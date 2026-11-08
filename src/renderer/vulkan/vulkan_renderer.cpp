@@ -17,6 +17,7 @@
 #include "../../engine/vertex_pack.h"
 #include "../light_clusters.h"   // buildClusters (clustered lights, RT_CLUSTERED)
 #include "../probe_grid.h"       // buildProbeGrid (ADR-0374)
+#include "rt_measure.h"           // RT_RT_MEASURE: what ray tracing would cost (phase 3c)
 
 #include <vulkan/vulkan.h>
 // GPU memory: AMD's Vulkan Memory Allocator (third_party/VulkanMemoryAllocator, compiled
@@ -43,6 +44,8 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 // PNG output for frame capture (declarations only; the stb implementation is
 // compiled once with the importer's vendored copy — same as the Metal backend).
@@ -1177,6 +1180,10 @@ struct VulkanRenderer::Impl {
     // window). With VK_EXT_memory_budget the heap budgets are the driver's own.
     VmaAllocator allocator = nullptr;
     bool memoryBudgetExt = false, haveProps2 = false;
+    // THE API VERSION (renderer-realism phase 3c step 2): 1.2 where the loader and the GPU have it -- the ray-tracing
+    // extensions need it (VK_KHR_acceleration_structure: 1.1, buffer device addresses: core in 1.2) -- else 1.0, as
+    // the backend was written. The instance asks for it, the device's own is the lower of the two, and VMA is told.
+    uint32_t apiVersion = VK_API_VERSION_1_0;
     bool createAllocator();
     bool createGpuBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buffer, VmaAllocation& alloc);
     bool createGpuImage(const VkImageCreateInfo& info, VkImage& image, VmaAllocation& alloc);
@@ -1244,7 +1251,14 @@ bool VulkanRenderer::Impl::createInstance() {
     app.applicationVersion = VK_MAKE_VERSION(0, 1, 0);
     app.pEngineName = "raytracer-engine";
     app.engineVersion = VK_MAKE_VERSION(0, 1, 0);
-    app.apiVersion = VK_API_VERSION_1_0;
+    {
+        PFN_vkEnumerateInstanceVersion version = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
+            vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion"));
+        uint32_t loader = VK_API_VERSION_1_0;
+        if (version) version(&loader);
+        apiVersion = loader >= VK_API_VERSION_1_2 && !std::getenv("RT_VK_1_0") ? VK_API_VERSION_1_2 : VK_API_VERSION_1_0;
+    }
+    app.apiVersion = apiVersion;
 
     std::vector<std::string> reqStr = window->requiredVulkanInstanceExtensions();
     if (reqStr.empty()) {
@@ -1380,6 +1394,14 @@ bool VulkanRenderer::Impl::pickPhysicalDevice() {
     if (physicalDevice == VK_NULL_HANDLE) {
         LOG_ERROR("[vulkan] no suitable GPU (needs graphics + present + swapchain)");
         return false;
+    }
+    {   // the device's own version caps what we use
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(physicalDevice, &props);
+        if (props.apiVersion < apiVersion) apiVersion = VK_API_VERSION_1_0;
+        LOG_INFO << "[vulkan] API " << VK_API_VERSION_MAJOR(apiVersion) << "." << VK_API_VERSION_MINOR(apiVersion)
+                 << " (the device has " << VK_API_VERSION_MAJOR(props.apiVersion) << "." << VK_API_VERSION_MINOR(props.apiVersion)
+                 << "." << VK_API_VERSION_PATCH(props.apiVersion) << ")";
     }
     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProps);
     VkPhysicalDeviceProperties props;
@@ -6092,7 +6114,7 @@ bool VulkanRenderer::Impl::createBuffer(VkDeviceSize size, VkBufferUsageFlags us
 
 bool VulkanRenderer::Impl::createAllocator() {
     VmaAllocatorCreateInfo info{};
-    info.vulkanApiVersion = VK_API_VERSION_1_0;
+    info.vulkanApiVersion = apiVersion;
     info.physicalDevice = physicalDevice;
     info.device = device;
     info.instance = instance;
@@ -9599,6 +9621,78 @@ uint32_t VulkanRenderer::crowdTravellers() const { return impl->crowdLive; }
 uint32_t VulkanRenderer::crowdDrawn() const { return impl->crowdDrawnLast; }
 
 void VulkanRenderer::endFrame() {
+    // RT_RT_MEASURE=<frame>: from that frame, for RT_RT_WINDOW frames (600), every instance drawn within 300 m of the
+    // camera is collected (turn the camera round meanwhile: reflections see behind you); then what acceleration
+    // structures would cost -- every mesh on the GPU, and only those within 100 / 150 / 300 m -- the driver's sizes from
+    // counts alone, nothing allocated (rt_measure.h), against the device memory still free
+    static const long rtMeasureAt = std::getenv("RT_RT_MEASURE") ? std::max(60L, std::atol(std::getenv("RT_RT_MEASURE"))) : -1;
+    static const long rtWindow = std::getenv("RT_RT_WINDOW") ? std::max(1L, std::atol(std::getenv("RT_RT_WINDOW"))) : 600;
+    if (rtMeasureAt > 0 && impl->frameCounter >= static_cast<uint64_t>(rtMeasureAt) &&
+        impl->frameCounter <= static_cast<uint64_t>(rtMeasureAt + rtWindow)) {
+        // per instance (its mesh and where it stands, to 1 m): the nearest it came to the camera, less its radius
+        static std::unordered_map<uint64_t, std::pair<uint32_t, float>> near;   // key -> (mesh index, distance)
+        if (impl->frameCounter == static_cast<uint64_t>(rtMeasureAt)) LOG_INFO << "[rt] collecting what is near for " << rtWindow << " frames";
+        const Vec3 eye(impl->cpuGlobals.cameraPosition[0], impl->cpuGlobals.cameraPosition[1], impl->cpuGlobals.cameraPosition[2]);
+        for (const DrawItem& it : impl->drawQueue) {
+            if (it.crowd || it.terrain) continue;
+            GpuMesh* m = impl->meshes.get(it.mesh);
+            if (!m) continue;
+            const float rad = m->bounds.radius;
+            for (uint32_t k = 0; k < it.instanceCount; ++k) {
+                const std::size_t row = static_cast<std::size_t>(it.firstInstance + k) * 16;
+                if (row + 15 >= impl->instanceData.size()) break;
+                const float* t = impl->instanceData.data() + row + 12;
+                const float d = std::max(0.0f, static_cast<float>((Vec3(t[0], t[1], t[2]) - eye).length()) - rad);
+                if (d > 300.0f) continue;
+                const uint64_t key = (static_cast<uint64_t>(it.mesh.index) << 40) ^
+                                     (static_cast<uint64_t>(static_cast<int64_t>(std::floor(t[0])) & 0xFFFFF) << 20) ^
+                                     static_cast<uint64_t>(static_cast<int64_t>(std::floor(t[2])) & 0xFFFFF) ^
+                                     (static_cast<uint64_t>(static_cast<int64_t>(std::floor(t[1])) & 0xFFF) << 52);
+                auto [pos, fresh] = near.emplace(key, std::make_pair(it.mesh.index, d));
+                if (!fresh) pos->second.second = std::min(pos->second.second, d);
+            }
+        }
+        if (impl->frameCounter == static_cast<uint64_t>(rtMeasureAt + rtWindow)) {
+            VkPhysicalDeviceProperties pp;
+            vkGetPhysicalDeviceProperties(impl->physicalDevice, &pp);
+            double freeMb = -1;
+            if (impl->allocator) {
+                VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+                vmaGetHeapBudgets(impl->allocator, budgets);
+                const VkPhysicalDeviceMemoryProperties* props = nullptr;
+                vmaGetMemoryProperties(impl->allocator, &props);
+                for (uint32_t h = 0; props && h < props->memoryHeapCount; ++h)
+                    if (props->memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                        freeMb = std::max(freeMb, (static_cast<double>(budgets[h].budget) - static_cast<double>(budgets[h].usage)) / 1048576.0);
+            }
+            auto report = [&](const char* what, const std::vector<RtMeshCount>& counts, uint32_t instances) {
+                const RtMeasure r = measureRayTracingMemory(pp.vendorID, pp.deviceID, counts, instances);
+                if (!r.ok) { LOG_INFO << "[rt] measure: " << r.why; return; }
+                LOG_INFO << "[rt] " << what << ": " << r.meshes << " meshes, " << r.triangles << " triangles, " << instances
+                         << " instances -> BLAS " << r.blasBytes / 1048576.0 << " MB uncompacted (largest scratch "
+                         << r.blasScratchMax / 1048576.0 << " MB), TLAS " << r.tlasBytes / 1048576.0 << " MB";
+            };
+            std::vector<RtMeshCount> all;
+            impl->meshes.forEach([&](MeshHandle, GpuMesh& m) {
+                all.push_back(RtMeshCount{static_cast<uint32_t>(m.vertexCount), m.indexCount / 3, m.packed ? 32u : 56u});
+            });
+            report("every mesh on the GPU", all, static_cast<uint32_t>(near.size()));
+            for (float within : {100.0f, 150.0f, 300.0f}) {
+                std::unordered_set<uint32_t> meshIds;
+                uint32_t instances = 0;
+                for (const auto& [key, v] : near)
+                    if (v.second <= within) { meshIds.insert(v.first); ++instances; }
+                std::vector<RtMeshCount> counts;
+                impl->meshes.forEach([&](MeshHandle h, GpuMesh& m) {
+                    if (meshIds.count(h.index)) counts.push_back(RtMeshCount{static_cast<uint32_t>(m.vertexCount), m.indexCount / 3, m.packed ? 32u : 56u});
+                });
+                const std::string what = "within " + std::to_string(static_cast<int>(within)) + " m";
+                report(what.c_str(), counts, instances);
+            }
+            LOG_INFO << "[rt] device memory free now " << freeMb << " MB (terrain and the GPU crowd not counted)";
+            near.clear();
+        }
+    }
     // the GPU crowd's draws: one per kind with travellers, its instances and count crowd.comp's
     if (impl->crowdLive > 0 && !std::getenv("RT_NO_GPU_CROWD"))
         for (std::size_t k = 0; k < impl->crowdKinds.size(); ++k) {

@@ -407,6 +407,7 @@ void RenderSystem::render(FrameContext& ctx) {
         ctx.renderer.setReflectionProbes(probeBoard.slots);
     }
     if (!probeBoard.captures.empty() && ctx.renderer.supportsProbeCapture()) {
+        const auto capT0 = std::chrono::steady_clock::now();
         const Real reach = probeBoard.reach;
         for (const ProbeBoard::Face& pf : probeBoard.captures) {
             if (pf.slot >= probeBoard.slots.size()) continue;
@@ -443,6 +444,18 @@ void RenderSystem::render(FrameContext& ctx) {
                 if (!instanceScratch_.empty()) ctx.renderer.drawMeshInstanced(g.mesh, instanceScratch_, g.material);
             });
             ctx.renderer.endProbeFace();
+        }
+        // RT_DUMP_STATS: what the probe faces cost the CPU (each walks the world), every 120 faces
+        if (encStats) {
+            static double capMs = 0;
+            static int capFaces = 0;
+            capMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - capT0).count();
+            capFaces += static_cast<int>(probeBoard.captures.size());
+            if (capFaces >= 120) {
+                std::fprintf(stderr, "[probes] capture: %.2f ms a face on the CPU (%d faces)\n", capMs / capFaces, capFaces);
+                capMs = 0;
+                capFaces = 0;
+            }
         }
     }
 

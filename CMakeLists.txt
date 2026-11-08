@@ -1421,7 +1421,7 @@ else()
     # ADR-0057; see src/renderer/vulkan/AGENTS.md.
     find_package(Vulkan QUIET)
     if(Vulkan_FOUND)
-        list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp src/renderer/vulkan/vma_impl.cpp)
+        list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp src/renderer/vulkan/vma_impl.cpp src/renderer/vulkan/rt_measure.cpp)
         set(PLATFORM_LIBS Vulkan::Vulkan)
 
         # Compile the SPIR-V shaders (shared target; sets VK_SHADER_OUT_DIR).
@@ -1546,6 +1546,7 @@ if(Qt6_FOUND)
             target_sources(editor_app PRIVATE
                 src/renderer/vulkan/vulkan_renderer.cpp
                 src/renderer/vulkan/vma_impl.cpp
+                src/renderer/vulkan/rt_measure.cpp
                 src/editor_app/vulkan_viewport.cpp
             )
             target_include_directories(editor_app SYSTEM PRIVATE third_party/VulkanMemoryAllocator)

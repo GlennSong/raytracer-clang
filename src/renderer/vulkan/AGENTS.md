@@ -4,7 +4,7 @@ The Vulkan backend (Linux + Windows), the second implementation of the
 `Renderer` seam (`../AGENTS.md`). **Status: Phases 0–1 landed** — device/
 swapchain bring-up, the SPIR-V shader toolchain, and forward lit single-mesh
 draws (`vulkan_renderer.{h,cpp}`, `shaders/vulkan/mesh.{vert,frag}`). Written
-against the Vulkan 1.0 spec; **unverified on device** (no GPU/SDK in CI — needs a
+against the Vulkan 1.0 spec, run at 1.2 where the loader and GPU have it (ADR-0375; `RT_VK_1_0=1` keeps 1.0); **unverified on device** (no GPU/SDK in CI — needs a
 real Linux/Windows run with the validation layers). Phases 2+ (textures, full
 forward, shadows, IBL, post) still to do. Decision: ADR-0057. Plan:
 `docs/vulkan-renderer-plan.md`. Parity reference: `../metal/AGENTS.md`.

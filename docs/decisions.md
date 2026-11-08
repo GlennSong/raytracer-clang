@@ -17030,3 +17030,38 @@ across the street as in ADR-0373, now from street probes, day and night; no vali
 **Owed:** the captures baked with the level; the 256^2 tier for the nearest few; per-probe lights at night; each
 capture face walks the whole world (a cell index of the static draws); `DayNightSystem::findCityBounds` reads the
 empty `RoadEntity` graph too, so a lanes city may have no light-pollution centre (to check).
+
+## ADR-0375 — Ray-traced reflections: measured first, and the renderer on Vulkan 1.2
+
+**Context.** Probes are blurry and box-shaped; Glenn asked about real ray tracing for the buildings near you, "and not
+blow up my gpu". The renderer asked for Vulkan 1.0, which has no ray tracing.
+
+**Decision.**
+- **Measure before building** (`renderer/vulkan/rt_measure.h`). `RT_RT_MEASURE=<frame>` collects, over
+  `RT_RT_WINDOW` frames (600), every instance drawn within 300 m of the camera (turn the camera round meanwhile:
+  `~/Claude/raytracer-parked/lightbench/rtmeasure.sh`). It then asks the driver what bottom-level structures would
+  cost for every mesh on the GPU, and for those within 100, 150 and 300 m, plus a top level over the instances
+  (`vkGetAccelerationStructureBuildSizesKHR`, from counts alone, nothing allocated). The question goes to a
+  short-lived 1.2 device on the same GPU, so the renderer's own device is untouched.
+
+  | | river_town | island_8_nature, financial district |
+  |---|---|---|
+  | every mesh | 1.26 GB | 3.4 GB |
+  | within 150 m | 35 MB | 147 MB |
+  | TLAS (300 m) | 2 MB | 6.5 MB |
+  | device memory free | 5.2 GB | 1.2 GB |
+
+  Uncompacted; terrain and the GPU crowd not counted. Everything cannot fit on the island; what is near you can, at
+  about a tenth of what is free.
+- **Pick and choose** (Glenn: close up ray traced, farther faked). Rays only from smooth surfaces near you, faded into
+  the probes. Rays only hit the near buildings, street and cars, not foliage, small props or the crowd. A hard cap at
+  a share of free memory drops the farthest meshes first. All of it data, to come.
+- **Vulkan 1.2.** The instance asks for 1.2 when the loader has it. The device's own version caps it (the 3080:
+  1.4.341), and VMA is told; `RT_VK_1_0=1` keeps 1.0. No extension or feature is enabled yet. Validation-clean on
+  river_town, the same frames as 1.0.
+- `RT_DUMP_STATS` also logs a probe face's CPU cost: 0.35 ms, only while a probe is captured (about 2 s at load).
+  That is why the probes' captures are **not** baked with the level: it would cost ~0.5 GB of disk on river_town and
+  several GB on the island to save those 2 seconds; relighting already makes the time of day free (ADR-0373).
+
+**Owed:** the ray-tracing extensions and features on the device, buffer addresses on mesh buffers, the near BLAS set
+with the cap, the reflection rays, and a `raytrace` data table.
