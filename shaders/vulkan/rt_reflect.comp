@@ -106,7 +106,11 @@ void main() {
         vec3 tint = vertexColor(vb, I.strideWords, I.packed, i0) * (1.0 - bc.x - bc.y) +
                     vertexColor(vb, I.strideWords, I.packed, i1) * bc.x + vertexColor(vb, I.strideWords, I.packed, i2) * bc.y;
         vec3 albedo = I.albedoRough.rgb * tint;
-        vec3 emission = I.emissionMetal.rgb * ((I.flags & 32u) != 0u ? tint : vec3(1.0));
+        // (in the physical sky's units, as the scene pass draws a glow: without the glows' scale, 0.004, every lit
+        // window in a reflection was ~250x the window itself -- Glenn, 2026-11-08: "the nighttime reflections of other
+        // buildings still seems really bright")
+        vec3 emission = I.emissionMetal.rgb * ((I.flags & 32u) != 0u ? tint : vec3(1.0)) *
+                        (skyIsPhysical() ? g.skyPhysical3.z : 1.0);
         // the frame's lights as the scene pass lights a surface (shadeLight), the sun's shadow by a ray through the near
         // scene; the sky's light by the harmonics
         float metallic = clamp(I.emissionMetal.a, 0.0, 1.0);

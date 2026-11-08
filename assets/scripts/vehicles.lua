@@ -123,6 +123,9 @@ local KIT_TINT = {
   tank = { 0.78, 0.79, 0.80 }, trailer = { 0.86, 0.87, 0.88 }, sign = { 1.0, 0.85, 0.2 },
   beacon = { 0.80, 0.06, 0.05 },
 }
+-- THE INSIDE FINISHES (Glenn, 2026-11-08: "car interiors should be not shiny -- seats, dashboard, etc."): a part of
+-- these materials is the cabin's, drawn in its matte material (roughness 0.9, no metal), never in the body's paint
+local KIT_INSIDE = { interior = true, liner = true, dash = true, seat = true, carpet = true, steer = true }
 local KIT_CABIN_TINT = { liner = { 0.45, 0.43, 0.40 }, carpet = { 0.10, 0.10, 0.11 }, seat = { 0.18, 0.17, 0.16 },
                          dash = { 0.08, 0.08, 0.09 }, steer = { 0.05, 0.05, 0.05 } }
 -- A KIT BODY's HANDLING (item 23, #117: one handling builder): `P` the kit spec, `car` its kit.build(P, 0), `h`
@@ -179,22 +182,26 @@ local function kit_drivable(specName, opts, h)
   -- and a commandeered car and the one N drops must drive as one)
   local handled = kit.build(P, 0)
   -- a material set (kit.build's parts) as its painted shell and its glass
+  -- (the painted parts, the glass, and the inside finishes: KIT_INSIDE)
   local function painted_set(set)
-    local out = {}
+    local out, inside = {}, {}
     for name, part in pairs(set) do
-      if name ~= "glass" then
+      if KIT_INSIDE[name] then
+        inside[#inside + 1] = mesh.paint(part, KIT_TINT[name] or KIT_CABIN_TINT[name] or { 0.3, 0.3, 0.3 })
+      elseif name ~= "glass" then
         local col = name == "body" and P.color or (KIT_TINT[name] or LENS_TINT[name] or { 0.4, 0.4, 0.4 })
         out[#out + 1] = lens_tag(mesh.paint(part, col), name)
       end
     end
-    return out, set.glass
+    return out, set.glass, inside
   end
-  local shell, glass = painted_set(car.parts)
+  local shell, glass, inside = painted_set(car.parts)
   local parts = {}
   if glass then
     -- the glass's own colour is the kit's glass tint, not white: a pane's diffuse colour lies over everything seen
     -- through it, and white was a milky veil from inside (Glenn: the bus's view out "almost all white"; ADR-0378)
-    parts[#parts + 1] = { mesh = glass, albedo = KIT_TINT.glass, metallic = 0.0, roughness = 0.06, opacity = 0.30 }
+    parts[#parts + 1] = { mesh = glass, albedo = KIT_TINT.glass, metallic = 0.0, roughness = 0.06,
+                          opacity = P.glass_opacity or 0.30 }
   end
   -- THE MOVING PANELS (ADR-0352): each door, the hood, the trunk -- its painted shell and its glass, on its hinge
   local panels = {}
@@ -203,8 +210,8 @@ local function kit_drivable(specName, opts, h)
   table.sort(names)
   for _, name in ipairs(names) do
     local pn = car.panels[name]
-    local pshell, pglass = painted_set(pn.parts)
-    local pcabin = {}
+    local pshell, pglass, pinside = painted_set(pn.parts)
+    local pcabin = pinside
     for cname, part in pairs(pn.cabin or {}) do pcabin[#pcabin + 1] = mesh.paint(part, KIT_CABIN_TINT[cname] or { 0.3, 0.3, 0.3 }) end
     if #pshell > 0 or pglass then
       panels[#panels + 1] = { name = name, pivot = pn.hinge.pivot, axis = pn.hinge.axis, open = pn.hinge.open, lo = pn.lo, hi = pn.hi,
@@ -215,14 +222,15 @@ local function kit_drivable(specName, opts, h)
                               metallic = h.metallic or 0.5, roughness = h.roughness or 0.4, panel = name }
       end
       if pglass then
-        parts[#parts + 1] = { mesh = pglass, albedo = KIT_TINT.glass, metallic = 0.0, roughness = 0.06, opacity = 0.30, panel = name }
+        parts[#parts + 1] = { mesh = pglass, albedo = KIT_TINT.glass, metallic = 0.0, roughness = 0.06,
+                              opacity = P.glass_opacity or 0.30, panel = name }
       end
       if #pcabin > 0 then
         parts[#parts + 1] = { mesh = mesh.merge(pcabin), albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.9, panel = name }
       end
     end
   end
-  local cabin = {}
+  local cabin = inside
   for name, part in pairs(car.cabin or {}) do
     local col = KIT_CABIN_TINT[name] or { 0.3, 0.3, 0.3 }
     cabin[#cabin + 1] = mesh.paint(part, col)
@@ -522,8 +530,11 @@ local function kit_car(spec, color)
   -- (a bus is built with its door panels apart: the city slides them open at its stops, ADR-0356)
   local car = kit.build(P, P.level or FLEET_KIT_LEVEL, { panels = P.saloon ~= nil })
   local shell = {}
+  local cabinParts = {}
   for name, part in pairs(car.parts) do
-    if name ~= "glass" then
+    if KIT_INSIDE[name] then   -- (the inside finishes: the cabin's matte material, not the paint)
+      cabinParts[#cabinParts + 1] = mesh.paint(part, KIT_TINT[name] or KIT_CABIN_TINT[name] or { 0.3, 0.3, 0.3 })
+    elseif name ~= "glass" then
       local col = name == "body" and color or (KIT_TINT[name] or LENS_TINT[name] or { 0.5, 0.5, 0.5 })
       shell[#shell + 1] = lens_tag(mesh.paint(part, col), name)
     end
@@ -560,7 +571,6 @@ local function kit_car(spec, color)
   end
   -- the cabin: a near car shows it through clear glass; an OPEN car (the convertible) always does, so
   -- its cabin rides in the shell and it is a see-into vehicle like the bus
-  local cabinParts = {}
   for name, part in pairs(car.cabin or {}) do
     local col = KIT_CABIN[name] or { 0.3, 0.3, 0.3 }
     cabinParts[#cabinParts + 1] = mesh.paint(part, col)

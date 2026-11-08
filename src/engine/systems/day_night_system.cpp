@@ -1151,14 +1151,21 @@ void DayNightSystem::render(FrameContext& ctx) {
         if (ImGui::CollapsingHeader(volumetric ? "Clouds (volumetric)"
                                                : "Clouds (2D overlay)")) {
             if (volumetric) {
-                // Bound STRAIGHT to the live params: the level loader writes
-                // them once at load and the renderer reads them fresh each
-                // frame, with nothing re-applying in between — so an edit here
-                // is the value the next frame marches.
+                // Coverage, density and the noise's scale are WRITTEN EVERY FRAME by applyClouds -- from the knobs
+                // (cloudCoverage, cloudDensity: the weather's while it runs) and the level's authored noise scale
+                // (cloudBase_) -- so they are edited there: bound to the live params, each edit was overwritten
+                // the next frame (Glenn, 2026-11-08: "I've tried changing the noise scale, but I don't think the
+                // engine seems to save it"). The rest are read fresh by the renderer and bound straight.
                 ImGui::Checkbox("Enabled##vclouds",
                                 &ctx.renderer.volumetricCloudsEnabled);
-                ImGui::SliderFloat("Coverage##v", &vc.coverage, 0.0f, 1.0f);
-                ImGui::SliderFloat("Density##v", &vc.density, 0.0f, 1.0f);
+                if (weatherActive) {
+                    ImGui::TextDisabled("Weather (%s) sets coverage and density.", weatherKindName(weather.state));
+                    if (ImGui::Button("Weather off: tune them here##v")) weatherActive = false;
+                }
+                ImGui::BeginDisabled(weatherActive);
+                ImGui::SliderFloat("Coverage##v", &cloudCoverage, 0.0f, 1.0f);
+                ImGui::SliderFloat("Density##v", &cloudDensity, 0.0f, 1.0f);
+                ImGui::EndDisabled();
                 ImGui::SliderFloat("Ambient##v", &vc.ambient, 0.0f, 2.0f);
                 ImGui::SliderFloat("Detail erosion##v", &vc.detailStrength,
                                    0.0f, 1.0f);
@@ -1166,7 +1173,8 @@ void DayNightSystem::render(FrameContext& ctx) {
                 ImGui::SliderFloat("Cirrus##v", &vc.cirrus, 0.0f, 1.0f);
                 ImGui::SliderFloat("Phase g##v", &vc.phaseG, -0.9f, 0.9f);
                 ImGui::SliderFloat("Wind (m/s)##v", &vc.wind, 0.0f, 60.0f);
-                ImGui::SliderFloat("Noise scale##v", &vc.noiseScale,
+                // (the level's own scale: the weather's `scale` multiplies it)
+                ImGui::SliderFloat("Noise scale##v", &cloudBase_.noiseScale,
                                    0.0002f, 0.005f, "%.4f");
                 ImGui::DragFloatRange2("Slab bottom / top##v", &vc.bottom,
                                        &vc.top, 10.0f, 100.0f, 6000.0f,

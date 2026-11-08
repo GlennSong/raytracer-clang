@@ -17349,3 +17349,27 @@ bit overpowering on the buildings that reflect/raytrace them".
 **Owed:** the deck's outlines come from the base noise's ~1.4 km puffs. Erosion cuts only a thin band at their rim,
 so real wispiness needs the base shape itself (a finer, more broken base, or a higher-resolution detail volume and a
 true curl texture).
+
+## ADR-0385 — Matte car interiors, glows in the rays' units, the cloud panel's dead sliders
+
+**Context.** Glenn, 2026-11-08: "car interiors should be not shiny -- seats, dashboard, etc."; "the nighttime
+reflections of other buildings still seems really bright"; "I've tried changing the noise scale, but I don't think
+the engine seems to save it".
+
+**Diagnosis.**
+- The kit's inside finishes that are body parts (`interior` door cards, `liner`, `dash`) went into the painted
+  shell. They wore the body's paint: metallic 0.5, roughness 0.4.
+- rt_reflect.comp added a hit's emission without the glows' scale (lights.lua emission_scale, 0.004 under the
+  physical sky; ADR-0369). Every lit window in a ray-traced reflection was ~250x the window itself; the scene pass
+  and the probe capture both scale it.
+- The volumetric panel's Coverage, Density and Noise scale were bound to the live params, which applyClouds rewrites
+  every frame from the knobs (the weather's while it runs) and the level's authored noise scale.
+
+**Decision.**
+- vehicles.lua `KIT_INSIDE` (interior, liner, dash, seat, carpet, steer): a part of those materials goes to the matte
+  cabin (roughness 0.9, no metal), in the drivable build (whole body and each panel) and the fleet's. The drivable's
+  glass takes the kind's `glass_opacity` too.
+- rt_reflect scales the hit's emission as the scene pass does.
+- The panel's Coverage and Density edit the knobs, greyed out while the weather runs, with a button to turn the
+  weather off. Noise scale edits the authored value the weather's scale multiplies, so it holds under the weather.
+  Edits stay session-only.
