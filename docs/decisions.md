@@ -17114,3 +17114,17 @@ everything does not. Glenn: close up ray traced, farther away faked.
   - Owed: compaction; cars and people in the near scene (SimBody, every frame); the brightness on glass checked
     against the probes' split-sum reflectance (the screen-space confidence rule reads a little dark straight-on);
     textures at hits (vertex colour and material only today); denoising if rougher surfaces ever take rays; Metal.
+- **Fallbacks** (Glenn: "make sure we have fallbacks ... use the cubemaps"). One answer, `raysThisFrame()`, read by
+  both the scene pass (whether to fade the probe out) and the ray pass. The rays are off, and the probes and sky cube
+  reflect as before, when any of these holds:
+  - the GPU has no ray queries, or the renderer is on Vulkan 1.0 (`RT_VK_1_0=1`);
+  - `RT_RT_REFLECT=0`;
+  - the near scene is empty;
+  - SSR is off in the composite (the rays write into its target);
+  - the ray pipeline cannot be built. This warns once.
+
+  The first three were run on the river_town bench with the shader file hidden for the last: each matched the
+  probe-only picture to the pixel and was validation-clean. SSR off was checked in code only; its setting is read
+  from the saved settings at start.
+  - On Vulkan 1.0 the material pool chain broke a rule (12 validation errors): it allocated from a full pool and
+    caught the failure, legal from 1.1. It now counts sets per link and moves on before one is full.

@@ -943,6 +943,10 @@ struct VulkanRenderer::Impl {
     // reset each frame, so memory is bounded by the peak frame ever seen.
     std::array<std::vector<VkDescriptorPool>, MAX_FRAMES_IN_FLIGHT> materialPools{};
     size_t materialPoolActive = 0;   // index into the current frame's chain
+    // Sets taken from the active link. The chain moves on BEFORE a link is full: allocating from a full pool is an
+    // error code the driver may return on Vulkan 1.1+, but invalid usage on 1.0 (the ray-tracing fallback, RT_VK_1_0).
+    uint32_t materialPoolUsed = 0;
+    static constexpr uint32_t kMaterialSetsPerPool = 2048;   // sets per chain link
     VkSampler textureSampler = VK_NULL_HANDLE;
     GpuTexture defaultTexture;   // 1x1 white, stands in for absent maps
     bool materialPoolExhaustedWarned = false;
@@ -1037,6 +1041,7 @@ struct VulkanRenderer::Impl {
     void recordProbeRelight(VkCommandBuffer cmd);
     void recordRayScene(VkCommandBuffer cmd);
     bool ensureRtReflectPipeline();
+    bool raysThisFrame();
     void recordRtReflect(VkCommandBuffer cmd);
     void queueDraw(const DrawItem& item) {
         if (captureActive >= 0) captures[static_cast<std::size_t>(captureActive)].items.push_back(item);
@@ -1664,15 +1669,14 @@ bool VulkanRenderer::Impl::createImageViews() {
 
 // One link of a frame's material-descriptor-pool chain (see materialPools).
 bool VulkanRenderer::Impl::createMaterialPool(VkDescriptorPool* out) {
-    constexpr uint32_t MAX_MATERIAL_SETS = 2048;   // sets per chain link
     VkDescriptorPoolSize size{};
     size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    size.descriptorCount = MAX_MATERIAL_SETS * 5;
+    size.descriptorCount = kMaterialSetsPerPool * 5;
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = 1;
     info.pPoolSizes = &size;
-    info.maxSets = MAX_MATERIAL_SETS;
+    info.maxSets = kMaterialSetsPerPool;
     if (vkCreateDescriptorPool(device, &info, nullptr, out) != VK_SUCCESS) {
         LOG_ERROR("[vulkan] material descriptor pool creation failed");
         return false;
@@ -6658,8 +6662,6 @@ bool VulkanRenderer::Impl::createMaterialResources() {
         return false;
     }
 
-    // Chunk size of one pool in the per-frame chain (see materialPools).
-    constexpr uint32_t MAX_MATERIAL_SETS = 2048;
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         VkDescriptorPool pool = VK_NULL_HANDLE;
         if (!createMaterialPool(&pool)) return false;
@@ -6956,9 +6958,14 @@ VkDescriptorSet VulkanRenderer::Impl::allocMaterialSet(const DrawItem& item) {
     // scale as the visible set crossed the cap).
     auto& chain = materialPools[currentFrame];
     for (;;) {
-        dsa.descriptorPool = chain[materialPoolActive];
-        if (vkAllocateDescriptorSets(device, &dsa, &matSet) == VK_SUCCESS)
-            break;
+        if (materialPoolUsed < kMaterialSetsPerPool) {
+            dsa.descriptorPool = chain[materialPoolActive];
+            if (vkAllocateDescriptorSets(device, &dsa, &matSet) == VK_SUCCESS) {
+                ++materialPoolUsed;
+                break;
+            }
+        }
+        materialPoolUsed = 0;
         if (materialPoolActive + 1 < chain.size()) {
             ++materialPoolActive;
             continue;
@@ -7795,6 +7802,7 @@ void VulkanRenderer::Impl::drawFrame() {
         vkResetDescriptorPool(device, pool, 0);
     if (uiPools[currentFrame]) vkResetDescriptorPool(device, uiPools[currentFrame], 0);
     materialPoolActive = 0;
+    materialPoolUsed = 0;
     materialPoolExhaustedWarned = false;
 
     uint32_t imageIndex = 0;
@@ -7879,9 +7887,9 @@ void VulkanRenderer::Impl::drawFrame() {
         pb[2] = probeGrid.originZ;
         pb[3] = probeGrid.cell;
         pb[4] = static_cast<float>(ProbeGrid::kSize);
-        // the reflection rays' rules, when they will run this frame (mesh.frag fades the probe out where they fade in)
-        static const bool rtOff = [] { const char* v = std::getenv("RT_RT_REFLECT"); return v && std::strcmp(v, "0") == 0; }();
-        const bool rays = !rtOff && rayQuery && rt.hasTopLevel() && !rtRows.empty();
+        // the reflection rays' rules, when they will run this frame (mesh.frag fades the probe out where they fade in;
+        // otherwise the probes and the sky cube stand, as on a GPU without ray tracing)
+        const bool rays = raysThisFrame();
         pb[5] = rays ? rtRules[0] : 0.0f;
         pb[6] = rays ? rtRules[1] : 0.0f;
         pb[7] = rays ? rtRules[2] : 0.0f;
@@ -8976,9 +8984,22 @@ bool VulkanRenderer::Impl::ensureRtReflectPipeline() {
     return true;
 }
 
-void VulkanRenderer::Impl::recordRtReflect(VkCommandBuffer cmd) {
+// THE ONE ANSWER to "do the rays run this frame" (ADR-0376), read by both sides: the scene pass drops the probe's
+// reflection only where the rays will put theirs. Off -- and the probes and sky cube stand, as before -- when the GPU
+// has no ray queries (or Vulkan 1.0: RT_VK_1_0), RT_RT_REFLECT=0, the near scene is empty, the screen-space target is
+// off in the composite (the rays write into it), or the ray pipeline could not be built.
+bool VulkanRenderer::Impl::raysThisFrame() {
     static const bool off = [] { const char* v = std::getenv("RT_RT_REFLECT"); return v && std::strcmp(v, "0") == 0; }();
-    if (off || !rayQuery || !rt.hasTopLevel() || rtRows.empty() || !ssrImage || !ensureRtReflectPipeline()) return;
+    if (off || !rayQuery || !ssrEnabledFrame || !ssrImage || !rt.hasTopLevel() || rtRows.empty()) return false;
+    if (ensureRtReflectPipeline()) return true;
+    static bool warned = false;
+    if (!warned) LOG_WARN << "[rt] the reflection rays' pipeline could not be built (rt_reflect.comp.spv): the probes and sky cube reflect instead";
+    warned = true;
+    return false;
+}
+
+void VulkanRenderer::Impl::recordRtReflect(VkCommandBuffer cmd) {
+    if (!raysThisFrame()) return;
     const int f = currentFrame;
     // this frame's hit-shading rows
     const VkDeviceSize bytes = rtRows.size() * sizeof(RtInstGpu);
