@@ -1,6 +1,5 @@
 #include "day_night_system.h"
 #include "../components.h"
-#include "../procgen/city/roads/road_entity.h"   // RoadEntity: the city's footprint (light pollution)
 #include "../procgen/noise.h"
 #include "../procgen/terrain.h"          // terrainHeight: the horizon raster
 #include "../vehicle_lamps.h"   // duskRamp: night glow shares the lamp boundary
@@ -328,15 +327,15 @@ void DayNightSystem::seedFromConfig(const DayNightConfig& c) {
     }
 }
 
-// The city's footprint: the bounding circle of every road graph's nodes.
-// Found once (roads are level data); a level with no roads has no city and
-// no pollution anywhere.
+// The city's footprint: the bounding circle of the level's road network's nodes (LevelRoadGraph, the one graph; a
+// lanes city's RoadEntity graph is empty, ADR-0374). Found once (roads are level data); a level with no roads has no
+// city and no pollution anywhere.
 void DayNightSystem::findCityBounds(FrameContext& ctx) {
     if (cityBoundsKnown_) return;
     double minX = 1e30, minZ = 1e30, maxX = -1e30, maxZ = -1e30;
     bool any = false;
-    ctx.world.each<RoadEntity>([&](Entity, RoadEntity& r) {
-        for (const RoadNode& n : r.graph.nodes) {
+    ctx.world.each<LevelRoadGraph>([&](Entity, LevelRoadGraph& g) {
+        for (const RoadNode& n : g.graph.nodes) {
             minX = std::min(minX, static_cast<double>(n.pos.x));
             maxX = std::max(maxX, static_cast<double>(n.pos.x));
             minZ = std::min(minZ, static_cast<double>(n.pos.y));
