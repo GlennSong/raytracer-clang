@@ -530,8 +530,8 @@
  {
   "name": "view",
   "owner": "engine",
-  "summary": "Debug view: 0 normal, 1 AO, 2 SSR, 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades; plus wireframe.",
-  "usage": "view <0-8> [wire 0-2]"
+  "summary": "Debug view: 0 normal, 1 AO, 2 SSR (and the rays), 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades, 9 roughness (what reflects); plus wireframe.",
+  "usage": "view <0-9> [wire 0-2]"
  },
  {
   "name": "walk_to",

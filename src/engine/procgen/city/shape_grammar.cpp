@@ -290,7 +290,9 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         case PartId::Trim:
             m.albedo = wallColor * 0.55; m.metallic = 0.0f; m.roughness = 0.7f; break;
         case PartId::Roof:
-            m.albedo = {0.18, 0.18, 0.20}; m.metallic = 0.0f; m.roughness = 0.85f; break;
+            // a tar or concrete roof is about as rough as a surface gets (Glenn, 2026-11-07: "it should be rough/matte
+            // since it's concrete"): at 0.85 a low sun gave this dark roof a broad sheen that read as shiny
+            m.albedo = {0.18, 0.18, 0.20}; m.metallic = 0.0f; m.roughness = 0.95f; break;
         case PartId::Door:
             m.albedo = {0.12, 0.12, 0.13}; m.metallic = 0.3f; m.roughness = 0.4f; break;
         case PartId::Ground:

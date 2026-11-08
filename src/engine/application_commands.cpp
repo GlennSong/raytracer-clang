@@ -236,15 +236,16 @@ void Application::registerCameraVerbs() {
         return publishRequest(eventBus, r, "detach", "ok detach " + mode + " staged");
     });
 
-    commandTable.add("view", "view <0-8> [wire 0-2]",
-                     "Debug view: 0 normal, 1 AO, 2 SSR, 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades; plus wireframe.",
+    commandTable.add("view", "view <0-9> [wire 0-2]",
+                     "Debug view: 0 normal, 1 AO, 2 SSR (and the rays), 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades, "
+                     "9 roughness (what reflects); plus wireframe.",
                      [this](const ControlCommand& cmd) -> std::string {
         // Debug view + wireframe are plain public renderer ints (the
         // RT_DEBUG_VIEW / RT_WIREFRAME env knobs, now runtime).
         double v;
-        if (cmd.args.empty() || !num(cmd.args[0], v) || v < 0 || v > 8)
-            return "err usage: view <0-8> [wire0-2]  (0=normal 1=AO 2=SSR "
-                   "3=depth 4=normals 5=shadow 6=albedo 7=facing 8=cascades)";
+        if (cmd.args.empty() || !num(cmd.args[0], v) || v < 0 || v > 9)
+            return "err usage: view <0-9> [wire0-2]  (0=normal 1=AO 2=SSR 3=depth 4=normals 5=shadow 6=albedo 7=facing "
+                   "8=cascades 9=roughness)";
         rendererPtr->debugView = static_cast<int>(v);
         if (cmd.args.size() > 1 && num(cmd.args[1], v))
             rendererPtr->wireframe = std::clamp(static_cast<int>(v), 0, 2);

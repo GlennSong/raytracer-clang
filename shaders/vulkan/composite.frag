@@ -198,6 +198,10 @@ void main() {
             vec4 s = texture(ssrTex, inUV);
             outColor = vec4(s.rgb * s.a, 1.0); return;
         }
+        if (pc.debugView == 9) {                 // roughness (G-buffer: what SSR and the rays gate on; black = mirror)
+            outColor = bg ? vec4(0.0, 0.0, 0.3, 1.0) : vec4(vec3(texture(normalTex, inUV).a), 1.0);
+            return;
+        }
         if (pc.debugView == 4) {                 // world normals (G-buffer, encoded)
             outColor = bg ? vec4(0.5, 0.5, 1.0, 1.0)
                           : vec4(texture(normalTex, inUV).rgb, 1.0);
