@@ -398,20 +398,25 @@ void RenderSystem::render(FrameContext& ctx) {
                          cellOk, encT1);
     }
 
-    // REFLECTION PROBES' FACES (ADR-0372, stage A's check: RT_PROBE_TEST=1 captures probe 0 at the camera, two faces a
-    // frame; the ProbeSystem places and schedules them in stage B). The static world only -- the structures, scenery,
-    // furniture and ground paint within the probe's reach, culled against the face's own frustum.
-    static const bool probeTest = std::getenv("RT_PROBE_TEST") != nullptr;
-    if (probeTest && ctx.renderer.supportsProbeCapture()) {
-        const Vec3 eye = cam.position;
-        const Real reach = 300.0;
-        for (int k = 0; k < 2; ++k) {
-            const int face = static_cast<int>((frameNo_ * 2 + static_cast<uint64_t>(k)) % 6);
+    // REFLECTION PROBES (ADR-0372/0374): ProbeSystem's slots, handed over when they change, and this frame's faces --
+    // the static world only (the structures, scenery, furniture and ground paint within the board's reach), culled
+    // against the face's own frustum.
+    const ProbeBoard& probeBoard = ctx.view.probes;
+    if (probeBoard.revision != probeRevision_) {
+        probeRevision_ = probeBoard.revision;
+        ctx.renderer.setReflectionProbes(probeBoard.slots);
+    }
+    if (!probeBoard.captures.empty() && ctx.renderer.supportsProbeCapture()) {
+        const Real reach = probeBoard.reach;
+        for (const ProbeBoard::Face& pf : probeBoard.captures) {
+            if (pf.slot >= probeBoard.slots.size()) continue;
+            const int face = pf.face;
+            const Vec3 eye = probeBoard.slots[pf.slot].position;
             Vec3 fwd, up;
             probeFaceBasis(face, fwd, up);
             const Frustum ff = Frustum::fromViewProjection(Mat4::perspective(degreesToRadians(90.0), 1.0, 0.1, reach) *
                                                            Mat4::lookAt(eye, eye + fwd, up));
-            ctx.renderer.beginProbeFace(0, face, eye);
+            ctx.renderer.beginProbeFace(pf.slot, face, eye);
             ctx.world.each<Transform, Renderable>([&](Entity, Transform& t, Renderable& r) {
                 if (r.drawClass == DrawClass::SimBody || r.drawClass == DrawClass::Effect || r.drawClass == DrawClass::Terrain) return;
                 if (r.renderLayer & ctx.renderer.hiddenLayers) return;

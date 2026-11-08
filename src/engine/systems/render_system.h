@@ -71,6 +71,7 @@ private:
     struct TierFade { float a = 0.0f; uint32_t mesh = ~0u; uint64_t seen = 0; };
     std::vector<TierFade> tierFade_;
     uint64_t frameNo_ = 0;
+    uint64_t probeRevision_ = 0;   // the probe board's slots last handed to the renderer (ADR-0374)
     std::chrono::steady_clock::time_point lastRender_;
 };
 

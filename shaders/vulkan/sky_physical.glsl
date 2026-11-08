@@ -11,6 +11,15 @@ layout(set = 0, binding = 15) uniform samplerCube skyCubeTex;      // the sky cu
 
 bool skyIsPhysical() { return g.counts.z == 2; }
 
+// THE SKY'S LIGHT ON A SURFACE facing n (ADR-0371): E / pi from the nine harmonics (sky_atmosphere.cpp
+// atmosphereIrradianceSH: the same basis, Y up)
+vec3 skyIrradianceSH(vec3 d) {
+    return max(g.skySH[0].rgb * 0.282095 + g.skySH[1].rgb * (0.488603 * d.y) + g.skySH[2].rgb * (0.488603 * d.z) +
+               g.skySH[3].rgb * (0.488603 * d.x) + g.skySH[4].rgb * (1.092548 * d.x * d.y) +
+               g.skySH[5].rgb * (1.092548 * d.y * d.z) + g.skySH[6].rgb * (0.315392 * (3.0 * d.z * d.z - 1.0)) +
+               g.skySH[7].rgb * (1.092548 * d.x * d.z) + g.skySH[8].rgb * (0.546274 * (d.x * d.x - d.y * d.y)), vec3(0.0));
+}
+
 // the transmittance from the camera toward a direction with cosine-zenith mu (0 into the ground)
 vec3 skyTransmittanceToward(float mu) {
     float rg = g.skyPhysical.x, rt = g.skyPhysical2.z;

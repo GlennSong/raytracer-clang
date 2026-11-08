@@ -5,6 +5,8 @@
 
 #include "test_framework.h"
 #include "../src/engine/lights/light_picker.h"
+#include "../src/engine/lights/probe_sites.h"
+#include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/scripting/lights_lua.h"
 #include <cmath>
 #include <fstream>
@@ -164,4 +166,96 @@ TEST_CASE(lights_lua_gives_every_pool_a_many_light_budget) {
         CHECK(p.manyCount >= p.count);   // a clustered renderer never lights fewer than a forward one
     }
     for (const char* name : {"tail_light", "brake_light"}) CHECK(book.kind(name) >= 0);
+    // the reflection probes' rules (ADR-0374) are read, and sane
+    CHECK(book.probes.spacing >= 5.0 && book.probes.height > 0.0 && book.probes.above > 0.0);
+    LightBook bad;
+    CHECK(!loadLightsSource("return { probes = { spacing = 1 } }", bad, &err));
+}
+
+// THE REFLECTION PROBES' SITES (ADR-0374): along a street every `spacing` metres at `height` over the carriageway (a
+// deck's own height when it is one), one site where two streets meet, and each box holding its stretch of street and
+// the frontages either side.
+TEST_CASE(probe_sites_line_the_streets) {
+    RoadGraph g;
+    RoadNode a, b, c, d;
+    a.pos = Vec2(0, 0);
+    b.pos = Vec2(200, 0);
+    c.pos = Vec2(0, 160);
+    d.pos = Vec2(400, 0);
+    d.elev = 12.0;   // a ramp up to a deck
+    d.elevAbsolute = true;
+    g.nodes = {a, b, c, d};
+    RoadEdge ab, ac, bd;
+    ab.a = 0; ab.b = 1; ab.width = 10;
+    ac.a = 0; ac.b = 2; ac.width = 10;
+    bd.a = 1; bd.b = 3; bd.width = 10;
+    g.edges = {ab, ac, bd};
+    const ProbeGroundFn ground = [](double, double) { return 2.0; };
+    ProbeRules rules;
+    std::vector<ProbeSite> sites;
+    placeProbeSites(g, ground, rules, sites);
+    CHECK(sites.size() == 5u + 4u + 5u);
+    for (const ProbeSite& s : sites) {
+        CHECK(s.boxMin.x < s.position.x && s.position.x < s.boxMax.x);
+        CHECK(s.boxMin.z < s.position.z && s.position.z < s.boxMax.z);
+        if (s.position.x < 200.0 && s.position.z == 0.0) {
+            CHECK(std::fabs(s.position.y - (2.0 + rules.height)) < 1e-9);   // at grade: the ground's
+            CHECK(s.boxMax.z - s.boxMin.z > 10.0 + 2 * rules.side - 1e-6);  // past both kerbs to the frontages
+        }
+    }
+    // the ramp: from the ground at b (2) to the deck at d (12), 5 sites at 0.1 .. 0.9 of the way
+    int ramp = 0;
+    for (const ProbeSite& s : sites)
+        if (s.position.x > 200.0) {
+            ++ramp;
+            const double t = (s.position.x - 200.0) / 200.0;
+            CHECK(std::fabs(s.position.y - (2.0 + 10.0 * t + rules.height)) < 1e-6);
+        }
+    CHECK(ramp == 5);
+    // the junction: a short arm's middle lands within `merge` of the other's: one site
+    RoadGraph j;
+    RoadNode o, e, n;
+    o.pos = Vec2(0, 0);
+    e.pos = Vec2(20, 0);
+    n.pos = Vec2(0, 20);
+    j.nodes = {o, e, n};
+    RoadEdge oe, on;
+    oe.a = 0; oe.b = 1;
+    on.a = 0; on.b = 2;
+    j.edges = {oe, on};
+    std::vector<ProbeSite> js;
+    placeProbeSites(j, ground, rules, js);
+    CHECK(js.size() == 1u);
+}
+
+// THE NEAREST 64, STABLY (ADR-0374): a slot keeps its probe while it stays near (within the hysteresis past the
+// nearest set's edge), so walking down a street re-captures only the probes it passes.
+TEST_CASE(probe_residency_is_the_nearest_and_keeps_its_slots) {
+    std::vector<ProbeSite> sites;
+    for (int i = 0; i < 100; ++i) {
+        ProbeSite s;
+        s.position = Vec3(i * 40.0, 5.0, 0.0);
+        sites.push_back(s);
+    }
+    std::vector<int> resident(8, -1);
+    CHECK(pickResidentProbes(sites, Vec3(0, 0, 0), 15.0, resident));
+    for (int r : resident) CHECK(r >= 0 && r < 8);   // the nearest 8
+    CHECK(!pickResidentProbes(sites, Vec3(0, 0, 0), 15.0, resident));   // nothing moved: nothing changes
+    const std::vector<int> before = resident;
+    // a little way on: the edge moves 10 m, inside the hysteresis -- still nothing changes
+    CHECK(!pickResidentProbes(sites, Vec3(10, 0, 0), 15.0, resident));
+    // 300 m on: the four farthest behind leave, the four new ones ahead take their slots; the rest keep theirs
+    CHECK(pickResidentProbes(sites, Vec3(300, 0, 0), 15.0, resident));
+    int kept = 0;
+    for (std::size_t i = 0; i < resident.size(); ++i) {
+        CHECK(resident[i] >= 0);
+        if (resident[i] == before[i]) ++kept;
+        const double d = std::fabs(sites[static_cast<std::size_t>(resident[i])].position.x - 300.0);
+        CHECK(d <= 140.0 + 1e-9);   // all eight now the nearest (20, 60, 100, 140 m either side)
+    }
+    CHECK(kept == 4);
+    // the level's sites gone: every slot empties
+    std::vector<ProbeSite> none;
+    CHECK(pickResidentProbes(none, Vec3(0, 0, 0), 15.0, resident));
+    for (int r : resident) CHECK(r == -1);
 }

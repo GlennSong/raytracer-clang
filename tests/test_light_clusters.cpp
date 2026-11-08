@@ -3,6 +3,7 @@
 
 #include "test_framework.h"
 #include "../src/renderer/light_clusters.h"
+#include "../src/renderer/probe_grid.h"
 #include <chrono>
 #include <cmath>
 
@@ -98,4 +99,28 @@ TEST_CASE(a_crowd_of_lights_round_the_camera_bins_fast_and_keeps_the_nearest) {
                 out.maxInCell, out.capped, ms);
     CHECK(out.capped > 0);
     for (const uint32_t oc : out.offsetCount) CHECK((oc >> 24) <= 64u);
+}
+
+// WHICH PROBE A PIXEL READS (ADR-0374): the plan grid over the probes' boxes lists, per cell, the two nearest probes
+// whose boxes reach it -- a pixel tests those, not all 64 -- and an empty slot (a box inside out) is never listed.
+TEST_CASE(probe_grid_lists_the_two_nearest_boxes_per_cell) {
+    std::vector<ReflectionProbe> probes;
+    probes.emplace_back(Vec3(20, 5, 0), 0.0f, Vec3(0, 0, -30), Vec3(45, 50, 30));     // 0
+    probes.emplace_back(Vec3(60, 5, 0), 0.0f, Vec3(35, 0, -30), Vec3(85, 50, 30));    // 1
+    probes.emplace_back(Vec3(100, 5, 0), 0.0f, Vec3(75, 0, -30), Vec3(128, 50, 30));  // 2
+    probes.emplace_back(Vec3(0, -1e6, 0), 0.0f, Vec3(1, 1, 1), Vec3(-1, -1, -1));     // 3: empty
+    ProbeGrid grid;
+    buildProbeGrid(probes, grid);
+    CHECK(grid.originX == 0.0f && grid.originZ == -30.0f);
+    CHECK(grid.cell == 2.0f);   // 128 m over 64 cells
+    auto at = [&](double x, double z) {
+        const int cx = static_cast<int>(std::floor((x - grid.originX) / grid.cell));
+        const int cz = static_cast<int>(std::floor((z - grid.originZ) / grid.cell));
+        return grid.cells[static_cast<std::size_t>(cz * ProbeGrid::kSize + cx)];
+    };
+    CHECK(at(5, 0) == 1u);                    // only probe 0's box reaches: (0 + 1), no second
+    CHECK(at(41, 0) == (2u | (1u << 8)));     // both 0's and 1's: 1 nearer the middle (41: 19 m vs 21) first
+    CHECK(at(39, 0) == (1u | (2u << 8)));     // ...and 0 nearer here
+    CHECK(at(80, 10) == (3u | (2u << 8)));    // 1 and 2 (2 nearer the cell's middle, 81); never the empty slot
+    for (uint32_t c : grid.cells) CHECK((c & 0xFFu) != 4u && ((c >> 8) & 0xFFu) != 4u);
 }

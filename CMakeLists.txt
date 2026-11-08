@@ -45,6 +45,7 @@ add_library(engine_core STATIC
     src/job_system.cpp
     src/renderer/settings.cpp
     src/renderer/light_clusters.cpp
+    src/renderer/probe_grid.cpp
     src/renderer/hosted_window.cpp
     src/renderer/debug_ui_clipboard.cpp
     src/engine/recent_scenes.cpp
@@ -249,8 +250,10 @@ add_library(engine_core STATIC
     src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
     src/engine/systems/light_system.cpp
+    src/engine/systems/probe_system.cpp
     src/engine/lights/light_kinds.cpp
     src/engine/lights/light_picker.cpp
+    src/engine/lights/probe_sites.cpp
     src/engine/sky/sky_atmosphere.cpp
     src/engine/systems/xr_camera_system.cpp
     src/engine/systems/debug_draw_system.cpp
@@ -1148,7 +1151,7 @@ function(rt_build_vulkan_shaders)
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
                    clouds.frag clouds_composite.frag clouds_resolve.frag
-                   ui.vert ui.frag occlusion_reduce.comp crowd.comp cluster_bin.comp sky_view.comp lum_histogram.comp aerial_volume.comp sky_cube.comp sky_prefilter.comp)
+                   ui.vert ui.frag occlusion_reduce.comp crowd.comp cluster_bin.comp sky_view.comp lum_histogram.comp aerial_volume.comp sky_cube.comp sky_prefilter.comp probe_relight.comp probe_prefilter.comp)
     set(VK_SPV_FILES "")
     foreach(shader ${VK_SHADERS})
         add_custom_command(
@@ -1157,7 +1160,7 @@ function(rt_build_vulkan_shaders)
                     ${VK_SHADER_SRC_DIR}/${shader}
                     -I ${VK_SHADER_SRC_DIR}
                     -o ${VK_SHADER_OUT_DIR}/${shader}.spv
-            DEPENDS ${VK_SHADER_SRC_DIR}/${shader} ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl
+            DEPENDS ${VK_SHADER_SRC_DIR}/${shader} ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl
             COMMENT "glslc ${shader} -> ${shader}.spv"
             VERBATIM)
         list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)
@@ -1167,7 +1170,7 @@ function(rt_build_vulkan_shaders)
         OUTPUT ${VK_SHADER_OUT_DIR}/mesh_probe.frag.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${VK_SHADER_SRC_DIR}/mesh.frag -DPROBE_CAPTURE -I ${VK_SHADER_SRC_DIR}
                 -o ${VK_SHADER_OUT_DIR}/mesh_probe.frag.spv
-        DEPENDS ${VK_SHADER_SRC_DIR}/mesh.frag ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl
+        DEPENDS ${VK_SHADER_SRC_DIR}/mesh.frag ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl
         COMMENT "glslc mesh.frag (PROBE_CAPTURE) -> mesh_probe.frag.spv"
         VERBATIM)
     list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/mesh_probe.frag.spv)

@@ -48,6 +48,8 @@ struct RenderView {
     // WHERE THE LIGHTS ARE (ADR-0362): the producers publish on their channels, LightSystem picks the frame's
     // lights into it, RenderSystem draws with them
     LightBoard lights;
+    // the reflection probes near the camera and this frame's captures (ADR-0374: ProbeSystem -> RenderSystem)
+    ProbeBoard probes;
     // The placed camera the view is rendered through, if any (invalid when the
     // editor controllers drive it). Lets the render system hide that entity's
     // gizmo — you don't draw the camera you are inside of.

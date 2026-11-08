@@ -6,6 +6,7 @@
 // file one plain white point kind stands -- there is no C++ copy of the catalogue.
 
 #include "../../rt_math.h"
+#include "probe_sites.h"   // ProbeRules
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -47,6 +48,7 @@ struct LightBook {
     // THE GLOWS (ADR-0369): a glowing surface's class and its real luminance (cd/m^2) under the physical sky
     struct Glow { std::string name; float nits = 0.0f; };
     std::vector<Glow> glows;
+    ProbeRules probes;   // the reflection probes along the streets (ADR-0374)
     float glowNits(const std::string& name) const;   // 0: no such class
     int kind(const std::string& name) const;   // its index, -1 if none
     int pool(const std::string& name) const;

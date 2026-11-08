@@ -6,59 +6,7 @@
 // encodes on store. Without the Phase 5 tone map the bright sun disc clips to
 // white — expected until the composite tonemap lands.
 
-struct Light {
-    vec4 positionIntensity;
-    vec4 directionInner;
-    vec4 colorOuter;
-    vec4 typeRange;
-};
-layout(set = 0, binding = 0) uniform Globals {
-    mat4  viewProjection;
-    mat4  view;
-    mat4  invViewProjection;
-    mat4  cascadeVP[4];
-    vec4  cameraPosition;
-    vec4  ambient;
-    vec4  cascadeSplit;
-    ivec4 counts;
-    vec4  shadowParams;
-    vec4  skySunDir;       // xyz dir, w disc intensity (0 behind a ridge)
-    vec4  skySunColor;     // rgb, w the WIDE aureole (softened behind a ridge)
-    vec4  skyZenith;
-    vec4  skyHorizon;
-    vec4  skyGround;
-    vec4  skyCloud;        // x coverage, y density, z scale, w time
-    Light lights[32];
-    vec4  fog;             // (appended after lights — see GlobalsUBO)
-    vec4  shadowTint;
-    vec4  wind1;
-    vec4  wind2;
-    vec4  skyMoonDir;      // xyz toward the moon, w disc radiance (0 = down)
-    vec4  skyMoonSun;      // xyz TRUE sun direction (lights the disc), w lit fraction
-    vec4  skyCelX;         // the celestial frame in local space (stars)
-    vec4  skyCelY;
-    vec4  skyCelZ;
-    vec4  skyStars;        // x visibility (0 by day), y Milky Way strength
-    vec4  skyCity;         // xy unit XZ toward the city, z light pollution (0..1)
-    // (the rest of the block as mesh.frag declares it, to reach the physical sky's uniforms)
-    vec4  terrainHorizon;
-    vec4  terrainHorizon2;
-    vec4  viewerBoxA;
-    vec4  viewerBoxB;
-    vec4  glassMode;
-    vec4  terrainNormal;
-    vec4  terrainNormal2;
-    vec4  terrainSurface;
-    vec4  terrainSurface2;
-    ivec4 clusterGrid;
-    vec4  clusterDepth;
-    vec4  skyPhysical;     // THE PHYSICAL SKY (ADR-0367): x ground radius, y camera height, z the active light's top
-    vec4  skyPhysical2;    //   illuminance, w cos(sun radius); x disc visibility, y the other light's, z top radius
-    vec4  skyPhysical3;    //   x 1: the active light is the sun, y the stars' / moon's / city glow's scale
-} g;
-#include "sky_physical.glsl"
-
-layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
+#include "globals.glsl"   // (set 0 as every scene shader sees it: ADR-0372)
 
 layout(location = 0) in vec3 inViewDir;
 layout(location = 0) out vec4 outColor;

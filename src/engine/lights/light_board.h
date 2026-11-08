@@ -39,6 +39,20 @@ struct LightBoard {
     std::vector<SpotLight> spots;
 };
 
+// THE REFLECTION PROBES (ADR-0374): ProbeSystem's resident set, slot by slot (the slot is the probe's index on the GPU;
+// an empty slot's box is inside out, so it holds nothing), `revision` bumped whenever a slot changes, and the faces to
+// capture this frame, which RenderSystem draws (the static world within `reach` of the probe).
+struct ProbeBoard {
+    struct Face {
+        uint32_t slot = 0;
+        int face = 0;
+    };
+    std::vector<ReflectionProbe> slots;
+    uint64_t revision = 0;
+    std::vector<Face> captures;
+    double reach = 300.0;
+};
+
 }  // namespace engine
 
 #endif

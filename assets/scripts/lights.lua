@@ -36,6 +36,12 @@ return {
   city_glow_nits = 2.0,
   moon_nits = 2500,
 
+  -- THE REFLECTION PROBES (ADR-0374): one every `spacing` m of street, `height` m over the carriageway, its box (the
+  -- reflection's parallax) `side` m past the kerbs either side to the frontages, from `below` under the street to
+  -- `above` over it; sites nearer than `merge` are one (junctions); the 64 nearest are held, and one leaves only once it
+  -- is `hysteresis` m past the nearest set's edge
+  probes = { spacing = 40, height = 5, side = 30, below = 1, above = 45, merge = 20, hysteresis = 15 },
+
   -- THE GLOWS (ADR-0369): each class of glowing surface at its real luminance (cd/m^2) under the physical sky, in its
   -- own colour; a class not here keeps its old emission scaled by emission_scale
   glows = {

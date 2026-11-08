@@ -16,6 +16,7 @@
 #include "../../slot_map.h"
 #include "../../engine/vertex_pack.h"
 #include "../light_clusters.h"   // buildClusters (clustered lights, RT_CLUSTERED)
+#include "../probe_grid.h"       // buildProbeGrid (ADR-0374)
 
 #include <vulkan/vulkan.h>
 // GPU memory: AMD's Vulkan Memory Allocator (third_party/VulkanMemoryAllocator, compiled
@@ -976,6 +977,32 @@ struct VulkanRenderer::Impl {
     VkPipeline probeCulled = VK_NULL_HANDLE, probeCulledPacked = VK_NULL_HANDLE;
     VkPipeline probeTwoSided = VK_NULL_HANDLE, probeTwoSidedPacked = VK_NULL_HANDLE;
     VkPipeline probeTerrain = VK_NULL_HANDLE;
+    // RELIT (ADR-0373): the probes' radiance cubes (a cube array, kProbeMips GGX mips) -- relit a few a frame by
+    // probe_relight.comp, blurred by probe_prefilter.comp -- and the probes as set (setReflectionProbes): their boxes in a
+    // per-frame buffer (set 0 binding 16) beside the cube array (17), for mesh.frag
+    static constexpr uint32_t kProbeMips = 5;
+    VkImage probeRadImage = VK_NULL_HANDLE;
+    VkDeviceMemory probeRadMemory = VK_NULL_HANDLE;
+    VkImageView probeRadCubeView = VK_NULL_HANDLE;   // sampled, all mips
+    VkImageView probeRadMipView[kProbeMips]{};       // storage, 2D array, one mip each
+    bool probeRadGeneral = false;
+    std::vector<ReflectionProbe> probes;
+    std::array<uint8_t, kMaxProbes> probeFaces{};    // the faces captured since it was placed (bit per face)
+    std::array<uint8_t, kMaxProbes> probeLit{};      // relit at least once
+    ProbeGrid probeGrid;                              // which probe a pixel reads (ADR-0374)
+    uint32_t relightCursor = 0;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> probeBuf{};
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> probeBufMem{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> probeBufMapped{};
+    VkDescriptorSetLayout relightSetLayout = VK_NULL_HANDLE, pfSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool relightPool = VK_NULL_HANDLE;
+    VkDescriptorSet relightSet = VK_NULL_HANDLE;
+    VkDescriptorSet pfSets[kProbeMips]{};
+    VkPipelineLayout relightLayout = VK_NULL_HANDLE, pfLayout = VK_NULL_HANDLE;
+    VkPipeline relightPipe = VK_NULL_HANDLE, pfPipe = VK_NULL_HANDLE;
+    bool relightFailed = false;
+    bool ensureRelightPipelines();
+    void recordProbeRelight(VkCommandBuffer cmd);
     void queueDraw(const DrawItem& item) {
         if (captureActive >= 0) captures[static_cast<std::size_t>(captureActive)].items.push_back(item);
         else if (captureActive == -1) drawQueue.push_back(item);
@@ -988,6 +1015,7 @@ struct VulkanRenderer::Impl {
         if (captureActive == -1) return drawQueue.empty() ? nullptr : &drawQueue.back();
         return nullptr;
     }
+    bool initialGeneral = false;   // the storage images moved to GENERAL (the first command buffer)
     bool createProbeTargets();
     void recordProbeCaptures(VkCommandBuffer cmd);
     void dumpProbe(uint32_t probe, const std::string& path);
@@ -1403,6 +1431,7 @@ bool VulkanRenderer::Impl::createLogicalDevice() {
         VkPhysicalDeviceFeatures have{};
         vkGetPhysicalDeviceFeatures(physicalDevice, &have);
         if (have.depthClamp) { features.depthClamp = VK_TRUE; depthClamp = true; }
+        if (have.imageCubeArray) features.imageCubeArray = VK_TRUE;   // (the reflection probes' cube array: ADR-0373)
     }
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -3854,7 +3883,7 @@ bool VulkanRenderer::Impl::createSyncObjects() {
 }
 
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 16> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 18> bindings{};
     bindings[0].binding = 0;   // global UBO
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;   // (slots: the frame's, the probe faces': ADR-0372)
     bindings[0].descriptorCount = 1;
@@ -3893,6 +3922,15 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
         bindings[b].descriptorCount = 1;
         bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
+    // the reflection probes (ADR-0373): their positions and boxes (16), their relit cubes (17)
+    bindings[16].binding = 16;
+    bindings[16].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[16].descriptorCount = 1;
+    bindings[17].binding = 17;
+    bindings[17].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[17].descriptorCount = 1;
+    // every binding is the compute passes' too: probe_relight.comp lights a probe as mesh.frag lights a surface
+    for (VkDescriptorSetLayoutBinding& b : bindings) b.stageFlags |= VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -4096,10 +4134,10 @@ bool VulkanRenderer::Impl::createDescriptorPool() {
     std::array<VkDescriptorPoolSize, 3> sizes{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     sizes[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
-    sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;   // the clustered lights' three buffers
-    sizes[2].descriptorCount = MAX_FRAMES_IN_FLIGHT * 3;
+    sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;   // the clustered lights' three buffers, the probes'
+    sizes[2].descriptorCount = MAX_FRAMES_IN_FLIGHT * 4;
     sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon + 3 terrain maps
-    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 12;   // + the sky view + transmittance + the aerial volume's two + the cube
+    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 13;   // (+ the probes' cube array)   // + the sky view + transmittance + the aerial volume's two + the cube
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = static_cast<uint32_t>(sizes.size());
@@ -4263,6 +4301,25 @@ void VulkanRenderer::Impl::updateSkyDescriptors() {
             write.pImageInfo = &img;
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
         }
+    // 16, 17: the reflection probes' boxes and relit cubes (ADR-0373)
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT && probeRadCubeView && probeBuf[i]; ++i) {
+        VkDescriptorBufferInfo bi{probeBuf[i], 0, VK_WHOLE_SIZE};
+        VkDescriptorImageInfo img{brdfLutSampler, probeRadCubeView, VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet w[2]{};
+        w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[0].dstSet = descriptorSets[i];
+        w[0].dstBinding = 16;
+        w[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[0].descriptorCount = 1;
+        w[0].pBufferInfo = &bi;
+        w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[1].dstSet = descriptorSets[i];
+        w[1].dstBinding = 17;
+        w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[1].descriptorCount = 1;
+        w[1].pImageInfo = &img;
+        vkUpdateDescriptorSets(device, 2, w, 0, nullptr);
+    }
     // 15: the sky cube (made at init; GENERAL once written)
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT && cubeOutView; ++i) {
         VkDescriptorImageInfo img{brdfLutSampler, cubeOutView, VK_IMAGE_LAYOUT_GENERAL};
@@ -4527,6 +4584,49 @@ bool VulkanRenderer::Impl::createProbeTargets() {
             !view(probeGbufImage[k], fmt, VK_IMAGE_ASPECT_COLOR_BIT, kMaxProbes * 6, probeGbufView[k]))
             return false;
     }
+    {   // the radiance cube array (ADR-0373)
+        VkImageCreateInfo ii{};
+        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+        ii.imageType = VK_IMAGE_TYPE_2D;
+        ii.format = fmt;
+        ii.extent = {kProbeFace, kProbeFace, 1};
+        ii.mipLevels = kProbeMips;
+        ii.arrayLayers = kMaxProbes * 6;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device, &ii, nullptr, &probeRadImage) != VK_SUCCESS) return false;
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(device, probeRadImage, &req);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device, &ai, nullptr, &probeRadMemory) != VK_SUCCESS) return false;
+        vkBindImageMemory(device, probeRadImage, probeRadMemory, 0);
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = probeRadImage;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+        vi.format = fmt;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, kProbeMips, 0, kMaxProbes * 6};
+        if (vkCreateImageView(device, &vi, nullptr, &probeRadCubeView) != VK_SUCCESS) return false;
+        for (uint32_t m = 0; m < kProbeMips; ++m) {
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, m, 1, 0, kMaxProbes * 6};
+            if (vkCreateImageView(device, &vi, nullptr, &probeRadMipView[m]) != VK_SUCCESS) return false;
+        }
+        const VkDeviceSize bytes = 32 + kMaxProbes * 48 + ProbeGrid::kSize * ProbeGrid::kSize * 4;
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+            if (!createBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                              probeBuf[i], probeBufMem[i]))
+                return false;
+            vkMapMemory(device, probeBufMem[i], 0, bytes, 0, &probeBufMapped[i]);
+            std::memset(probeBufMapped[i], 0, static_cast<std::size_t>(bytes));
+        }
+    }
     if (!image(kDepthFormat, 1, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, probeDepthImage, probeDepthMemory) ||
         !view(probeDepthImage, kDepthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1, probeDepthView))
         return false;
@@ -4681,6 +4781,7 @@ void VulkanRenderer::Impl::recordProbeCaptures(VkCommandBuffer cmd) {
         vkCmdEndRenderPass(cmd);
         // into the probe's layer, mirrored left to right
         const uint32_t layer = std::min(slot.probe, kMaxProbes - 1) * 6 + static_cast<uint32_t>(slot.face % 6);
+        probeFaces[std::min(slot.probe, kMaxProbes - 1)] |= static_cast<uint8_t>(1u << (slot.face % 6));
         VkImageMemoryBarrier toDst[3]{};
         for (int k = 0; k < 3; ++k) {
             toDst[k].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -4712,6 +4813,164 @@ void VulkanRenderer::Impl::recordProbeCaptures(VkCommandBuffer cmd) {
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
                              nullptr, 0, nullptr, 3, toDst);
     }
+}
+
+bool VulkanRenderer::Impl::ensureRelightPipelines() {
+    if (relightPipe && pfPipe) return true;
+    if (relightFailed || !probeRadCubeView) return false;
+    relightFailed = true;
+    VkDescriptorSetLayoutBinding rb[4]{};
+    for (int k = 0; k < 4; ++k) {
+        rb[k].binding = static_cast<uint32_t>(k);
+        rb[k].descriptorType = k < 3 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        rb[k].descriptorCount = 1;
+        rb[k].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 4;
+    li.pBindings = rb;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &relightSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorSetLayoutBinding pb[2]{};
+    pb[0].binding = 0; pb[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; pb[0].descriptorCount = 1; pb[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pb[1].binding = 1; pb[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; pb[1].descriptorCount = 1;
+    pb[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    li.bindingCount = 2;
+    li.pBindings = pb;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &pfSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize sz[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 + kProbeMips}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 + kProbeMips}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1 + kProbeMips;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sz;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &relightPool) != VK_SUCCESS) return false;
+    VkDescriptorSetAllocateInfo a{};
+    a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    a.descriptorPool = relightPool;
+    a.descriptorSetCount = 1;
+    a.pSetLayouts = &relightSetLayout;
+    if (vkAllocateDescriptorSets(device, &a, &relightSet) != VK_SUCCESS) return false;
+    {
+        VkDescriptorImageInfo img[4]{};
+        for (int k = 0; k < 3; ++k) img[k] = {brdfLutSampler, probeGbufView[k], VK_IMAGE_LAYOUT_GENERAL};
+        img[3] = {VK_NULL_HANDLE, probeRadMipView[0], VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet w[4]{};
+        for (int k = 0; k < 4; ++k) {
+            w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[k].dstSet = relightSet;
+            w[k].dstBinding = static_cast<uint32_t>(k);
+            w[k].descriptorCount = 1;
+            w[k].descriptorType = rb[k].descriptorType;
+            w[k].pImageInfo = &img[k];
+        }
+        vkUpdateDescriptorSets(device, 4, w, 0, nullptr);
+    }
+    for (uint32_t m = 0; m < kProbeMips; ++m) {
+        a.pSetLayouts = &pfSetLayout;
+        if (vkAllocateDescriptorSets(device, &a, &pfSets[m]) != VK_SUCCESS) return false;
+        VkDescriptorImageInfo img[2] = {{VK_NULL_HANDLE, probeRadMipView[m], VK_IMAGE_LAYOUT_GENERAL},
+                                        {brdfLutSampler, probeRadCubeView, VK_IMAGE_LAYOUT_GENERAL}};
+        VkWriteDescriptorSet w[2]{};
+        for (int k = 0; k < 2; ++k) {
+            w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[k].dstSet = pfSets[m];
+            w[k].dstBinding = static_cast<uint32_t>(k);
+            w[k].descriptorCount = 1;
+            w[k].descriptorType = pb[k].descriptorType;
+            w[k].pImageInfo = &img[k];
+        }
+        vkUpdateDescriptorSets(device, 2, w, 0, nullptr);
+    }
+    auto pipe = [&](const VkDescriptorSetLayout* sls, uint32_t n, const char* spv, VkPipelineLayout& layout, VkPipeline& out) {
+        VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16};
+        VkPipelineLayoutCreateInfo pl{};
+        pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pl.setLayoutCount = n;
+        pl.pSetLayouts = sls;
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &range;
+        if (vkCreatePipelineLayout(device, &pl, nullptr, &layout) != VK_SUCCESS) return false;
+        VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/" + spv);
+        if (!mod) return false;
+        VkComputePipelineCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        ci.stage.module = mod;
+        ci.stage.pName = "main";
+        ci.layout = layout;
+        const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &out);
+        vkDestroyShaderModule(device, mod, nullptr);
+        return r == VK_SUCCESS;
+    };
+    const VkDescriptorSetLayout relightSls[2] = {descriptorSetLayout, relightSetLayout};
+    if (!pipe(relightSls, 2, "probe_relight.comp.spv", relightLayout, relightPipe) ||
+        !pipe(&pfSetLayout, 1, "probe_prefilter.comp.spv", pfLayout, pfPipe))
+        return false;
+    relightFailed = false;
+    LOG_INFO("[vulkan] reflection probes: relight pipelines ready");
+    return true;
+}
+
+// THE PROBES RELIT (ADR-0373): up to four a frame, round the probes whose six faces have all been captured -- lit as the
+// scene is now (set 0, the frame's slot), then blurred into their rough mips
+void VulkanRenderer::Impl::recordProbeRelight(VkCommandBuffer cmd) {
+    if (!probeRadGeneral && probeRadImage) {   // (sampled by mesh.frag from the first frame)
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = probeRadImage;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, kProbeMips, 0, kMaxProbes * 6};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &b);
+        probeRadGeneral = true;
+    }
+    if (probes.empty() || !probeGbufGeneral || !ensureRelightPipelines()) return;
+    const uint32_t n = static_cast<uint32_t>(std::min<std::size_t>(probes.size(), kMaxProbes));
+    std::vector<uint32_t> pick;
+    for (uint32_t k = 0; k < n && pick.size() < 4; ++k) {
+        const uint32_t i = (relightCursor + k) % n;
+        if (probeFaces[i] == 0x3F) pick.push_back(i);
+    }
+    relightCursor = (relightCursor + 4) % std::max(n, 1u);
+    if (pick.empty()) return;
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+                         &mb, 0, nullptr, 0, nullptr);
+    const uint32_t frameSlot = 0;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, relightPipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, relightLayout, 0, 1, &descriptorSets[currentFrame], 1, &frameSlot);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, relightLayout, 1, 1, &relightSet, 0, nullptr);
+    for (uint32_t i : pick) {
+        const float push[4] = {static_cast<float>(probes[i].position.x), static_cast<float>(probes[i].position.y),
+                               static_cast<float>(probes[i].position.z), static_cast<float>(i)};
+        vkCmdPushConstants(cmd, relightLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+        vkCmdDispatch(cmd, kProbeFace / 8, kProbeFace / 8, 6);
+        probeLit[i] = 1;
+    }
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pfPipe);
+    for (uint32_t m = 1; m < kProbeMips; ++m) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pfLayout, 0, 1, &pfSets[m], 0, nullptr);
+        const uint32_t sz = kProbeFace >> m;
+        for (uint32_t i : pick) {
+            const float push[4] = {static_cast<float>(m) / static_cast<float>(kProbeMips - 1), static_cast<float>(i), 0.0f, 0.0f};
+            vkCmdPushConstants(cmd, pfLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+            vkCmdDispatch(cmd, (sz + 7) / 8, (sz + 7) / 8, 6);
+        }
+    }
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
 }
 
 // RT_PROBE_DUMP (a check of the capture): probe `probe`'s six albedo faces, read back and written as one PPM strip
@@ -6973,6 +7232,36 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
         gpuTimeWritten[currentFrame] = true;
     }
     gpuMark(cmd, 0);
+    // THE STORAGE IMAGES' WORKING LAYOUT, once (ADR-0373): the aerial volume, the sky cubes and the probes' arrays are
+    // sampled by set 0 from the first frame -- before the features that write them have run -- so they go to GENERAL
+    // together here, and each feature's own first-use transition finds them there
+    if (!initialGeneral) {
+        std::vector<VkImageMemoryBarrier> bs;
+        auto add = [&](VkImage img, uint32_t mips, uint32_t layers) {
+            if (!img) return;
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = img;
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, layers};
+            bs.push_back(b);
+        };
+        add(aerialImage[0], 1, 1);
+        add(aerialImage[1], 1, 1);
+        add(cubeSrcImage, kCubeSrcMips, 6);
+        add(cubeOutImage, kCubeOutMips, 6);
+        for (int k = 0; k < 3; ++k) add(probeGbufImage[k], 1, kMaxProbes * 6);
+        add(probeRadImage, kProbeMips, kMaxProbes * 6);
+        if (!bs.empty())
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr,
+                                 static_cast<uint32_t>(bs.size()), bs.data());
+        aerialGeneral = cubeGeneral = probeGbufGeneral = probeRadGeneral = true;
+        initialGeneral = true;
+    }
     recordClusterBin(cmd);   // the froxels' light lists (ADR-0364), before the scene pass reads them
     recordSkyView(cmd);      // the physical sky's view (ADR-0367), before the sky and the scene sample it
     recordAerial(cmd);       // ...and the air between the camera and everything it sees (ADR-0370)
@@ -6983,6 +7272,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     recordShadowPass(cmd);
     gpuMark(cmd, 1);
     recordProbeCaptures(cmd);   // this frame's reflection-probe faces (ADR-0372: after the shadows, which set 0 samples)
+    recordProbeRelight(cmd);    // ...and a few probes relit as the scene is now (ADR-0373)
 
     // Scene pass → offscreen HDR + world-normal G-buffer (sky + geometry).
     std::array<VkClearValue, 3> clears{};
@@ -7463,6 +7753,26 @@ void VulkanRenderer::Impl::drawFrame() {
     cpuGlobals.cameraPosition[3] = preExposure();
     // Upload this frame's globals into its persistently mapped UBO.
     std::memcpy(globalsMapped[currentFrame], &cpuGlobals, sizeof(GlobalsUBO));
+    // THE PROBES for mesh.frag (ADR-0373/0374): count and the plan grid's corner and cell, its size, then each one's
+    // position (w 1: relit), box min, box max, then the grid's cells
+    if (probeBufMapped[currentFrame]) {
+        float* pb = static_cast<float*>(probeBufMapped[currentFrame]);
+        const uint32_t n = static_cast<uint32_t>(std::min<std::size_t>(probes.size(), kMaxProbes));
+        pb[0] = static_cast<float>(n);
+        pb[1] = probeGrid.originX;
+        pb[2] = probeGrid.originZ;
+        pb[3] = probeGrid.cell;
+        pb[4] = static_cast<float>(ProbeGrid::kSize);
+        std::memcpy(pb + 8 + kMaxProbes * 12, probeGrid.cells.data(), probeGrid.cells.size() * sizeof(uint32_t));
+        for (uint32_t i = 0; i < n; ++i) {
+            const ReflectionProbe& rp = probes[i];
+            float* q = pb + 8 + i * 12;
+            q[0] = static_cast<float>(rp.position.x); q[1] = static_cast<float>(rp.position.y); q[2] = static_cast<float>(rp.position.z);
+            q[3] = probeLit[i] ? 1.0f : 0.0f;
+            q[4] = static_cast<float>(rp.boxMin.x); q[5] = static_cast<float>(rp.boxMin.y); q[6] = static_cast<float>(rp.boxMin.z); q[7] = 0.0f;
+            q[8] = static_cast<float>(rp.boxMax.x); q[9] = static_cast<float>(rp.boxMax.y); q[10] = static_cast<float>(rp.boxMax.z); q[11] = 0.0f;
+        }
+    }
     // ...and each probe face's, in the slots after it (ADR-0372): its view and eye, no lights or shadows (the capture
     // writes the surface, not its light)
     for (uint32_t c = 0; c < captureCount; ++c) {
@@ -7811,6 +8121,19 @@ void VulkanRenderer::shutdown() {
     for (VkPipeline pp : {impl->probeCulled, impl->probeCulledPacked, impl->probeTwoSided, impl->probeTwoSidedPacked, impl->probeTerrain})
         if (pp) vkDestroyPipeline(impl->device, pp, nullptr);
     if (impl->probeFramebuffer) vkDestroyFramebuffer(impl->device, impl->probeFramebuffer, nullptr);
+    for (VkPipeline pp : {impl->relightPipe, impl->pfPipe}) if (pp) vkDestroyPipeline(impl->device, pp, nullptr);
+    for (VkPipelineLayout pl : {impl->relightLayout, impl->pfLayout}) if (pl) vkDestroyPipelineLayout(impl->device, pl, nullptr);
+    if (impl->relightPool) vkDestroyDescriptorPool(impl->device, impl->relightPool, nullptr);
+    for (VkDescriptorSetLayout dl : {impl->relightSetLayout, impl->pfSetLayout}) if (dl) vkDestroyDescriptorSetLayout(impl->device, dl, nullptr);
+    for (uint32_t m = 0; m < Impl::kProbeMips; ++m) if (impl->probeRadMipView[m]) vkDestroyImageView(impl->device, impl->probeRadMipView[m], nullptr);
+    if (impl->probeRadCubeView) vkDestroyImageView(impl->device, impl->probeRadCubeView, nullptr);
+    if (impl->probeRadImage) vkDestroyImage(impl->device, impl->probeRadImage, nullptr);
+    if (impl->probeRadMemory) vkFreeMemory(impl->device, impl->probeRadMemory, nullptr);
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        if (impl->probeBufMem[i]) vkUnmapMemory(impl->device, impl->probeBufMem[i]);
+        if (impl->probeBuf[i]) vkDestroyBuffer(impl->device, impl->probeBuf[i], nullptr);
+        if (impl->probeBufMem[i]) vkFreeMemory(impl->device, impl->probeBufMem[i], nullptr);
+    }
     if (impl->probeRenderPass) vkDestroyRenderPass(impl->device, impl->probeRenderPass, nullptr);
     for (int k = 0; k < 3; ++k) {
         if (impl->probeTargetView[k]) vkDestroyImageView(impl->device, impl->probeTargetView[k], nullptr);
@@ -8368,6 +8691,19 @@ void VulkanRenderer::setEnvironmentMap(TextureHandle equirect) {
         impl->envBound = false;
     }
     impl->updateGlobalEnvDescriptor();
+}
+
+// THE REFLECTION PROBES (ADR-0373): slot i is probes[i]; one that moved (or is new) is unlit until its six faces are
+// captured again
+void VulkanRenderer::setReflectionProbes(const std::vector<ReflectionProbe>& probes) {
+    const std::size_t n = std::min<std::size_t>(probes.size(), Impl::kMaxProbes);
+    for (std::size_t i = 0; i < n; ++i) {
+        const bool same = i < impl->probes.size() && (impl->probes[i].position - probes[i].position).lengthSquared() < 1e-6;
+        if (!same) { impl->probeFaces[i] = 0; impl->probeLit[i] = 0; }
+    }
+    for (std::size_t i = n; i < Impl::kMaxProbes; ++i) { impl->probeFaces[i] = 0; impl->probeLit[i] = 0; }
+    impl->probes.assign(probes.begin(), probes.begin() + static_cast<std::ptrdiff_t>(n));
+    buildProbeGrid(impl->probes, impl->probeGrid);
 }
 
 // A REFLECTION PROBE'S FACE (ADR-0372): its camera (90 degrees, square, reverse-Z like the frame's) into the next free

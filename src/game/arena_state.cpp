@@ -40,6 +40,7 @@
 #include "../engine/systems/carry_system.h"
 #include "../engine/systems/render_system.h"
 #include "../engine/systems/light_system.h"
+#include "../engine/systems/probe_system.h"
 #include "../engine/systems/xr_camera_system.h"
 #include "../engine/systems/debug_draw_system.h"
 #include "../engine/systems/audio_system.h"
@@ -262,6 +263,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<XrCameraSystem>();
     addSystem<UnderwaterSystem>();   // the camera under a water surface -> the composite's underwater look (#58)
     addSystem<LightSystem>();   // picks the frame's lights from everything that gives off light (ADR-0362)
+    addSystem<ProbeSystem>();   // the reflection probes along the streets, and which to capture (ADR-0374)
     addSystem<RenderSystem>();
     addSystem<DebugDrawSystem>();   // ctx.debug lines on top of the scene (ADR-0067)
     // After the camera systems so the listener follows this frame's view.

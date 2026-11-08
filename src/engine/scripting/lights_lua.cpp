@@ -52,6 +52,21 @@ bool loadLightsSource(const std::string& code, LightBook& out, std::string* err)
     book.emissionScale = static_cast<float>(numField(L, root, "emission_scale", 1.0));
     book.cityGlowNits = static_cast<float>(numField(L, root, "city_glow_nits", 0.0));
     book.moonNits = static_cast<float>(numField(L, root, "moon_nits", 2500.0));
+    lua_getfield(L, root, "probes");
+    if (lua_istable(L, -1)) {
+        const int t = lua_gettop(L);
+        ProbeRules& r = book.probes;
+        r.spacing = numField(L, t, "spacing", r.spacing);
+        r.height = numField(L, t, "height", r.height);
+        r.side = numField(L, t, "side", r.side);
+        r.below = numField(L, t, "below", r.below);
+        r.above = numField(L, t, "above", r.above);
+        r.merge = numField(L, t, "merge", r.merge);
+        r.hysteresis = numField(L, t, "hysteresis", r.hysteresis);
+        if (r.spacing < 5 || r.merge < 1 || r.side < 0 || r.below < 0 || r.above <= 0 || r.hysteresis < 0)
+            return fail("probes: spacing >= 5, merge >= 1, side/below/hysteresis >= 0, above > 0");
+    }
+    lua_pop(L, 1);
     lua_getfield(L, root, "pools");
     if (lua_istable(L, -1)) {
         const int pt = lua_gettop(L);

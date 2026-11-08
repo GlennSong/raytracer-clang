@@ -35,6 +35,7 @@ public:
                                    const float* data) override;
     void setEnvironmentMap(TextureHandle equirect) override;
     bool supportsProbeCapture() const override { return true; }
+    void setReflectionProbes(const std::vector<ReflectionProbe>& probes) override;
     void beginProbeFace(uint32_t probe, int face, const Vec3& eye) override;
     void endProbeFace() override;
     bool measuredSceneLuminance(float& log2Units) const override;

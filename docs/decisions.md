@@ -16950,3 +16950,83 @@ the surfaces are) will be baked with the level in stage B; only the relighting r
 
 **Owed:** stage B (placement, the nearest 64 resident,
 the capture schedule, baking the captures with the level); C (relight); D (use in the reflections).
+
+## ADR-0373 — Reflection probes, stages C and D: relit, and used
+
+**Context.** Stage A (ADR-0372) captures what a probe's faces see. They now have to be lit as the scene is lit, and
+reflected.
+
+**Decision.**
+- **One lighting, shared.**
+  - `mesh.frag`'s globals block and set-0 textures move to `globals.glsl`. The GGX terms, the lights' falloff, the
+    cascaded and mountain shadows and one light's contribution (`shadeLight`) move to `lighting_common.glsl`. The sky
+    harmonics' evaluation moves to `sky_physical.glsl`.
+  - `mesh.frag`, `sky.frag` (its partial copy of the block retired) and the relight shader include them.
+  - Proof of a pure move: the same shot with only cloud edges, wind-moved foliage and a passing car differing.
+  - Every set-0 binding is now the compute stage's too.
+- **Relit** (`probe_relight.comp`): each texel of a probe's six faces, lit as the scene pass lights a surface:
+  - the frame's lights (the sun or moon with its cascaded shadow, measured from the frame's camera, and the mountains'
+    shadow; the picked lamps);
+  - the sky's light by the harmonics, its reflection of the sky cube, and the surface's glow;
+  - or the sky itself where the capture found nothing.
+
+  The result goes into a 64^2 cube array (64 probes, 5 GGX mips blurred by `probe_prefilter.comp`). Up to four probes
+  are relit a frame, round those whose six faces have all been captured.
+- **Used** (`globals.glsl` `probeReflection`, from `mesh.frag`'s physical branch):
+  - the probe whose box holds the fragment, its parallax corrected (the reflected ray's exit from the box, seen from
+    the probe), at roughness × 4;
+  - faded to the sky cube over the box's last 4 m;
+  - SSR stays first in the composite.
+
+  The probes are `Renderer::setReflectionProbes` (the existing API, Metal's authored probes): slot i is probe i, and
+  one that moved is unlit until recaptured. Probe data is set 0 binding 16, the cube array 17.
+- **The device's `imageCubeArray` feature** is enabled. The storage images (the aerial volume, the sky cubes, the
+  probes' arrays) go to GENERAL together in the first command buffer, since set 0 samples them before their features
+  run.
+
+**Seen** (`~/Pictures/Raytracer/2026-11-07_reflection_probe_first_light.jpg`; `RT_PROBE_TEST=1`, a probe at a street
+corner below a glass tower): the tower's panes reflect the building across the street, rows of windows and all, at noon
+and at golden hour, where with the sky cube alone they were a flat blue-grey.
+
+**Owed:**
+- stage B: placement along the streets, the nearest 64 resident, a capture schedule, the captures baked with the
+  level;
+- per-probe lights at night (today the relight takes the frame's 32);
+- validation: only the material pools' grow-on-demand allocation remains, as designed.
+
+## ADR-0374 — Reflection probes, stage B: along the streets, the nearest 64, read through a plan grid
+
+**Context.** Stages A, C and D (ADR-0372/0373) captured, relit and used one probe that a test hook put at the camera.
+A city needs them where reflections are seen, the street, and enough of them; the renderer holds 64.
+
+**Decision.**
+- **Where** (`lights/probe_sites.h`, pure): along every edge of the level's road network (`LevelRoadGraph`, the one
+  graph every consumer reads; a lanes city's `RoadEntity` graph is empty), one every `spacing` m at `height` m over
+  the carriageway (the ground's height at grade, the line between the ends on a deck or ramp). Sites nearer than
+  `merge` (and within 6 m in height) are one, so a junction gets one. Each box is the street's stretch, `side` m past
+  both kerbs to the frontages, `below` m under the street to `above` over it. river_town: 1017 sites in 1 ms.
+- **The rules are data:** lights.lua `probes` (spacing 40, height 5, side 30, below 1, above 45, merge 20,
+  hysteresis 15), checked when read.
+- **Which 64** (`pickResidentProbes`, pure): the nearest by plan distance. A resident probe keeps its slot until it is
+  `hysteresis` m past the nearest set's edge, so walking a street recaptures only the probes it passes. Done again when
+  the camera has moved 4 m.
+- **The schedule** (`ProbeSystem`, before RenderSystem): a probe that joins queues its six faces, nearest first; two
+  faces a frame; a queued face whose slot was given away is dropped. The slots and the frame's faces go on
+  `RenderView::probes` (`ProbeBoard`). RenderSystem hands the slots to `setReflectionProbes` when their revision changes
+  and draws the faces (the stage A culling, unchanged). An empty slot has an inside-out box. `RT_PROBE_TEST` retires;
+  `RT_PROBES=0` is the A/B.
+- **Which probe a pixel reads** (`renderer/probe_grid.h`, pure): a 64 x 64 plan grid over the probes' boxes, each cell
+  the two probes nearest its middle whose boxes reach it, built when the probes change and uploaded after them in the
+  probe SSBO. A pixel tests those two (the first relit one holding it wins). Testing every box, as stage D did, cost the
+  scene pass 7.6 ms on river_town (6.8 -> 14.4); the grid costs 0.5 ms (7.3).
+- **Probes are lit diffuse only** (`SHADE_DIFFUSE_ONLY` in `lighting_common.glsl`, set by the relight): a light's
+  highlight belongs to where the eye stands, and the probe's eye is not the viewer's. Baked in, the sun's glint off a
+  far window was smeared by the prefilter into a flat yellow patch on every rough leaf that read the probe; widening
+  the roughness made the patch bigger. The sky's reflection and the glows stay.
+
+**Seen** (river_town bench, `~/Claude/raytracer-parked/lightbench` sb0 vs sb5): the glass tower reflects the building
+across the street as in ADR-0373, now from street probes, day and night; no validation messages.
+
+**Owed:** the captures baked with the level; the 256^2 tier for the nearest few; per-probe lights at night; each
+capture face walks the whole world (a cell index of the static draws); `DayNightSystem::findCityBounds` reads the
+empty `RoadEntity` graph too, so a lanes city may have no light-pollution centre (to check).
