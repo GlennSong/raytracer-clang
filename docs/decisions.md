@@ -17065,3 +17065,16 @@ blow up my gpu". The renderer asked for Vulkan 1.0, which has no ray tracing.
 
 **Owed:** the ray-tracing extensions and features on the device, buffer addresses on mesh buffers, the near BLAS set
 with the cap, the reflection rays, and a `raytrace` data table.
+
+## ADR-0376 — Ray-traced reflections near the camera
+
+**Context.** ADR-0375 measured it: near-only ray tracing fits (147 MB within 150 m at the island's densest street);
+everything does not. Glenn: close up ray traced, farther away faked.
+
+**Decision, step by step.**
+- **3a. The device.** On Vulkan 1.2 with VK_KHR_acceleration_structure, VK_KHR_ray_query,
+  VK_KHR_deferred_host_operations and VK_KHR_spirv_1_4, and the device's `bufferDeviceAddress`,
+  `accelerationStructure` and `rayQuery` features, all of them go on (the features through a VkPhysicalDeviceFeatures2
+  chain), VMA takes buffer device addresses, and mesh vertex and index buffers are addressable build inputs (and
+  storage, for hit shading). `RT_RT_REFLECT=0` leaves it all off. Validation-clean on river_town; the frame's cost
+  unchanged (11.10 vs 11.21 ms).

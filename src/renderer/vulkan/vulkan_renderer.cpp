@@ -449,6 +449,10 @@ struct VulkanRenderer::Impl {
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memProps{};
     bool depthClamp = false;   // the device clamps depth (shadow pancaking: createShadowPipeline)
+    // RAY QUERIES (renderer-realism phase 3c, ADR-0376): the device has acceleration structures and ray queries on, and
+    // mesh buffers carry device addresses so a bottom-level build can read them. Vulkan 1.2 and the extensions needed;
+    // RT_RT_REFLECT=0 leaves it all off.
+    bool rayQuery = false;
     uint32_t graphicsFamily = 0;
     uint32_t presentFamily = 0;
     VkDevice device = VK_NULL_HANDLE;
@@ -1455,13 +1459,70 @@ bool VulkanRenderer::Impl::createLogicalDevice() {
         if (have.depthClamp) { features.depthClamp = VK_TRUE; depthClamp = true; }
         if (have.imageCubeArray) features.imageCubeArray = VK_TRUE;   // (the reflection probes' cube array: ADR-0373)
     }
+    // RAY QUERIES (ADR-0376): their extensions and features, when the device has every one
+    VkPhysicalDeviceFeatures2 features2{};
+    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    VkPhysicalDeviceVulkan12Features v12{};
+    v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeat{};
+    asFeat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    VkPhysicalDeviceRayQueryFeaturesKHR rqFeat{};
+    rqFeat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+    const char* rtExts[] = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_RAY_QUERY_EXTENSION_NAME,
+                            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, VK_KHR_SPIRV_1_4_EXTENSION_NAME};
+    const char* rtOff = std::getenv("RT_RT_REFLECT");
+    if (apiVersion >= VK_API_VERSION_1_2 && !(rtOff && std::strcmp(rtOff, "0") == 0)) {
+        uint32_t n = 0;
+        vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &n, nullptr);
+        std::vector<VkExtensionProperties> have(n);
+        vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &n, have.data());
+        bool all = true;
+        for (const char* e : rtExts) {
+            bool found = false;
+            for (const VkExtensionProperties& h : have) found = found || std::strcmp(h.extensionName, e) == 0;
+            all = all && found;
+        }
+        if (all) {
+            // the device's own answer for each feature
+            VkPhysicalDeviceRayQueryFeaturesKHR rqHave{};
+            rqHave.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+            VkPhysicalDeviceAccelerationStructureFeaturesKHR asHave{};
+            asHave.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+            asHave.pNext = &rqHave;
+            VkPhysicalDeviceVulkan12Features v12Have{};
+            v12Have.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+            v12Have.pNext = &asHave;
+            VkPhysicalDeviceFeatures2 query{};
+            query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            query.pNext = &v12Have;
+            vkGetPhysicalDeviceFeatures2(physicalDevice, &query);
+            all = v12Have.bufferDeviceAddress && asHave.accelerationStructure && rqHave.rayQuery;
+        }
+        if (all) {
+            for (const char* e : rtExts) deviceExts.push_back(e);
+            v12.bufferDeviceAddress = VK_TRUE;
+            asFeat.accelerationStructure = VK_TRUE;
+            rqFeat.rayQuery = VK_TRUE;
+            v12.pNext = &asFeat;
+            asFeat.pNext = &rqFeat;
+            rayQuery = true;
+        }
+        LOG_INFO << "[rt] ray queries " << (rayQuery ? "on (acceleration structures, buffer addresses)" : "unavailable on this GPU");
+    }
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     info.queueCreateInfoCount = static_cast<uint32_t>(queueInfos.size());
     info.pQueueCreateInfos = queueInfos.data();
     info.enabledExtensionCount = static_cast<uint32_t>(deviceExts.size());
     info.ppEnabledExtensionNames = deviceExts.data();
-    info.pEnabledFeatures = &features;
+    if (rayQuery) {
+        // features ride the chain, not pEnabledFeatures (one or the other)
+        features2.features = features;
+        features2.pNext = &v12;
+        info.pNext = &features2;
+    } else {
+        info.pEnabledFeatures = &features;
+    }
     if (vkCreateDevice(physicalDevice, &info, nullptr, &device) != VK_SUCCESS) {
         LOG_ERROR("[vulkan] vkCreateDevice failed");
         return false;
@@ -6126,6 +6187,7 @@ bool VulkanRenderer::Impl::createAllocator() {
     if (!fns.vkGetPhysicalDeviceMemoryProperties2KHR) memoryBudgetExt = false;
     info.pVulkanFunctions = &fns;
     if (memoryBudgetExt) info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+    if (rayQuery) info.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;   // (ADR-0376)
     if (vmaCreateAllocator(&info, &allocator) != VK_SUCCESS) {
         LOG_ERROR("[vulkan] vmaCreateAllocator failed");
         return false;
@@ -8509,8 +8571,11 @@ MeshHandle VulkanRenderer::Impl::uploadMeshBytes(const BoundingSphere& bounds, c
         const VkDeviceSize isize = indexCount * sizeof(uint32_t);
         // Suballocated by VMA; the data goes through the upload queue and is on the
         // device by the next frame (ADR-0094).
-        bool ok = createGpuBuffer(vsize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, record.vertexBuffer, record.vertexAlloc) &&
-                  createGpuBuffer(isize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, record.indexBuffer, record.indexAlloc);
+        // with ray queries, a bottom-level build reads the mesh where it lies (ADR-0376)
+        const VkBufferUsageFlags rtRead = rayQuery ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                          VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0;
+        bool ok = createGpuBuffer(vsize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | rtRead, record.vertexBuffer, record.vertexAlloc) &&
+                  createGpuBuffer(isize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | rtRead, record.indexBuffer, record.indexAlloc);
         if (!ok) {
             LOG_ERROR("[vulkan] uploadMesh buffer creation failed");
             destroyMesh(record);
