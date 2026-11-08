@@ -271,3 +271,34 @@ TEST_CASE(probe_residency_is_the_nearest_and_keeps_its_slots) {
     CHECK(pickResidentProbes(none, Vec3(0, 0, 0), 15.0, resident));
     for (int r : resident) CHECK(r == -1);
 }
+
+// A STOREY'S PROBES (ADR-0380): a grid over the footprint (an oriented box), one probe a cell at its height over the
+// floor, each box the cell's from floor to ceiling, every one marked indoor -- and a footprint smaller than a cell
+// still gets one.
+TEST_CASE(storey_probes_grid_the_floor) {
+    const Vec2 axis[2] = {Vec2(1, 0), Vec2(0, 1)};
+    const Real half[2] = {20, 12};
+    std::vector<ProbeSite> s;
+    placeStoreyProbeSites(Vec2(100, 50), axis, half, 30.0, 34.0, 8.0, 1.6, s);
+    CHECK(s.size() == 5u * 3u);   // 40 m / 8 = 5 across, 24 m / 8 = 3 deep
+    for (const ProbeSite& p : s) {
+        CHECK(p.indoor);
+        CHECK(std::fabs(p.position.y - 31.6) < 1e-9);
+        CHECK(p.boxMin.y < 30.0 && p.boxMax.y > 34.0);
+        CHECK(p.position.x > 80.0 && p.position.x < 120.0 && p.position.z > 38.0 && p.position.z < 62.0);
+        CHECK(p.boxMin.x < p.position.x && p.position.x < p.boxMax.x);
+    }
+    // turned 45 degrees: the boxes are the turned cells' bounds, still holding their probes
+    const Real r = std::sqrt(0.5);
+    const Vec2 turned[2] = {Vec2(r, r), Vec2(-r, r)};
+    std::vector<ProbeSite> t;
+    placeStoreyProbeSites(Vec2(0, 0), turned, half, 0.0, 3.5, 8.0, 1.6, t);
+    CHECK(t.size() == 15u);
+    for (const ProbeSite& p : t) CHECK(p.boxMin.z < p.position.z && p.position.z < p.boxMax.z);
+    // smaller than a cell: one, in the middle; a low ceiling keeps it under the ceiling
+    const Real tiny[2] = {2, 1.5};
+    std::vector<ProbeSite> u;
+    placeStoreyProbeSites(Vec2(5, 5), axis, tiny, 10.0, 11.5, 8.0, 1.6, u);
+    CHECK(u.size() == 1u);
+    CHECK(u[0].position.y <= 11.5 - 0.3 + 1e-9);
+}

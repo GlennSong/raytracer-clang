@@ -88,6 +88,8 @@ bool loadLightsSource(const std::string& code, LightBook& out, std::string* err)
         r.above = numField(L, t, "above", r.above);
         r.merge = numField(L, t, "merge", r.merge);
         r.hysteresis = numField(L, t, "hysteresis", r.hysteresis);
+        r.indoorSpacing = numField(L, t, "indoor_spacing", r.indoorSpacing);
+        r.indoorHeight = numField(L, t, "indoor_height", r.indoorHeight);
         if (r.spacing < 5 || r.merge < 1 || r.side < 0 || r.below < 0 || r.above <= 0 || r.hysteresis < 0)
             return fail("probes: spacing >= 5, merge >= 1, side/below/hysteresis >= 0, above > 0");
     }

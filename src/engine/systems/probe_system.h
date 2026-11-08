@@ -3,6 +3,7 @@
 
 #include "../system.h"
 #include "../lights/probe_sites.h"
+#include "../procgen/city/shape_grammar.h"   // StoreyPlan
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -24,9 +25,15 @@ public:
 
 private:
     void placeSites(FrameContext& ctx);
+    void placeStorey(FrameContext& ctx);   // (ADR-0380)
 
-    std::vector<ProbeSite> sites_;
+    std::vector<ProbeSite> sites_;   // the street's [0, streetCount_), then the camera's storey's (ADR-0380)
+    std::size_t streetCount_ = 0;
     std::size_t roadsSeen_ = static_cast<std::size_t>(-1);
+    // the storey the camera stands on: its building (and that building's storey plans) and which storey (0: none)
+    const void* storeyRecord_ = nullptr;
+    std::vector<StoreyPlan> storeyPlans_;
+    uint64_t storeyKey_ = 0;
     std::vector<int> resident_ = std::vector<int>(kSlots, -1);
     struct Pending {
         int slot = 0, site = 0, face = 0;

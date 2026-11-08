@@ -7929,7 +7929,8 @@ void VulkanRenderer::Impl::drawFrame() {
             float* q = pb + 8 + i * 12;
             q[0] = static_cast<float>(rp.position.x); q[1] = static_cast<float>(rp.position.y); q[2] = static_cast<float>(rp.position.z);
             q[3] = probeLit[i] ? 1.0f : 0.0f;
-            q[4] = static_cast<float>(rp.boxMin.x); q[5] = static_cast<float>(rp.boxMin.y); q[6] = static_cast<float>(rp.boxMin.z); q[7] = 0.0f;
+            q[4] = static_cast<float>(rp.boxMin.x); q[5] = static_cast<float>(rp.boxMin.y); q[6] = static_cast<float>(rp.boxMin.z);
+            q[7] = rp.indoor ? 1.0f : 0.0f;   // (ADR-0380)
             q[8] = static_cast<float>(rp.boxMax.x); q[9] = static_cast<float>(rp.boxMax.y); q[10] = static_cast<float>(rp.boxMax.z); q[11] = 0.0f;
         }
     }

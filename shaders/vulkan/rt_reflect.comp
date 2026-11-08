@@ -128,7 +128,7 @@ void main() {
     } else {
         // past the near scene: the probe's (faked) reflection, and the sky past that
         vec3 fallback = skyIsPhysical() ? textureLod(skyCubeTex, R, roughness * 5.0).rgb : g.skyHorizon.rgb;
-        col = probeReflection(P, R, roughness, fallback);
+        col = probeReflection(P, R, roughness, fallback, false);   // (the G-buffer has no indoor bit yet: the street's)
     }
     // the share of the probe's reflection the scene pass took out here (mesh.frag's rule, exactly), times the
     // surface's own reflection weight

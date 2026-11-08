@@ -67,6 +67,29 @@ void placeProbeSites(const RoadGraph& g, const ProbeGroundFn& ground, const Prob
     }
 }
 
+void placeStoreyProbeSites(const Vec2& centre, const Vec2 axis[2], const Real half[2], double floorY, double ceilY,
+                           double spacing, double height, std::vector<ProbeSite>& out) {
+    const double sp = std::max(spacing, 2.0);
+    const int nu = std::max(1, static_cast<int>(std::lround(2.0 * half[0] / sp)));
+    const int nv = std::max(1, static_cast<int>(std::lround(2.0 * half[1] / sp)));
+    const double cu = 2.0 * half[0] / nu, cv = 2.0 * half[1] / nv;   // the cells as laid
+    // the box: the turned cell's axis-aligned bounds, half a metre over so neighbours meet
+    const double hx = std::fabs(axis[0].x) * cu * 0.5 + std::fabs(axis[1].x) * cv * 0.5 + 0.5;
+    const double hz = std::fabs(axis[0].y) * cu * 0.5 + std::fabs(axis[1].y) * cv * 0.5 + 0.5;
+    const double y = std::min(floorY + height, ceilY - 0.3);
+    for (int i = 0; i < nu; ++i)
+        for (int j = 0; j < nv; ++j) {
+            const double u = -half[0] + (i + 0.5) * cu, v = -half[1] + (j + 0.5) * cv;
+            const double x = centre.x + axis[0].x * u + axis[1].x * v, z = centre.y + axis[0].y * u + axis[1].y * v;
+            ProbeSite s;
+            s.position = Vec3(x, y, z);
+            s.boxMin = Vec3(x - hx, floorY - 0.2, z - hz);
+            s.boxMax = Vec3(x + hx, ceilY + 0.2, z + hz);
+            s.indoor = true;
+            out.push_back(s);
+        }
+}
+
 bool pickResidentProbes(const std::vector<ProbeSite>& sites, const Vec3& eye, double hysteresis, std::vector<int>& resident) {
     const std::size_t slots = resident.size();
     if (slots == 0) return false;

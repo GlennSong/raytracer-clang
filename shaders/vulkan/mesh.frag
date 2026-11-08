@@ -1309,9 +1309,9 @@ void main() {
         vec3 T = normalize(inWorldTangent - N * dot(N, inWorldTangent));
         vec3 B = cross(N, T);
         vec3 tsN = texture(normalMap, inTexcoord).xyz * 2.0 - 1.0;
-        // an INDOOR finish is polished: the outdoor bake's relief at a fifth (its bumps broke every ceiling lamp's
+        // an INDOOR finish is polished: the outdoor bake's relief at a twelfth (its bumps broke every ceiling lamp's
         // highlight into specks on an office floor; ADR-0377)
-        if ((pc.surfaceFlags.y & (1u << 28)) != 0u) tsN = vec3(tsN.xy * 0.2, tsN.z);
+        if ((pc.surfaceFlags.y & (1u << 28)) != 0u) tsN = vec3(tsN.xy * 0.08, tsN.z);
         // TOKSVIG (ADR-0377): the map's mips average its bumps, and an averaged normal is SHORT -- the bumps the pixel
         // covers. That shortness is the spread specular anti-aliasing widens the lobe by (below)
         float len = clamp(length(tsN), 1e-3, 1.0);
@@ -1472,9 +1472,10 @@ void main() {
             // its lamps do the rest), and the same for what its surfaces reflect, until a floor's own probes do
             float daylight = dot(skyIrradianceSH(vec3(0.0, 1.0, 0.0)), vec3(0.2126, 0.7152, 0.0722));
             irradiance = vec3(daylight * 0.30);
-            prefiltered = irradiance;
+            // ...and what it reflects is the storey's own probe, where the camera's floor has them (ADR-0380)
+            prefiltered = probeReflection(inWorldPos, R, roughness, irradiance, true);
         } else {
-            prefiltered = probeReflection(inWorldPos, R, roughness, prefiltered);
+            prefiltered = probeReflection(inWorldPos, R, roughness, prefiltered, false);
         }
         // ...but near the camera the rays answer (ADR-0376, rt_reflect.comp): the probe's part fades out exactly as
         // theirs fades in, so the blurry reflection does not ghost under the sharp one
@@ -1663,7 +1664,9 @@ void main() {
         outColor.rgb *= g.cameraPosition.w;   // PRE-EXPOSED (ADR-0366): the camera's exposure, applied as it is drawn
 #ifdef PROBE_CAPTURE
         outColor = vec4(albedo, metallic);
-        outEmit = vec4(emission * (skyIsPhysical() ? g.skyPhysical3.z : 1.0), length(inWorldPos - g.cameraPosition.xyz));
+        // (an indoor surface's distance is written negative: the relight lights it as a room, not the open sky; ADR-0380)
+        outEmit = vec4(emission * (skyIsPhysical() ? g.skyPhysical3.z : 1.0),
+                       length(inWorldPos - g.cameraPosition.xyz) * ((pc.surfaceFlags.y & (1u << 28)) != 0u ? -1.0 : 1.0));
 #endif
     }
 #ifdef PROBE_CAPTURE

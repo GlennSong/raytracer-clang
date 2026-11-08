@@ -40,13 +40,15 @@ return {
   -- reflection's parallax) `side` m past the kerbs either side to the frontages, from `below` under the street to
   -- `above` over it; sites nearer than `merge` are one (junctions); the 64 nearest are held, and one leaves only once it
   -- is `hysteresis` m past the nearest set's edge
-  probes = { spacing = 40, height = 5, side = 30, below = 1, above = 45, merge = 20, hysteresis = 15 },
+  -- indoors (ADR-0380), the storey you stand on: one every `indoor_spacing` m across it, `indoor_height` m up
+  probes = { spacing = 40, height = 5, side = 30, below = 1, above = 45, merge = 20, hysteresis = 15,
+             indoor_spacing = 8, indoor_height = 1.6 },
 
   -- RAY-TRACED REFLECTIONS (ADR-0376; Glenn: "close up raytraced, further away faked"): rays only from surfaces
   -- smoother than `max_roughness`, within `near` m, faded into the probes over the last `fade` m; they hit only these
   -- draw classes (structure, scenery, furniture, groundPaint, simBody: a level's drawDistances names) within `near`; the structures may take at most
   -- `memory_share` of the GPU memory free when they start (and never more than 1.5 GB)
-  raytrace = { near = 150, fade = 25, max_roughness = 0.3, memory_share = 0.25, hits = { "structure", "furniture" } },
+  raytrace = { near = 150, fade = 25, max_roughness = 0.3, memory_share = 0.25, hits = { "structure", "furniture", "simBody" } },
 
   -- THE GLOWS (ADR-0369): each class of glowing surface at its real luminance (cd/m^2) under the physical sky, in its
   -- own colour; a class not here keeps its old emission scaled by emission_scale

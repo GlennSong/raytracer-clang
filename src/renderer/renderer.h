@@ -685,6 +685,7 @@ struct ReflectionProbe {
     float influenceRadius;
     Vec3 boxMin, boxMax;    // AABB for parallax correction
     int priority = 0;       // higher = preferred when overlapping
+    bool indoor = false;    // a storey's probe (ADR-0380): indoor surfaces read only these, the street never
 
     ReflectionProbe() : influenceRadius(10.0f) {}
     ReflectionProbe(const Vec3& pos, float radius, const Vec3& bMin, const Vec3& bMax)

@@ -124,3 +124,22 @@ TEST_CASE(probe_grid_lists_the_two_nearest_boxes_per_cell) {
     CHECK(at(80, 10) == (3u | (2u << 8)));    // 1 and 2 (2 nearer the cell's middle, 81); never the empty slot
     for (uint32_t c : grid.cells) CHECK((c & 0xFFu) != 4u && ((c >> 8) & 0xFFu) != 4u);
 }
+
+// ...and the INDOOR entry (ADR-0380): a cell's third byte is the nearest indoor probe; the street bytes never name one
+TEST_CASE(probe_grid_keeps_the_indoor_probe_apart) {
+    std::vector<ReflectionProbe> probes;
+    probes.emplace_back(Vec3(20, 5, 0), 0.0f, Vec3(0, 0, -30), Vec3(60, 50, 30));     // 0: street
+    ReflectionProbe in(Vec3(22, 31, 2), 0.0f, Vec3(14, 30, -6), Vec3(30, 34, 10));   // 1: a storey's
+    in.indoor = true;
+    probes.push_back(in);
+    ProbeGrid grid;
+    buildProbeGrid(probes, grid);
+    auto at = [&](double x, double z) {
+        const int cx = static_cast<int>(std::floor((x - grid.originX) / grid.cell));
+        const int cz = static_cast<int>(std::floor((z - grid.originZ) / grid.cell));
+        return grid.cells[static_cast<std::size_t>(cz * ProbeGrid::kSize + cx)];
+    };
+    CHECK(at(22, 2) == (1u | (2u << 16)));   // the street probe in byte 0, the indoor one in byte 2, byte 1 empty
+    CHECK(at(50, 20) == 1u);                 // past the storey's box: the street only
+    for (uint32_t c : grid.cells) CHECK((c & 0xFFu) != 2u && ((c >> 8) & 0xFFu) != 2u);
+}

@@ -25,12 +25,16 @@ void buildProbeGrid(const std::vector<ReflectionProbe>& probes, ProbeGrid& out) 
             const double x0 = lx + cx * static_cast<double>(out.cell), z0 = lz + cz * static_cast<double>(out.cell);
             const double x1 = x0 + out.cell, z1 = z0 + out.cell;
             const double mx = 0.5 * (x0 + x1), mz = 0.5 * (z0 + z1);
-            int best[2] = {-1, -1};
-            double bestD[2] = {1e30, 1e30};
+            int best[2] = {-1, -1}, inBest = -1;
+            double bestD[2] = {1e30, 1e30}, inD = 1e30;
             for (std::size_t i = 0; i < n; ++i) {
                 const ReflectionProbe& p = probes[i];
                 if (p.boxMin.x > x1 || p.boxMax.x < x0 || p.boxMin.z > z1 || p.boxMax.z < z0) continue;
                 const double dx = p.position.x - mx, dz = p.position.z - mz, d = dx * dx + dz * dz;
+                if (p.indoor) {
+                    if (d < inD) { inD = d; inBest = static_cast<int>(i); }
+                    continue;
+                }
                 if (d < bestD[0]) {
                     best[1] = best[0]; bestD[1] = bestD[0];
                     best[0] = static_cast<int>(i); bestD[0] = d;
@@ -39,7 +43,8 @@ void buildProbeGrid(const std::vector<ReflectionProbe>& probes, ProbeGrid& out) 
                 }
             }
             out.cells[static_cast<std::size_t>(cz * k + cx)] =
-                static_cast<uint32_t>(best[0] + 1) | (static_cast<uint32_t>(best[1] + 1) << 8);
+                static_cast<uint32_t>(best[0] + 1) | (static_cast<uint32_t>(best[1] + 1) << 8) |
+                (static_cast<uint32_t>(inBest + 1) << 16);
         }
 }
 

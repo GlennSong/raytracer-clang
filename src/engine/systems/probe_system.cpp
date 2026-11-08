@@ -5,6 +5,8 @@
 #include "../procgen/noise.h"
 #include "../procgen/terrain.h"
 #include "../world.h"
+#include "building_interior_system.h"   // storeyOf (the storey the interiors stream)
+#include "../procgen/city/building_records.h"
 #include "../../log.h"
 
 #include <algorithm>
@@ -40,11 +42,52 @@ void ProbeSystem::placeSites(FrameContext& ctx) {
     sites_.clear();
     const ProbeRules& rules = lightBook().probes;
     ctx.world.each<LevelRoadGraph>([&](Entity, LevelRoadGraph& g) { placeProbeSites(g.graph, ground, rules, sites_); });
+    streetCount_ = sites_.size();
+    storeyKey_ = 0;
+    storeyRecord_ = nullptr;
     std::fill(resident_.begin(), resident_.end(), -1);
     pending_.clear();
     lastEye_ = Vec3(1e30, 0, 0);
     LOG_INFO << "[probes] " << sites_.size() << " sites along the streets ("
              << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() << " ms)";
+}
+
+// THE STOREY THE CAMERA STANDS ON (ADR-0380; Glenn: "probes just need to exist for that floor when you're on it"): its
+// sites after the street's, again whenever the building or the storey changes; the slots that held the last storey's
+// give them up (the street's keep theirs). Nothing is kept once you leave: a floor is captured as you arrive.
+void ProbeSystem::placeStorey(FrameContext& ctx) {
+    const Vec3 eye = ctx.view.camera.position;
+    const CityBuildings* cb = nullptr;
+    ctx.world.each<CityBuildings>([&](Entity, CityBuildings& b) { if (!cb) cb = &b; });
+    const BuildingRecord* r = cb ? cb->recordAt(Vec2(eye.x, eye.z), eye.y) : nullptr;
+    uint64_t key = 0;
+    double floorY = 0, ceilY = 0;
+    if (r && r->plan.size() >= 3) {
+        if (r != storeyRecord_) {
+            storeyPlans_ = storeyPlans(r->plan, r->params);
+            storeyRecord_ = r;
+        }
+        const int f = BuildingInteriorSystem::storeyOf(*r, eye.y);
+        if (f >= 0 && f < static_cast<int>(storeyPlans_.size())) {
+            const StoreyPlan& sp = storeyPlans_[static_cast<std::size_t>(f)];
+            floorY = r->baseY + sp.y0;
+            ceilY = floorY + sp.h;
+            key = (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(r)) << 8) ^ static_cast<uint64_t>(f + 1);
+        }
+    } else {
+        storeyRecord_ = nullptr;
+    }
+    if (key == storeyKey_) return;
+    storeyKey_ = key;
+    sites_.resize(streetCount_);
+    for (int& s : resident_)
+        if (s >= static_cast<int>(streetCount_)) s = -1;   // (their queued faces are dropped as stale)
+    if (key != 0) {
+        const OBB2 ob = orientedBoundingBox(r->plan);
+        const ProbeRules& rules = lightBook().probes;
+        placeStoreyProbeSites(ob.center, ob.axis, ob.half, floorY, ceilY, rules.indoorSpacing, rules.indoorHeight, sites_);
+    }
+    lastEye_ = Vec3(1e30, 0, 0);   // (the slots are picked again this frame)
 }
 
 void ProbeSystem::render(FrameContext& ctx) {
@@ -53,6 +96,7 @@ void ProbeSystem::render(FrameContext& ctx) {
     static const bool off = probesOff();
     if (off || !ctx.renderer.supportsProbeCapture()) return;
     placeSites(ctx);
+    placeStorey(ctx);
     const Vec3 eye = ctx.view.camera.position;
     // who holds the slots: again once the camera has moved a few metres
     const double mx = eye.x - lastEye_.x, mz = eye.z - lastEye_.z;
@@ -72,6 +116,7 @@ void ProbeSystem::render(FrameContext& ctx) {
                 }
                 const ProbeSite& site = sites_[static_cast<std::size_t>(s)];
                 board.slots[i] = ReflectionProbe(site.position, 0.0f, site.boxMin, site.boxMax);
+                board.slots[i].indoor = site.indoor;
                 if (s != before[i]) joined.emplace_back((site.position - eye).lengthSquared(), static_cast<int>(i));
             }
             std::sort(joined.begin(), joined.end());

@@ -17214,3 +17214,45 @@ night eye amplifies it several stops, and ten frames of history (ADR-0328) did n
 **Decision.** In clouds_resolve.frag, the march's result enters the history taken 70% of the way to its 3 x 3 mean.
 A cloud has no detail at half resolution for this to blur. The clamp box stays the raw neighbourhood's, so edges
 still reject stale history. Seen at 20:30 from the river_town shore: smooth cloud edges at the night exposure.
+
+## ADR-0380 — A storey's own reflection probes
+
+**Context.** Glenn: interiors "use a cubemap of all the ceiling lights, but is that the way to go?", "it could be
+crazy expensive to store cubemaps for all interiors", "probes just need to exist for that floor when you're on it".
+ADR-0377 kept the street's probes out of rooms and left a flat neutral reflection in their place.
+
+**Decision.**
+- **Where:** when the camera stands in a building, the ProbeSystem finds its storey with the interior system's own
+  `storeyPlans`/`storeyOf` and lays a grid over the footprint's oriented box (`placeStoreyProbeSites`, pure). There
+  is one probe every `indoor_spacing` m (8) at `indoor_height` m (1.6) over the floor, each box its cell from floor
+  to ceiling. The rules are lights.lua `probes`.
+  - These sites follow the street's in the one list, so the street's slots keep their probes. A new building or
+    storey clears only the slots that held the last storey's.
+  - Nothing is stored: a storey is captured as you arrive (2 faces a frame, nearest first), in the same 64 slots.
+- **Kept apart:** `ReflectionProbe::indoor`. The plan grid's cell names two street probes and the nearest indoor
+  one (byte 2). An indoor surface (`FLAG_INDOOR`) reads only the storey's probe, falling back to the neutral share; a
+  street surface reads only the street's.
+- **The capture** writes an indoor texel's distance negative. The relight lights it as mesh.frag lights a room: no
+  open sky.
+- Indoor finishes take the bake's relief at a twelfth (was a fifth): with a real reflection in them, a fifth still
+  glittered with the probe's ceiling panels.
+- Seen in glass_tower #228, 22:00: the floor reflects the room's ceiling panels and windows as soft pools.
+  Validation-clean.
+
+**Owed:**
+- The rays' miss fallback reads the street's probe (the G-buffer has no indoor bit).
+- The relight takes the frame's 32 lights, not the clustered room lights, so a storey's probe sees its lamps as their
+  glowing panels, not as light on its walls.
+
+## ADR-0381 — Cars in the ray-traced reflections
+
+**Context.** ADR-0376 owed the city's moving bodies in the near scene.
+
+**Decision.**
+- RenderSystem picks what moves (draw class simBody: the city's cars) every frame, at its pose this frame. The static
+  world keeps its pick on 5 m of movement or a second.
+- Both lists merge nearest first into `setRayInstances`. A car model's bottom level is built once, and its instances
+  join the top level each frame.
+- Transparent parts (opacity under 1: a car's glass) stay out of the near scene, so a ray goes into the car.
+- lights.lua raytrace hits: structure, furniture, simBody.
+- river_town bench: 759 instances in the top level (583 without the cars). The frame is 10.6 ms.

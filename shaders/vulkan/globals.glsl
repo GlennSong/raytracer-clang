@@ -86,15 +86,16 @@ layout(set = 0, binding = 17) uniform samplerCubeArray probeRadiance;
 
 // The reflection toward R from P out of the probe whose box holds P -- the box's parallax corrected (the ray's exit
 // from the box, seen from the probe) -- faded in from the box's walls; `fallback` (the sky's) where none does.
-vec3 probeReflection(vec3 P, vec3 R, float roughness, vec3 fallback) {
-    // the plan grid's cell (ADR-0374) names two probes; the first relit one whose box holds P
+vec3 probeReflection(vec3 P, vec3 R, float roughness, vec3 fallback, bool indoor) {
+    // the plan grid's cell (ADR-0374) names two street probes and an indoor one (ADR-0380): a street surface tries the
+    // street's, an indoor one only the storey's -- the first relit one whose box holds P
     int k = int(probeGridSize.x);
     if (probeCount.x < 0.5 || k <= 0) return fallback;
     ivec2 gc = ivec2(floor((P.xz - probeCount.yz) / probeCount.w));
     if (any(lessThan(gc, ivec2(0))) || any(greaterThanEqual(gc, ivec2(k)))) return fallback;
     uint pair = probeCells[gc.y * k + gc.x];
     int best = -1;
-    for (int j = 0; j < 2 && best < 0; ++j) {
+    for (int j = indoor ? 2 : 0; j < (indoor ? 3 : 2) && best < 0; ++j) {
         int i = int((pair >> (8 * j)) & 0xFFu) - 1;
         if (i < 0) break;
         if (probeData[i * 3].w < 0.5) continue;
