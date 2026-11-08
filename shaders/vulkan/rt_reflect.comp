@@ -8,17 +8,20 @@
 // within `near` metres traces its reflection against the near scene (rt_scene.h) and shades what it hits from that
 // surface's own triangle -- its vertex colour and material, its geometric normal, the sun (with a shadow ray through
 // the same scene) and the sky's light -- or, where the ray leaves the near scene, takes the probe's reflection (the
-// far, faked part). The result replaces the screen-space one with the same confidence rule, faded out over the last
-// `fade` metres so it meets the faked reflection without a line.
+// far, faked part). What it writes is ADDED to the scene (rt_denoise.comp filters it, rt_apply.comp adds it): the
+// surface's own reflection weight (the G-buffer's, gbuffer.glsl) times the share of the probe's reflection the scene
+// pass took out here (mesh.frag: the same near, fade and roughness rule) -- so the rays put back exactly what the
+// probes gave, sharp, and the glass is as bright as its material says.
 #include "sky_common.glsl"
 #include "globals.glsl"
 #include "lighting_common.glsl"
+#include "gbuffer.glsl"
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 1, binding = 0) uniform sampler2D depthTex;      // the scene's (reverse-Z)
 layout(set = 1, binding = 1) uniform sampler2D normalTex;     // world normal * 0.5 + 0.5, a = roughness
-layout(set = 1, binding = 2, rgba16f) uniform image2D reflectOut;   // the screen-space target: rgb + confidence
+layout(set = 1, binding = 5, rgba16f) uniform writeonly image2D rtRaw;   // rgb the radiance to add (pre-exposed), a its share
 layout(set = 1, binding = 3) uniform accelerationStructureEXT nearScene;
 
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Words { uint w[]; };
@@ -37,7 +40,7 @@ struct RtInst {
 layout(std430, set = 1, binding = 4) readonly buffer RtInsts { RtInst inst[]; };
 
 layout(push_constant) uniform Push {
-    vec4 rules;   // x near, y fade, z max roughness, w the screen-space pass's blend strength
+    vec4 rules;   // x near, y fade, z max roughness
 } pc;
 
 vec3 reconstructWorld(vec2 uv, float depth) {
@@ -65,19 +68,20 @@ float sunVisible(vec3 p, vec3 n, vec3 toSun) {
 }
 
 void main() {
-    ivec2 size = imageSize(reflectOut);
+    ivec2 size = imageSize(rtRaw);
     ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= size.x || px.y >= size.y) return;
+    imageStore(rtRaw, px, vec4(0.0));                      // (nothing to add, unless the ray says otherwise)
     vec2 uv = (vec2(px) + 0.5) / vec2(size);
     float depth = textureLod(depthTex, uv, 0.0).r;
     if (depth <= 0.0) return;                              // the sky
     vec4 nr = textureLod(normalTex, uv, 0.0);
-    float roughness = nr.a;
+    float roughness = gbufRoughness(nr);
     if (roughness > pc.rules.z) return;                    // rough: the screen-space and probe reflections stand
     vec3 P = reconstructWorld(uv, depth);
     float camDist = distance(P, g.cameraPosition.xyz);
     if (camDist > pc.rules.x) return;                      // far: faked
-    vec3 N = normalize(nr.rgb * 2.0 - 1.0);
+    vec3 N = gbufNormal(nr);
     vec3 V = normalize(P - g.cameraPosition.xyz);
     vec3 R = reflect(V, N);
 
@@ -126,13 +130,10 @@ void main() {
         vec3 fallback = skyIsPhysical() ? textureLod(skyCubeTex, R, roughness * 5.0).rgb : g.skyHorizon.rgb;
         col = probeReflection(P, R, roughness, fallback);
     }
-    // the screen-space pass's confidence rule (ssr.frag), faded over the last `fade` metres of `near`
-    float fresnel = pow(clamp(1.0 - max(dot(N, -V), 0.0), 0.0, 1.0), 3.0);
+    // the share of the probe's reflection the scene pass took out here (mesh.frag's rule, exactly), times the
+    // surface's own reflection weight
     float roughFade = 1.0 - smoothstep(0.0, pc.rules.z, roughness);
     float nearFade = 1.0 - smoothstep(pc.rules.x - pc.rules.y, pc.rules.x, camDist);
-    float conf = clamp(mix(0.2, 1.0, fresnel) * roughFade * pc.rules.w, 0.0, 1.0);
-    vec4 ssr = imageLoad(reflectOut, px);
-    // near: the ray's answer; toward the edge, back to whatever the screen-space pass found
-    vec4 rt = vec4(col * g.cameraPosition.w, conf);   // pre-exposed, as the scene's target is (ADR-0366)
-    imageStore(reflectOut, px, mix(ssr, rt, nearFade));
+    float k = nearFade * roughFade;
+    imageStore(rtRaw, px, vec4(col * gbufSpecular(nr) * k * g.cameraPosition.w, k));   // pre-exposed (ADR-0366)
 }

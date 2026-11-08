@@ -1,6 +1,7 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "sky_common.glsl"
+#include "gbuffer.glsl"
 // Phase 2 forward fragment stage (ADR-0057). Faithful port of the Metal
 // evaluateLighting + the procedural surface library (shaders/metal/lighting.metal
 // + common.metal): multi-light Cook-Torrance (GGX + height-correlated Smith,
@@ -52,7 +53,7 @@ layout(location = 0) out vec4 outColor;
 // emission and the distance from the probe (2) -- so the probe can be relit as the day and the lamps change
 layout(location = 2) out vec4 outEmit;
 #endif
-layout(location = 1) out vec4 outNormal;   // world normal *0.5+0.5 (SSAO G-buffer)
+layout(location = 1) out vec4 outNormal;   // the G-buffer: gbuffer.glsl
 
 // ---- BRDF (ported from lighting.metal) ------------------------------------
 #include "lighting_common.glsl"
@@ -1399,7 +1400,13 @@ void main() {
     // directly; no cubemap bake. The BRDF LUT (baked at init) gives the split-sum
     // specular. g.ambient carries the ambient tint * multiplier as the IBL strength.
     float NdotV = max(dot(N, V), 1e-4);
-    vec3 R = reflect(-V, N);
+    // THE DOMINANT DIRECTION of the reflection (Lagarde & de Rousiers, "Moving Frostbite to PBR", 2014): a rough lobe's
+    // light comes from nearer the normal than the mirror direction, so the lookup bends toward N as the roughness
+    // rises. Without it a rough road at a grazing view read the buildings and palms beside it, a mirror's image
+    // smeared (Glenn, 2026-11-08: "It's got a reflection in it right?"); now it reads the sky above. Glass (0.03)
+    // keeps the mirror direction.
+    float smoothness = 1.0 - roughness;
+    vec3 R = normalize(mix(N, reflect(-V, N), smoothness * (sqrt(smoothness) + roughness)));
     // IBL source: HDR equirect when bound (counts.z==1), else the procedural sky.
     vec3 irradiance, prefiltered;
     if (g.counts.z == 1) {
@@ -1432,6 +1439,8 @@ void main() {
     // envSpecular = prefiltered * (F0 * scale + bias) — matches Metal's IBL.
     vec2 brdf = texture(brdfLut, vec2(NdotV, roughness)).rg;
     vec3 envSpecular = prefiltered * (f0 * brdf.x + brdf.y);
+    // ...that weight, for the G-buffer: the reflection rays replace exactly this much of the probe's (ADR-0376)
+    float specWeight = dot((f0 * brdf.x + brdf.y) * ambientShadow, vec3(0.2126, 0.7152, 0.0722));
     // The ambient strength scales the sky's LIGHT (the diffuse fill), not its REFLECTION: a mirror shows the sky at
     // the sky's own brightness, as Metal's lighting_surface and the water composite do. Scaling both made every glass
     // tower reflect the sky at ~a quarter of it -- dark and matte (Glenn, 2026-10-16: "a little more matte rather
@@ -1469,6 +1478,9 @@ void main() {
             tint = tints[clamp(ci, 0, 3)];
         }
         outColor = vec4(tint, 1.0);
+    } else if (dbg == 10) {
+        // the environment reflection alone (the probe's, or the sky's): what every surface takes from its surroundings
+        outColor = vec4(envSpecular * ambientShadow * g.cameraPosition.w, 1.0);
     } else {
         // (under the physical sky every glow's emission comes into engine units: ADR-0369)
         vec3 color = direct + ambient + emission * (skyIsPhysical() ? g.skyPhysical3.z : 1.0);
@@ -1599,5 +1611,9 @@ void main() {
         outEmit = vec4(emission * (skyIsPhysical() ? g.skyPhysical3.z : 1.0), length(inWorldPos - g.cameraPosition.xyz));
 #endif
     }
-    outNormal = vec4(N * 0.5 + 0.5, roughness);   // world normal (SSAO) + roughness (SSR gate)
+#ifdef PROBE_CAPTURE
+    outNormal = vec4(N * 0.5 + 0.5, roughness);   // a probe's G-buffer (RGBA16F) keeps its own layout: probe_relight.comp
+#else
+    outNormal = gbufEncode(N, roughness, specWeight);   // world normal (SSAO), roughness (SSR, rays), reflection weight
+#endif
 }

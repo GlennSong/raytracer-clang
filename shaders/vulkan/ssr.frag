@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "gbuffer.glsl"
 // Screen-space reflections (ADR-0057, Phase 5b). World-space ray march of the
 // reflection ray against the depth buffer; on a hit, samples the HDR scene and
 // returns it with a confidence (edge + Fresnel + roughness fade, scaled by
@@ -58,11 +60,11 @@ void main() {
     if (depth <= 0.0) return;                       // sky: no reflection (reverse-Z far = 0)
 
     vec4 nr = texture(normalTex, inUV);
-    float roughness = nr.a;
+    float roughness = gbufRoughness(nr);
     if (roughness > pc.maxRoughness) return;        // too rough to mirror
 
     vec3 P = reconstructWorld(inUV, depth);
-    vec3 N = normalize(nr.rgb * 2.0 - 1.0);
+    vec3 N = gbufNormal(nr);
     vec3 V = normalize(P - g.cameraPosition.xyz);   // camera → surface
     vec3 R = reflect(V, N);
 

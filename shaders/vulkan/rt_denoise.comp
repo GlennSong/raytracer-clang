@@ -1,0 +1,60 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// THE REFLECTION RAYS, FILTERED (ADR-0376): one ray a half-resolution pixel catches a bright window's edge in one pixel
+// and misses it in the next -- the sparkle Glenn saw on towers at night, a truck's windshield and office floors. Each
+// pixel takes a 5 x 5 neighbourhood of rt_reflect's raw result, weighted by distance, by how alike the surfaces are (the
+// normal, and the depth along the view) and down by brightness (a Karis average: a lone very bright sample counts
+// little, so it cannot flash), into rtOut. Where the rays answer, the screen-space reflection is muted by the same
+// share, so nothing is reflected twice.
+#include "sky_common.glsl"
+#include "globals.glsl"
+#include "gbuffer.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 1, binding = 0) uniform sampler2D depthTex;
+layout(set = 1, binding = 1) uniform sampler2D normalTex;
+layout(set = 1, binding = 2, rgba16f) uniform image2D ssrTarget;            // rgb + confidence: muted where rays answer
+layout(set = 1, binding = 5, rgba16f) uniform readonly image2D rtRaw;
+layout(set = 1, binding = 6, rgba16f) uniform writeonly image2D rtOut;
+
+vec3 reconstructWorld(vec2 uv, float depth) {
+    vec4 c = g.invViewProjection * vec4(uv * 2.0 - 1.0, depth, 1.0);
+    return c.xyz / c.w;
+}
+
+void main() {
+    ivec2 size = imageSize(rtRaw);
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= size.x || px.y >= size.y) return;
+    vec4 c = imageLoad(rtRaw, px);
+    if (c.a <= 0.0) { imageStore(rtOut, px, vec4(0.0)); return; }
+    vec2 uv = (vec2(px) + 0.5) / vec2(size);
+    vec3 nC = gbufNormal(textureLod(normalTex, uv, 0.0));
+    float dC = distance(reconstructWorld(uv, textureLod(depthTex, uv, 0.0).r), g.cameraPosition.xyz);
+    vec3 sum = vec3(0.0);
+    float wsum = 0.0;
+    for (int y = -2; y <= 2; ++y)
+        for (int x = -2; x <= 2; ++x) {
+            ivec2 q = px + ivec2(x, y);
+            if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
+            vec4 s = imageLoad(rtRaw, q);
+            if (s.a <= 0.0) continue;
+            vec2 quv = (vec2(q) + 0.5) / vec2(size);
+            float dq = textureLod(depthTex, quv, 0.0).r;
+            if (dq <= 0.0) continue;
+            vec3 nS = gbufNormal(textureLod(normalTex, quv, 0.0));
+            float dS = distance(reconstructWorld(quv, dq), g.cameraPosition.xyz);
+            float w = exp(-float(x * x + y * y) / 4.5);                          // distance
+            w *= pow(max(dot(nC, nS), 0.0), 16.0);                                // the same surface's facing
+            w *= exp(-abs(dS - dC) / max(0.03 * dC, 0.05));                       // ...and its depth
+            vec3 rad = s.rgb / max(s.a, 1e-3);                                    // (its radiance, before its share)
+            w /= 1.0 + dot(rad, vec3(0.2126, 0.7152, 0.0722));                    // a lone bright sample counts little
+            sum += w * rad;
+            wsum += w;
+        }
+    vec3 rad = wsum > 0.0 ? sum / wsum : c.rgb / max(c.a, 1e-3);
+    imageStore(rtOut, px, vec4(rad * c.a, c.a));
+    vec4 ssr = imageLoad(ssrTarget, px);
+    imageStore(ssrTarget, px, vec4(ssr.rgb, ssr.a * (1.0 - c.a)));
+}

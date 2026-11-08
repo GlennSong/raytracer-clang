@@ -17128,3 +17128,22 @@ everything does not. Glenn: close up ray traced, farther away faked.
   from the saved settings at start.
   - On Vulkan 1.0 the material pool chain broke a rule (12 validation errors): it allocated from a full pool and
     caught the failure, legal from 1.1. It now counts sets per link and moves on before one is full.
+- **Glenn's road and glass feedback** (2026-11-08):
+  - **The road "had a reflection in it"** (Glenn's screenshot: the buildings and palms smeared in sunlit asphalt). Not
+    a material fault: the environment lookup used the mirror direction for every surface. A 0.93 road at a grazing
+    view looked sideways along the street into the probe's buildings. mesh.frag now takes the dominant direction
+    (Lagarde & de Rousiers 2014), bent toward the normal as the roughness rises: rough ground reads the sky above,
+    glass keeps its mirror. `view 10` shows the environment reflection alone, for chasing the next one.
+  - **Roads in the near scene.** Road meshes had no draw class (Unset: drawn forever, outside the static draw index,
+    invisible to anything that picks by class), so rays from a tower's glass found no street below. They are
+    Structure now. No level limits that class, so they draw as far as before.
+  - **The rays put back exactly what the probes gave.** The G-buffer (gbuffer.glsl, RGBA8) is now the octahedral
+    normal in rg, roughness in b, and in a the surface's reflection weight (split-sum F0 x scale + bias, luminance,
+    times the ambient shadow). `rt_reflect` writes `k x weight x ray`, where k is the share of the probe mesh.frag
+    took out. `rt_denoise` filters it at half resolution and mutes SSR where the rays answer. `rt_apply` upsamples
+    it by depth and adds it to the HDR target. So glass is as bright as its material: no longer darker head-on under
+    SSR's confidence rule.
+  - **The sparkle** (towers at night, a truck's windshield): the 5 x 5 filter weights by distance, normal, depth and
+    1 / (1 + luminance), so a lone bright hit cannot flash. The rays now also need the physical sky, the only branch
+    that takes the probe out.
+  - Cost on the bench: frame 11.0 ms (11.8 before). The probe capture keeps its own G-buffer layout.

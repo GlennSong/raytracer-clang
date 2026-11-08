@@ -1,0 +1,51 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// THE REFLECTION RAYS, ADDED (ADR-0376): each full-resolution pixel takes the filtered half-resolution result
+// (rt_denoise.comp) from the four texels round it, each weighted by how near its depth is to the pixel's own -- so a
+// mullion's edge does not pick up the pane's reflection beside it -- and adds it to the scene's HDR target, which the
+// composite reads as it stands (the bloom and depth of field have already taken theirs: the reflections are not in
+// them).
+#include "sky_common.glsl"
+#include "globals.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 1, binding = 0) uniform sampler2D depthTex;
+layout(set = 1, binding = 7) uniform sampler2D rtOutTex;                    // the filtered half-resolution result
+layout(set = 1, binding = 8, rgba16f) uniform image2D hdrTarget;            // the scene's, full resolution
+
+vec3 reconstructWorld(vec2 uv, float depth) {
+    vec4 c = g.invViewProjection * vec4(uv * 2.0 - 1.0, depth, 1.0);
+    return c.xyz / c.w;
+}
+
+void main() {
+    ivec2 size = imageSize(hdrTarget);
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= size.x || px.y >= size.y) return;
+    vec2 uv = (vec2(px) + 0.5) / vec2(size);
+    float d = textureLod(depthTex, uv, 0.0).r;
+    if (d <= 0.0) return;
+    float dist = distance(reconstructWorld(uv, d), g.cameraPosition.xyz);
+    ivec2 halfSize = textureSize(rtOutTex, 0);
+    vec2 hp = uv * vec2(halfSize) - 0.5;
+    ivec2 base = ivec2(floor(hp));
+    vec2 f = hp - vec2(base);
+    vec3 sum = vec3(0.0);
+    float wsum = 0.0;
+    for (int k = 0; k < 4; ++k) {
+        ivec2 o = ivec2(k & 1, k >> 1);
+        ivec2 q = clamp(base + o, ivec2(0), halfSize - 1);
+        vec4 s = texelFetch(rtOutTex, q, 0);
+        vec2 quv = (vec2(q) + 0.5) / vec2(halfSize);
+        float dq = textureLod(depthTex, quv, 0.0).r;
+        float dS = dq > 0.0 ? distance(reconstructWorld(quv, dq), g.cameraPosition.xyz) : 1e6;
+        float w = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y);
+        w *= exp(-abs(dS - dist) / max(0.03 * dist, 0.05));
+        sum += w * s.rgb;
+        wsum += w;
+    }
+    if (wsum <= 1e-5) return;
+    vec4 hdr = imageLoad(hdrTarget, px);
+    imageStore(hdrTarget, px, vec4(hdr.rgb + sum / wsum, hdr.a));
+}

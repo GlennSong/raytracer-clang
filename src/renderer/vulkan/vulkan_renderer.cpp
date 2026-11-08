@@ -474,7 +474,14 @@ struct VulkanRenderer::Impl {
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> rtSets{};
     VkPipelineLayout rtLayout = VK_NULL_HANDLE;
     VkPipeline rtPipe = VK_NULL_HANDLE;
+    VkPipeline rtDenoisePipe = VK_NULL_HANDLE, rtApplyPipe = VK_NULL_HANDLE;
     bool rtPipeFailed = false;
+    // the rays' half-resolution results (rt_reflect -> rtRaw -> rt_denoise -> rtOut -> rt_apply), made with the SSR
+    // target; GENERAL from their first use
+    VkImage rtRawImage = VK_NULL_HANDLE, rtOutImage = VK_NULL_HANDLE;
+    VkDeviceMemory rtRawMemory = VK_NULL_HANDLE, rtOutMemory = VK_NULL_HANDLE;
+    VkImageView rtRawView = VK_NULL_HANDLE, rtOutView = VK_NULL_HANDLE;
+    bool rtImagesGeneral = false;
     float rtRules[4] = {150.0f, 25.0f, 0.3f, 1.0f};   // near, fade, max roughness, (the SSR blend strength, per frame)
     float rtShare = 0.0f;
     uint64_t rtLogged = 0;
@@ -2282,7 +2289,8 @@ bool VulkanRenderer::Impl::createHdrResources() {
     image.format = kHdrFormat;
     image.tiling = VK_IMAGE_TILING_OPTIMAL;
     image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    image.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                  (rayQuery ? VK_IMAGE_USAGE_STORAGE_BIT : 0);   // (the reflection rays add into it: rt_apply.comp, ADR-0376)
     image.samples = VK_SAMPLE_COUNT_1_BIT;
     image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     if (vkCreateImage(device, &image, nullptr, &hdrImage) != VK_SUCCESS) {
@@ -3200,6 +3208,14 @@ bool VulkanRenderer::Impl::createSsrResources() {
                                (rayQuery ? VK_IMAGE_USAGE_STORAGE_BIT : 0),   // (the rays write into it: ADR-0376)
                            ssrImage, ssrMemory, ssrView))
         return false;
+    if (rayQuery) {
+        if (!createColorTarget(ssrExtent.width, ssrExtent.height, kHdrFormat, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                               rtRawImage, rtRawMemory, rtRawView) ||
+            !createColorTarget(ssrExtent.width, ssrExtent.height, kHdrFormat, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                               rtOutImage, rtOutMemory, rtOutView))
+            return false;
+        rtImagesGeneral = false;
+    }
 
     if (ssrRenderPass == VK_NULL_HANDLE) {
         VkAttachmentDescription color{};
@@ -7118,6 +7134,9 @@ void VulkanRenderer::Impl::cleanupSwapchain() {
     ssrView = VK_NULL_HANDLE;
     ssrImage = VK_NULL_HANDLE;
     ssrMemory = VK_NULL_HANDLE;
+    for (VkImageView* v : {&rtRawView, &rtOutView}) { if (*v) vkDestroyImageView(device, *v, nullptr); *v = VK_NULL_HANDLE; }
+    for (VkImage* i : {&rtRawImage, &rtOutImage}) { if (*i) vkDestroyImage(device, *i, nullptr); *i = VK_NULL_HANDLE; }
+    for (VkDeviceMemory* m : {&rtRawMemory, &rtOutMemory}) { if (*m) vkFreeMemory(device, *m, nullptr); *m = VK_NULL_HANDLE; }
     if (cloudFramebuffer) vkDestroyFramebuffer(device, cloudFramebuffer, nullptr);
     if (cloudCompositeFramebuffer) vkDestroyFramebuffer(device, cloudCompositeFramebuffer, nullptr);
     if (cloudView) vkDestroyImageView(device, cloudView, nullptr);
@@ -8531,6 +8550,9 @@ void VulkanRenderer::shutdown() {
     for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; ++f)
         if (impl->rtRowBuf[f]) { vmaDestroyBuffer(impl->allocator, impl->rtRowBuf[f], impl->rtRowAlloc[f]); impl->rtRowBuf[f] = VK_NULL_HANDLE; }
     if (impl->rtPipe) vkDestroyPipeline(impl->device, impl->rtPipe, nullptr);
+    if (impl->rtDenoisePipe) vkDestroyPipeline(impl->device, impl->rtDenoisePipe, nullptr);
+    if (impl->rtApplyPipe) vkDestroyPipeline(impl->device, impl->rtApplyPipe, nullptr);
+    impl->rtDenoisePipe = VK_NULL_HANDLE; impl->rtApplyPipe = VK_NULL_HANDLE;
     if (impl->rtLayout) vkDestroyPipelineLayout(impl->device, impl->rtLayout, nullptr);
     if (impl->rtPool) vkDestroyDescriptorPool(impl->device, impl->rtPool, nullptr);
     if (impl->rtSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->rtSetLayout, nullptr);
@@ -8922,14 +8944,19 @@ void VulkanRenderer::Impl::recordRayScene(VkCommandBuffer cmd) {
 // THE REFLECTION RAYS' PASS (ADR-0376 step 3c): rt_reflect.comp, set 0 the frame's (dynamic offset 0), set 1 its own
 // per frame in flight -- depth, normal, the screen-space target as storage, the near scene, the hit-shading rows
 bool VulkanRenderer::Impl::ensureRtReflectPipeline() {
-    if (rtPipe) return true;
+    if (rtPipe && rtDenoisePipe && rtApplyPipe) return true;
     if (rtPipeFailed) return false;
     rtPipeFailed = true;
-    VkDescriptorSetLayoutBinding b[5]{};
-    const VkDescriptorType types[5] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+    // set 1, shared by the three passes (each reads its own few): 0 depth, 1 normal, 2 the SSR target, 3 the near
+    // scene, 4 the hit-shading rows, 5 the raw result, 6 the filtered one (written), 7 the filtered one (sampled), 8 the
+    // scene's HDR target
+    VkDescriptorSetLayoutBinding b[9]{};
+    const VkDescriptorType types[9] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
-                                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
-    for (int k = 0; k < 5; ++k) {
+                                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
+    for (int k = 0; k < 9; ++k) {
         b[k].binding = static_cast<uint32_t>(k);
         b[k].descriptorType = types[k];
         b[k].descriptorCount = 1;
@@ -8937,11 +8964,11 @@ bool VulkanRenderer::Impl::ensureRtReflectPipeline() {
     }
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    li.bindingCount = 5;
+    li.bindingCount = 9;
     li.pBindings = b;
     if (vkCreateDescriptorSetLayout(device, &li, nullptr, &rtSetLayout) != VK_SUCCESS) return false;
-    VkDescriptorPoolSize sz[4] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * MAX_FRAMES_IN_FLIGHT},
-                                  {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, MAX_FRAMES_IN_FLIGHT},
+    VkDescriptorPoolSize sz[4] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 * MAX_FRAMES_IN_FLIGHT},
+                                  {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4 * MAX_FRAMES_IN_FLIGHT},
                                   {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, MAX_FRAMES_IN_FLIGHT},
                                   {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_FRAMES_IN_FLIGHT}};
     VkDescriptorPoolCreateInfo pi{};
@@ -8967,30 +8994,37 @@ bool VulkanRenderer::Impl::ensureRtReflectPipeline() {
     pl.pushConstantRangeCount = 1;
     pl.pPushConstantRanges = &range;
     if (vkCreatePipelineLayout(device, &pl, nullptr, &rtLayout) != VK_SUCCESS) return false;
-    VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/rt_reflect.comp.spv");
-    if (!mod) return false;
-    VkComputePipelineCreateInfo ci{};
-    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    ci.stage.module = mod;
-    ci.stage.pName = "main";
-    ci.layout = rtLayout;
-    const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &rtPipe);
-    vkDestroyShaderModule(device, mod, nullptr);
-    if (r != VK_SUCCESS) return false;
+    auto pipe = [&](const char* spv, VkPipeline& out) {
+        VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/" + spv);
+        if (!mod) return false;
+        VkComputePipelineCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        ci.stage.module = mod;
+        ci.stage.pName = "main";
+        ci.layout = rtLayout;
+        const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &out);
+        vkDestroyShaderModule(device, mod, nullptr);
+        return r == VK_SUCCESS;
+    };
+    if (!pipe("rt_reflect.comp.spv", rtPipe) || !pipe("rt_denoise.comp.spv", rtDenoisePipe) || !pipe("rt_apply.comp.spv", rtApplyPipe))
+        return false;
     rtPipeFailed = false;
-    LOG_INFO << "[rt] reflection rays ready (rt_reflect.comp)";
+    LOG_INFO << "[rt] reflection rays ready (rt_reflect, rt_denoise, rt_apply)";
     return true;
 }
-
 // THE ONE ANSWER to "do the rays run this frame" (ADR-0376), read by both sides: the scene pass drops the probe's
 // reflection only where the rays will put theirs. Off -- and the probes and sky cube stand, as before -- when the GPU
 // has no ray queries (or Vulkan 1.0: RT_VK_1_0), RT_RT_REFLECT=0, the near scene is empty, the screen-space target is
 // off in the composite (the rays write into it), or the ray pipeline could not be built.
 bool VulkanRenderer::Impl::raysThisFrame() {
     static const bool off = [] { const char* v = std::getenv("RT_RT_REFLECT"); return v && std::strcmp(v, "0") == 0; }();
-    if (off || !rayQuery || !ssrEnabledFrame || !ssrImage || !rt.hasTopLevel() || rtRows.empty()) return false;
+    // (the physical sky's branch of mesh.frag is the one that takes the probe's reflection out where the rays put
+    // theirs: under the old sky the rays would reflect twice)
+    if (off || !rayQuery || !ssrEnabledFrame || !ssrImage || !rtRawImage || cpuGlobals.counts[2] != 2 || !rt.hasTopLevel() ||
+        rtRows.empty())
+        return false;
     if (ensureRtReflectPipeline()) return true;
     static bool warned = false;
     if (!warned) LOG_WARN << "[rt] the reflection rays' pipeline could not be built (rt_reflect.comp.spv): the probes and sky cube reflect instead";
@@ -9022,57 +9056,87 @@ void VulkanRenderer::Impl::recordRtReflect(VkCommandBuffer cmd) {
     std::memcpy(rtRowMapped[f], rtRows.data(), static_cast<std::size_t>(bytes));
     vmaFlushAllocation(allocator, rtRowAlloc[f], 0, bytes);
     // its set: the views of this frame (the targets are recreated on a resize), the near scene as it is now
-    VkDescriptorImageInfo img[3] = {{gbufferSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
-                                    {gbufferSampler, normalView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                    {VK_NULL_HANDLE, ssrView, VK_IMAGE_LAYOUT_GENERAL}};
+    VkDescriptorImageInfo img[9]{};
+    img[0] = {gbufferSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+    img[1] = {gbufferSampler, normalView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    img[2] = {VK_NULL_HANDLE, ssrView, VK_IMAGE_LAYOUT_GENERAL};
+    img[5] = {VK_NULL_HANDLE, rtRawView, VK_IMAGE_LAYOUT_GENERAL};
+    img[6] = {VK_NULL_HANDLE, rtOutView, VK_IMAGE_LAYOUT_GENERAL};
+    img[7] = {compositeSampler, rtOutView, VK_IMAGE_LAYOUT_GENERAL};
+    img[8] = {VK_NULL_HANDLE, hdrView, VK_IMAGE_LAYOUT_GENERAL};
     VkAccelerationStructureKHR tl = rt.topLevel();
     VkWriteDescriptorSetAccelerationStructureKHR asw{};
     asw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
     asw.accelerationStructureCount = 1;
     asw.pAccelerationStructures = &tl;
     VkDescriptorBufferInfo rows{rtRowBuf[f], 0, VK_WHOLE_SIZE};
-    VkWriteDescriptorSet w[5]{};
-    for (int k = 0; k < 5; ++k) {
+    VkWriteDescriptorSet w[9]{};
+    const VkDescriptorType types[9] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
+    for (int k = 0; k < 9; ++k) {
         w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[k].dstSet = rtSets[f];
         w[k].dstBinding = static_cast<uint32_t>(k);
         w[k].descriptorCount = 1;
+        w[k].descriptorType = types[k];
+        if (k == 3) w[k].pNext = &asw;
+        else if (k == 4) w[k].pBufferInfo = &rows;
+        else w[k].pImageInfo = &img[k];
     }
-    for (int k = 0; k < 3; ++k) {
-        w[k].descriptorType = k < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        w[k].pImageInfo = &img[k];
+    vkUpdateDescriptorSets(device, 9, w, 0, nullptr);
+    auto imageBarrier = [&](VkImage image, VkImageLayout from, VkImageLayout to, VkAccessFlags src, VkAccessFlags dst,
+                            VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage) {
+        VkImageMemoryBarrier ib{};
+        ib.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        ib.srcAccessMask = src;
+        ib.dstAccessMask = dst;
+        ib.oldLayout = from;
+        ib.newLayout = to;
+        ib.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        ib.image = image;
+        ib.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &ib);
+    };
+    const VkPipelineStageFlags CS = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    const VkAccessFlags RW = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    if (!rtImagesGeneral) {
+        imageBarrier(rtRawImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, RW, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, CS);
+        imageBarrier(rtOutImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, RW, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, CS);
+        rtImagesGeneral = true;
+    } else {
+        // last frame's reads of the results come before this frame's writes
+        imageBarrier(rtRawImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT, RW, CS, CS);
+        imageBarrier(rtOutImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT, RW, CS, CS);
     }
-    w[3].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    w[3].pNext = &asw;
-    w[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    w[4].pBufferInfo = &rows;
-    vkUpdateDescriptorSets(device, 5, w, 0, nullptr);
-    // the screen-space target: from its pass's output to the rays' read-and-write, and back for the composite
-    VkImageMemoryBarrier ib{};
-    ib.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    ib.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    ib.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    ib.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    ib.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    ib.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    ib.image = ssrImage;
-    ib.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
-                         nullptr, 1, &ib);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rtPipe);
     const uint32_t frameSlot = 0;
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rtLayout, 0, 1, &descriptorSets[currentFrame], 1, &frameSlot);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rtLayout, 1, 1, &rtSets[f], 0, nullptr);
-    const float push[4] = {rtRules[0], rtRules[1], rtRules[2], ssrBlendStrength};
-    vkCmdPushConstants(cmd, rtLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
-    vkCmdDispatch(cmd, (ssrExtent.width + 7) / 8, (ssrExtent.height + 7) / 8, 1);
-    ib.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    ib.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    ib.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    ib.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
-                         nullptr, 1, &ib);
+    const float push[4] = {rtRules[0], rtRules[1], rtRules[2], 0.0f};
+    auto run = [&](VkPipeline p, uint32_t w0, uint32_t h0) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rtLayout, 0, 1, &descriptorSets[currentFrame], 1, &frameSlot);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rtLayout, 1, 1, &rtSets[f], 0, nullptr);
+        vkCmdPushConstants(cmd, rtLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+        vkCmdDispatch(cmd, (w0 + 7) / 8, (h0 + 7) / 8, 1);
+    };
+    // 1. the rays, raw
+    run(rtPipe, ssrExtent.width, ssrExtent.height);
+    imageBarrier(rtRawImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, CS, CS);
+    // 2. filtered, and the screen-space reflection muted where they answer
+    imageBarrier(ssrImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, RW,
+                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, CS);
+    run(rtDenoisePipe, ssrExtent.width, ssrExtent.height);
+    imageBarrier(rtOutImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, CS, CS);
+    imageBarrier(ssrImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
+                 VK_ACCESS_SHADER_READ_BIT, CS, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    // 3. added into the scene's HDR target, full resolution
+    imageBarrier(hdrImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT, RW,
+                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | CS, CS);
+    run(rtApplyPipe, swapchainExtent.width, swapchainExtent.height);
+    imageBarrier(hdrImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
+                 VK_ACCESS_SHADER_READ_BIT, CS, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | CS);
 }
 
 void VulkanRenderer::setReflectionProbes(const std::vector<ReflectionProbe>& probes) {

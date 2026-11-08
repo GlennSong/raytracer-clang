@@ -696,6 +696,10 @@ static void spawnRoadMeshes(const json& ent, std::vector<roads::RoadMesh>& meshe
         if (!onHost) createEntityCommon(me, ent, world);
         ++spawned;
         Renderable mr = proto;
+        // the road is large static world geometry (it was Unset: drawn to the far plane, outside the static draw index
+        // and invisible to everything that picks by class -- the reflection rays among them, ADR-0376). No level limits
+        // the structure class, so it is drawn as far as before
+        if (mr.drawClass == DrawClass::Unset) mr.drawClass = DrawClass::Structure;
         mr.material.albedo = rm.albedo;
         mr.material.roughness = rm.roughness;
         mr.material.metallic = rm.metallic;

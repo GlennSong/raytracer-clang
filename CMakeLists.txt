@@ -1160,7 +1160,7 @@ function(rt_build_vulkan_shaders)
                     ${VK_SHADER_SRC_DIR}/${shader}
                     -I ${VK_SHADER_SRC_DIR}
                     -o ${VK_SHADER_OUT_DIR}/${shader}.spv
-            DEPENDS ${VK_SHADER_SRC_DIR}/${shader} ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl
+            DEPENDS ${VK_SHADER_SRC_DIR}/${shader} ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl ${VK_SHADER_SRC_DIR}/gbuffer.glsl
             COMMENT "glslc ${shader} -> ${shader}.spv"
             VERBATIM)
         list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)
@@ -1170,16 +1170,32 @@ function(rt_build_vulkan_shaders)
         OUTPUT ${VK_SHADER_OUT_DIR}/rt_reflect.comp.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.2 ${VK_SHADER_SRC_DIR}/rt_reflect.comp -I ${VK_SHADER_SRC_DIR}
                 -o ${VK_SHADER_OUT_DIR}/rt_reflect.comp.spv
-        DEPENDS ${VK_SHADER_SRC_DIR}/rt_reflect.comp ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl
+        DEPENDS ${VK_SHADER_SRC_DIR}/rt_reflect.comp ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl ${VK_SHADER_SRC_DIR}/gbuffer.glsl
         COMMENT "glslc rt_reflect.comp (vulkan1.2) -> rt_reflect.comp.spv"
         VERBATIM)
     list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/rt_reflect.comp.spv)
+    add_custom_command(
+        OUTPUT ${VK_SHADER_OUT_DIR}/rt_denoise.comp.spv
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.2 ${VK_SHADER_SRC_DIR}/rt_denoise.comp -I ${VK_SHADER_SRC_DIR}
+                -o ${VK_SHADER_OUT_DIR}/rt_denoise.comp.spv
+        DEPENDS ${VK_SHADER_SRC_DIR}/rt_denoise.comp ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl ${VK_SHADER_SRC_DIR}/gbuffer.glsl
+        COMMENT "glslc rt_denoise.comp (vulkan1.2) -> rt_denoise.comp.spv"
+        VERBATIM)
+    list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/rt_denoise.comp.spv)
+    add_custom_command(
+        OUTPUT ${VK_SHADER_OUT_DIR}/rt_apply.comp.spv
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.2 ${VK_SHADER_SRC_DIR}/rt_apply.comp -I ${VK_SHADER_SRC_DIR}
+                -o ${VK_SHADER_OUT_DIR}/rt_apply.comp.spv
+        DEPENDS ${VK_SHADER_SRC_DIR}/rt_apply.comp ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl ${VK_SHADER_SRC_DIR}/gbuffer.glsl
+        COMMENT "glslc rt_apply.comp (vulkan1.2) -> rt_apply.comp.spv"
+        VERBATIM)
+    list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/rt_apply.comp.spv)
     # the reflection probes' capture (ADR-0372): mesh.frag again, writing the surface rather than its light
     add_custom_command(
         OUTPUT ${VK_SHADER_OUT_DIR}/mesh_probe.frag.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${VK_SHADER_SRC_DIR}/mesh.frag -DPROBE_CAPTURE -I ${VK_SHADER_SRC_DIR}
                 -o ${VK_SHADER_OUT_DIR}/mesh_probe.frag.spv
-        DEPENDS ${VK_SHADER_SRC_DIR}/mesh.frag ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl
+        DEPENDS ${VK_SHADER_SRC_DIR}/mesh.frag ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl ${VK_SHADER_SRC_DIR}/gbuffer.glsl
         COMMENT "glslc mesh.frag (PROBE_CAPTURE) -> mesh_probe.frag.spv"
         VERBATIM)
     list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/mesh_probe.frag.spv)

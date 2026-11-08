@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "gbuffer.glsl"
 // Composite: tonemap (ACES / AgX) + color grade + exposure of the HDR scene
 // target → the swapchain. Ported from post.metal (applyGrade / tonemapACES /
 // tonemapAgX). Both tonemappers fold in the ~2.2 display encode, so the output
@@ -160,7 +162,7 @@ vec3 underwaterScene(vec3 hdr, vec2 uv) {
     if (hitsSurface) path = min(path, tSurf);
     if (!hitsSurface) {
         // the bed and anything in the water: caustics where it faces up and the sun reaches
-        vec3 n = texture(normalTex, uv).rgb * 2.0 - 1.0;
+        vec3 n = gbufNormal(texture(normalTex, uv));
         float below = max(0.0, surf - P.y);
         float c = caustic(P.xz + vec2(0.0, 0.0), pc.underwater.w * 0.8);
         float reach = exp(-below / 7.0) * smoothstep(0.2, 0.8, n.y) * (0.25 + sunUp);
@@ -199,12 +201,12 @@ void main() {
             outColor = vec4(s.rgb * s.a, 1.0); return;
         }
         if (pc.debugView == 9) {                 // roughness (G-buffer: what SSR and the rays gate on; black = mirror)
-            outColor = bg ? vec4(0.0, 0.0, 0.3, 1.0) : vec4(vec3(texture(normalTex, inUV).a), 1.0);
+            outColor = bg ? vec4(0.0, 0.0, 0.3, 1.0) : vec4(vec3(gbufRoughness(texture(normalTex, inUV))), 1.0);
             return;
         }
         if (pc.debugView == 4) {                 // world normals (G-buffer, encoded)
             outColor = bg ? vec4(0.5, 0.5, 1.0, 1.0)
-                          : vec4(texture(normalTex, inUV).rgb, 1.0);
+                          : vec4(gbufNormal(texture(normalTex, inUV)) * 0.5 + 0.5, 1.0);
             return;
         }
         // 3/5/6/7/8: raw HDR (mesh.frag wrote the debug value); flat background.
