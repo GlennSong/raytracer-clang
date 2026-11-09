@@ -3,6 +3,8 @@
 // from the camera's height, lit by the active light (g.skySunDir: the sun by day, the moon by night) and the other;
 // radiance in engine light units (ADR-0366). envMode (g.counts.z) 2 when it is on.
 
+#include "atmosphere_common.glsl"
+
 layout(set = 0, binding = 11) uniform sampler2D skyViewTex;   // RGB radiance (units)
 layout(set = 0, binding = 12) uniform sampler2D skyTransTex;  // RGB transmittance (Bruneton r, mu)
 layout(set = 0, binding = 13) uniform sampler3D aerialInscatter;   // the aerial volume (ADR-0370): the air's light
@@ -22,53 +24,15 @@ vec3 skyIrradianceSH(vec3 d) {
 
 // the transmittance from the camera toward a direction with cosine-zenith mu (0 into the ground)
 vec3 skyTransmittanceToward(float mu) {
-    float rg = g.skyPhysical.x, rt = g.skyPhysical2.z;
-    float r = rg + max(g.skyPhysical.y, 0.5);
-    float horizonMu = -sqrt(max(1.0 - (rg * rg) / (r * r), 0.0));
-    if (mu < horizonMu) return vec3(0.0);
-    float H = sqrt(max(rt * rt - rg * rg, 0.0));
-    float rho = sqrt(max(r * r - rg * rg, 0.0));
-    float dd = r * r * (mu * mu - 1.0) + rt * rt;
-    float d = max(-r * mu + sqrt(max(dd, 0.0)), 0.0);
-    float dMin = rt - r, dMax = rho + H;
-    return textureLod(skyTransTex, vec2(clamp((d - dMin) / max(dMax - dMin, 1e-4), 0.0, 1.0), clamp(rho / max(H, 1e-4), 0.0, 1.0)), 0.0).rgb;
-}
-
-vec2 skyViewUv(float viewCos, float azim) {
     float rg = g.skyPhysical.x;
-    float r = rg + max(g.skyPhysical.y, 0.5);
-    float vHorizon = sqrt(max(r * r - rg * rg, 0.0));
-    float beta = acos(clamp(vHorizon / r, -1.0, 1.0));
-    float zenithHorizon = 3.14159265 - beta;
-    float viewZenith = acos(clamp(viewCos, -1.0, 1.0));
-    float v;
-    if (viewZenith < zenithHorizon) {
-        float c = viewZenith / max(zenithHorizon, 1e-4);
-        v = (1.0 - sqrt(max(1.0 - c, 0.0))) * 0.5;
-    } else {
-        float c = (viewZenith - zenithHorizon) / max(beta, 1e-4);
-        v = 0.5 + 0.5 * sqrt(clamp(c, 0.0, 1.0));
-    }
-    return vec2(sqrt(clamp(azim / 3.14159265, 0.0, 1.0)), v);
+    return atmTransmittance(skyTransTex, rg + max(g.skyPhysical.y, 0.5), mu, rg, g.skyPhysical2.z);
 }
 
 // The dome's radiance toward `dir` (the sky; no disc). Just under the horizon it blends back toward the horizon's own
 // radiance over a few degrees: on a finite world that band stands for distant land and reads as haze, not soil (the
 // Metal scattering sky's rule).
 vec3 skyViewRadiance(vec3 dir) {
-    vec2 vh = dir.xz, sh = g.skySunDir.xz;
-    float vl = length(vh), sl = length(sh);
-    float azim = (vl > 1e-4 && sl > 1e-4) ? acos(clamp(dot(vh / vl, sh / sl), -1.0, 1.0)) : 0.0;
-    vec3 col = textureLod(skyViewTex, skyViewUv(dir.y, azim), 0.0).rgb;
-    float rg = g.skyPhysical.x;
-    float r = rg + max(g.skyPhysical.y, 0.5);
-    float zenithHorizon = 3.14159265 - acos(clamp(sqrt(max(r * r - rg * rg, 0.0)) / r, -1.0, 1.0));
-    float dip = acos(clamp(dir.y, -1.0, 1.0)) - zenithHorizon;
-    if (dip > 0.0) {
-        float w = 1.0 - clamp(dip / 0.10, 0.0, 1.0);
-        vec3 horizonCol = textureLod(skyViewTex, skyViewUv(cos(zenithHorizon * 0.995), azim), 0.0).rgb;
-        col = mix(col, horizonCol, w * w);
-    }
+    vec3 col = atmSkyViewRadiance(skyViewTex, dir, g.skySunDir.xyz, g.skyPhysical.x, g.skyPhysical.y);
     // the natural night sky's floor (airglow and starlight, ~2e-4 cd/m^2): never quite black
     col += vec3(0.55, 0.62, 0.85) * 1.0e-8;
     return col;

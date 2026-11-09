@@ -2484,9 +2484,10 @@ void CityRenderSystem::syncCarLamps(World& world) {
                 ++busSignsDrawn_;
                 // THE SALOON'S LIGHTS (ADR-0378; Glenn: "The bus interior is dark at night so the bus will need
                 // interior lights"): three ceiling lights down the saloon, under the roof the front sign stands at --
-                // lights.lua bus_cabin, on the dusk ramp, one group a bus so the picker takes them whole
+                // lights.lua bus_cabin, on the dusk ramp, one group a bus so the picker takes them whole. Only on its
+                // trip (at a stop too): a bus at rest in the depot is dark, as a parked car is (ADR-0341, below).
                 static const int cabinKind = engine::lightKindId("bus_cabin");
-                if (cabinKind >= 0) {
+                if (cabinKind >= 0 && a.moving) {
                     const Real ceiling = busSignLocal_.m[1][3] - 0.25;   // (the sign's middle is near the roof)
                     const Real half = busSignLocal_.m[2][3] * 0.6;        // (...and its z the saloon's front)
                     for (int li = -1; li <= 1; ++li) {

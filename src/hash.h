@@ -67,6 +67,17 @@ inline uint32_t frozenCityPlanHash(int x, int y, uint32_t s) {
     h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
     return h;
 }
+// the clouds' noise bake (renderer/cloud_noise.h: its Perlin lattice and Worley cells; cached as "pw-clouds-v2")
+inline uint32_t frozenCloudNoiseHash(int x, int y, int z, uint32_t seed) {
+    uint32_t h = seed;
+    h ^= static_cast<uint32_t>(x) * 0x8da6b343u;
+    h ^= static_cast<uint32_t>(y) * 0xd8163841u;
+    h ^= static_cast<uint32_t>(z) * 0xcb1ab31fu;
+    h ^= h >> 13;
+    h *= 0x9e3779b1u;
+    h ^= h >> 16;
+    return h;
+}
 // the street planting's (level_loader.cpp): a node value in [0, 1)
 inline double frozenPlantingLattice(long long x, long long z, uint32_t salt) {
     uint64_t k = static_cast<uint64_t>(x) * 0x9E3779B97F4A7C15ull ^ static_cast<uint64_t>(z) * 0xC2B2AE3D27D4EB4Full ^ salt;

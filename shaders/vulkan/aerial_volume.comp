@@ -5,6 +5,7 @@
 // the air in front of it -- never the whole horizon's glow, which a uniform-air shortcut gave it at sunset. The same
 // medium, phases, transmittance and multiple scattering as sky_view.comp.
 
+#include "atmosphere_common.glsl"
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 0, rgba16f) uniform writeonly image3D inscatterVol;
@@ -25,24 +26,10 @@ layout(push_constant) uniform Push {
 
 const float PI = 3.14159265;
 
-float distToTop(float r, float mu, float rt) {
-    float d = r * r * (mu * mu - 1.0) + rt * rt;
-    return max(-r * mu + sqrt(max(d, 0.0)), 0.0);
-}
-vec3 transmittance(float r, float mu) {
-    float rg = pc.planet.x, rt = pc.planet.y;
-    r = clamp(r, rg, rt);
-    float horizonMu = -sqrt(max(1.0 - (rg * rg) / (r * r), 0.0));
-    if (mu < horizonMu) return vec3(0.0);
-    float H = sqrt(max(rt * rt - rg * rg, 0.0));
-    float rho = sqrt(max(r * r - rg * rg, 0.0));
-    float d = distToTop(r, mu, rt), dMin = rt - r, dMax = rho + H;
-    return textureLod(transLut, vec2(clamp((d - dMin) / max(dMax - dMin, 1e-4), 0.0, 1.0), clamp(rho / max(H, 1e-4), 0.0, 1.0)), 0.0).rgb;
-}
-vec3 multiScatter(float r, float muS) {
-    return textureLod(msLut, vec2(clamp(muS * 0.5 + 0.5, 0.0, 1.0), clamp((r - pc.planet.x) / (pc.planet.y - pc.planet.x), 0.0, 1.0)), 0.0).rgb;
-}
-float ozoneDensity(float h) { return max(0.0, 1.0 - abs(h - 25000.0) / 15000.0); }
+// (the shared pieces at this pass's planet: atmosphere_common.glsl)
+vec3 transmittance(float r, float mu) { return atmTransmittance(transLut, r, mu, pc.planet.x, pc.planet.y); }
+vec3 multiScatter(float r, float muS) { return atmMultiScatter(msLut, r, muS, pc.planet.x, pc.planet.y); }
+float ozoneDensity(float h) { return atmOzoneDensity(h); }
 
 void main() {
     ivec3 size = imageSize(inscatterVol);
@@ -54,9 +41,8 @@ void main() {
     vec3 x0 = vec3(0.0, rg + max(pc.planet.z, 0.5), 0.0);
     vec3 light = normalize(pc.sun.xyz);
     float nu = dot(dir, light);
-    float phaseR = 3.0 / (16.0 * PI) * (1.0 + nu * nu);
-    float g = pc.planet.w, g2 = g * g;
-    float phaseM = 3.0 / (8.0 * PI) * ((1.0 - g2) * (1.0 + nu * nu)) / ((2.0 + g2) * pow(1.0 + g2 - 2.0 * g * nu, 1.5));
+    float phaseR = atmRayleighPhase(nu);
+    float phaseM = atmMiePhase(nu, pc.planet.w);
     float density = pc.ozone.w;
     vec3 T = vec3(1.0), L = vec3(0.0);
     float t0 = 0.0;

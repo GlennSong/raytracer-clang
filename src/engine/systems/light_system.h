@@ -4,6 +4,7 @@
 #include "../system.h"
 #include "../event_bus.h"
 #include "../lights/light_board.h"
+#include "../lights/light_kinds.h"   // LightBook
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
@@ -34,6 +35,9 @@ private:
     std::vector<LightCandidate> statics_;
     std::unordered_map<uint64_t, std::vector<uint32_t>> cells_;
     std::size_t streetSeen_ = static_cast<std::size_t>(-1), railSeen_ = static_cast<std::size_t>(-1);
+    // the book at real candela (the physical sky, ADR-0369), and the loaded book it was made from
+    LightBook physicalBook_;
+    const LightBook* physicalFrom_ = nullptr;
     std::size_t lastPicked_ = 0, lastCands_ = 0;
     uint64_t frames_ = 0;
 };

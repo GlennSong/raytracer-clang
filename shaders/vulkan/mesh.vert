@@ -26,6 +26,8 @@ vec3 octDecode(vec2 e) {
     return normalize(n);
 }
 
+#include "hash.glsl"
+
 // Must match the block layout in mesh.frag and GlobalsUBO in vulkan_renderer.cpp.
 struct Light {
     vec4 positionIntensity;
@@ -53,7 +55,7 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  fog;             // rgb fog color, w density (matches GlobalsUBO)
     vec4  shadowTint;      // rgb artistic tint, w ambientStrength
     vec4  wind1;           // xyz wind dir, w wind time
-    vec4  wind2;           // x frequency, y height, z amplitude
+    vec4  wind2;           // xy gust patches' offset (m), z amplitude, w speed
 } g;
 
 layout(push_constant) uniform Push {
@@ -167,18 +169,17 @@ void main() {
     if ((pc.surfaceFlags.y & 4u) != 0u) {
         float baseY = M[3].y;
         // grass sways over its own half-metre height, not a tree's
-        float swayHeight = grass ? 0.6 : g.wind2.y;
+        float swayHeight = grass ? 0.6 : 2.5;
         float weight = clamp((world.y - baseY) / max(swayHeight, 0.001), 0.0, 1.0);
         weight *= weight;
-        float phase = g.wind1.w * g.wind2.x + dot(world.xz, vec2(0.15, 0.1));
+        const float beat = 1.6 * clamp(sqrt(g.wind2.w / 6.0), 0.6, 1.8);   // faster in a stronger wind
+        float phase = g.wind1.w * beat + dot(world.xz, vec2(0.15, 0.1));
         float gust = sin(phase) + 0.3 * sin(phase * 2.3 + 1.7);
-        // GUST FRONTS (ADR-0337): bands of stronger air travelling downwind at the wind's speed -- a field bows in a wave
-        // that crosses it -- their strength the weather's gustiness (wind1.y), and the whole sway leaning downwind
-        // (a mean push, not only the swing about upright)
+        // THE GUSTS (ADR-0337): the wind's own patches of stronger air (engine/wind.h windGustFactor, hash.glsl), carried
+        // downwind as the air goes -- a field bows as a gust crosses it, and it is the gust a glider then meets -- and
+        // the whole sway leaning downwind (a mean push, not only the swing about upright)
         const vec2 wdir = g.wind1.xz;
-        const float along = dot(world.xz, wdir) - g.wind1.w * g.wind2.w;
-        const float front = 0.5 + 0.5 * sin(along * 0.07 + 0.6 * sin(dot(world.xz, vec2(-wdir.y, wdir.x)) * 0.013));
-        const float push = 1.0 + g.wind1.y * (2.2 * front * front - 0.5);
+        const float push = windGustFactor(world.xz, g.wind2.xy, g.wind1.y);
         world.xz += wdir * (g.wind2.z * weight * (gust * push + 0.6 * push));
     }
     // ON A SLOPE every blade stands up from the ground under IT, not from a level plane through the planted origin:

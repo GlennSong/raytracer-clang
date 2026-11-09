@@ -241,7 +241,7 @@ void Application::registerCameraVerbs() {
     });
 
     commandTable.add("view", "view <0-10> [wire 0-2]",
-                     "Debug view: 0 normal, 1 AO, 2 SSR (and the rays), 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades, "
+                     "Debug view: 0 normal, 1 AO, 2 SSR (rays muted), 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades, "
                      "9 roughness (what reflects), 10 environment reflection alone; plus wireframe.",
                      [this](const ControlCommand& cmd) -> std::string {
         // Debug view + wireframe are plain public renderer ints (the

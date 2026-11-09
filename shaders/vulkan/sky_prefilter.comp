@@ -2,6 +2,7 @@
 // THE SKY CUBEMAP'S ROUGH MIPS (ADR-0371): mip `level` of the sky cube is the GGX lobe of roughness level / (levels - 1)
 // over mip 0 -- importance-sampled (Karis 2013, the split sum's first half; the BRDF LUT is the second), N = V = R.
 // Samples read the source at a mip matched to their solid angle (filtered importance sampling), so 48 of them are smooth.
+#include "cube_common.glsl"
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, rgba16f) uniform writeonly imageCube dst;
@@ -13,24 +14,6 @@ layout(push_constant) uniform Push {
 
 const float PI = 3.14159265;
 
-vec3 cubeDir(int face, vec2 uv) {
-    vec2 p = uv * 2.0 - 1.0;
-    if (face == 0) return normalize(vec3(1.0, -p.y, -p.x));
-    if (face == 1) return normalize(vec3(-1.0, -p.y, p.x));
-    if (face == 2) return normalize(vec3(p.x, 1.0, p.y));
-    if (face == 3) return normalize(vec3(p.x, -1.0, -p.y));
-    if (face == 4) return normalize(vec3(p.x, -p.y, 1.0));
-    return normalize(vec3(-p.x, -p.y, -1.0));
-}
-vec2 hammersley(uint i, uint n) {
-    uint b = i;
-    b = (b << 16u) | (b >> 16u);
-    b = ((b & 0x55555555u) << 1u) | ((b & 0xAAAAAAAAu) >> 1u);
-    b = ((b & 0x33333333u) << 2u) | ((b & 0xCCCCCCCCu) >> 2u);
-    b = ((b & 0x0F0F0F0Fu) << 4u) | ((b & 0xF0F0F0F0u) >> 4u);
-    b = ((b & 0x00FF00FFu) << 8u) | ((b & 0xFF00FF00u) >> 8u);
-    return vec2(float(i) / float(n), float(b) * 2.3283064365386963e-10);
-}
 
 void main() {
     ivec2 size = imageSize(dst).xy;
@@ -47,10 +30,7 @@ void main() {
     float texelSolid = 4.0 * PI / (6.0 * pc.params.y * pc.params.y);
     for (uint i = 0u; i < COUNT; ++i) {
         vec2 xi = hammersley(i, COUNT);
-        float phi = 2.0 * PI * xi.x;
-        float cosT = min(sqrt((1.0 - xi.y) / (1.0 + (a2 - 1.0) * xi.y)), 1.0);
-        float sinT = sqrt(max(1.0 - cosT * cosT, 0.0));   // (rounding put cosT past 1 at low roughness: NaN)
-        vec3 H = normalize(tx * (sinT * cos(phi)) + ty * (sinT * sin(phi)) + N * cosT);
+        vec3 H = ggxHalfway(N, tx, ty, a2, xi);
         vec3 L = normalize(2.0 * dot(N, H) * H - N);
         float NdotL = dot(N, L);
         if (NdotL <= 0.0) continue;

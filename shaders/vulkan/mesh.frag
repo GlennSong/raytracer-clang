@@ -1584,7 +1584,7 @@ void main() {
             // horizon's whole glow
             float dist = length(inWorldPos - g.cameraPosition.xyz);
             vec2 uvA = gl_FragCoord.xy / vec2(max(g.skyPhysical2.w, 1.0), max(g.skyPhysical5.w, 1.0));
-            const float S = 32.0, FAR = 120000.0;
+            const float S = float(textureSize(aerialInscatter, 0).z), FAR = g.aerialRange.x;   // (the volume's own)
             float f = sqrt(clamp(dist / FAR, 0.0, 1.0));
             vec3 aL, aT;
             if (f * S < 1.0) {   // nearer than the first slice: from nothing to it

@@ -11,9 +11,9 @@ namespace engine {
 // Sky WEATHER over the volumetric cloud deck (Glenn: "most of the time the
 // clouds shouldn't be that dramatic unless there's a storm"). Four states,
 // each a target point in the deck's knob space plus a sun dimmer. The states
-// ride the SAME volumetrics: coverage is a threshold sliding through a
-// world-anchored noise field, so EASING between targets grows or erodes the
-// existing clouds in place — a front arriving, not a sky crossfade. The old
+// ride the SAME volumetrics: the weather map's cells (sky/cloud_map.h, ADR-0386)
+// are laid from the eased cover, so EASING between targets grows or thins the
+// clouds there — a front arriving, not a sky crossfade. The old
 // default deck (coverage .5, density 1.0) is the Storm entry, correctly
 // labeled at last; Fair is the everyday sky.
 //

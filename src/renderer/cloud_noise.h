@@ -11,10 +11,9 @@
 // Every octave wraps its lattice/cell hash at that octave's period, so both
 // textures tile seamlessly under repeat addressing. The bake is deterministic
 // (fixed seed) and runs once: raw bytes are cached under cache/clouds/ keyed
-// by a content hash including the "pw-clouds-v1" version tag — the same
+// by a content hash including the "pw-clouds-v2" version tag — the same
 // pattern as the erosion cache in src/engine/procgen/terrain_field.cpp.
-// Header-only so metal_renderer.mm (compiled into both viewer and editor_app)
-// picks it up without CMake changes.
+// Shared by both backends (metal_renderer.mm, vulkan_renderer.cpp); header-only, so no CMake changes.
 #pragma once
 
 #include <algorithm>
@@ -22,23 +21,16 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
-#include "../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
+#include "../hash.h"         // frozenCloudNoiseHash
+#include "../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 #include <vector>
 
 namespace cloudnoise {
 
-// Deterministic lattice-point hash. Coordinates are pre-wrapped to the octave
-// period by the callers, which is what makes every octave tile.
-inline uint32_t hash3(int x, int y, int z, uint32_t seed) {
-    uint32_t h = seed;
-    h ^= static_cast<uint32_t>(x) * 0x8da6b343u;
-    h ^= static_cast<uint32_t>(y) * 0xd8163841u;
-    h ^= static_cast<uint32_t>(z) * 0xcb1ab31fu;
-    h ^= h >> 13;
-    h *= 0x9e3779b1u;
-    h ^= h >> 16;
-    return h;
-}
+// Deterministic lattice-point hash: hash.h's frozen one (the cached bake is its bits). Coordinates are pre-wrapped to
+// the octave period by the callers, which is what makes every octave tile. (The Perlin and Worley here are their own,
+// not procgen/noise.h's: they wrap at each octave's period, which the engine's noise does not.)
+inline uint32_t hash3(int x, int y, int z, uint32_t seed) { return engine::frozenCloudNoiseHash(x, y, z, seed); }
 
 inline int wrapi(int v, int period) {
     int m = v % period;
@@ -294,7 +286,7 @@ inline void bakeWeather(NoiseSet& s, uint32_t seed) {
 
 // Load the cached bake, or bake (a few hundred ms, threaded) and cache it.
 // The key hashes a descriptor of everything that shapes the bytes — bumping
-// the "pw-clouds-v1" tag (or any frequency) invalidates cleanly, and stale
+// the "pw-clouds-v2" tag (or any frequency) invalidates cleanly, and stale
 // entries are simply never referenced again.
 inline NoiseSet generateOrLoad() {
     NoiseSet s;

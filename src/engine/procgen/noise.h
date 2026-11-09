@@ -35,8 +35,8 @@ struct FrozenTreeTextureBlend {
     }
 };
 
-// VALUE NOISE (2026-11-08: it had been written three times -- the wind's gusts, a tree's textures, the lanes' recipe
-// terrain): a value per lattice node (`node(i, j)`, in [0, 1)), smoothstep-blended between the four round a point.
+// VALUE NOISE (2026-11-08: it had been written seven times, ADR-0389 -- the wind's gusts, a tree's textures, the
+// lanes' recipe terrain among them; the GPU's copy for the gusts is shaders/vulkan/hash.glsl): a value per lattice node (`node(i, j)`, in [0, 1)), smoothstep-blended between the four round a point.
 // Cheaper and blockier than the gradient Noise below. T: float or double. `blend`: LerpBlend, but for a frozen one.
 template <class T, class Node, class Blend = LerpBlend>
 T latticeValueNoise(T x, T y, Node&& node, Blend blend = {}) {

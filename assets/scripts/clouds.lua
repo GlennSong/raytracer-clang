@@ -1,7 +1,7 @@
 -- THE CLOUDS (ADR-0386; Glenn, 2026-11-08: "I would like to get us more in line with that Decima system"). As Nubis
 -- (Schneider, Horizon Zero Dawn): a WEATHER MAP places every cloud -- a footprint each, of its type, its size and its
 -- height -- and the 3D noise only shapes the cloud inside it. Before, the noise placed the clouds: every one a piece
--- of the same 5.7 km tile, every one as tall as the deck. engine/weather/cloud_map.cpp bakes the map round the camera
+-- of the same 5.7 km tile, every one as tall as the deck. engine/sky/cloud_map.cpp bakes the map round the camera
 -- from this; clouds.frag marches it. Read once at start.
 --
 -- types: the four along the weather's type axis (0, 1/3, 2/3, 1; WeatherCycle typeLo..typeHi spreads a day's clouds

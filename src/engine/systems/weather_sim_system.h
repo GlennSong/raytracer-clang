@@ -37,6 +37,7 @@ private:
     std::future<Stepped> pending_;
     bool stepping_ = false;
     bool begun_ = false;
+    uint32_t terrainKey_ = 0;   // the terrain the grid was begun on (0: none, flat land)
     double gathered_ = 0.0;   // weather seconds not yet stepped
     Entity fieldEntity_{};
     uint64_t version_ = 0;

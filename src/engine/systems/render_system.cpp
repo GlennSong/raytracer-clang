@@ -462,7 +462,7 @@ void RenderSystem::render(FrameContext& ctx) {
 
     // RAY-TRACED REFLECTIONS' NEAR SCENE (ADR-0376): what a reflection ray may hit -- the instances of lights.lua's
     // raytrace `hits` classes within `near`, every way round (a reflection sees behind you), nearest first. The static
-    // world again once the camera has moved 5 m, or a second on; what MOVES (simBody: the city's cars, ADR-0379) every
+    // world again once the camera has moved 5 m, or every 60 frames; what MOVES (simBody: the city's cars, ADR-0381) every
     // frame, at its pose this frame. Transparent parts (a car's glass) stay out: a ray goes into the car, as an eye
     // would. The renderer builds the structures within its memory budget (a car's model once, its instances each frame).
     if (ctx.renderer.supportsRayQuery()) {

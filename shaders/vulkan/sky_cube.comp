@@ -2,6 +2,8 @@
 // THE SKY AS A CUBEMAP (ADR-0371): the physical sky's dome (the sky-view texture, sky_view.comp) drawn into the six faces
 // of a cube, mip 0 -- the source sky_prefilter.comp blurs into the rough surfaces' mips. No sun disc: the sun is lit
 // directly (and a mirror's highlight from it); taking it again through the reflections doubled it.
+#include "cube_common.glsl"
+#include "atmosphere_common.glsl"
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, rgba16f) uniform writeonly imageCube cube;
@@ -12,54 +14,14 @@ layout(push_constant) uniform Push {
     vec4 planet;   // x ground radius, y camera height
 } pc;
 
-const float PI = 3.14159265;
 
-// a cube texel's direction (Vulkan's face order +X -X +Y -Y +Z -Z)
-vec3 cubeDir(int face, vec2 uv) {
-    vec2 p = uv * 2.0 - 1.0;
-    if (face == 0) return normalize(vec3(1.0, -p.y, -p.x));
-    if (face == 1) return normalize(vec3(-1.0, -p.y, p.x));
-    if (face == 2) return normalize(vec3(p.x, 1.0, p.y));
-    if (face == 3) return normalize(vec3(p.x, -1.0, -p.y));
-    if (face == 4) return normalize(vec3(p.x, -p.y, 1.0));
-    return normalize(vec3(-p.x, -p.y, -1.0));
-}
-
-vec2 skyViewUv(float viewCos, float azim) {
-    float rg = pc.planet.x;
-    float r = rg + max(pc.planet.y, 0.5);
-    float vHorizon = sqrt(max(r * r - rg * rg, 0.0));
-    float beta = acos(clamp(vHorizon / r, -1.0, 1.0));
-    float zenithHorizon = PI - beta;
-    float viewZenith = acos(clamp(viewCos, -1.0, 1.0));
-    float v;
-    if (viewZenith < zenithHorizon) {
-        float c = viewZenith / max(zenithHorizon, 1e-4);
-        v = (1.0 - sqrt(max(1.0 - c, 0.0))) * 0.5;
-    } else {
-        float c = (viewZenith - zenithHorizon) / max(beta, 1e-4);
-        v = 0.5 + 0.5 * sqrt(clamp(c, 0.0, 1.0));
-    }
-    return vec2(sqrt(clamp(azim / PI, 0.0, 1.0)), v);
-}
 
 void main() {
     ivec2 size = imageSize(cube).xy;
     ivec3 id = ivec3(gl_GlobalInvocationID);
     if (id.x >= size.x || id.y >= size.y) return;
     vec3 dir = cubeDir(id.z, (vec2(id.xy) + 0.5) / vec2(size));
-    vec2 vh = dir.xz, sh = pc.sun.xz;
-    float vl = length(vh), sl = length(sh);
-    float azim = (vl > 1e-4 && sl > 1e-4) ? acos(clamp(dot(vh / vl, sh / sl), -1.0, 1.0)) : 0.0;
-    // below the horizon the dome blends to the horizon's own light (sky_physical.glsl's rule): distant land as haze
-    float rg = pc.planet.x;
-    float r = rg + max(pc.planet.y, 0.5);
-    float zenithHorizon = PI - acos(clamp(sqrt(max(r * r - rg * rg, 0.0)) / r, -1.0, 1.0));
-    vec3 col = textureLod(skyViewTex, skyViewUv(dir.y, azim), 0.0).rgb;
-    float dip = acos(clamp(dir.y, -1.0, 1.0)) - zenithHorizon;
-    if (dip > 0.0) {
-        float w = 1.0 - clamp(dip / 0.10, 0.0, 1.0);
-        col = mix(col, textureLod(skyViewTex, skyViewUv(cos(zenithHorizon * 0.995), azim), 0.0).rgb, w * w);
-    }
+    // below the horizon the dome blends to the horizon's own light: distant land as haze
+    vec3 col = atmSkyViewRadiance(skyViewTex, dir, pc.sun.xyz, pc.planet.x, pc.planet.y);
     imageStore(cube, id, vec4(col, 1.0));
 }

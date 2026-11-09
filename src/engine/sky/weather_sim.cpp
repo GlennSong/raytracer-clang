@@ -20,7 +20,8 @@ constexpr double kLiftMoisture = 0.30;     // how much a unit of lift brings the
 constexpr double kSaturation = 0.91;       // the humidity (with the lift's help) a cloud forms past
 constexpr double kCondense = 600.0;        // s: a cloud forms...
 constexpr double kEvaporate = 1500.0;      // ...and goes, slower: carried downwind meanwhile (the plumes)
-constexpr int kJacobi = 30;                // pressure iterations a sub-step (warm-started)
+constexpr int kPressureSweeps = 30;        // pressure sweeps a sub-step (warm-started; red-black SOR)
+constexpr double kOverRelax = 1.9;         // the over-relaxation (1: plain Gauss-Seidel)
 }  // namespace
 
 void WeatherSim::init(const HeightRaster& terrain, double seaLevel, int n) {
@@ -110,9 +111,9 @@ void WeatherSim::subStep(const WeatherSimInputs& in, double dt) {
         u_[k] += static_cast<float>((U0 - u_[k]) * relax);
         v_[k] += static_cast<float>((V0 - v_[k]) * relax);
     }
-    std::vector<float> uOld = u_;
-    advect(u_, uOld, v_, dt, tmp_);
-    advect(v_, uOld, v_, dt, tmp_);
+    uOld_ = u_;   // (the member's room, kept: no allocation a sub-step)
+    advect(u_, uOld_, v_, dt, tmp_);
+    advect(v_, uOld_, v_, dt, tmp_);
     for (int j = 0; j < n_; ++j)
         for (int i = 0; i < n_; ++i)
             if (i < 2 || j < 2 || i >= n_ - 2 || j >= n_ - 2) {
@@ -128,15 +129,16 @@ void WeatherSim::subStep(const WeatherSimInputs& in, double dt) {
             div_[at(i, j)] = static_cast<float>(d + kBreeze * (tmp2_[at(i, j)] - meanHeat));
         }
     const double c2 = cell_ * cell_;
-    for (int it = 0; it < kJacobi; ++it) {
-        for (int j = 0; j < n_; ++j)
-            for (int i = 0; i < n_; ++i) {
-                const int il = std::max(i - 1, 0), ir = std::min(i + 1, n_ - 1), jd = std::max(j - 1, 0), ju = std::min(j + 1, n_ - 1);
-                tmp_[at(i, j)] = static_cast<float>(
-                    (p_[at(il, j)] + p_[at(ir, j)] + p_[at(i, jd)] + p_[at(i, ju)] - div_[at(i, j)] * c2) * 0.25);
-            }
-        p_.swap(tmp_);
-    }
+    // red-black over-relaxed Gauss-Seidel, in place: 30 sweeps of it sit within 0.01 of the converged cover, where 30 of
+    // Jacobi's (the first solve) were up to 0.3 off over the island -- a long-range pressure that had not spread yet
+    for (int it = 0; it < kPressureSweeps; ++it)
+        for (int colour = 0; colour < 2; ++colour)
+            for (int j = 0; j < n_; ++j)
+                for (int i = (j + colour) & 1; i < n_; i += 2) {
+                    const int il = std::max(i - 1, 0), ir = std::min(i + 1, n_ - 1), jd = std::max(j - 1, 0), ju = std::min(j + 1, n_ - 1);
+                    const double gs = (p_[at(il, j)] + p_[at(ir, j)] + p_[at(i, jd)] + p_[at(i, ju)] - div_[at(i, j)] * c2) * 0.25;
+                    p_[at(i, j)] = static_cast<float>(p_[at(i, j)] + kOverRelax * (gs - p_[at(i, j)]));
+                }
     for (int j = 0; j < n_; ++j)
         for (int i = 0; i < n_; ++i) {
             const int il = std::max(i - 1, 0), ir = std::min(i + 1, n_ - 1), jd = std::max(j - 1, 0), ju = std::min(j + 1, n_ - 1);

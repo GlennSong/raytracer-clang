@@ -563,7 +563,7 @@ struct PhysicalSkyFrame {
 // "environment": {"clouds": {...}}. A slab [bottom, top] of raymarched clouds
 // rendered at half resolution after the scene (depth-occluded) and upsampled
 // bilaterally; replaces the 2D FBM sky overlay while active. Altitudes are
-// world meters; `wind` drifts the field along +X in m/s.
+// world meters; the field drifts with the weather's wind (driftX/Z, CloudMapSystem).
 struct VolumetricCloudParams {
     bool  enabled = false;
     float coverage = 0.35f;      // 0 = clear, 1 = overcast
@@ -595,7 +595,7 @@ struct VolumetricCloudParams {
     // the 0.35 the old inline-fbm erosion hardcoded.
     float detailStrength = 0.35f;
     // WISPS (ADR-0384): how far the detail's lookup is swirled (Nubis' curl), with the wispy-to-billowy erosion, the
-    // translucent fringe, the far banks' coarse erosion and the silver-lining lobe; 0: the old solid edges
+    // far banks' coarse erosion and the silver-lining lobe; 0: the old solid edges
     float wisps = 1.0f;
     // THE CIRRUS (ADR-0384): the high ice layer's cover, 0..1 (0: none)
     float cirrus = 0.35f;
@@ -1133,6 +1133,7 @@ public:
     float windDir[2] = {0.94f, 0.34f};
     float windSpeed = 6.0f;
     float windGust = 0.35f;
+    float windDrift[2] = {0.0f, 0.0f};   // m: how far the air has gone (Wind::drift): the gust patches' offset
 
     // Resolution scale for the screen-space effect buffers (SSAO + SSR), a
     // fraction of the framebuffer. These effects are low/medium frequency, so

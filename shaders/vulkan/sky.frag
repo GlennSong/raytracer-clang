@@ -20,11 +20,11 @@ vec3 sampleEquirect(vec3 dir) {
 
 // THE MOON (the month): a sphere disc lit from the TRUE sun, so the terminator
 // falls where the phase says — a thin crescent hugging the sun's side, a
-// half at the quarters, a full face opposite the sun. Angular radius is ~2x
-// the real 0.26 deg (it reads as a moon rather than a dot at this size), the
+// half at the quarters, a full face opposite the sun. Angular radius ~1.5 deg,
+// ~5.7x the real 0.26 deg (it reads as a moon rather than a dot at this size), the
 // dark side keeps a whisper of earthshine, and a faint glow scales with the
 // lit fraction. Zero radiance below the horizon (w = 0 from the CPU).
-const float kMoonRadius = 0.026;    // radians (~1.5 deg: ~3x real, so the phase READS)
+const float kMoonRadius = 0.026;    // radians (~1.5 deg radius: ~5.7x real, so the phase READS)
 vec3 moonDisc(vec3 dir) {
     float I = g.skyMoonDir.w;
     if (I <= 0.0) return vec3(0.0);

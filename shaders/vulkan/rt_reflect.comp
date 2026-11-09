@@ -20,7 +20,7 @@
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 1, binding = 0) uniform sampler2D depthTex;      // the scene's (reverse-Z)
-layout(set = 1, binding = 1) uniform sampler2D normalTex;     // world normal * 0.5 + 0.5, a = roughness
+layout(set = 1, binding = 1) uniform sampler2D normalTex;     // the G-buffer (gbuffer.glsl: octahedral normal, roughness, specular weight)
 layout(set = 1, binding = 5, rgba16f) uniform writeonly image2D rtRaw;   // rgb the radiance to add (pre-exposed), a its share
 layout(set = 1, binding = 3) uniform accelerationStructureEXT nearScene;
 

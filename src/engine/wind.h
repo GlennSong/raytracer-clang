@@ -25,14 +25,17 @@ struct Wind {
     Vec3 dir{0.94, 0.0, 0.34};   // where the air is going, unit, horizontal
     Real speed = 6.0;            // m/s at 10 m above the ground
     Real gust = 0.35;            // 0 steady .. 1 squally: how much stronger a gust is than the mean
-    Real time = 0.0;             // seconds: what carries the gust patches downwind
+    Vec3 drift{0.0, 0.0, 0.0};   // m: how far the air has gone, the wind summed step by step -- what carries the gust
+                                 // patches downwind (summed, not dir * speed * time: a veering wind turns the patches'
+                                 // path, it does not swing the whole field round the origin)
 };
 
 
-// The gust factor at a point: 1 - gust/2 .. 1 + gust, patches ~120 m across travelling with the wind
+// The gust factor at a point: 1 - gust/2 .. 1 + gust, patches ~120 m across travelling with the wind. The grass and
+// trees bow to the same patches (mesh.vert, windGustFactor in hash.glsl: keep the two alike).
 inline Real windGustFactor(const Wind& w, const Vec3& p) {
     const Real s = 1.0 / 120.0;
-    const Vec3 q = p - w.dir * (w.speed * w.time);   // the air that is here now was upwind of it
+    const Vec3 q = p - w.drift;   // the air that is here now was upwind of it
     const Real n = 0.65 * valueNoise2(q.x * s, q.z * s, 0x57u) + 0.35 * valueNoise2(q.x * s * 2.7 + 5.3, q.z * s * 2.7 - 1.9, 0x57u);
     return 1.0 + w.gust * (1.5 * n - 0.5);
 }

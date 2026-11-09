@@ -1,9 +1,9 @@
 #include "trades.h"
 
+#include "../../scripting/book_slot.h"   // BookSlot
 #include <algorithm>
 #include <cstring>
 #include <memory>
-#include <mutex>
 #ifdef RT_ENABLE_SCRIPTING
 #include "../../scripting/trades_lua.h"   // ensureTradesLoaded: trades.lua, once
 #endif
@@ -96,27 +96,20 @@ const TradeBook& builtinTradeBook() {
 }
 
 namespace {
-std::shared_ptr<const TradeBook>& activeBook() {
-    static std::shared_ptr<const TradeBook> book;
-    return book;
-}
-std::mutex& bookMutex() {
-    static std::mutex mu;
-    return mu;
+BookSlot<TradeBook>& bookSlot() {
+    static BookSlot<TradeBook> slot;
+    return slot;
 }
 }  // namespace
 
-void setTradeBook(const TradeBook& book) {
-    std::lock_guard<std::mutex> lock(bookMutex());
-    activeBook() = std::make_shared<const TradeBook>(book);
-}
+void setTradeBook(const TradeBook& book) { bookSlot().set(book); }
 
 const TradeBook& tradeBook() {
 #ifdef RT_ENABLE_SCRIPTING
     ensureTradesLoaded();
 #endif
-    std::lock_guard<std::mutex> lock(bookMutex());
-    return activeBook() ? *activeBook() : builtinTradeBook();
+    const TradeBook* book = bookSlot().get();   // (kept for good: the reference stays valid across a reload)
+    return book ? *book : builtinTradeBook();
 }
 
 const TradeInterior& tradeInterior(uint8_t id) {

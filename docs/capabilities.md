@@ -26,7 +26,7 @@ being used. One row per capability; the "used by" column is the audit trail.
 | Capability | Where | Used by | Why / why not |
 |---|---|---|---|
 | Weather cache `cache/terrain/weather_<hash>.bin` | `procgen/terrain_weather.cpp` `weatheredTerrainCached` | terrain load | content key (`weatheredGroundKey`): the shaping block + code tags + backend + a relief fingerprint, raw floats, `RT_NOCACHE`; the droplet `<hash>.bin` cache it grew from went with the droplets (ADR-0257) |
-| Cloud-noise cache `cache/clouds/<hash>.bin` | `renderer/metal/cloud_noise.h:265` | sky | same shape, descriptor string with a version tag |
+| Cloud-noise cache `cache/clouds/<hash>.bin` | `renderer/cloud_noise.h:291` | sky | same shape, descriptor string with a version tag |
 | Level bundle `Bundle`/`BundleWriter` | `engine/bundle/bundle.h` | loader, `rt_bake`, editor | one file, aligned mmap-able sections, JSON TOC, manifest as commit marker; general — no producer knowledge |
 | Producers, keys, bake, obtain, prune | `engine/bundle/bake.h` | loader, `rt_bake`, editor | content keys + code tags, copy-forward of unchanged producers, `RT_NOCACHE`/`RT_BUNDLE_*` knobs; `pruneBundles` keeps the newest per level |
 | Codecs `PackedMesh`, height grid, road graphs, rings | `engine/bundle/codecs.h` | city producer, GLB view | float32 packed meshes; the cold path packs too (byte-identical cold/warm) |

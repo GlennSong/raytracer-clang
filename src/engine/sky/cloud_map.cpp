@@ -80,7 +80,7 @@ void bakeCloudMap(const CloudBook& book, const CloudMapInputs& in, CloudMapImage
     out.rgba.assign(static_cast<std::size_t>(n) * n * 4, 0);
 
     const float cover = std::clamp(in.coverage, 0.0f, 1.0f);
-    // THE CIRRUS's veils: two octaves of value noise stretched 4:1 along the sweep, cut to its cover
+    // THE CIRRUS's veils: two octaves of gradient noise (Noise) stretched 4:1 along the sweep, cut to its cover
     const float cirrus = std::clamp(in.cirrus, 0.0f, 1.0f);
     float sweepX = 1.0f, sweepZ = 0.0f;
     cloudCirrusSweep(in.seed, sweepX, sweepZ);
@@ -88,7 +88,8 @@ void bakeCloudMap(const CloudBook& book, const CloudMapInputs& in, CloudMapImage
     // THE AIR's ORGANISATION: clouds bunch into fields and lines along the wind with clear air between, they are not
     // sprinkled evenly (the map from above was speckle: Glenn's "dense in the sky all the time"). A slow moisture
     // field, stretched along the sweep into streets, scales how many cells each square holds -- its mean about one,
-    // so the cover asked for stays the sky's average. (The weather simulation, part C, will write this field.)
+    // so the cover asked for stays the sky's average. (Where the weather is simulated, its field replaces this one:
+    // ADR-0390.)
     // (a heavy sky is even -- an overcast's deck, a storm's mass: the bunching gives way as the cover passes 60 %)
     const double org = std::clamp(static_cast<double>(book.organisation), 0.0, 1.0) *
                        (1.0 - smoothstep(0.6, 0.9, static_cast<double>(cover)));

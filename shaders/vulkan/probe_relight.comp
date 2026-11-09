@@ -8,6 +8,7 @@
 #include "globals.glsl"
 #define SHADE_DIFFUSE_ONLY   // the highlights of the lights stay out of a probe (ADR-0374)
 #include "lighting_common.glsl"
+#include "cube_common.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -20,15 +21,6 @@ layout(push_constant) uniform Push {
     vec4 eye;      // xyz the probe, w its index
 } pc;
 
-vec3 cubeDir(int face, vec2 uv) {
-    vec2 p = uv * 2.0 - 1.0;
-    if (face == 0) return normalize(vec3(1.0, -p.y, -p.x));
-    if (face == 1) return normalize(vec3(-1.0, -p.y, p.x));
-    if (face == 2) return normalize(vec3(p.x, 1.0, p.y));
-    if (face == 3) return normalize(vec3(p.x, -1.0, -p.y));
-    if (face == 4) return normalize(vec3(p.x, -p.y, 1.0));
-    return normalize(vec3(-p.x, -p.y, -1.0));
-}
 
 void main() {
     ivec3 id = ivec3(gl_GlobalInvocationID);

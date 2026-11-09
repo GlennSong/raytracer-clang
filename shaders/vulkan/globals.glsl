@@ -31,7 +31,7 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  fog;                // rgb fog color, w density (0 = off)
     vec4  shadowTint;         // rgb artistic shadow tint, w ambientStrength
     vec4  wind1;              // xyz wind dir, w time (used by mesh.vert)
-    vec4  wind2;              // x frequency, y height, z amplitude
+    vec4  wind2;              // xy gust patches' offset (m), z amplitude, w speed
     vec4  skyMoonDir;         // (sky.frag's members, declared to reach the tail)
     vec4  skyMoonSun;
     vec4  skyCelX;
@@ -58,13 +58,14 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  skyPhysical3;       //   z top radius; x 1: the active light is the sun, y the celestial scale, z the glows'
                               //   emission into units (ADR-0369)
     vec4  skyPhysical4;       // the air for the aerial perspective: rgb Rayleigh /m, w its scale height;
-    vec4  skyPhysical5;       //   x Mie extinction /m, y its scale height, z the level's aerial density
+    vec4  skyPhysical5;       //   x Mie extinction /m, y its scale height, z the air's density scale (RT_AERIAL, 1)
     vec4  skySH[9];           // the sky's light on surfaces: E / pi, order-2 spherical harmonics (ADR-0371)
     vec4  cloudShadow;        // THE CLOUDS' SHADOW (ADR-0387; the weather map, binding 18): xy its corner in the air, z
     vec4  cloudShadow2;       //   1/extent, w how much of the sun a cloud's heart takes (0: off); x, y the drift, z the
                               //   height the sun's line is read at (the deck's middle)
     vec4  cloudTypeBase;      // each cloud type's base and middle (m; middle <= base: not in this weather): the
     vec4  cloudTypeMid;       //   sun's line crosses each type at its own height (cloudShadow)
+    vec4  aerialRange;        // x how far the aerial volume reaches (m: aerial_volume.comp's last slice)
 } g;
 #include "sky_physical.glsl"
 // the clustered lights (light_clusters.h): every point and spot, each froxel's offset (low 24 bits) | count (high 8),

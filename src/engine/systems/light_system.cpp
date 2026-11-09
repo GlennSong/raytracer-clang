@@ -59,18 +59,17 @@ void LightSystem::render(FrameContext& ctx) {
     board.spots.clear();
     const LightBook& loaded = lightBook();
     // UNDER THE PHYSICAL SKY (ADR-0369) each kind lights at its real candela, in engine units
-    static LightBook physicalBook;
-    static bool physicalMade = false;
-    if (!physicalMade) {
-        physicalBook = loaded;
-        for (LightKind& k : physicalBook.kinds)
+    // (made again when lights.lua is: a reload publishes a new book)
+    if (physicalFrom_ != &loaded) {
+        physicalBook_ = loaded;
+        for (LightKind& k : physicalBook_.kinds)
             if (k.candela > 0.0f) k.intensity = static_cast<float>(k.candela / kLuxPerUnit);
-        physicalMade = true;
+        physicalFrom_ = &loaded;
     }
-    const LightBook& book = ctx.view.lighting.physicalSky.enabled ? physicalBook : loaded;
-    static const int streetPool = book.pool("street");
-    static const int beaconPool = book.pool("beacons");
-    static const int streetLamp = lightKindId("street_lamp");
+    const LightBook& book = ctx.view.lighting.physicalSky.enabled ? physicalBook_ : loaded;
+    const int streetPool = book.pool("street");
+    const int beaconPool = book.pool("beacons");
+    const int streetLamp = book.kind("street_lamp");
 
     // THE BUDGETS, by what the renderer can light: the level's own lights first, the rest is ours
     const int capacity = ctx.renderer.lightCapacity();

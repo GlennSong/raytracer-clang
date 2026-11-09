@@ -99,33 +99,6 @@ vec3 clMap(vec2 xz) {
 }
 bool clMapOn() { return u.mapRect.w > 0.5; }
 
-// A map cell's type at height y: x its profile's density there, y the type's density, z its erosion, w its anvil; and
-// `hf` the height within the cell (0 its base, 1 its own top). The slot is the cell's own (the map's G), between two
-// types only where the bilinear read crosses cells; its top shrinks with the cell (the map's B).
-vec4 clCellShape(float slot, float topFrac, float y, out float hf) {
-    const float a = clamp(slot, 0.0, 1.0) * 3.0;
-    const int i = min(int(a), 2);
-    const float f = a - float(i);
-    const vec4 P = mix(u.typeProfile[i], u.typeProfile[i + 1], f);
-    const vec4 Q = mix(u.typeParams[i], u.typeParams[i + 1], f);
-    const vec2 H = mix(u.typeHeights[i].xy, u.typeHeights[i + 1].xy, f);
-    const float top = H.x + (H.y - H.x) * clamp(topFrac, 0.05, 1.0);
-    hf = (y - H.x) / max(1.0, top - H.x);
-    if (hf <= 0.0 || hf >= 1.0) return vec4(0.0);
-    const float prof = smoothstep(P.x, max(P.y, P.x + 1e-3), hf) * (1.0 - smoothstep(P.z, max(P.w, P.z + 1e-3), hf));
-    return vec4(prof, Q.x, Q.y, Q.z);
-}
-
-vec2 clWeather(vec2 xz) {
-    if (clMapOn()) {
-        const vec3 m = clMap(xz);
-        return vec2(m.x, m.y);
-    }
-    vec2 q = (xz + clWind().xz) * (u.params.z * 0.035);
-    if (u.detail.w > 0.5) return vec2(textureLod(baseNoise, vec3(q.x, 0.37, q.y), 0.0).r, 2.0 / 3.0);   // (RT_CLOUD_TYPES=0: the old slice, cumulus)
-    const vec4 w = textureLod(weatherMap, q, 0.0);
-    return vec2(w.r, mix(u.typeRange.x, u.typeRange.y, w.g));
-}
 // The type's shape at this height: x density from its profile, y its density scale, z erosion, w anvil -- the four
 // types blended along the axis by where `type` falls between neighbours
 vec4 clTypeShape(float type, float hf) {
@@ -138,6 +111,29 @@ vec4 clTypeShape(float type, float hf) {
     return vec4(prof, Q.x, Q.y, Q.z);
 }
 
+// A map cell's type at height y: x its profile's density there, y the type's density, z its erosion, w its anvil; and
+// `hf` the height within the cell (0 its base, 1 its own top). The slot is the cell's own (the map's G), between two
+// types only where the bilinear read crosses cells; its top shrinks with the cell (the map's B).
+vec4 clCellShape(float slot, float topFrac, float y, out float hf) {
+    const float a = clamp(slot, 0.0, 1.0) * 3.0;
+    const int i = min(int(a), 2);
+    const vec2 H = mix(u.typeHeights[i].xy, u.typeHeights[i + 1].xy, a - float(i));
+    const float top = H.x + (H.y - H.x) * clamp(topFrac, 0.05, 1.0);
+    hf = (y - H.x) / max(1.0, top - H.x);
+    if (hf <= 0.0 || hf >= 1.0) return vec4(0.0);
+    return clTypeShape(slot, hf);   // (the same blend of the types' profiles, at the cell's own height)
+}
+
+vec2 clWeather(vec2 xz) {
+    if (clMapOn()) {
+        const vec3 m = clMap(xz);
+        return vec2(m.x, m.y);
+    }
+    vec2 q = (xz + clWind().xz) * (u.params.z * 0.035);
+    if (u.detail.w > 0.5) return vec2(textureLod(baseNoise, vec3(q.x, 0.37, q.y), 0.0).r, 2.0 / 3.0);   // (RT_CLOUD_TYPES=0: the old slice, cumulus)
+    const vec4 w = textureLod(weatherMap, q, 0.0);
+    return vec2(w.r, mix(u.typeRange.x, u.typeRange.y, w.g));
+}
 // Coverage after the weather map: fair skies carve banks with real gaps,
 // storm coverage saturates the field into a full deck.
 float clLocalCoverage(float weather) {

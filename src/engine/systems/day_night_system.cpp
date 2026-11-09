@@ -448,6 +448,8 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
     // and slow-mo slows them. (The cycle's own Pause checkbox remains the
     // artistic "hold this time of day while the game runs" control.)
     if (enabled && !hdrEnvironmentActive(ctx)) cycle.advance(ctx.clock.fixedStep());
+    // (the flat sky overlay's phase, sky.frag applyClouds: drawn only where the volumetric deck is off -- the deck
+    // drifts by CloudMapSystem's driftX/Z, not this)
     if (cloudsEnabled) cloudPhase += ctx.clock.fixedStep() * cloudWindSpeed;
 
     // Weather: the auto walk rides the CYCLE's clock (cycle.speed is a day
@@ -501,7 +503,7 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
         wind.dir = Vec3(std::sin(toward), 0.0, -std::cos(toward));
         wind.speed = (weatherActive ? weather.windSpeed : 6.0) * climate_.windScale;
         wind.gust = weatherActive ? weather.windGust : 0.35;
-        wind.time += ctx.clock.fixedStep();
+        wind.drift += wind.dir * (wind.speed * ctx.clock.fixedStep());
         if (!ctx.world.alive(windEntity_)) {
             windEntity_ = ctx.world.create();
             ctx.world.add<Wind>(windEntity_, wind);
@@ -518,6 +520,8 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
         ctx.renderer.windDir[1] = static_cast<float>(wind.dir.z);
         ctx.renderer.windSpeed = static_cast<float>(wind.speed);
         ctx.renderer.windGust = static_cast<float>(wind.gust);
+        ctx.renderer.windDrift[0] = static_cast<float>(wind.drift.x);
+        ctx.renderer.windDrift[1] = static_cast<float>(wind.drift.z);
     }
 }
 
