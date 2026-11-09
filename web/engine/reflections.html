@@ -1174,6 +1174,11 @@ bool VulkanRenderer::Impl::raysThisFrame() {
     <figcaption>The window you stand behind, at night (2026-11-08, ADR-0382): before (left), the pane's own reflection in
       old units came out white; after (right), the room's real light, faint, over the night street.</figcaption>
   </figure>
+  <div class="note"><p><b>Fixed since this page's commit: glass near the camera kept its reflection.</b> The
+    transparent pass writes no G-buffer (only water's twin does), so the rays never see a pane: they reflect for the
+    surface behind it. Yet <code>mesh.frag</code> faded the probe's reflection out near the camera on every surface, so
+    a bus window or a lobby's glass within the rays' range lost its reflection outright. Since 2026-11-09
+    (<code>5335f32f</code>) the fade skips see-through glass, which keeps the probe's reflection at every distance.</p></div>
 
   <h3>Matte insides and the rays' glows</h3>
   <p>Two of Glenn's notes on 2026-11-08 were about things that reflected but should not have. The bus seats "should
