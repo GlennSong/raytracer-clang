@@ -37,6 +37,20 @@ std::vector<float> horn(uint32_t sampleRate = 48000, uint32_t seed = 1);
 // Seeds vary the rasp partials so two cars in one street aren't clones.
 std::vector<float> engine(uint32_t sampleRate = 48000, uint32_t seed = 1);
 
+// ---- A CAR'S PANELS AND ITS STARTER (ADR-0355; Glenn: "We should have an sfx for shutting the door, hood, trunk" and
+// "if the engine is busted we should have a different engine sound") -----------------------------------------------
+// What shut: a door, a hood or a trunk lid.
+enum class PanelKind : uint8_t { Door = 0, Hood, Trunk };
+// A panel SHUTTING: the latch's sharp click on top of the panel's own body -- a door's short solid thunk, a hood's
+// bigger, boomier slam with a ring of sheet steel, a trunk lid's lighter thump between them. One-shot; the caller
+// scales its volume by how fast it shut.
+std::vector<float> panelShut(PanelKind kind, uint32_t sampleRate = 48000, uint32_t seed = 1);
+// A panel OPENING: the latch letting go -- a click and a soft clunk. One-shot.
+std::vector<float> panelOpen(uint32_t sampleRate = 48000, uint32_t seed = 1);
+// A STARTER that will not catch: the motor's whine and the engine turning over, rrr-rrr-rrr, slowing as the battery
+// sags, and no fire. ~1.4 s one-shot.
+std::vector<float> starterNoCatch(uint32_t sampleRate = 48000, uint32_t seed = 1);
+
 // ---- The ground under a foot (#62/#63/#64/#65) --------------------------------------------------
 // What a footstep lands on, as far as the ear cares. The surface resolver (engine/audio/footsteps.h)
 // picks one from the collider's tag (roads) or the ground-cover map (terrain).

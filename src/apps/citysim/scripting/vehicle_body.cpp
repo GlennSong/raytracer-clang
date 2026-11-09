@@ -1,4 +1,5 @@
 #include "vehicle_body.h"
+#include <algorithm>
 
 #include "../../../engine/scripting/lua_state.h"   // luaState() + the Lua C API (scripting-internal)
 #include "../../../engine/scripting/procgen_mesh.h"   // luaToMesh (mesh.car shells)
@@ -268,8 +269,26 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
             lua_settop(L, base);
             return fail(err, where + ": `interior` is not a Mesh");
         }
+        // THE MID-RANGE BODY (`mid`, optional): the whole car (shell, dark glass, wheels) as a cheaper mesh drawn past
+        // `mid_from` metres -- the kit's faceted cage shaded with the smooth body's normals (vehicles.lua kit_car)
+        bool hasMid = false;
+        if (!optMeshField(L, rec, "mid", body.mid, hasMid)) {
+            lua_settop(L, base);
+            return fail(err, where + ": `mid` is not a Mesh");
+        }
+        bool hasFar = false;
+        if (!optMeshField(L, rec, "far", body.far, hasFar)) {
+            lua_settop(L, base);
+            return fail(err, where + ": `far` is not a Mesh");
+        }
+        lua_getfield(L, rec, "mid_from");
+        body.midFrom = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 0.0;
+        lua_pop(L, 1);
         lua_getfield(L, rec, "see_into");
         body.seeInto = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        lua_getfield(L, rec, "glass_opacity");
+        if (lua_isnumber(L, -1)) body.glassOpacity = std::clamp(lua_tonumber(L, -1), 0.0, 0.98);
         lua_pop(L, 1);
         lua_getfield(L, rec, "open_seat");
         body.openSeat = lua_toboolean(L, -1) != 0;
@@ -296,6 +315,29 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
         };
         readPoints("seats", body.seats);
         readPoints("doors", body.doors);
+        // bus_doors = { { body = Mesh, glass = Mesh, slide = {x,y,z} }, ... } (ADR-0356)
+        lua_getfield(L, rec, "bus_doors");
+        if (lua_istable(L, -1)) {
+            const int bt = lua_gettop(L);
+            const int n = static_cast<int>(luaL_len(L, bt));
+            for (int i = 1; i <= n; ++i) {
+                lua_rawgeti(L, bt, i);
+                const int di = lua_gettop(L);
+                if (lua_istable(L, di)) {
+                    CarBodyRecipe::DoorLeaf leaf;
+                    lua_getfield(L, di, "body");
+                    if (std::shared_ptr<RenderMesh> m = luaToMesh(L, -1)) leaf.body = *m;
+                    lua_pop(L, 1);
+                    lua_getfield(L, di, "glass");
+                    if (std::shared_ptr<RenderMesh> m = luaToMesh(L, -1)) leaf.glass = *m;
+                    lua_pop(L, 1);
+                    leaf.slide = vec3Field(L, di, "slide", leaf.slide);
+                    if (!leaf.body.vertices.empty()) body.doorLeaves.push_back(std::move(leaf));
+                }
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
         lua_getfield(L, rec, "driver_seat");
         body.hasDriverSeat = lua_istable(L, -1);
         lua_pop(L, 1);
@@ -369,6 +411,18 @@ bool loadFleetHandling(ScriptVM& vm, int slot, VehicleSpec& out, std::string* er
     if (spec.config.wheels.size() < 2) return fail(err, where + ": `handling` has no wheels");
     out = std::move(spec);
     return true;
+}
+
+bool loadFleetDrivable(ScriptVM& vm, int slot, std::string& recipe, Vec3& color) {
+    lua_State* L = luaState(vm);
+    const int base = lua_gettop(L);
+    const std::string where = "vehicle.fleet[" + std::to_string(slot + 1) + "]";
+    if (!pushFleetSlot(L, base, slot, where, nullptr)) return false;
+    const int e = lua_gettop(L);
+    recipe = strField(L, e, "drivable");
+    color = vec3Field(L, e, "color", Vec3(0.5, 0.5, 0.5));
+    lua_settop(L, base);
+    return !recipe.empty();
 }
 
 }  // namespace engine

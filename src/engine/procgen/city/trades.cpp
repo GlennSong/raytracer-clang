@@ -2,6 +2,11 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
+#include <mutex>
+#ifdef RT_ENABLE_SCRIPTING
+#include "../../scripting/trades_lua.h"   // ensureTradesLoaded: trades.lua, once
+#endif
 
 namespace engine {
 
@@ -11,7 +16,11 @@ namespace {
 // The mixes (weights: everyday, high street, nightlife, mall). A residential street is cafes, grocers, a pharmacy,
 // a bakery; a high street is mostly somewhere to eat and drink; a nightlife strip is bars, restaurants and clubs; a
 // mall is clothes, electronics, books and somewhere to sit down.
-const TradeInfo kTrades[] = {
+struct TradeRow {
+    uint8_t id; const char* name; const char* placeType; float openHour, closeHour; int weight[4]; int minBays, maxBays;
+    Vec3 fascia; bool terrace;
+};
+const TradeRow kTrades[] = {
     {0, "cafe", "cafe", 6.5f, 19.0f, {14, 14, 4, 10}, 2, 2, Vec3(0.95, 0.70, 0.35), true},
     {1, "grocery", "supermarket", 7.0f, 22.0f, {14, 6, 1, 2}, 2, 3, Vec3(0.35, 0.85, 0.40), false},
     {2, "boutique", "shop", 10.0f, 19.0f, {4, 10, 2, 22}, 2, 3, Vec3(0.95, 0.45, 0.65), false},
@@ -27,7 +36,6 @@ const TradeInfo kTrades[] = {
     // (facadeLayout), so the rest of the street keeps its shops.
     {16, "konbini", "supermarket", 0.0f, 24.0f, {0, 0, 0, 0}, 2, 3, Vec3(0.30, 0.75, 1.00), false},
 };
-constexpr int kCount = static_cast<int>(sizeof(kTrades) / sizeof(kTrades[0]));
 
 // The rooms. Colours are albedo (the room lights do the rest): a bar is oxblood, bottle green or ink over dark
 // panelling, a club black, a restaurant warm plaster over timber, a bakery cream over a black-and-white checker.
@@ -70,31 +78,77 @@ const TradeRoom kRooms[] = {
 };
 }  // namespace
 
-const TradeInterior& tradeInterior(uint8_t id) {
-    for (const TradeRoom& r : kRooms) if (r.id == id) return r.in;
-    return kPlainShop;
+const TradeBook& builtinTradeBook() {
+    static const TradeBook book = [] {
+        TradeBook b;
+        for (const TradeRow& r : kTrades) {
+            TradeInfo t;
+            t.id = r.id; t.name = r.name; t.placeType = r.placeType; t.openHour = r.openHour; t.closeHour = r.closeHour;
+            for (int m = 0; m < 4; ++m) t.weight[m] = r.weight[m];
+            t.minBays = r.minBays; t.maxBays = r.maxBays; t.fascia = r.fascia; t.terrace = r.terrace;
+            b.trades.push_back(t);
+        }
+        for (const TradeRoom& r : kRooms) b.rooms.push_back({r.id, r.in});
+        b.plain = kPlainShop;
+        return b;
+    }();
+    return book;
 }
 
-int tradeCount() { return kCount; }
-const TradeInfo& tradeAt(int index) { return kTrades[index < 0 ? 0 : index >= kCount ? kCount - 1 : index]; }
+namespace {
+std::shared_ptr<const TradeBook>& activeBook() {
+    static std::shared_ptr<const TradeBook> book;
+    return book;
+}
+std::mutex& bookMutex() {
+    static std::mutex mu;
+    return mu;
+}
+}  // namespace
+
+void setTradeBook(const TradeBook& book) {
+    std::lock_guard<std::mutex> lock(bookMutex());
+    activeBook() = std::make_shared<const TradeBook>(book);
+}
+
+const TradeBook& tradeBook() {
+#ifdef RT_ENABLE_SCRIPTING
+    ensureTradesLoaded();
+#endif
+    std::lock_guard<std::mutex> lock(bookMutex());
+    return activeBook() ? *activeBook() : builtinTradeBook();
+}
+
+const TradeInterior& tradeInterior(uint8_t id) {
+    const TradeBook& b = tradeBook();
+    for (const TradeBook::Room& r : b.rooms) if (r.id == id) return r.in;
+    return b.plain;
+}
+
+int tradeCount() { return static_cast<int>(tradeBook().trades.size()); }
+const TradeInfo& tradeAt(int index) {
+    const std::vector<TradeInfo>& t = tradeBook().trades;
+    return t[static_cast<std::size_t>(std::clamp(index, 0, static_cast<int>(t.size()) - 1))];
+}
 
 const TradeInfo* tradeById(uint8_t id) {
-    for (const TradeInfo& t : kTrades) if (t.id == id) return &t;
+    for (const TradeInfo& t : tradeBook().trades) if (t.id == id) return &t;
     return nullptr;
 }
 
 const TradeInfo* tradeByName(const char* name) {
-    for (const TradeInfo& t : kTrades) if (std::strcmp(t.name, name) == 0) return &t;
+    for (const TradeInfo& t : tradeBook().trades) if (t.name == name) return &t;
     return nullptr;
 }
 
 uint8_t pickTrade(uint32_t bits, int bays, uint8_t mix) {
     const int m = mix < 4 ? mix : 1;
+    const std::vector<TradeInfo>& trades = tradeBook().trades;
     int total = 0;
-    for (const TradeInfo& t : kTrades) if (bays >= t.minBays) total += t.weight[m];
+    for (const TradeInfo& t : trades) if (bays >= t.minBays) total += t.weight[m];
     if (total <= 0) return 0;
     int r = static_cast<int>(bits % static_cast<uint32_t>(total));
-    for (const TradeInfo& t : kTrades) {
+    for (const TradeInfo& t : trades) {
         if (bays < t.minBays) continue;
         if (r < t.weight[m]) return t.id;
         r -= t.weight[m];

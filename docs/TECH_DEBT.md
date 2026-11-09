@@ -413,9 +413,6 @@ took shortcuts worth paying down before the binding surface grows much more.
   merge/recompute_normals/bake_height_color` copies vertices+indices (functional
   style). Kit-bashing a leaf canopy allocates a lot. Fine at gen time; revisit if
   generation latency bites.
-- **`mesh.bake_height_color(m, c, c)` is used as a flat-color hack.** Relies on
-  the mesh having Y extent; a perfectly flat mesh (minY==maxY) would divide-by-
-  zero → NaN colors. Add a real `mesh.set_color(m, c)`.
 - **`flora.lua` uses Lua `math.random` + global `math.randomseed`** for rock/
   grass/flower — a second RNG alongside the engine `Noise`, reseeded per call via
   global state. Deterministic per call, but not coordinated with the engine's

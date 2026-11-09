@@ -265,9 +265,10 @@ public:
     // passenger's (the driver's mirrored), then the two rear seats when the body is long enough to have them.
     // False for a bus, a parked or released agent, or a body that publishes no driver seat.
     bool carSeatsOf(int agent, engine::Mat4* pose, std::vector<engine::Vec3>* seats) const;
-    const std::vector<engine::Vec3>& busSeats() const;
-    const std::vector<engine::Vec3>& busDoors() const;
-    engine::Real busFloorY() const;   // body-local floor height
+    // a bus's seats and doors (its own body's: `agent` -1, the first bus body)
+    const std::vector<engine::Vec3>& busSeats(int agent = -1) const;
+    const std::vector<engine::Vec3>& busDoors(int agent = -1) const;
+    engine::Real busFloorY(int agent = -1) const;   // body-local floor height
     // True if an NPC rider is drawn in `seat` on this bus right now.
     bool busSeatTaken(int agent, int seat) const;
     static int riderSeat(int agent, int j, int n);
@@ -422,6 +423,9 @@ public:
         return carOpenSeat_[static_cast<std::size_t>(((slot % n) + n) % n)] != 0;
     }
     engine::MeshHandle carCabinMesh(int slot) const { return slotOf(carCabinMesh_, slot); }
+    float carGlassOpacity(int slot) const {
+        return slot >= 0 && static_cast<std::size_t>(slot) < carGlassOpacity_.size() ? carGlassOpacity_[static_cast<std::size_t>(slot)] : 0.30f;
+    }
     // That car's lamp markers, for a promoted car's lenses. VehicleSystem falls
     // back to four lenses at GUESSED chassis corners when a Vehicle carries no
     // markers — which sat harmlessly on top of the old box car's baked lamp
@@ -447,6 +451,15 @@ public:
     // THAT CAR's HANDLING (item 23, #117): the slot's Jolt config -- its kit's or class's drivable handling on
     // its drawn wheels, the fleet's `handling` read by the one handling reader -- for a physical-tier car and a
     // commandeered one alike. Null when the fleet published none for it (no vehicles script).
+    // THE SLOT AS THE PLAYER'S CAR (ADR-0355): its drivable recipe ("kit_suv") and paint; false when it has none
+    bool carDrivable(int slot, std::string& recipe, engine::Vec3& paint) const {
+        if (carDrivable_.empty()) return false;
+        const int n = static_cast<int>(carDrivable_.size());
+        const std::size_t i = static_cast<std::size_t>(((slot % n) + n) % n);
+        recipe = carDrivable_[i];
+        paint = i < carPaint_.size() ? carPaint_[i] : engine::Vec3(0.5, 0.5, 0.5);
+        return !recipe.empty();
+    }
     const engine::PhysicsWorld::VehicleConfig* carConfig(int slot) const {
         if (carConfigs_.empty()) return nullptr;
         const int n = static_cast<int>(carConfigs_.size());
@@ -520,12 +533,30 @@ private:
     // Bus-stop furniture entities, kept so a rebuild can remove the old set
     // rather than stacking a second pole on every stop.
     std::vector<engine::Entity> busStopProps_;
-    int busVariant_ = -1;   // fleet slot that draws as a bus (-1 = none)
+    int busVariant_ = -1;   // fleet slot that draws as a bus (-1 = none): the first of busVariants_
+    // EVERY BUS BODY (Glenn, 2026-11-06: two saloons, "one where it's all seats and one where they're standing room"):
+    // the fleet's slots whose class is a bus ("bus", "bus_standing"); each bus wears the one its route picks
+    std::vector<int> busVariants_;
+    int busVariantOf(int agent) const;
+    bool isBusVariant(int v) const;
+    // per busVariants_ entry: its boards, in the body's frame -- the destination on the front, rear and kerb side,
+    // and the next stop inside, over the saloon (markers dest_sign, dest_sign_rear, dest_sign_side, stop_display)
+    struct BusBoard {
+        engine::Mat4 local;
+        bool nextStop = false;
+    };
+    std::vector<std::vector<BusBoard>> busBoards_;
     int fireVariant_ = -1;  // ...and as a fire engine (a fire station's, stationed in its bays)
     int taxiVariant_ = -1;  // ...and as a taxi (the cabs', CitySim::isTaxi)
     Real busPrintAcc_ = 0;  // RT_PRINT_BUSES cadence
     CitySim sim_;
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)
+    // THE MID-RANGE BODIES (vehicles.lua `mid`): per variant, the cheaper whole car drawn from its `mid_from` out --
+    // the same instances as carGroups_ (copied once the bake is done, lamp masks and all), the near group stopping
+    // where this one starts. Invalid where the recipe has none.
+    std::vector<engine::Entity> carMidGroups_;
+    std::vector<engine::RenderMesh> carFarMesh_;   // per variant: the recipe's far stand-in (empty: the two boxes)
+    void copyMidBodies(engine::World& world);
     std::unordered_map<int, engine::Mat4> physPose_;      // R5: agent -> body pose
     std::vector<std::vector<int>> carAgentIds_;           // parallel to bakes
     // (The one-shot SceneryCar bake that used to live here is gone: parked cars
@@ -638,6 +669,20 @@ private:
     std::vector<std::vector<CarWheel>> carWheels_;
     // ...and each slot's handling (carConfig), read with the catalogue: no geometry, so a headless sim has it.
     std::vector<engine::PhysicsWorld::VehicleConfig> carConfigs_;
+    // per slot: the menu's recipe for it and its paint (loadFleetDrivable), what a taken car is built as
+    std::vector<std::string> carDrivable_;
+    // per slot: a bus's door leaves (ADR-0356) -- each its paint's group and its glass's, and the slide at fully open;
+    // and per bus agent, how open its doors are (0 shut .. 1)
+    struct DoorLeafGroups {
+        engine::Entity body, glass;
+        engine::Vec3 slide{0, 0, 0};
+    };
+    std::vector<std::vector<DoorLeafGroups>> carDoorLeaves_;
+    std::unordered_map<int, float> busDoorOpen_;
+    struct BusDoorSound { engine::Vec3 at; bool shut = false; };
+    std::vector<BusDoorSound> busDoorSounds_;   // this step's, for the frame's update to play
+    engine::AudioClipHandle busDoorShutClip_, busDoorOpenClip_;
+    std::vector<engine::Vec3> carPaint_;
     // ...and its seat (the handling's `seat`): a seat with BARS, not a wheel, is ridden astride, so the slot draws
     // its own rider (carRiderGroups_) posed by the player's seat rule instead of the car driver
     std::vector<engine::SeatGeometry> carSeatGeom_;
@@ -655,6 +700,7 @@ private:
     std::vector<engine::Entity> carInteriorGroups_;
     std::vector<engine::MeshHandle> carGlassMesh_, carCabinMesh_;
     std::vector<char> carSeeInto_;
+    std::vector<float> carGlassOpacity_;
     std::vector<char> carOpenSeat_;   // nothing round the driver (a convertible), by slot
     // The agents drawn see-through this bake (nearest the player, with hysteresis).
     std::unordered_set<int> nearSwap_;
@@ -721,12 +767,14 @@ private:
     std::vector<engine::Entity> busSignGroups_;
     std::vector<int> busSignRow_;   // per route: its label's row
     int busSignOff_ = -1;           // the NOT IN SERVICE row
+    std::vector<std::vector<int>> busStopRow_;   // per route, per stop: its NEXT STOP row (the stop's street)
     int busSignsDrawn_ = 0;         // signs pushed this step (depots?)
     engine::Vec3 busSignAt_{0, 0, 0};   // ...the last one's world position
     bool busSignsTried_ = false;
     engine::Mat4 busSignLocal_;     // the board on the bus, in its body's frame
     void makeBusSigns(engine::FrameContext& ctx);
     int busSignRowFor(int agent) const;
+    int busStopRowFor(int agent) const;
     bool planBaked_ = false;                 // the plan outlines bake on first show
     void bakePlanOutlines(engine::World& world);
     std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)
@@ -793,6 +841,9 @@ private:
     // the documented fallback rather than every such context driving in the
     // dark with its headlights off.
     bool solarStaged_ = false;
+    // TRAFFIC'S LAMPS AS LIGHTS (ADR-0362): each lit drawn car's head and tail lamps from its own markers, gathered by
+    // syncCarLamps, published on the light board's traffic channel by update()
+    std::vector<engine::LightCandidate> trafficLights_;
     // THE WORLD CLOCK from a staged day/night cycle (lighting.clockHours),
     // via setWorldClock: the latest sky hour before build is where the city
     // opens; after build the rate is refreshed every step and a jump

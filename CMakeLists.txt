@@ -44,6 +44,8 @@ add_library(engine_core STATIC
     src/log.cpp
     src/job_system.cpp
     src/renderer/settings.cpp
+    src/renderer/light_clusters.cpp
+    src/renderer/probe_grid.cpp
     src/renderer/hosted_window.cpp
     src/renderer/debug_ui_clipboard.cpp
     src/engine/recent_scenes.cpp
@@ -66,7 +68,14 @@ add_library(engine_core STATIC
     src/engine/screenshot.cpp
     src/engine/mesh_shapes.cpp
     src/engine/mesh_words.cpp
+    src/engine/mesh_surfaces.cpp
     src/engine/mesh_builder.cpp
+    src/engine/mesh_unwrap.cpp
+    src/engine/mesh_bake.cpp
+    # the triangle BVH and its geometry, shared by the path tracer and the baker (mesh_bake.cpp)
+    src/geometry.cpp
+    src/aabb.cpp
+    src/triangle_bvh.cpp
     src/engine/board_meshes.cpp          # the skateboard and scooter a body rides (player, citysim children)
     src/engine/bundle/bundle.cpp
     src/engine/bundle/bake.cpp
@@ -98,7 +107,6 @@ add_library(engine_core STATIC
     src/engine/procgen/leaf_card.cpp
     src/engine/procgen/foliage_kit.cpp
     src/engine/procgen/surface_maps.cpp
-    src/engine/procgen/vehicle/car_mesh.cpp
     src/engine/procgen/vehicle/car_interior.cpp
     src/engine/procgen/vehicle/occupant.cpp
     src/engine/procgen/person.cpp
@@ -169,6 +177,7 @@ add_library(engine_core STATIC
     src/engine/interaction.cpp
     src/engine/interior_occupants.cpp
     src/engine/interact_broker.cpp
+    src/engine/vehicle_damage.cpp
     src/engine/furniture_draw.cpp
     src/engine/procgen/city/road_network.cpp
     src/engine/procgen/city/street_kit.cpp
@@ -240,6 +249,17 @@ add_library(engine_core STATIC
     src/engine/audio/sfx_motion.cpp
     src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
+    src/engine/systems/light_system.cpp
+    src/engine/systems/probe_system.cpp
+    src/engine/systems/cloud_map_system.cpp
+    src/engine/systems/weather_sim_system.cpp
+    src/engine/lights/light_kinds.cpp
+    src/engine/lights/light_picker.cpp
+    src/engine/lights/probe_sites.cpp
+    src/engine/sky/sky_atmosphere.cpp
+    src/engine/sky/cloud_book.cpp
+    src/engine/sky/cloud_map.cpp
+    src/engine/sky/weather_sim.cpp
     src/engine/systems/xr_camera_system.cpp
     src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
@@ -424,7 +444,13 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/script_system.cpp
         src/engine/scripting/lua_json.cpp
         src/engine/scripting/vehicle_spec.cpp
+        src/engine/scripting/carry_items.cpp
+        src/engine/scripting/trades_lua.cpp
+        src/engine/scripting/lights_lua.cpp
+        src/engine/scripting/clouds_lua.cpp
+        src/engine/scripting/street_props_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
+        src/engine/scripting/furniture_models_lua.cpp
         src/engine/scripting/tree_recipes_lua.cpp
         src/engine/scripting/settlements_lua.cpp
         src/engine/scripting/particles_lua.cpp
@@ -674,11 +700,8 @@ endif()
 set(CORE_SOURCES
     src/image.cpp
     src/camera.cpp
-    src/geometry.cpp
     src/material.cpp
     src/scene.cpp
-    src/aabb.cpp
-    src/triangle_bvh.cpp
     src/instance.cpp
     src/level_scene.cpp
     src/path_tracer.cpp
@@ -708,6 +731,8 @@ add_executable(run_tests
     tests/test_clock.cpp
     tests/test_control_channel.cpp
     tests/test_weather_cycle.cpp
+    tests/test_cloud_map.cpp
+    tests/test_weather_sim.cpp
     tests/test_editor_home_view.cpp
     tests/test_vehicle_audio.cpp
     tests/test_particles.cpp
@@ -745,6 +770,18 @@ add_executable(run_tests
     tests/test_path_tracer.cpp
     tests/test_asset_manager.cpp
     tests/test_mesh_builder.cpp
+    tests/test_mesh_unwrap.cpp
+    tests/test_mesh_bake.cpp
+    tests/test_vehicle_damage.cpp
+    tests/test_vehicle_fuel.cpp
+    tests/test_carry_stow.cpp
+    tests/test_camera_frame.cpp
+    tests/test_trades.cpp
+    tests/test_lights.cpp
+    tests/test_sky_atmosphere.cpp
+    tests/test_light_clusters.cpp
+    tests/test_danger_dodge.cpp
+    tests/test_mesh_surfaces.cpp
     tests/test_cube_sphere.cpp
     tests/test_noise.cpp
     tests/test_terrain.cpp
@@ -760,7 +797,6 @@ add_executable(run_tests
     tests/test_sdf.cpp
     tests/test_city.cpp
     tests/test_surface_maps.cpp
-    tests/test_car_mesh.cpp
     tests/test_vehicle_lamps.cpp
     tests/test_model_importer.cpp
     tests/test_instancing.cpp
@@ -1023,6 +1059,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/player_body_system.cpp   # the body posed in third person, and limp
         src/engine/systems/teleport_system.cpp
         src/engine/systems/vehicle_system.cpp
+        src/engine/systems/carry_system.cpp
         src/engine/systems/nature_collider_system.cpp   # trunk + rock colliders round the player (#55)
         src/engine/systems/footstep_system.cpp   # the player's feet, heard (#62/#63/#64)
         src/engine/systems/motion_audio_system.cpp   # the player's moves, heard: wind, grapple, canopy, boards
@@ -1122,7 +1159,7 @@ function(rt_build_vulkan_shaders)
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
                    clouds.frag clouds_composite.frag clouds_resolve.frag
-                   ui.vert ui.frag occlusion_reduce.comp crowd.comp)
+                   ui.vert ui.frag occlusion_reduce.comp crowd.comp cluster_bin.comp sky_view.comp lum_histogram.comp aerial_volume.comp sky_cube.comp sky_prefilter.comp probe_relight.comp probe_prefilter.comp)
     set(VK_SPV_FILES "")
     foreach(shader ${VK_SHADERS})
         add_custom_command(
@@ -1131,11 +1168,45 @@ function(rt_build_vulkan_shaders)
                     ${VK_SHADER_SRC_DIR}/${shader}
                     -I ${VK_SHADER_SRC_DIR}
                     -o ${VK_SHADER_OUT_DIR}/${shader}.spv
-            DEPENDS ${VK_SHADER_SRC_DIR}/${shader} ${VK_SHADER_SRC_DIR}/sky_common.glsl
+            DEPENDS ${VK_SHADER_SRC_DIR}/${shader} ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl ${VK_SHADER_SRC_DIR}/gbuffer.glsl
             COMMENT "glslc ${shader} -> ${shader}.spv"
             VERBATIM)
         list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)
     endforeach()
+    # the reflection rays (ADR-0376): ray queries need the Vulkan 1.2 target (SPIR-V 1.4+)
+    add_custom_command(
+        OUTPUT ${VK_SHADER_OUT_DIR}/rt_reflect.comp.spv
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.2 ${VK_SHADER_SRC_DIR}/rt_reflect.comp -I ${VK_SHADER_SRC_DIR}
+                -o ${VK_SHADER_OUT_DIR}/rt_reflect.comp.spv
+        DEPENDS ${VK_SHADER_SRC_DIR}/rt_reflect.comp ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl ${VK_SHADER_SRC_DIR}/gbuffer.glsl
+        COMMENT "glslc rt_reflect.comp (vulkan1.2) -> rt_reflect.comp.spv"
+        VERBATIM)
+    list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/rt_reflect.comp.spv)
+    add_custom_command(
+        OUTPUT ${VK_SHADER_OUT_DIR}/rt_denoise.comp.spv
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.2 ${VK_SHADER_SRC_DIR}/rt_denoise.comp -I ${VK_SHADER_SRC_DIR}
+                -o ${VK_SHADER_OUT_DIR}/rt_denoise.comp.spv
+        DEPENDS ${VK_SHADER_SRC_DIR}/rt_denoise.comp ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl ${VK_SHADER_SRC_DIR}/gbuffer.glsl
+        COMMENT "glslc rt_denoise.comp (vulkan1.2) -> rt_denoise.comp.spv"
+        VERBATIM)
+    list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/rt_denoise.comp.spv)
+    add_custom_command(
+        OUTPUT ${VK_SHADER_OUT_DIR}/rt_apply.comp.spv
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.2 ${VK_SHADER_SRC_DIR}/rt_apply.comp -I ${VK_SHADER_SRC_DIR}
+                -o ${VK_SHADER_OUT_DIR}/rt_apply.comp.spv
+        DEPENDS ${VK_SHADER_SRC_DIR}/rt_apply.comp ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl ${VK_SHADER_SRC_DIR}/gbuffer.glsl
+        COMMENT "glslc rt_apply.comp (vulkan1.2) -> rt_apply.comp.spv"
+        VERBATIM)
+    list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/rt_apply.comp.spv)
+    # the reflection probes' capture (ADR-0372): mesh.frag again, writing the surface rather than its light
+    add_custom_command(
+        OUTPUT ${VK_SHADER_OUT_DIR}/mesh_probe.frag.spv
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${VK_SHADER_SRC_DIR}/mesh.frag -DPROBE_CAPTURE -I ${VK_SHADER_SRC_DIR}
+                -o ${VK_SHADER_OUT_DIR}/mesh_probe.frag.spv
+        DEPENDS ${VK_SHADER_SRC_DIR}/mesh.frag ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl ${VK_SHADER_SRC_DIR}/gbuffer.glsl
+        COMMENT "glslc mesh.frag (PROBE_CAPTURE) -> mesh_probe.frag.spv"
+        VERBATIM)
+    list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/mesh_probe.frag.spv)
     # the erosion bake's kernels (ADR-0122): one GLSL source, one SPIR-V module per kernel
     foreach(kernel thermal apply)
         string(TOUPPER ${kernel} KERNEL_UP)
@@ -1383,7 +1454,7 @@ else()
     # ADR-0057; see src/renderer/vulkan/AGENTS.md.
     find_package(Vulkan QUIET)
     if(Vulkan_FOUND)
-        list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp src/renderer/vulkan/vma_impl.cpp)
+        list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp src/renderer/vulkan/vma_impl.cpp src/renderer/vulkan/rt_measure.cpp src/renderer/vulkan/rt_scene.cpp)
         set(PLATFORM_LIBS Vulkan::Vulkan)
 
         # Compile the SPIR-V shaders (shared target; sets VK_SHADER_OUT_DIR).
@@ -1508,6 +1579,8 @@ if(Qt6_FOUND)
             target_sources(editor_app PRIVATE
                 src/renderer/vulkan/vulkan_renderer.cpp
                 src/renderer/vulkan/vma_impl.cpp
+                src/renderer/vulkan/rt_measure.cpp
+                src/renderer/vulkan/rt_scene.cpp
                 src/editor_app/vulkan_viewport.cpp
             )
             target_include_directories(editor_app SYSTEM PRIVATE third_party/VulkanMemoryAllocator)

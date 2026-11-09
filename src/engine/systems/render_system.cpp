@@ -1,8 +1,8 @@
 #include "render_system.h"
 #include "../components.h"
-#include "../vehicle_lamps.h"   // duskRamp: street lights share the headlight boundary
 #include "../../profile.h"
 #include "../occlusion.h"
+#include "../lights/light_kinds.h"   // lightBook().raytrace (ADR-0376)
 
 #include <chrono>
 #include <algorithm>
@@ -52,7 +52,6 @@ void RenderSystem::onStart(FrameContext& ctx) {
     // Adopt the level's exposure (set by the level loader from JSON) rather than
     // forcing our own value — other owners (level JSON, the ImGui slider) drive it.
     exposure = ctx.view.lighting.exposure;
-    onLampLights_ = ctx.events.listen<LampLightsRequest>([this](const LampLightsRequest& r) { lampLights_ = r.on; });
 }
 
 void tierFadeBand(RenderMaterial& m, double dist, float share, bool coming) {
@@ -84,143 +83,15 @@ void RenderSystem::update(FrameContext& ctx) {
 void RenderSystem::render(FrameContext& ctx) {
     RT_PROFILE_ZONE_NAMED("renderSubmit");
     ctx.renderer.setCamera(ctx.view.camera);
-    // Street lamps become REAL point lights near the camera (device: "working
-    // street lights"): the loader's StreetFurniture carries every bulb
-    // position; each frame the nearest few join the light list on a COPY, so
-    // level-authored point lights are never displaced or accumulated into.
-    // NIGHT-GATED (WS3): the dusk ramp fades them in as the sun sinks — they
-    // ran 24/7 before, invisible against daylight and stealing 14 of the 32
-    // light slots at noon for nothing.
-    {
-        // `overlay lamplights off` kills the lamp POINT LIGHTS while leaving
-        // their emissive heads lit — the live A/B for night artifacts.
-        const Real dusk =
-            lampLights_ ? duskRamp(ctx.view.lighting.solarElevation) : Real(0);
-        bool lit = false;
-        SceneLighting withLamps;
-        // Headlight cones staged by VehicleSystem merge on the same copy —
-        // they exist whenever headlights are lit (dusk by the shared ramp, or
-        // the player's manual L toggle at noon).
-        const auto& coneSpots = ctx.view.lighting.vehicleSpots;
-        if (dusk > 0.01) {
-            // The lamps' near tier from the level's light LOD block (defaults:
-            // 20 lights within 160 m, range 34). 20 of the 32 slots: more lamps
-            // only brighten the street if more of them are REAL lights, and 14
-            // ran out within half a block. Leaves the sun/moon, 6 headlight
-            // cones and authored lights room (the renderer loops every light
-            // per fragment, so this is the honest cost knob for night).
-            int kMaxLampLights = 20;
-            Real lampRadius = 160.0, lampRange = 34.0;
-            ctx.world.each<CitySimConfig>([&](Entity, CitySimConfig& c) {
-                kMaxLampLights = std::max(1, c.lampLightCount);
-                lampRadius = std::max(Real(10), Real(c.lampLightRadius));
-                lampRange = std::max(Real(2), Real(c.lampLightRange));
-            });
-            // the candidates: every street lamp's bulb (the first StreetFurniture's), and every station's canopy
-            // lights (RailStop::lamps -- cooler, a shorter pool under a roof)
-            struct Bulb { Real d2; Vec3 at; bool station; };
-            std::vector<Bulb> nearBulbs;
-            const Vec3 eye = ctx.view.camera.position;
-            const Real maxDist2 = lampRadius * lampRadius;   // beyond this a bulb is the sprite tier's
-            bool streetSeen = false;
-            ctx.world.each<StreetFurniture>([&](Entity, StreetFurniture& f) {
-                if (f.lampHeads.empty() || streetSeen) return;
-                streetSeen = true;
-                for (const Vec3& h : f.lampHeads) {
-                    const Real d2 = (h - eye).lengthSquared();
-                    if (d2 < maxDist2) nearBulbs.push_back({d2, h, false});
-                }
-            });
-            ctx.world.each<RailTracks>([&](Entity, RailTracks& rt) {
-                for (const RailTrack& t : rt.tracks)
-                    for (const RailStop& st : t.stops)
-                        for (const Vec3& h : st.lamps) {
-                            const Real d2 = (h - eye).lengthSquared();
-                            if (d2 < maxDist2) nearBulbs.push_back({d2, h, true});
-                        }
-            });
-            if (!nearBulbs.empty()) {
-                if (static_cast<int>(nearBulbs.size()) > kMaxLampLights) {
-                    std::nth_element(nearBulbs.begin(),
-                                     nearBulbs.begin() + kMaxLampLights,
-                                     nearBulbs.end(),
-                                     [](const Bulb& a, const Bulb& b) {
-                                         return a.d2 < b.d2;
-                                     });
-                    nearBulbs.resize(kMaxLampLights);
-                }
-                // FADE AT THE BOUNDARY. The set is a hard "nearest N within
-                // R" pick, so driving made lamps SNAP to full intensity the
-                // moment they entered it and vanish when they left — the
-                // "lights ahead turn on and it doesn't look seamless". Fade
-                // each lamp out toward whichever boundary it will cross
-                // first: the radius, or (when the count cap is binding) the
-                // distance of the farthest lamp currently selected, which is
-                // the edge that actually moves as the camera drives.
-                Real cutoff = lampRadius;
-                if (static_cast<int>(nearBulbs.size()) >= kMaxLampLights) {
-                    Real farthest = 0;
-                    for (const Bulb& bl : nearBulbs)
-                        farthest = std::max(farthest, bl.d2);
-                    cutoff = std::min(cutoff, std::sqrt(farthest));
-                }
-                withLamps = ctx.view.lighting;
-                // Range 34 against 26 m spacing, so consecutive pools MEET —
-                // at 30/34 they fell short and the pavement went dark between
-                // every pair of lamps. Intensity rides the dusk ramp so lamps
-                // warm up through twilight instead of popping.
-                for (const Bulb& bl : nearBulbs) {
-                    // 1 at the near end, easing to 0 across the last quarter
-                    // of the reach, so a lamp joins and leaves the set
-                    // invisibly instead of popping.
-                    const Real d = std::sqrt(bl.d2);
-                    const Real edge = std::max(Real(1), cutoff);
-                    Real fade = (edge - d) / (0.25 * edge);
-                    fade = std::min(Real(1), std::max(Real(0), fade));
-                    fade = fade * fade * (3.0 - 2.0 * fade);   // smoothstep
-                    if (bl.station) {   // a canopy fitting: cool white, a pool down the platform (12 m apart)
-                        PointLight lamp(bl.at, Vec3(0.92, 0.96, 1.0), 26.0f * static_cast<float>(dusk * fade));
-                        lamp.range = 16.0f;
-                        withLamps.pointLights.push_back(lamp);
-                        continue;
-                    }
-                    PointLight lamp(bl.at - Vec3(0, 0.35, 0),
-                                    Vec3(1.0, 0.82, 0.55),
-                                    48.0f * static_cast<float>(dusk * fade));
-                    lamp.range = static_cast<float>(lampRange);
-                    withLamps.pointLights.push_back(lamp);
-                }
-                lit = true;
-            }
-        }
-        if (!coneSpots.empty()) {
-            if (!lit) { withLamps = ctx.view.lighting; lit = true; }
-            for (const SpotLight& s : coneSpots)
-                withLamps.spotLights.push_back(s);
-        }
-        if (!ctx.view.lighting.toolSpots.empty()) {   // the flashlight (FlashlightSystem)
-            if (!lit) { withLamps = ctx.view.lighting; lit = true; }
-            for (const SpotLight& s : ctx.view.lighting.toolSpots)
-                withLamps.spotLights.push_back(s);
-        }
-        // Interior room lights (ADR-0080), staged by BuildingInteriorSystem
-        // for the streamed interior around the player — always on, not
-        // dusk-gated: a roofed room is sun-blind at noon too.
-        const auto& roomPoints = ctx.view.lighting.interiorPoints;
-        if (!roomPoints.empty()) {
-            if (!lit) { withLamps = ctx.view.lighting; lit = true; }
-            for (const PointLight& p : roomPoints)
-                withLamps.pointLights.push_back(p);
-        }
-        // Aviation-beacon lights (BeaconLightSystem): the nearest few lamps,
-        // red, flashing — the near tier's light on the roof and the HVACs.
-        const auto& beaconPoints = ctx.view.lighting.beaconPoints;
-        if (!beaconPoints.empty()) {
-            if (!lit) { withLamps = ctx.view.lighting; lit = true; }
-            for (const PointLight& p : beaconPoints)
-                withLamps.pointLights.push_back(p);
-        }
-        ctx.renderer.setLights(lit ? withLamps : ctx.view.lighting);
+    // THE FRAME'S LIGHTS (ADR-0362): the level's own, then what LightSystem picked from everything that gives off
+    // light (lamps, rooms, beacons, headlights, the flashlight), on a COPY so the level's are never displaced
+    if (ctx.view.lights.points.empty() && ctx.view.lights.spots.empty()) {
+        ctx.renderer.setLights(ctx.view.lighting);
+    } else {
+        SceneLighting withLights = ctx.view.lighting;
+        withLights.pointLights.insert(withLights.pointLights.end(), ctx.view.lights.points.begin(), ctx.view.lights.points.end());
+        withLights.spotLights.insert(withLights.spotLights.end(), ctx.view.lights.spots.begin(), ctx.view.lights.spots.end());
+        ctx.renderer.setLights(withLights);
     }
 
     const auto& cam = ctx.view.camera;
@@ -526,6 +397,134 @@ void RenderSystem::render(FrameContext& ctx) {
         };
         drawIndex_.visit(frustum, cam.position, static_cast<Real>(ctx.renderer.vegetationDrawDistance), entityAt, groupAt,
                          cellOk, encT1);
+    }
+
+    // REFLECTION PROBES (ADR-0372/0374): ProbeSystem's slots, handed over when they change, and this frame's faces --
+    // the static world only (the structures, scenery, furniture and ground paint within the board's reach), culled
+    // against the face's own frustum.
+    const ProbeBoard& probeBoard = ctx.view.probes;
+    if (probeBoard.revision != probeRevision_) {
+        probeRevision_ = probeBoard.revision;
+        ctx.renderer.setReflectionProbes(probeBoard.slots);
+    }
+    if (!probeBoard.captures.empty() && ctx.renderer.supportsProbeCapture()) {
+        const auto capT0 = std::chrono::steady_clock::now();
+        const Real reach = probeBoard.reach;
+        for (const ProbeBoard::Face& pf : probeBoard.captures) {
+            if (pf.slot >= probeBoard.slots.size()) continue;
+            const int face = pf.face;
+            const Vec3 eye = probeBoard.slots[pf.slot].position;
+            Vec3 fwd, up;
+            probeFaceBasis(face, fwd, up);
+            const Frustum ff = Frustum::fromViewProjection(Mat4::perspective(degreesToRadians(90.0), 1.0, 0.1, reach) *
+                                                           Mat4::lookAt(eye, eye + fwd, up));
+            ctx.renderer.beginProbeFace(pf.slot, face, eye);
+            ctx.world.each<Transform, Renderable>([&](Entity, Transform& t, Renderable& r) {
+                if (r.drawClass == DrawClass::SimBody || r.drawClass == DrawClass::Effect || r.drawClass == DrawClass::Terrain) return;
+                if (r.renderLayer & ctx.renderer.hiddenLayers) return;
+                if (r.material.flags & (RenderMaterial::FLAG_SHADOW_ONLY | RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS)) return;
+                const Mat4 model = t.matrix();
+                const BoundingSphere b = ctx.renderer.getMeshBounds(r.mesh);
+                Vec3 lo, hi;
+                transformedAABB(model, b.boxMin, b.boxMax, lo, hi);
+                const Vec3 c = (lo + hi) * 0.5;
+                const Real d = (c - eye).length();
+                const Real dd = std::min(reach, resolveDistance(r.drawDistance, r.drawClass) > 0 ? resolveDistance(r.drawDistance, r.drawClass) : reach);
+                if (d > dd || (r.minDistance > 0 && d < r.minDistance)) return;
+                if (!ff.containsAABB(lo, hi)) return;
+                ctx.renderer.drawMesh(r.mesh, model, r.material);
+            });
+            ctx.world.each<InstanceGroup>([&](Entity, InstanceGroup& g) {
+                if (g.drawClass == DrawClass::SimBody || g.drawClass == DrawClass::Effect || g.transforms.empty()) return;
+                if (g.material.flags & (RenderMaterial::FLAG_SHADOW_ONLY | RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS)) return;
+                if ((g.boundsCenter - eye).length() - g.boundsRadius > reach) return;
+                if (!ff.containsSphere(g.boundsCenter, g.boundsRadius)) return;
+                const BoundingSphere mb = ctx.renderer.getMeshBounds(g.mesh);
+                const Real dd = std::min(reach, resolveDistance(g.drawDistance, g.drawClass) > 0 ? resolveDistance(g.drawDistance, g.drawClass) : reach);
+                frustumCullInstances(g.transforms, ff, mb.center, mb.radius, eye, dd, instanceScratch_, g.minDistance);
+                if (!instanceScratch_.empty()) ctx.renderer.drawMeshInstanced(g.mesh, instanceScratch_, g.material);
+            });
+            ctx.renderer.endProbeFace();
+        }
+        // RT_DUMP_STATS: what the probe faces cost the CPU (each walks the world), every 120 faces
+        if (encStats) {
+            static double capMs = 0;
+            static int capFaces = 0;
+            capMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - capT0).count();
+            capFaces += static_cast<int>(probeBoard.captures.size());
+            if (capFaces >= 120) {
+                std::fprintf(stderr, "[probes] capture: %.2f ms a face on the CPU (%d faces)\n", capMs / capFaces, capFaces);
+                capMs = 0;
+                capFaces = 0;
+            }
+        }
+    }
+
+    // RAY-TRACED REFLECTIONS' NEAR SCENE (ADR-0376): what a reflection ray may hit -- the instances of lights.lua's
+    // raytrace `hits` classes within `near`, every way round (a reflection sees behind you), nearest first. The static
+    // world again once the camera has moved 5 m, or a second on; what MOVES (simBody: the city's cars, ADR-0379) every
+    // frame, at its pose this frame. Transparent parts (a car's glass) stay out: a ray goes into the car, as an eye
+    // would. The renderer builds the structures within its memory budget (a car's model once, its instances each frame).
+    if (ctx.renderer.supportsRayQuery()) {
+        const LightBook::RayTrace& rules = lightBook().raytrace;
+        bool hits[static_cast<int>(DrawClass::Count)] = {};
+        for (int c = 0; c < static_cast<int>(DrawClass::Count); ++c)
+            if (const char* name = drawClassName(static_cast<DrawClass>(c)))
+                hits[c] = std::find(rules.hits.begin(), rules.hits.end(), name) != rules.hits.end();
+        const Real near = rules.near;
+        const Vec3 eye = cam.position;
+        auto moves = [](DrawClass c) { return c == DrawClass::SimBody; };
+        auto takes = [&](DrawClass c, const RenderMaterial& m) {
+            return hits[static_cast<int>(c)] && m.opacity >= 0.999f &&
+                   !(m.flags & (RenderMaterial::FLAG_SHADOW_ONLY | RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS));
+        };
+        // (the moving or the static ones, into `out`)
+        auto pick = [&](bool moving, std::vector<std::pair<Real, Renderer::RayInstance>>& out) {
+            out.clear();
+            ctx.world.each<Transform, Renderable>([&](Entity, Transform& t, Renderable& r) {
+                if (moves(r.drawClass) != moving || !takes(r.drawClass, r.material) || (r.renderLayer & ctx.renderer.hiddenLayers)) return;
+                const Mat4 model = t.matrix();
+                const BoundingSphere b = ctx.renderer.getMeshBounds(r.mesh);
+                Vec3 lo, hi;
+                transformedAABB(model, b.boxMin, b.boxMax, lo, hi);
+                const Real d = std::max<Real>(0.0, ((lo + hi) * 0.5 - eye).length() - (hi - lo).length() * 0.5);
+                // the tier you would see from here, as the draw picks it (a building's far models stay out)
+                const Real c = ((lo + hi) * 0.5 - eye).length();
+                const Real dd = resolveDistance(r.drawDistance, r.drawClass);
+                if ((dd > 0 && c > dd) || (r.minDistance > 0 && c < r.minDistance)) return;
+                if (d <= near) out.emplace_back(d, Renderer::RayInstance{r.mesh, model, r.material});
+            });
+            ctx.world.each<InstanceGroup>([&](Entity, InstanceGroup& g) {
+                if (moves(g.drawClass) != moving || !takes(g.drawClass, g.material) || g.transforms.empty()) return;
+                if ((g.boundsCenter - eye).length() - g.boundsRadius > near) return;
+                const BoundingSphere mb = ctx.renderer.getMeshBounds(g.mesh);
+                const Real dd = resolveDistance(g.drawDistance, g.drawClass);
+                for (const Mat4& m : g.transforms) {
+                    const Real c = (m.transformPoint(mb.center) - eye).length();
+                    if ((dd > 0 && c > dd) || (g.minDistance > 0 && c < g.minDistance)) continue;
+                    const Real d = std::max<Real>(0.0, c - mb.radius);
+                    if (d <= near) out.emplace_back(d, Renderer::RayInstance{g.mesh, m, g.material});
+                }
+            });
+        };
+        const bool staticDue = (cam.position - rayEye_).length() > 5.0 || frameNo_ >= rayFrame_ + 60;
+        if (staticDue) {
+            rayEye_ = cam.position;
+            rayFrame_ = frameNo_;
+            pick(false, rayNear_);
+        }
+        const bool movers = hits[static_cast<int>(DrawClass::SimBody)];
+        if (movers) pick(true, rayMoving_);
+        if (staticDue || movers) {
+            rayAll_ = rayNear_;
+            if (movers) rayAll_.insert(rayAll_.end(), rayMoving_.begin(), rayMoving_.end());
+            std::sort(rayAll_.begin(), rayAll_.end(), [](const std::pair<Real, Renderer::RayInstance>& x,
+                                                         const std::pair<Real, Renderer::RayInstance>& y) { return x.first < y.first; });
+            rayList_.clear();
+            for (const std::pair<Real, Renderer::RayInstance>& p : rayAll_) rayList_.push_back(p.second);
+            const float rayRules[3] = {static_cast<float>(rules.near), static_cast<float>(rules.fade), static_cast<float>(rules.maxRoughness)};
+            ctx.renderer.setRayInstances(rayList_, static_cast<float>(rules.memoryShare), rayRules);
+        }
     }
 
     if (encStats) {

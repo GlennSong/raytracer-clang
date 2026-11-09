@@ -9,6 +9,8 @@
 #include "../engine/systems/camera_system.h"
 #include "../engine/systems/motion_system.h"
 #include "../engine/systems/day_night_system.h"
+#include "../engine/systems/cloud_map_system.h"
+#include "../engine/systems/weather_sim_system.h"
 #include "../engine/systems/teleport_system.h"
 #include "../engine/systems/building_interior_system.h"
 #include "../engine/systems/door_system.h"
@@ -37,7 +39,10 @@
 #include "../apps/citysim/city_possess.h"
 #endif
 #include "../engine/systems/vehicle_system.h"
+#include "../engine/systems/carry_system.h"
 #include "../engine/systems/render_system.h"
+#include "../engine/systems/light_system.h"
+#include "../engine/systems/probe_system.h"
 #include "../engine/systems/xr_camera_system.h"
 #include "../engine/systems/debug_draw_system.h"
 #include "../engine/systems/audio_system.h"
@@ -121,7 +126,7 @@ public:
                 // Gentle/resting touches stay silent; harder hits get louder
                 // and slightly brighter. The cue is deferred to the frame
                 // dispatch like every other reaction.
-                if (hit.speed < 2.0) return;
+                if (hit.persisted || hit.speed < 2.0) return;   // (a scrape is not a knock)
                 PlaySound cue;
                 cue.clip = "sfx/impact";
                 cue.spatial = true;
@@ -223,6 +228,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // consumption) — and after PlayerSystem, so its chase-camera write wins.
     addSystem<citysim::CityPossessSystem>(citySys, physSys);
     addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
+    addSystem<CarrySystem>(physSys);             // carry loose things, and put them in a car's trunk (ADR-0358)
     addSystem<FlashlightSystem>();               // the light (L / D-pad up): its beam, staged in render() before RenderSystem
     addSystem<WatchSystem>();                    // the watch (Q / D-pad down): compass, waypoint, time on the wrist
 #else
@@ -231,6 +237,8 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #endif
     addSystem<GrassSystem>();            // the grass field around the camera (flora plan)
     addSystem<DayNightSystem>();
+    addSystem<WeatherSimSystem>();    // the weather simulated over the land and the sea (ADR-0390)
+    addSystem<CloudMapSystem>();      // the clouds' drift and the weather map that places them (ADR-0386)
     addSystem<BeaconLightSystem>();   // aviation-beacon sprites + near point lights (skyscrapers v2 M4)
 #ifdef RT_ENABLE_PHYSICS
     addSystem<ResidencySystem>();           // what is on the GPU, by where the camera is (ADR-0095)
@@ -258,6 +266,8 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #endif
     addSystem<XrCameraSystem>();
     addSystem<UnderwaterSystem>();   // the camera under a water surface -> the composite's underwater look (#58)
+    addSystem<LightSystem>();   // picks the frame's lights from everything that gives off light (ADR-0362)
+    addSystem<ProbeSystem>();   // the reflection probes along the streets, and which to capture (ADR-0374)
     addSystem<RenderSystem>();
     addSystem<DebugDrawSystem>();   // ctx.debug lines on top of the scene (ADR-0067)
     // After the camera systems so the listener follows this frame's view.

@@ -1,4 +1,5 @@
 #include "level_loader.h"
+#include "lights/light_kinds.h"   // lightGlowNits: the glows' real luminance (ADR-0369)
 #include "../hash.h"   // lowbias32
 #include "particles.h"
 #ifdef RT_ENABLE_SCRIPTING
@@ -75,7 +76,7 @@
 #include "procgen/city/road_network.h" // extractBlocks (block grading)
 #include "procgen/city/city_svg.h"
 #include "procgen/city/architect.h"   // districtName (city map hub labels)
-#include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
+#include "procgen/city/road_mesh.h"
 #include "procgen/city/street_furniture.h"   // build-time signal/lamp placement
 #include "procgen/city/street_kit.h"  // trafficSignalProto, streetLamp
 #include "procgen/city/street_names.h"  // nameStreets
@@ -97,6 +98,7 @@
 #include "scripting/procgen_bindings.h"
 #include "scripting/vehicle_spec.h"
 #endif
+#include "scripting/street_props_spec.h"   // (plain data: the reader itself needs scripting)
 #include "model_importer.h"
 #include "../proc_rng.h"
 #include <sstream>
@@ -694,6 +696,10 @@ static void spawnRoadMeshes(const json& ent, std::vector<roads::RoadMesh>& meshe
         if (!onHost) createEntityCommon(me, ent, world);
         ++spawned;
         Renderable mr = proto;
+        // the road is large static world geometry (it was Unset: drawn to the far plane, outside the static draw index
+        // and invisible to everything that picks by class -- the reflection rays among them, ADR-0376). No level limits
+        // the structure class, so it is drawn as far as before
+        if (mr.drawClass == DrawClass::Unset) mr.drawClass = DrawClass::Structure;
         mr.material.albedo = rm.albedo;
         mr.material.roughness = rm.roughness;
         mr.material.metallic = rm.metallic;
@@ -706,12 +712,14 @@ static void spawnRoadMeshes(const json& ent, std::vector<roads::RoadMesh>& meshe
         const bool nightLamp = rm.name == "station_lamp";
         if (nightLamp) mr.material.emission = Vec3(0, 0, 0);
         world.add<Renderable>(me, mr);
-        if (nightLamp) world.add<engine::NightGlow>(me, engine::NightGlow{Vec3(0.95, 0.97, 1.0) * 5.0});
+        if (nightLamp) {
+            engine::NightGlow ng{Vec3(0.95, 0.97, 1.0) * 5.0};
+            ng.nits = engine::lightGlowNits("station_lamp_head");
+            world.add<engine::NightGlow>(me, ng);
+        }
         if (!rm.collidable) continue;
         MeshCollider mc;
-        mc.vertices.reserve(rm.mesh.vertices.size());
-        for (const Vertex& v : rm.mesh.vertices) mc.vertices.push_back(v.position);
-        mc.indices = rm.mesh.indices;
+        mc.append(rm.mesh);
         mc.friction = rm.friction;
         mc.surface = colliderSurfaceForRoadMaterial(rm.name);
         world.add<MeshCollider>(me, mc);
@@ -1737,9 +1745,7 @@ static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
         world.add<PrevTransform>(e, PrevTransform{Transform{}});
         if (chunk.collider) {
             MeshCollider mc;
-            mc.vertices.reserve(chunk.mesh.vertices.size());
-            for (const Vertex& v : chunk.mesh.vertices) mc.vertices.push_back(v.position);
-            mc.indices = chunk.mesh.indices;
+            mc.append(chunk.mesh);
             mc.surface = ColliderSurface::Terrain;
             world.add<MeshCollider>(e, mc);
         }
@@ -2019,9 +2025,7 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
     // terrain instead of falling through (PhysicsSystem makes one static mesh
     // body). Inert when physics is disabled.
     MeshCollider mc;
-    mc.vertices.reserve(terrainMesh.vertices.size());
-    for (const Vertex& v : terrainMesh.vertices) mc.vertices.push_back(v.position);
-    mc.indices = terrainMesh.indices;
+    mc.append(terrainMesh);
     mc.surface = ColliderSurface::Terrain;
     world.add<MeshCollider>(e, mc);
 
@@ -4801,12 +4805,8 @@ bool LevelLoader::load(const std::string& path,
                     // coping as one static mesh, as the road retaining walls have
                     {
                         MeshCollider mc;
-                        mc.vertices.reserve(qm.vertices.size() + coping.vertices.size());
-                        for (const Vertex& v : qm.vertices) mc.vertices.push_back(v.position);
-                        mc.indices = qm.indices;
-                        const uint32_t off = static_cast<uint32_t>(qm.vertices.size());
-                        for (const Vertex& v : coping.vertices) mc.vertices.push_back(v.position);
-                        for (uint32_t ix : coping.indices) mc.indices.push_back(ix + off);
+                        mc.append(qm);
+                        mc.append(coping);
                         mc.friction = 0.9;
                         mc.surface = ColliderSurface::Concrete;   // dressed stone underfoot: the pavement step
                         world.add<MeshCollider>(qe, mc);
@@ -6165,6 +6165,7 @@ bool LevelLoader::load(const std::string& path,
             std::vector<engine::ShopSign> shopSigns;   // ...and the boards that name them
             int depotYards = 0, depotBays = 0;          // the bus depots' bays, to the buses
             int surfaceLots = 0, surfaceStalls = 0;     // the big boxes' and malls' parking lots, to the drivers
+            int fuelStops = 0;                            // the gas stations' pump sides (ADR-0357)
             struct OpenSpot { Vec3 at; Vec2 n; int place; };
             std::vector<OpenSpot> openSpots;            // ...and the OPEN signs in their windows
             MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
@@ -6289,6 +6290,26 @@ bool LevelLoader::load(const std::string& path,
                              << static_cast<int>(m0.m[1][3]) << " " << static_cast<int>(m0.m[2][3]);
                 }
             }
+            {   // THE GROWN LOTS by recipe, boxed (ADR-0359): what `frame lot` and `lots?` find
+                engine::LotSites ls;
+                for (const engine::LotBuilding& lb : grown.lots) {
+                    const engine::Poly2& ring = lb.plan.size() >= 3 ? lb.plan : lb.pad;
+                    if (ring.size() < 3) continue;
+                    engine::LotSites::Site site;
+                    site.recipe = lb.recipe;
+                    site.type = lb.type;
+                    double x0 = 1e30, z0 = 1e30, x1 = -1e30, z1 = -1e30;
+                    for (const engine::Vec2& q : lb.pad.size() >= 3 ? lb.pad : ring) {
+                        x0 = std::min(x0, q.x); x1 = std::max(x1, q.x);
+                        z0 = std::min(z0, q.y); z1 = std::max(z1, q.y);
+                    }
+                    const double y0 = lb.groundY, top = lb.height > 1.0 ? lb.height : 6.0;   // (an open lot: its canopy, its lamps)
+                    site.lo = Vec3(x0, y0, z0);
+                    site.hi = Vec3(x1, std::max(lb.baseY, lb.groundY) + top, z1);
+                    ls.sites.push_back(std::move(site));
+                }
+                world.add<engine::LotSites>(world.create(), std::move(ls));
+            }
             for (const engine::LotBuilding& lb : grown.lots) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
                 // Park FENCES + TREE TRUNKS are solid (drive feedback: "Parks
@@ -6314,21 +6335,18 @@ bool LevelLoader::load(const std::string& path,
                     }
                     engine::RenderMesh blockMesh;
                     engine::MeshBuilder::emitBlock(blockMesh, foot, head, Vec3(1, 1, 1));
-                    const uint32_t s0 =
-                        static_cast<uint32_t>(buildingsMc.vertices.size());
-                    for (const engine::Vertex& vx : blockMesh.vertices)
-                        buildingsMc.vertices.push_back(vx.position);
-                    for (uint32_t ix : blockMesh.indices)
-                        buildingsMc.indices.push_back(s0 + ix);
+                    buildingsMc.append(blockMesh);
                 };
                 for (const auto& fs : lb.fenceSegs)
                     wall(fs.first, fs.second, 0.95, 0.14);
-                for (const engine::LotBuilding::Area& ar : lb.areas) {   // a bus depot's shed: its four walls
-                    if (ar.kind != "bus_shed") continue;
+                // a bus depot's shed, and a gas station's kiosk and pump islands (ADR-0357): their four walls
+                for (const engine::LotBuilding::Area& ar : lb.areas) {
+                    const double h = ar.kind == "bus_shed" ? 7.5 : ar.kind == "kiosk" ? 3.6 : ar.kind == "pump_island" ? 1.9 : 0.0;
+                    if (h <= 0.0) continue;
                     const engine::Vec2 au = ar.axis, av(-ar.axis.y, ar.axis.x);
                     const engine::Vec2 q[4] = {ar.center - au * ar.halfL - av * ar.halfW, ar.center + au * ar.halfL - av * ar.halfW,
                                                ar.center + au * ar.halfL + av * ar.halfW, ar.center - au * ar.halfL + av * ar.halfW};
-                    for (int k = 0; k < 4; ++k) wall(q[k], q[(k + 1) % 4], 7.5, 0.3);
+                    for (int k = 0; k < 4; ++k) wall(q[k], q[(k + 1) % 4], h, 0.3);
                 }
                 for (const Vec3& ts : lb.treeSpots) {
                     const engine::Vec2 t2(ts.x, ts.z);
@@ -6450,7 +6468,14 @@ bool LevelLoader::load(const std::string& path,
                 // A BUS DEPOT (sculptBusDepot): no place for the schedules, its bays a garage only buses use, anchored
                 // on the street in front of its gate
                 // ...and an OPEN LOT's CAR PARK (recipe "car_park", sculptCarPark): the same yard, its stalls a garage for cars
-                if (lb.type == "depot") {
+                // A GAS STATION's pumps (ADR-0357): a FuelStop per standing place, where the player's car fills
+                for (const engine::LotBuilding::Area& ar : lb.areas) {
+                    if (ar.kind != "fuel_pump") continue;
+                    const Entity fe = world.create();
+                    world.add<engine::FuelStop>(fe, {ar.center, ar.axis, ar.halfL, ar.halfW});
+                    ++fuelStops;
+                }
+                if (lb.type == "depot" && lb.recipe != "gas_station") {
                     engine::CitySimConfig::GarageSpec gs;
                     const bool carPark = lb.recipe == "car_park";
                     gs.buses = !carPark;
@@ -6892,6 +6917,7 @@ bool LevelLoader::load(const std::string& path,
                      << lotTreesOnRoad << " kept off the drawn road";
             if (depotYards) LOG_INFO << "[citylots] " << depotYards << " bus depots, " << depotBays << " bus bays";
             if (surfaceLots) LOG_INFO << "[citylots] " << surfaceLots << " parking lots, " << surfaceStalls << " stalls for the drivers";
+            if (fuelStops) LOG_INFO << "[citylots] " << fuelStops << " fuel stops at the gas stations";
             if (!tradePlaces.empty()) {
                 std::string line;
                 int all = 0;
@@ -6936,7 +6962,9 @@ bool LevelLoader::load(const std::string& path,
                         g.drawClass = engine::DrawClass::Furniture;
                         const Entity signs = world.create();
                         world.add<InstanceGroup>(signs, g);
-                        world.add<engine::NightGlow>(signs, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * glow});
+                        engine::NightGlow ng{Vec3(1.0, 1.0, 1.0) * glow};
+                        ng.nits = engine::lightGlowNits("sign");
+                        world.add<engine::NightGlow>(signs, ng);
                     }
                     return atlas;
                 };
@@ -7217,13 +7245,15 @@ bool LevelLoader::load(const std::string& path,
                     // equals Glass by day).
                     if (static_cast<PartId>(pi) == PartId::LitBand)
                         // Crown bands, signage, podium uplights: the vertex colour is the tint.
-                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 1.3});
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 1.3, 1.0f, Vec3(1.0, 1.0, 1.0), -1.0f,
+                                                                          engine::lightGlowNits("lit_band")});
                     if (static_cast<PartId>(pi) == PartId::GlassLit)
                         // White: the pane's vertex colour is its tint (litTint, FLAG_EMISSIVE_VERTEX_TINT);
                         // 0.5, not 1.3: the room atlas carries the contrast now (a fixture at 1, walls
                         // at ~0.6, floor ~0.25) and the night exposure lifts it, so the fixture clips
                         // to white and the walls keep their tint instead of the whole pane clipping.
-                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 0.22});
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 0.22, 1.0f, Vec3(1.0, 1.0, 1.0), -1.0f,
+                                                                          engine::lightGlowNits("window_pane")});
                     const bool beaconFamily = static_cast<PartId>(pi) == PartId::Beacon ||
                                               static_cast<PartId>(pi) == PartId::BeaconGlow ||
                                               static_cast<PartId>(pi) == PartId::BeaconHaze;
@@ -7245,7 +7275,10 @@ bool LevelLoader::load(const std::string& path,
                         // On screen through their opacity: bulb 0.55 x 3.0 = 1.65, haze 0.22 x 4.5 = 1.0.
                         const Real glow = static_cast<PartId>(pi) == PartId::BeaconGlow ? 3.0
                                         : static_cast<PartId>(pi) == PartId::BeaconHaze ? 4.5 : 1.3;
-                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * glow});
+                        const char* cls = static_cast<PartId>(pi) == PartId::BeaconGlow ? "beacon_glow"
+                                        : static_cast<PartId>(pi) == PartId::BeaconHaze ? "beacon_haze" : "beacon_bulb";
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * glow, 1.0f, Vec3(1.0, 1.0, 1.0), -1.0f,
+                                                                          engine::lightGlowNits(cls)});
                         world.add<engine::BeaconBlink>(e, bb);
                     }
                     return e;
@@ -7488,6 +7521,7 @@ bool LevelLoader::load(const std::string& path,
                     ng.fullEmission = Vec3(1.0, 0.82, 0.58) * 0.16;
                     ng.nightAlbedo = 0.08f;   // the body goes dark with dusk; the window glow carries it
                     ng.dayAlbedo = r.material.albedo;
+                    ng.nits = engine::lightGlowNits("far_city");
                     world.add<engine::NightGlow>(e, ng);
                 }
             }
@@ -7637,9 +7671,22 @@ bool LevelLoader::load(const std::string& path,
         }
         if (!combined.edges.empty()) {
             const engine::NavGraph nav = engine::buildNavGraph(combined);
+            // THE KERB PROPS THAT ARE DATA (street_props.lua, ADR-0354): the hydrants and their kind, and the bodies
+            // of what the planner places
+            engine::StreetPropsSpec streetProps;
+#ifdef RT_ENABLE_SCRIPTING
+            {
+                std::string err;
+                if (!engine::loadStreetProps(levelDir, streetProps, &err)) LOG_WARN << "[street] " << err;
+                if (const std::string sp = resolveScriptPath("street_props.lua", levelDir); !sp.empty())
+                    g_loadedScriptFiles.push_back(sp);
+            }
+#endif
             const engine::StreetFurniturePlan fplan =
                 [&] {
                     engine::StreetFurnitureParams fp;
+                    for (const engine::StreetPropKind& k : streetProps.kinds)
+                        fp.kerbKinds.push_back({k.every, k.verge, k.junction, k.mainOnly});
                     world.each<engine::RoadEntity>(
                         [&](Entity, engine::RoadEntity& net) {
                             fp.sidewalkWidth = std::max(
@@ -7668,18 +7715,11 @@ bool LevelLoader::load(const std::string& path,
                     if (!charCells->empty() && !std::getenv("RT_ONE_PLANTING")) {
                         auto cells = charCells;
                         auto ground = furnGround;
-                        auto lattice = [](long long x, long long z, uint32_t salt) {
-                            uint64_t k = static_cast<uint64_t>(x) * 0x9E3779B97F4A7C15ull ^ static_cast<uint64_t>(z) * 0xC2B2AE3D27D4EB4Full ^ salt;
-                            k ^= k >> 31; k *= 0xBF58476D1CE4E5B9ull; k ^= k >> 29;
-                            return (k & 0xFFFFFF) / static_cast<double>(0x1000000);
-                        };
-                        auto noise = [lattice](double x, double z, double cell, uint32_t salt) {   // value noise, smooth
-                            const double fx = x / cell, fz = z / cell;
-                            const long long ix = static_cast<long long>(std::floor(fx)), iz = static_cast<long long>(std::floor(fz));
-                            double tx = fx - ix, tz = fz - iz;
-                            tx = tx * tx * (3 - 2 * tx); tz = tz * tz * (3 - 2 * tz);
-                            const double a = lattice(ix, iz, salt), b = lattice(ix + 1, iz, salt), c = lattice(ix, iz + 1, salt), d = lattice(ix + 1, iz + 1, salt);
-                            return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz;
+                        // (procgen/noise.h's value noise over the planting's frozen lattice, hash.h)
+                        auto noise = [](double x, double z, double cell, uint32_t salt) {
+                            return latticeValueNoise(x / cell, z / cell, [salt](int64_t i, int64_t j) {
+                                return frozenPlantingLattice(i, j, salt);
+                            });
                         };
                         // the island's height bands (its ground cover's): a street above the upland line is a hill
                         // town's, more mountain the nearer the mountain line; a level without bands has no high ground
@@ -7880,8 +7920,9 @@ bool LevelLoader::load(const std::string& path,
                     groupBounds(glow, lp.height + 1.0);
                     Entity glowE = world.create();
                     world.add<InstanceGroup>(glowE, glow);
-                    world.add<engine::NightGlow>(
-                        glowE, engine::NightGlow{Vec3(1.0, 0.85, 0.55) * 4.5});
+                    engine::NightGlow ng{Vec3(1.0, 0.85, 0.55) * 4.5};
+                    ng.nits = engine::lightGlowNits("street_lamp_head");
+                    world.add<engine::NightGlow>(glowE, ng);
                 }
             }
             // STREET NAME SIGNS (Glenn, 2026-09-19: "It would be nice to have
@@ -7893,6 +7934,12 @@ bool LevelLoader::load(const std::string& path,
                 auto naming = std::make_shared<engine::StreetNaming>(engine::nameStreets(combined));
                 engine::StreetDirectory dir;
                 dir.naming = naming;
+                for (const engine::Street& st : naming->streets) {
+                    std::vector<Vec2> line;
+                    for (int n : st.nodes)
+                        if (n >= 0 && n < static_cast<int>(combined.nodes.size())) line.push_back(combined.nodes[static_cast<std::size_t>(n)].pos);
+                    dir.lines.push_back(std::move(line));
+                }
                 const engine::Font* font = engine::signFont();
                 const bool wantSigns = root["citysim"].value("streetSigns", true);
                 if (wantSigns && !font)
@@ -8120,34 +8167,146 @@ bool LevelLoader::load(const std::string& path,
                     groupBounds(g, 1.0);
                     world.add<InstanceGroup>(world.create(), g);
                 }
-                const MeshHandle propMesh[3] = {assets.acquireMesh(engine::litterBinProto(), "city:litterbin"),
-                                                assets.acquireMesh(engine::bikeRackProto(), "city:bikerack"),
-                                                assets.acquireMesh(engine::newsBoxesProto(), "city:newsboxes")};
-                std::map<std::pair<int, int>, std::array<std::vector<Mat4>, 3>> propCells;
-                int nProp[3] = {0, 0, 0};
+                // THE KINDS: the planner's own three, then street_props.lua's (ADR-0354), each its mesh, its material,
+                // and the box it stands in as a body (a car knocks the light ones loose)
+                const std::size_t nKinds = 3 + streetProps.kinds.size();
+                std::vector<engine::RenderMesh> kindMesh = {engine::litterBinProto(), engine::bikeRackProto(), engine::newsBoxesProto()};
+                std::vector<std::string> kindName = {"bin", "bike_rack", "news_boxes"};
+                for (const engine::StreetPropKind& k : streetProps.kinds) { kindMesh.push_back(*k.mesh); kindName.push_back(k.name); }
+                std::vector<MeshHandle> propMesh;
+                std::vector<RenderMaterial> propMat;
+                for (std::size_t k = 0; k < nKinds; ++k) {
+                    propMesh.push_back(assets.acquireMesh(kindMesh[k], "city:kerb:" + kindName[k]));
+                    RenderMaterial m;
+                    m.albedo = Vec3(1, 1, 1);
+                    m.metallic = k == 1 ? 0.6f : 0.2f;
+                    m.roughness = 0.5f;
+                    propMat.push_back(m);
+                }
+                std::map<std::pair<int, int>, std::vector<std::vector<Mat4>>> propCells;
+                std::vector<int> nProp(nKinds, 0);
                 for (const engine::KerbProp& kp : fplan.props) {
+                    if (kp.kind >= nKinds) continue;
                     // the prototype's +Z out to the pavement: a yaw about +Y takes +Z to (sin, cos)
                     const Real yaw = std::atan2(kp.toPavement.x, kp.toPavement.y);
-                    propCells[cellOf(kp.base)][kp.kind % 3u].push_back(
-                        Mat4::trs(kp.base, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
-                    ++nProp[kp.kind % 3u];
+                    auto& cell = propCells[cellOf(kp.base)];
+                    if (cell.empty()) cell.resize(nKinds);
+                    cell[kp.kind].push_back(Mat4::trs(kp.base, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
+                    ++nProp[kp.kind];
+                }
+                // THE BODIES (ADR-0354): every kerb piece, tree trunk and lamp post a static shape the car meets,
+                // streamed round the player with the forests' (NatureColliderSystem); the pieces with a breaking speed
+                // are knocked loose
+                engine::NatureColliders streetBodies;
+                streetBodies.knockPush = streetProps.knockPush;
+                streetBodies.knockUp = streetProps.knockUp;
+                streetBodies.knockUpPerSpeed = streetProps.knockUpPerSpeed;
+                std::vector<engine::StreetPropCollider> kindBody(nKinds);
+                for (std::size_t k = 0; k < 3; ++k) {
+                    auto it = streetProps.legacy.find(kindName[k]);
+                    if (it != streetProps.legacy.end()) kindBody[k] = it->second;
+                }
+                for (std::size_t k = 3; k < nKinds; ++k) kindBody[k] = streetProps.kinds[k - 3].collider;
+                std::vector<int> pieceKindOf(nKinds, -1);
+                for (std::size_t k = 0; k < nKinds; ++k) {
+                    if (kindBody[k].breaksAt <= 0 || kindBody[k].half.y <= 0) continue;
+                    // the loose body's mesh: the prototype re-centred on its box
+                    engine::RenderMesh centred = kindMesh[k];
+                    for (engine::Vertex& v : centred.vertices) v.position.y -= kindBody[k].half.y;
+                    engine::NatureColliders::PieceKind pk;
+                    pk.name = kindName[k];
+                    pk.mesh = assets.acquireMesh(centred, "city:kerb:loose:" + kindName[k]);
+                    pk.material = propMat[k];
+                    pk.breaksAt = kindBody[k].breaksAt;
+                    pk.mass = kindBody[k].mass;
+                    if (k >= 3) {
+                        pk.spray = streetProps.kinds[k - 3].sprayEffect;
+                        pk.sprayRate = streetProps.kinds[k - 3].sprayRate;
+                        pk.sprayUp = streetProps.kinds[k - 3].sprayUp;
+                    }
+                    pieceKindOf[k] = static_cast<int>(streetBodies.pieceKinds.size());
+                    streetBodies.pieceKinds.push_back(pk);
                 }
                 for (auto& [key, byKind] : propCells)
-                    for (int k = 0; k < 3; ++k) {
+                    for (std::size_t k = 0; k < nKinds; ++k) {
                         if (byKind[k].empty()) continue;
                         InstanceGroup g;
                         g.mesh = propMesh[k];
-                        g.material.albedo = Vec3(1, 1, 1);
-                        g.material.metallic = k == 1 ? 0.6f : 0.2f;
-                        g.material.roughness = 0.5f;
+                        g.material = propMat[k];
+                        // the bodies: a box standing where each one stands, turned as it is
+                        std::vector<engine::NatureCollider> shapes;
+                        if (kindBody[k].half.y > 0)
+                            for (const Mat4& m : byKind[k]) {
+                                engine::NatureCollider c;
+                                c.centre = m.transformPoint(Vec3(0, kindBody[k].half.y, 0));
+                                const Vec3 ax = m.transformPoint(Vec3(1, 0, 0)) - m.transformPoint(Vec3(0, 0, 0));
+                                c.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(-ax.z, ax.x));
+                                c.half = kindBody[k].half;
+                                shapes.push_back(c);
+                            }
                         g.transforms = std::move(byKind[k]);
                         g.drawDistance = kerbDist * 0.5;
                         g.drawClass = engine::DrawClass::Furniture;
                         groupBounds(g, 1.5);
-                        world.add<InstanceGroup>(world.create(), g);
+                        const Entity ge = world.create();
+                        world.add<InstanceGroup>(ge, g);
+                        for (std::size_t i = 0; i < shapes.size(); ++i) {
+                            if (pieceKindOf[k] >= 0) {
+                                shapes[i].piece = static_cast<int>(streetBodies.pieces.size());
+                                streetBodies.pieces.push_back({pieceKindOf[k], ge, i, false});
+                            }
+                            streetBodies.add(shapes[i]);
+                        }
                     }
-                LOG_INFO << "[furniture] kerb life: " << fplan.trees.size() << " street trees, " << nProp[0] << " litter bins, "
-                         << nProp[1] << " bike racks, " << nProp[2] << " news boxes";
+                // the trunks and the lamp posts: they stop the car
+                if (streetProps.trunkRadius > 0)
+                    for (const engine::StreetTree& st : fplan.trees) {
+                        engine::NatureCollider c;
+                        c.capsule = true;
+                        const Real r = streetProps.trunkRadius * st.scale, hh = streetProps.trunkHeight * 0.5;
+                        c.half = Vec3(r, std::max(Real(0.05), hh - r), r);
+                        c.centre = st.base + Vec3(0, hh, 0);
+                        streetBodies.add(c);
+                    }
+                if (streetProps.lampRadius > 0)
+                    for (const Vec3& b : fplan.lampBases) {
+                        engine::NatureCollider c;
+                        c.capsule = true;
+                        const Real hh = streetProps.lampHeight * 0.5;
+                        c.half = Vec3(streetProps.lampRadius, std::max(Real(0.05), hh - streetProps.lampRadius), streetProps.lampRadius);
+                        c.centre = b + Vec3(0, hh, 0);
+                        streetBodies.add(c);
+                    }
+                const std::size_t nBodies = streetBodies.shapes.size(), nPieces = streetBodies.pieces.size();
+                // into the level's one set of streamed bodies (a forest level already has one)
+                {
+                    engine::NatureColliders* into = nullptr;
+                    world.each<engine::NatureColliders>([&](Entity, engine::NatureColliders& nc) { if (!into) into = &nc; });
+                    if (!into) {
+                        world.add<engine::NatureColliders>(world.create(), std::move(streetBodies));
+                    } else {
+                        into->knockPush = streetBodies.knockPush;
+                        into->knockUp = streetBodies.knockUp;
+                        into->knockUpPerSpeed = streetBodies.knockUpPerSpeed;
+                        const int pieceBase = static_cast<int>(into->pieces.size());
+                        const int kindBase = static_cast<int>(into->pieceKinds.size());
+                        for (const auto& pk : streetBodies.pieceKinds) into->pieceKinds.push_back(pk);
+                        for (auto pc : streetBodies.pieces) { pc.kind += kindBase; into->pieces.push_back(pc); }
+                        for (auto c : streetBodies.shapes) { if (c.piece >= 0) c.piece += pieceBase; into->add(c); }
+                    }
+                }
+                std::string census;
+                for (std::size_t k = 0; k < nKinds; ++k) census += ", " + std::to_string(nProp[k]) + " " + kindName[k];
+                for (const engine::KerbProp& kp : fplan.props)   // (where to find the first of a data kind)
+                    if (kp.kind == engine::KerbProp::kFirstDataKind) {
+                        char at[160];
+                        std::snprintf(at, sizeof at, " (the first %s at %.1f %.1f %.1f, the pavement toward %.2f %.2f)", kindName[kp.kind].c_str(),
+                              kp.base.x, kp.base.y, kp.base.z, kp.toPavement.x, kp.toPavement.y);
+                        census += at;
+                        break;
+                    }
+                census += "; " + std::to_string(nBodies) + " bodies, " + std::to_string(nPieces) + " breakable";
+                LOG_INFO << "[furniture] kerb life: " << fplan.trees.size() << " street trees" << census;
             }
             LOG_INFO << "[furniture] " << sf.signalPoles.size() << " signals, "
                      << fplan.lampBases.size() << " street lamps";
@@ -8367,16 +8526,8 @@ bool LevelLoader::load(const std::string& path,
         if (r.contains("drawDistances") && r["drawDistances"].is_object()) {
             const auto& d = r["drawDistances"];
             DrawPolicy p;
-            auto set = [&](DrawClass c, const char* key) {
-                p.distance[static_cast<int>(c)] = d.value(key, 0.0);
-            };
-            set(DrawClass::Terrain,     "terrain");
-            set(DrawClass::Structure,   "structure");
-            set(DrawClass::Scenery,     "scenery");
-            set(DrawClass::Furniture,   "furniture");
-            set(DrawClass::GroundPaint, "groundPaint");
-            set(DrawClass::SimBody,     "simBody");
-            set(DrawClass::Effect,      "effect");
+            for (int c = 0; c < static_cast<int>(DrawClass::Count); ++c)
+                if (const char* key = drawClassName(static_cast<DrawClass>(c))) p.distance[c] = d.value(key, 0.0);
             world.add<DrawPolicy>(world.create(), p);
         }
     }
@@ -8413,7 +8564,7 @@ bool LevelLoader::load(const std::string& path,
     //                         perspective (replaces exp fog while active).
     //   "environment.clouds" {coverage?, bottom?, top?, density?, noiseScale?,
     //                         wind?, steps?, lightSteps?, phaseG?, far?,
-    //                         ambient?, detailStrength?, enabled?} -> volumetric
+    //                         ambient?, detailStrength?, wisps?, cirrus?, enabled?} -> volumetric
     //                         cloud slab (retires the 2D FBM overlay while
     //                         active).
     view.lighting.skyScattering = SkyScatteringParams{};
@@ -8455,19 +8606,9 @@ bool LevelLoader::load(const std::string& path,
             vc.farDistance = c.value("far", vc.farDistance);
             vc.ambient     = c.value("ambient", vc.ambient);
             vc.detailStrength = c.value("detailStrength", vc.detailStrength);
-            // the cloud types (ADR-0336): up to four, along the type axis; and the range when the weather is off
-            if (c.contains("types") && c["types"].is_array()) {
-                std::size_t k = 0;
-                for (const auto& tj : c["types"]) {
-                    if (k >= vc.types.size() || !tj.is_object()) break;
-                    auto& ty = vc.types[k++];
-                    if (tj.contains("profile") && tj["profile"].is_array() && tj["profile"].size() == 4)
-                        for (int i = 0; i < 4; ++i) ty.profile[i] = tj["profile"][i].get<float>();
-                    ty.density = tj.value("density", ty.density);
-                    ty.erosion = tj.value("erosion", ty.erosion);
-                    ty.anvil = tj.value("anvil", ty.anvil);
-                }
-            }
+            vc.wisps = c.value("wisps", vc.wisps);
+            vc.cirrus = c.value("cirrus", vc.cirrus);
+            // the type range when the weather is off (ADR-0336; the types themselves are clouds.lua's, ADR-0386)
             if (c.contains("typeRange") && c["typeRange"].is_array() && c["typeRange"].size() == 2) {
                 vc.typeLo = c["typeRange"][0].get<float>();
                 vc.typeHi = c["typeRange"][1].get<float>();

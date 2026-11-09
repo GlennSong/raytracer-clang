@@ -75,7 +75,7 @@ function kit.body(P)
     assert(#sections[i] == n, "section " .. i .. " has " .. #sections[i] .. " points, not " .. n)
   end
   local B = poly.loft{ sections = sections, stations = stations, cap_start = true, cap_end = true,
-                       cap_crease = P.cap_crease or 0.3 }
+                       cap_crease = P.cap_crease or 1.4 }
 
   -- face index of the quad from ring k (1-based) point i (1-based): (k-1)*n + (i-1), 0-based
   local function face(k, i) return (k - 1) * n + (i - 1) end
@@ -152,6 +152,12 @@ function kit.body(P)
 
   -- A REAR WINDOW in the tail (a boxy vehicle's back glass is on its vertical tail, not the roof run):
   -- the tail cap's ladder rungs within P.rear_window = { y0, y1 }
+  -- A FRONT WINDOW in the nose (a bus's flat face: its windscreen is the nose cap's rungs within P.front_window)
+  if P.front_window then
+    local fw = P.front_window
+    local front = B:select{ group = "cap_end", where = function(c) return c[2] > fw[1] and c[2] < fw[2] end }
+    window(front, "win_front", W.windshield)
+  end
   if P.rear_window then
     local rw = P.rear_window
     local rear = B:select{ group = "cap_start", where = function(c) return c[2] > rw[1] and c[2] < rw[2] end }
@@ -162,9 +168,147 @@ function kit.body(P)
   local under = faces("bottom", function() return true end, true)
   B:assign(under, { mat = "trim", group = "underbody" })
 
+  -- CHARACTER LINES (Glenn, 2026-11-06: "Let's try smoother bodies"): the edges a subdivided body must keep or it
+  -- reads as a bar of soap -- the shoulder and the sill (the flank's two long edges), the hood's and the deck's
+  -- edges (the roof run ahead of the cowl and behind the deck), the arches (the underbody's outline). A faceted body
+  -- (level 0) never subdivides, so these change nothing there. P.lines = { flank, panel, arch } sharpness, or false.
+  if P.lines ~= false then
+    local ln = P.lines or {}
+    local all = function() return true end
+    B:crease_border(faces("side_r", all), ln.flank or 1.6)
+    B:crease_border(faces("side_l", all), ln.flank or 1.6)
+    local panel = faces("roof", function(zm) return zm > G.cowl or zm < G.deck end)
+    if #panel > 0 then B:crease_border(panel, ln.panel or 1.2) end
+    B:crease_border(under, ln.arch or 2.5)
+  end
+
+  -- THE MOVING PANELS (kit.panel_plan): each door's rows on its side (the flank up to the belt corner, then the ledge
+  -- and the glass column, each between its own seams), the hood and trunk across the top between the two belt
+  -- corners. A panel's outline is creased so it reads as a panel line, not a cut.
+  local plan = kit.panel_plan(P)
+  if plan then
+    local wraps = B:face_count() >= (#stations - 1) * n   -- the section's last quad (point n back to 1) is a face
+    local function rows(lo, hi, i0, i1)
+      local sel = {}
+      for k = 1, #stations - 1 do
+        if stations[k] >= lo - 1e-6 and stations[k + 1] <= hi + 1e-6 then
+          for i = i0, i1 do if i < n or wraps then sel[#sel + 1] = face(k, i) end end
+        end
+      end
+      return sel
+    end
+    local function tag(sel, name, crease)
+      if #sel == 0 then return end
+      B:assign(sel, { panel = name })
+      B:crease_border(sel, crease or 1.8)
+    end
+    -- x > 0 ("_l": the driver's left, the city drives on the left) is corners 2 -> 6, x < 0 corners 7 -> 1
+    local sides = { { tag = "l", low = { last[2], first[4] - 1 }, up = { first[4], first[6] - 1 } },
+                    { tag = "r", low = { last[9], n }, up = { last[7], last[9] - 1 } } }
+    for _, d in ipairs(plan.doors) do
+      for _, sd in ipairs(sides) do
+        local sel = rows(d.lo_low or d.lo, d.hi_low, sd.low[1], sd.low[2])
+        for _, f in ipairs(rows(d.lo_up or d.lo, d.hi_up, sd.up[1], sd.up[2])) do sel[#sel + 1] = f end
+        tag(sel, "door_" .. d.name .. "_" .. sd.tag)
+      end
+    end
+    for _, d in ipairs(plan.bus or {}) do   -- a bus's doors: the kerb side's flank, ledge and glass between the seams
+      local sel = rows(d.lo, d.hi, sides[1].low[1], sides[1].low[2])
+      for _, f in ipairs(rows(d.lo, d.hi, sides[1].up[1], sides[1].up[2])) do sel[#sel + 1] = f end
+      tag(sel, d.name)
+    end
+    if plan.hood then tag(rows(plan.hood.lo, plan.hood.hi, first[4], first[9] - 1), "hood") end
+    -- the tail above `y0`: every face at the back that faces back -- the cap and its window, and on a box whose
+    -- roof meets the tail square (a van: its back wall above the belt is the roof run falling sheer) those rows too
+    local tailZ = -P.length * 0.5 + 0.10
+    local function tail(y0)
+      return B:select{ normal = { 0, 0, -1 }, min_dot = 0.5, where = function(c) return c[3] < tailZ and c[2] > y0 end }
+    end
+    if plan.trunk and plan.trunk.kind == "tailgate" then
+      tag(tail(P.belt(-P.length * 0.5) - plan.trunk.bed), "tailgate")
+    elseif plan.trunk and plan.trunk.kind == "gate" then
+      tag(tail(plan.trunk.y0 or (P.tail_y[2] + 0.05)), "hatch")
+    elseif plan.trunk then
+      local sel = rows(plan.trunk.lo, plan.trunk.hi, first[4], first[9] - 1)
+      tag(sel, plan.trunk.kind == "hatch" and "hatch" or "trunk")
+    end
+  end
+
   -- the recipe's own operations (a convertible's cockpit, a pickup's bed, a van's rear door)
   if P.post then P.post(B, { faces = faces, P = P }) end
   return B, { n = n, stations = stations }
+end
+
+-- THE MOVING PANELS (ADR-0352; Glenn, 2026-11-06: "separate doors trunks hoods and add articulation points"): which
+-- rows of the cage each door, the hood and the trunk take, and where they hinge. `P.panels` (the recipe's `panels`):
+-- false for none (a bus's saloon has its own doors), else { doors = 1 | 2 per side, hood = false, trunk = "lid" |
+-- "hatch" | false }; by default a body without a saloon gets doors (two a side when it has a B-pillar and a cabin
+-- long enough behind it), a hood, and a trunk lid -- or a hatch when the deck is at the tail.
+-- A door's seam steps the way a real one does: below the belt it runs just clear of the wheel arch, above it at the
+-- pillar (the glass keys), so the window stays whole on the door.
+function kit.panel_plan(P)
+  local spec = P.panels
+  if spec == false then return nil end
+  -- A BUS's DOORS (ADR-0356; Glenn: "the bus should open its doors when I stop"): its saloon's two doorways on the
+  -- kerb side (x > 0) -- the front one beside the driver's partition, the middle one where the seats leave its
+  -- stretch of wall clear -- at the places car_interior.cpp's bus layout puts them (a test holds the two together).
+  -- A bus has no car doors, hood or trunk.
+  if spec == nil and P.saloon then
+    local half = P.length * 0.5
+    local sp = P.saloon
+    local frontZ = half - (sp.front or 0.35)
+    local len = frontZ - (-half + (sp.rear or 0.30))
+    local d0 = len * 0.46
+    return { doors = {}, bus = { { name = "bus_door_1", lo = frontZ - 1.65, hi = frontZ - 0.45 },
+                                 { name = "bus_door_2", lo = frontZ - d0 - 1.25, hi = frontZ - d0 } } }
+  end
+  spec = type(spec) == "table" and spec or {}
+  local G, half = P.glass, P.length * 0.5
+  local ra = P.wheel_r + 0.075
+  local front, rear = P.axles[#P.axles], P.axles[1]
+  local pillar = (G.pillars or {})[1]
+  local plan = { doors = {} }
+  local nd = spec.doors or ((pillar and pillar - G.c_side > 0.45) and 2 or 1)
+  local frontLow = front - ra - 0.08                      -- behind the front arch
+  if nd >= 1 then
+    local back = nd >= 2 and pillar or (pillar or G.c_side)
+    plan.doors[#plan.doors + 1] = { name = "front", hi_low = frontLow, hi_up = G.a_side - 0.03, lo = back, hinge = "front" }
+  end
+  if nd >= 2 then
+    local rearLow = math.max(rear + ra + 0.08, G.c_side + 0.03)   -- clear of the rear arch, never past the C-pillar
+    plan.doors[#plan.doors + 1] = { name = "rear", hi_low = pillar, hi_up = pillar, lo_low = rearLow, lo_up = G.c_side + 0.03,
+                                    hinge = "front" }
+  end
+  if spec.hood ~= false and G.cowl + 0.03 < half - 0.30 then plan.hood = { lo = G.cowl + 0.03, hi = half - 0.12 } end
+  local trunk = spec.trunk
+  if trunk == nil then trunk = (P.rear_window or G.deck + half <= 0.35) and "hatch" or "lid" end
+  if trunk == "lid" and G.deck - 0.03 > -half + 0.30 then plan.trunk = { kind = "lid", lo = -half + 0.12, hi = G.deck - 0.03 }
+  elseif trunk == "tailgate" then
+    -- a pickup's (Glenn: "The back flap should open downward on the truck"): the tail from the bed floor up, hinged
+    -- at its foot -- the bed's depth (the recipe's `bed`) below the rail
+    plan.trunk = { kind = "tailgate", bed = spec.bed or 0.48 }   -- (P.belt is not drawn yet when the seams are)
+  elseif trunk == "hatch" and P.rear_window then
+    -- a boxy tail (its back glass in the tail cap, P.rear_window): the gate is the tail above the bumper
+    plan.trunk = { kind = "gate", y0 = P.rear_window[1] - 0.40 }
+  elseif trunk == "hatch" and G.c_top - 0.03 > -half + 0.15 then plan.trunk = { kind = "hatch", lo = -half + 0.12, hi = G.c_top - 0.03 }
+  elseif trunk == "hatch" then
+    -- the roof runs to a flat tail (a van's box): the gate is the tail above its lamps
+    plan.trunk = { kind = "gate" }
+  end
+  return plan
+end
+
+-- the z of every seam the plan needs (kit.profile makes each a station)
+function kit.seams(P)
+  local plan = kit.panel_plan(P)
+  local out = {}
+  if not plan then return out end
+  local function add(z) if z then out[#out + 1] = z end end
+  for _, d in ipairs(plan.doors) do add(d.hi_low); add(d.hi_up); add(d.lo); add(d.lo_low); add(d.lo_up) end
+  for _, d in ipairs(plan.bus or {}) do add(d.lo); add(d.hi) end
+  if plan.hood then add(plan.hood.lo); add(plan.hood.hi) end
+  if plan.trunk and plan.trunk.lo then add(plan.trunk.lo); add(plan.trunk.hi) end
+  return out
 end
 
 -- ONE PARAMETRIC BODY. `o` (all metres, z from the car's centre, + toward the nose; heights from the ground):
@@ -182,11 +326,12 @@ function kit.profile(o)
   local L, W, H = o.L, o.W, o.H
   local half = L * 0.5
   local r = o.r
-  local P = { name = o.name, post = o.post, extras = o.extras, color = o.color, cap_crease = o.cap_crease,
+  local P = { name = o.name, lines = o.lines, post = o.post, extras = o.extras, color = o.color, cap_crease = o.cap_crease,
               windows = o.windows, lens = o.lens, lamps = o.lamps, grille = o.grille, grille_margin = o.grille_margin,
-              rear_window = o.rear_window, level = o.level, grille_w = o.grille_w, open_top = o.open_top,
+              rear_window = o.rear_window, front_window = o.front_window, saloon = o.saloon, sign = o.sign, signs = o.signs,
+              level = o.level, grille_w = o.grille_w, open_top = o.open_top,
               cabin_back = o.cabin_back, rear_seat = o.rear_seat, truck_seating = o.truck_seating, cargo = o.cargo,
-              hip_back = o.hip_back, interior = o.interior }
+              hip_back = o.hip_back, interior = o.interior, panels = o.panels, glass_opacity = o.glass_opacity }
   P.axles = o.axles or { -(half - o.ro), half - o.fo }
   P.wheel_r = r
   P.clear = o.clear   -- the drawn ground clearance (vehicles.lua: the collision floor)
@@ -214,6 +359,14 @@ function kit.profile(o)
   local dedup = {}
   for _, z in ipairs(zs) do if #dedup == 0 or z - dedup[#dedup] > (o.min_station or 0.045) then dedup[#dedup + 1] = z end end
   P.stations = dedup
+  -- THE PANEL SEAMS (ADR-0352) must be stations: a door's edge is a ring of the cage, so its faces are whole rows
+  P.seams = kit.seams(P)
+  for _, z in ipairs(P.seams) do
+    local best, bi = math.huge, nil
+    for i, s in ipairs(P.stations) do if math.abs(s - z) < best then best, bi = math.abs(s - z), i end end
+    if bi and best < (o.min_station or 0.045) then P.stations[bi] = z
+    elseif z > -half and z < half then P.stations[#P.stations + 1] = z; table.sort(P.stations) end
+  end
 
   local tp = o.taper or { 0.16, 0.12, 0.55 }
   function P.half_width(z)
@@ -280,48 +433,113 @@ local function tub(B, ctx, z0, z1, depth, mat)
 end
 kit.tub = tub
 
--- LAMP LENSES: separate rounded parts set onto the nose and tail at the profile's lamp bands (a lens
--- reads as an object; carving it out of the body's faces gave a fang). P.lamps = false for none.
-function kit.lamps(P, car, S)
-  if P.lamps == false then return end
-  local half = P.length * 0.5
-  local function surfaceZ(x, front)   -- the nose / tail face where the body is at least |x| wide
-    local z = front and half or -half
-    local dz = front and -0.01 or 0.01
-    for _ = 1, 120 do
-      if P.half_width(z) * 0.97 >= math.abs(x) then return z end
-      z = z + dz
-    end
-    return z
+-- A PANEL SHAPED TO THE FINISHED BODY (Glenn, 2026-11-06: "can they actually be integrated into the model ... on the
+-- actual surface of the car"): a lens, a grille, a badge. Its outline (a rounded rectangle `size` {w, h}, corners
+-- `r`; r = h/2 a pill, r = min/2 round) is laid on a plane at rule.from square to rule.dir and cast onto S point by
+-- point, so it follows the surface wherever it lands -- `proud` (m) off it, its middle domed `dome` more, its edge
+-- sunk `sink` into the body (no gap shows at a grazing view, and it can never float off or bury itself, which the
+-- placed boxes did). Returns the part and the hit at its centre (the lamp marker), or nil when the centre misses.
+function kit.patch(S, rule)
+  local d = rule.dir
+  local dl = math.sqrt(d[1] ^ 2 + d[2] ^ 2 + d[3] ^ 2)
+  d = { d[1] / dl, d[2] / dl, d[3] / dl }
+  local out = { -d[1], -d[2], -d[3] }
+  local upw = math.abs(out[2]) > 0.9 and { 0, 0, 1 } or { 0, 1, 0 }
+  local function cross(a, b) return { a[2] * b[3] - a[3] * b[2], a[3] * b[1] - a[1] * b[3], a[1] * b[2] - a[2] * b[1] } end
+  local function unit(a) local l = math.sqrt(a[1] ^ 2 + a[2] ^ 2 + a[3] ^ 2); return { a[1] / l, a[2] / l, a[3] / l } end
+  local right = unit(cross(upw, out))             -- right x up = out: the loft's faces come out facing out
+  local up = cross(out, right)
+  local o = rule.from
+  local hit0, _, face0 = S:raycast(o, d)
+  if not hit0 then return nil end
+  local t0 = (hit0[1] - o[1]) * d[1] + (hit0[2] - o[2]) * d[2] + (hit0[3] - o[3]) * d[3]
+  local w, h = rule.size[1] * 0.5, rule.size[2] * 0.5
+  local r = math.min(rule.r or 0.02, w * 0.999, h * 0.999)
+  -- the outline evenly spaced, then rings shrinking toward the middle: the patch has points inside its outline to
+  -- follow a curved surface (an outline and one cap spanned a lamp wrapping over the nose's edge with a flat
+  -- polygon, which cut into the body)
+  local ring = poly.resample(poly.section({ { -w, -h }, { w, -h }, { w, h }, { -w, h } }, r, rule.segs or 3),
+                             rule.points or (rule.coarse and 12 or 24))
+  -- (a coarse patch -- the mid-range body's -- has half the outline's points and one inner ring)
+  local SCALE = rule.coarse and { 1, 1, 0.45 } or { 1, 1, 0.72, 0.45, 0.18 }
+  local secs = {}
+  for k, s in ipairs(SCALE) do
+    local q = {}
+    for i, p in ipairs(ring) do q[i] = { p[1] * s, p[2] * s } end
+    secs[k] = q
   end
-  -- THE GRILLE: a separate panel on the flat nose cap, sized from the grille band and the nose, with
-  -- horizontal bars (a recess into the cap traced the cap's merged rim and sawed its edge)
+  local st = {}
+  for k = 1, #SCALE do st[k] = k - 1 end
+  local L = poly.loft{ sections = secs, stations = st, cap_start = false, cap_end = true, cap_crease = 0 }
+  -- (on the panel it was cast onto: a tail lamp on a hatch rides the hatch up -- Glenn: "they should be anchored onto
+  -- the hatch and move with it and not float separately")
+  L:assign(L:select{}, { mat = rule.mat or "lamp", panel = S:panel_of(face0) })
+  local proud, dome, sink = rule.proud or 0.003, rule.dome or 0.004, rule.sink or 0.012
+  L:map(function(x, y, z)
+    local ro = { o[1] + right[1] * x + up[1] * y, o[2] + right[2] * x + up[2] * y, o[3] + right[3] * x + up[3] * y }
+    local p, n = S:raycast(ro, d)
+    -- past the body's edge (a lens running off the side of a rounded nose): drawn in toward the middle until it lands,
+    -- so the outline hugs the body's silhouette (a point left on a flat plane there made the ragged edge)
+    local k = 1.0
+    while not p and k > 0.35 do
+      k = k - 0.08
+      p, n = S:raycast({ o[1] + (right[1] * x + up[1] * y) * k, o[2] + (right[2] * x + up[2] * y) * k,
+                         o[3] + (right[3] * x + up[3] * y) * k }, d)
+    end
+    if not p then p, n = { ro[1] + d[1] * t0, ro[2] + d[2] * t0, ro[3] + d[3] * t0 }, out end
+    -- off the surface along its own normal, turned toward the cast where it faces away (a hit near the silhouette):
+    -- along the cast alone, a lens lying over the hood's rounded edge barely cleared the paint and the paint showed
+    -- through it; the patch's inner rings keep neighbouring normals close, so the outline no longer tears
+    local nd = n[1] * out[1] + n[2] * out[2] + n[3] * out[3]
+    if nd < 0.3 then
+      local m = { n[1] + out[1] * (0.3 - nd), n[2] + out[2] * (0.3 - nd), n[3] + out[3] * (0.3 - nd) }
+      local ml = math.sqrt(m[1] ^ 2 + m[2] ^ 2 + m[3] ^ 2)
+      n = { m[1] / ml, m[2] / ml, m[3] / ml }
+    end
+    -- the ring k's share of the dome by its scale
+    local s = SCALE[math.floor(z + 0.5) + 1]
+    local off = z < 0.5 and -sink or proud + dome * (1 - s * s)
+    return p[1] + n[1] * off, p[2] + n[2] * off, p[3] + n[3] * off
+  end)
+  return L, hit0
+end
+
+-- LAMP LENSES AND THE GRILLE, shaped to the finished body (kit.patch). P.lamps = false for none.
+function kit.lamps(P, car, S)
+  if P.lamps == false or not S then return end
+  local coarse = car.coarse or false
+  local half = P.length * 0.5
+  car.markers = car.markers or {}
+  local lens = P.lens or {}
+  -- THE GRILLE: a dark panel on the nose within the grille band, a chrome bar across it every 6 cm
   if P.grille ~= false then
     local gy = P.grille_y
     local gw = (P.grille_w or 0.62) * P.half_width(half)
     local gh = gy[2] - gy[1]
     local cy = 0.5 * (gy[1] + gy[2])
-    car.polys[#car.polys + 1] = kit.box_part({ gw * 2, gh, 0.04 }, { 0, cy, half - 0.005 }, 2.5, "grille")
-    local bars = math.max(2, math.floor(gh / 0.06))
-    for i = 1, bars do
-      local y = gy[1] + gh * (i - 0.5) / bars
-      car.polys[#car.polys + 1] = kit.box_part({ gw * 2 - 0.04, 0.012, 0.03 }, { 0, y, half + 0.012 }, 2.5, "chrome")
+    local g = kit.patch(S, { from = { 0, cy, half + 1.0 }, dir = { 0, 0, -1 }, size = { gw * 2, gh }, r = 0.02,
+                             proud = 0.002, dome = 0, mat = "grille", coarse = coarse })
+    if g then
+      car.polys[#car.polys + 1] = g
+      local bars = math.max(2, math.floor(gh / 0.06))
+      for i = 1, bars - 1 do
+        local y = gy[1] + gh * i / bars
+        local b = kit.patch(S, { from = { 0, y, half + 1.0 }, dir = { 0, 0, -1 }, size = { gw * 2 - 0.05, 0.012 },
+                                 r = 0.005, segs = 1, proud = 0.006, dome = 0, sink = 0.004, mat = "chrome",
+                                 coarse = coarse })
+        if b then car.polys[#car.polys + 1] = b end
+      end
     end
   end
-  -- LAMP LENSES, by the placement grammar (kit.attach): each is cast onto the FINISHED body and set into
-  -- the surface it meets, facing along that surface's normal -- never buried in, or floating off, a body
-  -- whose real shape differs from the profile's guess
-  if not S then return end
-  car.markers = car.markers or {}
-  local lens = P.lens or {}
   local hy, ty = P.lamp_y, P.tail_y
   local hx = (lens.head_x or 0.70) * P.half_width(half - 0.25)
-  local hwid, hhei = lens.head_w or 0.34, math.min(hy[2] - hy[1], 0.14)
+  local hwid, hhei = lens.head_w or 0.34, math.min(hy[2] - hy[1], 0.12)
   -- SIDE NAMES ARE PHYSICAL (car_mesh.cpp): forward +Z, up +Y, the driver's LEFT is +X. These were swapped (+X
   -- tagged "_r"), so every kit body blinked the opposite indicator (Glenn, 2026-10-20: "It uses the opposite light").
   for _, sx in ipairs({ 1, -1 }) do
-    local part, at = kit.attach(S, { from = { sx * hx, hy[2] - hhei * 0.5, half + 1.0 }, dir = { 0, 0, -1 },
-                                     size = { hwid, hhei, 0.045 }, embed = 0.012, mat = "lamp" })
+    -- (centred in the band: a smooth body's nose rounds down into the band's top)
+    local part, at = kit.patch(S, { from = { sx * hx, 0.5 * (hy[1] + hy[2]), half + 1.0 }, dir = { 0, 0, -1 },
+                                    size = { hwid, hhei }, r = lens.head_r or hhei * 0.35, mat = "lamp", coarse = coarse })
     if part then
       car.polys[#car.polys + 1] = part
       car.markers[#car.markers + 1] = { name = sx > 0 and "headlight_l" or "headlight_r", pos = at }
@@ -331,8 +549,8 @@ function kit.lamps(P, car, S)
     local tx = (lens.tail_x or 0.72) * P.half_width(-half + 0.25)
     local twid, thei = lens.tail_w or 0.36, math.min(ty[2] - ty[1], 0.14)
     for _, sx in ipairs({ 1, -1 }) do
-      local part, at = kit.attach(S, { from = { sx * tx, ty[2] - thei * 0.5, -half - 1.0 }, dir = { 0, 0, 1 },
-                                       size = { twid, thei, 0.045 }, embed = 0.012, mat = "lamp_red" })
+      local part, at = kit.patch(S, { from = { sx * tx, 0.5 * (ty[1] + ty[2]), -half - 1.0 }, dir = { 0, 0, 1 },
+                                      size = { twid, thei }, r = lens.tail_r or thei * 0.25, mat = "lamp_red", coarse = coarse })
       if part then
         car.polys[#car.polys + 1] = part
         car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_l" or "taillight_r", pos = at }
@@ -520,6 +738,14 @@ S.offroad = function() return kit.profile{
     end
     -- a skid plate and tow hooks at the nose
     car.polys[#car.polys + 1] = kit.box_part({ 1.2, 0.05, 0.8 }, { 0, 0.40, 1.8 }, 3, "chassis")
+    -- STEEL BUMPERS standing proud of the body at each end, as a trail truck's do: the nose's is what meets a ledge's
+    -- edge first and rides the front up it (the collision hull is cut to the approach angle from the car's own length;
+    -- without them a 0.5 m step, taller than the wheel, caught the bodywork -- the lamp boxes had been doing it)
+    car.polys[#car.polys + 1] = kit.box_part({ 1.86, 0.16, 0.12 }, { 0, 0.74, 4.60 * 0.5 + 0.05 }, 3, "chassis")
+    car.polys[#car.polys + 1] = kit.box_part({ 1.80, 0.14, 0.10 }, { 0, 0.76, -(4.60 * 0.5) - 0.04 }, 3, "chassis")
+    for _, sx in ipairs({ 1, -1 }) do   -- the tow hooks
+      car.polys[#car.polys + 1] = kit.box_part({ 0.05, 0.08, 0.10 }, { sx * 0.55, 0.64, 4.60 * 0.5 + 0.10 }, 3, "chrome")
+    end
   end } end
 
 S.convertible = function() return kit.profile{
@@ -532,7 +758,7 @@ S.convertible = function() return kit.profile{
   extras = function(car) kit.windshield_frame(car, 1.50, 0.46, 0.30, 0.87, 58) end } end
 
 S.pickup = function() return kit.profile{
-  name = "pickup", L = 5.60, W = 2.00, H = 1.90, clear = 0.24, r = 0.40, fo = 0.95, ro = 1.10,
+  name = "pickup", panels = { trunk = "tailgate" }, L = 5.60, W = 2.00, H = 1.90, clear = 0.24, r = 0.40, fo = 0.95, ro = 1.10,
   glass = { cowl = 1.05, a_top = 0.50, c_top = -0.55, deck = -0.66, a_side = 0.95, c_side = -0.50, pillars = { 0.0 } },
   belt = { { -1, 1.12 }, { -0.95, 1.14 }, { -0.2, 1.14 }, { 0.5, 1.10 }, { 0.9, 1.04 }, { 1, 0.90 } },
   roof_drop = { 0.02, 0.02 }, roof_arch = 0.01, bl_exp = 1.0, roof_w = { 0.84, 0.82 },
@@ -542,6 +768,60 @@ S.pickup = function() return kit.profile{
   color = { 0.14, 0.30, 0.20 },
   windows = { side = { edge = 1.5, corner = 1.5 }, windshield = { edge = 1.2, corner = 1.0 }, back = { edge = 2, corner = 2 } },
   post = function(B, ctx) kit.tub(B, ctx, -2.70, -0.74, 0.48, "bed") end } end
+
+-- THE CITY BUS (Glenn likes the classic one: "I do like how the city bus's low poly style looks"): its box, its flat
+-- face with the windscreen in it, the long run of side panes between pillars, the destination sign over the
+-- windscreen, and the saloon -- the cab, the seat pairs either side of the aisle, the doors, the stanchions -- seen
+-- through clear glass.
+S.bus = function()
+  local L = 11.40
+  local half = L * 0.5
+  local pillars = {}
+  for z = half - 1.55, -half + 0.9, -1.30 do pillars[#pillars + 1] = z end
+  return kit.profile{
+    name = "bus", L = L, W = 2.55, H = 3.20, clear = 0.30, r = 0.50, fo = 2.60, ro = 3.10, wheel_w = 0.30,
+    glass = { cowl = half + 0.2, a_top = half + 0.1, c_top = -half - 0.1, deck = -half - 0.2,
+              a_side = half - 0.30, c_side = -half + 0.45, pillars = pillars, pillar_half = 0.06 },
+    belt = { { -1, 1.05 }, { 1, 1.05 } }, roof_drop = { 0.0, 0.0 }, roof_arch = 0.02, roof_w = { 0.92, 0.92 },
+    glass_w = 0.98, taper = { 0.02, 0.02, 0.25 }, tuck = 0.04, arch_gap = 0.06, step = 0.5,
+    radii = { bottom = 0.04, side = 0.05, shoulder = 0.04, glass = 0.03, roof = 0.14 },
+    lamp_y = { 0.48, 0.62 }, tail_y = { 0.55, 0.85 }, grille = false, cap_crease = 2.0,
+    lens = { head_x = 0.72, head_w = 0.28, tail_x = 0.80, tail_w = 0.22 },
+    front_window = { 0.95, 2.85 }, rear_window = { 1.70, 2.85 },
+    windows = { side = { edge = 2.5, corner = 3, gasket = 0.03 }, windshield = { edge = 2.5, corner = 3, gasket = 0.04 },
+                back = { edge = 2.5, corner = 3 } },
+    interior = false, truck_seating = true,
+    -- TINTED saloon glass (Glenn, 2026-11-08: "tint the bus windows a bit darker ... you can see straight through"):
+    -- ~60% of the view through, against a car's ~90% (mesh.frag's glass filter: 1 - 0.4 x opacity)
+    glass_opacity = 0.95,
+    saloon = { floor_y = 0.36, seat_color = { 0.12, 0.18, 0.42 }, trim_color = { 0.55, 0.55, 0.52 } },
+    sign = { 0, 2.98, half + 0.03 },
+    -- (Glenn, 2026-11-06: "an exterior facing display that shows it and an interior facing display that shows the
+    -- stop that you're heading towards next"): over the back window, in the kerb-side pane behind the front door
+    -- (x > 0, the driver's left: the city drives on the left), and hung from the ceiling behind the cab
+    signs = { { "dest_sign_rear", { 0, 2.98, -half - 0.03 } },
+              { "dest_sign_side", { 1.17, 2.55, half - 3.5 } },
+              { "stop_display", { 0, 2.78, half - 1.05 } } },
+    color = { 0.86, 0.62, 0.08 },
+    -- the housings behind the next-stop board and the side one (each board is lit both ways; its back would read
+    -- mirrored through the windscreen, or from the saloon)
+    extras = function(car)
+      car.polys[#car.polys + 1] = kit.tilted_box({ 1.08, 0.26, 0.06 }, { 0, 2.78, half - 1.05 + 0.036 }, 0, "dash")
+      car.polys[#car.polys + 1] = kit.tilted_box({ 0.06, 0.26, 1.08 }, { 1.17 - 0.036, 2.55, half - 3.5 }, 0, "dash")
+      -- ...and behind the front and rear boards (Glenn: "the exterior facing sign is visible backwards from the
+      -- inside"): a backing between each board and the glass
+      car.polys[#car.polys + 1] = kit.tilted_box({ 2.06, 0.24, 0.02 }, { 0, 2.98, half + 0.015 }, 0, "dash")
+      car.polys[#car.polys + 1] = kit.tilted_box({ 2.06, 0.24, 0.02 }, { 0, 2.98, -half - 0.015 }, 0, "dash")
+    end,
+  } end
+
+-- THE STANDING-ROOM BUS (Glenn, 2026-11-06: "one where it's all seats and one where they're standing room similar to
+-- what you have done for the local train"): the same bus, benches along the walls and the aisle to stand in
+S.bus_standing = function()
+  local P = S.bus()
+  P.saloon.layout = "standing"
+  return P
+end
 
 S.step_van = function() return kit.profile{
   name = "step_van", cabin_back = 1.25, rear_seat = false, truck_seating = true, cargo = true, hip_back = 0.95, L = 6.30, W = 2.30, H = 2.85, clear = 0.30, r = 0.42, fo = 0.85, ro = 1.35,
@@ -674,7 +954,8 @@ local function semi(trailer)
   local frameEnd = -5.35
   local fifthZ = (zD1 + zD2) * 0.5 + 0.3
   local P = kit.profile{
-    name = "semi", L = L, W = W, H = 3.95, clear = 0.45, r = r, fo = 2.2 - zF, ro = 0.0, axles = { zF },
+    name = "semi", panels = false, L = L, W = W, H = 3.95,   -- (its doors wait on the articulated rig, #189)
+    clear = 0.45, r = r, fo = 2.2 - zF, ro = 0.0, axles = { zF },
     glass = { cowl = 0.05, a_top = -0.40, c_top = -3.0, deck = -3.1, a_side = -0.45, c_side = -1.25, pillars = {} },
     belt = { { -1, 1.95 }, { -0.1, 1.95 }, { 0.02, 1.92 }, { 0.3, 1.78 }, { 0.9, 1.62 }, { 1, 1.40 } },
     roof_keys = { { -2.2, 3.90 }, { -1.3, 3.92 }, { -0.95, 3.35 }, { -0.60, 2.95 }, { -0.40, 2.92 } },
@@ -910,10 +1191,34 @@ function kit.build(P, level, opts)
   local S = kit.detail(level > 0 and B:subdivide(level) or B:copy(), P)
   local lo, hi = S:bounds()
   -- extras (boxes, trailer, sign) join before the centring, in ground space
-  local car = { polys = {}, height = hi[2] }
+  local car = { polys = {}, height = hi[2], coarse = opts.coarse }
   kit.lamps(P, car, S)
   local cabinPolys, hip, rearHip = {}, nil, nil
   if P.interior ~= false then cabinPolys, hip, rearHip = kit.interior(P, S) end
+  -- A BUS's SALOON (P.saloon, the cabin furniture's bus layout, mesh.cabin_interior): the hollow from just behind the
+  -- face to just ahead of the tail, its riders' seats and the doors they step off from
+  local saloon = nil
+  if P.saloon then
+    local half = P.length * 0.5
+    local sp = P.saloon
+    saloon = mesh.cabin_interior{ front_z = half - (sp.front or 0.35), rear_z = -half + (sp.rear or 0.30),
+                                  half_width = P.width * 0.5 - (sp.wall or 0.10), floor_y = sp.floor_y,
+                                  roof_y = P.height - (sp.roof or 0.18), rows = 0, seat_pitch = sp.pitch or 0.80,
+                                  hip_height = sp.hip or 0.45, seat_color = sp.seat_color, trim_color = sp.trim_color,
+                                  standing = sp.layout == "standing" }
+  end
+  -- A BUS's INSIDE (Glenn: "I am able to see inside of it and right out through the roof"): its painted shell, offset
+  -- in and turned to face the saloon, as a car's headliner and door cards are -- the shell is one-sided, and from in
+  -- the saloon (or a camera that clips in) the roof and walls were not there
+  if saloon then
+    local floorY = P.saloon.floor_y or 0.36
+    local sel = S:select{ mat = "body", where = function(c) return c[2] > floorY + 0.05 end }
+    if #sel > 0 then
+      local Lnr = S:extract(sel, -0.05, true)
+      Lnr:assign(Lnr:select{}, { mat = "liner" })
+      car.polys[#car.polys + 1] = Lnr
+    end
+  end
   if P.extras then P.extras(car) end
   for _, x in ipairs(car.polys) do S:append(x) end
   lo, hi = S:bounds()
@@ -922,13 +1227,50 @@ function kit.build(P, level, opts)
   S:translate{ 0, -cy, -cz }
   -- FACETED (Glenn: "I do like how the city bus's low poly style looks"): at level 0 every facet is flat
   -- shaded; a subdivided body smooths within 40 degrees
-  local parts = S:to_parts{ autosmooth = level > 0 and 40 or 8 }
+  local smoothing = level > 0 and 40 or 8
+  local parts, panels = nil, nil
+  if opts.panels then
+    -- THE MOVING PANELS (ADR-0352), each its own meshes and its hinge; the body is what is left. Glenn: "some doors
+    -- and hoods seem one sided and have no thickness" -- each panel's skin gets its back and its edges (painted, as a
+    -- real door's shut face is), and the body round each opening its jamb, so an open door shows two solid edges.
+    local names, sels, glassy = {}, {}, {}
+    for _, f in ipairs(S:select{ mat = "glass" }) do glassy[f] = true end
+    local bodyFace = {}
+    for _, f in ipairs(S:select{ panel = "body" }) do bodyFace[f] = true end
+    local function solid(sel) local out = {} for _, f in ipairs(sel) do if not glassy[f] then out[#out + 1] = f end end return out end
+    for _, name in ipairs(S:panels()) do
+      if name ~= "body" then names[#names + 1] = name; sels[name] = S:select{ panel = name } end
+    end
+    local bounds, thick = {}, {}
+    for _, name in ipairs(names) do
+      local lo2, hi2 = S:bounds(sels[name])
+      bounds[name] = { lo2, hi2 }
+      local t = name:sub(1, 5) == "door_" and 0.06 or 0.035
+      local skin = solid(sels[name])
+      local jamb = {}
+      for _, f in ipairs(S:ring(sels[name])) do if bodyFace[f] and not glassy[f] then jamb[#jamb + 1] = f end end
+      thick[#thick + 1] = { skin, t }
+      thick[#thick + 1] = { jamb, t }
+    end
+    for _, th in ipairs(thick) do if #th[1] > 0 then S:append(S:solidify(th[1], th[2], "body")) end end
+    parts = S:to_parts{ autosmooth = smoothing, panel = "body" }
+    panels = {}
+    for _, name in ipairs(names) do
+      local lo2, hi2 = bounds[name][1], bounds[name][2]
+      panels[name] = { parts = S:to_parts{ autosmooth = smoothing, panel = name }, hinge = kit.hinge(name, lo2, hi2),
+                       lo = lo2, hi = hi2 }
+    end
+  else
+    parts = S:to_parts{ autosmooth = smoothing }
+  end
   local cabin = nil
   if #cabinPolys > 0 then
     local I = cabinPolys[1]
     for i = 2, #cabinPolys do I:append(cabinPolys[i]) end
     I:translate{ 0, -cy, -cz }
-    cabin = I:to_parts{ autosmooth = 8 }
+    -- a door's card (the liner cast off its own panel) rides the door
+    cabin = I:to_parts{ autosmooth = 8, panel = panels and "body" or nil }
+    for name, pn in pairs(panels or {}) do pn.cabin = I:to_parts{ autosmooth = 8, panel = name } end
   end
   -- wheels: round, at the axles, just inside the body sides
   local r = P.wheel_r
@@ -960,11 +1302,69 @@ function kit.build(P, level, opts)
     local seatZ = (g.cowl or 0) - 1.15
     seat = { -P.width * 0.22, P.bottom(seatZ) + 0.39 - cy, seatZ - cz }
   end
-  return { parts = parts, wheels = wheels, size = { hi[1] - lo[1], hi[2], hi[3] - lo[3] }, lift = cy,
+  local function shifted(p) return { p[1], p[2] - cy, p[3] - cz } end
+  if saloon then
+    hip = nil
+    seat = shifted(saloon.driver_seat)
+  end
+  if P.sign then lights[#lights + 1] = { name = "dest_sign", pos = shifted(P.sign) } end
+  -- the bus's other boards (city_render: the destination again on the back and the kerb side, the next stop inside)
+  for _, b in ipairs(P.signs or {}) do lights[#lights + 1] = { name = b[1], pos = shifted(b[2]) } end
+  local seats, doors = nil, nil
+  if saloon then
+    seats, doors = {}, {}
+    for i, q in ipairs(saloon.seats) do seats[i] = shifted(q) end
+    for i, q in ipairs(saloon.doors) do doors[i] = shifted(q) end
+  end
+  -- ITS CARGO SPACE (ADR-0358): the box things are laid in, chassis frame, from the panel that opens it -- the boot
+  -- under a trunk lid, the floor behind a hatch, a pickup's bed in front of its tailgate (open to the sky)
+  local cargo = nil
+  for _, name in ipairs({ "trunk", "hatch", "tailgate" }) do
+    local pn = panels and panels[name]
+    if pn and not cargo then
+      local lo2, hi2 = pn.lo, pn.hi
+      local x0, x1 = lo2[1] + 0.15, hi2[1] - 0.15
+      if name == "trunk" then
+        cargo = { lo = { x0, lo2[2] - 0.50, lo2[3] + 0.05 }, hi = { x1, lo2[2] - 0.05, hi2[3] - 0.05 }, panel = name }
+      elseif name == "hatch" then
+        cargo = { lo = { x0, lo2[2] + 0.05, lo2[3] + 0.10 }, hi = { x1, lo2[2] + 0.65, lo2[3] + 0.95 }, panel = name }
+      else
+        cargo = { lo = { x0 + 0.05, lo2[2] + 0.02, hi2[3] + 0.08 }, hi = { x1 - 0.05, lo2[2] + 0.50, hi2[3] + 1.90 } }
+      end
+    end
+  end
+  return { saloon = saloon and mesh.translate(saloon.mesh, { 0, -cy, -cz }) or nil, seats = seats, doors = doors, cargo = cargo,
+           parts = parts, wheels = wheels, size = { hi[1] - lo[1], hi[2], hi[3] - lo[3] }, lift = cy,
            length = hi[3] - lo[3], spare = spare, color = P.color, lights = lights, driver_seat = seat,
            -- the back bench's hip point (its middle), when the cabin has one: where a back-seat rider sits
            rear_hip = rearHip and { rearHip[1], rearHip[2] - cy, rearHip[3] - cz } or nil,
-           cabin = cabin }
+           cabin = cabin, panels = panels }
+end
+
+-- WHERE A PANEL HINGES, from its bounds (body-centre space: +z the nose, x > 0 the driver's left): a door on its
+-- front edge, outboard, swinging out; the hood on its back edge (at the windscreen), the front lifting; a trunk lid
+-- or a hatch on its front edge, the back lifting. { pivot, axis, open (degrees) }: a positive turn about `axis`
+-- (right-handed) opens it; `mass` (kg) is what it weighs once it comes off (ADR-0355).
+function kit.hinge(name, lo, hi)
+  local ym = 0.5 * (lo[2] + hi[2])
+  if name:sub(1, 5) == "door_" then
+    local left = name:sub(-2) == "_l"
+    return { pivot = { left and hi[1] or lo[1], ym, hi[3] }, axis = { 0, left and -1 or 1, 0 }, open = 65, mass = 22 }
+  elseif name == "hood" then
+    return { pivot = { 0, hi[2], lo[3] }, axis = { -1, 0, 0 }, open = 55, mass = 16 }
+  elseif name == "trunk" then
+    return { pivot = { 0, hi[2], hi[3] }, axis = { 1, 0, 0 }, open = 62, mass = 12 }
+  elseif name == "hatch" then
+    return { pivot = { 0, hi[2], hi[3] }, axis = { 1, 0, 0 }, open = 80, mass = 18 }
+  elseif name:sub(1, 8) == "bus_door" then
+    -- a PLUG DOOR: it stands out from the side and slides back along it (a barely-there turn carries the progress;
+    -- `slide` is the travel at fully open, ADR-0356)
+    return { pivot = { hi[1], ym, hi[3] }, axis = { 0, 1, 0 }, open = 1, mass = 35,
+             slide = { 0.09, 0, -(hi[3] - lo[3]) * 0.95 } }
+  elseif name == "tailgate" then   -- on its foot, the top dropping back to lie flat
+    return { pivot = { 0, lo[2], hi[3] }, axis = { -1, 0, 0 }, open = 90, mass = 20 }
+  end
+  return { pivot = { 0, ym, 0.5 * (lo[3] + hi[3]) }, axis = { 0, 1, 0 }, open = 0 }
 end
 
 -- One wheel as poly parts: a rounded tyre (a lofted ring, subdivided), a dished rim and a hub, facing +x

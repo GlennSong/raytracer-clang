@@ -358,3 +358,23 @@ TEST_CASE(activities_lua_is_the_built_in_catalog) {
     CHECK(bad2.doString("activities = { x = { sites = { \"cafe\" } } } menus = { m = { { first = { { \"y\", 1 } } } } }", &err));
     CHECK(!loadActivityCatalog(bad2, c, &err));
 }
+
+// GETTING OUT OF A CAR'S WAY IS DATA (ADR-0355): people.lua's `people.dodge` reaches the catalog the walkers read,
+// equal to the rules' defaults, and an edit to it is what they get.
+TEST_CASE(people_lua_carries_the_dodge_tuning) {
+    ScriptVM vm;
+    std::string err;
+    const std::string src = readFile("assets/scripts/people.lua");
+    CHECK(vm.doString(src + "\npeople.dodge.reaction_hi = 0.9\npeople.dodge.freeze = 0", &err));
+    citysim::PeopleCatalog c;
+    CHECK(loadPeopleCatalog(vm, c, &err));
+    CHECK_APPROX(c.dodge.reactionHi, 0.9, 1e-12);
+    CHECK_APPROX(c.dodge.freezeShare, 0.0, 1e-12);
+    CHECK_APPROX(c.dodge.lookahead, engine::DodgeTuning().lookahead, 1e-12);
+    ScriptVM plain;
+    CHECK(plain.doString(src, &err));
+    citysim::PeopleCatalog d;
+    CHECK(loadPeopleCatalog(plain, d, &err));
+    CHECK_APPROX(d.dodge.freezeShare, engine::DodgeTuning().freezeShare, 1e-12);
+    CHECK_APPROX(d.dodge.throwCap, engine::DodgeTuning().throwCap, 1e-12);
+}

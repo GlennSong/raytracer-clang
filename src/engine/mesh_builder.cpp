@@ -2,6 +2,7 @@
 #include "mesh_builder.h"
 #include "../renderer/cube_faces.h"   // cubeFaceDirection — the cubemap convention
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <queue>
@@ -494,6 +495,67 @@ RenderMesh MeshBuilder::merged(const std::vector<RenderMesh>& parts) {
     return out;
 }
 
+void MeshBuilder::computeTangents(RenderMesh& mesh) {
+    std::vector<Vec3> tan(mesh.vertices.size(), Vec3(0, 0, 0));
+    std::vector<char> used(mesh.vertices.size(), 0);
+    auto tagged = [](const Vertex& v) { return v.u <= -999.0f; };
+    for (std::size_t f = 0; f + 2 < mesh.indices.size(); f += 3) {
+        const uint32_t a = mesh.indices[f], b = mesh.indices[f + 1], c = mesh.indices[f + 2];
+        const Vertex &A = mesh.vertices[a], &B = mesh.vertices[b], &C = mesh.vertices[c];
+        if (tagged(A) || tagged(B) || tagged(C)) continue;
+        const Vec3 e1 = B.position - A.position, e2 = C.position - A.position;
+        const double du1 = B.u - A.u, dv1 = B.v - A.v, du2 = C.u - A.u, dv2 = C.v - A.v;
+        const double det = du1 * dv2 - du2 * dv1;
+        if (std::fabs(det) < 1e-24) continue;
+        // dP/du, weighted by the face's area: det's sign carries the winding, the area is |e1 x e2| / 2
+        const Vec3 dPdu = (e1 * dv2 - e2 * dv1) * (1.0 / det);
+        const double w = 0.5 * cross(e1, e2).length();
+        for (uint32_t v : {a, b, c}) { tan[v] = tan[v] + dPdu * w; used[v] = 1; }
+    }
+    for (std::size_t i = 0; i < mesh.vertices.size(); ++i) {
+        if (!used[i]) continue;
+        Vertex& v = mesh.vertices[i];
+        Vec3 t = tan[i] - v.normal * dot(v.normal, tan[i]);
+        if (t.lengthSquared() < 1e-24) t = cross(std::fabs(v.normal.x) < 0.6 ? Vec3(1, 0, 0) : Vec3(0, 1, 0), v.normal);
+        if (t.lengthSquared() > 1e-24) v.tangent = normalize(t);
+    }
+}
+
+void MeshBuilder::transferNormals(RenderMesh& dst, const RenderMesh& src, double radius) {
+    if (src.vertices.empty() || radius <= 0) return;
+    // the source's vertices in a hash grid of `radius` cells: a query reads its own cell and the 26 round it
+    const double cell = radius;
+    auto key = [cell](const Vec3& p) {
+        return std::array<long long, 3>{static_cast<long long>(std::floor(p.x / cell)),
+                                        static_cast<long long>(std::floor(p.y / cell)),
+                                        static_cast<long long>(std::floor(p.z / cell))};
+    };
+    std::map<std::array<long long, 3>, std::vector<uint32_t>> grid;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(src.vertices.size()); ++i) grid[key(src.vertices[i].position)].push_back(i);
+    const double r2 = radius * radius;
+    for (Vertex& v : dst.vertices) {
+        const std::array<long long, 3> k = key(v.position);
+        double best = 1e30;
+        const Vertex* pick = nullptr;
+        for (long long dx = -1; dx <= 1; ++dx)
+            for (long long dy = -1; dy <= 1; ++dy)
+                for (long long dz = -1; dz <= 1; ++dz) {
+                    const auto it = grid.find({k[0] + dx, k[1] + dy, k[2] + dz});
+                    if (it == grid.end()) continue;
+                    for (uint32_t i : it->second) {
+                        const Vertex& s = src.vertices[i];
+                        const Vec3 d = s.position - v.position;
+                        const double d2 = dot(d, d);
+                        if (d2 > r2) continue;
+                        // near and facing the same way: distance as a share of the radius, plus the turn between them
+                        const double score = std::sqrt(d2) / radius + (1.0 - dot(s.normal, v.normal)) * 2.0;
+                        if (score < best) { best = score; pick = &s; }
+                    }
+                }
+        if (pick && dot(pick->normal, v.normal) > 0.0) v.normal = pick->normal;
+    }
+}
+
 void MeshBuilder::recomputeNormals(RenderMesh& mesh) {
     for (Vertex& v : mesh.vertices) v.normal = Vec3(0, 0, 0);
     for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
@@ -763,6 +825,16 @@ void MeshBuilder::bakeHeightColor(RenderMesh& mesh, const Vec3& low, const Vec3&
     for (Vertex& v : mesh.vertices) {
         double t = range > 1e-6 ? (v.position.y - minY) / range : 0.0;
         v.color = low + (high - low) * t;
+    }
+}
+
+void MeshBuilder::projectUV(RenderMesh& mesh, std::size_t from, const Vec3& origin, const Vec3& uAxis, const Vec3& vAxis) {
+    const Vec3 t = uAxis.lengthSquared() > 1e-24 ? normalize(uAxis) : Vec3(1, 0, 0);
+    for (std::size_t i = from; i < mesh.vertices.size(); ++i) {
+        Vertex& v = mesh.vertices[i];
+        v.u = static_cast<float>(dot(v.position - origin, uAxis));
+        v.v = static_cast<float>(dot(v.position - origin, vAxis));
+        v.tangent = t;
     }
 }
 

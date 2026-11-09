@@ -39,6 +39,9 @@ int WalkerRagdolls::knock(World& world, engine::AssetManager& assets, PhysicsWor
         }
     }
     if (pick < 0) return -1;
+    // (never from a pose gone bad: a ragdoll at NaN hangs Jolt's swing-twist solver)
+    for (const Real c : {centre.x, centre.y, centre.z, velocity.x, velocity.y, velocity.z})
+        if (!std::isfinite(c)) return -1;
     Slot& s = slots_[static_cast<std::size_t>(pick)];
     if (s.body != PhysicsWorld::INVALID_RAGDOLL) pw.removeRagdoll(s.body);
     assets_ = &assets;

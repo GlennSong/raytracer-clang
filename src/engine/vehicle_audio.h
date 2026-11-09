@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace engine {
 
@@ -84,6 +85,32 @@ inline float engineWobble(Real seconds, Real phase, Real revFraction) {
     const Real a = std::sin((seconds * Real(7.3) + phase) * tau);
     const Real b = std::sin((seconds * Real(2.7) + phase * Real(1.7)) * tau);
     return static_cast<float>(Real(1) + depth * (Real(0.62) * a + Real(0.38) * b));
+}
+
+// A HURT ENGINE (ADR-0355; Glenn: "if the engine is busted we should have a different engine sound"): `health` 1 runs
+// clean; below 0.6 it runs rough -- its note lurching (pitch) and missing beats (a misfire: the voice all but drops for
+// an eighth of a second, on a cylinder's whim), worse as it goes. `seconds` the sim clock, `phase` the car's own.
+struct EngineRough {
+    float pitch = 1.0f, gain = 1.0f;
+};
+// (`below`, `wobble` and `misfire` are the car's own: vehicles.lua KIT_DAMAGE `rough`)
+inline EngineRough engineRough(Real seconds, Real phase, Real health, Real below = 0.6, Real wobble = 0.07,
+                               Real misfire = 0.5) {
+    EngineRough r;
+    if (below <= 0) return r;
+    const Real bad = std::min(Real(1), std::max(Real(0), (below - health) / below));
+    if (bad <= 0) return r;
+    const Real tau = Real(6.283185307179586);
+    r.pitch = static_cast<float>(Real(1) + bad * wobble * std::sin((seconds * Real(3.1) + phase) * tau) +
+                                 bad * wobble * Real(0.43) * std::sin((seconds * Real(11.0) + phase * Real(2.3)) * tau));
+    // the misfire: each eighth of a second, a beat missed with a chance growing to one in two
+    const uint64_t slot = static_cast<uint64_t>(std::floor(seconds * 8.0 + phase * 5.0));
+    uint64_t h = slot * 0x9E3779B97F4A7C15ull + static_cast<uint64_t>(phase * 1000.0);
+    h ^= h >> 31;
+    h *= 0xBF58476D1CE4E5B9ull;
+    h ^= h >> 29;
+    if (static_cast<Real>(h % 1000) / 1000.0 < bad * misfire) r.gain = 0.15f;
+    return r;
 }
 
 inline EngineSound engineSoundFor(Real speedMps, Real throttle01, bool running) {

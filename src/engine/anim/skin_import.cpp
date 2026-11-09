@@ -1,6 +1,7 @@
 #include "skin_import.h"
 
 #include "../../log.h"
+#include "../mesh_builder.h"   // paint
 
 // tinygltf's implementation TU lives in model_importer.cpp; this file only
 // consumes the header (same NO_INCLUDE_JSON arrangement).
@@ -289,7 +290,7 @@ SkinnedModel loadSkinnedModel(const std::string& path) {
                                      pbr.baseColorFactor[1],
                                      pbr.baseColorFactor[2]);
             }
-            for (auto& v : out.bind.vertices) v.color = out.baseColor;
+            MeshBuilder::paint(out.bind, out.baseColor);
 
             result.meshes.push_back(std::move(out));
         }

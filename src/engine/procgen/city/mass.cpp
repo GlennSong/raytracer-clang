@@ -48,10 +48,7 @@ void loftSlices(RenderMesh& out, const std::vector<Poly2>& outlines, const std::
     if (cap && outlines[n - 1].size() >= 3) {
         const Poly2& top = outlines[n - 1];
         const Real y = heights[n - 1];
-        for (const auto& tri : triangulateIndices(top, {})) {
-            const Vec2 &a = top[static_cast<std::size_t>(tri[0])], &b = top[static_cast<std::size_t>(tri[1])], &c = top[static_cast<std::size_t>(tri[2])];
-            MeshBuilder::emitTri(out, Vec3(a.x, y, a.y), Vec3(b.x, y, b.y), Vec3(c.x, y, c.y), Vec3(0, 1, 0), colour);
-        }
+        MeshBuilder::emitFill(out, MeshFrame::level(y), {top, true}, colour);
     }
 }
 

@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "gbuffer.glsl"
 // World-space SSAO (ADR-0057, Phase 5b). Reconstructs world position from the
 // depth buffer via invViewProjection, reads the world normal G-buffer, samples a
 // cosine-weighted hemisphere kernel, and compares each sample's camera distance
@@ -70,7 +72,7 @@ void main() {
     if (depth <= 0.0) { outAO = 1.0; return; }   // background (reverse-Z far = 0)
 
     vec3 P = reconstructWorld(inUV, depth);
-    vec3 N = normalize(texture(normalTex, inUV).rgb * 2.0 - 1.0);
+    vec3 N = gbufNormal(texture(normalTex, inUV));
 
     // Per-pixel rotation of the kernel basis. Interleaved gradient noise keyed on
     // the (half-res) fragment coordinate gives a fine, near-uniform dither that

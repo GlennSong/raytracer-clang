@@ -73,6 +73,84 @@ std::vector<float> impact(uint32_t sampleRate, uint32_t seed) {
     return frames;
 }
 
+std::vector<float> panelShut(PanelKind kind, uint32_t sampleRate, uint32_t seed) {
+    // the body: a low damped resonance (the panel and the car it closes on), its pitch and decay by the panel; a hood
+    // adds a ring of thin steel, a door a little rattle of its glass
+    struct Body { double hz, decay, length, ring, ringHz; };
+    const Body b = kind == PanelKind::Door ? Body{95.0, 26.0, 0.32, 0.10, 760.0}
+                 : kind == PanelKind::Hood ? Body{68.0, 15.0, 0.55, 0.32, 410.0}
+                                           : Body{120.0, 30.0, 0.30, 0.16, 620.0};
+    const auto count = static_cast<size_t>(sampleRate * b.length);
+    std::vector<float> frames(count);
+    ProcRng rng(seed * 7919u + static_cast<uint32_t>(kind));
+    ProcUniform<double> noise(-1.0, 1.0);
+    ProcUniform<double> jitter(0.92, 1.08);
+    const double hz = b.hz * jitter(rng), ringHz = b.ringHz * jitter(rng);
+    double lp = 0.0;
+    for (size_t i = 0; i < count; i++) {
+        const double t = static_cast<double>(i) / sampleRate;
+        // the thump: a falling pitch (the panel flexing home) under a quick decay
+        const double thump = std::sin(TAU * hz * t * (1.0 + 0.6 * std::exp(-t * 40.0))) * std::exp(-t * b.decay);
+        const double second = 0.35 * std::sin(TAU * hz * 2.3 * t) * std::exp(-t * b.decay * 1.8);
+        // the latch: a sharp bright click right at the start
+        const double n = noise(rng);
+        lp += (n - lp) * 0.6;
+        const double click = 0.55 * (n - lp) * std::exp(-t * 900.0);
+        // the panel's own ring
+        const double ring = b.ring * std::sin(TAU * ringHz * t) * std::exp(-t * 9.0);
+        frames[i] = static_cast<float>(thump + second + click + ring);
+    }
+    normalize(frames, 0.85f);
+    return frames;
+}
+
+std::vector<float> panelOpen(uint32_t sampleRate, uint32_t seed) {
+    const auto count = static_cast<size_t>(sampleRate * 0.16);
+    std::vector<float> frames(count);
+    ProcRng rng(seed * 104729u);
+    ProcUniform<double> noise(-1.0, 1.0);
+    double lp = 0.0;
+    for (size_t i = 0; i < count; i++) {
+        const double t = static_cast<double>(i) / sampleRate;
+        const double n = noise(rng);
+        lp += (n - lp) * 0.5;
+        const double click = (n - lp) * std::exp(-t * 700.0);                      // the catch letting go
+        const double clunk = 0.5 * std::sin(TAU * 180.0 * t) * std::exp(-t * 45.0);  // the panel dropping onto its stop
+        const double late = t > 0.03 ? 0.4 * (n - lp) * std::exp(-(t - 0.03) * 900.0) : 0.0;   // the second pawl
+        frames[i] = static_cast<float>(click + clunk + late);
+    }
+    normalize(frames, 0.6f);
+    return frames;
+}
+
+std::vector<float> starterNoCatch(uint32_t sampleRate, uint32_t seed) {
+    const double length = 1.4;
+    const auto count = static_cast<size_t>(sampleRate * length);
+    std::vector<float> frames(count);
+    ProcRng rng(seed * 15485863u);
+    ProcUniform<double> noise(-1.0, 1.0);
+    double phase = 0.0, lp = 0.0;
+    for (size_t i = 0; i < count; i++) {
+        const double t = static_cast<double>(i) / sampleRate;
+        // the engine turning over: compression beats, ~5.5 a second slowing to ~4 as the battery sags
+        const double rate = 5.5 - 1.1 * (t / length);
+        phase += rate / sampleRate;
+        const double beat = 0.5 - 0.5 * std::cos(TAU * phase);          // 0..1 each stroke
+        const double chug = std::pow(beat, 3.0);
+        // the starter motor's whine, pitched by the load (dipping on each stroke)
+        const double whineHz = 520.0 - 90.0 * chug - 60.0 * (t / length);
+        const double whine = 0.22 * std::sin(TAU * whineHz * t) + 0.08 * std::sin(TAU * whineHz * 2.0 * t);
+        const double n = noise(rng);
+        lp += (n - lp) * 0.08;
+        const double body = 0.9 * lp * 3.0 * chug + 0.35 * std::sin(TAU * 55.0 * t) * chug;
+        // in at the start, out at the end
+        const double env = std::min(1.0, t / 0.05) * std::min(1.0, (length - t) / 0.12);
+        frames[i] = static_cast<float>((whine + body) * env);
+    }
+    normalize(frames, 0.7f);
+    return frames;
+}
+
 std::vector<float> horn(uint32_t sampleRate, uint32_t seed) {
     // One exact period. Loop-cleanliness comes from quantizing every partial to
     // an integer cycle count over `count` samples — the nominal frequencies are

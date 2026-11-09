@@ -1,11 +1,23 @@
 #include "building_collider.h"
 
-#include "road_mesh.h"       // triangulatePolygon
+#include "road_mesh.h"
+#include "../../mesh_builder.h"   // triangulate
 #include "shape_grammar.h"   // colliderTiers
-#include "triangulate.h"     // triangulateIndices (a cap with holes)
 #include <algorithm>
 
 namespace engine {
+
+namespace {
+// A flat CAP over a plan (and its holes) at height y, sharing its corners: a roof, a floor, a deck, a roof item's top.
+// One-sided as wound; mirrorTriangles makes a collider two-sided.
+void planCap(std::vector<Vec3>& V, std::vector<uint32_t>& I, const Poly2& plan, const std::vector<Poly2>& holes, Real y) {
+    const uint32_t s = static_cast<uint32_t>(V.size());
+    for (const Vec2& q : plan) V.push_back(Vec3(q.x, y, q.y));
+    for (const Poly2& hole : holes) for (const Vec2& q : hole) V.push_back(Vec3(q.x, y, q.y));
+    for (const std::array<int, 3>& tri : MeshBuilder::triangulate(plan, holes))
+        I.insert(I.end(), {s + static_cast<uint32_t>(tri[0]), s + static_cast<uint32_t>(tri[1]), s + static_cast<uint32_t>(tri[2])});
+}
+}  // namespace
 
 void appendBuildingPrism(std::vector<Vec3>& V, std::vector<uint32_t>& I,
                          const Poly2& plan, Real base, Real top, Real floorY,
@@ -64,24 +76,9 @@ void appendBuildingPrism(std::vector<Vec3>& V, std::vector<uint32_t>& I,
     // Roof cap (as before) and the FLOOR CAP (the missing collider: the
     // drawn Ground slab had no physics, so anything inside stood on the
     // terrain pad 0.5 m below the floor it could see).
-    for (const Real y : {top, floorY}) {
-        // The roof cap keeps its holes (the stairs rise through them); the floor cap is whole.
-        if (y == top && !roofHoles.empty()) {
-            const uint32_t s = static_cast<uint32_t>(V.size());
-            for (const Vec2& q : plan) V.push_back(Vec3(q.x, y, q.y));
-            for (const Poly2& hole : roofHoles) for (const Vec2& q : hole) V.push_back(Vec3(q.x, y, q.y));
-            for (const auto& tri : triangulateIndices(plan, roofHoles))
-                I.insert(I.end(), {s + static_cast<uint32_t>(tri[0]), s + static_cast<uint32_t>(tri[1]),
-                                   s + static_cast<uint32_t>(tri[2])});
-            continue;
-        }
-        for (const auto& tri : triangulatePolygon(plan)) {
-            const uint32_t s = static_cast<uint32_t>(V.size());
-            for (int k = 0; k < 3; ++k)
-                V.push_back(Vec3(plan[tri[k]].x, y, plan[tri[k]].y));
-            I.insert(I.end(), {s, s + 1, s + 2});
-        }
-    }
+    // The roof cap keeps its holes (the stairs rise through them); the floor cap is whole.
+    planCap(V, I, plan, roofHoles, top);
+    planCap(V, I, plan, {}, floorY);
     // Threshold step outside each door (tall plinths only).
     if (plinth > 0.3) {
         for (const DoorSpec& ds : doors) {
@@ -173,12 +170,7 @@ bool appendBuildingTiers(std::vector<Vec3>& V, std::vector<uint32_t>& I, const P
                 I.insert(I.end(), {s, s + 1, s + 2, s, s + 2, s + 3});
             }
             if (!ct.deck) continue;
-            const uint32_t s = static_cast<uint32_t>(V.size());
-            for (const Vec2& q : ct.plan) V.push_back(Vec3(q.x, baseY + ct.y1, q.y));
-            for (const Poly2& hole : holes) for (const Vec2& q : hole) V.push_back(Vec3(q.x, baseY + ct.y1, q.y));
-            for (const auto& tri : triangulateIndices(ct.plan, holes))
-                I.insert(I.end(), {s + static_cast<uint32_t>(tri[0]), s + static_cast<uint32_t>(tri[1]),
-                                   s + static_cast<uint32_t>(tri[2])});
+            planCap(V, I, ct.plan, holes, baseY + ct.y1);
         }
         // The parapet on the deck: a ring a walker meets at the edge (mirrorTriangles makes it two-sided) -- in
         // metre pieces, the ones under an overhanging tier above left out (they would wall its room).
@@ -237,10 +229,7 @@ void appendRoofItems(std::vector<Vec3>& V, std::vector<uint32_t>& I, const std::
         for (std::size_t i = 0; i < ri.footprint.size(); ++i)
             quad(ri.footprint[i], ri.footprint[(i + 1) % ri.footprint.size()], ri.y0, y1);
         if (ri.kind == RoofItem::Kind::Screen || ri.kind == RoofItem::Kind::Frame || ri.kind == RoofItem::Kind::BridgeWall) continue;   // a ring, open above
-        const uint32_t s = static_cast<uint32_t>(V.size());
-        for (const Vec2& q : ri.footprint) V.push_back(Vec3(q.x, y1, q.y));
-        for (const auto& tri : triangulateIndices(ri.footprint, {}))
-            I.insert(I.end(), {s + static_cast<uint32_t>(tri[0]), s + static_cast<uint32_t>(tri[1]), s + static_cast<uint32_t>(tri[2])});
+        planCap(V, I, ri.footprint, {}, y1);
     }
 }
 

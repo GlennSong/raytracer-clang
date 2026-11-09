@@ -7,6 +7,7 @@
 #include "../wind.h"
 #include "../weather_cycle.h"
 #include "../procgen/terrain_horizon.h"
+#include "../sky/sky_atmosphere.h"
 #include "../properties.h"
 #include "../control/control_commands.h"
 
@@ -89,7 +90,9 @@ struct SimHourQuery {
 // "Day / Night" in debug mode.
 // Write every NightGlow entity's emission for `ramp` (0 day .. 1 night) -- each entity once per ramp value, so one
 // that streamed in since the last change is lit too.
-void applyNightGlowRamp(World& world, Real ramp);
+// `perNit` (the physical sky, ADR-0369): a glow with real luminance is lit at nits x perNit in fullEmission's colour;
+// 0: every glow at its fullEmission.
+void applyNightGlowRamp(World& world, Real ramp, double perNit = 0.0);
 
 class DayNightSystem : public System {
 public:
@@ -220,6 +223,20 @@ private:
     void applyBeaconBlink(FrameContext& ctx);
     double blinkSeconds_ = 0.0;
     float nightAdapt_ = 1.0f;   // exposure / authored exposure this frame (1 by day, kNightAdapt at midnight)
+    // THE PHYSICAL SKY (ADR-0367; RT_SKY=physical): the atmosphere's tables (built from the level's scattering
+    // parameters, handed to the renderer once), and the last reading of the sky for the sun and the moon (taken again
+    // when either has moved or the camera has climbed)
+    void applyPhysicalSky(FrameContext& ctx, const DayNightState& st);
+    AtmosphereTables skyTables_;
+    bool skyTablesBuilt_ = false;
+    SkyReading sunReading_, moonReading_;
+    Vec3 readSunDir_{0, -2, 0}, readMoonDir_{0, -2, 0};
+    double readHeight_ = -1e9;
+    float readMoonTop_ = -1.0f;
+    Vec3 sunSH_[9], moonSH_[9];   // the sky's light on surfaces, per light (ADR-0371)
+    float autoExposure_ = -1.0f;   // the adapted exposure (ADR-0368); -1: not yet
+    double glowPerNit_ = 0.0;      // the physical sky's glows: emission per cd/m^2 (ADR-0369); 0: the old values
+    float lastDt_ = 0.0f;          // update's frame time, for the adaptation
 
     // The level's authored volumetric deck, captured on first sight: the
     // artistic knobs write ABSOLUTE values derived from this base each frame

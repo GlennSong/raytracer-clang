@@ -202,6 +202,27 @@ bool loadPeopleCatalog(ScriptVM& vm, citysim::PeopleCatalog& out, std::string* e
         std::string unknown;
         if (!shares(L, pt, "lodgers", bandNames, c.lodgers, unknown)) return bail("lodgers: no band `" + unknown + "`");
     }
+    // people.dodge (optional): getting out of a car's way (ADR-0355)
+    lua_getfield(L, pt, "dodge");
+    if (lua_istable(L, -1)) {
+        const int d = lua_gettop(L);
+        engine::DodgeTuning& k = c.dodge;
+        k.lookahead = numField(L, d, "lookahead", k.lookahead);
+        k.clearance = numField(L, d, "clearance", k.clearance);
+        k.minSpeed = numField(L, d, "min_speed", k.minSpeed);
+        k.reactionLo = numField(L, d, "reaction_lo", k.reactionLo);
+        k.reactionHi = numField(L, d, "reaction_hi", k.reactionHi);
+        k.freezeShare = numField(L, d, "freeze", k.freezeShare);
+        k.sprintLo = numField(L, d, "sprint_lo", k.sprintLo);
+        k.sprintHi = numField(L, d, "sprint_hi", k.sprintHi);
+        k.sprintFor = numField(L, d, "sprint_for", k.sprintFor);
+        k.diveBelow = numField(L, d, "dive_below", k.diveBelow);
+        k.diveBoost = numField(L, d, "dive_boost", k.diveBoost);
+        k.diveFor = numField(L, d, "dive_for", k.diveFor);
+        k.knockSpeed = numField(L, d, "knock_speed", k.knockSpeed);
+        k.throwCap = numField(L, d, "throw_cap", k.throwCap);
+    }
+    lua_pop(L, 1);
     lua_settop(L, base);
     if (const std::string wrong = c.check(); !wrong.empty()) return fail(err, "people.lua: " + wrong);
     out = std::move(c);

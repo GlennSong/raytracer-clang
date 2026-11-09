@@ -39,6 +39,12 @@ HeightRaster rasterizeHeights(const std::function<double(double, double)>& heigh
     return r;
 }
 
+HeightRaster rasterizeTerrain(const TerrainParams& params, uint32_t seed, double half, int size) {
+    const Noise noise(seed);
+    return rasterizeHeights([&](double x, double z) { return terrainHeight(params, noise, x, z); }, -half, -half,
+                            2.0 * half, size);
+}
+
 uint8_t HorizonMap::encode(double sinElev) {
     const double u = (sinElev - kEncodeLo) / (kEncodeHi - kEncodeLo);
     return static_cast<uint8_t>(std::lround(std::clamp(u, 0.0, 1.0) * 255.0));

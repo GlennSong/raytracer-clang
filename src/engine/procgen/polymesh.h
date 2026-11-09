@@ -37,12 +37,16 @@ struct PolyMesh {
         std::vector<int> v;
         int group = 0;
         int mat = 0;
+        int panel = 0;   // the moving part it belongs to (panels[]: "body", or a door, hood, trunk ...)
         Vec3 color{1, 1, 1};
     };
     std::vector<Vec3> pts;
     std::vector<Face> faces;
     std::vector<std::string> groups{"default"};
     std::vector<std::string> mats{"body"};
+    // PANELS (ADR-0352): a third face tag, beside group and material, that survives subdivision -- which part of
+    // a model a face moves with. Windows keep their groups; a door's glass is still glass, on the door panel.
+    std::vector<std::string> panels{"body"};
     std::map<std::pair<int, int>, float> creases;   // undirected (min, max) -> sharpness
     // VERTEX corners: a vertex with sharpness >= 1 keeps its place through that many subdivision levels
     // (the Catmull-Clark corner rule), fractional blends -- a window's corner stays a corner while the
@@ -53,6 +57,8 @@ struct PolyMesh {
     int matId(const std::string& name);
     int findGroup(const std::string& name) const;    // -1 if absent
     int findMat(const std::string& name) const;
+    int panelId(const std::string& name);            // adds if new
+    int findPanel(const std::string& name) const;
     float crease(int a, int b) const;
     void setCrease(int a, int b, float s);
     float corner(int v) const;
@@ -98,6 +104,13 @@ std::vector<int> insetRegion(PolyMesh& m, const std::vector<int>& sel, double am
 // (negative = inward) and, with `flip`, the winding reversed so the copy faces the other way. A cabin's
 // headliner and door cards are the body's own inside, offset in and flipped to face the cabin.
 PolyMesh extractOffset(const PolyMesh& m, const std::vector<int>& sel, double offset, bool flip);
+// THICKNESS for a skin (ADR-0352: a door, a hood, the body's side of the opening): the region's back -- its faces
+// offset `thickness` inward and turned to face in, in material `mat` -- and a wall along every edge of its outline
+// joining the skin to that back, all as a NEW poly to append. The walls face out of the region, so a door seen
+// edge-on is a solid slab.
+PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickness, const std::string& mat);
+// The faces outside `sel` that share a corner with it (one ring round the region).
+std::vector<int> ringAround(const PolyMesh& m, const std::vector<int>& sel);
 
 // Crease every edge on the outline of the region `sel` (edges with exactly one face in it).
 void creaseBorder(PolyMesh& m, const std::vector<int>& sel, float sharpness);
@@ -136,7 +149,10 @@ double signedVolume(const PolyMesh& m);  // > 0 for an outward-facing closed mes
 // Triangulate for the renderer: one RenderMesh per material, in the engine's winding. Normals are
 // smoothed across edges whose faces meet within `autosmoothDeg` and share a material, split elsewhere
 // (and at creases >= kInfCrease). UVs are box-projected at `uvScale` metres per tile; tangents follow.
-std::map<std::string, RenderMesh> toParts(const PolyMesh& m, double autosmoothDeg = 35.0, double uvScale = 1.0);
+// `panel` >= 0 emits only that panel's faces, its normals still averaged across the seam with its neighbours' so a
+// closed door shades as one with the body (-1: every face).
+std::map<std::string, RenderMesh> toParts(const PolyMesh& m, double autosmoothDeg = 35.0, double uvScale = 1.0,
+                                          int panel = -1);
 
 }  // namespace engine
 

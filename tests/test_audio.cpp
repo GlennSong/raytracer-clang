@@ -1,4 +1,5 @@
 #include "test_framework.h"
+#include "../src/engine/vehicle_audio.h"
 #include "../src/engine/audio/audio_engine.h"
 #include "../src/engine/audio/engine_voices.h"
 #include "../src/engine/components.h"
@@ -1207,4 +1208,43 @@ TEST_CASE(engine_voice_pool_voices_the_nearest_and_reclaims_the_gone) {
     for (int i = 0; i < 120; ++i) frame({});   // every car gone: two seconds of fading
     CHECK(audio.activeVoiceCount() == 0);
     pool.stopAll(audio);
+}
+
+// A CAR'S PANELS AND ITS STARTER (ADR-0355): each shut is a one-shot that starts loud (the latch) and dies away, a hood
+// longer and lower than a door; the open click is short; the dead starter runs well over a second. A hurt engine runs
+// rough (its pitch moves, it misfires) and a whole one does not.
+TEST_CASE(panel_shuts_open_clicks_and_a_dead_starter_sound_right) {
+    auto peak = [](const std::vector<float>& f, std::size_t a, std::size_t b) {
+        float p = 0;
+        for (std::size_t i = a; i < b && i < f.size(); ++i) p = std::max(p, std::fabs(f[i]));
+        return p;
+    };
+    const uint32_t r = 48000;
+    const std::vector<float> door = sfx::panelShut(sfx::PanelKind::Door, r, 1);
+    const std::vector<float> hood = sfx::panelShut(sfx::PanelKind::Hood, r, 1);
+    const std::vector<float> click = sfx::panelOpen(r, 1);
+    const std::vector<float> starter = sfx::starterNoCatch(r, 1);
+    CHECK(hood.size() > door.size());                                    // a hood rings on longer
+    CHECK(peak(door, 0, r / 20) > 0.5f);                                 // the slam is at the start...
+    CHECK(peak(door, door.size() - r / 20, door.size()) < 0.05f);        // ...and gone by the end
+    CHECK(click.size() < static_cast<std::size_t>(r) / 4);
+    CHECK(starter.size() > static_cast<std::size_t>(r));
+    bool clean = true;   // every sample of every one finite and within full scale
+    for (const std::vector<float>* f : {&door, &hood, &click, &starter})
+        for (float x : *f) clean = clean && std::isfinite(x) && std::fabs(x) <= 1.0f;
+    CHECK(clean);
+    // the engine
+    int misses = 0;
+    float lo = 2, hi = 0;
+    for (int i = 0; i < 400; ++i) {
+        const EngineRough healthy = engineRough(i * 0.01, 0.3, 1.0);
+        CHECK(healthy.pitch == 1.0f && healthy.gain == 1.0f);
+        const EngineRough hurt = engineRough(i * 0.01, 0.3, 0.1);
+        misses += hurt.gain < 1.0f;
+        lo = std::min(lo, hurt.pitch);
+        hi = std::max(hi, hurt.pitch);
+    }
+    std::printf("    [rough] a nearly dead engine: %d of 400 hundredths missing, pitch %.3f..%.3f\n", misses, lo, hi);
+    CHECK(misses > 60 && misses < 300);
+    CHECK(hi - lo > 0.08f);
 }

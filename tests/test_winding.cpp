@@ -31,7 +31,6 @@
 #include "../src/engine/procgen/grass.h"
 #include "../src/engine/procgen/planet.h"
 #include "../src/engine/procgen/terrain_lod.h"
-#include "../src/engine/procgen/vehicle/car_mesh.h"
 #include "../src/engine/procgen/vehicle/train_mesh.h"
 #include "../src/engine/procgen/vehicle/occupant.h"
 #include "../src/engine/anim/mannequin.h"
@@ -367,13 +366,6 @@ TEST_CASE(mesh_audit_vehicles_and_people) {
         printAudit(n.c_str(), a);
         total.add(a);
     };
-    {
-        const CarMesh car = buildCarMesh(defaultSedanParams());
-        Audit a;
-        for (const RenderMesh& m : car.parts) a.add(audit(m));
-        printAudit("buildCarMesh (sedan)", a);
-        total.add(a);
-    }
     for (const char* kind : {"intercity", "subway", "light_rail"}) {
         TrainBodySpec spec;
         spec.kind = kind;

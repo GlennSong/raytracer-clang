@@ -5,6 +5,8 @@
 #include "../physics/physics_world.h"   // PhysicsWorld::VehicleConfig
 #include "../player/seat_geometry.h"    // SeatGeometry
 #include "../world.h"                    // Entity, World
+#include "../vehicle_damage.h"            // DamageRule
+#include "../vehicle_fuel.h"              // FuelRule
 #include <memory>
 #include <string>
 #include <vector>
@@ -40,8 +42,30 @@ struct VehicleSpec {
         float roughness = 0.5f;
         float opacity = 1.0f;
         Vec3 emission{0, 0, 0};
+        int panel = -1;              // the moving panel it rides (panels[]), -1: fixed to the chassis
     };
     std::vector<Part> parts;
+    // THE MOVING PANELS (ADR-0352): a door, the hood, the trunk -- each turning about its hinge (chassis frame; a
+    // positive turn of `openDeg` about `axis` opens it). Parts name the panel they ride.
+    struct Panel {
+        std::string name;
+        Vec3 pivot{0, 0, 0};
+        Vec3 axis{0, 1, 0};
+        float openDeg = 0.0f;
+        Vec3 centre{0, 0, 0};        // the panel's middle (where its E prompt sits)
+        Vec3 lo{0, 0, 0}, hi{0, 0, 0};   // its box (chassis frame): what a touch is measured against
+        float mass = 20.0f;              // kg, once it comes off
+        Vec3 slide{0, 0, 0};             // chassis-frame travel at fully open (a bus's plug door slides; ADR-0356)
+    };
+    std::vector<Panel> panels;
+    // its damage tuning (ADR-0355): the spec's `damage` table (vehicles.lua KIT_DAMAGE), else the defaults
+    DamageRule damage;
+    // its tank (ADR-0357): the spec's `fuel` table (vehicles.lua KIT_FUEL), else the defaults
+    FuelRule fuel;
+    // its cargo space (ADR-0358): the spec's `cargo = { lo = {x,y,z}, hi = {x,y,z}, panel = "trunk" }`, chassis frame
+    bool hasCargo = false;
+    Vec3 cargoLo{0, 0, 0}, cargoHi{0, 0, 0};
+    std::string cargoPanel;   // empty: open to the sky
 
     // Named lamp mount points from the recipe's `lights` array — the same marker
     // format citysim's traffic already uses, so one generator feeds both. Names

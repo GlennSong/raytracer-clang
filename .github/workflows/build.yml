@@ -85,4 +85,6 @@ jobs:
       # The script extracts the runtime's own concatenation list from
       # metal_renderer.mm and offline-compiles the identical result.
       - name: Offline-compile the Metal shader library
+        # (even when a test failed: the shaders are their own check, and a red level case hid them)
+        if: ${{ !cancelled() }}
         run: bash tools/check-metal-shaders.sh

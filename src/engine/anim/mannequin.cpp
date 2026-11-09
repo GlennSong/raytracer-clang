@@ -15,7 +15,7 @@ const Vec3 PANTS(0.28, 0.28, 0.34);
 const Vec3 SHOES(0.16, 0.13, 0.11);
 
 void tint(RenderMesh& mesh, const Vec3& color) {
-    for (auto& v : mesh.vertices) v.color = color;
+    MeshBuilder::paint(mesh, color);
 }
 
 // A capsule whose cylinder spans from the joint origin ALONG `axis` for

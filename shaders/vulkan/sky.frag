@@ -6,43 +6,7 @@
 // encodes on store. Without the Phase 5 tone map the bright sun disc clips to
 // white — expected until the composite tonemap lands.
 
-struct Light {
-    vec4 positionIntensity;
-    vec4 directionInner;
-    vec4 colorOuter;
-    vec4 typeRange;
-};
-layout(set = 0, binding = 0) uniform Globals {
-    mat4  viewProjection;
-    mat4  view;
-    mat4  invViewProjection;
-    mat4  cascadeVP[4];
-    vec4  cameraPosition;
-    vec4  ambient;
-    vec4  cascadeSplit;
-    ivec4 counts;
-    vec4  shadowParams;
-    vec4  skySunDir;       // xyz dir, w disc intensity (0 behind a ridge)
-    vec4  skySunColor;     // rgb, w the WIDE aureole (softened behind a ridge)
-    vec4  skyZenith;
-    vec4  skyHorizon;
-    vec4  skyGround;
-    vec4  skyCloud;        // x coverage, y density, z scale, w time
-    Light lights[32];
-    vec4  fog;             // (appended after lights — see GlobalsUBO)
-    vec4  shadowTint;
-    vec4  wind1;
-    vec4  wind2;
-    vec4  skyMoonDir;      // xyz toward the moon, w disc radiance (0 = down)
-    vec4  skyMoonSun;      // xyz TRUE sun direction (lights the disc), w lit fraction
-    vec4  skyCelX;         // the celestial frame in local space (stars)
-    vec4  skyCelY;
-    vec4  skyCelZ;
-    vec4  skyStars;        // x visibility (0 by day), y Milky Way strength
-    vec4  skyCity;         // xy unit XZ toward the city, z light pollution (0..1)
-} g;
-
-layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
+#include "globals.glsl"   // (set 0 as every scene shader sees it: ADR-0372)
 
 layout(location = 0) in vec3 inViewDir;
 layout(location = 0) out vec4 outColor;
@@ -228,6 +192,7 @@ vec3 applyClouds(vec3 baseSky, vec3 dir) {
     vec3 cloudDark = vec3(0.40, 0.42, 0.50);
     vec3 cloudColor = mix(cloudDark, cloudLit, pow(sunAmt, 1.5));
     cloudColor *= (0.25 + 0.75 * g.skySunDir.w);
+    if (skyIsPhysical()) cloudColor *= g.skyPhysical.z / 6.4;   // (lit by the light above the air: 6.4 units the sun's)
     return mix(baseSky, cloudColor, mask);
 }
 
@@ -236,9 +201,14 @@ void main() {
     vec3 col;
     if (g.counts.z == 1) {
         col = sampleEquirect(dir);   // HDR environment background (no clouds)
+    } else if (skyIsPhysical()) {
+        // THE PHYSICAL SKY (ADR-0367): the dome, the sun's disc through the air, and the night's bodies over it
+        col = skyViewRadiance(dir) + skyLightDisc(dir);
+        col += (starField(dir) + moonDisc(dir)) * g.skyPhysical3.y + skyGlow(dir) * g.skyPhysical3.w;
+        col = applyClouds(col, dir);
     } else {
         col = sampleEnvironment(dir);
         col = applyClouds(col, dir);
     }
-    outColor = vec4(col, 1.0);
+    outColor = vec4(col * g.cameraPosition.w, 1.0);   // pre-exposed (ADR-0366)
 }

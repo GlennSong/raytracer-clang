@@ -62,6 +62,7 @@ Outside material used to tune the procedural output by measurement. None of it i
 | UF/IFAS Extension fact sheet, *Jacaranda mimosifolia*: Jacaranda | jacaranda: 8-15 m, an open rounded crown, lilac bloom (`real_tree.cpp`), 2026-10-10; measured, not shipped | University of Florida IFAS Extension, edis.ifas.ufl.edu | public extension publication |
 | UF/IFAS Extension fact sheet, *Plumeria rubra*: Frangipani | plumeria: 3-8 m, thick pale candelabra limbs, paddle leaves and flowers at the tips (`real_tree.cpp`), 2026-10-10; measured, not shipped | University of Florida IFAS Extension, edis.ifas.ufl.edu | public extension publication |
 | Four landscape reference photos (Alaska, Colorado aspens, Maroon Bells, Lauterbrunnen) | the realism colour palette (ADR-0102) | supplied by Glenn | his own reference; not distributed |
+| MODIS Aqua Corrected Reflectance (True Color) via NASA Worldview / GIBS: Hawaii, Puerto Rico, the Canary Islands, Corsica, summer afternoons 2022-2023 | how real cloud fields organise over islands (cells over sunlit land and high ground, clear sea and coasts, wakes downwind) for the weather map and its simulation (ADR-0389; ~/.claude/plans/clouds-weather.md), 2026-11-08; measured, not shipped | NASA EOSDIS, worldview.earthdata.nasa.gov | NASA imagery, no copyright restrictions |
 
 ## Methods named in the code
 

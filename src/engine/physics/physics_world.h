@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <unordered_set>
 #include <vector>
 
 namespace engine {
@@ -42,6 +43,13 @@ struct ContactEvent {
     Vec3 position;       // world-space contact point
     Vec3 normal;         // world-space contact normal
     Real approachSpeed = 0;
+    // A SCRAPE (ADR-0353): the touch persists -- reported each step only for a WATCHED body (a vehicle's chassis),
+    // with the speed the two surfaces slide past each other at the point
+    bool persisted = false;
+    Real slideSpeed = 0;
+    // A BREAK (ADR-0354): a watched body (a car) met a BREAKABLE one at its breaking speed or more -- the touch was let
+    // through (no push back on the car) and the owner of the breakable knocks it loose
+    bool broke = false;
 };
 
 class JobSystem;   // our thread pool (src/job_system.h)
@@ -93,6 +101,9 @@ public:
     int bodyCount() const;
 
     void setLinearVelocity(PhysicsBodyId id, const Vec3& velocity);
+    // A dynamic body's weight (its inertia scaled to match) and its air drag (< 0: left as it is). A part knocked off a
+    // car is a box of the shape's density -- a door weighed what a slab of water would (ADR-0353).
+    void setBodyMass(PhysicsBodyId id, Real kg, Real linearDamping = -1, Real angularDamping = -1);
     Vec3 getLinearVelocity(PhysicsBodyId id) const;
 
     // Drive a KINEMATIC body toward a target pose over `dt` (Jolt MoveKinematic):
@@ -320,6 +331,12 @@ public:
         Real engineDamping = 0.2;
         Real engineInertia = 0.5;
         Real antiRollStiffness = 0.0;
+        // THE DRIFT's FEEL, per car (Glenn, 2026-11-06: "a way tall delivery truck feels different from driving an SUV
+        // different from driving a sedan"; ADR-0236's numbers were one car's): the rear tyres' sideways grip in the
+        // slide (lower slides more), the slip angle full lock asks for, and the speed (m/s) it starts from.
+        Real driftRearGrip = 0.35;
+        Real driftSlipDegrees = 32.0;
+        Real driftMinSpeed = 11.0;
         // YAW ASSIST (the fishtail, measured in tests/test_vehicle_handling.cpp):
         // Jolt's tyre is a per-step impulse cap, so past a degree or two of
         // sideslip at speed all four tyres saturate at once and the net yaw
@@ -387,7 +404,8 @@ public:
     struct VehicleTelemetry { Real speed = 0, rpm = 0; int gear = 0; std::vector<Real> wheelSpin; std::vector<char> wheelContact; std::vector<Real> wheelSlip; };
     VehicleTelemetry vehicleTelemetry(VehicleId id) const;
     // DRIFT (ADR-0236; Glenn: "how hard is it to make a car drift? Something like burnout"): an arcade slide the
-    // player's car can be thrown into -- a handbrake tap while steering above 40 km/h. In the slide the rear
+    // player's car can be thrown into -- a handbrake tap while steering above 40 km/h, or the brake hard on with the
+    // wheel well over (Burnout's brake-and-turn). In the slide the rear
     // tyres keep a third of their sideways grip, the yaw assist stands aside, and a controller holds the slip
     // angle the steering asks for (up to 32°) and the speed the slide began with while the throttle is on;
     // straightened up, it hands back to grip. Drift time fills a boost (`boostVehicle` spends it).
@@ -436,6 +454,24 @@ public:
     // update(); PhysicsSystem maps these to entities and publishes them on the
     // EventBus (ADR-0071).
     std::vector<ContactEvent> drainContactEvents();
+    // A body a car knocks loose rather than stops at (a hydrant, a bin, ADR-0354): from `speed` m/s of closing speed
+    // its contact with a watched body is let through and reported `broke`. speed <= 0 forgets it.
+    void setBreakable(PhysicsBodyId body, Real speed);
+    // Two bodies that must not touch while they overlap -- a part knocked off a car and the car (ADR-0353), a piece
+    // knocked loose and the car that hit it (ADR-0354) -- and for `graceSteps` after they last overlapped.
+    void ignoreContacts(PhysicsBodyId a, PhysicsBodyId b, int graceSteps = 30);
+    // Bodies the last steps found gone bad (not finite; a car past 150 m/s, anything else past 1000) and parked below the
+    // world (update() runs
+    // sanitize()); the caller reports them.
+    struct SanitizedBody {
+        PhysicsBodyId body = INVALID_PHYSICS_BODY;
+        bool finite = false;
+        bool vehicle = false;   // a car's chassis (stopped, not parked)
+        bool kinematic = false; // a driven body moved that far in a step (reported once, left alone)
+        Real speed = 0;
+        Vec3 position;
+    };
+    std::vector<SanitizedBody> drainSanitized();
 
     // Call once after the initial static bodies are added.
     void optimizeBroadPhase();
@@ -444,6 +480,10 @@ public:
     void update(Real deltaTime, int collisionSteps = 1);
 
 private:
+    void sanitize();
+    std::vector<SanitizedBody> sanitized_;
+    std::unordered_set<uint32_t> kinematicJumped_;
+
     struct Impl;
     std::unique_ptr<Impl> impl;
 

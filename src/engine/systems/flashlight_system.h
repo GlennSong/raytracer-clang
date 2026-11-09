@@ -10,8 +10,8 @@ namespace engine {
 // the right hand with nothing else in it, under the barrel with the gun out, a headlamp with anything else (the
 // map, a chute, the grapple, a board). It was tool slot 4, so stepping past it with LB / RB switched it on.
 // While on and the player is on foot, a narrow warm cone, aimed where the view looks, is rebuilt every frame in
-// render() into its own list (SceneLighting::toolSpots), which RenderSystem merges with the headlights.
-// Registered before RenderSystem.
+// render() onto its channel of the light board (ADR-0362), for LightSystem to light.
+// Registered before LightSystem.
 class FlashlightSystem : public System {
 public:
     void onStart(FrameContext& ctx) override;

@@ -1,4 +1,5 @@
 #include "flashlight_system.h"
+#include "../lights/light_kinds.h"
 
 #include "../components.h"
 #include "../player/tools.h"
@@ -23,10 +24,11 @@ void FlashlightSystem::update(FrameContext& ctx) {
     }
 }
 
-// the beam is staged in RENDER, after the fixed steps, into its own list (SceneLighting::toolSpots), rebuilt
-// every frame here; RenderSystem, registered after this, merges it
+// the beam is published in RENDER, after the fixed steps, on the light board's tool channel, rebuilt every frame
+// here; LightSystem, registered after this, lights it (ADR-0362)
 void FlashlightSystem::render(FrameContext& ctx) {
-    ctx.view.lighting.toolSpots.clear();
+    std::vector<LightCandidate>& beams = ctx.view.lights.channel(LightChannel::Tool);
+    beams.clear();
     if (!on_) return;
     // on foot only: at the wheel the car's own headlights are the light
     bool driving = false;
@@ -54,9 +56,13 @@ void FlashlightSystem::render(FrameContext& ctx) {
     if (tool == Tool::Hands) at = eye + right * 0.25 - Vec3(0, 0.3, 0) + fwd * 0.3;        // in the right hand
     else if (tool == Tool::Gun) at = eye + right * 0.17 - Vec3(0, 0.24, 0) + fwd * 0.6;    // under the barrel
     else at = eye + Vec3(0, 0.09, 0) + fwd * 0.1;                                         // a headlamp
-    SpotLight beam(at, fwd, Vec3(1.0, 0.93, 0.8), /*intensity=*/140.0f, /*inner=*/0.2f, /*outer=*/0.42f);
-    beam.range = 60.0f;
-    ctx.view.lighting.toolSpots.push_back(beam);
+    static const int flashlightKind = lightKindId("flashlight");   // lights.lua (ADR-0362)
+    LightCandidate beam;
+    beam.kind = flashlightKind;
+    beam.position = at;
+    beam.direction = fwd;
+    beam.mine = true;
+    beams.push_back(beam);
 }
 
 }  // namespace engine

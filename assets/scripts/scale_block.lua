@@ -6,8 +6,7 @@
 --     grown by the architect as a lot would grow them (the seed rolled until the storeys are those)
 --   on it: a sedan, a street lamp, the city's people (1.8 m), and a 30 m measuring pole banded every metre (red every five)
 local m = model.new()
-local classes = require "vehicle_classes"
-local forms   = require "vehicle_forms"
+local vehicle = require "vehicles"
 
 local MATS = {
   wall      = material.new{ roughness = 0.85 },
@@ -67,25 +66,13 @@ grow("walkup_homes", 3, 30, 12, 16)       -- four
 grow("brick_shop", 5, 52, 12, 16)         -- six
 grow("office_midrise", 7, 78, 20, 20)     -- eight
 
--- A SEDAN in the near lane, along it (its length on z, turned onto x), A LAMP on the south walk (streetfurniture.lua's)
+-- A SEDAN in the near lane, along it (its length on z, turned onto x), A LAMP on the south walk (streetfurniture.lua's):
+-- the fleet's own sedan (vehicles.lua kit_forms: the smooth body, its glass and wheels), standing on the road
 do
-  local c = classes.classes["sedan"]
-  local d = classes.dims(c)
-  local car = mesh.car(forms.car_params(c, d, { color = { 0.72, 0.10, 0.10 }, lod = "high" }))
-  local lift = car.half_extent[2]
-  local function place(part, mat, y)
-    if part then m:add(mesh.translate(mesh.rotate_y(part, math.pi * 0.5), { 4, y, 1.6 }), mat) end
-  end
-  place(car.body, MATS.body, lift); place(car.glass, MATS.car_glass, lift); place(car.lamp, MATS.lamp, lift)
-  place(car.wheel, MATS.rubber, lift)
-  if car.wheel == nil then   -- (as car_gallery.lua: the wheels from the package's own numbers)
-    local r = c.wheel_diameter * 0.5
-    local wheel = mesh.rotate_z(mesh.cylinder(r, math.max(0.18, c.track * 0.13), 14), math.pi * 0.5)
-    local frontZ, rearZ = d.length * 0.5 - d.front_overhang, -(d.length * 0.5 - d.rear_overhang)
-    for _, sx in ipairs({ 1, -1 }) do
-      for _, wz in ipairs({ frontZ, rearZ }) do place(mesh.translate(wheel, { sx * c.track * 0.5, 0, wz }), MATS.rubber, r) end
-    end
-  end
+  local car = vehicle.kit_forms("sedan", { 0.72, 0.10, 0.10 }).near
+  local lo = nil
+  mesh.move_by(car, function(_, p) if not lo or p[2] < lo then lo = p[2] end end)
+  m:add(mesh.translate(mesh.rotate_y(car, math.pi * 0.5), { 4, -(lo or 0), 1.6 }), MATS.body)
 end
 m:add(mesh.translate(streetfurniture.lamp{ height = 4.6, pole_radius = 0.07, head_size = { 0.5, 0.2, 0.32 },
                                            head_color = { 1.0, 0.88, 0.55 } }, { 12, 0.12, 3.6 }), MATS.metal)

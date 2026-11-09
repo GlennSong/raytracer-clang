@@ -34,8 +34,18 @@ public:
     TextureHandle uploadTextureHDR(int width, int height, int channels,
                                    const float* data) override;
     void setEnvironmentMap(TextureHandle equirect) override;
+    bool supportsProbeCapture() const override { return true; }
+    void setReflectionProbes(const std::vector<ReflectionProbe>& probes) override;
+    bool supportsRayQuery() const override;
+    void setRayInstances(const std::vector<RayInstance>& nearestFirst, float memoryShare, const float rules[3]) override;
+    void beginProbeFace(uint32_t probe, int face, const Vec3& eye) override;
+    void endProbeFace() override;
+    bool measuredSceneLuminance(float& log2Units) const override;
+    bool measuredSceneHighlight(float& log2Units) const override;
+    void setSkyTables(const float* transmittance, int tw, int th, const float* multiScatter, int mw, int mh) override;
     void setTerrainHorizon(TextureHandle map, float originX, float originZ, float extent,
                            float encodeLo, float encodeHi) override;
+    void setCloudMap(TextureHandle map, double originX, double originZ, float extent) override;
     void setTerrainNormalMap(TextureHandle map, float originX, float originZ, float extent, float fadeStart,
                              float fadeEnd) override;
     void setTerrainSurfaceMaps(TextureHandle cover, TextureHandle macro, float originX, float originZ, float extent,
@@ -59,6 +69,7 @@ public:
     // the GPU crowd (crowd.comp)
     bool supportsGpuCrowd() const override;
     bool supportsLodBand() const override { return true; }
+    int lightCapacity() const override;
     void setCrowdKinds(const std::vector<CrowdKind>& kinds) override;
     void setCrowdLinks(const std::vector<float>& sixPerLink) override;
     void setCrowdRoutes(const std::vector<uint32_t>& pairs, std::size_t firstChanged) override;

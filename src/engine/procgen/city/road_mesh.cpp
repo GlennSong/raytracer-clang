@@ -67,10 +67,6 @@ std::vector<Vec2> fairHermite(const Vec2& p0, const Vec2& m0, const Vec2& p1, co
     return poly;
 }
 
-std::vector<std::array<int, 3>> triangulatePolygon(const std::vector<Vec2>& poly) {
-    // the engine's one triangulator (triangulate.h); this was a second ear-clipper of its own
-    return triangulateIndices(poly, {});
-}
 
 
 

@@ -58,15 +58,32 @@ struct CarBodyRecipe {
     // THE GLASS, its own part for every slot. A see-into vehicle (the bus: `seeInto`) always draws it
     // clear; ordinary traffic draws it opaque and reflective, and clear only near the player (fleet v2).
     RenderMesh glass;
-    // The cabin, apart from the shell for ordinary traffic (drawn only near the player); a see-into
-    // vehicle has it in `mesh` and leaves this empty.
+    // The cabin, apart from the shell, in its own matte material: ordinary traffic's drawn only near the player, a
+    // see-into vehicle's (a bus's saloon, an open car's seats) always (ADR-0383).
     RenderMesh interior;
+    // The MID-RANGE form (`mid`): the whole car, shell + dark glass + wheels, cheaper, drawn from `midFrom` metres out
+    // (the near body, its glass and cabin stop there). Empty: the near body is drawn at every distance.
+    RenderMesh mid;
+    double midFrom = 0.0;
+    // The FAR stand-in (`far`): the car's own silhouette in a few hundred triangles, in its colour, for the city's far
+    // band and the GPU crowd. Empty: the band's two-box stand-in.
+    RenderMesh far;
     bool seeInto = false;
+    // `glass_opacity`: the clear glass's (a see-into or near car's), read as its absorption by mesh.frag's glass
+    // filter -- a bus's tinted saloon glass is darker than a car's clear side window
+    double glassOpacity = 0.30;
     bool openSeat = false;   // `open_seat`: nothing round the driver (a convertible): a crash throws them (ADR-0252)
     // Seat hip points (body-local), for drawing people IN the vehicle: the
     // driver, and one per passenger seat. Empty when the recipe has none.
     std::vector<Vec3> seats;
     std::vector<Vec3> doors;   // floor points a passenger steps off from
+    // A BUS's DOOR LEAVES (ADR-0356): drawn apart from the body, each slid by `slide` (body frame) as the bus stands at
+    // its stop with its doors open -- its painted leaf and its glass
+    struct DoorLeaf {
+        RenderMesh body, glass;
+        Vec3 slide{0, 0, 0};
+    };
+    std::vector<DoorLeaf> doorLeaves;
     Vec3 driverSeat{0, 0, 0};
     bool hasDriverSeat = false;
     // `rear_hip`: the back bench's hip point (its middle), when the cabin has one. Without it a car has no back
@@ -123,6 +140,11 @@ bool loadFleetCatalogueEntry(ScriptVM& vm, int slot, Vec3& size,
 // config is what a physical-tier car or a commandeered one drives with. No geometry is built. False (err filled)
 // when the slot has none or it carries no wheels.
 bool loadFleetHandling(ScriptVM& vm, int slot, VehicleSpec& out, std::string* err = nullptr);
+
+// THE SLOT AS THE PLAYER'S CAR (ADR-0355; Glenn: "Why is an SUV in the world different than mine? I can't open the
+// hatch"): its `drivable` recipe (the menu's -- "kit_suv") and its paint `color`, so a car taken from the traffic is
+// built as the car N drops: panels, dents, its damage tuning. False when the slot names none.
+bool loadFleetDrivable(ScriptVM& vm, int slot, std::string& recipe, Vec3& color);
 
 }  // namespace engine
 

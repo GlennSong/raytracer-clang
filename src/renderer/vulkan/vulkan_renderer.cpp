@@ -15,6 +15,10 @@
 #include "../../log.h"
 #include "../../slot_map.h"
 #include "../../engine/vertex_pack.h"
+#include "../light_clusters.h"   // buildClusters (clustered lights, RT_CLUSTERED)
+#include "../probe_grid.h"       // buildProbeGrid (ADR-0374)
+#include "rt_measure.h"           // RT_RT_MEASURE: what ray tracing would cost (phase 3c)
+#include "rt_scene.h"             // the near scene for rays (ADR-0376)
 
 #include <vulkan/vulkan.h>
 // GPU memory: AMD's Vulkan Memory Allocator (third_party/VulkanMemoryAllocator, compiled
@@ -30,6 +34,7 @@
 #endif
 
 #include <algorithm>
+#include <iterator>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -40,6 +45,8 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 // PNG output for frame capture (declarations only; the stb implementation is
 // compiled once with the importer's vendored copy — same as the Metal backend).
@@ -187,6 +194,26 @@ struct GlobalsUBO {
     // camera distance the cover map blends in from, y 1/(the blend's length)
     float    terrainSurface[4];
     float    terrainSurface2[4];
+    // CLUSTERED LIGHTS (RT_CLUSTERED=1; renderer-realism phase 1): x tilesX, y tilesY, z slices, w 1: on (bindings 8-10);
+    // and x the slices' near depth, y 1/log(far/near), z the framebuffer's width, w its height
+    int32_t  clusterGrid[4];
+    float    clusterDepth[4];
+    // THE PHYSICAL SKY (ADR-0367; envMode counts.z = 2): x the ground radius, y the camera's height above it, z the
+    // active light's illuminance above the air (units), w cos(the sun's angular radius); and x the disc's visibility,
+    // y the other light's illuminance above the air, z the top of the atmosphere's radius; and x 1 when the active light
+    // is the sun (its disc is drawn; the moon draws as itself), y the scale the stars, the moon's disc and the city's
+    // glow take into units
+    float    skyPhysical[4];
+    float    skyPhysical2[4];
+    float    skyPhysical3[4];
+    // ...the air at sea level for the aerial perspective (ADR-0369): rgb Rayleigh scattering /m, w its scale height; and
+    // x Mie extinction /m, y its scale height, z the level's aerial density
+    float    skyPhysical4[4];
+    float    skyPhysical5[4];
+    // THE SKY'S LIGHT ON SURFACES (ADR-0371): its E / pi as nine spherical-harmonic coefficients (rgb each; mesh.frag)
+    float    skySH[9][4];
+    float    cloudShadow[4];     // THE CLOUDS' SHADOW (ADR-0387, binding 18): xy the map's corner in the air, z 1/extent, w strength
+    float    cloudShadow2[4];    // xy the drift, z the height the sun's line is read at
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -209,6 +236,10 @@ struct CloudUniformsGPU {
     float typeParams[4][4];         // x density, y erosion, z anvil, w unused
     float typeRange[4];             // x lo, y hi along the type axis (0 stratus .. 1 cumulonimbus), zw unused
     float wind[4];                  // xy the clouds' drift so far (x, z m: ADR-0337), zw unused
+    // THE WEATHER MAP (ADR-0386): each type's heights, the map's square in the air, the shape noise's scale
+    float typeHeights[4][4];        // x base, y top (m; top <= base: the deck's span)
+    float mapRect[4];               // x originX, y originZ, z 1 / extent, w 1: the map places the clouds
+    float shape[4];                 // x the shape noise's frequency against noiseScale, yz the cirrus's sweep
 };
 
 // Per-draw push constants for the forward pass (120 <= 128 B).
@@ -425,6 +456,41 @@ struct VulkanRenderer::Impl {
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memProps{};
     bool depthClamp = false;   // the device clamps depth (shadow pancaking: createShadowPipeline)
+    // RAY QUERIES (renderer-realism phase 3c, ADR-0376): the device has acceleration structures and ray queries on, and
+    // mesh buffers carry device addresses so a bottom-level build can read them. Vulkan 1.2 and the extensions needed;
+    // RT_RT_REFLECT=0 leaves it all off.
+    bool rayQuery = false;
+    RtScene rt;                                  // the near acceleration structures (rt_scene.h)
+    std::vector<RtScene::Instance> rtInstances;  // what the engine last handed over, mesh buffers resolved
+    // ...and each one's row for the rays' hit shading (rt_reflect.comp RtInst: 64 bytes), by its custom index
+    struct RtInstGpu {
+        float albedoRough[4];
+        float emissionMetal[4];
+        VkDeviceAddress vertices, indices;
+        uint32_t strideWords, packed, flags, pad;
+    };
+    static_assert(sizeof(RtInstGpu) == 64, "rt_reflect.comp's RtInst");
+    std::vector<RtInstGpu> rtRows;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> rtRowBuf{};
+    std::array<VmaAllocation, MAX_FRAMES_IN_FLIGHT> rtRowAlloc{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> rtRowMapped{};
+    std::array<VkDeviceSize, MAX_FRAMES_IN_FLIGHT> rtRowCap{};
+    VkDescriptorSetLayout rtSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool rtPool = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> rtSets{};
+    VkPipelineLayout rtLayout = VK_NULL_HANDLE;
+    VkPipeline rtPipe = VK_NULL_HANDLE;
+    VkPipeline rtDenoisePipe = VK_NULL_HANDLE, rtApplyPipe = VK_NULL_HANDLE;
+    bool rtPipeFailed = false;
+    // the rays' half-resolution results (rt_reflect -> rtRaw -> rt_denoise -> rtOut -> rt_apply), made with the SSR
+    // target; GENERAL from their first use
+    VkImage rtRawImage = VK_NULL_HANDLE, rtOutImage = VK_NULL_HANDLE;
+    VkDeviceMemory rtRawMemory = VK_NULL_HANDLE, rtOutMemory = VK_NULL_HANDLE;
+    VkImageView rtRawView = VK_NULL_HANDLE, rtOutView = VK_NULL_HANDLE;
+    bool rtImagesGeneral = false;
+    float rtRules[4] = {150.0f, 25.0f, 0.3f, 1.0f};   // near, fade, max roughness, (the SSR blend strength, per frame)
+    float rtShare = 0.0f;
+    uint64_t rtLogged = 0;
     uint32_t graphicsFamily = 0;
     uint32_t presentFamily = 0;
     VkDevice device = VK_NULL_HANDLE;
@@ -469,8 +535,14 @@ struct VulkanRenderer::Impl {
     VkDeviceMemory cloudDepthMemory = VK_NULL_HANDLE;
     VkImageView cloudDepthView = VK_NULL_HANDLE;
     GpuTexture cloudWeatherTex;
-    double cloudWindOffset[2] = {0.0, 0.0};   // the clouds' drift along the weather's wind (ADR-0337)
-    double cloudWindLast = 0.0;                              // the 2D weather map (cloudnoise::bakeWeather, ADR-0336)
+    // THE WEATHER MAP (ADR-0386, setCloudMap): its view (null: the baked static one), its square in the air, and the
+    // frames whose march set still binds the old one (rewritten as each frame comes round, after its fence)
+    VkImageView cloudMapView = VK_NULL_HANDLE;
+    float cloudMapRect[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    bool cloudMapStale[MAX_FRAMES_IN_FLIGHT] = {};
+    bool cloudShadowStale[MAX_FRAMES_IN_FLIGHT] = {};   // ...and the globals' binding 18 (ADR-0387)
+    VkImageView cloudWeatherViewNow() const { return cloudMapView ? cloudMapView : cloudWeatherTex.view; }
+    // (the 2D weather map baked with the noise: cloudnoise::bakeWeather, ADR-0336 -- the static one, without a live map)
     VkRenderPass cloudCompositeRenderPass = VK_NULL_HANDLE;  // HDR load+blend
     VkFramebuffer cloudFramebuffer = VK_NULL_HANDLE;
     VkFramebuffer cloudCompositeFramebuffer = VK_NULL_HANDLE;
@@ -690,6 +762,8 @@ struct VulkanRenderer::Impl {
     // map's square). Default texture when none is bound, gated by the UBO's flag.
     VkImageView terrainNormalView = VK_NULL_HANDLE;
     void updateGlobalTerrainNormalDescriptor();
+    // binding 18, the clouds' map for their shadow (ADR-0387): one frame's set, after its fence
+    void writeGlobalCloudShadow(int frame);
     // ...and the cover and macro maps (bindings 6, 7; ADR-0208), the same way
     VkImageView terrainCoverView = VK_NULL_HANDLE, terrainMacroView = VK_NULL_HANDLE;
 
@@ -731,6 +805,126 @@ struct VulkanRenderer::Impl {
     std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> globalsBuffers{};
     std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> globalsMemory{};
     std::array<void*, MAX_FRAMES_IN_FLIGHT> globalsMapped{};
+    // THE GLOBALS' SLOTS (ADR-0372): binding 0 is a dynamic uniform -- slot 0 the frame's view, slots 1.. the reflection
+    // probe faces captured this frame (each its own view-projection and eye), at globalsStride apart
+    static constexpr uint32_t kGlobalsSlots = 3;
+    VkDeviceSize globalsStride = 0;
+    // CLUSTERED LIGHTS: per frame in flight, the lights (GpuLight each), the froxels' offset|count, and the index lists
+    // (host-visible, written each frame from `clusterLights`); bindings 8, 9, 10
+    static constexpr uint32_t kClusterMaxLights = 4096, kClusterMaxIndices = 1u << 20;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> clusterBuf[3]{};
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> clusterMem[3]{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> clusterMapped[3]{};
+    bool clustered = false;
+    std::vector<GpuLight> clusterLights;   // every point and spot this frame (the sun stays lights[0])
+    ClusterGrid clusterGrid;
+    ClusterLists clusterLists;
+    Mat4 camView;
+    float camTanHalfY = 0.577f, camAspect = 1.78f;
+    int clusterLogEvery = 0;
+    // BINNED ON THE GPU (ADR-0364; RT_GPU_CLUSTERS=0 bins on the CPU as before): cluster_bin.comp writes bindings 9 and
+    // 10 into these device-local buffers (64 slots a froxel) from the lights in clusterBuf[0], before the scene pass.
+    // RT_CLUSTER_CHECK=1: every 120 frames the GPU's lists are read back and compared with buildClusters' on the same
+    // lights (logged).
+    bool gpuBin = false;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> binBuf[2]{};          // cells, indices
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> binMem[2]{};
+    VkDescriptorSetLayout binSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool binPool = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> binSets{};
+    VkPipelineLayout binLayout = VK_NULL_HANDLE;
+    VkPipeline binPipe = VK_NULL_HANDLE;
+    uint32_t binLightCount = 0;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> checkBuf[2]{};        // the read-back (host-visible)
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> checkMem[2]{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> checkMapped[2]{};
+    std::array<bool, MAX_FRAMES_IN_FLIGHT> checkPending{};
+    std::array<ClusterLists, MAX_FRAMES_IN_FLIGHT> checkCpu{};
+    bool checkThisFrame = false;
+    bool createBinPipeline();
+    // THE PHYSICAL SKY (ADR-0367): the CPU's two tables (setSkyTables), the sky view rebuilt each frame from them by
+    // sky_view.comp (192 x 108, kept in GENERAL layout: written by the compute, sampled by sky.frag and mesh.frag at
+    // set 0 binding 11; the transmittance at 12)
+    TextureHandle skyTransTex, skyMsTex;
+    VkImage skyViewImage = VK_NULL_HANDLE;
+    VkDeviceMemory skyViewMemory = VK_NULL_HANDLE;
+    VkImageView skyViewView = VK_NULL_HANDLE;
+    bool skyViewGeneral = false;
+    VkDescriptorSetLayout skySetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool skyPool = VK_NULL_HANDLE;
+    VkDescriptorSet skySet = VK_NULL_HANDLE;
+    VkPipelineLayout skyLayout = VK_NULL_HANDLE;
+    VkPipeline skyPipe = VK_NULL_HANDLE;
+    PhysicalSkyFrame skyFrame;
+    bool skyPhysicalOn = false;
+    bool pendingSkyDescriptors = false;
+    // AUTO EXPOSURE's measurement (ADR-0368): lum_histogram.comp over the scene after the clouds, the bins read back when
+    // the frame's fence has passed
+    static constexpr float kLumLog2Min = -14.0f, kLumLog2Range = 22.0f;   // pre-exposed: 2^-14 .. 2^8
+    VkDescriptorSetLayout lumSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool lumPool = VK_NULL_HANDLE;
+    VkDescriptorSet lumSet = VK_NULL_HANDLE;
+    VkPipelineLayout lumLayout = VK_NULL_HANDLE;
+    VkPipeline lumPipe = VK_NULL_HANDLE;
+    bool lumFailed = false;
+    VkImageView lumBoundHdr = VK_NULL_HANDLE;   // the HDR view the set points at (it changes with the swapchain)
+    VkBuffer lumBuf = VK_NULL_HANDLE;
+    VkDeviceMemory lumMem = VK_NULL_HANDLE;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> lumRead{};
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> lumReadMem{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> lumReadMapped{};
+    std::array<float, MAX_FRAMES_IN_FLIGHT> lumPre{};   // the pre-exposure that frame was drawn with (0: no reading)
+    float lumLog2 = 0.0f;
+    float lumHighLog2 = 0.0f;   // the 97th percentile (ADR-0378)
+    bool lumValid = false;
+    bool ensureLumPipeline();
+    void recordLumHistogram(VkCommandBuffer cmd);
+    void readLumHistogram();   // rewrite 11/12 once no frame is recording (the sky view's first frame)
+    bool ensureSkyView();
+    void updateSkyDescriptors();
+    void recordSkyView(VkCommandBuffer cmd);
+    // THE AERIAL PERSPECTIVE VOLUME (ADR-0370): aerial_volume.comp's in-scatter and transmittance, 32^3 each, made at init
+    // (set 0 bindings 13, 14 always have a 3D view), filled each frame the physical sky is on
+    static constexpr uint32_t kAerialSize = 32;
+    static constexpr float kAerialFar = 120000.0f;   // m
+    VkImage aerialImage[2]{};
+    VkDeviceMemory aerialMemory[2]{};
+    VkImageView aerialView[2]{};
+    bool aerialGeneral = false;
+    VkDescriptorSetLayout aerialSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool aerialPool = VK_NULL_HANDLE;
+    VkDescriptorSet aerialSet = VK_NULL_HANDLE;
+    VkPipelineLayout aerialLayout = VK_NULL_HANDLE;
+    VkPipeline aerialPipe = VK_NULL_HANDLE;
+    bool createAerialImages();
+    // THE SKY CUBEMAP (ADR-0371): sky_cube.comp draws the dome into skyCubeSrc's mip 0, blits box its mips, and
+    // sky_prefilter.comp GGX-filters skyCubeOut's 6 mips from it (roughness 0 .. 1); skyCubeOut is set 0 binding 15
+    static constexpr uint32_t kCubeSize = 128, kCubeSrcMips = 8, kCubeOutMips = 6;
+    VkImage cubeSrcImage = VK_NULL_HANDLE, cubeOutImage = VK_NULL_HANDLE;
+    VkDeviceMemory cubeSrcMemory = VK_NULL_HANDLE, cubeOutMemory = VK_NULL_HANDLE;
+    VkImageView cubeSrcView = VK_NULL_HANDLE, cubeSrcMip0 = VK_NULL_HANDLE, cubeOutView = VK_NULL_HANDLE;
+    VkImageView cubeOutMip[kCubeOutMips]{};
+    bool cubeGeneral = false;
+    VkDescriptorSetLayout cubeSetLayout = VK_NULL_HANDLE, prefSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool cubePool = VK_NULL_HANDLE;
+    VkDescriptorSet cubeSet = VK_NULL_HANDLE;
+    VkDescriptorSet prefSets[kCubeOutMips]{};
+    VkPipelineLayout cubeLayout = VK_NULL_HANDLE, prefLayout = VK_NULL_HANDLE;
+    VkPipeline cubePipe = VK_NULL_HANDLE, prefPipe = VK_NULL_HANDLE;
+    bool cubeFailed = false;
+    bool createSkyCubeImages();
+    bool ensureSkyCubePipelines();
+    void recordSkyCube(VkCommandBuffer cmd);
+    bool ensureAerialPipeline();
+    void recordAerial(VkCommandBuffer cmd);
+    // PRE-EXPOSURE (ADR-0366): the exposure the scene passes draw with (1 with RT_PREEXPOSE=0)
+    static bool preExposureOn() {
+        static const bool on = [] { const char* e = std::getenv("RT_PREEXPOSE"); return !(e && std::string(e) == "0"); }();
+        return on;
+    }
+    float preExposure() const { return preExposureOn() ? sceneExposure : 1.0f; }
+    void recordClusterBin(VkCommandBuffer cmd);
+    void compareClusterCheck();
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline meshPipeline = VK_NULL_HANDLE;          // two-sided (FLAG_TWO_SIDED batches)
     VkPipeline meshPipelineCulled = VK_NULL_HANDLE;    // back-face culled (the default)
@@ -771,6 +965,10 @@ struct VulkanRenderer::Impl {
     // reset each frame, so memory is bounded by the peak frame ever seen.
     std::array<std::vector<VkDescriptorPool>, MAX_FRAMES_IN_FLIGHT> materialPools{};
     size_t materialPoolActive = 0;   // index into the current frame's chain
+    // Sets taken from the active link. The chain moves on BEFORE a link is full: allocating from a full pool is an
+    // error code the driver may return on Vulkan 1.1+, but invalid usage on 1.0 (the ray-tracing fallback, RT_VK_1_0).
+    uint32_t materialPoolUsed = 0;
+    static constexpr uint32_t kMaterialSetsPerPool = 2048;   // sets per chain link
     VkSampler textureSampler = VK_NULL_HANDLE;
     GpuTexture defaultTexture;   // 1x1 white, stands in for absent maps
     bool materialPoolExhaustedWarned = false;
@@ -814,6 +1012,75 @@ struct VulkanRenderer::Impl {
 
     GlobalsUBO cpuGlobals{};
     std::vector<DrawItem> drawQueue;
+    // REFLECTION PROBES' CAPTURE (ADR-0372): a frame's probe faces, each its draws (routed here by queueDraw between
+    // beginProbeFace and endProbeFace), its view and its globals slot (1 + its index); drawn into the 64^2 G-buffer
+    // targets and blitted (mirrored: the cube convention) into the probes' G-buffer arrays, layer probe * 6 + face
+    static constexpr uint32_t kProbeFace = 64, kMaxProbes = 64;
+    struct ProbeCaptureSlot { uint32_t probe = 0; int face = 0; Vec3 eye; std::vector<DrawItem> items; float vp[16]{}, view[16]{}; };
+    std::array<ProbeCaptureSlot, kGlobalsSlots - 1> captures;
+    uint32_t captureCount = 0;
+    int captureActive = -1;   // -1 the frame's queue, >= 0 a capture slot, -2 dropped (no slot left)
+    VkImage probeTargetImage[3]{};
+    VkDeviceMemory probeTargetMemory[3]{};
+    VkImageView probeTargetView[3]{};
+    VkImage probeDepthImage = VK_NULL_HANDLE;
+    VkDeviceMemory probeDepthMemory = VK_NULL_HANDLE;
+    VkImageView probeDepthView = VK_NULL_HANDLE;
+    VkRenderPass probeRenderPass = VK_NULL_HANDLE;
+    VkFramebuffer probeFramebuffer = VK_NULL_HANDLE;
+    VkImage probeGbufImage[3]{};
+    VkDeviceMemory probeGbufMemory[3]{};
+    VkImageView probeGbufView[3]{};   // 2D arrays, kMaxProbes * 6 layers
+    bool probeGbufGeneral = false;
+    VkPipeline probeCulled = VK_NULL_HANDLE, probeCulledPacked = VK_NULL_HANDLE;
+    VkPipeline probeTwoSided = VK_NULL_HANDLE, probeTwoSidedPacked = VK_NULL_HANDLE;
+    VkPipeline probeTerrain = VK_NULL_HANDLE;
+    // RELIT (ADR-0373): the probes' radiance cubes (a cube array, kProbeMips GGX mips) -- relit a few a frame by
+    // probe_relight.comp, blurred by probe_prefilter.comp -- and the probes as set (setReflectionProbes): their boxes in a
+    // per-frame buffer (set 0 binding 16) beside the cube array (17), for mesh.frag
+    static constexpr uint32_t kProbeMips = 5;
+    VkImage probeRadImage = VK_NULL_HANDLE;
+    VkDeviceMemory probeRadMemory = VK_NULL_HANDLE;
+    VkImageView probeRadCubeView = VK_NULL_HANDLE;   // sampled, all mips
+    VkImageView probeRadMipView[kProbeMips]{};       // storage, 2D array, one mip each
+    bool probeRadGeneral = false;
+    std::vector<ReflectionProbe> probes;
+    std::array<uint8_t, kMaxProbes> probeFaces{};    // the faces captured since it was placed (bit per face)
+    std::array<uint8_t, kMaxProbes> probeLit{};      // relit at least once
+    ProbeGrid probeGrid;                              // which probe a pixel reads (ADR-0374)
+    uint32_t relightCursor = 0;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> probeBuf{};
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> probeBufMem{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> probeBufMapped{};
+    VkDescriptorSetLayout relightSetLayout = VK_NULL_HANDLE, pfSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool relightPool = VK_NULL_HANDLE;
+    VkDescriptorSet relightSet = VK_NULL_HANDLE;
+    VkDescriptorSet pfSets[kProbeMips]{};
+    VkPipelineLayout relightLayout = VK_NULL_HANDLE, pfLayout = VK_NULL_HANDLE;
+    VkPipeline relightPipe = VK_NULL_HANDLE, pfPipe = VK_NULL_HANDLE;
+    bool relightFailed = false;
+    bool ensureRelightPipelines();
+    void recordProbeRelight(VkCommandBuffer cmd);
+    void recordRayScene(VkCommandBuffer cmd);
+    bool ensureRtReflectPipeline();
+    bool raysThisFrame();
+    void recordRtReflect(VkCommandBuffer cmd);
+    void queueDraw(const DrawItem& item) {
+        if (captureActive >= 0) captures[static_cast<std::size_t>(captureActive)].items.push_back(item);
+        else if (captureActive == -1) drawQueue.push_back(item);
+    }
+    DrawItem* lastQueued() {   // the item queueDraw just took (nullptr: dropped)
+        if (captureActive >= 0) {
+            std::vector<DrawItem>& v = captures[static_cast<std::size_t>(captureActive)].items;
+            return v.empty() ? nullptr : &v.back();
+        }
+        if (captureActive == -1) return drawQueue.empty() ? nullptr : &drawQueue.back();
+        return nullptr;
+    }
+    bool initialGeneral = false;   // the storage images moved to GENERAL (the first command buffer)
+    bool createProbeTargets();
+    void recordProbeCaptures(VkCommandBuffer cmd);
+    void dumpProbe(uint32_t probe, const std::string& path);
 
     // ---- bring-up ----
     bool createInstance();
@@ -972,6 +1239,10 @@ struct VulkanRenderer::Impl {
     // window). With VK_EXT_memory_budget the heap budgets are the driver's own.
     VmaAllocator allocator = nullptr;
     bool memoryBudgetExt = false, haveProps2 = false;
+    // THE API VERSION (renderer-realism phase 3c step 2): 1.2 where the loader and the GPU have it -- the ray-tracing
+    // extensions need it (VK_KHR_acceleration_structure: 1.1, buffer device addresses: core in 1.2) -- else 1.0, as
+    // the backend was written. The instance asks for it, the device's own is the lower of the two, and VMA is told.
+    uint32_t apiVersion = VK_API_VERSION_1_0;
     bool createAllocator();
     bool createGpuBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buffer, VmaAllocation& alloc);
     bool createGpuImage(const VkImageCreateInfo& info, VkImage& image, VmaAllocation& alloc);
@@ -1039,7 +1310,14 @@ bool VulkanRenderer::Impl::createInstance() {
     app.applicationVersion = VK_MAKE_VERSION(0, 1, 0);
     app.pEngineName = "raytracer-engine";
     app.engineVersion = VK_MAKE_VERSION(0, 1, 0);
-    app.apiVersion = VK_API_VERSION_1_0;
+    {
+        PFN_vkEnumerateInstanceVersion version = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
+            vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion"));
+        uint32_t loader = VK_API_VERSION_1_0;
+        if (version) version(&loader);
+        apiVersion = loader >= VK_API_VERSION_1_2 && !std::getenv("RT_VK_1_0") ? VK_API_VERSION_1_2 : VK_API_VERSION_1_0;
+    }
+    app.apiVersion = apiVersion;
 
     std::vector<std::string> reqStr = window->requiredVulkanInstanceExtensions();
     if (reqStr.empty()) {
@@ -1176,6 +1454,14 @@ bool VulkanRenderer::Impl::pickPhysicalDevice() {
         LOG_ERROR("[vulkan] no suitable GPU (needs graphics + present + swapchain)");
         return false;
     }
+    {   // the device's own version caps what we use
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(physicalDevice, &props);
+        if (props.apiVersion < apiVersion) apiVersion = VK_API_VERSION_1_0;
+        LOG_INFO << "[vulkan] API " << VK_API_VERSION_MAJOR(apiVersion) << "." << VK_API_VERSION_MINOR(apiVersion)
+                 << " (the device has " << VK_API_VERSION_MAJOR(props.apiVersion) << "." << VK_API_VERSION_MINOR(props.apiVersion)
+                 << "." << VK_API_VERSION_PATCH(props.apiVersion) << ")";
+    }
     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProps);
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(physicalDevice, &props);
@@ -1226,6 +1512,57 @@ bool VulkanRenderer::Impl::createLogicalDevice() {
         VkPhysicalDeviceFeatures have{};
         vkGetPhysicalDeviceFeatures(physicalDevice, &have);
         if (have.depthClamp) { features.depthClamp = VK_TRUE; depthClamp = true; }
+        if (have.imageCubeArray) features.imageCubeArray = VK_TRUE;   // (the reflection probes' cube array: ADR-0373)
+    }
+    // RAY QUERIES (ADR-0376): their extensions and features, when the device has every one
+    VkPhysicalDeviceFeatures2 features2{};
+    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    VkPhysicalDeviceVulkan12Features v12{};
+    v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeat{};
+    asFeat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    VkPhysicalDeviceRayQueryFeaturesKHR rqFeat{};
+    rqFeat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+    const char* rtExts[] = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_RAY_QUERY_EXTENSION_NAME,
+                            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, VK_KHR_SPIRV_1_4_EXTENSION_NAME};
+    const char* rtOff = std::getenv("RT_RT_REFLECT");
+    if (apiVersion >= VK_API_VERSION_1_2 && !(rtOff && std::strcmp(rtOff, "0") == 0)) {
+        uint32_t n = 0;
+        vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &n, nullptr);
+        std::vector<VkExtensionProperties> have(n);
+        vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &n, have.data());
+        bool all = true;
+        for (const char* e : rtExts) {
+            bool found = false;
+            for (const VkExtensionProperties& h : have) found = found || std::strcmp(h.extensionName, e) == 0;
+            all = all && found;
+        }
+        if (all) {
+            // the device's own answer for each feature
+            VkPhysicalDeviceRayQueryFeaturesKHR rqHave{};
+            rqHave.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+            VkPhysicalDeviceAccelerationStructureFeaturesKHR asHave{};
+            asHave.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+            asHave.pNext = &rqHave;
+            VkPhysicalDeviceVulkan12Features v12Have{};
+            v12Have.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+            v12Have.pNext = &asHave;
+            VkPhysicalDeviceFeatures2 query{};
+            query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            query.pNext = &v12Have;
+            vkGetPhysicalDeviceFeatures2(physicalDevice, &query);
+            all = v12Have.bufferDeviceAddress && asHave.accelerationStructure && rqHave.rayQuery;
+        }
+        if (all) {
+            for (const char* e : rtExts) deviceExts.push_back(e);
+            v12.bufferDeviceAddress = VK_TRUE;
+            asFeat.accelerationStructure = VK_TRUE;
+            rqFeat.rayQuery = VK_TRUE;
+            v12.pNext = &asFeat;
+            asFeat.pNext = &rqFeat;
+            rayQuery = true;
+        }
+        LOG_INFO << "[rt] ray queries " << (rayQuery ? "on (acceleration structures, buffer addresses)" : "unavailable on this GPU");
     }
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -1233,7 +1570,14 @@ bool VulkanRenderer::Impl::createLogicalDevice() {
     info.pQueueCreateInfos = queueInfos.data();
     info.enabledExtensionCount = static_cast<uint32_t>(deviceExts.size());
     info.ppEnabledExtensionNames = deviceExts.data();
-    info.pEnabledFeatures = &features;
+    if (rayQuery) {
+        // features ride the chain, not pEnabledFeatures (one or the other)
+        features2.features = features;
+        features2.pNext = &v12;
+        info.pNext = &features2;
+    } else {
+        info.pEnabledFeatures = &features;
+    }
     if (vkCreateDevice(physicalDevice, &info, nullptr, &device) != VK_SUCCESS) {
         LOG_ERROR("[vulkan] vkCreateDevice failed");
         return false;
@@ -1347,15 +1691,14 @@ bool VulkanRenderer::Impl::createImageViews() {
 
 // One link of a frame's material-descriptor-pool chain (see materialPools).
 bool VulkanRenderer::Impl::createMaterialPool(VkDescriptorPool* out) {
-    constexpr uint32_t MAX_MATERIAL_SETS = 2048;   // sets per chain link
     VkDescriptorPoolSize size{};
     size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    size.descriptorCount = MAX_MATERIAL_SETS * 5;
+    size.descriptorCount = kMaterialSetsPerPool * 5;
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = 1;
     info.pPoolSizes = &size;
-    info.maxSets = MAX_MATERIAL_SETS;
+    info.maxSets = kMaterialSetsPerPool;
     if (vkCreateDescriptorPool(device, &info, nullptr, out) != VK_SUCCESS) {
         LOG_ERROR("[vulkan] material descriptor pool creation failed");
         return false;
@@ -1801,12 +2144,13 @@ bool VulkanRenderer::Impl::createCloudResources() {
     // mip-aware REPEAT sampler; depth + the overlay use the CLAMP composite one.
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         VkDescriptorBufferInfo ubo{cloudUboBuffers[i], 0, sizeof(CloudUniformsGPU)};
-        std::array<VkDescriptorImageInfo, 4> imgs{};
+        std::array<VkDescriptorImageInfo, 5> imgs{};   // (was 4, with imgs[4] written past its end)
         imgs[0] = {compositeSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
         imgs[1] = {textureSampler, cloudBaseView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         imgs[2] = {textureSampler, cloudDetailView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         imgs[3] = {textureSampler, cloudBaseView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};   // (binding 4: the resolve's; unread here)
-        imgs[4] = {textureSampler, cloudWeatherTex.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};   // the weather map
+        imgs[4] = {textureSampler, cloudWeatherViewNow(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};   // the weather map
+        cloudMapStale[i] = false;
         std::array<VkWriteDescriptorSet, 6> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = cloudMarchSets[i];
@@ -1847,7 +2191,7 @@ bool VulkanRenderer::Impl::createCloudResources() {
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(cw.size()), cw.data(), 0, nullptr);
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
             VkDescriptorBufferInfo ubo{cloudUboBuffers[i], 0, sizeof(CloudUniformsGPU)};
-            std::array<VkDescriptorImageInfo, 4> ri{};
+            std::array<VkDescriptorImageInfo, 5> ri{};   // (was 4: ri[4] below wrote past it -- a stack overwrite)
             ri[0] = {compositeSampler, cloudView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             ri[1] = {compositeSampler, cloudHistView[1 - h], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             ri[2] = {compositeSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
@@ -1961,7 +2305,8 @@ bool VulkanRenderer::Impl::createHdrResources() {
     image.format = kHdrFormat;
     image.tiling = VK_IMAGE_TILING_OPTIMAL;
     image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    image.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                  (rayQuery ? VK_IMAGE_USAGE_STORAGE_BIT : 0);   // (the reflection rays add into it: rt_apply.comp, ADR-0376)
     image.samples = VK_SAMPLE_COUNT_1_BIT;
     image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     if (vkCreateImage(device, &image, nullptr, &hdrImage) != VK_SUCCESS) {
@@ -2468,7 +2813,7 @@ void VulkanRenderer::Impl::recordBloom(VkCommandBuffer cmd) {
     };
 
     // Bright-pass: HDR → bloomImage[0].
-    BloomPush bright{tx, ty, 0.0f, 0.0f, bloomThreshold, bloomKnee, 1.0f, 0.0f};
+    BloomPush bright{tx, ty, 0.0f, 0.0f, bloomThreshold * preExposure(), bloomKnee * preExposure(), 1.0f, 0.0f};   // (in pre-exposed units)
     pass(bloomFramebuffer[0], bloomSetBright, bright);
     // Blur H: bloomImage[0] → bloomImage[1].
     BloomPush bh{tx, ty, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
@@ -2805,8 +3150,9 @@ void VulkanRenderer::Impl::recordSsao(VkCommandBuffer cmd) {
     vkCmdSetScissor(cmd, 0, 1, &sc);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssaoPipeline);
     std::array<VkDescriptorSet, 2> sets{descriptorSets[currentFrame], gbufferSet};
+    const uint32_t frameSlot = 0;   // (set 0's globals: the frame's view, ADR-0372)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssaoPipelineLayout, 0,
-                            static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
+                            static_cast<uint32_t>(sets.size()), sets.data(), 1, &frameSlot);
     SsaoPush push{ssaoRadius, ssaoBias, ssaoIntensity, 0.0f};
     vkCmdPushConstants(cmd, ssaoPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(SsaoPush), &push);
@@ -2874,9 +3220,18 @@ bool VulkanRenderer::Impl::createSsrResources() {
     ssrExtent = {std::max(1u, swapchainExtent.width / 2),
                  std::max(1u, swapchainExtent.height / 2)};
     if (!createColorTarget(ssrExtent.width, ssrExtent.height, kHdrFormat,
-                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                               (rayQuery ? VK_IMAGE_USAGE_STORAGE_BIT : 0),   // (the rays write into it: ADR-0376)
                            ssrImage, ssrMemory, ssrView))
         return false;
+    if (rayQuery) {
+        if (!createColorTarget(ssrExtent.width, ssrExtent.height, kHdrFormat, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                               rtRawImage, rtRawMemory, rtRawView) ||
+            !createColorTarget(ssrExtent.width, ssrExtent.height, kHdrFormat, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                               rtOutImage, rtOutMemory, rtOutView))
+            return false;
+        rtImagesGeneral = false;
+    }
 
     if (ssrRenderPass == VK_NULL_HANDLE) {
         VkAttachmentDescription color{};
@@ -3053,8 +3408,9 @@ void VulkanRenderer::Impl::recordSsr(VkCommandBuffer cmd) {
     vkCmdSetScissor(cmd, 0, 1, &sc);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssrPipeline);
     std::array<VkDescriptorSet, 2> sets{descriptorSets[currentFrame], ssrSet};
+    const uint32_t frameSlot = 0;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssrPipelineLayout, 0,
-                            static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
+                            static_cast<uint32_t>(sets.size()), sets.data(), 1, &frameSlot);
     SsrPush push{ssrMaxRayDist, ssrThickness, ssrMaxRoughness, ssrBlendStrength};
     vkCmdPushConstants(cmd, ssrPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(SsrPush), &push);
@@ -3306,8 +3662,9 @@ void VulkanRenderer::Impl::recordDof(VkCommandBuffer cmd) {
     vkCmdSetScissor(cmd, 0, 1, &sc);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dofPipeline);
     std::array<VkDescriptorSet, 2> sets{descriptorSets[currentFrame], dofSet};
+    const uint32_t frameSlot = 0;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dofPipelineLayout, 0,
-                            static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
+                            static_cast<uint32_t>(sets.size()), sets.data(), 1, &frameSlot);
     DofPush push{dofFocusDistance, dofFocalLength, dofAperture,
                  dofExtent.height * 1000.0f / dofSensorHeight, 16.0f,
                  1.0f / float(dofExtent.width), 1.0f / float(dofExtent.height), 0.0f};
@@ -3674,9 +4031,9 @@ bool VulkanRenderer::Impl::createSyncObjects() {
 }
 
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 19> bindings{};
     bindings[0].binding = 0;   // global UBO
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;   // (slots: the frame's, the probe faces': ADR-0372)
     bindings[0].descriptorCount = 1;
     bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     bindings[1].binding = 1;   // cascaded shadow map (sampler2DArrayShadow)
@@ -3695,12 +4052,37 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
     bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[4].descriptorCount = 1;
     bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    for (uint32_t b = 8; b < 11; ++b) {   // the clustered lights: lights, froxels, index lists (storage buffers)
+        bindings[b].binding = b;
+        bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[b].descriptorCount = 1;
+        bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    for (uint32_t b = 11; b < 16; ++b) {   // the physical sky's view, transmittance (0367), aerial volume (0370), cube (0371)
+        bindings[b].binding = b;
+        bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[b].descriptorCount = 1;
+        bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
     for (uint32_t b = 5; b < 8; ++b) {   // terrain normal map (ADR-0205); cover and macro maps (ADR-0208)
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[b].descriptorCount = 1;
         bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
+    // the reflection probes (ADR-0373): their positions and boxes (16), their relit cubes (17)
+    bindings[16].binding = 16;
+    bindings[16].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[16].descriptorCount = 1;
+    bindings[17].binding = 17;
+    bindings[17].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[17].descriptorCount = 1;
+    // the clouds' weather map, for their shadow (ADR-0387)
+    bindings[18].binding = 18;
+    bindings[18].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[18].descriptorCount = 1;
+    // every binding is the compute passes' too: probe_relight.comp lights a probe as mesh.frag lights a surface
+    for (VkDescriptorSetLayoutBinding& b : bindings) b.stageFlags |= VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -3714,21 +4096,200 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
 
 bool VulkanRenderer::Impl::createGlobalsBuffers() {
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        if (!createBuffer(sizeof(GlobalsUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        if (globalsStride == 0) {   // (each slot on the device's uniform-offset alignment)
+            VkPhysicalDeviceProperties props;
+            vkGetPhysicalDeviceProperties(physicalDevice, &props);
+            const VkDeviceSize a = std::max<VkDeviceSize>(props.limits.minUniformBufferOffsetAlignment, 16);
+            globalsStride = (sizeof(GlobalsUBO) + a - 1) / a * a;
+        }
+        if (!createBuffer(globalsStride * kGlobalsSlots, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                           globalsBuffers[i], globalsMemory[i]))
             return false;
-        vkMapMemory(device, globalsMemory[i], 0, sizeof(GlobalsUBO), 0, &globalsMapped[i]);
+        vkMapMemory(device, globalsMemory[i], 0, globalsStride * kGlobalsSlots, 0, &globalsMapped[i]);
+        const VkDeviceSize sizes[3] = {kClusterMaxLights * sizeof(GpuLight),
+                                       static_cast<VkDeviceSize>(ClusterGrid{}.cells()) * sizeof(uint32_t),
+                                       kClusterMaxIndices * sizeof(uint32_t)};
+        for (int k = 0; k < 3; ++k) {
+            if (!createBuffer(sizes[k], VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                              clusterBuf[k][i], clusterMem[k][i]))
+                return false;
+            vkMapMemory(device, clusterMem[k][i], 0, sizes[k], 0, &clusterMapped[k][i]);
+            std::memset(clusterMapped[k][i], 0, static_cast<std::size_t>(sizes[k]));
+        }
+    }
+    // the GPU's own lists (ADR-0364): device-local, written by cluster_bin.comp
+    static const bool gpuWanted = [] { const char* e = std::getenv("RT_GPU_CLUSTERS"); return !(e && std::string(e) == "0"); }();
+    if (gpuWanted) {
+        const VkDeviceSize binSizes[2] = {static_cast<VkDeviceSize>(ClusterGrid{}.cells()) * sizeof(uint32_t),
+                                          static_cast<VkDeviceSize>(ClusterGrid{}.cells()) * 64u * sizeof(uint32_t)};
+        bool ok = true;
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT && ok; ++i)
+            for (int k = 0; k < 2 && ok; ++k) {
+                ok = createBuffer(binSizes[k], VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, binBuf[k][i], binMem[k][i]);
+                if (ok && std::getenv("RT_CLUSTER_CHECK")) {
+                    ok = createBuffer(binSizes[k], VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                      checkBuf[k][i], checkMem[k][i]);
+                    if (ok) vkMapMemory(device, checkMem[k][i], 0, binSizes[k], 0, &checkMapped[k][i]);
+                }
+            }
+        gpuBin = ok && createBinPipeline();
+        LOG_INFO("[vulkan] clustered lights binned on the %s", gpuBin ? "GPU (cluster_bin.comp)" : "CPU (the GPU path failed)");
     }
     return true;
 }
 
+bool VulkanRenderer::Impl::createBinPipeline() {
+    VkDescriptorSetLayoutBinding b[3]{};
+    for (int k = 0; k < 3; ++k) {
+        b[k].binding = static_cast<uint32_t>(k);
+        b[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        b[k].descriptorCount = 1;
+        b[k].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 3;
+    li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &binSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * MAX_FRAMES_IN_FLIGHT};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = MAX_FRAMES_IN_FLIGHT;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &size;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &binPool) != VK_SUCCESS) return false;
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkDescriptorSetAllocateInfo a{};
+        a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        a.descriptorPool = binPool;
+        a.descriptorSetCount = 1;
+        a.pSetLayouts = &binSetLayout;
+        if (vkAllocateDescriptorSets(device, &a, &binSets[i]) != VK_SUCCESS) return false;
+        const VkBuffer bufs[3] = {clusterBuf[0][i], binBuf[0][i], binBuf[1][i]};
+        VkDescriptorBufferInfo info[3];
+        VkWriteDescriptorSet w[3]{};
+        for (int k = 0; k < 3; ++k) {
+            info[k] = {bufs[k], 0, VK_WHOLE_SIZE};
+            w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[k].dstSet = binSets[i];
+            w[k].dstBinding = static_cast<uint32_t>(k);
+            w[k].descriptorCount = 1;
+            w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[k].pBufferInfo = &info[k];
+        }
+        vkUpdateDescriptorSets(device, 3, w, 0, nullptr);
+    }
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 80};
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &binSetLayout;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &range;
+    if (vkCreatePipelineLayout(device, &pl, nullptr, &binLayout) != VK_SUCCESS) return false;
+    VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/cluster_bin.comp.spv");
+    if (!mod) return false;
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = mod;
+    ci.stage.pName = "main";
+    ci.layout = binLayout;
+    const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &binPipe);
+    vkDestroyShaderModule(device, mod, nullptr);
+    if (r != VK_SUCCESS) { binPipe = VK_NULL_HANDLE; return false; }
+    return true;
+}
+
+// The froxel lists, built by cluster_bin.comp from this frame's lights (already in clusterBuf[0]), before any pass reads
+// them (ADR-0364)
+void VulkanRenderer::Impl::recordClusterBin(VkCommandBuffer cmd) {
+    if (!clustered || !gpuBin) return;
+    VkMemoryBarrier toCompute{};
+    toCompute.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    toCompute.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+    toCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 1, &toCompute, 0, nullptr, 0, nullptr);
+    struct Push { float view[3][4]; int32_t grid[4]; float depth[4]; } push{};
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 4; ++c) push.view[r][c] = static_cast<float>(camView.m[r][c]);
+    push.grid[0] = clusterGrid.tilesX;
+    push.grid[1] = clusterGrid.tilesY;
+    push.grid[2] = clusterGrid.slices;
+    push.grid[3] = static_cast<int32_t>(binLightCount);
+    push.depth[0] = clusterGrid.zNear;
+    push.depth[1] = clusterGrid.zFar;
+    push.depth[2] = camTanHalfY * camAspect;
+    push.depth[3] = camTanHalfY;
+    static_assert(sizeof(Push) == 80, "cluster_bin.comp's push constants");
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, binPipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, binLayout, 0, 1, &binSets[currentFrame], 0, nullptr);
+    vkCmdPushConstants(cmd, binLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(cmd, static_cast<uint32_t>(clusterGrid.cells()), 1, 1);
+    VkMemoryBarrier toRead{};
+    toRead.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &toRead, 0, nullptr, 0, nullptr);
+    if (checkThisFrame && checkBuf[0][currentFrame]) {
+        for (int k = 0; k < 2; ++k) {
+            VkBufferCopy cp{0, 0, k == 0 ? static_cast<VkDeviceSize>(clusterGrid.cells()) * sizeof(uint32_t)
+                                         : static_cast<VkDeviceSize>(clusterGrid.cells()) * 64u * sizeof(uint32_t)};
+            vkCmdCopyBuffer(cmd, binBuf[k][currentFrame], checkBuf[k][currentFrame], 1, &cp);
+        }
+        VkMemoryBarrier toHost{};
+        toHost.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        toHost.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost, 0, nullptr, 0, nullptr);
+        checkPending[currentFrame] = true;
+    }
+}
+
+// RT_CLUSTER_CHECK: this slot's GPU lists (its fence has passed) against the CPU's from the same lights and camera
+void VulkanRenderer::Impl::compareClusterCheck() {
+    if (!checkPending[currentFrame]) return;
+    checkPending[currentFrame] = false;
+    const uint32_t* gc = static_cast<const uint32_t*>(checkMapped[0][currentFrame]);
+    const uint32_t* gi = static_cast<const uint32_t*>(checkMapped[1][currentFrame]);
+    const ClusterLists& cpu = checkCpu[currentFrame];
+    int differ = 0, differCapped = 0, missing = 0, extra = 0;
+    std::vector<uint32_t> a, b;
+    for (int c = 0; c < clusterGrid.cells(); ++c) {
+        const uint32_t oc = cpu.offsetCount[static_cast<std::size_t>(c)];
+        a.assign(cpu.indices.begin() + (oc & 0xFFFFFFu), cpu.indices.begin() + (oc & 0xFFFFFFu) + (oc >> 24));
+        b.assign(gi + (gc[c] & 0xFFFFFFu), gi + (gc[c] & 0xFFFFFFu) + (gc[c] >> 24));
+        std::sort(a.begin(), a.end());
+        std::sort(b.begin(), b.end());
+        if (a == b) continue;
+        if (a.size() >= 64 || b.size() >= 64) { ++differCapped; continue; }
+        ++differ;
+        std::vector<uint32_t> d;
+        std::set_difference(a.begin(), a.end(), b.begin(), b.end(), std::back_inserter(d));
+        missing += static_cast<int>(d.size());
+        d.clear();
+        std::set_difference(b.begin(), b.end(), a.begin(), a.end(), std::back_inserter(d));
+        extra += static_cast<int>(d.size());
+    }
+    LOG_INFO("[clusters] check: GPU against CPU over %d froxels: %d differ (%d lights missing, %d extra), %d at the cap differ",
+             clusterGrid.cells(), differ, missing, extra, differCapped);
+}
+
 bool VulkanRenderer::Impl::createDescriptorPool() {
-    std::array<VkDescriptorPoolSize, 2> sizes{};
-    sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    std::array<VkDescriptorPoolSize, 3> sizes{};
+    sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     sizes[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
+    sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;   // the clustered lights' three buffers, the probes'
+    sizes[2].descriptorCount = MAX_FRAMES_IN_FLIGHT * 4;
     sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon + 3 terrain maps
-    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 7;
+    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 14;   // (+ the clouds' map for their shadow, ADR-0387)   // (+ the probes' cube array)   // + the sky view + transmittance + the aerial volume's two + the cube
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = static_cast<uint32_t>(sizes.size());
@@ -3777,7 +4338,7 @@ bool VulkanRenderer::Impl::createDescriptorSets() {
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = descriptorSets[i];
         writes[0].dstBinding = 0;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         writes[0].descriptorCount = 1;
         writes[0].pBufferInfo = &buf;
         writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -3792,7 +4353,20 @@ bool VulkanRenderer::Impl::createDescriptorSets() {
         writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[2].descriptorCount = 1;
         writes[2].pImageInfo = &lut;
-        vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        // (the horizon map, writes[3], waits for the default texture: updateGlobalHorizonDescriptor writes it once it exists)
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(defaultTexture.view ? writes.size() : 3), writes.data(), 0, nullptr);
+        VkDescriptorBufferInfo cb[3];
+        VkWriteDescriptorSet cw[3]{};
+        for (int k = 0; k < 3; ++k) {
+            cb[k] = {k > 0 && gpuBin ? binBuf[k - 1][i] : clusterBuf[k][i], 0, VK_WHOLE_SIZE};   // (the GPU's lists, ADR-0364)
+            cw[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            cw[k].dstSet = descriptorSets[i];
+            cw[k].dstBinding = 8 + static_cast<uint32_t>(k);
+            cw[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            cw[k].descriptorCount = 1;
+            cw[k].pBufferInfo = &cb[k];
+        }
+        vkUpdateDescriptorSets(device, 3, cw, 0, nullptr);
     }
 
     // Env equirect sampler (wrap-u/clamp-v, linear + mips for roughness LOD).
@@ -3852,6 +4426,1200 @@ void VulkanRenderer::Impl::updateGlobalTerrainNormalDescriptor() {
             write.pImageInfo = &img;
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
         }
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) writeGlobalCloudShadow(i);   // (binding 18 needs a view too)
+}
+
+void VulkanRenderer::Impl::writeGlobalCloudShadow(int frame) {
+    if (!defaultTexture.view || !brdfLutSampler) return;
+    VkDescriptorImageInfo img{};
+    img.sampler = brdfLutSampler;   // clamp + linear
+    img.imageView = cloudMapView ? cloudMapView : defaultTexture.view;
+    img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = descriptorSets[frame];
+    write.dstBinding = 18;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &img;
+    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    cloudShadowStale[frame] = false;
+}
+
+// bindings 11 (the sky view, GENERAL) and 12 (the transmittance table): the default texture until the sky has them
+void VulkanRenderer::Impl::updateSkyDescriptors() {
+    if (!defaultTexture.view || !brdfLutSampler) return;
+    GpuTexture* tr = textures.get(skyTransTex);
+    const bool viewOn = skyViewView != VK_NULL_HANDLE && skyViewGeneral;
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t k = 0; k < 2; ++k) {
+            VkDescriptorImageInfo img{};
+            img.sampler = brdfLutSampler;   // linear, clamped
+            if (k == 0) {
+                img.imageView = viewOn ? skyViewView : defaultTexture.view;
+                img.imageLayout = viewOn ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            } else {
+                img.imageView = tr && tr->view ? tr->view : defaultTexture.view;
+                img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            }
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = descriptorSets[i];
+            write.dstBinding = 11 + k;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo = &img;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        }
+    // 16, 17: the reflection probes' boxes and relit cubes (ADR-0373)
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT && probeRadCubeView && probeBuf[i]; ++i) {
+        VkDescriptorBufferInfo bi{probeBuf[i], 0, VK_WHOLE_SIZE};
+        VkDescriptorImageInfo img{brdfLutSampler, probeRadCubeView, VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet w[2]{};
+        w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[0].dstSet = descriptorSets[i];
+        w[0].dstBinding = 16;
+        w[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[0].descriptorCount = 1;
+        w[0].pBufferInfo = &bi;
+        w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[1].dstSet = descriptorSets[i];
+        w[1].dstBinding = 17;
+        w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[1].descriptorCount = 1;
+        w[1].pImageInfo = &img;
+        vkUpdateDescriptorSets(device, 2, w, 0, nullptr);
+    }
+    // 15: the sky cube (made at init; GENERAL once written)
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT && cubeOutView; ++i) {
+        VkDescriptorImageInfo img{brdfLutSampler, cubeOutView, VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = descriptorSets[i];
+        write.dstBinding = 15;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.descriptorCount = 1;
+        write.pImageInfo = &img;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    }
+    // 13, 14: the aerial volume (made at init, so always a 3D view; GENERAL once it has been written)
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t k = 0; k < 2; ++k) {
+            if (!aerialView[k]) continue;
+            VkDescriptorImageInfo img{brdfLutSampler, aerialView[k], VK_IMAGE_LAYOUT_GENERAL};
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = descriptorSets[i];
+            write.dstBinding = 13 + k;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo = &img;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        }
+}
+
+bool VulkanRenderer::Impl::createSkyCubeImages() {
+    auto make = [&](uint32_t mips, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem) {
+        VkImageCreateInfo ii{};
+        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+        ii.imageType = VK_IMAGE_TYPE_2D;
+        ii.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ii.extent = {kCubeSize, kCubeSize, 1};
+        ii.mipLevels = mips;
+        ii.arrayLayers = 6;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = usage;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device, &ii, nullptr, &img) != VK_SUCCESS) return false;
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(device, img, &req);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device, &ai, nullptr, &mem) != VK_SUCCESS) return false;
+        vkBindImageMemory(device, img, mem, 0);
+        return true;
+    };
+    auto view = [&](VkImage img, uint32_t mip0, uint32_t mips, VkImageView& out) {
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = img;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+        vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mip0, mips, 0, 6};
+        return vkCreateImageView(device, &vi, nullptr, &out) == VK_SUCCESS;
+    };
+    if (!make(kCubeSrcMips, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+              cubeSrcImage, cubeSrcMemory) ||
+        !make(kCubeOutMips, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, cubeOutImage, cubeOutMemory))
+        return false;
+    if (!view(cubeSrcImage, 0, kCubeSrcMips, cubeSrcView) || !view(cubeSrcImage, 0, 1, cubeSrcMip0) ||
+        !view(cubeOutImage, 0, kCubeOutMips, cubeOutView))
+        return false;
+    for (uint32_t m = 0; m < kCubeOutMips; ++m)
+        if (!view(cubeOutImage, m, 1, cubeOutMip[m])) return false;
+    return true;
+}
+
+bool VulkanRenderer::Impl::ensureSkyCubePipelines() {
+    if (cubePipe && prefPipe) return true;
+    if (cubeFailed || !cubeOutView || !skyViewView) return false;
+    cubeFailed = true;
+    auto setLayout = [&](VkDescriptorType second, VkDescriptorSetLayout& out) {
+        VkDescriptorSetLayoutBinding b[2]{};
+        b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; b[0].descriptorCount = 1;
+        b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        b[1].binding = 1; b[1].descriptorType = second; b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        li.bindingCount = 2;
+        li.pBindings = b;
+        return vkCreateDescriptorSetLayout(device, &li, nullptr, &out) == VK_SUCCESS;
+    };
+    if (!setLayout(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cubeSetLayout) ||
+        !setLayout(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, prefSetLayout))
+        return false;
+    VkDescriptorPoolSize sz[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 + kCubeOutMips}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 + kCubeOutMips}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1 + kCubeOutMips;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sz;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &cubePool) != VK_SUCCESS) return false;
+    auto alloc = [&](VkDescriptorSetLayout l, VkDescriptorSet& s) {
+        VkDescriptorSetAllocateInfo a{};
+        a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        a.descriptorPool = cubePool;
+        a.descriptorSetCount = 1;
+        a.pSetLayouts = &l;
+        return vkAllocateDescriptorSets(device, &a, &s) == VK_SUCCESS;
+    };
+    auto write = [&](VkDescriptorSet s, VkImageView storage, VkImageView sampled, VkImageLayout sampledLayout) {
+        VkDescriptorImageInfo img[2] = {{VK_NULL_HANDLE, storage, VK_IMAGE_LAYOUT_GENERAL}, {brdfLutSampler, sampled, sampledLayout}};
+        VkWriteDescriptorSet w[2]{};
+        for (int k = 0; k < 2; ++k) {
+            w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[k].dstSet = s;
+            w[k].dstBinding = static_cast<uint32_t>(k);
+            w[k].descriptorCount = 1;
+            w[k].descriptorType = k == 0 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[k].pImageInfo = &img[k];
+        }
+        vkUpdateDescriptorSets(device, 2, w, 0, nullptr);
+    };
+    if (!alloc(cubeSetLayout, cubeSet)) return false;
+    write(cubeSet, cubeSrcMip0, skyViewView, VK_IMAGE_LAYOUT_GENERAL);
+    for (uint32_t m = 0; m < kCubeOutMips; ++m) {
+        if (!alloc(prefSetLayout, prefSets[m])) return false;
+        write(prefSets[m], cubeOutMip[m], cubeSrcView, VK_IMAGE_LAYOUT_GENERAL);
+    }
+    auto pipe = [&](VkDescriptorSetLayout sl, uint32_t pushBytes, const char* spv, VkPipelineLayout& layout, VkPipeline& out) {
+        VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, pushBytes};
+        VkPipelineLayoutCreateInfo pl{};
+        pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pl.setLayoutCount = 1;
+        pl.pSetLayouts = &sl;
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &range;
+        if (vkCreatePipelineLayout(device, &pl, nullptr, &layout) != VK_SUCCESS) return false;
+        VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/" + spv);
+        if (!mod) return false;
+        VkComputePipelineCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        ci.stage.module = mod;
+        ci.stage.pName = "main";
+        ci.layout = layout;
+        const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &out);
+        vkDestroyShaderModule(device, mod, nullptr);
+        return r == VK_SUCCESS;
+    };
+    if (!pipe(cubeSetLayout, 32, "sky_cube.comp.spv", cubeLayout, cubePipe) ||
+        !pipe(prefSetLayout, 16, "sky_prefilter.comp.spv", prefLayout, prefPipe))
+        return false;
+    cubeFailed = false;
+    LOG_INFO("[vulkan] physical sky: sky cubemap pipelines ready (%u^2, %u rough mips)", kCubeSize, kCubeOutMips);
+    return true;
+}
+
+// The sky cube for this frame (ADR-0371): mip 0 from the sky view, box mips by blits, then the GGX mips
+void VulkanRenderer::Impl::recordSkyCube(VkCommandBuffer cmd) {
+    if (!skyPhysicalOn || !skyViewGeneral || !ensureSkyCubePipelines()) return;
+    auto barrier = [&](VkImage img, uint32_t mip, uint32_t mips, VkAccessFlags src, VkAccessFlags dst, VkPipelineStageFlags s0,
+                       VkPipelineStageFlags s1, bool fromUndefined) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.srcAccessMask = src;
+        b.dstAccessMask = dst;
+        b.oldLayout = fromUndefined ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = img;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mip, mips, 0, 6};
+        vkCmdPipelineBarrier(cmd, s0, s1, 0, 0, nullptr, 0, nullptr, 1, &b);
+    };
+    const bool fresh = !cubeGeneral;
+    const VkPipelineStageFlags prior = fresh ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                                             : (VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    const VkAccessFlags priorRead = fresh ? 0 : VK_ACCESS_SHADER_READ_BIT;   // (nothing to wait on the first time)
+    barrier(cubeSrcImage, 0, kCubeSrcMips, priorRead, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+            prior, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, fresh);
+    barrier(cubeOutImage, 0, kCubeOutMips, priorRead, VK_ACCESS_SHADER_WRITE_BIT, prior,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, fresh);
+    cubeGeneral = true;
+    struct CubePush { float sun[4], planet[4]; } cp{};
+    cp.sun[0] = static_cast<float>(skyFrame.lightDir.x); cp.sun[1] = static_cast<float>(skyFrame.lightDir.y);
+    cp.sun[2] = static_cast<float>(skyFrame.lightDir.z);
+    cp.planet[0] = skyFrame.groundRadius; cp.planet[1] = skyFrame.cameraHeight;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cubePipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cubeLayout, 0, 1, &cubeSet, 0, nullptr);
+    vkCmdPushConstants(cmd, cubeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cp), &cp);
+    vkCmdDispatch(cmd, kCubeSize / 8, kCubeSize / 8, 6);
+    // the box mips, each from the one above
+    for (uint32_t m = 1; m < kCubeSrcMips; ++m) {
+        barrier(cubeSrcImage, m - 1, 1, m == 1 ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                m == 1 ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, false);
+        VkImageBlit bl{};
+        bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m - 1, 0, 6};
+        bl.srcOffsets[1] = {static_cast<int32_t>(kCubeSize >> (m - 1)), static_cast<int32_t>(kCubeSize >> (m - 1)), 1};
+        bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m, 0, 6};
+        bl.dstOffsets[1] = {static_cast<int32_t>(kCubeSize >> m), static_cast<int32_t>(kCubeSize >> m), 1};
+        vkCmdBlitImage(cmd, cubeSrcImage, VK_IMAGE_LAYOUT_GENERAL, cubeSrcImage, VK_IMAGE_LAYOUT_GENERAL, 1, &bl, VK_FILTER_LINEAR);
+    }
+    barrier(cubeSrcImage, 0, kCubeSrcMips, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, false);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prefPipe);
+    for (uint32_t m = 0; m < kCubeOutMips; ++m) {
+        const float rough = static_cast<float>(m) / static_cast<float>(kCubeOutMips - 1);
+        const float push[4] = {rough, static_cast<float>(kCubeSize), static_cast<float>(kCubeSrcMips), 0.0f};
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prefLayout, 0, 1, &prefSets[m], 0, nullptr);
+        vkCmdPushConstants(cmd, prefLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+        const uint32_t s = std::max(1u, kCubeSize >> m);
+        vkCmdDispatch(cmd, (s + 7) / 8, (s + 7) / 8, 6);
+    }
+    barrier(cubeOutImage, 0, kCubeOutMips, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, false);
+}
+
+// THE PROBE CAPTURE'S TARGETS (ADR-0372): three 64^2 RGBA16F colour targets (albedo + metallic, normal + roughness,
+// emission + distance) and a depth, their render pass and framebuffer; and the probes' G-buffer arrays the faces are
+// blitted into (kMaxProbes * 6 layers each)
+bool VulkanRenderer::Impl::createProbeTargets() {
+    auto image = [&](VkFormat fmt, uint32_t layers, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem) {
+        VkImageCreateInfo ii{};
+        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.imageType = VK_IMAGE_TYPE_2D;
+        ii.format = fmt;
+        ii.extent = {kProbeFace, kProbeFace, 1};
+        ii.mipLevels = 1;
+        ii.arrayLayers = layers;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = usage;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device, &ii, nullptr, &img) != VK_SUCCESS) return false;
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(device, img, &req);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device, &ai, nullptr, &mem) != VK_SUCCESS) return false;
+        vkBindImageMemory(device, img, mem, 0);
+        return true;
+    };
+    auto view = [&](VkImage img, VkFormat fmt, VkImageAspectFlags aspect, uint32_t layers, VkImageView& out) {
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = img;
+        vi.viewType = layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = fmt;
+        vi.subresourceRange = {aspect, 0, 1, 0, layers};
+        return vkCreateImageView(device, &vi, nullptr, &out) == VK_SUCCESS;
+    };
+    const VkFormat fmt = VK_FORMAT_R16G16B16A16_SFLOAT;
+    for (int k = 0; k < 3; ++k) {
+        if (!image(fmt, 1, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, probeTargetImage[k], probeTargetMemory[k]) ||
+            !view(probeTargetImage[k], fmt, VK_IMAGE_ASPECT_COLOR_BIT, 1, probeTargetView[k]))
+            return false;
+        if (!image(fmt, kMaxProbes * 6, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                            VK_IMAGE_USAGE_STORAGE_BIT,
+                   probeGbufImage[k], probeGbufMemory[k]) ||
+            !view(probeGbufImage[k], fmt, VK_IMAGE_ASPECT_COLOR_BIT, kMaxProbes * 6, probeGbufView[k]))
+            return false;
+    }
+    {   // the radiance cube array (ADR-0373)
+        VkImageCreateInfo ii{};
+        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+        ii.imageType = VK_IMAGE_TYPE_2D;
+        ii.format = fmt;
+        ii.extent = {kProbeFace, kProbeFace, 1};
+        ii.mipLevels = kProbeMips;
+        ii.arrayLayers = kMaxProbes * 6;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device, &ii, nullptr, &probeRadImage) != VK_SUCCESS) return false;
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(device, probeRadImage, &req);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device, &ai, nullptr, &probeRadMemory) != VK_SUCCESS) return false;
+        vkBindImageMemory(device, probeRadImage, probeRadMemory, 0);
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = probeRadImage;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+        vi.format = fmt;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, kProbeMips, 0, kMaxProbes * 6};
+        if (vkCreateImageView(device, &vi, nullptr, &probeRadCubeView) != VK_SUCCESS) return false;
+        for (uint32_t m = 0; m < kProbeMips; ++m) {
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, m, 1, 0, kMaxProbes * 6};
+            if (vkCreateImageView(device, &vi, nullptr, &probeRadMipView[m]) != VK_SUCCESS) return false;
+        }
+        const VkDeviceSize bytes = 32 + kMaxProbes * 48 + ProbeGrid::kSize * ProbeGrid::kSize * 4;
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+            if (!createBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                              probeBuf[i], probeBufMem[i]))
+                return false;
+            vkMapMemory(device, probeBufMem[i], 0, bytes, 0, &probeBufMapped[i]);
+            std::memset(probeBufMapped[i], 0, static_cast<std::size_t>(bytes));
+        }
+    }
+    if (!image(kDepthFormat, 1, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, probeDepthImage, probeDepthMemory) ||
+        !view(probeDepthImage, kDepthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1, probeDepthView))
+        return false;
+    VkAttachmentDescription att[4]{};
+    for (int k = 0; k < 3; ++k) {
+        att[k].format = fmt;
+        att[k].samples = VK_SAMPLE_COUNT_1_BIT;
+        att[k].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att[k].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att[k].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att[k].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att[k].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        att[k].finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    }
+    att[3] = att[0];
+    att[3].format = kDepthFormat;
+    att[3].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att[3].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    VkAttachmentReference colors[3] = {{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}, {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+                                       {2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}};
+    VkAttachmentReference depth{3, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription sub{};
+    sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub.colorAttachmentCount = 3;
+    sub.pColorAttachments = colors;
+    sub.pDepthStencilAttachment = &depth;
+    VkSubpassDependency deps[2]{};
+    deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    deps[0].dstSubpass = 0;
+    deps[0].srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    deps[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[1].srcSubpass = 0;
+    deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    deps[1].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    VkRenderPassCreateInfo rpi{};
+    rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpi.attachmentCount = 4;
+    rpi.pAttachments = att;
+    rpi.subpassCount = 1;
+    rpi.pSubpasses = &sub;
+    rpi.dependencyCount = 2;
+    rpi.pDependencies = deps;
+    if (vkCreateRenderPass(device, &rpi, nullptr, &probeRenderPass) != VK_SUCCESS) return false;
+    VkImageView fbViews[4] = {probeTargetView[0], probeTargetView[1], probeTargetView[2], probeDepthView};
+    VkFramebufferCreateInfo fbi{};
+    fbi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbi.renderPass = probeRenderPass;
+    fbi.attachmentCount = 4;
+    fbi.pAttachments = fbViews;
+    fbi.width = kProbeFace;
+    fbi.height = kProbeFace;
+    fbi.layers = 1;
+    return vkCreateFramebuffer(device, &fbi, nullptr, &probeFramebuffer) == VK_SUCCESS;
+}
+
+// This frame's probe faces (ADR-0372): each drawn into the targets with its own globals slot, then blitted, mirrored
+// left to right (the cube convention, probeFaceBasis), into its probe's layer of the three G-buffer arrays
+void VulkanRenderer::Impl::recordProbeCaptures(VkCommandBuffer cmd) {
+    if (captureCount == 0 || !probeRenderPass || !probeCulled) return;
+    const uint32_t layers = kMaxProbes * 6;
+    if (!probeGbufGeneral) {
+        VkImageMemoryBarrier b[3]{};   // (every layer: the helper's transition covers the first only)
+        for (int k = 0; k < 3; ++k) {
+            b[k].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b[k].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+            b[k].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b[k].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b[k].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b[k].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b[k].image = probeGbufImage[k];
+            b[k].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
+        }
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                             0, nullptr, 0, nullptr, 3, b);
+        probeGbufGeneral = true;
+    }
+    for (uint32_t c = 0; c < captureCount; ++c) {
+        const ProbeCaptureSlot& slot = captures[c];
+        std::array<VkClearValue, 4> clears{};
+        clears[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}};    // (albedo alpha 0: nothing there -- the sky shows)
+        clears[1].color = {{0.5f, 0.5f, 0.5f, 1.0f}};
+        clears[2].color = {{0.0f, 0.0f, 0.0f, 1.0e4f}};  // (no surface: as far as the sky)
+        clears[3].depthStencil = {0.0f, 0};              // reverse-Z
+        VkRenderPassBeginInfo rp{};
+        rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rp.renderPass = probeRenderPass;
+        rp.framebuffer = probeFramebuffer;
+        rp.renderArea.extent = {kProbeFace, kProbeFace};
+        rp.clearValueCount = 4;
+        rp.pClearValues = clears.data();
+        vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+        VkViewport vp{0.0f, 0.0f, static_cast<float>(kProbeFace), static_cast<float>(kProbeFace), 0.0f, 1.0f};
+        VkRect2D sc{{0, 0}, {kProbeFace, kProbeFace}};
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &sc);
+        const uint32_t slotOffset = static_cast<uint32_t>(globalsStride * (c + 1));
+        VkPipeline bound = VK_NULL_HANDLE;
+        for (const DrawItem& item : slot.items) {
+            GpuMesh* m = meshes.get(item.mesh);
+            if (!m || m->indexCount == 0 || item.terrain || item.crowd) continue;
+            if (item.push.surfaceFlags[1] & (RenderMaterial::FLAG_SHADOW_ONLY | RenderMaterial::FLAG_OVERLAY)) continue;
+            const bool two = (item.push.surfaceFlags[1] & RenderMaterial::FLAG_TWO_SIDED) || item.opacity < 1.0f;
+            const VkPipeline want = two ? (m->packed ? probeTwoSidedPacked : probeTwoSided) : (m->packed ? probeCulledPacked : probeCulled);
+            if (!want) continue;
+            if (want != bound) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                if (bound == VK_NULL_HANDLE)
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 1,
+                                            &slotOffset);
+                bound = want;
+            }
+            const VkDescriptorSet matSet = allocMaterialSet(item);
+            if (matSet == VK_NULL_HANDLE) continue;
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1, &matSet, 0, nullptr);
+            vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPush), &item.push);
+            const VkBuffer vbs[2] = {m->vertexBuffer, instanceBuffers[currentFrame]};
+            const VkDeviceSize offs[2] = {0, 0};
+            vkCmdBindVertexBuffers(cmd, 0, 2, vbs, offs);
+            vkCmdBindIndexBuffer(cmd, m->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, m->indexCount, item.instanceCount, 0, 0, item.firstInstance);
+        }
+        // the ground: the frame's own terrain draws (TerrainLodSystem selects them for the camera; a probe near it sees
+        // the same ground, if not all of it)
+        if (probeTerrain) {
+            bool boundT = false;
+            for (const DrawItem& item : drawQueue) {
+                if (!item.terrain) continue;
+                GpuMesh* m = meshes.get(item.mesh);
+                if (!m || m->indexCount == 0) continue;
+                if (!boundT) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, probeTerrain);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 1,
+                                            &slotOffset);
+                    boundT = true;
+                }
+                const VkDescriptorSet matSet = allocMaterialSet(item);
+                if (matSet == VK_NULL_HANDLE) continue;
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1, &matSet, 0, nullptr);
+                vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPush), &item.push);
+                const VkBuffer vbs[2] = {m->vertexBuffer, instanceBuffers[currentFrame]};
+                const VkDeviceSize offs[2] = {0, 0};
+                vkCmdBindVertexBuffers(cmd, 0, 2, vbs, offs);
+                vkCmdBindIndexBuffer(cmd, m->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cmd, m->indexCount, item.instanceCount, 0, 0, item.firstInstance);
+            }
+        }
+        vkCmdEndRenderPass(cmd);
+        // into the probe's layer, mirrored left to right
+        const uint32_t layer = std::min(slot.probe, kMaxProbes - 1) * 6 + static_cast<uint32_t>(slot.face % 6);
+        probeFaces[std::min(slot.probe, kMaxProbes - 1)] |= static_cast<uint8_t>(1u << (slot.face % 6));
+        VkImageMemoryBarrier toDst[3]{};
+        for (int k = 0; k < 3; ++k) {
+            toDst[k].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toDst[k].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+            toDst[k].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toDst[k].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            toDst[k].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            toDst[k].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toDst[k].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toDst[k].image = probeGbufImage[k];
+            toDst[k].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, layer, 1};
+        }
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 3, toDst);
+        for (int k = 0; k < 3; ++k) {
+            VkImageBlit bl{};
+            bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            bl.srcOffsets[0] = {static_cast<int32_t>(kProbeFace), 0, 0};   // (x reversed: the mirror)
+            bl.srcOffsets[1] = {0, static_cast<int32_t>(kProbeFace), 1};
+            bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, layer, 1};
+            bl.dstOffsets[1] = {static_cast<int32_t>(kProbeFace), static_cast<int32_t>(kProbeFace), 1};
+            vkCmdBlitImage(cmd, probeTargetImage[k], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, probeGbufImage[k], VK_IMAGE_LAYOUT_GENERAL, 1, &bl,
+                           VK_FILTER_NEAREST);
+        }
+        for (int k = 0; k < 3; ++k) {
+            toDst[k].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toDst[k].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        }
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 3, toDst);
+    }
+}
+
+bool VulkanRenderer::Impl::ensureRelightPipelines() {
+    if (relightPipe && pfPipe) return true;
+    if (relightFailed || !probeRadCubeView) return false;
+    relightFailed = true;
+    VkDescriptorSetLayoutBinding rb[4]{};
+    for (int k = 0; k < 4; ++k) {
+        rb[k].binding = static_cast<uint32_t>(k);
+        rb[k].descriptorType = k < 3 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        rb[k].descriptorCount = 1;
+        rb[k].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 4;
+    li.pBindings = rb;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &relightSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorSetLayoutBinding pb[2]{};
+    pb[0].binding = 0; pb[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; pb[0].descriptorCount = 1; pb[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pb[1].binding = 1; pb[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; pb[1].descriptorCount = 1;
+    pb[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    li.bindingCount = 2;
+    li.pBindings = pb;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &pfSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize sz[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 + kProbeMips}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 + kProbeMips}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1 + kProbeMips;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sz;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &relightPool) != VK_SUCCESS) return false;
+    VkDescriptorSetAllocateInfo a{};
+    a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    a.descriptorPool = relightPool;
+    a.descriptorSetCount = 1;
+    a.pSetLayouts = &relightSetLayout;
+    if (vkAllocateDescriptorSets(device, &a, &relightSet) != VK_SUCCESS) return false;
+    {
+        VkDescriptorImageInfo img[4]{};
+        for (int k = 0; k < 3; ++k) img[k] = {brdfLutSampler, probeGbufView[k], VK_IMAGE_LAYOUT_GENERAL};
+        img[3] = {VK_NULL_HANDLE, probeRadMipView[0], VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet w[4]{};
+        for (int k = 0; k < 4; ++k) {
+            w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[k].dstSet = relightSet;
+            w[k].dstBinding = static_cast<uint32_t>(k);
+            w[k].descriptorCount = 1;
+            w[k].descriptorType = rb[k].descriptorType;
+            w[k].pImageInfo = &img[k];
+        }
+        vkUpdateDescriptorSets(device, 4, w, 0, nullptr);
+    }
+    for (uint32_t m = 0; m < kProbeMips; ++m) {
+        a.pSetLayouts = &pfSetLayout;
+        if (vkAllocateDescriptorSets(device, &a, &pfSets[m]) != VK_SUCCESS) return false;
+        VkDescriptorImageInfo img[2] = {{VK_NULL_HANDLE, probeRadMipView[m], VK_IMAGE_LAYOUT_GENERAL},
+                                        {brdfLutSampler, probeRadCubeView, VK_IMAGE_LAYOUT_GENERAL}};
+        VkWriteDescriptorSet w[2]{};
+        for (int k = 0; k < 2; ++k) {
+            w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[k].dstSet = pfSets[m];
+            w[k].dstBinding = static_cast<uint32_t>(k);
+            w[k].descriptorCount = 1;
+            w[k].descriptorType = pb[k].descriptorType;
+            w[k].pImageInfo = &img[k];
+        }
+        vkUpdateDescriptorSets(device, 2, w, 0, nullptr);
+    }
+    auto pipe = [&](const VkDescriptorSetLayout* sls, uint32_t n, const char* spv, VkPipelineLayout& layout, VkPipeline& out) {
+        VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16};
+        VkPipelineLayoutCreateInfo pl{};
+        pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pl.setLayoutCount = n;
+        pl.pSetLayouts = sls;
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &range;
+        if (vkCreatePipelineLayout(device, &pl, nullptr, &layout) != VK_SUCCESS) return false;
+        VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/" + spv);
+        if (!mod) return false;
+        VkComputePipelineCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        ci.stage.module = mod;
+        ci.stage.pName = "main";
+        ci.layout = layout;
+        const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &out);
+        vkDestroyShaderModule(device, mod, nullptr);
+        return r == VK_SUCCESS;
+    };
+    const VkDescriptorSetLayout relightSls[2] = {descriptorSetLayout, relightSetLayout};
+    if (!pipe(relightSls, 2, "probe_relight.comp.spv", relightLayout, relightPipe) ||
+        !pipe(&pfSetLayout, 1, "probe_prefilter.comp.spv", pfLayout, pfPipe))
+        return false;
+    relightFailed = false;
+    LOG_INFO("[vulkan] reflection probes: relight pipelines ready");
+    return true;
+}
+
+// THE PROBES RELIT (ADR-0373): up to four a frame, round the probes whose six faces have all been captured -- lit as the
+// scene is now (set 0, the frame's slot), then blurred into their rough mips
+void VulkanRenderer::Impl::recordProbeRelight(VkCommandBuffer cmd) {
+    if (!probeRadGeneral && probeRadImage) {   // (sampled by mesh.frag from the first frame)
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = probeRadImage;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, kProbeMips, 0, kMaxProbes * 6};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &b);
+        probeRadGeneral = true;
+    }
+    if (probes.empty() || !probeGbufGeneral || !ensureRelightPipelines()) return;
+    const uint32_t n = static_cast<uint32_t>(std::min<std::size_t>(probes.size(), kMaxProbes));
+    std::vector<uint32_t> pick;
+    for (uint32_t k = 0; k < n && pick.size() < 4; ++k) {
+        const uint32_t i = (relightCursor + k) % n;
+        if (probeFaces[i] == 0x3F) pick.push_back(i);
+    }
+    relightCursor = (relightCursor + 4) % std::max(n, 1u);
+    if (pick.empty()) return;
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+                         &mb, 0, nullptr, 0, nullptr);
+    const uint32_t frameSlot = 0;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, relightPipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, relightLayout, 0, 1, &descriptorSets[currentFrame], 1, &frameSlot);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, relightLayout, 1, 1, &relightSet, 0, nullptr);
+    for (uint32_t i : pick) {
+        const float push[4] = {static_cast<float>(probes[i].position.x), static_cast<float>(probes[i].position.y),
+                               static_cast<float>(probes[i].position.z), static_cast<float>(i)};
+        vkCmdPushConstants(cmd, relightLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+        vkCmdDispatch(cmd, kProbeFace / 8, kProbeFace / 8, 6);
+        probeLit[i] = 1;
+    }
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pfPipe);
+    for (uint32_t m = 1; m < kProbeMips; ++m) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pfLayout, 0, 1, &pfSets[m], 0, nullptr);
+        const uint32_t sz = kProbeFace >> m;
+        for (uint32_t i : pick) {
+            const float push[4] = {static_cast<float>(m) / static_cast<float>(kProbeMips - 1), static_cast<float>(i), 0.0f, 0.0f};
+            vkCmdPushConstants(cmd, pfLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+            vkCmdDispatch(cmd, (sz + 7) / 8, (sz + 7) / 8, 6);
+        }
+    }
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+}
+
+// RT_PROBE_DUMP (a check of the capture): probe `probe`'s six albedo faces, read back and written as one PPM strip
+void VulkanRenderer::Impl::dumpProbe(uint32_t probe, const std::string& path) {
+    if (!probeGbufImage[0] || !probeGbufGeneral) return;
+    vkDeviceWaitIdle(device);
+    const VkDeviceSize faceBytes = static_cast<VkDeviceSize>(kProbeFace) * kProbeFace * 8;
+    VkBuffer buf = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    if (!createBuffer(faceBytes * 6 * 3, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, buf, mem))
+        return;
+    VkCommandBufferAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ai.commandPool = commandPool;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    VkCommandBuffer cb;
+    vkAllocateCommandBuffers(device, &ai, &cb);
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cb, &bi);
+    for (int k = 0; k < 3; ++k) {
+        VkBufferImageCopy cp{};
+        cp.bufferOffset = faceBytes * 6 * static_cast<VkDeviceSize>(k);
+        cp.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, std::min(probe, kMaxProbes - 1) * 6, 6};
+        cp.imageExtent = {kProbeFace, kProbeFace, 1};
+        vkCmdCopyImageToBuffer(cb, probeGbufImage[k], VK_IMAGE_LAYOUT_GENERAL, buf, 1, &cp);
+    }
+    vkEndCommandBuffer(cb);
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cb;
+    vkQueueSubmit(graphicsQueue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphicsQueue);
+    void* mapped = nullptr;
+    vkMapMemory(device, mem, 0, faceBytes * 18, 0, &mapped);
+    const uint16_t* h = static_cast<const uint16_t*>(mapped);
+    auto half = [](uint16_t v) {
+        const uint32_t sgn = (v >> 15) & 1u, e = (v >> 10) & 31u, f = v & 1023u;
+        float r = e == 0 ? std::ldexp(static_cast<float>(f), -24) : e == 31 ? 65504.0f : std::ldexp(static_cast<float>(f | 1024u), static_cast<int>(e) - 25);
+        return sgn ? -r : r;
+    };
+    // three rows (albedo, normal, emission), six faces across
+    const uint32_t W = kProbeFace * 6, Hh = kProbeFace * 3;
+    std::vector<uint8_t> img(static_cast<std::size_t>(W) * Hh * 3);
+    for (uint32_t k = 0; k < 3; ++k)
+        for (uint32_t f = 0; f < 6; ++f)
+            for (uint32_t y = 0; y < kProbeFace; ++y)
+                for (uint32_t x = 0; x < kProbeFace; ++x) {
+                    const std::size_t src = ((k * 6 + f) * kProbeFace * kProbeFace + y * kProbeFace + x) * 4;
+                    const std::size_t dst = ((k * kProbeFace + y) * W + f * kProbeFace + x) * 3;
+                    for (int ch = 0; ch < 3; ++ch) {
+                        float v = half(h[src + ch]);
+                        if (k == 2) v = v * 50.0f;   // (emission is small in units)
+                        img[dst + ch] = static_cast<uint8_t>(std::clamp(std::pow(std::max(v, 0.0f), 1.0f / 2.2f), 0.0f, 1.0f) * 255.0f);
+                    }
+                }
+    vkUnmapMemory(device, mem);
+    if (FILE* fp = std::fopen(path.c_str(), "wb")) {
+        std::fprintf(fp, "P6\n%u %u\n255\n", W, Hh);
+        std::fwrite(img.data(), 1, img.size(), fp);
+        std::fclose(fp);
+        LOG_INFO("[probes] probe %u's faces written to %s", probe, path.c_str());
+    }
+    vkFreeCommandBuffers(device, commandPool, 1, &cb);
+    vkDestroyBuffer(device, buf, nullptr);
+    vkFreeMemory(device, mem, nullptr);
+}
+
+bool VulkanRenderer::Impl::createAerialImages() {
+    for (int k = 0; k < 2; ++k) {
+        VkImageCreateInfo ii{};
+        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.imageType = VK_IMAGE_TYPE_3D;
+        ii.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ii.extent = {kAerialSize, kAerialSize, kAerialSize};
+        ii.mipLevels = 1;
+        ii.arrayLayers = 1;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device, &ii, nullptr, &aerialImage[k]) != VK_SUCCESS) return false;
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(device, aerialImage[k], &req);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device, &ai, nullptr, &aerialMemory[k]) != VK_SUCCESS) return false;
+        vkBindImageMemory(device, aerialImage[k], aerialMemory[k], 0);
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = aerialImage[k];
+        vi.viewType = VK_IMAGE_VIEW_TYPE_3D;
+        vi.format = ii.format;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device, &vi, nullptr, &aerialView[k]) != VK_SUCCESS) return false;
+    }
+    return true;
+}
+
+bool VulkanRenderer::Impl::ensureAerialPipeline() {
+    if (aerialPipe) return true;
+    if (!aerialView[0] || !aerialView[1]) return false;
+    VkDescriptorSetLayoutBinding b[4]{};
+    for (int k = 0; k < 4; ++k) {
+        b[k].binding = static_cast<uint32_t>(k);
+        b[k].descriptorType = k < 2 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[k].descriptorCount = 1;
+        b[k].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 4;
+    li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &aerialSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize sz[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sz;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &aerialPool) != VK_SUCCESS) return false;
+    VkDescriptorSetAllocateInfo a{};
+    a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    a.descriptorPool = aerialPool;
+    a.descriptorSetCount = 1;
+    a.pSetLayouts = &aerialSetLayout;
+    if (vkAllocateDescriptorSets(device, &a, &aerialSet) != VK_SUCCESS) return false;
+    GpuTexture* tr = textures.get(skyTransTex);
+    GpuTexture* ms = textures.get(skyMsTex);
+    if (!tr || !ms) return false;
+    VkDescriptorImageInfo img[4]{};
+    img[0] = {VK_NULL_HANDLE, aerialView[0], VK_IMAGE_LAYOUT_GENERAL};
+    img[1] = {VK_NULL_HANDLE, aerialView[1], VK_IMAGE_LAYOUT_GENERAL};
+    img[2] = {brdfLutSampler, tr->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    img[3] = {brdfLutSampler, ms->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet w[4]{};
+    for (int k = 0; k < 4; ++k) {
+        w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[k].dstSet = aerialSet;
+        w[k].dstBinding = static_cast<uint32_t>(k);
+        w[k].descriptorCount = 1;
+        w[k].descriptorType = b[k].descriptorType;
+        w[k].pImageInfo = &img[k];
+    }
+    vkUpdateDescriptorSets(device, 4, w, 0, nullptr);
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 128};
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &aerialSetLayout;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &range;
+    if (vkCreatePipelineLayout(device, &pl, nullptr, &aerialLayout) != VK_SUCCESS) return false;
+    VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/aerial_volume.comp.spv");
+    if (!mod) return false;
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = mod;
+    ci.stage.pName = "main";
+    ci.layout = aerialLayout;
+    const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &aerialPipe);
+    vkDestroyShaderModule(device, mod, nullptr);
+    if (r != VK_SUCCESS) { aerialPipe = VK_NULL_HANDLE; return false; }
+    LOG_INFO("[vulkan] physical sky: aerial perspective volume ready");
+    return true;
+}
+
+// The aerial volume for this frame's camera (ADR-0370), before the scene samples it
+void VulkanRenderer::Impl::recordAerial(VkCommandBuffer cmd) {
+    if (!skyPhysicalOn || !ensureAerialPipeline()) return;
+    VkImageMemoryBarrier bars[2]{};
+    for (int k = 0; k < 2; ++k) {
+        bars[k].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        bars[k].srcAccessMask = aerialGeneral ? VK_ACCESS_SHADER_READ_BIT : 0;
+        bars[k].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        bars[k].oldLayout = aerialGeneral ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+        bars[k].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        bars[k].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bars[k].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bars[k].image = aerialImage[k];
+        bars[k].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    }
+    vkCmdPipelineBarrier(cmd, aerialGeneral ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 2, bars);
+    aerialGeneral = true;
+    const PhysicalSkyFrame& f = skyFrame;
+    struct Push { float planet[4], rayleigh[4], mie[4], sun[4], ozone[4], right[4], up[4], fwd[4]; } p{};
+    p.planet[0] = f.groundRadius; p.planet[1] = f.topRadius; p.planet[2] = f.cameraHeight; p.planet[3] = f.mieG;
+    p.rayleigh[0] = static_cast<float>(f.rayleigh.x); p.rayleigh[1] = static_cast<float>(f.rayleigh.y);
+    p.rayleigh[2] = static_cast<float>(f.rayleigh.z); p.rayleigh[3] = f.rayleighHeight;
+    p.mie[0] = f.mieScatter; p.mie[1] = f.mieExtinction; p.mie[2] = f.mieHeight; p.mie[3] = kAerialFar;
+    p.sun[0] = static_cast<float>(f.lightDir.x); p.sun[1] = static_cast<float>(f.lightDir.y);
+    p.sun[2] = static_cast<float>(f.lightDir.z); p.sun[3] = f.lightTop;
+    p.ozone[0] = static_cast<float>(f.ozone.x); p.ozone[1] = static_cast<float>(f.ozone.y); p.ozone[2] = static_cast<float>(f.ozone.z);
+    p.ozone[3] = cpuGlobals.skyPhysical5[2];   // (the air's density scale, RT_AERIAL)
+    const float tanX = camTanHalfY * camAspect;
+    for (int c = 0; c < 3; ++c) {   // the view's rows: x right, y up, z back (it looks down -Z)
+        p.right[c] = static_cast<float>(camView.m[0][c]) * tanX;
+        p.up[c] = static_cast<float>(camView.m[1][c]) * camTanHalfY;
+        p.fwd[c] = -static_cast<float>(camView.m[2][c]);
+    }
+    static_assert(sizeof(Push) == 128, "aerial_volume.comp's push constants");
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, aerialPipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, aerialLayout, 0, 1, &aerialSet, 0, nullptr);
+    vkCmdPushConstants(cmd, aerialLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+    vkCmdDispatch(cmd, (kAerialSize + 7) / 8, (kAerialSize + 7) / 8, 1);
+    for (int k = 0; k < 2; ++k) {
+        bars[k].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        bars[k].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        bars[k].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 2, bars);
+}
+
+// The sky view's image and the compute pipeline that fills it, made once the tables have come
+bool VulkanRenderer::Impl::ensureSkyView() {
+    if (skyPipe) return true;
+    if (!createColorTarget(192, 108, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           skyViewImage, skyViewMemory, skyViewView))
+        return false;
+    VkDescriptorSetLayoutBinding b[3]{};
+    b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; b[0].descriptorCount = 1;
+    b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    for (int k = 1; k < 3; ++k) {
+        b[k].binding = static_cast<uint32_t>(k);
+        b[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[k].descriptorCount = 1;
+        b[k].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 3;
+    li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &skySetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize sz[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sz;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &skyPool) != VK_SUCCESS) return false;
+    VkDescriptorSetAllocateInfo a{};
+    a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    a.descriptorPool = skyPool;
+    a.descriptorSetCount = 1;
+    a.pSetLayouts = &skySetLayout;
+    if (vkAllocateDescriptorSets(device, &a, &skySet) != VK_SUCCESS) return false;
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 112};
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &skySetLayout;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &range;
+    if (vkCreatePipelineLayout(device, &pl, nullptr, &skyLayout) != VK_SUCCESS) return false;
+    VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/sky_view.comp.spv");
+    if (!mod) return false;
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = mod;
+    ci.stage.pName = "main";
+    ci.layout = skyLayout;
+    const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &skyPipe);
+    vkDestroyShaderModule(device, mod, nullptr);
+    if (r != VK_SUCCESS) { skyPipe = VK_NULL_HANDLE; return false; }
+    LOG_INFO("[vulkan] physical sky: sky-view pipeline ready");
+    return true;
+}
+
+// The sky view for this frame (ADR-0367), before any pass samples it
+void VulkanRenderer::Impl::recordSkyView(VkCommandBuffer cmd) {
+    if (!skyPhysicalOn || !skyPipe || !skySet) return;
+    VkImageMemoryBarrier toWrite{};
+    toWrite.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toWrite.srcAccessMask = skyViewGeneral ? VK_ACCESS_SHADER_READ_BIT : 0;
+    toWrite.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toWrite.oldLayout = skyViewGeneral ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    toWrite.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toWrite.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toWrite.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toWrite.image = skyViewImage;
+    toWrite.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, skyViewGeneral ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toWrite);
+    const PhysicalSkyFrame& f = skyFrame;
+    struct Push { float planet[4], rayleigh[4], mie[4], sun[4], moon[4], ground[4], ozone[4]; } p{};
+    p.planet[0] = f.groundRadius; p.planet[1] = f.topRadius; p.planet[2] = f.cameraHeight; p.planet[3] = f.mieG;
+    p.rayleigh[0] = static_cast<float>(f.rayleigh.x); p.rayleigh[1] = static_cast<float>(f.rayleigh.y);
+    p.rayleigh[2] = static_cast<float>(f.rayleigh.z); p.rayleigh[3] = f.rayleighHeight;
+    p.mie[0] = f.mieScatter; p.mie[1] = f.mieExtinction; p.mie[2] = f.mieHeight;
+    p.sun[0] = static_cast<float>(f.lightDir.x); p.sun[1] = static_cast<float>(f.lightDir.y);
+    p.sun[2] = static_cast<float>(f.lightDir.z); p.sun[3] = f.lightTop;
+    p.moon[0] = static_cast<float>(f.otherDir.x); p.moon[1] = static_cast<float>(f.otherDir.y);
+    p.moon[2] = static_cast<float>(f.otherDir.z); p.moon[3] = f.otherTop;
+    p.ground[0] = static_cast<float>(f.groundAlbedo.x); p.ground[1] = static_cast<float>(f.groundAlbedo.y);
+    p.ground[2] = static_cast<float>(f.groundAlbedo.z);
+    p.ozone[0] = static_cast<float>(f.ozone.x); p.ozone[1] = static_cast<float>(f.ozone.y); p.ozone[2] = static_cast<float>(f.ozone.z);
+    static_assert(sizeof(Push) == 112, "sky_view.comp's push constants");
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, skyPipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, skyLayout, 0, 1, &skySet, 0, nullptr);
+    vkCmdPushConstants(cmd, skyLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+    vkCmdDispatch(cmd, (192 + 7) / 8, (108 + 7) / 8, 1);
+    VkImageMemoryBarrier toRead = toWrite;
+    toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &toRead);
+    if (!skyViewGeneral) {   // (the first frame: the sets now point at it, for the frames after; this one's are bound)
+        skyViewGeneral = true;
+        pendingSkyDescriptors = true;
+    }
+}
+
+bool VulkanRenderer::Impl::ensureLumPipeline() {
+    if (lumPipe) return true;
+    if (lumFailed) return false;
+    lumFailed = true;
+    VkDescriptorSetLayoutBinding b[2]{};
+    b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; b[0].descriptorCount = 1;
+    b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    b[1].binding = 1; b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; b[1].descriptorCount = 1;
+    b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 2;
+    li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &lumSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize sz[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sz;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &lumPool) != VK_SUCCESS) return false;
+    VkDescriptorSetAllocateInfo a{};
+    a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    a.descriptorPool = lumPool;
+    a.descriptorSetCount = 1;
+    a.pSetLayouts = &lumSetLayout;
+    if (vkAllocateDescriptorSets(device, &a, &lumSet) != VK_SUCCESS) return false;
+    if (!createBuffer(64 * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, lumBuf, lumMem))
+        return false;
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        if (!createBuffer(64 * sizeof(uint32_t), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, lumRead[i], lumReadMem[i]))
+            return false;
+        vkMapMemory(device, lumReadMem[i], 0, 64 * sizeof(uint32_t), 0, &lumReadMapped[i]);
+    }
+    VkDescriptorBufferInfo bi{lumBuf, 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet w{};
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = lumSet;
+    w.dstBinding = 1;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w.pBufferInfo = &bi;
+    vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 32};
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &lumSetLayout;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &range;
+    if (vkCreatePipelineLayout(device, &pl, nullptr, &lumLayout) != VK_SUCCESS) return false;
+    VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/lum_histogram.comp.spv");
+    if (!mod) return false;
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = mod;
+    ci.stage.pName = "main";
+    ci.layout = lumLayout;
+    const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &lumPipe);
+    vkDestroyShaderModule(device, mod, nullptr);
+    if (r != VK_SUCCESS) { lumPipe = VK_NULL_HANDLE; return false; }
+    lumFailed = false;
+    return true;
+}
+
+// The histogram of this frame's scene (after the clouds, before the post), copied out for this slot's next turn
+void VulkanRenderer::Impl::recordLumHistogram(VkCommandBuffer cmd) {
+    lumPre[currentFrame] = 0.0f;
+    if (!hdrView || !ensureLumPipeline()) return;
+    if (lumBoundHdr != hdrView) {   // (the swapchain's HDR target is new: point the set at it)
+        VkDescriptorImageInfo img{brdfLutSampler, hdrView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = lumSet;
+        w.dstBinding = 0;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &img;
+        vkDeviceWaitIdle(device);   // (the set may be in a frame still in flight)
+        vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+        lumBoundHdr = hdrView;
+    }
+    vkCmdFillBuffer(cmd, lumBuf, 0, VK_WHOLE_SIZE, 0u);
+    VkMemoryBarrier toCompute{};
+    toCompute.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    toCompute.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    toCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &toCompute, 0, nullptr, 0, nullptr);
+    const int stride = 4;
+    struct Push { float range[4]; int32_t size[4]; } p{};
+    p.range[0] = kLumLog2Min;
+    p.range[1] = 64.0f / kLumLog2Range;
+    p.size[0] = static_cast<int32_t>(swapchainExtent.width);
+    p.size[1] = static_cast<int32_t>(swapchainExtent.height);
+    p.size[2] = stride;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, lumPipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, lumLayout, 0, 1, &lumSet, 0, nullptr);
+    vkCmdPushConstants(cmd, lumLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+    const uint32_t gx = (swapchainExtent.width / stride + 15) / 16, gy = (swapchainExtent.height / stride + 15) / 16;
+    vkCmdDispatch(cmd, gx, gy, 1);
+    VkMemoryBarrier toCopy{};
+    toCopy.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    toCopy.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toCopy.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &toCopy, 0, nullptr, 0, nullptr);
+    VkBufferCopy cp{0, 0, 64 * sizeof(uint32_t)};
+    vkCmdCopyBuffer(cmd, lumBuf, lumRead[currentFrame], 1, &cp);
+    VkMemoryBarrier toHost{};
+    toHost.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    toHost.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost, 0, nullptr, 0, nullptr);
+    lumPre[currentFrame] = std::max(preExposure(), 1e-30f);
+}
+
+// This slot's last histogram (its fence has passed): the mean log2 luminance between the 35th and the 95th
+// percentiles (the dark half of a night street and the lamps themselves left out), back in scene units
+void VulkanRenderer::Impl::readLumHistogram() {
+    if (lumPre[currentFrame] <= 0.0f || !lumReadMapped[currentFrame]) return;
+    const uint32_t* bins = static_cast<const uint32_t*>(lumReadMapped[currentFrame]);
+    uint64_t total = 0;
+    for (int i = 0; i < 64; ++i) total += bins[i];
+    if (total == 0) return;
+    const double lo = 0.35 * static_cast<double>(total), hi = 0.95 * static_cast<double>(total);
+    double seen = 0, sum = 0, weight = 0;
+    for (int i = 0; i < 64; ++i) {
+        const double n = bins[i];
+        const double a = std::max(seen, lo), b = std::min(seen + n, hi);
+        if (b > a) {
+            const double centre = kLumLog2Min + (i + 0.5) * (kLumLog2Range / 64.0);
+            sum += centre * (b - a);
+            weight += b - a;
+        }
+        seen += n;
+    }
+    if (weight <= 0) return;
+    lumLog2 = static_cast<float>(sum / weight - std::log2(static_cast<double>(lumPre[currentFrame])));
+    // the highlights: the bin the 97th percentile falls in
+    seen = 0;
+    for (int i = 0; i < 64; ++i) {
+        seen += bins[i];
+        if (seen >= 0.97 * static_cast<double>(total)) {
+            lumHighLog2 = static_cast<float>(kLumLog2Min + (i + 0.5) * (kLumLog2Range / 64.0) -
+                                             std::log2(static_cast<double>(lumPre[currentFrame])));
+            break;
+        }
+    }
+    lumValid = true;
 }
 
 void VulkanRenderer::Impl::updateGlobalHorizonDescriptor() {
@@ -4217,6 +5985,27 @@ bool VulkanRenderer::Impl::createPipeline() {
     // shader modules are still alive.
     raster.cullMode = VK_CULL_MODE_BACK_BIT;
     VkResult resultCulled = createTwin(&meshPipelineCulled, &meshPipelineCulledPacked);
+    // THE PROBE CAPTURE'S PIPELINES (ADR-0372): the same state into the probe's three targets, mesh.frag compiled with
+    // PROBE_CAPTURE; culled and two-sided, each with its standard-vertex twin
+    if (!probeRenderPass && !createProbeTargets()) LOG_WARN("[vulkan] reflection probes: the capture targets failed");
+    if (probeRenderPass) {
+        VkShaderModule pfrag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh_probe.frag.spv");
+        if (pfrag) {
+            stages[1].module = pfrag;
+            info.renderPass = probeRenderPass;
+            std::array<VkPipelineColorBlendAttachmentState, 3> pb{blendAttachment, blendAttachment, blendAttachment};
+            blend.attachmentCount = 3;
+            blend.pAttachments = pb.data();
+            if (createTwin(&probeCulled, &probeCulledPacked) != VK_SUCCESS) probeCulled = VK_NULL_HANDLE;
+            raster.cullMode = VK_CULL_MODE_NONE;
+            if (createTwin(&probeTwoSided, &probeTwoSidedPacked) != VK_SUCCESS) probeTwoSided = VK_NULL_HANDLE;
+            stages[1].module = frag;
+            info.renderPass = renderPass;
+            blend.attachmentCount = static_cast<uint32_t>(blendAttachments.size());
+            blend.pAttachments = blendAttachments.data();
+            vkDestroyShaderModule(device, pfrag, nullptr);
+        }
+    }
     raster.cullMode = VK_CULL_MODE_NONE;   // wire + transparent stay two-sided
     vkDestroyShaderModule(device, vert, nullptr);
     vkDestroyShaderModule(device, frag, nullptr);
@@ -4300,6 +6089,25 @@ bool VulkanRenderer::Impl::createPipeline() {
                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     info.pVertexInputState = &vertexInputTerrain;
     VkResult cresult = createTwin(&terrainPipeline, nullptr);
+    // ...and its reflection-probe capture twin (ADR-0372): the ground the probes see
+    if (probeRenderPass) {
+        if (VkShaderModule pfrag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh_probe.frag.spv")) {
+            stages[1].module = pfrag;
+            info.renderPass = probeRenderPass;
+            VkPipelineColorBlendAttachmentState opaqueAll = blendAttachments[0];
+            std::array<VkPipelineColorBlendAttachmentState, 3> pb{opaqueAll, opaqueAll, opaqueAll};
+            const VkPipelineColorBlendAttachmentState* was = blend.pAttachments;
+            const uint32_t wasCount = blend.attachmentCount;
+            blend.attachmentCount = 3;
+            blend.pAttachments = pb.data();
+            if (createTwin(&probeTerrain, nullptr) != VK_SUCCESS) probeTerrain = VK_NULL_HANDLE;
+            blend.attachmentCount = wasCount;
+            blend.pAttachments = was;
+            info.renderPass = renderPass;
+            stages[1].module = cfrag;
+            vkDestroyShaderModule(device, pfrag, nullptr);
+        }
+    }
     info.pVertexInputState = &vertexInput;
     vkDestroyShaderModule(device, cvert, nullptr);
     vkDestroyShaderModule(device, cfrag, nullptr);
@@ -4464,7 +6272,7 @@ bool VulkanRenderer::Impl::createBuffer(VkDeviceSize size, VkBufferUsageFlags us
 
 bool VulkanRenderer::Impl::createAllocator() {
     VmaAllocatorCreateInfo info{};
-    info.vulkanApiVersion = VK_API_VERSION_1_0;
+    info.vulkanApiVersion = apiVersion;
     info.physicalDevice = physicalDevice;
     info.device = device;
     info.instance = instance;
@@ -4476,6 +6284,7 @@ bool VulkanRenderer::Impl::createAllocator() {
     if (!fns.vkGetPhysicalDeviceMemoryProperties2KHR) memoryBudgetExt = false;
     info.pVulkanFunctions = &fns;
     if (memoryBudgetExt) info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+    if (rayQuery) info.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;   // (ADR-0376)
     if (vmaCreateAllocator(&info, &allocator) != VK_SUCCESS) {
         LOG_ERROR("[vulkan] vmaCreateAllocator failed");
         return false;
@@ -4711,6 +6520,7 @@ void VulkanRenderer::Impl::collectRetired(bool all) {
         else retiredTextures[keep++] = rt;
     }
     retiredTextures.resize(keep);
+    rt.collect(frameCounter, MAX_FRAMES_IN_FLIGHT, all);
 }
 
 void VulkanRenderer::Impl::destroyMesh(GpuMesh& m) {
@@ -4916,8 +6726,6 @@ bool VulkanRenderer::Impl::createMaterialResources() {
         return false;
     }
 
-    // Chunk size of one pool in the per-frame chain (see materialPools).
-    constexpr uint32_t MAX_MATERIAL_SETS = 2048;
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         VkDescriptorPool pool = VK_NULL_HANDLE;
         if (!createMaterialPool(&pool)) return false;
@@ -4944,6 +6752,9 @@ bool VulkanRenderer::Impl::createMaterialResources() {
         return false;
     }
     updateGlobalTerrainNormalDescriptor();   // (binding 5 needs a view before the first frame: the default's)
+    if (!aerialView[0]) createAerialImages();   // (13, 14 need 3D views from the start)
+    if (!cubeOutView) createSkyCubeImages();    // (15 a cube view)
+    updateSkyDescriptors();                  // (11..14 likewise)
     return true;
 }
 
@@ -5211,9 +7022,14 @@ VkDescriptorSet VulkanRenderer::Impl::allocMaterialSet(const DrawItem& item) {
     // scale as the visible set crossed the cap).
     auto& chain = materialPools[currentFrame];
     for (;;) {
-        dsa.descriptorPool = chain[materialPoolActive];
-        if (vkAllocateDescriptorSets(device, &dsa, &matSet) == VK_SUCCESS)
-            break;
+        if (materialPoolUsed < kMaterialSetsPerPool) {
+            dsa.descriptorPool = chain[materialPoolActive];
+            if (vkAllocateDescriptorSets(device, &dsa, &matSet) == VK_SUCCESS) {
+                ++materialPoolUsed;
+                break;
+            }
+        }
+        materialPoolUsed = 0;
         if (materialPoolActive + 1 < chain.size()) {
             ++materialPoolActive;
             continue;
@@ -5366,6 +7182,9 @@ void VulkanRenderer::Impl::cleanupSwapchain() {
     ssrView = VK_NULL_HANDLE;
     ssrImage = VK_NULL_HANDLE;
     ssrMemory = VK_NULL_HANDLE;
+    for (VkImageView* v : {&rtRawView, &rtOutView}) { if (*v) vkDestroyImageView(device, *v, nullptr); *v = VK_NULL_HANDLE; }
+    for (VkImage* i : {&rtRawImage, &rtOutImage}) { if (*i) vkDestroyImage(device, *i, nullptr); *i = VK_NULL_HANDLE; }
+    for (VkDeviceMemory* m : {&rtRawMemory, &rtOutMemory}) { if (*m) vkFreeMemory(device, *m, nullptr); *m = VK_NULL_HANDLE; }
     if (cloudFramebuffer) vkDestroyFramebuffer(device, cloudFramebuffer, nullptr);
     if (cloudCompositeFramebuffer) vkDestroyFramebuffer(device, cloudCompositeFramebuffer, nullptr);
     if (cloudView) vkDestroyImageView(device, cloudView, nullptr);
@@ -5601,11 +7420,48 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
         gpuTimeWritten[currentFrame] = true;
     }
     gpuMark(cmd, 0);
+    // THE STORAGE IMAGES' WORKING LAYOUT, once (ADR-0373): the aerial volume, the sky cubes and the probes' arrays are
+    // sampled by set 0 from the first frame -- before the features that write them have run -- so they go to GENERAL
+    // together here, and each feature's own first-use transition finds them there
+    if (!initialGeneral) {
+        std::vector<VkImageMemoryBarrier> bs;
+        auto add = [&](VkImage img, uint32_t mips, uint32_t layers) {
+            if (!img) return;
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = img;
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, layers};
+            bs.push_back(b);
+        };
+        add(aerialImage[0], 1, 1);
+        add(aerialImage[1], 1, 1);
+        add(cubeSrcImage, kCubeSrcMips, 6);
+        add(cubeOutImage, kCubeOutMips, 6);
+        for (int k = 0; k < 3; ++k) add(probeGbufImage[k], 1, kMaxProbes * 6);
+        add(probeRadImage, kProbeMips, kMaxProbes * 6);
+        if (!bs.empty())
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr,
+                                 static_cast<uint32_t>(bs.size()), bs.data());
+        aerialGeneral = cubeGeneral = probeGbufGeneral = probeRadGeneral = true;
+        initialGeneral = true;
+    }
+    recordClusterBin(cmd);   // the froxels' light lists (ADR-0364), before the scene pass reads them
+    recordSkyView(cmd);      // the physical sky's view (ADR-0367), before the sky and the scene sample it
+    recordAerial(cmd);       // ...and the air between the camera and everything it sees (ADR-0370)
+    recordSkyCube(cmd);      // ...and the sky as a cubemap for the reflections (ADR-0371)
     recordCrowd(cmd);   // the far travellers' instances, before any pass draws them
 
     // Cascaded shadow maps first (writes the depth array the lit pass samples).
     recordShadowPass(cmd);
     gpuMark(cmd, 1);
+    recordProbeCaptures(cmd);   // this frame's reflection-probe faces (ADR-0372: after the shadows, which set 0 samples)
+    recordProbeRelight(cmd);    // ...and a few probes relit as the scene is now (ADR-0373)
+    recordRayScene(cmd);        // the near acceleration structures for the reflection rays (ADR-0376)
 
     // Scene pass → offscreen HDR + world-normal G-buffer (sky + geometry).
     std::array<VkClearValue, 3> clears{};
@@ -5636,8 +7492,9 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
 
     // Skybox first (fills the background; depth untouched), then geometry.
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipeline);
+    const uint32_t frameSlot = 0;   // (set 0's globals: the frame's view, ADR-0372)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipelineLayout, 0, 1,
-                            &descriptorSets[currentFrame], 0, nullptr);
+                            &descriptorSets[currentFrame], 1, &frameSlot);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
     // Geometry. The wireframe debug view (Renderer::wireframe) shares the mesh
@@ -5692,7 +7549,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
                 if (bound == VK_NULL_HANDLE)
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
-                                            &descriptorSets[currentFrame], 0, nullptr);
+                                            &descriptorSets[currentFrame], 1, &frameSlot);
                 bound = want;
             }
 
@@ -5823,6 +7680,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
         if (resolve) cloudHistCur = 1 - cloudHistCur;   // next frame writes the other, reading this one
     }
 
+    recordLumHistogram(cmd);   // the frame's brightness, for the auto exposure (ADR-0368)
     // Bloom + SSAO read the scene outputs (always run so their views stay
     // sampleable; composite gates whether they're applied).
     gpuMark(cmd, 3);
@@ -5831,6 +7689,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     recordSsao(cmd);
     gpuMark(cmd, 5);
     recordSsr(cmd);
+    recordRtReflect(cmd);   // ...and, near the camera, the rays replace it (ADR-0376)
     gpuMark(cmd, 6);
     recordOcclusion(cmd);
     // DOF (off by default) blurs the HDR scene; composite reads dofView when on.
@@ -5852,9 +7711,9 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline);
     const std::array<VkDescriptorSet, 2> compositeSets{descriptorSets[currentFrame], compositeSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipelineLayout, 0,
-                            static_cast<uint32_t>(compositeSets.size()), compositeSets.data(), 0, nullptr);
+                            static_cast<uint32_t>(compositeSets.size()), compositeSets.data(), 1, &frameSlot);
     CompositePush cpush{};
-    cpush.exposure = sceneExposure;
+    cpush.exposure = preExposureOn() ? 1.0f : sceneExposure;   // (pre-exposed: ADR-0366)
     cpush.tonemapOp = tonemapOp;          // mirrored from the Renderer in endFrame
     cpush.gradeContrast = gradeContrast;
     cpush.gradeSaturation = gradeSaturation;
@@ -5878,6 +7737,28 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     cpush.underwaterColor[0] = static_cast<float>(underwater.color.x);
     cpush.underwaterColor[1] = static_cast<float>(underwater.color.y);
     cpush.underwaterColor[2] = static_cast<float>(underwater.color.z);
+    {
+        // THE LIGHT COMING DOWN INTO THE WATER, in engine units (E / pi on a level surface: the sky's harmonics up,
+        // and the sun's or the moon's beam), under the physical sky; 0: the old sky, whose colours are the light.
+        // composite.frag lit the water with the day model's sky colours, display values that the pre-applied night
+        // exposure turned white (Glenn, 2026-11-08: "going underwater at night the screen turns bright white")
+        float down = 0.0f;
+        if (cpuGlobals.counts[2] == 2) {
+            const float* s0 = cpuGlobals.skySH[0];
+            const float* s1 = cpuGlobals.skySH[1];
+            const float up[3] = {s0[0] * 0.282095f + s1[0] * 0.488603f, s0[1] * 0.282095f + s1[1] * 0.488603f,
+                                 s0[2] * 0.282095f + s1[2] * 0.488603f};
+            down = std::max(0.0f, 0.2126f * up[0] + 0.7152f * up[1] + 0.0722f * up[2]);
+            const GpuLight& l0 = cpuGlobals.lights[0];
+            if (cpuGlobals.counts[0] > 0 && static_cast<int>(l0.typeRange[0]) == 1) {
+                const float cosZ = std::max(0.0f, l0.directionInner[1]);
+                const float lum = 0.2126f * l0.colorOuter[0] + 0.7152f * l0.colorOuter[1] + 0.0722f * l0.colorOuter[2];
+                down += lum * l0.positionIntensity[3] * cosZ / 3.14159265f;
+            }
+            down = std::max(down, 1e-9f);
+        }
+        cpush.underwaterColor[3] = down;
+    }
     vkCmdPushConstants(cmd, compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CompositePush), &cpush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -5945,6 +7826,12 @@ void VulkanRenderer::Impl::drawFrame() {
     using GpuClock = std::chrono::steady_clock;
     const auto cw0 = GpuClock::now();
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+    readLumHistogram();   // (this slot's last measurement, now its fence has passed: ADR-0368)
+    if (pendingSkyDescriptors) {   // the sky view's first frame is drawn: every frame's set 0 now samples it (ADR-0367)
+        vkDeviceWaitIdle(device);
+        updateSkyDescriptors();
+        pendingSkyDescriptors = false;
+    }
     if (crowdReadback[currentFrame].mapped && crowdReadKinds[currentFrame] > 0) {   // the crowd's emitted counts
         vmaInvalidateAllocation(allocator, crowdReadback[currentFrame].alloc, 0, VK_WHOLE_SIZE);
         const uint32_t* c = static_cast<const uint32_t*>(crowdReadback[currentFrame].mapped);
@@ -5963,10 +7850,11 @@ void VulkanRenderer::Impl::drawFrame() {
             if (++gpuFrames == 120) {
                 const double n = gpuFrames;
                 LOG_INFO("[gpu] ms per frame: shadows %.2f scene %.2f clouds %.2f bloom %.2f ssao %.2f ssr %.2f occlusion+dof %.2f "
-                         "composite+ui %.2f | total %.2f || cpu in endFrame: fence wait %.2f record %.2f submit+present %.2f",
+                         "composite+ui %.2f | total %.2f || cpu in endFrame: fence wait %.2f record %.2f submit+present %.2f"
+                         " | lights %d",
                          gpuAccumMs[1] / n, gpuAccumMs[2] / n, gpuAccumMs[3] / n, gpuAccumMs[4] / n, gpuAccumMs[5] / n,
                          gpuAccumMs[6] / n, gpuAccumMs[7] / n, gpuAccumMs[8] / n, gpuAccumMs[0] / n, cpuWaitMs / n,
-                         cpuRecordMs / n, cpuQueueMs / n);
+                         cpuRecordMs / n, cpuQueueMs / n, static_cast<int>(cpuGlobals.counts[0]));
                 for (double& m : gpuAccumMs) m = 0;
                 cpuWaitMs = cpuRecordMs = cpuQueueMs = 0;
                 gpuFrames = 0;
@@ -6003,6 +7891,7 @@ void VulkanRenderer::Impl::drawFrame() {
         vkResetDescriptorPool(device, pool, 0);
     if (uiPools[currentFrame]) vkResetDescriptorPool(device, uiPools[currentFrame], 0);
     materialPoolActive = 0;
+    materialPoolUsed = 0;
     materialPoolExhaustedWarned = false;
 
     uint32_t imageIndex = 0;
@@ -6014,8 +7903,135 @@ void VulkanRenderer::Impl::drawFrame() {
         return;
     }
 
+    // CLUSTERED LIGHTS: bin this frame's lights into the froxels and upload the three buffers -- on the GPU (ADR-0364:
+    // the lights only; cluster_bin.comp writes the lists in recordCommandBuffer), else here
+    if (clustered && gpuBin) {
+        compareClusterCheck();   // (RT_CLUSTER_CHECK: this slot's last read-back, its fence passed)
+        std::memcpy(clusterMapped[0][currentFrame], clusterLights.data(), clusterLights.size() * sizeof(GpuLight));
+        binLightCount = static_cast<uint32_t>(clusterLights.size());
+        static int checkEvery = 0;
+        checkThisFrame = checkBuf[0][currentFrame] != VK_NULL_HANDLE && ++checkEvery % 120 == 0;
+        if (checkThisFrame) {
+            std::vector<ClusterLight> cl;
+            for (const GpuLight& l : clusterLights)
+                cl.push_back({Vec3(l.positionIntensity[0], l.positionIntensity[1], l.positionIntensity[2]), l.typeRange[1]});
+            buildClusters(clusterGrid, camView, camTanHalfY, camAspect, cl, checkCpu[currentFrame]);
+        }
+        if (++clusterLogEvery >= 240) {
+            clusterLogEvery = 0;
+            LOG_INFO("[clusters] %zu lights, binned on the GPU", clusterLights.size());
+        }
+        cpuGlobals.clusterGrid[0] = clusterGrid.tilesX;
+        cpuGlobals.clusterGrid[1] = clusterGrid.tilesY;
+        cpuGlobals.clusterGrid[2] = clusterGrid.slices;
+        cpuGlobals.clusterGrid[3] = 1;
+        cpuGlobals.clusterDepth[0] = clusterGrid.zNear;
+        cpuGlobals.clusterDepth[1] = 1.0f / std::log(clusterGrid.zFar / clusterGrid.zNear);
+        cpuGlobals.clusterDepth[2] = static_cast<float>(swapchainExtent.width);
+        cpuGlobals.clusterDepth[3] = static_cast<float>(swapchainExtent.height);
+    } else if (clustered) {
+        std::vector<ClusterLight> cl;
+        cl.reserve(clusterLights.size());
+        for (const GpuLight& l : clusterLights)
+            cl.push_back({Vec3(l.positionIntensity[0], l.positionIntensity[1], l.positionIntensity[2]), l.typeRange[1]});
+        const auto t0 = std::chrono::steady_clock::now();
+        buildClusters(clusterGrid, camView, camTanHalfY, camAspect, cl, clusterLists);
+        const double binMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        const std::size_t nIdx = std::min<std::size_t>(clusterLists.indices.size(), kClusterMaxIndices);
+        std::memcpy(clusterMapped[0][currentFrame], clusterLights.data(), clusterLights.size() * sizeof(GpuLight));
+        std::memcpy(clusterMapped[1][currentFrame], clusterLists.offsetCount.data(), clusterLists.offsetCount.size() * sizeof(uint32_t));
+        std::memcpy(clusterMapped[2][currentFrame], clusterLists.indices.data(), nIdx * sizeof(uint32_t));
+        if (nIdx < clusterLists.indices.size())   // (a froxel whose list runs past the buffer: emptied, not read off the end)
+            for (uint32_t& oc : clusterLists.offsetCount) if ((oc & 0xFFFFFFu) + (oc >> 24) > nIdx) oc = 0;
+        if (++clusterLogEvery >= 240) {
+            clusterLogEvery = 0;
+            LOG_INFO("[clusters] %zu lights, %zu list entries, busiest froxel %d (%d capped), binned in %.2f ms",
+                     clusterLights.size(), clusterLists.indices.size(), clusterLists.maxInCell, clusterLists.capped, binMs);
+        }
+        cpuGlobals.clusterGrid[0] = clusterGrid.tilesX;
+        cpuGlobals.clusterGrid[1] = clusterGrid.tilesY;
+        cpuGlobals.clusterGrid[2] = clusterGrid.slices;
+        cpuGlobals.clusterGrid[3] = 1;
+        cpuGlobals.clusterDepth[0] = clusterGrid.zNear;
+        cpuGlobals.clusterDepth[1] = 1.0f / std::log(clusterGrid.zFar / clusterGrid.zNear);
+        cpuGlobals.clusterDepth[2] = static_cast<float>(swapchainExtent.width);
+        cpuGlobals.clusterDepth[3] = static_cast<float>(swapchainExtent.height);
+    } else {
+        cpuGlobals.clusterGrid[3] = 0;
+    }
+    // PRE-EXPOSURE (ADR-0366): the scene is exposed as it is drawn -- mesh.frag, sky.frag and the clouds scale their
+    // radiance by it, rides cameraPosition.w -- so the HDR targets hold values near 1 whatever the units (physical
+    // light: a noon street ~10^4, a moonlit one ~10^-2, far past what fp16 keeps). The composite then exposes by 1.
+    // RT_PREEXPOSE=0: the old order (exposure in the composite), the A/B.
+    cpuGlobals.cameraPosition[3] = preExposure();
+    // THE CLOUDS' SHADOW (ADR-0387): the weather map's square and the drift, read where the sun's line crosses the
+    // deck's middle; off without a map or the deck
+    {
+        const VolumetricCloudParams& cp = cloudParams;
+        static const bool kNoCloudShadow = [] { const char* e = std::getenv("RT_CLOUD_SHADOW"); return e && e[0] == '0'; }();
+        const bool on = cloudMapView && cloudMapRect[3] > 0.5f && cloudsActive && !kNoCloudShadow;   // (RT_CLOUD_SHADOW=0: the A/B)
+        cpuGlobals.cloudShadow[0] = cloudMapRect[0];
+        cpuGlobals.cloudShadow[1] = cloudMapRect[1];
+        cpuGlobals.cloudShadow[2] = cloudMapRect[2];
+        cpuGlobals.cloudShadow[3] = on ? cp.shadow : 0.0f;
+        cpuGlobals.cloudShadow2[0] = static_cast<float>(cp.driftX);
+        cpuGlobals.cloudShadow2[1] = static_cast<float>(cp.driftZ);
+        cpuGlobals.cloudShadow2[2] = 0.5f * (cp.bottom + cp.top);
+        cpuGlobals.cloudShadow2[3] = 0.0f;
+        if (cloudShadowStale[currentFrame]) writeGlobalCloudShadow(currentFrame);
+    }
     // Upload this frame's globals into its persistently mapped UBO.
     std::memcpy(globalsMapped[currentFrame], &cpuGlobals, sizeof(GlobalsUBO));
+    // THE PROBES for mesh.frag (ADR-0373/0374): count and the plan grid's corner and cell, its size, then each one's
+    // position (w 1: relit), box min, box max, then the grid's cells
+    if (probeBufMapped[currentFrame]) {
+        float* pb = static_cast<float*>(probeBufMapped[currentFrame]);
+        const uint32_t n = static_cast<uint32_t>(std::min<std::size_t>(probes.size(), kMaxProbes));
+        pb[0] = static_cast<float>(n);
+        pb[1] = probeGrid.originX;
+        pb[2] = probeGrid.originZ;
+        pb[3] = probeGrid.cell;
+        pb[4] = static_cast<float>(ProbeGrid::kSize);
+        // the reflection rays' rules, when they will run this frame (mesh.frag fades the probe out where they fade in;
+        // otherwise the probes and the sky cube stand, as on a GPU without ray tracing)
+        const bool rays = raysThisFrame();
+        pb[5] = rays ? rtRules[0] : 0.0f;
+        pb[6] = rays ? rtRules[1] : 0.0f;
+        pb[7] = rays ? rtRules[2] : 0.0f;
+        std::memcpy(pb + 8 + kMaxProbes * 12, probeGrid.cells.data(), probeGrid.cells.size() * sizeof(uint32_t));
+        for (uint32_t i = 0; i < n; ++i) {
+            const ReflectionProbe& rp = probes[i];
+            float* q = pb + 8 + i * 12;
+            q[0] = static_cast<float>(rp.position.x); q[1] = static_cast<float>(rp.position.y); q[2] = static_cast<float>(rp.position.z);
+            q[3] = probeLit[i] ? 1.0f : 0.0f;
+            q[4] = static_cast<float>(rp.boxMin.x); q[5] = static_cast<float>(rp.boxMin.y); q[6] = static_cast<float>(rp.boxMin.z);
+            q[7] = rp.indoor ? 1.0f : 0.0f;   // (ADR-0380)
+            q[8] = static_cast<float>(rp.boxMax.x); q[9] = static_cast<float>(rp.boxMax.y); q[10] = static_cast<float>(rp.boxMax.z); q[11] = 0.0f;
+        }
+    }
+    // ...and each probe face's, in the slots after it (ADR-0372): its view and eye, no lights or shadows (the capture
+    // writes the surface, not its light)
+    for (uint32_t c = 0; c < captureCount; ++c) {
+        GlobalsUBO face = cpuGlobals;
+        std::memcpy(face.viewProjection, captures[c].vp, sizeof(face.viewProjection));
+        std::memcpy(face.view, captures[c].view, sizeof(face.view));
+        face.cameraPosition[0] = static_cast<float>(captures[c].eye.x);
+        face.cameraPosition[1] = static_cast<float>(captures[c].eye.y);
+        face.cameraPosition[2] = static_cast<float>(captures[c].eye.z);
+        face.cameraPosition[3] = 1.0f;
+        face.counts[0] = 0;
+        face.counts[1] = 0;
+        face.clusterGrid[3] = 0;
+        std::memcpy(static_cast<uint8_t*>(globalsMapped[currentFrame]) + globalsStride * (c + 1), &face, sizeof(GlobalsUBO));
+    }
+    // RT_PROBE_DUMP=<file.ppm>: probe 0's faces, rewritten every 600 of its faces captured (so the file follows the
+    // camera; a check)
+    {
+        static const char* dumpPath = std::getenv("RT_PROBE_DUMP");
+        static int captured = 0;
+        for (uint32_t c = 0; c < captureCount; ++c)
+            if (captures[c].probe == 0 && dumpPath && ++captured % 600 == 0) dumpProbe(0, dumpPath);
+    }
 
     // Volumetric-cloud uniforms (mirrors the Metal endFrame CloudUniforms fill;
     // the scattering-sky sun-transmittance tint is Metal-only until that sky is
@@ -6036,15 +8052,26 @@ void VulkanRenderer::Impl::drawFrame() {
             std::memcpy(cu.sunDirection, cpuGlobals.lights[0].directionInner,
                         3 * sizeof(float));
             std::memcpy(cu.sunColor, cpuGlobals.lights[0].colorOuter, 3 * sizeof(float));
-            cu.sunColor[3] = cpuGlobals.lights[0].positionIntensity[3];
+            cu.sunColor[3] = cpuGlobals.lights[0].positionIntensity[3] * preExposure();
         } else {
             std::memcpy(cu.sunDirection, cpuGlobals.skySunDir, 3 * sizeof(float));
             std::memcpy(cu.sunColor, cpuGlobals.skySunColor, 3 * sizeof(float));
-            cu.sunColor[3] = 1.0f;
+            cu.sunColor[3] = preExposure();
         }
-        for (int k = 0; k < 3; ++k)   // sky zenith/horizon mix reaching interiors
+        if (skyPhysicalOn) {   // (the physical sky: the deck's own sun, from its height -- ADR-0367)
+            const Vec3 d = normalize(skyFrame.cloudLightDir);
+            const Vec3 c = skyFrame.cloudLightColor;
+            const double peak = std::max(c.x, std::max(c.y, c.z));
+            cu.sunDirection[0] = static_cast<float>(d.x); cu.sunDirection[1] = static_cast<float>(d.y);
+            cu.sunDirection[2] = static_cast<float>(d.z);
+            cu.sunColor[0] = static_cast<float>(peak > 0 ? c.x / peak : 0.0);
+            cu.sunColor[1] = static_cast<float>(peak > 0 ? c.y / peak : 0.0);
+            cu.sunColor[2] = static_cast<float>(peak > 0 ? c.z / peak : 0.0);
+            cu.sunColor[3] = static_cast<float>(peak) * preExposure();
+        }
+        for (int k = 0; k < 3; ++k)   // sky zenith/horizon mix reaching interiors (pre-exposed, like the sun above)
             cu.skyAmbient[k] = (cpuGlobals.skyZenith[k] + cpuGlobals.skyHorizon[k]) *
-                               0.5f * cp.ambient;
+                               0.5f * cp.ambient * preExposure();
         cu.skyAmbient[3] = cpuGlobals.wind1[3];   // windTime drives the drift
         cu.layer[0] = cp.bottom;
         cu.layer[1] = cp.top;    // z planetRadius, w domainMode stay 0 (SLAB)
@@ -6067,8 +8094,31 @@ void VulkanRenderer::Impl::drawFrame() {
         }
         cu.typeRange[0] = cp.typeLo;
         cu.typeRange[1] = cp.typeHi;
-        cu.wind[0] = static_cast<float>(cloudWindOffset[0]);
-        cu.wind[1] = static_cast<float>(cloudWindOffset[1]);
+        cu.wind[0] = static_cast<float>(cp.driftX);   // (CloudMapSystem's, ADR-0386)
+        cu.wind[1] = static_cast<float>(cp.driftZ);
+        for (int k = 0; k < 4; ++k) {
+            cu.typeHeights[k][0] = cp.types[static_cast<std::size_t>(k)].base;
+            cu.typeHeights[k][1] = cp.types[static_cast<std::size_t>(k)].top;
+            cu.typeHeights[k][2] = cu.typeHeights[k][3] = 0.0f;
+        }
+        std::memcpy(cu.mapRect, cloudMapRect, sizeof(cu.mapRect));
+        cu.shape[0] = cp.shapeScale;
+        cu.shape[1] = cp.cirrusSweepX;
+        cu.shape[2] = cp.cirrusSweepZ;
+        cu.shape[3] = 0.0f;
+        // a new weather map: this frame's march set takes it now (its fence is behind us)
+        if (cloudMapStale[currentFrame]) {
+            VkDescriptorImageInfo wi{textureSampler, cloudWeatherViewNow(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkWriteDescriptorSet wr{};
+            wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr.dstSet = cloudMarchSets[currentFrame];
+            wr.dstBinding = 5;
+            wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            wr.descriptorCount = 1;
+            wr.pImageInfo = &wi;
+            vkUpdateDescriptorSets(device, 1, &wr, 0, nullptr);
+            cloudMapStale[currentFrame] = false;
+        }
         // RT_CLOUD_TYPES=0: the base volume's slice and one profile, as before (the A/B)
         static const bool kNoTypes = [] { const char* e = std::getenv("RT_CLOUD_TYPES"); return e && e[0] == '0'; }();
         cu.detail[3] = kNoTypes ? 1.0f : 0.0f;
@@ -6093,6 +8143,10 @@ void VulkanRenderer::Impl::drawFrame() {
         packMat4((cloudHistValid ? cloudPrevFlipVP : frameViewProj) * toCam, cu.prevViewProjection, /*flipY=*/false);
         cu.frame[0] = kHistory > 0.0f ? static_cast<float>(std::fmod(static_cast<double>(cloudFrames) * 0.6180339887, 1.0)) : 0.0f;
         cu.frame[1] = cloudHistValid && !jumped ? kHistory : 0.0f;
+        // the wisps and the cirrus (clouds.frag, ADR-0384); RT_CLOUD_WISPS=0 the old solid clouds, no cirrus (the A/B)
+        static const bool kNoWisps = [] { const char* e = std::getenv("RT_CLOUD_WISPS"); return e && e[0] == '0'; }();
+        cu.frame[2] = kNoWisps ? 0.0f : std::max(0.0f, cp.wisps);
+        cu.frame[3] = kNoWisps ? 0.0f : std::clamp(cp.cirrus, 0.0f, 1.0f);
         std::memcpy(cloudUboMapped[currentFrame], &cu, sizeof(cu));
         cloudPrevFlipVP = frameViewProj;
         std::memcpy(cloudPrevCam, cpuGlobals.cameraPosition, sizeof(cloudPrevCam));
@@ -6323,6 +8377,80 @@ void VulkanRenderer::shutdown() {
         *p = VK_NULL_HANDLE;
     }
     if (impl->pipelineLayout) vkDestroyPipelineLayout(impl->device, impl->pipelineLayout, nullptr);
+    if (impl->binPipe) vkDestroyPipeline(impl->device, impl->binPipe, nullptr);
+    if (impl->skyPipe) vkDestroyPipeline(impl->device, impl->skyPipe, nullptr);
+    if (impl->aerialPipe) vkDestroyPipeline(impl->device, impl->aerialPipe, nullptr);
+    if (impl->cubePipe) vkDestroyPipeline(impl->device, impl->cubePipe, nullptr);
+    for (VkPipeline pp : {impl->probeCulled, impl->probeCulledPacked, impl->probeTwoSided, impl->probeTwoSidedPacked, impl->probeTerrain})
+        if (pp) vkDestroyPipeline(impl->device, pp, nullptr);
+    if (impl->probeFramebuffer) vkDestroyFramebuffer(impl->device, impl->probeFramebuffer, nullptr);
+    for (VkPipeline pp : {impl->relightPipe, impl->pfPipe}) if (pp) vkDestroyPipeline(impl->device, pp, nullptr);
+    for (VkPipelineLayout pl : {impl->relightLayout, impl->pfLayout}) if (pl) vkDestroyPipelineLayout(impl->device, pl, nullptr);
+    if (impl->relightPool) vkDestroyDescriptorPool(impl->device, impl->relightPool, nullptr);
+    for (VkDescriptorSetLayout dl : {impl->relightSetLayout, impl->pfSetLayout}) if (dl) vkDestroyDescriptorSetLayout(impl->device, dl, nullptr);
+    for (uint32_t m = 0; m < Impl::kProbeMips; ++m) if (impl->probeRadMipView[m]) vkDestroyImageView(impl->device, impl->probeRadMipView[m], nullptr);
+    if (impl->probeRadCubeView) vkDestroyImageView(impl->device, impl->probeRadCubeView, nullptr);
+    if (impl->probeRadImage) vkDestroyImage(impl->device, impl->probeRadImage, nullptr);
+    if (impl->probeRadMemory) vkFreeMemory(impl->device, impl->probeRadMemory, nullptr);
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        if (impl->probeBufMem[i]) vkUnmapMemory(impl->device, impl->probeBufMem[i]);
+        if (impl->probeBuf[i]) vkDestroyBuffer(impl->device, impl->probeBuf[i], nullptr);
+        if (impl->probeBufMem[i]) vkFreeMemory(impl->device, impl->probeBufMem[i], nullptr);
+    }
+    if (impl->probeRenderPass) vkDestroyRenderPass(impl->device, impl->probeRenderPass, nullptr);
+    for (int k = 0; k < 3; ++k) {
+        if (impl->probeTargetView[k]) vkDestroyImageView(impl->device, impl->probeTargetView[k], nullptr);
+        if (impl->probeTargetImage[k]) vkDestroyImage(impl->device, impl->probeTargetImage[k], nullptr);
+        if (impl->probeTargetMemory[k]) vkFreeMemory(impl->device, impl->probeTargetMemory[k], nullptr);
+        if (impl->probeGbufView[k]) vkDestroyImageView(impl->device, impl->probeGbufView[k], nullptr);
+        if (impl->probeGbufImage[k]) vkDestroyImage(impl->device, impl->probeGbufImage[k], nullptr);
+        if (impl->probeGbufMemory[k]) vkFreeMemory(impl->device, impl->probeGbufMemory[k], nullptr);
+    }
+    if (impl->probeDepthView) vkDestroyImageView(impl->device, impl->probeDepthView, nullptr);
+    if (impl->probeDepthImage) vkDestroyImage(impl->device, impl->probeDepthImage, nullptr);
+    if (impl->probeDepthMemory) vkFreeMemory(impl->device, impl->probeDepthMemory, nullptr);
+    if (impl->prefPipe) vkDestroyPipeline(impl->device, impl->prefPipe, nullptr);
+    if (impl->cubeLayout) vkDestroyPipelineLayout(impl->device, impl->cubeLayout, nullptr);
+    if (impl->prefLayout) vkDestroyPipelineLayout(impl->device, impl->prefLayout, nullptr);
+    if (impl->cubePool) vkDestroyDescriptorPool(impl->device, impl->cubePool, nullptr);
+    if (impl->cubeSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->cubeSetLayout, nullptr);
+    if (impl->prefSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->prefSetLayout, nullptr);
+    for (uint32_t m = 0; m < Impl::kCubeOutMips; ++m)
+        if (impl->cubeOutMip[m]) vkDestroyImageView(impl->device, impl->cubeOutMip[m], nullptr);
+    for (VkImageView v : {impl->cubeSrcView, impl->cubeSrcMip0, impl->cubeOutView})
+        if (v) vkDestroyImageView(impl->device, v, nullptr);
+    if (impl->cubeSrcImage) vkDestroyImage(impl->device, impl->cubeSrcImage, nullptr);
+    if (impl->cubeOutImage) vkDestroyImage(impl->device, impl->cubeOutImage, nullptr);
+    if (impl->cubeSrcMemory) vkFreeMemory(impl->device, impl->cubeSrcMemory, nullptr);
+    if (impl->cubeOutMemory) vkFreeMemory(impl->device, impl->cubeOutMemory, nullptr);
+    if (impl->aerialLayout) vkDestroyPipelineLayout(impl->device, impl->aerialLayout, nullptr);
+    if (impl->aerialPool) vkDestroyDescriptorPool(impl->device, impl->aerialPool, nullptr);
+    if (impl->aerialSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->aerialSetLayout, nullptr);
+    for (int k = 0; k < 2; ++k) {
+        if (impl->aerialView[k]) vkDestroyImageView(impl->device, impl->aerialView[k], nullptr);
+        if (impl->aerialImage[k]) vkDestroyImage(impl->device, impl->aerialImage[k], nullptr);
+        if (impl->aerialMemory[k]) vkFreeMemory(impl->device, impl->aerialMemory[k], nullptr);
+    }
+    if (impl->lumPipe) vkDestroyPipeline(impl->device, impl->lumPipe, nullptr);
+    if (impl->lumLayout) vkDestroyPipelineLayout(impl->device, impl->lumLayout, nullptr);
+    if (impl->lumPool) vkDestroyDescriptorPool(impl->device, impl->lumPool, nullptr);
+    if (impl->lumSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->lumSetLayout, nullptr);
+    if (impl->lumBuf) vkDestroyBuffer(impl->device, impl->lumBuf, nullptr);
+    if (impl->lumMem) vkFreeMemory(impl->device, impl->lumMem, nullptr);
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        if (impl->lumReadMem[i]) vkUnmapMemory(impl->device, impl->lumReadMem[i]);
+        if (impl->lumRead[i]) vkDestroyBuffer(impl->device, impl->lumRead[i], nullptr);
+        if (impl->lumReadMem[i]) vkFreeMemory(impl->device, impl->lumReadMem[i], nullptr);
+    }
+    if (impl->skyLayout) vkDestroyPipelineLayout(impl->device, impl->skyLayout, nullptr);
+    if (impl->skyPool) vkDestroyDescriptorPool(impl->device, impl->skyPool, nullptr);
+    if (impl->skySetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->skySetLayout, nullptr);
+    if (impl->skyViewView) vkDestroyImageView(impl->device, impl->skyViewView, nullptr);
+    if (impl->skyViewImage) vkDestroyImage(impl->device, impl->skyViewImage, nullptr);
+    if (impl->skyViewMemory) vkFreeMemory(impl->device, impl->skyViewMemory, nullptr);
+    if (impl->binLayout) vkDestroyPipelineLayout(impl->device, impl->binLayout, nullptr);
+    if (impl->binPool) vkDestroyDescriptorPool(impl->device, impl->binPool, nullptr);
+    if (impl->binSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->binSetLayout, nullptr);
     if (impl->descriptorPool) vkDestroyDescriptorPool(impl->device, impl->descriptorPool, nullptr);
     if (impl->descriptorSetLayout)
         vkDestroyDescriptorSetLayout(impl->device, impl->descriptorSetLayout, nullptr);
@@ -6330,6 +8458,18 @@ void VulkanRenderer::shutdown() {
         if (impl->globalsMemory[i]) vkUnmapMemory(impl->device, impl->globalsMemory[i]);
         if (impl->globalsBuffers[i]) vkDestroyBuffer(impl->device, impl->globalsBuffers[i], nullptr);
         if (impl->globalsMemory[i]) vkFreeMemory(impl->device, impl->globalsMemory[i], nullptr);
+        for (int k = 0; k < 3; ++k) {
+            if (impl->clusterMem[k][i]) vkUnmapMemory(impl->device, impl->clusterMem[k][i]);
+            if (impl->clusterBuf[k][i]) vkDestroyBuffer(impl->device, impl->clusterBuf[k][i], nullptr);
+            if (impl->clusterMem[k][i]) vkFreeMemory(impl->device, impl->clusterMem[k][i], nullptr);
+        }
+        for (int k = 0; k < 2; ++k) {
+            if (impl->binBuf[k][i]) vkDestroyBuffer(impl->device, impl->binBuf[k][i], nullptr);
+            if (impl->binMem[k][i]) vkFreeMemory(impl->device, impl->binMem[k][i], nullptr);
+            if (impl->checkMem[k][i]) vkUnmapMemory(impl->device, impl->checkMem[k][i]);
+            if (impl->checkBuf[k][i]) vkDestroyBuffer(impl->device, impl->checkBuf[k][i], nullptr);
+            if (impl->checkMem[k][i]) vkFreeMemory(impl->device, impl->checkMem[k][i], nullptr);
+        }
     }
     impl->meshPipeline = VK_NULL_HANDLE;
     impl->meshPipelineCulled = VK_NULL_HANDLE;
@@ -6520,6 +8660,17 @@ void VulkanRenderer::shutdown() {
     impl->destroyInstanceBuffers();
     impl->destroyCrowd();
     impl->destroyUploads();
+    impl->rt.shutdown();
+    for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; ++f)
+        if (impl->rtRowBuf[f]) { vmaDestroyBuffer(impl->allocator, impl->rtRowBuf[f], impl->rtRowAlloc[f]); impl->rtRowBuf[f] = VK_NULL_HANDLE; }
+    if (impl->rtPipe) vkDestroyPipeline(impl->device, impl->rtPipe, nullptr);
+    if (impl->rtDenoisePipe) vkDestroyPipeline(impl->device, impl->rtDenoisePipe, nullptr);
+    if (impl->rtApplyPipe) vkDestroyPipeline(impl->device, impl->rtApplyPipe, nullptr);
+    impl->rtDenoisePipe = VK_NULL_HANDLE; impl->rtApplyPipe = VK_NULL_HANDLE;
+    if (impl->rtLayout) vkDestroyPipelineLayout(impl->device, impl->rtLayout, nullptr);
+    if (impl->rtPool) vkDestroyDescriptorPool(impl->device, impl->rtPool, nullptr);
+    if (impl->rtSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->rtSetLayout, nullptr);
+    impl->rtPipe = VK_NULL_HANDLE; impl->rtLayout = VK_NULL_HANDLE; impl->rtPool = VK_NULL_HANDLE; impl->rtSetLayout = VK_NULL_HANDLE;
     if (impl->allocator) { vmaDestroyAllocator(impl->allocator); impl->allocator = nullptr; }
     vkDestroyDevice(impl->device, nullptr);
     impl->device = VK_NULL_HANDLE;
@@ -6610,8 +8761,11 @@ MeshHandle VulkanRenderer::Impl::uploadMeshBytes(const BoundingSphere& bounds, c
         const VkDeviceSize isize = indexCount * sizeof(uint32_t);
         // Suballocated by VMA; the data goes through the upload queue and is on the
         // device by the next frame (ADR-0094).
-        bool ok = createGpuBuffer(vsize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, record.vertexBuffer, record.vertexAlloc) &&
-                  createGpuBuffer(isize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, record.indexBuffer, record.indexAlloc);
+        // with ray queries, a bottom-level build reads the mesh where it lies (ADR-0376)
+        const VkBufferUsageFlags rtRead = rayQuery ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                          VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0;
+        bool ok = createGpuBuffer(vsize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | rtRead, record.vertexBuffer, record.vertexAlloc) &&
+                  createGpuBuffer(isize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | rtRead, record.indexBuffer, record.indexAlloc);
         if (!ok) {
             LOG_ERROR("[vulkan] uploadMesh buffer creation failed");
             destroyMesh(record);
@@ -6693,8 +8847,13 @@ std::string VulkanRenderer::memoryReport() const {
 void VulkanRenderer::removeMesh(MeshHandle handle) {
     GpuMesh* m = impl->meshes.get(handle);
     if (!m) return;
-    // Retired, not destroyed: the frames in flight may still draw it (collectRetired).
+    // Retired, not destroyed: the frames in flight may still draw it (collectRetired). Its ray structure too.
     impl->retiredMeshes.push_back({*m, impl->frameCounter});
+    const uint64_t rtKey = (static_cast<uint64_t>(handle.generation) << 32) | handle.index;
+    impl->rt.forget(rtKey, impl->frameCounter);
+    // (its rows keep their custom indices: the instance leaves the list, its row stays unread until the next hand-over)
+    impl->rtInstances.erase(std::remove_if(impl->rtInstances.begin(), impl->rtInstances.end(),
+                                           [&](const RtScene::Instance& in) { return in.key == rtKey; }), impl->rtInstances.end());
     impl->meshes.erase(handle);
 }
 
@@ -6816,6 +8975,367 @@ void VulkanRenderer::setEnvironmentMap(TextureHandle equirect) {
     impl->updateGlobalEnvDescriptor();
 }
 
+// THE REFLECTION PROBES (ADR-0373): slot i is probes[i]; one that moved (or is new) is unlit until its six faces are
+// captured again
+bool VulkanRenderer::supportsRayQuery() const { return impl->rayQuery; }
+
+// THE NEAR SCENE FOR RAYS (ADR-0376): the engine's near instances, their meshes' buffers resolved now (a mesh removed
+// before the frame records is simply not there). The budget is set at the first call, from what is free then.
+void VulkanRenderer::setRayInstances(const std::vector<RayInstance>& nearestFirst, float memoryShare, const float rules[3]) {
+    if (!impl->rayQuery) return;
+    if (!impl->rt.ready()) {
+        VkDeviceSize freeBytes = 0;
+        VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+        vmaGetHeapBudgets(impl->allocator, budgets);
+        const VkPhysicalDeviceMemoryProperties* props = nullptr;
+        vmaGetMemoryProperties(impl->allocator, &props);
+        for (uint32_t h = 0; props && h < props->memoryHeapCount; ++h)
+            if ((props->memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) && budgets[h].budget > budgets[h].usage)
+                freeBytes = std::max<VkDeviceSize>(freeBytes, budgets[h].budget - budgets[h].usage);
+        // a share of what is free, and never more than 1.5 GB whatever the card
+        const VkDeviceSize budget = std::min<VkDeviceSize>(static_cast<VkDeviceSize>(static_cast<double>(freeBytes) *
+                                                                std::clamp(memoryShare, 0.0f, 0.5f)), VkDeviceSize(1536) << 20);
+        if (!impl->rt.init(impl->device, impl->allocator, impl->physicalDevice, budget)) {
+            LOG_WARN << "[rt] the acceleration-structure entry points are missing: no ray-traced reflections";
+            impl->rayQuery = false;
+            return;
+        }
+        LOG_INFO << "[rt] near scene: budget " << budget / 1048576.0 << " MB (" << memoryShare * 100.0f << "% of "
+                 << freeBytes / 1048576.0 << " MB free)";
+    }
+    for (int k = 0; k < 3; ++k) impl->rtRules[k] = rules[k];
+    impl->rtInstances.clear();
+    impl->rtInstances.reserve(nearestFirst.size());
+    impl->rtRows.clear();
+    for (const RayInstance& r : nearestFirst) {
+        GpuMesh* m = impl->meshes.get(r.mesh);
+        if (!m || m->indexCount == 0) continue;
+        RtScene::Instance in;
+        in.key = (static_cast<uint64_t>(r.mesh.generation) << 32) | r.mesh.index;
+        in.vertexBuffer = m->vertexBuffer;
+        in.indexBuffer = m->indexBuffer;
+        in.vertexCount = static_cast<uint32_t>(m->vertexCount);
+        in.indexCount = m->indexCount;
+        in.stride = m->packed ? 32u : 56u;
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 4; ++col) in.transform[row * 4 + col] = static_cast<float>(r.transform.m[row][col]);
+        in.custom = static_cast<uint32_t>(impl->rtInstances.size());
+        impl->rtInstances.push_back(in);
+        Impl::RtInstGpu row{};
+        const RenderMaterial& mat = r.material;
+        row.albedoRough[0] = static_cast<float>(mat.albedo.x); row.albedoRough[1] = static_cast<float>(mat.albedo.y);
+        row.albedoRough[2] = static_cast<float>(mat.albedo.z); row.albedoRough[3] = mat.roughness;
+        row.emissionMetal[0] = static_cast<float>(mat.emission.x); row.emissionMetal[1] = static_cast<float>(mat.emission.y);
+        row.emissionMetal[2] = static_cast<float>(mat.emission.z); row.emissionMetal[3] = mat.metallic;
+        VkBufferDeviceAddressInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+        ai.buffer = m->vertexBuffer;
+        row.vertices = vkGetBufferDeviceAddress(impl->device, &ai);
+        ai.buffer = m->indexBuffer;
+        row.indices = vkGetBufferDeviceAddress(impl->device, &ai);
+        row.strideWords = m->packed ? 8u : 14u;
+        row.packed = m->packed ? 1u : 0u;
+        row.flags = mat.flags;
+        impl->rtRows.push_back(row);
+    }
+}
+
+void VulkanRenderer::Impl::recordRayScene(VkCommandBuffer cmd) {
+    if (!rayQuery || !rt.ready()) return;
+    // (a mesh removed since the engine handed the list over has left it: removeMesh)
+    rt.record(cmd, currentFrame, frameCounter, rtInstances);
+    static const bool log = std::getenv("RT_DUMP_STATS") != nullptr;
+    if (log && frameCounter >= rtLogged + 300) {
+        rtLogged = frameCounter;
+        const RtScene::Stats st = rt.stats();
+        LOG_INFO << "[rt] near scene: " << st.instances << " instances in the top level (" << st.skipped << " left out), "
+                 << st.structures << " bottom levels, " << st.builtThisFrame << " built this frame; " << st.bytes / 1048576.0
+                 << " of " << st.budget / 1048576.0 << " MB (bottom levels " << st.bottomBytes / 1048576.0 << ", scratch "
+                 << st.scratchBytes / 1048576.0 << ")";
+    }
+}
+
+// THE REFLECTION RAYS' PASS (ADR-0376 step 3c): rt_reflect.comp, set 0 the frame's (dynamic offset 0), set 1 its own
+// per frame in flight -- depth, normal, the screen-space target as storage, the near scene, the hit-shading rows
+bool VulkanRenderer::Impl::ensureRtReflectPipeline() {
+    if (rtPipe && rtDenoisePipe && rtApplyPipe) return true;
+    if (rtPipeFailed) return false;
+    rtPipeFailed = true;
+    // set 1, shared by the three passes (each reads its own few): 0 depth, 1 normal, 2 the SSR target, 3 the near
+    // scene, 4 the hit-shading rows, 5 the raw result, 6 the filtered one (written), 7 the filtered one (sampled), 8 the
+    // scene's HDR target
+    VkDescriptorSetLayoutBinding b[9]{};
+    const VkDescriptorType types[9] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
+    for (int k = 0; k < 9; ++k) {
+        b[k].binding = static_cast<uint32_t>(k);
+        b[k].descriptorType = types[k];
+        b[k].descriptorCount = 1;
+        b[k].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 9;
+    li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &rtSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize sz[4] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 * MAX_FRAMES_IN_FLIGHT},
+                                  {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4 * MAX_FRAMES_IN_FLIGHT},
+                                  {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, MAX_FRAMES_IN_FLIGHT},
+                                  {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_FRAMES_IN_FLIGHT}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = MAX_FRAMES_IN_FLIGHT;
+    pi.poolSizeCount = 4;
+    pi.pPoolSizes = sz;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &rtPool) != VK_SUCCESS) return false;
+    for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; ++f) {
+        VkDescriptorSetAllocateInfo a{};
+        a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        a.descriptorPool = rtPool;
+        a.descriptorSetCount = 1;
+        a.pSetLayouts = &rtSetLayout;
+        if (vkAllocateDescriptorSets(device, &a, &rtSets[f]) != VK_SUCCESS) return false;
+    }
+    const VkDescriptorSetLayout sls[2] = {descriptorSetLayout, rtSetLayout};
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16};
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 2;
+    pl.pSetLayouts = sls;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &range;
+    if (vkCreatePipelineLayout(device, &pl, nullptr, &rtLayout) != VK_SUCCESS) return false;
+    auto pipe = [&](const char* spv, VkPipeline& out) {
+        VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/" + spv);
+        if (!mod) return false;
+        VkComputePipelineCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        ci.stage.module = mod;
+        ci.stage.pName = "main";
+        ci.layout = rtLayout;
+        const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &out);
+        vkDestroyShaderModule(device, mod, nullptr);
+        return r == VK_SUCCESS;
+    };
+    if (!pipe("rt_reflect.comp.spv", rtPipe) || !pipe("rt_denoise.comp.spv", rtDenoisePipe) || !pipe("rt_apply.comp.spv", rtApplyPipe))
+        return false;
+    rtPipeFailed = false;
+    LOG_INFO << "[rt] reflection rays ready (rt_reflect, rt_denoise, rt_apply)";
+    return true;
+}
+// THE ONE ANSWER to "do the rays run this frame" (ADR-0376), read by both sides: the scene pass drops the probe's
+// reflection only where the rays will put theirs. Off -- and the probes and sky cube stand, as before -- when the GPU
+// has no ray queries (or Vulkan 1.0: RT_VK_1_0), RT_RT_REFLECT=0, the near scene is empty, the screen-space target is
+// off in the composite (the rays write into it), or the ray pipeline could not be built.
+bool VulkanRenderer::Impl::raysThisFrame() {
+    static const bool off = [] { const char* v = std::getenv("RT_RT_REFLECT"); return v && std::strcmp(v, "0") == 0; }();
+    // (the physical sky's branch of mesh.frag is the one that takes the probe's reflection out where the rays put
+    // theirs: under the old sky the rays would reflect twice)
+    if (off || !rayQuery || !ssrEnabledFrame || !ssrImage || !rtRawImage || cpuGlobals.counts[2] != 2 || !rt.hasTopLevel() ||
+        rtRows.empty())
+        return false;
+    if (ensureRtReflectPipeline()) return true;
+    static bool warned = false;
+    if (!warned) LOG_WARN << "[rt] the reflection rays' pipeline could not be built (rt_reflect.comp.spv): the probes and sky cube reflect instead";
+    warned = true;
+    return false;
+}
+
+void VulkanRenderer::Impl::recordRtReflect(VkCommandBuffer cmd) {
+    if (!raysThisFrame()) return;
+    const int f = currentFrame;
+    // this frame's hit-shading rows
+    const VkDeviceSize bytes = rtRows.size() * sizeof(RtInstGpu);
+    if (rtRowCap[f] < bytes) {
+        if (rtRowBuf[f]) vmaDestroyBuffer(allocator, rtRowBuf[f], rtRowAlloc[f]);   // (this slot's last frame has finished)
+        rtRowBuf[f] = VK_NULL_HANDLE;
+        rtRowCap[f] = 0;
+        VkBufferCreateInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bi.size = std::max<VkDeviceSize>(bytes * 2, 64 * 1024);
+        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO;
+        ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VmaAllocationInfo got{};
+        if (vmaCreateBuffer(allocator, &bi, &ai, &rtRowBuf[f], &rtRowAlloc[f], &got) != VK_SUCCESS) return;
+        rtRowMapped[f] = got.pMappedData;
+        rtRowCap[f] = bi.size;
+    }
+    std::memcpy(rtRowMapped[f], rtRows.data(), static_cast<std::size_t>(bytes));
+    vmaFlushAllocation(allocator, rtRowAlloc[f], 0, bytes);
+    // its set: the views of this frame (the targets are recreated on a resize), the near scene as it is now
+    VkDescriptorImageInfo img[9]{};
+    img[0] = {gbufferSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+    img[1] = {gbufferSampler, normalView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    img[2] = {VK_NULL_HANDLE, ssrView, VK_IMAGE_LAYOUT_GENERAL};
+    img[5] = {VK_NULL_HANDLE, rtRawView, VK_IMAGE_LAYOUT_GENERAL};
+    img[6] = {VK_NULL_HANDLE, rtOutView, VK_IMAGE_LAYOUT_GENERAL};
+    img[7] = {compositeSampler, rtOutView, VK_IMAGE_LAYOUT_GENERAL};
+    img[8] = {VK_NULL_HANDLE, hdrView, VK_IMAGE_LAYOUT_GENERAL};
+    VkAccelerationStructureKHR tl = rt.topLevel();
+    VkWriteDescriptorSetAccelerationStructureKHR asw{};
+    asw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+    asw.accelerationStructureCount = 1;
+    asw.pAccelerationStructures = &tl;
+    VkDescriptorBufferInfo rows{rtRowBuf[f], 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet w[9]{};
+    const VkDescriptorType types[9] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
+    for (int k = 0; k < 9; ++k) {
+        w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[k].dstSet = rtSets[f];
+        w[k].dstBinding = static_cast<uint32_t>(k);
+        w[k].descriptorCount = 1;
+        w[k].descriptorType = types[k];
+        if (k == 3) w[k].pNext = &asw;
+        else if (k == 4) w[k].pBufferInfo = &rows;
+        else w[k].pImageInfo = &img[k];
+    }
+    vkUpdateDescriptorSets(device, 9, w, 0, nullptr);
+    auto imageBarrier = [&](VkImage image, VkImageLayout from, VkImageLayout to, VkAccessFlags src, VkAccessFlags dst,
+                            VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage) {
+        VkImageMemoryBarrier ib{};
+        ib.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        ib.srcAccessMask = src;
+        ib.dstAccessMask = dst;
+        ib.oldLayout = from;
+        ib.newLayout = to;
+        ib.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        ib.image = image;
+        ib.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &ib);
+    };
+    const VkPipelineStageFlags CS = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    const VkAccessFlags RW = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    if (!rtImagesGeneral) {
+        imageBarrier(rtRawImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, RW, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, CS);
+        imageBarrier(rtOutImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, RW, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, CS);
+        rtImagesGeneral = true;
+    } else {
+        // last frame's reads of the results come before this frame's writes
+        imageBarrier(rtRawImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT, RW, CS, CS);
+        imageBarrier(rtOutImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT, RW, CS, CS);
+    }
+    const uint32_t frameSlot = 0;
+    const float push[4] = {rtRules[0], rtRules[1], rtRules[2], 0.0f};
+    auto run = [&](VkPipeline p, uint32_t w0, uint32_t h0) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rtLayout, 0, 1, &descriptorSets[currentFrame], 1, &frameSlot);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rtLayout, 1, 1, &rtSets[f], 0, nullptr);
+        vkCmdPushConstants(cmd, rtLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+        vkCmdDispatch(cmd, (w0 + 7) / 8, (h0 + 7) / 8, 1);
+    };
+    // 1. the rays, raw
+    run(rtPipe, ssrExtent.width, ssrExtent.height);
+    imageBarrier(rtRawImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, CS, CS);
+    // 2. filtered, and the screen-space reflection muted where they answer
+    imageBarrier(ssrImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, RW,
+                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, CS);
+    run(rtDenoisePipe, ssrExtent.width, ssrExtent.height);
+    imageBarrier(rtOutImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, CS, CS);
+    imageBarrier(ssrImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
+                 VK_ACCESS_SHADER_READ_BIT, CS, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    // 3. added into the scene's HDR target, full resolution
+    imageBarrier(hdrImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT, RW,
+                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | CS, CS);
+    run(rtApplyPipe, swapchainExtent.width, swapchainExtent.height);
+    imageBarrier(hdrImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
+                 VK_ACCESS_SHADER_READ_BIT, CS, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | CS);
+}
+
+void VulkanRenderer::setReflectionProbes(const std::vector<ReflectionProbe>& probes) {
+    const std::size_t n = std::min<std::size_t>(probes.size(), Impl::kMaxProbes);
+    for (std::size_t i = 0; i < n; ++i) {
+        const bool same = i < impl->probes.size() && (impl->probes[i].position - probes[i].position).lengthSquared() < 1e-6;
+        if (!same) { impl->probeFaces[i] = 0; impl->probeLit[i] = 0; }
+    }
+    for (std::size_t i = n; i < Impl::kMaxProbes; ++i) { impl->probeFaces[i] = 0; impl->probeLit[i] = 0; }
+    impl->probes.assign(probes.begin(), probes.begin() + static_cast<std::ptrdiff_t>(n));
+    buildProbeGrid(impl->probes, impl->probeGrid);
+}
+
+// A REFLECTION PROBE'S FACE (ADR-0372): its camera (90 degrees, square, reverse-Z like the frame's) into the next free
+// capture slot; the draws until endProbeFace are its
+void VulkanRenderer::beginProbeFace(uint32_t probe, int face, const Vec3& eye) {
+    if (impl->captureCount >= impl->captures.size() || !impl->probeCulled) { impl->captureActive = -2; return; }
+    Impl::ProbeCaptureSlot& slot = impl->captures[impl->captureCount];
+    slot.probe = probe;
+    slot.face = face;
+    slot.eye = eye;
+    slot.items.clear();
+    Vec3 fwd, up;
+    probeFaceBasis(face, fwd, up);
+    const Mat4 view = Mat4::lookAt(eye, eye + fwd, up);
+    Mat4 proj = Mat4::perspective(3.14159265358979 * 0.5, 1.0, 0.1, 600.0);
+    Mat4 reverseZ;
+    reverseZ.m[2][2] = -1.0;
+    reverseZ.m[2][3] = 1.0;
+    proj = reverseZ * proj;
+    packMat4(proj * view, slot.vp, /*flipY=*/true);
+    packMat4(view, slot.view, /*flipY=*/false);
+    impl->captureActive = static_cast<int>(impl->captureCount++);
+}
+
+void VulkanRenderer::endProbeFace() { impl->captureActive = -1; }
+
+bool VulkanRenderer::measuredSceneLuminance(float& log2Units) const {
+    if (!impl->lumValid) return false;
+    log2Units = impl->lumLog2;
+    return true;
+}
+
+bool VulkanRenderer::measuredSceneHighlight(float& log2Units) const {
+    if (!impl->lumValid) return false;
+    log2Units = impl->lumHighLog2;
+    return true;
+}
+
+// THE PHYSICAL SKY's tables (ADR-0367): uploaded as RGBA16F, and the sky-view pass pointed at them
+void VulkanRenderer::setSkyTables(const float* transmittance, int tw, int th, const float* multiScatter, int mw, int mh) {
+    if (!impl->device || !transmittance || !multiScatter) return;
+    vkDeviceWaitIdle(impl->device);   // (the old tables may be in use)
+    if (impl->skyTransTex.valid()) removeTexture(impl->skyTransTex);
+    if (impl->skyMsTex.valid()) removeTexture(impl->skyMsTex);
+    impl->skyTransTex = uploadTextureHDR(tw, th, 3, transmittance);
+    impl->skyMsTex = uploadTextureHDR(mw, mh, 3, multiScatter);
+    GpuTexture* tr = impl->textures.get(impl->skyTransTex);
+    GpuTexture* ms = impl->textures.get(impl->skyMsTex);
+    if (!tr || !ms || !tr->view || !ms->view || !impl->ensureSkyView()) {
+        LOG_WARN("[vulkan] physical sky: the tables did not upload; the procedural sky stands");
+        return;
+    }
+    VkDescriptorImageInfo img[3]{};
+    img[0].imageView = impl->skyViewView;
+    img[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    img[1].sampler = impl->brdfLutSampler;
+    img[1].imageView = tr->view;
+    img[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    img[2] = img[1];
+    img[2].imageView = ms->view;
+    VkWriteDescriptorSet w[3]{};
+    for (int k = 0; k < 3; ++k) {
+        w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[k].dstSet = impl->skySet;
+        w[k].dstBinding = static_cast<uint32_t>(k);
+        w[k].descriptorCount = 1;
+        w[k].descriptorType = k == 0 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[k].pImageInfo = &img[k];
+    }
+    vkUpdateDescriptorSets(impl->device, 3, w, 0, nullptr);
+    impl->updateSkyDescriptors();
+    LOG_INFO("[vulkan] physical sky: tables %dx%d and %dx%d uploaded", tw, th, mw, mh);
+}
+
 void VulkanRenderer::setTerrainHorizon(TextureHandle map, float originX, float originZ,
                                        float extent, float encodeLo, float encodeHi) {
     GpuTexture* t = impl->textures.get(map);
@@ -6831,6 +9351,18 @@ void VulkanRenderer::setTerrainHorizon(TextureHandle map, float originX, float o
     impl->cpuGlobals.terrainHorizon2[2] = 0.0f;
     impl->cpuGlobals.terrainHorizon2[3] = 0.0f;
     impl->updateGlobalHorizonDescriptor();
+}
+
+void VulkanRenderer::setCloudMap(TextureHandle map, double originX, double originZ, float extent) {
+    GpuTexture* t = impl->textures.get(map);
+    const bool on = t && t->view && extent > 0.0f;
+    impl->cloudMapView = on ? t->view : VK_NULL_HANDLE;
+    impl->cloudMapRect[0] = static_cast<float>(originX);
+    impl->cloudMapRect[1] = static_cast<float>(originZ);
+    impl->cloudMapRect[2] = on ? 1.0f / extent : 0.0f;
+    impl->cloudMapRect[3] = on ? 1.0f : 0.0f;
+    for (bool& s : impl->cloudMapStale) s = true;
+    for (bool& s : impl->cloudShadowStale) s = true;
 }
 
 void VulkanRenderer::setTerrainNormalMap(TextureHandle map, float originX, float originZ, float extent,
@@ -6884,6 +9416,8 @@ const OcclusionDepth* VulkanRenderer::occlusionDepth() const {
 void VulkanRenderer::beginFrame() {
     impl->stats = RenderStats{};
     impl->drawQueue.clear();
+    impl->captureCount = 0;     // (the probe faces: ADR-0372)
+    impl->captureActive = -1;
     impl->uiQuads.clear();   // (the systems submit theirs in render, after this)
     impl->instanceData.clear();
 #ifdef RT_ENABLE_IMGUI
@@ -6949,6 +9483,9 @@ void VulkanRenderer::setCamera(const CameraState& camera) {
 
     // Captured for the cascade fit in setLights (un-flipped, reverse-Z VP).
     impl->camViewProj = vp;
+    impl->camView = view;
+    impl->camTanHalfY = static_cast<float>(std::tan(camera.fovDegrees * 3.14159265358979 / 360.0));
+    impl->camAspect = aspect;
     impl->camPos = camera.position;
     impl->camNear = camera.nearPlane;
     impl->camFar = camera.farPlane;
@@ -6968,13 +9505,22 @@ void VulkanRenderer::setCamera(const CameraState& camera) {
     impl->dofSensorHeight = static_cast<float>(camera.lens.sensorHeight);          // mm
 }
 
+// CLUSTERED LIGHTS (ADR-0361), on by default since ADR-0362's phase 2; RT_CLUSTERED=0 is the forward A/B (the fixed 32)
+static bool clusteredLights() {
+    static const bool on = [] { const char* e = std::getenv("RT_CLUSTERED"); return !(e && std::string(e) == "0"); }();
+    return on;
+}
+int VulkanRenderer::lightCapacity() const { return clusteredLights() ? static_cast<int>(Impl::kClusterMaxLights) : 31; }
+
 void VulkanRenderer::setLights(const SceneLighting& lighting) {
     float amb = lighting.ambientMultiplier;
     impl->cpuGlobals.ambient[0] = static_cast<float>(lighting.ambientTint.x) * amb;
     impl->cpuGlobals.ambient[1] = static_cast<float>(lighting.ambientTint.y) * amb;
     impl->cpuGlobals.ambient[2] = static_cast<float>(lighting.ambientTint.z) * amb;
-    // facade glass reflectance scale (mesh.frag): 3 by default, RT_GLASS_REFLECT=1 for the old glass
-    static const float glassReflect = [] { const char* e = std::getenv("RT_GLASS_REFLECT"); const float v = e ? static_cast<float>(std::atof(e)) : 3.0f; return v > 0.0f ? v : 3.0f; }();
+    // facade glass reflectance scale (mesh.frag): 2 by default, RT_GLASS_REFLECT=1 for the old glass. (3 was chosen
+    // when the reflections were the sky's alone; with the probes' and the rays' sharp street in it, Glenn, 2026-11-08:
+    // "a bit overpowering on the buildings that reflect/raytrace them")
+    static const float glassReflect = [] { const char* e = std::getenv("RT_GLASS_REFLECT"); const float v = e ? static_cast<float>(std::atof(e)) : 2.0f; return v > 0.0f ? v : 2.0f; }();
     impl->cpuGlobals.ambient[3] = glassReflect;
     // the far trees' self-shadow (mesh.frag impostorSelfShadow): RT_IMPOSTOR_SELF_SHADOW=0 for the A/B (z = 1: off)
     static const bool impSelfOff = [] { const char* e = std::getenv("RT_IMPOSTOR_SELF_SHADOW"); return e && std::string(e) == "0"; }();
@@ -7055,6 +9601,46 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     impl->cpuGlobals.skyCloud[3] = sky.cloudTime;
     // envMode: 1 = HDR equirect (when bound and the live toggle is on), else 0 = procedural.
     impl->cpuGlobals.counts[2] = (impl->envBound && environmentMapEnabled) ? 1 : 0;
+    // THE PHYSICAL SKY (ADR-0367): envMode 2 once its view is being drawn and the sets point at it
+    impl->skyFrame = lighting.physicalSky;
+    impl->skyPhysicalOn = lighting.physicalSky.enabled && impl->skyPipe != VK_NULL_HANDLE && impl->cpuGlobals.counts[2] == 0;
+    if (impl->skyPhysicalOn && impl->skyViewGeneral && !impl->pendingSkyDescriptors) impl->cpuGlobals.counts[2] = 2;
+    {
+        const PhysicalSkyFrame& f = lighting.physicalSky;
+        impl->cpuGlobals.skyPhysical[0] = f.groundRadius;
+        impl->cpuGlobals.skyPhysical[1] = f.cameraHeight;
+        impl->cpuGlobals.skyPhysical[2] = f.lightTop;
+        impl->cpuGlobals.skyPhysical[3] = std::cos(f.sunAngularRadius);
+        impl->cpuGlobals.skyPhysical2[0] = f.sunDisc;
+        impl->cpuGlobals.skyPhysical2[1] = f.otherTop;
+        impl->cpuGlobals.skyPhysical2[2] = f.topRadius;
+        impl->cpuGlobals.skyPhysical2[3] = static_cast<float>(impl->swapchainExtent.width);   // (the aerial volume's uv)
+        impl->cpuGlobals.skyPhysical3[0] = f.lightIsSun ? 1.0f : 0.0f;
+        impl->cpuGlobals.skyPhysical3[1] = f.celestialScale;
+        impl->cpuGlobals.skyPhysical3[2] = f.emissionScale;
+        impl->cpuGlobals.skyPhysical3[3] = f.cityGlowScale;
+        impl->cpuGlobals.skyPhysical4[0] = static_cast<float>(f.rayleigh.x);
+        impl->cpuGlobals.skyPhysical4[1] = static_cast<float>(f.rayleigh.y);
+        impl->cpuGlobals.skyPhysical4[2] = static_cast<float>(f.rayleigh.z);
+        impl->cpuGlobals.skyPhysical4[3] = f.rayleighHeight;
+        impl->cpuGlobals.skyPhysical5[0] = f.mieExtinction;
+        impl->cpuGlobals.skyPhysical5[1] = f.mieHeight;
+        // (the real air's own haze: the level's `aerial` was a multiplier tuned for the old Metal sky -- 4x drowned every
+        // range past ~20 km. RT_AERIAL=<x> scales it for an A/B.)
+        static const float aerialScale = [] { const char* e = std::getenv("RT_AERIAL"); return e ? static_cast<float>(std::atof(e)) : 1.0f; }();
+        impl->cpuGlobals.skyPhysical5[2] = aerialScale;
+        impl->cpuGlobals.skyPhysical5[3] = static_cast<float>(impl->swapchainExtent.height);
+        for (int k = 0; k < 9; ++k) {
+            impl->cpuGlobals.skySH[k][0] = static_cast<float>(f.irradianceSH[k].x);
+            impl->cpuGlobals.skySH[k][1] = static_cast<float>(f.irradianceSH[k].y);
+            impl->cpuGlobals.skySH[k][2] = static_cast<float>(f.irradianceSH[k].z);
+            impl->cpuGlobals.skySH[k][3] = 0.0f;
+        }
+        // RT_SKYCUBE: 0 the old path (the dome sampled toward N and R), 1 the harmonics only, 2 the cube only; else both
+        static const int cubeMode = [] { const char* e = std::getenv("RT_SKYCUBE"); return e ? std::atoi(e) : 3; }();
+        impl->cpuGlobals.skySH[0][3] = (cubeMode & 1) ? 1.0f : 0.0f;   // the harmonics
+        impl->cpuGlobals.skySH[1][3] = (cubeMode & 2) ? 1.0f : 0.0f;   // the cube
+    }
     impl->sceneExposure = lighting.exposure;
 
     // Aerial-perspective fog (matches Metal's lightData.fog* + the offline tracer).
@@ -7081,6 +9667,14 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         l.typeRange[0] = 1.0f; l.typeRange[1] = 0.0f; l.typeRange[2] = 0.0f; l.typeRange[3] = 0.0f;
     }
     // Point lights (type 0).
+    // (a room's light, type 3, carries its box: directionInner = centre x, z, axis x, z; colorOuter.w its floor;
+    // typeRange.zw the half extents -- mesh.frag lights only inside it, ADR-0365)
+    auto roomBox = [](GpuLight& l, const PointLight& p) {
+        if (!p.roomBox) return;
+        l.directionInner[0] = p.boxCx; l.directionInner[1] = p.boxCz; l.directionInner[2] = p.boxUx; l.directionInner[3] = p.boxUz;
+        l.colorOuter[3] = p.boxFloorY;
+        l.typeRange[0] = 3.0f; l.typeRange[2] = p.boxHalfU; l.typeRange[3] = p.boxHalfV;
+    };
     for (const PointLight& p : lighting.pointLights) {
         if (n >= 32) break;
         GpuLight& l = impl->cpuGlobals.lights[n++];
@@ -7088,6 +9682,7 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         setColor(l.directionInner, Vec3(0, 0, 0), 0.0f);
         setColor(l.colorOuter, p.color, 0.0f);
         l.typeRange[0] = 0.0f; l.typeRange[1] = p.range; l.typeRange[2] = 0.0f; l.typeRange[3] = 0.0f;
+        roomBox(l, p);
     }
     // Spot lights (type 2): cones stored as cosines.
     for (const SpotLight& s : lighting.spotLights) {
@@ -7098,6 +9693,58 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         setColor(l.colorOuter, s.color, std::cos(s.outerConeAngle));
         l.typeRange[0] = 2.0f; l.typeRange[1] = s.range; l.typeRange[2] = 0.0f; l.typeRange[3] = 0.0f;
     }
+    // CLUSTERED (RT_CLUSTERED=1): every point and spot, past the 32, into the light buffer; the froxels pick for each
+    // pixel (endFrame bins them). The UBO's 32 stay as they were (the sun first) for the loops that read them still
+    // (grass and leaf transmission, the water's glint, the viewer's room).
+    impl->clustered = clusteredLights();
+    impl->clusterLights.clear();
+    if (impl->clustered) {
+        for (const PointLight& p : lighting.pointLights) {
+            if (impl->clusterLights.size() >= Impl::kClusterMaxLights) break;
+            GpuLight l{};
+            setColor(l.positionIntensity, p.position, p.intensity);
+            setColor(l.colorOuter, p.color, 0.0f);
+            l.typeRange[1] = p.range;
+            roomBox(l, p);
+            impl->clusterLights.push_back(l);
+        }
+        for (const SpotLight& sp : lighting.spotLights) {
+            if (impl->clusterLights.size() >= Impl::kClusterMaxLights) break;
+            GpuLight l{};
+            setColor(l.positionIntensity, sp.position, sp.intensity);
+            setColor(l.directionInner, normalize(sp.direction), std::cos(sp.innerConeAngle));
+            setColor(l.colorOuter, sp.color, std::cos(sp.outerConeAngle));
+            l.typeRange[0] = 2.0f; l.typeRange[1] = sp.range;
+            impl->clusterLights.push_back(l);
+        }
+    }
+    // RT_LIGHT_FILL=N (a measurement, not a look): pad the list to N lights -- faint points scattered within 25 m of
+    // the camera, every one in range of what it sees -- so the scene pass's cost per light can be timed
+    // (RT_GPU_TIMES) at 1 against 32 on the same view.
+    static const int lightFill = [] { const char* e = std::getenv("RT_LIGHT_FILL"); return e ? std::atoi(e) : 0; }();
+    for (int k = 0; impl->clustered && k < lightFill - 32 && impl->clusterLights.size() < Impl::kClusterMaxLights; ++k) {
+        // (clustered: the fill past the 32 goes into the light buffer only -- a thousand faint points round the camera)
+        GpuLight l{};
+        const float a = static_cast<float>(k) * 2.39996f, r = 4.0f + 60.0f * std::sqrt(static_cast<float>(k % 997) / 997.0f);
+        const float* c = impl->cpuGlobals.cameraPosition;
+        setColor(l.positionIntensity, Vec3(c[0] + r * std::cos(a), c[1] - 1.0f + static_cast<float>(k % 5), c[2] + r * std::sin(a)), 0.02f);
+        setColor(l.colorOuter, Vec3(1, 0.9, 0.8), 0.0f);
+        l.typeRange[1] = 20.0f;
+        impl->clusterLights.push_back(l);
+    }
+    for (int k = 0; n < std::min(lightFill, 32); ++k) {
+        GpuLight& l = impl->cpuGlobals.lights[n++];
+        const float a = static_cast<float>(k) * 2.39996f, r = 4.0f + 21.0f * static_cast<float>((k * 37) % 32) / 32.0f;
+        const float* c = impl->cpuGlobals.cameraPosition;
+        const Vec3 at(c[0] + r * std::cos(a), c[1] - 1.0f + static_cast<float>(k % 5), c[2] + r * std::sin(a));
+        setColor(l.positionIntensity, at, 0.02f);
+        setColor(l.directionInner, Vec3(0, 0, 0), 0.0f);
+        setColor(l.colorOuter, Vec3(1, 0.9, 0.8), 0.0f);
+        l.typeRange[0] = 0.0f; l.typeRange[1] = 34.0f; l.typeRange[2] = 0.0f; l.typeRange[3] = 0.0f;
+    }
+    // RT_LIGHT_CAP=N (a measurement): only the first N (the sun first) -- the 1-light baseline
+    static const int lightCap = [] { const char* e = std::getenv("RT_LIGHT_CAP"); return e ? std::atoi(e) : 32; }();
+    n = std::min(n, std::max(0, lightCap));
     impl->cpuGlobals.counts[0] = n;
 
     // ---- Cascaded shadow maps for the sun (port of the Metal cascade fit) ----
@@ -7226,7 +9873,7 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
         item.worldCenter[2] = static_cast<float>(c.z);
         item.worldRadius = static_cast<float>(r);
     }
-    impl->drawQueue.push_back(item);
+    impl->queueDraw(item);
     impl->stats.entitiesSubmitted++;
 }
 
@@ -7248,7 +9895,9 @@ void VulkanRenderer::drawMeshInstanced(MeshHandle handle, const std::vector<Mat4
     // One draw for the whole set (ADR-0097): the material and the first transform (which the
     // transparent sort reads) as drawMesh makes them, then every matrix into the instance rows.
     drawMesh(handle, transforms.front(), material);
-    DrawItem& item = impl->drawQueue.back();
+    DrawItem* queued = impl->lastQueued();
+    if (!queued) return;   // (a probe face with no slot left this frame: dropped)
+    DrawItem& item = *queued;
     for (std::size_t i = 1; i < transforms.size(); ++i) impl->pushInstance(transforms[i]);
     item.instanceCount = static_cast<uint32_t>(transforms.size());
     if (const GpuMesh* gm = impl->meshes.get(handle); gm && gm->bounds.radius > 0) {
@@ -7306,7 +9955,7 @@ void VulkanRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& materi
     item.push.morphEnd = morphEnd;
     item.terrain = true;
     item.firstInstance = impl->pushInstance(Mat4());   // identity: the shadow pass reads it
-    impl->drawQueue.push_back(item);
+    impl->queueDraw(item);
     impl->stats.entitiesSubmitted++;
 }
 
@@ -7475,7 +10124,8 @@ bool VulkanRenderer::supportsGpuCrowd() const { return !std::getenv("RT_NO_GPU_C
 void VulkanRenderer::setCrowdKinds(const std::vector<CrowdKind>& kinds) {
     impl->crowdKinds = kinds;
     impl->crowdGrow(impl->crowdCmds, kinds.size() * 20 + 20,
-                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);   // (SRC: its counts are copied back for the telemetry)
     impl->crowdGrow(impl->crowdKindBuf, kinds.size() * 16 + 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
 }
 
@@ -7527,6 +10177,78 @@ uint32_t VulkanRenderer::crowdTravellers() const { return impl->crowdLive; }
 uint32_t VulkanRenderer::crowdDrawn() const { return impl->crowdDrawnLast; }
 
 void VulkanRenderer::endFrame() {
+    // RT_RT_MEASURE=<frame>: from that frame, for RT_RT_WINDOW frames (600), every instance drawn within 300 m of the
+    // camera is collected (turn the camera round meanwhile: reflections see behind you); then what acceleration
+    // structures would cost -- every mesh on the GPU, and only those within 100 / 150 / 300 m -- the driver's sizes from
+    // counts alone, nothing allocated (rt_measure.h), against the device memory still free
+    static const long rtMeasureAt = std::getenv("RT_RT_MEASURE") ? std::max(60L, std::atol(std::getenv("RT_RT_MEASURE"))) : -1;
+    static const long rtWindow = std::getenv("RT_RT_WINDOW") ? std::max(1L, std::atol(std::getenv("RT_RT_WINDOW"))) : 600;
+    if (rtMeasureAt > 0 && impl->frameCounter >= static_cast<uint64_t>(rtMeasureAt) &&
+        impl->frameCounter <= static_cast<uint64_t>(rtMeasureAt + rtWindow)) {
+        // per instance (its mesh and where it stands, to 1 m): the nearest it came to the camera, less its radius
+        static std::unordered_map<uint64_t, std::pair<uint32_t, float>> near;   // key -> (mesh index, distance)
+        if (impl->frameCounter == static_cast<uint64_t>(rtMeasureAt)) LOG_INFO << "[rt] collecting what is near for " << rtWindow << " frames";
+        const Vec3 eye(impl->cpuGlobals.cameraPosition[0], impl->cpuGlobals.cameraPosition[1], impl->cpuGlobals.cameraPosition[2]);
+        for (const DrawItem& it : impl->drawQueue) {
+            if (it.crowd || it.terrain) continue;
+            GpuMesh* m = impl->meshes.get(it.mesh);
+            if (!m) continue;
+            const float rad = m->bounds.radius;
+            for (uint32_t k = 0; k < it.instanceCount; ++k) {
+                const std::size_t row = static_cast<std::size_t>(it.firstInstance + k) * 16;
+                if (row + 15 >= impl->instanceData.size()) break;
+                const float* t = impl->instanceData.data() + row + 12;
+                const float d = std::max(0.0f, static_cast<float>((Vec3(t[0], t[1], t[2]) - eye).length()) - rad);
+                if (d > 300.0f) continue;
+                const uint64_t key = (static_cast<uint64_t>(it.mesh.index) << 40) ^
+                                     (static_cast<uint64_t>(static_cast<int64_t>(std::floor(t[0])) & 0xFFFFF) << 20) ^
+                                     static_cast<uint64_t>(static_cast<int64_t>(std::floor(t[2])) & 0xFFFFF) ^
+                                     (static_cast<uint64_t>(static_cast<int64_t>(std::floor(t[1])) & 0xFFF) << 52);
+                auto [pos, fresh] = near.emplace(key, std::make_pair(it.mesh.index, d));
+                if (!fresh) pos->second.second = std::min(pos->second.second, d);
+            }
+        }
+        if (impl->frameCounter == static_cast<uint64_t>(rtMeasureAt + rtWindow)) {
+            VkPhysicalDeviceProperties pp;
+            vkGetPhysicalDeviceProperties(impl->physicalDevice, &pp);
+            double freeMb = -1;
+            if (impl->allocator) {
+                VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+                vmaGetHeapBudgets(impl->allocator, budgets);
+                const VkPhysicalDeviceMemoryProperties* props = nullptr;
+                vmaGetMemoryProperties(impl->allocator, &props);
+                for (uint32_t h = 0; props && h < props->memoryHeapCount; ++h)
+                    if (props->memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                        freeMb = std::max(freeMb, (static_cast<double>(budgets[h].budget) - static_cast<double>(budgets[h].usage)) / 1048576.0);
+            }
+            auto report = [&](const char* what, const std::vector<RtMeshCount>& counts, uint32_t instances) {
+                const RtMeasure r = measureRayTracingMemory(pp.vendorID, pp.deviceID, counts, instances);
+                if (!r.ok) { LOG_INFO << "[rt] measure: " << r.why; return; }
+                LOG_INFO << "[rt] " << what << ": " << r.meshes << " meshes, " << r.triangles << " triangles, " << instances
+                         << " instances -> BLAS " << r.blasBytes / 1048576.0 << " MB uncompacted (largest scratch "
+                         << r.blasScratchMax / 1048576.0 << " MB), TLAS " << r.tlasBytes / 1048576.0 << " MB";
+            };
+            std::vector<RtMeshCount> all;
+            impl->meshes.forEach([&](MeshHandle, GpuMesh& m) {
+                all.push_back(RtMeshCount{static_cast<uint32_t>(m.vertexCount), m.indexCount / 3, m.packed ? 32u : 56u});
+            });
+            report("every mesh on the GPU", all, static_cast<uint32_t>(near.size()));
+            for (float within : {100.0f, 150.0f, 300.0f}) {
+                std::unordered_set<uint32_t> meshIds;
+                uint32_t instances = 0;
+                for (const auto& [key, v] : near)
+                    if (v.second <= within) { meshIds.insert(v.first); ++instances; }
+                std::vector<RtMeshCount> counts;
+                impl->meshes.forEach([&](MeshHandle h, GpuMesh& m) {
+                    if (meshIds.count(h.index)) counts.push_back(RtMeshCount{static_cast<uint32_t>(m.vertexCount), m.indexCount / 3, m.packed ? 32u : 56u});
+                });
+                const std::string what = "within " + std::to_string(static_cast<int>(within)) + " m";
+                report(what.c_str(), counts, instances);
+            }
+            LOG_INFO << "[rt] device memory free now " << freeMb << " MB (terrain and the GPU crowd not counted)";
+            near.clear();
+        }
+    }
     // the GPU crowd's draws: one per kind with travellers, its instances and count crowd.comp's
     if (impl->crowdLive > 0 && !std::getenv("RT_NO_GPU_CROWD"))
         for (std::size_t k = 0; k < impl->crowdKinds.size(); ++k) {
@@ -7586,20 +10308,7 @@ void VulkanRenderer::endFrame() {
     impl->cpuGlobals.wind2[1] = 2.5f;   // height
     impl->cpuGlobals.wind2[2] = 0.12f * std::clamp(wspd / 6.0f, 0.25f, 2.6f);   // amplitude
     impl->cpuGlobals.wind2[3] = wspd;
-    // the clouds drift along the same wind, integrated so a veering wind turns the drift instead of swinging the sky
-    // (the deck's own `wind` is its speed at 6 m/s on the ground; with RT_WIND_TIME pinned, a fixed offset)
-    {
-        const double cloudSpeed = static_cast<double>(impl->cloudParams.wind) * (wspd / 6.0);
-        if (kPinnedWind >= 0.0f) {
-            impl->cloudWindOffset[0] = windDir[0] * cloudSpeed * kPinnedWind;
-            impl->cloudWindOffset[1] = windDir[1] * cloudSpeed * kPinnedWind;
-        } else {
-            const double dt = std::clamp(static_cast<double>(windTime) - impl->cloudWindLast, 0.0, 0.25);
-            impl->cloudWindOffset[0] += windDir[0] * cloudSpeed * dt;
-            impl->cloudWindOffset[1] += windDir[1] * cloudSpeed * dt;
-        }
-        impl->cloudWindLast = windTime;
-    }
+    // (the clouds' drift along the same wind is CloudMapSystem's now, ADR-0386: VolumetricCloudParams::driftX/Z)
 #ifdef RT_ENABLE_IMGUI
     // Finalize the ImGui draw data (built by systems during render) before the
     // command buffer records it inside the composite pass.

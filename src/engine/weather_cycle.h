@@ -25,37 +25,41 @@ namespace engine {
 // clear noon never jump-cuts to a thunderhead.
 enum class WeatherKind : int { Clear = 0, Fair = 1, Overcast = 2, Storm = 3 };
 
+// A state's TARGETS: the weather data's (assets/scripts/clouds.lua `weathers`, ADR-0388; sky/cloud_book.cpp), where
+// a new kind of weather's numbers belong. The defaults below are fair's -- what every state is without clouds.lua.
 struct WeatherTargets {
-    float coverage;   // fraction of the noise field above the cloud threshold
-    float density;    // optical thickness (Beer term) — dark bases at 1.0
-    float scale;      // noise domain scale — bigger cells for heavy decks
-    float sunScale;   // multiplier on the sun's intensity (kills shadows too)
+    // the share of the sky under cloud: the weather map's (ADR-0386) -- it was the share of a noise field over a
+    // threshold, which read heavier than its number (fair's 0.32 filled the sky)
+    float coverage = 0.22f;
+    float density = 0.45f;    // optical thickness (Beer term) — dark bases at 1.0
+    float scale = 1.10f;      // noise domain scale — bigger cells for heavy decks
+    float sunScale = 1.00f;   // multiplier on the sun's intensity (kills shadows too)
     // An overcast sky is a giant diffuser: LESS direct light, MORE ambient,
     // and shadows nearly gone. Dimming only the sun (the first cut) kept
     // clear-sky contrast at lower brightness — "the lighting under the
     // clouds is still very harsh". ambientScale raises the fill; shadowSoften
     // fades the artistic shadow response toward shadowless.
-    float ambientScale;   // multiplier on the level's ambient fill
-    float shadowSoften;   // 0 = authored shadows, 1 = fully diffuse (no shadow)
+    float ambientScale = 1.05f;   // multiplier on the level's ambient fill
+    float shadowSoften = 0.08f;   // 0 = authored shadows, 1 = fully diffuse (no shadow)
     // The CLOUD TYPES the weather's map spreads over (ADR-0336; 0 stratus, 1/3 stratocumulus, 2/3 cumulus, 1
     // cumulonimbus): easing between states morphs the types too -- a front's puffs flatten into a deck.
-    float typeLo, typeHi;
+    float typeLo = 0.47f, typeHi = 0.75f;
     // THE WIND the state blows (ADR-0337, wind.h): m/s at 10 m, and how squally
-    float windSpeed, windGust;
+    float windSpeed = 6.0f, windGust = 0.35f;
+    // THE SIMULATION's air (ADR-0390, sky/weather_sim.h): the humidity the sea gives it, the inversion's height (m),
+    // how strongly sunlit land convects, and the large-scale lift (a front)
+    float humidity = 0.80f, inversion = 2000.0f, convection = 1.0f, lift = 0.0f;
 };
 
-inline WeatherTargets weatherTargets(WeatherKind k) {
-    switch (k) {
-        // 0.03, not 0.08: the coverage threshold rides the top of a noise
-        // field, and 8 % still filled the sky with popcorn — a clear day is a
-        // few wisps at most (Glenn, 2026-09-14: "can we see different weather?").
-        case WeatherKind::Clear:    return {0.03f, 0.25f, 0.90f, 1.00f, 1.00f, 0.00f, 0.62f, 0.70f, 3.0f, 0.20f};   // fair-weather puffs, a light breeze
-        case WeatherKind::Overcast: return {0.80f, 0.60f, 1.90f, 0.55f, 1.35f, 0.60f, 0.00f, 0.40f, 9.0f, 0.40f};   // stratus deck, a fresh wind
-        case WeatherKind::Storm:    return {0.92f, 1.00f, 1.60f, 0.28f, 1.45f, 0.85f, 0.60f, 1.00f, 16.0f, 0.70f};   // towers, a gale gusting
-        case WeatherKind::Fair:     break;
-    }
-    return {0.32f, 0.45f, 1.10f, 1.00f, 1.05f, 0.08f, 0.40f, 0.75f, 6.0f, 0.35f};   // Fair — the everyday sky, a moderate breeze
-}
+// THE WEATHER NOW, for the systems that follow it (WeatherSimSystem; rain and sound to come): DayNightSystem publishes
+// it each step on the Wind's entity, its targets eased. `active` false: the weather is off (the level's own sky).
+struct WeatherNow {
+    WeatherTargets live;
+    bool active = false;
+};
+
+// The state's targets, from the weather data (clouds.lua; sky/cloud_book.cpp)
+WeatherTargets weatherTargets(WeatherKind k);
 
 inline const char* weatherKindName(WeatherKind k) {
     switch (k) {
@@ -139,14 +143,15 @@ struct WeatherCycle {
     WeatherKind state = WeatherKind::Fair;
 
     // Live (eased) values — what the renderer shows THIS frame.
-    float coverage = 0.32f;
+    float coverage = 0.22f;
     float density  = 0.45f;
     float scale    = 1.10f;
     float sunScale = 1.00f;
     float ambientScale = 1.05f;
     float shadowSoften = 0.08f;
-    float typeLo = 0.40f, typeHi = 0.75f;
+    float typeLo = 0.47f, typeHi = 0.75f;
     float windSpeed = 6.0f, windGust = 0.35f;
+    float humidity = 0.80f, inversion = 2000.0f, convection = 1.0f, lift = 0.0f;
 
     bool autoMode = false;
     double sinceStepHours = 0.0;   // in-world hours since the last auto roll
@@ -171,6 +176,19 @@ struct WeatherCycle {
         typeHi += (t.typeHi - typeHi) * a;
         windSpeed += (t.windSpeed - windSpeed) * a;
         windGust += (t.windGust - windGust) * a;
+        humidity += (t.humidity - humidity) * a;
+        inversion += (t.inversion - inversion) * a;
+        convection += (t.convection - convection) * a;
+        lift += (t.lift - lift) * a;
+    }
+    // the live values as targets (WeatherNow)
+    WeatherTargets live() const {
+        WeatherTargets t;
+        t.coverage = coverage; t.density = density; t.scale = scale; t.sunScale = sunScale;
+        t.ambientScale = ambientScale; t.shadowSoften = shadowSoften; t.typeLo = typeLo; t.typeHi = typeHi;
+        t.windSpeed = windSpeed; t.windGust = windGust;
+        t.humidity = humidity; t.inversion = inversion; t.convection = convection; t.lift = lift;
+        return t;
     }
 
     // Jump straight to the state's targets (state restore at level start —
@@ -187,6 +205,10 @@ struct WeatherCycle {
         typeHi = t.typeHi;
         windSpeed = t.windSpeed;
         windGust = t.windGust;
+        humidity = t.humidity;
+        inversion = t.inversion;
+        convection = t.convection;
+        lift = t.lift;
     }
 
     // Advance the auto clock by in-world hours. At each kAutoHours boundary:

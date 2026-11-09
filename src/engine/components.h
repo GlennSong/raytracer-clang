@@ -3,6 +3,8 @@
 
 #include "../rt_math.h"
 #include "../renderer/renderer.h"
+#include "vehicle_damage.h"   // DamageRule (a car's damage tuning)
+#include "vehicle_fuel.h"     // FuelRule (its tank)
 #include "ai/driver_agent.h"   // DriverCommand / DriverTuning (AgentDriver)
 #include "audio/audio_engine.h"
 #include "physics/physics_world.h"
@@ -117,6 +119,20 @@ enum class DrawClass : uint8_t {
     Unlimited,     // explicit opt-out: the only way to say "draw forever"
     Count
 };
+
+// A class's name in data (a level's drawDistances, lights.lua raytrace hits); null for Unset, Unlimited and Count
+inline const char* drawClassName(DrawClass c) {
+    switch (c) {
+        case DrawClass::Terrain: return "terrain";
+        case DrawClass::Structure: return "structure";
+        case DrawClass::Scenery: return "scenery";
+        case DrawClass::Furniture: return "furniture";
+        case DrawClass::GroundPaint: return "groundPaint";
+        case DrawClass::SimBody: return "simBody";
+        case DrawClass::Effect: return "effect";
+        default: return nullptr;
+    }
+}
 
 // The single owner of draw-distance policy: class -> metres (0 = unlimited).
 // One per level (a singleton component the loader stamps), so distances scale
@@ -479,6 +495,10 @@ struct RigidBody {
     // fall, a bullet), so they don't tunnel through thin colliders. Capsule and
     // box bodies.
     bool continuousCollision = false;
+    // a body this one is born overlapping and must not be pushed off (a part knocked off a car, the car; ADR-0353):
+    // the pair ignores each other while they overlap and `ignoreGrace` steps after (PhysicsWorld::ignoreContacts)
+    PhysicsBodyId ignore = INVALID_PHYSICS_BODY;
+    int ignoreGrace = 30;
 };
 
 // A kinematic capsule character controller (ADR-0012). Unlike a dynamic
@@ -509,6 +529,14 @@ struct MeshCollider {
     Real friction = 0.6;
     ColliderSurface surface = ColliderSurface::Unknown;
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
+    // `m`'s triangles added (its positions; #191: the one copy from a drawn mesh, for the loops each loader wrote)
+    void append(const RenderMesh& m) {
+        const uint32_t base = static_cast<uint32_t>(vertices.size());
+        vertices.reserve(vertices.size() + m.vertices.size());
+        for (const Vertex& v : m.vertices) vertices.push_back(v.position);
+        indices.reserve(indices.size() + m.indices.size());
+        for (uint32_t ix : m.indices) indices.push_back(base + ix);
+    }
 };
 
 // A physics-driven car (ADR-0059). VehicleSystem creates the Jolt vehicle from
@@ -517,6 +545,31 @@ struct MeshCollider {
 // a Renderable (body mesh) + Transform/PrevTransform so RenderSystem draws it;
 // `wheelEntities` are optional child Renderables whose transforms VehicleSystem
 // refreshes from the wheels. UNVERIFIED submodule-gated path (needs Jolt).
+// CARRYING (ADR-0358; Glenn, 2026-11-07: trunk carry). A loose thing light enough to lift -- a panel off a car, a
+// bin knocked off its post, a box -- is CARRYABLE: E picks it up (its body goes; it rides in front of the player),
+// E puts it down (a body again), and beside a car's open trunk, hatch or bed E puts it IN: STOWED, it rides the car
+// where it was laid until E takes it out again (CarrySystem).
+struct Carryable {
+    std::string name = "box";
+    float mass = 10.0f;    // kg (its body's, once it is put down)
+    Vec3 half{0.2, 0.2, 0.2};   // its box's half extents, its own frame
+};
+struct CarriedBy {
+    Entity holder;
+};
+struct Stowed {
+    Entity vehicle;
+    Vec3 local{0, 0, 0};   // its middle, the chassis frame
+    Quat turn;             // ...and its turn in it
+};
+
+// A FUEL STOP (ADR-0357): the standing place beside a gas station's pump (a lot's area
+// "fuel_pump"), world XZ -- a car stopped with its middle inside fills there (VehicleSystem::servicePumps)
+struct FuelStop {
+    Vec2 center, axis{1, 0};
+    Real halfL = 3.0, halfW = 1.5;
+};
+
 struct Vehicle {
     PhysicsWorld::VehicleConfig config;
     // A PART-TIME 4x4 (spec drive = "4wd"): the driver switches 2WD (rear) <-> 4WD (VehicleSystem, key
@@ -578,6 +631,76 @@ struct Vehicle {
     // opacity < 1. Posed at chassis-local origin (0,0,0) every step, exactly like
     // the lamp lenses.
     std::vector<Entity> bodyParts;
+    // THE MOVING PANELS (ADR-0352): each door, the hood and the trunk turns about its hinge (chassis frame) by
+    // `angle`, which runs toward `target` (0 shut .. `open`); `hold` seconds until it swings shut by itself (a door
+    // the driver opens to get in or out). bodyPartPanel: per bodyParts entry, its panel or -1.
+    struct Panel {
+        std::string name;
+        Vec3 pivot{0, 0, 0};
+        Vec3 axis{0, 1, 0};
+        float open = 0.0f;               // radians, fully open
+        float angle = 0.0f, target = 0.0f;
+        float hold = 0.0f;
+        Vec3 centre{0, 0, 0};
+        Vec3 lo{0, 0, 0}, hi{0, 0, 0};   // its box, shut
+        float mass = 20.0f;              // kg, loose
+        Vec3 slide{0, 0, 0};             // travel at fully open, on top of the turn (a bus's plug door, ADR-0356)
+        float health = 1.0f;             // ADR-0353: at 0 it comes off
+        bool gone = false;
+        // where the part's points go: q (x - pivot) + pivot + slide x (how far open)
+        Quat turn() const { return Quat::fromAxisAngle(axis, angle); }
+        Vec3 travel() const { return open > 0.0f ? slide * static_cast<Real>(angle / open) : Vec3(0, 0, 0); }
+    };
+    std::vector<Panel> panels;
+    std::vector<int> bodyPartPanel;
+    // DAMAGE (ADR-0353, engine/vehicle_damage.h): each zone's health (DamageZone order: front, rear, left, right, roof,
+    // under); the nose at zero kills the engine. The meshes as drawn, kept on the CPU to dent: the body's and each
+    // bodyParts entry's (copied on the first dent; null until then), re-uploaded at most every `uploadEvery` s.
+    float zoneHealth[6] = {1, 1, 1, 1, 1, 1};
+    DamageRule damage;                       // its tuning (vehicles.lua KIT_DAMAGE, ADR-0355)
+    bool engineDead = false;
+    // FUEL (ADR-0357, engine/vehicle_fuel.h): litres in the tank (< 0: not filled yet -- the spawn fills it to its
+    // rule's `start`); at empty the engine dies as a spent nose's does, until a pump fills it
+    FuelRule fuelRule;
+    float fuel = -1.0f;
+    bool outOfFuel = false;
+    bool stalled() const { return engineDead || outOfFuel; }   // no engine: it steers, brakes and coasts
+    // ITS CARGO SPACE (ADR-0358, from the kit: vehicle_kit.lua `cargo`): the box things are laid in, chassis frame, and
+    // the panel that has to be open to reach it (-1: open to the sky, a pickup's bed); what is in it, by entity
+    Vec3 cargoLo{0, 0, 0}, cargoHi{0, 0, 0};
+    int cargoPanel = -1;
+    bool hasCargo = false;
+    std::vector<Entity> cargo;
+    std::shared_ptr<RenderMesh> bodyMesh;
+    std::vector<std::shared_ptr<RenderMesh>> partMeshes;
+    // ...and as they were built: what a repair puts back (ADR-0356)
+    std::shared_ptr<RenderMesh> bodyMeshBuilt;
+    std::vector<std::shared_ptr<RenderMesh>> partMeshesBuilt;
+    std::vector<int> partBuilt;              // per bodyParts entry: its index in partMeshesBuilt
+    bool bodyDented = false;                 // bodyMesh is this car's own copy
+    std::vector<char> partDented;            // ...and each part's
+    bool meshDirty = false;                  // dented since the last upload
+    float sinceUpload = 0.0f;
+    float scrapeSparkClock = 0.0f;
+    float age = 0.0f;                        // s since it was made (a car settling where it spawned is not hit)
+    float stoppedFor = 0.0f;                 // s standing still with its driver in (a bus's doors open, ADR-0356)
+    // ONE CRASH IS ONE KNOCK (Glenn: "I hit a fence with my truck... is it dead?"): a fence is a dozen posts and rails,
+    // each its own contact in the same instant; per zone, the knocks within a third of a second cost only the worst of them
+    Entity engineSmoke;                      // the hood's steam, then smoke, once the nose is hurt (ADR-0355)
+    float crashHarm[6] = {0, 0, 0, 0, 0, 0};
+    float crashClock[6] = {0, 0, 0, 0, 0, 0};
+    int panelIndex(const std::string& n) const {
+        for (std::size_t i = 0; i < panels.size(); ++i) if (panels[i].name == n) return static_cast<int>(i);
+        return -1;
+    }
+    // the driver's door: the front door on the side the driver sits (-X: the right, the world drives on the left)
+    int driverDoor() const { return panelIndex(hipPoint().x < 0 ? "door_front_r" : "door_front_l"); }
+    // swing a panel open, shutting again by itself after `hold` seconds (0: stays open)
+    void swingOpen(int i, float hold) {
+        if (i < 0 || i >= static_cast<int>(panels.size())) return;
+        panels[static_cast<std::size_t>(i)].target = panels[static_cast<std::size_t>(i)].open;
+        panels[static_cast<std::size_t>(i)].hold = hold;
+    }
 };
 
 // Marks a player entity currently seated in a vehicle (ADR-0059). PlayerSystem
@@ -677,6 +800,9 @@ struct NightGlow {
     // lit on its first frame, not left dark until the ramp next changes (Glenn's towers that went dark once he
     // had walked past them, 2026-09-30).
     float appliedRamp = -1.0f;
+    // ITS REAL LUMINANCE (cd/m^2, lights.lua glows; ADR-0369): what it glows at under the physical sky, in
+    // fullEmission's colour. 0: its old emission, scaled.
+    float nits = 0.0f;
 };
 
 // A FLASHING night light (skyscrapers v2 M4): with NightGlow on the same
@@ -699,6 +825,16 @@ struct BeaconBlink {
 // checking that ground dressing stands on the drawn terrain needs exactly that.
 struct LotPartChunk {
     uint8_t part = 0;
+};
+
+// THE GROWN LOTS, for finding one (ADR-0359; the `frame lot` and `lots?` verbs): each lot the city grew -- a building,
+// a park, a car park, a gas station -- by its recipe, with the box round it (world; y from its ground to its top).
+struct LotSites {
+    struct Site {
+        std::string recipe, type;
+        Vec3 lo, hi;
+    };
+    std::vector<Site> sites;
 };
 
 // Level-authored city-simulation settings (ADR-0063): a top-level "citysim"
@@ -761,6 +897,11 @@ struct CityMap {
 struct StreetNaming;
 struct StreetDirectory {
     std::shared_ptr<const StreetNaming> naming;
+    // each named street's centreline (its node chain's plan positions, in naming->streets order): what a place is
+    // looked up by -- the nearest street names a bus stop (the bus's next-stop display)
+    std::vector<std::vector<Vec2>> lines;
+    // The street nearest `p` (its name; empty when there is none within `reach` metres)
+    std::string nearestName(const Vec2& p, Real reach = 40.0) const;
     // How many signs stood up (the loader's census; 0 with signs off).
     int signPosts = 0;
 };

@@ -805,3 +805,87 @@ TEST_CASE(agent_driver_holds_a_cornering_route_on_real_physics) {
     CHECK(worstLat < 3.0);
     CHECK((Vec2(end.x, end.z) - path.back()).length() < 1.5);
 }
+
+// A CAR KNOCKS A BREAKABLE PIECE LOOSE, AND STOPS AT A SOLID ONE (ADR-0353/0354): a hydrant-sized box marked breakable
+// at 2 m/s lets the car through and is reported `broke`; the same box unmarked stops it (and is reported, not broken);
+// a car's scrape along a wall comes back as persisted contacts with its sliding speed.
+TEST_CASE(a_car_knocks_a_breakable_piece_loose_and_stops_at_a_solid_one) {
+    for (int breakable = 1; breakable >= 0; --breakable) {
+        PhysicsWorld world;
+        world.initialize();
+        world.addBox(Vec3(20, 1, 60), Vec3(0, -1, 20), Quat::identity(), BodyMotion::Static);
+        const PhysicsBodyId piece = world.addBox(Vec3(0.16, 0.39, 0.16), Vec3(0, 0.39, 20), Quat::identity(), BodyMotion::Static);
+        if (breakable) world.setBreakable(piece, 2.0);
+        const PhysicsWorld::VehicleId car = world.addVehicle(sedanConfig(), Vec3(0, 1.0, 0), Quat::identity());
+        const PhysicsBodyId chassis = world.vehicleBody(car);
+        bool touched = false, broke = false;
+        for (int i = 0; i < 60 * 6; ++i) {
+            world.setVehicleInput(car, 0.7, 0, 0, 0);
+            world.update(1.0 / 60.0);
+            for (const ContactEvent& e : world.drainContactEvents()) {
+                const bool pair = (e.bodyA == piece && e.bodyB == chassis) || (e.bodyB == piece && e.bodyA == chassis);
+                if (!pair) continue;
+                touched = true;
+                broke |= e.broke;
+            }
+        }
+        const Vec3 at = world.vehiclePosition(car);
+        std::printf("    [break] %s: touched %d broke %d, the car at z %.1f\n", breakable ? "breakable" : "solid",
+                    touched, broke, at.z);
+        CHECK(touched);
+        CHECK(broke == (breakable == 1));
+        if (breakable) CHECK(at.z > 25.0);   // through it
+        else CHECK(at.z < 20.0);             // stopped at it
+    }
+    // the scrape: a car driven along a wall it leans on
+    PhysicsWorld world;
+    world.initialize();
+    world.addBox(Vec3(20, 1, 80), Vec3(0, -1, 30), Quat::identity(), BodyMotion::Static);
+    world.addBox(Vec3(0.2, 1.0, 60), Vec3(-1.05, 1.0, 30), Quat::identity(), BodyMotion::Static);
+    // (clear of the wall at the start: it drives up to speed, then steers into it)
+    const PhysicsWorld::VehicleId car = world.addVehicle(sedanConfig(), Vec3(0.3, 1.0, 0), Quat::identity());
+    Real fastest = 0;
+    int persisted = 0;
+    for (int i = 0; i < 60 * 6; ++i) {
+        const Vec3 at = world.vehiclePosition(car);
+        const Real steer = i < 120 ? 0.0 : std::clamp((at.x - (-0.2)) * 0.6, -0.15, 0.15);   // (hold it against the wall)
+        world.setVehicleInput(car, 0.8, steer, 0, 0);
+        world.update(1.0 / 60.0);
+        for (const ContactEvent& e : world.drainContactEvents())
+            if (e.persisted) { ++persisted; fastest = std::max(fastest, e.slideSpeed); }
+    }
+    const Vec3 end = world.vehiclePosition(car);
+    std::printf("    [scrape] %d persisted touches, fastest slide along the wall %.1f m/s, the car at x %.2f z %.1f\n", persisted,
+                fastest, end.x, end.z);
+    CHECK(fastest > 3.0);
+}
+
+// A PART KNOCKED OFF A CAR IS BORN INSIDE IT (ADR-0353): a door-sized box made inside a moving car's chassis flung the
+// car at a hundred metres a second (Glenn: "the doors flew off and the game look like it crashed"). Ignored while they
+// overlap, the car drives on at its own speed and the box falls away.
+TEST_CASE(a_part_born_inside_its_car_does_not_fling_the_car) {
+    for (int ignored = 0; ignored <= 1; ++ignored) {
+        PhysicsWorld world;
+        world.initialize();
+        world.addBox(Vec3(20, 1, 120), Vec3(0, -1, 50), Quat::identity(), BodyMotion::Static);
+        const PhysicsWorld::VehicleId car = world.addVehicle(sedanConfig(), Vec3(0, 1.0, 0), Quat::identity());
+        for (int i = 0; i < 120; ++i) {   // up to about 12 m/s
+            world.setVehicleInput(car, 0.8, 0, 0, 0);
+            world.update(1.0 / 60.0);
+        }
+        const Vec3 at = world.vehiclePosition(car);
+        // (a bin's box, knocked loose where the car is passing through it: the heavier case)
+        const PhysicsBodyId door = world.addBox(Vec3(0.24, 0.5, 0.24), at + Vec3(0.3, 0.0, 1.2), Quat::identity(),
+                                                BodyMotion::Dynamic);
+        if (ignored) world.ignoreContacts(door, world.vehicleBody(car), 60);
+        world.setLinearVelocity(door, world.vehicleVelocity(car));
+        Real fastest = 0;
+        for (int i = 0; i < 60; ++i) {
+            world.setVehicleInput(car, 0.8, 0, 0, 0);
+            world.update(1.0 / 60.0);
+            fastest = std::max(fastest, world.vehicleVelocity(car).length());
+        }
+        std::printf("    [loose part] %s: the car's fastest %.1f m/s\n", ignored ? "ignored" : "colliding", fastest);
+        if (ignored) CHECK(fastest < 20.0);   // its own speed, no shove
+    }
+}

@@ -2,6 +2,8 @@
 
 #include "engine/level_params.h"   // readTerrainParams: a level terrain block, read the way the level reads it
 #include "engine/procgen/terrain.h"
+#include "engine/procgen/noise.h"   // latticeValueNoise
+#include "hash.h"   // frozenTerrainRecipeLattice
 #include "engine/procgen/hydrology.h"   // the base's rivers: relief stands back from them
 
 #include <algorithm>
@@ -16,19 +18,11 @@ namespace roads::lanes {
 
 namespace {
 
-// Deterministic lattice value noise: a hash per lattice node, smoothstep-interpolated.
-double hash01(int64_t ix, int64_t iy, uint32_t seed) {
-    uint64_t h = static_cast<uint64_t>(ix) * 0x9E3779B97F4A7C15ull ^ static_cast<uint64_t>(iy) * 0xC2B2AE3D27D4EB4Full ^ (static_cast<uint64_t>(seed) + 0x165667B19E3779F9ull);
-    h ^= h >> 31; h *= 0x7FB5D329728EA185ull; h ^= h >> 27; h *= 0x81DADEF4BC2DD44Dull; h ^= h >> 33;
-    return static_cast<double>(h >> 11) / 9007199254740992.0;
-}
-
+// Value noise (procgen/noise.h) at `cell` metres, over the recipe terrain's own frozen lattice (hash.h: kept until the
+// lanes' next tag)
 double valueNoise(double x, double y, double cell, uint32_t seed) {
-    double fx = x / cell, fy = y / cell; double ix = std::floor(fx), iy = std::floor(fy); double tx = fx - ix, ty = fy - iy;
-    tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
-    int64_t i = static_cast<int64_t>(ix), j = static_cast<int64_t>(iy);
-    double a = hash01(i, j, seed), b = hash01(i + 1, j, seed), c = hash01(i, j + 1, seed), d = hash01(i + 1, j + 1, seed);
-    return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+    return latticeValueNoise(x / cell, y / cell, [seed](int64_t i, int64_t j) { return frozenTerrainRecipeLattice(i, j, seed); },
+                             FrozenTerrainRecipeBlend{});
 }
 
 }  // namespace

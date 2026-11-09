@@ -119,6 +119,18 @@ void Application::registerCameraVerbs() {
         return publishRequest(eventBus, r, "camera", "ok camera staged");
     });
 
+    commandTable.add("frame", "frame <x0 y0 z0 x1 y1 z1> [pitch yaw] | frame lot <recipe> [n] [pitch yaw]",
+                     "Put the free camera where a world box, or the n-th grown lot of a recipe (lots? names them), fills "
+                     "the view at that pitch and yaw (default -30, -45); read frame? for the box and the eye (ADR-0359).",
+                     unanswered("a CameraSystem"));
+    commandTable.add("cloudmap", "cloudmap <path.png>",
+                     "Write the clouds' weather map as a picture (ADR-0386): every cloud from above, tinted by its type "
+                     "(stratus grey .. cumulonimbus red), the cirrus faint blue, the camera a red dot.",
+                     unanswered("a CloudMapSystem: a level with volumetric clouds and clouds.lua"));
+    commandTable.add("frame?", "frame?", "The last `frame`: what it found, its box and the eye it chose.",
+                     unanswered("a CameraSystem"));
+    commandTable.add("lots?", "lots?", "Every recipe the city grew, with how many lots of each (the names `frame lot` takes).",
+                     unanswered("a CameraSystem: a level that grew lots"));
     commandTable.add("camera?", "camera?",
                      "The camera's eye, pitch and yaw now, stamped with the frame number.",
                      [this](const ControlCommand&) -> std::string {
@@ -228,15 +240,16 @@ void Application::registerCameraVerbs() {
         return publishRequest(eventBus, r, "detach", "ok detach " + mode + " staged");
     });
 
-    commandTable.add("view", "view <0-8> [wire 0-2]",
-                     "Debug view: 0 normal, 1 AO, 2 SSR, 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades; plus wireframe.",
+    commandTable.add("view", "view <0-10> [wire 0-2]",
+                     "Debug view: 0 normal, 1 AO, 2 SSR (and the rays), 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades, "
+                     "9 roughness (what reflects), 10 environment reflection alone; plus wireframe.",
                      [this](const ControlCommand& cmd) -> std::string {
         // Debug view + wireframe are plain public renderer ints (the
         // RT_DEBUG_VIEW / RT_WIREFRAME env knobs, now runtime).
         double v;
-        if (cmd.args.empty() || !num(cmd.args[0], v) || v < 0 || v > 8)
-            return "err usage: view <0-8> [wire0-2]  (0=normal 1=AO 2=SSR "
-                   "3=depth 4=normals 5=shadow 6=albedo 7=facing 8=cascades)";
+        if (cmd.args.empty() || !num(cmd.args[0], v) || v < 0 || v > 10)
+            return "err usage: view <0-10> [wire0-2]  (0=normal 1=AO 2=SSR 3=depth 4=normals 5=shadow 6=albedo 7=facing "
+                   "8=cascades 9=roughness 10=environment reflection)";
         rendererPtr->debugView = static_cast<int>(v);
         if (cmd.args.size() > 1 && num(cmd.args[1], v))
             rendererPtr->wireframe = std::clamp(static_cast<int>(v), 0, 2);
@@ -541,6 +554,28 @@ void Application::registerPlayerVerbs() {
     commandTable.add("vehicle?", "vehicle?",
                      "The player's vehicle: speed, rpm, gear, drive mode, position, and the sim speed.",
                      unanswered("a VehicleSystem: play mode"));   // measured by it each frame
+
+    commandTable.add("vehicle_repair", "vehicle_repair",
+                     "Repair the car the player drives, else the nearest: every zone whole, the engine running, dents, "
+                     "glass and lamps as built (ADR-0356; a panel that came off stays off).",
+                     unanswered("a VehicleSystem: play mode"));
+
+    commandTable.add("vehicle_fuel", "vehicle_fuel <litres>",
+                     "Set the tank of the car the player drives (0: empty, the engine dies; ADR-0357).",
+                     unanswered("a VehicleSystem: play mode"));
+    commandTable.add("carry_spawn", "carry_spawn [name]",
+                     "Put a carry_items.lua thing (box, crate, ...) down in front of the player, to pick up and stow (ADR-0358).",
+                     unanswered("a CarrySystem: play mode"));
+
+    commandTable.add("pieces", "pieces knock",
+                     "Knock the street piece nearest the player loose (a bin, a rack, news boxes, a hydrant; ADR-0354), "
+                     "as a car hitting it would.",
+                     unanswered("a NatureColliderSystem: play mode, a level with street pieces"));
+
+    commandTable.add("panels", "panels open|shut|knock [name]",
+                     "Swing every drivable car's moving panels (doors, hood, trunk; ADR-0352) open or shut, or knock "
+                     "them off (ADR-0353); only those whose name holds `name` (door, hood, trunk, hatch, door_front_r ...).",
+                     unanswered("a VehicleSystem: play mode"));
 
     // FURNITURE INTERACTIONS (InteractionSystem): `interact` taps the interact key, `interact hold` holds it,
     // `interact stand` stands up, `interact next` moves the focus (Tab); `interact?` reports the focus.

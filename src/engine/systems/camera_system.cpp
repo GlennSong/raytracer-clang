@@ -3,6 +3,9 @@
 #include <cstdio>
 
 #include "../camera/view_distance.h"
+#include "../camera/camera_frame.h"   // frameBox (ADR-0359)
+#include <cstdlib>
+#include <map>
 #include "../components.h"
 #include "../mesh_builder.h"
 #include "../camera_store.h"
@@ -69,6 +72,17 @@ void CameraSystem::onStart(FrameContext& ctx) {
     onDetach_ = ctx.events.listen<CameraDetachRequest>([this](const CameraDetachRequest& r) {
         detachPending_ = r.mode;
     });
+    if (ctx.commands != nullptr) {
+        frameCmd_ = ctx.commands->bind("frame", "CameraSystem", [this](const ControlCommand& cmd) -> std::string {
+            if (cmd.args.empty()) return "err frame <x0 y0 z0 x1 y1 z1> [pitch yaw] | frame lot <recipe> [n] [pitch yaw]";
+            std::string line;
+            for (const std::string& a : cmd.args) line += (line.empty() ? "" : " ") + a;
+            frameStaged_.push_back(line);
+            return "ok staged (read frame?)";
+        });
+        answers_.bind(ctx.commands, "CameraSystem", "frame?");
+        answers_.bind(ctx.commands, "CameraSystem", "lots?");
+    }
 
     orbit.target = Vec3(
         ctx.settings.getDouble("orbitTargetX", 0.0),
@@ -153,6 +167,68 @@ void CameraSystem::update(FrameContext& ctx) {
     // the player pin (PlayerSystem early-outs on !positionLocked), so a staged
     // shot frames correctly in play mode too. Taken before the follow
     // early-return below so a command sent while driving isn't lost.
+    // FRAMING (ADR-0359): a box, or a grown lot by its recipe, fitted to this view's field of view and aspect
+    for (const std::string& line : frameStaged_) {
+        std::vector<std::string> a;
+        {
+            std::size_t i = 0;
+            while (i < line.size()) {
+                const std::size_t j = line.find(' ', i);
+                a.push_back(line.substr(i, j == std::string::npos ? std::string::npos : j - i));
+                if (j == std::string::npos) break;
+                i = j + 1;
+            }
+        }
+        Vec3 lo, hi;
+        bool found = false;
+        std::size_t next = 0;
+        std::string what;
+        if (a[0] == "lot" && a.size() >= 2) {
+            int n = 0;
+            next = 2;
+            if (a.size() >= 3 && a[2].find_first_not_of("0123456789") == std::string::npos) { n = std::atoi(a[2].c_str()); next = 3; }
+            int seen = 0;
+            ctx.world.each<LotSites>([&](Entity, LotSites& ls) {
+                for (const LotSites::Site& s : ls.sites) {
+                    if (s.recipe != a[1]) continue;
+                    if (seen++ == n) { lo = s.lo; hi = s.hi; found = true; }
+                }
+            });
+            what = a[1] + " " + std::to_string(n) + " of " + std::to_string(seen);
+        } else if (a.size() >= 6) {
+            double v[6];
+            bool ok = true;
+            for (int k = 0; k < 6; ++k) { char* e = nullptr; v[k] = std::strtod(a[k].c_str(), &e); ok = ok && e && *e == 0; }
+            if (ok) { lo = Vec3(std::min(v[0], v[3]), std::min(v[1], v[4]), std::min(v[2], v[5]));
+                      hi = Vec3(std::max(v[0], v[3]), std::max(v[1], v[4]), std::max(v[2], v[5])); found = true; what = "box"; }
+            next = 6;
+        }
+        if (!found) { answers_.set("frame?", "err no such lot or box: " + line); continue; }
+        // the look: given, or a three-quarter view from the south-east, down 30 degrees
+        Real pitch = -30, yaw = -45;
+        if (a.size() >= next + 2) { pitch = std::atof(a[next].c_str()); yaw = std::atof(a[next + 1].c_str()); }
+        const CameraState& cam = ctx.view.camera;
+        const Real aspect = ctx.framebufferHeight > 0 ? static_cast<Real>(ctx.framebufferWidth) / ctx.framebufferHeight
+                                                      : static_cast<Real>(cam.aspectRatio);
+        pose_.eye = frameBox(lo, hi, pitch, yaw, cam.fovDegrees, aspect);
+        pose_.pitch = pitch;
+        pose_.yaw = yaw;
+        posePending_ = true;
+        char b[256];
+        std::snprintf(b, sizeof b, "ok %s box %.1f %.1f %.1f  %.1f %.1f %.1f eye %.1f %.1f %.1f pitch %.0f yaw %.0f", what.c_str(),
+                      lo.x, lo.y, lo.z, hi.x, hi.y, hi.z, pose_.eye.x, pose_.eye.y, pose_.eye.z, pitch, yaw);
+        answers_.set("frame?", b);
+    }
+    frameStaged_.clear();
+    // `lots?`: every recipe the city grew, with how many (the names `frame lot` takes)
+    {
+        std::map<std::string, int> count;
+        ctx.world.each<LotSites>([&](Entity, LotSites& ls) { for (const LotSites::Site& s : ls.sites) ++count[s.recipe]; });
+        std::string out;
+        for (const auto& [r, n] : count) out += (out.empty() ? "" : " ") + r + "=" + std::to_string(n);
+        if (!out.empty() && answers_.secondsSinceAsked() < 5.0) answers_.set("lots?", out);
+    }
+
     if (posePending_) {
         posePending_ = false;
         fly.eye = pose_.eye;

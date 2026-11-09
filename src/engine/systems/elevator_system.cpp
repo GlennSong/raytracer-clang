@@ -3,6 +3,7 @@
 
 #include "physics_system.h"
 #include "../components.h"
+#include "../lights/light_kinds.h"   // lightKindId (ADR-0362)
 #include "../world.h"
 #include "../../log.h"
 #include "../procgen/city/shape_grammar.h"
@@ -185,20 +186,22 @@ void ElevatorSystem::fixedUpdate(FrameContext& ctx) {
             }
         }
     }
-    // The CAB LIGHT: a warm point in each cab, staged with the interior room
-    // lights (BuildingInteriorSystem clears that list earlier in the frame).
+    // The CAB LIGHT: a warm point in each cab, on the light board's cab channel (ADR-0362).
     // Without it the cab was lit by its ceiling panel's emission alone —
     // which lights nothing — and its floor went black in the shaft
     // (Glenn's third walk, 2026-09-15).
+    std::vector<LightCandidate>& cabLights = ctx.view.lights.channel(LightChannel::Cabs);
+    cabLights.clear();
+    static const int cabKind = lightKindId("cab");
     for (const auto& kv : banks_) {
         const Bank& b = kv.second;
         for (std::size_t i = 0; i < b.cabs.size() && i < b.core.hoistways.size(); ++i) {
             const CoreShaft& hw = b.core.hoistways[i];
             const Cab& cab = b.cabs[i];
-            PointLight pl(hw.at(hw.width * 0.5, 0.25 + CAB_D * 0.5, cab.y + CAB_H - 0.2),
-                          Vec3(1.0, 0.95, 0.86), 9.0f);
-            pl.range = 6.0f;
-            ctx.view.lighting.interiorPoints.push_back(pl);
+            LightCandidate pl;
+            pl.kind = cabKind;
+            pl.position = hw.at(hw.width * 0.5, 0.25 + CAB_D * 0.5, cab.y + CAB_H - 0.2);
+            cabLights.push_back(pl);
         }
     }
     {   // `elevator?` on the control channel

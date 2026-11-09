@@ -2,6 +2,7 @@
 
 #include "physics_system.h"
 #include "../components.h"
+#include "../lights/light_kinds.h"   // lightKindId (ADR-0362)
 #include "../../log.h"
 #include "../../profile.h"
 #include "../world.h"
@@ -54,12 +55,32 @@ void BuildingInteriorSystem::fixedUpdate(FrameContext& ctx) {
     step(ctx.world, &physics_->physicsWorld(), ctx.assets, &ctx.renderer,
          player);
 
-    // Room lights (ADR-0080): warm ceiling points for the resident interior
-    // NEAREST the player — one per storey, capped — staged transiently for
-    // RenderSystem to merge (the street-lamp pattern). The shader already
-    // loops point lights; interiors were the one place with none.
-    ctx.view.lighting.interiorPoints.clear();
+    // Room lights (ADR-0080, ADR-0365), published on the light board for LightSystem's rooms pool:
+    // - every resident's ceiling fittings, each a light of its fitting's kind kept to its own room's box (the walls stop
+    //   it: room-bounded, no shadow map);
+    // - a dim fill per storey for the resident NEAREST the player, the 4 storeys around them: the light the rooms
+    //   bounce about (corridors and halls have no fittings), until the light probes come.
+    std::vector<LightCandidate>& rooms = ctx.view.lights.channel(LightChannel::Rooms);
+    rooms.clear();
     ctx.view.lighting.viewerCeilingY = 0;
+    {
+        static const int fittingKind[3] = {lightKindId("room_panel"), lightKindId("room_round"), lightKindId("room_pendant")};
+        for (const std::pair<const std::size_t, Resident>& kv : resident_)
+            for (const RoomLight& rl : kv.second.lights) {
+                LightCandidate c;
+                c.kind = fittingKind[std::clamp(rl.kind, 0, 2)];
+                c.position = rl.at;
+                c.roomBox = true;
+                c.boxCx = static_cast<float>(rl.centre.x);
+                c.boxCz = static_cast<float>(rl.centre.y);
+                c.boxUx = static_cast<float>(rl.u.x);
+                c.boxUz = static_cast<float>(rl.u.y);
+                c.boxHalfU = static_cast<float>(rl.halfU);
+                c.boxHalfV = static_cast<float>(rl.halfV);
+                c.boxFloorY = static_cast<float>(rl.floorY);
+                rooms.push_back(c);
+            }
+    }
     if (!resident_.empty()) {
         const CityBuildings* cb = nullptr;
         ctx.world.each<CityBuildings>(
@@ -100,10 +121,12 @@ void BuildingInteriorSystem::fixedUpdate(FrameContext& ctx) {
                 const int lightCount = std::min(nSt, kFrom + 4);
                 for (int k = kFrom; k < lightCount; ++k) {
                     const StoreyPlan& sp = storeys[static_cast<std::size_t>(k)];
-                    PointLight pl(Vec3(c.x, r.baseY + sp.y0 + sp.h - 0.5, c.y),
-                                  Vec3(1.0, 0.88, 0.70), 22.0f);
+                    static const int roomKind = lightKindId("room_fill");   // lights.lua (ADR-0362, 0365)
+                    LightCandidate pl;
+                    pl.kind = roomKind;
+                    pl.position = Vec3(c.x, r.baseY + sp.y0 + sp.h - 0.5, c.y);
                     pl.range = static_cast<float>(ext * 2.0 + sp.h);
-                    ctx.view.lighting.interiorPoints.push_back(pl);
+                    rooms.push_back(pl);
                 }
             }
         }
@@ -314,6 +337,7 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
     Resident res;
     res.k0 = k0;
     res.k1 = k1;
+    res.lights = std::move(bm.roomLights);
     std::size_t tris = 0, bytes = 0;
     for (const RenderMesh& part : bm.parts) {
         if (part.indices.empty()) continue;
@@ -463,7 +487,7 @@ void BuildingInteriorSystem::release(World& world, PhysicsWorld* phys,
 }
 
 void BuildingInteriorSystem::onStop(FrameContext& ctx) {
-    ctx.view.lighting.interiorPoints.clear();
+    ctx.view.lights.channel(LightChannel::Rooms).clear();
     PhysicsWorld* phys = physics_ ? &physics_->physicsWorld() : nullptr;
     std::vector<std::size_t> keys;
     for (const auto& kv : resident_) keys.push_back(kv.first);

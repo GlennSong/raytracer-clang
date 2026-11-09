@@ -166,6 +166,10 @@ struct RenderMaterial {
     // (engine/vehicle_lamps.h LensRole), and the lamps lit ride each instance's bottom row as a mask (Mat4::m[3][0]):
     // mesh.vert lights the tagged lenses the mask names. Vulkan + Metal.
     static constexpr uint32_t FLAG_LAMP_STATE = 1u << 27;
+    // FLAG_INDOOR (bit 28, ADR-0377): a surface inside a building -- drywall, floors, furniture. It never takes the
+    // street's reflection probes or the open sky's light (Glenn: interior walls "occlude the outside but catch the
+    // color of the outside"); indoors the sky reaches it only as a dim, neutral share. Vulkan.
+    static constexpr uint32_t FLAG_INDOOR = 1u << 28;
     float lodIn0 = 0.0f, lodIn1 = 0.0f, lodOut0 = 0.0f, lodOut1 = 0.0f;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
     // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the
@@ -366,6 +370,11 @@ struct PointLight {
     Vec3 color;
     float intensity;
     float range = 25.0f;    // falloff window radius (world units)
+    // A ROOM's light (ADR-0365): it lights only inside its room's box -- the walls stop it without a shadow map.
+    // The box: centre (x, z), its axis u (unit, xz), half extents along u and across it, and the floor it stands on.
+    // A renderer without the box test lights it as a plain point.
+    bool roomBox = false;
+    float boxCx = 0, boxCz = 0, boxUx = 1, boxUz = 0, boxHalfU = 0, boxHalfV = 0, boxFloorY = 0;
 
     PointLight() : color(1, 1, 1), intensity(1.0f) {}
     PointLight(const Vec3& pos, const Vec3& col, float intensity)
@@ -507,6 +516,49 @@ struct SkyScatteringParams {
     float sunAngularRadius = 0.0047f;     // radians (~0.27°, the real sun)
 };
 
+// A REFLECTION PROBE'S CUBE FACE (ADR-0372): where it looks and which way is up on it, in the cube-map convention the
+// shaders sample by (sky_cube.comp cubeDir). A camera built with Mat4::lookAt on these sees each face mirrored left to
+// right (cube maps are left-handed); the renderer flips it as it stores the face.
+inline void probeFaceBasis(int face, Vec3& forward, Vec3& up) {
+    static const Vec3 f[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    static const Vec3 u[6] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
+    forward = f[face % 6];
+    up = u[face % 6];
+}
+
+// THE PHYSICAL SKY THIS FRAME (ADR-0367; engine/sky/sky_atmosphere.h): when on, the renderer draws the sky, its light
+// on surfaces and the haze from the atmosphere model -- a sky-view texture rebuilt each frame from the tables
+// setSkyTables gave it, lit by the active light (the sun by day, the moon by night: SceneLighting::sun) and the other
+// one -- in engine light units (ADR-0366). Off: the procedural sky (ProceduralSky) as before.
+struct PhysicalSkyFrame {
+    bool enabled = false;
+    Vec3 lightDir{0, 1, 0};   float lightTop = 0;    // the active light: toward it, its illuminance above the air
+    Vec3 otherDir{0, -1, 0};  float otherTop = 0;    // the other one (the moon by day, the sun by night)
+    float cameraHeight = 2;                          // m above the ground the atmosphere stands on
+    float groundRadius = 6360000, topRadius = 6460000;
+    Vec3 rayleigh{5.802e-6, 13.558e-6, 33.1e-6};
+    float rayleighHeight = 8000;
+    float mieScatter = 3.996e-6f, mieExtinction = 4.40e-6f, mieHeight = 1200, mieG = 0.8f;
+    Vec3 ozone{0.650e-6, 1.881e-6, 0.085e-6};
+    Vec3 groundAlbedo{0.3, 0.3, 0.3};
+    float sunAngularRadius = 0.0047f;
+    float sunDisc = 1.0f;     // the disc's visibility (a ridge in front of it: 0)
+    bool lightIsSun = true;   // the active light is the sun (its disc is drawn); else the moon, drawn as itself
+    // the stars, the moon's phased disc and the city's glow were tuned against the old night exposure; this takes
+    // them into units until they are physical too (ADR-0367)
+    float celestialScale = 1.0f;
+    // every glowing surface's emission into engine units (lights.lua emission_scale, ADR-0369)
+    float emissionScale = 1.0f;
+    // the city's glow on the sky (light pollution) into units: its old shape times this (ADR-0369)
+    float cityGlowScale = 0.0f;
+    // THE CLOUDS' LIGHT (ADR-0367): the sun (or the moon) as the cloud deck sees it, from its own height -- after
+    // sunset at the street the deck is still in the sun, through the long reddening air: the red and pink undersides
+    Vec3 cloudLightDir{0, 1, 0};
+    Vec3 cloudLightColor{0, 0, 0};   // colour x illuminance (units)
+    // THE SKY'S LIGHT ON A SURFACE of any facing (ADR-0371): E / pi as order-2 spherical harmonics, sun and moon together
+    Vec3 irradianceSH[9];
+};
+
 // Volumetric cloud layer (cinematic-sky phase). Opt-in per level via
 // "environment": {"clouds": {...}}. A slab [bottom, top] of raymarched clouds
 // rendered at half resolution after the scene (depth-occluded) and upsampled
@@ -542,19 +594,36 @@ struct VolumetricCloudParams {
     // eats into cloud edges (0 = solid billows, ~0.6 = ragged wisps). Matches
     // the 0.35 the old inline-fbm erosion hardcoded.
     float detailStrength = 0.35f;
+    // WISPS (ADR-0384): how far the detail's lookup is swirled (Nubis' curl), with the wispy-to-billowy erosion, the
+    // translucent fringe, the far banks' coarse erosion and the silver-lining lobe; 0: the old solid edges
+    float wisps = 1.0f;
+    // THE CIRRUS (ADR-0384): the high ice layer's cover, 0..1 (0: none)
+    float cirrus = 0.35f;
     // CLOUD TYPES (ADR-0336; Schneider's Nubis): the weather map's G picks a type along an axis, the live weather's
     // [typeLo, typeHi] spread over it. Each type: its HEIGHT PROFILE as fractions of the deck (density rises from 0 at
     // profile[0] to full at [1], holds, and falls back to 0 between [2] and [3]), its density, how much the detail
     // erodes it, and its anvil (the top spreading out, cumulonimbus). Ordered along the axis; neighbours blend.
-    // The level's "environment.clouds.types" replaces them, "typeRange" sets the range when the weather is off.
-    struct CloudType { float profile[4]; float density; float erosion; float anvil; };
+    // "typeRange" sets the range when the weather is off. With the weather map (ADR-0386) the types are clouds.lua's
+    // (CloudMapSystem copies them in) and stand at their own heights, base..top metres, the profile over that span;
+    // top <= base: the deck's (bottom..top) as before.
+    struct CloudType { float profile[4]; float density; float erosion; float anvil; float base = 0.0f, top = 0.0f; };
     std::array<CloudType, 4> types{{
         {{0.00f, 0.08f, 0.22f, 0.34f}, 0.70f, 0.50f, 0.0f},   // stratus: a low flat sheet
         {{0.00f, 0.14f, 0.42f, 0.62f}, 0.85f, 0.80f, 0.0f},   // stratocumulus: lumpy, low
         {{0.00f, 0.15f, 0.55f, 1.00f}, 1.00f, 1.00f, 0.0f},   // cumulus: the deck's old single profile
         {{0.00f, 0.05f, 0.85f, 1.00f}, 1.60f, 0.60f, 1.0f},   // cumulonimbus: the full deck, an anvil
     }};
-    float typeLo = 0.40f, typeHi = 0.75f;   // Fair's: stratocumulus to cumulus
+    float typeLo = 0.47f, typeHi = 0.75f;   // Fair's: mostly cumulus, a little stratocumulus
+    // THE CLOUDS' DRIFT so far along the weather's wind (x, z m; ADR-0337), integrated by CloudMapSystem: the march
+    // samples the air at the world plus this, and the weather map is laid out in that air (ADR-0386)
+    double driftX = 0.0, driftZ = 0.0;
+    // the shape noise's frequency against noiseScale (clouds.lua shape_scale with the map: the noise shapes a cell's
+    // inside, not the sky); 1 without
+    float shapeScale = 1.0f;
+    // the direction the cirrus streaks lie along (x, z; the weather map's, cloudCirrusSweep)
+    float cirrusSweepX = 0.8f, cirrusSweepZ = 0.6f;
+    // THE CLOUDS' SHADOW (ADR-0387): how much of the sun a cloud's heart takes (clouds.lua `shadow`; 0: none)
+    float shadow = 0.0f;
 };
 
 // Aerial-perspective fog (ADR-0016 environment). Lit color lerps toward `color`
@@ -595,25 +664,8 @@ struct SceneLighting {
     // no cycle is staged. -1 = none staged.
     float clockHours = -1.0f;
     float clockHoursPerSecond = 0.0f;
-    // Transient headlight cones (WS3): VehicleSystem clears and refills this
-    // every fixed step for lit vehicles nearest the camera (player first);
-    // RenderSystem merges them into the frame's lights ON A COPY, like the
-    // street lamps, so authored spot lights are never displaced. Never saved.
-    std::vector<SpotLight> vehicleSpots;
-    // Spots a hand-held TOOL casts (the flashlight): owned and rebuilt every frame by the tool's own
-    // render() -- separate from vehicleSpots, which VehicleSystem rebuilds only in fixed steps (a frame
-    // with none kept the old list, and a beam appended to it every frame stacked up)
-    std::vector<SpotLight> toolSpots;
-    // Transient interior room lights (ADR-0080): BuildingInteriorSystem
-    // clears and refills this every fixed step with warm ceiling lights for
-    // the streamed interior nearest the player; RenderSystem merges them into
-    // the frame's lights ON A COPY, like the street lamps, so authored
-    // lights are never displaced. Always on (interiors are sun-blind by
-    // day too). Never saved.
-    std::vector<PointLight> interiorPoints;
-    // Aviation-beacon lights (BeaconLightSystem, every frame): the nearest
-    // few lamps as red points, flashing. Merged like interiorPoints.
-    std::vector<PointLight> beaconPoints;
+    // (the lights systems give off -- headlights, lamps, rooms, beacons, the flashlight -- are published on the
+    // engine's light board and picked by LightSystem, ADR-0362; these are the level's own)
     // THE VIEWER'S ENCLOSURE (AudioSystem, every frame; the same box the walls and cabins muffle sound by): the
     // cabin they ride in, else the building they stand in, as a box -- centre, its horizontal axis u, half
     // extents (along u, across it, up). Glass inside it is the viewer's own window and reflects the room, not
@@ -638,6 +690,7 @@ struct SceneLighting {
     FogParams fog;
     UnderwaterParams underwater;
     SkyScatteringParams skyScattering;      // cinematic-sky opt-in (per level)
+    PhysicalSkyFrame physicalSky;           // the physical sky (ADR-0367), written by DayNightSystem
     VolumetricCloudParams volumetricClouds; // cloud-slab opt-in (per level)
     float exposure = 1.0f;
     float ambientMultiplier = 0.3f;
@@ -649,6 +702,7 @@ struct ReflectionProbe {
     float influenceRadius;
     Vec3 boxMin, boxMax;    // AABB for parallax correction
     int priority = 0;       // higher = preferred when overlapping
+    bool indoor = false;    // a storey's probe (ADR-0380): indoor surfaces read only these, the street never
 
     ReflectionProbe() : influenceRadius(10.0f) {}
     ReflectionProbe(const Vec3& pos, float radius, const Vec3& bMin, const Vec3& bMax)
@@ -838,6 +892,28 @@ public:
     // [originX, originX + extent) x [originZ, originZ + extent), encoded
     // encodeLo..encodeHi. The lit pass shadows fragments whose light sits
     // below it. An invalid handle switches it off. No-op by default.
+    // REFLECTION PROBES (ADR-0372): the draws between beginProbeFace and endProbeFace are captured into probe `probe`'s
+    // cube face `face` (0..5: +X -X +Y -Y +Z -Z, probeFaceBasis) seen from `eye` -- what the surfaces are (albedo,
+    // normal, roughness, emission, distance), to be relit -- not drawn to the screen. A frame takes at most a couple of
+    // faces; the rest of the begins in it are dropped (their draws too). False: no probes on this renderer.
+    virtual bool supportsProbeCapture() const { return false; }
+    virtual void beginProbeFace(uint32_t /*probe*/, int /*face*/, const Vec3& /*eye*/) {}
+    virtual void endProbeFace() {}
+    // THE FRAME'S MEASURED BRIGHTNESS (ADR-0368, auto exposure): the log2 of the scene's average luminance in engine
+    // units (the middle of a histogram of the drawn frame, before exposure), a couple of frames old. False: no
+    // measurement (a renderer that does not take one, or none yet).
+    virtual bool measuredSceneLuminance(float& /*log2Units*/) const { return false; }
+    // ...and its HIGHLIGHTS (ADR-0378): the log2 luminance the brightest 3% of the frame reaches (its 97th percentile),
+    // so the exposure can keep them from washing out to white -- a night tower's lit windows.
+    virtual bool measuredSceneHighlight(float& /*log2Units*/) const { return false; }
+    // THE PHYSICAL SKY's tables (ADR-0367: sky_atmosphere.h AtmosphereTables): transmittance and multiple scattering,
+    // RGB floats row by row. Uploaded when the atmosphere changes; the sky-view pass samples them each frame.
+    virtual void setSkyTables(const float* /*transmittance*/, int /*tw*/, int /*th*/, const float* /*multiScatter*/,
+                              int /*mw*/, int /*mh*/) {}
+    // THE WEATHER MAP (ADR-0386, engine/sky/cloud_map.h): an RGBA8 texture -- footprint, type, the cell's height --
+    // over the square [originX, originX + extent) x [originZ, ...) of the AIR (the world plus the clouds' drift).
+    // The march places its clouds by it. An invalid handle: the noise places them, as before. No-op by default.
+    virtual void setCloudMap(TextureHandle /*map*/, double /*originX*/, double /*originZ*/, float /*extent*/) {}
     virtual void setTerrainHorizon(TextureHandle /*map*/, float /*originX*/,
                                    float /*originZ*/, float /*extent*/,
                                    float /*encodeLo*/, float /*encodeHi*/) {}
@@ -932,6 +1008,17 @@ public:
         for (Mat4 m : transforms) { m.m[3][0] = m.m[3][1] = m.m[3][2] = 0; drawMesh(handle, m, material); }
     }
     virtual void setReflectionProbes(const std::vector<ReflectionProbe>& /*probes*/) {}
+    // RAY-TRACED REFLECTIONS (ADR-0376): what a reflection ray may hit -- the near instances, nearest first, as the
+    // engine picked them (raytrace rules, lights.lua) -- held until the next call. `memoryShare`: the most of the device
+    // memory free at the first call that the structures may ever take (Glenn: "not blow up my gpu"). `rules`: near,
+    // fade (m) and the roughest surface that casts a ray.
+    struct RayInstance {
+        MeshHandle mesh;
+        Mat4 transform;
+        RenderMaterial material;   // what the rays' hit shading lights it as
+    };
+    virtual bool supportsRayQuery() const { return false; }
+    virtual void setRayInstances(const std::vector<RayInstance>& /*nearestFirst*/, float /*memoryShare*/, const float /*rules*/[3]) {}
 
     // THE GPU CROWD (the 100k plan's mid-range band on compute): far travellers placed by a compute shader from their
     // route and clock -- see shaders/vulkan/crowd.comp. The caller keeps the data; a backend copies what changed.
@@ -956,6 +1043,10 @@ public:
     // FLAG_LOD_BAND drawn (the dithered band): without it a surface draws whole, so a caller crossfading two
     // models with it would draw both at once
     virtual bool supportsLodBand() const { return false; }
+    // How many point and spot lights a frame may hand setLights (besides the sun): a forward renderer loops a fixed
+    // 32 in every pixel (one slot is the sun's); a clustered one (ADR-0361) lights each pixel from its own short list,
+    // so thousands. LightSystem sizes its budgets to it (ADR-0362).
+    virtual int lightCapacity() const { return 31; }
     virtual void setCrowdKinds(const std::vector<CrowdKind>& /*kinds*/) {}
     virtual void setCrowdLinks(const std::vector<float>& /*sixPerLink*/) {}
     virtual void setCrowdRoutes(const std::vector<uint32_t>& /*pairs*/, std::size_t /*firstChanged*/) {}

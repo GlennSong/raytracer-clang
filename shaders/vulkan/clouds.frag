@@ -26,12 +26,17 @@ layout(set = 0, binding = 0) uniform CloudUniforms {
     vec4 march;           // x viewSteps, y lightSteps, z phaseG, w farDistance
     vec4 detail;          // x detailStrength (edge-erosion depth), y 1: the old coherent march offset (the A/B), z 1: the resolve reprojects by cloud depth, w unused
     mat4 prevViewProjection;   // last frame's (clouds_resolve.frag: the history's reprojection)
-    vec4 frame;                // x this frame's dither offset in [0,1), y history weight (0: reset), zw unused
+    vec4 frame;                // x this frame's dither offset in [0,1), y history weight (0: reset), z wisps (0: the old
+                               // solid edges, RT_CLOUD_WISPS=0), w the cirrus's cover (0: none) -- ADR-0384
     // THE CLOUD TYPES (ADR-0336): along the axis 0 stratus, 1/3 stratocumulus, 2/3 cumulus, 1 cumulonimbus
     vec4 typeProfile[4];       // the height fractions: rise from x, full by y, full to z, gone by w
     vec4 typeParams[4];        // x density, y erosion, z anvil
     vec4 typeRange;            // x lo, y hi: the live weather's types
     vec4 windOffset;           // xy: the clouds' drift so far along the weather's wind (x, z m: ADR-0337)
+    // THE WEATHER MAP (ADR-0386): each type's heights, the map's square in the air, the shape noise's scale
+    vec4 typeHeights[4];       // x base, y top (m; top <= base: the deck's span)
+    vec4 mapRect;              // x originX, y originZ, z 1 / extent, w 1: the map places the clouds
+    vec4 shape;                // x the shape noise's frequency against noiseScale, yz the cirrus's sweep (x, z)
 } u;
 
 layout(set = 0, binding = 1) uniform sampler2D sceneDepth;
@@ -84,7 +89,38 @@ vec3 clWind() { return vec3(u.windOffset.x, 0.0, u.windOffset.y); }   // (the we
 // THE WEATHER MAP (ADR-0336): x the coverage field, y the cloud type at this point (the map's G spread over the live
 // weather's type range). Its own 2D texture, R the slice of the base volume the march used to read, so the sky keeps
 // its layout.
+// THE WEATHER MAP THAT PLACES THE CLOUDS (ADR-0386; engine/sky/cloud_map.h): x the footprint (the coverage here: 0
+// clear air .. 1 a cloud's heart), y the cell's type slot, z its own top as a fraction of its type's height; zero
+// past the map's square. Laid out in the air: the world plus the drift.
+vec3 clMap(vec2 xz) {
+    vec2 uv = (xz + clWind().xz - u.mapRect.xy) * u.mapRect.z;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec3(0.0);
+    return textureLod(weatherMap, uv, 0.0).rgb;
+}
+bool clMapOn() { return u.mapRect.w > 0.5; }
+
+// A map cell's type at height y: x its profile's density there, y the type's density, z its erosion, w its anvil; and
+// `hf` the height within the cell (0 its base, 1 its own top). The slot is the cell's own (the map's G), between two
+// types only where the bilinear read crosses cells; its top shrinks with the cell (the map's B).
+vec4 clCellShape(float slot, float topFrac, float y, out float hf) {
+    const float a = clamp(slot, 0.0, 1.0) * 3.0;
+    const int i = min(int(a), 2);
+    const float f = a - float(i);
+    const vec4 P = mix(u.typeProfile[i], u.typeProfile[i + 1], f);
+    const vec4 Q = mix(u.typeParams[i], u.typeParams[i + 1], f);
+    const vec2 H = mix(u.typeHeights[i].xy, u.typeHeights[i + 1].xy, f);
+    const float top = H.x + (H.y - H.x) * clamp(topFrac, 0.05, 1.0);
+    hf = (y - H.x) / max(1.0, top - H.x);
+    if (hf <= 0.0 || hf >= 1.0) return vec4(0.0);
+    const float prof = smoothstep(P.x, max(P.y, P.x + 1e-3), hf) * (1.0 - smoothstep(P.z, max(P.w, P.z + 1e-3), hf));
+    return vec4(prof, Q.x, Q.y, Q.z);
+}
+
 vec2 clWeather(vec2 xz) {
+    if (clMapOn()) {
+        const vec3 m = clMap(xz);
+        return vec2(m.x, m.y);
+    }
     vec2 q = (xz + clWind().xz) * (u.params.z * 0.035);
     if (u.detail.w > 0.5) return vec2(textureLod(baseNoise, vec3(q.x, 0.37, q.y), 0.0).r, 2.0 / 3.0);   // (RT_CLOUD_TYPES=0: the old slice, cumulus)
     const vec4 w = textureLod(weatherMap, q, 0.0);
@@ -116,37 +152,94 @@ float clLocalCoverage(float weather) {
 // `detailFade` scales the high-frequency erosion (1 = full, 0 = shape only) —
 // steps longer than the detail texture's cells sample it below Nyquist and
 // turn cauliflower into confetti, so far samples keep shape, not noise.
-float clDensity(vec3 p, float detailFade) {
+// `coarse` (0..1): past where the fine erosion fades (the far banks), how much of the coarse one takes its place
+float clDensity(vec3 p, float detailFade, float coarse) {
     float hf = clLayerHeight(p);
     if (hf <= 0.0 || hf >= 1.0) return 0.0;
-    // the weather here, and its cloud type's shape at this height (ADR-0336)
-    const vec2 wx = clWeather(p.xz);
-    const vec4 shape = clTypeShape(wx.y, hf);
+    // the weather here, and its cloud type's shape at this height (ADR-0336) -- with the map, the cell's own
+    // (ADR-0386): its footprint IS the coverage, its type and its height its own
+    vec4 shape;
+    float cov;
+    if (clMapOn()) {
+        const vec3 m = clMap(p.xz);
+        if (m.x <= 0.004) return 0.0;
+        shape = clCellShape(m.y, m.z, p.y, hf);
+        cov = m.x;
+    } else {
+        const vec2 wx = clWeather(p.xz);
+        shape = clTypeShape(wx.y, hf);
+        cov = clLocalCoverage(wx.x);
+    }
     float profile = shape.x;
     if (profile <= 0.0) return 0.0;
     vec3 wind = clWind();
-    vec3 q = (p + wind) * u.params.z;
+    vec3 q = (p + wind) * (u.params.z * max(u.shape.x, 1e-3));
     // Base shape: R = perlin-worley, GBA = worley fBm at rising frequency.
     vec4 nse = textureLod(baseNoise, q * 0.25, 0.0);   // (explicit: one level, and the march's derivatives are undefined)
     float lowFbm = nse.g * 0.625 + nse.b * 0.25 + nse.a * 0.125;
     float base = clamp(clRemap(nse.r, lowFbm - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
-    float cov = clLocalCoverage(wx.x);
+    // THE HEIGHT PROFILE BEFORE THE COVERAGE (Nubis, with the map: ADR-0386): the noise thinned toward the cell's base
+    // and top, then cut by the footprint -- only the footprint's heart survives up there, so a cell rounds into a
+    // dome. Applied after, the cut was the same at every height: each cell stood as a cylinder, flat-sided.
+    if (clMapOn()) {
+        base *= profile;
+        profile = 1.0;
+        // ...and the footprint NARROWED as the cell rises (a cumulus is widest at its base and domes over, not a
+        // footprint stood up as a wall: Glenn, 2026-11-08, "the clouds still look boxy"): the soft footprint cut back
+        // by its height, so the sides lean in and the top is the heart's alone
+        const float narrow = 0.8 * smoothstep(0.0, 1.0, hf);
+        cov = clamp((cov - narrow) / max(1e-3, 1.0 - narrow), 0.0, 1.0);
+    }
     // the ANVIL (Nubis): near the top a cumulonimbus's coverage grows, so the tower spreads into a shelf
     cov = pow(cov, clRemap(clamp(hf, 0.7, 0.8), 0.7, 0.8, 1.0, mix(1.0, 0.5, shape.w)));
     float d = clamp((base - (1.0 - cov)) / max(1e-3, cov), 0.0, 1.0);
     // Edge erosion: subtract high-frequency worley scaled by (1 - d), so
     // interiors stay solid and edges wisp away.
-    vec3 det = textureLod(detailNoise, (q + wind * (0.08 * u.params.z) + vec3(0.0, 0.002 * u.skyAmbient.w * u.params.z, 0.0)) * 2.0, 0.0).rgb;
-    float detailFbm = det.r * 0.625 + det.g * 0.25 + det.b * 0.125;
-    d = clamp(d - detailFbm * u.detail.x * shape.z * detailFade * (1.0 - d), 0.0, 1.0);
+    vec3 dq = q + wind * (0.08 * u.params.z) + vec3(0.0, 0.002 * u.skyAmbient.w * u.params.z, 0.0);
+    if (u.frame.z <= 0.0) {
+        vec3 det = textureLod(detailNoise, dq * 2.0, 0.0).rgb;
+        float detailFbm = det.r * 0.625 + det.g * 0.25 + det.b * 0.125;
+        d = clamp(d - detailFbm * u.detail.x * shape.z * detailFade * (1.0 - d), 0.0, 1.0);
+        return d * profile * shape.y * u.params.y;
+    }
+    // WISPS (ADR-0384; Glenn, 2026-11-08: "the clouds are very solid looking and lack any of the wispiness of real
+    // clouds"). Worley erosion alone cuts cauliflower, never a torn edge. As Schneider's Nubis (2015/2017):
+    // - the detail's lookup SWIRLED by a low-frequency warp (a ~90 m-celled read of the same volume standing in for
+    //   his curl texture), most at the base, where cumulus tears into strands, least at the billowing top;
+    // - the erosion WISPY at the base and BILLOWY above (the fBm, inverted over the lowest tenth);
+    // - and as a remap, so a thin edge is eaten whole, not only thinned (a smoothstep over the result as well, to make
+    //   the fringe translucent, only blurred the clouds: tried and dropped);
+    // - the far banks, past the fine detail, eroded by the warp's own coarse read, so they keep a ragged outline.
+    float erode = 0.0;
+    if (detailFade > 0.0 || coarse > 0.0) {
+        vec3 wv = textureLod(detailNoise, dq * 0.5 + vec3(0.31, 0.17, 0.53), 0.0).rgb;
+        if (detailFade > 0.0) {
+            vec3 warp = (wv - 0.5) * 2.0 * (0.15 * u.frame.z) * (1.0 - 0.6 * hf);
+            vec3 det = textureLod(detailNoise, (dq + warp) * 2.0, 0.0).rgb;
+            float fbm = det.r * 0.625 + det.g * 0.25 + det.b * 0.125;
+            fbm = mix(fbm, 1.0 - fbm, clamp(hf * 10.0, 0.0, 1.0));
+            erode += fbm * detailFade;
+        }
+        erode += (wv.r * 0.625 + wv.g * 0.25 + wv.b * 0.125) * coarse * 0.8;
+    }
+    float e = clamp(erode * u.detail.x * shape.z * 1.8, 0.0, 0.95);
+    d = clamp((d - e) / (1.0 - e), 0.0, 1.0);
     return d * profile * shape.y * u.params.y;
 }
+
 
 // Henyey-Greenstein, normalised so isotropic (g = 0) returns 1 — the result
 // multiplies a directional sun term that carries no compensating 4pi.
 float clPhaseHG(float mu, float g) {
     float g2 = g * g;
     return (1.0 - g2) / pow(1.0 + g2 - 2.0 * g * mu, 1.5);
+}
+
+// Two lobes when the wisps are on (ADR-0384): the cloud's own and a sharp forward one -- the bright rim of a cloud
+// edge in front of the sun (the silver lining), which one broad lobe could not give
+float clPhase(float mu, float g) {
+    float p = clPhaseHG(mu, g);
+    return u.frame.z > 0.0 ? mix(p, clPhaseHG(mu, 0.8), 0.1) : p;
 }
 
 bool clLayerInterval(vec3 origin, vec3 dir, out float t0, out float t1) {
@@ -181,8 +274,46 @@ bool clLayerInterval(vec3 origin, vec3 dir, out float t0, out float t1) {
     return t1 > t0;
 }
 
+// THE CIRRUS (ADR-0384): the high ice cloud the deck never had -- mare's tails and veils, most of a fair sky's
+// wispiness. A thin sheet at 9 km, not marched: broad veils of the base volume read as a plane, stretched along one
+// sweep, faintly streaked by a finer read (fine fibres alone came out as scratches); drifting with the deck's wind, faster (the
+// jet stream). Thin (at most half opaque), lit by the sun's forward-scattering ice and the sky. Over the slab only;
+// `cover` (u.frame.w) from the level's "cirrus" (0: none). Returns premultiplied rgb and its opacity.
+vec4 clCirrus(vec3 camPos, vec3 dir, vec3 sunDir) {
+    const float kHeight = 9000.0;
+    if (u.frame.w <= 0.0 || u.layer.w > 0.5 || dir.y < 0.02 || camPos.y > kHeight) return vec4(0.0);
+    float t = (kHeight - camPos.y) / dir.y;
+    vec3 P = camPos + dir * t;
+    float c, fade;
+    if (clMapOn()) {
+        // the VEILS from the weather map's A (ADR-0386: laid out with the clouds, nothing tiling), faded before the
+        // map's edge, faintly streaked along its sweep by a finer read
+        const vec2 a = u.shape.yz;
+        const vec2 xz = P.xz + u.windOffset.xy;
+        const vec2 uv = vec2(dot(xz, a), dot(xz, vec2(-a.y, a.x)));
+        const vec2 m = (xz - u.mapRect.xy) * u.mapRect.z;
+        const float veil = any(lessThan(m, vec2(0.0))) || any(greaterThan(m, vec2(1.0))) ? 0.0 : textureLod(weatherMap, m, 0.0).a;
+        const float fib = textureLod(baseNoise, vec3(uv.x / 12000.0, 0.29, uv.y / 900.0), 0.0).r;
+        c = veil * (0.55 + 0.45 * fib);
+        fade = 1.0 - smoothstep(24000.0, 38000.0, length(P.xz - camPos.xz));
+    } else {
+        vec2 xz = P.xz + u.windOffset.xy * 2.5;
+        const vec2 a = vec2(0.8, 0.6);                               // the sweep the streaks lie along
+        vec2 uv = vec2(dot(xz, a), dot(xz, vec2(-a.y, a.x)));
+        vec4 pn = textureLod(baseNoise, vec3(uv.x / 24000.0, 0.61, uv.y / 9000.0), 0.0);       // the veils
+        float n = pn.r * 0.6 + pn.g * 0.25 + pn.b * 0.15;
+        float fib = textureLod(baseNoise, vec3(uv.x / 12000.0, 0.29, uv.y / 900.0), 0.0).r;    // the streaks in them
+        float cover = u.frame.w;
+        c = smoothstep(1.0 - cover, 1.0 - cover + 0.45, n) * (0.6 + 0.4 * fib);
+        fade = 1.0 - smoothstep(60000.0, 140000.0, t);
+    }
+    float alpha = c * 0.5 * fade;
+    vec3 sunLight = u.sunColor.rgb * u.sunColor.w;
+    vec3 lit = sunLight * (0.6 * clPhase(dot(dir, sunDir), 0.6)) + u.skyAmbient.rgb;
+    return vec4(lit * alpha, alpha);
+}
+
 void main() {
-    const vec4 CLEAR = vec4(0.0, 0.0, 0.0, 1.0);
 
     vec2 ndc = inUV * 2.0 - 1.0;   // flipped invVP: no manual y negation
     // THE RAY, from a point ~100 m out (reverse-Z depth 0.002, a few hundred near planes), not the near plane itself: there
@@ -196,17 +327,20 @@ void main() {
 
     float t0, t1;
     outCloudDepth = -1.0;
-    if (!clLayerInterval(camPos, dir, t0, t1)) { outColor = CLEAR; return; }
-
     // Scene depth occlusion (reverse-Z: background depth == 0 -> far).
     float depth = texture(sceneDepth, inUV).r;
+    // the cirrus behind everything the deck holds, over the open sky only (ADR-0384)
+    const vec4 cirrus = depth > 0.0 ? vec4(0.0) : clCirrus(camPos, dir, sunDir);
+    const vec4 CIRRUS_ONLY = vec4(cirrus.rgb, 1.0 - cirrus.a);
+    if (!clLayerInterval(camPos, dir, t0, t1)) { outColor = CIRRUS_ONLY; return; }
+
     float tScene = u.march.w;
     if (depth > 0.0) {
         vec4 w = u.invViewProjection * vec4(ndc, depth, 1.0);
         tScene = length(w.xyz / w.w);
     }
     t1 = min(t1, tScene);
-    if (t1 <= t0) { outColor = CLEAR; return; }
+    if (t1 <= t0) { outColor = CIRRUS_ONLY; return; }
 
     // EMPTY-RAY EARLY-OUT: probe the weather field along the slab span before
     // paying for the march — a fair sky is mostly gaps by design.
@@ -217,9 +351,10 @@ void main() {
         float cov = 0.0;
         for (int k = 0; k < 8 && cov < 0.02; ++k) {
             float f = (float(k) + fract(clDither(gl_FragCoord.xy) + u.frame.x)) / 8.0;
-            cov = max(cov, clLocalCoverage(clWeather((camPos + dir * mix(t0, t1, f)).xz).x));
+            const vec2 wq = clWeather((camPos + dir * mix(t0, t1, f)).xz);
+            cov = max(cov, clMapOn() ? wq.x : clLocalCoverage(wq.x));
         }
-        if (cov < 0.02) { outColor = CLEAR; return; }
+        if (cov < 0.02) { outColor = CIRRUS_ONLY; return; }
     }
 
     int viewSteps = int(u.march.x);
@@ -230,10 +365,12 @@ void main() {
     // times and the dither turns every mid-distance deck into weave.
     float budgetStep = (t1 - t0) / float(max(2, viewSteps));
     float slabThick = max(1.0, u.layer.y - u.layer.x);
-    float dsNear = min(budgetStep, slabThick / 12.0);
+    // (with the map the deck spans every type the weather has, up to the towers' 9 km: a twelfth of that is no step
+    // to resolve a cloud by, so the fine step stays a cloud's, ~40-120 m)
+    float dsNear = min(budgetStep, clMapOn() ? clamp(slabThick / 12.0, 40.0, 120.0) : slabThick / 12.0);
     float ds = dsNear;
     float mu = dot(dir, sunDir);
-    float phase = clPhaseHG(mu, u.march.z);
+    float phase = clPhase(mu, u.march.z);
 
     // Per-pixel start jitter breaks the shells of constant t; a decorrelated
     // offset for the sun march stops shadow slices locking to view slices.
@@ -297,7 +434,7 @@ void main() {
         // Detail falls away with distance — erosion finer than the pixel
         // footprint can only alias; far banks keep their SHAPE.
         float farFade = 1.0 - smoothstep(3500.0, 14000.0, t);
-        float density = clDensity(p, detailFade * farFade);
+        float density = clDensity(p, detailFade * farFade, 1.0 - farFade);
         if (density <= 0.001) {
             dryRun += 1;
             t += stepLen;
@@ -340,14 +477,14 @@ void main() {
                     hc = (hc ^ (hc >> 16)) * 0x7feb352du; hc = (hc ^ (hc >> 15)) * 0x846ca68bu; hc ^= hc >> 16;
                     vec3 rnd = vec3(float(hc & 1023u), float((hc >> 10) & 1023u), float((hc >> 20) & 1023u)) / 511.5 - 1.0;
                     vec3 lp = p + sunDir * dm + rnd * (0.35 * dm);   // the cone: widening with distance
-                    lightOD += clDensity(lp, 0.0) * (d1 - d0);
+                    lightOD += clDensity(lp, 0.0, 0.0) * (d1 - d0);
                     d0 = d1;
                 }
-                lightOD += clDensity(p + sunDir * (d0 * 3.0), 0.0) * d0;   // the long sample: what lies far up-sun
+                lightOD += clDensity(p + sunDir * (d0 * 3.0), 0.0, 0.0) * d0;   // the long sample: what lies far up-sun
             } else
             for (int j = 0; j < lightSteps; j++) {
                 vec3 lp = p + sunDir * (lds * (float(j) + lightJitter));
-                lightOD += clDensity(lp, detailFade * farFade * 0.5) * lds;
+                lightOD += clDensity(lp, detailFade * farFade * 0.5, 0.0) * lds;
             }
             // MULTIPLE SCATTERING (Wrenninge's octaves): single scattering with
             // Beer's law says a cloud base under 240 m of cloud gets no sun at
@@ -400,6 +537,6 @@ void main() {
     float ringFade = 1.0 - smoothstep(0.75 * u.march.w, u.march.w, t0);
     scattered *= ringFade;
     transmittance = mix(1.0, transmittance, ringFade);
-    outColor = vec4(scattered, transmittance);
+    outColor = vec4(scattered + transmittance * cirrus.rgb, transmittance * (1.0 - cirrus.a));
     outCloudDepth = depthW > 1e-3 ? depthSum / depthW : -1.0;
 }

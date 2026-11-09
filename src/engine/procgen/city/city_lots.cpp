@@ -13,7 +13,7 @@
 #include "section.h"         // the toolkit's section massing (issue #105)
 #include "cells.h"           // the toolkit's complex: a bundle of tubes (issue #105 step 5)
 #include "shape_grammar.h"   // growPlanBuilding — REAL buildings
-#include "road_mesh.h"       // triangulatePolygon (lot-shaped park pads)
+#include "road_mesh.h"
 #include "street_kit.h"      // streetLamp (plaza lamp posts)
 #include "block_grade.h"     // gradeBlocks (in-pass block terracing)
 #include "site_plan.h"       // siteFrame + largestAlignedRect: the rectilinear buildable
@@ -479,19 +479,12 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
     // hung its middle 0.4 m over a sloping courtyard
     auto discInto = [&](RenderMesh& m, const Vec2& o, Real r, Real y, const Vec3& col, bool seal) {
         const int n = 32, rings = std::max(1, static_cast<int>(std::ceil(r / segLen)));
-        Poly2 rimP;
-        for (int k = 0; k < n; ++k) {
-            const Real a0 = 6.2831853 * k / n, a1 = 6.2831853 * (k + 1) / n;
-            const Vec2 d0(std::cos(a0), std::sin(a0)), d1(std::cos(a1), std::sin(a1));
-            for (int ri = 0; ri < rings; ++ri) {
-                const Real r0 = r * ri / rings, r1 = r * (ri + 1) / rings;
-                const Vec2 p00 = o + d0 * r0, p01 = o + d1 * r0, p10 = o + d0 * r1, p11 = o + d1 * r1;
-                if (ri == 0) MeshBuilder::emitTri(m, Vec3(o.x, y, o.y), Vec3(p10.x, y, p10.y), Vec3(p11.x, y, p11.y), up, col);
-                else MeshBuilder::emitQuad(m, Vec3(p00.x, y, p00.y), Vec3(p10.x, y, p10.y), Vec3(p11.x, y, p11.y), Vec3(p01.x, y, p01.y), up, col);
-            }
-            rimP.push_back(o + d0 * r);
+        MeshBuilder::emitAnnulus(m, MeshFrame::level(y, true, o), 0, r, col, n, 0, TAU, rings);
+        if (seal) {
+            Poly2 rimP;
+            for (const Vec2& p : MeshBuilder::profileCircle(r, n).pts) rimP.push_back(o + p);
+            g.sealed.push_back(rimP);
         }
-        if (seal) g.sealed.push_back(rimP);
     };
     auto disc = [&](const Vec2& o, Real r, Real y, const Vec3& col, bool seal) { discInto(m, o, r, y, col, seal); };
     auto box = [&](const Vec2& at, Real y, const Vec2& along, const Vec3& size, PartId part, const Vec3& col) {
@@ -900,8 +893,8 @@ static bool sculptSportsField(LotBuilding& g, const Poly2& poly, uint32_t seed, 
     if (!track)
         while ((PL >= 50 && PW >= 34) && !fits()) { PL -= 3.0; PW -= 2.0; }
     if (std::getenv("RT_CAMPUS_DEBUG"))
-        std::printf("[sports field] pad %zu verts, box %.1f x %.1f: pitch %.1f x %.1f -> %.1f x %.1f, track %d\n", poly.size(),
-                    2 * ob.half[la], 2 * ob.half[1 - la], PL0, PW0, PL, PW, track ? 1 : 0);
+        std::printf("[sports field] at (%.1f, %.1f): pad %zu verts, box %.1f x %.1f: pitch %.1f x %.1f -> %.1f x %.1f, track %d\n",
+                    pc.x, pc.y, poly.size(), 2 * ob.half[la], 2 * ob.half[1 - la], PL0, PW0, PL, PW, track ? 1 : 0);
     if (PL < 50 || PW < 34) return false;   // a training pitch at the least
     const Real s = PW / 68.0;   // the markings scale with the width (a small pitch, a small box)
     RenderMesh m;
@@ -921,19 +914,15 @@ static bool sculptSportsField(LotBuilding& g, const Poly2& poly, uint32_t seed, 
     // THE TRACK: the infield's grass out to the inside of lane 1, then the lanes in a terracotta band, white lane
     // lines between them, the start/finish line across the home straight
     const Real tR = trackR(), tS = trackS();
+    // the pitch's plane at height y: the lot frame (x along the pitch, z across it) at P
+    auto pitchFrame = [&](Real x, Real z, Real y) {
+        return MeshFrame{P(x, z, y), Vec3(ua.x, 0, ua.y), up, Vec3(va.x, 0, va.y)};
+    };
     auto stadium = [&](Real r0, Real r1, Real y, const Vec3& col) {   // the band between two stadium outlines
-        const Real hs = tS / 2;
-        quad(-hs, -r1, hs, -r0, y, col);
-        quad(-hs, r0, hs, r1, y, col);
-        const int n = 28;
-        for (int end : {-1, 1})
-            for (int i = 0; i < n; ++i) {
-                const Real a0 = -1.5707963 + 3.14159265 * i / n, a1 = -1.5707963 + 3.14159265 * (i + 1) / n;
-                const Vec2 d0(std::cos(a0) * end, std::sin(a0)), d1(std::cos(a1) * end, std::sin(a1));
-                const Real cx = end * hs;
-                MeshBuilder::emitQuad(m, P(cx + d0.x * r0, d0.y * r0, y), P(cx + d1.x * r0, d1.y * r0, y),
-                                      P(cx + d1.x * r1, d1.y * r1, y), P(cx + d0.x * r1, d0.y * r1, y), up, col);
-            }
+        // a stadium is a rounded rectangle whose corners meet: straights tS long, ends of radius r
+        auto outline = [&](Real r) { return MeshBuilder::profileRoundedRect(tS + 2 * r, 2 * r, r, 14); };
+        if (r0 <= 0) MeshBuilder::emitFill(m, pitchFrame(0, 0, y), outline(r1), col);
+        else MeshBuilder::emitBand(m, pitchFrame(0, 0, y), outline(r1), outline(r0), col);
     };
     if (track) {
         const Vec3 infield(0.26, 0.47, 0.22), clay(0.62, 0.27, 0.19), lane(0.92, 0.90, 0.86);
@@ -962,13 +951,7 @@ static bool sculptSportsField(LotBuilding& g, const Poly2& poly, uint32_t seed, 
     lineZ(-PL / 2, -PW / 2, PW / 2); lineZ(PL / 2, -PW / 2, PW / 2);   // the goal lines
     lineZ(0, -PW / 2, PW / 2);                                        // halfway
     auto ring = [&](Real cx, Real r, Real a0, Real a1) {
-        const int n = 40;
-        for (int i = 0; i < n; ++i) {
-            const Real t0 = a0 + (a1 - a0) * i / n, t1 = a0 + (a1 - a0) * (i + 1) / n;
-            const Vec2 d0(std::cos(t0), std::sin(t0)), d1(std::cos(t1), std::sin(t1));
-            MeshBuilder::emitQuad(m, P(cx + d0.x * (r - lw / 2), d0.y * (r - lw / 2), ly), P(cx + d1.x * (r - lw / 2), d1.y * (r - lw / 2), ly),
-                                  P(cx + d1.x * (r + lw / 2), d1.y * (r + lw / 2), ly), P(cx + d0.x * (r + lw / 2), d0.y * (r + lw / 2), ly), up, white);
-        }
+        MeshBuilder::emitAnnulus(m, pitchFrame(cx, 0, ly), r - lw / 2, r + lw / 2, white, 40, a0, a1);
     };
     ring(0, 9.15 * s, 0, 6.2832);                                     // the centre circle
     quad(-0.15, -0.15, 0.15, 0.15, ly, white);                         // the centre spot
@@ -1847,21 +1830,9 @@ static void sculptUnderPad(LotBuilding& g, const Poly2& poly,
     RenderMesh m;
     Poly2 pad = inset(poly, 1.4);
     if (pad.size() < 3) pad = poly;
-    for (const auto& t : triangulatePolygon(pad)) {                    // slab
-        const Vec2& a = pad[t[0]]; const Vec2& b = pad[t[1]]; const Vec2& c = pad[t[2]];
-        MeshBuilder::emitTri(m, Vec3(a.x, gy(a) + lift, a.y),
-                             Vec3(b.x, gy(b) + lift, b.y),
-                             Vec3(c.x, gy(c) + lift, c.y), Vec3(0, 1, 0), slab);
-    }
-    for (std::size_t i = 0; i < pad.size(); ++i) {                     // curb skirt
-        const Vec2& a = pad[i]; const Vec2& b = pad[(i + 1) % pad.size()];
-        Vec2 n2 = normalize(Vec2(b.y - a.y, a.x - b.x));
-        MeshBuilder::emitQuad(m, Vec3(a.x, gy(a) + lift - 0.4, a.y),
-                              Vec3(b.x, gy(b) + lift - 0.4, b.y),
-                              Vec3(b.x, gy(b) + lift, b.y),
-                              Vec3(a.x, gy(a) + lift, a.y),
-                              Vec3(n2.x, 0, n2.y), slab * 0.8);
-    }
+    // the slab, and its kerb skirt 0.4 m down
+    MeshBuilder::emitPlanPrism(m, pad, {}, lift - 0.4, lift, slab, kFaceTop);
+    MeshBuilder::emitPlanPrism(m, pad, {}, lift - 0.4, lift, slab * 0.8, kFaceSides);
     const OBB2 ob = orientedBoundingBox(pad);
     const Vec2 ax = ob.axis[0], ay = ob.axis[1], ctr = ob.center;
     const Real hx = ob.half[0], hy = ob.half[1];
@@ -2119,26 +2090,16 @@ void sculptPaving(const Poly2& lotIn, Real paveY,
     auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : paveY; };
     const Vec3 up(0, 1, 0), white(1, 1, 1);
     RenderMesh deck, skirt;
-    for (const std::array<int, 3>& t : triangulatePolygon(lot))
-        MeshBuilder::emitTri(deck, Vec3(lot[t[0]].x, paveY, lot[t[0]].y),
-                             Vec3(lot[t[1]].x, paveY, lot[t[1]].y),
-                             Vec3(lot[t[2]].x, paveY, lot[t[2]].y), up, white);
-    for (std::size_t i = 0; i < lot.size(); ++i) {
-        const Vec2& a = lot[i];
-        const Vec2& e = lot[(i + 1) % lot.size()];
-        const Vec2 d = e - a;
-        if (d.length() < 1e-6) continue;
-        const Vec2 n2 = normalize(Vec2(d.y, -d.x));   // CCW: right normal = outward
-        // The skirt is UNCONDITIONAL and deep: the plate is a one-sided sheet, and
-        // wherever the ground dips between two corners (a neighbour's lower pad,
-        // the 1 m feather, a cross-street strip) an edge with no side under it
-        // hangs in the air as a paper-thin slab — the owner's "wafer-thin walls".
-        // A metre below the lower corner's ground, sampled at the mid-edge too.
+    MeshBuilder::emitFill(deck, MeshFrame::level(paveY), {lot, true}, white);
+    // The skirt is UNCONDITIONAL and deep: the plate is a one-sided sheet, and
+    // wherever the ground dips between two corners (a neighbour's lower pad,
+    // the 1 m feather, a cross-street strip) an edge with no side under it
+    // hangs in the air as a paper-thin slab — the owner's "wafer-thin walls".
+    // A metre below the lower corner's ground, sampled at the mid-edge too.
+    MeshBuilder::emitSkirt(skirt, lot, paveY, [&](const Vec2& a, const Vec2& e) {
         const Real lo = std::min({gy(a), gy(e), gy((a + e) * 0.5)}) - 1.0;
-        MeshBuilder::emitQuad(skirt, Vec3(a.x, lo, a.y), Vec3(e.x, lo, e.y),
-                              Vec3(e.x, paveY, e.y), Vec3(a.x, paveY, a.y),
-                              Vec3(n2.x, 0, n2.y), white);
-    }
+        return Vec2(lo, lo);
+    }, white);
     for (std::vector<RenderMesh>* parts : {outParts, outFlatParts}) {
         if (!parts || parts->size() <= static_cast<std::size_t>(PartId::Concrete)) continue;
         MeshBuilder::append((*parts)[static_cast<std::size_t>(PartId::Path)], deck);
@@ -2448,12 +2409,7 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
     // so the reveal is constant); Pavement surface via PartId::Path.
     {
         RenderMesh deck;
-        for (const std::array<int, 3>& t : triangulatePolygon(plan))
-            MeshBuilder::emitTri(deck,
-                                 Vec3(plan[t[0]].x, slabY, plan[t[0]].y),
-                                 Vec3(plan[t[1]].x, slabY, plan[t[1]].y),
-                                 Vec3(plan[t[2]].x, slabY, plan[t[2]].y),
-                                 up, white);
+        MeshBuilder::emitFill(deck, MeshFrame::level(slabY), {plan, true}, white);
         MeshBuilder::append((*outParts)[static_cast<std::size_t>(PartId::Path)],
                             deck);
     }
@@ -2461,19 +2417,8 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
     // downhill boundary never opens a gap under the slab.
     {
         RenderMesh skirt;
-        for (std::size_t i = 0; i < plan.size(); ++i) {
-            const Vec2& a = plan[i];
-            const Vec2& e = plan[(i + 1) % plan.size()];
-            Vec2 d = e - a;
-            if (d.length() < 1e-6) continue;
-            Vec2 n2 = normalize(Vec2(d.y, -d.x));   // CCW: right normal = outward
-            MeshBuilder::emitQuad(skirt,
-                                  Vec3(a.x, gy(a) - 0.5, a.y),
-                                  Vec3(e.x, gy(e) - 0.5, e.y),
-                                  Vec3(e.x, slabY, e.y),
-                                  Vec3(a.x, slabY, a.y),
-                                  Vec3(n2.x, 0, n2.y), white);
-        }
+        MeshBuilder::emitSkirt(skirt, plan, slabY, [&](const Vec2& a, const Vec2& e) { return Vec2(gy(a) - 0.5, gy(e) - 0.5); },
+                               white);
         MeshBuilder::append(
             (*outParts)[static_cast<std::size_t>(PartId::Concrete)], skirt);
     }

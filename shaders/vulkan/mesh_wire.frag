@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "gbuffer.glsl"
 // Wireframe debug view (ADR-0057; Renderer::wireframe). Used by the LINE-mode
 // wire pipeline, which shares the mesh pipeline layout and mesh.vert. Outputs a
 // flat line color (carried in the push's albedoMetallic.rgb so the backend can
@@ -19,5 +21,5 @@ layout(location = 1) out vec4 outNormal;
 
 void main() {
     outColor  = vec4(pc.albedoMetallic.rgb, 1.0);
-    outNormal = vec4(0.5, 0.5, 1.0, 1.0);   // neutral (+Z) world normal, max roughness
+    outNormal = gbufEncode(vec3(0.0, 0.0, 1.0), 1.0, 0.0);   // neutral (+Z) world normal, max roughness, no reflection
 }

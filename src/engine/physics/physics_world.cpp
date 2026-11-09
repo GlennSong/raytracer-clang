@@ -42,7 +42,10 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <atomic>
 #include <mutex>
+#include <unordered_map>
+#include <unordered_set>
 #include <string>
 
 namespace engine {
@@ -183,9 +186,40 @@ constexpr JPH::uint MAX_CONTACT_CONSTRAINTS = 10240;
 // refire, so the stream is edge-triggered impacts, not per-step spam.
 class ContactCollector final : public JPH::ContactListener {
 public:
+    // AN IGNORED PAIR (ADR-0353/0354): a part knocked off a car is born where it was -- inside the car's own box --
+    // and a piece knocked loose inside the car that hit it; Jolt pushed the two apart at a hundred metres a second
+    // (Glenn: "the doors flew off and the game look like it crashed": the car flung a walker's ragdoll to NaN). The
+    // pair touches nothing while their boxes overlap, and for `grace` steps after they last did.
+    JPH::ValidateResult OnContactValidate(const JPH::Body& body1, const JPH::Body& body2, JPH::RVec3Arg,
+                                          const JPH::CollideShapeResult&) override {
+        if (ignoredCount.load(std::memory_order_relaxed) == 0) return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
+        const uint64_t k = pairKey(body1.GetID().GetIndexAndSequenceNumber(), body2.GetID().GetIndexAndSequenceNumber());
+        std::lock_guard<std::mutex> lock(mutex);
+        auto it = ignored.find(k);
+        if (it == ignored.end()) return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
+        it->second.seen = true;
+        return JPH::ValidateResult::RejectAllContactsForThisBodyPair;
+    }
+    void ignore(uint32_t a, uint32_t b, int grace) {
+        std::lock_guard<std::mutex> lock(mutex);
+        ignored[pairKey(a, b)] = {grace, grace, true};
+        ignoredCount.store(ignored.size(), std::memory_order_relaxed);
+    }
+    // after a step: a pair whose boxes did not meet counts down its grace, and is let go at zero
+    void ageIgnored() {
+        std::lock_guard<std::mutex> lock(mutex);
+        for (auto it = ignored.begin(); it != ignored.end();) {
+            if (it->second.seen) it->second.left = it->second.grace;
+            else if (--it->second.left <= 0) { it = ignored.erase(it); continue; }
+            it->second.seen = false;
+            ++it;
+        }
+        ignoredCount.store(ignored.size(), std::memory_order_relaxed);
+    }
+
     void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2,
                         const JPH::ContactManifold& manifold,
-                        JPH::ContactSettings&) override {
+                        JPH::ContactSettings& settings) override {
         JPH::RVec3 point = manifold.GetWorldSpaceContactPointOn1(0);
         // Closing speed along the normal at the touch — the impact severity.
         JPH::Vec3 relVel = body2.GetPointVelocity(point) -
@@ -197,7 +231,57 @@ public:
         event.normal = fromJolt(JPH::RVec3(manifold.mWorldSpaceNormal));
         event.approachSpeed = std::fabs(relVel.Dot(manifold.mWorldSpaceNormal));
         std::lock_guard<std::mutex> lock(mutex);
+        event.broke = breaks(event.bodyA, event.bodyB, event.approachSpeed);
+        if (event.broke) settings.mIsSensor = true;   // the car goes through; the piece is knocked loose
         events.push_back(event);
+    }
+
+    // A STILL-TOUCHING pair, only where a watched body (a vehicle's chassis) is one of them: a scrape along a wall,
+    // a car leaning on another -- the sparks' and the damage's (ADR-0353)
+    void OnContactPersisted(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold,
+                            JPH::ContactSettings& settings) override {
+        const uint32_t a = body1.GetID().GetIndexAndSequenceNumber(), b = body2.GetID().GetIndexAndSequenceNumber();
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!watched.count(a) && !watched.count(b)) return;
+            // (a piece already broken this step stays let through until its owner takes it away)
+            if (broken.count(a) || broken.count(b)) { settings.mIsSensor = true; return; }
+        }
+        JPH::RVec3 point = manifold.GetWorldSpaceContactPointOn1(0);
+        JPH::Vec3 relVel = body2.GetPointVelocity(point) - body1.GetPointVelocity(point);
+        const JPH::Vec3 n = manifold.mWorldSpaceNormal;
+        const JPH::Vec3 slide = relVel - n * relVel.Dot(n);
+        ContactEvent event;
+        event.bodyA = a;
+        event.bodyB = b;
+        event.position = fromJolt(point);
+        event.normal = fromJolt(JPH::RVec3(n));
+        event.approachSpeed = std::fabs(relVel.Dot(n));
+        event.persisted = true;
+        event.slideSpeed = slide.Length();
+        std::lock_guard<std::mutex> lock(mutex);
+        events.push_back(event);
+    }
+
+    void watch(uint32_t body, bool on) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (on) watched.insert(body); else watched.erase(body);
+    }
+    void setBreakable(uint32_t body, float speed) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (speed > 0) breakable[body] = speed; else { breakable.erase(body); broken.erase(body); }
+    }
+    // (under the lock) a watched body meeting a breakable one hard enough
+    bool breaks(uint32_t a, uint32_t b, Real speed) {
+        auto at = [&](uint32_t piece, uint32_t other) {
+            auto it = breakable.find(piece);
+            if (it == breakable.end() || !watched.count(other)) return false;
+            if (broken.count(piece)) return true;
+            if (speed < it->second) return false;
+            broken.insert(piece);
+            return true;
+        };
+        return at(a, b) || at(b, a);
     }
 
     std::vector<ContactEvent> drain() {
@@ -210,6 +294,15 @@ public:
 private:
     std::mutex mutex;
     std::vector<ContactEvent> events;
+    std::unordered_set<uint32_t> watched;
+    std::unordered_map<uint32_t, float> breakable;
+    std::unordered_set<uint32_t> broken;
+    struct Ignored { int grace = 0, left = 0; bool seen = false; };
+    static uint64_t pairKey(uint32_t a, uint32_t b) {
+        return a < b ? (static_cast<uint64_t>(a) << 32) | b : (static_cast<uint64_t>(b) << 32) | a;
+    }
+    std::unordered_map<uint64_t, Ignored> ignored;
+    std::atomic<std::size_t> ignoredCount{0};
 };
 
 struct PhysicsWorld::Impl {
@@ -263,7 +356,7 @@ struct PhysicsWorld::Impl {
         bool tractionSplit = false;     // VehicleConfig::tractionSplit
         float appliedShare = -1.0f;     // the front share the differentials carry this step
         // drift (ADR-0236)
-        float throttle = 0.0f, handBrake = 0.0f;
+        float throttle = 0.0f, brake = 0.0f, handBrake = 0.0f;
         bool driftEnabled = false;
         std::vector<char> wheelRear;    // per wheel: behind the middle?
         float rearGrip = 1.0f, frontGrip = 1.0f;   // the tyres' sideways grip scale this step
@@ -271,6 +364,7 @@ struct PhysicsWorld::Impl {
         float driftTime = 0.0f, boost = 0.0f, boosting = 0.0f, holdSpeed = 0.0f;
         float slip = 0.0f, lastTravelYaw = 0.0f;
         bool haveTravel = false;
+        float driftRearGrip = 0.35f, driftSlipRad = 0.5585f, driftMinSpeed = 11.0f;   // VehicleConfig's drift feel
     };
     std::vector<Vehicle> vehicles;
 
@@ -308,6 +402,11 @@ bool PhysicsWorld::initialize(engine::JobSystem* jobSystem) {
                              impl->objectVsObject);
     impl->physicsSystem.SetContactListener(&impl->contacts);
     return true;
+}
+
+void PhysicsWorld::setBreakable(PhysicsBodyId body, Real speed) {
+    if (!impl) return;
+    impl->contacts.setBreakable(body, static_cast<float>(speed));
 }
 
 std::vector<ContactEvent> PhysicsWorld::drainContactEvents() {
@@ -367,7 +466,10 @@ PhysicsBodyId PhysicsWorld::addBox(const Vec3& halfExtent, const Vec3& position,
                                    Real restitution, Real friction,
                                    bool lockRotation, bool continuous) {
     if (!impl) return INVALID_PHYSICS_BODY;
-    JPH::BoxShapeSettings shapeSettings(toJolt(halfExtent));
+    // (a thin box -- a car's door, its hood -- has a convex radius no more than its thinnest half: Jolt refuses one
+    // thinner than its default 5 cm, and the part never got a body)
+    const float thinnest = static_cast<float>(std::min({halfExtent.x, halfExtent.y, halfExtent.z}));
+    JPH::BoxShapeSettings shapeSettings(toJolt(halfExtent), std::min(JPH::cDefaultConvexRadius, 0.5f * thinnest));
     JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
     if (result.HasError()) return INVALID_PHYSICS_BODY;
     return createBody(impl->bodies(), result.Get(), position, orientation, motion,
@@ -453,6 +555,18 @@ void PhysicsWorld::removeBody(PhysicsBodyId id) {
 void PhysicsWorld::setLinearVelocity(PhysicsBodyId id, const Vec3& velocity) {
     if (!impl || id == INVALID_PHYSICS_BODY) return;
     impl->bodies().SetLinearVelocity(JPH::BodyID(id), toJolt(velocity));
+}
+
+void PhysicsWorld::setBodyMass(PhysicsBodyId id, Real kg, Real linearDamping, Real angularDamping) {
+    if (!impl || id == INVALID_PHYSICS_BODY) return;
+    JPH::BodyLockWrite lock(impl->physicsSystem.GetBodyLockInterface(), JPH::BodyID(id));
+    if (!lock.Succeeded()) return;
+    JPH::Body& body = lock.GetBody();
+    JPH::MotionProperties* mp = body.GetMotionPropertiesUnchecked();
+    if (!mp || !body.IsDynamic()) return;
+    if (kg > 0) mp->ScaleToMass(static_cast<float>(kg));
+    if (linearDamping >= 0) mp->SetLinearDamping(static_cast<float>(linearDamping));
+    if (angularDamping >= 0) mp->SetAngularDamping(static_cast<float>(angularDamping));
 }
 
 Vec3 PhysicsWorld::getLinearVelocity(PhysicsBodyId id) const {
@@ -1167,6 +1281,7 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     v.centerLimitedSlip = cfg.centerLimitedSlip >= 1e29 ? FLT_MAX : static_cast<float>(cfg.centerLimitedSlip);
     v.dragArea = static_cast<float>(std::max(Real(0), cfg.dragArea));
     v.downforce = static_cast<float>(std::max(Real(0), cfg.downforce));
+    impl->contacts.watch(chassis->GetID().GetIndexAndSequenceNumber(), true);   // its scrapes (ADR-0353)
     v.mass = static_cast<float>(cfg.mass);
     v.tractionSplit = cfg.tractionSplit;
     v.appliedShare = share;
@@ -1182,6 +1297,9 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
         }
         v.wheelbase = static_cast<float>(std::max(Real(1.0), zMax - zMin));
     }
+    v.driftRearGrip = static_cast<float>(cfg.driftRearGrip);
+    v.driftSlipRad = static_cast<float>(cfg.driftSlipDegrees * DEG_TO_RAD);
+    v.driftMinSpeed = static_cast<float>(cfg.driftMinSpeed);
     impl->vehicles.push_back(std::move(v));
     return static_cast<VehicleId>(impl->vehicles.size() - 1);
 }
@@ -1212,6 +1330,7 @@ void PhysicsWorld::setVehicleInput(VehicleId id, Real forward, Real right,
     impl->vehicles[id].steer = static_cast<float>(std::clamp(right, Real(-1), Real(1)));
     impl->vehicles[id].throttle = static_cast<float>(forward);
     impl->vehicles[id].handBrake = static_cast<float>(handBrake);
+    impl->vehicles[id].brake = static_cast<float>(brake);
     // Throttle/steer is meaningless on a sleeping body — wake it.
     if (forward != 0.0 || right != 0.0 || brake != 0.0 || handBrake != 0.0)
         impl->bodies().ActivateBody(impl->vehicles[id].body);
@@ -1285,8 +1404,11 @@ void PhysicsWorld::applyDrift(std::size_t index, float dt) {
         v.boosting = std::max(0.0f, v.boosting - dt);
         bi.AddForce(v.body, fwd * (m * 7.0f));
     }
-    // INTO A SLIDE: a handbrake tap while steering at speed
-    if (!v.drifting && v.handBrake > 0.5f && std::fabs(v.steer) > 0.3f && speed > 11.0f) {
+    // INTO A SLIDE: a handbrake tap while steering at speed -- or, Burnout-style (Glenn, 2026-11-06: "slam on the
+    // break and then simply turn your car into a drift"), the brake hard on with the wheel turned well over
+    const bool flick = v.handBrake > 0.5f && std::fabs(v.steer) > 0.3f;
+    const bool stab = v.brake > 0.6f && std::fabs(v.steer) > 0.45f;
+    if (!v.drifting && (flick || stab) && speed > v.driftMinSpeed) {
         v.drifting = true;
         v.driftTime = 0;
         v.holdSpeed = speed;
@@ -1301,10 +1423,10 @@ void PhysicsWorld::applyDrift(std::size_t index, float dt) {
         v.rearGrip = v.frontGrip = 1.0f;
         return;
     }
-    v.rearGrip = 0.35f;
+    v.rearGrip = v.driftRearGrip;
     v.frontGrip = 0.9f;
     // hold the slip the steering asks for: the body yaws at the travel's rate plus a pull toward the target
-    const float target = -v.steer * JPH::DegreesToRadians(32.0f);
+    const float target = -v.steer * v.driftSlipRad;
     const float wantRate = travelRate + 3.0f * wrap(target - v.slip);
     const JPH::Vec3 up(0, 1, 0);
     const float yawRate = bi.GetAngularVelocity(v.body).Dot(up);
@@ -1533,7 +1655,72 @@ void PhysicsWorld::update(Real deltaTime, int collisionSteps) {
         }
         impl->physicsSystem.Update(static_cast<float>(deltaTime), collisionSteps,
                                    &impl->tempAllocator, impl->jobSystem.get());
+        impl->contacts.ageIgnored();
+        sanitize();
     }
+}
+
+// A BODY GONE BAD (Glenn, 2026-11-06: "the doors flew off and the game look like it crashed"): a body whose position or
+// velocity is not finite, or that moves faster than anything in the world can (a car past 150 m/s, anything else past
+// 1000: a bullet does 300), poisons whatever touches it --
+// a walker's ragdoll at NaN hung Jolt's swing-twist solver for good (its ellipse search never ends on NaN). Each step
+// such a body is parked far below the world, still and asleep, and reported; it is not removed (a ragdoll's joints
+// still hold it).
+void PhysicsWorld::sanitize() {
+    if (!impl) return;
+    JPH::BodyIDVector active;
+    impl->physicsSystem.GetActiveBodies(JPH::EBodyType::RigidBody, active);
+    JPH::BodyInterface& bi = impl->bodies();
+    for (const JPH::BodyID& id : active) {
+        const JPH::RVec3 p = bi.GetPosition(id);
+        const JPH::Vec3 v = bi.GetLinearVelocity(id), w = bi.GetAngularVelocity(id);
+        const bool finite = std::isfinite(p.GetX()) && std::isfinite(p.GetY()) && std::isfinite(p.GetZ()) &&
+                            std::isfinite(v.GetX()) && std::isfinite(v.GetY()) && std::isfinite(v.GetZ()) &&
+                            std::isfinite(w.GetX()) && std::isfinite(w.GetY()) && std::isfinite(w.GetZ());
+        const float speed = finite ? v.Length() : 0.0f;
+        // (a car past 150 m/s has been flung; a bullet does 300, so anything else only past 1000 -- the cars looked
+        // for only among the fast)
+        if (finite && speed < 150.0f) continue;
+        bool chassis = false;
+        for (const Impl::Vehicle& veh : impl->vehicles) chassis |= veh.body == id;
+        if (finite && speed < (chassis ? 150.0f : 1000.0f)) continue;
+        // a KINEMATIC body is driven (the city's traffic): its velocity is the step its owner moved it, and a jump of
+        // a hundred metres reads as six thousand m/s. Not parked (its owner moves it back at once: a fight, every
+        // step); reported once, so the jump can be found
+        if (bi.GetMotionType(id) != JPH::EMotionType::Dynamic) {
+            if (finite && !kinematicJumped_.insert(id.GetIndexAndSequenceNumber()).second) continue;
+            SanitizedBody r;
+            r.body = id.GetIndexAndSequenceNumber();
+            r.finite = finite;
+            r.speed = speed;
+            r.kinematic = true;
+            if (finite) r.position = fromJolt(p);
+            sanitized_.push_back(r);
+            continue;
+        }
+        SanitizedBody r;
+        r.body = id.GetIndexAndSequenceNumber();
+        r.finite = finite;
+        r.speed = speed;
+        if (finite) r.position = fromJolt(p);
+        r.vehicle = chassis;
+        sanitized_.push_back(r);
+        bi.SetLinearAndAngularVelocity(id, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+        if (chassis && finite) continue;   // (a car flung: stopped where it is, not taken away)
+        bi.SetPositionAndRotation(id, JPH::RVec3(0, -100000, 0), JPH::Quat::sIdentity(), JPH::EActivation::DontActivate);
+        bi.DeactivateBody(id);
+    }
+}
+
+std::vector<PhysicsWorld::SanitizedBody> PhysicsWorld::drainSanitized() {
+    std::vector<SanitizedBody> out;
+    out.swap(sanitized_);
+    return out;
+}
+
+void PhysicsWorld::ignoreContacts(PhysicsBodyId a, PhysicsBodyId b, int graceSteps) {
+    if (!impl || a == INVALID_PHYSICS_BODY || b == INVALID_PHYSICS_BODY) return;
+    impl->contacts.ignore(a, b, std::max(1, graceSteps));
 }
 
 }  // namespace engine

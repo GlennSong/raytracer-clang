@@ -41,7 +41,7 @@ RenderMesh buildCanopy() {
     for (int i = 0; i < kCells; ++i) {
         const Real a = -kSpread / 2 + kSpread * (i + 0.5) / kCells;
         RenderMesh cell = MeshBuilder::box(Vec3(kRadius * kSpread / kCells * 1.02, 0.22, 1.6));
-        for (Vertex& v : cell.vertices) v.color = i % 2 ? Vec3(0.92, 0.92, 0.9) : Vec3(0.85, 0.12, 0.1);
+        MeshBuilder::paint(cell, i % 2 ? Vec3(0.92, 0.92, 0.9) : Vec3(0.85, 0.12, 0.1));
         Transform tf;
         tf.position = Vec3(kRadius * std::sin(a), kRadius * std::cos(a) - kRadius, 0);
         tf.orientation = Quat::fromAxisAngle(Vec3(0, 0, 1), -a);

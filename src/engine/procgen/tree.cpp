@@ -3,6 +3,8 @@
 #include "lsystem.h"
 #include "skeleton.h"
 #include "../../rt_math.h"
+#include "noise.h"   // latticeValueNoise: the textures' value noise
+#include "../../hash.h"   // frozenTreeTextureLattice
 #include "../../curve.h"
 #include "sdf.h"
 
@@ -99,23 +101,12 @@ void assignRadii(std::vector<SkeletonNode>& nodes, const TreeParams& p) {
     }
 }
 
-// Smooth 3D value noise in [0,1) (the gnarl's meander and the bark's irregular cross-section).
-float gnarlHash(int x, int y, int z, uint32_t seed) {
-    uint32_t h = static_cast<uint32_t>(x) * 374761393u ^ static_cast<uint32_t>(y) * 668265263u ^
-                 static_cast<uint32_t>(z) * 2246822519u ^ seed * 3266489917u;
-    h = (h ^ (h >> 13)) * 1274126177u;
-    return (h ^ (h >> 16)) / 4294967296.0f;
-}
+// Smooth 3D value noise in [0,1) (the gnarl's meander and the bark's irregular cross-section): procgen/noise.h's,
+// over the gnarl's frozen lattice (hash.h)
 float gnarlNoise(const Vec3& p, uint32_t seed) {
-    const int xi = static_cast<int>(std::floor(p.x)), yi = static_cast<int>(std::floor(p.y)), zi = static_cast<int>(std::floor(p.z));
-    const float fx = static_cast<float>(p.x - xi), fy = static_cast<float>(p.y - yi), fz = static_cast<float>(p.z - zi);
-    const float sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy), sz = fz * fz * (3 - 2 * fz);
-    auto L = [](float a, float b, float t) { return a + (b - a) * t; };
-    float c[2][2];
-    for (int j = 0; j < 2; ++j)
-        for (int k = 0; k < 2; ++k)
-            c[j][k] = L(gnarlHash(xi, yi + j, zi + k, seed), gnarlHash(xi + 1, yi + j, zi + k, seed), sx);
-    return L(L(c[0][0], c[1][0], sy), L(c[0][1], c[1][1], sy), sz);
+    return latticeValueNoise3<float>(p.x, p.y, p.z, [seed](int64_t x, int64_t y, int64_t z) {
+        return frozenGnarlLattice(static_cast<int>(x), static_cast<int>(y), static_cast<int>(z), seed);
+    });
 }
 
 // Organic shaping: bend branches under gravity (droop) and add a lateral
@@ -2797,20 +2788,11 @@ TreeMesh growTree(const TreeParams& params, uint32_t seed) {
 
 namespace {
 
-// A cheap deterministic hash -> [0,1), and value noise from it.
-float hash2(int x, int y, uint32_t seed) {
-    uint32_t h = static_cast<uint32_t>(x) * 374761393u +
-                 static_cast<uint32_t>(y) * 668265263u + seed * 362437u;
-    h = (h ^ (h >> 13)) * 1274126177u;
-    return (h ^ (h >> 16)) / 4294967296.0f;
-}
+// Value noise (procgen/noise.h) over the textures' own frozen lattice (hash.h: kept until their bake's next tag)
 float valueNoise(float x, float y, uint32_t seed) {
-    int xi = (int)std::floor(x), yi = (int)std::floor(y);
-    float fx = x - xi, fy = y - yi;
-    float sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
-    float a = hash2(xi, yi, seed),       b = hash2(xi + 1, yi, seed);
-    float c = hash2(xi, yi + 1, seed),   d = hash2(xi + 1, yi + 1, seed);
-    return (a + (b - a) * sx) + ((c - a) + (d - c) * sx - (b - a) * sx) * sy;
+    return latticeValueNoise(x, y, [seed](int64_t i, int64_t j) {
+        return frozenTreeTextureLattice(static_cast<int>(i), static_cast<int>(j), seed);
+    }, FrozenTreeTextureBlend{});
 }
 
 float fbm(float x, float y, uint32_t seed, int octaves) {

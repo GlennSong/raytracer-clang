@@ -3,6 +3,8 @@
 
 #include "../system.h"
 #include "../physics/physics_world.h"
+#include <unordered_map>
+#include <unordered_set>
 
 namespace engine {
 
@@ -19,6 +21,13 @@ struct Collision {
     Vec3 position;   // world-space contact point
     Vec3 normal;
     Real speed = 0;  // closing speed along the normal (m/s) — severity
+    // still touching (a vehicle's scrape, ADR-0353), and how fast the surfaces slide past each other
+    bool persisted = false;
+    Real slide = 0;
+    // the two physics bodies (a body outside the ECS -- a streamed tree or hydrant -- is known by its id alone), and a
+    // breakable one knocked loose (ADR-0354)
+    PhysicsBodyId bodyA = INVALID_PHYSICS_BODY, bodyB = INVALID_PHYSICS_BODY;
+    bool broke = false;
 };
 
 // Drives Jolt physics from the ECS (ADR-0012, ROADMAP 2.3 Step C). Creates a
@@ -48,7 +57,16 @@ public:
     PhysicsWorld& physicsWorld() { return physics; }
 
 private:
+    // the entity a body belongs to (invalid: none in the ECS), from a kept map: an entry is checked against the
+    // entity's component before it is trusted, and a body not found rebuilds the map once (then is remembered as
+    // nobody's until the next rebuild, or a few seconds)
+    Entity entityOf(World& world, PhysicsBodyId id);
+    void rebuildBodyMap(World& world);
+
     PhysicsWorld physics;
+    std::unordered_map<PhysicsBodyId, Entity> byBody_;
+    std::unordered_set<PhysicsBodyId> nobodys_;
+    int nobodysAge_ = 0;   // fixed steps since the nobody set was cleared
 };
 
 

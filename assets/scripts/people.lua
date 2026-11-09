@@ -90,3 +90,21 @@ people = {
 
   lodgers = { young = 0.2, adult = 0.7, senior = 0.1 },
 }
+
+-- GETTING OUT OF A CAR'S WAY (ADR-0355; Glenn: "they don't try to jump out of the way even ... some kind of new state
+-- where they are self-aware ... and will try and move out of the way of danger"). engine/ai/danger_dodge.h's rules.
+--   lookahead / clearance / min_speed   a car is coming when its front reaches them within `lookahead` s, they stand
+--                       within its half width plus `clearance` m of its line, and it does `min_speed` m/s or more
+--   reaction_lo/hi      s from it coming to moving, each person their own between these
+--   freeze              the share who stand rooted instead
+--   sprint_lo/hi, sprint_for   m/s out of the way, for this long
+--   dive_below, dive_boost, dive_for   closer than this (s) it is a dive: x the sprint, this long
+--   knock_speed         m/s: a car's box reaching someone this fast knocks them down
+--   throw_cap           m/s: nobody is thrown faster
+people.dodge = {
+  lookahead = 1.8, clearance = 1.0, min_speed = 3.5,
+  reaction_lo = 0.25, reaction_hi = 0.65, freeze = 1 / 7,
+  sprint_lo = 4.5, sprint_hi = 6.5, sprint_for = 0.75,
+  dive_below = 0.45, dive_boost = 1.3, dive_for = 0.45,
+  knock_speed = 2.5, throw_cap = 30.0,
+}

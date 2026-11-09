@@ -6,6 +6,7 @@
 #include "../audio/engine_voices.h"   // EngineVoicePool
 #include "../properties.h"
 #include "../control/control_commands.h"
+#include "../ui/ui_text.h"
 #include <string>
 
 #include <vector>
@@ -13,6 +14,7 @@
 namespace engine {
 
 class PhysicsSystem;
+struct Vehicle;
 class CameraSystem;
 
 // Drives the player-controllable physics cars (ADR-0059). For every entity with
@@ -45,6 +47,27 @@ public:
     void render(FrameContext& ctx) override;        // the car picker / drive-mode panel
 
 private:
+    // `panels open|shut [name]` (ADR-0352): every car's panels, or the named one, staged for the next step
+    ControlCommands::Binding panelsCmd_;
+    std::vector<std::string> panelsStaged_;
+    // the panels' and the dead starter's sounds (sfx::panelShut / panelOpen / starterNoCatch, ADR-0355), made once
+    AudioClipHandle shutClip_[3], openClip_, starterClip_;
+    Real starterCooldown_ = 0;
+    void panelSound(FrameContext& ctx, const Vec3& at, int kind, float volume);   // kind 0..2 shut, 3 open, 4 starter
+    EventBus::Subscription onCollision_;
+    struct Hit {
+        Entity car, other;
+        Vec3 at, normal;
+        Real speed = 0, slide = 0;
+        bool persisted = false;
+        bool broke = false;   // it knocked a breakable piece loose (a hydrant, a bin): a light knock (ADR-0354)
+    };
+    std::vector<Hit> hits_;
+    // parts knocked off, waiting for their body (made on the next physics step) to be given the car's speed; and
+    // every loose part, oldest first (a cap keeps the street from filling up)
+    struct LooseKick { Entity e; Vec3 velocity; Real mass = 20; };
+    std::vector<LooseKick> looseKick_;
+    std::vector<Entity> loose_;
     EventBus::Subscription onSpawn_;
     bool spawnPending_ = false;
     std::string spawnRecipe_;
@@ -52,6 +75,25 @@ private:
     void createVehicles(FrameContext& ctx);
     void driveVehicles(FrameContext& ctx);
     void writeBack(FrameContext& ctx);
+    void swingPanels(FrameContext& ctx);
+    // THE CAR's READOUT (ADR-0356): the engine's health as a bar and each zone's, bottom right while driving (the game
+    // UI layer, engine/ui/ui_text.h)
+    void drawCarHud(FrameContext& ctx);
+    // A REPAIR (ADR-0356): every zone whole, the engine running, the dents and broken glass and lamps put back as they
+    // were built; a panel that came off is a loose body by then and stays off
+    void repair(FrameContext& ctx, Entity car, Vehicle& v);
+    ControlCommands::Binding repairCmd_;
+    bool repairStaged_ = false;
+    UiText carHud_;
+    // THE PUMP (ADR-0357): the player's car stopped on a FuelStop -- hold R to fill the tank, and with it full, R once
+    // more has the station fix the car. atPump_ is the step's answer (the readout's prompt); filling_ the hold
+    void servicePumps(FrameContext& ctx);
+    bool atPump_ = false, filling_ = false, serviceWasHeld_ = false;
+    ControlCommands::Binding fuelCmd_;
+    Real fuelStaged_ = -1;   // `vehicle_fuel <litres>`: the tank set on the next step
+    // DAMAGE (ADR-0353): the step's touches (from the Collision events) spent on the cars they hit
+    void applyDamage(FrameContext& ctx);
+    void detachPanel(FrameContext& ctx, Entity car, Vehicle& v, int panel, const Vec3& kick);
     void handleEnterExit(FrameContext& ctx);
     void spawnInFront(FrameContext& ctx);   // debug: drop a car ahead of the player
     void updateHorn(FrameContext& ctx);     // hold-to-honk (H / L3) while driving

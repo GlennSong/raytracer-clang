@@ -15556,3 +15556,1999 @@ are some vehicles that don't show up in the world. Maybe it's time to add those 
 
 **Consequences.** Adding slots changes which model and colour each car index gets, but every car stays stable for the
 run. The semis wait for #189's articulation, and the bicycles for #190.
+
+## ADR-0344 — Curves, profiles and the surfaces from them: the toolkit's first new words (#191)
+
+**Context.** #191 makes one geometry toolkit that everything uses. Glenn, 2026-11-06: "We need to be able to go further
+than a box for shapes. That's silly that we have 20 functions to make a box and literally nothing else?? I want to know
+how you're going to expand the capability of the mesh builder to incorporate curves, rounded objects, and more."
+`MeshBuilder` had fixed solids (box, sphere, cylinder, cone, torus, capsule, lathe, tube, rounded box). The engine's
+splines (`src/curve.h`: Hermite, Bezier, Catmull-Rom, centripetal, arc length, rotation-minimising frames) fed no mesh
+word at all.
+
+**Decision.**
+- **Profiles and paths** (`MeshProfile`, `MeshPath`, mesh_surfaces.cpp):
+  - Profiles: rect, rounded rect, circle, ellipse, superellipse, polygon and star; fillet, mitre offset and resample.
+    Closed profiles are kept counter-clockwise.
+  - Paths: line, arc, circle, helix, spline (the centripetal one in curve.h), Bezier, resample and length.
+- **Surfaces:**
+  - `sweep`: a profile along a path, with scale and twist along it; rotation-minimising frames seeded by an up hint;
+    the leftover twist on a closed path spread round it; flat end caps.
+  - `extrude`: a plan profile up +y, with quarter-round bevels from offset rings.
+  - `revolve`: full or partial turn, with the cut faces closed.
+  - `loft`: through point rings.
+  - `superquadric`.
+- **One grid builder** (`GridSurface`) serves every surface. A row or column is split where the faces either side part
+  by more than the crease angle, so a square tube keeps its edges and a round one is smooth. A pole takes the normal of
+  every face round it. A closed direction carries a UV seam. Every face is wound by `triFacing` to its word's outward
+  hint.
+- **Lua:** `mesh.profile.*`, `mesh.path.*`, `mesh.sweep`, `mesh.extrude`, `mesh.revolve`, `mesh.loft`,
+  `mesh.superquadric`, `mesh.section` (a profile stood in a plane, for lofts) and `mesh.paint`. A sweep's scale and twist
+  each take a number, a {from, to} pair, or a function of t.
+- **Modifiers:**
+  - `warp`: any position function, with normals and tangents carried through its Jacobian (finite differences, the
+    cofactors signed by the determinant). A crease stays a crease, and a warp that turns the mesh inside out flips the
+    winding with it.
+  - `bend`, `twist` and `taper`, all built on `warp`.
+  - `mirrored`, across any plane.
+  - `array`, by a repeated transform, and `arrayAlong`, evenly along a path in its frames.
+  - `extrude` gains side bands, so a warp has rings to bend. A twisted face is not flat: at 40 rings over 2 m the
+    volume error is 1.9 %, and it halves with the spacing.
+  - Lua: `mesh.warp/bend/twist/taper/mirror/array/array_along`.
+- **The shape lab** (`assets/levels/shape_lab.json`, `assets/scripts/shape_lab.lua`) shows every word in rows, and
+  ends with a chair, a round table and a lamp built with no box.
+- **First consolidation**, identical output by construction:
+  - `MeshBuilder::paint` replaces about 13 recolour loops, plus Lua's `bake_height_color(m, c, c)`, which with equal
+    colours is exactly a paint.
+  - Hand-written appends move onto `deform` / `paint` / `append` (foliage_kit, cells).
+  - `MeshCollider::append` replaces level_loader's five copies of a mesh into a collider.
+  - road_mesh's `triangulatePolygon` (a forwarder to earcut) is gone: its callers use `MeshBuilder::triangulate`.
+    pavement's CDT triangulator, which shared the name, is now `triangulateConstrained`.
+
+**Proof.**
+- The new words' tests check each surface's audit (wound out, no degenerate faces, unit normals) and its volume against
+  the shape's own formula: box, beveled box, capped rod, Pappus ring, helix coil, sphere, quarter annulus, frustum,
+  ellipsoid and the near-box superquadric. One test runs every word from Lua.
+- The consolidation is checked by `rt_bake --sections`: the suite's pre-edit bundles against a post-edit bake. On
+  river_town (1,631 sections) and light_rail_lab (135) every section is byte-identical except `city/e0/report`, which
+  holds the stage timings.
+- `geometryEqual` (`engine/mesh_compare.h`) is for the consolidations that will reorder triangles: are two meshes the
+  same triangles, each wound the same way, whatever order they come in.
+
+**Consequences.** The fixed solids can now be rebuilt as special cases: a box is an extruded rect, a cylinder an
+extruded circle, a sphere a revolved half circle. The ports (furniture's private `Maker` first) are phase 4, with a
+visual A/B. Still owed in the vocabulary: bevel and fillet on any edge, a lattice, booleans and a Coons patch.
+
+## ADR-0345 — Flat shapes: one annulus, band, fill and skirt for every disc, ring and paved plate (#191)
+
+**Context.** The inventory for #191 found six private discs and rings and nine hand-built plan slabs:
+- **Discs and rings:**
+  - the grammar's `emitDisc` and `ringCap`;
+  - city_lots' paved `discInto`, the track's `stadium` and the pitch's line `ring`;
+  - citysim's `ringXZ` and `wedgeXZ` markers.
+- **Slabs:** city_lots' pad, paving and plaza decks with their skirts, the grammar's four interior floors and ceilings,
+  mass.cpp's cap, and the building collider's three caps.
+
+Each one triangulated, or looped round a circle, on its own. Glenn OK'd the lots tag bump on 2026-11-06.
+
+**Decision.**
+- **Four flat words** (`mesh_words.cpp`). Each lies in a `MeshFrame`'s x-z plane, faces along its y, and takes uv in
+  the plane's metres.
+  - `emitBand`: the strip between two outlines paired point for point.
+  - `emitFill`: a profile and its holes, triangulated flat.
+  - `emitAnnulus`: radii rIn..rOut over any arc, in radial bands so it can drape on ground. With rIn 0 it is a disc
+    fanned from its centre, and over part of a turn a sector.
+  - `emitSkirt`: a wall hung from a plan outline down to a per-edge bottom, facing out of the outline (or into a hole).
+    `emitPlanPrism`'s walls are now skirts.
+- **Two helpers:**
+  - `MeshFrame::level(y, up, at)`: the world's plan at a height.
+  - `MeshBuilder::projectUV`: planar uv along any axes, for the floor's wood grain.
+- **Lua:** `mesh.annulus`, `mesh.band`, `mesh.fill` and `mesh.skirt`.
+- **Ports:**
+  - The parapet is two plan prisms with a hole: an upstand ring and its coping.
+  - The track's lanes are bands between two rounded rectangles whose corners meet, and its infield is a fill.
+  - The pitch's centre circle and arcs, the paved round and its inlaid bands, roof fan pads, tank lids, helipads
+    and drum caps are annuli.
+  - The lot decks are fills with skirts.
+  - The interior floors and ceilings are plan prisms, their well rims two-faced skirts.
+  - The collider's caps are one `planCap`.
+- **Side fixes:**
+  - The under-pad kerb's normal assumed a counter-clockwise pad. A skirt faces out whichever way an outline runs.
+  - Shared corners replace three vertices per triangle on every slab.
+
+**Proof.**
+- `mesh_flat_shapes_cover_their_outlines` checks each word against exact polygon formulas:
+  - the areas of a disc, a ring in three bands, a quarter sector, a down-facing lid, a stadium lane, an infield, and a
+    plate with a hole;
+  - the closed volume of a star skirted between two fills, either winding, and of a slab with a well;
+  - the audit of each;
+  - the Lua words.
+- **river_town, re-baked under lots tag 2026-11-06.1:**
+  - The mesh audit finds the same faults as the old bundle: 43 inward slivers and 2 open undersides, all already there.
+  - Triangles rose from 9,186,350 to 9,187,654 (+0.014 %): each disc is now fanned from its centre.
+  - Four before/after shots (`~/Pictures/Raytracer/2026-11-06_flat_shapes_ab_*`) show no change in shape; the pixel
+    differences are traffic, wind and shadows.
+
+
+## ADR-0346 — The furniture kit's models are Lua recipes over the mesh words (#191)
+
+**Context.** The furniture kit (`procgen/furniture_kit.cpp`, ADR-0173's library) modelled all 92 pieces in C++: a
+1,560-line switch over a private `Maker` of rounded boxes, tubes and lathes. Glenn's rule since #182 is that data
+belongs in Lua and C++ is the language. On 2026-11-06 he asked for the port: "port the furniture to use the new
+meshbuilder in lua ... I assume as we build the new furniture we'll test it to make sure it looks like the old
+furniture."
+
+**Decision.**
+- **The recipes live in `assets/scripts/furniture_models.lua`.**
+  - One function per piece, keyed by the piece's name: `furniture_models[name](variant) -> piece`.
+  - A piece is `{size, solid, collider_h, colliders, parts}`, with `parts` a mesh per finish.
+  - Each recipe is the C++ one translated line for line, its comments carried over.
+- **The Lua maker builds on the toolkit's words:**
+  - `box` is `mesh.rounded_box`;
+  - `tilted` is a rounded box under `mesh.rotate_x`;
+  - `rod` is a circle swept along a line (`mesh.sweep`, open ends);
+  - `turned` is `mesh.revolve` of an open profile, squashed by `mesh.scale`;
+  - `leg` and `front` are compositions of those.
+  - The bar stool's foot ring, eight straight rods before, is one hoop swept round a circle.
+- **Three new Lua words:**
+  - `mesh.rounded_box`;
+  - `mesh.move_by(m, fn(i, p, n))`, for the cactus's ribs;
+  - `rng.new(seed)`: the engine's ProcRng, so a seeded shelf, bookcase or dance floor draws the same numbers in a
+    recipe as it did in C++.
+- **The C++ side:**
+  - `scripting/furniture_models_lua` runs the file once into a kept VM and reads a piece back.
+  - `furniturePiece` caches it per (piece, variant) as before.
+  - `furniture_kit.cpp` is the piece names and that cache: 57 lines, down from 1,695.
+  - A recipe that fails leaves its piece empty and logs why.
+- **The piece list stays the `Piece` enum for now.** The placers key on it. A new piece is still an enum entry plus a
+  recipe; naming pieces by data is the kinds-are-data follow-up (#172).
+
+**Proof.**
+- `furniture_pieces_dump_their_numbers` (run with `RT_FURNITURE_DUMP=<file>`) writes, for every piece in nine
+  variants, its footprint and flags and, per finish, its triangles, area, bounds and area-weighted colour.
+  `tools/furniture_ab.py` compares two dumps.
+- **Old C++ against new Lua, 828 piece variants:**
+  - Footprints and flags are identical.
+  - At 0.2 % area and 0.5 mm bounds, three pieces differ, each by millimetres: the potted plant's leaf cards (the
+    orientation's reference axis), the school chair's splayed legs and the vase's stems (a swept rod's rings turn
+    differently from the old tube's).
+  - Triangles went from 1,041,220 to 1,042,084 (+0.1 %).
+- The showroom (`furniture_showroom.json`, now every piece in three variants) was shot before and after, 33 frames
+  (`~/Pictures/Raytracer/2026-11-06_furniture_lua_ab_*`).
+  - The first after-shot caught a real difference: the beach umbrella's canopy and valance lost their fabric weave.
+    `revolve` laid uv 0..1 along the profile and 0..1 round the turn, so a texture stretched over each turned part.
+    It now lays uv as the lathe did: u round the turn 0..1, v along the profile in metres.
+  - After that fix, every frame matches but for the weave's phase on the umbrellas.
+- The existing footprint and mesh-audit tests cover every piece.
+
+## ADR-0347 — Furniture upgraded with soft shapes: the cushion cage, the drape, bent members (#191)
+
+**Context.** After ADR-0346 every furniture piece was a Lua recipe, but the shapes were still the old C++ kit's:
+rounded boxes and straight rods. Glenn, 2026-11-06: "now that all of the furniture lives in Lua and we have better
+mesh tooling can we upgrade the look of some of that furniture?", then "I'd like you to direct and update the
+furniture. Let's see the changes in the lab as well."
+
+**Decision.**
+- **New maker words in `furniture_models.lua`.** Each is built on the shared toolkit, with no private geometry:
+  - `cage(part, c, rings, col, o)`: rounded rectangles in plan, ring by ring up y, skinned by `poly.loft` and
+    smoothed by `subdivide`, with seams creased by `crease_ring`. Rings may run up the outside and back down the
+    inside, so one cage makes a cushion, a bathtub's basin or a toilet's bowl.
+  - `cushion(part, c, size, col, o)`: a cage with a top and bottom panel sewn to a side band. Options:
+    - `crown`, `belly`, `pinch` (a pillow), `bow` (a back wrapping round) and `piping`;
+    - `face = "z"` for backs and headboards;
+    - `warp(u, v, w)` for anything else (a waterfall seat front, a lumbar swell).
+  - `drape(part, col, o)`: a cloth slab lying on a support and folding over its edges round a radius, hanging
+    below, with the hem waved. Used for the duvet and the turned-down sheet.
+  - `post`: a tapered leg (a rounded square swept with `scale`). `bent`: a member swept along `mesh.path.spline`
+    (a back leg running up into its post, a bowed rail, a spout, the office chair's star arms). `turned_leg`.
+- **Ten pieces upgraded:**
+  - **Sofa and lounge chair:** crowned, piped seat and back cushions, rolled arms, turned legs.
+  - **Double and single bed:** the duvet draped over the mattress's sides and foot as one cloth, the sheet folded
+    back over it, pinched pillows. The double's headboard is plain or channel-tufted by the style bits; the single's
+    is an extruded board with rounded edges.
+  - **Dining chair:** tapered legs; the back legs run on up into raked back posts. The back by the style bits: two
+    bowed rails, three spindles, or an upholstered pad.
+  - **Dining table:** an extruded top with a softened edge, on tapered legs.
+  - **Office chair:** a dished seat with a waterfall front, a back that wraps round with a lumbar swell, a curved
+    spine, bent arm posts and padded rests.
+  - **Bathtub:** one moulded shell. The apron rises to a rolled rim and the basin slopes to its floor, raked at the
+    back end. Spout and plug.
+  - **Toilet:** a hollow, egg-shaped bowl on a narrowing pedestal, a seat ring, the lid down or none by the style
+    bits, and the cistern with its lid.
+  - **Vanity:** a shaker door, and a round-cornered mirror on a framed backing.
+- **Nothing a placer reads changed.** Every piece keeps its size, `solid`, `collider_h` and colliders, so no room
+  layout or walkable space moves.
+- **The furniture lab** (`assets/levels/furniture_lab.json`) is the showroom script with
+  `opts = {pieces, per_row, variants, row_gap}`: the ten pieces in three variants each, rows spaced for close shots.
+
+**Proof.**
+- `tools/furniture_ab.py`, old dump against new, 828 piece variants: footprints and flags identical.
+- **Triangles, per piece at variant 0 (old → new):**
+
+  | Piece | Old | New |
+  |---|---|---|
+  | sofa | 3,432 | 4,832 |
+  | lounge chair | 1,932 | 2,512 |
+  | double bed | 3,240 | 4,858 |
+  | single bed | 1,764 | 3,639 |
+  | dining chair | 948 | 2,056 |
+  | office chair | 1,372 | 3,656 |
+  | toilet | 744 | ~2,900 |
+  | bathtub | 1,556 | 1,184 |
+  | dining table | 552 | 472 |
+
+  The cushion's default cage (one subdivision step, two steps per corner) was chosen over a finer one (two steps,
+  one per corner). The finer one tripled the sofa again (14k) with no difference at room distance.
+- **Showroom shots, before and after, of all ten pieces:** `~/Pictures/Raytracer/2026-11-06_furniture_upgrade_*`.
+- **The gate:** run_tests, physics_tests, lanes_tests.
+
+## ADR-0348 — Smooth fleet bodies: creased character lines, lenses shaped onto the body, a mid-range body (#191)
+
+**Context.** The kit's fleet bodies were faceted (level 0), Glenn's choice in September. On 2026-11-06 he asked for
+a visual upgrade, saw the two side by side and picked smooth ("Smooth works"). Plain subdivision bloated the
+bodies, because only the window outlines were creased. The lamps and grille were boxes set onto the nose and tail:
+Glenn, "Do they need to be floating cubes ... it would be better if it was on the actual surface of the car". A
+smooth body is about three times the triangles of a faceted one, and near-tier traffic is drawn out to 500-620 m.
+Glenn: "faceted lower poly cars with baked normals".
+
+**Decision.**
+- **Character lines on the cage** (`kit.body`). The flank's two long edges (shoulder and sill), the hood's and the
+  deck's panel edges, and the arches are creased. The nose and tail caps' rims are creased at 1.4, up from 0.3. A
+  faceted body never subdivides, so this changes nothing there. `P.lines = { flank, panel, arch }` tunes the
+  sharpness per spec; `false` turns it off.
+- **`kit.patch`: a panel shaped to the finished body.**
+  - A rounded-rectangle outline is laid on a plane and cast onto the subdivided body point by point, through
+    concentric rings, so it follows the surface.
+  - It stands a few millimetres proud along the cast and is domed in the middle; its edge sinks 12 mm into the body.
+  - Headlights, tail lights, the grille and its chrome bars all use it. Lamp markers sit at the centre's hit.
+  - Using one push-out direction, not each face's own normal, is what keeps a lens whole where it wraps over the
+    nose's edge.
+- **The fleet is smooth.** vehicles.lua `kit_car` builds at `FLEET_KIT_LEVEL = 1`; a spec's own `level` wins.
+- **A mid-range body.**
+  - `kit_mid` builds the same car at level 0, painted and lens-tagged the same.
+  - **`mesh.transfer_normals`** (`MeshBuilder::transferNormals`) gives each vertex the normal of the smooth body's
+    best-matching vertex. "Best" means within the radius, nearest, and facing most nearly the same way, so each side
+    of a crease finds its own side.
+  - The slot returns it as `mid` with `mid_from = 50`, matching the near swap's 50 m. It's the whole car: shell, dark
+    glass, wheels.
+- **The city draws it** (`CityRenderSystem`, `carMidGroups_`).
+  - Each variant with a `mid` gets a second instance group, its `minDistance` set to `mid_from`.
+  - The near body, its glass and its cabin get that number as their `drawDistance`.
+  - `copyMidBodies` copies the near group's poses, ids and lamp masks after the bake (the mask is written last).
+- **The fleet gallery** (`fleet_v2_gallery.lua`) takes `opts.levels` to show several levels in rows: the
+  side-by-side Glenn chose from.
+- **The off-roader gets steel bumpers and tow hooks** (its recipe's comment already named the hooks).
+  - The lamp boxes had stood 3-4 cm proud at each end, and the drivable hull is sized from the body's bounds, cut to
+    the approach angle. The shorter real nose (4.574 m against 4.660) let the 0.5 m ledge, taller than the 0.48 m
+    wheel, catch the bodywork: `offroader_drives_the_course...` stuck in lane +12.
+  - The bumpers make the nose meet the ledge's edge first, the way a trail truck's does. All four lanes pass again.
+
+**Proof.**
+- **Triangles per car:**
+  - near (smooth): 9-17k, avg 12.3k in wheel_lab, against 4.1k faceted;
+  - mid-range: 4.2-6.8k.
+- **Tests:**
+  - `mesh_transfer_normals_shades_a_cage_like_its_smooth_body`: a flat sphere ends with every normal radial, its
+    positions unmoved;
+  - `every_smooth_fleet_car_carries_a_cheaper_mid_range_body`: every kit car has one, under two thirds of the near
+    triangles, no bigger than the near car;
+  - `every_fleet_body_carries_its_own_lit_lenses` passes on the patched lenses.
+- **Shots:** faceted vs smooth with creases in the fleet gallery (`~/Pictures/Raytracer/2026-11-06_fleet_faceted_vs_smooth_*`),
+  and a wheel-lab A/B with the mid body forced near (all but identical at 8 m).
+
+**Owed.**
+- The island's frame-time cost, measured at a busy street.
+- Lighter lenses at mid range: they cost the same at both levels, so the mid body saves a third, not two thirds.
+- The far band's stand-ins from each car's own body (the car plan's step 2).
+- Some headlights' outer edge is ragged where it runs off the side of the nose.
+
+## ADR-0349 — The classic cars retire: the kit bus, far stand-ins of each car's own body, per-car handling and drift
+
+**Context.** Glenn, 2026-11-06:
+- "we may also just need to drop those classic looking vehicles";
+- "better LOD models for the new cars ... so that we can see something in the distance that doesn't look like a cube
+  on a cube";
+- "different cars should have different forms of suspension ... codified in Lua or something so we can tune it";
+- "I would settle for arcade drifting like a burnout where you can slam on the break and then simply turn your car
+  into a drift";
+- for the bus: "one where it's all seats and one where they're standing room similar to what you have done for the
+  local train".
+
+His call #3 on #191 was to retire `mesh.car` once the classic fleet and the bus moved onto kit bodies.
+
+**Decision.**
+- **The kit bus** (`vehicle_kit.lua` `S.bus`):
+  - an 11.4 x 2.55 x 3.2 m box;
+  - its windscreen is the nose cap's rungs (`P.front_window`, the twin of `rear_window`), with the side panes between
+    pillars every 1.3 m;
+  - a `dest_sign` marker over the windscreen. The city places the destination sign there, and keeps its old
+    0.4916-of-the-length guess for a bus without one.
+  - **The saloon** is car_interior.cpp's bus layout, now a Lua word: `mesh.cabin_interior{...}` returns the mesh,
+    driver seat, seats and doors. It replaces mesh.car's private call.
+  - `kit_car` makes a body with a saloon see-into: the saloon rides in the shell, the glass stays clear, and its
+    seats and doors are published.
+  - `S.bus_standing` is the same bus with `saloon.layout = "standing"`: `InteriorParams::busStanding` builds benches
+    along both walls (each seat's frame turned to face the aisle), the middle door's stretch clear, and a pole every
+    metre down both edges of the aisle.
+- **The classic set is gone:**
+  - `car_mesh.cpp/h` and the `mesh.car` binding with its parameter readers;
+  - `test_car_mesh.cpp` and vehicle_forms.lua (vehicle_classes.lua stays: the SAE seating and package data the cabin
+    builder and the seated driver are measured from);
+  - the car_gallery and car_lab labs;
+  - `fleet_car`, `CLASSIC_SLOTS`, `vehicle.classic`, `from_class`, `class_handling`, and the picker's three "(classic)"
+    entries.
+  - `fleet_mixed` is the kit fleet ordered for the island (the cars and trucks, the fire engine, the bus last).
+  - `vehicle.sedan / hatchback / jeep / pickup / van` are the kit's cars, the names levels spawn the player's car
+    by (`van` is the parcel van).
+  - scale_block's reference sedan is the fleet's (`vehicle.kit_forms`).
+- **The far stand-in is each car's own body** (`kit_far`, the slot's `far`):
+  - the profile lofted through only its key stations (the ends, the arches, the glass keys), every corner sharp, the
+    glass dark, eight-sided wheels: 416-484 triangles;
+  - `CityRenderSystem` builds the far band's groups from it, in the slot's colour, which the GPU crowd draws too.
+    The two-box stand-in in one of six colours is the fallback for a body without one.
+- **Lighter mid-range lenses.** `kit.patch{coarse = true}` (12 outline points, one inner ring) for the level-0 build:
+  the mid bodies average 4,747 triangles, down from about 5,800.
+- **Lenses hug the body.** An outline point that misses is drawn in toward the centre until it lands, instead of
+  sitting on a flat plane: that was the ragged edge. The offset runs along the hit's own normal, turned toward the
+  cast where it faces away, so a lens over the hood's rounded edge clears the paint. Lamps sit at their band's middle.
+- **The handling table** (`vehicles.lua` `KIT_HANDLING`). Per kit car:
+  - springs: `street(freq, travel, damping)`, the rest drop being the travel less the static sag g / (2 pi f)^2;
+  - anti-roll bars (`anti_roll`, already read by vehicle_spec.cpp, now set);
+  - a drift profile.
+  - The numbers: sedan 1.8 Hz street rig, 3000 N/m, rear grip 0.35 at 32 degrees; SUV 1.5 Hz / 0.26 m, 0.48 at
+    24 degrees; parcel van 1.4 Hz, 0.65 at 14 degrees; box truck 1.3 Hz, 0.70 at 12 degrees; bus 1.2 Hz / 0.30 m,
+    6000 N/m, 0.85 at 8 degrees.
+- **The drift's feel is data:** `VehicleConfig::driftRearGrip / driftSlipDegrees / driftMinSpeed`, read from the
+  recipe's `drift = { rear_grip, slip_deg, min_speed }` (ADR-0236's constants were one car's).
+- **The gate caught two:**
+  - The box truck at 1.3 Hz went over on a kerb at 29 km/h. It now runs 1.6 Hz / 0.24 m with 6000 N/m bars and rolls
+    22 degrees.
+  - A rider pressing E in the kit bus's front row tried the front door, 1.4 m away, before the free seat 0.55 m away:
+    the door won outright. `CityPlayerTransitSystem` now takes the nearer of a seat and a door, unless the broker
+    named one.
+- **Brake-and-turn** (`PhysicsWorld::applyDrift`). The brake hard on (> 0.6) with the wheel past 45 % starts the
+  slide, as the handbrake flick does. The brake is Space and the handbrake Ctrl, and the drift used to start only on
+  Ctrl: why "it doesn't seem to work".
+
+**Proof.**
+- `slamming_the_brake_and_turning_throws_a_car_into_the_drift`: brake + turn slides at 31 degrees for 89 frames; a
+  straight stop does not drift.
+- The fleet tests on the kit-only fleets (`fleet_mixed_carries_the_kit_bodies_and_one_bus`: 18 slots, the bus last).
+- The gate.
+- **Shots:**
+  - the gallery's near / mid / far rows (`opts.forms`);
+  - the kit bus outside and inside, both layouts;
+  - the scale lab's sedan.
+
+**Owed.**
+- Several bus variants in the city (`busVariant_` is one), so a route can run the standing-room bus.
+- The bus's side and rear signs, and the next-stop display inside.
+- Doors that open (the model layer).
+- Glenn's own drive test of the per-car feel.
+- UV unwrapping waits on adding xatlas (the submodule needs Glenn's OK).
+
+## ADR-0350 — Our own UV unwrapper and atlas, a map baker, tangents from UVs, one triangle BVH (#191)
+
+**Context.** Glenn, 2026-11-06:
+- "Is there a way of building tooling to do uvs properly? Like projecting or unwrapping a mesh so we could bake
+  these maps?"
+- xatlas was weighed and declined: "let's build our own then and make a battle tested".
+- "keep building out the baker and let's add all of these mathematical tools into the engine";
+- "we should probably move that spatial partitioning stuff into the engine near the math library".
+- On the glass: "shouldn't that be smooth? Should there be a way for us to separate the glass from the rest of the
+  body if we consider the car as a model".
+
+**Decision.**
+- **`engine/mesh_unwrap.h` `unwrapMesh`: a unique atlas for any mesh.**
+  - **Charts.** Grown from the largest face across welded edges, each face within `chartAngleDeg` (50) of the seed's
+    normal, so a chart can never wrap round on itself. `faceGroups` keeps a chart within one part.
+  - **Flattening.** Each chart projected onto its area-weighted plane. A chart turned past `lscmBelowCos` (0.92) is
+    flattened by LSCM: angles kept, two points pinned, conjugate gradients on the normal equations, the projection as
+    the start.
+  - **Injectivity.** Every triangle's winding kept, and no two triangles share area: an exact pair test bucketed on a
+    grid. An outline that doesn't cross itself is not enough; a panel lying on a panel passed it. A chart that fails
+    is split at half the angle, down to single faces.
+  - **Packing.** Each chart scaled to its 3-D area (one texel density), turned to its least-area box (hull edge
+    directions), stood up tall, then skyline packed bottom-left with `padding` texels into the least power-of-two
+    square ≤ `maxSize`. The density shrinks until everything fits.
+  - **Output.** The vertices are split at the seams and u, v are atlas coordinates. Tagged faces (u ≤ −999, a lens's
+    role) keep theirs. Tangents follow the atlas. Deterministic.
+  - **`auditUv`:** rasterised overlap, faces outside [0, 1], density spread (area-weighted 5th / 95th percentile), and
+    worst anisotropy (Sander's stretch).
+- **`engine/mesh_bake.h` `bakeMaps`: a detailed mesh baked into a cheap mesh's atlas.**
+  - **The frame.** Each texel's point and frame on the cheap surface, built as the shader builds it: interpolated
+    vertex tangents, B = cross(N, T).
+  - **The surface found.** The NEAREST detailed surface within `cage` either way, facing the same way and, with part
+    ids, of the same PART. Taking the first surface met from outside found lens rims and window gaskets and speckled
+    the bake. A ray running along an edge is nudged and retried, and each cast starts a hair behind the point so a
+    coincident surface counts.
+  - **Maps:**
+    - tangent-space and object-space normals;
+    - colour;
+    - occlusion (cosine rays, seeded per texel);
+    - mean curvature (−2 n·d / |d|² over each welded point's edges, interpolated);
+    - height (the offset along n);
+    - thickness (a ray back through the surface, capped).
+  - **Quality.** `samples`² points per texel averaged, and `dilate` rings filled past each chart.
+- **`bakeParts`: a model baked part by part into one atlas.** The parts' cheap meshes are unwrapped together, no chart
+  crossing parts, and each is baked from its own detailed mesh only. A part with `bake = false` (glass, wheels) takes
+  no atlas space, keeps its uvs, and is drawn smooth by its own material.
+- **`MeshBuilder::computeTangents`:** each vertex's tangent is its faces' dP/du, area-weighted, square to its normal.
+  The unwrapper uses it. Lua `mesh.tangents`.
+- **One triangle BVH.** `src/geometry.cpp`, `aabb.cpp` and `triangle_bvh.cpp` move from the path tracer's
+  CORE_SOURCES into `engine_core`, beside the math library, shared by the path tracer and the baker.
+- **Lua words:**
+  - `mesh.unwrap(m, opts) -> mesh, report`
+  - `mesh.bake(low, high, opts) -> maps` (Images)
+  - `mesh.bake_parts(parts, unwrap, bake) -> mesh, maps, report, part_meshes`
+  - `mesh.tangents(m)`
+  - The bake lab (`bake_lab.lua`) shows each kit car's mid body three ways: plain, its body baked by part (glass and
+    wheels smooth), and the smooth body.
+
+**Proof.** `tests/test_mesh_unwrap.cpp` (9 cases) and `tests/test_mesh_bake.cpp` (13):
+- **Unwrap, known shapes:** a box in 6 charts at density 1.00; spheres, a torus, a cone, a superquadric, a rounded
+  box: overlap 0, density within 0.92-1.08, stretch ≤ 1.13.
+- **Unwrap, odd input:** empty, one triangle, zero-area and repeated-index faces, a non-manifold fin, a 20 m sliver.
+- **Unwrap, behaviour:** deterministic; tagged faces kept.
+- **Unwrap, corpus:** EVERY furniture piece in three variants (276 meshes) under the bar (overlap ≤ 0.2 %, density
+  0.7-1.4, stretch ≤ 6); 40 lumpy spheres and 40 triangle soups (crossing, nested, duplicated faces); a 65k-triangle
+  sphere in 1.5 s.
+- **Bake:**
+  - a smooth sphere onto a coarse one: every texel found, normals exactly radial;
+  - a bump onto a flat sheet: matches the analytic normal;
+  - colour exact;
+  - occlusion 0.59 by a wall against 1.00 in the open;
+  - curvature +1.000 / −1.000 per m on a unit sphere outside / in;
+  - height 2.00 cm;
+  - thickness 9.99 cm of a 10 cm slab;
+  - by part, the own surface (tangent z 1.0000) over a nearer one of another part (0.9701);
+  - 3×3 samples agree;
+  - `bakeParts` keeps the glass's uvs and gives it no texels;
+  - dilation and determinism.
+
+**Owed.**
+- A handedness sign per vertex (mirrored construction UVs).
+- An explicit cage mesh.
+- Seam stitching.
+- Per-chart mip limits.
+- Multi-mesh atlases across the fleet.
+- The maps cached and GPU-compressed.
+- Car instance groups with texture slots, so traffic draws its baked maps.
+- Lenses as their own unbaked part.
+- Construction UVs from the loft/sweep words.
+- A viewer UV-checker view.
+- GPU baking.
+
+## ADR-0351 — Two buses in traffic, and the bus's boards: destination front, back and side, the next stop inside
+
+**Context.** Glenn, 2026-11-06:
+- "two different bus interior one where it's all seats and one where they're standing room";
+- "we should have the display to show where the bus is going, and there should be an exterior facing display that
+  shows it and an interior facing display that shows the stop that you're heading towards next."
+
+ADR-0349 built `S.bus_standing`, but the city drew one bus body (`busVariant_`) for every bus, and bus stops had no
+names.
+
+**Decision.**
+- **Every bus body in the fleet runs.** Any slot whose class starts with `bus` is a bus variant (`busVariants_`).
+  - A bus wears the variant its route picks (`busVariantOf`: route mod the variant count), so a line keeps one kind
+    of bus.
+  - Its seats, doors and floor are its own variant's: `busSeats(agent)`, `busDoors(agent)` and `busFloorY(agent)`,
+    used by boarding, riding and the seat-taken check.
+  - `FLEET_SLOTS` adds `bus_standing` (same livery; `KIT_HANDLING.bus_standing` is the bus's). The mixed fleet
+    carries both buses last.
+- **Stops are named for their street.**
+  - `StreetDirectory` keeps each named street's centreline (`lines`, from its node chain).
+  - `nearestName(p, reach = 40 m)` returns the nearest street within reach. A stop with none in reach shows its
+    line's label instead.
+- **The boards are markers on the bus recipe** (`P.signs`, beside the front `sign`):
+  - `dest_sign_rear` over the back window, turned to face back;
+  - `dest_sign_side` centred in the kerb-side pane behind the front door (x > 0, the driver's left: the city drives on the
+    left), turned to face out, at half the front board's width;
+  - `stop_display` hung behind the cab, facing the saloon, half width.
+
+  Each variant's boards are a `BusBoard` list (`busBoards_`). The destination boards show the route's row and the
+  next-stop board shows `NEXT|<STREET>`. All of them are rows in the one LED atlas (rows shared by label), and NOT IN
+  SERVICE shows on every board on the way in.
+- **Housings.** The boards are lit both ways, so the next-stop and side boards get dark housings in the recipe
+  (`extras`). Without them their backs read mirrored through the windscreen and from the saloon.
+- `depots?` answers on a level with no depots (river_town), since it is also the buses' sign report.
+
+**Owed.**
+- The front and rear boards' backs can still be glimpsed through the glass edge from inside.
+- The doors opening at stops, and interior lights, wait on the model layer and the clustered lights.
+
+## ADR-0352 — Moving panels: doors, hood, trunk, hatch and tailgate on hinges, with thickness (#191 model layer)
+
+**Context.** Glenn, 2026-11-06:
+- "I'm wondering if the cars we can separate doors trunks hoods and add articulation points. The doors can actually
+  open and close";
+- after the first look: "the pickup is weird. The back flap should open downward on the truck. Also some doors and
+  hoods seem one sided and have no thickness."
+
+**Decision.**
+- **A third face tag, `panel`,** beside group and material (`PolyMesh::Face::panel`, `PolyMesh::panels`). It survives
+  subdivision, extrusion, insetting, append and `extractOffset`, as the other two do.
+  - The Lua words take it: `assign{panel}`, `select{panel}`, `to_parts{panel}` (only that panel's faces, its normals
+    still averaged across the seam so a shut door shades with the body), `panels()`.
+  - Also new: `bounds(sel)`, `solidify(sel, t, mat)` (a region's back and its edge walls, as a poly to append) and
+    `ring(sel)` (the faces round a region). The C++ is `solidify` and `ringAround` in polymesh.
+- **The kit tags the panels on the cage** (`kit.panel_plan`, used by `kit.body`; each seam is made a station by
+  `kit.seams` so a panel is whole rows):
+  - **Doors:** one or two a side; two when there is a B-pillar with room behind it. The seam steps like a real one:
+    below the belt it clears the wheel arch, above it the line runs at the pillar, so the window stays whole on the
+    door.
+  - **The hood:** the top between the belt corners, cowl to nose.
+  - **The back:** a trunk lid behind the deck; a sloped hatch when the backlight runs to the tail; a gate when the
+    tail is upright, defined geometrically as every rear-facing face at the tail above the lamps or the rear window's
+    foot (a van's back wall above the belt is the roof run falling sheer, not the tail cap); the pickup's tailgate
+    from the bed floor up (`panels = { trunk = "tailgate" }`).
+  - A recipe can opt out with `panels = false` (the semis, until #189's rig). A bus's saloon has its own doors.
+- **`kit.build(P, level, { panels = true })`** returns the body without them and `panels[name] = { parts, hinge, lo,
+  hi, cabin }`.
+  - Each panel gets **thickness**: its skin's back and edges, painted as a real shut face is (6 cm on a door, 3.5 cm on
+    a lid), and the body round each opening its **jamb**.
+  - A door's card (the cabin liner cast off its own faces) rides the door.
+  - **Hinges** (`kit.hinge`): a door on its front edge, outboard, 65 degrees out; the hood on its back edge, 55 up; a
+    lid or hatch on its front edge (62 and 80); the tailgate on its foot, 90 down.
+- **The player's car** (`kit_drivable`) carries them.
+  - `VehicleSpec::panels` and each part's `panel`; `Vehicle::Panel` keeps `angle` running toward `target`; writeBack
+    poses a panel's parts x -> q (x - pivot) + pivot.
+  - The driver's door (the right front: the city drives on the left) swings open as you get in or out and shuts
+    behind you.
+  - E beside a parked car opens or shuts its hood or trunk (provider `vehicle_panel`).
+  - `panels open|shut [name]` on the control channel.
+- Traffic is unchanged: its bodies build without panels. The seams add a few stations to every kit body.
+
+**Tests.** `kit_cars_carry_doors_hood_and_trunk_that_open_outward`, over the nine drivable bodies:
+- both front doors on every one, rear doors in pairs;
+- the panels and the body together are the whole cage;
+- every hinge opens out or up, and the tailgate drops back.
+
+**Owed.**
+- An engine block in the bay.
+- The bus's doors at stops (the fleet instance path).
+- A door you open by hand on foot.
+- Per-part colliders: the chassis stays one shape; damage measures a touch against each panel's box (ADR-0353).
+
+## ADR-0353 — Car damage: zones, dents, panels that come off, a dead engine, sparks on knocks and scrapes
+
+**Context.** Glenn, 2026-11-06:
+- "It would be interesting if you could damage the car and bits and pieces can fall off until it was undrivable";
+- "if you were to hit guard rails or other cars, the contact point might be a place where we could play some sparks."
+
+ADR-0071's contact stream reported only new touches, and a vehicle's chassis came out as no entity.
+
+**Decision.**
+- **Contacts.**
+  - Jolt's persisted contacts are now reported, but only for watched bodies. Every vehicle chassis is watched from
+    `addVehicle`. A persisted contact carries `persisted` and `slideSpeed`, the speed the surfaces slide past each
+    other.
+  - `PhysicsSystem::publishContacts` maps a chassis body to its Vehicle entity, which is ADR-0071's "who did I hit"
+    hook.
+  - The arena's knock sounds ignore scrapes.
+- **The rules** (`engine/vehicle_damage.h`, pure):
+  - `damageZone`: front, rear, left, right, roof or under, by the touch's place against the half-extents; a corner is
+    an end.
+  - `touchHarm`: a knock costs nothing below 3 m/s and a whole zone at 28; a scrape costs 0.004 per metre slid. Both
+    are shared out by mass against 1,500 kg.
+  - `touchSparks`: a knock from 4 m/s, a slide from 2.5.
+  - `dentMesh`: a smoothstep push inward round the point, normals recomputed.
+- **The pass** (`VehicleSystem::applyDamage`, each step, from the queued `Collision` events):
+  - sparks at the point (a scrape's trickle at most every 80 ms);
+  - the zone loses 1.2 x the harm, and the panel the touch lands on (its box within 0.35 m) 1.6 x;
+  - a knock over 1.5 % dents the body and the panels near it: radius 0.22-0.77 m, depth to 14 cm. Each mesh is copied
+    on its first dent, a panel's in its hinged frame, and re-uploaded at most every 0.15 s.
+  - A **panel at zero comes off** (`detachPanel`): its painted skin, re-centred, becomes a loose box body at the car's
+    speed plus a push; its glass and card go, with a burst of sparks. At most 24 loose parts stay about.
+  - The **nose at zero kills the engine**: the car steers and brakes but does not drive.
+- `vehicle?` reports the zones, the panels still on, the weakest, and ENGINE DEAD / dented; `panels knock <name>`
+  tears panels off for tests and shots.
+
+**Seen.** In car_drive, the off-roader rammed into the parked jeep at about 58 km/h came off with its nose at 0.65 and
+dented. `panels knock hood` dropped every hood onto the ground.
+
+**Owed.**
+- Scratches as a texture: the drivable body needs the unwrapper's UVs.
+- Repair: a garage or the gas station.
+- A HUD for the damage.
+- Smoke from a dead engine.
+- Traffic cars take no damage: they are kinematic.
+
+## ADR-0354 — Street pieces as bodies: trunks and posts stop a car, bins and hydrants are knocked loose, a hydrant sprays
+
+**Context.** Glenn, 2026-11-06: "the things on the street such as mailboxes and even the trees should have some kind
+of collision ... if it was big enough, it might stop your car, but if it was a fire hydrant, you might knock a fire
+hydrant over and maybe it would spray water out." Kerb life (the city's next ten #3) was draw-only. The only street
+colliders were citysim's signal poles.
+
+**Decision.**
+- **The kerb props that are data** live in `assets/scripts/street_props.lua`. Each kind has:
+  - `name`, `every`, `verge`, `junction`, `main_only`;
+  - `mesh()`;
+  - `collider.half`, `breaks_at`;
+  - `spray = { effect, rate, up }`.
+
+  The hydrant is the first: red barrel, bonnet, hose and pumper outlets with their caps, every 90 m a side.
+  - The same file gives the bodies of what the planner already places: the bin, bike rack and news boxes (`legacy`), a
+    street tree's trunk and a lamp post.
+  - `loadStreetProps` (scripting/street_props_spec) reads it for the loader.
+  - The planner's own three kinds move into the list when the street kit does (#191). No new C++ kind.
+- **Placement.** `StreetFurnitureParams::kerbKinds`: the planner places the data kinds in a pass of their own after its
+  march, so every existing piece stands where it did. Each kind keeps its spacing a side and stays clear of trees,
+  lamps, poles, bins, racks and the other kinds. Their KerbProps carry kind 3 and up.
+- **Bodies.** Every kerb piece, trunk and lamp post is a static shape in the level's one `NatureColliders`, streamed
+  round the player with the forests' (the forest level's set is appended to, not duplicated). river_town has 4,403
+  bodies, 684 of them breakable.
+- **Breaking.**
+  - `PhysicsWorld::setBreakable(body, speed)`: a watched body (a car's chassis) meeting it at that closing speed or
+    more has the contact turned into a sensor (the car goes through) and is reported `broke`.
+  - `NatureColliderSystem` then removes the body, hides the piece's instance (scaled to nothing), drops a loose box
+    body of it (its mesh re-centred) pushed on along the knock, and sparks.
+  - A kind with a spray puts a ParticleEmitter on the stub for a minute: the hydrant's water column ("splash", 260 a
+    second at 7.5 m/s).
+  - A broken piece never streams back. At most 40 loose pieces stay about.
+  - The car's damage pass takes a break at a tenth of a knock.
+- `pieces knock` on the control channel breaks the piece nearest the player through the same path.
+- `Collision` now carries both body ids and `broke`, for owners of bodies outside the ECS.
+
+**Tests.** `a_car_knocks_a_breakable_piece_loose_and_stops_at_a_solid_one`:
+- a car drives through a hydrant-sized box marked breakable at 2 m/s (66 m on, `broke` reported);
+- the same box unmarked stops it at 17.8 m;
+- a scrape along a wall reports an 8.4 m/s slide.
+
+**Seen.** In river_town:
+- 186 hydrants;
+- a car driven along the pavement stopped at a street tree;
+- `pieces knock` beside the first hydrant threw it onto the lawn and left a water column at the stub.
+
+**Owed.**
+- Driving a car into a hydrant in the city, which wasn't reproduced headlessly: a car started in the kerb lane stopped
+  at a straight edge at x = -310 on two headings, most likely the kerb against the collision floor. Not confirmed.
+- Signal poles as these bodies too (citysim has its own).
+- Mailboxes and bollards (data entries).
+- A puddle under the spray.
+
+## ADR-0355 — Bodies gone bad, loose parts with weight, and walkers who get out of a car's way
+
+**Context.** Glenn, 2026-11-06, driving the first build of ADR-0353/0354 in river_town:
+- "I just smashed my car and the doors flew off and the game look like it crashed";
+- "Are parts of the car too light so they go flying off at high velocity? ... maybe they should be given more weight";
+- pedestrians "tend to just get pushed along with a vehicle and they don't ragdoll or they don't try to jump out of
+  the way even. Maybe they need some kind of new state where they are self-aware ... and will try and move out of the
+  way of danger."
+
+The hang: the main thread was in Jolt's `SwingTwistConstraintPart::ClampSwingTwist`. `Ellipse::GetClosestPoint` never
+ends on NaN. A walker's ragdoll had been made at a NaN position, thrown at 107 m/s by a car "moving" at 385 km/h.
+
+**Decision.**
+- **Never pushed off at birth.**
+  - `PhysicsWorld::ignoreContacts(a, b, grace)` rejects a pair in `OnContactValidate` while their boxes overlap, and
+    `grace` steps after.
+  - `RigidBody::ignore` applies it from a body's first step.
+  - A part knocked off a car ignores the car; a kerb piece knocked loose ignores the car passing through it.
+- **Thin boxes have bodies.** `addBox` gives a box a convex radius no more than half its thinnest side. Jolt refused a
+  door or hood under its default 5 cm, and the loose part never got a body.
+- **A body gone bad** (`PhysicsWorld::sanitize`, after every step): an active dynamic body not finite, or past
+  1,000 m/s (a car's chassis past 150; a bullet does 300), is parked below the world, still and asleep, and reported `[physics] a body gone bad`. It is not removed,
+  because a ragdoll's joints still hold it.
+  - A car's chassis is only stopped.
+  - A kinematic (driven) body is reported once and left alone. Its velocity is its owner's step (city traffic jumped
+    a long way reads as hundreds of m/s), and parking it fought its owner every step.
+- **Walkers.** One found NaN is put back where the sim has it. A ragdoll is never made from a NaN pose, and nobody is
+  thrown faster than 30 m/s. A car's first half second, and any knock past 60 m/s, cost it nothing: a car taken from
+  the traffic came with its engine already "wrecked".
+- **Weight** (data):
+  - panels' `mass` in `kit.hinge`: door 22 kg, hood 16, trunk 12, hatch 18, tailgate 20;
+  - kerb pieces' in street_props.lua: hydrant 90, bin 25, rack 35, news boxes 45.
+
+  `PhysicsWorld::setBodyMass` scales the shape's inertia to it and adds air drag (0.3 linear, 0.6 angular). A part
+  leaves at 0.7 of the car's speed with a small lift (it was the car's full speed plus 1.5 m/s up). A kerb piece leaves
+  at 0.6 of the knock.
+- **Out of the way** (`engine/ai/danger_dodge.h`, pure):
+  - A car is its box (`insideFootprint`). A walker is knocked down when the box reaches them; the old test was the
+    car's centre within 1.5 m, so the nose, 2 m ahead of it, shoved people along first. The throw follows the car's
+    travel, out to the side they were hit on.
+  - `assessThreat`: a car moving at someone, their place in its swept path (half width plus a metre), its front
+    within 1.8 s.
+  - `stepDodge`: each person notices after their own reaction time (0.25-0.65 s, from `dodgeTraits(agent)`). They then
+    sprint 4.5-6.5 m/s straight out of the path for 0.75 s, or dive faster and shorter when it is under 0.45 s off. One
+    in seven freezes.
+  - `knock?` counts the dodges.
+
+**Tests.**
+- `a_part_born_inside_its_car_does_not_fling_the_car` (physics).
+- danger_dodge's three:
+  - a nose hits before a centre would;
+  - threats ahead, beside, behind, far, creeping and reversing;
+  - of 70 people facing a 43 km/h car from 16 m, everyone who moves gets clear and about one in seven freezes.
+
+- **Damage that is fair** (the next drives):
+  - Glenn: "cars seem to lose power and then eventually become undrivable." The chassis box's bottom corners brushing
+    the road as a car pitched were scrapes on the nose and tail. A touch whose normal stands up (|n.y| > 0.7) is now
+    the ground: a scrape along it costs nothing and sparks only past 8 m/s; a knock from below is the underside's, at
+    a third.
+  - Glenn: "I hit a fence with my truck... is it dead?" A fence is a dozen contacts in one instant. Per zone, knocks
+    within a third of a second are one crash, costing only the worst (`crashHarm`/`crashClock`). One knock spends a
+    zone at 40 m/s (145 km/h), not 28.
+- **Damage you can see** (Glenn: "show the visual damage and maybe even show smoke and sparks and look damaged ... deform
+  the car dynamically"):
+  - The drivable body is built subdivided once, as the traffic's near bodies are, so a dent has vertices to push.
+  - Dents are deeper and wider: 0.25-0.9 m across, down to 26 cm.
+  - `dentMesh`'s `scuff` scrapes the paint toward dark bare metal as deep as the dent goes. A lamp lens crushed past
+    half the depth loses its lamp tag and darkens: the lamp is broken.
+  - The hood steams once the nose is under 60 % and smokes black (`engine_smoke`, particles.lua) under 25 % or dead,
+    trailing the car.
+
+- **Tuning is data** (Glenn: "move the tuning to lua"):
+  - A car's damage tuning is vehicles.lua's `KIT_DAMAGE`: a default and per-kit overrides (buses and the fire engine
+    take 55 m/s to spend a zone, the convertible 34). It is read into the drivable spec as `damage`, onto
+    `Vehicle::damage` (`DamageRule`, now carrying the dent, smoke, kick, crash-window and rough-engine numbers too). An N
+    drop reads it afresh.
+  - The dodge is people.lua's `people.dodge` (`DodgeTuning`, read into `PeopleCatalog::dodge`).
+  - A loose piece's throw is street_props.lua's `knock`.
+  - The C++ defaults equal the tables'. Tests hold that each is read and that an edit is what the game gets.
+- **A car taken from the traffic is the car N drops** (Glenn: "Why is an SUV in the world different than mine? I
+  can't open the hatch"):
+  - Each fleet entry carries its paint beside its `drivable` recipe (`loadFleetDrivable`).
+  - CityVehicleSystem builds the taken car from that recipe through `spawnVehicle` (panels, a body to dent, its
+    tuning), falling back to the traffic body only for a slot without one.
+  - The drivable car's handling comes from the faceted build, as the traffic's catalogue's does, so the two drive as
+    one. Its looks are from the subdivided build.
+- **Panels heard:** a latch as a panel opens, a shut by kind (door, hood, trunk: `sfx::panelShut`) as it closes.
+- **The driver gets out of the driver's door**, beside it at the seat. A car on its side or roof keeps the old up and
+  out.
+
+**Seen.** river_town at 75 km/h with every door and the hood knocked off mid-drive: no bodies gone bad, no hang.
+
+**Owed.**
+- Parked cars that open before they are taken (a near swap to the drivable).
+- Cracked and shattered glass (a crack texture).
+- Smoke from fire.
+- Repair.
+- A damage readout on the HUD.
+- Dodging seen in the city: the rules are tested; a probe drive met no walkers.
+
+## ADR-0356 — Buses that open their doors, glass that breaks, a damage readout, repair, and the steep viaduct measured
+
+**Context.** Glenn, 2026-11-06/07, playing river_town:
+- the bus "has no interior", "I am able to see inside of it and right out through the roof";
+- "the bus should open its doors when I stop";
+- "When the bus driver stops does the bus door open for passengers to get on?";
+- "the exterior facing sign is visible backwards from the inside";
+- "as a physics car the bus is too bouncy from side to side";
+- and the loose ends from ADR-0355: door sounds, cracked glass, a damage readout, parked cars you can open, repair,
+  "a crazy incline in that city that's undrivable".
+
+**Decision.**
+- **A bus's doors are panels.** `kit.panel_plan` gives a saloon bus its two kerb-side doorways (x > 0), at the places
+  car_interior.cpp's bus layout puts them. The plan copies its rule, and `bus_doors_stand_over_the_saloons_doorways`
+  holds the two together (z 4.32 / -0.20).
+  - A bus has no car doors, hood or trunk.
+  - Panels gain a slide (`Panel::slide`, `travel()`): a plug door stands out 9 cm and slides back along the side by
+    its width.
+- **The drivable bus** opens them after half a second standing still with its driver in, and shuts them on moving or
+  throttle. They have the door sounds and no E prompt.
+- **The traffic bus** is built with its doors apart (`kit_car`: `bus_doors`, each leaf's paint and glass and slide;
+  `CarBodyRecipe::doorLeaves`). CityRenderSystem draws each leaf as its own group per bus, slid by how open that bus's
+  doors are (`busDoorOpen_`). They open while its dwell runs (`Agent::busDwell` > 0.8 s) and shut before it pulls
+  away, with the latch and the slam heard within 35 m.
+- **A bus is lined inside:** its painted shell above the floor, offset in and turned (mat `liner`), as a car's
+  headliner is. The shell is one-sided, and from inside the roof was not there.
+- **The drivable bus carries its saloon** (seats, poles, cab).
+- **Boards backed:** the front and rear destination boards get a dark backing between the board and the glass, as the
+  side and next-stop boards have.
+- **The bus rolls less:** `street(1.5, 0.24, 0.8)` and 20000 N/m anti-roll bars, from `street(1.2, 0.30, 0.5)` and
+  6000. Past ~25000 Jolt's rig goes unstable: at 30000 it would not pull away, at 60000 it was thrown 10 m when put
+  down. The phys-tier tests hold this.
+- **Glass breaks** (`crackGlass`, `smashGlass`). A knock near glass crazes it (its tint whitened round the point) from
+  `crack_from`. From `smash_from` it smashes a hole: the triangles there go, with a burst of the new `glass` effect.
+  The fixed windows are one mesh, so the hole is the pane hit, not every window.
+- **The readout** (`drawCarHud`, the game UI layer): bottom right while driving. ENGINE and a bar of the nose's health
+  (green, amber below 60, red below 25, ENGINE DEAD), each zone's health, and the panels gone.
+- **Repair** (`VehicleSystem::repair`, `vehicle_repair`): every zone whole, the engine running, the smoke gone, and
+  each part's mesh back as built (`bodyMeshBuilt`, `partMeshesBuilt`, `partBuilt`, kept in step as panels come off). A
+  panel that came off stays off. The gas station's pump will offer it (fuel, next).
+- **A stopped city car's hood and trunk** open on foot: `CityVehicleSystem::promote` (the takeover, now its own
+  function) makes it the real car where it stands and swings the panel.
+- **The steep road, measured** (`level_river_town_streets_are_drivable_grades`): each street's own deck sampled every
+  4 m (`heightOn`, following it, not the bridge over it). The worst is 65.5 % at (393, 274), a viaduct coming down
+  into an at-grade junction in a few metres. That is the roads' to fix. The test is a ratchet at 70 %; 15 % is owed.
+
+**Owed.**
+- Truly parked cars (no driver: a `SimVehicle` with `driver < 0`) opened or taken on foot. The sim needs a way to hand
+  one over (taken, not drawn, its owner without it).
+- The viaduct's ramp (roads).
+- A crack texture on glass.
+
+## ADR-0357 — Fuel: a tank that burns, an engine that dies dry, and a pump that fills it
+
+**Context.** Glenn, 2026-11-07: "fuel and gas stations ... default when empty: engine dies, coast."
+
+**Decision.**
+- **The tank is data:** `KIT_FUEL` in vehicles.lua (a default, a row per kit) becomes each drivable spec's `fuel`
+  (`engine/vehicle_fuel.h` `FuelRule`): tank litres, idle and full-throttle burn, a game `pace` (12x: a 45 L tank
+  lasts 7.5 min flat out), the starting share, how fast a pump pours, and the share the readout warns below.
+- **The player's car burns** while its engine runs (`fuelBurn`, by throttle; reverse burns like forward). Dry, it is
+  `outOfFuel`. `Vehicle::stalled()` (a spent nose or a dry tank) is the one check the drive, the starter and the
+  engine's sound read: it steers, brakes and coasts, and the starter turns over and will not catch.
+- **The readout** gains a FUEL bar (amber under a quarter, red under the warning share, EMPTY when dry).
+- **A pump:** a `FuelStop` (a standing place, world XZ) the loader makes from each `fuel_pump` area a lot records.
+  Stopped with its middle on one, the player's car fills while R is held (pad A; R is the on-foot respawn, free in a
+  car), with a click as the nozzle goes in and out; full, a fresh R has the station repair it (ADR-0356).
+- `vehicle_fuel <litres>` sets the tank (a probe's empty tank).
+
+**The gas station is not in this ADR.** A first one was built as an open-lot sculpt (a kiosk box, pumps as boxes,
+type "depot": no place, nobody working there). Glenn: "someone also works in the station and there would be a shop
+... it should have an interior ... building grammar and furniture placement for the gas pumps?" It is being redone
+as a place (the `rt-new-place` skill; ADR-0360 onward), and the sculpt was not committed. The loader's `fuel_pump`
+area -> FuelStop path stays: it is what the redone station's pumps will feed.
+
+**Alternatives.** Burn by distance (a coasting car would burn); a real-time burn (a tank would last hours of play).
+
+**Consequences.** Only the player's car burns; the traffic has no tanks. Tests: `an_engine_burns_more_the_harder_it_is_pressed`,
+`a_pump_fills_the_tank_and_stops_at_full`, `drivable_spec_carries_its_tank`.
+
+**Revisit** when the traffic should run dry too, or fuel has a price.
+
+## ADR-0358 — Carrying things, and putting them in a car's trunk
+
+**Context.** The vehicle plan's "trunk carry", which Glenn took with "1, 2, 3".
+
+**Decision.**
+- **Carryable** is a component: a name, a weight and a box. Loose car panels (VehicleSystem::detachPanel) and street
+  pieces knocked loose (NatureColliderSystem) get one; `carry_spawn <name>` puts down a thing from
+  `carry_items.lua` (box, crate, cooler, suitcase, jerrycan; its `limit` is the heaviest a person lifts, 45 kg).
+- **CarrySystem** (after VehicleSystem): the broker's E on a carryable thing in reach picks it up -- its body goes,
+  it rides in front of the player (`CarriedBy`) -- and E puts it down, a body again with its weight.
+- **A car's cargo space is data from the kit:** `kit.build` returns `cargo = { lo, hi, panel }` from the panel that
+  opens it: the boot under a trunk lid, the floor behind a hatch, a pickup's bed in front of its tailgate (no panel:
+  open to the sky). Beside a car whose space is open (its panel 60% open), E puts the thing IN (held E: down): laid
+  where it fits (`engine/carry_stow.h` `stowSlot`: flattest side down, then its other sides, each turned a quarter;
+  packed from a corner, the row nearest the player first, the floor before a stack), `Stowed`, riding the car. An
+  open space offers what is in it: E takes it out.
+- The loose-part caps never destroy a thing carried or stowed.
+
+**Alternatives.** A physics bed (things rattle loose at speed; kept as pinned, which also keeps the car's handling).
+
+**Consequences.** Tests: `a_door_is_laid_flat_in_a_pickup_bed`, `boxes_fill_a_boot_then_stack_then_it_is_full`,
+`a_thing_bigger_than_the_space_is_refused`, `drivable_cars_carry_a_cargo_space_at_the_tail`.
+
+**Owed.** Arms posed holding it; a throw; things in a traffic car's trunk; a stowed thing's weight in the car's mass.
+
+## ADR-0359 — Framing a thing for a shot: `frame`, `lots?`
+
+**Context.** Glenn, 2026-11-07, after eight screenshots that missed a gas station: "find the bounding box of the gas
+station and then make sure it fits in the camera's frustum ... some kind of function in the code base to assist
+placing a camera for screenshots or even cinematic purposes?"
+
+**Decision.**
+- `engine/camera/camera_frame.h` `frameBox(lo, hi, pitch, yaw, vfov, aspect, fill)`: the eye that puts every corner
+  of a world box inside the view at that look (the fly camera's convention: yaw 0 down -Z), looking at its middle.
+- The loader records every grown lot by recipe with its box (`LotSites`).
+- `frame <x0 y0 z0 x1 y1 z1> [pitch yaw]` and `frame lot <recipe> [n] [pitch yaw]` (default a three-quarter view,
+  30 degrees down) put the fly camera there; `frame?` says what it found and the eye; `lots?` lists the recipes the
+  city grew with how many.
+
+**Consequences.** A shot of a kind is one command. Tests: `framing_puts_every_corner_in_view`,
+`fly_forward_is_the_fly_cameras_convention`.
+
+**Revisit** for cinematics: a path of frames, an orbit round a box, framing an entity.
+
+## ADR-0360 — The trades are data: trades.lua
+
+**Context.** Glenn, 2026-11-07, on what a new kind of place needs: "it sounds like a lot of that should live in
+lua." The trades table (what a shop unit is: name, citysim place, hours, how common per shop mix, bays, fascia,
+terrace) and each trade's room finish were C++ (`trades.cpp` `kTrades`, `kRooms`). The first stage of moving a
+place kind's data to Lua (the `rt-new-place` skill's plan: trades, shop furnishing, sign names, place behaviour by
+tag, site area kinds).
+
+**Decision.**
+- `assets/scripts/trades.lua` is the table: the trades in dealing order, each with its `room`; the rooms that are not
+  trades (the malls' concourses) in `rooms`; the plain shop's finish as `plain_room`. Lights by name (panels, round,
+  dim, none).
+- `TradeBook` (`trades.h`) holds it; every reader (`pickTrade`, `tradeBays`, `tradeById`, `tradeByName`,
+  `tradeInterior`) goes through `tradeBook()`, which reads the file once (`ensureTradesLoaded`,
+  `engine/scripting/trades_lua.cpp`). `builtinTradeBook()` is the old table, the fallback when the file is absent;
+  `trades_lua_is_the_built_in_trades` keeps the two equal field for field, in order. A broken file is refused whole
+  (`a_broken_trades_file_is_refused`) and the built-in book stands.
+- `TradeInfo::name` / `placeType` are strings.
+
+**Proof.** `rt_bake metro_v2_test --producer city,lots` with the file and without it (the built-in book):
+`rt_bake --sections` equal in all 1,158 lots sections (the city report differs by its timing text).
+
+**The bake key.** The trades are baked (facades, fascia, unit widths), so trades.lua belongs in the lots bake key.
+Adding a file to the key re-keys every level -- a full re-bake -- so it joins with the next `kLotsBuildTag` bump
+(the gas station's), not on its own. Until then an edit to trades.lua needs that bump or `RT_NOCACHE=1`.
+
+**Consequences.** A new trade is a row in trades.lua. Its furnishing is still the `switch (room.style)` in
+furniture.cpp: the next stage moves it to `furniture_rooms.lua` programs by trade.
+
+## ADR-0361 — Clustered lights on Vulkan (behind RT_CLUSTERED=1), and why not deferred
+
+**Context.** Glenn, 2026-11-07: "look into the deferred rendering so we could have many, many light sources. How
+possible is it to do that?" The renderer is forward, one pass: `mesh.frag` loops a 32-entry light array in the global
+UBO for every fragment (the sun, the nearest 20 lamps, 6 headlight cones, interior points, beacons -- at the cap the
+headlights drop first). The renderer-realism plan's phase 1 had already chosen clustered forward; ADR-0017 rejected
+deferred "for now", to revisit with many-light cities.
+
+**Measured first (river_town at 22:00, 2560 x 1405, RTX 3080, `RT_GPU_TIMES`; `RT_LIGHT_CAP` / `RT_LIGHT_FILL` pad or
+cut the list):** every light costs the scene pass ~0.1 ms wherever it is looked at -- towers 0.102, a park with trees
+and grass 0.103, a shop street 0.090 ms per light. The park, with the most overdraw, costs no more per light than the
+street: the depth test already throws away the hidden fragments, so each pixel is lit about once. Deferred's win --
+light each pixel once -- is one the forward pass mostly has. What a light costs is how many lights a pixel loops, and
+that is what clustering cuts. Forward at a thousand lights would be ~100 ms.
+
+**Decision (prototype, default off).**
+- `renderer/light_clusters.h` `buildClusters`: the view cut into 16 x 9 tiles x 24 exponential depth slices (0.5 m to
+  2 km); each light listed in every froxel its sphere reaches (sphere against the froxel's box), at most 64 a froxel
+  (the nearest its middle stay). CPU, a counting sort over (froxel, light) touches. Tests: no light that reaches a
+  point is missing from its froxel (3,475 points, 400 lights), none behind the camera, a 1,000-lamp street leaves
+  ~11 a froxel.
+- Vulkan: with `RT_CLUSTERED=1` every point and spot (up to 4,096) goes in a storage buffer (set 0 binding 8), the
+  froxels' offset|count (9) and index lists (10) beside it, rebuilt each frame in endFrame. `mesh.frag`'s
+  `evaluateLighting` then lights from the 32's sun and moon plus the pixel's froxel list (`shadeLight` is the one
+  light's maths both paths share). The 32 stay in the UBO for the loops still on them (grass and leaf transmission,
+  the water's glint, the viewer's room).
+- `RT_LAMP_LIGHTS` / `RT_LAMP_RADIUS` override the level's lamp count and reach (the producers are unchanged).
+
+**Results.**
+| view | forward, today's 23 | clustered, the same | clustered, every lamp in 800 m (~1,000) |
+|---|---|---|---|
+| street | 5.02 ms | 4.62 | 5.40 |
+| towers | 8.46 | 7.35 | 9.73 |
+Clustered with today's lights is the same picture (mean difference 0.04 / 255 on the street) and cheaper; with all
+the town's lamps lit the street glows to the end of the view for +1.3 ms over today. Binning ~0.5 ms on the CPU for
+the real lamps (0.56 ms for a 1,000-lamp street in the test). A thousand lights crowded within 60 m of the camera
+takes 11.5 ms: each touches most of the near froxels, so the sphere tests dominate -- the case for binning on the GPU.
+
+**Why not deferred (now).** No overdraw to save (above); a G-buffer of albedo, metallic, emission and a shading model
+on top of today's normal+roughness target, `mesh.frag` (1,722 lines, every surface) split into resolve and lighting
+halves with grass/leaf transmission and the impostors' self-shadow as special shading models, and three backends
+(Vulkan, Metal, WebGPU) restructured -- against clustered's light buffer and one loop. The froxel lists serve a
+deferred lighting pass unchanged if it comes. **Revisit deferred** for decals, AO on the ambient term only (today it
+darkens direct light and emission too), or if TAA's velocity target makes a G-buffer nearly free.
+
+**Owed (phase 1 proper).** Binning on the GPU (a compute pass); the producers past their caps (every car's head and
+tail lights, signs, shop fronts, lit windows as far-faded points); the 32-slot loops onto the lists; spot/point shadows
+(an atlas of 8); Metal and WebGPU; turning it on by default, with the level suite.
+
+## ADR-0362 — One light system: lights are data, emitters publish, one picker chooses
+
+**Context.** Glenn, 2026-11-07, on the clustered prototype (ADR-0361) and a trial that lit city traffic's lamps: "are
+we patching things because it's a quick win instead of doing the right thing which is harder but better?" ... "Why are
+two separate places picking lights? Should this be a unified system?" Real lights were chosen in seven places, each
+with its own nearest-N cap and fade:
+- street lamps and station canopies: RenderSystem's merge, 20 within 160 m, smoothstep edge fade;
+- headlight cones: VehicleSystem, the 3 nearest lit cars, the player's first, no fade;
+- room lights: BuildingInteriorSystem, one per storey for 4 storeys;
+- elevator cab lights: ElevatorSystem, appended to the room lights' list, which depends on the systems' order;
+- beacons: BeaconLightSystem, 6 within 60 m, linear fade;
+- the flashlight: FlashlightSystem;
+- the level's authored lights.
+
+Every light's colour, brightness, reach and cone was a C++ constant. RenderSystem concatenated the lists and the
+renderer kept the first 32. Glenn: "What doing it properly looks like: one light system. Yeah I think this makes a lot
+of sense." The plan is `~/.claude/plans/light-system.md`; this ADR is its phase 1.
+
+**Decision.**
+- **Lights are data: `assets/scripts/lights.lua`.**
+  - `kinds`: per kind, the type (point or spot), colour, intensity, range, cone, an offset from the emitter's point,
+    whether it rides the dusk ramp, and its pool.
+  - `pools`: per pool, how many real lights it may have, within what distance, whether the set fades at its moving
+    edge, and whether it picks emitters in groups (a car's two headlights go together).
+  - `engine/lights/light_kinds.h`: `LightBook`, read once by `ensureLightsLoaded` (`scripting/lights_lua.cpp`). There
+    is no C++ copy of the catalogue: without the file, one plain white point kind stands and it warns.
+- **Emitters publish candidates; they don't pick.**
+  - `LightCandidate`: kind, position, direction, a scale (blink, flicker), an optional range override, a group, and
+    flags (`Mine`: the player's own lights, always first).
+  - Each producer owns one channel of `SceneLighting::emitters` (`LightBoard`) and replaces it at its own cadence:
+    VehicleSystem per fixed step, the flashlight per frame, rooms and cabs per step (two channels now, so there is no
+    order dependency).
+  - Static emitters (street lamps, station canopy lamps) are read by the light system itself from `StreetFurniture`
+    and `RailTracks`. A spatial grid over them is phase 2.
+- **One picker: `engine/lights/light_picker.h` `pickLights`** (pure, tested). Per pool:
+  - `Mine` candidates first, then the nearest groups within `within`, up to `count`;
+  - the edge fade: smoothstep over the last quarter of the reach, toward whichever edge comes first, the pool's
+    distance or the farthest light picked when the count is binding (the street lamps' rule since WS3, now every
+    pool's);
+  - the dusk ramp for kinds that ride it.
+- **`LightSystem`** runs in `render()` just before RenderSystem. It gathers the board and the static emitters, picks,
+  and writes the frame's lights. RenderSystem hands them to the renderer; its merge is deleted, as are VehicleSystem's
+  3-car cut and BeaconLightSystem's near tier.
+- **The level's light block still sets the pools:**
+  - `CitySimConfig` `lampLightCount` / `lampLightRadius` / `lampLightRange` set the street pool;
+  - `lightCount` / `lightRadius` / `lightRange` set the beacon pool;
+  - `RT_LAMP_LIGHTS` / `RT_LAMP_RADIUS` remain the trial's override of the street pool until phase 2.
+- **Order out:** the same as before (authored, street, rooms and cabs, beacons; then authored spots, headlights,
+  flashlight), so the forward renderer's 32 keep the same lights. Phase 2 orders by importance.
+
+**What changes on screen.** Nothing by design, except two things:
+- the beacons' red pools now fade with the shared smoothstep instead of linearly over the last 15 m of their 60 m;
+- a light that comes out dark (the street set's farthest lamp sits exactly on its moving edge) is left out instead of
+  taking one of the forward renderer's 32 slots: river_town's street view went from 23 lights to 22.
+
+**Proof** (river_town at 22:00, forward, the ADR-0361 poses, against shots from before):
+- street: mean difference 0.28 / 255, 0.97 % of pixels over 8;
+- towers: 0.62 / 255, 1.47 %.
+
+The differing pixels are things that move between two runs (palm fronds in the wind, beacon blinks, a tree's crown);
+the lit pavement and facades match.
+
+**Owed (the plan's later phases).**
+- phase 2: clustered by default, importance across pools, a grid over the static emitters, traffic's lamps from their
+  own markers;
+- phase 3: GPU binning;
+- phase 4: the far tier (sprites from `lights.lua`; BeaconLightSystem keeps only the blink);
+- phase 5: a shadow atlas;
+- phase 5b: interiors (lights from the fittings, room-bounded, indoor sky light, sun through glass);
+- phase 6: Metal and WebGPU.
+
+## ADR-0363 — Many lights by default: budgets by renderer, the lamps in a grid, traffic's lamps lit
+
+**Context.** Phase 2 of the light-system plan (ADR-0362): the picker existed, but every budget was still the forward
+renderer's 32 and the clustered path (ADR-0361) was opt-in.
+
+**Decision.**
+- **Clustered is Vulkan's default;** `RT_CLUSTERED=0` is the forward A/B.
+- **`Renderer::lightCapacity()`:** how many points and spots a frame may hand over. It's 31 on a forward renderer
+  (Metal, WebGPU, Vulkan with clustering off), where one slot is the sun's, and 4,096 on clustered Vulkan.
+- **Each pool in `lights.lua` has a `many` budget** (count, reach, fade) for a renderer of many lights. Forward keeps
+  the pools' counts, which the level's light block still sets.
+
+  | pool | forward | many |
+  |---|---|---|
+  | street | 20 within 160 m | 2,500 within 800 m |
+  | headlights | 3 cars | 300 cars within 400 m, fading at the edge |
+  | tails | none | 300 cars within 200 m |
+  | beacons | 6 within 60 m | 64 within 250 m |
+
+  The `RT_LAMP_LIGHTS` / `RT_LAMP_RADIUS` trial switches are gone; the data replaces them.
+- **Over the capacity, the picked set is trimmed by importance** (`lightImportance`): the player's own first, then
+  the illuminance each light gives at the camera. A 32-light renderer now keeps the lights that matter instead of
+  cutting its list in arrival order (it used to drop the headlights first).
+- **The static lamps are held in a 64 m grid** (LightSystem, rebuilt when their count changes), and only the cells in
+  reach are read; before, every lamp on the map was tested every frame.
+- **City traffic's lamps are lights**, from each car's own markers (vehicles.lua `headlight_*` / `taillight_*`), on
+  the board's traffic channel: two headlight beams; a red `tail_light` glow behind each tail lamp after dark, and a
+  brighter `brake_light` while braking. A car's lamps are one group, so all of them go together.
+
+**Measured** (2560 x 1405, RTX 3080, 22:00, scene pass, the ADR-0361 poses, forward = `RT_CLUSTERED=0`):
+
+| view | forward (25 picked) | many | lights lit (published) |
+|---|---|---|---|
+| river_town street | 6.00 ms | 5.77 ms | 1,326 (2,104): 75 cars' beams |
+| river_town towers | 8.86 ms | 10.82 ms | 1,108 (1,971) |
+| island_8_nature, a town | 5.38 ms | 5.03 ms | 751 (885) |
+
+- Binning takes 0.3–0.5 ms of CPU.
+- The towers view looks across most of the town, so it pays about 2 ms for a lit town and traffic. The other two are
+  cheaper than forward: a pixel's list is shorter than the forward 25.
+
+**Owed (the plan):** GPU binning (phase 3); the far tier from `lights.lua` (phase 4); the shadow atlas (phase 5);
+interiors (5b); Metal and WebGPU clustering (phase 6). The room-reflection loop in `mesh.frag` (`roomRadiance`) still
+reads the UBO's 32, which hold the first lights picked, so LightSystem publishes the rooms and cabs first.
+
+## ADR-0364 — The light lists binned on the GPU
+
+**Context.** Phase 3 of the light-system plan. The froxel lists (ADR-0361) were built on the CPU every frame: 0.3–0.5 ms
+for real streets, but a light crowded near the camera touches most of the near froxels, and 1,000 within 60 m took
+6.8–12.6 ms of the main thread. The interiors (dozens of fittings a floor, round the player) and a junction full of
+headlights are that case.
+
+**Decision.**
+- **`shaders/vulkan/cluster_bin.comp`**: one workgroup a froxel (3,456), 64 threads.
+  - It makes the same first cut as `buildClusters` (the sphere's depth span and the tiles its view-ratio span reaches),
+    then the same sphere-against-box test.
+  - Touching lights gather in shared memory, up to 256. Over 64, the nearest to the froxel's middle stay, ties broken
+    by light order.
+  - The kept are written in light order into the froxel's own run of 64 slots: `cells[c] = (c * 64) | count << 24`,
+    the format `mesh.frag` already reads, so the scene pass is unchanged.
+- **Device-local list buffers** per frame in flight. The lights stay host-written (`clusterBuf[0]`). The dispatch runs
+  first in the frame's command buffer, with barriers from the host write and to the fragment reads. The lists' buffers
+  are bound to set 0 bindings 9/10 in place of the CPU's.
+- **`RT_GPU_CLUSTERS=0` bins on the CPU as before.**
+- **`RT_CLUSTER_CHECK=1`**: every 120 frames, the GPU's lists are read back (one frame slot later, after its fence)
+  and compared froxel by froxel with `buildClusters` run on the same lights and camera, and logged.
+  - The first version tested only the box and kept up to 1,555 extra lights in about 245 froxels, never one missing:
+    the boxes overhang the frustum's wedge. Adding the CPU's first cut made them equal.
+
+**Measured** (river_town, 22:00, `RT_GPU_TIMES`; the dispatch is counted in the `shadows` bucket):
+
+| view | CPU binning | GPU binning (the bucket's growth) | check |
+|---|---|---|---|
+| towers, 1,113 lights | 0.39–0.50 ms of CPU | ~0.1 ms of GPU | 20 of 20 equal |
+| street, 1,326 lights | 0.42–0.47 ms of CPU | ~0.05 ms | 22 of 22 equal |
+| 1,000 lights within 60 m (`RT_LIGHT_FILL`) | 6.8–12.6 ms of CPU | ~0.2 ms | 16 equal but one tie at the cap |
+
+**Owed:** a depth pre-pass to drop the froxels with nothing in them (empty sky, behind a wall). Metal and WebGPU
+(phase 6) bin on the CPU when they get clusters.
+
+## ADR-0365 — Room lights from the fittings, kept to their rooms
+
+**Context.** Glenn, 2026-11-07: "Buildings just seem bright all around." A streamed interior was lit by one warm point
+per storey at the building's centre, reaching twice the building's width, through every wall (local lights cast no
+shadows).
+
+**Decision.**
+- **Each fitting is a light.** Every ceiling fitting the furniture hangs (`emitFurniture`: an office's recessed panel,
+  a home's round flush fitting, a bar's pendant) records a `RoomLight` (`BuildingMesh::roomLights`): where the light
+  is, which fitting, and the room it lights (the room frame's centre, axis, half extents and floor).
+  - `BuildingInteriorSystem` keeps each resident's and publishes them on the light board.
+  - They are kinds `room_panel`, `room_round`, `room_pendant` in `lights.lua`, picked from the `rooms` pool (forward:
+    8 within 15 m; many: 600 within 45 m).
+- **Room-bounded.** The candidate and `PointLight` carry the room's box. Vulkan encodes such a light as type 3
+  (`directionInner` = centre x, z and axis; `colorOuter.w` the floor; `typeRange.zw` the half extents), and
+  `mesh.frag`'s `shadeLight` fades it to nothing within 0.12 m outside the box. The room's own walls are lit, the next
+  room's are not, with no shadow map. A renderer without the test lights it as a plain point.
+- **The storey light stays as a dim fill** (`room_fill`, 5 instead of 22): the light rooms bounce about, and what
+  lights the corridors, which hang no fittings, until light probes come.
+
+**Found on the way:** inside at 22:00 the rooms are brighter than at noon. The night exposure adaptation (×6) applies
+indoors too, so a lit room saturates to flat white and no fitting's pool can show. That is ADR-0366/0367's work
+(physical exposure, then auto exposure), not the lights'.
+
+## ADR-0366 — Engine light units, and the scene pre-exposed
+
+**Context.** Renderer-realism phase 2 (the physical sky and auto exposure, Glenn: "Yah do it"). A physical sky spans
+noon to moonlight, about 16 stops. The HDR targets are fp16, and today's exposure was applied in the composite, after
+the scene was stored.
+
+**Decision.**
+- **Units.** One engine light unit is `kLuxPerUnit` = 20,000 lux of illuminance (or cd/m^2 of luminance;
+  `engine/sky/sky_atmosphere.h`).
+  - The cycle's noon sun (5 units) is then 100,000 lux, clear-day sunlight at the ground.
+  - A level's typical exposure of 0.7 is EV100 14.5: exposure = kLuxPerUnit / (1.2 x 2^EV100), a camera in daylight
+    ("sunny 16" is EV 15).
+  - So the daytime look was already close to physical. Night was not: the lamps, windows and signs were tuned against
+    a ×6 night exposure, about 500× brighter than real.
+- **Pre-exposure.** `mesh.frag`, `sky.frag` and the clouds multiply their radiance by the camera's exposure as they
+  draw (it rides `GlobalsUBO::cameraPosition.w`, unused before), so the HDR targets hold values near 1 whatever the
+  scene's brightness.
+  - The composite exposes by 1.
+  - Bloom's threshold and knee are scaled into pre-exposed units.
+  - The underwater composite's sky terms are pre-exposed.
+  - `RT_PREEXPOSE=0` keeps the old order for the A/B.
+- **Proof:** river_town towers and street at 22:00 and at noon, old order against new. Means equal (43.3/43.3,
+  82.3/82.3, 45.5/45.7, 37.1/37.0); the differing pixels are palm fronds in the wind.
+
+## ADR-0367 — The physical sky on Vulkan (behind RT_SKY=physical)
+
+**Context.** Renderer-realism phase 2. Glenn: "We should probably do physical based lighting for the sky too". The
+Vulkan sky was a hand-made palette over the day (`day_night_cycle.cpp`). Metal had a Hillaire-style scattering sky,
+opt-in per level and tuned to the old exposure, with a uniform multiple-scattering stand-in and no test.
+
+**Decision.**
+- **One model, CPU first** (`engine/sky/sky_atmosphere.h`). Hillaire 2020:
+  - Rayleigh, Mie and ozone on a spherical planet;
+  - a transmittance table (Bruneton's mapping, 256 × 64);
+  - a multiple-scattering table (32 × 32, the second order's isotropic light and the series' 1 / (1 − f));
+  - `atmosphereSkyRadiance` marched from them; `atmosphereSkyIrradiance` cosine-weighted.
+
+  Radiance is per unit of illuminance above the air, times the sun's 128,000 lux or the moon's 0.32 × its lit
+  fraction, in engine units (ADR-0366).
+- **Tests** (`test_sky_atmosphere`):
+  - transmittance straight up is the closed form;
+  - the tables match the exact march;
+  - noon: 103,000 lux of sun on the ground, a blue zenith of 1,950 cd/m^2, 9,000 lux of sky light;
+  - sunset reddens the sun and the horizon toward it, and stays blue high up the other way;
+  - 4° below the horizon the zenith still glows (13 cd/m^2); at 20° below it is black.
+- **The GPU's sky view** (`sky_view.comp`, 192 × 108, Hillaire's sky-view mapping): the same march, reading the CPU's
+  two tables (uploaded by `Renderer::setSkyTables`).
+  - Rebuilt every frame, lit by the active light (the sun by day, the moon by night) and the other.
+  - Sampled at set 0 binding 11 (the transmittance at 12) by `sky_physical.glsl`, shared by `sky.frag` and `mesh.frag`.
+- **What reads it** (envMode 2):
+  - the sky you see, with the sun's disc through the air (capped to stay in fp16) and its aureole;
+  - the ambient and reflections (the dome toward the normal and the reflection);
+  - the fog's colour (the dome toward the far point);
+  - the stars, the moon's phased disc and the city glow, scaled into units (`celestialScale`, interim).
+- **`DayNightSystem` in physical mode** (`RT_SKY=physical`):
+  - The sun and the moon are read through the model (`readSky`: their colour and strength at the camera, the dome's
+    zenith, horizon and ground, the sky's irradiance), so the clouds, the underwater view and the glass's room read
+    physical colours.
+  - The active light is whichever lights the ground more.
+  - The ambient multiplier is 1: the sky's own light.
+- **Default off**: the night is not right until the emitters are physical (ADR-0368).
+
+**Seen** (river_town towers, `~/Pictures/Raytracer/2026-11-07_physical_sky_v1_old_meter_auto.png`): noon a deeper
+blue than the palette; 17:00 a real golden hour (warm light, lit clouds).
+
+## ADR-0368 — Auto exposure, from the frame
+
+**Context.** A physical sky spans 16 stops. The interim incident meter (ADR-0367: the light falling on the ground,
+EV100 = log2(E × 100 / 400), so a clear noon gives the level's 0.7) exposes a night street for its moonlight, as a
+long exposure would, and every lamp blows out.
+
+**Decision.**
+- **`lum_histogram.comp`**: a 64-bin histogram of the pre-exposed scene's log2 luminance (2^-14 .. 2^8), every fourth
+  pixel, after the clouds and before the post.
+  - It is copied out per frame in flight and read when that slot's fence passes (`readLumHistogram`).
+  - The mean between the 35th and 95th percentiles (a night street's dark half and the lamps themselves left out),
+    less the pre-exposure that frame was drawn with, is the scene's log2 luminance in units
+    (`Renderer::measuredSceneLuminance`).
+- **The eye** (`DayNightSystem`, physical mode):
+  - the target is key / L × the level's bias (its authored exposure / 0.7);
+  - the key is 0.18 above 100 cd/m^2, easing to a quarter of that by 0.01 cd/m^2, so a night street stays a night
+    street;
+  - eased toward with τ = 0.5 s into the light and 1.2 s into the dark, within EV100 −3 .. 17.
+- `RT_EXPOSURE=meter` keeps the meter (the A/B).
+
+**Seen.** Noon and 17:00 land where the meter put them. At dusk and night the eye adapts to the lamps and the lit
+windows, which are still tuned for the old ×6 night exposure (about 500× brighter than real). So it darkens until the
+sky is black and the lamp-lit facades look like day.
+
+**Next: the emitters' physical values.**
+- Street lamps about 1,600 cd, headlights about 20,000 cd in the beam, rooms 500 lux on a desk.
+- Lit windows about 200 cd/m^2, signs about 1,000.
+- The city's sky glow from the light the city sends up.
+- Then physical becomes the default and the palette, `kNightAdapt` and the emitters' night-exposure divisions go.
+
+## ADR-0369 — The lights at their real candela, the glows into units, the clouds lit from their own height
+
+**Context.** ADR-0368's eye adapted to lamps and windows tuned for the old ×6 night exposure (about 500× real), so at
+dusk the sky went black and lamp-lit facades looked like day. Glenn: "Why is the city so bright at dusk?"
+
+**Decision** (physical mode, `RT_SKY=physical`).
+- **Lights.** Each kind in `lights.lua` gains `candela`, its real luminous intensity, which LightSystem lights it at
+  under the physical sky (`intensity` stays the old exposure's until physical is the default):
+
+  | kind | cd |
+  |---|---|
+  | street lamp | 1,600 |
+  | station lamp | 600 |
+  | headlight | 15,000 |
+  | flashlight | 2,000 |
+  | room panel | 1,300 |
+  | round fitting | 700 |
+  | pendant | 250 |
+  | room fill | 250 |
+  | cab | 300 |
+  | tail | 15 |
+  | brake | 80 |
+  | beacon | 100 |
+- **Glows.** `lights.lua` `emission_scale` (0.004) brings every glowing surface's old emission into engine units in
+  `mesh.frag` (a lit window, old 1.3, ~100 cd/m^2). The night-exposure compensation of the beacons and the lamp
+  sprites (`nightAdapt`) is 1. Each class declaring its own luminance is the next refinement.
+- **The clouds' light.** `PhysicalSkyFrame::cloudLight*`: the sun (or the moon) through the transmittance from the
+  middle of the cloud deck, not from the street. After sunset the deck is still in the sun, through the long
+  reddening air.
+
+**Seen** (river_town towers; `~/Pictures/Raytracer/2026-11-07_physical_sky_sunset_v{1,2}*.png`):
+- the sun 2° up: golden clouds;
+- just under the horizon: salmon-red clouds over a purple-pink sky and an orange horizon;
+- −3° to −5°: the twilight's purple light overhead;
+- −10°: an orange band under deep blue;
+- night: lamp pools on the street and warm windows.
+
+A low deck (0.9–1.6 km) passes into the Earth's shadow about 1° after the street does, so its red is brief, as it is.
+
+**Then, the same day:**
+- **Glow classes** (`lights.lua` `glows`, `NightGlow::nits`). Each class of glowing surface the loader tags declares
+  its real luminance, lit in its own colour; the rest keep the scaled old value.
+
+  | class | cd/m^2 |
+  |---|---|
+  | window pane | 25 |
+  | lit band | 300 |
+  | far city | 12 |
+  | street lamp head | 8,000 |
+  | station lamp head | 5,000 |
+  | sign | 400 |
+  | beacon bulb / glow / haze | 3,000 / 2,000 / 800 |
+- **The moon's disc** at 2,500 cd/m^2 through the air (`moon_nits`); **the city's glow** on the sky at 2 cd/m^2 low
+  toward downtown (`city_glow_nits`).
+- **Aerial perspective** (Glenn: "Oh are those the mountains? That looks weird"). The haze faded far terrain toward
+  the sky 1° up (the brightest band at sunset) at the level's fixed fog density, and the range read as a glowing pale
+  cut-out. Now it is the same air as the sky: the surface's light thinned per channel by Rayleigh and Mie extinction
+  along the path (at the path's mean height, times the level's `aerialDensity`), and the sky's radiance from that
+  direction put in its place. Mountains are blue with distance at noon and hazy blue-lavender silhouettes at dusk.
+
+**Still owed:**
+- At night the lit windows clip to white: the camera adapts to the lamp-lit street, ~10× darker than a window.
+  Calibrate against Glenn's night references.
+- The stars' real luminance.
+- Then physical becomes the default, and the palette, `kNightAdapt`, the `intensity` fields and `emission_scale`
+  go.
+
+## ADR-0370 — The aerial perspective volume
+
+**Context.** Glenn, on the sunset shots: "I'm still not sure about the haze near the mountains ... shouldn't the
+mountains block the haze?" ADR-0369's aerial perspective had two faults:
+- **It treated the air as uniform**, with the sky's radiance as the limit. At sunset that radiance is the horizon's
+  glow gathered over hundreds of kilometres, so the mountains' bases glowed as if the sky showed through them.
+- **It took river_town's `aerial: 4.0`**, a multiplier tuned for the old Metal sky, so every range past ~20 km
+  drowned.
+
+**Decision.**
+- **`aerial_volume.comp`** (Hillaire 2020's fourth table): for 32 × 32 screen tiles, the air marched from the camera
+  along each tile's ray, with in-scatter and transmittance stored at 32 distances (quadratic, out to 120 km). It uses
+  the same medium, phases, transmittance and multiple scattering as the sky view, lit by the active light. Two 32^3
+  RGBA16F images are made at init, so set 0 bindings 13 and 14 always hold a 3D view, and they are rebuilt every frame
+  the physical sky is on.
+- **`mesh.frag`** reads the volume at the fragment's tile and distance (from nothing to the first slice under 117 m):
+  colour × T + L.
+- **The level's `aerial` is not applied** to the physical air. `RT_AERIAL=<x>` scales the air for an A/B.
+
+**Seen** (`~/Pictures/Raytracer/2026-11-07_aerial_volume_vs_uniform.png`):
+- at sunset the range is a solid silhouette with only the haze in front of it;
+- at noon a light blue haze;
+- toward a low sun at golden hour, a warm haze with the range as a gold silhouette, as real air does.
+
+## ADR-0371 — The sky as a cubemap and as spherical harmonics
+
+**Context.** Renderer-realism phase 3, the reflections (Glenn: "what about using a cubemap for reflections?"). Under
+the physical sky, a surface's ambient was the dome sampled once toward its normal, and its reflection was the dome
+toward R blended toward that ambient by roughness. A rough surface had no real blur, and a surface's sky light was one
+direction's radiance, not the sky's integral.
+
+**Decision** (physical mode).
+- **The sky cube.**
+  - `sky_cube.comp` draws the sky-view dome into a 128^2 cube each frame, with no sun disc: the sun is lit directly.
+  - Blits box-filter its 8 mips.
+  - `sky_prefilter.comp` GGX-filters the 6 output mips (roughness 0, 0.2 .. 1): 48 importance samples per texel, each
+    read at a mip matched to its solid angle (filtered importance sampling).
+  - The result is set 0 binding 15. `mesh.frag` reflects from mip roughness × 5, the BRDF LUT's split sum doing the
+    rest.
+- **The sky's light on surfaces** (`atmosphereIrradianceSH`): on the CPU, from the same model, when the sun or the
+  moon moves.
+  - 192 directions are projected onto order-2 spherical harmonics and convolved with the cosine: E / π, the
+    radiance-like value the ambient takes, sun and moon together.
+  - Nine coefficients go in `GlobalsUBO::skySH`.
+  - Test: within 7% of the exact cosine integral, up, sideways, down and oblique, at noon and with a low sun.
+  - It shows what one sample missed: at noon a face turned down takes more from the sunlit ground than a face turned
+    up takes from the sky.
+- **`RT_SKYCUBE`** is the A/B: 0 the old path, 1 the harmonics only, 2 the cube only.
+- **Found on the way:** at roughness ~0 the GGX sample's cosine rounded past 1, and sqrt(1 − cos²) went NaN; the NaN
+  spread through the cube to every reflective surface (and the exposure). The cosine is clamped, and a texel that
+  still comes out NaN or Inf is written black.
+
+**Seen** (`~/Pictures/Raytracer/2026-11-07_sky_cubemap_glass_towers_*.jpg`): glass towers reflecting a blue noon
+sky, and gold at golden hour.
+
+**Owed: the local probes.** Relightable box-projected cubes along the streets, in lobbies, shops and tunnels; SSR
+first, then the probe, then the sky. Today's reflections are still the sky's alone.
+
+**Validation-clean** (the Khronos layer on river_town under the physical sky, 0 messages). Fixed on the way:
+- the cloud resolve's image infos were a 4-array written at [4], a stack overwrite: the bad sType the layer reported;
+- the GPU crowd's draw-count buffer is copied back for telemetry but lacked TRANSFER_SRC;
+- the horizon map was written at init before the default texture existed (a null view), and is now left to
+  `updateGlobalHorizonDescriptor`;
+- `terrain.vert` did not write `mesh.frag`'s locations 6–8;
+- the sky cube's first barrier waited on a read at TOP_OF_PIPE.
+
+## ADR-0372 — Reflection probes, stage A: capturing a probe's faces
+
+**Context.** Renderer-realism phase 3b (`~/.claude/plans/renderer-realism.md`). The sky cube (ADR-0371) reflects the
+sky alone. Local probes are to reflect the street and its neighbours. They are relightable: a probe keeps what its
+faces saw, not their light, so time of day costs no recapture. Glenn asked whether this is cached: the captures (what
+the surfaces are) will be baked with the level in stage B; only the relighting runs live.
+
+**Decision (stage A).**
+- **Globals in slots.** Set 0 binding 0 is a dynamic uniform. Slot 0 is the frame's view; slots 1 and 2 are the
+  probe faces captured this frame, each its own view-projection and eye (no lights or cascades: the capture writes
+  surfaces). Each slot sits on the device's uniform-offset alignment. The six set-0 binds pass offset 0. The proof is
+  the same picture, validation-clean.
+- **The capture.** `Renderer::beginProbeFace(probe, face, eye)` / `endProbeFace()`: the draws between them (routed by
+  `queueDraw`) go into that slot's queue.
+  - Recorded after the shadow pass (set 0 samples the shadow array) into three 64^2 RGBA16F targets and a depth,
+    through capture twins of the mesh pipelines (culled and two-sided, full and packed vertices).
+  - `mesh.frag` is compiled with `PROBE_CAPTURE` (`mesh_probe.frag.spv`): albedo + metallic, normal + roughness (as
+    the scene pass writes it), emission + distance from the probe.
+  - Transparent surfaces are captured as opaque.
+  - Each face is blitted, mirrored left to right, into its probe's layer (probe × 6 + face) of three G-buffer arrays
+    (64 probes). Cube maps are left-handed; `probeFaceBasis` gives each face's forward and up in the cube convention
+    the shaders sample by.
+- **The check.** `RT_PROBE_TEST=1` captures probe 0 at the camera, two faces a frame, from the static world only
+  (structures, scenery, furniture, ground paint within 300 m, each face's own frustum). `RT_PROBE_DUMP=<file.ppm>`
+  rewrites its six faces (albedo, normal and emission rows) every 600 of its faces, so the file follows the camera.
+  At a street corner at noon the faces show the paving and kerbs, palms, shop fronts and awnings, the road's markings,
+  and the towers down the street, with the right normals. (A first dump fired after 12 faces, at the spawn point
+  before the camera moved: hence the refresh.)
+- **The ground.** Terrain's capture twin (terrain.vert with the capture fragment shader) draws the frame's own
+  terrain into each face. TerrainLodSystem selects it for the camera, so a probe near the camera sees most of the same
+  ground, not all of it.
+
+**Owed:** stage B (placement, the nearest 64 resident,
+the capture schedule, baking the captures with the level); C (relight); D (use in the reflections).
+
+## ADR-0373 — Reflection probes, stages C and D: relit, and used
+
+**Context.** Stage A (ADR-0372) captures what a probe's faces see. They now have to be lit as the scene is lit, and
+reflected.
+
+**Decision.**
+- **One lighting, shared.**
+  - `mesh.frag`'s globals block and set-0 textures move to `globals.glsl`. The GGX terms, the lights' falloff, the
+    cascaded and mountain shadows and one light's contribution (`shadeLight`) move to `lighting_common.glsl`. The sky
+    harmonics' evaluation moves to `sky_physical.glsl`.
+  - `mesh.frag`, `sky.frag` (its partial copy of the block retired) and the relight shader include them.
+  - Proof of a pure move: the same shot with only cloud edges, wind-moved foliage and a passing car differing.
+  - Every set-0 binding is now the compute stage's too.
+- **Relit** (`probe_relight.comp`): each texel of a probe's six faces, lit as the scene pass lights a surface:
+  - the frame's lights (the sun or moon with its cascaded shadow, measured from the frame's camera, and the mountains'
+    shadow; the picked lamps);
+  - the sky's light by the harmonics, its reflection of the sky cube, and the surface's glow;
+  - or the sky itself where the capture found nothing.
+
+  The result goes into a 64^2 cube array (64 probes, 5 GGX mips blurred by `probe_prefilter.comp`). Up to four probes
+  are relit a frame, round those whose six faces have all been captured.
+- **Used** (`globals.glsl` `probeReflection`, from `mesh.frag`'s physical branch):
+  - the probe whose box holds the fragment, its parallax corrected (the reflected ray's exit from the box, seen from
+    the probe), at roughness × 4;
+  - faded to the sky cube over the box's last 4 m;
+  - SSR stays first in the composite.
+
+  The probes are `Renderer::setReflectionProbes` (the existing API, Metal's authored probes): slot i is probe i, and
+  one that moved is unlit until recaptured. Probe data is set 0 binding 16, the cube array 17.
+- **The device's `imageCubeArray` feature** is enabled. The storage images (the aerial volume, the sky cubes, the
+  probes' arrays) go to GENERAL together in the first command buffer, since set 0 samples them before their features
+  run.
+
+**Seen** (`~/Pictures/Raytracer/2026-11-07_reflection_probe_first_light.jpg`; `RT_PROBE_TEST=1`, a probe at a street
+corner below a glass tower): the tower's panes reflect the building across the street, rows of windows and all, at noon
+and at golden hour, where with the sky cube alone they were a flat blue-grey.
+
+**Owed:**
+- stage B: placement along the streets, the nearest 64 resident, a capture schedule, the captures baked with the
+  level;
+- per-probe lights at night (today the relight takes the frame's 32);
+- validation: only the material pools' grow-on-demand allocation remains, as designed.
+
+## ADR-0374 — Reflection probes, stage B: along the streets, the nearest 64, read through a plan grid
+
+**Context.** Stages A, C and D (ADR-0372/0373) captured, relit and used one probe that a test hook put at the camera.
+A city needs them where reflections are seen, the street, and enough of them; the renderer holds 64.
+
+**Decision.**
+- **Where** (`lights/probe_sites.h`, pure): along every edge of the level's road network (`LevelRoadGraph`, the one
+  graph every consumer reads; a lanes city's `RoadEntity` graph is empty), one every `spacing` m at `height` m over
+  the carriageway (the ground's height at grade, the line between the ends on a deck or ramp). Sites nearer than
+  `merge` (and within 6 m in height) are one, so a junction gets one. Each box is the street's stretch, `side` m past
+  both kerbs to the frontages, `below` m under the street to `above` over it. river_town: 1017 sites in 1 ms.
+- **The rules are data:** lights.lua `probes` (spacing 40, height 5, side 30, below 1, above 45, merge 20,
+  hysteresis 15), checked when read.
+- **Which 64** (`pickResidentProbes`, pure): the nearest by plan distance. A resident probe keeps its slot until it is
+  `hysteresis` m past the nearest set's edge, so walking a street recaptures only the probes it passes. Done again when
+  the camera has moved 4 m.
+- **The schedule** (`ProbeSystem`, before RenderSystem): a probe that joins queues its six faces, nearest first; two
+  faces a frame; a queued face whose slot was given away is dropped. The slots and the frame's faces go on
+  `RenderView::probes` (`ProbeBoard`). RenderSystem hands the slots to `setReflectionProbes` when their revision changes
+  and draws the faces (the stage A culling, unchanged). An empty slot has an inside-out box. `RT_PROBE_TEST` retires;
+  `RT_PROBES=0` is the A/B.
+- **Which probe a pixel reads** (`renderer/probe_grid.h`, pure): a 64 x 64 plan grid over the probes' boxes, each cell
+  the two probes nearest its middle whose boxes reach it, built when the probes change and uploaded after them in the
+  probe SSBO. A pixel tests those two (the first relit one holding it wins). Testing every box, as stage D did, cost the
+  scene pass 7.6 ms on river_town (6.8 -> 14.4); the grid costs 0.5 ms (7.3).
+- **Probes are lit diffuse only** (`SHADE_DIFFUSE_ONLY` in `lighting_common.glsl`, set by the relight): a light's
+  highlight belongs to where the eye stands, and the probe's eye is not the viewer's. Baked in, the sun's glint off a
+  far window was smeared by the prefilter into a flat yellow patch on every rough leaf that read the probe; widening
+  the roughness made the patch bigger. The sky's reflection and the glows stay.
+
+**Seen** (river_town bench, `~/Claude/raytracer-parked/lightbench` sb0 vs sb5): the glass tower reflects the building
+across the street as in ADR-0373, now from street probes, day and night; no validation messages.
+
+**Owed:** the captures baked with the level; the 256^2 tier for the nearest few; per-probe lights at night; each
+capture face walks the whole world (a cell index of the static draws); `DayNightSystem::findCityBounds` reads the
+empty `RoadEntity` graph too, so a lanes city may have no light-pollution centre (to check).
+
+## ADR-0375 — Ray-traced reflections: measured first, and the renderer on Vulkan 1.2
+
+**Context.** Probes are blurry and box-shaped; Glenn asked about real ray tracing for the buildings near you, "and not
+blow up my gpu". The renderer asked for Vulkan 1.0, which has no ray tracing.
+
+**Decision.**
+- **Measure before building** (`renderer/vulkan/rt_measure.h`). `RT_RT_MEASURE=<frame>` collects, over
+  `RT_RT_WINDOW` frames (600), every instance drawn within 300 m of the camera (turn the camera round meanwhile:
+  `~/Claude/raytracer-parked/lightbench/rtmeasure.sh`). It then asks the driver what bottom-level structures would
+  cost for every mesh on the GPU, and for those within 100, 150 and 300 m, plus a top level over the instances
+  (`vkGetAccelerationStructureBuildSizesKHR`, from counts alone, nothing allocated). The question goes to a
+  short-lived 1.2 device on the same GPU, so the renderer's own device is untouched.
+
+  | | river_town | island_8_nature, financial district |
+  |---|---|---|
+  | every mesh | 1.26 GB | 3.4 GB |
+  | within 150 m | 35 MB | 147 MB |
+  | TLAS (300 m) | 2 MB | 6.5 MB |
+  | device memory free | 5.2 GB | 1.2 GB |
+
+  Uncompacted; terrain and the GPU crowd not counted. Everything cannot fit on the island; what is near you can, at
+  about a tenth of what is free.
+- **Pick and choose** (Glenn: close up ray traced, farther faked). Rays only from smooth surfaces near you, faded into
+  the probes. Rays only hit the near buildings, street and cars, not foliage, small props or the crowd. A hard cap at
+  a share of free memory drops the farthest meshes first. All of it data, to come.
+- **Vulkan 1.2.** The instance asks for 1.2 when the loader has it. The device's own version caps it (the 3080:
+  1.4.341), and VMA is told; `RT_VK_1_0=1` keeps 1.0. No extension or feature is enabled yet. Validation-clean on
+  river_town, the same frames as 1.0.
+- `RT_DUMP_STATS` also logs a probe face's CPU cost: 0.35 ms, only while a probe is captured (about 2 s at load).
+  That is why the probes' captures are **not** baked with the level: it would cost ~0.5 GB of disk on river_town and
+  several GB on the island to save those 2 seconds; relighting already makes the time of day free (ADR-0373).
+
+**Owed:** the ray-tracing extensions and features on the device, buffer addresses on mesh buffers, the near BLAS set
+with the cap, the reflection rays, and a `raytrace` data table.
+
+## ADR-0376 — Ray-traced reflections near the camera
+
+**Context.** ADR-0375 measured it: near-only ray tracing fits (147 MB within 150 m at the island's densest street);
+everything does not. Glenn: close up ray traced, farther away faked.
+
+**Decision, step by step.**
+- **3a. The device.** On Vulkan 1.2 with VK_KHR_acceleration_structure, VK_KHR_ray_query,
+  VK_KHR_deferred_host_operations and VK_KHR_spirv_1_4, and the device's `bufferDeviceAddress`,
+  `accelerationStructure` and `rayQuery` features, all of them go on (the features through a VkPhysicalDeviceFeatures2
+  chain), VMA takes buffer device addresses, and mesh vertex and index buffers are addressable build inputs (and
+  storage, for hit shading). `RT_RT_REFLECT=0` leaves it all off. Validation-clean on river_town; the frame's cost
+  unchanged (11.10 vs 11.21 ms).
+- **3b. The near scene** (`renderer/vulkan/rt_scene.h`). RenderSystem picks what a ray may hit, once the camera has
+  moved 5 m or a second on. These are the instances of lights.lua `raytrace.hits` (by default structure and furniture,
+  a level's drawDistances names via the one `drawClassName`) within `near` (150 m), every way round. Each is the tier
+  the draw would pick from here. They go nearest first through `Renderer::setRayInstances`.
+  - The renderer builds a bottom level per mesh, nearest first. Builds are spread over frames (600k triangles a frame).
+    A mesh no instance has used for 300 frames retires; a removed mesh's structure retires with it.
+  - A top level over the ready instances is rebuilt each frame.
+  - **The budget** is `memory_share` (25%) of the device memory free at the first call, never over 1.5 GB. It
+    covers the bottom levels, the scratch and the top level. A mesh that would pass it is left out (the probes answer
+    for it); nothing is allocated past it.
+  - river_town: ~600 instances, 115-155 MB of bottom levels, 12 MB of scratch, of a 1.37 GB budget. That is 3-4x
+    ADR-0375's measurement, which only counted what was drawn: buildings occluded from the camera were never drawn
+    there, but a reflection sees them. On the island the budget (25% of 1.2 GB) will bind near the towers, dropping
+    the farthest buildings.
+  - Cost: +0.14 ms GPU, +0.09 ms recording. Validation-clean.
+  - Owed: compaction (about half the bytes), cars (SimBody: every frame).
+- **3c. The rays** (`rt_reflect.comp`, after the screen-space pass, at its half resolution, into its target).
+  - Every pixel smoother than `max_roughness` (0.3) within `near` traces its reflection against the near scene.
+  - A hit is shaded from its own triangle, read through buffer addresses: its vertex colour, its material (each
+    instance's row: albedo, roughness, emission, metallic, and the emission tinted by the vertex colour where the
+    material says), and its geometric normal. The frame's lights light it as the scene pass would (`shadeLight`), the
+    sun's shadow by a second ray, plus the sky's harmonics. It is pre-exposed.
+  - A miss takes the probe's reflection: past the near scene it is faked.
+  - The confidence is the screen-space rule (`mix(0.2, 1, fresnel)` x roughness fade x blend strength), and the
+    result fades back to the screen-space one over the last `fade` (25 m).
+  - **No ghost:** mesh.frag fades the probe's reflection out where the rays fade in (the same near, fade and roughness
+    rule, in the probe buffer's spare header; zero when the rays are off). Without it, the blurry probe image showed
+    under the sharp one.
+  - **Seen** (`~/Pictures/Raytracer/2026-11-07_raytraced_reflections_first_light.jpg`, the river_town bench at
+    noon): the tower's panes show the building across the street window by window, and the white tower behind it,
+    where the probes gave a smear. Validation-clean.
+  - Cost: +0.56 ms GPU (the ssr slot 0.16 -> 0.72 ms); the frame 11.8 ms.
+  - `RT_RT_REFLECT=0` turns the rays and the ray device features off.
+  - Owed: compaction; cars and people in the near scene (SimBody, every frame); the brightness on glass checked
+    against the probes' split-sum reflectance (the screen-space confidence rule reads a little dark straight-on);
+    textures at hits (vertex colour and material only today); denoising if rougher surfaces ever take rays; Metal.
+- **Fallbacks** (Glenn: "make sure we have fallbacks ... use the cubemaps"). One answer, `raysThisFrame()`, read by
+  both the scene pass (whether to fade the probe out) and the ray pass. The rays are off, and the probes and sky cube
+  reflect as before, when any of these holds:
+  - the GPU has no ray queries, or the renderer is on Vulkan 1.0 (`RT_VK_1_0=1`);
+  - `RT_RT_REFLECT=0`;
+  - the near scene is empty;
+  - SSR is off in the composite (the rays write into its target);
+  - the ray pipeline cannot be built. This warns once.
+
+  The first three were run on the river_town bench with the shader file hidden for the last: each matched the
+  probe-only picture to the pixel and was validation-clean. SSR off was checked in code only; its setting is read
+  from the saved settings at start.
+  - On Vulkan 1.0 the material pool chain broke a rule (12 validation errors): it allocated from a full pool and
+    caught the failure, legal from 1.1. It now counts sets per link and moves on before one is full.
+- **Glenn's road and glass feedback** (2026-11-08):
+  - **The road "had a reflection in it"** (Glenn's screenshot: the buildings and palms smeared in sunlit asphalt). Not
+    a material fault: the environment lookup used the mirror direction for every surface. A 0.93 road at a grazing
+    view looked sideways along the street into the probe's buildings. mesh.frag now takes the dominant direction
+    (Lagarde & de Rousiers 2014), bent toward the normal as the roughness rises: rough ground reads the sky above,
+    glass keeps its mirror. `view 10` shows the environment reflection alone, for chasing the next one.
+  - **Roads in the near scene.** Road meshes had no draw class (Unset: drawn forever, outside the static draw index,
+    invisible to anything that picks by class), so rays from a tower's glass found no street below. They are
+    Structure now. No level limits that class, so they draw as far as before.
+  - **The rays put back exactly what the probes gave.** The G-buffer (gbuffer.glsl, RGBA8) is now the octahedral
+    normal in rg, roughness in b, and in a the surface's reflection weight (split-sum F0 x scale + bias, luminance,
+    times the ambient shadow). `rt_reflect` writes `k x weight x ray`, where k is the share of the probe mesh.frag
+    took out. `rt_denoise` filters it at half resolution and mutes SSR where the rays answer. `rt_apply` upsamples
+    it by depth and adds it to the HDR target. So glass is as bright as its material: no longer darker head-on under
+    SSR's confidence rule.
+  - **The sparkle** (towers at night, a truck's windshield): the 5 x 5 filter weights by distance, normal, depth and
+    1 / (1 + luminance), so a lone bright hit cannot flash. The rays now also need the physical sky, the only branch
+    that takes the probe out.
+  - Cost on the bench: frame 11.0 ms (11.8 before). The probe capture keeps its own G-buffer layout.
+
+## ADR-0377 — Indoors: no street reflections, no open sky, and floors that do not glitter
+
+**Context.** Glenn, walking the offices: interior walls "occlude the outside but catch the color of the outside", and
+the wood and tile floors speckle at night.
+
+**Decision.**
+- **`RenderMaterial::FLAG_INDOOR` (bit 28).** `materialFor` sets it on drywall, every interior floor finish and all
+  furniture parts. It is set at load, so no re-bake.
+- **Indoor light** (mesh.frag, the physical-sky branch). An indoor surface never reads the street's reflection probes
+  or the open sky's directional light. It takes a dim, neutral share of the day's light (12% of the sky's up-facing
+  irradiance, grey), for both its fill and what it reflects. The room's own glow and its lamps do the rest, until a
+  floor's own probes do (owed: per-floor probes).
+- **The floor glitter** had three parts, found in turn:
+  - **Specular anti-aliasing** (Kaplanyan & Hoffman 2016): the normal's spread across a pixel widens the lobe. It
+    helps everywhere and leaves flat faces (glass, walls) alone.
+  - **Toksvig** on the mesh-UV normal map: a mip-averaged normal is short, and its shortness is extra variance.
+  - **The real cause:** indoor finishes borrow the outdoor bakes (the tile is the Concrete bake), whose relief and
+    pores broke every ceiling lamp's highlight into specks. An indoor finish now takes the bake's relief at a fifth
+    and its roughness variation at a quarter: polished, with the lamps as soft pools. Ruled out on the way: the rays
+    (off, unchanged) and the environment reflection (view 10, flat).
+- Seen in glass_tower #228 (river_town, `-2.5 27 701`), 22:00, before and after.
+
+**Owed:** per-floor interior probes; the white windows from inside (the window-light calibration).
+
+## ADR-0378 — Night windows with a light of their own, an eye that keeps highlights, vehicle glass, bus lights, asphalt
+
+**Context.** Glenn's walkthrough, continued:
+- the towers' windows are "bright white and too harsh";
+- the view out of a bus is "almost all white and just seems to show the ambient occlusion", and the saloon is dark
+  at night;
+- the roads need "some kind of asphalt texture".
+
+**Decision.**
+- **Highlight protection** (day_night_system.cpp; the renderer reports the frame's 97th-percentile luminance,
+  `Renderer::measuredSceneHighlight`). The eye's median key never exposes so far that the brightest 3% of the frame
+  pass 1.5 before the tone curve. By day that is the sky, which sits under it anyway. At night it is the lit windows,
+  which the median-keyed eye had pushed ~7 stops past white. In a dark saloon it is the street through the windows:
+  the "all white" view out of the bus.
+- **Each lit room its own light** (mesh.frag's interior-mapped pane): about a fifth show only a desk lamp's warm pool
+  (15%), half are part-lit (45-80%), a third are full. The room's tint counts twice, so warm and fluorescent rooms keep
+  their colour through the tone curve. Measured first: only 0.7% of night pixels were clipped. The harshness was
+  every room the same near-white at the same level, not overexposure alone.
+- **Vehicle glass:** the drivable car's panes were `albedo {1,1,1}` at 30% opacity, so a lit white veil lay over
+  everything seen through them. They take the kit's glass tint (`KIT_TINT.glass`), as the city's traffic glass
+  already did.
+- **Bus saloon lights:** lights.lua `bus_cabin` (cool white, on the dusk ramp) in a `cabins` pool (3, then 60 with
+  clustering). CityRenderSystem publishes three down each bus, under the roof its front sign marks, one group a bus.
+- **Asphalt:** the carriageway surface (`surfAsphalt`, under the lane paint too) gains:
+  - aggregate flecks, repair patches with hard edges, and thin crack seams, each fading with the pixel's footprint
+    so far road does not shimmer;
+  - a weathered lift (x1.6 over the bundle's 0.085);
+  - the road relief (it had none), with its roughness kept at 0.8 or above.
+- **Indoors** (ADR-0377): the daylight share is 30%, not 12%. At 12% a lobby's back wall seen through the glazing
+  went black.
+
+**Owed:** the bus view verified from inside a riding bus (the bench could not board one); per-floor probes; the
+asphalt albedo in the bake (a lanes tag bump, Glenn's call).
+
+## ADR-0379 — Cloud grain in low light
+
+**Context.** Glenn: "Clouds are grainy in low light." The march's per-frame noise is the same at night, but the
+night eye amplifies it several stops, and ten frames of history (ADR-0328) did not average enough of it.
+
+**Decision.** In clouds_resolve.frag, the march's result enters the history taken 70% of the way to its 3 x 3 mean.
+A cloud has no detail at half resolution for this to blur. The clamp box stays the raw neighbourhood's, so edges
+still reject stale history. Seen at 20:30 from the river_town shore: smooth cloud edges at the night exposure.
+
+## ADR-0380 — A storey's own reflection probes
+
+**Context.** Glenn: interiors "use a cubemap of all the ceiling lights, but is that the way to go?", "it could be
+crazy expensive to store cubemaps for all interiors", "probes just need to exist for that floor when you're on it".
+ADR-0377 kept the street's probes out of rooms and left a flat neutral reflection in their place.
+
+**Decision.**
+- **Where:** when the camera stands in a building, the ProbeSystem finds its storey with the interior system's own
+  `storeyPlans`/`storeyOf` and lays a grid over the footprint's oriented box (`placeStoreyProbeSites`, pure). There
+  is one probe every `indoor_spacing` m (8) at `indoor_height` m (1.6) over the floor, each box its cell from floor
+  to ceiling. The rules are lights.lua `probes`.
+  - These sites follow the street's in the one list, so the street's slots keep their probes. A new building or
+    storey clears only the slots that held the last storey's.
+  - Nothing is stored: a storey is captured as you arrive (2 faces a frame, nearest first), in the same 64 slots.
+- **Kept apart:** `ReflectionProbe::indoor`. The plan grid's cell names two street probes and the nearest indoor
+  one (byte 2). An indoor surface (`FLAG_INDOOR`) reads only the storey's probe, falling back to the neutral share; a
+  street surface reads only the street's.
+- **The capture** writes an indoor texel's distance negative. The relight lights it as mesh.frag lights a room: no
+  open sky.
+- Indoor finishes take the bake's relief at a twelfth (was a fifth): with a real reflection in them, a fifth still
+  glittered with the probe's ceiling panels.
+- Seen in glass_tower #228, 22:00: the floor reflects the room's ceiling panels and windows as soft pools.
+  Validation-clean.
+
+**Owed:**
+- The rays' miss fallback reads the street's probe (the G-buffer has no indoor bit).
+- The relight takes the frame's 32 lights, not the clustered room lights, so a storey's probe sees its lamps as their
+  glowing panels, not as light on its walls.
+
+## ADR-0381 — Cars in the ray-traced reflections
+
+**Context.** ADR-0376 owed the city's moving bodies in the near scene.
+
+**Decision.**
+- RenderSystem picks what moves (draw class simBody: the city's cars) every frame, at its pose this frame. The static
+  world keeps its pick on 5 m of movement or a second.
+- Both lists merge nearest first into `setRayInstances`. A car model's bottom level is built once, and its instances
+  join the top level each frame.
+- Transparent parts (opacity under 1: a car's glass) stay out of the near scene, so a ray goes into the car.
+- lights.lua raytrace hits: structure, furniture, simBody.
+- river_town bench: 759 instances in the top level (583 without the cars). The frame is 10.6 ms.
+
+## ADR-0382 — Night windows from inside, a room's bounce, brighter buses
+
+**Context.** Glenn, 2026-11-08: at night every window seen from inside a building or a bus was white, "a shaded/AO
+only version of what's outside with no color"; interiors too dim ("an office would be bright"); bus lights "a bit dim".
+
+**Diagnosis.**
+- With the panes hidden (RT_GLASS=none) the night street showed through, dark, with its lit windows. The white was
+  the pane's own reflection.
+- A window of the viewer's own (mesh.frag's glass as a filter, SceneLighting::viewerBox) reflects the room behind
+  them. Its daylight term was `g.ambient.rgb * 0.35`, the unitless ambient strength. Under the physical sky the camera's
+  exposure is pre-applied (ADR-0366), and at night that is ~170x, so the constant came out white. The ceiling panels
+  in it were in the old units too.
+- The office's eye was keyed right: median 20 nits, at mid grey. The room lacked light: each fitting lit only what
+  faced it, so the ceiling between the panels and the far walls went dark.
+
+**Decision.**
+- **The own window's room** takes the room's real light: by day the indoor share of the sky's light (0.30, as an
+  indoor surface takes it, ADR-0377) on a 0.7 wall; at night its lamps; the ceiling panels at the glows' physical
+  scale. The old sky keeps the old term.
+- **A room's bounce** (lighting_common.glsl `roomBounce`): every room light (type 3) adds to an indoor surface
+  (FLAG_INDOOR) its irradiance at a distance softened by 2.5 m, facing no way, at half (a room's reflectance), kept to
+  its room's box as the light is. The room-box test is one function now, `roomLightInside`. The office's median went
+  20 -> 37 nits; the ceiling and walls are lit.
+- **Highlight protection** (ADR-0378) is off inside a viewer box: a room's brightest 3% is its own fittings, which
+  may clip.
+- **bus_cabin** 350 -> 800 cd.
+
+**Not seen on the bench:** the bus from inside (the bench rides with RT_AUDIO=null, which finds no cabin box) and a
+home's single-lamp room (no camera spot found); both take the same terms.
+
+**Owed:** the beacons' bulb and haze spheres (BeaconGlow, BeaconHaze) predate real beacon lights. Being transparent
+and not sprites, they draw through the glass path, which shows a pane's reflection and not its emission: grey-white
+shells. Removing them from the grammar is a lots tag bump.
+
+## ADR-0383 — Tinted bus and lobby glass, matte saloons, the window's room from the clusters, glass reflectance 2
+
+**Context.** Glenn, 2026-11-08, walking ADR-0382's build: the office and bus look good, but the bus windows should
+reflect the saloon; the bus seats "should probably be cloth or plastic and not reflect the surroundings"; bus and
+skyscraper-lobby glass should be tinted ("you can see straight through those windows"); the facade reflections "a
+bit overpowering on the buildings that reflect/raytrace them".
+
+**Diagnosis.**
+- The own window's room (mesh.frag `roomRadiance`) summed the 32-light list, which under clustered lights holds only
+  the sun: no lamp ever showed in a window from inside.
+- A see-into body (a bus, an open car) merged its saloon or cabin into the shell, so the seats wore the body's paint.
+
+**Decision.**
+- `roomRadiance` walks the pixel's cluster (`clusterCell`, now shared with evaluateLighting), and counts only lights
+  inside the viewer's box (`inViewerBox`, shared with the own-window test): the saloon's lamps, not the street's.
+- vehicles.lua puts a saloon and an open car's cabin in `interior`; the city draws a see-into body's interior group
+  always, in the cabin's matte material (roughness 0.9, not metallic).
+- `glass_opacity` per vehicle kind (vehicle_kit profile -> fleet record -> CarBodyRecipe::glassOpacity), used by the
+  city's clear glass, the bus door leaves and a commandeered car's glass. The bus: 0.95, ~62% through (cars keep
+  0.30, ~88%).
+- PartId::GlassClear (lobbies, storefronts, enterable buildings' panes) 0.24 -> 0.75: ~70% through. Applied at load,
+  no lots tag bump.
+- RT_GLASS_REFLECT default 3 -> 2: 3 was chosen when the glass reflected only the sky.
+- **Underwater at night** (Glenn: "the screen turns bright white"): composite.frag lit the water with the day model's
+  sky colours, display values the night's pre-exposure turned white. Under the physical sky the renderer pushes the
+  light coming down into the water (the harmonics' E/pi up, plus the sun's or moon's beam) in underwaterColor.w; the
+  water's scatter and the Snell window take their brightness from it, the window keeping the sky's hue.
+
+## ADR-0384 — Cloud wisps, a cirrus layer, the grain blur in low light only
+
+**Context.** Glenn, 2026-11-08: "the clouds are very solid looking and lack any of the wispiness of real clouds".
+
+**Decision** (clouds.frag, behind `wisps`; RT_CLOUD_WISPS=0 for the old clouds, no cirrus):
+- The detail's lookup is swirled by a low-frequency warp: a ~90 m-celled read of the detail volume, standing in for
+  Nubis' curl texture. It is strongest at the cloud's base.
+- The erosion is wispy at the base and billowy above (the fBm inverted over the lowest tenth, as Nubis), applied as a
+  remap so a thin edge is eaten whole.
+- Past where the fine detail fades (3.5-14 km), the warp's coarse read erodes the far banks.
+- Phase: a second, sharp forward lobe (g 0.8, a tenth) for the silver lining.
+- **Cirrus**: a thin sheet at 9 km, not marched, over the open sky only. Broad veils from the base volume, stretched
+  along one sweep and faintly streaked, drifting at 2.5x the deck's wind, at most half opaque. `cirrus` (0..1) is
+  the cover.
+- The level's `environment.clouds` takes `wisps` and `cirrus`; the day/night panel has sliders for both.
+- clouds_resolve.frag: ADR-0379's 3x3 grain blur fades in with the camera's exposure (none at 8, EV100 ~11; all of it
+  from 64, EV100 ~8). By day it was taking edge detail with the grain.
+
+**Tried and dropped:**
+- A smoothstep over the density, to make the fringe translucent. It only blurred the clouds.
+- Fine fibres alone for the cirrus. They came out as regular scratches.
+
+**Measured (river_town, 400 m, 10:00 and 17:30, old against new):**
+- The near cumulus edges are a little more broken. The change is modest.
+- Exaggerated values (swirl 0.25, erosion 2.5x) changed the shape little and added grain.
+- The cirrus is the most visible change, at its best lit by a low sun.
+
+**Owed:** the deck's outlines come from the base noise's ~1.4 km puffs. Erosion cuts only a thin band at their rim,
+so real wispiness needs the base shape itself (a finer, more broken base, or a higher-resolution detail volume and a
+true curl texture).
+
+## ADR-0385 — Matte car interiors, glows in the rays' units, the cloud panel's dead sliders
+
+**Context.** Glenn, 2026-11-08: "car interiors should be not shiny -- seats, dashboard, etc."; "the nighttime
+reflections of other buildings still seems really bright"; "I've tried changing the noise scale, but I don't think
+the engine seems to save it".
+
+**Diagnosis.**
+- The kit's inside finishes that are body parts (`interior` door cards, `liner`, `dash`) went into the painted
+  shell. They wore the body's paint: metallic 0.5, roughness 0.4.
+- rt_reflect.comp added a hit's emission without the glows' scale (lights.lua emission_scale, 0.004 under the
+  physical sky; ADR-0369). Every lit window in a ray-traced reflection was ~250x the window itself; the scene pass
+  and the probe capture both scale it.
+- The volumetric panel's Coverage, Density and Noise scale were bound to the live params, which applyClouds rewrites
+  every frame from the knobs (the weather's while it runs) and the level's authored noise scale.
+
+**Decision.**
+- vehicles.lua `KIT_INSIDE` (interior, liner, dash, seat, carpet, steer): a part of those materials goes to the matte
+  cabin (roughness 0.9, no metal), in the drivable build (whole body and each panel) and the fleet's. The drivable's
+  glass takes the kind's `glass_opacity` too.
+- rt_reflect scales the hit's emission as the scene pass does.
+- The panel's Coverage and Density edit the knobs, greyed out while the weather runs, with a button to turn the
+  weather off. Noise scale edits the authored value the weather's scale multiplies, so it holds under the weather.
+  Edits stay session-only.
+
+## ADR-0386 — The weather map places the clouds (Nubis), cloud types as data
+
+**Context.** Glenn, 2026-11-08: "Clouds repeat too much and look dense in the sky ... What does a triple A game engine
+like RAGE or Decima do?" and "I would like to get us more in line with that Decima system". The weather map's
+coverage (ADR-0336) was a slice of the base noise. So the noise placed every cloud: each was a piece of the same
+5.7 km tile, as tall as the deck, and fair weather filled the sky. Plan: ~/.claude/plans/clouds-weather.md, part A.
+
+**Decision.**
+- **assets/scripts/clouds.lua** (CloudBook, sky/cloud_book.h; scripting/clouds_lua.cpp): the four types along the
+  axis, now each a kind of cloud. A type sets its base and top in metres, profile, density, erosion and anvil, a
+  cell's radius range and aspect, and how shallow its smallest cells are. It also sets the shape noise's scale and
+  the map's size. The level JSON's `types` override (no level used it) is gone.
+- **sky/cloud_map.h** bakes a map round the camera in the AIR (the world plus the drift; 80 km, 1024^2). Each type's
+  cells are scattered over its own grid by a hash of the square and the seed. A cell is a noise-warped soft
+  ellipse, its height growing with its size.
+  - The cells are a Poisson field: -ln(1 - coverage) footprints' worth per m^2, shared by the weather's type range.
+    So the share of the sky under cloud is the coverage asked (measured: 0.05 / 0.22 / 0.45 within a few points
+    on six seeds), and an overcast's stratus overlaps into a deck (0.84 at 0.85).
+  - Nothing tiles, and two bakes agree where they overlap (test_cloud_map).
+- **CloudMapSystem** (after DayNightSystem):
+  - It integrates the clouds' drift. The renderer used to, out of the engine's reach; RT_WIND_TIME still pins it.
+  - It copies the types onto the params and spans the deck over the weather's types.
+  - It rebakes the map on a worker when the camera drifts 8 km through the air or the weather moves, then hands
+    it over (Renderer::setCloudMap).
+  - Vulkan rewrites each frame's march set as that frame comes round. The old texture is retired four frames
+    later. (Fixed on the way: the march set's image array was 4 long with a fifth written past its end.)
+- **clouds.frag**, where the map is on:
+  - The footprint is the coverage, and the cell's type and own top set its height span.
+  - The height profile thins the noise before the coverage cut (Nubis), so a cell rounds into a dome. Cut first,
+    every cell stood as a flat-sided cylinder.
+  - The shape noise runs at shape_scale (3x), its lumps a cloud's.
+  - The fine step stays 40-120 m whatever the deck's span.
+- **Weather coverage is the share of the sky now:** fair 0.32 -> 0.22, overcast 0.80 -> 0.90.
+
+- **Domes, not boxes** (Glenn: "the clouds still look boxy"):
+  - In the march, the footprint narrows as the cell rises: up to 0.8 of it is cut by the top.
+  - The footprint's soft edge runs from a quarter of the radius out, so that narrowing curves the sides.
+  - Cumulus are full only to 30 % of their height.
+  - (The area share recalibrated to 0.41; up to 16 cells a square for an overcast.)
+- **The cirrus from the map** (its A channel): veils of value noise, stretched 4:1 along a sweep from the seed and
+  cut to the cirrus cover. They are faintly streaked by the base volume along that sweep and fade before the map's
+  edge. Nothing tiles.
+- **Fair** types 0.47..0.75 (mostly cumulus); stratocumulus radius 800-2000 m.
+- The grain blur (ADR-0384) starts from exposure 2: sunset's clouds were grainy.
+
+**Measured** (cloud lab, 11:00 and 17:20, against the old):
+- The sky reads as separate, rounded cumulus of many sizes over clear sky, with no repeat.
+- The clouds pass costs 0.7-2.5 ms (was 0.9-1.8). "above" is now inside the taller deck.
+- A bake takes 50-115 ms on a worker (half the cores), three times in a lab run. The lab's frame stalls are its
+  camera jumps (14 in the old run, 8 here).
+
+**Owed:**
+- A2: the weather presets as data.
+- Metal parity.
+
+## ADR-0387 — The clouds' shadow
+
+**Context.** The weather plan's part B (~/.claude/plans/clouds-weather.md): with the clouds placed by a map
+(ADR-0386), the physical sun can be shaded by them.
+
+**Decision.**
+- **lighting_common.glsl `cloudShadow`:** a point's line to the light (light 0: the sun, or the moon) is read
+  against the weather map where it crosses the deck's middle.
+  - A cloud's footprint there takes up to `shadow` of the light (clouds.lua, 0.85: a heart passes ~15 %), less for
+    a shallow or mild cell.
+  - It is soft by the footprint's own edge. There is none above the deck or past the map.
+  - It applies to the direct light only; a cloud's shadow is still daylight.
+- **Where:** mesh.frag (on top of the cascades and the mountains' horizon), the probes' relight, and the ray-traced
+  reflections' sun.
+- **Vulkan:** set 0 binding 18 is the weather map, rewritten per frame after its fence as the march's set is.
+  Globals cloudShadow/cloudShadow2 carry its square, the drift and the reading height. RT_CLOUD_SHADOW=0 turns it
+  off for the A/B.
+
+**Measured:** the lab's shadow debug view (5) shows soft cloud shadows across the island and the sea; the sea under
+the overhead cloud is in its shadow.
+
+**Owed:**
+- The sky's light under overcast: the deck's, not the clear sky's.
+- The exposure meter's ground reading under a cloud.
+
+## ADR-0388 — The weathers as data
+
+**Context.** The weather plan's A2. The four states' targets (clear, fair, overcast, storm) were a switch in
+weather_cycle.h, against the rule that a kind is data (#172).
+
+**Decision.**
+- assets/scripts/clouds.lua `weathers`: each state's coverage, density, noise scale, sun and ambient multipliers,
+  shadow softening, type range and wind. Every field is required (a state's numbers are its whole definition).
+- `weatherTargets(kind)` reads the cloud book (sky/cloud_book.cpp).
+- Without clouds.lua, every state is WeatherTargets' defaults, which are fair's (as lights.lua's plain kind; no C++
+  copy of the table).
+- Values as they were, except clear's coverage 0.03 -> 0.04 (the map's real share: a few puffs).
+- test_cloud_map reads them and checks the book in use is clouds.lua's; test_weather_cycle's ordering holds on the
+  data.
+
+## ADR-0389 — The clouds organised round eddies; one value noise
+
+**Context.** Glenn, seeing the weather map from above (the new `cloudmap <path>` command): "That looks too dense and
+doesn't look like a real weather system"; "I'd imagine there would be swirls and eddies in the wind that would guide
+the clouds"; "It sounds like you're adding new math which means we need to make sure it's not duplicated"; "Remove
+the duplicates".
+
+**Decision: the map's cells organised** (clouds.lua `organisation`, `size_skew`):
+- A slow moisture field scales each grid square's cells. Its mean is one over a fixed 200 km, so a bake never
+  depends on its window. It is stretched along the sweep into streets and read through two scales of CURL NOISE (a
+  divergence-free swirl, ~10-30 km eddies). So the cells bunch into fields and lines that wrap round eddies, with
+  wide clear stretches between. The cirrus wraps round the same eddies.
+  - The field's strength gives way as the cover passes 60 %: an overcast is even.
+  - Where it bunches the cells, they overlap. So the footprints' worth per m^2 is solved over the field's samples
+    (bisection), and the asked cover is still the sky's (tests: 0.22 -> 0.19-0.23).
+- A cell's radius is drawn skewed to the small (the roll^2.2): many small cumulus, few big.
+- It is a stand-in. The wind field (part C) will write the field and its eddies.
+- **Cost:** the bake runs on CloudMapSystem's own worker, single-threaded, not on the shared pool, whose rows are the
+  frame's: 2-3 s for the 80 km map, a few times a session. Each square's cell count is worked out once (it was per
+  texel: 8 s).
+
+**Decision: one value noise** (it had been written seven times):
+- procgen/noise.h `latticeValueNoise` (2D) and `latticeValueNoise3` (3D) are the one interpolation, over a lattice
+  passed in. `valueNoise2` is the canonical one over hash.h's `hashCell`. `Noise::curl2` is the shared curl.
+- The wind's gusts use valueNoise2 (runtime only: the gust patches shift).
+- The tree textures, the tree gnarl, the lanes' recipe terrain, the procedural textures, the city planner and the
+  street planting keep their lattices bit for bit, as FROZEN hashes in hash.h, because what they lay is baked. Retire
+  each at its bake's next tag bump.
+- Proved against the old code over 200 000 points:
+  - city plan, planting, texture tiles, gnarl: identical;
+  - lanes terrain within 3e-16 and tree textures within 1.2e-7 (their old interpolation's operation order).
+- cloud_map.cpp's own hash, value noise and smoothstep are gone (hash.h, Noise, rt_math's smoothstep).
+- scene.cpp's surface noise stays apart: it is the CPU mirror of common.metal's, bit-exact to the GPU.
+
+**Also:** `cloudmap <path.png>`, the weather map from above: types tinted, cirrus faint blue, the camera red.
+
+## ADR-0390 — The weather simulated over the land and the sea
+
+**Context.** Glenn, 2026-11-08: "It feels like there are massive cloud structures that noise can't really create so we
+should simulate something more realistic." NASA's afternoon views of real islands (Puerto Rico, Corsica, Hawaii,
+the Canaries; CREDITS.md) show the organiser is the LAND:
+- cumulus over sunlit land and high ground (Puerto Rico ~1/3 of its land, 1-3 km cells), the sea round it ~3 %;
+- a summit above the trade inversion clear;
+- plumes and wakes downwind.
+The weather plan's part C.
+
+**Decision.**
+- **sky/weather_sim.h:** a 2D grid over the level and its sea (at least 64 km, 256^2: 250 m cells). Its fields:
+  - the wind: the prevailing one, carried by itself (Stam's stable fluids), drawn in over heated land by a pressure
+    projection (a sea breeze's convergence), walled by ground above the inversion;
+  - the lift: convergence, wind up a slope (down it, sinking), sunlit land's heating (more on high ground), the
+    weather's large-scale lift; the grid's outer ring, the free air, takes none from the first two;
+  - the humidity: the sea's, carried, drier over land;
+  - the cloud: condensing where the lifted air saturates, none above the inversion, carried downwind (it forms in
+    10 min and goes in 25), clearing by night.
+  Every constant is a named physical scale.
+- **WeatherSimSystem** steps it on a worker of its own, in the weather's time (the day's clock), from the world's
+  Wind and the new WeatherNow (DayNightSystem publishes it beside the Wind). It hands each step over as a
+  WeatherField. It settles four hours first (5 s on a worker).
+- **The weathers** (clouds.lua) gain the simulation's air: humidity, inversion, convection, lift.
+- **The weather map** (ADR-0386) takes its cloud from the field when there is one:
+  - each square's cells come from the simulated cover at the ground under the air (the air minus the drift), so the
+    cells drift through a field the land holds;
+  - their types lean to the weather range's severe end where the convection is;
+  - where the simulation's sky is closed, one continuous mass, the structures no scatter of cells makes;
+  - a new field rebakes the map at most every 10 s (0.7 s a bake);
+  - the coverage knob and the moisture field (ADR-0389) stand aside.
+- **terrain_horizon.h `rasterizeTerrain`:** the level's terrain on a grid, shared by the mountains' shadow
+  (DayNightSystem) and the simulation.
+
+**Measured:**
+- test_weather_sim, a made island in a made sea, fair afternoon: the land ~0.53 cover, the sea upwind 0, the sea
+  downwind 0.12, the 3000 m summit (inversion 2000 m) 0. The land clears by night. An overcast closes the sea
+  (0.75). The baked map follows (island > 0.15, sea < 0.03).
+- island_8_nature, fair, 14:00: cumulus over the island and a plume of them off it downwind, the open sea clear; from
+  600 m, towering cumulus over the mountains and a clear sky over the sea upwind.
+
+**Owed:**
+- Tuning the land's cover toward Puerto Rico's third.
+- The local wind for trees, grass and particles (the field's wind).
+- Rain from the deep cells (part D).
+- The cirrus's hooks read a little drawn.
+- Metal parity.

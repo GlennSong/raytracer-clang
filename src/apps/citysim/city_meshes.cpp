@@ -68,14 +68,7 @@ engine::RenderMesh buildPersonMesh(Real swing, int outfit, Real headScale) {
 
 engine::RenderMesh ringXZ(Real innerFrac, int segs) {
     engine::RenderMesh m;
-    const Vec3 white(1, 1, 1);
-    for (int i = 0; i < segs; ++i) {
-        Real t0 = (Real(i) / segs) * 6.28318530718;
-        Real t1 = (Real(i + 1) / segs) * 6.28318530718;
-        Vec3 o0(std::cos(t0), 0, std::sin(t0)), o1(std::cos(t1), 0, std::sin(t1));
-        Vec3 i0 = o0 * innerFrac, i1 = o1 * innerFrac;
-        addQuadXZ(m, o0, o1, i1, i0);
-    }
+    MeshBuilder::emitAnnulus(m, engine::MeshFrame::level(0), innerFrac, 1.0, Vec3(1, 1, 1), segs);
     return m;
 }
 
@@ -104,13 +97,9 @@ engine::RenderMesh wedgeXZ(Real halfAngleRad, int segs) {
         Vec3 off = Vec3(dir.z, 0, -dir.x) * (band * 0.5);   // in-plane perpendicular
         addQuadXZ(m, Vec3(0, 0, 0) - off, off, dir + off, dir - off);
     }
-    // The arc between them: a ring band clipped to the wedge's angular span.
-    for (int i = 0; i < segs; ++i) {
-        Real t0 = -halfAngleRad + (2 * halfAngleRad) * i / segs;
-        Real t1 = -halfAngleRad + (2 * halfAngleRad) * (i + 1) / segs;
-        Vec3 o0(std::sin(t0), 0, std::cos(t0)), o1(std::sin(t1), 0, std::cos(t1));
-        addQuadXZ(m, o0, o1, o1 * (1 - band), o0 * (1 - band));
-    }
+    // The arc between them: a ring band clipped to the wedge's angular span (angles from +Z toward +X).
+    MeshBuilder::emitAnnulus(m, engine::MeshFrame{Vec3(0, 0, 0), Vec3(0, 0, 1), Vec3(0, 1, 0), Vec3(1, 0, 0)}, 1 - band, 1.0,
+                             Vec3(1, 1, 1), segs, -halfAngleRad, halfAngleRad);
     return m;
 }
 

@@ -1,6 +1,7 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "sky_common.glsl"
+#include "gbuffer.glsl"
 // Phase 2 forward fragment stage (ADR-0057). Faithful port of the Metal
 // evaluateLighting + the procedural surface library (shaders/metal/lighting.metal
 // + common.metal): multi-light Cook-Torrance (GGX + height-correlated Smith,
@@ -10,64 +11,7 @@
 // texture maps (Phase 2b), tone mapping (Phase 5). Output is scene-linear; the
 // sRGB swapchain encodes on store.
 
-const float PI = 3.14159265359;
-
-struct Light {
-    vec4 positionIntensity;   // xyz position (point/spot), w intensity
-    vec4 directionInner;      // xyz direction (dir/spot), w innerCosAngle
-    vec4 colorOuter;          // rgb color, w outerCosAngle
-    vec4 typeRange;           // x type (0 point,1 directional,2 spot), y range
-};
-
-layout(set = 0, binding = 0) uniform Globals {
-    mat4  viewProjection;
-    mat4  view;
-    mat4  invViewProjection;
-    mat4  cascadeVP[4];
-    vec4  cameraPosition;
-    vec4  ambient;            // rgb = ambient tint * multiplier (IBL strength), w = facade glass reflectance scale
-    vec4  cascadeSplit;       // far view-space depth of cascades 0..3
-    ivec4 counts;             // x lightCount, y cascadeCount, z envMode, w debugView
-    vec4  shadowParams;       // x normalBias, y pcfRadius, z mapSize, w strength
-    vec4  skySunDir;          // xyz dir, w disc intensity
-    vec4  skySunColor;
-    vec4  skyZenith;
-    vec4  skyHorizon;
-    vec4  skyGround;
-    vec4  skyCloud;
-    Light lights[32];
-    vec4  fog;                // rgb fog color, w density (0 = off)
-    vec4  shadowTint;         // rgb artistic shadow tint, w ambientStrength
-    vec4  wind1;              // xyz wind dir, w time (used by mesh.vert)
-    vec4  wind2;              // x frequency, y height, z amplitude
-    vec4  skyMoonDir;         // (sky.frag's members, declared to reach the tail)
-    vec4  skyMoonSun;
-    vec4  skyCelX;
-    vec4  skyCelY;
-    vec4  skyCelZ;
-    vec4  skyStars;
-    vec4  skyCity;
-    vec4  terrainHorizon;     // xy world origin, z 1/extent, w enabled
-    vec4  terrainHorizon2;    // x encodeLo, y encodeHi - encodeLo, z 1: no impostor self-shadow (RT_IMPOSTOR_SELF_SHADOW=0),
-                              // w 1: grass bent to the sky, not its ground (RT_GRASS_GROUND=0)
-    vec4  viewerBoxA;         // the viewer's enclosure (SceneLighting::viewerBox*): xyz centre, w half along u (0: none)
-    vec4  viewerBoxB;         // xy its axis u (x, z), z half across it, w half up
-    vec4  glassMode;          // x 1: glass as a filter (0: the old glass, RT_GLASS=old; 2: none, RT_GLASS=none),
-                              // y the ceiling over the viewer (0: none)
-    vec4  terrainNormal;      // the terrain normal map (binding 5, ADR-0205): xy world origin, z 1/extent, w enabled
-    vec4  terrainNormal2;     // x the camera distance it blends in from, y 1/(the blend's length),
-                              // z 1: no surface relief (RT_TERRAIN_DETAIL=0, ADR-0207)
-    vec4  terrainSurface;     // the cover + macro maps (bindings 6, 7, ADR-0208): xy world origin, z 1/extent, w enabled
-    vec4  terrainSurface2;    // x the camera distance the cover map blends in from, y 1/(the blend's length)
-} g;
-
-layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
-layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
-layout(set = 0, binding = 3) uniform sampler2D brdfLut;       // split-sum BRDF LUT
-layout(set = 0, binding = 4) uniform sampler2D terrainHorizonMap;   // mountain shadows
-layout(set = 0, binding = 5) uniform sampler2D terrainNormalMap;    // the ground's slope per texel (ADR-0205)
-layout(set = 0, binding = 6) uniform sampler2D terrainCoverMap;     // its cover weights per texel (ADR-0208)
-layout(set = 0, binding = 7) uniform sampler2D terrainMacroMap;     // its convexity, wetness, rock tone, hardness (ADR-0208, -0209)
+#include "globals.glsl"
 
 const float ENV_PI = 3.14159265359;
 vec3 sampleEquirect(vec3 dir) {
@@ -103,33 +47,16 @@ layout(location = 7) flat in vec4 inImpA;   // FLAG_IMPOSTOR_VIEWS (bit 24): the
 layout(location = 8) flat in vec4 inImpB;   // ...its window half extents Rb, Hh and its block's corner in the atlas
 
 layout(location = 0) out vec4 outColor;
-layout(location = 1) out vec4 outNormal;   // world normal *0.5+0.5 (SSAO G-buffer)
+#ifdef PROBE_CAPTURE
+// A REFLECTION PROBE'S CAPTURE (ADR-0372; mesh_probe.frag.spv, this file with PROBE_CAPTURE): what the surface IS, not
+// how it is lit -- albedo and metallic (location 0), the world normal and roughness (1, as the scene pass writes it),
+// emission and the distance from the probe (2) -- so the probe can be relit as the day and the lamps change
+layout(location = 2) out vec4 outEmit;
+#endif
+layout(location = 1) out vec4 outNormal;   // the G-buffer: gbuffer.glsl
 
 // ---- BRDF (ported from lighting.metal) ------------------------------------
-float distributionGGX(float NdotH, float a2) {
-    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
-    return a2 / max(PI * d * d, 1e-6);
-}
-float visibilitySmithGGX(float NdotV, float NdotL, float a2) {
-    float gv = NdotL * sqrt(NdotV * NdotV * (1.0 - a2) + a2);
-    float gl = NdotV * sqrt(NdotL * NdotL * (1.0 - a2) + a2);
-    return 0.5 / max(gv + gl, 1e-5);
-}
-vec3 fresnelSchlickVec(float cosTheta, vec3 f0) {
-    return f0 + (1.0 - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}
-float distanceAttenuation(float dist, float range) {
-    float ratio2 = (dist * dist) / max(range * range, 1e-4);
-    float window = clamp(1.0 - ratio2 * ratio2, 0.0, 1.0);
-    return window * window / max(dist * dist, 1e-4);
-}
-
-// Roughness-aware Fresnel for the ambient/IBL term.
-vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
-    vec3 r = max(vec3(1.0 - roughness), F0);
-    return F0 + (r - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}
-
+#include "lighting_common.glsl"
 // Procedural-sky environment (no clouds — they are never baked into IBL),
 // ported from environment.metal sampleEnvironment. Used as an analytic stand-in
 // for Metal's baked irradiance/prefiltered cubes; Vulkan bakes no cubemap (an HDR
@@ -259,9 +186,24 @@ vec3 surfCorrugated(vec3 base, float u, float v) {
     return base * shade * (1.0 - rmask) + vec3(0.40, 0.22, 0.12) * rmask;
 }
 vec3 surfAsphalt(vec3 base, float u, float v) {
+    // ASPHALT (ADR-0378; Glenn: "the roads probably also need some kind of asphalt texture"): the binder's dark field
+    // with its broad blotches; the AGGREGATE showing through it, light stone flecks a few centimetres across; a REPAIR
+    // here and there, a fresher black with a hard edge; and thin dark CRACK seams. The fine terms fade with distance
+    // (fwidth: what a pixel covers) so far road settles to its average instead of shimmering.
+    float px = max(fwidth(u), fwidth(v));
+    float fine = clamp(1.0 - px * 25.0, 0.0, 1.0);     // the flecks: gone by ~4 cm a pixel
+    float mid = clamp(1.0 - px * 4.0, 0.0, 1.0);       // the cracks: gone by ~25 cm a pixel
     float spk = vnoise2(u * 30.0, v * 30.0), blotch = fbm2(u * 0.4, v * 0.4);
-    float shade = clamp(0.86 + 0.20 * (spk - 0.5) + 0.10 * (blotch - 0.5), 0.6, 1.02);
-    return base * shade;
+    float shade = 0.86 + 0.20 * (spk - 0.5) * fine + 0.10 * (blotch - 0.5);
+    float stones = smoothstep(0.70, 0.88, vnoise2(u * 55.0 + 3.1, v * 55.0 - 1.7)) * fine;
+    shade *= 1.0 + 1.6 * stones;
+    float patchN = fbm2(u * 0.12 + 7.3, v * 0.12 - 2.9);
+    shade *= mix(1.0, 0.80, smoothstep(0.66, 0.67, patchN));
+    float seam = abs(fbm2(u * 0.7 + 1.1, v * 0.7 + 4.2) - 0.5);
+    float crack = (1.0 - smoothstep(0.0, 0.010 + px * 0.5, seam)) * smoothstep(0.35, 0.65, fbm2(u * 0.2 - 3.0, v * 0.2 + 1.0));
+    shade *= 1.0 - 0.45 * crack * mid;
+    // (x1.6: the bundle's 0.085 is fresh-laid black; a city's roads are a weathered grey, ~0.13)
+    return base * clamp(shade * 1.6, 0.8, 3.0);
 }
 vec3 surfPavement(vec3 base, float u, float v) {
     const float slab = 1.2;
@@ -531,6 +473,7 @@ float gRockTone = 0.5;
 // The rock and snow shares terrainLayers settled on, for the relief below (ADR-0120); and the blended layers' HEIGHT
 // in metres (each layer's alpha by its relief), the surface relief's bump (ADR-0207)
 float gTerrainRock = 0.0, gTerrainSnow = 0.0, gTerrainH = 0.0;
+float gNormalVariance = 0.0;   // a normal map's averaged-away bumps (Toksvig, ADR-0377)
 // each layer's relief, metres for its alpha 0..1: a grass sward's clumps, a pebble, a ripple, a slab's crack
 // (rock none: its texture bump outlined the sub-layers' block edges and the hex tiling's blend seams into a net of
 // stair-stepped lines over every face -- Glenn, 2026-10-20; the rock's shape is the ground's own, ADR-0213)
@@ -675,7 +618,7 @@ void surfaceReliefRoad(vec3 worldPos, inout vec3 normal, inout float rough) {
              + 0.3 * vnoise2(rx * 37.0, rz * 37.0 + 2.3) - b0;
     normal = normalize(normal + vec3(-bx, 0.0, -bz) * 0.35);
     float spk = vnoise2(rx * 23.0, rz * 23.0);
-    rough = clamp(rough + (spk - 0.5) * 0.25, 0.55, 1.0);
+    rough = clamp(rough + (spk - 0.5) * 0.25, 0.8, 1.0);   // (dry asphalt stays rough: never a mirror fleck)
 }
 
 // Natural ground micro-relief: slope-scaled normal perturbation (steep rock
@@ -774,140 +717,89 @@ void surfaceReliefWater(vec3 worldPos, vec2 meshUV, float time, vec3 cameraPos,
 // dispatcher in surfaces.metal.
 void applySurfaceRelief(uint id, vec3 worldPos, vec2 meshUV, float time,
                         vec3 cameraPos, inout vec3 normal, inout float rough) {
-    if (id == 11u)      surfaceReliefRoad(worldPos, normal, rough);
+    if (id == 11u || id == 7u) surfaceReliefRoad(worldPos, normal, rough);   // (asphalt too: ADR-0378)
     else if (id == 13u) surfaceReliefTerrain(worldPos, normal, rough);
     else if (id == 12u) surfaceReliefWater(worldPos, meshUV, time, cameraPos,
                                            normal, rough);
 }
 
-// ---- cascaded shadows (ported from shadows.metal) --------------------------
-// Vulkan: no uv y-flip (the shadow VP is unflipped, so write and read use the
-// same NDC->uv mapping). Forward-Z light depth in [0,1].
-float sampleCascade(int slice, vec3 worldPos, vec3 N) {
-    vec3 biased = worldPos + N * g.shadowParams.x;          // normalBias
-    vec4 clip = g.cascadeVP[slice] * vec4(biased, 1.0);
-    vec3 ndc = clip.xyz / clip.w;
-    vec2 uv = ndc.xy * 0.5 + 0.5;
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
-    if (ndc.z < 0.0 || ndc.z > 1.0) return 1.0;
-    float texel = 1.0 / g.shadowParams.z;                   // 1 / mapSize
-    float pcf = g.shadowParams.y;                           // pcfRadius
-    float s = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x) {
-            vec2 off = vec2(float(x), float(y)) * texel * pcf;
-            s += texture(shadowMap, vec4(uv + off, float(slice), ndc.z));
-        }
-    return s / 9.0;
+// This pixel's froxel (clustered lights, ADR-0361): where its list of lights starts in clusterIndices, and how many
+void clusterCell(vec3 worldPos, out uint off, out uint n) {
+    float depth = -(g.view * vec4(worldPos, 1.0)).z;
+    int tx = clamp(int(gl_FragCoord.x / g.clusterDepth.z * float(g.clusterGrid.x)), 0, g.clusterGrid.x - 1);
+    int ty = clamp(g.clusterGrid.y - 1 - int(gl_FragCoord.y / g.clusterDepth.w * float(g.clusterGrid.y)), 0, g.clusterGrid.y - 1);
+    int sl = depth <= g.clusterDepth.x ? 0
+           : clamp(int(log(depth / g.clusterDepth.x) * g.clusterDepth.y * float(g.clusterGrid.z)), 0, g.clusterGrid.z - 1);
+    uint oc = clusterCells[(sl * g.clusterGrid.y + ty) * g.clusterGrid.x + tx];
+    off = oc & 0xFFFFFFu;
+    n = oc >> 24;
 }
 
-// TERRAIN HORIZON: mountain shadows at landscape scale (see
-// engine/procgen/terrain_horizon.h). sin(horizon elevation) toward the
-// slot-0 light over the world square; the light below it is behind the
-// ridge. A soft edge of ~1.4 deg so the shadow line does not shimmer as
-// the sun moves; outside the map, nothing is known and nothing shadows.
-float terrainShadow(vec3 worldPos, vec3 L) {
-    if (g.terrainHorizon.w < 0.5) return 1.0;
-    vec2 uv = (worldPos.xz - g.terrainHorizon.xy) * g.terrainHorizon.z;
-    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 1.0;
-    float h = g.terrainHorizon2.x + g.terrainHorizon2.y * texture(terrainHorizonMap, uv).r;
-    return smoothstep(h - 0.012, h + 0.012, L.y);
-}
-
-// THE TERRAIN NORMAL MAP (ADR-0205, engine/procgen/terrain_normal_map.h): beyond the distance where the CDLOD mesh
-// grows coarser than a texel, the ground lights by the baked slope of what it covers rather than its vertices' (16-64
-// m apart on a far tile) -- the erosion's gullies and spurs on the far mountains. Blended in over one level's range,
-// so no tile edge shows; outside the map's square, the vertex normal.
-vec3 terrainMapNormal(vec3 worldPos, vec3 vertexN) {
-    if (g.terrainNormal.w < 0.5) return vertexN;
-    const vec2 uv = (worldPos.xz - g.terrainNormal.xy) * g.terrainNormal.z;
-    const vec2 t = texture(terrainNormalMap, uv).rg * 2.0 - 1.0;   // (uniform flow: a draw is terrain or not)
-    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return vertexN;
-    const vec3 mapN = vec3(t.x, sqrt(max(1.0 - dot(t, t), 0.0)), t.y);
-    const float w = clamp((distance(worldPos, g.cameraPosition.xyz) - g.terrainNormal2.x) * g.terrainNormal2.y, 0.0, 1.0);
-    return normalize(mix(vertexN, mapN, w));
-}
-
-float computeShadow(vec3 worldPos, vec3 N, float viewDepth) {
-    int count = g.counts.y;
-    if (count <= 0) return 1.0;
-    int c = count - 1;
-    for (int i = 0; i < count; ++i)
-        if (viewDepth < g.cascadeSplit[i]) { c = i; break; }
-
-    float v = sampleCascade(c, worldPos, N);
-    if (c + 1 < count) {
-        float splitFar = g.cascadeSplit[c];
-        float splitNear = (c == 0) ? 0.0 : g.cascadeSplit[c - 1];
-        float bandStart = mix(splitFar, splitNear, 0.15);
-        if (viewDepth > bandStart) {
-            float t = clamp((viewDepth - bandStart) / (splitFar - bandStart), 0.0, 1.0);
-            v = mix(v, sampleCascade(c + 1, worldPos, N), t);
-        }
-    } else {
-        float farSplit = g.cascadeSplit[count - 1];
-        float fadeStart = farSplit * 0.8;
-        if (viewDepth > fadeStart) {
-            float t = clamp((viewDepth - fadeStart) / (farSplit - fadeStart), 0.0, 1.0);
-            v = mix(v, 1.0, t);
-        }
-    }
-    return v;
-}
-
-// ---- main ------------------------------------------------------------------
+// (`indoor`: a room's surface, which takes its lights' bounce too -- roomBounce)
 vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
-                      float metallic, float roughness, vec3 f0, vec3 sunShadow) {
+                      float metallic, float roughness, vec3 f0, vec3 sunShadow, bool indoor) {
     vec3 directLight = vec3(0.0);
+    vec3 bounce = vec3(0.0);
     float a = max(roughness * roughness, 0.002);
     float a2 = a * a;
     float NdotV = max(dot(N, V), 1e-4);
 
     int count = min(g.counts.x, 32);
-    for (int i = 0; i < count; ++i) {
-        Light light = g.lights[i];
-        int type = int(light.typeRange.x);
-        vec3 L;
-        float attenuation;
-        if (type == 1) {                       // directional
-            L = normalize(light.directionInner.xyz);
-            attenuation = light.positionIntensity.w;
-        } else {
-            L = light.positionIntensity.xyz - worldPos;
-            float dist = length(L);
-            L = normalize(L);
-            attenuation = light.positionIntensity.w * distanceAttenuation(dist, light.typeRange.y);
-            if (type == 2) {                   // spot
-                float theta = dot(-L, normalize(light.directionInner.xyz));
-                attenuation *= smoothstep(light.colorOuter.w, light.directionInner.w, theta);
-            }
+    if (g.clusterGrid.w != 0) {
+        // CLUSTERED: the sun (and the moon) from the 32, every other light from this pixel's froxel
+        for (int i = 0; i < count; ++i)
+            if (int(g.lights[i].typeRange.x) == 1)
+                directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+        uint off, n;
+        clusterCell(worldPos, off, n);
+        for (uint k = 0u; k < n; ++k) {
+            Light light = clusterLights[clusterIndices[off + k]];
+            directLight += shadeLight(light, worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+            if (indoor) bounce += roomBounce(light, worldPos);
         }
-        float NdotL = max(dot(N, L), 0.0);
-        if (NdotL <= 0.0 || attenuation <= 0.0) continue;
-
-        vec3 H = normalize(L + V);
-        float NdotH = max(dot(N, H), 0.0);
-        float VdotH = max(dot(V, H), 0.0);
-        float D = distributionGGX(NdotH, a2);
-        float Vis = visibilitySmithGGX(NdotV, NdotL, a2);
-        vec3 F = fresnelSchlickVec(VdotH, f0);
-        vec3 specular = D * Vis * F;
-        vec3 diffuse = (1.0 - F) * (1.0 - metallic) * albedo / PI;
-        vec3 sh = (type == 1) ? sunShadow : vec3(1.0);   // only the sun casts shadows
-        directLight += (diffuse + specular) * light.colorOuter.rgb * (attenuation * NdotL) * sh;
+        return directLight + bounce * albedo * (1.0 - metallic) / PI;
     }
-    return directLight;
+    for (int i = 0; i < count; ++i) {
+        directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+        if (indoor) bounce += roomBounce(g.lights[i], worldPos);
+    }
+    return directLight + bounce * albedo * (1.0 - metallic) / PI;
 }
 
 // THE ROOM A WINDOW REFLECTS (the viewer's own glass, at night a dark mirror of the lit room): the light the
 // point lights near it throw (a floor's ceiling panels, staged as interiorPoints), as the radiance of the room's
 // surfaces they light -- irradiance times a room's average reflectance (0.6) over pi, half of it facing the glass.
+// (is p inside the viewer's box: the building they stand in, the cabin they ride; SceneLighting::viewerBox)
+bool inViewerBox(vec3 p) {
+    if (g.viewerBoxA.w <= 0.0) return false;
+    vec3 d = p - g.viewerBoxA.xyz;
+    vec2 u = g.viewerBoxB.xy;
+    return abs(dot(d.xz, u)) <= g.viewerBoxA.w && abs(dot(d.xz, vec2(-u.y, u.x))) <= g.viewerBoxB.z &&
+           abs(d.y) <= g.viewerBoxB.w;
+}
+
 vec3 roomRadiance(vec3 worldPos) {
+    // (the lights in the viewer's own box only -- a street lamp past a bus window is not the saloon; and from the
+    // pixel's cluster when the lights are clustered, where the 32 hold only the sun -- Glenn, 2026-11-08: "the bus
+    // windows should probably reflect the interior")
     vec3 e = vec3(0.0);
+    if (g.clusterGrid.w != 0) {
+        uint off, n;
+        clusterCell(worldPos, off, n);
+        for (uint k = 0u; k < n; ++k) {
+            Light light = clusterLights[clusterIndices[off + k]];
+            const int lt = int(light.typeRange.x);
+            if ((lt != 0 && lt != 3) || !inViewerBox(light.positionIntensity.xyz)) continue;
+            float dist = length(light.positionIntensity.xyz - worldPos);
+            e += light.colorOuter.rgb * light.positionIntensity.w * distanceAttenuation(dist, light.typeRange.y);
+        }
+        return e * (0.6 / PI) * 0.5;
+    }
     int count = min(g.counts.x, 32);
     for (int i = 0; i < count; ++i) {
         Light light = g.lights[i];
-        if (int(light.typeRange.x) != 0) continue;   // point lights only (the sun and spots are not the room)
+        const int lt = int(light.typeRange.x);
+        if ((lt != 0 && lt != 3) || !inViewerBox(light.positionIntensity.xyz)) continue;   // point and room lights only
         float dist = length(light.positionIntensity.xyz - worldPos);
         e += light.colorOuter.rgb * light.positionIntensity.w * distanceAttenuation(dist, light.typeRange.y);
     }
@@ -1272,6 +1164,13 @@ void main() {
             float slat = fract(inTexcoord.y * 12.0);
             roomLight *= 0.30 + 0.70 * smoothstep(0.30, 0.40, slat);
         }
+        // EACH ROOM ITS OWN LIGHT (ADR-0378; Glenn: the towers' lit windows "bright white and too harsh"): a tower at
+        // night is not every room at full -- about a fifth show only a desk lamp's warm pool, half are part-lit, a
+        // third full. And the room's tint counts twice, so a warm room and a fluorescent one keep their colour through
+        // the tone curve instead of all reading as the same white.
+        float rnd3 = fract(sin(dot(cellv, vec3(71.113, 23.917, 5.331))) * 15731.743);
+        float level = rnd3 < 0.18 ? 0.15 : rnd3 < 0.70 ? mix(0.45, 0.8, (rnd3 - 0.18) / 0.52) : 1.0;
+        roomLight *= level * (rnd3 < 0.18 ? vec3(1.0, 0.62, 0.32) : paneTint);
     }
     emission *= roomLight;
 
@@ -1317,7 +1216,11 @@ void main() {
     }
     if ((texFlags & 2u) != 0u) {
         vec2 mr = texture(metallicRoughnessMap, inTexcoord).gb;
-        roughness = clamp(roughness * mr.x, 0.04, 1.0);
+        // an INDOOR finish (polished tile, marble, a wood floor: FLAG_INDOOR) takes the bake's roughness variation at
+        // a quarter: the outdoor bakes' pores dropped scattered pixels of a 0.35 tile to ~0.1, each a mirror for a
+        // ceiling lamp -- the glitter Glenn saw on office floors at night (ADR-0377)
+        const bool indoorFinish = (pc.surfaceFlags.y & (1u << 28)) != 0u;
+        roughness = clamp(roughness * mix(1.0, mr.x, indoorFinish ? 0.25 : 1.0), 0.04, 1.0);
         metallic = clamp(metallic * mr.y, 0.0, 1.0);
     }
     if ((texFlags & 8u) != 0u) ao = texture(aoMap, inTexcoord).r;
@@ -1443,6 +1346,13 @@ void main() {
         vec3 T = normalize(inWorldTangent - N * dot(N, inWorldTangent));
         vec3 B = cross(N, T);
         vec3 tsN = texture(normalMap, inTexcoord).xyz * 2.0 - 1.0;
+        // an INDOOR finish is polished: the outdoor bake's relief at a twelfth (its bumps broke every ceiling lamp's
+        // highlight into specks on an office floor; ADR-0377)
+        if ((pc.surfaceFlags.y & (1u << 28)) != 0u) tsN = vec3(tsN.xy * 0.08, tsN.z);
+        // TOKSVIG (ADR-0377): the map's mips average its bumps, and an averaged normal is SHORT -- the bumps the pixel
+        // covers. That shortness is the spread specular anti-aliasing widens the lobe by (below)
+        float len = clamp(length(tsN), 1e-3, 1.0);
+        gNormalVariance = (1.0 - len) / len;
         N = normalize(T * tsN.x + B * tsN.y + N * tsN.z);
         if (impostorCard) {
             if (cardBack) N -= 2.0 * dot(N, cardN) * cardN;   // the crown from behind: sides still out, top still up
@@ -1485,15 +1395,27 @@ void main() {
     applySurfaceRelief(pc.surfaceFlags.x, inWorldPos, inTexcoord, g.wind1.w,
                        g.cameraPosition.xyz, N, roughness);
     if (pc.surfaceFlags.x == 12u) roughness = mix(roughness, 0.6, gSeaFoam);
+    // SPECULAR ANTI-ALIASING (Kaplanyan & Hoffman, "Stable Specular Highlights", 2016; ADR-0377): a bumpy surface's
+    // normal turns within one pixel, so a narrow highlight lands on this pixel and misses the next -- the glitter
+    // Glenn saw on office floors under their ceiling lamps at night. The normal's spread across the pixel widens the
+    // lobe to what the pixel covers. A flat face (glass, a wall) has no spread and keeps its roughness.
+    {
+        vec3 dndx = dFdx(N), dndy = dFdy(N);
+        float variance = 0.25 * (dot(dndx, dndx) + dot(dndy, dndy));
+        float kernel = min(2.0 * variance + gNormalVariance, 0.25);
+        float a = roughness * roughness;
+        roughness = clamp(sqrt(sqrt(a * a + kernel)), roughness, 1.0);
+    }
 
     vec3 V = normalize(g.cameraPosition.xyz - inWorldPos);
     vec3 f0 = mix(vec3(0.04), albedo, metallic);
     // FACADE GLASS REFLECTS LIKE COATED CURTAIN-WALL GLASS (Glenn, 2026-10-16: the towers read dark and "a little
     // more matte rather than shiny"; he chose the 3x look from an A/B). The glass tints (curtainGlassColour,
     // glassGrey) are reflectances of 3-12% for the default pane; real office glass is 15-40%. Scaled here, not in
-    // the baked tints, so it rolls back without regrowing a city: RT_GLASS_REFLECT (default 3, 1 = the old glass)
-    // rides g.ambient.w. Only PartId::Glass/GlassLit are metallic 0.9 at roughness 0.08 (shape_grammar
-    // materialFor); car, train, water and interior glass are not metallic.
+    // the baked tints, so it rolls back without regrowing a city: RT_GLASS_REFLECT rides g.ambient.w (default 2 since
+    // the probes and rays put the sharp street in it, ADR-0383; 1 = the old glass). Only PartId::Glass/GlassLit are
+    // metallic 0.9 at roughness 0.08 (shape_grammar materialFor); car, train, water and interior glass are not
+    // metallic.
     if (metallic > 0.85 && roughness < 0.1) f0 = clamp(f0 * g.ambient.w, 0.0, 0.9);
 
     // Sun shadow (cascaded). viewDepth is the positive view-space depth; camera
@@ -1510,15 +1432,18 @@ void main() {
     if (impViews && g.counts.x > 0 && g.terrainHorizon2.z < 0.5)   // (a far tree's own crown: its sun-side views, above)
         sunVis *= impostorSelfShadow(impFront, normalize(g.lights[0].directionInner.xyz), impLod);
     float strength = g.shadowParams.w;
-    float sunShadow = mix(1.0, sunVis, strength);   // scalar form for the shadow debug view (5)
+    // ...and the clouds' (ADR-0387): on the sun's light only, not the sky's -- a cloud's shadow is daylight still
+    float cloudVis = g.counts.x > 0 ? cloudShadow(inWorldPos, normalize(g.lights[0].directionInner.xyz)) : 1.0;
+    float sunShadow = mix(1.0, sunVis, strength) * cloudVis;   // scalar form for the shadow debug view (5)
     // Artistic shadow tint (ADR-0017): occluded direct light + ambient lerp toward
     // the tint; ambientStrength (shadowTint.w) controls how much the same shadow
     // darkens IBL (so a bright sky doesn't fill shadows back in). Tint 0 = plain
     // darkening, identical to the untinted scalar.
-    vec3 directShadow  = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * strength);
+    vec3 directShadow  = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * strength) * cloudVis;
     vec3 ambientShadow = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * g.shadowTint.w);
 
-    vec3 direct = evaluateLighting(inWorldPos, N, V, albedo, metallic, roughness, f0, directShadow);
+    vec3 direct = evaluateLighting(inWorldPos, N, V, albedo, metallic, roughness, f0, directShadow,
+                                   (pc.surfaceFlags.y & (1u << 28)) != 0u);
 
     // GRASS TRANSMISSION (FLAG_GRASS), the cheap stand-in for subsurface scattering: sunlight
     // through thin blades. Strongest looking toward the sun (the backlit glow of a field at
@@ -1561,12 +1486,45 @@ void main() {
     // directly; no cubemap bake. The BRDF LUT (baked at init) gives the split-sum
     // specular. g.ambient carries the ambient tint * multiplier as the IBL strength.
     float NdotV = max(dot(N, V), 1e-4);
-    vec3 R = reflect(-V, N);
+    // THE DOMINANT DIRECTION of the reflection (Lagarde & de Rousiers, "Moving Frostbite to PBR", 2014): a rough lobe's
+    // light comes from nearer the normal than the mirror direction, so the lookup bends toward N as the roughness
+    // rises. Without it a rough road at a grazing view read the buildings and palms beside it, a mirror's image
+    // smeared (Glenn, 2026-11-08: "It's got a reflection in it right?"); now it reads the sky above. Glass (0.03)
+    // keeps the mirror direction.
+    float smoothness = 1.0 - roughness;
+    vec3 R = normalize(mix(N, reflect(-V, N), smoothness * (sqrt(smoothness) + roughness)));
     // IBL source: HDR equirect when bound (counts.z==1), else the procedural sky.
     vec3 irradiance, prefiltered;
     if (g.counts.z == 1) {
         irradiance = sampleEquirect(N);
         prefiltered = mix(sampleEquirect(R), irradiance, roughness);
+    } else if (skyIsPhysical()) {
+        // THE PHYSICAL SKY's light (ADR-0371): its irradiance / pi from the nine harmonics (the whole sky, cosine
+        // weighted: no second sun, the disc is lit directly), and the reflection from the sky cube's GGX mip for this
+        // roughness
+        irradiance = g.skySH[0].w < 0.5 ? skyViewRadiance(N) : skyIrradianceSH(N);
+        prefiltered = g.skySH[1].w < 0.5 ? mix(skyViewRadiance(R), irradiance, roughness)
+                                         : textureLod(skyCubeTex, R, roughness * 5.0).rgb;
+        // ...or the street's, where a reflection probe holds this surface (ADR-0373)
+        const bool indoor = (pc.surfaceFlags.y & (1u << 28)) != 0u;   // RenderMaterial::FLAG_INDOOR (ADR-0377)
+        if (indoor) {
+            // INDOORS the walls stand between a room and the street: no street probe, no open sky. The sky reaches
+            // a room only through its windows -- a dim, neutral share of the day's light (the room's own glow and
+            // its lamps do the rest), and the same for what its surfaces reflect, until a floor's own probes do
+            float daylight = dot(skyIrradianceSH(vec3(0.0, 1.0, 0.0)), vec3(0.2126, 0.7152, 0.0722));
+            irradiance = vec3(daylight * 0.30);
+            // ...and what it reflects is the storey's own probe, where the camera's floor has them (ADR-0380)
+            prefiltered = probeReflection(inWorldPos, R, roughness, irradiance, true);
+        } else {
+            prefiltered = probeReflection(inWorldPos, R, roughness, prefiltered, false);
+        }
+        // ...but near the camera the rays answer (ADR-0376, rt_reflect.comp): the probe's part fades out exactly as
+        // theirs fades in, so the blurry reflection does not ghost under the sharp one
+        if (probeGridSize.w > 0.0 && roughness <= probeGridSize.w) {
+            float camDist = distance(inWorldPos, g.cameraPosition.xyz);
+            float nearFade = 1.0 - smoothstep(probeGridSize.y - probeGridSize.z, probeGridSize.y, camDist);
+            prefiltered *= 1.0 - nearFade * (1.0 - smoothstep(0.0, probeGridSize.w, roughness));
+        }
     } else {
         irradiance = sampleSkyDome(N);   // (no second sun: see sampleSkyDome)
         prefiltered = mix(sampleEnvironment(R), irradiance, roughness);  // crude roughness blur; a mirror keeps the sun
@@ -1578,6 +1536,8 @@ void main() {
     // envSpecular = prefiltered * (F0 * scale + bias) — matches Metal's IBL.
     vec2 brdf = texture(brdfLut, vec2(NdotV, roughness)).rg;
     vec3 envSpecular = prefiltered * (f0 * brdf.x + brdf.y);
+    // ...that weight, for the G-buffer: the reflection rays replace exactly this much of the probe's (ADR-0376)
+    float specWeight = dot((f0 * brdf.x + brdf.y) * ambientShadow, vec3(0.2126, 0.7152, 0.0722));
     // The ambient strength scales the sky's LIGHT (the diffuse fill), not its REFLECTION: a mirror shows the sky at
     // the sky's own brightness, as Metal's lighting_surface and the water composite do. Scaling both made every glass
     // tower reflect the sky at ~a quarter of it -- dark and matte (Glenn, 2026-10-16: "a little more matte rather
@@ -1615,8 +1575,12 @@ void main() {
             tint = tints[clamp(ci, 0, 3)];
         }
         outColor = vec4(tint, 1.0);
+    } else if (dbg == 10) {
+        // the environment reflection alone (the probe's, or the sky's): what every surface takes from its surroundings
+        outColor = vec4(envSpecular * ambientShadow * g.cameraPosition.w, 1.0);
     } else {
-        vec3 color = direct + ambient + emission;
+        // (under the physical sky every glow's emission comes into engine units: ADR-0369)
+        vec3 color = direct + ambient + emission * (skyIsPhysical() ? g.skyPhysical3.z : 1.0);
         // WATER COMPOSITE. Over the bed the right result is
         //   F * sky + (1 - F) * (a_w * body + (1 - a_w) * bed)
         // with a_w the body's opacity from its depth (Beer-Lambert) and F the Fresnel reflectance:
@@ -1654,7 +1618,28 @@ void main() {
         // inscatters the live sky, so haze stays colour-correct at sunset and
         // under the moon. Vulkan faded toward the fixed fog.rgb, which turned
         // night distances WHITE. fog.rgb keeps its density-only role here.
-        if (g.fog.w > 0.0) {
+        if (skyIsPhysical()) {
+            // AERIAL PERSPECTIVE (ADR-0370): the air between the camera and this surface, from the volume aerial_volume.comp
+            // marched along this pixel's tile -- its light added, the surface's thinned (blue first) -- so a far range
+            // gets exactly the haze in front of it: a hazy silhouette, blue by day, purple at dusk, never the
+            // horizon's whole glow
+            float dist = length(inWorldPos - g.cameraPosition.xyz);
+            vec2 uvA = gl_FragCoord.xy / vec2(max(g.skyPhysical2.w, 1.0), max(g.skyPhysical5.w, 1.0));
+            const float S = 32.0, FAR = 120000.0;
+            float f = sqrt(clamp(dist / FAR, 0.0, 1.0));
+            vec3 aL, aT;
+            if (f * S < 1.0) {   // nearer than the first slice: from nothing to it
+                float a = f * S;
+                vec3 z0 = vec3(uvA, 0.5 / S);
+                aL = texture(aerialInscatter, z0).rgb * a;
+                aT = mix(vec3(1.0), texture(aerialTransmit, z0).rgb, a);
+            } else {
+                vec3 z = vec3(uvA, f - 0.5 / S);
+                aL = texture(aerialInscatter, z).rgb;
+                aT = texture(aerialTransmit, z).rgb;
+            }
+            color = color * aT + aL;
+        } else if (g.fog.w > 0.0) {
             vec3 rd = (inWorldPos - g.cameraPosition.xyz);
             float dist = length(rd);
             float f = 1.0 - exp(-g.fog.w * dist);
@@ -1681,21 +1666,21 @@ void main() {
             // blue-grey and the sky's reflection laid over the rest -- a grey veil. And a window of the viewer's
             // own (the building they stand in, the train they ride: SceneLighting::viewerBox) reflects the dim
             // room behind them at clear glass's 4 %, not the bright sky outside.
-            bool own = false;
-            if (g.viewerBoxA.w > 0.0) {
-                vec3 d = inWorldPos - g.viewerBoxA.xyz;
-                vec2 u = g.viewerBoxB.xy;
-                own = abs(dot(d.xz, u)) <= g.viewerBoxA.w && abs(dot(d.xz, vec2(-u.y, u.x))) <= g.viewerBoxB.z &&
-                      abs(d.y) <= g.viewerBoxB.w;
-            }
+            bool own = inViewerBox(inWorldPos);
             // (an office window is DOUBLE GLAZED: four faces at 4 % each reflect about 15 % head-on -- what makes a
             // window read as glass from inside: the bright room and its lights faint in it; Glenn: "it just seems
             // like there's no glass there" at one face's 4 %)
             vec3 fs = own ? vec3(0.15) * brdf.x + brdf.y : f0 * brdf.x + brdf.y;   // the split-sum reflectance
             vec3 Rv = reflect(-V, dot(N, V) < 0.0 ? -N : N);
-            vec3 reflected = own ? fs * (g.ambient.rgb * 0.35 + roomRadiance(inWorldPos) + ceilingPanels(inWorldPos, Rv))
-                                 // (the room: by day its walls lit by the daylight through these windows -- the sky's
-                                 // light on a 0.7 wall, half of it; at night its lamps, the ceiling's panels in it)
+            // (the room: by day its walls lit by the daylight through these windows -- the indoor share of the sky's
+            // light on a 0.7 wall, as the room's own surfaces take it above; at night its lamps, the ceiling's panels
+            // in it. Under the physical sky both come in its units: the old unitless 0.35 of the ambient strength,
+            // pre-exposed for a night room, turned every window white -- Glenn, 2026-11-08)
+            float glowScale = skyIsPhysical() ? g.skyPhysical3.z : 1.0;
+            vec3 roomDay = skyIsPhysical()
+                ? vec3(dot(skyIrradianceSH(vec3(0.0, 1.0, 0.0)), vec3(0.2126, 0.7152, 0.0722)) * 0.30 * 0.7)
+                : g.ambient.rgb * 0.35;
+            vec3 reflected = own ? fs * (roomDay + roomRadiance(inWorldPos) + ceilingPanels(inWorldPos, Rv) * glowScale)
                                  : prefiltered * fs * g.ambient.rgb * ambientShadow;
             float F = clamp(max(fs.r, max(fs.g, fs.b)), 0.0, 1.0);
             float T = 1.0 - 0.4 * opacity;
@@ -1717,6 +1702,17 @@ void main() {
         } else {
             outColor = vec4(color * opacity, opacity);
         }
+        outColor.rgb *= g.cameraPosition.w;   // PRE-EXPOSED (ADR-0366): the camera's exposure, applied as it is drawn
+#ifdef PROBE_CAPTURE
+        outColor = vec4(albedo, metallic);
+        // (an indoor surface's distance is written negative: the relight lights it as a room, not the open sky; ADR-0380)
+        outEmit = vec4(emission * (skyIsPhysical() ? g.skyPhysical3.z : 1.0),
+                       length(inWorldPos - g.cameraPosition.xyz) * ((pc.surfaceFlags.y & (1u << 28)) != 0u ? -1.0 : 1.0));
+#endif
     }
-    outNormal = vec4(N * 0.5 + 0.5, roughness);   // world normal (SSAO) + roughness (SSR gate)
+#ifdef PROBE_CAPTURE
+    outNormal = vec4(N * 0.5 + 0.5, roughness);   // a probe's G-buffer (RGBA16F) keeps its own layout: probe_relight.comp
+#else
+    outNormal = gbufEncode(N, roughness, specWeight);   // world normal (SSAO), roughness (SSR, rays), reflection weight
+#endif
 }

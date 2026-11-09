@@ -65,6 +65,20 @@ std::vector<ParticleEffect> builtins() {
         e.fadeIn = 0.0; e.fadeOut = 0.3; e.stretch = 0.02;
         e.count = 16; e.speed = 0; e.up = 2.5; e.spread = 1.4; e.jitter = 0.4;
     }
+    {   // a window smashed (ADR-0356): small bright shards thrown out, tumbling down, glinting
+        ParticleEffect& e = add("glass");
+        e.gravity = 9.81; e.drag = 0.4; e.lifeMin = 0.6; e.lifeMax = 1.2; e.shape = ParticleShape::Glow;
+        e.colour = Vec3(0.75, 0.82, 0.85);
+        e.glow = Vec3(0.30, 0.34, 0.36); e.sizeStart = 0.035; e.sizeEnd = 0.03; e.alpha = 0.9;
+        e.fadeIn = 0.0; e.fadeOut = 0.3; e.stretch = 0.0;
+        e.count = 24; e.speed = 2.5; e.up = 1.0; e.spread = 2.0; e.jitter = 0.1;
+    }
+    {   // a wrecked engine (ADR-0355): dark, oily puffs rolling up off the hood and hanging behind the car
+        ParticleEffect& e = add("engine_smoke");
+        e.gravity = -1.6; e.drag = 1.4; e.lifeMin = 1.6; e.lifeMax = 3.2; e.colour = Vec3(0.12, 0.12, 0.12);
+        e.glow = Vec3(0.0, 0.0, 0.0); e.sizeStart = 0.3; e.sizeEnd = 2.2; e.alpha = 0.7; e.fadeIn = 0.1; e.fadeOut = 0.7;
+        e.count = 1; e.speed = 0; e.up = 1.2; e.spread = 0.35; e.jitter = 0.15;
+    }
     {   // a vent, a kettle, a manhole on a cold night: white wisps rising and spreading
         ParticleEffect& e = add("steam");
         e.gravity = -1.2; e.drag = 1.2; e.lifeMin = 1.5; e.lifeMax = 3.0; e.colour = Vec3(0.92, 0.93, 0.95);

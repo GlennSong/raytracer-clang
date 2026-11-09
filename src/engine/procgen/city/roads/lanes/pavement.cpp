@@ -78,7 +78,7 @@ struct DSU {
     void unite(int a, int b) { p[static_cast<size_t>(find(a))] = find(b); }
 };
 
-FlatMesh triangulatePolygon(const Polygon2& poly) {
+FlatMesh triangulateConstrained(const Polygon2& poly) {
     std::vector<Vec2> pts; std::vector<std::pair<int, int>> edges; densify(poly.outer, pts, edges); for (const Ring& h : poly.holes) densify(h, pts, edges);
     Triangulation t = constrainedTriangulation(pts, edges); FlatMesh m; m.verts.reserve(t.verts.size());
     for (const Vec2& v : t.verts) m.verts.push_back({v, 0.0});
@@ -190,7 +190,7 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
     };
     // a point INSIDE a piece (a centroid can fall outside a bent one): its largest triangle's centre
     auto inside = [&](const Polygon2& piece) {
-        const FlatMesh m = triangulatePolygon(piece); double bestA = -1; Vec2 best = piece.outer.empty() ? Vec2() : piece.outer[0];
+        const FlatMesh m = triangulateConstrained(piece); double bestA = -1; Vec2 best = piece.outer.empty() ? Vec2() : piece.outer[0];
         for (const auto& t : m.tris) {
             const Vec2 &A = m.verts[static_cast<size_t>(t[0])].xy, &B = m.verts[static_cast<size_t>(t[1])].xy, &C = m.verts[static_cast<size_t>(t[2])].xy;
             const double a = std::fabs(cross(B - A, C - A)); if (a > bestA) { bestA = a; best = (A + B + C) / 3.0; }
@@ -413,7 +413,7 @@ void buildSurfaces(const RoadLabGraph& g, const LaneSet& L, DeckHeight& H, Pavem
 std::vector<FlatMesh> layerMeshes(const RoadLabGraph& g, const DeckHeight& H, const PolySet& layer, const std::vector<int>& roads, std::vector<Vec2>* spanning, const std::vector<double>* band) {
     std::vector<FlatMesh> out; const std::vector<char> want = H.edgeFlags(roads);
     for (const Polygon2& p : layer) {
-        FlatMesh m = triangulatePolygon(p); if (m.tris.empty() || roads.empty()) continue;
+        FlatMesh m = triangulateConstrained(p); if (m.tris.empty() || roads.empty()) continue;
         for (DeckVertex& v : m.verts) v.z = H.layerHeight(want, roads, v.xy, band);
         // a triangle steeper than any road can be (its plane's slope over 0.35, and a quarter metre or more of rise)
         // joins two levels: drop it and rebuild the boundary so the slab's side faces follow the cut. The SLOPE, not

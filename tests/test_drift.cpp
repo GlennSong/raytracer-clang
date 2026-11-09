@@ -80,3 +80,51 @@ TEST_CASE(a_handbrake_flick_throws_a_car_into_a_held_drift_and_it_grips_again) {
     CHECK(std::fabs(w.vehicleDrift(id).slipDeg) < 12);
     w.shutdown();
 }
+
+// BRAKE-AND-TURN (Glenn, 2026-11-06: "I would settle for arcade drifting like a burnout where you can slam on the
+// break and then simply turn your car into a drift"): the brake hard on with the wheel well over throws the car into
+// the same held slide as the handbrake flick -- and an ordinary stop, the wheel straight, does not.
+TEST_CASE(slamming_the_brake_and_turning_throws_a_car_into_the_drift) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    openModuleLoader(vm, makeModuleSource(std::string(RT_SOURCE_DIR) + "/assets/scripts"));
+    std::ifstream f(std::string(RT_SOURCE_DIR) + "/assets/scripts/vehicles.lua");
+    std::stringstream ss;
+    ss << f.rdbuf();
+    std::string err;
+    CHECK(vm.doString(ss.str(), &err));
+    VehicleSpec spec;
+    CHECK(loadVehicleSpec(vm, "return vehicle.kit_sedan(seed, {})", 1u, spec, &err));
+    const Real dt = 1.0 / 60.0;
+    for (const bool turn : {false, true}) {
+        PhysicsWorld w;
+        w.initialize();
+        w.addBox(Vec3(3000, 1, 3000), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static);
+        const PhysicsWorld::VehicleId id = w.addVehicle(spec.config, Vec3(0, 1.2, 0), Quat::identity());
+        w.setVehicleDriftEnabled(id, true);
+        w.optimizeBroadPhase();
+        for (int i = 0; i < 20 * 60 && w.vehicleVelocity(id).length() < 21.0; ++i) {
+            w.setVehicleInput(id, 1.0, 0, 0);
+            w.update(dt);
+        }
+        // the stab: brake hard, the wheel over (or straight, for the plain stop)
+        bool drifted = false;
+        for (int i = 0; i < 15; ++i) {
+            w.setVehicleInput(id, 0, turn ? 0.8 : 0.0, 1.0, 0);
+            w.update(dt);
+            drifted = drifted || w.vehicleDrift(id).drifting;
+        }
+        // then the throttle, the wheel held over
+        Real slipSum = 0;
+        int n = 0;
+        for (int i = 0; i < 2 * 60; ++i) {
+            w.setVehicleInput(id, 0.8, turn ? 0.8 : 0.0, 0, 0);
+            w.update(dt);
+            if (i > 30 && w.vehicleDrift(id).drifting) { slipSum += std::fabs(w.vehicleDrift(id).slipDeg); ++n; }
+        }
+        std::printf("    %s: drifted %d, slip %.0f deg average over %d frames sliding\n", turn ? "brake + turn" : "brake straight",
+                    drifted, slipSum / std::max(n, 1), n);
+        CHECK(drifted == turn);
+        if (turn) CHECK(n > 30 && slipSum / std::max(n, 1) > 10);
+    }
+}

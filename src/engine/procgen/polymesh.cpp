@@ -28,6 +28,16 @@ int PolyMesh::matId(const std::string& name) {
     mats.push_back(name);
     return static_cast<int>(mats.size()) - 1;
 }
+int PolyMesh::panelId(const std::string& name) {
+    const int g = findPanel(name);
+    if (g >= 0) return g;
+    panels.push_back(name);
+    return static_cast<int>(panels.size()) - 1;
+}
+int PolyMesh::findPanel(const std::string& name) const {
+    for (std::size_t i = 0; i < panels.size(); ++i) if (panels[i] == name) return static_cast<int>(i);
+    return -1;
+}
 int PolyMesh::findGroup(const std::string& name) const {
     for (std::size_t i = 0; i < groups.size(); ++i) if (groups[i] == name) return static_cast<int>(i);
     return -1;
@@ -77,6 +87,7 @@ void PolyMesh::append(const PolyMesh& o) {
         for (int& i : f.v) i += base;
         f.group = groupId(o.groups[static_cast<std::size_t>(f.group)]);
         f.mat = matId(o.mats[static_cast<std::size_t>(f.mat)]);
+        f.panel = panelId(o.panels[static_cast<std::size_t>(f.panel)]);
         faces.push_back(std::move(f));
     }
     for (const auto& [e, s] : o.creases) setCrease(e.first + base, e.second + base, s);
@@ -387,6 +398,7 @@ std::vector<int> extrude(PolyMesh& m, const std::vector<int>& sel, double dist, 
         w.v = {a, b, dup[b], dup[a]};
         w.group = m.faces[static_cast<std::size_t>(f)].group;
         w.mat = m.faces[static_cast<std::size_t>(f)].mat;
+        w.panel = m.faces[static_cast<std::size_t>(f)].panel;
         w.color = m.faces[static_cast<std::size_t>(f)].color;
         walls.push_back(w);
         // the crease on the old edge moves to the lifted edge; the wall's base is left smooth
@@ -511,6 +523,7 @@ PolyMesh extractOffset(const PolyMesh& m, const std::vector<int>& sel, double of
     PolyMesh out;
     out.groups = m.groups;
     out.mats = m.mats;
+    out.panels = m.panels;
     std::unordered_map<int, Vec3> nsum;
     for (int f : sel) {
         const Vec3 n = m.faceNormal(f);
@@ -527,6 +540,66 @@ PolyMesh extractOffset(const PolyMesh& m, const std::vector<int>& sel, double of
         for (int& i : g.v) i = remap[i];
         if (flip) std::reverse(g.v.begin(), g.v.end());
         out.faces.push_back(std::move(g));
+    }
+    return out;
+}
+
+PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickness, const std::string& mat) {
+    PolyMesh out = extractOffset(m, sel, -thickness, true);   // the back: its points first, in nsum order
+    const int k = out.matId(mat);
+    for (PolyMesh::Face& f : out.faces) f.mat = k;
+    // the back's point for each skin point (extractOffset's own remap, rebuilt: the same faces, the same order)
+    std::unordered_map<int, int> back;
+    {
+        std::size_t fi = 0;
+        for (int f : sel) {
+            const std::vector<int>& sv = m.faces[static_cast<std::size_t>(f)].v;
+            std::vector<int> bv = out.faces[fi++].v;
+            std::reverse(bv.begin(), bv.end());   // (the back was flipped)
+            for (std::size_t i = 0; i < sv.size() && i < bv.size(); ++i) back[sv[i]] = bv[i];
+        }
+    }
+    // the skin's outline: a directed edge a -> b whose twin b -> a is not in the region
+    std::unordered_set<long long> de;
+    for (int f : sel) {
+        const auto& v = m.faces[static_cast<std::size_t>(f)].v;
+        for (std::size_t i = 0; i < v.size(); ++i) de.insert(dkey(v[i], v[(i + 1) % v.size()]));
+    }
+    std::unordered_map<int, int> front;   // skin points on the outline, copied in
+    auto frontOf = [&](int i) {
+        auto it = front.find(i);
+        if (it != front.end()) return it->second;
+        const int j = static_cast<int>(out.pts.size());
+        out.pts.push_back(m.pts[static_cast<std::size_t>(i)]);
+        front[i] = j;
+        return j;
+    };
+    for (int f : sel) {
+        const PolyMesh::Face& face = m.faces[static_cast<std::size_t>(f)];
+        const auto& v = face.v;
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            const int a = v[i], b = v[(i + 1) % v.size()];
+            if (de.count(dkey(b, a))) continue;
+            PolyMesh::Face w;
+            w.v = {frontOf(b), frontOf(a), back[a], back[b]};
+            w.group = face.group;
+            w.mat = k;
+            w.panel = face.panel;
+            w.color = face.color;
+            out.faces.push_back(w);
+        }
+    }
+    return out;
+}
+
+std::vector<int> ringAround(const PolyMesh& m, const std::vector<int>& sel) {
+    std::unordered_set<int> in(sel.begin(), sel.end()), corners;
+    for (int f : sel) for (int v : m.faces[static_cast<std::size_t>(f)].v) corners.insert(v);
+    std::vector<int> out;
+    for (std::size_t f = 0; f < m.faces.size(); ++f) {
+        if (in.count(static_cast<int>(f))) continue;
+        for (int v : m.faces[f].v)
+            if (corners.count(v)) { out.push_back(static_cast<int>(f)); break; }
     }
     return out;
 }
@@ -611,6 +684,7 @@ PolyMesh subdivideOnce(const PolyMesh& m) {
     PolyMesh out;
     out.groups = m.groups;
     out.mats = m.mats;
+    out.panels = m.panels;
     const int nv = static_cast<int>(m.pts.size());
     // edges
     std::map<std::pair<int, int>, int> edgeIdx;
@@ -712,6 +786,7 @@ PolyMesh subdivideOnce(const PolyMesh& m) {
             q.v = {vi, eNext, fBase + static_cast<int>(f), ePrev};
             q.group = m.faces[f].group;
             q.mat = m.faces[f].mat;
+            q.panel = m.faces[f].panel;
             q.color = m.faces[f].color;
             out.faces.push_back(q);
         }
@@ -837,7 +912,7 @@ double signedVolume(const PolyMesh& m) {
 
 // --- to the renderer ------------------------------------------------------------------------------------
 
-std::map<std::string, RenderMesh> toParts(const PolyMesh& m, double autosmoothDeg, double uvScale) {
+std::map<std::string, RenderMesh> toParts(const PolyMesh& m, double autosmoothDeg, double uvScale, int panel) {
     std::map<std::string, RenderMesh> out;
     const double cosLim = std::cos(autosmoothDeg * M_PI / 180.0);
     std::vector<Vec3> fn(m.faces.size());
@@ -861,6 +936,7 @@ std::map<std::string, RenderMesh> toParts(const PolyMesh& m, double autosmoothDe
     for (std::size_t f = 0; f < m.faces.size(); ++f) {
         const auto& face = m.faces[f];
         if (face.v.size() < 3) continue;
+        if (panel >= 0 && face.panel != panel) continue;
         RenderMesh& rm = out[m.mats[static_cast<std::size_t>(face.mat)]];
         const uint32_t base = static_cast<uint32_t>(rm.vertices.size());
         // box-projected UV frame from the face normal

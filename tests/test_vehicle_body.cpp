@@ -41,7 +41,7 @@ struct VehiclesVM {
     ScriptVM vm;
     bool loaded = false;
     VehiclesVM() {
-        // vehicles.lua now `require`s vehicle_classes + vehicle_forms, so the VM
+        // vehicles.lua `require`s vehicle_kit, so the VM
         // needs the same surface the real hosts give it: the procgen bindings
         // plus a module loader rooted at the asset scripts. RT_SOURCE_DIR keeps
         // it resolving whatever the test's working directory is.
@@ -177,7 +177,7 @@ TEST_CASE(every_fleet_body_carries_its_own_lit_lenses) {
     std::string err;
     // (a drivable spec as a fleet slot: its body and lamps; the wheels are not what is checked)
     CHECK(a.vm.doString("function __asSlot(s) return { body = s.body, wheels = mesh.box({0.1, 0.1, 0.1}), lights = s.lights } end", &err));
-    for (const char* fleet : {"fleet_kit", "classic", "fleet_semis"}) {
+    for (const char* fleet : {"fleet_kit", "fleet_semis"}) {
         if (std::string(fleet) == "fleet_semis")
             CHECK(a.vm.doString("vehicle.fleet_semis = {"
                                 "  { class = 'semi', size = {2.6, 4.1, 22}, build = function() return __asSlot(vehicle.kit_drivable('semi', {}, {})) end },"
@@ -386,7 +386,7 @@ TEST_CASE(fleet_catalogue_is_the_size_the_car_is_built_at) {
         // fleet slot WAS a car. The transit slot is an 11.4 m bus, so the bound
         // is per-class now rather than being quietly loosened for everyone --
         // an 8 m "car" should still fail.
-        const bool transit = (className == "bus" || className == "fire_engine");   // (a 9.2 m fire engine too)
+        const bool transit = (className.rfind("bus", 0) == 0 || className == "fire_engine");   // (a 9.2 m fire engine too)
         const bool bike = twoWheelSlot(a.vm, slot);   // a motorcycle: 0.7 m over the bars, about 2 m long
         CHECK(size.x > (bike ? 0.4 : 1.0) && size.x < (bike ? 1.2 : 3.0));             // width
         CHECK(size.y > (bike ? 0.5 : 1.0) && size.y < (transit ? 4.0 : 3.5));          // height
@@ -532,7 +532,7 @@ TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
         std::string err;
         CHECK(loadFleetCarBody(a.vm, slot, body, &err));
         CHECK(!body.glass.vertices.empty() || twoWheelSlot(a.vm, slot));   // (a bike has no glass)
-        if (body.className != "bus") {
+        if (body.className.rfind("bus", 0) != 0) {
             // an open seat (the convertible, a bike) is seen into like the bus; every other car shows its cabin only
             // near the player
             CHECK(!body.seeInto || body.openSeat);
@@ -543,7 +543,13 @@ TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
         }
         ++buses;
         CHECK(body.seeInto);
-        CHECK(body.interior.vertices.empty());   // the saloon rides in the shell
+        // its two door leaves apart from the body, each sliding back along the side (ADR-0356)
+        CHECK(body.doorLeaves.size() == 2);
+        for (const auto& leaf : body.doorLeaves) CHECK(leaf.slide.z < -0.8 && !leaf.body.vertices.empty());
+        // the saloon is its own matte part, not in the shell's paint (ADR-0383: the seats wore the clear coat), and its
+        // glass is tinted darker than a car's
+        CHECK(!body.interior.vertices.empty());
+        CHECK(body.glassOpacity > 0.5);
         const Real W = body.size.x, H = body.size.y, L = body.size.z;
         CHECK(!body.glass.vertices.empty());
         CHECK(body.hasDriverSeat);
@@ -569,7 +575,7 @@ TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
                     body.driverSeat.z, widest);
         CHECK(widest > 1.1);                      // the middle door
     }
-    CHECK(buses == 1);
+    CHECK(buses == 2);   // (all seats and standing room)
 }
 
 // THE OFF-ROADER (#41): vehicle.offroad reads back as a part-time four-wheel-drive truck -- 2WD (rear) until
@@ -608,7 +614,11 @@ TEST_CASE(offroad_spec_is_a_part_time_4x4_on_long_travel) {
         tails += l.name.rfind("taillight", 0) == 0;
     }
     CHECK(heads == 2 && tails == 2);
-    CHECK(spec.parts.size() == 2);   // clear glass + the cabin
+    // clear glass + the cabin fixed to the chassis; the rest ride its doors, hood and hatch (ADR-0352)
+    int fixed = 0;
+    for (const auto& part : spec.parts) fixed += part.panel < 0;
+    CHECK(fixed == 2);
+    CHECK(spec.panels.size() >= 6);
 }
 
 // THE CAR PICKER (Glenn: "cycle through all of them ... It should tell me if the car is 2WD or 4WD"): every
@@ -643,40 +653,42 @@ TEST_CASE(car_picker_catalogue_builds_and_says_the_true_drivetrain) {
     CHECK(driveLabel("fwd").find("2WD") != std::string::npos);
 }
 
-// THE MIXED FLEET (Glenn: "get the new cars into island 8 along with the classic cars"). vehicle.fleet_mixed
-// is every kit car and truck, then every classic one, then ONE city bus; a level's `citysim.fleet` points
-// vehicle.fleet at it (selectFleet, after the script runs -- the first cut appended the switch to the script
-// text, after vehicles.lua's `return`, and every such level drew no cars), and the kit fleet stays the default.
-TEST_CASE(fleet_mixed_carries_kit_and_classic_bodies_and_one_bus) {
+// THE MIXED FLEET (Glenn: "get the new cars into island 8 along with the classic cars"). Since the classic cars
+// retired (ADR-0349) vehicle.fleet_mixed is the kit fleet ordered for the island: every car and truck, the fire
+// engine, then the city bus's two bodies (all seats, standing room); a level's `citysim.fleet` points vehicle.fleet at it (selectFleet, after the script runs
+// -- the first cut appended the switch to the script text, after vehicles.lua's `return`, and every such level drew no
+// cars), and the kit fleet stays the default.
+TEST_CASE(fleet_mixed_carries_the_kit_bodies_and_its_two_buses) {
     VehiclesVM v;
     CHECK(v.loaded);
-    CHECK(fleetSlotCount(v.vm) == 18);   // the default: the kit fleet (the fire engine, 2026-10-13; the motorcycle, 2026-11-04;
-                                         // the off-roader, the taxi and the moped, 2026-11-06)
+    CHECK(fleetSlotCount(v.vm) == 19);   // the default: the kit fleet (the fire engine, 2026-10-13; the motorcycle, 2026-11-04;
+                                         // the off-roader, the taxi and the moped, 2026-11-06; the standing-room bus)
     std::string err;
     CHECK(!selectFleet(v.vm, "no_such_fleet", &err));   // a bad name leaves the default...
-    CHECK(fleetSlotCount(v.vm) == 18);
+    CHECK(fleetSlotCount(v.vm) == 19);
     CHECK(selectFleet(v.vm, "fleet_mixed", &err));      // ...a good one switches it (the city bridge's call)
     const int n = fleetSlotCount(v.vm);
     std::printf("    fleet_mixed: %d slots\n", n);
-    CHECK(n == 30);   // (and the two bikes, and the fire engine before the bus)
-    int buses = 0, kitSedans = 0, classicSedans = 0, fireEngines = 0;
+    CHECK(n == 19);
+    int buses = 0, sedans = 0, fireEngines = 0;
     for (int s = 0; s < n; ++s) {
         Vec3 size;
         std::string cls, e;
         CHECK(loadFleetCatalogueEntry(v.vm, s, size, cls, &e));
         const bool bike = twoWheelSlot(v.vm, s);
         CHECK(size.x > (bike ? 0.4 : 1.0) && size.z > (bike ? 1.4 : 3.0));
-        if (cls == "bus") ++buses;
+        if (cls.rfind("bus", 0) == 0) ++buses;
         if (cls == "fire_engine") ++fireEngines;
-        if (cls == "sedan") (s < 12 ? kitSedans : classicSedans) += 1;
+        if (cls == "sedan") ++sedans;
+        if (s >= n - 2) CHECK(cls.rfind("bus", 0) == 0);   // the two bus bodies last
     }
-    CHECK(buses == 1);
+    CHECK(buses == 2);
     CHECK(fireEngines == 1);
-    CHECK(kitSedans == 3 && classicSedans == 3);
-    CarBodyRecipe kitBody, classicBody;
-    CHECK(loadFleetCarBody(v.vm, 0, kitBody, &err));        // a kit body
-    CHECK(loadFleetCarBody(v.vm, 12, classicBody, &err));   // a classic body
-    CHECK(!kitBody.mesh.vertices.empty() && !classicBody.mesh.vertices.empty());
+    CHECK(sedans == 3);
+    CarBodyRecipe kitBody, busBody;
+    CHECK(loadFleetCarBody(v.vm, 0, kitBody, &err));
+    CHECK(loadFleetCarBody(v.vm, n - 1, busBody, &err));
+    CHECK(!kitBody.mesh.vertices.empty() && !busBody.mesh.vertices.empty());
 }
 
 // #42 (Glenn, 2026-10-03: "I can see through the bottom of some cars and also the classic van/suv has a polygon
@@ -812,13 +824,12 @@ TEST_CASE(fleet_back_bench_is_inside_the_car) {
 
 // ONE HANDLING BUILDER (item 23, #117): a fleet slot's `handling` IS the drivable handling of its kit -- the config a
 // physical-tier traffic car and a commandeered one drive with is the one the player gets dropping the same car from
-// the menu. The kit slots match field for field, wheels and all; every slot (the classic cars and the bus too, on the
-// class handling) carries a whole car: four or more wheels on the ground datum, mass, torque and brakes.
+// the menu. The kit slots match field for field, wheels and all; every slot carries a whole car: four or more wheels on the ground datum, mass, torque and brakes.
 TEST_CASE(every_fleet_slot_drives_with_its_kit_s_drivable_handling) {
     VehiclesVM v;
     CHECK(v.loaded);
     if (!v.loaded) return;
-    for (const char* fleet : {"fleet_kit", "classic", "fleet_mixed"}) {
+    for (const char* fleet : {"fleet_kit", "fleet_mixed"}) {
         std::string err;
         CHECK(selectFleet(v.vm, fleet, &err));
         const int slots = fleetSlotCount(v.vm);
@@ -837,7 +848,7 @@ TEST_CASE(every_fleet_slot_drives_with_its_kit_s_drivable_handling) {
             CHECK(c.brakeTorque > c.mass);
             for (const PhysicsWorld::VehicleWheel& w : c.wheels)   // attach = drawn rest centre + the rig's drop
                 CHECK_APPROX(w.position.y, -c.chassisHalfExtent.y + w.radius + h.suspensionRestDrop, 1e-6);
-            // the slot's own drivable recipe (vehicles.lua catalogue `drivable`): kit_<kit>, or the classic class
+            // the slot's own drivable recipe (vehicles.lua catalogue `drivable`): kit_<kit>
             const std::string slotLua = "vehicle.fleet[" + std::to_string(i + 1) + "]";
             bool kitBody = false;   // (a classic slot's drawn wheels sit half a tyre inside its drivable spec's)
             CHECK(v.vm.doString("__kit_body = (" + slotLua + ".drivable or ''):sub(1, 4) == 'kit_'", &err));
@@ -864,7 +875,199 @@ TEST_CASE(every_fleet_slot_drives_with_its_kit_s_drivable_handling) {
             }
         }
         std::printf("    [handling] %s: %d slots, %d match their drivable recipe\n", fleet, slots, matched);
-        if (std::string(fleet) != "classic") CHECK(matched >= 10);
+        CHECK(matched >= 10);
     }
     CHECK(selectFleet(v.vm, "fleet_kit"));
+}
+
+// THE MID-RANGE BODY (Glenn, 2026-11-06: "faceted lower poly cars with baked normals"): every smooth kit car in the
+// fleet carries a cheaper whole car for past `mid_from` -- under two thirds of the near body's triangles (the lenses,
+// grille and wheels are the same at both; the body shell itself is a quarter), its own wheels in it,
+// and no bigger than the near car (it replaces it on the same instance).
+TEST_CASE(every_smooth_fleet_car_carries_a_cheaper_mid_range_body) {
+    VehiclesVM a;
+    CHECK(a.loaded);
+    int withMid = 0;
+    for (int slot = 0; slot < fleetSlotCount(a.vm); ++slot) {
+        CarBodyRecipe body;
+        std::string err;
+        CHECK(loadFleetCarBody(a.vm, slot, body, &err));
+        if (twoWheelSlot(a.vm, slot) || body.className.rfind("bus", 0) == 0) continue;
+        const std::size_t nearTris = body.mesh.indices.size() / 3, midTris = body.mid.indices.size() / 3;
+        std::printf("    [%2d %-12s] near %zu tris, mid %zu tris from %.0f m\n", slot, body.className.c_str(), nearTris, midTris,
+                    body.midFrom);
+        CHECK(midTris > 0);
+        CHECK(body.midFrom > 0);
+        CHECK(midTris * 3 < nearTris * 2);
+        double nearR = 0, midR = 0;
+        for (const Vertex& v : body.mesh.vertices) nearR = std::max(nearR, static_cast<double>(v.position.length()));
+        for (const Vertex& v : body.mid.vertices) midR = std::max(midR, static_cast<double>(v.position.length()));
+        CHECK(midR < nearR * 1.05 + 0.05);
+        if (midTris > 0) ++withMid;
+    }
+    CHECK(withMid > 8);
+}
+
+// THE MOVING PANELS (ADR-0352): every drivable kit car carries its doors (both sides), a hood unless the cab sits over
+// the engine, and a trunk, hatch or gate (a pickup's tailgate drops); the panels and the body are the whole car (no face lost
+// or doubled); and each hinge OPENS -- a door's middle swings out from the side, a lid's middle rises -- never into
+// the car.
+TEST_CASE(kit_cars_carry_doors_hood_and_trunk_that_open_outward) {
+    VehiclesVM a;
+    CHECK(a.loaded);
+    std::string err;
+    const bool ok = a.vm.doString(R"lua(
+      local kit = require "vehicle_kit"
+      local function turn(p, pivot, axis, deg)   -- Rodrigues: p about the line (pivot, axis)
+        local t = math.rad(deg)
+        local c, s = math.cos(t), math.sin(t)
+        local v = { p[1] - pivot[1], p[2] - pivot[2], p[3] - pivot[3] }
+        local k = axis
+        local kv = k[1] * v[1] + k[2] * v[2] + k[3] * v[3]
+        local x = { k[2] * v[3] - k[3] * v[2], k[3] * v[1] - k[1] * v[3], k[1] * v[2] - k[2] * v[1] }
+        local r = {}
+        for i = 1, 3 do r[i] = v[i] * c + x[i] * s + k[i] * kv * (1 - c) + pivot[i] end
+        return r
+      end
+      local bad = {}
+      local function fail(m) bad[#bad + 1] = m end
+      for _, name in ipairs({ "sedan", "taxi", "hatchback", "suv", "jeep", "offroad", "convertible", "pickup", "step_van" }) do
+        local P = kit.SPECS[name]()
+        local B = kit.body(P)
+        local have = {}
+        for _, pn in ipairs(B:panels()) do have[pn] = #B:select{ panel = pn } end
+        if not have.door_front_l or not have.door_front_r then fail(name .. ": no front doors") end
+        if (have.door_rear_l ~= nil) ~= (have.door_rear_r ~= nil) then fail(name .. ": rear doors on one side only") end
+        local total = 0
+        for _, n in pairs(have) do total = total + n end
+        if total ~= B:face_count() then fail(name .. ": panels + body " .. total .. " faces of " .. B:face_count()) end
+        local car = kit.build(P, 0, { panels = true })
+        local list = {}
+        for pn, panel in pairs(car.panels or {}) do
+          list[#list + 1] = pn
+          local c = { 0.5 * (panel.lo[1] + panel.hi[1]), 0.5 * (panel.lo[2] + panel.hi[2]), 0.5 * (panel.lo[3] + panel.hi[3]) }
+          local h = panel.hinge
+          local o = turn(c, h.pivot, h.axis, h.open)
+          if pn:sub(1, 5) == "door_" then
+            if math.abs(o[1]) < math.abs(c[1]) + 0.15 then fail(name .. " " .. pn .. ": swings in (x " .. c[1] .. " -> " .. o[1] .. ")") end
+          elseif pn == "tailgate" then
+            if o[2] > c[2] - 0.10 or o[3] > c[3] - 0.10 then fail(name .. " tailgate: does not drop back") end
+          elseif o[2] < c[2] + 0.10 then fail(name .. " " .. pn .. ": does not lift (y " .. c[2] .. " -> " .. o[2] .. ")") end
+          local n = 0
+          for _ in pairs(panel.parts) do n = n + 1 end
+          if n == 0 then fail(name .. " " .. pn .. ": no mesh") end
+        end
+        table.sort(list)
+        print("    [panels] " .. name .. ": " .. table.concat(list, " "))
+      end
+      if #bad > 0 then error(table.concat(bad, "; ")) end
+    )lua", &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
+}
+
+// A CAR'S DAMAGE IS DATA (ADR-0355): the drivable spec carries vehicles.lua's KIT_DAMAGE -- the default, equal to the
+// rule's, and a car's own overrides (the convertible folds easier; a sub-table overrides field by field).
+TEST_CASE(drivable_spec_carries_its_damage_tuning) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    std::string err;
+    VehicleSpec sedan, soft;
+    CHECK(loadVehicleSpec(v.vm, "return vehicle.sedan(seed, {})", 1u, sedan, &err));
+    CHECK(loadVehicleSpec(v.vm, "return vehicle.kit_drivable('convertible', {}, {})", 1u, soft, &err) ||
+          loadVehicleSpec(v.vm, "return vehicle.convertible(seed, {})", 1u, soft, &err));
+    const DamageRule base;
+    CHECK_APPROX(sedan.damage.knockFull, base.knockFull, 1e-9);
+    CHECK_APPROX(sedan.damage.dentDepthMax, base.dentDepthMax, 1e-9);
+    CHECK_APPROX(sedan.damage.roughMisfire, base.roughMisfire, 1e-9);
+    CHECK_APPROX(soft.damage.knockFull, 34.0, 1e-9);
+    CHECK_APPROX(soft.damage.dentDepthMax, base.dentDepthMax, 1e-9);   // (its other fields: the default's)
+}
+
+// ITS TANK (ADR-0357): vehicles.lua KIT_FUEL, the default under each car's own row -- a bus carries far more than a
+// hatchback, and a field a row leaves out is the default's
+TEST_CASE(drivable_spec_carries_its_tank) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    std::string err;
+    VehicleSpec sedan, hatch, bus;
+    CHECK(loadVehicleSpec(v.vm, "return vehicle.sedan(seed, {})", 1u, sedan, &err));
+    CHECK(loadVehicleSpec(v.vm, "return vehicle.kit_drivable('hatchback', {}, {})", 1u, hatch, &err) ||
+          loadVehicleSpec(v.vm, "return vehicle.hatchback(seed, {})", 1u, hatch, &err));
+    CHECK(loadVehicleSpec(v.vm, "return vehicle.kit_bus(seed, {})", 1u, bus, &err));
+    const FuelRule base;
+    CHECK_APPROX(sedan.fuel.tank, base.tank, 1e-9);
+    CHECK_APPROX(hatch.fuel.tank, 38.0, 1e-9);
+    CHECK_APPROX(hatch.fuel.pace, base.pace, 1e-9);
+    CHECK(bus.fuel.tank > 5 * hatch.fuel.tank);
+}
+
+// ITS CARGO SPACE (ADR-0358): a saloon's boot under its lid, a hatchback's floor behind its hatch, a pickup's bed
+// open to the sky -- each inside the car's own box, at its tail, with room for a box
+TEST_CASE(drivable_cars_carry_a_cargo_space_at_the_tail) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    std::string err;
+    struct Want { const char* recipe; const char* panel; };
+    for (const Want w : {Want{"sedan", "trunk"}, Want{"hatchback", "hatch"}, Want{"pickup", ""}}) {
+        VehicleSpec spec;
+        CHECK(loadVehicleSpec(v.vm, std::string("return vehicle.") + w.recipe + "(seed, {})", 1u, spec, &err));
+        std::printf("    [cargo] %s: %s, %.2f x %.2f x %.2f at z %.2f..%.2f (panel '%s')\n", w.recipe, spec.hasCargo ? "yes" : "NO",
+                    spec.cargoHi.x - spec.cargoLo.x, spec.cargoHi.y - spec.cargoLo.y, spec.cargoHi.z - spec.cargoLo.z,
+                    spec.cargoLo.z, spec.cargoHi.z, spec.cargoPanel.c_str());
+        CHECK(spec.hasCargo);
+        CHECK(spec.cargoPanel == w.panel);
+        CHECK(spec.cargoHi.x - spec.cargoLo.x > 0.8);
+        CHECK(spec.cargoHi.y - spec.cargoLo.y > 0.36);   // a 0.36 m box stands in it
+        CHECK(spec.cargoHi.z - spec.cargoLo.z > 0.4);
+        CHECK(spec.cargoHi.z < 0.0);                     // behind the middle: the tail end
+    }
+}
+
+// A BUS DRIVEN IS A BUS YOU CAN SEE INTO (Glenn: "the bus has no interior"): the drivable bus carries its saloon as a
+// part fixed to the chassis, as a car carries its cabin.
+TEST_CASE(drivable_bus_carries_its_saloon) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    std::string err;
+    for (const char* bus : {"kit_bus", "kit_bus_standing"}) {
+        VehicleSpec spec;
+        CHECK(loadVehicleSpec(v.vm, std::string("return vehicle.") + bus + "(seed, {})", 1u, spec, &err));
+        std::size_t fixedVerts = 0;
+        for (const auto& part : spec.parts)
+            if (part.panel < 0 && part.opacity >= 1.0f && part.mesh) fixedVerts += part.mesh->vertices.size();
+        std::printf("    [bus] %s: %zu vertices of interior fixed to the chassis\n", bus, fixedVerts);
+        CHECK(fixedVerts > 2000);   // the seats, the poles, the cab
+    }
+}
+
+// A BUS's DOORS ARE WHERE ITS SALOON'S ARE (ADR-0356): the body's door panels (vehicle_kit.lua panel_plan, which
+// copies car_interior.cpp's bus layout) stand over the saloon's own door markers, on the kerb side, and slide open
+// along the side; the bus is lined inside.
+TEST_CASE(bus_doors_stand_over_the_saloons_doorways) {
+    VehiclesVM a;
+    CHECK(a.loaded);
+    std::string err;
+    const bool ok = a.vm.doString(R"lua(
+      local kit = require "vehicle_kit"
+      for _, name in ipairs({ "bus", "bus_standing" }) do
+        local car = kit.build(kit.SPECS[name](), 0, { panels = true })
+        assert(car.panels and car.panels.bus_door_1 and car.panels.bus_door_2, name .. ": no bus doors")
+        assert(car.doors and #car.doors >= 2, name .. ": no saloon doors")
+        for i = 1, 2 do
+          local p = car.panels["bus_door_" .. i]
+          local d = car.doors[i]
+          local mid = 0.5 * (p.lo[3] + p.hi[3])
+          assert(math.abs(mid - d[3]) < 0.35, name .. " door " .. i .. ": panel at z " .. mid .. ", doorway at " .. d[3])
+          assert(p.lo[1] > 0 and d[1] > 0, name .. " door " .. i .. ": not on the kerb side")
+          assert(p.hinge.slide and p.hinge.slide[3] < -0.8, name .. " door " .. i .. ": does not slide along")
+        end
+        assert(car.parts.liner, name .. ": not lined inside")
+        print(string.format("    [bus doors] %s: z %.2f / %.2f over doorways %.2f / %.2f", name,
+          0.5 * (car.panels.bus_door_1.lo[3] + car.panels.bus_door_1.hi[3]), 0.5 * (car.panels.bus_door_2.lo[3] + car.panels.bus_door_2.hi[3]),
+          car.doors[1][3], car.doors[2][3]))
+      end
+    )lua", &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
 }

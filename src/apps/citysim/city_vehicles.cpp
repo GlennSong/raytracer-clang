@@ -6,6 +6,13 @@
 #include "../../engine/components.h"       // Transform, Vehicle, Renderable, InVehicle
 #include "../../engine/physics/physics_world.h"   // VehicleConfig (was via the header)
 #include "../../engine/world.h"
+#include "../../engine/script_assets.h"   // loadScriptCode, makeModuleSource
+#ifdef RT_ENABLE_SCRIPTING
+#include "../../engine/scripting/procgen_bindings.h"
+#include "../../engine/scripting/script_modules.h"
+#include "../../engine/scripting/script_vm.h"
+#include "../../engine/scripting/vehicle_spec.h"
+#endif
 #include "../../log.h"
 #include "city_sim.h"                       // VehicleBody
 
@@ -39,6 +46,27 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     // THE OFFER (the interaction broker, E): the nearest ambient car in reach, four times a second -- a real
     // Vehicle in reach is VehicleSystem's offer. The broker's command comes back to VehicleSystem, which presses
     // enter_vehicle; that press is what promotes the car below.
+    // A PARKED CAR's HOOD OR TRUNK, opened on foot (ADR-0356; Glenn: "the cars in the world are not the same as the one
+    // I am in ... I can't open the hatch"): the car becomes the real one where it stands, and the panel swings open
+    if (city_.built()) {
+        Entity pl;
+        ctx.world.each<Transform, engine::ControlledBy>([&](Entity e, Transform&, engine::ControlledBy&) {
+            if (!pl.valid()) pl = e;
+        });
+        engine::InteractCommand cmd;
+        if (pl.valid() && engine::takeInteractCommand(ctx.world, pl, "city_panel", cmd) && ambientAgent_ >= 0) {
+            const Entity car = promote(ctx, ambientAgent_);
+            if (Vehicle* v = car.valid() ? ctx.world.get<Vehicle>(car) : nullptr) {
+                for (Vehicle::Panel& p : v->panels) {
+                    const bool back = p.name == "trunk" || p.name == "hatch" || p.name == "tailgate";
+                    if ((cmd.key == 0 && p.name == "hood") || (cmd.key == 1 && back)) { p.target = p.open; p.hold = 0.0f; }
+                }
+                LOG_INFO << "[cityveh] opened a parked car's " << (cmd.key == 0 ? "hood" : "trunk");
+            }
+            ambientAgent_ = -1;
+            haveAmbient_ = false;
+        }
+    }
     if (city_.built() && !ctx.actions.pressed("enter_vehicle")) {
         scanT_ -= ctx.frameDelta;
         if (scanT_ <= 0) {
@@ -98,6 +126,30 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
                 o.reach = kCommandeerRadius;
                 o.needsSight = false;
                 engine::offerInteraction(ctx.world, pl, o);
+                // ...and a PARKED one's hood and trunk, at its nose and its tail (ADR-0356)
+                const Agent& amb = city_.sim().agents()[static_cast<std::size_t>(ambientAgent_)];
+                Vec3 gp;
+                Vec2 gh;
+                const int slot = city_.carSlotOf(ambientAgent_);
+                std::string recipe;
+                Vec3 paint;
+                if (!amb.moving && slot >= 0 && city_.carDrivable(slot, recipe, paint) && city_.agentWorldPose(ambientAgent_, gp, gh)) {
+                    const Real hl = city_.sim().fleetBody(slot).length * 0.5;
+                    const Real gl = gh.length();
+                    const Vec2 f = gl > 1e-6 ? gh * (1.0 / gl) : Vec2(0, 1);
+                    for (int end = 0; end < 2; ++end) {
+                        const Real s = end == 0 ? hl - 0.6 : -(hl - 0.4);
+                        engine::InteractOffer po;
+                        po.provider = "city_panel";
+                        po.key = static_cast<uint64_t>(end);
+                        po.name = end == 0 ? "hood" : "trunk";
+                        po.tap = "open";
+                        po.anchor = Vec3(gp.x + f.x * s, gp.y + 0.9, gp.z + f.y * s);
+                        po.reach = 2.2;
+                        po.needsSight = false;
+                        engine::offerInteraction(ctx.world, pl, po);
+                    }
+                }
             }
         }
         return;
@@ -141,13 +193,22 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     }
     if (bestAgent < 0) return;
 
+    promote(ctx, bestAgent);
+}
+
+// PROMOTE an ambient car: release its agent (its instanced car vanishes this tick) and spawn a real Vehicle of the
+// same car at the same pose -- for the player to get into, or to open a panel of (ADR-0356). The new entity, or none.
+Entity CityVehicleSystem::promote(engine::FrameContext& ctx, int bestAgent) {
+    World& world = ctx.world;
+    const CitySim& sim = city_.sim();
+    const auto& agents = sim.agents();
     // PROMOTE: release the agent (its instanced car + widget vanish this tick)
     // and spawn a real Vehicle with the same fleet body at the same pose.
     const Agent& a = agents[bestAgent];
     // THE MODEL IT IS DRAWN AS (#115): every part below by the draw slot, not the vehicle index -- they differ
     // whenever the fleet has service vehicles, and the car in the player's hands turned into another model.
     const int slot = city_.carSlotOf(bestAgent);
-    if (slot < 0) return;
+    if (slot < 0) return Entity{};
     // The ADOPTED fleet's body, so the promoted car's chassis, mass and CoG come
     // from the same catalogue entry its drawn shell was built from.
     const VehicleBody& body = sim.fleetBody(slot);
@@ -156,7 +217,7 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     const PhysicsWorld::VehicleConfig* own = city_.carConfig(slot);
     if (!own) {
         LOG_WARN << "[cityveh] slot " << slot << " publishes no handling -- not commandeering";
-        return;
+        return Entity{};
     }
 
     // WHERE THE CAR ACTUALLY IS. agentWorldPose resolves the ghost's (x,z) onto
@@ -170,7 +231,39 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     // nothing while the ambient car vanished.
     Vec3 groundPos;
     Vec2 groundHeading;
-    if (!city_.agentWorldPose(bestAgent, groundPos, groundHeading)) return;
+    if (!city_.agentWorldPose(bestAgent, groundPos, groundHeading)) return Entity{};
+
+    // THE SAME CAR THE MENU DROPS (ADR-0355; Glenn: "Why is an SUV in the world different than mine? I can't open
+    // the hatch"): the slot's drivable recipe in its paint -- panels on hinges, a body to dent, its damage tuning --
+    // built fresh (a rare action, as N's drop is). A slot without one keeps the traffic body below.
+#ifdef RT_ENABLE_SCRIPTING
+    {
+        std::string recipe;
+        Vec3 paint;
+        if (city_.carDrivable(slot, recipe, paint)) {
+            const std::string lib = engine::loadScriptCode("vehicles.lua", "");
+            engine::ScriptVM vm;
+            engine::openProcgenLibrary(vm);
+            engine::openModuleLoader(vm, engine::makeModuleSource(""));
+            std::string err;
+            engine::VehicleSpec spec;
+            char chunk[256];
+            std::snprintf(chunk, sizeof chunk, "return vehicle.%s(seed, { color = { %.4f, %.4f, %.4f } })", recipe.c_str(),
+                          paint.x, paint.y, paint.z);
+            if (!lib.empty() && vm.doString(lib, &err) && engine::loadVehicleSpec(vm, chunk, 1u, spec, &err)) {
+                const Vec3 at(groundPos.x, groundPos.y + spec.config.chassisHalfExtent.y + 0.35, groundPos.z);
+                const Real yawDeg = std::atan2(groundHeading.x, groundHeading.y) * 57.29577951308232;
+                const Entity car = engine::spawnVehicle(world, ctx.assets, spec, at, yawDeg);
+                LOG_INFO << "[cityveh] took agent " << bestAgent << "'s car as the drivable " << recipe << ": vehicle "
+                         << a.vehicle << ", model slot " << slot;
+                if (!city_.simMutable().ejectDriver(bestAgent)) city_.simMutable().releaseDriver(bestAgent);
+                promoted_.push_back(PromotedCar{car, bestAgent});
+                return car;
+            }
+            LOG_WARN << "[cityveh] slot " << slot << "'s drivable " << recipe << ": " << err << " -- the traffic body instead";
+        }
+    }
+#endif
 
     Entity e = world.create();
     Transform t;
@@ -197,7 +290,7 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
         LOG_WARN << "[cityveh] slot " << slot
                  << " has no body to promote — not commandeering";
         world.destroy(e);
-        return;
+        return Entity{};
     }
     // RETAIN: this handle is the render bridge's, acquired once at build. Taking
     // a second reference is what keeps it alive if the bridge ever drops its own
@@ -230,7 +323,7 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
         world.add<Renderable>(pe, pr);
         v.bodyParts.push_back(pe);
     };
-    addPart(city_.carGlassMesh(slot), 0.30f, 0.06f, 0.0f);
+    addPart(city_.carGlassMesh(slot), city_.carGlassOpacity(slot), 0.06f, 0.0f);
     addPart(city_.carCabinMesh(slot), 1.0f, 0.9f, 0.0f);
 
     // LAMPS from the recipe's markers, for the same reason the wheels come from
@@ -260,6 +353,7 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     // the driver gets out onto the pavement and stands there (no longer vanishing with the car)
     if (!city_.simMutable().ejectDriver(bestAgent)) city_.simMutable().releaseDriver(bestAgent);
     promoted_.push_back(PromotedCar{e, bestAgent});
+    return e;
 }
 
 void CityVehicleSystem::onStop(engine::FrameContext&) {

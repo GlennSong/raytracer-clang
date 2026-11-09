@@ -1,9 +1,9 @@
 #include "day_night_system.h"
 #include "../components.h"
-#include "../procgen/city/roads/road_entity.h"   // RoadEntity: the city's footprint (light pollution)
 #include "../procgen/noise.h"
 #include "../procgen/terrain.h"          // terrainHeight: the horizon raster
 #include "../vehicle_lamps.h"   // duskRamp: night glow shares the lamp boundary
+#include "../lights/light_kinds.h"   // lightBook: the glows' emission scale (ADR-0369)
 
 #include "../../log.h"
 
@@ -136,12 +136,8 @@ void DayNightSystem::buildHeightRaster(FrameContext& ctx) {
         if (!cfg) cfg = &c;
     });
     if (!cfg) return;
-    const TerrainParams params = cfg->params;
-    const Noise noise(cfg->seed);
     const double half = cfg->worldHalf;
-    raster_ = rasterizeHeights(
-        [&](double x, double z) { return terrainHeight(params, noise, x, z); },
-        -half, -half, 2.0 * half, 256);
+    raster_ = rasterizeTerrain(cfg->params, cfg->seed, half, 256);
     double lo = 1e30, hi = -1e30;
     for (float h : raster_.height) { lo = std::min(lo, static_cast<double>(h)); hi = std::max(hi, static_cast<double>(h)); }
     LOG_INFO << "[sky] terrain horizon raster: " << raster_.size << "^2 over " << 2.0 * half
@@ -327,15 +323,15 @@ void DayNightSystem::seedFromConfig(const DayNightConfig& c) {
     }
 }
 
-// The city's footprint: the bounding circle of every road graph's nodes.
-// Found once (roads are level data); a level with no roads has no city and
-// no pollution anywhere.
+// The city's footprint: the bounding circle of the level's road network's nodes (LevelRoadGraph, the one graph; a
+// lanes city's RoadEntity graph is empty, ADR-0374). Found once (roads are level data); a level with no roads has no
+// city and no pollution anywhere.
 void DayNightSystem::findCityBounds(FrameContext& ctx) {
     if (cityBoundsKnown_) return;
     double minX = 1e30, minZ = 1e30, maxX = -1e30, maxZ = -1e30;
     bool any = false;
-    ctx.world.each<RoadEntity>([&](Entity, RoadEntity& r) {
-        for (const RoadNode& n : r.graph.nodes) {
+    ctx.world.each<LevelRoadGraph>([&](Entity, LevelRoadGraph& g) {
+        for (const RoadNode& n : g.graph.nodes) {
             minX = std::min(minX, static_cast<double>(n.pos.x));
             maxX = std::max(maxX, static_cast<double>(n.pos.x));
             minZ = std::min(minZ, static_cast<double>(n.pos.y));
@@ -511,6 +507,12 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
         } else if (Wind* w = ctx.world.get<Wind>(windEntity_)) {
             *w = wind;
         }
+        // ...and the weather now, beside it (ADR-0390: the simulation follows it)
+        WeatherNow now;
+        now.live = weatherActive ? weather.live() : weatherTargets(WeatherKind::Fair);
+        now.active = weatherActive;
+        if (WeatherNow* wn = ctx.world.get<WeatherNow>(windEntity_)) *wn = now;
+        else ctx.world.add<WeatherNow>(windEntity_, now);
         ctx.renderer.windDir[0] = static_cast<float>(wind.dir.x);
         ctx.renderer.windDir[1] = static_cast<float>(wind.dir.z);
         ctx.renderer.windSpeed = static_cast<float>(wind.speed);
@@ -519,6 +521,7 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
 }
 
 void DayNightSystem::update(FrameContext& ctx) {
+    lastDt_ = static_cast<float>(ctx.frameDelta);
 #ifdef __EMSCRIPTEN__
     // The web build has no Dear ImGui, so the page's debug panel drives the
     // cycle through settings instead (rt_web_env in web_main.cpp). Re-read them
@@ -654,18 +657,175 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
     const float dayEase = dayF * dayF * (3.0f - 2.0f * dayF);
     lit.exposure = baseExposure_ * (1.0f + (kNightAdapt - 1.0f) * (1.0f - dayEase));
     nightAdapt_ = baseExposure_ > 0.0f ? lit.exposure / baseExposure_ : 1.0f;
+
+    static const bool physical = [] { const char* e = std::getenv("RT_SKY"); return e && std::string(e) == "physical"; }();
+    if (physical) applyPhysicalSky(ctx, st);
+    else lit.physicalSky.enabled = false;
+}
+
+// THE PHYSICAL SKY (ADR-0367): the sun and the moon through the atmosphere model -- their colour and strength at the
+// camera, the sky's colours for everything that reads the day model's (the clouds, underwater, the glass's room), its
+// light as the ambient -- and the renderer's sky view fed. Exposure, until the eye adapts (ADR-0368): an incident light
+// meter on what falls on the ground, set so a clear noon gives the level's authored exposure.
+void DayNightSystem::applyPhysicalSky(FrameContext& ctx, const DayNightState& st) {
+    auto& lit = ctx.view.lighting;
+    if (!skyTablesBuilt_) {
+        buildAtmosphereTables(atmosphereFrom(lit.skyScattering), skyTables_);
+        ctx.renderer.setSkyTables(skyTables_.transmittance.data(), AtmosphereTables::kTransW, AtmosphereTables::kTransH,
+                                  skyTables_.multiScatter.data(), AtmosphereTables::kMsW, AtmosphereTables::kMsH);
+        skyTablesBuilt_ = true;
+    }
+    const double height = std::max(0.0, ctx.view.camera.position.y);
+    const double sunTop = kSunTopLux / kLuxPerUnit;
+    const float moonTop = static_cast<float>(kFullMoonTopLux * st.moonIllumination / kLuxPerUnit);
+    if ((st.sunDirection - readSunDir_).length() > 0.002 || std::fabs(height - readHeight_) > 50.0) {
+        sunReading_ = readSky(skyTables_, height, st.sunDirection, sunTop);
+        atmosphereIrradianceSH(skyTables_, height, st.sunDirection, sunTop, sunSH_);
+        readSunDir_ = st.sunDirection;
+        readHeight_ = height;
+        readMoonDir_ = Vec3(0, -2, 0);   // (and the moon again, at this height)
+    }
+    if ((st.moonDirection - readMoonDir_).length() > 0.002 || std::fabs(moonTop - readMoonTop_) > 1e-9f) {
+        moonReading_ = readSky(skyTables_, height, st.moonDirection, moonTop);
+        atmosphereIrradianceSH(skyTables_, height, st.moonDirection, moonTop, moonSH_, 64);
+        readMoonDir_ = st.moonDirection;
+        readMoonTop_ = moonTop;
+    }
+    // the active light: whichever lights the ground more (the moon only once the sun is down)
+    const double sunGround = sunReading_.lightIntensity * std::max(0.0, st.sunDirection.y);
+    const double moonGround = moonReading_.lightIntensity * std::max(0.0, st.moonDirection.y);
+    const bool sunActive = sunGround >= moonGround;
+    const SkyReading& act = sunActive ? sunReading_ : moonReading_;
+    const float weatherSun = weatherActive ? weather.sunScale : 1.0f;
+    lit.sun.direction = sunActive ? st.sunDirection : st.moonDirection;
+    lit.sun.color = act.lightColor;
+    lit.sun.intensity = static_cast<float>(act.lightIntensity) * weatherSun;
+    lit.sky.sunDirection = lit.sun.direction;
+    lit.sky.sunColor = act.lightColor;
+    lit.sky.zenithColor = sunReading_.zenith + moonReading_.zenith;
+    lit.sky.horizonColor = sunReading_.horizon + moonReading_.horizon;
+    lit.sky.groundColor = sunReading_.ground + moonReading_.ground;
+    lit.ambientMultiplier = weatherActive ? weather.ambientScale : 1.0f;   // the sky's own light: no day-shape scale
+
+    PhysicalSkyFrame& f = lit.physicalSky;
+    const Atmosphere& a = skyTables_.atm;
+    f.enabled = true;
+    f.lightDir = lit.sun.direction;
+    f.lightTop = static_cast<float>(sunActive ? sunTop : moonTop) * weatherSun;
+    f.otherDir = sunActive ? st.moonDirection : st.sunDirection;
+    f.otherTop = static_cast<float>(sunActive ? moonTop : sunTop);
+    f.lightIsSun = sunActive;
+    f.cameraHeight = static_cast<float>(height);
+    f.groundRadius = static_cast<float>(a.groundRadius);
+    f.topRadius = static_cast<float>(a.topRadius);
+    f.rayleigh = a.rayleighScatter;
+    f.rayleighHeight = static_cast<float>(a.rayleighHeight);
+    f.mieScatter = static_cast<float>(a.mieScatter);
+    f.mieExtinction = static_cast<float>(a.mieExtinction);
+    f.mieHeight = static_cast<float>(a.mieHeight);
+    f.mieG = static_cast<float>(a.mieG);
+    f.ozone = a.ozoneAbsorb;
+    f.groundAlbedo = a.groundAlbedo;
+    f.sunAngularRadius = lit.skyScattering.sunAngularRadius;
+    f.sunDisc = lit.sky.sunDiscIntensity > 0.0f ? 1.0f : 0.0f;
+    f.celestialScale = 1.0e-5f;   // (the stars and the moon's disc were tuned at the old night exposure; ADR-0367)
+    f.emissionScale = lightBook().emissionScale;   // (ADR-0369)
+    for (int k = 0; k < 9; ++k) f.irradianceSH[k] = (sunSH_[k] + moonSH_[k]) * static_cast<double>(lit.ambientMultiplier);
+    {
+        static int dbg = 0;
+        if (std::getenv("RT_SKY_DEBUG") && ++dbg % 120 == 1)
+            LOG_INFO << "[sky] sh0 " << f.irradianceSH[0].x << " " << f.irradianceSH[0].y << " " << f.irradianceSH[0].z << " sh1 "
+                     << f.irradianceSH[1].y << " amb " << lit.ambientMultiplier << " exposure " << lit.exposure << " light "
+                     << lit.sun.intensity;
+    }
+    glowPerNit_ = 1.0 / (kLuxPerUnit * std::max(1e-6f, f.emissionScale));   // (the shader multiplies by the scale)
+    // THE MOON'S DISC at its real luminance through the air, and the CITY'S GLOW on the sky (sky.frag's shapes peak at
+    // 1 x the disc intensity and 0.06: ADR-0369)
+    {
+        const LightBook& lb = lightBook();
+        const Vec3 tm = sampleTransmittance(skyTables_, a.groundRadius + std::max(height, 0.5), st.moonDirection.y);
+        const double moonUnits = lb.moonNits / kLuxPerUnit * std::max(tm.x, std::max(tm.y, tm.z));
+        if (lit.sky.moonDiscIntensity > 0.0f)
+            lit.sky.moonDiscIntensity = static_cast<float>(moonUnits / std::max(1e-12f, f.celestialScale));
+        f.cityGlowScale = static_cast<float>(lb.cityGlowNits / kLuxPerUnit / 0.06);
+    }
+    {   // the deck's own sun: from the middle of the cloud layer, whichever of the sun and the moon lights it more
+        const VolumetricCloudParams& vc = lit.volumetricClouds;
+        const double r = a.groundRadius + std::max(height, 0.5 * (vc.bottom + vc.top));
+        const Vec3 tSun = sampleTransmittance(skyTables_, r, st.sunDirection.y) * sunTop;
+        const Vec3 tMoon = sampleTransmittance(skyTables_, r, st.moonDirection.y) * static_cast<double>(moonTop);
+        const bool sunLit = tSun.y >= tMoon.y;
+        f.cloudLightDir = sunLit ? st.sunDirection : st.moonDirection;
+        f.cloudLightColor = (sunLit ? tSun : tMoon) * static_cast<double>(weatherSun);
+    }
+
+    // THE METER: incident light on the ground (sun or moon, and the sky), EV100 = log2(E * 100 / C), exposure =
+    // kLuxPerUnit / (1.2 * 2^EV); C = 400 puts a clear noon (~99,000 lux) at exposure 0.7. The level's authored
+    // exposure is the bias against that.
+    const double groundLux = (sunGround + moonGround + sunReading_.irradianceUp.y + moonReading_.irradianceUp.y) * kLuxPerUnit;
+    const double ev = std::log2(std::max(groundLux, 1e-4) * 100.0 / 400.0);
+    const double meter = kLuxPerUnit / (1.2 * std::exp2(ev));
+    const double bias = baseExposure_ / 0.7;
+    lit.exposure = static_cast<float>(meter * bias);
+
+    // THE EYE (ADR-0368): the renderer's measure of the frame (the middle of its luminance histogram), and the exposure
+    // that puts it at a key -- mid grey by day, lower in the dark, so a night street stays a night street -- eased
+    // toward over a second or so (faster into the light than out of it), within EV100 -3 .. 17.
+    // RT_EXPOSURE=meter: the meter alone (the A/B).
+    static const bool meterOnly = [] { const char* e = std::getenv("RT_EXPOSURE"); return e && std::string(e) == "meter"; }();
+    float log2L = 0.0f;
+    if (!meterOnly && ctx.renderer.measuredSceneLuminance(log2L)) {
+        const double L = std::exp2(static_cast<double>(log2L));   // units
+        const double nits = L * kLuxPerUnit;
+        const double s = std::clamp((std::log10(std::max(nits, 1e-6)) + 2.0) / 4.0, 0.0, 1.0);   // 0.01 .. 100 cd/m^2
+        const double key = 0.18 * (0.25 + 0.75 * s * s * (3.0 - 2.0 * s));
+        double target = key / std::max(L, 1e-12) * bias;
+        // HIGHLIGHT PROTECTION (ADR-0378; Glenn: the towers' lit windows "bright white and too harsh"): never brighter
+        // than puts the frame's brightest 3% at kHighlightCeiling before the tone curve -- by day that is the sky, which
+        // sits under it anyway; at night it is the lit windows, which a median-keyed eye pushed ~7 stops past white,
+        // every tint the same white. A night city exposes as it photographs (EV100 ~4-6), the windows keeping colour.
+        // Not INSIDE (a building or a cabin: the viewer box, AudioSystem::publishViewerBox): there the brightest 3% is
+        // the room's own fittings, which may clip -- a room exposes for its walls, as a camera in one does (Glenn,
+        // 2026-11-08: "lights in the interior at night are too dim"; a lit office's median keys it anyway).
+        constexpr double kHighlightCeiling = 1.5;
+        float highLog2 = 0.0f;
+        if (!lit.viewerBoxValid && ctx.renderer.measuredSceneHighlight(highLog2))
+            target = std::min(target, kHighlightCeiling / std::max(std::exp2(static_cast<double>(highLog2)), 1e-12) * bias);
+        const double lo = kLuxPerUnit / (1.2 * std::exp2(17.0)), hi = kLuxPerUnit / (1.2 * std::exp2(-3.0));
+        target = std::clamp(target, lo, hi);
+        if (autoExposure_ <= 0.0f) {
+            autoExposure_ = static_cast<float>(target);
+        } else {
+            const double tau = target > autoExposure_ ? 1.2 : 0.5;   // into the dark slower, into the light faster
+            const double k = 1.0 - std::exp(-std::max(0.0f, std::min(lastDt_, 0.25f)) / tau);
+            autoExposure_ = static_cast<float>(std::exp(std::log(autoExposure_) + (std::log(target) - std::log(autoExposure_)) * k));
+        }
+        lit.exposure = autoExposure_;
+    }
+    // (the glows are in units now, scaled in the shader: no night-exposure compensation for the beacons and sprites)
+    nightAdapt_ = 1.0f;
 }
 
 // The glow at one ramp, per ENTITY (see NightGlow::appliedRamp): the ramp holds still for long stretches (a staged
 // hour, the cycle off) while building chunks stream in around the player; each is written once at the ramp it has
 // not seen yet.
-void applyNightGlowRamp(World& world, Real ramp) {
+namespace {
+// a glow's full emission: its real luminance in its colour under the physical sky, else its old value
+Vec3 glowEmission(const NightGlow& glow, double perNit) {
+    if (perNit <= 0.0 || glow.nits <= 0.0f) return glow.fullEmission;
+    const Vec3& c = glow.fullEmission;
+    const double peak = std::max(c.x, std::max(c.y, c.z));
+    return peak > 0.0 ? c * (glow.nits * perNit / peak) : Vec3(0, 0, 0);
+}
+}  // namespace
+
+void applyNightGlowRamp(World& world, Real ramp, double perNit) {
     const float rf = static_cast<float>(ramp);
     world.each<NightGlow, Renderable>(
         [&](Entity, NightGlow& glow, Renderable& r) {
             if (glow.appliedRamp == rf) return;
             glow.appliedRamp = rf;
-            r.material.emission = glow.fullEmission * ramp;
+            r.material.emission = glowEmission(glow, perNit) * ramp;
             if (glow.nightAlbedo < 1.0f)
                 r.material.albedo = glow.dayAlbedo * (1.0 - (1.0 - glow.nightAlbedo) * ramp);
         });
@@ -673,7 +833,7 @@ void applyNightGlowRamp(World& world, Real ramp) {
         [&](Entity, NightGlow& glow, InstanceGroup& g) {
             if (glow.appliedRamp == rf) return;
             glow.appliedRamp = rf;
-            g.material.emission = glow.fullEmission * ramp;
+            g.material.emission = glowEmission(glow, perNit) * ramp;
         });
 }
 
@@ -686,7 +846,7 @@ void applyNightGlowRamp(World& world, Real ramp) {
 void DayNightSystem::applyNightGlow(FrameContext& ctx) {
     const Real ramp = duskRamp(ctx.view.lighting.solarElevation);
     lastGlowRamp_ = ramp;
-    applyNightGlowRamp(ctx.world, ramp);
+    applyNightGlowRamp(ctx.world, ramp, glowPerNit_);
 }
 
 // BEACON FLASH: the aviation lamps on tall roofs. Their chunks carry NightGlow
@@ -711,7 +871,7 @@ void DayNightSystem::applyBeaconBlink(FrameContext& ctx) {
     ctx.world.each<NightGlow, BeaconBlink, Renderable>(
         [&](Entity, NightGlow& glow, BeaconBlink& b, Renderable& r) {
             const Real gate = ramp <= 0 ? Real(0) : beaconBlinkGate(blinkSeconds_, b.period, b.phase, b.duty);
-            r.material.emission = glow.fullEmission * (ramp * gate / adapt);
+            r.material.emission = glowEmission(glow, glowPerNit_) * (ramp * gate / adapt);
             if (b.baseOpacity < 1.0f) {
                 // The near tier: the translucent bulb and haze belong to the
                 // roof you are standing on; past ~20 m the sprite carries
@@ -993,20 +1153,30 @@ void DayNightSystem::render(FrameContext& ctx) {
         if (ImGui::CollapsingHeader(volumetric ? "Clouds (volumetric)"
                                                : "Clouds (2D overlay)")) {
             if (volumetric) {
-                // Bound STRAIGHT to the live params: the level loader writes
-                // them once at load and the renderer reads them fresh each
-                // frame, with nothing re-applying in between — so an edit here
-                // is the value the next frame marches.
+                // Coverage, density and the noise's scale are WRITTEN EVERY FRAME by applyClouds -- from the knobs
+                // (cloudCoverage, cloudDensity: the weather's while it runs) and the level's authored noise scale
+                // (cloudBase_) -- so they are edited there: bound to the live params, each edit was overwritten
+                // the next frame (Glenn, 2026-11-08: "I've tried changing the noise scale, but I don't think the
+                // engine seems to save it"). The rest are read fresh by the renderer and bound straight.
                 ImGui::Checkbox("Enabled##vclouds",
                                 &ctx.renderer.volumetricCloudsEnabled);
-                ImGui::SliderFloat("Coverage##v", &vc.coverage, 0.0f, 1.0f);
-                ImGui::SliderFloat("Density##v", &vc.density, 0.0f, 1.0f);
+                if (weatherActive) {
+                    ImGui::TextDisabled("Weather (%s) sets coverage and density.", weatherKindName(weather.state));
+                    if (ImGui::Button("Weather off: tune them here##v")) weatherActive = false;
+                }
+                ImGui::BeginDisabled(weatherActive);
+                ImGui::SliderFloat("Coverage##v", &cloudCoverage, 0.0f, 1.0f);
+                ImGui::SliderFloat("Density##v", &cloudDensity, 0.0f, 1.0f);
+                ImGui::EndDisabled();
                 ImGui::SliderFloat("Ambient##v", &vc.ambient, 0.0f, 2.0f);
                 ImGui::SliderFloat("Detail erosion##v", &vc.detailStrength,
                                    0.0f, 1.0f);
+                ImGui::SliderFloat("Wisps##v", &vc.wisps, 0.0f, 2.0f);       // (ADR-0384)
+                ImGui::SliderFloat("Cirrus##v", &vc.cirrus, 0.0f, 1.0f);
                 ImGui::SliderFloat("Phase g##v", &vc.phaseG, -0.9f, 0.9f);
                 ImGui::SliderFloat("Wind (m/s)##v", &vc.wind, 0.0f, 60.0f);
-                ImGui::SliderFloat("Noise scale##v", &vc.noiseScale,
+                // (the level's own scale: the weather's `scale` multiplies it)
+                ImGui::SliderFloat("Noise scale##v", &cloudBase_.noiseScale,
                                    0.0002f, 0.005f, "%.4f");
                 ImGui::DragFloatRange2("Slab bottom / top##v", &vc.bottom,
                                        &vc.top, 10.0f, 100.0f, 6000.0f,

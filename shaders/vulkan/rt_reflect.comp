@@ -1,0 +1,144 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+// RAY-TRACED REFLECTIONS NEAR THE CAMERA (ADR-0376 step 3c; Glenn: "close up raytraced, further away faked"). After
+// the screen-space pass, at its half resolution, into its target: each smooth pixel (roughness under the rule's)
+// within `near` metres traces its reflection against the near scene (rt_scene.h) and shades what it hits from that
+// surface's own triangle -- its vertex colour and material, its geometric normal, the sun (with a shadow ray through
+// the same scene) and the sky's light -- or, where the ray leaves the near scene, takes the probe's reflection (the
+// far, faked part). What it writes is ADDED to the scene (rt_denoise.comp filters it, rt_apply.comp adds it): the
+// surface's own reflection weight (the G-buffer's, gbuffer.glsl) times the share of the probe's reflection the scene
+// pass took out here (mesh.frag: the same near, fade and roughness rule) -- so the rays put back exactly what the
+// probes gave, sharp, and the glass is as bright as its material says.
+#include "sky_common.glsl"
+#include "globals.glsl"
+#include "lighting_common.glsl"
+#include "gbuffer.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 1, binding = 0) uniform sampler2D depthTex;      // the scene's (reverse-Z)
+layout(set = 1, binding = 1) uniform sampler2D normalTex;     // world normal * 0.5 + 0.5, a = roughness
+layout(set = 1, binding = 5, rgba16f) uniform writeonly image2D rtRaw;   // rgb the radiance to add (pre-exposed), a its share
+layout(set = 1, binding = 3) uniform accelerationStructureEXT nearScene;
+
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Words { uint w[]; };
+
+// one per top-level instance (its custom index): the mesh's buffers and the instance's material
+struct RtInst {
+    vec4 albedoRough;     // rgb albedo, a roughness
+    vec4 emissionMetal;   // rgb emission, a metallic
+    uvec2 vertices;       // device addresses
+    uvec2 indices;
+    uint strideWords;     // 8: the 32-byte packed vertex, 14: the 56-byte full one
+    uint packed;
+    uint flags;           // RenderMaterial flags (32: emission tinted by the vertex colour)
+    uint pad;
+};
+layout(std430, set = 1, binding = 4) readonly buffer RtInsts { RtInst inst[]; };
+
+layout(push_constant) uniform Push {
+    vec4 rules;   // x near, y fade, z max roughness
+} pc;
+
+vec3 reconstructWorld(vec2 uv, float depth) {
+    vec4 c = g.invViewProjection * vec4(uv * 2.0 - 1.0, depth, 1.0);
+    return c.xyz / c.w;
+}
+
+vec3 vertexPos(Words vb, uint stride, uint v) {
+    uint b = v * stride;
+    return vec3(uintBitsToFloat(vb.w[b]), uintBitsToFloat(vb.w[b + 1]), uintBitsToFloat(vb.w[b + 2]));
+}
+vec3 vertexColor(Words vb, uint stride, uint packed, uint v) {
+    uint b = v * stride;
+    if (packed != 0u) return unpackUnorm4x8(vb.w[b + 7]).rgb;   // byte 28: unorm8 tint
+    return vec3(uintBitsToFloat(vb.w[b + 11]), uintBitsToFloat(vb.w[b + 12]), uintBitsToFloat(vb.w[b + 13]));
+}
+
+// is the sun hidden from p? (any hit in the near scene; beyond it, the cascades' word is not available here)
+float sunVisible(vec3 p, vec3 n, vec3 toSun) {
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, nearScene, gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
+                          p + n * 0.05, 0.01, toSun, 2000.0);
+    while (rayQueryProceedEXT(q)) {}
+    return rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
+}
+
+void main() {
+    ivec2 size = imageSize(rtRaw);
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= size.x || px.y >= size.y) return;
+    imageStore(rtRaw, px, vec4(0.0));                      // (nothing to add, unless the ray says otherwise)
+    vec2 uv = (vec2(px) + 0.5) / vec2(size);
+    float depth = textureLod(depthTex, uv, 0.0).r;
+    if (depth <= 0.0) return;                              // the sky
+    vec4 nr = textureLod(normalTex, uv, 0.0);
+    float roughness = gbufRoughness(nr);
+    if (roughness > pc.rules.z) return;                    // rough: the screen-space and probe reflections stand
+    vec3 P = reconstructWorld(uv, depth);
+    float camDist = distance(P, g.cameraPosition.xyz);
+    if (camDist > pc.rules.x) return;                      // far: faked
+    vec3 N = gbufNormal(nr);
+    vec3 V = normalize(P - g.cameraPosition.xyz);
+    vec3 R = reflect(V, N);
+
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, nearScene, gl_RayFlagsOpaqueEXT, 0xFF, P + N * 0.03, 0.02, R, pc.rules.x * 2.0);
+    while (rayQueryProceedEXT(q)) {}
+    vec3 col;
+    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
+        int id = rayQueryGetIntersectionInstanceCustomIndexEXT(q, true);
+        int prim = rayQueryGetIntersectionPrimitiveIndexEXT(q, true);
+        vec2 bc = rayQueryGetIntersectionBarycentricsEXT(q, true);
+        mat4x3 o2w = rayQueryGetIntersectionObjectToWorldEXT(q, true);
+        RtInst I = inst[id];
+        Words ib = Words(I.indices);
+        Words vb = Words(I.vertices);
+        uint i0 = ib.w[prim * 3], i1 = ib.w[prim * 3 + 1], i2 = ib.w[prim * 3 + 2];
+        vec3 p0 = vertexPos(vb, I.strideWords, i0), p1 = vertexPos(vb, I.strideWords, i1), p2 = vertexPos(vb, I.strideWords, i2);
+        vec3 w0 = o2w * vec4(p0, 1.0), w1 = o2w * vec4(p1, 1.0), w2 = o2w * vec4(p2, 1.0);
+        vec3 H = w0 * (1.0 - bc.x - bc.y) + w1 * bc.x + w2 * bc.y;
+        vec3 Nh = normalize(cross(w1 - w0, w2 - w0));
+        if (dot(Nh, R) > 0.0) Nh = -Nh;                    // the face the ray met
+        vec3 tint = vertexColor(vb, I.strideWords, I.packed, i0) * (1.0 - bc.x - bc.y) +
+                    vertexColor(vb, I.strideWords, I.packed, i1) * bc.x + vertexColor(vb, I.strideWords, I.packed, i2) * bc.y;
+        vec3 albedo = I.albedoRough.rgb * tint;
+        // (in the physical sky's units, as the scene pass draws a glow: without the glows' scale, 0.004, every lit
+        // window in a reflection was ~250x the window itself -- Glenn, 2026-11-08: "the nighttime reflections of other
+        // buildings still seems really bright")
+        vec3 emission = I.emissionMetal.rgb * ((I.flags & 32u) != 0u ? tint : vec3(1.0)) *
+                        (skyIsPhysical() ? g.skyPhysical3.z : 1.0);
+        // the frame's lights as the scene pass lights a surface (shadeLight), the sun's shadow by a ray through the near
+        // scene; the sky's light by the harmonics
+        float metallic = clamp(I.emissionMetal.a, 0.0, 1.0);
+        float rough = clamp(I.albedoRough.a, 0.04, 1.0);
+        float a = max(rough * rough, 0.002);
+        vec3 Vh = -R;
+        float NdotV = max(dot(Nh, Vh), 1e-4);
+        vec3 f0 = mix(vec3(0.04), albedo, metallic);
+        vec3 sunShadow = vec3(1.0);
+        if (g.counts.x > 0 && int(g.lights[0].typeRange.x) == 1 && dot(Nh, g.lights[0].directionInner.xyz) > 0.0)
+            sunShadow = vec3(sunVisible(H, Nh, normalize(g.lights[0].directionInner.xyz)) *
+                             cloudShadow(H, normalize(g.lights[0].directionInner.xyz)));   // (ADR-0387)
+        vec3 direct = vec3(0.0);
+        for (int i = 0; i < min(g.counts.x, 32); ++i)
+            direct += shadeLight(g.lights[i], H, Nh, Vh, albedo, metallic, f0, a * a, NdotV, sunShadow);
+        vec3 sky = skyIsPhysical() ? skyIrradianceSH(Nh) : g.skyHorizon.rgb * 0.5;
+        col = direct + albedo * (1.0 - metallic) * sky * g.ambient.rgb + emission;
+        // the air between (the hit is near: a little haze at most)
+        col *= exp(-0.00002 * rayQueryGetIntersectionTEXT(q, true));
+    } else {
+        // past the near scene: the probe's (faked) reflection, and the sky past that
+        vec3 fallback = skyIsPhysical() ? textureLod(skyCubeTex, R, roughness * 5.0).rgb : g.skyHorizon.rgb;
+        col = probeReflection(P, R, roughness, fallback, false);   // (the G-buffer has no indoor bit yet: the street's)
+    }
+    // the share of the probe's reflection the scene pass took out here (mesh.frag's rule, exactly), times the
+    // surface's own reflection weight
+    float roughFade = 1.0 - smoothstep(0.0, pc.rules.z, roughness);
+    float nearFade = 1.0 - smoothstep(pc.rules.x - pc.rules.y, pc.rules.x, camDist);
+    float k = nearFade * roughFade;
+    imageStore(rtRaw, px, vec4(col * gbufSpecular(nr) * k * g.cameraPosition.w, k));   // pre-exposed (ADR-0366)
+}

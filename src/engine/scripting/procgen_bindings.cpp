@@ -9,8 +9,11 @@
 #include "../procgen/sdf.h"
 #include "../procgen/noise.h"
 #include "../procgen/lsystem.h"
+#include "../../proc_rng.h"
 #include "../procgen/tree.h"
-#include "../procgen/vehicle/car_mesh.h"
+#include "../mesh_bake.h"
+#include "../mesh_unwrap.h"
+#include "../procgen/vehicle/car_interior.h"
 #include "../procgen/vehicle/occupant.h"
 #include "../procgen/person.h"
 #include "../procgen/terrain.h"
@@ -292,85 +295,7 @@ int l_mesh_capsule(lua_State* L) {
     return 1;
 }
 
-// --- mesh.car -------------------------------------------------------------
-// The low-poly car generator. It returns PARTS, not one mesh:
-// Renderable/InstanceGroup each carry a single RenderMaterial, so transparent
-// glass physically cannot share a mesh with the painted body. Recipes live in
-// vehicles.lua over the class data in vehicle_classes.lua (ADR-0042: C++ owns
-// the vocabulary, Lua owns the recipe).
-
-// Read an optional array of {z, v} pairs into a key curve. Absent -> keep default.
-bool readKeys(lua_State* L, int idx, const char* key, std::vector<CarKey>* out) {
-    lua_getfield(L, idx, key);
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
-    const int n = static_cast<int>(lua_rawlen(L, -1));
-    std::vector<CarKey> keys;
-    for (int i = 1; i <= n; ++i) {
-        lua_rawgeti(L, -1, i);
-        if (lua_istable(L, -1) && lua_rawlen(L, -1) >= 2) {
-            lua_rawgeti(L, -1, 1);
-            lua_rawgeti(L, -2, 2);
-            keys.push_back({static_cast<Real>(lua_tonumber(L, -2)),
-                            static_cast<Real>(lua_tonumber(L, -1))});
-            lua_pop(L, 2);
-        }
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    if (keys.empty()) return false;
-    *out = keys;
-    return true;
-}
-
-bool readNumbers(lua_State* L, int idx, const char* key, std::vector<Real>* out) {
-    lua_getfield(L, idx, key);
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
-    const int n = static_cast<int>(lua_rawlen(L, -1));
-    std::vector<Real> v;
-    for (int i = 1; i <= n; ++i) {
-        lua_rawgeti(L, -1, i);
-        v.push_back(static_cast<Real>(lua_tonumber(L, -1)));
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    *out = v;
-    return true;
-}
-
-bool readBand(lua_State* L, int idx, const char* key, CarBand* out) {
-    lua_getfield(L, idx, key);
-    if (!lua_istable(L, -1) || lua_rawlen(L, -1) < 2) { lua_pop(L, 1); return false; }
-    lua_rawgeti(L, -1, 1);
-    lua_rawgeti(L, -2, 2);
-    Real a = static_cast<Real>(lua_tonumber(L, -2));
-    Real b = static_cast<Real>(lua_tonumber(L, -1));
-    lua_pop(L, 3);
-    *out = {std::min(a, b), std::max(a, b)};
-    return true;
-}
-
-bool readBands(lua_State* L, int idx, const char* key, std::vector<CarBand>* out) {
-    lua_getfield(L, idx, key);
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
-    const int n = static_cast<int>(lua_rawlen(L, -1));
-    std::vector<CarBand> v;
-    for (int i = 1; i <= n; ++i) {
-        lua_rawgeti(L, -1, i);
-        if (lua_istable(L, -1) && lua_rawlen(L, -1) >= 2) {
-            lua_rawgeti(L, -1, 1);
-            lua_rawgeti(L, -2, 2);
-            Real a = static_cast<Real>(lua_tonumber(L, -2));
-            Real b = static_cast<Real>(lua_tonumber(L, -1));
-            lua_pop(L, 2);
-            v.push_back({std::min(a, b), std::max(a, b)});
-        }
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    *out = v;
-    return true;
-}
-
+// An optional {r, g, b} field into *out (absent: left as it is).
 bool readColor(lua_State* L, int idx, const char* key, Vec3* out) {
     lua_getfield(L, idx, key);
     if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
@@ -379,110 +304,6 @@ bool readColor(lua_State* L, int idx, const char* key, Vec3* out) {
     return true;
 }
 
-CarParams readCarParams(lua_State* L, int idx) {
-    CarParams p = defaultSedanParams();
-    if (!lua_istable(L, idx)) return p;
-
-    p.width           = static_cast<Real>(optField(L, idx, "width", p.width));
-    p.height          = static_cast<Real>(optField(L, idx, "height", p.height));
-    p.length          = static_cast<Real>(optField(L, idx, "length", p.length));
-    p.wheelDiameter   = static_cast<Real>(optField(L, idx, "wheel_diameter", p.wheelDiameter));
-    p.frontOverhang   = static_cast<Real>(optField(L, idx, "front_overhang", p.frontOverhang));
-    p.rearOverhang    = static_cast<Real>(optField(L, idx, "rear_overhang", p.rearOverhang));
-    p.groundClearance = static_cast<Real>(optField(L, idx, "ground_clearance", p.groundClearance));
-
-    p.chamfer         = static_cast<Real>(optField(L, idx, "chamfer", p.chamfer));
-    p.topPts          = static_cast<int>(optField(L, idx, "top_pts", p.topPts));
-    p.bottomPts       = static_cast<int>(optField(L, idx, "bottom_pts", p.bottomPts));
-    p.tumblehome      = static_cast<Real>(optField(L, idx, "tumblehome", p.tumblehome));
-    p.pillarHalfWidth = static_cast<Real>(optField(L, idx, "pillar_half_width", p.pillarHalfWidth));
-    p.glassHalfU      = static_cast<Real>(optField(L, idx, "glass_half_u", p.glassHalfU));
-    p.railDrop        = static_cast<Real>(optField(L, idx, "rail_drop", p.railDrop));
-    p.archHalfSpan    = static_cast<Real>(optField(L, idx, "arch_half_span", p.archHalfSpan));
-    p.archTop         = static_cast<Real>(optField(L, idx, "arch_top", p.archTop));
-    // Cabin furniture and the belt's shape: a bus needs its own (rows 0 is the
-    // bus saloon), and none of these reached Lua, so every class got a car's.
-    p.rows            = static_cast<int>(optField(L, idx, "rows", p.rows));
-    p.seatPitch       = static_cast<Real>(optField(L, idx, "seat_pitch", p.seatPitch));
-    p.backAngle       = static_cast<Real>(optField(L, idx, "back_angle", p.backAngle));
-    p.steerDiameter   = static_cast<Real>(optField(L, idx, "steer_diameter", p.steerDiameter));
-    p.hipHeight       = static_cast<Real>(optField(L, idx, "hip_height", p.hipHeight));
-    p.cabinFloor      = static_cast<Real>(optField(L, idx, "cabin_floor", p.cabinFloor));
-    p.beltKick        = static_cast<Real>(optField(L, idx, "belt_kick", p.beltKick));
-    p.beltKickStart   = static_cast<Real>(optField(L, idx, "belt_kick_start", p.beltKickStart));
-    p.beltKickEnd     = static_cast<Real>(optField(L, idx, "belt_kick_end", p.beltKickEnd));
-    p.shellThickness  = static_cast<Real>(optField(L, idx, "shell_thickness", p.shellThickness));
-    p.interior        = optField(L, idx, "interior", p.interior ? 1.0 : 0.0) != 0.0;
-
-    readNumbers(L, idx, "stations", &p.stations);
-    readKeys(L, idx, "roof", &p.roof);
-    readKeys(L, idx, "sill", &p.sill);
-    readKeys(L, idx, "plan", &p.plan);
-    readBand(L, idx, "windshield", &p.windshield);
-    readBand(L, idx, "backlight", &p.backlight);
-    readBands(L, idx, "side_windows", &p.sideWindows);
-    readNumbers(L, idx, "pillars", &p.pillars);
-    readColor(L, idx, "paint", &p.paint);
-    readColor(L, idx, "trim_color", &p.trimColor);
-    readColor(L, idx, "seat_color", &p.seatColor);
-    readColor(L, idx, "interior_color", &p.interiorColor);
-    readColor(L, idx, "pillar_color", &p.pillarColor);
-
-    lua_getfield(L, idx, "lod");
-    if (lua_isstring(L, -1)) {
-        const std::string lod = lua_tostring(L, -1);
-        if (lod == "mid") p.lod = CarLod::Mid;
-        else if (lod == "low") p.lod = CarLod::Low;
-        else if (lod == "proxy") p.lod = CarLod::Proxy;
-        else p.lod = CarLod::High;
-    }
-    lua_pop(L, 1);
-    return p;
-}
-
-// mesh.car(params) -> { body=, glass=, interior=, lamp=, wheel=,
-//                       lights = {{name=, pos={x,y,z}, normal={x,y,z}}, ...},
-//                       half_extent = {x,y,z} }
-// Empty parts are omitted, so `if c.glass then` is the natural test in Lua.
-int l_mesh_car(lua_State* L) {
-    const CarParams p = readCarParams(L, 1);
-    const CarMesh car = buildCarMesh(p);
-
-    static const char* kNames[kCarPartCount] = {"body", "glass", "interior",
-                                                "lamp", "wheel"};
-    lua_newtable(L);
-    for (int i = 0; i < kCarPartCount; ++i) {
-        if (car.parts[i].vertices.empty()) continue;
-        pushMesh(L, std::make_shared<RenderMesh>(car.parts[i]));
-        lua_setfield(L, -2, kNames[i]);
-    }
-
-    lua_newtable(L);
-    int n = 0;
-    for (const CarAttach& a : car.attaches) {
-        lua_newtable(L);
-        lua_pushstring(L, a.tag.c_str());
-        lua_setfield(L, -2, "name");
-        auto pushVec = [&](const Vec3& v, const char* field) {
-            lua_newtable(L);
-            lua_pushnumber(L, v.x); lua_rawseti(L, -2, 1);
-            lua_pushnumber(L, v.y); lua_rawseti(L, -2, 2);
-            lua_pushnumber(L, v.z); lua_rawseti(L, -2, 3);
-            lua_setfield(L, -2, field);
-        };
-        pushVec(a.position, "pos");
-        pushVec(a.normal, "normal");
-        lua_rawseti(L, -2, ++n);
-    }
-    lua_setfield(L, -2, "lights");
-
-    lua_newtable(L);
-    lua_pushnumber(L, car.halfExtent.x); lua_rawseti(L, -2, 1);
-    lua_pushnumber(L, car.halfExtent.y); lua_rawseti(L, -2, 2);
-    lua_pushnumber(L, car.halfExtent.z); lua_rawseti(L, -2, 3);
-    lua_setfield(L, -2, "half_extent");
-    return 1;
-}
 
 
 // mesh.occupant{ back_angle=, shirt={r,g,b}, trousers=, skin= } -> Mesh
@@ -771,6 +592,513 @@ int l_mesh_uv_by(lua_State* L) {
         x.v = static_cast<float>(luaL_optnumber(L, -1, x.v));
         lua_pop(L, 2);
     }
+    pushMesh(L, m);
+    return 1;
+}
+
+// --- CURVES, PROFILES AND THE SURFACES FROM THEM (#191; mesh_surfaces.cpp) -----------------------------------------
+bool optBoolField(lua_State* L, int idx, const char* key, bool fallback);   // (below, with the building params)
+// A PROFILE in Lua is an array of {x, y} with `closed` (default true); a PATH an array of {x, y, z} with `closed`
+// (default false). Plain tables: a script can build, edit or concatenate them itself.
+MeshProfile checkProfile(lua_State* L, int idx) {
+    idx = lua_absindex(L, idx);
+    luaL_checktype(L, idx, LUA_TTABLE);
+    MeshProfile p;
+    const lua_Integer n = luaL_len(L, idx);
+    for (lua_Integer i = 1; i <= n; ++i) {
+        lua_geti(L, idx, i);
+        luaL_checktype(L, -1, LUA_TTABLE);
+        lua_geti(L, -1, 1);
+        const double x = luaL_checknumber(L, -1);
+        lua_geti(L, -2, 2);
+        const double y = luaL_checknumber(L, -1);
+        lua_pop(L, 3);
+        p.pts.push_back(Vec2(x, y));
+    }
+    lua_getfield(L, idx, "closed");
+    if (lua_isboolean(L, -1)) p.closed = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    return p;
+}
+void pushProfile(lua_State* L, const MeshProfile& p) {
+    lua_createtable(L, static_cast<int>(p.pts.size()), 1);
+    for (std::size_t i = 0; i < p.pts.size(); ++i) {
+        lua_createtable(L, 2, 0);
+        lua_pushnumber(L, p.pts[i].x); lua_seti(L, -2, 1);
+        lua_pushnumber(L, p.pts[i].y); lua_seti(L, -2, 2);
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_pushboolean(L, p.closed);
+    lua_setfield(L, -2, "closed");
+}
+std::vector<Vec3> checkPoints(lua_State* L, int idx) {
+    idx = lua_absindex(L, idx);
+    luaL_checktype(L, idx, LUA_TTABLE);
+    std::vector<Vec3> out;
+    const lua_Integer n = luaL_len(L, idx);
+    for (lua_Integer i = 1; i <= n; ++i) {
+        lua_geti(L, idx, i);
+        out.push_back(checkVec3(L, -1));
+        lua_pop(L, 1);
+    }
+    return out;
+}
+MeshPath checkPath(lua_State* L, int idx) {
+    MeshPath p;
+    p.pts = checkPoints(L, idx);
+    lua_getfield(L, lua_absindex(L, idx), "closed");
+    p.closed = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    return p;
+}
+void pushPath(lua_State* L, const MeshPath& p) {
+    lua_createtable(L, static_cast<int>(p.pts.size()), 1);
+    for (std::size_t i = 0; i < p.pts.size(); ++i) {
+        pushVec3(L, p.pts[i]);
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_pushboolean(L, p.closed);
+    lua_setfield(L, -2, "closed");
+}
+Vec3 optVec3Field(lua_State* L, int idx, const char* key, Vec3 fallback);   // (below, with the building params)
+int optIntField(lua_State* L, int idx, const char* key, int fallback) {
+    return lua_istable(L, idx) ? static_cast<int>(optField(L, idx, key, fallback)) : fallback;
+}
+double optNumField(lua_State* L, int idx, const char* key, double fallback) {
+    return lua_istable(L, idx) ? optField(L, idx, key, fallback) : fallback;
+}
+
+// mesh.profile.*
+int l_profile_rect(lua_State* L) { pushProfile(L, MeshBuilder::profileRect(luaL_checknumber(L, 1), luaL_checknumber(L, 2))); return 1; }
+int l_profile_rounded_rect(lua_State* L) {
+    pushProfile(L, MeshBuilder::profileRoundedRect(luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3),
+                                                   static_cast<int>(luaL_optinteger(L, 4, 4))));
+    return 1;
+}
+int l_profile_circle(lua_State* L) {
+    pushProfile(L, MeshBuilder::profileCircle(luaL_checknumber(L, 1), static_cast<int>(luaL_optinteger(L, 2, 24))));
+    return 1;
+}
+int l_profile_ellipse(lua_State* L) {
+    pushProfile(L, MeshBuilder::profileEllipse(luaL_checknumber(L, 1), luaL_checknumber(L, 2), static_cast<int>(luaL_optinteger(L, 3, 24))));
+    return 1;
+}
+int l_profile_superellipse(lua_State* L) {
+    pushProfile(L, MeshBuilder::profileSuperellipse(luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3),
+                                                    static_cast<int>(luaL_optinteger(L, 4, 48))));
+    return 1;
+}
+int l_profile_polygon(lua_State* L) {
+    pushProfile(L, MeshBuilder::profilePolygon(static_cast<int>(luaL_checkinteger(L, 1)), luaL_checknumber(L, 2)));
+    return 1;
+}
+int l_profile_star(lua_State* L) {
+    pushProfile(L, MeshBuilder::profileStar(static_cast<int>(luaL_checkinteger(L, 1)), luaL_checknumber(L, 2), luaL_checknumber(L, 3)));
+    return 1;
+}
+int l_profile_fillet(lua_State* L) {
+    pushProfile(L, MeshBuilder::profileFillet(checkProfile(L, 1), luaL_checknumber(L, 2), static_cast<int>(luaL_optinteger(L, 3, 4))));
+    return 1;
+}
+int l_profile_offset(lua_State* L) { pushProfile(L, MeshBuilder::profileOffset(checkProfile(L, 1), luaL_checknumber(L, 2))); return 1; }
+int l_profile_resample(lua_State* L) {
+    pushProfile(L, MeshBuilder::profileResample(checkProfile(L, 1), static_cast<int>(luaL_checkinteger(L, 2))));
+    return 1;
+}
+// mesh.profile.open(points): the same points as an OPEN profile (a moulding's edge, a lathe's outline)
+int l_profile_open(lua_State* L) {
+    MeshProfile p = checkProfile(L, 1);
+    p.closed = false;
+    pushProfile(L, p);
+    return 1;
+}
+
+// mesh.path.*
+int l_path_line(lua_State* L) {
+    pushPath(L, MeshBuilder::pathLine(checkVec3(L, 1), checkVec3(L, 2), static_cast<int>(luaL_optinteger(L, 3, 1))));
+    return 1;
+}
+int l_path_arc(lua_State* L) {   // (centre, from, normal, angle, segs)
+    pushPath(L, MeshBuilder::pathArc(checkVec3(L, 1), checkVec3(L, 2), checkVec3(L, 3), luaL_checknumber(L, 4),
+                                     static_cast<int>(luaL_optinteger(L, 5, 24))));
+    return 1;
+}
+int l_path_circle(lua_State* L) {   // (centre, radius, normal = up, segs)
+    const Vec3 n = lua_istable(L, 3) ? checkVec3(L, 3) : Vec3(0, 1, 0);
+    pushPath(L, MeshBuilder::pathCircle(checkVec3(L, 1), luaL_checknumber(L, 2), n, static_cast<int>(luaL_optinteger(L, 4, 32))));
+    return 1;
+}
+int l_path_helix(lua_State* L) {   // (centre, radius, pitch, turns, segs_per_turn)
+    pushPath(L, MeshBuilder::pathHelix(checkVec3(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3), luaL_checknumber(L, 4),
+                                       static_cast<int>(luaL_optinteger(L, 5, 32))));
+    return 1;
+}
+int l_path_spline(lua_State* L) {   // (points, {closed, count})
+    pushPath(L, MeshBuilder::pathSpline(checkPoints(L, 1), lua_istable(L, 2) && optBoolField(L, 2, "closed", false),
+                                        optIntField(L, 2, "count", 64)));
+    return 1;
+}
+int l_path_bezier(lua_State* L) {
+    pushPath(L, MeshBuilder::pathBezier(checkVec3(L, 1), checkVec3(L, 2), checkVec3(L, 3), checkVec3(L, 4),
+                                        static_cast<int>(luaL_optinteger(L, 5, 32))));
+    return 1;
+}
+int l_path_resample(lua_State* L) { pushPath(L, MeshBuilder::pathResample(checkPath(L, 1), luaL_checknumber(L, 2))); return 1; }
+int l_path_length(lua_State* L) { lua_pushnumber(L, MeshBuilder::pathLength(checkPath(L, 1))); return 1; }
+
+// mesh.cabin_interior{ front_z, rear_z, half_width, floor_y, roof_y, rows = 2 (0: a city bus's saloon), seat_pitch,
+//   back_angle, hip_height, steer_diameter, trim_color, seat_color, driver_on_left = true, standing = false (a bus's
+//   standing-room layout: benches along the walls) }
+//   -> { mesh =, driver_seat = {x,y,z}, seats = { {x,y,z}... }, doors = { ... }, rear_hip = {x,y,z} | nil }
+// The cabin furniture (car_interior.h buildCarInterior) for a kit body's hollow: a car's seats, dash and wheel, or a
+// bus's saloon -- the driver's cab, the seat pairs either side of the aisle, the doors, the stanchions -- and the hip
+// and door points riders are posed from.
+int l_mesh_cabin_interior(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    CabinSpace cabin;
+    cabin.frontZ = optNumField(L, 1, "front_z", 1.0);
+    cabin.rearZ = optNumField(L, 1, "rear_z", -1.0);
+    cabin.halfWidth = optNumField(L, 1, "half_width", 0.7);
+    cabin.floorY = optNumField(L, 1, "floor_y", 0.3);
+    cabin.roofY = optNumField(L, 1, "roof_y", 1.4);
+    InteriorParams ip;
+    ip.rows = optIntField(L, 1, "rows", ip.rows);
+    ip.seatPitch = optNumField(L, 1, "seat_pitch", ip.seatPitch);
+    ip.backAngle = optNumField(L, 1, "back_angle", ip.backAngle);
+    ip.cushionHeight = optNumField(L, 1, "hip_height", ip.cushionHeight);
+    ip.steerDiameter = optNumField(L, 1, "steer_diameter", ip.steerDiameter);
+    ip.trimColor = optVec3Field(L, 1, "trim_color", ip.trimColor);
+    ip.seatColor = optVec3Field(L, 1, "seat_color", ip.seatColor);
+    ip.driverOnLeft = optBoolField(L, 1, "driver_on_left", ip.driverOnLeft);
+    ip.busStanding = optBoolField(L, 1, "standing", ip.busStanding);
+    Vec3 sgrp(0, 0, 0);
+    std::vector<Vec3> seats, doors, rearHip;
+    auto m = std::make_shared<RenderMesh>(buildCarInterior(cabin, ip, &sgrp, &seats, &doors, &rearHip));
+    lua_createtable(L, 0, 5);
+    pushMesh(L, m);
+    lua_setfield(L, -2, "mesh");
+    pushVec3(L, sgrp);
+    lua_setfield(L, -2, "driver_seat");
+    auto list = [&](const std::vector<Vec3>& pts, const char* key) {
+        lua_createtable(L, static_cast<int>(pts.size()), 0);
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            pushVec3(L, pts[i]);
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+        }
+        lua_setfield(L, -2, key);
+    };
+    list(seats, "seats");
+    list(doors, "doors");
+    if (!rearHip.empty()) {
+        pushVec3(L, rearHip.front());
+        lua_setfield(L, -2, "rear_hip");
+    }
+    return 1;
+}
+
+// mesh.paint(mesh, {r, g, b}) -> every vertex that colour (what bake_height_color(m, c, c) stood in for)
+int l_mesh_paint(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::paint(*m, checkVec3(L, 2));
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.warp(mesh, function(p) return {x, y, z} end): every vertex moved, normals following the shape
+int l_mesh_warp(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    MeshBuilder::warp(*m, [L](const Vec3& p) {
+        lua_pushvalue(L, 2);
+        pushVec3(L, p);
+        lua_call(L, 1, 1);
+        const Vec3 q = checkVec3(L, -1);
+        lua_pop(L, 1);
+        return q;
+    });
+    pushMesh(L, m);
+    return 1;
+}
+int l_mesh_bend(lua_State* L) {   // (mesh, angle, length)
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::bend(*m, luaL_checknumber(L, 2), luaL_checknumber(L, 3));
+    pushMesh(L, m);
+    return 1;
+}
+int l_mesh_twist(lua_State* L) {   // (mesh, radians per metre)
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::twist(*m, luaL_checknumber(L, 2));
+    pushMesh(L, m);
+    return 1;
+}
+int l_mesh_taper(lua_State* L) {   // (mesh, top scale, height)
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::taper(*m, luaL_checknumber(L, 2), luaL_checknumber(L, 3));
+    pushMesh(L, m);
+    return 1;
+}
+int l_mesh_mirror(lua_State* L) {   // (mesh, normal, d = 0) -> the mirrored copy
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::mirrored(checkMesh(L, 1), checkVec3(L, 2), luaL_optnumber(L, 3, 0.0))));
+    return 1;
+}
+// mesh.array(mesh, count, {offset = {x, y, z}, rotate_y = radians, scale = k}): each copy the last moved by that step
+int l_mesh_array(lua_State* L) {
+    const Vec3 off = optVec3Field(L, 3, "offset", Vec3(0, 0, 0));
+    const double ry = optNumField(L, 3, "rotate_y", 0.0), sc = optNumField(L, 3, "scale", 1.0);
+    const Mat4 step = Mat4::translate(off.x, off.y, off.z) * Mat4::rotateY(ry) * Mat4::scale(sc, sc, sc);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::array(checkMesh(L, 1), static_cast<int>(luaL_checkinteger(L, 2)), step)));
+    return 1;
+}
+// mesh.array_along(mesh, path, count, {align = true, up = {0, 1, 0}})
+int l_mesh_array_along(lua_State* L) {
+    const bool align = !lua_istable(L, 4) || optBoolField(L, 4, "align", true);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::arrayAlong(checkMesh(L, 1), checkPath(L, 2), static_cast<int>(luaL_checkinteger(L, 3)),
+                                                                     align, optVec3Field(L, 4, "up", Vec3(0, 1, 0)))));
+    return 1;
+}
+// mesh.section(profile, {origin, right, up}) -> a ring of points: the profile stood in a plane (a loft's section)
+int l_mesh_section(lua_State* L) {
+    const MeshProfile p = checkProfile(L, 1);
+    const Vec3 o = optVec3Field(L, 2, "origin", Vec3(0, 0, 0)), r = optVec3Field(L, 2, "right", Vec3(1, 0, 0)),
+               u = optVec3Field(L, 2, "up", Vec3(0, 1, 0));
+    MeshPath ring;
+    ring.closed = p.closed;
+    for (const Vec2& q : p.pts) ring.pts.push_back(o + r * q.x + u * q.y);
+    pushPath(L, ring);
+    return 1;
+}
+
+// A number, a {from, to} pair or a function(t) as a function of t in 0..1 (nil: `fallback`)
+std::function<double(double)> optCurveField(lua_State* L, int idx, const char* key, bool linearFromZero,
+                                            std::vector<int>& refs) {
+    if (!lua_istable(L, idx)) return {};
+    lua_getfield(L, idx, key);
+    std::function<double(double)> f;
+    if (lua_isnumber(L, -1)) {
+        const double k = lua_tonumber(L, -1);
+        if (linearFromZero) f = [k](double t) { return k * t; };
+        else f = [k](double) { return k; };
+    } else if (lua_istable(L, -1)) {
+        lua_geti(L, -1, 1);
+        const double a = luaL_checknumber(L, -1);
+        lua_geti(L, -2, 2);
+        const double b = luaL_checknumber(L, -1);
+        lua_pop(L, 2);
+        f = [a, b](double t) { return a + (b - a) * t; };
+    } else if (lua_isfunction(L, -1)) {
+        lua_pushvalue(L, -1);
+        const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+        refs.push_back(ref);   // (released once the mesh is built)
+        f = [L, ref](double t) {
+            lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+            lua_pushnumber(L, t);
+            lua_call(L, 1, 1);
+            const double v = luaL_checknumber(L, -1);
+            lua_pop(L, 1);
+            return v;
+        };
+    }
+    lua_pop(L, 1);
+    return f;
+}
+
+// mesh.sweep(profile, path, {scale = k | {from, to} | fn(t), twist = radians | {from, to} | fn(t), caps = true,
+//   crease = 40, up = {0, 1, 0}, color = {1, 1, 1}})
+int l_mesh_sweep(lua_State* L) {
+    const MeshProfile prof = checkProfile(L, 1);
+    const MeshPath path = checkPath(L, 2);
+    SweepStyle st;
+    std::vector<int> refs;
+    st.scaleAt = optCurveField(L, 3, "scale", false, refs);
+    st.twistAt = optCurveField(L, 3, "twist", true, refs);
+    st.caps = !lua_istable(L, 3) || optBoolField(L, 3, "caps", true);
+    st.creaseDeg = optNumField(L, 3, "crease", st.creaseDeg);
+    st.up = optVec3Field(L, 3, "up", st.up);
+    st.color = optVec3Field(L, 3, "color", st.color);
+    auto m = std::make_shared<RenderMesh>(MeshBuilder::sweep(prof, path, st));
+    for (int r : refs) luaL_unref(L, LUA_REGISTRYINDEX, r);
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.extrude(profile, height, {bevel = 0, bevel_segs = 3, segs = 1 (bands up the side), color})
+int l_mesh_extrude(lua_State* L) {
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::extrude(checkProfile(L, 1), luaL_checknumber(L, 2),
+                                                                  optNumField(L, 3, "bevel", 0.0), optIntField(L, 3, "bevel_segs", 3),
+                                                                  optVec3Field(L, 3, "color", Vec3(1, 1, 1)),
+                                                                  optIntField(L, 3, "segs", 1))));
+    return 1;
+}
+// mesh.revolve(profile of {r, y}, {segs = 32, from = 0, to = 2 pi, color, crease = 40})
+int l_mesh_revolve(lua_State* L) {
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::revolve(checkProfile(L, 1), optIntField(L, 2, "segs", 32),
+                                                                  optNumField(L, 2, "from", 0.0), optNumField(L, 2, "to", TAU),
+                                                                  optVec3Field(L, 2, "color", Vec3(1, 1, 1)),
+                                                                  optNumField(L, 2, "crease", 40.0))));
+    return 1;
+}
+// mesh.loft(sections, {closed = true, caps = true, color, crease = 40}): sections an array of point rings (mesh.section)
+int l_mesh_loft(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<std::vector<Vec3>> secs;
+    const lua_Integer n = luaL_len(L, 1);
+    for (lua_Integer i = 1; i <= n; ++i) {
+        lua_geti(L, 1, i);
+        secs.push_back(checkPoints(L, -1));
+        lua_pop(L, 1);
+    }
+    const bool closed = !lua_istable(L, 2) || optBoolField(L, 2, "closed", true);
+    const bool caps = !lua_istable(L, 2) || optBoolField(L, 2, "caps", true);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::loft(secs, closed, caps, optVec3Field(L, 2, "color", Vec3(1, 1, 1)),
+                                                               optNumField(L, 2, "crease", 40.0))));
+    return 1;
+}
+// mesh.superquadric(radii, e1, e2, {stacks = 24, slices = 48, color})
+int l_mesh_superquadric(lua_State* L) {
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::superquadric(checkVec3(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3),
+                                                                       optIntField(L, 4, "stacks", 24), optIntField(L, 4, "slices", 48),
+                                                                       optVec3Field(L, 4, "color", Vec3(1, 1, 1)))));
+    return 1;
+}
+
+// mesh.rounded_box({w, h, d}, radius, {segs = 2, uv = 1}): a box centred on the origin, every edge rounded (the
+// furniture's cushions, tops and panels; a radius under 3 mm is sharp)
+int l_mesh_rounded_box(lua_State* L) {
+    double r = luaL_optnumber(L, 2, 0.0);
+    if (r < 0.003) r = 0;
+    const int segs = optIntField(L, 3, "segs", 2);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::roundedBox(checkVec3(L, 1), r, r > 0 ? segs : 1, optNumField(L, 3, "uv", 1.0))));
+    return 1;
+}
+// mesh.move_by(mesh, fn(i, p, n) -> p): every vertex (i from 0) moved where fn says -- or left, when it returns nil;
+// normals kept. A cactus's ribs, a dent; fn may also just read (a closure gathering positions).
+int l_mesh_move_by(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    for (std::size_t i = 0; i < m->vertices.size(); ++i) {
+        Vertex& v = m->vertices[i];
+        lua_pushvalue(L, 2);
+        lua_pushinteger(L, static_cast<lua_Integer>(i));
+        pushVec3(L, v.position);
+        pushVec3(L, v.normal);
+        lua_call(L, 3, 1);
+        if (lua_istable(L, -1)) v.position = checkVec3(L, -1);
+        lua_pop(L, 1);
+    }
+    pushMesh(L, m);
+    return 1;
+}
+
+// mesh.transfer_normals(dst, src, {radius = 0.08}) -> dst with each vertex's normal taken from the best-matching src
+// vertex (MeshBuilder::transferNormals): a faceted cage shaded like the smooth body subdivided from it.
+int l_mesh_transfer_normals(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::transferNormals(*m, checkMesh(L, 2), optNumField(L, 3, "radius", 0.08));
+    pushMesh(L, m);
+    return 1;
+}
+
+// mesh.tangents(m) -> m with each vertex's tangent from its uvs (MeshBuilder::computeTangents)
+int l_mesh_tangents(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::computeTangents(*m);
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.unwrap(m, {texels_per_metre = 128, padding = 4, max_size = 4096, chart_angle = 50}) -> mesh, report
+// A unique atlas layout for the mesh (engine/mesh_unwrap.h): its vertices split along the chart seams, u, v the atlas
+// coordinates; tagged faces (a lens's role) keep theirs. report = { charts, planar, lscm, splits, size, fill,
+// texels_per_metre, ok }.
+int l_mesh_unwrap(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    UnwrapOptions o;
+    o.texelsPerMetre = optNumField(L, 2, "texels_per_metre", o.texelsPerMetre);
+    o.padding = optIntField(L, 2, "padding", o.padding);
+    o.maxSize = optIntField(L, 2, "max_size", o.maxSize);
+    o.chartAngleDeg = optNumField(L, 2, "chart_angle", o.chartAngleDeg);
+    const UnwrapReport r = unwrapMesh(*m, o);
+    pushMesh(L, m);
+    lua_createtable(L, 0, 8);
+    lua_pushinteger(L, r.charts); lua_setfield(L, -2, "charts");
+    lua_pushinteger(L, r.planar); lua_setfield(L, -2, "planar");
+    lua_pushinteger(L, r.lscm); lua_setfield(L, -2, "lscm");
+    lua_pushinteger(L, r.splits); lua_setfield(L, -2, "splits");
+    lua_pushinteger(L, r.size); lua_setfield(L, -2, "size");
+    lua_pushnumber(L, r.fill); lua_setfield(L, -2, "fill");
+    lua_pushnumber(L, r.texelsPerMetre); lua_setfield(L, -2, "texels_per_metre");
+    lua_pushboolean(L, r.ok); lua_setfield(L, -2, "ok");
+    return 2;
+}
+
+// --- rng.* : THE ENGINE'S ONE SEEDED STREAM (ProcRng, proc_rng.h) for Lua: the same seed draws the same numbers in a
+// recipe as in C++ (a shelf's stock, a bookcase's spines) ---
+constexpr const char* kRngMt = "engine.procgen.Rng";
+// rng.new(seed) -> r; r:next() in [0, 1), r:range(a, b), r:below(n) in 0 .. n-1. Seeds wrap to 32 bits.
+int l_rng_new(lua_State* L) {
+    const uint32_t seed = static_cast<uint32_t>(static_cast<uint64_t>(luaL_checkinteger(L, 1)) & 0xffffffffull);
+    void* mem = lua_newuserdatauv(L, sizeof(ProcRng), 0);
+    new (mem) ProcRng(seed);
+    luaL_setmetatable(L, kRngMt);
+    return 1;
+}
+ProcRng& checkRng(lua_State* L, int idx) { return *static_cast<ProcRng*>(luaL_checkudata(L, idx, kRngMt)); }
+int l_rng_next(lua_State* L) { lua_pushnumber(L, checkRng(L, 1).next()); return 1; }
+int l_rng_range(lua_State* L) {
+    ProcRng& r = checkRng(L, 1);
+    const double a = luaL_checknumber(L, 2), b = luaL_checknumber(L, 3);
+    lua_pushnumber(L, r.in(a, b));
+    return 1;
+}
+int l_rng_below(lua_State* L) {
+    ProcRng& r = checkRng(L, 1);
+    lua_pushinteger(L, r.below(static_cast<int>(luaL_checkinteger(L, 2))));
+    return 1;
+}
+
+// FLAT SHAPES (#191) lie in the plan at `at` (the frame's origin: x, y, z) facing up, or down when `down`; a profile's
+// (x, y) are plan x and z.
+MeshFrame optLevelFrame(lua_State* L, int idx) {
+    const Vec3 at = optVec3Field(L, idx, "at", Vec3(0, 0, 0));
+    const bool down = lua_istable(L, idx) && optBoolField(L, idx, "down", false);
+    return MeshFrame::level(at.y, !down, Vec2(at.x, at.z));
+}
+// mesh.annulus(r_in, r_out, {sides = 32, from = 0, to = 2 pi, rings = 1, at, down, color}): r_in 0 a disc
+int l_mesh_annulus(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitAnnulus(*m, optLevelFrame(L, 3), luaL_checknumber(L, 1), luaL_checknumber(L, 2),
+                             optVec3Field(L, 3, "color", Vec3(1, 1, 1)), optIntField(L, 3, "sides", 32), optNumField(L, 3, "from", 0.0),
+                             optNumField(L, 3, "to", TAU), optIntField(L, 3, "rings", 1));
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.band(outer, inner, {at, down, color}): the strip between two profiles paired point for point
+int l_mesh_band(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitBand(*m, optLevelFrame(L, 3), checkProfile(L, 1), checkProfile(L, 2), optVec3Field(L, 3, "color", Vec3(1, 1, 1)));
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.fill(profile, {holes = {profile, ...}, at, down, color}): the profile laid flat and filled
+int l_mesh_fill(lua_State* L) {
+    std::vector<MeshProfile> holes;
+    if (lua_istable(L, 2) && lua_getfield(L, 2, "holes") == LUA_TTABLE) {
+        const lua_Integer n = luaL_len(L, -1);
+        for (lua_Integer i = 1; i <= n; ++i) {
+            lua_geti(L, -1, i);
+            holes.push_back(checkProfile(L, lua_gettop(L)));
+            lua_pop(L, 1);
+        }
+    }
+    if (lua_istable(L, 2)) lua_pop(L, 1);
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitFill(*m, optLevelFrame(L, 2), checkProfile(L, 1), optVec3Field(L, 2, "color", Vec3(1, 1, 1)), holes);
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.skirt(profile, top, bottom, {inward = false, color}): a wall hung round a plan outline from y = top to bottom
+int l_mesh_skirt(lua_State* L) {
+    const double bottom = luaL_checknumber(L, 3);
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitSkirt(*m, checkProfile(L, 1).pts, luaL_checknumber(L, 2), [bottom](const Vec2&, const Vec2&) { return Vec2(bottom, bottom); },
+                           optVec3Field(L, 4, "color", Vec3(1, 1, 1)), lua_istable(L, 4) && optBoolField(L, 4, "inward", false));
     pushMesh(L, m);
     return 1;
 }
@@ -1909,6 +2237,7 @@ int l_building_height(lua_State* L) {
 // Read an optional {x,y,z} field; fall back if absent/not a table.
 Vec3 optVec3Field(lua_State* L, int idx, const char* key, Vec3 fallback) {
     idx = lua_absindex(L, idx);
+    if (!lua_istable(L, idx)) return fallback;   // (no options table at all)
     lua_getfield(L, idx, key);
     Vec3 v = lua_istable(L, -1) ? checkVec3(L, -1) : fallback;
     lua_pop(L, 1);
@@ -2514,6 +2843,119 @@ int l_tex_bake_normal(lua_State* L) {
     int size = static_cast<int>(luaL_optinteger(L, 3, 256));
     pushImage(L, std::make_shared<TextureData>(bakeFieldNormal(h, strength, size)));
     return 1;
+}
+
+// BAKE OPTIONS from a Lua table at `idx`: size, cage, samples, color, curvature, height, thickness, ao_rays,
+// ao_distance, thickness_max, dilate (engine/mesh_bake.h)
+BakeOptions readBakeOptions(lua_State* L, int idx) {
+    BakeOptions o;
+    o.size = optIntField(L, idx, "size", o.size);
+    o.cage = optNumField(L, idx, "cage", o.cage);
+    o.samples = optIntField(L, idx, "samples", o.samples);
+    o.color = optBoolField(L, idx, "color", o.color);
+    o.curvature = optBoolField(L, idx, "curvature", o.curvature);
+    o.height = optBoolField(L, idx, "height", o.height);
+    o.thickness = optBoolField(L, idx, "thickness", o.thickness);
+    o.aoRays = optIntField(L, idx, "ao_rays", o.aoRays);
+    o.aoDistance = optNumField(L, idx, "ao_distance", o.aoDistance);
+    o.thicknessMax = optNumField(L, idx, "thickness_max", o.thicknessMax);
+    o.dilate = optIntField(L, idx, "dilate", o.dilate);
+    return o;
+}
+// The maps a bake asked for, as Images in a table (normal and world always; the rest when asked)
+void pushBakedMaps(lua_State* L, const BakedMaps& m, const BakeOptions& o) {
+    auto image = [&](std::vector<uint8_t> px, int channels, const char* key) {
+        auto t = std::make_shared<TextureData>();
+        t->width = t->height = m.size;
+        t->channels = channels;
+        t->pixels = std::move(px);
+        pushImage(L, t);
+        lua_setfield(L, -2, key);
+    };
+    lua_createtable(L, 0, 10);
+    image(normalMapBytes(m), 3, "normal");
+    image(worldNormalMapBytes(m), 3, "world");
+    if (o.color) image(colorMapBytes(m), 3, "color");
+    if (o.aoRays > 0) image(aoMapBytes(m), 1, "ao");
+    if (o.curvature) image(curvatureMapBytes(m), 1, "curvature");
+    if (o.height) image(heightMapBytes(m, o.cage), 1, "height");
+    if (o.thickness) image(thicknessMapBytes(m, o.thicknessMax), 1, "thickness");
+    lua_pushinteger(L, m.texels); lua_setfield(L, -2, "texels");
+    lua_pushinteger(L, m.hits); lua_setfield(L, -2, "hits");
+    lua_pushinteger(L, m.size); lua_setfield(L, -2, "size");
+}
+// mesh.bake(low, high, {size = 512, cage = 0.05, samples = 1, color, curvature, height, thickness, ao_rays = 0,
+//   ao_distance = 0.5, thickness_max = 0.5, dilate = 4}) -> { normal = Image, world = Image, color, ao, curvature,
+//   height, thickness (those asked for), texels =, hits =, size = }
+// The detailed mesh `high` baked into the atlas of `low` (unwrapped by mesh.unwrap; engine/mesh_bake.h).
+int l_mesh_bake(lua_State* L) {
+    const RenderMesh& low = checkMesh(L, 1);
+    const RenderMesh& high = checkMesh(L, 2);
+    const BakeOptions o = readBakeOptions(L, 3);
+    pushBakedMaps(L, bakeMaps(low, high, o), o);
+    return 1;
+}
+// mesh.bake_parts({ { low =, high =, bake = true }, ... }, { texels_per_metre, padding, max_size, chart_angle },
+//   { bake options as mesh.bake }) -> mesh, maps, report, part_meshes (each part's slice of `mesh`, in order)
+// A MODEL baked part by part into one atlas (engine/mesh_bake.h bakeParts): each part's low unwrapped with the
+// others (no chart crossing parts) and baked from its own high only; a part with bake = false (glass, a lens) takes
+// no atlas space and keeps its uvs. `mesh` is the parts' lows merged in order.
+int l_mesh_bake_parts(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<BakePart> parts;
+    const lua_Integer n = luaL_len(L, 1);
+    for (lua_Integer i = 1; i <= n; ++i) {
+        lua_geti(L, 1, i);
+        const int t = lua_gettop(L);
+        BakePart p;
+        lua_getfield(L, t, "low");
+        p.low = checkMesh(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, t, "high");
+        if (!lua_isnil(L, -1)) p.high = checkMesh(L, -1);
+        lua_pop(L, 1);
+        p.bake = optBoolField(L, t, "bake", true) && !p.high.indices.empty();
+        parts.push_back(std::move(p));
+        lua_pop(L, 1);
+    }
+    UnwrapOptions uo;
+    uo.texelsPerMetre = optNumField(L, 2, "texels_per_metre", uo.texelsPerMetre);
+    uo.padding = optIntField(L, 2, "padding", uo.padding);
+    uo.maxSize = optIntField(L, 2, "max_size", uo.maxSize);
+    uo.chartAngleDeg = optNumField(L, 2, "chart_angle", uo.chartAngleDeg);
+    const BakeOptions bo = readBakeOptions(L, 3);
+    BakedModel bm = bakeParts(parts, uo, bo);
+    // each part's own mesh (its slice of the merged one), so each is drawn with its own material: the body with its
+    // baked maps, the glass smooth
+    std::vector<RenderMesh> slices(parts.size());
+    for (std::size_t p = 0; p < parts.size(); ++p) {
+        const std::size_t i0 = bm.firstIndex[p], i1 = p + 1 < parts.size() ? bm.firstIndex[p + 1] : bm.mesh.indices.size();
+        std::unordered_map<uint32_t, uint32_t> remap;
+        for (std::size_t c = i0; c < i1; ++c) {
+            const uint32_t v = bm.mesh.indices[c];
+            auto it = remap.find(v);
+            if (it == remap.end()) {
+                it = remap.emplace(v, static_cast<uint32_t>(slices[p].vertices.size())).first;
+                slices[p].vertices.push_back(bm.mesh.vertices[v]);
+            }
+            slices[p].indices.push_back(it->second);
+        }
+    }
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(bm.mesh)));
+    BakeOptions shown = bo;
+    shown.size = bm.unwrap.size;
+    pushBakedMaps(L, bm.maps, shown);
+    lua_createtable(L, 0, 4);
+    lua_pushinteger(L, bm.unwrap.charts); lua_setfield(L, -2, "charts");
+    lua_pushinteger(L, bm.unwrap.size); lua_setfield(L, -2, "size");
+    lua_pushnumber(L, bm.unwrap.fill); lua_setfield(L, -2, "fill");
+    lua_pushboolean(L, bm.unwrap.ok); lua_setfield(L, -2, "ok");
+    lua_createtable(L, static_cast<int>(slices.size()), 0);
+    for (std::size_t p = 0; p < slices.size(); ++p) {
+        pushMesh(L, std::make_shared<RenderMesh>(std::move(slices[p])));
+        lua_rawseti(L, -2, static_cast<lua_Integer>(p + 1));
+    }
+    return 4;
 }
 
 // --- terrain.* : compose a heightfield from primitives (ADR-0043) -------------
@@ -3518,9 +3960,12 @@ int l_poly_box(lua_State* L) {
 int l_poly_select(lua_State* L) {
     PolyMesh& m = checkPoly(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
-    int group = -2, mat = -2;
+    int group = -2, mat = -2, panel = -2;
     lua_getfield(L, 2, "group");
     if (lua_isstring(L, -1)) group = m.findGroup(lua_tostring(L, -1));
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "panel");
+    if (lua_isstring(L, -1)) panel = m.findPanel(lua_tostring(L, -1));
     lua_pop(L, 1);
     lua_getfield(L, 2, "mat");
     if (lua_isstring(L, -1)) mat = m.findMat(lua_tostring(L, -1));
@@ -3548,6 +3993,7 @@ int l_poly_select(lua_State* L) {
         const auto& face = m.faces[f];
         if (group == -1 || (group >= 0 && face.group != group)) continue;
         if (mat == -1 || (mat >= 0 && face.mat != mat)) continue;
+        if (panel == -1 || (panel >= 0 && face.panel != panel)) continue;
         const Vec3 c = m.faceCentroid(static_cast<int>(f));
         if (haveBox && (c.x < lo.x || c.y < lo.y || c.z < lo.z || c.x > hi.x || c.y > hi.y || c.z > hi.z)) continue;
         const Vec3 n = m.faceNormal(static_cast<int>(f));
@@ -3592,14 +4038,15 @@ int l_poly_inset_region(lua_State* L) {
     pushSel(L, insetRegion(m, sel, luaL_checknumber(L, 3)));
     return 1;
 }
-// P:assign(sel, { group=, mat=, color={r,g,b} })
+// P:assign(sel, { group=, mat=, panel=, color={r,g,b} })
 int l_poly_assign(lua_State* L) {
     PolyMesh& m = checkPoly(L, 1);
     const auto sel = checkSel(L, 2);
     checkSelRange(L, m, sel);
     luaL_checktype(L, 3, LUA_TTABLE);
-    int g = -1, k = -1;
+    int g = -1, k = -1, pn = -1;
     lua_getfield(L, 3, "group"); if (lua_isstring(L, -1)) g = m.groupId(lua_tostring(L, -1)); lua_pop(L, 1);
+    lua_getfield(L, 3, "panel"); if (lua_isstring(L, -1)) pn = m.panelId(lua_tostring(L, -1)); lua_pop(L, 1);
     lua_getfield(L, 3, "mat"); if (lua_isstring(L, -1)) k = m.matId(lua_tostring(L, -1)); lua_pop(L, 1);
     bool haveC = false;
     Vec3 col;
@@ -3608,6 +4055,7 @@ int l_poly_assign(lua_State* L) {
         auto& face = m.faces[static_cast<std::size_t>(f)];
         if (g >= 0) face.group = g;
         if (k >= 0) face.mat = k;
+        if (pn >= 0) face.panel = pn;
         if (haveC) face.color = col;
     }
     return 0;
@@ -3724,26 +4172,78 @@ int l_poly_extract(lua_State* L) {
     pushPoly(L, std::make_shared<PolyMesh>(extractOffset(m, sel, luaL_checknumber(L, 3), lua_toboolean(L, 4) != 0)));
     return 1;
 }
+// P:panel_of(face) -> its panel's name (the face index raycast returns)
+int l_poly_panel_of(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    const lua_Integer f = luaL_checkinteger(L, 2);
+    if (f < 0 || f >= static_cast<lua_Integer>(m.faces.size())) return luaL_error(L, "panel_of: no face %d", static_cast<int>(f));
+    lua_pushstring(L, m.panels[static_cast<std::size_t>(m.faces[static_cast<std::size_t>(f)].panel)].c_str());
+    return 1;
+}
+// P:panels() -> { "body", "door_fl", ... }: the panels some face is on, body first
+int l_poly_panels(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    std::vector<char> used(m.panels.size(), 0);
+    for (const auto& f : m.faces) used[static_cast<std::size_t>(f.panel)] = 1;
+    lua_newtable(L);
+    int k = 0;
+    for (std::size_t i = 0; i < m.panels.size(); ++i)
+        if (used[i]) { lua_pushstring(L, m.panels[i].c_str()); lua_rawseti(L, -2, ++k); }
+    return 1;
+}
+// P:solidify(sel, thickness, mat) -> Poly: the region's back and its edge walls (append it to give the skin depth)
+int l_poly_solidify(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    pushPoly(L, std::make_shared<PolyMesh>(solidify(m, sel, luaL_checknumber(L, 3), luaL_optstring(L, 4, "trim"))));
+    return 1;
+}
+// P:ring(sel) -> sel: the faces round the region (sharing a corner with it)
+int l_poly_ring(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    pushSel(L, ringAround(m, sel));
+    return 1;
+}
 int l_poly_closed(lua_State* L) { lua_pushboolean(L, isClosed(checkPoly(L, 1))); return 1; }
 int l_poly_volume(lua_State* L) { lua_pushnumber(L, signedVolume(checkPoly(L, 1))); return 1; }
 int l_poly_face_count(lua_State* L) { lua_pushinteger(L, static_cast<lua_Integer>(checkPoly(L, 1).faces.size())); return 1; }
+// P:bounds([sel]) -> lo, hi: every point's, or only the selected faces' corners
 int l_poly_bounds(lua_State* L) {
     const PolyMesh& m = checkPoly(L, 1);
     Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
-    for (const Vec3& p : m.pts) {
+    auto take = [&](const Vec3& p) {
         lo = Vec3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
         hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
+    };
+    if (lua_istable(L, 2)) {
+        const auto sel = checkSel(L, 2);
+        checkSelRange(L, m, sel);
+        for (int f : sel)
+            for (int v : m.faces[static_cast<std::size_t>(f)].v) take(m.pts[static_cast<std::size_t>(v)]);
+    } else {
+        for (const Vec3& p : m.pts) take(p);
     }
     pushVec3(L, lo);
     pushVec3(L, hi);
     return 2;
 }
-// P:to_parts{ autosmooth = 35, uv_scale = 1 } -> { [mat] = Mesh, ... }
+// P:to_parts{ autosmooth = 35, uv_scale = 1, panel = "door_fl" } -> { [mat] = Mesh, ... } (panel: only its faces;
+// a panel the mesh lacks gives an empty table)
 int l_poly_to_parts(lua_State* L) {
     const PolyMesh& m = checkPoly(L, 1);
     const double sm = lua_istable(L, 2) ? optField(L, 2, "autosmooth", 35.0) : 35.0;
     const double uv = lua_istable(L, 2) ? optField(L, 2, "uv_scale", 1.0) : 1.0;
-    const auto parts = toParts(m, sm, uv);
+    int panel = -1;
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "panel");
+        if (lua_isstring(L, -1)) panel = m.findPanel(lua_tostring(L, -1));
+        if (lua_isstring(L, -1) && panel < 0) { lua_pop(L, 1); lua_newtable(L); return 1; }
+        lua_pop(L, 1);
+    }
+    const auto parts = toParts(m, sm, uv, panel);
     lua_createtable(L, 0, static_cast<int>(parts.size()));
     for (const auto& [name, rm] : parts) {
         pushMesh(L, std::make_shared<RenderMesh>(rm));
@@ -3767,6 +4267,7 @@ void registerPolyMetatable(lua_State* L) {
             {"append", l_poly_append}, {"translate", l_poly_translate}, {"scale", l_poly_scale},
             {"map", l_poly_map}, {"closed", l_poly_closed}, {"volume", l_poly_volume},
             {"face_count", l_poly_face_count}, {"bounds", l_poly_bounds}, {"to_parts", l_poly_to_parts},
+            {"panels", l_poly_panels}, {"solidify", l_poly_solidify}, {"ring", l_poly_ring}, {"panel_of", l_poly_panel_of},
             {nullptr, nullptr},
         };
         luaL_newlib(L, kMethods);
@@ -3937,7 +4438,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"plane", l_mesh_plane},
         {"torus", l_mesh_torus},
         {"capsule", l_mesh_capsule},
-        {"car", l_mesh_car},
+        {"cabin_interior", l_mesh_cabin_interior},
         {"occupant", l_mesh_occupant},
         {"person", l_mesh_person},
         {"merge", l_mesh_merge},
@@ -3969,9 +4470,50 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"flat_shade", l_mesh_flat_shade},
         {"autosmooth", l_mesh_autosmooth},
         {"audit", l_mesh_audit},
+        {"sweep", l_mesh_sweep},
+        {"extrude", l_mesh_extrude},
+        {"revolve", l_mesh_revolve},
+        {"loft", l_mesh_loft},
+        {"superquadric", l_mesh_superquadric},
+        {"rounded_box", l_mesh_rounded_box},
+        {"move_by", l_mesh_move_by},
+        {"transfer_normals", l_mesh_transfer_normals},
+        {"unwrap", l_mesh_unwrap},
+        {"tangents", l_mesh_tangents},
+        {"bake", l_mesh_bake},
+        {"bake_parts", l_mesh_bake_parts},
+        {"annulus", l_mesh_annulus},
+        {"band", l_mesh_band},
+        {"fill", l_mesh_fill},
+        {"skirt", l_mesh_skirt},
+        {"section", l_mesh_section},
+        {"paint", l_mesh_paint},
+        {"warp", l_mesh_warp},
+        {"bend", l_mesh_bend},
+        {"twist", l_mesh_twist},
+        {"taper", l_mesh_taper},
+        {"mirror", l_mesh_mirror},
+        {"array", l_mesh_array},
+        {"array_along", l_mesh_array_along},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kMeshFns);
+    // (#191) the curve words: mesh.profile.*, mesh.path.*
+    static const luaL_Reg kProfileFns[] = {
+        {"rect", l_profile_rect}, {"rounded_rect", l_profile_rounded_rect}, {"circle", l_profile_circle},
+        {"ellipse", l_profile_ellipse}, {"superellipse", l_profile_superellipse}, {"polygon", l_profile_polygon},
+        {"star", l_profile_star}, {"fillet", l_profile_fillet}, {"offset", l_profile_offset},
+        {"resample", l_profile_resample}, {"open", l_profile_open}, {nullptr, nullptr},
+    };
+    luaL_newlib(L, kProfileFns);
+    lua_setfield(L, -2, "profile");
+    static const luaL_Reg kPathFns[] = {
+        {"line", l_path_line}, {"arc", l_path_arc}, {"circle", l_path_circle}, {"helix", l_path_helix},
+        {"spline", l_path_spline}, {"bezier", l_path_bezier}, {"resample", l_path_resample}, {"length", l_path_length},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kPathFns);
+    lua_setfield(L, -2, "path");
     lua_setglobal(L, "mesh");
 
     registerPolyMetatable(L);
@@ -4038,6 +4580,18 @@ void openProcgenLibrary(ScriptVM& vm) {
     };
     luaL_newlib(L, kBuildingFns);
     lua_setglobal(L, "building");
+
+    if (luaL_newmetatable(L, kRngMt)) {   // ProcRng is trivially destructible: no __gc
+        lua_newtable(L);
+        lua_pushcfunction(L, l_rng_next);  lua_setfield(L, -2, "next");
+        lua_pushcfunction(L, l_rng_range); lua_setfield(L, -2, "range");
+        lua_pushcfunction(L, l_rng_below); lua_setfield(L, -2, "below");
+        lua_setfield(L, -2, "__index");
+    }
+    lua_pop(L, 1);
+    static const luaL_Reg kRngFns[] = {{"new", l_rng_new}, {nullptr, nullptr}};
+    luaL_newlib(L, kRngFns);
+    lua_setglobal(L, "rng");
 
     static const luaL_Reg kFurnitureFns[] = {
         {"lamp", l_furniture_lamp},

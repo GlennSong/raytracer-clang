@@ -4569,7 +4569,7 @@ TEST_CASE(level_print_shop_interiors) {
                 spotted[f.trade] = true;
                 const Vec2 c = (f.a + f.b) * 0.5;
                 std::printf("    [shop spot] %d %s %.2f %.2f %.2f %.3f %.3f %.1f\n", f.trade,
-                            tradeById(f.trade) ? tradeById(f.trade)->name : "?", c.x, r.baseY, c.y, f.n.x, f.n.y, len);
+                            tradeById(f.trade) ? tradeById(f.trade)->name.c_str() : "?", c.x, r.baseY, c.y, f.n.x, f.n.y, len);
             }
         }
         if (good > 0) ++furnished; else {
@@ -4643,4 +4643,57 @@ TEST_CASE(level_print_shop_interiors) {
     std::printf("    [shop interiors] %d buildings show shopfronts; %d not enterable; of %d sampled, %d have shop rooms "
                 "furnished behind their fronts, %d have none (%d of %d fronts furnished)\n",
                 withFronts, notEnterable, sampled, furnished, fallback, frontsFurnished, frontsTotal);
+}
+
+// THE STEEPEST STREETS (Glenn, 2026-11-06: "There's a crazy incline in that city that's undrivable"): the drawn deck
+// along every street of the graph -- each street's own deck, followed sample to sample (heightOn: not a bridge over it)
+// -- its grade over each 4 m, the steepest printed with where they are. The planner routes at 8 %; a street past 15 %
+// is not one a car drives up. A RATCHET (2026-11-07): river_town's worst is 65.5 % at (393, 274), where a viaduct
+// comes down into an at-grade junction in a few metres (the roads' to fix: the elevated street needs its ramp before
+// the junction); the check holds it from getting worse until then, and the 15 % line is owed.
+TEST_CASE(level_river_town_streets_are_drivable_grades) {
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    CHECK(LevelLoader::load(levelsDir() + "/river_town.json", world, *renderer, view, assets, /*editorMode=*/false));
+    engine::RoadGraph nav;
+    world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) { if (!g.graph.edges.empty()) nav = g.graph; });
+    std::vector<const engine::RoadDeckField*> decks;
+    world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { decks.push_back(&d.field); });
+    struct Steep { double grade; engine::Vec2 at; int klass; };
+    std::vector<Steep> steep;
+    int samples = 0;
+    for (const engine::RoadEdge& e : nav.edges) {
+        if (e.a < 0 || e.b < 0) continue;
+        if (e.klass == engine::RoadClass::Freeway || e.klass == engine::RoadClass::Ramp) continue;
+        const engine::Vec2 a = nav.nodes[static_cast<std::size_t>(e.a)].pos, b = nav.nodes[static_cast<std::size_t>(e.b)].pos;
+        const double len = (b - a).length();
+        if (len < 4.0) continue;
+        double prevY = 0;
+        bool havePrev = false;
+        engine::Vec2 prevAt;
+        for (double s = 0; s <= len; s += 4.0) {
+            const engine::Vec2 q = a + (b - a) * (s / len);
+            // the street's own deck, followed from the last sample (a bridge over it, a street under it, is not it)
+            double y = 0;
+            bool on = false;
+            const engine::RoadClass kl = e.klass;
+            for (const engine::RoadDeckField* d : decks)
+                if (d->heightOn(q.x, q.y, 1.0, &kl, havePrev ? prevY : 0.0, havePrev ? 3.0 : 1e9, &y)) { on = true; break; }
+            if (!on) { havePrev = false; continue; }
+            ++samples;
+            if (havePrev) steep.push_back({std::fabs(y - prevY) / 4.0, (q + prevAt) * 0.5, static_cast<int>(e.klass)});
+            prevY = y;
+            prevAt = q;
+            havePrev = true;
+        }
+    }
+    std::sort(steep.begin(), steep.end(), [](const Steep& x, const Steep& y) { return x.grade > y.grade; });
+    std::printf("    [grades] %d samples; the steepest:\n", samples);
+    for (std::size_t i = 0; i < steep.size() && i < 8; ++i)
+        std::printf("      %5.1f %% at %.0f %.0f (class %d)\n", steep[i].grade * 100.0, steep[i].at.x, steep[i].at.y, steep[i].klass);
+    CHECK(samples > 1000);
+    CHECK(steep.empty() || steep.front().grade < 0.70);   // (the ratchet; owed: < 0.15)
 }

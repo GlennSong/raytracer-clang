@@ -12,7 +12,7 @@
 #include "room_plan.h"
 #include "furniture.h"   // the core: shafts, stairwells, the ground ceiling's holes (M5)
 
-#include "road_mesh.h"            // triangulatePolygon (floorplan roof/slab fill)
+#include "road_mesh.h"
 #include "triangulate.h"          // triangulateWithHoles (interior ceilings, ADR-0080)
 #include "../surface_maps.h"      // surfaceWorldTileSize (shingle slope UVs)
 #include "../../mesh_builder.h"
@@ -280,8 +280,11 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             // behind it coming through (the transparent pass), both faces.
             // REFLECTIVE (Glenn, 2026-10-02): a little metal and a mirror-smooth face, so a pane catches the room
             // and the sky instead of vanishing -- still mostly see-through.
+            // TINTED like commercial glazing (Glenn, 2026-11-08: the skyscraper lobbies "you can see straight through
+            // those windows at the interior"): 0.75, read as absorption by mesh.frag's glass filter, passes ~70% (was
+            // 0.24, ~90%) -- a low-e storefront's light transmission
             m.albedo = {0.55, 0.66, 0.74}; m.metallic = 0.35f; m.roughness = 0.03f;
-            m.opacity = 0.24f; break;
+            m.opacity = 0.75f; break;
         case PartId::BeaconHaze:
             // The bulb's corona: larger, fainter, the soft red halo.
             m.albedo = {0.02, 0.02, 0.02}; m.metallic = 0.0f; m.roughness = 1.0f;
@@ -290,7 +293,9 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         case PartId::Trim:
             m.albedo = wallColor * 0.55; m.metallic = 0.0f; m.roughness = 0.7f; break;
         case PartId::Roof:
-            m.albedo = {0.18, 0.18, 0.20}; m.metallic = 0.0f; m.roughness = 0.85f; break;
+            // a tar or concrete roof is about as rough as a surface gets (Glenn, 2026-11-07: "it should be rough/matte
+            // since it's concrete"): at 0.85 a low sun gave this dark roof a broad sheen that read as shiny
+            m.albedo = {0.18, 0.18, 0.20}; m.metallic = 0.0f; m.roughness = 0.95f; break;
         case PartId::Door:
             m.albedo = {0.12, 0.12, 0.13}; m.metallic = 0.3f; m.roughness = 0.4f; break;
         case PartId::Ground:
@@ -391,6 +396,15 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         case PartId::Wall:
         default:
             m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.75f; break;
+    }
+    // INDOORS (ADR-0377): the rooms' surfaces never read the street's probes or the open sky
+    switch (id) {
+        case PartId::Interior: case PartId::InteriorFloor: case PartId::InteriorFloorTile: case PartId::InteriorFloorMarble:
+        case PartId::InteriorFloorCarpet: case PartId::Furniture: case PartId::FurnitureWood: case PartId::FurnitureFabric:
+        case PartId::FurnitureMetal: case PartId::FurnitureCeramic:
+            m.flags |= RenderMaterial::FLAG_INDOOR;
+            break;
+        default: break;
     }
     return m;
 }
@@ -652,7 +666,7 @@ static void appendGlassParts(BuildingMesh& out, RenderMesh& glass, RenderMesh& g
     if (clearPanes) {
         // Clear lobby glass is see-through whatever the tower's tint: its own faint colour (the old grey pane).
         for (RenderMesh* m : {&glass, &glassLit})
-            for (Vertex& v : m->vertices) v.color = Vec3(0.18, 0.27, 0.34);
+            MeshBuilder::paint(*m, Vec3(0.18, 0.27, 0.34));
         appendToPart(out, PartId::GlassClear, glass);
         appendToPart(out, PartId::GlassClear, glassLit);
     } else {
@@ -2010,15 +2024,11 @@ static void emitTube(BuildingMesh& out, const Vec3& cXZ, Real radius, Real y0,
     MeshBuilder::emitCylinder(partMesh(out, pid), cXZ + Vec3(0, y0, 0), radius, y1 - y0, sides, col, true, 0);
 }
 
-// A horizontal disc cap at height y (normal up or down).
+// A horizontal disc cap at height y (normal up or down): the mesh library's annulus, from the centre
 static void emitDisc(BuildingMesh& out, const Vec3& cXZ, Real radius, Real y,
                      int sides, PartId pid, const Vec3& col, bool up) {
-    std::vector<Vec3> ring;
-    for (int i = 0; i < sides; ++i) {
-        const Real a = 2 * PI * i / sides;
-        ring.push_back(cXZ + Vec3(std::cos(a) * radius, y, std::sin(a) * radius));
-    }
-    MeshBuilder::emitPolygon(partMesh(out, pid), ring, {}, Vec3(0, up ? 1 : -1, 0), col);
+    MeshBuilder::emitAnnulus(partMesh(out, pid), MeshFrame::level(cXZ.y + y, up, Vec2(cXZ.x, cXZ.z)), 0,
+                             radius, col, sides);
 }
 
 // --- Pagoda (the flared, upturned tile roof its tiers wear: pagodaPlan, ADR-0270) ---
@@ -2574,39 +2584,10 @@ void emitPlanParapet(BuildingMesh& out, const Poly2& pl, Real roofY, Real h,
     const std::size_t n = O.size();
     if (I.size() != n || Oc.size() != n || Ic.size() != n) return;
     RenderMesh wall, cop;
-    auto ringBand = [](RenderMesh& m, const Poly2& ring, Real y0, Real y1,
-                       bool outward, const Vec3& col) {
-        for (std::size_t i = 0; i < ring.size(); ++i) {
-            const Vec2& a = ring[i];
-            const Vec2& b = ring[(i + 1) % ring.size()];
-            Vec2 d = b - a;
-            if (d.length() < 1e-6) continue;
-            d = normalize(d);
-            Vec2 nrm = outward ? Vec2(d.y, -d.x) : Vec2(-d.y, d.x);
-            MeshBuilder::emitQuad(m, Vec3(a.x, y0, a.y), Vec3(b.x, y0, b.y),
-                     Vec3(b.x, y1, b.y), Vec3(a.x, y1, a.y),
-                     Vec3(nrm.x, 0, nrm.y), col);
-        }
-    };
-    auto ringCap = [&](RenderMesh& m, const Poly2& oRing, const Poly2& iRing,
-                       Real y, bool up2, const Vec3& col) {
-        for (std::size_t i = 0; i < n; ++i) {
-            const std::size_t j = (i + 1) % n;
-            MeshBuilder::emitQuad(m, Vec3(oRing[i].x, y, oRing[i].y),
-                     Vec3(oRing[j].x, y, oRing[j].y),
-                     Vec3(iRing[j].x, y, iRing[j].y),
-                     Vec3(iRing[i].x, y, iRing[i].y),
-                     Vec3(0, up2 ? 1 : -1, 0), col);
-        }
-    };
-    // Upstand: outer + inner faces (the coping's underside closes the top).
-    ringBand(wall, O, roofY, roofY + h, true, wallCol);
-    ringBand(wall, I, roofY, roofY + h, false, wallCol);
-    // Coping: oversailing ring with its own faces, top and underside.
-    ringBand(cop, Oc, roofY + h, roofY + h + ch, true, copingCol);
-    ringBand(cop, Ic, roofY + h, roofY + h + ch, false, copingCol);
-    ringCap(cop, Oc, Ic, roofY + h + ch, true, copingCol);
-    ringCap(cop, Oc, Ic, roofY + h, false, copingCol);
+    // the upstand: a ring wall, its outer face on the plan line and its inner one facing the roof (the coping's
+    // underside closes its top); the coping: an oversailing ring slab
+    MeshBuilder::emitPlanPrism(wall, O, {I}, roofY, roofY + h, wallCol, kFaceSides);
+    MeshBuilder::emitPlanPrism(cop, Oc, {Ic}, roofY + h, roofY + h + ch, copingCol);
     appendToPart(out, wallPart, wall);
     appendToPart(out, PartId::Trim, cop);
 }
@@ -5063,10 +5044,10 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     const Real grainTile =
         surfaceWorldTileSize(RenderMaterial::Surface::WoodSiding);
     const Vec2 grainOrigin = plan[0];
-    auto grainUV = [&](Real x, Real z, float& u, float& v) {
-        const Real lx = x - grainOrigin.x, lz = z - grainOrigin.y;
-        u = static_cast<float>((lx * grainD.x + lz * grainD.y) / grainTile);
-        v = static_cast<float>((lx * grainP.x + lz * grainP.y) / grainTile);
+    // the boards along the grain, at the wood's tile size, on what was emitted from vertex `from` on
+    auto grainUV = [&](std::size_t from) {
+        MeshBuilder::projectUV(floorMesh, from, Vec3(grainOrigin.x, 0, grainOrigin.y), Vec3(grainD.x, 0, grainD.y) * (1.0 / grainTile),
+                               Vec3(grainP.x, 0, grainP.y) * (1.0 / grainTile));
     };
 
     // --- floor slabs (top + underside; the underside IS the ceiling of the
@@ -5084,38 +5065,17 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         // faces with an open 0.25 m rim between them — from below, the top
         // face's backface shows through it (the facing view's residual red
         // line along the stairwell). Double-sided vertical quads close it.
-        if (!core.valid) for (const Poly2& hole : holes)
-            for (std::size_t e = 0; e < hole.size(); ++e) {
-                const Vec2 a = hole[e], b = hole[(e + 1) % hole.size()];
-                Vec2 en(-(b - a).y, (b - a).x);
-                const Real el = en.length();
-                if (el < 1e-9) continue;
-                en = en * (1.0 / el);
-                const Vec3 A(a.x, yTop, a.y), B(b.x, yTop, b.y);
-                const Vec3 C(b.x, yTop - 0.25, b.y), D(a.x, yTop - 0.25, a.y);
-                MeshBuilder::emitQuad(mesh, A, B, C, D, Vec3(en.x, 0, en.y), icol);
-                MeshBuilder::emitQuad(mesh, A, B, C, D, Vec3(-en.x, 0, -en.y), icol);
+        const Real yb = yTop - 0.25;
+        if (!core.valid)
+            for (const Poly2& hole : holes) {   // both faces
+                MeshBuilder::emitSkirt(mesh, hole, yTop, [yb](const Vec2&, const Vec2&) { return Vec2(yb, yb); }, icol, true);
+                MeshBuilder::emitSkirt(mesh, hole, yTop, [yb](const Vec2&, const Vec2&) { return Vec2(yb, yb); }, icol);
             }
-        for (const auto& t : triangulateWithHoles(storeys[k].plan, holes)) {
-            float u0, v0, u1, v1, u2, v2;
-            grainUV(t[0].x, t[0].y, u0, v0);
-            grainUV(t[1].x, t[1].y, u1, v1);
-            grainUV(t[2].x, t[2].y, u2, v2);
-            MeshBuilder::emitTriUV(floorMesh, Vec3(t[0].x, yTop, t[0].y),
-                                   Vec3(t[1].x, yTop, t[1].y),
-                                   Vec3(t[2].x, yTop, t[2].y), Vec3(0, 1, 0),
-                                   wcol, u0, v0, u1, v1, u2, v2);
-            const Real yb = yTop - 0.25;
-            MeshBuilder::emitTri(mesh, Vec3(t[0].x, yb, t[0].y),
-                                 Vec3(t[2].x, yb, t[2].y),
-                                 Vec3(t[1].x, yb, t[1].y), Vec3(0, -1, 0),
-                                 icol);
-            if (colliderOut)
-                MeshBuilder::emitTri(*colliderOut, Vec3(t[0].x, yTop, t[0].y),
-                                     Vec3(t[1].x, yTop, t[1].y),
-                                     Vec3(t[2].x, yTop, t[2].y),
-                                     Vec3(0, 1, 0), icol);
-        }
+        const std::size_t w0 = floorMesh.vertices.size();
+        MeshBuilder::emitPlanPrism(floorMesh, storeys[k].plan, holes, yb, yTop, wcol, kFaceTop);
+        grainUV(w0);
+        MeshBuilder::emitPlanPrism(mesh, storeys[k].plan, holes, yb, yTop, icol, kFaceBottom);
+        if (colliderOut) MeshBuilder::emitPlanPrism(*colliderOut, storeys[k].plan, holes, yb, yTop, icol, kFaceTop);
     }
 
     // The wood normal-map's groove direction follows TANGENTS, and emitTriUV
@@ -5138,12 +5098,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         // ...except where the core's stairs rise through it to the roof (the roof exit, core_plan.h).
         const std::vector<Poly2> topHoles =
             (core.valid && coreReachesRoof(params)) ? coreRoofHoles(core) : std::vector<Poly2>{};
-        for (const auto& t : triangulateWithHoles(topSp.plan, topHoles)) {
-            MeshBuilder::emitTri(mesh, Vec3(t[0].x, cy2, t[0].y),
-                                 Vec3(t[2].x, cy2, t[2].y),
-                                 Vec3(t[1].x, cy2, t[1].y), Vec3(0, -1, 0),
-                                 icol);
-        }
+        MeshBuilder::emitPlanPrism(mesh, topSp.plan, topHoles, cy2, cy2 + 0.25, icol, kFaceBottom);
     }
 
     // --- inner-wall COLLIDERS (all storeys, ground included): planes at
@@ -5488,7 +5443,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         // FURNITURE (buildings M4b): every named room gets the kit's pieces, placed for instanced drawing.
         // the ceiling's underside: the next storey's floor slab is 0.25 m deep
         const std::size_t firstPiece = out.furniture.size();
-        emitFurniture(out.furniture, colliderOut, rp, baseY + spk.y0, params.seed, baseY + spk.y0 + spk.h - 0.25);
+        emitFurniture(out.furniture, colliderOut, rp, baseY + spk.y0, params.seed, baseY + spk.y0 + spk.h - 0.25, &out.roomLights);
         // which SHOP UNIT each new piece furnishes (the room it stands in): whose people sit and serve there
         {
             std::vector<int16_t> unitOf(rp.rooms.size(), -1);
@@ -6428,11 +6383,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         const Real cy = y + gh - 0.25;
         const Vec3 icol = materialFor(PartId::Interior, wallColor).albedo;
         RenderMesh ceil;
-        for (const auto& t : triangulateWithHoles(plan, holes))
-            MeshBuilder::emitTri(ceil, Vec3(t[0].x, cy, t[0].y),
-                                 Vec3(t[2].x, cy, t[2].y),
-                                 Vec3(t[1].x, cy, t[1].y), Vec3(0, -1, 0),
-                                 icol);
+        MeshBuilder::emitPlanPrism(ceil, plan, holes, cy, cy + 0.25, icol, kFaceBottom);
         // Skirt the well rim (see growInterior): the ceiling's hole edge is
         // otherwise open between its underside and the slab above. Core
         // shafts get theirs 2 cm INSIDE the hole line: their walls stand on
@@ -6444,18 +6395,10 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             for (const Poly2& hole : holes) inset.push_back(offsetPolygonEdges(hole, std::vector<Real>(hole.size(), -0.02)));
             holes.swap(inset);
         }
-        for (const Poly2& hole : holes)
-            for (std::size_t e = 0; e < hole.size(); ++e) {
-                const Vec2 a = hole[e], b = hole[(e + 1) % hole.size()];
-                Vec2 en(-(b - a).y, (b - a).x);
-                const Real el = en.length();
-                if (el < 1e-9) continue;
-                en = en * (1.0 / el);
-                const Vec3 A(a.x, cy + 0.25, a.y), B(b.x, cy + 0.25, b.y);
-                const Vec3 C(b.x, cy, b.y), D(a.x, cy, a.y);
-                MeshBuilder::emitQuad(ceil, A, B, C, D, Vec3(en.x, 0, en.y), icol);
-                MeshBuilder::emitQuad(ceil, A, B, C, D, Vec3(-en.x, 0, -en.y), icol);
-            }
+        for (const Poly2& hole : holes) {   // both faces
+            MeshBuilder::emitSkirt(ceil, hole, cy + 0.25, [cy](const Vec2&, const Vec2&) { return Vec2(cy, cy); }, icol, true);
+            MeshBuilder::emitSkirt(ceil, hole, cy + 0.25, [cy](const Vec2&, const Vec2&) { return Vec2(cy, cy); }, icol);
+        }
         appendToPart(out, PartId::Interior, ceil);
         RenderMesh woodFloor;
         // Floor tone varies per building (device: "different flooring
@@ -6471,10 +6414,6 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         const Real ptile =
             surfaceWorldTileSize(RenderMaterial::Surface::WoodSiding);
         const Vec2 uvOrigin = plan[0];
-        auto puv = [&](const Vec2& v, float& u, float& w) {
-            u = static_cast<float>(dot(v - uvOrigin, pd) / ptile);
-            w = static_cast<float>(dot(v - uvOrigin, pp) / ptile);
-        };
         // The HOISTWAYS are pits in this sheet (Glenn's third walk, 2026-09-15:
         // "the shaft and cab are still messed up" — the lobby's wood ran
         // straight into the hoistway and over the cab's floor, so an open
@@ -6486,33 +6425,12 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             if (ocore.valid)
                 for (const CoreShaft& hw : ocore.hoistways) pits.push_back(hw.rect());
         }
-        auto woodTri = [&](const Vec2& a, const Vec2& b, const Vec2& c) {
-            float u0, v0, u1, v1, u2, v2;
-            puv(a, u0, v0);
-            puv(b, u1, v1);
-            puv(c, u2, v2);
-            MeshBuilder::emitTriUV(woodFloor, Vec3(a.x, y + 0.07, a.y), Vec3(b.x, y + 0.07, b.y),
-                                   Vec3(c.x, y + 0.07, c.y), Vec3(0, 1, 0), wcol, u0, v0, u1, v1, u2, v2);
-        };
-        if (pits.empty()) {
-            for (const auto& t : triangulatePolygon(plan)) woodTri(plan[t[0]], plan[t[1]], plan[t[2]]);
-        } else {
-            for (const auto& t : triangulateWithHoles(plan, pits)) woodTri(t[0], t[1], t[2]);
-        }
-        // Edge band: the overlay's cut edge shows at the doorway; give the
-        // wood sheet a visible thickness instead of a paper line.
-        for (std::size_t e2 = 0; e2 < plan.size(); ++e2) {
-            const Vec2 a2 = plan[e2], b2 = plan[(e2 + 1) % plan.size()];
-            Vec2 en(-(b2 - a2).y, (b2 - a2).x);
-            const Real el = en.length();
-            if (el < 1e-9) continue;
-            en = en * (1.0 / el);
-            MeshBuilder::emitQuad(woodFloor, Vec3(a2.x, y + 0.07, a2.y),
-                     Vec3(b2.x, y + 0.07, b2.y),
-                     Vec3(b2.x, y + 0.045, b2.y),
-                     Vec3(a2.x, y + 0.045, a2.y),
-                     Vec3(-en.x, 0, -en.y), wcol);
-        }
+        // the sheet 2.5 cm thick, its boards along the grain; its edge band shows at the doorway where the overlay's
+        // cut edge would be a paper line
+        MeshBuilder::emitPlanPrism(woodFloor, plan, pits, y + 0.045, y + 0.07, wcol, kFaceTop);
+        MeshBuilder::projectUV(woodFloor, 0, Vec3(uvOrigin.x, 0, uvOrigin.y), Vec3(pd.x, 0, pd.y) * (1.0 / ptile),
+                               Vec3(pp.x, 0, pp.y) * (1.0 / ptile));
+        MeshBuilder::emitSkirt(woodFloor, plan, y + 0.07, [y](const Vec2&, const Vec2&) { return Vec2(y + 0.045, y + 0.045); }, wcol);
         for (Vertex& v : woodFloor.vertices)
             v.tangent = Vec3(pd.x, 0, pd.y);
         appendToPart(out, floorFinishPartFor(params), woodFloor);

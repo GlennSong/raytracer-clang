@@ -74,6 +74,7 @@ private:
         int k0 = 0, k1 = -1;   // the storey window grown
         CorePlan core;         // lazily derived (the hoistway test while riding)
         bool coreKnown = false;
+        std::vector<RoomLight> lights;   // its ceiling fittings' lights, each kept to its room (ADR-0365)
     };
     void build(World& world, PhysicsWorld* phys, AssetManager& assets,
                Renderer* renderer, const BuildingRecord& r, std::size_t key,

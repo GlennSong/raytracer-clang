@@ -30,6 +30,14 @@ void readVehicleHandling(lua_State* L, int t, VehicleSpec& out) {
     // The forgiving knobs (physics_world.h): a recipe may loosen or drop them.
     c.maxPitchRollDegrees = numField(L, t, "max_roll_deg", c.maxPitchRollDegrees);
     c.antiRollStiffness = numField(L, t, "anti_roll", c.antiRollStiffness);
+    lua_getfield(L, t, "drift");   // { rear_grip, slip_deg, min_speed }: the car's own drift (physics_world.h)
+    if (lua_istable(L, -1)) {
+        const int d = lua_gettop(L);
+        c.driftRearGrip = numField(L, d, "rear_grip", c.driftRearGrip);
+        c.driftSlipDegrees = numField(L, d, "slip_deg", c.driftSlipDegrees);
+        c.driftMinSpeed = numField(L, d, "min_speed", c.driftMinSpeed);
+    }
+    lua_pop(L, 1);
     c.yawAssist = numField(L, t, "yaw_assist", c.yawAssist);
     c.lateralGrip = numField(L, t, "grip", c.lateralGrip);
     lua_getfield(L, t, "pedals");   // true: pedalled (a bicycle) -- heard as a freewheel and tyres, not an engine
@@ -187,7 +195,35 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     out.metallic = static_cast<float>(numField(L, t, "metallic", out.metallic));
     out.roughness = static_cast<float>(numField(L, t, "roughness", out.roughness));
 
-    // parts = { { mesh=, albedo=, metallic=, roughness=, opacity=, emission= }, ... }
+    // panels = { { name=, pivot={x,y,z}, axis={x,y,z}, open=deg }, ... } (ADR-0352), before the parts that name them
+    lua_getfield(L, t, "panels");
+    if (lua_istable(L, -1)) {
+        const int nt = lua_gettop(L);
+        const int n = static_cast<int>(luaL_len(L, nt));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, nt, i);
+            const int pi = lua_gettop(L);
+            if (lua_istable(L, pi)) {
+                VehicleSpec::Panel panel;
+                lua_getfield(L, pi, "name");
+                if (lua_isstring(L, -1)) panel.name = lua_tostring(L, -1);
+                lua_pop(L, 1);
+                panel.pivot = vec3Field(L, pi, "pivot", panel.pivot);
+                panel.axis = normalize(vec3Field(L, pi, "axis", panel.axis));
+                panel.openDeg = static_cast<float>(numField(L, pi, "open", panel.openDeg));
+                panel.centre = vec3Field(L, pi, "centre", panel.pivot);
+                panel.lo = vec3Field(L, pi, "lo", panel.centre);
+                panel.hi = vec3Field(L, pi, "hi", panel.centre);
+                panel.mass = static_cast<float>(numField(L, pi, "mass", panel.mass));
+                panel.slide = vec3Field(L, pi, "slide", panel.slide);
+                if (!panel.name.empty()) out.panels.push_back(std::move(panel));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+
+    // parts = { { mesh=, albedo=, metallic=, roughness=, opacity=, emission=, panel= }, ... }
     // Each becomes a child Renderable so glass/interior keep their own material.
     lua_getfield(L, t, "parts");
     if (lua_istable(L, -1)) {
@@ -207,6 +243,13 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
                     part.roughness = static_cast<float>(numField(L, pi, "roughness", part.roughness));
                     part.opacity = static_cast<float>(numField(L, pi, "opacity", part.opacity));
                     part.emission = vec3Field(L, pi, "emission", part.emission);
+                    lua_getfield(L, pi, "panel");
+                    if (lua_isstring(L, -1)) {
+                        const std::string pn = lua_tostring(L, -1);
+                        for (std::size_t k = 0; k < out.panels.size(); ++k)
+                            if (out.panels[k].name == pn) part.panel = static_cast<int>(k);
+                    }
+                    lua_pop(L, 1);
                     out.parts.push_back(std::move(part));
                 }
             }
@@ -251,6 +294,98 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
 
     readVehicleHandling(L, t, out);
 
+    // damage = { knock_from=, knock_full=, ..., dent = {...}, smoke = {...}, kick = {...}, rough = {...} } (ADR-0355)
+    lua_getfield(L, t, "damage");
+    if (lua_istable(L, -1)) {
+        const int d = lua_gettop(L);
+        DamageRule& r = out.damage;
+        r.knockFrom = numField(L, d, "knock_from", r.knockFrom);
+        r.knockFull = numField(L, d, "knock_full", r.knockFull);
+        r.scrapePerMetre = numField(L, d, "scrape_per_metre", r.scrapePerMetre);
+        r.refMass = numField(L, d, "ref_mass", r.refMass);
+        r.sparkKnock = numField(L, d, "spark_knock", r.sparkKnock);
+        r.sparkSlide = numField(L, d, "spark_slide", r.sparkSlide);
+        r.crashWindow = numField(L, d, "crash_window", r.crashWindow);
+        r.groundShare = numField(L, d, "ground_share", r.groundShare);
+        r.breakShare = numField(L, d, "break_share", r.breakShare);
+        r.zoneScale = numField(L, d, "zone_scale", r.zoneScale);
+        r.panelScale = numField(L, d, "panel_scale", r.panelScale);
+        r.crackFrom = numField(L, d, "crack_from", r.crackFrom);
+        r.smashFrom = numField(L, d, "smash_from", r.smashFrom);
+        auto sub = [&](const char* name, auto&& read) {
+            lua_getfield(L, d, name);
+            if (lua_istable(L, -1)) read(lua_gettop(L));
+            lua_pop(L, 1);
+        };
+        sub("dent", [&](int x) {
+            r.dentFrom = numField(L, x, "from", r.dentFrom);
+            r.dentRadiusLo = numField(L, x, "radius_lo", r.dentRadiusLo);
+            r.dentRadiusHi = numField(L, x, "radius_hi", r.dentRadiusHi);
+            r.dentDepthLo = numField(L, x, "depth_lo", r.dentDepthLo);
+            r.dentDepthPer = numField(L, x, "depth_per", r.dentDepthPer);
+            r.dentDepthMax = numField(L, x, "depth_max", r.dentDepthMax);
+            r.scuffLo = numField(L, x, "scuff_lo", r.scuffLo);
+            r.scuffPer = numField(L, x, "scuff_per", r.scuffPer);
+        });
+        sub("smoke", [&](int x) {
+            r.steamBelow = numField(L, x, "steam_below", r.steamBelow);
+            r.blackBelow = numField(L, x, "black_below", r.blackBelow);
+        });
+        sub("kick", [&](int x) {
+            r.kickCar = numField(L, x, "car", r.kickCar);
+            r.kickOut = numField(L, x, "out", r.kickOut);
+            r.kickUp = numField(L, x, "up", r.kickUp);
+        });
+        sub("rough", [&](int x) {
+            r.roughBelow = numField(L, x, "below", r.roughBelow);
+            r.roughWobble = numField(L, x, "wobble", r.roughWobble);
+            r.roughMisfire = numField(L, x, "misfire", r.roughMisfire);
+        });
+    }
+    lua_pop(L, 1);
+
+    // fuel = { tank=, idle=, full=, pace=, start=, fill=, low= } (ADR-0357)
+    lua_getfield(L, t, "fuel");
+    if (lua_istable(L, -1)) {
+        const int d = lua_gettop(L);
+        FuelRule& r = out.fuel;
+        r.tank = numField(L, d, "tank", r.tank);
+        r.idle = numField(L, d, "idle", r.idle);
+        r.full = numField(L, d, "full", r.full);
+        r.pace = numField(L, d, "pace", r.pace);
+        r.start = numField(L, d, "start", r.start);
+        r.fill = numField(L, d, "fill", r.fill);
+        r.low = numField(L, d, "low", r.low);
+    }
+    lua_pop(L, 1);
+
+    // cargo = { lo = {x,y,z}, hi = {x,y,z}, panel = "trunk" } (ADR-0358)
+    lua_getfield(L, t, "cargo");
+    if (lua_istable(L, -1)) {
+        const int d = lua_gettop(L);
+        auto vec = [&](const char* name, Vec3& v) {
+            lua_getfield(L, d, name);
+            const bool ok = lua_istable(L, -1);
+            if (ok) {
+                const int x = lua_gettop(L);
+                Real c[3] = {0, 0, 0};
+                for (int i = 0; i < 3; ++i) {
+                    lua_rawgeti(L, x, i + 1);
+                    c[i] = lua_tonumber(L, -1);
+                    lua_pop(L, 1);
+                }
+                v = Vec3(c[0], c[1], c[2]);
+            }
+            lua_pop(L, 1);
+            return ok;
+        };
+        out.hasCargo = vec("lo", out.cargoLo) && vec("hi", out.cargoHi);
+        lua_getfield(L, d, "panel");
+        if (lua_isstring(L, -1)) out.cargoPanel = lua_tostring(L, -1);
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+
     lua_pop(L, 1);   // the returned spec table
     return out.body != nullptr || !out.config.wheels.empty();
 }
@@ -283,6 +418,11 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
     v.hasDriverSeat = spec.hasDriverSeat;
     v.openSeat = spec.openSeat;
     v.seat = spec.seat;
+    v.bodyMesh = spec.body;   // (shared with the spec until the first dent copies it)
+    v.bodyMeshBuilt = spec.body;
+    v.damage = spec.damage;
+    v.fuelRule = spec.fuel;
+    v.fuel = static_cast<float>(spec.fuel.tank * std::clamp(spec.fuel.start, Real(0), Real(1)));
 
     // One child entity per extra part, rigidly pinned to the chassis by
     // VehicleSystem::writeBack. Separate entities because each carries its own
@@ -303,6 +443,24 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
         pr.material.emission = part.emission;
         world.add<Renderable>(pe, pr);
         v.bodyParts.push_back(pe);
+        v.bodyPartPanel.push_back(part.panel);
+        v.partMeshes.push_back(part.mesh);
+        v.partBuilt.push_back(static_cast<int>(v.partMeshesBuilt.size()));
+        v.partMeshesBuilt.push_back(part.mesh);
+        v.partDented.push_back(0);
+    }
+    for (const VehicleSpec::Panel& sp : spec.panels) {
+        Vehicle::Panel panel;
+        panel.name = sp.name;
+        panel.pivot = sp.pivot;
+        panel.axis = sp.axis;
+        panel.open = sp.openDeg * static_cast<float>(DEG_TO_RAD);
+        panel.centre = sp.centre;
+        panel.lo = sp.lo;
+        panel.hi = sp.hi;
+        panel.mass = sp.mass;
+        panel.slide = sp.slide;
+        v.panels.push_back(panel);
     }
     // Marker slots only: VehicleSystem creates the lens entities on its first
     // fixed step (it owns the shared mesh and the asset manager), so a car
@@ -314,6 +472,11 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
         lamp.left = !m.name.empty() && m.name.back() == 'l';
         v.lamps.push_back(lamp);
     }
+    // its cargo space (ADR-0358), and the panel that opens it
+    v.hasCargo = spec.hasCargo;
+    v.cargoLo = spec.cargoLo;
+    v.cargoHi = spec.cargoHi;
+    v.cargoPanel = spec.cargoPanel.empty() ? -1 : v.panelIndex(spec.cargoPanel);
     world.add<Vehicle>(e, v);
     return e;
 }

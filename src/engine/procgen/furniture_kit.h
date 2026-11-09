@@ -4,8 +4,9 @@
 // THE FURNITURE KIT (buildings M4b; Glenn, 2026-09-30: "I think you should legit build furniture. It feels like
 // you're repurposing parts from the flooring."). Modelled pieces -- a five-star office chair on casters with a gas
 // lift, a desk with a drawer pedestal, a sofa of separate cushions, a made bed, kitchen units with doors, worktop,
-// sink and hob -- written as RECIPES over the shape kit's words (MeshBuilder::roundedBox, lathe, tube, cylinder),
-// one mesh per MATERIAL so each wears a real one: wood grain, fabric, painted/plastic, metal, ceramic.
+// sink and hob -- written as RECIPES over the mesh words, in Lua (assets/scripts/furniture_models.lua, #191: rounded
+// boxes, swept rods, revolved profiles), one mesh per MATERIAL so each wears a real one: wood grain, fabric,
+// painted/plastic, metal, ceramic.
 //
 // A piece is modelled once per (piece, variant) and DRAWN INSTANCED (InstanceGroup): a room places transforms,
 // not triangles, so a piece can carry the detail a close look needs. The variant picks the wood and the fabric.
