@@ -48,6 +48,12 @@
   "usage": "camera?"
  },
  {
+  "name": "carry_spawn",
+  "owner": "engine",
+  "summary": "Put a carry_items.lua thing (box, crate, ...) down in front of the player, to pick up and stow (ADR-0358).",
+  "usage": "carry_spawn [name]"
+ },
+ {
   "name": "citymap",
   "owner": "engine",
   "summary": "Write the running level's layered city map as SVG.",
@@ -64,6 +70,12 @@
   "owner": "engine",
   "summary": "Read the debug UI's clipboard.",
   "usage": "clip?"
+ },
+ {
+  "name": "cloudmap",
+  "owner": "engine",
+  "summary": "Write the clouds' weather map as a picture (ADR-0386): every cloud from above, tinted by its type (stratus grey .. cumulonimbus red), the cirrus faint blue, the camera a red dot.",
+  "usage": "cloudmap <path.png>"
  },
  {
   "name": "clouds",
@@ -174,6 +186,18 @@
   "usage": "fog?"
  },
  {
+  "name": "frame",
+  "owner": "engine",
+  "summary": "Put the free camera where a world box, or the n-th grown lot of a recipe (lots? names them), fills the view at that pitch and yaw (default -30, -45); read frame? for the box and the eye (ADR-0359).",
+  "usage": "frame <x0 y0 z0 x1 y1 z1> [pitch yaw] | frame lot <recipe> [n] [pitch yaw]"
+ },
+ {
+  "name": "frame?",
+  "owner": "engine",
+  "summary": "The last `frame`: what it found, its box and the eye it chose.",
+  "usage": "frame?"
+ },
+ {
   "name": "get",
   "owner": "engine",
   "summary": "Read any Settings key.",
@@ -258,6 +282,12 @@
   "usage": "lot? <x> <z> [radius 40]"
  },
  {
+  "name": "lots?",
+  "owner": "engine",
+  "summary": "Every recipe the city grew, with how many lots of each (the names `frame lot` takes).",
+  "usage": "lots?"
+ },
+ {
   "name": "mem?",
   "owner": "engine",
   "summary": "GPU memory: the backend's allocations, then mesh data grouped by name, largest first.",
@@ -282,6 +312,12 @@
   "usage": "overlay <hud|ui|debug|lamplights|master|agents|cones|nav|plan> <on|off>"
  },
  {
+  "name": "panels",
+  "owner": "engine",
+  "summary": "Swing every drivable car's moving panels (doors, hood, trunk; ADR-0352) open or shut, or knock them off (ADR-0353); only those whose name holds `name` (door, hood, trunk, hatch, door_front_r ...).",
+  "usage": "panels open|shut|knock [name]"
+ },
+ {
   "name": "parking?",
   "owner": "engine",
   "summary": "Parking: kerb bays and garage stalls taken, and the nearest taken stall.",
@@ -292,6 +328,12 @@
   "owner": "engine",
   "summary": "On-foot camera: first or third person (the V key).",
   "usage": "person first|third|toggle"
+ },
+ {
+  "name": "pieces",
+  "owner": "engine",
+  "summary": "Knock the street piece nearest the player loose (a bin, a rack, news boxes, a hydrant; ADR-0354), as a car hitting it would.",
+  "usage": "pieces knock"
  },
  {
   "name": "pin",
@@ -474,6 +516,18 @@
   "usage": "vehicle?"
  },
  {
+  "name": "vehicle_fuel",
+  "owner": "engine",
+  "summary": "Set the tank of the car the player drives (0: empty, the engine dies; ADR-0357).",
+  "usage": "vehicle_fuel <litres>"
+ },
+ {
+  "name": "vehicle_repair",
+  "owner": "engine",
+  "summary": "Repair the car the player drives, else the nearest: every zone whole, the engine running, dents, glass and lamps as built (ADR-0356; a panel that came off stays off).",
+  "usage": "vehicle_repair"
+ },
+ {
   "name": "vehicle_spawn",
   "owner": "engine",
   "summary": "Drop a vehicle in front of the player (the N key); e.g. vehicle_spawn moped.",
@@ -482,8 +536,8 @@
  {
   "name": "view",
   "owner": "engine",
-  "summary": "Debug view: 0 normal, 1 AO, 2 SSR, 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades; plus wireframe.",
-  "usage": "view <0-8> [wire 0-2]"
+  "summary": "Debug view: 0 normal, 1 AO, 2 SSR (and the rays), 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades, 9 roughness (what reflects), 10 environment reflection alone; plus wireframe.",
+  "usage": "view <0-10> [wire 0-2]"
  },
  {
   "name": "walk_to",
