@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lights — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>Lights</h1>
+  <p class="lede">Every lamp, headlight, ceiling fitting and bus saloon in the world is one kind from a Lua table. The
+    systems that own them only <i>publish</i> where their lights are; one light system picks which are lit this frame,
+    and one Vulkan path lights each pixel from a short list of the lights near it. Since November 2026 that list can
+    hold thousands of lights, the rooms keep their light inside their walls, and the lights and glows can be given in
+    real candela and cd/m², on the same scale as the physical sky.</p>
+
+  <figure class="shot">
+    <img src="img/lighting/town-many-lights.webp" alt="A city at night from the air: every street lit by its lamps out to the far edge of town, towers with lit windows and red roof beacons, a freeway curving round in the foreground">
+    <figcaption>river_town at night with the many-light budgets (ADR-0363, 2026-11-07): the street pool reaches
+      800 m instead of the nearest 20 lamps, and city traffic's lamps are lights too.</figcaption>
+  </figure>
+
+  <h2>The problem</h2>
+  <p>The renderer is <b>forward</b>: each surface is shaded once, as it is drawn, by <code>mesh.frag</code>, which used to loop a
+    fixed array of 32 lights in the frame's uniform buffer for every pixel (<a href="renderer.html">A frame on the GPU</a>
+    shows that loop). Thirty-two lights had to cover the sun, the nearest 20 street lamps, a few cars' headlight cones,
+    the flashlight, the rooms round the player and the roof beacons. When the list was full, headlights dropped first.
+    A town of a thousand lamps could only ever light the twenty nearest.</p>
+  <p>Who chose the 32 was its own problem. On 2026-11-07 real lights were picked in <b>seven places</b>, each with its
+    own nearest-N cap and its own fade (ADR-0362): RenderSystem merged street and station lamps (20 within 160 m),
+    VehicleSystem kept the 3 nearest lit cars, BuildingInteriorSystem one light per storey, ElevatorSystem appended
+    its cab lights to the rooms' list (so the result depended on the systems' order), BeaconLightSystem 6 within 60 m
+    with a linear fade, plus the flashlight and the level's own authored lights. Every colour, brightness, reach and
+    cone was a C++ constant. Glenn asked the question that started the rework: "Why are two separate places picking
+    lights? Should this be a unified system?"</p>
+  <p>And the numbers were not real. Lamps, lit windows and signs had been tuned by eye against a night exposure lifted
+    six times, about 500 times brighter than real light (ADR-0366). Once the physical sky and an adapting eye arrived,
+    that showed: a city bright as day at dusk, lit rooms brighter at 22:00 than at noon, every window seen from inside
+    a white sheet. The rest of this page is how the light system was rebuilt over two days to fix all three.</p>
+
+  <h2>The shape of it</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 900 560" role="img" aria-label="The light pipeline. On the CPU each frame: six producers (VehicleSystem, FlashlightSystem, BuildingInteriorSystem, ElevatorSystem, BeaconLightSystem, CityRenderSystem) publish candidates on their channel of the LightBoard; the static street and station lamps sit in a 64 metre grid. LightSystem reads lights.lua's LightBook, gathers the board and the static lamps in reach, picks by pool and trims to the renderer's capacity. RenderSystem adds the picked lights to the level's own and calls setLights. On the GPU: setLights writes the sun and the first 31 lights into the uniform buffer and every point and spot, up to 4,096, into the cluster light buffer; cluster_bin.comp builds the froxel lists; mesh.frag lights each pixel from its froxel's list. The uniform buffer's 32 are still read by the sun loop, leaf transmission, the water glint, probe_relight and rt_reflect.">
+      <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <text x="12" y="18" fill="#e6c07b" font-size="12" text-anchor="start">CPU, every frame</text>
+        <!-- producers -->
+        <rect x="10" y="30" width="210" height="36" rx="7" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="45" fill="#cfe4ff" font-size="12">VehicleSystem</text>
+        <text x="115" y="60" fill="#93a6ba" font-size="11">Vehicles: drivable cars' beams</text>
+        <rect x="10" y="70" width="210" height="36" rx="7" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="85" fill="#cfe4ff" font-size="12">FlashlightSystem</text>
+        <text x="115" y="100" fill="#93a6ba" font-size="11">Tool: the hand-held beam</text>
+        <rect x="10" y="110" width="210" height="36" rx="7" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="125" fill="#cfe4ff" font-size="12">BuildingInteriorSystem</text>
+        <text x="115" y="140" fill="#93a6ba" font-size="11">Rooms: fittings + storey fill</text>
+        <rect x="10" y="150" width="210" height="36" rx="7" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="165" fill="#cfe4ff" font-size="12">ElevatorSystem</text>
+        <text x="115" y="180" fill="#93a6ba" font-size="11">Cabs: a cab's ceiling light</text>
+        <rect x="10" y="190" width="210" height="36" rx="7" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="205" fill="#cfe4ff" font-size="12">BeaconLightSystem</text>
+        <text x="115" y="220" fill="#93a6ba" font-size="11">Beacons: roof pools, blinking</text>
+        <rect x="10" y="230" width="210" height="36" rx="7" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="245" fill="#cfe4ff" font-size="12">CityRenderSystem</text>
+        <text x="115" y="260" fill="#93a6ba" font-size="11">Traffic: car lamps, bus saloons</text>
+        <rect x="10" y="276" width="210" height="36" rx="7" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="291" fill="#cfe4ff" font-size="12">StreetFurniture · RailTracks</text>
+        <text x="115" y="306" fill="#93a6ba" font-size="11">static lamps, in a 64 m grid</text>
+        <!-- board -->
+        <rect x="260" y="30" width="170" height="236" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="345" y="56" fill="#cfe4ff">LightBoard</text>
+        <text x="345" y="74" fill="#93a6ba" font-size="12">ctx.view.lights</text>
+        <text x="345" y="104" fill="#93a6ba" font-size="12">one channel a producer,</text>
+        <text x="345" y="122" fill="#93a6ba" font-size="12">replaced at its own</text>
+        <text x="345" y="140" fill="#93a6ba" font-size="12">cadence (step or frame)</text>
+        <text x="345" y="170" fill="#cfe4ff" font-size="12">LightCandidate:</text>
+        <text x="345" y="188" fill="#93a6ba" font-size="12">kind, where, aim,</text>
+        <text x="345" y="206" fill="#93a6ba" font-size="12">scale, group, mine,</text>
+        <text x="345" y="224" fill="#93a6ba" font-size="12">a room's box</text>
+        <g stroke="#6f8fb0" stroke-width="1.4">
+          <line x1="220" y1="48" x2="256" y2="80" marker-end="url(#a1)"/>
+          <line x1="220" y1="88" x2="256" y2="104" marker-end="url(#a1)"/>
+          <line x1="220" y1="128" x2="256" y2="128" marker-end="url(#a1)"/>
+          <line x1="220" y1="168" x2="256" y2="160" marker-end="url(#a1)"/>
+          <line x1="220" y1="208" x2="256" y2="190" marker-end="url(#a1)"/>
+          <line x1="220" y1="248" x2="256" y2="222" marker-end="url(#a1)"/>
+        </g>
+        <!-- book + light system -->
+        <rect x="470" y="30" width="210" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="575" y="53" fill="#cfe4ff">lights.lua → LightBook</text>
+        <text x="575" y="73" fill="#93a6ba" font-size="12">kinds · pools · glows</text>
+        <rect x="470" y="110" width="210" height="202" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="575" y="134" fill="#cfe4ff">LightSystem::render</text>
+        <text x="575" y="160" fill="#93a6ba" font-size="12">budgets from the renderer's</text>
+        <text x="575" y="177" fill="#93a6ba" font-size="12">lightCapacity(): 31 or 4,096</text>
+        <text x="575" y="203" fill="#8ec5ff" font-size="12">pickLights, per pool:</text>
+        <text x="575" y="220" fill="#93a6ba" font-size="12">yours first, then nearest,</text>
+        <text x="575" y="237" fill="#93a6ba" font-size="12">groups whole, edge fade,</text>
+        <text x="575" y="254" fill="#93a6ba" font-size="12">dusk ramp</text>
+        <text x="575" y="280" fill="#93a6ba" font-size="12">over capacity: trim</text>
+        <text x="575" y="297" fill="#93a6ba" font-size="12">by importance</text>
+        <line x1="575" y1="86" x2="575" y2="106" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="430" y1="190" x2="466" y2="190" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="220" y1="294" x2="466" y2="294" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <text x="345" y="288" fill="#93a6ba" font-size="11">only the cells in reach</text>
+        <!-- render system -->
+        <rect x="720" y="150" width="170" height="80" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="805" y="174" fill="#cfe4ff">RenderSystem</text>
+        <text x="805" y="194" fill="#93a6ba" font-size="12">the level's own lights</text>
+        <text x="805" y="211" fill="#93a6ba" font-size="12">+ the picked → setLights</text>
+        <line x1="680" y1="200" x2="716" y2="194" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <!-- divider -->
+        <line x1="10" y1="330" x2="890" y2="330" stroke="#2c3d50" stroke-dasharray="5 4"/>
+        <text x="12" y="350" fill="#e6c07b" font-size="12" text-anchor="start">GPU (Vulkan)</text>
+        <path d="M805,230 L805,318 L115,318 L115,366" stroke="#6f8fb0" stroke-width="1.6" fill="none" marker-end="url(#a1)"/>
+        <!-- gpu -->
+        <rect x="10" y="370" width="210" height="96" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="394" fill="#cfe4ff">setLights</text>
+        <text x="115" y="414" fill="#93a6ba" font-size="12">GpuLight: four vec4s</text>
+        <text x="115" y="432" fill="#93a6ba" font-size="12">type 0 point · 1 sun/moon</text>
+        <text x="115" y="450" fill="#93a6ba" font-size="12">2 spot · 3 room</text>
+        <rect x="260" y="364" width="190" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="355" y="387" fill="#cfe4ff">UBO lights[32]</text>
+        <text x="355" y="406" fill="#93a6ba" font-size="12">the sun + the first 31</text>
+        <rect x="260" y="452" width="190" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="355" y="475" fill="#cfe4ff">cluster light buffer</text>
+        <text x="355" y="494" fill="#93a6ba" font-size="12">binding 8 · up to 4,096</text>
+        <rect x="490" y="452" width="190" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="585" y="475" fill="#cfe4ff">cluster_bin.comp</text>
+        <text x="585" y="494" fill="#93a6ba" font-size="12">froxel lists → 9, 10</text>
+        <rect x="720" y="440" width="170" height="80" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="805" y="464" fill="#cfe4ff">mesh.frag</text>
+        <text x="805" y="484" fill="#93a6ba" font-size="12">evaluateLighting,</text>
+        <text x="805" y="501" fill="#93a6ba" font-size="12">roomRadiance: its froxel</text>
+        <rect x="490" y="364" width="400" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="690" y="387" fill="#cfe4ff">readers of the 32</text>
+        <text x="690" y="406" fill="#93a6ba" font-size="11">the sun loop · transmission · glint · probe_relight · rt_reflect</text>
+        <g stroke="#6f8fb0" stroke-width="1.6">
+          <line x1="220" y1="400" x2="256" y2="394" marker-end="url(#a1)"/>
+          <line x1="220" y1="440" x2="256" y2="474" marker-end="url(#a1)"/>
+          <line x1="450" y1="480" x2="486" y2="480" marker-end="url(#a1)"/>
+          <line x1="680" y1="480" x2="716" y2="480" marker-end="url(#a1)"/>
+          <line x1="450" y1="392" x2="486" y2="392" marker-end="url(#a1)"/>
+        </g>
+        <text x="450" y="545" fill="#93a6ba" font-size="12">RT_CLUSTERED=0: no cluster buffer; mesh.frag loops the 32 (the forward A/B, and Metal and WebGPU)</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The whole light path at commit e55dfaaa. The top half is ADR-0362 (one picker) and ADR-0363 (budgets by
+    renderer); the bottom half is ADR-0361 (clustered lights) and ADR-0364 (binned on the GPU).</p>
+
+  <h2>Lights are data: lights.lua</h2>
+  <p>ADR-0362 moved every light's numbers out of C++ into <code>assets/scripts/lights.lua</code>. It has two tables.
+    A <b>kind</b> is what a light is: point or spot, its colour, its intensity, its <b>range</b> (where the falloff
+    window reaches zero), a spot's cone, an offset from the emitter's point (a bulb hangs under its lamp head), whether
+    it rides the <b>dusk ramp</b> (dark by day, warming up through twilight), and which pool pays for it. A <b>pool</b>
+    is a budget: at most <code>count</code> lights, within <code>within</code> metres of the camera, fading at the edge
+    of the set or not, and picking emitters in groups or one by one.</p>
+<div class="code">
+    <div class="hd"><span>Three kinds: the street lamp, the station lamp, the headlight</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/assets/scripts/lights.lua#L67-L76">assets/scripts/lights.lua</a></div>
+<pre>  kinds = {
+    <span class="c">-- the street's lamps (StreetFurniture lamp heads): warm sodium-white pools that meet at 26 m spacing</span>
+    street_lamp = { candela = 1600, type = "point", color = { 1.0, 0.82, 0.55 }, intensity = 48, range = 34,
+                    offset = { 0, -0.35, 0 }, dusk = true, pool = "street" },
+    <span class="c">-- a station's canopy fittings (RailStop lamps, 12 m apart): cool white, a shorter pool under a roof</span>
+    station_lamp = { candela = 600, type = "point", color = { 0.92, 0.96, 1.0 }, intensity = 26, range = 16,
+                     dusk = true, pool = "street" },
+    <span class="c">-- a car's headlight: a cone pitched down onto the road ahead (the emitter aims it)</span>
+    headlight = { candela = 15000, type = "spot", color = { 1.0, 0.95, 0.82 }, intensity = 22, range = 45,
+                  cone = { 0.32, 0.55 }, pool = "headlights" },</pre>
+  </div>
+<div class="code">
+    <div class="hd"><span>The pools, each with a forward budget and a "many" budget for clustered lighting</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/assets/scripts/lights.lua#L104-L116">assets/scripts/lights.lua</a></div>
+<pre>  pools = {
+    <span class="c">-- every street lamp in sight lights its pool; a 32-light renderer keeps the nearest 20</span>
+    street = { count = 20, within = 160, fade = true, many = { count = 2500, within = 800 } },
+    <span class="c">-- the player's car always, then the nearest lit cars, two beams each</span>
+    headlights = { count = 3, within = 0, fade = false, groups = true,
+                   many = { count = 300, within = 400, fade = true } },
+    tails = { count = 0, within = 0, fade = true, groups = true, many = { count = 300, within = 200 } },
+    beacons = { count = 6, within = 60, fade = true, many = { count = 64, within = 250 } },
+    <span class="c">-- the fittings of the streamed interiors round the player</span>
+    rooms = { count = 8, within = 15, fade = true, many = { count = 600, within = 45 } },
+    <span class="c">-- the buses' saloons: the nearest bus's three (the one you ride), then every lit saloon near</span>
+    cabins = { count = 3, within = 25, fade = true, groups = true, many = { count = 60, within = 150 } },
+  },</pre>
+  </div>
+  <p>Each kind carries two brightnesses. <code>intensity</code> is the old one, illuminance at 1 m in the engine's
+    ADR-0017 units, tuned against the old night exposure. <code>candela</code> is the real luminous intensity, used when
+    the physical sky is on (ADR-0369, below). The file is read once at start by <code>ensureLightsLoaded</code> into a
+    <code>LightBook</code> (<code>engine/lights/light_kinds.h</code>). There is deliberately no C++ copy of the catalogue:
+    without the file one plain white point kind stands and the loader warns. Producers look a kind up once per call
+    site (<code>static const int k = lightKindId("headlight");</code>), and an unknown name is skipped with a single
+    warning, not a crash. A new kind of light is a row in the table, which is the project's
+    <i>kinds are data</i> rule applied to lights.</p>
+
+  <table>
+    <tr><th>Kind</th><th>Type</th><th>candela</th><th>range</th><th>Pool</th><th>Who publishes it</th></tr>
+    <tr><td>street_lamp</td><td>point</td><td>1,600</td><td>34 m</td><td>street</td><td>LightSystem, from <code>StreetFurniture</code> lamp heads</td></tr>
+    <tr><td>station_lamp</td><td>point</td><td>600</td><td>16 m</td><td>street</td><td>LightSystem, from <code>RailStop</code> lamps</td></tr>
+    <tr><td>headlight</td><td>spot</td><td>15,000</td><td>45 m</td><td>headlights</td><td>VehicleSystem (physics vehicles, yours marked), CityRenderSystem (traffic)</td></tr>
+    <tr><td>flashlight</td><td>spot</td><td>2,000</td><td>60 m</td><td>none: always lit</td><td>FlashlightSystem</td></tr>
+    <tr><td>room_panel / room_round / room_pendant</td><td>point, room-bounded</td><td>1,300 / 700 / 250</td><td>6 / 6 / 4 m</td><td>rooms</td><td>BuildingInteriorSystem, one per ceiling fitting</td></tr>
+    <tr><td>room_fill</td><td>point</td><td>250</td><td>20 m</td><td>none</td><td>BuildingInteriorSystem, one per storey</td></tr>
+    <tr><td>cab</td><td>point</td><td>300</td><td>6 m</td><td>none</td><td>ElevatorSystem</td></tr>
+    <tr><td>tail_light / brake_light</td><td>point</td><td>15 / 80</td><td>4 / 6 m</td><td>tails</td><td>CityRenderSystem</td></tr>
+    <tr><td>bus_cabin</td><td>point</td><td>800</td><td>7 m</td><td>cabins</td><td>CityRenderSystem, three per bus</td></tr>
+    <tr><td>beacon</td><td>point</td><td>100</td><td>10 m</td><td>beacons</td><td>BeaconLightSystem</td></tr>
+  </table>
+  <p class="cap">The kinds at e55dfaaa, from <code>lights.lua</code>. A kind with no pool is lit whenever it is
+    published. The same file also holds the glow classes, the reflection probes' spacing and the ray-traced reflections'
+    rules (see <a href="reflections.html">Reflections</a>).</p>
+
+  <h2>Emitters publish, they never pick</h2>
+  <p>A system that gives off light now writes <b>candidates</b> onto its own channel of the <code>LightBoard</code>
+    and stops there. A candidate is a kind, a position, an aim, and a few modifiers. It says nothing about whether it
+    will be lit.</p>
+<div class="code">
+    <div class="hd"><span>LightCandidate and the board's channels</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/lights/light_board.h#L17-L31">src/engine/lights/light_board.h</a></div>
+<pre>struct LightCandidate {
+    int kind = -1;                 <span class="c">// lightBook().kinds; -1: skipped</span>
+    Vec3 position;
+    Vec3 direction{0, 0, 1};       <span class="c">// a spot's aim</span>
+    float scale = 1.0f;            <span class="c">// times the kind's intensity (a flash, a level's beacon reach)</span>
+    float range = 0.0f;            <span class="c">// the falloff window, metres; 0: the kind's</span>
+    uint32_t group = 0;            <span class="c">// candidates sharing a group are picked whole (a car's two lamps); 0: alone</span>
+    bool mine = false;             <span class="c">// the player's own: picked first, never faded</span>
+    <span class="c">// a room's light: lit only inside this box (PointLight::roomBox, ADR-0365)</span>
+    bool roomBox = false;
+    float boxCx = 0, boxCz = 0, boxUx = 1, boxUz = 0, boxHalfU = 0, boxHalfV = 0, boxFloorY = 0;
+};
+
+<span class="c">// The producers, one channel each (Traffic: city cars' head and tail lamps, CityRenderSystem) (static emitters -- street lamps, station lamps -- are read by LightSystem itself).</span>
+enum class LightChannel : int { Vehicles, Tool, Rooms, Cabs, Beacons, Traffic, Count };</pre>
+  </div>
+  <p>Each producer replaces its channel at its own cadence: VehicleSystem every fixed step, the flashlight every
+    frame, the rooms and the elevator cabs every step. Giving the cabs their own channel removed the old order
+    dependency, where ElevatorSystem appended to the rooms' list and so had to run after BuildingInteriorSystem. The
+    <code>group</code> field lets a pool take emitters whole: a car's lamps share one group, and a bus's three saloon
+    lights share another. <code>mine</code> marks the player's own lights, which are picked first and never faded.</p>
+  <p>Street and station lamps do not move, so nobody publishes them. LightSystem reads them itself from
+    <code>StreetFurniture</code> and <code>RailTracks</code> and files them in a <b>64 m grid</b>, rebuilt only when
+    their count changes (a level loads, a tile streams in). Each frame only the cells within the street pool's reach are
+    read, and only after dark. Before ADR-0363, every lamp on the map was tested every frame.</p>
+<div class="code">
+    <div class="hd"><span>BuildingInteriorSystem: every ceiling fitting of every streamed interior becomes a room-bounded candidate</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/building_interior_system.cpp#L66-L82">src/engine/systems/building_interior_system.cpp</a></div>
+<pre>    {
+        static const int fittingKind[3] = {lightKindId("room_panel"), lightKindId("room_round"), lightKindId("room_pendant")};
+        for (const std::pair&lt;const std::size_t, Resident&gt;&amp; kv : resident_)
+            for (const RoomLight&amp; rl : kv.second.lights) {
+                LightCandidate c;
+                c.kind = fittingKind[std::clamp(rl.kind, 0, 2)];
+                c.position = rl.at;
+                c.roomBox = true;
+                c.boxCx = static_cast&lt;float&gt;(rl.centre.x);
+                c.boxCz = static_cast&lt;float&gt;(rl.centre.y);
+                c.boxUx = static_cast&lt;float&gt;(rl.u.x);
+                c.boxUz = static_cast&lt;float&gt;(rl.u.y);
+                c.boxHalfU = static_cast&lt;float&gt;(rl.halfU);
+                c.boxHalfV = static_cast&lt;float&gt;(rl.halfV);
+                c.boxFloorY = static_cast&lt;float&gt;(rl.floorY);
+                rooms.push_back(c);
+            }</pre>
+  </div>
+
+  <h2>One picker</h2>
+  <p><code>pickLights</code> (<code>engine/lights/light_picker.cpp</code>) is a pure function: candidates and a camera
+    position in, lights out. The tests in <code>tests/test_lights.cpp</code> exercise it directly. For each pool it
+    collects the <b>units</b> in reach (a single candidate, or a whole group, which counts at the distance of its
+    nearest member). It ranks them with yours first and then by distance, and keeps <code>count</code>.</p>
+<div class="code">
+    <div class="hd"><span>pickLights: keep the nearest units, and find the edge the set fades toward</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/lights/light_picker.cpp#L62-L70">src/engine/lights/light_picker.cpp</a></div>
+<pre>        const std::size_t keep = std::min(units.size(), static_cast&lt;std::size_t&gt;(std::max(0, pool.count)));
+        auto before = [](const Unit&amp; a, const Unit&amp; b) { return a.mine != b.mine ? a.mine : a.d &lt; b.d; };
+        std::partial_sort(units.begin(), units.begin() + static_cast&lt;std::ptrdiff_t&gt;(keep), units.end(), before);
+        float edge = pool.within;
+        if (units.size() &gt; keep &amp;&amp; keep &gt; 0) {   <span class="c">// the count binds: the farthest picked is the edge that moves</span>
+            float farthest = 0.0f;
+            for (std::size_t u = 0; u &lt; keep; ++u) farthest = std::max(farthest, units[u].d);
+            edge = edge &gt; 0.0f ? std::min(edge, farthest) : farthest;
+        }</pre>
+  </div>
+  <p>The fade is what stops lights popping. A picked light fades out across the <b>last quarter</b> of the pool's
+    edge with a smoothstep. The edge is the pool's reach, or, when the count is the binding limit, the distance of the
+    farthest light picked. That second edge moves with the camera. As you drive, the 21st-nearest lamp is fading in
+    while the 20th is fading out, rather than one switching on as the other switches off. This was the street lamps'
+    rule since the WS3 street-lights work. ADR-0362 made it every pool's. The lit strength is then the kind's intensity × the
+    candidate's scale × the fade × the dusk ramp (for kinds that ride it), and a light that comes out at zero is left
+    out.</p>
+  <p>Then comes the renderer's capacity. If more lights survive than the renderer can take, only the most important
+    stay: yours, then the ones giving the most light where the camera is.</p>
+<div class="code">
+    <div class="hd"><span>pickLights: over the renderer's capacity, keep the most important</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/lights/light_picker.cpp#L96-L108">src/engine/lights/light_picker.cpp</a></div>
+<pre>    if (static_cast&lt;int&gt;(order.size()) &gt; std::max(0, cap)) {
+        std::vector&lt;float&gt; score(cands.size(), 0.0f);
+        for (std::size_t i : order) {
+            const LightKind&amp; k = book.kinds[static_cast&lt;std::size_t&gt;(cands[i].kind)];
+            score[i] = cands[i].mine ? std::numeric_limits&lt;float&gt;::max()
+                                     : lightImportance(lit[i], cands[i].range &gt; 0.0f ? cands[i].range : k.range, dist[i]);
+        }
+        const std::size_t keepN = static_cast&lt;std::size_t&gt;(std::max(0, cap));
+        std::nth_element(order.begin(), order.begin() + static_cast&lt;std::ptrdiff_t&gt;(keepN), order.end(),
+                         [&amp;](std::size_t a, std::size_t b) { return score[a] &gt; score[b]; });
+        order.resize(keepN);
+        std::sort(order.begin(), order.end());   <span class="c">// back in the candidates' order</span>
+    }</pre>
+  </div>
+  <p><code>lightImportance</code> is the light's illuminance at the camera, <code>intensity / d²</code> with
+    <code>d</code> at least 1 m, and zero past its range. It is a crude measure (a lamp behind you scores as high as one
+    in front), but it replaced something worse. Before ADR-0363 the forward renderer simply cut its list at 32 in
+    arrival order, so headlights, which arrived last, were the first to go. The test
+    <code>light_picker_trims_to_the_renderers_capacity_by_importance</code> pins the rule: ten lamps and a far-off torch,
+    capacity 4, and the torch is kept along with the three nearest lamps.</p>
+  <p><code>LightSystem::render</code> wraps the picker. It runs in the render phase just before RenderSystem, takes its
+    budgets from what the renderer says it can light, and swaps in the real candela when the physical sky is on:</p>
+<div class="code">
+    <div class="hd"><span>LightSystem::render: the physical book and the budgets</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/light_system.cpp#L61-L81">src/engine/systems/light_system.cpp</a></div>
+<pre>    <span class="c">// UNDER THE PHYSICAL SKY (ADR-0369) each kind lights at its real candela, in engine units</span>
+    static LightBook physicalBook;
+    static bool physicalMade = false;
+    if (!physicalMade) {
+        physicalBook = loaded;
+        for (LightKind&amp; k : physicalBook.kinds)
+            if (k.candela &gt; 0.0f) k.intensity = static_cast&lt;float&gt;(k.candela / kLuxPerUnit);
+        physicalMade = true;
+    }
+    const LightBook&amp; book = ctx.view.lighting.physicalSky.enabled ? physicalBook : loaded;
+    static const int streetPool = book.pool("street");
+    static const int beaconPool = book.pool("beacons");
+    static const int streetLamp = lightKindId("street_lamp");
+
+    <span class="c">// THE BUDGETS, by what the renderer can light: the level's own lights first, the rest is ours</span>
+    const int capacity = ctx.renderer.lightCapacity();
+    const bool many = capacity &gt; 64;
+    const int cap = std::max(0, capacity - static_cast&lt;int&gt;(ctx.view.lighting.pointLights.size() + ctx.view.lighting.spotLights.size()));
+    std::vector&lt;LightPool&gt; pools = book.pools;
+    for (LightPool&amp; p : pools)
+        if (many &amp;&amp; p.hasMany) { p.count = p.manyCount; p.within = p.manyWithin; p.fade = p.manyFade; }</pre>
+  </div>
+  <p>The order of the output matters, because the forward renderer and some shaders read a prefix of it. LightSystem
+    puts the rooms and cabs first, then the static lamps, then beacons, traffic, your car's beams and the flashlight.
+    RenderSystem then puts the level's own authored lights in front of all of them. A level's light block still sets
+    the forward street and beacon pools (<code>CitySimConfig</code>'s <code>lampLightCount</code>,
+    <code>lampLightRadius</code>, <code>lampLightRange</code>, <code>lightCount</code>, <code>lightRadius</code>), and
+    <code>overlay lamplights off</code> empties the street pool while the lamp heads stay lit.</p>
+  <div class="note history"><p><b>The same picture, by design.</b> ADR-0362 was a refactor and was held to that:
+    river_town at 22:00 with the forward renderer, shot at the same poses before and after, differed by a mean of
+    0.28/255 on the street (0.97% of pixels over 8) and 0.62/255 at the towers (1.47%). The differing pixels were things
+    that move between runs (palm fronds, beacon blinks). Two changes were intended. The beacons' pools now fade with the
+    shared smoothstep instead of linearly over their last 15 m, and a light that comes out dark is dropped instead of
+    taking a slot, which took the street view from 23 lights to 22.</p></div>
+
+  <h2>Why not deferred: the measurement</h2>
+  <p>Glenn's request on 2026-11-07 was "look into the deferred rendering so we could have many, many light sources".
+    <b>Deferred shading</b> renders every surface's material into a set of screen-sized buffers (a G-buffer) first, then
+    lights each pixel once in a separate pass, so hidden surfaces are never lit. Its usual selling point is that a
+    forward renderer lights fragments that end up overdrawn. ADR-0361 measured before choosing, using two knobs that
+    pad or cut the forward list (<code>RT_LIGHT_FILL</code>, <code>RT_LIGHT_CAP</code>) and <code>RT_GPU_TIMES</code> for
+    the scene pass (river_town at 22:00, 2560×1405, RTX 3080).</p>
+  <table>
+    <tr><th>View</th><th>Scene-pass cost per light</th></tr>
+    <tr><td>towers</td><td>0.102 ms</td></tr>
+    <tr><td>a park with trees and grass (the most overdraw)</td><td>0.103 ms</td></tr>
+    <tr><td>a shop street</td><td>0.090 ms</td></tr>
+  </table>
+  <p class="cap">ADR-0361. The park costs no more per light than the street.</p>
+  <p>That flat line is the finding. The depth test already discards hidden fragments, so each pixel is lit about once
+    in the forward pass too. Deferred's win was mostly already there. What a light costs is how many lights each pixel
+    loops through, and at ~0.1 ms each a thousand lights would be ~100 ms. That cost is what <b>clustering</b> cuts, and
+    it cuts it without the rest of deferred's bill. ADR-0361 lists that bill: a fatter G-buffer (albedo, metallic,
+    emission, a shading model on top of today's normal and roughness), <code>mesh.frag</code> (1,722 lines, every surface)
+    split into material and lighting halves, grass and leaf transmission and the impostors' self-shadow turned into special
+    shading models, and three backends restructured. The ADR keeps the door open: the froxel lists would serve a
+    deferred lighting pass unchanged, and deferred is worth revisiting for decals, for AO on the ambient term only
+    (today AO darkens direct light and emission too), or if a TAA velocity target makes a G-buffer nearly free.</p>
+
+  <h2>Clustered lights</h2>
+  <p>A <b>froxel</b> (frustum voxel) is one cell of the view frustum cut into a grid: screen tiles across, depth slices
+    along the view. Each light is listed in every froxel its sphere of influence touches. A pixel finds its froxel and
+    shades with only that list. A street of a thousand lamps then costs each pixel the handful near it.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 300" role="img" aria-label="Side view of the view frustum from the camera: nine tile rows fan out from the eye, crossed by depth slices whose spacing grows with distance. One froxel is highlighted. A light's sphere touches several froxels. The grid is 16 by 9 tiles by 24 slices, from 0.5 metres to 2 kilometres, with up to 64 lights per froxel.">
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <!-- frustum -->
+        <path d="M40,150 L560,30 L560,270 Z" fill="#0f151e" stroke="#2c3d50"/>
+        <circle cx="40" cy="150" r="5" fill="#8ec5ff"/>
+        <text x="40" y="178" fill="#93a6ba" font-size="12">eye</text>
+        <!-- tile rays -->
+        <g stroke="#2c3d50" stroke-width="1">
+          <line x1="40" y1="150" x2="560" y2="56.7"/><line x1="40" y1="150" x2="560" y2="83.3"/>
+          <line x1="40" y1="150" x2="560" y2="110"/><line x1="40" y1="150" x2="560" y2="136.7"/>
+          <line x1="40" y1="150" x2="560" y2="163.3"/><line x1="40" y1="150" x2="560" y2="190"/>
+          <line x1="40" y1="150" x2="560" y2="216.7"/><line x1="40" y1="150" x2="560" y2="243.3"/>
+        </g>
+        <!-- slices: x, half-height = (x-40)*120/520 -->
+        <g stroke="#6f8fb0" stroke-width="1">
+          <line x1="58" y1="145.8" x2="58" y2="154.2"/><line x1="72" y1="142.6" x2="72" y2="157.4"/>
+          <line x1="92" y1="138" x2="92" y2="162"/><line x1="120" y1="131.5" x2="120" y2="168.5"/>
+          <line x1="160" y1="122.3" x2="160" y2="177.7"/><line x1="215" y1="109.6" x2="215" y2="190.4"/>
+          <line x1="290" y1="92.3" x2="290" y2="207.7"/><line x1="390" y1="69.2" x2="390" y2="230.8"/>
+          <line x1="560" y1="30" x2="560" y2="270"/>
+        </g>
+        <!-- highlighted froxel: slice 290..390 between rays k=3 (end 110) and k=4 (end 136.7) -->
+        <path d="M290,130.8 L390,123.1 L390,140.4 L290,144.6 Z" fill="#3b82f6" fill-opacity="0.45" stroke="#3b82f6"/>
+        <!-- a light -->
+        <circle cx="430" cy="190" r="34" fill="#e6c07b" fill-opacity="0.12" stroke="#e6c07b" stroke-dasharray="4 3"/>
+        <circle cx="430" cy="190" r="4" fill="#e6c07b"/>
+        <text x="430" y="243" fill="#e6c07b" font-size="12">a light's range</text>
+        <text x="300" y="285" fill="#93a6ba" font-size="12">slices grow with depth (each the same ratio deeper); not to scale</text>
+        <text x="340" y="112" fill="#8ec5ff" font-size="12">one froxel</text>
+        <!-- legend -->
+        <rect x="600" y="30" width="290" height="240" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <g text-anchor="start" font-size="12">
+          <text x="616" y="56" fill="#cfe4ff" font-size="13">ClusterGrid</text>
+          <text x="616" y="80" fill="#93a6ba">16 × 9 screen tiles × 24 slices</text>
+          <text x="616" y="98" fill="#93a6ba">= 3,456 froxels</text>
+          <text x="616" y="122" fill="#93a6ba">slices exponential, 0.5 m to 2 km</text>
+          <text x="616" y="146" fill="#93a6ba">a light goes in every froxel whose</text>
+          <text x="616" y="164" fill="#93a6ba">box its sphere touches</text>
+          <text x="616" y="188" fill="#93a6ba">at most 64 a froxel: over that,</text>
+          <text x="616" y="206" fill="#93a6ba">the nearest the froxel's middle</text>
+          <text x="616" y="230" fill="#8ec5ff">cells[c] = offset | count &lt;&lt; 24</text>
+          <text x="616" y="250" fill="#93a6ba">indices[]: light numbers, cell by cell</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">A side view: the 9 tile rows fan out from the eye, the depth slices cut across them. Exponential slices
+    keep froxels roughly cube-shaped at every distance, small near the eye where lights are dense on screen.</p>
+<div class="code">
+    <div class="hd"><span>ClusterGrid: the froxel grid</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/light_clusters.h#L17-L24">src/renderer/light_clusters.h</a></div>
+<pre>struct ClusterGrid {
+    int tilesX = 16, tilesY = 9, slices = 24;
+    float zNear = 0.5f, zFar = 2000.0f;   <span class="c">// view depth the slices span (m); nearer is slice 0, farther the last</span>
+    int cells() const { return tilesX * tilesY * slices; }
+    <span class="c">// The slice a view depth falls in (exponential: each slice the same ratio deeper), clamped to the grid.</span>
+    int sliceOf(float depth) const;
+    float sliceNear(int s) const;
+};</pre>
+  </div>
+  <p>The CPU binner, <code>buildClusters</code>, moves each light into view space and makes a cheap first cut: the
+    sphere's depth span gives the slices it can reach, and the tangents of its span at the near and far ends give the
+    tiles. Inside that block it tests the sphere against each froxel's box. Every touch becomes a (froxel, light) pair,
+    and a counting sort turns the pairs into one flat index list with an offset and count per froxel, with no
+    per-froxel vectors to grow.</p>
+<div class="code">
+    <div class="hd"><span>buildClusters: the sphere against each froxel's box</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/light_clusters.cpp#L50-L62">src/renderer/light_clusters.cpp</a></div>
+<pre>        for (int s = s0; s &lt;= s1; ++s) {
+            const float zn = grid.sliceNear(s), zf = grid.sliceNear(s + 1);
+            for (int ty = ty0; ty &lt;= ty1; ++ty) {
+                const float a = edgeY(ty), b = edgeY(ty + 1);
+                const float yLo = std::min(a * zn, a * zf), yHi = std::max(b * zn, b * zf);
+                for (int tx = tx0; tx &lt;= tx1; ++tx) {
+                    const float c = edgeX(tx), e = edgeX(tx + 1);
+                    const float xLo = std::min(c * zn, c * zf), xHi = std::max(e * zn, e * zf);
+                    <span class="c">// the sphere against the froxel's box (view space)</span>
+                    const float qx = std::clamp(x, xLo, xHi) - x, qy = std::clamp(y, yLo, yHi) - y, qz = std::clamp(d, zn, zf) - d;
+                    if (qx * qx + qy * qy + qz * qz &gt; r2) continue;
+                    touches.push_back({static_cast&lt;uint32_t&gt;((s * grid.tilesY + ty) * grid.tilesX + tx), static_cast&lt;uint32_t&gt;(li)});
+                }</pre>
+  </div>
+  <p>On the Vulkan side, <code>setLights</code> still fills the uniform buffer's 32 slots exactly as before (the sun
+    first), because a few loops still read them. It also writes every point and spot light, up to 4,096, into a storage
+    buffer at set 0, binding 8. The froxels' offset|count words go to binding 9 and the index lists to binding 10.</p>
+<div class="code">
+    <div class="hd"><span>setLights: every point and spot into the cluster light buffer</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L9696-L9710">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre>    <span class="c">// CLUSTERED (RT_CLUSTERED=1): every point and spot, past the 32, into the light buffer; the froxels pick for each</span>
+    <span class="c">// pixel (endFrame bins them). The UBO's 32 stay as they were (the sun first) for the loops that read them still</span>
+    <span class="c">// (grass and leaf transmission, the water's glint, the viewer's room).</span>
+    impl-&gt;clustered = clusteredLights();
+    impl-&gt;clusterLights.clear();
+    if (impl-&gt;clustered) {
+        for (const PointLight&amp; p : lighting.pointLights) {
+            if (impl-&gt;clusterLights.size() &gt;= Impl::kClusterMaxLights) break;
+            GpuLight l{};
+            setColor(l.positionIntensity, p.position, p.intensity);
+            setColor(l.colorOuter, p.color, 0.0f);
+            l.typeRange[1] = p.range;
+            roomBox(l, p);
+            impl-&gt;clusterLights.push_back(l);
+        }</pre>
+  </div>
+  <p>In <code>mesh.frag</code> the change is small. The pixel finds its froxel from its screen position and its
+    view depth, then loops that froxel's list instead of the 32. The directional light (the sun, or the moon at
+    night) still comes from the uniform buffer. <code>shadeLight</code>, one light's GGX maths, is shared by both paths,
+    so clustered and forward give the same picture.</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag: the pixel's froxel, and evaluateLighting with and without clusters</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L726-L767">shaders/vulkan/mesh.frag</a></div>
+<pre><span class="c">// This pixel's froxel (clustered lights, ADR-0361): where its list of lights starts in clusterIndices, and how many</span>
+void clusterCell(vec3 worldPos, out uint off, out uint n) {
+    float depth = -(g.view * vec4(worldPos, 1.0)).z;
+    int tx = clamp(int(gl_FragCoord.x / g.clusterDepth.z * float(g.clusterGrid.x)), 0, g.clusterGrid.x - 1);
+    int ty = clamp(g.clusterGrid.y - 1 - int(gl_FragCoord.y / g.clusterDepth.w * float(g.clusterGrid.y)), 0, g.clusterGrid.y - 1);
+    int sl = depth &lt;= g.clusterDepth.x ? 0
+           : clamp(int(log(depth / g.clusterDepth.x) * g.clusterDepth.y * float(g.clusterGrid.z)), 0, g.clusterGrid.z - 1);
+    uint oc = clusterCells[(sl * g.clusterGrid.y + ty) * g.clusterGrid.x + tx];
+    off = oc &amp; 0xFFFFFFu;
+    n = oc &gt;&gt; 24;
+}
+
+<span class="c">// (`indoor`: a room's surface, which takes its lights' bounce too -- roomBounce)</span>
+vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
+                      float metallic, float roughness, vec3 f0, vec3 sunShadow, bool indoor) {
+    vec3 directLight = vec3(0.0);
+    vec3 bounce = vec3(0.0);
+    float a = max(roughness * roughness, 0.002);
+    float a2 = a * a;
+    float NdotV = max(dot(N, V), 1e-4);
+
+    int count = min(g.counts.x, 32);
+    if (g.clusterGrid.w != 0) {
+        <span class="c">// CLUSTERED: the sun (and the moon) from the 32, every other light from this pixel's froxel</span>
+        for (int i = 0; i &lt; count; ++i)
+            if (int(g.lights[i].typeRange.x) == 1)
+                directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+        uint off, n;
+        clusterCell(worldPos, off, n);
+        for (uint k = 0u; k &lt; n; ++k) {
+            Light light = clusterLights[clusterIndices[off + k]];
+            directLight += shadeLight(light, worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+            if (indoor) bounce += roomBounce(light, worldPos);
+        }
+        return directLight + bounce * albedo * (1.0 - metallic) / PI;
+    }
+    for (int i = 0; i &lt; count; ++i) {
+        directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+        if (indoor) bounce += roomBounce(g.lights[i], worldPos);
+    }
+    return directLight + bounce * albedo * (1.0 - metallic) / PI;
+}</pre>
+  </div>
+  <p>The tile row is flipped (<code>clusterGrid.y - 1 - …</code>) because the binner's tiles count up from the bottom
+    of the view, where Vulkan's <code>gl_FragCoord.y</code> counts down. The slice comes from the same logarithm the CPU
+    uses, with <code>1 / log(far / near)</code> precomputed into <code>clusterDepth.y</code>.</p>
+
+  <h3>What it bought</h3>
+  <table>
+    <tr><th>View (scene pass)</th><th>forward, 23 lights</th><th>clustered, the same 23</th><th>clustered, every lamp in 800 m (~1,000)</th></tr>
+    <tr><td>street</td><td>5.02 ms</td><td>4.62</td><td>5.40</td></tr>
+    <tr><td>towers</td><td>8.46</td><td>7.35</td><td>9.73</td></tr>
+  </table>
+  <p class="cap">ADR-0361, river_town at 22:00, 2560×1405, RTX 3080. With the same lights the picture matched (mean
+    difference 0.04/255 on the street) and was cheaper.</p>
+  <figure class="shot">
+    <img src="img/lighting/towers-today-vs-1000.webp" alt="Two night views of the same city side by side. Left: lamp pools only on the nearest streets. Right: lamp-lit streets visible far into the distance between the towers">
+    <figcaption>The towers pose at 22:00 (2026-11-07). Left: the forward list's lamps. Right: every lamp within
+      800 m lit, about a thousand, through the clusters. The far streets glow to the end of the view.</figcaption>
+  </figure>
+  <p>The prototype was off by default. ADR-0363 (the same day) made it Vulkan's default and gave every pool a second,
+    larger budget for a renderer that can light thousands. <code>Renderer::lightCapacity()</code> reports which kind of
+    renderer it is: 31 on a forward one (Metal, WebGPU, or Vulkan with <code>RT_CLUSTERED=0</code>, one slot being the
+    sun's), 4,096 on clustered Vulkan. LightSystem treats any capacity over 64 as "many".</p>
+<div class="code">
+    <div class="hd"><span>Vulkan: clustered by default, and the capacity it reports</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L9508-L9513">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre><span class="c">// CLUSTERED LIGHTS (ADR-0361), on by default since ADR-0362's phase 2; RT_CLUSTERED=0 is the forward A/B (the fixed 32)</span>
+static bool clusteredLights() {
+    static const bool on = [] { const char* e = std::getenv("RT_CLUSTERED"); return !(e &amp;&amp; std::string(e) == "0"); }();
+    return on;
+}
+int VulkanRenderer::lightCapacity() const { return clusteredLights() ? static_cast&lt;int&gt;(Impl::kClusterMaxLights) : 31; }</pre>
+  </div>
+  <p>The same ADR made city traffic's lamps real lights, from each car's own lamp markers in <code>vehicles.lua</code>:
+    two headlight beams, a red tail glow after dark, a brighter brake glow while braking. The <code>RT_LAMP_LIGHTS</code>
+    / <code>RT_LAMP_RADIUS</code> trial switches were deleted, because the pools' <code>many</code> budgets replace them.</p>
+  <table>
+    <tr><th>View (scene pass)</th><th>forward (25 picked)</th><th>many</th><th>lights lit (published)</th></tr>
+    <tr><td>river_town street</td><td>6.00 ms</td><td>5.77 ms</td><td>1,326 (2,104): 75 cars' beams</td></tr>
+    <tr><td>river_town towers</td><td>8.86 ms</td><td>10.82 ms</td><td>1,108 (1,971)</td></tr>
+    <tr><td>island_8_nature, a town</td><td>5.38 ms</td><td>5.03 ms</td><td>751 (885)</td></tr>
+  </table>
+  <p class="cap">ADR-0363. The towers view looks across most of the town and pays about 2 ms for a lit town and its
+    traffic; the other two are cheaper than forward, because a pixel's list is shorter than the forward 25.</p>
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/lighting/grid-many-lights.webp" alt="A night city from high above: a grid of streets traced by lamp pools, towers with lit windows and red beacons, a dark ring road at the edge">
+      <figcaption>The same town from above (2026-11-07): lamp-lit streets trace its grid.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/lighting/street-night-physical.webp" alt="A street corner at night under the physical sky: lamp pools on the pavement, a taxi's headlights on the road, warm lit windows in brick buildings and palms in silhouette">
+      <figcaption>A street at night under the physical sky (2026-11-07): lamp pools on the pavement and a taxi's beams.</figcaption>
+    </figure>
+  </div>
+
+  <h3>Binned on the GPU (ADR-0364)</h3>
+  <p>CPU binning cost 0.3–0.5 ms for real streets, but its worst case is lights crowded round the camera: each one
+    touches most of the near froxels, and 1,000 lights within 60 m took 6.8–12.6 ms of the main thread. Interiors (dozens
+    of fittings a floor) and a junction full of headlights are exactly that case. <code>cluster_bin.comp</code> moves the
+    work to a compute shader: one workgroup of 64 threads per froxel (3,456 workgroups). The threads test every light
+    with the CPU's first cut and the same sphere-against-box test, gather the touching ones in shared memory (up to
+    256), and keep the nearest 64 to the froxel's middle when there are more.</p>
+<div class="code">
+    <div class="hd"><span>cluster_bin.comp: keep the nearest 64, write them in light order into the froxel's own 64 slots</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/cluster_bin.comp#L89-L110">shaders/vulkan/cluster_bin.comp</a></div>
+<pre>    barrier();
+    const uint n = min(candCount, GATHER);
+    const uint keep = min(n, SLOTS);
+    <span class="c">// over the cap: the nearest the middle stay (ties by light order, so the pick is the same every frame)</span>
+    for (uint k = t; k &lt; n; k += 64u) {
+        uint nearer = 0u;
+        if (n &gt; SLOTS)
+            for (uint j = 0u; j &lt; n; ++j)
+                if (candD2[j] &lt; candD2[k] || (candD2[j] == candD2[k] &amp;&amp; candIdx[j] &lt; candIdx[k])) ++nearer;
+        candKeep[k] = nearer &lt; SLOTS ? 1u : 0u;
+    }
+    barrier();
+    <span class="c">// the kept, written in light order (a deterministic list, like the CPU's)</span>
+    const uint base = cell * SLOTS;
+    for (uint k = t; k &lt; n; k += 64u) {
+        if (candKeep[k] == 0u) continue;
+        uint before = 0u;
+        for (uint j = 0u; j &lt; n; ++j)
+            if (candKeep[j] != 0u &amp;&amp; candIdx[j] &lt; candIdx[k]) ++before;
+        indices[base + before] = candIdx[k];
+    }
+    if (t == 0u) cells[cell] = (base &amp; 0xFFFFFFu) | (keep &lt;&lt; 24);</pre>
+  </div>
+  <p>Giving each froxel a fixed run of 64 slots (<code>base = cell * 64</code>) avoids a prefix sum. It costs memory
+    (3,456 × 64 indices), but the output is in the very format <code>mesh.frag</code> already read, so the scene pass did
+    not change. The dispatch is recorded before any pass of the frame, with barriers from the host's write of
+    the lights and to the fragment shader's reads.</p>
+  <table>
+    <tr><th>View (river_town, 22:00)</th><th>CPU binning</th><th>GPU binning</th><th>RT_CLUSTER_CHECK</th></tr>
+    <tr><td>towers, 1,113 lights</td><td>0.39–0.50 ms of CPU</td><td>~0.1 ms of GPU</td><td>20 of 20 equal</td></tr>
+    <tr><td>street, 1,326 lights</td><td>0.42–0.47 ms</td><td>~0.05 ms</td><td>22 of 22 equal</td></tr>
+    <tr><td>1,000 lights within 60 m (<code>RT_LIGHT_FILL</code>)</td><td>6.8–12.6 ms</td><td>~0.2 ms</td><td>16 equal but one tie at the cap</td></tr>
+  </table>
+  <p class="cap">ADR-0364. The GPU time is the growth of the <code>shadows</code> bucket of <code>RT_GPU_TIMES</code>,
+    which the dispatch falls in.</p>
+  <div class="note history"><p><b>A checker that caught an over-count.</b> <code>RT_CLUSTER_CHECK=1</code> reads the
+    GPU's lists back every 120 frames (one frame slot later, after its fence) and compares them froxel by froxel with
+    <code>buildClusters</code> run on the same lights and camera. The first version of the shader tested only the box,
+    and the check found up to 1,555 extra lights in about 245 froxels, though never a missing one. The froxels' boxes
+    overhang the frustum's wedge, so a light could touch a box without being visible through it. Adding the CPU's first
+    cut (the sphere's depth span and view-ratio span) made the two equal. <code>RT_GPU_CLUSTERS=0</code> still bins on
+    the CPU.</p></div>
+
+  <h2>Room lights, kept to their rooms (ADR-0365)</h2>
+  <p>"Buildings just seem bright all around" (Glenn, 2026-11-07). A streamed interior had been lit by one warm point
+    per storey at the building's centre, reaching twice the building's width, and local lights cast no shadows, so it
+    lit through every wall. ADR-0365 lights rooms from their fittings. Every ceiling fitting the furniture planner hangs
+    (an office's recessed panel, a home's round flush fitting, a bar's pendant) records a <code>RoomLight</code> in
+    <code>BuildingMesh::roomLights</code>: where the light is, which fitting, and the box of the room it hangs in.</p>
+  <p>Walls still cast no shadows, and a shadow map per room would be far too expensive. Instead each light carries
+    its room's box and lights nothing outside it. A room's own walls are lit on their inner faces, and the room next
+    door is not.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 290" role="img" aria-label="Plan view of two rooms side by side. A ceiling fitting in the left room has a 6 metre range circle that crosses the party wall into the right room. Only the left room is lit: the light fades to zero within 0.12 metres outside its room's box. On the right, how a room light is packed into a GpuLight as type 3.">
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="40" y="40" width="250" height="180" fill="#e6c07b" fill-opacity="0.13" stroke="#cfe4ff" stroke-width="2"/>
+        <rect x="290" y="40" width="200" height="180" fill="#0f151e" stroke="#cfe4ff" stroke-width="2"/>
+        <circle cx="180" cy="130" r="122" fill="none" stroke="#e6c07b" stroke-dasharray="5 4"/>
+        <circle cx="180" cy="130" r="7" fill="#e6c07b"/>
+        <text x="180" y="158" fill="#e6c07b" font-size="12">room_panel</text>
+        <text x="165" y="64" fill="#cfe4ff" font-size="12">its room: lit</text>
+        <text x="390" y="64" fill="#93a6ba" font-size="12">next room: dark</text>
+        <text x="410" y="130" fill="#93a6ba" font-size="12">the range reaches here,</text>
+        <text x="410" y="148" fill="#93a6ba" font-size="12">the box test says no</text>
+        <line x1="40" y1="266" x2="290" y2="266" stroke="#8ec5ff"/>
+        <text x="165" y="283" fill="#8ec5ff" font-size="12">halfU × 2 along u</text>
+        <line x1="20" y1="40" x2="20" y2="220" stroke="#8ec5ff"/>
+        <text x="20" y="34" fill="#8ec5ff" font-size="12">halfV</text>
+        <text x="400" y="240" fill="#93a6ba" font-size="12">fades to 0 by 0.12 m past the wall</text>
+        <rect x="540" y="30" width="350" height="216" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <g text-anchor="start" font-size="12">
+          <text x="556" y="54" fill="#cfe4ff" font-size="13">GpuLight, type 3 (a room's light)</text>
+          <text x="556" y="80" fill="#93a6ba">positionIntensity: the fitting, its intensity</text>
+          <text x="556" y="100" fill="#93a6ba">directionInner: box centre x, z; axis u x, z</text>
+          <text x="556" y="120" fill="#93a6ba">colorOuter: colour; w the room's floor</text>
+          <text x="556" y="140" fill="#93a6ba">typeRange: 3, range, half extents u, v</text>
+          <text x="556" y="168" fill="#8ec5ff">shadeLight × roomLightInside</text>
+          <text x="556" y="188" fill="#8ec5ff">roomBounce (indoor surfaces only)</text>
+          <text x="556" y="214" fill="#93a6ba">a renderer without the test (Metal,</text>
+          <text x="556" y="232" fill="#93a6ba">WebGPU) lights it as a plain point</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The box is a rotated rectangle in plan (centre, axis, half extents) plus a floor height. A spot light
+    already uses <code>directionInner</code> and <code>colorOuter.w</code> for its aim and cone, so a room light reuses
+    those slots, and the type tells the shader which reading applies.</p>
+<div class="code">
+    <div class="hd"><span>setLights: a room's box packed into the light's spare slots</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L9669-L9677">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre>    <span class="c">// Point lights (type 0).</span>
+    <span class="c">// (a room's light, type 3, carries its box: directionInner = centre x, z, axis x, z; colorOuter.w its floor;</span>
+    <span class="c">// typeRange.zw the half extents -- mesh.frag lights only inside it, ADR-0365)</span>
+    auto roomBox = [](GpuLight&amp; l, const PointLight&amp; p) {
+        if (!p.roomBox) return;
+        l.directionInner[0] = p.boxCx; l.directionInner[1] = p.boxCz; l.directionInner[2] = p.boxUx; l.directionInner[3] = p.boxUz;
+        l.colorOuter[3] = p.boxFloorY;
+        l.typeRange[0] = 3.0f; l.typeRange[2] = p.boxHalfU; l.typeRange[3] = p.boxHalfV;
+    };</pre>
+  </div>
+<div class="code">
+    <div class="hd"><span>lighting_common.glsl: the box test, and a room's bounce</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/lighting_common.glsl#L120-L143">shaders/vulkan/lighting_common.glsl</a></div>
+<pre><span class="c">// A room's light (ADR-0365) reaches only inside its room's box: 1 inside, 0 past its walls -- its own walls' inner</span>
+<span class="c">// faces lit, the next room's not</span>
+float roomLightInside(Light light, vec3 worldPos) {
+    vec2 d = worldPos.xz - light.directionInner.xy;
+    vec2 u = light.directionInner.zw;
+    float out_ = max(max(abs(dot(d, u)) - light.typeRange.z, abs(dot(d, vec2(-u.y, u.x))) - light.typeRange.w),
+                     light.colorOuter.w - 0.05 - worldPos.y);
+    return 1.0 - smoothstep(0.02, 0.12, out_);
+}
+
+<span class="c">// THE ROOM'S BOUNCE (Glenn, 2026-11-08: "lights in the interior at night are too dim"): a room's light reaches the</span>
+<span class="c">// ceiling and the walls beside it mostly off the floor and the other walls -- in a pale room about as much again as</span>
+<span class="c">// it gives directly. Each room light's irradiance at a distance softened by the room's height (the bounce comes from</span>
+<span class="c">// everywhere round it), facing no way, at half (a room's average reflectance), kept to its room. Irradiance: the</span>
+<span class="c">// caller takes albedo / pi of it.</span>
+vec3 roomBounce(Light light, vec3 worldPos) {
+    if (int(light.typeRange.x) != 3) return vec3(0.0);
+    float dist = length(light.positionIntensity.xyz - worldPos);
+    float ratio2 = (dist * dist) / max(light.typeRange.y * light.typeRange.y, 1e-4);
+    float window = clamp(1.0 - ratio2 * ratio2, 0.0, 1.0);
+    const float kSoften2 = 2.5 * 2.5, kReflectance = 0.5;
+    return light.colorOuter.rgb * (light.positionIntensity.w * kReflectance * window * window / (dist * dist + kSoften2)) *
+           roomLightInside(light, worldPos);
+}</pre>
+  </div>
+  <p>The fittings pick from the <code>rooms</code> pool (forward: 8 within 15 m; many: 600 within 45 m). The storey
+    light did not go away. It stayed as a dim <code>room_fill</code> (intensity 5 instead of 22), standing in for the
+    light rooms bounce about and lighting the corridors, which hang no fittings.</p>
+  <div class="note history"><p><b>Found on the way.</b> Inside at 22:00 the rooms came out brighter than at noon. The
+    night exposure lift (×6) applied indoors as well, so a lit room saturated to flat white and no fitting's pool could
+    show. ADR-0365 recorded that as the exposure work's problem, not the lights', and it is what ADR-0366 and the
+    adapting eye of ADR-0368 went on to fix (see <a href="sky.html">The sky</a>).</p></div>
+
+  <h2>Units, and the scene pre-exposed (ADR-0366)</h2>
+  <p>A physical sky spans noon to moonlight, about 16 stops. The HDR targets are 16-bit floats, and the exposure used
+    to be applied in the composite, after the scene had been stored, so the scene's raw values had to fit fp16 at
+    every hour. ADR-0366 fixed the units first, then where exposure happens.</p>
+  <p><b>One engine light unit is 20,000 lux</b> (<code>kLuxPerUnit</code> in <code>engine/sky/sky_atmosphere.h</code>),
+    or 20,000 cd/m² when it measures luminance. The day cycle's noon sun, 5 units, is then 100,000 lux, which is
+    clear-day sunlight at the ground. A level's typical exposure of 0.7 works out at EV100 14.5 (exposure =
+    kLuxPerUnit / (1.2 × 2^EV100)), close to the photographer's "sunny 16" rule of EV 15. So the daytime look was
+    already nearly physical. Night was not: lamps, windows and signs had been tuned against the ×6 night exposure,
+    about 500 times brighter than real.</p>
+  <p><b>Pre-exposure</b> means multiplying by the camera's exposure while drawing, not afterwards. <code>mesh.frag</code>,
+    <code>sky.frag</code> and the clouds scale their radiance by it, so the stored HDR values sit near 1 whatever the
+    scene's brightness, and the composite exposes by 1. Bloom's threshold and knee were rescaled to match, and so were
+    the underwater composite's sky terms.</p>
+<div class="code">
+    <div class="hd"><span>The exposure rides cameraPosition.w, a slot that was unused before</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L7962-L7966">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre>    <span class="c">// PRE-EXPOSURE (ADR-0366): the scene is exposed as it is drawn -- mesh.frag, sky.frag and the clouds scale their</span>
+    <span class="c">// radiance by it, rides cameraPosition.w -- so the HDR targets hold values near 1 whatever the units (physical</span>
+    <span class="c">// light: a noon street ~10^4, a moonlit one ~10^-2, far past what fp16 keeps). The composite then exposes by 1.</span>
+    <span class="c">// RT_PREEXPOSE=0: the old order (exposure in the composite), the A/B.</span>
+    cpuGlobals.cameraPosition[3] = preExposure();</pre>
+  </div>
+  <p>The proof was an A/B with <code>RT_PREEXPOSE=0</code> (the old order) on river_town's towers and street at 22:00
+    and at noon: means equal (43.3/43.3, 82.3/82.3, 45.5/45.7, 37.1/37.0), with palm fronds in the wind again the only
+    difference. Later passes follow the same rule: the ray-traced reflections' output (<code>rt_reflect.comp</code>) is
+    multiplied by <code>g.cameraPosition.w</code> as it is stored.</p>
+
+  <h3>Physical lights and glows (ADR-0369)</h3>
+  <p>With the units fixed, the lights could be given real values. Under the physical sky (<code>RT_SKY=physical</code>,
+    still opt-in at this commit) LightSystem builds a second <code>LightBook</code> once, with each kind's intensity
+    replaced by <code>candela / kLuxPerUnit</code>. A point light's intensity is its illuminance at 1 m, and a source of
+    <i>I</i> candela gives <i>I</i> lux at 1 m, so the conversion is exact. The <code>LightSystem</code> excerpt above
+    shows it. A street lamp is 1,600 cd, a headlight 15,000, an office ceiling panel 1,300, a tail lamp 15.</p>
+  <p><b>Glows</b> are the other half of night: surfaces that emit light without lighting anything (a lit window, a lamp
+    head, a sign, a beacon bulb). Their emission had the same ×500 problem. ADR-0369 gave them two routes into units. A
+    global <code>emission_scale</code> of 0.004 brings any old emission into engine units (a lit window at the old 1.3
+    comes to about 100 cd/m²). Then, the same day, <b>glow classes</b>: each class of glowing surface the level loader
+    tags declares its real luminance in <code>lights.lua</code>, and is lit at that in its own colour.</p>
+  <table>
+    <tr><th>Glow class</th><th>cd/m²</th><th></th><th>Glow class</th><th>cd/m²</th></tr>
+    <tr><td>window_pane</td><td>25</td><td></td><td>street_lamp_head</td><td>8,000</td></tr>
+    <tr><td>lit_band</td><td>300</td><td></td><td>station_lamp_head</td><td>5,000</td></tr>
+    <tr><td>far_city</td><td>12</td><td></td><td>sign</td><td>400</td></tr>
+    <tr><td>beacon_bulb / glow / haze</td><td>3,000 / 2,000 / 800</td><td></td><td>the moon's disc</td><td>2,500</td></tr>
+  </table>
+  <p class="cap">ADR-0369 and <code>lights.lua</code>. The city's glow on the night sky is 2 cd/m² low toward downtown
+    (<code>city_glow_nits</code>); the sky itself is <a href="sky.html">its own page</a>.</p>
+  <p>The plumbing is easy to get wrong, which matters for the bug in the next section. The loader tags a glowing entity
+    with a <code>NightGlow</code> holding its class's nits. <code>DayNightSystem</code> writes the material's emission as
+    the glow's colour scaled so its peak is <code>nits × perNit</code>, where <code>perNit = 1 / (kLuxPerUnit ×
+    emission_scale)</code>. Every shader that draws the surface then multiplies by <code>emission_scale</code>
+    (<code>skyPhysical3.z</code>), which lands it in engine units. The material stores <code>nits / 80</code>. It is not
+    stored in engine units directly because the shader-side scale is shared with all the untagged old emission.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 230" role="img" aria-label="A glow's way into units: lights.lua's glow class in cd per square metre; DayNightSystem writes the material emission as nits divided by 80; each shader that draws it multiplies by skyPhysical3.z, 0.004, giving engine units, nits over 20,000; then times the exposure. rt_reflect.comp missed the times 0.004 step until ADR-0385, so lit windows in reflections were about 250 times too bright.">
+      <defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="10" y="30" width="160" height="80" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="90" y="54" fill="#cfe4ff">lights.lua glows</text>
+        <text x="90" y="74" fill="#93a6ba" font-size="12">window_pane = 25</text>
+        <text x="90" y="92" fill="#93a6ba" font-size="12">cd/m², per class</text>
+        <rect x="190" y="30" width="160" height="80" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="270" y="54" fill="#cfe4ff">DayNightSystem</text>
+        <text x="270" y="74" fill="#93a6ba" font-size="12">emission peak =</text>
+        <text x="270" y="92" fill="#93a6ba" font-size="12">nits / (20,000 × 0.004)</text>
+        <rect x="370" y="30" width="160" height="80" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="450" y="54" fill="#cfe4ff">the material</text>
+        <text x="450" y="74" fill="#93a6ba" font-size="12">emission ≈ nits / 80</text>
+        <text x="450" y="92" fill="#93a6ba" font-size="12">(a window: 0.31)</text>
+        <rect x="550" y="30" width="160" height="80" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="630" y="54" fill="#cfe4ff">each shader</text>
+        <text x="630" y="74" fill="#93a6ba" font-size="12">× skyPhysical3.z</text>
+        <text x="630" y="92" fill="#93a6ba" font-size="12">(emission_scale 0.004)</text>
+        <rect x="730" y="30" width="160" height="80" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="810" y="54" fill="#cfe4ff">engine units</text>
+        <text x="810" y="74" fill="#93a6ba" font-size="12">nits / 20,000,</text>
+        <text x="810" y="92" fill="#93a6ba" font-size="12">then × exposure</text>
+        <g stroke="#6f8fb0" stroke-width="1.6">
+          <line x1="170" y1="70" x2="186" y2="70" marker-end="url(#a5)"/>
+          <line x1="350" y1="70" x2="366" y2="70" marker-end="url(#a5)"/>
+          <line x1="530" y1="70" x2="546" y2="70" marker-end="url(#a5)"/>
+          <line x1="710" y1="70" x2="726" y2="70" marker-end="url(#a5)"/>
+        </g>
+        <g font-size="12">
+          <text x="630" y="138" fill="#8ec5ff">mesh.frag scene pass ✓</text>
+          <text x="630" y="158" fill="#8ec5ff">mesh.frag probe capture (gEmit) ✓</text>
+          <text x="630" y="178" fill="#e6c07b">rt_reflect.comp: missing until ADR-0385</text>
+          <text x="630" y="198" fill="#e6c07b">(lit windows ~250× too bright in reflections)</text>
+        </g>
+        <line x1="630" y1="110" x2="630" y2="124" stroke="#6f8fb0" stroke-width="1.4"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">One glow's path from the table to the screen. The ×0.004 has to be applied by every shader that reads
+    the emission, and one of them did not.</p>
+<div class="code">
+    <div class="hd"><span>DayNightSystem: a glow's emission from its class's nits</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/day_night_system.cpp#L813-L819">src/engine/systems/day_night_system.cpp</a></div>
+<pre><span class="c">// a glow's full emission: its real luminance in its colour under the physical sky, else its old value</span>
+Vec3 glowEmission(const NightGlow&amp; glow, double perNit) {
+    if (perNit &lt;= 0.0 || glow.nits &lt;= 0.0f) return glow.fullEmission;
+    const Vec3&amp; c = glow.fullEmission;
+    const double peak = std::max(c.x, std::max(c.y, c.z));
+    return peak &gt; 0.0 ? c * (glow.nits * perNit / peak) : Vec3(0, 0, 0);
+}</pre>
+  </div>
+<div class="code">
+    <div class="hd"><span>mesh.frag: the glows come into units as the colour is summed</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1582-L1583">shaders/vulkan/mesh.frag</a></div>
+<pre>        <span class="c">// (under the physical sky every glow's emission comes into engine units: ADR-0369)</span>
+        vec3 color = direct + ambient + emission * (skyIsPhysical() ? g.skyPhysical3.z : 1.0);</pre>
+  </div>
+  <p>ADR-0369's "still owed" list says what was wrong next: at night the lit windows clipped to white, because the
+    camera adapted to the lamp-lit street, about 10 times darker than a window. That is where the next section starts.</p>
+
+  <h2>Indoors, night windows, and buses</h2>
+  <p>On 2026-11-08 Glenn walked the build at night and filed a list: interior walls "occlude the outside but catch the
+    color of the outside", office floors that speckle, tower windows "bright white and too harsh", the view out of a bus
+    "almost all white", a bus saloon dark at night. Four ADRs that day answered it. Their lighting parts are below.
+    Most of the shader work is in the physical-sky branch of <code>mesh.frag</code>, so it applies under
+    <code>RT_SKY=physical</code>.</p>
+
+  <h3>Indoors (ADR-0377)</h3>
+  <p><code>RenderMaterial::FLAG_INDOOR</code> (bit 28) is set at load on drywall, every interior floor finish and all
+    furniture parts. No re-bake is needed. An indoor surface never reads the street's reflection probes or the open
+    sky's light. It takes a dim, neutral share of the day's light, the sky's up-facing irradiance made grey, for both its
+    fill and what it reflects. ADR-0377 set the share at 12%. ADR-0378 raised it to 30% the next day, after a lobby's
+    back wall seen through its glazing went black at 12%. The probe relight (<code>probe_relight.comp</code>) lights an
+    indoor texel with the same share, so an indoor probe agrees with the room it holds (see <a href="reflections.html">Reflections</a>).</p>
+  <p>The glittering floors are partly a lighting story too. Specular anti-aliasing and Toksvig filtering helped, but
+    the real cause was that indoor finishes borrowed the outdoor material bakes. Their relief and pores broke every
+    ceiling lamp's highlight into specks. An indoor finish now takes the bake's relief at a fifth and its roughness
+    variation at a quarter, and the lamps show as soft pools.</p>
+
+  <h3>Night windows with a light of their own (ADR-0378)</h3>
+  <p>Before changing anything, ADR-0378 measured: only 0.7% of night pixels were clipped. The harshness was not
+    overexposure alone. Every lit room was the same near-white at the same level. A tower's windows are drawn by an
+    interior-mapped pane (a fake room behind the glass, read from an atlas), and each room now gets its own light from a
+    hash of its cell:</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag: each lit room its own light level and colour</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1167-L1173">shaders/vulkan/mesh.frag</a></div>
+<pre>        <span class="c">// EACH ROOM ITS OWN LIGHT (ADR-0378; Glenn: the towers' lit windows "bright white and too harsh"): a tower at</span>
+        <span class="c">// night is not every room at full -- about a fifth show only a desk lamp's warm pool, half are part-lit, a</span>
+        <span class="c">// third full. And the room's tint counts twice, so a warm room and a fluorescent one keep their colour through</span>
+        <span class="c">// the tone curve instead of all reading as the same white.</span>
+        float rnd3 = fract(sin(dot(cellv, vec3(71.113, 23.917, 5.331))) * 15731.743);
+        float level = rnd3 &lt; 0.18 ? 0.15 : rnd3 &lt; 0.70 ? mix(0.45, 0.8, (rnd3 - 0.18) / 0.52) : 1.0;
+        roomLight *= level * (rnd3 &lt; 0.18 ? vec3(1.0, 0.62, 0.32) : paneTint);</pre>
+  </div>
+  <p>About a fifth of rooms (18% of the hash) show only a desk lamp's warm pool at 15%, half are part-lit at 45–80%, and
+    the rest are full. The room's tint is applied twice, so a warm room and a fluorescent one keep their colour through
+    the tone curve. The other half of the fix is in the eye. Auto exposure gained <b>highlight protection</b>: it never
+    exposes so far that the brightest 3% of the frame passes 1.5 before the tone curve. By day that is the sky. At night
+    it is the windows, which a median-keyed eye had pushed about 7 stops past white. Exposure has
+    <a href="sky.html">its own page</a>.</p>
+  <p>Two vehicle fixes rode along. The drivable car's panes were <code>albedo {1,1,1}</code> at 30% opacity, a lit white
+    veil over everything seen through them, and now take the kit's glass tint as traffic glass already did. And buses
+    got saloon lights: the <code>bus_cabin</code> kind in a <code>cabins</code> pool (3, or 60 with clustering), three
+    down each bus under the roof, one group per bus.</p>
+<div class="code">
+    <div class="hd"><span>CityRenderSystem: three saloon lights down each bus, one group</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/apps/citysim/city_render.cpp#L2485-L2499">src/apps/citysim/city_render.cpp</a></div>
+<pre>                <span class="c">// THE SALOON'S LIGHTS (ADR-0378; Glenn: "The bus interior is dark at night so the bus will need</span>
+                <span class="c">// interior lights"): three ceiling lights down the saloon, under the roof the front sign stands at --</span>
+                <span class="c">// lights.lua bus_cabin, on the dusk ramp, one group a bus so the picker takes them whole</span>
+                static const int cabinKind = engine::lightKindId("bus_cabin");
+                if (cabinKind &gt;= 0) {
+                    const Real ceiling = busSignLocal_.m[1][3] - 0.25;   <span class="c">// (the sign's middle is near the roof)</span>
+                    const Real half = busSignLocal_.m[2][3] * 0.6;        <span class="c">// (...and its z the saloon's front)</span>
+                    for (int li = -1; li &lt;= 1; ++li) {
+                        engine::LightCandidate c;
+                        c.kind = cabinKind;
+                        c.position = body.transformPoint(Vec3(0, ceiling, half * li));
+                        c.direction = body.transformPoint(Vec3(0, ceiling - 1, half * li)) - c.position;
+                        c.group = 0x40000000u + static_cast&lt;uint32_t&gt;(ai);
+                        trafficLights_.push_back(c);
+                    }</pre>
+  </div>
+
+  <h3>Night windows from inside, and a room's bounce (ADR-0382)</h3>
+  <p>The next complaint was the reverse view: at night every window seen from <i>inside</i> a building or a bus was
+    white, "a shaded/AO only version of what's outside with no color". The diagnosis began with <code>RT_GLASS=none</code>,
+    which hides the panes. With them hidden, the night street showed through, dark, with its lit windows, so the white was
+    the pane's own reflection.</p>
+  <p>A window of the <b>viewer's own</b> (the building they stand in or the bus they ride, given to the renderer as
+    <code>SceneLighting::viewerBox</code>) reflects the room behind the viewer, not the sky. Its daytime term was
+    <code>g.ambient.rgb * 0.35</code>, a unitless ambient strength. Under pre-exposure (ADR-0366) the night exposure is
+    applied while drawing, about 170 times at night, and that constant came out white. Now the reflected room is lit in
+    real terms: by day the indoor share of the sky's light (0.30) on a 0.7 wall, at night the room's lamps, and the
+    ceiling panels at the glows' physical scale.</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag: what the viewer's own window reflects</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1679-L1684">shaders/vulkan/mesh.frag</a></div>
+<pre>            float glowScale = skyIsPhysical() ? g.skyPhysical3.z : 1.0;
+            vec3 roomDay = skyIsPhysical()
+                ? vec3(dot(skyIrradianceSH(vec3(0.0, 1.0, 0.0)), vec3(0.2126, 0.7152, 0.0722)) * 0.30 * 0.7)
+                : g.ambient.rgb * 0.35;
+            vec3 reflected = own ? fs * (roomDay + roomRadiance(inWorldPos) + ceilingPanels(inWorldPos, Rv) * glowScale)
+                                 : prefiltered * fs * g.ambient.rgb * ambientShadow;</pre>
+  </div>
+  <p>The rooms themselves were too dim ("an office would be bright"). The eye was keyed correctly: the office's median
+    was 20 nits, at mid grey. The room lacked light, because each fitting lit only what faced it, so the ceiling between
+    the panels and the far walls went dark. Real rooms are lit as much by bounce as by the fittings directly.
+    <code>roomBounce</code> (in the excerpt above) adds a cheap stand-in. Each room light adds to an indoor surface its
+    irradiance at a distance softened by 2.5 m (so the bounce comes "from everywhere" and does not peak under the lamp),
+    facing no particular way, at half strength (a room's average reflectance), and kept to the room's box. The box test
+    became one shared function, <code>roomLightInside</code>, used by both the light and its bounce. The office's median
+    went from 20 to 37 nits, with the ceiling and walls lit.</p>
+  <figure class="shot">
+    <img src="img/lighting/night-windows-before-after.webp" alt="An open-plan office at night, before and after. Left: the windows are a flat white sheet and the floor is dark. Right: through the windows the night city shows dark with lit windows, and the floor and walls are evenly lit">
+    <figcaption>An office at night, before and after ADR-0382 (2026-11-08). Left: the viewer's own windows reflect a
+      white room. Right: the night street shows through, the room is lit by its fittings and their bounce.</figcaption>
+  </figure>
+  <p>Two smaller changes in the same ADR. Highlight protection is off inside a viewer box, because there the brightest
+    3% is the room's own fittings, which may clip, and a room should expose for its walls as a camera in one does. And
+    <code>bus_cabin</code> went from 350 to 800 cd ("a bit dim").</p>
+  <div class="note"><p><b>The window's room, from the clusters (ADR-0383).</b> The next walk found that a bus window
+    still did not reflect its saloon. <code>roomRadiance</code> summed the uniform buffer's 32, which under clustered
+    lighting holds only the sun, so no lamp ever showed in a window from inside. It now walks the pixel's froxel
+    (<code>clusterCell</code>, shared with <code>evaluateLighting</code>) and counts only lights inside the viewer's box
+    (<code>inViewerBox</code>, shared with the own-window test): the saloon's lamps, not the street's.</p></div>
+
+  <h2>Glows in the rays' units (ADR-0385)</h2>
+  <p>"The nighttime reflections of other buildings still seems really bright" (Glenn, 2026-11-08). The ray-traced
+    reflections shade what a ray hits in a compute shader, <code>rt_reflect.comp</code>, with its own copy of the
+    surface sum. It added a hit's emission without <code>emission_scale</code>, so every lit window seen in a
+    reflection was about 250 times the window itself (1 / 0.004). The scene pass and the probe capture both apply the
+    scale; the rays now do too.</p>
+<div class="code">
+    <div class="hd"><span>rt_reflect.comp: a hit's glow in the physical sky's units</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/rt_reflect.comp#L109-L113">shaders/vulkan/rt_reflect.comp</a></div>
+<pre>        <span class="c">// (in the physical sky's units, as the scene pass draws a glow: without the glows' scale, 0.004, every lit</span>
+        <span class="c">// window in a reflection was ~250x the window itself -- Glenn, 2026-11-08: "the nighttime reflections of other</span>
+        <span class="c">// buildings still seems really bright")</span>
+        vec3 emission = I.emissionMetal.rgb * ((I.flags &amp; 32u) != 0u ? tint : vec3(1.0)) *
+                        (skyIsPhysical() ? g.skyPhysical3.z : 1.0);</pre>
+  </div>
+  <p>This is the cost of a scale that every reader has to remember. Each consumer of emission has to multiply by it,
+    and a new consumer that does not will be wrong by a factor of 250 without any error. The reflections themselves
+    are <a href="reflections.html">their own page</a>.</p>
+
+  <h2>Who reads the lights</h2>
+  <p>"One picker chooses" holds on the CPU. On the GPU the picked lights arrive in two forms, and not every shader
+    reads the same one.</p>
+  <table>
+    <tr><th>Reader</th><th>What it reads</th><th>Notes</th></tr>
+    <tr><td><code>mesh.frag</code> <code>evaluateLighting</code></td><td>the sun from the 32; every other light from
+      the pixel's froxel</td><td>forward (<code>RT_CLUSTERED=0</code>): all 32</td></tr>
+    <tr><td><code>mesh.frag</code> <code>roomRadiance</code></td><td>the pixel's froxel, lights in the viewer's box only</td>
+      <td>point and room lights (types 0 and 3)</td></tr>
+    <tr><td><code>mesh.frag</code> leaf/grass transmission, water glint</td><td>the 32, type 1 only</td><td>the sun</td></tr>
+    <tr><td><code>probe_relight.comp</code></td><td>the 32</td><td>diffuse only (<code>SHADE_DIFFUSE_ONLY</code>): a
+      highlight belongs to the viewer's eye, not the probe's</td></tr>
+    <tr><td><code>rt_reflect.comp</code></td><td>the 32</td><td>a ray's hit lit by <code>shadeLight</code>, the sun's
+      shadow by another ray</td></tr>
+    <tr><td><code>cluster_bin.comp</code></td><td>the cluster light buffer</td><td>positions and ranges only</td></tr>
+  </table>
+  <p class="cap">At e55dfaaa. <code>shadeLight</code>, <code>roomLightInside</code> and <code>roomBounce</code> live in
+    <code>lighting_common.glsl</code>, shared by <code>mesh.frag</code>, <code>probe_relight.comp</code> and
+    <code>rt_reflect.comp</code>, so a light means the same thing to all three.</p>
+<div class="code">
+    <div class="hd"><span>rt_reflect.comp: a ray's hit is lit by the uniform buffer's 32, not the clusters</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/rt_reflect.comp#L126-L128">shaders/vulkan/rt_reflect.comp</a></div>
+<pre>        vec3 direct = vec3(0.0);
+        for (int i = 0; i &lt; min(g.counts.x, 32); ++i)
+            direct += shadeLight(g.lights[i], H, Nh, Vh, albedo, metallic, f0, a * a, NdotV, sunShadow);</pre>
+  </div>
+  <p>The consequence is worth knowing. Under clustered lighting the 32 are the sun plus the first 31 lights in
+    LightSystem's order, which is the level's own, then rooms and cabs, then street lamps. Spots (headlights, the
+    flashlight) come after every point light in <code>setLights</code>. So a reflection probe or a ray-traced reflection
+    sees at most 31 of the picked lights, mostly rooms and the nearest street lamps, and in a busy scene no headlights at
+    all. The screen sees all of them. Nothing in the ADRs addresses this yet (see the end of the page).</p>
+
+  <h2>How it got here</h2>
+  <div class="note history"><p><b>2026-11-07, the morning: measure, then cluster.</b> ADR-0017 had rejected deferred "for
+    now", to be revisited with many-light cities. When the request came, ADR-0361 measured the forward pass first, found
+    each light costs ~0.1 ms everywhere, and built clustered forward behind <code>RT_CLUSTERED=1</code>
+    (<code>723b3d77</code>). A trial that lit city traffic's lamps prompted Glenn's "are we patching things because it's a
+    quick win instead of doing the right thing which is harder but better?", and that produced the light-system plan
+    (<code>~/.claude/plans/light-system.md</code>) and its phase 1, ADR-0362 (<code>1ecef860</code>).</p></div>
+  <div class="note history"><p><b>2026-11-07, the afternoon: phases 2, 3 and 5b.</b> Clustered became the default, with
+    budgets by renderer, the static lamps in a grid and traffic's lamps lit (ADR-0363). The bin moved to the GPU
+    (ADR-0364), both in <code>c1529809</code>. Rooms were lit from their fittings and bounded by their boxes (ADR-0365), and the
+    units and pre-exposure (ADR-0366) came in <code>57ee888b</code>. After the physical sky and auto exposure
+    (ADR-0367, 0368), the city was "so bright at dusk", and ADR-0369 put the lights at their real candela and the glows
+    at their real luminance (<code>8a8693a4</code>).</p></div>
+  <div class="note history"><p><b>2026-11-08: the night walk.</b> Indoors and the floor glitter (ADR-0377), night windows
+    with rooms of their own, vehicle glass and bus saloon lights (ADR-0378, <code>43d4e81f</code>); windows from inside
+    and a room's bounce (ADR-0382, <code>0ac70577</code>); the window's room from the clusters (ADR-0383,
+    <code>38276bb5</code>); emission in the rays' units (ADR-0385, <code>c7393489</code>). Each fix began with a
+    measurement or an A/B switch that hid one term (<code>RT_GLASS=none</code>, the clipped-pixel count, the office's
+    median nits). In each case the cause was not the first suspect: the white windows were the pane's own reflection, not
+    the exposure; the glitter was the borrowed outdoor bakes, not the rays or the environment reflection.</p></div>
+
+  <h3>What is still owed</h3>
+  <ul>
+    <li>Spot and point shadows (a shadow atlas of 8, the plan's phase 5): local lights still cast no shadows; only the room box stops a room's light.</li>
+    <li>The far tier (phase 4): distant lamps as sprites from <code>lights.lua</code>, with BeaconLightSystem keeping only the blink.</li>
+    <li>Clustering on Metal and WebGPU (phase 6); they bin on the CPU when they get it.</li>
+    <li>A depth pre-pass to skip empty froxels (ADR-0364).</li>
+    <li>The physical sky as the default, after which <code>intensity</code>, <code>emission_scale</code> and the old night lift can go (ADR-0369).</li>
+    <li>The beacons' bulb and haze spheres predate real beacon lights and draw through the glass path as grey-white
+      shells; removing them is a lots tag bump (ADR-0382).</li>
+    <li>The bus seen from inside a riding bus, and a home's single-lamp room, were not checked on the bench (ADR-0378, 0382).</li>
+  </ul>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/lights.lua">assets/scripts/lights.lua</a> — the kinds, pools, glow classes, emission scale (and the probes' and rays' rules)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/lights/light_kinds.h">src/engine/lights/light_kinds.h</a> — <code>LightKind</code>, <code>LightPool</code>, <code>LightBook</code>; loaded by <code>src/engine/scripting/lights_lua.cpp</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/lights/light_board.h">src/engine/lights/light_board.h</a> — <code>LightCandidate</code>, the channels, the frame's picked lights</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/lights/light_picker.cpp">src/engine/lights/light_picker.h/.cpp</a> — <code>pickLights</code>, <code>lightImportance</code>, <code>lightEdgeFade</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/light_system.cpp">src/engine/systems/light_system.cpp</a> — the static lamps' grid, budgets, the physical book</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/light_clusters.cpp">src/renderer/light_clusters.h/.cpp</a> — <code>ClusterGrid</code>, <code>buildClusters</code> (the CPU binner, and the check's reference)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/cluster_bin.comp">shaders/vulkan/cluster_bin.comp</a> — the GPU binner</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/lighting_common.glsl">shaders/vulkan/lighting_common.glsl</a> — <code>shadeLight</code>, <code>roomLightInside</code>, <code>roomBounce</code>, the BRDF and shadows</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/mesh.frag">shaders/vulkan/mesh.frag</a> — <code>clusterCell</code>, <code>evaluateLighting</code>, <code>roomRadiance</code>, <code>ceilingPanels</code>, the lit rooms, the indoor branch</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/vulkan/vulkan_renderer.cpp">src/renderer/vulkan/vulkan_renderer.cpp</a> — <code>setLights</code>, <code>lightCapacity</code>, <code>recordClusterBin</code>, <code>compareClusterCheck</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/day_night_system.cpp">src/engine/systems/day_night_system.cpp</a> — the glows' nits into emission, the dusk ramp, exposure</li>
+    <li>Producers: <code>vehicle_system.cpp</code>, <code>flashlight_system.cpp</code>, <code>building_interior_system.cpp</code>, <code>elevator_system.cpp</code>, <code>beacon_light_system.cpp</code> (all in <code>src/engine/systems/</code>), <code>src/apps/citysim/city_render.cpp</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_lights.cpp">tests/test_lights.cpp</a> — the picker (nearest, edge fade, groups, dusk, capacity), every kind the producers name, the many budgets; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_light_clusters.cpp">tests/test_light_clusters.cpp</a> — no light missing from a froxel, none behind the camera, a 1,000-lamp street, a crowd at the camera</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a> — ADR-0017, 0361–0366, 0369, 0377, 0378, 0382, 0383, 0385</li>
+  </ul>
+
+  <h3>Switches and probes</h3>
+  <table>
+    <tr><th>Switch or tool</th><th>What it does</th></tr>
+    <tr><td><code>RT_CLUSTERED=0</code></td><td>the forward renderer's fixed 32 (capacity 31); the A/B for every clustered change</td></tr>
+    <tr><td><code>RT_GPU_CLUSTERS=0</code></td><td>bin the froxels on the CPU (<code>buildClusters</code>)</td></tr>
+    <tr><td><code>RT_CLUSTER_CHECK=1</code></td><td>every 120 frames, compare the GPU's lists with the CPU's; logs a <code>[clusters] check</code> line</td></tr>
+    <tr><td><code>RT_LIGHT_FILL=N</code>, <code>RT_LIGHT_CAP=N</code></td><td>pad the list with faint lights round the camera, or cut it to N: for timing the cost per light</td></tr>
+    <tr><td><code>RT_SKY=physical</code></td><td>the physical sky, and with it the candela, glow classes, indoor light and own-window terms</td></tr>
+    <tr><td><code>RT_PREEXPOSE=0</code></td><td>expose in the composite, as before ADR-0366</td></tr>
+    <tr><td><code>RT_EXPOSURE=meter</code></td><td>the incident-light meter alone, no adapting eye</td></tr>
+    <tr><td><code>RT_GLASS=none</code> / <code>old</code></td><td>panes drawn as nothing (the reference a pane is measured against) / the old glass</td></tr>
+    <tr><td><code>RT_GPU_TIMES=1</code></td><td>pass times; the bin dispatch counts in <code>shadows</code></td></tr>
+    <tr><td><code>overlay lamplights off</code></td><td>empty the street pool (the lamp heads stay lit)</td></tr>
+    <tr><td><code>[lights]</code>, <code>[clusters]</code> log lines</td><td>every 240 frames: <code>[lights]</code> (at night) lights lit of published and the renderer's capacity; <code>[clusters]</code> lights binned (on the CPU path also list entries, the busiest froxel and the binning time)</td></tr>
+    <tr><td>debug view 10</td><td>the environment reflection alone (used to rule it out of the floor glitter)</td></tr>
+  </table>
+
+  <footer>Code excerpts from commit <code>e55dfaaa</code> (2026-11-09). Drawn from ADR-0017, 0361, 0362, 0363, 0364,
+    0365, 0366, 0369, 0377, 0378, 0382, 0383, 0385 (and, where they meet, 0367, 0368); commits <code>723b3d77</code>,
+    <code>1ecef860</code>, <code>c1529809</code>, <code>57ee888b</code>, <code>8a8693a4</code>, <code>43d4e81f</code>,
+    <code>0ac70577</code>, <code>38276bb5</code>, <code>c7393489</code>; tests <code>test_lights.cpp</code> and
+    <code>test_light_clusters.cpp</code>.</footer>
+</div>
+</body>
+</html>

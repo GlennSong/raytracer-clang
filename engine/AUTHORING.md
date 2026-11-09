@@ -49,6 +49,8 @@ High to mid level: explain the idea, then show the real code that carries it. No
 
 Pinned commit for the first edition: `47d587f31769b795527e22ef848a82f6401ad112` (main, 2026-10-26).
 When a page is revised, re-pin it to the commit it was checked against.
+The November 2026 pages (lighting, sky, reflections, clouds, weather) and the revised renderer page are
+pinned to `e55dfaaae57a8cc3617c737e53cdc3b526790479` (main, the merge of #198, 2026-11-09).
 
 ## Mechanics
 

@@ -1,0 +1,1184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clouds — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>Clouds</h1>
+  <p class="lede">The sky's clouds are a volume. Every frame a shader marches each pixel's ray through a layer of
+    noise, kilometres deep, and adds up the light the cloud scatters toward the camera. Where the clouds stand is
+    decided before that, on the CPU. A <b>weather map</b>, baked round the camera, places every cloud as a cell of
+    one of four types, with its own size and its own height. The 3D noise only shapes the inside of each cell. The
+    same map shades the ground under the clouds.</p>
+
+  <figure class="shot">
+    <img src="img/clouds/island-cumulus.webp" alt="An island seen from the sea in the afternoon: separate rounded cumulus of many sizes over it and out to the horizon, a large flat-based cloud overhead, and thin curling cirrus streaks high above">
+    <figcaption>island_8 on 2026-11-08, after the weather map (ADR-0386) and the simulated weather (ADR-0390): cumulus
+      of many sizes over the island, some clear sky between them, and the cirrus veils at 9 km curling round the
+      map's eddies.</figcaption>
+  </figure>
+
+  <div class="note"><p><b>Whose idea.</b> The design follows Guerrilla Games' <b>Nubis</b> cloud system for the Decima
+    engine (<i>Horizon Zero Dawn</i>, then <i>Horizon Forbidden West</i>). Andrew Schneider described it in the SIGGRAPH
+    <i>Advances in Real-Time Rendering</i> talks: "The Real-Time Volumetric Cloudscapes of Horizon Zero Dawn" (2015)
+    and "Nubis: Authoring Real-Time Volumetric Cloudscapes with the Decima Engine" (2017). The code and the ADRs cite
+    these as "Schneider 2015/2017". From them come the weather map with a type channel, the height profile per type,
+    the Perlin-Worley base noise eroded by a Worley detail noise, the anvil, the light march in a cone, and the
+    wispy-to-billowy erosion. The multiple-scattering approximation is Wrenninge's (credited in CREDITS.md). Real
+    satellite views from NASA were used to judge the result (see <a href="#refs">The reference</a>).</p></div>
+
+  <h2>The problem</h2>
+  <p>A cumulus cloud is a few hundred metres to a few kilometres across. A sky full of them reaches 30 km to the
+    horizon, and some are seen from inside. Clouds are not surfaces, so a triangle mesh cannot draw them. They are
+    a density field that light passes through, scatters in, and is partly absorbed by. The standard real-time answer
+    is a <b>ray march</b>: walk each pixel's ray through the cloud layer in steps, read the density at each step, and
+    add up light and transmittance (the fraction of light that gets through) as you go.</p>
+  <p>That leaves three hard parts:</p>
+  <ul>
+    <li><b>Where the clouds are.</b> Until 2026-11-08 a slice of the same tiling 3D noise placed every cloud. Each
+      cloud was a piece of one 5.7 km tile, all as tall as the deck. Glenn's verdict was "Clouds repeat too much and
+      look dense in the sky". Decima separates the two jobs: a 2D map says where clouds are and what kind, and the 3D
+      noise only shapes them.</li>
+    <li><b>How they are lit.</b> A cloud is bright because light scatters inside it many times. Single scattering
+      under Beer's law (light falls off as e<sup>−optical depth</sup>) turns every cloud base black.</li>
+    <li><b>What it costs.</b> The march runs at half resolution with a few dozen steps a pixel. Too few samples give
+      noise, plates and stair-steps, and most of the cloud ADRs are about hiding that without paying for more
+      samples.</li>
+  </ul>
+
+  <h2>The pipeline</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 900 430" role="img" aria-label="clouds.lua is read into a CloudBook; CloudMapSystem integrates the drift, copies the types and bakes the weather map on a worker, optionally from the simulated weather field; the map feeds the half-resolution march, then the history resolve, then the composite and the post chain; the same map at set 0 binding 18 gives cloudShadow to mesh.frag, the probe relight and the ray-traced reflections">
+      <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <text x="20" y="20" fill="#e6c07b" font-size="12" text-anchor="start">CPU, engine systems</text>
+        <rect x="20" y="32" width="150" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="95" y="56" fill="#cfe4ff">clouds.lua</text>
+        <text x="95" y="75" fill="#93a6ba" font-size="12">types, weathers, map</text>
+        <rect x="200" y="32" width="160" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="280" y="56" fill="#cfe4ff">CloudBook</text>
+        <text x="280" y="75" fill="#93a6ba" font-size="12">sky/cloud_book.h</text>
+        <rect x="390" y="32" width="190" height="58" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="485" y="56" fill="#cfe4ff">CloudMapSystem</text>
+        <text x="485" y="75" fill="#93a6ba" font-size="12">drift · types · deck span</text>
+        <rect x="610" y="32" width="140" height="58" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="680" y="56" fill="#cfe4ff">bakeCloudMap</text>
+        <text x="680" y="75" fill="#93a6ba" font-size="12">its own worker</text>
+        <rect x="770" y="32" width="100" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="820" y="56" fill="#cfe4ff">weather map</text>
+        <text x="820" y="75" fill="#93a6ba" font-size="12">RGBA8, 80 km</text>
+        <line x1="170" y1="61" x2="196" y2="61" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="360" y1="61" x2="386" y2="61" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="580" y1="61" x2="606" y2="61" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="750" y1="61" x2="766" y2="61" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+
+        <rect x="20" y="128" width="190" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="152" fill="#cfe4ff">DayNightSystem</text>
+        <text x="115" y="171" fill="#93a6ba" font-size="12">weather knobs, deck's sun</text>
+        <path d="M210,140 L390,90" stroke="#6f8fb0" stroke-width="1.6" fill="none" marker-end="url(#a1)"/>
+        <rect x="610" y="128" width="140" height="58" rx="9" fill="#131a24" stroke="#2c3d50" stroke-dasharray="5 4"/>
+        <text x="680" y="152" fill="#cfe4ff">WeatherField</text>
+        <text x="680" y="171" fill="#93a6ba" font-size="12">simulated cloud</text>
+        <line x1="680" y1="128" x2="680" y2="94" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+
+        <text x="250" y="240" fill="#e6c07b" font-size="12" text-anchor="start">GPU, each frame (Vulkan)</text>
+        <rect x="20" y="250" width="190" height="58" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="115" y="274" fill="#cfe4ff">clouds.frag</text>
+        <text x="115" y="293" fill="#93a6ba" font-size="12">half-res march + depth</text>
+        <rect x="250" y="250" width="180" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="340" y="274" fill="#cfe4ff">clouds_resolve.frag</text>
+        <text x="340" y="293" fill="#93a6ba" font-size="12">3×3 pull, history 0.9</text>
+        <rect x="470" y="250" width="190" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="565" y="274" fill="#cfe4ff">clouds_composite.frag</text>
+        <text x="565" y="293" fill="#93a6ba" font-size="12">upsample onto HDR</text>
+        <rect x="700" y="250" width="160" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="780" y="274" fill="#cfe4ff">post chain</text>
+        <text x="780" y="293" fill="#93a6ba" font-size="12">bloom, SSAO, tone</text>
+        <line x1="210" y1="279" x2="246" y2="279" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="430" y1="279" x2="466" y2="279" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="660" y1="279" x2="696" y2="279" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="115" y1="186" x2="115" y2="246" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <path d="M820,90 L820,212 L170,212 L170,246" stroke="#6f8fb0" stroke-width="1.6" fill="none" marker-end="url(#a1)"/>
+        <text x="500" y="206" fill="#93a6ba" font-size="12">binding 5 of the march set</text>
+
+        <path d="M870,61 L888,61 L888,380 L864,380" stroke="#6f8fb0" stroke-width="1.6" fill="none" marker-end="url(#a1)"/>
+        <rect x="470" y="350" width="390" height="60" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="665" y="374" fill="#cfe4ff">the same map at set 0, binding 18</text>
+        <text x="665" y="394" fill="#93a6ba" font-size="12">cloudShadow(): mesh.frag, probe_relight, rt_reflect</text>
+        <text x="20" y="370" fill="#93a6ba" font-size="12" text-anchor="start">dashed: only when the weather is simulated</text>
+        <text x="20" y="390" fill="#93a6ba" font-size="12" text-anchor="start">(weather.html)</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Who feeds whom. The CPU decides where clouds are and how they drift. The GPU shapes, lights and
+    averages them, then composites them into the HDR scene before the post passes, so bloom and the other passes see
+    the clouded scene.</p>
+  <p>Each frame, in system order:</p>
+  <ol>
+    <li><b>DayNightSystem</b> eases the weather (clear, fair, overcast, storm) and writes its knobs onto the view's
+      <code>VolumetricCloudParams</code>: coverage, density, noise scale and the range of cloud types the weather
+      spreads over. Under the physical sky it also works out the light that reaches the cloud deck (see
+      <a href="#light">Lighting</a>). The weather itself is on the <a href="weather.html">weather</a> page.</li>
+    <li><b>CloudMapSystem</b> runs after it. It moves the clouds along the wind, copies the four types from the
+      cloud book onto the params, sets the deck's span, and starts a new map bake on a worker when one is due. A
+      finished bake is uploaded as a texture and handed to the renderer with <code>setCloudMap</code>.</li>
+    <li><b>The Vulkan renderer</b> packs everything into <code>CloudUniforms</code> and records three fullscreen
+      passes after the scene pass: the march, the resolve (the history) and the composite.</li>
+  </ol>
+  <p>The level turns the clouds on with <code>environment.clouds</code> in its JSON (<code>coverage</code>,
+    <code>density</code>, <code>noiseScale</code>, <code>wind</code>, <code>steps</code>, <code>lightSteps</code>,
+    <code>phaseG</code>, <code>far</code>, <code>ambient</code>, <code>detailStrength</code>, <code>wisps</code>,
+    <code>cirrus</code>, <code>typeRange</code>, and <code>bottom</code>/<code>top</code>, which matter only without
+    clouds.lua: with it, the deck spans the types). Everything about the kinds of cloud is in
+    <code>assets/scripts/clouds.lua</code>.</p>
+
+  <h2>Cloud types as data</h2>
+  <p>A <b>cloud type</b> is a kind of cloud: where it stands, how its density changes with height, how big its cells
+    are. There are exactly four, ordered from mild to severe along a <b>type axis</b> from 0 to 1 (slots 0, ⅓, ⅔ and
+    1). A weather names a range on that axis. Fair weather spreads its clouds over 0.47 to 0.75, mostly cumulus and
+    a little stratocumulus. A storm spreads over 0.60 to 1.00, cumulus to cumulonimbus. Since ADR-0386 the types are
+    data, in the same file as the weathers (ADR-0388):</p>
+  <div class="code">
+    <div class="hd"><span>clouds.lua: the four types along the axis (the level JSON's old <code>types</code> override is gone)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/assets/scripts/clouds.lua#L65-L76">assets/scripts/clouds.lua</a></div>
+<pre>  types = {
+    { name = "stratus", base = 500, top = 1100, profile = { 0.00, 0.20, 0.55, 1.00 }, density = 0.70, erosion = 0.40,
+      anvil = 0.0, radius = { 4000, 12000 }, aspect = 2.2, low = 0.7 },
+    { name = "stratocumulus", base = 900, top = 1700, profile = { 0.00, 0.15, 0.50, 0.95 }, density = 0.85,
+      erosion = 0.70, anvil = 0.0, radius = { 800, 2000 }, aspect = 1.7, low = 0.6 },
+    <span class="c">-- fair-weather cumulus: flat bases at ~1.2 km, the small ones shallow (humilis), the big ones a kilometre deep;</span>
+    <span class="c">-- full only low down, thinning over most of its height, so it domes (with the footprint narrowing as it rises)</span>
+    { name = "cumulus", base = 1200, top = 2700, profile = { 0.00, 0.06, 0.30, 1.00 }, density = 1.00, erosion = 1.00,
+      anvil = 0.0, radius = { 250, 1300 }, aspect = 1.25, low = 0.3 },
+    { name = "cumulonimbus", base = 900, top = 9000, profile = { 0.00, 0.04, 0.85, 1.00 }, density = 1.60,
+      erosion = 0.60, anvil = 1.0, radius = { 2500, 6000 }, aspect = 1.1, low = 0.6 },
+  },</pre>
+  </div>
+  <p>The <b>profile</b> gives the density by height as four fractions of the type's span. Density rises from 0 at
+    <code>[1]</code> to full at <code>[2]</code>, holds until <code>[3]</code>, and falls to 0 by <code>[4]</code>,
+    with a smoothstep on each ramp. <code>radius</code> is a cell's footprint, half across. <code>aspect</code>
+    stretches it along its own heading, so the stratiform sheets are elongated. <code>low</code> is how tall the
+    smallest cell grows, as a fraction of the type's height, and the biggest cells reach <code>top</code>.</p>
+  <div class="diagram">
+        <svg viewBox="0 0 900 400" role="img" aria-label="The four cloud types of clouds.lua drawn to scale by height: stratus 500 to 1100 m, stratocumulus 900 to 1700 m, cumulus 1200 to 2700 m, cumulonimbus 900 to 9000 m; each shape is its density profile">
+        <g font-family="system-ui, sans-serif" font-size="12">
+        <line x1="70" y1="340.0" x2="880" y2="340.0" stroke="#1f2a37" stroke-width="1"/>
+        <text x="62" y="344.0" fill="#93a6ba" text-anchor="end">0 km</text>
+        <line x1="70" y1="307.4" x2="880" y2="307.4" stroke="#1f2a37" stroke-width="1"/>
+        <text x="62" y="311.4" fill="#93a6ba" text-anchor="end">1 km</text>
+        <line x1="70" y1="274.7" x2="880" y2="274.7" stroke="#1f2a37" stroke-width="1"/>
+        <text x="62" y="278.7" fill="#93a6ba" text-anchor="end">2 km</text>
+        <line x1="70" y1="242.1" x2="880" y2="242.1" stroke="#1f2a37" stroke-width="1"/>
+        <text x="62" y="246.1" fill="#93a6ba" text-anchor="end">3 km</text>
+        <line x1="70" y1="209.5" x2="880" y2="209.5" stroke="#1f2a37" stroke-width="1"/>
+        <text x="62" y="213.5" fill="#93a6ba" text-anchor="end">4 km</text>
+        <line x1="70" y1="176.8" x2="880" y2="176.8" stroke="#1f2a37" stroke-width="1"/>
+        <text x="62" y="180.8" fill="#93a6ba" text-anchor="end">5 km</text>
+        <line x1="70" y1="144.2" x2="880" y2="144.2" stroke="#1f2a37" stroke-width="1"/>
+        <text x="62" y="148.2" fill="#93a6ba" text-anchor="end">6 km</text>
+        <line x1="70" y1="111.6" x2="880" y2="111.6" stroke="#1f2a37" stroke-width="1"/>
+        <text x="62" y="115.6" fill="#93a6ba" text-anchor="end">7 km</text>
+        <line x1="70" y1="78.9" x2="880" y2="78.9" stroke="#1f2a37" stroke-width="1"/>
+        <text x="62" y="82.9" fill="#93a6ba" text-anchor="end">8 km</text>
+        <line x1="70" y1="46.3" x2="880" y2="46.3" stroke="#1f2a37" stroke-width="1"/>
+        <text x="62" y="50.3" fill="#93a6ba" text-anchor="end">9 km</text>
+        <text x="18" y="185" fill="#93a6ba" transform="rotate(-90 18 185)" text-anchor="middle">height above the sea</text>
+        <polygon points="175.0,323.7 175.8,323.4 178.2,323.2 181.9,322.9 186.7,322.7 192.4,322.5 198.7,322.2 205.5,322.0 212.5,321.7 219.5,321.5 226.3,321.2 232.6,321.0 238.3,320.7 243.1,320.5 246.8,320.3 249.2,320.0 250.0,319.8 250.0,319.5 250.0,319.3 250.0,319.0 250.0,318.8 250.0,318.5 250.0,318.3 250.0,318.1 250.0,317.8 250.0,317.6 250.0,317.3 250.0,317.1 250.0,316.8 250.0,316.6 250.0,316.3 250.0,316.1 250.0,315.9 250.0,315.6 250.0,315.4 250.0,315.1 250.0,314.9 250.0,314.6 250.0,314.4 250.0,314.1 250.0,313.9 250.0,313.6 250.0,313.4 250.0,313.2 250.0,312.9 249.8,312.7 249.3,312.4 248.5,312.2 247.4,311.9 246.1,311.7 244.4,311.4 242.6,311.2 240.5,311.0 238.3,310.7 235.9,310.5 233.3,310.2 230.6,310.0 227.7,309.7 224.8,309.5 221.8,309.2 218.7,309.0 215.6,308.8 212.5,308.5 209.4,308.3 206.3,308.0 203.2,307.8 200.2,307.5 197.3,307.3 194.4,307.0 191.7,306.8 189.1,306.6 186.7,306.3 184.5,306.1 182.4,305.8 180.6,305.6 178.9,305.3 177.6,305.1 176.5,304.8 175.7,304.6 175.2,304.4 175.0,304.1 175.0,304.1 174.8,304.4 174.3,304.6 173.5,304.8 172.4,305.1 171.1,305.3 169.4,305.6 167.6,305.8 165.5,306.1 163.3,306.3 160.9,306.6 158.3,306.8 155.6,307.0 152.7,307.3 149.8,307.5 146.8,307.8 143.7,308.0 140.6,308.3 137.5,308.5 134.4,308.8 131.3,309.0 128.2,309.2 125.2,309.5 122.3,309.7 119.4,310.0 116.7,310.2 114.1,310.5 111.7,310.7 109.5,311.0 107.4,311.2 105.6,311.4 103.9,311.7 102.6,311.9 101.5,312.2 100.7,312.4 100.2,312.7 100.0,312.9 100.0,313.2 100.0,313.4 100.0,313.6 100.0,313.9 100.0,314.1 100.0,314.4 100.0,314.6 100.0,314.9 100.0,315.1 100.0,315.4 100.0,315.6 100.0,315.9 100.0,316.1 100.0,316.3 100.0,316.6 100.0,316.8 100.0,317.1 100.0,317.3 100.0,317.6 100.0,317.8 100.0,318.1 100.0,318.3 100.0,318.5 100.0,318.8 100.0,319.0 100.0,319.3 100.0,319.5 100.0,319.8 100.8,320.0 103.2,320.3 106.9,320.5 111.7,320.7 117.4,321.0 123.7,321.2 130.5,321.5 137.5,321.7 144.5,322.0 151.3,322.2 157.6,322.5 163.3,322.7 168.1,322.9 171.8,323.2 174.2,323.4 175.0,323.7" fill="#8ec5ff" fill-opacity="0.22" stroke="#8ec5ff" stroke-width="1.4"/>
+        <line x1="92" y1="310.0" x2="258" y2="310.0" stroke="#e6c07b" stroke-width="1.2" stroke-dasharray="4 3"/>
+        <text x="175" y="360" fill="#cfe4ff" font-size="13" text-anchor="middle">stratus</text>
+        <text x="175" y="377" fill="#93a6ba" text-anchor="middle">500–1100 m · r 4–12 km</text>
+        <polygon points="375.0,310.6 376.5,310.3 380.6,310.0 386.7,309.7 394.4,309.3 403.2,309.0 412.5,308.7 421.8,308.3 430.6,308.0 438.3,307.7 444.4,307.4 448.5,307.0 450.0,306.7 450.0,306.4 450.0,306.1 450.0,305.7 450.0,305.4 450.0,305.1 450.0,304.8 450.0,304.4 450.0,304.1 450.0,303.8 450.0,303.5 450.0,303.1 450.0,302.8 450.0,302.5 450.0,302.1 450.0,301.8 450.0,301.5 450.0,301.2 450.0,300.8 450.0,300.5 450.0,300.2 450.0,299.9 450.0,299.5 450.0,299.2 450.0,298.9 450.0,298.6 450.0,298.2 450.0,297.9 450.0,297.6 449.8,297.3 449.3,296.9 448.5,296.6 447.4,296.3 446.1,295.9 444.4,295.6 442.6,295.3 440.5,295.0 438.3,294.6 435.9,294.3 433.3,294.0 430.6,293.7 427.7,293.3 424.8,293.0 421.8,292.7 418.7,292.4 415.6,292.0 412.5,291.7 409.4,291.4 406.3,291.1 403.2,290.7 400.2,290.4 397.3,290.1 394.4,289.7 391.7,289.4 389.1,289.1 386.7,288.8 384.5,288.4 382.4,288.1 380.6,287.8 378.9,287.5 377.6,287.1 376.5,286.8 375.7,286.5 375.2,286.2 375.0,285.8 375.0,285.5 375.0,285.2 375.0,284.9 375.0,284.5 375.0,284.5 375.0,284.9 375.0,285.2 375.0,285.5 375.0,285.8 374.8,286.2 374.3,286.5 373.5,286.8 372.4,287.1 371.1,287.5 369.4,287.8 367.6,288.1 365.5,288.4 363.3,288.8 360.9,289.1 358.3,289.4 355.6,289.7 352.7,290.1 349.8,290.4 346.8,290.7 343.7,291.1 340.6,291.4 337.5,291.7 334.4,292.0 331.3,292.4 328.2,292.7 325.2,293.0 322.3,293.3 319.4,293.7 316.7,294.0 314.1,294.3 311.7,294.6 309.5,295.0 307.4,295.3 305.6,295.6 303.9,295.9 302.6,296.3 301.5,296.6 300.7,296.9 300.2,297.3 300.0,297.6 300.0,297.9 300.0,298.2 300.0,298.6 300.0,298.9 300.0,299.2 300.0,299.5 300.0,299.9 300.0,300.2 300.0,300.5 300.0,300.8 300.0,301.2 300.0,301.5 300.0,301.8 300.0,302.1 300.0,302.5 300.0,302.8 300.0,303.1 300.0,303.5 300.0,303.8 300.0,304.1 300.0,304.4 300.0,304.8 300.0,305.1 300.0,305.4 300.0,305.7 300.0,306.1 300.0,306.4 300.0,306.7 301.5,307.0 305.6,307.4 311.7,307.7 319.4,308.0 328.2,308.3 337.5,308.7 346.8,309.0 355.6,309.3 363.3,309.7 369.4,310.0 373.5,310.3 375.0,310.6" fill="#8ec5ff" fill-opacity="0.22" stroke="#8ec5ff" stroke-width="1.4"/>
+        <line x1="292" y1="295.0" x2="458" y2="295.0" stroke="#e6c07b" stroke-width="1.2" stroke-dasharray="4 3"/>
+        <text x="375" y="360" fill="#cfe4ff" font-size="13" text-anchor="middle">stratocumulus</text>
+        <text x="375" y="377" fill="#93a6ba" text-anchor="middle">900–1700 m · r 0.8–2 km</text>
+        <polygon points="575.0,300.8 583.4,300.2 603.2,299.6 626.3,299.0 644.4,298.4 650.0,297.8 650.0,297.2 650.0,296.6 650.0,295.9 650.0,295.3 650.0,294.7 650.0,294.1 650.0,293.5 650.0,292.9 650.0,292.3 650.0,291.7 650.0,291.1 650.0,290.4 650.0,289.8 650.0,289.2 650.0,288.6 650.0,288.0 650.0,287.4 650.0,286.8 650.0,286.2 649.9,285.5 649.7,284.9 649.4,284.3 648.9,283.7 648.3,283.1 647.6,282.5 646.8,281.9 645.8,281.3 644.8,280.7 643.7,280.0 642.5,279.4 641.1,278.8 639.8,278.2 638.3,277.6 636.7,277.0 635.1,276.4 633.5,275.8 631.7,275.1 630.0,274.5 628.1,273.9 626.3,273.3 624.4,272.7 622.4,272.1 620.5,271.5 618.5,270.9 616.5,270.2 614.5,269.6 612.5,269.0 610.5,268.4 608.5,267.8 606.5,267.2 604.5,266.6 602.6,266.0 600.6,265.4 598.7,264.7 596.9,264.1 595.0,263.5 593.3,262.9 591.5,262.3 589.9,261.7 588.3,261.1 586.7,260.5 585.2,259.8 583.9,259.2 582.5,258.6 581.3,258.0 580.2,257.4 579.2,256.8 578.2,256.2 577.4,255.6 576.7,255.0 576.1,254.3 575.6,253.7 575.3,253.1 575.1,252.5 575.0,251.9 575.0,251.9 574.9,252.5 574.7,253.1 574.4,253.7 573.9,254.3 573.3,255.0 572.6,255.6 571.8,256.2 570.8,256.8 569.8,257.4 568.7,258.0 567.5,258.6 566.1,259.2 564.8,259.8 563.3,260.5 561.7,261.1 560.1,261.7 558.5,262.3 556.7,262.9 555.0,263.5 553.1,264.1 551.3,264.7 549.4,265.4 547.4,266.0 545.5,266.6 543.5,267.2 541.5,267.8 539.5,268.4 537.5,269.0 535.5,269.6 533.5,270.2 531.5,270.9 529.5,271.5 527.6,272.1 525.6,272.7 523.7,273.3 521.9,273.9 520.0,274.5 518.3,275.1 516.5,275.8 514.9,276.4 513.3,277.0 511.7,277.6 510.2,278.2 508.9,278.8 507.5,279.4 506.3,280.0 505.2,280.7 504.2,281.3 503.2,281.9 502.4,282.5 501.7,283.1 501.1,283.7 500.6,284.3 500.3,284.9 500.1,285.5 500.0,286.2 500.0,286.8 500.0,287.4 500.0,288.0 500.0,288.6 500.0,289.2 500.0,289.8 500.0,290.4 500.0,291.1 500.0,291.7 500.0,292.3 500.0,292.9 500.0,293.5 500.0,294.1 500.0,294.7 500.0,295.3 500.0,295.9 500.0,296.6 500.0,297.2 500.0,297.8 505.6,298.4 523.7,299.0 546.8,299.6 566.6,300.2 575.0,300.8" fill="#8ec5ff" fill-opacity="0.22" stroke="#3b82f6" stroke-width="1.4"/>
+        <line x1="492" y1="286.2" x2="658" y2="286.2" stroke="#e6c07b" stroke-width="1.2" stroke-dasharray="4 3"/>
+        <text x="575" y="360" fill="#cfe4ff" font-size="13" text-anchor="middle">cumulus</text>
+        <text x="575" y="377" fill="#93a6ba" text-anchor="middle">1200–2700 m · r 0.25–1.3 km</text>
+        <polygon points="775.0,310.6 792.4,307.3 826.3,304.0 849.2,300.7 850.0,297.4 850.0,294.1 850.0,290.8 850.0,287.5 850.0,284.2 850.0,280.9 850.0,277.6 850.0,274.3 850.0,271.0 850.0,267.7 850.0,264.4 850.0,261.1 850.0,257.8 850.0,254.5 850.0,251.2 850.0,247.9 850.0,244.6 850.0,241.2 850.0,237.9 850.0,234.6 850.0,231.3 850.0,228.0 850.0,224.7 850.0,221.4 850.0,218.1 850.0,214.8 850.0,211.5 850.0,208.2 850.0,204.9 850.0,201.6 850.0,198.3 850.0,195.0 850.0,191.7 850.0,188.4 850.0,185.1 850.0,181.8 850.0,178.5 850.0,175.2 850.0,171.9 850.0,168.6 850.0,165.3 850.0,162.0 850.0,158.7 850.0,155.3 850.0,152.0 850.0,148.7 850.0,145.4 850.0,142.1 850.0,138.8 850.0,135.5 850.0,132.2 850.0,128.9 850.0,125.6 850.0,122.3 850.0,119.0 850.0,115.7 850.0,112.4 850.0,109.1 850.0,105.8 850.0,102.5 850.0,99.2 850.0,95.9 850.0,92.6 850.0,89.3 850.0,86.0 848.5,82.7 844.4,79.4 838.3,76.1 830.6,72.7 821.8,69.4 812.5,66.1 803.2,62.8 794.4,59.5 786.7,56.2 780.6,52.9 776.5,49.6 775.0,46.3 775.0,46.3 773.5,49.6 769.4,52.9 763.3,56.2 755.6,59.5 746.8,62.8 737.5,66.1 728.2,69.4 719.4,72.7 711.7,76.1 705.6,79.4 701.5,82.7 700.0,86.0 700.0,89.3 700.0,92.6 700.0,95.9 700.0,99.2 700.0,102.5 700.0,105.8 700.0,109.1 700.0,112.4 700.0,115.7 700.0,119.0 700.0,122.3 700.0,125.6 700.0,128.9 700.0,132.2 700.0,135.5 700.0,138.8 700.0,142.1 700.0,145.4 700.0,148.7 700.0,152.0 700.0,155.3 700.0,158.7 700.0,162.0 700.0,165.3 700.0,168.6 700.0,171.9 700.0,175.2 700.0,178.5 700.0,181.8 700.0,185.1 700.0,188.4 700.0,191.7 700.0,195.0 700.0,198.3 700.0,201.6 700.0,204.9 700.0,208.2 700.0,211.5 700.0,214.8 700.0,218.1 700.0,221.4 700.0,224.7 700.0,228.0 700.0,231.3 700.0,234.6 700.0,237.9 700.0,241.2 700.0,244.6 700.0,247.9 700.0,251.2 700.0,254.5 700.0,257.8 700.0,261.1 700.0,264.4 700.0,267.7 700.0,271.0 700.0,274.3 700.0,277.6 700.0,280.9 700.0,284.2 700.0,287.5 700.0,290.8 700.0,294.1 700.0,297.4 700.8,300.7 723.7,304.0 757.6,307.3 775.0,310.6" fill="#8ec5ff" fill-opacity="0.22" stroke="#8ec5ff" stroke-width="1.4"/>
+        <line x1="692" y1="152.0" x2="858" y2="152.0" stroke="#e6c07b" stroke-width="1.2" stroke-dasharray="4 3"/>
+        <text x="775" y="360" fill="#cfe4ff" font-size="13" text-anchor="middle">cumulonimbus</text>
+        <text x="775" y="377" fill="#93a6ba" text-anchor="middle">900–9000 m · r 2.5–6 km</text>
+        <line x1="90" y1="58" x2="114" y2="58" stroke="#e6c07b" stroke-width="1.2" stroke-dasharray="4 3"/>
+        <text x="120" y="62" fill="#e6c07b">how tall the smallest cell of the type grows (low)</text>
+        </g></svg>
+  </div>
+  <p class="cap">The four types to scale, drawn from the numbers in clouds.lua at the pinned commit. Each shape's
+    width is its profile. Cumulus (outlined blue) is full only over the bottom 30 % of its height and thins above,
+    which, with the footprint narrowing (below), makes it a dome. The dashed line is how high the smallest cells of
+    that type reach.</p>
+  <p><code>loadCloudsSource</code> (scripting/clouds_lua.cpp) is strict. It wants exactly four types,
+    <code>top &gt; base</code>, <code>0 &lt; radius min ≤ max</code>, <code>aspect ≥ 1</code> and
+    <code>0 &lt; low ≤ 1</code>, and every field of every weather (ADR-0388: "a state's numbers are its whole
+    definition"). It is read once, through <code>ensureCloudsLoaded</code>. If the file is missing or does not read,
+    the plain book stands: the built-in cumulus in all four slots, and the old noise-placed clouds, because
+    CloudMapSystem bakes no map without a loaded book.</p>
+  <p>The book also carries the knobs that are not per type: <code>shape_scale</code> (3, the shape noise's frequency
+    against the level's), <code>shadow</code> (0.85), <code>organisation</code> (1), <code>size_skew</code> (2.2),
+    and <code style="overflow-wrap:anywhere">map = { extent = 80000, size = 1024, rebuild_m = 8000 }</code>. That makes an 80 km square of
+    1024² texels, about 78 m a texel.</p>
+
+  <h2>The weather map places the clouds</h2>
+  <p>The map is a square of the sky round the camera, in <b>air coordinates</b>: the world position plus how far the
+    clouds have drifted. Because the map moves with the air, the wind alone never forces a rebake. Each texel holds
+    four bytes:</p>
+  <table>
+    <tr><th>Channel</th><th>Holds</th><th>Read by</th></tr>
+    <tr><td>R</td><td>the footprint, 0 (clear air) to 1 (a cloud's heart): the coverage the march cuts at</td><td>march, shadow</td></tr>
+    <tr><td>G</td><td>the cell's type, its slot on the axis (0, ⅓, ⅔, 1)</td><td>march, shadow</td></tr>
+    <tr><td>B</td><td>the cell's own top, as a fraction of its type's height (small cumulus are shallow)</td><td>march, shadow</td></tr>
+    <tr><td>A</td><td>the cirrus: the 9 km veils' cover there</td><td>march (the cirrus sheet)</td></tr>
+  </table>
+
+  <h3>Cells as a Poisson field</h3>
+  <p>Every cloud is a <b>cell</b>: a soft ellipse with a noisy rim, of one type, at its own size. Each type scatters its
+    cells over its own grid. The grid spacing is 2.6 × the type's largest radius × √aspect, so a cell never reaches
+    further than one square from its own. How many cells a square holds, and where they sit, come from a hash of the
+    square's indices and the seed (hash.h's <code>hashCell</code>). Nothing tiles, and a cell's fate never depends on
+    where the map's window is. Two bakes therefore agree exactly where they overlap, which is what
+    <code style="overflow-wrap:anywhere">cloud_map_bakes_agree_where_they_meet</code> tests.</p>
+  <p>The coverage the weather asks for is meant to be the share of the sky under cloud. Cells dropped at random
+    overlap, so the share they cover is not simply their total area. For a <b>Poisson field</b> (points scattered
+    independently at a mean density λ per m²) of footprints of area A, the uncovered share is e<sup>−λA</sup>. To
+    cover c of the sky you need −ln(1 − c) footprints' worth per square metre. That is the bake's starting point:</p>
+  <div class="code">
+    <div class="hd"><span>bakeCloudMap: the footprints' worth per m² that covers the sky asked for, solved by bisection when the field bunches the cells</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/cloud_map.cpp#L134-L149">src/engine/sky/cloud_map.cpp</a></div>
+<pre>    <span class="c">// THE CELLS AS A POISSON FIELD: footprints dropped at random cover 1 - exp(-cells per m^2 x a footprint's area)</span>
+    <span class="c">// of the sky, so the coverage asked for is reached exactly by -ln(1 - coverage) footprints' worth per m^2, shared</span>
+    <span class="c">// by the types as the weather's range spreads them -- an overcast's stratus overlapping into a deck</span>
+    <span class="c">// ...and where the field bunches them, the dense parts overlap and saturate: so the footprints' worth per m^2 is</span>
+    <span class="c">// solved over the field's samples, the mean of 1 - exp(-lambda x field) brought to the cover asked (bisection)</span>
+    double lambdaArea = -std::log(std::max(1e-4, 1.0 - static_cast&lt;double&gt;(cover)));
+    if (org &gt; 0.0 &amp;&amp; cover &gt; 0.0f) {
+        double lo = 0.0, hi = 20.0;
+        for (int it = 0; it &lt; 40; ++it) {
+            const double mid = 0.5 * (lo + hi);
+            double got = 0.0;
+            for (double f : samples) got += 1.0 - std::exp(-mid * f);
+            (got / samples.size() &lt; cover ? lo : hi) = mid;
+        }
+        lambdaArea = 0.5 * (lo + hi);
+    }</pre>
+  </div>
+  <p>That amount is shared between the four types by <code>cloudTypeWeights</code>, each slot's overlap with the
+    weather's range. It is then turned into a mean number of cells per square, using the type's mean footprint
+    area. A cell's footprint counts as cloud only where it is above 0.5, and the soft edge and the warp make that
+    about 0.41 of the ellipse (<code>kAreaShare</code>, measured by test_cloud_map). A square holds at most 16
+    cells. Measured in ADR-0386: asking for 0.05, 0.22 and 0.45 gave within a few points of those on six seeds, and an
+    overcast's stratus asked to cover 0.85 overlapped into a deck at 0.84. Since ADR-0389 the test holds every seed to
+    within 0.05 + a quarter of the ask.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 300" role="img" aria-label="A texel looks at the 3 by 3 grid squares round it for one type; each square holds a hashed number of cells, each a rotated soft ellipse; the texel keeps the strongest footprint and that cell's type and height">
+      <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker>
+        <radialGradient id="cell" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stop-color="#cfe4ff" stop-opacity="0.9"/><stop offset="0.25" stop-color="#cfe4ff" stop-opacity="0.85"/>
+          <stop offset="1" stop-color="#cfe4ff" stop-opacity="0"/></radialGradient></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <g stroke="#2c3d50" stroke-width="1">
+          <line x1="30" y1="30" x2="390" y2="30"/><line x1="30" y1="120" x2="390" y2="120"/>
+          <line x1="30" y1="210" x2="390" y2="210"/><line x1="30" y1="290" x2="390" y2="290"/>
+          <line x1="30" y1="30" x2="30" y2="290"/><line x1="120" y1="30" x2="120" y2="290"/>
+          <line x1="210" y1="30" x2="210" y2="290"/><line x1="300" y1="30" x2="300" y2="290"/><line x1="390" y1="30" x2="390" y2="290"/>
+        </g>
+        <rect x="120" y="120" width="180" height="170" fill="none" stroke="#3b82f6" stroke-width="1.6" stroke-dasharray="6 4"/>
+        <ellipse cx="80" cy="70" rx="38" ry="26" transform="rotate(20 80 70)" fill="url(#cell)"/>
+        <ellipse cx="160" cy="95" rx="22" ry="16" fill="url(#cell)"/>
+        <ellipse cx="250" cy="60" rx="30" ry="22" transform="rotate(-30 250 60)" fill="url(#cell)"/>
+        <ellipse cx="345" cy="160" rx="44" ry="30" transform="rotate(10 345 160)" fill="url(#cell)"/>
+        <ellipse cx="185" cy="175" rx="50" ry="36" transform="rotate(-15 185 175)" fill="url(#cell)"/>
+        <ellipse cx="265" cy="250" rx="20" ry="15" fill="url(#cell)"/>
+        <ellipse cx="70" cy="250" rx="26" ry="20" transform="rotate(40 70 250)" fill="url(#cell)"/>
+        <circle cx="215" cy="185" r="5" fill="#e6c07b"/>
+        <text x="225" y="200" fill="#e6c07b" font-size="12">a texel</text>
+        <text x="210" y="20" fill="#93a6ba" font-size="12" text-anchor="middle">one type's grid (each type has its own spacing)</text>
+        <g text-anchor="start">
+          <text x="430" y="50" fill="#cfe4ff">For each texel, each type:</text>
+          <text x="430" y="76" fill="#93a6ba" font-size="12">1. the 3×3 squares round it (blue: the texel's own square)</text>
+          <text x="430" y="98" fill="#93a6ba" font-size="12">2. each square's count: the whole part of its mean,</text>
+          <text x="446" y="116" fill="#93a6ba" font-size="12">plus one more by the fraction's odds (a hashed roll)</text>
+          <text x="430" y="138" fill="#93a6ba" font-size="12">3. each cell's radius, centre, angle, height: more rolls</text>
+          <text x="430" y="160" fill="#93a6ba" font-size="12">4. footprint = 1 − smoothstep(0.25, 1, d), the rim warped</text>
+          <text x="446" y="178" fill="#93a6ba" font-size="12">by two octaves of noise at the cell's own scale</text>
+          <text x="430" y="200" fill="#93a6ba" font-size="12">5. keep the strongest: R footprint, G type, B its top</text>
+          <text x="430" y="232" fill="#cfe4ff">Then, with a simulated weather:</text>
+          <text x="430" y="256" fill="#93a6ba" font-size="12">each square's mean from the simulated cover, and one</text>
+          <text x="430" y="274" fill="#93a6ba" font-size="12">continuous mass where its sky is closed (ADR-0390)</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">One texel of the bake (sky/cloud_map.cpp). The bake runs row by row on the calling thread, which is
+    CloudMapSystem's own worker, not the shared job pool whose rows belong to the frame.</p>
+  <div class="code">
+    <div class="hd"><span>bakeCloudMap: one cell's footprint at a texel; the long soft edge is what the march narrows into a dome</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/cloud_map.cpp#L212-L236">src/engine/sky/cloud_map.cpp</a></div>
+<pre>                            for (int m = 0; m &lt; count; ++m) {
+                                const CloudTypeSpec&amp; t = *g.type;
+                                const uint32_t o = 8u * static_cast&lt;uint32_t&gt;(m);
+                                const double rn = roll(ci, cj, g.salt, o + 1);
+                                const double r = cellRadius(t, rn, book.sizeSkew);
+                                const double reach = r * t.aspect * 1.5;
+                                const double cx = (ci + roll(ci, cj, g.salt, o + 2)) * g.spacing;
+                                const double cz = (cj + roll(ci, cj, g.salt, o + 3)) * g.spacing;
+                                const double dx = x - cx, dz = z - cz;
+                                if (dx * dx + dz * dz &gt; reach * reach) continue;
+                                const double ang = roll(ci, cj, g.salt, o + 4) * PI;
+                                const double ca = std::cos(ang), sa = std::sin(ang);
+                                const double u = (dx * ca + dz * sa) / (r * t.aspect), v = (-dx * sa + dz * ca) / r;
+                                <span class="c">// the rim warped by two octaves of noise at the cell's own scale: a cloud, not a disc</span>
+                                const double warp = field01(rimNoise, x / (0.7 * r) + 11.0 * g.slot, z / (0.7 * r)) +
+                                                    0.5 * field01(rimNoise, x / (0.3 * r) - 7.0 * g.slot, z / (0.3 * r) + 3.1) - 0.75;
+                                const double d = std::sqrt(u * u + v * v) * (1.0 + 0.45 * warp);
+                                const double f = 1.0 - smoothstep(0.25, 1.0, d);   <span class="c">// (a long soft edge: the march narrows it as the cell rises into a dome)</span>
+                                if (f &gt; best) {
+                                    best = f;
+                                    slot = g.slot;
+                                    height = static_cast&lt;float&gt;(std::clamp(
+                                        t.low + (1.0 - t.low) * rn + 0.15 * (roll(ci, cj, g.salt, o + 5) - 0.5), 0.15, 1.0));
+                                }
+                            }</pre>
+  </div>
+  <p>A cell's <b>radius is skewed to the small</b> (ADR-0389): the radius is the roll raised to <code>size_skew</code>
+    (2.2) and spread over the type's range, giving many small cumulus and a few big ones, as a real field has. A
+    cell's height follows its size: <code>low + (1 − low) × roll</code>, with a little jitter, so the small ones are
+    shallow (cumulus <i>humilis</i>) and the big ones reach the type's top.</p>
+
+  <h3>Organised round eddies</h3>
+  <p>A Poisson field is even: every part of the sky looks like every other. Glenn, looking at the first map from above
+    with the new <code>cloudmap</code> command: "That looks too dense and doesn't look like a real weather system …
+    I'd imagine there would be swirls and eddies in the wind that would guide the clouds." ADR-0389 adds a slow
+    <b>moisture field</b> that scales how many cells each square holds. It is stretched along a sweep (the direction
+    the cirrus streaks lie, picked from the seed) into streets, and read through two scales of <b>curl noise</b>. Curl
+    noise is the 2D curl of a noise field, (∂N/∂y, −∂N/∂x). It is divergence-free, so the flow swirls and shears
+    what it carries but never piles it up or thins it out.</p>
+  <div class="code">
+    <div class="hd"><span>bakeCloudMap: the eddies (curl noise, ~30 km and ~11 km) and the moisture field read through them</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/cloud_map.cpp#L98-L116">src/engine/sky/cloud_map.cpp</a></div>
+<pre>    <span class="c">// THE EDDIES (Glenn, 2026-11-08: "swirls and eddies in the wind that would guide the clouds"): the field read</span>
+    <span class="c">// through a swirling flow -- the curl of a slow noise (divergence-free: it turns and shears, never piles up), two</span>
+    <span class="c">// scales, so the fields and the cirrus wrap round eddies of ~10-30 km. (Part C's wind will be the real one.)</span>
+    const Noise eddyNoise(hashPair(in.seed, 0xEDD1u));
+    auto swirl = [&amp;](double&amp; x, double&amp; z) {
+        const double scales[2] = {30000.0, 11000.0}, amps[2] = {4500.0, 1500.0};
+        for (int o = 0; o &lt; 2; ++o) {
+            double cx = 0.0, cz = 0.0;
+            eddyNoise.curl2(x / scales[o] + 17.3 * o, z / scales[o], cx, cz);   <span class="c">// (Noise::curl2: the shared curl)</span>
+            x += amps[o] * cx;
+            z += amps[o] * cz;
+        }
+    };
+    auto rawField = [&amp;](double x, double z) {
+        swirl(x, z);
+        const double a = x * sweepX + z * sweepZ, b = -x * sweepZ + z * sweepX;
+        const double nv = 0.6 * field01(airNoise, a / 24000.0, b / 8000.0) + 0.4 * field01(airNoise, a / 9000.0 + 31.7, b / 3500.0);
+        return smoothstep(0.42, 0.72, nv);
+    };</pre>
+  </div>
+  <p>The field's mean is taken over a fixed 200 km round the world origin, not over the map's window, so a cell's fate
+    still never depends on where the map is. Where the field bunches cells they overlap more, so the simple
+    −ln(1 − c) would come out short. The footprints' worth per m² is instead solved by bisection over the field's
+    64 × 64 samples, until the mean of 1 − e<sup>−λf</sup> equals the cover asked. The tests then gave 0.19–0.23
+    for an ask of 0.22. The organisation gives way as the cover passes 60 %, so an overcast is even. The cirrus
+    veils are swirled through the same eddies.</p>
+  <figure class="shot">
+    <img src="img/clouds/map-three.webp" alt="Three weather maps seen from above as `cloudmap` writes them: left, an even speckle of white cells over blue; middle, the cells bunched into curving fields and lines with wide clear stretches; right, a few cells over a green island and a plume of them off it, the open sea mostly clear">
+    <figcaption>The map from above (<code>cloudmap &lt;path.png&gt;</code>; the camera is the red dot). Left: ADR-0386's
+      even Poisson field, the one Glenn found "too dense". Middle: ADR-0389's eddies, the cells in fields and lines
+      with clear air between. Right: ADR-0390, the map reading the simulated weather over island_8, with cumulus over
+      the land and a plume downwind. Lab captures from 2026-11-08.</figcaption>
+  </figure>
+
+  <h3 id="refs">Reading the simulated weather</h3>
+  <p>Noise, however swirled, does not know where the land is. ADR-0390 put a 2D weather simulation over the level and
+    its sea, with wind, lift, humidity and cloud on a grid of 250 m cells. That system is described on the
+    <a href="weather.html">weather</a> page. The cloud side of it is small. When a <code>WeatherField</code> exists,
+    the bake reads it instead of the coverage knob and the moisture field:</p>
+  <div class="code">
+    <div class="hd"><span>bakeCloudMap: each square's cells from the simulated cover at the ground under the air, and one solid mass where its sky is closed</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/cloud_map.cpp#L178-L250">src/engine/sky/cloud_map.cpp</a></div>
+<pre>                if (in.field) {
+                    <span class="c">// the simulation's cloud here, as footprints' worth per m^2, shared by the types its convection leans</span>
+                    <span class="c">// to (this type's share of a narrow range round that point on the axis)</span>
+                    const double wx = ax - in.driftX, wz = az - in.driftZ;
+                    const double c = std::min(0.97, static_cast&lt;double&gt;(in.field-&gt;coverAt(wx, wz)));
+                    const double t = in.typeLo + (in.typeHi - in.typeLo) * in.field-&gt;convectionAt(wx, wz);
+                    const std::array&lt;float, 4&gt; share = cloudTypeWeights(static_cast&lt;float&gt;(t - 0.08), static_cast&lt;float&gt;(t + 0.08));
+                    m = -std::log(1.0 - c) * share[static_cast&lt;std::size_t&gt;(k)] * g.spacing * g.spacing / meanAreaOf[k];
+<span class="c">                // ...</span>
+                <span class="c">// THE SIMULATION's SOLID CLOUD: where it says the sky is closed, one continuous mass -- the structures</span>
+                <span class="c">// no scatter of cells makes (a merged afternoon mass over a mountain, a front's deck)</span>
+                if (in.field) {
+                    const double wx = x - in.driftX, wz = z - in.driftZ;
+                    const double mass = smoothstep(0.55, 0.92, static_cast&lt;double&gt;(in.field-&gt;coverAt(wx, wz)));
+                    if (mass &gt; best) {
+                        best = mass;
+                        const double t = in.typeLo + (in.typeHi - in.typeLo) * in.field-&gt;convectionAt(wx, wz);
+                        slot = static_cast&lt;float&gt;(std::lround(std::clamp(t, 0.0, 1.0) * 3.0)) / 3.0f;
+                        height = 1.0f;
+                    }
+                }</pre>
+  </div>
+  <ul>
+    <li>Each square's cells come from the simulated cover at the <i>ground under the air</i> (air position minus the
+      drift). The cells drift through a field that the land holds still.</li>
+    <li>Their types lean toward the severe end of the weather's range where the convection is strong.</li>
+    <li>Where the simulation says the sky is closed (cover from 0.55 to 0.92), one continuous mass is written, the
+      kind of structure no scatter of cells makes.</li>
+    <li>A new field rebakes the map at most every 10 s, at 0.7 s a bake (ADR-0390).</li>
+  </ul>
+  <p>The test <code style="overflow-wrap:anywhere">weather_sim_places_the_maps_clouds_over_the_land</code> (tests/test_weather_sim.cpp) bakes a
+    64 km map from a made island in a made sea on a fair afternoon. It checks that more than 15 % of the island is
+    under cloud and less than 3 % of the sea upwind.</p>
+  <p><b>The reference.</b> The target for all of this came from real satellite imagery: NASA Worldview's MODIS Aqua
+    Corrected Reflectance (true colour) of Hawaii, Puerto Rico, the Canary Islands and Corsica, on summer afternoons in
+    2022–2023 (CREDITS.md: "measured, not shipped"; NASA imagery has no copyright restrictions). ADR-0390 reads
+    from them that the organiser is the land: cumulus over sunlit land and high ground (about a third of Puerto
+    Rico's land, in 1–3 km cells), about 3 % over the sea round it, a summit above the trade inversion clear, and
+    plumes and wakes downwind.</p>
+  <figure class="shot">
+    <img src="img/clouds/nasa-islands.webp" alt="Two satellite images: Puerto Rico with fair-weather cumulus covering much of the land in small cells and clear sea round it; Corsica with small cloud clusters only along its mountain spine">
+    <figcaption>Two of the references: Puerto Rico, 2023-06-14, and Corsica, 2023-07-15 (MODIS Aqua via NASA
+      Worldview, public domain). Cumulus forms over the land and the high ground, and the sea stays clear.</figcaption>
+  </figure>
+  <figure class="shot">
+    <img src="img/clouds/sim-towers.webp" alt="From 600 m over the island: towering cumulus over the mountain ridge, clear blue sky beside it">
+    <figcaption>The map reading the simulation (island_8, fair, 14:00, from 600 m): towering cumulus over the
+      mountains, with clear sky over the sea upwind.</figcaption>
+  </figure>
+
+  <h3>CloudMapSystem: the drift and the rebake</h3>
+  <p>The renderer used to integrate the clouds' drift itself, out of the engine's reach. The map has to be laid out in
+    the same air the march samples, so ADR-0386 moved the drift into <code>CloudMapSystem</code>. The deck's
+    <code>wind</code> is its speed in a 6 m/s ground wind, scaled by the weather's actual wind
+    (<a href="weather.html">ADR-0337's one wind</a>):</p>
+  <div class="code">
+    <div class="hd"><span>CloudMapSystem::update: the drift, along the weather's wind; RT_WIND_TIME pins it for the lab</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/cloud_map_system.cpp#L99-L111">src/engine/systems/cloud_map_system.cpp</a></div>
+<pre>    <span class="c">// THE DRIFT: the deck's own `wind` is its speed in a 6 m/s ground wind</span>
+    const double speed = static_cast&lt;double&gt;(vc.wind) * (std::max(ctx.renderer.windSpeed, 0.0f) / 6.0);
+    const double dirX = ctx.renderer.windDir[0], dirZ = ctx.renderer.windDir[1];
+    if (pinnedWindTime() &gt;= 0.0) {
+        driftX_ = dirX * speed * pinnedWindTime();
+        driftZ_ = dirZ * speed * pinnedWindTime();
+    } else {
+        const double dt = std::clamp(ctx.frameDelta, 0.0, 0.25);
+        driftX_ += dirX * speed * dt;
+        driftZ_ += dirZ * speed * dt;
+    }
+    vc.driftX = driftX_;
+    vc.driftZ = driftZ_;</pre>
+  </div>
+  <p>The system then copies the four types onto the params and sets the deck's <code>bottom</code>/<code>top</code>
+    to the lowest base and highest top among the types the weather spreads over. With storms in range the deck reaches
+    9 km. A bake starts on a <code>std::async</code> worker when there is no map yet, when the camera has drifted
+    <code>rebuild_m</code> (8 km) through the air, when a new simulated field arrived more than 10 s after the last
+    bake, or when the weather moved more than 0.01 on any input at least 1.5 s after the last bake:</p>
+  <div class="code">
+    <div class="hd"><span>CloudMapSystem::update: when a new map is baked</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/cloud_map_system.cpp#L166-L174">src/engine/systems/cloud_map_system.cpp</a></div>
+<pre>    const double moved = std::hypot(in.centreX - built_.centreX, in.centreZ - built_.centreZ);
+    const bool weatherMoved = std::fabs(in.coverage - built_.coverage) &gt; 0.01f ||
+                              std::fabs(in.typeLo - built_.typeLo) &gt; 0.01f || std::fabs(in.typeHi - built_.typeHi) &gt; 0.01f ||
+                              std::fabs(in.cirrus - built_.cirrus) &gt; 0.01f ||
+                              in.seed != built_.seed;
+    const bool fieldMoved = in.fieldVersion != built_.fieldVersion &amp;&amp; sinceBake_ &gt; kMinSecondsForField;
+    if (!baking_ &amp;&amp; (!haveMap_ || moved &gt; book.rebuildMetres || fieldMoved ||
+                     (weatherMoved &amp;&amp; sinceBake_ &gt; kMinSecondsBetweenBakes)))
+        startBake(in);</pre>
+  </div>
+  <p>A finished bake becomes a texture handed over with <code>setCloudMap</code>. Vulkan rewrites each frame's march
+    descriptor set (and the globals' binding 18) as that frame comes round, after its fence. The old texture is
+    removed four frames later, past the frames in flight. ADR-0386 found and fixed an overrun on the way: the march
+    set's image array was 4 long and a fifth image was written past its end.</p>
+  <div class="note history"><p><b>How the map got here.</b> ADR-0336 (2026-11-05) gave the clouds their first
+    weather map, a 512² texture whose R was the base noise's slice at v = 0.37 ("so the sky keeps its layout"), whose
+    G was a slow Perlin type field, and whose B was wetness for rain later. It also added the four types, as
+    fractions of one 900–1600 m deck. The noise still placed every cloud. <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L17377">ADR-0386</a> replaced R with cells. Its
+    first bake ran on half the cores at 50–115 ms. <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L17472">ADR-0389</a>'s eddies made it 2–3 s single-threaded on the
+    system's own worker, after the per-square cell count was moved out of the per-texel loop (it had been 8 s).
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L17508">ADR-0390</a> with a field: 0.7 s. The old path is still there, behind <code>RT_CLOUD_TYPES=0</code> and for
+    levels without clouds.lua.</p></div>
+  <figure class="shot">
+    <img src="img/clouds/weather-map-old-new.webp" alt="Six views of the cloud lab sky, old on the left and new on the right: on the left smeared, repeated blobs fill the sky; on the right separate rounded cumulus of many sizes and a large flat-based cloud overhead">
+    <figcaption>The cloud lab before (left) and after (right) the weather map placed the clouds (ADR-0386,
+      2026-11-08). The old sky is one noise tile repeated. The new one has separate cells of many sizes over clear
+      sky.</figcaption>
+  </figure>
+
+  <h2>The shape of a cloud: density</h2>
+  <p>Everything the march knows about a point in the sky comes from one function, <code>clDensity</code>. With the
+    map on, it goes through these stages:</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 250" role="img" aria-label="clDensity: read the map, get the cell's shape at this height, read the base noise, multiply by the profile, narrow the footprint with height, apply the anvil, cut by coverage, erode with the warped detail noise, scale by density">
+      <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="10" y="20" width="160" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="90" y="44" fill="#cfe4ff">1 · clMap</text>
+        <text x="90" y="63" fill="#93a6ba" font-size="12">footprint, type, top</text>
+        <text x="90" y="80" fill="#93a6ba" font-size="12">at (x, z) + drift</text>
+        <rect x="190" y="20" width="160" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="270" y="44" fill="#cfe4ff">2 · clCellShape</text>
+        <text x="270" y="63" fill="#93a6ba" font-size="12">profile at its height,</text>
+        <text x="270" y="80" fill="#93a6ba" font-size="12">density, erosion, anvil</text>
+        <rect x="370" y="20" width="160" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="450" y="44" fill="#cfe4ff">3 · base noise</text>
+        <text x="450" y="63" fill="#93a6ba" font-size="12">Perlin-Worley 128³,</text>
+        <text x="450" y="80" fill="#93a6ba" font-size="12">× shape_scale (3)</text>
+        <rect x="550" y="20" width="160" height="70" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="630" y="44" fill="#cfe4ff">4 · × profile</text>
+        <text x="630" y="63" fill="#93a6ba" font-size="12">before the cut:</text>
+        <text x="630" y="80" fill="#93a6ba" font-size="12">tops thin, not walls</text>
+        <rect x="730" y="20" width="160" height="70" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="810" y="44" fill="#cfe4ff">5 · narrow</text>
+        <text x="810" y="63" fill="#93a6ba" font-size="12">footprint cut by up</text>
+        <text x="810" y="80" fill="#93a6ba" font-size="12">to 0.8 as it rises</text>
+        <line x1="170" y1="55" x2="186" y2="55" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+        <line x1="350" y1="55" x2="366" y2="55" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+        <line x1="530" y1="55" x2="546" y2="55" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+        <line x1="710" y1="55" x2="726" y2="55" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+        <path d="M810,90 L810,118 L100,118 L100,146" stroke="#6f8fb0" stroke-width="1.6" fill="none" marker-end="url(#a3)"/>
+        <rect x="10" y="150" width="190" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="105" y="174" fill="#cfe4ff">6 · anvil</text>
+        <text x="105" y="193" fill="#93a6ba" font-size="12">coverage raised from 70 %</text>
+        <text x="105" y="210" fill="#93a6ba" font-size="12">of the height (Cb only)</text>
+        <rect x="230" y="150" width="190" height="70" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="325" y="174" fill="#cfe4ff">7 · coverage cut</text>
+        <text x="325" y="193" fill="#93a6ba" font-size="12">d = (base − (1 − cov))</text>
+        <text x="325" y="210" fill="#93a6ba" font-size="12">÷ cov, clamped</text>
+        <rect x="450" y="150" width="210" height="70" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="555" y="174" fill="#cfe4ff">8 · erosion (wisps)</text>
+        <text x="555" y="193" fill="#93a6ba" font-size="12">warped detail, wispy → billowy,</text>
+        <text x="555" y="210" fill="#93a6ba" font-size="12">applied as a remap</text>
+        <rect x="690" y="150" width="200" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="790" y="174" fill="#cfe4ff">9 · × density</text>
+        <text x="790" y="193" fill="#93a6ba" font-size="12">the type's × the level's</text>
+        <text x="790" y="210" fill="#93a6ba" font-size="12">(extinction per metre)</text>
+        <line x1="200" y1="185" x2="226" y2="185" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+        <line x1="420" y1="185" x2="446" y2="185" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+        <line x1="660" y1="185" x2="686" y2="185" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap"><code>clDensity</code> in shaders/vulkan/clouds.frag with the map on. Without it (no clouds.lua, or
+    <code>RT_CLOUD_TYPES=0</code>), steps 1–2 read the old 512² map or the base-noise slice and the four types as
+    fractions of one deck, and steps 4–5 are skipped.</p>
+  <p>The base noise and the detail noise are tiling 3D textures baked once on the CPU and cached under
+    <code>cache/clouds/</code> (src/renderer/metal/cloud_noise.h, shared by both backends). The <b>base</b> is
+    128³ RGBA8. Its R is "Perlin-Worley", Perlin fBm remapped by inverted Worley noise, which gives billowy cauliflower
+    forms. Its G, B and A are Worley fBm at rising frequencies. The <b>detail</b> is 32³, three channels of Worley fBm
+    for the edges. Stages 4 to 7 are the heart of it:</p>
+  <div class="code">
+    <div class="hd"><span>clDensity: the profile thins the noise before the coverage cut, the footprint narrows as the cell rises, the anvil, the cut</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/clouds.frag#L173-L195">shaders/vulkan/clouds.frag</a></div>
+<pre>    float profile = shape.x;
+    if (profile &lt;= 0.0) return 0.0;
+    vec3 wind = clWind();
+    vec3 q = (p + wind) * (u.params.z * max(u.shape.x, 1e-3));
+    <span class="c">// Base shape: R = perlin-worley, GBA = worley fBm at rising frequency.</span>
+    vec4 nse = textureLod(baseNoise, q * 0.25, 0.0);   <span class="c">// (explicit: one level, and the march's derivatives are undefined)</span>
+    float lowFbm = nse.g * 0.625 + nse.b * 0.25 + nse.a * 0.125;
+    float base = clamp(clRemap(nse.r, lowFbm - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
+    <span class="c">// THE HEIGHT PROFILE BEFORE THE COVERAGE (Nubis, with the map: ADR-0386): the noise thinned toward the cell's base</span>
+    <span class="c">// and top, then cut by the footprint -- only the footprint's heart survives up there, so a cell rounds into a</span>
+    <span class="c">// dome. Applied after, the cut was the same at every height: each cell stood as a cylinder, flat-sided.</span>
+    if (clMapOn()) {
+        base *= profile;
+        profile = 1.0;
+        <span class="c">// ...and the footprint NARROWED as the cell rises (a cumulus is widest at its base and domes over, not a</span>
+        <span class="c">// footprint stood up as a wall: Glenn, 2026-11-08, "the clouds still look boxy"): the soft footprint cut back</span>
+        <span class="c">// by its height, so the sides lean in and the top is the heart's alone</span>
+        const float narrow = 0.8 * smoothstep(0.0, 1.0, hf);
+        cov = clamp((cov - narrow) / max(1e-3, 1.0 - narrow), 0.0, 1.0);
+    }
+    <span class="c">// the ANVIL (Nubis): near the top a cumulonimbus's coverage grows, so the tower spreads into a shelf</span>
+    cov = pow(cov, clRemap(clamp(hf, 0.7, 0.8), 0.7, 0.8, 1.0, mix(1.0, 0.5, shape.w)));
+    float d = clamp((base - (1.0 - cov)) / max(1e-3, cov), 0.0, 1.0);</pre>
+  </div>
+  <p>The order matters. If the profile multiplies <i>after</i> the coverage cut, the cut is the same at every height,
+    and each cell stands as a flat-sided cylinder. Multiplied <i>before</i>, the thinned noise near the top survives
+    the cut only where the footprint is strongest, at the cell's heart, so the cell rounds over. That was the first
+    fix in ADR-0386. Glenn then still saw "the clouds still look boxy", and the second fix narrows the footprint
+    itself with height: up to 0.8 of it is cut by the top. The footprint's soft edge runs from a quarter of the radius
+    out, so that narrowing curves the sides.</p>
+  <figure class="shot">
+    <img src="img/clouds/domes-before-after.webp" alt="Three pairs of lab views over the sea: on the left the cells have flat, vertical sides; on the right the same cells are rounded domes, wider at the base">
+    <figcaption>"Domes, not boxes" (ADR-0386): the map's cells before (left) and after (right) the footprint narrows
+      as the cell rises, with cumulus full only over its lowest 30 %.</figcaption>
+  </figure>
+
+  <h3>Wisps</h3>
+  <p>"The clouds are very solid looking and lack any of the wispiness of real clouds" (Glenn, 2026-11-08). Worley
+    erosion alone cuts cauliflower, never a torn edge. ADR-0384 takes three more things from Nubis, all behind the
+    level's <code>wisps</code> value (0 is the old solid edges):</p>
+  <ul>
+    <li><b>A swirled lookup.</b> The detail texture is read at a point displaced by a low-frequency warp: a coarse
+      (~90 m-celled) read of the same detail volume, standing in for Nubis's curl texture. The swirl is strongest at
+      the cloud's base, where cumulus tears into strands, and weakest at the billowing top.</li>
+    <li><b>Wispy below, billowy above.</b> The detail fBm is used as it is at the very base and inverted from a tenth of
+      the height up, the switch blended over that lowest tenth.</li>
+    <li><b>A remap, not a subtraction</b>, so a thin edge is eaten whole rather than only thinned. Past where the
+      fine detail fades (3.5–14 km), the warp's own coarse read erodes the far banks so they keep a ragged
+      outline.</li>
+  </ul>
+  <div class="code">
+    <div class="hd"><span>clDensity: the wisps -- the warped detail read, inverted above the base, applied as a remap</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/clouds.frag#L213-L227">shaders/vulkan/clouds.frag</a></div>
+<pre>    float erode = 0.0;
+    if (detailFade &gt; 0.0 || coarse &gt; 0.0) {
+        vec3 wv = textureLod(detailNoise, dq * 0.5 + vec3(0.31, 0.17, 0.53), 0.0).rgb;
+        if (detailFade &gt; 0.0) {
+            vec3 warp = (wv - 0.5) * 2.0 * (0.15 * u.frame.z) * (1.0 - 0.6 * hf);
+            vec3 det = textureLod(detailNoise, (dq + warp) * 2.0, 0.0).rgb;
+            float fbm = det.r * 0.625 + det.g * 0.25 + det.b * 0.125;
+            fbm = mix(fbm, 1.0 - fbm, clamp(hf * 10.0, 0.0, 1.0));
+            erode += fbm * detailFade;
+        }
+        erode += (wv.r * 0.625 + wv.g * 0.25 + wv.b * 0.125) * coarse * 0.8;
+    }
+    float e = clamp(erode * u.detail.x * shape.z * 1.8, 0.0, 0.95);
+    d = clamp((d - e) / (1.0 - e), 0.0, 1.0);
+    return d * profile * shape.y * u.params.y;</pre>
+  </div>
+  <p>The result, in the ADR's own words, is modest. The near cumulus edges are a little more broken, and exaggerated
+    values (swirl 0.25, erosion 2.5×) changed the shape little and added grain. The ADR names the reason: a cloud's
+    outline comes from the base noise's ~1.4 km puffs, and erosion only cuts a thin band at the rim. Real wispiness
+    needs the base shape itself to change, either a finer and more broken base or a higher-resolution detail volume
+    with a true curl texture. That is still owed. Two things were tried and dropped: a smoothstep over the density
+    to make the fringe translucent ("It only blurred the clouds"), and fine fibres alone for the cirrus ("regular
+    scratches").</p>
+  <figure class="shot">
+    <img src="img/clouds/wisps-old-new.webp" alt="Two pairs of island views, left the old solid clouds, right with wisps and cirrus: the right ones show slightly more broken edges and faint high streaks">
+    <figcaption>ADR-0384's A/B on the island, 2026-11-08: the old clouds (left) and the wisps with the cirrus
+      (right). The edges change a little, and the cirrus streaks are the most visible difference.</figcaption>
+  </figure>
+
+  <h3>The cirrus</h3>
+  <p>Most of a fair sky's wispiness is <b>cirrus</b>: thin ice cloud at 8–12 km, as mare's tails and veils. The deck
+    never had it. <code>clCirrus</code> draws it as a sheet at 9 km that is <i>not marched</i>: each ray finds the
+    plane once, over the open sky only (where the scene depth is the background). It is at most half opaque and lit
+    by the sun through a forward-scattering phase plus the sky. With the map on, the veils are the map's A channel,
+    two octaves of noise stretched 4:1 along the sweep, swirled through the eddies and cut to the cirrus cover. The
+    base volume streaks them faintly along the sweep, and they fade out before the map's edge.</p>
+  <div class="code">
+    <div class="hd"><span>clCirrus: the veils from the map's A, streaked along the sweep, faded before the map's edge</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/clouds.frag#L286-L298">shaders/vulkan/clouds.frag</a></div>
+<pre>    vec3 P = camPos + dir * t;
+    float c, fade;
+    if (clMapOn()) {
+        <span class="c">// the VEILS from the weather map's A (ADR-0386: laid out with the clouds, nothing tiling), faded before the</span>
+        <span class="c">// map's edge, faintly streaked along its sweep by a finer read</span>
+        const vec2 a = u.shape.yz;
+        const vec2 xz = P.xz + u.windOffset.xy;
+        const vec2 uv = vec2(dot(xz, a), dot(xz, vec2(-a.y, a.x)));
+        const vec2 m = (xz - u.mapRect.xy) * u.mapRect.z;
+        const float veil = any(lessThan(m, vec2(0.0))) || any(greaterThan(m, vec2(1.0))) ? 0.0 : textureLod(weatherMap, m, 0.0).a;
+        const float fib = textureLod(baseNoise, vec3(uv.x / 12000.0, 0.29, uv.y / 900.0), 0.0).r;
+        c = veil * (0.55 + 0.45 * fib);
+        fade = 1.0 - smoothstep(24000.0, 38000.0, length(P.xz - camPos.xz));</pre>
+  </div>
+  <p>Without the map, the veils come from the base volume directly and drift at 2.5 × the deck's wind (a jet stream).
+    With the map they ride the same drift as the deck, because they are laid out in the same air. The cirrus is at
+    its best lit by a low sun:</p>
+  <figure class="shot">
+    <img src="img/clouds/cirrus-sunset.webp" alt="Four golden-hour views over the sea: cumulus lit orange from the side, long pale streaks of cirrus across the sky above them, the sun setting behind an island">
+    <figcaption>Cirrus at sunset (2026-11-08): the streaks lie along one sweep across the sky, above the cumulus.</figcaption>
+  </figure>
+
+  <h2>The march</h2>
+  <p>The march is <code>main()</code> in clouds.frag, a fullscreen triangle at <b>half resolution</b>. It writes two
+    targets: RGBA16F colour (rgb the scattered light, a the transmittance, a premultiplied overlay) and an R32F
+    <b>cloud depth</b>, the distance to the cloud the ray found, for the history. Before any noise is read, a ray
+    goes through these steps:</p>
+  <ol>
+    <li><b>Build the ray from 100 m out.</b> The direction comes from a point at reverse-Z depth 0.002, not the near
+      plane (ADR-0332's addendum, below).</li>
+    <li><b>Clip it to the deck</b> (<code>clLayerInterval</code>: a slab over a ground scene, or a spherical shell for
+      a planet) and to the scene depth, so a mountain hides the clouds behind it.</li>
+    <li><b>Probe for an empty ray.</b> Eight reads of the map along the span, each jittered within its eighth. If none
+      finds coverage, the pixel returns only the cirrus. A fair sky is mostly gaps, so most rays stop here. There
+      used to be three probes, which let small clouds fall between them and cut clouds along hard lines.</li>
+  </ol>
+  <div class="code">
+    <div class="hd"><span>main: eight jittered probes of the map before paying for the march</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/clouds.frag#L345-L358">shaders/vulkan/clouds.frag</a></div>
+<pre>    <span class="c">// EMPTY-RAY EARLY-OUT: probe the weather field along the slab span before</span>
+    <span class="c">// paying for the march — a fair sky is mostly gaps by design.</span>
+    <span class="c">// (three probes -- start, middle, end -- let a cloud smaller than half the span fall between them: the</span>
+    <span class="c">// ray was cleared for some pixels and marched for their neighbours, and clouds came out cut along hard</span>
+    <span class="c">// lines -- the "break in the rendering" Glenn saw. Eight probes, each jittered along its eighth)</span>
+    {
+        float cov = 0.0;
+        for (int k = 0; k &lt; 8 &amp;&amp; cov &lt; 0.02; ++k) {
+            float f = (float(k) + fract(clDither(gl_FragCoord.xy) + u.frame.x)) / 8.0;
+            const vec2 wq = clWeather((camPos + dir * mix(t0, t1, f)).xz);
+            cov = max(cov, clMapOn() ? wq.x : clLocalCoverage(wq.x));
+        }
+        if (cov &lt; 0.02) { outColor = CIRRUS_ONLY; return; }
+    }</pre>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 900 300" role="img" aria-label="A view ray climbs from the camera through the cloud deck; fine steps inside a cloud, stretched steps across gaps, a rewind on entry; from one sample the sun march takes six samples in a widening cone and one long sample further toward the sun">
+      <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker>
+        <marker id="a4w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#e6c07b"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <rect x="0" y="70" width="900" height="150" fill="#131a24"/>
+        <line x1="0" y1="70" x2="900" y2="70" stroke="#2c3d50"/><line x1="0" y1="220" x2="900" y2="220" stroke="#2c3d50"/>
+        <text x="8" y="64" fill="#93a6ba" font-size="12">deck top</text>
+        <text x="8" y="236" fill="#93a6ba" font-size="12">deck bottom</text>
+        <ellipse cx="300" cy="175" rx="85" ry="42" fill="#2c3d50" fill-opacity="0.8"/>
+        <ellipse cx="660" cy="140" rx="110" ry="58" fill="#2c3d50" fill-opacity="0.8"/>
+        <circle cx="40" cy="280" r="6" fill="#cfe4ff"/>
+        <text x="54" y="285" fill="#cfe4ff" font-size="12">camera</text>
+        <line x1="40" y1="280" x2="880" y2="40" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#a4)"/>
+        <g fill="#8ec5ff">
+          <circle cx="226" cy="227" r="3"/><circle cx="246" cy="221" r="3"/><circle cx="265" cy="216" r="3"/>
+          <circle cx="285" cy="210" r="3"/><circle cx="305" cy="204" r="3"/><circle cx="325" cy="199" r="3"/>
+          <circle cx="345" cy="193" r="3"/>
+        </g>
+        <g fill="none" stroke="#8ec5ff" stroke-width="1.4">
+          <circle cx="395" cy="179" r="4"/><circle cx="460" cy="160" r="4"/><circle cx="545" cy="136" r="4"/>
+        </g>
+        <path d="M545,136 C530,150 520,150 505,148" stroke="#e6c07b" stroke-width="1.4" fill="none" stroke-dasharray="4 3" marker-end="url(#a4w)"/>
+        <text x="500" y="182" fill="#e6c07b" font-size="12">found cloud: rewind</text>
+        <g fill="#8ec5ff">
+          <circle cx="565" cy="131" r="3"/><circle cx="582" cy="126" r="3"/><circle cx="599" cy="121" r="3"/>
+          <circle cx="616" cy="116" r="3"/>
+        </g>
+        <text x="372" y="208" fill="#93a6ba" font-size="12">gap: steps stretch</text>
+        <text x="230" y="260" fill="#93a6ba" font-size="12">inside: the fine step (40–120 m)</text>
+        <g stroke="#e6c07b" stroke-width="1.2">
+          <line x1="305" y1="204" x2="760" y2="10" stroke-dasharray="3 3"/>
+        </g>
+        <g fill="#e6c07b">
+          <circle cx="312" cy="200" r="2.4"/><circle cx="321" cy="198" r="2.4"/><circle cx="338" cy="186" r="2.6"/>
+          <circle cx="352" cy="186" r="2.6"/><circle cx="378" cy="168" r="2.8"/><circle cx="404" cy="166" r="3"/>
+          <circle cx="470" cy="128" r="3.4"/>
+        </g>
+        <path d="M312,200 L404,140 L404,192 Z" fill="#e6c07b" fill-opacity="0.08" stroke="none"/>
+        <text x="350" y="112" fill="#e6c07b" font-size="12">the long sample (3×)</text>
+        <text x="700" y="22" fill="#e6c07b" font-size="12">toward the sun</text>
+        <text x="610" y="262" fill="#93a6ba" font-size="12">each sample jittered within its own step,</text>
+        <text x="610" y="280" fill="#93a6ba" font-size="12">the jitter re-rolled every frame</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">One ray through the deck. Blue: view samples, solid where they integrate, hollow where a dry run has
+    stretched them. Gold: the sun march from one sample, six samples at growing distances pushed off the line within a
+    widening cone, then one long sample.</p>
+  <p>Then the loop. It has <b>two step sizes</b>. The <i>budget</i> step is the span divided by the step count (40 by
+    default; the cloud lab uses 96). The <i>fine</i> step is the one that resolves a cloud, 40–120 m with the map.
+    After three empty samples in a row the stride grows, up to 6 fine steps, and when a stretched step lands in cloud
+    the ray <b>rewinds</b> to the last empty sample and re-enters at the fine step. Inside cloud a step integrates at
+    most about half an optical depth. And whatever the rewinds cost, the ray always reaches its end: what is left of
+    it, divided by the steps left, is the least a step may be. Rays that ran out of budget used to stop mid-deck, and
+    far clouds ended along lines that traced the nearer ones.</p>
+  <p>Each step adds its light <b>analytically</b>: the source times (1 − e<sup>−σ·ds</sup>), not
+    source × σ × ds. The rectangle rule overshoots by the step's optical depth, and it had stacked into a white wall
+    at the horizon. The same weights give each pixel's cloud depth:</p>
+  <div class="code">
+    <div class="hd"><span>main: the step's light added analytically, its weight into the cloud depth, out once 99 % is hidden</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/clouds.frag#L512-L522">shaders/vulkan/clouds.frag</a></div>
+<pre>            <span class="c">// ANALYTIC in-scatter for the step: source * (1 - exp(-sigma*ds)).</span>
+            <span class="c">// The rectangle rule (source * density * ds) overshoots by the</span>
+            <span class="c">// per-step optical depth and stacked into the horizon white wall.</span>
+            vec3 lum = sunLight * beer * phase * powder + ambient;
+            float stepT = exp(-density * stepLen);
+            scattered += transmittance * lum * (1.0 - stepT);
+            const float wgt = transmittance * (1.0 - stepT);
+            depthSum += length(p - camPos) * wgt;
+            depthW += wgt;
+            transmittance *= stepT;
+            if (transmittance &lt; 0.01) break;</pre>
+  </div>
+  <p>Fine detail fades with distance (<code>farFade</code>, 3.5 to 14 km), because erosion finer than a pixel's
+    footprint only aliases. From 5 km the cloud is tinted toward the sky's colour in proportion to the cloud the ray
+    found (ADR-0333: when it was mixed into empty rays too, it drew the old map's 320 m texels as pale squares round far clouds).
+    The deck ends softly between 0.75 and 1 × the far distance (30 km by default).</p>
+  <div class="note history"><p><b>"The clouds look blocky" (ADR-0332, 2026-11-05).</b> Far banks came out in shelves,
+    stair-steps and plates. A cloud lab was built (<code style="overflow-wrap:anywhere">assets/levels/cloud_lab.json</code>,
+    <code>tools/cloud_lab.py</code>: ten fixed poses, the wind pinned by <code>RT_WIND_TIME</code>, side-by-side A/B
+    sheets). Ten fixes were ruled out one by one, among them quintic noise reads, no Worley remap, 384 steps,
+    mipmapped noise and a band-limited bake. The first cause found: the start offset moved only the <i>first</i>
+    sample, so every pixel sampled the far deck at nearly the same distances. Each sample now sits at its pixel's own
+    jitter <i>within its own step</i>, re-rolled each frame. The island's own blocks turned out to be something else:
+    the <b>ray</b>. clouds.frag built each pixel's direction from the near plane, as a ~10 cm vector between two
+    ~6.6 km float32 positions, through a 35 km far plane's inverse projection. Every direction snapped to a coarse
+    grid. "Why every cloud-side experiment failed: the noise, the march and the history were never the fault." The
+    ray now starts ~100 m out, at the same cost.</p></div>
+
+  <h2 id="light">Lighting</h2>
+  <p>At each step that holds cloud, the shader needs the sunlight arriving there through the cloud between the
+    point and the sun. A short <b>light march</b> estimates that optical depth. It covers a fixed 240 m span, not the
+    whole deck: over the whole deck the optical depth reached ~64, e<sup>−64</sup> is zero, and interiors were lit by
+    ambient alone. Since ADR-0333 it is Nubis's <b>cone</b>. Six samples at growing distances (about 10 m first,
+    about 120 m last) are each pushed off the line inside a cone that widens toward the sun, and they read the base
+    shape only, with no detail. One long sample at 3× then covers what lies far up-sun. Six samples on one straight line
+    through the full-detail noise had streaked every low-sun cloud along the light.</p>
+  <div class="code">
+    <div class="hd"><span>main: the sun's cone (Schneider 2015/2017)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/clouds.frag#L466-L483">shaders/vulkan/clouds.frag</a></div>
+<pre>            if (u.detail.y &lt; 0.5) {   <span class="c">// (RT_CLOUD_JITTER=coherent: the old straight line too, for the A/B)</span>
+                <span class="c">// THE SUN'S CONE (Schneider 2015/2017): samples at growing distances, each pushed off the line inside a cone</span>
+                <span class="c">// that widens toward the sun, reading the base shape only (no detail: the light needs the cloud's bulk);</span>
+                <span class="c">// then one long sample for the deep shadow. Six samples on one straight line through the full-detail</span>
+                <span class="c">// noise streaked every low-sun cloud along the light (the "layers")</span>
+                float d0 = 0.0;
+                for (int j = 0; j &lt; lightSteps; j++) {
+                    float f1 = float(j + 1) / float(lightSteps);
+                    float d1 = lightSpan * f1 * f1 * 1.6;             <span class="c">// growing steps: ~10 m first, ~120 m last</span>
+                    float dm = mix(d0, d1, lightJitter);
+                    uint hc = hh ^ (uint(j) * 0x9E3779B9u) ^ uint(u.frame.x * 65536.0);
+                    hc = (hc ^ (hc &gt;&gt; 16)) * 0x7feb352du; hc = (hc ^ (hc &gt;&gt; 15)) * 0x846ca68bu; hc ^= hc &gt;&gt; 16;
+                    vec3 rnd = vec3(float(hc &amp; 1023u), float((hc &gt;&gt; 10) &amp; 1023u), float((hc &gt;&gt; 20) &amp; 1023u)) / 511.5 - 1.0;
+                    vec3 lp = p + sunDir * dm + rnd * (0.35 * dm);   <span class="c">// the cone: widening with distance</span>
+                    lightOD += clDensity(lp, 0.0, 0.0) * (d1 - d0);
+                    d0 = d1;
+                }
+                lightOD += clDensity(p + sunDir * (d0 * 3.0), 0.0, 0.0) * d0;   <span class="c">// the long sample: what lies far up-sun</span></pre>
+  </div>
+  <p><b>Multiple scattering.</b> Light that scatters many times inside a cloud is what makes its base grey instead of
+    black. The standard cheap stand-in is <b>Wrenninge's octaves</b>: sum three copies of the single-scattering
+    term, each order with the extinction, the contribution and the phase anisotropy scaled down (0.45, 0.5, 0.5):</p>
+  <div class="code">
+    <div class="hd"><span>main: three octaves of scattering, then the powder term</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/clouds.frag#L496-L505">shaders/vulkan/clouds.frag</a></div>
+<pre>            float beer = 0.0;
+            {
+                float a = 1.0, b = 1.0, c = 1.0;
+                for (int k = 0; k &lt; 3; k++) {
+                    beer += a * exp(-lightOD * b) * clPhaseHG(mu, u.march.z * c);
+                    a *= 0.45; b *= 0.5; c *= 0.5;
+                }
+                beer /= max(1e-4, clPhaseHG(mu, u.march.z));   <span class="c">// `phase` multiplies below</span>
+            }
+            float powder = 1.0 - exp(-2.0 * density * stepLen);</pre>
+  </div>
+  <p>The <b>phase function</b> says how much light scatters toward the camera given the angle to the sun.
+    It is Henyey-Greenstein, normalised so isotropic is 1, at the level's <code>phaseG</code> (0.45 by default). With
+    wisps on there is a second, sharp forward lobe (g 0.8, a tenth of the weight) for the <b>silver lining</b>, the
+    bright rim of a cloud edge in front of the sun:</p>
+  <div class="code">
+    <div class="hd"><span>clPhase: a second, sharp forward lobe for the silver lining</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/clouds.frag#L238-L243">shaders/vulkan/clouds.frag</a></div>
+<pre><span class="c">// Two lobes when the wisps are on (ADR-0384): the cloud's own and a sharp forward one -- the bright rim of a cloud</span>
+<span class="c">// edge in front of the sun (the silver lining), which one broad lobe could not give</span>
+float clPhase(float mu, float g) {
+    float p = clPhaseHG(mu, g);
+    return u.frame.z &gt; 0.0 ? mix(p, clPhaseHG(mu, 0.8), 0.1) : p;
+}</pre>
+  </div>
+  <p>The rest of the light: a <b>powder</b> term (1 − e<sup>−2σ·ds</sup>) darkens the thin edges facing the sun, and an
+    <b>ambient</b> from the sky's zenith and horizon grades with height (0.7 at the base to 1 at the top), plus a
+    little bounce from the lit ground under the base.</p>
+  <p><b>Lit from their own height</b> (ADR-0369). Under the physical sky (<a href="sky.html">the sky page</a>) the sun
+    reaches the clouds through the air above the <i>deck</i>, not above the street. DayNightSystem works out the
+    transmittance from the middle of the cloud layer, for the sun and for the moon, and lights the clouds by whichever
+    is brighter there:</p>
+  <div class="code">
+    <div class="hd"><span>DayNightSystem: the deck's own sun, from the middle of the cloud layer</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/day_night_system.cpp#L752-L760">src/engine/systems/day_night_system.cpp</a></div>
+<pre>    {   <span class="c">// the deck's own sun: from the middle of the cloud layer, whichever of the sun and the moon lights it more</span>
+        const VolumetricCloudParams&amp; vc = lit.volumetricClouds;
+        const double r = a.groundRadius + std::max(height, 0.5 * (vc.bottom + vc.top));
+        const Vec3 tSun = sampleTransmittance(skyTables_, r, st.sunDirection.y) * sunTop;
+        const Vec3 tMoon = sampleTransmittance(skyTables_, r, st.moonDirection.y) * static_cast&lt;double&gt;(moonTop);
+        const bool sunLit = tSun.y &gt;= tMoon.y;
+        f.cloudLightDir = sunLit ? st.sunDirection : st.moonDirection;
+        f.cloudLightColor = (sunLit ? tSun : tMoon) * static_cast&lt;double&gt;(weatherSun);
+    }</pre>
+  </div>
+  <p>After sunset the deck is still in the sun, through the long reddening path of air. The renderer normalises that
+    colour and puts its peak into the clouds' sun intensity. ADR-0369 reports what this gave on river_town: golden
+    clouds with the sun 2° up, salmon-red clouds over a purple-pink sky just under the horizon, the twilight's purple
+    overhead at −3° to −5°. A low deck (0.9–1.6 km) passes into the Earth's shadow about 1° after the street does,
+    so its red is brief, as it is in nature.</p>
+  <figure class="shot">
+    <img src="img/clouds/sunset-cloud-light.webp" alt="Four views of river_town's towers: night; the sun just up with golden clouds; just under the horizon with salmon-red clouds over an orange horizon; and later with the clouds unlit and purple-brown">
+    <figcaption>The clouds lit from their own height (ADR-0369, 2026-11-07): night, the sun 2° up, just under the horizon
+      (the deck still in the sun, the street not), and a little later, when the deck has passed into the Earth's
+      shadow too.</figcaption>
+  </figure>
+
+  <h2>The history: averaging the noise away</h2>
+  <p>A half-resolution march with a few dozen jittered steps is noisy every frame. The <b>resolve</b> pass
+    (clouds_resolve.frag, ADR-0328) blends this frame's march into a history, two half-resolution targets ping-ponged,
+    keeping 0.9 of the old one (about ten frames' memory). The history is <b>reprojected</b>: for each pixel it finds
+    where that pixel's cloud was on last frame's screen and reads the history there. It is <b>clamped</b> to the
+    range of this frame's 3 × 3 neighbourhood, so a moving cloud edge or hill silhouette leaves no ghost. A camera
+    jump of more than 50 m in a frame resets it.</p>
+  <div class="code">
+    <div class="hd"><span>clouds_resolve.frag: in low light, the march taken most of the way to its 3×3 mean before it enters the history</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/clouds_resolve.frag#L42-L80">shaders/vulkan/clouds_resolve.frag</a></div>
+<pre>    <span class="c">// GRAIN IN LOW LIGHT (ADR-0379; Glenn: "Clouds are grainy in low light"): the march's per-frame noise is the same</span>
+    <span class="c">// in the dark, but the night eye amplifies it several stops. What enters the history is the pixel taken most of</span>
+    <span class="c">// the way to its 3 x 3 mean -- a cloud has no detail at half resolution that this blurs -- so ten frames of history</span>
+    <span class="c">// average a third of the noise they did. (The clamp box above stays the raw neighbourhood's.)</span>
+    <span class="c">// ...in low light only (ADR-0384): by day it took the wisps' edge detail with the grain (Glenn: "the clouds are</span>
+    <span class="c">// very solid looking"). By the camera's exposure (cameraPosition.w, pre-applied: ~0.7 at noon, hundreds at</span>
+    <span class="c">// night): none at 2 and under (EV100 ~13, the afternoon), all of it from 32 (EV100 ~9) -- the sunset's clouds</span>
+    <span class="c">// were grainy at 8 (ADR-0386).</span>
+    float lowLight = smoothstep(1.0, 5.0, log2(max(u.cameraPosition.w, 1e-6)));
+    cur = mix(cur, sum / 9.0, 0.7 * lowLight);
+<span class="c">    // ...</span>
+    vec4 hist = clamp(texture(history, prevUV), lo, hi);
+    outColor = mix(cur, hist, u.frame.y);</pre>
+  </div>
+  <p><b>The grain blur.</b> The march's per-frame noise is the same at night, but the night exposure amplifies it
+    several stops. ADR-0379 takes the pixel 70 % of the way to its 3 × 3 mean before it enters the history. A cloud
+    has no detail at half resolution for this to blur, and the clamp box stays the raw neighbourhood's, so edges still
+    reject stale history. By day, though, it took the wisps' edge detail with the grain, so ADR-0384 fades it in with
+    the camera's exposure. ADR-0386 then started it lower because sunset's clouds were grainy. In the code it is none at
+    an exposure of 2 and under (EV100 ~13, the afternoon) and all of it from 32 (EV100 ~9).</p>
+  <div class="note history"><p><b>Three reprojection faults, three fixes.</b> <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L14978">ADR-0328</a> measured the shimmer
+    first, with <code>tools/cloud_flicker.py</code> (each frame against its neighbours' mean). The march's offsets had
+    been a pattern fixed to the screen, which crawled across the clouds as the camera moved. Rolling them by a
+    golden-ratio step each frame, with the history, took the flown p99 from 9.0 to 4.0 (of 255). <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L15222">ADR-0334</a>: the
+    history reprojected every pixel as if its cloud were at the deck's middle height, so layers slid when flying
+    near or above the deck ("some of the layers shift as you go above the clouds"). The march now writes each pixel's
+    own cloud depth, weighted by what each step added. <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L15253">ADR-0335</a>: "horizontal striping going through each cloud".
+    A bisection showed the history's reprojection was the amplifier, with km-scale positions subtracted in float
+    landing each read a fraction of a texel off. The matrices are now composed and inverted in double, relative to
+    the camera, and the stripe score fell from 26.5 to 15.1.</p></div>
+
+  <h2>The clouds' shadow</h2>
+  <p>With the map placing the clouds, the sun can be shaded by them (ADR-0387). There is no shadow map of the
+    volume. <code>cloudShadow</code> follows a point's line to the light up to the deck's middle height and reads the
+    weather map where it crosses:</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 240" role="img" aria-label="From a ground point a line runs toward the sun; where it crosses the deck's middle height, the weather map's footprint there sets how much of the sun is taken">
+      <defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#e6c07b"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <line x1="0" y1="210" x2="900" y2="210" stroke="#2c3d50" stroke-width="2"/>
+        <text x="10" y="230" fill="#93a6ba" font-size="12">ground</text>
+        <line x1="0" y1="80" x2="900" y2="80" stroke="#3b82f6" stroke-width="1.2" stroke-dasharray="6 4"/>
+        <text x="10" y="72" fill="#8ec5ff" font-size="12">the deck's middle: the map read here (cloudShadow2.z)</text>
+        <ellipse cx="560" cy="82" rx="110" ry="38" fill="#2c3d50" fill-opacity="0.85"/>
+        <text x="560" y="86" fill="#cfe4ff" font-size="12" text-anchor="middle">a cell's footprint</text>
+        <circle cx="330" cy="210" r="5" fill="#cfe4ff"/>
+        <line x1="330" y1="210" x2="740" y2="20" stroke="#e6c07b" stroke-width="1.4" marker-end="url(#a5)"/>
+        <circle cx="610" cy="80" r="4" fill="#e6c07b"/>
+        <text x="760" y="24" fill="#e6c07b" font-size="12">to the sun</text>
+        <text x="250" y="198" fill="#cfe4ff" font-size="12">a lit point</text>
+        <rect x="330" y="200" width="300" height="8" fill="#000" fill-opacity="0.35"/>
+        <text x="640" y="200" fill="#93a6ba" font-size="12">soft by the footprint's own edge</text>
+        <text x="80" y="150" fill="#93a6ba" font-size="12">1 − shadow × smoothstep(0.2, 0.7, R) × depth</text>
+        <text x="80" y="168" fill="#93a6ba" font-size="12">depth = 0.55 + 0.45 · (top B + type G / 2)</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">One read of the map per shaded point: cheap, soft, and roughly right for the low types. The read
+    height is the middle of the whole deck, so when a storm's range stretches the deck to 9 km, the shadows of low
+    cumulus are displaced along the sun's direction.</p>
+  <div class="code">
+    <div class="hd"><span>lighting_common.glsl: cloudShadow -- the light's line read against the weather map at the deck's middle</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/lighting_common.glsl#L63-L76">shaders/vulkan/lighting_common.glsl</a></div>
+<pre><span class="c">// THE CLOUDS' SHADOW (ADR-0387; Glenn, 2026-11-08, the weather plan's part B): the light's line from this point read</span>
+<span class="c">// against the weather map where it crosses the deck's middle -- a cloud's footprint there takes up to `w` of the sun</span>
+<span class="c">// (a heart ~85 %: the rest comes through and round it, scattered), less for a small shallow cell. Soft, as a</span>
+<span class="c">// cloud's shadow on the ground is (the footprint's own edge, ~100 m). Above the deck, or past the map: none.</span>
+float cloudShadow(vec3 worldPos, vec3 L) {
+    if (g.cloudShadow.w &lt;= 0.0 || L.y &lt;= 0.02) return 1.0;
+    float t = (g.cloudShadow2.z - worldPos.y) / L.y;
+    if (t &lt;= 0.0) return 1.0;
+    vec2 uv = (worldPos.xz + L.xz * t + g.cloudShadow2.xy - g.cloudShadow.xy) * g.cloudShadow.z;
+    if (uv.x &lt; 0.0 || uv.y &lt; 0.0 || uv.x &gt; 1.0 || uv.y &gt; 1.0) return 1.0;
+    vec3 m = textureLod(cloudShadowMap, uv, 0.0).rgb;
+    float depth = 0.55 + 0.45 * clamp(m.b + m.g * 0.5, 0.0, 1.0);   <span class="c">// a deep or severe cell shades more</span>
+    return 1.0 - g.cloudShadow.w * smoothstep(0.2, 0.7, m.r) * depth;
+}</pre>
+  </div>
+  <p>A cloud's heart takes up to <code>shadow</code> (0.85, so about 15 % passes), less for a shallow or mild cell.
+    There is none above the deck, past the map, or with the light under 0.02 of vertical. It applies to the
+    <b>direct light only</b>, because a cloud's shadow is still daylight. It is used in three places: mesh.frag (on
+    top of the cascades and the mountains' horizon shadow), the probes' relight (probe_relight.comp, see
+    <a href="lighting.html">lighting</a>) and the ray-traced reflections' sun (rt_reflect.comp, see
+    <a href="reflections.html">reflections</a>).</p>
+  <div class="code">
+    <div class="hd"><span>mesh.frag: the clouds' shadow on the sun's light only</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1435-L1437">shaders/vulkan/mesh.frag</a></div>
+<pre>    <span class="c">// ...and the clouds' (ADR-0387): on the sun's light only, not the sky's -- a cloud's shadow is daylight still</span>
+    float cloudVis = g.counts.x &gt; 0 ? cloudShadow(inWorldPos, normalize(g.lights[0].directionInner.xyz)) : 1.0;
+    float sunShadow = mix(1.0, sunVis, strength) * cloudVis;   <span class="c">// scalar form for the shadow debug view (5)</span></pre>
+  </div>
+  <p>On the CPU, the globals carry the map's square, the drift and the reading height (<code>cloudShadow</code>,
+    <code>cloudShadow2</code>), and set 0 binding 18 is rewritten per frame after its fence, as the march's set is.
+    <code>RT_CLOUD_SHADOW=0</code> turns it off for the A/B.</p>
+  <figure class="shot">
+    <img src="img/clouds/shadow-debug.webp" alt="The shadow debug view in grey: the island and the sea lit white with soft dark patches of cloud shadow, the near sea entirely dark under an overhead cloud">
+    <figcaption>The lab's shadow debug view (5), 2026-11-08: soft cloud shadows across the island and the sea, and the
+      sea under the overhead cloud in its shadow (white is sunlit).</figcaption>
+  </figure>
+  <p>Owed, from the ADR: under an overcast the sky's light should be the deck's, not the clear sky's, and the exposure
+    meter should read the ground under a cloud.</p>
+
+  <h2>One value noise, and the frozen hashes</h2>
+  <p>The eddies needed noise, and Glenn asked for the duplicates to go: "It sounds like you're adding new math which
+    means we need to make sure it's not duplicated." A sweep found <b>value noise</b> (a hashed value at each lattice
+    node, blended smoothly between the four round a point) written seven times. ADR-0389 made it one template in
+    procgen/noise.h over a lattice that is passed in, with <code>valueNoise2</code> the canonical one over hash.h's
+    <code>hashCell</code>, and <code>Noise::curl2</code> the shared curl. cloud_map.cpp's own hash, value noise and
+    smoothstep were deleted.</p>
+  <p>But several users <i>bake</i> what their noise lays down: a tree's textures and gnarl, the lanes' recipe terrain,
+    the procedural textures, the city planner, the street planting. A different hash would re-lay all of that without
+    a bake tag bump, so their lattices stay bit for bit as <b>frozen hashes</b> in hash.h, each to be retired at its
+    bake's next tag bump:</p>
+  <div class="code">
+    <div class="hd"><span>hash.h: the frozen hashes -- kept bit for bit only because what they lay is baked</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/hash.h#L35-L44">src/hash.h</a></div>
+<pre><span class="c">// FROZEN HASHES (2026-11-08, the value noise made one: procgen/noise.h). Each kept bit for bit only because what it</span>
+<span class="c">// lays is baked -- a tree's textures and gnarl, the lanes' recipe terrain, the procedural textures, the city plans, the</span>
+<span class="c">// street planting -- and a new hash would re-lay it without a tag bump. (The blend is frozen too where its rounding</span>
+<span class="c">// differed: procgen/noise.h FrozenTerrainRecipeBlend, FrozenTreeTextureBlend.) Retire each for hashCell / hashPair at its</span>
+<span class="c">// bake's next tag bump.</span>
+inline float frozenTreeTextureLattice(int x, int y, uint32_t seed) {
+    uint32_t h = static_cast&lt;uint32_t&gt;(x) * 374761393u + static_cast&lt;uint32_t&gt;(y) * 668265263u + seed * 362437u;
+    h = (h ^ (h &gt;&gt; 13)) * 1274126177u;
+    return (h ^ (h &gt;&gt; 16)) / 4294967296.0f;
+}</pre>
+  </div>
+  <p>ADR-0389 checked the new code against the old over 200 000 points. The city plan, the planting, the texture
+    tiles and the gnarl were identical. The lanes' terrain was within 3e-16 and the tree textures within 1.2e-7,
+    because the old code blended in a different order of operations. Review commit <code>12695b94</code> closed that
+    gap too: the blend became a parameter, and the two old orders are kept beside their lattices as
+    <code>FrozenTerrainRecipeBlend</code> and <code>FrozenTreeTextureBlend</code>, "checked identical over 2M
+    samples, gcc and clang. No tag bump."</p>
+  <div class="code">
+    <div class="hd"><span>procgen/noise.h: the one value noise, its blend a parameter so the frozen orders survive</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/procgen/noise.h#L22-L51">src/engine/procgen/noise.h</a></div>
+<pre><span class="c">// FROZEN BLENDS: the same bilinear blend, its arithmetic in the order a baked noise was written in (the rounding is</span>
+<span class="c">// baked too: the lanes' recipe terrain, a tree's textures). Retire each with its frozen lattice (hash.h) at its bake's</span>
+<span class="c">// next tag bump.</span>
+struct FrozenTerrainRecipeBlend {
+    template &lt;class T&gt;
+    T operator()(T a, T b, T c, T d, T u, T v) const {
+        return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+    }
+};
+struct FrozenTreeTextureBlend {
+    template &lt;class T&gt;
+    T operator()(T a, T b, T c, T d, T u, T v) const {
+        return (a + (b - a) * u) + ((c - a) + (d - c) * u - (b - a) * u) * v;
+    }
+};
+
+<span class="c">// VALUE NOISE (2026-11-08: it had been written three times -- the wind's gusts, a tree's textures, the lanes' recipe</span>
+<span class="c">// terrain): a value per lattice node (`node(i, j)`, in [0, 1)), smoothstep-blended between the four round a point.</span>
+<span class="c">// Cheaper and blockier than the gradient Noise below. T: float or double. `blend`: LerpBlend, but for a frozen one.</span>
+template &lt;class T, class Node, class Blend = LerpBlend&gt;
+T latticeValueNoise(T x, T y, Node&amp;&amp; node, Blend blend = {}) {
+    const T fx = std::floor(x), fy = std::floor(y);
+    const int64_t i = static_cast&lt;int64_t&gt;(fx), j = static_cast&lt;int64_t&gt;(fy);
+    T u = x - fx, v = y - fy;
+    u = u * u * (T(3) - T(2) * u);
+    v = v * v * (T(3) - T(2) * v);
+    const T a = static_cast&lt;T&gt;(node(i, j)), b = static_cast&lt;T&gt;(node(i + 1, j));
+    const T c = static_cast&lt;T&gt;(node(i, j + 1)), d = static_cast&lt;T&gt;(node(i + 1, j + 1));
+    return blend(a, b, c, d, u, v);
+}</pre>
+  </div>
+  <p>One noise stays apart on purpose: scene.cpp's surface noise is the CPU mirror of common.metal's, bit-exact to the
+    GPU. The 3D cloud textures are also generated by their own Perlin and Worley code in cloud_noise.h, which is
+    baked and cached by a version tag.</p>
+
+  <h2>How it got here</h2>
+  <table>
+    <tr><th>ADR</th><th>Date</th><th>What changed</th></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L14978">ADR-0328</a></td><td>2026-11-05</td><td>The history: rolling offsets, a reprojected resolve, clamped to the 3×3 neighbourhood</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L15097">ADR-0332</a></td><td>2026-11-05</td><td>Each pixel's own offset inside every step; the cloud lab; the ray from 100 m out</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L15193">ADR-0333</a></td><td>2026-11-05</td><td>Haze on cloud only (no squares); the sun's light march in a cone</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L15222">ADR-0334</a></td><td>2026-11-05</td><td>The history reprojects by each pixel's cloud depth</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L15253">ADR-0335</a></td><td>2026-11-05</td><td>Rays and reprojection camera-relative, composed in double</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L15285">ADR-0336</a></td><td>2026-11-05</td><td>The first weather map (noise slice) and four cloud types along an axis</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L16786">ADR-0369</a></td><td>2026-11-07</td><td>The clouds lit from their own height under the physical sky</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L17209">ADR-0379</a></td><td>2026-11-08</td><td>The march pulled toward its 3×3 mean before the history</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L17322">ADR-0384</a></td><td>2026-11-08</td><td>Wisps, the cirrus sheet, the silver-lining lobe; the grain blur in low light only</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L17353">ADR-0385</a></td><td>2026-11-08</td><td>The panel's Coverage, Density and Noise scale sliders made live</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L17377">ADR-0386</a></td><td>2026-11-08</td><td>The weather map places the clouds (cells, Poisson field); types as data; domes</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L17432">ADR-0387</a></td><td>2026-11-08</td><td>The clouds' shadow</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L17457">ADR-0388</a></td><td>2026-11-08</td><td>The weathers as data in clouds.lua</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L17472">ADR-0389</a></td><td>2026-11-08</td><td>Organised round eddies; size skew; one value noise</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L17508">ADR-0390</a></td><td>2026-11-08</td><td>The map reads the simulated weather</td></tr>
+  </table>
+  <p>The thread through it: the first week of fixes (0328–0335) were all about sampling. Noise, plates and stripes were
+    each traced to how and where the march sampled, and none to the noise itself. Once the sampling was clean, what
+    was left was the look, and the look needed the clouds to be <i>placed</i>, not cut out of a noise field. That is
+    the Decima move, made on 2026-11-08 in five ADRs.</p>
+
+  <h2>Tests, labs and switches</h2>
+  <ul>
+    <li><b>tests/test_cloud_map.cpp</b> (6 cases): <code style="overflow-wrap:anywhere">clouds_lua_reads_four_types_mild_to_severe</code>,
+      <code style="overflow-wrap:anywhere">clouds_lua_reads_the_weathers_mild_to_severe</code>, <code style="overflow-wrap:anywhere">cloud_type_weights_spread_the_range</code>,
+      <code style="overflow-wrap:anywhere">cloud_map_cover_is_what_the_weather_asks_on_every_seed</code> (0.05, 0.22, 0.45 on seeds 1–6),
+      <code style="overflow-wrap:anywhere">cloud_map_overcast_closes_into_a_deck</code> (&gt; 0.75 at 0.85), and
+      <code style="overflow-wrap:anywhere">cloud_map_bakes_agree_where_they_meet</code> (two windows 9 km apart, identical where they overlap; another
+      seed is another sky). It bakes the shipped book on a 40 km, 512² map: the same texel, a quarter of the work.</li>
+    <li><b>tests/test_weather_sim.cpp</b>: <code style="overflow-wrap:anywhere">weather_sim_places_the_maps_clouds_over_the_land</code> (above).</li>
+    <li><b>assets/levels/cloud_lab.json</b> + <b>tools/cloud_lab.py OUT [--against DIR] [--env K=V]</b>: twelve fixed
+      poses (overhead, mid, horizon, sunward, inside, above, the far deck to four quarters, the island's beach camera,
+      near), each a PNG and its <code>RT_GPU_TIMES</code> line, with the wind pinned; <code>--against</code> builds A/B
+      sheets.</li>
+    <li><b>tools/cloud_flicker.py</b>: a burst of consecutive frames, scored by each frame's difference from its
+      neighbours' mean.</li>
+    <li><b><code>cloudmap &lt;path.png&gt;</code></b> (control command): the weather map from above, north up, types
+      tinted (stratus grey, stratocumulus pale, cumulus white, cumulonimbus red), cirrus a faint blue wash, land green
+      under a simulated field, the camera a red dot. See <a href="commands.html">commands</a>.</li>
+    <li><b>The day/night panel</b>, "Clouds (volumetric)": Coverage and Density edit the knobs and are greyed out
+      while the weather runs (ADR-0385), with a button to turn the weather off. Noise scale edits the level's authored
+      value that the weather's scale multiplies. Wisps (0–2), Cirrus (0–1), Phase g, Wind, Detail erosion, Ambient and
+      Light steps edit the live params. Edits are session-only.</li>
+  </ul>
+  <table>
+    <tr><th>Switch</th><th>What it does</th></tr>
+    <tr><td><code>RT_CLOUD_WISPS=0</code></td><td>The old solid clouds, no cirrus (ADR-0384)</td></tr>
+    <tr><td><code>RT_CLOUD_SHADOW=0</code></td><td>No cloud shadows (ADR-0387)</td></tr>
+    <tr><td><code>RT_CLOUD_TYPES=0</code></td><td>The base-noise slice and one profile, as before ADR-0336</td></tr>
+    <tr><td><code>RT_CLOUD_HISTORY=0</code> / a number</td><td>No history (the old fixed offsets), or the history's weight (default 0.9, at most 0.97)</td></tr>
+    <tr><td><code>RT_CLOUD_DEPTH=0</code></td><td>Reproject by the deck's middle height (ADR-0334's A/B)</td></tr>
+    <tr><td><code>RT_CLOUD_JITTER=coherent</code></td><td>The old 2×2 offset pattern, step-start samples and the straight sun line</td></tr>
+    <tr><td><code>RT_WIND_TIME=&lt;s&gt;</code></td><td>Pins the drift (and the renderer's sway): every run draws the same sky</td></tr>
+    <tr><td><code>RT_GPU_TIMES=1</code></td><td>Per-pass GPU times, the clouds pass among them</td></tr>
+  </table>
+  <p>Still owed, across the ADRs: Metal parity (clouds.metal keeps the pre-history march, #71); wispiness in the base
+    shape itself; the cirrus's hooks read a little drawn; tuning the land's cover toward Puerto Rico's third; rain from
+    the deep cells.</p>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/clouds.frag">shaders/vulkan/clouds.frag</a> — the march: clDensity, clCellShape, clPhase, clCirrus, the light cone, the octaves</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/clouds_resolve.frag">shaders/vulkan/clouds_resolve.frag</a> — the history: reprojection, clamp, low-light 3×3 pull</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/clouds_composite.frag">shaders/vulkan/clouds_composite.frag</a> — the depth-guided upsample onto the HDR scene</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/lighting_common.glsl">shaders/vulkan/lighting_common.glsl</a> — cloudShadow (used by mesh.frag, probe_relight.comp, rt_reflect.comp)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/clouds.lua">assets/scripts/clouds.lua</a> — the four types, the weathers, the map's size, shadow, organisation</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sky/cloud_book.h">src/engine/sky/cloud_book.h</a> / <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sky/cloud_book.cpp">.cpp</a> — CloudTypeSpec, CloudBook, weatherTargets</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/scripting/clouds_lua.cpp">src/engine/scripting/clouds_lua.cpp</a> — loadCloudsSource, ensureCloudsLoaded</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sky/cloud_map.h">src/engine/sky/cloud_map.h</a> / <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sky/cloud_map.cpp">.cpp</a> — bakeCloudMap, cloudTypeWeights, cloudCirrusSweep, cloudMapCover</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/cloud_map_system.cpp">src/engine/systems/cloud_map_system.cpp</a> — the drift, the types onto the params, the rebake, <code>cloudmap</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/renderer.h">src/renderer/renderer.h</a> — VolumetricCloudParams</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/vulkan/vulkan_renderer.cpp">src/renderer/vulkan/vulkan_renderer.cpp</a> — CloudUniforms, the three passes, the A/B switches, binding 18</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/metal/cloud_noise.h">src/renderer/metal/cloud_noise.h</a> — the Perlin-Worley base and Worley detail volumes, baked and cached</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/noise.h">src/engine/procgen/noise.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/hash.h">src/hash.h</a> — the one value noise, curl2, the frozen hashes and blends</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_cloud_map.cpp">tests/test_cloud_map.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_weather_sim.cpp">tests/test_weather_sim.cpp</a></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/levels/cloud_lab.json">assets/levels/cloud_lab.json</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/cloud_lab.py">tools/cloud_lab.py</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/cloud_flicker.py">tools/cloud_flicker.py</a></li>
+  </ul>
+  <p>Neighbours: <a href="sky.html">the sky and atmosphere</a>, <a href="weather.html">the weather simulation</a>,
+    <a href="lighting.html">lights</a>, <a href="reflections.html">reflections</a>, and
+    <a href="renderer.html">a frame on the GPU</a> for where the cloud passes sit in the frame.</p>
+
+  <footer>Code excerpts from commit <code>e55dfaaa</code> (2026-11-09). Drawn from ADR-0328, 0332–0336, 0369, 0379,
+    0384–0390, review commit 12695b94, and CREDITS.md. After Andrew Schneider's Nubis talks (Guerrilla Games,
+    SIGGRAPH 2015 and 2017).</footer>
+</div>
+</body>
+</html>

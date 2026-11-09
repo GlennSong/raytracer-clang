@@ -1,0 +1,1317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reflections: Probes and Ray Tracing — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>Reflections: probes and ray tracing</h1>
+  <p class="lede">A shiny surface shows what is around it, so the renderer has to answer one question for every glossy
+    pixel: what does it see in the mirror direction? Near the camera, and for smooth surfaces only, a real ray answers
+    it, traced on the GPU against the buildings, streets and cars close by. Farther off, a <b>reflection probe</b>
+    answers it: a small cube picture of the street, captured once as "what the surfaces are" and relit every few frames,
+    so the time of day costs nothing. Past the probes the sky cube answers. The three tiers fade into one another, and
+    each one falls back to the next.</p>
+
+  <figure class="shot">
+    <img src="img/reflections/rays-first-light.webp" alt="Two views of the same glass tower at noon from street level. Left: the panes show a blurry, box-shaped smear of the building across the street. Right: the same panes show that building window by window, sharp, with a white tower behind it">
+    <figcaption>The river_town bench at noon (2026-11-07, ADR-0376). Left: the street probe's reflection, blurry and
+      box-shaped. Right: the ray-traced reflection, the building across the street window by window.</figcaption>
+  </figure>
+
+  <h2>The problem</h2>
+  <p>Before November the renderer had two ways to fill a reflection. <b>Screen-space reflections</b> (SSR, on the
+    <a href="renderer.html">frame page</a>) march the mirror ray through the depth buffer and copy whatever colour is
+    there. They are cheap and sharp, but they can only show what is already on the screen: the building behind you,
+    or the floors of a tower above the top edge of the view, are not there to copy. Everything else fell back to the
+    sky. Under the physical sky that became the <b>sky cube</b> (ADR-0371, on the <a href="sky.html">sky page</a>): the
+    sky drawn into a 128² cubemap each frame and blurred into mips by roughness. A glass tower then reflected a clean
+    blue sky even when it stood across a narrow street from another building. ADR-0371 says it plainly: "Today's
+    reflections are still the sky's alone."</p>
+  <p>Real reflections need the world, not just the sky, and they need it from points of view the camera does not
+    have. There are two classic answers and the engine uses both:</p>
+  <ul>
+    <li><b>Reflection probes</b>: render the surroundings into a cubemap from a fixed point and look reflections up
+      in it. Cheap to read, but blurry (a 64² face), and only exact at the probe's own position. A <b>box
+      projection</b> (also called parallax correction) makes it much better: the probe knows the box of space it stands
+      for, and the reflected ray is followed to the wall of that box before the cube is read.</li>
+    <li><b>Ray tracing</b>: fire a real ray along the mirror direction and shade whatever it hits. Exact, but it needs
+      the scene in a GPU <b>acceleration structure</b> (a tree over the triangles that rays can be tested against
+      quickly), and a city of the island's size does not fit in a 10 GB card that way.</li>
+  </ul>
+  <p>So the plan (Glenn: "close up ray traced, farther faked") is a ladder. Rays where they matter and fit, probes
+    behind them, the sky behind those.</p>
+
+  <h2>The ladder: rays, then probes, then the sky</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 900 360" role="img" aria-label="For a reflecting pixel: if it is within 150 m, smoother than roughness 0.3 and the rays run this frame, a ray is traced against the near scene; a hit is shaded from its own triangle. A miss, or a pixel that does not qualify, reads the reflection probe whose box holds it. Where no relit probe box holds it, the sky cube is read. SSR stays in the composite but is muted where the rays answer">
+      <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="14" y="134" width="160" height="76" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="94" y="160" fill="#cfe4ff">a glossy pixel</text>
+        <text x="94" y="180" fill="#93a6ba" font-size="12">position P, mirror R,</text>
+        <text x="94" y="197" fill="#93a6ba" font-size="12">roughness</text>
+        <rect x="222" y="22" width="200" height="88" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="322" y="46" fill="#cfe4ff">qualifies for a ray?</text>
+        <text x="322" y="66" fill="#93a6ba" font-size="12">within near (150 m)</text>
+        <text x="322" y="83" fill="#93a6ba" font-size="12">roughness ≤ 0.3</text>
+        <text x="322" y="100" fill="#93a6ba" font-size="12">raysThisFrame()</text>
+        <rect x="478" y="22" width="190" height="88" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="573" y="50" fill="#cfe4ff">ray vs the near scene</text>
+        <text x="573" y="70" fill="#8ec5ff" font-size="12">rt_reflect.comp</text>
+        <text x="573" y="88" fill="#93a6ba" font-size="12">half resolution</text>
+        <rect x="718" y="22" width="168" height="88" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="802" y="50" fill="#cfe4ff">shade the hit</text>
+        <text x="802" y="70" fill="#93a6ba" font-size="12">its own triangle,</text>
+        <text x="802" y="88" fill="#93a6ba" font-size="12">lights, sun ray, sky SH</text>
+        <rect x="478" y="160" width="190" height="88" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="573" y="186" fill="#cfe4ff">the probe holding P</text>
+        <text x="573" y="206" fill="#8ec5ff" font-size="12">probeReflection()</text>
+        <text x="573" y="224" fill="#93a6ba" font-size="12">box-projected, mip rough × 4</text>
+        <rect x="478" y="290" width="190" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="573" y="314" fill="#cfe4ff">the sky cube</text>
+        <text x="573" y="333" fill="#93a6ba" font-size="12">mip rough × 5 (sky page)</text>
+        <rect x="718" y="160" width="168" height="88" rx="9" fill="#0f151e" stroke="#2c3d50"/>
+        <text x="802" y="186" fill="#e6c07b" font-size="12">SSR in the composite</text>
+        <text x="802" y="206" fill="#93a6ba" font-size="12">still first, but muted</text>
+        <text x="802" y="224" fill="#93a6ba" font-size="12">where the rays answer</text>
+        <line x1="174" y1="160" x2="218" y2="80" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="422" y1="66" x2="474" y2="66" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <text x="448" y="58" fill="#8ec5ff" font-size="12">yes</text>
+        <line x1="668" y1="66" x2="714" y2="66" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <text x="691" y="58" fill="#8ec5ff" font-size="12">hit</text>
+        <line x1="573" y1="110" x2="573" y2="156" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <text x="600" y="138" fill="#8ec5ff" font-size="12">miss</text>
+        <path d="M322,110 L322,204 L474,204" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <text x="372" y="196" fill="#8ec5ff" font-size="12">no</text>
+        <line x1="573" y1="248" x2="573" y2="286" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <text x="584" y="266" fill="#93a6ba" font-size="12" text-anchor="start">no relit probe box holds P</text>
+        <text x="584" y="281" fill="#93a6ba" font-size="12" text-anchor="start">(blended over its last 4 m)</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Which tier answers a pixel. The scene pass always computes the probe-or-sky reflection; where the rays
+    will answer it takes that share back out, and the ray pass adds the same share in, sharper (the "no ghost" rule below).</p>
+
+  <p>The tiers are not switched hard. Each fades into the next over a margin: the probe fades to the sky over the last
+    4 m inside its box, and the rays fade to the probe over the last 25 m of their 150 m reach (<code>fade</code>) and
+    as roughness rises to 0.3. Every rule lives in one place, the <code>lights.lua</code> data table, next to the
+    lights (the <a href="lighting.html">lighting page</a> covers the rest of that file):</p>
+<div class="code">
+    <div class="hd"><span>lights.lua: the probes' and the rays' rules are data</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/assets/scripts/lights.lua#L39-L51">assets/scripts/lights.lua</a></div>
+<pre>  <span class="c">-- THE REFLECTION PROBES (ADR-0374): one every `spacing` m of street, `height` m over the carriageway, its box (the</span>
+  <span class="c">-- reflection's parallax) `side` m past the kerbs either side to the frontages, from `below` under the street to</span>
+  <span class="c">-- `above` over it; sites nearer than `merge` are one (junctions); the 64 nearest are held, and one leaves only once it</span>
+  <span class="c">-- is `hysteresis` m past the nearest set's edge</span>
+  <span class="c">-- indoors (ADR-0380), the storey you stand on: one every `indoor_spacing` m across it, `indoor_height` m up</span>
+  probes = { spacing = 40, height = 5, side = 30, below = 1, above = 45, merge = 20, hysteresis = 15,
+             indoor_spacing = 8, indoor_height = 1.6 },
+
+  <span class="c">-- RAY-TRACED REFLECTIONS (ADR-0376; Glenn: "close up raytraced, further away faked"): rays only from surfaces</span>
+  <span class="c">-- smoother than `max_roughness`, within `near` m, faded into the probes over the last `fade` m; they hit only these</span>
+  <span class="c">-- draw classes (structure, scenery, furniture, groundPaint, simBody: a level's drawDistances names) within `near`; the structures may take at most</span>
+  <span class="c">-- `memory_share` of the GPU memory free when they start (and never more than 1.5 GB)</span>
+  raytrace = { near = 150, fade = 25, max_roughness = 0.3, memory_share = 0.25, hits = { "structure", "furniture", "simBody" } },</pre>
+  </div>
+  <p>The comment on <code>raytrace</code> names five classes a ray may hit, but the list holds three
+    (<code>structure</code>, <code>furniture</code>, <code>simBody</code>). The list is what the code reads.</p>
+
+  <h2>Reflection probes</h2>
+  <p>A probe here is not a picture of light. It is a picture of <i>stuff</i>. When a probe is captured, each of its
+    six cube faces records, per texel, what the nearest surface is: its colour, how metallic and rough it is, which
+    way it faces, how much it glows and how far away it is. That is a small <b>G-buffer</b> (a "geometry buffer": the
+    surface properties a lighting pass needs, stored instead of the lit colour). A compute shader then
+    <b>relights</b> those texels the way the scene pass lights a real surface, with this frame's sun, sky and lamps.
+    Dusk falls and the probes darken with it, without a recapture. That split, capture rarely and relight often, is the
+    idea the four stages were built around (ADR-0372: "a probe keeps what its faces saw, not their light, so time of
+    day costs no recapture").</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 440" role="img" aria-label="Probe life cycle. On the CPU: ProbeSystem places sites along the streets and on the camera's storey, picks the nearest 64 and queues six faces for each new one, two a frame; it hands slots and faces to RenderSystem through ProbeBoard; RenderSystem calls setReflectionProbes and draws each face's static world between beginProbeFace and endProbeFace. On the GPU: the faces are drawn into three 64 by 64 targets with mesh.frag compiled with PROBE_CAPTURE, blitted mirrored into the probes' G-buffer arrays, relit four probes a frame by probe_relight.comp into a radiance cube array, blurred into mips by probe_prefilter.comp, and read by mesh.frag and by rt_reflect on a miss">
+      <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <text x="20" y="22" fill="#e6c07b" font-size="12" text-anchor="start">CPU, every frame</text>
+        <rect x="14" y="34" width="270" height="112" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="149" y="58" fill="#cfe4ff">ProbeSystem (stage B)</text>
+        <text x="149" y="80" fill="#93a6ba" font-size="12">sites along LevelRoadGraph</text>
+        <text x="149" y="97" fill="#93a6ba" font-size="12">+ the storey you stand on</text>
+        <text x="149" y="114" fill="#93a6ba" font-size="12">the nearest 64 hold the slots</text>
+        <text x="149" y="131" fill="#93a6ba" font-size="12">new ones: 6 faces queued, 2 a frame</text>
+        <rect x="324" y="56" width="220" height="68" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="434" y="82" fill="#cfe4ff">ProbeBoard</text>
+        <text x="434" y="102" fill="#93a6ba" font-size="12">slots · captures · revision</text>
+        <rect x="584" y="34" width="302" height="112" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="735" y="58" fill="#cfe4ff">RenderSystem</text>
+        <text x="735" y="80" fill="#93a6ba" font-size="12">setReflectionProbes (on a new revision)</text>
+        <text x="735" y="97" fill="#93a6ba" font-size="12">per face: beginProbeFace, the static</text>
+        <text x="735" y="114" fill="#93a6ba" font-size="12">world within 300 m in that face's</text>
+        <text x="735" y="131" fill="#93a6ba" font-size="12">frustum, endProbeFace</text>
+        <line x1="284" y1="90" x2="320" y2="90" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a2)"/>
+        <line x1="544" y1="90" x2="580" y2="90" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a2)"/>
+        <text x="20" y="192" fill="#e6c07b" font-size="12" text-anchor="start">GPU, in the frame's command buffer (after the shadow cascades)</text>
+        <rect x="14" y="204" width="200" height="96" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="114" y="228" fill="#cfe4ff">capture (stage A)</text>
+        <text x="114" y="248" fill="#93a6ba" font-size="12">mesh_probe.frag.spv</text>
+        <text x="114" y="265" fill="#93a6ba" font-size="12">three 64² targets</text>
+        <text x="114" y="282" fill="#93a6ba" font-size="12">+ depth, reverse-Z</text>
+        <rect x="244" y="204" width="200" height="96" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="344" y="228" fill="#cfe4ff">G-buffer arrays</text>
+        <text x="344" y="248" fill="#93a6ba" font-size="12">blitted, mirrored</text>
+        <text x="344" y="265" fill="#93a6ba" font-size="12">layer = probe × 6 + face</text>
+        <text x="344" y="282" fill="#93a6ba" font-size="12">64 probes: 384 layers</text>
+        <rect x="474" y="204" width="200" height="96" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="574" y="228" fill="#cfe4ff">relight (stage C)</text>
+        <text x="574" y="248" fill="#93a6ba" font-size="12">probe_relight.comp</text>
+        <text x="574" y="265" fill="#93a6ba" font-size="12">4 complete probes</text>
+        <text x="574" y="282" fill="#93a6ba" font-size="12">a frame, round robin</text>
+        <rect x="704" y="204" width="182" height="96" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="795" y="228" fill="#cfe4ff">prefilter</text>
+        <text x="795" y="248" fill="#93a6ba" font-size="12">probe_prefilter.comp</text>
+        <text x="795" y="265" fill="#93a6ba" font-size="12">mips 1–4: GGX lobes</text>
+        <text x="795" y="282" fill="#93a6ba" font-size="12">roughness 0.25 … 1</text>
+        <line x1="214" y1="252" x2="240" y2="252" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a2)"/>
+        <line x1="444" y1="252" x2="470" y2="252" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a2)"/>
+        <line x1="674" y1="252" x2="700" y2="252" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a2)"/>
+        <rect x="244" y="340" width="430" height="84" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="459" y="364" fill="#cfe4ff">set 0: binding 16 the probe buffer, 17 the cube array</text>
+        <text x="459" y="384" fill="#93a6ba" font-size="12">positions (w 1: relit), boxes, indoor flags, the 64 × 64 plan grid,</text>
+        <text x="459" y="401" fill="#93a6ba" font-size="12">the rays' rules; radiance cubes, 64² × 5 mips (stage D)</text>
+        <rect x="704" y="340" width="182" height="84" rx="9" fill="#0f151e" stroke="#2c3d50"/>
+        <text x="795" y="364" fill="#cfe4ff">read by</text>
+        <text x="795" y="384" fill="#93a6ba" font-size="12">mesh.frag (every pixel)</text>
+        <text x="795" y="401" fill="#93a6ba" font-size="12">rt_reflect (on a miss)</text>
+        <path d="M795,300 L795,318 L459,318 L459,336" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a2)"/>
+        <line x1="674" y1="382" x2="700" y2="382" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a2)"/>
+        <path d="M735,146 L735,166 L114,166 L114,200" fill="none" stroke="#6f8fb0" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a2)"/>
+        <text x="430" y="160" fill="#93a6ba" font-size="12">the face's draws (queueDraw routes them to a capture slot)</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">One probe's life. The CPU decides where probes stand and which faces to capture; the GPU captures,
+    stores, relights and blurs them inside the frame, before the scene pass that reads them.</p>
+
+  <h3>Stage A: capturing what a face sees</h3>
+  <p>A probe face is a 90° square camera at the probe. ADR-0372 made the frame's globals (set 0 binding 0: the view,
+    lights, sky) a <b>dynamic uniform</b> with slots: slot 0 is the frame's view, slots 1 and 2 are the probe faces
+    captured this frame, each with its own view-projection and eye. So a frame captures at most two faces
+    (<code>kGlobalsSlots = 3</code>). <code>Renderer::beginProbeFace(probe, face, eye)</code> and
+    <code>endProbeFace()</code> bracket the draws for a face, and the backend's <code>queueDraw</code> routes them into that
+    slot's queue instead of the frame's. They are recorded after the shadow cascades (the capture shader samples the
+    shadow array through set 0) into three 64² RGBA16F targets and a depth, through capture twins of the mesh
+    pipelines.</p>
+  <p>The fragment shader is <code>mesh.frag</code> itself, compiled a second time with <code>PROBE_CAPTURE</code>
+    defined (<code>mesh_probe.frag.spv</code>). It runs all the material logic (the procedural surfaces, the vertex tints,
+    the bakes), so a captured brick wall has the same albedo as the one on screen, and then writes the surface instead of
+    the light:</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag with PROBE_CAPTURE: the surface, not its light</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1706-L1717">shaders/vulkan/mesh.frag</a></div>
+<pre>#ifdef PROBE_CAPTURE
+        outColor = vec4(albedo, metallic);
+        <span class="c">// (an indoor surface's distance is written negative: the relight lights it as a room, not the open sky; ADR-0380)</span>
+        outEmit = vec4(emission * (skyIsPhysical() ? g.skyPhysical3.z : 1.0),
+                       length(inWorldPos - g.cameraPosition.xyz) * ((pc.surfaceFlags.y &amp; (1u &lt;&lt; 28)) != 0u ? -1.0 : 1.0));
+#endif
+    }
+#ifdef PROBE_CAPTURE
+    outNormal = vec4(N * 0.5 + 0.5, roughness);   <span class="c">// a probe's G-buffer (RGBA16F) keeps its own layout: probe_relight.comp</span>
+#else
+    outNormal = gbufEncode(N, roughness, specWeight);   <span class="c">// world normal (SSAO), roughness (SSR, rays), reflection weight</span>
+#endif</pre>
+  </div>
+  <p>The clear values do the "nothing here" bookkeeping: an albedo alpha of 0, and a distance of 10 000, which the
+    relight reads as "the sky shows here" (anything over 9 000). Transparent surfaces are captured as opaque. Each
+    finished face is blitted, mirrored left to right, into layer <code>probe × 6 + face</code> of three 2D arrays (64
+    probes, 384 layers). The mirror is there because cube maps are left-handed: <code>probeFaceBasis</code> gives each
+    face's forward and up in the convention the shaders sample by.</p>
+  <table>
+    <tr><th>Image</th><th>Size</th><th>What a texel holds</th></tr>
+    <tr><td>G-buffer array 0</td><td>64² × 384 layers, RGBA16F</td><td>albedo (rgb), metallic (a)</td></tr>
+    <tr><td>G-buffer array 1</td><td>64² × 384 layers, RGBA16F</td><td>world normal × 0.5 + 0.5 (rgb), roughness (a)</td></tr>
+    <tr><td>G-buffer array 2</td><td>64² × 384 layers, RGBA16F</td><td>emission in engine units (rgb); distance from the probe (a), negative for an indoor surface, 10⁴ for none</td></tr>
+    <tr><td>Radiance cube array</td><td>64² × 384 layers × 5 mips, RGBA16F</td><td>the relit colour; mip m is the GGX blur for roughness m / 4</td></tr>
+  </table>
+  <p>Only the static world goes into a face: RenderSystem walks structures, scenery, furniture and ground paint within
+    the board's <code>reach</code> (300 m), culled against that face's own frustum. Cars (<code>SimBody</code>), effects
+    and grass stay out. The ground comes from the frame's own terrain draws, which TerrainLodSystem selected for the camera,
+    "so a probe near the camera sees most of the same ground, not all of it" (ADR-0372).</p>
+
+  <div class="note history"><p><b>Proving the capture before using it.</b> Stage A shipped with no reflections at all.
+    <code>RT_PROBE_TEST=1</code> put probe 0 at the camera, and <code>RT_PROBE_DUMP=&lt;file.ppm&gt;</code> wrote its six faces
+    (albedo, normal and emission rows) to a strip. At a street corner at noon the dump showed the paving and kerbs, palms,
+    shop fronts and awnings, the road's markings and the towers down the street, with the right normals. The first dump
+    fired after 12 faces, at the spawn point before the camera had moved, which is why the dump now rewrites itself every
+    600 faces and follows the camera. <code>RT_PROBE_TEST</code> retired with stage B; <code>RT_PROBE_DUMP</code> is
+    still there.</p></div>
+
+  <h3>Stage B: where the probes stand</h3>
+  <p>Reflections are seen from the street, so the probes stand along the streets. <code>placeProbeSites</code> walks
+    every edge of the level's road network (<code>LevelRoadGraph</code>, the one graph every consumer reads) and drops a
+    site every 40 m of centreline, 5 m over the carriageway: "a little over a bus's height". On a deck or a ramp the
+    height follows the line between the edge's ends, not the ground under it. Each site's <b>box</b> is the stretch of
+    street it stands for, reaching 30 m past both kerbs to the building frontages, from 1 m below the road to 45 m above
+    it. Sites closer than 20 m (and within 6 m in height) merge, so a junction gets one probe, not one per arm. ADR-0374
+    measured river_town: 1017 sites in 1 ms.</p>
+<div class="code">
+    <div class="hd"><span>probe_sites.h: a site and the rules it is placed by</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/lights/probe_sites.h#L19-L37">src/engine/lights/probe_sites.h</a></div>
+<pre>struct ProbeSite {
+    Vec3 position;
+    Vec3 boxMin, boxMax;
+    bool indoor = false;   <span class="c">// a storey's (ADR-0380): only indoor surfaces read it, and they read only these</span>
+};
+
+<span class="c">// The rules (lights.lua `probes`; these are the defaults a missing field takes).</span>
+struct ProbeRules {
+    double spacing = 40.0;   <span class="c">// m of centreline per probe</span>
+    double height = 5.0;     <span class="c">// m above the carriageway</span>
+    double side = 30.0;      <span class="c">// m the box reaches past the road's half width, either side</span>
+    double below = 1.0;      <span class="c">// m the box reaches under the carriageway (its floor is the street: what the probe saw) ...</span>
+    double above = 45.0;     <span class="c">// ... and over it</span>
+    double merge = 20.0;     <span class="c">// a site this near another (and within 6 m in height) is the same site: junctions</span>
+    double hysteresis = 15.0;   <span class="c">// m past the nearest set's edge a resident probe may drift before it gives its slot up</span>
+    <span class="c">// INDOORS (ADR-0380): the storey the camera stands on, one probe every `indoorSpacing` m across its footprint at</span>
+    <span class="c">// `indoorHeight` over its floor, each box its cell from floor to ceiling</span>
+    double indoorSpacing = 8.0, indoorHeight = 1.6;
+};</pre>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 380" role="img" aria-label="Plan view of a street with a side street meeting it. Probe sites stand every 40 m along each centreline; at the junction two would-be sites merge into one. One probe's box is highlighted: its stretch of street plus 30 m past each kerb. A grid cell over the plan lists the two nearest street probes whose boxes reach it">
+      <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40,0 L0,0 L0,40" fill="none" stroke="#1f2a37" stroke-width="1"/></pattern></defs>
+      <g font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+        <rect x="20" y="20" width="860" height="340" fill="url(#grid)"/>
+        <!-- frontages -->
+        <rect x="40" y="70" width="820" height="60" fill="#10161f" stroke="#2c3d50"/>
+        <rect x="40" y="250" width="380" height="80" fill="#10161f" stroke="#2c3d50"/>
+        <rect x="500" y="250" width="360" height="80" fill="#10161f" stroke="#2c3d50"/>
+        <text x="450" y="104" fill="#64768a">frontages (buildings)</text>
+        <!-- main street, vertical side street -->
+        <rect x="40" y="160" width="820" height="60" fill="#1a2330" stroke="#2c3d50"/>
+        <rect x="430" y="220" width="60" height="140" fill="#1a2330" stroke="#2c3d50"/>
+        <line x1="40" y1="190" x2="860" y2="190" stroke="#3a4b5f" stroke-dasharray="10 8"/>
+        <line x1="460" y1="190" x2="460" y2="360" stroke="#3a4b5f" stroke-dasharray="10 8"/>
+        <!-- highlighted box for the site at x=300 -->
+        <rect x="250" y="130" width="100" height="120" fill="#3b82f6" fill-opacity="0.12" stroke="#3b82f6" stroke-width="1.6"/>
+        <!-- sites every 40 m (80 px = 40 m) -->
+        <g fill="#8ec5ff">
+          <circle cx="60" cy="190" r="6"/><circle cx="140" cy="190" r="6"/><circle cx="220" cy="190" r="6"/>
+          <circle cx="300" cy="190" r="7" fill="#e6c07b"/><circle cx="380" cy="190" r="6"/><circle cx="460" cy="190" r="7"/>
+          <circle cx="540" cy="190" r="6"/><circle cx="620" cy="190" r="6"/><circle cx="700" cy="190" r="6"/>
+          <circle cx="780" cy="190" r="6"/><circle cx="460" cy="290" r="6"/>
+        </g>
+        <circle cx="460" cy="222" r="6" fill="none" stroke="#8ec5ff" stroke-dasharray="3 3"/>
+        <!-- labels -->
+        <text x="300" y="150" fill="#e6c07b">this site's box</text>
+        <line x1="356" y1="160" x2="356" y2="216" stroke="#e6c07b" stroke-width="1.2"/>
+        <line x1="356" y1="220" x2="356" y2="248" stroke="#e6c07b" stroke-width="1.2" marker-end="url(#a3)"/>
+        <text x="395" y="240" fill="#e6c07b" text-anchor="start">side: 30 m</text>
+        <text x="395" y="254" fill="#e6c07b" text-anchor="start">past the kerb</text>
+        <line x1="140" y1="215" x2="220" y2="215" stroke="#93a6ba" stroke-width="1.2" marker-start="url(#a3)" marker-end="url(#a3)"/>
+        <text x="180" y="236" fill="#93a6ba">40 m</text>
+        <text x="560" y="236" fill="#8ec5ff" text-anchor="start">merged: one site at</text>
+        <text x="560" y="250" fill="#8ec5ff" text-anchor="start">the junction (20 m)</text>
+        <line x1="556" y1="240" x2="472" y2="224" stroke="#8ec5ff" stroke-width="1.1"/>
+        <!-- a grid cell -->
+        <rect x="320" y="40" width="40" height="40" fill="none" stroke="#e6c07b" stroke-width="2"/>
+        <text x="372" y="46" fill="#cfe4ff" text-anchor="start">a plan-grid cell: (nearest + 1) | (second + 1) &lt;&lt; 8</text>
+        <text x="372" y="62" fill="#93a6ba" text-anchor="start">| (nearest indoor + 1) &lt;&lt; 16, built when the probes change</text>
+        <text x="60" y="352" fill="#64768a" text-anchor="start">plan view, schematic</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Sites along a street and a side street (a schematic: the spacing is to scale, the box's reach across the
+    street is drawn shorter than its 30 m, and its height, 1 m under the road to 45 m over it, is not shown). The highlighted box is what one probe's reflection is box-projected against.</p>
+
+  <p>A city has far more sites than the renderer's 64 slots. <code>pickResidentProbes</code> keeps the nearest 64 by plan
+    distance, re-picked once the camera has moved 4 m in plan (the <code>&gt; 16.0</code> below is that distance squared). A resident probe keeps its slot until it
+    is <code>hysteresis</code> (15 m) past the edge of the nearest set, so walking down a street recaptures only the probes
+    you pass, not a reshuffled 64. The new arrivals are queued six faces each, nearest first, and two faces are taken a
+    frame:</p>
+<div class="code">
+    <div class="hd"><span>ProbeSystem::render: re-pick the slots, queue the new arrivals' faces, take two a frame</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/probe_system.cpp#L100-L135">src/engine/systems/probe_system.cpp</a></div>
+<pre>    const Vec3 eye = ctx.view.camera.position;
+    <span class="c">// who holds the slots: again once the camera has moved a few metres</span>
+    const double mx = eye.x - lastEye_.x, mz = eye.z - lastEye_.z;
+    if (mx * mx + mz * mz &gt; 16.0 || board.slots.size() != resident_.size()) {
+        lastEye_ = eye;
+        const std::vector&lt;int&gt; before = resident_;
+        if (pickResidentProbes(sites_, eye, lightBook().probes.hysteresis, resident_) || board.slots.size() != resident_.size()) {
+            board.slots.assign(resident_.size(), ReflectionProbe());
+            <span class="c">// the new arrivals, nearest first, six faces each</span>
+            std::vector&lt;std::pair&lt;double, int&gt;&gt; joined;
+            for (std::size_t i = 0; i &lt; resident_.size(); ++i) {
+                const int s = resident_[i];
+                if (s &lt; 0) {
+                    <span class="c">// empty: a box inside out holds nothing</span>
+                    board.slots[i] = ReflectionProbe(Vec3(0, -1e6, 0), 0.0f, Vec3(1, 1, 1), Vec3(-1, -1, -1));
+                    continue;
+                }
+                const ProbeSite&amp; site = sites_[static_cast&lt;std::size_t&gt;(s)];
+                board.slots[i] = ReflectionProbe(site.position, 0.0f, site.boxMin, site.boxMax);
+                board.slots[i].indoor = site.indoor;
+                if (s != before[i]) joined.emplace_back((site.position - eye).lengthSquared(), static_cast&lt;int&gt;(i));
+            }
+            std::sort(joined.begin(), joined.end());
+            for (const std::pair&lt;double, int&gt;&amp; j : joined)
+                for (int f = 0; f &lt; 6; ++f) pending_.push_back(Pending{j.second, resident_[static_cast&lt;std::size_t&gt;(j.second)], f});
+            ++board.revision;
+        }
+    }
+    <span class="c">// this frame's faces (a slot given away since it was queued is skipped)</span>
+    while (!pending_.empty() &amp;&amp; static_cast&lt;int&gt;(board.captures.size()) &lt; kFacesPerFrame) {
+        const Pending p = pending_.front();
+        pending_.pop_front();
+        if (resident_[static_cast&lt;std::size_t&gt;(p.slot)] != p.site) continue;
+        board.captures.push_back(ProbeBoard::Face{static_cast&lt;uint32_t&gt;(p.slot), p.face});
+    }
+}</pre>
+  </div>
+  <p>An empty slot is a box turned inside out, which holds nothing, so no pixel reads it. A slot whose site changed
+    since its faces were queued drops the stale faces. On the renderer side, <code>setReflectionProbes</code> clears a
+    slot's "faces captured" and "relit" bits whenever its probe moved, so a moved probe is unlit, and skipped by every
+    pixel, until its six new faces are in.</p>
+
+  <div class="note history"><p><b>Why the captures are not baked.</b> ADR-0372 planned to bake the captures with the
+    level in stage B. ADR-0375 measured first: <code>RT_DUMP_STATS</code> logs a probe face's CPU cost, 0.35 ms, and
+    only while a probe is being captured (about 2 s at load). Baking would cost "~0.5 GB of disk on river_town and
+    several GB on the island to save those 2 seconds", and relighting already makes the time of day free. So probes
+    are captured as you arrive, and nothing is stored.</p></div>
+
+  <h3>Stage C: relit, as the scene is lit</h3>
+  <p>To relight a probe the way <code>mesh.frag</code> lights a pixel, the two had to share their lighting code. ADR-0373
+    moved it: the globals block and set-0 textures to <code>globals.glsl</code>, the GGX terms, light falloff,
+    shadows and one light's contribution (<code>shadeLight</code>) to <code>lighting_common.glsl</code>, the sky
+    harmonics to <code>sky_physical.glsl</code>. <code>mesh.frag</code>, <code>sky.frag</code> and the relight include
+    them. The proof that the move changed nothing was the same shot, with only cloud edges, wind-moved foliage and a
+    passing car differing. Then <code>probe_relight.comp</code> lights every texel of a probe's six faces:</p>
+<div class="code">
+    <div class="hd"><span>probe_relight.comp: a captured texel, lit with this frame's lights and sky</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/probe_relight.comp#L37-L79">shaders/vulkan/probe_relight.comp</a></div>
+<pre>    int layer = int(pc.eye.w) * 6 + id.z;
+    vec4 alb = texelFetch(gAlbedo, ivec3(id.xy, layer), 0);
+    vec4 nr = texelFetch(gNormal, ivec3(id.xy, layer), 0);
+    vec4 em = texelFetch(gEmit, ivec3(id.xy, layer), 0);
+    vec3 dir = cubeDir(id.z, (vec2(id.xy) + 0.5) / vec2(size));
+    vec3 col;
+    if (em.a &gt; 9000.0) {
+        col = skyIsPhysical() ? textureLod(skyCubeTex, dir, 0.0).rgb : mix(g.skyHorizon.rgb, g.skyZenith.rgb, clamp(dir.y, 0.0, 1.0));
+    } else {
+        <span class="c">// (a negative distance: an indoor surface, ADR-0380 -- lit as mesh.frag lights a room: no open sky)</span>
+        const bool indoorTexel = em.a &lt; 0.0;
+        vec3 P = pc.eye.xyz + dir * abs(em.a);
+        vec3 N = normalize(nr.rgb * 2.0 - 1.0);
+        vec3 V = -dir;
+        vec3 albedo = alb.rgb;
+        float metallic = clamp(alb.a, 0.0, 1.0);
+        float roughness = clamp(nr.a, 0.04, 1.0);
+        vec3 f0 = mix(vec3(0.04), albedo, metallic);
+        float a = max(roughness * roughness, 0.002);
+        float a2 = a * a;
+        float NdotV = max(dot(N, V), 1e-4);
+        <span class="c">// the sun's shadow where the frame's cascades reach (measured from the frame's camera), the mountains' beyond</span>
+        float viewDepth = -(g.view * vec4(P, 1.0)).z;
+        float sv = g.counts.y &gt; 0 ? computeShadow(P, N, viewDepth) : 1.0;
+        if (g.counts.x &gt; 0) {
+            sv *= terrainShadow(P, normalize(g.lights[0].directionInner.xyz));
+            sv *= cloudShadow(P, normalize(g.lights[0].directionInner.xyz));   <span class="c">// (ADR-0387)</span>
+        }
+        vec3 direct = vec3(0.0);
+        for (int i = 0; i &lt; min(g.counts.x, 32); ++i)
+            direct += shadeLight(g.lights[i], P, N, V, albedo, metallic, f0, a2, NdotV, vec3(sv));
+        vec3 F = fresnelSchlickRoughness(NdotV, f0, roughness);
+        vec3 kd = (1.0 - F) * (1.0 - metallic);
+        vec3 irr = skyIsPhysical() ? skyIrradianceSH(N) : g.skyHorizon.rgb * 0.5;
+        vec3 spec = skyIsPhysical() ? textureLod(skyCubeTex, reflect(-V, N), roughness * 5.0).rgb : vec3(0.0);
+        if (indoorTexel &amp;&amp; skyIsPhysical()) {
+            irr = vec3(dot(skyIrradianceSH(vec3(0.0, 1.0, 0.0)), vec3(0.2126, 0.7152, 0.0722)) * 0.30);
+            spec = irr;
+        }
+        col = direct + kd * albedo * irr * g.ambient.rgb + spec * F + em.rgb;
+    }
+    imageStore(radiance, ivec3(id.xy, layer), vec4(max(col, vec3(0.0)), 1.0));
+}</pre>
+  </div>
+  <p>Three details matter. The position comes back from the stored distance (<code>eye + dir × distance</code>), so
+    shadows and lamp falloff are evaluated at the real surface. The sun's shadow uses the frame's own cascades, measured
+    from the frame's camera, and the mountains' horizon map beyond them (the cloud shadow, ADR-0387, is on the
+    <a href="clouds.html">clouds page</a>). And the lights are <b>diffuse only</b>:
+    <code>SHADE_DIFFUSE_ONLY</code> drops each light's specular highlight from the relight. A highlight belongs to where
+    the eye stands, and the probe's eye is not the viewer's. Baked in, ADR-0374 found, the sun's glint off a far window
+    was smeared by the prefilter "into a flat yellow patch on every rough leaf that read the probe"; widening the
+    roughness made the patch bigger. The sky's reflection and the glows stay in.</p>
+  <p>Relighting is spread over frames. Each frame takes up to four probes whose six faces are all in, round-robin from a
+    cursor, and then <code>probe_prefilter.comp</code> blurs those four into mips 1–4: 48 GGX importance samples per texel,
+    at roughness m / 4 for mip m, read from mip 0.</p>
+<div class="code">
+    <div class="hd"><span>recordProbeRelight: four complete probes a frame</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L5103-L5110">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre>    if (probes.empty() || !probeGbufGeneral || !ensureRelightPipelines()) return;
+    const uint32_t n = static_cast&lt;uint32_t&gt;(std::min&lt;std::size_t&gt;(probes.size(), kMaxProbes));
+    std::vector&lt;uint32_t&gt; pick;
+    for (uint32_t k = 0; k &lt; n &amp;&amp; pick.size() &lt; 4; ++k) {
+        const uint32_t i = (relightCursor + k) % n;
+        if (probeFaces[i] == 0x3F) pick.push_back(i);
+    }
+    relightCursor = (relightCursor + 4) % std::max(n, 1u);</pre>
+  </div>
+  <p>With all 64 slots captured, that is every probe relit once every 16 frames.</p>
+
+  <h3>Stage D: used, through a plan grid</h3>
+  <p><code>mesh.frag</code>'s physical-sky branch first takes the sky cube's reflection, then asks
+    <code>probeReflection</code> for the probe whose box holds the pixel, passing the sky's answer as the fallback:</p>
+<div class="code">
+    <div class="hd"><span>globals.glsl probeReflection: the grid cell, the box test, the box projection, the fade</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/globals.glsl#L93-L121">shaders/vulkan/globals.glsl</a></div>
+<pre>vec3 probeReflection(vec3 P, vec3 R, float roughness, vec3 fallback, bool indoor) {
+    <span class="c">// the plan grid's cell (ADR-0374) names two street probes and an indoor one (ADR-0380): a street surface tries the</span>
+    <span class="c">// street's, an indoor one only the storey's -- the first relit one whose box holds P</span>
+    int k = int(probeGridSize.x);
+    if (probeCount.x &lt; 0.5 || k &lt;= 0) return fallback;
+    ivec2 gc = ivec2(floor((P.xz - probeCount.yz) / probeCount.w));
+    if (any(lessThan(gc, ivec2(0))) || any(greaterThanEqual(gc, ivec2(k)))) return fallback;
+    uint pair = probeCells[gc.y * k + gc.x];
+    int best = -1;
+    for (int j = indoor ? 2 : 0; j &lt; (indoor ? 3 : 2) &amp;&amp; best &lt; 0; ++j) {
+        int i = int((pair &gt;&gt; (8 * j)) &amp; 0xFFu) - 1;
+        if (i &lt; 0) break;
+        if (probeData[i * 3].w &lt; 0.5) continue;
+        vec3 lo = probeData[i * 3 + 1].xyz, hi = probeData[i * 3 + 2].xyz;
+        if (all(greaterThanEqual(P, lo)) &amp;&amp; all(lessThanEqual(P, hi))) best = i;
+    }
+    if (best &lt; 0) return fallback;
+    vec4 pos = probeData[best * 3];
+    vec3 lo = probeData[best * 3 + 1].xyz, hi = probeData[best * 3 + 2].xyz;
+    vec3 r = normalize(R);
+    vec3 t1 = (hi - P) / r, t2 = (lo - P) / r;
+    vec3 tf = max(t1, t2);
+    float t = min(min(tf.x, tf.y), tf.z);
+    vec3 d = P + r * t - pos.xyz;
+    vec3 c = textureLod(probeRadiance, vec4(d, float(best)), roughness * 4.0).rgb;
+    vec3 edge = min(P - lo, hi - P);
+    float w = clamp(min(min(edge.x, edge.z), edge.y + 100.0) / 4.0, 0.0, 1.0);   <span class="c">// (4 m from a wall; not the floor)</span>
+    return mix(fallback, c, w);
+}</pre>
+  </div>
+  <p>The box projection is the four lines from <code>t1</code> to <code>d</code>. From the pixel <code>P</code>, the
+    reflected ray is followed to the point where it leaves the box (the nearest of the three far-wall hits), and the cube
+    is read in the direction from the <i>probe</i> to that exit point, not along <code>R</code>. A reflection of the
+    building across the street then lines up with the building, wherever on the glass you look. The blend weight is the
+    distance to the nearest side wall over 4 m; the floor and ceiling are left out (<code>edge.y + 100</code>), so a pixel
+    at street level is not faded just for being near the box's floor.</p>
+  <p>Which box holds a pixel is the expensive question. Stage D's first version tested every box, and ADR-0374 measured
+    it: 7.6 ms on river_town's scene pass (6.8 → 14.4 ms). The fix is a <b>plan grid</b>: 64 × 64 cells over the probes'
+    boxes, each cell naming the two street probes nearest its middle whose boxes reach it, built on the CPU only when the
+    probes change. A pixel reads its cell and tests at most two boxes. The scene pass with the grid: 7.3 ms, 0.5 ms
+    over no probes.</p>
+<div class="code">
+    <div class="hd"><span>probe_grid.h: two street probes and an indoor one per cell, one 32-bit word</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/probe_grid.h#L17-L26">src/renderer/probe_grid.h</a></div>
+<pre>struct ProbeGrid {
+    static constexpr int kSize = 64;
+    float originX = 0, originZ = 0;   <span class="c">// the grid's min corner</span>
+    float cell = 1;                   <span class="c">// m a side</span>
+    <span class="c">// per cell: (nearest street probe + 1) | (second street probe + 1) &lt;&lt; 8 | (nearest indoor probe + 1) &lt;&lt; 16; 0 none</span>
+    std::vector&lt;uint32_t&gt; cells = std::vector&lt;uint32_t&gt;(kSize * kSize, 0u);
+};
+
+<span class="c">// `probes`' boxes into the grid (an inside-out box, an empty slot, is left out)</span>
+void buildProbeGrid(const std::vector&lt;ReflectionProbe&gt;&amp; probes, ProbeGrid&amp; out);</pre>
+  </div>
+
+  <figure class="shot">
+    <img src="img/reflections/probe-first-light.webp" alt="Four views of a glass tower at a street corner. Top: noon. Bottom: golden hour. Left column: the panes are a flat blue-grey. Right column: the panes show the building across the street, rows of windows and all">
+    <figcaption>Probe first light (2026-11-07, ADR-0373, with <code>RT_PROBE_TEST=1</code> putting a probe at a street
+      corner). Left: the sky cube alone, flat blue-grey. Right: the probe, the building across the street in the panes,
+      at noon (top) and golden hour (bottom), with no recapture between them.</figcaption>
+  </figure>
+  <figure class="shot">
+    <img src="img/reflections/street-probes-day-night.webp" alt="Four views of the same glass tower: two at night with lit windows, two at noon. In each pair the right view shows the street's reflection in the panes">
+    <figcaption>The same corner from the street probes of stage B, night (top) and noon (bottom), probes off (left)
+      and on (right): ADR-0374's "day and night".</figcaption>
+  </figure>
+
+  <h3>A storey's own probes</h3>
+  <p>Indoors, the street's probes are wrong: they show the street through the walls. ADR-0377 first kept them out with
+    <code>RenderMaterial::FLAG_INDOOR</code> (bit 28), set at load on drywall, interior floor finishes and furniture. An
+    indoor surface read neither the street's probes nor the open sky, only a dim neutral share of the day's light (30%
+    after ADR-0378). That stopped the glow of the street on office walls but left floors with nothing to reflect.</p>
+  <p>Glenn's point was that storing cubemaps for every interior would be "crazy expensive", and "probes just need to
+    exist for that floor when you're on it". ADR-0380 does exactly that. When the camera stands in a building,
+    ProbeSystem finds its storey with the interior system's own <code>storeyPlans</code> and <code>storeyOf</code>, and lays
+    a grid over the footprint's oriented box: one probe every 8 m, 1.6 m over the floor, each box its cell from floor to
+    ceiling. These sites follow the street's in the same list, so the street probes keep their slots, and changing floor
+    or building clears only the indoor ones. Nothing is stored; a floor is captured as you arrive, two faces a frame.</p>
+  <ul>
+    <li>The two kinds are kept apart by <code>ReflectionProbe::indoor</code>. The plan grid's third byte names the nearest
+      indoor probe; an indoor surface reads only that, a street surface only the first two.</li>
+    <li>The capture writes an indoor texel's distance negative, and the relight lights it as a room: no open sky, the
+      indoor daylight share instead.</li>
+    <li>With a real reflection in them, indoor finishes took the outdoor bakes' relief at a twelfth (it had been a fifth
+      since ADR-0377): at a fifth the floors still glittered with the probe's ceiling panels.</li>
+  </ul>
+
+  <h2>Ray-traced reflections</h2>
+  <h3>Measured first, and Vulkan 1.2</h3>
+  <p>Glenn asked about real ray tracing for the buildings near you, "and not blow up my gpu". The renderer asked Vulkan
+    for version 1.0, which has no ray tracing. Before changing that, ADR-0375 built a measuring tool,
+    <code>rt_measure</code>. <code>RT_RT_MEASURE=&lt;frame&gt;</code> collects every instance drawn within 300 m of the
+    camera over <code>RT_RT_WINDOW</code> frames (600; you turn the camera round meanwhile), then asks the driver what
+    acceleration structures would cost (<code>vkGetAccelerationStructureBuildSizesKHR</code>, from counts alone, nothing
+    allocated). The question goes to a short-lived Vulkan 1.2 device on the same GPU, so the renderer's own device is
+    not touched.</p>
+  <table>
+    <tr><th>ADR-0375 (uncompacted; terrain and GPU crowd not counted)</th><th>river_town</th><th>island_8_nature, financial district</th></tr>
+    <tr><td>bottom levels for every mesh on the GPU</td><td>1.26 GB</td><td>3.4 GB</td></tr>
+    <tr><td>bottom levels within 150 m</td><td>35 MB</td><td>147 MB</td></tr>
+    <tr><td>top level (300 m)</td><td>2 MB</td><td>6.5 MB</td></tr>
+    <tr><td>device memory free</td><td>5.2 GB</td><td>1.2 GB</td></tr>
+  </table>
+  <p>Everything cannot fit on the island; what is near you can, at about a tenth of what is free. That set the shape of
+    everything after: rays only from smooth surfaces near you, hitting only near buildings, street and cars (not
+    foliage, small props or the crowd), under a hard cap that drops the farthest meshes first. The same commit moved the
+    renderer to Vulkan 1.2: the instance asks for 1.2 when the loader has it, capped by the device's own version (the
+    3080 reports 1.4.341), and VMA, the memory allocator, is told. <code>RT_VK_1_0=1</code> keeps 1.0. It was
+    validation-clean on river_town with the same frames as 1.0.</p>
+
+  <h3>Ray queries on the device</h3>
+  <p>ADR-0376 step 3a turned on what rays need, all or nothing: the extensions
+    <code>VK_KHR_acceleration_structure</code>, <code>VK_KHR_ray_query</code>,
+    <code>VK_KHR_deferred_host_operations</code> and <code>VK_KHR_spirv_1_4</code>, and the features
+    <code>bufferDeviceAddress</code>, <code>accelerationStructure</code> and <code>rayQuery</code> through a
+    <code>VkPhysicalDeviceFeatures2</code> chain. The renderer uses <b>ray queries</b>, not a ray-tracing pipeline: a
+    compute shader asks "what does this ray hit?" inline, with no shader binding table. Mesh vertex and index buffers became
+    addressable (they are build inputs for the structures, and the hit shader reads them by address). The frame's cost
+    did not move (11.10 vs 11.21 ms). <code>RT_RT_REFLECT=0</code> leaves all of it off.</p>
+
+  <h3>The near scene: what a ray may hit</h3>
+  <p>RenderSystem picks the <b>near scene</b> on the CPU. It takes the instances of the <code>raytrace.hits</code> draw
+    classes within <code>near</code>, all the way round the camera (a reflection sees behind you), at the tier the
+    draw itself would pick from here, so a building's far model stays out. Transparent parts stay out too: "a ray goes
+    into the car, as an eye would". The static world is re-picked once the camera has moved 5 m, or every 60 frames;
+    what moves (<code>simBody</code>: the city's cars, ADR-0381) is picked every frame at this frame's pose. Both lists
+    merge nearest first:</p>
+<div class="code">
+    <div class="hd"><span>RenderSystem: what a ray may hit, and the merged list, nearest first</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/render_system.cpp#L477-L527">src/engine/systems/render_system.cpp</a></div>
+<pre>        auto takes = [&amp;](DrawClass c, const RenderMaterial&amp; m) {
+            return hits[static_cast&lt;int&gt;(c)] &amp;&amp; m.opacity &gt;= 0.999f &amp;&amp;
+                   !(m.flags &amp; (RenderMaterial::FLAG_SHADOW_ONLY | RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS));
+        };
+        <span class="c">// ...</span>
+        if (staticDue) {
+            rayEye_ = cam.position;
+            rayFrame_ = frameNo_;
+            pick(false, rayNear_);
+        }
+        const bool movers = hits[static_cast&lt;int&gt;(DrawClass::SimBody)];
+        if (movers) pick(true, rayMoving_);
+        if (staticDue || movers) {
+            rayAll_ = rayNear_;
+            if (movers) rayAll_.insert(rayAll_.end(), rayMoving_.begin(), rayMoving_.end());
+            std::sort(rayAll_.begin(), rayAll_.end(), [](const std::pair&lt;Real, Renderer::RayInstance&gt;&amp; x,
+                                                         const std::pair&lt;Real, Renderer::RayInstance&gt;&amp; y) { return x.first &lt; y.first; });
+            rayList_.clear();
+            for (const std::pair&lt;Real, Renderer::RayInstance&gt;&amp; p : rayAll_) rayList_.push_back(p.second);
+            const float rayRules[3] = {static_cast&lt;float&gt;(rules.near), static_cast&lt;float&gt;(rules.fade), static_cast&lt;float&gt;(rules.maxRoughness)};
+            ctx.renderer.setRayInstances(rayList_, static_cast&lt;float&gt;(rules.memoryShare), rayRules);
+        }</pre>
+  </div>
+  <p><code>setRayInstances</code> turns each into two things: an <code>RtScene::Instance</code> (the mesh's buffers and
+    counts, its 3 × 4 transform, and a custom index) for the acceleration structures, and a row the hit shader reads by
+    that index (albedo, roughness, emission, metallic, the vertex and index buffers' device addresses, the vertex stride
+    and the material flags).</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 400" role="img" aria-label="Structure of the ray scene. RenderSystem's RayInstance list (mesh, transform, material) goes to VulkanRenderer setRayInstances, which makes RtScene Instances and RtInstGpu rows. RtScene holds a map from mesh key to bottom-level structures, a retired list, one shared scratch buffer, one top level and two instance buffers. Each frame record builds the missing bottom levels nearest first under the budget and 600k triangles, then rebuilds the top level over the ready instances. rt_reflect reads the top level at binding 3 and the rows at binding 4">
+      <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="14" y="20" width="200" height="86" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="114" y="44" fill="#cfe4ff">RenderSystem pick</text>
+        <text x="114" y="64" fill="#93a6ba" font-size="12">RayInstance: mesh,</text>
+        <text x="114" y="81" fill="#93a6ba" font-size="12">transform, material</text>
+        <text x="114" y="98" fill="#93a6ba" font-size="12">nearest first</text>
+        <rect x="254" y="20" width="200" height="86" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="354" y="44" fill="#cfe4ff">setRayInstances</text>
+        <text x="354" y="64" fill="#93a6ba" font-size="12">first call: the budget</text>
+        <text x="354" y="81" fill="#93a6ba" font-size="12">= 25% of free VRAM,</text>
+        <text x="354" y="98" fill="#93a6ba" font-size="12">at most 1.5 GB</text>
+        <rect x="494" y="20" width="190" height="86" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="589" y="44" fill="#cfe4ff">RtInstGpu rows</text>
+        <text x="589" y="64" fill="#93a6ba" font-size="12">albedo, rough, emission,</text>
+        <text x="589" y="81" fill="#93a6ba" font-size="12">metallic, buffer addresses,</text>
+        <text x="589" y="98" fill="#93a6ba" font-size="12">stride, flags</text>
+        <rect x="724" y="20" width="162" height="86" rx="9" fill="#0f151e" stroke="#2c3d50"/>
+        <text x="805" y="44" fill="#cfe4ff">rt_reflect.comp</text>
+        <text x="805" y="64" fill="#93a6ba" font-size="12">binding 3: the TLAS</text>
+        <text x="805" y="81" fill="#93a6ba" font-size="12">binding 4: the rows,</text>
+        <text x="805" y="98" fill="#93a6ba" font-size="12">by custom index</text>
+        <line x1="214" y1="63" x2="250" y2="63" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a4)"/>
+        <line x1="454" y1="63" x2="490" y2="63" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a4)"/>
+        <line x1="684" y1="63" x2="720" y2="63" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a4)"/>
+        <rect x="14" y="146" width="872" height="240" rx="10" fill="#0f151e" stroke="#3b82f6"/>
+        <text x="40" y="170" fill="#cfe4ff" text-anchor="start">RtScene (rt_scene.h), recorded into the frame before the scene pass</text>
+        <line x1="354" y1="106" x2="354" y2="142" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a4)"/>
+        <text x="420" y="132" fill="#93a6ba" font-size="12">Instance list</text>
+        <rect x="34" y="186" width="260" height="84" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="164" y="208" fill="#cfe4ff">blas_: mesh key → Blas</text>
+        <text x="164" y="228" fill="#93a6ba" font-size="12">structure, buffer, bytes, lastUsed</text>
+        <text x="164" y="246" fill="#93a6ba" font-size="12">unused 300 frames: retired,</text>
+        <text x="164" y="263" fill="#93a6ba" font-size="12">freed when no frame can read it</text>
+        <rect x="320" y="186" width="260" height="84" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="450" y="208" fill="#cfe4ff">one shared scratch</text>
+        <text x="450" y="228" fill="#93a6ba" font-size="12">every build of a frame in one</text>
+        <text x="450" y="246" fill="#93a6ba" font-size="12">grow; each start aligned;</text>
+        <text x="450" y="263" fill="#93a6ba" font-size="12">kept for the next frames</text>
+        <rect x="606" y="186" width="260" height="84" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="736" y="208" fill="#cfe4ff">one top level (TLAS)</text>
+        <text x="736" y="228" fill="#93a6ba" font-size="12">rebuilt every frame over the</text>
+        <text x="736" y="246" fill="#93a6ba" font-size="12">ready instances; instance</text>
+        <text x="736" y="263" fill="#93a6ba" font-size="12">buffer per frame in flight</text>
+        <rect x="34" y="290" width="832" height="80" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="450" y="314" fill="#e6c07b">record(): 1. missing bottom levels, nearest first, while the budget and 600k triangles allow</text>
+        <text x="450" y="336" fill="#e6c07b">2. one vkCmdBuildAccelerationStructuresKHR for all of them  3. the TLAS over every ready instance</text>
+        <text x="450" y="358" fill="#93a6ba" font-size="12">a mesh past the budget is skipped, never allocated: the probes answer for it</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">What a ray can hit, and who holds it. A bottom level (BLAS) is per mesh, so a car model or a repeated
+    building part is built once however many instances there are; the top level (TLAS) places the instances.</p>
+
+  <h3>RtScene: bottom levels under a budget, one top level a frame</h3>
+  <p><code>RtScene</code> keeps one <b>bottom-level acceleration structure</b> (BLAS: a GPU tree over one mesh's
+    triangles) per mesh, keyed by its handle, and builds a <b>top level</b> (TLAS: a tree over the placed instances,
+    each pointing at its mesh's BLAS) every frame. The budget is fixed at the first call: a share of the device memory free
+    at that moment, never over 1.5 GB.</p>
+<div class="code">
+    <div class="hd"><span>setRayInstances: the budget, set once</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L8995-L8997">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre>        <span class="c">// a share of what is free, and never more than 1.5 GB whatever the card</span>
+        const VkDeviceSize budget = std::min&lt;VkDeviceSize&gt;(static_cast&lt;VkDeviceSize&gt;(static_cast&lt;double&gt;(freeBytes) *
+                                                                std::clamp(memoryShare, 0.0f, 0.5f)), VkDeviceSize(1536) &lt;&lt; 20);</pre>
+  </div>
+  <p>Each frame <code>record</code> walks the near list nearest first. A mesh that already has a BLAS is marked used and
+    ready. A missing one is sized by the driver, and is built only if the memory held, plus this structure, plus any scratch
+    it adds, stays inside the budget. Builds are also capped at 600 000 triangles a frame (one mesh always goes), so
+    arriving in a dense block spreads its builds over several frames rather than stalling one:</p>
+<div class="code">
+    <div class="hd"><span>RtScene::record: the budget test, the one scratch grow, and the frame's builds</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/rt_scene.cpp#L165-L245">src/renderer/vulkan/rt_scene.cpp</a></div>
+<pre>        VkAccelerationStructureBuildSizesInfoKHR si{};
+        si.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+        p.info.pGeometries = &amp;p.geo;
+        sizes_(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &amp;p.info, &amp;tris, &amp;si);
+        <span class="c">// (and its start's alignment slack: the frame's builds share one scratch, each start aligned)</span>
+        const VkDeviceSize scratch = alignUp(si.buildScratchSize, scratchAlign_) + scratchAlign_;
+        const VkDeviceSize growScratch = std::max&lt;VkDeviceSize&gt;(scratchNeed + scratch, scratchSize_) - scratchSize_;
+        <span class="c">// THE BUDGET: what is held, plus this one, plus any scratch it adds -- never past it</span>
+        if (total() + si.accelerationStructureSize + growScratch &gt; budget_) { ++stats_.skipped; continue; }
+    <span class="c">// ...</span>
+    <span class="c">// the scratch, grown to the frame's builds (kept: the next frames reuse it)</span>
+    auto growScratch = [&amp;](VkDeviceSize need) {
+        if (need &lt;= scratchSize_) return true;
+        if (scratch_) retiredTlas_.push_back(Retired{Blas{VK_NULL_HANDLE, scratch_, scratchAlloc_, 0, 0, 0}, counter});
+        scratch_ = VK_NULL_HANDLE;
+        scratchSize_ = 0;
+        if (!buffer(need, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, scratch_, scratchAlloc_, nullptr)) return false;
+        scratchSize_ = need;
+        return true;
+    };
+    <span class="c">// (scratchNeed has each build's alignment slack: one grow is enough for the lot -- a second, whose failure would</span>
+    <span class="c">// leave this frame's structures unbuilt yet counted ready, cannot be needed)</span>
+    if (!pending.empty() &amp;&amp; !growScratch(scratchNeed)) {
+    <span class="c">// ...</span>
+    if (!pending.empty()) {
+        VkDeviceAddress base = addressOf(scratch_);
+        VkDeviceSize off = 0;
+        std::vector&lt;VkAccelerationStructureBuildGeometryInfoKHR&gt; infos;
+        std::vector&lt;const VkAccelerationStructureBuildRangeInfoKHR*&gt; ranges;
+        for (Pending&amp; p : pending) {
+            p.info.pGeometries = &amp;p.geo;
+            p.info.scratchData.deviceAddress = alignUp(base + off, scratchAlign_);
+            off += p.scratchBytes;
+            infos.push_back(p.info);
+            ranges.push_back(&amp;p.range);
+        }
+        build_(cmd, static_cast&lt;uint32_t&gt;(infos.size()), infos.data(), ranges.data());</pre>
+  </div>
+  <p>The scratch is the temporary memory a build works in. All of a frame's builds share one buffer, each starting at
+    an aligned offset. The <code>+ scratchAlign_</code> on line 170 is the slack for that alignment, counted per build
+    before anything is allocated, so a single grow always fits the lot. That line changed in the last commit before the
+    merge (<code>12695b94</code>, the review fixes). Before it, the slack was found only after the grow: the code
+    could need a second grow, and if that one failed, this frame's structures stayed unbuilt yet counted ready.</p>
+  <p>Then the top level, over every instance whose BLAS is ready. Each instance carries its row index in
+    <code>instanceCustomIndex</code>, and back-face culling is off, so a ray sees the inside of a wall as well as the
+    outside:</p>
+<div class="code">
+    <div class="hd"><span>RtScene::record: the top level's instances</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/rt_scene.cpp#L251-L266">src/renderer/vulkan/rt_scene.cpp</a></div>
+<pre>    <span class="c">// 2. THE TOP LEVEL over every ready instance</span>
+    std::vector&lt;VkAccelerationStructureInstanceKHR&gt; inst;
+    inst.reserve(nearestFirst.size());
+    for (std::size_t i = 0; i &lt; nearestFirst.size(); ++i) {
+        if (!ready[i]) { ++stats_.skipped; continue; }
+        const Instance&amp; in = nearestFirst[i];
+        auto it = blas_.find(in.key);
+        if (it == blas_.end()) continue;
+        VkAccelerationStructureInstanceKHR v{};
+        std::memcpy(&amp;v.transform, in.transform, sizeof(v.transform));
+        v.instanceCustomIndex = in.custom &amp; 0xFFFFFFu;
+        v.mask = 0xFF;
+        v.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        v.accelerationStructureReference = it-&gt;second.address;
+        inst.push_back(v);
+    }</pre>
+  </div>
+  <p>The TLAS buffer grows with 50% headroom, and a structure retired (a grown TLAS, an idle BLAS, an old scratch)
+    goes to a list and is destroyed only when no frame in flight can still read it. On river_town ADR-0376 measured about 600
+    instances, 115–155 MB of bottom levels and 12 MB of scratch, of a 1.37 GB budget, for +0.14 ms of GPU and +0.09 ms of
+    recording. That is three to four times ADR-0375's 35 MB, because the measurement counted only what was drawn, and
+    buildings hidden from the camera are never drawn, though a reflection sees them.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 230" role="img" aria-label="Budget bars to scale. river_town: a 1.37 GB budget of which about 115 to 155 MB of bottom levels and 12 MB of scratch are used. Island financial district: 147 MB measured within 150 m (drawn instances only) against a budget of 25 percent of 1.2 GB free, about 300 MB">
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <text x="20" y="34" fill="#cfe4ff" font-size="13">river_town (ADR-0376): budget 1.37 GB, 25% of what was free</text>
+        <rect x="20" y="46" width="700" height="34" rx="4" fill="#131a24" stroke="#2c3d50"/>
+        <rect x="20" y="46" width="79" height="34" rx="4" fill="#3b82f6"/>
+        <rect x="99" y="46" width="6" height="34" fill="#e6c07b"/>
+        <text x="114" y="68" fill="#93a6ba">bottom levels 115–155 MB + scratch 12 MB</text>
+        <text x="720" y="100" fill="#64768a" text-anchor="end">1.37 GB</text>
+        <text x="20" y="140" fill="#cfe4ff" font-size="13">island_8_nature, financial district (ADR-0375): 25% of 1.2 GB free ≈ 300 MB</text>
+        <rect x="20" y="152" width="153" height="34" rx="4" fill="#131a24" stroke="#2c3d50"/>
+        <rect x="20" y="152" width="75" height="34" rx="4" fill="#3b82f6" fill-opacity="0.6"/>
+        <text x="186" y="174" fill="#93a6ba">147 MB measured within 150 m, drawn instances only;</text>
+        <text x="186" y="208" fill="#93a6ba">ADR-0376: "the budget … will bind near the towers, dropping the farthest buildings"</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The budgets drawn to one scale (the full bar is 1.37 GB). On river_town the near scene uses about an eighth of its budget; on the
+    island the budget is small enough that the nearest-first order decides what is left out.</p>
+
+  <h3>The rays</h3>
+  <p><code>rt_reflect.comp</code> runs after the screen-space pass, at its half resolution. Every pixel smoother than 0.3
+    and within 150 m traces its mirror ray against the near scene, out to twice <code>near</code>:</p>
+<div class="code">
+    <div class="hd"><span>rt_reflect.comp: who traces, the query, and the hit's triangle read by address</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/rt_reflect.comp#L76-L104">shaders/vulkan/rt_reflect.comp</a></div>
+<pre>    float depth = textureLod(depthTex, uv, 0.0).r;
+    if (depth &lt;= 0.0) return;                              <span class="c">// the sky</span>
+    vec4 nr = textureLod(normalTex, uv, 0.0);
+    float roughness = gbufRoughness(nr);
+    if (roughness &gt; pc.rules.z) return;                    <span class="c">// rough: the screen-space and probe reflections stand</span>
+    vec3 P = reconstructWorld(uv, depth);
+    float camDist = distance(P, g.cameraPosition.xyz);
+    if (camDist &gt; pc.rules.x) return;                      <span class="c">// far: faked</span>
+    vec3 N = gbufNormal(nr);
+    vec3 V = normalize(P - g.cameraPosition.xyz);
+    vec3 R = reflect(V, N);
+
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, nearScene, gl_RayFlagsOpaqueEXT, 0xFF, P + N * 0.03, 0.02, R, pc.rules.x * 2.0);
+    while (rayQueryProceedEXT(q)) {}
+    vec3 col;
+    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
+        int id = rayQueryGetIntersectionInstanceCustomIndexEXT(q, true);
+        int prim = rayQueryGetIntersectionPrimitiveIndexEXT(q, true);
+        vec2 bc = rayQueryGetIntersectionBarycentricsEXT(q, true);
+        mat4x3 o2w = rayQueryGetIntersectionObjectToWorldEXT(q, true);
+        RtInst I = inst[id];
+        Words ib = Words(I.indices);
+        Words vb = Words(I.vertices);
+        uint i0 = ib.w[prim * 3], i1 = ib.w[prim * 3 + 1], i2 = ib.w[prim * 3 + 2];
+        vec3 p0 = vertexPos(vb, I.strideWords, i0), p1 = vertexPos(vb, I.strideWords, i1), p2 = vertexPos(vb, I.strideWords, i2);
+        vec3 w0 = o2w * vec4(p0, 1.0), w1 = o2w * vec4(p1, 1.0), w2 = o2w * vec4(p2, 1.0);
+        vec3 H = w0 * (1.0 - bc.x - bc.y) + w1 * bc.x + w2 * bc.y;
+        vec3 Nh = normalize(cross(w1 - w0, w2 - w0));</pre>
+  </div>
+  <p>The hit is shaded from its own triangle: the three indices and positions are read through the buffer addresses in
+    the instance's row (<code>GL_EXT_buffer_reference</code>), the position and the <b>geometric</b> normal (the flat face
+    normal, no smoothing) are rebuilt in world space, and the vertex colour is interpolated by the barycentrics. There
+    are no textures at a hit, only vertex colour and material (ADR-0376 lists textures as owed). The frame's lights
+    light it through the same <code>shadeLight</code> the scene pass uses; the sun's shadow is a second ray through the
+    near scene, times the cloud shadow; the sky's light comes from the harmonics:</p>
+<div class="code">
+    <div class="hd"><span>rt_reflect.comp: the hit lit, the miss faked, and the share written</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/rt_reflect.comp#L109-L143">shaders/vulkan/rt_reflect.comp</a></div>
+<pre>        <span class="c">// (in the physical sky's units, as the scene pass draws a glow: without the glows' scale, 0.004, every lit</span>
+        <span class="c">// window in a reflection was ~250x the window itself -- Glenn, 2026-11-08: "the nighttime reflections of other</span>
+        <span class="c">// buildings still seems really bright")</span>
+        vec3 emission = I.emissionMetal.rgb * ((I.flags &amp; 32u) != 0u ? tint : vec3(1.0)) *
+                        (skyIsPhysical() ? g.skyPhysical3.z : 1.0);
+        <span class="c">// the frame's lights as the scene pass lights a surface (shadeLight), the sun's shadow by a ray through the near</span>
+        <span class="c">// scene; the sky's light by the harmonics</span>
+        float metallic = clamp(I.emissionMetal.a, 0.0, 1.0);
+        float rough = clamp(I.albedoRough.a, 0.04, 1.0);
+        float a = max(rough * rough, 0.002);
+        vec3 Vh = -R;
+        float NdotV = max(dot(Nh, Vh), 1e-4);
+        vec3 f0 = mix(vec3(0.04), albedo, metallic);
+        vec3 sunShadow = vec3(1.0);
+        if (g.counts.x &gt; 0 &amp;&amp; int(g.lights[0].typeRange.x) == 1 &amp;&amp; dot(Nh, g.lights[0].directionInner.xyz) &gt; 0.0)
+            sunShadow = vec3(sunVisible(H, Nh, normalize(g.lights[0].directionInner.xyz)) *
+                             cloudShadow(H, normalize(g.lights[0].directionInner.xyz)));   <span class="c">// (ADR-0387)</span>
+        vec3 direct = vec3(0.0);
+        for (int i = 0; i &lt; min(g.counts.x, 32); ++i)
+            direct += shadeLight(g.lights[i], H, Nh, Vh, albedo, metallic, f0, a * a, NdotV, sunShadow);
+        vec3 sky = skyIsPhysical() ? skyIrradianceSH(Nh) : g.skyHorizon.rgb * 0.5;
+        col = direct + albedo * (1.0 - metallic) * sky * g.ambient.rgb + emission;
+        <span class="c">// the air between (the hit is near: a little haze at most)</span>
+        col *= exp(-0.00002 * rayQueryGetIntersectionTEXT(q, true));
+    } else {
+        <span class="c">// past the near scene: the probe's (faked) reflection, and the sky past that</span>
+        vec3 fallback = skyIsPhysical() ? textureLod(skyCubeTex, R, roughness * 5.0).rgb : g.skyHorizon.rgb;
+        col = probeReflection(P, R, roughness, fallback, false);   <span class="c">// (the G-buffer has no indoor bit yet: the street's)</span>
+    }
+    <span class="c">// the share of the probe's reflection the scene pass took out here (mesh.frag's rule, exactly), times the</span>
+    <span class="c">// surface's own reflection weight</span>
+    float roughFade = 1.0 - smoothstep(0.0, pc.rules.z, roughness);
+    float nearFade = 1.0 - smoothstep(pc.rules.x - pc.rules.y, pc.rules.x, camDist);
+    float k = nearFade * roughFade;
+    imageStore(rtRaw, px, vec4(col * gbufSpecular(nr) * k * g.cameraPosition.w, k));   <span class="c">// pre-exposed (ADR-0366)</span></pre>
+  </div>
+  <p>A miss falls back to the probe, and past the probe the sky cube: "past the near scene it is faked". The
+    comment on that call is ADR-0380's open point: the G-buffer has no indoor bit, so a ray that misses from an indoor
+    floor reads the <i>street's</i> probe, not the storey's.</p>
+
+  <h3>No ghost, and as bright as the glass</h3>
+  <p>The first version of the rays drew their reflection on top of the probe's, and the blurry probe image showed
+    under the sharp one. The fix was to make the scene pass and the ray pass agree on one number, the share
+    <code>k</code> each pixel hands from the probe to the rays: a near fade over the last 25 m of 150 m, times a
+    roughness fade from 0 to 0.3. The ray rules reach <code>mesh.frag</code> in the probe buffer's spare header
+    (<code>probeGridSize.yzw</code>), and they are zero whenever the rays will not run this frame:</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag: the probe's share fades out exactly where the rays fade in</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1521-L1527">shaders/vulkan/mesh.frag</a></div>
+<pre>        <span class="c">// ...but near the camera the rays answer (ADR-0376, rt_reflect.comp): the probe's part fades out exactly as</span>
+        <span class="c">// theirs fades in, so the blurry reflection does not ghost under the sharp one</span>
+        if (probeGridSize.w &gt; 0.0 &amp;&amp; roughness &lt;= probeGridSize.w) {
+            float camDist = distance(inWorldPos, g.cameraPosition.xyz);
+            float nearFade = 1.0 - smoothstep(probeGridSize.y - probeGridSize.z, probeGridSize.y, camDist);
+            prefiltered *= 1.0 - nearFade * (1.0 - smoothstep(0.0, probeGridSize.w, roughness));
+        }</pre>
+  </div>
+  <p>The second problem was brightness. The rays first used SSR's confidence rule
+    (<code>mix(0.2, 1, fresnel)</code>), which read darker head-on than the probe's split-sum reflectance. ADR-0376's
+    later commit (<code>40c75c85</code>) made the G-buffer carry the exact weight the scene pass multiplied its
+    reflection by, so the rays put back exactly what the probe gave:</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag: the reflection weight, for the G-buffer</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1538-L1540">shaders/vulkan/mesh.frag</a></div>
+<pre>    vec3 envSpecular = prefiltered * (f0 * brdf.x + brdf.y);
+    <span class="c">// ...that weight, for the G-buffer: the reflection rays replace exactly this much of the probe's (ADR-0376)</span>
+    float specWeight = dot((f0 * brdf.x + brdf.y) * ambientShadow, vec3(0.2126, 0.7152, 0.0722));</pre>
+  </div>
+<div class="code">
+    <div class="hd"><span>gbuffer.glsl: one encoding for the scene pass's second target</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/gbuffer.glsl#L1-L15">shaders/vulkan/gbuffer.glsl</a></div>
+<pre><span class="c">// THE SCENE PASS'S SECOND TARGET (RGBA8; ADR-0376): rg the world normal, octahedral; b the roughness (what SSR and the</span>
+<span class="c">// reflection rays gate on); a the specular weight -- what the surface multiplies its environment reflection by (the</span>
+<span class="c">// split-sum F0 * scale + bias, its luminance, times the ambient shadow), so the rays replace exactly the reflection</span>
+<span class="c">// the probes gave. One encoding, every writer and reader (mesh.frag, mesh_wire.frag, ssao, ssr, the composite, the</span>
+<span class="c">// rays).</span>
+<span class="c">// ...</span>
+vec4 gbufEncode(vec3 n, float roughness, float specWeight) {
+    return vec4(gbufOct(normalize(n)), roughness, clamp(specWeight, 0.0, 1.0));
+}</pre>
+  </div>
+  <p>The G-buffer is RGBA8, so the normal is packed <b>octahedral</b> (the unit sphere folded flat into a square, two
+    channels instead of three), which freed the alpha for the weight. <code>rt_reflect</code> writes
+    <code>k × weight × ray</code>, pre-exposed (ADR-0366), into its raw image.</p>
+
+  <h3>Denoise and apply</h3>
+  <p>One ray per half-resolution pixel catches a bright lit window's edge in one pixel and misses it in the next. At
+    night that is a field of sparkles on every tower, a truck's windshield and the office floors. <code>rt_denoise.comp</code>
+    filters it with a 5 × 5 neighbourhood, weighted by distance, by how alike the surfaces are (normal and depth), and down
+    by brightness:</p>
+<div class="code">
+    <div class="hd"><span>rt_denoise.comp: a 5 × 5 joint filter, a lone bright sample counting little, and SSR muted</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/rt_denoise.comp#L35-L60">shaders/vulkan/rt_denoise.comp</a></div>
+<pre>    vec3 sum = vec3(0.0);
+    float wsum = 0.0;
+    for (int y = -2; y &lt;= 2; ++y)
+        for (int x = -2; x &lt;= 2; ++x) {
+            ivec2 q = px + ivec2(x, y);
+            if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
+            vec4 s = imageLoad(rtRaw, q);
+            if (s.a &lt;= 0.0) continue;
+            vec2 quv = (vec2(q) + 0.5) / vec2(size);
+            float dq = textureLod(depthTex, quv, 0.0).r;
+            if (dq &lt;= 0.0) continue;
+            vec3 nS = gbufNormal(textureLod(normalTex, quv, 0.0));
+            float dS = distance(reconstructWorld(quv, dq), g.cameraPosition.xyz);
+            float w = exp(-float(x * x + y * y) / 4.5);                          <span class="c">// distance</span>
+            w *= pow(max(dot(nC, nS), 0.0), 16.0);                                <span class="c">// the same surface's facing</span>
+            w *= exp(-abs(dS - dC) / max(0.03 * dC, 0.05));                       <span class="c">// ...and its depth</span>
+            vec3 rad = s.rgb / max(s.a, 1e-3);                                    <span class="c">// (its radiance, before its share)</span>
+            w /= 1.0 + dot(rad, vec3(0.2126, 0.7152, 0.0722));                    <span class="c">// a lone bright sample counts little</span>
+            sum += w * rad;
+            wsum += w;
+        }
+    vec3 rad = wsum &gt; 0.0 ? sum / wsum : c.rgb / max(c.a, 1e-3);
+    imageStore(rtOut, px, vec4(rad * c.a, c.a));
+    vec4 ssr = imageLoad(ssrTarget, px);
+    imageStore(ssrTarget, px, vec4(ssr.rgb, ssr.a * (1.0 - c.a)));
+}</pre>
+  </div>
+  <p>The <code>1 / (1 + luminance)</code> weight is a Karis average: a single very bright sample counts for little, so
+    it cannot flash. The last two lines mute SSR by the same share, so nothing is reflected twice. Then
+    <code>rt_apply.comp</code> upsamples the result to full resolution from the four texels round each pixel, weighted by
+    how near their depth is to the pixel's own ("so a mullion's edge does not pick up the pane's reflection beside it"),
+    and adds it straight into the HDR target. Bloom has already run by then, so the rays' reflections are not in the
+    bloom.</p>
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/reflections/rays-vs-probe-zoom.webp" alt="Close-up of tower glass. Left: a blurry olive-toned reflection of a building with smeared dark streaks. Right: a sharp grey reflection of the same building's windows">
+      <figcaption>Close up, 2026-11-07: the probe alone (left) and the rays with the probe faded out where they
+        answer (right).</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/reflections/rays-night-sparkle.webp" alt="Night towers seen from below. Left: lit windows, dark glass. Right: the same, with many small bright speckles of reflected windows across the facades">
+      <figcaption>Night, 2026-11-07, before the denoise and the glows' scale: probes (left), raw rays (right). The
+        speckle is the sparkle ADR-0376's filter was written for.</figcaption>
+    </figure>
+  </div>
+
+  <h3>Fallbacks</h3>
+  <p>Glenn: "make sure we have fallbacks ... use the cubemaps". The rays depend on a lot: the GPU, the API version, a
+    switch, a non-empty scene, SSR (the rays write into its target) and a pipeline that built. One function answers for
+    the frame, and both sides read it: the probe-buffer upload (whether <code>mesh.frag</code> fades the probe out) and the
+    ray pass itself.</p>
+<div class="code">
+    <div class="hd"><span>raysThisFrame: the one answer to "do the rays run this frame?"</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L9131-L9147">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre><span class="c">// THE ONE ANSWER to "do the rays run this frame" (ADR-0376), read by both sides: the scene pass drops the probe's</span>
+<span class="c">// reflection only where the rays will put theirs. Off -- and the probes and sky cube stand, as before -- when the GPU</span>
+<span class="c">// has no ray queries (or Vulkan 1.0: RT_VK_1_0), RT_RT_REFLECT=0, the near scene is empty, the screen-space target is</span>
+<span class="c">// off in the composite (the rays write into it), or the ray pipeline could not be built.</span>
+bool VulkanRenderer::Impl::raysThisFrame() {
+    static const bool off = [] { const char* v = std::getenv("RT_RT_REFLECT"); return v &amp;&amp; std::strcmp(v, "0") == 0; }();
+    <span class="c">// (the physical sky's branch of mesh.frag is the one that takes the probe's reflection out where the rays put</span>
+    <span class="c">// theirs: under the old sky the rays would reflect twice)</span>
+    if (off || !rayQuery || !ssrEnabledFrame || !ssrImage || !rtRawImage || cpuGlobals.counts[2] != 2 || !rt.hasTopLevel() ||
+        rtRows.empty())
+        return false;
+    if (ensureRtReflectPipeline()) return true;
+    static bool warned = false;
+    if (!warned) LOG_WARN &lt;&lt; "[rt] the reflection rays' pipeline could not be built (rt_reflect.comp.spv): the probes and sky cube reflect instead";
+    warned = true;
+    return false;
+}</pre>
+  </div>
+  <p>When it says no, the probes and the sky cube reflect as before, untouched. ADR-0376 records the checks: no ray
+    queries, <code>RT_VK_1_0=1</code>, <code>RT_RT_REFLECT=0</code>, an empty near scene, and the shader file hidden,
+    each matching the probe-only picture to the pixel and validation-clean. SSR off was checked in code only. The
+    physical-sky test (<code>counts[2] != 2</code>) came later: it is the only branch of <code>mesh.frag</code> that takes
+    the probe out, so under the old sky the rays would reflect twice. On the way, the Vulkan 1.0 run turned up a separate
+    bug: the material descriptor pools allocated from a full pool and caught the failure, which is legal from 1.1 only; the
+    pool chain now counts its sets per link.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 270" role="img" aria-label="The frame in order with the reflection passes highlighted: shadow cascades, probe captures, probe relight and prefilter, ray scene builds, scene pass, clouds, bloom, SSAO, SSR, rt_reflect, rt_denoise, rt_apply, composite">
+      <defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+        <rect x="14" y="24" width="150" height="70" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="89" y="52" fill="#cfe4ff" font-size="13">sky cube, shadows</text>
+        <text x="89" y="72" fill="#93a6ba">(sky page, frame page)</text>
+        <rect x="190" y="24" width="150" height="70" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="265" y="52" fill="#cfe4ff" font-size="13">probe captures</text>
+        <text x="265" y="72" fill="#93a6ba">≤ 2 faces, 64²</text>
+        <rect x="366" y="24" width="160" height="70" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="446" y="52" fill="#cfe4ff" font-size="13">relight + prefilter</text>
+        <text x="446" y="72" fill="#93a6ba">≤ 4 probes</text>
+        <rect x="552" y="24" width="150" height="70" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="627" y="52" fill="#cfe4ff" font-size="13">ray scene</text>
+        <text x="627" y="72" fill="#93a6ba">BLAS builds, TLAS</text>
+        <rect x="728" y="24" width="158" height="70" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="807" y="46" fill="#cfe4ff" font-size="13">scene pass</text>
+        <text x="807" y="64" fill="#93a6ba">probe × (1 − k);</text>
+        <text x="807" y="81" fill="#93a6ba">G-buffer weight</text>
+        <line x1="164" y1="59" x2="186" y2="59" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#a5)"/>
+        <line x1="340" y1="59" x2="362" y2="59" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#a5)"/>
+        <line x1="526" y1="59" x2="548" y2="59" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#a5)"/>
+        <line x1="702" y1="59" x2="724" y2="59" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#a5)"/>
+        <path d="M807,94 L807,120 L89,120 L89,150" fill="none" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#a5)"/>
+        <rect x="14" y="154" width="150" height="70" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="89" y="182" fill="#cfe4ff" font-size="13">clouds, bloom,</text>
+        <text x="89" y="200" fill="#cfe4ff" font-size="13">SSAO</text>
+        <rect x="190" y="154" width="120" height="70" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="250" y="182" fill="#cfe4ff" font-size="13">SSR</text>
+        <text x="250" y="202" fill="#93a6ba">half res</text>
+        <rect x="336" y="154" width="130" height="70" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="401" y="182" fill="#cfe4ff" font-size="13">rt_reflect</text>
+        <text x="401" y="202" fill="#93a6ba">half: k × w × ray</text>
+        <rect x="492" y="154" width="130" height="70" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="557" y="182" fill="#cfe4ff" font-size="13">rt_denoise</text>
+        <text x="557" y="202" fill="#93a6ba">half: 5 × 5, mutes SSR</text>
+        <rect x="648" y="154" width="120" height="70" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="708" y="182" fill="#cfe4ff" font-size="13">rt_apply</text>
+        <text x="708" y="202" fill="#93a6ba">full: + HDR</text>
+        <rect x="794" y="154" width="92" height="70" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="840" y="182" fill="#cfe4ff" font-size="13">composite</text>
+        <text x="840" y="202" fill="#93a6ba">+ SSR</text>
+        <line x1="164" y1="189" x2="186" y2="189" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#a5)"/>
+        <line x1="310" y1="189" x2="332" y2="189" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#a5)"/>
+        <line x1="466" y1="189" x2="488" y2="189" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#a5)"/>
+        <line x1="622" y1="189" x2="644" y2="189" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#a5)"/>
+        <line x1="768" y1="189" x2="790" y2="189" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#a5)"/>
+        <text x="450" y="252" fill="#93a6ba">blue: this page's passes. The three ray passes run only when raysThisFrame() says so.</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Where reflections sit in the frame (<code>recordCommandBuffer</code> at e55dfaaa). The probe and ray
+    work before the scene pass prepares what the scene pass reads; the three ray passes after SSR correct its
+    result.</p>
+
+  <h3>Roads stop mirroring</h3>
+  <p>Glenn's screenshot on 2026-11-08 showed buildings and palms smeared in sunlit asphalt: "It's got a reflection in
+    it right?" It was not a material fault. The environment lookup used the mirror direction for every surface, and a
+    0.93-rough road at a grazing view looked sideways along the street into the probe's buildings. A rough lobe gathers
+    most of its light from nearer the normal than the mirror direction, so <code>mesh.frag</code> now uses the
+    <b>dominant direction</b> (Lagarde and de Rousiers, "Moving Frostbite to PBR", 2014):</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag: the reflection bends toward the normal as roughness rises</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1489-L1495">shaders/vulkan/mesh.frag</a></div>
+<pre>    <span class="c">// THE DOMINANT DIRECTION of the reflection (Lagarde &amp; de Rousiers, "Moving Frostbite to PBR", 2014): a rough lobe's</span>
+    <span class="c">// light comes from nearer the normal than the mirror direction, so the lookup bends toward N as the roughness</span>
+    <span class="c">// rises. Without it a rough road at a grazing view read the buildings and palms beside it, a mirror's image</span>
+    <span class="c">// smeared (Glenn, 2026-11-08: "It's got a reflection in it right?"); now it reads the sky above. Glass (0.03)</span>
+    <span class="c">// keeps the mirror direction.</span>
+    float smoothness = 1.0 - roughness;
+    vec3 R = normalize(mix(N, reflect(-V, N), smoothness * (sqrt(smoothness) + roughness)));</pre>
+  </div>
+  <p>Rough ground now reads the sky above it; glass, at 0.03, keeps its mirror. <code>view 10</code> was added to show the
+    environment reflection alone, for chasing the next one. The same commit put roads into the near scene: road meshes had
+    no draw class (Unset: drawn forever, outside the static draw index, invisible to anything that picks by class), so a
+    ray from a tower's glass found no street below it. They are <code>Structure</code> now, and since no level limits that
+    class, they draw as far as before.</p>
+
+  <h3>Cars in the rays</h3>
+  <p>ADR-0376 left the moving bodies out. ADR-0381 added them: RenderSystem picks the <code>simBody</code> class every
+    frame at its pose this frame, while the static world keeps its 5 m / 60-frame pick. A car model's BLAS is built once,
+    and its instances join the TLAS each frame, so traffic costs a TLAS entry per car, not a rebuild. A car's glass
+    (opacity under 1) stays out, so a ray goes into the car. On the river_town bench the TLAS went from 583 to 759
+    instances, with the frame at 10.6 ms.</p>
+
+  <h2>Glass and materials, as reflections see them</h2>
+  <p>Once real things showed in the glass, several materials turned out to be tuned for a world that only reflected the
+    sky. Each fix is small, and each is set at load (no re-bake, no lots tag bump).</p>
+
+  <h3>Facade glass</h3>
+  <p>The towers' curtain-wall glass (<code>PartId::Glass</code> and <code>GlassLit</code>: metallic 0.9, roughness 0.08) is
+    opaque and mirror-like. In October Glenn chose a 3× reflectance for it from an A/B, when it reflected only the sky and
+    read dark. With probes and rays putting the street in it, ADR-0383 found the facades "a bit overpowering" and set
+    the default to 2:</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag: facade glass reflectance, RT_GLASS_REFLECT riding g.ambient.w</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1412-L1419">shaders/vulkan/mesh.frag</a></div>
+<pre>    <span class="c">// FACADE GLASS REFLECTS LIKE COATED CURTAIN-WALL GLASS (Glenn, 2026-10-16: the towers read dark and "a little</span>
+    <span class="c">// more matte rather than shiny"; he chose the 3x look from an A/B). The glass tints (curtainGlassColour,</span>
+    <span class="c">// glassGrey) are reflectances of 3-12% for the default pane; real office glass is 15-40%. Scaled here, not in</span>
+    <span class="c">// the baked tints, so it rolls back without regrowing a city: RT_GLASS_REFLECT rides g.ambient.w (default 2 since</span>
+    <span class="c">// the probes and rays put the sharp street in it, ADR-0383; 1 = the old glass). Only PartId::Glass/GlassLit are</span>
+    <span class="c">// metallic 0.9 at roughness 0.08 (shape_grammar materialFor); car, train, water and interior glass are not</span>
+    <span class="c">// metallic.</span>
+    if (metallic &gt; 0.85 &amp;&amp; roughness &lt; 0.1) f0 = clamp(f0 * g.ambient.w, 0.0, 0.9);</pre>
+  </div>
+
+  <h3>See-through glass: buses, lobbies, the window you stand behind</h3>
+  <p>Clear glass is drawn in the transparent pass as a <b>filter</b> (<code>RT_GLASS</code>, from October): it lets
+    through most of the light behind it, less what it reflects, and adds the reflection. How much it lets through is
+    its opacity, read as absorption. ADR-0383 tinted two kinds of it because "you can see straight through those
+    windows":</p>
+  <ul>
+    <li><code>glass_opacity</code> per vehicle kind, carried from the vehicle kit's profile through the fleet record
+      to <code>CarBodyRecipe::glassOpacity</code>. The bus takes 0.95 (about 62% through); cars keep 0.30 (about 88%).
+      ADR-0385 gave the drivable car the kind's value too.</li>
+    <li>Building clear glass (<code>PartId::GlassClear</code>: lobbies, storefronts, enterable buildings' panes) went
+      from 0.24 to 0.75, about 70% through.</li>
+  </ul>
+<div class="code">
+    <div class="hd"><span>shape_grammar.cpp materialFor: building clear glass</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/procgen/city/shape_grammar.cpp#L278-L287">src/engine/procgen/city/shape_grammar.cpp</a></div>
+<pre>        case PartId::GlassClear:
+            <span class="c">// Clear glass: a faint blue, a sharp fresnel, most of what is</span>
+            <span class="c">// behind it coming through (the transparent pass), both faces.</span>
+            <span class="c">// REFLECTIVE (Glenn, 2026-10-02): a little metal and a mirror-smooth face, so a pane catches the room</span>
+            <span class="c">// and the sky instead of vanishing -- still mostly see-through.</span>
+            <span class="c">// TINTED like commercial glazing (Glenn, 2026-11-08: the skyscraper lobbies "you can see straight through</span>
+            <span class="c">// those windows at the interior"): 0.75, read as absorption by mesh.frag's glass filter, passes ~70% (was</span>
+            <span class="c">// 0.24, ~90%) -- a low-e storefront's light transmission</span>
+            m.albedo = {0.55, 0.66, 0.74}; m.metallic = 0.35f; m.roughness = 0.03f;
+            m.opacity = 0.75f; break;</pre>
+  </div>
+  <p>A pane of the viewer's own (the building they stand in, the bus they ride: <code>SceneLighting::viewerBox</code>)
+    reflects the room behind them, not the street. ADR-0382 found that reflection white at night: its daylight term was an
+    old unitless constant, and under the physical sky's pre-exposure (about 170× at night) it came out white. It now takes
+    the room's real light: by day the indoor share of the sky on a 0.7 wall, at night the room's lamps
+    (<code>roomRadiance</code>, which ADR-0383 made walk the pixel's light cluster and count only lights inside the viewer's
+    box, so a bus window shows its saloon's lamps), plus the ceiling panels at the glows' physical scale:</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag: the own window reflects the room; any other pane the probe or sky</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1679-L1684">shaders/vulkan/mesh.frag</a></div>
+<pre>            float glowScale = skyIsPhysical() ? g.skyPhysical3.z : 1.0;
+            vec3 roomDay = skyIsPhysical()
+                ? vec3(dot(skyIrradianceSH(vec3(0.0, 1.0, 0.0)), vec3(0.2126, 0.7152, 0.0722)) * 0.30 * 0.7)
+                : g.ambient.rgb * 0.35;
+            vec3 reflected = own ? fs * (roomDay + roomRadiance(inWorldPos) + ceilingPanels(inWorldPos, Rv) * glowScale)
+                                 : prefiltered * fs * g.ambient.rgb * ambientShadow;</pre>
+  </div>
+  <figure class="shot">
+    <img src="img/reflections/own-window-night.webp" alt="An office at night seen from inside. Left: the windows are a flat white sheet. Right: the windows are dark, showing the night street and lit windows of other buildings, with faint reflections of the ceiling panels">
+    <figcaption>The window you stand behind, at night (2026-11-08, ADR-0382): before (left), the pane's own reflection in
+      old units came out white; after (right), the room's real light, faint, over the night street.</figcaption>
+  </figure>
+
+  <h3>Matte insides and the rays' glows</h3>
+  <p>Two of Glenn's notes on 2026-11-08 were about things that reflected but should not have. The bus seats "should
+    probably be cloth or plastic and not reflect the surroundings", and "car interiors should be not shiny". In both cases
+    the inside parts had been merged into the painted shell and wore the body's paint (for the car kit's inside finishes, metallic 0.5 and roughness 0.4, ADR-0385).
+    ADR-0383 drew a see-into body's saloon or cabin as its own part in a matte cabin material (roughness 0.9, not
+    metallic), and ADR-0385 extended that to every inside finish of the kit, in the drivable build and the fleet's:</p>
+<div class="code">
+    <div class="hd"><span>vehicles.lua: the inside finishes are the cabin's, never the paint</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/assets/scripts/vehicles.lua#L126-L128">assets/scripts/vehicles.lua</a></div>
+<pre><span class="c">-- THE INSIDE FINISHES (Glenn, 2026-11-08: "car interiors should be not shiny -- seats, dashboard, etc."): a part of</span>
+<span class="c">-- these materials is the cabin's, drawn in its matte material (roughness 0.9, no metal), never in the body's paint</span>
+local KIT_INSIDE = { interior = true, liner = true, dash = true, seat = true, carpet = true, steer = true }</pre>
+  </div>
+  <p>The other note was "the nighttime reflections of other buildings still seems really bright". <code>rt_reflect</code>
+    added a hit's emission without the glows' scale (<code>emission_scale</code>, 0.004 under the physical sky,
+    ADR-0369), so every lit window in a ray-traced reflection was about 250 times the window itself. The scene pass and the
+    probe capture both applied the scale; the ray pass now does too (the <code>skyPhysical3.z</code> factor in the hit
+    excerpt above).</p>
+
+  <h3>Roofs matte, and view 9</h3>
+  <p>At a roof at 7:45 Glenn said "it should be rough/matte since it's concrete". The shine stayed with the probes and
+    the rays both off: a dark roof at roughness 0.85 under a low sun took a broad highlight and a grazing sky sheen. Commit
+    <code>a8c49ca9</code> set <code>PartId::Roof</code> to 0.95, and added <code>view 9</code>, which shows the G-buffer
+    roughness that SSR and the rays gate on (black is a mirror, the sky dark blue).</p>
+  <figure class="shot">
+    <img src="img/reflections/roof-matte.webp" alt="A flat dark roof at a low sun, before and after. Left: a broad pale sheen across the roof. Right: the roof evenly matte">
+    <figcaption>A roof at roughness 0.85 (left) and 0.95 (right), 2026-11-07.</figcaption>
+  </figure>
+
+  <h2>How it fits: what each tier needs</h2>
+  <table>
+    <tr><th>Tier</th><th>Reads from the scene</th><th>Costs (measured)</th><th>Answers for</th></tr>
+    <tr><td>Rays</td><td>The near scene's meshes (vertex and index buffers by address), each instance's material row, the
+      frame's lights, the sky harmonics, the cloud shadow map, the scene's depth and G-buffer</td><td>+0.56 ms GPU at first
+      light (the SSR slot 0.16 → 0.72 ms); scene upkeep +0.14 ms GPU, +0.09 ms recording; 115–155 MB + 12 MB scratch on
+      river_town; bench frame 11.0 ms after the denoise</td><td>Smooth (≤ 0.3) surfaces within 150 m, fading over the last
+      25 m</td></tr>
+    <tr><td>Probes</td><td>The static world within 300 m of a probe (captures), the frame's terrain draws, the frame's
+      lights, cascades, horizon map and sky cube (relight), the road graph and the storey plans (placement)</td><td>0.35 ms
+      CPU per face captured, 2 faces a frame while capturing; the plan grid's lookup 0.5 ms of scene pass on river_town (a
+      box per pixel had cost 7.6 ms)</td><td>Everything a probe box holds, at any roughness; ray misses</td></tr>
+    <tr><td>Sky cube</td><td>The physical sky (<a href="sky.html">sky page</a>)</td><td>—</td><td>Everything else</td></tr>
+    <tr><td>SSR</td><td>The frame's HDR, depth and G-buffer (<a href="renderer.html">frame page</a>)</td><td>half
+      resolution</td><td>Stays first in the composite; muted where the rays answer</td></tr>
+  </table>
+  <p>Probe faces are 64² everywhere; ADR-0374 owes a 256² tier for the nearest few.</p>
+
+  <h2>Switches, debug views and tests</h2>
+  <table>
+    <tr><th>Switch</th><th>What it does</th></tr>
+    <tr><td><code>RT_PROBES=0</code></td><td>no probes (ProbeSystem does nothing): the sky cube alone</td></tr>
+    <tr><td><code>RT_PROBE_DUMP=&lt;file.ppm&gt;</code></td><td>probe 0's six faces (albedo, normal, emission rows), rewritten every 600 of its faces</td></tr>
+    <tr><td><code>RT_RT_REFLECT=0</code></td><td>no ray extensions or features on the device, no rays: probes and sky cube</td></tr>
+    <tr><td><code>RT_VK_1_0=1</code></td><td>the renderer on Vulkan 1.0 (so no rays): the fallback check</td></tr>
+    <tr><td><code>RT_RT_MEASURE=&lt;frame&gt;</code>, <code>RT_RT_WINDOW</code></td><td>what the structures would cost, from the instances drawn within 300 m over the window (600 frames)</td></tr>
+    <tr><td><code>RT_DUMP_STATS=1</code></td><td>includes <code>[rt] near scene:</code> (instances, left out, bottom levels, built this frame, MB of budget) every 300 frames and <code>[probes] capture:</code> ms a face</td></tr>
+    <tr><td><code>RT_GLASS_REFLECT</code></td><td>facade glass reflectance scale (default 2; 1 the old glass)</td></tr>
+    <tr><td><code>RT_GLASS=old</code> / <code>none</code></td><td>the old alpha-blended glass / no panes (the reference)</td></tr>
+    <tr><td><code>RT_SKYCUBE</code></td><td>the sky cube's A/B (<a href="sky.html">sky page</a>)</td></tr>
+    <tr><td><code>view 2</code></td><td>SSR (rgb × confidence). The <code>view</code> command's help says "SSR (and the rays)", but since <code>40c75c85</code> the rays are added to the HDR target, not the SSR image, so this view shows SSR muted where the rays answer</td></tr>
+    <tr><td><code>view 9</code></td><td>G-buffer roughness: what SSR and the rays gate on; black = mirror</td></tr>
+    <tr><td><code>view 10</code></td><td>the environment reflection alone (the probe's or the sky's, after the rays' share is taken out)</td></tr>
+  </table>
+  <p>The Vulkan renderer is not compiled into the test binaries (the commit messages for 3a and the fallbacks say so),
+    so the GPU side was checked on the river_town bench, validation-clean, with A/B pictures. The pure CPU parts have
+    unit tests:</p>
+  <ul>
+    <li><code>tests/test_lights.cpp</code>: <code>probe_<wbr>sites_<wbr>line_<wbr>the_<wbr>streets</code> (spacing, height, the box, the
+      junction merge), <code>probe_<wbr>residency_<wbr>is_<wbr>the_<wbr>nearest_<wbr>and_<wbr>keeps_<wbr>its_<wbr>slots</code> (the hysteresis),
+      <code>storey_<wbr>probes_<wbr>grid_<wbr>the_<wbr>floor</code> (including a footprint turned 45°), and the <code>lights.lua</code> checks:
+      the probes' and the rays' rules read and sane, every <code>hits</code> name a real draw class, a
+      <code>memory_share</code> of 0.9 refused.</li>
+    <li><code>tests/test_light_clusters.cpp</code>: <code>probe_<wbr>grid_<wbr>lists_<wbr>the_<wbr>two_<wbr>nearest_<wbr>boxes_<wbr>per_<wbr>cell</code> and
+      <code>probe_<wbr>grid_<wbr>keeps_<wbr>the_<wbr>indoor_<wbr>probe_<wbr>apart</code>.</li>
+  </ul>
+
+  <h2>How it got here</h2>
+  <div class="note history"><p><b>2026-11-07: the sky cube first.</b> ADR-0371 gave the physical sky a 128² cubemap
+    with GGX mips and spherical-harmonic sky light. It fixed rough surfaces, which had had no real blur, but every
+    reflection was still only sky. On the way it found that at roughness ~0 the GGX sample's cosine rounded past 1 and
+    went NaN, which "spread through the cube to every reflective surface (and the exposure)".</p></div>
+  <div class="note history"><p><b>2026-11-07: probes in four stages.</b> A (<code>25d44c5f</code>): capture,
+    checked by dumping faces before any were used. C and D (<code>84d791a9</code>): the lighting moved to shared files,
+    the relight, and the first reflection, one test probe at a corner. B, same commit: sites along the streets, the
+    nearest 64, two faces a frame, and the plan grid after a per-pixel box loop cost 7.6 ms. The relight went diffuse-only
+    after the sun's glint smeared yellow over the trees.</p></div>
+  <div class="note history"><p><b>2026-11-07: rays, measured first.</b> <code>f3842173</code> measured
+    (35 MB near vs 1.26 GB all on river_town; 147 MB vs 3.4 GB on the island) and moved to Vulkan 1.2.
+    <code>1a139e0c</code> turned on ray queries; <code>ae6280d0</code> built the near scene and the rays, with the
+    no-ghost fade; <code>5c25ca5e</code> made the fallbacks one function and checked each to the pixel. The same day,
+    <code>a8c49ca9</code> made the roofs matte.</p></div>
+  <div class="note history"><p><b>2026-11-08: Glenn's walkthrough.</b> <code>40c75c85</code>: roads stop mirroring
+    (the dominant direction), roads join the near scene, the G-buffer carries the reflection weight, the rays are
+    denoised. <code>43d4e81f</code> (ADR-0377/0378): <code>FLAG_INDOOR</code>, the floor glitter traced to the outdoor
+    bakes' relief. <code>b99b00ea</code>: a storey's own probes (ADR-0380), cars in the rays (ADR-0381).
+    <code>38276bb5</code> and <code>c7393489</code> (ADR-0383, 0385): tinted bus and lobby glass, matte saloons and car
+    interiors, the rays' glows in the right units, facade glass 3 → 2. <code>12695b94</code> (2026-11-09, review fixes)
+    sized the shared scratch in one grow. All of it merged as #198 (<code>e55dfaaa</code>).</p></div>
+
+  <h3>What is still owed</h3>
+  <ul>
+    <li>Compaction of the bottom levels (ADR-0376: "about half the bytes").</li>
+    <li>Textures at ray hits (vertex colour and material only today); people in the near scene; Metal.</li>
+    <li>The rays' miss fallback reads the street's probe indoors: the G-buffer has no indoor bit (ADR-0380).</li>
+    <li>The relight takes the frame's 32 lights, not the clustered room lights, so a storey's probe sees its lamps as
+      glowing panels, not as light on its walls (ADR-0380); per-probe lights at night (ADR-0373/0374).</li>
+    <li>A 256² probe tier for the nearest few, and a cell index of the static draws so a capture face does not walk the
+      whole world (ADR-0374).</li>
+    <li>A denoise for rougher surfaces, if they ever take rays (ADR-0376).</li>
+  </ul>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/lights/probe_sites.h">src/engine/lights/probe_sites.h</a>/<a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/lights/probe_sites.cpp">.cpp</a> — where probes stand: streets, storeys, the resident 64</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/probe_system.cpp">src/engine/systems/probe_system.cpp</a> — the sites, the slots and the capture schedule</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/probe_grid.cpp">src/renderer/probe_grid.h/.cpp</a> — which probe a pixel reads</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/render_system.cpp">src/engine/systems/render_system.cpp</a> — the probe faces' draws and the near scene's pick</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/vulkan/vulkan_renderer.cpp">src/renderer/vulkan/vulkan_renderer.cpp</a> — <code>recordProbeCaptures</code>, <code>recordProbeRelight</code>, <code>setRayInstances</code>, <code>raysThisFrame</code>, <code>recordRtReflect</code>, the device's ray features</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/vulkan/rt_scene.cpp">src/renderer/vulkan/rt_scene.h/.cpp</a> — the bottom levels, the scratch, the top level, the budget</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/vulkan/rt_measure.cpp">src/renderer/vulkan/rt_measure.h/.cpp</a> — <code>RT_RT_MEASURE</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/tree/main/shaders/vulkan">shaders/vulkan/</a> — <code>probe_relight.comp</code>, <code>probe_prefilter.comp</code>, <code>rt_reflect.comp</code>, <code>rt_denoise.comp</code>, <code>rt_apply.comp</code>, <code>globals.glsl</code> (<code>probeReflection</code>), <code>gbuffer.glsl</code>, <code>lighting_common.glsl</code>, <code>mesh.frag</code> (<code>PROBE_CAPTURE</code>, the fade, glass)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/lights.lua">assets/scripts/lights.lua</a> — <code>probes</code> and <code>raytrace</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/vehicles.lua">assets/scripts/vehicles.lua</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/shape_grammar.cpp">src/engine/procgen/city/shape_grammar.cpp</a> — glass and matte materials</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_lights.cpp">tests/test_lights.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_light_clusters.cpp">tests/test_light_clusters.cpp</a></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a> — ADR-0372 to 0376, 0380, 0381, 0383, 0385 (and 0371, 0377, 0378, 0382)</li>
+  </ul>
+  <p>Related pages: <a href="renderer.html">a frame on the GPU</a> (SSR, the pass graph), <a href="lighting.html">lighting</a>
+    (the lights, clusters and units the relight and the rays share), <a href="sky.html">the sky</a> (the sky cube and
+    harmonics, the last tier), <a href="clouds.html">clouds</a> (the cloud shadow that reaches the rays),
+    <a href="weather.html">weather</a>, <a href="vehicles.html">vehicles</a> and <a href="buildings.html">buildings</a>
+    (where the glass and the materials come from).</p>
+
+  <footer>Code excerpts from commit <code>e55dfaaa</code> (2026-11-09). Drawn from ADR-0371, 0372, 0373, 0374, 0375,
+    0376, 0377, 0378, 0380, 0381, 0382, 0383 and 0385; commits <code>25d44c5f</code>, <code>84d791a9</code>,
+    <code>f3842173</code>, <code>1a139e0c</code>, <code>ae6280d0</code>, <code>5c25ca5e</code>, <code>a8c49ca9</code>,
+    <code>40c75c85</code>, <code>43d4e81f</code>, <code>b99b00ea</code>, <code>38276bb5</code>, <code>c7393489</code>
+    and <code>12695b94</code>.</footer>
+</div>
+</body>
+</html>
