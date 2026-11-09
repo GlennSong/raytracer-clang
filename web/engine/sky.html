@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sky, Atmosphere and Exposure — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>Sky, atmosphere and exposure</h1>
+  <p class="lede">Behind <code>RT_SKY=physical</code>, the Vulkan renderer draws the sky from a model of real air:
+    Rayleigh, Mie and ozone over a round planet, solved once on the CPU into two small tables and marched again on the
+    GPU every frame. Everything is in one set of physical light units. A camera that measures each frame and adapts
+    its exposure carries those units from a 100,000 lux noon to a moonlit street. The one idea is that the sky, the
+    light the sky throws on surfaces, the haze in front of a mountain and the colour of the sun are all one model,
+    read in different ways.</p>
+
+  <figure class="shot">
+    <img src="img/sky/hero-sheet.webp" alt="Eight panels of the same river_town towers and street under the physical sky: blue noon, golden hour with lit clouds, salmon sunset clouds over a purple-pink sky, deep dusk with lit windows, night with lamp pools, then two street views at sunset and noon">
+    <figcaption>The physical sky on river_town (2026-11-07, after ADR-0369): noon, golden hour, the sun just under
+      the horizon, the twilight's purple, night, and two street views. The colours come from the air model and the
+      brightness from the auto exposure.</figcaption>
+  </figure>
+
+  <h2>The problem</h2>
+  <p>Until November 2026 the Vulkan sky was a <b>palette</b>: <code>day_night_cycle.cpp</code> held hand-picked
+    zenith, horizon and ground colours for each hour, and <code>sky.frag</code> blended them with a sun disc and a
+    glow. It looked fine at noon. It could not do a real golden hour or the Earth's shadow rising at dusk, and
+    nothing linked the sky's colour to the sun's colour on a wall. Metal had a Hillaire-style scattering sky, but it
+    was opt-in per level, tuned to the old exposure, used a uniform stand-in for multiple scattering and had no test
+    (ADR-0367's context).</p>
+  <p>A physical sky also brings a second problem. Real light spans about 16 stops between noon and moonlight
+    (ADR-0366). A fixed exposure cannot cover that. The old engine faked night by multiplying the exposure up to
+    ×6 at midnight (<code>kNightAdapt</code>), and every lamp, window and sign had been tuned against that lift.
+    ADR-0366 measured the result: the night emitters were about 500× brighter than real. So the work came as a chain,
+    each step forcing the next:</p>
+  <table>
+    <tr><th>ADR</th><th>Step</th><th>What it left for the next step</th></tr>
+    <tr><td>0366</td><td>Engine light units; the scene pre-exposed</td><td>units and headroom in place; the sky itself
+      still a palette</td></tr>
+    <tr><td>0367</td><td>The physical sky, CPU model first, GPU sky view</td><td>an incident light meter exposes a night
+      street for its moonlight and every lamp blows out</td></tr>
+    <tr><td>0368</td><td>Auto exposure from the frame's histogram</td><td>the eye adapted to emitters tuned 500× too
+      bright, so dusk looked like day</td></tr>
+    <tr><td>0369</td><td>Lights at real candela, glows into units, clouds lit from their height</td><td>far mountains
+      glowed: the haze treated the air as uniform</td></tr>
+    <tr><td>0370</td><td>The aerial perspective volume</td><td>a rough surface's sky light was one direction's radiance,
+      not the sky's integral</td></tr>
+    <tr><td>0371</td><td>The sky as a cubemap and as spherical harmonics; the renderer validation-clean</td><td>then
+      the local reflection probes (ADR-0372 onward, <a href="reflections.html">reflections</a>)</td></tr>
+  </table>
+  <p>All six landed on 2026-11-07, in four commits (<code>57ee888b</code>, <code>2d006311</code>,
+    <code>8a8693a4</code>, <code>7459752b</code>). The physical sky is still <b>off by default</b> at the pinned
+    commit: <code>DayNightSystem</code> turns it on only when the environment variable <code>RT_SKY</code> is
+    <code>physical</code>. ADR-0369's "still owed" list says why: the lit windows still clip at night and the stars are
+    not in real units yet. Once they are, physical becomes the default and the palette goes.</p>
+
+  <h2>One unit of light</h2>
+  <p>A physical sky needs physical numbers, but the engine already had a lighting scale that worked by day. ADR-0366
+    picked a unit that keeps it: <b>one engine light unit is 20,000 lux</b> of illuminance (light falling on a surface),
+    or 20,000 cd/m² of luminance (how bright a surface looks). The cycle's noon sun was already 5 units, so it is now
+    100,000 lux, which is clear-day sunlight at the ground. And a level's typical exposure of 0.7 works out to EV100
+    14.5, a camera in daylight ("sunny 16" is EV 15). Daytime was nearly physical already. Night was the part that
+    was wrong.</p>
+<div class="code">
+    <div class="hd"><span>The unit, the light above the air, and the air itself: Earth's numbers as defaults</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/sky_atmosphere.h#L19-L37">src/engine/sky/sky_atmosphere.h</a></div>
+<pre><span class="c">// ENGINE LIGHT UNITS (ADR-0366): an illuminance of one unit is this many lux, a luminance of one unit this many cd/m^2.</span>
+<span class="c">// Chosen so the cycle's noon sun (5 units) is 100,000 lux -- clear-day sunlight at the ground -- and a level's typical</span>
+<span class="c">// exposure of 0.7 is EV100 14.5, a camera in daylight.</span>
+constexpr double kLuxPerUnit = 20000.0;
+<span class="c">// The sun's illuminance above the atmosphere (the solar constant in lux), and the full moon's (it is lit by the sun:</span>
+<span class="c">// its albedo ~0.12, so about 2.5e-6 of the sun's): times the transmittance on the way down.</span>
+constexpr double kSunTopLux = 128000.0;
+constexpr double kFullMoonTopLux = 0.32;
+
+struct Atmosphere {
+    double groundRadius = 6360000.0, topRadius = 6460000.0;   <span class="c">// m</span>
+    Vec3 rayleighScatter{5.802e-6, 13.558e-6, 33.1e-6};       <span class="c">// /m at sea level</span>
+    double rayleighHeight = 8000.0;
+    double mieScatter = 3.996e-6, mieExtinction = 4.40e-6;    <span class="c">// /m</span>
+    double mieHeight = 1200.0, mieG = 0.8;
+    Vec3 ozoneAbsorb{0.650e-6, 1.881e-6, 0.085e-6};          <span class="c">// /m at the layer's peak (25 km, 15 km either side)</span>
+    Vec3 groundAlbedo{0.3, 0.3, 0.3};
+    double multiScatter = 1.0;   <span class="c">// scales the multiple-scattering term (1: the model's own)</span>
+};</pre>
+  </div>
+  <p>Two numbers anchor everything else. <code>kSunTopLux</code> is the sun above the atmosphere (the solar
+    constant in lux, 128,000). <code>kFullMoonTopLux</code> is the full moon's, 0.32 lux: the moon is lit by the sun,
+    with an albedo of about 0.12. The model gives radiance <i>per unit of illuminance at the top of the air</i>, so the
+    same tables serve both lights. Multiply by 6.4 units (128,000 / 20,000) for the sun, or by the moon's
+    0.32 × its lit fraction / 20,000 for the moon.</p>
+  <table>
+    <tr><th>Thing</th><th>Real value</th><th>Engine units</th><th>Where it is set</th></tr>
+    <tr><td>Sun above the air</td><td>128,000 lux</td><td>6.4</td><td><code>kSunTopLux</code></td></tr>
+    <tr><td>Noon sun on the ground (test)</td><td>~103,000 lux</td><td>~5.2</td><td>ADR-0367, <code>test_sky_atmosphere</code></td></tr>
+    <tr><td>Blue zenith at noon</td><td>~1,950 cd/m²</td><td>~0.1</td><td>ADR-0367</td></tr>
+    <tr><td>Sky light on the ground at noon</td><td>~9,000 lux</td><td>~0.45</td><td>ADR-0367</td></tr>
+    <tr><td>Zenith with the sun 4° down</td><td>~13 cd/m²</td><td>6.5e-4</td><td>ADR-0367</td></tr>
+    <tr><td>The moon's disc</td><td>2,500 cd/m²</td><td>0.125</td><td><code>lights.lua moon_nits</code></td></tr>
+    <tr><td>A lit window pane</td><td>25 cd/m²</td><td>1.25e-3</td><td><code>lights.lua glows</code></td></tr>
+    <tr><td>The city's glow on the sky</td><td>2 cd/m²</td><td>1e-4</td><td><code>lights.lua city_glow_nits</code></td></tr>
+    <tr><td>The natural night sky's floor</td><td>~2e-4 cd/m²</td><td>1e-8</td><td><code>sky_physical.glsl</code></td></tr>
+  </table>
+  <p class="cap">The span the renderer has to hold: from 6.4 units to 1e-8, about 29 stops of radiance in one frame
+    format. That is what pre-exposure is for.</p>
+
+  <h3>Pre-exposure: the camera applied as the scene is drawn</h3>
+  <p>The HDR targets are fp16. Half floats keep about three decimal digits and run out above 65,504 and (as
+    normal numbers) below about 6e-5, and the table above runs to 1e-8. Exposed in the composite, as it used to be, a
+    night scene would be stored as numbers fp16 handles badly and only then multiplied up. ADR-0366 moved the
+    exposure to the front: <code>mesh.frag</code>, <code>sky.frag</code> and the clouds multiply their radiance by
+    the camera's exposure as they draw it, so the HDR image always holds values near 1. The exposure rides
+    <code>GlobalsUBO::cameraPosition.w</code>, a slot that was unused before. The composite then exposes by 1.
+    Bloom's threshold and knee are scaled into pre-exposed units, and the underwater view, the ray-traced reflections
+    and the cloud grain blur's low-light test read the same <code>cameraPosition.w</code>.</p>
+  <div class="note history"><p><b>Proved equal before it was used.</b> ADR-0366 compared river_town at 22:00 and at
+    noon, old order against new (<code>RT_PREEXPOSE=0</code> keeps the old one). The image means matched: 43.3/43.3,
+    82.3/82.3, 45.5/45.7, 37.1/37.0. The only differing pixels were palm fronds moving in the wind.</p></div>
+
+  <h2>The shape of it: what runs where</h2>
+  <p>The model is split by cost. The expensive and slowly changing parts (the tables, the sun's colour at the
+    camera, the sky's total light on a surface) are computed on the CPU, rarely. The parts that depend on the view
+    (the dome in every direction, the air in front of every pixel) are marched on the GPU, every frame, from the
+    CPU's tables. Because both sides read the same two tables and the same medium, they cannot drift apart. The
+    header says it plainly: "so both sides are one model".</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 470" role="img" aria-label="CPU and GPU halves of the physical sky. On the CPU, DayNightCycle gives the sun and moon; DayNightSystem calls the atmosphere model to build two tables once and read the sky and its harmonics when a light moves, and writes PhysicalSkyFrame and the exposure. The tables are uploaded once and the frame's numbers go into the globals. On the GPU each frame, sky_view.comp makes the dome texture, sky_cube.comp and sky_prefilter.comp turn it into a filtered cube, and aerial_volume.comp makes the air volume. sky.frag, mesh.frag, the probes, the rays and the composite read them.">
+      <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <text x="150" y="22" fill="#e6c07b">CPU: once, or when a light moves</text>
+        <text x="460" y="22" fill="#e6c07b">upload</text>
+        <text x="745" y="22" fill="#e6c07b">GPU: every frame</text>
+        <rect x="20" y="36" width="260" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="150" y="60" fill="#cfe4ff">DayNightCycle</text>
+        <text x="150" y="80" fill="#93a6ba" font-size="12">sun, moon: hour, day, latitude</text>
+        <rect x="20" y="114" width="260" height="76" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="150" y="138" fill="#cfe4ff">DayNightSystem</text>
+        <text x="150" y="158" fill="#93a6ba" font-size="12">applyPhysicalSky: active light,</text>
+        <text x="150" y="176" fill="#93a6ba" font-size="12">the meter and the eye</text>
+        <rect x="20" y="210" width="260" height="130" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="150" y="234" fill="#cfe4ff">sky_atmosphere.cpp</text>
+        <text x="150" y="256" fill="#93a6ba" font-size="12">buildAtmosphereTables (once)</text>
+        <text x="150" y="276" fill="#93a6ba" font-size="12">readSky: light colour, zenith,</text>
+        <text x="150" y="294" fill="#93a6ba" font-size="12">horizon, ground, irradiance</text>
+        <text x="150" y="314" fill="#93a6ba" font-size="12">atmosphereIrradianceSH: 9 coeffs</text>
+        <rect x="20" y="360" width="260" height="92" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="150" y="384" fill="#cfe4ff">SceneLighting</text>
+        <text x="150" y="404" fill="#93a6ba" font-size="12">sun (or moon): colour, strength</text>
+        <text x="150" y="422" fill="#93a6ba" font-size="12">physicalSky: PhysicalSkyFrame</text>
+        <text x="150" y="440" fill="#93a6ba" font-size="12">exposure</text>
+        <rect x="340" y="114" width="240" height="76" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="460" y="138" fill="#cfe4ff">setSkyTables (once)</text>
+        <text x="460" y="158" fill="#93a6ba" font-size="12">transmittance 256 × 64</text>
+        <text x="460" y="176" fill="#93a6ba" font-size="12">multiple scattering 32 × 32</text>
+        <rect x="340" y="360" width="240" height="92" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="460" y="384" fill="#cfe4ff">GlobalsUBO (setLights)</text>
+        <text x="460" y="404" fill="#93a6ba" font-size="12">skyPhysical … skyPhysical5</text>
+        <text x="460" y="422" fill="#93a6ba" font-size="12">skySH[9]</text>
+        <text x="460" y="440" fill="#93a6ba" font-size="12">cameraPosition.w = exposure</text>
+        <rect x="630" y="36" width="250" height="58" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="755" y="60" fill="#cfe4ff">sky_view.comp</text>
+        <text x="755" y="80" fill="#93a6ba" font-size="12">the dome, 192 × 108 → binding 11</text>
+        <rect x="630" y="114" width="250" height="76" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="755" y="138" fill="#cfe4ff">sky_cube.comp + blits</text>
+        <text x="755" y="158" fill="#93a6ba" font-size="12">128² cube, 8 box mips</text>
+        <text x="755" y="176" fill="#93a6ba" font-size="12">then sky_prefilter.comp</text>
+        <rect x="630" y="210" width="250" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="755" y="234" fill="#cfe4ff">6 GGX mips → binding 15</text>
+        <text x="755" y="254" fill="#93a6ba" font-size="12">roughness 0, 0.2 … 1</text>
+        <rect x="630" y="288" width="250" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="755" y="312" fill="#cfe4ff">aerial_volume.comp</text>
+        <text x="755" y="332" fill="#93a6ba" font-size="12">2 × 32³ → bindings 13, 14</text>
+        <rect x="630" y="366" width="250" height="86" rx="9" fill="#0f151e" stroke="#2c3d50"/>
+        <text x="755" y="390" fill="#cfe4ff">readers</text>
+        <text x="755" y="410" fill="#93a6ba" font-size="12">sky.frag · mesh.frag · composite</text>
+        <text x="755" y="428" fill="#93a6ba" font-size="12">probe_relight · rt_reflect</text>
+        <text x="755" y="446" fill="#93a6ba" font-size="12">(see "Who reads what")</text>
+        <line x1="150" y1="94" x2="150" y2="110" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="150" y1="190" x2="150" y2="206" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="150" y1="340" x2="150" y2="356" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="280" y1="230" x2="336" y2="160" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="280" y1="406" x2="336" y2="406" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="580" y1="140" x2="626" y2="70" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="580" y1="160" x2="626" y2="310" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="580" y1="400" x2="626" y2="400" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="755" y1="94" x2="755" y2="110" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="755" y1="190" x2="755" y2="206" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="755" y1="346" x2="755" y2="362" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <path d="M880,65 Q898,65 898,200 Q898,380 884,390" fill="none" stroke="#6f8fb0" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a1)"/>
+        <path d="M880,239 Q892,239 892,300 Q892,370 884,372" fill="none" stroke="#6f8fb0" stroke-width="1.4" stroke-dasharray="5 4"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The two halves. Solid arrows are data passed on; the dashed lines on the right are the sky view and the
+    cube going to their readers. The tables go up once per level; the frame's numbers go up every frame in the
+    globals block that every scene shader includes.</p>
+
+  <h2>The atmosphere model</h2>
+  <p>The model is Sébastien Hillaire's, from "A Scalable and Production Ready Sky and Atmosphere Rendering Technique"
+    (Eurographics Symposium on Rendering, 2020), with the transmittance table laid out as Eric Bruneton and Fabrice
+    Neyret's "Precomputed Atmospheric Scattering" (2008) does it. Both are credited in <code>CREDITS.md</code> under
+    "Methods named in the code". The air is three things over a planet of 6,360 km radius, in a 100 km shell:</p>
+  <ul>
+    <li><b>Rayleigh scattering</b>: air molecules. It scatters blue nearly six times more than red (the
+      <code>rayleighScatter</code> vector), thins out exponentially with an 8 km scale height, and is why the sky is
+      blue and the sunset red.</li>
+    <li><b>Mie scattering</b>: aerosols, haze. Grey, concentrated low (1.2 km scale height), and strongly forward:
+      its phase function (how much light goes in each direction) has <code>mieG = 0.8</code>, which makes the bright
+      aureole round the sun. A level's <code>turbidity</code> multiplies it.</li>
+    <li><b>Ozone</b>: absorbs, does not scatter, in a tent-shaped layer peaking at 25 km. It takes green most and blue least (the <code>ozoneAbsorb</code> vector),
+      so it matters most on the long, low paths of twilight.</li>
+  </ul>
+
+  <h3>Two tables, built once</h3>
+  <p>The <b>transmittance table</b> answers "what fraction of the light gets through the air from this height, in
+    this direction, to the top?". It is indexed by the radius <i>r</i> and the cosine of the view's zenith angle
+    <i>μ</i>, using Bruneton's mapping, which spends its texels near the horizon where the answer changes fastest.
+    Each of its 256 × 64 texels is a 40-step march of the extinction. A ray that hits the ground gets zero: that is the
+    planet's shadow, and the reason a mountain range or a cloud deck can still be sunlit after the street is not.</p>
+  <p>The <b>multiple-scattering table</b> is Hillaire's main trick. Light that scatters once (sun → air → eye) is
+    cheap to march. Light that scatters two, three or more times is what keeps a twilight sky bright and fills shadows
+    with blue. Hillaire's observation: at a given height and sun angle, the light arriving from the second bounce on
+    is close to the same from every direction. So for each of 32 × 32 (height, sun cosine) cells the table marches 64
+    directions once, gathering <i>G</i>, the second-order light, and <i>f</i>, the fraction the surroundings scatter
+    back. The infinite series of higher orders is then a geometric series: <i>G</i> / (1 − <i>f</i>).</p>
+<div class="code">
+    <div class="hd"><span>buildAtmosphereTables: the multiple-scattering table, Hillaire 2020 section 5.5</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/sky_atmosphere.cpp#L151-L194">src/engine/sky/sky_atmosphere.cpp</a></div>
+<pre><span class="c">    // MULTIPLE SCATTERING (Hillaire 2020, sec. 5.5): at each (height, sun cosine), the second-order light arriving from</span>
+<span class="c">    // every direction (isotropic phase) and the fraction f of light the surroundings scatter back; the infinite series</span>
+<span class="c">    // of higher orders sums to G / (1 - f)</span>
+<span class="c">            // ...</span>
+            for (int d = 0; d &lt; dirs; ++d) {
+                const Vec3 w = fibonacciDir(d, dirs);
+                const double tg = distToGround(r, w.y, rg);
+                const double tMax = tg &gt; 0.0 ? tg : distToTop(r, w.y, rt);
+                const double ds = tMax / steps;
+                Vec3 T(1, 1, 1), L(0, 0, 0), f(0, 0, 0);
+                for (int i = 0; i &lt; steps; ++i) {
+                    const Vec3 p = x0 + w * ((i + 0.5) * ds);
+                    const double rp = p.length();
+                    const Medium m = mediumAt(a, std::max(rp - rg, 0.0));
+                    const Vec3 sigS = m.rayleigh + Vec3(m.mie, m.mie, m.mie);
+                    const Vec3 Ts = sampleTransmittance(out, rp, dot(p * (1.0 / rp), sun));
+                    const Vec3 stepT = expV(m.extinction * -ds);
+                    const Vec3 S = mulV(sigS, Ts) * iso;
+                    const Vec3 one(1, 1, 1);
+                    L = L + mulV(T, divV(mulV(S, one - stepT), m.extinction));
+                    f = f + mulV(T, divV(mulV(sigS, one - stepT), m.extinction));
+                    T = mulV(T, stepT);
+                }
+<span class="c">                // ...</span>
+                G = G + L * (1.0 / dirs);
+                F = F + f * (iso * 4.0 * PI / dirs);
+            }
+            const Vec3 psi(G.x / std::max(1e-6, 1.0 - F.x) * a.multiScatter, G.y / std::max(1e-6, 1.0 - F.y) * a.multiScatter,
+                           G.z / std::max(1e-6, 1.0 - F.z) * a.multiScatter);</pre>
+  </div>
+  <p>Each step of the march uses the analytic integral of a constant medium over the step,
+    <code>S × (1 − e<sup>−σΔs</sup>) / σ</code>, rather than <code>S × Δs</code>. With only 20 or 32 steps along
+    100 km of air, that is what keeps a thick step from over-counting.</p>
+
+  <h3>The sky's radiance, and the readings the engine takes from it</h3>
+  <p><code>atmosphereSkyRadiance</code> marches a view ray from the camera's height. At each step it takes the
+    sunlight that reached that point (the transmittance table), scatters it toward the eye by the Rayleigh and Mie
+    phase functions (single scattering), adds the multiple-scattering table's term, and thins everything behind it.
+    A ray that meets the ground adds the ground's lit albedo (0.3 grey by default).</p>
+<div class="code">
+    <div class="hd"><span>atmosphereSkyRadiance: one step of the march, single plus multiple scattering</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/sky_atmosphere.cpp#L217-L229">src/engine/sky/sky_atmosphere.cpp</a></div>
+<pre>    for (int i = 0; i &lt; steps; ++i) {
+        const Vec3 p = x0 + view * ((i + 0.5) * ds);
+        const double rp = p.length();
+        const Medium m = mediumAt(a, std::max(rp - rg, 0.0));
+        const double muS = dot(p * (1.0 / rp), light);
+        const Vec3 Ts = sampleTransmittance(t, rp, muS);
+        const Vec3 single = mulV(Ts, m.rayleigh * phaseR + Vec3(m.mie, m.mie, m.mie) * phaseM);
+        const Vec3 multi = mulV(m.rayleigh + Vec3(m.mie, m.mie, m.mie), sampleMultiScatter(t, rp, muS));
+        const Vec3 S = single + multi;
+        const Vec3 stepT = expV(m.extinction * -ds);
+        L = L + mulV(T, divV(mulV(S, one - stepT), m.extinction));
+        T = mulV(T, stepT);
+    }</pre>
+  </div>
+  <p>The CPU uses this march for a handful of readings, collected in a <code>SkyReading</code>: the light's own
+    colour and strength at the camera (the transmittance toward it, normalised to a max channel of 1, so the sun
+    turns orange-red at 2° up by itself), and the zenith, the horizon (eight directions 2° up, averaged), the ground
+    and the up-facing irradiance. <code>DayNightSystem</code> hands these to everything that used to read the
+    palette, so the 2D cloud overlay, the underwater view and the glass's room all read physical colours (ADR-0367).</p>
+
+  <div class="note"><p><b>The tests hold the CPU model to Earth.</b> <code>tests/test_sky_atmosphere.cpp</code>: the
+    transmittance straight up matches the closed form (each layer's coefficient × its scale height; ozone's tent
+    integrates to 15 km); the tables match the exact march within 0.02-0.03; noon (sun 60° up) gives 80,000-120,000 lux
+    of sun on the ground, a zenith of 1,500-12,000 cd/m² and bluer than green than red, and 8,000-40,000 lux of sky
+    light; at sunset the sun's blue channel falls under half and the sky toward the sun is warm while the sky
+    opposite and higher stays blue; with the sun 4° down the zenith is still lit (over 0.5 cd/m², under 5% of noon),
+    and at 20° down it is under 1e-3 cd/m². The GPU is held to the CPU by construction: it is the same march on
+    the same tables.</p></div>
+
+  <h2>The GPU's sky view</h2>
+  <p>The dome changes whenever the sun moves or the camera climbs, and it is read thousands of times per frame, so
+    the GPU keeps it as a texture rebuilt each frame. <code>sky_view.comp</code> fills a 192 × 108 RGBA16F image in
+    Hillaire's <b>sky-view mapping</b>. The horizon sits on the middle row. Above and below it a square-root warp crowds the rows toward
+    the horizon, where the colour changes fastest. The columns are the azimuth measured from the sun, also square-root warped so the sun's
+    side gets more of them, and only 0 to 180°: the sky is mirror-symmetric about the sun's vertical plane.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 760 250" role="img" aria-label="The sky-view texture: 192 by 108 texels. The top edge is the zenith, the middle row is the horizon, the bottom edge is straight down. The left edge is toward the sun, the right edge is directly away from it. Both axes are square-root warped so texels crowd toward the horizon and toward the sun.">
+      <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker>
+        <linearGradient id="skyg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#1d3f7a"/><stop offset="0.48" stop-color="#9fb8d6"/>
+          <stop offset="0.5" stop-color="#c9b48f"/><stop offset="1" stop-color="#3a3428"/></linearGradient></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <rect x="160" y="30" width="400" height="190" rx="4" fill="url(#skyg)" stroke="#2c3d50"/>
+        <g stroke="#0a0e14" stroke-opacity="0.35" stroke-width="1">
+          <line x1="160" y1="125" x2="560" y2="125" stroke-opacity="0.9" stroke="#e6c07b" stroke-width="1.6"/>
+          <line x1="160" y1="111" x2="560" y2="111"/><line x1="160" y1="98" x2="560" y2="98"/>
+          <line x1="160" y1="78" x2="560" y2="78"/><line x1="160" y1="50" x2="560" y2="50"/>
+          <line x1="160" y1="139" x2="560" y2="139"/><line x1="160" y1="152" x2="560" y2="152"/>
+          <line x1="160" y1="172" x2="560" y2="172"/><line x1="160" y1="200" x2="560" y2="200"/>
+          <line x1="184" y1="30" x2="184" y2="220"/><line x1="210" y1="30" x2="210" y2="220"/>
+          <line x1="250" y1="30" x2="250" y2="220"/><line x1="310" y1="30" x2="310" y2="220"/>
+          <line x1="390" y1="30" x2="390" y2="220"/><line x1="470" y1="30" x2="470" y2="220"/>
+        </g>
+        <circle cx="166" cy="104" r="7" fill="#fff4cf"/>
+        <text x="150" y="40" fill="#cfe4ff" text-anchor="end">zenith</text>
+        <text x="150" y="129" fill="#e6c07b" text-anchor="end">horizon (v = 0.5)</text>
+        <text x="150" y="218" fill="#cfe4ff" text-anchor="end">straight down</text>
+        <text x="160" y="244" fill="#93a6ba" font-size="12">toward the sun</text>
+        <text x="560" y="244" fill="#93a6ba" font-size="12" text-anchor="end">180° from it</text>
+        <text x="575" y="80" fill="#93a6ba" font-size="12">rows: √ warp</text>
+        <text x="575" y="98" fill="#93a6ba" font-size="12">toward the horizon</text>
+        <text x="575" y="160" fill="#93a6ba" font-size="12">columns: u = √(azimuth / π)</text>
+        <text x="575" y="178" fill="#93a6ba" font-size="12">toward the sun's side</text>
+        <text x="360" y="20" fill="#cfe4ff" text-anchor="middle">192 × 108 RGBA16F, radiance in units</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The sky-view mapping (the grid lines are illustrative). The horizon stays on the middle row at any height;
+    what changes with the camera's height is the angle each half covers (from higher up the horizon dips).</p>
+
+  <p>Both lights go into the one texture. By day the active light is the sun and the "other" is the moon (and the
+    reverse at night). The shader builds its frame round the active light and places the other one by its azimuth
+    from it, so twilight and moonlight share the dome:</p>
+<div class="code">
+    <div class="hd"><span>sky_view.comp: the sun along +x in the table's frame, the moon placed by its azimuth from the sun</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/sky_view.comp#L108-L127">shaders/vulkan/sky_view.comp</a></div>
+<pre>    float azim = uv.x * uv.x * PI;   <span class="c">// from the sun, mirrored</span>
+    float sz = sin(viewZenith);
+<span class="c">    // in the LUT's frame the sun lies along +x at its height; the moon keeps its azimuth from the sun</span>
+    vec3 dir = vec3(sz * cos(azim), cos(viewZenith), sz * sin(azim));
+    vec3 sunH = vec3(pc.sun.x, 0.0, pc.sun.z);
+    float sunHl = length(sunH);
+    vec3 sun = vec3(sqrt(max(1.0 - pc.sun.y * pc.sun.y, 0.0)), pc.sun.y, 0.0);
+    vec3 L = pc.sun.w &gt; 0.0 ? march(r, dir, sun) * pc.sun.w : vec3(0.0);
+    if (pc.moon.w &gt; 0.0) {
+<span class="c">        // the moon's direction in the sun's frame: its azimuth relative to the sun's</span>
+        vec3 mH = vec3(pc.moon.x, 0.0, pc.moon.z);
+        float a = 0.0;
+        if (sunHl &gt; 1e-4 &amp;&amp; length(mH) &gt; 1e-4) {
+            vec3 s = sunH / sunHl, m = mH / length(mH);
+            a = atan(s.x * m.z - s.z * m.x, dot(s, m));
+        }
+        float mh = sqrt(max(1.0 - pc.moon.y * pc.moon.y, 0.0));
+        vec3 moon = vec3(mh * cos(a), pc.moon.y, mh * sin(a));
+        L += march(r, dir, moon) * pc.moon.w;
+    }</pre>
+  </div>
+  <p><code>sky_physical.glsl</code> is the reading side, included by <code>sky.frag</code>, <code>mesh.frag</code>,
+    the probes' relight and the ray pass. <code>skyViewRadiance(dir)</code> inverts the mapping. Just under the
+    horizon it blends back toward the horizon's own colour over about six degrees (0.1 rad): on a finite world that
+    band is distant land and should read as haze, not soil (the Metal scattering sky's rule). And it adds a floor of
+    1e-8 units, about 2e-4 cd/m², the natural night sky's airglow and starlight, so the sky is never exactly black.</p>
+
+  <h3>The sun's disc</h3>
+  <p>The real sun's disc is about 1.6e9 cd/m² at noon. Pre-exposed by 0.7 that is still far beyond fp16's 65,504,
+    so <code>skyLightDisc</code> keeps the physics but caps it: the disc's radiance is its illuminance over its solid
+    angle, reddened by the transmittance toward it, held to at most 2,000 × the light above the air. That is bright
+    enough to bloom and no brighter (the Metal sky's "artistic disc"). Two power lobes add the aureole.</p>
+<div class="code">
+    <div class="hd"><span>skyLightDisc: the disc through the air, capped to stay in fp16</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/sky_physical.glsl#L77-L92">shaders/vulkan/sky_physical.glsl</a></div>
+<pre><span class="c">// The active light's disc, reddened and dimmed by the air on the way, with its aureole: radiance (units). The sun's</span>
+<span class="c">// disc is ~1.6e9 cd/m^2 at noon; kept as it is, pre-exposed it would overflow fp16, so it is held to a bright that</span>
+<span class="c">// blooms (the Metal sky's rule: an "artistic disc").</span>
+vec3 skyLightDisc(vec3 dir) {
+    float top = g.skyPhysical.z;
+    if (top &lt;= 0.0 || g.skyPhysical3.x &lt; 0.5) return vec3(0.0);   <span class="c">// (the moon draws as itself: sky.frag moonDisc)</span>
+    vec3 t = skyTransmittanceToward(dir.y);
+    float cosL = dot(dir, g.skySunDir.xyz);
+    float discCos = g.skyPhysical.w;
+    float disc = smoothstep(discCos - 0.0002, discCos, cosL) * g.skyPhysical2.x;
+<span class="c">    // the real disc's radiance over its solid angle (2 pi (1 - cos r)), capped at 2000x the top illuminance</span>
+    float solid = max(6.2831853 * (1.0 - discCos), 1e-6);
+    vec3 col = t * top * min(1.0 / solid, 2000.0) * disc;
+    float c2 = clamp(cosL, 0.0, 1.0);
+    col += t * top * (pow(c2, 4000.0) * 0.5 + pow(c2, 250.0) * 0.02) * g.skyPhysical2.x;
+    return col;</pre>
+  </div>
+  <p>Only the sun draws this way. The moon keeps <code>sky.frag</code>'s phased disc (a sphere lit from the true sun,
+    so the crescent faces it) and the stars keep their procedural field on the celestial sphere. Both are older than
+    the physical sky and were tuned at the ×6 night exposure. They are scaled into units by
+    <code>skyPhysical3.y</code> (<code>celestialScale</code>, 1e-5, "interim"), and the moon's disc intensity is then
+    set so it comes out at its real 2,500 cd/m² through the air (ADR-0369). The city's light-pollution glow is
+    scaled by <code>skyPhysical3.w</code> to peak at 2 cd/m².</p>
+<div class="code">
+    <div class="hd"><span>sky.frag main: the three skies (HDR map, physical, palette), pre-exposed on the way out</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/sky.frag#L199-L214">shaders/vulkan/sky.frag</a></div>
+<pre>void main() {
+    vec3 dir = normalize(inViewDir);
+    vec3 col;
+    if (g.counts.z == 1) {
+        col = sampleEquirect(dir);   <span class="c">// HDR environment background (no clouds)</span>
+    } else if (skyIsPhysical()) {
+<span class="c">        // THE PHYSICAL SKY (ADR-0367): the dome, the sun's disc through the air, and the night's bodies over it</span>
+        col = skyViewRadiance(dir) + skyLightDisc(dir);
+        col += (starField(dir) + moonDisc(dir)) * g.skyPhysical3.y + skyGlow(dir) * g.skyPhysical3.w;
+        col = applyClouds(col, dir);
+    } else {
+        col = sampleEnvironment(dir);
+        col = applyClouds(col, dir);
+    }
+    outColor = vec4(col * g.cameraPosition.w, 1.0);   <span class="c">// pre-exposed (ADR-0366)</span>
+}</pre>
+  </div>
+
+  <figure class="shot">
+    <img src="img/sky/twilight.webp" alt="River_town at deep dusk: a purple sky with salmon-red cloud undersides over dark mountains, towers with lit windows and red roof beacons, street lamps pooling on the pavement">
+    <figcaption>Just after sunset (ADR-0369's "Seen" list): salmon-red clouds over a purple-pink sky. The street is in
+      the Earth's shadow, but the cloud deck, about a kilometre up, is still in the sun through the long reddening
+      air.</figcaption>
+  </figure>
+
+  <h2>The day-night cycle drives it</h2>
+  <p><code>DayNightCycle</code> is the clock and the astronomy. From the hour, the calendar day (172 is June 21) and
+    the latitude (40° N by default) it gives the sun's direction (hour angle round the celestial pole, tilted by the
+    latitude, offset by the declination), the moon's direction, age and lit fraction, and the celestial frame the stars
+    are drawn on. <code>DayNightSystem::applyLighting</code> turns that into the frame's <code>SceneLighting</code>
+    every frame, and with <code>RT_SKY=physical</code> it then calls <code>applyPhysicalSky</code>, which replaces the
+    palette's numbers with the model's.</p>
+<div class="code">
+    <div class="hd"><span>applyPhysicalSky: tables once, readings when a light moves, the active light by what reaches the ground</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/day_night_system.cpp#L672-L697">src/engine/systems/day_night_system.cpp</a></div>
+<pre>    if (!skyTablesBuilt_) {
+        buildAtmosphereTables(atmosphereFrom(lit.skyScattering), skyTables_);
+        ctx.renderer.setSkyTables(skyTables_.transmittance.data(), AtmosphereTables::kTransW, AtmosphereTables::kTransH,
+                                  skyTables_.multiScatter.data(), AtmosphereTables::kMsW, AtmosphereTables::kMsH);
+        skyTablesBuilt_ = true;
+    }
+    const double height = std::max(0.0, ctx.view.camera.position.y);
+    const double sunTop = kSunTopLux / kLuxPerUnit;
+    const float moonTop = static_cast&lt;float&gt;(kFullMoonTopLux * st.moonIllumination / kLuxPerUnit);
+    if ((st.sunDirection - readSunDir_).length() &gt; 0.002 || std::fabs(height - readHeight_) &gt; 50.0) {
+        sunReading_ = readSky(skyTables_, height, st.sunDirection, sunTop);
+        atmosphereIrradianceSH(skyTables_, height, st.sunDirection, sunTop, sunSH_);
+<span class="c">    // ...</span>
+<span class="c">    // the active light: whichever lights the ground more (the moon only once the sun is down)</span>
+    const double sunGround = sunReading_.lightIntensity * std::max(0.0, st.sunDirection.y);
+    const double moonGround = moonReading_.lightIntensity * std::max(0.0, st.moonDirection.y);
+    const bool sunActive = sunGround &gt;= moonGround;</pre>
+  </div>
+  <p>Three things to notice. The tables are built once per level, from the level's scattering parameters, and
+    uploaded once. The readings and the harmonics are taken again only when the sun moves by more than 0.002 (in
+    direction) or the camera climbs by more than 50 m, not every frame.  And the <b>active light</b> (the one <code>SceneLighting::sun</code> carries, which casts
+    the shadows) is whichever of the sun and the moon puts more light on level ground. It switches to the moon only
+    once the sun is well down; both are near-black at the crossover, so nothing pops (the cycle's own note on the
+    handoff).</p>
+  <p>Under the physical sky the ambient multiplier is 1. The sky's light is now the sky's own (only the weather's
+    <code>ambientScale</code> still applies), not a day-shaped curve. The weather's <code>sunScale</code> dims the
+    active light, and through <code>lightTop</code> the dome as well.</p>
+
+  <h3>The clouds lit from their own height</h3>
+  <p>The volumetric clouds (their own page: <a href="clouds.html">clouds</a>) need a sun too, and the one at the
+    street is wrong for them after sunset. ADR-0369 gave them their own: <code>PhysicalSkyFrame::cloudLight*</code> is
+    the sun (or the moon, whichever is brighter there) through the transmittance from the middle of the cloud deck,
+    not from the camera. A low deck (0.9-1.6 km) passes into the Earth's shadow about 1° after the street does, so
+    its red undersides are brief, as they are in life. The older 2D cloud overlay in <code>sky.frag</code> is scaled
+    into units by <code>skyPhysical.z / 6.4</code>.</p>
+
+  <h2>Exposure: a meter, then an eye</h2>
+  <p>With radiance in real units, something has to pick the exposure. ADR-0367 started with an <b>incident light
+    meter</b>, the way a photographer reads the light falling on a scene: EV100 = log2(E × 100 / 400), where E is the
+    lux on the ground from the sun, the moon and the sky, and exposure = 20,000 / (1.2 × 2<sup>EV100</sup>). The
+    constant 400 puts a clear noon (about 99,000 lux) at exposure 0.7, and the level's authored exposure divided by
+    0.7 is a bias on top. It is right by day. At night it is a long exposure: it exposes a street for its moonlight,
+    and every lamp blows out.</p>
+
+  <figure class="shot">
+    <img src="img/sky/v1-old-meter-auto.webp" alt="A grid of river_town frames in three columns and five rows, from day at the top to night at the bottom; the lower rows of the middle and right columns are blown out to white or show only black sky over glaring facades">
+    <figcaption>The first physical-sky comparison (<code>2026-11-07_physical_sky_v1_old_meter_auto.png</code>, named in
+      ADR-0367): the old palette, the incident meter and the first auto exposure, from day down to night. Noon lands
+      well in all three; at dusk and night the meter washes the scene to white, and the first eye, adapting to lamps
+      and windows still about 500× too bright, darkens until the sky is black (ADR-0368's "Seen").</figcaption>
+  </figure>
+
+  <p>ADR-0368 replaced it with an <b>eye</b>: measure the frame the camera actually sees, and expose for it. After the
+    clouds are composited and before bloom, <code>lum_histogram.comp</code> reads every fourth pixel of the HDR image,
+    takes its luminance, and counts log2 of it into 64 bins from 2<sup>−14</sup> to 2<sup>8</sup>. Because the image
+    is pre-exposed, that fixed range follows the exposure, so it fits a noon frame and a night frame alike. Each
+    workgroup counts into shared memory first and adds to the global bins once, so the atomics stay cheap.</p>
+<div class="code">
+    <div class="hd"><span>lum_histogram.comp: shared-memory bins, then one atomic add per bin per workgroup</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/lum_histogram.comp#L17-L30">shaders/vulkan/lum_histogram.comp</a></div>
+<pre>void main() {
+    uint t = gl_LocalInvocationIndex;
+    if (t &lt; 64u) local[t] = 0u;
+    barrier();
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy) * pc.size.z;
+    if (px.x &lt; pc.size.x &amp;&amp; px.y &lt; pc.size.y) {
+        vec3 c = texelFetch(hdr, px, 0).rgb;
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        int b = l &gt; 1e-12 ? clamp(int((log2(l) - pc.range.x) * pc.range.y), 0, 63) : 0;
+        atomicAdd(local[b], 1u);
+    }
+    barrier();
+    if (t &lt; 64u &amp;&amp; local[t] &gt; 0u) atomicAdd(bins[t], local[t]);
+}</pre>
+  </div>
+  <p>The histogram is copied to a host-visible buffer per frame in flight and read when that slot's fence has passed,
+    two frames later, so the CPU never waits on the GPU for it. <code>readLumHistogram</code> takes the mean between
+    the 35th and the 95th percentiles: the dark half of a night street and the lamps themselves are left out. Then it
+    subtracts the pre-exposure that frame was drawn with, which turns the number back into scene units.</p>
+<div class="code">
+    <div class="hd"><span>readLumHistogram: the middle of the histogram, back in scene units</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L5592-L5611">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre>void VulkanRenderer::Impl::readLumHistogram() {
+    if (lumPre[currentFrame] &lt;= 0.0f || !lumReadMapped[currentFrame]) return;
+    const uint32_t* bins = static_cast&lt;const uint32_t*&gt;(lumReadMapped[currentFrame]);
+    uint64_t total = 0;
+    for (int i = 0; i &lt; 64; ++i) total += bins[i];
+    if (total == 0) return;
+    const double lo = 0.35 * static_cast&lt;double&gt;(total), hi = 0.95 * static_cast&lt;double&gt;(total);
+    double seen = 0, sum = 0, weight = 0;
+    for (int i = 0; i &lt; 64; ++i) {
+        const double n = bins[i];
+        const double a = std::max(seen, lo), b = std::min(seen + n, hi);
+        if (b &gt; a) {
+            const double centre = kLumLog2Min + (i + 0.5) * (kLumLog2Range / 64.0);
+            sum += centre * (b - a);
+            weight += b - a;
+        }
+        seen += n;
+    }
+    if (weight &lt;= 0) return;
+    lumLog2 = static_cast&lt;float&gt;(sum / weight - std::log2(static_cast&lt;double&gt;(lumPre[currentFrame])));</pre>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 300" role="img" aria-label="The exposure loop. Frame N is drawn pre-exposed by the current exposure. lum_histogram.comp counts its luminance. Two frames later the CPU reads it, takes the mean between the 35th and 95th percentiles and removes the pre-exposure. DayNightSystem computes a key that drops in the dark, divides by the measured luminance, applies the level bias, caps highlights, clamps to EV100 -3 to 17, and eases toward it. The new exposure goes into cameraPosition.w for the next frame.">
+      <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="30" width="250" height="80" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="145" y="56" fill="#cfe4ff">frame N drawn</text>
+        <text x="145" y="76" fill="#93a6ba" font-size="12">radiance × cameraPosition.w</text>
+        <text x="145" y="94" fill="#93a6ba" font-size="12">(sky, scene, clouds)</text>
+        <rect x="325" y="30" width="250" height="80" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="450" y="56" fill="#cfe4ff">lum_histogram.comp</text>
+        <text x="450" y="76" fill="#93a6ba" font-size="12">64 bins of log2 luminance</text>
+        <text x="450" y="94" fill="#93a6ba" font-size="12">2^-14 .. 2^8, every 4th pixel</text>
+        <rect x="630" y="30" width="250" height="80" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="755" y="56" fill="#cfe4ff">readLumHistogram</text>
+        <text x="755" y="76" fill="#93a6ba" font-size="12">2 frames later, after the fence</text>
+        <text x="755" y="94" fill="#93a6ba" font-size="12">mean of 35-95 % − log2(pre)</text>
+        <rect x="630" y="170" width="250" height="110" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="755" y="194" fill="#cfe4ff">the eye (DayNightSystem)</text>
+        <text x="755" y="214" fill="#93a6ba" font-size="12">key 0.18 → ¼ of it in the dark</text>
+        <text x="755" y="232" fill="#93a6ba" font-size="12">target = key / L × bias</text>
+        <text x="755" y="250" fill="#93a6ba" font-size="12">highlight cap · EV100 −3 .. 17</text>
+        <text x="755" y="268" fill="#93a6ba" font-size="12">τ 0.5 s to light, 1.2 s to dark</text>
+        <rect x="20" y="190" width="250" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="145" y="216" fill="#cfe4ff">frame N + k</text>
+        <text x="145" y="236" fill="#93a6ba" font-size="12">composite exposes by 1</text>
+        <line x1="270" y1="70" x2="321" y2="70" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+        <line x1="575" y1="70" x2="626" y2="70" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+        <line x1="755" y1="110" x2="755" y2="166" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+        <line x1="630" y1="225" x2="274" y2="225" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+        <text x="450" y="215" fill="#8ec5ff" font-size="12">lit.exposure → cameraPosition.w</text>
+        <line x1="145" y1="190" x2="145" y2="114" stroke="#6f8fb0" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">A feedback loop with a two-frame delay. Subtracting the pre-exposure makes the measurement
+    independent of the exposure that produced it, so the loop converges instead of chasing itself.</p>
+
+  <p>The eye turns the measurement into a target. The <b>key</b> is the grey level the measured luminance should map
+    to: 0.18 (mid grey) for anything above 100 cd/m², easing down to a quarter of that by 0.01 cd/m². Without the
+    drop, the eye would brighten a night street to daylight grey; with it, a night street stays a night street. The
+    target is key / L × the level's bias, kept within EV100 −3 to 17, and the exposure eases toward it in log space:
+    with a time constant of 0.5 s into the light and 1.2 s into the dark, as eyes do.
+    <code>RT_EXPOSURE=meter</code> keeps the incident meter for the A/B.</p>
+<div class="code">
+    <div class="hd"><span>The eye: a key that drops in the dark, the highlight cap, the clamp, and the eased approach</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/day_night_system.cpp#L776-L803">src/engine/systems/day_night_system.cpp</a></div>
+<pre>    float log2L = 0.0f;
+    if (!meterOnly &amp;&amp; ctx.renderer.measuredSceneLuminance(log2L)) {
+        const double L = std::exp2(static_cast&lt;double&gt;(log2L));   <span class="c">// units</span>
+        const double nits = L * kLuxPerUnit;
+        const double s = std::clamp((std::log10(std::max(nits, 1e-6)) + 2.0) / 4.0, 0.0, 1.0);   <span class="c">// 0.01 .. 100 cd/m^2</span>
+        const double key = 0.18 * (0.25 + 0.75 * s * s * (3.0 - 2.0 * s));
+        double target = key / std::max(L, 1e-12) * bias;
+<span class="c">        // ...</span>
+        constexpr double kHighlightCeiling = 1.5;
+        float highLog2 = 0.0f;
+        if (!lit.viewerBoxValid &amp;&amp; ctx.renderer.measuredSceneHighlight(highLog2))
+            target = std::min(target, kHighlightCeiling / std::max(std::exp2(static_cast&lt;double&gt;(highLog2)), 1e-12) * bias);
+        const double lo = kLuxPerUnit / (1.2 * std::exp2(17.0)), hi = kLuxPerUnit / (1.2 * std::exp2(-3.0));
+        target = std::clamp(target, lo, hi);
+        if (autoExposure_ &lt;= 0.0f) {
+            autoExposure_ = static_cast&lt;float&gt;(target);
+        } else {
+            const double tau = target &gt; autoExposure_ ? 1.2 : 0.5;   <span class="c">// into the dark slower, into the light faster</span>
+            const double k = 1.0 - std::exp(-std::max(0.0f, std::min(lastDt_, 0.25f)) / tau);
+            autoExposure_ = static_cast&lt;float&gt;(std::exp(std::log(autoExposure_) + (std::log(target) - std::log(autoExposure_)) * k));
+        }
+        lit.exposure = autoExposure_;</pre>
+  </div>
+  <p>The highlight cap came a day later (ADR-0378, after Glenn found the towers' lit windows "bright white and too
+    harsh"). The renderer also reports the 97th percentile, and the eye never exposes so far that the brightest 3%
+    pass 1.5 before the tone curve. By day that is the sky, which sits under it anyway. At night it is the lit windows,
+    which the median-keyed eye had pushed about 7 stops past white. Inside a building or a cabin (the viewer box) the
+    cap is off: a room exposes for its walls and its fittings may clip, as a camera in one would.</p>
+
+  <div class="note history"><p><b>Why the emitters had to change.</b> With the eye in place (ADR-0368), the city at
+    dusk looked like day: the eye adapted to lamps and windows tuned for the old ×6 night lift. ADR-0369 put them in
+    real units. Each light kind in <code>lights.lua</code> got a <code>candela</code> (a street lamp 1,600 cd, a
+    headlight 15,000), and each class of glowing surface a luminance (a window pane 25 cd/m², a street lamp's head
+    8,000, a sign 400). Everything else that glows is brought into units by one factor, <code>emission_scale</code>
+    = 0.004, which reaches <code>mesh.frag</code> as <code>skyPhysical3.z</code>: an old window emission of 1.3 comes
+    out about 100 cd/m². The lights themselves are the <a href="lighting.html">lighting</a> page's subject. One
+    miss surfaced later: ADR-0385 found <code>rt_reflect.comp</code> adding a hit's emission without that scale, so
+    every lit window in a ray-traced reflection was about 250× the window itself.</p></div>
+
+  <h2>Aerial perspective: the air in front of things</h2>
+  <p><b>Aerial perspective</b> is the haze that makes distant mountains blue: between the eye and a far surface, the
+    air both dims the surface's light (blue first) and adds light of its own, scattered toward the eye from the sun.
+    The old Vulkan path faded a surface toward the sky's colour by a fixed fog density. ADR-0369's first physical
+    version thinned the surface by the real air's extinction and put the sky's radiance from that direction in its
+    place. That treats the air as uniform, with the whole sky's light as the limit. Glenn's question on the sunset
+    shots found the flaw: "shouldn't the mountains block the haze?" At sunset the sky's radiance toward the horizon
+    is the glow gathered over hundreds of kilometres of air, so the mountains' bases glowed as if the sky showed
+    through them.</p>
+
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/sky/aerial-volume-vs-uniform.webp" alt="Four frames of a mountain range behind river_town. Top: at sunset the range is washed in an orange glow and at noon it is pale; bottom: at sunset the range is a solid dark silhouette with haze in front, and at noon a light blue haze">
+      <figcaption>ADR-0370's evidence. Top row: the uniform-air shortcut, at sunset and at noon. Bottom row: the
+        volume. At sunset the range becomes a solid silhouette with only the haze in front of it.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/sky/aerial-x4-vs-real-air.webp" alt="Four frames of the same mountain range. Top: the range is drowned in pale haze at sunset and blue-washed at noon; bottom: crisper ranges with natural haze">
+      <figcaption>The level's <code>aerial: 4.0</code> (top) against the real air (bottom). The multiplier was tuned
+        for the old Metal sky and drowned every range past about 20 km, so it is no longer applied.</figcaption>
+    </figure>
+  </div>
+
+  <p>ADR-0370's answer is Hillaire's fourth table, the <b>aerial perspective volume</b>. <code>aerial_volume.comp</code>
+    divides the screen into 32 × 32 tiles. For each tile it marches the air from the camera along the tile's centre
+    ray, and stores two values at 32 distances: the light scattered in so far, and the transmittance so far. The
+    distances are quadratic, fine near and coarse far, out to 120 km. A surface then reads the slice for its own
+    distance, so it gets exactly the haze of the air in front of it and nothing behind it.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 260" role="img" aria-label="Side view of the aerial perspective volume. From the camera on the left, one tile's ray runs right to 120 km. Thirty-two slice boundaries are spaced quadratically, crowded near the camera and wide apart far away. A tower near the camera reads an early slice; a mountain range at 40 km reads its own slice, getting only the air in front of it. The first slice ends at about 117 metres.">
+      <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <rect x="30" y="122" width="22" height="16" rx="3" fill="#131a24" stroke="#3b82f6"/>
+        <text x="41" y="160" fill="#cfe4ff" text-anchor="middle">camera</text>
+        <line x1="52" y1="130" x2="866" y2="130" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a4)"/>
+        <g stroke="#8ec5ff" stroke-opacity="0.75" stroke-width="1">
+          <line x1="52.8" y1="112" x2="52.8" y2="148"/><line x1="55.2" y1="112" x2="55.2" y2="148"/>
+          <line x1="59.1" y1="112" x2="59.1" y2="148"/><line x1="64.7" y1="112" x2="64.7" y2="148"/>
+          <line x1="71.8" y1="112" x2="71.8" y2="148"/><line x1="80.6" y1="112" x2="80.6" y2="148"/>
+          <line x1="90.9" y1="112" x2="90.9" y2="148"/><line x1="102.8" y1="112" x2="102.8" y2="148"/>
+          <line x1="116.3" y1="112" x2="116.3" y2="148"/><line x1="131.4" y1="112" x2="131.4" y2="148"/>
+          <line x1="148.1" y1="112" x2="148.1" y2="148"/><line x1="166.4" y1="112" x2="166.4" y2="148"/>
+          <line x1="186.3" y1="112" x2="186.3" y2="148"/><line x1="207.8" y1="112" x2="207.8" y2="148"/>
+          <line x1="230.8" y1="112" x2="230.8" y2="148"/><line x1="255.4" y1="112" x2="255.4" y2="148"/>
+          <line x1="281.6" y1="112" x2="281.6" y2="148"/><line x1="309.4" y1="112" x2="309.4" y2="148"/>
+          <line x1="338.8" y1="112" x2="338.8" y2="148"/><line x1="369.7" y1="112" x2="369.7" y2="148"/>
+          <line x1="402.2" y1="112" x2="402.2" y2="148"/><line x1="436.3" y1="112" x2="436.3" y2="148"/>
+          <line x1="472.0" y1="112" x2="472.0" y2="148"/><line x1="509.2" y1="112" x2="509.2" y2="148"/>
+          <line x1="548.0" y1="112" x2="548.0" y2="148"/><line x1="588.3" y1="112" x2="588.3" y2="148"/>
+          <line x1="630.2" y1="112" x2="630.2" y2="148"/><line x1="673.7" y1="112" x2="673.7" y2="148"/>
+          <line x1="718.8" y1="112" x2="718.8" y2="148"/><line x1="765.4" y1="112" x2="765.4" y2="148"/>
+          <line x1="813.6" y1="112" x2="813.6" y2="148"/><line x1="863.3" y1="112" x2="863.3" y2="148"/>
+        </g>
+        <rect x="88" y="70" width="14" height="60" fill="#131a24" stroke="#2c3d50"/>
+        <text x="95" y="62" fill="#93a6ba" font-size="12" text-anchor="middle">a tower</text>
+        <path d="M300,130 L330,92 L352,108 L378,70 L404,100 L430,84 L462,130 Z" fill="#131a24" stroke="#e6c07b"/>
+        <text x="381" y="58" fill="#e6c07b" font-size="12" text-anchor="middle">a range ~40 km off</text>
+        <text x="381" y="190" fill="#93a6ba" font-size="12" text-anchor="middle">colour × T + L, read at its own slice</text>
+        <line x1="381" y1="178" x2="381" y2="152" stroke="#6f8fb0" stroke-width="1.2" marker-end="url(#a4)"/>
+        <text x="60" y="210" fill="#93a6ba" font-size="12">first slice ends at 120 km / 32² ≈ 117 m;</text>
+        <text x="60" y="228" fill="#93a6ba" font-size="12">nearer than that, mesh.frag fades from no air to it</text>
+        <text x="866" y="104" fill="#cfe4ff" font-size="12" text-anchor="end">120 km</text>
+        <text x="560" y="210" fill="#93a6ba" font-size="12">slice s ends at 120 km × ((s + 1) / 32)²</text>
+        <text x="560" y="228" fill="#93a6ba" font-size="12">3 march steps per slice, 2 × 32³ RGBA16F</text>
+        <text x="450" y="24" fill="#cfe4ff" text-anchor="middle">one of 32 × 32 screen tiles, seen from the side</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Slice spacing drawn to scale along the ray. Half the slices are spent on the nearest quarter of the
+    distance, where the change per metre is largest.</p>
+
+<div class="code">
+    <div class="hd"><span>aerial_volume.comp: the march, stored slice by slice</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/aerial_volume.comp#L61-L85">shaders/vulkan/aerial_volume.comp</a></div>
+<pre>    vec3 T = vec3(1.0), L = vec3(0.0);
+    float t0 = 0.0;
+    const int SUB = 3;
+    for (int s = 0; s &lt; size.z; ++s) {
+        float f = (float(s) + 1.0) / float(size.z);
+        float t1 = pc.mie.w * f * f;   <span class="c">// quadratic: fine near, coarse far</span>
+        float ds = (t1 - t0) / float(SUB);
+        for (int k = 0; k &lt; SUB; ++k) {
+            vec3 p = x0 + dir * (t0 + (float(k) + 0.5) * ds);
+            float rp = length(p);
+            float h = max(rp - rg, 0.0);
+            vec3 sR = pc.rayleigh.rgb * exp(-h / pc.rayleigh.w) * density;
+            float sM = pc.mie.x * exp(-h / pc.mie.z) * density;
+            vec3 ext = max((pc.rayleigh.rgb * exp(-h / pc.rayleigh.w) + vec3(pc.mie.y * exp(-h / pc.mie.z))) * density +
+                           pc.ozone.rgb * ozoneDensity(h), vec3(1e-12));
+            float muS = dot(p / rp, light);
+            vec3 S = (transmittance(rp, muS) * (sR * phaseR + vec3(sM) * phaseM) + (sR + vec3(sM)) * multiScatter(rp, muS)) * pc.sun.w;
+            vec3 stepT = exp(-ext * ds);
+            L += T * (S - S * stepT) / ext;
+            T *= stepT;
+        }
+        t0 = t1;
+        imageStore(inscatterVol, ivec3(px, s), vec4(L, 1.0));
+        imageStore(transmitVol, ivec3(px, s), vec4(T, 1.0));
+    }</pre>
+  </div>
+  <p>It uses the same medium, phase functions, transmittance table and multiple-scattering table as the sky view, lit
+    by the active light. One difference: the density scale in <code>pc.ozone.w</code> multiplies the scattering
+    air, so an A/B can thicken it (<code>RT_AERIAL=&lt;x&gt;</code>), but not the ozone. The level's own
+    <code>aerial</code> key is no longer applied to the physical air. On the reading side, <code>mesh.frag</code> takes
+    the square root of its distance over 120 km to find its slice, which inverts the quadratic spacing exactly, and
+    applies <code>colour × T + L</code>:</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag: a surface reads the air in front of it</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1621-L1640">shaders/vulkan/mesh.frag</a></div>
+<pre>        if (skyIsPhysical()) {
+<span class="c">            // AERIAL PERSPECTIVE (ADR-0370): the air between the camera and this surface, from the volume aerial_volume.comp</span>
+<span class="c">            // marched along this pixel's tile -- its light added, the surface's thinned (blue first) -- so a far range</span>
+<span class="c">            // gets exactly the haze in front of it: a hazy silhouette, blue by day, purple at dusk, never the</span>
+<span class="c">            // horizon's whole glow</span>
+            float dist = length(inWorldPos - g.cameraPosition.xyz);
+            vec2 uvA = gl_FragCoord.xy / vec2(max(g.skyPhysical2.w, 1.0), max(g.skyPhysical5.w, 1.0));
+            const float S = 32.0, FAR = 120000.0;
+            float f = sqrt(clamp(dist / FAR, 0.0, 1.0));
+            vec3 aL, aT;
+            if (f * S &lt; 1.0) {   <span class="c">// nearer than the first slice: from nothing to it</span>
+                float a = f * S;
+                vec3 z0 = vec3(uvA, 0.5 / S);
+                aL = texture(aerialInscatter, z0).rgb * a;
+                aT = mix(vec3(1.0), texture(aerialTransmit, z0).rgb, a);
+            } else {
+                vec3 z = vec3(uvA, f - 0.5 / S);
+                aL = texture(aerialInscatter, z).rgb;
+                aT = texture(aerialTransmit, z).rgb;
+            }</pre>
+  </div>
+  <p>The two 3D images are made at init, before anything has written them, because set 0 bindings 13 and 14 must
+    always hold a 3D view whether or not the physical sky is on. ADR-0373 then moved them, with the sky cubes and the
+    probes' arrays, into the GENERAL layout together at the first frame. The volume is rebuilt every frame the
+    physical sky is on.</p>
+
+  <h2>The sky as a cubemap and as spherical harmonics</h2>
+  <p>Under the first physical sky a surface's ambient light was the dome sampled once toward its normal, and its
+    reflection was the dome toward the mirror direction, blended toward that ambient as the roughness rose. Both were
+    wrong in the same way: one direction's radiance stood in for an integral. A rough surface had no real blur, and a
+    wall's sky light was the colour of one point of the sky, not the light of the whole hemisphere it faces
+    (ADR-0371's context, prompted by Glenn: "what about using a cubemap for reflections?"). ADR-0371 split the job into
+    the two standard answers.</p>
+
+  <h3>Specular: a prefiltered cube</h3>
+  <p><code>sky_cube.comp</code> draws the sky-view dome into the six faces of a 128² cube every frame, with the same
+    below-horizon blend and <b>no sun disc</b>: the sun is lit directly by the BRDF, and taking it again through the
+    reflections doubled it. Blits box-filter its 8 mips. Then <code>sky_prefilter.comp</code> writes a second cube with
+    6 mips, mip <i>m</i> holding the sky convolved with a GGX lobe of roughness <i>m</i> / 5 (0, 0.2 … 1). This is the
+    first half of Brian Karis's split-sum approximation ("Real Shading in Unreal Engine 4", 2013); the BRDF lookup table
+    the renderer bakes at start-up is the second half. Each texel takes 48 importance samples. Each sample reads the
+    source at the mip whose texel size matches the sample's solid angle (filtered importance sampling), so 48 samples
+    come out smooth rather than speckled.</p>
+<div class="code">
+    <div class="hd"><span>sky_prefilter.comp: 48 GGX samples, each at a mip matched to its solid angle; NaN written black</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/sky_prefilter.comp#L48-L67">shaders/vulkan/sky_prefilter.comp</a></div>
+<pre>    for (uint i = 0u; i &lt; COUNT; ++i) {
+        vec2 xi = hammersley(i, COUNT);
+        float phi = 2.0 * PI * xi.x;
+        float cosT = min(sqrt((1.0 - xi.y) / (1.0 + (a2 - 1.0) * xi.y)), 1.0);
+        float sinT = sqrt(max(1.0 - cosT * cosT, 0.0));   <span class="c">// (rounding put cosT past 1 at low roughness: NaN)</span>
+        vec3 H = normalize(tx * (sinT * cos(phi)) + ty * (sinT * sin(phi)) + N * cosT);
+        vec3 L = normalize(2.0 * dot(N, H) * H - N);
+        float NdotL = dot(N, L);
+        if (NdotL &lt;= 0.0) continue;
+        float NdotH = max(dot(N, H), 0.0);
+        float d = (NdotH * NdotH * (a2 - 1.0) + 1.0);
+        float D = a2 / (PI * d * d);
+        float pdf = D * 0.25;   <span class="c">// D(H) NdotH / (4 VdotH), N = V</span>
+        float sampleSolid = 1.0 / (float(COUNT) * pdf + 1e-6);
+        float mip = clamp(0.5 * log2(sampleSolid / texelSolid) + 1.0, 0.0, pc.params.z - 1.0);
+        sum += textureLod(src, L, mip).rgb * NdotL;
+        weight += NdotL;
+    }
+    vec3 c = sum / max(weight, 1e-4);
+    imageStore(dst, id, vec4(any(isnan(c)) || any(isinf(c)) ? vec3(0.0) : c, 1.0));</pre>
+  </div>
+  <div class="note history"><p><b>A NaN that ate the reflections.</b> At roughness near 0, rounding put the GGX sample's
+    cosine just past 1, and <code>sqrt(1 − cos²)</code> went NaN. Filtering spread the NaN through the cube, then to
+    every reflective surface, and then, through the histogram, to the exposure. The cosine is now clamped with
+    <code>min(…, 1.0)</code>, and any texel that still comes out NaN or Inf is written black (ADR-0371).</p></div>
+
+  <h3>Diffuse: nine numbers on the CPU</h3>
+  <p>The light a surface takes from the whole sky (its irradiance) is smooth: a cosine-weighted average over a
+    hemisphere varies slowly with the facing. Ravi Ramamoorthi and Pat Hanrahan showed ("An Efficient Representation for
+    Irradiance Environment Maps", 2001) that order-2 <b>spherical harmonics</b> (nine basis functions over the sphere)
+    hold it closely. <code>atmosphereIrradianceSH</code> projects the sky's radiance in 192 Fibonacci
+    directions (64 for the moon) onto the nine functions, then convolves with the clamped cosine, which for SH is just a scale per band
+    (π, 2π/3, π/4), and divides by π. The result is E / π, the radiance-like value the shader's ambient takes. It runs
+    on the CPU, from the same model, only when the sun or the moon moves, once per light, and the two are summed.</p>
+<div class="code">
+    <div class="hd"><span>atmosphereIrradianceSH: project, then convolve with the cosine band by band</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/sky_atmosphere.cpp#L268-L282">src/engine/sky/sky_atmosphere.cpp</a></div>
+<pre>void atmosphereIrradianceSH(const AtmosphereTables&amp; t, double height, const Vec3&amp; light, double topUnits, Vec3 out[9],
+                            int samples) {
+    for (int k = 0; k &lt; 9; ++k) out[k] = Vec3(0, 0, 0);
+    double y[9];
+    for (int i = 0; i &lt; samples; ++i) {
+        const Vec3 d = fibonacciDir(i, samples);
+        const Vec3 L = atmosphereSkyRadiance(t, height, d, light, 20) * topUnits;
+        shBasis(d, y);
+        for (int k = 0; k &lt; 9; ++k) out[k] = out[k] + L * y[k];
+    }
+<span class="c">    // the radiance's coefficients (4 pi / N each), convolved with the clamped cosine (pi, 2 pi / 3, pi / 4 by band) and</span>
+<span class="c">    // over pi: the radiance-like E / pi the shader's ambient takes</span>
+    const double band[9] = {1.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 0.25, 0.25, 0.25, 0.25, 0.25};
+    for (int k = 0; k &lt; 9; ++k) out[k] = out[k] * (4.0 * PI / samples * band[k]);
+}</pre>
+  </div>
+  <p>The nine coefficients go up in <code>GlobalsUBO::skySH</code> and <code>skyIrradianceSH</code> in
+    <code>sky_physical.glsl</code> evaluates the same basis. The test holds them to the brute-force cosine integral at
+    noon and with the sun 8° up, for up, two sideways and one oblique normal (it allows 15%; the ADR reports within
+    7%). The harmonics showed something the single sample had missed: at noon, a face turned down takes more from the
+    sunlit ground than a face turned up takes from the sky.</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag: the ambient from the harmonics, the reflection from the cube's GGX mip</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1501-L1507">shaders/vulkan/mesh.frag</a></div>
+<pre>    } else if (skyIsPhysical()) {
+<span class="c">        // THE PHYSICAL SKY's light (ADR-0371): its irradiance / pi from the nine harmonics (the whole sky, cosine</span>
+<span class="c">        // weighted: no second sun, the disc is lit directly), and the reflection from the sky cube's GGX mip for this</span>
+<span class="c">        // roughness</span>
+        irradiance = g.skySH[0].w &lt; 0.5 ? skyViewRadiance(N) : skyIrradianceSH(N);
+        prefiltered = g.skySH[1].w &lt; 0.5 ? mix(skyViewRadiance(R), irradiance, roughness)
+                                         : textureLod(skyCubeTex, R, roughness * 5.0).rgb;</pre>
+  </div>
+  <p><code>RT_SKYCUBE</code> is the A/B, packed into the spare <code>w</code> of the first two coefficients: 0 the old
+    single-sample path, 1 the harmonics only, 2 the cube only, 3 (the default) both.</p>
+
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/sky/cube-glass-noon.webp" alt="Glass towers at noon reflecting a blue sky with white clouds">
+      <figcaption>Glass towers at noon, reflecting the sky cube (ADR-0371).</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/sky/cube-glass-golden.webp" alt="Glass towers at golden hour, their faces gold with the low sun's sky, mountains in a warm haze behind">
+      <figcaption>The same towers at golden hour: the cube carries the warm sky, and the haze toward the low sun is
+        the aerial volume.</figcaption>
+    </figure>
+  </div>
+
+  <h3>Who reads what</h3>
+  <p>The cube and the harmonics became the sky's light for everything after them. Each reader takes the sky only where
+    nothing nearer answers: the local probes and the rays (the <a href="reflections.html">reflections</a> page) sit in
+    front of the cube and fall back to it.</p>
+  <table>
+    <tr><th>Reader</th><th>Sky view (11)</th><th>Cube (15)</th><th>Harmonics</th><th>Aerial (13, 14)</th></tr>
+    <tr><td><code>sky.frag</code>: the sky you see</td><td>the dome + disc</td><td>—</td><td>—</td><td>—</td></tr>
+    <tr><td><code>mesh.frag</code>: lit surfaces</td><td>old path only (<code>RT_SKYCUBE=0</code>)</td><td>reflection at
+      mip roughness × 5, behind the probes</td><td>ambient; indoors 30% of the up-facing value</td><td>colour × T + L</td></tr>
+    <tr><td><code>probe_relight.comp</code>: the probes</td><td>—</td><td>a texel that saw nothing (miss); the relit
+      surface's reflection</td><td>the relit surface's ambient</td><td>—</td></tr>
+    <tr><td><code>rt_reflect.comp</code>: the rays</td><td>—</td><td>past the near scene, under the probe</td><td>a
+      hit's ambient</td><td>— (a fixed exp(−0.00002 t))</td></tr>
+    <tr><td><code>composite.frag</code>: underwater</td><td>—</td><td>—</td><td>the downwelling light (next
+      section)</td><td>—</td></tr>
+  </table>
+
+  <h2>Underwater, and at night</h2>
+  <p><code>composite.frag</code> draws the view from under water as a post effect: absorption along the path (red first),
+    light scattered in by the water, caustics on the bed, and Snell's window overhead (the sky squeezed into a cone
+    about 48.6° from vertical, a mirror of the depths outside it). It used to take its light from the palette's sky
+    colours. Those are display values, and once the night's pre-exposure reached about 170× (ADR-0382's figure) they went white. Glenn,
+    2026-11-08: "going underwater at night the screen turns bright white".</p>
+  <p>The fix (described in ADR-0383, committed with ADR-0384 in <code>38276bb5</code>) gives the water a real number.
+    The renderer computes the <b>downwelling light</b>, the light coming down onto a level surface, in units: the
+    harmonics' first two bands evaluated straight up, plus the active light's beam × its cosine / π. It sends that in
+    <code>underwaterColor.w</code>. Zero means the old sky, so the palette path is unchanged.</p>
+<div class="code">
+    <div class="hd"><span>The downwelling light into the water, from the harmonics and the beam</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L7741-L7760">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre><span class="c">        // THE LIGHT COMING DOWN INTO THE WATER, in engine units (E / pi on a level surface: the sky's harmonics up,</span>
+<span class="c">        // and the sun's or the moon's beam), under the physical sky; 0: the old sky, whose colours are the light.</span>
+<span class="c">        // composite.frag lit the water with the day model's sky colours, display values that the pre-applied night</span>
+<span class="c">        // exposure turned white (Glenn, 2026-11-08: "going underwater at night the screen turns bright white")</span>
+        float down = 0.0f;
+        if (cpuGlobals.counts[2] == 2) {
+            const float* s0 = cpuGlobals.skySH[0];
+            const float* s1 = cpuGlobals.skySH[1];
+            const float up[3] = {s0[0] * 0.282095f + s1[0] * 0.488603f, s0[1] * 0.282095f + s1[1] * 0.488603f,
+                                 s0[2] * 0.282095f + s1[2] * 0.488603f};
+            down = std::max(0.0f, 0.2126f * up[0] + 0.7152f * up[1] + 0.0722f * up[2]);
+            const GpuLight&amp; l0 = cpuGlobals.lights[0];
+            if (cpuGlobals.counts[0] &gt; 0 &amp;&amp; static_cast&lt;int&gt;(l0.typeRange[0]) == 1) {
+                const float cosZ = std::max(0.0f, l0.directionInner[1]);
+                const float lum = 0.2126f * l0.colorOuter[0] + 0.7152f * l0.colorOuter[1] + 0.0722f * l0.colorOuter[2];
+                down += lum * l0.positionIntensity[3] * cosZ / 3.14159265f;
+            }
+            down = std::max(down, 1e-9f);
+        }
+        cpush.underwaterColor[3] = down;</pre>
+  </div>
+  <p>In the shader, the water's in-scatter takes its brightness from that number, and the Snell window keeps the sky's
+    <i>hue</i> (horizon to zenith) but takes its brightness from it too. Both are pre-exposed like everything else, so
+    a night dive is dark-blue and moonlit, not white.</p>
+<div class="code">
+    <div class="hd"><span>composite.frag: the scatter and Snell's window from the measured light</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/composite.frag#L152-L181">shaders/vulkan/composite.frag</a></div>
+<pre><span class="c">    // (under the physical sky, the light the renderer measured coming down: the sky colours are display values, which</span>
+<span class="c">    // the night's pre-exposure turned white)</span>
+    bool physical = pc.underwaterColor.w &gt; 0.0;
+    float light = (physical ? pc.underwaterColor.w : sky + sunLum) * exp(-camDepth / 22.0) *
+                  g.cameraPosition.w;   <span class="c">// (pre-exposed, ADR-0366)</span>
+    vec3 water = pc.underwaterColor.rgb;
+<span class="c">        // ...</span>
+<span class="c">        // lean toward the sky's own light the way a diver sees the bright disc overhead</span>
+        vec3 skyHue = mix(g.skyHorizon.rgb, g.skyZenith.rgb, smoothstep(0.66, 1.0, dir.y));
+        vec3 above = (physical ? skyHue / max(dot(skyHue, luma), 1e-4) * pc.underwaterColor.w : skyHue * 1.1) *
+                     g.cameraPosition.w;</pre>
+  </div>
+
+  <h3>The night sky and twilight</h3>
+  <p>Twilight falls out of the model rather than a palette entry. After sunset the street is in the planet's shadow,
+    but the air above it is not, so the sky keeps glowing from light scattered once and many times. The test holds it: still
+    over 0.5 cd/m² at the zenith with the sun 4° down. ADR-0369's sunset
+    sequence on river_town: the sun 2° up, golden clouds; just under the horizon, salmon-red clouds over a purple-pink
+    sky and an orange horizon; −3° to −5°, the twilight's purple overhead; −10°, an orange band under deep blue. Once
+    the sun is about 20° down it lights nothing (under 1e-3 cd/m²). The moon then becomes the active light and the
+    same tables give a moonlit sky, a blue-shifted day sky about 400,000 times dimmer (0.32 lux against 128,000), with
+    the 1e-8 floor, the stars, the moon's disc and the city's glow on top.</p>
+
+  <h2>How it fits in the frame</h2>
+  <p>All the sky's GPU work runs at the top of the command buffer, after the clustered lights are binned and before
+    anything samples it. The histogram sits between the clouds and the post chain, so it sees the clouded sky but not
+    bloom. (The order of the whole frame is on the <a href="renderer.html">renderer</a> page.)</p>
+<div class="code">
+    <div class="hd"><span>recordCommandBuffer: the sky's compute passes, before the shadows and the scene</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L7453-L7456">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre>    recordClusterBin(cmd);   <span class="c">// the froxels' light lists (ADR-0364), before the scene pass reads them</span>
+    recordSkyView(cmd);      <span class="c">// the physical sky's view (ADR-0367), before the sky and the scene sample it</span>
+    recordAerial(cmd);       <span class="c">// ...and the air between the camera and everything it sees (ADR-0370)</span>
+    recordSkyCube(cmd);      <span class="c">// ...and the sky as a cubemap for the reflections (ADR-0371)</span></pre>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 200" role="img" aria-label="The frame with the sky's passes marked: cluster bin, sky view, aerial volume, sky cube and prefilter, crowd, shadows, probes, then the scene pass where sky.frag and mesh.frag draw pre-exposed, then clouds, the luminance histogram, bloom, SSAO, SSR and rays, and the composite which exposes by one and draws the underwater view.">
+      <defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+        <rect x="10" y="20" width="96" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="58" y="44" fill="#cfe4ff">cluster bin</text><text x="58" y="62" fill="#93a6ba">lights</text>
+        <rect x="120" y="20" width="96" height="56" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="168" y="44" fill="#cfe4ff">sky view</text><text x="168" y="62" fill="#93a6ba">0367</text>
+        <rect x="230" y="20" width="96" height="56" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="278" y="44" fill="#cfe4ff">aerial</text><text x="278" y="62" fill="#93a6ba">0370</text>
+        <rect x="340" y="20" width="96" height="56" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="388" y="44" fill="#cfe4ff">sky cube</text><text x="388" y="62" fill="#93a6ba">0371</text>
+        <rect x="450" y="20" width="96" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="498" y="44" fill="#cfe4ff">crowd,</text><text x="498" y="62" fill="#93a6ba">shadows</text>
+        <rect x="560" y="20" width="96" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="608" y="44" fill="#cfe4ff">probes</text><text x="608" y="62" fill="#93a6ba">read cube, SH</text>
+        <rect x="670" y="20" width="220" height="56" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="780" y="44" fill="#cfe4ff">scene pass</text><text x="780" y="62" fill="#93a6ba">sky.frag, mesh.frag × exposure</text>
+        <rect x="670" y="120" width="220" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="780" y="144" fill="#cfe4ff">clouds</text><text x="780" y="162" fill="#93a6ba">their own sun (0369)</text>
+        <rect x="450" y="120" width="196" height="56" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="548" y="144" fill="#cfe4ff">lum histogram</text><text x="548" y="162" fill="#93a6ba">0368</text>
+        <rect x="230" y="120" width="196" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="328" y="144" fill="#cfe4ff">bloom, SSAO, SSR, rays</text><text x="328" y="162" fill="#93a6ba">threshold pre-exposed</text>
+        <rect x="10" y="120" width="196" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="108" y="144" fill="#cfe4ff">composite</text><text x="108" y="162" fill="#93a6ba">exposes by 1, underwater</text>
+        <line x1="106" y1="48" x2="116" y2="48" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <line x1="216" y1="48" x2="226" y2="48" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <line x1="326" y1="48" x2="336" y2="48" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <line x1="436" y1="48" x2="446" y2="48" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <line x1="546" y1="48" x2="556" y2="48" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <line x1="656" y1="48" x2="666" y2="48" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <line x1="780" y1="76" x2="780" y2="116" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <line x1="670" y1="148" x2="650" y2="148" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <line x1="450" y1="148" x2="430" y2="148" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <line x1="230" y1="148" x2="210" y2="148" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The sky's passes (blue outlines) in the frame. The sky view must come first: the aerial volume does not
+    read it, but the cube does, and the scene pass reads all three.</p>
+
+  <p>One more ordering detail: the renderer switches the shaders to the physical sky (<code>envMode</code> 2,
+    <code>g.counts.z</code>) only once the sky view has been drawn at least once and the descriptor sets point at it.
+    An HDR environment map, when a level binds one, takes precedence; the physical sky never runs under it.</p>
+
+  <h2>The validation pass</h2>
+  <p>ADR-0371 also ran the Khronos validation layer on river_town under the physical sky and got it to zero messages.
+    The
+    five fixes were not all the sky's own:</p>
+  <ul>
+    <li>the cloud resolve's image infos were a 4-element array written at index 4: a stack overwrite, and the source of
+      the "bad sType" the layer reported;</li>
+    <li>the GPU crowd's draw-count buffer was copied back for telemetry but lacked <code>TRANSFER_SRC</code>;</li>
+    <li>the horizon map was written at init before the default texture existed (a null view); it is now left to
+      <code>updateGlobalHorizonDescriptor</code>;</li>
+    <li><code>terrain.vert</code> did not write <code>mesh.frag</code>'s input locations 6-8;</li>
+    <li>the sky cube's first barrier waited on a read at <code>TOP_OF_PIPE</code>.</li>
+  </ul>
+
+  <h2>Level JSON</h2>
+  <p>The physical sky takes its air from the level's <code>environment.sky</code> block, the one the Metal scattering
+    sky reads (<code>"model": "scattering"</code>). <code>atmosphereFrom</code> uses <code>turbidity</code> (scales
+    Mie scattering and extinction), <code>mieG</code>, <code>multiScatter</code>, <code>groundAlbedo</code> and
+    <code>sunAngularRadius</code>. Without the block, Earth's defaults apply. Two keys of that block are not used by the
+    physical sky: <code>aerial</code> (ADR-0370 dropped it; <code>RT_AERIAL</code> is the A/B) and
+    <code>brightness</code>. The level's authored <code>exposure</code> stays meaningful as a bias: the meter and the
+    eye both multiply by it / 0.7.</p>
+<pre style="background:#0a0e14;border:1px solid #1f2a37;border-radius:10px;padding:12px 14px;overflow-x:auto;font:12.8px/1.55 ui-monospace,monospace;color:#d5e2ee">"environment": {
+  "sky": { "model": "scattering", "turbidity": 2.0, "aerial": 4.0 }
+}</pre>
+  <p class="cap">river_town's sky block at the pinned commit: turbidity 2 doubles the haze; <code>aerial</code> is now
+    ignored by the physical sky.</p>
+
+  <h2>How it got here</h2>
+  <table>
+    <tr><th>When</th><th>What changed</th><th>Why</th></tr>
+    <tr><td>before 2026-11-07</td><td>Vulkan sky: the palette in <code>day_night_cycle.cpp</code>, a ×6 night exposure
+      lift; Metal: an opt-in Hillaire-style scattering sky</td><td>a look that worked by day</td></tr>
+    <tr><td>2026-11-07</td><td>Engine units, pre-exposure (0366)</td><td>16 stops would not fit fp16</td></tr>
+    <tr><td>2026-11-07</td><td>Physical sky: CPU model, tests, GPU sky view (0367)</td><td>"physical based lighting
+      for the sky too"</td></tr>
+    <tr><td>2026-11-07</td><td>Histogram auto exposure (0368)</td><td>the meter blew out every lamp at night</td></tr>
+    <tr><td>2026-11-07</td><td>Candela, glows in units, clouds lit from their height (0369)</td><td>"Why is the city so
+      bright at dusk?"</td></tr>
+    <tr><td>2026-11-07</td><td>Aerial perspective volume (0370)</td><td>"shouldn't the mountains block the haze?"</td></tr>
+    <tr><td>2026-11-07</td><td>Sky cube + harmonics; validation-clean (0371)</td><td>no real blur, one-sample ambient</td></tr>
+    <tr><td>2026-11-08</td><td>Highlight cap on the eye (0378); emission scaled in the rays (0385); underwater from
+      the downwelling light (0383)</td><td>white windows; ~250× reflections; a white screen under water at night</td></tr>
+  </table>
+  <p><b>Still owed</b> (from the ADRs): the stars' real luminance (ADR-0369); lit windows clipping at night against
+    the street-adapted eye (ADR-0369, partly answered by ADR-0378); the sky's light under overcast, the deck's rather
+    than the clear sky's, and the meter's ground reading under a cloud (ADR-0387); then physical by default, and the
+    palette, <code>kNightAdapt</code>, the lights' old <code>intensity</code> fields and <code>emission_scale</code>
+    retired.</p>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sky/sky_atmosphere.h">src/engine/sky/sky_atmosphere.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sky/sky_atmosphere.cpp">sky_atmosphere.cpp</a> — units, the air, the tables, the march, <code>readSky</code>, the harmonics</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/day_night_system.cpp">src/engine/systems/day_night_system.cpp</a> — <code>applyPhysicalSky</code>: the active light, the clouds' sun, the meter and the eye</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/day_night_cycle.h">src/engine/day_night_cycle.h</a> — the clock, the sun, the moon and the stars</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/renderer.h">src/renderer/renderer.h</a> — <code>PhysicalSkyFrame</code>, <code>SkyScatteringParams</code>, <code>setSkyTables</code>, <code>measuredSceneLuminance</code>/<code>Highlight</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/vulkan/vulkan_renderer.cpp">src/renderer/vulkan/vulkan_renderer.cpp</a> — <code>recordSkyView</code>, <code>recordAerial</code>, <code>recordSkyCube</code>, <code>recordLumHistogram</code>/<code>readLumHistogram</code>, the globals fill in <code>setLights</code>, the underwater push</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/sky_physical.glsl">shaders/vulkan/sky_physical.glsl</a> — bindings 11-15, <code>skyViewRadiance</code>, <code>skyLightDisc</code>, <code>skyIrradianceSH</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/sky_view.comp">shaders/vulkan/sky_view.comp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/aerial_volume.comp">aerial_volume.comp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/sky_cube.comp">sky_cube.comp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/sky_prefilter.comp">sky_prefilter.comp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/lum_histogram.comp">lum_histogram.comp</a> — the compute passes</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/sky.frag">shaders/vulkan/sky.frag</a> — the sky you see (all three modes), the moon, the stars, the city glow</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/composite.frag">shaders/vulkan/composite.frag</a> — <code>underwaterScene</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/lights.lua">assets/scripts/lights.lua</a> — <code>emission_scale</code>, <code>moon_nits</code>, <code>city_glow_nits</code>, the glow classes</li>
+  </ul>
+  <p><b>Tests:</b> <code>tests/test_sky_atmosphere.cpp</code> —
+    <code style="word-break: break-all">sky_transmittance_straight_up_is_the_closed_form</code>,
+    <code style="word-break: break-all">sky_tables_agree_with_the_exact_march</code>,
+    <code style="word-break: break-all">sky_noon_is_blue_and_daylight_bright</code>,
+    <code style="word-break: break-all">sky_sunset_reddens_the_sun_and_the_horizon_toward_it</code>,
+    <code style="word-break: break-all">sky_twilight_glows_and_night_is_dark</code>,
+    <code style="word-break: break-all">sky_irradiance_harmonics_match_the_integral</code>. The GPU side has no
+    automated test; it is checked by eye on river_town and by the A/B switches.</p>
+  <p><b>Test bed:</b> <code>river_town</code>, the towers and the street, at noon, 17:00, sunset and 22:00 (every
+    screenshot on this page). Set the hour with the <code>daynight</code> command (<code>hour</code>,
+    <code>hold</code>, <code>day</code>, <code>moon</code>; see <a href="commands.html">commands</a>).</p>
+  <p><b>Switches:</b> <code>RT_SKY=physical</code> (on; off by default), <code>RT_EXPOSURE=meter</code> (the incident
+    meter, not the eye), <code>RT_PREEXPOSE=0</code> (exposure in the composite, the old order),
+    <code>RT_AERIAL=&lt;x&gt;</code> (scale the air of the aerial volume), <code>RT_SKYCUBE=0|1|2</code> (old path,
+    harmonics only, cube only), <code>RT_SKY_DEBUG=1</code> (log the first coefficients, the exposure and the light every
+    120 frames), <code>RT_SKY_SVG=&lt;path&gt;</code> (write the day's sky chart at boot, also
+    <code>daynight chart</code>).</p>
+
+  <footer>Code excerpts from commit <code>e55dfaaa</code> (2026-11-09). Drawn from ADR-0366, 0367, 0368, 0369, 0370,
+    0371, 0373, 0378, 0383, 0384, 0385 and 0387 in
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a>, and the
+    commits <code>57ee888b</code>, <code>2d006311</code>, <code>8a8693a4</code>, <code>7459752b</code> and
+    <code>38276bb5</code>. Methods: Hillaire 2020 (sky, multiple scattering, sky view, aerial volume), Bruneton and
+    Neyret 2008 (the transmittance mapping), Karis 2013 (the split sum), Ramamoorthi and Hanrahan 2001 (irradiance
+    harmonics).</footer>
+</div>
+</body>
+</html>

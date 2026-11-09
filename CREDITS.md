@@ -73,6 +73,11 @@ Published techniques we implemented. These are courtesy credits, not licence obl
 - interleaved gradient noise (Jimenez)
 - PCG hash (Jarzynski & Olano)
 - multiple-scattering octaves for clouds (Wrenninge)
+- volumetric clouds from a weather map, cloud types and eroded noise (Schneider, Guerrilla Games: "Nubis", SIGGRAPH 2015 and 2017)
+- split-sum prefiltered environment lighting (Karis 2013)
+- irradiance as spherical harmonics (Ramamoorthi & Hanrahan 2001)
+- a rough reflection's dominant direction (Lagarde & de Rousiers, "Moving Frostbite to PBR", 2014)
+- stable fluids: semi-Lagrangian advection and a pressure projection (Stam 1999)
 - Möller-Trumbore ray-triangle intersection
 - SplitMix
 - Chaikin corner cutting
