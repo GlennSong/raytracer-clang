@@ -21,7 +21,8 @@ namespace {
 // Value noise (procgen/noise.h) at `cell` metres, over the recipe terrain's own frozen lattice (hash.h: kept until the
 // lanes' next tag)
 double valueNoise(double x, double y, double cell, uint32_t seed) {
-    return latticeValueNoise(x / cell, y / cell, [seed](int64_t i, int64_t j) { return frozenTerrainRecipeLattice(i, j, seed); });
+    return latticeValueNoise(x / cell, y / cell, [seed](int64_t i, int64_t j) { return frozenTerrainRecipeLattice(i, j, seed); },
+                             FrozenTerrainRecipeBlend{});
 }
 
 }  // namespace

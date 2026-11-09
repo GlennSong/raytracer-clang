@@ -109,31 +109,56 @@ void PhysicsSystem::step(World& world, Real dt) {
         });
 }
 
-void PhysicsSystem::publishContacts(World& world, EventBus& events) {
-    std::vector<ContactEvent> contacts = physics.drainContactEvents();
-    if (contacts.empty()) return;
-
-    // Body id -> entity, for the bodies the ECS knows about. Rebuilt per call:
-    // contacts are bursty (usually zero), so an always-maintained map would
-    // cost more than this occasional sweep.
-    std::unordered_map<PhysicsBodyId, Entity> byBody;
+void PhysicsSystem::rebuildBodyMap(World& world) {
+    byBody_.clear();
+    nobodys_.clear();
+    nobodysAge_ = 0;
     world.each<RigidBody>([&](Entity e, RigidBody& rb) {
-        if (rb.bodyId != INVALID_PHYSICS_BODY) byBody[rb.bodyId] = e;
+        if (rb.bodyId != INVALID_PHYSICS_BODY) byBody_[rb.bodyId] = e;
     });
     world.each<MeshCollider>([&](Entity e, MeshCollider& mc) {
-        if (mc.bodyId != INVALID_PHYSICS_BODY) byBody[mc.bodyId] = e;
+        if (mc.bodyId != INVALID_PHYSICS_BODY) byBody_[mc.bodyId] = e;
     });
     // ...and a drivable vehicle's chassis (ADR-0071's "who did I hit" hook; ADR-0353 damage and sparks)
     world.each<Vehicle>([&](Entity e, Vehicle& v) {
-        if (v.vehicleId != PhysicsWorld::INVALID_VEHICLE) byBody[physics.vehicleBody(v.vehicleId)] = e;
+        if (v.vehicleId != PhysicsWorld::INVALID_VEHICLE) byBody_[physics.vehicleBody(v.vehicleId)] = e;
     });
+}
 
+Entity PhysicsSystem::entityOf(World& world, PhysicsBodyId id) {
+    if (id == INVALID_PHYSICS_BODY) return Entity{};
+    // (still that entity's body? a destroyed entity's id, or a body re-made under another, is a miss)
+    auto owns = [&](Entity e) {
+        if (!world.alive(e)) return false;
+        if (const RigidBody* rb = world.get<RigidBody>(e); rb && rb->bodyId == id) return true;
+        if (const MeshCollider* mc = world.get<MeshCollider>(e); mc && mc->bodyId == id) return true;
+        const Vehicle* v = world.get<Vehicle>(e);
+        return v && v->vehicleId != PhysicsWorld::INVALID_VEHICLE && physics.vehicleBody(v->vehicleId) == id;
+    };
+    auto it = byBody_.find(id);
+    if (it != byBody_.end() && owns(it->second)) return it->second;
+    if (it == byBody_.end() && nobodys_.count(id)) return Entity{};
+    rebuildBodyMap(world);
+    it = byBody_.find(id);
+    if (it != byBody_.end()) return it->second;
+    nobodys_.insert(id);
+    return Entity{};
+}
+
+// Contacts used to be rare (new ones only), so the body map was swept per call; a car's scrape now reports every step
+// it lasts (ADR-0353), so the map is kept and only rebuilt on a body it does not know.
+void PhysicsSystem::publishContacts(World& world, EventBus& events) {
+    // (a body id's sequence number wraps: forget the nobodies every few seconds)
+    if (++nobodysAge_ > 240) {
+        nobodys_.clear();
+        nobodysAge_ = 0;
+    }
+    std::vector<ContactEvent> contacts = physics.drainContactEvents();
+    if (contacts.empty()) return;
     for (const ContactEvent& contact : contacts) {
         Collision collision;
-        auto a = byBody.find(contact.bodyA);
-        auto b = byBody.find(contact.bodyB);
-        if (a != byBody.end()) collision.a = a->second;
-        if (b != byBody.end()) collision.b = b->second;
+        collision.a = entityOf(world, contact.bodyA);
+        collision.b = entityOf(world, contact.bodyB);
         collision.position = contact.position;
         collision.normal = contact.normal;
         collision.speed = contact.approachSpeed;

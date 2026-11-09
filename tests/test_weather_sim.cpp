@@ -84,7 +84,7 @@ TEST_CASE(weather_sim_an_overcast_closes_over_the_sea) {
     in.weather.lift = 0.35f;
     in.weather.convection = 0.3f;
     s.settle(in);
-    const float sea = meanCover(s, [](double x, double z) { return x < -20000.0; });
+    const float sea = meanCover(s, [](double x, double) { return x < -20000.0; });
     CHECK(sea > 0.6f);
 }
 

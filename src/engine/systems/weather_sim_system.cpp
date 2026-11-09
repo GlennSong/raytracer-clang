@@ -27,7 +27,7 @@ WeatherSimInputs inputsNow(FrameContext& ctx) {
         in.weather.lift = now.live.lift;
     });
     const double hours = ctx.view.lighting.clockHours >= 0.0f ? ctx.view.lighting.clockHours : 14.0;
-    in.sunUp = static_cast<float>(std::sin((hours - 6.0) * 3.14159265358979323846 / 12.0));
+    in.sunUp = static_cast<float>(std::sin((hours - 6.0) * PI / 12.0));
     return in;
 }
 }  // namespace
@@ -54,7 +54,8 @@ void WeatherSimSystem::begin(FrameContext& ctx) {
         sim.settle(in);
         LOG_INFO << "[weather] settled in "
                  << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
-        return std::move(sim);
+        std::shared_ptr<const WeatherSim> snapshot = std::make_shared<const WeatherSim>(sim);
+        return Stepped{std::move(sim), std::move(snapshot)};
     });
     stepping_ = true;
     begun_ = true;
@@ -62,7 +63,7 @@ void WeatherSimSystem::begin(FrameContext& ctx) {
 
 void WeatherSimSystem::publish(FrameContext& ctx) {
     WeatherField f;
-    f.sim = std::make_shared<const WeatherSim>(sim_);
+    f.sim = std::move(snapshot_);
     f.version = ++version_;
     if (!ctx.world.alive(fieldEntity_)) {
         fieldEntity_ = ctx.world.create();
@@ -79,7 +80,9 @@ void WeatherSimSystem::update(FrameContext& ctx) {
     const double perSecond = ctx.view.lighting.clockHoursPerSecond > 0.0f ? ctx.view.lighting.clockHoursPerSecond * 3600.0 : 1.0;
     gathered_ += std::clamp(ctx.frameDelta, 0.0, 0.25) * perSecond;
     if (stepping_ && pending_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-        sim_ = pending_.get();
+        Stepped done = pending_.get();
+        sim_ = std::move(done.sim);
+        snapshot_ = std::move(done.snapshot);
         stepping_ = false;
         publish(ctx);
     }
@@ -89,7 +92,8 @@ void WeatherSimSystem::update(FrameContext& ctx) {
         gathered_ = 0.0;
         pending_ = std::async(std::launch::async, [sim = std::move(sim_), in]() mutable {
             sim.step(in);
-            return std::move(sim);
+            std::shared_ptr<const WeatherSim> snapshot = std::make_shared<const WeatherSim>(sim);
+            return Stepped{std::move(sim), std::move(snapshot)};
         });
         stepping_ = true;
     }

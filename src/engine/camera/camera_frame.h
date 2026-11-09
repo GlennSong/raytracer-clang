@@ -15,7 +15,7 @@ namespace engine {
 
 // The fly camera's look direction for a pitch and yaw (degrees).
 inline Vec3 flyForward(Real pitchDeg, Real yawDeg) {
-    const Real p = pitchDeg * 3.14159265358979323846 / 180.0, y = yawDeg * 3.14159265358979323846 / 180.0;
+    const Real p = pitchDeg * DEG_TO_RAD, y = yawDeg * DEG_TO_RAD;
     return Vec3(std::sin(y) * std::cos(p), std::sin(p), -std::cos(y) * std::cos(p));
 }
 
@@ -27,7 +27,7 @@ inline Vec3 frameBox(const Vec3& lo, const Vec3& hi, Real pitchDeg, Real yawDeg,
     Vec3 r = cross(f, Vec3(0, 1, 0));
     r = r.length() > 1e-6 ? r * (1.0 / r.length()) : Vec3(1, 0, 0);   // (straight down: any right will do)
     const Vec3 u = cross(r, f);
-    const Real ty = std::tan(vfovDeg * 3.14159265358979323846 / 360.0) * fill;
+    const Real ty = std::tan(vfovDeg * 0.5 * DEG_TO_RAD) * fill;
     const Real tx = ty * std::max(Real(0.1), aspect);
     Real d = 0;
     for (int k = 0; k < 8; ++k) {

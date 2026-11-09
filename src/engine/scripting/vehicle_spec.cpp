@@ -454,7 +454,7 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
         panel.name = sp.name;
         panel.pivot = sp.pivot;
         panel.axis = sp.axis;
-        panel.open = sp.openDeg * static_cast<float>(3.14159265358979 / 180.0);
+        panel.open = sp.openDeg * static_cast<float>(DEG_TO_RAD);
         panel.centre = sp.centre;
         panel.lo = sp.lo;
         panel.hi = sp.hi;

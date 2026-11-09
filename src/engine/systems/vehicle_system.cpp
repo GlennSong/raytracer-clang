@@ -1312,7 +1312,7 @@ void VehicleSystem::applyDamage(FrameContext& ctx) {
         if (v->age < 0.5f || h.speed > 60.0) continue;
         const Quat inv = t->orientation.conjugate();
         const Vec3 local = inv.rotate(h.at - t->position);
-        const Vec3 inward = inv.rotate(h.normal);   // into the car, chassis frame
+        const Vec3 inward = inv.rotate(h.normal * -1.0);   // into the car, chassis frame (the normal points out of it)
         const DamageZone zone = ground ? DamageZone::Under : damageZone(local, v->config.chassisHalfExtent);
         float& zh = v->zoneHealth[static_cast<int>(zone)];
         // (a knock within a third of a second of the last on this zone is the same crash: it adds only what it
@@ -1421,6 +1421,7 @@ void VehicleSystem::applyDamage(FrameContext& ctx) {
                 ParticleEmitter em;
                 em.halfExtent = Vec3(0.25, 0.05, 0.2);
                 ctx.world.add<ParticleEmitter>(v.engineSmoke, em);
+                ct = ctx.world.get<Transform>(e);   // (the add may have moved the Transforms)
             }
             Transform* st = ctx.world.get<Transform>(v.engineSmoke);
             ParticleEmitter* pe = ctx.world.get<ParticleEmitter>(v.engineSmoke);
@@ -1467,6 +1468,7 @@ void VehicleSystem::detachPanel(FrameContext& ctx, Entity car, Vehicle& v, int p
     if (!ct) return;
     const Quat q = panel.turn();
     const Vec3 centreWorld = ct->position + ct->orientation.rotate(q.rotate(panel.centre - panel.pivot) + panel.pivot + panel.travel());
+    const Quat carTurn = ct->orientation;   // (ct is not used past here: destroying the glass moves the Transforms)
     bool freed = false;
     std::vector<Entity> keep;
     std::vector<int> keepPanel;
@@ -1503,7 +1505,7 @@ void VehicleSystem::detachPanel(FrameContext& ctx, Entity car, Vehicle& v, int p
         if (old.valid()) ctx.assets.releaseMesh(old);
         if (Transform* pt = ctx.world.get<Transform>(pe)) {
             pt->position = centreWorld;
-            pt->orientation = ct->orientation * q;
+            pt->orientation = carTurn * q;
             if (PrevTransform* pp = ctx.world.get<PrevTransform>(pe)) pp->value = *pt;
         }
         Collider col;

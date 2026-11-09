@@ -16,6 +16,7 @@
 //   tuning      every number here is people.lua's `people.dodge` (DodgeTuning)
 
 #include "../procgen/city/polygon.h"   // Vec2, dot
+#include "../../hash.h"
 
 #include <algorithm>
 #include <cmath>
@@ -90,10 +91,7 @@ struct DodgeTraits {
 
 // A person's own: reaction 0.25-0.65 s, one in seven freezes, a sprint of 4.5-6.5 m/s.
 inline DodgeTraits dodgeTraits(uint32_t seed, const DodgeTuning& k = DodgeTuning()) {
-    uint32_t h = seed * 2654435761u;
-    h ^= h >> 15;
-    h *= 0x2c1b3c6du;
-    h ^= h >> 12;
+    const uint32_t h = hashPair(seed, 0xD0D6Eu);   // (hash.h)
     DodgeTraits d;
     d.reaction = k.reactionLo + (h & 0xFF) / 255.0 * (k.reactionHi - k.reactionLo);
     d.freezes = ((h >> 8) % 1000u) / 1000.0 < k.freezeShare;

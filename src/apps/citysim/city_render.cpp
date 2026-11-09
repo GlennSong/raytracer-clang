@@ -2704,7 +2704,6 @@ void CityRenderSystem::makeBusSigns(engine::FrameContext& ctx) {
     busSignLocal_ = Mat4::translate(0, h.y * 2 * 0.90 - h.y, h.z * 2 * 0.4916 + 0.04);
     // ...or where each bus's own recipe puts its boards (markers: the kit bus, ADR-0349). The board faces +Z; the
     // rear one and the next-stop one over the saloon turn to face back, the side one faces out from its side.
-    constexpr Real kPi = 3.14159265358979;
     busBoards_.assign(busVariants_.size(), {});
     for (std::size_t k = 0; k < busVariants_.size(); ++k) {
         const int bv = busVariants_[k];
@@ -2714,11 +2713,11 @@ void CityRenderSystem::makeBusSigns(engine::FrameContext& ctx) {
         for (const LampMarker& m : carLights_[static_cast<std::size_t>(bv)]) {
             const Mat4 at = Mat4::translate(m.pos.x, m.pos.y, m.pos.z);
             if (m.name == "dest_sign") boards.front().local = at;
-            else if (m.name == "dest_sign_rear") boards.push_back(BusBoard{at * Mat4::rotateY(kPi), false});
+            else if (m.name == "dest_sign_rear") boards.push_back(BusBoard{at * Mat4::rotateY(engine::PI), false});
             // (the side board stands in a pane, the next-stop one hangs behind the cab: each half the front's width)
             else if (m.name == "dest_sign_side")
-                boards.push_back(BusBoard{at * Mat4::rotateY(m.pos.x >= 0 ? kPi * 0.5 : -kPi * 0.5) * Mat4::scale(0.5, 1, 1), false});
-            else if (m.name == "stop_display") boards.push_back(BusBoard{at * Mat4::rotateY(kPi) * Mat4::scale(0.5, 1, 1), true});
+                boards.push_back(BusBoard{at * Mat4::rotateY(m.pos.x >= 0 ? engine::PI * 0.5 : -engine::PI * 0.5) * Mat4::scale(0.5, 1, 1), false});
+            else if (m.name == "stop_display") boards.push_back(BusBoard{at * Mat4::rotateY(engine::PI) * Mat4::scale(0.5, 1, 1), true});
         }
     }
     std::string all;

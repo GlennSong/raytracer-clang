@@ -8,7 +8,6 @@ namespace engine {
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 double clamp01(double v) { return std::min(1.0, std::max(0.0, v)); }
 
@@ -73,7 +72,7 @@ Vec3 divV(const Vec3& a, const Vec3& b) { return Vec3(a.x / b.x, a.y / b.y, a.z 
 
 // a well-spread direction on the unit sphere (spherical Fibonacci), i of n
 Vec3 fibonacciDir(int i, int n) {
-    const double golden = kPi * (3.0 - std::sqrt(5.0));
+    const double golden = PI * (3.0 - std::sqrt(5.0));
     const double y = 1.0 - 2.0 * (i + 0.5) / n, rad = std::sqrt(std::max(0.0, 1.0 - y * y)), th = golden * i;
     return Vec3(std::cos(th) * rad, y, std::sin(th) * rad);
 }
@@ -154,7 +153,7 @@ void buildAtmosphereTables(const Atmosphere& a, AtmosphereTables& out) {
     // of higher orders sums to G / (1 - f)
     out.multiScatter.assign(static_cast<std::size_t>(AtmosphereTables::kMsW) * AtmosphereTables::kMsH * 3, 0.0f);
     const int dirs = 64, steps = 20;
-    const double iso = 1.0 / (4.0 * kPi);
+    const double iso = 1.0 / (4.0 * PI);
     for (int y = 0; y < AtmosphereTables::kMsH; ++y)
         for (int x = 0; x < AtmosphereTables::kMsW; ++x) {
             const double muS = std::clamp(2.0 * (x + 0.5) / AtmosphereTables::kMsW - 1.0, -1.0, 1.0);
@@ -186,10 +185,10 @@ void buildAtmosphereTables(const Atmosphere& a, AtmosphereTables& out) {
                     const Vec3 n = p * (1.0 / p.length());
                     const double muG = dot(n, sun);
                     const Vec3 Ts = sampleTransmittance(out, rg, muG);
-                    L = L + mulV(mulV(T, Ts), a.groundAlbedo) * (std::max(muG, 0.0) / kPi);
+                    L = L + mulV(mulV(T, Ts), a.groundAlbedo) * (std::max(muG, 0.0) / PI);
                 }
                 G = G + L * (1.0 / dirs);
-                F = F + f * (iso * 4.0 * kPi / dirs);
+                F = F + f * (iso * 4.0 * PI / dirs);
             }
             const Vec3 psi(G.x / std::max(1e-6, 1.0 - F.x) * a.multiScatter, G.y / std::max(1e-6, 1.0 - F.y) * a.multiScatter,
                            G.z / std::max(1e-6, 1.0 - F.z) * a.multiScatter);
@@ -209,9 +208,9 @@ Vec3 atmosphereSkyRadiance(const AtmosphereTables& t, double height, const Vec3&
     const double tMax = tg > 0.0 ? tg : distToTop(r, view.y, rt);
     if (tMax <= 0.0) return Vec3(0, 0, 0);
     const double nu = dot(view, light);
-    const double phaseR = 3.0 / (16.0 * kPi) * (1.0 + nu * nu);
+    const double phaseR = 3.0 / (16.0 * PI) * (1.0 + nu * nu);
     const double g = a.mieG, g2 = g * g;
-    const double phaseM = 3.0 / (8.0 * kPi) * ((1.0 - g2) * (1.0 + nu * nu)) / ((2.0 + g2) * std::pow(1.0 + g2 - 2.0 * g * nu, 1.5));
+    const double phaseM = 3.0 / (8.0 * PI) * ((1.0 - g2) * (1.0 + nu * nu)) / ((2.0 + g2) * std::pow(1.0 + g2 - 2.0 * g * nu, 1.5));
     const double ds = tMax / steps;
     Vec3 T(1, 1, 1), L(0, 0, 0);
     const Vec3 one(1, 1, 1);
@@ -232,7 +231,7 @@ Vec3 atmosphereSkyRadiance(const AtmosphereTables& t, double height, const Vec3&
         const Vec3 p = x0 + view * tg;
         const Vec3 n = p * (1.0 / p.length());
         const double muG = dot(n, light);
-        L = L + mulV(mulV(T, sampleTransmittance(t, rg, muG)), a.groundAlbedo) * (std::max(muG, 0.0) / kPi);
+        L = L + mulV(mulV(T, sampleTransmittance(t, rg, muG)), a.groundAlbedo) * (std::max(muG, 0.0) / PI);
     }
     return L;
 }
@@ -242,14 +241,14 @@ Vec3 atmosphereSkyIrradiance(const AtmosphereTables& t, double height, const Vec
     Vec3 up = std::fabs(normal.y) < 0.99 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
     const Vec3 tx = normalize(cross(up, normal)), ty = cross(normal, tx);
     Vec3 sum(0, 0, 0);
-    const double golden = kPi * (3.0 - std::sqrt(5.0));
+    const double golden = PI * (3.0 - std::sqrt(5.0));
     for (int i = 0; i < samples; ++i) {
         const double rr = std::sqrt((i + 0.5) / samples), th = golden * i;
         const double x = rr * std::cos(th), y = rr * std::sin(th), z = std::sqrt(std::max(0.0, 1.0 - rr * rr));
         const Vec3 d = normalize(tx * x + ty * y + normal * z);
         sum = sum + atmosphereSkyRadiance(t, height, d, light, 24);
     }
-    return sum * (kPi / samples);   // E = pi * the cosine-weighted mean radiance
+    return sum * (PI / samples);   // E = pi * the cosine-weighted mean radiance
 }
 
 namespace {
@@ -279,7 +278,7 @@ void atmosphereIrradianceSH(const AtmosphereTables& t, double height, const Vec3
     // the radiance's coefficients (4 pi / N each), convolved with the clamped cosine (pi, 2 pi / 3, pi / 4 by band) and
     // over pi: the radiance-like E / pi the shader's ambient takes
     const double band[9] = {1.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 0.25, 0.25, 0.25, 0.25, 0.25};
-    for (int k = 0; k < 9; ++k) out[k] = out[k] * (4.0 * kPi / samples * band[k]);
+    for (int k = 0; k < 9; ++k) out[k] = out[k] * (4.0 * PI / samples * band[k]);
 }
 
 Vec3 evalIrradianceSH(const Vec3 sh[9], const Vec3& n) {
@@ -301,7 +300,7 @@ SkyReading readSky(const AtmosphereTables& t, double height, const Vec3& light, 
     Vec3 hz(0, 0, 0);
     const double el = 0.035;   // two degrees up: the horizon band
     for (int k = 0; k < 8; ++k) {
-        const double az = k * kPi / 4.0;
+        const double az = k * PI / 4.0;
         hz = hz + atmosphereSkyRadiance(t, height, normalize(Vec3(std::cos(az), el, std::sin(az))), light);
     }
     s.horizon = hz * (topUnits / 8.0);

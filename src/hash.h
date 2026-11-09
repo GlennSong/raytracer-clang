@@ -34,7 +34,8 @@ inline double unit24(uint32_t h) { return (h & 0xFFFFFFu) / 16777216.0; }
 
 // FROZEN HASHES (2026-11-08, the value noise made one: procgen/noise.h). Each kept bit for bit only because what it
 // lays is baked -- a tree's textures and gnarl, the lanes' recipe terrain, the procedural textures, the city plans, the
-// street planting -- and a new hash would re-lay it without a tag bump. Retire each for hashCell / hashPair at its
+// street planting -- and a new hash would re-lay it without a tag bump. (The blend is frozen too where its rounding
+// differed: procgen/noise.h FrozenTerrainRecipeBlend, FrozenTreeTextureBlend.) Retire each for hashCell / hashPair at its
 // bake's next tag bump.
 inline float frozenTreeTextureLattice(int x, int y, uint32_t seed) {
     uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u + seed * 362437u;

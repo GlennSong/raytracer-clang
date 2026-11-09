@@ -2792,7 +2792,7 @@ namespace {
 float valueNoise(float x, float y, uint32_t seed) {
     return latticeValueNoise(x, y, [seed](int64_t i, int64_t j) {
         return frozenTreeTextureLattice(static_cast<int>(i), static_cast<int>(j), seed);
-    });
+    }, FrozenTreeTextureBlend{});
 }
 
 float fbm(float x, float y, uint32_t seed, int octaves) {

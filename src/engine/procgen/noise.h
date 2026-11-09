@@ -12,11 +12,34 @@ namespace engine {
 // terrain (noise.cpp; a test holds it to std::shuffle on libstdc++).
 void frozenShuffle256(std::array<int, 256>& p, uint32_t seed);
 
+// THE BLEND of a lattice square's four corners a, b (along x), c, d (a row up) at smoothstepped u, v: the bilinear one
+struct LerpBlend {
+    template <class T>
+    T operator()(T a, T b, T c, T d, T u, T v) const {
+        return (a + (b - a) * u) + ((c + (d - c) * u) - (a + (b - a) * u)) * v;
+    }
+};
+// FROZEN BLENDS: the same bilinear blend, its arithmetic in the order a baked noise was written in (the rounding is
+// baked too: the lanes' recipe terrain, a tree's textures). Retire each with its frozen lattice (hash.h) at its bake's
+// next tag bump.
+struct FrozenTerrainRecipeBlend {
+    template <class T>
+    T operator()(T a, T b, T c, T d, T u, T v) const {
+        return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+    }
+};
+struct FrozenTreeTextureBlend {
+    template <class T>
+    T operator()(T a, T b, T c, T d, T u, T v) const {
+        return (a + (b - a) * u) + ((c - a) + (d - c) * u - (b - a) * u) * v;
+    }
+};
+
 // VALUE NOISE (2026-11-08: it had been written three times -- the wind's gusts, a tree's textures, the lanes' recipe
 // terrain): a value per lattice node (`node(i, j)`, in [0, 1)), smoothstep-blended between the four round a point.
-// Cheaper and blockier than the gradient Noise below. T: float or double.
-template <class T, class Node>
-T latticeValueNoise(T x, T y, Node&& node) {
+// Cheaper and blockier than the gradient Noise below. T: float or double. `blend`: LerpBlend, but for a frozen one.
+template <class T, class Node, class Blend = LerpBlend>
+T latticeValueNoise(T x, T y, Node&& node, Blend blend = {}) {
     const T fx = std::floor(x), fy = std::floor(y);
     const int64_t i = static_cast<int64_t>(fx), j = static_cast<int64_t>(fy);
     T u = x - fx, v = y - fy;
@@ -24,7 +47,7 @@ T latticeValueNoise(T x, T y, Node&& node) {
     v = v * v * (T(3) - T(2) * v);
     const T a = static_cast<T>(node(i, j)), b = static_cast<T>(node(i + 1, j));
     const T c = static_cast<T>(node(i, j + 1)), d = static_cast<T>(node(i + 1, j + 1));
-    return (a + (b - a) * u) + ((c + (d - c) * u) - (a + (b - a) * u)) * v;
+    return blend(a, b, c, d, u, v);
 }
 // ...in 3D: trilinear, x first, then y, then z. P the position's type (the fraction is taken in it), T the value's.
 template <class T, class P, class Node>

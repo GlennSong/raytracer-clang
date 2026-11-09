@@ -1,6 +1,6 @@
 #include "weather_sim.h"
 
-#include "../../rt_math.h"   // smoothstep
+#include "../../rt_math.h"   // smoothstep, bilinearGrid
 #include <algorithm>
 #include <cmath>
 
@@ -56,12 +56,9 @@ void WeatherSim::init(const HeightRaster& terrain, double seaLevel, int n) {
 
 float WeatherSim::sample(const std::vector<float>& f, double x, double z) const {
     if (n_ <= 0 || f.empty()) return 0.0f;
-    const double gx = std::clamp((x - originX_) / cell_ - 0.5, 0.0, n_ - 1.0);
-    const double gz = std::clamp((z - originZ_) / cell_ - 0.5, 0.0, n_ - 1.0);
-    const int i = std::min(static_cast<int>(gx), n_ - 2), j = std::min(static_cast<int>(gz), n_ - 2);
-    const double a = gx - i, b = gz - j;
-    return static_cast<float>((f[at(i, j)] * (1 - a) + f[at(i + 1, j)] * a) * (1 - b) +
-                              (f[at(i, j + 1)] * (1 - a) + f[at(i + 1, j + 1)] * a) * b);
+    // (the values sit at the cells' middles)
+    return static_cast<float>(bilinearGrid(n_, n_, (x - originX_) / cell_ - 0.5, (z - originZ_) / cell_ - 0.5,
+                                           [&](int i, int j) { return static_cast<Real>(f[at(i, j)]); }));
 }
 
 // Semi-Lagrangian: each cell takes what was upwind of it `dt` ago (bilinear; the grid's edge clamps)
@@ -69,12 +66,8 @@ void WeatherSim::advect(std::vector<float>& f, const std::vector<float>& u, cons
                         std::vector<float>& tmp) const {
     for (int j = 0; j < n_; ++j)
         for (int i = 0; i < n_; ++i) {
-            const double gx = std::clamp(i - u[at(i, j)] * dt / cell_, 0.0, n_ - 1.001);
-            const double gz = std::clamp(j - v[at(i, j)] * dt / cell_, 0.0, n_ - 1.001);
-            const int i0 = static_cast<int>(gx), j0 = static_cast<int>(gz);
-            const double a = gx - i0, b = gz - j0;
-            tmp[at(i, j)] = static_cast<float>((f[at(i0, j0)] * (1 - a) + f[at(i0 + 1, j0)] * a) * (1 - b) +
-                                               (f[at(i0, j0 + 1)] * (1 - a) + f[at(i0 + 1, j0 + 1)] * a) * b);
+            tmp[at(i, j)] = static_cast<float>(bilinearGrid(n_, n_, i - u[at(i, j)] * dt / cell_, j - v[at(i, j)] * dt / cell_,
+                                                            [&](int a, int b) { return static_cast<Real>(f[at(a, b)]); }));
         }
     f.swap(tmp);
 }

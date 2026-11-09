@@ -1298,7 +1298,7 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
         v.wheelbase = static_cast<float>(std::max(Real(1.0), zMax - zMin));
     }
     v.driftRearGrip = static_cast<float>(cfg.driftRearGrip);
-    v.driftSlipRad = static_cast<float>(cfg.driftSlipDegrees * 3.14159265358979 / 180.0);
+    v.driftSlipRad = static_cast<float>(cfg.driftSlipDegrees * DEG_TO_RAD);
     v.driftMinSpeed = static_cast<float>(cfg.driftMinSpeed);
     impl->vehicles.push_back(std::move(v));
     return static_cast<VehicleId>(impl->vehicles.size() - 1);
@@ -1678,9 +1678,11 @@ void PhysicsWorld::sanitize() {
                             std::isfinite(v.GetX()) && std::isfinite(v.GetY()) && std::isfinite(v.GetZ()) &&
                             std::isfinite(w.GetX()) && std::isfinite(w.GetY()) && std::isfinite(w.GetZ());
         const float speed = finite ? v.Length() : 0.0f;
+        // (a car past 150 m/s has been flung; a bullet does 300, so anything else only past 1000 -- the cars looked
+        // for only among the fast)
+        if (finite && speed < 150.0f) continue;
         bool chassis = false;
         for (const Impl::Vehicle& veh : impl->vehicles) chassis |= veh.body == id;
-        // (a car past 150 m/s has been flung; a bullet does 300, so anything else only past 1000)
         if (finite && speed < (chassis ? 150.0f : 1000.0f)) continue;
         // a KINEMATIC body is driven (the city's traffic): its velocity is the step its owner moved it, and a jump of
         // a hundred metres reads as six thousand m/s. Not parked (its owner moves it back at once: a fight, every

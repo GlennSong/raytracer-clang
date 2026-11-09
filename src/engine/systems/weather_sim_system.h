@@ -25,8 +25,16 @@ private:
     void begin(FrameContext& ctx);
     void publish(FrameContext& ctx);
 
+    // a step's result: the simulation to carry on, and its snapshot to hand over -- copied on the worker (a few MB:
+    // not the main thread's to copy)
+    struct Stepped {
+        WeatherSim sim;
+        std::shared_ptr<const WeatherSim> snapshot;
+    };
+
     WeatherSim sim_;   // (moved to the worker while it steps)
-    std::future<WeatherSim> pending_;
+    std::shared_ptr<const WeatherSim> snapshot_;   // the last step's, to publish
+    std::future<Stepped> pending_;
     bool stepping_ = false;
     bool begun_ = false;
     double gathered_ = 0.0;   // weather seconds not yet stepped

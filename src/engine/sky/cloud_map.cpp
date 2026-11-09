@@ -11,7 +11,6 @@ namespace engine {
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 // a grid square's k-th roll in [0, 1) (hash.h)
 double roll(int64_t i, int64_t j, uint32_t salt, uint32_t k) {
@@ -47,7 +46,7 @@ double cellRadius(const CloudTypeSpec& t, double rn, float skew) {
 }  // namespace
 
 void cloudCirrusSweep(uint32_t seed, float& x, float& z) {
-    const double a = unit24(hashPair(seed, 0xC1A2u)) * kPi;
+    const double a = unit24(hashPair(seed, 0xC1A2u)) * PI;
     x = static_cast<float>(std::cos(a));
     z = static_cast<float>(std::sin(a));
 }
@@ -161,7 +160,7 @@ void bakeCloudMap(const CloudBook& book, const CloudMapInputs& in, CloudMapImage
             const double r = cellRadius(t, (s + 0.5) / 256.0, book.sizeSkew);
             meanR2 += r * r / 256.0;
         }
-        const double meanArea = kPi * meanR2 * t.aspect * kAreaShare;
+        const double meanArea = PI * meanR2 * t.aspect * kAreaShare;
         meanAreaOf[k] = meanArea;
         g.perSquare = std::min(static_cast<double>(kMaxPerSquare),
                                lambdaArea * w[static_cast<std::size_t>(k)] * g.spacing * g.spacing / meanArea);
@@ -220,7 +219,7 @@ void bakeCloudMap(const CloudBook& book, const CloudMapInputs& in, CloudMapImage
                                 const double cz = (cj + roll(ci, cj, g.salt, o + 3)) * g.spacing;
                                 const double dx = x - cx, dz = z - cz;
                                 if (dx * dx + dz * dz > reach * reach) continue;
-                                const double ang = roll(ci, cj, g.salt, o + 4) * kPi;
+                                const double ang = roll(ci, cj, g.salt, o + 4) * PI;
                                 const double ca = std::cos(ang), sa = std::sin(ang);
                                 const double u = (dx * ca + dz * sa) / (r * t.aspect), v = (-dx * sa + dz * ca) / r;
                                 // the rim warped by two octaves of noise at the cell's own scale: a cloud, not a disc

@@ -29,16 +29,15 @@ inline Vec3 turnedHalf(const Quat& q, const Vec3& h) {
 // True with `at` (its middle) and `turn` when the thing of half extents `half` fits in [lo, hi] beside `taken`.
 inline bool stowSlot(const Vec3& lo, const Vec3& hi, const Vec3& half, const std::vector<StowBox>& taken, const Vec3& near,
                      Vec3& at, Quat& turn) {
-    const Real kPi = 3.14159265358979323846;
     const Vec3 X(1, 0, 0), Y(0, 1, 0), Z(0, 0, 1);
     // the turns, flattest first: the axis the thing is thinnest along stood up, then the others
-    Quat lay[3] = {Quat(), Quat::fromAxisAngle(Z, kPi * 0.5), Quat::fromAxisAngle(X, kPi * 0.5)};   // y, x, z up
+    Quat lay[3] = {Quat(), Quat::fromAxisAngle(Z, PI * 0.5), Quat::fromAxisAngle(X, PI * 0.5)};   // y, x, z up
     const Real up[3] = {half.y, half.x, half.z};
     int order[3] = {0, 1, 2};
     std::sort(order, order + 3, [&](int a, int b) { return up[a] < up[b]; });
     constexpr Real gap = 0.01, step = 0.05;
     for (const int o : order)
-        for (const Real spin : {Real(0), kPi * 0.5}) {
+        for (const Real spin : {Real(0), PI * 0.5}) {
             const Quat q = Quat::fromAxisAngle(Y, spin) * lay[o];
             const Vec3 h = turnedHalf(q, half);
             if (2 * h.x > hi.x - lo.x + 1e-6 || 2 * h.y > hi.y - lo.y + 1e-6 || 2 * h.z > hi.z - lo.z + 1e-6) continue;

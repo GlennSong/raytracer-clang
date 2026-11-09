@@ -440,7 +440,7 @@ UnwrapReport unwrapMesh(RenderMesh& mesh, const UnwrapOptions& opts) {
     std::vector<int> all;
     for (std::size_t f = 0; f < nf; ++f) if (!faces[f].tag) all.push_back(static_cast<int>(f));
     std::vector<std::vector<int>> pending;
-    grow(all, std::cos(opts.chartAngleDeg * 3.14159265358979 / 180.0), pending);
+    grow(all, std::cos(opts.chartAngleDeg * DEG_TO_RAD), pending);
 
     // FLATTEN each chart; a chart that will not lay flat one-to-one is split (half the angle) and tried again
     std::vector<Packed> charts;
@@ -474,7 +474,7 @@ UnwrapReport unwrapMesh(RenderMesh& mesh, const UnwrapOptions& opts) {
                 ++rep.splits;
                 std::vector<std::vector<int>> parts;
                 const double a2 = std::max(2.0, angle * 0.5);
-                grow(chart, std::cos(a2 * 3.14159265358979 / 180.0), parts);
+                grow(chart, std::cos(a2 * DEG_TO_RAD), parts);
                 if (parts.size() == 1) {   // the angle cannot split it (a fold within the cone): one face at a time
                     for (int f : chart) work.push_back({{f}, a2});
                 } else {

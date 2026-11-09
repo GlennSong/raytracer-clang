@@ -166,7 +166,8 @@ void RtScene::record(VkCommandBuffer cmd, int frame, uint64_t counter, const std
         si.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
         p.info.pGeometries = &p.geo;
         sizes_(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &p.info, &tris, &si);
-        const VkDeviceSize scratch = alignUp(si.buildScratchSize, scratchAlign_);
+        // (and its start's alignment slack: the frame's builds share one scratch, each start aligned)
+        const VkDeviceSize scratch = alignUp(si.buildScratchSize, scratchAlign_) + scratchAlign_;
         const VkDeviceSize growScratch = std::max<VkDeviceSize>(scratchNeed + scratch, scratchSize_) - scratchSize_;
         // THE BUDGET: what is held, plus this one, plus any scratch it adds -- never past it
         if (total() + si.accelerationStructureSize + growScratch > budget_) { ++stats_.skipped; continue; }
@@ -211,6 +212,8 @@ void RtScene::record(VkCommandBuffer cmd, int frame, uint64_t counter, const std
         scratchSize_ = need;
         return true;
     };
+    // (scratchNeed has each build's alignment slack: one grow is enough for the lot -- a second, whose failure would
+    // leave this frame's structures unbuilt yet counted ready, cannot be needed)
     if (!pending.empty() && !growScratch(scratchNeed)) {
         // no scratch: undo this frame's structures (they were never built)
         for (Pending& p : pending)
@@ -235,19 +238,9 @@ void RtScene::record(VkCommandBuffer cmd, int frame, uint64_t counter, const std
         for (Pending& p : pending) {
             p.info.pGeometries = &p.geo;
             p.info.scratchData.deviceAddress = alignUp(base + off, scratchAlign_);
-            off += p.scratchBytes + scratchAlign_;
+            off += p.scratchBytes;
             infos.push_back(p.info);
             ranges.push_back(&p.range);
-        }
-        if (off > scratchSize_) {
-            // (alignment slack: build in two halves is not worth it -- grow and go)
-            if (!growScratch(off)) return;
-            base = addressOf(scratch_);
-            off = 0;
-            for (std::size_t k = 0; k < pending.size(); ++k) {
-                infos[k].scratchData.deviceAddress = alignUp(base + off, scratchAlign_);
-                off += pending[k].scratchBytes + scratchAlign_;
-            }
         }
         build_(cmd, static_cast<uint32_t>(infos.size()), infos.data(), ranges.data());
         stats_.builtThisFrame = static_cast<uint32_t>(pending.size());
