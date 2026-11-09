@@ -252,12 +252,14 @@ add_library(engine_core STATIC
     src/engine/systems/light_system.cpp
     src/engine/systems/probe_system.cpp
     src/engine/systems/cloud_map_system.cpp
+    src/engine/systems/weather_sim_system.cpp
     src/engine/lights/light_kinds.cpp
     src/engine/lights/light_picker.cpp
     src/engine/lights/probe_sites.cpp
     src/engine/sky/sky_atmosphere.cpp
     src/engine/sky/cloud_book.cpp
     src/engine/sky/cloud_map.cpp
+    src/engine/sky/weather_sim.cpp
     src/engine/systems/xr_camera_system.cpp
     src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
@@ -730,6 +732,7 @@ add_executable(run_tests
     tests/test_control_channel.cpp
     tests/test_weather_cycle.cpp
     tests/test_cloud_map.cpp
+    tests/test_weather_sim.cpp
     tests/test_editor_home_view.cpp
     tests/test_vehicle_audio.cpp
     tests/test_particles.cpp

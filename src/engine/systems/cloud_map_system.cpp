@@ -16,6 +16,7 @@ double pinnedWindTime() {
     return t;
 }
 constexpr double kMinSecondsBetweenBakes = 1.5;
+constexpr double kMinSecondsForField = 10.0;   // (a new simulated weather: the sky moves slowly, a bake is seconds)
 constexpr int kOldTexFrames = 4;   // past the frames in flight
 }  // namespace
 
@@ -60,7 +61,15 @@ void CloudMapSystem::writePicture(const std::string& path, const Vec3& camera) c
             const double f = p[0] / 255.0, slot = p[1] / 255.0 * 3.0, cirrus = p[3] / 255.0;
             const int a = std::min(static_cast<int>(slot), 2);
             const Vec3 tint = tints[a] * (1.0 - (slot - a)) + tints[a + 1] * (slot - a);
-            const Vec3 air = Vec3(0.12, 0.25, 0.48) + Vec3(0.25, 0.3, 0.4) * cirrus;
+            // (the ground under clear air, where the map was baked with the simulation: land green, the sea blue --
+            // as the satellite references read)
+            Vec3 ground(0.12, 0.25, 0.48);
+            if (last_.inputs.field) {
+                const double x = last_.originX + (i + 0.5) * last_.extent / n - last_.inputs.driftX;
+                const double z = last_.originZ + (j + 0.5) * last_.extent / n - last_.inputs.driftZ;
+                if (last_.inputs.field->landAt(x, z)) ground = Vec3(0.22, 0.30, 0.14);
+            }
+            const Vec3 air = ground + Vec3(0.25, 0.3, 0.4) * cirrus;
             put(i, j, air * (1.0 - f) + tint * f);
         }
     // the camera, in the air
@@ -146,6 +155,12 @@ void CloudMapSystem::update(FrameContext& ctx) {
     in.typeHi = vc.typeHi;
     in.cirrus = vc.cirrus * vc.wisps > 0.0f ? vc.cirrus : 0.0f;
     in.seed = static_cast<uint32_t>(ctx.settings.getDouble("weather.seed", 7.0));
+    ctx.world.each<WeatherField>([&](Entity, WeatherField& f) {
+        in.field = f.sim;
+        in.fieldVersion = f.version;
+    });
+    in.driftX = driftX_;
+    in.driftZ = driftZ_;
     in.centreX = ctx.view.camera.position.x + driftX_;
     in.centreZ = ctx.view.camera.position.z + driftZ_;
     const double moved = std::hypot(in.centreX - built_.centreX, in.centreZ - built_.centreZ);
@@ -153,7 +168,8 @@ void CloudMapSystem::update(FrameContext& ctx) {
                               std::fabs(in.typeLo - built_.typeLo) > 0.01f || std::fabs(in.typeHi - built_.typeHi) > 0.01f ||
                               std::fabs(in.cirrus - built_.cirrus) > 0.01f ||
                               in.seed != built_.seed;
-    if (!baking_ && (!haveMap_ || moved > book.rebuildMetres ||
+    const bool fieldMoved = in.fieldVersion != built_.fieldVersion && sinceBake_ > kMinSecondsForField;
+    if (!baking_ && (!haveMap_ || moved > book.rebuildMetres || fieldMoved ||
                      (weatherMoved && sinceBake_ > kMinSecondsBetweenBakes)))
         startBake(in);
 }

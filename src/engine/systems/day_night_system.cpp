@@ -136,12 +136,8 @@ void DayNightSystem::buildHeightRaster(FrameContext& ctx) {
         if (!cfg) cfg = &c;
     });
     if (!cfg) return;
-    const TerrainParams params = cfg->params;
-    const Noise noise(cfg->seed);
     const double half = cfg->worldHalf;
-    raster_ = rasterizeHeights(
-        [&](double x, double z) { return terrainHeight(params, noise, x, z); },
-        -half, -half, 2.0 * half, 256);
+    raster_ = rasterizeTerrain(cfg->params, cfg->seed, half, 256);
     double lo = 1e30, hi = -1e30;
     for (float h : raster_.height) { lo = std::min(lo, static_cast<double>(h)); hi = std::max(hi, static_cast<double>(h)); }
     LOG_INFO << "[sky] terrain horizon raster: " << raster_.size << "^2 over " << 2.0 * half
@@ -511,6 +507,12 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
         } else if (Wind* w = ctx.world.get<Wind>(windEntity_)) {
             *w = wind;
         }
+        // ...and the weather now, beside it (ADR-0390: the simulation follows it)
+        WeatherNow now;
+        now.live = weatherActive ? weather.live() : weatherTargets(WeatherKind::Fair);
+        now.active = weatherActive;
+        if (WeatherNow* wn = ctx.world.get<WeatherNow>(windEntity_)) *wn = now;
+        else ctx.world.add<WeatherNow>(windEntity_, now);
         ctx.renderer.windDir[0] = static_cast<float>(wind.dir.x);
         ctx.renderer.windDir[1] = static_cast<float>(wind.dir.z);
         ctx.renderer.windSpeed = static_cast<float>(wind.speed);

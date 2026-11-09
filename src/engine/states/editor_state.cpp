@@ -17,6 +17,7 @@
 #ifdef __EMSCRIPTEN__
 #include "../systems/day_night_system.h"
 #include "../systems/cloud_map_system.h"
+#include "../systems/weather_sim_system.h"
 #endif
 #include "../../log.h"
 
@@ -35,6 +36,7 @@ EditorState::EditorState(Window& window, Renderer& renderer,
     // let the page's debug panel drive it through settings (rt_web_env). Native
     // editors keep a static sky and reach the cycle via play mode's ImGui.
     addSystem<DayNightSystem>();
+    addSystem<WeatherSimSystem>();   // (ADR-0390)
     addSystem<CloudMapSystem>();   // (ADR-0386)
 #endif
     addSystem<GrassSystem>();

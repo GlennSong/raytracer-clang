@@ -131,6 +131,7 @@ void bakeCloudMap(const CloudBook& book, const CloudMapInputs& in, CloudMapImage
     const std::array<float, 4> w = cloudTypeWeights(in.typeLo, in.typeHi);
     const Noise rimNoise(hashPair(in.seed, 0x51A7u));   // (the cells' rims; offset per type)
     std::array<Grid, 4> grids{};
+    std::array<double, 4> meanAreaOf{};
     // THE CELLS AS A POISSON FIELD: footprints dropped at random cover 1 - exp(-cells per m^2 x a footprint's area)
     // of the sky, so the coverage asked for is reached exactly by -ln(1 - coverage) footprints' worth per m^2, shared
     // by the types as the weather's range spreads them -- an overcast's stratus overlapping into a deck
@@ -161,8 +162,10 @@ void bakeCloudMap(const CloudBook& book, const CloudMapInputs& in, CloudMapImage
             meanR2 += r * r / 256.0;
         }
         const double meanArea = kPi * meanR2 * t.aspect * kAreaShare;
+        meanAreaOf[k] = meanArea;
         g.perSquare = std::min(static_cast<double>(kMaxPerSquare),
                                lambdaArea * w[static_cast<std::size_t>(k)] * g.spacing * g.spacing / meanArea);
+        if (in.field) g.perSquare = 1.0;   // (each square its own, from the simulation)
         if (g.perSquare <= 0.0) continue;
         g.i0 = static_cast<int64_t>(std::floor(out.originX / g.spacing)) - 1;
         g.j0 = static_cast<int64_t>(std::floor(out.originZ / g.spacing)) - 1;
@@ -170,9 +173,22 @@ void bakeCloudMap(const CloudBook& book, const CloudMapInputs& in, CloudMapImage
         g.nj = g.ni;
         g.mean.resize(static_cast<std::size_t>(g.ni * g.nj));
         for (int64_t b = 0; b < g.nj; ++b)
-            for (int64_t a = 0; a < g.ni; ++a)
-                g.mean[static_cast<std::size_t>(b * g.ni + a)] = std::min(
-                    static_cast<double>(kMaxPerSquare), g.perSquare * airField((g.i0 + a + 0.5) * g.spacing, (g.j0 + b + 0.5) * g.spacing));
+            for (int64_t a = 0; a < g.ni; ++a) {
+                const double ax = (g.i0 + a + 0.5) * g.spacing, az = (g.j0 + b + 0.5) * g.spacing;
+                double m = 0.0;
+                if (in.field) {
+                    // the simulation's cloud here, as footprints' worth per m^2, shared by the types its convection leans
+                    // to (this type's share of a narrow range round that point on the axis)
+                    const double wx = ax - in.driftX, wz = az - in.driftZ;
+                    const double c = std::min(0.97, static_cast<double>(in.field->coverAt(wx, wz)));
+                    const double t = in.typeLo + (in.typeHi - in.typeLo) * in.field->convectionAt(wx, wz);
+                    const std::array<float, 4> share = cloudTypeWeights(static_cast<float>(t - 0.08), static_cast<float>(t + 0.08));
+                    m = -std::log(1.0 - c) * share[static_cast<std::size_t>(k)] * g.spacing * g.spacing / meanAreaOf[k];
+                } else {
+                    m = g.perSquare * airField(ax, az);
+                }
+                g.mean[static_cast<std::size_t>(b * g.ni + a)] = std::min(static_cast<double>(kMaxPerSquare), m);
+            }
     }
 
     auto rows = [&](int j0, int j1) {
@@ -220,6 +236,18 @@ void bakeCloudMap(const CloudBook& book, const CloudMapInputs& in, CloudMapImage
                                 }
                             }
                         }
+                }
+                // THE SIMULATION's SOLID CLOUD: where it says the sky is closed, one continuous mass -- the structures
+                // no scatter of cells makes (a merged afternoon mass over a mountain, a front's deck)
+                if (in.field) {
+                    const double wx = x - in.driftX, wz = z - in.driftZ;
+                    const double mass = smoothstep(0.55, 0.92, static_cast<double>(in.field->coverAt(wx, wz)));
+                    if (mass > best) {
+                        best = mass;
+                        const double t = in.typeLo + (in.typeHi - in.typeLo) * in.field->convectionAt(wx, wz);
+                        slot = static_cast<float>(std::lround(std::clamp(t, 0.0, 1.0) * 3.0)) / 3.0f;
+                        height = 1.0f;
+                    }
                 }
                 double veil = 0.0;
                 if (cirrus > 0.0f) {

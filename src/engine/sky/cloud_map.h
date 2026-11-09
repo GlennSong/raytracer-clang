@@ -15,7 +15,9 @@
 //      the 9 km sheet)
 
 #include "cloud_book.h"
+#include "weather_sim.h"
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace engine {
@@ -26,6 +28,12 @@ struct CloudMapInputs {
     float cirrus = 0.0f;                  // the cirrus's cover, 0..1
     uint32_t seed = 1;
     double centreX = 0.0, centreZ = 0.0;  // the camera, in the air (world + drift)
+    // THE SIMULATED WEATHER (ADR-0390), when there is one: it places the cloud -- how much over each square (its
+    // cover, read at the world point under the air: the air minus the drift), of which types (its convective share
+    // leans to the range's severe end), and its solid masses -- and `coverage` and the moisture field stand aside
+    std::shared_ptr<const WeatherSim> field;
+    uint64_t fieldVersion = 0;
+    double driftX = 0.0, driftZ = 0.0;
 };
 
 struct CloudMapImage {

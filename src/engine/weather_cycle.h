@@ -46,6 +46,16 @@ struct WeatherTargets {
     float typeLo = 0.47f, typeHi = 0.75f;
     // THE WIND the state blows (ADR-0337, wind.h): m/s at 10 m, and how squally
     float windSpeed = 6.0f, windGust = 0.35f;
+    // THE SIMULATION's air (ADR-0390, sky/weather_sim.h): the humidity the sea gives it, the inversion's height (m),
+    // how strongly sunlit land convects, and the large-scale lift (a front)
+    float humidity = 0.80f, inversion = 2000.0f, convection = 1.0f, lift = 0.0f;
+};
+
+// THE WEATHER NOW, for the systems that follow it (WeatherSimSystem; rain and sound to come): DayNightSystem publishes
+// it each step on the Wind's entity, its targets eased. `active` false: the weather is off (the level's own sky).
+struct WeatherNow {
+    WeatherTargets live;
+    bool active = false;
 };
 
 // The state's targets, from the weather data (clouds.lua; sky/cloud_book.cpp)
@@ -141,6 +151,7 @@ struct WeatherCycle {
     float shadowSoften = 0.08f;
     float typeLo = 0.47f, typeHi = 0.75f;
     float windSpeed = 6.0f, windGust = 0.35f;
+    float humidity = 0.80f, inversion = 2000.0f, convection = 1.0f, lift = 0.0f;
 
     bool autoMode = false;
     double sinceStepHours = 0.0;   // in-world hours since the last auto roll
@@ -165,6 +176,19 @@ struct WeatherCycle {
         typeHi += (t.typeHi - typeHi) * a;
         windSpeed += (t.windSpeed - windSpeed) * a;
         windGust += (t.windGust - windGust) * a;
+        humidity += (t.humidity - humidity) * a;
+        inversion += (t.inversion - inversion) * a;
+        convection += (t.convection - convection) * a;
+        lift += (t.lift - lift) * a;
+    }
+    // the live values as targets (WeatherNow)
+    WeatherTargets live() const {
+        WeatherTargets t;
+        t.coverage = coverage; t.density = density; t.scale = scale; t.sunScale = sunScale;
+        t.ambientScale = ambientScale; t.shadowSoften = shadowSoften; t.typeLo = typeLo; t.typeHi = typeHi;
+        t.windSpeed = windSpeed; t.windGust = windGust;
+        t.humidity = humidity; t.inversion = inversion; t.convection = convection; t.lift = lift;
+        return t;
     }
 
     // Jump straight to the state's targets (state restore at level start —
@@ -181,6 +205,10 @@ struct WeatherCycle {
         typeHi = t.typeHi;
         windSpeed = t.windSpeed;
         windGust = t.windGust;
+        humidity = t.humidity;
+        inversion = t.inversion;
+        convection = t.convection;
+        lift = t.lift;
     }
 
     // Advance the auto clock by in-world hours. At each kAutoHours boundary:

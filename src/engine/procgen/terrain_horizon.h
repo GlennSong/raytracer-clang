@@ -40,6 +40,9 @@ struct HeightRaster {
 // [originZ, originZ + extent) at `size` texels per side.
 HeightRaster rasterizeHeights(const std::function<double(double, double)>& heightAt,
                               double originX, double originZ, double extent, int size);
+// A level's terrain (its params and seed) over its whole square world [-half, half)^2 at `size` texels a side: the
+// mountains' shadow (DayNightSystem) and the weather (WeatherSimSystem) read the same one
+HeightRaster rasterizeTerrain(const TerrainParams& params, uint32_t seed, double half, int size);
 
 struct HorizonMap {
     int    size = 0;

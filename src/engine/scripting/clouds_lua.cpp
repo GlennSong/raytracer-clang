@@ -86,10 +86,11 @@ bool loadCloudsSource(const std::string& code, CloudBook& out, std::string* err)
         if (!lua_istable(L, -1)) return fail(std::string("weathers.") + names[k] + " is missing");
         const int t = lua_gettop(L);
         WeatherTargets& w = book.weathers[static_cast<std::size_t>(k)];
-        const char* keys[8] = {"coverage", "density", "scale", "sun", "ambient", "shadow_soften", "wind", "gust"};
-        float* fields[8] = {&w.coverage, &w.density, &w.scale, &w.sunScale, &w.ambientScale, &w.shadowSoften,
-                            &w.windSpeed, &w.windGust};
-        for (int f = 0; f < 8; ++f) {
+        const char* keys[12] = {"coverage", "density", "scale", "sun", "ambient", "shadow_soften", "wind", "gust",
+                                "humidity", "inversion", "convection", "lift"};
+        float* fields[12] = {&w.coverage, &w.density, &w.scale, &w.sunScale, &w.ambientScale, &w.shadowSoften,
+                             &w.windSpeed, &w.windGust, &w.humidity, &w.inversion, &w.convection, &w.lift};
+        for (int f = 0; f < 12; ++f) {
             lua_getfield(L, t, keys[f]);
             if (!lua_isnumber(L, -1)) return fail(std::string("weathers.") + names[k] + "." + keys[f] + " is not a number");
             *fields[f] = static_cast<float>(lua_tonumber(L, -1));

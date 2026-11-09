@@ -10,6 +10,7 @@
 #include "../engine/systems/motion_system.h"
 #include "../engine/systems/day_night_system.h"
 #include "../engine/systems/cloud_map_system.h"
+#include "../engine/systems/weather_sim_system.h"
 #include "../engine/systems/teleport_system.h"
 #include "../engine/systems/building_interior_system.h"
 #include "../engine/systems/door_system.h"
@@ -236,6 +237,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #endif
     addSystem<GrassSystem>();            // the grass field around the camera (flora plan)
     addSystem<DayNightSystem>();
+    addSystem<WeatherSimSystem>();    // the weather simulated over the land and the sea (ADR-0390)
     addSystem<CloudMapSystem>();      // the clouds' drift and the weather map that places them (ADR-0386)
     addSystem<BeaconLightSystem>();   // aviation-beacon sprites + near point lights (skyscrapers v2 M4)
 #ifdef RT_ENABLE_PHYSICS

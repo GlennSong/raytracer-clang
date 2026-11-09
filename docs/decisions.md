@@ -17504,3 +17504,51 @@ the duplicates".
 - scene.cpp's surface noise stays apart: it is the CPU mirror of common.metal's, bit-exact to the GPU.
 
 **Also:** `cloudmap <path.png>`, the weather map from above: types tinted, cirrus faint blue, the camera red.
+
+## ADR-0390 — The weather simulated over the land and the sea
+
+**Context.** Glenn, 2026-11-08: "It feels like there are massive cloud structures that noise can't really create so we
+should simulate something more realistic." NASA's afternoon views of real islands (Puerto Rico, Corsica, Hawaii,
+the Canaries; CREDITS.md) show the organiser is the LAND:
+- cumulus over sunlit land and high ground (Puerto Rico ~1/3 of its land, 1-3 km cells), the sea round it ~3 %;
+- a summit above the trade inversion clear;
+- plumes and wakes downwind.
+The weather plan's part C.
+
+**Decision.**
+- **sky/weather_sim.h:** a 2D grid over the level and its sea (at least 64 km, 256^2: 250 m cells). Its fields:
+  - the wind: the prevailing one, carried by itself (Stam's stable fluids), drawn in over heated land by a pressure
+    projection (a sea breeze's convergence), walled by ground above the inversion;
+  - the lift: convergence, wind up a slope (down it, sinking), sunlit land's heating (more on high ground), the
+    weather's large-scale lift; the grid's outer ring, the free air, takes none from the first two;
+  - the humidity: the sea's, carried, drier over land;
+  - the cloud: condensing where the lifted air saturates, none above the inversion, carried downwind (it forms in
+    10 min and goes in 25), clearing by night.
+  Every constant is a named physical scale.
+- **WeatherSimSystem** steps it on a worker of its own, in the weather's time (the day's clock), from the world's
+  Wind and the new WeatherNow (DayNightSystem publishes it beside the Wind). It hands each step over as a
+  WeatherField. It settles four hours first (5 s on a worker).
+- **The weathers** (clouds.lua) gain the simulation's air: humidity, inversion, convection, lift.
+- **The weather map** (ADR-0386) takes its cloud from the field when there is one:
+  - each square's cells come from the simulated cover at the ground under the air (the air minus the drift), so the
+    cells drift through a field the land holds;
+  - their types lean to the weather range's severe end where the convection is;
+  - where the simulation's sky is closed, one continuous mass, the structures no scatter of cells makes;
+  - a new field rebakes the map at most every 10 s (0.7 s a bake);
+  - the coverage knob and the moisture field (ADR-0389) stand aside.
+- **terrain_horizon.h `rasterizeTerrain`:** the level's terrain on a grid, shared by the mountains' shadow
+  (DayNightSystem) and the simulation.
+
+**Measured:**
+- test_weather_sim, a made island in a made sea, fair afternoon: the land ~0.53 cover, the sea upwind 0, the sea
+  downwind 0.12, the 3000 m summit (inversion 2000 m) 0. The land clears by night. An overcast closes the sea
+  (0.75). The baked map follows (island > 0.15, sea < 0.03).
+- island_8_nature, fair, 14:00: cumulus over the island and a plume of them off it downwind, the open sea clear; from
+  600 m, towering cumulus over the mountains and a clear sky over the sea upwind.
+
+**Owed:**
+- Tuning the land's cover toward Puerto Rico's third.
+- The local wind for trees, grass and particles (the field's wind).
+- Rain from the deep cells (part D).
+- The cirrus's hooks read a little drawn.
+- Metal parity.
