@@ -123,6 +123,10 @@ void Application::registerCameraVerbs() {
                      "Put the free camera where a world box, or the n-th grown lot of a recipe (lots? names them), fills "
                      "the view at that pitch and yaw (default -30, -45); read frame? for the box and the eye (ADR-0359).",
                      unanswered("a CameraSystem"));
+    commandTable.add("cloudmap", "cloudmap <path.png>",
+                     "Write the clouds' weather map as a picture (ADR-0386): every cloud from above, tinted by its type "
+                     "(stratus grey .. cumulonimbus red), the cirrus faint blue, the camera a red dot.",
+                     unanswered("a CloudMapSystem: a level with volumetric clouds and clouds.lua"));
     commandTable.add("frame?", "frame?", "The last `frame`: what it found, its box and the eye it chose.",
                      unanswered("a CameraSystem"));
     commandTable.add("lots?", "lots?", "Every recipe the city grew, with how many lots of each (the names `frame lot` takes).",

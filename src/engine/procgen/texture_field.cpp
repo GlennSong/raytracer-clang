@@ -18,12 +18,8 @@ namespace {
 
 double clamp01(double x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
 
-uint32_t hash2i(int x, int y, uint32_t seed) {
-    uint32_t h = seed * 2654435761u + static_cast<uint32_t>(x) * 40503u +
-                 static_cast<uint32_t>(y) * 668265263u + 0x9e3779b9u;
-    h ^= h >> 15; h *= 0x2c1b3c6du; h ^= h >> 12; h *= 0x297a2d39u; h ^= h >> 15;
-    return h;
-}
+// (the textures' own hash: hash.h's frozen one, kept until their bake's next tag)
+uint32_t hash2i(int x, int y, uint32_t seed) { return frozenTextureFieldHash(x, y, seed); }
 
 // Wrapping value lattice: exactly periodic in `period` cells.
 double tileLattice(int x, int y, int period, uint32_t seed) {
@@ -31,15 +27,11 @@ double tileLattice(int x, int y, int period, uint32_t seed) {
     y = ((y % period) + period) % period;
     return (hash2i(x, y, seed) & 0xFFFFFFu) / 16777215.0;
 }
+// (procgen/noise.h's value noise over the wrapping lattice)
 double tileValueNoise(double u, double v, int period, uint32_t seed) {
-    const double x = u * period, y = v * period;
-    const int i = static_cast<int>(std::floor(x)), j = static_cast<int>(std::floor(y));
-    const double fx = x - i, fy = y - j;
-    const double sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
-    const double a = tileLattice(i, j, period, seed), b = tileLattice(i + 1, j, period, seed);
-    const double c = tileLattice(i, j + 1, period, seed), d = tileLattice(i + 1, j + 1, period, seed);
-    const double top = a + (b - a) * sx, bot = c + (d - c) * sx;
-    return top + (bot - top) * sy;
+    return latticeValueNoise(u * period, v * period, [period, seed](int64_t i, int64_t j) {
+        return tileLattice(static_cast<int>(i), static_cast<int>(j), period, seed);
+    });
 }
 // Worley over a wrapping jittered grid: nearest and second-nearest distances, and the nearest id.
 struct CellHit { double d1, d2; uint32_t id; };

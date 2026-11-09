@@ -3,6 +3,7 @@
 #ifdef RT_ENABLE_SCRIPTING
 #include "../scripting/clouds_lua.h"   // ensureCloudsLoaded: clouds.lua, once
 #endif
+#include <algorithm>
 #include <memory>
 #include <mutex>
 
@@ -39,6 +40,11 @@ const CloudBook& cloudBook() {
 #endif
     std::lock_guard<std::mutex> lock(bookMutex());
     return activeBook() ? *activeBook() : plainBook();
+}
+
+WeatherTargets weatherTargets(WeatherKind k) {
+    const int i = std::clamp(static_cast<int>(k), 0, 3);
+    return cloudBook().weathers[static_cast<std::size_t>(i)];
 }
 
 }  // namespace engine

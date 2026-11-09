@@ -25,41 +25,31 @@ namespace engine {
 // clear noon never jump-cuts to a thunderhead.
 enum class WeatherKind : int { Clear = 0, Fair = 1, Overcast = 2, Storm = 3 };
 
+// A state's TARGETS: the weather data's (assets/scripts/clouds.lua `weathers`, ADR-0388; sky/cloud_book.cpp), where
+// a new kind of weather's numbers belong. The defaults below are fair's -- what every state is without clouds.lua.
 struct WeatherTargets {
     // the share of the sky under cloud: the weather map's (ADR-0386) -- it was the share of a noise field over a
     // threshold, which read heavier than its number (fair's 0.32 filled the sky)
-    float coverage;
-    float density;    // optical thickness (Beer term) — dark bases at 1.0
-    float scale;      // noise domain scale — bigger cells for heavy decks
-    float sunScale;   // multiplier on the sun's intensity (kills shadows too)
+    float coverage = 0.22f;
+    float density = 0.45f;    // optical thickness (Beer term) — dark bases at 1.0
+    float scale = 1.10f;      // noise domain scale — bigger cells for heavy decks
+    float sunScale = 1.00f;   // multiplier on the sun's intensity (kills shadows too)
     // An overcast sky is a giant diffuser: LESS direct light, MORE ambient,
     // and shadows nearly gone. Dimming only the sun (the first cut) kept
     // clear-sky contrast at lower brightness — "the lighting under the
     // clouds is still very harsh". ambientScale raises the fill; shadowSoften
     // fades the artistic shadow response toward shadowless.
-    float ambientScale;   // multiplier on the level's ambient fill
-    float shadowSoften;   // 0 = authored shadows, 1 = fully diffuse (no shadow)
+    float ambientScale = 1.05f;   // multiplier on the level's ambient fill
+    float shadowSoften = 0.08f;   // 0 = authored shadows, 1 = fully diffuse (no shadow)
     // The CLOUD TYPES the weather's map spreads over (ADR-0336; 0 stratus, 1/3 stratocumulus, 2/3 cumulus, 1
     // cumulonimbus): easing between states morphs the types too -- a front's puffs flatten into a deck.
-    float typeLo, typeHi;
+    float typeLo = 0.47f, typeHi = 0.75f;
     // THE WIND the state blows (ADR-0337, wind.h): m/s at 10 m, and how squally
-    float windSpeed, windGust;
+    float windSpeed = 6.0f, windGust = 0.35f;
 };
 
-inline WeatherTargets weatherTargets(WeatherKind k) {
-    switch (k) {
-        // 0.03, not 0.08: the coverage threshold rides the top of a noise
-        // field, and 8 % still filled the sky with popcorn — a clear day is a
-        // few wisps at most (Glenn, 2026-09-14: "can we see different weather?").
-        case WeatherKind::Clear:    return {0.03f, 0.25f, 0.90f, 1.00f, 1.00f, 0.00f, 0.62f, 0.70f, 3.0f, 0.20f};   // fair-weather puffs, a light breeze
-        case WeatherKind::Overcast: return {0.90f, 0.60f, 1.90f, 0.55f, 1.35f, 0.60f, 0.00f, 0.40f, 9.0f, 0.40f};   // stratus deck, a fresh wind
-        case WeatherKind::Storm:    return {0.92f, 1.00f, 1.60f, 0.28f, 1.45f, 0.85f, 0.60f, 1.00f, 16.0f, 0.70f};   // towers, a gale gusting
-        case WeatherKind::Fair:     break;
-    }
-    // Fair -- the everyday sky, a moderate breeze: a fifth of it under cloud, as a fair-weather cumulus sky is
-    // (types 0.47..0.75: mostly cumulus, a little stratocumulus -- at 0.40 a sheet of stratocumulus hung overhead)
-    return {0.22f, 0.45f, 1.10f, 1.00f, 1.05f, 0.08f, 0.47f, 0.75f, 6.0f, 0.35f};
-}
+// The state's targets, from the weather data (clouds.lua; sky/cloud_book.cpp)
+WeatherTargets weatherTargets(WeatherKind k);
 
 inline const char* weatherKindName(WeatherKind k) {
     switch (k) {

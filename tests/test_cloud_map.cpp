@@ -53,6 +53,21 @@ TEST_CASE(clouds_lua_reads_four_types_mild_to_severe) {
     CHECK(!loadCloudsSource("return { types = { { base = 900, top = 500 }, {}, {}, {} } }", b, &err));
 }
 
+TEST_CASE(clouds_lua_reads_the_weathers_mild_to_severe) {
+    CloudBook b;
+    std::string err;
+    CHECK(loadCloudsSource(readCloudsFile(), b, &err));
+    // (WeatherKind's order: clear, fair, overcast, storm)
+    CHECK(b.weathers[0].coverage < b.weathers[1].coverage && b.weathers[1].coverage < b.weathers[2].coverage);
+    CHECK(b.weathers[3].sunScale < b.weathers[1].sunScale);
+    CHECK(b.weathers[1].typeLo < b.weathers[1].typeHi);
+    // the book in use is clouds.lua's: the weather walks its numbers
+    CHECK(cloudBook().loaded);
+    CHECK(weatherTargets(WeatherKind::Fair).coverage == b.weathers[1].coverage);
+    // a state missing, or a field, does not read
+    CHECK(!loadCloudsSource("return { types = { {}, {}, {}, {} }, weathers = { clear = {} } }", b, &err));
+}
+
 TEST_CASE(cloud_type_weights_spread_the_range) {
     const std::array<float, 4> one = cloudTypeWeights(2.0f / 3.0f, 2.0f / 3.0f);
     CHECK(one[2] == 1.0f);

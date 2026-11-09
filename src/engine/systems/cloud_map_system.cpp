@@ -1,6 +1,7 @@
 #include "cloud_map_system.h"
 
 #include "../../log.h"
+#include <tinygltf/stb_image_write.h>   // (the implementation is model_importer's)
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -31,6 +32,47 @@ void CloudMapSystem::startBake(const CloudMapInputs& in) {
     sinceBake_ = 0.0;
 }
 
+void CloudMapSystem::onStart(FrameContext& ctx) {
+    if (ctx.commands != nullptr)
+        pictureCmd_ = ctx.commands->bind("cloudmap", "CloudMapSystem", [this](const ControlCommand& cmd) -> std::string {
+            if (cmd.args.empty()) return "err cloudmap <path.png>";
+            picturePath_ = cmd.args[0];
+            return "ok staged " + picturePath_;
+        });
+}
+
+// THE MAP AS A PICTURE (`cloudmap`): from above, north up (-z), each texel a cloud's footprint over the sea-blue of
+// clear air, tinted by its type -- stratus grey, stratocumulus pale, cumulus white, cumulonimbus red -- the cirrus
+// a faint blue wash, the camera a red dot
+void CloudMapSystem::writePicture(const std::string& path, const Vec3& camera) const {
+    const int n = last_.size;
+    std::vector<uint8_t> img(static_cast<std::size_t>(n) * n * 3);
+    auto put = [&](int i, int j, const Vec3& c) {
+        uint8_t* q = &img[(static_cast<std::size_t>(j) * n + i) * 3];
+        q[0] = static_cast<uint8_t>(std::lround(std::clamp(c.x, 0.0, 1.0) * 255.0));
+        q[1] = static_cast<uint8_t>(std::lround(std::clamp(c.y, 0.0, 1.0) * 255.0));
+        q[2] = static_cast<uint8_t>(std::lround(std::clamp(c.z, 0.0, 1.0) * 255.0));
+    };
+    const Vec3 tints[4] = {Vec3(0.62, 0.62, 0.66), Vec3(0.85, 0.85, 0.80), Vec3(1.0, 1.0, 1.0), Vec3(1.0, 0.55, 0.50)};
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            const uint8_t* p = &last_.rgba[(static_cast<std::size_t>(j) * n + i) * 4];
+            const double f = p[0] / 255.0, slot = p[1] / 255.0 * 3.0, cirrus = p[3] / 255.0;
+            const int a = std::min(static_cast<int>(slot), 2);
+            const Vec3 tint = tints[a] * (1.0 - (slot - a)) + tints[a + 1] * (slot - a);
+            const Vec3 air = Vec3(0.12, 0.25, 0.48) + Vec3(0.25, 0.3, 0.4) * cirrus;
+            put(i, j, air * (1.0 - f) + tint * f);
+        }
+    // the camera, in the air
+    const double texel = last_.extent / n;
+    const int ci = static_cast<int>((camera.x + driftX_ - last_.originX) / texel);
+    const int cj = static_cast<int>((camera.z + driftZ_ - last_.originZ) / texel);
+    for (int dj = -3; dj <= 3; ++dj)
+        for (int di = -3; di <= 3; ++di)
+            if (ci + di >= 0 && cj + dj >= 0 && ci + di < n && cj + dj < n) put(ci + di, cj + dj, Vec3(1.0, 0.1, 0.1));
+    if (!stbi_write_png(path.c_str(), n, n, 3, img.data(), n * 3)) LOG_WARN << "[clouds] could not write " << path;
+}
+
 void CloudMapSystem::update(FrameContext& ctx) {
     VolumetricCloudParams& vc = ctx.view.lighting.volumetricClouds;
     if (oldTexFrames_ > 0 && --oldTexFrames_ == 0 && oldTex_.valid()) {
@@ -39,6 +81,11 @@ void CloudMapSystem::update(FrameContext& ctx) {
     }
     if (!vc.enabled) return;
     const CloudBook& book = cloudBook();
+    if (!picturePath_.empty() && haveMap_) {
+        writePicture(picturePath_, ctx.view.camera.position);
+        LOG_INFO << "[clouds] the map written to " << picturePath_;
+        picturePath_.clear();
+    }
 
     // THE DRIFT: the deck's own `wind` is its speed in a 6 m/s ground wind
     const double speed = static_cast<double>(vc.wind) * (std::max(ctx.renderer.windSpeed, 0.0f) / 6.0);
@@ -88,6 +135,7 @@ void CloudMapSystem::update(FrameContext& ctx) {
             tex_ = t;
             built_ = m.inputs;
             haveMap_ = true;
+            last_ = m;
             LOG_INFO << "[clouds] map baked in " << m.bakeMs << " ms (coverage " << m.inputs.coverage << ", types "
                      << m.inputs.typeLo << ".." << m.inputs.typeHi << ")";
         }

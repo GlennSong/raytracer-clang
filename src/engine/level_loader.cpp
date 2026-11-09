@@ -7715,18 +7715,11 @@ bool LevelLoader::load(const std::string& path,
                     if (!charCells->empty() && !std::getenv("RT_ONE_PLANTING")) {
                         auto cells = charCells;
                         auto ground = furnGround;
-                        auto lattice = [](long long x, long long z, uint32_t salt) {
-                            uint64_t k = static_cast<uint64_t>(x) * 0x9E3779B97F4A7C15ull ^ static_cast<uint64_t>(z) * 0xC2B2AE3D27D4EB4Full ^ salt;
-                            k ^= k >> 31; k *= 0xBF58476D1CE4E5B9ull; k ^= k >> 29;
-                            return (k & 0xFFFFFF) / static_cast<double>(0x1000000);
-                        };
-                        auto noise = [lattice](double x, double z, double cell, uint32_t salt) {   // value noise, smooth
-                            const double fx = x / cell, fz = z / cell;
-                            const long long ix = static_cast<long long>(std::floor(fx)), iz = static_cast<long long>(std::floor(fz));
-                            double tx = fx - ix, tz = fz - iz;
-                            tx = tx * tx * (3 - 2 * tx); tz = tz * tz * (3 - 2 * tz);
-                            const double a = lattice(ix, iz, salt), b = lattice(ix + 1, iz, salt), c = lattice(ix, iz + 1, salt), d = lattice(ix + 1, iz + 1, salt);
-                            return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz;
+                        // (procgen/noise.h's value noise over the planting's frozen lattice, hash.h)
+                        auto noise = [](double x, double z, double cell, uint32_t salt) {
+                            return latticeValueNoise(x / cell, z / cell, [salt](int64_t i, int64_t j) {
+                                return frozenPlantingLattice(i, j, salt);
+                            });
                         };
                         // the island's height bands (its ground cover's): a street above the upland line is a hill
                         // town's, more mountain the nearer the mountain line; a level without bands has no high ground

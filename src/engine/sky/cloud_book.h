@@ -5,6 +5,7 @@
 // weather's type axis (where each stands, how big its cells are, its shape), and the weather map's size. The map
 // (cloud_map.h) places cells of these types; the renderer's march shapes them (VolumetricCloudParams::types).
 
+#include "../weather_cycle.h"   // WeatherTargets
 #include <array>
 #include <string>
 
@@ -24,9 +25,13 @@ struct CloudBook {
     std::array<CloudTypeSpec, 4> types{};   // along the type axis: 0, 1/3, 2/3, 1
     float shapeScale = 3.0f;                // the shape noise against the level's noiseScale
     float shadow = 0.85f;                   // how much of the sun a cloud's heart takes on the ground (ADR-0387)
+    float organisation = 0.0f;              // 0 cells sprinkled evenly .. 1 bunched into fields and streets
+    float sizeSkew = 1.0f;                  // 1 a cell's radius even over its range; above, skewed to the small
     float mapExtent = 80000.0f;             // metres across
     int mapSize = 1024;                     // texels across
     float rebuildMetres = 8000.0f;          // the camera's drift in the air that rebakes the map
+    // THE WEATHERS (ADR-0388): each state's targets, by WeatherKind (clear, fair, overcast, storm)
+    std::array<WeatherTargets, 4> weathers{};
     bool loaded = false;                    // false: clouds.lua was not read (the built-in cumulus everywhere)
 };
 

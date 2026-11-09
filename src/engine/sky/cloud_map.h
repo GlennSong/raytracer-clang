@@ -41,7 +41,7 @@ struct CloudMapImage {
 void cloudCirrusSweep(uint32_t seed, float& x, float& z);
 // Each slot's share of the cells for a type range (sums to 1): the overlap of [lo, hi] with the slot's own third
 std::array<float, 4> cloudTypeWeights(float typeLo, float typeHi);
-// Bake the map (threaded; ~tens of ms for 1024^2)
+// Bake the map, on the calling thread (a few hundred ms for 1024^2: CloudMapSystem runs it beside the frame)
 void bakeCloudMap(const CloudBook& book, const CloudMapInputs& in, CloudMapImage& out);
 // The share of the map's texels at or over `footprint` -- what the coverage came to (tests, the lab)
 float cloudMapCover(const CloudMapImage& map, float footprint = 0.5f);

@@ -17453,3 +17453,54 @@ the overhead cloud is in its shadow.
 **Owed:**
 - The sky's light under overcast: the deck's, not the clear sky's.
 - The exposure meter's ground reading under a cloud.
+
+## ADR-0388 — The weathers as data
+
+**Context.** The weather plan's A2. The four states' targets (clear, fair, overcast, storm) were a switch in
+weather_cycle.h, against the rule that a kind is data (#172).
+
+**Decision.**
+- assets/scripts/clouds.lua `weathers`: each state's coverage, density, noise scale, sun and ambient multipliers,
+  shadow softening, type range and wind. Every field is required (a state's numbers are its whole definition).
+- `weatherTargets(kind)` reads the cloud book (sky/cloud_book.cpp).
+- Without clouds.lua, every state is WeatherTargets' defaults, which are fair's (as lights.lua's plain kind; no C++
+  copy of the table).
+- Values as they were, except clear's coverage 0.03 -> 0.04 (the map's real share: a few puffs).
+- test_cloud_map reads them and checks the book in use is clouds.lua's; test_weather_cycle's ordering holds on the
+  data.
+
+## ADR-0389 — The clouds organised round eddies; one value noise
+
+**Context.** Glenn, seeing the weather map from above (the new `cloudmap <path>` command): "That looks too dense and
+doesn't look like a real weather system"; "I'd imagine there would be swirls and eddies in the wind that would guide
+the clouds"; "It sounds like you're adding new math which means we need to make sure it's not duplicated"; "Remove
+the duplicates".
+
+**Decision: the map's cells organised** (clouds.lua `organisation`, `size_skew`):
+- A slow moisture field scales each grid square's cells. Its mean is one over a fixed 200 km, so a bake never
+  depends on its window. It is stretched along the sweep into streets and read through two scales of CURL NOISE (a
+  divergence-free swirl, ~10-30 km eddies). So the cells bunch into fields and lines that wrap round eddies, with
+  wide clear stretches between. The cirrus wraps round the same eddies.
+  - The field's strength gives way as the cover passes 60 %: an overcast is even.
+  - Where it bunches the cells, they overlap. So the footprints' worth per m^2 is solved over the field's samples
+    (bisection), and the asked cover is still the sky's (tests: 0.22 -> 0.19-0.23).
+- A cell's radius is drawn skewed to the small (the roll^2.2): many small cumulus, few big.
+- It is a stand-in. The wind field (part C) will write the field and its eddies.
+- **Cost:** the bake runs on CloudMapSystem's own worker, single-threaded, not on the shared pool, whose rows are the
+  frame's: 2-3 s for the 80 km map, a few times a session. Each square's cell count is worked out once (it was per
+  texel: 8 s).
+
+**Decision: one value noise** (it had been written seven times):
+- procgen/noise.h `latticeValueNoise` (2D) and `latticeValueNoise3` (3D) are the one interpolation, over a lattice
+  passed in. `valueNoise2` is the canonical one over hash.h's `hashCell`. `Noise::curl2` is the shared curl.
+- The wind's gusts use valueNoise2 (runtime only: the gust patches shift).
+- The tree textures, the tree gnarl, the lanes' recipe terrain, the procedural textures, the city planner and the
+  street planting keep their lattices bit for bit, as FROZEN hashes in hash.h, because what they lay is baked. Retire
+  each at its bake's next tag bump.
+- Proved against the old code over 200 000 points:
+  - city plan, planting, texture tiles, gnarl: identical;
+  - lanes terrain within 3e-16 and tree textures within 1.2e-7 (their old interpolation's operation order).
+- cloud_map.cpp's own hash, value noise and smoothstep are gone (hash.h, Noise, rt_math's smoothstep).
+- scene.cpp's surface noise stays apart: it is the CPU mirror of common.metal's, bit-exact to the GPU.
+
+**Also:** `cloudmap <path.png>`, the weather map from above: types tinted, cirrus faint blue, the camera red.

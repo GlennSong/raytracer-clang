@@ -2,8 +2,10 @@
 #define RAYTRACER_ENGINE_CLOUD_MAP_SYSTEM_H
 
 #include "../system.h"
+#include "../control/control_commands.h"
 #include "../sky/cloud_map.h"
 #include <future>
+#include <string>
 
 namespace engine {
 
@@ -17,6 +19,7 @@ namespace engine {
 //   `rebuild_m` through the air or the weather has moved on, and handed to the renderer (setCloudMap).
 class CloudMapSystem : public System {
 public:
+    void onStart(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
     void onStop(FrameContext& ctx) override;
 
@@ -26,6 +29,11 @@ public:
 
 private:
     void startBake(const CloudMapInputs& in);
+    void writePicture(const std::string& path, const Vec3& camera) const;
+
+    ControlCommands::Binding pictureCmd_;   // `cloudmap <path>`
+    std::string picturePath_;               // staged by it, written in update
+    CloudMapImage last_;                    // the map handed over last (for the picture)
 
     double driftX_ = 0.0, driftZ_ = 0.0;
     std::future<CloudMapImage> pending_;

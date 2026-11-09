@@ -102,6 +102,13 @@ double Noise::fbm2(double x, double y, int octaves, double lacunarity,
     return fbm3(x, y, 0.0, octaves, lacunarity, gain);
 }
 
+void Noise::curl2(double x, double y, double& outX, double& outY, double h) const {
+    const double dx = (noise2(x + h, y) - noise2(x - h, y)) / (2.0 * h);
+    const double dy = (noise2(x, y + h) - noise2(x, y - h)) / (2.0 * h);
+    outX = dy;
+    outY = -dx;
+}
+
 double Noise::warpedFbm2(double x, double y, double warp, int octaves) const {
     // Offset coordinates so the two warp channels are decorrelated.
     double qx = fbm2(x, y, octaves);

@@ -1,6 +1,8 @@
 #include "city_plan.h"
 #include "plan_scene.h"   // the freeway both sides build: what the plan clears for the scene
 #include "../../../../curve.h"
+#include "../../../../hash.h"   // frozenCityPlanHash
+#include "../../noise.h"   // latticeValueNoise
 #include "land_shape.h"   // a city shaped by its land (world.land.shape)
 #include "../roads/lanes/road_graph_spec.h"   // stations
 #include "../roads/lanes/polyline_ops.h"
@@ -28,19 +30,12 @@ namespace {
 
 
 // ---- noise -------------------------------------------------------------------
-uint32_t hash3(int x, int y, uint32_t s) {
-    uint32_t h = s ^ (static_cast<uint32_t>(x) * 0x8da6b343u) ^ (static_cast<uint32_t>(y) * 0xd8163841u);
-    h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
-    return h;
-}
-Real valueNoise(Real x, Real y, uint32_t s) {   // -1..1, smooth
-    const int xi = static_cast<int>(std::floor(x)), yi = static_cast<int>(std::floor(y));
-    const Real fx = x - xi, fy = y - yi;
-    auto r = [&](int a, int b) { return (hash3(a, b, s) & 0xFFFF) / 65535.0 * 2.0 - 1.0; };
-    const Real u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
-    const Real a0 = r(xi, yi) + (r(xi + 1, yi) - r(xi, yi)) * u;
-    const Real a1 = r(xi, yi + 1) + (r(xi + 1, yi + 1) - r(xi, yi + 1)) * u;
-    return a0 + (a1 - a0) * v;
+// (the planner's own hash: hash.h's frozen one, kept until the plans' next tag)
+uint32_t hash3(int x, int y, uint32_t s) { return frozenCityPlanHash(x, y, s); }
+Real valueNoise(Real x, Real y, uint32_t s) {   // -1..1, smooth: procgen/noise.h's, over the planner's lattice
+    return latticeValueNoise(x, y, [s](int64_t a, int64_t b) {
+        return (hash3(static_cast<int>(a), static_cast<int>(b), s) & 0xFFFF) / 65535.0 * 2.0 - 1.0;
+    });
 }
 // Periodic in theta: a closed ring stays closed.
 Real ringNoise(Real theta, int k, uint32_t s) {

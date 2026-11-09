@@ -36,6 +36,8 @@ bool loadCloudsSource(const std::string& code, CloudBook& out, std::string* err)
     CloudBook book;
     book.shapeScale = static_cast<float>(numField(L, root, "shape_scale", book.shapeScale));
     book.shadow = static_cast<float>(numField(L, root, "shadow", book.shadow));
+    book.organisation = static_cast<float>(numField(L, root, "organisation", book.organisation));
+    book.sizeSkew = static_cast<float>(numField(L, root, "size_skew", book.sizeSkew));
     if (book.shadow < 0.0f || book.shadow > 1.0f) return fail("shadow: 0..1");
     lua_getfield(L, root, "map");
     if (lua_istable(L, -1)) {
@@ -71,6 +73,34 @@ bool loadCloudsSource(const std::string& code, CloudBook& out, std::string* err)
         if (!(c.top > c.base) || !(c.radiusMin > 0.0f && c.radiusMax >= c.radiusMin) || c.aspect < 1.0f ||
             !(c.low > 0.0f && c.low <= 1.0f))
             return fail("type `" + c.name + "`: top > base, 0 < radius min <= max, aspect >= 1, 0 < low <= 1");
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    // THE WEATHERS (ADR-0388): one table per state, every field given (a state's numbers are its whole definition)
+    lua_getfield(L, root, "weathers");
+    if (!lua_istable(L, -1)) return fail("weathers: clear, fair, overcast and storm");
+    const int weathers = lua_gettop(L);
+    const char* names[4] = {"clear", "fair", "overcast", "storm"};
+    for (int k = 0; k < 4; ++k) {
+        lua_getfield(L, weathers, names[k]);
+        if (!lua_istable(L, -1)) return fail(std::string("weathers.") + names[k] + " is missing");
+        const int t = lua_gettop(L);
+        WeatherTargets& w = book.weathers[static_cast<std::size_t>(k)];
+        const char* keys[8] = {"coverage", "density", "scale", "sun", "ambient", "shadow_soften", "wind", "gust"};
+        float* fields[8] = {&w.coverage, &w.density, &w.scale, &w.sunScale, &w.ambientScale, &w.shadowSoften,
+                            &w.windSpeed, &w.windGust};
+        for (int f = 0; f < 8; ++f) {
+            lua_getfield(L, t, keys[f]);
+            if (!lua_isnumber(L, -1)) return fail(std::string("weathers.") + names[k] + "." + keys[f] + " is not a number");
+            *fields[f] = static_cast<float>(lua_tonumber(L, -1));
+            lua_pop(L, 1);
+        }
+        float range[2] = {-1.0f, -1.0f};
+        if (!numbers(L, t, "types", range, 2) || range[0] < 0.0f || range[1] > 1.0f || range[0] > range[1])
+            return fail(std::string("weathers.") + names[k] + ".types: { lo, hi } within 0..1");
+        w.typeLo = range[0];
+        w.typeHi = range[1];
+        if (w.coverage < 0.0f || w.coverage > 1.0f) return fail(std::string("weathers.") + names[k] + ".coverage: 0..1");
         lua_pop(L, 1);
     }
     lua_pop(L, 1);

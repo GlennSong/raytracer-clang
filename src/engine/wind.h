@@ -13,6 +13,7 @@
 // make it vary by place (the lee of the mountains, the ridges, the open sea); until then it is one airmass.
 
 #include "../rt_math.h"
+#include "procgen/noise.h"   // valueNoise2: the gust patches
 
 #include <algorithm>
 #include <cmath>
@@ -27,27 +28,12 @@ struct Wind {
     Real time = 0.0;             // seconds: what carries the gust patches downwind
 };
 
-namespace windDetail {
-inline Real hash2(int64_t i, int64_t j) {
-    uint64_t h = static_cast<uint64_t>(i) * 0x9E3779B97F4A7C15ull ^ static_cast<uint64_t>(j) * 0xC2B2AE3D27D4EB4Full;
-    h ^= h >> 31; h *= 0xBF58476D1CE4E5B9ull; h ^= h >> 29;
-    return static_cast<Real>(h >> 11) * (1.0 / 9007199254740992.0);
-}
-inline Real valueNoise(Real x, Real z) {
-    const Real fx = std::floor(x), fz = std::floor(z);
-    const int64_t i = static_cast<int64_t>(fx), j = static_cast<int64_t>(fz);
-    Real u = x - fx, v = z - fz;
-    u = u * u * (3 - 2 * u); v = v * v * (3 - 2 * v);
-    const Real a = hash2(i, j), b = hash2(i + 1, j), c = hash2(i, j + 1), d = hash2(i + 1, j + 1);
-    return (a + (b - a) * u) + ((c + (d - c) * u) - (a + (b - a) * u)) * v;
-}
-}  // namespace windDetail
 
 // The gust factor at a point: 1 - gust/2 .. 1 + gust, patches ~120 m across travelling with the wind
 inline Real windGustFactor(const Wind& w, const Vec3& p) {
     const Real s = 1.0 / 120.0;
     const Vec3 q = p - w.dir * (w.speed * w.time);   // the air that is here now was upwind of it
-    const Real n = 0.65 * windDetail::valueNoise(q.x * s, q.z * s) + 0.35 * windDetail::valueNoise(q.x * s * 2.7 + 5.3, q.z * s * 2.7 - 1.9);
+    const Real n = 0.65 * valueNoise2(q.x * s, q.z * s, 0x57u) + 0.35 * valueNoise2(q.x * s * 2.7 + 5.3, q.z * s * 2.7 - 1.9, 0x57u);
     return 1.0 + w.gust * (1.5 * n - 0.5);
 }
 

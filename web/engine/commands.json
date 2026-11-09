@@ -72,6 +72,12 @@
   "usage": "clip?"
  },
  {
+  "name": "cloudmap",
+  "owner": "engine",
+  "summary": "Write the clouds' weather map as a picture (ADR-0386): every cloud from above, tinted by its type (stratus grey .. cumulonimbus red), the cirrus faint blue, the camera a red dot.",
+  "usage": "cloudmap <path.png>"
+ },
+ {
   "name": "clouds",
   "owner": "engine",
   "summary": "Set the cloud deck live: on or off, coverage, density, scale, wind. Kept with the deck's settings.",
