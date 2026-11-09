@@ -1,0 +1,998 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Weather and Wind — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>Weather and wind</h1>
+  <p class="lede">The weather is four states written as data and eased into one another over time. It sets one wind
+    for everything the air moves, and it drives a small fluid simulation of the air over the island and its sea.
+    That simulation decides where clouds form: over sunlit land and windward slopes, carried off downwind, and not
+    over the open sea or over a summit that stands above the inversion.</p>
+
+  <h2>The problem</h2>
+  <p>A sky has to change: clear days, grey days, a storm now and then, and fronts that arrive rather than cut in. The
+    same weather has to agree everywhere it shows. If the clouds race east while the grass leans west and a parachute
+    drifts north, the world reads as fake. And the clouds have to sit where real clouds sit. Seen from a satellite on a
+    summer afternoon, an island's clouds are organised by the <i>land</i>: cumulus over the sunlit ground and high
+    slopes, clear coasts and sea, clear peaks above the trade-wind cap, and long plumes trailing downwind. Noise
+    scattered evenly over sea and land can't make that pattern.</p>
+  <p>Three ideas carry the system:</p>
+  <ul>
+    <li><b>A weather is a set of numbers, and the numbers are data.</b> Each state (clear, fair, overcast, storm) is a
+      table in <code>assets/scripts/clouds.lua</code>: cloud cover, light, wind and the air the simulation needs
+      (ADR-0388). Changing weather means easing every number toward the new state's values over about 40 seconds.</li>
+    <li><b>One wind, one source.</b> <code>DayNightSystem</code> publishes the eased weather as two components, the
+      <code>Wind</code> and the <code>WeatherNow</code>. Everything that moves with the air reads the first, and the
+      simulation follows both (ADR-0337, ADR-0390).</li>
+    <li><b>Simulate the organisation, not the clouds.</b> A coarse 2D grid of stable fluids (Stam's method) carries the
+      wind, the lift, the humidity and a cloud amount over at least 64 km. The cloud renderer still draws every cloud;
+      the simulation only tells its weather map how much cloud to put where, and of what kind (ADR-0390).</li>
+  </ul>
+
+  <h2>The shape of it</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 900 470" role="img" aria-label="Structure: clouds.lua weathers feed WeatherCycle inside DayNightSystem, steered by the weather command, saved settings and the level's policy; DayNightSystem publishes Wind and WeatherNow on one entity and the renderer's wind; WeatherSimSystem reads them, steps a WeatherSim on a worker and publishes a WeatherField; CloudMapSystem bakes the weather map from it for the clouds; grass, trees, sea and the glide read the wind">
+      <defs><marker id="wa1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <text x="20" y="22" fill="#e6c07b" font-size="12" text-anchor="start">THE STATE (data, then eased)</text>
+        <rect x="20" y="32" width="200" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="120" y="55" fill="#cfe4ff">clouds.lua weathers</text>
+        <text x="120" y="74" fill="#93a6ba" font-size="12">clear · fair · overcast · storm</text>
+        <rect x="290" y="32" width="300" height="56" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="440" y="55" fill="#cfe4ff">WeatherCycle (in DayNightSystem)</text>
+        <text x="440" y="74" fill="#93a6ba" font-size="12">state · ease τ 40 s · auto walk · calendar</text>
+        <rect x="660" y="32" width="220" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="770" y="55" fill="#cfe4ff">weather command</text>
+        <text x="770" y="74" fill="#93a6ba" font-size="12">settings · level policy</text>
+        <line x1="220" y1="60" x2="286" y2="60" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa1)"/>
+        <line x1="660" y1="60" x2="594" y2="60" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa1)"/>
+
+        <text x="20" y="122" fill="#e6c07b" font-size="12" text-anchor="start">PUBLISHED each fixed step (one entity)</text>
+        <rect x="150" y="132" width="250" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="275" y="155" fill="#cfe4ff">Wind</text>
+        <text x="275" y="174" fill="#93a6ba" font-size="12">dir · speed · gust · time</text>
+        <rect x="480" y="132" width="250" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="605" y="155" fill="#cfe4ff">WeatherNow</text>
+        <text x="605" y="174" fill="#93a6ba" font-size="12">live targets · active</text>
+        <line x1="400" y1="88" x2="300" y2="128" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa1)"/>
+        <line x1="480" y1="88" x2="580" y2="128" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa1)"/>
+
+        <text x="650" y="308" fill="#e6c07b" font-size="12" text-anchor="start">THE SIMULATION (own worker)</text>
+        <rect x="380" y="232" width="260" height="56" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="510" y="255" fill="#cfe4ff">WeatherSimSystem</text>
+        <text x="510" y="274" fill="#93a6ba" font-size="12">WeatherSim 256², step every 30 s</text>
+        <rect x="690" y="232" width="190" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="785" y="255" fill="#cfe4ff">rasterizeTerrain</text>
+        <text x="785" y="274" fill="#93a6ba" font-size="12">shared with DayNight</text>
+        <line x1="690" y1="260" x2="644" y2="260" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa1)"/>
+        <line x1="300" y1="188" x2="440" y2="228" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa1)"/>
+        <line x1="600" y1="188" x2="540" y2="228" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa1)"/>
+        <rect x="380" y="320" width="260" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="510" y="343" fill="#cfe4ff">WeatherField</text>
+        <text x="510" y="362" fill="#93a6ba" font-size="12">shared_ptr&lt;const WeatherSim&gt;, version</text>
+        <line x1="510" y1="288" x2="510" y2="316" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa1)"/>
+        <rect x="380" y="400" width="260" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="510" y="423" fill="#cfe4ff">CloudMapSystem</text>
+        <text x="510" y="442" fill="#93a6ba" font-size="12">weather map → clouds, cloud shadow</text>
+        <line x1="510" y1="376" x2="510" y2="396" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa1)"/>
+
+        <text x="20" y="322" fill="#e6c07b" font-size="12" text-anchor="start">THE WIND'S READERS</text>
+        <rect x="20" y="332" width="290" height="44" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="165" y="359" fill="#cfe4ff">grass and tree sway, sea waves</text>
+        <rect x="20" y="386" width="290" height="44" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="165" y="413" fill="#cfe4ff">windAt: glide, parachute</text>
+        <path d="M200,188 L200,205 L120,205 L120,328" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa1)"/>
+        <path d="M200,205 L330,205 L330,428 L376,428" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa1)"/>
+        <text x="342" y="455" fill="#93a6ba" font-size="12" text-anchor="start">drift</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Who owns what. <code>DayNightSystem</code> owns the weather and publishes it; the systems after it
+    (<code>WeatherSimSystem</code>, then <code>CloudMapSystem</code>, in that order in both the editor and the game
+    states) read the components. The wind also reaches the shaders through <code>Renderer::windDir/Speed/Gust</code>.
+    The box at the bottom is where this page hands over to <a href="clouds.html">Clouds</a>.</p>
+
+  <h2>The weather states, as data</h2>
+  <p>A weather state is a point in a space of numbers. The first version (commit <code>68a1a9b0</code>, 2026-08-17,
+    after Glenn's "most of the time the clouds shouldn't be that dramatic unless there's a storm") made the old default
+    deck the <i>storm</i> state and added a milder <i>fair</i> for everyday skies. The states lived in a C++ switch until
+    ADR-0388 moved them into <code>clouds.lua</code>, under the rule that a new kind of anything is a data edit. Every
+    field is required: a state's numbers are its whole definition, and the loader fails on a missing one rather than
+    guessing.</p>
+  <div class="code">
+    <div class="hd"><span>clouds.lua: the four weathers (ADR-0388), with the simulation's air (ADR-0390)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/assets/scripts/clouds.lua#L46-L64">assets/scripts/clouds.lua</a></div>
+<pre>  weathers = {
+    <span class="c">-- a clear day is a few small puffs at most (Glenn, 2026-09-14: "can we see different weather?"), a light breeze</span>
+    clear = { coverage = <span class="n">0.04</span>, density = <span class="n">0.25</span>, scale = <span class="n">0.90</span>, sun = <span class="n">1.00</span>, ambient = <span class="n">1.00</span>, shadow_soften = <span class="n">0.00</span>,
+              types = { <span class="n">0.62</span>, <span class="n">0.70</span> }, wind = <span class="n">3.0</span>, gust = <span class="n">0.20</span>,
+              humidity = <span class="n">0.74</span>, inversion = <span class="n">1600</span>, convection = <span class="n">0.6</span>, lift = -<span class="n">0.10</span> },
+    <span class="c">-- the everyday sky: a fifth of it under fair-weather cumulus, a little stratocumulus, a moderate breeze</span>
+    fair = { coverage = <span class="n">0.22</span>, density = <span class="n">0.45</span>, scale = <span class="n">1.10</span>, sun = <span class="n">1.00</span>, ambient = <span class="n">1.05</span>, shadow_soften = <span class="n">0.08</span>,
+             types = { <span class="n">0.47</span>, <span class="n">0.75</span> }, wind = <span class="n">6.0</span>, gust = <span class="n">0.35</span>,
+             humidity = <span class="n">0.80</span>, inversion = <span class="n">2000</span>, convection = <span class="n">1.0</span>, lift = <span class="n">0.0</span> },
+    <span class="c">-- a stratus deck closing over (stratocumulus breaking it), a fresh wind</span>
+    overcast = { coverage = <span class="n">0.90</span>, density = <span class="n">0.60</span>, scale = <span class="n">1.90</span>, sun = <span class="n">0.55</span>, ambient = <span class="n">1.35</span>, shadow_soften = <span class="n">0.60</span>,
+                 types = { <span class="n">0.00</span>, <span class="n">0.40</span> }, wind = <span class="n">9.0</span>, gust = <span class="n">0.40</span>,
+                 humidity = <span class="n">0.92</span>, inversion = <span class="n">2500</span>, convection = <span class="n">0.3</span>, lift = <span class="n">0.35</span> },
+    <span class="c">-- towers among cumulus, a gale gusting ("most of the time the clouds shouldn't be that dramatic unless there's</span>
+    <span class="c">-- a storm")</span>
+    storm = { coverage = <span class="n">0.92</span>, density = <span class="n">1.00</span>, scale = <span class="n">1.60</span>, sun = <span class="n">0.28</span>, ambient = <span class="n">1.45</span>, shadow_soften = <span class="n">0.85</span>,
+              types = { <span class="n">0.60</span>, <span class="n">1.00</span> }, wind = <span class="n">16.0</span>, gust = <span class="n">0.70</span>,
+              humidity = <span class="n">0.95</span>, inversion = <span class="n">9000</span>, convection = <span class="n">1.6</span>, lift = <span class="n">0.20</span> },
+  },</pre>
+  </div>
+  <p>The fields fall into four groups, and each group has a different reader:</p>
+  <table>
+    <tr><th>Fields</th><th>What they mean</th><th>Who reads them</th></tr>
+    <tr><td><code>coverage</code>, <code>density</code>, <code>scale</code>, <code>types</code></td><td>The share of the
+      sky under cloud, how thick the deck is, the noise's size, and the range of cloud types (0 stratus … 1
+      cumulonimbus) the day's clouds spread over</td><td>The cloud renderer and its weather map
+      (<a href="clouds.html">Clouds</a>)</td></tr>
+    <tr><td><code>sun</code>, <code>ambient</code>, <code>shadow_soften</code></td><td>An overcast is a diffuser: less
+      sun, more sky fill, softer shadows</td><td><code>DayNightSystem</code>'s lighting (<a href="lighting.html">Lights</a>,
+      <a href="sky.html">Sky</a>)</td></tr>
+    <tr><td><code>wind</code>, <code>gust</code></td><td>m/s at 10 m above the ground, and how squally (0 steady … 1
+      squally)</td><td>The <code>Wind</code> component (below)</td></tr>
+    <tr><td><code>humidity</code>, <code>inversion</code>, <code>convection</code>, <code>lift</code></td><td>The air the
+      sea gives, the height of the cap cumulus can't rise through, how strongly sunlit land heats the air, and a
+      large-scale lift everywhere (a front; below zero, a high's sinking air)</td><td>The simulation, through
+      <code>WeatherNow</code></td></tr>
+  </table>
+  <p>Read the last four fields of each state and you can see how a weather is <i>made</i> rather than painted. Clear
+    has dry air, a low cap and sinking air. Overcast has wet air and a front's lift, so cloud forms over the sea as well
+    as the land, while its weak convection keeps the land from standing out. Storm raises the cap to 9 km, so nothing
+    stops the towers, and has the strongest convection.</p>
+
+  <h2>Easing from one state to the next</h2>
+  <p>C++ holds the same numbers in one struct, <code>WeatherTargets</code>. Its defaults are fair's, so with no
+    <code>clouds.lua</code> every state is fair rather than a second copy of the table. <code>weatherTargets(kind)</code>
+    reads the loaded cloud book. <code>WeatherNow</code>, the component the simulation reads, is just the eased targets
+    plus an on/off flag:</p>
+  <div class="code">
+    <div class="hd"><span>WeatherTargets' last fields, and WeatherNow</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/weather_cycle.h#L44-L59">src/engine/weather_cycle.h</a></div>
+<pre>    <span class="c">// The CLOUD TYPES the weather's map spreads over (ADR-0336; 0 stratus, 1/3 stratocumulus, 2/3 cumulus, 1</span>
+    <span class="c">// cumulonimbus): easing between states morphs the types too -- a front's puffs flatten into a deck.</span>
+    <span class="t">float</span> typeLo = <span class="n">0.47f</span>, typeHi = <span class="n">0.75f</span>;
+    <span class="c">// THE WIND the state blows (ADR-0337, wind.h): m/s at 10 m, and how squally</span>
+    <span class="t">float</span> windSpeed = <span class="n">6.0f</span>, windGust = <span class="n">0.35f</span>;
+    <span class="c">// THE SIMULATION's air (ADR-0390, sky/weather_sim.h): the humidity the sea gives it, the inversion's height (m),</span>
+    <span class="c">// how strongly sunlit land convects, and the large-scale lift (a front)</span>
+    <span class="t">float</span> humidity = <span class="n">0.80f</span>, inversion = <span class="n">2000.0f</span>, convection = <span class="n">1.0f</span>, lift = <span class="n">0.0f</span>;
+};
+
+<span class="c">// THE WEATHER NOW, for the systems that follow it (WeatherSimSystem; rain and sound to come): DayNightSystem publishes</span>
+<span class="c">// it each step on the Wind's entity, its targets eased. `active` false: the weather is off (the level's own sky).</span>
+<span class="k">struct</span> <span class="t">WeatherNow</span> {
+    <span class="t">WeatherTargets</span> live;
+    <span class="t">bool</span> active = <span class="k">false</span>;
+};</pre>
+  </div>
+  <p><code>WeatherCycle</code> holds the current state and a live copy of every number. Each fixed step it moves every
+    live value a share of the way to the state's target. The share is <code>1 − exp(−dt / 40 s)</code>, so about 63 % of
+    the gap closes every 40 seconds of simulation time. Because the clouds are <i>placed</i> by these numbers rather than
+    cross-faded between two pictures, a front grows the existing clouds in place. <code>live()</code> packs the live
+    values back into a <code>WeatherTargets</code>, which is what <code>WeatherNow</code> carries.</p>
+  <div class="code">
+    <div class="hd"><span>WeatherCycle::ease and live (most of the fourteen lines elided)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/weather_cycle.h#L160-L192">src/engine/weather_cycle.h</a></div>
+<pre>    <span class="k">static constexpr</span> <span class="t">double</span> kAutoHours = <span class="n">4.0</span>;    <span class="c">// in-world hours between rolls</span>
+    <span class="c">// Exponential approach: ~63% of the gap closes per tau of sim time, so a</span>
+    <span class="c">// front takes a couple of minutes to fully arrive instead of popping.</span>
+    <span class="k">static constexpr</span> <span class="t">double</span> kTauSeconds = <span class="n">40.0</span>;
+
+    <span class="t">void</span> ease(<span class="t">double</span> dtSeconds) {
+        <span class="k">const</span> <span class="t">WeatherTargets</span> t = weatherTargets(state);
+        <span class="k">const</span> <span class="t">float</span> a =
+            <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(<span class="n">1.0</span> - std::exp(-dtSeconds / kTauSeconds));
+        coverage += (t.coverage - coverage) * a;
+        <span class="c">// ...</span>
+        humidity += (t.humidity - humidity) * a;
+        inversion += (t.inversion - inversion) * a;
+        convection += (t.convection - convection) * a;
+        lift += (t.lift - lift) * a;
+    }
+    <span class="c">// the live values as targets (WeatherNow)</span>
+    <span class="t">WeatherTargets</span> live() <span class="k">const</span> {
+        <span class="c">// ...</span>
+    }</pre>
+  </div>
+  <p>Two other motions sit beside the easing. <code>snap()</code> jumps straight to the targets, for a state restored at
+    start (yesterday's storm should not fade in from a clear boot) or a <code>now</code> request. The <b>auto walk</b>
+    rolls every 4 in-world hours: half the time the state stays, a quarter of the time it steps one milder, a quarter
+    one harsher. It never skips a neighbour, so a clear noon can't jump-cut to a thunderhead. Since ADR-0340 the walk
+    belongs to a <b>calendar</b>: each in-world day opens with a state drawn from the level's climate (summer and winter
+    odds blended by the day of the year, flipped south of the equator), and the walk within the day is seeded by that
+    day. A given day always has the same weather however you reach it.</p>
+
+  <h3>The <code>weather</code> command, and whose weather wins</h3>
+  <table>
+    <tr><th>Command</th><th>What it does</th></tr>
+    <tr><td><code>weather clear|fair|overcast|storm</code></td><td>Sets the state by hand and turns the auto walk off.
+      The new state eases in over about 40 s.</td></tr>
+    <tr><td><code>weather &lt;state&gt; now</code></td><td>The same, snapped at once (screenshots, A/B
+      comparisons).</td></tr>
+    <tr><td><code>weather auto</code></td><td>Back to the calendar: today's weather, then the walk.</td></tr>
+    <tr><td><code>weather off</code></td><td>The weather lets go; the cloud panel and the <code>clouds</code> command
+      own the deck again, and <code>WeatherNow.active</code> is false (its numbers are fair's).</td></tr>
+    <tr><td><code>weather?</code></td><td>Prints the state, and <code>(auto)</code> if it is walking.</td></tr>
+  </table>
+  <p>The command publishes a <code>WeatherRequest</code> event (ADR-0253's control bus), which
+    <code>DayNightSystem</code> consumes. At startup, three sources compete, in this order:</p>
+  <table>
+    <tr><th>#</th><th>Source</th><th>Rule</th></tr>
+    <tr><td>1</td><td>Remembered weather (<code>settings.json</code>: <code>weather.state</code>,
+      <code>weather.auto</code>)</td><td>Only a state chosen by hand survives a restart, and it is snapped. Saved
+      <i>auto</i> weather is not restored (ADR-0340).</td></tr>
+    <tr><td>2</td><td>The level's <code>"dayNight": {"weather": ...}</code></td><td><code>off</code>, <code>auto</code>,
+      or a fixed state. A level's <code>"climate"</code> sets the odds, the prevailing wind's bearing and a wind
+      scale.</td></tr>
+    <tr><td>3</td><td>Nobody said anything</td><td>A level with a volumetric cloud deck gets auto weather, so days
+      differ by default.</td></tr>
+  </table>
+  <div class="note history"><p><b>Remembered weather used to win too often.</b> Every session saved its weather, and the
+    saved state outranked the level and the day's roll, so "the day's roll almost never ran" (ADR-0340). Earlier,
+    ADR-0102, calibrating realism against photographs, had found <code>river_valley</code> coming out overcast (its
+    deck turned the weather to auto, and auto's day was overcast) and noted that "a remembered weather in
+    <code>settings.json</code> beats the level's <code>dayNight.weather</code> by design", so screenshots pinned it with
+    <code>--cmd "weather fair now"</code>. ADR-0340 also fixed a seed
+    bug: the level-policy path rolled with a hard-coded 7 where the default path read <code>weather.seed</code>.</p></div>
+
+  <h2>Publishing the weather: Wind and WeatherNow</h2>
+  <p>At the end of every fixed step, after easing, <code>DayNightSystem</code> works out the wind and writes both
+    components onto one entity. The direction comes from the climate's prevailing bearing (it blows <i>from</i> that
+    bearing, so the air goes the opposite way; north is −z, east +x) and veers about it with two slow sines: ±0.52 rad
+    over 26 in-world hours plus a smaller 7.3-hour wobble, the "±30°" of ADR-0337. The speed and gustiness are the
+    weather's, or a moderate 6 m/s and 0.35 when the weather is off.</p>
+  <div class="code">
+    <div class="hd"><span>DayNightSystem::fixedUpdate: the wind and the weather now, published</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/day_night_system.cpp#L492-L520">src/engine/systems/day_night_system.cpp</a></div>
+<pre>    <span class="c">// THE WIND (ADR-0337): the weather's speed and gustiness (a moderate breeze with the weather off); its direction</span>
+    <span class="c">// veers slowly through the day about the seed's prevailing one (+-30 degrees over ~26 in-world hours)</span>
+    {
+        <span class="c">// (the climate's prevailing wind, ADR-0340: it comes FROM that compass bearing, so it goes toward the opposite;</span>
+        <span class="c">// north is -z, east +x)</span>
+        <span class="k">const</span> <span class="t">double</span> hours = cycle.absoluteDay() * <span class="n">24.0</span>;
+        <span class="k">const</span> <span class="t">double</span> toward = (climate_.prevailingFromDeg + <span class="n">180.0</span>) * <span class="n">0.017453292519943295</span> +
+                              <span class="n">0.52</span> * std::sin(hours * <span class="n">6.283185307</span> / <span class="n">26.0</span>) + <span class="n">0.17</span> * std::sin(hours * <span class="n">6.283185307</span> / <span class="n">7.3</span>);
+        wind.dir = <span class="t">Vec3</span>(std::sin(toward), <span class="n">0.0</span>, -std::cos(toward));
+        wind.speed = (weatherActive ? weather.windSpeed : <span class="n">6.0</span>) * climate_.windScale;
+        wind.gust = weatherActive ? weather.windGust : <span class="n">0.35</span>;
+        wind.time += ctx.clock.fixedStep();
+        <span class="k">if</span> (!ctx.world.alive(windEntity_)) {
+            windEntity_ = ctx.world.create();
+            ctx.world.add&lt;<span class="t">Wind</span>&gt;(windEntity_, wind);
+        } <span class="k">else if</span> (<span class="t">Wind</span>* w = ctx.world.get&lt;<span class="t">Wind</span>&gt;(windEntity_)) {
+            *w = wind;
+        }
+        <span class="c">// ...and the weather now, beside it (ADR-0390: the simulation follows it)</span>
+        <span class="t">WeatherNow</span> now;
+        now.live = weatherActive ? weather.live() : weatherTargets(<span class="t">WeatherKind</span>::Fair);
+        now.active = weatherActive;
+        <span class="k">if</span> (<span class="t">WeatherNow</span>* wn = ctx.world.get&lt;<span class="t">WeatherNow</span>&gt;(windEntity_)) *wn = now;
+        <span class="k">else</span> ctx.world.add&lt;<span class="t">WeatherNow</span>&gt;(windEntity_, now);
+        ctx.renderer.windDir[<span class="n">0</span>] = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(wind.dir.x);
+        ctx.renderer.windDir[<span class="n">1</span>] = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(wind.dir.z);
+        ctx.renderer.windSpeed = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(wind.speed);
+        ctx.renderer.windGust = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(wind.gust);
+    }</pre>
+  </div>
+  <p>Easing and publishing use simulation time (<code>ctx.clock.fixedStep()</code>): pausing the game freezes the
+    weather with everything else, and slow motion slows it. The auto walk, though, rides the day's clock, so it holds
+    when the day/night cycle is paused while an in-flight front still finishes arriving.</p>
+
+  <h2>The wind</h2>
+  <p>Before ADR-0337, "wind" was three unrelated constants: the clouds drifted along +x, grass and trees swayed toward a
+    fixed (0.85, 0.30), and the sea's wave trains had fixed headings. Glenn asked whether the weather's wind could also
+    push "players ... the parachute and wing suit ... grass or trees ... the waves in the sea". The answer was one
+    <code>Wind</code> and one question anyone can ask of it:</p>
+  <div class="code">
+    <div class="hd"><span>wind.h: the Wind, its gusts, and windAt</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/wind.h#L24-L46">src/engine/wind.h</a></div>
+<pre><span class="k">struct</span> <span class="t">Wind</span> {
+    <span class="t">Vec3</span> dir{<span class="n">0.94</span>, <span class="n">0.0</span>, <span class="n">0.34</span>};   <span class="c">// where the air is going, unit, horizontal</span>
+    <span class="t">Real</span> speed = <span class="n">6.0</span>;            <span class="c">// m/s at 10 m above the ground</span>
+    <span class="t">Real</span> gust = <span class="n">0.35</span>;            <span class="c">// 0 steady .. 1 squally: how much stronger a gust is than the mean</span>
+    <span class="t">Real</span> time = <span class="n">0.0</span>;             <span class="c">// seconds: what carries the gust patches downwind</span>
+};
+
+
+<span class="c">// The gust factor at a point: 1 - gust/2 .. 1 + gust, patches ~120 m across travelling with the wind</span>
+<span class="k">inline</span> <span class="t">Real</span> windGustFactor(<span class="k">const</span> <span class="t">Wind</span>&amp; w, <span class="k">const</span> <span class="t">Vec3</span>&amp; p) {
+    <span class="k">const</span> <span class="t">Real</span> s = <span class="n">1.0</span> / <span class="n">120.0</span>;
+    <span class="k">const</span> <span class="t">Vec3</span> q = p - w.dir * (w.speed * w.time);   <span class="c">// the air that is here now was upwind of it</span>
+    <span class="k">const</span> <span class="t">Real</span> n = <span class="n">0.65</span> * valueNoise2(q.x * s, q.z * s, <span class="n">0x57u</span>) + <span class="n">0.35</span> * valueNoise2(q.x * s * <span class="n">2.7</span> + <span class="n">5.3</span>, q.z * s * <span class="n">2.7</span> - <span class="n">1.9</span>, <span class="n">0x57u</span>);
+    <span class="k">return</span> <span class="n">1.0</span> + w.gust * (<span class="n">1.5</span> * n - <span class="n">0.5</span>);
+}
+
+<span class="c">// The wind at a point, m/s, horizontal: the mean along `dir`, stronger with height (the power law, a = 0.14, held</span>
+<span class="c">// within 0.6 .. 1.8 of the 10 m speed) and gusting</span>
+<span class="k">inline</span> <span class="t">Vec3</span> windAt(<span class="k">const</span> <span class="t">Wind</span>&amp; w, <span class="k">const</span> <span class="t">Vec3</span>&amp; p, <span class="t">Real</span> groundY = <span class="n">0.0</span>) {
+    <span class="k">const</span> <span class="t">Real</span> h = std::max(p.y - groundY, <span class="n">2.0</span>);
+    <span class="k">const</span> <span class="t">Real</span> prof = std::clamp(std::pow(h / <span class="n">10.0</span>, <span class="n">0.14</span>), <span class="n">0.6</span>, <span class="n">1.8</span>);
+    <span class="k">return</span> w.dir * (w.speed * prof * windGustFactor(w, p));
+}</pre>
+  </div>
+  <p>Two details are worth reading closely. The gust patches are sampled at <code>p − dir · speed · time</code>: the air
+    over a point now was upwind of it a moment ago, so the noise pattern travels downwind at the wind's speed, and a
+    gust has a place and a direction rather than flickering everywhere at once. The noise is
+    <code>valueNoise2</code>, the engine's one value noise (ADR-0389 found value noise written seven times and kept one).
+    The profile is the meteorologists' power law for wind over open ground, <i>u(h) = u₁₀ (h/10)<sup>0.14</sup></i>,
+    clamped so that however high you fly the wind is at most 1.8 times the 10 m wind.</p>
+  <table>
+    <tr><th>Reader</th><th>How it uses the wind</th></tr>
+    <tr><td>Grass and trees (<code>mesh.vert</code>)</td><td>Sway along the wind: 0.12 m of amplitude at 6 m/s, scaling
+      with speed, the frequency with √speed. Gust fronts are bands moving downwind, so a field bows in waves, and a mean
+      downwind lean is added (ADR-0337; see <a href="trees.html">Trees</a>).</td></tr>
+    <tr><td>The sea (<code>mesh.frag</code>)</td><td>The first of four wave trains heads downwind; heights scale by
+      speed / 6; whitecaps run from none in a calm to many in a gale.</td></tr>
+    <tr><td>Glide and parachute</td><td>Ground speed is airspeed plus <code>windAt(position)</code>: a chute drifts and
+      is buffeted, a wing suit makes little headway into a gale (<a href="player.html">The player</a>).</td></tr>
+    <tr><td>The clouds' drift (<code>CloudMapSystem</code>)</td><td>Integrated on the CPU along the wind, scaled by the
+      deck's own <code>wind</code> knob per 6 m/s of ground wind, so a veering wind turns the drift rather than
+      swinging the sky (ADR-0337, moved into <code>CloudMapSystem</code> by ADR-0386).</td></tr>
+    <tr><td>The simulation</td><td>The prevailing wind the grid relaxes toward (below).</td></tr>
+  </table>
+  <p><b><code>RT_WIND_TIME=&lt;seconds&gt;</code></b> pins the wind's clock for the renderer's sway and for the clouds'
+    drift, so every run of the cloud lab (<code>tools/cloud_lab.py</code>) has its clouds in the same place and an A/B
+    is honest. It does not touch <code>Wind::time</code> itself.</p>
+  <div class="note"><p><b>Still one airmass.</b> The <code>Wind</code> component is the same everywhere on the map:
+    trees in the lee of a ridge sway exactly like trees on its crest. The simulation below computes a wind that does
+    vary by place (round the mountains, into the heated land), but nothing outside the simulation reads it yet; that is
+    issue <a href="https://github.com/GlennSong/raytracer-clang/issues/200">#200</a>. Also note that the shader's sway
+    makes its own gust bands from its own clock (the renderer's wall time), while <code>windAt</code> uses the noise
+    patches above on <code>Wind::time</code>, so a gust seen crossing a field is not yet literally the one a glider meets
+    there.</p></div>
+
+  <h2>Why simulate the weather</h2>
+  <p>By 2026-11-08 the clouds were placed by a weather map of soft cloud cells (ADR-0386, <a href="clouds.html">Clouds</a>),
+    bunched into fields and streets around curl-noise eddies 10–30 km across (ADR-0389). Seen from above with the new
+    <code>cloudmap</code> command it still read wrong. Glenn: "That looks too dense and doesn't look like a real weather
+    system", then: "It feels like there are massive cloud structures that noise can't really create so we should
+    simulate something more realistic."</p>
+  <p>The reference was real islands. NASA Worldview's MODIS Aqua true-colour views, taken around 13:30 local time on
+    summer afternoons of 2022 and 2023 (<code>CREDITS.md</code>; measured, not shipped), showed the same thing on every
+    island:</p>
+  <div class="grid">
+    <div class="b"><h3>Puerto Rico</h3><p>Popcorn cumulus over the land only, cells 1–3 km, about a third of the land
+      covered; the sea round it about 3 %, with a clear coastal strip. On another date the cells merged into one mass
+      streaming downwind.</p></div>
+    <div class="b"><h3>Corsica</h3><p>Cumulus only along the mountain spine; the coast, lowlands and sea
+      clear.</p></div>
+    <div class="b"><h3>Hawaii</h3><p>Cloud piled on the windward slopes; the summits, above the trade-wind inversion near
+      2 km, poke through clear.</p></div>
+    <div class="b"><h3>Canaries</h3><p>Small cumulus fields over open sea, and clear <i>wakes</i> in the islands'
+      lee.</p></div>
+  </div>
+  <p>The organiser is the land, through physics a noise function can't know about: the sun heats land faster than sea,
+    the heated air rises and draws a sea breeze in from the coast, wind forced up a slope cools and condenses, a cap of
+    warm air (the <i>inversion</i>) stops cumulus at a fixed height, and whatever forms is carried downwind before it
+    evaporates. The weather plan's part C (<code>~/.claude/plans/clouds-weather.md</code>) became ADR-0390: simulate just
+    enough of that to get the pattern.</p>
+  <figure class="shot">
+    <img src="img/weather/map-before-sim.webp" alt="Six views out to sea under cumulus: on the left the older noise-placed clouds, on the right the weather map's separate rounded cells; in all of them the cloud over the open sea is as thick as anywhere">
+    <figcaption>Before the simulation (2026-11-08, earlier the same day): left, the noise-placed clouds; right, the
+      weather map's cells (ADR-0386). Both are better or worse <i>clouds</i>, but neither knows where the land is: the
+      open sea is as cloudy as the island.</figcaption>
+  </figure>
+
+  <h2>The simulation</h2>
+  <p>Weather models are 3D and run on supercomputers. This one is deliberately small: a single 2D grid treated as one
+    slab, the <i>boundary layer</i> (the lowest kilometre or two of air, where the ground's heat and roughness are
+    felt). It has no temperature field and no vertical levels. Each physical effect is a term with its own named time or
+    length scale, tuned until the made-up test island looks like the satellite pictures. The diagram shows the effects
+    it keeps, on a cross-section along the wind:</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 330" role="img" aria-label="Cross-section along the wind: the prevailing wind from the left over the sea; a sea breeze drawn in toward the heated island at low level; cumulus over the sunlit windward slope and summit area of the low island; an inversion at 2000 m; a high peak poking above it stays clear with air going round it; a plume of cloud carried downwind and evaporating over the sea">
+      <defs><marker id="wa2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker>
+        <marker id="wa2w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#e6c07b"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <rect x="0" y="262" width="900" height="68" fill="#0d1d33"/>
+        <text x="60" y="300" fill="#8ec5ff">sea: humid air (τ 3 h)</text>
+        <text x="790" y="300" fill="#8ec5ff">sea downwind</text>
+        <path d="M200,262 L270,210 L340,170 L390,160 L440,175 L500,215 L560,262 Z" fill="#1c2a1e" stroke="#4d6b48"/>
+        <text x="380" y="252" fill="#a6c39a" text-anchor="middle">sunlit land: heated, drier air</text>
+        <path d="M700,262 L740,90 L780,262 Z" fill="#26302a" stroke="#6f7d70"/>
+        <text x="740" y="82" fill="#cfe4ff" text-anchor="middle">peak above the cap: clear</text>
+        <line x1="20" y1="120" x2="880" y2="120" stroke="#e6c07b" stroke-width="1.4" stroke-dasharray="7 5"/>
+        <text x="24" y="112" fill="#e6c07b">inversion (fair: 2000 m): cumulus stop here</text>
+        <g fill="#dfe9f3" opacity="0.92">
+          <ellipse cx="320" cy="150" rx="34" ry="18"/><ellipse cx="350" cy="140" rx="30" ry="20"/>
+          <ellipse cx="380" cy="146" rx="30" ry="16"/><ellipse cx="292" cy="160" rx="22" ry="12"/>
+        </g>
+        <g fill="#dfe9f3" opacity="0.55">
+          <ellipse cx="560" cy="152" rx="30" ry="13"/><ellipse cx="615" cy="156" rx="24" ry="10"/>
+        </g>
+        <g fill="#dfe9f3" opacity="0.28"><ellipse cx="662" cy="158" rx="18" ry="8"/></g>
+        <text x="540" y="186" fill="#93a6ba">plume (τ 25 min)</text>
+        <text x="340" y="98" fill="#cfe4ff" text-anchor="middle">cumulus where lifted air saturates (τ 10 min)</text>
+        <line x1="30" y1="200" x2="160" y2="200" stroke="#6f8fb0" stroke-width="2" marker-end="url(#wa2)"/>
+        <text x="30" y="190" fill="#93a6ba">the prevailing wind</text>
+        <line x1="130" y1="245" x2="192" y2="245" stroke="#e6c07b" stroke-width="1.8" marker-end="url(#wa2w)"/>
+        <line x1="640" y1="245" x2="570" y2="245" stroke="#e6c07b" stroke-width="1.8" marker-end="url(#wa2w)"/>
+        <text x="100" y="234" fill="#e6c07b">sea breeze in</text>
+        <text x="580" y="234" fill="#e6c07b">sea breeze in</text>
+        <line x1="238" y1="228" x2="268" y2="190" stroke="#e6c07b" stroke-width="1.6" marker-end="url(#wa2w)"/>
+        <line x1="400" y1="205" x2="400" y2="176" stroke="#e6c07b" stroke-width="1.6" marker-end="url(#wa2w)"/>
+        <text x="186" y="182" fill="#e6c07b">up the slope</text>
+        <text x="392" y="214" fill="#e6c07b" text-anchor="end">convergence + heat</text>
+        <line x1="470" y1="190" x2="492" y2="218" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa2)"/>
+        <text x="500" y="214" fill="#93a6ba">lee: sinking</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">What the grid keeps, drawn in profile (the grid itself is flat: these are its 2D fields read as a
+    story). In the grid, "ground above the inversion" is a wall the wind goes round, not over.</p>
+
+  <h3>The grid and its fields</h3>
+  <p><code>WeatherSim::init</code> lays an <i>n</i>×<i>n</i> grid (256 in the engine) over a square height raster and
+    marks each cell land or sea against the level's sea level. <code>WeatherSimSystem</code> makes that raster with
+    <code>rasterizeTerrain</code>, the same function <code>DayNightSystem</code> uses for the mountains' shadow, over
+    the level's square or 64 km, whichever is wider. At 64 km a cell is 250 m. The 64 km minimum exists so a small level
+    still has sea round it for the wind to come from.</p>
+  <div class="code">
+    <div class="hd"><span>WeatherSim's state: eight fields on one grid, and the solver's scratch</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/weather_sim.h#L80-L89">src/engine/sky/weather_sim.h</a></div>
+<pre>    <span class="t">int</span> n_ = <span class="n">0</span>;
+    <span class="t">double</span> originX_ = <span class="n">0.0</span>, originZ_ = <span class="n">0.0</span>, cell_ = <span class="n">1.0</span>;
+    <span class="t">std::vector</span>&lt;<span class="t">float</span>&gt; h_;      <span class="c">// ground above the sea, m (0 over the sea)</span>
+    <span class="t">std::vector</span>&lt;<span class="t">float</span>&gt; land_;   <span class="c">// 1 land, 0 sea</span>
+    <span class="t">std::vector</span>&lt;<span class="t">float</span>&gt; u_, v_;  <span class="c">// the wind, m/s</span>
+    <span class="t">std::vector</span>&lt;<span class="t">float</span>&gt; q_;      <span class="c">// relative humidity</span>
+    <span class="t">std::vector</span>&lt;<span class="t">float</span>&gt; c_;      <span class="c">// cloud, 0..1</span>
+    <span class="t">std::vector</span>&lt;<span class="t">float</span>&gt; lift_;   <span class="c">// the lift, unitless (~0..1 a cumulus's)</span>
+    <span class="t">std::vector</span>&lt;<span class="t">float</span>&gt; conv_;   <span class="c">// the convective share of the lift, 0..1</span>
+    <span class="t">std::vector</span>&lt;<span class="t">float</span>&gt; p_, div_, tmp_, tmp2_;</pre>
+  </div>
+  <p>Its inputs each step are small: the prevailing wind (direction and speed, from <code>Wind</code>), the sun's height
+    as a sine (<code>sunUp</code>, negative at night), the seconds to advance, and the weather's four numbers from
+    <code>WeatherNow</code>. The class is pure: no engine state, no clock, so the tests drive it directly.</p>
+
+  <h3>One sub-step</h3>
+  <div class="diagram">
+    <svg viewBox="0 0 900 250" role="img" aria-label="One sub-step in order: heating; wind relaxed, carried by itself, edges pinned; projection makes the convergence the heating asks; wall where ground is above the inversion; lift from convergence, slope, heat and the weather; humidity carried and relaxed to sea or land; cloud relaxed toward saturation; cloud carried">
+      <defs><marker id="wa3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="20" width="190" height="62" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="44" fill="#cfe4ff">1 heating</text>
+        <text x="115" y="64" fill="#93a6ba" font-size="12">sunlit land, high ground</text>
+        <rect x="240" y="20" width="190" height="62" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="335" y="44" fill="#cfe4ff">2 wind</text>
+        <text x="335" y="64" fill="#93a6ba" font-size="12">relax · advect · pin edges</text>
+        <rect x="460" y="20" width="190" height="62" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="555" y="44" fill="#cfe4ff">3 projection</text>
+        <text x="555" y="64" fill="#93a6ba" font-size="12">∇²p = div u − asked</text>
+        <rect x="680" y="20" width="200" height="62" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="780" y="44" fill="#cfe4ff">4 the wall</text>
+        <text x="780" y="64" fill="#93a6ba" font-size="12">ground above the cap</text>
+        <rect x="20" y="150" width="190" height="62" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="174" fill="#cfe4ff">5 lift</text>
+        <text x="115" y="194" fill="#93a6ba" font-size="12">conv + slope + heat + w</text>
+        <rect x="240" y="150" width="190" height="62" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="335" y="174" fill="#cfe4ff">6 humidity</text>
+        <text x="335" y="194" fill="#93a6ba" font-size="12">sea wets, land dries</text>
+        <rect x="460" y="150" width="190" height="62" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="555" y="174" fill="#cfe4ff">7 cloud</text>
+        <text x="555" y="194" fill="#93a6ba" font-size="12">toward saturation's want</text>
+        <rect x="680" y="150" width="200" height="62" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="780" y="174" fill="#cfe4ff">8 cloud carried</text>
+        <text x="780" y="194" fill="#93a6ba" font-size="12">plumes downwind</text>
+        <line x1="210" y1="51" x2="236" y2="51" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa3)"/>
+        <line x1="430" y1="51" x2="456" y2="51" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa3)"/>
+        <line x1="650" y1="51" x2="676" y2="51" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa3)"/>
+        <path d="M780,82 L780,116 L115,116 L115,146" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa3)"/>
+        <line x1="210" y1="181" x2="236" y2="181" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa3)"/>
+        <line x1="430" y1="181" x2="456" y2="181" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa3)"/>
+        <line x1="650" y1="181" x2="676" y2="181" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#wa3)"/>
+        <text x="450" y="238" fill="#93a6ba" font-size="12">Steps 2–3 are Stam's stable fluids: advect semi-Lagrangian, then project. Steps 6–8 ride the wind they produce.</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap"><code>WeatherSim::subStep</code>, top to bottom of the function. The two blue boxes are where the
+    island's pattern is made: the convergence the heating asks for, and where the lifted air saturates.</p>
+
+  <h3>The scales</h3>
+  <p>Every constant sits at the top of <code>weather_sim.cpp</code> with the physical quantity it stands for:</p>
+  <div class="code">
+    <div class="hd"><span>The scales, each the physical one it stands for</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/weather_sim.cpp#L10-L23">src/engine/sky/weather_sim.cpp</a></div>
+<pre><span class="c">// THE SCALES (each the physical one it stands for, tuned against the satellite references: test_weather_sim)</span>
+<span class="k">constexpr</span> <span class="t">double</span> kWindRelax = <span class="n">2400.0</span>;      <span class="c">// s: the wind returns to the prevailing one (the free air above steering it)</span>
+<span class="k">constexpr</span> <span class="t">double</span> kBreeze = <span class="n">1.2e-4</span>;         <span class="c">// 1/s of convergence a unit of heating draws in (a sea breeze: ~2-4 m/s)</span>
+<span class="k">constexpr</span> <span class="t">double</span> kConvergenceLift = <span class="n">1500.0</span>;   <span class="c">// lift per 1/s of convergence (1e-4: 0.15)</span>
+<span class="k">constexpr</span> <span class="t">double</span> kSlopeLift = <span class="n">0.5</span>;         <span class="c">// lift per m/s the wind climbs (0.3 m/s up a slope: 0.15)</span>
+<span class="k">constexpr</span> <span class="t">double</span> kHeatLift = <span class="n">0.6</span>;          <span class="c">// lift per unit of heating (sunlit high ground: ~0.6)</span>
+<span class="k">constexpr</span> <span class="t">double</span> kSeaMoisten = <span class="n">3.0</span> * <span class="n">3600.0</span>;   <span class="c">// s: the sea brings the air to its humidity</span>
+<span class="k">constexpr</span> <span class="t">double</span> kLandDry = <span class="n">8.0</span> * <span class="n">3600.0</span>;      <span class="c">// s: ...and the land dries it toward its own (drier) share</span>
+<span class="k">constexpr</span> <span class="t">double</span> kLandShare = <span class="n">0.88</span>;        <span class="c">// the land's humidity, a share of the sea's</span>
+<span class="k">constexpr</span> <span class="t">double</span> kLiftMoisture = <span class="n">0.30</span>;     <span class="c">// how much a unit of lift brings the air nearer saturation (rising, it cools)</span>
+<span class="k">constexpr</span> <span class="t">double</span> kSaturation = <span class="n">0.91</span>;       <span class="c">// the humidity (with the lift's help) a cloud forms past</span>
+<span class="k">constexpr</span> <span class="t">double</span> kCondense = <span class="n">600.0</span>;        <span class="c">// s: a cloud forms...</span>
+<span class="k">constexpr</span> <span class="t">double</span> kEvaporate = <span class="n">1500.0</span>;      <span class="c">// ...and goes, slower: carried downwind meanwhile (the plumes)</span>
+<span class="k">constexpr</span> <span class="t">int</span> kJacobi = <span class="n">30</span>;                <span class="c">// pressure iterations a sub-step (warm-started)</span></pre>
+  </div>
+  <table>
+    <tr><th>Constant</th><th>Value</th><th>What it means in the weather</th></tr>
+    <tr><td><code>kWindRelax</code></td><td>2400 s (40 min)</td><td>How fast the grid's wind forgets local disturbances
+      and returns to the prevailing wind. It stands in for the free air above the slab, which keeps steering it. Shorter,
+      and the wakes and sea breezes die before they matter; longer, and eddies wander the grid.</td></tr>
+    <tr><td><code>kBreeze</code></td><td>1.2 × 10⁻⁴ s⁻¹</td><td>Convergence asked per unit of heating: how hard hot
+      land pulls air in. Sized for a sea breeze of about 2–4 m/s.</td></tr>
+    <tr><td><code>kConvergenceLift</code></td><td>1500</td><td>Lift per s⁻¹ of convergence: air that piles in has to go
+      up. 10⁻⁴ s⁻¹ gives 0.15.</td></tr>
+    <tr><td><code>kSlopeLift</code></td><td>0.5</td><td>Lift per m/s the wind climbs (wind · slope). 0.3 m/s up a slope
+      gives 0.15; the lee's descent gives negative lift (sinking).</td></tr>
+    <tr><td><code>kHeatLift</code></td><td>0.6</td><td>Lift per unit of heating: a thermal. Sunlit high ground at noon
+      heats about 1, so about 0.6.</td></tr>
+    <tr><td><code>kSeaMoisten</code>, <code>kLandDry</code>, <code>kLandShare</code></td><td>3 h, 8 h, 0.88</td><td>The
+      sea brings the air to the weather's humidity in hours; over land it dries toward 88 % of that, more slowly, so air
+      that crossed the coast recently is still sea air.</td></tr>
+    <tr><td><code>kLiftMoisture</code></td><td>0.30</td><td>Rising air cools, so its relative humidity climbs: a unit of
+      lift counts as 0.30 of humidity.</td></tr>
+    <tr><td><code>kSaturation</code></td><td>0.91</td><td>Where humidity plus lifted humidity passes this, cloud forms
+      (fully 0.12 past it).</td></tr>
+    <tr><td><code>kCondense</code>, <code>kEvaporate</code></td><td>600 s, 1500 s</td><td>Cloud forms in about 10 min and
+      goes in about 25 (ADR-0390). The difference is what makes plumes: a cloud carried off the land at 6 m/s travels
+      some 9 km in its 25 minutes of fading.</td></tr>
+    <tr><td><code>kJacobi</code></td><td>30</td><td>Pressure-solve iterations per sub-step, starting from the previous
+      sub-step's pressure.</td></tr>
+  </table>
+
+  <h3>Heating, the wind and the sea breeze</h3>
+  <p>The heart of the step is about fifty lines. First the <b>heating</b>: sunlit land heats by the sun's height, from
+    0.35 at sea level to 1 at 1200 m and above (high ground heats the air more). By night the land cools by up to 0.3
+    and the sea, warmer than the land, heats by up to 0.15. Everything is scaled by the weather's
+    <code>convection</code>. Then the <b>wind</b>: relaxed toward the prevailing one, carried by itself, and the outer
+    two cells pinned to the prevailing wind, the free air the grid opens onto.</p>
+  <div class="code">
+    <div class="hd"><span>WeatherSim::subStep: the heating, the wind, the projection and the wall</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/weather_sim.cpp#L90-L149">src/engine/sky/weather_sim.cpp</a></div>
+<pre><span class="t">void</span> WeatherSim::subStep(<span class="k">const</span> <span class="t">WeatherSimInputs</span>&amp; in, <span class="t">double</span> dt) {
+    <span class="k">const</span> <span class="t">WeatherSimWeather</span>&amp; w = in.weather;
+    <span class="k">const</span> <span class="t">double</span> U0 = in.windX * in.windSpeed, V0 = in.windZ * in.windSpeed;
+    <span class="k">const</span> <span class="t">double</span> day = std::max(<span class="n">0.0</span>, <span class="k">static_cast</span>&lt;<span class="t">double</span>&gt;(in.sunUp));
+    <span class="k">const</span> <span class="t">double</span> night = std::clamp(-<span class="k">static_cast</span>&lt;<span class="t">double</span>&gt;(in.sunUp) * <span class="n">3.0</span>, <span class="n">0.0</span>, <span class="n">1.0</span>);
+    <span class="k">const</span> <span class="t">double</span> inv = w.inversion;
+
+    <span class="c">// THE HEATING: sunlit land, more on high ground; by night the land cools under the sea's warmth</span>
+    <span class="t">double</span> meanHeat = <span class="n">0.0</span>;
+    <span class="k">for</span> (<span class="t">std::size_t</span> k = <span class="n">0</span>; k &lt; h_.size(); ++k) {
+        <span class="k">const</span> <span class="t">double</span> high = std::clamp(h_[k] / <span class="n">1200.0</span>, <span class="n">0.0</span>, <span class="n">1.0</span>);
+        <span class="k">const</span> <span class="t">double</span> heat = w.convection * (land_[k] * (day * (<span class="n">0.35</span> + <span class="n">0.65</span> * high) - <span class="n">0.3</span> * night) + (<span class="n">1.0</span> - land_[k]) * <span class="n">0.15</span> * night);
+        tmp2_[k] = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(heat);
+        meanHeat += heat;
+    }
+    meanHeat /= <span class="k">static_cast</span>&lt;<span class="t">double</span>&gt;(h_.size());
+
+    <span class="c">// THE WIND: back toward the prevailing one; carried by itself; the far edge is the free air</span>
+    <span class="k">const</span> <span class="t">double</span> relax = std::min(<span class="n">1.0</span>, dt / kWindRelax);
+    <span class="c">// ...</span>
+    <span class="t">std::vector</span>&lt;<span class="t">float</span>&gt; uOld = u_;
+    advect(u_, uOld, v_, dt, tmp_);
+    advect(v_, uOld, v_, dt, tmp_);
+    <span class="c">// ... (the outer two cells set to U0, V0)</span>
+    <span class="c">// ...made to converge where the heating asks (the projection: grad^2 p = div u - the asked divergence)</span>
+    <span class="k">const</span> <span class="t">double</span> inv2c = <span class="n">1.0</span> / (<span class="n">2.0</span> * cell_);
+    <span class="k">for</span> (<span class="t">int</span> j = <span class="n">0</span>; j &lt; n_; ++j)
+        <span class="k">for</span> (<span class="t">int</span> i = <span class="n">0</span>; i &lt; n_; ++i) {
+            <span class="k">const</span> <span class="t">int</span> il = std::max(i - <span class="n">1</span>, <span class="n">0</span>), ir = std::min(i + <span class="n">1</span>, n_ - <span class="n">1</span>), jd = std::max(j - <span class="n">1</span>, <span class="n">0</span>), ju = std::min(j + <span class="n">1</span>, n_ - <span class="n">1</span>);
+            <span class="k">const</span> <span class="t">double</span> d = (u_[at(ir, j)] - u_[at(il, j)]) * inv2c + (v_[at(i, ju)] - v_[at(i, jd)]) * inv2c;
+            div_[at(i, j)] = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(d + kBreeze * (tmp2_[at(i, j)] - meanHeat));
+        }
+    <span class="c">// ... (30 Jacobi sweeps for p)</span>
+    <span class="k">for</span> (<span class="t">int</span> j = <span class="n">0</span>; j &lt; n_; ++j)
+        <span class="k">for</span> (<span class="t">int</span> i = <span class="n">0</span>; i &lt; n_; ++i) {
+            <span class="c">// ...</span>
+            u_[at(i, j)] -= <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;((p_[at(ir, j)] - p_[at(il, j)]) * inv2c);
+            v_[at(i, j)] -= <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;((p_[at(i, ju)] - p_[at(i, jd)]) * inv2c);
+            <span class="c">// ground standing above the inversion is a wall: the air goes round it</span>
+            <span class="k">const</span> <span class="t">double</span> wall = smoothstep(inv - <span class="n">250.0</span>, inv + <span class="n">250.0</span>, h_[at(i, j)]);
+            u_[at(i, j)] *= <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(<span class="n">1.0</span> - wall);
+            v_[at(i, j)] *= <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(<span class="n">1.0</span> - wall);
+        }</pre>
+  </div>
+  <p>The projection is the one clever move, borrowed from Jos Stam's "Stable Fluids" (1999). In an ordinary fluid solver
+    the projection removes all divergence: solve ∇²p = ∇·u, subtract ∇p, and the wind neither piles up nor spreads out.
+    Here the source on the right is ∇·u <i>plus</i> <code>kBreeze</code> × (heat − mean heat). Subtracting ∇p then leaves
+    a wind whose divergence is <code>−kBreeze × (heat − mean)</code>: it converges over hot land and diverges over the
+    cooler sea, which is what a sea breeze is. Subtracting the mean keeps the total zero, which a pressure solve with
+    closed edges needs. No temperature or buoyancy is simulated; the heating simply <i>asks</i> for convergence and the
+    projection supplies a wind field that delivers it.</p>
+  <p>The <b>wall</b> follows: where the ground stands within 250 m of the inversion or above it, the wind is faded to
+    nothing, so the air flows round the peak. That is how a Mauna Kea gets a wake on each side and stays clear on top.
+    The advection is semi-Lagrangian: each cell takes what was upwind of it <code>dt</code> ago, read bilinearly through
+    the shared <code>bilinearGrid</code> (since review commit <code>12695b94</code>; it had its own copy). It is
+    unconditionally stable, which is why Stam's method suits a game: a long step blurs instead of exploding.</p>
+
+  <h3>Lift, humidity and cloud</h3>
+  <div class="code">
+    <div class="hd"><span>WeatherSim::subStep: the lift, the moisture and the cloud</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/weather_sim.cpp#L151-L184">src/engine/sky/weather_sim.cpp</a></div>
+<pre>    <span class="c">// THE LIFT: the convergence, the wind up the slope (down it: sinking), the heating, the weather's own</span>
+    <span class="k">for</span> (<span class="t">int</span> j = <span class="n">0</span>; j &lt; n_; ++j)
+        <span class="k">for</span> (<span class="t">int</span> i = <span class="n">0</span>; i &lt; n_; ++i) {
+            <span class="c">// ...</span>
+            <span class="k">const</span> <span class="t">double</span> conv = -d * kConvergenceLift;
+            <span class="k">const</span> <span class="t">double</span> slope = (u_[k] * dhx + v_[k] * dhz) * kSlopeLift;
+            <span class="k">const</span> <span class="t">double</span> heat = std::max(<span class="n">0.0</span>, <span class="k">static_cast</span>&lt;<span class="t">double</span>&gt;(tmp2_[k])) * kHeatLift;
+            <span class="c">// (the outer ring is the free air the grid opens on: pinned to the prevailing wind, its convergence is the</span>
+            <span class="c">// pinning's, not the weather's -- it lifted false cloud along the grid's edges)</span>
+            <span class="k">const</span> <span class="t">bool</span> ring = i &lt; <span class="n">4</span> || j &lt; <span class="n">4</span> || i &gt;= n_ - <span class="n">4</span> || j &gt;= n_ - <span class="n">4</span>;
+            lift_[k] = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(std::clamp((ring ? <span class="n">0.0</span> : conv + slope) + heat + w.lift, -<span class="n">1.0</span>, <span class="n">2.0</span>));
+            conv_[k] = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(std::clamp(heat * <span class="n">1.4</span> + std::max(<span class="n">0.0</span>, conv), <span class="n">0.0</span>, <span class="n">1.0</span>));
+        }
+
+    <span class="c">// THE MOISTURE: carried; the sea moistens the air toward its humidity, the land dries it toward a share of it</span>
+    advect(q_, u_, v_, dt, tmp_);
+    <span class="k">for</span> (<span class="t">std::size_t</span> k = <span class="n">0</span>; k &lt; q_.size(); ++k) {
+        <span class="k">const</span> <span class="t">double</span> target = land_[k] &gt; <span class="n">0.5f</span> ? w.humidity * kLandShare : w.humidity;
+        <span class="k">const</span> <span class="t">double</span> tau = land_[k] &gt; <span class="n">0.5f</span> ? kLandDry : kSeaMoisten;
+        q_[k] += <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;((target - q_[k]) * std::min(<span class="n">1.0</span>, dt / tau));
+    }
+
+    <span class="c">// THE CLOUD: where the lifted air saturates, and none where the ground stands above the inversion; carried</span>
+    <span class="k">for</span> (<span class="t">std::size_t</span> k = <span class="n">0</span>; k &lt; c_.size(); ++k) {
+        <span class="k">const</span> <span class="t">double</span> sat = q_[k] + kLiftMoisture * lift_[k] - kSaturation;
+        <span class="k">const</span> <span class="t">double</span> above = smoothstep(inv - <span class="n">250.0</span>, inv + <span class="n">250.0</span>, h_[k]);
+        <span class="k">const</span> <span class="t">double</span> want = smoothstep(<span class="n">0.0</span>, <span class="n">0.12</span>, sat) * (<span class="n">1.0</span> - above);
+        <span class="k">const</span> <span class="t">double</span> tau = want &gt; c_[k] ? kCondense : kEvaporate;
+        c_[k] += <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;((want - c_[k]) * std::min(<span class="n">1.0</span>, dt / tau));
+    }
+    advect(c_, u_, v_, dt, tmp_);</pre>
+  </div>
+  <p>Lift is a sum of four reasons air rises: convergence (air piling in), the wind running up the slope (the dot
+    product of wind and ground gradient; negative in the lee), the heat of a thermal, and the weather's own large-scale
+    lift. The <b>convective share</b> <code>conv_</code> is kept separately: it says how much of the lift is heat-driven,
+    and the cloud map uses it to lean toward the severe end of the day's cloud types (towering cumulus over hot ground,
+    flatter cloud where a front's lift alone makes it).</p>
+  <p>The cloud does not have a budget of water. Each cell has a <i>want</i>, from 0 to 1, set by how far humidity plus
+    lift passes saturation, and the cloud relaxes toward it: quickly when growing, slowly when fading. A worked case with
+    the constants: on fair's sea, humidity settles at 0.80, so cloud needs lift of about 0.37 before it starts. On land
+    the air dries toward 0.704 and needs lift near 0.69. The sun alone gives low land 0.6 × 0.35 ≈ 0.21 at noon and high
+    ground about 0.6, so cloud forms only where heat, slope and convergence add up. That is the windward slopes and the
+    heart of the island, not the coast.</p>
+  <figure class="shot">
+    <img src="img/weather/sim-fields.webp" alt="Four top-down maps of the test world: a 12 km island and a small 3000 m peak north of it in a dark sea. Fair afternoon: the island white with cloud on its upwind side, a fading plume trailing east, the small peak's top clear with two streaks off its flanks. Lift: orange over the island's upwind half, darker in its lee, the peak orange upwind and blue downwind, small arrows showing air drawn in. Night: no cloud on the island. Overcast: grey cloud over the whole sea, the island white, a clear wake in its lee">
+    <figcaption>The test's made world (<code>madeWorld()</code> in <code>tests/test_weather_sim.cpp</code>: 64 km of sea,
+      a 12 km island rising to 1400 m, and a 3.5 km peak to 3000 m 18 km north, above the 2000 m inversion), settled
+      for four hours with a 6 m/s wind toward +x (east, to the right; north is up). Drawn for this page by a scratch
+      program that links <code>weather_sim.cpp</code> as the test does. Top right: lift in colour (orange rising, blue
+      sinking) with arrows for the wind's <i>change</i> from the prevailing wind. The cover numbers match ADR-0390's: the
+      island 0.53, the sea upwind 0, the sea downwind 0.12, the summit 0; overcast's upwind sea 0.75.</figcaption>
+  </figure>
+  <p>Read the four maps against the satellite list. The upwind half of the island has the cloud, where the slope lift
+    and the heating add; the lee half sinks and stays lighter. A plume runs east off the island and fades. The high peak
+    is clear on top, clouded round its flanks, and sheds two streaks from its sides, like Hawaii's. By night the island
+    clears (the land cools, the sea breeze reverses), though the high peak's flanks keep some cloud from the wind forced
+    up them. In the overcast, the front's lift and wet air close the sea, and the island's lee shows a clear wake, the
+    Canaries' pattern.</p>
+
+  <h3>Sub-steps, and settling</h3>
+  <div class="code">
+    <div class="hd"><span>WeatherSim::step and settle</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/weather_sim.cpp#L75-L88">src/engine/sky/weather_sim.cpp</a></div>
+<pre><span class="t">void</span> WeatherSim::step(<span class="k">const</span> <span class="t">WeatherSimInputs</span>&amp; in) {
+    <span class="k">if</span> (n_ &lt;= <span class="n">0</span> || in.dt &lt;= <span class="n">0.0</span>) <span class="k">return</span>;
+    <span class="c">// sub-steps the wind crosses at most a cell in (and no longer than two minutes: the relaxations' resolution)</span>
+    <span class="k">const</span> <span class="t">double</span> fastest = std::max(<span class="n">1.0</span>, <span class="k">static_cast</span>&lt;<span class="t">double</span>&gt;(in.windSpeed) * <span class="n">1.5</span> + <span class="n">4.0</span>);
+    <span class="k">const</span> <span class="t">double</span> most = std::min(<span class="n">120.0</span>, <span class="n">0.9</span> * cell_ / fastest);
+    <span class="k">const</span> <span class="t">int</span> steps = std::max(<span class="n">1</span>, <span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(std::ceil(in.dt / most)));
+    <span class="k">for</span> (<span class="t">int</span> s = <span class="n">0</span>; s &lt; steps; ++s) subStep(in, in.dt / steps);
+}
+
+<span class="t">void</span> WeatherSim::settle(<span class="k">const</span> <span class="t">WeatherSimInputs</span>&amp; in, <span class="t">double</span> seconds) {
+    <span class="t">WeatherSimInputs</span> s = in;
+    s.dt = seconds;
+    step(s);
+}</pre>
+  </div>
+  <p>Semi-Lagrangian advection is stable at any step, but it is only <i>accurate</i> when the wind moves less than a cell
+    per step, so <code>step</code> splits its time. The "fastest" wind allows half again the prevailing speed plus 4 m/s
+    for the breezes. For fair's 6 m/s on 250 m cells a sub-step is 0.9 × 250 / 13 ≈ 17 s; for a 16 m/s storm about 8 s.
+    The 120 s ceiling only applies on coarse grids. <code>settle</code> is just a long step: four hours by default, which
+    for fair weather is over 800 sub-steps and, per ADR-0390, about 5 s on a worker. Four hours is many times the wind's
+    40-minute memory and the cloud's 10 and 25 minutes, and longer than the sea's 3-hour moistening, so the pattern has
+    formed; only the land's 8-hour drying is still on its way.</p>
+
+  <h2>Running it: WeatherSimSystem</h2>
+  <p>The system does three jobs: build the grid once the terrain is known, keep the simulation moving in the
+    <i>weather's</i> time, and hand finished states to the readers without ever blocking a frame.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 250" role="img" aria-label="Timeline: on the main thread, begin rasterizes the terrain and moves the simulation to a worker that settles four hours; each frame adds weather seconds; when the worker is done the main thread takes the simulation back and publishes the snapshot as a new WeatherField version; once 30 weather seconds have gathered the simulation moves to a worker again; CloudMapSystem rebakes when the version changed and 10 seconds have passed">
+      <defs><marker id="wa4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <text x="20" y="40" fill="#e6c07b">MAIN</text>
+        <text x="20" y="120" fill="#e6c07b">WORKER</text>
+        <text x="20" y="200" fill="#e6c07b">CLOUD MAP</text>
+        <line x1="90" y1="36" x2="880" y2="36" stroke="#2c3d50" stroke-width="1.2"/>
+        <line x1="90" y1="116" x2="880" y2="116" stroke="#2c3d50" stroke-width="1.2"/>
+        <line x1="90" y1="196" x2="880" y2="196" stroke="#2c3d50" stroke-width="1.2"/>
+        <g text-anchor="middle">
+          <rect x="95" y="16" width="130" height="40" rx="7" fill="#131a24" stroke="#3b82f6"/>
+          <text x="160" y="34" fill="#cfe4ff" font-size="12.5">begin</text><text x="160" y="49" fill="#93a6ba">raster + init</text>
+          <rect x="230" y="96" width="220" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="340" y="114" fill="#cfe4ff" font-size="12.5">settle 4 h, copy snapshot</text><text x="340" y="129" fill="#93a6ba">a few seconds</text>
+          <rect x="460" y="16" width="130" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="525" y="34" fill="#cfe4ff" font-size="12.5">publish v1</text><text x="525" y="49" fill="#93a6ba">WeatherField</text>
+          <rect x="600" y="96" width="150" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="675" y="114" fill="#cfe4ff" font-size="12.5">step ≥ 30 s</text><text x="675" y="129" fill="#93a6ba">+ snapshot</text>
+          <rect x="760" y="16" width="120" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="820" y="34" fill="#cfe4ff" font-size="12.5">publish v2</text><text x="820" y="49" fill="#93a6ba">…</text>
+          <rect x="470" y="176" width="200" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="570" y="194" fill="#cfe4ff" font-size="12.5">bake map from v1</text><text x="570" y="209" fill="#93a6ba">its own worker</text>
+          <rect x="770" y="176" width="110" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="825" y="194" fill="#cfe4ff" font-size="12.5">≥ 10 s later</text><text x="825" y="209" fill="#93a6ba">v2's bake</text>
+        </g>
+        <line x1="225" y1="46" x2="250" y2="92" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#wa4)"/>
+        <line x1="450" y1="106" x2="480" y2="60" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#wa4)"/>
+        <line x1="590" y1="46" x2="620" y2="92" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#wa4)"/>
+        <line x1="750" y1="106" x2="780" y2="60" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#wa4)"/>
+        <line x1="525" y1="56" x2="545" y2="172" stroke="#6f8fb0" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#wa4)"/>
+        <line x1="820" y1="56" x2="825" y2="172" stroke="#6f8fb0" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#wa4)"/>
+        <text x="100" y="236" fill="#93a6ba">The simulation is moved, never shared: the main thread holds it only between steps; readers hold an immutable copy.</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">One simulation, one worker, one immutable snapshot per step. The dashed arrows are reads of the shared
+    snapshot.</p>
+  <div class="code">
+    <div class="hd"><span>WeatherSimSystem::update: the weather's time, the handover, the next step</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/weather_sim_system.cpp#L76-L100">src/engine/systems/weather_sim_system.cpp</a></div>
+<pre><span class="t">void</span> WeatherSimSystem::update(<span class="t">FrameContext</span>&amp; ctx) {
+    <span class="k">if</span> (!ctx.view.lighting.volumetricClouds.enabled) <span class="k">return</span>;
+    <span class="k">if</span> (!begun_) begin(ctx);
+    <span class="c">// the weather's time: the day's clock where it runs, real time where it is held</span>
+    <span class="k">const</span> <span class="t">double</span> perSecond = ctx.view.lighting.clockHoursPerSecond &gt; <span class="n">0.0f</span> ? ctx.view.lighting.clockHoursPerSecond * <span class="n">3600.0</span> : <span class="n">1.0</span>;
+    gathered_ += std::clamp(ctx.frameDelta, <span class="n">0.0</span>, <span class="n">0.25</span>) * perSecond;
+    <span class="k">if</span> (stepping_ &amp;&amp; pending_.wait_for(std::chrono::seconds(<span class="n">0</span>)) == std::future_status::ready) {
+        <span class="t">Stepped</span> done = pending_.get();
+        sim_ = std::move(done.sim);
+        snapshot_ = std::move(done.snapshot);
+        stepping_ = <span class="k">false</span>;
+        publish(ctx);
+    }
+    <span class="k">if</span> (!stepping_ &amp;&amp; sim_.ready() &amp;&amp; gathered_ &gt;= kStepEvery) {
+        <span class="t">WeatherSimInputs</span> in = inputsNow(ctx);
+        in.dt = std::min(gathered_, <span class="n">3600.0</span>);   <span class="c">// (an hour at most at once: a long stall does not leap the sky)</span>
+        gathered_ = <span class="n">0.0</span>;
+        pending_ = std::async(std::launch::async, [sim = std::move(sim_), in]() <span class="k">mutable</span> {
+            sim.step(in);
+            std::shared_ptr&lt;<span class="k">const</span> <span class="t">WeatherSim</span>&gt; snapshot = std::make_shared&lt;<span class="k">const</span> <span class="t">WeatherSim</span>&gt;(sim);
+            <span class="k">return</span> <span class="t">Stepped</span>{std::move(sim), std::move(snapshot)};
+        });
+        stepping_ = <span class="k">true</span>;
+    }
+}</pre>
+  </div>
+  <ul>
+    <li><b>The weather's time.</b> The simulation advances on the day's clock: on a 30-minute day, an afternoon's
+      convection builds and decays in minutes of play, in step with the sun. When the clock is held, it runs at real
+      time so the sky still lives. Frame time is clamped to 0.25 s, so a hitch does not count as weather.</li>
+    <li><b>Batched steps.</b> Weather seconds pile up in <code>gathered_</code> and are stepped in one go once 30 have
+      gathered and the worker is free. A long stall is capped at an hour of weather at once.</li>
+    <li><b>The sun's height</b> comes from the clock alone, <code>sin((hours − 6) · π / 12)</code>: 0 at 06:00 and
+      18:00, 1 at noon. The comment in <code>inputsNow</code> says the latitude's finer arc is the sky's business, not
+      the weather's. "Night" in the heating saturates once that sine is below −⅓, about 19:20 to 04:40.</li>
+    <li><b>The snapshot.</b> The <code>WeatherSim</code> itself is <i>moved</i> into the worker's lambda and back, so
+      only one thread ever touches it. Each step also makes an immutable copy,
+      <code>shared_ptr&lt;const WeatherSim&gt;</code>, and that copy is what is published. Readers (the cloud map bake, on
+      another worker) keep their copy alive as long as they need it, while the next step runs on the original.</li>
+  </ul>
+  <div class="code">
+    <div class="hd"><span>WeatherField: what the simulation publishes</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/weather_sim.h#L92-L97">src/engine/sky/weather_sim.h</a></div>
+<pre><span class="c">// THE WEATHER FIELD the simulation last finished (WeatherSimSystem publishes it on an entity of its own): read-only,</span>
+<span class="c">// shared, swapped whole -- the weather map bakes from it on a worker while the next step runs</span>
+<span class="k">struct</span> <span class="t">WeatherField</span> {
+    std::shared_ptr&lt;<span class="k">const</span> <span class="t">WeatherSim</span>&gt; sim;
+    <span class="t">uint64_t</span> version = <span class="n">0</span>;   <span class="c">// counts the handovers</span>
+};</pre>
+  </div>
+  <div class="note history"><p><b>Who copies the snapshot.</b> In the first version (commit <code>28155245</code>) the
+    worker returned the stepped simulation, and <code>publish()</code> copied it into a new <code>shared_ptr</code> on the
+    main thread: twelve 256² float arrays, about 3 MB per handover, inside a frame. The review fixes for
+    #198 (commit <code>12695b94</code>, "The weather's snapshot is copied on the worker, not the main thread") made the
+    worker return a <code>Stepped</code> pair, the simulation and its finished snapshot, so the main thread only moves
+    pointers. The same commit replaced the simulation's two hand-written bilinear reads with the shared
+    <code>bilinearGrid</code>, and its hand-written π with <code>PI</code>.</p></div>
+  <p><code>begin()</code> runs on the first frame that has a volumetric cloud deck. It reads the level's
+    <code>TerrainLodConfig</code>, rasterizes the terrain over the larger of the level and 64 km, and logs the grid
+    ("<code>[weather] simulation over 64 km, 256^2 cells of 250 m, with its sea</code>"). A level with no terrain gets
+    flat land and no sea. The first step is <code>settle()</code> on the worker, so the first sky the player sees has
+    already formed rather than growing from nothing.</p>
+
+  <h2>How it feeds the clouds</h2>
+  <p>The simulation produces no cloud shapes. The clouds are drawn by the volumetric march from a <i>weather map</i>:
+    an 80 km square of the sky round the camera, baked on a worker by <code>CloudMapSystem</code>, in which every cloud
+    is a soft footprint of some type and height (<a href="clouds.html">Clouds</a> explains all of that). With a
+    <code>WeatherField</code> present, the map takes three things from it:</p>
+  <div class="code">
+    <div class="hd"><span>bakeCloudMap: each grid square's cells from the simulated cover and convection</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/cloud_map.cpp#L178-L185">src/engine/sky/cloud_map.cpp</a></div>
+<pre>                <span class="k">if</span> (in.field) {
+                    <span class="c">// the simulation's cloud here, as footprints' worth per m^2, shared by the types its convection leans</span>
+                    <span class="c">// to (this type's share of a narrow range round that point on the axis)</span>
+                    <span class="k">const</span> <span class="t">double</span> wx = ax - in.driftX, wz = az - in.driftZ;
+                    <span class="k">const</span> <span class="t">double</span> c = std::min(<span class="n">0.97</span>, <span class="k">static_cast</span>&lt;<span class="t">double</span>&gt;(in.field-&gt;coverAt(wx, wz)));
+                    <span class="k">const</span> <span class="t">double</span> t = in.typeLo + (in.typeHi - in.typeLo) * in.field-&gt;convectionAt(wx, wz);
+                    <span class="k">const</span> std::array&lt;<span class="t">float</span>, <span class="n">4</span>&gt; share = cloudTypeWeights(<span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(t - <span class="n">0.08</span>), <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(t + <span class="n">0.08</span>));
+                    m = -std::log(<span class="n">1.0</span> - c) * share[<span class="k">static_cast</span>&lt;<span class="t">std::size_t</span>&gt;(k)] * g.spacing * g.spacing / meanAreaOf[k];</pre>
+  </div>
+  <ol>
+    <li><b>Cover → how many cells (λ).</b> Cells dropped at random with density λ per m² leave a share
+      exp(−λ·A) of the sky uncovered, where A is a cell's area. So to cover a share <i>c</i>, the bake asks for
+      λ·A = −ln(1 − <i>c</i>) footprints' worth per square. Cover is capped at 0.97 so the logarithm stays finite.
+      The map is laid out in the moving air (the world plus the clouds' drift), so it reads the simulation at the
+      ground point under the air, <code>air − drift</code>.</li>
+    <li><b>Convection → which type.</b> The convective share picks a point on the day's type range (fair: 0.47–0.75),
+      and the square's cells go to the types within ±0.08 of it: hot ground gets cumulus, a front's lift the flatter
+      end.</li>
+    <li><b>Closed sky → one mass.</b> Where the simulated cover passes 0.55, a solid footprint fades in (full at 0.92),
+      typed by the convection and at full height: "the structures no scatter of cells makes (a merged afternoon mass
+      over a mountain, a front's deck)".</li>
+  </ol>
+  <div class="code">
+    <div class="hd"><span>bakeCloudMap: the simulation's solid cloud</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/sky/cloud_map.cpp#L239-L250">src/engine/sky/cloud_map.cpp</a></div>
+<pre>                <span class="c">// THE SIMULATION's SOLID CLOUD: where it says the sky is closed, one continuous mass -- the structures</span>
+                <span class="c">// no scatter of cells makes (a merged afternoon mass over a mountain, a front's deck)</span>
+                <span class="k">if</span> (in.field) {
+                    <span class="k">const</span> <span class="t">double</span> wx = x - in.driftX, wz = z - in.driftZ;
+                    <span class="k">const</span> <span class="t">double</span> mass = smoothstep(<span class="n">0.55</span>, <span class="n">0.92</span>, <span class="k">static_cast</span>&lt;<span class="t">double</span>&gt;(in.field-&gt;coverAt(wx, wz)));
+                    <span class="k">if</span> (mass &gt; best) {
+                        best = mass;
+                        <span class="k">const</span> <span class="t">double</span> t = in.typeLo + (in.typeHi - in.typeLo) * in.field-&gt;convectionAt(wx, wz);
+                        slot = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(std::lround(std::clamp(t, <span class="n">0.0</span>, <span class="n">1.0</span>) * <span class="n">3.0</span>)) / <span class="n">3.0f</span>;
+                        height = <span class="n">1.0f</span>;
+                    }
+                }</pre>
+  </div>
+  <p>With a field present, the weather's <code>coverage</code> knob and ADR-0389's eddy-swirled moisture field stand
+    aside: the simulation says where. A new field version triggers a rebake at most every 10 seconds (ADR-0390 measured
+    0.7 s per bake). The weather map in turn drives the clouds' shadows on the ground (ADR-0387), so the simulation also
+    decides where the island is in shade.</p>
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/weather/island-cumulus.webp" alt="The island seen from offshore in the afternoon: a crowd of cumulus piled over its mountains, thinning over the sea in the foreground">
+      <figcaption>The island from offshore (2026-11-08, 18:40 wall clock, after the simulation landed): cumulus
+        massed over the land and its mountains, the sea in front clearer.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/weather/cumulus-over-range.webp" alt="From a town street, large cumulus clouds stand over the island's mountain range under a deep blue sky">
+      <figcaption>From a town under the range: towering cumulus over the mountains, as ADR-0390 recorded for
+        <code>island_8_nature</code> on a fair afternoon.</figcaption>
+    </figure>
+  </div>
+
+  <h2>What the tests hold it to</h2>
+  <p><code>tests/test_weather_sim.cpp</code> builds the made world in the picture above and checks the satellite
+    patterns as numbers. The tests are the tuning target: every constant was tuned against them.</p>
+  <div class="code">
+    <div class="hd"><span>The fair-afternoon test: the land, not the sea</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/tests/test_weather_sim.cpp#L52-L65">tests/test_weather_sim.cpp</a></div>
+<pre>TEST_CASE(weather_sim_fair_afternoon_clouds_the_land_not_the_sea) {
+    <span class="t">WeatherSim</span> s;
+    s.init(madeWorld(), <span class="n">0.0</span>, <span class="n">256</span>);
+    s.settle(fairAfternoon());
+    <span class="k">const</span> <span class="t">float</span> land = meanCover(s, [](<span class="t">double</span> x, <span class="t">double</span> z) { <span class="k">return</span> std::hypot(x, z) &lt; <span class="n">10000.0</span>; });
+    <span class="k">const</span> <span class="t">float</span> seaUpwind = meanCover(s, [](<span class="t">double</span> x, <span class="t">double</span> z) { <span class="k">return</span> x &lt; -<span class="n">20000.0</span> &amp;&amp; std::fabs(z) &lt; <span class="n">8000.0</span>; });
+    <span class="k">const</span> <span class="t">float</span> seaDownwind = meanCover(s, [](<span class="t">double</span> x, <span class="t">double</span> z) { <span class="k">return</span> x &gt; <span class="n">14000.0</span> &amp;&amp; x &lt; <span class="n">22000.0</span> &amp;&amp; std::fabs(z) &lt; <span class="n">6000.0</span>; });
+    <span class="k">const</span> <span class="t">float</span> summit = s.coverAt(<span class="n">0.0</span>, -<span class="n">18000.0</span>);
+    <span class="k">for</span> (<span class="t">float</span> c : s.cover()) CHECK(c &gt;= <span class="n">0.0f</span> &amp;&amp; c &lt;= <span class="n">1.0f</span> &amp;&amp; std::isfinite(c));
+    CHECK(land &gt; <span class="n">0.25f</span> &amp;&amp; land &lt; <span class="n">0.55f</span>);   <span class="c">// about a third of Puerto Rico's land under cumulus on a fair afternoon</span>
+    CHECK(seaUpwind &lt; <span class="n">0.05f</span>);         <span class="c">// ...its sea upwind nearly clear</span>
+    CHECK(seaDownwind &gt; seaUpwind);   <span class="c">// ...cloud carried off downwind</span>
+    CHECK(summit &lt; <span class="n">0.1f</span>);             <span class="c">// a summit above the inversion stands clear (Mauna Kea)</span>
+}</pre>
+  </div>
+  <table>
+    <tr><th>Test</th><th>Holds</th><th>Measured (ADR-0390)</th></tr>
+    <tr><td><code>weather_sim_fair_afternoon_clouds_the_land_not_the_sea</code></td><td>Land cover 0.25–0.55; sea upwind
+      &lt; 0.05; more cloud downwind than upwind; the 3000 m summit &lt; 0.1</td><td>Land ~0.53, sea upwind 0, sea
+      downwind 0.12, summit 0</td></tr>
+    <tr><td><code>weather_sim_the_land_clears_by_night</code></td><td>Night cover on the island under half the
+      day's</td><td>"The land clears by night"</td></tr>
+    <tr><td><code>weather_sim_an_overcast_closes_over_the_sea</code></td><td>Humidity 0.92, lift 0.35, convection 0.3:
+      sea cover &gt; 0.6</td><td>0.75</td></tr>
+    <tr><td><code>weather_sim_places_the_maps_clouds_over_the_land</code></td><td>The baked weather map: over 15 % of
+      the island under cloud, under 3 % of the upwind sea</td><td>Island &gt; 0.15, sea &lt; 0.03</td></tr>
+  </table>
+  <p>Note the upper bound of the land test, 0.55, against the measured 0.53, and the comment beside it, "about a third of
+    Puerto Rico's land". The island is cloudier than the reference; that is the first known gap below. The weather cycle
+    has its own tests in <code>tests/test_weather_cycle.cpp</code>: the states ordered mild to severe on the data, easing
+    that converges without overshoot, snaps that land exactly, the auto walk stepping only to neighbours and
+    deterministically, the calendar and seasons (<code style="word-break: break-all">weather_calendar_climate_and_season</code>), and the wind's bounds
+    and travelling gusts (<code style="word-break: break-all">wind_rises_with_the_weather_and_keeps_its_bounds</code>).</p>
+
+  <h2>Known gaps</h2>
+  <div class="grid">
+    <div class="b"><h3>Too much cloud on land (#199)</h3><p>A fair afternoon covers ~0.53 of the test island against
+      Puerto Rico's ~0.35. ADR-0390's first owed item; <a href="https://github.com/GlennSong/raytracer-clang/issues/199">issue
+      #199</a>.</p></div>
+    <div class="b"><h3>Local wind for foliage (#200)</h3><p>The simulation's wind varies by place, but trees, grass and
+      particles still read the one <code>Wind</code>. <a href="https://github.com/GlennSong/raytracer-clang/issues/200">Issue
+      #200</a>.</p></div>
+    <div class="b"><h3>Rain (#201)</h3><p>Precipitation from deep wet cells: rain shafts, particles, wet surfaces, sound
+      (the plan's part D). <a href="https://github.com/GlennSong/raytracer-clang/issues/201">Issue #201</a>.</p></div>
+    <div class="b"><h3>Fronts still walk</h3><p>The day's state is still drawn from the calendar and walked; ADR-0340
+      expected the simulation to bring fronts in from the prevailing wind instead. Metal has no simulation-driven
+      clouds yet (ADR-0390, owed).</p></div>
+  </div>
+
+  <h2>How it got here</h2>
+  <table>
+    <tr><th>When</th><th>What changed</th></tr>
+    <tr><td>2026-08-17, <code>68a1a9b0</code></td><td>Four weather states eased over a volumetric deck (τ 40 s), an auto
+      walk to neighbours every 4 hours, the <code>weather</code> command, and the state remembered across
+      sessions.</td></tr>
+    <tr><td>ADR-0102</td><td>Realism calibration found remembered weather silently overriding a level's
+      weather.</td></tr>
+    <tr><td>ADR-0336</td><td>Each state names a range of cloud types, eased with the rest, so a front's puffs flatten
+      into a deck.</td></tr>
+    <tr><td>ADR-0337</td><td>One <code>Wind</code> from the weather for clouds, grass, trees, sea and flight; gusts as
+      travelling patches; the direction veering through the day.</td></tr>
+    <tr><td>ADR-0340</td><td>Weather follows a calendar and the level's climate; only a hand-chosen state survives a
+      restart; the seed bug fixed.</td></tr>
+    <tr><td>ADR-0386, 0387</td><td>A weather map places the clouds (Nubis); the clouds cast shadows. The drift moves
+      into <code>CloudMapSystem</code>.</td></tr>
+    <tr><td>ADR-0388</td><td>The four weathers move from a C++ switch into <code>clouds.lua</code>; every field
+      required.</td></tr>
+    <tr><td>ADR-0389</td><td>Cells bunched round curl-noise eddies, a stand-in "until the wind field (part C) writes
+      it"; one value noise for the engine, including the gusts.</td></tr>
+    <tr><td>ADR-0390, <code>28155245</code></td><td>The weather simulated over the land and the sea; the weathers gain
+      humidity, inversion, convection and lift; <code>WeatherNow</code>; the shared <code>rasterizeTerrain</code>.</td></tr>
+    <tr><td><code>12695b94</code></td><td>Review fixes: the snapshot copied on the worker; the shared
+      <code>bilinearGrid</code> and <code>PI</code>.</td></tr>
+  </table>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sky/weather_sim.h">src/engine/sky/weather_sim.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sky/weather_sim.cpp">weather_sim.cpp</a> — the simulation, its scales, and WeatherField</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/weather_sim_system.cpp">src/engine/systems/weather_sim_system.cpp</a> — the grid over the level, the worker, the handover</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/weather_cycle.h">src/engine/weather_cycle.h</a> — WeatherTargets, WeatherNow, WeatherCycle, the calendar and the climate</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/wind.h">src/engine/wind.h</a> — the Wind, windGustFactor, windAt</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/day_night_system.cpp">src/engine/systems/day_night_system.cpp</a> — the weather policy at start, requests, easing, publishing Wind and WeatherNow</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/clouds.lua">assets/scripts/clouds.lua</a> — the weathers (and the cloud types); <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/scripting/clouds_lua.cpp">scripting/clouds_lua.cpp</a> reads them, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sky/cloud_book.cpp">sky/cloud_book.cpp</a> serves <code>weatherTargets</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sky/cloud_map.cpp">src/engine/sky/cloud_map.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/cloud_map_system.cpp">systems/cloud_map_system.cpp</a> — where the field becomes the weather map, and the drift</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/terrain_horizon.h">src/engine/procgen/terrain_horizon.h</a> — HeightRaster, rasterizeHeights, rasterizeTerrain</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_weather_sim.cpp">tests/test_weather_sim.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_weather_cycle.cpp">tests/test_weather_cycle.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_cloud_map.cpp">tests/test_cloud_map.cpp</a></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/CREDITS.md">CREDITS.md</a> — the NASA Worldview references</li>
+  </ul>
+  <table>
+    <tr><th>Command / switch</th><th>What it does</th></tr>
+    <tr><td><code>weather clear|fair|overcast|storm|auto|off [now]</code></td><td>Set the weather; <code>now</code> snaps
+      it</td></tr>
+    <tr><td><code>weather?</code></td><td>The state, and whether it is on auto</td></tr>
+    <tr><td><code>cloudmap &lt;path.png&gt;</code></td><td>The weather map from above (types tinted, the camera red, land
+      marked when a simulated field is present)</td></tr>
+    <tr><td><code>RT_WIND_TIME=&lt;s&gt;</code></td><td>Pin the sway's and the clouds' drift clock (the cloud lab)</td></tr>
+    <tr><td><code>RT_TIME=&lt;hour|moment|now&gt;</code></td><td>Start at an hour; the simulation's sun follows the
+      clock</td></tr>
+    <tr><td><code>"dayNight": {"weather": ..., "climate": {...}}</code></td><td>A level's weather policy, odds and
+      prevailing wind</td></tr>
+  </table>
+  <p>The commands are listed with the rest on the <a href="commands.html">commands page</a>. Related pages:
+    <a href="clouds.html">Clouds</a> (the march, types, shadows), <a href="sky.html">Sky, atmosphere and exposure</a>,
+    <a href="lighting.html">Lights</a>, <a href="reflections.html">Reflections</a>, and <a href="terrain.html">Building
+    the ground</a> for the terrain the simulation rasterizes. (The terrain's "weather" block is a different thing: the
+    erosion bake that grows the mountains.)</p>
+
+  <footer>Code excerpts from commit <code>e55dfaaa</code> (2026-11-09). Drawn from ADR-0102, 0253, 0336, 0337, 0340,
+    0386, 0387, 0388, 0389 and 0390 in
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a>, commits
+    <code>68a1a9b0</code>, <code>28155245</code> and <code>12695b94</code>, and issues #199–#201.</footer>
+</div>
+</body>
+</html>

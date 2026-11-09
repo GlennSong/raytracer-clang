@@ -20,7 +20,7 @@
 
   <h2>The map</h2>
   <div class="diagram">
-    <svg viewBox="0 0 840 400" role="img" aria-label="How the engine's systems relate: the spine runs everything; the procedural language feeds terrain, trees, roads, buildings and vehicles; bakes cache them; the renderer draws; the city simulation, trains, the player and audio run on top">
+    <svg viewBox="0 0 840 470" role="img" aria-label="How the engine's systems relate: the spine runs everything; the procedural language feeds terrain, trees, roads, buildings and vehicles; bakes cache them; the renderer draws, lit by the lights, the sky, reflections, clouds and the simulated weather; the city simulation, trains, the player and audio run on top">
       <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
       <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
@@ -56,13 +56,26 @@
         <a href="renderer.html"><rect x="720" y="228" width="100" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
           <text x="770" y="258" fill="#cfe4ff">Renderer</text></a>
         <line x1="505" y1="176" x2="505" y2="224" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar)"/>
+        <!-- the physical renderer -->
+        <text x="505" y="304" fill="#7f93a8" font-size="12">LIGHT, SKY AND WEATHER (what the renderer shades with)</text>
+        <a href="lighting.html"><rect x="190" y="314" width="115" height="44" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="247" y="341" fill="#cfe4ff">Lights</text></a>
+        <a href="sky.html"><rect x="319" y="314" width="115" height="44" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="376" y="341" fill="#cfe4ff">Sky</text></a>
+        <a href="reflections.html"><rect x="448" y="314" width="115" height="44" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="505" y="341" fill="#cfe4ff">Reflections</text></a>
+        <a href="clouds.html"><rect x="577" y="314" width="115" height="44" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="634" y="341" fill="#cfe4ff">Clouds</text></a>
+        <a href="weather.html"><rect x="706" y="314" width="114" height="44" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="763" y="341" fill="#cfe4ff">Weather</text></a>
+        <line x1="770" y1="312" x2="770" y2="282" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar)"/>
         <!-- spine -->
-        <a href="spine.html"><rect x="20" y="318" width="800" height="44" rx="9" fill="#131a24" stroke="#3b82f6"/>
-          <text x="420" y="345" fill="#cfe4ff">The spine: Application, systems, ECS, fixed step, events, Lua, physics, the control channel</text></a>
-        <line x1="505" y1="314" x2="505" y2="282" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar)"/>
+        <a href="spine.html"><rect x="20" y="392" width="800" height="44" rx="9" fill="#131a24" stroke="#3b82f6"/>
+          <text x="420" y="419" fill="#cfe4ff">The spine: Application, systems, ECS, fixed step, events, Lua, physics, the control channel</text></a>
+        <line x1="505" y1="388" x2="505" y2="362" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar)"/>
         <a href="testing.html"><rect x="20" y="228" width="150" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
           <text x="95" y="252" fill="#cfe4ff">Tests and</text><text x="95" y="268" fill="#cfe4ff">measurement</text></a>
-        <text x="420" y="388" fill="#7f93a8" font-size="12">Click a box to open its page.</text>
+        <text x="420" y="460" fill="#7f93a8" font-size="12">Click a box to open its page.</text>
       </g>
     </svg>
   </div>
@@ -85,6 +98,18 @@
     <a class="b" href="trees.html"><h3>Trees and forests</h3><p>Lua recipes grown by C++, cards and impostors by distance, forests of hundreds of thousands.</p></a>
     <a class="b" href="vehicles.html"><h3>Vehicles</h3><p>Bodies from a mesh kit, Jolt vehicles under them, and the handling work that made them drive well.</p></a>
     <a class="b" href="trains.html"><h3>Trains</h3><p>Track in the lanes builder, the island loop, stations, light rail, and the people who ride.</p></a>
+  </div>
+
+  <h2>Light, sky and weather</h2>
+  <p>The physical renderer of November 2026: light in real units, a sky made by an atmosphere, reflections from probes
+    and rays, and clouds placed by a simulated weather. <a href="renderer.html">A frame on the GPU</a> shows how they
+    fit into one frame.</p>
+  <div class="grid">
+    <a class="b" href="lighting.html"><h3>Lights</h3><p>One light system for every lamp, window and headlight, binned into clusters on the GPU; rooms lit from their fittings, and the light they bounce.</p></a>
+    <a class="b" href="sky.html"><h3>Sky, atmosphere and exposure</h3><p>A physically based sky and the haze between you and the hills, the sky as a cubemap and spherical harmonics, and an eye that adapts.</p></a>
+    <a class="b" href="reflections.html"><h3>Reflections</h3><p>Probes captured along the streets and relit as the day turns, ray-traced reflections near the camera, and glass that tints.</p></a>
+    <a class="b" href="clouds.html"><h3>Clouds</h3><p>Volumetric clouds placed by a weather map, shaped by cloud types written as data, eroded into wisps, and casting shadows on the ground.</p></a>
+    <a class="b" href="weather.html"><h3>Weather and wind</h3><p>Weather states as data, the wind, and a small fluid simulation of the air over the island that decides where clouds form.</p></a>
   </div>
 
   <h2>Life in it</h2>

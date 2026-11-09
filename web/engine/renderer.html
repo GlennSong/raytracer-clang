@@ -11,15 +11,166 @@
   <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
   <h1>A frame on the GPU (and the path tracer)</h1>
   <p class="lede">Every frame, the engine walks the world, decides what can be seen, and turns that into a list of
-    draws. One backend (Vulkan on Linux and Windows) then records the whole frame into one command buffer: shadow
-    maps, a lit HDR scene, clouds, a handful of screen-space passes, and a composite that tone-maps the result
-    onto the screen. The idea that holds it together is a small seam. The engine only ever says "draw this mesh with
-    this material here". Everything the GPU needs is the backend's business.</p>
+    draws. One backend (Vulkan on Linux and Windows) then records the whole frame into one command buffer: light
+    lists, sky tables, shadow maps, reflection probes, a lit HDR scene, clouds, a handful of screen-space passes,
+    ray-traced reflections near the camera, and a composite that tone-maps the result onto the screen. The idea
+    that holds it together is a small seam. The engine only ever says "draw this mesh with this material here, under
+    these lights". Everything the GPU needs is the backend's business. This page is the map of the whole frame;
+    the lights, the sky, the reflections, the clouds and the weather each have a page of their own.</p>
 
   <figure class="shot">
     <img src="img/renderer/city-day.webp" alt="A wide daytime view over a planned city: rows of houses and streets, a freeway curving off, a downtown cluster of towers in the distance under volumetric clouds">
-    <figcaption>One finished frame (Vulkan, 2026-09-24): cascaded sun shadows on the houses, volumetric clouds
-      composited before the post passes, aerial haze over the far towers, then the tone map.</figcaption>
+    <figcaption>One finished frame (Vulkan, 2026-09-24, before the November work below): cascaded sun shadows on the
+      houses, volumetric clouds composited before the post passes, aerial haze over the far towers, then the tone
+      map.</figcaption>
+  </figure>
+
+  <h2 id="fits">How the physical renderer fits together</h2>
+  <p>In November 2026 the Vulkan renderer took most of a "renderer realism" plan in a few days: thousands of real
+    lights instead of 32, a sky computed from a model of the atmosphere, an eye that adapts to the frame, reflection
+    probes along the streets, ray-traced reflections close to the camera, and clouds placed by a simulated weather.
+    Each is its own system with its own page. They meet in one place: the shading of one pixel in
+    <code>mesh.frag</code> (and in the two compute shaders that shade what a probe or a ray sees,
+    <code>probe_relight.comp</code> and <code>rt_reflect.comp</code>, which include the same lighting code).</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 640" role="img" aria-label="How the physical renderer fits together. On the left, the engine: procgen and bakes supply meshes and materials; the city sim, vehicles and rooms publish light emitters; DayNightSystem runs the sun, moon, sky model and exposure; the weather simulation and CloudMapSystem make the weather map. In the middle, the renderer's machinery: RenderSystem builds the draw list, probe faces and the ray pick; LightSystem picks lights and cluster_bin.comp bins them into froxels; the physical sky makes the sky view, aerial volume, sky cube and harmonics; the clouds march and cast shadows; reflection probes are captured and relit; ray-traced reflections are traced near the camera. All of them feed one pixel in mesh.frag: direct light, ambient, reflection, aerial perspective and exposure. The frame's luminance histogram feeds back to the exposure.">
+      <defs><marker id="a0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <text x="115" y="12" fill="#e6c07b" font-size="12">the engine</text>
+        <text x="405" y="12" fill="#e6c07b" font-size="12">the renderer's machinery</text>
+        <text x="745" y="12" fill="#e6c07b" font-size="12">one pixel</text>
+        <a href="procgen.html"><rect x="10" y="20" width="210" height="78" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="115" y="45" fill="#cfe4ff">procgen + bakes</text>
+          <text x="115" y="65" fill="#93a6ba" font-size="12">meshes, materials, kinds</text>
+          <text x="115" y="83" fill="#93a6ba" font-size="12">draw classes</text></a>
+        <a href="citysim.html"><rect x="10" y="118" width="210" height="78" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="115" y="143" fill="#cfe4ff">city sim · vehicles · rooms</text>
+          <text x="115" y="163" fill="#93a6ba" font-size="12">emitters publish candidates</text>
+          <text x="115" y="181" fill="#93a6ba" font-size="12">(kinds in lights.lua)</text></a>
+        <a href="sky.html"><rect x="10" y="216" width="210" height="78" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="115" y="241" fill="#cfe4ff">DayNightSystem</text>
+          <text x="115" y="261" fill="#93a6ba" font-size="12">sun, moon, sky model</text>
+          <text x="115" y="279" fill="#93a6ba" font-size="12">the eye (exposure)</text></a>
+        <a href="weather.html"><rect x="10" y="314" width="210" height="78" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="115" y="339" fill="#cfe4ff">WeatherSim → CloudMap</text>
+          <text x="115" y="359" fill="#93a6ba" font-size="12">the weather, the wind</text>
+          <text x="115" y="377" fill="#93a6ba" font-size="12">the weather map (80 km)</text></a>
+
+        <a href="#frame"><rect x="260" y="20" width="290" height="78" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="405" y="45" fill="#cfe4ff">RenderSystem (this page)</text>
+          <text x="405" y="65" fill="#93a6ba" font-size="12">cull → the draw list · probe faces</text>
+          <text x="405" y="83" fill="#93a6ba" font-size="12">the ray pick (within 150 m)</text></a>
+        <a href="lighting.html"><rect x="260" y="118" width="290" height="78" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="405" y="143" fill="#cfe4ff">LightSystem → setLights</text>
+          <text x="405" y="163" fill="#93a6ba" font-size="12">one picker, budgets by renderer</text>
+          <text x="405" y="181" fill="#93a6ba" font-size="12">cluster_bin.comp: froxel lists</text></a>
+        <a href="sky.html"><rect x="260" y="216" width="290" height="78" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="405" y="241" fill="#cfe4ff">the physical sky</text>
+          <text x="405" y="261" fill="#93a6ba" font-size="12">sky_view · aerial_volume</text>
+          <text x="405" y="279" fill="#93a6ba" font-size="12">sky cube + harmonics · histogram</text></a>
+        <a href="clouds.html"><rect x="260" y="314" width="290" height="78" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="405" y="339" fill="#cfe4ff">clouds</text>
+          <text x="405" y="359" fill="#93a6ba" font-size="12">clouds.frag march + history</text>
+          <text x="405" y="377" fill="#93a6ba" font-size="12">cloudShadow (set 0, binding 18)</text></a>
+        <a href="reflections.html"><rect x="260" y="412" width="290" height="78" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="405" y="437" fill="#cfe4ff">reflection probes</text>
+          <text x="405" y="457" fill="#93a6ba" font-size="12">ProbeSystem → capture faces</text>
+          <text x="405" y="475" fill="#93a6ba" font-size="12">probe_relight.comp (64 cubes)</text></a>
+        <a href="reflections.html"><rect x="260" y="510" width="290" height="78" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="405" y="535" fill="#cfe4ff">ray-traced reflections</text>
+          <text x="405" y="555" fill="#93a6ba" font-size="12">the near BLAS / TLAS (rt_scene)</text>
+          <text x="405" y="573" fill="#93a6ba" font-size="12">rt_reflect → denoise → apply</text></a>
+
+        <rect x="600" y="20" width="290" height="568" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="745" y="46" fill="#cfe4ff">mesh.frag</text>
+        <g text-anchor="start" font-size="12.5">
+          <text x="618" y="84" fill="#8ec5ff">direct = Σ shadeLight (GGX)</text>
+          <text x="630" y="106" fill="#93a6ba">the sun × cascades × mountains</text>
+          <text x="630" y="126" fill="#93a6ba">× the cloud shadow</text>
+          <text x="630" y="146" fill="#93a6ba">+ this froxel's lamps, rooms</text>
+          <text x="630" y="166" fill="#93a6ba">+ a room's bounce (indoors)</text>
+          <text x="618" y="210" fill="#8ec5ff">ambient = the sky's light</text>
+          <text x="630" y="232" fill="#93a6ba">nine harmonics (or the palette)</text>
+          <text x="618" y="276" fill="#8ec5ff">reflection</text>
+          <text x="630" y="298" fill="#93a6ba">the sky cube, or</text>
+          <text x="630" y="318" fill="#93a6ba">the street's / storey's probe;</text>
+          <text x="630" y="338" fill="#93a6ba">near: faded out for the rays</text>
+          <text x="618" y="382" fill="#8ec5ff">× the air</text>
+          <text x="630" y="404" fill="#93a6ba">colour × T + L (aerial volume)</text>
+          <text x="618" y="448" fill="#8ec5ff">× exposure (pre-exposed)</text>
+          <text x="630" y="470" fill="#93a6ba">→ the HDR target</text>
+          <text x="618" y="514" fill="#e6c07b">then: clouds, histogram, bloom,</text>
+          <text x="618" y="534" fill="#e6c07b">SSAO, SSR + rays, composite</text>
+        </g>
+
+        <g stroke="#6f8fb0" stroke-width="1.6" fill="none">
+          <line x1="220" y1="59" x2="256" y2="59" marker-end="url(#a0)"/>
+          <line x1="220" y1="157" x2="256" y2="157" marker-end="url(#a0)"/>
+          <line x1="220" y1="255" x2="256" y2="255" marker-end="url(#a0)"/>
+          <line x1="220" y1="353" x2="256" y2="353" marker-end="url(#a0)"/>
+          <line x1="550" y1="59" x2="596" y2="59" marker-end="url(#a0)"/>
+          <line x1="550" y1="157" x2="596" y2="140" marker-end="url(#a0)"/>
+          <line x1="550" y1="255" x2="596" y2="230" marker-end="url(#a0)"/>
+          <line x1="550" y1="353" x2="596" y2="126" marker-end="url(#a0)"/>
+          <line x1="550" y1="451" x2="596" y2="318" marker-end="url(#a0)"/>
+          <line x1="550" y1="549" x2="596" y2="338" marker-end="url(#a0)"/>
+        </g>
+        <path d="M745,588 V620 H240 V270 H224" stroke="#e6c07b" stroke-width="1.4" stroke-dasharray="5 4" fill="none" marker-end="url(#a0)"/>
+        <text x="500" y="614" fill="#e6c07b" font-size="12">the frame's luminance → next frame's exposure (ADR-0368)</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Who feeds the shading of one pixel. Each box links to its page. The dashed line is the one loop:
+    the frame's brightness, measured on the GPU, sets the next frame's exposure. RenderSystem also hands the probes
+    their faces to capture and the rays their near scene (not drawn, to keep the lines readable).</p>
+
+  <p>Read it from the left. The <b>meshes and materials</b> come from the procedural generators and the bakes that
+    cache them (<a href="procgen.html">the procedural language</a>, <a href="bakes.html">bakes</a>); a draw's
+    <i>class</i> (structure, furniture, simBody…) is what the ray pick and the probe capture select by. The
+    <b>lights</b> are data: kinds and pools in <code>assets/scripts/lights.lua</code>. Everything that gives off
+    light publishes candidates on a board (the city's cars their head and tail lamps, buses their cabin lights, a
+    streamed building its ceiling fittings, the flashlight, the beacons), and one picker in <code>LightSystem</code>
+    chooses the frame's set within a budget the renderer states (<code>Renderer::lightCapacity()</code>: 31 on a
+    forward renderer, 4,096 on clustered Vulkan; ADR-0362, 0363). <b>DayNightSystem</b> places the sun and the moon,
+    reads their colour through the atmosphere model when the physical sky is on, publishes the weather and the wind,
+    and runs the eye. The <b>weather</b> is simulated over the land and the sea (ADR-0390), and
+    <code>CloudMapSystem</code> bakes from it the weather map that places every cloud (ADR-0386).</p>
+  <p>In the middle, each system turns into GPU work: froxel light lists, sky tables, a cloud march, probe cubes, a
+    ray-tracing scene. On the right they are all read by one shader through the same set of bindings (set 0:
+    the globals, the shadow cascades, the cluster buffers at 8–10, the sky view and aerial volume at 11–14, the sky
+    cube at 15, the probes at 16–17, the weather map at 18; <code>shaders/vulkan/globals.glsl</code>), and lit by one
+    function, <code>shadeLight</code> in <code>lighting_common.glsl</code>, which the probe relight and the ray hits
+    include as well. That sharing is the point: a lamp lights a wall, the wall's probe and a ray's hit on the wall
+    with the same maths (ADR-0373).</p>
+
+  <div class="grid">
+    <a class="b" href="lighting.html"><h3>Lights</h3><p>One light system, clustered lights, room lights, pre-exposure, night windows, a room's bounce.</p></a>
+    <a class="b" href="sky.html"><h3>Sky, atmosphere and exposure</h3><p>The physical sky, auto exposure, the aerial perspective volume, the sky cube and harmonics, underwater.</p></a>
+    <a class="b" href="reflections.html"><h3>Reflections: probes and ray tracing</h3><p>Street and storey probes, relit live; ray queries near the camera, and the fallbacks.</p></a>
+    <a class="b" href="clouds.html"><h3>Clouds</h3><p>The march, the weather map, cloud types as data, wisps, cirrus, cloud shadows.</p></a>
+    <a class="b" href="weather.html"><h3>Weather and wind</h3><p>Weather states as data, one wind, the weather simulated over the land and the sea.</p></a>
+  </div>
+
+  <div class="note"><p><b>Two switches decide what you see.</b> Clustered lights are Vulkan's default
+    (<code>RT_CLUSTERED=0</code> is the forward A/B). The physical sky is <i>not</i> the default yet:
+    <code>DayNightSystem</code> turns it on only with <code>RT_SKY=physical</code>, and without it the frame keeps the
+    hand-made day/night palette, the old night exposure (×6) and the analytic sky light. The sky view, aerial volume and
+    sky cube then do not run, <code>mesh.frag</code> never reads a probe, and the rays stay off, because only the
+    physical branch takes the probe's share out where the rays put theirs (ADR-0376). ADR-0369 lists what is left
+    before physical becomes the default (the lit windows' calibration, the stars).</p></div>
+  <div class="note"><p><b>Vulkan only, so far.</b> All of this is in the Vulkan backend. Metal and WebGPU loop a
+    forward 32 lights (the picker trims to them by importance) and have none of the rest; Metal's own, older scattering
+    sky is opt-in per level and tuned to the old exposure (ADR-0367). <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/renderer-parity.md">docs/renderer-parity.md</a>,
+    re-surveyed as a Vulkan | Metal | WebGPU ledger on 2026-11-07 (<code>3b898f89</code>, "Vulkan is the reference
+    now"), is the list of what they lack; issue #203 tracks Metal parity for the physical renderer and the clouds.</p></div>
+
+  <figure class="shot">
+    <img src="img/renderer/physical-sky-day.webp" alt="Eight views of the same city under the physical sky: towers at noon under a deep blue sky, the same towers gold at golden hour, salmon clouds at sunset, purple twilight with the first lit windows, night with lit windows and street lamps, and a palm-lined street at night, at sunset and at noon">
+    <figcaption>One model through the day (river_town, <code>RT_SKY=physical</code>, 2026-11-07): the sun and the sky
+      from the atmosphere tables, the clouds lit from their own height, the eye adapting from noon to night, the lamps
+      and windows at their real luminance (ADR-0367..0369).</figcaption>
   </figure>
 
   <h2>Where it started: a CPU path tracer</h2>
@@ -38,7 +189,7 @@
     averaging for free.</p>
 <div class="code">
     <div class="hd"><span>Camera::generateRay: a thin lens with Brown distortion; lensRadius 0 is an exact pinhole</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/camera.cpp#L45-L66">src/camera.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/camera.cpp#L45-L66">src/camera.cpp</a></div>
 <pre>Ray Camera::generateRay(double u, double v, double lensU, double lensV,
                         double radialScale) const {
 <span class="c">    // Brown radial distortion (+ the caller's per-channel scale) on centered</span>
@@ -114,7 +265,7 @@
     instances live side by side, so scenes without instances render exactly as they did before ADR-0041.</p>
 <div class="code">
     <div class="hd"><span>InstanceBVH::intersect: a TLAS leaf moves the ray into the proto's frame, not the proto into the world</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/instance.cpp#L125-L140">src/instance.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/instance.cpp#L125-L140">src/instance.cpp</a></div>
 <pre><span class="c">                // Map the world ray into the proto frame. Direction is NOT</span>
 <span class="c">                // renormalised, so `t` is identical in both frames.</span>
                 Ray localRay(inst.toLocal.transformPoint(ray.origin),
@@ -172,11 +323,11 @@
         <rect x="12" y="252" width="200" height="76" rx="9" fill="#131a24" stroke="#3b82f6"/>
         <text x="112" y="276" fill="#cfe4ff">VulkanRenderer</text>
         <text x="112" y="296" fill="#93a6ba" font-size="12">Linux · Windows (0057)</text>
-        <text x="112" y="314" fill="#93a6ba" font-size="12">7,501 lines · GLSL→SPIR-V</text>
+        <text x="112" y="314" fill="#93a6ba" font-size="12">10,425 lines · GLSL→SPIR-V</text>
         <rect x="237" y="252" width="200" height="76" rx="9" fill="#131a24" stroke="#2c3d50"/>
         <text x="337" y="276" fill="#cfe4ff">MetalRenderer</text>
         <text x="337" y="296" fill="#93a6ba" font-size="12">macOS · visionOS (the first)</text>
-        <text x="337" y="314" fill="#93a6ba" font-size="12">5,219 lines · MSL at runtime</text>
+        <text x="337" y="314" fill="#93a6ba" font-size="12">5,233 lines · MSL at runtime</text>
         <rect x="462" y="252" width="200" height="76" rx="9" fill="#131a24" stroke="#2c3d50"/>
         <text x="562" y="276" fill="#cfe4ff">WebGPU renderer</text>
         <text x="562" y="296" fill="#93a6ba" font-size="12">browser, Emscripten (0058)</text>
@@ -198,11 +349,11 @@
     </svg>
   </div>
   <p class="cap">Who talks to the seam, and who implements it. Line counts are the backend source files at the pinned
-    commit; each backend also has its own shader tree (shaders/vulkan, shaders/metal, WGSL embedded).</p>
+    commit (Vulkan's main file only; the ray-tracing scene is in <code>rt_scene.cpp</code> beside it); each backend also has its own shader tree (shaders/vulkan, shaders/metal, WGSL embedded).</p>
 
 <div class="code">
     <div class="hd"><span>Renderer: the per-frame half of the contract (resource upload and the knobs omitted)</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/renderer.h#L881-L966">src/renderer/renderer.h</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/renderer.h#L976-L1076">src/renderer/renderer.h</a></div>
 <pre>    virtual void beginFrame() = 0;
     virtual void setCamera(const CameraState&amp; camera) = 0;
     <span class="c">// ...</span>
@@ -228,6 +379,37 @@
     It also clears the matrix's bottom row first. That row is where the engine smuggles per-instance data (a grass
     clump's rank, a traffic signal's colour) to the Vulkan shaders, and it must not reach another backend as a
     perspective <code>w</code>.</p>
+  <p>The physical renderer widened the seam without changing its shape. Every addition is a virtual with a do-nothing
+    default, so Metal, WebGPU and the null renderer compile unchanged and simply answer "no":</p>
+<div class="code">
+    <div class="hd"><span>Renderer: what the November work added to the seam (each a no-op by default)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/renderer.h#L895-L916">src/renderer/renderer.h</a></div>
+<pre><span class="c">    // REFLECTION PROBES (ADR-0372): the draws between beginProbeFace and endProbeFace are captured into probe `probe`'s</span>
+<span class="c">    // cube face `face` (0..5: +X -X +Y -Y +Z -Z, probeFaceBasis) seen from `eye` -- what the surfaces are (albedo,</span>
+<span class="c">    // normal, roughness, emission, distance), to be relit -- not drawn to the screen. A frame takes at most a couple of</span>
+<span class="c">    // faces; the rest of the begins in it are dropped (their draws too). False: no probes on this renderer.</span>
+    virtual bool supportsProbeCapture() const { return false; }
+    virtual void beginProbeFace(uint32_t <span class="c">/*probe*/</span>, int <span class="c">/*face*/</span>, const Vec3&amp; <span class="c">/*eye*/</span>) {}
+    virtual void endProbeFace() {}
+<span class="c">    // THE FRAME'S MEASURED BRIGHTNESS (ADR-0368, auto exposure): the log2 of the scene's average luminance in engine</span>
+<span class="c">    // units (the middle of a histogram of the drawn frame, before exposure), a couple of frames old. False: no</span>
+<span class="c">    // measurement (a renderer that does not take one, or none yet).</span>
+    virtual bool measuredSceneLuminance(float&amp; <span class="c">/*log2Units*/</span>) const { return false; }
+    <span class="c">// ...</span>
+<span class="c">    // THE PHYSICAL SKY's tables (ADR-0367: sky_atmosphere.h AtmosphereTables): transmittance and multiple scattering,</span>
+<span class="c">    // RGB floats row by row. Uploaded when the atmosphere changes; the sky-view pass samples them each frame.</span>
+    virtual void setSkyTables(const float* <span class="c">/*transmittance*/</span>, int <span class="c">/*tw*/</span>, int <span class="c">/*th*/</span>, const float* <span class="c">/*multiScatter*/</span>,
+                              int <span class="c">/*mw*/</span>, int <span class="c">/*mh*/</span>) {}
+<span class="c">    // THE WEATHER MAP (ADR-0386, engine/sky/cloud_map.h): an RGBA8 texture -- footprint, type, the cell's height --</span>
+<span class="c">    // over the square [originX, originX + extent) x [originZ, ...) of the AIR (the world plus the clouds' drift).</span>
+<span class="c">    // The march places its clouds by it. An invalid handle: the noise places them, as before. No-op by default.</span>
+    virtual void setCloudMap(TextureHandle <span class="c">/*map*/</span>, double <span class="c">/*originX*/</span>, double <span class="c">/*originZ*/</span>, float <span class="c">/*extent*/</span>) {}</pre>
+  </div>
+  <p>Beside them are <code>setReflectionProbes</code> (the probes' boxes, an API Metal's authored probes already used),
+    <code>supportsRayQuery</code> / <code>setRayInstances</code> (the near scene a reflection ray may hit, nearest
+    first, with a memory share it may never pass) and <code>lightCapacity</code> (how many lights to hand over).
+    The engine side asks before it works: RenderSystem builds probe faces only if
+    <code>supportsProbeCapture()</code>, and a ray pick only if <code>supportsRayQuery()</code>.</p>
 
   <h3>How the backends came in</h3>
   <table>
@@ -245,17 +427,18 @@
   <p>The price is three shader trees kept in step by hand, which ADR-0057 and ADR-0058 both name as the dominant
     long-term cost. In practice the Vulkan backend is the one Glenn runs (the Linux workstation with the RTX 3080), and
     since September most new rendering lands there first and says so: "Vulkan only" is in the text of ADR-0088,
-    0094, 0096, 0100, 0193 and 0226. <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/renderer-parity.md">docs/renderer-parity.md</a>
+    0094, 0096, 0100, 0193 and 0226, and the GPU half of the November realism work (ADR-0361 on) is Vulkan only.
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/renderer-parity.md">docs/renderer-parity.md</a>
     is the matrix of who has what. The rest of this page describes the Vulkan backend.</p>
 
-  <h2>From the world to a command buffer</h2>
+  <h2 id="frame">From the world to a command buffer</h2>
   <p><code>Application::renderFrame</code> brackets a frame in three timed phases, named so a slow frame can say
     where it was slow (ADR-0077): <b>acquire</b> (<code>beginFrame</code>), <b>encode</b> (the systems'
     <code>render</code> calls walk the world and submit draws) and <b>submit</b> (<code>endFrame</code>, which on
     Vulkan records and submits the GPU's work).</p>
 <div class="code">
     <div class="hd"><span>Application::renderFrame: the three brackets of a frame</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/application.cpp#L169-L186">src/engine/application.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/application.cpp#L174-L191">src/engine/application.cpp</a></div>
 <pre>    {
         RT_PROFILE_ZONE_NAMED("acquire");
         frameStats.beginPhase(FramePhase::RenderAcquire);
@@ -277,7 +460,7 @@
   </div>
 
   <div class="diagram">
-    <svg viewBox="0 0 900 270" role="img" aria-label="The CPU side of a frame: beginFrame clears the queues; RenderSystem culls and turns each visible thing into a draw item and instance rows; endFrame waits for this frame slot's fence, reads back timings and occlusion, flushes uploads, records the command buffer, submits and presents; the GPU then runs the pass graph">
+    <svg viewBox="0 0 900 270" role="img" aria-label="The CPU side of a frame: beginFrame clears the queues; LightSystem picks the lights and ProbeSystem the probe faces, then RenderSystem culls and turns each visible thing into a draw item and instance rows; endFrame waits for this frame slot's fence, reads back timings, occlusion and the luminance histogram, flushes uploads, records the command buffer, submits and presents; the GPU then runs the pass graph">
       <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
       <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
@@ -289,22 +472,23 @@
         <text x="95" y="132" fill="#93a6ba" font-size="12">the instance rows</text>
         <rect x="215" y="20" width="230" height="230" rx="9" fill="#131a24" stroke="#3b82f6"/>
         <text x="330" y="46" fill="#cfe4ff">encode</text>
-        <text x="330" y="66" fill="#8ec5ff" font-size="12">RenderSystem::render</text>
-        <text x="330" y="96" fill="#93a6ba" font-size="12">lights: nearest lamps join</text>
-        <text x="330" y="114" fill="#93a6ba" font-size="12">draw index: visible 200 m cells</text>
-        <text x="330" y="132" fill="#93a6ba" font-size="12">frustum + occlusion cull</text>
-        <text x="330" y="150" fill="#93a6ba" font-size="12">draw distance, tier fade</text>
-        <text x="330" y="168" fill="#93a6ba" font-size="12">moving instances lerped</text>
+        <text x="330" y="66" fill="#8ec5ff" font-size="12">LightSystem · ProbeSystem,</text>
+        <text x="330" y="82" fill="#8ec5ff" font-size="12">then RenderSystem::render</text>
+        <text x="330" y="100" fill="#93a6ba" font-size="12">lights; probe faces; ray pick</text>
+        <text x="330" y="118" fill="#93a6ba" font-size="12">draw index: visible 200 m cells</text>
+        <text x="330" y="136" fill="#93a6ba" font-size="12">frustum + occlusion cull</text>
+        <text x="330" y="154" fill="#93a6ba" font-size="12">draw distance, tier fade</text>
+        <text x="330" y="172" fill="#93a6ba" font-size="12">moving instances lerped</text>
         <text x="330" y="194" fill="#cfe4ff" font-size="12">drawMesh → DrawItem</text>
         <text x="330" y="212" fill="#cfe4ff" font-size="12">matrix → instance row</text>
         <rect x="480" y="20" width="230" height="230" rx="9" fill="#131a24" stroke="#2c3d50"/>
         <text x="595" y="46" fill="#cfe4ff">submit</text>
         <text x="595" y="66" fill="#8ec5ff" font-size="12">endFrame() → drawFrame()</text>
-        <text x="595" y="96" fill="#93a6ba" font-size="12">wait for this slot's fence</text>
-        <text x="595" y="114" fill="#93a6ba" font-size="12">read its GPU times</text>
-        <text x="595" y="132" fill="#93a6ba" font-size="12">and its occlusion depth</text>
-        <text x="595" y="150" fill="#93a6ba" font-size="12">flush uploads, retire old</text>
-        <text x="595" y="168" fill="#93a6ba" font-size="12">write the instance buffer</text>
+        <text x="595" y="92" fill="#93a6ba" font-size="12">wait for this slot's fence</text>
+        <text x="595" y="110" fill="#93a6ba" font-size="12">read its GPU times, occlusion</text>
+        <text x="595" y="128" fill="#93a6ba" font-size="12">depth and luminance histogram</text>
+        <text x="595" y="146" fill="#93a6ba" font-size="12">flush uploads, retire old</text>
+        <text x="595" y="164" fill="#93a6ba" font-size="12">write instances + light buffer</text>
         <text x="595" y="194" fill="#cfe4ff" font-size="12">record the pass graph</text>
         <text x="595" y="212" fill="#cfe4ff" font-size="12">submit + present</text>
         <rect x="745" y="20" width="145" height="230" rx="9" fill="#0f151e" stroke="#2c3d50"/>
@@ -321,7 +505,9 @@
     </svg>
   </div>
   <p class="cap">The CPU half of a frame on Vulkan. With <code>MAX_FRAMES_IN_FLIGHT = 2</code>, the fence wait in
-    endFrame is for the frame before last, so the CPU builds frame N while the GPU still draws N − 1.</p>
+    endFrame is for the frame before last, so the CPU builds frame N while the GPU still draws N − 1. Everything read
+    back (GPU times, the occlusion depth, the luminance the eye adapts to) is therefore a frame or two old, and nothing
+    waits for it.</p>
 
   <p>The renderer is <b>immediate mode</b> for the draw list: nothing about a draw survives the frame. Every frame
     the world is walked again, culled again, and every visible instance's matrix is written again into a per-frame,
@@ -330,7 +516,7 @@
     unit of the list is the <code>DrawItem</code>:</p>
 <div class="code">
     <div class="hd"><span>DrawItem: one queued draw, the backend's whole idea of "something to draw"</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/vulkan/vulkan_renderer.cpp#L326-L345">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L364-L383">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
 <pre>struct DrawItem {
     MeshHandle mesh;
     MeshPush push;
@@ -355,125 +541,148 @@
   <p><code>MeshPush</code> is the 120-byte push-constant block the shaders read: albedo, metallic, roughness,
     emission, the material flags (a 32-bit word of switches like <code>FLAG_ALPHA_TEST</code>,
     <code>FLAG_GRASS</code>, <code>FLAG_LOD_BAND</code>), the procedural surface id (brick, asphalt, water…) and
-    16 floats of material features. Textures are bound per draw from a descriptor pool that is reset every frame.</p>
+    16 floats of material features. Textures are bound per draw from a descriptor pool that is reset every frame.
+    Since ADR-0372 a draw can also be routed elsewhere: between <code>beginProbeFace</code> and
+    <code>endProbeFace</code> the same <code>drawMesh</code> calls go into a probe face's own queue (at most two faces a
+    frame; a face with no slot left is dropped, which is why <code>drawMeshInstanced</code> now checks that its first
+    draw was queued at all).</p>
 
-  <h2>The pass graph</h2>
+  <h2 id="passes">The pass graph</h2>
   <p>A <b>pass</b> is one trip through the GPU's pipeline that writes some images; later passes read them. The order
     and the image formats are fixed in <code>recordCommandBuffer</code>. The matrix below is the whole frame: one row
-    per pass in the order they run, one column per image, <b>W</b> where a pass writes it and <b>R</b> where it reads it.
-    The brackets on the left are the <code>RT_GPU_TIMES</code> buckets the timings come back in.</p>
+    per pass in the order they run, one column per image or buffer, <b>W</b> where a pass writes it and <b>R</b> where
+    it reads it. The brackets on the left are the <code>RT_GPU_TIMES</code> buckets the timings come back in. Since
+    October the frame has grown from eleven rows to seventeen, and almost all of the new ones run <i>before</i> the
+    scene pass: they make the things a pixel reads while it is shaded.</p>
 
   <div class="diagram">
-    <svg viewBox="0 0 930 640" role="img" aria-label="Access matrix of the Vulkan frame. Rows are passes in order: crowd compute, shadow cascades, scene pass, cloud march, cloud composite, bloom, SSAO and blur, SSR, occlusion reduce, depth of field, composite with UI. Columns are images: shadow maps, HDR colour, normal and roughness, depth, clouds, bloom, AO, SSR, DOF, occlusion buffer, swapchain. Each cell marks a read or a write.">
-      <g font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
-        <!-- column headers -->
-        <g fill="#cfe4ff">
-          <text x="390" y="30">shadow</text><text x="440" y="30">HDR</text><text x="490" y="30">normal</text>
-          <text x="540" y="30">depth</text><text x="590" y="30">clouds</text><text x="640" y="30">bloom</text>
-          <text x="690" y="30">AO</text><text x="740" y="30">SSR</text><text x="790" y="30">DOF</text>
-          <text x="840" y="30">occl.</text><text x="890" y="30">screen</text>
-        </g>
-        <g fill="#93a6ba" font-size="11">
-          <text x="390" y="46">4×2048²</text><text x="440" y="46">16F</text><text x="490" y="46">+rough</text>
-          <text x="540" y="46">rev-Z</text><text x="590" y="46">½ 16F</text><text x="640" y="46">½ ×2</text>
-          <text x="690" y="46">½ R8</text><text x="740" y="46">½</text><text x="790" y="46">full</text>
-          <text x="840" y="46">host</text><text x="890" y="46">UNORM</text>
-        </g>
-        <g stroke="#1f2a37" stroke-width="1">
-          <line x1="365" y1="56" x2="365" y2="590"/><line x1="415" y1="56" x2="415" y2="590"/>
-          <line x1="465" y1="56" x2="465" y2="590"/><line x1="515" y1="56" x2="515" y2="590"/>
-          <line x1="565" y1="56" x2="565" y2="590"/><line x1="615" y1="56" x2="615" y2="590"/>
-          <line x1="665" y1="56" x2="665" y2="590"/><line x1="715" y1="56" x2="715" y2="590"/>
-          <line x1="765" y1="56" x2="765" y2="590"/><line x1="815" y1="56" x2="815" y2="590"/>
-          <line x1="865" y1="56" x2="865" y2="590"/><line x1="915" y1="56" x2="915" y2="590"/>
-        </g>
-        <!-- rows: y centre = 80 + 46*i -->
-        <g>
-          <rect x="105" y="60" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
-          <text x="230" y="77" fill="#cfe4ff">crowd.comp (compute)</text>
-          <text x="230" y="93" fill="#93a6ba" font-size="11">far travellers' instances + indirect counts</text>
-          <rect x="105" y="106" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
-          <text x="230" y="123" fill="#cfe4ff">shadow cascades</text>
-          <text x="230" y="139" fill="#93a6ba" font-size="11">depth only, culled per cascade</text>
-          <rect x="105" y="152" width="250" height="40" rx="7" fill="#131a24" stroke="#3b82f6"/>
-          <text x="230" y="169" fill="#cfe4ff">scene pass (mesh.frag)</text>
-          <text x="230" y="185" fill="#93a6ba" font-size="11">sky, opaque, terrain, water, glass, overlay</text>
-          <rect x="105" y="198" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
-          <text x="230" y="215" fill="#cfe4ff">cloud march (half res)</text>
-          <text x="230" y="231" fill="#93a6ba" font-size="11">volumetric, 3-D noise textures</text>
-          <rect x="105" y="244" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
-          <text x="230" y="261" fill="#cfe4ff">cloud composite</text>
-          <text x="230" y="277" fill="#93a6ba" font-size="11">bilateral upsample onto the HDR</text>
-          <rect x="105" y="290" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
-          <text x="230" y="307" fill="#cfe4ff">bloom</text>
-          <text x="230" y="323" fill="#93a6ba" font-size="11">bright pass, blur H, blur V</text>
-          <rect x="105" y="336" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
-          <text x="230" y="353" fill="#cfe4ff">SSAO + blur</text>
-          <text x="230" y="369" fill="#93a6ba" font-size="11">world-space hemisphere kernel</text>
-          <rect x="105" y="382" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
-          <text x="230" y="399" fill="#cfe4ff">SSR</text>
-          <text x="230" y="415" fill="#93a6ba" font-size="11">reflection rays marched in depth</text>
-          <rect x="105" y="428" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
-          <text x="230" y="445" fill="#cfe4ff">occlusion reduce (compute)</text>
-          <text x="230" y="461" fill="#93a6ba" font-size="11">farthest depth per 16 px tile</text>
-          <rect x="105" y="474" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
-          <text x="230" y="491" fill="#cfe4ff">depth of field</text>
-          <text x="230" y="507" fill="#93a6ba" font-size="11">only with a real aperture</text>
-          <rect x="105" y="520" width="250" height="56" rx="7" fill="#131a24" stroke="#3b82f6"/>
-          <text x="230" y="539" fill="#cfe4ff">composite → swapchain</text>
-          <text x="230" y="555" fill="#93a6ba" font-size="11">AO, SSR, bloom, exposure, grade, tonemap</text>
-          <text x="230" y="570" fill="#93a6ba" font-size="11">then UI quads, then ImGui</text>
-        </g>
-        <!-- RT_GPU_TIMES buckets -->
-        <g stroke="#e6c07b" stroke-width="2" fill="none">
-          <path d="M96,62 h-6 v82 h6"/><path d="M96,154 h-6 v36 h6"/><path d="M96,200 h-6 v82 h6"/>
-          <path d="M96,292 h-6 v36 h6"/><path d="M96,338 h-6 v36 h6"/><path d="M96,384 h-6 v36 h6"/>
-          <path d="M96,430 h-6 v82 h6"/><path d="M96,522 h-6 v52 h6"/>
-        </g>
-        <g fill="#e6c07b" font-size="11" text-anchor="end">
-          <text x="84" y="107">shadows</text><text x="84" y="176">scene</text><text x="84" y="245">clouds</text>
-          <text x="84" y="314">bloom</text><text x="84" y="360">ssao</text><text x="84" y="406">ssr</text>
-          <text x="84" y="469">occl+dof</text><text x="84" y="552">comp+ui</text>
-        </g>
-        <!-- cells -->
-        <defs>
-          <g id="cw"><circle r="10" fill="#e6c07b"/><text y="4" fill="#131a24" font-size="11" font-weight="700">W</text></g>
-          <g id="cr"><circle r="10" fill="#0a0e14" stroke="#8ec5ff" stroke-width="1.5"/><text y="4" fill="#8ec5ff" font-size="11" font-weight="700">R</text></g>
-        </defs>
-        <use href="#cw" x="390" y="126"/>
-        <use href="#cr" x="390" y="172"/><use href="#cw" x="440" y="172"/><use href="#cw" x="490" y="172"/><use href="#cw" x="540" y="172"/>
-        <use href="#cr" x="540" y="218"/><use href="#cw" x="590" y="218"/>
-        <use href="#cw" x="440" y="264"/><use href="#cr" x="540" y="264"/><use href="#cr" x="590" y="264"/>
-        <use href="#cr" x="440" y="310"/><use href="#cw" x="640" y="310"/>
-        <use href="#cr" x="490" y="356"/><use href="#cr" x="540" y="356"/><use href="#cw" x="690" y="356"/>
-        <use href="#cr" x="440" y="402"/><use href="#cr" x="490" y="402"/><use href="#cr" x="540" y="402"/><use href="#cw" x="740" y="402"/>
-        <use href="#cr" x="540" y="448"/><use href="#cw" x="840" y="448"/>
-        <use href="#cr" x="440" y="494"/><use href="#cr" x="540" y="494"/><use href="#cw" x="790" y="494"/>
-        <use href="#cr" x="440" y="548"/><use href="#cr" x="490" y="548"/><use href="#cr" x="540" y="548"/><use href="#cr" x="640" y="548"/>
-        <use href="#cr" x="690" y="548"/><use href="#cr" x="740" y="548"/><use href="#cr" x="790" y="548"/><use href="#cw" x="890" y="548"/>
-        <!-- legend -->
-        <g font-size="12" text-anchor="start">
-          <use href="#cw" x="120" y="614"/><text x="138" y="618" fill="#93a6ba">writes</text>
-          <use href="#cr" x="210" y="614"/><text x="228" y="618" fill="#93a6ba">reads</text>
-          <text x="300" y="618" fill="#93a6ba">½ = half resolution. Brackets: RT_GPU_TIMES buckets (the crowd falls in "shadows").</text>
-        </g>
-      </g>
-    </svg>
+<svg viewBox="0 0 1049 858" role="img" aria-label="Access matrix of the Vulkan frame at e55dfaaa. Rows are passes in order: cluster binning, the physical sky tables, the GPU crowd, shadow cascades, probe capture, probe relight, the ray scene build, the scene pass, the clouds, the luminance histogram, bloom, SSAO, SSR, the ray-traced reflections, occlusion reduce, depth of field, and the composite with the UI. Columns are images and buffers: froxel lists, sky tables, shadow maps, probes, the ray-tracing structures, the weather map, HDR colour, the normal G-buffer, depth, bloom, AO, SSR, DOF, host readback and the swapchain. Each cell marks a read, a write or both.">
+  <g font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+    <defs>
+      <g id="cw"><circle r="10" fill="#e6c07b"/><text y="4" fill="#131a24" font-size="11" font-weight="700">W</text></g>
+      <g id="cr"><circle r="10" fill="#0a0e14" stroke="#8ec5ff" stroke-width="1.5"/><text y="4" fill="#8ec5ff" font-size="11" font-weight="700">R</text></g>
+      <g id="crw"><circle r="10" fill="#e6c07b" stroke="#8ec5ff" stroke-width="2"/><text y="4" fill="#131a24" font-size="9" font-weight="700">RW</text></g>
+    </defs>
+    <g fill="#cfe4ff" font-size="11.5"><text x="405" y="30">froxels</text><text x="449" y="30">sky</text><text x="493" y="30">shadow</text><text x="537" y="30">probes</text><text x="581" y="30">BVH</text><text x="625" y="30">wx map</text><text x="669" y="30">HDR</text><text x="713" y="30">normal</text><text x="757" y="30">depth</text><text x="801" y="30">bloom</text><text x="845" y="30">AO</text><text x="889" y="30">SSR</text><text x="933" y="30">DOF</text><text x="977" y="30">host</text><text x="1021" y="30">screen</text></g>
+    <g fill="#93a6ba" font-size="10.5"><text x="405" y="46">SSBO</text><text x="449" y="46">LUTs</text><text x="493" y="46">2048²</text><text x="537" y="46">×64</text><text x="581" y="46">near</text><text x="625" y="46">CPU</text><text x="669" y="46">16F</text><text x="713" y="46">G-buf</text><text x="757" y="46">rev-Z</text><text x="801" y="46">½ ×2</text><text x="845" y="46">½ R8</text><text x="889" y="46">½</text><text x="933" y="46">full</text><text x="977" y="46">read</text><text x="1021" y="46">UNORM</text></g>
+    <g stroke="#1f2a37" stroke-width="1"><line x1="383" y1="56" x2="383" y2="802"/><line x1="427" y1="56" x2="427" y2="802"/><line x1="471" y1="56" x2="471" y2="802"/><line x1="515" y1="56" x2="515" y2="802"/><line x1="559" y1="56" x2="559" y2="802"/><line x1="603" y1="56" x2="603" y2="802"/><line x1="647" y1="56" x2="647" y2="802"/><line x1="691" y1="56" x2="691" y2="802"/><line x1="735" y1="56" x2="735" y2="802"/><line x1="779" y1="56" x2="779" y2="802"/><line x1="823" y1="56" x2="823" y2="802"/><line x1="867" y1="56" x2="867" y2="802"/><line x1="911" y1="56" x2="911" y2="802"/><line x1="955" y1="56" x2="955" y2="802"/><line x1="999" y1="56" x2="999" y2="802"/><line x1="1043" y1="56" x2="1043" y2="802"/></g>
+    <rect x="110" y="60" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="76" fill="#cfe4ff">cluster_bin.comp</text><text x="241" y="91" fill="#93a6ba" font-size="10.5">the lights → each froxel's list</text>
+    <use href="#cw" x="405" y="79"/>
+    <rect x="110" y="104" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="120" fill="#cfe4ff">sky_view · aerial · sky_cube</text><text x="241" y="135" fill="#93a6ba" font-size="10.5">physical sky only: LUTs, air, cube</text>
+    <use href="#cw" x="449" y="123"/>
+    <rect x="110" y="148" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="164" fill="#cfe4ff">crowd.comp (compute)</text><text x="241" y="179" fill="#93a6ba" font-size="10.5">far travellers' instances + counts</text>
+    <rect x="110" y="192" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="208" fill="#cfe4ff">shadow cascades</text><text x="241" y="223" fill="#93a6ba" font-size="10.5">depth only, culled per cascade</text>
+    <use href="#cw" x="493" y="211"/>
+    <rect x="110" y="236" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="252" fill="#cfe4ff">probe capture (≤ 2 faces)</text><text x="241" y="267" fill="#93a6ba" font-size="10.5">the static world, as surfaces</text>
+    <use href="#cw" x="537" y="255"/>
+    <rect x="110" y="280" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="296" fill="#cfe4ff">probe relight + prefilter</text><text x="241" y="311" fill="#93a6ba" font-size="10.5">≤ 4 probes, lit as the scene is</text>
+    <use href="#cr" x="493" y="299"/>
+    <use href="#cr" x="449" y="299"/>
+    <use href="#cr" x="625" y="299"/>
+    <use href="#crw" x="537" y="299"/>
+    <rect x="110" y="324" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="340" fill="#cfe4ff">ray scene build</text><text x="241" y="355" fill="#93a6ba" font-size="10.5">near BLAS, the TLAS each frame</text>
+    <use href="#cw" x="581" y="343"/>
+    <rect x="110" y="368" width="262" height="38" rx="7" fill="#131a24" stroke="#3b82f6"/>
+    <text x="241" y="384" fill="#cfe4ff">scene pass: sky.frag + mesh.frag</text><text x="241" y="399" fill="#93a6ba" font-size="10.5">opaque, terrain, water, glass, overlay</text>
+    <use href="#cr" x="405" y="387"/>
+    <use href="#cr" x="449" y="387"/>
+    <use href="#cr" x="493" y="387"/>
+    <use href="#cr" x="537" y="387"/>
+    <use href="#cr" x="625" y="387"/>
+    <use href="#cw" x="669" y="387"/>
+    <use href="#cw" x="713" y="387"/>
+    <use href="#cw" x="757" y="387"/>
+    <rect x="110" y="412" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="428" fill="#cfe4ff">clouds: march → resolve → comp.</text><text x="241" y="443" fill="#93a6ba" font-size="10.5">half res, a history, bilateral</text>
+    <use href="#cr" x="625" y="431"/>
+    <use href="#cr" x="757" y="431"/>
+    <use href="#crw" x="669" y="431"/>
+    <rect x="110" y="456" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="472" fill="#cfe4ff">lum_histogram.comp</text><text x="241" y="487" fill="#93a6ba" font-size="10.5">64 bins of log luminance</text>
+    <use href="#cr" x="669" y="475"/>
+    <use href="#cw" x="977" y="475"/>
+    <rect x="110" y="500" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="516" fill="#cfe4ff">bloom</text><text x="241" y="531" fill="#93a6ba" font-size="10.5">bright pass, blur H, blur V</text>
+    <use href="#cr" x="669" y="519"/>
+    <use href="#cw" x="801" y="519"/>
+    <rect x="110" y="544" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="560" fill="#cfe4ff">SSAO + blur</text><text x="241" y="575" fill="#93a6ba" font-size="10.5">world-space hemisphere kernel</text>
+    <use href="#cr" x="713" y="563"/>
+    <use href="#cr" x="757" y="563"/>
+    <use href="#cw" x="845" y="563"/>
+    <rect x="110" y="588" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="604" fill="#cfe4ff">SSR</text><text x="241" y="619" fill="#93a6ba" font-size="10.5">reflection rays marched in depth</text>
+    <use href="#cr" x="669" y="607"/>
+    <use href="#cr" x="713" y="607"/>
+    <use href="#cr" x="757" y="607"/>
+    <use href="#cw" x="889" y="607"/>
+    <rect x="110" y="632" width="262" height="38" rx="7" fill="#131a24" stroke="#3b82f6"/>
+    <text x="241" y="648" fill="#cfe4ff">rt_reflect → denoise → apply</text><text x="241" y="663" fill="#93a6ba" font-size="10.5">ray queries near the camera</text>
+    <use href="#cr" x="581" y="651"/>
+    <use href="#cr" x="537" y="651"/>
+    <use href="#cr" x="449" y="651"/>
+    <use href="#cr" x="625" y="651"/>
+    <use href="#cr" x="713" y="651"/>
+    <use href="#cr" x="757" y="651"/>
+    <use href="#crw" x="889" y="651"/>
+    <use href="#crw" x="669" y="651"/>
+    <rect x="110" y="676" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="692" fill="#cfe4ff">occlusion reduce (compute)</text><text x="241" y="707" fill="#93a6ba" font-size="10.5">farthest depth per 16 px tile</text>
+    <use href="#cr" x="757" y="695"/>
+    <use href="#cw" x="977" y="695"/>
+    <rect x="110" y="720" width="262" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/>
+    <text x="241" y="736" fill="#cfe4ff">depth of field</text><text x="241" y="751" fill="#93a6ba" font-size="10.5">only with a real aperture</text>
+    <use href="#cr" x="669" y="739"/>
+    <use href="#cr" x="757" y="739"/>
+    <use href="#cw" x="933" y="739"/>
+    <rect x="110" y="764" width="262" height="38" rx="7" fill="#131a24" stroke="#3b82f6"/>
+    <text x="241" y="780" fill="#cfe4ff">composite → swapchain, UI</text><text x="241" y="795" fill="#93a6ba" font-size="10.5">AO, SSR, bloom, grade, tone map</text>
+    <use href="#cr" x="669" y="783"/>
+    <use href="#cr" x="713" y="783"/>
+    <use href="#cr" x="757" y="783"/>
+    <use href="#cr" x="801" y="783"/>
+    <use href="#cr" x="845" y="783"/>
+    <use href="#cr" x="889" y="783"/>
+    <use href="#cr" x="933" y="783"/>
+    <use href="#cw" x="1021" y="783"/>
+    <g stroke="#e6c07b" stroke-width="2" fill="none"><path d="M100,62 h-6 v166 h6"/><path d="M100,238 h-6 v166 h6"/><path d="M100,414 h-6 v78 h6"/><path d="M100,502 h-6 v34 h6"/><path d="M100,546 h-6 v34 h6"/><path d="M100,590 h-6 v78 h6"/><path d="M100,678 h-6 v78 h6"/><path d="M100,766 h-6 v34 h6"/></g>
+    <g fill="#e6c07b" font-size="11" text-anchor="end"><text x="88" y="149">shadows</text><text x="88" y="325">scene</text><text x="88" y="457">clouds</text><text x="88" y="523">bloom</text><text x="88" y="567">ssao</text><text x="88" y="633">ssr</text><text x="88" y="721">occl+dof</text><text x="88" y="787">comp+ui</text></g>
+    <g font-size="12" text-anchor="start"><use href="#cw" x="120" y="832"/><text x="136" y="836" fill="#93a6ba">writes</text><use href="#cr" x="200" y="832"/><text x="216" y="836" fill="#93a6ba">reads</text><use href="#crw" x="276" y="832"/><text x="292" y="836" fill="#93a6ba">both</text><text x="350" y="836" fill="#93a6ba">½ = half res. Brackets: RT_GPU_TIMES buckets. wx map: the weather map (baked on the CPU).</text></g>
+  </g>
+</svg>
   </div>
-  <p class="cap">The Vulkan frame at commit 47d587f3, from <code>recordCommandBuffer</code> and the descriptor
-    writes that feed each pass. The composite reads the DOF image instead of the HDR one when depth of field is on,
-    and reads depth and normals for the underwater view and the debug views.</p>
+  <p class="cap">The Vulkan frame at commit e55dfaaa, from <code>recordCommandBuffer</code> and the descriptor
+    writes that feed each pass. The sky tables, the probes and the rays are only <i>read</i> under the physical sky
+    (<code>RT_SKY=physical</code>); the sky tables are also only <i>made</i> then. The probes are still captured and
+    relit, and the ray scene still built, under the old sky. The composite reads the DOF image instead of the HDR one
+    when depth of field is on, and reads depth and normals for the underwater view and the debug views. The clouds'
+    own half-resolution targets and history are left out.</p>
 
   <p>Here is the same order in the code, with the timestamp marks between the stages:</p>
 <div class="code">
     <div class="hd"><span>recordCommandBuffer: the frame in order, a GPU timestamp after each stage</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/vulkan/vulkan_renderer.cpp#L5481-L5752">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L7422-L7778">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
 <pre>    gpuMark(cmd, 0);
+    <span class="c">// ...</span>
+    recordClusterBin(cmd);   <span class="c">// the froxels' light lists (ADR-0364), before the scene pass reads them</span>
+    recordSkyView(cmd);      <span class="c">// the physical sky's view (ADR-0367), before the sky and the scene sample it</span>
+    recordAerial(cmd);       <span class="c">// ...and the air between the camera and everything it sees (ADR-0370)</span>
+    recordSkyCube(cmd);      <span class="c">// ...and the sky as a cubemap for the reflections (ADR-0371)</span>
     recordCrowd(cmd);   <span class="c">// the far travellers' instances, before any pass draws them</span>
 
 <span class="c">    // Cascaded shadow maps first (writes the depth array the lit pass samples).</span>
     recordShadowPass(cmd);
     gpuMark(cmd, 1);
+    recordProbeCaptures(cmd);   <span class="c">// this frame's reflection-probe faces (ADR-0372: after the shadows, which set 0 samples)</span>
+    recordProbeRelight(cmd);    <span class="c">// ...and a few probes relit as the scene is now (ADR-0373)</span>
+    recordRayScene(cmd);        <span class="c">// the near acceleration structures for the reflection rays (ADR-0376)</span>
     <span class="c">// ...</span>
     vkCmdEndRenderPass(cmd);
     gpuMark(cmd, 2);
@@ -483,6 +692,7 @@
 <span class="c">    // chain so SSR/bloom/DOF all see the clouded scene.</span>
     if (cloudsActive &amp;&amp; cloudMarchPipeline &amp;&amp; cloudCompositePipeline &amp;&amp; cloudFramebuffer) {
     <span class="c">// ...</span>
+    recordLumHistogram(cmd);   <span class="c">// the frame's brightness, for the auto exposure (ADR-0368)</span>
 <span class="c">    // Bloom + SSAO read the scene outputs (always run so their views stay</span>
 <span class="c">    // sampleable; composite gates whether they're applied).</span>
     gpuMark(cmd, 3);
@@ -491,6 +701,7 @@
     recordSsao(cmd);
     gpuMark(cmd, 5);
     recordSsr(cmd);
+    recordRtReflect(cmd);   <span class="c">// ...and, near the camera, the rays replace it (ADR-0376)</span>
     gpuMark(cmd, 6);
     recordOcclusion(cmd);
 <span class="c">    // DOF (off by default) blurs the HDR scene; composite reads dofView when on.</span>
@@ -500,42 +711,85 @@
     vkCmdEndRenderPass(cmd);
     gpuMark(cmd, 8);</pre>
   </div>
+  <p>Each <code>record…</code> call decides for itself whether it has anything to do this frame: the sky passes
+    return at once unless the physical sky is on, the probe passes when no face is queued or no probe is placed, the
+    ray pass unless <code>raysThisFrame()</code> says yes. So the code always reads as the full frame, and a switch
+    only empties a stage.</p>
 
   <h3>Each pass in a sentence or two</h3>
   <table>
     <tr><th>Pass</th><th>What it does, and why it is there</th></tr>
+    <tr><td>cluster_bin.comp</td><td>The <b>clustered lights</b>: the view is cut into 16 × 9 screen tiles × 24
+      depth slices (0.5 m to 2 km, exponential), the <b>froxels</b>, and every light is listed in each froxel its
+      sphere reaches, at most 64 a froxel, the nearest its middle kept. One workgroup a froxel, 64 threads; it replaced
+      a CPU binning that took 6.8–12.6 ms with 1,000 lights near the camera (ADR-0361, 0364). A pixel then loops only
+      its own froxel's list. <a href="lighting.html">Lights</a>.</td></tr>
+    <tr><td>Sky tables</td><td>Only under the physical sky. <code>sky_view.comp</code> marches the atmosphere into a
+      192 × 108 dome from the transmittance and multiple-scattering tables the CPU uploads (<code>setSkyTables</code>);
+      <code>aerial_volume.comp</code> marches the air for 32 × 32 screen tiles at 32 distances out to 120 km;
+      <code>sky_cube.comp</code> and <code>sky_prefilter.comp</code> make a 128² cube with GGX-blurred mips for
+      reflections. The sky's diffuse light is nine spherical-harmonic numbers made on the CPU (ADR-0367, 0370, 0371).
+      <a href="sky.html">Sky, atmosphere and exposure</a>.</td></tr>
     <tr><td>crowd.comp</td><td>The city's far travellers (the "GPU crowd") are placed by a compute shader from
-      their route and clock, writing their instance matrices and an indirect draw count. It runs first, so every later
-      pass can draw them.</td></tr>
+      their route and clock, writing their instance matrices and an indirect draw count. It runs before the passes
+      that draw them.</td></tr>
     <tr><td>Shadow cascades</td><td><b>Cascaded shadow maps</b>: the view is cut into up to four depth slices, and
       each gets its own 2048² depth map rendered from the sun, so near shadows are sharp and far ones still exist.
       The boxes are fitted round the camera (<code>cascade_fit.h</code>), not the view direction, so turning does not
-      make shadows shimmer. Each cascade draws only the items whose sphere overlaps its four sides; grass, overlays
-      and the camera-facing impostor cards cast nothing. Alpha-cut leaves use a second pipeline that cuts the shadow
-      by the leaf texture's alpha.</td></tr>
-    <tr><td>Scene pass</td><td>The sky (a full-screen triangle from <code>sky.frag</code>: the day/night palette and
-      the sun disc), then the geometry, sorted by kind into opaque (back-face culled, then two-sided), terrain
-      (its own vertex shader, which morphs CDLOD tiles), water, transparent (sorted back to front, premultiplied
-      alpha), and overlays (depth off). All lit by <code>mesh.frag</code>. It writes three images: HDR colour, a
-      "G-buffer" of world normal and roughness for the screen-space passes, and depth. Depth is <b>reverse-Z</b>:
-      near is 1 and far is 0, which with a float depth buffer keeps precision nearly even out to kilometres.</td></tr>
-    <tr><td>Clouds</td><td>Volumetric clouds marched at half resolution against the scene depth, then upsampled
-      bilaterally (edge-aware, so cloud does not bleed over a roof line) onto the HDR image. They go in before the
-      post chain, so bloom and SSR see the clouded sky.</td></tr>
-    <tr><td>Bloom</td><td>Three half-resolution draws: a soft-threshold bright pass, then a horizontal and a vertical
-      blur. The composite adds the result.</td></tr>
+      make shadows shimmer. Each cascade draws only the items whose sphere overlaps its four sides; grass, overlays,
+      the camera-facing impostor cards and sprites cast nothing. Alpha-cut leaves use a second pipeline that cuts the
+      shadow by the leaf texture's alpha. (The clouds' shadow is not a map: it is read from the weather map in the
+      shader, below.)</td></tr>
+    <tr><td>Probe capture</td><td>At most two faces a frame of a <b>reflection probe</b>, a small cube camera placed
+      along the streets (or on the storey you stand in). A face is 64² and stores what the surfaces <i>are</i>
+      (albedo and metallic, normal and roughness, emission and distance), not how they are lit, through capture twins
+      of the mesh pipelines. So the time of day costs no recapture (ADR-0372, 0374, 0380).
+      <a href="reflections.html">Reflections</a>.</td></tr>
+    <tr><td>Probe relight</td><td>Up to four probes a frame lit from their stored surfaces as the scene pass lights a
+      surface (the same <code>shadeLight</code>, the sun's cascades and the clouds' shadow), diffuse only, into a
+      64-probe cube array with five GGX mips (ADR-0373, 0374).</td></tr>
+    <tr><td>Ray scene build</td><td>On a GPU with ray queries (the renderer asks for Vulkan 1.2 since ADR-0375):
+      a bottom-level acceleration structure per nearby mesh, built nearest first and spread over frames, and a top
+      level over the near instances rebuilt every frame, inside a budget of 25% of the free device memory and never
+      over 1.5 GB (ADR-0376, 0381).</td></tr>
+    <tr><td>Scene pass</td><td>The sky first (a full-screen triangle from <code>sky.frag</code>: the day/night palette
+      and the sun disc, or under the physical sky the sky view with the sun through the air), then the geometry,
+      sorted by kind into opaque (back-face culled, then two-sided), terrain (its own vertex shader, which morphs
+      CDLOD tiles), water, transparent (sorted back to front, premultiplied alpha), and overlays (depth off). All lit by
+      <code>mesh.frag</code> (next section). It writes three images: HDR colour, already multiplied by the camera's
+      exposure (<b>pre-exposed</b>, ADR-0366, so fp16 holds noon and moonlight alike); a G-buffer (RGBA8: the
+      octahedral world normal, the roughness, and the surface's reflection weight, which the rays use to replace exactly
+      what the probe gave, ADR-0376); and depth. Depth is <b>reverse-Z</b>: near is 1 and far is 0, which with a float
+      depth buffer keeps precision nearly even out to kilometres.</td></tr>
+    <tr><td>Clouds</td><td>Volumetric clouds marched at half resolution against the scene depth, each cloud placed
+      by the weather map (ADR-0386), blended into a reprojected history to hide the march's noise (ADR-0328, 0379),
+      then upsampled bilaterally (edge-aware, so cloud does not bleed over a roof line) onto the HDR image. They go in
+      before the post chain, so bloom and SSR see the clouded sky. <a href="clouds.html">Clouds</a>.</td></tr>
+    <tr><td>lum_histogram.comp</td><td>A 64-bin histogram of the frame's log luminance, every fourth pixel, copied out
+      and read when its frame slot's fence passes. Under the physical sky, <code>DayNightSystem</code>'s eye exposes
+      the next frames by the mean between its 35th and 95th percentiles, and keeps the brightest 3% from washing out
+      (ADR-0368, 0378).</td></tr>
+    <tr><td>Bloom</td><td>Three half-resolution draws: a soft-threshold bright pass (its threshold in pre-exposed units),
+      then a horizontal and a vertical blur. The composite adds the result.</td></tr>
     <tr><td>SSAO</td><td><b>Screen-space ambient occlusion</b>: darkening creases and contact points by testing a
       hemisphere of samples round each pixel against the depth buffer. Half resolution, then a blur.</td></tr>
     <tr><td>SSR</td><td><b>Screen-space reflections</b>: each pixel's reflection ray is marched against the depth
       buffer; where it hits, the HDR colour there is the reflection, with a confidence that fades at screen edges and
       on rough surfaces. This is what puts the mountains in the lake below.</td></tr>
+    <tr><td>Ray-traced reflections</td><td>Under the physical sky, on a GPU with ray queries: every pixel smoother than
+      roughness 0.3 within 150 m traces its reflection against the near scene (<code>rt_reflect.comp</code>, at SSR's
+      half resolution). A hit is shaded from its own triangle with <code>shadeLight</code>, the sun's shadow by a
+      second ray; a miss takes the probe. <code>rt_denoise.comp</code> filters it and mutes SSR where the rays
+      answer, <code>rt_apply.comp</code> adds it to the HDR image (ADR-0376). Measured: +0.56 ms of GPU.</td></tr>
     <tr><td>Occlusion reduce</td><td>The renderer's first compute pass: depth reduced to 16 px tiles for the CPU's
       occlusion culling (its own section below).</td></tr>
     <tr><td>DOF</td><td>Depth of field, a thin-lens circle of confusion gathered at full resolution. Skipped unless the
       camera has a real aperture.</td></tr>
     <tr><td>Composite</td><td>One full-screen draw into the swapchain: lens distortion and chromatic aberration, then
-      AO (with a floor), SSR mixed in by its confidence, the underwater view, bloom, exposure, the grade and the tone
-      map (ACES or AgX). Then the game UI layer (ADR-0088) and the ImGui debug overlay, in the same render pass.</td></tr>
+      AO (with a floor), SSR mixed in by its confidence, the underwater view (lit, under the physical sky, by the light
+      coming down into the water, ADR-0383), bloom, the grade and the tone map (ACES or AgX). Exposure here is 1: the
+      scene was exposed as it was drawn. Then the game UI layer (ADR-0088) and the ImGui debug overlay, in the same
+      render pass.</td></tr>
   </table>
 
   <div class="shots">
@@ -545,20 +799,21 @@
         reflect in it.</figcaption>
     </figure>
     <figure class="shot">
-      <img src="img/renderer/night-towers.webp" alt="Towers at night with lit windows under a starry sky; red aviation beacons glow on the roofs">
-      <figcaption>Night: window panes lit by emission, red beacon lights (real point lights near the camera) blooming
-        in the composite.</figcaption>
+      <img src="img/renderer/city-night-lights.webp" alt="A city at night seen from above: towers full of lit windows, streets lined with pools of lamp light, red beacons on the roofs, an elevated railway curving through">
+      <figcaption>Night with many lights (Glenn's screenshot, 2026-11-08, clustered lights the default): every street
+        lamp's pool is a real light, binned into the froxels; the windows are glows.</figcaption>
     </figure>
   </div>
 
-  <div class="note"><p><b>Shaders compiled but not drawn.</b> At <code>47d587f3</code> CMake compiled <code>atmosphere.frag</code>,
-    <code>star.frag</code>, <code>water.vert</code> and <code>water.frag</code> (the procedural-planet passes) to
-    SPIR-V, but nothing in the Vulkan backend loaded them; ADR-0294 has since deleted all four. Water on Vulkan is drawn by
-    <code>mesh.frag</code> through the water pipeline (its <code>Surface::Water</code> and <code>River</code> code), and
-    the sky by <code>sky.frag</code>. The memory note on realism records the matching gotcha: the "scattering" sky
-    model is Metal only.</p></div>
+  <div class="note"><p><b>Shaders compiled but not drawn, and two skies.</b> Until ADR-0294 CMake compiled
+    <code>atmosphere.frag</code>, <code>star.frag</code>, <code>water.vert</code> and <code>water.frag</code> (the
+    procedural-planet passes) to SPIR-V, but nothing in the Vulkan backend loaded them; all four are deleted. Water on
+    Vulkan is drawn by <code>mesh.frag</code> through the water pipeline (its <code>Surface::Water</code> and
+    <code>River</code> code), and the sky by <code>sky.frag</code>, in one of two modes: the palette, or (ADR-0367)
+    the physical sky through <code>sky_physical.glsl</code>, which <code>mesh.frag</code> and <code>sky.frag</code>
+    share. Metal's own "scattering" sky is a separate, older model and is not the one Vulkan uses.</p></div>
 
-  <h2>Lighting: one BRDF, one set of units</h2>
+  <h2 id="lighting">Lighting: one BRDF, one set of units</h2>
   <p>ADR-0017 (2026-06-10) found the lighting in two mismatched halves. Light from the sky (image-based lighting) was
     proper GGX physically based shading, but the sun and lamps were Blinn-Phong with no 1/π, about three times too
     hot, and shadows only darkened the direct term. Under a bright sky a fully shadowed pixel kept about 80% of its
@@ -566,10 +821,15 @@
     (the GGX distribution, height-correlated Smith visibility, Schlick Fresnel), Lambert/π diffuse, and
     inverse-square falloff with a windowed range for lamps. And artistic shadow controls that act on visibility, so
     they hold whatever the shading model.</p>
+  <p>Everything in November kept that commitment and made it literal. The BRDF moved out of <code>mesh.frag</code>
+    into <code>lighting_common.glsl</code> (ADR-0373), so the scene pass, the probe relight and the ray hits include
+    the same file, and "the same light" is the same code wherever a surface is lit.</p>
 <div class="code">
-    <div class="hd"><span>mesh.frag: the BRDF the sun, lamps and the path tracer share</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/mesh.frag#L106-L123">shaders/vulkan/mesh.frag</a></div>
-<pre><span class="c">// ---- BRDF (ported from lighting.metal) ------------------------------------</span>
+    <div class="hd"><span>lighting_common.glsl: the BRDF the sun, the lamps, the probes, the rays and the path tracer share</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/lighting_common.glsl#L1-L20">shaders/vulkan/lighting_common.glsl</a></div>
+<pre><span class="c">// THE LIGHT ON A SURFACE (ADR-0372): the GGX terms, the lights' falloff, the sun's cascaded and the mountains' shadow,</span>
+<span class="c">// and one light's contribution -- shared by mesh.frag and probe_relight.comp (include after globals.glsl).</span>
+
 float distributionGGX(float NdotH, float a2) {
     float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
     return a2 / max(PI * d * d, 1e-6);
@@ -589,54 +849,165 @@ float distanceAttenuation(float dist, float range) {
 }</pre>
   </div>
 <div class="code">
-    <div class="hd"><span>evaluateLighting: every light, one loop (up to 32 lights); only the sun is shadowed</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/mesh.frag#L820-L859">shaders/vulkan/mesh.frag</a></div>
-<pre>vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
-                      float metallic, float roughness, vec3 f0, vec3 sunShadow) {
+    <div class="hd"><span>shadeLight: one light's contribution, the unit every lighting loop is made of (a room light stays in its room; a probe takes no highlight)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/lighting_common.glsl#L145-L186">shaders/vulkan/lighting_common.glsl</a></div>
+<pre><span class="c">// One light's direct contribution (the GGX specular + Lambert diffuse, the sun's shadow on the sun only).</span>
+vec3 shadeLight(Light light, vec3 worldPos, vec3 N, vec3 V, vec3 albedo, float metallic, vec3 f0, float a2,
+                float NdotV, vec3 sunShadow) {
+    <span class="c">// ...</span>
+        if (type == 2) {                   <span class="c">// spot</span>
+            float theta = dot(-L, normalize(light.directionInner.xyz));
+            attenuation *= smoothstep(light.colorOuter.w, light.directionInner.w, theta);
+        } else if (type == 3) {            <span class="c">// a room's light (ADR-0365): only inside its room's box</span>
+            attenuation *= roomLightInside(light, worldPos);
+        }
+    }
+    float NdotL = max(dot(N, L), 0.0);
+    if (NdotL &lt;= 0.0 || attenuation &lt;= 0.0) return vec3(0.0);
+
+    vec3 H = normalize(L + V);
+    float NdotH = max(dot(N, H), 0.0);
+    float VdotH = max(dot(V, H), 0.0);
+    float D = distributionGGX(NdotH, a2);
+    float Vis = visibilitySmithGGX(NdotV, NdotL, a2);
+    vec3 F = fresnelSchlickVec(VdotH, f0);
+#ifdef SHADE_DIFFUSE_ONLY
+<span class="c">    // a probe's relight (ADR-0374): a highlight is where the eye stands, and the probe's eye is not the viewer's --</span>
+<span class="c">    // baked in, the sun's glint off a far window smeared over every rough surface that reads the probe</span>
+    vec3 specular = vec3(0.0);
+#else
+    vec3 specular = D * Vis * F;
+#endif
+    vec3 diffuse = (1.0 - F) * (1.0 - metallic) * albedo / PI;
+    vec3 sh = (type == 1) ? sunShadow : vec3(1.0);   <span class="c">// only the sun casts shadows</span>
+    return (diffuse + specular) * light.colorOuter.rgb * (attenuation * NdotL) * sh;
+}</pre>
+  </div>
+  <p>What changed is <i>which</i> lights a pixel loops. Until ADR-0361 every pixel looped the same fixed 32 in the
+    globals (the sun, the nearest 20 lamps, a few headlight cones, beacons, rooms), and each light cost the scene pass
+    about 0.1 ms wherever you looked. Now the 32 keep only the sun and the moon for this loop, and every other light
+    comes from the pixel's froxel:</p>
+<div class="code">
+    <div class="hd"><span>evaluateLighting: the sun from the 32, everything else from this pixel's froxel; indoors, each room light's bounce too</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L738-L767">shaders/vulkan/mesh.frag</a></div>
+<pre><span class="c">// (`indoor`: a room's surface, which takes its lights' bounce too -- roomBounce)</span>
+vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
+                      float metallic, float roughness, vec3 f0, vec3 sunShadow, bool indoor) {
     vec3 directLight = vec3(0.0);
+    vec3 bounce = vec3(0.0);
     float a = max(roughness * roughness, 0.002);
     float a2 = a * a;
     float NdotV = max(dot(N, V), 1e-4);
-        <span class="c">// ...</span>
-        float NdotL = max(dot(N, L), 0.0);
-        if (NdotL &lt;= 0.0 || attenuation &lt;= 0.0) continue;
 
-        vec3 H = normalize(L + V);
-        float NdotH = max(dot(N, H), 0.0);
-        float VdotH = max(dot(V, H), 0.0);
-        float D = distributionGGX(NdotH, a2);
-        float Vis = visibilitySmithGGX(NdotV, NdotL, a2);
-        vec3 F = fresnelSchlickVec(VdotH, f0);
-        vec3 specular = D * Vis * F;
-        vec3 diffuse = (1.0 - F) * (1.0 - metallic) * albedo / PI;
-        vec3 sh = (type == 1) ? sunShadow : vec3(1.0);   <span class="c">// only the sun casts shadows</span>
-        directLight += (diffuse + specular) * light.colorOuter.rgb * (attenuation * NdotL) * sh;
-    }</pre>
+    int count = min(g.counts.x, 32);
+    if (g.clusterGrid.w != 0) {
+<span class="c">        // CLUSTERED: the sun (and the moon) from the 32, every other light from this pixel's froxel</span>
+        for (int i = 0; i &lt; count; ++i)
+            if (int(g.lights[i].typeRange.x) == 1)
+                directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+        uint off, n;
+        clusterCell(worldPos, off, n);
+        for (uint k = 0u; k &lt; n; ++k) {
+            Light light = clusterLights[clusterIndices[off + k]];
+            directLight += shadeLight(light, worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+            if (indoor) bounce += roomBounce(light, worldPos);
+        }
+        return directLight + bounce * albedo * (1.0 - metallic) / PI;
+    }
+    for (int i = 0; i &lt; count; ++i) {
+        directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+        if (indoor) bounce += roomBounce(g.lights[i], worldPos);
+    }
+    return directLight + bounce * albedo * (1.0 - metallic) / PI;
+}</pre>
   </div>
-  <p>The 32-light cap is real and shapes the city at night: <code>RenderSystem</code> picks the nearest street lamps
-    (20 by default within 160 m), station canopy lights, headlight cones, the flashlight, interior room lights and
-    roof beacons, and fades each lamp in and out as it crosses the edge of that set, so lights do not pop on as you
-    drive. The shader loops every light for every pixel, so this count is "the honest cost knob for night" (the
-    comment in <code>render_system.cpp</code>).</p>
+  <p>The lights themselves are chosen before the renderer sees them. ADR-0362 found seven places each picking lights
+    with its own nearest-N cap and fade (the street lamps in RenderSystem, headlights in VehicleSystem, rooms, cabs,
+    beacons, the flashlight, the level's own) and replaced them with one: emitters publish candidates, the kinds and
+    pools are data in <code>lights.lua</code>, and <code>LightSystem</code>'s picker chooses per pool, fading each
+    set at its moving edge so nothing pops. A pool has a forward budget and a <code>many</code> budget (the street:
+    20 lamps within 160 m forward, 2,500 within 800 m clustered), picked by <code>lightCapacity()</code>. On
+    river_town at 22:00 that lit 1,326 lights for 5.77 ms of scene pass where forward's 25 took 6.00 (ADR-0363).
+    The lamps are at their real candela under the physical sky (a street lamp 1,600 cd, a headlight 15,000), a room's
+    ceiling fittings light only their own room (light type 3, ADR-0365) and bounce off its walls (ADR-0382).
+    <a href="lighting.html">Lights</a> has the whole story.</p>
 <div class="code">
-    <div class="hd"><span>The ADR-0017 shadow controls: a tint, and how far a shadow also darkens the sky's light</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/mesh.frag#L1466-L1471">shaders/vulkan/mesh.frag</a></div>
+    <div class="hd"><span>The ADR-0017 shadow controls: a tint, and how far a shadow also darkens the sky's light (now times the clouds' shadow)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1438-L1443">shaders/vulkan/mesh.frag</a></div>
 <pre><span class="c">    // Artistic shadow tint (ADR-0017): occluded direct light + ambient lerp toward</span>
 <span class="c">    // the tint; ambientStrength (shadowTint.w) controls how much the same shadow</span>
 <span class="c">    // darkens IBL (so a bright sky doesn't fill shadows back in). Tint 0 = plain</span>
 <span class="c">    // darkening, identical to the untinted scalar.</span>
-    vec3 directShadow  = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * strength);
+    vec3 directShadow  = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * strength) * cloudVis;
     vec3 ambientShadow = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * g.shadowTint.w);</pre>
   </div>
-  <p>On Vulkan the sky's light is analytic: the shader evaluates the procedural sky (or an HDR equirect) by normal
-    for the diffuse fill and along the reflection for specular, then applies the split-sum BRDF lookup table baked at
-    start-up (<code>brdf_lut.frag</code>). The baked, prefiltered cubemaps ADR-0017 Phase 3 describes are the Metal
-    path.</p>
-  <figure class="shot">
-    <img src="img/renderer/trees-sun.webp" alt="Broadleaf trees and red maples in a meadow, backlit by a low bright sun with a soft glow round it; mountains in the haze">
-    <figcaption>Leaf and grass transmission (a cheap stand-in for light through thin leaves, ADR-0129) lights the crowns'
-      sunlit rims; the sun's glow is bloom.</figcaption>
-  </figure>
+  <p>The sun's visibility is a product: the shadow cascades, the mountains' horizon map (light 0 below a ridge),
+    a far tree's self-shadow, and since ADR-0387 the clouds. <code>cloudShadow</code> follows the line to the sun up to
+    the middle of the cloud deck and reads the weather map there: a cloud's footprint takes up to 85% of the direct
+    light, softly at its edge. It is applied to the direct light only, because a cloud's shadow is still daylight.
+    <a href="clouds.html">Clouds</a> and <a href="weather.html">Weather and wind</a> follow the map back to the
+    simulated weather that makes it.</p>
+
+  <h3>The sky's light and the reflections</h3>
+  <p>Everything that is not a direct light is the environment: the sky's diffuse light, and what a surface reflects.
+    Here the two skies differ. Under the default palette sky the light is analytic: the shader evaluates the
+    procedural sky (or an HDR equirect) by normal for the diffuse fill and along the reflection for specular, then
+    applies the split-sum BRDF lookup table baked at start-up (<code>brdf_lut.frag</code>). Under the physical sky
+    (ADR-0367..0371) the diffuse fill is the whole sky's irradiance from nine spherical-harmonic coefficients, and the
+    reflection comes from a chain, each link a fallback for the next:</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag, the physical branch: the sky cube, then the street's (or the storey's) probe, then faded out where the rays answer</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L1501-L1527">shaders/vulkan/mesh.frag</a></div>
+<pre>    } else if (skyIsPhysical()) {
+<span class="c">        // THE PHYSICAL SKY's light (ADR-0371): its irradiance / pi from the nine harmonics (the whole sky, cosine</span>
+<span class="c">        // weighted: no second sun, the disc is lit directly), and the reflection from the sky cube's GGX mip for this</span>
+<span class="c">        // roughness</span>
+        irradiance = g.skySH[0].w &lt; 0.5 ? skyViewRadiance(N) : skyIrradianceSH(N);
+        prefiltered = g.skySH[1].w &lt; 0.5 ? mix(skyViewRadiance(R), irradiance, roughness)
+                                         : textureLod(skyCubeTex, R, roughness * 5.0).rgb;
+<span class="c">        // ...or the street's, where a reflection probe holds this surface (ADR-0373)</span>
+        const bool indoor = (pc.surfaceFlags.y &amp; (1u &lt;&lt; 28)) != 0u;   <span class="c">// RenderMaterial::FLAG_INDOOR (ADR-0377)</span>
+        if (indoor) {
+            <span class="c">// ...</span>
+            float daylight = dot(skyIrradianceSH(vec3(0.0, 1.0, 0.0)), vec3(0.2126, 0.7152, 0.0722));
+            irradiance = vec3(daylight * 0.30);
+<span class="c">            // ...and what it reflects is the storey's own probe, where the camera's floor has them (ADR-0380)</span>
+            prefiltered = probeReflection(inWorldPos, R, roughness, irradiance, true);
+        } else {
+            prefiltered = probeReflection(inWorldPos, R, roughness, prefiltered, false);
+        }
+<span class="c">        // ...but near the camera the rays answer (ADR-0376, rt_reflect.comp): the probe's part fades out exactly as</span>
+<span class="c">        // theirs fades in, so the blurry reflection does not ghost under the sharp one</span>
+        if (probeGridSize.w &gt; 0.0 &amp;&amp; roughness &lt;= probeGridSize.w) {
+            float camDist = distance(inWorldPos, g.cameraPosition.xyz);
+            float nearFade = 1.0 - smoothstep(probeGridSize.y - probeGridSize.z, probeGridSize.y, camDist);
+            prefiltered *= 1.0 - nearFade * (1.0 - smoothstep(0.0, probeGridSize.w, roughness));
+        }</pre>
+  </div>
+  <p>So a glass tower near you reflects the building across the street by ray tracing, a farther one by the nearest
+    street probe (parallax-corrected inside its box), and past every probe the sky cube; an indoor surface reads only
+    its storey's probe, never the street's. The rays are added after the scene pass (by <code>rt_apply.comp</code>),
+    weighted by the reflection weight the scene pass left in the G-buffer, so they replace exactly the share the
+    probe gave up. <a href="reflections.html">Reflections: probes and ray tracing</a> has the details and the
+    fallbacks.</p>
+  <p>Two more things happen to every pixel after it is lit. Under the physical sky, the <b>aerial perspective</b>
+    volume puts the air between the camera and the surface on it (colour × transmittance + in-scattered light, from
+    the same atmosphere as the sky; ADR-0370). And the result is multiplied by the camera's exposure before it is
+    stored (ADR-0366). One engine light unit is 20,000 lux, so the cycle's noon sun of 5 units is 100,000 lux, and the
+    exposure follows the camera's EV100; under the physical sky the eye sets it from the last frames' histogram.
+    <a href="sky.html">Sky, atmosphere and exposure</a>.</p>
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/renderer/trees-sun.webp" alt="Broadleaf trees and red maples in a meadow, backlit by a low bright sun with a soft glow round it; mountains in the haze">
+      <figcaption>Leaf and grass transmission (a cheap stand-in for light through thin leaves, ADR-0129) lights the
+        crowns' sunlit rims; the sun's glow is bloom. These loops still read the 32 for the sun.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/renderer/night-towers.webp" alt="Towers at night with lit windows under a starry sky; red aviation beacons glow on the roofs">
+      <figcaption>Night (an October shot, before the physical lights): window panes lit by emission, red beacon lights
+        (real point lights near the camera) blooming in the composite.</figcaption>
+    </figure>
+  </div>
 
   <h2>What it costs: RT_GPU_TIMES</h2>
   <p>Profiling the GPU needs timestamps written by the GPU itself. With <code>RT_GPU_TIMES=1</code> the backend
@@ -645,7 +1016,7 @@ float distanceAttenuation(float dist, float range) {
     time inside <code>endFrame</code>: fence wait, recording, and submit + present.</p>
 <div class="code">
     <div class="hd"><span>The GPU pass timer: nine marks, one query pool per frame in flight</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/vulkan/vulkan_renderer.cpp#L690-L700">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L786-L796">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
 <pre><span class="c">    // GPU PASS TIMES (RT_GPU_TIMES=1; Glenn: "get a breakdown"): a timestamp after each stage of the frame, one</span>
 <span class="c">    // query pool per frame slot, read when that slot's fence has passed (no stall). Logged every 120 frames.</span>
     static constexpr int kGpuMarks = 9;   <span class="c">// start, shadows, scene, clouds, bloom, ssao, ssr, occlusion+dof, composite+ui</span>
@@ -662,6 +1033,10 @@ float distanceAttenuation(float dist, float range) {
     every frame time is a multiple of the refresh interval, and ADR-0097 found both builds reading "exactly 50.0 ms" on
     the test forest. And do not measure with the screen locked: the compositor throttles presentation and the GPU
     idles (the render-profile memory note).</p>
+  <p>The nine marks did not grow with the frame; the new passes fall into the old buckets by where they run. The
+    light binning, the sky tables and the crowd are in <b>shadows</b>; the probe capture, the probe relight and the ray
+    scene build in <b>scene</b>; the histogram in <b>clouds</b>; the ray-traced reflections in <b>ssr</b>. ADR-0364
+    and ADR-0376 read their costs as the growth of those buckets.</p>
 
   <table>
     <tr><th>Where</th><th>What was measured</th><th>Source</th></tr>
@@ -675,12 +1050,24 @@ float distanceAttenuation(float dist, float range) {
       after impostors from 150 m and thinner far levels; the many-view impostors themselves about 1 ms</td><td>ADR-0195</td></tr>
     <tr><td>island_8_nature, above a forest stand</td><td>10.9 ms with the recipe trees, 10.7 with the real_tree
       forest</td><td>ADR-0197</td></tr>
+    <tr><td>river_town at 22:00, 2560×1405, the scene pass</td><td>forward: about 0.1 ms per light wherever you
+      look. Clustered with the same lights: street 5.02 → 4.62 ms, towers 8.46 → 7.35; every lamp within 800 m
+      (~1,000): street 5.40</td><td>ADR-0361</td></tr>
+    <tr><td>the same, many lights by default</td><td>street 6.00 (forward, 25 picked) → 5.77 ms with 1,326 lit;
+      towers 8.86 → 10.82 with 1,108; island_8_nature, a town: 5.38 → 5.03 with 751</td><td>ADR-0363</td></tr>
+    <tr><td>light binning</td><td>CPU 0.39–0.50 ms (towers) → GPU ~0.1 ms; 1,000 lights within 60 m: CPU
+      6.8–12.6 ms → GPU ~0.2 ms</td><td>ADR-0364</td></tr>
+    <tr><td>river_town, which probe a pixel reads</td><td>testing every probe's box: scene pass 6.8 → 14.4 ms; through
+      a 64 × 64 plan grid: 7.3 ms</td><td>ADR-0374</td></tr>
+    <tr><td>river_town bench, ray-traced reflections</td><td>the near scene +0.14 ms GPU, +0.09 ms recording; the rays
+      +0.56 ms (the ssr bucket 0.16 → 0.72); frame 11.8 ms, 11.0 after the G-buffer weight and denoise</td><td>ADR-0376</td></tr>
+    <tr><td>the cloud lab, 11:00 and 17:20</td><td>the clouds pass 0.7–2.5 ms with the weather map (was 0.9–1.8)</td><td>ADR-0386</td></tr>
   </table>
   <p>The lesson the memory note draws is the one to keep: profile before guessing. Glenn suspected the post effects;
     they were nearly free. The cost was shadows, and the CPU rebuilding static things every frame.</p>
 <div class="code">
     <div class="hd"><span>recordShadowPass: each cascade skips what lies outside its four sides (not near/far: a caster toward the sun still throws its shadow in)</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/vulkan/vulkan_renderer.cpp#L5190-L5204">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L7110-L7126">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
 <pre>            for (const DrawItem&amp; item : drawQueue) {
                 GpuMesh* m = meshes.get(item.mesh);
                 if (!m || m-&gt;indexCount == 0) continue;
@@ -692,10 +1079,12 @@ float distanceAttenuation(float dist, float range) {
                                   planes[pi][2] * item.worldCenter[2] + planes[pi][3] &lt; -item.worldRadius;
                     if (out) continue;
                 }
-<span class="c">                // Debug-gizmo overlays (FLAG_OVERLAY), ground cover (FLAG_GRASS) and the camera-turned impostor cards</span>
-<span class="c">                // (FLAG_IMPOSTOR_VIEWS: their shadow-only crossed cards cast theirs) cast no shadows.</span>
+<span class="c">                // Debug-gizmo overlays (FLAG_OVERLAY), ground cover (FLAG_GRASS), the camera-turned impostor cards</span>
+<span class="c">                // (FLAG_IMPOSTOR_VIEWS: their shadow-only crossed cards cast theirs) and SPRITES (FLAG_ALPHA_FROM_MAP: a</span>
+<span class="c">                // particle's puff, a beacon's glow -- each cast its whole quad, a hard square under every dust cloud;</span>
+<span class="c">                // Glenn, 2026-11-05: "you can see the alpha channel space around them") cast no shadows.</span>
                 if (item.push.surfaceFlags[1] &amp; (RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS |
-                                                 RenderMaterial::FLAG_IMPOSTOR_VIEWS)) continue;</pre>
+                                                 RenderMaterial::FLAG_IMPOSTOR_VIEWS | RenderMaterial::FLAG_ALPHA_FROM_MAP)) continue;</pre>
   </div>
 
   <h2>Instancing: one draw for a forest</h2>
@@ -707,7 +1096,7 @@ float distanceAttenuation(float dist, float range) {
     A plain <code>drawMesh</code> is a one-instance draw: one path, not an instanced twin of every pipeline.</p>
 <div class="code">
     <div class="hd"><span>VulkanRenderer::drawMeshInstanced: the first matrix makes the item, the rest become its instance rows</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/vulkan/vulkan_renderer.cpp#L7047-L7059">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L9888-L9902">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
 <pre>void VulkanRenderer::drawMeshInstanced(MeshHandle handle, const std::vector&lt;Mat4&gt;&amp; transforms,
                                        const RenderMaterial&amp; material) {
 <span class="c">    // (bounds: the box round every instance's sphere, then the sphere round that box)</span>
@@ -718,7 +1107,9 @@ float distanceAttenuation(float dist, float range) {
 <span class="c">    // One draw for the whole set (ADR-0097): the material and the first transform (which the</span>
 <span class="c">    // transparent sort reads) as drawMesh makes them, then every matrix into the instance rows.</span>
     drawMesh(handle, transforms.front(), material);
-    DrawItem&amp; item = impl-&gt;drawQueue.back();
+    DrawItem* queued = impl-&gt;lastQueued();
+    if (!queued) return;   <span class="c">// (a probe face with no slot left this frame: dropped)</span>
+    DrawItem&amp; item = *queued;
     for (std::size_t i = 1; i &lt; transforms.size(); ++i) impl-&gt;pushInstance(transforms[i]);
     item.instanceCount = static_cast&lt;uint32_t&gt;(transforms.size());</pre>
   </div>
@@ -733,7 +1124,7 @@ float distanceAttenuation(float dist, float range) {
     it to carry per-instance data to the shader, and the shader puts the row back before using the matrix:</p>
 <div class="code">
     <div class="hd"><span>mesh.vert: data in the bottom row (grass rank and ground slope; a traffic signal's state)</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/mesh.vert#L79-L93">shaders/vulkan/mesh.vert</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.vert#L79-L93">shaders/vulkan/mesh.vert</a></div>
 <pre>    const bool grass = (pc.surfaceFlags.y &amp; (1u &lt;&lt; 17)) != 0u;   <span class="c">// FLAG_GRASS</span>
 <span class="c">    // Grass clumps carry their random rank in the transform's bottom row (GrassSystem), and their ground's normal</span>
 <span class="c">    // (its x and z); every other mesh's is (0, 0, 0, 1).</span>
@@ -797,7 +1188,7 @@ float distanceAttenuation(float dist, float range) {
     vector onto a square so two numbers hold it.</p>
 <div class="code">
     <div class="hd"><span>The standard vertex, and the test that picks a layout per mesh</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/vulkan/vulkan_renderer.cpp#L93-L118">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/renderer/vulkan/vulkan_renderer.cpp#L100-L125">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
 <pre>struct GpuVertexPacked {
     float position[3];
     int16_t normal[2];    <span class="c">// octahedral, snorm16</span>
@@ -907,7 +1298,7 @@ VertexFit vertexFitFor(const RenderMesh&amp; mesh) {
     GPU for it; the test is built to be conservative about that age.</p>
 <div class="code">
     <div class="hd"><span>occlusion_reduce.comp: one thread a tile; reverse-Z, so the farthest depth is the smallest</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/occlusion_reduce.comp#L17-L28">shaders/vulkan/occlusion_reduce.comp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/occlusion_reduce.comp#L17-L28">shaders/vulkan/occlusion_reduce.comp</a></div>
 <pre>void main() {
     ivec2 o = ivec2(gl_GlobalInvocationID.xy);
     if (o.x &gt;= pc.outSize.x || o.y &gt;= pc.outSize.y) return;
@@ -923,7 +1314,7 @@ VertexFit vertexFitFor(const RenderMesh&amp; mesh) {
   </div>
 <div class="code">
     <div class="hd"><span>occludedBox: project the box with that frame's transform; hidden only if it is behind every tile</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/occlusion.cpp#L20-L51">src/engine/occlusion.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/occlusion.cpp#L20-L51">src/engine/occlusion.cpp</a></div>
 <pre>bool occludedBox(const OcclusionDepth&amp; o, const Vec3&amp; loIn, const Vec3&amp; hiIn, double slack) {
     const Vec3 lo = loIn - Vec3(slack, slack, slack), hi = hiIn + Vec3(slack, slack, slack);
     const Mat4&amp; m = o.viewProj;
@@ -949,7 +1340,7 @@ VertexFit vertexFitFor(const RenderMesh&amp; mesh) {
     tree behind a ridge still shades the ridge.</p>
 <div class="code">
     <div class="hd"><span>RenderSystem: a hidden entity is still drawn, but only into the shadow maps</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/render_system.cpp#L366-L378">src/engine/systems/render_system.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/render_system.cpp#L226-L238">src/engine/systems/render_system.cpp</a></div>
 <pre>            if (occ &amp;&amp; !(r.material.flags &amp; RenderMaterial::FLAG_OVERLAY)) {
                 ++occTested;
                 if (occludedBox(*occ, worldMin, worldMax, occSlack)) {
@@ -1044,7 +1435,7 @@ VertexFit vertexFitFor(const RenderMesh&amp; mesh) {
     share by time, not by distance.</p>
 <div class="code">
     <div class="hd"><span>mesh.frag: the band test, complementary for the tier going out and the one coming in</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/mesh.frag#L1013-L1028">shaders/vulkan/mesh.frag</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/shaders/vulkan/mesh.frag#L944-L959">shaders/vulkan/mesh.frag</a></div>
 <pre><span class="c">    // FLAG_LOD_BAND (bit 19, ADR-0129): drawn only inside a distance band, dithered at its edges, so a</span>
 <span class="c">    // near model and its far impostor crossfade per pixel (features[3] = in0, in1, out0, out1)</span>
     if ((pc.surfaceFlags.y &amp; (1u &lt;&lt; 19)) != 0u) {
@@ -1075,7 +1466,7 @@ VertexFit vertexFitFor(const RenderMesh&amp; mesh) {
     as a band so wide (100 km) that the same share holds at every pixel of the cell. No shader change.</p>
 <div class="code">
     <div class="hd"><span>tierFadeBand: turn a share of pixels into the existing LOD band</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/render_system.cpp#L68-L79">src/engine/systems/render_system.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/render_system.cpp#L57-L68">src/engine/systems/render_system.cpp</a></div>
 <pre>void tierFadeBand(RenderMaterial&amp; m, double dist, float share, bool coming) {
 <span class="c">    // the dither's share as a band so wide (kBand) that it reads the same at every pixel of a cell: smoothstep(e0,</span>
 <span class="c">    // e0 + kBand, d) = s at d = dist when e0 = dist - t kBand, t = smoothstep^-1(s). Coming in keeps the pixels the</span>
@@ -1105,7 +1496,7 @@ VertexFit vertexFitFor(const RenderMesh&amp; mesh) {
     driver, riders and lamps take the body's id plus a part number, so they move as one.</p>
 <div class="code">
     <div class="hd"><span>RenderSystem::drawGroup: each named instance between its last pose and this one</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/render_system.cpp#L454-L486">src/engine/systems/render_system.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/systems/render_system.cpp#L315-L347">src/engine/systems/render_system.cpp</a></div>
 <pre>            const std::vector&lt;Mat4&gt;* drawn = &amp;g.transforms;
             static const bool noLerp = std::getenv("RT_NO_INSTANCE_LERP") != nullptr;   <span class="c">// the A/B: as baked</span>
             if (!noLerp &amp;&amp; !g.ids.empty() &amp;&amp; g.ids.size() == g.transforms.size() &amp;&amp; !g.prevTransforms.empty() &amp;&amp;
@@ -1143,7 +1534,7 @@ VertexFit vertexFitFor(const RenderMesh&amp; mesh) {
     with <code>FLAG_OVERLAY</code>. It worked on every backend the day it landed, with zero backend code.</p>
 <div class="code">
     <div class="hd"><span>DebugDraw: an immediate-mode line list, baked to ribbons</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/debug_draw.h#L24-L80">src/engine/debug_draw.h</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/src/engine/debug_draw.h#L24-L80">src/engine/debug_draw.h</a></div>
 <pre>class DebugDraw {
 public:
     struct Line {
@@ -1188,45 +1579,93 @@ RenderMesh buildDebugLineMesh(const std::vector&lt;DebugDraw::Line&gt;&amp; line
     2026-10-05) showed shadows at 9.7 ms of a 14.1 ms GPU frame because every cascade drew everything; the per-cascade
     cull fixed it. Then the forests (ADR-0193, 0195), the city tier crossfade (ADR-0226, during the island streaming work
     of 2026-10-23) and moving instances (ADR-0240).</p></div>
-  <p>What is still open, from the notes and ADRs: the draw list is rebuilt every frame (the render-profile note names
-    retained static instance buffers and GPU-driven culling with indirect draws as the next lever); Metal and WebGPU
-    lack the Vulkan-only features above; camera-relative rendering (ADR-0095) is planned but not built, which is why
-    positions stay 32-bit floats in the vertex.</p>
+  <div class="note history"><p><b>November: the renderer realism plan.</b> On 2026-11-06 a plan
+    (<code>~/.claude/plans/renderer-realism.md</code>) surveyed the Vulkan renderer and set an order: many lights, a
+    physical sky, reflections, then materials, anti-aliasing, shadows, volumetrics and GI. Most of the first three
+    landed on 2026-11-07 and 08, each measured before it was built.</p>
+    <p><b>Lights.</b> Glenn asked about deferred rendering for "many, many light sources". ADR-0361 measured first:
+    each light cost the forward scene pass about 0.1 ms, the same in a park full of overdraw as on a plain street,
+    because the depth test already lit each pixel about once. Deferred's win was one the frame mostly had; what cost
+    was how many lights each pixel looped. So: clustered forward, prototyped behind <code>RT_CLUSTERED=1</code>, with
+    deferred kept for decals or a cheap G-buffer later. Then, after Glenn's "are we patching things because it's a
+    quick win?", one light system with lights as data (ADR-0362), clustered by default (0363), binned on the GPU
+    (0364), room lights from the fittings (0365).</p>
+    <p><b>The sky and the eye.</b> One engine unit of light became 20,000 lux and the scene pre-exposed (ADR-0366);
+    the Hillaire atmosphere on the CPU with tests, then on the GPU behind <code>RT_SKY=physical</code> (0367); auto
+    exposure from a histogram (0368); lamps at their real candela and glows in real luminance (0369); the aerial
+    perspective volume, after Glenn asked why the hazy mountains glowed (0370); the sky as a cube and nine harmonics
+    (0371).</p>
+    <p><b>Reflections.</b> Probes captured, relit and used (ADR-0372..0374), the probe lookup cut from 7.6 ms to
+    0.5 ms by a plan grid. Ray tracing measured before it was built (0375: everything would not fit on the island,
+    what is within 150 m would), the renderer moved to Vulkan 1.2, and ray-traced reflections near the camera with
+    clean fallbacks to the probes and the sky cube (0376), then interiors (0377, 0380), cars in the ray scene (0381),
+    night windows and a room's bounce (0378, 0382, 0383), glows in the rays' units (0385).</p>
+    <p><b>Clouds and weather.</b> The clouds, rebuilt over #187 (from ADR-0328 on 2026-11-05), were placed by a weather
+    map, typed as data and given a shadow on the ground (0386–0388), organised round eddies (0389), and finally
+    placed by a weather simulated over the land and the sea (0390).</p>
+    <p>All of it is Vulkan only. Issue #203 tracks Metal parity; the parity ledger has the clustered-lights row
+    (<code>c1529809</code>) but still lists the probes and the physical sky as Metal-only rows from before this
+    work.</p></div>
+  <p>What is still open, from the notes and ADRs: the physical sky is not yet the default (ADR-0369: the lit windows'
+    calibration and the stars first), and with it the probes, the rays and the auto exposure stay opt-in; the probe
+    relight and the ray hits light from the globals' 32 lights, not the froxel lists, so a storey's probe sees its
+    fittings as glowing panels rather than light on its walls (ADR-0380, owed); no shadows from lamps (a shadow atlas
+    is the light plan's phase 5); the draw list is rebuilt every frame (the render-profile note names retained static
+    instance buffers and GPU-driven culling with indirect draws as the next lever); Metal and WebGPU lack everything
+    Vulkan-only above; camera-relative rendering (ADR-0095) is planned but not built, which is why positions stay
+    32-bit floats in the vertex.</p>
 
   <h2>Where to look</h2>
   <ul class="files">
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/renderer.h">src/renderer/renderer.h</a> — the seam: <code>Renderer</code>, <code>RenderMaterial</code> and its flags, <code>RenderMesh</code>, <code>OcclusionDepth</code></li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/vulkan/vulkan_renderer.cpp">src/renderer/vulkan/vulkan_renderer.cpp</a> — the Vulkan backend; <code>recordCommandBuffer</code> is the pass graph, <code>drawFrame</code> the CPU side</li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/tree/main/shaders/vulkan">shaders/vulkan/</a> — <code>mesh.vert</code>/<code>mesh.frag</code> (all lit surfaces), <code>terrain.vert</code>, <code>sky.frag</code>, <code>clouds*.frag</code>, <code>ssao*.frag</code>, <code>ssr.frag</code>, <code>bloom.frag</code>, <code>dof.frag</code>, <code>composite.frag</code>, <code>ui.*</code>, <code>occlusion_reduce.comp</code>, <code>crowd.comp</code></li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/render_system.cpp">src/engine/systems/render_system.cpp</a> — culling, lamps, LOD distances, tier fades, instance interpolation</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/renderer.h">src/renderer/renderer.h</a> — the seam: <code>Renderer</code>, <code>RenderMaterial</code> and its flags, <code>RenderMesh</code>, <code>OcclusionDepth</code>, <code>ReflectionProbe</code>, <code>RayInstance</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/vulkan/vulkan_renderer.cpp">src/renderer/vulkan/vulkan_renderer.cpp</a> — the Vulkan backend; <code>recordCommandBuffer</code> is the pass graph, <code>drawFrame</code> the CPU side, <code>setLights</code> the light packing; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/vulkan/rt_scene.cpp">rt_scene.h/.cpp</a> the near ray-tracing scene, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/vulkan/rt_measure.h">rt_measure.h</a> the measurement</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/tree/main/shaders/vulkan">shaders/vulkan/</a> — <code>mesh.vert</code>/<code>mesh.frag</code> (all lit surfaces), <code>globals.glsl</code> (set 0), <code>lighting_common.glsl</code> (the BRDF and <code>shadeLight</code>), <code>gbuffer.glsl</code>, <code>sky.frag</code>, <code>sky_physical.glsl</code>, <code>sky_view.comp</code>, <code>aerial_volume.comp</code>, <code>sky_cube.comp</code>, <code>sky_prefilter.comp</code>, <code>cluster_bin.comp</code>, <code>probe_relight.comp</code>, <code>probe_prefilter.comp</code>, <code>rt_reflect.comp</code>, <code>rt_denoise.comp</code>, <code>rt_apply.comp</code>, <code>lum_histogram.comp</code>, <code>clouds*.frag</code>, <code>ssao*.frag</code>, <code>ssr.frag</code>, <code>bloom.frag</code>, <code>dof.frag</code>, <code>composite.frag</code>, <code>ui.*</code>, <code>occlusion_reduce.comp</code>, <code>crowd.comp</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/light_clusters.h">src/renderer/light_clusters.h</a> (the CPU binning and the reference the GPU's is checked against), <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/probe_grid.h">src/renderer/probe_grid.h</a> (which probe a pixel reads)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/render_system.cpp">src/engine/systems/render_system.cpp</a> — culling, LOD distances, tier fades, instance interpolation, probe faces, the ray pick</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/light_system.cpp">src/engine/systems/light_system.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/lights/light_picker.h">src/engine/lights/light_picker.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/lights.lua">assets/scripts/lights.lua</a> — the lights (see <a href="lighting.html">Lights</a>)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/day_night_system.cpp">src/engine/systems/day_night_system.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sky/sky_atmosphere.h">src/engine/sky/sky_atmosphere.h</a> — the sun, the physical sky, the eye (see <a href="sky.html">Sky</a>)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/probe_system.cpp">src/engine/systems/probe_system.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/lights/probe_sites.h">src/engine/lights/probe_sites.h</a> — where the probes go (see <a href="reflections.html">Reflections</a>)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sky/cloud_map.h">src/engine/sky/cloud_map.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sky/weather_sim.h">src/engine/sky/weather_sim.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/clouds.lua">assets/scripts/clouds.lua</a> — the weather map and the weather (see <a href="clouds.html">Clouds</a>, <a href="weather.html">Weather</a>)</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/occlusion.cpp">src/engine/occlusion.h/.cpp</a> — the occlusion test</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/cascade_fit.h">src/renderer/cascade_fit.h</a> — the shadow cascade fit (test: <code>tests/test_cascade_fit.cpp</code>)</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/debug_draw.h">src/engine/debug_draw.h</a> — debug lines (test: <code>tests/test_debug_draw.cpp</code>)</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/path_tracer.cpp">src/path_tracer.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/camera.cpp">src/camera.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/triangle_bvh.cpp">src/triangle_bvh.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/instance.cpp">src/instance.cpp</a> — the offline tracer (test: <code>tests/test_instance_tlas.cpp</code>)</li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_instancing.cpp">tests/test_instancing.cpp</a> — includes the tier crossfade pixel-split test; <code>tests/test_scatter.cpp</code> has <code>impostor_views_frame_the_tree_from_every_side</code></li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/renderer-parity.md">docs/renderer-parity.md</a> — which backend has what; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/rendering.md">docs/rendering.md</a> (July; older) and <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/world-streaming-plan.md">docs/world-streaming-plan.md</a></li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a> — ADR-0001, 0017, 0037, 0041, 0057, 0058, 0067, 0088, 0094–0097, 0100, 0129, 0193, 0195, 0224, 0226, 0240</li>
+    <li>Tests: <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_instancing.cpp">tests/test_instancing.cpp</a> (includes the tier crossfade pixel-split test), <code>tests/test_scatter.cpp</code> (<code>impostor_views_frame_the_tree_from_every_side</code>), <code>test_light_clusters.cpp</code>, <code>test_lights.cpp</code>, <code>test_sky_atmosphere.cpp</code>, <code>test_cloud_map.cpp</code>, <code>test_weather_sim.cpp</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/renderer-parity.md">docs/renderer-parity.md</a> — which backend has what (Vulkan | Metal | WebGPU, and the backlog); <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/rendering.md">docs/rendering.md</a> (July; older) and <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/world-streaming-plan.md">docs/world-streaming-plan.md</a></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a> — ADR-0001, 0017, 0037, 0041, 0057, 0058, 0067, 0088, 0094–0097, 0100, 0129, 0193, 0195, 0224, 0226, 0240, 0294, 0328, 0361–0390</li>
   </ul>
   <h3>Test beds and switches</h3>
   <table>
     <tr><th>Switch or tool</th><th>What it does</th></tr>
+    <tr><td><code>RT_SKY=physical</code></td><td>the physical sky, auto exposure, the aerial perspective, the sky cube, and with them the probes' and the rays' reflections (off by default)</td></tr>
+    <tr><td><code>RT_CLUSTERED=0</code></td><td>the forward 32-light path instead of clustered lights (the A/B); <code>RT_GPU_CLUSTERS=0</code> bins on the CPU; <code>RT_CLUSTER_CHECK=1</code> compares the GPU's lists with the CPU's every 120 frames</td></tr>
+    <tr><td><code>RT_LIGHT_FILL=N</code>, <code>RT_LIGHT_CAP=N</code></td><td>pad or cut the light list, to time the cost per light</td></tr>
+    <tr><td><code>RT_PREEXPOSE=0</code>, <code>RT_EXPOSURE=meter</code>, <code>RT_AERIAL=x</code>, <code>RT_SKYCUBE=0/1/2</code></td><td>the A/Bs for pre-exposure, the auto exposure, the air's strength, and the sky cube and harmonics</td></tr>
+    <tr><td><code>RT_PROBES=0</code>, <code>RT_PROBE_DUMP=file.ppm</code></td><td>no reflection probes; dump a probe's captured faces</td></tr>
+    <tr><td><code>RT_RT_REFLECT=0</code>, <code>RT_VK_1_0=1</code>, <code>RT_RT_MEASURE=frame</code></td><td>no ray tracing (the device features off too); Vulkan 1.0; measure what the acceleration structures would cost</td></tr>
+    <tr><td><code>RT_CLOUD_SHADOW=0</code>, <code>RT_CLOUD_WISPS=0</code></td><td>no cloud shadows; the old solid clouds without wisps or cirrus</td></tr>
+    <tr><td><code>RT_GLASS_REFLECT=x</code>, <code>RT_GLASS=old/none</code></td><td>the glass's reflection strength (default 2, ADR-0383); the old glass, or none at all</td></tr>
     <tr><td><code>RT_GPU_TIMES=1</code></td><td>the <code>[gpu]</code> pass-time line every 120 frames</td></tr>
     <tr><td><code>RT_VSYNC=0</code></td><td>present without vsync (MAILBOX, else IMMEDIATE), for any timing</td></tr>
-    <tr><td><code>RT_DUMP_STATS=1</code></td><td>draws, instances, triangles, shadow casters; the <code>[encode]</code> walk; fading draws</td></tr>
+    <tr><td><code>RT_DUMP_STATS=1</code></td><td>draws, instances, triangles, shadow casters; the <code>[encode]</code> walk; fading draws; the ray scene and a probe face's CPU cost</td></tr>
     <tr><td><code>RT_DUMP_DRAWS=1</code></td><td>one-shot audit of every renderable's bounds and cull verdict</td></tr>
-    <tr><td><code>RT_NO_SHADOW_CULL</code>, <code>RT_NO_INSTANCING=1</code>, <code>RT_NO_OCCLUSION=1</code>, <code>RT_NO_DRAW_INDEX</code>, <code>RT_NO_TIER_FADE</code>, <code>RT_NO_INSTANCE_LERP</code>, <code>RT_VERTEX_FULL=1</code>, <code>RT_IMPOSTOR_VIEWS=0</code></td><td>the A/B switches for each change on this page</td></tr>
+    <tr><td><code>RT_NO_SHADOW_CULL</code>, <code>RT_NO_INSTANCING=1</code>, <code>RT_NO_OCCLUSION=1</code>, <code>RT_NO_DRAW_INDEX</code>, <code>RT_NO_TIER_FADE</code>, <code>RT_NO_INSTANCE_LERP</code>, <code>RT_VERTEX_FULL=1</code>, <code>RT_IMPOSTOR_VIEWS=0</code></td><td>the A/B switches for the older changes on this page</td></tr>
     <tr><td><code>RT_OCC_STATS=1</code></td><td>what occlusion culled, every 120 frames</td></tr>
     <tr><td><code>RT_NO_ROADS</code> / <code>_BUILDINGS</code> / <code>_SIM</code> / <code>_FOLIAGE</code></td><td>hide a class of geometry and read the difference off the stats</td></tr>
     <tr><td><code>mem?</code> (control channel)</td><td>GPU heaps, mesh bytes per vertex layout, upload totals</td></tr>
+    <tr><td><code>view 9</code>, <code>view 10</code></td><td>debug views: roughness; the environment reflection alone (ADR-0376)</td></tr>
     <tr><td><code>tools/walk_probe.py</code>, <code>tools/fly_probe.py</code></td><td>walk or fly the camera along a path and list the frames that hitch</td></tr>
+    <tr><td><code>assets/levels/river_town.json</code>, <code>cloud_lab.json</code></td><td>the bench the November ADRs measure on (towers and a street at 22:00 and noon), and the cloud lab</td></tr>
     <tr><td><code>assets/levels/instancing_forest.json</code>, <code>forest.json</code></td><td>many light instances (draw-call bound) vs a few heavy trees (GPU bound)</td></tr>
   </table>
 
-  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0001, 0017, 0037, 0041, 0057,
-    0058, 0067, 0088, 0094, 0095, 0096, 0097, 0100, 0129, 0193, 0195, 0197, 0224, 0226, 0240; commits
-    <code>d165c80b</code>, <code>3ba3ba60</code>, <code>fcbdb2bf</code>, <code>979a1f16</code>, <code>b4d985ea</code>,
-    <code>7eeb25ea</code>, <code>04d4d5fb</code>, <code>a5e18463</code>; the memory notes on render profiling, GPU
-    memory and occlusion.</footer>
+  <footer>Code excerpts from commit <code>e55dfaaa</code> (main's merge, 2026-11-09; first edition 47d587f3,
+    2026-10-26). Drawn from ADR-0001, 0017, 0037, 0041, 0057, 0058, 0067, 0088, 0094, 0095, 0096, 0097, 0100, 0129,
+    0193, 0195, 0197, 0224, 0226, 0240, 0294, 0328, 0361–0390; issue #203; commits <code>d165c80b</code>,
+    <code>3ba3ba60</code>, <code>fcbdb2bf</code>, <code>979a1f16</code>, <code>b4d985ea</code>, <code>7eeb25ea</code>,
+    <code>04d4d5fb</code>, <code>a5e18463</code>, <code>3b898f89</code>, <code>723b3d77</code>, <code>c1529809</code>,
+    <code>2d006311</code>, <code>ae6280d0</code>, <code>1cf32067</code>, <code>28155245</code>; the renderer-realism plan;
+    the memory notes on render profiling, GPU memory and occlusion.</footer>
 </div>
 </body>
 </html>
