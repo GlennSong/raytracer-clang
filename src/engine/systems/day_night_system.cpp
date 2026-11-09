@@ -4,6 +4,7 @@
 #include "../procgen/terrain.h"          // terrainHeight: the horizon raster
 #include "../vehicle_lamps.h"   // duskRamp: night glow shares the lamp boundary
 #include "../lights/light_kinds.h"   // lightBook: the glows' emission scale (ADR-0369)
+#include "../sky/cloud_book.h"   // cloudBook: the deck's span comes from its types (the clouds panel)
 
 #include "../../log.h"
 
@@ -1178,9 +1179,14 @@ void DayNightSystem::render(FrameContext& ctx) {
                 // (the level's own scale: the weather's `scale` multiplies it)
                 ImGui::SliderFloat("Noise scale##v", &cloudBase_.noiseScale,
                                    0.0002f, 0.005f, "%.4f");
-                ImGui::DragFloatRange2("Slab bottom / top##v", &vc.bottom,
-                                       &vc.top, 10.0f, 100.0f, 6000.0f,
-                                       "%.0f m", "%.0f m");
+                // (with clouds.lua the deck's span is the types' own, base to top, set each frame by CloudMapSystem:
+                // a slider here was overwritten before it was read)
+                if (cloudBook().loaded)
+                    ImGui::TextDisabled("Deck %.0f .. %.0f m (the cloud types in clouds.lua)", vc.bottom, vc.top);
+                else
+                    ImGui::DragFloatRange2("Slab bottom / top##v", &vc.bottom,
+                                           &vc.top, 10.0f, 100.0f, 6000.0f,
+                                           "%.0f m", "%.0f m");
                 ImGui::SliderInt("Light steps##v", &vc.lightSteps, 1, 16);
                 // The step-count override lives on the renderer, not the params,
                 // so it belongs in the same panel rather than beside it.

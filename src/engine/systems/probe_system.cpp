@@ -94,7 +94,8 @@ void ProbeSystem::render(FrameContext& ctx) {
     ProbeBoard& board = ctx.view.probes;
     board.captures.clear();
     static const bool off = probesOff();
-    if (off || !ctx.renderer.supportsProbeCapture()) return;
+    // (only the physical sky's branch of the scene pass reads a probe: without it, none is captured or relit)
+    if (off || !ctx.renderer.supportsProbeCapture() || !ctx.view.lighting.physicalSky.enabled) return;
     placeSites(ctx);
     placeStorey(ctx);
     const Vec3 eye = ctx.view.camera.position;

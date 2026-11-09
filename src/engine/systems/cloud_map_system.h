@@ -11,7 +11,8 @@ namespace engine {
 
 // THE CLOUDS' PLACES AND DRIFT (ADR-0386). After DayNightSystem has set the weather's cloud knobs on the view
 // (coverage, the type range), each frame:
-// - the drift: the clouds carried along the weather's wind (VolumetricCloudParams::driftX/Z; RT_WIND_TIME pins it,
+// - the drift: the clouds carried along the weather's wind (VolumetricCloudParams::driftX/Z, the world-to-air
+//   offset: minus the distance gone, so it points upwind; RT_WIND_TIME pins it,
 //   as the renderer's sway: the cloud lab's honest A/B) -- the renderer used to integrate it, out of the engine's
 //   reach, and the map has to be laid out in the same air;
 // - the types from clouds.lua onto the params, and the deck's span from the types the weather spreads over;

@@ -96,7 +96,8 @@ void LightSystem::render(FrameContext& ctx) {
     const float dusk = static_cast<float>(duskRamp(ctx.view.lighting.solarElevation));
 
     // the rooms and the cabs first: the lights reach the renderer in this order, and the first 31 are the ones its
-    // fixed loops still read (the viewer's window mirroring the room: mesh.frag roomRadiance)
+    // fixed loops still read -- grass and leaf transmission, the water's glint, and a probe texel or a ray's hit the
+    // camera does not see (evaluateLighting's fallback); a point it sees, and the viewer's room, take their froxel's
     cands_.clear();
     for (LightChannel ch : {LightChannel::Rooms, LightChannel::Cabs}) {
         const std::vector<LightCandidate>& list = board.channel(ch);

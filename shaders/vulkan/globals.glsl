@@ -51,7 +51,7 @@ layout(set = 0, binding = 0) uniform Globals {
                               // z 1: no surface relief (RT_TERRAIN_DETAIL=0, ADR-0207)
     vec4  terrainSurface;     // the cover + macro maps (bindings 6, 7, ADR-0208): xy world origin, z 1/extent, w enabled
     vec4  terrainSurface2;    // x the camera distance the cover map blends in from, y 1/(the blend's length)
-    ivec4 clusterGrid;        // CLUSTERED LIGHTS (RT_CLUSTERED=1): x tilesX, y tilesY, z slices, w 1: on (bindings 8-10)
+    ivec4 clusterGrid;        // CLUSTERED LIGHTS (default; RT_CLUSTERED=0 off): x tilesX, y tilesY, z slices, w 1: on (bindings 8-10)
     vec4  clusterDepth;       // x the slices' near depth, y 1/log(far/near), z framebuffer width, w height
     vec4  skyPhysical;        // THE PHYSICAL SKY (ADR-0367; envMode 2): x ground radius, y camera height, z the active
     vec4  skyPhysical2;       //   light's top illuminance, w cos(sun radius); x disc visibility, y the other light's,
@@ -63,6 +63,8 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  cloudShadow;        // THE CLOUDS' SHADOW (ADR-0387; the weather map, binding 18): xy its corner in the air, z
     vec4  cloudShadow2;       //   1/extent, w how much of the sun a cloud's heart takes (0: off); x, y the drift, z the
                               //   height the sun's line is read at (the deck's middle)
+    vec4  cloudTypeBase;      // each cloud type's base and middle (m; middle <= base: not in this weather): the
+    vec4  cloudTypeMid;       //   sun's line crosses each type at its own height (cloudShadow)
 } g;
 #include "sky_physical.glsl"
 // the clustered lights (light_clusters.h): every point and spot, each froxel's offset (low 24 bits) | count (high 8),
@@ -71,14 +73,38 @@ layout(std430, set = 0, binding = 8) readonly buffer ClusterLightBuf { Light clu
 layout(std430, set = 0, binding = 9) readonly buffer ClusterCellBuf { uint clusterCells[]; };
 layout(std430, set = 0, binding = 10) readonly buffer ClusterIndexBuf { uint clusterIndices[]; };
 
+// The froxel a world point falls in (ADR-0361), found by projecting it with the frame's camera -- so any pass can ask,
+// not only the scene pass's pixel: a probe's texel being relit (ADR-0373) or a reflection ray's hit (ADR-0376) that the
+// camera also sees. Its list starts at `off` in clusterIndices and holds `n` lights. False when the lights are not
+// clustered or the point is off the camera's view (behind it or past the frustum's sides): the caller then shades with
+// the frame's 32, the sun first. (The scene pass gets its own pixel's tile: the projection is the one that drew it.)
+bool clusterCellAt(vec3 worldPos, out uint off, out uint n) {
+    off = 0u;
+    n = 0u;
+    if (g.clusterGrid.w == 0) return false;
+    vec4 clip = g.viewProjection * vec4(worldPos, 1.0);
+    if (clip.w <= 1e-4) return false;
+    vec2 uv = clip.xy / clip.w * 0.5 + 0.5;   // (Vulkan's y down: uv.y is gl_FragCoord.y / height)
+    if (any(lessThan(uv, vec2(-0.001))) || any(greaterThan(uv, vec2(1.001)))) return false;
+    float depth = -(g.view * vec4(worldPos, 1.0)).z;
+    int tx = clamp(int(uv.x * float(g.clusterGrid.x)), 0, g.clusterGrid.x - 1);
+    int ty = clamp(g.clusterGrid.y - 1 - int(uv.y * float(g.clusterGrid.y)), 0, g.clusterGrid.y - 1);
+    int sl = depth <= g.clusterDepth.x ? 0
+           : clamp(int(log(depth / g.clusterDepth.x) * g.clusterDepth.y * float(g.clusterGrid.z)), 0, g.clusterGrid.z - 1);
+    uint oc = clusterCells[(sl * g.clusterGrid.y + ty) * g.clusterGrid.x + tx];
+    off = oc & 0xFFFFFFu;
+    n = oc >> 24;
+    return true;
+}
+
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
 layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
 layout(set = 0, binding = 3) uniform sampler2D brdfLut;       // split-sum BRDF LUT
 layout(set = 0, binding = 4) uniform sampler2D terrainHorizonMap;   // mountain shadows
 layout(set = 0, binding = 5) uniform sampler2D terrainNormalMap;    // the ground's slope per texel (ADR-0205)
 layout(set = 0, binding = 6) uniform sampler2D terrainCoverMap;     // its cover weights per texel (ADR-0208)
-layout(set = 0, binding = 7) uniform sampler2D terrainMacroMap;
-layout(set = 0, binding = 18) uniform sampler2D cloudShadowMap;     // the clouds' weather map (ADR-0386, -0387)     // its convexity, wetness, rock tone, hardness (ADR-0208, -0209)
+layout(set = 0, binding = 7) uniform sampler2D terrainMacroMap;     // its convexity, wetness, rock tone, hardness (ADR-0208, -0209)
+layout(set = 0, binding = 18) uniform sampler2D cloudShadowMap;     // the clouds' weather map (ADR-0386, -0387)
 
 // THE REFLECTION PROBES (ADR-0373): their count (x), then each one's position (w 1: relit), box min, box max; and their
 // relit cubes, a cube array with GGX mips (roughness 0 .. 1 over 5)

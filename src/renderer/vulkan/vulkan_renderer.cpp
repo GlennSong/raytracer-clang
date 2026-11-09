@@ -194,7 +194,7 @@ struct GlobalsUBO {
     // camera distance the cover map blends in from, y 1/(the blend's length)
     float    terrainSurface[4];
     float    terrainSurface2[4];
-    // CLUSTERED LIGHTS (RT_CLUSTERED=1; renderer-realism phase 1): x tilesX, y tilesY, z slices, w 1: on (bindings 8-10);
+    // CLUSTERED LIGHTS (on by default, RT_CLUSTERED=0 off; renderer-realism phase 1): x tilesX, y tilesY, z slices, w 1: on (bindings 8-10);
     // and x the slices' near depth, y 1/log(far/near), z the framebuffer's width, w its height
     int32_t  clusterGrid[4];
     float    clusterDepth[4];
@@ -214,6 +214,10 @@ struct GlobalsUBO {
     float    skySH[9][4];
     float    cloudShadow[4];     // THE CLOUDS' SHADOW (ADR-0387, binding 18): xy the map's corner in the air, z 1/extent, w strength
     float    cloudShadow2[4];    // xy the drift, z the height the sun's line is read at
+    // ...and where each of the four cloud types stands, base and middle (m; middle <= base: not in this weather), for
+    // the line to cross each type at its own height (lighting_common.glsl cloudShadow)
+    float    cloudTypeBase[4];
+    float    cloudTypeMid[4];
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -4236,8 +4240,10 @@ void VulkanRenderer::Impl::recordClusterBin(VkCommandBuffer cmd) {
     toRead.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+    // (read by the scene pass, and by the probes' relight and the reflection rays, compute both: evaluateLighting)
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &toRead, 0, nullptr, 0, nullptr);
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 1, &toRead, 0, nullptr, 0, nullptr);
     if (checkThisFrame && checkBuf[0][currentFrame]) {
         for (int k = 0; k < 2; ++k) {
             VkBufferCopy cp{0, 0, k == 0 ? static_cast<VkDeviceSize>(clusterGrid.cells()) * sizeof(uint32_t)
@@ -5100,7 +5106,8 @@ void VulkanRenderer::Impl::recordProbeRelight(VkCommandBuffer cmd) {
                              0, 0, nullptr, 0, nullptr, 1, &b);
         probeRadGeneral = true;
     }
-    if (probes.empty() || !probeGbufGeneral || !ensureRelightPipelines()) return;
+    // (only the physical sky's scene pass reads a probe: ProbeSystem captures none without it, and none is relit)
+    if (!skyPhysicalOn || probes.empty() || !probeGbufGeneral || !ensureRelightPipelines()) return;
     const uint32_t n = static_cast<uint32_t>(std::min<std::size_t>(probes.size(), kMaxProbes));
     std::vector<uint32_t> pick;
     for (uint32_t k = 0; k < n && pick.size() < 4; ++k) {
@@ -5539,7 +5546,8 @@ bool VulkanRenderer::Impl::ensureLumPipeline() {
 // The histogram of this frame's scene (after the clouds, before the post), copied out for this slot's next turn
 void VulkanRenderer::Impl::recordLumHistogram(VkCommandBuffer cmd) {
     lumPre[currentFrame] = 0.0f;
-    if (!hdrView || !ensureLumPipeline()) return;
+    // (only the physical sky's exposure reads it: DayNightSystem::applyPhysicalSky)
+    if (!skyPhysicalOn || !hdrView || !ensureLumPipeline()) return;
     if (lumBoundHdr != hdrView) {   // (the swapchain's HDR target is new: point the set at it)
         VkDescriptorImageInfo img{brdfLutSampler, hdrView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet w{};
@@ -7978,6 +7986,12 @@ void VulkanRenderer::Impl::drawFrame() {
         cpuGlobals.cloudShadow2[1] = static_cast<float>(cp.driftZ);
         cpuGlobals.cloudShadow2[2] = 0.5f * (cp.bottom + cp.top);
         cpuGlobals.cloudShadow2[3] = 0.0f;
+        // (every type the book gives a span: the simulation's cells reach a little past the weather's range)
+        for (std::size_t k = 0; k < 4; ++k) {
+            const VolumetricCloudParams::CloudType& t = cp.types[k];
+            cpuGlobals.cloudTypeBase[k] = t.base;
+            cpuGlobals.cloudTypeMid[k] = t.top > t.base ? 0.5f * (t.base + t.top) : t.base - 1.0f;
+        }
         if (cloudShadowStale[currentFrame]) writeGlobalCloudShadow(currentFrame);
     }
     // Upload this frame's globals into its persistently mapped UBO.
@@ -9041,7 +9055,8 @@ void VulkanRenderer::setRayInstances(const std::vector<RayInstance>& nearestFirs
 }
 
 void VulkanRenderer::Impl::recordRayScene(VkCommandBuffer cmd) {
-    if (!rayQuery || !rt.ready()) return;
+    // (the rays reflect only under the physical sky -- raysThisFrame -- so without it the structures are not built)
+    if (!rayQuery || !rt.ready() || cpuGlobals.counts[2] != 2) return;
     // (a mesh removed since the engine handed the list over has left it: removeMesh)
     rt.record(cmd, currentFrame, frameCounter, rtInstances);
     static const bool log = std::getenv("RT_DUMP_STATS") != nullptr;
@@ -9693,9 +9708,10 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         setColor(l.colorOuter, s.color, std::cos(s.outerConeAngle));
         l.typeRange[0] = 2.0f; l.typeRange[1] = s.range; l.typeRange[2] = 0.0f; l.typeRange[3] = 0.0f;
     }
-    // CLUSTERED (RT_CLUSTERED=1): every point and spot, past the 32, into the light buffer; the froxels pick for each
-    // pixel (endFrame bins them). The UBO's 32 stay as they were (the sun first) for the loops that read them still
-    // (grass and leaf transmission, the water's glint, the viewer's room).
+    // CLUSTERED (the default; RT_CLUSTERED=0 the forward A/B): every point and spot, past the 32, into the light buffer;
+    // the froxels pick for each point the camera sees (cluster_bin.comp bins them). The UBO's 32 stay as they were (the
+    // sun first) for the loops that read them still (grass and leaf transmission, the water's glint) and for a point
+    // the camera does not see (evaluateLighting's fallback: a probe texel or a ray's hit behind it).
     impl->clustered = clusteredLights();
     impl->clusterLights.clear();
     if (impl->clustered) {

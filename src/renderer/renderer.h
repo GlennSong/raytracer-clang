@@ -614,8 +614,9 @@ struct VolumetricCloudParams {
         {{0.00f, 0.05f, 0.85f, 1.00f}, 1.60f, 0.60f, 1.0f},   // cumulonimbus: the full deck, an anvil
     }};
     float typeLo = 0.47f, typeHi = 0.75f;   // Fair's: mostly cumulus, a little stratocumulus
-    // THE CLOUDS' DRIFT so far along the weather's wind (x, z m; ADR-0337), integrated by CloudMapSystem: the march
-    // samples the air at the world plus this, and the weather map is laid out in that air (ADR-0386)
+    // THE CLOUDS' DRIFT (x, z m; ADR-0337), integrated by CloudMapSystem: the march samples the air at the world plus
+    // this, and the weather map is laid out in that air (ADR-0386) -- so it runs AGAINST the wind, minus the distance
+    // the air has gone, for the clouds to go with it
     double driftX = 0.0, driftZ = 0.0;
     // the shape noise's frequency against noiseScale (clouds.lua shape_scale with the map: the noise shapes a cell's
     // inside, not the sky); 1 without

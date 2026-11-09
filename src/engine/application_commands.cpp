@@ -182,7 +182,7 @@ void Application::registerCameraVerbs() {
         if (what == "ui") { rendererPtr->uiHidden = !on; return "ok ui"; }
         if (what == "debug") { setDebugOverlay(on); return "ok debug"; }
         // Street-lamp POINT LIGHTS, live (the emissive heads stay lit): a
-        // LampLightsRequest for RenderSystem.
+        // LampLightsRequest, which LightSystem hears (ADR-0362; declared in render_system.h).
         if (what == "lamplights") {
             LampLightsRequest r;
             r.on = on;

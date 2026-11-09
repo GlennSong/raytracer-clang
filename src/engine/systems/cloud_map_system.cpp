@@ -96,9 +96,12 @@ void CloudMapSystem::update(FrameContext& ctx) {
         picturePath_.clear();
     }
 
-    // THE DRIFT: the deck's own `wind` is its speed in a 6 m/s ground wind
+    // THE DRIFT: the deck's own `wind` is its speed in a 6 m/s ground wind. Every reader takes the air at a world
+    // point as the world PLUS the drift (the march, the map's bake, the shadow), so a cloud fixed in the air stands
+    // over the world at the air MINUS the drift: for it to go where the wind goes (windDir: where the air goes), the
+    // drift runs against the wind. (Until 2026-11-09 it ran with it, and every cloud sailed upwind -- since #59.)
     const double speed = static_cast<double>(vc.wind) * (std::max(ctx.renderer.windSpeed, 0.0f) / 6.0);
-    const double dirX = ctx.renderer.windDir[0], dirZ = ctx.renderer.windDir[1];
+    const double dirX = -ctx.renderer.windDir[0], dirZ = -ctx.renderer.windDir[1];
     if (pinnedWindTime() >= 0.0) {
         driftX_ = dirX * speed * pinnedWindTime();
         driftZ_ = dirZ * speed * pinnedWindTime();

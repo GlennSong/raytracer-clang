@@ -52,8 +52,6 @@ void main() {
         float metallic = clamp(alb.a, 0.0, 1.0);
         float roughness = clamp(nr.a, 0.04, 1.0);
         vec3 f0 = mix(vec3(0.04), albedo, metallic);
-        float a = max(roughness * roughness, 0.002);
-        float a2 = a * a;
         float NdotV = max(dot(N, V), 1e-4);
         // the sun's shadow where the frame's cascades reach (measured from the frame's camera), the mountains' beyond
         float viewDepth = -(g.view * vec4(P, 1.0)).z;
@@ -62,9 +60,7 @@ void main() {
             sv *= terrainShadow(P, normalize(g.lights[0].directionInner.xyz));
             sv *= cloudShadow(P, normalize(g.lights[0].directionInner.xyz));   // (ADR-0387)
         }
-        vec3 direct = vec3(0.0);
-        for (int i = 0; i < min(g.counts.x, 32); ++i)
-            direct += shadeLight(g.lights[i], P, N, V, albedo, metallic, f0, a2, NdotV, vec3(sv));
+        vec3 direct = evaluateLighting(P, N, V, albedo, metallic, roughness, f0, vec3(sv), indoorTexel);
         vec3 F = fresnelSchlickRoughness(NdotV, f0, roughness);
         vec3 kd = (1.0 - F) * (1.0 - metallic);
         vec3 irr = skyIsPhysical() ? skyIrradianceSH(N) : g.skyHorizon.rgb * 0.5;
