@@ -107,7 +107,12 @@ std::string simLevelPath() {
 // again: the island's cold bake is minutes, and four print cases below load island_8_nature once it exists.
 // Then (2026-10-22 run, cold, Linux / macOS) piedmont_roads 578 / 418 s, tree_lab 193 s (macOS), scale_lab 169 /
 // 172 s -- and scale_lab grows its hero trees on EVERY load (156 s again warm), in every case that walks the levels.
-// RT_LEVEL_TESTS_SKIP_HEAVY=1 (the push workflow) leaves them out; the nightly workflow runs everything.
+// mountain_town_lab (ADR-0323, 2026-11-04) bakes island 8's weathered ground like the island levels: 1093-1134 s
+// cold on Linux, two thirds of the 1800 s cap on its own, and every push run timed out from then until it joined
+// (2026-11-10). The regrade it shows is unit-tested on small ground (test_regrade.cpp); the lab is the island view.
+// RT_LEVEL_TESTS_SKIP_HEAVY=1 (the push workflow) leaves them out; the nightly workflow runs everything. A level that
+// the push run loads for longer than kPushLoadBudget fails every_shipped_level_loads, naming itself: join it here.
+constexpr double kPushLoadBudget = 300.0;   // s, cold on a runner (river_town and metro_v2_test take ~150)
 bool skipHeavy() {
     const char* e = std::getenv("RT_LEVEL_TESTS_SKIP_HEAVY");
     return e && *e && std::string(e) != "0";
@@ -115,7 +120,7 @@ bool skipHeavy() {
 bool isHeavyLevel(const std::string& name) {
     static const char* kHeavy[] = {"metro_mountain.json", "metro_planned.json", "island_8_weathered.json", "piedmont.json",
                                    "island_8_rocky.json", "island_8_nature.json",
-                                   "tree_lab.json", "scale_lab.json"};
+                                   "tree_lab.json", "scale_lab.json", "mountain_town_lab.json"};
     for (const char* h : kHeavy) if (name == h || (name.size() > std::strlen(h) && name.compare(name.size() - std::strlen(h), std::string::npos, h) == 0 && name[name.size() - std::strlen(h) - 1] == '/')) return true;
     return false;
 }
@@ -581,6 +586,12 @@ TEST_CASE(every_shipped_level_loads) {
     for (const LevelFacts& f : levels) {
         if (!f.loaded) std::printf("    level '%s' failed to load\n", f.name.c_str());
         CHECK(f.loaded);
+        // THE PUSH RUN's time (above): a level this slow belongs on the heavy list, or the suite runs out of time
+        // and hides every finding behind a timeout
+        if (skipHeavy() && f.loadSeconds > kPushLoadBudget)
+            std::printf("    level '%s' took %.0f s to load (push budget %.0f s): add it to isHeavyLevel\n",
+                        f.name.c_str(), f.loadSeconds, kPushLoadBudget);
+        CHECK(!skipHeavy() || f.loadSeconds <= kPushLoadBudget);
     }
 }
 
