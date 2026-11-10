@@ -1100,6 +1100,7 @@ if(RT_ENABLE_PHYSICS)
         tests/test_offroad_course.cpp
         tests/test_physics_system.cpp
         tests/test_city_phys_tier.cpp
+        tests/test_city_phys_deck.cpp   # #24: physical cars on a real city's decks and ramps never fall through
         tests/test_city_ride.cpp
         tests/test_city_map.cpp
         tests/test_building_collider.cpp

@@ -52,6 +52,7 @@
 #include "../src/engine/text/font.h"
 #include "../src/engine/system.h"
 #include "../src/engine/world.h"
+#include "collider_grid.h"   // pointInTriangleXZ, ColliderGrid
 #include "../src/renderer/renderer.h"
 
 #include <algorithm>
@@ -71,6 +72,7 @@
 #include <vector>
 
 using namespace engine;
+using namespace rt_test;
 using json = nlohmann::json;
 
 namespace {
@@ -164,15 +166,6 @@ std::vector<std::string> shippedLevels() {
 // be a few cm inside a kerb or a sidewalk slab without the level being broken.
 constexpr double GROUND_ABOVE_SPAWN_TOLERANCE = 1.0;
 
-bool pointInTriangleXZ(double px, double pz, const Vec3& a, const Vec3& b,
-                       const Vec3& c) {
-    const double d1 = (px - b.x) * (a.z - b.z) - (a.x - b.x) * (pz - b.z);
-    const double d2 = (px - c.x) * (b.z - c.z) - (b.x - c.x) * (pz - c.z);
-    const double d3 = (px - a.x) * (c.z - a.z) - (c.x - a.x) * (pz - a.z);
-    const bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-    const bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-    return !(neg && pos);
-}
 
 // The probe accumulates every collidable surface over the spawn's XZ and sorts
 // them into two buckets. The distinction matters: a level can have a tree canopy
@@ -1234,69 +1227,6 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
 // average (the bridge placed them on the terrain, which the mesher carves
 // 0.22 m under the deck, minus a vestigial 0.08 lift, plus the carve's own
 // hillside error); after RoadDeck: within 3 cm.
-namespace {
-// Collider triangles bucketed by XZ cell so a probe touches a few dozen
-// triangles, not the city's millions.
-struct ColliderGrid {
-    struct Tri { Vec3 a, b, c; };
-    std::vector<Tri> tris;
-    std::unordered_map<long long, std::vector<int>> cells;
-    static constexpr double kCell = 12.0;
-    static long long key(int cx, int cz) {
-        return (static_cast<long long>(cx) << 32) ^ (static_cast<long long>(cz) & 0xffffffffLL);
-    }
-    void add(const MeshCollider& mc) {
-        for (std::size_t i = 0; i + 2 < mc.indices.size(); i += 3) {
-            Tri t{mc.vertices[mc.indices[i]], mc.vertices[mc.indices[i + 1]],
-                  mc.vertices[mc.indices[i + 2]]};
-            const int id = static_cast<int>(tris.size());
-            tris.push_back(t);
-            const double x0 = std::min({t.a.x, t.b.x, t.c.x}), x1 = std::max({t.a.x, t.b.x, t.c.x});
-            const double z0 = std::min({t.a.z, t.b.z, t.c.z}), z1 = std::max({t.a.z, t.b.z, t.c.z});
-            for (int cz = static_cast<int>(std::floor(z0 / kCell)); cz <= static_cast<int>(std::floor(z1 / kCell)); ++cz)
-                for (int cx = static_cast<int>(std::floor(x0 / kCell)); cx <= static_cast<int>(std::floor(x1 / kCell)); ++cx)
-                    cells[key(cx, cz)].push_back(id);
-        }
-    }
-    // Every collider surface under (x, z), for the offender listing.
-    std::vector<double> surfacesAt(double x, double z) const {
-        std::vector<double> out;
-        auto it = cells.find(key(static_cast<int>(std::floor(x / kCell)),
-                                 static_cast<int>(std::floor(z / kCell))));
-        if (it == cells.end()) return out;
-        for (int id : it->second) {
-            const Tri& t = tris[id];
-            if (!pointInTriangleXZ(x, z, t.a, t.b, t.c)) continue;
-            const double den = (t.b.z - t.c.z) * (t.a.x - t.c.x) + (t.c.x - t.b.x) * (t.a.z - t.c.z);
-            if (std::fabs(den) < 1e-12) continue;
-            const double w0 = ((t.b.z - t.c.z) * (x - t.c.x) + (t.c.x - t.b.x) * (z - t.c.z)) / den;
-            const double w1 = ((t.c.z - t.a.z) * (x - t.c.x) + (t.a.x - t.c.x) * (z - t.c.z)) / den;
-            out.push_back(w0 * t.a.y + w1 * t.b.y + (1.0 - w0 - w1) * t.c.y);
-        }
-        std::sort(out.begin(), out.end());
-        return out;
-    }
-    // Highest collider surface under (x, z) that is not above `ceiling`.
-    bool surfaceAt(double x, double z, double ceiling, double& top) const {
-        auto it = cells.find(key(static_cast<int>(std::floor(x / kCell)),
-                                 static_cast<int>(std::floor(z / kCell))));
-        if (it == cells.end()) return false;
-        bool found = false;
-        for (int id : it->second) {
-            const Tri& t = tris[id];
-            if (!pointInTriangleXZ(x, z, t.a, t.b, t.c)) continue;
-            const double den = (t.b.z - t.c.z) * (t.a.x - t.c.x) + (t.c.x - t.b.x) * (t.a.z - t.c.z);
-            if (std::fabs(den) < 1e-12) continue;
-            const double w0 = ((t.b.z - t.c.z) * (x - t.c.x) + (t.c.x - t.b.x) * (z - t.c.z)) / den;
-            const double w1 = ((t.c.z - t.a.z) * (x - t.c.x) + (t.a.x - t.c.x) * (z - t.c.z)) / den;
-            const double y = w0 * t.a.y + w1 * t.b.y + (1.0 - w0 - w1) * t.c.y;
-            if (y > ceiling) continue;
-            if (!found || y > top) { top = y; found = true; }
-        }
-        return found;
-    }
-};
-}  // namespace
 
 TEST_CASE(metro_traffic_drives_on_the_road_deck) {
     std::unique_ptr<Renderer> renderer = Renderer::create();
