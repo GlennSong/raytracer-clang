@@ -15,6 +15,7 @@
 #include "../../log.h"
 #include "../../slot_map.h"
 #include "../../engine/vertex_pack.h"
+#include "../../engine/sky/sky_atmosphere.h"   // evalIrradianceSH: the sky's light straight down into the water
 #include "../light_clusters.h"   // buildClusters (clustered lights, RT_CLUSTERED)
 #include "../probe_grid.h"       // buildProbeGrid (ADR-0374)
 #include "rt_measure.h"           // RT_RT_MEASURE: what ray tracing would cost (phase 3c)
@@ -55,7 +56,7 @@
 // Tileable Perlin-Worley 3D noise bake for the volumetric clouds — the SAME
 // CPU header the Metal backend uses (pure C++, disk-cached in cache/clouds/),
 // so both backends march identical noise fields.
-#include "../metal/cloud_noise.h"
+#include "../cloud_noise.h"
 #include <map>
 #include <vector>
 
@@ -162,7 +163,7 @@ struct GlobalsUBO {
     float    fog[4];                 // aerial-perspective fog (ADR-0016); w 0 = off
     float    shadowTint[4];          // rgb artistic shadow tint, w ambientStrength
     float    wind1[4];               // xyz wind direction, w wind time (seconds)
-    float    wind2[4];               // x frequency, y height, z amplitude (FLAG_WIND)
+    float    wind2[4];               // xy the gust patches' offset (m), z sway amplitude (FLAG_WIND), w speed
     // The moon (the month): xyz toward the moon, w disc radiance scale (0 =
     // below the horizon); xyz the TRUE sun direction the disc is lit from
     // (skySunDir carries the active light — the moon itself at night), w
@@ -194,7 +195,7 @@ struct GlobalsUBO {
     // camera distance the cover map blends in from, y 1/(the blend's length)
     float    terrainSurface[4];
     float    terrainSurface2[4];
-    // CLUSTERED LIGHTS (RT_CLUSTERED=1; renderer-realism phase 1): x tilesX, y tilesY, z slices, w 1: on (bindings 8-10);
+    // CLUSTERED LIGHTS (on by default, RT_CLUSTERED=0 off; renderer-realism phase 1): x tilesX, y tilesY, z slices, w 1: on (bindings 8-10);
     // and x the slices' near depth, y 1/log(far/near), z the framebuffer's width, w its height
     int32_t  clusterGrid[4];
     float    clusterDepth[4];
@@ -214,6 +215,11 @@ struct GlobalsUBO {
     float    skySH[9][4];
     float    cloudShadow[4];     // THE CLOUDS' SHADOW (ADR-0387, binding 18): xy the map's corner in the air, z 1/extent, w strength
     float    cloudShadow2[4];    // xy the drift, z the height the sun's line is read at
+    // ...and where each of the four cloud types stands, base and middle (m; middle <= base: not in this weather), for
+    // the line to cross each type at its own height (lighting_common.glsl cloudShadow)
+    float    cloudTypeBase[4];
+    float    cloudTypeMid[4];
+    float    aerialRange[4];     // x the aerial volume's far end (kAerialFar), for mesh.frag's lookup
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -471,6 +477,7 @@ struct VulkanRenderer::Impl {
     };
     static_assert(sizeof(RtInstGpu) == 64, "rt_reflect.comp's RtInst");
     std::vector<RtInstGpu> rtRows;
+    bool raysFrame = false;   // the rays run this frame (raysThisFrame, asked once at the globals' upload)
     std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> rtRowBuf{};
     std::array<VmaAllocation, MAX_FRAMES_IN_FLIGHT> rtRowAlloc{};
     std::array<void*, MAX_FRAMES_IN_FLIGHT> rtRowMapped{};
@@ -4236,8 +4243,10 @@ void VulkanRenderer::Impl::recordClusterBin(VkCommandBuffer cmd) {
     toRead.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+    // (read by the scene pass, and by the probes' relight and the reflection rays, compute both: evaluateLighting)
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &toRead, 0, nullptr, 0, nullptr);
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 1, &toRead, 0, nullptr, 0, nullptr);
     if (checkThisFrame && checkBuf[0][currentFrame]) {
         for (int k = 0; k < 2; ++k) {
             VkBufferCopy cp{0, 0, k == 0 ? static_cast<VkDeviceSize>(clusterGrid.cells()) * sizeof(uint32_t)
@@ -5100,14 +5109,16 @@ void VulkanRenderer::Impl::recordProbeRelight(VkCommandBuffer cmd) {
                              0, 0, nullptr, 0, nullptr, 1, &b);
         probeRadGeneral = true;
     }
-    if (probes.empty() || !probeGbufGeneral || !ensureRelightPipelines()) return;
+    // (only the physical sky's scene pass reads a probe: ProbeSystem captures none without it, and none is relit)
+    if (!skyPhysicalOn || probes.empty() || !probeGbufGeneral || !ensureRelightPipelines()) return;
     const uint32_t n = static_cast<uint32_t>(std::min<std::size_t>(probes.size(), kMaxProbes));
     std::vector<uint32_t> pick;
-    for (uint32_t k = 0; k < n && pick.size() < 4; ++k) {
-        const uint32_t i = (relightCursor + k) % n;
+    uint32_t walked = 0;   // (the cursor moves past what was looked at: past the picks, and past any still capturing)
+    for (; walked < n && pick.size() < 4; ++walked) {
+        const uint32_t i = (relightCursor + walked) % n;
         if (probeFaces[i] == 0x3F) pick.push_back(i);
     }
-    relightCursor = (relightCursor + 4) % std::max(n, 1u);
+    relightCursor = (relightCursor + std::max(walked, 1u)) % std::max(n, 1u);
     if (pick.empty()) return;
     VkMemoryBarrier mb{};
     mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -5539,7 +5550,8 @@ bool VulkanRenderer::Impl::ensureLumPipeline() {
 // The histogram of this frame's scene (after the clouds, before the post), copied out for this slot's next turn
 void VulkanRenderer::Impl::recordLumHistogram(VkCommandBuffer cmd) {
     lumPre[currentFrame] = 0.0f;
-    if (!hdrView || !ensureLumPipeline()) return;
+    // (only the physical sky's exposure reads it: DayNightSystem::applyPhysicalSky)
+    if (!skyPhysicalOn || !hdrView || !ensureLumPipeline()) return;
     if (lumBoundHdr != hdrView) {   // (the swapchain's HDR target is new: point the set at it)
         VkDescriptorImageInfo img{brdfLutSampler, hdrView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet w{};
@@ -7680,16 +7692,19 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
         if (resolve) cloudHistCur = 1 - cloudHistCur;   // next frame writes the other, reading this one
     }
 
+    gpuMark(cmd, 3);
+    // SSR, and near the camera the rays that replace it (ADR-0376) -- the rays ADDED into the HDR image here, before
+    // the exposure reads it and bloom spreads it: a bright thing seen in a ray's reflection blooms as one seen in a
+    // probe's does. (SSR reads the image without them: the rays' denoise mutes SSR where they stand, so SSR first.)
+    recordSsr(cmd);
+    recordRtReflect(cmd);
+    gpuMark(cmd, 4);
     recordLumHistogram(cmd);   // the frame's brightness, for the auto exposure (ADR-0368)
     // Bloom + SSAO read the scene outputs (always run so their views stay
     // sampleable; composite gates whether they're applied).
-    gpuMark(cmd, 3);
     recordBloom(cmd);
-    gpuMark(cmd, 4);
-    recordSsao(cmd);
     gpuMark(cmd, 5);
-    recordSsr(cmd);
-    recordRtReflect(cmd);   // ...and, near the camera, the rays replace it (ADR-0376)
+    recordSsao(cmd);
     gpuMark(cmd, 6);
     recordOcclusion(cmd);
     // DOF (off by default) blurs the HDR scene; composite reads dofView when on.
@@ -7744,11 +7759,11 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
         // exposure turned white (Glenn, 2026-11-08: "going underwater at night the screen turns bright white")
         float down = 0.0f;
         if (cpuGlobals.counts[2] == 2) {
-            const float* s0 = cpuGlobals.skySH[0];
-            const float* s1 = cpuGlobals.skySH[1];
-            const float up[3] = {s0[0] * 0.282095f + s1[0] * 0.488603f, s0[1] * 0.282095f + s1[1] * 0.488603f,
-                                 s0[2] * 0.282095f + s1[2] * 0.488603f};
-            down = std::max(0.0f, 0.2126f * up[0] + 0.7152f * up[1] + 0.0722f * up[2]);
+            // (all nine terms: straight up reads band 2 as well -- the one evaluation, sky_atmosphere.h)
+            Vec3 sh[9];
+            for (int k = 0; k < 9; ++k) sh[k] = Vec3(cpuGlobals.skySH[k][0], cpuGlobals.skySH[k][1], cpuGlobals.skySH[k][2]);
+            const Vec3 up = evalIrradianceSH(sh, Vec3(0, 1, 0));
+            down = static_cast<float>(std::max(0.0, 0.2126 * up.x + 0.7152 * up.y + 0.0722 * up.z));
             const GpuLight& l0 = cpuGlobals.lights[0];
             if (cpuGlobals.counts[0] > 0 && static_cast<int>(l0.typeRange[0]) == 1) {
                 const float cosZ = std::max(0.0f, l0.directionInner[1]);
@@ -7849,7 +7864,7 @@ void VulkanRenderer::Impl::drawFrame() {
             gpuAccumMs[0] += (ts[kGpuMarks - 1] - ts[0]) * gpuTickNs * 1e-6;
             if (++gpuFrames == 120) {
                 const double n = gpuFrames;
-                LOG_INFO("[gpu] ms per frame: shadows %.2f scene %.2f clouds %.2f bloom %.2f ssao %.2f ssr %.2f occlusion+dof %.2f "
+                LOG_INFO("[gpu] ms per frame: shadows %.2f scene %.2f clouds %.2f ssr+rays %.2f bloom %.2f ssao %.2f occlusion+dof %.2f "
                          "composite+ui %.2f | total %.2f || cpu in endFrame: fence wait %.2f record %.2f submit+present %.2f"
                          " | lights %d",
                          gpuAccumMs[1] / n, gpuAccumMs[2] / n, gpuAccumMs[3] / n, gpuAccumMs[4] / n, gpuAccumMs[5] / n,
@@ -7978,10 +7993,20 @@ void VulkanRenderer::Impl::drawFrame() {
         cpuGlobals.cloudShadow2[1] = static_cast<float>(cp.driftZ);
         cpuGlobals.cloudShadow2[2] = 0.5f * (cp.bottom + cp.top);
         cpuGlobals.cloudShadow2[3] = 0.0f;
+        // (every type the book gives a span: the simulation's cells reach a little past the weather's range)
+        for (std::size_t k = 0; k < 4; ++k) {
+            const VolumetricCloudParams::CloudType& t = cp.types[k];
+            cpuGlobals.cloudTypeBase[k] = t.base;
+            cpuGlobals.cloudTypeMid[k] = t.top > t.base ? 0.5f * (t.base + t.top) : t.base - 1.0f;
+        }
         if (cloudShadowStale[currentFrame]) writeGlobalCloudShadow(currentFrame);
     }
     // Upload this frame's globals into its persistently mapped UBO.
     std::memcpy(globalsMapped[currentFrame], &cpuGlobals, sizeof(GlobalsUBO));
+    // WHETHER THE RAYS RUN THIS FRAME, decided once, here: mesh.frag's rules (below) and the ray pass (recordRtReflect)
+    // both follow it. (Asked again after the near scene's build, a top level that came or went in between left a
+    // frame with the reflection twice, or with none.)
+    raysFrame = raysThisFrame();
     // THE PROBES for mesh.frag (ADR-0373/0374): count and the plan grid's corner and cell, its size, then each one's
     // position (w 1: relit), box min, box max, then the grid's cells
     if (probeBufMapped[currentFrame]) {
@@ -7994,7 +8019,7 @@ void VulkanRenderer::Impl::drawFrame() {
         pb[4] = static_cast<float>(ProbeGrid::kSize);
         // the reflection rays' rules, when they will run this frame (mesh.frag fades the probe out where they fade in;
         // otherwise the probes and the sky cube stand, as on a GPU without ray tracing)
-        const bool rays = raysThisFrame();
+        const bool rays = raysFrame;
         pb[5] = rays ? rtRules[0] : 0.0f;
         pb[6] = rays ? rtRules[1] : 0.0f;
         pb[7] = rays ? rtRules[2] : 0.0f;
@@ -8033,9 +8058,8 @@ void VulkanRenderer::Impl::drawFrame() {
             if (captures[c].probe == 0 && dumpPath && ++captured % 600 == 0) dumpProbe(0, dumpPath);
     }
 
-    // Volumetric-cloud uniforms (mirrors the Metal endFrame CloudUniforms fill;
-    // the scattering-sky sun-transmittance tint is Metal-only until that sky is
-    // ported, so the sun reaches the deck untinted here).
+    // Volumetric-cloud uniforms (began as the Metal endFrame CloudUniforms fill; under the physical sky the deck's
+    // sun is tinted by the air above it, ADR-0369 -- below).
     if (cloudsActive && cloudUboMapped[currentFrame]) {
         const VolumetricCloudParams& cp = cloudParams;
         CloudUniformsGPU cu{};
@@ -8058,7 +8082,7 @@ void VulkanRenderer::Impl::drawFrame() {
             std::memcpy(cu.sunColor, cpuGlobals.skySunColor, 3 * sizeof(float));
             cu.sunColor[3] = preExposure();
         }
-        if (skyPhysicalOn) {   // (the physical sky: the deck's own sun, from its height -- ADR-0367)
+        if (skyPhysicalOn) {   // (the physical sky: the deck's own sun, from its height -- ADR-0369)
             const Vec3 d = normalize(skyFrame.cloudLightDir);
             const Vec3 c = skyFrame.cloudLightColor;
             const double peak = std::max(c.x, std::max(c.y, c.z));
@@ -9041,7 +9065,8 @@ void VulkanRenderer::setRayInstances(const std::vector<RayInstance>& nearestFirs
 }
 
 void VulkanRenderer::Impl::recordRayScene(VkCommandBuffer cmd) {
-    if (!rayQuery || !rt.ready()) return;
+    // (the rays reflect only under the physical sky -- raysThisFrame -- so without it the structures are not built)
+    if (!rayQuery || !rt.ready() || cpuGlobals.counts[2] != 2) return;
     // (a mesh removed since the engine handed the list over has left it: removeMesh)
     rt.record(cmd, currentFrame, frameCounter, rtInstances);
     static const bool log = std::getenv("RT_DUMP_STATS") != nullptr;
@@ -9137,7 +9162,7 @@ bool VulkanRenderer::Impl::raysThisFrame() {
     // (the physical sky's branch of mesh.frag is the one that takes the probe's reflection out where the rays put
     // theirs: under the old sky the rays would reflect twice)
     if (off || !rayQuery || !ssrEnabledFrame || !ssrImage || !rtRawImage || cpuGlobals.counts[2] != 2 || !rt.hasTopLevel() ||
-        rtRows.empty())
+        rtRows.empty() || rtInstances.empty())
         return false;
     if (ensureRtReflectPipeline()) return true;
     static bool warned = false;
@@ -9147,7 +9172,8 @@ bool VulkanRenderer::Impl::raysThisFrame() {
 }
 
 void VulkanRenderer::Impl::recordRtReflect(VkCommandBuffer cmd) {
-    if (!raysThisFrame()) return;
+    // (as decided at the upload; the top level gone since -- its build failed -- leaves this frame unreflected near)
+    if (!raysFrame || !rt.hasTopLevel()) return;
     const int f = currentFrame;
     // this frame's hit-shading rows
     const VkDeviceSize bytes = rtRows.size() * sizeof(RtInstGpu);
@@ -9505,7 +9531,7 @@ void VulkanRenderer::setCamera(const CameraState& camera) {
     impl->dofSensorHeight = static_cast<float>(camera.lens.sensorHeight);          // mm
 }
 
-// CLUSTERED LIGHTS (ADR-0361), on by default since ADR-0362's phase 2; RT_CLUSTERED=0 is the forward A/B (the fixed 32)
+// CLUSTERED LIGHTS (ADR-0361), on by default since ADR-0363; RT_CLUSTERED=0 is the forward A/B (the fixed 32)
 static bool clusteredLights() {
     static const bool on = [] { const char* e = std::getenv("RT_CLUSTERED"); return !(e && std::string(e) == "0"); }();
     return on;
@@ -9629,6 +9655,7 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         // range past ~20 km. RT_AERIAL=<x> scales it for an A/B.)
         static const float aerialScale = [] { const char* e = std::getenv("RT_AERIAL"); return e ? static_cast<float>(std::atof(e)) : 1.0f; }();
         impl->cpuGlobals.skyPhysical5[2] = aerialScale;
+        impl->cpuGlobals.aerialRange[0] = Impl::kAerialFar;
         impl->cpuGlobals.skyPhysical5[3] = static_cast<float>(impl->swapchainExtent.height);
         for (int k = 0; k < 9; ++k) {
             impl->cpuGlobals.skySH[k][0] = static_cast<float>(f.irradianceSH[k].x);
@@ -9637,7 +9664,10 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
             impl->cpuGlobals.skySH[k][3] = 0.0f;
         }
         // RT_SKYCUBE: 0 the old path (the dome sampled toward N and R), 1 the harmonics only, 2 the cube only; else both
-        static const int cubeMode = [] { const char* e = std::getenv("RT_SKYCUBE"); return e ? std::atoi(e) : 3; }();
+        static const int cubeMode = [] {
+            const int m = [] { const char* e = std::getenv("RT_SKYCUBE"); return e ? std::atoi(e) : 3; }();
+            return (m >= 0 && m <= 2) ? m : 3;
+        }();
         impl->cpuGlobals.skySH[0][3] = (cubeMode & 1) ? 1.0f : 0.0f;   // the harmonics
         impl->cpuGlobals.skySH[1][3] = (cubeMode & 2) ? 1.0f : 0.0f;   // the cube
     }
@@ -9693,9 +9723,10 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         setColor(l.colorOuter, s.color, std::cos(s.outerConeAngle));
         l.typeRange[0] = 2.0f; l.typeRange[1] = s.range; l.typeRange[2] = 0.0f; l.typeRange[3] = 0.0f;
     }
-    // CLUSTERED (RT_CLUSTERED=1): every point and spot, past the 32, into the light buffer; the froxels pick for each
-    // pixel (endFrame bins them). The UBO's 32 stay as they were (the sun first) for the loops that read them still
-    // (grass and leaf transmission, the water's glint, the viewer's room).
+    // CLUSTERED (the default; RT_CLUSTERED=0 the forward A/B): every point and spot, past the 32, into the light buffer;
+    // the froxels pick for each point the camera sees (cluster_bin.comp bins them). The UBO's 32 stay as they were (the
+    // sun first) for the loops that read them still (grass and leaf transmission, the water's glint) and for a point
+    // the camera does not see (evaluateLighting's fallback: a probe texel or a ray's hit behind it).
     impl->clustered = clusteredLights();
     impl->clusterLights.clear();
     if (impl->clustered) {
@@ -10299,13 +10330,14 @@ void VulkanRenderer::endFrame() {
     static const float kPinnedWind = [] { const char* e = std::getenv("RT_WIND_TIME"); return e ? static_cast<float>(std::atof(e)) : -1.0f; }();
     if (kPinnedWind >= 0.0f) windTime = kPinnedWind;
     // THE WEATHER'S WIND (ADR-0337; Renderer::windDir/Speed/Gust, set by DayNightSystem): wind1 xz where the air goes,
-    // y how squally; wind2 z the sway's amplitude -- 0.12 at a moderate 6 m/s, as it was, growing with the speed -- and
-    // w the speed itself (the sea's wave trains, mesh.frag)
+    // y how squally; wind2 xy how far the air has gone, z the sway's amplitude -- 0.12 at a moderate 6 m/s, as it
+    // was, growing with the speed -- and w the speed itself (the sea's wave trains, mesh.frag; the sway's beat)
     const float wspd = std::max(windSpeed, 0.0f);
     impl->cpuGlobals.wind1[0] = windDir[0];  impl->cpuGlobals.wind1[1] = windGust;
     impl->cpuGlobals.wind1[2] = windDir[1];  impl->cpuGlobals.wind1[3] = windTime;
-    impl->cpuGlobals.wind2[0] = 1.6f * std::clamp(std::sqrt(wspd / 6.0f), 0.6f, 1.8f);   // frequency
-    impl->cpuGlobals.wind2[1] = 2.5f;   // height
+    // (xy the gust patches' offset, Wind::drift: the grass and trees bow to the patches a glider meets, wind.h)
+    impl->cpuGlobals.wind2[0] = windDrift[0];
+    impl->cpuGlobals.wind2[1] = windDrift[1];
     impl->cpuGlobals.wind2[2] = 0.12f * std::clamp(wspd / 6.0f, 0.25f, 2.6f);   // amplitude
     impl->cpuGlobals.wind2[3] = wspd;
     // (the clouds' drift along the same wind is CloudMapSystem's now, ADR-0386: VolumetricCloudParams::driftX/Z)

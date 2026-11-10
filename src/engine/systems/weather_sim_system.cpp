@@ -3,10 +3,12 @@
 #include "../components.h"     // TerrainLodConfig
 #include "../weather_cycle.h"  // WeatherNow
 #include "../wind.h"
+#include "../../hash.h"
 #include "../../log.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 
 namespace engine {
 
@@ -29,6 +31,19 @@ WeatherSimInputs inputsNow(FrameContext& ctx) {
     const double hours = ctx.view.lighting.clockHours >= 0.0f ? ctx.view.lighting.clockHours : 14.0;
     in.sunUp = static_cast<float>(std::sin((hours - 6.0) * PI / 12.0));
     return in;
+}
+
+// which terrain the grid stands on: its seed, size and sea (0 without one). A grid begun before the terrain, or on one
+// since replaced, begins again.
+uint32_t terrainKeyOf(FrameContext& ctx) {
+    const TerrainLodConfig* cfg = nullptr;
+    ctx.world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) { if (!cfg) cfg = &c; });
+    if (!cfg) return 0u;
+    const float sea = static_cast<float>(cfg->params.seaLevel);
+    uint32_t halfBits = 0, seaBits = 0;
+    std::memcpy(&halfBits, &cfg->worldHalf, sizeof(halfBits));
+    std::memcpy(&seaBits, &sea, sizeof(seaBits));
+    return hashPair(hashPair(cfg->seed, halfBits), seaBits) | 1u;
 }
 }  // namespace
 
@@ -58,6 +73,7 @@ void WeatherSimSystem::begin(FrameContext& ctx) {
         return Stepped{std::move(sim), std::move(snapshot)};
     });
     stepping_ = true;
+    terrainKey_ = terrainKeyOf(ctx);
     begun_ = true;
 }
 
@@ -75,6 +91,11 @@ void WeatherSimSystem::publish(FrameContext& ctx) {
 
 void WeatherSimSystem::update(FrameContext& ctx) {
     if (!ctx.view.lighting.volumetricClouds.enabled) return;
+    // (begun again on a new terrain, once the worker is home -- the step in flight belongs to the old grid)
+    if (begun_ && !stepping_ && terrainKeyOf(ctx) != terrainKey_) {
+        begun_ = false;
+        gathered_ = 0.0;
+    }
     if (!begun_) begin(ctx);
     // the weather's time: the day's clock where it runs, real time where it is held
     const double perSecond = ctx.view.lighting.clockHoursPerSecond > 0.0f ? ctx.view.lighting.clockHoursPerSecond * 3600.0 : 1.0;

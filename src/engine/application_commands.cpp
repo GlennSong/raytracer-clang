@@ -182,7 +182,7 @@ void Application::registerCameraVerbs() {
         if (what == "ui") { rendererPtr->uiHidden = !on; return "ok ui"; }
         if (what == "debug") { setDebugOverlay(on); return "ok debug"; }
         // Street-lamp POINT LIGHTS, live (the emissive heads stay lit): a
-        // LampLightsRequest for RenderSystem.
+        // LampLightsRequest, which LightSystem hears (ADR-0362; declared in render_system.h).
         if (what == "lamplights") {
             LampLightsRequest r;
             r.on = on;
@@ -241,7 +241,7 @@ void Application::registerCameraVerbs() {
     });
 
     commandTable.add("view", "view <0-10> [wire 0-2]",
-                     "Debug view: 0 normal, 1 AO, 2 SSR (and the rays), 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades, "
+                     "Debug view: 0 normal, 1 AO, 2 SSR (rays muted), 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades, "
                      "9 roughness (what reflects), 10 environment reflection alone; plus wireframe.",
                      [this](const ControlCommand& cmd) -> std::string {
         // Debug view + wireframe are plain public renderer ints (the

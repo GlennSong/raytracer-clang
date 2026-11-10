@@ -175,9 +175,9 @@ TEST_CASE(wind_rises_with_the_weather_and_keeps_its_bounds) {
     // stronger aloft, within its clamp
     CHECK(windAt(w, Vec3(0, 200, 0)).length() / windGustFactor(w, Vec3(0, 200, 0)) > 12.0);
     CHECK(windAt(w, Vec3(0, 2, 0)).length() / windGustFactor(w, Vec3(0, 2, 0)) >= 6.0 - 1e-9);
-    // a gust travels downwind at the wind's speed: what is here at t was 10 * dt upwind at t - dt
+    // a gust travels downwind with the air: what is here after the air went 30 m was 30 m upwind before
     Wind w2 = w;
-    w2.time = 3.0;
+    w2.drift = w.dir * 30.0;
     const Vec3 p(123.0, 10.0, -77.0);
     CHECK_APPROX(windGustFactor(w2, p), windGustFactor(w, p - w.dir * 30.0), 1e-9);
     // a calm is a calm

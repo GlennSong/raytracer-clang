@@ -86,7 +86,7 @@ private:
     std::vector<float> c_;      // cloud, 0..1
     std::vector<float> lift_;   // the lift, unitless (~0..1 a cumulus's)
     std::vector<float> conv_;   // the convective share of the lift, 0..1
-    std::vector<float> p_, div_, tmp_, tmp2_;
+    std::vector<float> p_, div_, tmp_, tmp2_, uOld_;
 };
 
 // THE WEATHER FIELD the simulation last finished (WeatherSimSystem publishes it on an entity of its own): read-only,

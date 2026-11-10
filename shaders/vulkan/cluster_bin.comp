@@ -32,6 +32,7 @@ shared uint candIdx[GATHER];
 shared float candD2[GATHER];
 shared uint candKeep[GATHER];
 shared uint candCount;
+shared uint batchHit[64];
 
 float sliceNear(int s) {
     return pc.depth.x * pow(pc.depth.y / pc.depth.x, float(s) / float(pc.grid.z));
@@ -61,30 +62,51 @@ void main() {
 
     if (t == 0u) candCount = 0u;
     barrier();
-    for (uint i = t; i < uint(pc.grid.w); i += 64u) {
-        const Light L = lights[i];
-        const float r = L.typeRange.y;
-        if (r <= 0.0) continue;
-        const vec4 w = vec4(L.positionIntensity.xyz, 1.0);
-        const vec3 p = vec3(dot(pc.viewRow0, w), dot(pc.viewRow1, w), -dot(pc.viewRow2, w));
-        // buildClusters' first cut, so the lists are the CPU's: the sphere's depth span and the tiles its view-ratio
-        // span reaches (the froxel boxes overhang the frustum's wedge; this keeps a light out of the boxes it cannot
-        // reach through the view)
-        if (p.z + r < pc.depth.x || p.z - r > pc.depth.y) continue;
-        const float dMin = max(p.z - r, pc.depth.x), dMax = min(p.z + r, pc.depth.y);
-        const float rxLo = min((p.x - r) / dMin, (p.x - r) / dMax), rxHi = max((p.x + r) / dMin, (p.x + r) / dMax);
-        const float ryLo = min((p.y - r) / dMin, (p.y - r) / dMax), ryHi = max((p.y + r) / dMin, (p.y + r) / dMax);
-        if (rxHi < c0 || rxLo > c1 || ryHi < e0 || ryLo > e1) continue;
-        const int s0 = sliceOf(dMin), s1 = sliceOf(dMax);
-        if (s < s0 || s > s1) continue;
-        const vec3 q = vec3(clamp(p.x, xLo, xHi), clamp(p.y, yLo, yHi), clamp(p.z, zn, zf)) - p;
-        if (dot(q, q) > r * r) continue;
-        const uint slot = atomicAdd(candCount, 1u);
-        if (slot < GATHER) {
-            candIdx[slot] = i;
-            const vec3 d = p - mid;
-            candD2[slot] = dot(d, d);
+    // gathered in LIGHT ORDER, 64 lights a pass, each pass's touching ones appended in order: past GATHER the later
+    // lights are the ones not seen -- the same ones every frame (an atomic append dropped whichever threads came last)
+    for (uint first = 0u; first < uint(pc.grid.w); first += 64u) {
+        const uint i = first + t;
+        bool hit = false;
+        float d2 = 0.0;
+        if (i < uint(pc.grid.w)) {
+            const Light L = lights[i];
+            const float r = L.typeRange.y;
+            const vec4 w = vec4(L.positionIntensity.xyz, 1.0);
+            const vec3 p = vec3(dot(pc.viewRow0, w), dot(pc.viewRow1, w), -dot(pc.viewRow2, w));
+            // buildClusters' first cut, so the lists are the CPU's: the sphere's depth span and the tiles its
+            // view-ratio span reaches (the froxel boxes overhang the frustum's wedge; this keeps a light out of the
+            // boxes it cannot reach through the view)
+            if (r > 0.0 && p.z + r >= pc.depth.x && p.z - r <= pc.depth.y) {
+                const float dMin = max(p.z - r, pc.depth.x), dMax = min(p.z + r, pc.depth.y);
+                const float rxLo = min((p.x - r) / dMin, (p.x - r) / dMax), rxHi = max((p.x + r) / dMin, (p.x + r) / dMax);
+                const float ryLo = min((p.y - r) / dMin, (p.y - r) / dMax), ryHi = max((p.y + r) / dMin, (p.y + r) / dMax);
+                const int s0 = sliceOf(dMin), s1 = sliceOf(dMax);
+                if (!(rxHi < c0 || rxLo > c1 || ryHi < e0 || ryLo > e1) && s >= s0 && s <= s1) {
+                    const vec3 q = vec3(clamp(p.x, xLo, xHi), clamp(p.y, yLo, yHi), clamp(p.z, zn, zf)) - p;
+                    hit = dot(q, q) <= r * r;
+                    const vec3 d = p - mid;
+                    d2 = dot(d, d);
+                }
+            }
         }
+        batchHit[t] = hit ? 1u : 0u;
+        barrier();
+        if (hit) {
+            uint rank = 0u;
+            for (uint j = 0u; j < t; ++j) rank += batchHit[j];
+            const uint slot = candCount + rank;
+            if (slot < GATHER) {
+                candIdx[slot] = i;
+                candD2[slot] = d2;
+            }
+        }
+        barrier();
+        if (t == 0u) {
+            uint hits = 0u;
+            for (uint j = 0u; j < 64u; ++j) hits += batchHit[j];
+            candCount += hits;
+        }
+        barrier();
     }
     barrier();
     const uint n = min(candCount, GATHER);

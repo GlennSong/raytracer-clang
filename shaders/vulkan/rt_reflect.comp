@@ -20,7 +20,7 @@
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 1, binding = 0) uniform sampler2D depthTex;      // the scene's (reverse-Z)
-layout(set = 1, binding = 1) uniform sampler2D normalTex;     // world normal * 0.5 + 0.5, a = roughness
+layout(set = 1, binding = 1) uniform sampler2D normalTex;     // the G-buffer (gbuffer.glsl: octahedral normal, roughness, specular weight)
 layout(set = 1, binding = 5, rgba16f) uniform writeonly image2D rtRaw;   // rgb the radiance to add (pre-exposed), a its share
 layout(set = 1, binding = 3) uniform accelerationStructureEXT nearScene;
 
@@ -111,21 +111,18 @@ void main() {
         // buildings still seems really bright")
         vec3 emission = I.emissionMetal.rgb * ((I.flags & 32u) != 0u ? tint : vec3(1.0)) *
                         (skyIsPhysical() ? g.skyPhysical3.z : 1.0);
-        // the frame's lights as the scene pass lights a surface (shadeLight), the sun's shadow by a ray through the near
+        // the frame's lights as the scene pass lights a surface (evaluateLighting: its froxel's, when the camera sees
+        // the hit), the sun's shadow by a ray through the near
         // scene; the sky's light by the harmonics
         float metallic = clamp(I.emissionMetal.a, 0.0, 1.0);
         float rough = clamp(I.albedoRough.a, 0.04, 1.0);
-        float a = max(rough * rough, 0.002);
         vec3 Vh = -R;
-        float NdotV = max(dot(Nh, Vh), 1e-4);
         vec3 f0 = mix(vec3(0.04), albedo, metallic);
         vec3 sunShadow = vec3(1.0);
         if (g.counts.x > 0 && int(g.lights[0].typeRange.x) == 1 && dot(Nh, g.lights[0].directionInner.xyz) > 0.0)
             sunShadow = vec3(sunVisible(H, Nh, normalize(g.lights[0].directionInner.xyz)) *
                              cloudShadow(H, normalize(g.lights[0].directionInner.xyz)));   // (ADR-0387)
-        vec3 direct = vec3(0.0);
-        for (int i = 0; i < min(g.counts.x, 32); ++i)
-            direct += shadeLight(g.lights[i], H, Nh, Vh, albedo, metallic, f0, a * a, NdotV, sunShadow);
+        vec3 direct = evaluateLighting(H, Nh, Vh, albedo, metallic, rough, f0, sunShadow, false);
         vec3 sky = skyIsPhysical() ? skyIrradianceSH(Nh) : g.skyHorizon.rgb * 0.5;
         col = direct + albedo * (1.0 - metallic) * sky * g.ambient.rgb + emission;
         // the air between (the hit is near: a little haze at most)

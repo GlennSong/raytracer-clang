@@ -17552,3 +17552,85 @@ The weather plan's part C.
 - Rain from the deep cells (part D).
 - The cirrus's hooks read a little drawn.
 - Metal parity.
+
+## ADR-0391 — What the engine pages found: the fixes
+
+**Context.** Writing the light, sky, reflections, clouds, weather and renderer pages (web/engine, #207) meant reading
+every line they quote against its ADR. The writers listed what disagreed. Glenn, 2026-11-09: "go ahead and look at
+those issues", then "Do those next" for the smaller ones. Each finding was checked against the code first.
+
+**Decision.** The bugs:
+- **Reflections and probes see every light** (5335f32f). `rt_reflect.comp` and `probe_relight.comp` looped the
+  globals' 32: the sun plus the first 31 published, so a reflection's lighting hung on publication order. One
+  `evaluateLighting` (lighting_common.glsl) now walks the froxel of any point the camera's grid holds (`clusterCellAt`)
+  and falls back to the 32 only past it.
+- **Glass near the camera keeps its reflection** (5335f32f). The rays trace from the G-buffer, which see-through glass
+  does not write, yet mesh.frag faded the glass's probe reflection for them.
+- **Clouds drift downwind** (5335f32f). The drift is the air's offset, read at world + drift. The map system added
+  `windDir`, so a cloud moved upwind.
+- **A cloud's shadow at its own height** (5335f32f). The shadow is read where the sun's line crosses each type's own
+  middle, not the whole deck's (5 km once storms are in range).
+- **The wind's gusts are one model.** The grass and trees bowed to sine bands on the renderer's clock; a glider met
+  `windGustFactor`'s patches on the world's. mesh.vert now reads the same patches (`windGustFactor` in the new
+  shaders/vulkan/hash.glsl, bit for bit hash.h and noise.h's value noise). The patches ride `Wind::drift`, the wind
+  summed step by step: `dir * speed * time` swung the whole field round the origin as the wind veered, faster each
+  hour. `wind2.xy` carries the drift; the sway's beat comes from the speed.
+- **The sway's ripple runs downwind.** Its phase was `dot(xz, (0.15, 0.1))`, so the waves rolled toward -x whatever
+  the wind did, across it or into it, and the swing (-1.3..1.3 about a 0.6 lean) tipped blades past upright into the
+  wind. The crests now lie across the wind and travel with it (0.18 rad/m along `wind1.xz`), and the bend is a lean
+  that flutters, 0.9 +- 0.38 of it, never upwind. Seen on island_8_nature: the wind blows through the grass.
+- **The pressure solve converges.** 30 Jacobi sweeps a sub-step left the cover up to 0.29 off the converged answer
+  over the test island (mean 0.001). Red-black SOR (omega 1.9) in place, same 30 sweeps, same cost: within 0.008.
+- **The weather grid follows its terrain.** WeatherSimSystem began once. It now begins again when the terrain it
+  stands on changes (its seed, size, sea).
+- **The rays decide once a frame.** mesh.frag's ray rules and the ray pass asked `raysThisFrame` before and after
+  the near scene's build. A top level that came or went in between left a frame with the reflection twice or none.
+  The pass follows the upload's answer; an empty near scene counts as no rays.
+- **The rays bloom.** They are added to the HDR image before the exposure histogram and bloom, not after: SSR and
+  the rays run first (the rays' denoise mutes SSR, so SSR goes first). RT_GPU_TIMES' buckets read `ssr+rays`,
+  `bloom` (with the histogram), `ssao`.
+- **The near scene's budget holds for the top level too.** The bottom levels leave room for the top level's growth,
+  its instance buffer and its scratch; a failed top-level create no longer leaks its buffer; a mesh left out is
+  counted once.
+- **The underwater light reads all nine harmonics** (`evalIrradianceSH`): straight up has band-2 terms.
+- **The GPU binner drops the same lights every frame.** Past 256 touching a froxel, an atomic append kept whichever
+  threads came first. It gathers in light order, 64 lights a pass.
+- **A bus at rest is dark** inside as well (ADR-0341's rule now covers the saloon's lights).
+- **The physical light book follows lights.lua.** It was made once (statics); it is made again when a new book is
+  published.
+- **A Lua book's reference stays good.** The cloud, trade and light books are held in one `BookSlot`
+  (scripting/book_slot.h), which keeps every book published: a reload no longer frees a book a reader holds.
+- **The probe relight cursor** moves past what it looked at, so a probe is not relit two frames running.
+- **RT_SKYCUBE** outside 0-2 means both, as its comment says.
+
+The duplicates, made one:
+- the physical sky's distances, table lookups, ozone, phase functions and sky-view mapping with its below-horizon blend
+  (shaders/vulkan/atmosphere_common.glsl, for sky_view, aerial_volume, sky_cube and sky_physical);
+- the cube passes' `cubeDir`, `hammersley` and GGX sample (cube_common.glsl);
+- `clCellShape` on `clTypeShape`;
+- mesh.frag's aerial volume size from the texture, its range from the globals (`aerialRange`), not literals;
+- the clouds' noise bake (`renderer/cloud_noise.h`, moved out of metal/): its lattice hash is hash.h's
+  `frozenCloudNoiseHash`, the same bits, so the cached "pw-clouds-v2" bake stands. Its Perlin and Worley stay its
+  own: they wrap at each octave's period, which procgen/noise.h's do not.
+
+Not changed, and why:
+- **DayNight's `cloudPhase`** is not a second drift. It moves only the flat sky overlay, which is off whenever the
+  volumetric deck is on.
+- **A car's beams and tails** are picked in their own pools (400 m, 200 m), so a far car can show beams without tails.
+  ADR-0363's "a car's lamps are one group" holds within a pool. A tail's 4 m of light past 200 m is not seen, and its
+  glow is the mesh's.
+- **The cirrus drifts at the deck's 1x** since ADR-0386 put its veils in the weather map; ADR-0384's 2.5x would slide
+  them off the bake.
+- **The erosion's direction**: ADR-0384's "the fBm inverted over the lowest tenth" reads backwards; the code keeps the
+  fBm at the base and inverts it from a tenth of the height up.
+- **The probes' rough mips** sample mip 0 only (their cube is written as it is read). The sky's filtered sampling
+  would need the lower mips readable as each is written. Its comment says so now.
+- **The rays' haze** is their own fixed falloff, not the aerial volume. That is owed.
+- **Metal** keeps its sine sway (parity ledger); the ledger's probe and physical-sky rows now say what Vulkan has.
+
+**Verification.** run_tests (1582/1582, after the commands page regenerated for `view 2`'s new help), physics_tests
+(151/151) and lanes_tests (50/50) pass. The night street in metro_v2_test under the physical sky renders cleanly:
+RT_CLUSTER_CHECK finds the GPU's lists equal to the CPU's in all 3,456 froxels (1,952 lights), and RT_GPU_TIMES
+shows the new `ssr+rays` bucket at 0.8-1.5 ms. (The validation layer was forced through the loader and printed
+nothing; this RelWithDebInfo build compiles the renderer's own validation out, so that is not a proof.) The solver was measured in a scratch harness that
+settles test_weather_sim's island at 30 and 300 Jacobi sweeps and at 30 and 600 SOR sweeps.

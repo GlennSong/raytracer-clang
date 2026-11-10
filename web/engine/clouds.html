@@ -506,6 +506,12 @@
     system's own worker, after the per-square cell count was moved out of the per-texel loop (it had been 8 s).
     <a href="https://github.com/GlennSong/raytracer-clang/blob/e55dfaaae57a8cc3617c737e53cdc3b526790479/docs/decisions.md#L17508">ADR-0390</a> with a field: 0.7 s. The old path is still there, behind <code>RT_CLOUD_TYPES=0</code> and for
     levels without clouds.lua.</p></div>
+  <div class="note"><p><b>Fixed since this page's commit: the clouds drifted upwind.</b> Every reader takes the
+    air over a world point as the world <i>plus</i> the drift, so a cloud fixed in the air stands over the world at the
+    air <i>minus</i> the drift. With the drift integrated along <code>windDir</code> (where the air goes), every cloud
+    sailed against the wind, a sign carried over from the renderer's old offset since #59. Since 2026-11-09
+    (<code>5335f32f</code>) the drift runs against the wind, and the clouds go with it, and with the simulated weather
+    they are baked from (which advects downwind), so a rebake no longer pulls them back.</p></div>
   <figure class="shot">
     <img src="img/clouds/weather-map-old-new.webp" alt="Six views of the cloud lab sky, old on the left and new on the right: on the left smeared, repeated blobs fill the sky; on the right separate rounded cumulus of many sizes and a large flat-based cloud overhead">
     <figcaption>The cloud lab before (left) and after (right) the weather map placed the clouds (ADR-0386,
@@ -1015,6 +1021,12 @@ float cloudShadow(vec3 worldPos, vec3 L) {
   <p>On the CPU, the globals carry the map's square, the drift and the reading height (<code>cloudShadow</code>,
     <code>cloudShadow2</code>), and set 0 binding 18 is rewritten per frame after its fence, as the march's set is.
     <code>RT_CLOUD_SHADOW=0</code> turns it off for the A/B.</p>
+  <div class="note"><p><b>Fixed since this page's commit: each type at its own height.</b> Reading every shadow at
+    the whole deck's middle was wrong once storms were in the weather's range: the deck then spans 0.5 to 12 km, so a
+    fair-weather cumulus at 1.5 km was read at about 5 km and its shadow landed kilometres along the sun's line. Since
+    2026-11-09 (<code>5335f32f</code>) <code>cloudShadow</code> follows the line to each cloud type's own middle
+    (<code>cloudTypeBase</code>/<code>cloudTypeMid</code> in the globals) and counts a read only where the map's cell is
+    that type. That is up to four reads per pixel instead of one.</p></div>
   <figure class="shot">
     <img src="img/clouds/shadow-debug.webp" alt="The shadow debug view in grey: the island and the sea lit white with soft dark patches of cloud shadow, the near sea entirely dark under an overhead cloud">
     <figcaption>The lab's shadow debug view (5), 2026-11-08: soft cloud shadows across the island and the sea, and the

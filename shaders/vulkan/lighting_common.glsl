@@ -61,18 +61,38 @@ float terrainShadow(vec3 worldPos, vec3 L) {
 }
 
 // THE CLOUDS' SHADOW (ADR-0387; Glenn, 2026-11-08, the weather plan's part B): the light's line from this point read
-// against the weather map where it crosses the deck's middle -- a cloud's footprint there takes up to `w` of the sun
-// (a heart ~85 %: the rest comes through and round it, scattered), less for a small shallow cell. Soft, as a
+// against the weather map where it crosses each cloud type's middle -- a cloud's footprint there takes up to `w` of the
+// sun (a heart ~85 %: the rest comes through and round it, scattered), less for a small shallow cell. Soft, as a
 // cloud's shadow on the ground is (the footprint's own edge, ~100 m). Above the deck, or past the map: none.
+// Each type at its own height: read at the whole deck's middle, a fair-weather cumulus at 1.5 km under a storm's
+// range (the deck to 12 km) was read at ~5 km and cast its shadow kilometres along the sun (until 2026-11-09). A read
+// counts only where the map's cell is that type (G: the slot), so a type's line never borrows another's footprint.
+float cloudShadowAt(vec2 xz, vec3 L, float y, float height, out vec3 m) {
+    float t = (height - y) / L.y;
+    m = vec3(0.0);
+    if (t <= 0.0) return 0.0;
+    vec2 uv = (xz + L.xz * t + g.cloudShadow2.xy - g.cloudShadow.xy) * g.cloudShadow.z;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
+    m = textureLod(cloudShadowMap, uv, 0.0).rgb;
+    float depth = 0.55 + 0.45 * clamp(m.b + m.g * 0.5, 0.0, 1.0);   // a deep or severe cell shades more
+    return smoothstep(0.2, 0.7, m.r) * depth;
+}
 float cloudShadow(vec3 worldPos, vec3 L) {
     if (g.cloudShadow.w <= 0.0 || L.y <= 0.02) return 1.0;
-    float t = (g.cloudShadow2.z - worldPos.y) / L.y;
-    if (t <= 0.0) return 1.0;
-    vec2 uv = (worldPos.xz + L.xz * t + g.cloudShadow2.xy - g.cloudShadow.xy) * g.cloudShadow.z;
-    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 1.0;
-    vec3 m = textureLod(cloudShadowMap, uv, 0.0).rgb;
-    float depth = 0.55 + 0.45 * clamp(m.b + m.g * 0.5, 0.0, 1.0);   // a deep or severe cell shades more
-    return 1.0 - g.cloudShadow.w * smoothstep(0.2, 0.7, m.r) * depth;
+    float shade = 0.0;
+    bool typed = false;
+    for (int k = 0; k < 4; ++k) {
+        if (g.cloudTypeMid[k] <= g.cloudTypeBase[k]) continue;
+        typed = true;
+        vec3 m;
+        float s = cloudShadowAt(worldPos.xz, L, worldPos.y, g.cloudTypeMid[k], m);
+        if (abs(m.g * 3.0 - float(k)) < 0.5) shade = max(shade, s);
+    }
+    if (!typed) {   // (no types handed over: the deck's middle, as before)
+        vec3 m;
+        shade = cloudShadowAt(worldPos.xz, L, worldPos.y, g.cloudShadow2.z, m);
+    }
+    return 1.0 - g.cloudShadow.w * shade;
 }
 
 // THE TERRAIN NORMAL MAP (ADR-0205, engine/procgen/terrain_normal_map.h): beyond the distance where the CDLOD mesh
@@ -184,3 +204,36 @@ vec3 shadeLight(Light light, vec3 worldPos, vec3 N, vec3 V, vec3 albedo, float m
     return (diffuse + specular) * light.colorOuter.rgb * (attenuation * NdotL) * sh;
 }
 
+// THE FRAME'S LIGHTS ON A SURFACE: the one light loop of the scene pass, a probe's relight (ADR-0373) and a reflection
+// ray's hit (ADR-0376). Clustered (ADR-0361), the sun and the moon come from the 32 and every other light from the
+// point's froxel; a point the camera does not see (a probe texel behind it, a ray's hit off screen) has no froxel and
+// takes the 32 instead -- the sun and the first 31 published. (Until 2026-11-09 the probes and the rays always took the
+// 32, so a car's headlamps and the player's torch, published after the street's lamps, never showed in a reflection.)
+// `indoor`: a room's surface, which takes its lights' bounce too (roomBounce).
+vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
+                      float metallic, float roughness, vec3 f0, vec3 sunShadow, bool indoor) {
+    vec3 directLight = vec3(0.0);
+    vec3 bounce = vec3(0.0);
+    float a = max(roughness * roughness, 0.002);
+    float a2 = a * a;
+    float NdotV = max(dot(N, V), 1e-4);
+
+    int count = min(g.counts.x, 32);
+    uint off, n;
+    if (clusterCellAt(worldPos, off, n)) {
+        for (int i = 0; i < count; ++i)
+            if (int(g.lights[i].typeRange.x) == 1)
+                directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+        for (uint k = 0u; k < n; ++k) {
+            Light light = clusterLights[clusterIndices[off + k]];
+            directLight += shadeLight(light, worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+            if (indoor) bounce += roomBounce(light, worldPos);
+        }
+        return directLight + bounce * albedo * (1.0 - metallic) / PI;
+    }
+    for (int i = 0; i < count; ++i) {
+        directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+        if (indoor) bounce += roomBounce(g.lights[i], worldPos);
+    }
+    return directLight + bounce * albedo * (1.0 - metallic) / PI;
+}

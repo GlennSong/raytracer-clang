@@ -25,7 +25,7 @@
 #include "../../engine/asset_root.h"
 #include "../../engine/xr/xr_backend.h"
 #include "../cube_faces.h"
-#include "cloud_noise.h"   // Perlin-Worley 3D noise bake (volumetric clouds)
+#include "../cloud_noise.h"   // Perlin-Worley 3D noise bake (volumetric clouds)
 
 #include <atomic>
 #include <memory>

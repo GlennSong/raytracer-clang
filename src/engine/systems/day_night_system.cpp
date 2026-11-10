@@ -4,6 +4,7 @@
 #include "../procgen/terrain.h"          // terrainHeight: the horizon raster
 #include "../vehicle_lamps.h"   // duskRamp: night glow shares the lamp boundary
 #include "../lights/light_kinds.h"   // lightBook: the glows' emission scale (ADR-0369)
+#include "../sky/cloud_book.h"   // cloudBook: the deck's span comes from its types (the clouds panel)
 
 #include "../../log.h"
 
@@ -447,6 +448,8 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
     // and slow-mo slows them. (The cycle's own Pause checkbox remains the
     // artistic "hold this time of day while the game runs" control.)
     if (enabled && !hdrEnvironmentActive(ctx)) cycle.advance(ctx.clock.fixedStep());
+    // (the flat sky overlay's phase, sky.frag applyClouds: drawn only where the volumetric deck is off -- the deck
+    // drifts by CloudMapSystem's driftX/Z, not this)
     if (cloudsEnabled) cloudPhase += ctx.clock.fixedStep() * cloudWindSpeed;
 
     // Weather: the auto walk rides the CYCLE's clock (cycle.speed is a day
@@ -500,7 +503,7 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
         wind.dir = Vec3(std::sin(toward), 0.0, -std::cos(toward));
         wind.speed = (weatherActive ? weather.windSpeed : 6.0) * climate_.windScale;
         wind.gust = weatherActive ? weather.windGust : 0.35;
-        wind.time += ctx.clock.fixedStep();
+        wind.drift += wind.dir * (wind.speed * ctx.clock.fixedStep());
         if (!ctx.world.alive(windEntity_)) {
             windEntity_ = ctx.world.create();
             ctx.world.add<Wind>(windEntity_, wind);
@@ -517,6 +520,8 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
         ctx.renderer.windDir[1] = static_cast<float>(wind.dir.z);
         ctx.renderer.windSpeed = static_cast<float>(wind.speed);
         ctx.renderer.windGust = static_cast<float>(wind.gust);
+        ctx.renderer.windDrift[0] = static_cast<float>(wind.drift.x);
+        ctx.renderer.windDrift[1] = static_cast<float>(wind.drift.z);
     }
 }
 
@@ -1178,9 +1183,14 @@ void DayNightSystem::render(FrameContext& ctx) {
                 // (the level's own scale: the weather's `scale` multiplies it)
                 ImGui::SliderFloat("Noise scale##v", &cloudBase_.noiseScale,
                                    0.0002f, 0.005f, "%.4f");
-                ImGui::DragFloatRange2("Slab bottom / top##v", &vc.bottom,
-                                       &vc.top, 10.0f, 100.0f, 6000.0f,
-                                       "%.0f m", "%.0f m");
+                // (with clouds.lua the deck's span is the types' own, base to top, set each frame by CloudMapSystem:
+                // a slider here was overwritten before it was read)
+                if (cloudBook().loaded)
+                    ImGui::TextDisabled("Deck %.0f .. %.0f m (the cloud types in clouds.lua)", vc.bottom, vc.top);
+                else
+                    ImGui::DragFloatRange2("Slab bottom / top##v", &vc.bottom,
+                                           &vc.top, 10.0f, 100.0f, 6000.0f,
+                                           "%.0f m", "%.0f m");
                 ImGui::SliderInt("Light steps##v", &vc.lightSteps, 1, 16);
                 // The step-count override lives on the renderer, not the params,
                 // so it belongs in the same panel rather than beside it.

@@ -1017,6 +1017,12 @@ Vec3 glowEmission(const NightGlow&amp; glow, double perNit) {
     flashlight) come after every point light in <code>setLights</code>. So a reflection probe or a ray-traced reflection
     sees at most 31 of the picked lights, mostly rooms and the nearest street lamps, and in a busy scene no headlights at
     all. The screen sees all of them. Nothing in the ADRs addresses this yet (see the end of the page).</p>
+  <div class="note"><p><b>Fixed since this page's commit.</b> On 2026-11-09 (<code>5335f32f</code>) the light loop
+    moved into <code>lighting_common.glsl</code> as the one <code>evaluateLighting</code> the scene pass, the probes'
+    relight and the rays' hits all call, and the froxel lookup became <code>clusterCellAt</code> in
+    <code>globals.glsl</code>: it finds a world point's froxel by projecting it with the frame's camera, not by the
+    pixel being drawn. A probe texel or a ray's hit that the camera sees now takes its froxel's lights, headlights and
+    the flashlight among them; one it does not see (behind the camera) still takes the 32.</p></div>
 
   <h2>How it got here</h2>
   <div class="note history"><p><b>2026-11-07, the morning: measure, then cluster.</b> ADR-0017 had rejected deferred "for

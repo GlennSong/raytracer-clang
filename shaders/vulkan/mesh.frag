@@ -723,49 +723,6 @@ void applySurfaceRelief(uint id, vec3 worldPos, vec2 meshUV, float time,
                                            normal, rough);
 }
 
-// This pixel's froxel (clustered lights, ADR-0361): where its list of lights starts in clusterIndices, and how many
-void clusterCell(vec3 worldPos, out uint off, out uint n) {
-    float depth = -(g.view * vec4(worldPos, 1.0)).z;
-    int tx = clamp(int(gl_FragCoord.x / g.clusterDepth.z * float(g.clusterGrid.x)), 0, g.clusterGrid.x - 1);
-    int ty = clamp(g.clusterGrid.y - 1 - int(gl_FragCoord.y / g.clusterDepth.w * float(g.clusterGrid.y)), 0, g.clusterGrid.y - 1);
-    int sl = depth <= g.clusterDepth.x ? 0
-           : clamp(int(log(depth / g.clusterDepth.x) * g.clusterDepth.y * float(g.clusterGrid.z)), 0, g.clusterGrid.z - 1);
-    uint oc = clusterCells[(sl * g.clusterGrid.y + ty) * g.clusterGrid.x + tx];
-    off = oc & 0xFFFFFFu;
-    n = oc >> 24;
-}
-
-// (`indoor`: a room's surface, which takes its lights' bounce too -- roomBounce)
-vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
-                      float metallic, float roughness, vec3 f0, vec3 sunShadow, bool indoor) {
-    vec3 directLight = vec3(0.0);
-    vec3 bounce = vec3(0.0);
-    float a = max(roughness * roughness, 0.002);
-    float a2 = a * a;
-    float NdotV = max(dot(N, V), 1e-4);
-
-    int count = min(g.counts.x, 32);
-    if (g.clusterGrid.w != 0) {
-        // CLUSTERED: the sun (and the moon) from the 32, every other light from this pixel's froxel
-        for (int i = 0; i < count; ++i)
-            if (int(g.lights[i].typeRange.x) == 1)
-                directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
-        uint off, n;
-        clusterCell(worldPos, off, n);
-        for (uint k = 0u; k < n; ++k) {
-            Light light = clusterLights[clusterIndices[off + k]];
-            directLight += shadeLight(light, worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
-            if (indoor) bounce += roomBounce(light, worldPos);
-        }
-        return directLight + bounce * albedo * (1.0 - metallic) / PI;
-    }
-    for (int i = 0; i < count; ++i) {
-        directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
-        if (indoor) bounce += roomBounce(g.lights[i], worldPos);
-    }
-    return directLight + bounce * albedo * (1.0 - metallic) / PI;
-}
-
 // THE ROOM A WINDOW REFLECTS (the viewer's own glass, at night a dark mirror of the lit room): the light the
 // point lights near it throw (a floor's ceiling panels, staged as interiorPoints), as the radiance of the room's
 // surfaces they light -- irradiance times a room's average reflectance (0.6) over pi, half of it facing the glass.
@@ -783,9 +740,8 @@ vec3 roomRadiance(vec3 worldPos) {
     // pixel's cluster when the lights are clustered, where the 32 hold only the sun -- Glenn, 2026-11-08: "the bus
     // windows should probably reflect the interior")
     vec3 e = vec3(0.0);
-    if (g.clusterGrid.w != 0) {
-        uint off, n;
-        clusterCell(worldPos, off, n);
+    uint off, n;
+    if (clusterCellAt(worldPos, off, n)) {
         for (uint k = 0u; k < n; ++k) {
             Light light = clusterLights[clusterIndices[off + k]];
             const int lt = int(light.typeRange.x);
@@ -1519,8 +1475,11 @@ void main() {
             prefiltered = probeReflection(inWorldPos, R, roughness, prefiltered, false);
         }
         // ...but near the camera the rays answer (ADR-0376, rt_reflect.comp): the probe's part fades out exactly as
-        // theirs fades in, so the blurry reflection does not ghost under the sharp one
-        if (probeGridSize.w > 0.0 && roughness <= probeGridSize.w) {
+        // theirs fades in, so the blurry reflection does not ghost under the sharp one. Not on see-through glass: the
+        // transparent pass writes no G-buffer (only water's twin does), so the rays never see the pane -- they reflect
+        // for the surface behind it -- and a lobby's or a bus's window near the camera lost its reflection outright.
+        const bool seeThrough = uintBitsToFloat(pc.surfaceFlags.w) < 0.999 && !isWater;
+        if (probeGridSize.w > 0.0 && roughness <= probeGridSize.w && !seeThrough) {
             float camDist = distance(inWorldPos, g.cameraPosition.xyz);
             float nearFade = 1.0 - smoothstep(probeGridSize.y - probeGridSize.z, probeGridSize.y, camDist);
             prefiltered *= 1.0 - nearFade * (1.0 - smoothstep(0.0, probeGridSize.w, roughness));
@@ -1625,7 +1584,7 @@ void main() {
             // horizon's whole glow
             float dist = length(inWorldPos - g.cameraPosition.xyz);
             vec2 uvA = gl_FragCoord.xy / vec2(max(g.skyPhysical2.w, 1.0), max(g.skyPhysical5.w, 1.0));
-            const float S = 32.0, FAR = 120000.0;
+            const float S = float(textureSize(aerialInscatter, 0).z), FAR = g.aerialRange.x;   // (the volume's own)
             float f = sqrt(clamp(dist / FAR, 0.0, 1.0));
             vec3 aL, aT;
             if (f * S < 1.0) {   // nearer than the first slice: from nothing to it

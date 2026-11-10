@@ -121,6 +121,33 @@ void RtScene::record(VkCommandBuffer cmd, int frame, uint64_t counter, const std
     }
     // the budget's fixed parts: the scratch and the top level, as they stand (they grow inside it below)
     auto total = [&]() { return used_ + scratchSize_ + tlasSize_ + instCap_[0] + instCap_[1]; };
+    // the top level's own sizes for n instances (the size query reads no device address)
+    auto topSizes = [&](uint32_t n) {
+        VkAccelerationStructureGeometryKHR g{};
+        g.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+        g.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+        g.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+        VkAccelerationStructureBuildGeometryInfoKHR gi{};
+        gi.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+        gi.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+        gi.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+        gi.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        gi.geometryCount = 1;
+        gi.pGeometries = &g;
+        VkAccelerationStructureBuildSizesInfoKHR s{};
+        s.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+        sizes_(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &gi, &n, &s);
+        return s;
+    };
+    // what the top level may add this frame (a grown structure, a grown instance buffer, its scratch): the bottom
+    // levels leave room for it, so the top level stays inside the budget too
+    const uint32_t wantInstances = static_cast<uint32_t>(nearestFirst.size());
+    const VkAccelerationStructureBuildSizesInfoKHR topNeed = topSizes(wantInstances);
+    const VkDeviceSize topScratch = alignUp(topNeed.buildScratchSize, scratchAlign_) + scratchAlign_;
+    const VkDeviceSize wantInstBytes = static_cast<VkDeviceSize>(wantInstances) * sizeof(VkAccelerationStructureInstanceKHR);
+    const VkDeviceSize topReserve =
+        (topNeed.accelerationStructureSize > tlasSize_ ? topNeed.accelerationStructureSize * 3 / 2 - tlasSize_ : 0) +
+        (wantInstBytes > instCap_[frame] ? std::max<VkDeviceSize>(wantInstBytes * 2, 64 * 1024) - instCap_[frame] : 0);
 
     // 1. THE MISSING BOTTOM LEVELS, nearest first, while the budgets allow
     struct Pending {
@@ -168,14 +195,13 @@ void RtScene::record(VkCommandBuffer cmd, int frame, uint64_t counter, const std
         sizes_(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &p.info, &tris, &si);
         // (and its start's alignment slack: the frame's builds share one scratch, each start aligned)
         const VkDeviceSize scratch = alignUp(si.buildScratchSize, scratchAlign_) + scratchAlign_;
-        const VkDeviceSize growScratch = std::max<VkDeviceSize>(scratchNeed + scratch, scratchSize_) - scratchSize_;
-        // THE BUDGET: what is held, plus this one, plus any scratch it adds -- never past it
-        if (total() + si.accelerationStructureSize + growScratch > budget_) { ++stats_.skipped; continue; }
+        const VkDeviceSize growScratch = std::max({scratchNeed + scratch, topScratch, scratchSize_}) - scratchSize_;
+        // THE BUDGET: what is held, plus this one, plus any scratch it adds, plus the top level's room -- never past it
+        // (a mesh left out is counted once, by the top level below)
+        if (total() + topReserve + si.accelerationStructureSize + growScratch > budget_) continue;
         Blas b;
-        if (!buffer(si.accelerationStructureSize, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, b.buffer, b.alloc, nullptr)) {
-            ++stats_.skipped;
+        if (!buffer(si.accelerationStructureSize, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, b.buffer, b.alloc, nullptr))
             continue;
-        }
         VkAccelerationStructureCreateInfoKHR ci{};
         ci.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
         ci.buffer = b.buffer;
@@ -183,7 +209,6 @@ void RtScene::record(VkCommandBuffer cmd, int frame, uint64_t counter, const std
         ci.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
         if (create_(device_, &ci, nullptr, &b.as) != VK_SUCCESS) {
             destroy(b);
-            ++stats_.skipped;
             continue;
         }
         VkAccelerationStructureDeviceAddressInfoKHR ai{};
@@ -309,7 +334,13 @@ void RtScene::record(VkCommandBuffer cmd, int frame, uint64_t counter, const std
         ci.buffer = tlasBuffer_;
         ci.size = size;
         ci.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-        if (create_(device_, &ci, nullptr, &tlas_) != VK_SUCCESS) { tlasInstances_ = 0; return; }
+        if (create_(device_, &ci, nullptr, &tlas_) != VK_SUCCESS) {
+            vmaDestroyBuffer(allocator_, tlasBuffer_, tlasAlloc_);   // (the next grow would overwrite the handle)
+            tlasBuffer_ = VK_NULL_HANDLE;
+            tlas_ = VK_NULL_HANDLE;
+            tlasInstances_ = 0;
+            return;
+        }
         tlasSize_ = size;
     }
     if (!growScratch(alignUp(si.buildScratchSize, scratchAlign_) + scratchAlign_)) { tlasInstances_ = 0; return; }

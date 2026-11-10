@@ -8595,6 +8595,7 @@ bool LevelLoader::load(const std::string& path,
             auto& vc = view.lighting.volumetricClouds;
             vc.enabled     = c.value("enabled", true);
             vc.coverage    = c.value("coverage", vc.coverage);
+            // (bottom / top: the slab only without clouds.lua -- with it, the cloud types set the deck's span)
             vc.bottom      = c.value("bottom", vc.bottom);
             vc.top         = c.value("top", vc.top);
             vc.density     = c.value("density", vc.density);

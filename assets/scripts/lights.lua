@@ -46,7 +46,8 @@ return {
 
   -- RAY-TRACED REFLECTIONS (ADR-0376; Glenn: "close up raytraced, further away faked"): rays only from surfaces
   -- smoother than `max_roughness`, within `near` m, faded into the probes over the last `fade` m; they hit only these
-  -- draw classes (structure, scenery, furniture, groundPaint, simBody: a level's drawDistances names) within `near`; the structures may take at most
+  -- draw classes (any of a level's drawDistances names: structure, scenery, furniture, groundPaint, simBody) within
+  -- `near`; the structures may take at most
   -- `memory_share` of the GPU memory free when they start (and never more than 1.5 GB)
   raytrace = { near = 150, fade = 25, max_roughness = 0.3, memory_share = 0.25, hits = { "structure", "furniture", "simBody" } },
 
