@@ -134,6 +134,12 @@
     <code>classic</code> (the older mesh.car bodies, which Glenn kept "as a 'classic' set") and
     <code>fleet_mixed</code> (both together, 25 slots, made for island 8). <code>selectFleet</code> in
     <code>vehicle_body.h</code> points <code>vehicle.fleet</code> at the one chosen.</p>
+  <div class="note"><p><b>Changed since this page's commit: the classic cars retired.</b> On 2026-11-06
+    (<code>2c9ab643</code>, <a href="https://github.com/GlennSong/raytracer-clang/blob/dcc175fa/docs/decisions.md?plain=1#L15845">ADR-0349</a>) Glenn retired the <code>mesh.car</code> bodies: the <code>classic</code>
+    fleet, <code>vehicle_forms.lua</code> and <code>car_mesh.cpp/h</code> are gone, and the sedan, hatchback, jeep,
+    pickup and van recipes spawn kit cars. The bus is now a kit bus too (its windscreen in its face, the saloon from
+    <code>mesh.cabin_interior</code>, seats, doors and the destination sign). <code>fleet_mixed</code> is still a name
+    a level can pick, but it is now the kit fleet with the bus last.</p></div>
 
   <h2>The vehicle spec, field by field</h2>
   <p>A drivable recipe returns one table. Its fields fall into six groups, and each group maps onto a C++
@@ -310,6 +316,8 @@
       <code>vehicle_kit.lua</code> builds every car and truck from it.</td><td>Current (ADR-0139, 0140). The bus
       stays on <code>mesh.car</code>, which Glenn likes.</td></tr>
   </table>
+  <p class="cap">Since 2026-11-06 (<a href="https://github.com/GlennSong/raytracer-clang/blob/dcc175fa/docs/decisions.md?plain=1#L15845">ADR-0349</a>) the bus is a kit body as well, and <code>mesh.car</code> is
+    retired: the polymesh kit makes every vehicle.</p>
   <p>The kit is an editable polygon mesh. Its faces carry a group, a material and a colour; its edges carry a crease
     sharpness. It comes with the operations a box-modeller uses: loft, extrude, inset, crease, mirror,
     Catmull-Clark subdivide, then <code>toParts</code> to make one RenderMesh per material.</p>
@@ -1104,9 +1112,8 @@ v.frontGrip = <span class="n">0.9f</span>;
   <ul class="files">
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/vehicles.lua">assets/scripts/vehicles.lua</a> — every recipe: from_class, kit_drivable, the off-roader, two-wheelers, <code>vehicle.drivable</code>, the fleets</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/vehicle_kit.lua">assets/scripts/vehicle_kit.lua</a> — the kit bodies: profiles, loft, glass, lamps (<code>kit.attach</code>), interior, <code>kit.build</code></li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/vehicle_classes.lua">assets/scripts/vehicle_classes.lua</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/vehicle_forms.lua">vehicle_forms.lua</a> — class packages and curves for mesh.car bodies</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/vehicle_classes.lua">assets/scripts/vehicle_classes.lua</a> — the class packages (<code>vehicle_forms.lua</code>, the mesh.car curves, retired with them)</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/polymesh.h">src/engine/procgen/polymesh.h</a> — the hard-surface kit (<code>poly.*</code> in Lua)</li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/vehicle/car_mesh.h">src/engine/procgen/vehicle/car_mesh.h</a> — <code>mesh.car</code> (the bus, the classic set)</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/scripting/vehicle_spec.h">src/engine/scripting/vehicle_spec.h</a> — <code>VehicleSpec</code>, <code>loadVehicleSpec</code>, <code>spawnVehicle</code>, the drivable catalogue</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/scripting/vehicle_body.h">src/apps/citysim/scripting/vehicle_body.h</a> — <code>CarBodyRecipe</code>, <code>loadFleetCarBody</code>, <code>selectFleet</code></li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/physics/physics_world.h">src/engine/physics/physics_world.h</a> / <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/physics/physics_world.cpp">.cpp</a> — <code>VehicleConfig</code>, <code>addVehicle</code>, yaw assist, drift, drag, traction split</li>
