@@ -648,6 +648,11 @@ int VulkanRenderer::lightCapacity() const { return clusteredLights() ? static_ca
     overhang the frustum's wedge, so a light could touch a box without being visible through it. Adding the CPU's first
     cut (the sphere's depth span and view-ratio span) made the two equal. <code>RT_GPU_CLUSTERS=0</code> still bins on
     the CPU.</p></div>
+  <div class="note"><p><b>Fixed since this page's commit: a crowded froxel keeps the same lights.</b> The threads
+    gathered the touching lights in whatever order they won the shared counter, so past 256 a different set could be
+    dropped each frame and a lamp flickered. Since 2026-11-09 (<code>58d12b54</code>, <a href="https://github.com/GlennSong/raytracer-clang/blob/cb3b805e3136026636becf92d034927a6a1baa65/docs/decisions.md#L17556">ADR-0391</a>) the gather runs 64
+    lights a pass in light order, each thread's slot from a prefix count over the pass, so the kept set is the same
+    every frame. <code>RT_CLUSTER_CHECK</code> on a night street: 0 of 3,456 froxels differ, 1,952 lights.</p></div>
 
   <h2>Room lights, kept to their rooms (ADR-0365)</h2>
   <p>"Buildings just seem bright all around" (Glenn, 2026-11-07). A streamed interior had been lit by one warm point

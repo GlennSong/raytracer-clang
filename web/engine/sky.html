@@ -929,6 +929,15 @@ vec3 skyLightDisc(vec3 dir) {
         }
         cpush.underwaterColor[3] = down;</pre>
   </div>
+  <div class="note"><p><b>Fixed since this page's commit.</b> The downwelling light above takes only two of the nine
+    harmonic terms (the constant and the vertical one), though straight up the second band's vertical term counts
+    too. Since 2026-11-09 (<code>58d12b54</code>, <a href="https://github.com/GlennSong/raytracer-clang/blob/cb3b805e3136026636becf92d034927a6a1baa65/docs/decisions.md#L17556">ADR-0391</a>) it is
+    <code>evalIrradianceSH</code> straight up, the same evaluation as everything else. In the same commit the
+    atmosphere's shared pieces (the distances to the air's top and the ground, the transmittance and multiple-scattering
+    lookups, ozone, the phase functions, the sky view's mapping) moved into one header,
+    <code>shaders/vulkan/atmosphere_common.glsl</code>, for <code>sky_view.comp</code>, <code>aerial_volume.comp</code>,
+    <code>sky_cube.comp</code> and <code>sky_physical.glsl</code>, which had each kept a copy; the cube passes' helpers
+    went to <code>cube_common.glsl</code> the same way.</p></div>
   <p>In the shader, the water's in-scatter takes its brightness from that number, and the Snell window keeps the sky's
     <i>hue</i> (horizon to zenith) but takes its brightness from it too. Both are pre-exposed like everything else, so
     a night dive is dark-blue and moonlit, not white.</p>
