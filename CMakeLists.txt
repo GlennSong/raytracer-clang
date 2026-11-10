@@ -16,6 +16,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Threads back the JobSystem (and the offline tracer that now uses it).
 find_package(Threads REQUIRED)
 
+# THE SAME NUMBERS ON EVERY MACHINE (#102, #166, #206): every seed must grow the same city on Linux and macOS, and a car
+# must climb the same ledge. Apple's clang contracts a*b+c into one fused multiply-add on arm64 by default; x86-64's
+# baseline has no FMA, so there the expression rounds twice. Contraction off makes arm64 round like x86 (and changes
+# nothing on x86). Jolt's own switch for the same (CROSS_PLATFORM_DETERMINISTIC) is set with the physics below.
+option(RT_DETERMINISTIC_FP "Round floating point the same on every platform (no FMA contraction)" ON)
+if(RT_DETERMINISTIC_FP AND (CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU"))
+    add_compile_options(-ffp-contract=off)
+endif()
+
 # On Windows the UCRT headers gate M_PI (and the other M_* math constants)
 # behind _USE_MATH_DEFINES. clang targets the MSVC runtime here, so define it
 # project-wide before any translation unit includes <cmath>. No-op elsewhere.
@@ -1020,6 +1029,7 @@ if(RT_ENABLE_PHYSICS)
     set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
     set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
     set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
+    set(CROSS_PLATFORM_DETERMINISTIC ${RT_DETERMINISTIC_FP} CACHE BOOL "" FORCE)   # (RT_DETERMINISTIC_FP, above)
     add_subdirectory(third_party/JoltPhysics/Build ${CMAKE_BINARY_DIR}/jolt)
 
     # Jolt.cmake does `target_compile_options(Jolt PUBLIC -pthread)` on every
