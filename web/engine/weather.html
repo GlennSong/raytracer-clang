@@ -347,10 +347,19 @@
   <div class="note"><p><b>Still one airmass.</b> The <code>Wind</code> component is the same everywhere on the map:
     trees in the lee of a ridge sway exactly like trees on its crest. The simulation below computes a wind that does
     vary by place (round the mountains, into the heated land), but nothing outside the simulation reads it yet; that is
-    issue <a href="https://github.com/GlennSong/raytracer-clang/issues/200">#200</a>. Also note that the shader's sway
-    makes its own gust bands from its own clock (the renderer's wall time), while <code>windAt</code> uses the noise
-    patches above on <code>Wind::time</code>, so a gust seen crossing a field is not yet literally the one a glider meets
-    there.</p></div>
+    issue <a href="https://github.com/GlennSong/raytracer-clang/issues/200">#200</a>.</p></div>
+  <div class="note"><p><b>Fixed since this page's commit: one gust model, carried by the wind.</b> The shader's sway
+    made its own gust bands from its own clock, while <code>windAt</code> used the noise patches above, so a gust seen
+    crossing a field was not the one a glider met there. And the patches were placed at <code>dir · speed ·
+    time</code>, which swung the whole field round the world's origin whenever the wind veered, faster each hour. Since
+    2026-11-09 (<code>58d12b54</code>, <a href="https://github.com/GlennSong/raytracer-clang/blob/cb3b805e3136026636becf92d034927a6a1baa65/docs/decisions.md#L17556">ADR-0391</a>) <code>Wind::time</code> is <code>Wind::drift</code>, the
+    distance the air has actually gone, summed a step at a time (<code>drift += dir · speed · dt</code>), and
+    <code>windGustFactor</code> reads <code>p − drift</code>. <code>mesh.vert</code> reads the very same patches:
+    <code>shaders/vulkan/hash.glsl</code> is hash.h's and noise.h's value noise bit for bit, and the drift rides the
+    globals' <code>wind2.xy</code>. Then (<code>8485c1d8</code>) the sway's ripple, which had rolled along one fixed
+    world axis whatever the wind did, was turned to run downwind, and the bend became a downwind lean that flutters
+    (0.4 to 1.4 of it) instead of a swing that tipped blades into the wind. <code>RT_WIND_TIME</code> still pins the
+    ripple's clock and the clouds' drift; the gust patches follow <code>Wind::drift</code>.</p></div>
 
   <h2>Why simulate the weather</h2>
   <p>By 2026-11-08 the clouds were placed by a weather map of soft cloud cells (ADR-0386, <a href="clouds.html">Clouds</a>),
@@ -548,6 +557,13 @@
     <tr><td><code>kJacobi</code></td><td>30</td><td>Pressure-solve iterations per sub-step, starting from the previous
       sub-step's pressure.</td></tr>
   </table>
+  <div class="note"><p><b>Fixed since this page's commit: the pressure solve converges.</b> Thirty Jacobi sweeps
+    looked fine on average (a mean error of 0.001 in the cover), but measured against a 600-sweep solve on the test
+    island the cover was off by up to 0.29 in places: Jacobi carries a correction one cell a sweep, and the grid is 128
+    cells wide. Since 2026-11-09 (<code>58d12b54</code>, <a href="https://github.com/GlennSong/raytracer-clang/blob/cb3b805e3136026636becf92d034927a6a1baa65/docs/decisions.md#L17556">ADR-0391</a>) the same 30 sweeps are red-black
+    successive over-relaxation (ω = 1.9, <code>kPressureSweeps</code> and <code>kOverRelax</code>), within 0.008 of
+    the converged cover at the same cost. The step's old-wind copy is a member now, not a vector made every sub-step,
+    and the grid starts over when the terrain under it changes (its seed, size or sea level).</p></div>
 
   <h3>Heating, the wind and the sea breeze</h3>
   <p>The heart of the step is about fifty lines. First the <b>heating</b>: sunlit land heats by the sun's height, from

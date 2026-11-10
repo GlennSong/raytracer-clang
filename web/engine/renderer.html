@@ -711,6 +711,12 @@
     vkCmdEndRenderPass(cmd);
     gpuMark(cmd, 8);</pre>
   </div>
+  <div class="note"><p><b>Changed since this page's commit: the rays before bloom.</b> The rays' reflections were
+    added after bloom had run, so a bright light seen in a window never bloomed. Since 2026-11-09
+    (<code>58d12b54</code>, <a href="https://github.com/GlennSong/raytracer-clang/blob/cb3b805e3136026636becf92d034927a6a1baa65/docs/decisions.md#L17556">ADR-0391</a>) SSR and the rays come first, then the exposure histogram and bloom, then
+    SSAO, and the <code>RT_GPU_TIMES</code> buckets read <code>ssr+rays</code>, <code>bloom</code>, <code>ssao</code>.
+    Whether the rays run is also decided once, when the frame's globals are written (<code>raysFrame</code>), so the
+    ray pass and the composite's SSR mute can no longer disagree within a frame.</p></div>
   <p>Each <code>record…</code> call decides for itself whether it has anything to do this frame: the sky passes
     return at once unless the physical sky is on, the probe passes when no face is queued or no probe is placed, the
     ray pass unless <code>raysThisFrame()</code> says yes. So the code always reads as the full frame, and a switch
