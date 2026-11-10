@@ -799,6 +799,10 @@ void buildProbeGrid(const std::vector&lt;ReflectionProbe&gt;&amp; probes, ProbeG
   </div>
   <p class="cap">The budgets drawn to one scale (the full bar is 1.37 GB). On river_town the near scene uses about an eighth of its budget; on the
     island the budget is small enough that the nearest-first order decides what is left out.</p>
+  <div class="note"><p><b>Fixed since this page's commit: the budget holds the top level too.</b> The budget counted
+    only the bottom levels, so the top level and its instance buffer could take the memory past it. Since 2026-11-09
+    (<code>58d12b54</code>, <a href="https://github.com/GlennSong/raytracer-clang/blob/cb3b805e3136026636becf92d034927a6a1baa65/docs/decisions.md#L17556">ADR-0391</a>) room is kept for the top level's growth and its instances (and its scratch),
+    a top level that fails to build frees its buffer instead of leaking it, and a skipped mesh is counted once.</p></div>
 
   <h3>The rays</h3>
   <p><code>rt_reflect.comp</code> runs after the screen-space pass, at its half resolution. Every pixel smoother than 0.3
@@ -971,6 +975,9 @@ vec4 gbufEncode(vec3 n, float roughness, float specWeight) {
     how near their depth is to the pixel's own ("so a mullion's edge does not pick up the pane's reflection beside it"),
     and adds it straight into the HDR target. Bloom has already run by then, so the rays' reflections are not in the
     bloom.</p>
+  <div class="note"><p><b>Fixed since this page's commit: the rays' reflections bloom.</b> Since 2026-11-09
+    (<code>58d12b54</code>, <a href="https://github.com/GlennSong/raytracer-clang/blob/cb3b805e3136026636becf92d034927a6a1baa65/docs/decisions.md#L17556">ADR-0391</a>) the rays run before bloom, so a lamp seen in a pane blooms like the lamp
+    itself, and whether they run is fixed once a frame, so a pixel is never reflected twice or not at all.</p></div>
   <div class="shots">
     <figure class="shot">
       <img src="img/reflections/rays-vs-probe-zoom.webp" alt="Close-up of tower glass. Left: a blurry olive-toned reflection of a building with smeared dark streaks. Right: a sharp grey reflection of the same building's windows">
