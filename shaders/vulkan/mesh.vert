@@ -173,14 +173,16 @@ void main() {
         float weight = clamp((world.y - baseY) / max(swayHeight, 0.001), 0.0, 1.0);
         weight *= weight;
         const float beat = 1.6 * clamp(sqrt(g.wind2.w / 6.0), 0.6, 1.8);   // faster in a stronger wind
-        float phase = g.wind1.w * beat + dot(world.xz, vec2(0.15, 0.1));
-        float gust = sin(phase) + 0.3 * sin(phase * 2.3 + 1.7);
-        // THE GUSTS (ADR-0337): the wind's own patches of stronger air (engine/wind.h windGustFactor, hash.glsl), carried
-        // downwind as the air goes -- a field bows as a gust crosses it, and it is the gust a glider then meets -- and
-        // the whole sway leaning downwind (a mean push, not only the swing about upright)
+        // THE RIPPLE runs DOWNWIND: its crests are lines across the wind, travelling with it (0.18 rad/m, about a 35 m
+        // wave). It used to run along one fixed world axis, crossing or meeting the wind it was meant to show.
         const vec2 wdir = g.wind1.xz;
+        float phase = g.wind1.w * beat - 0.18 * dot(world.xz, wdir);
+        float flutter = sin(phase) + 0.3 * sin(phase * 2.3 + 1.7);   // -1.3..1.3
+        // THE GUSTS (ADR-0337): the wind's own patches of stronger air (engine/wind.h windGustFactor, hash.glsl), carried
+        // downwind as the air goes -- a field bows as a gust crosses it, and it is the gust a glider then meets. The
+        // bend is a LEAN downwind that flutters back toward upright (0.4..1.4 of the lean), never past it into the wind.
         const float push = windGustFactor(world.xz, g.wind2.xy, g.wind1.y);
-        world.xz += wdir * (g.wind2.z * weight * (gust * push + 0.6 * push));
+        world.xz += wdir * (g.wind2.z * weight * push * (0.9 + 0.38 * flutter));
     }
     // ON A SLOPE every blade stands up from the ground under IT, not from a level plane through the planted origin:
     // a shear by the ground's gradient (its normal rides the bottom row), so a card's foot follows the hill instead

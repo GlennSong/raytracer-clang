@@ -17575,6 +17575,10 @@ those issues", then "Do those next" for the smaller ones. Each finding was check
   shaders/vulkan/hash.glsl, bit for bit hash.h and noise.h's value noise). The patches ride `Wind::drift`, the wind
   summed step by step: `dir * speed * time` swung the whole field round the origin as the wind veered, faster each
   hour. `wind2.xy` carries the drift; the sway's beat comes from the speed.
+- **The sway's ripple runs downwind.** Its phase was `dot(xz, (0.15, 0.1))`, so the waves rolled toward -x whatever
+  the wind did, across it or into it, and the swing (-1.3..1.3 about a 0.6 lean) tipped blades past upright into the
+  wind. The crests now lie across the wind and travel with it (0.18 rad/m along `wind1.xz`), and the bend is a lean
+  that flutters, 0.9 +- 0.38 of it, never upwind. Seen on island_8_nature: the wind blows through the grass.
 - **The pressure solve converges.** 30 Jacobi sweeps a sub-step left the cover up to 0.29 off the converged answer
   over the test island (mean 0.001). Red-black SOR (omega 1.9) in place, same 30 sweeps, same cost: within 0.008.
 - **The weather grid follows its terrain.** WeatherSimSystem began once. It now begins again when the terrain it
