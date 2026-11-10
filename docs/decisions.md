@@ -17634,3 +17634,34 @@ RT_CLUSTER_CHECK finds the GPU's lists equal to the CPU's in all 3,456 froxels (
 shows the new `ssr+rays` bucket at 0.8-1.5 ms. (The validation layer was forced through the loader and printed
 nothing; this RelWithDebInfo build compiles the renderer's own validation out, so that is not a proof.) The solver was measured in a scratch harness that
 settles test_weather_sim's island at 30 and 300 Jacobi sweeps and at 30 and 600 SOR sweeps.
+
+## ADR-0392 — A partner's pull fades along the road from the seam (#142)
+
+**Context.** #142: on metro_v2_test a car's lowest tyre stood +0.26 m off the drawn ramp (ADR-0223's bound is
+0.10 m), and the published deck stood up to 1.35 m off the drawn road. DeckHeight::blendTo faded a higher-ranked
+partner's pull by the 2-D distance from the point to the partner's footprint, within blendLen (20 m). A ramp climbing
+BESIDE its street therefore took a cross-fall: its near edge pulled down to the street, its far edge not. The drawn
+surface's edge-to-edge triangles cannot hold that cross-fall, so the deck the cars stand on and the road drawn under
+them parted.
+
+**Decision.**
+- **The seams.** After setPartners, DeckHeight samples each lane of every road every 1 m along the road's spine and
+  records, per partner lane, the spine stations where the lane touches that partner (within half its width + 0.5 m).
+- **The pull fades by distance ALONG the road** from the nearest seam station, so every point across one
+  cross-section takes the same pull and the deck stays level across. Where a road has no seam with a partner, the
+  2-D distance stands, as before. The partner chosen is the one nearest by that measure; whether a point is near
+  the seam (the exact take-over) is still the 2-D test.
+- Connectors keep the 2-D rule (they have no spine of their own).
+- kLanesBuildTag -> 2026-11-10.1.
+
+**Measured** (metro_v2_test, RT_NOCACHE, before -> after):
+- lowest tyre's gap +0.260 -> +0.070 m; samples off by > 0.25 m 1 -> 0; max 0.298 -> 0.122 m.
+- the field's answer vs the drawn road, over 25 cm: 1178 -> 39; over 10 cm: 2380 -> 784.
+- mid-edge centreline over 25 cm: 232 -> 0; authored decks' centreline 232 -> 0.
+- pokes (LOD 0) 2511 -> 2448; ground probes flush 9380 -> 9381.
+- lanes_no_elevated_deck_is_see_through: system_interchange 6 -> 7, one more tie at a slab corner (-38, 70) where
+  the low deck rose 0.3 m; the exact ray meets the soffit front in both builds, so it is not a hole.
+
+**Owed.** Within 25 m of a spine end the edge samples over 25 cm went 199 -> 337 (half-way out 20 -> 61), and the
+field is off by 25 cm where the spine's own section is not at 12 samples (was 0). A spine end's seam station is the
+junction mouth, so the pull there is full across the mouth; the follow-up is to taper it over the mouth's width.

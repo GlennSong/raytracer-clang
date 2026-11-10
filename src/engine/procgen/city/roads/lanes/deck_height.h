@@ -58,7 +58,16 @@ private:
     std::vector<std::unique_ptr<SegmentGrid>> grids_;                   // centrelines (fallback)
     struct Boundary { std::vector<SegmentGrid> outers, holes; std::vector<Ring> outerRings, holeRings; std::vector<Box2> outerBoxes; };
     std::vector<Boundary> boundaries_;
-    double blendTo(double z, const std::vector<int>& partners, const Vec2& p) const;
+    // THE SEAMS (#142): per road, per partner lane, the stations along the road's spine (1 m apart) where one of
+    // the road's lanes touches that partner. A partner pulls by distance ALONG the road from them, so every point
+    // across one cross-section takes the same pull -- the 2-D distance to the partner's footprint tilted a ramp
+    // climbing beside its street (its near edge pulled down, its far edge not), a cross-fall the drawn surface's
+    // edge-to-edge triangles could not hold, so cars stood on a deck 0.3 m over the road drawn under them.
+    std::vector<std::unique_ptr<SegmentGrid>> edgeGrids_;
+    std::vector<std::vector<std::pair<int, std::vector<double>>>> seams_;
+    void buildSeams();
+    double alongSeam(int edge, int partner, const Vec2& p) const;   // -1: no seam known (the 2-D distance stands)
+    double blendTo(double z, int edge, const std::vector<int>& partners, const Vec2& p) const;
     bool deepInside(int lane, const Vec2& p, double margin) const;   // inside the footprint, over `margin` from its edge
     // NEAR-LANE INDEX: every lane in the cells its footprint's box, grown by kIndexReach, overlaps -- so a
     // nearestLane within that radius tests the lanes of one cell, in lane order, not all of them

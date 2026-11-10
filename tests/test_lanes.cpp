@@ -1335,9 +1335,11 @@ TEST_CASE(lanes_no_elevated_deck_is_see_through_from_an_angle) {
     // crack between the step face and the soffit (2026-10-14: merged within 2 mm now). Shoulders and sidewalks cut per
     // road at their own level (2026-10-15) tessellate differently, which moves the eyes (one per walkable top): the same
     // slab-corner ties sample as 1 on the relief crossing and 6 at the interchange -- the geometry along each new look is
-    // identical under RT_LAYERS_FLAT=1 (RT_SEE_THROUGH_RAY).
+    // identical under RT_LAYERS_FLAT=1 (RT_SEE_THROUGH_RAY). #142's along-the-road partner pull (2026-11-10) lifts a
+    // low deck at (-38, 70) 0.3 m, which moves the eyes again: one more slab-corner tie there, 7 (the same look,
+    // RT_SEE_THROUGH_RAY with the direction normalised, meets the soffit's front in both builds).
     const std::map<std::string, size_t> known = {{"freeway_cross", 0}, {"freeway_cross_relief", 1}, {"light_rail_lab", 0},
-                                                 {"rail_loop", 0}, {"system_interchange", 6}, {"valley_viaduct", 5}};
+                                                 {"rail_loop", 0}, {"system_interchange", 7}, {"valley_viaduct", 5}};
     for (const char* scn : {"freeway_cross", "freeway_cross_relief", "light_rail_lab", "rail_loop", "system_interchange", "valley_viaduct"}) {
         const Result& r = scene(scn);
         const std::vector<NamedMesh> meshes = buildMeshes(r);

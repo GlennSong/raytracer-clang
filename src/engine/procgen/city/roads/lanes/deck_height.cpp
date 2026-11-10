@@ -60,6 +60,51 @@ void DeckHeight::setPartners(std::vector<std::vector<int>> partners) {
         std::set<int> u(v.begin(), v.end()); v.assign(u.begin(), u.end());
         std::sort(v.begin(), v.end(), [&](int a, int b) { return L_.rank(a, g_) > L_.rank(b, g_); });
     }
+    buildSeams();
+}
+
+void DeckHeight::buildSeams() {
+    constexpr double kStep = 1.0, kTouch = 0.5;   // m: the sampling along each lane, and how near counts as touching
+    edgeGrids_.clear(); edgeGrids_.reserve(g_.edges.size());
+    for (const EdgeSpec& E : g_.edges) edgeGrids_.push_back(E.xy.size() >= 2 ? std::make_unique<SegmentGrid>(E.xy, 8.0) : nullptr);
+    seams_.assign(g_.edges.size(), {});
+    for (size_t e = 0; e < g_.edges.size(); ++e) {
+        if (!edgeGrids_[e] || roadPartners_[e].empty()) continue;
+        for (int q : roadPartners_[e]) {
+            std::vector<double> st;
+            for (const Lane& l : L_.lanes) {
+                if (l.parent != static_cast<int>(e) || l.isConnector() || l.xy.size() < 2 || l.s.size() != l.xy.size()) continue;
+                const double reach = l.w / 2 + kTouch;
+                size_t k = 0;
+                for (double s = 0; s <= l.s.back() + 1e-9; s += kStep) {
+                    while (k + 2 < l.s.size() && l.s[k + 1] < s) ++k;
+                    const double span = l.s[k + 1] - l.s[k], t = span > 1e-9 ? std::clamp((s - l.s[k]) / span, 0.0, 1.0) : 0.0;
+                    const Vec2 P(l.xy[k].x + (l.xy[k + 1].x - l.xy[k].x) * t, l.xy[k].y + (l.xy[k + 1].y - l.xy[k].y) * t);
+                    if (!(distanceToLane(q, P, reach) <= reach)) continue;
+                    double es = 0;
+                    if (std::isfinite(edgeGrids_[e]->distanceWithin(P, kIndexReach, &es))) st.push_back(es);
+                }
+            }
+            if (st.empty()) continue;
+            std::sort(st.begin(), st.end());
+            seams_[e].emplace_back(q, std::move(st));
+        }
+    }
+}
+
+double DeckHeight::alongSeam(int edge, int partner, const Vec2& p) const {
+    if (edge < 0 || static_cast<size_t>(edge) >= seams_.size() || !edgeGrids_[static_cast<size_t>(edge)]) return -1.0;
+    for (const auto& [q, st] : seams_[static_cast<size_t>(edge)]) {
+        if (q != partner) continue;
+        double s = 0;
+        if (!std::isfinite(edgeGrids_[static_cast<size_t>(edge)]->distanceWithin(p, kIndexReach, &s))) return -1.0;
+        const std::vector<double>::const_iterator it = std::lower_bound(st.begin(), st.end(), s);
+        double d = std::numeric_limits<double>::infinity();
+        if (it != st.end()) d = *it - s;
+        if (it != st.begin()) d = std::min(d, s - *(it - 1));
+        return std::max(0.0, d - 0.5);   // (half the 1 m sampling: a point between two touching samples is on the seam)
+    }
+    return -1.0;
 }
 
 double DeckHeight::own(int lane, const Vec2& p) const { return laneHeightAt(L_.lanes[static_cast<size_t>(lane)], g_, p); }
@@ -182,16 +227,22 @@ bool DeckHeight::deepInside(int lane, const Vec2& p, double margin) const {
     return inside;
 }
 
-double DeckHeight::blendTo(double z, const std::vector<int>& partners, const Vec2& p) const {
+double DeckHeight::blendTo(double z, int edge, const std::vector<int>& partners, const Vec2& p) const {
     static thread_local int depth = 0; struct Guard { int& d; explicit Guard(int& x) : d(x) { ++d; } ~Guard() { --d; } } guard(depth);
     if (depth > 12) throw std::runtime_error("lanelab: partner chain too deep — the partner relation is not a strict order");
     // The NEAREST partner within blendLen pulls with a smoothstep of distance and takes over exactly at
     // the seam (d = 0), using the partner's DECK height so chains agree. Nearest only: a weighted mix of
     // several partners is smoother inside a lane but is no longer exact where two surfaces meet.
-    double Lb = g_.rules.blendLen; int best = -1; double bd = std::numeric_limits<double>::infinity();
-    for (int q : partners) { double d = distanceToLane(q, p, Lb); if (d < bd) { bd = d; best = q; } }
-    if (best < 0 || !(bd < Lb)) return z;
-    double w = bd / Lb; w = w * w * (3 - 2 * w);
+    // The distance is ALONG the road from where it meets the partner (alongSeam, #142) where that is known, so a
+    // cross-section takes one pull; the 2-D distance to the footprint stands for a partner the road never touches.
+    double Lb = g_.rules.blendLen; int best = -1; double bd = std::numeric_limits<double>::infinity(), bw = bd;
+    for (int q : partners) {
+        const double d = distanceToLane(q, p, Lb); if (!(d < Lb)) continue;
+        const double a = alongSeam(edge, q, p), use = a >= 0 ? a : d;
+        if (use < bw) { bw = use; bd = d; best = q; }
+    }
+    if (best < 0 || !(bw < Lb)) return z;
+    double w = bw / Lb; w = w * w * (3 - 2 * w);
     // A partner pulls only where the two are at the same level. Partnership is per ROAD pair (a ramp and
     // the street it lands on), but the blend radius is 2D, so a ramp 20 m from that street and 4 m above
     // it was dragged down to it — a 3.8 m dip in the deck with the pier, placed from the profile, standing
@@ -211,8 +262,11 @@ double DeckHeight::blendTo(double z, const std::vector<int>& partners, const Vec
     return pull * zp + (1 - pull) * z;
 }
 
-double DeckHeight::deck(int lane, const Vec2& p) const { return blendTo(own(lane, p), partners_[static_cast<size_t>(lane)], p); }
-double DeckHeight::deckRoad(int edge, const Vec2& p) const { return blendTo(ownRoad(edge, p), roadPartners_[static_cast<size_t>(edge)], p); }
+double DeckHeight::deck(int lane, const Vec2& p) const {
+    const Lane& l = L_.lanes[static_cast<size_t>(lane)];
+    return blendTo(own(lane, p), l.isConnector() ? -1 : l.parent, partners_[static_cast<size_t>(lane)], p);
+}
+double DeckHeight::deckRoad(int edge, const Vec2& p) const { return blendTo(ownRoad(edge, p), edge, roadPartners_[static_cast<size_t>(edge)], p); }
 
 }  // namespace roads::lanes
 }  // namespace engine
