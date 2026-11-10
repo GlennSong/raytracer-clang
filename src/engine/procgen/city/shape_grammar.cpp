@@ -4971,13 +4971,17 @@ StoreyRooms storeyRooms(const Poly2& plan, const BuildingParams& params, Real ba
     const StairRun* on = runOn(runs, ki);
     // A LINK STOREY (cells.h, ADR-0179): a bridge or a doorway to the next cell opens here, onto open floor -- the
     // sky lobby, furnished as the lounge, clear of this storey's stair and off its wall.
-    if (ki >= 1 && !linkDoors(spk.plan, params, ki, 0).empty()) {
+    // Each link doorway keeps the floor in front of it clear, 2.5 m in, as a well does: the lounge's strip along that
+    // wall stopped at nothing, and the far tower's sofa stood in the doorway (the walker crossed the bridge and met
+    // its back, 0.7 m in).
+    if (const std::vector<LinkDoor> lds = ki >= 1 ? linkDoors(spk.plan, params, ki, 0) : std::vector<LinkDoor>{}; !lds.empty()) {
         std::vector<Poly2> wells;
         std::vector<std::size_t> blank;
         if (on && nS > 1) {
             wells.push_back(on->il.well);
             if (on->sides == spk.plan.size()) blank.push_back(on->il.edge);
         }
+        for (const LinkDoor& ld : lds) wells.push_back({ld.a, ld.b, ld.b - ld.n * 2.5, ld.a - ld.n * 2.5});
         sr.rp = transferLoungePlan(spk.plan, params, interiorInset(params), ki, wells, blank);
         return sr;
     }

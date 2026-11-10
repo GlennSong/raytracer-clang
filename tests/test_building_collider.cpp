@@ -10,6 +10,7 @@
 #include "../src/engine/procgen/city/cells.h"
 #include "../src/engine/procgen/city/core_plan.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
+#include "../src/engine/scripting/furniture_library_lua.h"   // the rooms furnished as a level furnishes them
 
 #include <cmath>
 #include <utility>
@@ -301,6 +302,9 @@ int twinTowerCellsForTest(const BuildingParams& base, std::vector<std::pair<Poly
 // storey (the resident interiors), the bridge's floor and glass sides (roof items of the tower that carries it) and
 // the lot's own prism -- and a walker from the sky lobby of one, out through the link door, across, into the other.
 TEST_CASE(a_walker_crosses_the_sky_bridge_between_twin_towers) {
+    // Furnished, as in a level: without the library the rooms grow empty, and the case passed alone but failed after
+    // any city level's load in the same process (which loads it) -- the furnished far tower is the one a player walks.
+    ensureFurnitureLibraryLoaded();
     const Poly2 box = {{-34, -14}, {34, -14}, {34, 14}, {-34, 14}};
     BuildingParams p;
     p.floors = 24;
