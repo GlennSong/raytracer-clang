@@ -17837,3 +17837,35 @@ with real lanes: the lowest tyre's gap +0.070 -> +0.058 m.
 then the cities switch to real lanes, measured against the junction gate. The parking/bays and stop lines still place
 by the offsets.
 
+## ADR-0397 — Turns run lane to lane, and a car does not turn back on itself at a junction
+
+**Context.** #218 step 3. In the traffic lab (ADR-0395) 7 of 289 drivers spun round on the spot in the first minute
+with real lanes (ADR-0396). The junction turn was a quadratic from link geometry, its span cut to 45% of the shorter
+street run (tight on short links) and skipped altogether past 120 degrees. Logged, the spins were not curves but
+ROUTES: a car turning back 170 degrees inside a junction -- down a collector, then up the one-way beside it (the lab's
+diamond interchanges), or up a one-way 14 m and back down the collector. No curve joins two lanes a few metres apart
+for a car with a 6 m turning circle.
+
+**Decision.**
+- **On the real lanes, a turn path from lane to lane.** From where the incoming lane meets the junction's mouth
+  (`junctionRadius` + 1 m back, up to 90% of the street run) to where the outgoing lane leaves it: a cubic whose ends
+  point along each lane, its handles an arc's for the angle turned ((4/3) tan(theta/4) r; chord / 3 when straight).
+  Every turn, the sharp ones too. Only where the level drives real lanes (`citysim.realLanes`); the old quadratic
+  stays for the cities until they do.
+- **A U-turn costs a minute in routing.** `findRoute`, for vehicles: leaving a node more than ~140 degrees from the
+  link it was reached by costs 60 s, unless it is the node's only way out (a dead end). Node-based A*, so it reads the
+  link the node was reached by -- the standard approximation. Not onto or off a ramp or the freeway: an
+  interchange's straight-segment ramps meet their roads at angles that read as reversals where the lanes only
+  diverge or merge (priced, the city plan's freeway lost a quarter of its commutes, 20.5% -> 14.6%, and
+  `city_plan_freeway_is_worth_driving_to` failed).
+
+**Measured.**
+- traffic_lab spins in the first minute: 7 -> 6 (turn paths) -> 3 (the U-turn cost). Two of the three are one place
+  on the east interchange where going round costs more than the minute; one is a 121-degree left turn.
+- metro_junctions_stay_clear (the cities on the offsets, the U-turn cost on): cars stuck in a box over 5 s 172 -> 163,
+  overlapping pairs 177 -> 141.
+- The plan's freeway commute share stays 0.205.
+
+**Owed.** The east interchange's turn-back; turning circles per vehicle (#219: the path's tightest radius against
+the car's); merges (#221); the cities onto real lanes.
+

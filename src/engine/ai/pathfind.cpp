@@ -32,6 +32,9 @@ constexpr Real kMaxSpeed = 28.0;
 // same fact in the router. Freeway and ramp merges are free-flowing and cost nothing,
 // and a walker (onFoot) is not charged.
 constexpr Real kStreetJunctionDelay = 6.0;   // seconds
+// a car turning back on itself at a node: more than ~140 degrees, priced as a minute -- round the block wins
+constexpr Real kUTurnCos = -0.75;
+constexpr Real kUTurnPenalty = 60.0;   // seconds
 }  // namespace
 
 Real Route::length(const NavGraph& g) const {
@@ -151,6 +154,23 @@ Route findRouteImpl(const NavGraph& graph, int startNode, int goalNode, bool onF
                 step += kStreetJunctionDelay;
             if (linkCostScale && static_cast<std::size_t>(li) < linkCostScale->size())
                 step *= std::max<Real>(1.0, (*linkCostScale)[static_cast<std::size_t>(li)]);
+            // A U-TURN COSTS (#218): a car turning back on itself at a node -- onto the street it came along, or a
+            // one-way beside it -- needs a junction as wide as two turning circles, and a driver goes round the block
+            // instead. Priced only where there is another way on (a dead end's only way out is back). Node-based, so it
+            // reads the link the node was reached by: what the drivers of the traffic lab's diamond interchanges
+            // were doing when they spun round on the spot (170 degrees inside the junction).
+            if (!onFoot && u != startNode && sc.stamp[static_cast<std::size_t>(u)] == gen) {
+                const int in = sc.came[static_cast<std::size_t>(u)];
+                // (not onto or off a ramp or the freeway: an interchange's straight-segment ramps meet their roads at
+                // angles that read as a reversal where the lanes only diverge or merge -- priced, the city plan's
+                // freeway lost a quarter of its commutes, 20.5% -> 14.6%)
+                const auto isMotorway = [](RoadClass c) { return c == RoadClass::Ramp || c == RoadClass::Freeway; };
+                if (in >= 0 && graph.outLinks[u].size() > 1 && !isMotorway(graph.links[static_cast<std::size_t>(in)].klass) &&
+                    !isMotorway(link.klass)) {
+                    const Vec2 a = graph.direction(in), b = graph.direction(li);
+                    if (a.x * b.x + a.y * b.y < kUTurnCos) step += kUTurnPenalty;
+                }
+            }
             Real tentative = gOf(u) + step;
             if (tentative + 1e-12 < gOf(link.to)) {
                 setG(link.to, tentative, li);

@@ -4652,9 +4652,20 @@ TEST_CASE(level_traffic_lab_cars_do_not_spin_on_the_spot) {
                 spun[k] = 1;
                 ++spins;
                 if (std::getenv("RT_LAB_SPIN_LOG"))
+                {
                     std::printf("      spin: agent %zu t=%.1f s at (%.1f, %.1f), heading (%.2f, %.2f) -> (%.2f, %.2f), leg %d of %zu\n", k,
                                 i * 0.1, a.pos.x, a.pos.y, anchorHead[k].x, anchorHead[k].y, a.heading.x, a.heading.y, a.leg,
                                 a.route.links.size());
+                    const engine::NavGraph& nv = city.nav();
+                    for (int q = std::max(0, a.leg - 2); q <= std::min<int>(static_cast<int>(a.route.links.size()) - 1, a.leg + 2); ++q) {
+                        const int lq = a.route.links[static_cast<std::size_t>(q)];
+                        const engine::NavLink& L = nv.links[static_cast<std::size_t>(lq)];
+                        const Vec2 dq = nv.direction(lq);
+                        std::printf("        leg %d link %d dir (%.2f,%.2f) len %.1f class %d lanes %d %s; ends at node %d (%s, %zu out)\n", q, lq, dq.x, dq.y,
+                                    L.length, static_cast<int>(L.klass), L.lanes, city.sim().laneMap().has(lq) ? "real" : "offsets", L.to,
+                                    nv.isJunction(L.to) ? "junction" : "not a junction", nv.outLinks[static_cast<std::size_t>(L.to)].size());
+                    }
+                }
             }
         }
     }

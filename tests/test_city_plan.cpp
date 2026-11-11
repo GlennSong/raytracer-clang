@@ -108,6 +108,7 @@ TEST_CASE(city_plan_freeway_is_worth_driving_to) {
     CHECK(s.freewayKm > 0);
     CHECK(plan.interchanges.size() >= 2);
     CHECK(s.commutesSampled > 0);
+    std::printf("    [plan] freeway commute share %.3f\n", s.freewayCommuteShare);
     CHECK(s.freewayCommuteShare >= 0.15);
 }
 

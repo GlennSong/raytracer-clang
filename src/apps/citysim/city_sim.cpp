@@ -4870,7 +4870,8 @@ void CitySim::refreshPose(Agent& a) {
     // what steer() turns the nose toward.
     {
         const int legN = legCount;
-        const Real kReach = 14.0;
+        // (on the real lanes a turn runs mouth to mouth: the reach covers the widest box)
+        const Real kReach = useRealLanes_ ? 40.0 : 14.0;
         int kin = -1;
         Real d = 0;   // route metres from the car ahead to the node (< 0: past it)
         {
@@ -4890,7 +4891,59 @@ void CitySim::refreshPose(Agent& a) {
                 }
             }
         }
-        if (kin >= 0) {
+        if (kin >= 0 && useRealLanes_) {
+            // ON THE REAL LANES: A TURN PATH FROM LANE TO LANE (#218 step 3). From where the incoming lane meets the
+            // junction's mouth to where the outgoing lane leaves it: a cubic whose ends point along each lane, its
+            // handles an arc's for the angle turned (a slight bend gentle, a hairpin a wide sweep) -- every turn,
+            // the sharp ones too (a diamond's ramp terminal, where the quadratic below was skipped and the car spun).
+            const int lin = a.route.links[kin], lout = a.route.links[kin + 1];
+            const Vec2 din = nav_->direction(lin), dout = nav_->direction(lout);
+            if (din.x * dout.x + din.y * dout.y < 0.94) {
+                const int node = nav_->links[lin].to;
+                Real runIn = 0, runOut = 0;
+                for (int k = kin; k >= 0 && runIn < 60.0; --k) {
+                    runIn += nav_->links[a.route.links[k]].length;
+                    if (k < kin && nav_->isJunction(nav_->links[a.route.links[k]].to)) break;
+                }
+                for (int k = kin + 1; k < legN && runOut < 60.0; ++k) {
+                    runOut += nav_->links[a.route.links[k]].length;
+                    if (nav_->isJunction(nav_->links[a.route.links[k]].to)) break;
+                }
+                const Real mouth = std::max(Real(4.0), junctionRadius(node) + 1.0);
+                const Real mIn = std::min(mouth, runIn * 0.9), mOut = std::min(mouth, runOut * 0.9);
+                auto back = [&](Real m) {   // the lane m before the node
+                    int k = kin;
+                    Real Lk = nav_->links[a.route.links[k]].length;
+                    while (m > Lk && k > 0) { m -= Lk; --k; Lk = nav_->links[a.route.links[k]].length; }
+                    return sample(a.route.links[k], Lk > 1e-9 ? (Lk - std::min(m, Lk)) / Lk : 0.0);
+                };
+                auto fwd = [&](Real m) {    // ...and m after it
+                    int k = kin + 1;
+                    Real Lk = nav_->links[a.route.links[k]].length;
+                    while (m > Lk && k + 1 < legN) { m -= Lk; ++k; Lk = nav_->links[a.route.links[k]].length; }
+                    return sample(a.route.links[k], Lk > 1e-9 ? std::min(m, Lk) / Lk : 1.0);
+                };
+                if (mIn > 0.5 && mOut > 0.5 && d < mIn && -d < mOut) {
+                    const Vec2 p0 = back(mIn), p3 = fwd(mOut);
+                    Vec2 t0 = back(std::max(Real(0), mIn - 0.5)) - back(mIn + 0.5);
+                    Vec2 t3 = fwd(mOut + 0.5) - fwd(std::max(Real(0), mOut - 0.5));
+                    const Real l0 = t0.length(), l3 = t3.length();
+                    t0 = l0 > 1e-9 ? t0 * (1.0 / l0) : din;
+                    t3 = l3 > 1e-9 ? t3 * (1.0 / l3) : dout;
+                    // an arc's handle: (4/3) tan(theta/4) r, with the chord 2 r sin(theta/2) -- chord/3 when straight
+                    const Real theta = std::acos(std::clamp(t0.x * t3.x + t0.y * t3.y, Real(-1), Real(1)));
+                    const Real chord = (p3 - p0).length();
+                    const Real h = theta < 1e-3 ? chord / 3.0
+                                                : chord * (4.0 / 3.0) * std::tan(theta / 4.0) / (2.0 * std::max(std::sin(theta / 2.0), Real(0.2)));
+                    const Vec2 c1 = p0 + t0 * h, c2 = p3 - t3 * h;
+                    const Real u = std::clamp((mIn - d) / (mIn + mOut), Real(0), Real(1)), v = 1.0 - u;
+                    a.pos = p0 * (v * v * v) + c1 * (3.0 * u * v * v) + c2 * (3.0 * u * u * v) + p3 * (u * u * u);
+                    const Vec2 tan = (c1 - p0) * (3.0 * v * v) + (c2 - c1) * (6.0 * u * v) + (p3 - c2) * (3.0 * u * u);
+                    const Real tl = tan.length();
+                    if (tl > 1e-6) a.pathDir = tan * (1.0 / tl);
+                }
+            }
+        } else if (kin >= 0) {
             const int lin = a.route.links[kin], lout = a.route.links[kin + 1];
             const Vec2 din = nav_->direction(lin), dout = nav_->direction(lout);
             const Real cosT = din.x * dout.x + din.y * dout.y;
