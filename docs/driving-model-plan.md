@@ -88,6 +88,19 @@ Per "roads: no guessing": the road builder states every movement, and the sim ne
 - **Conflict matrix per junction**, baked from connector geometry plus the rule set: which movements cross or merge, who yields to
   whom, and which may wait inside the junction.
 - **Speed limits per road**, posted (signs placed by the builder). The rule set gives defaults by road class.
+- **Regulations as road data, their signs and paint planted from it** (Glenn, 2026-11-11: "make and plant those traffic signs so we
+  can visually see something on the road and gauge the AI against it"):
+  - every regulation is a statement on a lane, connector or junction approach: stop, give way, priority road, speed limit, no
+    entry, one way, no U-turn, no parking, no stopping, bus lane, turn restrictions;
+  - **the picture of each is planted from the same statement:** the sign (a face laid out by the existing road-sign system,
+    ADR-0110, baked into its atlas, on a post or gantry) and the road paint (stop line, 止まれ on the road, arrows, stall lines,
+    crosswalks). A driver reads exactly what the player sees, so a car that runs a stop has a visible sign it ran;
+  - which regulations exist, what they mean, and what their faces look like belong to the **rule set**: Japanese faces by
+    default (the red inverted 止まれ triangle, the blue one-way arrow, the red-ringed speed limit), from the official standard
+    and credited;
+  - **parking is road data too:** kerbside spaces and bays the road states and paints, with the rule set's no-parking zones (near
+    junctions, crossings, bus stops, hydrants). Today the sim invents a bay every 7 m along any road with a parking band; that
+    goes.
 - **Published to the game as one LaneGraph.** Vehicles route and drive on it. The NavGraph stays for walking.
 - A lanes-tag bump rebuilds every city level's roads (Glenn's OK at that step).
 
@@ -213,6 +226,9 @@ the old model until phase 9.
 1. **The lane graph in the lab.** Connectors for every movement, lane turn assignments, control, the conflict matrix, speed
    limits, parking lanes. Checks: every connector within its class's radius, every lane reachable, nothing contradicting
    the paint. Lanes-tag bump.
+   **1b. Regulations, signs, paint and parking** as road data, planted in the lab: every regulation stated and shown,
+   Japanese faces, parking spaces the road states. Can start first: it gives the lab something visible to judge drivers
+   against from phase 2 on.
 2. **The core.**
    - the vehicle state;
    - lane-level routing that knows where the car faces;
