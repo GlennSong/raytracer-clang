@@ -371,6 +371,26 @@ follow along and review.
   - **soak** — running the simulation for a long time to catch rare bugs.
   - When a new term like these is load-bearing in an explanation, gloss it in a
     few words rather than assuming the reader knows it.
+- **Documents too: plans, ADRs, issues and docs pages are written for Glenn,
+  not for specialists.** (Glenn, 2026-11-11, on the driving plan: "I don't know
+  what the Krauss safe speed is ... The jargon makes it impossible to understand
+  intuitively what is being said.") A plan that borrows from a field (traffic
+  engineering, rendering, physics) will be full of that field's names. Rules:
+  - **Say what a thing does before what it's called.** "A speed limit on each
+    car: never so fast that it couldn't stop if the car ahead braked as hard as
+    it can" — then, if the name matters for looking it up, "(the Krauss safe
+    speed)". Never the name alone.
+  - **Every acronym and borrowed name is explained where it first appears** in
+    that document (IDM, MOBIL, HCM, SUMO...). A document read on its own must
+    make sense without the sources.
+  - **A long document opens with a short glossary** of the terms it keeps
+    using, in plain words.
+  - **Prefer the everyday word** over the field's: "the gap between cars", not
+    "headway"; "how fast a queue empties at a green", not "saturation flow".
+    Keep the field's term only where we'll need it to read the sources, and
+    then gloss it.
+  - **The test:** could Glenn explain each sentence back without looking
+    anything up? If not, rewrite it.
 - **Edit source files with the Edit / Write tools, never with shell or Python
   string-replacement.** The editor tools show a reviewable diff, fail safely
   when the target text is missing or ambiguous, and let the harness track file
