@@ -11,6 +11,7 @@
 #include "activities.h"
 #include "city_goals.h"
 #include "city_roles.h"   // every resident's day comes from its role (RoleCatalog, buildDayTable)
+#include "lane_map.h"     // the real lanes on each link (#218)
 #include "city_bus.h"
 #include "city_rail_riders.h"
 #include "city_dispatch.h"
@@ -1219,6 +1220,14 @@ public:
     // a service vehicle) take role `name` -- the traffic lab gives lab_driver, always driving. After the cabs and
     // buses are marked. Returns how many took it (0 when the role is unknown).
     int giveDriversRole(const std::string& name, Real share);
+    // THE REAL LANES (#218): the lanes builder's lanes matched to the links (LaneMap; set by the host after build) --
+    // always built, used to draw cars only where the level asks (citysim.realLanes; RT_REAL_LANES=1/0 overrides):
+    // the traffic lab drives them; the cities keep the centreline offsets until the junctions take real lanes (ramp
+    // tails merging along a street met its traffic and jammed metro's junctions: ADR-0396).
+    void setLaneMap(LaneMap m) { laneMap_ = std::move(m); }
+    const LaneMap& laneMap() const { return laneMap_; }
+    void setUseRealLanes(bool on) { useRealLanes_ = on; }
+    bool useRealLanes() const { return useRealLanes_; }
     // Does this agent drive one trip straight into the next (the level's wander mode, or a roaming role's day)?
     // The chained-arrival corner, the final-leg turn yield and the no-parking rules ask this, not wander_.
     bool roams(const Agent& a) const {
@@ -2029,6 +2038,8 @@ private:
     std::vector<uint8_t> crowdHas_;
     Real thinkPeriod_ = 0.35;   // reactive re-decide cadence (s), staggered per agent
     bool wander_ = false;       // lab mode: perpetual random trips, no schedule
+    LaneMap laneMap_;           // the real lanes on each link (#218): empty = the link's line plus an offset
+    bool useRealLanes_ = false; // draw cars on them (citysim.realLanes)
     // Three-tier traffic state (P4): the fed bubble centre, the fixed-frame
     // counter the V buckets key off (frameIndex_ % vTickDivisor — no wall
     // clock), and the lifetime transition counters the tests gate on.

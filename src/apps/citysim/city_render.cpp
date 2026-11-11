@@ -276,6 +276,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.taxiFraction = c.taxiFraction;
         params_.driverRole = c.driverRole;
         params_.driverRoleShare = c.driverRoleShare;
+        params_.realLanes = c.realLanes;
         params_.hailChance = c.hailChance;
         params_.hailMinMetres = c.hailMinMetres;
         params_.busRoutes = c.busRoutes;
@@ -751,6 +752,22 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
 #endif
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.build(nav_, carCount, pedCount, params_.seed);
+    // THE REAL LANES (#218): the lanes the builder laid (published at load, engine::LevelLanes) matched to the links
+    world.each<engine::LevelLanes>([&](Entity, engine::LevelLanes& ll) {
+        if (ll.lanes.empty()) return;
+        LaneMap lm;
+        lm.build(nav_, ll.lanes);
+        LOG_INFO << "[citysim] real lanes: " << lm.matched << " of " << lm.drivable << " drivable links matched (" << lm.countDiffers
+                 << " with another lane count, " << lm.partial << " where a lane starts or ends along the link, " << lm.none
+                 << " with no lane found; " << lm.kerbParking << " leaving the kerb lane to the parking); the rest keep the centreline offsets";
+        sim_.setLaneMap(std::move(lm));
+    });
+    {
+        bool real = params_.realLanes;
+        if (const char* e = std::getenv("RT_REAL_LANES")) real = e[0] == '1';
+        sim_.setUseRealLanes(real);
+        if (real) LOG_INFO << "[citysim] cars drive the real lanes";
+    }
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
     // THE FIRE STATIONS' ENGINES (Glenn, 2026-10-13: "a fire truck should be an actual truck"): one parked behind each
     // bay door of every fire station (vehicleBayDoors: the doors the facade draws), its nose to the door, on the bay's

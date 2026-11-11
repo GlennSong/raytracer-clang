@@ -505,6 +505,7 @@ add_library(citysim STATIC
     src/apps/citysim/station_entrance.cpp   # the pavilion over each station's way in
     src/apps/citysim/rail_board.cpp   # a platform's departure board: next trains, minutes away
     src/apps/citysim/bus_stop_props.cpp   # the pole, sign and bench you can see
+    src/apps/citysim/lane_map.cpp         # the real lanes on each link (#218)
     src/apps/citysim/city_map_raster.cpp  # the map tool's picture: the city SVG, rasterized (nanosvg)
     src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
     src/apps/citysim/place_kinds.cpp     # what kind each place is, its tags, a home's dwellings (places.lua)

@@ -1039,6 +1039,9 @@ struct CitySimConfig {
     // -- the traffic lab's "lab_driver", always driving. Empty: none.
     std::string driverRole;
     float driverRoleShare = 1.0f;
+    // DRAW CARS ON THE REAL LANES (#218, ADR-0396): the lanes builder's lanes, not the link's line plus an offset.
+    // The traffic lab's; the cities' once their junctions take real lanes.
+    bool realLanes = false;
     float hailChance = 0.0f;
     float hailMinMetres = 400.0f;
     // BUSES (city_bus.h): `busRoutes` derived loops of `busStops` stops, with
@@ -1150,6 +1153,23 @@ struct OpenSigns {
 // (Supersedes the P8.4 ExtraNavGraph bolt-on, which only the sim could see.)
 struct LevelRoadGraph {
     RoadGraph graph;
+};
+
+// THE CITY's REAL LANES (#218): every lane the lanes builder laid, recomputed at load from the level's own graph by the
+// builder's first step (expand -- the input the bake was built from, ~60 ms on the island) and published as plain
+// lines, so the traffic sim drives the painted lanes instead of a centreline plus an offset. `kind` is the builder's:
+// through | turn | slip | aux | ramp | connector. `parent` is the lane's road (graph edge index), `dir` +1 along it.
+struct TrafficLane {
+    std::vector<Vec2> xy;
+    double w = 3.5;
+    int parent = -1;
+    int dir = 1;
+    std::string kind;
+};
+struct LevelLanes {
+    std::vector<TrafficLane> lanes;
+    // each road's centreline after expand (graph edge index -> points), for checking the recompute against the bake
+    std::vector<std::vector<Vec2>> roads;
 };
 
 // The DECK a road entity's mesh actually rode (RoadDeckField), stored by the

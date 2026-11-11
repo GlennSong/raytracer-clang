@@ -1395,3 +1395,24 @@ TEST_CASE(lanes_an_elevated_deck_has_a_soffit_facing_down) {
         }
     }
 }
+
+// #218 (measured 2026-11-10): what recomputing every city's lanes at LOAD costs -- expand() on each planned graph, the
+// builder's own first step (the sim would read the same lanes the bake was built from). Print-only; RT_EXPAND_TIMING.
+TEST_CASE(lanes_print_expand_cost_per_city) {
+    if (!std::getenv("RT_EXPAND_TIMING")) return;
+    for (const char* name : {"traffic_lab", "metro_v2_test", "river_town", "metro_planned", "island_8_nature_lanelab"}) {
+        std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + name;
+        if (path.size() < 5 || path.substr(path.size() - 5) != ".json")
+            path += std::string(name).find("_lanelab") == std::string::npos ? "_lanelab.json" : ".json";
+        std::ifstream in(path);
+        if (!in) { std::printf("    [expand] %s: no graph\n", name); continue; }
+        const nlohmann::json j = nlohmann::json::parse(in);
+        RoadLabGraph g = RoadLabGraph::fromJson(j);
+        const auto t0 = std::chrono::steady_clock::now();
+        const LaneSet L = expand(g);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        std::size_t pts = 0;
+        for (const Lane& l : L.lanes) pts += l.xy.size();
+        std::printf("    [expand] %-26s %5zu edges -> %6zu lanes, %8zu points: %.1f ms\n", name, g.edges.size(), L.lanes.size(), pts, ms);
+    }
+}

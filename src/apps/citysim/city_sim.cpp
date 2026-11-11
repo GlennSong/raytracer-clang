@@ -4745,9 +4745,12 @@ void CitySim::refreshPose(Agent& a) {
         const Real phase = (a.home * 2.399 + a.work * 1.117);
         const Real waverGain =
             std::min(Real(1), std::max(Real(0), (a.speed - 14.0) / 12.0));
-        off += 0.12 * std::sin(simSeconds_ * 0.55 + phase) * waverGain;
-        Vec2 cpt = nav_->pointOnLink(link, t);
+        const Real waver = 0.12 * std::sin(simSeconds_ * 0.55 + phase) * waverGain;
+        off += waver;
         const Vec2 d = nav_->direction(link);
+        // ON THE REAL LANE (#218), where the link is matched to the builder's lanes
+        if (useRealLanes_ && laneMap_.has(link)) return laneMap_.point(link, t, fl) + Vec2(d.y, -d.x) * waver;
+        Vec2 cpt = nav_->pointOnLink(link, t);
         return cpt + Vec2(d.y, -d.x) * off;
     };
     a.pos = sample(li, L > 1e-9 ? s / L : 0.0);

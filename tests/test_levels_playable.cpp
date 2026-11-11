@@ -68,6 +68,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <numeric>
 #include <unordered_map>
 #include <vector>
 
@@ -4660,4 +4661,184 @@ TEST_CASE(level_traffic_lab_cars_do_not_spin_on_the_spot) {
     for (std::size_t k = 0; k < n; ++k) drivers += anchored[k];
     std::printf("    [lab-spin] %d drivers in the first minute; %d spun round within 15 m\n", drivers, spins);
     CHECK(drivers > 200);
+}
+
+// THE REAL LANES (#218): the sim drives the lanes builder's lanes, recomputed at load (engine::LevelLanes) from the
+// graph the bake was built from. Held to the bake, per city level:
+//   1. the recomputed roads lie on the baked driving surface's spines (the same build's centrelines): within 5 cm;
+//   2. every lane a link was matched to lies inside its road's baked carriageway;
+// and printed: how many links matched, and how far the old centreline-plus-offset pose stood from the real lane.
+namespace {
+struct SpineIndex {   // the baked spines' segments, by 10 m cell
+    struct Seg { Vec2 a, b; double hw; };
+    std::vector<Seg> segs;
+    std::unordered_map<int64_t, std::vector<int>> cells;
+    static int64_t key(int x, int z) { return (static_cast<int64_t>(x) << 32) ^ static_cast<uint32_t>(z); }
+    void add(const engine::UnionSpine& s) {
+        for (std::size_t i = 0; i + 1 < s.points.size(); ++i) {
+            const int id = static_cast<int>(segs.size());
+            segs.push_back({s.points[i], s.points[i + 1], s.halfWidth});
+            const Vec2 lo(std::min(s.points[i].x, s.points[i + 1].x), std::min(s.points[i].y, s.points[i + 1].y));
+            const Vec2 hi(std::max(s.points[i].x, s.points[i + 1].x), std::max(s.points[i].y, s.points[i + 1].y));
+            for (int z = static_cast<int>(std::floor(lo.y / 10.0)); z <= static_cast<int>(std::floor(hi.y / 10.0)); ++z)
+                for (int x = static_cast<int>(std::floor(lo.x / 10.0)); x <= static_cast<int>(std::floor(hi.x / 10.0)); ++x)
+                    cells[key(x, z)].push_back(id);
+        }
+    }
+    // the nearest spine segment within ~20 m (running along `along`, when given: near a junction the nearest spine can
+    // be the crossing road's): distance to its line, its half-width
+    bool nearest(const Vec2& p, double& dist, double& hw, Vec2 along = Vec2(0, 0)) const {
+        dist = 1e30;
+        const int cx = static_cast<int>(std::floor(p.x / 10.0)), cz = static_cast<int>(std::floor(p.y / 10.0));
+        for (int z = cz - 2; z <= cz + 2; ++z)
+            for (int x = cx - 2; x <= cx + 2; ++x) {
+                auto it = cells.find(key(x, z));
+                if (it == cells.end()) continue;
+                for (int id : it->second) {
+                    const Seg& s = segs[static_cast<std::size_t>(id)];
+                    const Vec2 ab = s.b - s.a;
+                    const double l2 = ab.x * ab.x + ab.y * ab.y;
+                    if (along.length() > 0.5 && l2 > 1e-12 &&
+                        std::fabs((ab.x * along.x + ab.y * along.y) / std::sqrt(l2)) < 0.7)
+                        continue;
+                    const double u = l2 > 1e-12 ? std::clamp(((p.x - s.a.x) * ab.x + (p.y - s.a.y) * ab.y) / l2, 0.0, 1.0) : 0.0;
+                    const double d = (p - (s.a + ab * u)).length();
+                    if (d < dist) { dist = d; hw = s.hw; }
+                }
+            }
+        return dist < 1e29;
+    }
+};
+}  // namespace
+
+TEST_CASE(level_real_lanes_match_the_baked_roads) {
+    for (const char* name : {"traffic_lab", "metro_v2_test", "river_town"}) {
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        const bool loaded = LevelLoader::load(std::string(RT_SOURCE_DIR) + "/assets/levels/" + name + ".json", world, *renderer,
+                                              view, assets, false);
+        CHECK(loaded);
+        if (!loaded) continue;
+        const engine::LevelLanes* ll = nullptr;
+        world.each<engine::LevelLanes>([&](Entity, engine::LevelLanes& l) { if (!ll) ll = &l; });
+        CHECK(ll != nullptr && !ll->lanes.empty());
+        if (!ll) continue;
+        SpineIndex baked;
+        world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { for (const engine::UnionSpine& s : d.field.spines) baked.add(s); });
+        // 1. the recomputed roads on the baked spines
+        int roadPts = 0, roadOff = 0;
+        double roadWorst = 0;
+        for (const std::vector<Vec2>& road : ll->roads)
+            for (std::size_t i = 0; i < road.size(); ++i) {
+                double d = 0, hw = 0;
+                if (!baked.nearest(road[i], d, hw)) continue;
+                ++roadPts;
+                roadWorst = std::max(roadWorst, d);
+                roadOff += d > 0.05;
+            }
+        // each recomputed road's own baked half-width: the baked spine its middle lies ON (the recompute is exact)
+        std::vector<double> roadHw(ll->roads.size(), -1.0);
+        for (std::size_t r = 0; r < ll->roads.size(); ++r) {
+            const std::vector<Vec2>& road = ll->roads[r];
+            if (road.size() < 2) continue;
+            const std::size_t m = road.size() / 2;
+            const Vec2 along = road[std::min(m + 1, road.size() - 1)] - road[m > 0 ? m - 1 : 0];
+            double d = 0, hw = 0;
+            if (baked.nearest(road[m], d, hw, along.length() > 1e-9 ? along * (1.0 / along.length()) : Vec2(0, 0)) && d < 0.05)
+                roadHw[r] = hw;
+        }
+        auto distToRoad = [&](int r, const Vec2& p) {
+            double best = 1e30;
+            const std::vector<Vec2>& road = ll->roads[static_cast<std::size_t>(r)];
+            for (std::size_t i = 0; i + 1 < road.size(); ++i) {
+                const Vec2 ab = road[i + 1] - road[i];
+                const double l2 = ab.x * ab.x + ab.y * ab.y;
+                const double u = l2 > 1e-12 ? std::clamp(((p.x - road[i].x) * ab.x + (p.y - road[i].y) * ab.y) / l2, 0.0, 1.0) : 0.0;
+                best = std::min(best, (p - (road[i] + ab * u)).length());
+            }
+            return best;
+        };
+        citysim::CityRenderSystem city;
+        CHECK(city.build(world, &assets, nullptr));
+        const citysim::LaneMap& lm = city.sim().laneMap();
+        const engine::NavGraph& nav = city.nav();
+        // 2. matched lanes inside their carriageway; and the old pose's distance from them
+        int lanePts = 0, laneOut = 0;
+        double laneWorst = 0;
+        std::vector<double> oldGap;
+        for (int li = 0; li < nav.linkCount(); ++li) {
+            if (!lm.has(li)) continue;
+            const engine::NavLink& L = nav.links[static_cast<std::size_t>(li)];
+            const std::vector<citysim::LinkLane>& ls = lm.lanesOf(li);
+            const double sp = city.sim().laneSpacingFor(li);
+            const Vec2 d = nav.direction(li), kerb = engine::rightOf(d);
+            for (std::size_t k = 0; k < ls.size(); ++k) {
+                for (double t : {0.1, 0.5, 0.9}) {
+                    // against ITS OWN road's baked carriageway
+                    const Vec2 p = lm.point(li, t, static_cast<double>(k));
+                    const int road = ls[k].road;
+                    if (road < 0 || static_cast<std::size_t>(road) >= roadHw.size() || roadHw[static_cast<std::size_t>(road)] < 0) continue;
+                    const double dist = distToRoad(road, p), hw = roadHw[static_cast<std::size_t>(road)];
+                    ++lanePts;
+                    const double over = dist + ls[k].w * 0.5 - hw;
+                    laneWorst = std::max(laneWorst, over);
+                    laneOut += over > 0.15;
+                    if (over > 0.15 && std::getenv("RT_LANES_LOG"))
+                        std::printf("      out: link %d lane %zu t %.1f at (%.1f, %.1f) w %.1f: %.2f m from the spine, its half-width %.2f, class %d oneWay %d sim lanes %d\n",
+                                    li, k, t, p.x, p.y, ls[k].w, dist, hw, static_cast<int>(L.klass), L.oneWay ? 1 : 0, L.lanes);
+                }
+                double off = (0.5 + static_cast<double>(k)) * sp;
+                if (L.oneWay) off -= L.lanes * 0.5 * sp;
+                const Vec2 oldP = nav.pointOnLink(li, 0.5) + kerb * off;
+                oldGap.push_back((oldP - lm.point(li, 0.5, static_cast<double>(k))).length());
+            }
+        }
+        if (const char* at = std::getenv("RT_LANES_AT")) {   // "x,z": every link touching the node nearest there
+            double qx = 0, qz = 0;
+            std::sscanf(at, "%lf,%lf", &qx, &qz);
+            int best = -1; double bd = 1e30;
+            for (int n = 0; n < nav.nodeCount(); ++n) { const double dd = (nav.nodes[static_cast<std::size_t>(n)] - Vec2(qx, qz)).length(); if (dd < bd) { bd = dd; best = n; } }
+            for (int li = 0; li < nav.linkCount(); ++li) {
+                const engine::NavLink& L = nav.links[static_cast<std::size_t>(li)];
+                if (L.from != best && L.to != best) continue;
+                const Vec2 d = nav.direction(li), kerb = engine::rightOf(d);
+                const double sp = city.sim().laneSpacingFor(li);
+                std::printf("      link %d %s node %d: (%.1f,%.1f)->(%.1f,%.1f) class %d width %.1f lanes %d oneWay %d spacing %.2f %s\n", li,
+                            L.to == best ? "into" : "out of", best, nav.nodes[static_cast<std::size_t>(L.from)].x, nav.nodes[static_cast<std::size_t>(L.from)].y,
+                            nav.nodes[static_cast<std::size_t>(L.to)].x, nav.nodes[static_cast<std::size_t>(L.to)].y, static_cast<int>(L.klass), L.width, L.lanes,
+                            L.oneWay ? 1 : 0, sp, lm.has(li) ? "matched" : "OFFSETS");
+                for (int k = 0; k < L.lanes; ++k) {
+                    double off = (0.5 + k) * sp;
+                    if (L.oneWay) off -= L.lanes * 0.5 * sp;
+                    const Vec2 m = nav.pointOnLink(li, 0.5);
+                    std::printf("        lane %d: old offset %+.2f", k, off);
+                    if (lm.has(li)) {
+                        const Vec2 p = lm.point(li, 0.5, k);
+                        std::printf(", real %+.2f (road %d)", (p.x - m.x) * kerb.x + (p.y - m.y) * kerb.y, lm.lanesOf(li)[static_cast<std::size_t>(k)].road);
+                    }
+                    std::printf("\n");
+                }
+            }
+        }
+        std::sort(oldGap.begin(), oldGap.end());
+        const double mean = oldGap.empty() ? 0 : std::accumulate(oldGap.begin(), oldGap.end(), 0.0) / oldGap.size();
+        std::printf("    [lanes] %-14s %zu lanes, %d of %d drivable links matched (%d leaving the kerb lane to parking; %d other count, %d partial, %d none)\n", name,
+                    ll->lanes.size(), lm.matched, lm.drivable, lm.kerbParking, lm.countDiffers, lm.partial, lm.none);
+        std::printf("    [lanes] %-14s roads on the baked spines: %d points, worst %.3f m, %d over 5 cm; lanes in the carriageway: "
+                    "%d samples, %d past its edge by > 15 cm (worst %+.2f m)\n", name, roadPts, roadWorst, roadOff, lanePts, laneOut, laneWorst);
+        {
+            std::string c;
+            for (const auto& [k, v] : lm.counts) c += " sim " + std::to_string(k.first) + "/found " + std::to_string(k.second) + ": " + std::to_string(v) + ";";
+            std::printf("    [lanes] %-14s lane counts:%s\n", name, c.c_str());
+        }
+        if (!oldGap.empty())
+            std::printf("    [lanes] %-14s the old offset pose from the real lane: mean %.2f m, p95 %.2f m, worst %.2f m\n", name, mean,
+                        oldGap[oldGap.size() * 95 / 100], oldGap.back());
+        CHECK(roadPts > 0 && roadOff == 0);
+        CHECK(lanePts > 0 && laneOut == 0);
+        CHECK(lm.matched > lm.drivable / 2);
+    }
 }

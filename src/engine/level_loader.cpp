@@ -65,6 +65,7 @@
 #include "bundle/cache_use.h"
 #ifdef RT_ROADS_LANES
 #include "procgen/city/roads/lanes/lanes.h"     // the lanes road builder (ADR-0083/0089)
+#include "procgen/city/roads/lanes/lane_expand.h"   // expand: the city's real lanes for the traffic sim (#218)
 #include "procgen/city/roads/lanes/deck_mesh.h"
 #include "procgen/city/roads/lanes/road_twin.h"   // the derived road graph: nav, furniture, map
 #include "procgen/city/roads/lanes/block_audit.h"  // sceneBlocks: city blocks straight from the pavement
@@ -663,6 +664,36 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
     // The ONE derived road graph: nav, traffic, furniture, street signs, the city map. The
     // lattice's is re-derived downstream from every RoadEntity in the world by the same
     // function, and only when nothing published one.
+    // THE REAL LANES (#218): this city's lanes, recomputed from the graph the bake was built from (the same rule:
+    // cityEntities + loadCityGraph, then the builder's own first step, expand). Not baked: ~60 ms on the island, and
+    // a level test holds them to the baked road surface.
+    {
+        using namespace engine::roads::lanes;
+        for (const CityEntity& e : cityEntities(in.level)) {
+            if (e.entityIndex != in.entityIndex) continue;
+            try {
+                RoadLabGraph g = loadCityGraph(e);
+                const LaneSet L = expand(g);
+                engine::LevelLanes* out = nullptr;
+                world.each<engine::LevelLanes>([&](Entity, engine::LevelLanes& l) { if (!out) out = &l; });
+                if (!out) out = &world.add<engine::LevelLanes>(world.create(), engine::LevelLanes{});
+                const int roadBase = static_cast<int>(out->roads.size());
+                for (const EdgeSpec& es : g.edges) out->roads.push_back(es.xy);
+                for (const Lane& l : L.lanes) {
+                    engine::TrafficLane t;
+                    t.xy = l.xy;
+                    t.w = l.w;
+                    t.parent = l.parent >= 0 ? roadBase + l.parent : -1;
+                    t.dir = l.dir;
+                    t.kind = l.kind;
+                    out->lanes.push_back(std::move(t));
+                }
+                LOG_INFO << "[roads] " << L.lanes.size() << " lanes recomputed for the traffic sim (" << g.edges.size() << " roads)";
+            } catch (const std::exception& ex) {
+                LOG_WARN << "[roads] lanes for the traffic sim: " << ex.what() << " (cars keep the centreline offsets)";
+            }
+        }
+    }
     bool have = false; world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph&) { have = true; });
     if (have) return;
     engine::LevelRoadGraph lrg; lrg.graph = b.navGraph(in);
@@ -5831,6 +5862,7 @@ bool LevelLoader::load(const std::string& path,
         cfg.taxiFraction = cs.value("taxiFraction", cfg.taxiFraction);
         cfg.driverRole = cs.value("driverRole", cfg.driverRole);
         cfg.driverRoleShare = cs.value("driverRoleShare", cfg.driverRoleShare);
+        cfg.realLanes = cs.value("realLanes", cfg.realLanes);
         cfg.hailChance = cs.value("hailChance", cfg.hailChance);
         cfg.hailMinMetres = cs.value("hailMinMetres", cfg.hailMinMetres);
         cfg.busRoutes = cs.value("busRoutes", cfg.busRoutes);

@@ -17801,3 +17801,39 @@ overriding an agent's brain to just drive around."
 - Destinations are random nodes; a list of lab routes (through downtown, onto the freeway and off) comes with the
   numbers the lab prints (lane error, pivots, crashes per km, junction throughput, merges).
 
+## ADR-0396 — The sim knows the real lanes: recomputed at load, matched to its links, held to the bake
+
+**Context.** #218. The sim drew a car at its link's line plus (lane + 0.5) x spacing. The lanes builder lays real
+lanes (`Lane`, lane_expand.h) that the sim never read, so cars sat between the painted lanes: measured, 1.65 m from
+the real lane on average on metro_v2_test and river_town (worst 4.8 and 8.5 m). The real lanes could be stored in the
+bake (a lanes tag bump and a re-bake of every city) or recomputed at load.
+
+**Decision.**
+- **Recomputed at load, not baked.** `publishCityProducts` runs the builder's own first step, `expand`, on the graph the
+  bake was built from (the same rule: `cityEntities` + `loadCityGraph`, with the level's sidewalk overrides) and
+  publishes the lanes as plain lines, `engine::LevelLanes` (no lanes-module types). Measured: traffic_lab 5.8 ms,
+  metro_v2_test 5.7 ms, metro_planned 34 ms, island_8_nature 57 ms. No tag bump.
+- **Matched to the links** (`citysim::LaneMap`). For each drivable NavLink: the travel lanes running its way over its
+  whole length (lanes against their road, `dir` -1, read in travel order), of ONE road (near a junction a crossing
+  road's lane can run alongside), ordered offside (lane 0) to kerb along `rightOf` (we drive on the left).
+- **The kerb lane is the parking lane.** The sim counts its lanes from the road's width less the parking it lines the
+  kerbs with, so a road laid three lanes a way is two to drive in and the bays. One more lane than the sim's count:
+  the kerb-most is left to the parking. Matched: traffic_lab 1364 of 1372 links, metro_v2_test 2121 of 2151,
+  river_town 1760 of 1874; the rest (a turn pocket starting, a lane dropping, a ramp merging) keep the offsets.
+- **Held to the bake** (`level_real_lanes_match_the_baked_roads`, three city levels): the recomputed roads lie on the
+  baked deck spines (worst 0.000 m over 124,000 points), and every matched lane lies inside its own road's baked
+  carriageway (0 of 23,751 samples past the edge).
+- **Drawn on only where the level asks** (`citysim.realLanes`; `RT_REAL_LANES=1/0` overrides). The traffic lab does.
+  The cities do not yet: with real lanes metro_junctions_stay_clear went from 172 to 384 cars stuck in a box over
+  5 s (limit 300) and from 177 to 325 overlapping pairs. At node 664 a freeway off-ramp's tail (d0_0_b_off) merges
+  along a collector (s396): its lane runs into the collector's, and with no merge rule (#221) the two streams met and
+  jammed; the old offsets had kept them 4 m apart by accident. At the downtown crossing (node 181) the real lanes
+  sit 1.8 and 5.5 m off the centre line where the offsets put cars at 2.75 and 8.25 m.
+
+**Measured with real lanes in the lab.** Spins in the first minute 8 -> 7 (of 289); metro's traffic-on-the-deck check
+with real lanes: the lowest tyre's gap +0.070 -> +0.058 m.
+
+**Owed.** Turn paths through each junction from lane to lane (#218 step 3); merges where a ramp joins a street (#221);
+then the cities switch to real lanes, measured against the junction gate. The parking/bays and stop lines still place
+by the offsets.
+
