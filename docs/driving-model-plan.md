@@ -15,7 +15,7 @@ side stays and feeds this: who lives where, their jobs, their days, their roles 
   once when the roads are built, not while driving.
 - **Rule set** — the rules of the road for a country or region, written as Lua data: what signs exist and mean, who gives way to
   whom, signal timing, speed limits, whether you can turn on a red.
-- **Regulation** — one rule placed on the road: "stop here", "no entry", "40 km/h from here".
+- **Regulation** — one rule placed on the road: "stop here", "no entry", "25 mph from here".
 - **Fact** — something a driver has noticed, with a name the rules can refer to: "the car ahead is 12 m away and slowing", "my
   light is red", "a car is coming the other way, 3 seconds out".
 - **Level of detail** — how much work the simulation spends on a car, depending on how far it is from the player.
@@ -54,7 +54,8 @@ The baseline, measured in the lab on the current model (commit 1a315bf8, 289 dri
    (tourists, hotels, commutes across the island: #213, #223). Any vehicle can answer "who's driving, who's aboard, and why".
 3. **Driving is the rules of the road, as data.**
    - Rule sets are written in Lua and can be switched per level or region.
-   - The default is driving on the left under Japanese rules (or a mix). Others can be tried later.
+   - The default is driving on the left with American rules and signs, mirrored (as in the US Virgin Islands). Others, such
+     as Japan's, can be tried later.
    - The C++ is general machinery: notice, decide by the rules, act within what the vehicle can do. It never holds a rule written
      for one situation.
    - The test of the design: if something can only happen because someone wrote code for that exact case, the design is wrong.
@@ -125,12 +126,13 @@ Under our rule "roads: no guessing", the road builder states every move a car ca
     one way, no U-turn, no parking, no stopping, bus lane, turn bans.
   - Its picture is planted from that same statement:
     - the sign: a sign face laid out by the existing road-sign system (ADR-0110), which today only signs the island's freeway;
-    - the road paint: stop line, 止まれ ("stop") on the road, arrows, parking-space lines, crosswalks.
+    - the road paint: stop lines, STOP written on the road, arrows, parking-space lines, crosswalks.
 
     A driver obeys exactly what the player sees, so a car that runs a stop sign has a visible sign it ran.
-  - **The rule set decides which signs exist, what they mean, and what they look like:** Japanese signs by default (the red
-    upside-down 止まれ triangle, the blue one-way arrow, the red-ringed speed limit), from the official Japanese standard,
-    credited.
+  - **The rule set decides which signs exist, what they mean, and what they look like:** American signs by default (the red STOP
+    octagon, the YIELD triangle, the white SPEED LIMIT panel, DO NOT ENTER, the black-and-white ONE WAY arrow), drawn to the
+    *MUTCD* (the *Manual on Uniform Traffic Control Devices*, the US federal standard for signs and road markings), credited.
+    The island's freeway signs are already American.
   - **Parking is road data too:** kerbside spaces and bays that the road states and paints, and the rule set's no-parking
     zones (near junctions, crossings, bus stops, hydrants). Today the sim invents a parking space every 7 m along any road with
     a parking strip. That goes.
@@ -181,15 +183,20 @@ Each fact has a name. When a rule needs to notice something new, the list of fac
 - Rules have priorities, and every answer carries the name of the rule that gave it. That name is what the driver card shows.
 - **Rule sets are descriptions, not programs:** they're read once when the level loads, and the C++ applies them. That keeps
   thousands of drivers cheap, and keeps to "data in Lua, C++ is the language". No Lua runs for each car each tick.
-- **The default rule set: Japan, driving on the left.**
-  - lights go green, yellow, red, and you can't turn on a red; green arrows let a turn go;
-  - a turn across oncoming traffic gives way to it;
-  - stop (止まれ) and give-way signs;
-  - where two equal roads meet without a light, traffic from the left goes first;
+- **The default rule set: American rules and signs, mirrored for driving on the left** (Glenn, 2026-11-11: "I think we should use
+  American signs"). A real place works this way: the US Virgin Islands drive on the left with American signs, mph and US law.
+  - lights go green, yellow, red; green arrows let a turn go;
+  - turning on red after a full stop, where it isn't signed against. Driving on the left, that's a **left** on red, the turn
+    that stays by the kerb;
+  - a turn across oncoming traffic (a right turn, driving on the left) gives way to it;
+  - STOP and YIELD signs, and all-way stops where whoever stopped first goes first;
+  - where two roads meet with no sign or light, the car that got there first goes, and if two arrive together, the one on the
+    other's left goes (the US "yield to the right", mirrored);
   - people on a crosswalk have priority;
-  - speed limits in km/h.
+  - speed limits in mph (25 mph on city streets by default).
 
-  Each rule is checked against Japan's Road Traffic Act before it's written down, and the Act is credited.
+  Each rule is checked against a real source before it's written down: the *Uniform Vehicle Code* (the model traffic law US
+  states base theirs on) and the US Virgin Islands' own code. The sources are credited.
 - **Light timing comes from the rule set:** how long each phase lasts, and how long yellow lasts. Yellow uses the standard
   traffic engineers' formula (from the ITE, the US Institute of Transportation Engineers), which bases it on the road's speed.
   There's an all-red moment between phases so a junction can clear.
@@ -294,14 +301,14 @@ the old model until phase 9.
    Checks: every connector drivable, every lane reachable and leavable, nothing contradicting the paint. Needs a lanes tag bump.
 
    **1b. Regulations, signs, paint and parking as road data, planted in the lab** (#233): every regulation stated and shown,
-   Japanese signs, parking spaces the road states. This can go first: it gives the lab something visible to judge drivers
+   American signs, parking spaces the road states. This can go first: it gives the lab something visible to judge drivers
    against from phase 2 on.
 2. **The core** (#227):
    - the one true state;
    - routes that know which way the car is facing;
    - following;
    - drawing from the state;
-   - the rules engine with a first Japanese rule set;
+   - the rules engine with a first rule set (American, mirrored for driving on the left);
    - the driver card over the MCP.
 
    Cars only, on the lab's grid, with every junction run as an all-way stop (whoever arrived first goes) until phase 3.
@@ -339,5 +346,6 @@ Alongside, outside the driving model:
   drivable, and say where, rather than produce a bad curve.
 - **The cost of the middle distance at island scale:** measured in phase 8 before choosing CPU or graphics card.
 - **Physical cars following a path well at low speed:** the "aim at a point ahead" steering is known to be fiddly to tune.
-- **Getting the rules right:** Japan's rules checked against the Act. The US-measured numbers we borrow (how big a gap drivers
-  accept when turning, from the HCM, the US *Highway Capacity Manual*) mirrored for driving on the left.
+- **Getting the rules right:** the rules checked against the Uniform Vehicle Code and the US Virgin Islands' code, and every
+  left and right in them mirrored for driving on the left, the US-measured numbers too (how big a gap drivers accept when
+  turning, from the HCM, the US *Highway Capacity Manual*). Easy to get backwards; each mirrored rule gets a test.
