@@ -640,7 +640,8 @@ TEST_CASE(city_cabs_draw_as_taxis_and_only_cabs_do) {
 // #23 JUNCTION PILE-UPS (QA: "cars grinding against each other in packed intersections ... piled upon other
 // cars ... tipped over ... then somehow the cars become non-physics objects and they can go through each
 // other"). An OVERSATURATED grid -- four times the soak's traffic -- with the player at an interior crossing,
-// so the physical tier's bodies meet queues at every mouth. Measured per possessed body per tick:
+// so the physical tier's bodies meet queues at every mouth. Measured per possessed body per tick, each body at its
+// own chassis box (a bicycle is 0.4 m wide; measured as a 1.84 m car it "overlapped" every car that passed it):
 //   tip    -- up vector's y (a car on its side reads ~0)
 //   climb  -- chassis floor (centre less its half height) above the resting floor on the flat ground (on another car's roof: > 1 m)
 //   ghost  -- the deepest 2D footprint overlap with any other car, body or kinematic box ("go through each other")
@@ -717,7 +718,7 @@ TEST_CASE(city_phys_tier_packed_junction_does_not_pile_up) {
         std::unordered_map<long long, int> byUid;
         for (std::size_t q = 0; q < city.sim().agents().size(); ++q) byUid[static_cast<long long>(city.sim().agents()[q].uid)] = static_cast<int>(q);
         for (const auto& p : bridge.possessed())
-            feet.push_back({p.agent, footOf(pw.vehiclePosition(p.vid), pw.vehicleOrientation(p.vid), 0.92, 2.15)});
+            feet.push_back({p.agent, footOf(pw.vehiclePosition(p.vid), pw.vehicleOrientation(p.vid), p.halfX, p.halfZ)});
         for (const auto& box : bridge.carProxyBoxes()) {
             const Vec3 bp = pw.bodyPosition(box.id);
             if (bp.y < -100) continue;
@@ -774,7 +775,7 @@ TEST_CASE(city_phys_tier_packed_junction_does_not_pile_up) {
             { const Real dv = (city.sim().agents()[p.agent].pos - Vec2(bp.x, bp.z)).length();
               worstDiv = std::max(worstDiv, dv);
               Real& sp = spell[p.agent]; sp = dv > 6.0 ? sp + dt : 0; worstSpell = std::max(worstSpell, sp); }
-            const Foot me = footOf(bp, pw.vehicleOrientation(p.vid), 0.92, 2.15);
+            const Foot me = footOf(bp, pw.vehicleOrientation(p.vid), p.halfX, p.halfZ);
             Real deepest = 0; int partner = -2; Vec2 partnerC;
             for (const auto& [ag, f] : feet) if (ag != p.agent) { const Real o = footOverlap(me, f); if (o > deepest) { deepest = o; partner = ag; partnerC = f.c; } }
             static const bool logDeep = std::getenv("RT_PILEUP_LOG") != nullptr;
@@ -799,7 +800,7 @@ TEST_CASE(city_phys_tier_packed_junction_does_not_pile_up) {
         // (either party), snap = a body jumped > 2 m this tick, contact = everything else (driven into it).
         for (const auto& p : bridge.possessed()) {
             const Vec3 bp = pw.vehiclePosition(p.vid);
-            const Foot me = footOf(bp, pw.vehicleOrientation(p.vid), 0.92, 2.15);
+            const Foot me = footOf(bp, pw.vehicleOrientation(p.vid), p.halfX, p.halfZ);
             Real deepest = 0; int partner = -2;
             for (const auto& [ag, f] : feet) if (ag != p.agent) { const Real o = footOverlap(me, f); if (o > deepest) { deepest = o; partner = ag; } }
             const bool jumped = lastPos.count(p.agent) && (Vec2(bp.x, bp.z) - Vec2(lastPos[p.agent].x, lastPos[p.agent].z)).length() > 2.0;
