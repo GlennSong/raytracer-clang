@@ -489,6 +489,43 @@ struct MeshBuilder {
     // triples' order unspecified (wind them with triFacing). Earcut (procgen/city/triangulate.h).
     static std::vector<std::array<int, 3>> triangulate(const std::vector<Vec2>& outline,
                                                        const std::vector<std::vector<Vec2>>& holes = {});
+
+    // --- THE DRAPE ON A MESH (mesh_words.cpp) -------------------------------------------------------------------
+    // DRAPE flat geometry (thin stuff laid on a surface: road paint, a decal, a mat) on SURFACE, a list of triangles in
+    // world space (x, height, z). Each triangle of `flat` is cut in plan along the surface triangles' edges, so every
+    // piece lies inside exactly ONE surface triangle, and the piece takes that triangle's plane, `lift` metres above it:
+    // the drape follows every fold of the surface exactly, between its corners as well as at them (lifting only the
+    // corners leaves a flat triangle bridging the folds under it). Pieces over no surface triangle are trimmed away.
+    // Where surfaces stack (a bridge over a street), a piece goes on the surface nearest the height `flat` had there,
+    // and on none when that is more than `reach` metres away; where two surface triangles overlap in plan, the nearer
+    // one takes the piece and the other gets only what is left, so nothing is drawn twice. Each piece keeps the
+    // colour, uv and tangent interpolated from its flat triangle, and takes the surface triangle's normal (turned to
+    // the side the flat triangle faced). A flat triangle the surface does not fold under -- fully covered, and every
+    // piece within `flush` metres of the plane through the surface at its corners -- is kept whole instead (a flat or
+    // evenly graded road keeps its paint's triangle count). Faces go out through triFacing. Returns the draped mesh
+    // (same materialIndex).
+    static RenderMesh drapeOnMesh(const RenderMesh& flat, const std::vector<std::array<Vec3, 3>>& surface, double lift,
+                                  double reach, double flush = 0.0);
+
+    // --- THE WELD (mesh_words.cpp) ------------------------------------------------------------------------------
+    // WELD a mesh: vertices that are the same vertex become one, and triangles with no area go. Two vertices are the
+    // same when EVERYTHING the renderer reads agrees within its tolerance -- position, normal, tangent, uv and colour
+    // -- so a hard edge (one place, two normals) and a texture seam (one place, two uvs) keep both their vertices.
+    // `positionOnly` welds on position alone, like Blender's "merge by distance": the first vertex at a place wins,
+    // hard edges and seams smooth away, so it is for meshes that have neither. A triangle that ends up with two
+    // corners on one vertex, or with less than `sliver` square metres of area, is dropped; a vertex no triangle uses
+    // is dropped. Triangle order and winding are kept; of two vertices welded, the earlier one stays. What cutting
+    // leaves behind (drapeOnMesh gives every piece its own corners) is what this is for.
+    struct WeldTolerance {
+        double position = 1e-4;     // metres, per axis
+        double direction = 1e-3;    // normal and tangent, per component
+        double uv = 1e-4;
+        double color = 1.0 / 512.0;
+        double sliver = 1e-8;       // square metres
+        bool positionOnly = false;
+    };
+    static RenderMesh weld(const RenderMesh& mesh);
+    static RenderMesh weld(const RenderMesh& mesh, const WeldTolerance& tol);
 };
 
 }  // namespace engine

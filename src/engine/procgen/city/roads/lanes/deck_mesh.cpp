@@ -1142,32 +1142,20 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         MeshBuilder::gridIndices(terrain, G.nx, G.ny, 0); MeshBuilder::recomputeNormals(terrain);
     }
     // PAINT ON THE DRAWN ROAD (Glenn, 2026-11-05: "Street markings are floating above the street ... It has to match the
-    // geometry 1:1 for it to look flush with the surface"): every paint vertex goes onto the road triangle drawn under it
-    // (the one nearest its height, of the asphalt and shoulder -- never a sidewalk's, so an edge line does not climb the
-    // kerb), 2 cm up. The paint was laid on the lanes' height model, which the triangulated surface follows only at its
-    // vertices (#142: 0.3-0.4 m apart across a leaning ramp), and each stripe's two edges took its centre's height, so on
-    // a banked road one edge floated and the other sank.
-    auto onRoad = [&](const Vec2& q, double near, double& out) {
-        auto it = drawnGrid.find(drawnKey(std::lround(std::floor(q.x / kDrawnCell)), std::lround(std::floor(q.y / kDrawnCell))));
-        if (it == drawnGrid.end()) return false;
-        double best = 1.0;
-        bool found = false;
-        for (uint32_t i : it->second) {
-            const Drawn& d = drawn[i];
-            if (!d.road) continue;
-            const double det = cross(d.b - d.a, d.c - d.a); if (std::fabs(det) < 1e-12) continue;
-            const double u = cross(q - d.a, d.c - d.a) / det, v = cross(d.b - d.a, q - d.a) / det;
-            if (u < -1e-9 || v < -1e-9 || u + v > 1 + 1e-9) continue;
-            const double z = d.za + u * (d.zb - d.za) + v * (d.zc - d.za);
-            if (std::fabs(z - near) < best) { best = std::fabs(z - near); out = z; found = true; }
-        }
-        return found;
-    };
-    for (RenderMesh* paint : {&paintW, &paintY})
-        for (Vertex& v : paint->vertices) {
-            double z = 0;
-            if (onRoad(Vec2(v.position.x, v.position.z), v.position.y, z)) v.position.y = static_cast<Real>(z + 0.02);
-        }
+    // geometry 1:1 for it to look flush with the surface"). The paint was laid on the lanes' height model, which the
+    // triangulated surface follows only at its vertices (#142: 0.3-0.4 m apart across a leaning ramp), and each stripe's
+    // two edges took its centre's height, so on a banked road one edge floated and the other sank. So it is DRAPED on
+    // the road triangles drawn under it (of the asphalt and shoulder -- never a sidewalk's, so an edge line does not
+    // climb the kerb), kPaintLift up: cut along their edges, every piece on the plane of the one road triangle it lies
+    // in (#244: lifting only the paint's corners left each paint triangle bridging the folds between them -- sunk over
+    // a crest, floating over a dip -- and a corner just off the road's edge was not moved at all). A paint triangle the
+    // road does not fold under (within kPaintFlush) stays whole. Paint over no road triangle is trimmed. Where roads stack, each piece goes on the road nearest the height it was laid at, within
+    // kPaintReach: the paint does not carry the lane it was laid for (a lane line straddles two lanes' triangles, an
+    // edge line lies on the shoulder's), so the height it was laid at is what says which deck it belongs to.
+    std::vector<std::array<Vec3, 3>> roadTris;
+    for (const Drawn& d : drawn)
+        if (d.road) roadTris.push_back({world(d.a, d.za), world(d.b, d.zb), world(d.c, d.zc)});
+    for (RenderMesh* paint : {&paintW, &paintY}) *paint = MeshBuilder::drapeOnMesh(*paint, roadTris, kPaintLift, kPaintReach, kPaintFlush);
     std::vector<NamedMesh> out;
     auto add = [&](const char* n, RenderMesh& m, const Vec3& c) { if (!m.indices.empty()) out.push_back({n, std::move(m), c}); };
     add("asphalt", asphalt, kAsphalt); add("concrete", concrete, kConcrete); add("guardrail", guardrail, kGuardrail); add("sidewalk", sidewalk, kSidewalk); add("shoulder", shoulder, kShoulder); add("median", median, kMedian);

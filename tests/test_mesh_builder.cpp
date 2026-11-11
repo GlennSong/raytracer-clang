@@ -196,3 +196,55 @@ TEST_CASE(shape_kit_icosphere_cut_facet) {
     const engine::RenderMesh tube = MeshBuilder::tube({Vec3(0, 0, 0), Vec3(0, 1, 0), Vec3(0, 2, 0)}, {0.3, 0.2, 0.1}, 6);
     CHECK(tube.vertices.size() == 18 && tube.indices.size() == 2u * 6u * 6u);
 }
+
+// THE WELD (#244): what cutting leaves behind -- every piece with its own corners -- becomes shared vertices, and a
+// hard edge or a texture seam keeps both of its.
+TEST_CASE(mesh_weld_shares_the_corners_neighbours_have_in_common) {
+    const Vec3 up(0, 1, 0);
+    engine::RenderMesh m;   // a unit square as two triangles, each with its own three vertices
+    const Vec3 q[4] = {Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(1, 0, 1), Vec3(0, 0, 1)};
+    for (int i : {0, 1, 2, 0, 2, 3}) {
+        m.indices.push_back(static_cast<uint32_t>(m.vertices.size()));
+        m.vertices.push_back(Vertex(q[i], up, static_cast<float>(q[i].x), static_cast<float>(q[i].z)));
+    }
+    m.materialIndex = 7;
+    const engine::RenderMesh w = MeshBuilder::weld(m);
+    CHECK(w.vertices.size() == 4 && w.indices.size() == 6);
+    CHECK(w.materialIndex == 7);
+    for (std::size_t i = 0; i < m.indices.size(); ++i)   // the same triangles, in the same order, wound the same way
+        CHECK((w.vertices[w.indices[i]].position - m.vertices[m.indices[i]].position).length() < 1e-9);
+    CHECK(MeshBuilder::weld(w).vertices.size() == 4);   // welding a welded mesh changes nothing
+}
+
+TEST_CASE(mesh_weld_keeps_hard_edges_and_seams_unless_told_position_only) {
+    engine::RenderMesh m;   // two faces meeting at a right angle along the x axis: the shared edge has two normals
+    const Vec3 floorN(0, 1, 0), wallN(0, 0, -1);
+    const Vec3 a(0, 0, 0), b(1, 0, 0);
+    for (const Vertex& v : {Vertex(a, floorN), Vertex(b, floorN), Vertex(Vec3(1, 0, 1), floorN),
+                            Vertex(a, wallN), Vertex(Vec3(1, 1, 0), wallN), Vertex(b, wallN)}) {
+        m.indices.push_back(static_cast<uint32_t>(m.vertices.size()));
+        m.vertices.push_back(v);
+    }
+    CHECK(MeshBuilder::weld(m).vertices.size() == 6);   // the edge keeps a vertex for each face
+    MeshBuilder::WeldTolerance byPlace;
+    byPlace.positionOnly = true;
+    CHECK(MeshBuilder::weld(m, byPlace).vertices.size() == 4);
+    engine::RenderMesh seam = m;   // one place, one normal, two uvs: a texture seam
+    for (Vertex& v : seam.vertices) v.normal = floorN;
+    seam.vertices[3].u = 0.5f;
+    CHECK(MeshBuilder::weld(seam).vertices.size() == 5);   // b welds, a keeps both
+}
+
+TEST_CASE(mesh_weld_drops_triangles_with_no_area_and_vertices_nothing_uses) {
+    const Vec3 up(0, 1, 0);
+    engine::RenderMesh m;
+    for (const Vec3& p : {Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(0, 0, 1),            // a real triangle
+                          Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(0.5, 0, 1e-9),       // a sliver along its edge (5e-10 m2)
+                          Vec3(5, 0, 5), Vec3(5, 0, 5), Vec3(6, 0, 5)}) {         // two corners on one place
+        m.indices.push_back(static_cast<uint32_t>(m.vertices.size()));
+        m.vertices.push_back(Vertex(p, up));
+    }
+    m.vertices.push_back(Vertex(Vec3(9, 9, 9), up));   // a vertex no triangle uses
+    const engine::RenderMesh w = MeshBuilder::weld(m);
+    CHECK(w.indices.size() == 3 && w.vertices.size() == 3);
+}

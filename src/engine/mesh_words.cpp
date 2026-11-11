@@ -1,10 +1,14 @@
-// THE MESH LIBRARY's solids and fills (mesh_builder.h): boxes, blocks, polygons, plan prisms, cylinders, and the one
-// triangulator. Every face here goes out through emitQuad / emitTri / triFacing, wound to the normal it is given.
+// THE MESH LIBRARY's solids and fills (mesh_builder.h): boxes, blocks, polygons, plan prisms, cylinders, the one
+// triangulator, and the drape on a mesh. Every face here goes out through emitQuad / emitTri / triFacing, wound to the
+// normal it is given.
 #include "mesh_builder.h"
+#include "../hash.h"
 #include "procgen/city/triangulate.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <unordered_map>
 
 namespace engine {
 
@@ -229,6 +233,312 @@ void MeshBuilder::emitAnnulus(RenderMesh& mesh, const MeshFrame& f, double rIn, 
         for (std::size_t k = 0; k < spans; ++k)
             triFacing(mesh, c, base + static_cast<uint32_t>(k), base + static_cast<uint32_t>((k + 1) % n), up);
     }
+}
+
+// THE DRAPE ON A MESH ---------------------------------------------------------------------------------------------
+namespace {
+// The surface triangles are found through a grid of this many metres a cell. It is a lookup only: any size gives the
+// same pieces, this one keeps a road's few-metre triangles to a handful a cell.
+constexpr double kDrapeCell = 4.0;
+// Twice the plan area (m^2) under which a triangle stands on edge: no plane to drape on, nothing flat to drape.
+constexpr double kDrapeNoPlan2 = 1e-10;
+// A piece of less plan area than this (m^2) is a sliver left by a cut along a shared edge: dropped.
+constexpr double kDrapeSliver = 1e-8;
+// A flat triangle counts as wholly over the surface when its pieces cover it to within this share of its area.
+constexpr double kDrapeWholeShare = 1e-6;
+
+// A surface triangle as the drape reads it: its plan corners counter-clockwise, its plane (height at a plan point)
+// and the normal of that plane facing up.
+struct DrapeUnder {
+    Vec2 p[3];
+    Vec2 lo, hi;
+    double h = 0, hx = 0, hz = 0;   // height h at p[0], rising hx per metre of x and hz per metre of z
+    Vec3 up;
+    double heightAt(const Vec2& q) const { return h + hx * (q.x - p[0].x) + hz * (q.y - p[0].y); }
+};
+
+long long drapeKey(long i, long j) {
+    return (static_cast<long long>(i) << 32) ^ static_cast<long long>(static_cast<uint32_t>(j));
+}
+long drapeCellOf(double x) { return std::lround(std::floor(x / kDrapeCell)); }
+
+bool boxesMeet(const Vec2& lo, const Vec2& hi, const Vec2& lo2, const Vec2& hi2) {
+    return lo.x <= hi2.x && lo2.x <= hi.x && lo.y <= hi2.y && lo2.y <= hi.y;
+}
+
+// The convex polygon `poly` clipped to the inside of the convex counter-clockwise ring `ring`, one edge's half-plane
+// at a time (polygon.h's clipHalfPlane). Empty when less than a sliver is left.
+Poly2 clipToConvex(Poly2 poly, const Vec2* ring, std::size_t n) {
+    for (std::size_t e = 0; e < n && poly.size() >= 3; ++e) {
+        const Vec2 d = ring[(e + 1) % n] - ring[e];
+        if (d.lengthSquared() < kDrapeNoPlan2) continue;
+        const Vec2 out = normalize(Vec2(d.y, -d.x));   // the edge's outward side (the ring runs counter-clockwise)
+        poly = clipHalfPlane(poly, out, dot(out, ring[e]));
+    }
+    if (poly.size() < 3 || area(poly) < kDrapeSliver) return {};
+    return poly;
+}
+
+// The convex pieces of convex `poly` that lie outside the convex counter-clockwise `hole`, appended to `out`: the part
+// beyond the hole's first edge, then of what is left the part beyond its second, and so on.
+void subtractConvex(const Poly2& poly, const Poly2& hole, std::vector<Poly2>& out) {
+    Poly2 rest = poly;
+    for (std::size_t e = 0; e < hole.size() && rest.size() >= 3; ++e) {
+        const Vec2 d = hole[(e + 1) % hole.size()] - hole[e];
+        if (d.lengthSquared() < kDrapeNoPlan2) continue;
+        const Vec2 n = normalize(Vec2(d.y, -d.x));
+        const double c = dot(n, hole[e]);
+        const Poly2 beyond = clipHalfPlane(rest, n * -1.0, -c);
+        if (beyond.size() >= 3 && area(beyond) >= kDrapeSliver) out.push_back(beyond);
+        rest = clipHalfPlane(rest, n, c);
+    }
+}
+}  // namespace
+
+RenderMesh MeshBuilder::drapeOnMesh(const RenderMesh& flat, const std::vector<std::array<Vec3, 3>>& surface, double lift,
+                                    double reach, double flush) {
+    RenderMesh out;
+    out.materialIndex = flat.materialIndex;
+    // the surface triangles, planes and grid
+    std::vector<DrapeUnder> under;
+    under.reserve(surface.size());
+    std::unordered_map<long long, std::vector<uint32_t>> grid;
+    for (const std::array<Vec3, 3>& s : surface) {
+        Vec2 a(s[0].x, s[0].z), b(s[1].x, s[1].z), c(s[2].x, s[2].z);
+        double ha = s[0].y, hb = s[1].y, hc = s[2].y;
+        double det = cross(b - a, c - a);
+        if (std::fabs(det) < kDrapeNoPlan2) continue;
+        if (det < 0) {
+            std::swap(b, c);
+            std::swap(hb, hc);
+            det = -det;
+        }
+        DrapeUnder u;
+        u.p[0] = a;
+        u.p[1] = b;
+        u.p[2] = c;
+        const Vec2 ab = b - a, ac = c - a;
+        u.h = ha;
+        u.hx = ((hb - ha) * ac.y - (hc - ha) * ab.y) / det;
+        u.hz = ((hc - ha) * ab.x - (hb - ha) * ac.x) / det;
+        u.up = normalize(Vec3(-u.hx, 1.0, -u.hz));
+        bounds(Poly2{a, b, c}, u.lo, u.hi);
+        const uint32_t id = static_cast<uint32_t>(under.size());
+        for (long i = drapeCellOf(u.lo.x); i <= drapeCellOf(u.hi.x); ++i)
+            for (long j = drapeCellOf(u.lo.y); j <= drapeCellOf(u.hi.y); ++j) grid[drapeKey(i, j)].push_back(id);
+        under.push_back(u);
+    }
+    std::vector<uint32_t> seenBy(under.size(), UINT32_MAX);   // which flat triangle last listed each surface triangle
+    std::vector<uint32_t> cands;
+    std::vector<std::pair<double, uint32_t>> ranked;
+    std::vector<Poly2> taken, pieces, next;   // taken: the pieces kept so far, over surface triangles takenBy
+    std::vector<uint32_t> takenBy;
+    for (std::size_t t = 0; t + 2 < flat.indices.size(); t += 3) {
+        const Vertex& A = flat.vertices[flat.indices[t]];
+        const Vertex& B = flat.vertices[flat.indices[t + 1]];
+        const Vertex& C = flat.vertices[flat.indices[t + 2]];
+        const Vec2 pa(A.position.x, A.position.z), pb(B.position.x, B.position.z), pc(C.position.x, C.position.z);
+        const double det = cross(pb - pa, pc - pa);
+        if (std::fabs(det) < kDrapeNoPlan2) continue;   // standing on edge: nothing flat to lay down
+        // the side the flat triangle faces (its front, mesh_builder.h): the pieces face the same way
+        const double side = cross(C.position - A.position, B.position - A.position).y >= 0 ? 1.0 : -1.0;
+        // where a plan point falls in the flat triangle (its weights on A, B, C): what every attribute is read through
+        auto weights = [&](const Vec2& q, double& wa, double& wb, double& wc) {
+            wb = cross(q - pa, pc - pa) / det;
+            wc = cross(pb - pa, q - pa) / det;
+            wa = 1.0 - wb - wc;
+        };
+        auto flatHeight = [&](const Vec2& q) {
+            double wa = 0, wb = 0, wc = 0;
+            weights(q, wa, wb, wc);
+            return wa * A.position.y + wb * B.position.y + wc * C.position.y;
+        };
+        Poly2 tri{pa, pb, pc};
+        if (det < 0) std::swap(tri[1], tri[2]);   // counter-clockwise, as the pieces cut from it stay
+        Vec2 lo, hi;
+        bounds(tri, lo, hi);
+        // the surface triangles near it, nearest in height (at its middle) first
+        cands.clear();
+        const uint32_t tag = static_cast<uint32_t>(t / 3);
+        for (long i = drapeCellOf(lo.x); i <= drapeCellOf(hi.x); ++i)
+            for (long j = drapeCellOf(lo.y); j <= drapeCellOf(hi.y); ++j) {
+                std::unordered_map<long long, std::vector<uint32_t>>::const_iterator it = grid.find(drapeKey(i, j));
+                if (it == grid.end()) continue;
+                for (uint32_t id : it->second)
+                    if (seenBy[id] != tag && boxesMeet(lo, hi, under[id].lo, under[id].hi)) {
+                        seenBy[id] = tag;
+                        cands.push_back(id);
+                    }
+            }
+        const Vec2 mid = (pa + pb + pc) * (1.0 / 3.0);
+        const double midH = flatHeight(mid);
+        ranked.clear();
+        for (uint32_t id : cands) ranked.push_back({std::fabs(under[id].heightAt(mid) - midH), id});
+        std::sort(ranked.begin(), ranked.end());
+        // each surface triangle in turn takes the part of the flat triangle over it that no nearer one took
+        taken.clear();
+        takenBy.clear();
+        for (const std::pair<double, uint32_t>& rk : ranked) {
+            const DrapeUnder& U = under[rk.second];
+            const Poly2 over = clipToConvex(tri, U.p, 3);
+            if (over.empty()) continue;
+            pieces.assign(1, over);
+            for (const Poly2& hole : taken) {
+                Vec2 hlo, hhi;
+                bounds(hole, hlo, hhi);
+                next.clear();
+                for (const Poly2& piece : pieces) {
+                    Vec2 plo, phi;
+                    bounds(piece, plo, phi);
+                    if (!boxesMeet(plo, phi, hlo, hhi) || clipToConvex(piece, hole.data(), hole.size()).empty()) {
+                        next.push_back(piece);   // they do not overlap: kept whole (cutting it along the hole's edges would only shred it)
+                        continue;
+                    }
+                    subtractConvex(piece, hole, next);
+                }
+                pieces.swap(next);
+                if (pieces.empty()) break;
+            }
+            for (const Poly2& piece : pieces) {
+                if (piece.size() < 3 || area(piece) < kDrapeSliver) continue;
+                const Vec2 at = centroid(piece);
+                if (std::fabs(U.heightAt(at) - flatHeight(at)) > reach) continue;   // another level's surface
+                taken.push_back(piece);
+                takenBy.push_back(rk.second);
+            }
+        }
+        if (taken.empty()) continue;
+        // a vertex of the drape at plan point q, `lift` over surface height h, its attributes read from the flat triangle
+        auto put = [&](const Vec2& q, double h, const Vec3& n) {
+            double wa = 0, wb = 0, wc = 0;
+            weights(q, wa, wb, wc);
+            const uint32_t vi = vertex(out, Vec3(q.x, h + lift, q.y), n, A.color * wa + B.color * wb + C.color * wc);
+            Vertex& v = out.vertices[vi];
+            v.u = static_cast<float>(wa * A.u + wb * B.u + wc * C.u);
+            v.v = static_cast<float>(wa * A.v + wb * B.v + wc * C.v);
+            v.tangent = A.tangent * wa + B.tangent * wb + C.tangent * wc;
+            return vi;
+        };
+        // KEPT WHOLE when the surface does not fold under it: the triangle fully covered, and every corner of every
+        // piece within `flush` of the plane through the surface at the triangle's own corners. (Between the corners of
+        // the pieces the gap runs straight, so that bounds it everywhere.) A flat road keeps its paint's triangles.
+        double coveredArea = 0;
+        for (const Poly2& piece : taken) coveredArea += area(piece);
+        double cornerH[3] = {0, 0, 0};
+        bool whole = std::fabs(coveredArea - 0.5 * std::fabs(det)) <= kDrapeWholeShare * 0.5 * std::fabs(det);
+        const Vec2 corner[3] = {pa, pb, pc};
+        for (int k = 0; k < 3 && whole; ++k) {
+            whole = false;
+            for (std::size_t pi = 0; pi < taken.size() && !whole; ++pi)
+                for (const Vec2& q : taken[pi])
+                    if ((q - corner[k]).lengthSquared() < kDrapeNoPlan2) {
+                        cornerH[k] = under[takenBy[pi]].heightAt(corner[k]);
+                        whole = true;
+                        break;
+                    }
+        }
+        auto cornerPlane = [&](const Vec2& q) {
+            double wa = 0, wb = 0, wc = 0;
+            weights(q, wa, wb, wc);
+            return wa * cornerH[0] + wb * cornerH[1] + wc * cornerH[2];
+        };
+        for (std::size_t pi = 0; pi < taken.size() && whole; ++pi)
+            for (const Vec2& q : taken[pi])
+                if (std::fabs(under[takenBy[pi]].heightAt(q) - cornerPlane(q)) > flush) { whole = false; break; }
+        if (whole) {
+            const Vec3 a3(pa.x, cornerH[0], pa.y), b3(pb.x, cornerH[1], pb.y), c3(pc.x, cornerH[2], pc.y);
+            Vec3 n = cross(c3 - a3, b3 - a3);
+            if (n.y * side < 0) n = n * -1.0;
+            const uint32_t ia = put(pa, cornerH[0], n), ib = put(pb, cornerH[1], n), ic = put(pc, cornerH[2], n);
+            triFacing(out, ia, ib, ic, n);
+            continue;
+        }
+        for (std::size_t pi = 0; pi < taken.size(); ++pi) {
+            const DrapeUnder& U = under[takenBy[pi]];
+            const Vec3 n = U.up * side;
+            const uint32_t base = static_cast<uint32_t>(out.vertices.size());
+            for (const Vec2& q : taken[pi]) put(q, U.heightAt(q), n);
+            for (std::size_t k = 1; k + 1 < taken[pi].size(); ++k)
+                triFacing(out, base, base + static_cast<uint32_t>(k), base + static_cast<uint32_t>(k + 1), n);
+        }
+    }
+    return weld(out);   // every piece was given its own corners: the ones neighbours share become one
+}
+
+namespace {
+// The weld's lookup grid: cells this many tolerances wide, so a vertex within the tolerance of another is in one of
+// the (at most two per axis) cells its own tolerance box touches.
+constexpr double kWeldCellTolerances = 4.0;
+constexpr uint32_t kWeldUnset = 0xFFFFFFFFu;
+
+bool weldNear(const Vec3& a, const Vec3& b, double tol) {
+    return std::fabs(a.x - b.x) <= tol && std::fabs(a.y - b.y) <= tol && std::fabs(a.z - b.z) <= tol;
+}
+bool weldSame(const Vertex& a, const Vertex& b, const MeshBuilder::WeldTolerance& t) {
+    if (!weldNear(a.position, b.position, t.position)) return false;
+    if (t.positionOnly) return true;
+    return weldNear(a.normal, b.normal, t.direction) && weldNear(a.tangent, b.tangent, t.direction) &&
+           std::fabs(static_cast<double>(a.u) - b.u) <= t.uv && std::fabs(static_cast<double>(a.v) - b.v) <= t.uv &&
+           weldNear(a.color, b.color, t.color);
+}
+uint32_t weldCellKey(int64_t x, int64_t y, int64_t z) {
+    return hashPair(hashCell(static_cast<uint32_t>(x), static_cast<uint32_t>(y), 0u), static_cast<uint32_t>(z));
+}
+}  // namespace
+
+RenderMesh MeshBuilder::weld(const RenderMesh& mesh) { return weld(mesh, WeldTolerance()); }
+
+RenderMesh MeshBuilder::weld(const RenderMesh& mesh, const WeldTolerance& tol) {
+    const double cell = std::max(tol.position, 1e-9) * kWeldCellTolerances;
+    // 1. Each vertex's keeper: the earliest vertex it is the same as (itself, when there is none).
+    std::vector<Vertex> kept;
+    std::vector<uint32_t> keeperOf(mesh.vertices.size(), kWeldUnset);
+    std::unordered_map<uint32_t, std::vector<uint32_t>> grid;   // cell -> kept vertices in it (looked up, never walked)
+    for (std::size_t i = 0; i < mesh.vertices.size(); ++i) {
+        const Vertex& v = mesh.vertices[i];
+        const Vec3& p = v.position;
+        const int64_t lo[3] = {static_cast<int64_t>(std::floor((p.x - tol.position) / cell)),
+                               static_cast<int64_t>(std::floor((p.y - tol.position) / cell)),
+                               static_cast<int64_t>(std::floor((p.z - tol.position) / cell))};
+        const int64_t hi[3] = {static_cast<int64_t>(std::floor((p.x + tol.position) / cell)),
+                               static_cast<int64_t>(std::floor((p.y + tol.position) / cell)),
+                               static_cast<int64_t>(std::floor((p.z + tol.position) / cell))};
+        uint32_t found = kWeldUnset;
+        for (int64_t x = lo[0]; x <= hi[0]; ++x)
+            for (int64_t y = lo[1]; y <= hi[1]; ++y)
+                for (int64_t z = lo[2]; z <= hi[2]; ++z) {
+                    const std::unordered_map<uint32_t, std::vector<uint32_t>>::const_iterator it = grid.find(weldCellKey(x, y, z));
+                    if (it == grid.end()) continue;
+                    for (uint32_t k : it->second)
+                        if (k < found && weldSame(kept[k], v, tol)) found = k;   // the earliest, whatever order cells come in
+                }
+        if (found == kWeldUnset) {
+            found = static_cast<uint32_t>(kept.size());
+            kept.push_back(v);
+            grid[weldCellKey(static_cast<int64_t>(std::floor(p.x / cell)), static_cast<int64_t>(std::floor(p.y / cell)),
+                             static_cast<int64_t>(std::floor(p.z / cell)))].push_back(found);
+        }
+        keeperOf[i] = found;
+    }
+    // 2. The triangles on their keepers, without the ones that have no area; then only the vertices still used.
+    RenderMesh out;
+    out.materialIndex = mesh.materialIndex;
+    out.tangentIsData = mesh.tangentIsData;
+    std::vector<uint32_t> slot(kept.size(), kWeldUnset);
+    for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+        const uint32_t a = keeperOf[mesh.indices[t]], b = keeperOf[mesh.indices[t + 1]], c = keeperOf[mesh.indices[t + 2]];
+        if (a == b || b == c || a == c) continue;
+        const Vec3 n = cross(kept[b].position - kept[a].position, kept[c].position - kept[a].position);
+        if (0.5 * n.length() < tol.sliver) continue;
+        for (uint32_t k : {a, b, c}) {
+            if (slot[k] == kWeldUnset) {
+                slot[k] = static_cast<uint32_t>(out.vertices.size());
+                out.vertices.push_back(kept[k]);
+            }
+            out.indices.push_back(slot[k]);
+        }
+    }
+    return out;
 }
 
 }  // namespace engine

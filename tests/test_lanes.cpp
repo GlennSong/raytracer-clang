@@ -6,6 +6,10 @@
 #include "engine/procgen/city/roads/lanes/geom2d.h"
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
 #include "engine/mesh_audit.h"
+#include "engine/mesh_builder.h"
+#include <array>
+#include <cmath>
+#include <functional>
 #include "engine/vertex_pack.h"
 
 using namespace engine;
@@ -716,6 +720,142 @@ TEST_CASE(lanes_arrows_assign_turns_to_the_lanes_that_make_them) {
     m = assignLaneMoves(2, true, true, false);
     CHECK(m[0].left && m[0].straight);
     CHECK(m[1].straight && !m[1].right);
+}
+
+// PAINT SITS FLUSH ON HILLS (#244). Road paint is thin flat geometry laid on the road's triangles. Lifting only its
+// corners onto the road left each flat paint triangle bridging the folds of the road under it: sunk into the road over
+// a crest, floating over a dip. MeshBuilder::drapeOnMesh cuts it along the road's triangle edges so every piece lies
+// on one road triangle. Three road surfaces that fold under the paint -- a crest, a curve whose bank grows round it,
+// a ramp that sags into its climb while its cross-slope turns over -- and on each the gap between paint and road,
+// measured at every paint triangle's corners, edge middles, middle and three points inside, must be the lift to a
+// millimetre. The same paint with only its corners lifted must NOT pass, or the scene has no fold to find.
+namespace {
+using RoadTris = std::vector<std::array<Vec3, 3>>;
+// A road sheet from a lattice of points at(i, j), i along the road, j across it: two triangles a cell, the diagonal
+// alternating cell to cell as a deck's triangulation does.
+RoadTris roadSheet(int along, int across, const std::function<Vec3(int, int)>& at) {
+    RoadTris out;
+    for (int i = 0; i + 1 < along; ++i)
+        for (int j = 0; j + 1 < across; ++j) {
+            const Vec3 a = at(i, j), b = at(i + 1, j), c = at(i + 1, j + 1), d = at(i, j + 1);
+            if ((i + j) % 2 == 0) { out.push_back({a, b, c}); out.push_back({a, c, d}); }
+            else { out.push_back({a, b, d}); out.push_back({b, c, d}); }
+        }
+    return out;
+}
+// The road's height at plan point q (the triangle under it nearest `near`); NaN off the road.
+double roadHeightAt(const RoadTris& road, const Vec2& q, double near) {
+    constexpr double kOnEdge = 1e-9;
+    double best = std::nan("");
+    for (const std::array<Vec3, 3>& t : road) {
+        const Vec2 a(t[0].x, t[0].z), b(t[1].x, t[1].z), c(t[2].x, t[2].z);
+        const double det = cross(b - a, c - a);
+        if (std::fabs(det) < 1e-12) continue;
+        const double u = cross(q - a, c - a) / det, v = cross(b - a, q - a) / det;
+        if (u < -kOnEdge || v < -kOnEdge || u + v > 1 + kOnEdge) continue;
+        const double z = t[0].y + u * (t[1].y - t[0].y) + v * (t[2].y - t[0].y);
+        if (std::isnan(best) || std::fabs(z - near) < std::fabs(best - near)) best = z;
+    }
+    return best;
+}
+// Paint stripes along plan polylines, `halfWidth` each side, every corner ON the road (as the old fit left it).
+RenderMesh paintOn(const RoadTris& road, const std::vector<std::vector<Vec2>>& lines, double halfWidth, double near) {
+    RenderMesh paint;
+    const Vec3 white(0.9, 0.9, 0.88);
+    for (const std::vector<Vec2>& line : lines)
+        for (std::size_t k = 0; k + 1 < line.size(); ++k) {
+            const Vec2 d = normalize(line[k + 1] - line[k]), side(-d.y * halfWidth, d.x * halfWidth);
+            const Vec2 q[4] = {line[k] - side, line[k + 1] - side, line[k + 1] + side, line[k] + side};
+            Vec3 p[4];
+            for (int i = 0; i < 4; ++i) p[i] = Vec3(q[i].x, roadHeightAt(road, q[i], near), q[i].y);
+            MeshBuilder::emitQuad(paint, p[0], p[1], p[2], p[3], Vec3(0, 1, 0), white);
+        }
+    return paint;
+}
+struct PaintGap { double worst = 0; double paintArea = 0; int offRoad = 0; int facingDown = 0; };
+// The worst |paint - road - lift| over the paint, sampled through every triangle, and the paint's plan area.
+PaintGap paintGap(const RenderMesh& paint, const RoadTris& road, double lift) {
+    PaintGap g;
+    const double w[][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {0.5, 0.5, 0}, {0, 0.5, 0.5}, {0.5, 0, 0.5},
+                           {1.0 / 3, 1.0 / 3, 1.0 / 3}, {0.7, 0.15, 0.15}, {0.15, 0.7, 0.15}, {0.15, 0.15, 0.7}};
+    for (std::size_t t = 0; t + 2 < paint.indices.size(); t += 3) {
+        const Vertex& A = paint.vertices[paint.indices[t]];
+        const Vertex& B = paint.vertices[paint.indices[t + 1]];
+        const Vertex& C = paint.vertices[paint.indices[t + 2]];
+        const Vec3 front = cross(C.position - A.position, B.position - A.position);
+        if (front.y <= 0 || A.normal.y <= 0) ++g.facingDown;
+        g.paintArea += 0.5 * std::fabs(front.y);
+        for (const double* s : w) {
+            const Vec3 p = A.position * s[0] + B.position * s[1] + C.position * s[2];
+            const double h = roadHeightAt(road, Vec2(p.x, p.z), p.y);
+            if (std::isnan(h)) { ++g.offRoad; continue; }
+            g.worst = std::max(g.worst, std::fabs(p.y - h - lift));
+        }
+    }
+    return g;
+}
+}  // namespace
+
+TEST_CASE(lanes_paint_lies_flush_on_a_crest_a_banked_curve_and_a_ramp) {
+    constexpr double kMm = 0.001;
+    struct Scene { const char* name; RoadTris road; std::vector<std::vector<Vec2>> lines; double near; };
+    std::vector<Scene> scenes;
+    {   // (a) A CREST: 80 m over a 20 m summit, 2.5 m cells; three lane lines and a stop bar across the top. A bridge
+        // deck crosses 6 m over the summit: the paint must stay on the street under it.
+        Scene s{"crest", roadSheet(33, 5, [](int i, int j) { const double x = 2.5 * i; return Vec3(x, 20.0 - 0.004 * (x - 40.0) * (x - 40.0), -5.0 + 2.5 * j); }), {}, 20.0};
+        for (double z : {-3.5, 0.0, 3.5}) { std::vector<Vec2> l; for (double x = 1.0; x <= 79.0; x += 6.0) l.push_back(Vec2(x, z)); s.lines.push_back(l); }
+        s.lines.push_back({Vec2(41.3, -4.6), Vec2(41.3, 4.6)});
+        const RoadTris bridge = roadSheet(2, 2, [](int i, int j) { return Vec3(36.0 + 8.0 * i, 26.0, -30.0 + 60.0 * j); });
+        RoadTris both = s.road; both.insert(both.end(), bridge.begin(), bridge.end());
+        s.road = both;
+        scenes.push_back(s);
+    }
+    {   // (b) A BANKED CURVE: 60 m radius through a radian, climbing 3%, its bank growing from level to 10% round it
+        Scene s{"banked curve", roadSheet(51, 5, [](int i, int j) {
+            const double th = 0.02 * i, off = -5.0 + 2.5 * j, r = 60.0 + off;
+            return Vec3(r * std::cos(th), 0.03 * 60.0 * th + 0.10 * th * off, r * std::sin(th));
+        }), {}, 0.0};
+        for (double off : {-3.5, 0.0, 3.5}) {
+            std::vector<Vec2> l;
+            for (double th = 0.01; th <= 0.99; th += 0.1) l.push_back(Vec2((60.0 + off) * std::cos(th), (60.0 + off) * std::sin(th)));
+            s.lines.push_back(l);
+        }
+        scenes.push_back(s);
+    }
+    {   // (c) A RAMP: level, then sagging into an 8% climb, its cross-slope turning from -3% to +3% along it
+        Scene s{"ramp", roadSheet(34, 5, [](int i, int j) {
+            const double x = 3.0 * i, z = -4.0 + 2.0 * j, rise = x < 30.0 ? 0.0 : x < 80.0 ? 0.0008 * (x - 30.0) * (x - 30.0) : 2.0 + 0.08 * (x - 80.0);
+            return Vec3(x, rise + (-0.03 + 0.06 * x / 99.0) * z, z);
+        }), {}, 0.0};
+        for (double z : {-3.0, 0.0, 3.0}) { std::vector<Vec2> l; for (double x = 0.5; x <= 98.5; x += 7.0) l.push_back(Vec2(x, z)); s.lines.push_back(l); }
+        scenes.push_back(s);
+    }
+    {   // A ROAD THAT DOES NOT FOLD (an even 5% grade, 2% cross-fall): its paint keeps its triangles
+        const RoadTris road = roadSheet(34, 5, [](int i, int j) { const double x = 3.0 * i, z = -4.0 + 2.0 * j; return Vec3(x, 0.05 * x + 0.02 * z, z); });
+        std::vector<std::vector<Vec2>> lines;
+        for (double z : {-3.0, 0.0, 3.0}) { std::vector<Vec2> l; for (double x = 0.5; x <= 98.5; x += 7.0) l.push_back(Vec2(x, z)); lines.push_back(l); }
+        const RenderMesh flat = paintOn(road, lines, 0.08, 0.0);
+        const RenderMesh draped = MeshBuilder::drapeOnMesh(flat, road, kPaintLift, kPaintReach, kPaintFlush);
+        CHECK(draped.indices.size() == flat.indices.size());
+        CHECK(paintGap(draped, road, kPaintLift).worst <= kMm);
+    }
+    for (const Scene& s : scenes) {
+        const RenderMesh flat = paintOn(s.road, s.lines, 0.08, s.near);
+        // the corners-only fit: every corner on the road and lifted, the triangles between them flat
+        RenderMesh cornersOnly = flat;
+        for (Vertex& v : cornersOnly.vertices) v.position.y += kPaintLift;
+        const PaintGap before = paintGap(cornersOnly, s.road, kPaintLift);
+        const RenderMesh draped = MeshBuilder::drapeOnMesh(flat, s.road, kPaintLift, kPaintReach, kPaintFlush);
+        const PaintGap after = paintGap(draped, s.road, kPaintLift);
+        std::printf("  %s: paint %zu -> %zu triangles; worst gap off the lift: corners only %.1f mm, draped %.4f mm; area %.3f -> %.3f m2\n",
+                    s.name, flat.indices.size() / 3, draped.indices.size() / 3, before.worst * 1000.0, after.worst * 1000.0,
+                    before.paintArea, after.paintArea);
+        CHECK(before.worst > kMm);                                       // the scene has folds under its paint
+        CHECK(after.worst <= kMm);                                       // ...and the drape follows every one of them
+        CHECK(after.offRoad == 0 && after.facingDown == 0);
+        CHECK(std::fabs(after.paintArea - before.paintArea) < 1e-6 * before.paintArea + 1e-6);   // nothing trimmed, nothing twice
+        for (const Vertex& v : draped.vertices) CHECK_APPROX(v.color.x, 0.9, 1e-9);
+    }
 }
 
 // ADR-0116: a mountain road CUTS through the rise it cannot climb. The profile used to be the grade-limited

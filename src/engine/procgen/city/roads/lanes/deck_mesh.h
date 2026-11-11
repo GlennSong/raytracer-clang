@@ -18,6 +18,17 @@ namespace roads::lanes {
 // pass's paving datum (block_audit.h lanesSidewalkRise) is the mesher's own number.
 constexpr double kSidewalkLift = 0.12;
 
+// ROAD PAINT on the drawn road (MeshBuilder::drapeOnMesh): every stripe, bar and arrow lies this far above the road
+// triangle under it, so the depth test does not let the asphalt show through it. (The cure for that is a depth bias
+// when paint is drawn; until the renderer has one, the lift stays.)
+constexpr double kPaintLift = 0.02;
+// ...and goes on the road surface nearest the height it was laid at, never on one further than this (a bridge over
+// the street, or the street under a bridge).
+constexpr double kPaintReach = 1.0;
+// A paint triangle the road under it folds by less than this (metres off the plane through its corners) is kept whole
+// rather than cut along the road's triangles: half a millimetre is far under what the 2 cm lift hides.
+constexpr double kPaintFlush = 0.0005;
+
 struct NamedMesh { std::string name; RenderMesh mesh; Vec3 color; };
 
 // One mesh per material: asphalt (deck tops and bottoms), concrete (walls, piers), sidewalk,

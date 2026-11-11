@@ -36,6 +36,17 @@ using namespace engine::roads::lanes;
 
 namespace {
 
+// The --out folder, made with every folder above it (`out/lanelab/x` when `out/lanelab` is not there yet). Says so
+// and returns false when it cannot be made: a plain mkdir made only the last folder, failed silently, and the tool
+// went on to print "wrote ..." for files it had not written.
+bool makeOutDir(const std::string& dir) {
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (!ec && std::filesystem::is_directory(dir, ec)) return true;
+    std::fprintf(stderr, "lanes: cannot make the output folder %s%s%s\n", dir.c_str(), ec ? ": " : "", ec ? ec.message().c_str() : "");
+    return false;
+}
+
 // THE SYSTEM-INTERCHANGE SCENE, the city planner's geometry in miniature: a ring of radius 1000
 // held 8 m up, crossed square by a radial expressway at ground level, with the ring's frontage
 // roads cut back round the crossing. Outside, the expressway climbs back to 8 m to bridge a
@@ -177,7 +188,8 @@ int main(int argc, char** argv) {
         BlockAudit a = auditBlocks(*r, citysim);
         std::printf("scene-hole blocks: ");
         std::printf("%s", summary(a).c_str());
-        mkdir(out.c_str(), 0755); const std::string svg = out + "/blocks.svg"; writeBlocksSvg(*r, a, svg); std::printf("wrote %s\n", svg.c_str());
+        if (!makeOutDir(out)) return 1;
+        const std::string svg = out + "/blocks.svg"; writeBlocksSvg(*r, a, svg); std::printf("wrote %s\n", svg.c_str());
         {   // --at x y r: what the lot pass put near a point — lots, building part meshes, LOD1 boxes (set LANELAB_AUDIT_PARTS=1 to grow meshes)
             bool at = false; double ax = 0, ay = 0, ar = 30; for (int i = 3; i + 3 < argc; ++i) if (std::strcmp(argv[i], "--at") == 0) { at = true; ax = std::atof(argv[i + 1]); ay = std::atof(argv[i + 2]); ar = std::atof(argv[i + 3]); }
             if (at) {
@@ -568,7 +580,8 @@ int main(int argc, char** argv) {
         }
     }
     if (!out.empty() && !quick) {
-        mkdir(out.c_str(), 0755); std::string base = out + "/" + r.graph.name; std::string err;
+        if (!makeOutDir(out)) return 1;
+        std::string base = out + "/" + r.graph.name; std::string err;
         std::vector<NamedMesh> meshes = buildMeshes(r); size_t tris = 0; for (const NamedMesh& m : meshes) tris += m.mesh.indices.size() / 3;
     if (!debugLane.empty()) {   // the lane's footprint (raw rings), its spine and every deck triangle within its bbox, by owner
         using namespace engine::roads::lanes;
@@ -592,8 +605,11 @@ int main(int argc, char** argv) {
             std::printf("--debug-lane %s: %d deck triangles in its bbox, %d owned by it; footprint polygons %zu, ring vertices %zu; wrote %s\n", debugLane.c_str(), inBox, owned, fp.size(), fp.empty() ? size_t(0) : fp[0].outer.size(), (out + "/lane_" + debugLane + ".svg").c_str());
         }
     }
-        if (!writeGlb(meshes, base + ".glb", &err)) std::fprintf(stderr, "lanes: %s\n", err.c_str());
-        writePlanSvg(r, base + ".svg"); writeStatsJson(r, out + "/stats.json");
+        bool wrote = true;
+        if (!writeGlb(meshes, base + ".glb", &err)) { std::fprintf(stderr, "lanes: %s\n", err.c_str()); wrote = false; }
+        if (!writePlanSvg(r, base + ".svg")) { std::fprintf(stderr, "lanes: cannot write %s.svg\n", base.c_str()); wrote = false; }
+        if (!writeStatsJson(r, out + "/stats.json")) { std::fprintf(stderr, "lanes: cannot write %s/stats.json\n", out.c_str()); wrote = false; }
+        if (!wrote) return 1;
         std::printf("wrote %s.glb (%zu meshes, %zu triangles), %s.svg, %s/stats.json\n", base.c_str(), meshes.size(), tris, base.c_str(), out.c_str());
     }
     return ok ? 0 : 1;
