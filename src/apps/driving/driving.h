@@ -6,8 +6,9 @@
 // a time, takes trips in ("this person drives this car to that place"), lets the host steer a trip (a new destination,
 // a hold, an early end) and hands events back after each tick.
 //
-// For now nothing drives: a trip is recorded, can be asked about, steered and ended, and the tick only advances its
-// clock. The three steps of a tick (design 7.1: plan, settle claims, move) are laid out as empty private functions,
+// For now nothing drives: cars are placed on the road and removed (traffic_state.h holds a car's record and the
+// per-path lists), a trip is recorded for a placed car, can be asked about, steered and ended, and the tick only
+// advances its clock. The three steps of a tick (design 7.1: plan, settle claims, move) are laid out as empty private functions,
 // so the tasks after this one fill them in place.
 //
 // The boundary (design 3): this library links engine_core only and includes nothing from the city sim, the renderer,
@@ -20,12 +21,14 @@
 // Units: metres, seconds.
 
 #include "engine/procgen/city/roads/lane_graph.h"
+#include "apps/driving/traffic_state.h"   // CarId, PathPoint, Car, the per-path lists
 #include "apps/driving/vehicle_class.h"
 #include "slot_map.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -36,31 +39,6 @@ using engine::Real;
 // WHO IS AT THE WHEEL: the host's stable number for a person (the city sim's AgentId). The library never reads meaning
 // into it; it only hands it back on events (and, later, works out the person's driving habits from a hash of it).
 using PersonId = uint64_t;
-
-// WHICH CAR: the host's number for it (the city sim's vehicle index). The library holds no record of the car yet --
-// where a car is on the road arrives with the tick (task C6) -- so for now a car is just this number, which is also
-// the order events come out in.
-struct CarId {
-    static constexpr uint32_t kNone = 0xFFFFFFFFu;
-    uint32_t index = kNone;
-
-    CarId() = default;
-    explicit CarId(uint32_t i) : index(i) {}
-    bool valid() const { return index != kNone; }
-    bool operator==(const CarId& o) const { return index == o.index; }
-    bool operator!=(const CarId& o) const { return index != o.index; }
-    bool operator<(const CarId& o) const { return index < o.index; }
-};
-
-// A PLACE ON THE ROAD: a path of the lane graph (a lane or a connector) and a distance along it, in metres from its
-// start. A trip's destination and a hold are both one of these.
-struct PathPoint {
-    engine::PathId path;
-    Real along = 0;
-
-    bool operator==(const PathPoint& o) const { return path == o.path && along == o.along; }
-    bool operator!=(const PathPoint& o) const { return !(*this == o); }
-};
 
 // The host's name for a hold (a bus stop's number, a fare's): an opaque number, unique within one trip.
 using HoldName = uint64_t;
@@ -120,18 +98,39 @@ public:
 
     const engine::LaneGraph* roads() const { return roads_; }
 
-    // THE KINDS OF VEHICLE on the road (vehicle_class.h, #248), copied in by the host from its vehicle data. Nothing
-    // reads them yet; the speed and lane tasks will.
-    void setVehicleClasses(VehicleClasses classes) { vehicleClasses_ = std::move(classes); }
+    // THE KINDS OF VEHICLE on the road (vehicle_class.h, #248), copied in by the host from its vehicle data. A car is
+    // placed as one of them, and its length says how far back its body reaches. Setting them rebuilds the per-path
+    // lists (a car whose class index is no longer in the table drops out of them).
+    void setVehicleClasses(VehicleClasses classes);
     const VehicleClasses& vehicleClasses() const { return vehicleClasses_; }
+
+    // PLACE A CAR on the road (moving or parked; nobody drives it until a trip begins): `car` of class `vehicleClass`
+    // (an index into vehicleClasses()), its front bumper at `front`, and `trail` the earlier paths its body reaches
+    // back over, nearest first (each leading into the one before it; paths the body does not reach are dropped).
+    // Refused (false, and the reason in `why` when given) when the car is already placed, the class or the path is
+    // unknown, the distance is off the path, a trail path is unknown or does not lead on, the trail is longer than
+    // kMaxTrail, or the body does not fit on the path and the trail.
+    bool placeCar(CarId car, uint32_t vehicleClass, const PathPoint& front,
+                  const std::vector<engine::PathId>& trail = {}, std::string* why = nullptr);
+    // REMOVE A CAR from the road. Refused (false, with the reason) when it is not placed or is on a trip (end the trip
+    // first).
+    bool removeCar(CarId car, std::string* why = nullptr);
+    // The car's record, or null when it is not placed.
+    const Car* car(CarId id) const;
+    std::size_t carCount() const { return cars_.size(); }
+    // Every car's record, in car-id order, and every path's cars (rebuilt whenever a car is placed or removed), for
+    // the questions in traffic_state.h.
+    const std::vector<Car>& cars() const { return cars_; }
+    const PathLists& pathLists() const { return pathLists_; }
 
     // ONE STEP of `dt` seconds: plan, settle claims, move (design 7.1). For now it only advances the clock.
     void tick(Real dt);
     uint64_t tickCount() const { return tickCount_; }
     double clockSeconds() const { return clockSeconds_; }
 
-    // BEGIN A TRIP: `person` drives `car` to `destination`. Refused (a null handle) when the car is already on a trip,
-    // or the destination is not a place on the road (an unknown path, or a distance off its ends).
+    // BEGIN A TRIP: `person` drives `car` to `destination`. Refused (a null handle) when the car has not been placed,
+    // is already on a trip, or the destination is not a place on the road (an unknown path, or a distance off its
+    // ends).
     TripId beginTrip(CarId car, PersonId person, const PathPoint& destination);
     // The trip, or null when the handle is null or stale (its trip has ended).
     const Trip* trip(TripId id) const;
@@ -151,8 +150,8 @@ public:
     // THE EVENTS since the last drain, sorted (eventBefore). The list is empty afterwards.
     std::vector<Event> drainEvents();
 
-    // ONE NUMBER OVER EVERYTHING HELD (the clock, every trip, the queued events), folded in a fixed order: the same
-    // start and the same calls give the same number at every tick.
+    // ONE NUMBER OVER EVERYTHING HELD (the clock, every car's record in car-id order, every trip, the queued events),
+    // folded in a fixed order: the same start and the same calls give the same number at every tick.
     uint64_t stateHash() const;
 
 private:
@@ -162,9 +161,12 @@ private:
     void move();            // each car moves; events are queued for the host
 
     bool onRoad(const PathPoint& p) const;
+    Car* findPlaced(CarId id);
 
     const engine::LaneGraph* roads_ = nullptr;
     VehicleClasses vehicleClasses_;
+    std::vector<Car> cars_;     // every placed car, in car-id order
+    PathLists pathLists_;       // rebuilt from cars_ whenever a car is placed or removed
     uint64_t tickCount_ = 0;
     double clockSeconds_ = 0;
     engine::SlotMap<Trip, TripTag> trips_;

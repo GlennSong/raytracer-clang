@@ -39,10 +39,24 @@ PathPoint at(uint32_t path, Real along) {
     return p;
 }
 
+// A trip needs a placed car: gives `d` one vehicle class (an ordinary car's size) and places each of `ids` on lane 0,
+// its front 10 m along.
+constexpr Real kCarLength = 4.5, kCarWidth = 1.8, kCarWheelbase = 2.7, kCarSteerDegrees = 30;
+constexpr Real kPlacedAlong = 10;
+void placeCars(Driving& d, const std::vector<uint32_t>& ids) {
+    if (d.vehicleClasses().empty()) {
+        VehicleClasses classes;
+        classes.add(deriveVehicleClass("test_car", kCarLength, kCarWidth, kCarWheelbase, kCarSteerDegrees));
+        d.setVehicleClasses(classes);
+    }
+    for (uint32_t id : ids) CHECK(d.placeCar(CarId(id), 0, at(0, kPlacedAlong)));
+}
+
 // A fixed sequence of calls, the state hash after each tick. `variant` changes one call (another destination).
 std::vector<uint64_t> runSequence(const engine::LaneGraph& g, int variant) {
     Driving d(&g);
     std::vector<uint64_t> hashes;
+    placeCars(d, {3, 1});
     const TripId a = d.beginTrip(CarId(3), 1001, at(0, 50));
     const TripId b = d.beginTrip(CarId(1), 1002, at(1, 20));
     for (int t = 0; t < 30; ++t) {
@@ -77,8 +91,13 @@ TEST_CASE(driving_trip_begin_query_steer_end) {
     const engine::LaneGraph g = twoLanes();
     Driving d(&g);
     d.tick(kTickSeconds);
+    // A car must be on the road before anyone drives it.
+    CHECK(!d.beginTrip(CarId(4), 42, at(0, 30)).valid());
+    placeCars(d, {4, 5});
+    CHECK(!d.car(CarId(4))->driven);
     const TripId id = d.beginTrip(CarId(4), 42, at(0, 30));
     CHECK(id.valid());
+    CHECK(d.car(CarId(4))->driven);
     CHECK(d.tripCount() == 1u);
     const Trip* t = d.trip(id);
     CHECK(t != nullptr);
@@ -121,13 +140,15 @@ TEST_CASE(driving_trip_begin_query_steer_end) {
         CHECK(ev[0].person == 42u);
         CHECK(ev[0].trip == id);
     }
-    // The car is free again.
+    // The car is free again, and nobody is driving it.
+    CHECK(!d.car(CarId(4))->driven);
     CHECK(d.beginTrip(CarId(4), 43, at(0, 10)).valid());
 }
 
 TEST_CASE(driving_stale_trip_handle_is_refused) {
     const engine::LaneGraph g = twoLanes();
     Driving d(&g);
+    placeCars(d, {1, 2});
     const TripId old = d.beginTrip(CarId(1), 1, at(0, 10));
     CHECK(d.endTrip(old));
     // The next trip takes the freed slot; the old handle must not reach it.
@@ -149,6 +170,7 @@ TEST_CASE(driving_events_sorted_by_car_and_drained) {
     Driving d(&g);
     // Begun and ended in an order unlike car order.
     const uint32_t cars[] = {7, 2, 9, 0, 5};
+    placeCars(d, {7, 2, 9, 0, 5});
     std::vector<TripId> trips;
     for (uint32_t c : cars) trips.push_back(d.beginTrip(CarId(c), 100 + c, at(0, 10)));
     for (std::size_t i = trips.size(); i-- > 0;) d.endTrip(trips[i]);

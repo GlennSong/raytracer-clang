@@ -231,6 +231,21 @@ struct LaneGraph {
     Range addCurve(const std::vector<Vec2>& xy, const std::vector<Real>& z);
     // Adds points to planPoints and returns their range.
     Range addPlanPoints(const std::vector<Vec2>& pts);
+
+    // READING A PATH'S CENTRE LINE at a distance along it (metres from its start; clamped to its ends), each by a
+    // binary search over the curve's stations (polyline.h's station readers, over the path's range). An unknown path
+    // reads as the origin, height 0, heading +x, grade 0.
+    // Where it is, in plan.
+    Vec2 pointAt(PathId path, Real distanceAlong) const;
+    // How high it is.
+    Real heightAt(PathId path, Real distanceAlong) const;
+    // Which way it runs, in plan, as a unit vector: the chord from polyline.h's kTangentHalfSpan before to as far
+    // after (chordAtStation), so it turns smoothly through a vertex instead of jumping at it. A path with no length
+    // there reads as the chord from its first point to its last, and failing that as +x.
+    Vec2 directionAt(PathId path, Real distanceAlong) const;
+    // How steeply it climbs there: metres up per metre along the plan, over the same chord as directionAt (0 where
+    // the chord has no plan length).
+    Real gradeAt(PathId path, Real distanceAlong) const;
 };
 
 bool operator==(const Path& a, const Path& b);

@@ -274,6 +274,50 @@ Range LaneGraph::addCurve(const std::vector<Vec2>& xy, const std::vector<Real>& 
     return r;
 }
 
+namespace {
+// The curve range of a path, or an empty one for an unknown path or a range off the shared arrays.
+Range curveOf(const LaneGraph& g, PathId path) {
+    if (!path.valid() || path.index >= g.paths.size()) return Range{};
+    const Range r = g.paths[path.index].curve;
+    if (r.end() > g.points.size() || r.end() > g.along.size() || r.end() > g.heights.size()) return Range{};
+    return r;
+}
+}  // namespace
+
+Vec2 LaneGraph::pointAt(PathId path, Real distanceAlong) const {
+    const Range r = curveOf(*this, path);
+    if (r.count == 0) return Vec2();
+    return pointAtStation(points.data() + r.first, along.data() + r.first, r.count, distanceAlong);
+}
+
+Real LaneGraph::heightAt(PathId path, Real distanceAlong) const {
+    const Range r = curveOf(*this, path);
+    if (r.count == 0) return 0;
+    return valueAtStation(along.data() + r.first, heights.data() + r.first, r.count, distanceAlong);
+}
+
+Vec2 LaneGraph::directionAt(PathId path, Real distanceAlong) const {
+    const Vec2 kNoHeading(1, 0);
+    const Range r = curveOf(*this, path);
+    if (r.count == 0) return kNoHeading;
+    const Vec2 d = chordAtStation(points.data() + r.first, along.data() + r.first, r.count, distanceAlong);
+    if (d.length() > kShortestStationSpan) return normalize(d);
+    const Vec2 whole = points[r.end() - 1] - points[r.first];
+    return whole.length() > kShortestStationSpan ? normalize(whole) : kNoHeading;
+}
+
+Real LaneGraph::gradeAt(PathId path, Real distanceAlong) const {
+    const Range r = curveOf(*this, path);
+    if (r.count == 0) return 0;
+    const Real* s = along.data() + r.first;
+    const Real before = std::max(distanceAlong - kTangentHalfSpan, s[0]);
+    const Real after = std::min(distanceAlong + kTangentHalfSpan, s[r.count - 1]);
+    const Real run = chordAtStation(points.data() + r.first, s, r.count, distanceAlong).length();
+    if (run <= kShortestStationSpan) return 0;
+    const Real* h = heights.data() + r.first;
+    return (valueAtStation(s, h, r.count, after) - valueAtStation(s, h, r.count, before)) / run;
+}
+
 Range LaneGraph::addPlanPoints(const std::vector<Vec2>& pts) {
     Range r;
     r.first = static_cast<uint32_t>(planPoints.size());

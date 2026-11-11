@@ -29,24 +29,18 @@ Projection project(const std::vector<Vec2>& xy, const std::vector<double>& s, co
     return best;
 }
 
+// These three are polyline.h's station readers over the whole vector (the lane graph reads ranges with the same ones).
 Vec2 pointAt(const std::vector<Vec2>& xy, const std::vector<double>& s, double station) {
-    if (station <= s.front()) return xy.front();
-    if (station >= s.back()) return xy.back();
-    size_t k = std::upper_bound(s.begin(), s.end(), station) - s.begin();
-    double f = (station - s[k-1]) / std::max(s[k] - s[k-1], 1e-12); return lerp(xy[k-1], xy[k], f);
+    return pointAtStation(xy.data(), s.data(), s.size(), station);
 }
 
 Vec2 tangentAtStation(const std::vector<Vec2>& xy, const std::vector<double>& s, double station) {
-    Vec2 a = pointAt(xy, s, std::max(station - 0.5, s.front())), b = pointAt(xy, s, std::min(station + 0.5, s.back()));
-    Vec2 d = b - a; return d.length() > 1e-12 ? normalize(d) : tangentAt(xy, 0);
+    const Vec2 d = chordAtStation(xy.data(), s.data(), s.size(), station);
+    return d.length() > kShortestStationSpan ? normalize(d) : tangentAt(xy, 0);
 }
 
 double interp(const std::vector<double>& xs, const std::vector<double>& ys, double x) {
-    if (xs.empty()) return 0.0;
-    if (x <= xs.front()) return ys.front();
-    if (x >= xs.back()) return ys.back();
-    size_t k = std::upper_bound(xs.begin(), xs.end(), x) - xs.begin();
-    double f = (x - xs[k-1]) / std::max(xs[k] - xs[k-1], 1e-12); return ys[k-1] + (ys[k] - ys[k-1]) * f;
+    return valueAtStation(xs.data(), ys.data(), xs.size(), x);
 }
 
 std::vector<Vec2> crossings(const std::vector<Vec2>& a, const std::vector<Vec2>& b) {

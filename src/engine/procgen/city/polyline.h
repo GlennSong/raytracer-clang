@@ -102,6 +102,68 @@ inline std::vector<Real> stations(const std::vector<Vec2>& P) {
     return s;
 }
 
+// READING AN OPEN POLYLINE AT A STATION (a distance along it), given as a pointer and a count so a range of one of the
+// lane graph's shared arrays serves as well as a whole vector. `s` holds each point's station, rising (stations()).
+// A station before the first point reads the first, one past the last reads the last. Each finds its segment by a
+// binary search over the stations. The road builder's pointAt / interp / tangentAtStation (lanes/polyline_ops.h) and
+// the lane graph's path lookups (LaneGraph::pointAt and the rest) are all these.
+
+// The shortest segment a station divides: a shorter one (two points at one station) is read as this long.
+constexpr Real kShortestStationSpan = 1e-12;
+// How far each way of a station a polyline's direction is measured over (tangentAtStation's span): the direction is
+// the chord from (station - this) to (station + this), each end clamped to the polyline's ends.
+constexpr Real kTangentHalfSpan = 0.5;
+
+// Where along the polyline a station falls: the segment (P[seg] -> P[seg + 1]) and the fraction along it. Before the
+// start: segment 0 at fraction 0; past the end: the last segment at fraction 1. Fewer than two points: segment 0, 0.
+struct StationSpot {
+    std::size_t seg = 0;
+    Real t = 0;
+};
+inline StationSpot spotAtStation(const Real* s, std::size_t n, Real station) {
+    StationSpot spot;
+    if (n < 2 || station <= s[0]) return spot;
+    if (station >= s[n - 1]) {
+        spot.seg = n - 2;
+        spot.t = 1;
+        return spot;
+    }
+    const std::size_t k = static_cast<std::size_t>(std::upper_bound(s, s + n, station) - s);
+    spot.seg = k - 1;
+    spot.t = (station - s[k - 1]) / std::max(s[k] - s[k - 1], kShortestStationSpan);
+    return spot;
+}
+
+// The point at a station. No points: the origin.
+inline Vec2 pointAtStation(const Vec2* xy, const Real* s, std::size_t n, Real station) {
+    if (n == 0) return Vec2();
+    if (station <= s[0]) return xy[0];
+    if (station >= s[n - 1]) return xy[n - 1];
+    const StationSpot spot = spotAtStation(s, n, station);
+    return lerp(xy[spot.seg], xy[spot.seg + 1], spot.t);
+}
+
+// A value carried at each point (a height, a width), read at a station by straight-line interpolation (numpy's interp,
+// clamped). No points: 0.
+inline Real valueAtStation(const Real* s, const Real* v, std::size_t n, Real station) {
+    if (n == 0) return 0;
+    if (station <= s[0]) return v[0];
+    if (station >= s[n - 1]) return v[n - 1];
+    const StationSpot spot = spotAtStation(s, n, station);
+    return v[spot.seg] + (v[spot.seg + 1] - v[spot.seg]) * spot.t;
+}
+
+// The CHORD across a station: from the point `halfSpan` before it to the point `halfSpan` after it, each end clamped to
+// the polyline's ends; not normalised. Its direction blends the directions of the segments it spans, so it turns
+// smoothly through a vertex instead of jumping there. It is zero when the span covers no length (one point, or points
+// all in one place): the caller picks its own direction then.
+inline Vec2 chordAtStation(const Vec2* xy, const Real* s, std::size_t n, Real station, Real halfSpan = kTangentHalfSpan) {
+    if (n == 0) return Vec2();
+    const Vec2 a = pointAtStation(xy, s, n, std::max(station - halfSpan, s[0]));
+    const Vec2 b = pointAtStation(xy, s, n, std::min(station + halfSpan, s[n - 1]));
+    return b - a;
+}
+
 // How far p lies off the LINE through a and b (to a itself when they meet).
 inline Real distToLine(const Vec2& p, const Vec2& a, const Vec2& b) {
     const Vec2 ab = b - a;
