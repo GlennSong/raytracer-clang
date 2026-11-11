@@ -859,10 +859,15 @@ A few facts also need memory ("I came to a full stop at this line", "I've been w
 
 - The reader turns the Lua into flat arrays: each condition becomes a short list of "compare slot N with value V"
   steps over a per-driver array of fact values. No strings and no Lua at tick time.
-- Load-time checks, each an error with file and line: unknown fact, device, answer or mode name; a number without
-  a unit where one is needed; a `settle` list that can leave two movements tied (the reader appends a final
-  tie-break and warns); a regulation kind used by the road data that the rule set doesn't define.
-- **Units.** The rule set says `units = { speed = "mph" }`. The reader converts. C++ only ever sees metres and seconds.
+- Load-time checks, each an error naming the file and the full key (`us_left.lua: rule_set.devices.stop.means.rank
+  is "halt", which is not one of ranks (...)`; a value in a Lua table carries no line number, so the key is what
+  can be named): unknown fact, device, answer or mode name; a number without
+  a unit; a `settle` list that can leave two movements tied (the reader appends a final
+  tie-break and warns); a regulation kind used by the road data that the rule set doesn't define. All faults in a
+  file are reported together, not only the first.
+- **Units.** As built (task C3): every number carries its own unit, `default_limit = { 25, unit = "mph", source =
+  "..." }`, from a short list (s, m, ft, mph, km/h, m/s, m/s2, ft/s2, ratio). The reader converts and keeps what
+  was written for the driver card. C++ only ever sees metres and seconds. Numbers with no `source` are counted.
 - **Reloading while running** (the Lua hot-reload from ADR-0259): tables are swapped between ticks. Cars keep their
   state; a car in a mode that no longer exists returns to `driving`. Junction plans are worked out again.
 - **Rule coverage.** The lab counts how often each rule was the binding one. A rule that never binds in a full lab
