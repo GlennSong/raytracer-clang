@@ -142,6 +142,73 @@ def tool_planner_stats(args):
     return f"{info}\n{tail}"
 
 
+# --- field reports (the game's F9, engine/field_report.h) ----------------------
+
+def _reports_folder():
+    """report.folder from the viewer's settings.json, else <screenshot folder>/reports (~/Pictures/Raytracer)."""
+    cfg = {}
+    try:
+        with open(os.path.join(REPO, "settings.json")) as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        pass
+    if cfg.get("report.folder"):
+        return os.path.expanduser(cfg["report.folder"])
+    shots = cfg.get("screenshot.folder") or ""
+    if not shots:
+        pictures = os.environ.get("XDG_PICTURES_DIR") or os.path.expanduser("~/Pictures")
+        shots = os.path.join(pictures, "Raytracer")
+    return os.path.join(os.path.expanduser(shots), "reports")
+
+def _report_dirs():
+    base = _reports_folder()
+    if not os.path.isdir(base):
+        return base, []
+    dirs = [d for d in os.listdir(base) if os.path.exists(os.path.join(base, d, "report.json"))]
+    return base, sorted(dirs, reverse=True)
+
+def tool_reports(args):
+    base, dirs = _report_dirs()
+    rid = args.get("id")
+    if not rid:
+        if not dirs:
+            return f"no reports in {base}"
+        lines = [f"{len(dirs)} report(s) in {base}, newest first:"]
+        for d in dirs[:int(args.get("count") or 10)]:
+            try:
+                with open(os.path.join(base, d, "report.json")) as f:
+                    r = json.load(f)
+            except (OSError, ValueError):
+                continue
+            issue = os.path.join(base, d, "issue.txt")
+            filed = open(issue).read().strip() if os.path.exists(issue) else "not filed"
+            lines.append(f"- {d}: {r.get('title', '')} [{os.path.basename(r.get('level', ''))}] ({filed})")
+        return "\n".join(lines)
+    match = [d for d in dirs if d.startswith(rid)] if rid != "latest" else dirs[:1]
+    if not match:
+        return f"no report {rid} in {base}"
+    folder = os.path.join(base, match[0])
+    with open(os.path.join(folder, "note.md")) as f:
+        note = f.read()
+    with open(os.path.join(folder, "report.json")) as f:
+        facts = json.load(f).get("facts", {})
+    shot = os.path.join(folder, "shot.png")
+    out = [f"folder: {folder}", f"shot: {shot if os.path.exists(shot) else '(none)'}", "", note, "facts (raw):"]
+    out += [f"  {k}: {v}" for k, v in facts.items()]
+    return "\n".join(out)
+
+def tool_file_report(args):
+    base, dirs = _report_dirs()
+    rid = args["id"]
+    match = [d for d in dirs if d.startswith(rid)] if rid != "latest" else dirs[:1]
+    if not match:
+        return f"no report {rid} in {base}"
+    r = subprocess.run([sys.executable, os.path.join(REPO, "tools", "file_report.py"), os.path.join(base, match[0])],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.strip() or r.stdout.strip())
+    return r.stdout.strip()
+
 NUM = {"type": "number"}
 STR = {"type": "string"}
 CAM_PROPS = {"x": NUM, "y": NUM, "z": NUM, "pitch": NUM, "yaw": NUM,
@@ -173,6 +240,13 @@ COMPOSITES = [
      "families the debug panel owns (ssao.*, ssr.*, shadow.*, bloom.*, "
      "tonemap.op, grade.*, hud.show).",
      {"params": {"type": "object"}, "instance": STR}, [], tool_render_params),
+    ("reports", "Field reports Glenn made in the game (F9): with no id, the newest (title, level, whether filed); "
+     "with an id (a prefix, or 'latest'), its note, teleport line, every fact and the screenshot's path (read "
+     "the PNG to see it). Works with no viewer running.",
+     {"id": STR, "count": NUM}, [], tool_reports),
+    ("file_report", "File a field report as a GitHub issue (tools/file_report.py: the shot pushed to the "
+     "issue-shots branch, the note as the body). Public: only when Glenn asks.",
+     {"id": STR}, ["id"], tool_file_report),
     ("viewer_command", "Raw control-channel line (see docs/control-channel.md),"
      " sent as typed.", {"command": STR, "instance": STR}, ["command"],
      tool_viewer_command),

@@ -17674,3 +17674,44 @@ Measured again (RT_NOCACHE):
 
 **Owed.** The spine-end edge samples (279) are still over their count before #142 (199), and the field's worst sample is
 +1.36 m (+1.35 m before #142; +0.50 m with .1).
+
+## ADR-0393 — Field reports: F9 sends a screenshot, a note and where you are
+
+**Context.** Glenn (2026-11-10): "is there some way for me to take a screenshot and write some text and send it to
+you ... with a bunch of metadata attached like where I am in the game world and what I'm looking at? ... Or maybe so I
+can send it to GitHub as an issue to track." Until now a problem seen in play reached a session as words, and the
+session then had to find the place again. The viewer could already answer every needed question over the control
+channel (`where?`, `lot?`, `ground?`, `vehicle?` ...), but only when asked from outside, and nothing said what the
+crosshair was on.
+
+**Decision.**
+- **F9, in a dev build.** CMake `RT_DEV_TOOLS` (ON; a shipped build turns it off and the key, the box and the filer
+  compile out). The `report` action, bound by the Application so every mode has it (`bind.report` rebinds).
+- **The facts are the table's answers** (ADR-0253), asked in-process at the press: one list in
+  `engine/field_report.cpp`; a verb nothing answers in this state is dropped. A test holds every verb on the list to a
+  listed verb, so a rename cannot silently empty the reports.
+- **`aim?`**, new, answered by TeleportSystem (it holds the physics): the ray through the view's centre to 2 km, past
+  the player's own car, gives the point, distance, normal, surface tag and the entity whose body it is.
+- **The shot comes first.** The frame is dumped (F12's path); the note box (FieldReportState: transparent, blocks
+  input, so the world under it is frozen) opens once the PNG has stopped growing, so neither the box nor the last
+  report's toast is in the picture. The box closes on the frame after Save/Cancel, so the Esc that cancels is never
+  also the game's quit.
+- **The folder** `<report.folder>/<local time>/` (default the screenshot folder's `reports/`): `shot.png`,
+  `report.json`, `note.md`. Cancel removes the folder that press made.
+- **GitHub.** The API cannot attach an image to an issue, so `tools/file_report.py` commits the shot to the
+  `issue-shots` branch with git plumbing (a private index file, no checkout: Glenn's uncommitted work is never
+  touched), pushes it, and files the issue with the shot linked, labelled `field-report`. Run in the background when
+  the box's checkbox is ticked; by hand (or the MCP's `file_report`) otherwise. The repo is public, so the box says
+  so. A folder with an `issue.txt` is not filed twice.
+- **Reading them.** The MCP's `reports` tool lists and reads them with no viewer running; `report [note]` on the socket
+  makes one without the box (a session's before/after, and the probe that tested this).
+
+**Measured.** metro_v2_test, a probe viewer: `report` wrote all three files 1 s after the press; `aim?` said asphalt,
+60.5 m, the road mesh, and `lot?` there named road edge 521; `tap F9` opened the box over a frozen world, and its shot
+had no box in it. `file_report.py --dry-run` built the `issue-shots` commit (one 5 MB PNG) and the body; no issue was
+filed.
+
+**Owed.** A shot is a full-size PNG (about 5 MB on the branch each); a smaller JPEG for the issue would need an
+encoder in the filer. People are not physics bodies, so `aim?` cannot name the walker under the crosshair (`look?`
+lists those near a possessed agent only).
+

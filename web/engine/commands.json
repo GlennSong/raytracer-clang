@@ -12,6 +12,12 @@
   "usage": "agent?"
  },
  {
+  "name": "aim?",
+  "owner": "engine",
+  "summary": "What the view's centre is on: the point, how far, the surface, and the entity whose body it is (the player's own car is looked through). The field report's \"looking at\".",
+  "usage": "aim?"
+ },
+ {
   "name": "alight",
   "owner": "engine",
   "summary": "The possessed walker gets out of the car it is in.",
@@ -406,6 +412,12 @@
   "owner": "engine",
   "summary": "Push the render Settings keys (ssao.*, ssr.*, shadow.*, bloom.*, grade.*) to the renderer, or save them.",
   "usage": "render apply|save"
+ },
+ {
+  "name": "report",
+  "owner": "engine",
+  "summary": "Make a field report as F9 does (field_report.h), without the note box: the shot, the facts and this note, saved to the reports folder once the frame lands. Read the log for the folder.",
+  "usage": "report [note]"
  },
  {
   "name": "ride",

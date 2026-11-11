@@ -127,6 +127,23 @@ void Application::registerCameraVerbs() {
                      "Write the clouds' weather map as a picture (ADR-0386): every cloud from above, tinted by its type "
                      "(stratus grey .. cumulonimbus red), the cirrus faint blue, the camera a red dot.",
                      unanswered("a CloudMapSystem: a level with volumetric clouds and clouds.lua"));
+    commandTable.add("report", "report [note]",
+                     "Make a field report as F9 does (field_report.h), without the note box: the shot, the facts and "
+                     "this note, saved to the reports folder once the frame lands. Read the log for the folder.",
+                     [this](const ControlCommand& cmd) -> std::string {
+#ifdef RT_DEV_TOOLS
+        if (reportPhase_ != ReportPhase::Idle) return "err report: one is being made";
+        startFieldReport(cmd.rest, true);
+        return report_.dir.empty() ? "err report: no folder (" + reportToast_ + ")" : "ok report " + report_.dir;
+#else
+        (void)cmd;
+        return "err report: a build without RT_DEV_TOOLS";
+#endif
+    });
+    commandTable.add("aim?", "aim?",
+                     "What the view's centre is on: the point, how far, the surface, and the entity whose body it is "
+                     "(the player's own car is looked through). The field report's \"looking at\".",
+                     unanswered("a TeleportSystem: play mode"));
     commandTable.add("frame?", "frame?", "The last `frame`: what it found, its box and the eye it chose.",
                      unanswered("a CameraSystem"));
     commandTable.add("lots?", "lots?", "Every recipe the city grew, with how many lots of each (the names `frame lot` takes).",

@@ -69,6 +69,9 @@ void DevControlSystem::onStart(FrameContext& ctx) {
               << "  Up/Down=exposure, Esc=quit\n"
               << "  Enter=pause, 0=real-time speed (sim speed: ` debug menu)\n"
               << "  F12=screenshot (into " << screenshotFolder(ctx.settings) << ")\n"
+#ifdef RT_DEV_TOOLS
+              << "  F9=field report: screenshot + where you are + what you look at + a note\n"
+#endif
               << "  P=toggle perspective/orthographic camera\n"
               << "  F=detach/attach freecam (mouse looks, WASD/QE fly)\n"
               << "  C=place camera here, V/B=cycle viewports, X=editor view\n"

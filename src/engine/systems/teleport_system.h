@@ -59,6 +59,10 @@ private:
     bool openPanel_ = false;   // a TeleportPanelRequest: unfold the section on the next panel draw
     EventBus::Subscription onRequest_, onOpenPanel_;
     ControlCommands::Binding answer_;   // `teleport?`
+    ControlCommands::Binding aim_;      // `aim?`: what the view's centre is on (field reports)
+    World* world_ = nullptr;            // the app's, for `aim?` (set in onStart)
+    const RenderView* view_ = nullptr;
+    std::string aimAnswer() const;
     std::vector<TeleportBookmark> bookmarks_;
     bool groundAt(FrameContext& ctx, double x, double z, double& y) const;
     void loadBookmarks(FrameContext& ctx);

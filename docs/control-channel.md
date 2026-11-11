@@ -223,7 +223,25 @@ Written by hand are only the composites, which do more than send one line:
 `viewer_status`, `launch_viewer`, `screenshot` (frames a pose, waits for the
 PNG), `teleport` (stages, then reads `teleport?`), `planner_stats` (the log
 scrape), `render_params` (several `set`s and `render apply`), and
-`viewer_command` (a raw protocol line).
+`viewer_command` (a raw protocol line), and the two that need no viewer:
+`reports` (the field reports Glenn made with F9: the newest, or one by id with
+its note, facts and the shot's path) and `file_report` (one as a GitHub issue;
+public, so only when he asks).
+
+## Field reports (ADR-0393)
+
+F9 in a dev build (`RT_DEV_TOOLS`, on by default; `bind.report` rebinds it)
+dumps the frame, asks the table's own questions in-process (`where?`, `aim?`,
+`lot?` at the crosshair, `ground?` there, `vehicle?`, `daynight?`, `weather?`,
+`bundle?`, `mem?` ...), then freezes the world under a note box. Save writes
+`<report.folder>/<time>/` (default `~/Pictures/Raytracer/reports/`): `shot.png`,
+`report.json` (the facts by verb, the teleport line) and `note.md` (the note,
+the teleport line, the facts as a list -- also the issue's body). "File a
+GitHub issue" runs `tools/file_report.py` on the folder in the background: the
+shot is committed to the `issue-shots` branch with git plumbing (a private
+index; the working tree is never touched) and linked from an issue labelled
+`field-report`; the issue's URL lands in `issue.txt`. `report [note]` on the
+socket makes one without the box. `aim?` is the crosshair's answer on its own.
 
 Instances: every tool takes an optional `instance` (socket basename
 substring); default is the newest live viewer — which is how an agent attaches

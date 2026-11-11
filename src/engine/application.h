@@ -16,6 +16,7 @@
 #include "../renderer/renderer.h"
 #include "../renderer/window.h"
 #include "../renderer/settings.h"
+#include "field_report.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -119,6 +120,13 @@ private:
     void registerEngineVerbs();
     void registerEventVerbs();
     void setDebugOverlay(bool on);   // the grave key's push/pop, callable
+    // FIELD REPORTS (field_report.h, application_report.cpp): F9 dumps the frame, asks the facts, then opens the
+    // note box over the frozen world; Save writes the folder (and files the issue when asked).
+    void stepFieldReport();          // once per frame, after the states' update
+    void startFieldReport(const std::string& headlessNote = "", bool headless = false);
+    void openFieldReport();
+    void closeFieldReport();
+    void drawFieldReportToast(const FrameContext& ctx);
     void reconcileFramebuffer();
     void renderFrame();
     FrameContext makeContext();
@@ -202,6 +210,17 @@ private:
     double interpolation = 0.0;
     bool quit = false;
     StateTransition transitionRequest;
+
+    enum class ReportPhase { Idle, Capturing, Open };
+    ReportPhase reportPhase_ = ReportPhase::Idle;
+    FieldReport report_;              // the one being made
+    int reportFrames_ = 0;            // frames since the press, while the shot lands
+    long long reportShotSize_ = -1;   // the shot's size last frame: written when it stops growing
+    bool reportClosing_ = false;      // the box said Save or Cancel: close it next frame
+    bool reportSave_ = false;
+    bool reportHeadless_ = false;     // the `report` verb: no box, saved as soon as the shot lands
+    std::string reportToast_;         // "Report saved ..." for a few seconds after
+    double reportToastLeft_ = 0;
 };
 
 

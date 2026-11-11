@@ -70,11 +70,14 @@ add_library(engine_core STATIC
     src/engine/components.cpp
     src/engine/application.cpp
     src/engine/application_commands.cpp
+    src/engine/application_report.cpp
     src/engine/state_stack.cpp
     src/engine/states/playing_state.cpp
     src/engine/states/debug_overlay_state.cpp
+    src/engine/states/field_report_state.cpp
     src/engine/states/editor_state.cpp
     src/engine/screenshot.cpp
+    src/engine/field_report.cpp
     src/engine/mesh_shapes.cpp
     src/engine/mesh_words.cpp
     src/engine/mesh_surfaces.cpp
@@ -302,6 +305,15 @@ add_library(engine_core STATIC
     # the core is what lets a plain engine app carry none of the city's code.
 )
 target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
+# Developer tools in the game itself (field reports: F9, engine/field_report.h). ON for every build we run; a
+# shipped build turns it OFF and the key, the box and the issue filer are compiled out.
+option(RT_DEV_TOOLS "Build the in-game developer tools (F9 field reports)" ON)
+if(RT_DEV_TOOLS)
+    target_compile_definitions(engine_core PUBLIC RT_DEV_TOOLS=1)
+endif()
+# the report's issue filer (tools/file_report.py) is found in the source tree when the viewer runs elsewhere
+set_source_files_properties(src/engine/application_report.cpp PROPERTIES
+                            COMPILE_DEFINITIONS RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 # Build identity (ADR-0084): `git describe` at configure time into a generated header, so logs, the
 # `info` control verb and bundle manifests can say which engine built what. Content keys, not this
 # string, decide whether a bundle is current — a stale describe after commits is only cosmetic.
@@ -739,6 +751,7 @@ add_executable(run_tests
     tests/test_world.cpp
     tests/test_clock.cpp
     tests/test_control_channel.cpp
+    tests/test_field_report.cpp
     tests/test_weather_cycle.cpp
     tests/test_cloud_map.cpp
     tests/test_weather_sim.cpp
@@ -1130,7 +1143,7 @@ if(RT_ENABLE_PHYSICS)
     # city it drives has no cars at all to collide with.
     target_compile_definitions(physics_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     target_link_libraries(physics_tests PRIVATE citysim engine_core Jolt Threads::Threads)
-    add_test(NAME physics_tests COMMAND physics_tests)
+    add_test(NAME physics_tests COMMAND physics_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})   # levels name their road graphs relative to the repo
 
     # The audible physics demo (see the demos block above for the rationale).
     if(RT_BUILD_DEMOS AND RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)

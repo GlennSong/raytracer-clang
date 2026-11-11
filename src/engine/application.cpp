@@ -181,6 +181,7 @@ void Application::renderFrame() {
         RT_PROFILE_ZONE_NAMED("encode");
         frameStats.beginPhase(FramePhase::RenderEncode);
         stateStack.forEachRenderable([&](AppState& state) { state.render(ctx); });
+        drawFieldReportToast(ctx);
         frameStats.endPhase(FramePhase::RenderEncode);
     }
     {
@@ -221,6 +222,11 @@ void Application::begin() {
         FrameContext ctx = makeContext();
         stateStack.onStart(ctx);
     }
+#ifdef RT_DEV_TOOLS
+    // F9: a field report (field_report.h). Bound here, not by a state's system, so every mode has it.
+    if (!inputMap.bindButtonByName("report", settingsStore.getString("bind.report", "")))
+        inputMap.bindButton("report", KeyCode::F9);
+#endif
     // Render through the window so it keeps painting during a modal resize,
     // when pollEvents blocks and the loop is suspended. (Hosted windows
     // ignore this — the host paints by calling runFrame.)
@@ -367,7 +373,8 @@ void Application::runFrame() {
             // Backtick toggles debug overlay
             if (event.type == EventType::KeyPressed
                 && event.key == KeyCode::GraveAccent
-                && !event.repeat) {
+                && !event.repeat
+                && reportPhase_ == ReportPhase::Idle) {   // the report box sits on top of the stack: it closes itself
                 setDebugOverlay(!debugOverlayActive);
             } else {
                 stateStack.onEvent(event, ctx);
@@ -416,6 +423,7 @@ void Application::runFrame() {
         playerInputs.updateGamepads(window->getGamepads());
         inputMap.updateGamepad(window->getGamepads()[0]);
         stateStack.forEachActive([&](AppState& state) { state.update(ctx); });
+        stepFieldReport();   // F9 (field_report.h)
         frameStats.endPhase(FramePhase::Update);
     }
 

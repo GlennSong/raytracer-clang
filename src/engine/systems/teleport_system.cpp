@@ -144,6 +144,72 @@ void TeleportSystem::onStart(FrameContext& ctx) {
         answer_ = ctx.commands->bind("teleport?", "TeleportSystem", [this](const ControlCommand&) -> std::string {
             return lastResult_.empty() ? "ok (pending)" : "ok " + lastResult_;
         });
+    world_ = &ctx.world;
+    view_ = &ctx.view;
+    if (ctx.commands != nullptr)
+        aim_ = ctx.commands->bind("aim?", "TeleportSystem", [this](const ControlCommand&) { return aimAnswer(); });
+}
+
+// WHAT THE VIEW'S CENTRE IS ON (`aim?`, the field report's "looking at"): the physics ray through the middle of
+// the screen, past the player's own car, to 2 km. The point, the normal, how far, the surface tag, and what the
+// body belongs to, when an entity owns it.
+std::string TeleportSystem::aimAnswer() const {
+    if (physics_ == nullptr || view_ == nullptr || world_ == nullptr) return "err aim?: no physics here";
+    const PhysicsWorld& pw = physics_->physicsWorld();
+    const Vec3 eye = view_->camera.position;
+    Vec3 dir = view_->camera.target - eye;
+    const Real len = dir.length();
+    if (len < 1e-9) return "err aim?: the camera has no direction";
+    dir = dir * (1.0 / len);
+
+    // the player's own car is not what they are looking at (the chase camera sits behind it)
+    PhysicsBodyId own = INVALID_PHYSICS_BODY;
+    world_->each<InVehicle, ControlledBy>([&](Entity, InVehicle& iv, ControlledBy&) {
+        if (const Vehicle* v = world_->get<Vehicle>(iv.vehicle))
+            if (v->vehicleId != PhysicsWorld::INVALID_VEHICLE) own = pw.vehicleBody(v->vehicleId);
+    });
+    const Real range = 2000.0;
+    Vec3 from = eye;
+    PhysicsWorld::RayHit hit;
+    bool found = false;
+    for (int tries = 0; tries < 4; ++tries) {
+        const Real left = range - (from - eye).length();
+        if (left <= 0 || !pw.castRayHit(from, dir * left, hit)) break;
+        if (own == INVALID_PHYSICS_BODY || hit.body != own) { found = true; break; }
+        from = hit.point + dir * 0.05;   // through our own car
+    }
+    if (!found) return "ok nothing within 2000 m";
+
+    static const char* const kSurfaces[] = {"unknown", "terrain", "asphalt", "concrete", "grass", "dirt",
+                                            "sand",    "rock",    "snow",    "wood",     "metal"};
+    const uint8_t sTag = pw.bodySurface(hit.body);
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "ok at %.2f %.2f %.2f dist %.1f normal %.2f %.2f %.2f surface %s%s", hit.point.x,
+                  hit.point.y, hit.point.z, (hit.point - eye).length(), hit.normal.x, hit.normal.y, hit.normal.z,
+                  sTag < 11 ? kSurfaces[sTag] : "?", hit.dynamic ? " dynamic" : "");
+    std::string out = buf;
+    // whose body: a car, a loose body, a static mesh (a lot's chunk says which part)
+    bool named = false;
+    world_->each<Vehicle>([&](Entity e, Vehicle& v) {
+        if (named || v.vehicleId == PhysicsWorld::INVALID_VEHICLE || pw.vehicleBody(v.vehicleId) != hit.body) return;
+        out += " | vehicle entity " + std::to_string(e.index);
+        named = true;
+    });
+    if (!named)
+        world_->each<RigidBody>([&](Entity e, RigidBody& rb) {
+            if (named || rb.bodyId != hit.body) return;
+            out += " | body entity " + std::to_string(e.index);
+            named = true;
+        });
+    if (!named)
+        world_->each<MeshCollider>([&](Entity e, MeshCollider& mc) {
+            if (named || mc.bodyId != hit.body) return;
+            out += " | static mesh entity " + std::to_string(e.index) + " (" + std::to_string(mc.indices.size() / 3) +
+                   " triangles)";
+            if (const LotPartChunk* lp = world_->get<LotPartChunk>(e)) out += " lot part " + std::to_string(lp->part);
+            named = true;
+        });
+    return out;
 }
 
 void TeleportSystem::onStop(FrameContext& ctx) {
