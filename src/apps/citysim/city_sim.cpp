@@ -5220,11 +5220,12 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                 if (db2 < jr * jr && std::fabs(along) < 0.7) {
                     if (gridlocked && b.speed < 0.3) continue;
                     yieldAtLine = true;
+                    gate.why = 1;
                     break;
                 }
                 // 2: turn yield against oncoming approach traffic.
                 if (!turning || along >= -0.3 || protectedTurn) continue;
-                if (b.speed > 0.5) { yieldAtLine = true; break; }  // live traffic
+                if (b.speed > 0.5) { yieldAtLine = true; gate.why = 2; break; }  // live traffic
                 // A gridlocked car stops waiting on anything STALLED — including
                 // the stopped-turner tie-break below, whose cross-junction chains
                 // (A waits on B waits on C...) were the 400-second holds. Only
@@ -5239,6 +5240,7 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                         Vec2 bd1 = nav_->direction(b.route.links[jb.leg + 1]);
                         if (bd0.x * bd1.x + bd0.y * bd1.y < 0.85) {
                             yieldAtLine = true;
+                            gate.why = 2;
                             break;
                         }
                     }
@@ -5263,7 +5265,7 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                     const Real clearAt = ja.toNode + jr +
                                          0.5 * vehicleLength(static_cast<int>(self)) +
                                          minGaps_[self];
-                    if (gaps_[self] < clearAt) yieldAtLine = true;
+                    if (gaps_[self] < clearAt) { yieldAtLine = true; gate.why = 3; }
                 }
             }
             if (yieldAtLine)
@@ -5587,10 +5589,12 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         // the leader IDM brakes for. A gridlock-creeping car ignores the
         // wedge: the creep exists to unpick stalemates, and the fender-bender
         // rule arbitrates any resulting brush.
+        bool wedgeLeads = false;
         if (myIdx < static_cast<int>(carAheadGap_.size()) &&
             carAheadGap_[myIdx] < netGap && a.holdTimer <= 6.0) {
             netGap = carAheadGap_[myIdx];
             dv = a.speed - carAheadSpeed_[myIdx];
+            wedgeLeads = true;
         }
         // A BUS BRAKES FOR ITS STOP. It used to arrive at speed and stand
         // still the next tick -- 5.6 m/s to 0 in 33 ms, a jolt nobody rides
@@ -5618,6 +5622,9 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         // The capped target is still a hard ceiling (signals/junction rules
         // must bind immediately, not on the IDM relaxation curve).
         a.speed = std::min(a.speed, std::max(Real(0), target));
+        if (a.speed < 0.3)
+            holdWhy(a, netGap < 2.0 ? (wedgeLeads ? 16 : 15) : seenAhead < 1e9 && seenAhead - kPedClearance < 2.0 ? 17
+                                                    : gate.yieldAtLine ? static_cast<uint8_t>(11 + gate.why) : 19);
     } else {
         Real slowZone = kPedSlowZone;
         target = followCap(target, gap, minGap, slowZone);
@@ -5685,6 +5692,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             car && gate.distToLine > nav_->links[li].length - a.distOnLeg) {
             lineRoom = std::max(Real(0), gate.distToLine);
             a.state = redAhead ? Agent::State::Waiting : Agent::State::Yielding;
+            if (a.speed < 0.3) holdWhy(a, redAhead ? 11 : static_cast<uint8_t>(11 + gate.why));
         } else if (redAhead || gate.yieldAtLine) {
             // The hold applies only BEFORE the line. A car already past it is
             // committed to the box and drives on — clamping it there trapped it
@@ -5693,7 +5701,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             if (gate.distToLine >= -kLineSlack - 1e-6) {
                 Real room = std::max(Real(0), gate.distToLine);
                 Real motion = std::min(a.speed * dt, room);
-                if (motion < a.speed * dt) { a.speed = 0; if (!car) holdWhy(a, 2); }   // held at the line
+                if (motion < a.speed * dt) { a.speed = 0; holdWhy(a, !car ? 2 : redAhead ? 11 : static_cast<uint8_t>(11 + gate.why)); }   // held at the line
                 a.distOnLeg += motion;
                 // FSM: red = Waiting; holding a turn for oncoming = Yielding.
                 // A pedestrian held at the kerb is Waiting too (honest red ring).
@@ -7543,6 +7551,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         // expires — a crash is a real stop, not a suggestion.
         if (a.crashTimer > 0) {
             a.crashTimer -= dt;
+            if (a.mode == Agent::Mode::Driver) holdWhy(a, 10);
             a.speed = 0;
             a.state = Agent::State::Waiting;
             continue;
@@ -7559,6 +7568,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             if (std::sqrt(dx * dx + dy * dy) > a.tetherLead) {
                 a.speed = 0;
                 a.state = Agent::State::Waiting;
+                if (a.mode == Agent::Mode::Driver) holdWhy(a, 18);
                 ++tetherHeldThisTick;
                 continue;
             }

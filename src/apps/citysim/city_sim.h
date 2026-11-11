@@ -709,7 +709,9 @@ public:
     // The signals' cycle times (signals.lua at level load; SignalTiming's defaults otherwise). Set before build().
     void setSignalTiming(const SignalTiming& t) { signalTiming_ = t; }
     // RT_TRAFFIC_DEBUG: why a walker last stood still (1 kerb gap, 2 signal line, 3 a car body, 4 its leader) and
-    // its follow gap -- the "spawn point" heaps
+    // its follow gap -- the "spawn point" heaps. A CAR's (#218, the lab's mid-turn freezes): 10 a crash hold, 11 a red,
+    // 12 a crossing car in the box, 13 oncoming (a turn), 14 no exit room, 15 its lane leader, 16 a body in the wedge,
+    // 17 a person seen, 18 its tether, 19 a speed cap (bend, junction pace)
     int holdWhyOf(int i) const { return i >= 0 && i < static_cast<int>(holdWhy_.size()) ? holdWhy_[static_cast<std::size_t>(i)] : 0; }
     void holdWhy(const Agent& a, uint8_t why) {
         const std::size_t i = static_cast<std::size_t>(&a - agents_.data());
@@ -1746,6 +1748,7 @@ private:
     struct JunctionGate {
         Real cap = 0;               // speed target after junction/signal/yield caps
         bool yieldAtLine = false;   // holding for box/oncoming traffic/exit room
+        uint8_t why = 0;            // ...which: 1 a crossing car in the box, 2 oncoming (a turn), 3 no exit room
         int node = -1;              // the junction ahead (-1: none within reach)
         int approachLink = -1;      // the route link that enters it (its signal)
         Real distToNode = 0;        // route metres to the node

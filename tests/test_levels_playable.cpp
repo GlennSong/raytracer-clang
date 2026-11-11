@@ -2074,6 +2074,32 @@ TEST_CASE(metro_junctions_stay_clear) {
         std::printf("    [junction]   %ld stuck at node %d  ->  teleport %.2f %.2f\n",
                     stuckAt[worst[w]], junctions[worst[w]], p.x, p.y);
     }
+    // RT_JUNCTION_DUMP: the cars standing still at the worst junction at the end -- where each is, its links, and what
+    // stands ahead of it within 12 m
+    if (std::getenv("RT_JUNCTION_DUMP") && !worst.empty() && stuckAt[worst[0]] > 0) {
+        const Vec2 c = nav.nodes[static_cast<std::size_t>(junctions[worst[0]])];
+        const auto& ag = city.sim().agents();
+        for (std::size_t k = 0; k < ag.size(); ++k) {
+            const citysim::Agent& a = ag[k];
+            if (a.mode != citysim::Agent::Mode::Driver || !a.moving || stoppedFor[k] < 5.0 || (a.pos - c).length() > 30) continue;
+            const int li = a.leg < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
+            const int ln = a.leg + 1 < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg) + 1] : -1;
+            std::printf("      car %zu stopped %.0f s at (%.1f, %.1f) heading (%.2f, %.2f) lane %d laneF %.2f link %d (%d->%d k%d) next %d",
+                        k, stoppedFor[k], a.pos.x, a.pos.y, a.heading.x, a.heading.y, a.lane, a.laneF, li,
+                        li >= 0 ? nav.links[static_cast<std::size_t>(li)].from : -1, li >= 0 ? nav.links[static_cast<std::size_t>(li)].to : -1,
+                        li >= 0 ? static_cast<int>(nav.links[static_cast<std::size_t>(li)].klass) : -1, ln);
+            if (ln >= 0) std::printf(" (%d->%d)", nav.links[static_cast<std::size_t>(ln)].from, nav.links[static_cast<std::size_t>(ln)].to);
+            std::printf(" dist %.1f/%.1f\n", a.distOnLeg, li >= 0 ? nav.links[static_cast<std::size_t>(li)].length : 0.0);
+            for (std::size_t m = 0; m < ag.size(); ++m) {
+                if (m == k || ag[m].mode != citysim::Agent::Mode::Driver || !ag[m].moving) continue;
+                const Vec2 d = ag[m].pos - a.pos;
+                const Real ahead = d.x * a.heading.x + d.y * a.heading.y;
+                if (ahead > 0 && ahead < 12 && std::fabs(d.x * a.heading.y - d.y * a.heading.x) < 3)
+                    std::printf("        ahead: car %zu %.1f m on, %.1f across, heading (%.2f, %.2f), speed %.1f\n", m, ahead,
+                                d.x * a.heading.y - d.y * a.heading.x, ag[m].heading.x, ag[m].heading.y, ag[m].speed);
+            }
+        }
+    }
     CHECK(samples > 0 && carsSeen / samples > 40);   // the city is actually driving
     CHECK(stuckBox < 300);
     CHECK(overlaps < 800);
@@ -4620,6 +4646,92 @@ TEST_CASE(level_river_town_streets_are_drivable_grades) {
     CHECK(steep.empty() || steep.front().grade < 0.70);   // (the ratchet; owed: < 0.15)
 }
 
+// THE LAB's CARS DO NOT FREEZE IN A JUNCTION (#218; Glenn, 2026-11-11, watching the lab: "I do see them change lane but
+// then stop and freeze mid turn and then some while later they continue. The motion is not smooth"). Two minutes; every
+// time a driver stands (< 0.3 m/s) for over a second is a STOP, counted IN A BOX when it stands inside a junction's
+// mouth, and by why the sim held it (CitySim::holdWhyOf). Printed; RT_LAB_STOP_LOG lists the longest box stops.
+TEST_CASE(level_traffic_lab_cars_do_not_freeze_in_a_junction) {
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded = LevelLoader::load(std::string(RT_SOURCE_DIR) + "/assets/levels/traffic_lab.json", world, *renderer,
+                                          view, assets, false);
+    CHECK(loaded);
+    if (!loaded) return;
+    citysim::CityRenderSystem city;
+    CHECK(city.build(world, &assets, nullptr));
+    citysim::CitySim& sim = city.simMutable();
+    const engine::NavGraph& nav = city.nav();
+    std::vector<int> junctions;
+    std::vector<Real> mouth;
+    for (int j = 0; j < nav.nodeCount(); ++j) {
+        if (!nav.isJunction(j)) continue;
+        Real r = 0;
+        for (int li : nav.outLinks[static_cast<std::size_t>(j)]) r = std::max(r, nav.links[static_cast<std::size_t>(li)].width * 0.5);
+        junctions.push_back(j);
+        mouth.push_back(r + 3.5);
+    }
+    auto inBox = [&](Vec2 p) {
+        for (std::size_t j = 0; j < junctions.size(); ++j)
+            if ((p - nav.nodes[static_cast<std::size_t>(junctions[j])]).length() < mouth[j]) return true;
+        return false;
+    };
+    struct Stop { std::size_t agent; Real t0, len; Vec2 at; bool box; int why; };
+    const std::size_t n = sim.agents().size();
+    std::vector<Real> since(n, -1);
+    std::vector<int> whyAt(n, 0);
+    std::vector<Vec2> where(n);
+    std::vector<Stop> stops;
+    const Real dt = 0.1;
+    double moving = 0;
+    for (int i = 0; i < 1200; ++i) {   // 120 s
+        sim.step(dt, 1.0 / 3600.0);
+        const Real t = (i + 1) * dt;
+        for (std::size_t k = 0; k < n; ++k) {
+            const citysim::Agent& a = sim.agents()[k];
+            const bool driving = a.mode == citysim::Agent::Mode::Driver && a.moving && !a.far();
+            if (driving) moving += dt;
+            const bool stood = driving && a.speed < 0.3;
+            if (stood && since[k] < 0) { since[k] = t; where[k] = a.pos; whyAt[k] = sim.holdWhyOf(static_cast<int>(k)); }
+            if (stood && since[k] >= 0 && t - since[k] < 0.35) whyAt[k] = sim.holdWhyOf(static_cast<int>(k));   // settled reason
+            if (!stood && since[k] >= 0) {
+                if (t - since[k] > 1.0) stops.push_back({k, since[k], t - since[k], where[k], inBox(where[k]), whyAt[k]});
+                since[k] = -1;
+            }
+        }
+    }
+    for (std::size_t k = 0; k < n; ++k)
+        if (since[k] >= 0 && 120.0 - since[k] > 1.0) stops.push_back({k, since[k], 120.0 - since[k], where[k], inBox(where[k]), whyAt[k]});
+    const char* names[] = {"crash", "red", "crossing car in the box", "oncoming", "no exit room", "lane leader", "body in the wedge",
+                           "person", "tether", "speed cap"};
+    std::map<int, std::pair<int, double>> byWhy;
+    int boxStops = 0;
+    double boxSecs = 0;
+    for (const Stop& s : stops) {
+        if (!s.box) continue;
+        ++boxStops;
+        boxSecs += s.len;
+        byWhy[s.why].first++;
+        byWhy[s.why].second += s.len;
+    }
+    std::printf("    [lab-stops] %zu stops over 1 s in %.0f driver-minutes; %d inside a junction (%.0f s standing)\n", stops.size(),
+                moving / 60.0, boxStops, boxSecs);
+    for (const auto& [why, c] : byWhy)
+        std::printf("      %-24s %4d stops, %6.1f s\n", why >= 10 && why <= 19 ? names[why - 10] : "?", c.first, c.second);
+    if (std::getenv("RT_LAB_STOP_LOG")) {
+        std::sort(stops.begin(), stops.end(), [](const Stop& x, const Stop& y) { return x.len > y.len; });
+        int shown = 0;
+        for (const Stop& s : stops) {
+            if (!s.box || shown++ >= 12) continue;
+            std::printf("      agent %zu stood %.1f s from t=%.1f at (%.1f, %.1f): %s\n", s.agent, s.len, s.t0, s.at.x, s.at.y,
+                        s.why >= 10 && s.why <= 19 ? names[s.why - 10] : "?");
+        }
+    }
+    CHECK(moving > 0);
+}
+
 // THE TRAFFIC LAB's FIRST MINUTE (#214; Glenn's field report 2026-11-10_23-34-38: "these cars were facing down the
 // street and then turned non-car like almost all the way around"). Load the lab, run a minute, and count drivers that
 // SPIN: their heading turns more than 120 degrees while they move less than 15 m. Printed; RT_LAB_SPIN_LOG lists them.
@@ -4641,10 +4753,20 @@ TEST_CASE(level_traffic_lab_cars_do_not_spin_on_the_spot) {
     std::vector<Vec2> anchorPos(n), anchorHead(n);
     std::vector<char> anchored(n, 0), spun(n, 0);
     int spins = 0, drivers = 0;
+    // WIDE SWINGS (Glenn, 2026-11-11: "just about every car in my field of view spin in a very wide arc and then
+    // started moving"): a trip starting from a space is drawn pulling out (CitySim's pull), its yaw turned from the
+    // parked car's to its lane's -- by up to pi, across the street, where the car is parked facing away from its route
+    int pulls = 0, wideSwings = 0;
+    std::vector<Real> lastPullLen(n, 0);
     for (int i = 0; i < 600; ++i) {   // 60 s
         sim.step(0.1, 1.0 / 3600.0);
         for (std::size_t k = 0; k < n; ++k) {
             const citysim::Agent& a = sim.agents()[k];
+            if (a.mode == citysim::Agent::Mode::Driver && a.pullLen > 0 && a.pullS < 0.5 && a.pullLen != lastPullLen[k]) {
+                ++pulls;
+                if (std::fabs(a.pullYawOffset) > 1.5708) ++wideSwings;
+            }
+            lastPullLen[k] = a.pullLen;
             if (a.mode != citysim::Agent::Mode::Driver || !a.moving) continue;
             if (!anchored[k] || (a.pos - anchorPos[k]).length() > 15.0) { anchorPos[k] = a.pos; anchorHead[k] = a.heading; anchored[k] = 1; continue; }
             const Real dot = a.heading.x * anchorHead[k].x + a.heading.y * anchorHead[k].y;
@@ -4671,6 +4793,7 @@ TEST_CASE(level_traffic_lab_cars_do_not_spin_on_the_spot) {
     }
     for (std::size_t k = 0; k < n; ++k) drivers += anchored[k];
     std::printf("    [lab-spin] %d drivers in the first minute; %d spun round within 15 m\n", drivers, spins);
+    std::printf("    [lab-pull] pulls out of a space turning > 90 degrees: %d of %d trip starts\n", wideSwings, pulls);
     CHECK(drivers > 200);
 }
 
