@@ -104,10 +104,24 @@ bool unitFactor(const std::string& word, double& factor);
 // The unit words, comma separated in table order, for error messages.
 std::string unitWords();
 
+// WHAT A UNIT MEASURES, so a check can tell a speed from a time: every unit word belongs to one of these, in the same
+// table as its factor.
+enum class UnitFamily : uint8_t { Length, Time, Speed, Acceleration, Ratio };
+constexpr uint8_t kUnitFamilyCount = 5;
+// Says whether `word` is a unit, and which family it is in.
+bool unitFamily(const std::string& word, UnitFamily& family);
+// The family in words for messages, with its article ("a speed", "an acceleration"), and the unit it is stored in.
+const char* unitFamilyWords(UnitFamily family);
+const char* unitFamilyStoredUnit(UnitFamily family);
+
+// WHO IS AT THE WHEEL: the host's stable number for a person (the city sim's AgentId). The library never reads meaning
+// into it; it hands it back on events and works out the person's own driving habits from a hash of it.
+using PersonId = uint64_t;
+
 // ONE PERSON'S OWN VALUE of a setting: the same person always gets the same value, it lies in [low, high], and values
 // bunch around `usual` (a triangular spread whose peak is at `usual`). Mixes the person's id with a hash of the
 // setting's name, so two settings are independent for one person. Stateless, so it costs no memory.
-double personalValue(const PersonalSetting& setting, uint64_t personId);
+double personalValue(const PersonalSetting& setting, PersonId personId);
 
 }  // namespace driving
 

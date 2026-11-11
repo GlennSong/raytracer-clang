@@ -36,9 +36,7 @@ namespace driving {
 
 using engine::Real;
 
-// WHO IS AT THE WHEEL: the host's stable number for a person (the city sim's AgentId). The library never reads meaning
-// into it; it only hands it back on events (and, later, works out the person's driving habits from a hash of it).
-using PersonId = uint64_t;
+// (PersonId, who is at the wheel, is in rule_set.h, beside personalValue which reads a person's habits from it.)
 
 // The host's name for a hold (a bus stop's number, a fare's): an opaque number, unique within one trip.
 using HoldName = uint64_t;

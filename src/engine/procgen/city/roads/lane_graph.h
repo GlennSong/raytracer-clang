@@ -117,7 +117,7 @@ struct Path {
     Range curve;                         // its centre line: into LaneGraph::points / along / heights
     Real length = 0;                     // metres along the centre line
     Real width = 0;
-    Real tightestRadius = 0;             // the radius of its tightest bend (a path with no bend: kNoBend)
+    Real tightestRadius = kNoBend;       // the radius of its tightest bend (a path with no bend: kNoBend, the default)
     Real speedLimit = 0;                 // metres per second
     SectionId section;                   // lanes: the section it lies in
     uint32_t indexInSection = 0;         // lanes: 0 = offside ... last = kerb

@@ -9,11 +9,12 @@ namespace driving {
 
 namespace {
 
-// THE ONE UNIT TABLE: each word a rule set may write, and the number that turns it into metres / seconds / m/s / m/s2 /
-// a plain ratio. Adding a unit is adding a row here.
+// THE ONE UNIT TABLE: each word a rule set may write, the number that turns it into metres / seconds / m/s / m/s2 /
+// a plain ratio, and what it measures. Adding a unit is adding a row here.
 struct UnitRow {
     const char* word;
     double factor;
+    UnitFamily family;
 };
 constexpr double kMetresPerFoot = 0.3048;
 constexpr double kMetresPerSecondPerMph = 0.44704;
@@ -21,15 +22,28 @@ constexpr double kSecondsPerHour = 3600.0;
 constexpr double kMetresPerKilometre = 1000.0;
 constexpr double kIdentity = 1.0;
 const UnitRow kUnits[] = {
-    {"s", kIdentity},
-    {"m", kIdentity},
-    {"ft", kMetresPerFoot},
-    {"mph", kMetresPerSecondPerMph},
-    {"km/h", kMetresPerKilometre / kSecondsPerHour},
-    {"m/s", kIdentity},
-    {"m/s2", kIdentity},
-    {"ft/s2", kMetresPerFoot},
-    {"ratio", kIdentity},
+    {"s", kIdentity, UnitFamily::Time},
+    {"m", kIdentity, UnitFamily::Length},
+    {"ft", kMetresPerFoot, UnitFamily::Length},
+    {"mph", kMetresPerSecondPerMph, UnitFamily::Speed},
+    {"km/h", kMetresPerKilometre / kSecondsPerHour, UnitFamily::Speed},
+    {"m/s", kIdentity, UnitFamily::Speed},
+    {"m/s2", kIdentity, UnitFamily::Acceleration},
+    {"ft/s2", kMetresPerFoot, UnitFamily::Acceleration},
+    {"ratio", kIdentity, UnitFamily::Ratio},
+};
+
+// Each family in words, and the unit its numbers are stored in, in UnitFamily order.
+struct FamilyRow {
+    const char* words;
+    const char* storedUnit;
+};
+const FamilyRow kFamilies[kUnitFamilyCount] = {
+    {"a length", "m"},
+    {"a time", "s"},
+    {"a speed", "m/s"},
+    {"an acceleration", "m/s2"},
+    {"a ratio", "ratio"},
 };
 
 // A person's 64-bit id is folded into the 32-bit hash as its two halves.
@@ -64,6 +78,19 @@ bool unitFactor(const std::string& word, double& factor) {
     return false;
 }
 
+bool unitFamily(const std::string& word, UnitFamily& family) {
+    for (const UnitRow& row : kUnits) {
+        if (word == row.word) {
+            family = row.family;
+            return true;
+        }
+    }
+    return false;
+}
+
+const char* unitFamilyWords(UnitFamily family) { return kFamilies[static_cast<uint8_t>(family)].words; }
+const char* unitFamilyStoredUnit(UnitFamily family) { return kFamilies[static_cast<uint8_t>(family)].storedUnit; }
+
 std::string unitWords() {
     std::string out;
     for (const UnitRow& row : kUnits) {
@@ -92,7 +119,7 @@ std::size_t RuleSet::unsourcedNumberCount() const {
     return count;
 }
 
-double personalValue(const PersonalSetting& setting, uint64_t personId) {
+double personalValue(const PersonalSetting& setting, PersonId personId) {
     const double span = setting.high - setting.low;
     if (!(span > 0)) return setting.low;   // no range: everyone has the one value
     const uint32_t personBits = engine::hashPair(static_cast<uint32_t>(personId),

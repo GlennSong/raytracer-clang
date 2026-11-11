@@ -493,6 +493,8 @@ endif()
 # ============================================================
 add_library(driving STATIC
     src/apps/driving/driving.cpp
+    src/apps/driving/notice.cpp          # facts: what a driver can notice, registered by name (#251)
+    src/apps/driving/road_rules.cpp      # the graph's regulation kinds bound to the rule set's devices (#251)
     src/apps/driving/rule_set.cpp
     src/apps/driving/traffic_state.cpp   # each car's record and each path's cars in order (#249)
     src/apps/driving/vehicle_class.cpp
@@ -507,7 +509,7 @@ endif()
 
 # The driving library's own headless tests: engine_core + driving, never citysim.
 add_executable(driving_tests tests/main.cpp tests/test_driving.cpp tests/test_driving_rules.cpp
-    tests/test_driving_vehicles.cpp tests/test_driving_traffic.cpp)
+    tests/test_driving_vehicles.cpp tests/test_driving_traffic.cpp tests/test_driving_notice.cpp)
 target_include_directories(driving_tests PRIVATE src tests)
 target_compile_options(driving_tests PRIVATE -Wall -Wextra)
 target_compile_definitions(driving_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
