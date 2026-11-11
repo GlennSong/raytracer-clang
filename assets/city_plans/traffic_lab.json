@@ -1,0 +1,13 @@
+{
+  "_comment": "THE TRAFFIC LAB (#214): roads only, flat, small enough to load in seconds -- a downtown grid with arterials every third street, a short midtown ring of larger blocks, and a freeway ring with two radial spurs (their interchanges). Built with `city_plan scene` into assets/lanelab/planned/traffic_lab_lanelab.json.",
+  "name": "traffic_lab",
+  "center": [0.0, 0.0],
+  "size": 1300.0,
+  "relief": 0.0,
+  "seed": 214,
+  "core": { "angle": 0.0, "arterialEvery": 3, "block": [90.0, 60.0], "radius": 300.0 },
+  "midtown": { "block": [140.0, 95.0], "radius": 380.0, "warp": 0.0 },
+  "outskirts": { "curvature": 0.0, "margin": 60.0, "ringSpacing": 140.0, "spokes": 4, "streetSpacing": 95.0 },
+  "freeway": { "radials": 2, "radius": 520.0, "wobble": 0.0 },
+  "roads": { "arterial": 22.0, "collector": 16.0, "freeway": 30.0, "local": 12.0, "sidewalk": 5.0 }
+}

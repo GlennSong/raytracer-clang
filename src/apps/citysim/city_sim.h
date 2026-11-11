@@ -1215,6 +1215,15 @@ public:
     // whatever tables are set — call setGoalTables after it, not before).
     void setWander(bool on);
     bool wander() const { return wander_; }
+    // A LEVEL's ROLE FOR ITS DRIVERS (#214; citysim.driverRole): `share` of the private drivers (never a bus, a cab or
+    // a service vehicle) take role `name` -- the traffic lab gives lab_driver, always driving. After the cabs and
+    // buses are marked. Returns how many took it (0 when the role is unknown).
+    int giveDriversRole(const std::string& name, Real share);
+    // Does this agent drive one trip straight into the next (the level's wander mode, or a roaming role's day)?
+    // The chained-arrival corner, the final-leg turn yield and the no-parking rules ask this, not wander_.
+    bool roams(const Agent& a) const {
+        return wander_ || (a.role < roles_.roles.size() && roles_.roles[a.role].day.roam);
+    }
 
     // The goal layer as data (ADR-0064): replace the per-archetype goal tables
     // (states + transitions over the C++ action vocabulary — city_goals.h).

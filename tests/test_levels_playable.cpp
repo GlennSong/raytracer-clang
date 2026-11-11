@@ -4618,3 +4618,46 @@ TEST_CASE(level_river_town_streets_are_drivable_grades) {
     CHECK(samples > 1000);
     CHECK(steep.empty() || steep.front().grade < 0.70);   // (the ratchet; owed: < 0.15)
 }
+
+// THE TRAFFIC LAB's FIRST MINUTE (#214; Glenn's field report 2026-11-10_23-34-38: "these cars were facing down the
+// street and then turned non-car like almost all the way around"). Load the lab, run a minute, and count drivers that
+// SPIN: their heading turns more than 120 degrees while they move less than 15 m. Printed; RT_LAB_SPIN_LOG lists them.
+TEST_CASE(level_traffic_lab_cars_do_not_spin_on_the_spot) {
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded = LevelLoader::load(std::string(RT_SOURCE_DIR) + "/assets/levels/traffic_lab.json", world, *renderer,
+                                          view, assets, false);
+    CHECK(loaded);
+    if (!loaded) return;
+    citysim::CityRenderSystem city;
+    CHECK(city.build(world, &assets, nullptr));
+    citysim::CitySim& sim = city.simMutable();
+    const std::size_t n = sim.agents().size();
+    // per driver: the window's anchor (position, heading) -- a spin is >120 degrees of turn within 15 m of the anchor
+    std::vector<Vec2> anchorPos(n), anchorHead(n);
+    std::vector<char> anchored(n, 0), spun(n, 0);
+    int spins = 0, drivers = 0;
+    for (int i = 0; i < 600; ++i) {   // 60 s
+        sim.step(0.1, 1.0 / 3600.0);
+        for (std::size_t k = 0; k < n; ++k) {
+            const citysim::Agent& a = sim.agents()[k];
+            if (a.mode != citysim::Agent::Mode::Driver || !a.moving) continue;
+            if (!anchored[k] || (a.pos - anchorPos[k]).length() > 15.0) { anchorPos[k] = a.pos; anchorHead[k] = a.heading; anchored[k] = 1; continue; }
+            const Real dot = a.heading.x * anchorHead[k].x + a.heading.y * anchorHead[k].y;
+            if (dot < -0.5 && !spun[k]) {
+                spun[k] = 1;
+                ++spins;
+                if (std::getenv("RT_LAB_SPIN_LOG"))
+                    std::printf("      spin: agent %zu t=%.1f s at (%.1f, %.1f), heading (%.2f, %.2f) -> (%.2f, %.2f), leg %d of %zu\n", k,
+                                i * 0.1, a.pos.x, a.pos.y, anchorHead[k].x, anchorHead[k].y, a.heading.x, a.heading.y, a.leg,
+                                a.route.links.size());
+            }
+        }
+    }
+    for (std::size_t k = 0; k < n; ++k) drivers += anchored[k];
+    std::printf("    [lab-spin] %d drivers in the first minute; %d spun round within 15 m\n", drivers, spins);
+    CHECK(drivers > 200);
+}

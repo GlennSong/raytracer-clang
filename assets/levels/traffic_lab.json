@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "name": "traffic_lab",
+  "_comment": "THE TRAFFIC LAB (#214): roads only -- a downtown grid, a boulevard ring and a freeway ring with two diamond interchanges (assets/city_plans/traffic_lab.json -> city_plan scene) -- and a few hundred cars that are always driving. Where the realistic-traffic layers (#225) are built and judged before the real cities.",
+  "entities": [
+    {
+      "id": 1,
+      "name": "ground",
+      "shape": "box",
+      "position": [
+        0.0,
+        -0.3,
+        0.0
+      ],
+      "size": [
+        1500.0,
+        0.4,
+        1500.0
+      ],
+      "material": {
+        "albedo": [
+          0.36,
+          0.42,
+          0.3
+        ],
+        "metallic": 0.0,
+        "roughness": 1.0,
+        "opacity": 1.0,
+        "emission": [
+          0,
+          0,
+          0
+        ],
+        "checkerboard": false
+      },
+      "physics": {
+        "motion": "static",
+        "friction": 0.9,
+        "restitution": 0.0
+      }
+    },
+    {
+      "id": 2,
+      "name": "streets",
+      "shape": "road",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "road": {
+        "builder": "lanes",
+        "graph": "assets/lanelab/planned/traffic_lab_lanelab.json",
+        "sidewalks": {
+          "arterial": 5.0,
+          "collector": 4.0,
+          "local": 3.5
+        }
+      }
+    }
+  ],
+  "citysim": {
+    "seed": 214,
+    "vehicles": "vehicles.lua",
+    "cars": 300,
+    "pedestrians": 0,
+    "wander": false,
+    "buildLots": false,
+    "buses": 0,
+    "busRoutes": 0,
+    "taxiFraction": 0.0,
+    "tiered": false,
+    "debugWidgets": false,
+    "perceptionReliability": 1.0,
+    "driverRole": "lab_driver",
+    "driverRoleShare": 1.0,
+    "dormancy": false
+  },
+  "dayNight": {
+    "dayMinutes": 1440.0,
+    "timeOfDay": 0.5
+  },
+  "player": {
+    "position": [
+      0.0,
+      1.2,
+      0.0
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.6
+    },
+    "friction": 0.5
+  },
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  }
+}

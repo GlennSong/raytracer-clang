@@ -75,6 +75,8 @@ struct CityRenderParams {
     Real pedDemoteRadius = 350.0;
     // Cabs on the street, and how readily a walker hails one (0 = off).
     Real taxiFraction = 0.0;
+    std::string driverRole;        // a role for the level's drivers (CitySim::giveDriversRole; the traffic lab's)
+    Real driverRoleShare = 1.0;
     Real hailChance = 0.0;
     Real hailMinMetres = 400.0;
     int busRoutes = 0;

@@ -4258,7 +4258,7 @@ void CitySim::releaseBays(Agent& a) {
 }
 
 bool CitySim::parksInBays(const Agent& a) const {
-    if (a.archetype != Agent::Mode::Driver || wander_) return false;
+    if (a.archetype != Agent::Mode::Driver || roams(a)) return false;
     const int self = indexOf(a);
     return !onService(self);
 }
@@ -4343,6 +4343,29 @@ void CitySim::applyTaxiFraction() {
             ++made;
         }
     }
+}
+
+int CitySim::giveDriversRole(const std::string& name, Real share) {
+    const int id = roles_.find(name);
+    if (id < 0 || share <= 0) return 0;
+    std::vector<int> drivers;
+    for (std::size_t i = 0; i < agents_.size(); ++i) {
+        const int ii = static_cast<int>(i);
+        if (agents_[i].archetype == Agent::Mode::Driver && agents_[i].car >= 0 && !isBus(ii) && !isTaxi(ii) &&
+            !onService(ii))
+            drivers.push_back(ii);
+    }
+    // every Nth by index, as the cabs are: deterministic and spread through the fleet
+    const int want = std::min(static_cast<int>(drivers.size()), static_cast<int>(drivers.size() * std::min(share, Real(1)) + 0.5));
+    if (want <= 0) return 0;
+    const double stride = static_cast<double>(drivers.size()) / want;
+    for (int k = 0; k < want; ++k) {
+        Agent& a = agents_[static_cast<std::size_t>(drivers[static_cast<std::size_t>(k * stride)])];
+        a.role = static_cast<RoleId>(id);
+        a.goal = tableFor(a).entry();
+        a.goalHours = 0;
+    }
+    return want;
 }
 
 bool CitySim::hail(int passenger, int pickup, int dropoff) {
@@ -4819,7 +4842,7 @@ void CitySim::refreshPose(Agent& a) {
         Real B = blendSpan(pli, li);
         if (B > 1e-6 && s < B)
             a.pos = cornerAt(pli, li, B, 0.5 + s / (2.0 * B));
-    } else if (wander_ && a.arrivedLink >= 0 &&
+    } else if (roams(a) && a.arrivedLink >= 0 &&
                nav_->links[a.arrivedLink].to == nav_->links[li].from) {
         // A CHAINED wander trip (arrival rolled straight into the next route):
         // blend leg 0 from the link the agent arrived along, exactly like an
@@ -5105,8 +5128,8 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
             if (jLeg + 1 < static_cast<int>(a.route.links.size())) {
                 Vec2 d1 = nav_->direction(a.route.links[jLeg + 1]);
                 turning = d0.x * d1.x + d0.y * d1.y < 0.85;   // a real bend
-            } else if (wander_) {
-                // Final leg in wander mode: arrival CHAINS straight through this
+            } else if (roams(a)) {
+                // Final leg in wander mode (or a roaming role's): arrival CHAINS straight through this
                 // node onto an unknown next route — treat it as a turn so a
                 // chained continuation yields to live oncoming traffic instead
                 // of sweeping across it (the crash-at-the-junction generator).
@@ -5833,7 +5856,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             a.busStoodLeg = a.leg;
             a.leg = legCount;
         }
-    } else if (!wander_ && car && a.leg == legCount - 1) {
+    } else if (!roams(a) && car && a.leg == legCount - 1) {
         const int li = a.route.links[a.leg];
         Real L = nav_->links[li].length;
         Real shortBy = std::min(Real(3.0), L * 0.5);

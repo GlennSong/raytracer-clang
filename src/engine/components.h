@@ -1035,6 +1035,10 @@ struct CitySimConfig {
     // with probability `hailChance` instead of walking. All three default to
     // OFF, so no existing level changes behaviour by being reloaded.
     float taxiFraction = 0.0f;
+    // A ROLE FOR THE LEVEL's DRIVERS (#214): `driverRoleShare` of the private drivers take role `driverRole` (roles.lua)
+    // -- the traffic lab's "lab_driver", always driving. Empty: none.
+    std::string driverRole;
+    float driverRoleShare = 1.0f;
     float hailChance = 0.0f;
     float hailMinMetres = 400.0f;
     // BUSES (city_bus.h): `busRoutes` derived loops of `busStops` stops, with

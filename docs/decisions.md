@@ -17760,3 +17760,44 @@ Every pan or zoom past the margin rasterized the whole view again; panning back 
 **Owed.** The overview could be baked with the level (it only changes when the city does), saving the first second of
 island workers; the SVG text round trip (write, then parse) could hand shapes to the rasterizer directly.
 
+## ADR-0395 — The traffic lab: roads only, and drivers who are always driving by a role, not a mode
+
+**Context.** #214, the first step of the realistic-traffic plan (#225). Traffic has to be built and judged somewhere
+that is all traffic: the 1:1 island day has barely any private cars on the road (#223), and its cities take minutes to
+load. Glenn: "we don't want that behavior baked into how an agent works since this is a special case. It's like we'd be
+overriding an agent's brain to just drive around."
+
+**Decision.**
+- **The level.** `traffic_lab` is a road plan with no buildings: brief `assets/city_plans/traffic_lab.json` (a 90 x 60 m
+  grid core with arterials every third street, a boulevard ring, a freeway ring between frontage roads with two radial
+  diamond interchanges, flat), built by `city_plan scene` into `assets/lanelab/planned/traffic_lab_lanelab.json` (337 road
+  edges, 0.08 s). The lanes build takes 1.5 min the first time, then the level loads from the cache. `buildLots: false`;
+  300 cars, no pedestrians, buses or cabs; one tier and no dormancy.
+- **Always driving is a role.** An agent's behaviour is its role's goal table (`tableFor`), composed from day parts by
+  `buildDayTable`. A new part, `day.roam`, makes the day one perpetual trip (the same `wanderGoals` table the agent lab's
+  wander mode installs, not a copy). Role `lab_driver` (roles.lua, and the C++ default catalog kept identical) is
+  `roam = true` with no job and no staff spec, so the job search never hands it out.
+- **A level gives it.** `citysim.driverRole` / `driverRoleShare`: after the cabs and buses are marked,
+  `CitySim::giveDriversRole` sets that share of the private drivers to the role (every Nth by index, as the cabs). The
+  agent code is untouched; the city's residents never get it.
+- **Asked per agent, not per level.** The four places that special-cased the level-wide `wander_` (no parking in bays,
+  the chained-arrival corner, the final-leg turn yield, parking short at the destination) now ask `roams(a)`: wander
+  mode, or a roaming role's day.
+
+**Measured.** traffic_lab: 300 drivers take the role; 289-290 under way at every check over two minutes. Test
+`a_roaming_role_keeps_its_drivers_driving` (a 400 m grid town, 40 drivers): under way in 100% of samples.
+
+**Owed.**
+- The level-wide `wander` mode should become this role (one way to do it; ADR-0063's agent lab moves over).
+- The lab's blocks fill with trees (no buildings); a lab may want them bare.
+- The road builder flags one 0.47 m step at a diamond ramp shoulder near (-471, -122).
+- **Cars spin on the spot at sharp route corners**, measured by `level_traffic_lab_cars_do_not_spin_on_the_spot`
+  (print-only for now): 8-11 of 290 drivers in the first minute turn more than 120 degrees within 15 m, nearly all
+  where a diamond interchange's ramps meet the frontage and radial roads (x about +-470 and 567) and where the
+  boulevard ring meets the grid at an angle. The path itself turns that sharply and the car is placed on it, not
+  steered: #218 (turn paths) and #219 (turning circles). Glenn's first field report from the lab
+  (2026-11-10_23-34-38) is this. Two start-of-trip fixes were tried (the way behind a fresh car treated as the way
+  back; parked roaming cars squared to their street) and measured no different, so they were not kept.
+- Destinations are random nodes; a list of lab routes (through downtown, onto the freeway and off) comes with the
+  numbers the lab prints (lane error, pivots, crashes per km, junction throughput, merges).
+

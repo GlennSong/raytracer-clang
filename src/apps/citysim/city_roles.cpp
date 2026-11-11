@@ -93,8 +93,8 @@ std::string RoleCatalog::describe() const {
     for (const ResidentRole& r : roles) {
         const RoleDay& d = r.day;
         std::snprintf(b, sizeof b,
-                      "role %s commute=%d pause=%g outings=%s work=%g break=%s/%s/%s/%g repeat=%d errand=%d evening=%s share=%g\n",
-                      r.name.c_str(), d.commute ? 1 : 0, d.outingPause, d.outingMenu.c_str(), d.workBeforeBreak, targetLabel(d.breakTarget),
+                      "role %s commute=%d roam=%d pause=%g outings=%s work=%g break=%s/%s/%s/%g repeat=%d errand=%d evening=%s share=%g\n",
+                      r.name.c_str(), d.commute ? 1 : 0, d.roam ? 1 : 0, d.outingPause, d.outingMenu.c_str(), d.workBeforeBreak, targetLabel(d.breakTarget),
                       d.breakMenu.c_str(), activityLabel(d.breakActivity), d.breakHours, d.breaksRepeat ? 1 : 0,
                       d.errand ? 1 : 0, d.eveningMenu.c_str(), r.nightOutShare);
         out += b;
@@ -123,6 +123,7 @@ std::string RoleCatalog::describe() const {
 }
 
 GoalTable buildDayTable(const RoleDay& d) {
+    if (d.roam) return wanderGoals(true);   // one perpetual trip, the same table the agent lab's wander mode installs
     GoalTable t;
     t.addState("AtHome", GoalAction::Rest, GoalTarget::None, Activity::AtHome);
     if (!d.commute) {
@@ -259,6 +260,10 @@ RoleCatalog defaultRoleCatalog() {
     staff("cook", floor, 0.08, {"restaurant"}, 2, true);
     staff("clerk", floor, 0.15, {"supermarket", "shop"}, 2, true);
     staff("bartender", floor, 0.05, {"bar", "club"}, 2, true);
+    // the traffic lab's driver (#214): always driving -- no job, never handed out; a level gives it (citysim.driverRole)
+    RoleDay roam;
+    roam.roam = true;
+    add("lab_driver", roam, 0.0);
     return c;
 }
 

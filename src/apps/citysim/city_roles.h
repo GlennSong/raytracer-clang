@@ -47,6 +47,9 @@ struct RoleDay {
     bool errand = false;
     // The evening (addNightOut): the activity menu a night out picks from; empty = never goes out.
     std::string eveningMenu;
+    // ALWAYS DRIVING (the traffic lab's driver, #214): no home, work or hours -- from the start, a trip to a destination
+    // and straight on to the next, for ever (the agent lab's perpetual trip, wanderGoals, as a role). Overrides the rest.
+    bool roam = false;
 };
 
 // WHO WORKS WHERE, for a STAFF role (Glenn: "you'd need teachers for the students, managers for shops, waiters for

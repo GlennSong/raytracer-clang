@@ -589,3 +589,31 @@ TEST_CASE(walkers_keep_files_across_a_wide_pavement) {
     CHECK(checked > 30);
     CHECK(onFile * 10 >= checked * 8);
 }
+
+// THE TRAFFIC LAB's DRIVERS (#214): a level gives its drivers a roaming role (roles.lua lab_driver, day.roam) and
+// they drive one trip straight into the next -- none parks, none goes home -- with the agent code untouched and the
+// level-wide wander mode off.
+TEST_CASE(a_roaming_role_keeps_its_drivers_driving) {
+    const NavGraph nav = citytest::cityNav(400.0, 80.0, 5);
+    CitySim sim;
+    sim.build(nav, 40, 0, 214);
+    CHECK(!sim.wander());
+    CHECK(sim.giveDriversRole("no_such_role", 1.0) == 0);
+    const int given = sim.giveDriversRole("lab_driver", 1.0);
+    CHECK(given >= 30);
+    const int lab = sim.roles().find("lab_driver");
+    CHECK(lab >= 0);
+    long moving = 0, held = 0;
+    for (int i = 0; i < 6000; ++i) {
+        sim.step(0.1, 0.5);
+        if (i < 600 || i % 50 != 0) continue;   // past the first minute, every 5 s
+        for (const Agent& a : sim.agents()) {
+            if (static_cast<int>(a.role) != lab) continue;
+            ++held;
+            moving += a.moving && a.mode == Agent::Mode::Driver;
+        }
+    }
+    const double share = held > 0 ? static_cast<double>(moving) / held : 0.0;
+    std::printf("    [lab-driver] %d drivers took the role; under way %.1f%% of samples\n", given, share * 100.0);
+    CHECK(share > 0.9);
+}

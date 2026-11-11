@@ -274,6 +274,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.pedPromoteRadius = c.pedPromoteRadius;
         params_.pedDemoteRadius = c.pedDemoteRadius;
         params_.taxiFraction = c.taxiFraction;
+        params_.driverRole = c.driverRole;
+        params_.driverRoleShare = c.driverRoleShare;
         params_.hailChance = c.hailChance;
         params_.hailMinMetres = c.hailMinMetres;
         params_.busRoutes = c.busRoutes;
@@ -928,6 +930,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.setBuses(params_.busRoutes, params_.busStops, params_.buses,
                   params_.busMaxWalk);
+    // The level's role for its drivers (the traffic lab's lab_driver): after the cabs and buses are marked.
+    if (!params_.driverRole.empty()) {
+        const int n = sim_.giveDriversRole(params_.driverRole, params_.driverRoleShare);
+        LOG_INFO << "[citysim] " << n << " drivers take the role " << params_.driverRole;
+        if (n == 0) LOG_WARN << "[citysim] driverRole " << params_.driverRole << ": unknown role, or no drivers";
+    }
     if (!sim_.busAnchors.empty())
     {
         LOG_INFO << "[citysim] bus lines stop at " << sim_.buses().anchorsServed() << " of " << sim_.buses().anchorCount() << " stations' ways in";
