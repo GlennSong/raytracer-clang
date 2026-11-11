@@ -174,7 +174,9 @@ public:
         PhysicsBodyId body = INVALID_PHYSICS_BODY;
         bool dynamic = false;
     };
-    bool castRayHit(const Vec3& origin, const Vec3& dirAndLength, RayHit& hit) const;
+    // `ignore`: a body the ray passes through (the player's own car, for `aim?`)
+    bool castRayHit(const Vec3& origin, const Vec3& dirAndLength, RayHit& hit,
+                    PhysicsBodyId ignore = INVALID_PHYSICS_BODY) const;
     Vec3 characterVelocity(CharacterId id) const;
     GroundState characterGroundState(CharacterId id) const;
     // The body the character stands on (INVALID_PHYSICS_BODY in the air): what a footstep lands on.

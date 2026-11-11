@@ -197,7 +197,12 @@ void Application::registerCameraVerbs() {
         const bool on = cmd.args[1] == "on" || cmd.args[1] == "1";
         if (what == "hud") { rendererPtr->showHud = on; return "ok hud"; }
         if (what == "ui") { rendererPtr->uiHidden = !on; return "ok ui"; }
-        if (what == "debug") { setDebugOverlay(on); return "ok debug"; }
+        if (what == "debug") {
+            // the report box is on top of the stack and pops itself: a pop here would take the box, not the overlay
+            if (reportPhase_ == ReportPhase::Open) return "err overlay debug: a field report box is open";
+            setDebugOverlay(on);
+            return "ok debug";
+        }
         // Street-lamp POINT LIGHTS, live (the emissive heads stay lit): a
         // LampLightsRequest, which LightSystem hears (ADR-0362; declared in render_system.h).
         if (what == "lamplights") {

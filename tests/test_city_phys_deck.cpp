@@ -74,6 +74,7 @@ TEST_CASE(city_physical_cars_never_fall_through_the_road) {
         }
     });
     CHECK(!deckPts.empty());
+    if (deckPts.empty()) return;   // (the hops below pick a point modulo its count)
     auto onStructure = [&](const Vec3& c, double road) {
         const int cx = static_cast<int>(std::floor(c.x / 8.0)), cz = static_cast<int>(std::floor(c.z / 8.0));
         for (int dz = -1; dz <= 1; ++dz)

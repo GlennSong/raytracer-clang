@@ -79,7 +79,12 @@ std::string fieldReportTitle(const FieldReport& r) {
     std::string first = r.note.substr(0, r.note.find('\n'));
     while (!first.empty() && first.back() == ' ') first.pop_back();
     if (first.empty()) return "Field report " + r.id;
-    if (first.size() > 80) first = first.substr(0, 77) + "...";
+    if (first.size() > 80) {
+        // cut on a character boundary: half a multi-byte character is not UTF-8, and the JSON dump refuses it
+        std::size_t cut = 77;
+        while (cut > 0 && (static_cast<unsigned char>(first[cut]) & 0xC0) == 0x80) --cut;
+        first = first.substr(0, cut) + "...";
+    }
     return first;
 }
 
@@ -100,7 +105,8 @@ std::string fieldReportJson(const FieldReport& r) {
     nlohmann::ordered_json facts = nlohmann::ordered_json::object();
     for (const FieldReportFact& f : r.facts) facts[f.verb] = f.reply;
     j["facts"] = facts;
-    return j.dump(2) + "\n";
+    // replace, not throw: a reply with a stray byte must not take the game down on Save
+    return j.dump(2, ' ', false, nlohmann::ordered_json::error_handler_t::replace) + "\n";
 }
 
 std::string fieldReportMarkdown(const FieldReport& r) {

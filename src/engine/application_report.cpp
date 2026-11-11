@@ -38,6 +38,15 @@ std::string isoNow() {
 
 std::string firstWord(const std::string& line) { return line.substr(0, line.find(' ')); }
 
+#ifndef _WIN32
+// one word for sh: in single quotes, a quote inside closed, escaped and reopened
+std::string shellQuote(const std::string& s) {
+    std::string q = "'";
+    for (const char c : s) q += c == '\'' ? std::string("'\\''") : std::string(1, c);
+    return q + "'";
+}
+#endif
+
 // the tool that files a report folder as an issue (tools/file_report.py), from the working directory the viewer
 // was started in (the repo root, as for assets/), else the source tree it was built from
 std::string fileReportTool() {
@@ -102,6 +111,7 @@ void Application::startFieldReport(const std::string& headlessNote, bool headles
     report_.level = settingsStore.getString("levelPath", "?");
     report_.build = std::string(RT_BUILD_GIT_DESCRIBE) + " " + RT_BUILD_TYPE + " " + RT_BUILD_PLATFORM;
     report_.wallTime = isoNow();
+    reportStaged_.clear();
 
     // THE FACTS, asked now -- the moment of the press, before anything moves
     const std::vector<std::string>& after = fieldReportVerbsAfter();
@@ -121,8 +131,10 @@ void Application::startFieldReport(const std::string& headlessNote, bool headles
         }
         // a staged question ("ground? x z") is answered later; its read-back is the fact
         if (line != firstWord(line) &&
-            std::find(after.begin(), after.end(), firstWord(line)) != after.end())
+            std::find(after.begin(), after.end(), firstWord(line)) != after.end()) {
+            reportStaged_.push_back(firstWord(line));
             continue;
+        }
         report_.facts.push_back({line, kept});
     }
 
@@ -134,8 +146,10 @@ void Application::startFieldReport(const std::string& headlessNote, bool headles
 }
 
 void Application::openFieldReport() {
-    // the questions staged at the press have had their frames: read them back
+    // the questions staged at the press have had their frames: read them back -- only those staged, or the
+    // read-back is whatever was last asked there (another report's spot, an MCP query)
     for (const std::string& line : fieldReportVerbsAfter()) {
+        if (std::find(reportStaged_.begin(), reportStaged_.end(), line) == reportStaged_.end()) continue;
         std::string kept;
         if (fieldReportKeep(commandTable.run(parseControlCommand(line)), kept)) report_.facts.push_back({line, kept});
     }
@@ -176,8 +190,8 @@ void Application::closeFieldReport() {
             reportToast_ += "\n(no tools/file_report.py here: file it with `python3 tools/file_report.py " + report_.dir + "`)";
         } else {
             // in the background: the push and the issue take seconds; its log and the issue's link land in the folder
-            const std::string cmd = "python3 '" + tool + "' '" + report_.dir + "' > '" + report_.dir +
-                                    "/issue.log' 2>&1 &";
+            const std::string cmd = "python3 " + shellQuote(tool) + " " + shellQuote(report_.dir) + " > " +
+                                    shellQuote(report_.dir + "/issue.log") + " 2>&1 &";
             if (std::system(cmd.c_str()) == 0) reportToast_ += "\nFiling the GitHub issue (issue.log in the folder)";
             else reportToast_ += "\nCould not start the issue filer";
         }

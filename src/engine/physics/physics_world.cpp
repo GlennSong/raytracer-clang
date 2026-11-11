@@ -10,6 +10,7 @@
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -833,13 +834,16 @@ bool PhysicsWorld::castRay(const Vec3& origin, const Vec3& dirAndLength,
     return true;
 }
 
-bool PhysicsWorld::castRayHit(const Vec3& origin, const Vec3& dirAndLength, RayHit& out) const {
+bool PhysicsWorld::castRayHit(const Vec3& origin, const Vec3& dirAndLength, RayHit& out, PhysicsBodyId ignore) const {
     if (!impl) return false;
     JPH::RRayCast ray{JPH::RVec3(origin.x, origin.y, origin.z),
                       JPH::Vec3(static_cast<float>(dirAndLength.x), static_cast<float>(dirAndLength.y),
                                 static_cast<float>(dirAndLength.z))};
     JPH::RayCastResult hit;
-    if (!impl->physicsSystem.GetNarrowPhaseQuery().CastRay(ray, hit)) return false;
+    // a filter, not a re-cast from the far side: a convex body is solid to a ray that starts inside it
+    // (an invalid id matches no body)
+    const JPH::IgnoreSingleBodyFilter skip{JPH::BodyID(ignore)};
+    if (!impl->physicsSystem.GetNarrowPhaseQuery().CastRay(ray, hit, {}, {}, skip)) return false;
     const JPH::RVec3 p = ray.GetPointOnRay(hit.mFraction);
     out.point = Vec3(p.GetX(), p.GetY(), p.GetZ());
     out.body = hit.mBodyID.GetIndexAndSequenceNumber();

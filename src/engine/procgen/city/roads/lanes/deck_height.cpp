@@ -71,12 +71,19 @@ void DeckHeight::buildSeams() {
     edgeLen_.assign(g_.edges.size(), 0.0);
     for (size_t e = 0; e < g_.edges.size(); ++e)
         for (size_t i = 1; i < g_.edges[e].xy.size(); ++i) edgeLen_[e] += (g_.edges[e].xy[i] - g_.edges[e].xy[i - 1]).length();
+    // each road's own lanes, once: not a walk over every lane in the city per (road, partner)
+    std::vector<std::vector<int>> roadLanes(g_.edges.size());
+    for (size_t li = 0; li < L_.lanes.size(); ++li) {
+        const Lane& l = L_.lanes[li];
+        if (l.parent < 0 || static_cast<size_t>(l.parent) >= g_.edges.size() || l.isConnector() || l.xy.size() < 2 || l.s.size() != l.xy.size()) continue;
+        roadLanes[static_cast<size_t>(l.parent)].push_back(static_cast<int>(li));
+    }
     for (size_t e = 0; e < g_.edges.size(); ++e) {
         if (!edgeGrids_[e] || roadPartners_[e].empty()) continue;
         for (int q : roadPartners_[e]) {
             std::vector<double> st;
-            for (const Lane& l : L_.lanes) {
-                if (l.parent != static_cast<int>(e) || l.isConnector() || l.xy.size() < 2 || l.s.size() != l.xy.size()) continue;
+            for (int li : roadLanes[e]) {
+                const Lane& l = L_.lanes[static_cast<size_t>(li)];
                 const double reach = l.w / 2 + kTouch;
                 size_t k = 0;
                 for (double s = 0; s <= l.s.back() + 1e-9; s += kStep) {
@@ -95,12 +102,16 @@ void DeckHeight::buildSeams() {
     }
 }
 
-double DeckHeight::alongSeam(int edge, int partner, const Vec2& p, double* fromEnd) const {
-    if (edge < 0 || static_cast<size_t>(edge) >= seams_.size() || !edgeGrids_[static_cast<size_t>(edge)]) return -1.0;
+bool DeckHeight::spineStation(int edge, const Vec2& p, double& s) const {
+    if (edge < 0 || static_cast<size_t>(edge) >= seams_.size() || !edgeGrids_[static_cast<size_t>(edge)] ||
+        seams_[static_cast<size_t>(edge)].empty())
+        return false;
+    return std::isfinite(edgeGrids_[static_cast<size_t>(edge)]->distanceWithin(p, kIndexReach, &s));
+}
+
+double DeckHeight::alongSeam(int edge, int partner, double s, double* fromEnd) const {
     for (const auto& [q, st] : seams_[static_cast<size_t>(edge)]) {
         if (q != partner) continue;
-        double s = 0;
-        if (!std::isfinite(edgeGrids_[static_cast<size_t>(edge)]->distanceWithin(p, kIndexReach, &s))) return -1.0;
         if (fromEnd) *fromEnd = std::max(0.0, std::min(s, edgeLen_[static_cast<size_t>(edge)] - s));
         const std::vector<double>::const_iterator it = std::lower_bound(st.begin(), st.end(), s);
         double d = std::numeric_limits<double>::infinity();
@@ -243,10 +254,12 @@ double DeckHeight::blendTo(double z, int edge, const std::vector<int>& partners,
     // from the end: there the seam stations ARE the mouth, the along-road pull was full right across it, and river_town's
     // streets stepped 74 % where the 2-D rule had them at 51 % (the spine-end samples off by 25 cm went 199 -> 337).
     double Lb = g_.rules.blendLen; int best = -1; double bd = std::numeric_limits<double>::infinity(), bw = bd;
+    double station = 0;   // p's station on the road's spine: the same for every partner, so found once
+    const bool onSpine = spineStation(edge, p, station);
     for (int q : partners) {
         const double d = distanceToLane(q, p, Lb); if (!(d < Lb)) continue;
         double fromEnd = 0;
-        const double a = alongSeam(edge, q, p, &fromEnd);
+        const double a = onSpine ? alongSeam(edge, q, station, &fromEnd) : -1.0;
         double t = std::min(1.0, fromEnd / Lb); t = t * t * (3 - 2 * t);
         const double use = a >= 0 ? t * a + (1 - t) * d : d;
         if (use < bw) { bw = use; bd = d; best = q; }

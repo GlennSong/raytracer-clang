@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
 #include <sstream>
 
 #ifdef RT_ENABLE_IMGUI
@@ -168,17 +169,8 @@ std::string TeleportSystem::aimAnswer() const {
         if (const Vehicle* v = world_->get<Vehicle>(iv.vehicle))
             if (v->vehicleId != PhysicsWorld::INVALID_VEHICLE) own = pw.vehicleBody(v->vehicleId);
     });
-    const Real range = 2000.0;
-    Vec3 from = eye;
     PhysicsWorld::RayHit hit;
-    bool found = false;
-    for (int tries = 0; tries < 4; ++tries) {
-        const Real left = range - (from - eye).length();
-        if (left <= 0 || !pw.castRayHit(from, dir * left, hit)) break;
-        if (own == INVALID_PHYSICS_BODY || hit.body != own) { found = true; break; }
-        from = hit.point + dir * 0.05;   // through our own car
-    }
-    if (!found) return "ok nothing within 2000 m";
+    if (!pw.castRayHit(eye, dir * 2000.0, hit, own)) return "ok nothing within 2000 m";   // through our own car
 
     static const char* const kSurfaces[] = {"unknown", "terrain", "asphalt", "concrete", "grass", "dirt",
                                             "sand",    "rock",    "snow",    "wood",     "metal"};
@@ -186,7 +178,7 @@ std::string TeleportSystem::aimAnswer() const {
     char buf[256];
     std::snprintf(buf, sizeof(buf), "ok at %.2f %.2f %.2f dist %.1f normal %.2f %.2f %.2f surface %s%s", hit.point.x,
                   hit.point.y, hit.point.z, (hit.point - eye).length(), hit.normal.x, hit.normal.y, hit.normal.z,
-                  sTag < 11 ? kSurfaces[sTag] : "?", hit.dynamic ? " dynamic" : "");
+                  sTag < std::size(kSurfaces) ? kSurfaces[sTag] : "?", hit.dynamic ? " dynamic" : "");
     std::string out = buf;
     // whose body: a car, a loose body, a static mesh (a lot's chunk says which part)
     bool named = false;

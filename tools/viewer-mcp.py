@@ -144,6 +144,23 @@ def tool_planner_stats(args):
 
 # --- field reports (the game's F9, engine/field_report.h) ----------------------
 
+def _pictures_folder():
+    """The game's rule (engine/screenshot.cpp): XDG_PICTURES_DIR, else user-dirs.dirs on Linux, else ~/Pictures."""
+    home = os.path.expanduser("~")
+    if os.environ.get("XDG_PICTURES_DIR"):
+        return os.environ["XDG_PICTURES_DIR"]
+    if sys.platform.startswith("linux"):
+        cfg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+        try:
+            with open(os.path.join(cfg, "user-dirs.dirs")) as f:
+                for line in f:
+                    if line.startswith("XDG_PICTURES_DIR="):
+                        v = line.split("=", 1)[1].strip().strip('"')
+                        return v.replace("$HOME", home, 1) if v.startswith("$HOME") else v
+        except OSError:
+            pass
+    return os.path.join(home, "Pictures")
+
 def _reports_folder():
     """report.folder from the viewer's settings.json, else <screenshot folder>/reports (~/Pictures/Raytracer)."""
     cfg = {}
@@ -156,8 +173,7 @@ def _reports_folder():
         return os.path.expanduser(cfg["report.folder"])
     shots = cfg.get("screenshot.folder") or ""
     if not shots:
-        pictures = os.environ.get("XDG_PICTURES_DIR") or os.path.expanduser("~/Pictures")
-        shots = os.path.join(pictures, "Raytracer")
+        shots = os.path.join(_pictures_folder(), "Raytracer")
     return os.path.join(os.path.expanduser(shots), "reports")
 
 def _report_dirs():

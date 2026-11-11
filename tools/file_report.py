@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BRANCH = "issue-shots"
@@ -32,27 +33,36 @@ def run(args, env=None, check=True, input=None):
 
 
 def push_shot(shot, report_id, title, dry):
-    """Commit shot to BRANCH as shots/<id>.png on top of the remote branch; return its raw URL."""
-    run(["git", "fetch", "-q", "origin", BRANCH], check=False)
-    parent = run(["git", "rev-parse", "--verify", "-q", f"refs/remotes/origin/{BRANCH}"], check=False)
-    with tempfile.TemporaryDirectory() as tmp:
-        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, "index"))
-        if parent:
-            run(["git", "read-tree", parent], env=env)
-        blob = run(["git", "hash-object", "-w", shot])
-        path = f"shots/{report_id}.png"
-        run(["git", "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}"], env=env)
-        tree = run(["git", "write-tree"], env=env)
-    cmd = ["git", "commit-tree", tree, "-m", f"Field report {report_id}: {title}"]
-    if parent:
-        cmd[3:3] = ["-p", parent]
-    commit = run(cmd)
+    """Commit shot to BRANCH as shots/<id>.png on top of the remote branch; return its URL.
+
+    Two reports filed at once both build on the same tip; the later push is refused as not a fast-forward. So:
+    fetch, build on the tip, push -- and on a refusal, again on the new tip (a few times)."""
     slug = run(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"])
-    if dry:
-        print(f"[dry run] would push {commit} to {BRANCH} ({path})")
-    else:
-        run(["git", "push", "-q", "origin", f"{commit}:refs/heads/{BRANCH}"])
-    return f"https://github.com/{slug}/blob/{BRANCH}/{path}?raw=true"
+    path = f"shots/{report_id}.png"
+    url = f"https://github.com/{slug}/blob/{BRANCH}/{path}?raw=true"
+    if dry:   # no objects written, nothing pushed
+        print(f"[dry run] would commit {shot} as {path} on {BRANCH} and push it")
+        return url
+    blob = run(["git", "hash-object", "-w", shot])
+    for attempt in range(5):
+        run(["git", "fetch", "-q", "origin", BRANCH], check=False)
+        parent = run(["git", "rev-parse", "--verify", "-q", f"refs/remotes/origin/{BRANCH}"], check=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, "index"))
+            if parent:
+                run(["git", "read-tree", parent], env=env)
+            run(["git", "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}"], env=env)
+            tree = run(["git", "write-tree"], env=env)
+        cmd = ["git", "commit-tree", tree, "-m", f"Field report {report_id}: {title}"]
+        if parent:
+            cmd[3:3] = ["-p", parent]
+        commit = run(cmd)
+        pushed = subprocess.run(["git", "push", "-q", "origin", f"{commit}:refs/heads/{BRANCH}"], cwd=REPO,
+                                capture_output=True, text=True)
+        if pushed.returncode == 0:
+            return url
+        time.sleep(1 + attempt)   # another filing got there first: build on its tip
+    raise SystemExit(f"could not push the shot to {BRANCH}: {pushed.stderr.strip()}")
 
 
 def main():

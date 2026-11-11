@@ -219,6 +219,7 @@ private:
     bool reportClosing_ = false;      // the box said Save or Cancel: close it next frame
     bool reportSave_ = false;
     bool reportHeadless_ = false;     // the `report` verb: no box, saved as soon as the shot lands
+    std::vector<std::string> reportStaged_;   // the "after" verbs this press staged (ground? x z): only they are read back
     std::string reportToast_;         // "Report saved ..." for a few seconds after
     double reportToastLeft_ = 0;
 };

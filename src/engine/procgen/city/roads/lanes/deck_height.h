@@ -67,8 +67,11 @@ private:
     std::vector<std::vector<std::pair<int, std::vector<double>>>> seams_;
     std::vector<double> edgeLen_;   // each road's spine length (how far a point is from its ends)
     void buildSeams();
-    // -1: no seam known (the 2-D distance stands). `fromEnd`: the point's distance along the spine to its nearer end.
-    double alongSeam(int edge, int partner, const Vec2& p, double* fromEnd = nullptr) const;
+    // The station `s` of p on the road's spine (false: no seams on that road, or p beyond the spine's reach).
+    bool spineStation(int edge, const Vec2& p, double& s) const;
+    // From that station: -1, no seam known (the 2-D distance stands). `fromEnd`: the distance along the spine to
+    // its nearer end.
+    double alongSeam(int edge, int partner, double s, double* fromEnd = nullptr) const;
     double blendTo(double z, int edge, const std::vector<int>& partners, const Vec2& p) const;
     bool deepInside(int lane, const Vec2& p, double margin) const;   // inside the footprint, over `margin` from its edge
     // NEAR-LANE INDEX: every lane in the cells its footprint's box, grown by kIndexReach, overlaps -- so a
