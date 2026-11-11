@@ -6628,6 +6628,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             a.tickFromPullS = a.pullS;
         }
     stepTick(simDt, hoursPerSecond);
+    if (drivingV2_) drivingV2_->tick(simDt);   // the new driving model (#234), alongside the old, which still drives
     // RT_TRACE_AGENT=<id>: that agent's plan, every tick (with the speed watchdog: what a flickering one is doing)
     static const int traceId = std::getenv("RT_TRACE_AGENT") ? std::atoi(std::getenv("RT_TRACE_AGENT")) : -1;
     if (traceId >= 0 && traceId < static_cast<int>(agents_.size())) {

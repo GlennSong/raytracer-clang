@@ -277,6 +277,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.driverRole = c.driverRole;
         params_.driverRoleShare = c.driverRoleShare;
         params_.realLanes = c.realLanes;
+        params_.driving = c.driving;
         params_.hailChance = c.hailChance;
         params_.hailMinMetres = c.hailMinMetres;
         params_.busRoutes = c.busRoutes;
@@ -767,6 +768,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         if (const char* e = std::getenv("RT_REAL_LANES")) real = e[0] == '1';
         sim_.setUseRealLanes(real);
         if (real) LOG_INFO << "[citysim] cars drive the real lanes";
+    }
+    // WHICH DRIVING MODEL (#234; citysim.driving): "v2" also runs the new driving library, ticking an empty world
+    if (params_.driving == "v2") {
+        sim_.useDrivingV2(true);
+        LOG_INFO << "[citysim] driving v2: the new driving library ticks alongside (no cars yet)";
+    } else if (params_.driving != "v1") {
+        LOG_WARN << "[citysim] driving \"" << params_.driving << "\": unknown model (v1 or v2); keeping v1";
     }
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
     // THE FIRE STATIONS' ENGINES (Glenn, 2026-10-13: "a fire truck should be an actual truck"): one parked behind each

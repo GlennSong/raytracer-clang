@@ -78,6 +78,7 @@ struct CityRenderParams {
     std::string driverRole;        // a role for the level's drivers (CitySim::giveDriversRole; the traffic lab's)
     Real driverRoleShare = 1.0;
     bool realLanes = false;        // draw cars on the real lanes (#218)
+    std::string driving = "v1";    // which driving model (CitySimConfig::driving; "v2" also runs the new library)
     Real hailChance = 0.0;
     Real hailMinMetres = 400.0;
     int busRoutes = 0;

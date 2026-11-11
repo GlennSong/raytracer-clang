@@ -62,6 +62,41 @@ TEST_CASE(city_possessed_car_tracks_its_driver) {
     CHECK(anyMoved);   // at least one driver actually drove its car somewhere
 }
 
+// THE PER-LEVEL SWITCH (#234; citysim.driving): with "v2" the sim holds the new driving library and ticks it once per
+// sim tick, and the old model, which still drives every car, does exactly what it does under "v1".
+TEST_CASE(city_sim_driving_v2_ticks_alongside_v1) {
+    NavGraph nav = cityNav();
+    CitySim v1, v2;
+    v1.build(nav, 25, 10, 99);
+    v2.build(nav, 25, 10, 99);
+    v2.useDrivingV2(true);
+    CHECK(v1.drivingV2() == nullptr);
+    CHECK(v2.drivingV2() != nullptr);
+    const int steps = 2000;
+    const Real dt = 0.1;
+    for (int i = 0; i < steps; ++i) {
+        v1.step(dt, 0.3);
+        v2.step(dt, 0.3);
+    }
+    const driving::Driving* d = v2.drivingV2();
+    CHECK(d != nullptr);
+    if (d) {
+        CHECK(d->tickCount() == static_cast<uint64_t>(steps));   // the default rate ticks every step
+        CHECK_APPROX(d->clockSeconds(), steps * dt, 1e-6);
+        CHECK(d->tripCount() == 0u);                            // an empty world: no cars handed over yet
+    }
+    int differ = 0;
+    CHECK(v1.agents().size() == v2.agents().size());
+    for (std::size_t i = 0; i < v1.agents().size() && i < v2.agents().size(); ++i) {
+        const Agent& a = v1.agents()[i];
+        const Agent& b = v2.agents()[i];
+        if (a.pos.x != b.pos.x || a.pos.y != b.pos.y || a.speed != b.speed || a.state != b.state) ++differ;
+    }
+    for (std::size_t v = 0; v < v1.vehicles().size() && v < v2.vehicles().size(); ++v)
+        if (v1.vehicles()[v].pos.x != v2.vehicles()[v].pos.x || v1.vehicles()[v].pos.y != v2.vehicles()[v].pos.y) ++differ;
+    CHECK(differ == 0);
+}
+
 TEST_CASE(city_player_agent_is_not_auto_driven) {
     NavGraph nav = cityNav();
     CitySim sim;

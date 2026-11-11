@@ -482,6 +482,30 @@ if(RT_ENABLE_SCRIPTING)
 endif()
 
 # ============================================================
+# driving — the driving model, rebuilt as its own library (#234,
+# docs/driving-model-design.md section 3). It is given a lane graph (and, as the
+# tasks after #234 land, a rule set and vehicle classes), is told "start this
+# trip", steps the traffic and reports events. Links engine_core ONLY and
+# includes nothing from citysim, the renderer, the entity world, the physics
+# wrapper or Lua; citysim links `driving` (the arrow goes one way: citysim ->
+# driving -> engine_core). driving_tests checks the includes of every file in
+# src/apps/driving and fails if one reaches past that line.
+# ============================================================
+add_library(driving STATIC
+    src/apps/driving/driving.cpp
+)
+target_compile_options(driving PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(driving PUBLIC engine_core)
+
+# The driving library's own headless tests: engine_core + driving, never citysim.
+add_executable(driving_tests tests/main.cpp tests/test_driving.cpp)
+target_include_directories(driving_tests PRIVATE src tests)
+target_compile_options(driving_tests PRIVATE -Wall -Wextra)
+target_compile_definitions(driving_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_link_libraries(driving_tests PRIVATE engine_core driving)
+add_test(NAME driving_tests COMMAND driving_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# ============================================================
 # citysim — the living-world APPLICATION library (ADR-0060…0066). The agent
 # city sim, traffic, places, and its render bridge: an application built ON the
 # engine, not part of it. Links engine_core (the only arrow — citysim depends on
@@ -519,7 +543,7 @@ add_library(citysim STATIC
     src/apps/citysim/city_meshes.cpp
 )
 target_compile_options(citysim PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(citysim PUBLIC engine_core)
+target_link_libraries(citysim PUBLIC engine_core driving)   # driving: the new driving model (citysim.driving = "v2")
 if(RT_ENABLE_SCRIPTING)
     # The citysim-specific Lua readers (moved out of engine_core): they turn Lua
     # goal/fleet tables into citysim types, so they belong to the app, not the core.

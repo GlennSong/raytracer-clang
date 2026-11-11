@@ -21,7 +21,9 @@
 #include "households.h"     // ages, life stages and households (people.lua)
 #include "relationships.h"
 #include "traffic_signal.h"
+#include "../driving/driving.h"   // the new driving model (#234; citysim.driving = "v2")
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <queue>
 #include <map>
@@ -1230,6 +1232,11 @@ public:
     const LaneMap& laneMap() const { return laneMap_; }
     void setUseRealLanes(bool on) { useRealLanes_ = on; }
     bool useRealLanes() const { return useRealLanes_; }
+    // THE NEW DRIVING MODEL (#234; citysim.driving = "v2"): on, the sim holds a driving::Driving and ticks it once per
+    // sim tick, with an empty world for now. The old model drives the cars either way. Off drops it.
+    void useDrivingV2(bool on) { if (on) drivingV2_.emplace(); else drivingV2_.reset(); }
+    // The new model, read-only; null when the level drives v1.
+    const driving::Driving* drivingV2() const { return drivingV2_ ? &*drivingV2_ : nullptr; }
     // Does this agent drive one trip straight into the next (the level's wander mode, or a roaming role's day)?
     // The chained-arrival corner, the final-leg turn yield and the no-parking rules ask this, not wander_.
     bool roams(const Agent& a) const {
@@ -2043,6 +2050,7 @@ private:
     bool wander_ = false;       // lab mode: perpetual random trips, no schedule
     LaneMap laneMap_;           // the real lanes on each link (#218): empty = the link's line plus an offset
     bool useRealLanes_ = false; // draw cars on them (citysim.realLanes)
+    std::optional<driving::Driving> drivingV2_;   // the new driving model, when the level asks for it (useDrivingV2)
     // Three-tier traffic state (P4): the fed bubble centre, the fixed-frame
     // counter the V buckets key off (frameIndex_ % vTickDivisor — no wall
     // clock), and the lifetime transition counters the tests gate on.

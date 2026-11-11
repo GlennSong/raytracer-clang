@@ -1042,6 +1042,9 @@ struct CitySimConfig {
     // DRAW CARS ON THE REAL LANES (#218, ADR-0396): the lanes builder's lanes, not the link's line plus an offset.
     // The traffic lab's; the cities' once their junctions take real lanes.
     bool realLanes = false;
+    // WHICH DRIVING MODEL (#234): "v1", today's, drives the cars; "v2" also runs the new driving library (src/apps/
+    // driving) alongside it, ticking an empty world until later tasks hand it the cars.
+    std::string driving = "v1";
     float hailChance = 0.0f;
     float hailMinMetres = 400.0f;
     // BUSES (city_bus.h): `busRoutes` derived loops of `busStops` stops, with
