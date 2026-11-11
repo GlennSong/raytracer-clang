@@ -65,8 +65,10 @@ private:
     // edge-to-edge triangles could not hold, so cars stood on a deck 0.3 m over the road drawn under them.
     std::vector<std::unique_ptr<SegmentGrid>> edgeGrids_;
     std::vector<std::vector<std::pair<int, std::vector<double>>>> seams_;
+    std::vector<double> edgeLen_;   // each road's spine length (how far a point is from its ends)
     void buildSeams();
-    double alongSeam(int edge, int partner, const Vec2& p) const;   // -1: no seam known (the 2-D distance stands)
+    // -1: no seam known (the 2-D distance stands). `fromEnd`: the point's distance along the spine to its nearer end.
+    double alongSeam(int edge, int partner, const Vec2& p, double* fromEnd = nullptr) const;
     double blendTo(double z, int edge, const std::vector<int>& partners, const Vec2& p) const;
     bool deepInside(int lane, const Vec2& p, double margin) const;   // inside the footprint, over `margin` from its edge
     // NEAR-LANE INDEX: every lane in the cells its footprint's box, grown by kIndexReach, overlaps -- so a

@@ -68,6 +68,9 @@ void DeckHeight::buildSeams() {
     edgeGrids_.clear(); edgeGrids_.reserve(g_.edges.size());
     for (const EdgeSpec& E : g_.edges) edgeGrids_.push_back(E.xy.size() >= 2 ? std::make_unique<SegmentGrid>(E.xy, 8.0) : nullptr);
     seams_.assign(g_.edges.size(), {});
+    edgeLen_.assign(g_.edges.size(), 0.0);
+    for (size_t e = 0; e < g_.edges.size(); ++e)
+        for (size_t i = 1; i < g_.edges[e].xy.size(); ++i) edgeLen_[e] += (g_.edges[e].xy[i] - g_.edges[e].xy[i - 1]).length();
     for (size_t e = 0; e < g_.edges.size(); ++e) {
         if (!edgeGrids_[e] || roadPartners_[e].empty()) continue;
         for (int q : roadPartners_[e]) {
@@ -92,12 +95,13 @@ void DeckHeight::buildSeams() {
     }
 }
 
-double DeckHeight::alongSeam(int edge, int partner, const Vec2& p) const {
+double DeckHeight::alongSeam(int edge, int partner, const Vec2& p, double* fromEnd) const {
     if (edge < 0 || static_cast<size_t>(edge) >= seams_.size() || !edgeGrids_[static_cast<size_t>(edge)]) return -1.0;
     for (const auto& [q, st] : seams_[static_cast<size_t>(edge)]) {
         if (q != partner) continue;
         double s = 0;
         if (!std::isfinite(edgeGrids_[static_cast<size_t>(edge)]->distanceWithin(p, kIndexReach, &s))) return -1.0;
+        if (fromEnd) *fromEnd = std::max(0.0, std::min(s, edgeLen_[static_cast<size_t>(edge)] - s));
         const std::vector<double>::const_iterator it = std::lower_bound(st.begin(), st.end(), s);
         double d = std::numeric_limits<double>::infinity();
         if (it != st.end()) d = *it - s;
@@ -235,10 +239,16 @@ double DeckHeight::blendTo(double z, int edge, const std::vector<int>& partners,
     // several partners is smoother inside a lane but is no longer exact where two surfaces meet.
     // The distance is ALONG the road from where it meets the partner (alongSeam, #142) where that is known, so a
     // cross-section takes one pull; the 2-D distance to the footprint stands for a partner the road never touches.
+    // AT A SPINE'S END (a junction mouth) the 2-D distance stands too, handing over to the along-road one over blendLen
+    // from the end: there the seam stations ARE the mouth, the along-road pull was full right across it, and river_town's
+    // streets stepped 74 % where the 2-D rule had them at 51 % (the spine-end samples off by 25 cm went 199 -> 337).
     double Lb = g_.rules.blendLen; int best = -1; double bd = std::numeric_limits<double>::infinity(), bw = bd;
     for (int q : partners) {
         const double d = distanceToLane(q, p, Lb); if (!(d < Lb)) continue;
-        const double a = alongSeam(edge, q, p), use = a >= 0 ? a : d;
+        double fromEnd = 0;
+        const double a = alongSeam(edge, q, p, &fromEnd);
+        double t = std::min(1.0, fromEnd / Lb); t = t * t * (3 - 2 * t);
+        const double use = a >= 0 ? t * a + (1 - t) * d : d;
         if (use < bw) { bw = use; bd = d; best = q; }
     }
     if (best < 0 || !(bw < Lb)) return z;

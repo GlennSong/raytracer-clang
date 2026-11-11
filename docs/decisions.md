@@ -17662,6 +17662,15 @@ them parted.
 - lanes_no_elevated_deck_is_see_through: system_interchange 6 -> 7, one more tie at a slab corner (-38, 70) where
   the low deck rose 0.3 m; the exact ray meets the soffit front in both builds, so it is not a hole.
 
-**Owed.** Within 25 m of a spine end the edge samples over 25 cm went 199 -> 337 (half-way out 20 -> 61), and the
-field is off by 25 cm where the spine's own section is not at 12 samples (was 0). A spine end's seam station is the
-junction mouth, so the pull there is full across the mouth; the follow-up is to taper it over the mouth's width.
+**At a spine's end the 2-D distance stands** (kLanesBuildTag -> 2026-11-10.2). As first pushed, within 25 m of a spine
+end the edge samples over 25 cm went 199 -> 337, and CI's level_river_town_streets_are_drivable_grades failed on both
+machines: its steepest street step went 50.9 % -> 74.4 % (the ratchet is 70 %). A spine end's seam stations ARE the
+junction mouth, so the along-road pull was full right across the mouth. The measure is now the 2-D distance at the
+end, handing over to the along-road one by a smoothstep over blendLen of the spine's own length, so it stays continuous.
+Measured again (RT_NOCACHE):
+- river_town's steepest step 66.2 % (65.5 % before #142); the 74.4 % spot is off the top eight.
+- metro_v2_test: lowest tyre +0.070 m; the field over 25 cm 39 -> 19; within 25 m of a spine end, edge 337 -> 279,
+  half-way 61 -> 33; the field off where the spine's own section is not 12 -> 6; pokes (LOD 0) 2448 -> 2417.
+
+**Owed.** The spine-end edge samples (279) are still over their count before #142 (199), and the field's worst sample is
++1.36 m (+1.35 m before #142; +0.50 m with .1).
