@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "../src/apps/citysim/city_map_tool.h"
 #include "../src/apps/citysim/city_render.h"
+#include "../src/apps/citysim/bus_stop_props.h"
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/camera/fly_camera_controller.h"
 #include "../src/engine/components.h"
@@ -147,3 +148,50 @@ TEST_CASE(city_map_tool_draws_you_facing_the_way_you_look) {
     // frame + paper + >= 2 per stop + 2 per bus + 2 for you + legend
     CHECK(static_cast<int>(quads.size()) >= 2 + 2 * stops + 2 * params.buses + 2);
 }
+
+// THE BUS LINES ARE DRAWN LIVE (ADR-0394): not rasterized into the map's tiles but laid over them as line quads
+// in the route's colour, a few pixels wide at any zoom, and clipped to the panel -- a line never paints the frame.
+TEST_CASE(city_map_tool_draws_the_bus_lines_live_inside_the_panel) {
+    World world;
+    world.add<RoadEntity>(world.create(), mapGrid());
+    CityRenderParams params;
+    params.cars = 0;
+    params.pedestrians = 0;
+    params.seed = 7;
+    params.busRoutes = 1;
+    params.busStops = 8;
+    params.buses = 1;
+    params.vehicleScript = readAsset("vehicles.lua");
+    CityRenderSystem city(params);
+    StubUploader uploader;
+    engine::AssetManager assets(uploader);
+    CHECK(city.build(world, &assets));
+    CHECK(city.sim().buses().routeCount() >= 1);   // (a loop each way: twins)
+    const engine::Vec3 rc = routeColour(city.sim().buses().lineOf(0));
+    const float line[4] = {static_cast<float>(rc.x), static_cast<float>(rc.y), static_cast<float>(rc.z), 0.9f};
+
+    FlyCameraController fly;
+    CityMapToolSystem map(city, fly);
+    map.takeLines();
+    const int W = 1600, H = 900;
+    const auto p = CityMapToolSystem::panel(W, H);
+    auto count = [&](double cx, double cz, double mpp, int& in, int& out) {
+        map.showAt(cx, cz, mpp);
+        in = out = 0;
+        for (const auto& q : map.composeFrame(world, W, H)) {
+            if (!sameColour(q, line) || q.texture.valid()) continue;
+            bool inside = true;
+            for (int k = 0; k < 4; ++k)
+                inside = inside && q.x[k] >= p.x0 - 0.01f && q.x[k] <= p.x1 + 0.01f && q.y[k] >= p.y0 - 0.01f &&
+                         q.y[k] <= p.y1 + 0.01f;
+            ++(inside ? in : out);
+        }
+    };
+    int in = 0, out = 0;
+    count(180, 180, 0.6, in, out);   // the whole grid
+    CHECK(in > 4);
+    CHECK(out == 0);
+    count(0, 0, 0.15, in, out);      // close in on a corner: the line runs off the panel, clipped at its edge
+    CHECK(out == 0);
+}
+

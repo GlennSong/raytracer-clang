@@ -8,12 +8,14 @@
 // The city map already exists as an SVG (engine/procgen/city/city_svg.h: the
 // streets, blocks and buildings the generators actually built, 1 unit = 1 m,
 // y = world Z). This parses that file once and rasterizes any view of it on
-// demand -- centre, metres per pixel, size -- with nanosvg, plus a transit
-// overlay (the bus lines) whose strokes stay a few PIXELS wide at every zoom,
-// so a line reads at city scale without paving over a street up close.
+// demand -- centre, metres per pixel, size -- with nanosvg.
 //
-// Pure: no ECS, no renderer, no threads -- the map tool runs it on a worker
-// and uploads the pixels; a test runs it headless. One rasterize() at a time.
+// TILES (ADR-0394): the map tool draws it as 256-pixel tiles at power-of-two zooms (tileView), several at once,
+// each worker with its own Rasterizer. After loadCity the parsed city is read-only: rasterizeTile never touches
+// it, so any number of threads may draw from one CityMapRaster. The transit lines are not part of the picture:
+// the tool draws them live, as lines over the tiles.
+//
+// Pure: no ECS, no renderer, no threads of its own -- a test runs it headless.
 
 #include <cstdint>
 #include <string>
@@ -39,8 +41,6 @@ public:
     // The city layer: an SVG file from writeCityMapSvg. Reads its viewBox so
     // world metres map to image units exactly.
     bool loadCity(const std::string& svgPath);
-    // The transit overlay, in the SAME world frame (see transitSvg).
-    bool loadTransit(const std::string& svgText);
     bool loaded() const { return city_ != nullptr; }
 
     // The city's extent in world metres (x, z), from the SVG's viewBox.
@@ -55,32 +55,51 @@ public:
         int w = 0, h = 0;              // pixels
     };
     // RGBA8, row-major, top row = smaller world Z. Outside the city is the
-    // `paper` colour. Transit strokes are `linePx` pixels wide.
-    void rasterize(const View& v, std::vector<uint8_t>& rgba, float linePx = 4.0f) const;
-
+    // `paper` colour. Not thread-safe (it uses the raster's own rasterizer); a test's call.
+    void rasterize(const View& v, std::vector<uint8_t>& rgba) const;
     // Shapes the last rasterize() actually drew (culling check for tests).
     int lastShapesDrawn() const { return lastDrawn_; }
 
+    // A rasterizer of one's own: one per thread that calls rasterizeTile.
+    class Rasterizer {
+    public:
+        Rasterizer();
+        ~Rasterizer();
+        Rasterizer(const Rasterizer&) = delete;
+        Rasterizer& operator=(const Rasterizer&) = delete;
+        NSVGrasterizer* get() const { return r_; }
+    private:
+        NSVGrasterizer* r_ = nullptr;
+    };
+    // The same picture as rasterize(), drawn with the caller's rasterizer, reading the city only: safe from many
+    // threads at once. Returns the shapes drawn.
+    int rasterizeTile(const View& v, std::vector<uint8_t>& rgba, Rasterizer& with) const;
+
+    // THE TILES: tile (z, ix, iy) is kTilePx square at kFinestMpp x 2^z metres per pixel, counted from the city's
+    // (minX, minZ) corner.
+    static constexpr int kTilePx = 256;
+    static constexpr double kFinestMpp = 0.125;
+    static double levelMpp(int z);
+    // The level to show at `mpp`: the coarsest whose tiles are at least as sharp (shown at 0.5..1x).
+    static int levelFor(double mpp);
+    // The level where the whole city fits in about `across` tiles each way (the overview, drawn first).
+    int overviewLevel(int across = 4) const;
+    View tileView(int z, int ix, int iy) const;
+
 private:
     NSVGimage* city_ = nullptr;
-    NSVGimage* transit_ = nullptr;
     NSVGrasterizer* rast_ = nullptr;
     double minX_ = 0, minZ_ = 0, w_ = 0, h_ = 0;
     mutable int lastDrawn_ = 0;
-    mutable std::vector<uint8_t> overlay_;   // scratch for the transit pass
 };
 
-// The transit overlay as SVG text in the city map's frame: one closed line per
-// route in its sign colour (routeColour), for CityMapRaster::loadTransit.
-// `routes` holds each route's driven path (world x, z); `colours` its RGB 0..1.
+// A transit line the map draws over its tiles (CityMapToolSystem: live, a few pixels wide at any zoom).
 struct TransitLine {
-    std::vector<std::pair<double, double>> path;
+    std::vector<std::pair<double, double>> path;   // world x, z
     float r = 1, g = 0, b = 0;
-    float width = 1.0f;     // times the overlay's line width (a rail line's casing is wider than a bus line)
+    float width = 1.0f;     // times the map's line width (a rail line's casing is wider than a bus line)
     bool closed = true;     // a loop (a bus route is one); an open line ends where it ends
 };
-std::string transitSvg(const std::vector<TransitLine>& lines, double minX, double minZ,
-                       double w, double h);
 
 }  // namespace citysim
 

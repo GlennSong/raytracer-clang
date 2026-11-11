@@ -2156,9 +2156,10 @@ TEST_CASE(metro_pedestrians_walk_and_keep_apart) {
 // THE MAP IS THE CITY SVG (Glenn, 2026-09-19: "make a minimap using the svg map
 // we have and use it to pan and zoom around ... bus stops and bus lines ... It
 // can't be imgui. But should show the svg map"). The map tool rasterizes the
-// level's own city-map SVG (what the generators built) plus the bus lines; this
-// pins that the picture is the city, the lines are on it in their colours, and
-// that a close view only pays for what it shows.
+// level's own city-map SVG (what the generators built) as tiles (ADR-0394); the
+// bus lines are drawn live over them (tests/test_city_map.cpp). This pins that
+// the picture is the city, that a close view only pays for what it shows, and
+// that a tile drawn on its own rasterizer is the same picture as that view drawn whole.
 TEST_CASE(metro_map_shows_the_city_and_its_bus_lines) {
     std::unique_ptr<Renderer> renderer = Renderer::create();
     RendererMeshUploader uploader(*renderer);
@@ -2180,16 +2181,6 @@ TEST_CASE(metro_map_shows_the_city_and_its_bus_lines) {
                                   engine::CityMapLayers::fromList(citysim::kCityMapLayers)));
     citysim::CityMapRaster r;
     CHECK(r.loadCity(svg));
-    std::vector<citysim::TransitLine> lines;
-    const auto& net = city.sim().buses();
-    for (int ri = 0; ri < net.routeCount(); ++ri) {
-        citysim::TransitLine l;
-        for (const auto& pt : net.route(ri).path) l.path.push_back({pt.x, pt.y});
-        const engine::Vec3 c = citysim::routeColour(net.lineOf(ri));
-        l.r = static_cast<float>(c.x); l.g = static_cast<float>(c.y); l.b = static_cast<float>(c.z);
-        lines.push_back(l);
-    }
-    CHECK(r.loadTransit(citysim::transitSvg(lines, r.minX(), r.minZ(), r.width(), r.height())));
 
     // The whole city in 1000 px.
     citysim::CityMapRaster::View v;
@@ -2210,31 +2201,6 @@ TEST_CASE(metro_map_shows_the_city_and_its_bus_lines) {
         if (lum < 190) ++ink;
     }
     const double inkShare = static_cast<double>(ink) / (v.w * v.h);
-    // Each route's line, in its colour, at points along its path.
-    int hit = 0, tried = 0, worstRoute = 100;
-    for (int ri = 0; ri < net.routeCount(); ++ri) {
-        const auto& path = net.route(ri).path;
-        const engine::Vec3 c = citysim::routeColour(net.lineOf(ri));
-        int rh = 0, rt = 0;
-        for (std::size_t k = 0; k < path.size(); k += std::max<std::size_t>(1, path.size() / 40)) {
-            const int x = static_cast<int>((path[k].x - (v.cx - v.w * 0.5 * v.metresPerPixel)) / v.metresPerPixel);
-            const int y = static_cast<int>((path[k].y - (v.cz - v.h * 0.5 * v.metresPerPixel)) / v.metresPerPixel);
-            ++rt;
-            bool found = false;
-            for (int dy = -2; dy <= 2 && !found; ++dy)
-                for (int dx = -2; dx <= 2 && !found; ++dx) {
-                    const int xx = x + dx, yy = y + dy;
-                    if (xx < 0 || yy < 0 || xx >= v.w || yy >= v.h) continue;
-                    const std::size_t o = (static_cast<std::size_t>(yy) * v.w + xx) * 4;
-                    const double dr = px[o] - c.x * 255, dg = px[o + 1] - c.y * 255, db = px[o + 2] - c.z * 255;
-                    if (dr * dr + dg * dg + db * db < 60.0 * 60.0) found = true;
-                }
-            if (found) ++rh;
-        }
-        hit += rh;
-        tried += rt;
-        worstRoute = std::min(worstRoute, rt ? rh * 100 / rt : 0);
-    }
     // A street-level view (0.3 m/px) round the player.
     citysim::CityMapRaster::View s;
     s.cx = city.sim().tierCenter().x;
@@ -2244,12 +2210,26 @@ TEST_CASE(metro_map_shows_the_city_and_its_bus_lines) {
     s.h = 900;
     r.rasterize(s, px);
     const int streetShapes = r.lastShapesDrawn();
-    std::printf("    [map] city view %.0f ms: %d shapes, %.0f%% ink; bus lines found at %d/%d "
-                "path points (worst route %d%%); street view drew %d shapes\n",
-                ms, cityShapes, inkShare * 100.0, hit, tried, worstRoute, streetShapes);
+
+    // A tile at street level under the player, on its own rasterizer: the same pixels as the whole-view call.
+    const int z = citysim::CityMapRaster::levelFor(0.3);
+    const double span = citysim::CityMapRaster::kTilePx * citysim::CityMapRaster::levelMpp(z);
+    const int ix = static_cast<int>((s.cx - r.minX()) / span), iy = static_cast<int>((s.cz - r.minZ()) / span);
+    const citysim::CityMapRaster::View tv = r.tileView(z, ix, iy);
+    citysim::CityMapRaster::Rasterizer own;
+    std::vector<uint8_t> tile, same;
+    const auto t1 = std::chrono::steady_clock::now();
+    const int tileShapes = r.rasterizeTile(tv, tile, own);
+    const double tileMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
+    r.rasterize(tv, same);
+    std::printf("    [map] city view %.0f ms: %d shapes, %.0f%% ink; street view drew %d shapes; a street tile "
+                "(level %d) %.1f ms, %d shapes; overview level %d\n",
+                ms, cityShapes, inkShare * 100.0, streetShapes, z, tileMs, tileShapes, r.overviewLevel());
     CHECK(inkShare > 0.08);                    // it is a city, not a blank sheet
-    CHECK(worstRoute >= 30);                   // every route's line is on it (routes sharing a street paint over each other)
     CHECK(streetShapes < cityShapes / 5);      // a close view only rasterizes what it shows
+    CHECK(tile.size() == static_cast<std::size_t>(citysim::CityMapRaster::kTilePx * citysim::CityMapRaster::kTilePx * 4));
+    CHECK(tile == same);                       // a worker's tile is the picture, not an approximation of it
+    CHECK(tileShapes > 0 && tileShapes < streetShapes);
 }
 
 // STREET NAME SIGNS ON METRO (Glenn, 2026-09-19: "store a list of all the

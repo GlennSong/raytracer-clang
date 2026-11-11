@@ -17715,3 +17715,48 @@ filed.
 encoder in the filer. People are not physics bodies, so `aim?` cannot name the walker under the crosshair (`look?`
 lists those near a possessed agent only).
 
+## ADR-0394 — The map is tiles: drawn by several threads, kept, and the overview ready before it opens
+
+**Context.** Glenn (2026-11-10): "right now loading the SVG for the entire island is really slow and you can't
+immediately see any of the map which is not good." Measured with the old code (one picture per view, one worker, all
+of it on the first press of 3):
+
+| | metro_v2_test | island_8_nature |
+|---|---|---|
+| write the city SVG | 90 ms (2 MB) | 912 ms (21 MB) |
+| parse it | 26 ms | 297 ms |
+| rasterize the first full-screen view (3302 x 1762) | 513 ms | 1028 ms |
+
+Every pan or zoom past the margin rasterized the whole view again; panning back redrew what had been seen.
+
+**Decision.**
+- **Tiles.** CityMapRaster draws 256-pixel tiles at power-of-two zooms (0.125 m/px x 2^z). The level shown is the
+  coarsest at least as sharp as the screen (tiles shown at 0.5..1x). Tiles are kept on the GPU (400 at most, 256 KB
+  each; the least recently wanted go first, the overview never).
+- **Several threads, one parsed city.** After loadCity the parsed image is read-only: rasterizeTile culls by copying
+  the overlapping shapes into a list of its own (the old cull relinked the shared list) and draws with the caller's
+  rasterizer. Up to 6 workers (a quarter of the cores, at least 2), their own threads: tiles take tens of ms, and
+  the shared job pool's physics must not wait behind them.
+- **Order.** Each frame the map ranks what it lacks: the overview level (the whole city in about 4 x 4 tiles), then
+  the level under the one shown, then the one shown with a tile's margin, nearest the centre first.
+- **Never blank.** Tiles draw coarsest first, so the overview shows under sharper ones while they come.
+- **Ready before it opens.** The SVG is written and parsed, and the overview drawn, as soon as the level is up, map open
+  or not.
+- **Long strokes cut short.** On the island a kerb or sidewalk loop is one stroked shape of up to 66,618 points, and
+  the rasterizer strokes all of a shape it is handed: a tile touching one paid for the whole loop (240 ms a tile). At
+  load, stroke-only shapes (no fill, no dash, no gradient) are cut into runs of 128 segments with round caps (the
+  sidewalks' own join; under a pixel on a 0.5 m kerb line at the finest zoom), each with its own bounds. Fills are
+  left whole.
+- **The transit lines are drawn live**, as line quads over the tiles, a few pixels wide at any zoom and clipped to the
+  panel; no longer rasterized into the picture (the trains arriving no longer redraws it). transitSvg and the transit
+  raster are gone. This is the first of the map's lightweight layers (the toolkit plan is #212).
+
+**Measured** (same machine):
+- a metro street tile 3.7 ms (16 shapes); an island tile 17 ms on average over the first 200 (43 ms for the overview's);
+- metro: the whole view sharp 0.5 s after pressing 3; the island: sharp but for two corner tiles at 0.5 s, all of it by
+  2 s, the overview under it from the first frame (the old code: nothing for 2.3 s);
+- a tile drawn on its own rasterizer is byte-identical to the same view drawn whole (level test).
+
+**Owed.** The overview could be baked with the level (it only changes when the city does), saving the first second of
+island workers; the SVG text round trip (write, then parse) could hand shapes to the rasterizer directly.
+

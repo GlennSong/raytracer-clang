@@ -14,8 +14,10 @@
 // map's: drag pans, the wheel zooms, C centres it back on you. The city keeps
 // running and you can still walk.
 //
-// Rasterizing a view takes 50-200 ms, so it runs on a worker; the last picture
-// is shown moved and scaled until the new one lands.
+// The picture is tiles (ADR-0394): rasterizing a whole screen took 0.5 s on one
+// thread (metro_v2_test), so the city is drawn as 256-pixel tiles at power-of-two
+// zooms by a few workers, nearest the centre first, kept on the GPU, with the
+// overview drawn as soon as the level is up so the first look is never blank.
 
 #include "../../engine/system.h"
 #include "../../rt_math.h"
@@ -23,8 +25,11 @@
 #include "city_map_raster.h"
 
 #include <condition_variable>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -62,6 +67,11 @@ public:
         open_ = true; follow_ = false; sized_ = true;
         cx_ = cx; cz_ = cz; mpp_ = metresPerPixel;
     }
+    // Take the transit lines from the sim (update does, when the city is built and when the trains arrive).
+    void takeLines() {
+        lines_ = transitLines();
+        linesTaken_ = true;
+    }
     // The tints composeFrame gives its markers (so a test can find them).
     static const float* youColour();
     static const float* frameColour();
@@ -71,7 +81,6 @@ private:
     std::vector<TransitLine> transitLines() const;
     void startWorker(engine::FrameContext& ctx);
     void stopWorker();
-    void requestRaster(const CityMapRaster::View& v);
     void ensureSprites(engine::Renderer& r);
 
     CityRenderSystem& city_;
@@ -84,31 +93,46 @@ private:
     double mpp_ = 1.0;                // metres per framebuffer pixel
     bool sized_ = false;              // mpp_ fitted to the city on first open
 
-    // The picture on the GPU and the view it was drawn for.
-    engine::TextureHandle tex_;
-    CityMapRaster::View texView_;
     // Sprites: a round dot (stops, buses) and the you-are-here arrow.
     engine::TextureHandle dot_, arrow_;
 
-    // --- the worker ---------------------------------------------------------
-    std::thread worker_;
+    // --- THE TILES (ADR-0394) ------------------------------------------------
+    // The picture is CityMapRaster tiles, 256 px at power-of-two zooms, kept on the GPU. Drawn coarsest first, so
+    // a view is never blank: the overview level (the whole city in a few tiles, drawn as soon as the level is up,
+    // map open or not) shows under the sharper ones while they come.
+    struct TileKey {
+        int z = 0, ix = 0, iy = 0;
+        bool operator<(const TileKey& o) const {
+            return z != o.z ? z < o.z : (ix != o.ix ? ix < o.ix : iy < o.iy);
+        }
+    };
+    struct Tile {
+        engine::TextureHandle tex;
+        uint64_t used = 0;   // the frame it was last wanted (the cache drops the oldest)
+    };
+    std::map<TileKey, Tile> tiles_;
+    uint64_t frame_ = 0;
+    // the city's frame, copied from the parsed raster on the main thread once it is ready
+    int overviewZ_ = -1;
+    double cityX_ = 0, cityZ_ = 0, cityW_ = 0, cityH_ = 0;
+    void wantTiles(double panelW, double panelH);   // main thread: what to draw next, coarse and central first
+    void takeTiles(engine::Renderer& r);           // main thread: upload what the workers drew; drop the oldest
+
+    // the loader (writes and parses the SVG) and the tile workers, each with its own rasterizer
+    std::thread loader_;
+    std::vector<std::thread> workers_;
     std::mutex mu_;
     std::condition_variable cv_;
     bool quit_ = false;
-    bool loading_ = false;            // SVG not parsed yet
-    bool haveJob_ = false;
-    CityMapRaster::View job_;
-    bool haveResult_ = false;
-    CityMapRaster::View resultView_;
-    std::vector<uint8_t> result_;
-    bool rasterBusy_ = false;
-    CityMapRaster::View lastAsked_;
-    bool askedAny_ = false;
-    double settle_ = 0;               // seconds since the view last changed
-    // The trains start a few frames after the city: the overlay is redrawn once the rail is there.
-    bool railInOverlay_ = false;
-    bool haveLines_ = false;          // newLines_ waiting for the worker
-    std::vector<TransitLine> newLines_;
+    std::shared_ptr<const CityMapRaster> raster_;   // set once, read-only after (guarded for the handoff)
+    std::vector<TileKey> want_;                     // to draw, first first
+    std::set<TileKey> drawing_;                     // taken by a worker, not back yet
+    std::vector<std::pair<TileKey, std::vector<uint8_t>>> done_;
+
+    // The transit lines, drawn live over the tiles (a few pixels wide at any zoom). The trains start a few frames
+    // after the city: the lines are taken again once the rail is there.
+    std::vector<TransitLine> lines_;
+    bool linesTaken_ = false, railInLines_ = false;
 };
 
 }  // namespace citysim
