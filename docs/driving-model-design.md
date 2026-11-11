@@ -480,6 +480,17 @@ What a switch costs:
 
 Sketch only; field names are for the implementer to settle.
 
+**As built** (task A3, `src/engine/procgen/city/roads/lane_graph.h`), where it differs from the sketch below:
+
+- a connector records the lane it comes *from* as well as the lane it joins;
+- a lane's "next" may be another lane (where a section is cut with no junction), not only connectors;
+- crossing points and crosswalks may belong to no junction (a crosswalk mid-block, a rail track across a street);
+- rail tracks have their own table, so a crossing point's other side can be a path, a crosswalk or a track;
+- a parking space is called `CarSpace`, because the word for a kind of lane is data and may not appear in the code;
+- tags, regulation kinds, controls and road classes are name tables carried by the graph, at most 32 names for
+  each set of tags;
+- one path is 96 bytes plus its curve points; curves are stored in full precision until the island is measured.
+
 ```cpp
 struct LanePath {                 // a lane or a connector
     PathId id;

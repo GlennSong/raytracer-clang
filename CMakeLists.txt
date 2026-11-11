@@ -212,6 +212,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/roads/road_entity.cpp
     src/engine/procgen/city/roads/road_builder.cpp
     src/engine/procgen/city/roads/ground_grid.cpp
+    src/engine/procgen/city/roads/lane_graph.cpp   # the driving model's road data (design 5.2, #236)
     src/engine/procgen/city/road_semantics.cpp
     src/engine/procgen/city/road_rules.cpp
     src/engine/procgen/city/road_offset.cpp
@@ -745,6 +746,7 @@ target_link_libraries(raytracer PRIVATE engine_core)
 add_executable(run_tests
     tests/main.cpp
     tests/test_bundle.cpp
+    tests/test_lane_graph.cpp
     tests/test_lot_cache.cpp
     tests/test_math.cpp
     tests/test_slot_map.cpp
