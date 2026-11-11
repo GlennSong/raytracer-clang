@@ -5,6 +5,7 @@
 #include "../../../engine/scripting/procgen_mesh.h"   // luaToMesh (mesh.car shells)
 #include "../../../engine/scripting/lua_helpers.h" // strField/vec3Field spec readers
 #include "../../../engine/mesh_builder.h"          // MeshBuilder::box (same primitive as addBox)
+#include "../../driving/scripting/vehicle_class_lua.h"   // a slot's `driving` block (#248)
 
 namespace engine {
 
@@ -411,6 +412,30 @@ bool loadFleetHandling(ScriptVM& vm, int slot, VehicleSpec& out, std::string* er
     if (spec.config.wheels.size() < 2) return fail(err, where + ": `handling` has no wheels");
     out = std::move(spec);
     return true;
+}
+
+bool loadFleetDrivingClass(ScriptVM& vm, int slot, driving::VehicleClass& out, std::string* err) {
+    Vec3 size(0, 0, 0);
+    std::string className;
+    VehicleSpec handling;
+    if (!loadFleetCatalogueEntry(vm, slot, size, className, err) || !loadFleetHandling(vm, slot, handling, err))
+        return false;
+    const std::string where = "vehicle.fleet[" + std::to_string(slot + 1) + "]";
+    std::vector<driving::WheelSpot> spots;
+    for (const PhysicsWorld::VehicleWheel& w : handling.config.wheels) spots.push_back({w.position.z, w.steered});
+    Real wheelbase = 0;
+    if (!driving::wheelbaseFromWheels(spots, wheelbase))
+        return fail(err, where + ": its wheels give no wheelbase (none of them steers, or all do)");
+    driving::VehicleClass c =
+        driving::deriveVehicleClass(className, size.z, size.x, wheelbase, handling.config.maxSteerDegrees);
+    lua_State* L = luaState(vm);
+    const int base = lua_gettop(L);
+    if (!pushFleetSlot(L, base, slot, where, err)) return false;
+    lua_getfield(L, lua_gettop(L), "driving");
+    const bool ok = driving::readVehicleClassBlock(L, -1, where + ".driving", c, err);
+    lua_settop(L, base);
+    if (ok) out = std::move(c);
+    return ok;
 }
 
 bool loadFleetDrivable(ScriptVM& vm, int slot, std::string& recipe, Vec3& color) {

@@ -152,7 +152,7 @@ Under our rule "roads: no guessing", the road builder states every move a car ca
   - **Direction:** along the curve, turned a little while drifting sideways in a lane change.
 
   Since every path is drivable, the car can never pivot or slide.
-- **Kinds of vehicle are data** (`vehicle_classes.lua`): length, width, wheelbase (the distance between front and back axles),
+- **Kinds of vehicle are data** (the `driving` block of each class in `vehicles.lua`, where the fleet lives): length, width, wheelbase (the distance between front and back axles),
   tightest turning circle, how hard it can speed up and brake, which roads and lanes it may use. A truck's trailer follows its
   hitch the way a real trailer does.
 - **Physical cars** near the player (real physics bodies, in Jolt, the physics engine) steer along the same path. While a car

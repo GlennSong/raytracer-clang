@@ -20,11 +20,13 @@
 // Units: metres, seconds.
 
 #include "engine/procgen/city/roads/lane_graph.h"
+#include "apps/driving/vehicle_class.h"
 #include "slot_map.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <utility>
 #include <vector>
 
 namespace driving {
@@ -112,10 +114,16 @@ class Driving {
 public:
     // Given the road it drives on: a lane graph that must outlive this object (it is read, never owned). Null is an
     // empty world: it ticks, and every trip is refused, since there is nowhere to go.
-    // (The compiled rule set and the vehicle classes are given here too, by the tasks that bring them: design 3.)
+    // (The compiled rule set is given here too, by the task that brings it: design 3. The vehicle classes come in
+    // through setVehicleClasses.)
     explicit Driving(const engine::LaneGraph* roads = nullptr);
 
     const engine::LaneGraph* roads() const { return roads_; }
+
+    // THE KINDS OF VEHICLE on the road (vehicle_class.h, #248), copied in by the host from its vehicle data. Nothing
+    // reads them yet; the speed and lane tasks will.
+    void setVehicleClasses(VehicleClasses classes) { vehicleClasses_ = std::move(classes); }
+    const VehicleClasses& vehicleClasses() const { return vehicleClasses_; }
 
     // ONE STEP of `dt` seconds: plan, settle claims, move (design 7.1). For now it only advances the clock.
     void tick(Real dt);
@@ -156,6 +164,7 @@ private:
     bool onRoad(const PathPoint& p) const;
 
     const engine::LaneGraph* roads_ = nullptr;
+    VehicleClasses vehicleClasses_;
     uint64_t tickCount_ = 0;
     double clockSeconds_ = 0;
     engine::SlotMap<Trip, TripTag> trips_;

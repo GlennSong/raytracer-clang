@@ -3,6 +3,7 @@
 
 #include "../../../renderer/renderer.h"   // RenderMesh, Vertex, Vec3
 #include "../../../engine/scripting/vehicle_spec.h"   // VehicleSpec, readVehicleHandling
+#include "../../driving/vehicle_class.h"              // driving::VehicleClass (#248)
 
 #include <string>
 #include <vector>
@@ -140,6 +141,12 @@ bool loadFleetCatalogueEntry(ScriptVM& vm, int slot, Vec3& size,
 // config is what a physical-tier car or a commandeered one drives with. No geometry is built. False (err filled)
 // when the slot has none or it carries no wheels.
 bool loadFleetHandling(ScriptVM& vm, int slot, VehicleSpec& out, std::string* err = nullptr);
+
+// THE SLOT AS THE DRIVING MODEL SEES IT (#248): its class name; length and width from its `size`; the wheelbase from
+// its handling's wheels (steered axle to the middle of the others) and the tightest turn from that and its
+// `max_steer_deg`; then its `driving` block for the rest. No geometry is built. False (err filled) when any part is
+// missing or malformed.
+bool loadFleetDrivingClass(ScriptVM& vm, int slot, driving::VehicleClass& out, std::string* err = nullptr);
 
 // THE SLOT AS THE PLAYER'S CAR (ADR-0355; Glenn: "Why is an SUV in the world different than mine? I can't open the
 // hatch"): its `drivable` recipe (the menu's -- "kit_suv") and its paint `color`, so a car taken from the traffic is

@@ -670,6 +670,39 @@ local FLEET_SLOTS = {
     { kit = "bus_standing", color = { 0.86, 0.62, 0.08 } },
 }
 
+-- HOW EACH CLASS DRIVES, for the driving model (#248; read by apps/driving/scripting/vehicle_class_lua.cpp, published
+-- on each catalogue entry as `driving`). ONLY what the data above cannot give: the sizes are NOT here -- length and
+-- width come from the body (`size`), the wheelbase from the wheel layout, the tightest turn from the wheelbase and
+-- `max_steer_deg` -- so no size is written twice.
+--   speed_up        m/s2   comfortable speeding-up (the "a" of the car-following formula, design 8)
+--   brake           m/s2   comfortable braking ("b")
+--   hardest_brake   m/s2   the hardest it can brake (the emergency stop the safe-speed limit assumes of the car ahead)
+--   top_speed       m/s    (km/h in the comment)
+--   tags            names a lane's `open_to` / `closed_to` is matched against (design 5.4): what kind of service it is in
+--   trailer         { length = m, hitch_ahead = m ahead of the back axle's middle } -- only a vehicle that pulls one
+-- SOURCING, as in vehicle_classes.lua: [J] a figure verified from a primary standard; [~] a plausible default, good
+-- enough to drive from, not good enough to cite. Every number here is [~]. The bands they were picked from: comfortable
+-- speeding-up 1-2 m/s2 for a car, under 1 for a heavy vehicle, and comfortable braking 1.5-2 m/s2 (the usual values in
+-- the car-following literature); hardest braking about 0.8 g for a car on dry road, less for the heavy ones; a bus kept
+-- gentle in both for its standing passengers.
+local DRIVING = {
+  sedan       = { speed_up = 1.5, brake = 2.0, hardest_brake = 8.0, top_speed = 50, tags = { "car" } },   -- [~] 180 km/h
+  hatchback   = { speed_up = 1.4, brake = 2.0, hardest_brake = 8.0, top_speed = 47, tags = { "car" } },   -- [~] 170 km/h
+  taxi        = { speed_up = 1.5, brake = 2.0, hardest_brake = 8.0, top_speed = 50, tags = { "car", "taxi" } },   -- [~]
+  convertible = { speed_up = 2.0, brake = 2.0, hardest_brake = 8.5, top_speed = 61, tags = { "car" } },   -- [~] 220 km/h
+  suv         = { speed_up = 1.4, brake = 2.0, hardest_brake = 7.5, top_speed = 50, tags = { "car" } },   -- [~] 180 km/h
+  jeep        = { speed_up = 1.3, brake = 2.0, hardest_brake = 7.5, top_speed = 44, tags = { "car" } },   -- [~] 160 km/h
+  pickup      = { speed_up = 1.3, brake = 2.0, hardest_brake = 7.5, top_speed = 47, tags = { "car" } },   -- [~] 170 km/h
+  offroad     = { speed_up = 1.2, brake = 2.0, hardest_brake = 7.0, top_speed = 44, tags = { "car" } },   -- [~] 160 km/h
+  step_van    = { speed_up = 1.0, brake = 1.8, hardest_brake = 6.5, top_speed = 33, tags = { "van", "goods" } },   -- [~] 120 km/h
+  small_truck = { speed_up = 0.8, brake = 1.6, hardest_brake = 6.0, top_speed = 31, tags = { "truck", "goods" } },   -- [~] 110 km/h
+  fire_engine = { speed_up = 1.0, brake = 1.6, hardest_brake = 5.5, top_speed = 31, tags = { "truck", "emergency" } },   -- [~] 110 km/h
+  bus         = { speed_up = 0.8, brake = 1.3, hardest_brake = 5.0, top_speed = 28, tags = { "bus" } },   -- [~] 100 km/h
+  motorcycle  = { speed_up = 2.0, brake = 2.0, hardest_brake = 7.0, top_speed = 50, tags = { "motorcycle" } },   -- [~] 180 km/h
+  moped       = { speed_up = 1.2, brake = 1.8, hardest_brake = 5.5, top_speed = 12.5, tags = { "moped" } },   -- [~] 45 km/h, the usual moped class limit
+}
+DRIVING.bus_standing = DRIVING.bus   -- (the same bus, another saloon)
+
 -- A TWO-WHEELER IN THE FLEET (Glenn, 2026-11-04: "motorcycles -- can you make it available"): the drivable recipe
 -- above, its wheels baked in for traffic like every fleet body. Its handling IS that drivable spec (two_wheeler,
 -- lean, the seat's bars and pegs), so a commandeered bike rides like the one N drops, and the city draws its rider
@@ -718,6 +751,7 @@ local function catalogue(slots)
                 size = { 0.7, spec.chassis.half[2] * 2, math.abs(spec.wheels[1].z - spec.wheels[2].z) + 2 * spec.wheel.radius },
                 -- its handling IS the drivable spec: two wheels, the lean, the seat's bars and pegs
                 handling = spec,
+                driving = DRIVING[slot.bike],    -- how it drives, for the driving model (#248)
                 drivable = slot.bike,
                 color = slot.color,
                 build = function() return bike_fleet(slot.bike, slot.color) end,
@@ -730,6 +764,7 @@ local function catalogue(slots)
                 size = car.size,
                 -- what the physics tier and a commandeered car drive with: the kit's drivable handling
                 handling = kit_handling(P, car, KIT_HANDLING[slot.kit] or {}),
+                driving = DRIVING[slot.kit],     -- how it drives, for the driving model (#248)
                 drivable = "kit_" .. slot.kit,   -- the menu's recipe for this car (nil: none)
                 color = slot.color,              -- ...and its paint: a car taken from the traffic is built as that
                 build = function() return kit_car(slot.kit, slot.color) end,

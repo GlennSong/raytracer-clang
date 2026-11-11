@@ -247,6 +247,17 @@ const VehicleBody& vehicleFleetBody(int slot) {
     return kFleet[s];
 }
 
+driving::VehicleClasses builtInDrivingClasses() {
+    driving::VehicleClasses out;
+    for (int s = 0; s < kFleetSize; ++s) {
+        const VehicleBody& b = kFleet[s];
+        out.add(driving::deriveVehicleClass("fleet_slot_" + std::to_string(s), b.length, b.width,
+                                            b.length * driving::kUnknownWheelbaseShareOfLength,
+                                            driving::kUnknownMaxSteerDegrees));
+    }
+    return out;
+}
+
 Real CitySim::vehicleLength(int agentIndex) const {
     const Agent& a = agents_[agentIndex];
     if (a.mode == Agent::Mode::Driver && a.vehicle >= 0 &&

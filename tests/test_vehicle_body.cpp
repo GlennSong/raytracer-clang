@@ -1071,3 +1071,62 @@ TEST_CASE(bus_doors_stand_over_the_saloons_doorways) {
     if (!ok) std::printf("    %s\n", err.c_str());
     CHECK(ok);
 }
+
+// THE FLEET AS THE DRIVING MODEL SEES IT (#248): every slot of every named fleet gives a driving class that validates,
+// whose sizes are the body's and the wheels' exactly (derived, never written twice), whose tightest turn is the
+// wheelbase over tan(largest steer) and believable for a road vehicle, and whose `driving` block gives the rest.
+TEST_CASE(fleet_vehicle_driving_classes_derive_from_the_fleet) {
+    // A road vehicle's tightest turn, at the middle of its back axle: a moped's under 2 m, a bus's around 8 m.
+    constexpr Real kBelievableTurnLo = 1.5, kBelievableTurnHi = 15.0;
+    constexpr Real kDegToRad = 3.14159265358979323846 / 180.0;
+    VehiclesVM a;
+    CHECK(a.loaded);
+    if (!a.loaded) return;
+    for (const char* fleet : {"fleet_kit", "fleet_mixed"}) {
+        CHECK(selectFleet(a.vm, fleet));
+        driving::VehicleClasses table;
+        std::printf("    [driving] %s\n    %-13s %7s %7s %9s %8s %8s %6s %6s %6s  %s\n", fleet, "class", "length",
+                    "width", "wheelbase", "steer", "turn r", "up", "brake", "hard", "tags");
+        for (int slot = 0; slot < fleetSlotCount(a.vm); ++slot) {
+            driving::VehicleClass c;
+            std::string err;
+            const bool ok = loadFleetDrivingClass(a.vm, slot, c, &err);
+            if (!ok) std::printf("    slot %d: %s\n", slot, err.c_str());
+            CHECK(ok);
+            if (!ok) continue;
+            for (const std::string& p : driving::validate(c)) std::printf("    %s\n", p.c_str());
+            CHECK(driving::validate(c).empty());
+            // the body's size, exactly
+            Vec3 size;
+            std::string className;
+            CHECK(loadFleetCatalogueEntry(a.vm, slot, size, className));
+            CHECK(c.name == className);
+            CHECK(c.length == size.z && c.width == size.x);
+            // the wheel layout's axle distance: the steered axle to the middle of the others
+            VehicleSpec h;
+            CHECK(loadFleetHandling(a.vm, slot, h));
+            Real front = 0, backLo = 1e30, backHi = -1e30;
+            for (const PhysicsWorld::VehicleWheel& w : h.config.wheels) {
+                if (w.steered) front = w.position.z;
+                else {
+                    backLo = std::min(backLo, w.position.z);
+                    backHi = std::max(backHi, w.position.z);
+                }
+            }
+            CHECK_APPROX(c.wheelbase, front - 0.5 * (backLo + backHi), 1e-12);
+            const Real steer = h.config.maxSteerDegrees;
+            CHECK_APPROX(c.tightestTurnRadius, c.wheelbase / std::tan(steer * kDegToRad), 1e-9);
+            CHECK(c.tightestTurnRadius > kBelievableTurnLo && c.tightestTurnRadius < kBelievableTurnHi);
+            // the authored fields came from the block (the reader refuses a block missing any)
+            CHECK(!c.tags.empty());
+            std::string tags;
+            for (const std::string& t : c.tags) tags += (tags.empty() ? "" : ",") + t;
+            std::printf("    %-13s %7.2f %7.2f %9.2f %8.1f %8.2f %6.2f %6.2f %6.2f  %s (top %.1f m/s)\n", c.name.c_str(),
+                        c.length, c.width, c.wheelbase, steer, c.tightestTurnRadius, c.speedUp, c.brake,
+                        c.hardestBrake, tags.c_str(), c.topSpeed);
+            if (table.indexOf(c.name) < 0) table.add(c);
+        }
+        CHECK(driving::validate(table).empty());
+    }
+    CHECK(selectFleet(a.vm, "fleet_kit"));
+}

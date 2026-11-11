@@ -615,6 +615,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // people to notice the city was full of blocks. Absence is a data decision;
     // say `"vehicles": "vehicles.lua"` to have cars, or `"cars": 0` not to.
     int fleetVariants = 0;
+    driving::VehicleClasses drivingClasses;   // the new driving model's (#248): one per fleet class, the first slot's
 #ifdef RT_ENABLE_SCRIPTING
     engine::ScriptVM fleetVM_;
     bool fleetScripted = false;
@@ -695,6 +696,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                     carDrivable_.push_back(recipe);
                     carPaint_.push_back(paint);
                 }
+                {   // how it drives, for the new driving model (#248)
+                    driving::VehicleClass dc;
+                    std::string dErr;
+                    if (!engine::loadFleetDrivingClass(fleetVM_, v, dc, &dErr))
+                        LOG_WARN << "citysim vehicles fleet[" << v << "] driving class: " << dErr;
+                    else if (drivingClasses.indexOf(dc.name) < 0) drivingClasses.add(std::move(dc));
+                }
                 catalogue.push_back(body);
             }
             LOG_INFO << "[citysim] fleet: " << slots << " slots, bus variant "
@@ -772,6 +780,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // WHICH DRIVING MODEL (#234; citysim.driving): "v2" also runs the new driving library, ticking an empty world
     if (params_.driving == "v2") {
         sim_.useDrivingV2(true);
+        if (drivingClasses.empty()) drivingClasses = builtInDrivingClasses();   // (no scripted fleet)
+        for (const std::string& p : driving::validate(drivingClasses)) LOG_WARN << "[citysim] driving v2 vehicle class: " << p;
+        sim_.setDrivingVehicleClasses(std::move(drivingClasses));
         LOG_INFO << "[citysim] driving v2: the new driving library ticks alongside (no cars yet)";
     } else if (params_.driving != "v1") {
         LOG_WARN << "[citysim] driving \"" << params_.driving << "\": unknown model (v1 or v2); keeping v1";

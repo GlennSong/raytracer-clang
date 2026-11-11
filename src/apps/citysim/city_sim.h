@@ -423,6 +423,9 @@ struct VehicleBody {
 // authoritative for, the shipped classes.
 int vehicleFleetSize();
 const VehicleBody& vehicleFleetBody(int slot);   // slot wraps into [0, size)
+// The built-in fleet as the new driving model's classes (#248), one per slot ("fleet_slot_<n>"): length and width from
+// the body; it has no wheels, so the wheelbase and steering are vehicle_class.h's kUnknown* and the rest its defaults.
+driving::VehicleClasses builtInDrivingClasses();
 
 // A drivable car. Kinematic in the sim core; its pose tracks its driver. Inert
 // when `driver < 0`. Its body (type + dimensions) comes from the fleet table.
@@ -1235,6 +1238,8 @@ public:
     // THE NEW DRIVING MODEL (#234; citysim.driving = "v2"): on, the sim holds a driving::Driving and ticks it once per
     // sim tick, with an empty world for now. The old model drives the cars either way. Off drops it.
     void useDrivingV2(bool on) { if (on) drivingV2_.emplace(); else drivingV2_.reset(); }
+    // ...and the kinds of vehicle it knows (#248: one class per fleet class, read with the fleet). No-op under v1.
+    void setDrivingVehicleClasses(driving::VehicleClasses c) { if (drivingV2_) drivingV2_->setVehicleClasses(std::move(c)); }
     // The new model, read-only; null when the level drives v1.
     const driving::Driving* drivingV2() const { return drivingV2_ ? &*drivingV2_ : nullptr; }
     // Does this agent drive one trip straight into the next (the level's wander mode, or a roaming role's day)?
