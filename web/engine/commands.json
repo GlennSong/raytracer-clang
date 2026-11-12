@@ -138,6 +138,12 @@
   "usage": "driver? [car id]"
  },
  {
+  "name": "driving?",
+  "owner": "engine",
+  "summary": "The new driving model's cars in one line: how many are placed, moving and standing, trips begun and arrived, cars put down again from a road's end, routes not found, mean speed, and what a tick costs.",
+  "usage": "driving?"
+ },
+ {
   "name": "elevator",
   "owner": "engine",
   "summary": "Press the elevator call key, or move the panel's floor selection by delta.",

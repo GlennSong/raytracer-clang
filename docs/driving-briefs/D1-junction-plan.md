@@ -1,5 +1,11 @@
 # D1 — Who gives way to whom, worked out at load
 
+**As built (ADR-0401):** the give-way table per junction (`right_of_way.h`), plus a plan for each driver
+(`junction_plan.h`) listing the junctions ahead and the waiting points on each connector. A waiting point is a place
+where the car's front may stop with no part of it in another path's crossing stretch; the stop line is always the
+first. Real junctions are tighter than the textbook ones: opposite far turns can conflict (B3 / ADR-0400 found two such
+pairs in the lab's four-way). The hand-out added the per-driver plan to the table this brief asks for.
+
 **Read first:** design 6.1 (b), 9.1. Brief B3. `src/apps/citysim/traffic_signal.h` for how lights are grouped today
 (read only; it is not changed).
 

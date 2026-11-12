@@ -53,6 +53,9 @@ The implementer reports back with: what changed (files), the test output, anythi
 anything in the brief or design it found to be wrong. That last part matters: a brief that turns out wrong gets
 fixed here, not worked round in code.
 
+Before starting, the implementer checks the hand-out message against the brief and the GitHub issue; where they
+differ, the brief and the issue win, and the difference is reported.
+
 ## Standing rules (paste into every hand-out)
 
 From `AGENTS.md`, which the implementer should also read:

@@ -60,6 +60,12 @@ Who gives way (D1). Anything at run time.
 - Counts match the textbook figures on hand-made junctions, as tests:
   - a four-way junction, one lane each way, every turn allowed: **16 crosses, 8 joins, 8 splits**;
   - a T-junction, one lane each way: **3 crosses, 3 joins, 3 splits**.
+
+  **As built (ADR-0400):** the records are pairs of paths, not places. Three paths leaving one lane part at two
+  places but make three pairs, and all three pairs are real. So a four-way with one lane each way has **16 crosses,
+  12 joins and 12 splits**; a T has **3 / 3 / 3** (two paths per lane, so pairs and places agree). Rail tracks get no
+  records yet (nothing fills them, and the graph has no track width). A path finds its records through
+  `Path::crossings`, ordered along the path (by where the stretch on that path begins, then by id).
 - A bridge over a street gives no crossing.
 - A crosswalk gives one record for each path that passes over it.
 - Mirroring a junction's shape gives the mirrored table.
