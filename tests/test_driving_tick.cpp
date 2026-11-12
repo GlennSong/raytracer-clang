@@ -14,7 +14,8 @@
 //  11. a car stops behind a parked car at the standstill gap, its record naming that car, and stays put;
 //  12. a way that ends with no rule to stop the car: it stops short of the end and never passes it.
 // Every tick of every run is watched (13): no driven car at rest held back by nothing, no two bodies overlapping on
-// any path, no speed below zero. Last, what a tick costs.
+// any path, no speed below zero. Then (14, issue #281) a car on a long straight slows in time for a bend on the next lane,
+// takes it no faster than is comfortable and is not slowed before it needs to be. Last, what a tick costs.
 
 #include "test_framework.h"
 
@@ -1124,6 +1125,83 @@ TEST_CASE(tick_12_way_end_without_a_rule_is_a_wall) {
     CHECK(w.d.drainEvents().empty());   // never arrived: it drove past its destination, as its rules let it
     std::printf("    at rest %.4f m short of the end of the road\n", end - road.x(c));
     watch.check("way end");
+}
+
+// ---- 14. a bend after a long straight (#281) ----------------------------------------------------------------------------
+
+namespace {
+// What one run up to a bend comes to.
+struct BendRun {
+    Real worstSideAccel = 0;            // speed squared over the radius, the worst with the front on the bend
+    Real earliestBendBinding = -1;      // x where the bend rule first held the car back
+    Real slowedTooEarly = 0;            // x of the first tick the bend held the car where it had no need yet; 0: none
+    Real speedAfter = 0;                // speed 25 m past the bend
+    bool bendHeld = false;
+    std::vector<uint64_t> hashes;       // the state hash after every tick
+};
+// A Straight road of six 100 m sections whose fourth eastward lane (x 300 to 400 m) bends at `radius` from 40 to 70 m
+// along it (its bend profile; the line itself stays straight, as only the profile is read). One car from x = 10 to the
+// far end, stepping at `dt`, deciding every `interval` seconds.
+BendRun runToABend(Real radius, Real dt, Real interval) {
+    constexpr Real kBendFrom = 340, kBendTo = 370;
+    Straight road(6, 100);
+    engine::LaneGraph& g = road.roads.graph;
+    engine::Path& bent = g.paths[road.lane(3).index];
+    bent.bends = g.addBends({engine::BendPiece{0, engine::kNoBend}, engine::BendPiece{kBendFrom - 300, radius},
+                             engine::BendPiece{kBendTo - 300, engine::kNoBend}});
+    bent.tightestRadius = radius;
+    const TestRules rules(ruleSetLua(kAllRules));
+    World w(road.graph(), rules);
+    decideEvery(w.d, interval, dt);
+    CHECK(placeAt(w.d, road, 1, 10));
+    CHECK(w.d.beginTrip(CarId(1), 1, road.point(590)).valid());
+    const VehicleClass& cls = w.d.vehicleClasses().at(kOrdinary);
+    const Real top = road.roads.spec.speedLimit, side = 2.0;   // the test rule set's comfortable_side_accel
+    const Real bendSpeed = std::sqrt(side * radius), tau = static_cast<Real>(ticksFor(interval, dt)) * dt;
+    // How far before the bend a car at the limit must begin to slow: a decision's travel, then braking comfortably.
+    const Real needed = top * tau + (top * top - bendSpeed * bendSpeed) / (2 * cls.brake);
+    const RuleIndex bendRule = rules.rule("bend ahead");
+    BendRun out;
+    Watch watch;
+    for (int k = 0; k < static_cast<int>(90 / dt); ++k) {
+        w.d.tick(dt);
+        watch.look(w.d);
+        out.hashes.push_back(w.d.stateHash());
+        const Car* c = w.d.car(CarId(1));
+        if (!c || !c->driven) break;
+        const Real x = road.x(*c);
+        if (x >= kBendFrom && x <= kBendTo) out.worstSideAccel = std::max(out.worstSideAccel, c->speed * c->speed / radius);
+        const bool byBend = c->binding.by == Limit::TopSpeed && c->binding.rule == bendRule;
+        if (byBend && !out.bendHeld) {
+            out.bendHeld = true;
+            out.earliestBendBinding = x;
+        }
+        // (a metre's slack: the car decides only every interval, and the formula's own rounding)
+        if (byBend && x < kBendFrom - needed - 1 && out.slowedTooEarly == 0) out.slowedTooEarly = x;
+        if (x >= kBendTo + 25 && out.speedAfter == 0) out.speedAfter = c->speed;
+    }
+    watch.check("a bend after a straight");
+    std::printf("    a %.0f m bend at %.3f s steps, deciding every %.2f s: held by the bend from x = %.1f (it need not "
+                "slow before %.1f); %.3f m/s2 sideways at worst on it (comfortable: %.1f); %.2f m/s 25 m past it\n",
+                radius, dt, tau, out.earliestBendBinding, kBendFrom - needed, out.worstSideAccel, side, out.speedAfter);
+    return out;
+}
+}  // namespace
+
+TEST_CASE(tick_14_a_bend_after_a_long_straight_is_slowed_for_in_time) {
+    // At the lab's step and decide interval, and at a coarse one: the car slows for the bend on the next lane in time,
+    // takes it at no more than the comfortable sideways acceleration, is not slowed on the straight before it needs to
+    // be, and speeds up again after it.
+    for (const Real interval : {0.1, 0.5}) {
+        const BendRun r = runToABend(20, 1.0 / 60, interval);
+        CHECK(r.bendHeld);
+        CHECK(r.worstSideAccel <= 2.0 + 1e-6);
+        CHECK(r.slowedTooEarly == 0);
+        CHECK(r.speedAfter > std::sqrt(2.0 * 20) + 1);
+    }
+    // The same run twice: the same state hash at every tick.
+    const BendRun a = runToABend(20, 1.0 / 60, 0.1), b = runToABend(20, 1.0 / 60, 0.1);
+    CHECK(!a.hashes.empty() && a.hashes == b.hashes);
 }
 
 // ---- What a tick costs ------------------------------------------------------------------------------------------------

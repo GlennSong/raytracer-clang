@@ -444,6 +444,8 @@ void Driving::plan() {
             view.board = &board_;
             view.giveWay = &p.verdict;
         }
+        // What it decides now it holds until its next turn to decide (#281: a bend's speed allows for that).
+        view.decideInterval = static_cast<Real>(every) * step_;
         noticeFacts(view, facts_, wanted_, noticed_, noticeScratch_);
         const NoticedFact& arrived = noticed_[arrivedSlot_];
         if (arrived.present && arrived.yes) {

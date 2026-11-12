@@ -5,6 +5,7 @@
 #include "../src/engine/bundle/bundle.h"
 #include "../src/engine/procgen/city/roads/lane_graph.h"
 #include "../src/engine/procgen/city/roads/lanes/lane_graph_cache.h"   // a level's lane graph saved and read back
+#include "../src/engine/procgen/city/roads/lanes/lane_graph_build.h"   // measureBends, findKinks (#281)
 
 #include <cstdio>
 #include <filesystem>
@@ -163,6 +164,9 @@ LaneGraph makeCrossroads() {
     stopLine.to = 39;
     g.regulations = {limit, stopLine};
     g.paths[0].regulations = Range{0, 2};
+    // A bend profile on lane 0 (#281): straight, a 50 m curve from 10 to 20 m along, straight again.
+    g.paths[0].bends = g.addBends({BendPiece{0, kNoBend}, BendPiece{10, 50}, BendPiece{20, kNoBend}});
+    g.paths[0].tightestRadius = 50;
 
     // The junction, its crosswalk over the east arm, its crossing points.
     Junction j;
@@ -296,6 +300,7 @@ TEST_CASE(lane_graph_text_dump_reads_by_hand) {
           "connector 9: far turn, from lane 0 into lane 3, 9.2 m, tightest radius 9.0 m, 3.0 m wide, junction 0, "
           "may wait inside at 4.6 m, tags turn, open to car, bus, bike, speed limit 6.7 m/s\n"
           "  curve: (5.0, -1.5, 0.0) (-1.5, 5.0, 0.0)\n"
+          "  bends: none measured; the whole path at its tightest radius (9.0 m)\n"
           "  crossing points along it: 2 from 0.0 m, 3 from 0.0 m\n");
     CHECK(dumpCrossing(g, CrossingId(4)) ==
           "crossing point 4, junction 0: connector 10 crosses connector 13; on connector 10 from 3.0 to 6.5 m, "
@@ -412,6 +417,184 @@ TEST_CASE(lane_graph_validate_names_each_fault) {
         g.pathCrossings[g.paths[connectorId(0, 1)].crossings.first] = CrossingId(4);
         CHECK(hasProblem(validate(g), "connector 9 lists crossing point 4, which is not on it"));
     }
+    {   // a bend profile that does not start at 0, does not rise, has a radius of zero, runs past its path (#281)
+        LaneGraph g = good;
+        g.bendPieces[g.paths[0].bends.first].from = 1;
+        CHECK(hasProblem(validate(g), "lane 0: its bend profile starts 1.00 m along, not at 0"));
+        g = good;
+        g.bendPieces[g.paths[0].bends.first + 2].from = 10;
+        CHECK(hasProblem(validate(g), "lane 0: its bend pieces do not rise (piece 2 at 10.00 m)"));
+        g = good;
+        g.bendPieces[g.paths[0].bends.first + 1].radius = 0;
+        CHECK(hasProblem(validate(g), "lane 0: bend piece 1 has radius 0.00 m"));
+        g = good;
+        g.bendPieces[g.paths[0].bends.first + 2].from = 41;
+        CHECK(hasProblem(validate(g), "lane 0: bend piece 2 begins at 41.00 m, past its end (40.00 m)"));
+        g = good;
+        g.paths[0].bends.count = 9;
+        CHECK(hasProblem(validate(g), "lane 0: its bend profile (0 to 9) is out of range (3 pieces)"));
+    }
+}
+
+// ---- bends, measured as a vehicle feels them (#281) ----------------------------------------------------------------
+
+namespace {
+
+// A LINE DRAWN BY CURVATURE: starting at the origin heading +x, turning `curvature(s)` radians per metre at s metres
+// along (plus one way round), a point every spacings[k % size] metres (the last point at `length`). Integrated in
+// centimetre steps, so the points lie on the curve to well under a millimetre.
+template <typename Curvature>
+std::vector<Vec2> drawLine(Curvature curvature, Real length, const std::vector<Real>& spacings) {
+    constexpr Real kStep = 0.01;
+    std::vector<Vec2> pts = {Vec2(0, 0)};
+    Vec2 at(0, 0);
+    Real heading = 0, s = 0, next = spacings[0];
+    std::size_t k = 0;
+    while (s < length - 1e-12) {
+        const Real h = std::min(kStep, length - s);
+        const Real mid = heading + 0.5 * h * curvature(s + 0.5 * h);
+        at = at + Vec2(std::cos(mid), std::sin(mid)) * h;
+        heading += h * curvature(s + 0.5 * h);
+        s += h;
+        if (s >= next - 1e-9 || s >= length - 1e-12) {
+            pts.push_back(at);
+            next += spacings[++k % spacings.size()];
+        }
+    }
+    return pts;
+}
+// A graph of one lane along `pts`, its bend profile measured by the road builder's measureBends.
+LaneGraph oneLane(const std::vector<Vec2>& pts) {
+    LaneGraph g;
+    g.roadClassNames = {"street"};
+    Path p;
+    p.curve = g.addCurve(pts, std::vector<Real>(pts.size(), 0.0));
+    p.length = g.along[p.curve.end() - 1];
+    p.width = 3;
+    p.bends = g.addBends(roads::lanes::measureBends(g.points.data() + p.curve.first, g.along.data() + p.curve.first,
+                                                    p.curve.count));
+    g.paths.push_back(p);
+    return g;
+}
+// Uneven spacings between a fifth of a metre and a metre (the builder draws about a metre apart).
+const std::vector<Real> kUneven = {0.3, 0.9, 0.5, 1.0, 0.2, 0.7, 0.45, 0.8};
+
+}  // namespace
+
+TEST_CASE(lane_graph_bends_read_a_circle_at_its_radius_at_any_spacing) {
+    // Circles of 8, 60 and 300 m drawn with points at uneven spacing: every piece of the profile within 3% of the radius.
+    for (const Real R : {8.0, 60.0, 300.0}) {
+        const LaneGraph g = oneLane(drawLine([&](Real) { return 1 / R; }, R * 1.5, kUneven));
+        Real least = kNoBend, most = 0;
+        for (uint32_t i = 0; i < g.bendCount(PathId(0)); ++i) {
+            least = std::min(least, g.bendSpan(PathId(0), i).radius);
+            most = std::max(most, g.bendSpan(PathId(0), i).radius);
+        }
+        std::printf("    a circle of %.0f m: %u pieces, %.2f to %.2f m\n", R, g.bendCount(PathId(0)), least, most);
+        CHECK(least >= 0.97 * R && most <= 1.03 * R);
+        CHECK(roads::lanes::findKinks(g.points.data(), g.along.data(), g.points.size()).empty());
+    }
+}
+
+TEST_CASE(lane_graph_bends_a_straight_line_with_jitter_is_straight) {
+    // 200 m drawn a metre at a time, each segment's heading off by up to 0.2 degrees either way (a fixed pattern): one
+    // straight piece, and no kink.
+    const Real jitter = 0.2 * 3.14159265358979 / 180;
+    const Real pattern[] = {1, -1, 0.5, -0.3, 0.9, -0.8, 0.1, -1, 1, 0.2};
+    std::vector<Vec2> pts = {Vec2(0, 0)};
+    for (int i = 0; i < 200; ++i) {
+        const Real h = jitter * pattern[i % 10];
+        pts.push_back(pts.back() + Vec2(std::cos(h), std::sin(h)));
+    }
+    const LaneGraph g = oneLane(pts);
+    CHECK(g.bendCount(PathId(0)) == 1u);
+    CHECK(g.bendSpan(PathId(0), 0).radius == kNoBend);
+    CHECK(roads::lanes::findKinks(g.points.data(), g.along.data(), g.points.size()).empty());
+}
+
+TEST_CASE(lane_graph_bends_a_corner_reads_its_radius_from_where_it_begins) {
+    // 30 m straight, a 90-degree corner of radius 8 m (12.6 m round), 30 m straight; points a metre apart.
+    constexpr Real kR = 8, kIn = 30;
+    const Real arc = kR * 3.14159265358979 / 2;
+    const LaneGraph g = oneLane(drawLine([&](Real s) { return s > kIn && s < kIn + arc ? 1 / kR : 0.0; },
+                                         kIn + arc + 30, {1.0}));
+    const BendSpan t = g.tightestBend(PathId(0));
+    std::printf("    the corner: tightest %.2f m from %.1f to %.1f m (the arc runs %.1f to %.1f m)\n", t.radius, t.from, t.to,
+                kIn, kIn + arc);
+    CHECK(t.radius >= 0.97 * kR && t.radius <= 1.03 * kR);
+    CHECK(t.from <= kIn + 1 && t.from >= kIn - 3);      // reached at its radius from where it begins (a metre's reading)
+    CHECK(t.to >= kIn + arc - 1 && t.to <= kIn + arc + 3);
+    CHECK(g.radiusAt(PathId(0), kIn + arc / 2) <= 1.03 * kR);
+    CHECK(g.radiusAt(PathId(0), 10) == kNoBend);           // the straights either side are straight
+    CHECK(g.radiusAt(PathId(0), kIn + arc + 20) == kNoBend);
+    CHECK(roads::lanes::findKinks(g.points.data(), g.along.data(), g.points.size()).empty());
+}
+
+TEST_CASE(lane_graph_bends_a_spiral_tightens_along_it) {
+    // A spiral whose curvature grows evenly, s / 2000 per metre (a radius of 2000 / s): the profile tightens along it,
+    // and reads each place no gentler than it is and within a fifth of it (a piece is read at its tightest).
+    const LaneGraph g = oneLane(drawLine([](Real s) { return s / 2000; }, 100, kUneven));
+    Real before = kNoBend;
+    for (uint32_t i = 0; i < g.bendCount(PathId(0)); ++i) {
+        CHECK(g.bendSpan(PathId(0), i).radius <= before);
+        before = g.bendSpan(PathId(0), i).radius;
+    }
+    CHECK(g.bendCount(PathId(0)) >= 5u);
+    for (const Real s : {30.0, 50.0, 90.0}) {
+        const Real r = g.radiusAt(PathId(0), s), truth = 2000 / s;
+        std::printf("    the spiral at %.0f m: %.1f m (it is %.1f m there)\n", s, r, truth);
+        CHECK(r <= 1.03 * truth && r >= 0.8 * truth);
+    }
+}
+
+TEST_CASE(lane_graph_bends_a_kink_is_a_short_bend_and_reported) {
+    // A straight 100 m line, a metre between points, with the heading jumping at 50 m. Five degrees: a bend of about
+    // 130 m there and straight away from it, and one kink of 5 degrees at 50 m. Two degrees: a gentle bend (about 800 m)
+    // and no kink (under kKinkDegrees).
+    for (const Real degrees : {5.0, 2.0}) {
+        const Real jump = degrees * 3.14159265358979 / 180;
+        std::vector<Vec2> pts;
+        for (int i = 0; i <= 100; ++i) {
+            const Real h = i > 50 ? jump : 0;
+            pts.push_back(i == 0 ? Vec2(0, 0) : pts.back() + Vec2(std::cos(h), std::sin(h)));
+        }
+        const LaneGraph g = oneLane(pts);
+        const BendSpan t = g.tightestBend(PathId(0));
+        const std::vector<roads::lanes::Kink> kinks = roads::lanes::findKinks(g.points.data(), g.along.data(), g.points.size());
+        std::printf("    a %.0f-degree kink: tightest %.1f m from %.1f to %.1f m; %zu kinks found\n", degrees, t.radius, t.from,
+                    t.to, kinks.size());
+        CHECK(t.from <= 50 && t.to >= 50);
+        CHECK(g.radiusAt(PathId(0), 10) == kNoBend && g.radiusAt(PathId(0), 90) == kNoBend);
+        if (degrees == 5.0) {
+            CHECK(t.radius > 100 && t.radius < 160);
+            CHECK(kinks.size() == 1u);
+            CHECK(!kinks.empty() && std::fabs(kinks[0].along - 50) < 1e-9 && std::fabs(kinks[0].degrees - 5) < 1e-6);
+        } else {
+            CHECK(t.radius > 600 && t.radius < kNoBend);
+            CHECK(kinks.empty());
+        }
+    }
+}
+
+TEST_CASE(lane_graph_bends_read_through_the_graph) {
+    // The readers: a path with a profile of its own reads it piece by piece; a path with none reads as one stretch at
+    // its tightest radius; an unknown path has none.
+    const LaneGraph g = makeCrossroads();
+    CHECK(g.bendCount(PathId(0)) == 3u);
+    const BendSpan b = g.bendSpan(PathId(0), 1);
+    CHECK(b.from == 10 && b.to == 20 && b.radius == 50);
+    CHECK(g.bendSpan(PathId(0), 2).to == g.paths[0].length);
+    CHECK(g.radiusAt(PathId(0), 5) == kNoBend && g.radiusAt(PathId(0), 15) == 50 && g.radiusAt(PathId(0), 25) == kNoBend);
+    CHECK(g.radiusAt(PathId(0), -3) == kNoBend && g.radiusAt(PathId(0), 99) == kNoBend);
+    CHECK(g.tightestBend(PathId(0)).from == 10);
+    const PathId turn(connectorId(0, 1));
+    CHECK(g.bendCount(turn) == 1u);
+    CHECK(g.bendSpan(turn, 0).radius == kFarRadius && g.bendSpan(turn, 0).to == g.paths[turn.index].length);
+    CHECK(g.radiusAt(turn, 1) == kFarRadius);
+    CHECK(g.bendCount(PathId(999)) == 0u && g.radiusAt(PathId(999), 0) == kNoBend);
+    // And the text dump shows each path's tightest and where.
+    CHECK(dumpPath(g, PathId(0)).find("  bends: the tightest 50.0 m, from 10.0 to 20.0 m along; pieces: 0.0 m no bend, "
+                                      "10.0 m 50.0 m, 20.0 m no bend\n") != std::string::npos);
 }
 
 TEST_CASE(lane_graph_refuses_a_bad_file) {

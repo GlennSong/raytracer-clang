@@ -13,9 +13,10 @@ namespace engine {
 namespace {
 
 // The section's magic and the version this build writes and reads (2: junctions list their arriving and leaving lanes;
-// 3: each path lists its crossing points; 4: a regulation covers a stretch, from and to, issue #240).
+// 3: each path lists its crossing points; 4: a regulation covers a stretch, from and to, issue #240; 5: each path's bend
+// profile, issue #281).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 4;
+constexpr uint32_t kVersion = 5;
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
 // A closed outline (a junction's box, a crosswalk) has at least this many corners; a track's line two points.
@@ -126,6 +127,7 @@ void putItem(BinWriter& w, const Path& p) {
     w.put(p.length);
     w.put(p.width);
     w.put(p.tightestRadius);
+    putItem(w, p.bends);
     w.put(p.speedLimit);
     putItem(w, p.section);
     w.put(p.indexInSection);
@@ -182,6 +184,10 @@ void putItem(BinWriter& w, const CarSpace& s) {
     w.put(s.from);
     w.put(s.to);
 }
+void putItem(BinWriter& w, const BendPiece& b) {
+    w.put(b.from);
+    w.put(b.radius);
+}
 
 bool getItem(BinReader& r, std::string& s) { return r.getStr(s); }
 bool getItem(BinReader& r, Vec2& v) { return r.get(v.x) && r.get(v.y); }
@@ -204,7 +210,7 @@ bool getItem(BinReader& r, LaneLine& l) {
 bool getItem(BinReader& r, Path& p) {
     return getEnum(r, p.kind) && getEnum(r, p.turn) && r.get(p.laneTags) && r.get(p.vehicleTags) &&
            getItem(r, p.curve) && r.get(p.length) && r.get(p.width) && r.get(p.tightestRadius) &&
-           r.get(p.speedLimit) && getItem(r, p.section) && r.get(p.indexInSection) && getItem(r, p.junction) &&
+           getItem(r, p.bends) && r.get(p.speedLimit) && getItem(r, p.section) && r.get(p.indexInSection) && getItem(r, p.junction) &&
            getItem(r, p.from) && r.get(p.waitInsideAt) && getItem(r, p.next) && getItem(r, p.regulations) &&
            getItem(r, p.crossings);
 }
@@ -223,6 +229,7 @@ bool getItem(BinReader& r, Regulation& x) {
     return r.get(x.kind) && getItem(r, x.path) && r.get(x.from) && r.get(x.to) && r.get(x.value);
 }
 bool getItem(BinReader& r, CarSpace& s) { return getItem(r, s.lane) && r.get(s.from) && r.get(s.to); }
+bool getItem(BinReader& r, BendPiece& b) { return r.get(b.from) && r.get(b.radius); }
 
 // The fewest bytes one element of a list takes on disk (a default one, written): how a count read from a damaged file
 // is caught before it asks for more memory than the file could fill.
@@ -332,6 +339,77 @@ Range LaneGraph::addPlanPoints(const std::vector<Vec2>& pts) {
     return r;
 }
 
+Range LaneGraph::addBends(const std::vector<BendPiece>& pieces) {
+    Range r;
+    r.first = static_cast<uint32_t>(bendPieces.size());
+    r.count = static_cast<uint32_t>(pieces.size());
+    bendPieces.insert(bendPieces.end(), pieces.begin(), pieces.end());
+    return r;
+}
+
+namespace {
+// A path's own bend pieces, or an empty range for an unknown path or one whose range runs off the shared array (then
+// it reads as the whole path at its tightest radius).
+Range bendsOf(const LaneGraph& g, PathId path) {
+    if (!path.valid() || path.index >= g.paths.size()) return Range{};
+    const Range r = g.paths[path.index].bends;
+    return inRange(r, g.bendPieces.size()) ? r : Range{};
+}
+}  // namespace
+
+uint32_t LaneGraph::bendCount(PathId path) const {
+    if (!path.valid() || path.index >= paths.size()) return 0;
+    const Range r = bendsOf(*this, path);
+    return r.count > 0 ? r.count : 1;
+}
+
+BendSpan LaneGraph::bendSpan(PathId path, uint32_t i) const {
+    BendSpan s;
+    if (!path.valid() || path.index >= paths.size()) return s;
+    const Path& p = paths[path.index];
+    const Range r = bendsOf(*this, path);
+    if (r.count == 0) {
+        if (i == 0) {
+            s.to = p.length;
+            s.radius = p.tightestRadius;
+        } else {
+            s.from = s.to = p.length;
+        }
+        return s;
+    }
+    if (i >= r.count) {
+        s.from = s.to = p.length;
+        return s;
+    }
+    const BendPiece& b = bendPieces[r.first + i];
+    s.from = b.from;
+    s.to = i + 1 < r.count ? bendPieces[r.first + i + 1].from : p.length;
+    s.radius = b.radius;
+    return s;
+}
+
+Real LaneGraph::radiusAt(PathId path, Real distanceAlong) const {
+    if (!path.valid() || path.index >= paths.size()) return kNoBend;
+    const Range r = bendsOf(*this, path);
+    if (r.count == 0) return paths[path.index].tightestRadius;
+    // the last piece that begins at or before the place (the first when the place is before every piece)
+    const BendPiece* first = bendPieces.data() + r.first;
+    const BendPiece* last = first + r.count;
+    const BendPiece* after = std::upper_bound(first, last, distanceAlong,
+                                              [](Real d, const BendPiece& b) { return d < b.from; });
+    return after == first ? first->radius : (after - 1)->radius;
+}
+
+BendSpan LaneGraph::tightestBend(PathId path) const {
+    BendSpan best;
+    const uint32_t n = bendCount(path);
+    for (uint32_t i = 0; i < n; ++i) {
+        const BendSpan s = bendSpan(path, i);
+        if (i == 0 || s.radius < best.radius) best = s;
+    }
+    return best;
+}
+
 void indexCrossings(LaneGraph& g) {
     // junction by junction, those on no junction (kNoIndex) last; then (a, other side, other, aFrom), and the rest of
     // the record so equal keys still sort one way
@@ -387,7 +465,7 @@ bool sameVec2s(const std::vector<Vec2>& a, const std::vector<Vec2>& b) {
 bool operator==(const Path& a, const Path& b) {
     return a.kind == b.kind && a.turn == b.turn && a.laneTags == b.laneTags && a.vehicleTags == b.vehicleTags &&
            a.curve == b.curve && a.length == b.length && a.width == b.width && a.tightestRadius == b.tightestRadius &&
-           a.speedLimit == b.speedLimit && a.section == b.section && a.indexInSection == b.indexInSection &&
+           a.bends == b.bends && a.speedLimit == b.speedLimit && a.section == b.section && a.indexInSection == b.indexInSection &&
            a.junction == b.junction && a.from == b.from && a.waitInsideAt == b.waitInsideAt && a.next == b.next &&
            a.regulations == b.regulations && a.crossings == b.crossings;
 }
@@ -411,6 +489,13 @@ bool operator==(const Regulation& a, const Regulation& b) {
     return a.kind == b.kind && a.path == b.path && a.from == b.from && a.to == b.to && a.value == b.value;
 }
 bool operator==(const CarSpace& a, const CarSpace& b) { return a.lane == b.lane && a.from == b.from && a.to == b.to; }
+namespace {
+bool sameBends(const std::vector<BendPiece>& a, const std::vector<BendPiece>& b) {
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](const BendPiece& x, const BendPiece& y) {
+               return x.from == y.from && x.radius == y.radius;
+           });
+}
+}  // namespace
 bool operator==(const LaneGraph& a, const LaneGraph& b) {
     return a.laneTagNames == b.laneTagNames && a.vehicleTagNames == b.vehicleTagNames &&
            a.regulationKindNames == b.regulationKindNames && a.controlNames == b.controlNames &&
@@ -420,7 +505,8 @@ bool operator==(const LaneGraph& a, const LaneGraph& b) {
            sameVec2s(a.points, b.points) && a.along == b.along && a.heights == b.heights &&
            a.nextPaths == b.nextPaths && a.sectionLanes == b.sectionLanes && a.laneLines == b.laneLines &&
            a.junctionConnectors == b.junctionConnectors && a.junctionLanes == b.junctionLanes &&
-           a.pathCrossings == b.pathCrossings && sameVec2s(a.planPoints, b.planPoints);
+           a.pathCrossings == b.pathCrossings && sameVec2s(a.planPoints, b.planPoints) &&
+           sameBends(a.bendPieces, b.bendPieces);
 }
 
 // ---- validate ---------------------------------------------------------------------------------------------------
@@ -474,6 +560,24 @@ std::vector<std::string> validate(const LaneGraph& g) {
         if (!(p.length > 0) || std::isinf(p.length)) out.push_back(fmt("%s: length %.2f m", who.c_str(), p.length));
         if (!(p.width > 0) || std::isinf(p.width)) out.push_back(fmt("%s: width %.2f m", who.c_str(), p.width));
         if (!(p.tightestRadius > 0)) out.push_back(fmt("%s: tightest radius %.2f m", who.c_str(), p.tightestRadius));
+        // Its bend profile: pieces from 0, rising, each on the path, each radius above zero (kNoBend for straight).
+        if (!inRange(p.bends, g.bendPieces.size())) {
+            out.push_back(fmt("%s: its bend profile (%u to %u) is out of range (%zu pieces)", who.c_str(), p.bends.first,
+                              p.bends.end(), g.bendPieces.size()));
+        } else if (p.bends.count > 0) {
+            if (g.bendPieces[p.bends.first].from != 0)
+                out.push_back(fmt("%s: its bend profile starts %.2f m along, not at 0", who.c_str(),
+                                  g.bendPieces[p.bends.first].from));
+            for (uint32_t k = p.bends.first; k < p.bends.end(); ++k) {
+                const BendPiece& b = g.bendPieces[k];
+                if (!(b.radius > 0)) out.push_back(fmt("%s: bend piece %u has radius %.2f m", who.c_str(), k - p.bends.first, b.radius));
+                if (k > p.bends.first && !(b.from > g.bendPieces[k - 1].from))
+                    out.push_back(fmt("%s: its bend pieces do not rise (piece %u at %.2f m)", who.c_str(), k - p.bends.first, b.from));
+                if (!(b.from < p.length + kLengthTolerance))
+                    out.push_back(fmt("%s: bend piece %u begins at %.2f m, past its end (%.2f m)", who.c_str(),
+                                      k - p.bends.first, b.from, p.length));
+            }
+        }
         if (!(p.speedLimit >= 0) || std::isinf(p.speedLimit))
             out.push_back(fmt("%s: speed limit %.2f m/s", who.c_str(), p.speedLimit));
 
@@ -1082,6 +1186,17 @@ std::string dumpPath(const LaneGraph& g, PathId id) {
     for (std::size_t k = p.curve.first; k < curveEnd; ++k)
         out += fmt(" (%.1f, %.1f, %.1f)", g.points[k].x, g.points[k].y, g.heights[k]);
     out += "\n";
+    // Its bend profile (issue #281): the tightest stretch and where, then every piece (where it begins, its radius).
+    if (p.bends.count == 0) {
+        out += "  bends: none measured; the whole path at its tightest radius (" + metres(p.tightestRadius) + ")\n";
+    } else {
+        const BendSpan t = g.tightestBend(id);
+        out += fmt("  bends: the tightest %s, from %.1f to %.1f m along; pieces:", metres(t.radius).c_str(), t.from, t.to);
+        for (uint32_t k = p.bends.first; k < safeEnd(p.bends, g.bendPieces.size()); ++k)
+            out += fmt("%s %.1f m %s", k == p.bends.first ? "" : ",", g.bendPieces[k].from,
+                       metres(g.bendPieces[k].radius).c_str());
+        out += "\n";
+    }
     for (uint32_t k = p.regulations.first; k < safeEnd(p.regulations, g.regulations.size()); ++k) {
         const Regulation& r = g.regulations[k];
         out += r.to == r.from ? fmt("  regulation %u: %s at %.1f m, value %.1f\n", k,
@@ -1217,6 +1332,7 @@ void putLaneGraph(bundle::BinWriter& w, const LaneGraph& g) {
     putList(w, g.junctionLanes);
     putList(w, g.pathCrossings);
     putList(w, g.planPoints);
+    putList(w, g.bendPieces);
 }
 
 bool getLaneGraph(bundle::BinReader& r, LaneGraph& g, std::string* err) {
@@ -1246,7 +1362,7 @@ bool getLaneGraph(bundle::BinReader& r, LaneGraph& g, std::string* err) {
                     getList(r, in.junctionConnectors, "junction connectors", err) &&
                     getList(r, in.junctionLanes, "junction lanes", err) &&
                     getList(r, in.pathCrossings, "path crossing points", err) &&
-                    getList(r, in.planPoints, "plan points", err);
+                    getList(r, in.planPoints, "plan points", err) && getList(r, in.bendPieces, "bend pieces", err);
     if (!ok) return false;
     if (r.remaining() != 0) {
         if (err) *err = fmt("lane graph: %zu stray bytes after the last list", r.remaining());

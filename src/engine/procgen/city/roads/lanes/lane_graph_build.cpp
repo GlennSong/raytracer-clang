@@ -189,21 +189,86 @@ bool unite(std::vector<int>& parent, int a, int b) {
     return true;
 }
 
-// THE TIGHTEST BEND of a centre line: the smallest radius of the circle through each three consecutive points (points
-// closer than kMinBendChord to the one kept before are passed over), radii of kStraightEnoughRadius and more read as
-// straight. kNoBend when nothing bends.
-double tightestRadius(const std::vector<Vec2>& pts) {
-    std::vector<Vec2> q;
-    for (const Vec2& p : pts)
-        if (q.empty() || distance(q.back(), p) >= kMinBendChord) q.push_back(p);
-    if (q.size() >= 2 && distance(q.back(), pts.back()) > 0) q.back() = pts.back();
-    double best = kNoBend;
-    for (std::size_t k = 1; k + 1 < q.size(); ++k) {
-        const double r = circleRadius(q[k - 1], q[k], q[k + 1]);
-        if (r < kStraightEnoughRadius) best = std::min(best, r);
+// ---- bends, measured as a vehicle feels them (issue #281, lane_graph_build.h measureBends) -------------------------
+
+// A CENTRE LINE AS A BEND IS READ FROM IT: the points closer than kMinBendChord to the one kept before passed over (the
+// last point kept in place of a near one), each kept point with its distance along the line (from the first point's).
+struct ThinLine {
+    std::vector<Vec2> xy;
+    std::vector<double> s;
+};
+ThinLine thinLine(const Vec2* xy, const double* along, std::size_t n) {
+    ThinLine t;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (!t.xy.empty() && distance(t.xy.back(), xy[i]) < kMinBendChord) continue;
+        t.xy.push_back(xy[i]);
+        t.s.push_back(along[i] - along[0]);
     }
-    return best;
+    if (t.xy.size() >= 2 && distance(t.xy.back(), xy[n - 1]) > 0) {
+        t.xy.back() = xy[n - 1];
+        t.s.back() = along[n - 1] - along[0];
+    }
+    return t;
 }
+// How far the heading turns at kept point i (1 .. size - 2): radians, plus one way round, minus the other.
+double turnAt(const ThinLine& t, std::size_t i) {
+    const Vec2 in = t.xy[i] - t.xy[i - 1], out = t.xy[i + 1] - t.xy[i];
+    return std::atan2(cross(in, out), dot(in, out));
+}
+// A point's share of the line, before it and after it: halfway back to the point before and halfway on to the point
+// after, each no more than kBendSpread (metres).
+double shareBefore(const ThinLine& t, std::size_t i) { return std::min(0.5 * (t.s[i] - t.s[i - 1]), kBendSpread); }
+double shareAfter(const ThinLine& t, std::size_t i) { return std::min(0.5 * (t.s[i + 1] - t.s[i]), kBendSpread); }
+
+// A point that turns less than this (radians) is rounding in a straight line's points: it turns nowhere.
+constexpr double kNoTurn = 1e-12;
+
+// THE LINE'S TURNING SUMMED FROM ITS START, each point's turn spread evenly over its share of the line: knots where the
+// sum is read, rising evenly across each point's share and level between them. Level before the first knot and after
+// the last. Each point's share (from, to) and turn are kept too.
+struct Turning {
+    std::vector<double> x, total;
+    std::vector<double> from, to, turn;   // per point that can turn: its share of the line, and its turn
+    double at(double s) const {
+        if (x.empty() || s <= x.front()) return 0;
+        if (s >= x.back()) return total.back();
+        const std::size_t k = static_cast<std::size_t>(std::upper_bound(x.begin(), x.end(), s) - x.begin());
+        const double span = x[k] - x[k - 1];
+        return span > 0 ? total[k - 1] + (total[k] - total[k - 1]) * (s - x[k - 1]) / span : total[k];
+    }
+    // The part of [a, b] over which the line turns: from where the first point turning there begins its share to where
+    // the last one's ends, clipped to [a, b]. False when it turns nowhere there.
+    bool turnsWithin(double a, double b, double& lo, double& hi) const {
+        bool any = false;
+        std::size_t k = static_cast<std::size_t>(std::upper_bound(to.begin(), to.end(), a) - to.begin());
+        for (; k < turn.size() && from[k] < b; ++k) {
+            if (!(std::fabs(turn[k]) > kNoTurn)) continue;
+            if (!any) lo = std::max(a, from[k]);
+            any = true;
+            hi = std::min(b, to[k]);
+        }
+        return any;
+    }
+};
+Turning turningOf(const ThinLine& t) {
+    Turning T;
+    double sum = 0;
+    for (std::size_t i = 1; i + 1 < t.xy.size(); ++i) {
+        const double turn = turnAt(t, i);
+        T.from.push_back(t.s[i] - shareBefore(t, i));
+        T.to.push_back(t.s[i] + shareAfter(t, i));
+        T.turn.push_back(turn);
+        T.x.push_back(T.from.back());
+        T.total.push_back(sum);
+        sum += turn;
+        T.x.push_back(T.to.back());
+        T.total.push_back(sum);
+    }
+    return T;
+}
+
+// A cut this close to a cell's edge is on the edge (metres): a stretch that only touches a cell does not cover it.
+constexpr double kCellEdgeSlack = 1e-9;
 
 // Where an outline's edge crosses the segment a -> b, as a fraction along it (the first crossing), or -1.
 double outlineCrossing(const std::vector<Vec2>& outline, const Vec2& a, const Vec2& b) {
@@ -451,6 +516,118 @@ void carryControlPlan(const RoadLabGraph& g, const std::string& unplannedControl
 }
 
 }  // namespace
+
+std::vector<BendPiece> measureBends(const Vec2* xy, const double* along, std::size_t count) {
+    std::vector<BendPiece> out;
+    const double length = count >= 2 ? along[count - 1] - along[0] : 0.0;
+    const ThinLine line = count >= 2 ? thinLine(xy, along, count) : ThinLine();
+    if (!(length > 0) || line.xy.size() < 3) return {BendPiece()};
+    const Turning turning = turningOf(line);
+
+    // The line cut into cells kBendSampleStep long (at most), read at every cell edge; each reading laid over the cells
+    // its stretch covers, the tightest kept.
+    const std::size_t cells = std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(length / kBendSampleStep)));
+    const double step = length / static_cast<double>(cells);
+    std::vector<double> cellRadius(cells, kNoBend);
+    for (std::size_t k = 0; k <= cells; ++k) {
+        const double s = step * static_cast<double>(k);
+        double radius = kNoBend, from = 0, to = 0;
+        for (const double wanted : kBendMeasureLengths) {
+            const double span = std::min(wanted, length);
+            const double mid = std::clamp(s, 0.5 * span, length - 0.5 * span);
+            from = mid - 0.5 * span;
+            to = mid + 0.5 * span;
+            const double turn = std::fabs(turning.at(to) - turning.at(from));
+            radius = turn > 0 ? span / turn : kNoBend;
+            // long enough when a curve of this radius strays no more than kBendRoom from its chord across it (a radius of
+            // kNoBend never is), or when the stretch is the whole line
+            if (span >= 2.0 * std::sqrt(2.0 * kBendRoom * radius) || span >= length) break;
+        }
+        if (!(radius < kStraightEnoughRadius)) continue;
+        // laid over the part of the stretch where the line turns (a stretch that is straight but for its far end does
+        // not make its straight part a bend)
+        double lo = from, hi = to;
+        if (!turning.turnsWithin(from, to, lo, hi)) continue;
+        const std::size_t first = std::min(cells - 1, static_cast<std::size_t>(std::floor(lo / step + kCellEdgeSlack)));
+        const std::size_t last =
+            std::min(cells, std::max(first + 1, static_cast<std::size_t>(std::ceil(hi / step - kCellEdgeSlack))));
+        for (std::size_t c = first; c < last; ++c) cellRadius[c] = std::min(cellRadius[c], radius);
+    }
+
+    // Neighbouring cells of near enough the same radius (or both straight) make one piece, at the tightest of them.
+    double widest = kNoBend;
+    for (std::size_t c = 0; c < cells; ++c) {
+        const double r = cellRadius[c];
+        if (!out.empty()) {
+            BendPiece& p = out.back();
+            const bool bothStraight = r == kNoBend && p.radius == kNoBend;
+            const bool alike = r != kNoBend && p.radius != kNoBend &&
+                               std::max(widest, r) <= std::min(p.radius, r) * (1.0 + kBendPieceShare);
+            if (bothStraight || alike) {
+                p.radius = std::min(p.radius, r);
+                widest = std::max(widest, r);
+                continue;
+            }
+        }
+        BendPiece piece;
+        piece.from = step * static_cast<double>(c);
+        piece.radius = r;
+        out.push_back(piece);
+        widest = r;
+    }
+    return out;
+}
+
+std::vector<Kink> findKinks(const Vec2* xy, const double* along, std::size_t count) {
+    std::vector<Kink> out;
+    if (count < 3) return out;
+    const ThinLine line = thinLine(xy, along, count);
+    const std::size_t n = line.xy.size();
+    if (n < 3) return out;
+    std::vector<double> turn(n, 0.0), before(n, 0.0), after(n, 0.0);
+    for (std::size_t i = 1; i + 1 < n; ++i) {
+        turn[i] = turnAt(line, i);
+        before[i] = shareBefore(line, i);
+        after[i] = shareAfter(line, i);
+    }
+    // Two looks. The first judges every point against its neighbours; the second judges the points the first found
+    // again, leaving out the neighbours it found, so a point beside a kink is not blamed for the kink's turn.
+    std::vector<uint8_t> kinked(n, 0);
+    std::vector<double> jumps(n, 0.0);
+    for (int look = 0; look < 2; ++look) {
+        // How sharply the line bends at point j (its turn over its share), when j turns (not an end) and is no kink.
+        auto bendAt = [&](std::size_t j, double& curvature) {
+            if (j < 1 || j + 1 >= n || kinked[j] || !(before[j] + after[j] > 0)) return false;
+            curvature = turn[j] / (before[j] + after[j]);
+            return true;
+        };
+        std::vector<uint8_t> found(n, 0);
+        for (std::size_t i = 1; i + 1 < n; ++i) {
+            if (look == 1 && !kinked[i]) continue;
+            // What a smooth line turns at point i: the bend just before it over its share before, and the bend just
+            // after it over its share after, each read at the neighbouring point. Round a circle that is exactly the
+            // point's turn. A side with no such point (the line's end, or a kink) could run straight or carry on the
+            // other side's bend: the point is given the benefit of the doubt, the smaller jump of the two.
+            double bendBefore = 0, bendAfter = 0;
+            const bool hasBefore = bendAt(i - 1, bendBefore), hasAfter = bendAt(i + 1, bendAfter);
+            double jump = std::fabs(turn[i] - bendBefore * before[i] - bendAfter * after[i]);
+            if (!hasBefore) jump = std::min(jump, std::fabs(turn[i] - bendAfter * (before[i] + after[i])));
+            if (!hasAfter) jump = std::min(jump, std::fabs(turn[i] - bendBefore * (before[i] + after[i])));
+            jumps[i] = jump * kDegreesPerRadian;
+            found[i] = jumps[i] > kKinkDegrees;
+        }
+        kinked = found;
+    }
+    for (std::size_t i = 1; i + 1 < n; ++i) {
+        if (!kinked[i]) continue;
+        Kink k;
+        k.along = line.s[i];
+        k.degrees = jumps[i];
+        k.at = line.xy[i];
+        out.push_back(k);
+    }
+    return out;
+}
 
 LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
     const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
@@ -1227,7 +1404,7 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
                 p.curve = G.addCurve(pts, z);
                 p.length = G.along[p.curve.end() - 1];
                 p.width = l.w;
-                p.tightestRadius = tightestRadius(pts);
+                p.tightestRadius = kNoBend;   // measured with its bend profile, once every path is made
                 p.speedLimit = 0;   // no posted limit: limits come with the control plan
                 p.section = sid;
                 p.indexInSection = static_cast<uint32_t>(k);
@@ -1443,6 +1620,59 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
         G.nextPaths.insert(G.nextPaths.end(), next[p].begin(), next[p].end());
         G.paths[p].next.count = static_cast<uint32_t>(next[p].size());
     }
+
+    // ---- every path's bend profile, as a vehicle feels it, and the kinks a driver would feel (#281) -----------------
+    // A lane's tightest radius is its profile's tightest piece; a connector keeps the arc it was designed with. A path
+    // whose profile is one piece at its tightest radius stores none (the readers take the whole path at that radius).
+    // Kinks are reported with their place and kept as drawn: they are the road builder's to fix.
+    for (uint32_t p = 0; p < G.paths.size(); ++p) {
+        Path& path = G.paths[p];
+        const Vec2* xy = G.points.data() + path.curve.first;
+        const double* s = G.along.data() + path.curve.first;
+        const std::vector<BendPiece> pieces = measureBends(xy, s, path.curve.count);
+        double tightest = kNoBend;
+        for (const BendPiece& b : pieces) tightest = std::min(tightest, b.radius);
+        if (path.kind == PathKind::Lane) path.tightestRadius = tightest;
+        const bool plain = pieces.size() == 1 && pieces[0].radius == path.tightestRadius;
+        path.bends = plain ? Range{static_cast<uint32_t>(G.bendPieces.size()), 0} : G.addBends(pieces);
+        const bool lane = path.kind == PathKind::Lane;
+        for (const Kink& k : findKinks(xy, s, path.curve.count)) {
+            if (lane) {
+                ++out.laneKinks;
+                out.worstLaneKink = std::max(out.worstLaneKink, k.degrees);
+                const int li = p < out.sources.size() ? out.sources[p].lane : -1;
+                addProblem(out.problems, "kink: the line of lane %s (lane path %u) jumps %.1f degrees at one point, %.1f m "
+                                         "along it at (%.1f, %.1f), beyond the bend around it (more than %.0f): a jerk a "
+                                         "driver would feel; kept as drawn, and the bend profile slows for it",
+                           li >= 0 ? laneAt(li).id.c_str() : "?", p, k.degrees, k.along, k.at.x, k.at.y, kKinkDegrees);
+            } else {
+                ++out.connectorKinks;
+                out.worstConnectorKink = std::max(out.worstConnectorKink, k.degrees);
+                addProblem(out.problems, "kink: connector %u (junction %u) jumps %.1f degrees at one point, %.1f m along "
+                                         "it at (%.1f, %.1f), beyond the bend around it (more than %.0f)",
+                           p, path.junction.index, k.degrees, k.along, k.at.x, k.at.y, kKinkDegrees);
+            }
+        }
+    }
+    // Where one path leads into the next, the heading may not jump either.
+    for (uint32_t p = 0; p < G.paths.size(); ++p) {
+        const Vec2 leaving = G.directionAt(PathId(p), G.paths[p].length);
+        for (uint32_t k = G.paths[p].next.first; k < G.paths[p].next.end(); ++k) {
+            const PathId n = G.nextPaths[k];
+            const double degrees =
+                std::acos(std::clamp(dot(leaving, G.directionAt(n, 0)), -1.0, 1.0)) * kDegreesPerRadian;
+            if (degrees <= kKinkDegrees) continue;
+            ++out.joinKinks;
+            out.worstJoinKink = std::max(out.worstJoinKink, degrees);
+            const Vec2 at = G.pointAt(n, 0);
+            addProblem(out.problems, "kink: %s %u leads into %s %u with its heading jumping %.1f degrees at (%.1f, %.1f) "
+                                     "(more than %.0f)",
+                       G.paths[p].kind == PathKind::Lane ? "lane" : "connector", p,
+                       G.paths[n.index].kind == PathKind::Lane ? "lane" : "connector", n.index, degrees, at.x, at.y,
+                       kKinkDegrees);
+        }
+    }
+    out.bendPieceBytes = G.bendPieces.size() * sizeof(BendPiece) + G.paths.size() * sizeof(Range);
 
     // ---- where the paths cross, join and split (the vehicles' widths, the builder's same-level figure) --------------
     CrossingOptions co;

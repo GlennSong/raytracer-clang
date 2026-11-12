@@ -84,6 +84,71 @@ constexpr double kCarryOnTrims[] = {1.0, 2.0, 4.0, 8.0};
 constexpr double kCarryOnTrimShare = 0.25;
 // Bends gentler than this radius count as straight when a path's tightest radius is measured (metres).
 constexpr double kStraightEnoughRadius = 1000.0;
+
+// HOW A BEND IS MEASURED: THE BEND A VEHICLE FEELS (issue #281). A lane line is a chain of points, and the heading turns
+// only where two pieces of the chain meet. Read from neighbouring points, a turn of a fraction of a degree between two
+// points a few centimetres apart is a hairpin; a driver never feels it, because a driver does not follow the drawn line
+// to the centimetre. So a bend is measured as a driver takes it:
+//   1. Each point's turn is spread evenly over its share of the line (halfway back to the point before, halfway on to
+//      the point after, each at most kBendSpread). Round a circle drawn with points up to a metre apart, at any
+//      spacing, this gives exactly one over its radius everywhere; a long straight segment carries no bend, so a sharp
+//      turn at its end stays sharp.
+//   2. The bend at a place is that turning averaged over a stretch centred there (shifted to fit inside the path, the
+//      whole path when it is shorter): the turn over the stretch, divided by its length, is one over the radius.
+//   3. How long the stretch is follows from the room a driver has: a driver whose line strays no more than kBendRoom
+//      from the drawn one takes a turn spread over any stretch with a sagitta that small as one smooth curve. A circle
+//      of radius R strays from its chord by kBendRoom across 2 * sqrt(2 * kBendRoom * R) of it, so the stretch used is
+//      the shortest (of kBendMeasureLengths) at least that long for the radius read over it: 2 m round a 5 m corner, 16
+//      m round a 300 m curve, and up to 28 m, where the radius read is kStraightEnoughRadius. A kink of angle a read
+//      this way is a curve of at least 8 * kBendRoom / a^2 (a little more, as the stretches come in steps): a quarter
+//      of a degree reads as straight, 2 degrees as about 800 m, 3 degrees about 300 m, 5 degrees about 130 m.
+//   4. Every radius is laid over the part of the stretch it was read over where the line turns, the tightest wherever
+//      readings overlap, so a bend is reached at its own radius from where it begins, and a straight is not slowed by
+//      a bend at the far end of a long stretch.
+// Why not one fixed length: a stretch long enough to read the lab's 0.4-degree jitter as straight (10 m) reads its 5 m
+// corners (a third of its connectors, under 8 m of arc) up to a quarter gentler than they are; one short enough for the
+// corners reads the jitter as a bend.
+//
+// The room (metres): a hand's width, well inside the room a lane leaves beside a car (a 3.7 m lane, a 1.9 m car). It is
+// the shape's, so it lives with the builder, not in a rule set: the bend profile is baked with the lane graph (design
+// 5.1, the shape layer) and every rule set reads the same one.
+constexpr double kBendRoom = 0.1;
+// How far either side of a point its turn is spread, at most (metres): half the builder's point spacing of about a
+// metre. Further apart, the segments between points are straight and carry no bend of their own.
+constexpr double kBendSpread = 0.5;
+// The stretches a bend is read over, shortest first, each sqrt(2) longer (metres): from a metre (a turn inside a metre is
+// taken over a metre) to the length that reads kStraightEnoughRadius (2 * sqrt(2 * kBendRoom * kStraightEnoughRadius),
+// 28.3 m): a turn that reads gentler than that over it is straight.
+constexpr double kBendMeasureLengths[] = {1.0, 1.414, 2.0, 2.828, 4.0, 5.657, 8.0, 11.31, 16.0, 22.63, 28.29};
+// Where along a path the bend is read: every this many metres (and at both ends). Each reading covers a stretch at least
+// a metre long, so nothing between two readings is missed.
+constexpr double kBendSampleStep = 1.0;
+// Neighbouring stretches whose radii differ by no more than this share are kept as one piece, at the tighter radius
+// (so a car slows at most 5% more than it need on a curve whose radius changes along it, and a path keeps a handful
+// of pieces).
+constexpr double kBendPieceShare = 0.1;
+// THE BEND PROFILE OF A CENTRE LINE (points and their distances along it, rising; at least two points): pieces from 0,
+// in order, each with the tightest radius read anywhere over it (kNoBend where it runs straight), neighbours of
+// different radii. Points closer together than kMinBendChord to the one kept before are passed over. A line with no
+// bend at all is one straight piece.
+std::vector<BendPiece> measureBends(const Vec2* xy, const double* along, std::size_t count);
+
+// A KINK: a place where a line's heading jumps by more than kKinkDegrees at one point, beyond what a smooth line turns
+// there (the bend just before the point over its share of the line before it, plus the bend just after it over its
+// share after, each read at the neighbouring point: round a circle that is exactly the point's turn; where a side has
+// no such point -- the line's end, or a neighbour that is itself a kink -- the smaller jump of that side running
+// straight or carrying on the other side's bend). The
+// builder reports each with its place and never smooths it away; the bend profile slows for it. Three degrees: read as
+// a bend (step 3 above) a 3-degree jump is a curve of about 300 m, which at a comfortable 2 m/s2 sideways holds a car to
+// about 55 mph, under a freeway's 65; a jump under about 2.6 degrees slows nobody below 65 mph.
+constexpr double kKinkDegrees = 3.0;
+struct Kink {
+    double along = 0;      // metres along the line
+    double degrees = 0;    // how far the heading jumps there, beyond the bend around it (a turn either way, unsigned)
+    Vec2 at;               // where, in plan
+};
+// The kinks of a centre line (as measureBends reads its points), in order along it.
+std::vector<Kink> findKinks(const Vec2* xy, const double* along, std::size_t count);
 // A lane point within this height of a junction's lane ends is at the junction's level (metres): a lane passing under
 // or over a junction is not in it.
 constexpr double kJunctionLevelReach = 2.0;
@@ -117,9 +182,10 @@ inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 // the old code built. (A change to the roads themselves
 // is the lanes tag's, kLanesBuildTag, which keys the roads; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
-constexpr uint32_t kLaneGraphBuildVersion = 3;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
+constexpr uint32_t kLaneGraphBuildVersion = 4;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
                                                  // 2: crossing points (#239, ADR-0400)
                                                  // 3: the control plan carried through: controls, signs, limits (#240)
+                                                 // 4: each path's bend profile, measured as a vehicle feels it (#281)
 
 // A VEHICLE TAG and how it turns: the tightest radius its path may have, and its width (metres). Passed in by the
 // caller (the engine does not know the driving model's vehicles); a connector tighter than the radius is closed to it.
@@ -224,6 +290,12 @@ struct LaneGraphBuild {
     uint32_t crossingsOutside = 0;         // places two roads' lanes cross at one level outside every junction
     uint32_t tidiedLanes = 0;              // lanes whose fold at a sharp corner was cut out
     uint32_t mergedSections = 0;           // short sections merged into a neighbour
+    // KINKS (issue #281, findKinks), each also a line in the problems with its place: in the builder's lane lines, in
+    // the connectors' lines, and where one path leads into the next with its heading jumping by more than
+    // kKinkDegrees. The largest jump of each, in degrees.
+    uint32_t laneKinks = 0, connectorKinks = 0, joinKinks = 0;
+    double worstLaneKink = 0, worstConnectorKink = 0, worstJoinKink = 0;
+    std::size_t bendPieceBytes = 0;        // the bend profiles' memory (the pieces and each path's range)
     uint32_t rampEnds = 0;                 // ramp ends on a street taken into the junction they run into
     uint32_t connectorsByTurn[kTurnCount] = {};   // connectors made, by Turn
     std::vector<uint32_t> closedTo;        // per vehicle tag name: connectors too tight for it (closed to it)

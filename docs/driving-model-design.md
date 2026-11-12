@@ -503,7 +503,11 @@ Sketch only; field names are for the implementer to settle.
 - crossing points (task B3, ADR-0400) come in three kinds, cross, join and **split** (two paths leaving one lane);
   each path lists the ones it is part of (`Path::crossings`, by where they begin along it), so a record stored once is
   found from either path; two paths that do not run through one junction (two junctions' connectors, or a connector and
-  a lane) are filed under no junction.
+  a lane) are filed under no junction;
+- each path has a **bend profile** (issue #281, ADR-0404): a short run of (distance along, radius) pieces in one shared
+  array, measured once by the builder as a vehicle feels the bend (section 8); `tightestRadius` is a lane's tightest
+  piece, and a connector's designed arc (what closes it to a vehicle that turns wider). A path with none bends at its
+  `tightestRadius` throughout.
 
 ```cpp
 struct LanePath {                 // a lane or a connector
@@ -986,6 +990,12 @@ One formula decides acceleration, and every stop answer goes through it.
   interval in the table above.
 - **Corner speed** is a top-speed answer from the path's tightest radius ahead and a comfortable sideways
   acceleration from the rule set, applied early enough to brake comfortably.
+  *As built* (#281, ADR-0404): each path carries a **bend profile** (pieces of its length, each with the radius a
+  vehicle feels there), measured by the lane graph builder from the line's shape over a stretch whose length follows
+  from how far a driver may stray from the drawn line (`kBendRoom`), so a kink between two points is not a hairpin.
+  `corner_speed` reads every stretch of the profiles on the way ahead out to the look-ahead (a connector as one stretch
+  at its tightest, the speed the junction step announces), and gives the speed the car may do now so that, holding it
+  until its next decision and then braking comfortably, it meets each stretch at or below that stretch's speed.
 - **Hills.** A class's speeding-up and braking are adjusted by the path's slope, from its own power and weight
   figures. A loaded truck is slow uphill because of its data, not a rule.
 

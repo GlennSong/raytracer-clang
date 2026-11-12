@@ -152,8 +152,9 @@ Real secondsToStopAt(Real distance, const Mover& m);
 Real secondsToCoverStoppingFirst(Real distance, Real toLine, const Mover& m);
 
 // THE SPEED A CAR WILL HOLD THROUGH A CONNECTOR: the lowest of its class's top speed, the connector's limit (its posted
-// one, or its road class's default: RoadRules::baseLimit) and the speed its tightest bend allows at
-// `comfortableSideAccel` (the rule set's comfortable_side_accel); never below kSlowestThrough.
+// one, or its road class's default: RoadRules::baseLimit) and the speed its tightest bend (LaneGraph::tightestBend, as
+// corner_speed holds a car through a connector) allows at `comfortableSideAccel` (the rule set's comfortable_side_accel);
+// never below kSlowestThrough.
 Real speedThrough(const engine::LaneGraph& roads, const RoadRules& roadRules, engine::PathId connector, Real topSpeed,
                   Real comfortableSideAccel);
 

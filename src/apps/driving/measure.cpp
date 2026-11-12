@@ -362,12 +362,12 @@ void OverLimitRow::notChecked(CarId car) { over_.erase(car); }
 void BendRow::note(CarId car, uint64_t tick, double seconds, double dt, double speed, double radius, double comfortable) {
     checkedCarSeconds += dt;
     const double side = sideAcceleration(speed, radius);
+    worstSideAccel = std::max(worstSideAccel, side);   // the worst seen, over the target or not (#281)
     if (!(side > comfortable + kSideAccelToleranceMps2)) {
         over_.erase(car);
         return;
     }
     carSeconds += dt;
-    worstSideAccel = std::max(worstSideAccel, side);
     std::map<CarId, Spell>::iterator it = over_.find(car);
     if (it == over_.end()) {
         Spell s;
@@ -834,9 +834,12 @@ void Measurements::lookAtCar(const Driving& d, const Car& c, const Seen* before,
     }
     if (!checked) rows_.overOwnLimit.notChecked(c.id);
 
+    // The bend where the car's front is, from its path's bend profile (#281): the radius a driver feels there, as the
+    // fact corner_speed reads it, not the tightest anywhere on the path.
     const Number* comfortable = d.hasRules() ? d.ruleSet().findNumber(kNumberComfortableSideAccel) : nullptr;
-    if (comfortable && std::isfinite(path.tightestRadius) && path.tightestRadius > 0)
-        rows_.bends.note(c.id, tick, now, dt, c.speed, path.tightestRadius, comfortable->value);
+    const Real radius = roads->radiusAt(c.path, c.along);
+    if (comfortable && std::isfinite(radius) && radius > 0)
+        rows_.bends.note(c.id, tick, now, dt, c.speed, radius, comfortable->value);
     else
         rows_.bends.notChecked(c.id);
 }

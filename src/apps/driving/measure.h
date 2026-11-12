@@ -359,7 +359,8 @@ private:
     std::map<CarId, Spell> over_;
 };
 
-// ROUND A BEND TOO FAST: speed squared over the path's tightest radius above `comfortable` by more than
+// ROUND A BEND TOO FAST: speed squared over the bend's radius where the car's front is (its path's bend profile, issue
+// #281; Measurements reads it with LaneGraph::radiusAt) above `comfortable` by more than
 // kSideAccelToleranceMps2. One offender per spell, showing the worst moment of it.
 struct BendRow {
     double carSeconds = 0;

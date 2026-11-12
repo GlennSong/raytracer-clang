@@ -274,6 +274,50 @@ int main(int argc, char** argv) {
                             cp.conflicts, cp.lanesOffPlan, cp.signsWithNoLane, kinds.empty() ? "nothing" : kinds.c_str(),
                             cp.lanesPosted, cp.connectorsPosted);
         }
+        {
+            // THE BENDS BY ROAD CLASS (#281): each path's tightest measured bend (its bend profile's tightest piece), lanes
+            // by their section's class and connectors by the class of the lane they lead into, so a glance says whether
+            // the numbers look like the roads (a freeway ring in the hundreds of metres, a street corner a few metres).
+            struct Group { std::vector<double> radii; uint32_t bent = 0; double least = kNoBend; uint32_t leastPath = 0; double leastAt = 0; };
+            std::map<std::pair<int, std::string>, Group> groups;   // (lanes 0 / connectors 1, class) -> its paths
+            for (uint32_t p = 0; p < G.paths.size(); ++p) {
+                const Path& path = G.paths[p];
+                uint32_t lane = p;
+                if (path.kind == PathKind::Connector && path.next.count > 0) lane = G.nextPaths[path.next.first].index;
+                const SectionId sec = G.paths[lane].section;
+                const std::string cls = sec.valid() && G.sections[sec.index].roadClass < G.roadClassNames.size()
+                                            ? G.roadClassNames[G.sections[sec.index].roadClass] : std::string("?");
+                Group& gr = groups[{path.kind == PathKind::Lane ? 0 : 1, cls}];
+                const BendSpan t = G.tightestBend(PathId(p));
+                gr.radii.push_back(t.radius);
+                if (std::isfinite(t.radius)) ++gr.bent;
+                if (t.radius < gr.least) { gr.least = t.radius; gr.leastPath = p; gr.leastAt = t.from; }
+            }
+            auto radius = [](double r) {
+                if (!std::isfinite(r)) return std::string("no bend");
+                char b[32];
+                std::snprintf(b, sizeof b, "%.1f m", r);
+                return std::string(b);
+            };
+            std::printf("  bends by road class (each path's tightest measured bend; kinks: %u in lanes, the worst %.1f deg; %u in "
+                        "connectors, the worst %.1f deg; %u where paths join, the worst %.1f deg; bend profiles %zu pieces, "
+                        "%zu bytes):\n", lg.laneKinks, lg.worstLaneKink, lg.connectorKinks, lg.worstConnectorKink,
+                        lg.joinKinks, lg.worstJoinKink, G.bendPieces.size(), lg.bendPieceBytes);
+            std::printf("    %-28s %6s %6s %10s %12s %10s  %s\n", "paths", "count", "bent", "median", "lowest 10%", "minimum", "where the minimum is");
+            for (std::pair<const std::pair<int, std::string>, Group>& kv : groups) {
+                std::vector<double>& rs = kv.second.radii;
+                std::sort(rs.begin(), rs.end());
+                const double median = rs[rs.size() / 2], tenth = rs[rs.size() / 10];
+                const std::string who = (kv.first.first == 0 ? "lanes, " : "connectors into ") + kv.first.second;
+                char where[96] = "-";
+                if (std::isfinite(kv.second.least))
+                    std::snprintf(where, sizeof where, "%s %u from %.1f m along",
+                                  G.paths[kv.second.leastPath].kind == PathKind::Lane ? "lane" : "connector",
+                                  kv.second.leastPath, kv.second.leastAt);
+                std::printf("    %-28s %6zu %6u %10s %12s %10s  %s\n", who.c_str(), rs.size(), kv.second.bent, radius(median).c_str(),
+                            radius(tenth).c_str(), radius(kv.second.least).c_str(), where);
+            }
+        }
         const std::string dumpPath = outDir + "/lane_graph.txt", problemsPath = outDir + "/problems.txt", svgPath = outDir + "/lane_graph.svg";
         const std::string reachPath = outDir + "/reach.txt";
         { std::ofstream f(dumpPath); f << dumpText(G); if (!f) { std::fprintf(stderr, "lanes: cannot write %s\n", dumpPath.c_str()); return 1; } }

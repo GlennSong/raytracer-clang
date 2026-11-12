@@ -1907,13 +1907,48 @@ TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
     CHECK(lg.reachableShare >= 0.9);
     CHECK(lg.unjoined.empty());
     CHECK(lg.crossingsOutside == 0);
-    // every problem is a refusal with its place, a fold tidied, or a crossing point to look at (lane_graph_crossings.h)
+    // every problem is a refusal with its place, a fold tidied, a crossing point to look at (lane_graph_crossings.h), or a
+    // kink in a line with its place (#281: the road builder's to fix, reported, not smoothed)
     for (const std::string& p : lg.problems) {
         const bool known = p.find(" is refused, at (") != std::string::npos || p.find("; tidied (") != std::string::npos ||
-                           p.find(": refused: ") != std::string::npos || p.find("crossing points: ") == 0;
+                           p.find(": refused: ") != std::string::npos || p.find("crossing points: ") == 0 ||
+                           (p.find("kink: ") == 0 && p.find(" at (") != std::string::npos);
         if (!known) std::printf("      problem: %s\n", p.c_str());
         CHECK(known);
     }
+}
+
+// THE TRAFFIC LAB'S BENDS LOOK LIKE ITS ROADS (#281): every path's bend profile measured as a vehicle feels it. The
+// lanes of the class with the highest posted limit (the lab's freeway ring, about 290 m round) bend in the hundreds of
+// metres, not the 27.5 m the old point-to-point reading gave; each lane's tightest radius is its profile's tightest; a
+// profile is small; and every kink counted is listed in the problems with its place.
+TEST_CASE(lanes_the_traffic_lab_bends_look_like_its_roads) {
+    const LaneGraphBuild& lg = laneGraphOf("planned/traffic_lab_lanelab");
+    const LaneGraph& G = lg.graph;
+    double fastest = 0;
+    for (const Path& p : G.paths)
+        if (p.kind == PathKind::Lane) fastest = std::max(fastest, p.speedLimit);
+    std::vector<double> radii;
+    uint32_t mismatched = 0;
+    for (uint32_t i = 0; i < G.paths.size(); ++i) {
+        const Path& p = G.paths[i];
+        if (p.kind != PathKind::Lane) continue;
+        if (G.tightestBend(PathId(i)).radius != p.tightestRadius) ++mismatched;
+        if (p.speedLimit == fastest) radii.push_back(G.tightestBend(PathId(i)).radius);
+    }
+    std::sort(radii.begin(), radii.end());
+    CHECK(!radii.empty());
+    const double median = radii.empty() ? 0 : radii[radii.size() / 2];
+    std::printf("    the fastest lanes (%.1f m/s): %zu, median tightest bend %.1f m; %zu bend pieces (%zu bytes); kinks: %u in "
+                "lanes (worst %.1f deg), %u in connectors (worst %.1f deg), %u where paths join\n",
+                fastest, radii.size(), median, G.bendPieces.size(), lg.bendPieceBytes, lg.laneKinks, lg.worstLaneKink,
+                lg.connectorKinks, lg.worstConnectorKink, lg.joinKinks);
+    CHECK(median > 200 && median < kStraightEnoughRadius);
+    CHECK(mismatched == 0u);
+    CHECK(G.bendPieces.size() < 4 * G.paths.size());   // a handful of pieces a path at most, on the whole
+    uint32_t listed = 0;
+    for (const std::string& p : lg.problems) listed += p.find("kink: ") == 0 ? 1 : 0;
+    CHECK(listed == lg.laneKinks + lg.connectorKinks + lg.joinKinks);
 }
 
 // ---- which turns a junction offers, on hand-made junctions -------------------------------------------------------------

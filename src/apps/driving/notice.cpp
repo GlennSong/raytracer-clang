@@ -74,10 +74,6 @@ bool speedHabit(const DriverView& v, Real& habit) {
     return true;
 }
 
-// The speed I may do now so that, braking comfortably at `brake`, I am down to `speedThere` after `distance` metres.
-Real speedNowFor(Real speedThere, Real brake, Real distance) {
-    return std::sqrt(speedThere * speedThere + kTwo * brake * distance);
-}
 
 // ---- Filling a fact -----------------------------------------------------------------------------------------------
 
@@ -151,7 +147,7 @@ void noticeSlowerAhead(const DriverView& v, NoticeScratch& s, NoticedFact& out) 
     Real bestMetres = 0;
     const auto consider = [&](Real limit, engine::PathId path, Real distance) {
         if (!(limit < current) || distance > v.lookAhead) return;
-        const Real now = speedNowFor(limit * habit, brake, distance);
+        const Real now = speedNowFor(limit * habit, brake, distance, v.decideInterval, v.me.speed);
         if (now < best) {
             best = now;
             bestPath = path;
@@ -183,7 +179,8 @@ void noticeSlowerAhead(const DriverView& v, NoticeScratch& s, NoticedFact& out) 
     setMetres(out, bestMetres);
 }
 
-// The lowest "speed I may do now" over every bend on the paths in view; my own path's counts from where I am.
+// The lowest "speed I may do now" over every stretch of the bend profiles on my way, from where I am out to my
+// look-ahead (issue #281): the bend ahead, not the tightest anywhere on a path.
 void noticeCornerSpeed(const DriverView& v, NoticeScratch&, NoticedFact& out) {
     if (!knownPath(v.roads, v.me.path)) return;
     const Number* side = v.rules.findNumber(kNumberComfortableSideAccel);
@@ -193,21 +190,35 @@ void noticeCornerSpeed(const DriverView& v, NoticeScratch&, NoticedFact& out) {
     Real best = kNoSpeedYet;
     engine::PathId bestPath;
     Real bestMetres = 0;
-    Real toStart = 0;
+    Real toStart = -v.me.along;   // from my front to the start of the path being looked at
     for (std::size_t i = 0; i < wayCount(v); ++i) {
         const engine::PathId id = wayPath(v, i);
         if (!knownPath(v.roads, id) || toStart > v.lookAhead) break;
-        const engine::Path& p = v.roads.paths[id.index];
-        // A radius that is not a positive finite number is no bend (kNoBend, or a path whose radius was never set).
-        if (std::isfinite(p.tightestRadius) && p.tightestRadius > 0) {
-            const Real now = speedNowFor(std::sqrt(sideAccel * p.tightestRadius), brake, toStart);
+        // Through a junction a driver holds one speed, its tightest bend's, from the connector's start: the speed the
+        // junction step announces it will cross at (announce.h speedThrough reads the same stretch). Along a lane, each
+        // stretch of the profile at its own place.
+        const bool through = v.roads.paths[id.index].kind == engine::PathKind::Connector;
+        const uint32_t stretches = through ? 1 : v.roads.bendCount(id);
+        for (uint32_t k = 0; k < stretches; ++k) {
+            engine::BendSpan b = v.roads.bendSpan(id, k);
+            if (through) {
+                b = v.roads.tightestBend(id);
+                b.from = 0;
+                b.to = v.roads.paths[id.index].length;
+            }
+            if (toStart + b.to <= 0) continue;              // behind my front
+            const Real ahead = toStart + b.from;            // where it begins, from my front (below zero: I am on it)
+            if (ahead > v.lookAhead) break;
+            // A radius that is not a positive finite number is no bend (kNoBend, or a radius never set).
+            if (!(std::isfinite(b.radius) && b.radius > 0)) continue;
+            const Real now = speedNowFor(std::sqrt(sideAccel * b.radius), brake, ahead, v.decideInterval, v.me.speed);
             if (now < best) {
                 best = now;
                 bestPath = id;
-                bestMetres = toStart;
+                bestMetres = std::max(Real(0), ahead);
             }
         }
-        toStart += (i == 0) ? p.length - v.me.along : p.length;
+        toStart += v.roads.paths[id.index].length;
     }
     if (best == kNoSpeedYet) return;
     setNumber(out, best);
@@ -469,6 +480,26 @@ void noticeFacts(const DriverView& view, const FactRegistry& registry, const std
     noticeFacts(view, registry, wanted, out, scratch);
 }
 
+Real speedNowFor(Real speedThere, Real brake, Real distance, Real reaction, Real speedNow) {
+    if (!(distance > 0) || !(brake > 0)) return speedThere;
+    const Real t = std::max(Real(0), reaction), b = brake, w = speedThere, u = std::max(Real(0), speedNow);
+    // At or below it: T t + (T^2 - w^2) / (2b) = d, for T: T = -b t + sqrt((b t)^2 + w^2 + 2 b d).
+    const Real bt = b * t;
+    const Real holding = -bt + std::sqrt(bt * bt + w * w + kTwo * b * distance);
+    // At or below it; or so far above it that braking toward it takes the whole interval (it is never held, and the
+    // next decision looks again).
+    if (holding >= u || holding <= u - bt) return std::max(w, holding);
+    // Above it, and down to it within the interval. Braking all the way from now already overshoots: braking all the
+    // interval is the best a top speed can do (u - b t).
+    const Real brakingAllTheWay = (u * u - w * w) / (kTwo * b);
+    if (brakingAllTheWay > distance) return std::max(w, u - bt);
+    // (u^2 - w^2) / (2b) + T t - T (u - T) / b = d: T^2 / b + T (t - u / b) + (u^2 - w^2) / (2b) - d = 0, the larger root,
+    // between u - b t and u (the sum rises with T there, from brakingAllTheWay to the holding sum at u).
+    const Real p = t - u / b, q = brakingAllTheWay - distance;
+    const Real root = kTwo * b * (-p + std::sqrt(std::max(Real(0), p * p - kTwo * kTwo * q / b))) / (kTwo * kTwo);
+    return std::max(w, std::min(u, std::max(root, u - bt)));
+}
+
 bool registerBuiltInFacts(FactRegistry& registry, std::vector<std::string>* problems) {
     std::vector<FactSpec> specs;
     specs.push_back(spec(kFactCarAhead, FactKind::YesNo, noticeCarAhead,
@@ -490,7 +521,7 @@ bool registerBuiltInFacts(FactRegistry& registry, std::vector<std::string>* prob
     slower.settings.push_back(need(kSettingSpeedHabit, UnitFamily::Ratio));
     specs.push_back(slower);
     FactSpec corner = measured(kFactCornerSpeed, FactKind::Number, UnitFamily::Speed, noticeCornerSpeed,
-                               "the speed I may do now and still slow comfortably for the tightest bend ahead, m/s");
+                               "the speed I may do now and still slow comfortably for every bend ahead, m/s");
     corner.numbers.push_back(need(kNumberComfortableSideAccel, UnitFamily::Acceleration));
     specs.push_back(corner);
     specs.push_back(spec(kFactLaneEndsAhead, FactKind::YesNo, noticeLaneEndsAhead,

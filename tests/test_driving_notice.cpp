@@ -159,14 +159,14 @@ struct World {
     }
     // Every built-in fact for car `id`, along `way` (followOnlyWay when empty), looking `lookAhead` metres ahead.
     std::vector<NoticedFact> notice(uint32_t id, Real lookAhead, PersonId person = 1, WayAhead way = WayAhead(),
-                                    NoticeScratch* scratch = nullptr) {
+                                    NoticeScratch* scratch = nullptr, Real decideInterval = 0) {
         std::vector<NoticedFact> out;
         const Car* me = findCar(cars, lists, CarId(id));
         CHECK(me != nullptr);
         if (!me) return out;
         if (way.paths.empty()) way = followOnlyWay(g, me->path, me->along, lookAhead);
-        const DriverView view{*me, classes.at(me->vehicleClass), person, way, g, cars, lists, rules, roadRules,
-                              lookAhead};
+        DriverView view{*me, classes.at(me->vehicleClass), person, way, g, cars, lists, rules, roadRules, lookAhead};
+        view.decideInterval = decideInterval;
         std::vector<FactSlot> all;
         for (std::size_t i = 0; i < facts.size(); ++i) all.push_back(static_cast<FactSlot>(i));
         NoticeScratch own;
@@ -408,6 +408,58 @@ TEST_CASE(notice_corner_speed_formula_closer_is_lower_absent) {
     WayAhead upToBend;
     upToBend.paths = {pid(0), pid(1)};
     CHECK(!w.fact(w.notice(1, 30, 1, upToBend), kFactCornerSpeed).present);
+}
+
+TEST_CASE(notice_corner_speed_reads_the_bend_ahead_not_the_tightest_on_the_path) {
+    // One 340 m lane with one tight place: straight, a 20 m bend from 200 to 230 m, straight again (its bend profile,
+    // #281). Side accel 2, brake 2: the bend's own speed is sqrt(40).
+    engine::LaneGraph g = chain({340, 50}, {29, 29});
+    g.paths[0].bends = g.addBends({engine::BendPiece{0, engine::kNoBend}, engine::BendPiece{200, 20},
+                                   engine::BendPiece{230, engine::kNoBend}});
+    g.paths[0].tightestRadius = 20;
+    World w(std::move(g), testRules());
+    // From 10 m along at 25 m/s, looking 120 m: the bend is 190 m off, out of sight: the lane is not slow here.
+    w.place({record(1, 0, 10, 25)});
+    CHECK(!w.fact(w.notice(1, 120), kFactCornerSpeed).present);
+    // Looking 250 m: sqrt(40 + 2 x 2 x 190) = sqrt(800), about the bend's place.
+    const NoticedFact far = w.fact(w.notice(1, 250), kFactCornerSpeed);
+    CHECK(far.present && far.aboutPath == pid(0));
+    CHECK_APPROX(far.number, std::sqrt(800.0), kEps);
+    CHECK_APPROX(far.metres, 190, kEps);
+    // On the bend: its own speed. Past it: nothing.
+    w.place({record(1, 0, 210, 6)});
+    const NoticedFact on = w.fact(w.notice(1, 250), kFactCornerSpeed);
+    CHECK_APPROX(on.number, std::sqrt(40.0), kEps);
+    CHECK(on.metres == 0);
+    w.place({record(1, 0, 240, 8)});
+    CHECK(!w.fact(w.notice(1, 250), kFactCornerSpeed).present);
+}
+
+TEST_CASE(notice_corner_speed_sees_a_bend_on_the_next_path_and_allows_for_the_decide_interval) {
+    // A 100 m lane leading into a 20 m path that bends at 8 m from 5 to 15 m along it. From 60 m along the lane the
+    // bend begins 40 + 5 = 45 m ahead: sqrt(2 x 8 + 2 x 2 x 45) = 14.0 m/s.
+    engine::LaneGraph g = chain({100, 20}, {20, 20});
+    g.paths[1].bends = g.addBends({engine::BendPiece{0, engine::kNoBend}, engine::BendPiece{5, 8},
+                                   engine::BendPiece{15, engine::kNoBend}});
+    g.paths[1].tightestRadius = 8;
+    World w(std::move(g), testRules());
+    w.place({record(1, 0, 60, 15)});
+    const NoticedFact c = w.fact(w.notice(1, 100), kFactCornerSpeed);
+    CHECK(c.present && c.aboutPath == pid(1));
+    CHECK_APPROX(c.number, 14.0, kEps);
+    CHECK_APPROX(c.metres, 45, kEps);
+    // Deciding every tenth of a second: the speed held for 0.1 s, then braking at 2, still comes down to sqrt(16) by
+    // the bend: v = -0.2 + sqrt(0.04 + 16 + 180).
+    const NoticedFact late = w.fact(w.notice(1, 100, 1, WayAhead(), nullptr, 0.1), kFactCornerSpeed);
+    const Real v = -0.2 + std::sqrt(0.04 + 16 + 180);
+    CHECK_APPROX(late.number, v, kEps);
+    CHECK_APPROX(v * 0.1 + (v * v - 16) / (2 * kBrake), 45, 1e-9);
+    // The formula alone: at or before the place, the speed there; closer than a decision's travel, never below it.
+    CHECK_APPROX(speedNowFor(4, 2, 0, 0.1), 4, kEps);
+    CHECK_APPROX(speedNowFor(4, 2, -3, 0.1), 4, kEps);
+    CHECK_APPROX(speedNowFor(4, 2, 0.2, 0.1), 4, kEps);
+    CHECK_APPROX(speedNowFor(4, 2, 45, 0), std::sqrt(196.0), kEps);
+    CHECK_APPROX(speedNowFor(4, 0, 45, 0.1), 4, kEps);   // a car that cannot brake must already be at it
 }
 
 // ---- 4. where my way runs out ------------------------------------------------------------------------------------

@@ -108,6 +108,11 @@ struct DriverView {
     // host that did not register it).
     const AnnouncementBoard* board = nullptr;
     const GiveWayVerdict* giveWay = nullptr;
+    // How long what I decide now is held before I decide again (seconds; the decide interval). A top speed I am given
+    // now is still the one I hold that long from now, so "the speed I may do now" for a bend or a lower limit ahead
+    // (corner_speed, slower_ahead) allows for covering that much road at it before I can brake (issue #281). Zero: I
+    // decide afresh at every instant.
+    Real decideInterval = 0;
 };
 
 // WORK SEVERAL FACTS SHARE for one driver, filled on first use and cleared between drivers. It holds only things
@@ -208,7 +213,13 @@ constexpr const char* kFactClosingSpeed = "closing_speed";    // m/s: my speed m
 constexpr const char* kFactRoadLimit = "road_limit";          // m/s: the limit in force where my front is
 constexpr const char* kFactMyLimit = "my_limit";              // m/s: road_limit times my speed habit
 constexpr const char* kFactSlowerAhead = "slower_ahead";      // m/s: the speed I may do now for a lower limit ahead
-constexpr const char* kFactCornerSpeed = "corner_speed";      // m/s: the speed I may do now for a bend ahead
+// m/s: the speed I may do now for the bends ahead (issue #281): every stretch of my way's bend profiles (the graph's,
+// LaneGraph::bendSpan) from where I am out to my look-ahead, the stretch I am on included, each taken at
+// sqrt(comfortable_side_accel x its radius); the lowest over them of the speed from which, holding it for my decide
+// interval and then braking comfortably, I am down to that speed where the stretch begins (and never below it). A
+// connector is one stretch at its tightest radius: through a junction a driver holds one speed, the one the junction
+// step announces (announce.h speedThrough). About the path the binding stretch lies on, so many metres ahead.
+constexpr const char* kFactCornerSpeed = "corner_speed";
 constexpr const char* kFactLaneEndsAhead = "lane_ends_ahead"; // yes/no: my way runs out within my look-ahead
 constexpr const char* kFactLaneEnd = "lane_end";              // place: where it runs out
 constexpr const char* kFactMySpeed = "my_speed";              // m/s
@@ -232,6 +243,20 @@ constexpr Real kStandingBelow = 0.1;
 // `arrived` is yes when the destination is no further than this from my front (m): a car that stopped for it is
 // there. (A destination this little BEHIND my front counts too, so rounding never strands a car that stopped on it.)
 constexpr Real kArrivedWithin = 0.5;
+
+// THE SPEED I MAY DO NOW (a top speed to hold until my next decision, `reaction` seconds away) so that I am down to
+// `speedThere` after `distance` metres, braking comfortably at `brake`. What the move step does with a top speed T
+// (act.h) decides the sum, `speedNow` being how fast I am going:
+//   - at or below T, I may speed up to it and hold it until I next decide, then brake:
+//       T * reaction + (T^2 - speedThere^2) / (2 * brake) <= distance;
+//   - above T, I brake down to it, hold it for the rest of the interval, then brake again; holding it after
+//     braking costs (speedNow - T)^2 / (2 * brake) more road than holding it from the start would, which the first sum
+//     leaves out (issue #281: bends taken 2% to 5% too fast):
+//       (speedNow^2 - speedThere^2) / (2 * brake) + T * reaction - T * (speedNow - T) / brake <= distance;
+//   - so far above T that braking takes the whole interval, T is never held: the first sum's T, as at or below it.
+// The largest T that keeps the sum, never below speedThere (a car already that slow may carry on). A distance of zero
+// or less, or a car that cannot brake: speedThere. corner_speed and slower_ahead read it.
+Real speedNowFor(Real speedThere, Real brake, Real distance, Real reaction, Real speedNow = 0);
 
 // Adds the built-in facts above, in the order listed. False (with the reasons, one line each) when one is refused,
 // which only happens when one of their names was registered before.

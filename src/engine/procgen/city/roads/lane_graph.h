@@ -109,6 +109,24 @@ constexpr Real kNoWaitInside = -1;
 // The tightest radius of a path with no bend at all.
 constexpr Real kNoBend = std::numeric_limits<Real>::infinity();
 
+// ONE PIECE OF A PATH'S BEND PROFILE (issue #281): from `from` metres along the path to where the next piece begins (or
+// the path's end), the path bends no tighter than `radius` (kNoBend: it runs straight there). A path's pieces start at
+// 0 and rise. The road builder measures them once, from the path's shape over a stretch the way a vehicle feels it
+// (lanes/lane_graph_build.h measureBends), so a car reads the bend AHEAD of it rather than the tightest anywhere on its
+// path.
+struct BendPiece {
+    Real from = 0;
+    Real radius = kNoBend;
+};
+
+// A STRETCH OF A PATH AND HOW TIGHT IT BENDS, as the readers hand it out: from `from` to `to` metres along, no tighter
+// than `radius`.
+struct BendSpan {
+    Real from = 0;
+    Real to = 0;
+    Real radius = kNoBend;
+};
+
 // ONE CURVE A CAR CAN BE ON: a lane, or a connector through a junction.
 struct Path {
     PathKind kind = PathKind::Lane;
@@ -118,7 +136,11 @@ struct Path {
     Range curve;                         // its centre line: into LaneGraph::points / along / heights
     Real length = 0;                     // metres along the centre line
     Real width = 0;
-    Real tightestRadius = kNoBend;       // the radius of its tightest bend (a path with no bend: kNoBend, the default)
+    Real tightestRadius = kNoBend;       // the radius of its tightest bend (a path with no bend: kNoBend, the default).
+                                         // A lane's is its bend profile's tightest piece; a connector's is the tightest
+                                         // arc it was designed with (what closes it to a vehicle that turns wider).
+    Range bends;                         // into LaneGraph::bendPieces: its bend profile, pieces in order along it. None:
+                                         // the whole path bends at tightestRadius (a straight path, or a hand-made one)
     Real speedLimit = 0;                 // metres per second
     SectionId section;                   // lanes: the section it lies in
     uint32_t indexInSection = 0;         // lanes: 0 = offside ... last = kerb
@@ -249,6 +271,7 @@ struct LaneGraph {
     std::vector<PathId> junctionLanes;  // the lanes arriving at and leaving each junction
     std::vector<CrossingId> pathCrossings;   // each path's crossing points (Path::crossings)
     std::vector<Vec2> planPoints;       // junction boxes, crosswalk outlines, track lines
+    std::vector<BendPiece> bendPieces;  // each path's bend profile (Path::bends)
 
     // A name's index in a table, or kNoName.
     static NameIndex nameIndex(const std::vector<std::string>& table, const std::string& name);
@@ -257,6 +280,19 @@ struct LaneGraph {
     Range addCurve(const std::vector<Vec2>& xy, const std::vector<Real>& z);
     // Adds points to planPoints and returns their range.
     Range addPlanPoints(const std::vector<Vec2>& pts);
+    // Adds a bend profile to bendPieces and returns its range for a Path::bends.
+    Range addBends(const std::vector<BendPiece>& pieces);
+
+    // READING A PATH'S BEND PROFILE (issue #281). Its stretches in order along it: a path with no pieces of its own has
+    // one stretch, the whole path at its tightestRadius; an unknown path has none.
+    uint32_t bendCount(PathId path) const;
+    // Stretch i of bendCount (an i out of range reads as an empty stretch at the path's end, straight).
+    BendSpan bendSpan(PathId path, uint32_t i) const;
+    // How tight the path bends at a distance along it: the radius of the stretch holding it (clamped to the path's
+    // ends; kNoBend for an unknown path).
+    Real radiusAt(PathId path, Real distanceAlong) const;
+    // Its tightest stretch (the first of equals): where the bend a car must slow most for lies.
+    BendSpan tightestBend(PathId path) const;
 
     // READING A PATH'S CENTRE LINE at a distance along it (metres from its start; clamped to its ends), each by a
     // binary search over the curve's stations (polyline.h's station readers, over the path's range). An unknown path
@@ -295,7 +331,7 @@ void indexCrossings(LaneGraph& g);
 // bounds, every enum value known, every tag inside its name table, lanes and their sections agreeing both ways,
 // connectors and their junctions agreeing both ways, a connector's from-lane listing it as next, lists sorted,
 // stretches running forwards, a junction's arriving lanes ending and its leaving lanes beginning within
-// kJunctionEndReach of its outline. Crossing points: their stretches on their paths, two paths filed under a junction
+// kJunctionEndReach of its outline; each path's bend profile starting at 0, rising, on the path. Crossing points: their stretches on their paths, two paths filed under a junction
 // both its connectors (and two filed under none not), a split starting both paths from a lane they both leave, a join
 // reaching the end of both into a lane they both enter, no two records of one pair overlapping on both paths, and each
 // path's list holding exactly the records that name it, in order. Returns the problems in plain words, each naming

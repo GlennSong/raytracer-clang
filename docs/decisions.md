@@ -18345,3 +18345,60 @@ junctions by the planner yet (the lab has none; such a built junction is reporte
 `no_turn_on_red` as arm regulations need only devices and policy rows. The planner's facts have no traffic counts, so
 the class stands in for the manual's volume warrants.
 
+## ADR-0404 — Bends measured as a vehicle feels them, read ahead of the car, allowing for the decide interval (#281)
+
+Words: a BEND PROFILE is a path's run of pieces (from so many metres along, the radius a vehicle feels there); a KINK
+is a place where a drawn line's heading jumps at one point; the DECIDE INTERVAL is how long a driver holds what it
+decided before deciding again (a tenth of a second in the lab).
+
+**Context.** Glenn saw freeway cars in the traffic lab drive slower than city cars (#281). Each path stored one
+"tightest radius", read from the circle through each three neighbouring points of its line, so a fraction-of-a-degree
+kink between points a few centimetres apart read as a hairpin: the lab's freeway lanes had a median of 27.5 m (the ring
+is about 290 m round), ramps 6.8 m. The bend rule held the whole lane to that, about 7.4 m/s on a 65 mph road. And bends
+were taken at up to 2.82 m/s2 sideways against the rule set's 2.0.
+
+**Decision.**
+- **How a bend is measured** (`lanes/lane_graph_build.h` measureBends). Each point's turn is spread over its share of
+  the line (at most half a metre either side: a long straight segment carries no bend); the bend at a place is that
+  turning averaged over a stretch round it; the stretch is the shortest (from 1 m to 28 m, in steps of sqrt 2) long
+  enough that a curve of the radius read strays no more than `kBendRoom` (0.1 m) from its chord across it, so a real 5 m
+  corner reads 5 m over 2 m of it while a 0.4-degree jitter reads as straight. Each reading is laid over the part of its
+  stretch where the line turns, the tightest kept, so a bend is reached at its own radius from where it begins.
+  Neighbouring stretches within 10% are one piece at the tighter radius. One fixed length could not do both: 10 m reads
+  the lab's 5 m corners (a third of its connectors) up to a quarter gentler; 4 m reads the jitter as a bend. The room is
+  the shape's, so it lives with the builder, not in a rule set.
+- **How it is stored.** `Path::bends`, a range into one shared `LaneGraph::bendPieces` array of (from, radius); a path
+  whose profile is one piece at its tightest radius stores none (straight lanes, hand-made graphs). A lane's
+  `tightestRadius` is its profile's tightest piece; a connector keeps its designed arc (what closes it to a vehicle that
+  turns wider). Lab: 6,353 pieces, 133 kB with the paths' ranges (16 bytes a piece, 8 a path). LGRF version 5, lane graph
+  builder version 4 (no lanes tag bump: the roads are unchanged; the three `.glb` builds are byte-identical).
+- **The bend ahead.** `corner_speed` reads every stretch of the profiles on the way ahead, from the car's front out to
+  its look-ahead (which covers the distance it needs to slow from its speed), each at its own place; a connector is one
+  stretch at its tightest (through a junction a driver holds one speed, the one the junction step announces: `speedThrough`
+  reads the same stretch). No per-tick allocation.
+- **The lag.** Checked on a synthetic road (driving_tests tick_14): with no allowance a car took a 20 m bend at 2.25
+  m/s2 deciding every 0.1 s, 3.26 m/s2 every 0.5 s. Two causes: the top speed is held for a whole decide interval, and a
+  car above it brakes to it and then holds it for the rest of the interval, covering more road than holding it from the
+  start would. `speedNowFor` (notice.h) allows for both (the decide interval comes in `DriverView::decideInterval`), and
+  `slower_ahead` reads it too. Result: 2.000 m/s2 at both intervals; the lab's worst 2.00 against 2.82.
+- **Kinks are reported, not smoothed** (`findKinks`): a heading jump of more than 3 degrees at one point, beyond what a
+  smooth line turns there, is a problem line with its place (`problems.txt`); the profile slows for it. The lab has 51,
+  all in builder lane lines, the worst 10.6 degrees on ramp `d1_0_b_off` 235 m along at (475.3, 71.5), then 8.5 and 8.4
+  on `d1_0_a_on` and `d1_0_a_off`, 7.9 on `s118.b2`. They are the road builder's to fix.
+- The measurements row reads the radius where the car's front is, and says its worst figure when it passes too.
+  `lanes_tool lanegraph` prints the radii by road class; the dump prints each path's tightest piece, where, and its
+  pieces.
+
+**Measured** (the lab, 5 minutes): mean speed 5.91 -> 8.85 m/s; freeway lanes 6.74 -> 12.84 m/s, collector 7.34 -> 9.30,
+arterial 4.66 -> 5.00, local 3.39 -> 3.45, inside junctions 5.24 -> 5.58; trips begun 546 -> 721, arrived 246 -> 421;
+bends row FAIL (4.1 car-seconds over, worst 2.82) -> pass (worst 2.00); freeway free flow 24% -> 75% of its limit; the
+model's tick 0.264 -> 0.293 ms (more cars moving, more trips). Freeway lanes' median tightest bend 27.5 -> 291.7 m, ramps
+6.8 -> 21.4 m.
+
+**Owed.** The ring itself holds cars to 24 m/s (83% of 65 mph) at 2 m/s2 sideways: a planner question (a 65 mph road
+wants about 450 m) or a rule-set one (no banking yet). Most freeway time is spent behind a car (mopeds and buses that
+cannot do the limit, cars stopping to arrive on freeway lanes, and no lane changes until E1). The faster traffic shows
+two junction gaps the lab's 0-pair checks catch: a slow truck that gave way, then went and committed, crossed by the
+car it gave way to (first in goes first is D4's), and one join spell. The old, slow traffic never reached them, not
+even with the comfortable sideways acceleration nudged to 1.9 or 2.1.
+

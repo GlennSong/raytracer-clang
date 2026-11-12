@@ -193,6 +193,11 @@ TEST_CASE(measure_5_a_bend_taken_too_fast) {
     CHECK(r.offenders.total == 1u && r.offenders.kept[0].car == CarId(2) && r.offenders.kept[0].tick == 501u);
     CHECK_APPROX(numberOf(r.offenders.kept[0], "side_accel"), 36 / kRadius, kEps);
     CHECK_APPROX(rows.bends.carSeconds, kTick, kEps);
+    // A row that passes still says its worst figure (#281).
+    MeasureRows calm;
+    calm.bends.note(CarId(2), 500, 8.0, kTick, 3.9, kRadius, kComfortable);
+    CHECK(rowOf(calm, "bend_speed").status == RowStatus::Pass);
+    CHECK_APPROX(calm.bends.worstSideAccel, 3.9 * 3.9 / kRadius, kEps);
 }
 
 TEST_CASE(measure_6_standing_with_no_reason_for_25_seconds) {
