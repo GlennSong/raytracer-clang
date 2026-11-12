@@ -38,11 +38,14 @@ engine::Vec3 lift(const engine::Vec2& plan, Real height) { return engine::Vec3(p
 
 }  // namespace
 
-bool operator==(const Binding& a, const Binding& b) { return a.by == b.by && a.car == b.car && a.rule == b.rule; }
+bool operator==(const Binding& a, const Binding& b) {
+    return a.by == b.by && a.car == b.car && a.rule == b.rule && a.stopFor == b.stopFor;
+}
 
 bool operator==(const HeldAnswers& a, const HeldAnswers& b) {
     return a.decided == b.decided && a.hasStop == b.hasStop && a.stopAt == b.stopAt && a.stopRule == b.stopRule &&
-           a.topSpeed == b.topSpeed && a.topSpeedRule == b.topSpeedRule;
+           a.stopFor == b.stopFor && a.stopCar == b.stopCar && a.topSpeed == b.topSpeed &&
+           a.topSpeedRule == b.topSpeedRule;
 }
 
 bool operator==(const PathEntry& a, const PathEntry& b) {

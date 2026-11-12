@@ -1,5 +1,16 @@
 # D3 — Announcements, the give-way decision, patience
 
+**As built (ADR-0402):** the board (`announce.h`) and the judgement (`give_way.h`), as below, with these corrections.
+"Who reached their line first" is each car's ARRIVAL, fixed once when it first judges the junction (its own estimate
+then) or, for a full stop, when it comes to rest: read off the line, a car that stopped to give way to me took the
+right of way from me as I arrived. A car that is going goes before one that is not, judged one decision ahead. A ring of
+fall-backs among cars arriving in one tick goes by lower car id. A driver decides only within its decision horizon
+(comfortable stopping distance plus one decision's travel); a driver that is held or blocked judges but decides nothing.
+All-way stops and stop signs are rules in the rule set (`next_line`, `everyone_stops`, `sign_rank`, `stopped_at_line`),
+not C++. The look-ahead had to be 10 s, not 8: a far turn from rest takes about 5.5 s to clear, and with the 2.5 s gap
+that is the whole 8 s, so a car could come into view already inside the gap. The lights' clock is D2: the phase is
+fixed at the first.
+
 **Read first:** design 4 (announcers), 9.2, 9.3. Briefs D1 and C6.
 
 ## The goal

@@ -37,6 +37,8 @@ using engine::Real;
 struct RoadRules;      // road_rules.h: the graph's regulation kinds bound to the rule set's devices
 struct RightOfWay;     // right_of_way.h: who gives way to whom at every junction
 struct JunctionPlans;  // junction_plan.h: one driver's plans for the junctions ahead
+class AnnouncementBoard;   // announce.h: who will be on which crossing point, and when
+struct GiveWayVerdict;     // give_way.h: what one driver judged about giving way at the junctions ahead
 
 // WHAT KIND OF VALUE a fact holds.
 enum class FactKind : uint8_t {
@@ -101,6 +103,11 @@ struct DriverView {
     // way to whom (issue #260; the junction facts of task D3 read them). Null when there are none (no rules, no trip).
     const JunctionPlans* junctions = nullptr;
     const RightOfWay* rightOfWay = nullptr;
+    // This tick's board of announcements, and what I judged from it about giving way at the junctions ahead (issue #262:
+    // the junction facts of give_way.h read the judgement). Null when the junction step is off (no rules, no trip, or a
+    // host that did not register it).
+    const AnnouncementBoard* board = nullptr;
+    const GiveWayVerdict* giveWay = nullptr;
 };
 
 // WORK SEVERAL FACTS SHARE for one driver, filled on first use and cleared between drivers. It holds only things
@@ -139,6 +146,9 @@ struct FactSpec {
     std::vector<std::string> words;    // a Word fact's list (empty otherwise)
     std::vector<FactNeed> numbers;     // rule-set numbers it reads
     std::vector<FactNeed> settings;    // personal settings it reads
+    // A Place fact a rule stops by: what that stop waits for (traffic_state.h). GivingWay: the car the fact is about
+    // (NoticedFact::aboutCar) is the one given way to, and the wait-for graph draws a right-of-way arrow to it.
+    StopFor stopFor = StopFor::Place;
 };
 
 // SOMETHING OTHER THAN A FACT THAT READS THE RULE SET, declaring what it reads the way a fact does, so the same check

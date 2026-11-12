@@ -96,6 +96,7 @@ StepOutcome stepSpeed(const Follower& f, Real speed, Real topSpeed, RuleIndex to
             out.binding.by = o.kind;
             out.binding.car = o.car;
             out.binding.rule = o.rule;
+            out.binding.stopFor = o.kind == Limit::Stop ? o.stopFor : StopFor::Place;
         }
     }
     const Real accel = std::max(f.speedUp - mostTaken, -f.brake);
@@ -117,8 +118,9 @@ StepOutcome stepSpeed(const Follower& f, Real speed, Real topSpeed, RuleIndex to
         if (limit < next) {
             next = limit;
             out.binding.by = o.kind;
-            out.binding.car = o.kind == Limit::CarAhead ? o.car : CarId();
+            out.binding.car = o.kind == Limit::CarAhead || o.kind == Limit::Stop ? o.car : CarId();
             out.binding.rule = o.kind == Limit::Stop ? o.rule : kNoRule;
+            out.binding.stopFor = o.kind == Limit::Stop ? o.stopFor : StopFor::Place;
         }
     }
     // Comfortable braking may be exceeded only as far as the hardest braking.

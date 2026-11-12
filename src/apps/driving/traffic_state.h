@@ -88,10 +88,22 @@ enum class Limit : uint8_t {
 };
 constexpr uint8_t kLimitCount = 5;
 
+// WHAT A PLACE TO STOP BY WAITS FOR (issue #262): only the place itself (a destination, a hold, a lane's end), or
+// another car the driver is GIVING WAY to (then the stop names that car, and the wait-for graph draws a right-of-way
+// arrow to it). Which one a stop is comes from the place fact that gave it (FactSpec::stopFor in notice.h).
+enum class StopFor : uint8_t {
+    Place,       // the place itself
+    GivingWay,   // giving way at a junction's line: to the car named with it
+    FullStop,    // a full stop at a junction's line before going on (a stop sign, an all-way stop): the junction's own
+                 // control, so the car still announces that it will cross, after stopping
+};
+constexpr uint8_t kStopForCount = 3;
+
 struct Binding {
     Limit by = Limit::Nothing;
-    CarId car;                // CarAhead: which car
+    CarId car;                // CarAhead: which car; Stop: the car it gives way to (none for a plain place)
     RuleIndex rule = kNoRule; // Stop, TopSpeed: which rule
+    StopFor stopFor = StopFor::Place;   // Stop: what it waits for
 };
 bool operator==(const Binding& a, const Binding& b);
 inline bool operator!=(const Binding& a, const Binding& b) { return !(a == b); }
@@ -104,6 +116,8 @@ struct HeldAnswers {
     bool hasStop = false;
     double stopAt = 0;             // the odometer reading at which its front is to be at rest
     RuleIndex stopRule = kNoRule;
+    StopFor stopFor = StopFor::Place;   // what the stop waits for
+    CarId stopCar;                 // GivingWay: the car it gives way to
     Real topSpeed = 0;             // the top speed to aim for, m/s: a rule's, or the vehicle class's when none gave one
     RuleIndex topSpeedRule = kNoRule;   // kNoRule: the class's own
 };

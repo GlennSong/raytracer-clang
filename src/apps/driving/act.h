@@ -119,8 +119,9 @@ struct Obstacle {
     Real distance = 0;              // my front to: its rear (CarAhead), the place (Stop), the end (WayEnd)
     Real speed = 0;                 // CarAhead: its speed; otherwise 0
     Real hardestBrake = 0;          // CarAhead: its hardest braking; otherwise unused (the place cannot move)
-    CarId car;                      // CarAhead: which car
+    CarId car;                      // CarAhead: which car; Stop: the car it gives way to, if any
     RuleIndex rule = kNoRule;       // Stop: which rule gave it
+    StopFor stopFor = StopFor::Place;   // Stop: what it waits for (traffic_state.h)
     bool hardOnly = false;          // WayEnd: only where the driver stopped looking (the hard limit alone applies)
 };
 // The most things one driver weighs at once: the car ahead, the place to stop by, the end of the way.

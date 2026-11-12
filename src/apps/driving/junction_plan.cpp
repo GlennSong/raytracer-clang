@@ -37,6 +37,11 @@ void note(PlanUpdate& out, uint64_t tick, double seconds, PlanChange change, con
 
 }  // namespace
 
+bool operator==(const GiveWayJudgement& a, const GiveWayJudgement& b) {
+    return a.cause == b.cause && a.other == b.other && a.crossing == b.crossing && a.otherPath == b.otherPath &&
+           a.need == b.need && a.have == b.have;
+}
+
 bool operator==(const JunctionPlan& a, const JunctionPlan& b) {
     if (a.junction != b.junction || a.connector != b.connector || a.turn != b.turn ||
         a.startOdometer != b.startOdometer || a.madeAtTick != b.madeAtTick || a.crossingCount != b.crossingCount ||
@@ -44,7 +49,19 @@ bool operator==(const JunctionPlan& a, const JunctionPlan& b) {
         return false;
     for (std::size_t i = 0; i < a.waitingCount && i < kMaxWaitingPoints; ++i)
         if (a.waitingAt[i] != b.waitingAt[i]) return false;
-    return true;
+    return a.arrivalFixed == b.arrivalFixed && a.arrivalTick == b.arrivalTick && a.arrivalAt == b.arrivalAt &&
+           a.cameToRest == b.cameToRest && a.restAt == b.restAt && a.committed == b.committed &&
+           a.committedTick == b.committedTick && a.decision == b.decision && a.mindChanges == b.mindChanges &&
+           a.judged == b.judged;
+}
+
+const char* giveWayDecisionWords(GiveWayDecision d) {
+    switch (d) {
+    case GiveWayDecision::Undecided: return "undecided";
+    case GiveWayDecision::Go: return "go";
+    case GiveWayDecision::GiveWay: return "give way";
+    }
+    return "";
 }
 
 bool operator==(const PlanNote& a, const PlanNote& b) {
@@ -188,12 +205,58 @@ uint64_t junctionPlansHash(const JunctionPlans& plans) {
         h.pod(p.crossingCount);
         h.pod(p.waitingCount);
         for (std::size_t k = 0; k < p.waitingCount; ++k) h.pod(p.waitingAt[k]);
+        h.pod(static_cast<uint8_t>(p.arrivalFixed));
+        h.pod(p.arrivalTick);
+        h.pod(p.arrivalAt);
+        h.pod(static_cast<uint8_t>(p.cameToRest));
+        h.pod(p.restAt);
+        h.pod(static_cast<uint8_t>(p.committed));
+        h.pod(p.committedTick);
+        h.pod(static_cast<uint8_t>(p.decision));
+        h.pod(p.mindChanges);
+        h.pod(static_cast<uint8_t>(p.judged.cause));
+        h.pod(p.judged.other.index);
+        h.pod(p.judged.crossing.index);
+        h.pod(p.judged.otherPath.index);
+        h.pod(p.judged.need);
+        h.pod(p.judged.have);
     }
     return h.h;
 }
 
+std::string describeGiveWay(const LaneGraph& roads, const RightOfWay& row, const JunctionPlan& p, double now) {
+    std::string out;
+    const GiveWayJudgement& j = p.judged;
+    const std::string other = j.otherPath.valid() ? pathTurnWords(roads, row, j.otherPath) : std::string("a path");
+    switch (p.decision) {
+    case GiveWayDecision::Undecided: out = "not decided yet (not near enough to judge)"; break;
+    case GiveWayDecision::Go:
+        out = "go";
+        if (j.cause == GiveWayCause::Gap)
+            out += " (the tightest gap: car " + std::to_string(j.other.index) + " on " + other + ", at crossing point " +
+                   std::to_string(j.crossing.index) + ", " + one(j.have) + " s; I need " + one(j.need) + " s)";
+        break;
+    case GiveWayDecision::GiveWay:
+        out = "giving way";
+        if (j.cause == GiveWayCause::Gap)
+            out += " to car " + std::to_string(j.other.index) + " on " + other + ", at crossing point " +
+                   std::to_string(j.crossing.index) + ": a gap of " + one(j.have) + " s; I need " + one(j.need) + " s";
+        else if (j.cause == GiveWayCause::NextJunction)
+            out += ": I give way at the next junction and my body would not fit between the two";
+        break;
+    }
+    if (p.mindChanges > 0) out += "; changed its mind " + std::to_string(p.mindChanges) + (p.mindChanges == 1 ? " time" : " times");
+    if (p.arrivalFixed) out += "; its arrival at the line, for who goes first: t=" + one(p.arrivalAt) + " s";
+    if (p.cameToRest) {
+        out += ", came to rest there at t=" + one(p.restAt) + " s";
+        if (now >= p.restAt) out += " (" + one(now - p.restAt) + " s ago)";
+    }
+    if (p.committed) out += "; committed (past its last waiting point)";
+    return out;
+}
+
 std::string describeJunctionPlans(const LaneGraph& roads, const RightOfWay& row, const Car& car,
-                                  const JunctionPlans& plans) {
+                                  const JunctionPlans& plans, double now) {
     if (plans.count == 0) return "junctions ahead: none in view\n";
     std::string out = "junctions ahead (" + std::to_string(plans.count) + " planned, nearest first):\n";
     for (std::size_t i = 0; i < plans.count; ++i) {
@@ -203,6 +266,7 @@ std::string describeJunctionPlans(const LaneGraph& roads, const RightOfWay& row,
                std::to_string(p.connector.index) + ", ";
         out += ahead >= 0 ? "its start " + one(ahead) + " m ahead" : "its start " + one(-ahead) + " m behind my front";
         out += " (planned at tick " + std::to_string(p.madeAtTick) + ")\n";
+        out += "    decided: " + describeGiveWay(roads, row, p, now) + "\n";
         if (!p.connector.valid() || p.connector.index >= roads.paths.size()) continue;
         const engine::Path& path = roads.paths[p.connector.index];
         const uint32_t phases =

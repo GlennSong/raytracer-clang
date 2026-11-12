@@ -54,6 +54,32 @@ constexpr std::size_t kMaxJunctionPlans = 4;
 // point, which errs toward committing late.
 constexpr std::size_t kMaxWaitingPoints = 4;
 
+// WHAT A DRIVER HAS DECIDED about one junction (issue #262, give_way.h): nothing yet (it is not yet near enough, or it
+// has not decided since the plan was made), to GO through, or to GIVE WAY at the line.
+enum class GiveWayDecision : uint8_t { Undecided, Go, GiveWay };
+constexpr uint8_t kGiveWayDecisionCount = 3;
+const char* giveWayDecisionWords(GiveWayDecision d);   // "undecided", "go", "give way"
+
+// WHY A DRIVER GIVES WAY at a junction's line, or what it judged when it decided to go.
+enum class GiveWayCause : uint8_t {
+    None,           // nothing to give way to: no meeting it must judge has anyone announced on it
+    Gap,            // a gap judged against a car's announcement (the car, the crossing, the gap needed and had)
+    NextJunction,   // it gives way at the next junction, and there is no room for its body between the two
+};
+constexpr uint8_t kGiveWayCauseCount = 3;
+
+// THE JUDGEMENT BEHIND A DECISION: to whom, where, and the gaps. For Go, the tightest gap the driver accepted (none
+// when nobody was there to judge); for GiveWay, the first meeting where the gap fell short.
+struct GiveWayJudgement {
+    GiveWayCause cause = GiveWayCause::None;
+    CarId other;                       // Gap: the car judged
+    engine::CrossingId crossing;       // Gap: at which crossing point
+    engine::PathId otherPath;          // Gap: the path that car is on there
+    Real need = 0;                     // Gap: the gap needed, seconds (shrunk by patience, or the hard one once going)
+    Real have = 0;                     // Gap: the gap there is, seconds (below `need` when giving way)
+};
+bool operator==(const GiveWayJudgement& a, const GiveWayJudgement& b);
+
 // ONE JUNCTION AHEAD, as a driver plans for it.
 struct JunctionPlan {
     engine::JunctionId junction;
@@ -64,6 +90,26 @@ struct JunctionPlan {
     uint32_t crossingCount = 0;           // how many crossing points lie along the connector (Path::crossings)
     uint8_t waitingCount = 0;             // how many of waitingAt are in use (at least 1: the line)
     std::array<Real, kMaxWaitingPoints> waitingAt{};   // along the connector, in order; the first is 0 (the line)
+
+    // WHAT THE CAR REMEMBERS OF THE LINE (issue #262). Its ARRIVAL: when it reaches its line, fixed once, the first
+    // time its driver judged this junction -- as the tick its own estimate then had it reaching the line -- or, where it
+    // comes to a full stop first, the tick it came to rest there, or, if it never judged, the tick it could no longer
+    // stop before the line. "Who reached their line first" settles the pairs asked while driving, by these (give_way.h
+    // says why it is fixed when first judged rather than read off the line as each car gets there). CAME TO REST at the
+    // line: "I came to rest at this line", which a full stop needs before the car may go (noteAtTheLine, every tick).
+    // COMMITTED: its front is past its last waiting point (design 9.4); task D4 orders committed cars by when.
+    bool arrivalFixed = false;
+    uint64_t arrivalTick = 0;
+    double arrivalAt = 0;
+    bool cameToRest = false;
+    double restAt = 0;
+    bool committed = false;
+    uint64_t committedTick = 0;
+    // WHAT ITS DRIVER DECIDED at its last decision (give_way.h), how many times it switched between going and giving
+    // way on this approach (the brief allows one), and the judgement behind it.
+    GiveWayDecision decision = GiveWayDecision::Undecided;
+    uint8_t mindChanges = 0;
+    GiveWayJudgement judged;
 
     // Where along the connector the car is committed once its front is past it.
     Real lastWaitingPoint() const { return waitingCount > 0 ? waitingAt[waitingCount - 1] : Real(0); }
@@ -132,8 +178,14 @@ uint64_t junctionPlansHash(const JunctionPlans& plans);
 // A DRIVER'S PLANS AS TEXT, for the driver card: for each junction ahead, nearest first, the junction, the kind of turn,
 // the connector, how far ahead its start is, its crossing points in order with how far ahead each begins and who gives
 // way there (at phase 0 for lights, until task D2 runs their clock), and its waiting points.
+// Each plan also says what its driver decided (describeGiveWay); `now` (the clock, seconds) says how long ago it came
+// to rest at the line.
 std::string describeJunctionPlans(const engine::LaneGraph& roads, const RightOfWay& row, const Car& car,
-                                  const JunctionPlans& plans);
+                                  const JunctionPlans& plans, double now = -1);
+// WHAT A DRIVER DECIDED about one junction, in words: "giving way to car 12 on the far turn from the north (connector
+// 345), at crossing point 6789: a gap of 2.1 s; I need 4.1 s; its arrival at the line ... t=40.2 s, ...".
+std::string describeGiveWay(const engine::LaneGraph& roads, const RightOfWay& row, const JunctionPlan& plan,
+                            double now = -1);
 // "straight on", "near turn", "far turn", "U-turn".
 const char* turnWords(engine::Turn t);
 

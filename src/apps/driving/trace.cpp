@@ -84,7 +84,11 @@ std::string entryWords(const Driving& d, const TraceEntry& e) {
     switch (e.binding.by) {
     case Limit::Nothing: what = "free road"; break;
     case Limit::CarAhead: what = "following " + carWords(e.binding.car); break;
-    case Limit::Stop: what = "a stop" + whyWords(d, e.why, e.binding.rule); break;
+    case Limit::Stop:
+        what = "a stop" + whyWords(d, e.why, e.binding.rule);
+        if (e.binding.stopFor == StopFor::GivingWay && e.binding.car.valid())
+            what += ", giving way to " + carWords(e.binding.car);
+        break;
     case Limit::TopSpeed:
         what = e.binding.rule == kNoRule ? std::string("its vehicle class's top speed")
                                          : "a top speed" + whyWords(d, e.why, e.binding.rule);
@@ -161,6 +165,23 @@ const PlanNote& CarTrace::planNoteOldestFirst(std::size_t i) const {
     return planNotes[(first + i) % kPlanNoteLength];
 }
 
+bool operator==(const GiveWayNote& a, const GiveWayNote& b) {
+    return a.tick == b.tick && a.seconds == b.seconds && a.junction == b.junction && a.connector == b.connector &&
+           a.decision == b.decision && a.judged == b.judged;
+}
+
+void CarTrace::addGiveWayNote(const GiveWayNote& n) {
+    giveWayNotes[giveWayNotesWritten % kGiveWayNoteLength] = n;
+    ++giveWayNotesWritten;
+}
+
+std::size_t CarTrace::giveWayNoteCount() const { return std::min<std::size_t>(giveWayNotesWritten, kGiveWayNoteLength); }
+
+const GiveWayNote& CarTrace::giveWayNoteOldestFirst(std::size_t i) const {
+    const std::size_t first = giveWayNotesWritten > kGiveWayNoteLength ? giveWayNotesWritten % kGiveWayNoteLength : 0;
+    return giveWayNotes[(first + i) % kGiveWayNoteLength];
+}
+
 uint64_t traceHash(const CarTrace& trace) {
     engine::bundle::Fnv h;
     h.pod(trace.written);
@@ -186,6 +207,20 @@ uint64_t traceHash(const CarTrace& trace) {
         h.pod(static_cast<uint8_t>(n.change));
         h.pod(n.junction.index);
         h.pod(n.connector.index);
+    }
+    h.pod(trace.giveWayNotesWritten);
+    for (std::size_t i = 0; i < trace.giveWayNoteCount(); ++i) {
+        const GiveWayNote& n = trace.giveWayNoteOldestFirst(i);
+        h.pod(n.tick);
+        h.pod(n.seconds);
+        h.pod(n.junction.index);
+        h.pod(n.connector.index);
+        h.pod(static_cast<uint8_t>(n.decision));
+        h.pod(static_cast<uint8_t>(n.judged.cause));
+        h.pod(n.judged.other.index);
+        h.pod(n.judged.crossing.index);
+        h.pod(n.judged.need);
+        h.pod(n.judged.have);
     }
     return h.h;
 }
@@ -252,6 +287,14 @@ std::string describeCar(const Driving& d, CarId id) {
         case Limit::Stop:
             out += "a stop " + one(static_cast<Real>(c->held.stopAt - c->odometer)) + " m ahead, by rule " +
                    ruleName(d, b.rule);
+            // Giving way: to whom, where, the gap it has and the gap it needs (the plan it gives way at says).
+            if (b.stopFor == StopFor::GivingWay && roads)
+                for (std::size_t k = 0; k < t->junctions.count; ++k) {
+                    const JunctionPlan& p = t->junctions.plans[k];
+                    if (p.decision != GiveWayDecision::GiveWay) continue;
+                    out += "; " + describeGiveWay(*roads, d.rightOfWay(), p, d.clockSeconds());
+                    break;
+                }
             break;
         case Limit::TopSpeed:
             out += "its top speed of " + one(c->held.topSpeed) + " m/s, " +
@@ -277,7 +320,7 @@ std::string describeCar(const Driving& d, CarId id) {
     }
 
     // The junctions ahead, as its driver plans for them.
-    if (roads) out += describeJunctionPlans(*roads, d.rightOfWay(), *c, t->junctions);
+    if (roads) out += describeJunctionPlans(*roads, d.rightOfWay(), *c, t->junctions, d.clockSeconds());
 
     // What it decided recently, oldest first.
     const CarTrace& trace = t->trace;
@@ -304,6 +347,24 @@ std::string describeCar(const Driving& d, CarId id) {
             const PlanNote& n = trace.planNoteOldestFirst(i);
             out += "  t=" + one(n.seconds) + " s  junction " + std::to_string(n.junction.index) + " by connector " +
                    std::to_string(n.connector.index) + ": " + planChangeWords(n.change) + "\n";
+        }
+    }
+    // What it decided at junctions, oldest first: each change of go / give way, or of whom it gives way to.
+    if (trace.giveWayNotesWritten > 0) {
+        out += "give-way decisions";
+        if (trace.giveWayNotesWritten > trace.giveWayNoteCount())
+            out += " (the last " + std::to_string(trace.giveWayNoteCount()) + " of " +
+                   std::to_string(trace.giveWayNotesWritten) + ")";
+        out += ":\n";
+        for (std::size_t i = 0; i < trace.giveWayNoteCount(); ++i) {
+            const GiveWayNote& n = trace.giveWayNoteOldestFirst(i);
+            JunctionPlan shown;
+            shown.decision = n.decision;
+            shown.judged = n.judged;
+            out += "  t=" + one(n.seconds) + " s  junction " + std::to_string(n.junction.index) + " by connector " +
+                   std::to_string(n.connector.index) + ": " +
+                   (roads ? describeGiveWay(*roads, d.rightOfWay(), shown) : std::string(giveWayDecisionWords(n.decision))) +
+                   "\n";
         }
     }
     return out;

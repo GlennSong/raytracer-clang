@@ -66,6 +66,20 @@ bool operator==(const TraceEntry& a, const TraceEntry& b);
 // How many notes of junction plans made and dropped a driven car's trace keeps (junction_plan.h PlanNote).
 constexpr std::size_t kPlanNoteLength = 8;
 
+// ONE CHANGE IN WHAT A DRIVER DECIDED AT A JUNCTION (issue #262): it decided to go or to give way, or now gives way
+// for another reason or to another car; with the judgement behind it (to whom, where, the gaps).
+struct GiveWayNote {
+    uint64_t tick = 0;
+    double seconds = 0;
+    engine::JunctionId junction;
+    engine::PathId connector;
+    GiveWayDecision decision = GiveWayDecision::Undecided;
+    GiveWayJudgement judged;
+};
+bool operator==(const GiveWayNote& a, const GiveWayNote& b);
+// How many of them a driven car's trace keeps.
+constexpr std::size_t kGiveWayNoteLength = 8;
+
 // ONE DRIVEN CAR'S TRACE: the ring, and the reasons behind the answers its driver holds now (for the card's "held"
 // line, and for the entries); and a second ring of its junction plans made and dropped.
 struct CarTrace {
@@ -75,6 +89,8 @@ struct CarTrace {
     TracedReason heldTopSpeed;   // why the top speed it holds
     std::array<PlanNote, kPlanNoteLength> planNotes;
     uint32_t planNotesWritten = 0;   // plan notes ever written on this trip (the ring keeps the last kPlanNoteLength)
+    std::array<GiveWayNote, kGiveWayNoteLength> giveWayNotes;
+    uint32_t giveWayNotesWritten = 0;   // give-way notes ever written on this trip
 
     // Adds an entry, dropping the oldest when the ring is full.
     void add(const TraceEntry& e);
@@ -87,6 +103,10 @@ struct CarTrace {
     void addPlanNote(const PlanNote& n);
     std::size_t planNoteCount() const;
     const PlanNote& planNoteOldestFirst(std::size_t i) const;
+    // The same for the give-way notes.
+    void addGiveWayNote(const GiveWayNote& n);
+    std::size_t giveWayNoteCount() const;
+    const GiveWayNote& giveWayNoteOldestFirst(std::size_t i) const;
 };
 
 // ONE NUMBER OVER A CAR'S TRACE (its ring oldest first, the count written, the held reasons), folded in a fixed order.

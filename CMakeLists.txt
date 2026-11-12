@@ -493,8 +493,10 @@ endif()
 # ============================================================
 add_library(driving STATIC
     src/apps/driving/act.cpp             # speeding up, following and stopping: the move step's formulas (#253)
+    src/apps/driving/announce.cpp        # the board: who will be on which crossing point, and when (#262)
     src/apps/driving/decide.cpp          # rules' answers combined into one decision, with its reasons (#252)
     src/apps/driving/driving.cpp
+    src/apps/driving/give_way.cpp        # judging the gaps a driver gives way by at junctions; patience (#262)
     src/apps/driving/junction_plan.cpp   # each driver's plan for the junctions ahead: connector, waiting points (#260)
     src/apps/driving/measure.cpp         # the plan's measurements table, counted while the tick runs (#257)
     src/apps/driving/notice.cpp         # facts: what a driver can notice, registered by name (#251)
@@ -527,6 +529,7 @@ add_executable(driving_tests tests/main.cpp tests/test_driving.cpp tests/test_dr
     tests/test_driving_measure.cpp  # the measurements table's arithmetic, breaches staged by hand (#257)
     tests/test_driving_trip_places.cpp   # where trips begin and end; routes with no lane change; default limits (#255)
     tests/test_driving_junctions.cpp     # who gives way to whom at load, and each driver's junction plan (#260)
+    tests/test_driving_give_way.cpp      # announcing, and giving way at junctions, on synthetic roads (#262)
     tests/driving_test_roads.cpp)  # small realistic road networks for the driving tests (#254)
 target_include_directories(driving_tests PRIVATE src tests)
 target_compile_options(driving_tests PRIVATE -Wall -Wextra)

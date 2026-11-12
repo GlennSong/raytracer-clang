@@ -18141,3 +18141,107 @@ at every minute (`5826a9b05a724639` at 300 s). Tick cost 0.134 ms before, 0.140 
 cars (D4); room beyond (D5); a sign that forbids turning on red (the control's `turn_on_red` is read; a `forbids` device
 on one approach is not yet).
 
+## ADR-0402 — Giving way: cars announce when they will be on each crossing point, and drivers judge the gap (#262)
+
+Words: an ANNOUNCEMENT is a car saying when its front will reach a crossing point's stretch on its path and when its tail
+will be past it; the BOARD holds every car's, rewritten each tick; a GAP is the time between one car's tail leaving the
+stretch and the other's front reaching it (traffic engineers' post-encroachment time); a car is GOING when it can no
+longer stop at its line braking comfortably (or is past it); its ARRIVAL is the tick it reaches its line, fixed once.
+
+**Context.** Driving model task D3 (`docs/driving-briefs/D3-give-way.md`). With the crossing points (ADR-0400) and the
+table of who gives way (ADR-0401) built, the lab's cars still drove through each other where paths cross and join:
+81 pairs seen overlapping where paths cross inside a junction and 25 where they join, sampled once a second in five
+minutes, and 15 spells of two cars overlapping on the lane after a join. Every lab junction is uncontrolled, so every
+meeting there is "asked while driving": who arrived first, then the kerb side, then the movement.
+
+**Decision.**
+- **The board** (`src/apps/driving/announce.h`): at the start of every plan step, every driven car with a junction within
+  its look-ahead TIME (the rule set's `junction_look_ahead`) announces each crossing point along its connector, from its
+  own state alone: arrival and clear times by one shared estimate (speeding up or slowing toward the speed it will hold
+  through the turn; a car that must stop first adds the stop), the speed through, whether it stops first, is going, is
+  committed, its fixed arrival, and NOT GOING when it is stopping short of the crossing for something that is not this
+  junction's traffic (a hold, its destination, a stop at an earlier junction, a stopped car beyond the line it cannot
+  pass, a queue behind such a car). A queue for one line announces no earlier than the car in front plus a following
+  interval (its gap kept, plus that car's length at the speed through), worked nearest the line first, and carried on,
+  shrinking, after the car in front has crossed. A car on a lane meeting a connector (ADR-0400's carry-overs) announces
+  as going. The board is an indexed flat array: filed by crossing point with a counting sort over the dense crossing ids,
+  each crossing's few by arrival, then who; found in one lookup; its memory kept from tick to tick.
+- **The judgement** (`src/apps/driving/give_way.h`), once per decision, nearest junction first: for each crossing point
+  along the connector and each car announced there that the driver must give way to, it may go ahead (its tail clear
+  before the other arrives, by the gap) or behind (arriving after the other's tail is clear, by the gap); otherwise it
+  gives way at the junction's line. Two gaps: `gap_comfortable` to decide to go, `gap_hard` to keep going once decided;
+  past the point where it could stop comfortably it is going whatever. Patience: the comfortable gap shrinks by
+  `gap_shrink` per second stood at the line, divided by the person's `patience`, down to `gap_floor` (never below
+  `gap_hard`). The one with right of way never looks at the one giving way.
+- **Who goes first when the table asks while driving**: a car that is going before one that is not (judged a decision
+  ahead for a driver that has decided to go, so nobody decides to go the moment before such a car becomes one to give
+  way to); then by ARRIVAL tick; then the table's fall-back; a ring of fall-backs among cars arriving in one tick (four
+  cars reaching a four-way together) goes by the lower car id, the same for every car in it.
+- **The arrival is fixed once**, when the driver first judges the junction (its own estimate then), or when it comes to
+  rest at the line where the control makes everyone stop or it holds a full stop, or when it can no longer stop if it
+  never judged. Read off the line as each car got there (the brief's words), a car that had stopped at its line to give
+  way to me took the right of way from me as I arrived and I stopped for it: priority flipped under drivers that had
+  already decided, with decisions made far back in queues the main cause of drivers changing their minds twice (dozens a
+  minute in the lab); holding the giving-way relation as memory instead formed rings and deadlocked (4 loops in two
+  minutes).
+  Fixed when first judged, the order of two cars never changes, so it has no loop and makes nobody change their mind.
+- **Deciding**: a driver decides only within its decision horizon (its comfortable stopping distance, one decision's
+  travel and `at_line_within`); one that is not going (held, blocked beyond the line) still judges and stops if it must,
+  but a clear road is no decision to go. Each change of decision is counted and traced (`give-way decisions` on the
+  card), and the plan keeps how many times its driver switched.
+- **The openings**: facts `must_give_way`, `give_way_line` (a place to stop by, `StopFor::GivingWay`: the stop names
+  the car given way to, and the wait-for graph draws a right-of-way arrow to it), `give_way_gap`, `give_way_gap_needed`,
+  `committed`, `stopped_at_line`; for full stops `next_line` (`StopFor::FullStop`), `everyone_stops`, `sign_rank` (its
+  words the rule set's ranks). All-way stops and stop signs are rules in the rule set. The numbers and settings are
+  declared as a reader of the rule set, so `buildRoadRules` names any missing. A host turns the step on by registering
+  it (`registerJunctionFacts`, after reading the rule set); without it nothing changes (the driving tests' older rule
+  sets).
+- **The lab's rule set** (`assets/scripts/rules/lab.lua`): `junction_look_ahead` 10 s (the brief said about 8; a far turn
+  from rest takes about 5.5 s to clear, which with the 2.5 s gap is the whole 8 s, so a car could come into view already
+  inside the gap), `gap_comfortable` 2.5 s (from the HCM's minor-street critical headways less the time to clear),
+  `gap_hard` 1.0 s, `gap_floor` 1.5 s, `gap_shrink` 0.05, `at_line_within` 1 m, `patience` 0.5-2; one rule, `give way`.
+- **The lights**: the phase is fixed at the first (`currentPhase`, the one place that says so) until D2's clock runs.
+- **The state hash** now folds the junction plans (what a car does reads them) and the stop's new fields.
+
+**Measured** (the lab, 300 drivers, five simulated minutes; before, the build at 371bd96e with the same measuring test):
+
+| | before | after |
+|---|---|---|
+| pairs overlapping on the plan where paths cross inside a junction (samples) | 81 (83) | 0 |
+| ... where they join inside a junction | 25 (30) | 0 |
+| ... where they meet filed under no junction | 0 | 1 (2): the road-data case below |
+| spells of overlap on the lane after a join (pair-ticks) | 15 (678) | 0 |
+| trips begun / arrived | 663 / 363 | 644 / 344 |
+| mean speed | 7.53 m/s | 7.18 m/s |
+| longest wait at a junction's line | none | 13.6 s (giving way) |
+| queues over junction lines; every gap from the second car on | 75; 7 gaps, 5.95 s a car | 176; 22 gaps, 7.72 s a car |
+| first car from moving off to its line | 2.92 s | 1.15 s |
+| loops, cars waiting with no reason, cars standing 60 s | 0, 0, 0 | 0, 0, 0 |
+| drivers changing their minds twice on one approach | | 0 (of 4,818 go and 965 give-way decisions) |
+| the model's tick (worst), back to back on a quiet machine | 0.137 ms (0.50) | 0.256 ms (0.67) |
+
+The lab's queues are short (no queue reached four cars), so the plan's saturation figure has no data; the gaps above
+include waiting for gaps on the other road. Gaps taken after giving way: 1.79-7.88 s, the smallest needed 1.78 s. The
+board held at most 1,464 announcements; no cap was hit; the steady state allocates nothing new (the board, the queue
+work and the judgement reuse their memory or are fixed arrays). The tick nearly doubles: every driven car announces
+every tick (the board was first sorted whole, 0.38 ms; filing it by crossing id brought that down), and the way ahead
+is now at least the look-ahead time long. The state hash is the same at every second of two runs (the sameness test,
+plans included). The one overlap left is ADR-0400's road-data case: junction 75's
+76 m ramp-end connector 3010 passes within touching distance of the end of lane 775, where cars wait at the same
+junction's line; a car waiting there is in the connector's path, and a car on the connector committed long before.
+
+On the hand-made roads (`tests/test_driving_give_way.cpp`, 16 cases): two cars on crossing paths, a stop-sign queue
+taking gaps on a main road that never stops for it, a join, a far turn across oncoming traffic (uncontrolled and on a
+green), four cars reaching a four-way in one tick (uncontrolled and all-way stop: one at a time, the same order every
+run), a 12 m bus's tail, a car too fast to stop, a refused turn, a meeting filed under no junction, a held car that does
+not hold up cross traffic, patience over twelve people (every gap taken between 1.5 and 2.5 s and at least what was
+needed), and ten minutes of random traffic at an uncontrolled four-way, an all-way stop and a T with a stop sign: no
+overlap, no loop. In that random traffic 0, 2 and 1 of about 180 drivers changed their minds twice: a car further back
+whose estimate dropped as the car in front crossed, caught by the hard gap as designed; the test bounds it.
+
+**Not here.** Waiting inside the junction and first in goes first (D4): a committed car does not stop for anything here,
+and a body on a crossing point does not yet block it for everyone. Room beyond as a claim (D5): a car stopped beyond
+the line only limits how far the car behind can get, which it announces. People and trains on the board (E5). A red
+light (D2): with the clock, a red is a stop that is not this junction's traffic, so the car announces "not going" by
+itself.
+

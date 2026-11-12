@@ -1010,6 +1010,17 @@ expects to reach it, the time its tail will be clear, the speed it will be doing
 sign, a red), when it arrived at the line, and how long it has waited. An announcement is worked out from the
 driver's own state alone, so all of them can be made in the plan step without order mattering.
 
+*As built* (task D3, ADR-0402): `src/apps/driving/announce.h`. The board is rewritten at the start of every plan step
+from the cars as they stood at the start of the tick, filed by crossing point (a counting sort over the dense crossing
+ids: an indexed flat array, found in one lookup), each crossing point's few in order of arrival, then who. Who announces
+is a time (`junction_look_ahead`, 10 s in the lab); a driver's way ahead is at least that long, and never shorter than
+the junctions it has planned for. One thing is not the car's own: a queue for one line announces no earlier than the
+car in front plus a following interval (gap kept, plus that car's length at the speed through), worked nearest the line
+first, and the interval carries on, shrinking, after the car in front has crossed. A car standing beyond the line
+limits how far the car behind can get: it announces "not going" for crossing points it cannot reach and "never clear"
+of one it would stop on. Besides when it reaches the line, it announces whether it is GOING (it cannot stop at the
+line, or will not be able to by its next decision) and its fixed ARRIVAL (9.3).
+
 ### 9.3 The fact `must_give_way`
 
 For each crossing point on my connector, for each announcement by a movement I give way to (from the junction plan,
@@ -1023,6 +1034,18 @@ margin? If not, I must give way, and the fact records to whom and by how many se
   can't tie (lower lane id, then lower car id), so exactly one of any two gives way.
 - **Where to wait.** Normally at the stop line. A far turn on a green may pull forward to the connector's
   `waitInsideAt` and wait there for a gap, as American drivers do. It has then entered the junction (below).
+
+*As built* (task D3, ADR-0402): `src/apps/driving/give_way.h`. The judgement is worked out once per decision and the
+facts (`must_give_way`, `give_way_line`, `give_way_gap`, `give_way_gap_needed`, `committed`, `stopped_at_line`, and for
+full stops `next_line`, `everyone_stops`, `sign_rank`) read it; the rule set says what to do with them
+(`{ when = "must_give_way", give = { stop_at = "give_way_line" } }`). Pairs asked while driving are ordered: a car that
+is going first; then by each car's ARRIVAL at its line, fixed once when its driver first judges the junction (as its own
+estimate then had it) or, for a full stop, when it comes to rest there; then the table's fall-back; a ring of
+fall-backs among cars arriving in one tick is broken at the lower car id. The arrival is fixed rather than read off the
+line because read off the line a car that had stopped to give way to me took the right of way from me as I arrived.
+A driver decides only within its decision horizon (its comfortable stopping distance and one decision's travel), and a
+driver that is not going (held, or blocked beyond the line) judges but decides nothing. A full stop (all-way stop, stop
+sign) is a rule in the rule set, not C++.
 
 ### 9.4 Inside the junction: first in goes first
 

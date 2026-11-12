@@ -8,8 +8,9 @@
 // level_traffic_lab_v2_drives: the lab as it ships (citysim.driving "v2", rules/lab.lua) for five simulated minutes at
 // the viewer's 60 steps a second. Every second it asks the wait-for graph who is waiting and why (a car waiting for no
 // reason fails the test), tracks how long each car has stood, and looks for two cars' bodies overlapping (on the same
-// path: fails; where different paths cross or join inside a junction: counted, expected until the junction rules
-// exist). Every two seconds it measures each car's tyres against the drawn road (CityRenderSystem::wheelGaps), sorted
+// path, or where different paths cross or join, sorted by the kind of meeting of their paths: fails beyond what giving
+// way left, issue #262). It measures queues emptying over junction lines and the longest wait at a line, and counts
+// what drivers decided at junctions. Every two seconds it measures each car's tyres against the drawn road (CityRenderSystem::wheelGaps), sorted
 // by where the car is: on a slope, a banked curve, over a crest or in a dip, or on the flat. At the end it prints the
 // measurements table (driving/measure.h), `driving?`, `waiting?` and the cars that stood longest, with why.
 //
@@ -143,7 +144,11 @@ struct Footprint {
     driving::CarId car;
     Vec2 rear, front;
     Real halfWidth = 0;
+    Real height = 0;   // the road's height under the middle of the body
 };
+// Two bodies whose roads are further apart in height than this are on different decks (a street under a bridge), not
+// overlapping: the road builder's own same-level figure (Rules::sameLevelDz), which the crossing points use too.
+constexpr Real kSameLevelWithin = 1.0;
 
 // Do two bodies overlap on the plan (separating axes over the two rectangles)?
 bool overlap(const Footprint& a, const Footprint& b) {
@@ -212,6 +217,51 @@ struct WayIn {
         return engine::kNoIndex;
     }
 };
+
+// WHAT THE FIVE-MINUTE RUN MAY SHOW, measured when giving way came in (issue #262, ADR-0402), so a later change cannot
+// make it worse unseen. Pairs of cars seen overlapping on the plan (sampled each second) where their paths cross or
+// join inside one junction, and where they meet filed under no junction; drivers that changed their minds twice.
+constexpr std::size_t kMostCrossJoinPairs = 0;
+constexpr std::size_t kMostAcrossJunctionPairs = 1;
+constexpr uint64_t kMostChangedMindTwice = 4;
+
+// WHERE TWO CARS' PATHS MEET, for an overlap on the plan between cars on different paths: the kind of the first crossing
+// point found between any path one body is on and any path the other's is on (crossings filed under a junction first,
+// as each path lists them), or none.
+enum class MeetKind { Cross, Join, Split, CrossAcross, JoinAcross, None };
+constexpr int kMeetKindCount = 6;
+const char* meetWords(MeetKind k) {
+    switch (k) {
+        case MeetKind::Cross: return "a cross inside one junction";
+        case MeetKind::Join: return "a join inside one junction";
+        case MeetKind::Split: return "a split (two paths leaving one lane)";
+        case MeetKind::CrossAcross: return "a cross filed under no junction (two junctions, or a connector and a lane)";
+        case MeetKind::JoinAcross: return "a join filed under no junction";
+        case MeetKind::None: return "no crossing point between their paths";
+    }
+    return "?";
+}
+MeetKind meetingOf(const engine::LaneGraph& roads, const driving::Car& a, const driving::Car& b, uint32_t* crossing) {
+    std::vector<engine::PathId> pa{a.path}, pb{b.path};
+    for (std::size_t k = 0; k < a.trailCount; ++k) pa.push_back(a.trail[k]);
+    for (std::size_t k = 0; k < b.trailCount; ++k) pb.push_back(b.trail[k]);
+    for (const engine::PathId p : pa) {
+        const engine::Path& path = roads.paths[p.index];
+        for (uint32_t k = path.crossings.first; k < path.crossings.end(); ++k) {
+            const engine::CrossingId cid = roads.pathCrossings[k];
+            const engine::CrossingPoint& rec = roads.crossings[cid.index];
+            if (rec.otherSide != engine::OtherSide::Path) continue;
+            const engine::PathId other = rec.a == p ? rec.otherPath() : rec.a;
+            if (std::find(pb.begin(), pb.end(), other) == pb.end()) continue;
+            if (crossing) *crossing = cid.index;
+            const bool across = !rec.junction.valid();
+            if (rec.meeting == engine::Meeting::Split) return MeetKind::Split;
+            if (rec.meeting == engine::Meeting::Join) return across ? MeetKind::JoinAcross : MeetKind::Join;
+            return across ? MeetKind::CrossAcross : MeetKind::Cross;
+        }
+    }
+    return MeetKind::None;
+}
 
 // WHERE A CAR IS, for the tyre check: on a slope, a banked curve, over a crest or in a dip, or on the flat.
 enum class Ground { Flat, Slope, Banked, Crest, Dip };
@@ -295,9 +345,85 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     uint64_t joinPairTicks = 0, followPairTicks = 0, joinSpells = 0, followSpells = 0;
     Real worstFollowOverlap = 0;
     std::set<std::pair<uint32_t, uint32_t>> joinPairs, followPairs;
+    // Overlaps on the plan between cars on different paths, by the kind of meeting of their paths (sampled each second).
+    uint64_t meetSamples[kMeetKindCount] = {};
+    std::set<std::pair<uint32_t, uint32_t>> meetPairs[kMeetKindCount];
+    // QUEUES EMPTYING AT JUNCTION LINES: a car's front leaving an arriving lane for a connector crosses that lane's line;
+    // the queue figures come from those crossings (measure.h findQueueBursts), as the measurements table reads them.
+    struct RestSeen {
+        bool atRest = true;
+        double restLeftAt = -1, restOdometer = 0;
+    };
+    std::map<uint32_t, RestSeen> rest;
+    std::map<uint32_t, std::vector<driving::LineCrossing>> lineCrossings;   // by arriving lane
+    std::map<uint32_t, uint32_t> frontPath;
+    // THE LONGEST WAIT AT A JUNCTION'S LINE: a car standing with its front within 2 m of the end of a lane that leads into
+    // a connector, its spell from coming to rest there to moving on.
+    constexpr Real kAtTheLine = 2.0;
+    std::set<std::pair<uint32_t, uint64_t>> dithered;   // (car, its plan's tick) already shown
+    std::map<uint32_t, Real> lineWaitSince;
+    Real longestLineWait = 0;
+    uint32_t longestLineWaitCar = 0;
+    std::string longestLineWaitWhy;
     for (int i = 1; i <= steps; ++i) {
         city.step(lc.world, kStep);
         const Real now = i * kStep;
+        // RT_LAB_WATCH=<car>,<from s>,<to s>: that car's card and the announcements on its junctions' crossing points,
+        // every tick of the window (for a person chasing one decision).
+        if (const char* watch = std::getenv("RT_LAB_WATCH")) {
+            unsigned wc = 0;
+            double from = 0, to = 0;
+            if (std::sscanf(watch, "%u,%lf,%lf", &wc, &from, &to) == 3 && now >= from && now <= to &&
+                d->car(driving::CarId(wc))) {
+                std::printf("---- t=%.3f\n%s", now, d->describeCar(driving::CarId(wc)).c_str());
+                const driving::JunctionPlans* plans = d->junctionPlans(driving::CarId(wc));
+                for (std::size_t k = 0; plans && k < plans->count; ++k) {
+                    const engine::Path& p = roads.paths[plans->plans[k].connector.index];
+                    for (uint32_t x = p.crossings.first; x < p.crossings.end(); ++x)
+                        for (const driving::Announcement& a : d->board().on(roads.pathCrossings[x]))
+                            std::printf("  board: crossing %u car %llu path %u arrive %.2f clear %.2f going %d fixed %d "
+                                        "at tick %llu notGoing %d\n",
+                                        a.crossing.index, static_cast<unsigned long long>(a.who), a.onPath.index,
+                                        a.arriveIn, a.clearIn, a.going, a.arrivalFixed,
+                                        static_cast<unsigned long long>(a.arrivalTick), a.notGoing);
+                }
+            }
+        }
+        for (const driving::Car& c : d->cars()) {
+            if (!c.driven) continue;
+            RestSeen& r = rest[c.id.index];
+            const bool atRest = c.speed < driving::kStandingBelow;
+            if (r.atRest && !atRest) {
+                r.restLeftAt = now - kStep;
+                r.restOdometer = c.odometer;
+            }
+            r.atRest = atRest;
+            std::map<uint32_t, uint32_t>::iterator fp = frontPath.find(c.id.index);
+            if (fp != frontPath.end() && fp->second != c.path.index &&
+                roads.paths[c.path.index].kind == engine::PathKind::Connector &&
+                roads.paths[c.path.index].from.index == fp->second) {
+                driving::LineCrossing x;
+                x.car = c.id;
+                x.tick = static_cast<uint64_t>(i);
+                x.seconds = now;
+                x.restLeftAt = r.restLeftAt;
+                x.restDistance = (c.odometer - c.along) - r.restOdometer;
+                lineCrossings[fp->second].push_back(x);
+            }
+            frontPath[c.id.index] = c.path.index;
+            const engine::Path& on = roads.paths[c.path.index];
+            const bool atLine = on.kind == engine::PathKind::Lane && on.next.count > 0 &&
+                                roads.paths[roads.nextPaths[on.next.first].index].kind == engine::PathKind::Connector &&
+                                on.length - c.along <= kAtTheLine && driving::isWaiting(c);
+            std::map<uint32_t, Real>::iterator lw = lineWaitSince.find(c.id.index);
+            if (atLine && lw == lineWaitSince.end()) lineWaitSince[c.id.index] = now;
+            if (atLine && lw != lineWaitSince.end() && now - lw->second > longestLineWait) {
+                longestLineWait = now - lw->second;
+                longestLineWaitCar = c.id.index;
+                longestLineWaitWhy = why(c);
+            }
+            if (!atLine && lw != lineWaitSince.end()) lineWaitSince.erase(lw);
+        }
         for (const driving::Car& c : d->cars()) {
             std::map<uint32_t, uint32_t>::iterator lf = lastFront.find(c.id.index);
             if (lf != lastFront.end() && lf->second == c.path.index) continue;
@@ -337,6 +463,17 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         overlappingBefore.swap(overlappingNow);
         if (i % perSecond != 0) continue;
 
+        // A DRIVER THAT CHANGED ITS MIND MORE THAN ONCE on one approach: its card, the first time, when asked.
+        if (std::getenv("RT_LAB_DITHER_LOG"))
+            for (const driving::Car& c : d->cars()) {
+                const driving::JunctionPlans* plans = d->junctionPlans(c.id);
+                for (std::size_t k = 0; plans && k < plans->count; ++k) {
+                    const driving::JunctionPlan& p = plans->plans[k];
+                    if (p.mindChanges < 2 || !dithered.insert({c.id.index, p.madeAtTick}).second) continue;
+                    std::printf("      [dither] t=%.0f car %u at junction %u:\n%s", now, c.id.index, p.junction.index,
+                                d->describeCar(c.id).c_str());
+                }
+            }
         // WHO IS WAITING, AND WHY: a car waiting for no reason is the fault this model exists to remove.
         const driving::WaitReport wr = d->waitReport();
         noReason += wr.noReason.size();
@@ -364,12 +501,14 @@ TEST_CASE(level_traffic_lab_v2_drives) {
             f.rear = Vec2(p.rear.x, p.rear.z);
             f.front = Vec2(p.front.x, p.front.z);
             f.halfWidth = d->vehicleClasses().at(c.vehicleClass).width * 0.5;
+            f.height = (p.rear.y + p.front.y) * 0.5;
             bodies.push_back(f);
         }
         for (std::size_t a = 0; a < bodies.size(); ++a)
             for (std::size_t b = a + 1; b < bodies.size(); ++b) {
                 const Vec2 ma = (bodies[a].rear + bodies[a].front) * 0.5, mb = (bodies[b].rear + bodies[b].front) * 0.5;
                 if ((ma - mb).length() > 25.0) continue;
+                if (std::fabs(bodies[a].height - bodies[b].height) > kSameLevelWithin) continue;
                 if (!overlap(bodies[a], bodies[b])) continue;
                 const std::pair<uint32_t, uint32_t> key(bodies[a].car.index, bodies[b].car.index);
                 if (sharePath(d->pathLists(), roads, bodies[a].car, bodies[b].car, d->cars()[a])) {
@@ -378,6 +517,15 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                 } else {
                     ++crossOverlapSamples;
                     crossOverlapPairs.insert(key);
+                    uint32_t crossing = engine::kNoIndex;
+                    const MeetKind kind = meetingOf(roads, d->cars()[a], d->cars()[b], &crossing);
+                    ++meetSamples[static_cast<int>(kind)];
+                    const bool fresh = meetPairs[static_cast<int>(kind)].insert(key).second;
+                    if (fresh && std::getenv("RT_LAB_OVERLAP_LOG")) {
+                        std::printf("      [cross-overlap] t=%.0f cars %u and %u, %s (crossing %u)\n", now, key.first,
+                                    key.second, meetWords(kind), crossing);
+                        std::printf("%s%s", d->describeCar(bodies[a].car).c_str(), d->describeCar(bodies[b].car).c_str());
+                    }
                 }
             }
         // THE TYRES AGAINST THE DRAWN ROAD, every ten seconds.
@@ -443,6 +591,20 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                     pc.mostCrossings, pc.mostCrossingsConnector.index, pc.mostAtOnce,
                     static_cast<unsigned long long>(caps.junctionPlansCut),
                     static_cast<unsigned long long>(caps.waitingPointsCut), static_cast<unsigned long long>(d->planHash()));
+        // GIVING WAY (issue #262): what drivers decided at junctions, and the board.
+        std::printf("    [lab-v2] give way: %llu decisions to go, %llu to give way; %llu went after giving way, taking gaps "
+                    "of %.2f-%.2f s (the smallest needed %.2f s); %llu plans where the driver changed its mind more than "
+                    "once; the board held at most %zu announcements; %llu tie groups cut\n",
+                    static_cast<unsigned long long>(pc.decidedGo), static_cast<unsigned long long>(pc.decidedGiveWay),
+                    static_cast<unsigned long long>(pc.wentAfterGivingWay), pc.smallestGapTaken, pc.largestGapTaken,
+                    pc.smallestGapNeeded, static_cast<unsigned long long>(pc.changedMindTwice), d->board().most(),
+                    static_cast<unsigned long long>(caps.tieGroupsCut));
+        // One driver's card giving way at a line, as `driver? <id>` shows it.
+        for (const driving::Car& c : d->cars()) {
+            if (c.binding.by != driving::Limit::Stop || c.binding.stopFor != driving::StopFor::GivingWay) continue;
+            std::printf("    [lab-v2] driver? %u (giving way):\n%s", c.id.index, d->describeCar(c.id).c_str());
+            break;
+        }
         // One driver's card with a junction ahead, as `driver? <id>` shows it.
         for (const driving::Car& c : d->cars()) {
             const driving::JunctionPlans* plans = d->junctionPlans(c.id);
@@ -486,6 +648,32 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                 "different paths, where they cross or join %llu (%zu pairs)\n",
                 static_cast<unsigned long long>(sameOverlapSamples), sameOverlapPairs.size(),
                 static_cast<unsigned long long>(crossOverlapSamples), crossOverlapPairs.size());
+    std::printf("    [lab-v2] ... on different paths, by where their paths meet (samples, pairs):\n");
+    for (int k = 0; k < kMeetKindCount; ++k)
+        std::printf("      %-75s %4llu  %4zu\n", meetWords(static_cast<MeetKind>(k)),
+                    static_cast<unsigned long long>(meetSamples[k]), meetPairs[k].size());
+    // The queues emptying over junction lines, and the longest wait at a line.
+    {
+        std::vector<driving::QueueBurst> bursts;
+        for (const std::pair<const uint32_t, std::vector<driving::LineCrossing>>& line : lineCrossings)
+            for (const driving::QueueBurst& b : driving::findQueueBursts(line.second)) bursts.push_back(b);
+        const driving::QueueFigures q = driving::queueFigures(bursts);
+        // The lab's queues are short: every gap from the second car on, as well as the plan's figure (from the fourth).
+        double allGaps = 0;
+        std::size_t gapCount = 0;
+        for (const driving::QueueBurst& b : bursts)
+            for (const double g : b.gaps) {
+                allGaps += g;
+                ++gapCount;
+            }
+        std::printf("    [lab-v2] queues emptying over junction lines: %zu queues; %zu gaps from the second car on, %.2f s "
+                    "a car on average; %zu from the %zuth car on, %.2f s a car; the first car %.2f s from moving off to "
+                    "its line\n",
+                    q.bursts, gapCount, gapCount ? allGaps / static_cast<double>(gapCount) : 0.0, q.gaps,
+                    driving::kSaturationFromCar, q.secondsPerCar, q.firstCarDelay);
+        std::printf("    [lab-v2] the longest wait at a junction's line: %.1f s (car %u, at the end of it: %s)\n",
+                    longestLineWait, longestLineWaitCar, longestLineWaitWhy.c_str());
+    }
     std::printf("    [lab-v2] tyres against the drawn road (every 2 s, every car; + floats, - sinks); the steepest body "
                 "pitch seen %.3f, roll %.3f:\n",
                 steepestPitch, steepestRoll);
@@ -498,9 +686,22 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     std::printf("    [lab-v2] the measurements table:\n%s\n", report.describe().c_str());
 
     CHECK(noReason == 0);
-    CHECK(followPairTicks == 0);   // following holds; overlaps where paths join wait for the junction rules
+    CHECK(followPairTicks == 0);   // following holds
     CHECK(worstGap < 0.03);
     CHECK(sim.drivingHost().counts().arrivals > 0);
+    // GIVING WAY (issue #262, ADR-0402). No two cars that obeyed the rules overlap where their paths cross or join
+    // inside a junction, nor on the lane after a join; no loop of waiting cars; nobody stands 60 s. What may remain is
+    // the road-data case ADR-0400 lists: junction 75's long connector 3010 passes within touching distance of the end of
+    // lane 775, where cars wait at that junction's own line (filed under no junction: a car waiting there sits in the
+    // connector's path, and a car on the connector has long since committed).
+    CHECK(meetPairs[static_cast<int>(MeetKind::Cross)].size() + meetPairs[static_cast<int>(MeetKind::Join)].size() <=
+          kMostCrossJoinPairs);
+    CHECK(meetPairs[static_cast<int>(MeetKind::CrossAcross)].size() + meetPairs[static_cast<int>(MeetKind::JoinAcross)].size() <=
+          kMostAcrossJunctionPairs);
+    CHECK(joinPairTicks == 0);
+    CHECK(loopSamples == 0);
+    CHECK(over60 == 0);
+    CHECK(d->junctionPlanCounts().changedMindTwice <= kMostChangedMindTwice);
 }
 
 TEST_CASE(level_traffic_lab_v2_same_every_run) {

@@ -3,6 +3,7 @@
 #include "city_sim.h"
 
 #include "../driving/act.h"            // registerMoveNeeds
+#include "../driving/give_way.h"       // registerJunctionFacts
 #include "../driving/road_rules.h"
 #include "../../engine/script_assets.h"   // loadScriptCode, resolveScriptPath
 #ifdef RT_ENABLE_SCRIPTING
@@ -56,6 +57,12 @@ bool loadDrivingRules(const std::string& file, driving::Driving& d, std::string*
     driving::AnswerVocabulary vocabulary;
     driving::CompiledRules rules;
     if (!driving::loadRuleSet(vm, file, ruleSet, &err)) return refuse(err);
+    // The junction step: announcing, and giving way (#262); its sign_rank fact speaks the rule set's ranks.
+    if (!driving::registerJunctionFacts(facts, ruleSet.ranks, &problems)) {
+        std::string all;
+        for (const std::string& p : problems) all += (all.empty() ? "" : "; ") + p;
+        return refuse("the junction step's facts would not register: " + all);
+    }
     if (!driving::loadRules(vm, file, facts, ruleSet, vocabulary, rules, &err)) return refuse(err);
     driving::RoadRules roadRules;
     if (!driving::buildRoadRules(*d.roads(), ruleSet, facts, roadRules, &problems)) {

@@ -9,10 +9,16 @@
 // Cars are placed on the road and removed (traffic_state.h holds a car's record and the per-path lists); a trip is
 // recorded for a placed car, can be asked about, steered and ended. Once the host has handed over the rules (useRules),
 // each tick runs the three steps of design 7.1 over the driven cars (issue #253):
-//   1. PLAN: each driver whose turn it is notices its facts along its way ahead, decides by the rules, and HOLDS the
-//      answers (a place to stop by, as an odometer reading; a top speed; the way ahead). Before noticing, it brings its
-//      plans for the junctions on its way ahead up to date (junction_plan.h). A driver whose `arrived` fact
-//      is yes ends its trip instead: a Parked event, and the car stays where it is, placed and undriven.
+//   1. PLAN: first, when the host registered the junction step (give_way.h registerJunctionFacts), every driven car
+//      notes what its own state says about the lines ahead (came to rest, committed, arrived) and ANNOUNCES itself on
+//      the board for the crossing points of the junctions within its look-ahead time (announce.h), from the state at
+//      the start of the tick; the board is then sorted. Then each driver whose turn it is notices its facts along its
+//      way ahead, decides by the rules, and HOLDS the answers (a place to stop by, as an odometer reading; a top speed;
+//      the way ahead). Before noticing, it brings its plans for the junctions on its way ahead up to date
+//      (junction_plan.h) and judges, from this tick's board, whether it must give way at them (give_way.h). A driver
+//      whose `arrived` fact is yes ends its trip instead: a Parked event, and the car stays where it is, placed and
+//      undriven. Every decision reads the cars as they stood at the start of the tick and this tick's board; the
+//      answers are applied only once all are made, so the order cars are visited in changes nothing.
 //   2. SETTLE CLAIMS: nothing yet (junctions and lane changes bring claims).
 //   3. MOVE: every driven car works out its speed from its held answers and a fresh look at the car ahead (act.h),
 //      moves along its held way, carrying over onto the next paths as many times as it must, and records what held it
@@ -30,7 +36,9 @@
 // Units: metres, seconds.
 
 #include "engine/procgen/city/roads/lane_graph.h"
+#include "apps/driving/announce.h"        // the board: who will be on which crossing point, and when
 #include "apps/driving/decide.h"
+#include "apps/driving/give_way.h"        // judging the gaps a driver gives way by
 #include "apps/driving/junction_plan.h"   // each driver's plan for the junctions ahead
 #include "apps/driving/notice.h"
 #include "apps/driving/right_of_way.h"    // who gives way to whom, worked out at load
@@ -80,8 +88,9 @@ struct Trip {
     // looking, a limit it never comes near.
     bool wayEnds = false;
     // THE JUNCTIONS AHEAD, as the driver plans for them (junction_plan.h): made when a junction's connector comes onto
-    // the way ahead, kept until the car is through, dropped at once when the trip is routed again. Nothing a car does
-    // reads them yet (task D3 will), so they are left out of stateHash; planHash folds them.
+    // the way ahead, kept until the car is through, dropped at once when the trip is routed again. They hold what the
+    // car remembers of each line and what its driver decided there (issue #262), which what it does reads, so stateHash
+    // folds them; planHash folds them too, with the plan counts.
     JunctionPlans junctions;
     // WHAT THE DRIVER DECIDED RECENTLY (trace.h), and the reasons behind what it holds now. Written only while
     // DrivingSettings::trace is on; never read by the tick, and left out of stateHash (traceHash folds it).
@@ -125,6 +134,10 @@ struct CapCounts {
     // commits later than it might. Counted per plan made.
     uint64_t waitingPointsCut = 0;
     CarId lastWaitingPointCut;
+    // More cars than kMaxTieGroup arrived at one junction's lines in the same tick when a driver looked for a ring of
+    // fall-backs among them (give_way.h): those past the cap were left to the plain fall-back. Counted per look.
+    uint64_t tieGroupsCut = 0;
+    CarId lastTieGroupCut;
 };
 
 // HOW THE DRIVERS' JUNCTION PLANS WENT since this object was made (junction_plan.h).
@@ -136,6 +149,13 @@ struct JunctionPlanCounts {
     uint32_t mostCrossings = 0;  // the most crossing points along one plan's connector
     engine::PathId mostCrossingsConnector;
     uint32_t mostAtOnce = 0;     // the most junctions one driver had planned for at once
+    // WHAT DRIVERS DECIDED at junctions (issue #262), counted per change of decision on a plan.
+    uint64_t decidedGo = 0;          // decided to go (from undecided, or after giving way)
+    uint64_t decidedGiveWay = 0;     // decided to give way
+    uint64_t wentAfterGivingWay = 0; // ... of the go decisions, after giving way on the same approach (a gap taken)
+    uint64_t changedMindTwice = 0;   // plans whose driver switched between go and give way more than once
+    // The gaps taken after giving way: the smallest and largest gap had, and the smallest gap needed (seconds).
+    Real smallestGapTaken = 0, largestGapTaken = 0, smallestGapNeeded = 0;
 };
 
 // THE HOST'S HANDLE TO A TRIP. Trips are begun and ended, and their slots reused, so the handle carries a generation:
@@ -199,6 +219,11 @@ public:
     // The car's plans for the junctions ahead, or null when it is on no trip.
     const JunctionPlans* junctionPlans(CarId car) const;
     const JunctionPlanCounts& junctionPlanCounts() const { return planCounts_; }
+    // THE JUNCTION STEP (issue #262): on when the rules came with a registry that has it (registerJunctionFacts). This
+    // tick's board of announcements (announce.h), as it was when the drivers decided.
+    bool junctionStep() const { return junctionsOn_; }
+    const JunctionNumbers& junctionNumbers() const { return junctionNumbers_; }
+    const AnnouncementBoard& board() const { return board_; }
     // ONE NUMBER OVER EVERY DRIVER'S JUNCTION PLANS (in car order) and the plan counts and caps, kept apart from
     // stateHash, which leaves them out while nothing a car does reads them.
     uint64_t planHash() const;
@@ -304,6 +329,8 @@ public:
 private:
     // The three steps of a tick, in order (design 7.1).
     void plan();            // each driver due works out what it wants; reads last tick's state, writes nothing shared
+    // The start of the plan step: every driven car notes the lines ahead and announces itself (announce.h).
+    void announce();
     void settleClaims();    // two cars that wanted the same thing: granted in a fixed order (nothing to settle yet)
     void move(Real dt);     // each driven car moves; then the copies swap and the lists are rebuilt
 
@@ -330,9 +357,30 @@ private:
         TracedReason topSpeedWhy;
         JunctionPlans junctions;    // the plans for the junctions on `way`, updated before the driver noticed
         PlanUpdate planUpdate;      // what updating them did
+        GiveWayVerdict verdict;     // what it judged about giving way at them (the junction step only)
+        std::array<Real, kMaxJunctionPlans> lineIn{};   // ... and when the board had it reaching each one's line
     };
     // Counts and traces what one update of a car's plans did.
     void notePlanUpdate(const PlanUpdate& u, CarId car, Trip& t, const JunctionPlans& plans);
+    // Records on the trip's plans what the driver decided (give_way.h), counting and tracing each change, and fixes the
+    // arrival at each line it judged for the first time (`lineIn`, by plan).
+    void applyVerdict(const GiveWayVerdict& v, const std::array<Real, kMaxJunctionPlans>& lineIn, const Car& car,
+                      Trip& t);
+
+    // ONE CAR'S NEAREST LINE, as the announcing step works it out (working memory, rebuilt every tick).
+    struct LineWork {
+        bool has = false;
+        uint8_t plan = 0;             // which of its plans
+        double toLine = 0;            // metres from its front
+        Real ownIn = 0;               // seconds to reach it, by its own estimate
+        Real in = 0;                  // ... and no earlier than the car ahead queued for the same line
+        bool notGoing = false;        // stopping short of the line for another reason, or queued behind such a car
+        double frontLimit = kNever;   // the odometer reading its front cannot pass (a stopped car beyond the line)
+        engine::PathId fromLane;      // the lane the connector leaves: cars queued for one line share it
+        Real through = 0;             // the speed it will hold through that junction
+    };
+    // When the board has a car reaching the line of each of its plans, by connector (kNever: not announced).
+    using LineTimes = std::array<std::pair<engine::PathId, Real>, kMaxJunctionPlans>;
     // The trip was routed again: its plans go at once (each noted).
     void dropPlansForNewRoute(Trip& t);
 
@@ -366,6 +414,10 @@ private:
     PersonalSetting gapKept_;             // the setting gap_kept, and its name's hash (personalValue)
     uint32_t gapKeptHash_ = 0;
     Real standstillGap_ = 0;
+    bool junctionsOn_ = false;            // the junction step (give_way.h hasJunctionStep)
+    Real step_ = 0;                       // the step of the tick under way, seconds (the decide interval is a number of them)
+    JunctionNumbers junctionNumbers_;
+    AnnouncementBoard board_;             // rewritten at the start of every plan step
 
     // Working memory reused from tick to tick (never part of the state).
     std::vector<Car> carsNext_;           // the second copy of the cars the move step writes
@@ -375,6 +427,9 @@ private:
     NoticeScratch noticeScratch_;
     Decision decision_;
     std::vector<engine::PathId> pathsAfter_;
+    std::vector<LineWork> lines_;         // the announcing step's, per record
+    std::vector<uint32_t> lineOrder_;     // ... the records with a line, nearest the line first
+    std::vector<LineTimes> lineTimes_;    // ... per record
 };
 
 }  // namespace driving

@@ -65,6 +65,14 @@ WaitReason waitReasonOf(const Car& car) {
         r.toCar = car.binding.car;
         break;
     case Limit::Stop:
+        // Giving way to a car: an arrow to it. A full stop first (no car named) or any other place: a leaf.
+        if (car.binding.stopFor == StopFor::GivingWay && car.binding.car.valid()) {
+            r.sort = ReasonSort::Arrow;
+            r.arrow = ArrowKind::GivingWay;
+            r.toCar = car.binding.car;
+            r.rule = car.binding.rule;
+            break;
+        }
         r.sort = ReasonSort::Leaf;
         r.leaf = LeafKind::Stop;
         r.rule = car.binding.rule;
