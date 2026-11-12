@@ -174,12 +174,18 @@ struct Track {
     uint32_t railTrack = kNoIndex;                   // the rail network's own index of the track
 };
 
+// How far from its junction's outline a lane arriving at the junction may end, or a lane leaving it begin (metres, in
+// plan): the lanes the connectors through a junction will join.
+constexpr Real kJunctionEndReach = 1.5;
+
 struct Junction {
     Range connectors;          // into LaneGraph::junctionConnectors, in id order
     Range crossings;           // into LaneGraph::crossings directly (crossings are stored junction by junction)
     Range crosswalks;          // into LaneGraph::crosswalks directly (likewise)
     NameIndex control = kNoName;   // a LaneGraph::controlNames entry, from the control plan
     Range box;                 // into LaneGraph::planPoints: the outline of the area that must not be blocked
+    Range arriving;            // into LaneGraph::junctionLanes: the lanes ending at its outline (at a stop line), id order
+    Range leaving;             // into LaneGraph::junctionLanes: the lanes beginning at its outline, in id order
 };
 
 // A RULE STANDING ON A PATH: a kind (a LaneGraph::regulationKindNames entry), where along the path, and a value
@@ -222,6 +228,7 @@ struct LaneGraph {
     std::vector<PathId> sectionLanes;
     std::vector<LaneLine> laneLines;
     std::vector<PathId> junctionConnectors;
+    std::vector<PathId> junctionLanes;  // the lanes arriving at and leaving each junction
     std::vector<Vec2> planPoints;       // junction boxes, crosswalk outlines, track lines
 
     // A name's index in a table, or kNoName.
@@ -262,7 +269,8 @@ inline bool operator!=(const LaneGraph& a, const LaneGraph& b) { return !(a == b
 // THE STRUCTURAL CHECKS (design 5.3; the geometric ones come with the road builder): every index and range in
 // bounds, every enum value known, every tag inside its name table, lanes and their sections agreeing both ways,
 // connectors and their junctions agreeing both ways, a connector's from-lane listing it as next, lists sorted,
-// stretches running forwards. Returns the problems in plain words, each naming what and where; empty = sound.
+// stretches running forwards, a junction's arriving lanes ending and its leaving lanes beginning within
+// kJunctionEndReach of its outline. Returns the problems in plain words, each naming what and where; empty = sound.
 std::vector<std::string> validate(const LaneGraph& g);
 
 // THE WHOLE GRAPH AS TEXT, in id order, with the names from the name tables: for a person checking a junction by

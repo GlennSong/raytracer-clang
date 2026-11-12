@@ -43,6 +43,43 @@ double interp(const std::vector<double>& xs, const std::vector<double>& ys, doub
     return valueAtStation(xs.data(), ys.data(), xs.size(), x);
 }
 
+std::vector<Vec2> sliceAtStations(const std::vector<Vec2>& xy, const std::vector<double>& s, double from, double to,
+                                  double minGap) {
+    std::vector<Vec2> out;
+    if (xy.empty() || s.size() != xy.size()) return out;
+    const double a = std::clamp(from, s.front(), s.back()), b = std::clamp(std::max(from, to), s.front(), s.back());
+    out.push_back(pointAt(xy, s, a));
+    for (std::size_t i = 0; i < xy.size(); ++i)
+        if (s[i] > a + minGap && s[i] < b - minGap) out.push_back(xy[i]);
+    out.push_back(pointAt(xy, s, b));
+    return out;
+}
+
+double stationAcross(const std::vector<Vec2>& xy, const std::vector<double>& s, const Vec2& p) {
+    // from the nearest point's station, step along the tangent by how far p stands ahead of the normal there (Newton's
+    // step on a line, near enough on a gentle bend) until the step is negligible
+    constexpr int kSteps = 8;
+    constexpr double kSettled = 1e-6;
+    if (xy.size() < 2) return s.empty() ? 0.0 : s.front();
+    double st = project(xy, s, p).station;
+    for (int i = 0; i < kSteps; ++i) {
+        const double ahead = dot(p - pointAt(xy, s, st), tangentAtStation(xy, s, st));
+        const double next = std::clamp(st + ahead, s.front(), s.back());
+        const bool settled = std::fabs(next - st) < kSettled;
+        st = next;
+        if (settled) break;
+    }
+    return st;
+}
+
+double circleRadius(const Vec2& a, const Vec2& b, const Vec2& c) {
+    // R = |ab| |bc| |ca| / (2 |cross(b - a, c - a)|)
+    const double twiceArea = std::fabs(cross(b - a, c - a));
+    const double sides = distance(a, b) * distance(b, c) * distance(c, a);
+    if (!(twiceArea > 0)) return std::numeric_limits<double>::infinity();
+    return sides / (2 * twiceArea);
+}
+
 std::vector<Vec2> crossings(const std::vector<Vec2>& a, const std::vector<Vec2>& b) {
     std::vector<Vec2> out;
     auto box = [](const std::vector<Vec2>& p, double& x0, double& x1, double& y0, double& y1) {

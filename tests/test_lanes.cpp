@@ -1556,3 +1556,271 @@ TEST_CASE(lanes_print_expand_cost_per_city) {
         std::printf("    [expand] %-26s %5zu edges -> %6zu lanes, %8zu points: %.1f ms\n", name, g.edges.size(), L.lanes.size(), pts, ms);
     }
 }
+
+// ---- THE LANE GRAPH FROM THE BUILT LANES (#237) ------------------------------------------------------------------------
+#include "engine/procgen/city/roads/lanes/lane_graph_build.h"
+
+namespace {
+// The one vehicle tag the tests open every lane to (a test's name, not a kind of vehicle).
+constexpr const char* kLaneGraphTestTag = "test_any";
+// A builder lane's paths and its stretches inside junctions may miss its length by this much (metres).
+constexpr double kLaneCoverTolerance = 0.01;
+// A section's lanes start (and end) within this of the section's start along its road's spine (metres).
+constexpr double kSectionShareTolerance = 0.05;
+// Two neighbours in a section stand no farther apart than their half widths and this (metres).
+constexpr double kNeighbourSlack = 0.5;
+// Two directions' cosines this close are the same direction (rounding).
+constexpr double kCosineRounding = 1e-6;
+
+const LaneGraphBuild& laneGraphOf(const std::string& name) {
+    static std::map<std::string, LaneGraphBuild> cache;
+    std::map<std::string, LaneGraphBuild>::iterator it = cache.find(name);
+    if (it == cache.end()) {
+        LaneGraphOptions o;
+        o.vehicleTags = {kLaneGraphTestTag};
+        it = cache.emplace(name, buildLaneGraph(scene(name), o)).first;
+    }
+    return it->second;
+}
+bool anyProblemWith(const LaneGraphBuild& lg, const std::string& words) {
+    for (const std::string& p : lg.problems)
+        if (p.find(words) != std::string::npos) return true;
+    return false;
+}
+// How far the points stray from ONE LINE ACROSS THE ROAD through `spineAt` (the line through it and the farthest point;
+// all within a few centimetres of it when the points are the starts, or the ends, of a section's lanes).
+double offCrossLine(const Vec2& spineAt, const std::vector<Vec2>& pts) {
+    Vec2 far = spineAt;
+    for (const Vec2& p : pts)
+        if (distance(p, spineAt) > distance(far, spineAt)) far = p;
+    double worst = 0;
+    if (distance(far, spineAt) < 0.5) {
+        for (const Vec2& p : pts) worst = std::max(worst, distance(p, spineAt));
+        return worst;
+    }
+    const Vec2 across = normalize(far - spineAt);
+    for (const Vec2& p : pts) worst = std::max(worst, std::fabs(cross(across, p - spineAt)));
+    return worst;
+}
+
+// THE CHECKS EVERY SCENE'S LANE GRAPH MUST PASS (#237's "done when" 1 to 3).
+void checkLaneGraph(const std::string& name) {
+    const Result& r = scene(name);
+    const LaneGraphBuild& lg = laneGraphOf(name);
+    const LaneGraph& G = lg.graph;
+    uint32_t lanePaths = 0;
+    for (const Path& p : G.paths) lanePaths += p.kind == PathKind::Lane ? 1 : 0;
+    std::printf("    [lane graph] %s: %u lane paths, %zu sections, %zu junctions, %zu problems, %.0f ms; %u connector lanes left "
+                "out, %u junctions merged, %u ends cut at an outline, %u road joins, %u crossings outside junctions\n",
+                name.c_str(), lanePaths, G.sections.size(), G.junctions.size(), lg.problems.size(), lg.milliseconds,
+                lg.connectorsLeftOut, lg.mergedJunctions, lg.endsAtOutline, lg.roadJoins, lg.crossingsOutside);
+    for (std::size_t i = 0; i < lg.problems.size() && i < 4; ++i) std::printf("      problem: %s\n", lg.problems[i].c_str());
+
+    // 1. sound
+    const std::vector<std::string> faults = validate(G);
+    for (std::size_t i = 0; i < faults.size() && i < 8; ++i) std::printf("      fault: %s\n", faults[i].c_str());
+    CHECK(faults.empty());
+    CHECK(lg.sources.size() == G.paths.size() && lg.sectionSources.size() == G.sections.size());
+    if (lg.sources.size() != G.paths.size() || lg.sectionSources.size() != G.sections.size()) return;
+
+    // 2. every builder lane cars drive covered once, end to end, by its paths and its stretches inside junctions
+    const LaneSet& L = r.lanes;
+    std::vector<std::vector<uint32_t>> ofLane(L.lanes.size());
+    for (uint32_t p = 0; p < G.paths.size(); ++p) ofLane[static_cast<std::size_t>(lg.sources[p].lane)].push_back(p);
+    int badCover = 0;
+    for (std::size_t li = 0; li < L.lanes.size(); ++li) {
+        if (lg.leftOut[li]) { CHECK(ofLane[li].empty()); continue; }
+        std::vector<uint32_t>& ps = ofLane[li];
+        std::sort(ps.begin(), ps.end(), [&](uint32_t a, uint32_t b) { return lg.sources[a].from < lg.sources[b].from; });
+        double total = lg.insideJunctions[li], reached = 0;
+        bool overlap = false;
+        for (uint32_t p : ps) {
+            overlap = overlap || lg.sources[p].from < reached - kLaneCoverTolerance;
+            reached = lg.sources[p].to;
+            total += G.paths[p].length;
+        }
+        if (overlap || std::fabs(total - L.lanes[li].s.back()) > kLaneCoverTolerance) {
+            if (badCover++ < 4) std::printf("      lane %s: paths and junction stretches %.3f m of %.3f m%s\n", L.lanes[li].id.c_str(), total,
+                                            L.lanes[li].s.back(), overlap ? ", overlapping" : "");
+        }
+    }
+    CHECK(badCover == 0);
+    // each lane path in exactly one section
+    std::vector<int> inSections(G.paths.size(), 0);
+    for (const PathId& p : G.sectionLanes) ++inSections[p.index];
+    for (uint32_t p = 0; p < G.paths.size(); ++p) CHECK(inSections[p] == 1);
+    // a section's lanes start together and end together (on one line across the road, through its spine at the section's
+    // start and end); neighbours side by side; a short section reported
+    int badShare = 0, badNeighbours = 0;
+    for (uint32_t s = 0; s < G.sections.size(); ++s) {
+        const Section& sec = G.sections[s];
+        const SectionSource& ss = lg.sectionSources[s];
+        const EdgeSpec& e = r.graph.edges[static_cast<std::size_t>(ss.edge)];
+        std::vector<Vec2> starts, ends;
+        for (uint32_t k = sec.lanes.first; k < sec.lanes.end(); ++k) {
+            starts.push_back(G.pointAt(G.sectionLanes[k], 0));
+            ends.push_back(G.pointAt(G.sectionLanes[k], G.paths[G.sectionLanes[k].index].length));
+        }
+        auto spineAt = [&](double u) { return pointAt(e.xy, e.s, ss.dir > 0 ? u : e.s.back() - u); };
+        const double offStart = offCrossLine(spineAt(ss.from), starts), offEnd = offCrossLine(spineAt(ss.to), ends);
+        if (offStart > kSectionShareTolerance || offEnd > kSectionShareTolerance)
+            if (badShare++ < 4) std::printf("      section %u on %s: its lanes' starts stray %.3f m and ends %.3f m from a line across the road\n", s,
+                                            e.id.c_str(), offStart, offEnd);
+        for (uint32_t k = sec.lanes.first; k < sec.lanes.end(); ++k) {
+            const PathId p = G.sectionLanes[k];
+            if (k + 1 < sec.lanes.end()) {
+                const PathId q = G.sectionLanes[k + 1];
+                const double gap = distance(G.pointAt(p, G.paths[p.index].length / 2), G.pointAt(q, G.paths[q.index].length / 2));
+                if (gap > (G.paths[p.index].width + G.paths[q.index].width) / 2 + kNeighbourSlack)
+                    if (badNeighbours++ < 4) std::printf("      section %u: lanes %u and %u stand %.2f m apart\n", s, p.index, q.index, gap);
+            }
+        }
+        if (ss.to - ss.from < kShortestSection) CHECK(anyProblemWith(lg, "section " + std::to_string(s) + " "));
+    }
+    CHECK(badShare == 0);
+    CHECK(badNeighbours == 0);
+    // where one lane follows another, they join within 1 cm and 1 degree -- or, where a builder lane is carried on into
+    // the next section, they turn no more than the builder's lane itself turns there (a cut on a bend tighter than
+    // about 29 m reads the two sides' directions half a metre apart, kTangentHalfSpan, and a lane kinked at a
+    // sample turns at it whether cut there or not): the cut adds no kink
+    int badJoins = 0, onBends = 0;
+    const double joinCos = std::cos(kJoinDegrees * 3.14159265358979 / 180.0);
+    for (uint32_t p = 0; p < G.paths.size(); ++p)
+        for (uint32_t k = G.paths[p].next.first; k < G.paths[p].next.end(); ++k) {
+            const PathId q = G.nextPaths[k];
+            const double gap = distance(G.pointAt(PathId(p), G.paths[p].length), G.pointAt(q, 0));
+            const double cosine = dot(G.directionAt(PathId(p), G.paths[p].length), G.directionAt(q, 0));
+            double allowed = joinCos;
+            if (lg.sources[p].lane == lg.sources[q.index].lane && cosine < joinCos) {
+                const Lane& l = L.lanes[static_cast<std::size_t>(lg.sources[p].lane)];
+                std::vector<Vec2> xy = l.xy;
+                if (l.dir < 0) std::reverse(xy.begin(), xy.end());
+                const std::vector<double> s = stations(xy);
+                const double t = lg.sources[p].to;
+                const Vec2 before = normalize(pointAt(xy, s, t) - pointAt(xy, s, t - kTangentHalfSpan));
+                const Vec2 after = normalize(pointAt(xy, s, t + kTangentHalfSpan) - pointAt(xy, s, t));
+                allowed = std::min(joinCos, dot(before, after) - kCosineRounding);
+                ++onBends;
+            }
+            if (gap > kJoinDistance || cosine < allowed)
+                if (badJoins++ < 4) std::printf("      lane %u -> lane %u: %.4f m apart, cos %.6f (allowed %.6f)\n", p, q.index, gap, cosine, allowed);
+        }
+    if (onBends) std::printf("      (%d cuts on bends tighter than a degree per half metre: held to the builder lane's own turn)\n", onBends);
+    CHECK(badJoins == 0);
+
+    // 3. junctions: two arriving and two leaving or reported; their ends on the outline; no lane inside one
+    int inside = 0, skipped = 0;
+    for (uint32_t j = 0; j < G.junctions.size(); ++j) {
+        const Junction& jn = G.junctions[j];
+        if (jn.arriving.count < 2 || jn.leaving.count < 2) CHECK(anyProblemWith(lg, "junction " + std::to_string(j) + " at"));
+        const std::vector<Vec2> outline(G.planPoints.begin() + jn.box.first, G.planPoints.begin() + jn.box.end());
+        std::vector<double> levels;
+        for (uint32_t k = jn.arriving.first; k < jn.arriving.end(); ++k) {
+            const PathId p = G.junctionLanes[k];
+            CHECK(distToPolyline(G.pointAt(p, G.paths[p.index].length), outline, true) <= kJunctionEndReach);
+            levels.push_back(G.heightAt(p, G.paths[p.index].length));
+        }
+        for (uint32_t k = jn.leaving.first; k < jn.leaving.end(); ++k) {
+            const PathId p = G.junctionLanes[k];
+            CHECK(distToPolyline(G.pointAt(p, 0), outline, true) <= kJunctionEndReach);
+            levels.push_back(G.heightAt(p, 0));
+        }
+        if (anyProblemWith(lg, "junction " + std::to_string(j) + " at") || levels.empty()) { ++skipped; continue; }
+        for (uint32_t p = 0; p < G.paths.size(); ++p)
+            for (uint32_t k = G.paths[p].curve.first; k < G.paths[p].curve.end(); ++k) {
+                const Vec2 q = G.points[k];
+                if (!pointInPolygon(outline, q) || distToPolyline(q, outline, true) <= kJunctionEndReach) continue;
+                double nearest = 1e300;
+                for (double z : levels) nearest = std::min(nearest, std::fabs(G.heights[k] - z));
+                if (nearest > kJunctionLevelReach) continue;
+                if (inside++ < 4) std::printf("      lane %u passes inside junction %u at (%.1f, %.1f)\n", p, j, q.x, q.y);
+                break;
+            }
+    }
+    if (skipped) std::printf("      (%d junctions listed in the problems were not searched for lanes inside them)\n", skipped);
+    CHECK(inside == 0);
+}
+}  // namespace
+
+TEST_CASE(lanes_lane_graph_of_grid_city_is_sound_and_covers_every_lane) { checkLaneGraph("grid_city"); }
+TEST_CASE(lanes_lane_graph_of_hill_junction_is_sound_and_covers_every_lane) { checkLaneGraph("hill_junction"); }
+TEST_CASE(lanes_lane_graph_of_ring_city_is_sound_and_covers_every_lane) { checkLaneGraph("ring_city"); }
+TEST_CASE(lanes_lane_graph_of_valley_viaduct_is_sound_and_covers_every_lane) { checkLaneGraph("valley_viaduct"); }
+TEST_CASE(lanes_lane_graph_of_the_traffic_lab_is_sound_and_covers_every_lane) { checkLaneGraph("planned/traffic_lab_lanelab"); }
+
+// One grid_city junction by hand: the two arterials (two lanes each way) crossing at (160, 120). Four approaches of two
+// lanes each arrive and four leave; an arriving lane of v2 ends on the paint's stop bar.
+TEST_CASE(lanes_lane_graph_a_grid_city_crossing_checked_by_hand) {
+    const Result& r = scene("grid_city");
+    const LaneGraphBuild& lg = laneGraphOf("grid_city");
+    const LaneGraph& G = lg.graph;
+    const int v2 = r.graph.index.at("v2"), h2 = r.graph.index.at("h2");
+    const Vec2 crossing(160, 120);
+    int found = -1;
+    for (uint32_t j = 0; j < G.junctions.size(); ++j) {
+        const Range b = G.junctions[j].box;
+        const std::vector<Vec2> outline(G.planPoints.begin() + b.first, G.planPoints.begin() + b.end());
+        if (pointInPolygon(outline, crossing)) found = static_cast<int>(j);
+    }
+    CHECK(found >= 0);
+    if (found < 0) return;
+    const Junction& jn = G.junctions[static_cast<std::size_t>(found)];
+    CHECK(jn.arriving.count == 8);
+    CHECK(jn.leaving.count == 8);
+    auto roadOf = [&](PathId p) { return r.lanes.lanes[static_cast<std::size_t>(lg.sources[p.index].lane)].parent; };
+    int fromV2 = 0, fromH2 = 0;
+    for (uint32_t k = jn.arriving.first; k < jn.arriving.end(); ++k) {
+        fromV2 += roadOf(G.junctionLanes[k]) == v2 ? 1 : 0;
+        fromH2 += roadOf(G.junctionLanes[k]) == h2 ? 1 : 0;
+    }
+    CHECK(fromV2 == 4 && fromH2 == 4);
+    // v2's box there, as the paint finds it; a lane arriving up v2 (along its spine) ends on the stop bar
+    const LaneLookup look(r.pavement);
+    const std::map<int, std::vector<JunctionSpan>> spans = junctionSpans(r, look);
+    const EdgeSpec& e = r.graph.edges[static_cast<std::size_t>(v2)];
+    const double at = project(e.xy, e.s, crossing).station;
+    const JunctionSpan* box = nullptr;
+    for (const JunctionSpan& sp : spans.at(v2))
+        if (at >= sp.s0 && at <= sp.s1) box = &sp;
+    CHECK(box != nullptr);
+    if (!box) return;
+    CHECK(box->crossRank >= r.graph.cls(e).rank);   // the bar is painted: the crossing road ranks as high
+    int onBar = 0;
+    for (uint32_t k = jn.arriving.first; k < jn.arriving.end(); ++k) {
+        const PathId p = G.junctionLanes[k];
+        const Lane& l = r.lanes.lanes[static_cast<std::size_t>(lg.sources[p.index].lane)];
+        if (l.parent != v2 || l.dir < 0) continue;
+        const Vec2 end = G.pointAt(p, G.paths[p.index].length);
+        const Projection pr = project(e.xy, e.s, end);
+        std::printf("    v2 lane %s arrives at %.3f m along v2; the stop bar stands at %.3f m, %.2f m off the spine\n", l.id.c_str(),
+                    pr.station, box->s0 - kStopLineBack, pr.distance);
+        CHECK(std::fabs(pr.station - (box->s0 - kStopLineBack)) < kJoinDistance);
+        CHECK(pr.distance < r.graph.hw(e));   // across the road, within its lanes: where the bar is painted
+        ++onBar;
+    }
+    CHECK(onBar == 2);
+}
+
+// Offside to kerb: in a section of two lanes each way, lane 0 is the one nearer the road's centre line, both ways.
+TEST_CASE(lanes_lane_graph_lists_a_two_lane_section_offside_to_kerb) {
+    const Result& r = scene("grid_city");
+    const LaneGraphBuild& lg = laneGraphOf("grid_city");
+    const LaneGraph& G = lg.graph;
+    const int v2 = r.graph.index.at("v2");
+    const EdgeSpec& e = r.graph.edges[static_cast<std::size_t>(v2)];
+    int checked[2] = {0, 0};
+    for (uint32_t s = 0; s < G.sections.size(); ++s) {
+        const SectionSource& ss = lg.sectionSources[s];
+        if (ss.edge != v2 || G.sections[s].lanes.count != 2) continue;
+        const PathId offside = G.sectionLanes[G.sections[s].lanes.first], kerb = G.sectionLanes[G.sections[s].lanes.first + 1];
+        const double dOff = project(e.xy, e.s, G.pointAt(offside, G.paths[offside.index].length / 2)).distance;
+        const double dKerb = project(e.xy, e.s, G.pointAt(kerb, G.paths[kerb.index].length / 2)).distance;
+        CHECK(dOff < dKerb);
+        // and both run the section's way: along the spine for +1
+        const Vec2 along = tangentAtStation(e.xy, e.s, project(e.xy, e.s, G.pointAt(offside, 0)).station);
+        CHECK(dot(G.directionAt(offside, 0), along) * ss.dir > 0);
+        ++checked[ss.dir > 0 ? 0 : 1];
+    }
+    std::printf("    v2: %d two-lane sections along its spine and %d against it, offside lane nearer the centre in each\n", checked[0], checked[1]);
+    CHECK(checked[0] > 0 && checked[1] > 0);
+}

@@ -1,6 +1,8 @@
 // lanes_tool — the headless host for the lanes road builder (ADR-0083, ADR-0089).
 //   lanes_tool build <graph.json> [--out <dir>]     build, print the summary and invariants, write <name>.glb/.svg/stats.json
 //                      [--probe x y r] [--quick] [--holes] [--walls]   heights and steps around a point; --quick skips the invariant sweep and the exports; --holes lists unpaved holes; --walls lists parapets that end on drivable road
+//   lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle-tags a,b]   the lane graph (#237): lane_graph.txt (its
+//                      dump), problems.txt and lane_graph.svg (lanes by section, junction outlines, arriving/leaving ends)
 //   lanes_tool terrain <graph.json> <out.json> [step]   the scene's natural ground on a grid (for a map)
 //   lanes_tool interchange-demo <out.json>   write the system-interchange test scene: a curved elevated ring over a radial
 //                      expressway at ground level, its four ramps, and the expressway's inner leg becoming a boulevard
@@ -18,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include "engine/procgen/city/roads/lanes/lanes_export.h"
+#include "engine/procgen/city/roads/lanes/lane_graph_build.h"
 #include "engine/procgen/city/roads/lanes/interchange.h"
 #include "engine/procgen/city/roads/lanes/terrain_recipe.h"
 #include <chrono>
@@ -162,8 +165,51 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0; i < rep.undeclared.size() && (i < 20 || std::getenv("LANES_ALL_UNDECLARED")); ++i) std::printf("  not in the plan: %s\n", rep.undeclared[i].c_str());
         return 0;
     }
+    if (argc >= 3 && std::strcmp(argv[1], "lanegraph") == 0) {
+        // THE LANE GRAPH (#237): the built lanes cut into sections, with the junctions; its text dump, its problems and
+        // a plan SVG in --out. --vehicle-tags a,b,c: the vehicle tags every lane is open to (none by default).
+        std::string outDir = ".";
+        LaneGraphOptions lgo;
+        for (int i = 3; i + 1 < argc; ++i) {
+            if (std::strcmp(argv[i], "--out") == 0) outDir = argv[i + 1];
+            if (std::strcmp(argv[i], "--vehicle-tags") == 0) {
+                std::string list = argv[i + 1];
+                for (std::size_t at = 0; at <= list.size();) {
+                    const std::size_t comma = std::min(list.find(',', at), list.size());
+                    if (comma > at) lgo.vehicleTags.push_back(list.substr(at, comma - at));
+                    at = comma + 1;
+                }
+            }
+        }
+        if (!makeOutDir(outDir)) return 1;
+        const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        std::unique_ptr<Result> rp;
+        try { rp = build(RoadLabGraph::load(argv[2])); } catch (const std::exception& e) { std::fprintf(stderr, "lanes: %s\n", e.what()); return 1; }
+        const double buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        const LaneGraphBuild lg = buildLaneGraph(*rp, lgo);
+        uint32_t lanes = 0;
+        for (const Path& p : lg.graph.paths) lanes += p.kind == PathKind::Lane ? 1 : 0;
+        std::printf("%s: %u lane paths, %zu sections, %zu junctions, %zu problems; lane graph %.0f ms (%.0f of it the paint's "
+                    "junction boxes), the build before it %.0f ms",
+                    rp->graph.name.c_str(), lanes, lg.graph.sections.size(), lg.graph.junctions.size(), lg.problems.size(),
+                    lg.milliseconds, lg.boxMilliseconds, buildMs);
+        for (const char* stage : {"lanes", "profiles", "footprints", "surfaces"})
+            if (rp->timings.count(stage)) std::printf(", %s %.0f", stage, 1000 * rp->timings.at(stage));
+        std::printf("\n  left out: %u connector lanes, %u track/footway lanes; %u junctions merged, %u lane ends cut at an outline "
+                    "(no stop line of their own), %u lanes joined end to end across roads, %u places two roads' lanes cross "
+                    "outside every junction\n",
+                    lg.connectorsLeftOut, lg.otherLanesLeftOut, lg.mergedJunctions, lg.endsAtOutline, lg.roadJoins, lg.crossingsOutside);
+        const std::string dumpPath = outDir + "/lane_graph.txt", problemsPath = outDir + "/problems.txt", svgPath = outDir + "/lane_graph.svg";
+        { std::ofstream f(dumpPath); f << dumpText(lg.graph); if (!f) { std::fprintf(stderr, "lanes: cannot write %s\n", dumpPath.c_str()); return 1; } }
+        { std::ofstream f(problemsPath); for (const std::string& p : lg.problems) f << p << "\n"; }
+        for (std::size_t i = 0; i < lg.problems.size() && i < 10; ++i) std::printf("  problem: %s\n", lg.problems[i].c_str());
+        if (!writeLaneGraphSvg(lg.graph, svgPath)) { std::fprintf(stderr, "lanes: cannot write %s\n", svgPath.c_str()); return 1; }
+        std::printf("wrote %s, %s, %s\n", dumpPath.c_str(), problemsPath.c_str(), svgPath.c_str());
+        return 0;
+    }
     if (argc < 3 || (std::strcmp(argv[1], "build") != 0 && std::strcmp(argv[1], "twin") != 0 && std::strcmp(argv[1], "blocks") != 0)) {
         std::fprintf(stderr, "usage: lanes_tool build <graph.json> [--out <dir>]\n"
+                             "       lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle-tags a,b]   (the lane graph: dump, problems, plan SVG)\n"
                              "       lanes_tool design <graph.json> <out.json> [--plan-crossings]   (the graph with every road's planned profile; built again, taken as given)\n"
                              "                    [--ramp-width M] [--ramp-shoulder M]   ramp carriageway (default 4.5 m lane, 2.5 m shoulder)\n");
         return 2;

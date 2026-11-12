@@ -12,9 +12,9 @@ namespace engine {
 
 namespace {
 
-// The section's magic and the version this build writes and reads.
+// The section's magic and the version this build writes and reads (2: junctions list their arriving and leaving lanes).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 2;
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
 // A closed outline (a junction's box, a crosswalk) has at least this many corners; a track's line two points.
@@ -145,6 +145,8 @@ void putItem(BinWriter& w, const Junction& j) {
     putItem(w, j.crosswalks);
     w.put(j.control);
     putItem(w, j.box);
+    putItem(w, j.arriving);
+    putItem(w, j.leaving);
 }
 void putItem(BinWriter& w, const CrossingPoint& c) {
     putItem(w, c.a);
@@ -205,7 +207,7 @@ bool getItem(BinReader& r, Path& p) {
 bool getItem(BinReader& r, Section& s) { return getItem(r, s.lanes) && getItem(r, s.lines) && r.get(s.roadClass); }
 bool getItem(BinReader& r, Junction& j) {
     return getItem(r, j.connectors) && getItem(r, j.crossings) && getItem(r, j.crosswalks) && r.get(j.control) &&
-           getItem(r, j.box);
+           getItem(r, j.box) && getItem(r, j.arriving) && getItem(r, j.leaving);
 }
 bool getItem(BinReader& r, CrossingPoint& c) {
     return getItem(r, c.a) && getEnum(r, c.otherSide) && getEnum(r, c.meeting) && r.get(c.other) &&
@@ -356,7 +358,7 @@ bool operator==(const Crosswalk& a, const Crosswalk& b) {
 bool operator==(const Track& a, const Track& b) { return a.line == b.line && a.railTrack == b.railTrack; }
 bool operator==(const Junction& a, const Junction& b) {
     return a.connectors == b.connectors && a.crossings == b.crossings && a.crosswalks == b.crosswalks &&
-           a.control == b.control && a.box == b.box;
+           a.control == b.control && a.box == b.box && a.arriving == b.arriving && a.leaving == b.leaving;
 }
 bool operator==(const Regulation& a, const Regulation& b) {
     return a.kind == b.kind && a.path == b.path && a.at == b.at && a.value == b.value;
@@ -370,7 +372,8 @@ bool operator==(const LaneGraph& a, const LaneGraph& b) {
            a.tracks == b.tracks && a.regulations == b.regulations && a.carSpaces == b.carSpaces &&
            sameVec2s(a.points, b.points) && a.along == b.along && a.heights == b.heights &&
            a.nextPaths == b.nextPaths && a.sectionLanes == b.sectionLanes && a.laneLines == b.laneLines &&
-           a.junctionConnectors == b.junctionConnectors && sameVec2s(a.planPoints, b.planPoints);
+           a.junctionConnectors == b.junctionConnectors && a.junctionLanes == b.junctionLanes &&
+           sameVec2s(a.planPoints, b.planPoints);
 }
 
 // ---- validate ---------------------------------------------------------------------------------------------------
@@ -598,6 +601,37 @@ std::vector<std::string> validate(const LaneGraph& g) {
                 if (g.crosswalks[k].junction.index != j)
                     out.push_back(fmt("junction %u lists crosswalk %u, which says it lies in junction %u", j, k,
                                       g.crosswalks[k].junction.index));
+        }
+        // Its arriving and leaving lanes: lanes, in id order, ending (arriving) or beginning (leaving) at its outline.
+        std::vector<Vec2> outline;
+        if (inRange(jn.box, g.planPoints.size()))
+            outline.assign(g.planPoints.begin() + jn.box.first, g.planPoints.begin() + jn.box.end());
+        for (int side = 0; side < 2; ++side) {
+            const bool arriving = side == 0;
+            const Range& r = arriving ? jn.arriving : jn.leaving;
+            const char* how = arriving ? "arriving" : "leaving";
+            if (!inRange(r, g.junctionLanes.size())) {
+                out.push_back(fmt("junction %u: its %s lanes (%u to %u) are out of range (%zu entries)", j, how, r.first,
+                                  r.end(), g.junctionLanes.size()));
+                continue;
+            }
+            for (uint32_t k = r.first; k < r.end(); ++k) {
+                const uint32_t p = g.junctionLanes[k].index;
+                if (p >= nPaths || g.paths[p].kind != PathKind::Lane) {
+                    out.push_back(fmt("junction %u lists %s as %s, not a lane", j, pathName(g, p).c_str(), how));
+                    continue;
+                }
+                if (k > r.first && !(g.junctionLanes[k - 1] < g.junctionLanes[k]))
+                    out.push_back(fmt("junction %u: its %s lanes are not in id order (%u after %u)", j, how, p,
+                                      g.junctionLanes[k - 1].index));
+                if (outline.size() < kMinOutlinePoints) continue;
+                const Real at = arriving ? g.paths[p].length : 0;
+                const Vec2 end = g.pointAt(PathId(p), at);
+                const Real off = distToPolyline(end, outline, true);
+                if (!(off <= kJunctionEndReach))
+                    out.push_back(fmt("junction %u: %s lane %u %s at (%.1f, %.1f), %.2f m from its outline (at most %.2f)",
+                                      j, how, p, arriving ? "ends" : "begins", end.x, end.y, off, kJunctionEndReach));
+            }
         }
     }
     // Whether entry k of a junction-by-junction array lies in junction j's range of it.
@@ -832,6 +866,13 @@ std::string dumpText(const LaneGraph& g) {
         for (uint32_t k = jn.connectors.first; k < safeEnd(jn.connectors, g.junctionConnectors.size()); ++k)
             out += fmt(" %u", g.junctionConnectors[k].index);
         out += "\n  box: " + planPointsText(g, jn.box) + "\n";
+        out += "  arriving lanes:";
+        for (uint32_t k = jn.arriving.first; k < safeEnd(jn.arriving, g.junctionLanes.size()); ++k)
+            out += fmt(" %u", g.junctionLanes[k].index);
+        out += "\n  leaving lanes:";
+        for (uint32_t k = jn.leaving.first; k < safeEnd(jn.leaving, g.junctionLanes.size()); ++k)
+            out += fmt(" %u", g.junctionLanes[k].index);
+        out += "\n";
     }
     for (uint32_t c = 0; c < g.crossings.size(); ++c) out += dumpCrossing(g, CrossingId(c));
     for (uint32_t w = 0; w < g.crosswalks.size(); ++w) {
@@ -873,6 +914,7 @@ void putLaneGraph(bundle::BinWriter& w, const LaneGraph& g) {
     putList(w, g.sectionLanes);
     putList(w, g.laneLines);
     putList(w, g.junctionConnectors);
+    putList(w, g.junctionLanes);
     putList(w, g.planPoints);
 }
 
@@ -901,6 +943,7 @@ bool getLaneGraph(bundle::BinReader& r, LaneGraph& g, std::string* err) {
                     getList(r, in.nextPaths, "next paths", err) && getList(r, in.sectionLanes, "section lanes", err) &&
                     getList(r, in.laneLines, "lane lines", err) &&
                     getList(r, in.junctionConnectors, "junction connectors", err) &&
+                    getList(r, in.junctionLanes, "junction lanes", err) &&
                     getList(r, in.planPoints, "plan points", err);
     if (!ok) return false;
     if (r.remaining() != 0) {

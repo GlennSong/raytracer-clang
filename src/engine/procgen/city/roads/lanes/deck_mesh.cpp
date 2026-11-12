@@ -702,7 +702,72 @@ void platformKit(RenderMesh& plat, RenderMesh& concrete, RenderMesh& canopy, Ren
     }
 }
 
+// The junction test's numbers: two decks within kJunctionSameLevel of each other are one level; a crossing lane whose
+// direction there is within kJunctionParallel (|cos|) of the street's runs beside it, not across it; a street lane is
+// sampled every kJunctionSampleStep metres along it.
+constexpr double kJunctionSameLevel = 1.0;
+constexpr double kJunctionParallel = 0.7;
+constexpr double kJunctionSampleStep = 2.0;
+
+// A list of road indices, sorted and without repeats.
+void sortUnique(std::vector<int>& v) {
+    std::sort(v.begin(), v.end());
+    v.erase(std::unique(v.begin(), v.end()), v.end());
+}
+
 }  // namespace
+
+LaneLookup::LaneLookup(const Pavement& pavement)
+    : box(laneBoxes(pavement.footprints)), grid(box, pavement.footprints), footprint(prepareAll(pavement.footprints)) {}
+
+int junctionCrossRank(const Result& r, const LaneLookup& look, size_t li, const Vec2& p, const Vec2& t, std::vector<int>* crossEdges) {
+    const LaneSet& L = r.lanes; const DeckHeight& H = *r.heights;
+    const Lane& l = L.lanes[li]; if (l.isConnector()) return -1;
+    const double zl = H.deck(static_cast<int>(li), p); int best = -1;
+    for (int ojI : look.grid.at(p)) {
+        const size_t oj = static_cast<size_t>(ojI); const Lane& o = L.lanes[oj];
+        if (oj == li || o.isConnector() || o.parent == l.parent || o.parent < 0 || r.pavement.footprints[oj].empty()) continue;
+        const Box2& b = look.box[oj];
+        if (p.x < b.minX || p.x > b.maxX || p.y < b.minY || p.y > b.maxY || !look.footprint[oj].contains(p)) continue;
+        if (std::fabs(H.deck(static_cast<int>(oj), p) - zl) > kJunctionSameLevel) continue;
+        Projection pr = project(o.xy, o.s, p);
+        if (std::fabs(dot(t, tangentAtStation(o.xy, o.s, pr.station))) > kJunctionParallel) continue;
+        best = std::max(best, r.graph.cls(r.graph.edges[static_cast<size_t>(o.parent)]).rank);
+        if (crossEdges) crossEdges->push_back(o.parent);
+    }
+    return best;
+}
+
+std::map<int, std::vector<JunctionSpan>> junctionSpans(const Result& r, const LaneLookup& look) {
+    const LaneSet& L = r.lanes;
+    // per street, the parent-station spans where its lanes run through a box
+    std::map<int, std::vector<JunctionSpan>> spans;
+    std::vector<int> hits, crossing;
+    for (size_t li = 0; li < L.lanes.size(); ++li) {
+        const Lane& l = L.lanes[li]; if (l.isConnector() || l.parent < 0 || l.s.size() < 2) continue;
+        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; if (e.isRamp() || e.cls == "freeway" || r.graph.cls(e).rank < 1 || trackClass(r.graph, e.cls)) continue;
+        int n = std::max(2, static_cast<int>(l.s.back() / kJunctionSampleStep) + 1); double in0 = -1, inLast = 0; int rankMax = -1;
+        for (int k = 0; k <= n; ++k) {
+            int cr = -1; double st = 0; hits.clear();
+            if (k < n) { double ls = l.s.back() * k / (n - 1); Vec2 p = pointAt(l.xy, l.s, ls); Vec2 t = tangentAtStation(l.xy, l.s, ls); cr = junctionCrossRank(r, look, li, p, t, &hits); st = project(e.xy, e.s, p).station; }
+            if (cr >= 0) { if (in0 < 0) { in0 = st; rankMax = cr; crossing.clear(); } inLast = st; rankMax = std::max(rankMax, cr); crossing.insert(crossing.end(), hits.begin(), hits.end()); }
+            else if (in0 >= 0) { sortUnique(crossing); spans[l.parent].push_back({std::min(in0, inLast), std::max(in0, inLast), rankMax, crossing}); in0 = -1; }
+        }
+    }
+    std::map<int, std::vector<JunctionSpan>> boxes;   // parent edge -> merged junction spans
+    for (auto& [pe, raw] : spans) {
+        std::sort(raw.begin(), raw.end(), [](const JunctionSpan& a, const JunctionSpan& b) { return a.s0 < b.s0; });
+        std::vector<JunctionSpan>& merged = boxes[pe];
+        for (const JunctionSpan& sp : raw) {
+            if (!merged.empty() && sp.s0 <= merged.back().s1 + kJunctionMergeGap) {
+                merged.back().s1 = std::max(merged.back().s1, sp.s1); merged.back().crossRank = std::max(merged.back().crossRank, sp.crossRank);
+                merged.back().crossEdges.insert(merged.back().crossEdges.end(), sp.crossEdges.begin(), sp.crossEdges.end());
+                sortUnique(merged.back().crossEdges);
+            } else merged.push_back(sp);
+        }
+    }
+    return boxes;
+}
 
 std::vector<RailTrack> railTracks(const Result& r) {
     std::vector<RailTrack> out;
@@ -779,7 +844,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     // the viaduct is pavement in plan but not a continuation of this deck.
     // Every point query below asks "which lanes' footprints contain q": the boxes once, a grid of them, never
     // a bounds() over a footprint's vertices per call (that was a 100 s stall on metro).
-    const std::vector<Box2> laneBox = laneBoxes(r.pavement.footprints); const LaneGrid laneGrid(laneBox, r.pavement.footprints); const std::vector<PreparedSet> footprint = prepareAll(r.pavement.footprints);
+    const LaneLookup look(r.pavement); const std::vector<Box2>& laneBox = look.box; const LaneGrid& laneGrid = look.grid; const std::vector<PreparedSet>& footprint = look.footprint;
     auto sameLevelPavedAt = [&](const Vec2& q, double z) {
         for (int ojI : laneGrid.at(q)) {
             const size_t oj = static_cast<size_t>(ojI); const Box2& bb = laneBox[oj];
@@ -935,51 +1000,15 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         LOG_INFO << "[deck stats] concrete triangles by stage:" << o << "; asphalt " << asphalt.indices.size() / 3
                  << " (" << asphalt.vertices.size() << " verts), hasTerrain " << r.hasTerrain;
     }
-    // Junction boxes: a point on a street lane that lies inside a CROSSING road's lane at the same level
-    // is inside an intersection. Lane paint stops there (lane lines running through a junction read as
-    // a mess), and the spans of it along each street get a zebra crosswalk and a stop bar per approach.
-    // Parallel overlaps (a gore, an aux lane beside its host) and grade-separated overlaps (a street
-    // under a viaduct) are not junctions. Returns the crossing road's rank, or -1.
-    auto inBox = [&](size_t li, const Vec2& p, const Vec2& t) {
-        const Lane& l = L.lanes[li]; if (l.isConnector()) return -1;
-        const double zl = H.deck(static_cast<int>(li), p); int best = -1;
-        for (int ojI : laneGrid.at(p)) {
-            const size_t oj = static_cast<size_t>(ojI); const Lane& o = L.lanes[oj];
-            if (oj == li || o.isConnector() || o.parent == l.parent || o.parent < 0 || r.pavement.footprints[oj].empty()) continue;
-            const Box2& b = laneBox[oj];
-            if (p.x < b.minX || p.x > b.maxX || p.y < b.minY || p.y > b.maxY || !footprint[oj].contains(p)) continue;
-            if (std::fabs(H.deck(static_cast<int>(oj), p) - zl) > 1.0) continue;
-            Projection pr = project(o.xy, o.s, p);
-            if (std::fabs(dot(t, tangentAtStation(o.xy, o.s, pr.station))) > 0.7) continue;
-            best = std::max(best, r.graph.cls(r.graph.edges[static_cast<size_t>(o.parent)]).rank);
-        }
-        return best;
-    };
-    // Crosswalks and stop bars: per street, the parent-station spans where its lanes run through a box.
-    struct Span { double s0, s1; int crossRank; };
-    std::map<int, std::vector<Span>> spans;
-    for (size_t li = 0; li < L.lanes.size(); ++li) {
-        const Lane& l = L.lanes[li]; if (l.isConnector() || l.parent < 0 || l.s.size() < 2) continue;
-        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; if (e.isRamp() || e.cls == "freeway" || r.graph.cls(e).rank < 1 || trackClass(r.graph, e.cls)) continue;
-        int n = std::max(2, static_cast<int>(l.s.back() / 2.0) + 1); double in0 = -1, inLast = 0; int rankMax = -1;
-        for (int k = 0; k <= n; ++k) {
-            int cr = -1; double st = 0;
-            if (k < n) { double ls = l.s.back() * k / (n - 1); Vec2 p = pointAt(l.xy, l.s, ls); Vec2 t = tangentAtStation(l.xy, l.s, ls); cr = inBox(li, p, t); st = project(e.xy, e.s, p).station; }
-            if (cr >= 0) { if (in0 < 0) { in0 = st; rankMax = cr; } inLast = st; rankMax = std::max(rankMax, cr); }
-            else if (in0 >= 0) { spans[l.parent].push_back({std::min(in0, inLast), std::max(in0, inLast), rankMax}); in0 = -1; }
-        }
-    }
-    std::map<int, std::vector<Span>> boxes;   // parent edge -> merged junction spans
-    for (auto& [pe, raw] : spans) {
-        std::sort(raw.begin(), raw.end(), [](const Span& a, const Span& b) { return a.s0 < b.s0; });
-        std::vector<Span>& merged = boxes[pe];
-        for (const Span& sp : raw) { if (!merged.empty() && sp.s0 <= merged.back().s1 + 12.0 /* a divided road is ONE junction: its carriageways sit a median apart */) { merged.back().s1 = std::max(merged.back().s1, sp.s1); merged.back().crossRank = std::max(merged.back().crossRank, sp.crossRank); } else merged.push_back(sp); }
-    }
+    // Junction boxes (junctionCrossRank, junctionSpans): lane paint stops inside them (lane lines running through a
+    // junction read as a mess), and the spans of them along each street get a zebra crosswalk and a stop bar per approach.
+    auto inBox = [&](size_t li, const Vec2& p, const Vec2& t) { return junctionCrossRank(r, look, li, p, t); };
+    const std::map<int, std::vector<JunctionSpan>> boxes = junctionSpans(r, look);   // parent edge -> merged junction spans
     // a point on a street lane inside one of its road's merged boxes (the median gap of a divided cross road included)
     auto inSpan = [&](const Lane& l, const Vec2& p) {
         auto it = boxes.find(l.parent); if (it == boxes.end()) return false;
         const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; const double st = project(e.xy, e.s, p).station;
-        for (const Span& sp : it->second) if (st >= sp.s0 - 0.5 && st <= sp.s1 + 0.5) return true;
+        for (const JunctionSpan& sp : it->second) if (st >= sp.s0 - 0.5 && st <= sp.s1 + 0.5) return true;
         return false;
     };
     // markings: each lane edge classified by what lies just outside it
@@ -1015,7 +1044,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     for (auto& [pe, merged] : boxes) {
         const EdgeSpec& e = r.graph.edges[static_cast<size_t>(pe)]; const double Lr = e.s.back(); const int ownRank = r.graph.cls(e).rank;
         auto paintSide = [&](double sBox, int sign, int crossRank) {   // sign -1: the approach at stations below the box; +1: above
-            const double sw0 = sBox + sign * 1.0, sw1 = sBox + sign * 4.0;
+            const double sw0 = sBox + sign * kCrosswalkNear, sw1 = sBox + sign * kCrosswalkFar;
             if (std::min(sw0, sw1) < 2.0 || std::max(sw0, sw1) > Lr - 2.0) return;   // the road ends in this box: no leg here
             const double stMid = 0.5 * (sw0 + sw1); Vec2 P = pointAt(e.xy, e.s, stMid); Vec2 T = tangentAtStation(e.xy, e.s, stMid); Vec2 N = perp(T);
             struct LL { int li; double lat, w; bool approaching; }; std::vector<LL> ls;
@@ -1049,7 +1078,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
             {
                 std::vector<const LL*> app;
                 for (const LL& x : ls) if (x.approaching) app.push_back(&x);
-                const double sStop = sBox + sign * 5.2;
+                const double sStop = sBox + sign * kStopLineBack;
                 const Vec2 D = T * static_cast<double>(-sign);   // travel into the box
                 const Vec2 Lft = perp(D);                         // the plan's left of travel
                 // the approach lies at stations on the `sign` side of the box: back from the stop line is +sign
@@ -1093,7 +1122,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
                         // the second arrow only where the block is long enough that the next junction's
                         // arrows (painted back from ITS stop line) don't meet it mid-block
                         double gap = sign < 0 ? sBox : Lr - sBox;
-                        for (const Span& o : merged) {
+                        for (const JunctionSpan& o : merged) {
                             if (sign < 0 && o.s1 < sBox - 1.0) gap = std::min(gap, sBox - o.s1);
                             if (sign > 0 && o.s0 > sBox + 1.0) gap = std::min(gap, o.s0 - sBox);
                         }
@@ -1128,10 +1157,10 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
             // for the major one (equal ranks: every approach stops)
             if (crossRank < ownRank) return;
             double lo = 1e300, hi = -1e300; for (const LL& x : ls) if (x.approaching) { lo = std::min(lo, x.lat - x.w / 2); hi = std::max(hi, x.lat + x.w / 2); }
-            if (lo < hi) { Vec2 Q = pointAt(e.xy, e.s, sBox + sign * 5.2); Vec2 a = Q + N * (lo + 0.15), b = Q + N * (hi - 0.15);
+            if (lo < hi) { Vec2 Q = pointAt(e.xy, e.s, sBox + sign * kStopLineBack); Vec2 a = Q + N * (lo + 0.15), b = Q + N * (hi - 0.15);
                 strip(paintW, std::vector<Vec2>{a, b}, std::vector<double>{zAt(laneAt(lo), a), zAt(laneAt(hi), b)}, 0.25, 0, 0, kPaintWhite); }
         };
-        for (const Span& sp : merged) { paintSide(sp.s0, -1, sp.crossRank); paintSide(sp.s1, +1, sp.crossRank); }
+        for (const JunctionSpan& sp : merged) { paintSide(sp.s0, -1, sp.crossRank); paintSide(sp.s1, +1, sp.crossRank); }
     }
     // terrain
     if (r.hasTerrain) {

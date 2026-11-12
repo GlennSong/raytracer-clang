@@ -166,6 +166,13 @@ LaneGraph makeCrossroads() {
     j.connectors.first = static_cast<uint32_t>(g.junctionConnectors.size());
     for (uint32_t c = kFirstConnector; c < g.paths.size(); ++c) g.junctionConnectors.push_back(PathId(c));
     j.connectors.count = static_cast<uint32_t>(g.paths.size()) - kFirstConnector;
+    // The lanes arriving at it (each arm's lane in, and the kerb lane beside the west arm's) and leaving it.
+    j.arriving.first = static_cast<uint32_t>(g.junctionLanes.size());
+    for (uint32_t p : {0u, 2u, 4u, 6u, kKerbLane}) g.junctionLanes.push_back(PathId(p));
+    j.arriving.count = static_cast<uint32_t>(g.junctionLanes.size()) - j.arriving.first;
+    j.leaving.first = static_cast<uint32_t>(g.junctionLanes.size());
+    for (uint32_t p : {1u, 3u, 5u, 7u}) g.junctionLanes.push_back(PathId(p));
+    j.leaving.count = static_cast<uint32_t>(g.junctionLanes.size()) - j.leaving.first;
     Crosswalk walk;
     walk.outline = g.addPlanPoints({Vec2(6, -3), Vec2(9, -3), Vec2(9, 3), Vec2(6, 3)});
     walk.junction = JunctionId(0);
@@ -293,6 +300,7 @@ TEST_CASE(lane_graph_text_dump_reads_by_hand) {
     CHECK(all.find("lane graph: 21 paths (9 lanes, 12 connectors), 8 sections, 1 junctions, 8 crossing points, "
                    "1 crosswalks, 0 tracks, 2 regulations, 3 car spaces\n") == 0);
     CHECK(all.find("  regulation 1: stop at 39.0 m, value 0.0\n") != std::string::npos);
+    CHECK(all.find("  arriving lanes: 0 2 4 6 8\n  leaving lanes: 1 3 5 7\n") != std::string::npos);
     CHECK(all.find("car space 2: lane 8 from 14.0 to 20.0 m\n") != std::string::npos);
     CHECK(all == dumpText(makeCrossroads()));   // the same text every run
 }
@@ -340,6 +348,19 @@ TEST_CASE(lane_graph_validate_names_each_fault) {
         LaneGraph g = good;
         std::swap(g.crossings[4].a.index, g.crossings[4].other);
         CHECK(hasProblem(validate(g), "crossing point 4: its paths must be stored lower id first (13, 10)"));
+    }
+    {   // a junction listing as arriving a lane that ends far from it (the east arm's leaving lane), and a connector
+        LaneGraph g = good;
+        g.junctionLanes[g.junctions[0].arriving.first] = PathId(1);
+        g.junctionLanes[g.junctions[0].leaving.first] = PathId(kFirstConnector);
+        const std::vector<std::string> p = validate(g);
+        CHECK(hasProblem(p, "junction 0: arriving lane 1 ends at (45.0, 1.5), 39.00 m from its outline (at most 1.50)"));
+        CHECK(hasProblem(p, "junction 0 lists connector 9 as leaving, not a lane"));
+    }
+    {   // its lanes out of id order
+        LaneGraph g = good;
+        std::swap(g.junctionLanes[g.junctions[0].leaving.first], g.junctionLanes[g.junctions[0].leaving.first + 1]);
+        CHECK(hasProblem(validate(g), "junction 0: its leaving lanes are not in id order (1 after 3)"));
     }
 }
 

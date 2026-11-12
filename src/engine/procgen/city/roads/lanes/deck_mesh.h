@@ -8,6 +8,7 @@
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "renderer/renderer.h"
 #include "engine/procgen/city/rail_track.h"
+#include <map>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,44 @@ struct NamedMesh { std::string name; RenderMesh mesh; Vec3 color; };
 // One mesh per material: asphalt (deck tops and bottoms), concrete (walls, piers), sidewalk,
 // shoulder, median, paint white, paint yellow, terrain. Empty meshes are omitted.
 std::vector<NamedMesh> buildMeshes(const Result& r);
+
+// WHICH LANES' FOOTPRINTS HOLD A POINT, asked many times: every lane footprint's bounding box once, a coarse grid of
+// them, and the footprints prepared for point tests. Built once per result by whoever asks (the mesher, the lane graph).
+struct LaneLookup {
+    std::vector<Box2> box;                 // per lane
+    LaneGrid grid;
+    std::vector<PreparedSet> footprint;    // per lane
+    explicit LaneLookup(const Pavement& pavement);
+};
+
+// JUNCTION BOXES, as the road paint finds them: lane paint stops inside them, and each street approaching one gets a
+// zebra crosswalk, lane arrows and (where it must stop) a stop bar. The lane graph cuts its lanes at the same boxes.
+// Where an approach's marks stand, in metres back from the box along the approaching street's spine: the crosswalk
+// from kCrosswalkNear to kCrosswalkFar, the stop line at kStopLineBack (its bar is painted only where the street
+// stops for the crossing road; the line is where every approach ends).
+constexpr double kCrosswalkNear = 1.0;
+constexpr double kCrosswalkFar = 4.0;
+constexpr double kStopLineBack = 5.2;
+// Two stretches of one street inside crossing roads closer than this along it are ONE junction: a divided cross road's
+// carriageways sit a median apart.
+constexpr double kJunctionMergeGap = 12.0;
+
+// One junction box along a street: the stretch of the street's spine (stations s0 to s1) where its lanes run inside a
+// crossing road's lanes at the same level, the highest class rank among those crossing roads, and which roads they are
+// (graph edge indices, ascending).
+struct JunctionSpan {
+    double s0 = 0, s1 = 0;
+    int crossRank = -1;
+    std::vector<int> crossEdges;
+};
+// Whether a point on street lane `li` (heading `t` there) is inside an intersection: inside a CROSSING road's lane at
+// the same level. Parallel overlaps (a gore, an aux lane beside its host) and grade-separated ones (a street under a
+// viaduct) are not. Returns the crossing road's rank, or -1; `crossEdges` (optional) gets the crossing lanes' roads.
+int junctionCrossRank(const Result& r, const LaneLookup& look, size_t li, const Vec2& p, const Vec2& t,
+                      std::vector<int>* crossEdges = nullptr);
+// Every street's junction boxes (graph edge index -> its boxes, in station order, a divided cross road's two merged
+// into one). Streets only: ramps, freeways, tracks and classes ranked below 1 have none of their own.
+std::map<int, std::vector<JunctionSpan>> junctionSpans(const Result& r, const LaneLookup& look);
 
 // Every track lane's railhead line, in running order, with the platforms beside it (rail_track.h).
 std::vector<RailTrack> railTracks(const Result& r);

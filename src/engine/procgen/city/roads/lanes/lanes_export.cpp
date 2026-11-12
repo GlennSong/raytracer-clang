@@ -4,8 +4,10 @@
 #include "engine/glb_export.h"
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 
 namespace engine {
 namespace roads::lanes {
@@ -70,6 +72,102 @@ bool writeStatsJson(const Result& r, const std::string& path) {
         }
     }
     std::ofstream f(path); if (!f) return false; f << j.dump(1); return true;
+}
+
+namespace {
+// The lane graph plan's look, in plan metres (1 unit = 1 m) unless named otherwise.
+constexpr double kGraphSvgPixelsPerMetre = 6.0;   // how large the page opens; zoom for more
+constexpr double kGraphSvgMargin = 20.0;
+constexpr double kGraphSvgLaneStroke = 0.35;
+constexpr double kGraphSvgArrowLength = 1.6, kGraphSvgArrowHalfWidth = 0.7;
+constexpr double kGraphSvgLabelSize = 1.1, kGraphSvgJunctionLabelSize = 2.0;
+constexpr double kGraphSvgLabelOffset = 0.6;      // a lane's id sits this far to the side of its centre line
+constexpr double kGraphSvgTickStroke = 0.18, kGraphSvgOutlineStroke = 0.3, kGraphSvgEndStroke = 0.25;
+constexpr double kGraphSvgEndMark = 0.7;          // the arriving circle's radius, the leaving square's half side
+// Section colours, far apart in hue; a section takes every kGraphSvgColourStride-th one so neighbours differ.
+const char* const kGraphSvgColours[] = {"#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e",
+                                        "#17becf", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22"};
+constexpr std::size_t kGraphSvgColourCount = sizeof(kGraphSvgColours) / sizeof(kGraphSvgColours[0]);
+constexpr std::size_t kGraphSvgColourStride = 3;
+}  // namespace
+
+bool writeLaneGraphSvg(const LaneGraph& g, const std::string& path) {
+    double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+    for (const std::vector<Vec2>* set : {&g.points, &g.planPoints})
+        for (const Vec2& p : *set) { x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y); }
+    if (x0 > x1) { x0 = y0 = 0; x1 = y1 = 1; }
+    std::ofstream f(path); if (!f) return false;
+    f << std::fixed << std::setprecision(2);
+    const double W = x1 - x0 + 2 * kGraphSvgMargin, Hh = y1 - y0 + 2 * kGraphSvgMargin;
+    auto X = [&](double x) { return x - x0 + kGraphSvgMargin; };
+    auto Y = [&](double y) { return y1 - y + kGraphSvgMargin; };   // plan y up, as the builder's plan SVG
+    f << "<svg xmlns='http://www.w3.org/2000/svg' width='" << W * kGraphSvgPixelsPerMetre << "' height='" << Hh * kGraphSvgPixelsPerMetre
+      << "' viewBox='0 0 " << W << " " << Hh << "' font-family='sans-serif'>\n";
+    f << "<rect width='100%' height='100%' fill='#fbfaf7'/>\n";
+    // junction outlines, with their ids
+    f << "<g id='junctions' fill='#f3d9a4' fill-opacity='0.55' stroke='#b07a1e' stroke-width='" << kGraphSvgOutlineStroke << "'>\n";
+    for (uint32_t j = 0; j < g.junctions.size(); ++j) {
+        const Range& b = g.junctions[j].box;
+        if (b.end() > g.planPoints.size() || b.count == 0) continue;
+        f << "<polygon points='";
+        Vec2 c;
+        for (uint32_t k = b.first; k < b.end(); ++k) { f << X(g.planPoints[k].x) << "," << Y(g.planPoints[k].y) << " "; c += g.planPoints[k]; }
+        c = c / static_cast<double>(b.count);
+        f << "'/>\n<text x='" << X(c.x) << "' y='" << Y(c.y) << "' font-size='" << kGraphSvgJunctionLabelSize
+          << "' fill='#7a4f0a' stroke='none' text-anchor='middle'>J" << j << "</text>\n";
+    }
+    f << "</g>\n";
+    // lane paths: centre line, arrowhead, id
+    f << "<g id='lanes' fill='none' stroke-width='" << kGraphSvgLaneStroke << "'>\n";
+    for (uint32_t p = 0; p < g.paths.size(); ++p) {
+        const Path& path = g.paths[p];
+        if (path.curve.end() > g.points.size()) continue;
+        const char* colour = kGraphSvgColours[(static_cast<std::size_t>(path.section.index) * kGraphSvgColourStride) % kGraphSvgColourCount];
+        f << "<polyline stroke='" << colour << "' points='";
+        for (uint32_t k = path.curve.first; k < path.curve.end(); ++k) f << X(g.points[k].x) << "," << Y(g.points[k].y) << " ";
+        f << "'/>\n";
+        const Vec2 tip = g.pointAt(PathId(p), path.length), d = g.directionAt(PathId(p), path.length), n = perp(d);
+        const Vec2 b0 = tip - d * kGraphSvgArrowLength + n * kGraphSvgArrowHalfWidth, b1 = tip - d * kGraphSvgArrowLength - n * kGraphSvgArrowHalfWidth;
+        f << "<polygon fill='" << colour << "' stroke='none' points='" << X(tip.x) << "," << Y(tip.y) << " " << X(b0.x) << "," << Y(b0.y)
+          << " " << X(b1.x) << "," << Y(b1.y) << "'/>\n";
+        const Vec2 mid = g.pointAt(PathId(p), path.length / 2), label = mid + perp(g.directionAt(PathId(p), path.length / 2)) * kGraphSvgLabelOffset;
+        f << "<text x='" << X(label.x) << "' y='" << Y(label.y) << "' font-size='" << kGraphSvgLabelSize << "' fill='" << colour
+          << "' stroke='none' text-anchor='middle' dominant-baseline='middle'>" << p << "</text>\n";
+    }
+    f << "</g>\n";
+    // where each section starts: a tick across its lanes
+    f << "<g id='section-starts' stroke='#333' stroke-width='" << kGraphSvgTickStroke << "'>\n";
+    for (const Section& s : g.sections) {
+        if (s.lanes.count == 0 || s.lanes.end() > g.sectionLanes.size()) continue;
+        const PathId first = g.sectionLanes[s.lanes.first], last = g.sectionLanes[s.lanes.end() - 1];
+        const Vec2 n = perp(g.directionAt(first, 0));
+        const Vec2 a = g.pointAt(first, 0) + n * (g.paths[first.index].width / 2), b = g.pointAt(last, 0) - n * (g.paths[last.index].width / 2);
+        // (the offside lane's far edge to the kerb lane's far edge, whichever side the normal points)
+        const Vec2 a2 = g.pointAt(first, 0) - n * (g.paths[first.index].width / 2), b2 = g.pointAt(last, 0) + n * (g.paths[last.index].width / 2);
+        const bool wide = distance(a, b) >= distance(a2, b2);
+        const Vec2 from = wide ? a : a2, to = wide ? b : b2;
+        f << "<line x1='" << X(from.x) << "' y1='" << Y(from.y) << "' x2='" << X(to.x) << "' y2='" << Y(to.y) << "'/>\n";
+    }
+    f << "</g>\n";
+    // arriving ends (circles) and leaving starts (squares)
+    f << "<g id='junction-ends' fill='none' stroke-width='" << kGraphSvgEndStroke << "'>\n";
+    for (const Junction& jn : g.junctions) {
+        for (uint32_t k = jn.arriving.first; k < jn.arriving.end() && k < g.junctionLanes.size(); ++k) {
+            const PathId p = g.junctionLanes[k];
+            if (p.index >= g.paths.size()) continue;
+            const Vec2 q = g.pointAt(p, g.paths[p.index].length);
+            f << "<circle cx='" << X(q.x) << "' cy='" << Y(q.y) << "' r='" << kGraphSvgEndMark << "' stroke='#c62828'/>\n";
+        }
+        for (uint32_t k = jn.leaving.first; k < jn.leaving.end() && k < g.junctionLanes.size(); ++k) {
+            const PathId p = g.junctionLanes[k];
+            if (p.index >= g.paths.size()) continue;
+            const Vec2 q = g.pointAt(p, 0);
+            f << "<rect x='" << X(q.x) - kGraphSvgEndMark << "' y='" << Y(q.y) - kGraphSvgEndMark << "' width='" << 2 * kGraphSvgEndMark
+              << "' height='" << 2 * kGraphSvgEndMark << "' stroke='#2e7d32'/>\n";
+        }
+    }
+    f << "</g>\n</svg>\n";
+    return static_cast<bool>(f);
 }
 
 }  // namespace roads::lanes
