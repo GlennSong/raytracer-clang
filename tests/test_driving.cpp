@@ -20,15 +20,29 @@ namespace {
 constexpr Real kTickSeconds = 0.1;
 constexpr Real kLaneLength = 100;
 
-// Two straight lanes, 100 m each: enough road for a destination and a hold. Nothing here is driven on yet.
+// Two straight lanes, 100 m each, side by side in one section with a line a car may cross either way, open to the test
+// car's tag: enough road for a destination and a hold, and a route to either lane from the first.
+constexpr const char* kTestTag = "test_tag";
 engine::LaneGraph twoLanes() {
     engine::LaneGraph g;
-    for (int i = 0; i < 2; ++i) {
+    g.vehicleTagNames = {kTestTag};
+    engine::Section s;
+    s.lanes.count = 2;
+    s.lines.count = 1;
+    for (uint32_t i = 0; i < 2; ++i) {
         engine::Path p;
         p.curve = g.addCurve({engine::Vec2(0, i * 4.0), engine::Vec2(kLaneLength, i * 4.0)}, {0, 0});
         p.length = kLaneLength;
+        p.vehicleTags = 1;
+        p.section = engine::SectionId(0);
+        p.indexInSection = i;
         g.paths.push_back(p);
+        g.sectionLanes.push_back(engine::PathId(i));
     }
+    engine::LaneLine line;
+    line.crossFromOffside = line.crossFromKerbside = true;
+    g.laneLines.push_back(line);
+    g.sections.push_back(s);
     return g;
 }
 
@@ -46,7 +60,9 @@ constexpr Real kPlacedAlong = 10;
 void placeCars(Driving& d, const std::vector<uint32_t>& ids) {
     if (d.vehicleClasses().empty()) {
         VehicleClasses classes;
-        classes.add(deriveVehicleClass("test_car", kCarLength, kCarWidth, kCarWheelbase, kCarSteerDegrees));
+        VehicleClass car = deriveVehicleClass("test_car", kCarLength, kCarWidth, kCarWheelbase, kCarSteerDegrees);
+        car.tags = {kTestTag};
+        classes.add(car);
         d.setVehicleClasses(classes);
     }
     for (uint32_t id : ids) CHECK(d.placeCar(CarId(id), 0, at(0, kPlacedAlong)));

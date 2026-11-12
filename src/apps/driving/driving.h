@@ -21,6 +21,7 @@
 // Units: metres, seconds.
 
 #include "engine/procgen/city/roads/lane_graph.h"
+#include "apps/driving/route.h"
 #include "apps/driving/traffic_state.h"   // CarId, PathPoint, Car, the per-path lists
 #include "apps/driving/vehicle_class.h"
 #include "slot_map.h"
@@ -48,14 +49,15 @@ struct Hold {
     PathPoint at;
 };
 
-// ONE TRIP: this person is driving this car to that place (design 3.1). The route, mode and remembered facts join it
-// in later tasks.
+// ONE TRIP: this person is driving this car to that place (design 3.1), and the way there (route.h). The mode and
+// remembered facts join it in later tasks.
 struct Trip {
     CarId car;
     PersonId person = 0;
     PathPoint destination;
     std::vector<Hold> holds;     // sorted by name
     uint64_t beganAtTick = 0;    // the tick count when the host began it
+    Route route;                 // from where the car was when it was last routed, to the destination
 };
 
 // THE HOST'S HANDLE TO A TRIP. Trips are begun and ended, and their slots reused, so the handle carries a generation:
@@ -126,18 +128,27 @@ public:
     uint64_t tickCount() const { return tickCount_; }
     double clockSeconds() const { return clockSeconds_; }
 
-    // BEGIN A TRIP: `person` drives `car` to `destination`. Refused (a null handle) when the car has not been placed,
-    // is already on a trip, or the destination is not a place on the road (an unknown path, or a distance off its
-    // ends).
+    // BEGIN A TRIP: `person` drives `car` to `destination`, by the route found from where the car's front is now.
+    // Refused (a null handle) when the car has not been placed, is already on a trip, or the destination is not a
+    // place on the road (an unknown path, or a distance off its ends). Refused too when the destination is on the road
+    // but there is no route there for the car's class: then a NoRoute event is queued for the car (with a null trip).
     TripId beginTrip(CarId car, PersonId person, const PathPoint& destination);
     // The trip, or null when the handle is null or stale (its trip has ended).
     const Trip* trip(TripId id) const;
     std::size_t tripCount() const { return trips_.size(); }
+    // The trip's route (read-only), or null for a null or stale handle.
+    const Route* route(TripId id) const;
+    // What binding the vehicle classes to the road had to say (a class tag the road does not know), one line each.
+    const std::vector<std::string>& routeNotes() const { return routeNotes_; }
 
     // STEER A TRIP (design 3.1: the host steers trips, never cars). Each is refused (false) for a stale handle or a
     // place not on the road.
-    // A new destination (a cab given a new fare, a bus's next stop).
+    // A new destination (a cab given a new fare, a bus's next stop), routed from where the car is now. When there is
+    // no route there, the trip keeps its old destination and route, a NoRoute event is queued, and the answer is false.
     bool changeDestination(TripId id, const PathPoint& destination);
+    // ROUTE AGAIN from where the car is now to the same destination (after a missed turn). When there is no route, the
+    // old one is kept, a NoRoute event is queued, and the answer is false.
+    bool reroute(TripId id);
     // Place hold `name` at `at`; a hold of that name already on the trip moves there.
     bool placeHold(TripId id, HoldName name, const PathPoint& at);
     // Release hold `name`; false when the trip has no such hold.
@@ -160,9 +171,15 @@ private:
 
     bool onRoad(const PathPoint& p) const;
     Car* findPlaced(CarId id);
+    // The route for a placed car from its front to `to`, for its class.
+    Route routeFor(const Car& c, const PathPoint& to) const;
+    void queueEvent(EventKind kind, CarId car, TripId trip, PersonId person);
 
     const engine::LaneGraph* roads_ = nullptr;
     VehicleClasses vehicleClasses_;
+    RouteBounds routeBounds_;                 // studyRoads(*roads_), measured once
+    std::vector<RouteClass> routeClasses_;    // each vehicle class bound to the road, by class index
+    std::vector<std::string> routeNotes_;
     std::vector<Car> cars_;     // every placed car, in car-id order
     PathLists pathLists_;       // rebuilt from cars_ whenever a car is placed or removed
     uint64_t tickCount_ = 0;

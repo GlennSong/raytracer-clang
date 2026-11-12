@@ -13,7 +13,9 @@ bool eventBefore(const Event& a, const Event& b) {
            std::make_tuple(b.car.index, static_cast<uint8_t>(b.kind), b.trip.index, b.trip.generation, b.tick, b.person);
 }
 
-Driving::Driving(const engine::LaneGraph* roads) : roads_(roads) {}
+Driving::Driving(const engine::LaneGraph* roads) : roads_(roads) {
+    if (roads_) routeBounds_ = studyRoads(*roads_);
+}
 
 void Driving::tick(Real dt) {
     plan();
@@ -56,7 +58,31 @@ bool leadsInto(const engine::LaneGraph& roads, engine::PathId from, engine::Path
 
 void Driving::setVehicleClasses(VehicleClasses classes) {
     vehicleClasses_ = std::move(classes);
-    if (roads_) rebuildPathLists(*roads_, vehicleClasses_, cars_, pathLists_);
+    routeClasses_.clear();
+    routeNotes_.clear();
+    if (roads_) {
+        for (const VehicleClass& c : vehicleClasses_.all())
+            routeClasses_.push_back(bindRouteClass(*roads_, c, &routeNotes_));
+        rebuildPathLists(*roads_, vehicleClasses_, cars_, pathLists_);
+    }
+}
+
+Route Driving::routeFor(const Car& c, const PathPoint& to) const {
+    PathPoint front;
+    front.path = c.path;
+    front.along = c.along;
+    const RouteClass cls = c.vehicleClass < routeClasses_.size() ? routeClasses_[c.vehicleClass] : RouteClass();
+    return findRoute(*roads_, routeBounds_, cls, front, to);
+}
+
+void Driving::queueEvent(EventKind kind, CarId car, TripId trip, PersonId person) {
+    Event e;
+    e.kind = kind;
+    e.car = car;
+    e.trip = trip;
+    e.person = person;
+    e.tick = tickCount_;
+    events_.push_back(e);
 }
 
 Car* Driving::findPlaced(CarId id) {
@@ -136,12 +162,18 @@ bool Driving::removeCar(CarId id, std::string* why) {
 TripId Driving::beginTrip(CarId car, PersonId person, const PathPoint& destination) {
     Car* placed = findPlaced(car);
     if (!placed || tripOfCar_.count(car) != 0 || !onRoad(destination)) return TripId{};
+    Route route = routeFor(*placed, destination);
+    if (!route.found) {
+        queueEvent(EventKind::NoRoute, car, TripId{}, person);
+        return TripId{};
+    }
     placed->driven = true;
     Trip t;
     t.car = car;
     t.person = person;
     t.destination = destination;
     t.beganAtTick = tickCount_;
+    t.route = std::move(route);
     const TripId id = trips_.insert(t);
     tripOfCar_[car] = id;
     return id;
@@ -149,10 +181,37 @@ TripId Driving::beginTrip(CarId car, PersonId person, const PathPoint& destinati
 
 const Trip* Driving::trip(TripId id) const { return trips_.get(id); }
 
+const Route* Driving::route(TripId id) const {
+    const Trip* t = trips_.get(id);
+    return t ? &t->route : nullptr;
+}
+
 bool Driving::changeDestination(TripId id, const PathPoint& destination) {
     Trip* t = trips_.get(id);
     if (!t || !onRoad(destination)) return false;
+    const Car* c = car(t->car);
+    if (!c) return false;
+    Route route = routeFor(*c, destination);
+    if (!route.found) {
+        queueEvent(EventKind::NoRoute, t->car, id, t->person);
+        return false;
+    }
     t->destination = destination;
+    t->route = std::move(route);
+    return true;
+}
+
+bool Driving::reroute(TripId id) {
+    Trip* t = trips_.get(id);
+    if (!t) return false;
+    const Car* c = car(t->car);
+    if (!c) return false;
+    Route route = routeFor(*c, t->destination);
+    if (!route.found) {
+        queueEvent(EventKind::NoRoute, t->car, id, t->person);
+        return false;
+    }
+    t->route = std::move(route);
     return true;
 }
 
@@ -245,6 +304,7 @@ uint64_t Driving::stateHash() const {
             h.pod(hold.at.path.index);
             h.pod(hold.at.along);
         }
+        h.pod(routeHash(t->route));
     }
     // The events not yet drained, in the order they will come out.
     std::vector<Event> queued = events_;
