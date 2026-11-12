@@ -40,6 +40,11 @@ Real reactionTime(Real decideInterval, Real step) { return std::max(decideInterv
 
 Real freeRoadAcceleration(const Follower& f, Real speed, Real topSpeed) {
     if (!(topSpeed > 0)) return speed > 0 ? -f.brake : Real(0);
+    // Above the top speed: brake comfortably down to it. The formula below slows a car that is only a little over
+    // far more gently than that, and the top speeds for a bend or a lower limit ahead (corner_speed, slower_ahead) are
+    // "the speed I may do NOW if I brake comfortably from here", so a gentler brake arrives too fast (#257: bends
+    // taken at four times the comfortable sideways acceleration).
+    if (speed > topSpeed) return -f.brake;
     return f.speedUp * (1 - std::pow(speed / topSpeed, kFreeRoadExponent));
 }
 
@@ -97,6 +102,9 @@ StepOutcome stepSpeed(const Follower& f, Real speed, Real topSpeed, RuleIndex to
 
     // 2. At rest: move off only on a clear go.
     Real next = (speed <= 0 && accel <= kMoveOffAbove) ? Real(0) : speed + accel * step;
+    // A car braking down to its top speed stops braking AT it, not a fraction of a tick's braking below it (it would
+    // then speed up again, and what limits it would flip every tick).
+    if (out.binding.by == Limit::TopSpeed && speed > topSpeed && next < topSpeed) next = topSpeed;
 
     // 3. The hard limit against each thing ahead.
     for (std::size_t i = 0; i < obstacleCount; ++i) {

@@ -95,8 +95,9 @@ struct Follower {
     Real standstillGap = 0;  // s0: metres between the two when both stand (standstill_gap)
 };
 
-// EASING ON AN EMPTY ROAD: a * (1 - (v / v_top)^4). A top speed of zero or below (a car held still) is never divided
-// by: a moving car brakes comfortably, a car at rest stays at rest (zero).
+// EASING ON AN EMPTY ROAD: a * (1 - (v / v_top)^4) up to the top speed; above it, comfortable braking down to it.
+// A top speed of zero or below (a car held still) is never divided by: a moving car brakes comfortably, a car at
+// rest stays at rest (zero).
 Real freeRoadAcceleration(const Follower& f, Real speed, Real topSpeed);
 // The gap this driver would like to the thing ahead at these speeds: s0 + v*T + v*(v - v_ahead) / (2*sqrt(a*b)), and
 // never below s0 (the closing part is below zero when the thing ahead pulls away; it may cancel the seconds of gap but
