@@ -92,6 +92,10 @@ struct DrivingSettings {
     // Keep each driven car's trace (trace.h). It only records: switching it off changes nothing a car does, and the
     // state hash is the same either way.
     bool trace = true;
+    // Routes may change lanes (RouteClass::laneChanges). The tick cannot change lanes yet (task E1), so a car given a
+    // route that needs one stops at the end of its lane for good; a host whose cars must finish their trips turns this
+    // off until lane changes exist. Takes effect for routes found from then on.
+    bool laneChanges = true;
 };
 
 // WHEN A FIXED CAP CUT SOMETHING SHORT, counted so it is never silent (both are covered by the state hash). Each
@@ -222,6 +226,10 @@ public:
     // End the trip before it arrives. The handle goes stale, and an EndedEarly event is queued. The car stays placed
     // where it is, undriven and at rest (the host has taken it over).
     bool endTrip(TripId id);
+    // AT THE END OF A ROAD THAT JUST ENDS (a lane with no path after it, such as the open edge of a map): the car is
+    // on a trip, at rest, with its front no further than kArrivedWithin from the end of a path that leads nowhere.
+    // Nothing in the model will ever move it on; what happens next is the host's choice. False for a car not placed.
+    bool atRoadEnd(CarId car) const;
 
     // THE EVENTS since the last drain, sorted (eventBefore). The list is empty afterwards.
     std::vector<Event> drainEvents();

@@ -764,6 +764,12 @@ void CityWalkerSystem::onStart(engine::FrameContext& ctx) {
         answerLaneGraph_ = ctx.commands->bind("lanegraph?", "CityWalkerSystem", [this](const engine::ControlCommand&) -> std::string {
             return "ok " + (city_.sim().drivingV2() ? city_.sim().drivingRoadsReport() : std::string(kDrivingV2Off));
         });
+        // `driving?`: the new model's cars at a glance -- placed, moving, standing, trips, cars put down again, routes
+        // not found, mean speed, tick cost (city_driving.h)
+        answerDriving_ = ctx.commands->bind("driving?", "CityWalkerSystem", [this](const engine::ControlCommand&) -> std::string {
+            const driving::Driving* d = city_.sim().drivingV2();
+            return "ok " + (d ? city_.sim().drivingHost().describe(*d) : std::string(kDrivingV2Off));
+        });
     }
 }
 

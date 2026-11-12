@@ -469,8 +469,9 @@ private:
 
 // ONE TICK, TIMED: ticks `d` and hands what it cost on the wall clock to the measurements attached to it (none: only
 // ticks). The tick is timed with the measurements set aside, and they then look at it, so the cost is the tick's own
-// and the module never reads the clock while it watches.
-void tickTimed(Driving& d, Real dt);
+// and the module never reads the clock while it watches. Returns what the tick cost, in milliseconds (for a host's own
+// report; nothing that drives may read it).
+double tickTimed(Driving& d, Real dt);
 
 }  // namespace driving
 

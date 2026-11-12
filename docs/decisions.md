@@ -17941,3 +17941,67 @@ bike lanes) once the planner states them; the builder leaves wedges under 0.5 mÂ
 street); near turns at tight corners need the builder's kerb returns or stop lines to change for a 5 m car; the
 connector checks take 3.1 s of the lab's 4.1 s (the sweep, every 0.1 m).
 
+## ADR-0399 â€” The traffic lab's cars are driven and drawn by the new model (#255, #258, #235)
+
+Words: the OLD MODEL is the city sim's own driving (`city_sim.cpp`); the NEW MODEL is the driving library
+(`src/apps/driving`); a PART of the road is a set of lanes and connectors that can all reach one another (lane_graph.h
+`reachableParts`); a car is PUT DOWN when it is placed on the lane graph by the host rather than driven there.
+
+**Context.** The lab loaded the real lane graph into the new model (v2) but the old model still drove and drew every
+car. The new model can follow, stop at places the rules name and arrive, but has no junction rules and cannot change
+lanes. The owner wants to watch it drive the lab.
+
+**Decision.**
+- **The first rule set is data:** `assets/scripts/rules/lab.lua` (named by the level, `citysim.drivingRules`): keep to
+  the limit (`my_limit`), slow before a lower one (`slower_ahead`), slow for bends (`corner_speed`), stop where the lane
+  ends, stop at the destination; `standstill_gap`, `comfortable_side_accel`, `gap_kept`, `speed_habit`, each with a
+  unit and a source (`[~]` for a guess to tune). A refused rule set is logged with its file and key path, the new
+  model is switched off and the old one drives (`CitySim::startDrivingV2`, `loadDrivingRules`).
+- **Limits on roads with none posted** are a rule-set table, `default_limits`, by road class, written like the numbers:
+  the lane graph posts no limits until the control plan (B4) does, and every path's limit was 0, so no car would have
+  moved. Bound per path at load (`RoadRules::unpostedLimit`; a connector takes the class of the lane it joins); a class
+  with unposted paths and no default is a load problem. Route costs still read posted limits only (owed).
+- **The seam, at its narrowest** (`CitySim::drivenByV2`, false for every agent on a v1 level): the new model's drivers
+  are left out of the old model's active list (no goal table, no advance, no crash check, no wedge as the mover), out
+  of its spatial grid (every old-model look at another car -- launch clearance, junction occupancy, sensing, the wedge,
+  crashes, the physics tier's pick -- goes through that grid), out of its lane occupancy (`computeGaps`) and out of the
+  tier pass. Their old trip, bays and in-between state are cleared at the hand-over. After every tick the new model's
+  host (`city_driving.h`, `DrivingHost`) writes each car's place into its agent and vehicle (the middle of the body from
+  `carPose`, the rear-to-front direction, speed, a state label), so drawing, the walkers' car checks, the map and the
+  camera read it unchanged. **v1 is unchanged, bit for bit:** a state hash over every agent and vehicle
+  (`tests/test_traffic_lab_v2.cpp`, `level_v1_state_is_unchanged`) on the lab run as v1 for 2 minutes at 60 steps a
+  second, and on river_town (8,890 agents: walkers, buses, cabs, tiers) for a minute, is identical before and after
+  this change at every print.
+- **Trips anywhere** (`driving/trip_places.h`): places are on the lanes (never a connector) of parts with at least 8
+  lanes, for the vehicle class and the way routes are found; a car is put down with room round it (4 m at load, 70 m
+  while traffic moves) and sent to a place in its own part, so a route always exists; the picks are stateless hashes
+  of the level seed, the person, the question and a per-person count. On arrival it is sent on again. A car standing
+  at the end of a lane with nothing after it (`Driving::atRoadEnd`) is taken off, put down again and counted.
+- **Routes keep to the car's own lanes until lane changes exist** (`DrivingSettings::laneChanges`, off in the lab):
+  a route needing a lane change the tick cannot make leaves the car standing for ever, level with its destination in
+  the wrong lane or where its lane ends. Without lane changes the lab's road falls into more parts (the class with the
+  most has 11 parts of 8+ lanes, 1,428 of 1,927 lanes), and a car keeps to its part.
+- **Drawn from the model**: `agentPose` takes the agent's place (copied from `carPose`) with the old path's
+  between-tick blend and tilt filter; the four-wheel fit stands it on the drawn deck nearest the lane graph's height
+  under it (`deckSurfaceNear`), so a car on the elevated freeway is drawn on it and not on the road below; the new
+  model's two-wheelers are fitted on their two wheels (pitch only). Brake lamps: acceleration below -0.5 m/s2, or held at
+  rest; no indicators yet. `driving?` gives the one-line summary.
+
+**Measured** (the lab, 300 drivers, 5 simulated minutes at 60 ticks a second, `level_traffic_lab_v2_drives`): 663 trips
+begun, 363 arrived, 0 routes not found, 0 put down again; mean speed 7.5 m/s; the model's tick 0.13 ms (0.44 ms per
+1,000 cars), its measurements 0.22 ms, the host's work 0.16 ms. No car waited with no reason (sampled every second), no
+loops, none stood 60 s. Bodies on one path overlapping after coming onto it the same way (following failed): 0; after
+coming onto it from different paths (a join; no merge rule yet): 15 spells; bodies overlapping where different paths
+cross or join, sampled each second: 127 (119 pairs). Tyres against the drawn road (every 2 s, every car, 45,000 car
+samples): within +3.7 mm / -3.6 mm, flat, ramps, crests and dips alike (the lab has no banked curve: the steepest roll
+seen is 0.3%); the lane graph's own height is up to 4.6 cm off the drawn road over a crest, which is why the drawing
+takes the deck. The state hash is the same at every second of two runs.
+
+**Owed.** Junction rules (D1-D5): cars pass through each other where paths cross and merge into each other where they
+join, which is also why the measurements' same-path overlap row fails. Lane changes (E1), then routes with them. Bends:
+cars enter a bend up to 3.0 m/s2 sideways against the rule set's 2.0 (52.7 car-seconds of 72,000 on bends): the held
+top speed is a tenth of a second stale when the bend comes, so `corner_speed` (and `slower_ahead`) should allow for the
+driver's decide interval. Route costs with default limits. The A2 seam proper (readers ask a car view; here the new
+model writes the agent's fields). `lanegraph?` and `driving?` on the commands page. Checking the drawing in
+`editor_app`.
+

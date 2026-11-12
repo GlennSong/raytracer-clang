@@ -5864,6 +5864,7 @@ bool LevelLoader::load(const std::string& path,
         cfg.driverRoleShare = cs.value("driverRoleShare", cfg.driverRoleShare);
         cfg.realLanes = cs.value("realLanes", cfg.realLanes);
         cfg.driving = cs.value("driving", cfg.driving);
+        cfg.drivingRules = cs.value("drivingRules", cfg.drivingRules);
         cfg.levelPath = g_levelPath;
         cfg.hailChance = cs.value("hailChance", cfg.hailChance);
         cfg.hailMinMetres = cs.value("hailMinMetres", cfg.hailMinMetres);

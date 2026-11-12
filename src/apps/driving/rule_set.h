@@ -10,6 +10,8 @@
 //   - the DEVICES: things that can stand on or be painted on the road, and what each one means;
 //   - the NUMBERS: every tunable number, stored in metres / seconds / metres per second (squared) / plain ratios,
 //     with the unit and the source it was written with;
+//   - the DEFAULT LIMITS: the speed limit on a road with none posted, by the road's class, written like the numbers
+//     (an optional table: a rule set for roads whose every path has a posted limit needs none);
 //   - the PERSONALITY settings: each driver setting's usual value and the range people fall in.
 //
 // What a device can mean is a small fixed vocabulary of EFFECTS (stop line, rank, top speed, closed to, open to,
@@ -34,6 +36,8 @@ enum class DrivesOn { Left, Right };
 // Words of the rule-set language that the reader checks for. Kept here so C++ has each in one place.
 constexpr const char* kWordAll = "all";       // closed_to / open_to: every kind of vehicle
 constexpr const char* kWordValue = "value";   // top_speed: the regulation's own number is the speed
+// The table of limits on roads with none posted, by road class (RuleSet::defaultLimits).
+constexpr const char* kKeyDefaultLimits = "default_limits";
 
 // "No rank": a device that does not say which sign rank it carries.
 constexpr int kNoRank = -1;
@@ -79,6 +83,8 @@ struct PersonalSetting {
     double writtenLow = 0;
     double writtenHigh = 0;
     std::string unit;                // as written
+    std::string source;              // where the values came from ("" when the file gave none)
+    bool hasSource = false;
 };
 
 struct RuleSet {
@@ -88,13 +94,17 @@ struct RuleSet {
     std::vector<Device> devices;             // sorted by name
     std::vector<Number> numbers;             // sorted by name
     std::vector<PersonalSetting> personality;   // sorted by name
+    std::vector<Number> defaultLimits;          // by road class name, sorted; each a speed
 
     const Device* findDevice(const std::string& deviceName) const;
     const Number* findNumber(const std::string& numberName) const;
     const PersonalSetting* findPersonal(const std::string& settingName) const;
+    // The default limit for road class `roadClass`, or null.
+    const Number* findDefaultLimit(const std::string& roadClass) const;
     // Position of a rank name in `ranks` (0 goes first), or kNoRank.
     int rankIndex(const std::string& rankName) const;
-    // How many numbers came without a source. A later check fails a real rule set when this is not zero.
+    // How many numbers (default limits among them) came without a source. A later check fails a real rule set when
+    // this is not zero.
     std::size_t unsourcedNumberCount() const;
 };
 

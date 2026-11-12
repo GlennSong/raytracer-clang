@@ -76,7 +76,8 @@
     "driverRoleShare": 1.0,
     "dormancy": false,
     "realLanes": true,
-    "driving": "v2"
+    "driving": "v2",
+    "drivingRules": "rules/lab.lua"
   },
   "dayNight": {
     "dayMinutes": 1440.0,

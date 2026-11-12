@@ -43,6 +43,20 @@ void checkNeeds(const RuleSet& rules, const std::string& who, const std::vector<
     }
 }
 
+// The road class a path belongs to: a lane's section's; a connector's, that of the lane it joins. kNoName for none.
+engine::NameIndex roadClassOf(const engine::LaneGraph& roads, engine::PathId path) {
+    engine::PathId lane = path;
+    const engine::Path& p = roads.paths[path.index];
+    if (p.kind == engine::PathKind::Connector) {
+        if (p.next.count == 0 || p.next.first >= roads.nextPaths.size()) return engine::kNoName;
+        lane = roads.nextPaths[p.next.first];
+    }
+    if (!lane.valid() || lane.index >= roads.paths.size()) return engine::kNoName;
+    const engine::Path& l = roads.paths[lane.index];
+    if (l.kind != engine::PathKind::Lane || l.section.index >= roads.sections.size()) return engine::kNoName;
+    return roads.sections[l.section.index].roadClass;
+}
+
 }  // namespace
 
 const Device* RoadRules::device(const RuleSet& rules, engine::NameIndex kind) const {
@@ -50,6 +64,13 @@ const Device* RoadRules::device(const RuleSet& rules, engine::NameIndex kind) co
     const uint32_t d = deviceOfKind[kind];
     if (d >= rules.devices.size()) return nullptr;
     return &rules.devices[d];
+}
+
+Real RoadRules::baseLimit(const engine::LaneGraph& roads, engine::PathId path) const {
+    if (!path.valid() || path.index >= roads.paths.size()) return 0;
+    const Real posted = roads.paths[path.index].speedLimit;
+    if (posted > 0) return posted;
+    return path.index < unpostedLimit.size() ? unpostedLimit[path.index] : Real(0);
 }
 
 bool buildRoadRules(const engine::LaneGraph& roads, const RuleSet& rules, const FactRegistry& facts, RoadRules& out,
@@ -66,6 +87,30 @@ bool buildRoadRules(const engine::LaneGraph& roads, const RuleSet& rules, const 
             continue;
         }
         out.deviceOfKind[k] = static_cast<uint32_t>(d - rules.devices.data());
+    }
+
+    // Paths with no posted limit take their road class's default, which must be a speed.
+    out.unpostedLimit.assign(roads.paths.size(), 0);
+    enum class Lack : uint8_t { Nothing, NoDefault, NotASpeed };   // what a road class with unposted paths lacks
+    std::vector<Lack> lacking(roads.roadClassNames.size(), Lack::Nothing);
+    for (std::size_t p = 0; p < roads.paths.size(); ++p) {
+        if (roads.paths[p].speedLimit > 0) continue;
+        const engine::NameIndex cls = roadClassOf(roads, engine::PathId(static_cast<uint32_t>(p)));
+        if (cls >= roads.roadClassNames.size()) continue;
+        const Number* limit = rules.findDefaultLimit(roads.roadClassNames[cls]);
+        UnitFamily family = UnitFamily::Ratio;
+        if (!limit) lacking[cls] = Lack::NoDefault;
+        else if (!unitFamily(limit->unit, family) || family != UnitFamily::Speed) lacking[cls] = Lack::NotASpeed;
+        else out.unpostedLimit[p] = static_cast<Real>(limit->value);
+    }
+    for (std::size_t c = 0; c < lacking.size(); ++c) {
+        const std::string& cls = roads.roadClassNames[c];
+        if (lacking[c] == Lack::NoDefault)
+            found.push_back("the lane graph has paths of road class \"" + cls + "\" with no posted limit, but rule set \"" +
+                            rules.name + "\" has no " + kKeyDefaultLimits + "." + cls);
+        else if (lacking[c] == Lack::NotASpeed)
+            found.push_back("rule set \"" + rules.name + "\" gives " + kKeyDefaultLimits + "." + cls + " in \"" +
+                            rules.findDefaultLimit(cls)->unit + "\", which is not a speed");
     }
 
     for (const FactSpec& fact : facts.all())

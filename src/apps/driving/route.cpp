@@ -348,8 +348,8 @@ Route findRoute(const LaneGraph& roads, const RouteBounds& bounds, const RouteCl
                 if (mayUse(roads, cls, q)) reach(q.index, u, toEnd, false);
             });
         }
-        // Sideways, into the lane beside (a start node goes to the start node beside it).
-        if (path.kind == PathKind::Lane) {
+        // Sideways, into the lane beside (a start node goes to the start node beside it), when the class may.
+        if (cls.laneChanges && path.kind == PathKind::Lane) {
             for (const bool towardKerb : {false, true}) {
                 const PathId beside = sidestep(roads, p, towardKerb);
                 if (!beside.valid() || !mayUse(roads, cls, beside)) continue;
@@ -685,6 +685,7 @@ uint64_t routeHash(const Route& route) {
     h.pod(route.vehicle.tags);
     h.pod(route.vehicle.tightestTurnRadius);
     h.pod(route.vehicle.topSpeed);
+    h.pod(static_cast<uint8_t>(route.vehicle.laneChanges));
     h.pod(route.startConnector.index);
     h.pod(route.endConnector.index);
     h.pod(static_cast<uint64_t>(route.legs.size()));

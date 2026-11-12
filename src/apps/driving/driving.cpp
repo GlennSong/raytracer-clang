@@ -369,7 +369,8 @@ Route Driving::routeFor(const Car& c, const PathPoint& to) const {
     PathPoint front;
     front.path = c.path;
     front.along = c.along;
-    const RouteClass cls = c.vehicleClass < routeClasses_.size() ? routeClasses_[c.vehicleClass] : RouteClass();
+    RouteClass cls = c.vehicleClass < routeClasses_.size() ? routeClasses_[c.vehicleClass] : RouteClass();
+    cls.laneChanges = settings_.laneChanges;
     return findRoute(*roads_, routeBounds_, cls, front, to);
 }
 
@@ -563,6 +564,13 @@ bool Driving::endTrip(TripId id) {
     return true;
 }
 
+bool Driving::atRoadEnd(CarId id) const {
+    const Car* c = car(id);
+    if (!c || !c->driven || !roads_ || c->speed >= kStandingBelow) return false;
+    const engine::Path& p = roads_->paths[c->path.index];
+    return p.next.count == 0 && p.length - c->along <= kArrivedWithin;
+}
+
 std::vector<Event> Driving::drainEvents() {
     std::vector<Event> out;
     out.swap(events_);
@@ -604,6 +612,7 @@ uint64_t Driving::stateHash() const {
         h.pod(c.binding.rule);
     }
     h.pod(settings_.decideEveryTicks);
+    h.pod(static_cast<uint8_t>(settings_.laneChanges));
     h.pod(capCounts_.tailsOffTrail);
     h.pod(capCounts_.lastTailOffTrail.index);
     h.pod(capCounts_.lookAheadsCut);

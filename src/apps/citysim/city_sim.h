@@ -22,6 +22,7 @@
 #include "relationships.h"
 #include "traffic_signal.h"
 #include "../driving/driving.h"   // the new driving model (#234; citysim.driving = "v2")
+#include "city_driving.h"         // ...and the city sim's side of it: the drivers handed over (#255)
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -1238,7 +1239,8 @@ public:
     void setUseRealLanes(bool on) { useRealLanes_ = on; }
     bool useRealLanes() const { return useRealLanes_; }
     // THE NEW DRIVING MODEL (#234; citysim.driving = "v2"): on, the sim holds a driving::Driving and ticks it once per
-    // sim tick, with an empty world for now. The old model drives the cars either way. Off drops it.
+    // sim tick. Until startDrivingV2 hands it cars it ticks an empty world and the old model drives every car. Off
+    // drops it.
     void useDrivingV2(bool on) { if (on) drivingV2_.emplace(); else drivingV2_.reset(); }
     // ...and the kinds of vehicle it knows (#248: one class per fleet class, read with the fleet). No-op under v1.
     void setDrivingVehicleClasses(driving::VehicleClasses c) { if (drivingV2_) drivingV2_->setVehicleClasses(std::move(c)); }
@@ -1250,6 +1252,19 @@ public:
     const std::string& drivingRoadsReport() const { return drivingRoadsReport_; }
     // The new model, read-only; null when the level drives v1.
     const driving::Driving* drivingV2() const { return drivingV2_ ? &*drivingV2_ : nullptr; }
+    // THE NEW MODEL TAKES THE DRIVERS (#255; city_driving.h): reads the rule set `rulesFile` and gives it to the model,
+    // then hands it the cars of every driver of role `role` (the level's driverRole), each as the driving class of its
+    // fleet slot (`classOfSlot`, as DrivingHost::begin). Those drivers leave the old model for good: their old trip and
+    // bays are dropped, and from then on the old model neither drives them, nor steers or crash-checks them, nor counts
+    // them in its lanes and junctions (drivenByV2). False, with the reason in `report`, when there is no new model or
+    // the rule set is refused; then nothing changes and the old model drives every car. On success `report` says what
+    // was handed over. Call once, after build and the roles.
+    bool startDrivingV2(const std::string& rulesFile, const std::string& role, const std::vector<int>& classOfSlot,
+                        std::string* report);
+    // Does the new model drive this agent's car? (Always false on a v1 level.)
+    bool drivenByV2(int agent) const { return drivingHost_.drives(agent); }
+    // The hand-over's side of it: counts, costs, the measurements, road heights for drawing (`driving?`).
+    const DrivingHost& drivingHost() const { return drivingHost_; }
     // Does this agent drive one trip straight into the next (the level's wander mode, or a roaming role's day)?
     // The chained-arrival corner, the final-leg turn yield and the no-parking rules ask this, not wander_.
     bool roams(const Agent& a) const {
@@ -2067,6 +2082,7 @@ private:
     // Its road (setDrivingRoads): shared, so its address stays put while the model holds a pointer to it.
     std::shared_ptr<const engine::LaneGraph> drivingRoads_;
     std::string drivingRoadsReport_ = "no lane graph yet";
+    DrivingHost drivingHost_;   // the drivers handed to the new model (startDrivingV2); inactive on a v1 level
     // Three-tier traffic state (P4): the fed bubble centre, the fixed-frame
     // counter the V buckets key off (frameIndex_ % vTickDivisor — no wall
     // clock), and the lifetime transition counters the tests gate on.

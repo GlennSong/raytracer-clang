@@ -105,6 +105,7 @@ const Number* RuleSet::findNumber(const std::string& numberName) const { return 
 const PersonalSetting* RuleSet::findPersonal(const std::string& settingName) const {
     return findByName(personality, settingName);
 }
+const Number* RuleSet::findDefaultLimit(const std::string& roadClass) const { return findByName(defaultLimits, roadClass); }
 
 int RuleSet::rankIndex(const std::string& rankName) const {
     for (std::size_t i = 0; i < ranks.size(); ++i)
@@ -114,8 +115,9 @@ int RuleSet::rankIndex(const std::string& rankName) const {
 
 std::size_t RuleSet::unsourcedNumberCount() const {
     std::size_t count = 0;
-    for (const Number& n : numbers)
-        if (!n.hasSource) ++count;
+    for (const std::vector<Number>* table : {&numbers, &defaultLimits})
+        for (const Number& n : *table)
+            if (!n.hasSource) ++count;
     return count;
 }
 

@@ -283,10 +283,20 @@ struct ReachableParts {
     std::vector<uint32_t> sizes;    // per part: how many paths it holds
     uint32_t largest = 0;           // the part with the most paths (the lowest numbered of equals); 0 when there are none
 };
+// WHICH MOVES COUNT when working out the parts. The default follows every next list and every lane change the lines
+// allow, over every path. A caller asking for one kind of vehicle, or for cars that cannot change lanes yet, narrows it.
+struct ReachRules {
+    bool laneChanges = true;        // follow the lane changes the lines allow (false: next lists only)
+    std::vector<uint8_t> open;      // per path, non-zero: it may be driven; empty: every path may. A closed path is never
+                                    // stepped onto and steps nowhere, so it is a part of its own.
+};
 ReachableParts reachableParts(const LaneGraph& g);
+ReachableParts reachableParts(const LaneGraph& g, const ReachRules& rules);
 // What `from` leads to in one step: its next paths, then the lanes beside it it may change into (both in id order).
-// What reachableParts follows; an index out of range leads nowhere.
+// What reachableParts follows; an index out of range leads nowhere. With rules: only the moves they allow, onto open
+// paths (and none from a closed one).
 std::vector<PathId> stepsFrom(const LaneGraph& g, PathId from);
+std::vector<PathId> stepsFrom(const LaneGraph& g, PathId from, const ReachRules& rules);
 
 // THE WHOLE GRAPH AS TEXT, in id order, with the names from the name tables: for a person checking a junction by
 // hand, and for tests to compare. Same graph, same text, every run.

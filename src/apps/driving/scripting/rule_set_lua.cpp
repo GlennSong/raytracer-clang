@@ -64,7 +64,9 @@ public:
         readDrivesOn(root, out);
         const bool ranksOk = readRanks(root, out);
         readDevices(root, out, ranksOk);
-        readNumbers(root, out);
+        readNumbers(root, kKeyNumbers, true, out.numbers);
+        readNumbers(root, kKeyDefaultLimits, false, out.defaultLimits);
+        checkDefaultLimitsAreSpeeds(out.defaultLimits);
         readPersonality(root, out);
         lua_settop(L, base);
         return clean();
@@ -240,6 +242,22 @@ private:
         return ok;
     }
 
+    // Where a value came from: the optional string under `source` in the table at `table`.
+    void readSource(int table, const std::string& path, std::string& source, bool& hasSource) {
+        const int top = lua_gettop(L);
+        const int src = pushField(table, kKeySource);
+        if (!lua_isnil(L, src)) {
+            std::string s;
+            if (stringAt(src, s)) {
+                source = s;
+                hasSource = true;
+            } else {
+                fail(path + "." + kKeySource, "is " + describe(src) + ", expected a string");
+            }
+        }
+        lua_settop(L, top);
+    }
+
     // A number in a table at `table` under `key`.
     bool readNumberField(int table, const std::string& path, const char* key, double& value) {
         const int top = lua_gettop(L);
@@ -255,10 +273,16 @@ private:
         return ok;
     }
 
-    void readNumbers(int root, RuleSet& out) {
+    // A table of numbers under `key` (numbers, default_limits), each { value, unit = "...", source = "..." }, into
+    // `out`. An absent table is a fault when `required`, and an empty list otherwise.
+    void readNumbers(int root, const char* key, bool required, std::vector<Number>& out) {
         const int top = lua_gettop(L);
-        const int list = pushField(root, kKeyNumbers);
-        const std::string path = std::string(kRoot) + "." + kKeyNumbers;
+        const int list = pushField(root, key);
+        const std::string path = std::string(kRoot) + "." + key;
+        if (!required && lua_isnil(L, list)) {
+            lua_settop(L, top);
+            return;
+        }
         if (!lua_istable(L, list)) {
             fail(path, "is " + describe(list) + ", expected a table of numbers");
             lua_settop(L, top);
@@ -295,24 +319,25 @@ private:
                 ok = false;
             }
             lua_settop(L, mark + 1);
-            const int src = pushField(nt, kKeySource);
-            if (!lua_isnil(L, src)) {
-                std::string s;
-                if (stringAt(src, s)) {
-                    n.source = s;
-                    n.hasSource = true;
-                } else {
-                    fail(numberPath + "." + kKeySource, "is " + describe(src) + ", expected a string");
-                }
-            }
+            readSource(nt, numberPath, n.source, n.hasSource);
             if (ok) {
                 n.value = n.writtenValue * factor;
                 numbers.push_back(n);
             }
             lua_settop(L, mark);
         }
-        out.numbers = numbers;
+        out = numbers;
         lua_settop(L, top);
+    }
+
+    // Every default limit is a speed: a limit in seconds or metres is a slip of the pen.
+    void checkDefaultLimitsAreSpeeds(const std::vector<Number>& limits) {
+        for (const Number& n : limits) {
+            UnitFamily family = UnitFamily::Ratio;
+            if (unitFamily(n.unit, family) && family != UnitFamily::Speed)
+                fail(std::string(kRoot) + "." + kKeyDefaultLimits + "." + n.name + "." + kKeyUnit,
+                     "is \"" + n.unit + "\", which is " + unitFamilyWords(family) + "; a limit is a speed");
+        }
     }
 
     void readPersonality(int root, RuleSet& out) {
@@ -328,14 +353,14 @@ private:
         std::vector<std::string> odd;
         keysOf(list, names, odd);
         for (const std::string& o : odd) fail(path, "has the key " + o + ", which is not a name; expected setting names");
-        const std::vector<std::string> allowed = {kKeyUsual, kKeyLow, kKeyHigh, kKeyUnit};
+        const std::vector<std::string> allowed = {kKeyUsual, kKeyLow, kKeyHigh, kKeyUnit, kKeySource};
         std::vector<PersonalSetting> settings;
         for (const std::string& name : names) {
             const int mark = lua_gettop(L);
             const std::string settingPath = path + "." + name;
             const int st = pushField(list, name);
             if (!lua_istable(L, st)) {
-                fail(settingPath, "is " + describe(st) + ", expected { usual, low, high, unit }");
+                fail(settingPath, "is " + describe(st) + ", expected { usual, low, high, unit, source }");
                 lua_settop(L, mark);
                 continue;
             }
@@ -347,6 +372,7 @@ private:
             ok = readNumberField(st, settingPath, kKeyUsual, p.writtenUsual) && ok;
             ok = readNumberField(st, settingPath, kKeyLow, p.writtenLow) && ok;
             ok = readNumberField(st, settingPath, kKeyHigh, p.writtenHigh) && ok;
+            readSource(st, settingPath, p.source, p.hasSource);
             if (ok && !(p.writtenLow <= p.writtenUsual && p.writtenUsual <= p.writtenHigh)) {
                 fail(settingPath, "has low " + numberText(p.writtenLow) + ", usual " + numberText(p.writtenUsual) +
                                       ", high " + numberText(p.writtenHigh) + "; expected low <= usual <= high");

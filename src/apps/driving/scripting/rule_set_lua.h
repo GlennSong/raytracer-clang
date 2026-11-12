@@ -3,7 +3,8 @@
 
 // READS A RULE SET OUT OF LUA (driving-model-design.md 6.1 a, c, d and 6.4; issue #250). The caller has already run the
 // rule-set file in `vm`, which defined a global table `rule_set`. This reads the parts C3 owns (name, drives_on,
-// ranks, devices, numbers, personality) into plain structs and checks them. Other top-level keys are left for the later
+// ranks, devices, numbers, personality, and the optional default_limits, written like the numbers) into plain structs
+// and checks them. Other top-level keys are left for the later
 // readers and are not errors; unknown keys inside the parts read here ARE, so a typo is caught.
 //
 // A value in a Lua table carries no line number, so an error names the file and the full key path and says what was

@@ -756,27 +756,35 @@ std::vector<std::string> validate(const LaneGraph& g) {
 
 // ---- where a car can go -----------------------------------------------------------------------------------------
 
-std::vector<PathId> stepsFrom(const LaneGraph& g, PathId from) {
+std::vector<PathId> stepsFrom(const LaneGraph& g, PathId from) { return stepsFrom(g, from, ReachRules()); }
+
+std::vector<PathId> stepsFrom(const LaneGraph& g, PathId from, const ReachRules& rules) {
     std::vector<PathId> out;
     if (!from.valid() || from.index >= g.paths.size()) return out;
+    const auto isOpen = [&](PathId q) { return rules.open.empty() || (q.index < rules.open.size() && rules.open[q.index] != 0); };
+    if (!isOpen(from)) return out;
     const Path& p = g.paths[from.index];
     if (inRange(p.next, g.nextPaths.size()))
         for (uint32_t k = p.next.first; k < p.next.end(); ++k)
-            if (g.nextPaths[k].index < g.paths.size()) out.push_back(g.nextPaths[k]);
-    if (p.kind != PathKind::Lane || p.section.index >= g.sections.size()) return out;
+            if (g.nextPaths[k].index < g.paths.size() && isOpen(g.nextPaths[k])) out.push_back(g.nextPaths[k]);
+    if (!rules.laneChanges || p.kind != PathKind::Lane || p.section.index >= g.sections.size()) return out;
     const Section& s = g.sections[p.section.index];
     if (!inRange(s.lanes, g.sectionLanes.size()) || !inRange(s.lines, g.laneLines.size())) return out;
     const uint32_t k = p.indexInSection;
     // the line on its offside (between lane k - 1 and k), crossed from the kerb side; the one on its kerb side (between
     // lane k and k + 1), crossed from the offside
-    if (k > 0 && k - 1 < s.lines.count && g.laneLines[s.lines.first + k - 1].crossFromKerbside)
+    if (k > 0 && k - 1 < s.lines.count && g.laneLines[s.lines.first + k - 1].crossFromKerbside &&
+        isOpen(g.sectionLanes[s.lanes.first + k - 1]))
         out.push_back(g.sectionLanes[s.lanes.first + k - 1]);
-    if (k + 1 < s.lanes.count && k < s.lines.count && g.laneLines[s.lines.first + k].crossFromOffside)
+    if (k + 1 < s.lanes.count && k < s.lines.count && g.laneLines[s.lines.first + k].crossFromOffside &&
+        isOpen(g.sectionLanes[s.lanes.first + k + 1]))
         out.push_back(g.sectionLanes[s.lanes.first + k + 1]);
     return out;
 }
 
-ReachableParts reachableParts(const LaneGraph& g) {
+ReachableParts reachableParts(const LaneGraph& g) { return reachableParts(g, ReachRules()); }
+
+ReachableParts reachableParts(const LaneGraph& g, const ReachRules& rules) {
     // Tarjan's walk, kept on an explicit stack (an island's lanes would overflow the call stack): each path gets the
     // order it was first reached in and the lowest such order it can get back to; a path that can get back to no path
     // reached before it closes a part, everything above it on the stack.
@@ -790,7 +798,7 @@ ReachableParts reachableParts(const LaneGraph& g) {
     uint32_t reached = 0, parts = 0;
     for (uint32_t root = 0; root < n; ++root) {
         if (order[root] != kUnseen) continue;
-        walk.push_back(Frame{root, stepsFrom(g, PathId(root)), 0});
+        walk.push_back(Frame{root, stepsFrom(g, PathId(root), rules), 0});
         order[root] = low[root] = reached++;
         stack.push_back(root);
         onStack[root] = 1;
@@ -802,7 +810,7 @@ ReachableParts reachableParts(const LaneGraph& g) {
                     order[q] = low[q] = reached++;
                     stack.push_back(q);
                     onStack[q] = 1;
-                    walk.push_back(Frame{q, stepsFrom(g, PathId(q)), 0});
+                    walk.push_back(Frame{q, stepsFrom(g, PathId(q), rules), 0});
                 } else if (onStack[q]) {
                     low[f.path] = std::min(low[f.path], order[q]);
                 }

@@ -53,6 +53,9 @@ struct RouteClass {
     engine::TagMask tags = 0;          // the graph's vehicle-tag bits for the class's tag names
     Real tightestTurnRadius = 0;       // a path bending tighter than this is refused
     Real topSpeed = 0;                 // m/s; caps every speed limit
+    // Routes may change lanes. Off, a route keeps to the lane the car is in and the lanes that lane leads into, so a car
+    // that cannot change lanes yet can drive every route it is given (Driving sets it from DrivingSettings::laneChanges).
+    bool laneChanges = true;
 };
 
 // BINDS A CLASS TO A GRAPH: each of its tag names to the graph's bit for it. A tag the graph does not know is not an

@@ -911,6 +911,10 @@ void Application::registerCityVerbs() {
     commandTable.add("lanegraph?", "lanegraph?",
                      "The new driving model's lane graph: paths, sections, junctions, connectors, refused turns, how much a car can get round, and whether it came from the cache or was built.",
                      unanswered("a CityWalkerSystem: play mode on a city level"));
+    // `driving?`: the new driving model's cars at a glance (citysim.driving = "v2")
+    commandTable.add("driving?", "driving?",
+                     "The new driving model's cars in one line: how many are placed, moving and standing, trips begun and arrived, cars put down again from a road's end, routes not found, mean speed, and what a tick costs.",
+                     unanswered("a CityWalkerSystem: play mode on a city level"));
 }
 
 // Asking the ground and the buildings

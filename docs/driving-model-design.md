@@ -785,6 +785,10 @@ roundabout is `give_way` on every entry; it needs no new question.
 **(c) Numbers: gaps, margins, timing, defaults.** How many seconds clear a far turn needs; the safety margin at a
 crossing point; how patience shrinks it and its floor; default speed limits by kind of road, in mph; how far before a
 turn to indicate; yellow and all-red timing by formula. Every number carries a comment naming its source.
+*As built* (#255, ADR-0399): the default limits are their own table, `default_limits = { local = { 25, unit = "mph",
+source = "..." }, ... }`, keyed by the lane graph's road class and written like the numbers; a path with no posted limit
+takes its class's (a connector the class of the lane it joins), bound once at load. A personal setting may carry a
+`source` too.
 
 **(d) Personality ranges.** For each driver setting (gap kept, gap accepted, speed habit, patience, attention, how
 pushy, indicating, horn), a default and a range. A person's own values are worked out from their identity by the

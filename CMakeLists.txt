@@ -502,6 +502,7 @@ add_library(driving STATIC
     src/apps/driving/rule_set.cpp
     src/apps/driving/trace.cpp           # each car's recent decisions, and the driver card (#256)
     src/apps/driving/traffic_state.cpp   # each car's record and each path's cars in order (#249)
+    src/apps/driving/trip_places.cpp     # where trips can begin and end, for a host that sends cars anywhere (#255)
     src/apps/driving/vehicle_class.cpp
     src/apps/driving/wait_graph.cpp      # who is waiting for whom, and its loops (#256)
 )
@@ -522,6 +523,7 @@ add_executable(driving_tests tests/main.cpp tests/test_driving.cpp tests/test_dr
     tests/test_driving_tick.cpp     # the three-step tick: speed, following, stopping, arriving (#253)
     tests/test_driving_trace.cpp    # the decision trace, the driver card and the wait-for graph (#256)
     tests/test_driving_measure.cpp  # the measurements table's arithmetic, breaches staged by hand (#257)
+    tests/test_driving_trip_places.cpp   # where trips begin and end; routes with no lane change; default limits (#255)
     tests/driving_test_roads.cpp)  # small realistic road networks for the driving tests (#254)
 target_include_directories(driving_tests PRIVATE src tests)
 target_compile_options(driving_tests PRIVATE -Wall -Wextra)
@@ -561,6 +563,7 @@ add_library(citysim STATIC
     src/apps/citysim/households.cpp      # ages, life stages, households in the dwellings (people.lua)
     src/apps/citysim/relationships.cpp   # surface-level social graph (ADR-0066)
     src/apps/citysim/city_sim.cpp
+    src/apps/citysim/city_driving.cpp   # the drivers handed to the new driving model (v2, #255)
     src/apps/citysim/city_render.cpp
     src/apps/citysim/city_spectate.cpp   # spectate camera: cycle + follow NPCs (headless-safe)
     src/apps/citysim/city_traffic_audio.cpp   # ambient traffic engine note (voice pool)
@@ -1006,6 +1009,7 @@ add_test(NAME unit_tests COMMAND run_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 add_executable(level_tests
     tests/main.cpp
     tests/test_levels_playable.cpp
+    tests/test_traffic_lab_v2.cpp   # the traffic lab driven by the new model; a v1 level's state unchanged (#255, #235)
     # Drives the real LevelLoader, which needs a Renderer. NullRenderer
     # satisfies Renderer::create() without a GPU (exactly one create() is linked
     # per target, and this target links no backend).

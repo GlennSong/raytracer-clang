@@ -910,7 +910,7 @@ MeasurementReport Measurements::report() const {
     return buildReport(rows, ruleNames_);
 }
 
-void tickTimed(Driving& d, Real dt) {
+double tickTimed(Driving& d, Real dt) {
     Measurements* m = d.measurements();
     std::size_t driven = 0;
     for (const Car& c : d.cars())
@@ -920,9 +920,11 @@ void tickTimed(Driving& d, Real dt) {
     d.tick(dt);
     const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     d.attachMeasurements(m);
-    if (!m) return;
+    const double ms = std::chrono::duration<double>(end - start).count() * kMillisecondsPerSecond;
+    if (!m) return ms;
     m->observe(d);
-    m->noteTickCost(std::chrono::duration<double>(end - start).count() * kMillisecondsPerSecond, driven);
+    m->noteTickCost(ms, driven);
+    return ms;
 }
 
 }  // namespace driving

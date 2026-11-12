@@ -5,8 +5,9 @@
 //
 // The lane graph names the kinds of regulation standing on its paths in its own table (regulationKindNames); the rule
 // set says what each device means, by name. RoadRules is the join of the two: for each regulation kind in the graph,
-// the rule set's device of the same name. Facts read it to learn what a regulation means without looking up a name
-// while cars drive.
+// the rule set's device of the same name; and for each path with no posted limit, the rule set's default limit for its
+// road's class (issue #255: the lane graph posts no limits until the control plan does). Facts read it to learn what a
+// regulation means, and what limit holds, without looking up a name while cars drive.
 //
 // Building it is also where the facts are checked against the rule set: every number and personal setting a
 // registered fact says it needs must be there, in the kind of unit it asks for (a speed is not a time); and so must
@@ -29,16 +30,24 @@ constexpr uint32_t kNoDevice = 0xFFFFFFFFu;
 struct RoadRules {
     // One per entry of the graph's regulationKindNames: the index of its device in RuleSet::devices, or kNoDevice.
     std::vector<uint32_t> deviceOfKind;
+    // THE LIMIT ON A ROAD WITH NONE POSTED, per path (m/s): a path whose own speedLimit is 0 takes the rule set's
+    // default limit for its road's class (RuleSet::defaultLimits) -- a lane its section's class, a connector the class
+    // of the lane it joins. 0 where the path has a posted limit, no road class, or its class has no default.
+    std::vector<Real> unpostedLimit;
 
     // What a regulation of kind `kind` means: its device in `rules` (the rule set this was built from), or null for a
     // kind the graph does not have or that is not bound.
     const Device* device(const RuleSet& rules, engine::NameIndex kind) const;
+    // The limit in force on `path` before any regulation on it: its posted limit, or else its unposted one (0 when it
+    // has neither).
+    Real baseLimit(const engine::LaneGraph& roads, engine::PathId path) const;
 };
 
 // BUILDS THE BINDING and checks the registered facts' needs. True when there is no problem. Otherwise false, `out`
 // holds what could be bound, and `problems` (when given) gets every problem, in this order: regulation kinds in the
-// graph's table order, then facts in slot order, then the other readers in the order added, each one's numbers then
-// its settings in the order it declares them.
+// graph's table order, then road classes with unposted paths and no default limit (in the graph's table order), then
+// facts in slot order, then the other readers in the order added, each one's numbers then its settings in the order
+// it declares them.
 bool buildRoadRules(const engine::LaneGraph& roads, const RuleSet& rules, const FactRegistry& facts, RoadRules& out,
                     std::vector<std::string>* problems = nullptr);
 

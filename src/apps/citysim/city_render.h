@@ -79,6 +79,7 @@ struct CityRenderParams {
     Real driverRoleShare = 1.0;
     bool realLanes = false;        // draw cars on the real lanes (#218)
     std::string driving = "v1";    // which driving model (CitySimConfig::driving; "v2" also runs the new library)
+    std::string drivingRules;      // the rule set v2 drives by (CitySimConfig::drivingRules)
     std::string levelPath;         // the level file (CitySimConfig::levelPath): v2 builds its lane graph from it
     Real hailChance = 0.0;
     Real hailMinMetres = 400.0;
@@ -264,6 +265,12 @@ public:
     // in that body frame: seat hip points, door floor points, floor height.
     // False when the agent is not a see-into vehicle.
     bool busFrame(int agent, engine::Mat4* pose) const;
+    // THE TYRES AGAINST THE ROAD (the new model's drawing check, #255): agent `agent`'s car as it would be drawn now, and
+    // for each of its wheels the height of the wheel's lowest point above the drawn road surface under it (metres; +
+    // floats, - sinks), wheel by wheel; and, when asked, the pose it is drawn with and each wheel's lowest point. False
+    // when the agent is not a driver drawn with wheels.
+    bool wheelGaps(int agent, std::vector<Real>& gaps, engine::Mat4* pose = nullptr,
+                   std::vector<engine::Vec3>* bottoms = nullptr) const;
     // A CAR'S SEATS (Glenn, 2026-10-02: "a way to detect which part of the car you get into so you can be a
     // passenger (backseat, frontseat passenger) or the driver ... we'd have to be pointing at the seat that we
     // want"): an ambient car's drawn pose and its seat hips in the body frame -- [0] the driver's, [1] the front

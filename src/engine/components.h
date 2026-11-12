@@ -1043,8 +1043,11 @@ struct CitySimConfig {
     // The traffic lab's; the cities' once their junctions take real lanes.
     bool realLanes = false;
     // WHICH DRIVING MODEL (#234): "v1", today's, drives the cars; "v2" also runs the new driving library (src/apps/
-    // driving) alongside it, ticking an empty world until later tasks hand it the cars.
+    // driving), which drives the cars of the level's driverRole when the level names a rule set (drivingRules).
     std::string driving = "v1";
+    // THE RULE SET the new model drives by (#258): a Lua file under assets/scripts ("rules/lab.lua"). Empty: v2 ticks
+    // an empty world and the old model drives every car.
+    std::string drivingRules;
     // The level file this block came from (the loader's path): under v2 the city sim keys and builds the level's lane
     // graph from it (lane_graph_cache.h). Empty for a level not loaded from a file.
     std::string levelPath;
