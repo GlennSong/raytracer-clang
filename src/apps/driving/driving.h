@@ -6,10 +6,18 @@
 // a time, takes trips in ("this person drives this car to that place"), lets the host steer a trip (a new destination,
 // a hold, an early end) and hands events back after each tick.
 //
-// For now nothing drives: cars are placed on the road and removed (traffic_state.h holds a car's record and the
-// per-path lists), a trip is recorded for a placed car, can be asked about, steered and ended, and the tick only
-// advances its clock. The three steps of a tick (design 7.1: plan, settle claims, move) are laid out as empty private functions,
-// so the tasks after this one fill them in place.
+// Cars are placed on the road and removed (traffic_state.h holds a car's record and the per-path lists); a trip is
+// recorded for a placed car, can be asked about, steered and ended. Once the host has handed over the rules (useRules),
+// each tick runs the three steps of design 7.1 over the driven cars (issue #253):
+//   1. PLAN: each driver whose turn it is notices its facts along its way ahead, decides by the rules, and HOLDS the
+//      answers (a place to stop by, as an odometer reading; a top speed; the way ahead). A driver whose `arrived` fact
+//      is yes ends its trip instead: a Parked event, and the car stays where it is, placed and undriven.
+//   2. SETTLE CLAIMS: nothing yet (junctions and lane changes bring claims).
+//   3. MOVE: every driven car works out its speed from its held answers and a fresh look at the car ahead (act.h),
+//      moves along its held way, carrying over onto the next paths as many times as it must, and records what held it
+//      back. Every car reads the state as it was at the start of the step and writes a second copy; the copies then
+//      swap and every path's list is rebuilt.
+// Without the rules the tick only advances its clock.
 //
 // The boundary (design 3): this library links engine_core only and includes nothing from the city sim, the renderer,
 // the entity world, the physics wrapper or Lua. The arrow goes one way: citysim may include this, never the reverse.
@@ -21,8 +29,12 @@
 // Units: metres, seconds.
 
 #include "engine/procgen/city/roads/lane_graph.h"
+#include "apps/driving/decide.h"
+#include "apps/driving/notice.h"
+#include "apps/driving/road_rules.h"
 #include "apps/driving/route.h"
-#include "apps/driving/traffic_state.h"   // CarId, PathPoint, Car, the per-path lists
+#include "apps/driving/rule_set.h"
+#include "apps/driving/traffic_state.h"   // CarId, PathPoint, Car, Hold, the per-path lists
 #include "apps/driving/vehicle_class.h"
 #include "slot_map.h"
 
@@ -37,17 +49,8 @@ namespace driving {
 
 using engine::Real;
 
-// (PersonId, who is at the wheel, is in rule_set.h, beside personalValue which reads a person's habits from it.)
-
-// The host's name for a hold (a bus stop's number, a fare's): an opaque number, unique within one trip.
-using HoldName = uint64_t;
-
-// "STOP HERE UNTIL RELEASED", placed on a trip by the host (design glossary: a bus waiting for passengers, a cab
-// picking up). Nothing acts on it yet.
-struct Hold {
-    HoldName name = 0;
-    PathPoint at;
-};
+// (PersonId, who is at the wheel, is in rule_set.h, beside personalValue which reads a person's habits from it. A
+// Hold and its HoldName are in traffic_state.h, so the facts can see them.)
 
 // ONE TRIP: this person is driving this car to that place (design 3.1), and the way there (route.h). The mode and
 // remembered facts join it in later tasks.
@@ -58,6 +61,41 @@ struct Trip {
     std::vector<Hold> holds;     // sorted by name
     uint64_t beganAtTick = 0;    // the tick count when the host began it
     Route route;                 // from where the car was when it was last routed, to the destination
+    // How far along the route the car has got: the first leg its front can be on (route.h's `fromLeg`). Moved on at
+    // each decision; back to 0 whenever the trip is routed again.
+    uint32_t legReached = 0;
+    // THE WAY AHEAD as of the driver's last decision (route.h wayAhead): the paths the car moves along until it decides
+    // again, its path at that moment first. The move step never takes the car past the end of the last of them.
+    WayAhead way;
+    uint32_t wayAt = 0;          // which of `way.paths` the car's front is on now
+    // The way stops short of where the driver looked: its last path leads nowhere on the route (a lane that ends, or
+    // the destination's). Then its end is a place to come to rest at; otherwise it is only where the driver stopped
+    // looking, a limit it never comes near.
+    bool wayEnds = false;
+};
+
+// HOW THE TICK RUNS, set by the host (or a test). These numbers move to the rule set's `detail` table (design 7.2) in
+// a later task; until then they live here, each a named default.
+struct DrivingSettings {
+    // How often a driver decides, in ticks: car `id` decides on the ticks where tick count mod N equals id mod N, so
+    // the drivers are spread evenly over the ticks (and every driver decides on its first tick of a trip, whatever its
+    // turn). At 60 ticks a second the default is the design's "near" rate, 10 decisions a second. Zero is taken as 1.
+    static constexpr uint32_t kDefaultDecideEveryTicks = 6;
+    uint32_t decideEveryTicks = kDefaultDecideEveryTicks;
+};
+
+// WHEN A FIXED CAP CUT SOMETHING SHORT, counted so it is never silent (both are covered by the state hash). Each
+// count is per car per time it happened: a tick for a tail, a decision for a look-ahead.
+struct CapCounts {
+    // A moving car's body lay on more paths behind its front than kMaxTrail: the oldest were dropped from its trail,
+    // and its listing on the oldest path kept reaches back past that path's start by the rest of its body, so
+    // followers keep at least the true gap (traffic_state.h). The count, and the last car it happened to.
+    uint64_t tailsOffTrail = 0;
+    CarId lastTailOffTrail;
+    // A driver's way ahead stopped at kMaxFollowedPaths paths, short of how far it looks, so it searched no further
+    // for the car ahead or anything else. The end of that way is still a wall the car never passes.
+    uint64_t lookAheadsCut = 0;
+    CarId lastLookAheadCut;
 };
 
 // THE HOST'S HANDLE TO A TRIP. Trips are begun and ended, and their slots reused, so the handle carries a generation:
@@ -91,12 +129,30 @@ bool eventBefore(const Event& a, const Event& b);
 class Driving {
 public:
     // Given the road it drives on: a lane graph that must outlive this object (it is read, never owned). Null is an
-    // empty world: it ticks, and every trip is refused, since there is nowhere to go.
-    // (The compiled rule set is given here too, by the task that brings it: design 3. The vehicle classes come in
-    // through setVehicleClasses.)
+    // empty world: it ticks, and every trip is refused, since there is nowhere to go. (The vehicle classes come in
+    // through setVehicleClasses, the rules through useRules.)
     explicit Driving(const engine::LaneGraph* roads = nullptr);
 
     const engine::LaneGraph* roads() const { return roads_; }
+
+    // THE RULES, already loaded and checked by the host (the Lua readers in scripting/, then buildRoadRules with a
+    // registry that has the built-in facts and the move step's needs: registerBuiltInFacts, registerMoveNeeds). Copied
+    // in; this library loads nothing. Refused (false, the reason in `why`) when the registry has no `arrived` fact or
+    // the rule set lacks a number or setting the move step reads (buildRoadRules names those first). Until rules are
+    // given, a tick moves nothing.
+    bool useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary vocabulary, CompiledRules rules,
+                  RoadRules roadRules, std::string* why = nullptr);
+    bool hasRules() const { return hasRules_; }
+    const RuleSet& ruleSet() const { return ruleSet_; }
+    const FactRegistry& facts() const { return facts_; }
+    const CompiledRules& rules() const { return rules_; }
+
+    // How often a fixed cap cut something short since this object was made (CapCounts).
+    const CapCounts& capCounts() const { return capCounts_; }
+
+    // HOW THE TICK RUNS (how often drivers decide). Takes effect from the next tick.
+    void setSettings(const DrivingSettings& settings) { settings_ = settings; }
+    const DrivingSettings& settings() const { return settings_; }
 
     // THE KINDS OF VEHICLE on the road (vehicle_class.h, #248), copied in by the host from its vehicle data. A car is
     // placed as one of them, and its length says how far back its body reaches. Setting them rebuilds the per-path
@@ -123,7 +179,7 @@ public:
     const std::vector<Car>& cars() const { return cars_; }
     const PathLists& pathLists() const { return pathLists_; }
 
-    // ONE STEP of `dt` seconds: plan, settle claims, move (design 7.1). For now it only advances the clock.
+    // ONE STEP of `dt` seconds: plan, settle claims, move (design 7.1), then the clock moves on.
     void tick(Real dt);
     uint64_t tickCount() const { return tickCount_; }
     double clockSeconds() const { return clockSeconds_; }
@@ -153,7 +209,8 @@ public:
     bool placeHold(TripId id, HoldName name, const PathPoint& at);
     // Release hold `name`; false when the trip has no such hold.
     bool releaseHold(TripId id, HoldName name);
-    // End the trip before it arrives. The handle goes stale, and an EndedEarly event is queued.
+    // End the trip before it arrives. The handle goes stale, and an EndedEarly event is queued. The car stays placed
+    // where it is, undriven and at rest (the host has taken it over).
     bool endTrip(TripId id);
 
     // THE EVENTS since the last drain, sorted (eventBefore). The list is empty afterwards.
@@ -164,16 +221,31 @@ public:
     uint64_t stateHash() const;
 
 private:
-    // The three steps of a tick, in order (design 7.1). Empty until the tasks that fill them.
-    void plan();            // each driver works out what it wants; reads last tick's state, writes nothing shared
-    void settleClaims();    // two cars that wanted the same thing: granted in a fixed order
-    void move();            // each car moves; events are queued for the host
+    // The three steps of a tick, in order (design 7.1).
+    void plan();            // each driver due works out what it wants; reads last tick's state, writes nothing shared
+    void settleClaims();    // two cars that wanted the same thing: granted in a fixed order (nothing to settle yet)
+    void move(Real dt);     // each driven car moves; then the copies swap and the lists are rebuilt
 
     bool onRoad(const PathPoint& p) const;
     Car* findPlaced(CarId id);
     // The route for a placed car from its front to `to`, for its class.
     Route routeFor(const Car& c, const PathPoint& to) const;
     void queueEvent(EventKind kind, CarId car, TripId trip, PersonId person);
+    // Each record's trip (a null handle for a car not on one), by its place in cars_: walks cars_ and tripOfCar_
+    // side by side, both in car-id order.
+    void findTripsOfRecords();
+    // A car whose trip has ended (arrived, or ended by the host): undriven, at rest where it is, nothing held.
+    static void leaveParked(Car& c);
+    // What the driver of car record `record` on trip `t` decided this tick, before it is applied.
+    struct Planned {
+        std::size_t record = 0;
+        TripId trip;
+        bool arrived = false;     // its `arrived` fact was yes: the trip ends here
+        HeldAnswers held;
+        WayAhead way;
+        bool wayEnds = false;
+        uint32_t legReached = 0;
+    };
 
     const engine::LaneGraph* roads_ = nullptr;
     VehicleClasses vehicleClasses_;
@@ -181,12 +253,36 @@ private:
     std::vector<RouteClass> routeClasses_;    // each vehicle class bound to the road, by class index
     std::vector<std::string> routeNotes_;
     std::vector<Car> cars_;     // every placed car, in car-id order
-    PathLists pathLists_;       // rebuilt from cars_ whenever a car is placed or removed
+    PathLists pathLists_;       // rebuilt from cars_ whenever a car is placed or removed, and after every move
     uint64_t tickCount_ = 0;
     double clockSeconds_ = 0;
     engine::SlotMap<Trip, TripTag> trips_;
     std::map<CarId, TripId> tripOfCar_;   // each car's trip, in car order (the hash walks the trips by it)
     std::vector<Event> events_;           // queued since the last drain, in the order they happened
+    DrivingSettings settings_;
+    CapCounts capCounts_;
+
+    // The rules (useRules).
+    bool hasRules_ = false;
+    RuleSet ruleSet_;
+    FactRegistry facts_;
+    AnswerVocabulary vocabulary_;
+    CompiledRules rules_;
+    RoadRules roadRules_;
+    std::vector<FactSlot> wanted_;        // the facts worked out for each driver: the rules' own, and `arrived`
+    FactSlot arrivedSlot_ = kNoFact;
+    PersonalSetting gapKept_;             // the setting gap_kept, and its name's hash (personalValue)
+    uint32_t gapKeptHash_ = 0;
+    Real standstillGap_ = 0;
+
+    // Working memory reused from tick to tick (never part of the state).
+    std::vector<Car> carsNext_;           // the second copy of the cars the move step writes
+    std::vector<TripId> tripOfRecord_;    // findTripsOfRecords
+    std::vector<Planned> planned_;
+    std::vector<NoticedFact> noticed_;
+    NoticeScratch noticeScratch_;
+    Decision decision_;
+    std::vector<engine::PathId> pathsAfter_;
 };
 
 }  // namespace driving

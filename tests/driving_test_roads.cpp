@@ -176,15 +176,22 @@ engine::PathId TestRoads::straightLane(uint32_t i, bool eastward, uint32_t k) co
 // ---- builders ------------------------------------------------------------------------------------------------------
 
 TestRoads straightRoad(uint32_t sections, const TestRoadSpec& spec) {
+    return straightRoadOf(std::vector<Real>(sections, spec.roadLength), spec);
+}
+
+TestRoads straightRoadOf(const std::vector<Real>& sectionLengths, const TestRoadSpec& spec) {
     TestRoads t;
     t.spec = spec;
+    const uint32_t sections = static_cast<uint32_t>(sectionLengths.size());
     t.sectionCount = sections;
     LaneGraph& g = t.graph;
     addNames(g);
     const Vec2 east = headingVector(Heading::East);
+    Real x = 0;
     for (uint32_t i = 0; i < sections; ++i) {
-        const Vec2 west0 = east * (Real(i) * spec.roadLength);
-        const Vec2 east0 = east * (Real(i + 1) * spec.roadLength);
+        const Vec2 west0 = east * x;
+        x += sectionLengths[i];
+        const Vec2 east0 = east * x;
         t.straightSections.push_back(addSection(g, spec, west0, east0, kerbward(Heading::East, spec.drivesOn)));
         t.straightSections.push_back(addSection(g, spec, east0, west0, kerbward(Heading::West, spec.drivesOn)));
     }

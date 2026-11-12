@@ -1,8 +1,10 @@
 #include "apps/driving/driving.h"
 
+#include "apps/driving/act.h"
 #include "engine/bundle/bundle.h"   // Fnv: the repo's 64-bit hash folded field by field
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include <tuple>
 
@@ -18,16 +20,16 @@ Driving::Driving(const engine::LaneGraph* roads) : roads_(roads) {
 }
 
 void Driving::tick(Real dt) {
-    plan();
-    settleClaims();
-    move();
+    if (hasRules_ && roads_ && dt > 0) {
+        plan();
+        settleClaims();
+        move(dt);
+    }
     ++tickCount_;
     clockSeconds_ += dt;
 }
 
-void Driving::plan() {}
 void Driving::settleClaims() {}
-void Driving::move() {}
 
 bool Driving::onRoad(const PathPoint& p) const {
     if (!roads_ || !p.path.valid() || p.path.index >= roads_->paths.size()) return false;
@@ -55,6 +57,263 @@ bool leadsInto(const engine::LaneGraph& roads, engine::PathId from, engine::Path
 }
 
 }  // namespace
+
+// ---- The rules --------------------------------------------------------------------------------------------------------
+
+bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary vocabulary, CompiledRules rules,
+                       RoadRules roadRules, std::string* why) {
+    const FactSlot arrived = facts.find(kFactArrived);
+    if (arrived == kNoFact)
+        return refuse(why, std::string("the fact registry has no \"") + kFactArrived +
+                               "\" fact (registerBuiltInFacts adds it): the library ends a trip by it");
+    const PersonalSetting* gapKept = ruleSet.findPersonal(kSettingGapKept);
+    const Number* standstill = ruleSet.findNumber(kNumberStandstillGap);
+    if (!gapKept || !standstill)
+        return refuse(why, "rule set \"" + ruleSet.name + "\" lacks the setting \"" + kSettingGapKept +
+                               "\" or the number \"" + kNumberStandstillGap + "\", which " + kMoveReaderName +
+                               " reads (buildRoadRules reports it, given a registry with registerMoveNeeds)");
+    gapKept_ = *gapKept;
+    gapKeptHash_ = settingNameHash(kSettingGapKept);
+    standstillGap_ = static_cast<Real>(standstill->value);
+    ruleSet_ = std::move(ruleSet);
+    facts_ = std::move(facts);
+    vocabulary_ = std::move(vocabulary);
+    rules_ = std::move(rules);
+    roadRules_ = std::move(roadRules);
+    arrivedSlot_ = arrived;
+    wanted_ = rules_.usedFacts;
+    wanted_.push_back(arrived);
+    std::sort(wanted_.begin(), wanted_.end());
+    wanted_.erase(std::unique(wanted_.begin(), wanted_.end()), wanted_.end());
+    hasRules_ = true;
+    // Answers held under other rules name other rules: every driver decides afresh on the next tick.
+    for (Car& c : cars_) c.held.decided = false;
+    return true;
+}
+
+// ---- The tick ---------------------------------------------------------------------------------------------------------
+
+void Driving::findTripsOfRecords() {
+    tripOfRecord_.assign(cars_.size(), TripId{});
+    std::map<CarId, TripId>::const_iterator it = tripOfCar_.begin();
+    for (std::size_t i = 0; i < cars_.size(); ++i) {
+        while (it != tripOfCar_.end() && it->first < cars_[i].id) ++it;
+        if (it != tripOfCar_.end() && it->first == cars_[i].id) tripOfRecord_[i] = it->second;
+    }
+}
+
+void Driving::leaveParked(Car& c) {
+    c.driven = false;
+    c.speed = 0;
+    c.acceleration = 0;
+    c.held = HeldAnswers();
+    c.binding = Binding();
+}
+
+// PLAN: each driven car whose turn it is (or that has not decided yet on this trip) notices its facts along its way
+// ahead and decides by the rules. Every decision reads the cars as they stood at the start of the tick; the answers
+// are applied only once all are made.
+void Driving::plan() {
+    findTripsOfRecords();
+    const uint32_t every = std::max<uint32_t>(1, settings_.decideEveryTicks);
+    planned_.clear();
+    for (std::size_t i = 0; i < cars_.size(); ++i) {
+        const Car& c = cars_[i];
+        const Trip* t = trips_.get(tripOfRecord_[i]);
+        if (!c.driven || !t || c.vehicleClass >= vehicleClasses_.size()) continue;
+        if (c.held.decided && tickCount_ % every != c.id.index % every) continue;
+        const VehicleClass& cls = vehicleClasses_.at(c.vehicleClass);
+
+        Planned p;
+        p.record = i;
+        p.trip = tripOfRecord_[i];
+        PathPoint front;
+        front.path = c.path;
+        front.along = c.along;
+        p.legReached = t->legReached;
+        const RoutePlace place = placeOnRoute(t->route, *roads_, front, t->legReached);
+        if (place.part == RoutePart::Leg || place.part == RoutePart::Turn) p.legReached = place.index;
+        const Real lookAhead = lookAheadDistance(c.speed, cls.brake);
+        p.way = wayAhead(t->route, *roads_, c.path, c.along, lookAhead, p.legReached);
+        Real reach = -c.along;
+        for (const engine::PathId path : p.way.paths) reach += roads_->paths[path.index].length;
+        p.wayEnds = reach < lookAhead && p.way.paths.size() < kMaxFollowedPaths;
+        if (reach < lookAhead && p.way.paths.size() >= kMaxFollowedPaths) {
+            // Cut short by the cap on paths followed, not by how far the driver looks: counted, never silent.
+            ++capCounts_.lookAheadsCut;
+            capCounts_.lastLookAheadCut = c.id;
+        }
+
+        const DriverView view{c,          cls,       t->person,  p.way,         *roads_,     cars_,     pathLists_,
+                              ruleSet_,   roadRules_, lookAhead, &t->destination, &t->holds};
+        noticeFacts(view, facts_, wanted_, noticed_, noticeScratch_);
+        const NoticedFact& arrived = noticed_[arrivedSlot_];
+        if (arrived.present && arrived.yes) {
+            p.arrived = true;
+            planned_.push_back(std::move(p));
+            continue;
+        }
+        decide(rules_, noticed_, ruleSet_, t->person, decision_);
+        p.held.decided = true;
+        if (decision_.stop.given) {
+            p.held.hasStop = true;
+            p.held.stopAt = c.odometer + decision_.stop.distance;
+            p.held.stopRule = decision_.stop.why.rule;
+        }
+        // The top speed to aim for: the rules' when it is below what the car can do, else the class's own.
+        p.held.topSpeed = cls.topSpeed;
+        p.held.topSpeedRule = kNoRule;
+        if (decision_.topSpeed.given && decision_.topSpeed.speed < cls.topSpeed) {
+            p.held.topSpeed = std::max(Real(0), decision_.topSpeed.speed);
+            p.held.topSpeedRule = decision_.topSpeed.why.rule;
+        }
+        planned_.push_back(std::move(p));
+    }
+
+    for (Planned& p : planned_) {
+        Car& c = cars_[p.record];
+        Trip* t = trips_.get(p.trip);
+        if (p.arrived) {
+            // Undriven from here on; its speed (a crawl at most) is set to rest by the move step, which writes the
+            // copy the other cars read next tick.
+            queueEvent(EventKind::Parked, c.id, p.trip, t->person);
+            c.driven = false;
+            c.held = HeldAnswers();
+            c.binding = Binding();
+            tripOfCar_.erase(c.id);
+            trips_.erase(p.trip);
+            continue;
+        }
+        c.held = p.held;
+        t->way = std::move(p.way);
+        t->wayAt = 0;
+        t->wayEnds = p.wayEnds;
+        t->legReached = p.legReached;
+    }
+}
+
+// MOVE: every driven car's new speed from its held answers and a fresh look at the car ahead (act.h), then along its
+// held way. Reads cars_ (the state at the start of the step), writes carsNext_; the two then swap.
+void Driving::move(Real dt) {
+    findTripsOfRecords();
+    carsNext_ = cars_;
+    const uint32_t every = std::max<uint32_t>(1, settings_.decideEveryTicks);
+    const Real reaction = reactionTime(static_cast<Real>(every) * dt, dt);
+
+    for (std::size_t i = 0; i < cars_.size(); ++i) {
+        const Car& c = cars_[i];
+        Trip* t = trips_.get(tripOfRecord_[i]);
+        if (!c.driven) {
+            // Nobody drives it: it stands (a car that has just arrived comes to rest from its last crawl).
+            if (c.speed != 0) leaveParked(carsNext_[i]);
+            continue;
+        }
+        if (!t || !c.held.decided || c.vehicleClass >= vehicleClasses_.size()) continue;
+        const VehicleClass& cls = vehicleClasses_.at(c.vehicleClass);
+        const std::vector<engine::PathId>& way = t->way.paths;
+        const bool onWay = t->wayAt < way.size() && way[t->wayAt] == c.path;
+
+        // The way from the car's front on, and how far it is to its end.
+        pathsAfter_.clear();
+        Real toEnd = roads_->paths[c.path.index].length - c.along;
+        if (onWay) {
+            for (std::size_t k = t->wayAt + 1; k < way.size(); ++k) {
+                pathsAfter_.push_back(way[k]);
+                toEnd += roads_->paths[way[k].index].length;
+            }
+        }
+
+        // What is ahead: the car ahead (looked at afresh), the place to stop by it holds, the end of its way.
+        Obstacle ahead[kMaxObstacles];
+        std::size_t count = 0;
+        const Neighbour n = carAhead(*roads_, cars_, pathLists_, c.id, pathsAfter_, toEnd);
+        if (n.found()) {
+            Obstacle& o = ahead[count++];
+            o.kind = Limit::CarAhead;
+            o.distance = n.gap;
+            o.speed = n.speed;
+            o.car = n.car;
+            const Car* other = findCar(cars_, pathLists_, n.car);
+            o.hardestBrake = other && other->vehicleClass < vehicleClasses_.size()
+                                 ? vehicleClasses_.at(other->vehicleClass).hardestBrake
+                                 : Real(0);
+        }
+        if (c.held.hasStop) {
+            Obstacle& o = ahead[count++];
+            o.kind = Limit::Stop;
+            o.distance = static_cast<Real>(c.held.stopAt - c.odometer);
+            o.rule = c.held.stopRule;
+        }
+        {
+            Obstacle& o = ahead[count++];
+            o.kind = Limit::WayEnd;
+            o.distance = toEnd;
+            o.hardOnly = !(onWay && t->wayEnds);
+        }
+
+        Follower f;
+        f.speedUp = cls.speedUp;
+        f.brake = cls.brake;
+        f.hardestBrake = cls.hardestBrake;
+        f.gapKept = static_cast<Real>(personalValue(gapKept_, gapKeptHash_, t->person));
+        f.standstillGap = standstillGap_;
+        const StepOutcome step = stepSpeed(f, c.speed, c.held.topSpeed, c.held.topSpeedRule, ahead, count, dt, reaction);
+
+        Car& out = carsNext_[i];
+        out.speed = step.speed;
+        out.acceleration = step.acceleration;
+        out.binding = step.binding;
+
+        // Along the way: carry what remains past the end of a path onto the next, as many times as it takes. The end
+        // of the way is a wall; the hard limit keeps the car short of it, so stopping there is only ever rounding (or
+        // a stop the hardest braking could not make).
+        Real along = c.along + step.speed * dt;
+        Real moved = step.speed * dt;
+        engine::PathId path = c.path;
+        std::size_t at = t->wayAt;
+        std::array<engine::PathId, kMaxTrail> crossed;   // the paths passed this step, latest first (the last few)
+        std::size_t crossedCount = 0;
+        while (along > roads_->paths[path.index].length) {
+            const Real length = roads_->paths[path.index].length;
+            if (!onWay || at + 1 >= way.size()) {
+                moved -= along - length;
+                along = length;
+                break;
+            }
+            along -= length;
+            // Keep the latest kMaxTrail paths crossed: shift the older ones back.
+            for (std::size_t k = std::min(crossedCount, kMaxTrail - 1); k > 0; --k) crossed[k] = crossed[k - 1];
+            crossed[0] = path;
+            crossedCount = std::min(crossedCount + 1, kMaxTrail);
+            ++at;
+            path = way[at];
+        }
+        out.path = path;
+        out.along = along;
+        out.odometer = c.odometer + moved;
+        if (onWay) t->wayAt = static_cast<uint32_t>(at);
+
+        // The trail: the paths just passed, latest first, then the old trail; only those the body still reaches.
+        std::array<engine::PathId, kMaxTrail> trail;
+        std::size_t trailCount = 0;
+        for (std::size_t k = 0; k < crossedCount && trailCount < kMaxTrail; ++k) trail[trailCount++] = crossed[k];
+        for (std::size_t k = 0; k < c.trailCount && trailCount < kMaxTrail; ++k) trail[trailCount++] = c.trail[k];
+        out.trail = trail;
+        out.trailCount = static_cast<uint8_t>(trailCount);
+        const Body body = layBody(*roads_, out, cls.length);
+        out.trailCount = static_cast<uint8_t>(body.count > 0 ? body.count - 1 : 0);
+        if (body.unplaced > 0) {
+            // The body lies on more paths than the trail holds. The lists then extend its oldest piece back by the rest
+            // (rebuildPathLists), so followers stay clear of all of it; counted, never silent.
+            ++capCounts_.tailsOffTrail;
+            capCounts_.lastTailOffTrail = c.id;
+        }
+        for (std::size_t k = out.trailCount; k < kMaxTrail; ++k) out.trail[k] = engine::PathId();
+    }
+
+    cars_.swap(carsNext_);
+    rebuildPathLists(*roads_, vehicleClasses_, cars_, pathLists_);
+}
 
 void Driving::setVehicleClasses(VehicleClasses classes) {
     vehicleClasses_ = std::move(classes);
@@ -168,6 +427,8 @@ TripId Driving::beginTrip(CarId car, PersonId person, const PathPoint& destinati
         return TripId{};
     }
     placed->driven = true;
+    placed->held = HeldAnswers();   // nothing decided yet: it decides on its next tick
+    placed->binding = Binding();
     Trip t;
     t.car = car;
     t.person = person;
@@ -198,6 +459,8 @@ bool Driving::changeDestination(TripId id, const PathPoint& destination) {
     }
     t->destination = destination;
     t->route = std::move(route);
+    t->legReached = 0;
+    findPlaced(t->car)->held.decided = false;   // decides again on its next tick, on the new route
     return true;
 }
 
@@ -212,6 +475,8 @@ bool Driving::reroute(TripId id) {
         return false;
     }
     t->route = std::move(route);
+    t->legReached = 0;
+    findPlaced(t->car)->held.decided = false;   // decides again on its next tick, on the new route
     return true;
 }
 
@@ -251,7 +516,9 @@ bool Driving::endTrip(TripId id) {
     e.person = t->person;
     e.tick = tickCount_;
     events_.push_back(e);
-    if (Car* c = findPlaced(t->car)) c->driven = false;
+    // The host has taken the car: it stands where it is, undriven (an undriven car never moves, so it must not keep a
+    // speed the cars behind would read).
+    if (Car* c = findPlaced(t->car)) leaveParked(*c);
     tripOfCar_.erase(t->car);
     trips_.erase(id);
     return true;
@@ -286,7 +553,22 @@ uint64_t Driving::stateHash() const {
         h.pod(static_cast<uint8_t>(c.driven));
         h.pod(c.trailCount);
         for (std::size_t i = 0; i < c.trailCount; ++i) h.pod(c.trail[i].index);
+        h.pod(c.odometer);
+        h.pod(static_cast<uint8_t>(c.held.decided));
+        h.pod(static_cast<uint8_t>(c.held.hasStop));
+        h.pod(c.held.stopAt);
+        h.pod(c.held.stopRule);
+        h.pod(c.held.topSpeed);
+        h.pod(c.held.topSpeedRule);
+        h.pod(static_cast<uint8_t>(c.binding.by));
+        h.pod(c.binding.car.index);
+        h.pod(c.binding.rule);
     }
+    h.pod(settings_.decideEveryTicks);
+    h.pod(capCounts_.tailsOffTrail);
+    h.pod(capCounts_.lastTailOffTrail.index);
+    h.pod(capCounts_.lookAheadsCut);
+    h.pod(capCounts_.lastLookAheadCut.index);
     // The trips, in car order.
     h.pod(static_cast<uint64_t>(tripOfCar_.size()));
     for (const std::pair<const CarId, TripId>& entry : tripOfCar_) {
@@ -305,6 +587,11 @@ uint64_t Driving::stateHash() const {
             h.pod(hold.at.along);
         }
         h.pod(routeHash(t->route));
+        h.pod(t->legReached);
+        h.pod(t->wayAt);
+        h.pod(static_cast<uint8_t>(t->wayEnds));
+        h.pod(static_cast<uint64_t>(t->way.paths.size()));
+        for (const engine::PathId p : t->way.paths) h.pod(p.index);
     }
     // The events not yet drained, in the order they will come out.
     std::vector<Event> queued = events_;

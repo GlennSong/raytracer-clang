@@ -96,9 +96,7 @@ private:
 
 // ---- Compiled rules --------------------------------------------------------------------------------------------------
 
-// A rule's place in written order.
-using RuleIndex = uint32_t;
-constexpr RuleIndex kNoRule = 0xFFFFFFFFu;
+// (RuleIndex, a rule's place in written order, and kNoRule are in rule_set.h, so a car's record can name a rule.)
 
 // How deeply conditions may nest: a condition at the top is level 1; each "not", "all" and "any" adds one.
 constexpr std::size_t kMaxConditionNesting = 8;

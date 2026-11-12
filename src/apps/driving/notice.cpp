@@ -259,6 +259,85 @@ void noticeLaneEnd(const DriverView& v, NoticeScratch&, NoticedFact& out) {
 void noticeMySpeed(const DriverView& v, NoticeScratch&, NoticedFact& out) { setNumber(out, v.me.speed); }
 void noticeStanding(const DriverView& v, NoticeScratch&, NoticedFact& out) { setYes(out, v.me.speed < kStandingBelow); }
 
+// Where a place on the road lies on path `path`, when it does: on that path itself, or level with it on another lane of
+// the same section, at the same share of the lane's length (as the router reads a destination on a lane the car is not
+// in: route.h lastChance).
+bool levelOn(const engine::LaneGraph& roads, const PathPoint& place, engine::PathId path, Real& along) {
+    if (place.path == path) {
+        along = place.along;
+        return true;
+    }
+    if (!knownPath(roads, place.path)) return false;
+    const engine::Path& at = roads.paths[place.path.index];
+    const engine::Path& on = roads.paths[path.index];
+    if (at.kind != engine::PathKind::Lane || on.kind != engine::PathKind::Lane || !at.section.valid() ||
+        at.section != on.section || !(at.length > 0))
+        return false;
+    along = place.along / at.length * on.length;
+    return true;
+}
+
+// A PLACE ON MY WAY: metres from my front to the first point along my way where `place` lies (levelOn), when that is
+// no more than `behind` metres behind my front and no further ahead than my look-ahead.
+struct OnMyWay {
+    bool found = false;
+    Real metres = 0;          // below zero only when it lies (at most `behind`) behind my front
+    engine::PathId path;
+};
+OnMyWay placeOnMyWay(const DriverView& v, const PathPoint& place, Real behind) {
+    OnMyWay out;
+    if (!knownPath(v.roads, v.me.path)) return out;
+    Real toStart = -v.me.along;   // from my front to the start of the path being looked at
+    for (std::size_t i = 0; i < wayCount(v); ++i) {
+        const engine::PathId id = wayPath(v, i);
+        if (!knownPath(v.roads, id) || toStart > v.lookAhead) break;
+        Real along = 0;
+        if (levelOn(v.roads, place, id, along)) {
+            const Real metres = toStart + along;
+            if (metres >= -behind && metres <= v.lookAhead) {
+                out.found = true;
+                out.metres = metres;
+                out.path = id;
+                return out;
+            }
+        }
+        toStart += v.roads.paths[id.index].length;
+    }
+    return out;
+}
+
+void noticeDestination(const DriverView& v, NoticeScratch&, NoticedFact& out) {
+    if (!v.destination) return;
+    const OnMyWay at = placeOnMyWay(v, *v.destination, 0);
+    if (!at.found) return;
+    setNumber(out, at.metres);
+    out.aboutPath = at.path;
+    setMetres(out, at.metres);
+}
+
+void noticeHoldAhead(const DriverView& v, NoticeScratch&, NoticedFact& out) {
+    if (!v.holds) return;
+    OnMyWay nearest;
+    for (const Hold& h : *v.holds) {
+        const OnMyWay at = placeOnMyWay(v, h.at, 0);
+        if (at.found && (!nearest.found || at.metres < nearest.metres)) nearest = at;
+    }
+    if (!nearest.found) return;
+    setNumber(out, nearest.metres);
+    out.aboutPath = nearest.path;
+    setMetres(out, nearest.metres);
+}
+
+void noticeArrived(const DriverView& v, NoticeScratch&, NoticedFact& out) {
+    if (!v.destination) return;
+    const OnMyWay at = placeOnMyWay(v, *v.destination, kArrivedWithin);
+    setYes(out, v.me.speed < kStandingBelow && at.found && at.metres <= kArrivedWithin);
+    if (at.found) {
+        out.aboutPath = at.path;
+        setMetres(out, at.metres);
+    }
+}
+
 FactSpec spec(const char* name, FactKind kind, NoticeFn fn, const char* meaning) {
     FactSpec s;
     s.name = name;
@@ -343,6 +422,25 @@ FactSlot FactRegistry::add(FactSpec spec, std::string* why) {
     return static_cast<FactSlot>(facts_.size() - 1);
 }
 
+bool FactRegistry::addReader(ReaderSpec spec, std::string* why) {
+    if (spec.name.empty()) {
+        if (why) *why = "a reader of the rule set needs a name";
+        return false;
+    }
+    if (findReader(spec.name)) {
+        if (why) *why = "reader \"" + spec.name + "\" is already registered";
+        return false;
+    }
+    readers_.push_back(std::move(spec));
+    return true;
+}
+
+const ReaderSpec* FactRegistry::findReader(const std::string& name) const {
+    for (const ReaderSpec& r : readers_)
+        if (r.name == name) return &r;
+    return nullptr;
+}
+
 FactSlot FactRegistry::find(const std::string& name) const {
     for (std::size_t i = 0; i < facts_.size(); ++i)
         if (facts_[i].name == name) return static_cast<FactSlot>(i);
@@ -402,6 +500,12 @@ bool registerBuiltInFacts(FactRegistry& registry, std::vector<std::string>* prob
     specs.push_back(measured(kFactMySpeed, FactKind::Number, UnitFamily::Speed, noticeMySpeed,
                              "how fast I am going, m/s"));
     specs.push_back(spec(kFactStanding, FactKind::YesNo, noticeStanding, "I am standing still, or as good as"));
+    specs.push_back(measured(kFactDestination, FactKind::Place, UnitFamily::Length, noticeDestination,
+                             "where my trip ends, metres ahead along my way"));
+    specs.push_back(measured(kFactHoldAhead, FactKind::Place, UnitFamily::Length, noticeHoldAhead,
+                             "the nearest hold placed on my trip that is still ahead, metres along my way"));
+    specs.push_back(spec(kFactArrived, FactKind::YesNo, noticeArrived,
+                         "I am standing at my destination: my trip is over"));
 
     bool ok = true;
     for (FactSpec& s : specs) {

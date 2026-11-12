@@ -91,6 +91,10 @@ struct DriverView {
     const RuleSet& rules;
     const RoadRules& roadRules;          // the graph's regulation kinds, bound to the rule set's devices
     Real lookAhead;                      // how far ahead I look, in metres
+    // Where my trip goes and the holds the host has placed on it; null when I am on no trip (then the facts about
+    // them are absent).
+    const PathPoint* destination = nullptr;
+    const std::vector<Hold>* holds = nullptr;
 };
 
 // WORK SEVERAL FACTS SHARE for one driver, filled on first use and cleared between drivers. It holds only things
@@ -131,11 +135,22 @@ struct FactSpec {
     std::vector<FactNeed> settings;    // personal settings it reads
 };
 
+// SOMETHING OTHER THAN A FACT THAT READS THE RULE SET, declaring what it reads the way a fact does, so the same check
+// (buildRoadRules) reports a rule set that lacks one, naming who needs it. The move step is one (act.h,
+// registerMoveNeeds): it reads the gap a driver keeps and the standstill gap on every tick.
+struct ReaderSpec {
+    std::string name;                  // unique among the readers; named in the problems reported
+    std::string meaning;               // one line, plain language
+    std::vector<FactNeed> numbers;     // rule-set numbers it reads
+    std::vector<FactNeed> settings;    // personal settings it reads
+};
+
 // A fact's place in registration order.
 using FactSlot = uint32_t;
 constexpr FactSlot kNoFact = 0xFFFFFFFFu;
 
-// EVERY FACT A DRIVER CAN NOTICE, in registration order. An object the host owns: no global table.
+// EVERY FACT A DRIVER CAN NOTICE, in registration order, and every other reader of the rule set. An object the host
+// owns: no global table.
 class FactRegistry {
 public:
     // Adds a fact at the end and gives its slot. Refused (kNoFact, with the reason in `why` when given) for an empty
@@ -147,8 +162,15 @@ public:
     const FactSpec& at(FactSlot slot) const { return facts_[slot]; }
     const std::vector<FactSpec>& all() const { return facts_; }
 
+    // Adds a reader at the end. Refused (false, the reason in `why`) for an empty name or one already a reader's.
+    bool addReader(ReaderSpec spec, std::string* why = nullptr);
+    // The reader of that name, or null.
+    const ReaderSpec* findReader(const std::string& name) const;
+    const std::vector<ReaderSpec>& readers() const { return readers_; }
+
 private:
     std::vector<FactSpec> facts_;
+    std::vector<ReaderSpec> readers_;
 };
 
 // WORKS OUT THE FACTS ASKED FOR, for one driver. `wanted` lists slots (a rule set asks only for those it uses; repeats
@@ -175,6 +197,15 @@ constexpr const char* kFactLaneEndsAhead = "lane_ends_ahead"; // yes/no: my way 
 constexpr const char* kFactLaneEnd = "lane_end";              // place: where it runs out
 constexpr const char* kFactMySpeed = "my_speed";              // m/s
 constexpr const char* kFactStanding = "standing";             // yes/no: my speed is below kStandingBelow
+// Where my trip ends, metres ahead along my way, when it is within my look-ahead (about its path). A rule set says
+// { name = "arrive", give = { stop_at = "destination" } }: the library never stops at a destination by itself.
+constexpr const char* kFactDestination = "destination";       // place
+// The nearest hold the host has placed on my trip that is still ahead, within my look-ahead (about its path). A rule
+// set says { name = "held", give = { stop_at = "hold_ahead" } }.
+constexpr const char* kFactHoldAhead = "hold_ahead";          // place
+// I am standing (as `standing`) with my destination no further ahead than kArrivedWithin. The library ends a driven
+// car's trip when this is yes at a decision (a Parked event), so it is always worked out, whatever the rules use.
+constexpr const char* kFactArrived = "arrived";               // yes/no
 
 // The personal setting my_limit and slower_ahead read: how far above or below the limit this person drives (a ratio).
 constexpr const char* kSettingSpeedHabit = "speed_habit";
@@ -182,6 +213,9 @@ constexpr const char* kSettingSpeedHabit = "speed_habit";
 constexpr const char* kNumberComfortableSideAccel = "comfortable_side_accel";
 // `standing` is yes below this speed (m/s): slower than a walking crawl, the car is as good as stopped.
 constexpr Real kStandingBelow = 0.1;
+// `arrived` is yes when the destination is no further than this from my front (m): a car that stopped for it is
+// there. (A destination this little BEHIND my front counts too, so rounding never strands a car that stopped on it.)
+constexpr Real kArrivedWithin = 0.5;
 
 // Adds the built-in facts above, in the order listed. False (with the reasons, one line each) when one is refused,
 // which only happens when one of their names was registered before.

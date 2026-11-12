@@ -82,3 +82,5 @@ Published techniques we implemented. These are courtesy credits, not licence obl
 - SplitMix
 - Chaikin corner cutting
 - SAE J1100 / J826 occupant and vehicle dimensions
+- easing toward a speed and off the car ahead: the Intelligent Driver Model (Treiber, Hennecke & Helbing 2000), in `src/apps/driving/act.h`
+- the "could still stop in time" speed limit: the Krauss safe speed (Krauss 1998), in `src/apps/driving/act.h`

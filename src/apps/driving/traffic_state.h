@@ -56,11 +56,59 @@ struct PathPoint {
     bool operator!=(const PathPoint& o) const { return !(*this == o); }
 };
 
-// HOW MANY EARLIER PATHS a car's body may still lie on behind the path its front is on. A 12 m bus across a junction
-// cut into short pieces covers the lane it came from, a connector or two and the lane it entered; six covers that with
-// room.
-// A car that would need more is refused when placed.
-constexpr std::size_t kMaxTrail = 6;
+// HOW MANY EARLIER PATHS a car's body may still lie on behind the path its front is on. The worst case kept in mind: a
+// 20 m vehicle over paths as short as 1.5 m (a junction cut into short pieces) lies on 14 behind its front; 16 covers
+// that with room.
+// A car that would need more is refused when placed. A MOVING car that comes to need more keeps the nearest kMaxTrail,
+// and its listing on the oldest of them reaches back past that path's start by the rest of its body (PathEntry::rear
+// below zero), so no follower is ever offered a gap inside it; Driving counts each time (tailsOffTrail).
+constexpr std::size_t kMaxTrail = 16;
+
+// The host's name for a hold (a bus stop's number, a fare's): an opaque number, unique within one trip.
+using HoldName = uint64_t;
+
+// "STOP HERE UNTIL RELEASED", placed on a trip by the host (design glossary: a bus waiting for passengers, a cab
+// picking up). The library does not stop for it by itself: the fact `hold_ahead` (notice.h) sees it, and a rule set's
+// rule gives it as a place to stop by.
+struct Hold {
+    HoldName name = 0;
+    PathPoint at;
+};
+
+// WHAT HELD A CAR BACK THIS TICK (design 4, its "binding answer"): which of the things the move step weighed set its
+// speed. A later task shows it on the driver card and draws the wait-for graph from it. A driven car at rest always has
+// one of CarAhead, Stop, WayEnd, or TopSpeed with a held top speed of zero; at rest with Nothing would be a car stopped
+// for no reason, which is the fault this whole model exists to remove.
+enum class Limit : uint8_t {
+    Nothing,    // free road: nothing held it back
+    CarAhead,   // the car ahead (Binding::car)
+    Stop,       // the place to stop by it holds (Binding::rule gave it)
+    TopSpeed,   // the top speed it holds (Binding::rule gave it; kNoRule: its vehicle class's own top speed)
+    WayEnd,     // the end of the paths it knows its way along (a lane that leads nowhere on its route)
+};
+constexpr uint8_t kLimitCount = 5;
+
+struct Binding {
+    Limit by = Limit::Nothing;
+    CarId car;                // CarAhead: which car
+    RuleIndex rule = kNoRule; // Stop, TopSpeed: which rule
+};
+bool operator==(const Binding& a, const Binding& b);
+inline bool operator!=(const Binding& a, const Binding& b) { return !(a == b); }
+
+// WHAT A CAR'S DRIVER LAST DECIDED, held until it decides again (design 7: deciding and moving are separate). Replaced
+// whole at each decision. The place to stop by is held as an ODOMETER READING (Car::odometer), so it stays put on the
+// road while the car approaches it, across any number of paths.
+struct HeldAnswers {
+    bool decided = false;          // false until the driver's first decision on this trip: it then decides at once
+    bool hasStop = false;
+    double stopAt = 0;             // the odometer reading at which its front is to be at rest
+    RuleIndex stopRule = kNoRule;
+    Real topSpeed = 0;             // the top speed to aim for, m/s: a rule's, or the vehicle class's when none gave one
+    RuleIndex topSpeedRule = kNoRule;   // kNoRule: the class's own
+};
+bool operator==(const HeldAnswers& a, const HeldAnswers& b);
+inline bool operator!=(const HeldAnswers& a, const HeldAnswers& b) { return !(a == b); }
 
 // ONE CAR ON THE ROAD, moving or parked (a parked car is a car at rest that nobody is driving).
 struct Car {
@@ -79,6 +127,11 @@ struct Car {
     std::array<engine::PathId, kMaxTrail> trail;
     uint8_t trailCount = 0;           // how many of `trail` are in use
     bool driven = false;              // someone is driving it (it is on a trip)
+    // How far its front has travelled since it was placed, in metres. Places it means to stop by are held as readings
+    // of it (HeldAnswers::stopAt).
+    double odometer = 0;
+    HeldAnswers held;                 // what its driver last decided (only while driven)
+    Binding binding;                  // what held it back on the last tick it moved (only while driven)
 };
 
 // WHY A CAR IS LISTED ON A PATH.
@@ -94,7 +147,9 @@ struct PathEntry {
     CarId car;
     OnPath why = OnPath::Front;
     Real front = 0;   // metres along this path of its front-most point here
-    Real rear = 0;    // ... and of its rear-most point here
+    // ... and of its rear-most point here. Below zero only on the oldest path of a body longer than its trail can hold:
+    // the rest of the body lies that far back before this path's start, on paths no longer recorded.
+    Real rear = 0;
 };
 bool operator==(const PathEntry& a, const PathEntry& b);
 
@@ -144,7 +199,9 @@ Body layBody(const engine::LaneGraph& roads, const Car& car, Real length);
 // BUILDS EVERY PATH'S LIST from the car records, whatever order they are in. Each car is listed on its front path
 // (Front), on each trail path its body reaches (Tail), and on its besidePath (Beside) over the same stretch as on its
 // front path, clamped to the lane: the lanes of a section run side by side from one start to one end, so a distance
-// along one is level with the same distance along the other. A car with an unknown class or path is not listed.
+// along one is level with the same distance along the other. A car with an unknown class or path is not listed. A body
+// its trail cannot hold (layBody's `unplaced`) is listed with its last piece's rear moved back by what found no path,
+// so a car ahead found by that piece is never nearer than its true rear.
 void rebuildPathLists(const engine::LaneGraph& roads, const VehicleClasses& classes, const std::vector<Car>& cars,
                       PathLists& out);
 

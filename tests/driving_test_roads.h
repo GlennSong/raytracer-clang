@@ -103,6 +103,9 @@ struct TestRoads {
 // A STRAIGHT ROAD of `sections` sections each way, laid west to east from x = 0, each `roadLength` long, the lanes of
 // one section leading straight into the same lanes of the next (no junctions).
 TestRoads straightRoad(uint32_t sections, const TestRoadSpec& spec = TestRoadSpec());
+// The same, with each section its own length (west to east): a long approach onto a run of very short sections, as a
+// junction cut into short paths gives (spec.roadLength is not read).
+TestRoads straightRoadOf(const std::vector<Real>& sectionLengths, const TestRoadSpec& spec = TestRoadSpec());
 
 // A GRID of `rows` by `cols` junctions, junction (r, c) at the plan point (c, r) times the junction spacing.
 TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec = TestRoadSpec());

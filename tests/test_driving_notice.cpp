@@ -219,7 +219,8 @@ TEST_CASE(notice_registry_register_find_refuse_in_order) {
     CHECK(registerBuiltInFacts(b));
     const std::vector<const char*> order = {kFactCarAhead,   kFactGapAhead,      kFactSpeedAhead, kFactClosingSpeed,
                                             kFactRoadLimit,  kFactMyLimit,       kFactSlowerAhead, kFactCornerSpeed,
-                                            kFactLaneEndsAhead, kFactLaneEnd,    kFactMySpeed,    kFactStanding};
+                                            kFactLaneEndsAhead, kFactLaneEnd,    kFactMySpeed,    kFactStanding,
+                                            kFactDestination, kFactHoldAhead,    kFactArrived};
     CHECK(b.size() == order.size());
     for (std::size_t i = 0; i < order.size(); ++i) CHECK(b.find(order[i]) == static_cast<FactSlot>(i));
     CHECK(b.at(b.find(kFactLaneEnd)).kind == FactKind::Place);

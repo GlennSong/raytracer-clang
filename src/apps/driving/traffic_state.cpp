@@ -38,6 +38,13 @@ engine::Vec3 lift(const engine::Vec2& plan, Real height) { return engine::Vec3(p
 
 }  // namespace
 
+bool operator==(const Binding& a, const Binding& b) { return a.by == b.by && a.car == b.car && a.rule == b.rule; }
+
+bool operator==(const HeldAnswers& a, const HeldAnswers& b) {
+    return a.decided == b.decided && a.hasStop == b.hasStop && a.stopAt == b.stopAt && a.stopRule == b.stopRule &&
+           a.topSpeed == b.topSpeed && a.topSpeedRule == b.topSpeedRule;
+}
+
 bool operator==(const PathEntry& a, const PathEntry& b) {
     return a.car == b.car && a.why == b.why && a.front == b.front && a.rear == b.rear;
 }
@@ -99,6 +106,8 @@ void rebuildPathLists(const engine::LaneGraph& roads, const VehicleClasses& clas
             l.entry.why = i == 0 ? OnPath::Front : OnPath::Tail;
             l.entry.front = body.pieces[i].front;
             l.entry.rear = body.pieces[i].rear;
+            // What found no path to lie on lies back past the oldest path's start: never list the body shorter.
+            if (i + 1 == body.count) l.entry.rear -= body.unplaced;
             listed.push_back(l);
         }
         if (knownPath(roads, car.besidePath) && car.besidePath != car.path) {

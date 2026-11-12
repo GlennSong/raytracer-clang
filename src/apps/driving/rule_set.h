@@ -114,6 +114,11 @@ bool unitFamily(const std::string& word, UnitFamily& family);
 const char* unitFamilyWords(UnitFamily family);
 const char* unitFamilyStoredUnit(UnitFamily family);
 
+// WHICH RULE: a rule's place in the rule set's `rules`, in written order (decide.h compiles them). Kept here so a car's
+// record (traffic_state.h) can say which rule gave the answer that held it back.
+using RuleIndex = uint32_t;
+constexpr RuleIndex kNoRule = 0xFFFFFFFFu;
+
 // WHO IS AT THE WHEEL: the host's stable number for a person (the city sim's AgentId). The library never reads meaning
 // into it; it hands it back on events and works out the person's own driving habits from a hash of it.
 using PersonId = uint64_t;
