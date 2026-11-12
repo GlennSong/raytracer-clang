@@ -252,6 +252,14 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     CHECK(sim.drivingHost().active());
     const engine::LaneGraph& roads = *d->roads();
     std::printf("    [lab-v2] at load: %s\n", sim.drivingHost().describe(*d).c_str());
+    // WHO GIVES WAY TO WHOM (issue #260): the table's counts, and one four-way's table in words, for checking by hand.
+    std::printf("    [lab-v2] %s", driving::describeRightOfWay(d->rightOfWay()).c_str());
+    for (uint32_t j = 0; j < roads.junctions.size(); ++j) {
+        const driving::JunctionRules& jr = d->rightOfWay().junctions[j];
+        if (jr.approaches.count != 4 || roads.junctions[j].connectors.count > 12) continue;
+        std::printf("    [lab-v2] one four-way's table:\n%s", d->describeJunction(engine::JunctionId(j)).c_str());
+        break;
+    }
 
     const Real seconds = std::getenv("RT_LAB_SECONDS") ? std::atof(std::getenv("RT_LAB_SECONDS")) : 300.0;
     const int steps = static_cast<int>(seconds / kStep + 0.5);
@@ -423,6 +431,26 @@ TEST_CASE(level_traffic_lab_v2_drives) {
 
     std::printf("    [lab-v2] driving?: %s\n", sim.drivingHost().describe(*d).c_str());
     std::printf("    [lab-v2] waiting?: %s\n", d->describeWaiting(d->waitReport()).c_str());
+    // THE DRIVERS' JUNCTION PLANS (issue #260): how many were made and dropped, the most crossing points on one, the caps.
+    {
+        const driving::JunctionPlanCounts& pc = d->junctionPlanCounts();
+        const driving::CapCounts& caps = d->capCounts();
+        std::printf("    [lab-v2] junction plans: %llu made; dropped %llu through, %llu as the way changed, %llu as the "
+                    "route changed; the most crossing points on one plan %u (connector %u); the most junctions planned "
+                    "at once %u; caps hit: %llu plans cut, %llu waiting points cut; plan hash %016llx\n",
+                    static_cast<unsigned long long>(pc.made), static_cast<unsigned long long>(pc.cleared),
+                    static_cast<unsigned long long>(pc.wayChanged), static_cast<unsigned long long>(pc.routeChanged),
+                    pc.mostCrossings, pc.mostCrossingsConnector.index, pc.mostAtOnce,
+                    static_cast<unsigned long long>(caps.junctionPlansCut),
+                    static_cast<unsigned long long>(caps.waitingPointsCut), static_cast<unsigned long long>(d->planHash()));
+        // One driver's card with a junction ahead, as `driver? <id>` shows it.
+        for (const driving::Car& c : d->cars()) {
+            const driving::JunctionPlans* plans = d->junctionPlans(c.id);
+            if (!plans || plans->count == 0 || plans->plans[0].crossingCount < 4) continue;
+            std::printf("    [lab-v2] driver? %u:\n%s", c.id.index, d->describeCar(c.id).c_str());
+            break;
+        }
+    }
     std::printf("    [lab-v2] sampled each second: %llu cars waiting in all, %llu with no reason, %llu loops\n",
                 static_cast<unsigned long long>(waitSamples), static_cast<unsigned long long>(noReason),
                 static_cast<unsigned long long>(loopSamples));
@@ -476,7 +504,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
 }
 
 TEST_CASE(level_traffic_lab_v2_same_every_run) {
-    std::vector<uint64_t> first;
+    std::vector<uint64_t> first, firstPlans;
     for (int run = 0; run < 2; ++run) {
         LoadedCity lc("traffic_lab.json", "");
         CHECK(lc.ok);
@@ -484,18 +512,26 @@ TEST_CASE(level_traffic_lab_v2_same_every_run) {
         const driving::Driving* d = lc.city.sim().drivingV2();
         CHECK(d != nullptr);
         if (!d) return;
-        int differ = 0;
+        int differ = 0, plansDiffer = 0;
         for (int i = 1; i <= 60 * 60; ++i) {
             lc.city.step(lc.world, kStep);
             if (i % 60 != 0) continue;
             const uint64_t h = d->stateHash();
-            if (run == 0) first.push_back(h);
-            else if (first[static_cast<std::size_t>(i / 60 - 1)] != h) ++differ;
+            const uint64_t p = d->planHash();   // the drivers' junction plans (#260), kept apart from the state hash
+            if (run == 0) {
+                first.push_back(h);
+                firstPlans.push_back(p);
+            } else {
+                if (first[static_cast<std::size_t>(i / 60 - 1)] != h) ++differ;
+                if (firstPlans[static_cast<std::size_t>(i / 60 - 1)] != p) ++plansDiffer;
+            }
         }
         if (run == 1) {
-            std::printf("    [lab-v2] two runs of a minute: %d of %zu per-second state hashes differ; last %016llx\n", differ,
-                        first.size(), static_cast<unsigned long long>(d->stateHash()));
+            std::printf("    [lab-v2] two runs of a minute: %d of %zu per-second state hashes differ, %d plan hashes; last "
+                        "%016llx\n",
+                        differ, first.size(), plansDiffer, static_cast<unsigned long long>(d->stateHash()));
             CHECK(differ == 0);
+            CHECK(plansDiffer == 0);
         }
     }
 }

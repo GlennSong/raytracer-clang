@@ -34,7 +34,9 @@ namespace driving {
 
 using engine::Real;
 
-struct RoadRules;   // road_rules.h: the graph's regulation kinds bound to the rule set's devices
+struct RoadRules;      // road_rules.h: the graph's regulation kinds bound to the rule set's devices
+struct RightOfWay;     // right_of_way.h: who gives way to whom at every junction
+struct JunctionPlans;  // junction_plan.h: one driver's plans for the junctions ahead
 
 // WHAT KIND OF VALUE a fact holds.
 enum class FactKind : uint8_t {
@@ -95,6 +97,10 @@ struct DriverView {
     // them are absent).
     const PathPoint* destination = nullptr;
     const std::vector<Hold>* holds = nullptr;
+    // My plans for the junctions on my way ahead, brought up to date before I notice anything, and the table of who gives
+    // way to whom (issue #260; the junction facts of task D3 read them). Null when there are none (no rules, no trip).
+    const JunctionPlans* junctions = nullptr;
+    const RightOfWay* rightOfWay = nullptr;
 };
 
 // WORK SEVERAL FACTS SHARE for one driver, filled on first use and cleared between drivers. It holds only things

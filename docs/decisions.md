@@ -18087,3 +18087,57 @@ after. The lab drives exactly as before (the crossing points are data nobody rea
 finder handles them; none are filled yet). Who gives way at each record (D1). A margin from the rule set, should it ever
 depend on speed.
 
+## ADR-0401 — Who gives way to whom, worked out at load, and each driver's plan for the junctions ahead (#260)
+
+Words: a MEETING is one crossing point between two paths (ADR-0400); an APPROACH is the arriving lanes of one section at
+a junction; a PHASE is a set of turns whose lights are green together; a WAITING POINT is a place on a connector where a
+car's front may stop with no part of its body in another path's crossing stretch; a car is COMMITTED once its front is
+past its last waiting point (design 9.4).
+
+**Context.** Driving model task D1 (`docs/driving-briefs/D1-junction-plan.md`). Give way (D3), first in goes first (D4)
+and room beyond (D5) all need, for every meeting at a junction, who gives way, and for each driver, which junction and
+connector are coming and where it may wait. The brief asks for the table; the hand-out added the per-driver plan.
+
+**Decision.**
+- **The table** (`src/apps/driving/right_of_way.h`) is built by `Driving::useRules` from the lane graph, the rule set's
+  new `control` and `movement_rank` tables (read by `scripting/rule_set_lua`) and the binding (`buildRoadRules`, which
+  now refuses a junction control the rule set has no row for). Each meeting gets, per phase, *A gives way*, *the other
+  gives way*, *nobody* (a split) or *ask while driving* with the fall-back found by asking the rest of the list. Questions
+  are asked in written order; if nothing tells two turns apart, the lower path id gives way and the table notes it.
+- **Kerb side** is shape: approach A is on B's kerb side when, turning from B's direction of travel toward its kerb (the
+  side from `kerbwardPerpSign`), A is the first approach found within the half turn on that side. Approaches facing
+  each other (directions within about 37 degrees of opposite, `kFacingDot` = -0.8, the old controller's figure) or
+  running alongside are on neither's.
+- **Sign rank**: an approach's rank is that of the last ranked device standing on its arriving lane; an approach with no
+  ranked sign shares the rank listed first in `ranks` (so a rule set lists the priority road's rank first).
+- **Lights** come only from data: a control whose settle list asks `light` gets phases. Whole approaches are coloured
+  first (in order of their first connector; two conflict when a turn of one meets a turn of the other, unless the
+  approaches face each other and one turn is in the control's `gives_way_on_green`), which gives a plain four-way its two
+  phases; then any single turn meeting nothing green in a phase is added to it. A movement in `arrow` that would give
+  way to the approach facing it gets an arrow phase of its own just before. `turn_on_red` makes that movement "red, may
+  turn" (gives way to everything) wherever it is red.
+- **Meetings filed under no junction** (ADR-0400's carry-overs) are asked while driving, falling back on the lower path
+  id. Crosswalks and tracks get no answer: people and trains announce (design 4).
+- **The plan** (`src/apps/driving/junction_plan.h`) lives on the trip in fixed arrays (at most 4 junctions, 4 waiting
+  points each; more is counted in `CapCounts`). It is updated at each decision before the facts are noticed (so
+  `DriverView` can carry it to D3's facts): a plan is kept while its connector is on the way ahead or under the body,
+  made when a connector first appears on the way ahead, dropped as *through it* or *way changed*, and dropped at once by
+  `changeDestination` and `reroute`. It holds the junction, connector, the connector's own stated turn, the odometer
+  reading at the connector's start (stable while the car moves), the count of crossing points, and the waiting points.
+  Crossing points and answers are read from the graph and the table when asked, never copied.
+- **Waiting points** come from the crossing stretches: the line (the connector's start) always; then, for each clear gap
+  between two merged stretches (crosses, joins, crosswalks; splits left out, since there the car behind follows) at
+  least as long as the car, the end of that gap. A longer vehicle has fewer.
+- **Kept out of the state hash.** Nothing a car does reads the plans yet, so `stateHash` is unchanged; `planHash` folds
+  the plans, their counts and their two caps, and the lab's sameness test checks it.
+
+**Measured** (the lab, five simulated minutes): 168 junctions, none with lights; 6,197 meetings: 5,028 asked while
+driving (21 across two junctions), 1,169 splits, 284 left in some part to the lower path id (approaches facing each other
+whose paths meet, and two paths from one approach). 5,261 plans made, 5,075 dropped through, 2 as the way changed; the
+most crossing points on one plan 36; at most 3 junctions planned at once; no cap hit. The state hash is the same as before
+at every minute (`5826a9b05a724639` at 300 s). Tick cost 0.134 ms before, 0.140 ms after.
+
+**Not here.** The lights' clock and timing (D2); acting on the table (D3); using the waiting points to commit and order
+cars (D4); room beyond (D5); a sign that forbids turning on red (the control's `turn_on_red` is read; a `forbids` device
+on one approach is not yet).
+

@@ -998,6 +998,11 @@ For each junction, from its connectors, its control and the rule set:
   The light's state stays a pure function of the clock, so out-of-sight junctions cost nothing and never drift.
 - For each connector: the list of crossing points along it, in order, with the movements it must give way to at each.
 
+*As built* (task D1, ADR-0401): the table is `src/apps/driving/right_of_way.h`, built by `Driving::useRules`; a
+connector's crossing points are read from `Path::crossings` and the table, not copied. Each driver also keeps a plan for
+the junctions on its way ahead (`junction_plan.h`: junction, connector, turn, where the connector starts, its waiting
+points), made when the junction comes into view and kept until it is through; `DriverView` carries both to the facts.
+
 ### 9.2 Approaching: announce
 
 Once a junction is within look-ahead, a driver announces for each crossing point on its connector: the time it

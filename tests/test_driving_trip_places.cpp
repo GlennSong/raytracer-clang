@@ -174,6 +174,7 @@ namespace {
 
 const char* kRulesLua = R"LUA(
 rule_set = { name = 'trip_places_test', drives_on = 'left', ranks = {}, devices = {},
+  control = { test_uncontrolled = { settle = { 'arrived_first', 'kerb_side', 'movement' } } },
   numbers = { standstill_gap = { 2, unit = 'm', source = 'test' },
               comfortable_side_accel = { 2, unit = 'm/s2', source = 'test' } },
   default_limits = { test_street = { 20, unit = 'mph', source = 'test' } },

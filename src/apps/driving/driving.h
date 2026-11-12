@@ -10,7 +10,8 @@
 // recorded for a placed car, can be asked about, steered and ended. Once the host has handed over the rules (useRules),
 // each tick runs the three steps of design 7.1 over the driven cars (issue #253):
 //   1. PLAN: each driver whose turn it is notices its facts along its way ahead, decides by the rules, and HOLDS the
-//      answers (a place to stop by, as an odometer reading; a top speed; the way ahead). A driver whose `arrived` fact
+//      answers (a place to stop by, as an odometer reading; a top speed; the way ahead). Before noticing, it brings its
+//      plans for the junctions on its way ahead up to date (junction_plan.h). A driver whose `arrived` fact
 //      is yes ends its trip instead: a Parked event, and the car stays where it is, placed and undriven.
 //   2. SETTLE CLAIMS: nothing yet (junctions and lane changes bring claims).
 //   3. MOVE: every driven car works out its speed from its held answers and a fresh look at the car ahead (act.h),
@@ -30,7 +31,9 @@
 
 #include "engine/procgen/city/roads/lane_graph.h"
 #include "apps/driving/decide.h"
+#include "apps/driving/junction_plan.h"   // each driver's plan for the junctions ahead
 #include "apps/driving/notice.h"
+#include "apps/driving/right_of_way.h"    // who gives way to whom, worked out at load
 #include "apps/driving/road_rules.h"
 #include "apps/driving/route.h"
 #include "apps/driving/rule_set.h"
@@ -76,6 +79,10 @@ struct Trip {
     // the destination's). Then its end is a place to come to rest at; otherwise it is only where the driver stopped
     // looking, a limit it never comes near.
     bool wayEnds = false;
+    // THE JUNCTIONS AHEAD, as the driver plans for them (junction_plan.h): made when a junction's connector comes onto
+    // the way ahead, kept until the car is through, dropped at once when the trip is routed again. Nothing a car does
+    // reads them yet (task D3 will), so they are left out of stateHash; planHash folds them.
+    JunctionPlans junctions;
     // WHAT THE DRIVER DECIDED RECENTLY (trace.h), and the reasons behind what it holds now. Written only while
     // DrivingSettings::trace is on; never read by the tick, and left out of stateHash (traceHash folds it).
     CarTrace trace;
@@ -110,6 +117,25 @@ struct CapCounts {
     // for the car ahead or anything else. The end of that way is still a wall the car never passes.
     uint64_t lookAheadsCut = 0;
     CarId lastLookAheadCut;
+    // A driver had more junctions in view than kMaxJunctionPlans: the farthest wait to be planned for until a nearer one
+    // is cleared. Counted per decision. (Like the plans themselves, these two are not in stateHash; planHash folds them.)
+    uint64_t junctionPlansCut = 0;
+    CarId lastJunctionPlanCut;
+    // A new plan's connector had more places to wait than kMaxWaitingPoints: the plan keeps the first ones, so its car
+    // commits later than it might. Counted per plan made.
+    uint64_t waitingPointsCut = 0;
+    CarId lastWaitingPointCut;
+};
+
+// HOW THE DRIVERS' JUNCTION PLANS WENT since this object was made (junction_plan.h).
+struct JunctionPlanCounts {
+    uint64_t made = 0;
+    uint64_t cleared = 0;        // dropped: the car was through
+    uint64_t wayChanged = 0;     // dropped: its way no longer went through the connector
+    uint64_t routeChanged = 0;   // dropped: the trip was routed again
+    uint32_t mostCrossings = 0;  // the most crossing points along one plan's connector
+    engine::PathId mostCrossingsConnector;
+    uint32_t mostAtOnce = 0;     // the most junctions one driver had planned for at once
 };
 
 // THE HOST'S HANDLE TO A TRIP. Trips are begun and ended, and their slots reused, so the handle carries a generation:
@@ -153,7 +179,8 @@ public:
     // registry that has the built-in facts and the move step's needs: registerBuiltInFacts, registerMoveNeeds). Copied
     // in; this library loads nothing. Refused (false, the reason in `why`) when the registry has no `arrived` fact or
     // the rule set lacks a number or setting the move step reads (buildRoadRules names those first). Until rules are
-    // given, a tick moves nothing.
+    // given, a tick moves nothing. Taking them, it works out who gives way to whom at every junction (rightOfWay()), and
+    // every driver plans its junctions afresh at its next decision.
     bool useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary vocabulary, CompiledRules rules,
                   RoadRules roadRules, std::string* why = nullptr);
     bool hasRules() const { return hasRules_; }
@@ -163,6 +190,18 @@ public:
 
     // How often a fixed cap cut something short since this object was made (CapCounts).
     const CapCounts& capCounts() const { return capCounts_; }
+
+    // ---- Junctions (issue #260) ----
+    // WHO GIVES WAY TO WHOM at every junction, worked out by useRules from the road, the rule set and the binding.
+    const RightOfWay& rightOfWay() const { return rightOfWay_; }
+    // One junction's table as text (right_of_way.h describeJunctionRules).
+    std::string describeJunction(engine::JunctionId junction) const;
+    // The car's plans for the junctions ahead, or null when it is on no trip.
+    const JunctionPlans* junctionPlans(CarId car) const;
+    const JunctionPlanCounts& junctionPlanCounts() const { return planCounts_; }
+    // ONE NUMBER OVER EVERY DRIVER'S JUNCTION PLANS (in car order) and the plan counts and caps, kept apart from
+    // stateHash, which leaves them out while nothing a car does reads them.
+    uint64_t planHash() const;
 
     // HOW THE TICK RUNS (how often drivers decide). Takes effect from the next tick.
     void setSettings(const DrivingSettings& settings) { settings_ = settings; }
@@ -289,7 +328,13 @@ private:
         uint32_t legReached = 0;
         TracedReason stopWhy;       // the reasons behind `held`, kept only while tracing
         TracedReason topSpeedWhy;
+        JunctionPlans junctions;    // the plans for the junctions on `way`, updated before the driver noticed
+        PlanUpdate planUpdate;      // what updating them did
     };
+    // Counts and traces what one update of a car's plans did.
+    void notePlanUpdate(const PlanUpdate& u, CarId car, Trip& t, const JunctionPlans& plans);
+    // The trip was routed again: its plans go at once (each noted).
+    void dropPlansForNewRoute(Trip& t);
 
     const engine::LaneGraph* roads_ = nullptr;
     VehicleClasses vehicleClasses_;
@@ -314,7 +359,9 @@ private:
     AnswerVocabulary vocabulary_;
     CompiledRules rules_;
     RoadRules roadRules_;
-    std::vector<FactSlot> wanted_;        // the facts worked out for each driver: the rules' own, and `arrived`
+    RightOfWay rightOfWay_;               // built from the road and the rules by useRules
+    JunctionPlanCounts planCounts_;
+    std::vector<FactSlot> wanted_;       // the facts worked out for each driver: the rules' own, and `arrived`
     FactSlot arrivedSlot_ = kNoFact;
     PersonalSetting gapKept_;             // the setting gap_kept, and its name's hash (personalValue)
     uint32_t gapKeptHash_ = 0;

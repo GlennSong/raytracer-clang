@@ -38,6 +38,16 @@ constexpr const char* kEffectOpenTo = "open_to";
 constexpr const char* kEffectForbids = "forbids";
 constexpr const char* kWordDrivesLeft = "left";
 constexpr const char* kWordDrivesRight = "right";
+// Right of way (issue #260).
+constexpr const char* kKeyControl = "control";
+constexpr const char* kKeyMovementRank = "movement_rank";
+constexpr const char* kKeySettle = "settle";
+constexpr const char* kKeyEveryoneStops = "everyone_stops";
+constexpr const char* kKeyGivesWayOnGreen = "gives_way_on_green";
+constexpr const char* kKeyArrow = "arrow";
+constexpr const char* kKeyTurnOnRed = "turn_on_red";
+constexpr const char* kKeyMovement = "movement";
+constexpr const char* kKeyAfter = "after";
 
 // A number's value is the first entry of its table.
 constexpr lua_Integer kNumberValueSlot = 1;
@@ -68,11 +78,177 @@ public:
         readNumbers(root, kKeyDefaultLimits, false, out.defaultLimits);
         checkDefaultLimitsAreSpeeds(out.defaultLimits);
         readPersonality(root, out);
+        readMovementRank(root, out);
+        readControls(root, out);
         lua_settop(L, base);
         return clean();
     }
 
 private:
+    // A list of movement words at `idx` into a mask, each named once. False (reported) on any fault.
+    bool movementList(int idx, const std::string& path, std::vector<Movement>& out) {
+        std::vector<std::string> words;
+        if (!stringList(idx, path, true, words)) return false;
+        bool ok = true;
+        out.clear();
+        for (const std::string& w : words) {
+            Movement m = Movement::Straight;
+            if (!movementOf(w, m)) {
+                fail(path, "names \"" + w + "\", which is not one of the movements (" + movementWords() + ")");
+                ok = false;
+            } else if (std::find(out.begin(), out.end(), m) != out.end()) {
+                fail(path, "lists \"" + w + "\" twice, expected each movement once");
+                ok = false;
+            } else {
+                out.push_back(m);
+            }
+        }
+        return ok;
+    }
+
+    static MovementMask maskOf(const std::vector<Movement>& list) {
+        MovementMask mask = 0;
+        for (const Movement m : list) mask = static_cast<MovementMask>(mask | (1u << static_cast<uint8_t>(m)));
+        return mask;
+    }
+
+    // movement_rank: optional; the movements in the order they go first.
+    void readMovementRank(int root, RuleSet& out) {
+        const int top = lua_gettop(L);
+        const int v = pushField(root, kKeyMovementRank);
+        if (!lua_isnil(L, v)) {
+            std::vector<Movement> list;
+            if (movementList(v, std::string(kRoot) + "." + kKeyMovementRank, list)) out.movementRank = list;
+        }
+        lua_settop(L, top);
+    }
+
+    // control: optional; each kind of junction control.
+    void readControls(int root, RuleSet& out) {
+        const int top = lua_gettop(L);
+        const int list = pushField(root, kKeyControl);
+        const std::string path = std::string(kRoot) + "." + kKeyControl;
+        if (lua_isnil(L, list)) {
+            lua_settop(L, top);
+            return;
+        }
+        if (!lua_istable(L, list)) {
+            fail(path, "is " + describe(list) + ", expected a table of junction controls");
+            lua_settop(L, top);
+            return;
+        }
+        std::vector<std::string> names;
+        std::vector<std::string> odd;
+        keysOf(list, names, odd);
+        for (const std::string& o : odd) fail(path, "has the key " + o + ", which is not a name; expected control names");
+        const std::vector<std::string> allowed = {kKeySettle, kKeyEveryoneStops, kKeyGivesWayOnGreen, kKeyArrow,
+                                                  kKeyTurnOnRed};
+        std::vector<ControlKind> controls;
+        for (const std::string& name : names) {
+            const int mark = lua_gettop(L);
+            const std::string controlPath = path + "." + name;
+            const int ct = pushField(list, name);
+            if (!lua_istable(L, ct)) {
+                fail(controlPath, "is " + describe(ct) + ", expected a table with (" + joined(allowed) + ")");
+                lua_settop(L, mark);
+                continue;
+            }
+            checkKeys(ct, controlPath, allowed);
+            ControlKind k;
+            k.name = name;
+            bool ok = true;
+            // settle: required, a list of questions, each once.
+            {
+                const int v = pushField(ct, kKeySettle);
+                const std::string settlePath = controlPath + "." + kKeySettle;
+                std::vector<std::string> words;
+                if (!stringList(v, settlePath, false, words)) {
+                    ok = false;
+                } else if (words.empty()) {
+                    fail(settlePath, "is empty, expected at least one of (" + settleQuestionWords() + ")");
+                    ok = false;
+                }
+                for (const std::string& w : words) {
+                    SettleQuestion q = SettleQuestion::Light;
+                    if (!settleQuestionOf(w, q)) {
+                        fail(settlePath, "names \"" + w + "\", which is not one of the questions (" +
+                                             settleQuestionWords() + ")");
+                        ok = false;
+                    } else if (std::find(k.settle.begin(), k.settle.end(), q) != k.settle.end()) {
+                        fail(settlePath, "asks \"" + w + "\" twice, expected each question once");
+                        ok = false;
+                    } else {
+                        k.settle.push_back(q);
+                    }
+                }
+                lua_settop(L, mark + 1);
+            }
+            {
+                const int v = pushField(ct, kKeyEveryoneStops);
+                if (lua_type(L, v) == LUA_TBOOLEAN) k.everyoneStops = lua_toboolean(L, v) != 0;
+                else if (!lua_isnil(L, v)) {
+                    fail(controlPath + "." + kKeyEveryoneStops, "is " + describe(v) + ", expected true or false");
+                    ok = false;
+                }
+                lua_settop(L, mark + 1);
+            }
+            for (const char* key : {kKeyGivesWayOnGreen, kKeyArrow}) {
+                const int v = pushField(ct, key);
+                if (!lua_isnil(L, v)) {
+                    std::vector<Movement> list;
+                    if (!movementList(v, controlPath + "." + key, list)) ok = false;
+                    const MovementMask mask = maskOf(list);
+                    if (std::string(key) == kKeyArrow) k.arrow = mask;
+                    else k.givesWayOnGreen = mask;
+                }
+                lua_settop(L, mark + 1);
+            }
+            {
+                const int v = pushField(ct, kKeyTurnOnRed);
+                const std::string redPath = controlPath + "." + kKeyTurnOnRed;
+                if (lua_istable(L, v)) {
+                    checkKeys(v, redPath, {kKeyMovement, kKeyAfter});
+                    const int m = pushField(v, kKeyMovement);
+                    std::string s;
+                    if (stringAt(m, s) && movementOf(s, k.turnOnRedMovement)) {
+                        k.turnOnRed = true;
+                    } else {
+                        fail(redPath + "." + kKeyMovement,
+                             "is " + describe(m) + ", expected one of the movements (" + movementWords() + ")");
+                        ok = false;
+                    }
+                    lua_settop(L, mark + 2);
+                    const int a = pushField(v, kKeyAfter);
+                    if (!lua_isnil(L, a)) {
+                        if (stringAt(a, s) && s == kWordFullStop) {
+                            k.turnOnRedAfterFullStop = true;
+                        } else {
+                            fail(redPath + "." + kKeyAfter,
+                                 "is " + describe(a) + ", expected \"" + std::string(kWordFullStop) + "\"");
+                            ok = false;
+                        }
+                    }
+                } else if (!lua_isnil(L, v)) {
+                    fail(redPath, "is " + describe(v) + ", expected { movement = ..., after = \"" +
+                                      std::string(kWordFullStop) + "\" }");
+                    ok = false;
+                }
+                lua_settop(L, mark + 1);
+            }
+            // Lights' tables mean nothing to a control with no lights: a slip of the pen, said so.
+            if (!k.hasLights() && (k.givesWayOnGreen != 0 || k.arrow != 0 || k.turnOnRed)) {
+                fail(controlPath, "gives " + std::string(kKeyGivesWayOnGreen) + ", " + kKeyArrow + " or " + kKeyTurnOnRed +
+                                      ", which only a control whose settle list asks \"" +
+                                      settleQuestionWord(SettleQuestion::Light) + "\" can use");
+                ok = false;
+            }
+            if (ok) controls.push_back(k);
+            lua_settop(L, mark);
+        }
+        out.controls = controls;
+        lua_settop(L, top);
+    }
+
     void readName(int root, RuleSet& out) {
         const int top = lua_gettop(L);
         const int v = pushField(root, kKeyName);

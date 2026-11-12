@@ -34,6 +34,9 @@ struct RoadRules {
     // default limit for its road's class (RuleSet::defaultLimits) -- a lane its section's class, a connector the class
     // of the lane it joins. 0 where the path has a posted limit, no road class, or its class has no default.
     std::vector<Real> unpostedLimit;
+    // One per entry of the graph's controlNames: the index of the rule set's row of the same name in RuleSet::controls,
+    // or kNoDevice when it has none (issue #260: right_of_way.h reads it).
+    std::vector<uint32_t> controlOfName;
 
     // What a regulation of kind `kind` means: its device in `rules` (the rule set this was built from), or null for a
     // kind the graph does not have or that is not bound.
@@ -46,6 +49,7 @@ struct RoadRules {
 // BUILDS THE BINDING and checks the registered facts' needs. True when there is no problem. Otherwise false, `out`
 // holds what could be bound, and `problems` (when given) gets every problem, in this order: regulation kinds in the
 // graph's table order, then road classes with unposted paths and no default limit (in the graph's table order), then
+// junction controls some junction carries that the rule set's `control` table lacks (in the graph's table order), then
 // facts in slot order, then the other readers in the order added, each one's numbers then its settings in the order
 // it declares them.
 bool buildRoadRules(const engine::LaneGraph& roads, const RuleSet& rules, const FactRegistry& facts, RoadRules& out,

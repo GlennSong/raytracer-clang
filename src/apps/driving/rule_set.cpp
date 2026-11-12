@@ -100,6 +100,68 @@ std::string unitWords() {
     return out;
 }
 
+// ---- Right of way's words ---------------------------------------------------------------------------------------------
+
+namespace {
+
+// THE QUESTIONS' WORDS, in SettleQuestion order.
+const char* const kSettleWords[kSettleQuestionCount] = {"light", "sign_rank", "movement", "kerb_side", "arrived_first"};
+// THE MOVEMENTS' WORDS, in Movement order.
+const char* const kMovementWords[kMovementCount] = {"straight", "near_turn", "far_turn", "u_turn"};
+
+template <std::size_t N>
+std::string wordList(const char* const (&words)[N]) {
+    std::string out;
+    for (const char* w : words) out += (out.empty() ? "" : ", ") + std::string(w);
+    return out;
+}
+
+}  // namespace
+
+const char* settleQuestionWord(SettleQuestion q) {
+    const uint8_t i = static_cast<uint8_t>(q);
+    return i < kSettleQuestionCount ? kSettleWords[i] : "";
+}
+
+bool settleQuestionOf(const std::string& word, SettleQuestion& out) {
+    for (uint8_t i = 0; i < kSettleQuestionCount; ++i)
+        if (word == kSettleWords[i]) {
+            out = static_cast<SettleQuestion>(i);
+            return true;
+        }
+    return false;
+}
+
+std::string settleQuestionWords() { return wordList(kSettleWords); }
+
+const char* movementWord(Movement m) {
+    const uint8_t i = static_cast<uint8_t>(m);
+    return i < kMovementCount ? kMovementWords[i] : "";
+}
+
+bool movementOf(const std::string& word, Movement& out) {
+    for (uint8_t i = 0; i < kMovementCount; ++i)
+        if (word == kMovementWords[i]) {
+            out = static_cast<Movement>(i);
+            return true;
+        }
+    return false;
+}
+
+std::string movementWords() { return wordList(kMovementWords); }
+
+bool ControlKind::hasLights() const {
+    return std::find(settle.begin(), settle.end(), SettleQuestion::Light) != settle.end();
+}
+
+const ControlKind* RuleSet::findControl(const std::string& controlName) const { return findByName(controls, controlName); }
+
+uint32_t RuleSet::movementRankOf(Movement m) const {
+    for (std::size_t i = 0; i < movementRank.size(); ++i)
+        if (movementRank[i] == m) return static_cast<uint32_t>(i);
+    return static_cast<uint32_t>(movementRank.size());
+}
+
 const Device* RuleSet::findDevice(const std::string& deviceName) const { return findByName(devices, deviceName); }
 const Number* RuleSet::findNumber(const std::string& numberName) const { return findByName(numbers, numberName); }
 const PersonalSetting* RuleSet::findPersonal(const std::string& settingName) const {

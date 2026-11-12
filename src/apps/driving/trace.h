@@ -19,6 +19,7 @@
 // is the host's to add: the card prints the host's opaque person number only.
 
 #include "apps/driving/decide.h"          // Decision, Reason, ReadValue, CompiledRules, explain
+#include "apps/driving/junction_plan.h"   // PlanNote: a junction plan made or dropped
 #include "apps/driving/traffic_state.h"   // CarId, Binding
 
 #include <array>
@@ -62,13 +63,18 @@ struct TraceEntry {
 };
 bool operator==(const TraceEntry& a, const TraceEntry& b);
 
+// How many notes of junction plans made and dropped a driven car's trace keeps (junction_plan.h PlanNote).
+constexpr std::size_t kPlanNoteLength = 8;
+
 // ONE DRIVEN CAR'S TRACE: the ring, and the reasons behind the answers its driver holds now (for the card's "held"
-// line, and for the entries).
+// line, and for the entries); and a second ring of its junction plans made and dropped.
 struct CarTrace {
     std::array<TraceEntry, kTraceLength> ring;
     uint32_t written = 0;        // entries ever written on this trip (the ring keeps the last kTraceLength)
     TracedReason heldStop;       // why the place to stop by it holds (rule kNoRule: none held, or not traced)
     TracedReason heldTopSpeed;   // why the top speed it holds
+    std::array<PlanNote, kPlanNoteLength> planNotes;
+    uint32_t planNotesWritten = 0;   // plan notes ever written on this trip (the ring keeps the last kPlanNoteLength)
 
     // Adds an entry, dropping the oldest when the ring is full.
     void add(const TraceEntry& e);
@@ -77,6 +83,10 @@ struct CarTrace {
     const TraceEntry& oldestFirst(std::size_t i) const;
     // The newest entry, or null when none was written.
     const TraceEntry* latest() const;
+    // The same for the plan notes.
+    void addPlanNote(const PlanNote& n);
+    std::size_t planNoteCount() const;
+    const PlanNote& planNoteOldestFirst(std::size_t i) const;
 };
 
 // ONE NUMBER OVER A CAR'S TRACE (its ring oldest first, the count written, the held reasons), folded in a fixed order.

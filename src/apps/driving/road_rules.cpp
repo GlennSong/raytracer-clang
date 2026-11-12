@@ -113,6 +113,20 @@ bool buildRoadRules(const engine::LaneGraph& roads, const RuleSet& rules, const 
                             rules.findDefaultLimit(cls)->unit + "\", which is not a speed");
     }
 
+    // Every control a junction carries must be a row of the rule set's control table.
+    out.controlOfName.assign(roads.controlNames.size(), kNoDevice);
+    std::vector<uint32_t> junctionsOfControl(roads.controlNames.size(), 0);
+    for (const engine::Junction& jn : roads.junctions)
+        if (jn.control < junctionsOfControl.size()) ++junctionsOfControl[jn.control];
+    for (std::size_t c = 0; c < roads.controlNames.size(); ++c) {
+        const ControlKind* k = rules.findControl(roads.controlNames[c]);
+        if (k) out.controlOfName[c] = static_cast<uint32_t>(k - rules.controls.data());
+        else if (junctionsOfControl[c] > 0)
+            found.push_back("the lane graph has " + std::to_string(junctionsOfControl[c]) + " junctions controlled by \"" +
+                            roads.controlNames[c] + "\", but rule set \"" + rules.name + "\" has no control." +
+                            roads.controlNames[c]);
+    }
+
     for (const FactSpec& fact : facts.all())
         checkNeeds(rules, "fact \"" + fact.name + "\"", fact.numbers, fact.settings, found);
     for (const ReaderSpec& reader : facts.readers())

@@ -5,7 +5,8 @@
 -- The smallest set that makes cars drive sensibly on roads WITHOUT junction rules: keep to the road's limit (and the
 -- car's own top speed, which the model applies by itself), slow for bends, slow before a lower limit, stop where the
 -- lane ends, stop at the destination. There is no giving way, no signal and no lane change yet: where two paths cross
--- or join inside a junction, cars pass through each other. Those rules come with the junction tasks (D1-D5).
+-- or join inside a junction, cars pass through each other. Those rules come with the junction tasks (D1-D5); D1 adds
+-- the right-of-way tables below, which only the junction table reads.
 --
 -- Every number says where it came from. "[~]" marks a guess to tune against the lab's measurements, not a figure
 -- from a source.
@@ -17,6 +18,22 @@ rule_set = {
   -- No signs stand on the lab's roads yet, so there is nothing to rank and nothing for a sign to mean.
   ranks = {},
   devices = {},
+
+  -- WHO GIVES WAY TO WHOM at each kind of junction control (issue #260): the questions asked, in order, until one tells
+  -- two turns apart. The model works out a table from these when the level loads; no rule acts on it yet (task D3).
+  control = {
+    -- The lab's junctions carry no planned control yet (the control plan, task B4, will put one at each), so every one
+    -- is settled as an uncontrolled junction: who got there first; at the same moment, the one coming from the other's
+    -- kerb side goes first; then by movement (a far turn gives way to the traffic it crosses).
+    -- Source: California Vehicle Code 21800 (a), (b) (first to arrive; at the same time, yield to the vehicle on the
+    -- right, which is the kerb side where traffic keeps right) and 21801 (a) (a left turn, the far turn there, yields to
+    -- oncoming traffic); read with near/far and kerb side so it holds on either side of the road.
+    not_planned = { settle = { "arrived_first", "kerb_side", "movement" } },
+  },
+  -- The kinds of turn, the one that goes first first. Straight on goes before the far turn (CVC 21801 (a)); the near
+  -- turn between them and the U-turn last are [~] judgements: the near turn crosses no oncoming stream, the U-turn
+  -- crosses every one.
+  movement_rank = { "straight", "near_turn", "far_turn", "u_turn" },
 
   numbers = {
     -- The gap kept to the car ahead when both stand still: the Intelligent Driver Model's s0.

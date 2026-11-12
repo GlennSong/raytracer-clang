@@ -93,9 +93,40 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
     std::sort(wanted_.begin(), wanted_.end());
     wanted_.erase(std::unique(wanted_.begin(), wanted_.end()), wanted_.end());
     hasRules_ = true;
+    // Who gives way to whom, from the road and these rules; every driver plans its junctions afresh against it.
+    if (roads_) rightOfWay_ = buildRightOfWay(*roads_, ruleSet_, roadRules_);
+    for (std::pair<const CarId, TripId>& entry : tripOfCar_)
+        if (Trip* t = trips_.get(entry.second)) t->junctions = JunctionPlans();
     // Answers held under other rules name other rules: every driver decides afresh on the next tick.
     for (Car& c : cars_) c.held.decided = false;
     return true;
+}
+
+void Driving::notePlanUpdate(const PlanUpdate& u, CarId car, Trip& t, const JunctionPlans& plans) {
+    planCounts_.made += u.made;
+    for (std::size_t i = 0; i < u.noteCount; ++i) {
+        switch (u.notes[i].change) {
+        case PlanChange::Made: break;
+        case PlanChange::Cleared: ++planCounts_.cleared; break;
+        case PlanChange::WayChanged: ++planCounts_.wayChanged; break;
+        case PlanChange::RouteChanged: ++planCounts_.routeChanged; break;
+        }
+        if (settings_.trace) t.trace.addPlanNote(u.notes[i]);
+    }
+    if (u.plansCut) {
+        ++capCounts_.junctionPlansCut;
+        capCounts_.lastJunctionPlanCut = car;
+    }
+    if (u.waitingPointsCut) {
+        ++capCounts_.waitingPointsCut;
+        capCounts_.lastWaitingPointCut = car;
+    }
+    planCounts_.mostAtOnce = std::max<uint32_t>(planCounts_.mostAtOnce, plans.count);
+    for (std::size_t i = 0; i < plans.count; ++i)
+        if (plans.plans[i].crossingCount > planCounts_.mostCrossings) {
+            planCounts_.mostCrossings = plans.plans[i].crossingCount;
+            planCounts_.mostCrossingsConnector = plans.plans[i].connector;
+        }
 }
 
 // ---- The tick ---------------------------------------------------------------------------------------------------------
@@ -150,9 +181,13 @@ void Driving::plan() {
             ++capCounts_.lookAheadsCut;
             capCounts_.lastLookAheadCut = c.id;
         }
+        // The junctions on the way ahead: plans kept, dropped and made before the driver notices anything.
+        p.junctions = t->junctions;
+        updateJunctionPlans(*roads_, rightOfWay_, c, cls.length, p.way, tickCount_, clockSeconds_, p.junctions,
+                            p.planUpdate);
 
         const DriverView view{c,          cls,       t->person,  p.way,         *roads_,     cars_,     pathLists_,
-                              ruleSet_,   roadRules_, lookAhead, &t->destination, &t->holds};
+                              ruleSet_,   roadRules_, lookAhead, &t->destination, &t->holds, &p.junctions, &rightOfWay_};
         noticeFacts(view, facts_, wanted_, noticed_, noticeScratch_);
         const NoticedFact& arrived = noticed_[arrivedSlot_];
         if (arrived.present && arrived.yes) {
@@ -197,6 +232,8 @@ void Driving::plan() {
             continue;
         }
         c.held = p.held;
+        t->junctions = p.junctions;
+        notePlanUpdate(p.planUpdate, c.id, *t, t->junctions);
         t->way = std::move(p.way);
         t->wayAt = 0;
         t->wayEnds = p.wayEnds;
@@ -501,7 +538,14 @@ bool Driving::changeDestination(TripId id, const PathPoint& destination) {
     t->route = std::move(route);
     t->legReached = 0;
     findPlaced(t->car)->held.decided = false;   // decides again on its next tick, on the new route
+    dropPlansForNewRoute(*t);
     return true;
+}
+
+void Driving::dropPlansForNewRoute(Trip& t) {
+    PlanUpdate u;
+    dropJunctionPlans(tickCount_, clockSeconds_, PlanChange::RouteChanged, t.junctions, u);
+    notePlanUpdate(u, t.car, t, t.junctions);
 }
 
 bool Driving::reroute(TripId id) {
@@ -517,6 +561,7 @@ bool Driving::reroute(TripId id) {
     t->route = std::move(route);
     t->legReached = 0;
     findPlaced(t->car)->held.decided = false;   // decides again on its next tick, on the new route
+    dropPlansForNewRoute(*t);
     return true;
 }
 
@@ -688,6 +733,40 @@ WaitReport Driving::waitReport() const {
 
 std::string Driving::describeWaiting(const WaitReport& report) const {
     return driving::describeWaiting(report, hasRules_ ? &rules_.labels.rules : nullptr);
+}
+
+// ---- Junctions ---------------------------------------------------------------------------------------------------------
+
+std::string Driving::describeJunction(engine::JunctionId junction) const {
+    if (!roads_ || !hasRules_) return "no junction table: the model has no road or no rules yet\n";
+    return describeJunctionRules(*roads_, ruleSet_, rightOfWay_, junction);
+}
+
+const JunctionPlans* Driving::junctionPlans(CarId car) const {
+    const Trip* t = trips_.get(tripOf(car));
+    return t ? &t->junctions : nullptr;
+}
+
+uint64_t Driving::planHash() const {
+    engine::bundle::Fnv h;
+    h.pod(static_cast<uint64_t>(tripOfCar_.size()));
+    for (const std::pair<const CarId, TripId>& entry : tripOfCar_) {
+        const Trip* t = trips_.get(entry.second);
+        h.pod(entry.first.index);
+        h.pod(t ? junctionPlansHash(t->junctions) : uint64_t(0));
+    }
+    h.pod(planCounts_.made);
+    h.pod(planCounts_.cleared);
+    h.pod(planCounts_.wayChanged);
+    h.pod(planCounts_.routeChanged);
+    h.pod(planCounts_.mostCrossings);
+    h.pod(planCounts_.mostCrossingsConnector.index);
+    h.pod(planCounts_.mostAtOnce);
+    h.pod(capCounts_.junctionPlansCut);
+    h.pod(capCounts_.lastJunctionPlanCut.index);
+    h.pod(capCounts_.waitingPointsCut);
+    h.pod(capCounts_.lastWaitingPointCut.index);
+    return h.h;
 }
 
 }  // namespace driving

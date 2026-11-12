@@ -5,8 +5,10 @@
 // one Lua file (a "rule set"); the reader in scripting/rule_set_lua.h reads it once when a level loads and fills these
 // structs. Nothing here touches Lua, and no Lua runs while cars drive.
 //
-// This file holds four parts of a rule set:
+// This file holds these parts of a rule set:
 //   - which side of the road traffic keeps, and the sign ranks in order (which sign goes first);
+//   - RIGHT OF WAY: each kind of junction control and the questions that settle who gives way there, and the order the
+//     kinds of turn go in (right_of_way.h turns them into a table per junction at load);
 //   - the DEVICES: things that can stand on or be painted on the road, and what each one means;
 //   - the NUMBERS: every tunable number, stored in metres / seconds / metres per second (squared) / plain ratios,
 //     with the unit and the source it was written with;
@@ -87,6 +89,59 @@ struct PersonalSetting {
     bool hasSource = false;
 };
 
+// ---- Right of way (design 6.1 b; issue #260) --------------------------------------------------------------------------
+//
+// WHO GIVES WAY AT A JUNCTION is settled by asking a short list of QUESTIONS in order (a control's `settle` list); the
+// first that tells two turns apart decides. The questions are a small fixed vocabulary, because code answers each:
+enum class SettleQuestion : uint8_t {
+    Light,          // at load, per signal phase: a green goes before a red (a turn allowed on red gives way to all)
+    SignRank,       // at load: the rank of the sign each approach carries (RuleSet::ranks; no sign shares the first)
+    Movement,       // at load: the kind of turn, by RuleSet::movementRank (earlier goes first)
+    KerbSide,       // at load: the one arriving from the other's kerb side goes first
+    ArrivedFirst,   // while driving: whoever reached their line first
+};
+constexpr uint8_t kSettleQuestionCount = 5;
+// The question's word in a rule-set file ("light", "sign_rank", ...); empty for an unknown one.
+const char* settleQuestionWord(SettleQuestion q);
+// The question a word names; false for a word that is none.
+bool settleQuestionOf(const std::string& word, SettleQuestion& out);
+// The words, comma separated, for messages.
+std::string settleQuestionWords();
+
+// THE KINDS OF TURN a rule set can name, as words: straight on, the near turn (stays by the kerb), the far turn
+// (crosses the oncoming traffic), the U-turn. The lane graph's connectors carry the same four (engine::Turn).
+enum class Movement : uint8_t { Straight, NearTurn, FarTurn, UTurn };
+constexpr uint8_t kMovementCount = 4;
+const char* movementWord(Movement m);   // "straight", "near_turn", "far_turn", "u_turn"
+bool movementOf(const std::string& word, Movement& out);
+std::string movementWords();
+// A set of movements: bit (1 << movement).
+using MovementMask = uint8_t;
+inline bool hasMovement(MovementMask mask, Movement m) { return (mask & (1u << static_cast<uint8_t>(m))) != 0; }
+
+// The one thing a turn on red may have to do first, as the rule-set file writes it: come to a full stop.
+constexpr const char* kWordFullStop = "full_stop";
+
+// ONE KIND OF JUNCTION CONTROL (a row of the rule set's `control` table): the questions that settle two turns, and, for
+// a control with lights (one whose settle list asks `light`), how its turns are grouped into phases.
+struct ControlKind {
+    std::string name;
+    std::vector<SettleQuestion> settle;   // in written order
+    bool everyoneStops = false;           // every driver stops at the line first (D3 acts on it; the table does not)
+    // LIGHTS. Turns that may go on a plain green and give way to what comes from the approach facing theirs (a far turn
+    // on a green gives way to oncoming traffic): they may share a phase with what they meet from that approach.
+    MovementMask givesWayOnGreen = 0;
+    // Turns given their own green arrow: a phase of their own, before the phase their approach shares with the one facing
+    // it, in which they go and what they meet waits.
+    MovementMask arrow = 0;
+    // A turn that may be made on a red, giving way to everything (turn_on_red = { movement = ..., after = ... }).
+    bool turnOnRed = false;
+    Movement turnOnRedMovement = Movement::NearTurn;
+    bool turnOnRedAfterFullStop = false;  // ... only after coming to a full stop (D3 acts on it)
+
+    bool hasLights() const;               // its settle list asks `light`
+};
+
 struct RuleSet {
     std::string name;
     DrivesOn drivesOn = DrivesOn::Right;
@@ -95,8 +150,16 @@ struct RuleSet {
     std::vector<Number> numbers;             // sorted by name
     std::vector<PersonalSetting> personality;   // sorted by name
     std::vector<Number> defaultLimits;          // by road class name, sorted; each a speed
+    // RIGHT OF WAY (an optional table: a rule set for roads with no junctions needs none). The kinds of junction control,
+    // sorted by name, and the movements in the order they go first (written order; a movement not listed goes after
+    // every listed one).
+    std::vector<ControlKind> controls;
+    std::vector<Movement> movementRank;
 
     const Device* findDevice(const std::string& deviceName) const;
+    const ControlKind* findControl(const std::string& controlName) const;
+    // A movement's place in movementRank (0 goes first); movementRank's size for one not listed.
+    uint32_t movementRankOf(Movement m) const;
     const Number* findNumber(const std::string& numberName) const;
     const PersonalSetting* findPersonal(const std::string& settingName) const;
     // The default limit for road class `roadClass`, or null.

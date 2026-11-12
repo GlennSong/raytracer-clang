@@ -149,6 +149,18 @@ const TraceEntry& CarTrace::oldestFirst(std::size_t i) const {
 
 const TraceEntry* CarTrace::latest() const { return written == 0 ? nullptr : &ring[(written - 1) % kTraceLength]; }
 
+void CarTrace::addPlanNote(const PlanNote& n) {
+    planNotes[planNotesWritten % kPlanNoteLength] = n;
+    ++planNotesWritten;
+}
+
+std::size_t CarTrace::planNoteCount() const { return std::min<std::size_t>(planNotesWritten, kPlanNoteLength); }
+
+const PlanNote& CarTrace::planNoteOldestFirst(std::size_t i) const {
+    const std::size_t first = planNotesWritten > kPlanNoteLength ? planNotesWritten % kPlanNoteLength : 0;
+    return planNotes[(first + i) % kPlanNoteLength];
+}
+
 uint64_t traceHash(const CarTrace& trace) {
     engine::bundle::Fnv h;
     h.pod(trace.written);
@@ -166,6 +178,15 @@ uint64_t traceHash(const CarTrace& trace) {
     }
     foldReason(h, trace.heldStop);
     foldReason(h, trace.heldTopSpeed);
+    h.pod(trace.planNotesWritten);
+    for (std::size_t i = 0; i < trace.planNoteCount(); ++i) {
+        const PlanNote& n = trace.planNoteOldestFirst(i);
+        h.pod(n.tick);
+        h.pod(n.seconds);
+        h.pod(static_cast<uint8_t>(n.change));
+        h.pod(n.junction.index);
+        h.pod(n.connector.index);
+    }
     return h.h;
 }
 
@@ -255,6 +276,9 @@ std::string describeCar(const Driving& d, CarId id) {
         out += "\n";
     }
 
+    // The junctions ahead, as its driver plans for them.
+    if (roads) out += describeJunctionPlans(*roads, d.rightOfWay(), *c, t->junctions);
+
     // What it decided recently, oldest first.
     const CarTrace& trace = t->trace;
     if (trace.written == 0) {
@@ -267,6 +291,19 @@ std::string describeCar(const Driving& d, CarId id) {
         for (std::size_t i = 0; i < trace.size(); ++i) {
             const TraceEntry& e = trace.oldestFirst(i);
             out += "  t=" + one(e.seconds) + " s  " + entryWords(d, e) + "\n";
+        }
+    }
+    // Its junction plans made and dropped, oldest first.
+    if (trace.planNotesWritten > 0) {
+        out += "junction plans";
+        if (trace.planNotesWritten > trace.planNoteCount())
+            out += " (the last " + std::to_string(trace.planNoteCount()) + " of " +
+                   std::to_string(trace.planNotesWritten) + ")";
+        out += ":\n";
+        for (std::size_t i = 0; i < trace.planNoteCount(); ++i) {
+            const PlanNote& n = trace.planNoteOldestFirst(i);
+            out += "  t=" + one(n.seconds) + " s  junction " + std::to_string(n.junction.index) + " by connector " +
+                   std::to_string(n.connector.index) + ": " + planChangeWords(n.change) + "\n";
         }
     }
     return out;

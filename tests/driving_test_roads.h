@@ -61,6 +61,12 @@ struct TestRoadSpec {
     Real speedLimit = 13.4;       // m/s (30 mph), on every lane and connector
     driving::DrivesOn drivesOn = driving::DrivesOn::Left;
     engine::LaneLine line;        // the line between neighbouring lanes; crossable both ways unless set otherwise
+    // TURNS REFUSED at grid junctions: no connector is built for them, as the road builder refuses a turn it cannot draw.
+    struct RefusedTurn {
+        uint32_t row = 0, col = 0;
+        Heading in = Heading::East, out = Heading::East;
+    };
+    std::vector<RefusedTurn> refused;
     TestRoadSpec() {
         line.crossFromOffside = true;
         line.crossFromKerbside = true;
@@ -117,7 +123,10 @@ TestRoads straightRoadOf(const std::vector<Real>& sectionLengths, const TestRoad
 // into the first's (no junctions). A car can drive round it for ever.
 TestRoads ringRoad(uint32_t sides, const TestRoadSpec& spec = TestRoadSpec());
 
-// A GRID of `rows` by `cols` junctions, junction (r, c) at the plan point (c, r) times the junction spacing.
+// A GRID of `rows` by `cols` junctions, junction (r, c) at the plan point (c, r) times the junction spacing. Its
+// junctions carry real crossing points: where their connectors cross, join and split, found by the road builder's own
+// finder (lanes/lane_graph_crossings.h, findCrossingPoints, with the test car's width) when this build has the lanes
+// builder (RT_ROADS_LANES); without it, none.
 TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec = TestRoadSpec());
 
 // AN ORDINARY CAR that may use the test roads: 4.5 m, a 2.7 m wheelbase, 30 degrees of steering (a 4.7 m turn), the

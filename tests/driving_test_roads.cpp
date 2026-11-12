@@ -1,6 +1,9 @@
 #include "driving_test_roads.h"
 
 #include "apps/driving/traffic_state.h"   // kerbwardPerpSign
+#ifdef RT_ROADS_LANES
+#include "engine/procgen/city/roads/lanes/lane_graph_crossings.h"   // the road builder's crossing-point finder
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -290,6 +293,10 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
                 for (uint8_t oi = 0; oi < kHeadingCount; ++oi) {
                     const Heading out = static_cast<Heading>(oi);
                     if (out == opposite(in) || !t.sectionLeaving(r, c, out).valid()) continue;
+                    bool refused = false;
+                    for (const TestRoadSpec::RefusedTurn& x : spec.refused)
+                        if (x.row == r && x.col == c && x.in == in && x.out == out) refused = true;
+                    if (refused) continue;
                     engine::Turn turn = engine::Turn::Straight;
                     uint32_t firstLane = 0, lastLane = lanes;   // which lanes take this movement, lane k into lane k
                     if (out == nearTurnFrom(in, spec.drivesOn)) {
@@ -345,6 +352,15 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
         nexts[j.first.index].push_back(j.second);
     }
     writeNextLists(g, nexts);
+#ifdef RT_ROADS_LANES
+    // Where the connectors of each junction cross, join and split, as the road builder finds them.
+    engine::roads::lanes::CrossingOptions crossingOptions;
+    engine::roads::lanes::VehicleSize car;
+    car.tag = kTestVehicleTag;
+    car.width = kCarWidth;
+    crossingOptions.vehicles.push_back(car);
+    engine::roads::lanes::findCrossingPoints(g, crossingOptions);
+#endif
     return t;
 }
 

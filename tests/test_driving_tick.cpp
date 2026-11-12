@@ -186,7 +186,9 @@ std::string num(double v) { return std::to_string(v); }
 
 // A whole rule set around `rules`. `withMoveNeeds` false leaves out what the move step reads.
 std::string ruleSetLua(const std::vector<const char*>& rules, const Spread& s = Spread(), bool withMoveNeeds = true) {
-    std::string lua = "rule_set = { name = 'c6_test', drives_on = 'left', ranks = { 'stop' }, devices = {}, numbers = { "
+    std::string lua = "rule_set = { name = 'c6_test', drives_on = 'left', ranks = { 'stop' }, devices = {}, "
+                      "control = { test_uncontrolled = { settle = { 'arrived_first', 'kerb_side', 'movement' } } }, "
+                      "numbers = { "
                       "comfortable_side_accel = { 2, unit = 'm/s2', source = 'test' }, ";
     if (withMoveNeeds) lua += "standstill_gap = { " + num(kStandstillGap) + ", unit = 'm', source = 'test' }, ";
     lua += "}, personality = { speed_habit = { usual = " + num(s.habitUsual) + ", low = " + num(s.habitLow) +
@@ -1342,6 +1344,7 @@ TEST_CASE(trace_T3_driver_cards) {
                       "on lane 2 at 43.7 m, 13.2 m/s, speeding up\n"
                       "now: its top speed of 13.4 m/s, by rule \"speed limit\"\n"
                       "held: no stop; top speed 13.4 m/s (speed limit: my_limit is 13.4 m/s)\n"
+                      "junctions ahead: none in view\n"
                       "recent:\n"
                       "  t=0.0 s  free road; 0.0 m/s on lane 0 at 10.0 m\n"
                       "  t=0.0 s  a top speed (speed limit: my_limit is 13.4 m/s); 0.0 m/s on lane 0 at 10.0 m\n");
@@ -1362,6 +1365,7 @@ TEST_CASE(trace_T3_driver_cards) {
                       "on lane 4 at 10.8 m, 6.0 m/s, steady\n"
                       "now: following car 9, 11.2 m ahead, doing 6.0 m/s\n"
                       "held: no stop; top speed 13.4 m/s (speed limit: my_limit is 13.4 m/s)\n"
+                      "junctions ahead: none in view\n"
                       "recent:\n"
                       "  t=0.0 s  following car 9; 0.0 m/s on lane 0 at 10.0 m\n");
     }
@@ -1380,6 +1384,7 @@ TEST_CASE(trace_T3_driver_cards) {
                       "now: a stop 0.0 m ahead, by rule \"held\"\n"
                       "held: stop in 0.0 m (held: hold_ahead is 0.0 m); top speed 13.4 m/s (speed limit: my_limit is "
                       "13.4 m/s)\n"
+                      "junctions ahead: none in view\n"
                       "recent:\n"
                       "  t=0.0 s  free road; 0.0 m/s on lane 0 at 10.0 m\n"
                       "  t=0.0 s  a top speed (speed limit: my_limit is 13.4 m/s); 0.0 m/s on lane 0 at 10.0 m\n"
