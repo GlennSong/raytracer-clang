@@ -221,6 +221,8 @@ uint64_t traceHash(const CarTrace& trace) {
         h.pod(n.judged.crossing.index);
         h.pod(n.judged.need);
         h.pod(n.judged.have);
+        h.pod(static_cast<uint8_t>(n.judged.by));
+        h.pod(n.judged.stopAlong);
     }
     return h.h;
 }

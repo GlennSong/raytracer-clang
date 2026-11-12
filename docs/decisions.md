@@ -18402,3 +18402,115 @@ two junction gaps the lab's 0-pair checks catch: a slow truck that gave way, the
 car it gave way to (first in goes first is D4's), and one join spell. The old, slow traffic never reached them, not
 even with the comfortable sideways acceleration nudged to 1.9 or 2.1.
 
+## ADR-0405 — Inside the junction: one conflict resolver, first in goes first, waiting inside, and no rings (#263)
+
+Words: a CONFLICT is two cars that have both announced (ADR-0402) that they will be on crossing points their two paths
+share; a car is COMMITTED once its front is past its last waiting point (ADR-0401), and GOING once it can no longer stop
+at its line braking comfortably; a car's BODY is ON a crossing point when its front is past the start of that path's
+stretch and its tail is not yet past the end; a RING is cars each going after the next, round to the first (a loop of
+"goes after"); a GROUP is the junction a crossing point is filed under, or "no junction" (ADR-0400's carry-overs).
+
+**Context.** Driving model task D4 (`docs/driving-briefs/D4-inside-the-junction.md`). Once a car was past its line,
+nothing ordered it against anyone: D3 skipped every plan its car was "going" at, and the car with right of way never
+looked at the one giving way. The faster traffic of #281 showed what that costs: at junction 122 a slow small truck gave
+way, went, committed, and was crossed by the car it had given way to (which had right of way by movement, so never
+looked); after junction 16 a car merging slowly from a stop sign was caught on the lane after the join by a car with
+right of way that had been speeding up out of sight (44 ticks of overlap); and junction 75's 76 m connector 3010 drove
+through a car waiting on lane 766 at junction 90's line (ADR-0400's road-data case). Who goes first was also settled in
+pieces: the table's answer in one place, D3's "going, arrival, fall-back" chain in another, a ring search among cars
+arriving in one tick (capped at eight cars) in a third. The owner asked for one resolver: policy as data, one mechanism.
+
+**Decision.**
+- **One conflict resolver** (`src/apps/driving/conflict.h`). Once a tick, after the board is sealed, every pair of cars
+  announced on one crossing point from different paths (where the table does not say "nobody", a split) becomes ONE
+  conflict per pair per group, gathered over every crossing point they share there, and is settled by asking named
+  questions in order, each a small pure function, until one answers: **on_it** (whose body is on a shared crossing
+  point), **committed_first** (committed before not; two committed by the tick each committed), **table** (the give-way
+  table's settled answer: lights, signs, movement, lower path id, as the control's rule-set row lists them; "ask while
+  driving", or answers that disagree across the shared crossing points: no answer), **going**, **arrived_first** (the
+  fixed arrival tick, ADR-0402), **fallback** (the table's fall-back), **lower_id** (cannot tie). The first two are the
+  brief's rules 1 and 2, asked first because once a car is inside it can only be waited for; the rest is D3's order for
+  cars not yet committed. Drivers look the answer up (`goesFirst`); `give_way.cpp` holds no ordering of its own any more
+  (its ring search, `goFirstWhenAsked`, and the cap `kMaxTieGroup` with `CapCounts::tieGroupsCut` are gone). The
+  resolver holds no number and names no kind; every gap stays in the rule set.
+- **The guarantees, and how each is made.** CONSISTENT: one record per pair per group, worked out once from the board
+  everyone reads, so A before B means B after A whoever asks; a body on a crossing point the two share in one group
+  counts in each of their groups. ALWAYS AN ANSWER: lower_id. NO RINGS: all conflicts' arrows ("goes after") together,
+  with arrows nobody can turn round -- a car behind another on one path (the next in that path's list of cars, from where
+  the cars are, not from what binds them, so the arrow does not come and go as the car ahead moves off), and an answer
+  given by on_it -- are cut into strongly connected parts (Tarjan's method). Inside a part with a loop, the cars are put
+  in one order that keeps every fixed arrow (a topological order, Kahn's method), choosing among the cars free to come
+  next by a fixed key (committed first, by when; going; arrival; lower id), and each conflict in the part is answered by
+  that order. Every arrow inside the part then follows one order, which has no loop; the arrows between parts already had
+  none. A loop of fixed arrows alone sets aside a queue arrow first (putting a car before the one ahead of it in its lane
+  answers nothing it does), and a body's only if bodies alone are locked round (counted; never seen in the lab).
+  DETERMINISTIC: the board is sorted, crossing points are walked in id order, pairs sorted by (group, car, car,
+  crossing), no unordered container, no pointer order, no clock. `tests/test_driving_conflict.cpp` checks all four on
+  900 random boards (random tables that do make rings), the question order, the classic four-car ring (lower id first,
+  as D3 did) and a ring through a queue (broken at the table's answer, not through the body or the queue).
+- **Why all groups together, not one junction at a time.** Checked a junction at a time, the lab deadlocked: a car
+  queued behind one waiting at junction 90's line, whose wait was for a car on junction 75's connector 3010, which was
+  waiting for the body of the queued car (on 3010's path). A car can be held at one junction's line by its conflict at
+  the next (ADR-0402: when its body would not fit between the two, it stops at the line before), and two junctions'
+  paths can overlap. All together, some rings through two junctions are broken that would have untied themselves in time
+  (a car inside one junction now, meeting another at the next one later); they are answered by the fixed order, which
+  is safe.
+- **Committed cars judge too.** `judgeGiveWay` no longer skips a plan whose car is going. A going car keeps out of the way
+  of a car the resolver puts before it: where it still can stop at its line braking comfortably it stops there (D3);
+  once it cannot, it stops INSIDE, at the last of its waiting points short of the crossing point, or else with its
+  front at the crossing point's stretch (`JunctionPlan::judged.stopAlong`, metres along the connector; 0 is the line).
+  A car whose front is already on that stretch cannot keep out of it and goes on (the other then waits for its body).
+  The stop goes through the rule set like any other: the `give_way_line` fact is now "where I stop to give way", the
+  line or inside, and the lab's one "give way" rule acts on it, so the measurements row "At rest inside a junction"
+  records it as "by rule give way" and the wait-for graph draws its arrow to the car given way to.
+- **A car to follow.** Where the resolver answered by on_it or committed_first, the car going second may only come
+  behind (its front arriving after the other's tail is clear, by the gap it needs), never dash ahead (`followOnly`).
+- **Nobody plans to go behind a car waiting inside.** A car waiting inside the junction for somebody else announces, for
+  the crossing points at and beyond where it waits, that it is not going (`Announcement::going` false) and that it waits
+  inside (`waitsInside`); others may go ahead of it if the gap allows, never behind it. Without this the lab's moped on
+  connector 3010, waiting at its inside waiting point, was held there 130 s: each car of the stream on connector 3018
+  judged it could go "behind" it (its estimate said it would leave at once), committed, and so came before it.
+- **Waits inside are counted apart from changes of mind** (`JunctionPlanCounts::waitedInside`): a driver that went at
+  its line, then stopped inside for a car that goes first, did not change its mind about the line.
+
+**Measured** (the lab, 300 drivers, five simulated minutes; before = 11f362cc):
+
+| | before | after |
+|---|---|---|
+| pairs overlapping where paths cross inside a junction (samples) | 1 (1) | 0 |
+| ... where they join inside a junction | 0 | 0 |
+| ... where they meet filed under no junction | 1 (1) | 0 |
+| ... where two paths leave one lane (not a check: the car behind follows) | 1 (1) | 1 (1) |
+| spells of overlap on the lane after a join (pair-ticks) | 1 (44) | 0 |
+| trips begun / arrived | 721 / 421 | 717 / 417 |
+| mean speed (the test's, every car every tick; the host's `driving?`) | 8.85; 8.85 m/s | 8.80; 8.56 m/s |
+| longest wait at a junction's line | 46.4 s | 39.5 s |
+| loops, cars waiting with no reason, cars standing 60 s | 0, 0, 0 | 0, 0, 0 |
+| drivers changing their minds twice on one approach | 3 | 3 (and 71 waits inside) |
+| decisions to go / to give way | 3,937 / 605 | 3,944 / 664 |
+| at rest inside a junction, car-seconds | 0.7 (behind a car) | 94.2 (88.1 giving way, 5.3 behind a car) |
+| the model's tick (worst) | 0.302 ms (1.02) | 0.337 ms (0.93) |
+
+Conflicts settled over the run (summed over ticks): on_it 227k, committed_first 271k, table 232k, going 13k,
+arrived_first 84k, fallback 255k, by a ring's order 35k; rings broken 14,320 tick-instances, through a body 0, of
+bodies and queues alone 17. The freeway free-flow check and the measurements table pass; the state hash is the same at
+every second of two runs. The lab test's limits are back to 0 (`kMostCrossJoinPairs`, `kMostJoinPairTicks`) and the
+across-junction one is 0 too (`kMostAcrossJunctionPairs`).
+On the hand-made roads (`tests/test_driving_give_way.cpp`): 16, a slow truck stops at its stop sign and commits across
+the path of a car with right of way by the signs, held at its line; the car, let go as the truck nears their crossing
+point, waits for it ("it committed first"); 17, a slow truck merging from a stop sign while the main road looks empty is
+followed, not hit, on the lane after the join by a car that was speeding up out of sight. With D4 switched off by hand
+(the first two questions, and going cars judging) both overlap, as the lab did. All D3 cases and ten minutes of random
+traffic at each control still pass, with no mind changes; the T with a stop sign gives way 63 times where it gave way 39
+(main-road cars now wait for side-road cars that committed).
+
+**Not here.** Waiting inside for a far turn on a green (`waitInsideAt`): no lights run a programme yet (D2, #261: every
+light junction is run as an all-way stop while dark), so there is no green on which a far turn gives way, and the lane
+graph builder sets no `waitInsideAt`; the brief's staged tests 1, 2 and 5, and its test 6 at a four-way with lights,
+wait for both. Inside waits here use ADR-0401's waiting points (gaps between crossing stretches a body fits in), which
+is how the brief's "last waiting point" was built. Room beyond as a claim (D5): the "stop at the line before when the
+body would not fit between two junctions" is still the judgement's, and is what lets a ring run through two junctions.
+Whether the midtown ring's junction 75 could go back to a two-way stop (the deadlock that gave five-or-more-road
+junctions lights, ADR-0403): not tried, as it means re-planning the lab's road graph; the deadlock's shape (a car queued
+behind one giving way to a car that gave way to it) is now a ring through a queue, which the resolver breaks.
+

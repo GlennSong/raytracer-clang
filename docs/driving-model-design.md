@@ -1080,6 +1080,20 @@ with right of way*, keeps its distance from the crossing point until the earlier
 any car's body lying on a crossing point blocks that point for everyone. Commit time gives a single order over the
 committed cars in a junction, and a single order has no loops. The full rules are in `driving-briefs/D4`. This is the rule the SUMO paper names as what prevents deadlock inside a junction.
 
+*As built* (task D4, ADR-0405): **one conflict resolver** (`src/apps/driving/conflict.h`) decides who goes first for
+every pair of cars announced on crossing points they share, once a tick from the board, one record per pair per
+junction (crossing points filed under no junction make one more group). It asks named questions in order, each a small
+pure function, until one answers: whose body is already on a shared crossing point (`on_it`), who committed first
+(`committed_first`), the give-way table's settled answer (`table`), who can no longer stop at its line (`going`), who
+reached its line first (`arrived_first`), the table's fall-back (`fallback`), the lower car id (`lower_id`). Who yields
+to whom stays policy in the rule set (the table); the resolver is mechanism, and `give_way.cpp` keeps no ordering of
+its own. A car past its line (or too fast to stop at it) still judges: it stops inside, at its last waiting point
+short of the crossing point (ADR-0401's gaps a body fits in) or with its front at the crossing point's stretch, for a
+car the resolver puts first; the stop goes through the rule set's "give way" rule like any other (`give_way_line` is
+"where I stop to give way"). Where `on_it` or `committed_first` decided, the car going second may only come behind.
+Nobody plans to go behind a car waiting inside for somebody else. Waiting inside for a far turn on a green
+(`waitInsideAt`) waits for the lights' clock (D2): none runs yet, and the builder sets no `waitInsideAt`.
+
 ### 9.5 Don't block the box: room is claimed, not just seen
 
 A car may enter only if there is room for it beyond the junction: its own length plus a standstill gap, on the lane
@@ -1115,6 +1129,19 @@ gridlock, and no rule of the road undoes it. The design's answer has three parts
    graph each second and looks for loops. A loop made only of "waiting for room" arrows is **gridlock** and is
    reported as a road-design or demand problem. A loop with any other arrow in it is a **deadlock**, a bug, and
    fails the test. A car at rest with *no* arrow at all is the worst bug and also fails.
+
+*As built* (task D4, ADR-0405): the argument above is not enough on its own, and the lab showed where. A car stopped
+to keep out of a body's way can itself lie on another car's crossing point; a queue behind a car waiting at a line can
+lie across a long connector of a junction next door; and a car whose body would not fit between two junctions waits at
+the first junction's line for a conflict at the second, so a loop can run through two junctions. So the conflict
+resolver also guarantees, by construction, that its "goes after" answers hold no ring: all its answers, together with
+the arrows no answer can turn round (a car behind another on one path; a body on a crossing point), are cut into
+strongly connected parts (each car in a part can reach each other by the arrows: Tarjan's method), and inside a part
+with a loop every pair is answered by one order that keeps the fixed arrows (a topological order, Kahn's method), the
+cars free to come next taken committed first, then going, then by arrival, then by the lower id. One order has no loop,
+and the arrows between parts already had none. A loop made of bodies and queues alone, which no answer can undo, is
+counted; the lab has none through bodies. One more guard keeps a car waiting inside from being held there: nobody plans
+to go "behind" it, because committing behind it would put it after them.
 
 ## 10. Routes and lane changes
 

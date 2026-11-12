@@ -1,5 +1,22 @@
 # D4 — First in goes first; waiting inside for a far turn
 
+**As built (ADR-0405), first in goes first; waiting inside for a far turn is not built yet.** Who goes first is one
+conflict resolver (`src/apps/driving/conflict.h`): named questions asked in order (a body on the crossing point, who
+committed first, the give-way table, going, arrival, the table's fall-back, the lower id), one answer per pair of cars,
+rings broken in one fixed order. Committed cars judge too and wait inside, at a waiting point (ADR-0401's gaps) or short
+of the crossing point, for a car that goes first. Where this brief turned out wrong or short:
+- *Why no loop* is not enough: a car stopped by rule 1 can itself lie on another's crossing point, a queue at one line
+  can lie across a connector of the junction next door, and a car whose body would not fit between two junctions waits
+  at the first for a conflict at the second. The lab deadlocked that way (junctions 75 and 90). The resolver therefore
+  finds loops among its answers and the fixed arrows (bodies, queues) and answers each loop by one order (ADR-0405).
+- *Going behind* a car with right of way that is still waiting (at its line, or inside) let the follower commit and so
+  come first; a stream of such followers held a car waiting inside for over two minutes. Nobody now plans to go behind a
+  car waiting inside.
+- *Last waiting point*: the brief says the line, or `waitInsideAt`; D1 built waiting points as every gap between
+  crossing stretches a body fits in (ADR-0401). The as-built keeps D1's, so a long connector has inside waiting points.
+- *Waiting inside for a far turn* needs a green on which the far turn gives way (task D2's clock; no lights run yet) and
+  a `waitInsideAt` from the builder (none is set): staged tests 1, 2, 5 and the lights in 6 wait for both.
+
 **Read first:** design 9.4, 9.6. Brief D3.
 
 ## The goal

@@ -39,7 +39,7 @@ void note(PlanUpdate& out, uint64_t tick, double seconds, PlanChange change, con
 
 bool operator==(const GiveWayJudgement& a, const GiveWayJudgement& b) {
     return a.cause == b.cause && a.other == b.other && a.crossing == b.crossing && a.otherPath == b.otherPath &&
-           a.need == b.need && a.have == b.have;
+           a.need == b.need && a.have == b.have && a.by == b.by && a.stopAlong == b.stopAlong;
 }
 
 bool operator==(const JunctionPlan& a, const JunctionPlan& b) {
@@ -220,6 +220,8 @@ uint64_t junctionPlansHash(const JunctionPlans& plans) {
         h.pod(p.judged.otherPath.index);
         h.pod(p.judged.need);
         h.pod(p.judged.have);
+        h.pod(static_cast<uint8_t>(p.judged.by));
+        h.pod(p.judged.stopAlong);
     }
     return h.h;
 }
@@ -238,10 +240,12 @@ std::string describeGiveWay(const LaneGraph& roads, const RightOfWay& row, const
         break;
     case GiveWayDecision::GiveWay:
         out = "giving way";
-        if (j.cause == GiveWayCause::Gap)
+        if (j.cause == GiveWayCause::Gap) {
             out += " to car " + std::to_string(j.other.index) + " on " + other + ", at crossing point " +
-                   std::to_string(j.crossing.index) + ": a gap of " + one(j.have) + " s; I need " + one(j.need) + " s";
-        else if (j.cause == GiveWayCause::NextJunction)
+                   std::to_string(j.crossing.index) + " (" + questionWords(j.by) + "): a gap of " + one(j.have) +
+                   " s; I need " + one(j.need) + " s";
+            out += j.stopAlong > 0 ? ", waiting inside the junction " + one(j.stopAlong) + " m along" : ", at the line";
+        } else if (j.cause == GiveWayCause::NextJunction)
             out += ": I give way at the next junction and my body would not fit between the two";
         break;
     }

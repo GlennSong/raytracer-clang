@@ -37,6 +37,7 @@
 
 #include "engine/procgen/city/roads/lane_graph.h"
 #include "apps/driving/announce.h"        // the board: who will be on which crossing point, and when
+#include "apps/driving/conflict.h"        // who goes first where two cars' paths meet: the one resolver
 #include "apps/driving/decide.h"
 #include "apps/driving/give_way.h"        // judging the gaps a driver gives way by
 #include "apps/driving/junction_plan.h"   // each driver's plan for the junctions ahead
@@ -134,10 +135,6 @@ struct CapCounts {
     // commits later than it might. Counted per plan made.
     uint64_t waitingPointsCut = 0;
     CarId lastWaitingPointCut;
-    // More cars than kMaxTieGroup arrived at one junction's lines in the same tick when a driver looked for a ring of
-    // fall-backs among them (give_way.h): those past the cap were left to the plain fall-back. Counted per look.
-    uint64_t tieGroupsCut = 0;
-    CarId lastTieGroupCut;
 };
 
 // HOW THE DRIVERS' JUNCTION PLANS WENT since this object was made (junction_plan.h).
@@ -154,6 +151,9 @@ struct JunctionPlanCounts {
     uint64_t decidedGiveWay = 0;     // decided to give way
     uint64_t wentAfterGivingWay = 0; // ... of the go decisions, after giving way on the same approach (a gap taken)
     uint64_t changedMindTwice = 0;   // plans whose driver switched between go and give way more than once
+    // ... not counting waits INSIDE the junction (issue #263): a driver past its line, or too fast to stop at it, that
+    // stopped inside for a car the resolver put first. Counted here, each stop once.
+    uint64_t waitedInside = 0;
     // The gaps taken after giving way: the smallest and largest gap had, and the smallest gap needed (seconds).
     Real smallestGapTaken = 0, largestGapTaken = 0, smallestGapNeeded = 0;
 };
@@ -224,6 +224,10 @@ public:
     bool junctionStep() const { return junctionsOn_; }
     const JunctionNumbers& junctionNumbers() const { return junctionNumbers_; }
     const AnnouncementBoard& board() const { return board_; }
+    // WHO GOES FIRST (issue #263): this tick's conflicts, settled by the one conflict resolver (conflict.h) from the
+    // board, and its counts summed over every tick so far.
+    const ConflictResolver& resolver() const { return resolver_; }
+    const ConflictCounts& conflictCounts() const { return conflictTotals_; }
     // ONE NUMBER OVER EVERY DRIVER'S JUNCTION PLANS (in car order) and the plan counts and caps, kept apart from
     // stateHash, which leaves them out while nothing a car does reads them.
     uint64_t planHash() const;
@@ -418,6 +422,9 @@ private:
     Real step_ = 0;                       // the step of the tick under way, seconds (the decide interval is a number of them)
     JunctionNumbers junctionNumbers_;
     AnnouncementBoard board_;             // rewritten at the start of every plan step
+    ConflictResolver resolver_;           // ... and its conflicts settled from it, once a tick
+    std::vector<std::pair<uint64_t, uint64_t>> behind_;   // ... with each car held behind the car ahead (working memory)
+    ConflictCounts conflictTotals_;       // the resolver's counts over every tick (not read by the tick)
 
     // Working memory reused from tick to tick (never part of the state).
     std::vector<Car> carsNext_;           // the second copy of the cars the move step writes

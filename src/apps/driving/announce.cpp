@@ -95,6 +95,7 @@ uint64_t boardHash(const AnnouncementBoard& board) {
         h.pod(a.arrivalTick);
         h.pod(a.arrivalAt);
         h.pod(static_cast<uint8_t>(a.committed));
+        h.pod(static_cast<uint8_t>(a.waitsInside));
         h.pod(a.committedTick);
         h.pod(a.waited);
         h.pod(a.waitingFor);
@@ -237,7 +238,12 @@ void announcePlan(const engine::LaneGraph& roads, const JunctionPlan& plan, cons
         a.clearIn = when(toClear) + car.shift;
         a.speedThere = car.move.speedThrough;
         a.stopsFirst = car.stopsFirst;
-        a.going = going;
+        // Waiting inside the junction to give way (task D4): not going through the crossing points at or beyond where it
+        // waits (its stop is a stretch's start or a waiting point, which is one), though it is past its line.
+        const bool waitsShort =
+            plan.decision == GiveWayDecision::GiveWay && plan.judged.stopAlong > 0 && from >= plan.judged.stopAlong;
+        a.going = going && !waitsShort;
+        a.waitsInside = waitsShort;
         // Not going: stopping short of the stretch, or (while it can still stop at the line) for another reason.
         a.notGoing = (car.notGoing && !going) || car.heldStopAt < startAt || car.frontLimit < startAt;
         // A front that cannot get far enough for the tail to clear the stretch: never clear of it.

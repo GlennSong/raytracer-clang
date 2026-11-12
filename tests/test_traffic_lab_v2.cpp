@@ -218,18 +218,15 @@ struct WayIn {
     }
 };
 
-// WHAT THE FIVE-MINUTE RUN MAY SHOW, measured when giving way came in (issue #262, ADR-0402), so a later change cannot
-// make it worse unseen. Pairs of cars seen overlapping on the plan (sampled each second) where their paths cross or
-// join inside one junction, and where they meet filed under no junction; drivers that changed their minds twice.
-//
-// OWED TO ISSUE #263 (inside the junction): both of the next two were 0 until the freeway bend fix (#281) let traffic
-// flow half again as fast (mean 5.9 -> 8.9 m/s). That showed two cases giving way alone does not cover: a car that
-// gave way, then went, and was crossed inside the junction by the car it had given way to (nothing yet says "first in
-// goes first" once both are inside); and one pair overlapping for 44 ticks on the lane after a join. They are held at
-// what was measured on 2026-11-12 so nothing gets worse unseen. #263 must bring both back to 0.
-constexpr std::size_t kMostCrossJoinPairs = 1;
-constexpr uint64_t kMostJoinPairTicks = 44;
-constexpr std::size_t kMostAcrossJunctionPairs = 1;
+// WHAT THE FIVE-MINUTE RUN MAY SHOW, so a later change cannot make it worse unseen. Pairs of cars seen overlapping on
+// the plan (sampled each second) where their paths cross or join inside one junction, and where they meet filed under no
+// junction; pair-ticks of overlap on the lane after a join: none, since first in goes first inside the junction (issue
+// #263, ADR-0405: before it, a car that gave way and then went was crossed by the car it had given way to, one pair
+// overlapped 44 ticks after a join, and junction 75's long connector 3010 drove through a car waiting on lane 766).
+// Drivers that changed their minds twice on one approach: at most four (waits inside a junction are counted apart).
+constexpr std::size_t kMostCrossJoinPairs = 0;
+constexpr uint64_t kMostJoinPairTicks = 0;
+constexpr std::size_t kMostAcrossJunctionPairs = 0;
 constexpr uint64_t kMostChangedMindTwice = 4;
 // THE FASTEST ROADS FLOW (issue #281): on the lanes of the road class with the highest posted limit (the lab's
 // freeway), the mean speed of cars in FREE FLOW -- held by nothing ahead (no car, no stop, not the end of their way),
@@ -663,11 +660,22 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         // GIVING WAY (issue #262): what drivers decided at junctions, and the board.
         std::printf("    [lab-v2] give way: %llu decisions to go, %llu to give way; %llu went after giving way, taking gaps "
                     "of %.2f-%.2f s (the smallest needed %.2f s); %llu plans where the driver changed its mind more than "
-                    "once; the board held at most %zu announcements; %llu tie groups cut\n",
+                    "once; %llu waits inside a junction; the board held at most %zu announcements\n",
                     static_cast<unsigned long long>(pc.decidedGo), static_cast<unsigned long long>(pc.decidedGiveWay),
                     static_cast<unsigned long long>(pc.wentAfterGivingWay), pc.smallestGapTaken, pc.largestGapTaken,
-                    pc.smallestGapNeeded, static_cast<unsigned long long>(pc.changedMindTwice), d->board().most(),
-                    static_cast<unsigned long long>(caps.tieGroupsCut));
+                    pc.smallestGapNeeded, static_cast<unsigned long long>(pc.changedMindTwice),
+                    static_cast<unsigned long long>(pc.waitedInside), d->board().most());
+        // WHO GOES FIRST (issue #263): the conflicts the one resolver settled over the run, by the question that decided.
+        const driving::ConflictCounts& cc = d->conflictCounts();
+        std::printf("    [lab-v2] who goes first: %llu conflicts settled (summed over the ticks); by question:",
+                    static_cast<unsigned long long>(cc.conflicts));
+        for (uint8_t q = 0; q < driving::kQuestionCount; ++q)
+            if (cc.byQuestion[q] > 0)
+                std::printf(" %s %llu", driving::questionName(static_cast<driving::Question>(q)),
+                            static_cast<unsigned long long>(cc.byQuestion[q]));
+        std::printf("; rings broken %llu (through a body %llu; of bodies and queues alone %llu)\n",
+                    static_cast<unsigned long long>(cc.rings), static_cast<unsigned long long>(cc.ringThroughABody),
+                    static_cast<unsigned long long>(cc.physicalRings));
         // One driver's card giving way at a line, as `driver? <id>` shows it.
         for (const driving::Car& c : d->cars()) {
             if (c.binding.by != driving::Limit::Stop || c.binding.stopFor != driving::StopFor::GivingWay) continue;
@@ -773,11 +781,11 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     CHECK(followPairTicks == 0);   // following holds
     CHECK(worstGap < 0.03);
     CHECK(sim.drivingHost().counts().arrivals > 0);
-    // GIVING WAY (issue #262, ADR-0402). No two cars that obeyed the rules overlap where their paths cross or join
-    // inside a junction, nor on the lane after a join; no loop of waiting cars; nobody stands 60 s. What may remain is
-    // the road-data case ADR-0400 lists: junction 75's long connector 3010 passes within touching distance of the end of
-    // lane 775, where cars wait at that junction's own line (filed under no junction: a car waiting there sits in the
-    // connector's path, and a car on the connector has long since committed).
+    // GIVING WAY AND INSIDE THE JUNCTION (issues #262 and #263, ADR-0402 and ADR-0405). No two cars that obeyed the rules
+    // overlap where their paths cross or join, inside a junction or across two, nor on the lane after a join; no loop of
+    // waiting cars; nobody stands 60 s. That includes the road-data case ADR-0400 lists (junction 75's long connector
+    // 3010 passes within touching distance of the ends of lanes where cars wait at junction 90's line): a car on the
+    // connector now waits for a body on its path, and a ring through that waiting is broken at an answer.
     CHECK(meetPairs[static_cast<int>(MeetKind::Cross)].size() + meetPairs[static_cast<int>(MeetKind::Join)].size() <=
           kMostCrossJoinPairs);
     CHECK(meetPairs[static_cast<int>(MeetKind::CrossAcross)].size() + meetPairs[static_cast<int>(MeetKind::JoinAcross)].size() <=

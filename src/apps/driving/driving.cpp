@@ -139,10 +139,6 @@ void Driving::notePlanUpdate(const PlanUpdate& u, CarId car, Trip& t, const Junc
 void Driving::applyVerdict(const GiveWayVerdict& v, const std::array<Real, kMaxJunctionPlans>& lineIn, const Car& car,
                            Trip& t) {
     if (!v.judged) return;
-    if (v.tieGroupsCut > 0) {
-        capCounts_.tieGroupsCut += v.tieGroupsCut;
-        capCounts_.lastTieGroupCut = car.id;
-    }
     for (std::size_t k = 0; k < t.junctions.count && k < kMaxJunctionPlans; ++k) {
         const GiveWayDecision d = v.decision[k];
         if (d == GiveWayDecision::Undecided) continue;   // not judged this time: kept as it was
@@ -163,10 +159,14 @@ void Driving::applyVerdict(const GiveWayVerdict& v, const std::array<Real, kMaxJ
         const bool changed = plan.decision != d;
         const bool toAnother = d == GiveWayDecision::GiveWay && !changed && plan.judged.cause != j.cause;
         const bool toAnotherCar = d == GiveWayDecision::GiveWay && !changed && plan.judged.other != j.other;
+        // A wait INSIDE the junction (task D4): stopping inside for a car that goes first, or going on again from such a
+        // stop. It is not a change of mind about the line, and it takes no gap at the line: counted on its own.
+        const bool inside = (d == GiveWayDecision::GiveWay && j.stopAlong > 0) ||
+                            (plan.decision == GiveWayDecision::GiveWay && plan.judged.stopAlong > 0);
         if (changed) {
             if (d == GiveWayDecision::Go) {
                 ++planCounts_.decidedGo;
-                if (plan.decision == GiveWayDecision::GiveWay && j.cause == GiveWayCause::Gap) {
+                if (plan.decision == GiveWayDecision::GiveWay && j.cause == GiveWayCause::Gap && !inside) {
                     // A gap taken after giving way.
                     const bool first = planCounts_.wentAfterGivingWay == 0;
                     ++planCounts_.wentAfterGivingWay;
@@ -177,7 +177,11 @@ void Driving::applyVerdict(const GiveWayVerdict& v, const std::array<Real, kMaxJ
             } else {
                 ++planCounts_.decidedGiveWay;
             }
-            if (plan.decision != GiveWayDecision::Undecided && ++plan.mindChanges == 2) ++planCounts_.changedMindTwice;
+            if (inside) {
+                if (d == GiveWayDecision::GiveWay) ++planCounts_.waitedInside;
+            } else if (plan.decision != GiveWayDecision::Undecided && ++plan.mindChanges == 2) {
+                ++planCounts_.changedMindTwice;
+            }
         }
         plan.decision = d;
         plan.judged = j;
@@ -371,6 +375,19 @@ void Driving::announce() {
             }
     }
     board_.seal();
+    // Who goes first wherever two announced cars meet: settled once, from the sealed board, for every driver (#263). A
+    // car behind another on one path (the next in its list: a front, or a tail still on it) can never go before it: an
+    // arrow no answer can turn round, so a ring through it is broken at an answer, never through the queue. Read from
+    // where the cars are, not from what binds them, so the arrow does not come and go as the car ahead moves off.
+    behind_.clear();
+    for (uint32_t p = 0; p < roads_->paths.size(); ++p) {
+        const PathList list = pathLists_.on(engine::PathId(p));
+        for (std::size_t k = 0; k + 1 < list.size(); ++k)
+            if (list[k].car != list[k + 1].car && list[k].why != OnPath::Beside && list[k + 1].why != OnPath::Beside)
+                behind_.push_back({list[k + 1].car.index, list[k].car.index});
+    }
+    resolver_.study(*roads_, rightOfWay_, board_, behind_);
+    addCounts(conflictTotals_, resolver_.counts());
 }
 
 // PLAN: each driven car whose turn it is (or that has not decided yet on this trip) notices its facts along its way
@@ -426,8 +443,10 @@ void Driving::plan() {
                             p.planUpdate);
         // ... and whether it must give way at them, judged from this tick's board.
         if (junctionsOn_) {
-            GiveWayInputs in{*roads_, rightOfWay_, ruleSet_, roadRules_, board_, junctionNumbers_, c, cls.length, cls.brake,
-                             static_cast<Real>(every) * step_, t->person, clockSeconds_, p.junctions, {}};
+            GiveWayInputs in{*roads_,   rightOfWay_, ruleSet_,   roadRules_,
+                             board_,    resolver_,   junctionNumbers_, c,
+                             cls.length, cls.brake,  static_cast<Real>(every) * step_, t->person,
+                             clockSeconds_, p.junctions, {}};
             for (std::size_t k = 0; k < kMaxJunctionPlans; ++k) {
                 in.lineIn[k] = kNever;
                 if (k >= p.junctions.count) continue;
@@ -933,8 +952,6 @@ uint64_t Driving::stateHash() const {
     h.pod(capCounts_.lastTailOffTrail.index);
     h.pod(capCounts_.lookAheadsCut);
     h.pod(capCounts_.lastLookAheadCut.index);
-    h.pod(capCounts_.tieGroupsCut);
-    h.pod(capCounts_.lastTieGroupCut.index);
     h.pod(static_cast<uint8_t>(junctionsOn_));
     // The trips, in car order.
     h.pod(static_cast<uint64_t>(tripOfCar_.size()));

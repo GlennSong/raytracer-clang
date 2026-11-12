@@ -459,6 +459,8 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
     return out;
 }
 
+uint32_t currentPhase(const RightOfWay&, engine::JunctionId) { return 0; }
+
 MyTurn myTurn(const LaneGraph& roads, const MeetingAnswer& a, CrossingId crossing, PathId path, PathId* otherPath) {
     if (!crossing.valid() || crossing.index >= roads.crossings.size()) return MyTurn::Neither;
     const CrossingPoint& rec = roads.crossings[crossing.index];

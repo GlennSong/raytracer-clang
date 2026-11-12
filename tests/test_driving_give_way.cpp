@@ -20,7 +20,11 @@
 //  13. patience over many people: every gap taken lies between the floor and the full gap;
 //  14. ten minutes of random traffic at an uncontrolled four-way, an all-way stop and a T with a stop sign: no loop in
 //      the wait-for graph, no two bodies overlapping, nobody changes their mind twice, traffic flows;
-//  15. the driver card and the wait-for graph name the car given way to.
+//  15. the driver card and the wait-for graph name the car given way to;
+//  16. inside the junction (issue #263): a slow truck that committed across the path of a car with right of way by the
+//      signs is not crossed by it ("it committed first");
+//  17. a slow truck merging from a stop sign while the main road looked empty is followed, not hit, on the lane after
+//      the join, by a car that was speeding up out of sight. Both overlapped before D4 (checked by switching it off).
 
 #include "test_framework.h"
 
@@ -227,6 +231,12 @@ struct Sim {
         VehicleClass bus = deriveVehicleClass("test_bus", 12.0, 2.5, 6.0, 40);
         bus.tags = {driving_test::kTestVehicleTag};
         classes.add(bus);
+        // Class 2: a slow, loaded small truck (the lab's #263 cases): 7 m, very slow to speed up, never faster than 6 m/s.
+        VehicleClass truck = deriveVehicleClass("test_slow_truck", 7.0, 2.3, 4.5, 40);
+        truck.tags = {driving_test::kTestVehicleTag};
+        truck.speedUp = 0.2;
+        truck.topSpeed = 6.0;
+        classes.add(truck);
         d.setVehicleClasses(classes);
         DrivingSettings s;
         s.decideEveryTicks = decideEvery;
@@ -958,6 +968,108 @@ TEST_CASE(give_way_15_the_card_and_the_wait_graph_name_who) {
     }
     CHECK(sawArrow);
     CHECK(sawCard);
+}
+
+// ---- 16 and 17. Inside the junction: first in goes first (issue #263, task D4) -----------------------------------------
+
+namespace {
+
+// Is car `car` giving way to car `other` now, because of question `by` (conflict.h)?
+bool givingWayBecause(const Sim& s, uint32_t car, uint32_t other, Question by) {
+    const JunctionPlans* plans = s.d.junctionPlans(CarId(car));
+    for (std::size_t k = 0; plans && k < plans->count; ++k) {
+        const JunctionPlan& p = plans->plans[k];
+        if (p.decision == GiveWayDecision::GiveWay && p.judged.other == CarId(other) && p.judged.by == by) return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+TEST_CASE(give_way_16_a_car_that_committed_first_is_not_crossed) {
+    // The lab's first #263 failure, on a hand-made four-way: a slow truck gave way, then went and committed, and was
+    // crossed inside the junction by the car it had given way to, which had right of way and so never looked at it.
+    // Here the truck's road carries a stop sign; car 0, straight on from the south, has right of way by the signs but is
+    // held at its line by the host; the slow truck (car 1) from the north stops at its sign, then takes its far turn
+    // across car 0's path, passing the held car over (it announces "not going"), and commits. Car 0 is let go the moment
+    // the truck is past its line: the truck committed first, so car 0 waits for it. (Without "committed first" car 0,
+    // with right of way by the table, would never look at the truck, and drive into it.)
+    TestRoads roads = driving_test::gridRoads(3, 3);
+    standStopSign(roads.graph, roads.laneArriving(1, 1, kSouth, 0));
+    Sim s(std::move(roads), kMinorStop);
+    CHECK(s.ok);
+    const TripId held = approach(s, 0, 1, 1, kNorth, 0.5, kNorth);
+    const engine::PathId lane0 = s.t.laneArriving(1, 1, kNorth, 0);
+    CHECK(s.d.placeHold(held, 1, at(lane0, s.t.graph.paths[lane0.index].length)));
+    s.run(2);
+    const Heading truckOut = driving_test::farTurnFrom(kSouth, DrivesOn::Left);
+    approach(s, 1, 1, 1, kSouth, 20, truckOut, 2);
+    // Where the truck's path crosses car 0's, along the truck's connector: car 0 is let go as the truck, committed, is
+    // about to reach it (as the lab's car went while the truck was half way through its turn).
+    const engine::PathId truckPath = s.t.connector(1, 1, kSouth, 0, truckOut, 0);
+    const engine::PathId carPath = s.t.connector(1, 1, kNorth, 0, kNorth, 0);
+    Real crossingAlong = -1;
+    const engine::Path& tp = s.t.graph.paths[truckPath.index];
+    for (uint32_t k = tp.crossings.first; k < tp.crossings.end(); ++k) {
+        const engine::CrossingPoint& rec = s.t.graph.crossings[s.t.graph.pathCrossings[k].index];
+        if (rec.otherSide != engine::OtherSide::Path) continue;
+        const bool truckIsA = rec.a == truckPath;
+        if ((truckIsA ? rec.otherPath() : rec.a) == carPath) crossingAlong = truckIsA ? rec.aFrom : rec.otherFrom;
+    }
+    CHECK(crossingAlong > 0);
+    bool released = false, committedFirst = false;
+    for (int i = 0; i < static_cast<int>(90 / kStep); ++i) {   // the truck is slow: both arrive within 90 s
+        const JunctionPlans* plans = s.d.junctionPlans(CarId(1));
+        const Car* truck = s.d.car(CarId(1));
+        if (!released && plans && plans->count > 0 && plans->plans[0].committed && truck && truck->path == truckPath &&
+            truck->along > crossingAlong - 4) {
+            CHECK(s.d.releaseHold(held, 1));
+            released = true;
+        }
+        s.step();
+        committedFirst = committedFirst || givingWayBecause(s, 0, 1, Question::CommittedFirst);
+    }
+    s.report("committed first");
+    s.checkClean();
+    CHECK(released);
+    CHECK(s.arrived == 2);
+    // The truck went first and was never stopped inside; car 0 gave way to it because it committed first.
+    CHECK(s.entryOrder().size() == 2 && s.entryOrder()[0].second == 1);
+    CHECK(!s.stoppedAfterMoving[1]);
+    CHECK(committedFirst);
+}
+
+TEST_CASE(give_way_17_a_car_merging_ahead_is_followed_not_hit) {
+    // The lab's second #263 failure: two cars coming onto one lane from different paths overlapped on it. A slow truck
+    // (car 0) stops at a stop sign and takes its near turn into the main road while the main road is empty as far as it
+    // can see; car 1, with right of way on the main road, starts from rest far back, speeds up, and reaches the join
+    // while the truck is still on it. The truck committed first: car 1 keeps behind it.
+    Heading fromNear = kNorth;
+    for (const Heading h : {kNorth, kSouth})
+        if (driving_test::nearTurnFrom(h, DrivesOn::Left) == kEast) fromNear = h;
+    TestRoadSpec spec;
+    spec.roadLength = 200;
+    TestRoads roads = driving_test::gridRoads(3, 3, spec);
+    standStopSign(roads.graph, roads.laneArriving(1, 1, fromNear, 0));
+    Sim s(std::move(roads), kMinorStop);
+    CHECK(s.ok);
+    // Car 1 starts at rest 60 m back: beyond what a car at rest looks ahead (act.h kLookAheadFloor), so it has not
+    // planned the junction, nor announced, when the truck decides.
+    approach(s, 0, 1, 1, fromNear, 0.5, kEast, 2);
+    approach(s, 1, 1, 1, kEast, 60, kEast);
+    s.step();
+    CHECK(s.d.junctionPlans(CarId(1)) && s.d.junctionPlans(CarId(1))->count == 0);
+    bool followed = false;
+    for (int i = 0; i < static_cast<int>(90 / kStep); ++i) {   // the truck is slow: both arrive within 90 s
+        s.step();
+        followed = followed || givingWayBecause(s, 1, 0, Question::CommittedFirst) ||
+                   givingWayBecause(s, 1, 0, Question::OnIt);
+    }
+    s.report("merging ahead");
+    s.checkClean();
+    CHECK(s.arrived == 2);
+    CHECK(s.entryOrder().size() == 2 && s.entryOrder()[0].second == 0);
+    CHECK(followed);
 }
 
 #endif  // RT_ENABLE_SCRIPTING

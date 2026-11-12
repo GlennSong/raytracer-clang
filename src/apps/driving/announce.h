@@ -68,7 +68,9 @@ struct Announcement {
     bool stopsFirst = false;       // it must come to rest at its line first (an all-way stop it has not yet stopped at)
     bool notGoing = false;         // it is stopping before this crossing for a reason other than this junction's traffic
     bool going = false;            // it will not stop before its line: past it, too fast to stop there comfortably while
-                                   // not giving way, or a car on a lane
+                                   // not giving way, or a car on a lane; not when it waits inside short of this crossing
+    bool waitsInside = false;      // it is past its line, waiting inside the junction short of this crossing point to give
+                                   // way (task D4): nobody may plan to go behind it, as it may wait a while
     bool arrivalFixed = false;     // its arrival at its line is fixed (JunctionPlan::arrivalFixed)
     uint64_t arrivalTick = 0;      // ... at this tick ("equal to within a tick" compares these)
     double arrivalAt = 0;          // ... and this clock time

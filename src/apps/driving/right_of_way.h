@@ -188,6 +188,10 @@ struct RightOfWay {
 // of the graph's control names is, and what each regulation kind means).
 RightOfWay buildRightOfWay(const engine::LaneGraph& roads, const RuleSet& rules, const RoadRules& roadRules);
 
+// The phase of a junction's lights drivers judge by. The lights' clock is task D2: until it runs, every junction shows
+// its first phase (0), and this is the one place that says so.
+uint32_t currentPhase(const RightOfWay& row, engine::JunctionId junction);
+
 // FROM ONE PATH'S SIDE: at crossing record `crossing`, does a car on `path` give way? GivesWay::A/Other read from its
 // side: `mine` is Ask, Neither, or whether I give way (true) or the other does (false). The other path is put in
 // `otherPath` (not valid for a crosswalk's or a track's).

@@ -494,7 +494,8 @@ endif()
 add_library(driving STATIC
     src/apps/driving/act.cpp             # speeding up, following and stopping: the move step's formulas (#253)
     src/apps/driving/announce.cpp        # the board: who will be on which crossing point, and when (#262)
-    src/apps/driving/decide.cpp          # rules' answers combined into one decision, with its reasons (#252)
+    src/apps/driving/conflict.cpp        # who goes first where two cars' paths meet: the one resolver (#263)
+    src/apps/driving/decide.cpp         # rules' answers combined into one decision, with its reasons (#252)
     src/apps/driving/driving.cpp
     src/apps/driving/give_way.cpp        # judging the gaps a driver gives way by at junctions; patience (#262)
     src/apps/driving/junction_plan.cpp   # each driver's plan for the junctions ahead: connector, waiting points (#260)
@@ -530,6 +531,7 @@ add_executable(driving_tests tests/main.cpp tests/test_driving.cpp tests/test_dr
     tests/test_driving_trip_places.cpp   # where trips begin and end; routes with no lane change; default limits (#255)
     tests/test_driving_junctions.cpp     # who gives way to whom at load, and each driver's junction plan (#260)
     tests/test_driving_give_way.cpp      # announcing, and giving way at junctions, on synthetic roads (#262)
+    tests/test_driving_conflict.cpp      # the one conflict resolver's guarantees: order, consistent, answers, no rings (#263)
     tests/test_driving_control_plan.cpp  # the lab's placement policy on the synthetic grid, and the table from it (#240)
     tests/driving_test_roads.cpp)  # small realistic road networks for the driving tests (#254)
 target_include_directories(driving_tests PRIVATE src tests)

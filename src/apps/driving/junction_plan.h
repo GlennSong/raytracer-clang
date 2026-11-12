@@ -33,6 +33,7 @@
 
 #include "engine/procgen/city/roads/lane_graph.h"
 #include "apps/driving/notice.h"          // WayAhead
+#include "apps/driving/conflict.h"            // Question
 #include "apps/driving/right_of_way.h"
 #include "apps/driving/traffic_state.h"   // Car
 
@@ -77,6 +78,10 @@ struct GiveWayJudgement {
     engine::PathId otherPath;          // Gap: the path that car is on there
     Real need = 0;                     // Gap: the gap needed, seconds (shrunk by patience, or the hard one once going)
     Real have = 0;                     // Gap: the gap there is, seconds (below `need` when giving way)
+    Question by = Question::None;      // Gap: why that car goes first (the conflict resolver's question, conflict.h)
+    // GiveWay: where along the connector the car stops, metres: 0 is the line; more is inside the junction, short of the
+    // crossing point (task D4: a car past its line, or that can no longer stop at it, waits inside).
+    Real stopAlong = 0;
 };
 bool operator==(const GiveWayJudgement& a, const GiveWayJudgement& b);
 
