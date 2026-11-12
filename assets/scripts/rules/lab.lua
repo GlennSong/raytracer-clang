@@ -7,9 +7,10 @@
 -- destination, and GIVE WAY at junctions (issue #262): a driver that must give way stops at the junction's line until
 -- the gap is big enough. Who gives way to whom is the right-of-way table below (D1); the gaps are the numbers below.
 -- Every junction has a control the city planner chose by the PLACEMENT POLICY at the end of this file (issue #240):
--- traffic lights, an all-way stop, stop or give-way signs on the minor road, or none. The lights have no clock yet
--- (task D2, #261), so a junction with lights is treated as its row's `when_dark` says. No lane changes yet; waiting
--- inside a junction (D4) and room beyond it (D5) come next.
+-- traffic lights, an all-way stop, stop or give-way signs on the minor road, or none. The lights run a programme timed
+-- from the numbers below (issue #261): stop at a red, stop at a yellow if you comfortably can, turn on red after a full
+-- stop where `turn_on_red` allows; a far turn on a plain green may wait inside the junction for a gap. No lane changes
+-- yet; room beyond a junction (D5) comes next.
 --
 -- Every number says where it came from. "[~]" marks a guess to tune against the lab's measurements, not a figure
 -- from a source. The California Vehicle Code (CVC) is read with near turn / far turn and kerb side in place of its
@@ -38,11 +39,15 @@ rule_set = {
   control = {
     -- TRAFFIC LIGHTS: a green goes before a red; on a green, a far turn gives way to the oncoming traffic it crosses.
     -- Source: CVC 21451 (a) (on a green, go, giving way to traffic lawfully in the junction), 21801 (a) (a left turn --
-    -- the far turn here -- yields to oncoming traffic) and 21453 (a) (stop at a red). WHILE DARK: there is no light clock yet (#261), and lights stuck on one phase would
-    -- hold half their approaches at a red for ever, so a junction with lights is treated as an all-way stop, as the
-    -- law treats a signal that is out (CVC 21800 (d)(1): at inoperative signals, stop, then go on when it is safe) or
-    -- flashing red (CVC 21457 (a)).
-    signal = { settle = { "light", "movement" }, gives_way_on_green = { "far_turn" }, when_dark = "all_way_stop" },
+    -- the far turn here -- yields to oncoming traffic) and 21453 (a) (stop at a red). TURN ON RED: after a full stop at
+    -- the red, the near turn may be made, giving way to everyone (CVC 21453 (b), the right turn on red where traffic
+    -- keeps right; section unverified). No arrows: far turns go on the plain green, giving way ([~] protected far turns
+    -- would lengthen every cycle; add `arrow = { "far_turn" }` to try them). WHILE DARK (a host that runs no light clock):
+    -- lights stuck on one phase would hold half their approaches at a red for ever, so a junction with lights is treated
+    -- as an all-way stop, as the law treats a signal that is out (CVC 21800 (d)(1): at inoperative signals, stop, then go
+    -- on when it is safe) or flashing red (CVC 21457 (a)).
+    signal = { settle = { "light", "movement" }, gives_way_on_green = { "far_turn" },
+               turn_on_red = { movement = "near_turn", after = "full_stop" }, when_dark = "all_way_stop" },
     -- AN ALL-WAY STOP: everyone stops at the line; then whoever got there first goes; of two arriving together, the one
     -- coming from the other's kerb side; then by movement. Source: CVC 22450 (a) (stop at the limit line of a stop
     -- sign), 21800 (a), (c) (the first to arrive; at an all-way stop, of two arriving together, yield to the vehicle on
@@ -95,6 +100,37 @@ rule_set = {
     gap_shrink = { 0.05, unit = "ratio", source = "[~] a guess to tune" },
     -- A car at rest this near its line has reached it ("I came to rest at this line").
     at_line_within = { 1.0, unit = "m", source = "[~] a guess to tune: about a fifth of a car's length" },
+
+    -- THE TRAFFIC LIGHTS' TIMING (issue #261), worked out for every junction with lights when the level loads.
+    -- YELLOW (the warning that red is coming) = reaction time + approach speed / (2 x deceleration + 2 x gravity x grade):
+    -- the ITE kinematic formula, long enough that a driver who sees the yellow just too late to stop at this deceleration
+    -- reaches the line before red. The approach speed is the arriving lane's limit: 25 mph gives 2.8 s (held to the 3 s
+    -- shortest), 35 mph 3.6 s. The same deceleration decides who stops at a yellow (the dilemma rule below).
+    signal_reaction_time = { 1.0, unit = "s",
+      source = "ITE, Guidelines for Determining Traffic Signal Change and Clearance Intervals (the kinematic formula's perception-reaction time, 1.0 s); checked against secondary summaries, the ITE text itself unread" },
+    signal_deceleration = { 10, unit = "ft/s2",
+      source = "ITE, Guidelines for Determining Traffic Signal Change and Clearance Intervals (the kinematic formula's deceleration, 10 ft/s2); checked against secondary summaries, the ITE text itself unread" },
+    gravity = { 9.81, unit = "m/s2", source = "standard gravity (the yellow formula's grade term)" },
+    yellow_shortest = { 3.0, unit = "s", source = "MUTCD 2009 section 4D.26: a yellow change interval should last at least 3 s and at most 6 s" },
+    yellow_longest = { 6.0, unit = "s", source = "MUTCD 2009 section 4D.26 (as above)" },
+    -- ALL-RED (every movement losing its green shows red while the last car to go clears) = (distance to clear + a design
+    -- vehicle's length) / approach speed: the ITE clearance formula. The distance is how far along the turn it has
+    -- crossed every path it crosses (the far side of the farthest conflicting lane); the speed the arriving lane's limit.
+    all_red_vehicle_length = { 20, unit = "ft",
+      source = "ITE, Guidelines for Determining Traffic Signal Change and Clearance Intervals (the clearance formula's vehicle length, 20 ft); checked against secondary summaries, the ITE text itself unread" },
+    all_red_shortest = { 1.0, unit = "s", source = "[~] a guess to tune: a short all-red where little is left to clear" },
+    all_red_longest = { 6.0, unit = "s", source = "MUTCD 2009 section 4D.26: a red clearance interval should not exceed 6 s" },
+    -- GREEN: the cycle below, less the yellows and all-reds, shared equally between a junction's phases (the lab has no
+    -- traffic counts to share it by), held between these.
+    green_shortest = { 7.0, unit = "s", source = "[~] a guess to tune: a short minimum green that still lets a few queued cars away" },
+    green_longest = { 30.0, unit = "s", source = "[~] a guess to tune" },
+    signal_cycle = { 40.0, unit = "s",
+      source = "[~] after assets/scripts/signals.lua's note: keep a two-phase cycle short, so one red's queue fits a small city block" },
+    -- THE GREEN WAVE: each junction's cycle starts as much later as a car at this speed takes to drive to it from the
+    -- plan's origin in this direction (east, north: a direction on the plan), so lights along it turn green in turn.
+    signal_wave_speed = { 30, unit = "mph", source = "[~] a guess to tune: a little under the arterials' limit" },
+    signal_wave_east = { 1.0, unit = "ratio", source = "[~] a guess to tune: the wave runs east" },
+    signal_wave_north = { 0.0, unit = "ratio", source = "[~] a guess to tune" },
   },
 
   -- THE LIMIT ON A ROAD WITH NONE POSTED, by the road's class (the lane graph's road classes). The control plan posts
@@ -138,6 +174,18 @@ rule_set = {
     { name = "all-way stop",      when = { all = { "everyone_stops", { "not", "stopped_at_line" } } },
       give = { stop_at = "next_line" } },
     { name = "stop sign",         when = { all = { { "sign_rank", "is", "stop" }, { "not", "stopped_at_line" } } },
+      give = { stop_at = "next_line" } },
+    -- TRAFFIC LIGHTS (issue #261). A red: stop at the line (CVC 21453 (a)) -- unless the driver can no longer stop there,
+    -- which the yellow below rules out for anyone driving at the limit (it then clears in the all-red).
+    { name = "red light",         when = { all = { { "light", "is", "red" }, "can_stop_for_light" } },
+      give = { stop_at = "light_line" } },
+    -- A yellow: stop if you can stop comfortably before the line; if you cannot, go on (the yellow is timed for you to
+    -- reach the line before the red). CVC 21452 (a): a yellow warns that the red is coming.
+    { name = "yellow light",      when = { all = { { "light", "is", "yellow" }, "can_stop_for_light" } },
+      give = { stop_at = "light_line" } },
+    -- Red, may turn (turn_on_red above): a full stop at the line first; then the "give way" rule waits for a gap in
+    -- everyone (CVC 21453 (b), section unverified).
+    { name = "turn on red",       when = { all = { { "light", "is", "red_may_turn" }, { "not", "stopped_at_line" } } },
       give = { stop_at = "next_line" } },
   },
 

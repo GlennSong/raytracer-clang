@@ -84,6 +84,11 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
     const bool junctions = hasJunctionStep(facts);
     JunctionNumbers junctionNumbers;
     if (junctions && !readJunctionNumbers(ruleSet, junctionNumbers, why)) return false;
+    // The lights' clock, when the host registered it (buildRoadRules then bound the lights as running, not dark).
+    LightTiming lightTiming;
+    if (roadRules.lightsRun && !readLightTiming(ruleSet, lightTiming, why)) return false;
+    lightsRun_ = roadRules.lightsRun;
+    lightTiming_ = lightTiming;
     junctionsOn_ = junctions;
     junctionNumbers_ = junctionNumbers;
     gapKept_ = *gapKept;
@@ -101,7 +106,11 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
     wanted_.erase(std::unique(wanted_.begin(), wanted_.end()), wanted_.end());
     hasRules_ = true;
     // Who gives way to whom, from the road and these rules; every driver plans its junctions afresh against it.
-    if (roads_) rightOfWay_ = buildRightOfWay(*roads_, ruleSet_, roadRules_);
+    if (roads_) {
+        rightOfWay_ = buildRightOfWay(*roads_, ruleSet_, roadRules_);
+        // ... and every junction's traffic lights timed, with the far turns' places to wait inside checked (#261).
+        if (lightsRun_) timeSignalProgrammes(*roads_, roadRules_, lightTiming_, rightOfWay_);
+    }
     for (std::pair<const CarId, TripId>& entry : tripOfCar_)
         if (Trip* t = trips_.get(entry.second)) t->junctions = JunctionPlans();
     // Answers held under other rules name other rules: every driver decides afresh on the next tick.
@@ -238,8 +247,14 @@ void Driving::announce() {
         if (!c.driven || !t || !c.held.decided || c.vehicleClass >= vehicleClasses_.size()) continue;
         const VehicleClass& cls = vehicleClasses_.at(c.vehicleClass);
         JunctionPlans& plans = t->junctions;
-        for (std::size_t k = 0; k < plans.count; ++k)
-            noteAtTheLine(plans.plans[k], c, cls.brake, n.atLineWithin, tickCount_, clockSeconds_);
+        for (std::size_t k = 0; k < plans.count; ++k) {
+            // What its turn's light shows now (a pure function of the clock; Dark where no light runs a programme): inside
+            // on a red it is committed; standing at a red or a yellow it has not yet come to rest for the traffic (#261).
+            const Lamp lamp = lightsRun_ ? lampAt(*roads_, rightOfWay_, plans.plans[k].connector, clockSeconds_) : Lamp::Dark;
+            const bool red = lamp == Lamp::Red || lamp == Lamp::RedMayTurn;
+            const bool held = lamp == Lamp::Red || lamp == Lamp::Yellow;
+            noteAtTheLine(plans.plans[k], c, cls.brake, n.atLineWithin, tickCount_, clockSeconds_, red, held);
+        }
         for (std::size_t k = 0; k < plans.count; ++k) {
             const JunctionPlan& p = plans.plans[k];
             if (!(p.startOdometer > c.odometer) || !p.connector.valid()) continue;
@@ -386,7 +401,7 @@ void Driving::announce() {
             if (list[k].car != list[k + 1].car && list[k].why != OnPath::Beside && list[k + 1].why != OnPath::Beside)
                 behind_.push_back({list[k + 1].car.index, list[k].car.index});
     }
-    resolver_.study(*roads_, rightOfWay_, board_, behind_);
+    resolver_.study(*roads_, rightOfWay_, board_, behind_, clockSeconds_);
     addCounts(conflictTotals_, resolver_.counts());
 }
 
@@ -446,7 +461,7 @@ void Driving::plan() {
             GiveWayInputs in{*roads_,   rightOfWay_, ruleSet_,   roadRules_,
                              board_,    resolver_,   junctionNumbers_, c,
                              cls.length, cls.brake,  static_cast<Real>(every) * step_, t->person,
-                             clockSeconds_, p.junctions, {}};
+                             clockSeconds_, p.junctions, {}, lightsRun_ ? &lightTiming_ : nullptr, cls.hardestBrake};
             for (std::size_t k = 0; k < kMaxJunctionPlans; ++k) {
                 in.lineIn[k] = kNever;
                 if (k >= p.junctions.count) continue;

@@ -1680,6 +1680,8 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
     co.clearance = g.rules.sameLevelDz;
     out.crossings = findCrossingPoints(G, co);
     out.problems.insert(out.problems.end(), out.crossings.problems.begin(), out.crossings.problems.end());
+    // ... and where a far turn may wait inside its junction for a gap in the oncoming traffic (#261)
+    out.crossings.waitInsidePoints = placeWaitInsidePoints(G);
 
     // ---- the control plan: each junction's control, the signs where roads arrive, the posted limits (#240) ----------
     carryControlPlan(g, opts.control, out);

@@ -196,12 +196,12 @@ constexpr std::size_t kMaxQueueLooked = 16;
 // THE RESOLVER: settles every conflict on a sealed board, once a tick; then answers "who goes first" by lookup.
 class ConflictResolver {
 public:
-    // Settles every conflict on `board` (sealed for this tick), each junction's table read at its current light phase
-    // (right_of_way.h currentPhase).
+    // Settles every conflict on `board` (sealed for this tick), each junction's table read at the phase its lights are in
+    // at clock `now` (signal_programme.h currentPhase: a pure function of the clock).
     // `behind` lists the arrows nobody can turn round from outside the board: (the car ahead, the car behind it on one
     // path: the next in that path's list), as the cars stood at the start of the tick, in any order.
     void study(const engine::LaneGraph& roads, const RightOfWay& row, const AnnouncementBoard& board,
-               const std::vector<std::pair<uint64_t, uint64_t>>& behind = {});
+               const std::vector<std::pair<uint64_t, uint64_t>>& behind = {}, double now = 0);
 
     // The group a crossing point is settled in: its junction, or "no junction".
     static uint32_t groupOf(const engine::LaneGraph& roads, engine::CrossingId crossing);

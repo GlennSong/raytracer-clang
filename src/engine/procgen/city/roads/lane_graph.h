@@ -106,6 +106,12 @@ constexpr uint8_t kOtherSideCount = 3;
 
 // A connector with no place to wait inside its junction.
 constexpr Real kNoWaitInside = -1;
+// TWO APPROACHES TO A JUNCTION FACE EACH OTHER (their traffic meets head on: "oncoming") when the dot of their unit
+// directions of travel, at the ends of their arriving lanes, is below this: within about 37 degrees of opposite, the
+// figure the old signal controller uses for opposing approaches (ADR-0109). The road builder reads it to place a far
+// turn's waiting point inside the junction (lanes/lane_graph_crossings.h placeWaitInsidePoints); the driving model's
+// right-of-way table reads the same one.
+constexpr Real kOncomingDot = -0.8;
 // The tightest radius of a path with no bend at all.
 constexpr Real kNoBend = std::numeric_limits<Real>::infinity();
 

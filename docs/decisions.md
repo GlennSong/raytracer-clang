@@ -18514,3 +18514,133 @@ Whether the midtown ring's junction 75 could go back to a two-way stop (the dead
 junctions lights, ADR-0403): not tried, as it means re-planning the lab's road graph; the deadlock's shape (a car queued
 behind one giving way to a car that gave way to it) is now a ring through a queue, which the resolver breaks.
 
+## ADR-0406 — Traffic lights by movement, timed from the rule set, their state a pure function of the clock (#261)
+
+Words: a MOVEMENT is one turn through a junction (a connector); a PHASE is a set of movements green together (ADR-0401
+groups them); a PROGRAMME is a junction's phases in order, each GREEN, then YELLOW (the warning that red is coming) and
+ALL-RED (every movement losing its green shows red while the last cars clear) for the movements losing their green; the
+CYCLE is one pass through the phases; the OFFSET shifts a junction's cycle; a GREEN WAVE is offsets chosen so lights along
+a direction turn green one after another for traffic going that way; the DILEMMA is the yellow's question, stop or go;
+a far turn's PLACE TO WAIT INSIDE is where it may pull forward on a plain green to wait for a gap (design 5.2's
+`waitInsideAt`).
+
+**Context.** Driving model task D2 (#261). The lab's 38 junctions with lights ran as all-way stops (`when_dark`, ADR-0403):
+no light clock existed, and `currentPhase` was fixed at 0. Owed from #263: waiting inside for a far turn on a green, a
+builder that sets `waitInsideAt`, the road-data check the D4 brief asks for, and D4's staged tests 1, 2, 5 and 6 with lights.
+
+**Decision.**
+- **The programme is D1's phases, timed** (`src/apps/driving/signal_programme.h`, `timeSignalProgrammes`, run by
+  `Driving::useRules` after `buildRightOfWay`). Nothing new decides which movements go together; the timing lives on the
+  phases (`Phase::green/yellow/allRed`, `JunctionRules::cycle/offset`). Numbers and formulas from the rule set (the
+  light clock's reader, `registerLightClock`, declares the 14 numbers, so `buildRoadRules` names any a rule set lacks):
+  - YELLOW = reaction + approach speed / (2 x deceleration + 2 x gravity x grade) (ITE's kinematic formula: 1.0 s,
+    10 ft/s2), the approach speed the arriving lane's limit (posted or default), the grade its climb at the line; held to
+    3-6 s (MUTCD 2009 4D.26). The longest over the movements losing their green. 25 mph gives 2.8 s, held to 3.0; 30 mph
+    3.2; 35 mph 3.6.
+  - ALL-RED = (distance to clear + 20 ft) / approach speed (ITE's clearance formula), the distance being how far along the
+    turn its last CROSS ends (joins and splits left out: past them a car only follows); held to 1-6 s (6: MUTCD 4D.26).
+    First tried with the turn's own speed and joins counted: every lab junction hit the 6 s ceiling (cycles 66-82 s at the
+    multi-phase junctions); a car still inside at the next green is safe either way (below), so the published formula,
+    approach speed, stands.
+  - GREEN = (target cycle 40 s - the yellows and all-reds) / phases, held to 7-30 s ([~]: the lab has no counts to split
+    by). The target follows the old `signals.lua` note (short cycles, so a red's queue fits a block).
+  - OFFSET: a green wave east at 30 mph: the phase serving the approach most nearly along the wave's line starts when a car
+    at that speed from the plan's origin would arrive. Rotating to that phase matters: phases are numbered in no order of
+    direction, and two lights 26 m apart (the lab's junctions 11 and 110) that started phase 0 together served crossing
+    roads at once.
+  - A movement green in two phases in a row stays green through the change (no yellow, no all-red for it).
+- **State is a pure function of the clock**: `signalAt(junction, t)`, `currentPhase(junction, t)` and
+  `lampAt(connector, t)` read the programme and the time only; nothing per junction is stored while cars drive. The
+  resolver (`study(..., now)`), the judgement, the driver card and `Driving::lamp` all read them. `checkSignalProgrammes`
+  samples every stage of every phase and reports two movements whose paths meet both letting traffic in, unless they come
+  from facing approaches and one is a `gives_way_on_green` movement.
+- **Drivers obey through facts and rules, not C++ cases.** New facts (`give_way.h`): `light` (the lamp at the nearest lights
+  ahead that are NOT green for my turn -- a green near junction must not hide a red just beyond it -- else the nearest),
+  `light_line`, `can_stop_for_light` (holding what I decide for my decide interval, then braking at the yellow's own
+  deceleration; once I hold a stop at that line, while my hardest braking still can). `lab.lua`: "red light" and "yellow
+  light" stop at `light_line` when `can_stop_for_light`; "turn on red" (`turn_on_red = { movement = "near_turn", after =
+  "full_stop" }`, CVC 21453 (b)) makes the full stop, then the give-way table (red, may turn: gives way to everyone) does
+  the rest. The table is read at the current phase, so a permitted far turn gives way to oncoming traffic on the green.
+  Two mechanisms in the judgement (`judgeGiveWay`): a driver that can still stop before a RED decides nothing there; and
+  `noteAtTheLine` starts an approach afresh at a red before the line (decision, arrival, came-to-rest cleared: they were for
+  a green that is over), and does not note "came to rest" while a red or yellow holds the car, so patience and arrival
+  start at its green. Without these, every red turned "go" into "give way" and back: 16 drivers "changed their mind
+  twice" in five minutes; with them, 2.
+- **Committed on a red.** A car past its line (by more than at_line_within) whose light shows red is committed whatever its
+  waiting points say: it entered lawfully (CVC 21451 (a)), and the next green's cars wait for it (`committed_first`).
+  Otherwise a far turn waiting inside at the change waits through the cross street's whole green.
+- **Two close lights.** The give-way judgement's "line before" (a car whose body would not fit between two junctions stops
+  at the first) applies to a red beyond too, but only if both lights will be green together for the car's two turns
+  within two of the longer cycle (`greensMeet`, sampling the pure lamps every 0.5 s): at the lab's junctions 11 and 110 a
+  far turn at 11 into 110 is never green at both, and the car waited 216 s. It then goes in and waits with its tail in the
+  first box -- a road-data matter (such lights want one programme), and room beyond's (D5).
+- **Waiting inside.** The builder places `waitInsideAt` by shape (`placeWaitInsidePoints`: short of the first stretch met
+  with a path from a facing approach, `engine::kOncomingDot`, the same -0.8 the table reads; none for a T or a turn meeting
+  none). LGRF unchanged; builder version 5; road meshes unchanged (`lanes_tool build` traffic_lab.glb byte-identical). The
+  check the D4 brief asks for is made at load against the rule set's table (it is policy: who the turn gives way to):
+  in every phase the turn is green, it must go first at every crossing point whose stretch begins before the point; a
+  point that fails is dropped with a note. Kept only at lights running a programme. A car whose whole body fits past the
+  line adds it to its waiting points; on its own green, giving way at a crossing point at or beyond it, it pulls forward
+  instead of stopping at the line (never on yellow, red or an arrow). The brief's argument needed one more piece: the point
+  usually lies on the SPLIT stretch where the far turn and straight on leave one lane, where the car behind no longer sees
+  the waiting car once its tail is off the lane (it drove through it, 47 pairs in ten minutes on the test grid). The car
+  behind now waits behind a car standing inside on its split stretch (`GiveWayCause::BehindInMyLane`) and, as a queued car
+  does, announces "not going" beyond -- which also broke a ring of two opposing far turns each waiting for the other's
+  oncoming car, stuck behind the other far turn.
+- **Lights dark** (`when_dark`) is now a run-time state, `RoadRules::lightsRun`: a host that does not register the light
+  clock gets dark lights; the compile-time `kLightsRunAProgramme` is gone. The city sim registers it when the rule set has
+  a control with lights.
+- **Lamps are not wired** (below).
+
+**Measured** (the lab, 300 drivers, five simulated minutes; before = the same tree with the lights dark):
+
+| | before (dark: all-way stops) | after (lights run) |
+|---|---|---|
+| lights: junctions, phases (by count), cycles | 0 | 38: 2-phase x31 (40.0 s), 3-phase x2 (41.2, 42.6), 4-phase x3 (55.3-60.0), 5-phase x2 (77.2, 77.4) |
+| far turns that may wait inside (dropped by the check) | -- | 100 (5) |
+| cars onto a red / turned on red after stopping / onto a yellow | -- | 0 / 20 / 41 (of 770 crossing lit lines) |
+| mean wait at lights (standing on the lane arrived by, queue included); longest | -- | 7.0 s a car; 133.1 s |
+| trips begun / arrived | 717 / 417 | 705 / 405 |
+| mean speed (the test's; the host's) | 8.80; 8.56 m/s | 8.61; 8.35 m/s |
+| longest wait at a junction's line | 39.5 s | 83.4 s (a permitted far turn giving way) |
+| pairs overlapping where paths cross / join inside a junction; across junctions | 0 / 0; 0 | 0 / 0; 0 |
+| loops; cars waiting with no reason; cars standing over 60 s | 0; 0; 0 | 2 (5 cars, 1 s each); 0; 10 |
+| drivers changing their minds twice; waits inside a junction | 3; 71 | 2; 92 |
+| the model's tick (worst) | 0.339 ms (0.999) | 0.376 ms (0.908) |
+
+The freeway free-flow check passes (75% of the limit). The state hash is the same at every second of two runs. On the
+synthetic grid (`tests/test_driving_give_way.cpp` lights_18-25): the yellow at 25-75 mph and +/-4% grades is the formula's;
+no unsafe stage at any junction, with or without arrows; phase and lamps the same forwards, backwards and a cycle on; a car
+sent at a red stops 0.03 m short of the line and goes on the green; at the yellows 26 cars that could stop waited and 2 that
+could not went on, none otherwise; D4's tests 1 (the far turn stops 4.9 m in, its place 5.0 m, and goes after three
+oncoming cars), 2 (with no gap all green it leaves on the change, the cross street after it), 5 (the grid's far turns pass
+in front of each other; the crossing shape the grid cannot make, the lab has 20 such pairs at lights) and 6 (ten minutes at
+a four-way: no overlap, no loop, nobody with no reason, nobody onto a red, no car inside at the start of two greens, 34
+waits inside).
+
+**Not met, and why.**
+- *Loops*: 2 in five minutes, each seen once (1 s): the same five cars at junctions 11 and 14, which a 6-7 m lane joins each
+  way: a car queued at 11 with its tail in 14's box, a far turn waiting inside 14 for that body, a car behind it, a car
+  behind that inside 11's box, and a far turn at 11 giving way to its body. Every car entered a box it could not leave:
+  room beyond (D5) is what prevents it, and the D4 brief's "a car needs room beyond granted before it may enter to wait" is
+  not met until D5. Not patched here.
+- *Standing over 60 s*: 10 cars (red light 5, behind a car 3, give way 1, yellow 1; the longest 82 s, a permitted far turn
+  finding no gap). The longest cycles are 77 s (the five-road junctions 21 and 75) and 55-60 s (four phases): a car
+  reaching a red just after its green there waits nearly a cycle, and a queue longer. The 60 s limit is below the lab's
+  longest cycle; proposed: the longest cycle plus one green and change (about 100 s) for "standing", or shorter cycles at
+  the many-phase junctions (green_shortest 7 -> 5 s gives 67 s), or protected far-turn arrows where the permitted far turn
+  starves. Left at 60 for Glenn to choose.
+- *Lamps*: the drawn signal heads are the old model's (`StreetFurniture::Signal`, placed by `planStreetFurniture` at nav-graph
+  nodes with four or more approaches, coloured each frame from `citysim::SignalController::stateForLink` through a number
+  in the instance transform, `city_render.cpp`). The lab draws 339 heads cycling on the old controller, at a different set
+  of junctions from the lane graph's 38 with lights. Making them read `Driving::lamp(connector)` needs a map from each head
+  (a nav link entering a node) to a lane graph junction and approach (geometric: the lane graph keeps no nav ids), a branch
+  in the per-frame write, and -- for the right heads at the right junctions -- the poles planted from the lane graph's
+  `signal` junctions, as #241 plants signs. Not done.
+- *Opposing far turns that cross* (D4 test 5's other shape): not on a hand-made junction; the lab has them.
+
+**Owed.** Room beyond (D5), which the loops above wait for. Lamps from the lane graph (above). Protected far turns in the
+lab's policy where a permitted one starves (`arrow`, measured not chosen). Junctions closer than a car (11/14/110) run as one
+programme, or placed so (the planner's `apart`). Traffic-actuated timing would need detectors; the programme is fixed time
+on purpose (a pure function of the clock).
+

@@ -58,6 +58,15 @@
 // give_way_gap_needed (seconds), committed and stopped_at_line (yes/no), and for full stops next_line, everyone_stops and
 // sign_rank. The judgement is worked out once per decision (judgeGiveWay) and the facts read it.
 //
+// TRAFFIC LIGHTS (issue #261; signal_programme.h is the clock). The table is read at the phase the junction is in now. A
+// driver that can still stop before a RED decides nothing there (the light holds it; the red starts its approach afresh:
+// announce.h noteAtTheLine). The facts light, light_line and can_stop_for_light say what its turn's lamp shows at the
+// lights ahead, where it stops for them and whether it can (the dilemma at a yellow); the rule set's rules act on them.
+// WAITING INSIDE: on its own green, a far turn that must give way at a crossing point at or beyond its place to wait
+// inside (JunctionPlan::waitInsideAt) pulls forward to it instead of stopping at the line. A car from the same lane that
+// would leave by another turn (a split) waits behind a car standing inside on the split's stretch (cause BehindInMyLane:
+// its tail may be off the lane, where following no longer sees it), and is not this junction's traffic while it does.
+//
 // Same result every run: the board is sorted, the resolver settles each conflict once a tick from it, and crossing points
 // are read in their order along the connector.
 //
@@ -70,6 +79,7 @@
 #include "apps/driving/notice.h"
 #include "apps/driving/right_of_way.h"
 #include "apps/driving/rule_set.h"
+#include "apps/driving/signal_programme.h"   // the lights' clock: the lamp a driver sees, and the yellow's numbers
 #include "apps/driving/traffic_state.h"
 
 #include <array>
@@ -108,6 +118,18 @@ constexpr const char* kFactStoppedAtLine = "stopped_at_line";         // yes/no:
 constexpr const char* kFactNextLine = "next_line";                    // place
 constexpr const char* kFactEveryoneStops = "everyone_stops";          // yes/no: that junction's control says so
 constexpr const char* kFactSignRank = "sign_rank";                    // word: the rank of the sign on my approach
+// TRAFFIC LIGHTS (issue #261): among the junctions ahead whose lights run a programme (signal_programme.h) and whose line
+// my front has not passed by more than at_line_within, the nearest whose lamp for my turn is not green -- a green near
+// junction must not hide a red just beyond it -- or else the nearest. Absent where there is none (no lights, or dark).
+// What my turn's lamp shows there: "green", "yellow", "red", "red_may_turn" (signal_programme.h lampWords).
+constexpr const char* kFactLight = "light";                           // word
+// Where I stop for it: its line (even where my body would not fit between the junction before and it: see give_way.cpp).
+// A rule set says { when = { "light", "is", "red" }, give = { stop_at = "light_line" } }.
+constexpr const char* kFactLightLine = "light_line";                  // place
+// THE DILEMMA: can I stop at light_line, holding what I decide now for my decide interval and then braking at the rule
+// set's signal_deceleration (the deceleration the yellow is timed for)? A driver who cannot is, by the yellow's own
+// formula, able to reach the line before the red. { all = { { "light", "is", "yellow" }, "can_stop_for_light" } }.
+constexpr const char* kFactCanStopForLight = "can_stop_for_light";    // yes/no
 
 // THE NUMBERS, read once when the rules are handed over.
 struct JunctionNumbers {
@@ -171,6 +193,9 @@ struct GiveWayInputs {
     const JunctionPlans& plans;
     // Per plan: the time the board has me reaching its line, seconds (kNever: too far to announce it yet).
     std::array<Real, kMaxJunctionPlans> lineIn{};
+    // The light clock's numbers when the lights run a programme (signal_programme.h); null when they are dark.
+    const LightTiming* lights = nullptr;
+    Real hardestBrake = 0;    // my hardest braking, m/s2 (a driver already stopping for a light keeps stopping while it can)
 };
 
 // WHAT ONE DRIVER JUDGED.
@@ -192,6 +217,12 @@ struct GiveWayVerdict {
     bool stoppedAtLine = false;
     bool everyoneStops = false;
     int signRank = 0;
+    // THE NEAREST LIGHTS AHEAD (issue #261; the light facts above): what my turn's lamp shows, how far ahead I stop for
+    // it, and whether I can stop there (the dilemma).
+    bool hasLight = false;
+    Lamp lamp = Lamp::Dark;
+    Real toLightLine = 0;
+    bool canStopForLight = false;
 };
 
 // JUDGES every planned junction, nearest first (see the top of this file).

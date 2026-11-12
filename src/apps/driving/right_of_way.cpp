@@ -459,8 +459,6 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
     return out;
 }
 
-uint32_t currentPhase(const RightOfWay&, engine::JunctionId) { return 0; }
-
 MyTurn myTurn(const LaneGraph& roads, const MeetingAnswer& a, CrossingId crossing, PathId path, PathId* otherPath) {
     if (!crossing.valid() || crossing.index >= roads.crossings.size()) return MyTurn::Neither;
     const CrossingPoint& rec = roads.crossings[crossing.index];
@@ -595,8 +593,11 @@ std::string describeJunctionRules(const LaneGraph& roads, const RuleSet& rules, 
             else if (l == Light::RedMayTurn) redTurn += " " + std::to_string(c.index);
         }
         if (!redTurn.empty()) out += "; red, may turn:" + redTurn;
+        if (jr.running())
+            out += "; green " + one(p.green) + " s, then yellow " + one(p.yellow) + " s and all-red " + one(p.allRed) + " s";
         out += "\n";
     }
+    if (jr.running()) out += "  cycle " + one(jr.cycle) + " s, offset " + one(jr.offset) + " s\n";
     for (uint32_t c = jn.crossings.first; c < jn.crossings.end() && c < roads.crossings.size(); ++c) {
         const CrossingPoint& rec = roads.crossings[c];
         if (rec.otherSide != engine::OtherSide::Path || row.answersOf[c].count == 0) continue;
@@ -627,6 +628,11 @@ std::string describeRightOfWay(const RightOfWay& row) {
                       " asked while driving (" + std::to_string(n.acrossJunctions) + " of them across two junctions), " +
                       std::to_string(n.splits) + " splits; " + std::to_string(n.byLowerPathId) +
                       " left in some part to the lower path id\n";
+    if (n.junctionsTimed > 0)
+        out += "  lights running a programme: " + std::to_string(n.junctionsTimed) + " junctions, cycles " + one(n.shortestCycle) +
+               "-" + one(n.longestCycle) + " s; " + std::to_string(n.waitInsidePoints) +
+               " far turns may wait inside on their green (" + std::to_string(n.waitInsideDropped) +
+               " places the builder marked refused at load)\n";
     for (std::size_t i = 0; i < row.notes.size() && i < kNotesShown; ++i) out += "  " + row.notes[i] + "\n";
     if (row.notes.size() > kNotesShown)
         out += "  ... and " + std::to_string(row.notes.size() - kNotesShown) + " more notes\n";

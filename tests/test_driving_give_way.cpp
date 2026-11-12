@@ -25,6 +25,16 @@
 //      signs is not crossed by it ("it committed first");
 //  17. a slow truck merging from a stop sign while the main road looked empty is followed, not hit, on the lane after
 //      the join, by a car that was speeding up out of sight. Both overlapped before D4 (checked by switching it off).
+//  TRAFFIC LIGHTS (issue #261, task D2; the light clock registered):
+//  18. the yellow and the all-red follow the ITE formulas at several speeds and grades, and every programme's yellow does;
+//  19. no two movements whose paths meet let traffic in together in any stage of any phase (with and without arrows),
+//      and the phase and every lamp are the same however and in whatever order they are asked, and a cycle on;
+//  20. a car sent at a red stops at the line and goes on the green;
+//  21. the yellow dilemma both ways: cars that can stop do, cars that cannot go on before the red;
+//  22. (D4 staged test 1) a far turn waits inside while three oncoming cars pass, and goes in the gap after;
+//  23. (D4 staged test 2) with no gap all green, it completes on the change, and the cross street goes after it;
+//  24. (D4 staged test 5) opposing far turns (the shape where they pass in front of each other; the grid makes no other);
+//  25. (D4 staged test 6, lights) ten minutes of random traffic at a four-way with lights.
 
 #include "test_framework.h"
 
@@ -126,7 +136,21 @@ rule_set = { name = 'd3', drives_on = 'left', ranks = { 'priority', 'give_way', 
     gap_hard = { 1.0, unit = 's', source = 'test' },
     gap_floor = { 1.5, unit = 's', source = 'test' },
     gap_shrink = { 0.05, unit = 'ratio', source = 'test' },
-    at_line_within = { 1.0, unit = 'm', source = 'test' } },
+    at_line_within = { 1.0, unit = 'm', source = 'test' },
+    signal_reaction_time = { 1.0, unit = 's', source = 'test: the lab' },
+    signal_deceleration = { 10, unit = 'ft/s2', source = 'test: the lab' },
+    gravity = { 9.81, unit = 'm/s2', source = 'test' },
+    yellow_shortest = { 3, unit = 's', source = 'test: the lab' },
+    yellow_longest = { 6, unit = 's', source = 'test: the lab' },
+    all_red_vehicle_length = { 20, unit = 'ft', source = 'test: the lab' },
+    all_red_shortest = { 1, unit = 's', source = 'test: the lab' },
+    all_red_longest = { 6, unit = 's', source = 'test: the lab' },
+    green_shortest = { 7, unit = 's', source = 'test: the lab' },
+    green_longest = { 30, unit = 's', source = 'test: the lab' },
+    signal_cycle = { 40, unit = 's', source = 'test: the lab' },
+    signal_wave_speed = { 30, unit = 'mph', source = 'test: the lab' },
+    signal_wave_east = { 1, unit = 'ratio', source = 'test: the lab' },
+    signal_wave_north = { 0, unit = 'ratio', source = 'test: the lab' } },
   personality = {
     gap_kept = { usual = 1.5, low = 1.2, high = 1.8, unit = 's', source = 'test' },
     speed_habit = { usual = 1, low = 0.95, high = 1.05, unit = 'ratio', source = 'test' },
@@ -142,6 +166,12 @@ rule_set = { name = 'd3', drives_on = 'left', ranks = { 'priority', 'give_way', 
       give = { stop_at = 'next_line' } },
     { name = 'stop sign', when = { all = { { 'sign_rank', 'is', 'stop' }, { 'not', 'stopped_at_line' } } },
       give = { stop_at = 'next_line' } },
+    { name = 'red light', when = { all = { { 'light', 'is', 'red' }, 'can_stop_for_light' } },
+      give = { stop_at = 'light_line' } },
+    { name = 'yellow light', when = { all = { { 'light', 'is', 'yellow' }, 'can_stop_for_light' } },
+      give = { stop_at = 'light_line' } },
+    { name = 'turn on red', when = { all = { { 'light', 'is', 'red_may_turn' }, { 'not', 'stopped_at_line' } } },
+      give = { stop_at = 'next_line' } },
   } }
 )LUA";
 }
@@ -150,6 +180,10 @@ const char* kUncontrolled = "{ settle = { 'arrived_first', 'kerb_side', 'movemen
 const char* kAllWayStop = "{ settle = { 'arrived_first', 'kerb_side', 'movement' }, everyone_stops = true }";
 const char* kMinorStop = "{ settle = { 'sign_rank', 'movement', 'arrived_first' } }";
 const char* kLights = "{ settle = { 'light', 'movement' }, gives_way_on_green = { 'far_turn' } }";
+// The lab's lights (issue #261): a far turn on a plain green gives way; the near turn may be made on red after a full stop.
+const char* kLabLights =
+    "{ settle = { 'light', 'movement' }, gives_way_on_green = { 'far_turn' }, "
+    "turn_on_red = { movement = 'near_turn', after = 'full_stop' } }";
 
 // A stop sign standing at the end of `lane` (a "stop" regulation), as the T test of D1 places one.
 void standStopSign(engine::LaneGraph& g, engine::PathId lane) {
@@ -224,9 +258,21 @@ struct Sim {
     std::vector<WaitLoop> loops;                            // every loop the wait-for graph showed
     uint64_t noReason = 0;
     uint64_t arrived = 0;
+    bool lightsOn = false;
+    // AT LIGHTS (issue #261): fronts crossing a line by what their turn's lamp showed as the tick began, and each car's
+    // tick of entering its connector (by connector) and of leaving it.
+    uint64_t enteredOnRed = 0, enteredOnYellow = 0, enteredOnGreen = 0, turnedOnRed = 0;
+    std::map<uint32_t, uint32_t> frontWas;                  // per car: the path its front was on last tick
+    std::map<uint32_t, std::vector<std::pair<uint32_t, double>>> enteredConnector, exitedConnector;   // (connector, clock)
+    std::map<uint32_t, uint32_t> restedInside;              // per car: ticks at rest with its front on a connector
+    std::map<uint32_t, uint32_t> greensInside;              // per car: greens begun while its front is on a connector
+    uint32_t mostGreensInside = 0;                          // ... the most for one stay
 
-    Sim(TestRoads roads, const char* control, uint32_t decideEvery = DrivingSettings::kDefaultDecideEveryTicks)
-        : t(std::move(roads)), d(&t.graph) {
+    // `lights`: register the light clock, so a control with lights runs its programme (issue #261); without it they are
+    // dark (here: fixed at their first phase, as the test controls name no `when_dark`).
+    Sim(TestRoads roads, const char* control, uint32_t decideEvery = DrivingSettings::kDefaultDecideEveryTicks,
+        bool lights = false)
+        : t(std::move(roads)), d(&t.graph), lightsOn(lights) {
         classes.add(driving_test::testCarClass());
         VehicleClass bus = deriveVehicleClass("test_bus", 12.0, 2.5, 6.0, 40);
         bus.tags = {driving_test::kTestVehicleTag};
@@ -259,7 +305,7 @@ struct Sim {
             return false;
         }
         std::vector<std::string> problems;
-        if (!registerJunctionFacts(facts, ruleSet.ranks, &problems) ||
+        if (!registerJunctionFacts(facts, ruleSet.ranks, &problems) || (lightsOn && !registerLightClock(facts, &problems)) ||
             !loadRules(vm, kFile, facts, ruleSet, vocabulary, rules, &err)) {
             std::printf("    rules: %s\n", err.c_str());
             return false;
@@ -288,6 +334,7 @@ struct Sim {
 
     // One tick, and a look at everything.
     void step() {
+        const double before = d.clockSeconds();
         d.tick(kStep);
         // Cars that arrived are taken off the road (they would stand on the lane, parked, in everyone's way).
         std::vector<CarId> parked;
@@ -301,6 +348,32 @@ struct Sim {
         for (const Car& c : d.cars()) {
             const uint32_t id = c.id.index;
             const bool onConnector = t.graph.paths[c.path.index].kind == engine::PathKind::Connector;
+            // AT LIGHTS (issue #261): a front coming onto a connector, by what its lamp showed as the tick began; a front
+            // leaving one; a front at rest on one.
+            std::map<uint32_t, uint32_t>::iterator was = frontWas.find(id);
+            if (was != frontWas.end() && was->second != c.path.index) {
+                const engine::Path& from = t.graph.paths[was->second];
+                if (onConnector) {
+                    enteredConnector[id].push_back({c.path.index, d.clockSeconds()});
+                    const Lamp lamp = lampAt(t.graph, d.rightOfWay(), c.path, before);
+                    enteredOnRed += lamp == Lamp::Red;
+                    enteredOnYellow += lamp == Lamp::Yellow;
+                    enteredOnGreen += lamp == Lamp::Green;
+                    turnedOnRed += lamp == Lamp::RedMayTurn;
+                }
+                if (from.kind == engine::PathKind::Connector) exitedConnector[id].push_back({was->second, d.clockSeconds()});
+            }
+            frontWas[id] = c.path.index;
+            if (onConnector && c.speed < kStandingBelow) ++restedInside[id];
+            // Inside a junction with lights at the start of a green: counted per stay (D4's staged test 6).
+            if (!onConnector) greensInside.erase(id);
+            const engine::JunctionId j = t.graph.paths[c.path.index].junction;
+            if (onConnector && lightsOn && j.valid()) {
+                const SignalNow now = signalAt(d.rightOfWay(), j, d.clockSeconds());
+                const SignalNow then = signalAt(d.rightOfWay(), j, before);
+                if (now.running && now.stage == Stage::Green && (then.phase != now.phase || then.stage != Stage::Green))
+                    mostGreensInside = std::max(mostGreensInside, ++greensInside[id]);
+            }
             if (!onConnector && enteredJunction.count(id)) leftJunction[id] = true;
             if (!lowestSpeed.count(id) || c.speed < lowestSpeed[id]) lowestSpeed[id] = c.speed;
             if (!leftJunction[id] && (!mostBraking.count(id) || c.acceleration < mostBraking[id]))
@@ -326,7 +399,11 @@ struct Sim {
         for (std::size_t a = 0; a < bodies.size(); ++a)
             for (std::size_t b = a + 1; b < bodies.size(); ++b) {
                 if (((bodies[a].front - bodies[b].front).length()) > 30) continue;
-                if (overlap(bodies[a], bodies[b])) overlapping.insert({bodies[a].car.index, bodies[b].car.index});
+                if (overlap(bodies[a], bodies[b]) &&
+                    overlapping.insert({bodies[a].car.index, bodies[b].car.index}).second &&
+                    std::getenv("RT_GIVE_WAY_OVERLAP_CARDS"))   // the two cards at a pair's first overlap
+                    std::printf("---- overlap t=%.2f\n%s%s", d.clockSeconds(), d.describeCar(bodies[a].car).c_str(),
+                                d.describeCar(bodies[b].car).c_str());
             }
         // RT_GIVE_WAY_WATCH=<car>,<from s>,<to s>: that car's card and every announcement on its connector's crossing
         // points, every tick of that window (for a person chasing one decision).
@@ -352,7 +429,13 @@ struct Sim {
         if (d.tickCount() % 60 == 0) {
             const WaitReport r = d.waitReport();
             noReason += r.noReason.size();
-            for (const WaitLoop& l : r.loops) loops.push_back(l);
+            for (const WaitLoop& l : r.loops) {
+                loops.push_back(l);
+                if (std::getenv("RT_GIVE_WAY_OVERLAP_CARDS")) {   // ... and a loop's cards, each time it is seen
+                    std::printf("---- loop t=%.2f\n%s", d.clockSeconds(), d.describeWaiting(r).c_str());
+                    for (const CarId car : l.cars) std::printf("%s", d.describeCar(car).c_str());
+                }
+            }
             // RT_GIVE_WAY_DEBUG=<seconds>: every driven car's card at that second, for a person to read.
             const char* debug = std::getenv("RT_GIVE_WAY_DEBUG");
             if (debug && static_cast<uint64_t>(std::atof(debug) * 60 + 0.5) == d.tickCount()) {
@@ -1070,6 +1153,366 @@ TEST_CASE(give_way_17_a_car_merging_ahead_is_followed_not_hit) {
     CHECK(s.arrived == 2);
     CHECK(s.entryOrder().size() == 2 && s.entryOrder()[0].second == 0);
     CHECK(followed);
+}
+
+// ---- 18 to 25. Traffic lights by movement, timed from the rule set (issue #261, task D2) -------------------------------
+
+namespace {
+
+// The lab's light timing (rulesLua's numbers), for the formula checks.
+LightTiming labTiming(const Sim& s) {
+    LightTiming t;
+    CHECK(readLightTiming(s.d.ruleSet(), t));
+    return t;
+}
+
+// Steps `s` until connector `c`'s lamp turns to `want` (it shows something else, then `want`), at most `limit` seconds.
+bool stepUntilLamp(Sim& s, engine::PathId c, Lamp want, Real limit) {
+    Lamp was = s.d.lamp(c);
+    for (int i = 0; i < static_cast<int>(limit / kStep); ++i) {
+        s.step();
+        const Lamp now = s.d.lamp(c);
+        if (now == want && was != want) return true;
+        was = now;
+    }
+    return false;
+}
+
+// The connector at junction (r, c) from the offside lane arriving heading `in` to the one leaving heading `out`.
+engine::PathId turnAt(const Sim& s, uint32_t r, uint32_t c, Heading in, Heading out) {
+    return s.t.connector(r, c, in, 0, out, 0);
+}
+
+}  // namespace
+
+TEST_CASE(lights_18_the_yellow_and_all_red_follow_the_formula) {
+    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    CHECK(s.ok);
+    const LightTiming t = labTiming(s);
+    // The ITE kinematic formula: reaction + v / (2 a + 2 g G), a = 10 ft/s2, held between 3 and 6 s.
+    const Real a = 10 * 0.3048;
+    const Real mph = 0.44704;
+    struct Case {
+        Real mph, grade, expected;
+    };
+    const Case cases[] = {
+        {25, 0, 3.0},                                   // 2.83 s: held to the shortest, 3 s
+        {35, 0, 1.0 + 35 * mph / (2 * a)},              // 3.57 s
+        {45, 0, 1.0 + 45 * mph / (2 * a)},              // 4.30 s
+        {55, 0, 1.0 + 55 * mph / (2 * a)},              // 5.03 s
+        {35, 0.04, 1.0 + 35 * mph / (2 * a + 2 * 9.81 * 0.04)},    // uphill: shorter
+        {35, -0.04, 1.0 + 35 * mph / (2 * a - 2 * 9.81 * 0.04)},   // downhill: longer
+        {75, 0, 6.0},                                   // 6.5 s: held to the longest, 6 s
+    };
+    for (const Case& c : cases) {
+        const Real got = yellowSeconds(t, c.mph * mph, c.grade);
+        std::printf("    yellow at %.0f mph on a %+.0f%% grade: %.2f s (expected %.2f)\n", c.mph, 100 * c.grade, got, c.expected);
+        CHECK_APPROX(got, c.expected, 1e-9);
+    }
+    // ITE clearance: (W + L) / v, L = 20 ft, held between 1 and 6 s.
+    CHECK_APPROX(allRedSeconds(t, 20, 30 * mph), (20 + 20 * 0.3048) / (30 * mph), 1e-9);
+    CHECK_APPROX(allRedSeconds(t, 0, 60 * mph), 1.0, 1e-9);
+    CHECK_APPROX(allRedSeconds(t, 200, 10 * mph), 6.0, 1e-9);
+    // Every timed change on the test grid (a 30 mph limit everywhere, flat): its yellow is the formula's.
+    const RightOfWay& row = s.d.rightOfWay();
+    CHECK(s.d.lightsRun());
+    CHECK(row.counts.junctionsTimed == static_cast<uint32_t>(s.t.graph.junctions.size()));
+    for (const Phase& p : row.phases)
+        if (p.yellow > 0) CHECK_APPROX(p.yellow, yellowSeconds(t, s.t.spec.speedLimit, 0), 1e-9);
+    std::printf("%s", describeProgramme(s.t.graph, row, s.t.junction(1, 1)).c_str());
+}
+
+TEST_CASE(lights_19_nothing_that_crosses_is_green_together_and_the_state_is_a_pure_function_of_time) {
+    for (const char* control : {kLabLights, "{ settle = { 'light', 'movement' }, gives_way_on_green = { 'far_turn' }, "
+                                            "arrow = { 'far_turn' } }"}) {
+        Sim s(driving_test::gridRoads(3, 3), control, DrivingSettings::kDefaultDecideEveryTicks, true);
+        CHECK(s.ok);
+        const RightOfWay& row = s.d.rightOfWay();
+        const std::vector<std::string> unsafe = checkSignalProgrammes(s.t.graph, s.d.ruleSet(), row);
+        for (const std::string& u : unsafe) std::printf("    %s\n", u.c_str());
+        CHECK(unsafe.empty());
+        const engine::JunctionId j = s.t.junction(1, 1);
+        std::printf("%s", describeProgramme(s.t.graph, row, j).c_str());
+        // The same answer however often, and in whatever order, it is asked: forwards, backwards, and one cycle on.
+        const engine::Junction& jn = s.t.graph.junctions[j.index];
+        const Real cycle = row.junctions[j.index].cycle;
+        constexpr int kSamples = 400;
+        std::vector<Lamp> forwards;
+        std::vector<uint32_t> phases;
+        for (int k = 0; k < kSamples; ++k) {
+            const double at = 0.37 * k;
+            phases.push_back(currentPhase(row, j, at));
+            for (uint32_t i = 0; i < jn.connectors.count; ++i)
+                forwards.push_back(lampAt(s.t.graph, row, s.t.graph.junctionConnectors[jn.connectors.first + i], at));
+        }
+        int differ = 0;
+        for (int k = kSamples - 1; k >= 0; --k) {
+            const double at = 0.37 * k;
+            const SignalNow here = signalAt(row, j, at);
+            const bool nearEdge = std::min(here.into, here.remaining) < 1e-6;
+            differ += currentPhase(row, j, at) != phases[static_cast<std::size_t>(k)];
+            if (!nearEdge) differ += currentPhase(row, j, at + 3 * cycle) != phases[static_cast<std::size_t>(k)];
+            for (uint32_t i = 0; i < jn.connectors.count; ++i) {
+                const engine::PathId c = s.t.graph.junctionConnectors[jn.connectors.first + i];
+                const Lamp was = forwards[static_cast<std::size_t>(k) * jn.connectors.count + i];
+                differ += lampAt(s.t.graph, row, c, at) != was;
+                if (!nearEdge) differ += lampAt(s.t.graph, row, c, at + 3 * cycle) != was;
+            }
+        }
+        CHECK(differ == 0);
+        // A second model built from the same road and rules has the same programmes.
+        Sim again(driving_test::gridRoads(3, 3), control, DrivingSettings::kDefaultDecideEveryTicks, true);
+        for (std::size_t p = 0; p < row.phases.size() && p < again.d.rightOfWay().phases.size(); ++p) {
+            CHECK(row.phases[p].green == again.d.rightOfWay().phases[p].green);
+            CHECK(row.phases[p].yellow == again.d.rightOfWay().phases[p].yellow);
+            CHECK(row.phases[p].allRed == again.d.rightOfWay().phases[p].allRed);
+        }
+    }
+}
+
+TEST_CASE(lights_20_a_car_at_a_red_stops_at_the_line_and_goes_on_green) {
+    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    CHECK(s.ok);
+    const engine::PathId straight = turnAt(s, 1, 1, kEast, kEast);
+    CHECK(straight.valid());
+    // Wait for the red to begin, then send a car at it from 60 m back.
+    CHECK(stepUntilLamp(s, straight, Lamp::Red, 120));
+    approach(s, 0, 1, 1, kEast, 60, kEast);
+    const engine::PathId lane = s.t.laneArriving(1, 1, kEast, 0);
+    Real restedShort = -1;
+    bool sawRed = false;
+    for (int i = 0; i < static_cast<int>(80 / kStep) && s.arrived == 0; ++i) {
+        s.step();
+        const Car* c = s.d.car(CarId(0));
+        if (!c || c->path != lane || c->speed >= kStandingBelow) continue;
+        restedShort = s.t.graph.paths[lane.index].length - c->along;
+        sawRed = sawRed || s.d.lamp(straight) == Lamp::Red;
+    }
+    s.report("a red, then a green");
+    s.checkClean();
+    std::printf("    came to rest %.2f m short of the line, at a red: %s\n", restedShort, sawRed ? "yes" : "no");
+    CHECK(sawRed);
+    CHECK(restedShort >= 0 && restedShort <= 1.0);
+    CHECK(s.enteredOnRed == 0 && s.enteredOnGreen == 1);
+    CHECK(s.arrived == 1);
+}
+
+TEST_CASE(lights_21_the_yellow_dilemma_both_ways) {
+    // A stream eastbound through the middle junction for four minutes. At each yellow, every car on the approach either
+    // can stop comfortably (by the yellow's own deceleration, with a metre to spare) and must not enter until the next
+    // green, or cannot (a metre the other way) and must enter before the red. Both kinds happen.
+    TestRoadSpec spec;
+    spec.roadLength = 150;
+    Sim s(driving_test::gridRoads(3, 3, spec), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    CHECK(s.ok);
+    const LightTiming t = labTiming(s);
+    const engine::PathId straight = turnAt(s, 1, 1, kEast, kEast);
+    const engine::PathId lane = s.t.laneArriving(1, 1, kEast, 0);
+    const Real laneLength = s.t.graph.paths[lane.index].length;
+    const Real interval = static_cast<Real>(DrivingSettings::kDefaultDecideEveryTicks) * kStep;
+    constexpr Real kMargin = 1.0;
+    // car -> when the change (yellow, then all-red) it was judged at the start of ends
+    std::map<uint32_t, double> mustStop, mustGo;
+    std::map<uint32_t, Lamp> enteredOn;          // car -> its lamp as it entered
+    std::map<uint32_t, double> enteredAt;        // ... and when
+    uint32_t next = 0;
+    Real nextAt = 0;
+    Lamp was = s.d.lamp(straight);
+    for (int i = 0; i < static_cast<int>(240 / kStep); ++i) {
+        const Real now = static_cast<Real>(s.d.clockSeconds());
+        if (now >= nextAt && carsOnStretch(s.d.pathLists(), lane, 0, 20).empty()) {
+            s.add(next, lane, 5, s.t.laneLeaving(1, 1, kEast, 0), 90);
+            ++next;
+            nextAt = now + 2.5;
+        }
+        const double before = s.d.clockSeconds();
+        s.step();
+        const Lamp lamp = s.d.lamp(straight);
+        if (lamp == Lamp::Yellow && was == Lamp::Green) {
+            const SignalNow sig = signalAt(s.d.rightOfWay(), s.t.junction(1, 1), s.d.clockSeconds());
+            const JunctionRules& jr = s.d.rightOfWay().junctions[s.t.junction(1, 1).index];
+            const double changeEnds =
+                s.d.clockSeconds() + sig.remaining + s.d.rightOfWay().phases[jr.phases.first + sig.phase].allRed;
+            for (const Car& c : s.d.cars()) {
+                if (c.path != lane || mustStop.count(c.id.index) || mustGo.count(c.id.index)) continue;
+                const Real toLine = laneLength - c.along;
+                // The driver decides at its next turn to decide, up to one interval on: allow for that much road.
+                const Real stopping = c.speed * interval + c.speed * c.speed / (2 * t.deceleration);
+                const Real margin = kMargin + c.speed * interval;
+                if (stopping + margin < toLine) mustStop[c.id.index] = changeEnds;
+                else if (stopping > toLine + margin) mustGo[c.id.index] = changeEnds;
+            }
+        }
+        was = lamp;
+        for (const Car& c : s.d.cars())
+            if (c.path == straight && !enteredOn.count(c.id.index)) {
+                enteredOn[c.id.index] = lampAt(s.t.graph, s.d.rightOfWay(), straight, before);
+                enteredAt[c.id.index] = before;
+            }
+    }
+    s.report("the yellow dilemma");
+    s.checkClean(kRandomMindChangesPerHundred);
+    int stopped = 0, went = 0, wrong = 0;
+    // Could stop: it did not cross the line before that change was over. Could not: it crossed before the red.
+    for (const std::pair<const uint32_t, double>& m : mustStop) {
+        if (!enteredOn.count(m.first)) continue;
+        ++stopped;
+        if (enteredAt[m.first] < m.second) {
+            ++wrong;
+            std::printf("    car %u could stop at a yellow but entered on %s\n", m.first, lampWord(enteredOn[m.first]));
+        }
+    }
+    for (const std::pair<const uint32_t, double>& m : mustGo) {
+        if (!enteredOn.count(m.first)) continue;
+        ++went;
+        if (enteredOn[m.first] != Lamp::Yellow && enteredOn[m.first] != Lamp::Green) {
+            ++wrong;
+            std::printf("    car %u could not stop at a yellow but entered on %s\n", m.first, lampWord(enteredOn[m.first]));
+        }
+    }
+    std::printf("    at the yellows: %d cars could stop and waited for the next green, %d could not and went on; %d "
+                "did otherwise; %llu entered on red\n",
+                stopped, went, wrong, static_cast<unsigned long long>(s.enteredOnRed));
+    CHECK(stopped > 0 && went > 0);
+    CHECK(wrong == 0);
+    CHECK(s.enteredOnRed == 0);
+}
+
+TEST_CASE(lights_22_a_far_turn_waits_inside_while_three_oncoming_cars_pass) {
+    // D4's staged test 1: on a plain green, a far-turning car pulls forward to its place to wait inside, waits there
+    // while three oncoming cars pass, and goes in the gap after them.
+    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    CHECK(s.ok);
+    const Heading far = driving_test::farTurnFrom(kEast, DrivesOn::Left);
+    const engine::PathId turn = turnAt(s, 1, 1, kEast, far);
+    CHECK(turn.valid());
+    const Real waitAt = s.d.rightOfWay().paths[turn.index].waitInsideAt;
+    std::printf("    the far turn (connector %u, %.1f m) may wait inside at %.1f m\n", turn.index,
+                s.t.graph.paths[turn.index].length, waitAt);
+    CHECK(waitAt >= s.d.vehicleClasses().at(0).length);
+    CHECK(stepUntilLamp(s, turn, Lamp::Green, 120));
+    approach(s, 0, 1, 1, kEast, 10, far);
+    approach(s, 1, 1, 1, kWest, 16, kWest);
+    approach(s, 2, 1, 1, kWest, 28, kWest);
+    approach(s, 3, 1, 1, kWest, 40, kWest);
+    Real restedAt = -1;
+    for (int i = 0; i < static_cast<int>(40 / kStep) && s.arrived < 4; ++i) {
+        s.step();
+        const Car* c = s.d.car(CarId(0));
+        if (c && c->path == turn && c->speed < kStandingBelow) restedAt = c->along;
+    }
+    s.report("a far turn waits inside");
+    s.checkClean();
+    std::printf("    the far turn came to rest %.1f m along its connector\n", restedAt);
+    CHECK(restedAt > 0 && std::fabs(restedAt - waitAt) <= 1.0);
+    CHECK(s.arrived == 4);
+    // It left its connector after the three oncoming cars had come onto theirs (it went in the gap after them).
+    CHECK(s.exitedConnector[0].size() == 1);
+    for (uint32_t k = 1; k <= 3; ++k)
+        CHECK(s.enteredConnector[k].size() == 1 && s.enteredConnector[k][0].second < s.exitedConnector[0][0].second);
+    CHECK(s.enteredOnRed == 0);
+}
+
+TEST_CASE(lights_23_with_no_gap_the_far_turn_completes_on_the_change) {
+    // D4's staged test 2: oncoming traffic with no gap the whole green; the far-turning car waits inside and completes
+    // on the yellow or the all-red; the cross street's first car, waiting at its red, does not come onto the junction
+    // until it is clear.
+    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    CHECK(s.ok);
+    const Heading far = driving_test::farTurnFrom(kEast, DrivesOn::Left);
+    const engine::PathId turn = turnAt(s, 1, 1, kEast, far);
+    const engine::PathId oncoming = s.t.laneArriving(1, 1, kWest, 0);
+    // During the red before the green: the far-turning car and a queue of oncoming cars wait at their lines.
+    CHECK(stepUntilLamp(s, turn, Lamp::Red, 120));
+    approach(s, 0, 1, 1, kEast, 8, far);
+    const Real queue[] = {2, 9, 16, 23, 30, 37};
+    uint32_t next = 2;
+    for (const Real at : queue) approach(s, next++, 1, 1, kWest, at, kWest);
+    CHECK(stepUntilLamp(s, turn, Lamp::Green, 60));
+    approach(s, 1, 1, 1, kNorth, 2, kNorth);   // the cross street's first car, at its red
+    Real nextAt = 0;
+    bool streaming = true;
+    Lamp exitedOn = Lamp::Dark;
+    for (int i = 0; i < static_cast<int>(60 / kStep) && s.arrived < next; ++i) {
+        const Real now = static_cast<Real>(s.d.clockSeconds());
+        // A close stream of oncoming cars while the light lets them in.
+        streaming = streaming && s.d.lamp(turnAt(s, 1, 1, kWest, kWest)) == Lamp::Green;
+        if (streaming && now >= nextAt && carsOnStretch(s.d.pathLists(), oncoming, 0, 14).empty()) {
+            s.add(next, oncoming, 6, s.t.laneLeaving(1, 1, kWest, 0), 90);
+            ++next;
+            nextAt = now + 0.5;
+        }
+        const double before = s.d.clockSeconds();
+        const std::size_t exited = s.exitedConnector[0].size();
+        s.step();
+        if (s.exitedConnector[0].size() > exited) exitedOn = lampAt(s.t.graph, s.d.rightOfWay(), turn, before);
+    }
+    s.report("a far turn with no gap");
+    s.checkClean();
+    std::printf("    %u oncoming cars; the far turn left its connector on %s; it rested inside %u ticks\n", next - 2,
+                lampWord(exitedOn), s.restedInside[0]);
+    CHECK(s.restedInside[0] > 0);
+    CHECK(exitedOn == Lamp::Yellow || exitedOn == Lamp::Red);
+    // The cross street's car went on its own green, after the far turn was through.
+    CHECK(s.exitedConnector[0].size() == 1 && s.exitedConnector[1].size() == 1 &&
+          s.exitedConnector[1][0].second > s.exitedConnector[0][0].second);
+    CHECK(s.enteredOnRed == 0);
+}
+
+TEST_CASE(lights_24_opposing_far_turns_both_shapes) {
+    // D4's staged test 5: two far turns from approaches facing each other, on one green. Whether their paths cross or
+    // each turns in front of the other is the shape's (B2): the grid's 1-lane junction and a wider one give both. Either
+    // way both complete, with no overlap and no loop.
+    int crossing = 0, clear = 0;
+    const std::pair<uint32_t, Real> shapes[] = {{1, 6}, {1, 20}, {2, 6}, {2, 2}, {3, 2}};   // (lanes each way, corner)
+    for (const std::pair<uint32_t, Real>& shape : shapes) {
+        TestRoadSpec spec;
+        spec.lanesEachWay = shape.first;
+        spec.cornerRadius = shape.second;
+        Sim s(driving_test::gridRoads(3, 3, spec), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+        CHECK(s.ok);
+        const Heading farE = driving_test::farTurnFrom(kEast, DrivesOn::Left);
+        const Heading farW = driving_test::farTurnFrom(kWest, DrivesOn::Left);
+        const engine::PathId a = turnAt(s, 1, 1, kEast, farE), b = turnAt(s, 1, 1, kWest, farW);
+        bool meet = false;
+        const engine::Path& pa = s.t.graph.paths[a.index];
+        for (uint32_t k = pa.crossings.first; k < pa.crossings.end(); ++k) {
+            const engine::CrossingPoint& x = s.t.graph.crossings[s.t.graph.pathCrossings[k].index];
+            meet = meet || (x.otherSide == engine::OtherSide::Path && (x.a == b || x.otherPath() == b));
+        }
+        (meet ? crossing : clear) += 1;
+        CHECK(stepUntilLamp(s, a, Lamp::Green, 120));
+        approach(s, 0, 1, 1, kEast, 10, farE);
+        approach(s, 1, 1, 1, kWest, 10, farW);
+        s.run(40);
+        s.report(meet ? "opposing far turns whose paths cross" : "opposing far turns that pass in front of each other");
+        s.checkClean();
+        CHECK(s.arrived == 2);
+        CHECK(s.enteredOnRed == 0);
+    }
+    // The grid's quarter-circle far turns pass in front of each other at every size tried; the other shape (their paths
+    // cross) is the lab's (its four-ways' opposing far turns cross: ADR-0406 counts them), and a hand-made junction for it
+    // here is owed.
+    std::printf("    shapes: %d where the two paths cross, %d where they do not\n", crossing, clear);
+    CHECK(clear > 0);
+}
+
+TEST_CASE(lights_25_ten_minutes_of_random_traffic_at_a_four_way_with_lights) {
+    // D4's staged test 6, the lights version: no overlap, no loop, every stop with a reason, nobody onto a red, and no car
+    // inside the junction at the start of two greens in a row.
+    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    CHECK(s.ok);
+    randomTraffic(s, 1, 1, {kEast, kNorth, kWest, kSouth}, 10 * 60);
+    s.report("ten minutes, a four-way with lights");
+    std::printf("    entered on green %llu, yellow %llu, red %llu; turned on red %llu; most greens begun with one car "
+                "inside %u; far turns that waited inside: %llu\n",
+                static_cast<unsigned long long>(s.enteredOnGreen), static_cast<unsigned long long>(s.enteredOnYellow),
+                static_cast<unsigned long long>(s.enteredOnRed), static_cast<unsigned long long>(s.turnedOnRed),
+                s.mostGreensInside, static_cast<unsigned long long>(s.d.junctionPlanCounts().waitedInside));
+    s.checkClean(kRandomMindChangesPerHundred);
+    CHECK(s.enteredOnRed == 0);
+    CHECK(s.mostGreensInside <= 1);
+    CHECK(s.arrived > 120);
 }
 
 #endif  // RT_ENABLE_SCRIPTING

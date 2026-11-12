@@ -1,5 +1,6 @@
 #include "apps/driving/junction_plan.h"
 
+#include "apps/driving/signal_programme.h"   // the phase and the light now, for the driver card
 #include "engine/bundle/bundle.h"   // Fnv: the repo's 64-bit hash folded field by field
 
 #include <cstdio>
@@ -49,7 +50,7 @@ bool operator==(const JunctionPlan& a, const JunctionPlan& b) {
         return false;
     for (std::size_t i = 0; i < a.waitingCount && i < kMaxWaitingPoints; ++i)
         if (a.waitingAt[i] != b.waitingAt[i]) return false;
-    return a.arrivalFixed == b.arrivalFixed && a.arrivalTick == b.arrivalTick && a.arrivalAt == b.arrivalAt &&
+    return a.waitInsideAt == b.waitInsideAt && a.arrivalFixed == b.arrivalFixed && a.arrivalTick == b.arrivalTick && a.arrivalAt == b.arrivalAt &&
            a.cameToRest == b.cameToRest && a.restAt == b.restAt && a.committed == b.committed &&
            a.committedTick == b.committedTick && a.decision == b.decision && a.mindChanges == b.mindChanges &&
            a.judged == b.judged;
@@ -101,6 +102,7 @@ bool findWaitingPoints(const LaneGraph& roads, const RightOfWay& row, PathId con
     plan.waitingAt.fill(0);
     plan.waitingAt[0] = 0;   // the line
     plan.waitingCount = 1;
+    plan.waitInsideAt = engine::kNoWaitInside;
     if (!connector.valid() || connector.index >= roads.paths.size() || connector.index >= row.paths.size()) return true;
     const engine::Range gaps = row.paths[connector.index].gaps;
     bool fitted = true;
@@ -112,6 +114,23 @@ bool findWaitingPoints(const LaneGraph& roads, const RightOfWay& row, PathId con
             break;
         }
         plan.waitingAt[plan.waitingCount++] = gap.to;
+    }
+    // A far turn's place to wait inside on its green (issue #261), when the whole body fits past the line: put in order
+    // among the others (once, if a gap already ends there).
+    const Real inside = row.paths[connector.index].waitInsideAt;
+    if (inside > 0 && inside >= carLength) {
+        bool there = false;
+        for (std::size_t w = 0; w < plan.waitingCount; ++w) there = there || plan.waitingAt[w] == inside;
+        if (!there && plan.waitingCount >= kMaxWaitingPoints) {
+            fitted = false;
+        } else {
+            plan.waitInsideAt = inside;
+            if (!there) {
+                std::size_t at = plan.waitingCount++;
+                for (; at > 1 && plan.waitingAt[at - 1] > inside; --at) plan.waitingAt[at] = plan.waitingAt[at - 1];
+                plan.waitingAt[at] = inside;
+            }
+        }
     }
     return fitted;
 }
@@ -205,6 +224,7 @@ uint64_t junctionPlansHash(const JunctionPlans& plans) {
         h.pod(p.crossingCount);
         h.pod(p.waitingCount);
         for (std::size_t k = 0; k < p.waitingCount; ++k) h.pod(p.waitingAt[k]);
+        h.pod(p.waitInsideAt);
         h.pod(static_cast<uint8_t>(p.arrivalFixed));
         h.pod(p.arrivalTick);
         h.pod(p.arrivalAt);
@@ -245,8 +265,13 @@ std::string describeGiveWay(const LaneGraph& roads, const RightOfWay& row, const
                    std::to_string(j.crossing.index) + " (" + questionWords(j.by) + "): a gap of " + one(j.have) +
                    " s; I need " + one(j.need) + " s";
             out += j.stopAlong > 0 ? ", waiting inside the junction " + one(j.stopAlong) + " m along" : ", at the line";
-        } else if (j.cause == GiveWayCause::NextJunction)
+        } else if (j.cause == GiveWayCause::NextJunction) {
             out += ": I give way at the next junction and my body would not fit between the two";
+        } else if (j.cause == GiveWayCause::BehindInMyLane) {
+            out += ": behind car " + std::to_string(j.other.index) + " on " + other + ", from my lane, standing inside " +
+                   "the junction on the stretch where our turns leave the lane (crossing point " +
+                   std::to_string(j.crossing.index) + ")";
+        }
         break;
     }
     if (p.mindChanges > 0) out += "; changed its mind " + std::to_string(p.mindChanges) + (p.mindChanges == 1 ? " time" : " times");
@@ -275,8 +300,10 @@ std::string describeJunctionPlans(const LaneGraph& roads, const RightOfWay& row,
         const engine::Path& path = roads.paths[p.connector.index];
         const uint32_t phases =
             p.junction.valid() && p.junction.index < row.junctions.size() ? row.junctions[p.junction.index].phaseCount() : 1;
+        const uint32_t phase = now >= 0 ? currentPhase(row, p.junction, now) : 0;
         out += "    crossing points (" + std::to_string(path.crossings.count) + ", in order along it" +
-               (phases > 1 ? "; who gives way at phase 0 of " + std::to_string(phases) + ", the lights' clock is task D2"
+               (phases > 1 ? "; who gives way in phase " + std::to_string(phase) + " of " + std::to_string(phases) +
+                                 ", the light now " + lampWord(lampAt(roads, row, p.connector, now))
                            : std::string()) +
                "):\n";
         for (uint32_t k = path.crossings.first; k < path.crossings.end() && k < roads.pathCrossings.size(); ++k) {
@@ -295,7 +322,7 @@ std::string describeJunctionPlans(const LaneGraph& roads, const RightOfWay& row,
                 out += std::string(kind) + " with " + pathTurnWords(roads, row, other);
             }
             out += ", " + one(from) + "-" + one(to) + " m along, " + one(ahead + from) + " m ahead: ";
-            const MeetingAnswer* a = row.answer(cid, 0);
+            const MeetingAnswer* a = row.answer(cid, phase);
             if (!a) {
                 out += "whoever is on it announces (people and trains are task E5)\n";
                 continue;
@@ -316,7 +343,8 @@ std::string describeJunctionPlans(const LaneGraph& roads, const RightOfWay& row,
         out += "    waiting points:";
         for (std::size_t w = 0; w < p.waitingCount; ++w)
             out += (w == 0 ? " the line (" : ", ") + one(p.waitingAt[w]) + (w == 0 ? " m)" : " m along");
-        out += "; committed once past " + one(p.lastWaitingPoint()) + " m along it\n";
+        if (p.waitInsideAt > 0) out += "; " + one(p.waitInsideAt) + " m is where it may wait inside on its green";
+        out += "; committed once past " + one(p.lastWaitingPoint()) + " m along it (past the line, on its red)\n";
     }
     return out;
 }

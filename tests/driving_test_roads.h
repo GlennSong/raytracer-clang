@@ -125,8 +125,9 @@ TestRoads ringRoad(uint32_t sides, const TestRoadSpec& spec = TestRoadSpec());
 
 // A GRID of `rows` by `cols` junctions, junction (r, c) at the plan point (c, r) times the junction spacing. Its
 // junctions carry real crossing points: where their connectors cross, join and split, found by the road builder's own
-// finder (lanes/lane_graph_crossings.h, findCrossingPoints, with the test car's width) when this build has the lanes
-// builder (RT_ROADS_LANES); without it, none.
+// finder (lanes/lane_graph_crossings.h, findCrossingPoints, with the test car's width), and each far turn's place to wait
+// inside as the builder places it (placeWaitInsidePoints), when this build has the lanes builder (RT_ROADS_LANES);
+// without it, none.
 TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec = TestRoadSpec());
 
 // AN ORDINARY CAR that may use the test roads: 4.5 m, a 2.7 m wheelbase, 30 degrees of steering (a 4.7 m turn), the

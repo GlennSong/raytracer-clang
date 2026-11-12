@@ -1,6 +1,7 @@
 #include "apps/driving/conflict.h"
 
 #include "apps/driving/announce.h"
+#include "apps/driving/signal_programme.h"   // currentPhase: the lights' phase, a pure function of the clock
 #include "engine/bundle/bundle.h"   // Fnv: the repo's 64-bit hash folded field by field
 
 #include <algorithm>
@@ -172,7 +173,7 @@ uint32_t ConflictResolver::groupOf(const engine::LaneGraph& roads, engine::Cross
 }
 
 void ConflictResolver::study(const engine::LaneGraph& roads, const RightOfWay& row, const AnnouncementBoard& board,
-                             const std::vector<std::pair<uint64_t, uint64_t>>& behind) {
+                             const std::vector<std::pair<uint64_t, uint64_t>>& behind, double now) {
     met_.clear();
     settled_.clear();
     counts_ = ConflictCounts();
@@ -185,7 +186,7 @@ void ConflictResolver::study(const engine::LaneGraph& roads, const RightOfWay& r
         if (on.size() < 2) continue;
         const engine::CrossingPoint& rec = roads.crossings[c];
         if (rec.otherSide != engine::OtherSide::Path) continue;
-        const MeetingAnswer* answer = row.answer(cid, currentPhase(row, rec.junction));
+        const MeetingAnswer* answer = row.answer(cid, currentPhase(row, rec.junction, now));
         if (!answer || answer->who == GivesWay::Neither) continue;   // a split: the car behind follows
         const uint32_t group = groupOf(roads, cid);
         for (const Announcement* x = on.begin(); x != on.end(); ++x)

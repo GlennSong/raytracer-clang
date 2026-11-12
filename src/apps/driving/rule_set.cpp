@@ -154,6 +154,10 @@ bool ControlKind::hasLights() const {
     return std::find(settle.begin(), settle.end(), SettleQuestion::Light) != settle.end();
 }
 
+bool RuleSet::anyLights() const {
+    return std::any_of(controls.begin(), controls.end(), [](const ControlKind& k) { return k.hasLights(); });
+}
+
 const ControlKind* RuleSet::findControl(const std::string& controlName) const { return findByName(controls, controlName); }
 
 uint32_t RuleSet::movementRankOf(Movement m) const {

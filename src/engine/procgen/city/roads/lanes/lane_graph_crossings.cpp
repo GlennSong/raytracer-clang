@@ -472,5 +472,35 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
     return rep;
 }
 
+uint32_t placeWaitInsidePoints(LaneGraph& g) {
+    uint32_t placed = 0;
+    for (Path& p : g.paths) p.waitInsideAt = kNoWaitInside;
+    for (uint32_t c = 0; c < g.paths.size(); ++c) {
+        Path& p = g.paths[c];
+        if (p.kind != PathKind::Connector || p.turn != Turn::FarTurn || !p.junction.valid() ||
+            p.from.index >= g.paths.size())
+            continue;
+        const Vec2 mine = g.directionAt(p.from, g.paths[p.from.index].length);
+        // The crossing points along it are listed by where their stretch on it begins: the first with a path from a facing
+        // approach is where the front stops.
+        for (uint32_t k = p.crossings.first; k < p.crossings.end() && k < g.pathCrossings.size(); ++k) {
+            const CrossingPoint& x = g.crossings[g.pathCrossings[k].index];
+            if (x.otherSide != OtherSide::Path || x.meeting == Meeting::Split || x.junction != p.junction) continue;
+            const PathId o = x.a == PathId(c) ? x.otherPath() : x.a;
+            const Path& op = g.paths[o.index];
+            if (op.kind != PathKind::Connector || op.from.index >= g.paths.size()) continue;
+            const Vec2 theirs = g.directionAt(op.from, g.paths[op.from.index].length);
+            if (!(dot(mine, theirs) < kOncomingDot)) continue;
+            const double at = x.a == PathId(c) ? x.aFrom : x.otherFrom;
+            if (at > 0) {
+                p.waitInsideAt = at;
+                ++placed;
+            }
+            break;
+        }
+    }
+    return placed;
+}
+
 }  // namespace roads::lanes
 }  // namespace engine

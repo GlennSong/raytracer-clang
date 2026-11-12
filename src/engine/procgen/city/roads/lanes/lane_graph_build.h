@@ -182,10 +182,11 @@ inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 // the old code built. (A change to the roads themselves
 // is the lanes tag's, kLanesBuildTag, which keys the roads; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
-constexpr uint32_t kLaneGraphBuildVersion = 4;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
+constexpr uint32_t kLaneGraphBuildVersion = 5;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
                                                  // 2: crossing points (#239, ADR-0400)
                                                  // 3: the control plan carried through: controls, signs, limits (#240)
                                                  // 4: each path's bend profile, measured as a vehicle feels it (#281)
+                                                 // 5: far turns' places to wait inside the junction (#261, ADR-0406)
 
 // A VEHICLE TAG and how it turns: the tightest radius its path may have, and its width (metres). Passed in by the
 // caller (the engine does not know the driving model's vehicles); a connector tighter than the radius is closed to it.
@@ -253,6 +254,7 @@ struct CrossingReport {
     uint32_t busiestJunction = kNoIndex;      // the junction with the most records filed under it (the lowest of equals)
     uint32_t busiestCount = 0;
     uint32_t junctionsWithout = 0;            // junctions with two or more connectors and no record
+    uint32_t waitInsidePoints = 0;            // far turns given a place to wait inside (placeWaitInsidePoints)
     std::vector<std::string> problems;        // anything that looks wrong, in plain words with its place
     double milliseconds = 0;
 };

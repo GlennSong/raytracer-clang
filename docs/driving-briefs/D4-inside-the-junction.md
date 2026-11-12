@@ -1,6 +1,6 @@
 # D4 — First in goes first; waiting inside for a far turn
 
-**As built (ADR-0405), first in goes first; waiting inside for a far turn is not built yet.** Who goes first is one
+**As built (ADR-0405), first in goes first; waiting inside for a far turn with task D2 (ADR-0406).** Who goes first is one
 conflict resolver (`src/apps/driving/conflict.h`): named questions asked in order (a body on the crossing point, who
 committed first, the give-way table, going, arrival, the table's fall-back, the lower id), one answer per pair of cars,
 rings broken in one fixed order. Committed cars judge too and wait inside, at a waiting point (ADR-0401's gaps) or short
@@ -14,8 +14,18 @@ of the crossing point, for a car that goes first. Where this brief turned out wr
   car waiting inside.
 - *Last waiting point*: the brief says the line, or `waitInsideAt`; D1 built waiting points as every gap between
   crossing stretches a body fits in (ADR-0401). The as-built keeps D1's, so a long connector has inside waiting points.
-- *Waiting inside for a far turn* needs a green on which the far turn gives way (task D2's clock; no lights run yet) and
-  a `waitInsideAt` from the builder (none is set): staged tests 1, 2, 5 and the lights in 6 wait for both.
+- *Waiting inside for a far turn* came with the lights' clock (D2, ADR-0406): the builder places `waitInsideAt` by shape
+  (short of the first stretch met with a path from the facing approach), the check at load is made against the rule
+  set's table (in every phase the turn is green, it goes first at every crossing point its body has reached), and a car
+  whose body fits past the line uses it on its own green. Where the brief was short: (1) *the light changes as a car
+  reaches its last waiting point* -- a car past its line on its RED is committed whatever its waiting points say (CVC
+  21451: it entered lawfully), else a car waiting inside at the change waits through the cross street's whole green;
+  (2) the place to wait inside usually lies on the stretch where the far turn and the straight on leave one lane (a
+  split), where the car behind cannot see the waiting car once its tail is off the lane: the car behind now waits behind
+  it and announces "not going" beyond (without that, two opposing far turns waiting inside each held the other's
+  oncoming car: a ring); (3) *room beyond* (D5) is not built, so "a car needs room granted before it may enter to wait"
+  is not met. Staged tests 1, 2, 5 and the lights in 6 are `tests/test_driving_give_way.cpp` lights_22 to lights_25;
+  test 5's crossing shape the synthetic grid cannot make (the lab has it).
 
 **Read first:** design 9.4, 9.6. Brief D3.
 

@@ -43,6 +43,7 @@
 #include "apps/driving/junction_plan.h"   // each driver's plan for the junctions ahead
 #include "apps/driving/notice.h"
 #include "apps/driving/right_of_way.h"    // who gives way to whom, worked out at load
+#include "apps/driving/signal_programme.h"   // the traffic lights' clock: a pure function of the time
 #include "apps/driving/road_rules.h"
 #include "apps/driving/route.h"
 #include "apps/driving/rule_set.h"
@@ -219,6 +220,14 @@ public:
     // The car's plans for the junctions ahead, or null when it is on no trip.
     const JunctionPlans* junctionPlans(CarId car) const;
     const JunctionPlanCounts& junctionPlanCounts() const { return planCounts_; }
+    // THE TRAFFIC LIGHTS (issue #261): whether they run a programme (the host registered the light clock,
+    // signal_programme.h), its numbers, and what a connector's lamp shows now -- the same pure function of the clock the
+    // drivers read, for anything that draws or reports the lights (Dark where none runs).
+    bool lightsRun() const { return lightsRun_; }
+    const LightTiming& lightTiming() const { return lightTiming_; }
+    Lamp lamp(engine::PathId connector) const {
+        return lightsRun_ && roads_ ? lampAt(*roads_, rightOfWay_, connector, clockSeconds_) : Lamp::Dark;
+    }
     // THE JUNCTION STEP (issue #262): on when the rules came with a registry that has it (registerJunctionFacts). This
     // tick's board of announcements (announce.h), as it was when the drivers decided.
     bool junctionStep() const { return junctionsOn_; }
@@ -419,6 +428,8 @@ private:
     uint32_t gapKeptHash_ = 0;
     Real standstillGap_ = 0;
     bool junctionsOn_ = false;            // the junction step (give_way.h hasJunctionStep)
+    bool lightsRun_ = false;              // the lights run a programme (road_rules.h RoadRules::lightsRun)
+    LightTiming lightTiming_;             // ... by these numbers (signal_programme.h)
     Real step_ = 0;                       // the step of the tick under way, seconds (the decide interval is a number of them)
     JunctionNumbers junctionNumbers_;
     AnnouncementBoard board_;             // rewritten at the start of every plan step

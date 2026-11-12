@@ -800,8 +800,8 @@ depend only on the road (`sign_rank`, `movement`, `light` per signal phase) are 
 pair of movements. Questions that depend on the moment (`arrived_first`) are stored as "ask while driving". A
 roundabout is `give_way` on every entry; it needs no new question.
 *As built* (task B4, ADR-0403): the two-way stop row is named `stop` (as the sign kit's STOP sign names it), and a row
-with lights may name `when_dark`, the row it is treated as while no light runs a programme (the lab's lights run as an
-all-way stop until the light clock, #261, exists). A sixth table, `placement`, is the planner's (section 5.1).
+with lights may name `when_dark`, the row it is treated as while no light runs a programme (a host that registers no
+light clock: section 9.1). A sixth table, `placement`, is the planner's (section 5.1).
 
 **(c) Numbers: gaps, margins, timing, defaults.** How many seconds clear a far turn needs; the safety margin at a
 crossing point; how patience shrinks it and its floor; default speed limits by kind of road, in mph; how far before a
@@ -1026,6 +1026,28 @@ connector's crossing points are read from `Path::crossings` and the table, not c
 the junctions on its way ahead (`junction_plan.h`: junction, connector, turn, where the connector starts, its waiting
 points), made when the junction comes into view and kept until it is through; `DriverView` carries both to the facts.
 
+*As built* (task D2, ADR-0406): **the lights' clock** is `src/apps/driving/signal_programme.h`. The phases stay D1's
+(grouped by what conflicts, per movement, in `right_of_way.h`); at load each lit junction's programme is timed from the
+rule set's numbers: the **yellow** (the warning that red is coming) by the ITE formula, reaction + approach speed / (2 x
+deceleration + 2 x gravity x grade), the approach speed being the arriving lane's limit and the grade its climb at the
+line, held to 3-6 s (MUTCD 4D.26); the **all-red** (every movement losing its green shows red while the last cars clear)
+by ITE's (width to clear + a 20 ft vehicle) / approach speed, the width being how far along the turn its last crossing
+ends; the **greens** share a target cycle (40 s in the lab) less the yellows and all-reds, equally, held to 7-30 s; and a
+**green wave** offsets each junction so the phase serving its road most nearly along the wave's line begins as a car at
+the wave's speed would reach it (east at 30 mph in the lab), which also makes two close lights serve one road together.
+A movement green in two phases running one after the other stays green through the change. Which phase a junction is in,
+and what each movement's lamp shows (green, yellow, red, "red, may turn"), are **pure functions of the sim time**
+(`signalAt`, `currentPhase`, `lampAt`): nothing is stored per junction while cars drive, and drivers, the conflict
+resolver, the driver card and anything that draws lamps read the same answer. `checkSignalProgrammes` checks every stage
+of every programme: no two movements whose paths meet let traffic in together unless the rule set lets one give way.
+**Drivers** read three facts (`light`: the lamp at the nearest lights ahead that are not green for them, else the nearest;
+`light_line`; `can_stop_for_light`: the dilemma, by the yellow's own deceleration and the decide interval, kept once a
+driver has begun to stop) and the lab's rules say what to do: stop at a red, stop at a yellow if you can, turn on red
+after a full stop where `turn_on_red` allows, and the give-way table read at the current phase does the rest. A car
+inside the junction when its light turns red is **committed** (it entered lawfully; the next green waits for it), a red
+before the line starts the approach afresh (its decision and arrival were for a green that is over), and the lights run
+only for a host that registers the light clock (`registerLightClock`); otherwise `when_dark` still holds.
+
 ### 9.2 Approaching: announce
 
 Once a junction is within look-ahead, a driver announces for each crossing point on its connector: the time it
@@ -1091,8 +1113,19 @@ its own. A car past its line (or too fast to stop at it) still judges: it stops 
 short of the crossing point (ADR-0401's gaps a body fits in) or with its front at the crossing point's stretch, for a
 car the resolver puts first; the stop goes through the rule set's "give way" rule like any other (`give_way_line` is
 "where I stop to give way"). Where `on_it` or `committed_first` decided, the car going second may only come behind.
-Nobody plans to go behind a car waiting inside for somebody else. Waiting inside for a far turn on a green
-(`waitInsideAt`) waits for the lights' clock (D2): none runs yet, and the builder sets no `waitInsideAt`.
+Nobody plans to go behind a car waiting inside for somebody else.
+
+*As built* (task D2, ADR-0406): **waiting inside for a far turn on a green.** The lane graph builder places each far
+turn's `waitInsideAt` by shape: its front just short of the first stretch where it meets a path from the approach facing
+it (`lanes/lane_graph_crossings.h placeWaitInsidePoints`; builder version 5). At load the driving model keeps a point
+only at lights that run a programme, and only if, in every phase where the turn is green, it goes first at every crossing
+point its body has reached by then (the D4 brief's road-data check, made against the rule set's table: 5 of the lab's
+105 points fail it). A car whose whole body fits past the line has it as one more waiting point. On its own green, a far
+turn that must give way at a crossing point at or beyond the point pulls forward to it instead of stopping at the line;
+never on a yellow, a red or an arrow. Once its light turns red, a car past its line is committed whatever its waiting
+points say, so it clears in the change and the next green waits for its body. A car from the same lane that would pass
+the waiting car (two turns leaving one lane: a split) waits behind it, since its tail may be off the lane and still in
+the split's stretch, where following cannot see it; it announces "not going" beyond, as a queued car does.
 
 ### 9.5 Don't block the box: room is claimed, not just seen
 

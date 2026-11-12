@@ -34,8 +34,8 @@
 // approaches (so a plain four-way gets its classic two phases), then to single turns: any turn that meets nothing
 // already green in a phase is added to it. A movement in the control's `arrow` list that would have to give way in its
 // phase gets an ARROW PHASE of its own just before it, green for those turns only. A turn the control allows on red
-// (`turn_on_red`) is "red, may turn" in every phase where it is not green. Phases are in order; the clock that walks them
-// and their timing are task D2's.
+// (`turn_on_red`) is "red, may turn" in every phase where it is not green. Phases are in order; their timing and the clock
+// that walks them are signal_programme.h's (task D2, #261), which fills the timing fields below.
 //
 // WHERE A CAR CAN WAIT on a connector (for the junction plan, junction_plan.h): the stretches of its crossing points
 // (crosses, joins, crosswalks; not splits, where the car behind follows) are merged along it; the GAPS between them are
@@ -103,7 +103,7 @@ constexpr uint32_t kNoApproach = 0xFFFFFFFFu;
 // TWO APPROACHES FACE EACH OTHER when their directions of travel point more nearly opposite than this (the dot of the
 // two unit directions is below it): within about 37 degrees of head on, the figure the old signal controller uses for
 // opposing approaches (ADR-0109).
-constexpr Real kFacingDot = -0.8;
+constexpr Real kFacingDot = engine::kOncomingDot;
 // ... and run alongside each other when it is above minus this (above 0.8): neither is on the other's kerb side.
 constexpr Real kAlongsideDot = -kFacingDot;
 
@@ -120,6 +120,10 @@ struct Approach {
 struct Phase {
     bool arrow = false;             // an arrow phase (only `arrow` movements green)
     engine::Range lights;           // into RightOfWay::lights
+    // ITS TIMING (signal_programme.h, task D2): seconds of green, then of yellow and of all-red for the movements losing
+    // their green as the next phase begins (both 0 when none does). All 0 while no programme runs.
+    Real green = 0, yellow = 0, allRed = 0;
+    Real length() const { return green + yellow + allRed; }
 };
 
 // ONE JUNCTION'S PART OF THE TABLE.
@@ -127,7 +131,12 @@ struct JunctionRules {
     uint32_t control = kNoControl;  // its control, an index into RuleSet::controls (kNoControl: the rule set has none)
     engine::Range approaches;       // into RightOfWay::approaches, in order of their first connector
     engine::Range phases;           // into RightOfWay::phases; none when the control has no lights
+    // ITS PROGRAMME (signal_programme.h): one pass through every phase, seconds (0: no programme runs: no lights, or the
+    // lights are dark), and how far its cycle is shifted, seconds (the green wave).
+    Real cycle = 0;
+    Real offset = 0;
     uint32_t phaseCount() const { return phases.count > 0 ? phases.count : 1; }   // a junction with no lights has one
+    bool running() const { return cycle > 0 && phases.count > 0; }
 };
 
 // ONE CONNECTOR'S PART: its approach, its movement, and where a body can stand inside the junction.
@@ -137,6 +146,10 @@ struct ConnectorRules {
     Movement movement = Movement::Straight;   // the connector's own stated turn (B2's), never worked out again
     engine::Range gaps;                // into RightOfWay::gaps: the clear stretches between its crossing stretches
     Real firstStretchAt = 0;           // where its first crossing stretch begins (its length when it has none)
+    // WHERE A FAR TURN MAY WAIT INSIDE THE JUNCTION on its green, giving way (the road builder's Path::waitInsideAt, kept
+    // only at lights running a programme and only where the check at load passes: signal_programme.h). kNoWaitInside:
+    // nowhere.
+    Real waitInsideAt = engine::kNoWaitInside;
 };
 
 // A STRETCH OF A CONNECTOR clear of every crossing stretch, between two of them: a body standing wholly inside it is
@@ -158,6 +171,11 @@ struct RightOfWayCounts {
     uint32_t byLowerPathId = 0;        // ... decided (or their fall-back decided) by the lower path id, at some phase
     uint32_t junctionsWithoutControl = 0;   // the rule set has no row for their control
     uint32_t junctionsDark = 0;             // lights with no programme running, treated as their `when_dark` row
+    // THE PROGRAMMES (signal_programme.h timeSignalProgrammes).
+    uint32_t junctionsTimed = 0;            // lights running a programme
+    Real shortestCycle = 0, longestCycle = 0;
+    uint32_t waitInsidePoints = 0;          // far turns that may wait inside on their green
+    uint32_t waitInsideDropped = 0;         // ... places the builder marked that the check at load refused
 };
 
 // THE WHOLE TABLE.
@@ -188,9 +206,7 @@ struct RightOfWay {
 // of the graph's control names is, and what each regulation kind means).
 RightOfWay buildRightOfWay(const engine::LaneGraph& roads, const RuleSet& rules, const RoadRules& roadRules);
 
-// The phase of a junction's lights drivers judge by. The lights' clock is task D2: until it runs, every junction shows
-// its first phase (0), and this is the one place that says so.
-uint32_t currentPhase(const RightOfWay& row, engine::JunctionId junction);
+// (The phase a junction's table is read at, a pure function of the clock, is signal_programme.h's currentPhase.)
 
 // FROM ONE PATH'S SIDE: at crossing record `crossing`, does a car on `path` give way? GivesWay::A/Other read from its
 // side: `mine` is Ask, Neither, or whether I give way (true) or the other does (false). The other path is put in

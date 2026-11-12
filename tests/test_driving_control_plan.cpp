@@ -244,7 +244,7 @@ TEST_CASE(control_plan_meets_the_table_3_lights_with_no_clock_are_treated_as_the
     CHECK(buildTable(t.graph, b));
     const ControlKind* signal = b.rules.findControl("signal");
     CHECK(signal && signal->hasLights() && !signal->whenDark.empty());
-    CHECK(!kLightsRunAProgramme);
+    CHECK(!b.roadRules.lightsRun);   // no light clock registered: the lights are dark (#261)
     CHECK(b.roadRules.darkOfName.size() == 1u && b.roadRules.darkOfName[0] == 1);
     const JunctionRules& jr = b.row.junctions[t.junction(kRow, kCol).index];
     CHECK(b.rules.controls[jr.control].name == signal->whenDark);

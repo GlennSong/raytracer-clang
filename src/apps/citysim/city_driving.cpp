@@ -63,6 +63,12 @@ bool loadDrivingRules(const std::string& file, driving::Driving& d, std::string*
         for (const std::string& p : problems) all += (all.empty() ? "" : "; ") + p;
         return refuse("the junction step's facts would not register: " + all);
     }
+    // The lights' clock (#261): a rule set with lights has them run a programme (without it they would be dark).
+    if (ruleSet.anyLights() && !driving::registerLightClock(facts, &problems)) {
+        std::string all;
+        for (const std::string& p : problems) all += (all.empty() ? "" : "; ") + p;
+        return refuse("the light clock would not register: " + all);
+    }
     if (!driving::loadRules(vm, file, facts, ruleSet, vocabulary, rules, &err)) return refuse(err);
     driving::RoadRules roadRules;
     if (!driving::buildRoadRules(*d.roads(), ruleSet, facts, roadRules, &problems)) {

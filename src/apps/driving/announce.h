@@ -176,7 +176,12 @@ double heldStopOf(const Car& car);
 // NOTES WHAT THE CAR'S OWN STATE SAYS ABOUT THE LINE of `plan`, at tick `tick` and clock `now`: it came to rest at the
 // line (within the rule set's at_line_within), it is committed, and -- when its arrival is not yet fixed -- it arrives
 // now, because it came to rest at the line or can no longer stop before it. Each, once noted, stays for the plan's life.
-void noteAtTheLine(JunctionPlan& plan, const Car& car, Real brake, Real atLineWithin, uint64_t tick, double now);
+// COMMITTED: its front past its last waiting point; or, when `redForMe` (its turn's light shows red: issue #261), past
+// the line by more than at_line_within: inside on a red, it may not wait for anyone of the next green. CAME TO REST is
+// not noted while `heldByLight` (its light shows red, not "red, may turn", or yellow): standing at a red is not waiting
+// for this junction's traffic, so its patience, and its arrival for who goes first, start when its light turns green.
+void noteAtTheLine(JunctionPlan& plan, const Car& car, Real brake, Real atLineWithin, uint64_t tick, double now,
+                   bool redForMe = false, bool heldByLight = false);
 // FIXES THE CAR'S ARRIVAL at `plan`'s line, when not yet fixed: `lineIn` seconds from now (tick `tick`, clock `now`,
 // ticks of `step` seconds), its own estimate when its driver first judges the junction.
 void fixArrival(JunctionPlan& plan, Real lineIn, uint64_t tick, double now, Real step);

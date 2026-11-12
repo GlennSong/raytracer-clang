@@ -137,10 +137,10 @@ struct ControlKind {
     // A turn that may be made on a red, giving way to everything (turn_on_red = { movement = ..., after = ... }).
     bool turnOnRed = false;
     Movement turnOnRedMovement = Movement::NearTurn;
-    bool turnOnRedAfterFullStop = false;  // ... only after coming to a full stop (D3 acts on it)
-    // WHILE NO LIGHT RUNS A PROGRAMME (road_rules.h kLightsRunAProgramme: the light clock is task D2, #261), a junction
-    // with this control is treated as the control named here (`when_dark`; a dark or flashing-red signal is an all-way
-    // stop). Empty: it keeps its own row, its lights fixed at their first phase.
+    bool turnOnRedAfterFullStop = false;  // ... only after coming to a full stop (the rule set's own rules act on it)
+    // WHILE NO LIGHT RUNS A PROGRAMME (road_rules.h RoadRules::lightsRun: a host that registered no light clock,
+    // signal_programme.h), a junction with this control is treated as the control named here (`when_dark`; a dark or
+    // flashing-red signal is an all-way stop). Empty: it keeps its own row, its lights fixed at their first phase.
     std::string whenDark;
 
     bool hasLights() const;               // its settle list asks `light`
@@ -162,6 +162,8 @@ struct RuleSet {
 
     const Device* findDevice(const std::string& deviceName) const;
     const ControlKind* findControl(const std::string& controlName) const;
+    // Some control has lights (a host then registers the light clock, signal_programme.h, for them to run).
+    bool anyLights() const;
     // A movement's place in movementRank (0 goes first); movementRank's size for one not listed.
     uint32_t movementRankOf(Movement m) const;
     const Number* findNumber(const std::string& numberName) const;

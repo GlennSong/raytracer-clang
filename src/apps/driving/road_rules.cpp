@@ -1,5 +1,7 @@
 #include "apps/driving/road_rules.h"
 
+#include "apps/driving/signal_programme.h"   // hasLightClock: whether the lights run a programme
+
 #include <cstddef>
 
 namespace driving {
@@ -119,10 +121,11 @@ bool buildRoadRules(const engine::LaneGraph& roads, const RuleSet& rules, const 
     for (const engine::Junction& jn : roads.junctions)
         if (jn.control < junctionsOfControl.size()) ++junctionsOfControl[jn.control];
     out.darkOfName.assign(roads.controlNames.size(), 0);
+    out.lightsRun = hasLightClock(facts);
     for (std::size_t c = 0; c < roads.controlNames.size(); ++c) {
         const ControlKind* k = rules.findControl(roads.controlNames[c]);
         // lights with no programme running are treated as the row their `when_dark` names (checked to exist at load)
-        const ControlKind* dark = k && k->hasLights() && !kLightsRunAProgramme && !k->whenDark.empty()
+        const ControlKind* dark = k && k->hasLights() && !out.lightsRun && !k->whenDark.empty()
                                       ? rules.findControl(k->whenDark)
                                       : nullptr;
         if (dark) {

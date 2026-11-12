@@ -18,7 +18,10 @@
 // the front stopped short of the next stretch with the tail clear of the one before. The last of them is the car's LAST
 // WAITING POINT: once its front is past it, the car is COMMITTED (task D4 orders committed cars by when they passed it).
 // A long vehicle has fewer waiting points than a short one at the same junction, which is the point: it cannot wait
-// where it does not fit.
+// where it does not fit. At lights (issue #261) a far turn may also wait at its connector's place to wait inside
+// (waitInsideAt below), where its body stands across the cross street's paths, which have a red: that is a waiting point
+// only while its own light is green or yellow. Once its light is red, a car past its line is committed whatever its
+// waiting points say: it entered lawfully and the next green waits for it to clear (Driving::announce, noteAtTheLine).
 //
 // A plan is DROPPED when the car is through (its body has left the connector: CLEARED), when the way ahead no longer
 // runs through its connector (WAY CHANGED: the driver chose another lane or turn), or at once when the trip is routed
@@ -66,8 +69,12 @@ enum class GiveWayCause : uint8_t {
     None,           // nothing to give way to: no meeting it must judge has anyone announced on it
     Gap,            // a gap judged against a car's announcement (the car, the crossing, the gap needed and had)
     NextJunction,   // it gives way at the next junction, and there is no room for its body between the two
+    // a car from its own lane stands inside the junction to give way (a far turn waiting for its gap, issue #261), its
+    // tail on the stretch where our two turns leave the lane: it waits behind it, as behind a car ahead (the car and the
+    // crossing as for Gap). Not this junction's traffic: it announces that it is not going beyond.
+    BehindInMyLane,
 };
-constexpr uint8_t kGiveWayCauseCount = 3;
+constexpr uint8_t kGiveWayCauseCount = 4;
 
 // THE JUDGEMENT BEHIND A DECISION: to whom, where, and the gaps. For Go, the tightest gap the driver accepted (none
 // when nobody was there to judge); for GiveWay, the first meeting where the gap fell short.
@@ -95,6 +102,10 @@ struct JunctionPlan {
     uint32_t crossingCount = 0;           // how many crossing points lie along the connector (Path::crossings)
     uint8_t waitingCount = 0;             // how many of waitingAt are in use (at least 1: the line)
     std::array<Real, kMaxWaitingPoints> waitingAt{};   // along the connector, in order; the first is 0 (the line)
+    // WHERE THIS CAR MAY WAIT INSIDE FOR A GAP on its green (issue #261): its connector's checked place to wait inside
+    // (right_of_way.h ConnectorRules::waitInsideAt) when its whole body fits past the line; it is one of waitingAt.
+    // kNoWaitInside: nowhere.
+    Real waitInsideAt = engine::kNoWaitInside;
 
     // WHAT THE CAR REMEMBERS OF THE LINE (issue #262). Its ARRIVAL: when it reaches its line, fixed once, the first
     // time its driver judged this junction -- as the tick its own estimate then had it reaching the line -- or, where it
@@ -182,7 +193,7 @@ uint64_t junctionPlansHash(const JunctionPlans& plans);
 
 // A DRIVER'S PLANS AS TEXT, for the driver card: for each junction ahead, nearest first, the junction, the kind of turn,
 // the connector, how far ahead its start is, its crossing points in order with how far ahead each begins and who gives
-// way there (at phase 0 for lights, until task D2 runs their clock), and its waiting points.
+// way there (for lights, in the phase they are in at `now`, and the light the car's turn shows), and its waiting points.
 // Each plan also says what its driver decided (describeGiveWay); `now` (the clock, seconds) says how long ago it came
 // to rest at the line.
 std::string describeJunctionPlans(const engine::LaneGraph& roads, const RightOfWay& row, const Car& car,

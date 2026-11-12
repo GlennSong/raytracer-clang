@@ -360,6 +360,8 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
     car.width = kCarWidth;
     crossingOptions.vehicles.push_back(car);
     engine::roads::lanes::findCrossingPoints(g, crossingOptions);
+    // ... and where a far turn may wait inside its junction, as the road builder places it (#261).
+    engine::roads::lanes::placeWaitInsidePoints(g);
 #endif
     return t;
 }

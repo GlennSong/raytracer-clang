@@ -173,12 +173,25 @@ bool isGoing(const JunctionPlan& plan, double odometer, Real speed, Real brake, 
 
 double heldStopOf(const Car& car) { return car.held.hasStop ? car.held.stopAt : static_cast<double>(kNever); }
 
-void noteAtTheLine(JunctionPlan& plan, const Car& car, Real brake, Real atLineWithin, uint64_t tick, double now) {
+void noteAtTheLine(JunctionPlan& plan, const Car& car, Real brake, Real atLineWithin, uint64_t tick, double now,
+                   bool redForMe, bool heldByLight) {
     const double odometer = car.odometer;
     const Real speed = car.speed;
     const double toLine = plan.startOdometer - odometer;
     const bool atRest = speed < kStandingBelow;
-    if (!plan.cameToRest && atRest && toLine <= atLineWithin && toLine >= -atLineWithin) {
+    // A RED before the line (not "red, may turn") starts the approach afresh: what was decided, and the arrival fixed, on
+    // the green before it are for a green that is over. The next green is judged as new.
+    if (redForMe && heldByLight && toLine > 0) {
+        plan.decision = GiveWayDecision::Undecided;
+        plan.judged = GiveWayJudgement();
+        plan.mindChanges = 0;
+        plan.arrivalFixed = false;
+        plan.arrivalTick = 0;
+        plan.arrivalAt = 0;
+        plan.cameToRest = false;
+        plan.restAt = 0;
+    }
+    if (!plan.cameToRest && !heldByLight && atRest && toLine <= atLineWithin && toLine >= -atLineWithin) {
         plan.cameToRest = true;
         plan.restAt = now;
     }
@@ -187,7 +200,8 @@ void noteAtTheLine(JunctionPlan& plan, const Car& car, Real brake, Real atLineWi
         plan.arrivalTick = tick;
         plan.arrivalAt = now;
     }
-    if (!plan.committed && odometer > plan.startOdometer + plan.lastWaitingPoint()) {
+    if (!plan.committed && (odometer > plan.startOdometer + plan.lastWaitingPoint() ||
+                            (redForMe && odometer > plan.startOdometer + atLineWithin))) {
         plan.committed = true;
         plan.committedTick = tick;
     }

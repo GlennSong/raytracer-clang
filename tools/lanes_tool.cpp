@@ -249,11 +249,12 @@ int main(int argc, char** argv) {
             const CrossingReport& cr = lg.crossings;
             std::printf("  crossing points: %zu (%u crosses, %u joins, %u splits between two paths; %u with crosswalks); of "
                         "the path pairs, %u reach across two junctions and %u are a connector and a lane; the busiest "
-                        "junction %u has %u; %u junctions with two or more connectors have none; %.0f ms\n",
+                        "junction %u has %u; %u junctions with two or more connectors have none; %u far turns have a "
+                        "place to wait inside; %.0f ms\n",
                         G.crossings.size(), cr.byMeeting[static_cast<int>(Meeting::Cross)],
                         cr.byMeeting[static_cast<int>(Meeting::Join)], cr.byMeeting[static_cast<int>(Meeting::Split)],
                         cr.withCrosswalks, cr.betweenJunctions, cr.withLanes, cr.busiestJunction, cr.busiestCount,
-                        cr.junctionsWithout, cr.milliseconds);
+                        cr.junctionsWithout, cr.waitInsidePoints, cr.milliseconds);
         }
         {
             // the control plan carried through (#240)

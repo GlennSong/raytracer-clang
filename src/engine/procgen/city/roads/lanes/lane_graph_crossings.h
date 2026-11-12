@@ -67,6 +67,18 @@ struct CrossingOptions {
 // outline (more than kJunctionEndReach out).
 CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts);
 
+// WHERE A FAR TURN MAY WAIT INSIDE ITS JUNCTION (issue #261; docs/driving-briefs/D4-inside-the-junction.md; design
+// 5.2's Path::waitInsideAt). A driver turning across oncoming traffic on a plain green may pull forward into the
+// junction and wait there for a gap. Shape decides where: its front just short of the first stretch where its path
+// meets a path from an approach facing it (an arriving lane whose traffic comes head on: kOncomingDot), so its body
+// stands across the cross street's paths (which have a red while it may wait) and short of every oncoming one. A far
+// turn that meets nothing from a facing approach (a T, or a junction with no oncoming road) gets none, and so does one
+// whose first such stretch begins at its very start. Whether waiting there is allowed, and on which lights, is the rule
+// set's: the driving model checks each point against its give-way table at load and drops one that would leave a body
+// in the way of something that may move with it (driving/signal_programme.h). Needs the crossing points
+// (findCrossingPoints first). Returns how many connectors got a point; every other path is left with none.
+uint32_t placeWaitInsidePoints(LaneGraph& g);
+
 }  // namespace roads::lanes
 }  // namespace engine
 
