@@ -141,6 +141,25 @@ int main(int argc, char** argv) {
         std::printf("wrote %s: %zu x %zu\n", argv[3], rows.empty() ? 0 : rows[0].size(), rows.size());
         return 0;
     }
+    if (argc >= 3 && std::strcmp(argv[1], "landings") == 0) {
+        // THE RAMPS' LANDINGS (#282): each ramp end on a street checked as build() checks it, without the build -- the
+        // lanes composed, no heights, so a planned crossing's clearance is not measured here. Every graph named.
+        int faults = 0, planned = 0;
+        for (int i = 2; i < argc; ++i) {
+            try {
+                RoadLabGraph g = RoadLabGraph::load(argv[i]);
+                (void)expand(g);
+                int ramps = 0;
+                for (const EdgeSpec& e : g.edges) ramps += e.isRamp() ? 1 : 0;
+                const std::vector<RampLandingFault> fs = checkRampLandings(g);
+                std::printf("%s: %d ramps, %zu ends land wrongly\n", argv[i], ramps, fs.size());
+                for (const RampLandingFault& f : fs) { std::printf("  %s\n", describe(f).c_str()); planned += f.declared ? 1 : 0; }
+                faults += static_cast<int>(fs.size());
+            } catch (const std::exception& ex) { std::fprintf(stderr, "lanes: %s: %s\n", argv[i], ex.what()); }
+        }
+        std::printf("%d ramp ends land wrongly in all, %d of them planned (build() refuses those)\n", faults, planned);
+        return 0;
+    }
     if (argc == 3 && std::strcmp(argv[1], "interchange-demo") == 0) {
         std::ofstream(argv[2]) << interchangeDemo().dump(1) << "\n";
         std::printf("wrote %s\n", argv[2]);
@@ -401,6 +420,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "usage: lanes_tool build <graph.json> [--out <dir>]\n"
                              "       lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width ...] [--junction J ...]   (the lane graph: dump, problems, reach, plan SVG; junction close-ups)\n"
                              "       lanes_tool design <graph.json> <out.json> [--plan-crossings]   (the graph with every road's planned profile; built again, taken as given)\n"
+                             "       lanes_tool landings <graph.json> ...   (each ramp end on a street: on the carriageway going its way? #282)\n"
                              "                    [--ramp-width M] [--ramp-shoulder M]   ramp carriageway (default 4.5 m lane, 2.5 m shoulder)\n");
         return 2;
     }

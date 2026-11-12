@@ -61,6 +61,13 @@ void applyFloors(EdgeSpec& e, const RoadClassSpec& c);   // re-impose a through 
 // only, and the next section met it 4 m lower (Saltwood). Recompute whenever a track's floorPts change.
 void chainTrackFloors(RoadLabGraph& g, double tol);
 void rampProfile(RoadLabGraph& g, EdgeSpec& e, const HeightField& terrain);
+// A RAMP'S HEIGHT OVER ITS FREE RUN (#282): the one model rampProfile builds a ramp by and the planner (diamondRamps)
+// plans one by, so a ramp is planned at the heights it will be built at. Between its departure (station s0, height za)
+// and its arrival (s1, zb): a smoothstep from za to zb, lifted to clear each HOLD (a floor point: height `z` within
+// `half` of station `s`, falling away beyond at the design grade, kDesignGrade x gMax), and never higher than gMax
+// reaches from either end -- a hold the ramp cannot afford is met as far as the grade allows, not by a cliff.
+struct RampHold { double s = 0, z = 0, half = 0; };
+double rampFreeHeight(double s, double s0, double s1, double za, double zb, const std::vector<RampHold>& holds, double gMax);
 double projectZ(const EdgeSpec& e, const Vec2& p);
 double maxGrade(const EdgeSpec& e);
 

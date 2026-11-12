@@ -288,6 +288,11 @@ TEST_CASE(no_ramp_is_anchored_at_the_end_of_its_road) {
                     const nlohmann::json& an = e[side];
                     const auto it = path.find(an.value("edge", std::string()));
                     if (it == path.end() || it->second.size() < 2) continue;
+                    // the freeway's ends; a ramp's lane of its own on a street (#282) is placed clear of that street's
+                    // junctions by the planner, and a street running on as its next piece is not an end
+                    bool onFreeway = false;
+                    for (const Vec2& q : freewayEnds) onFreeway = onFreeway || (q - it->second.front()).length() < 1e-6;
+                    if (!onFreeway) continue;
                     ++anchors;
                     const Vec2 at(an["at"][0].get<double>(), an["at"][1].get<double>());
                     const Vec2 nearEnd = (at - it->second.front()).length() < (at - it->second.back()).length() ? it->second.front() : it->second.back();

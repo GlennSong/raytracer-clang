@@ -20,6 +20,22 @@ struct Pier { int edge; Vec2 xy; double z0, z1; };
 
 struct Check { std::string name, detail; bool ok; };
 
+// A RAMP'S END ON A STREET, CHECKED (#282, ADR-0411). A ramp's traffic must reach the street's carriageway going its way
+// without standing in, or crossing at grade, the one coming the other way. Each ramp end on a road is checked:
+//   - an end anchored to a host lane (a lane of its own beside it) must run the way that lane runs;
+//   - a bare end running ALONG the street (the lane graph's parallel test, kJunctionParallelForGraph) must not end on
+//     the street's centre line, nor on the carriageway running against it (a bare end meeting the street at an angle is
+//     an arm of a junction there, and is not judged here);
+//   - a ramp whose landing was planned ("landing", RampLanding) must land as planned: on that street, by that kind of
+//     join and on that carriageway, and over the street it crosses with the planned clearance, deck to deck (when its
+//     heights are known: after build()'s profiles).
+// `declared`: the ramp carries a planned landing. build() REFUSES such a ramp (throws, naming it): the plan and the
+// roads disagree, and the planner is the one to fix. A ramp with none (planned before the rule, or by hand) only warns:
+// Result::rampLandings, and lanes_tool.
+struct RampLandingFault { std::string ramp, street, what; Vec2 at; bool declared = false; };
+std::vector<RampLandingFault> checkRampLandings(const RoadLabGraph& g);
+std::string describe(const RampLandingFault& f);
+
 struct Result {
     RoadLabGraph graph;
     LaneSet lanes;
@@ -34,6 +50,7 @@ struct Result {
     double nodeMismatchBefore = 0, nodeMismatchAfter = 0, seconds = 0;
     std::string nodeMismatchWhere;             // the worst node, when it is worth naming
     std::vector<std::string> undeclaredCrossings;   // a graph that declares its crossings: the ones it did not (ADR-0215)
+    std::vector<RampLandingFault> rampLandings;     // ramp ends that land wrongly, none planned (warnings; #282)
     std::map<std::string, double> timings;
 };
 

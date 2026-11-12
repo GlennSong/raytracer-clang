@@ -376,20 +376,27 @@ void rampProfile(RoadLabGraph& g, EdgeSpec& e, const HeightField& terrain) {
     // floor tents on a ramp: lift under a design-grade cone, but never inside the held runs at the anchors,
     // and never above what the class's maximum grade can reach from either anchor — a hold the ramp cannot
     // afford is met as far as the grade allows and left for the clearance invariant to name, not a cliff.
+    // (rampFreeHeight: the same heights the planner planned the ramp by)
     if (!e.floorPts.empty()) {
-        const double gd = kDesignGrade * g.cls(e).gMax, gm = g.cls(e).gMax;
-        for (const auto& fp : e.floorPts) {
-            const double sc = project(e.xy, e.s, Vec2(fp[0], fp[1])).station;
-            for (size_t i = 0; i < n; ++i) {
-                if (e.s[i] <= s0 || e.s[i] >= s1) continue;
-                const double tent = fp[2] - gd * std::max(0.0, std::fabs(e.s[i] - sc) - fp[3]);
-                const double cap = std::min(za + gm * (e.s[i] - s0), zb + gm * (s1 - e.s[i]));
-                e.z[i] = std::max(e.z[i], std::min(tent, cap));
-            }
-        }
+        std::vector<RampHold> holds;
+        for (const auto& fp : e.floorPts) holds.push_back({project(e.xy, e.s, Vec2(fp[0], fp[1])).station, fp[2], fp[3]});
+        for (size_t i = 0; i < n; ++i)
+            if (e.s[i] > s0 && e.s[i] < s1) e.z[i] = rampFreeHeight(e.s[i], s0, s1, za, zb, holds, g.cls(e).gMax);
     }
     const RoadClassSpec& c = g.cls(e); e.ramp.valid = true; e.ramp.departS = s0; e.ramp.touchS = s1; e.ramp.length = e.s.back();
     e.ramp.climb = zb - za; e.ramp.freeLen = s1 - s0; e.ramp.requiredLen = std::fabs(e.ramp.climb) / c.gMax * 1.5; e.ramp.ok = e.ramp.freeLen + 1e-6 >= e.ramp.requiredLen;
+}
+
+double rampFreeHeight(double s, double s0, double s1, double za, double zb, const std::vector<RampHold>& holds, double gMax) {
+    const double w = smoothstep01((s - s0) / std::max(s1 - s0, 1e-6));
+    double z = (1 - w) * za + w * zb;
+    const double gd = kDesignGrade * gMax;
+    for (const RampHold& h : holds) {
+        const double tent = h.z - gd * std::max(0.0, std::fabs(s - h.s) - h.half);
+        const double cap = std::min(za + gMax * (s - s0), zb + gMax * (s1 - s));
+        z = std::max(z, std::min(tent, cap));
+    }
+    return z;
 }
 
 double crossingMismatch(const RoadLabGraph& g, const std::vector<CrossingMeet>& meets, double maxDz, double rampMaxDz, const CrossingMeet** worstAt) {

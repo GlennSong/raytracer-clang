@@ -417,7 +417,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
     };
     auto street = [&](const std::string& sid, RoadClass k, const std::vector<Vec2>& pts) {
         edges.push_back({{"id", sid}, {"class", className(k)}, {"path", {{"points", pointsJson(pts)}}}});
-        rampStreets.push_back({sid, pts, closable(k, pts)});
+        rampStreets.push_back({sid, pts, closable(k, pts), className(k)});
     };
     auto piece = [](const std::vector<Vec2>& pts, double s0, double s1) {
         const std::vector<double> st = stations(pts);
@@ -683,9 +683,14 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             }
             if (std::getenv("RT_PLAN_WHY") && !dr.closed.empty()) std::printf("[plan] %s: %zu streets under the ring closed for ramps\n", dop.aId.c_str(), dr.closed.size());
             if (std::getenv("RT_PLAN_WHY"))
-                std::printf("[plan] %s: %d diamonds of %d crossings (oblique %d, spacing %d, no terminal %d, no room %d, over a street %d)\n",
+                std::printf("[plan] %s: %d diamonds of %d crossings (oblique %d, spacing %d, no terminal %d, no landing %d, no room %d, over a street %d)\n",
                             dop.aId.c_str(), dr.built, dr.candidates, dr.rejectedOblique, dr.rejectedSpacing, dr.rejectedTerminal,
-                            dr.rejectedRoom, dr.rejectedConflict);
+                            dr.rejectedLanding, dr.rejectedRoom, dr.rejectedConflict);
+            // said every time (ADR-0411): a ring that loses its diamonds for want of room to land them is a road-layout question
+            if (dr.rejectedLanding > 0 && dr.built == 0)
+                std::fprintf(stderr, "city_plan: %s: no diamond: at %d of its %d crossings the road beside the freeway has no room to land a ramp "
+                             "on the carriageway going its way (#282, ADR-0411; RT_DIAMOND_WHY=1 says why)\n",
+                             dop.aId.c_str(), dr.rejectedLanding, dr.candidates);
         }
         if (looped) {
             // the loop's diamonds, onto its places' main streets and back roads

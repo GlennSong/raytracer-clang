@@ -38,6 +38,10 @@ struct LaneSet {
 // Ramps get their composed geometry (mutates the graph's ramp edges), then every paved edge
 // expands into lanes and the declared connectors are generated.
 LaneSet expand(RoadLabGraph& g);
+// The host lane a ramp's anchor attaches to, by its side (as read, road_graph_spec.cpp readAnchor): "right" the forward
+// lanes' kerb lane (their outer lane, on the spine's right in plan coordinates; written "kerb"), "back-right" the
+// backward lanes' (written "back-kerb"), "left" the forward lanes' offside lane.
+LaneSlot anchorSlot(const RoadLabGraph& g, const EdgeSpec& host, const std::string& side);
 
 // Same travel direction and centrelines about one lane width apart over >= 20 m.
 std::vector<std::pair<int, int>> adjacency(const LaneSet& L);

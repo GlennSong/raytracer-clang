@@ -177,6 +177,24 @@ struct TerrainSpec {
     bool hasCalm = false; double calmDx = 1, calmDy = 0, calmFrom = 0, calmTo = 0;
 };
 
+// A RAMP'S LANDING AS PLANNED (#282, ADR-0411; interchange.h): how the planner meant the ramp's end on a street to meet
+// it -- written into the ramp's "landing" for the builder to check (checkRampLandings), never to work out:
+//   "landing": {"street": "s276", "joins": "merge", "carriageway": "backward", "half": "far",
+//               "crossing": {"kind": "over", "street": "s340", "at": [x, y], "clearance": 7.6}}
+// `joins`: "merge" -- by a lane of its own beside the kerb lane of the street's `carriageway` ("forward": the lanes
+// running along the street's spine; "backward": the other way), its end anchored there; "junction" -- as one arm of a
+// junction on the street, its end bare. `half`: the half of the street, seen from the freeway, the carriageway is on
+// ("near" or "far"). `crossing`: how the ramp gets to that half -- "over" a street (holding `clearance` over it, deck
+// to deck, at `at`), or "none". A ramp without one was planned before the rule (or by hand): the builder checks its
+// geometry all the same, and only warns.
+struct RampLanding {
+    bool declared = false;
+    std::string street, joins, carriageway, half;
+    std::string crossingKind, crossingStreet;   // kind "over" or "none"
+    Vec2 crossingAt;
+    double clearance = 0;
+};
+
 struct RampInfo {
     bool valid = false;
     double departS = 0, touchS = 0, length = 0, climb = 0, freeLen = 0, requiredLen = 0;
@@ -209,6 +227,7 @@ struct EdgeSpec {
     std::vector<Vec2> xy;                // spine, resampled at rules.step
     std::vector<double> s, z, t;         // station, deck height, terrain height along the spine
     RampInfo ramp;
+    RampLanding landing;                 // a ramp's end on a street, as planned (#282)
     // Does anything meet this end? An OPEN end is pinned to the ground by the profile
     // solve: gradeLimit only ever RAISES a profile, so a road that cannot follow its
     // terrain otherwise floats — steep_climb began 65 m in the air over a valley floor

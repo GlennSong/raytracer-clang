@@ -19091,3 +19091,84 @@ own figure has said 7 s a car since #261; the row only now has lines to read). W
 soak's limits (two of the longest cycle, 185.6 s) are UNVERIFIED until the milestone's soak. The same build shows stands
 of up to 151 s between 300 and 500 s ("no room beyond"), past the five-minute limit's window.
 
+
+## ADR-0411 — A ramp lands on the carriageway going its way, over the road if it must; the builder refuses one that does not; the traffic lab is left as it was until its streets give the ramps room (#282)
+
+Words: a CARRIAGEWAY is one direction's lanes of a two-way road. A ramp's KERB LANE is the lane of a carriageway beside
+the kerb (this city drives on the left: the left-hand lane; the OFFSIDE lane is the one by the centre line). A
+TOUCH-DOWN is where a ramp meets the road running beside the freeway (a FRONTAGE ROAD), instead of the street that
+crosses under it. A LANE OF ITS OWN is the extra lane a ramp brings alongside a road where it joins it (a MERGE LANE,
+followed by a TAPER where it narrows away) or leaves it (a DECELERATION LANE and its taper). A HOLD (a FLOOR POINT) is a
+height a road must keep near a place, approached at its grade. The NEAR and FAR HALF of a road are the halves nearer to
+and farther from the freeway. CLEARANCE here is deck surface to deck surface: the builder's free height under a deck
+plus the thicker slab plus the girder depth (`under_clearance + thick + structure_depth`, 7.6 m for a ramp over a
+collector). A ramp's LANDING is its end on a street as the planner meant it.
+
+**Context.** Glenn, in the viewer: cars leaving the freeway in the traffic lab cross the oncoming carriageway, and queues
+stand in the oncoming lane. The diagnosis on #282: the interchange planner (`interchange.cpp`, the frontage touch-down)
+ended the ramp on the frontage road's CENTRE LINE and wrote only the road's name (`"to": "s240"`). A ramp always arrives
+from the freeway's side, and on a two-way road beside the freeway that half carries the traffic going the other way, so
+the ramp's one connector ran across the near carriageway into the far one, and its stop line stood 2.3 m into the
+oncoming kerb lane. Glenn's fix: land the ramp on the carriageway running its way, carried over or under the road with
+the heights stated; the builder refuses a ramp that joins a carriageway going the other way.
+
+**Decision.**
+- **A. The planner lands a touch-down on the carriageway going the ramp's way** (`diamondRamps`, its new `landOn`). The
+  ramp's traffic travels the freeway's way where it meets the frontage road, so it takes that road's carriageway going
+  that way: its end is an ANCHOR beside that carriageway's kerb lane, from which the builder lays the lane of its own
+  (`streetAux` 40 m + `streetTaper` 25 m to join, `streetDecel` 30 m + 25 m to leave). Where that carriageway is the far
+  one (always, beside a freeway), the ramp crosses OVER the frontage road first: a floor point holds it at the builder's
+  clearance over the road, it comes down on the far side at the ramp's design grade, then turns in to its lane. Its
+  heights are planned with the builder's own ramp model (`rampFreeHeight`, factored out of `rampProfile` with the same
+  arithmetic, so no built road changes), and every street it passes is checked against them: cleared, closed (a
+  closable street, as before) or a refusal. A merge lane must have ended before the junction ahead's mouth and the solid
+  lines before its stop line (`mouth` + `kSolidBeforeStopLine`, 50 m from the junction); a lane of its own keeps
+  `mouth` from a junction at its other end. Where a touch-down cannot be made so, that side of the diamond cannot land
+  and the diamond is refused -- it is never landed on the centre line. (The four-way fallback, a T on the crossing
+  street nearer its next junction, is still taken only where there is no road beside the freeway: tried beside one, it
+  put the ramps' T 18 m from the frontage junction, one tangle of a junction that lost its lights.)
+- **B. The ramp says how it lands** (`"landing"` on the ramp edge, `RampLanding`): the street, how it joins ("merge" by a
+  lane of its own, or "junction" as an arm of one), which carriageway ("forward": the lanes running along the street's
+  spine; "backward"), which half ("near" or "far"), and its crossing ("over" a named street at a point with its
+  clearance, or "none"). The anchor names the kerb lane as "kerb" or "back-kerb" (read as the old "right" / "back-right";
+  no new data says left or right).
+- **C. The builder checks every ramp end on a street and refuses a planned one that lands wrongly**
+  (`checkRampLandings`, run in `build()` after the profiles). An anchored end must run the way its host lane runs; a
+  bare end running along the street (the lane graph's parallel test) must not end on its centre line or on the
+  carriageway running against it (a bare end meeting the street at an angle is a junction's arm, not judged); a planned
+  landing must be on its street, by its kind of join, on its carriageway, and its "over" crossing must hold its
+  clearance as built. A ramp that carries a landing and fails is REFUSED: `build()` throws, naming the ramp and what is
+  wrong. A ramp with none -- every ramp planned before this rule -- only WARNS (`Result::rampLandings`, a line on
+  stderr, the invariant's detail), so no level stops loading. `lanes_tool landings GRAPH...` runs the check without a
+  build.
+- **D. The traffic lab is NOT re-planned.** Under A, `city_plan scene` on the lab builds no diamond at all (0 of 20 and 0
+  of 19 crossings on the two ring chains). The frontage roads are cut by junctions every 47-153 m (outer ring: median
+  99 m; inner ring: median 106 m, with streets meeting its far side at most of them), and a landing needs, on the far
+  side, about 280 m clear of side streets (coming down 7.6 m at 7.2 %: about 106 m, turning in: 50 m, the merge lane and
+  taper: 65 m, its mouth: 50 m), and before that 115-145 m of one road between junctions for the lane of its own and
+  its mouths (an on-ramp's, an off-ramp's). Re-planning would take the lab's freeway off the network; that is Glenn's call, so the lab keeps its roads,
+  its bake and its pinned five-minute hash, and its eight ramps warn. Ways to give the ramps room, for him to choose:
+  (1) frontage roads one-way in the freeway's direction (every ramp then joins beside the frontage road's lane nearest
+  the freeway, crossing nothing; the planner would need to anchor to that lane, which it does not yet), (2) no side streets meeting a frontage road's far side within about 300 m of an
+  interchange (the city plan, or the planner closing them as it closes streets under the ring), (3) a ramp ending as an
+  arm of a junction on the frontage road, under its control (as d0_0_b_off and d0_0_a_on end today, at the planned
+  junctions j111, stop signs, and j122, lights) -- which crosses the oncoming traffic at grade under that control,
+  against the rule as written.
+- **E. What a re-plan would do now, anywhere.** No planned city has room either: run on their briefs, the planner keeps
+  only the system interchanges' ramps -- metro_planned 52 -> 8 ramps, metro_mountain 52 -> 8, piedmont 32 -> 8,
+  metro_v2_test 8 -> 0, river_town 8 -> 8 (it had no diamonds) -- and lands no touch-down in any of them (written to a
+  scratch folder only; nothing re-planned). So no city should be re-planned with this planner until D's choice is made;
+  `city_plan` says so every time a ring chain loses its diamonds this way (`DiamondResult::rejectedLanding`).
+- **F. Other levels keep their roads.** The check counts 159 ramp ends landing on a centre line, all planned before the
+  rule (warnings): metro_mountain 41, metro_planned 41, metro_rivers 38, piedmont 23, metro_v2_test 8, traffic_lab 8.
+  island_8_nature's 32 ramps, river_town's 8, zz_mtn_window's 4 and the hand-made scenes pass. No lanes tag bump: no built road changes (the
+  profile code is the same arithmetic; the check only reads).
+
+**Tests** (`lanes_tests`): a ramp merging into the carriageway going its way is built and passes; the builder refuses,
+naming the ramp, one anchored beside the carriageway coming the other way (and one whose plan names the other
+carriageway) and one ending along the centre line, and only warns when it carries no plan; a ramp over the street to its
+far carriageway passes at its planned 7.6 m and is refused at grade; the planner lands all four ramps of a diamond
+between frontage roads on their far carriageways over the road, and the builder finds them as planned (built in full
+by hand, `lanes_tool build`, that scene passes every invariant); with a street meeting the far side where a ramp must
+come down, the planner refuses the diamond. `no_ramp_is_anchored_at_the_end_of_its_road` now looks at freeway anchors
+only: a ramp's anchor on a street is placed clear of that street's junctions by A.

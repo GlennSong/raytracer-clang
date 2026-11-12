@@ -110,6 +110,10 @@ RampAnchor readAnchor(const nlohmann::json& j, const LaneLayout& hostLanes) {
     if (j.is_null()) return a;
     if (j.is_string()) { a.edge = j.get<std::string>(); return a; }
     a.edge = j.at("edge").get<std::string>(); a.side = j.value("side", std::string("right"));
+    // the kerb lane by name (#282: a road side is the kerb or the offside, never left or right): "kerb" the forward
+    // lanes' (on the spine's right in plan coordinates), "back-kerb" the backward lanes'
+    if (a.side == "kerb") a.side = "right";
+    else if (a.side == "back-kerb") a.side = "back-right";
     if (j.contains("s")) { a.hasStation = true; a.s = j.at("s").get<double>(); a.set = true; }
     else if (j.contains("x")) { a.axis = 'x'; a.coord = j.at("x").get<double>(); a.set = true; }
     else if (j.contains("y")) { a.axis = 'y'; a.coord = j.at("y").get<double>(); a.set = true; }
@@ -323,6 +327,25 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         e.speedLimitHand = ej.value("speed_limit_hand", false);
         if (!(e.speedLimit >= 0.0)) throw std::runtime_error("edge " + e.id + ": speed_limit must be a speed in m/s, 0 or more");
         auto hostLanes = [&](const nlohmann::json& a) { if (a.is_object()) { const EdgeSpec* h = g.find(a.at("edge").get<std::string>()); if (h) return h->lanes; } return e.lanes; };
+        if (ej.contains("landing")) {
+            const nlohmann::json& lj = ej["landing"];
+            RampLanding& L = e.landing;
+            L.declared = true;
+            L.street = lj.value("street", std::string());
+            L.joins = lj.value("joins", std::string());
+            L.carriageway = lj.value("carriageway", std::string());
+            L.half = lj.value("half", std::string());
+            if (lj.contains("crossing") && lj["crossing"].is_object()) {
+                const nlohmann::json& cj = lj["crossing"];
+                L.crossingKind = cj.value("kind", std::string());
+                L.crossingStreet = cj.value("street", std::string());
+                if (cj.contains("at")) L.crossingAt = Vec2(cj["at"].at(0).get<double>(), cj["at"].at(1).get<double>());
+                L.clearance = num(cj, "clearance", 0.0);
+            } else {
+                L.crossingKind = "none";
+            }
+            if (L.joins != "merge" && L.joins != "junction") throw std::runtime_error("edge " + e.id + ": landing.joins must be \"merge\" or \"junction\", not \"" + L.joins + "\"");
+        }
         if (ej.contains("from")) e.from = readAnchor(ej["from"], hostLanes(ej["from"]));
         if (ej.contains("to")) e.to = readAnchor(ej["to"], hostLanes(ej["to"]));
         for (const std::string& ref : {e.from.edge, e.to.edge}) if (!ref.empty() && !g.index.count(ref)) throw std::runtime_error("edge " + e.id + ": from/to references unknown or later edge " + ref);

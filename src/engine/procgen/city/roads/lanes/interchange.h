@@ -14,6 +14,22 @@
 // freeway between frontage roads), the ramps touch down along the road beside the freeway
 // instead: the off-ramp upstream of the crossing, the on-ramp downstream of it.
 //
+// A TOUCH-DOWN JOINS THE CARRIAGEWAY GOING ITS WAY (#282). An off-ramp joins the carriageway of
+// the road beside the freeway that travels the way the ramp's traffic is going, by a merge lane of
+// its own beside that carriageway's kerb lane; an on-ramp leaves the carriageway going its way by a
+// deceleration lane beside its kerb lane. Never the road's centre line, and never across the
+// carriageway coming the other way at grade: where the carriageway going its way is the far one
+// -- always, for a two-way road beside the freeway: the ramp arrives from the freeway's side, and
+// that half of the road carries the traffic going the other way -- the ramp crosses OVER the road
+// beside the freeway, holding the builder's clearance there, comes down on the far side and joins
+// from there. The ramp's data says so: its anchor on the street names the carriageway's kerb lane
+// ("kerb": the street's forward lanes, "back-kerb": its backward lanes), its floor point holds it
+// over the road, and its "landing" states the street, the carriageway, the half of the road (near
+// or far from the freeway) and the crossing, for the builder to check (checkRampLandings) rather
+// than work out. Where a touch-down cannot fit -- a street meets the road's far side where the ramp
+// must come down, or the road has no room for the lane of its own clear of its junctions -- that
+// side cannot land, and the diamond is refused (ADR-0411: on the traffic lab, every diamond).
+//
 // A ramp is as long as its climb needs at the RAMP's grade under the builder's smoothstep
 // profile (steepest at 1.5x the mean), measured to the ground where it lands, plus the part
 // of it within reach of that street. A diamond whose ramps would pass over another street
@@ -43,6 +59,9 @@ struct RampStreet {
     // ramp or lead lane would pass over it too low may CLOSE it instead of being refused
     // (DiamondResult::closed), its two ends becoming Ts on the roads either side.
     bool closable = false;
+    // Its road class (the class table's name, roadClass): which lanes it has each way, how wide, its sidewalk -- where
+    // a ramp touching down beside it joins or leaves its kerb lane. Empty: a local street.
+    std::string cls;
 };
 
 struct DiamondOptions {
@@ -71,6 +90,12 @@ struct DiamondOptions {
                                  // a block over — a split diamond
     double frontageReach = 90;   // how far out a road beside the freeway may be and still be one
     double shift = 50, along = 20;   // band -> frontage road at grade, then on its line to the terminal
+    // A touch-down's lane of its own on the street (#282): an off-ramp's merge lane after its gore and its taper; an
+    // on-ramp's deceleration lane before its gore and its taper. A street's traffic is slow; these are short.
+    double streetAux = 40, streetDecel = 30, streetTaper = 25;
+    // A ramp crossing the road beside the freeway moves across over this many metres along for every metre across (a
+    // smoothstep: about 31 degrees at its steepest).
+    double crossPerMetre = 2.5;
     double clearance = 0;        // the deck's height over the ground at a crossing
     double window = 200, gMax = 0.06;   // the freeway's own profile, for the climb
     std::vector<std::pair<double, double>> keepOut;   // station ranges no ramp's lanes may touch (a system interchange's)
@@ -86,6 +111,7 @@ struct DiamondResult {
     std::vector<nlohmann::json> ramps;
     int built = 0;
     int candidates = 0, rejectedOblique = 0, rejectedSpacing = 0, rejectedTerminal = 0, rejectedRoom = 0, rejectedConflict = 0;
+    int rejectedLanding = 0;   // a side whose road beside the freeway has no room to land it on the carriageway going its way (#282)
     double squarestRejected = 0;
     std::vector<std::string> closed;   // closable streets the built diamonds closed: drop their edges
 };

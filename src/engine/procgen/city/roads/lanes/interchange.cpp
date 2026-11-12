@@ -1,5 +1,6 @@
 #include "engine/procgen/city/roads/lanes/interchange.h"
 
+#include "engine/procgen/city/roads/lanes/lane_graph_build.h"   // kSolidBeforeStopLine: where a merge lane must have ended
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_graph_spec.h"
 #include "engine/procgen/city/roads/lanes/vertical_profile.h"
@@ -135,19 +136,15 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
     // after); without it 5 of 44 island ramps came out 2-15% short of their climb
     auto runFor = [&](double climb) { return std::fabs(climb) * 1.2 / peak * 1.5 + 40.0; };
 
-    // A ramp's spine, in its direction of travel. It starts on the auxiliary lane (the builder
+    // A four-way's spine, in its direction of travel. It starts on the auxiliary lane (the builder
     // replaces the first/last point with the exact gore), eases out to the band over `diverge`
-    // and falls in it. A crossing terminal is then a straight run to the street; a frontage
-    // terminal shifts across to the road beside the freeway over `shift`, AT GRADE — the builder
-    // counts the ramp as arrived once it is within reach of that road — and runs `along` its
-    // line to the terminal, finishing ALONG a street, which is how the builder joins them.
-    auto spine = [&](double sGore, double sTerm, double side, const Vec2& term, bool off, double rEnd) {
+    // and falls in it, then runs straight to the crossing street. (A touch-down's: landOn.)
+    auto spine = [&](double sGore, double sTerm, double side, const Vec2& term, bool off) {
         std::vector<Vec2> pts;
         const double dir = sTerm > sGore ? 1.0 : -1.0, span = std::fabs(sTerm - sGore);
         for (double d = 0; d < span - 2.0; d += 4.0) {
             const double st = sGore + dir * d;
-            double r = auxOff + (rBand - auxOff) * smoothstep01(d / o.diverge);
-            if (rEnd != rBand) r += (rEnd - rBand) * smoothstep01((d - (span - o.along - o.shift)) / o.shift);
+            const double r = auxOff + (rBand - auxOff) * smoothstep01(d / o.diverge);
             pts.push_back(atS(st) + nrmS(st) * (r * side));
         }
         pts.push_back(term);
@@ -180,6 +177,177 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
                 }
             }
         }
+        return false;
+    };
+
+    // THE TOUCH-DOWN, ON THE CARRIAGEWAY GOING THE RAMP'S WAY (#282; interchange.h). A ramp's traffic travels the
+    // freeway's way (`fwd` along the route) where it meets the road beside the freeway, so it joins (an off-ramp) or
+    // leaves (an on-ramp) that road's carriageway travelling that way, by a lane of its own beside its kerb lane: the
+    // anchor the builder composes the merge or deceleration lane from. When that carriageway is the far one, the ramp
+    // crosses OVER the road first, holding the builder's clearance there (a floor point: its rule, under_clearance + the
+    // thicker slab + structure depth), comes down on the far side, then turns in to its lane. Its heights are planned
+    // by the builder's own model (rampFreeHeight), so every street it passes is cleared or refused here, not found out
+    // in the build.
+    const Rules builderRules;   // the builder's rules as the planner writes the graph (it writes no "rules" of its own)
+    const RoadClassSpec& rampClass = roadClass("ramp");
+    auto needOver = [&](const std::string& cls) {   // a ramp's deck over a street's, surface to surface
+        return builderRules.underClearance + std::max(rampClass.thick, roadClass(cls).thick) + builderRules.structureDepth;
+    };
+    struct Landing {
+        bool far = false, forward = true;
+        std::string side;                 // the anchor's lane: "kerb" (the street's forward lanes) or "back-kerb" (its backward ones)
+        double sAnchor = 0;               // the freeway station of the gore on the street
+        Vec2 gore;                        // the gore's place on the street's centreline (the anchor's "at")
+        std::vector<Vec2> spine;          // freeway gore -> street gore (reversed for an on-ramp when written)
+        bool held = false; Vec2 holdAt; double holdZ = 0, holdHalf = 0, clearance = 0; std::size_t holdStreet = 0;
+    };
+    auto landOn = [&](double sCross, double sTouch, double side, double fwd, bool off, std::size_t k, double f, Landing& L) -> bool {
+        static const bool why = std::getenv("RT_DIAMOND_WHY") != nullptr;
+        static const bool whyAll = why && std::string(std::getenv("RT_DIAMOND_WHY")) == "2";   // and every length tried
+        const RampStreet& fr = streets[k];
+        const RoadClassSpec& sc = roadClass(fr.cls.empty() ? std::string("local") : fr.cls);
+        const std::vector<LaneSlot> slots = laneSlots(sc, sc.lanes);
+        const std::vector<double> ss = stations(fr.xy);
+        const double len = ss.back();
+        const Vec2 n = nrmS(sTouch) * side;   // outward, away from the freeway
+        const Projection at = project(fr.xy, ss, atS(sTouch) + n * f);
+        const Vec2 tS = tangentAt(fr.xy, at.segment);
+        // the carriageway going the ramp's way, and its kerb lane
+        L.forward = dot(tangentAtStation(route, cs, clampS(sTouch)) * fwd, tS) > 0;
+        const int count = L.forward ? sc.lanes.fwd : sc.lanes.back;
+        if (count < 1) { if (why) std::fprintf(stderr, "    %s: no carriageway going its way\n", fr.id.c_str()); return false; }
+        const std::string want = (L.forward ? "f" : "b") + std::to_string(count - 1);
+        double kerbOff = 0, reach = 0;
+        bool found = false;
+        for (const LaneSlot& sl : slots) {
+            reach = std::max(reach, std::fabs(sl.offset));
+            if (sl.name == want) { kerbOff = sl.offset; found = true; }
+        }
+        if (!found) return false;
+        const double edge = reach + sc.lanes.w / 2 + sc.shoulder + sc.sidewalk;   // the street's outer edge, sidewalk and all
+        L.side = L.forward ? "kerb" : "back-kerb";
+        L.far = dot(perp(tS) * kerbOff, n) > 0;
+        // offsets from the freeway's centreline, outward: the lane of its own beside the kerb lane, the far side's band
+        const double rAux = f + (L.far ? 1.0 : -1.0) * (std::fabs(kerbOff) + sc.lanes.w);
+        const double rFar = f + edge + o.bandGap + o.rampHalf;
+        // THE GORE ON THE STREET: the lane of its own lies on this one street (the builder lays it along its host's
+        // stations), after the gore for an off-ramp, before it for an on-ramp. An off-ramp's merge lane has ended
+        // before the junction ahead's mouth and the solid lines before its stop line (no car changes lanes there:
+        // lane_graph_build.h); an on-ramp's deceleration lane begins `mouth` past the junction behind. The other end
+        // of the lane of its own keeps `mouth` from a junction too, and only a little from where the street merely
+        // runs on as the next piece of the same road.
+        const double lane = off ? o.streetAux + o.streetTaper : o.streetDecel + o.streetTaper;
+        const bool aheadAtEnd = L.forward;   // the street's end its traffic runs toward: its last point when forward
+        auto junctionAt = [&](bool atEnd) {
+            const Vec2 q = atEnd ? fr.xy.back() : fr.xy.front();
+            int meeting = 0;
+            for (std::size_t ci = 0; ci < streets.size(); ++ci)
+                if (ci != k && streets[ci].xy.size() >= 2 && (distance(streets[ci].xy.front(), q) < 1.0 || distance(streets[ci].xy.back(), q) < 1.0)) ++meeting;
+            return meeting != 1;   // one other road's end there: the same road running on
+        };
+        const double marginAhead = off ? o.mouth + kSolidBeforeStopLine : (junctionAt(aheadAtEnd) ? o.mouth : 2.0);
+        const double marginBehind = off ? (junctionAt(!aheadAtEnd) ? o.mouth : 2.0) : o.mouth;
+        // in "how far along the traffic's way" from the end behind: the gore, then (off) its lane after it
+        const double uG = off ? len - marginAhead - lane : marginBehind + lane;
+        if ((off && uG < marginBehind) || (!off && uG > len - marginAhead)) {
+            if (why) std::fprintf(stderr, "    %s: %.0f m long, no room for %.0f m of lane and its mouths (%.0f, %.0f)\n", fr.id.c_str(), len, lane, marginBehind, marginAhead);
+            return false;
+        }
+        const double stG = aheadAtEnd ? uG : len - uG;
+        L.gore = pointAt(fr.xy, ss, stG);
+        L.sAnchor = project(route, cs, L.gore).station;
+        const double away = off ? -fwd : fwd;   // off: the freeway gore is upstream; on: downstream
+        if ((L.sAnchor - sCross) * away < 0) { if (why) std::fprintf(stderr, "    %s: its gore falls past the crossing\n", fr.id.c_str()); return false; }
+        const double zStreet = groundAt(L.gore);
+        const double clear = needOver(fr.cls.empty() ? std::string("local") : fr.cls);
+        const double gd = kDesignGrade * rampClass.gMax;
+        const double crossLen = o.crossPerMetre * std::fabs(rFar - rBand);
+        const double descend = clear / gd + 10.0;   // the far side's run down from the hold, at the design grade, and a little
+        const double before = L.far ? crossLen + descend : 0.0;
+        // the shortest ramp that fits: its heights as the builder will make them (rampFreeHeight) meet the hold, are down
+        // by the time it turns in to its lane, and clear every street it passes
+        for (double span = o.diverge + before + o.shift + 10.0; span < 1200.0; span += 10.0) {
+            const double sGore = L.sAnchor + away * span, dir = -away;
+            if (sGore < 0.0 || sGore > routeLen) break;
+            const double dCrossEnd = span - o.shift - descend;   // where it reaches the far side's band
+            std::vector<Vec2> pts;
+            std::vector<double> rs;
+            for (double d = 0; d < span - 2.0; d += 4.0) {
+                double r = auxOff + (rBand - auxOff) * smoothstep01(d / o.diverge);
+                if (L.far) r += (rFar - rBand) * smoothstep01((d - (dCrossEnd - crossLen)) / crossLen);
+                const double rLast = L.far ? rFar : rBand;
+                r += (rAux - rLast) * smoothstep01((d - (span - o.shift)) / o.shift);
+                const double st = sGore + dir * d;
+                pts.push_back(atS(st) + nrmS(st) * (r * side));
+                rs.push_back(r);
+            }
+            pts.push_back(atS(L.sAnchor) + nrmS(L.sAnchor) * (rAux * side));
+            rs.push_back(rAux);
+            const std::vector<double> ds = stations(pts);
+            const double za = deckZ(sGore), zb = zStreet;
+            if (std::fabs(za - zb) / rampClass.gMax * 1.5 > ds.back()) continue;   // the builder's own check: free run for the climb
+            std::vector<RampHold> holds;
+            L.held = false;
+            if (L.far) {
+                // the hold: centred where it crosses the street's centreline, over the stretch either side of that
+                // where it is within its half-width of the street's outer edge (not its turn in to its lane at the end)
+                double in = -1, out = -1, centre = -1;
+                std::size_t ic = 0;
+                for (std::size_t i = 1; i < rs.size() && centre < 0; ++i)
+                    if ((rs[i - 1] - f) * (rs[i] - f) <= 0) { centre = ds[i - 1] + (ds[i] - ds[i - 1]) * (f - rs[i - 1]) / (rs[i] - rs[i - 1] + 1e-12); ic = i; }
+                if (centre >= 0) {
+                    std::size_t a = ic, b = ic;
+                    while (a > 0 && std::fabs(rs[a - 1] - f) < edge + o.rampHalf) --a;
+                    while (b + 1 < rs.size() && std::fabs(rs[b + 1] - f) < edge + o.rampHalf) ++b;
+                    in = ds[a];
+                    out = ds[b];
+                }
+                if (in < 0 || centre < 0 || centre < o.diverge) { if (whyAll) std::fprintf(stderr, "      %.0f m: no hold (in %.0f centre %.0f)\n", ds.back(), in, centre); continue; }
+                L.held = true;
+                L.holdHalf = std::max(centre - in, out - centre) + 4.0;   // a sample's slack either side
+                L.holdAt = pointAt(pts, ds, centre);
+                L.holdZ = groundAt(L.holdAt) + clear;
+                L.clearance = clear;
+                holds.push_back({centre, L.holdZ, L.holdHalf});
+            }
+            auto zAt = [&](double d) { return rampFreeHeight(d, 0.0, ds.back(), za, zb, holds, rampClass.gMax); };
+            bool ok = true;
+            if (L.held)
+                for (double d = std::max(0.0, holds[0].s - holds[0].half); d <= holds[0].s + holds[0].half && ok; d += 1.0)
+                    if (zAt(d) < holds[0].z - 0.05) ok = false;
+            if (!ok) { if (whyAll) std::fprintf(stderr, "      %.0f m: under its hold (%.1f m wanted at %.0f m, half %.0f)\n", ds.back(), holds[0].z, holds[0].s, holds[0].half); continue; }
+            if (zAt(ds.back() - o.shift) - zb > builderRules.sameLevelDz) {   // still up in the air where it turns in
+                if (whyAll) std::fprintf(stderr, "      %.0f m: %.1f m up where it turns in\n", ds.back(), zAt(ds.back() - o.shift) - zb);
+                continue;
+            }
+            // every street it passes: cleared by the builder's clearance, or a refusal (a closable one closes)
+            std::vector<std::size_t> closes;
+            bool blocked = false;
+            for (std::size_t ci = 0; ci < streets.size() && !blocked; ++ci) {
+                if (streets[ci].xy.size() < 2 || closed[ci]) continue;
+                for (const Vec2& x : crossings(pts, streets[ci].xy)) {
+                    const double dx = project(pts, ds, x).station;
+                    if (dx > ds.back() - 1.0) continue;   // the gore itself, on its lane beside the street
+                    const double over = zAt(dx) - groundAt(x);
+                    if (over >= needOver(streets[ci].cls.empty() ? std::string("local") : streets[ci].cls) - 0.2) {
+                        if (L.held && distance(x, L.holdAt) < L.holdHalf) L.holdStreet = ci;
+                        continue;
+                    }
+                    if (streets[ci].closable && !used[ci]) { closes.push_back(ci); continue; }
+                    if (why) std::fprintf(stderr, "    landing on %s, %.0f m long: passes %s at %.0f m along, %.1f m over it\n", fr.id.c_str(), ds.back(), streets[ci].id.c_str(), dx, over);
+                    // past the crossing's start, the ramp is on its way down to a gore that does not move: a longer ramp
+                    // passes the same street as low
+                    if (dx > dCrossEnd - crossLen) return false;
+                    blocked = true;
+                    break;
+                }
+            }
+            if (blocked) continue;
+            for (std::size_t ci : closes) closing.push_back(ci);
+            L.spine = pts;
+            return true;
+        }
+        if (why) std::fprintf(stderr, "    landing on %s: no length fits\n", fr.id.c_str());
         return false;
     };
 
@@ -222,46 +390,53 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         const bool crossA = terminal(cd, aSide, o.mouth, tA, sA, kA), crossB = terminal(cd, -aSide, o.mouth, tB, sB, kB);
         // Four ramps. `fwd` is the carriageway's direction of travel in station: a exits
         // upstream of its terminal and merges downstream of it; b is the mirror.
-        struct Plan { const char* name; const std::string* host; bool off; double side, fwd; bool cross; double sTerm; Vec2 term; double sGore; std::size_t street; double beside; };
-        Plan ps[4] = {{"a_off", &o.aId, true, aSide, 1.0, crossA, sA, tA, 0, kA, 0}, {"a_on", &o.aId, false, aSide, 1.0, crossA, sA, tA, 0, kA, 0},
-                      {"b_off", &o.bId, true, -aSide, -1.0, crossB, sB, tB, 0, kB, 0}, {"b_on", &o.bId, false, -aSide, -1.0, crossB, sB, tB, 0, kB, 0}};
-        bool found = true, room = true, clear = true;
+        struct Plan { const char* name; const std::string* host; bool off; double side, fwd; bool cross; double sTerm; Vec2 term; double sGore; std::size_t street; double beside; bool lands; Landing landing; };
+        Plan ps[4] = {{"a_off", &o.aId, true, aSide, 1.0, crossA, sA, tA, 0, kA, 0, false, {}}, {"a_on", &o.aId, false, aSide, 1.0, crossA, sA, tA, 0, kA, 0, false, {}},
+                      {"b_off", &o.bId, true, -aSide, -1.0, crossB, sB, tB, 0, kB, 0, false, {}}, {"b_on", &o.bId, false, -aSide, -1.0, crossB, sB, tB, 0, kB, 0, false, {}}};
+        bool found = true, room = true, clear = true, landing = true;
         std::vector<std::vector<Vec2>> spines;
         for (Plan& p : ps) {
             const double away = p.off ? -p.fwd : p.fwd;   // off: the gore is upstream; on: downstream
             if (!p.cross) {
-                // the touch-down, `mouth` clear of the crossing, on the road beside the freeway —
-                // and a road beside it where the shift begins: the same road, though side streets
-                // meeting it from outside cut it into several chains
+                // the touch-down, `mouth` clear of the crossing, on the road beside the freeway, on the carriageway
+                // going the ramp's way (landOn); where it will not fit, a four-way nearer the next junction
                 const double sTouch = cd.s + away * o.mouth;
-                double f = 0, f0 = 0; std::size_t k = 0, k0 = 0;
-                if (besideAt(sTouch, p.side, f, k) && besideAt(sTouch + away * (o.along + o.shift), p.side, f0, k0)) {
-                    const RampStreet& fr = streets[k];
-                    p.sTerm = sTouch; p.beside = f; p.street = k;
-                    p.term = pointAt(fr.xy, stations(fr.xy), project(fr.xy, stations(fr.xy), atS(sTouch) + nrmS(sTouch) * (f * p.side)).station);
+                double f = 0; std::size_t k = 0;
+                if (besideAt(sTouch, p.side, f, k)) {
+                    if (!landOn(cd.s, sTouch, p.side, p.fwd, p.off, k, f, p.landing)) { found = false; landing = false; break; }   // no room to land as it must
+                    p.lands = true; p.street = k; p.beside = f;
+                    p.sTerm = p.landing.sAnchor; p.term = p.landing.gore;
                 } else if (terminal(cd, p.side, o.crossMouth, p.term, p.sTerm, p.street)) {
                     p.cross = true;   // no road beside to land on: a four-way nearer the next junction
                 } else { found = false; break; }
             }
-            // free run, then the part within reach of the landing street: the level approach
-            // across the street's half-width, or the shift and the run along the frontage road
-            const double arrive = p.cross ? o.landing : o.shift + o.along;
-            // THE SHORTEST RAMP LONG ENOUGH FOR THE CLIMB AT ITS OWN GORE (#40): the deck falls away from the
-            // crossing it bridges, so the climb depends on the length. Two fixed-point steps (the climb at the
-            // crossing, then at that long ramp's gore) landed on the short answer -- 165 m for a gore 14.8 m up,
-            // a 15% ramp by the builder's own check. Scan out until the run covers the climb where it ends.
-            const double zTermG = groundAt(p.term);
-            double L = std::max(runFor(deckZ(p.sTerm) - zTermG), o.diverge) + arrive;   // the upper bound: the peak's climb
-            for (double Ltry = o.diverge + arrive; Ltry < L; Ltry += 10.0)
-                if (Ltry >= std::max(runFor(deckZ(p.sTerm + away * Ltry) - zTermG), o.diverge) + arrive) { L = Ltry; break; }
-            p.sGore = p.sTerm + away * L;
             const double lead = p.off ? o.decel + o.taperOff : o.aux + o.taperOn;
+            if (p.lands) {
+                // its length, its spine and the streets it passes were settled by landOn
+                std::vector<Vec2> sp = p.landing.spine;
+                p.sGore = project(route, cs, sp.front()).station;
+                if (!p.off) std::reverse(sp.begin(), sp.end());   // an on-ramp reads street -> band -> gore
+                spines.push_back(sp);
+            } else {
+                // free run, then the part within reach of the landing street: the level approach
+                // across the street's half-width
+                const double arrive = o.landing;
+                // THE SHORTEST RAMP LONG ENOUGH FOR THE CLIMB AT ITS OWN GORE (#40): the deck falls away from the
+                // crossing it bridges, so the climb depends on the length. Two fixed-point steps (the climb at the
+                // crossing, then at that long ramp's gore) landed on the short answer -- 165 m for a gore 14.8 m up,
+                // a 15% ramp by the builder's own check. Scan out until the run covers the climb where it ends.
+                const double zTermG = groundAt(p.term);
+                double L = std::max(runFor(deckZ(p.sTerm) - zTermG), o.diverge) + arrive;   // the upper bound: the peak's climb
+                for (double Ltry = o.diverge + arrive; Ltry < L; Ltry += 10.0)
+                    if (Ltry >= std::max(runFor(deckZ(p.sTerm + away * Ltry) - zTermG), o.diverge) + arrive) { L = Ltry; break; }
+                p.sGore = p.sTerm + away * L;
+                spines.push_back(spine(p.sGore, p.sTerm, p.side, p.term, p.off));
+                const double zGore = deckZ(p.sGore), zTerm = groundAt(p.term);
+                if (conflicts(spines.back(), cd.street, p.street, p.off ? zGore : zTerm, p.off ? zTerm : zGore, p.off, arrive)) clear = false;
+            }
             const double lo = std::min({p.sGore, p.sGore + away * lead, p.sTerm}), hi = std::max({p.sGore, p.sGore + away * lead, p.sTerm});
             if (lo < 20.0 || hi > routeLen - 20.0) room = false;
-            for (const auto& k : o.keepOut) if (lo < k.second && hi > k.first) room = false;
-            spines.push_back(spine(p.sGore, p.sTerm, p.side, p.term, p.off, p.cross ? rBand : p.beside));
-            const double zGore = deckZ(p.sGore), zTerm = groundAt(p.term);
-            if (conflicts(spines.back(), cd.street, p.street, p.off ? zGore : zTerm, p.off ? zTerm : zGore, p.off, arrive)) clear = false;
+            for (const auto& kk : o.keepOut) if (lo < kk.second && hi > kk.first) room = false;
             // ...nor may its decel or aux lane, up on the freeway, pass over a street crossing under
             // it: that lane is one with the ramp, which comes down to the ground, and a lane both
             // stacked over a street and level with the streets it meets tore the deck (the SW town).
@@ -283,9 +458,11 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         static const bool why = std::getenv("RT_DIAMOND_WHY") != nullptr;
         if (why) std::fprintf(stderr, "[diamond] %s crossing at s=%.0f (%.0f deg, street %s): side a %s, side b %s -> %s\n", o.idPrefix.c_str(), cd.s, cd.angle,
                               streets[cd.street].id.c_str(), crossA ? "four-way" : "frontage?", crossB ? "four-way" : "frontage?",
-                              !found ? "no terminal" : !room ? "no room" : !clear ? "over a street" : "built");
+                              !landing ? "no landing" : !found ? "no terminal" : !room ? "no room" : !clear ? "over a street" : "built");
         if (why && !room) { std::fprintf(stderr, "    route %.0f m, keep-outs", routeLen); for (const auto& k : o.keepOut) std::fprintf(stderr, " [%.0f, %.0f]", k.first, k.second); std::fprintf(stderr, "\n"); }
-        if (why) for (const Plan& p : ps) std::fprintf(stderr, "    %s: term s=%.0f gore s=%.0f cross=%d beside=%.0f deck %.1f over ground %.1f (band %.0f)\n", p.name, p.sTerm, p.sGore, p.cross, p.beside, deckZ(p.sGore), groundAt(p.term), rBand);
+        if (why) for (const Plan& p : ps) std::fprintf(stderr, "    %s: term s=%.0f gore s=%.0f cross=%d lands=%d (%s half, %s) beside=%.0f deck %.1f over ground %.1f (band %.0f)\n", p.name, p.sTerm, p.sGore, p.cross, p.lands,
+                                                     p.landing.far ? "far" : "near", p.landing.side.c_str(), p.beside, deckZ(p.sGore), groundAt(p.term), rBand);
+        if (!landing) { ++out.rejectedLanding; continue; }
         if (!found) { ++out.rejectedTerminal; continue; }
         if (!room) { ++out.rejectedRoom; continue; }
         if (!clear) { ++out.rejectedConflict; continue; }
@@ -297,9 +474,35 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
             nlohmann::json e; e["id"] = pre + "_" + p.name; e["class"] = "ramp";
             nlohmann::json anchor = {{"edge", *p.host}, {"at", {gore.x, gore.y}}, {"side", "right"}, {"approach", o.approach}};
             const std::string sid = streets[p.street].id;
-            if (p.off) { anchor["decel"] = o.decel; anchor["taper"] = o.taperOff; e["from"] = anchor; e["to"] = sid; }
-            else       { anchor["aux"] = o.aux;     anchor["taper"] = o.taperOn;  e["to"] = anchor; e["from"] = sid; }
+            // the street end: a touch-down's anchor on the kerb lane of the carriageway going its way, with its lane of
+            // its own (#282); a four-way's bare street, which it meets at a junction
+            nlohmann::json street = sid;
+            if (p.lands) {
+                const Landing& L = p.landing;
+                street = {{"edge", sid}, {"at", {std::round(L.gore.x * 100) / 100, std::round(L.gore.y * 100) / 100}}, {"side", L.side}, {"approach", 20.0}};
+                if (p.off) { street["aux"] = o.streetAux; street["taper"] = o.streetTaper; }
+                else       { street["decel"] = o.streetDecel; street["taper"] = o.streetTaper; }
+            }
+            if (p.off) { anchor["decel"] = o.decel; anchor["taper"] = o.taperOff; e["from"] = anchor; e["to"] = street; }
+            else       { anchor["aux"] = o.aux;     anchor["taper"] = o.taperOn;  e["to"] = anchor; e["from"] = street; }
             e["path"] = {{"type", "polyline"}, {"points", pointList(spines[static_cast<std::size_t>(k)])}};
+            // THE LANDING AS PLANNED (#282): which street, which of its carriageways and how the ramp gets there -- for
+            // the builder to check (checkRampLandings), never to work out
+            nlohmann::json landing = {{"street", sid}, {"joins", p.lands ? "merge" : "junction"}};
+            if (p.lands) {
+                const Landing& L = p.landing;
+                landing["carriageway"] = L.forward ? "forward" : "backward";
+                landing["half"] = L.far ? "far" : "near";   // of the street, from the freeway
+                if (L.held) {
+                    const double z = std::round(L.holdZ * 100) / 100;
+                    const nlohmann::json at = {std::round(L.holdAt.x * 100) / 100, std::round(L.holdAt.y * 100) / 100};
+                    landing["crossing"] = {{"kind", "over"}, {"street", streets[L.holdStreet].id}, {"at", at}, {"clearance", std::round(L.clearance * 100) / 100}};
+                    e["floor"] = nlohmann::json::array({{at[0], at[1], z, std::round(L.holdHalf * 100) / 100}});
+                } else {
+                    landing["crossing"] = "none";
+                }
+            }
+            e["landing"] = landing;
             out.ramps.push_back(e);
         }
         taken.push_back(cd.s);

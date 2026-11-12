@@ -341,7 +341,7 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
         if (rd.kind == "freeway" || rd.points.size() < 2) continue;
         const std::vector<std::vector<Vec2>> pieces = clip(rd.points);
         for (std::size_t q = 0; q < pieces.size(); ++q) {
-            json e = {{"id", rd.kind + std::to_string(k) + (q ? "_" + std::to_string(q) : std::string())}, {"class", rd.kind == "link" ? "collector" : "mountain"},
+            json e = {{"id", rd.kind + std::to_string(k) + (q ? "_" + std::to_string(q) : std::string())}, {"class", islandRoadClass(rd)},
                       {"floor", riverFloors(pieces[q])}, {"path", {{"points", pointsJson(pieces[q])}}}};
             // this piece's lay-bys: the lookout's station along it, the pocket on its valley side (the
             // builder's forward lanes lie right of the path, so a view to the right is a forward pocket)

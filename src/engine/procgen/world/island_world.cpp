@@ -947,7 +947,7 @@ void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>
     // 2. THE DIAMONDS
     std::vector<roads::lanes::RampStreet> streets;
     for (std::size_t k = 0; k < w.roads.size(); ++k)
-        if (w.roads[k].kind != "freeway" && w.roads[k].points.size() >= 2) streets.push_back({w.roads[k].kind + std::to_string(k), w.roads[k].points, false});
+        if (w.roads[k].kind != "freeway" && w.roads[k].points.size() >= 2) streets.push_back({w.roads[k].kind + std::to_string(k), w.roads[k].points, false, islandRoadClass(w.roads[k])});
     const HeightField ground = [&w](double x, double z) { return w.heightAt(x, z); };
     w.ramps.clear();
     w.rampEdges.clear();
@@ -1285,7 +1285,7 @@ void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>
                 ++built;
             }
             candidates += dr.candidates; oblique += dr.rejectedOblique; spacing += dr.rejectedSpacing;
-            terminal += dr.rejectedTerminal; room += dr.rejectedRoom; conflict += dr.rejectedConflict;
+            terminal += dr.rejectedTerminal + dr.rejectedLanding; room += dr.rejectedRoom; conflict += dr.rejectedConflict;
             return got;
         };
         auto servedStreets = [&] {

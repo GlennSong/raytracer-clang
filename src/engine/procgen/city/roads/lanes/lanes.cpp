@@ -1,4 +1,5 @@
 #include "engine/procgen/city/roads/lanes/lanes.h"
+#include "engine/procgen/city/roads/lanes/lane_graph_build.h"   // kJunctionParallelForGraph: a ramp end along a street
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_design.h"
 #include "engine/procgen/city/roads/lanes/vertical_profile.h"
@@ -18,6 +19,87 @@ namespace roads::lanes {
 
 namespace {
 double secondsSince(const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); }
+}
+
+std::string describe(const RampLandingFault& f) {
+    char at[64];
+    std::snprintf(at, sizeof at, " at (%.1f, %.1f)", f.at.x, f.at.y);
+    return "ramp " + f.ramp + ": " + f.what + at + (f.declared ? "" : " (planned before the landing rule: a warning)");
+}
+
+std::vector<RampLandingFault> checkRampLandings(const RoadLabGraph& g) {
+    std::vector<RampLandingFault> out;
+    // the ramp's own way at one end: over its first or last few metres (its traffic runs along its spine)
+    constexpr double kEndRun = 6.0;
+    auto wayAt = [](const EdgeSpec& e, int end, std::size_t i) {
+        const std::size_t n = e.xy.size();
+        std::size_t a = i, b = i;
+        if (end == 1) { while (a > 0 && distance(e.xy[a], e.xy[i]) < kEndRun) --a; }
+        else { while (b + 1 < n && distance(e.xy[b], e.xy[i]) < kEndRun) ++b; }
+        return normalize(e.xy[b] - e.xy[a]);
+    };
+    for (const EdgeSpec& e : g.edges) {
+        if (!e.isRamp() || e.xy.size() < 2 || e.lanes.back > 0) continue;   // a two-way "ramp" is a road
+        const RampLanding& L = e.landing;
+        auto fault = [&](const std::string& street, const std::string& what, const Vec2& at) { out.push_back({e.id, street, what, at, L.declared}); };
+        bool landed = !L.declared;
+        for (int end = 0; end < 2; ++end) {
+            const RampAnchor& a = end == 0 ? e.from : e.to;
+            if (a.edge.empty()) continue;
+            const EdgeSpec* host = g.find(a.edge);
+            if (!host || host->xy.size() < 2 || g.cls(*host).track || g.cls(*host).footway) continue;
+            const bool landing = L.declared && a.edge == L.street;
+            landed = landed || landing;
+            if (a.set) {
+                // a lane of its own beside a host lane: it must run that lane's way
+                const int ai = e.anchorIdx[end];
+                if (ai < 0) continue;
+                const std::size_t i = static_cast<std::size_t>(ai);
+                const LaneSlot slot = anchorSlot(g, *host, a.side);
+                const Projection pr = project(host->xy, host->s, e.xy[i]);
+                const Vec2 laneWay = tangentAt(host->xy, pr.segment) * static_cast<double>(slot.dir);
+                const std::string cw = slot.dir > 0 ? "forward" : "backward";
+                if (dot(wayAt(e, end, i), laneWay) < 0)
+                    fault(host->id, std::string(end == 1 ? "joins " : "leaves ") + host->id + "'s " + cw + " carriageway, which runs against it", e.xy[i]);
+                if (landing && L.joins != "merge") fault(host->id, "planned to meet " + host->id + " at a junction, but it is anchored beside a lane", e.xy[i]);
+                if (landing && !L.carriageway.empty() && L.carriageway != cw)
+                    fault(host->id, "planned for " + host->id + "'s " + L.carriageway + " carriageway, but anchored beside its " + cw + " lanes", e.xy[i]);
+                continue;
+            }
+            // a bare end: where it meets the street, and which way it is going there
+            const std::size_t i = end == 0 ? 0 : e.xy.size() - 1;
+            const Vec2 p = e.xy[i];
+            const Projection pr = project(host->xy, host->s, p);
+            if (pr.distance > g.hw(*host)) continue;   // not on it: it meets its height only
+            const Vec2 tH = tangentAt(host->xy, pr.segment);
+            const Vec2 way = wayAt(e, end, i);
+            if (landing && L.joins == "merge") fault(host->id, "planned to merge into " + host->id + ", but it has no lane of its own there", p);
+            if (std::fabs(dot(way, tH)) < kJunctionParallelForGraph) continue;   // at an angle: an arm of a junction there
+            // along the street: on which of its carriageways? (plan coordinates: forward lanes lie on the spine's right)
+            const double offset = dot(p - pointAt(host->xy, host->s, pr.station), perp(tH));
+            if (std::fabs(offset) < host->lanes.w / 2) { fault(host->id, std::string(end == 1 ? "ends" : "starts") + " along " + host->id + "'s centre line", p); continue; }
+            const bool forwardSide = offset < 0;
+            if ((forwardSide ? host->lanes.fwd : host->lanes.back) < 1 || dot(way, tH * (forwardSide ? 1.0 : -1.0)) < 0)
+                fault(host->id, std::string(end == 1 ? "ends" : "starts") + " along " + host->id + "'s " + (forwardSide ? "forward" : "backward") + " carriageway, which runs against it", p);
+        }
+        if (!L.declared) continue;
+        if (!landed) fault(L.street, "planned to land on " + L.street + ", but neither of its ends is on it", e.xy.back());
+        // THE CROSSING AS PLANNED: over the street, deck to deck, with its clearance (once the heights are made)
+        if (L.crossingKind == "over") {
+            const EdgeSpec* under = g.find(L.crossingStreet);
+            if (!under) { fault(L.crossingStreet, "planned to cross over " + L.crossingStreet + ", which is not in the graph", L.crossingAt); continue; }
+            if (e.z.size() != e.xy.size() || under->z.size() != under->xy.size()) continue;
+            const double gap = projectZ(e, L.crossingAt) - projectZ(*under, L.crossingAt);
+            if (gap < L.clearance - 0.05) {
+                char b[160];
+                std::snprintf(b, sizeof b, "passes over %s %.2f m above it, planned %.2f m", under->id.c_str(), gap, L.clearance);
+                fault(under->id, b, L.crossingAt);
+            }
+        } else if (L.crossingKind != "none" && !L.crossingKind.empty()) {
+            fault(L.crossingStreet, "planned crossing of kind \"" + L.crossingKind + "\": only \"over\" or \"none\" is built", L.crossingAt);
+        }
+    }
+    return out;
 }
 
 nlohmann::json designedGraph(const nlohmann::json& spec, const std::string& baseDir, DesignReport* report) {
@@ -75,6 +157,19 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
                 for (std::size_t i = 0; i < e.s.size(); ++i)
                     if (e.s[i] >= next) { std::fprintf(stderr, "[dump]   %7.0f %8.2f %8.2f  (%+.1f)  at (%.0f, %.0f)\n", e.s[i], e.z[i], e.t[i], e.z[i] - e.t[i], e.xy[i].x, e.xy[i].y); next += step; }
             }
+    // THE RAMPS' LANDINGS (#282): a planned one that does not land as planned is refused; the rest warn
+    {
+        std::string refused;
+        for (const RampLandingFault& f : checkRampLandings(g)) {
+            if (f.declared) refused += (refused.empty() ? "" : "; ") + describe(f);
+            else r.rampLandings.push_back(f);
+        }
+        if (!refused.empty()) throw std::runtime_error("lanes: refused: " + refused);
+        if (!r.rampLandings.empty()) {
+            std::fprintf(stderr, "lanelab: %zu ramp ends land on a street's centre line or its carriageway coming the other way "
+                         "(not re-planned since the landing rule, #282), e.g. %s\n", r.rampLandings.size(), describe(r.rampLandings.front()).c_str());
+        }
+    }
     r.timings["profiles"] = secondsSince(t1); t1 = std::chrono::steady_clock::now(); stage(2, "footprints", 0.0);
     // 3. footprints, closing, layers; 4. arrangement and surfaces
     r.heights = std::make_unique<DeckHeight>(g, r.lanes);
@@ -320,6 +415,12 @@ std::vector<Check> invariants(const Result& r) {
     add("multilane roads have derived lane adjacency", adj, std::to_string(r.adjacent.size()) + " adjacent pairs" + (adj ? "" : ", none found for" + d.str()));
     if (r.hasTerrain) { d.str(""); d << r.conform.above << " of " << r.conform.samples << " samples above by > 1 cm, max excess " << r.conform.maxExcess << " m"; add("no terrain above any deck (> 1 cm)", r.conform.above == 0, d.str()); }
     out.push_back(cover);
+    {   // the ramps' landings (#282): a planned one that did not land as planned never gets here (build() refused it)
+        d.str("");
+        d << r.rampLandings.size() << " ramp ends land on a street's centre line or its carriageway coming the other way, none planned (warnings)";
+        for (std::size_t i = 0; i < r.rampLandings.size() && i < 6; ++i) d << (i ? "; " : ": ") << describe(r.rampLandings[i]);
+        add("ramps land on the carriageway going their way", true, d.str());
+    }
     // Structure clearance: where two lanes are purely grade-separated (never same-level anywhere they
     // overlap), the smaller deck-to-deck gap must leave under_clearance below the upper slab and its girders
     // (Glenn: "roads that go underneath collide with the bottom of the freeway's undercarriage"). Pairs that

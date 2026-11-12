@@ -25,13 +25,16 @@ Lane ribbonLane(const std::string& id, int parent, const std::string& kind, cons
     l.s = stations(l.xy); return l;
 }
 
-// The slot a ramp attaches to: 'right' = forward outer lane, 'back-right' = backward outer, 'left' = forward inner.
-LaneSlot outerSlot(const RoadLabGraph& g, const EdgeSpec& host, const std::string& side) {
+}  // namespace
+
+LaneSlot anchorSlot(const RoadLabGraph& g, const EdgeSpec& host, const std::string& side) {
     std::vector<LaneSlot> slots = laneSlots(g.cls(host), host.lanes);
     std::string want = side == "right" ? "f" + std::to_string(host.lanes.fwd - 1) : side == "back-right" ? "b" + std::to_string(host.lanes.back - 1) : "f0";
     for (const LaneSlot& s : slots) if (s.name == want) return s;
     throw std::runtime_error("ramp anchor: host " + host.id + " has no lane on side " + side);
 }
+
+namespace {
 
 double hostStation(const EdgeSpec& host, const RampAnchor& a) {
     if (a.hasStation) return a.s;
@@ -53,7 +56,7 @@ void composeRamp(RoadLabGraph& g, EdgeSpec& e) {
     nlohmann::json pts = path.value("points", nlohmann::json::array());
     std::vector<Vec2> pre, post; e.anchorIdx[0] = e.anchorIdx[1] = -1; e.anchorLanes.clear();
     if (e.to.set) {
-        const EdgeSpec& host = *g.find(e.to.edge); LaneSlot slot = outerSlot(g, host, e.to.side);
+        const EdgeSpec& host = *g.find(e.to.edge); LaneSlot slot = anchorSlot(g, host, e.to.side);
         double sg = hostStation(host, e.to), aux = e.to.aux, tap = e.to.taper > 0 ? e.to.taper : 30 * host.lanes.w, appr = e.to.approach;
         double sgn = slot.dir > 0 ? 1.0 : -1.0, outward = (e.to.side == "right") ? -1.0 : +1.0;   // the auxiliary lane lies outside the outer lane
         std::vector<double> ss, off; int n = static_cast<int>(aux + tap) + 1;
@@ -64,7 +67,7 @@ void composeRamp(RoadLabGraph& g, EdgeSpec& e) {
         else if (!pts.empty()) pts[pts.size() - 1] = {G.x, G.y};
     }
     if (e.from.set) {
-        const EdgeSpec& host = *g.find(e.from.edge); LaneSlot slot = outerSlot(g, host, e.from.side);
+        const EdgeSpec& host = *g.find(e.from.edge); LaneSlot slot = anchorSlot(g, host, e.from.side);
         double sg = hostStation(host, e.from), dec = e.from.decel, tap = e.from.taper > 0 ? e.from.taper : 30 * host.lanes.w, appr = e.from.approach;
         double sgn = slot.dir > 0 ? 1.0 : -1.0, outward = (e.from.side == "right") ? -1.0 : +1.0;
         std::vector<double> ss, off; int n = static_cast<int>(dec + tap) + 1;

@@ -94,6 +94,9 @@ struct IslandRoad {
     int from = -1, to = -1;    // site indices
     std::string street;        // a link: the city street it lands on (its exit is signed with it)
 };
+// The road class an island road is built as in the lanes scene (island_scene) and planned against (its ramps' landings):
+// a link is a collector, a pass or a mountain road the mountain class.
+inline const char* islandRoadClass(const IslandRoad& rd) { return rd.kind == "link" ? "collector" : "mountain"; }
 
 struct IslandWorld {
     nlohmann::json terrain;    // the level terrain block (island, range, rivers)
