@@ -495,7 +495,8 @@ add_library(driving STATIC
     src/apps/driving/act.cpp             # speeding up, following and stopping: the move step's formulas (#253)
     src/apps/driving/decide.cpp          # rules' answers combined into one decision, with its reasons (#252)
     src/apps/driving/driving.cpp
-    src/apps/driving/notice.cpp          # facts: what a driver can notice, registered by name (#251)
+    src/apps/driving/measure.cpp         # the plan's measurements table, counted while the tick runs (#257)
+    src/apps/driving/notice.cpp         # facts: what a driver can notice, registered by name (#251)
     src/apps/driving/road_rules.cpp      # the graph's regulation kinds bound to the rule set's devices (#251)
     src/apps/driving/route.cpp           # routes over sections and connectors, and which lanes lead on (#254)
     src/apps/driving/rule_set.cpp
@@ -520,7 +521,8 @@ add_executable(driving_tests tests/main.cpp tests/test_driving.cpp tests/test_dr
     tests/test_driving_decide.cpp tests/test_driving_route.cpp
     tests/test_driving_tick.cpp     # the three-step tick: speed, following, stopping, arriving (#253)
     tests/test_driving_trace.cpp    # the decision trace, the driver card and the wait-for graph (#256)
-    tests/driving_test_roads.cpp)   # small realistic road networks for the driving tests (#254)
+    tests/test_driving_measure.cpp  # the measurements table's arithmetic, breaches staged by hand (#257)
+    tests/driving_test_roads.cpp)  # small realistic road networks for the driving tests (#254)
 target_include_directories(driving_tests PRIVATE src tests)
 target_compile_options(driving_tests PRIVATE -Wall -Wextra)
 target_compile_definitions(driving_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

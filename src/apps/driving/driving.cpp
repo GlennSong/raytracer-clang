@@ -1,6 +1,7 @@
 #include "apps/driving/driving.h"
 
 #include "apps/driving/act.h"
+#include "apps/driving/measure.h"
 #include "engine/bundle/bundle.h"   // Fnv: the repo's 64-bit hash folded field by field
 
 #include <algorithm>
@@ -27,6 +28,12 @@ void Driving::tick(Real dt) {
     }
     ++tickCount_;
     clockSeconds_ += dt;
+    if (measurements_) measurements_->observe(*this);   // it only watches
+}
+
+void Driving::attachMeasurements(Measurements* m) {
+    measurements_ = m;
+    if (m && !m->begun()) m->begin(*this);
 }
 
 void Driving::settleClaims() {}

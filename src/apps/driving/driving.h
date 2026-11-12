@@ -51,6 +51,8 @@ namespace driving {
 
 using engine::Real;
 
+class Measurements;   // measure.h: the measurements table, which watches the tick
+
 // (PersonId, who is at the wheel, is in rule_set.h, beside personalValue which reads a person's habits from it. A
 // Hold and its HoldName are in traffic_state.h, so the facts can see them.)
 
@@ -241,6 +243,16 @@ public:
     // rules named.
     WaitReport waitReport() const;
     std::string describeWaiting(const WaitReport& report) const;
+    // The graph's regulation kinds bound to the rule set's devices (useRules), for code that reads facts the way a
+    // driver does (measure.h).
+    const RoadRules& roadRules() const { return roadRules_; }
+
+    // ---- The measurements table (measure.h; issue #257). It only watches: nothing it holds is read by the tick, and
+    // the state hash is the same with it attached or not. ----
+    // Attach `m` (it must outlive the attachment; null detaches). After each tick it is shown the world read-only. When
+    // it has not yet begun, it first remembers where every car is now.
+    void attachMeasurements(Measurements* m);
+    Measurements* measurements() const { return measurements_; }
 
 private:
     // The three steps of a tick, in order (design 7.1).
@@ -285,6 +297,7 @@ private:
     std::vector<Event> events_;           // queued since the last drain, in the order they happened
     DrivingSettings settings_;
     CapCounts capCounts_;
+    Measurements* measurements_ = nullptr;   // watches after each tick; never read by the tick, not in the hash
 
     // The rules (useRules).
     bool hasRules_ = false;

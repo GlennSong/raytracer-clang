@@ -22,6 +22,7 @@
 
 #include "apps/driving/act.h"
 #include "apps/driving/driving.h"
+#include "apps/driving/measure.h"
 #include "apps/driving/road_rules.h"
 #include "hash.h"
 
@@ -1494,6 +1495,197 @@ TEST_CASE(trace_T5_queue_behind_a_hold_is_a_chain) {
     std::printf("%s", text.c_str());
     CHECK(text.find("a stop by rule \"held\": 1 queue, 6 cars in all, the longest 6") != std::string::npos);
     watch.check("queue behind a hold");
+}
+
+// ---- The measurements table on a live tick (#257) ---------------------------------------------------------------------
+//
+// (The arithmetic on its own, with breaches staged by hand, is in test_driving_measure.cpp.)
+//   M1. 60 cars on a grid driving trips (a new one each time one parks) for 3 simulated minutes: every row with a zero
+//       target passes but two the model fails today (overlaps where two connectors join one lane, bends taken too
+//       fast; see the test), which are only checked to be measured; the table is printed;
+//   M2. a queue of 10 released from a hold on a straight road, a counting line at the hold: the zero-target rows pass,
+//       and the queue figures are measured (and printed; both are outside the plan's bands today, see the test);
+//   M3. the full ring: one gridlock loop, counted once however long it runs, every car in it; no deadlock;
+//   M4. attached or not: the same state hash at every one of 2,000 ticks with 50 cars on a grid.
+
+namespace {
+
+// The rows whose target is zero. Each must pass; where the run gave nothing to measure (no bend on a straight road)
+// it must at least not fail, and `needData` says which must have had something. `knownFailing` names rows the model
+// fails today, which the caller checks on its own.
+const std::vector<const char*> kZeroTargetRows = {"standing_no_reason", "deadlock_loops", "jumps",     "tight_turns",
+                                                  "overlaps",           "over_own_limit", "bend_speed"};
+
+bool listed(const std::vector<const char*>& keys, const char* key) {
+    return std::find_if(keys.begin(), keys.end(), [&](const char* k) { return std::string(k) == key; }) != keys.end();
+}
+
+void checkZeroTargetRows(const MeasurementReport& rep, const std::vector<const char*>& needData,
+                         const std::vector<const char*>& knownFailing = {}) {
+    for (const char* key : kZeroTargetRows) {
+        if (listed(knownFailing, key)) continue;
+        const ReportRow* r = rep.row(key);
+        CHECK(r != nullptr);
+        if (!r) continue;
+        const bool mustHaveData = listed(needData, key);
+        const bool ok = r->status == RowStatus::Pass || (!mustHaveData && r->status == RowStatus::NoData);
+        CHECK(ok);
+        if (!ok) std::printf("    row %s: %s\n", key, rowStatusWords(r->status));
+    }
+}
+
+}  // namespace
+
+TEST_CASE(measure_M1_grid_city_three_minutes_clean) {
+    const TestRoads t = driving_test::gridRoads(4, 4);
+    const TestRules rules(ruleSetLua(kAllRules));
+    World w(t.graph, rules);
+    std::vector<engine::PathId> lanes;
+    for (uint32_t i = 0; i < t.graph.paths.size(); ++i)
+        if (t.graph.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
+    constexpr uint32_t kCars = 60;
+    constexpr uint32_t kSeed = 257;
+    constexpr Real kDestinationAlong = 50;
+    for (uint32_t k = 0; k < kCars; ++k) {
+        const engine::PathId lane = lanes[k % lanes.size()];
+        CHECK(w.d.placeCar(CarId(k), kOrdinary, at(lane, 10 + static_cast<Real>(k / lanes.size()) * 30)));
+        CHECK(w.d.beginTrip(CarId(k), k, at(lanes[engine::hashPair(kSeed, k) % lanes.size()], kDestinationAlong))
+                  .valid());
+    }
+    Measurements m;
+    w.d.attachMeasurements(&m);
+    constexpr Real dt = 1.0 / 60;
+    constexpr int kTicks = static_cast<int>(180 / dt);
+    uint32_t tripsBegun = kCars, parked = 0;
+    for (int k = 0; k < kTicks; ++k) {
+        tickTimed(w.d, dt);
+        // A car that has parked sets off again somewhere else (the host's part).
+        for (const Event& e : w.d.drainEvents()) {
+            if (e.kind != EventKind::Parked) continue;
+            ++parked;
+            const engine::PathId to = lanes[engine::hashPair(kSeed, e.car.index + kCars * (++tripsBegun)) % lanes.size()];
+            w.d.beginTrip(e.car, e.person, at(to, kDestinationAlong));
+        }
+    }
+    const MeasurementReport rep = m.report();
+    std::printf("    %u trips parked in 3 minutes\n%s", parked, rep.describe().c_str());
+    CHECK(rep.ticks == static_cast<uint64_t>(kTicks));
+    CHECK(parked > 0u);
+    checkZeroTargetRows(rep, {"standing_no_reason", "deadlock_loops", "jumps", "tight_turns", "over_own_limit"},
+                        {"overlaps", "bend_speed"});
+    // TWO ROWS THE MODEL FAILS TODAY, measured and printed but not asserted to pass (findings of #257, for the tasks
+    // that fix them):
+    //   - overlaps: two cars leaving a junction by different connectors into the same lane (a straight-on car and a
+    //     turning one) meet at the lane's start and drive into each other, since nothing settles who goes first yet
+    //     (the tick's "settle claims" step is empty until the junction tasks);
+    //   - bend_speed: a driver's top speed for a bend (corner_speed) is approached through the free-road term, which
+    //     brakes too gently when the speed is well above it, so cars reach a turn faster than the rule set's
+    //     comfortable sideways acceleration and brake inside it.
+    // Each is checked to have been measured; when the model is fixed, move them into the list above.
+    const ReportRow* overlaps = rep.row("overlaps");
+    const ReportRow* bends = rep.row("bend_speed");
+    CHECK(overlaps && overlaps->status != RowStatus::NoData && overlaps->status != RowStatus::NotMeasured);
+    CHECK(bends && bends->status != RowStatus::NoData && bends->status != RowStatus::NotMeasured);
+    const ReportRow* cost = rep.row("tick_cost");
+    CHECK(cost && cost->status == RowStatus::NoTarget && m.rows().cost.ticksTimed == static_cast<uint64_t>(kTicks));
+}
+
+TEST_CASE(measure_M2_released_queue_figures) {
+    const Straight road(6, 100);
+    const TestRules rules(ruleSetLua(kAllRules));
+    World w(road.graph(), rules);
+    constexpr Real dt = 1.0 / 60;
+    decideEvery(w.d, 0.1, dt);
+    constexpr uint32_t kCars = 10;
+    constexpr Real kLine = 300;
+    constexpr Real kSpacing = 9;
+    TripId first;
+    for (uint32_t k = 0; k < kCars; ++k) {
+        CHECK(placeAt(w.d, road, k, kLine - 5 - k * kSpacing));
+        const TripId trip = w.d.beginTrip(CarId(k), 3000 + k, road.point(590));
+        if (k == 0) first = trip;
+    }
+    CHECK(w.d.placeHold(first, 1, road.point(kLine)));
+    Measurements m;
+    m.addCountingLine(road.point(kLine));
+    w.d.attachMeasurements(&m);
+    for (int k = 0; k < static_cast<int>(60 / dt); ++k) tickTimed(w.d, dt);
+    CHECK(w.d.releaseHold(first, 1));
+    for (int k = 0; k < static_cast<int>(60 / dt); ++k) tickTimed(w.d, dt);
+    const MeasurementReport rep = m.report();
+    std::printf("%s", rep.describe().c_str());
+    checkZeroTargetRows(rep, {"standing_no_reason", "deadlock_loops", "jumps", "tight_turns", "overlaps",
+                              "over_own_limit"});
+    // The queue figures are measured and finite, whatever they are. About 2.4 s per car has been measured, outside the
+    // plan's band of 1.7 to 2.1 s, so that row is EXPECTED to fail for now: only that it was measured is checked here.
+    // The first car's delay fails too, for another reason: it is measured from the moment the car began to move, and a
+    // car standing at the line crosses it a fraction of a second later. The plan's "about 2 s" counts the driver's
+    // reaction to the green as well, and nothing in the model reacts late to a release yet.
+    const ReportRow* headway = rep.row("queue_headway");
+    const ReportRow* startUp = rep.row("queue_start_up");
+    CHECK(headway && headway->status != RowStatus::NoData && std::isfinite(headway->values[0].value));
+    CHECK(startUp && startUp->status != RowStatus::NoData && std::isfinite(startUp->values[0].value));
+    CHECK(headway && headway->offenders.kept.size() == 1u && headway->offenders.kept[0].car == CarId(0));
+    CHECK(headway && !headway->offenders.kept.empty() && headway->offenders.kept[0].numbers[0].value == kCars);
+}
+
+TEST_CASE(measure_M3_full_ring_is_one_gridlock_counted_once) {
+    const TestRoads ring = ringOfFour();
+    const TestRules rules(ruleSetLua(kAllRules));
+    constexpr Real dt = 1.0 / 60;
+    World w(ring.graph, rules);
+    fillRing(w, ring, CarId::kNone);
+    Measurements m;
+    w.d.attachMeasurements(&m);
+    for (int k = 0; k < static_cast<int>(30 / dt); ++k) w.d.tick(dt);
+    const LoopRow after30 = m.rows().loops;
+    for (int k = 0; k < static_cast<int>(90 / dt); ++k) w.d.tick(dt);
+    const LoopRow& loops = m.rows().loops;
+    CHECK(after30.gridlock.loops == 1u && loops.gridlock.loops == 1u);
+    CHECK(loops.gridlock.mostCars == kRingCars);
+    CHECK(loops.gridlock.longest > after30.gridlock.longest);
+    CHECK(loops.deadlock.loops == 0u);
+    const MeasurementReport rep = m.report();
+    const ReportRow* grid = rep.row("gridlock_loops");
+    CHECK(grid && grid->status == RowStatus::NoTarget && grid->offenders.total == 1u);
+    CHECK(grid && !grid->offenders.kept.empty() && grid->offenders.kept[0].car == CarId(0));
+    const ReportRow* dead = rep.row("deadlock_loops");
+    CHECK(dead && dead->status == RowStatus::Pass);
+    std::printf("    the full ring for 2 minutes: %llu gridlock loop of %llu cars, lasting %.0f s; %llu deadlocks\n",
+                static_cast<unsigned long long>(loops.gridlock.loops),
+                static_cast<unsigned long long>(loops.gridlock.mostCars), loops.gridlock.longest,
+                static_cast<unsigned long long>(loops.deadlock.loops));
+}
+
+TEST_CASE(measure_M4_attached_or_not_same_state_hash) {
+    const TestRoads t = driving_test::gridRoads(4, 4);
+    const TestRules rules(ruleSetLua(kAllRules));
+    std::vector<engine::PathId> lanes;
+    for (uint32_t i = 0; i < t.graph.paths.size(); ++i)
+        if (t.graph.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
+    constexpr uint32_t kCars = 50;
+    constexpr int kTicks = 2000;
+    constexpr Real dt = 1.0 / 60;
+    std::vector<uint64_t> hashes[2];
+    Measurements m;
+    for (int pass = 0; pass < 2; ++pass) {
+        World w(t.graph, rules);
+        for (uint32_t k = 0; k < kCars; ++k) {
+            const engine::PathId lane = lanes[k % lanes.size()];
+            CHECK(w.d.placeCar(CarId(k), kOrdinary, at(lane, 10 + static_cast<Real>(k / lanes.size()) * 30)));
+            w.d.beginTrip(CarId(k), k, at(lanes[engine::hashPair(256, k) % lanes.size()], 50));
+        }
+        if (pass == 1) w.d.attachMeasurements(&m);
+        for (int k = 0; k < kTicks; ++k) {
+            w.d.tick(dt);
+            hashes[pass].push_back(w.d.stateHash());
+        }
+    }
+    CHECK(hashes[0].size() == static_cast<std::size_t>(kTicks));
+    CHECK(hashes[0] == hashes[1]);
+    CHECK(m.rows().ticks == static_cast<uint64_t>(kTicks));
+    std::printf("    %u cars, %d ticks: the same state hash at every tick with the measurements attached and not\n",
+                kCars, kTicks);
 }
 
 #endif  // RT_ENABLE_SCRIPTING
