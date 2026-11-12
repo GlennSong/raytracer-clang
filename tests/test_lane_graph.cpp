@@ -149,16 +149,18 @@ LaneGraph makeCrossroads() {
         }
         p.next.count = static_cast<uint32_t>(g.nextPaths.size()) - p.next.first;
     }
-    // Two regulations on lane 0: a speed limit from its start, a stop line near its end.
+    // Two regulations on lane 0: a speed limit over its whole length, a stop line near its end.
     Regulation limit;
     limit.kind = LaneGraph::nameIndex(g.regulationKindNames, "speed_limit");
     limit.path = PathId(0);
-    limit.at = 0;
+    limit.from = 0;
+    limit.to = g.paths[0].length;
     limit.value = kLaneSpeed;
     Regulation stopLine;
     stopLine.kind = LaneGraph::nameIndex(g.regulationKindNames, "stop");
     stopLine.path = PathId(0);
-    stopLine.at = 39;
+    stopLine.from = 39;
+    stopLine.to = 39;
     g.regulations = {limit, stopLine};
     g.paths[0].regulations = Range{0, 2};
 
@@ -305,7 +307,10 @@ TEST_CASE(lane_graph_text_dump_reads_by_hand) {
     CHECK(all.find("lane graph: 21 paths (9 lanes, 12 connectors), 8 sections, 1 junctions, 8 crossing points, "
                    "1 crosswalks, 0 tracks, 2 regulations, 3 car spaces\n") == 0);
     CHECK(all.find("  regulation 1: stop at 39.0 m, value 0.0\n") != std::string::npos);
-    CHECK(all.find("  arriving lanes: 0 2 4 6 8\n  leaving lanes: 1 3 5 7\n") != std::string::npos);
+    CHECK(all.find("  regulation 0: speed_limit from 0.0 to ") != std::string::npos);
+    // what each arriving lane faces at its end (the stop line near lane 0's end), between its arriving and leaving lanes
+    CHECK(all.find("  arriving lanes: 0 2 4 6 8\n  at the arriving lanes' ends: lane 0 stop\n  leaving lanes: 1 3 5 7\n") !=
+          std::string::npos);
     CHECK(all.find("car space 2: lane 8 from 14.0 to 20.0 m\n") != std::string::npos);
     CHECK(all == dumpText(makeCrossroads()));   // the same text every run
 }
@@ -331,8 +336,15 @@ TEST_CASE(lane_graph_validate_names_each_fault) {
     }
     {   // regulations out of order along their path
         LaneGraph g = good;
-        g.regulations[0].at = 39.5;
-        CHECK(hasProblem(validate(g), "lane 0: its regulations are out of order (regulation 1 at 39.00 m after 39.50 m)"));
+        g.regulations[0].from = 39.5;
+        CHECK(hasProblem(validate(g), "lane 0: its regulations are out of order (regulation 1 from 39.00 m after 39.50 m)"));
+    }
+    {   // a regulation's stretch running backwards, and one off its path
+        LaneGraph g = good;
+        g.regulations[1].to = 38;
+        CHECK(hasProblem(validate(g), "regulation 1: runs backwards on lane 0 (from 39.00 to 38.00 m)"));
+        g.regulations[1].to = g.paths[0].length + 5;
+        CHECK(hasProblem(validate(g), "regulation 1: from 39.00 to"));
     }
     {   // a crossing stretch running backwards
         LaneGraph g = good;

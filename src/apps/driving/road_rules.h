@@ -27,6 +27,12 @@ namespace driving {
 // Not bound: a regulation kind with no device (only in a RoadRules that was refused).
 constexpr uint32_t kNoDevice = 0xFFFFFFFFu;
 
+// WHETHER TRAFFIC LIGHTS RUN A PROGRAMME YET. Not until the light clock exists (task D2, #261): until then a junction
+// whose control has lights and names a `when_dark` row (rule_set.h ControlKind::whenDark) is bound to that row, as a
+// dark or flashing-red signal is; one naming none keeps its lights, fixed at their first phase (give_way.h
+// currentPhase). #261 turns this on.
+constexpr bool kLightsRunAProgramme = false;
+
 struct RoadRules {
     // One per entry of the graph's regulationKindNames: the index of its device in RuleSet::devices, or kNoDevice.
     std::vector<uint32_t> deviceOfKind;
@@ -35,8 +41,12 @@ struct RoadRules {
     // of the lane it joins. 0 where the path has a posted limit, no road class, or its class has no default.
     std::vector<Real> unpostedLimit;
     // One per entry of the graph's controlNames: the index of the rule set's row of the same name in RuleSet::controls,
-    // or kNoDevice when it has none (issue #260: right_of_way.h reads it).
+    // or kNoDevice when it has none (issue #260: right_of_way.h reads it). A control with lights while no light runs a
+    // programme: the row its `when_dark` names, when it names one (kLightsRunAProgramme).
     std::vector<uint32_t> controlOfName;
+    // One per entry of the graph's controlNames: 1 where controlOfName is the row the control is treated as while its
+    // lights are dark, not its own.
+    std::vector<uint8_t> darkOfName;
 
     // What a regulation of kind `kind` means: its device in `rules` (the rule set this was built from), or null for a
     // kind the graph does not have or that is not bound.

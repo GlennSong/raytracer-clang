@@ -426,7 +426,7 @@ void Driving::plan() {
                             p.planUpdate);
         // ... and whether it must give way at them, judged from this tick's board.
         if (junctionsOn_) {
-            GiveWayInputs in{*roads_, rightOfWay_, ruleSet_, board_, junctionNumbers_, c, cls.length, cls.brake,
+            GiveWayInputs in{*roads_, rightOfWay_, ruleSet_, roadRules_, board_, junctionNumbers_, c, cls.length, cls.brake,
                              static_cast<Real>(every) * step_, t->person, clockSeconds_, p.junctions, {}};
             for (std::size_t k = 0; k < kMaxJunctionPlans; ++k) {
                 in.lineIn[k] = kNever;

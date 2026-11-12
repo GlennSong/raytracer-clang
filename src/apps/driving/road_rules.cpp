@@ -118,9 +118,17 @@ bool buildRoadRules(const engine::LaneGraph& roads, const RuleSet& rules, const 
     std::vector<uint32_t> junctionsOfControl(roads.controlNames.size(), 0);
     for (const engine::Junction& jn : roads.junctions)
         if (jn.control < junctionsOfControl.size()) ++junctionsOfControl[jn.control];
+    out.darkOfName.assign(roads.controlNames.size(), 0);
     for (std::size_t c = 0; c < roads.controlNames.size(); ++c) {
         const ControlKind* k = rules.findControl(roads.controlNames[c]);
-        if (k) out.controlOfName[c] = static_cast<uint32_t>(k - rules.controls.data());
+        // lights with no programme running are treated as the row their `when_dark` names (checked to exist at load)
+        const ControlKind* dark = k && k->hasLights() && !kLightsRunAProgramme && !k->whenDark.empty()
+                                      ? rules.findControl(k->whenDark)
+                                      : nullptr;
+        if (dark) {
+            out.controlOfName[c] = static_cast<uint32_t>(dark - rules.controls.data());
+            out.darkOfName[c] = 1;
+        } else if (k) out.controlOfName[c] = static_cast<uint32_t>(k - rules.controls.data());
         else if (junctionsOfControl[c] > 0)
             found.push_back("the lane graph has " + std::to_string(junctionsOfControl[c]) + " junctions controlled by \"" +
                             roads.controlNames[c] + "\", but rule set \"" + rules.name + "\" has no control." +

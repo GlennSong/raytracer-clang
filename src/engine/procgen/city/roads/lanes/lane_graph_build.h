@@ -35,6 +35,12 @@
 //   to the neighbour's cut.
 // - Not turned into lane paths: the builder's hand-declared connector lanes, and the lanes of track and footway classes
 //   (no car drives them).
+// - THE CONTROL PLAN (issue #240, control_plan.h) is carried through, never worked out here: every lane posts its
+//   road's `speed_limit` and every connector that of the lane it joins; where the road graph plans its junctions, each
+//   junction takes the control of the planned junction its lanes' arms belong to (kPlannedArmReach), and each arm's
+//   regulations stand at the end of every lane arriving by it. A junction the plan does not name, one holding planned
+//   junctions of different controls, a lane whose road the plan gives no arm there and a regulation on an arm no lane
+//   arrives by are reported; the junction is left kControlNotPlanned.
 //
 // It needs the whole build (the junction boxes come from the lane footprints and deck heights): seconds on a city, so
 // it is not run at level load (see the report on #237).
@@ -49,9 +55,16 @@
 namespace engine {
 namespace roads::lanes {
 
-// The control every junction carries until the control plan names one (a later task). Not a kind of control: the
-// absence of a plan, so whatever reads it can say so.
+// The control every junction carries when the road graph plans none (a graph with no "junctions" list), and the one a
+// junction gets when the graph's plan does not name it or names it twice over (both reported). Not a kind of control:
+// the absence of a plan, so whatever reads it can say so -- a rule set that has no row for it refuses the graph.
 constexpr const char* kControlNotPlanned = "not_planned";
+// THE CONTROL PLAN CARRIED THROUGH (issue #240; control_plan.h writes it into the road graph). Each lane arriving at or
+// leaving a built junction is matched to the planned arm of its road on the same side of the junction (the road's
+// spine running in or out) whose station is nearest where the lane ends or begins, and no further than this (metres
+// along the road): a ramp's lanes leave a street up to kRampEndReach from the ramp's end. A built junction takes the
+// control of the planned junction its lanes' arms belong to.
+constexpr double kPlannedArmReach = 50.0;
 // How far before a junction's stop line the lines between lanes are solid (metres). To become rule-set data.
 constexpr double kSolidBeforeStopLine = 20.0;
 // A section shorter than this is merged into its neighbour where a lane begins or ends at one of its cuts, and
@@ -104,8 +117,9 @@ inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 // the old code built. (A change to the roads themselves
 // is the lanes tag's, kLanesBuildTag, which keys the roads; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
-constexpr uint32_t kLaneGraphBuildVersion = 2;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
+constexpr uint32_t kLaneGraphBuildVersion = 3;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
                                                  // 2: crossing points (#239, ADR-0400)
+                                                 // 3: the control plan carried through: controls, signs, limits (#240)
 
 // A VEHICLE TAG and how it turns: the tightest radius its path may have, and its width (metres). Passed in by the
 // caller (the engine does not know the driving model's vehicles); a connector tighter than the radius is closed to it.
@@ -118,8 +132,27 @@ struct VehicleSize {
 struct LaneGraphOptions {
     // Every lane is open to every one of these vehicle tags, until lane kinds carry who may use them (a later task).
     std::vector<VehicleSize> vehicles;
-    // The control every junction carries.
+    // The control every junction carries when the road graph plans none (RoadLabGraph::declaresJunctions false).
     std::string control = kControlNotPlanned;
+};
+
+// HOW THE CONTROL PLAN CAME THROUGH, counted (all zero for a graph that plans none).
+struct ControlPlanReport {
+    bool declared = false;                       // the road graph carries a plan
+    uint32_t planned = 0;                        // planned junctions
+    uint32_t plannedNotBuilt = 0;                // ... no built junction's lanes meet any of their arms (two roads
+                                                 // whose lanes simply run on into each other: no junction is built)
+    uint32_t plannedSpread = 0;                  // ... whose arms the builder made into several junctions (each takes
+                                                 // the planned one's control)
+    uint32_t merged = 0;                         // built junctions holding two or more planned ones of one control
+    uint32_t notPlanned = 0;                     // built junctions no planned one names (left not_planned, reported)
+    uint32_t conflicts = 0;                      // built junctions holding planned ones of different controls (likewise)
+    uint32_t lanesOffPlan = 0;                   // lanes of a built junction whose road has no planned arm there
+    uint32_t signsWithNoLane = 0;                // planned arm regulations with no lane arriving to stand them on
+    std::vector<std::pair<std::string, uint32_t>> byControl;   // built junctions per control, by name
+    std::vector<std::pair<std::string, uint32_t>> regulations; // regulations stood, per kind, by name
+    uint32_t lanesPosted = 0;                    // lane paths with a posted limit
+    uint32_t connectorsPosted = 0;               // connectors with a posted limit (the lane they join's)
 };
 
 // What a junction was made from, and how it fared, by junction id.
@@ -200,7 +233,10 @@ struct LaneGraphBuild {
     double reachableShare = 0;
     std::vector<std::pair<std::string, std::vector<uint32_t>>> outside;
     CrossingReport crossings;              // the crossing points (their problems are in `problems` too)
-    double milliseconds = 0;               // the whole of buildLaneGraph
+    ControlPlanReport controlPlan;         // the control plan carried through (its problems are in `problems`)
+    std::vector<std::vector<uint32_t>> plannedOf;   // per built junction: the planned junctions (RoadLabGraph::junctions
+                                                    // indexes) it holds, in index order
+    double milliseconds = 0;             // the whole of buildLaneGraph
     double boxMilliseconds = 0;            // ... of which finding the paint's junction boxes
     double connectMilliseconds = 0;        // ... of which the connectors (the crossing points: crossings.milliseconds)
 };

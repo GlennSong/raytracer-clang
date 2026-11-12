@@ -530,6 +530,7 @@ add_executable(driving_tests tests/main.cpp tests/test_driving.cpp tests/test_dr
     tests/test_driving_trip_places.cpp   # where trips begin and end; routes with no lane change; default limits (#255)
     tests/test_driving_junctions.cpp     # who gives way to whom at load, and each driver's junction plan (#260)
     tests/test_driving_give_way.cpp      # announcing, and giving way at junctions, on synthetic roads (#262)
+    tests/test_driving_control_plan.cpp  # the lab's placement policy on the synthetic grid, and the table from it (#240)
     tests/driving_test_roads.cpp)  # small realistic road networks for the driving tests (#254)
 target_include_directories(driving_tests PRIVATE src tests)
 target_compile_options(driving_tests PRIVATE -Wall -Wextra)
@@ -652,6 +653,7 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/lane_graph_connect.cpp   # the paths through its junctions (#238)
             src/engine/procgen/city/roads/lanes/lane_graph_crossings.cpp   # where they cross, join and split (#239)
             src/engine/procgen/city/roads/lanes/lane_graph_cache.cpp   # a level's lane graph saved and read back
+            src/engine/procgen/city/roads/lanes/control_plan.cpp   # every junction's control and every road's limit, planned (#240)
             src/engine/procgen/city/roads/lanes_builder.cpp
         )
         target_link_libraries(engine_core PRIVATE Clipper2 CDT::CDT)
@@ -664,7 +666,8 @@ if(RT_BUILD_ROADS_LANES)
         target_compile_options(lanes_tool PRIVATE -Wall -Wextra)
         target_link_libraries(lanes_tool PRIVATE engine_core citysim)
 
-        add_executable(lanes_tests tests/main.cpp tests/test_lanes.cpp)
+        add_executable(lanes_tests tests/main.cpp tests/test_lanes.cpp
+            tests/test_control_plan.cpp)   # every junction's control and every road's limit, planned and carried (#240)
         target_include_directories(lanes_tests PRIVATE src tests)
         target_compile_options(lanes_tests PRIVATE -Wall -Wextra)
         target_compile_definitions(lanes_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

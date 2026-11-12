@@ -476,6 +476,16 @@ What a switch costs:
 - Different placement policy (a country with no all-way stops): re-run the control plan. No shape rebuild.
 - Driving on the other side of the road: a full road rebuild. Lanes and connectors are different shapes.
 
+*As built* (task B4, ADR-0403): the placement policy is the rule set's `placement` table (`class_order`,
+`speed_limits`, ordered `junctions` rows: conditions on a junction's facts, then a control and the signs at its major
+and minor approaches). The planner (`lanes/control_plan.h`) writes the plan into the road graph JSON: a `junctions`
+list (each junction's control, why, its arms and the regulations where they arrive) and each road's `speed_limit`;
+`city_plan controls GRAPH RULES --write` re-runs it with no shape change. The lane graph builder matches each built
+junction's lanes to the planned arms and carries the control, the signs (regulations at arriving lanes' ends) and the
+posted limits through; a junction the plan does not name, or names twice with different controls, is reported and left
+`not_planned`, never filled in. Controls are named as the sign kit's `means` names them: `stop` (the design's
+`minor_stop`), `all_way_stop`, `give_way`; and `signal`, `unmarked`.
+
 ### 5.2 Types
 
 Sketch only; field names are for the implementer to settle.
@@ -785,6 +795,9 @@ movement_rank = { "straight", "near_turn", "far_turn", "u_turn" }   -- earlier g
 depend only on the road (`sign_rank`, `movement`, `light` per signal phase) are answered **at load** and stored per
 pair of movements. Questions that depend on the moment (`arrived_first`) are stored as "ask while driving". A
 roundabout is `give_way` on every entry; it needs no new question.
+*As built* (task B4, ADR-0403): the two-way stop row is named `stop` (as the sign kit's STOP sign names it), and a row
+with lights may name `when_dark`, the row it is treated as while no light runs a programme (the lab's lights run as an
+all-way stop until the light clock, #261, exists). A sixth table, `placement`, is the planner's (section 5.1).
 
 **(c) Numbers: gaps, margins, timing, defaults.** How many seconds clear a far turn needs; the safety margin at a
 crossing point; how patience shrinks it and its floor; default speed limits by kind of road, in mph; how far before a

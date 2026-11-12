@@ -160,6 +160,7 @@ struct GiveWayInputs {
     const engine::LaneGraph& roads;
     const RightOfWay& row;
     const RuleSet& rules;
+    const RoadRules& roadRules;   // what each regulation kind on the road means (a stop sign's stop line)
     const AnnouncementBoard& board;
     const JunctionNumbers& numbers;
     const Car& me;

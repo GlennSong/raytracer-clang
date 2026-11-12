@@ -1,6 +1,7 @@
 #include "apps/driving/scripting/rule_set_lua.h"
 
 #include "apps/driving/scripting/lua_table_reader.h"
+#include "engine/procgen/city/roads/lanes/control_plan.h"   // ControlPolicy: the placement policy's plain form
 #include "engine/scripting/lua_state.h"
 #include "engine/scripting/script_vm.h"
 
@@ -48,6 +49,7 @@ constexpr const char* kKeyArrow = "arrow";
 constexpr const char* kKeyTurnOnRed = "turn_on_red";
 constexpr const char* kKeyMovement = "movement";
 constexpr const char* kKeyAfter = "after";
+constexpr const char* kKeyWhenDark = "when_dark";
 
 // A number's value is the first entry of its table.
 constexpr lua_Integer kNumberValueSlot = 1;
@@ -84,7 +86,7 @@ public:
         return clean();
     }
 
-private:
+protected:
     // A list of movement words at `idx` into a mask, each named once. False (reported) on any fault.
     bool movementList(int idx, const std::string& path, std::vector<Movement>& out) {
         std::vector<std::string> words;
@@ -142,7 +144,7 @@ private:
         keysOf(list, names, odd);
         for (const std::string& o : odd) fail(path, "has the key " + o + ", which is not a name; expected control names");
         const std::vector<std::string> allowed = {kKeySettle, kKeyEveryoneStops, kKeyGivesWayOnGreen, kKeyArrow,
-                                                  kKeyTurnOnRed};
+                                                  kKeyTurnOnRed, kKeyWhenDark};
         std::vector<ControlKind> controls;
         for (const std::string& name : names) {
             const int mark = lua_gettop(L);
@@ -235,15 +237,34 @@ private:
                 }
                 lua_settop(L, mark + 1);
             }
+            {
+                const int v = pushField(ct, kKeyWhenDark);
+                if (!lua_isnil(L, v) && !stringAt(v, k.whenDark)) {
+                    fail(controlPath + "." + kKeyWhenDark, "is " + describe(v) + ", expected the name of another control");
+                    ok = false;
+                }
+                lua_settop(L, mark + 1);
+            }
             // Lights' tables mean nothing to a control with no lights: a slip of the pen, said so.
-            if (!k.hasLights() && (k.givesWayOnGreen != 0 || k.arrow != 0 || k.turnOnRed)) {
-                fail(controlPath, "gives " + std::string(kKeyGivesWayOnGreen) + ", " + kKeyArrow + " or " + kKeyTurnOnRed +
-                                      ", which only a control whose settle list asks \"" +
+            if (!k.hasLights() && (k.givesWayOnGreen != 0 || k.arrow != 0 || k.turnOnRed || !k.whenDark.empty())) {
+                fail(controlPath, "gives " + std::string(kKeyGivesWayOnGreen) + ", " + kKeyArrow + ", " + kKeyTurnOnRed +
+                                      " or " + kKeyWhenDark + ", which only a control whose settle list asks \"" +
                                       settleQuestionWord(SettleQuestion::Light) + "\" can use");
                 ok = false;
             }
             if (ok) controls.push_back(k);
             lua_settop(L, mark);
+        }
+        // A light treated as another control while dark names a control there is, one with no lights of its own.
+        for (const ControlKind& k : controls) {
+            if (k.whenDark.empty()) continue;
+            const std::vector<ControlKind>::const_iterator it =
+                std::find_if(controls.begin(), controls.end(), [&](const ControlKind& c) { return c.name == k.whenDark; });
+            if (it == controls.end())
+                fail(path + "." + k.name + "." + kKeyWhenDark, "names \"" + k.whenDark + "\", which is not a control here");
+            else if (it->hasLights())
+                fail(path + "." + k.name + "." + kKeyWhenDark, "names \"" + k.whenDark +
+                                                                   "\", which has lights of its own; expected a control without");
         }
         out.controls = controls;
         lua_settop(L, top);
@@ -450,11 +471,13 @@ private:
     }
 
     // A table of numbers under `key` (numbers, default_limits), each { value, unit = "...", source = "..." }, into
-    // `out`. An absent table is a fault when `required`, and an empty list otherwise.
-    void readNumbers(int root, const char* key, bool required, std::vector<Number>& out) {
+    // `out`. An absent table is a fault when `required`, and an empty list otherwise. `within` is the key path of the
+    // table at `root` (rule_set, or rule_set.placement).
+    void readNumbers(int root, const char* key, bool required, std::vector<Number>& out,
+                     const std::string& within = kRoot) {
         const int top = lua_gettop(L);
         const int list = pushField(root, key);
-        const std::string path = std::string(kRoot) + "." + key;
+        const std::string path = within + "." + key;
         if (!required && lua_isnil(L, list)) {
             lua_settop(L, top);
             return;
@@ -507,11 +530,12 @@ private:
     }
 
     // Every default limit is a speed: a limit in seconds or metres is a slip of the pen.
-    void checkDefaultLimitsAreSpeeds(const std::vector<Number>& limits) {
+    void checkDefaultLimitsAreSpeeds(const std::vector<Number>& limits,
+                                     const std::string& path = std::string(kRoot) + "." + kKeyDefaultLimits) {
         for (const Number& n : limits) {
             UnitFamily family = UnitFamily::Ratio;
             if (unitFamily(n.unit, family) && family != UnitFamily::Speed)
-                fail(std::string(kRoot) + "." + kKeyDefaultLimits + "." + n.name + "." + kKeyUnit,
+                fail(path + "." + n.name + "." + kKeyUnit,
                      "is \"" + n.unit + "\", which is " + unitFamilyWords(family) + "; a limit is a speed");
         }
     }
@@ -567,7 +591,290 @@ private:
     }
 };
 
+// ---- The placement policy (issue #240) -------------------------------------------------------------------------------
+
+constexpr const char* kKeyPlacement = "placement";
+constexpr const char* kKeyClassOrder = "class_order";
+constexpr const char* kKeySpeedLimits = "speed_limits";
+constexpr const char* kKeyJunctions = "junctions";
+constexpr const char* kKeyWhen = "when";
+constexpr const char* kKeyApart = "apart";
+constexpr const char* kKeySigns = "signs";
+constexpr const char* kKeyMin = "min";
+constexpr const char* kKeyMax = "max";
+constexpr const char* kFactArms = "arms";
+constexpr const char* kFactApproaches = "approaches";
+constexpr const char* kFactMajor = "major";
+constexpr const char* kFactMinor = "minor";
+constexpr const char* kFactHasMinor = "has_minor";
+constexpr const char* kFactRampEnd = "ramp_end";
+constexpr const char* kFactMajorLanes = "major_lanes";
+constexpr const char* kFactMinorLanes = "minor_lanes";
+constexpr const char* kFactMajorLimit = "major_limit";
+constexpr const char* kFactMinorLimit = "minor_limit";
+constexpr const char* kSignsAll = "all";
+
+// Reads rule_set.placement, checked against the rule set the same file holds.
+class PlacementReader : public Reader {
+public:
+    PlacementReader(lua_State* state, const std::string& file) : Reader(state, file) {}
+
+    bool readPlacement(const RuleSet& rules, engine::roads::lanes::ControlPolicy& out) {
+        const int base = lua_gettop(L);
+        lua_getglobal(L, kRoot);
+        const std::string path = std::string(kRoot) + "." + kKeyPlacement;
+        if (!lua_istable(L, -1)) {
+            fail(kRoot, "is " + describe(-1) + ", expected a table: the rule-set file must define a global `rule_set`");
+            lua_settop(L, base);
+            return false;
+        }
+        const int p = pushField(lua_gettop(L), kKeyPlacement);
+        if (!lua_istable(L, p)) {
+            fail(path, "is " + describe(p) + ", expected the placement policy { " + kKeyClassOrder + ", " + kKeySpeedLimits +
+                           ", " + kKeyJunctions + " }");
+            lua_settop(L, base);
+            return false;
+        }
+        checkKeys(p, path, {kKeyClassOrder, kKeySpeedLimits, kKeyJunctions});
+        out.name = rules.name;
+        {
+            const int v = pushField(p, kKeyClassOrder);
+            const std::string at = path + "." + kKeyClassOrder;
+            if (stringList(v, at, false, out.classOrder)) {
+                std::vector<std::string> sorted = out.classOrder;
+                std::sort(sorted.begin(), sorted.end());
+                if (std::adjacent_find(sorted.begin(), sorted.end()) != sorted.end())
+                    fail(at, "names a class twice, expected each road class once");
+                if (out.classOrder.empty()) fail(at, "is empty, expected the road classes, the most important first");
+            }
+            lua_settop(L, p);
+        }
+        {
+            std::vector<Number> limits;
+            readNumbers(p, kKeySpeedLimits, false, limits, path);
+            checkDefaultLimitsAreSpeeds(limits, path + "." + kKeySpeedLimits);
+            out.speedLimits.clear();
+            for (const Number& n : limits) out.speedLimits.emplace_back(n.name, n.value);
+        }
+        readRows(p, path + "." + kKeyJunctions, rules, out.rows);
+        lua_settop(L, base);
+        return clean();
+    }
+
+private:
+    // { min = n, max = n } of plain counts at `idx`.
+    void countRange(int idx, const std::string& path, engine::roads::lanes::FactRange& out) {
+        const int top = lua_gettop(L);
+        if (!lua_istable(L, idx)) {
+            fail(path, "is " + describe(idx) + ", expected { " + kKeyMin + " = n, " + kKeyMax + " = n }");
+            return;
+        }
+        checkKeys(idx, path, {kKeyMin, kKeyMax});
+        out.set = true;
+        for (const char* key : {kKeyMin, kKeyMax}) {
+            const int v = pushField(idx, key);
+            if (lua_type(L, v) == LUA_TNUMBER && std::isfinite(lua_tonumber(L, v)))
+                (std::string(key) == kKeyMin ? out.lo : out.hi) = lua_tonumber(L, v);
+            else if (!lua_isnil(L, v))
+                fail(path + "." + key, "is " + describe(v) + ", expected a count");
+            lua_settop(L, top);
+        }
+    }
+
+    // { value, unit = "...", source = "..." } at `idx`, of the family `family`, into `value` (converted).
+    bool unitNumber(int idx, const std::string& path, UnitFamily family, double& value) {
+        const int top = lua_gettop(L);
+        if (!lua_istable(L, idx)) {
+            fail(path, "is " + describe(idx) + ", expected { value, unit = \"...\", source = \"...\" } (" +
+                           unitFamilyWords(family) + ")");
+            return false;
+        }
+        checkKeys(idx, path, {kKeyUnit, kKeySource}, {std::to_string(kNumberValueSlot)});
+        std::string unit;
+        double factor = 0;
+        bool ok = readUnit(idx, path, unit, factor);
+        UnitFamily got = UnitFamily::Ratio;
+        if (ok && unitFamily(unit, got) && got != family) {
+            fail(path + "." + kKeyUnit, "is \"" + unit + "\", which is " + unitFamilyWords(got) + "; expected " +
+                                            unitFamilyWords(family));
+            ok = false;
+        }
+        lua_rawgeti(L, idx, kNumberValueSlot);
+        if (lua_type(L, -1) == LUA_TNUMBER && std::isfinite(lua_tonumber(L, -1))) {
+            if (ok) value = lua_tonumber(L, -1) * factor;
+        } else {
+            fail(path + "[" + std::to_string(kNumberValueSlot) + "]", "is " + describe(-1) + ", expected the number itself");
+            ok = false;
+        }
+        lua_settop(L, top);
+        return ok;
+    }
+
+    // { min = { value, unit = ... }, max = { ... } } of speeds at `idx`.
+    void speedRange(int idx, const std::string& path, engine::roads::lanes::FactRange& out) {
+        const int top = lua_gettop(L);
+        if (!lua_istable(L, idx)) {
+            fail(path, "is " + describe(idx) + ", expected { " + kKeyMin + " = { value, unit = ... }, " + kKeyMax + " = ... }");
+            return;
+        }
+        checkKeys(idx, path, {kKeyMin, kKeyMax});
+        out.set = true;
+        for (const char* key : {kKeyMin, kKeyMax}) {
+            const int v = pushField(idx, key);
+            if (!lua_isnil(L, v)) unitNumber(v, path + "." + key, UnitFamily::Speed, std::string(key) == kKeyMin ? out.lo : out.hi);
+            lua_settop(L, top);
+        }
+    }
+
+    void yesNo(int idx, const std::string& path, engine::roads::lanes::YesNo& out) {
+        if (lua_type(L, idx) == LUA_TBOOLEAN)
+            out = lua_toboolean(L, idx) ? engine::roads::lanes::YesNo::Yes : engine::roads::lanes::YesNo::No;
+        else
+            fail(path, "is " + describe(idx) + ", expected true or false");
+    }
+
+    void readRows(int placement, const std::string& path, const RuleSet& rules, std::vector<engine::roads::lanes::PolicyRow>& out) {
+        const int top = lua_gettop(L);
+        const int list = pushField(placement, kKeyJunctions);
+        if (!lua_istable(L, list)) {
+            fail(path, "is " + describe(list) + ", expected a list of rows { name, when, control, signs }");
+            lua_settop(L, top);
+            return;
+        }
+        std::vector<std::string> names, odd;
+        keysOf(list, names, odd);
+        if (!names.empty()) fail(path, "has the key \"" + names[0] + "\", expected a list of rows");
+        const lua_Integer n = static_cast<lua_Integer>(lua_rawlen(L, list));
+        if (n == 0) fail(path, "is empty, expected at least one row");
+        std::vector<engine::roads::lanes::PolicyRow> rows;
+        bool lastHoldsForAll = false;
+        for (lua_Integer i = 1; i <= n; ++i) {
+            const std::string rowPath = path + "[" + std::to_string(i) + "]";
+            lua_rawgeti(L, list, i);
+            const int rt = lua_gettop(L);
+            if (!lua_istable(L, rt)) {
+                fail(rowPath, "is " + describe(rt) + ", expected a row { name, when, control, signs }");
+                lua_settop(L, list);
+                continue;
+            }
+            checkKeys(rt, rowPath, {kKeyName, kKeyWhen, kKeyApart, kKeyControl, kKeySigns});
+            engine::roads::lanes::PolicyRow row;
+            {
+                const int v = pushField(rt, kKeyName);
+                if (!stringAt(v, row.name) || row.name.empty()) fail(rowPath + "." + kKeyName, "is " + describe(v) + ", expected what the row is for, in words");
+                lua_settop(L, rt);
+            }
+            {
+                const int v = pushField(rt, kKeyControl);
+                if (!stringAt(v, row.control)) fail(rowPath + "." + kKeyControl, "is " + describe(v) + ", expected a control's name");
+                else if (!rules.findControl(row.control))
+                    fail(rowPath + "." + kKeyControl, "names \"" + row.control + "\", which " + kRoot + "." + kKeyControl + " has no row for");
+                lua_settop(L, rt);
+            }
+            bool asks = false;
+            {
+                const int w = pushField(rt, kKeyWhen);
+                const std::string whenPath = rowPath + "." + kKeyWhen;
+                if (lua_istable(L, w)) {
+                    const std::vector<std::string> given =
+                        checkKeys(w, whenPath, {kFactArms, kFactApproaches, kFactMajor, kFactMinor, kFactHasMinor, kFactRampEnd,
+                                                kFactMajorLanes, kFactMinorLanes, kFactMajorLimit, kFactMinorLimit});
+                    asks = !given.empty();
+                    auto field = [&](const char* key) { return pushField(w, key); };
+                    int v = field(kFactArms);
+                    if (!lua_isnil(L, v)) countRange(v, whenPath + "." + kFactArms, row.arms);
+                    lua_settop(L, w);
+                    v = field(kFactApproaches);
+                    if (!lua_isnil(L, v)) countRange(v, whenPath + "." + kFactApproaches, row.approaches);
+                    lua_settop(L, w);
+                    v = field(kFactMajor);
+                    if (!lua_isnil(L, v)) stringList(v, whenPath + "." + kFactMajor, true, row.major);
+                    lua_settop(L, w);
+                    v = field(kFactMinor);
+                    if (!lua_isnil(L, v)) stringList(v, whenPath + "." + kFactMinor, true, row.minor);
+                    lua_settop(L, w);
+                    v = field(kFactHasMinor);
+                    if (!lua_isnil(L, v)) yesNo(v, whenPath + "." + kFactHasMinor, row.hasMinor);
+                    lua_settop(L, w);
+                    v = field(kFactRampEnd);
+                    if (!lua_isnil(L, v)) yesNo(v, whenPath + "." + kFactRampEnd, row.rampEnd);
+                    lua_settop(L, w);
+                    v = field(kFactMajorLanes);
+                    if (!lua_isnil(L, v)) countRange(v, whenPath + "." + kFactMajorLanes, row.majorLanes);
+                    lua_settop(L, w);
+                    v = field(kFactMinorLanes);
+                    if (!lua_isnil(L, v)) countRange(v, whenPath + "." + kFactMinorLanes, row.minorLanes);
+                    lua_settop(L, w);
+                    v = field(kFactMajorLimit);
+                    if (!lua_isnil(L, v)) speedRange(v, whenPath + "." + kFactMajorLimit, row.majorLimit);
+                    lua_settop(L, w);
+                    v = field(kFactMinorLimit);
+                    if (!lua_isnil(L, v)) speedRange(v, whenPath + "." + kFactMinorLimit, row.minorLimit);
+                    lua_settop(L, w);
+                } else if (!lua_isnil(L, w)) {
+                    fail(whenPath, "is " + describe(w) + ", expected a table of conditions");
+                }
+                lua_settop(L, rt);
+            }
+            {
+                const int v = pushField(rt, kKeyApart);
+                if (!lua_isnil(L, v)) {
+                    if (unitNumber(v, rowPath + "." + kKeyApart, UnitFamily::Length, row.apart)) asks = true;
+                }
+                lua_settop(L, rt);
+            }
+            {
+                const int s = pushField(rt, kKeySigns);
+                const std::string signsPath = rowPath + "." + kKeySigns;
+                if (lua_istable(L, s)) {
+                    checkKeys(s, signsPath, {kFactMajor, kFactMinor, kSignsAll});
+                    for (const char* key : {kSignsAll, kFactMajor, kFactMinor}) {
+                        const int v = pushField(s, key);
+                        std::vector<std::string> kinds;
+                        if (!lua_isnil(L, v) && stringList(v, signsPath + "." + key, true, kinds)) {
+                            for (const std::string& k : kinds)
+                                if (!rules.findDevice(k))
+                                    fail(signsPath + "." + key, "names \"" + k + "\", which " + kRoot + "." + kKeyDevices +
+                                                                     " has no device for");
+                            const std::string which = key;
+                            if (which != kFactMinor) row.majorSigns.insert(row.majorSigns.end(), kinds.begin(), kinds.end());
+                            if (which != kFactMajor) row.minorSigns.insert(row.minorSigns.end(), kinds.begin(), kinds.end());
+                        }
+                        lua_settop(L, s);
+                    }
+                } else if (!lua_isnil(L, s)) {
+                    fail(signsPath, "is " + describe(s) + ", expected { " + kFactMajor + " = ..., " + kFactMinor + " = ..., " +
+                                        kSignsAll + " = ... }");
+                }
+                lua_settop(L, rt);
+            }
+            lastHoldsForAll = !asks;
+            rows.push_back(row);
+            lua_settop(L, list);
+        }
+        if (n > 0 && !lastHoldsForAll)
+            fail(path + "[" + std::to_string(n) + "]", "asks something (" + std::string(kKeyWhen) + " or " + kKeyApart +
+                                                           "); the last row must hold for every junction, so none is left "
+                                                           "without a control");
+        out = rows;
+        lua_settop(L, top);
+    }
+};
+
 }  // namespace
+
+bool loadPlacementPolicy(engine::ScriptVM& vm, const std::string& fileName, const RuleSet& rules,
+                         engine::roads::lanes::ControlPolicy& out, std::string* err) {
+    lua_State* L = engine::luaState(vm);
+    PlacementReader reader(L, fileName);
+    engine::roads::lanes::ControlPolicy scratch;
+    if (!reader.readPlacement(rules, scratch)) {
+        if (err) *err = reader.report();
+        return false;
+    }
+    out = scratch;
+    return true;
+}
 
 bool loadRuleSet(engine::ScriptVM& vm, const std::string& fileName, RuleSet& out, std::string* err) {
     lua_State* L = engine::luaState(vm);

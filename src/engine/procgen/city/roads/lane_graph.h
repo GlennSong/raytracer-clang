@@ -6,8 +6,9 @@
 // how lanes lie side by side (SECTIONS), the junctions, where two paths or a path and a crosswalk or rail track meet
 // (CROSSING POINTS), the rules standing along the paths (REGULATIONS) and the places to leave a car (CAR SPACES).
 //
-// This file holds the types, the save and load (one bundle section), a structural check and a text dump. Nothing
-// fills the graph yet (the road builder will), and nothing drives on it yet.
+// This file holds the types, the save and load (one bundle section), a structural check and a text dump. The lane
+// graph builder (lanes/lane_graph_build.h) fills it from the built roads, with each junction's control and the
+// regulations the control plan wrote into the road graph (lanes/control_plan.h); the driving model reads it.
 //
 // How it is stored. The graph is whole-world and fixed after load, so it is a few big arrays: a path does not own a
 // vector of points or of next-paths, it holds a RANGE (first, count) into one shared array. An island with tens of
@@ -201,12 +202,15 @@ struct Junction {
     Range leaving;             // into LaneGraph::junctionLanes: the lanes beginning at its outline, in id order
 };
 
-// A RULE STANDING ON A PATH: a kind (a LaneGraph::regulationKindNames entry), where along the path, and a value
-// whose meaning the kind's rule says ("stop here": unused; "25 from here": the speed in metres per second).
+// A RULE STANDING ON A PATH: a kind (a LaneGraph::regulationKindNames entry), the stretch of the path where it applies
+// (from `from` to `to` metres along it; a sign that stands at one place, a stop sign at the end of an arriving lane,
+// has from == to), and a value whose meaning the kind's rule says ("stop here": unused; "25 from here": the speed in
+// metres per second). Who wrote it: the control plan (issue #240), carried through by the lane graph builder.
 struct Regulation {
     NameIndex kind = kNoName;
     PathId path;
-    Real at = 0;
+    Real from = 0;
+    Real to = 0;
     Real value = 0;
 };
 
@@ -231,7 +235,7 @@ struct LaneGraph {
                                             // other, aFrom)
     std::vector<Crosswalk> crosswalks;      // junction by junction (those on no junction last)
     std::vector<Track> tracks;
-    std::vector<Regulation> regulations;    // path by path, then by distance along
+    std::vector<Regulation> regulations;    // path by path, then by where each begins (from), then where it ends (to)
     std::vector<CarSpace> carSpaces;        // by (lane, from)
 
     // The shared arrays the ranges point into.

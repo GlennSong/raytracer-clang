@@ -358,7 +358,7 @@ TEST_CASE(junction_table_4_side_road_stop_sign_at_a_t) {
     engine::Regulation stop;
     stop.kind = 0;
     stop.path = side;
-    stop.at = g.paths[side.index].length;
+    stop.from = stop.to = g.paths[side.index].length;
     g.regulations = {stop};
     g.paths[side.index].regulations = engine::Range{0, 1};
     CHECK(engine::validate(g).empty());

@@ -288,9 +288,10 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
         const engine::Junction& jn = roads.junctions[j];
         JunctionRules& jr = out.junctions[j];
         JunctionWork& w = work[j];
-        if (jn.control < roadRules.controlOfName.size() && roadRules.controlOfName[jn.control] < rules.controls.size())
+        if (jn.control < roadRules.controlOfName.size() && roadRules.controlOfName[jn.control] < rules.controls.size()) {
             jr.control = roadRules.controlOfName[jn.control];
-        else {
+            if (jn.control < roadRules.darkOfName.size() && roadRules.darkOfName[jn.control]) ++out.counts.junctionsDark;
+        } else {
             ++out.counts.junctionsWithoutControl;
             out.notes.push_back("junction " + std::to_string(j) + ": rule set \"" + rules.name +
                                 "\" has no row for its control: every pair there falls to the lower path id");
@@ -564,6 +565,8 @@ std::string describeJunctionRules(const LaneGraph& roads, const RuleSet& rules, 
         out += "no control the rule set knows";
     } else {
         const ControlKind& ck = rules.controls[jr.control];
+        const std::string planned = jn.control < roads.controlNames.size() ? roads.controlNames[jn.control] : std::string();
+        if (!planned.empty() && planned != ck.name) out += "\"" + planned + "\", its lights dark: treated as ";
         out += "control \"" + ck.name + "\" (settle:";
         for (const SettleQuestion q : ck.settle) out += std::string(" ") + settleQuestionWord(q);
         out += ck.everyoneStops ? "; everyone stops first)" : ")";
@@ -615,7 +618,8 @@ std::string describeRightOfWay(const RightOfWay& row) {
     const RightOfWayCounts& n = row.counts;
     std::string out = "right of way: " + std::to_string(n.junctions) + " junctions (" +
                       std::to_string(n.junctionsWithLights) + " with lights, " + std::to_string(n.phases) +
-                      " phases among them; " + std::to_string(n.junctionsWithoutControl) +
+                      " phases among them; " + std::to_string(n.junctionsDark) +
+                      " with lights treated as another control while dark; " + std::to_string(n.junctionsWithoutControl) +
                       " whose control the rule set lacks); " + std::to_string(n.meetings) + " meetings of two paths: " +
                       std::to_string(n.settledAtLoad) + " settled at load, " + std::to_string(n.askWhileDriving) +
                       " asked while driving (" + std::to_string(n.acrossJunctions) + " of them across two junctions), " +

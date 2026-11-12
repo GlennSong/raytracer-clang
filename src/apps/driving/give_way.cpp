@@ -1,6 +1,7 @@
 #include "apps/driving/give_way.h"
 
 #include "apps/driving/act.h"   // kSettingGapKept, kNumberStandstillGap
+#include "apps/driving/road_rules.h"   // RoadRules::device: what a regulation on the road means
 
 #include <algorithm>
 #include <cmath>
@@ -92,6 +93,18 @@ bool inRing(const engine::LaneGraph& roads, const RightOfWay& row, const Announc
 }
 
 // ---- Judging one junction's meetings ----------------------------------------------------------------------------
+
+// Does the lane I arrive at plan `p`'s junction by carry, at its end, a device with a stop line (a stop sign)?
+bool stopLineAtEnd(const GiveWayInputs& in, const JunctionPlan& p) {
+    const engine::PathId lane = in.roads.paths[p.connector.index].from;
+    if (!knownPath(in.roads, lane)) return false;
+    const engine::Path& l = in.roads.paths[lane.index];
+    for (uint32_t r = l.regulations.first; r < l.regulations.end() && r < in.roads.regulations.size(); ++r) {
+        const Device* d = in.roadRules.device(in.rules, in.roads.regulations[r].kind);
+        if (d && d->stopLine && in.roads.regulations[r].from >= l.length - in.numbers.atLineWithin) return true;
+    }
+    return false;
+}
 
 // Did I announce, on any crossing point along plan `p`'s connector, that I am not going?
 bool announcedNotGoing(const GiveWayInputs& in, const JunctionPlan& p) {
@@ -323,11 +336,19 @@ void judgeGiveWay(const GiveWayInputs& in, GiveWayVerdict& out) {
         // going): others do not wait for it. It still judges, and stops at the line if it must give way (it may be let
         // go this very decision), but a clear road is no decision to go: it has not decided anything there yet.
         const bool notGoing = announcedNotGoing(in, p);
+        // Still owing a full stop at this line (it holds one there, the junction's control makes everyone stop, or the lane
+        // it arrives by carries a device with a stop line at its end) and not yet at rest there: held there as surely, so
+        // a clear road is no decision to go either. It decides when it has stopped; deciding before (issue #240: the
+        // lab's all-way stops and stop signs) turned every driver that met a car arriving first into "go", then "give
+        // way", then "go".
+        const ControlKind* control = junctionControl(in.row, in.rules, p.junction);
+        const bool owesStop = stopsFirstAt(me, p, in.numbers.atLineWithin) ||
+                              (!p.cameToRest && ((control && control->everyoneStops) || stopLineAtEnd(in, p)));
 
         GiveWayJudgement j;
         const bool give = judgeMeetings(in, p, patience, j, out.tieGroupsCut);
         if (!give) {
-            if (notGoing) break;
+            if (notGoing || owesStop) break;
             out.decision[i] = GiveWayDecision::Go;
             out.judgement[i] = j;
             continue;

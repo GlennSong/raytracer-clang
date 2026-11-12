@@ -138,6 +138,10 @@ struct ControlKind {
     bool turnOnRed = false;
     Movement turnOnRedMovement = Movement::NearTurn;
     bool turnOnRedAfterFullStop = false;  // ... only after coming to a full stop (D3 acts on it)
+    // WHILE NO LIGHT RUNS A PROGRAMME (road_rules.h kLightsRunAProgramme: the light clock is task D2, #261), a junction
+    // with this control is treated as the control named here (`when_dark`; a dark or flashing-red signal is an all-way
+    // stop). Empty: it keeps its own row, its lights fixed at their first phase.
+    std::string whenDark;
 
     bool hasLights() const;               // its settle list asks `light`
 };

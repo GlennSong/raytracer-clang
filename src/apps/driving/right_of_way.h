@@ -157,6 +157,7 @@ struct RightOfWayCounts {
     uint32_t acrossJunctions = 0;      // filed under no junction
     uint32_t byLowerPathId = 0;        // ... decided (or their fall-back decided) by the lower path id, at some phase
     uint32_t junctionsWithoutControl = 0;   // the rule set has no row for their control
+    uint32_t junctionsDark = 0;             // lights with no programme running, treated as their `when_dark` row
 };
 
 // THE WHOLE TABLE.

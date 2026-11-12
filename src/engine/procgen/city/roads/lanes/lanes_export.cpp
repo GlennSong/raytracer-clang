@@ -104,6 +104,13 @@ constexpr double kGraphSvgCloseUpKeyScale = 0.3;   // the key on a close-up of o
 const char* const kGraphSvgMeetingColours[] = {"#ad1457", "#00838f", "#f9a825"};
 const char* const kGraphSvgMeetingNames[] = {"cross", "join", "split"};
 constexpr double kGraphSvgStretchStroke = 1.1, kGraphSvgStretchOpacity = 0.35, kGraphSvgMeetingMark = 0.45;
+// Junction controls (a disc per junction) and the regulations at arriving lanes' ends (a triangle per lane): palettes
+// taken by the name's index in the graph's table, the disc's radius and label size, the triangle's half size.
+const char* const kGraphSvgControlColours[] = {"#c62828", "#2e7d32", "#ef6c00", "#6d4c41", "#1565c0", "#7b1fa2"};
+constexpr std::size_t kGraphSvgControlColourCount = sizeof(kGraphSvgControlColours) / sizeof(kGraphSvgControlColours[0]);
+const char* const kGraphSvgRegulationColours[] = {"#b71c1c", "#f57f17", "#4a148c", "#006064"};
+constexpr std::size_t kGraphSvgRegulationColourCount = sizeof(kGraphSvgRegulationColours) / sizeof(kGraphSvgRegulationColours[0]);
+constexpr double kGraphSvgControlDisc = 1.6, kGraphSvgControlLabelSize = 1.6, kGraphSvgSignMark = 0.9;
 }  // namespace
 
 bool writeLaneGraphSvg(const LaneGraph& g, const std::string& path, const LaneGraphSvgMarks& marks) {
@@ -269,11 +276,56 @@ bool writeLaneGraphSvg(const LaneGraph& g, const std::string& path, const LaneGr
         f << "<title>crossing point " << c << "</title>" << (x.junction.valid() ? "</circle>\n" : "</rect>\n");
     }
     f << "</g>\n";
+    // each junction's control (issue #240): a disc coloured by the control above the junction's id, the control's name
+    // beneath it; and at the end of each arriving lane that faces a regulation (a stop sign), a triangle coloured by its
+    // kind, pointing the way the lane runs. Colours come by the name's index in the graph's own tables: no kind is named.
+    auto controlColour = [&](NameIndex c) { return kGraphSvgControlColours[c % kGraphSvgControlColourCount]; };
+    auto kindColour = [&](NameIndex k) { return kGraphSvgRegulationColours[k % kGraphSvgRegulationColourCount]; };
+    f << "<g id='controls' stroke='none'>\n";
+    for (uint32_t j = 0; j < g.junctions.size(); ++j) {
+        const Junction& jn = g.junctions[j];
+        const Range& b = jn.box;
+        if (b.end() > g.planPoints.size() || b.count == 0 || !shown(g.planPoints.data() + b.first, b.count)) continue;
+        if (jn.control < g.controlNames.size()) {
+            Vec2 c;
+            for (uint32_t k = b.first; k < b.end(); ++k) c += g.planPoints[k];
+            c = c / static_cast<double>(b.count);
+            const std::string& name = g.controlNames[jn.control];
+            f << "<circle cx='" << X(c.x) << "' cy='" << Y(c.y) - kGraphSvgJunctionLabelSize - kGraphSvgControlDisc << "' r='"
+              << kGraphSvgControlDisc << "' fill='" << controlColour(jn.control) << "' fill-opacity='0.85'><title>junction " << j
+              << ": " << name << "</title></circle>\n";
+            f << "<text x='" << X(c.x) << "' y='" << Y(c.y) + kGraphSvgControlLabelSize << "' font-size='" << kGraphSvgControlLabelSize
+              << "' fill='" << controlColour(jn.control) << "' text-anchor='middle'>" << name << "</text>\n";
+        }
+        for (uint32_t k = jn.arriving.first; k < jn.arriving.end() && k < g.junctionLanes.size(); ++k) {
+            const PathId p = g.junctionLanes[k];
+            if (p.index >= g.paths.size()) continue;
+            const Path& lp = g.paths[p.index];
+            for (uint32_t r = lp.regulations.first; r < lp.regulations.end() && r < g.regulations.size(); ++r) {
+                const Regulation& reg = g.regulations[r];
+                if (reg.from < lp.length - kJunctionEndReach) continue;
+                const Vec2 at = g.pointAt(p, reg.from), d = g.directionAt(p, reg.from), n = perp(d);
+                const double s = kGraphSvgSignMark;
+                const Vec2 tip = at + d * s, b0 = at - d * s + n * s, b1 = at - d * s - n * s;
+                f << "<polygon fill='" << kindColour(reg.kind) << "' points='" << X(tip.x) << "," << Y(tip.y) << " " << X(b0.x)
+                  << "," << Y(b0.y) << " " << X(b1.x) << "," << Y(b1.y) << "'><title>lane " << p.index << ": "
+                  << (reg.kind < g.regulationKindNames.size() ? g.regulationKindNames[reg.kind] : std::string("?"))
+                  << "</title></polygon>\n";
+            }
+        }
+    }
+    f << "</g>\n";
     // the key, in the corner at the picture's origin (smaller on a close-up, so it does not cover the junction)
     const double keyScale = marks.cropped ? kGraphSvgCloseUpKeyScale : 1.0;
     const double keyLine = kGraphSvgKeyLine * keyScale;
     f << "<g id='key' font-size='" << kGraphSvgKeySize * keyScale << "'>\n";
     double keyY = keyLine;
+    for (NameIndex c = 0; c < g.controlNames.size(); ++c, keyY += keyLine)
+        f << "<text x='" << keyLine << "' y='" << keyY << "' fill='" << controlColour(c) << "'>junction control (disc): "
+          << g.controlNames[c] << "</text>\n";
+    for (NameIndex k = 0; k < g.regulationKindNames.size(); ++k, keyY += keyLine)
+        f << "<text x='" << keyLine << "' y='" << keyY << "' fill='" << kindColour(k)
+          << "'>at an arriving lane's end (triangle): " << g.regulationKindNames[k] << "</text>\n";
     for (std::size_t t = 1; t < kTurnCount; ++t, keyY += keyLine)
         f << "<text x='" << keyLine << "' y='" << keyY << "' fill='" << kGraphSvgTurnColours[t] << "'>connector: "
           << kGraphSvgTurnNames[t] << "</text>\n";

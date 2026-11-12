@@ -78,7 +78,8 @@ void addRegulations(engine::LaneGraph& g, uint32_t path, const std::vector<engin
 engine::Regulation regulation(engine::NameIndex kind, Real at, Real value = 0) {
     engine::Regulation r;
     r.kind = kind;
-    r.at = at;
+    r.from = at;
+    r.to = at;
     r.value = value;
     return r;
 }

@@ -35,7 +35,7 @@ Real limitAt(const DriverView& v, engine::PathId path, Real along) {
     Real limit = v.roadRules.baseLimit(v.roads, path);
     for (uint32_t r = p.regulations.first; r < p.regulations.end() && r < v.roads.regulations.size(); ++r) {
         const engine::Regulation& reg = v.roads.regulations[r];
-        if (reg.at > along) break;
+        if (reg.from > along) break;
         if (setsTopSpeed(v, reg)) limit = reg.value;
     }
     return limit;
@@ -162,7 +162,7 @@ void noticeSlowerAhead(const DriverView& v, NoticeScratch& s, NoticedFact& out) 
     const engine::Path& mine = v.roads.paths[v.me.path.index];
     for (uint32_t r = mine.regulations.first; r < mine.regulations.end() && r < v.roads.regulations.size(); ++r) {
         const engine::Regulation& reg = v.roads.regulations[r];
-        if (reg.at > v.me.along && setsTopSpeed(v, reg)) consider(reg.value, v.me.path, reg.at - v.me.along);
+        if (reg.from > v.me.along && setsTopSpeed(v, reg)) consider(reg.value, v.me.path, reg.from - v.me.along);
     }
     // On each later path: the limit in force as I enter it, then its regulations further along.
     Real toStart = mine.length - v.me.along;
@@ -173,7 +173,7 @@ void noticeSlowerAhead(const DriverView& v, NoticeScratch& s, NoticedFact& out) 
         const engine::Path& p = v.roads.paths[id.index];
         for (uint32_t r = p.regulations.first; r < p.regulations.end() && r < v.roads.regulations.size(); ++r) {
             const engine::Regulation& reg = v.roads.regulations[r];
-            if (reg.at > 0 && setsTopSpeed(v, reg)) consider(reg.value, id, toStart + reg.at);
+            if (reg.from > 0 && setsTopSpeed(v, reg)) consider(reg.value, id, toStart + reg.from);
         }
         toStart += p.length;
     }

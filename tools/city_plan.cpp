@@ -7,6 +7,14 @@
 //       scorecard line; with several variants, OUT_DIR/contact.png side by side.
 //   city_plan brief
 //       prints the default brief, to copy and edit.
+//   city_plan controls GRAPH.json RULES.lua [--write] [--report FILE]
+//       THE CONTROL PLAN (issue #240): every junction of a road graph given a
+//       control and every road a posted limit, by the rule set's placement policy
+//       (RULES is under assets/scripts, e.g. rules/lab.lua); prints the counts,
+//       --report writes one line per junction (its facts and what decided it), and
+//       --write puts the plan into GRAPH (its "junctions" list and each road's
+//       "speed_limit"), leaving the rest of the file as it was. Junctions marked
+//       "hand" and roads marked "speed_limit_hand" are kept. No road shape changes.
 //
 // The scores come from the engine's own parcel walk and router, so a plan that
 // scores well here builds the way it scored.
@@ -30,7 +38,11 @@
 
 #include <chrono>
 #include <cctype>
+#include "engine/procgen/city/roads/lanes/control_plan.h"   // the control plan (#240)
+#include "engine/script_assets.h"                           // loadScriptCode: the rule set's file
 #ifdef RT_ENABLE_SCRIPTING
+#include "apps/driving/scripting/rule_set_lua.h"           // the rule set and its placement policy
+#include "engine/scripting/script_vm.h"
 #include "engine/scripting/settlements_lua.h"
 #endif
 #include <cstdio>
@@ -50,6 +62,7 @@ static int usage() {
                  "usage: city_plan generate BRIEF.json OUT_DIR [--variants N]\n"
                  "       city_plan scene BRIEF.json OUT_SCENE.json [--no-ramps]\n"
                  "       city_plan brief\n"
+                 "       city_plan controls GRAPH.json RULES.lua [--write] [--report FILE]   every junction's control and every road's limit, by the rule set's placement policy (#240)\n"
                  "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n"
                  "       city_plan island SEED OUT_DIR [--variants N]   island worlds on the map: terrain, sites, ring freeway (ADR-0105)\n"
                  "       city_plan island-cities SEED OUT_DIR [--terrain LEVEL.json] [--png] [--view X Z HALF NAME]...   that island's cities and towns planned on its land, mapped, and extra close-ups (ADR-0106);\n"
@@ -974,6 +987,61 @@ int main(int argc, char** argv) {
         out["townHubs"] = hubs;
         std::cout << out.dump(1) << "\n";
         return 0;
+    }
+    if (verb == "controls" && argc >= 4) {
+#ifdef RT_ENABLE_SCRIPTING
+        // THE CONTROL PLAN (issue #240): the rule set's placement policy over the road graph, written into it.
+        const std::string graphPath = argv[2], rulesFile = argv[3];
+        bool write = false;
+        std::string reportPath;
+        for (int a = 4; a < argc; ++a) {
+            if (std::string(argv[a]) == "--write") write = true;
+            if (std::string(argv[a]) == "--report" && a + 1 < argc) reportPath = argv[a + 1];
+        }
+        nlohmann::json scene;
+        {
+            std::ifstream in(graphPath);
+            if (!in) { std::fprintf(stderr, "city_plan: cannot read %s\n", graphPath.c_str()); return 1; }
+            try { in >> scene; } catch (const std::exception& e) { std::fprintf(stderr, "city_plan: %s: %s\n", graphPath.c_str(), e.what()); return 1; }
+        }
+        const std::string code = engine::loadScriptCode(rulesFile, "");
+        if (code.empty()) { std::fprintf(stderr, "city_plan: %s: not found under assets/scripts (or it is empty)\n", rulesFile.c_str()); return 1; }
+        engine::ScriptVM vm;
+        std::string err;
+        driving::RuleSet rules;
+        engine::roads::lanes::ControlPolicy policy;
+        if (!vm.doString(code, &err) || !driving::loadRuleSet(vm, rulesFile, rules, &err) ||
+            !driving::loadPlacementPolicy(vm, rulesFile, rules, policy, &err)) {
+            std::fprintf(stderr, "city_plan: %s\n", err.c_str());
+            return 1;
+        }
+        const std::string dir = graphPath.find('/') == std::string::npos ? "." : graphPath.substr(0, graphPath.rfind('/'));
+        engine::roads::lanes::ControlPlan plan;
+        try {
+            plan = engine::roads::lanes::planControls(engine::roads::lanes::RoadLabGraph::fromJson(scene, dir), policy);
+        } catch (const std::exception& e) { std::fprintf(stderr, "city_plan: %s: %s\n", graphPath.c_str(), e.what()); return 1; }
+        std::printf("%s: %s", graphPath.c_str(), engine::roads::lanes::describeControlPlan(plan).c_str());
+        if (!reportPath.empty()) {
+            std::ofstream f(reportPath);
+            for (std::size_t i = 0, k = plan.handKept; i < plan.facts.size(); ++i, ++k) {
+                const engine::roads::lanes::PlannedJunction& pj = plan.junctions[k];
+                f << pj.id << " at (" << pj.at.x << ", " << pj.at.y << "): " << pj.control << ", \"" << pj.why << "\"; "
+                  << engine::roads::lanes::describeFacts(plan.facts[i]) << "\n";
+            }
+            std::printf("wrote %s\n", reportPath.c_str());
+        }
+        if (write) {
+            engine::roads::lanes::writeControlPlan(scene, plan);
+            std::ofstream o(graphPath);
+            if (!o) { std::fprintf(stderr, "city_plan: cannot write %s\n", graphPath.c_str()); return 1; }
+            o << scene.dump(1) << "\n";
+            std::printf("wrote the plan into %s\n", graphPath.c_str());
+        }
+        return plan.problems.empty() ? 0 : 1;
+#else
+        std::fprintf(stderr, "city_plan controls: this build has no scripting, so no rule set can be read\n");
+        return 1;
+#endif
     }
     if ((verb != "generate" && verb != "scene") || argc < 4) return usage();
     const std::string briefPath = argv[2], outDir = argv[3];

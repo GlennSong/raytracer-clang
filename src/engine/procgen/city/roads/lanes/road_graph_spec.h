@@ -48,6 +48,38 @@ struct RampAnchor {
 
 struct ConnectorSpec { std::string from, to; double toS = 0; };
 
+// A JUNCTION AS PLANNED: THE CONTROL PLAN (issue #240, driving-model-design.md 5.1; control_plan.h writes it). Which
+// control a junction has (traffic lights, an all-way stop, stop or give-way signs on its minor roads, or nothing) and
+// which regulations stand where each road arrives (a stop sign), decided by the city planner from the rule set's
+// placement policy and written here as INTENT: the lane graph builder carries it through and checks it, never works a
+// control out for itself ("roads: no guessing"). Authored at the graph's top level:
+//   "junctions": [{"id": "j12", "at": [x, y], "control": "stop", "why": "a local street meets a collector",
+//                  "arms": [{"road": "s4", "at": 87.3, "spine": "in", "regulations": ["stop"]}, ...]}]
+// An ARM is one road's way into the junction: the road, the station along its spine where it meets the junction, and
+// whether its spine runs INto the junction there (its forward lanes arrive) or OUT of it (its backward lanes arrive).
+// A road that passes through (a ramp ending on a street's side) is two arms, one each way. A junction the planner
+// spread over several nodes (streets meeting so close together that they make one junction) lists only the arms
+// that lead out of it, and names the stretches of road lying between its nodes as `inside` ({"road", "from", "to"},
+// stations along the road's spine): the builder may still make two junctions there, joined by such a stretch, and
+// both take this one's control. `hand`: written by a person, so re-planning keeps it as it is.
+struct PlannedArm {
+    std::string road;
+    double at = 0;                          // station along the road's spine
+    bool spineIn = true;                    // the spine runs into the junction here
+    std::vector<std::string> regulations;   // kinds standing at the end of each lane that arrives by this arm
+};
+struct PlannedStretch {
+    std::string road;
+    double from = 0, to = 0;                // stations along the road's spine, from <= to
+};
+struct PlannedJunction {
+    std::string id, control, why;
+    Vec2 at;
+    std::vector<PlannedArm> arms;
+    std::vector<PlannedStretch> inside;     // the stretches of road lying between its nodes
+    bool hand = false;
+};
+
 // A CROSSING AS PLANNED (ADR-0215, Glenn: "the planner and builder should know the intent of the roads so it's not
 // guessing"): where two roads cross or one ends on the other away from a shared node, what the plan means there --
 //   "bridge"    grade-separated: `over` goes over the other, clearing it by the rules' clearance (or `clearance` m);
@@ -168,6 +200,11 @@ struct EdgeSpec {
     // as the design stage made it ("profile": {"step": 1, "z": [...]}). A graph whose roads all carry one is DESIGNED:
     // the builder takes the heights as given and checks them, never re-designs them.
     std::vector<double> profile; double profileStep = 0.0;
+    // THE POSTED SPEED LIMIT (issue #240, the control plan; "speed_limit": metres per second), on every lane of the road
+    // both ways; 0: none posted (the rule set's default for the road's class holds). `speedLimitHand`
+    // ("speed_limit_hand": true): set by a person, so re-planning keeps it.
+    double speedLimit = 0.0;
+    bool speedLimitHand = false;
     // resolved geometry and profile
     std::vector<Vec2> xy;                // spine, resampled at rules.step
     std::vector<double> s, z, t;         // station, deck height, terrain height along the spine
@@ -193,7 +230,12 @@ struct RoadLabGraph {
     std::vector<ConnectorSpec> connectors;
     std::vector<CrossingSpec> crossings;  // as planned (see CrossingSpec)
     bool declaresCrossings = false;       // the graph carried a "crossings" list: every crossing is on it
-    bool designed() const;                // every road with a spine carries its planned profile
+    // THE CONTROL PLAN (see PlannedJunction). A graph that carries the "junctions" list DECLARES every junction's control:
+    // the lane graph builder reports a junction it builds that no planned one names. Without the list (every graph
+    // before #240), each junction carries the lane graph options' one control, as before.
+    std::vector<PlannedJunction> junctions;
+    bool declaresJunctions = false;
+    bool designed() const;               // every road with a spine carries its planned profile
     std::map<std::string, int> index;    // edge id -> position in edges
     // the planned crossing of edges a and b nearest p (within `within` m), or null
     const CrossingSpec* declaredCrossing(const std::string& a, const std::string& b, const Vec2& p, double within = 12.0) const;

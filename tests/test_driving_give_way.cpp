@@ -153,7 +153,7 @@ void standStopSign(engine::LaneGraph& g, engine::PathId lane) {
     engine::Regulation stop;
     stop.kind = 0;
     stop.path = lane;
-    stop.at = g.paths[lane.index].length;
+    stop.from = stop.to = g.paths[lane.index].length;
     g.regulations = {stop};
     g.paths[lane.index].regulations = engine::Range{0, 1};
 }

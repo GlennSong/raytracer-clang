@@ -16,9 +16,11 @@
 // THE KEY says everything the graph is made from:
 //   - the ROADS: the city producer's own key for the level (city_producer.h), the same number that names the road
 //     bake: the lanes tag (kLanesBuildTag), the road graph file's bytes, its terrain file, the level's sidewalk
-//     override. New roads, new key -- and the lanes tag is never bumped for this;
+//     override. New roads, new key -- and the lanes tag is never bumped for this. The control plan (each junction's
+//     control, the signs, the posted limits: issue #240) is part of the road graph file, so a new plan is a new key;
 //   - the VEHICLES the connectors were checked against, in order: each tag, its tightest turning radius and its width
-//     (they decide which vehicles each connector is open to), and the control every junction carries;
+//     (they decide which vehicles each connector is open to), and the control every junction carries when the road
+//     graph plans none;
 //   - the builder's version, kLaneGraphBuildVersion (lane_graph_build.h), bumped by hand when the builder's output
 //     can change, and this file's own layout version.
 // A file whose name, recorded key, section hashes or graph do not check out is refused with the reason, rebuilt and

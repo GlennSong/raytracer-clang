@@ -13,6 +13,8 @@
 #include <cstdio>
 #include <map>
 #include <numeric>
+#include <set>
+#include <tuple>
 #include <utility>
 
 namespace engine {
@@ -233,6 +235,220 @@ struct Bounds {
     void add(const Vec2& p) { x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y); }
     bool overlaps(const Bounds& o) const { return !(o.x0 > x1 || o.x1 < x0 || o.y0 > y1 || o.y1 < y0); }
 };
+
+void tally(std::vector<std::pair<std::string, uint32_t>>& counts, const std::string& name) {
+    for (std::pair<std::string, uint32_t>& c : counts)
+        if (c.first == name) {
+            ++c.second;
+            return;
+        }
+    counts.emplace_back(name, 1);
+}
+
+// THE CONTROL PLAN CARRIED THROUGH (issue #240; control_plan.h, road_graph_spec.h PlannedJunction). Every lane takes
+// its road's posted limit and every connector that of the lane it joins. Where the road graph plans its junctions,
+// each built junction's lanes are matched to the planned arms of their roads (kPlannedArmReach), the junction takes the
+// control of the planned junction they belong to, and the regulations an arm carries stand at the end of each lane
+// arriving by it. Nothing is worked out: a junction no planned one names, one holding planned junctions of different
+// controls, a lane whose road the plan gives no arm there, and a regulation on an arm no lane arrives by are each
+// reported with its place; the junction is left not planned, which a rule set refuses.
+void carryControlPlan(const RoadLabGraph& g, const std::string& unplannedControl, LaneGraphBuild& out) {
+    LaneGraph& G = out.graph;
+    ControlPlanReport& rep = out.controlPlan;
+    const std::vector<SectionSource>& sections = out.sectionSources;
+    out.plannedOf.assign(G.junctions.size(), {});
+    for (Path& p : G.paths) {
+        if (p.kind != PathKind::Lane || p.section.index >= sections.size()) continue;
+        const int edge = sections[p.section.index].edge;
+        p.speedLimit = edge >= 0 ? g.edges[static_cast<std::size_t>(edge)].speedLimit : 0.0;
+        if (p.speedLimit > 0) ++rep.lanesPosted;
+    }
+    for (Path& p : G.paths) {
+        if (p.kind != PathKind::Connector || p.next.count == 0) continue;
+        p.speedLimit = G.paths[G.nextPaths[p.next.first].index].speedLimit;
+        if (p.speedLimit > 0) ++rep.connectorsPosted;
+    }
+    if (!g.declaresJunctions) return;
+    rep.declared = true;
+    rep.planned = static_cast<uint32_t>(g.junctions.size());
+
+    // the planned arms by (road, its spine running in): (station, planned junction, arm)
+    struct ArmRef {
+        double at = 0;
+        uint32_t junction = 0, arm = 0;
+    };
+    std::map<std::pair<int, bool>, std::vector<ArmRef>> arms;
+    // road -> the stretches of it lying inside a planned junction: (from, to, planned junction)
+    std::map<int, std::vector<std::tuple<double, double, uint32_t>>> insideOf;
+    for (uint32_t pj = 0; pj < g.junctions.size(); ++pj) {
+        for (uint32_t a = 0; a < g.junctions[pj].arms.size(); ++a) {
+            const PlannedArm& arm = g.junctions[pj].arms[a];
+            arms[std::make_pair(g.index.at(arm.road), arm.spineIn)].push_back(ArmRef{arm.at, pj, a});
+        }
+        for (const PlannedStretch& st : g.junctions[pj].inside)
+            insideOf[g.index.at(st.road)].emplace_back(st.from, st.to, pj);
+    }
+    // the planned junction a lane end at station `s` of road `edge` lies inside (between two of its nodes), if any
+    auto insideAt = [&](int edge, double s, uint32_t& found) {
+        const std::map<int, std::vector<std::tuple<double, double, uint32_t>>>::const_iterator it = insideOf.find(edge);
+        if (it == insideOf.end()) return false;
+        for (const std::tuple<double, double, uint32_t>& st : it->second)
+            if (s >= std::get<0>(st) && s <= std::get<1>(st)) {
+                found = std::get<2>(st);
+                return true;
+            }
+        return false;
+    };
+    // the arm a lane of road `edge` belongs to, its end or start at spine station `s`, the spine running in or out there
+    auto armOf = [&](int edge, bool spineIn, double s, ArmRef& found) {
+        const std::map<std::pair<int, bool>, std::vector<ArmRef>>::const_iterator it = arms.find(std::make_pair(edge, spineIn));
+        if (it == arms.end()) return false;
+        double best = kPlannedArmReach;
+        bool any = false;
+        for (const ArmRef& a : it->second)
+            if (std::fabs(a.at - s) <= best) {
+                if (any && std::fabs(a.at - s) == best) continue;   // (equal: the first, in plan order)
+                best = std::fabs(a.at - s);
+                found = a;
+                any = true;
+            }
+        return any;
+    };
+    // where a lane of a section meets its junction: the section's road, the station along its spine, its spine's way
+    struct LaneEnd {
+        int edge = -1;
+        double s = 0;
+        bool spineIn = true;
+    };
+    auto endOf = [&](PathId lane, bool arriving) {
+        LaneEnd e;
+        const uint32_t sec = G.paths[lane.index].section.index;
+        if (sec >= sections.size() || sections[sec].edge < 0) return e;
+        const SectionSource& src = sections[sec];
+        e.edge = src.edge;
+        const double length = g.edges[static_cast<std::size_t>(e.edge)].s.back();
+        const double u = arriving ? src.to : src.from;   // metres the way the traffic runs
+        e.s = src.dir > 0 ? u : length - u;
+        // arriving with the spine, the spine runs into the junction; leaving with it, out of it
+        e.spineIn = arriving == (src.dir > 0);
+        return e;
+    };
+    std::vector<std::vector<std::pair<PathId, ArmRef>>> arrivingArms(G.junctions.size());   // arriving lanes, their arms
+    std::vector<std::vector<uint32_t>> builtOf(g.junctions.size());
+    std::vector<uint32_t> lanesOnArm;   // per (planned junction, arm), flattened: arriving lanes matched to it
+    std::vector<uint32_t> armBase(g.junctions.size() + 1, 0);
+    for (uint32_t pj = 0; pj < g.junctions.size(); ++pj)
+        armBase[pj + 1] = armBase[pj] + static_cast<uint32_t>(g.junctions[pj].arms.size());
+    lanesOnArm.assign(armBase.back(), 0);
+    for (uint32_t j = 0; j < G.junctions.size(); ++j) {
+        const Junction& jn = G.junctions[j];
+        std::set<uint32_t> planned;
+        for (int arriving = 1; arriving >= 0; --arriving) {
+            const Range lanes = arriving ? jn.arriving : jn.leaving;
+            for (uint32_t k = lanes.first; k < lanes.end(); ++k) {
+                const PathId lane = G.junctionLanes[k];
+                const LaneEnd e = endOf(lane, arriving != 0);
+                ArmRef ref;
+                uint32_t inside = 0;
+                if (e.edge >= 0 && insideAt(e.edge, e.s, inside)) {   // between two nodes of one planned junction: its, no sign
+                    planned.insert(inside);
+                    continue;
+                }
+                if (e.edge < 0 || !armOf(e.edge, e.spineIn, e.s, ref)) {
+                    ++rep.lanesOffPlan;
+                    addProblem(out.problems, "junction %u: lane %u %s by road %s (its spine running %s at %.1f m), where "
+                                             "the control plan has no arm of that road", j, lane.index,
+                               arriving ? "arrives" : "leaves", e.edge >= 0 ? g.edges[static_cast<std::size_t>(e.edge)].id.c_str() : "(none)",
+                               e.spineIn ? "in" : "out", e.s);
+                    continue;
+                }
+                planned.insert(ref.junction);
+                if (arriving) {
+                    arrivingArms[j].emplace_back(lane, ref);
+                    ++lanesOnArm[armBase[ref.junction] + ref.arm];
+                }
+            }
+        }
+        out.plannedOf[j].assign(planned.begin(), planned.end());
+        for (uint32_t pj : planned) builtOf[pj].push_back(j);
+    }
+
+    // each built junction's control: its planned junctions', when they agree
+    std::vector<std::string> controlOf(G.junctions.size(), unplannedControl);
+    for (uint32_t j = 0; j < G.junctions.size(); ++j) {
+        const std::vector<uint32_t>& planned = out.plannedOf[j];
+        const JunctionNote& note = out.junctionNotes[j];
+        if (planned.empty()) {
+            ++rep.notPlanned;
+            addProblem(out.problems, "junction %u at (%.1f, %.1f) (roads %s): no planned junction names it; it is left "
+                                     "\"%s\"", j, note.at.x, note.at.y, note.roads.c_str(), unplannedControl.c_str());
+            continue;
+        }
+        bool agree = true;
+        std::string names;
+        for (uint32_t pj : planned) {
+            agree = agree && g.junctions[pj].control == g.junctions[planned.front()].control;
+            names += (names.empty() ? "" : ", ") + g.junctions[pj].id + " (" + g.junctions[pj].control + ")";
+        }
+        if (!agree) {
+            ++rep.conflicts;
+            addProblem(out.problems, "junction %u at (%.1f, %.1f) (roads %s): the builder made one junction of planned "
+                                     "junctions %s, whose controls differ; it is left \"%s\"", j, note.at.x, note.at.y,
+                       note.roads.c_str(), names.c_str(), unplannedControl.c_str());
+            continue;
+        }
+        if (planned.size() > 1) ++rep.merged;
+        controlOf[j] = g.junctions[planned.front()].control;
+    }
+    for (uint32_t pj = 0; pj < g.junctions.size(); ++pj) {
+        if (builtOf[pj].empty()) ++rep.plannedNotBuilt;
+        if (builtOf[pj].size() > 1) ++rep.plannedSpread;
+        for (uint32_t a = 0; a < g.junctions[pj].arms.size(); ++a) {
+            const PlannedArm& arm = g.junctions[pj].arms[a];
+            if (arm.regulations.empty() || builtOf[pj].empty() || lanesOnArm[armBase[pj] + a] > 0) continue;
+            ++rep.signsWithNoLane;
+            addProblem(out.problems, "planned junction %s: its arm on road %s (spine %s at %.1f m) carries \"%s\", but no "
+                                     "lane arrives by it there", g.junctions[pj].id.c_str(), arm.road.c_str(),
+                       arm.spineIn ? "in" : "out", arm.at, arm.regulations.front().c_str());
+        }
+    }
+    G.controlNames = controlOf;
+    std::sort(G.controlNames.begin(), G.controlNames.end());
+    G.controlNames.erase(std::unique(G.controlNames.begin(), G.controlNames.end()), G.controlNames.end());
+    for (uint32_t j = 0; j < G.junctions.size(); ++j) {
+        G.junctions[j].control = LaneGraph::nameIndex(G.controlNames, controlOf[j]);
+        tally(rep.byControl, controlOf[j]);
+    }
+    std::sort(rep.byControl.begin(), rep.byControl.end());
+
+    // the regulations: each arm's, at the end of every lane arriving by it, path by path
+    std::vector<std::vector<std::string>> kindsOn(G.paths.size());
+    for (const std::vector<std::pair<PathId, ArmRef>>& lanes : arrivingArms)
+        for (const std::pair<PathId, ArmRef>& la : lanes)
+            for (const std::string& kind : g.junctions[la.second.junction].arms[la.second.arm].regulations) {
+                kindsOn[la.first.index].push_back(kind);
+                G.regulationKindNames.push_back(kind);
+                tally(rep.regulations, kind);
+            }
+    std::sort(rep.regulations.begin(), rep.regulations.end());
+    std::sort(G.regulationKindNames.begin(), G.regulationKindNames.end());
+    G.regulationKindNames.erase(std::unique(G.regulationKindNames.begin(), G.regulationKindNames.end()), G.regulationKindNames.end());
+    G.regulations.clear();
+    for (uint32_t p = 0; p < G.paths.size(); ++p) {
+        std::vector<std::string>& kinds = kindsOn[p];
+        std::sort(kinds.begin(), kinds.end());
+        kinds.erase(std::unique(kinds.begin(), kinds.end()), kinds.end());
+        G.paths[p].regulations = Range{static_cast<uint32_t>(G.regulations.size()), 0};
+        for (const std::string& kind : kinds) {
+            Regulation reg;
+            reg.kind = LaneGraph::nameIndex(G.regulationKindNames, kind);
+            reg.path = PathId(p);
+            reg.from = reg.to = G.paths[p].length;
+            G.regulations.push_back(reg);
+        }
+        G.paths[p].regulations.count = static_cast<uint32_t>(G.regulations.size()) - G.paths[p].regulations.first;
+    }
+}
 
 }  // namespace
 
@@ -1234,6 +1450,9 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
     co.clearance = g.rules.sameLevelDz;
     out.crossings = findCrossingPoints(G, co);
     out.problems.insert(out.problems.end(), out.crossings.problems.begin(), out.crossings.problems.end());
+
+    // ---- the control plan: each junction's control, the signs where roads arrive, the posted limits (#240) ----------
+    carryControlPlan(g, opts.control, out);
 
     for (const std::string& p : validate(G)) out.problems.push_back("lane graph: " + p);
     reachReport(out);

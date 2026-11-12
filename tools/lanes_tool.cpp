@@ -28,6 +28,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <nlohmann/json.hpp>
 
 #include <cstdio>
@@ -254,6 +255,25 @@ int main(int argc, char** argv) {
                         cr.withCrosswalks, cr.betweenJunctions, cr.withLanes, cr.busiestJunction, cr.busiestCount,
                         cr.junctionsWithout, cr.milliseconds);
         }
+        {
+            // the control plan carried through (#240)
+            const ControlPlanReport& cp = lg.controlPlan;
+            std::string controls, kinds;
+            for (const std::pair<std::string, uint32_t>& c : cp.byControl)
+                controls += (controls.empty() ? "" : ", ") + std::to_string(c.second) + " " + c.first;
+            for (const std::pair<std::string, uint32_t>& k : cp.regulations)
+                kinds += (kinds.empty() ? "" : ", ") + std::to_string(k.second) + " " + k.first;
+            if (!cp.declared)
+                std::printf("  control plan: none in the road graph; every junction \"%s\"\n", lgo.control.c_str());
+            else
+                std::printf("  control plan: %u planned junctions (%u spread over several built ones, %u with no junction built "
+                            "there); built junctions: %s; %u holding two or more planned ones of one control, %u no planned "
+                            "one names, %u holding planned ones that differ; %u lanes off the plan, %u planned signs with no "
+                            "lane; at arriving lanes' ends: %s; posted limits on %u lanes and %u connectors\n",
+                            cp.planned, cp.plannedSpread, cp.plannedNotBuilt, controls.c_str(), cp.merged, cp.notPlanned,
+                            cp.conflicts, cp.lanesOffPlan, cp.signsWithNoLane, kinds.empty() ? "nothing" : kinds.c_str(),
+                            cp.lanesPosted, cp.connectorsPosted);
+        }
         const std::string dumpPath = outDir + "/lane_graph.txt", problemsPath = outDir + "/problems.txt", svgPath = outDir + "/lane_graph.svg";
         const std::string reachPath = outDir + "/reach.txt";
         { std::ofstream f(dumpPath); f << dumpText(G); if (!f) { std::fprintf(stderr, "lanes: cannot write %s\n", dumpPath.c_str()); return 1; } }
@@ -293,8 +313,30 @@ int main(int argc, char** argv) {
             close.cropHi = close.cropHi + Vec2(kCloseUpMargin, kCloseUpMargin);
             const std::string base = outDir + "/junction_" + std::to_string(j);
             if (!writeLaneGraphSvg(G, base + ".svg", close)) { std::fprintf(stderr, "lanes: cannot write %s.svg\n", base.c_str()); return 1; }
-            // its connectors, then every crossing point on one of them, in id order
+            // the junction itself (its control, the signs its arriving lanes face), the planned junctions it came from (what
+            // the road graph's control plan says and why), then its connectors, then every crossing point on one of them
             std::ofstream f(base + ".txt");
+            {
+                // the dump's lines for this junction: its header and the indented lines under it
+                std::istringstream all(dumpText(G));
+                const std::string head = "junction " + std::to_string(j) + ":";
+                bool in = false;
+                for (std::string line; std::getline(all, line);) {
+                    if (line.compare(0, head.size(), head) == 0) in = true;
+                    else if (in && line.compare(0, 2, "  ") != 0) break;
+                    if (in) f << line << "\n";
+                }
+            }
+            if (j < lg.plannedOf.size())
+                for (uint32_t pj : lg.plannedOf[j]) {
+                    const PlannedJunction& p = rp->graph.junctions[pj];
+                    f << "planned as " << p.id << " at (" << p.at.x << ", " << p.at.y << "): " << p.control << ", \"" << p.why << "\"\n";
+                    for (const PlannedArm& a : p.arms) {
+                        f << "  arm: road " << a.road << ", its spine running " << (a.spineIn ? "in" : "out") << " at " << a.at << " m";
+                        for (const std::string& r : a.regulations) f << ", " << r;
+                        f << "\n";
+                    }
+                }
             std::vector<uint32_t> records;
             for (uint32_t k = jn.connectors.first; k < jn.connectors.end(); ++k) {
                 const PathId c = G.junctionConnectors[k];

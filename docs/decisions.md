@@ -18245,3 +18245,103 @@ the line only limits how far the car behind can get, which it announces. People 
 light (D2): with the clock, a red is a stop that is not this junction's traffic, so the car announces "not going" by
 itself.
 
+## ADR-0403 — The control plan: every junction's control and every road's limit, planned as data and carried through (#240)
+
+Words: a CONTROL is how a junction is run (traffic lights, an all-way stop, stop or give-way signs on the minor road,
+or nothing); a REGULATION is a rule standing on a path (a stop sign at the end of an arriving lane); the PLACEMENT
+POLICY is the rule-set table that says which junction gets which control; a NODE is a place where roads meet in the
+road graph (road ends at one point, or a ramp's free end on a street's side); an ARM is one road's way into a junction,
+an APPROACH an arm with lanes arriving; the MAJOR road at a junction is the most important class there.
+
+**Context.** Driving model task B4 (#240; design 5.1, 6.1). Every lane graph junction carried one made-up control,
+`not_planned`, settled as an uncontrolled junction, and no road posted a limit: the rule set's `default_limits` stood in
+everywhere. The design says the planner writes each junction's control and every regulation into the road graph as
+intent, from a policy that is rule-set data, and the builder carries them through and checks them, never inferring one
+("roads: no guessing").
+
+**Decision.**
+- **The policy lives in the rule set**, as its `placement` table (`assets/scripts/rules/lab.lua`): one country, one
+  file, and the reader checks the policy against the same file's `control` rows and `devices`, so a policy can never
+  choose a control or a sign its rule set cannot read. It holds `class_order` (road classes, most important first),
+  `speed_limits` (posted per class, with units and sources) and `junctions`, ordered rows: conditions on the junction's
+  facts -- arms, approaches, the major and minor road's class, the most lanes arriving on one major and one minor
+  approach, their posted limits, whether a ramp ends there -- an optional `apart` (no junction already given this
+  control within so many metres), and a decision: the control and the signs at the major / minor / all approaches. The
+  first row that holds decides; the reader refuses a policy whose last row asks anything, so no junction is left
+  without one. Read by `driving::loadPlacementPolicy` (scripting/rule_set_lua) into the engine's plain
+  `ControlPolicy`; the driving model itself never reads it.
+- **The planner** (`src/engine/procgen/city/roads/lanes/control_plan.h`, with the road builder): `findJunctions` finds
+  the nodes of a road graph (ramps composed first by the builder's own `expand`, so stations agree), groups nodes so
+  close along a road that the builder will make them one junction (each road's half-width, the stop line's setback and
+  the merge gap: the builder's own figures), works out each junction's arms and facts and settles which approaches are
+  major (by class; among equals, the one pair running straight through a T, by the one `kStraightOnDegrees`).
+  `planControls` decides junctions most important first (so `apart` serves the busier junction) and posts each road's
+  limit; `writeControlPlan` writes the result into the road graph JSON: a `junctions` list (id, place, control, the
+  row's name as `why`, arms with the regulations standing where they arrive, the stretches of road lying inside) and a
+  `speed_limit` (m/s) on each road, leaving every other field as it was. A junction marked `hand` and a road marked
+  `speed_limit_hand` are kept as written. `city_plan controls GRAPH.json RULES.lua [--write] [--report FILE]` runs it;
+  re-planning a planned graph writes the same bytes.
+- **The builder carries it and checks it** (`lane_graph_build.cpp carryControlPlan`): each lane arriving at or leaving a
+  built junction is matched to its road's planned arm on the same side (spine running in or out), nearest station
+  within `kPlannedArmReach`, or to a stretch planned as inside a junction. A built junction takes its planned
+  junction's control; one no planned junction names, or one holding planned junctions of different controls, is
+  reported with its place and left `not_planned` (which a rule set without that row refuses); a lane whose road has no
+  arm there, and a regulation on an arm no lane arrives by, are reported. Each arm's regulations stand at the end of
+  every lane arriving by it. Every lane posts its road's limit and every connector that of the lane it joins, so the
+  rule set's defaults hold only where nothing is posted (the lab's ramps). A graph with no `junctions` list is built as
+  before, every junction `opts.control`.
+- **The lane graph**: a regulation covers a stretch of its path, `from` and `to` (a sign at one place has them equal);
+  `validate` checks both lie on the path and run forwards, and the order; the dump lists, under each junction, what its
+  arriving lanes face at their ends; the plan SVG draws a disc per junction coloured by its control with the control's
+  name, and a triangle at each arriving lane's end for each regulation there, colours taken by name index (no kind is
+  named in C++). LGRF version 4; builder version 3 (every level's cached lane graph is built again once).
+- **Lights with no clock** (`when_dark`): a control row with lights may name another row to be treated as while no
+  light runs a programme (`road_rules.h kLightsRunAProgramme`, false until #261). The lab's `signal` row names
+  `all_way_stop`, as the law treats a dark or flashing-red signal (CVC 21800 (d)(1), 21457 (a)). Lights fixed at their
+  first phase would hold half their approaches behind the other half's traffic with no light to show for it.
+- **Names line up with the sign kit** (`assets/scripts/signs_us.lua` `means`): controls `stop`, `all_way_stop`,
+  `give_way` and regulations `stop`, `give_way` are its words; `signal` and `unmarked` have no sign of their own. The
+  design's `minor_stop` is called `stop`, as the kit's STOP sign names it.
+- **Giving way at a full stop** (`give_way.cpp`): a driver still owing a full stop at a line (it holds one there, the
+  control makes everyone stop, or its arriving lane carries a device with a stop line) and not yet at rest there makes
+  no decision to go there, as a driver not going makes none (ADR-0402). Deciding before turned most drivers at the
+  lab's all-way stops into "go", then "give way" to the car that arrived first, then "go" (104 plans changed their
+  minds twice in five minutes; 1 after).
+
+**The lab** (`city_plan controls assets/lanelab/planned/traffic_lab_lanelab.json rules/lab.lua --write`): 166 planned
+junctions decided by the rows "one road running on as another" 23, "a ramp ends on a street: the ramp stops" 4, "a ramp
+leaves a street" 2, "five or more roads meet: lights" 9, "arterials cross: lights" 11, "an arterial meets a collector:
+lights" 7, "a local street meets a busier road: the local street stops" 76, "a collector ends on a collector: it stops"
+4, "local streets cross: an all-way stop" 30. Built: 168 junctions, 38 with lights (run as all-way stops while dark), 30
+all-way stops, 86 two-way stops, 14 with nothing; 244 arriving lanes stand a stop sign; 1,919 lanes and 1,992
+connectors post a limit (the 8 ramp lanes and the connectors joining them take the default). No plan problem.
+
+**Measured** (five simulated minutes, 300 drivers; before = HEAD 154763ee with every junction `not_planned`):
+
+| | before | after |
+|---|---|---|
+| trips begun / arrived | 644 / 344 | 546 / 246 |
+| mean speed | 7.18 m/s | 6.30 m/s |
+| longest wait at a junction's line | 13.6 s | 27.7 s |
+| loops, cars waiting with no reason, cars standing 60 s | 0, 0, 0 | 0, 0, 0 |
+| pairs overlapping inside a junction (cross / join) | 0 / 0 | 0 / 0 |
+| plans changing their minds twice | 0 | 1 |
+| the model's tick (worst) | 0.272 ms (0.82) | 0.270 ms (0.70) |
+
+Slower, as stops and all-way stops make it: everyone now stops at 68 junctions and minor roads at 86 more. Before the
+"five or more roads meet" row, the midtown ring's eight-road junction 75 got a two-way stop and deadlocked (3 loops,
+the longest 150 s: a car queued behind one giving way to a car that gave way to it); arrival-ordered control there does
+not. That is D4/D5's ground (first in goes first, room beyond), reported, not patched.
+
+**Not changed.** The road meshes: traffic_lab, ring_city and grid_city build byte-identical `.glb`s. The lab's road graph
+file changed, so its bake key changed and it re-baked once (35 s, then 1.3 s loads); no other level's key changed. (Its
+bake also grew 4 MB: paint from #244, which landed after the lab's previous bake, without a tag bump.)
+
+**Owed.** The lights' clock (#261): turn `kLightsRunAProgramme` on, and the lab's lights run as lights. Planting the
+signs (#241): one sign kit entry per `means.regulation` at each arriving lane's end, and the `ALL WAY` plaque where the
+junction's control is `all_way_stop`; speed-limit signs from each road's `speed_limit` (the lane graph keeps the limit
+on each path, not as a regulation record). Roads crossing mid-edge at one level (not at a node) are not found as
+junctions by the planner yet (the lab has none; such a built junction is reported as not planned). Turn bans and
+`no_turn_on_red` as arm regulations need only devices and policy rows. The planner's facts have no traffic counts, so
+the class stands in for the manual's volume warrants.
+

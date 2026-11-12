@@ -319,6 +319,9 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         if (ej.contains("profile")) { e.profileStep = ej["profile"].value("step", 1.0); e.profile = ej["profile"].at("z").get<std::vector<double>>(); }
         if (ej.contains("lots_range")) { e.lotsFrom = ej["lots_range"].at(0).get<double>(); e.lotsTo = ej["lots_range"].at(1).get<double>(); }
         if (ej.contains("floor")) for (const auto& fp : ej["floor"]) e.floorPts.push_back({fp.at(0).get<double>(), fp.at(1).get<double>(), fp.at(2).get<double>(), fp.size() > 3 ? fp.at(3).get<double>() : 0.0});
+        e.speedLimit = num(ej, "speed_limit", 0.0);
+        e.speedLimitHand = ej.value("speed_limit_hand", false);
+        if (!(e.speedLimit >= 0.0)) throw std::runtime_error("edge " + e.id + ": speed_limit must be a speed in m/s, 0 or more");
         auto hostLanes = [&](const nlohmann::json& a) { if (a.is_object()) { const EdgeSpec* h = g.find(a.at("edge").get<std::string>()); if (h) return h->lanes; } return e.lanes; };
         if (ej.contains("from")) e.from = readAnchor(ej["from"], hostLanes(ej["from"]));
         if (ej.contains("to")) e.to = readAnchor(ej["to"], hostLanes(ej["to"]));
@@ -339,6 +342,42 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
             // (a bridge may leave `over` empty: the design stage chooses by its own rule, and designedGraph writes the choice in)
             if (x.kind == "bridge" && !x.over.empty() && x.over != x.a && x.over != x.b) throw std::runtime_error("crossing " + x.a + "/" + x.b + ": over names neither road");
             g.crossings.push_back(x);
+        }
+    }
+    if (spec.contains("junctions")) {
+        // THE CONTROL PLAN (PlannedJunction): read as written; a road an arm names must exist, and every junction must
+        // name a control (a junction left without one is the plan's fault, never filled in here).
+        g.declaresJunctions = true;
+        for (const nlohmann::json& jj : spec["junctions"]) {
+            PlannedJunction pj;
+            pj.id = jj.at("id").get<std::string>();
+            pj.control = jj.value("control", std::string());
+            pj.why = jj.value("why", std::string());
+            pj.hand = jj.value("hand", false);
+            if (jj.contains("at")) pj.at = Vec2(jj["at"].at(0).get<double>(), jj["at"].at(1).get<double>());
+            if (pj.control.empty()) throw std::runtime_error("junction " + pj.id + ": names no control");
+            for (const nlohmann::json& aj : jj.at("arms")) {
+                PlannedArm a;
+                a.road = aj.at("road").get<std::string>();
+                a.at = aj.at("at").get<double>();
+                const std::string spine = aj.at("spine").get<std::string>();
+                if (spine != "in" && spine != "out") throw std::runtime_error("junction " + pj.id + ": arm " + a.road + ": spine is \"" + spine + "\", expected \"in\" or \"out\"");
+                a.spineIn = spine == "in";
+                if (aj.contains("regulations")) a.regulations = aj["regulations"].get<std::vector<std::string>>();
+                if (!g.index.count(a.road)) throw std::runtime_error("junction " + pj.id + ": arm names unknown road " + a.road);
+                pj.arms.push_back(a);
+            }
+            if (jj.contains("inside"))
+                for (const nlohmann::json& sj : jj["inside"]) {
+                    PlannedStretch st;
+                    st.road = sj.at("road").get<std::string>();
+                    st.from = sj.at("from").get<double>();
+                    st.to = sj.at("to").get<double>();
+                    if (!g.index.count(st.road)) throw std::runtime_error("junction " + pj.id + ": inside names unknown road " + st.road);
+                    if (!(st.from <= st.to)) throw std::runtime_error("junction " + pj.id + ": inside stretch of " + st.road + " runs backwards");
+                    pj.inside.push_back(st);
+                }
+            g.junctions.push_back(pj);
         }
     }
     if (g.edges.empty()) throw std::runtime_error("graph has no edges");
