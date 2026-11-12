@@ -120,11 +120,17 @@ std::size_t RuleSet::unsourcedNumberCount() const {
 }
 
 double personalValue(const PersonalSetting& setting, PersonId personId) {
+    return personalValue(setting, nameHash(setting.name), personId);
+}
+
+uint32_t settingNameHash(const std::string& settingName) { return nameHash(settingName); }
+
+double personalValue(const PersonalSetting& setting, uint32_t settingHash, PersonId personId) {
     const double span = setting.high - setting.low;
     if (!(span > 0)) return setting.low;   // no range: everyone has the one value
     const uint32_t personBits = engine::hashPair(static_cast<uint32_t>(personId),
                                                  static_cast<uint32_t>(personId >> kHalfWordBits));
-    const double u = engine::unit24(engine::hashPair(personBits, nameHash(setting.name)));
+    const double u = engine::unit24(engine::hashPair(personBits, settingHash));
     // The triangular spread, turned from a uniform number by its inverse: the peak sits at `usual`, which a share
     // `peak` of the people are below.
     const double peak = (setting.usual - setting.low) / span;

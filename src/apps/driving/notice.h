@@ -123,6 +123,9 @@ struct FactSpec {
     FactKind kind = FactKind::Number;
     NoticeFn notice = nullptr;
     std::string meaning;               // one line, plain language, for the driver card and the docs
+    // What a Number or Place fact measures, so a rule comparing it with a number of another kind (a distance with a
+    // time) is refused at load. A Place is always a length. Means nothing for YesNo and Word facts.
+    UnitFamily unit = UnitFamily::Ratio;
     std::vector<std::string> words;    // a Word fact's list (empty otherwise)
     std::vector<FactNeed> numbers;     // rule-set numbers it reads
     std::vector<FactNeed> settings;    // personal settings it reads
@@ -136,7 +139,7 @@ constexpr FactSlot kNoFact = 0xFFFFFFFFu;
 class FactRegistry {
 public:
     // Adds a fact at the end and gives its slot. Refused (kNoFact, with the reason in `why` when given) for an empty
-    // name, a name already registered, or no function.
+    // name, a name already registered, no function, or a Place fact whose unit is not a length.
     FactSlot add(FactSpec spec, std::string* why = nullptr);
     // The slot of the fact of that name, or kNoFact.
     FactSlot find(const std::string& name) const;

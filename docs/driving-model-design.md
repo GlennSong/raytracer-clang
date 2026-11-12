@@ -815,9 +815,22 @@ rules = {
   { name = "get in lane",     when = { "lanes_to_cross", ">", 0 },      give = { move = "toward_route_lane" } },
   { name = "indicate",        when = { "turn_within", "<", "indicate_distance" }, give = { indicate = "turn_side" } },
   { name = "person crossing", when = "person_on_my_crosswalk",          give = { stop_at = "crosswalk" } },
-  { name = "horn: cut off",   when = { all = { "cut_off", { "horn_temper", ">", 0.6 } } }, give = { action = "horn" } },
+  { name = "horn: cut off",   when = { all = { "cut_off", "quick_to_horn" } }, give = { action = "horn" } },
 }
 ```
+
+**As built** (task C5, `src/apps/driving/decide.h`):
+
+- Rules are an ordered list. A condition is a fact's name, `not`, `all`, `any`, or one comparison whose left side
+  is a fact. `unless` means "and not". A comparison with a fact that has nothing to report is false.
+- The right side of a comparison names a rule-set number, a personal setting or another fact. A number written
+  straight into a rule is allowed **only against a plain ratio or count** (`lanes_to_cross > 0`). Against a speed,
+  a distance or a time it is refused, because it would have no unit: the rule must name a number, which carries one.
+- So a personal setting can't sit on the left: "this driver is quick to use the horn" is a yes/no fact
+  (`quick_to_horn`), worked out in C++ from the setting, as in the last rule above.
+- There are no rule priorities. Answers combine by fixed arithmetic, so a priority would do nothing.
+- Intentions and actions are a vocabulary registered in C++ like facts, because code has to act on them.
+- Deciding reads no strings: about 180 billionths of a second for a dozen rules.
 
 ### 6.2 Where the weight sits, honestly
 

@@ -492,6 +492,7 @@ endif()
 # src/apps/driving and fails if one reaches past that line.
 # ============================================================
 add_library(driving STATIC
+    src/apps/driving/decide.cpp          # rules' answers combined into one decision, with its reasons (#252)
     src/apps/driving/driving.cpp
     src/apps/driving/notice.cpp          # facts: what a driver can notice, registered by name (#251)
     src/apps/driving/road_rules.cpp      # the graph's regulation kinds bound to the rule set's devices (#251)
@@ -503,13 +504,16 @@ target_compile_options(driving PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(driving PUBLIC engine_core)
 if(RT_ENABLE_SCRIPTING)
     # The one place the driving library meets Lua: the rule-set reader (#250). Lua comes through engine_core.
-    target_sources(driving PRIVATE src/apps/driving/scripting/rule_set_lua.cpp
+    target_sources(driving PRIVATE src/apps/driving/scripting/lua_table_reader.cpp   # what the readers share
+                                   src/apps/driving/scripting/rule_set_lua.cpp
+                                   src/apps/driving/scripting/rules_lua.cpp          # + the rules, compiled (#252)
                                    src/apps/driving/scripting/vehicle_class_lua.cpp)   # + the vehicles' driving blocks (#248)
 endif()
 
 # The driving library's own headless tests: engine_core + driving, never citysim.
 add_executable(driving_tests tests/main.cpp tests/test_driving.cpp tests/test_driving_rules.cpp
-    tests/test_driving_vehicles.cpp tests/test_driving_traffic.cpp tests/test_driving_notice.cpp)
+    tests/test_driving_vehicles.cpp tests/test_driving_traffic.cpp tests/test_driving_notice.cpp
+    tests/test_driving_decide.cpp)
 target_include_directories(driving_tests PRIVATE src tests)
 target_compile_options(driving_tests PRIVATE -Wall -Wextra)
 target_compile_definitions(driving_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

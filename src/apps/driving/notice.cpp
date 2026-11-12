@@ -267,6 +267,12 @@ FactSpec spec(const char* name, FactKind kind, NoticeFn fn, const char* meaning)
     s.meaning = meaning;
     return s;
 }
+// A Number or Place fact, with what it measures.
+FactSpec measured(const char* name, FactKind kind, UnitFamily unit, NoticeFn fn, const char* meaning) {
+    FactSpec s = spec(name, kind, fn, meaning);
+    s.unit = unit;
+    return s;
+}
 FactNeed need(const char* name, UnitFamily family) {
     FactNeed n;
     n.name = name;
@@ -329,6 +335,10 @@ FactSlot FactRegistry::add(FactSpec spec, std::string* why) {
         if (why) *why = "fact \"" + spec.name + "\" has no function to work it out";
         return kNoFact;
     }
+    if (spec.kind == FactKind::Place && spec.unit != UnitFamily::Length) {
+        if (why) *why = "fact \"" + spec.name + "\" is a place, so its unit must be a length";
+        return kNoFact;
+    }
     facts_.push_back(std::move(spec));
     return static_cast<FactSlot>(facts_.size() - 1);
 }
@@ -365,29 +375,32 @@ bool registerBuiltInFacts(FactRegistry& registry, std::vector<std::string>* prob
     std::vector<FactSpec> specs;
     specs.push_back(spec(kFactCarAhead, FactKind::YesNo, noticeCarAhead,
                          "there is a car ahead of me on my way, within how far I look"));
-    specs.push_back(spec(kFactGapAhead, FactKind::Number, noticeGapAhead,
-                         "metres from my front bumper to the rear of the car ahead"));
-    specs.push_back(spec(kFactSpeedAhead, FactKind::Number, noticeSpeedAhead, "how fast the car ahead is going, m/s"));
-    specs.push_back(spec(kFactClosingSpeed, FactKind::Number, noticeClosingSpeed,
-                         "how much faster I am going than the car ahead, m/s (below zero: it is pulling away)"));
-    specs.push_back(spec(kFactRoadLimit, FactKind::Number, noticeRoadLimit,
-                         "the speed limit in force where my front bumper is, m/s"));
-    FactSpec myLimit = spec(kFactMyLimit, FactKind::Number, noticeMyLimit,
-                            "the speed I like to drive here: the limit times my own speed habit, m/s");
+    specs.push_back(measured(kFactGapAhead, FactKind::Number, UnitFamily::Length, noticeGapAhead,
+                             "metres from my front bumper to the rear of the car ahead"));
+    specs.push_back(measured(kFactSpeedAhead, FactKind::Number, UnitFamily::Speed, noticeSpeedAhead,
+                             "how fast the car ahead is going, m/s"));
+    specs.push_back(measured(kFactClosingSpeed, FactKind::Number, UnitFamily::Speed, noticeClosingSpeed,
+                             "how much faster I am going than the car ahead, m/s (below zero: it is pulling away)"));
+    specs.push_back(measured(kFactRoadLimit, FactKind::Number, UnitFamily::Speed, noticeRoadLimit,
+                             "the speed limit in force where my front bumper is, m/s"));
+    FactSpec myLimit = measured(kFactMyLimit, FactKind::Number, UnitFamily::Speed, noticeMyLimit,
+                                "the speed I like to drive here: the limit times my own speed habit, m/s");
     myLimit.settings.push_back(need(kSettingSpeedHabit, UnitFamily::Ratio));
     specs.push_back(myLimit);
-    FactSpec slower = spec(kFactSlowerAhead, FactKind::Number, noticeSlowerAhead,
-                           "the speed I may do now and still slow comfortably to a lower limit ahead, m/s");
+    FactSpec slower = measured(kFactSlowerAhead, FactKind::Number, UnitFamily::Speed, noticeSlowerAhead,
+                               "the speed I may do now and still slow comfortably to a lower limit ahead, m/s");
     slower.settings.push_back(need(kSettingSpeedHabit, UnitFamily::Ratio));
     specs.push_back(slower);
-    FactSpec corner = spec(kFactCornerSpeed, FactKind::Number, noticeCornerSpeed,
-                           "the speed I may do now and still slow comfortably for the tightest bend ahead, m/s");
+    FactSpec corner = measured(kFactCornerSpeed, FactKind::Number, UnitFamily::Speed, noticeCornerSpeed,
+                               "the speed I may do now and still slow comfortably for the tightest bend ahead, m/s");
     corner.numbers.push_back(need(kNumberComfortableSideAccel, UnitFamily::Acceleration));
     specs.push_back(corner);
     specs.push_back(spec(kFactLaneEndsAhead, FactKind::YesNo, noticeLaneEndsAhead,
                          "my way runs out within how far I look"));
-    specs.push_back(spec(kFactLaneEnd, FactKind::Place, noticeLaneEnd, "where my way runs out, metres ahead"));
-    specs.push_back(spec(kFactMySpeed, FactKind::Number, noticeMySpeed, "how fast I am going, m/s"));
+    specs.push_back(measured(kFactLaneEnd, FactKind::Place, UnitFamily::Length, noticeLaneEnd,
+                             "where my way runs out, metres ahead"));
+    specs.push_back(measured(kFactMySpeed, FactKind::Number, UnitFamily::Speed, noticeMySpeed,
+                             "how fast I am going, m/s"));
     specs.push_back(spec(kFactStanding, FactKind::YesNo, noticeStanding, "I am standing still, or as good as"));
 
     bool ok = true;

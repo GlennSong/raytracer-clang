@@ -122,6 +122,10 @@ using PersonId = uint64_t;
 // bunch around `usual` (a triangular spread whose peak is at `usual`). Mixes the person's id with a hash of the
 // setting's name, so two settings are independent for one person. Stateless, so it costs no memory.
 double personalValue(const PersonalSetting& setting, PersonId personId);
+// The same, with the hash of the setting's name worked out beforehand (settingNameHash), so code that runs every tick
+// never reads the name.
+uint32_t settingNameHash(const std::string& settingName);
+double personalValue(const PersonalSetting& setting, uint32_t nameHash, PersonId personId);
 
 }  // namespace driving
 
