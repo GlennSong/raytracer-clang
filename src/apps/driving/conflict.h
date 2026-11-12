@@ -211,6 +211,12 @@ public:
     // there (nothing to give way to). `by` says which question decided (None for no conflict).
     bool goesFirst(const engine::LaneGraph& roads, engine::CrossingId crossing, uint64_t me, uint64_t them,
                    Question* by = nullptr) const;
+    // WHO GOES FIRST BETWEEN TWO CARS, WHEREVER THEY MEET this tick: the settled answer of a conflict the two have, in
+    // any group. The groups never disagree: their arrows are checked for rings all together, and a ring is answered by
+    // one order. First: `a` goes first; Second: `b` does; NoAnswer: they have no conflict this tick. `by` says which
+    // question decided (None for no conflict). The room beyond a junction is granted in this order among cars asking in
+    // the same tick (room.h, issue #264), so room does not go to a car that must then wait for one it was preferred to.
+    Answer order(uint64_t a, uint64_t b, Question* by = nullptr) const;
 
     // Every conflict settled this tick, in (group, first, second) order.
     const std::vector<SettledConflict>& conflicts() const { return settled_; }
@@ -245,7 +251,7 @@ private:
 
     std::vector<Met> met_;
     std::vector<SettledConflict> settled_;
-    std::vector<uint32_t> byPair_;   // settled_ by pair of cars, then group (working memory)
+    std::vector<uint32_t> byPair_;   // settled_ by pair of cars, then group (order() reads it after the study)
     // While breaking rings (working memory, kept from tick to tick): the cars (sorted), each one's side for the order,
     // the arrows (by `from`, with where each car's begin), and the strongly connected parts (Tarjan's walk).
     std::vector<uint64_t> nodes_;

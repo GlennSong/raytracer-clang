@@ -73,6 +73,15 @@ WaitReason waitReasonOf(const Car& car) {
             r.rule = car.binding.rule;
             break;
         }
+        // Waiting at the line for room beyond, behind a car's tail (issue #264): an arrow about space. With no car named
+        // (the lights or a stop at the next junction will not let it through) it is a leaf.
+        if (car.binding.stopFor == StopFor::NoRoom && car.binding.car.valid()) {
+            r.sort = ReasonSort::Arrow;
+            r.arrow = ArrowKind::NoRoomBeyond;
+            r.toCar = car.binding.car;
+            r.rule = car.binding.rule;
+            break;
+        }
         r.sort = ReasonSort::Leaf;
         r.leaf = LeafKind::Stop;
         r.rule = car.binding.rule;

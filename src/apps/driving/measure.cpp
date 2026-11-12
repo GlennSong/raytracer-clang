@@ -310,6 +310,118 @@ void JunctionStopRow::note(const Binding& binding, double dt) {
     if (binding.by == Limit::Stop) byStopRule[binding.rule] += dt;
 }
 
+// ---- At rest in a junction box (issue #264) ----------------------------------------------------------------------------
+
+const char* boxReasonKey(BoxReason r) {
+    switch (r) {
+    case BoxReason::GivingWay: return "giving_way";
+    case BoxReason::BehindGivingWay: return "behind_giving_way";
+    case BoxReason::BehindMovingInBox: return "behind_moving_in_box";
+    case BoxReason::BehindOther: return "behind_other";
+    case BoxReason::WaitingForRoom: return "waiting_for_room";
+    case BoxReason::StopByRule: return "stop_by_rule";
+    case BoxReason::TopSpeed: return "top_speed";
+    case BoxReason::WayEnd: return "way_end";
+    case BoxReason::Nothing: return "nothing";
+    }
+    return "?";
+}
+
+const char* boxReasonWords(BoxReason r) {
+    switch (r) {
+    case BoxReason::GivingWay: return "giving way (a recorded give-way, or waiting inside for a far turn)";
+    case BoxReason::BehindGivingWay: return "behind a car giving way in a box";
+    case BoxReason::BehindMovingInBox: return "behind a car moving off inside a box";
+    case BoxReason::BehindOther: return "behind a car held by something else (a queue reaching into the box)";
+    case BoxReason::WaitingForRoom: return "waiting for room beyond";
+    case BoxReason::StopByRule: return "stopped by another rule";
+    case BoxReason::TopSpeed: return "held by a top speed";
+    case BoxReason::WayEnd: return "at the end of its way";
+    case BoxReason::Nothing: return "held by nothing";
+    }
+    return "?";
+}
+
+bool boxReasonAllowed(BoxReason r) {
+    return r == BoxReason::GivingWay || r == BoxReason::BehindGivingWay || r == BoxReason::BehindMovingInBox;
+}
+
+bool bodyInBox(const engine::LaneGraph& roads, const VehicleClasses& classes, const Car& car, Real atLineWithin) {
+    if (car.vehicleClass >= classes.size() || !knownPath(&roads, car.path)) return false;
+    const Body body = layBody(roads, car, classes.at(car.vehicleClass).length);
+    for (std::size_t k = 0; k < body.count; ++k) {
+        const BodyPiece& piece = body.pieces[k];
+        if (!knownPath(&roads, piece.path)) continue;
+        const engine::Path& path = roads.paths[piece.path.index];
+        if (path.kind == engine::PathKind::Connector) {
+            if (piece.front - std::max(Real(0), piece.rear) > atLineWithin) return true;
+            continue;
+        }
+        for (uint32_t c = path.crossings.first; c < path.crossings.end() && c < roads.pathCrossings.size(); ++c) {
+            const engine::CrossingPoint& x = roads.crossings[roads.pathCrossings[c].index];
+            if (x.otherSide == engine::OtherSide::Crosswalk && x.a == piece.path && piece.front > x.aFrom &&
+                piece.rear < x.aTo)
+                return true;
+        }
+    }
+    return false;
+}
+
+BoxReason boxReason(const std::vector<Car>& cars, const PathLists& lists, const Car& car,
+                    bool (*inBox)(const Car& car, const void* context), const void* context) {
+    switch (car.binding.by) {
+    case Limit::Nothing: return BoxReason::Nothing;
+    case Limit::TopSpeed: return BoxReason::TopSpeed;
+    case Limit::WayEnd: return BoxReason::WayEnd;
+    case Limit::Stop:
+        if (car.binding.stopFor == StopFor::GivingWay) return BoxReason::GivingWay;
+        if (car.binding.stopFor == StopFor::NoRoom) return BoxReason::WaitingForRoom;
+        return BoxReason::StopByRule;
+    case Limit::CarAhead: break;
+    }
+    // Held by the car ahead, but itself holding a stop to give way further on (a far turn waiting inside behind another):
+    // its own decision is a recorded give-way.
+    if (car.held.hasStop && car.held.stopFor == StopFor::GivingWay) return BoxReason::GivingWay;
+    // Behind a car: follow the queue to its head (each waiting, held by the car ahead), no further than the cars there are.
+    const Car* head = &car;
+    for (std::size_t steps = 0; steps <= cars.size(); ++steps) {
+        if (head->binding.by != Limit::CarAhead) break;
+        const Car* ahead = findCar(cars, lists, head->binding.car);
+        if (!ahead || ahead == &car) {
+            head = nullptr;   // a ring, or a car gone: nothing in a box gives way at its head
+            break;
+        }
+        if (!isWaiting(*ahead)) {
+            // The queue's head is moving off. Inside a box itself, the queue inside is starting off (a far turn that
+            // waited inside going in its gap, the one behind not yet moving): allowed. Beyond the box, it is a queue that
+            // reached back into it.
+            return inBox(*ahead, context) ? BoxReason::BehindMovingInBox : BoxReason::BehindOther;
+        }
+        head = ahead;
+    }
+    if (head && head->binding.by == Limit::Stop && head->binding.stopFor == StopFor::GivingWay && inBox(*head, context))
+        return BoxReason::BehindGivingWay;
+    return BoxReason::BehindOther;
+}
+
+void BoxStopRow::note(CarId car, uint64_t tick, double seconds, double dt, BoxReason why, const Binding& binding) {
+    carSeconds += dt;
+    byReason[static_cast<uint8_t>(why)] += dt;
+    if (why == BoxReason::StopByRule) byStopRule[binding.rule] += dt;
+    if (boxReasonAllowed(why)) {
+        bad_.erase(car.index);
+        return;
+    }
+    notAllowed += dt;
+    if (bad_.insert(car.index).second)   // a new spell
+        offenders.offer(offender(car, tick, seconds,
+                                 {named("reason", static_cast<double>(static_cast<uint8_t>(why)), boxReasonKey(why), ""),
+                                  named("binding_car", binding.car.valid() ? static_cast<double>(binding.car.index) : -1,
+                                        "held by car", "")}));
+}
+
+void BoxStopRow::notInBox(CarId car) { bad_.erase(car.index); }
+
 void OverlapRow::note(const std::vector<std::pair<OverlapPair, engine::PathId>>& found, uint64_t tick, double seconds) {
     std::set<std::pair<uint32_t, uint32_t>> now;
     for (const std::pair<OverlapPair, engine::PathId>& f : found) {
@@ -498,6 +610,38 @@ MeasurementReport buildReport(const MeasureRows& m, const std::vector<std::strin
             parts += ", " + fmt("%.1f", s.second) + " by rule \"" + name + "\"";
         }
         r.summary = fmt("%.1f", m.junctionStops.carSeconds) + " car-seconds" + (parts.empty() ? "" : ": " + parts);
+        rep.rows.push_back(r);
+    }
+    {
+        // Issue #264 (the D5 brief's "done when"): nobody at rest in a box except by a recorded give-way.
+        ReportRow r = makeRow("box_stops",
+                              "At rest with any part of the body in a junction box (or on a crosswalk), by why",
+                              "only giving way (a recorded give-way, waiting inside for a far turn, or behind a car "
+                              "giving way in the box or moving off inside it)");
+        const BoxStopRow& b = m.boxStops;
+        r.status = zeroTarget(b.notAllowed > 0);
+        r.values.push_back(named("car_seconds", b.carSeconds, "", "car-seconds"));
+        r.values.push_back(named("not_allowed_s", b.notAllowed, "not allowed", "s"));
+        std::string parts;
+        for (uint8_t k = 0; k < kBoxReasonCount; ++k) {
+            const BoxReason why = static_cast<BoxReason>(k);
+            NamedNumber n = named("", b.byReason[k], boxReasonWords(why), "s");
+            n.key = std::string(boxReasonKey(why)) + "_s";
+            r.values.push_back(n);
+            if (b.byReason[k] > 0 && why != BoxReason::StopByRule)
+                parts += std::string(parts.empty() ? "" : ", ") + fmt("%.1f", b.byReason[k]) + " " + boxReasonWords(why);
+        }
+        for (const std::pair<const RuleIndex, double>& s : b.byStopRule) {
+            const std::string name = ruleName(ruleNames, s.first);
+            NamedNumber n = named("", s.second, "", "s");
+            n.key = "stop_rule:" + name + "_s";
+            n.label = "stopped by rule \"" + name + "\"";
+            r.values.push_back(n);
+            parts += std::string(parts.empty() ? "" : ", ") + fmt("%.1f", s.second) + " by rule \"" + name + "\"";
+        }
+        r.summary = fmt("%.1f", b.carSeconds) + " car-seconds, " + fmt("%.1f", b.notAllowed) + " not allowed" +
+                    (parts.empty() ? "" : ": " + parts);
+        r.offenders = b.offenders;
         rep.rows.push_back(r);
     }
     {
@@ -856,6 +1000,37 @@ void Measurements::lookForOverlaps(const Driving& d, double now) {
     rows_.overlaps.note(overlapsFound_, d.tickCount(), now);
 }
 
+namespace {
+
+// What bodyInBox needs, passed through boxReason to look at the car at the head of a queue.
+struct BoxLook {
+    const engine::LaneGraph* roads = nullptr;
+    const VehicleClasses* classes = nullptr;
+    Real atLineWithin = 0;
+};
+bool lookInBox(const Car& car, const void* context) {
+    const BoxLook* look = static_cast<const BoxLook*>(context);
+    return bodyInBox(*look->roads, *look->classes, car, look->atLineWithin);
+}
+
+}  // namespace
+
+void Measurements::lookForBoxStops(const Driving& d, double now, double dt) {
+    if (!d.roads()) return;
+    BoxLook look;
+    look.roads = d.roads();
+    look.classes = &d.vehicleClasses();
+    look.atLineWithin = d.junctionStep() ? d.junctionNumbers().atLineWithin : Real(0);
+    for (const Car& c : d.cars()) {
+        if (!isWaiting(c) || !lookInBox(c, &look)) {
+            rows_.boxStops.notInBox(c.id);
+            continue;
+        }
+        rows_.boxStops.note(c.id, d.tickCount(), now, dt, boxReason(d.cars(), d.pathLists(), c, lookInBox, &look),
+                            c.binding);
+    }
+}
+
 void Measurements::observe(const Driving& d) {
     if (driving_ != &d) {
         begin(d);
@@ -885,6 +1060,7 @@ void Measurements::observe(const Driving& d) {
     seen_.swap(seenNext_);
 
     lookForOverlaps(d, now);
+    lookForBoxStops(d, now, dt);
 
     // The loops, once a second of simulated time.
     if (!sampledLoops_ || now >= nextLoopSample_ - kClockSlackSeconds) {

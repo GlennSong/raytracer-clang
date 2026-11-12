@@ -503,6 +503,7 @@ add_library(driving STATIC
     src/apps/driving/notice.cpp         # facts: what a driver can notice, registered by name (#251)
     src/apps/driving/right_of_way.cpp    # who gives way to whom at every junction, worked out at load (#260)
     src/apps/driving/road_rules.cpp      # the graph's regulation kinds bound to the rule set's devices (#251)
+    src/apps/driving/room.cpp            # room beyond a junction, asked for and granted one car at a time (#264)
     src/apps/driving/route.cpp           # routes over sections and connectors, and which lanes lead on (#254)
     src/apps/driving/signal_programme.cpp   # the traffic lights' clock: programmes, yellow, a pure function of time (#261)
     src/apps/driving/rule_set.cpp

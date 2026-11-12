@@ -180,6 +180,8 @@ double heldStopOf(const Car& car);
 // the line by more than at_line_within: inside on a red, it may not wait for anyone of the next green. CAME TO REST is
 // not noted while `heldByLight` (its light shows red, not "red, may turn", or yellow): standing at a red is not waiting
 // for this junction's traffic, so its patience, and its arrival for who goes first, start when its light turns green.
+// (A car held at its line for room beyond keeps its arrival: started afresh at each grant, it was put after every car
+// that came meanwhile, gave the room back to give way to them, and lost it again: issue #264.)
 void noteAtTheLine(JunctionPlan& plan, const Car& car, Real brake, Real atLineWithin, uint64_t tick, double now,
                    bool redForMe = false, bool heldByLight = false);
 // FIXES THE CAR'S ARRIVAL at `plan`'s line, when not yet fixed: `lineIn` seconds from now (tick `tick`, clock `now`,

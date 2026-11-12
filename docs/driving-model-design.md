@@ -1139,6 +1139,25 @@ is not granted room stops at the line and announces that it's stopping, so cross
 Closely spaced junctions: if the next stop line is nearer than the car is long, "room" is measured through the next
 junction too. A car never enters a junction it can't clear, however the junctions are spaced.
 
+*As built* (task D5, ADR-0407): `src/apps/driving/room.h`. A driver ASKS in the plan step when it decides to go at the
+nearest junction it holds no room at (one decision before it could no longer stop comfortably), or to pull forward and wait
+inside (the rule set's `room_to_wait_inside`), or when, at rest at its line, it is about to move off (released by a red);
+the claim is remembered on its junction plan. The settle step grants asks once a tick in one order -- first ask earlier
+first; among first asks of one tick, the conflict resolver's order (`ConflictResolver::order`), then the lower id -- each
+grant counted before the next. Room is measured to where the back of the queue would come to rest (each car on the stretch
+braking comfortably, held behind the one ahead), from past the far crosswalk, less every car in transit (front on a
+connector into the lane, or granted and not yet there) and every car first in the queue for it (refused for want of it
+earlier, still at its line). A car refused stops at its line by the rule set's rule ("no room beyond": facts
+`no_room_beyond`, `room_line`) and announces that it is not going. A car whose car ahead in its lane, short of the same
+line, holds no grant is refused. Grants are kept until the front reaches the lane, given back when the car holds a stop at
+or before the line for something else; they live on the plan, so they cannot leak. Through junctions too close to stop
+between, the claim passes on, up to `room_through_junctions` (3), only where no full stop is owed and each light passed will
+let the car in (green or yellow) as it gets there and for `room_arrival_slack` after; the car is committed through them. A
+turn a class could never (or, at two uncoordinated lights, too seldom: `room_cycles_through`) be granted room through is
+closed to that class's routes at load and reported as a road-data problem. This replaced #261's "stop at the line before
+when the body won't fit" for lights. The measurements row `box_stops` checks the brief's "done when" (nobody at rest in a box
+but by a recorded give-way).
+
 ### 9.6 Why this can't deadlock, and what can still freeze
 
 A deadlock needs a loop of cars each waiting for the next. Check each kind of waiting:

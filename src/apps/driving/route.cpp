@@ -182,7 +182,8 @@ RouteClass bindRouteClass(const LaneGraph& roads, const VehicleClass& cls, std::
 bool mayUse(const LaneGraph& roads, const RouteClass& cls, PathId path) {
     if (!knownPath(roads, path)) return false;
     const Path& p = roads.paths[path.index];
-    return (p.vehicleTags & cls.tags) != 0 && p.tightestRadius >= cls.tightestTurnRadius;
+    return (p.vehicleTags & cls.tags) != 0 && p.tightestRadius >= cls.tightestTurnRadius &&
+           !std::binary_search(cls.closed.begin(), cls.closed.end(), path);
 }
 
 Real freeFlowSpeed(const LaneGraph& roads, const RouteClass& cls, PathId path) {
@@ -686,6 +687,8 @@ uint64_t routeHash(const Route& route) {
     h.pod(route.vehicle.tightestTurnRadius);
     h.pod(route.vehicle.topSpeed);
     h.pod(static_cast<uint8_t>(route.vehicle.laneChanges));
+    h.pod(static_cast<uint64_t>(route.vehicle.closed.size()));
+    for (const engine::PathId c : route.vehicle.closed) h.pod(c.index);
     h.pod(route.startConnector.index);
     h.pod(route.endConnector.index);
     h.pod(static_cast<uint64_t>(route.legs.size()));

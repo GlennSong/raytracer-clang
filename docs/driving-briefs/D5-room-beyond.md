@@ -1,5 +1,32 @@
 # D5 — Don't block the box, as a claim
 
+**As built (ADR-0407).** Room is asked for in the plan step and granted in the settle step (`src/apps/driving/room.h`),
+remembered on each driver's junction plan; a refused car stops at its line by the rule set's "no room beyond" rule and
+announces that it is not going. Each decision below was followed; where the brief turned out short or wrong:
+- *How much room*: "the last car brakes" alone would let a moving last car "rest" past a stopped car ahead of it, so each
+  car on the stretch is held behind the one ahead. Room also counts, besides cars in transit and grants, every car FIRST IN
+  THE QUEUE for it (refused earlier, still at its line): asking order only among one tick's asks let a car at a red lose a
+  one-car link to other approaches every cycle (145 s).
+- *When I ask*: also when, at rest at the line, a driver is about to move off without that counting as a decision
+  (released by a red: D3's gate). It rolled a few centimetres over the line before its refusal came, and a car past its line
+  is committed; so a refused car that rolled no more than at_line_within over its line stops where it is.
+- *Granting*: "by right of way (D1)" is the conflict resolver's settled order (`ConflictResolver::order`, a new read of it),
+  not the D1 table. A car whose car ahead in its lane holds no grant is refused, or a car behind could hold room the one in
+  front can never get.
+- *Once granted*: "holds until the car is on the lane beyond" -- or until it gives it back by holding a stop at or before its
+  line for something else (giving way at the line, a red), so a grant is never held through a red.
+- *Junctions close together*: room alone is not enough at lights. A chain is granted only where each light passed through
+  will let the car in (green or yellow) as it gets there, and the car is then committed through those junctions (a yellow
+  there does not stop it). This replaced #261's "stop at the line before" stop-gap. Two lights that almost never line up for
+  a turn pair (the 216 s case) leave cars waiting at the first line: such turns are closed to the classes they are too
+  short for at load (`room_cycles_through`) and reported, so routes go round. The driver's look-ahead is lengthened so a
+  plan exists for each junction a chain passes (a car at rest saw no further than its own junction).
+- *Waiting inside needs a grant too*: built (`room_to_wait_inside`), and never through a chain.
+- *Done when 4* (1.9 s a car): room beyond changes queue discharge not at all, but the following model empties a queue at
+  2.75 s a car on the hand-made roads; that is task C6's to meet. *Done when 6*: no loop in the lab; one car stood 123 s, a
+  permitted far turn starving at a five-phase light (ADR-0406's owed arrows), not room beyond.
+- Staged tests: `tests/test_driving_give_way.cpp` room_26 to room_34; the lab's `box_stops` row is the "done when".
+
 **Read first:** design 9.5, 9.6, 7.1 (the settle step). Brief D4.
 
 ## The goal

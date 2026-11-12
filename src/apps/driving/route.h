@@ -56,6 +56,10 @@ struct RouteClass {
     // Routes may change lanes. Off, a route keeps to the lane the car is in and the lanes that lane leads into, so a car
     // that cannot change lanes yet can drive every route it is given (Driving sets it from DrivingSettings::laneChanges).
     bool laneChanges = true;
+    // Connectors CLOSED to the class, sorted: turns it could never (or too seldom) be granted room beyond (room.h
+    // turnsClosedForRoom: into a stretch it cannot stop in, with every way on through the next junction barred to it).
+    // Driving fills it once it has the rules; bindRouteClass leaves it empty.
+    std::vector<engine::PathId> closed;
 };
 
 // BINDS A CLASS TO A GRAPH: each of its tag names to the graph's bit for it. A tag the graph does not know is not an

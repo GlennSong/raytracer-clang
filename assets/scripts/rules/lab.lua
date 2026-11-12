@@ -9,8 +9,9 @@
 -- Every junction has a control the city planner chose by the PLACEMENT POLICY at the end of this file (issue #240):
 -- traffic lights, an all-way stop, stop or give-way signs on the minor road, or none. The lights run a programme timed
 -- from the numbers below (issue #261): stop at a red, stop at a yellow if you comfortably can, turn on red after a full
--- stop where `turn_on_red` allows; a far turn on a plain green may wait inside the junction for a gap. No lane changes
--- yet; room beyond a junction (D5) comes next.
+-- stop where `turn_on_red` allows; a far turn on a plain green may wait inside the junction for a gap. Nobody enters a
+-- junction it cannot leave (issue #264): room beyond is asked for and granted one car at a time, and a car refused it
+-- waits at the line (the "no room beyond" rule). No lane changes yet.
 --
 -- Every number says where it came from. "[~]" marks a guess to tune against the lab's measurements, not a figure
 -- from a source. The California Vehicle Code (CVC) is read with near turn / far turn and kerb side in place of its
@@ -101,6 +102,33 @@ rule_set = {
     -- A car at rest this near its line has reached it ("I came to rest at this line").
     at_line_within = { 1.0, unit = "m", source = "[~] a guess to tune: about a fifth of a car's length" },
 
+    -- ROOM BEYOND A JUNCTION (issue #264). A car may enter a junction only when it has been granted room to come to rest
+    -- beyond it, clear of the box: its own length and the standstill gap above. "Don't block the box" is the law's own:
+    -- a driver may not enter an intersection without room on the other side for the vehicle (CVC 22526 (a); section
+    -- number from memory, unverified).
+    -- When the stretch beyond is shorter than the car (two junctions a few metres apart), the claim passes through the
+    -- next junction too, and on, up to this many junctions in all; past that the road has a stretch no vehicle of that
+    -- length can ever stop in, reported as a road-data problem.
+    room_through_junctions = { 3, unit = "ratio",
+      source = "the driving-model brief D5 (docs/driving-briefs/D5-room-beyond.md): up to three junctions" },
+    -- The crosswalk on the far side lies inside the box: room begins this far past it, so nobody rests on it.
+    room_clear_of_crosswalk = { 0.5, unit = "m", source = "[~] a guess to tune: a little clearance past the far crosswalk" },
+    -- Waiting inside for a far turn needs room granted too, held while the car waits (1: yes; 0: no). Cautious: it can
+    -- hold a space for most of a green. A setting to relax after measuring (the brief).
+    room_to_wait_inside = { 1, unit = "ratio", source = "the driving-model brief D5: waiting inside needs a grant too" },
+    -- Passing through a junction with lights without stopping (its body would not fit before the next line): its light
+    -- for the turn must let the car in -- green, or yellow, which a car that cannot stop between the two goes on at --
+    -- from when the car reckons to get there until this much later, so a car a little slower than it reckoned is not
+    -- caught by the red with its tail in the box behind.
+    room_arrival_slack = { 2.0, unit = "s", source = "[~] a guess to tune: a car held up a little on its way between the two" },
+    -- Two lights so close that a car cannot stop between them, whose programmes let a car through both (as above, from
+    -- rest at the first line on its green) less often than once in this many of the longer of their cycles: the two are
+    -- not coordinated for that turn, so it is closed to the vehicles the stretch between is too short for, as a turn too
+    -- tight for them is, and routes go round. A road-data problem the lab reports at load: such lights want one
+    -- programme between them (the light clock's owed work, ADR-0406).
+    room_cycles_through = { 1.5, unit = "ratio",
+      source = "[~] a guess to tune: once a cycle is coordinated; twice as long apart is a wait of two cycles at the first line" },
+
     -- THE TRAFFIC LIGHTS' TIMING (issue #261), worked out for every junction with lights when the level loads.
     -- YELLOW (the warning that red is coming) = reaction time + approach speed / (2 x deceleration + 2 x gravity x grade):
     -- the ITE kinematic formula, long enough that a driver who sees the yellow just too late to stop at this deceleration
@@ -169,6 +197,8 @@ rule_set = {
     { name = "arrive",            give = { stop_at = "destination" } },
     -- Stop at the junction's line while the gap is too small (or until come to rest, where everyone stops first).
     { name = "give way",          when = "must_give_way", give = { stop_at = "give_way_line" } },
+    -- Don't block the box (issue #264; CVC 22526 (a), unverified): refused room beyond a junction, wait at its line.
+    { name = "no room beyond",    when = "no_room_beyond", give = { stop_at = "room_line" } },
     -- A full stop at the line where the control makes everyone stop (an all-way stop), and where the approach carries a
     -- stop sign (CVC 22450 (a)); then the give-way rule decides when to go.
     { name = "all-way stop",      when = { all = { "everyone_stops", { "not", "stopped_at_line" } } },

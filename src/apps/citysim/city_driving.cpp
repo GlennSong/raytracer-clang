@@ -4,6 +4,7 @@
 
 #include "../driving/act.h"            // registerMoveNeeds
 #include "../driving/give_way.h"       // registerJunctionFacts
+#include "../driving/room.h"           // registerRoomFacts
 #include "../driving/road_rules.h"
 #include "../../engine/script_assets.h"   // loadScriptCode, resolveScriptPath
 #ifdef RT_ENABLE_SCRIPTING
@@ -63,6 +64,12 @@ bool loadDrivingRules(const std::string& file, driving::Driving& d, std::string*
         for (const std::string& p : problems) all += (all.empty() ? "" : "; ") + p;
         return refuse("the junction step's facts would not register: " + all);
     }
+    // Room beyond a junction (#264): asked for and granted one car at a time; nobody enters a box it cannot leave.
+    if (!driving::registerRoomFacts(facts, &problems)) {
+        std::string all;
+        for (const std::string& p : problems) all += (all.empty() ? "" : "; ") + p;
+        return refuse("the room step's facts would not register: " + all);
+    }
     // The lights' clock (#261): a rule set with lights has them run a programme (without it they would be dark).
     if (ruleSet.anyLights() && !driving::registerLightClock(facts, &problems)) {
         std::string all;
@@ -96,9 +103,14 @@ const driving::TripPlaces& DrivingHost::placesFor(const driving::Driving& d, uin
         placesFound_.resize(cls + 1, 0);
     }
     if (!placesFound_[cls]) {
-        driving::RouteClass rc = driving::bindRouteClass(*d.roads(), d.vehicleClasses().at(cls));
-        rc.laneChanges = d.settings().laneChanges;
-        placesOfClass_[cls] = driving::findTripPlaces(*d.roads(), rc, kPlaceMargin, kSmallestTripPart);
+        // As the model routes the class: turns it could never be granted room through closed (#264).
+        const driving::RouteClass rc = d.routeClass(cls);
+        // With room beyond (#264) a destination is at least the room this class needs from either end of its lane, so
+        // a car stopping there has its whole body clear of the junction box behind it (and of the next one's line).
+        const Real margin = d.roomStep() ? std::max(kPlaceMargin, driving::roomNeeded(d.vehicleClasses().at(cls),
+                                                                                       d.roomNumbers().standstillGap))
+                                         : kPlaceMargin;
+        placesOfClass_[cls] = driving::findTripPlaces(*d.roads(), rc, margin, kSmallestTripPart);
         placesFound_[cls] = 1;
     }
     return placesOfClass_[cls];

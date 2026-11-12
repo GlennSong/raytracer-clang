@@ -23,8 +23,8 @@ of the crossing point, for a car that goes first. Where this brief turned out wr
   (2) the place to wait inside usually lies on the stretch where the far turn and the straight on leave one lane (a
   split), where the car behind cannot see the waiting car once its tail is off the lane: the car behind now waits behind
   it and announces "not going" beyond (without that, two opposing far turns waiting inside each held the other's
-  oncoming car: a ring); (3) *room beyond* (D5) is not built, so "a car needs room granted before it may enter to wait"
-  is not met. Staged tests 1, 2, 5 and the lights in 6 are `tests/test_driving_give_way.cpp` lights_22 to lights_25;
+  oncoming car: a ring); (3) *room beyond*: "a car needs room granted before it may enter to wait" is met by D5
+  (ADR-0407, the rule set's `room_to_wait_inside`). Staged tests 1, 2, 5 and the lights in 6 are `tests/test_driving_give_way.cpp` lights_22 to lights_25;
   test 5's crossing shape the synthetic grid cannot make (the lab has it).
 
 **Read first:** design 9.4, 9.6. Brief D3.

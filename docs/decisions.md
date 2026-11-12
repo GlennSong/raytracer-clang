@@ -18644,3 +18644,141 @@ lab's policy where a permitted one starves (`arrow`, measured not chosen). Junct
 programme, or placed so (the planner's `apart`). Traffic-actuated timing would need detectors; the programme is fixed time
 on purpose (a pure function of the clock).
 
+## ADR-0407 — Room beyond a junction: asked for, granted one car at a time, through junctions too close to stop between (#264)
+
+Words: the BOX is a junction's inside (its connectors, and a crosswalk across the lane leaving it); a car's ROOM BEYOND is
+road after the box where it can come to rest clear of it; a STRETCH is the lanes from one box's end to the next place a car
+might have to stop (the next junction's line, or the road's end); a GRANT is room given to one car, remembered on its
+junction plan; a CHAIN is one claim passing through junctions too close together for the car to stop between them;
+COMMITTED is ADR-0405's (past the last waiting point).
+
+**Context.** Driving model task D5 (`docs/driving-briefs/D5-room-beyond.md`). With the lights running (ADR-0406) the lab
+showed two deadlock loops of five cars at junctions 11 and 14 (a 6-7 m lane joins them each way): a car queued on the link
+behind a car waiting at 11's line had its tail in 14's box, a far turn waiting inside 14 gave way to that body, and so on
+round; the lab test allowed four loop samples, owed to this issue. Cars stood at rest on connectors for 437 car-seconds in
+five minutes, 206 of them behind a car (queues reaching back into boxes). The give-way judgement's "stop at the line before
+when your body won't fit between two junctions", applied to lights, had been cut back (#261) to "only when both greens meet
+within two cycles" after a car waited 216 s at a pair of lights never green together for its turns; with the cut-back, such
+a car went in and waited with its tail in the box behind. 35 junction plans were cut by the four-junction cap.
+
+**Decision.**
+- **Room is claimed, not seen** (`src/apps/driving/room.h`, `RoomLedger`; the settle step, design 7.1 step 2, finally does
+  work). A driver ASKS in the plan step at the decision where it decides to go at the nearest junction it holds no grant for
+  (the judgement decides "go" only within its decision horizon, one decision before the point of no comfortable stop), or
+  decides to pull forward and wait inside (D4; the rule set's `room_to_wait_inside`, 1 in the lab, says that needs room
+  too), or -- at rest at its line -- judged nothing to give way to there without that counting as a decision (released by a
+  red). The ask is remembered on the junction plan (`JunctionPlan::room`, a `RoomClaim`); the stop is the rule set's: a car
+  REFUSED at its last ask has the facts `no_room_beyond` and `room_line` (a place, `StopFor::NoRoom`, about the car whose
+  tail bounds the room), and the lab's rule "no room beyond" stops it there. Such a stop is not the junction's own, so the
+  car announces "not going" (ADR-0402) and cross traffic uses the time. A car that had rolled no more than at_line_within
+  over its line when the refusal came stops where it is.
+- **How much room** (the brief's decisions): the far end is where the back of the queue would come to rest -- each car on the
+  stretch, front one first, supposed to brake comfortably from its speed now, held behind the one ahead by a standstill gap
+  and never past the stretch's end (or a hold of the asker's own) -- the brief's "the last car brakes", made safe where the
+  last car is moving behind a stopped one; the near end is the box's end, past a crosswalk on the lane (filed under the
+  junction) by `room_clear_of_crosswalk`; less the length and gap of every car IN TRANSIT (front on a connector into the
+  lane, granted or not, derived from where cars are each tick; or granted and not yet on the lane) and of every car FIRST
+  IN THE QUEUE for it (refused for want of room before this car first asked, still at its line, through a red too). A car
+  needs its length (with trailer) and the standstill gap.
+- **Who gets it first: the conflict resolver's order, extended by when each asked.** Asks are granted once a tick in one
+  order: first ask earlier first; among first asks of one tick, the resolver's answer (`ConflictResolver::order`, the new
+  read of its settled conflicts across all groups -- the groups never disagree, since rings are broken over all of them)
+  as a topological order, then the lower car id; each grant counted before the next is looked at. A car whose car ahead in
+  its lane, short of the same line, holds no grant there is refused (the car ahead first; otherwise a car behind could hold
+  room the one in front can never get). "Who asked first" holds across ticks through the queue above: before it, a car
+  refused at J75 lost lane 766's one car of room, every cycle, to cars from other approaches whose greens came while its
+  light was red (145 s).
+- **Grants** live on the plan: kept until the car's front reaches the lane (then it is counted where it is), or given back
+  when, short of the line, it holds a stop at or before the line for something else (it decided to give way at the line, a
+  red, a hold); a dropped plan takes its grant with it. Nothing else holds them, so they cannot leak; the lab test checks
+  that every grant outstanding is a driven car short of its lane, and the unit tests that none is left once the cars are.
+- **Junctions too close to stop between.** When the stretch beyond is shorter than the car needs, the claim passes through
+  the next junction and on, up to `room_through_junctions` (3, the brief): granted only with room beyond the last, nothing
+  resting on the way between, no full stop owed at the junctions passed (stop sign, all-way stop: `stopsEveryoneFirst`,
+  shared with the judgement), and, where they have lights, each light letting the car in -- green or yellow -- from when it
+  reckons to arrive (its estimate from rest or speed, announce.h) until `room_arrival_slack` (2 s) later: the lamp is a pure
+  function of the clock, so this is foreseen exactly. The junctions passed through hold their part (chained grants), and
+  once the car is committed at the first it is COMMITTED THROUGH at them (`commitThrough`: its last waiting point before the
+  second is the first's): the resolver puts it before their uncommitted cars, and a yellow there, which it could only stop
+  for with its tail in the box behind, does not stop it (a red still does). Waiting inside is never granted through a chain.
+  Past `room_through_junctions` the claim is refused as a road-data problem (the road has a stretch no vehicle of this length
+  can ever stop in). A driver's look-ahead is lengthened to measure the claim (`roomReach`): a car at rest looked no further
+  than the junctions it had planned, so a claim through the next junction found no plan for it and was refused for ever.
+- **This replaces the #261 stop-gap.** The light fact's "line before when the body won't fit" and its `greensMeet` are gone:
+  the light fact reads its own junction's line, and the chain claim keeps the car at the first line until the second light
+  will let it in as it gets there. Where two lights almost never line up for a turn pair (the 216 s case), that is now said
+  at load: `turnsClosedForRoom` closes to a vehicle class every turn into a stretch it cannot stop in where every way on
+  through the next junction is barred to it -- the road ends there, everyone stops first there, or the two lights let it
+  through, arriving from rest at the first line on its green, less often than once in `room_cycles_through` (1.5) of the
+  longer cycle -- as a turn too tight for it is closed (`RouteClass::closed`, read by `mayUse`); `reportRoomRoads` lists the
+  places. Routes go round. The host finds its trip places with the same route class (`Driving::routeClass`).
+- **The give-way judgement** decides as ever at a line where its car's only stop is its own wait for room (deciding to go is
+  how it asks again), and switches made while held for room are counted apart from changes of mind
+  (`JunctionPlanCounts::switchedWhileHeldForRoom`): the car cannot go whatever it judges. Tried and dropped: starting a held
+  car's arrival afresh at each grant, as a red does (ADR-0406) -- put after every car that came meanwhile, it gave the room
+  back to give way to them and lost it again (20 cars stood over 100 s in five minutes).
+- **The cap on plans** is six (`kMaxJunctionPlans`, was four). The 35 cuts were three episodes, cars at 12-14 m/s through the
+  chain of lights 14, 11, 110 and 8 (25 m apart: 20 m connectors and 6 m links), where the junction look-ahead (10 s) saw five
+  junctions with the one under the car; the fifth was planned and announced up to two seconds late, 90-130 m off, outside
+  any decision horizon -- harmless then, but a chain claim needs a plan for each junction it passes, so the cap went up.
+  The lights' green wave is what let cars run that fast there.
+- **Destinations** are now kept at least a car's room (its body and the standstill gap) from either end of their lane by the
+  lab's host (`placesFor`): a car arriving 2 m past a junction stood with its tail in the box for a tick.
+- **The measurements table** gets a row `box_stops` (`measure.h BoxStopRow`): car-seconds at rest with any part of the body
+  on a connector (by more than at_line_within) or a crosswalk, by why, following a queue to its head: a recorded give-way,
+  behind a car giving way in the box, or behind a car moving off inside it are allowed; anything else (a queue reaching
+  back into the box, a red, a destination, waiting for room) fails it. The wait-for graph draws a room wait to a car as an
+  arrow about space ("waiting for room behind the tail of"), so a loop made only of those is gridlock, not deadlock.
+- **Policy as data** (`assets/scripts/rules/lab.lua`, declared as a reader so `buildRoadRules` names any missing):
+  `room_through_junctions` 3 (the brief), `room_clear_of_crosswalk` 0.5 m, `room_to_wait_inside` 1, `room_arrival_slack`
+  2 s, `room_cycles_through` 1.5 (the last three [~]), and the rule `{ name = "no room beyond", when = "no_room_beyond",
+  give = { stop_at = "room_line" } }` (CVC 22526 (a), from memory, unverified). The room step is registered by the host
+  (`registerRoomFacts`, after the junction step); without it nothing changes but the light fact's line (above).
+
+**Measured** (the lab, 300 drivers, five simulated minutes; before = 48886120):
+
+| | before | after |
+|---|---|---|
+| loops (samples; the deadlock row of the measurements table) | 4 (2 loops, 5 cars; FAIL) | 0 (pass) |
+| at rest with any part of the body in a box, car-seconds | (not measured) | 128.3: 127.4 giving way, 0.9 behind a car giving way, 0 not allowed |
+| at rest with the front on a connector, car-seconds (the old row) | 437.2 (205.6 behind a car, 230.0 giving way) | 224.1 (15.0 behind a car, 166.4 giving way, 0.6 waiting for room) |
+| trips begun / arrived | 705 / 405 | 721 / 421 |
+| mean speed (the test's; the host's) | 8.61; 8.35 m/s | 8.85; 8.80 m/s |
+| longest wait at a junction's line | 83.4 s | 77.3 s |
+| cars standing over 100 s (`kLongestStand`) | 0 (longest 82 s) | 1 (123 s: below) |
+| cars onto a red / pairs overlapping where paths cross or join / changed mind twice | 0 / 0 / 2 | 0 / 0 / 3 |
+| freeway free flow, share of the limit | 75% | 78% |
+| junction plans cut by the cap | 35 | 0 |
+| rings broken by the resolver (of bodies and queues alone) | 15,189 (220) | 3,897 (0) |
+| the model's tick (worst) | 0.368 ms (0.854) | 0.382 ms (1.028) |
+
+Room over the run: 7,160 asks settled, 4,490 granted (47 through junctions too close to stop between, 55 to wait inside),
+refused 1,750 for no room, 4 behind a car ahead in the lane, 916 for lights ahead that would not let it in; 3,814 grants
+used on the lane, 659 given back; at most 107 held at once. At load: 59 stretches shorter than some class needs (4 ending
+where everyone stops first: buses and fire engines can never use them), 19 turn pairs at two lit junctions too seldom in
+turn for the shortest class that does not fit, 111 turns closed summed over the 15 classes. The state hash is the same at
+every second of two runs.
+
+**Not met, and why.** One car stood 123 s, over the 100 s `kLongestStand` (Glenn's, unchanged): a small truck's permitted
+far turn at the five-phase junction 21 (77 s cycle), which reached a red, gave way to the oncoming stream for its whole
+8 s green, and waited a second red. Its connector has no place to wait inside, so it cannot complete on the change; it held
+no room grant (it never decided to go). That is ADR-0406's owed protected far turn, not room beyond; before this change
+the same junction's far turns stood 82 s. The lab test fails on that one check.
+
+On the hand-made roads (`tests/test_driving_give_way.cpp` room_26-34, the room step registered): two approaches with room
+for one -- exactly one enters, the other waits at its line, the same one every run (26); a lane beyond full and stopped for
+ten minutes -- nobody into the box, cross traffic flows, 170 arrive (27); junctions 8 m apart -- a 12 m bus waits at the first
+line until there is room beyond the second, then goes through both (28); a green with an empty lane beyond -- room changes
+the queue's discharge not at all (29: 2.75 s a car with and without; the brief's 1.9 s is the following model's to meet);
+a crosswalk across the lane beyond -- the car that would have rested on it waits at its line (30); a queue backing up 30 m
+from a red -- 362 car-ticks of cars at rest in the box behind without room beyond, none with it (31); the 11/14 shape (6 m
+apart), uncontrolled and with lights, ten minutes -- no loop, nobody in a box, every grant accounted for each second, all
+arrive and no grant is left (uncontrolled; with lights the grid's demand gridlocks round the blocks: no loop, no box, printed)
+(32); the same every run (33); the far end where a moving last car would come to rest (34).
+
+**Not here.** Rerouting a driver who waits for room when its route has another way (design 9.6 point 2): routes avoid only
+the turns closed at load. Lane changes into a stretch (E1 reads the same count). Coordinating close lights into one
+programme (ADR-0406's owed work), which is what the closed turns and the 77-s waits at lane 766 ask for. Throughput: the
+brief's 1.9 s a car from a queue is not met by the following model on the hand-made roads (2.75 s); room beyond does not
+slow it.
+

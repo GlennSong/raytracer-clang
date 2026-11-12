@@ -25,39 +25,6 @@ FactNeed need(const char* name, UnitFamily family) {
 
 // ---- Judging one junction's meetings ----------------------------------------------------------------------------
 
-// Does the lane I arrive at plan `p`'s junction by carry, at its end, a device with a stop line (a stop sign)?
-bool stopLineAtEnd(const GiveWayInputs& in, const JunctionPlan& p) {
-    const engine::PathId lane = in.roads.paths[p.connector.index].from;
-    if (!knownPath(in.roads, lane)) return false;
-    const engine::Path& l = in.roads.paths[lane.index];
-    for (uint32_t r = l.regulations.first; r < l.regulations.end() && r < in.roads.regulations.size(); ++r) {
-        const Device* d = in.roadRules.device(in.rules, in.roads.regulations[r].kind);
-        if (d && d->stopLine && in.roads.regulations[r].from >= l.length - in.numbers.atLineWithin) return true;
-    }
-    return false;
-}
-
-// HOW FAR AHEAD A DRIVER LOOKS for two lights both green for its two turns (in cycles of the longer of the two), and in
-// what steps (seconds): a driver at the first of two lights too close together for its body waits there only if, this
-// far ahead, there is a moment both show it green. Read the lamps' pure function of the clock (signal_programme.h).
-constexpr Real kGreensMeetCycles = 2;
-constexpr Real kGreensMeetStep = 0.5;
-
-// Will connector `first`'s lamp and connector `second`'s lamp both be green at some moment within kGreensMeetCycles of
-// the longer cycle from `now`? True where the first junction runs no programme (nothing there to wait for but the
-// second's green, which comes).
-bool greensMeet(const engine::LaneGraph& roads, const RightOfWay& row, engine::PathId first, engine::PathId second,
-                double now) {
-    const engine::JunctionId a = roads.paths[first.index].junction, b = roads.paths[second.index].junction;
-    if (!a.valid() || a.index >= row.junctions.size() || !row.junctions[a.index].running()) return true;
-    if (!b.valid() || b.index >= row.junctions.size() || !row.junctions[b.index].running()) return true;
-    const Real horizon = kGreensMeetCycles * std::max(row.junctions[a.index].cycle, row.junctions[b.index].cycle);
-    for (Real t = 0; t <= horizon; t += kGreensMeetStep)
-        if (lampAt(roads, row, first, now + t) == Lamp::Green && lampAt(roads, row, second, now + t) == Lamp::Green)
-            return true;
-    return false;
-}
-
 // Did I announce, on any crossing point along plan `p`'s connector, that I am not going?
 bool announcedNotGoing(const GiveWayInputs& in, const JunctionPlan& p) {
     const engine::Path& conn = in.roads.paths[p.connector.index];
@@ -283,6 +250,25 @@ const ControlKind* junctionControl(const RightOfWay& row, const RuleSet& rules, 
     return c < rules.controls.size() ? &rules.controls[c] : nullptr;
 }
 
+bool stopLineAtEnd(const engine::LaneGraph& roads, const RuleSet& rules, const RoadRules& roadRules, engine::PathId lane,
+                   Real atLineWithin) {
+    if (!knownPath(roads, lane)) return false;
+    const engine::Path& l = roads.paths[lane.index];
+    for (uint32_t r = l.regulations.first; r < l.regulations.end() && r < roads.regulations.size(); ++r) {
+        const Device* d = roadRules.device(rules, roads.regulations[r].kind);
+        if (d && d->stopLine && roads.regulations[r].from >= l.length - atLineWithin) return true;
+    }
+    return false;
+}
+
+bool stopsEveryoneFirst(const engine::LaneGraph& roads, const RightOfWay& row, const RuleSet& rules,
+                        const RoadRules& roadRules, engine::PathId connector, Real atLineWithin) {
+    if (!knownPath(roads, connector)) return false;
+    const ControlKind* control = junctionControl(row, rules, roads.paths[connector.index].junction);
+    return (control && control->everyoneStops) ||
+           stopLineAtEnd(roads, rules, roadRules, roads.paths[connector.index].from, atLineWithin);
+}
+
 Real comfortableGap(const JunctionNumbers& n, Real waited, Real patience) {
     const Real floor = std::max(n.gapFloor, n.gapHard);
     const Real shrink = patience > 0 ? n.gapShrink / patience : Real(0);
@@ -321,6 +307,10 @@ void judgeGiveWay(const GiveWayInputs& in, GiveWayVerdict& out) {
         if (!(p.startOdometer > me.odometer - in.numbers.atLineWithin) || !knownPath(in.roads, p.connector)) continue;
         const Lamp lamp = lampAt(in.roads, in.row, p.connector, in.now);
         if (lamp == Lamp::Dark) continue;
+        // Committed through to these lights from the junction before (room.h commitThrough: no place to wait between
+        // the two), a yellow here is one it cannot stop for without its tail in the box behind: it goes on, as the
+        // dilemma lets a car that cannot stop. A red still stops it.
+        if (p.committed && lamp == Lamp::Yellow) continue;
         if (lit == kMaxJunctionPlans || litLamp == Lamp::Green) {
             lit = i;
             litLamp = lamp;
@@ -328,26 +318,10 @@ void judgeGiveWay(const GiveWayInputs& in, GiveWayVerdict& out) {
         if (lamp != Lamp::Green) break;
     }
     if (lit < kMaxJunctionPlans) {
-        const JunctionPlan& p = plans.plans[lit];
-        // Where to stop: this line; or, for a light that is not green, the line before when my body would not fit between
-        // the two junctions (and I can still stop there), as giving way does below: a car never enters a junction it
-        // cannot clear (design 9.5). Unless the two lights will not both be green for my two turns within the next
-        // kGreensMeetCycles of the longer cycle: two lights closer than a car's length (the lab's junctions 11 and 110)
-        // can show a green at the first and a red at the second at every moment one turn needs both, and a driver held
-        // at the first would wait there for ever. It then goes in and waits with its tail in the first junction,
-        // committed, and that junction's traffic waits for its body (a road-data matter: such lights want one
-        // programme between them).
-        double line = p.startOdometer;
-        if (lit > 0 && litLamp != Lamp::Green) {
-            const JunctionPlan& before = plans.plans[lit - 1];
-            if (knownPath(in.roads, before.connector) && before.startOdometer > me.odometer &&
-                !isGoing(before, me.odometer, me.speed, brake, heldStop)) {
-                const double beforeEnds = before.startOdometer + in.roads.paths[before.connector.index].length;
-                if (p.startOdometer - beforeEnds < in.length + in.numbers.standstillGap &&
-                    greensMeet(in.roads, in.row, before.connector, p.connector, in.now))
-                    line = before.startOdometer;
-            }
-        }
+        // Where to stop: this light's own line. A light at the next junction whose line is nearer the junction before than
+        // my body will need is not this fact's: room beyond (room.h, issue #264) grants entry to the junction before only
+        // when that light will be green as I get there, so I never stop at its line with my tail in the box behind.
+        const double line = plans.plans[lit].startOdometer;
         out.hasLight = true;
         out.lamp = litLamp;
         out.toLightLine = static_cast<Real>(line - me.odometer);
@@ -391,15 +365,20 @@ void judgeGiveWay(const GiveWayInputs& in, GiveWayVerdict& out) {
             // Not going there, as it announced (held, a stopped car beyond its line it cannot pass, a queue that is not
             // going): others do not wait for it. It still judges, and stops at the line if it must give way (it may be
             // let go this very decision), but a clear road is no decision to go: it has not decided anything there yet.
-            notGoing = announcedNotGoing(in, p);
+            // One exception: a car whose only stop at this line is its own wait for room beyond (room.h) judges and
+            // decides as ever, since deciding to go is when it asks for room again (it announced "not going" so that cross
+            // traffic would use the time).
+            const bool waitingForRoomHere = me.held.hasStop && me.held.stopFor == StopFor::NoRoom &&
+                                            std::fabs(me.held.stopAt - p.startOdometer) <= in.numbers.atLineWithin;
+            notGoing = !waitingForRoomHere && announcedNotGoing(in, p);
             // Still owing a full stop at this line (it holds one there, the junction's control makes everyone stop, or the
             // lane it arrives by carries a device with a stop line at its end) and not yet at rest there: held there as
             // surely, so a clear road is no decision to go either. It decides when it has stopped; deciding before (issue
             // #240: the lab's all-way stops and stop signs) turned every driver that met a car arriving first into "go",
             // then "give way", then "go".
-            const ControlKind* control = junctionControl(in.row, in.rules, p.junction);
             owesStop = stopsFirstAt(me, p, in.numbers.atLineWithin) ||
-                       (!p.cameToRest && ((control && control->everyoneStops) || stopLineAtEnd(in, p)));
+                       (!p.cameToRest && stopsEveryoneFirst(in.roads, in.row, in.rules, in.roadRules, p.connector,
+                                                            in.numbers.atLineWithin));
         }
 
         GiveWayJudgement j;
@@ -426,6 +405,7 @@ void judgeGiveWay(const GiveWayInputs& in, GiveWayVerdict& out) {
                 j.stopAlong = p.waitInsideAt;
         }
         if (!give) {
+            out.clear[i] = !owesStop;
             if (notGoing || owesStop) break;
             out.decision[i] = GiveWayDecision::Go;
             out.judgement[i] = j;

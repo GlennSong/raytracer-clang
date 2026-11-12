@@ -45,7 +45,9 @@ constexpr Real kStartRoom = 4.0;
 // Room kept round a car put down again while traffic is moving: enough for a car at a freeway's speed behind it to
 // stop braking hard (about 30 m/s at 7 m/s2 is 64 m).
 constexpr Real kMovingRoom = 70.0;
-// How far from either end of a lane a destination lies, so no trip ends inside a junction's mouth.
+// How far from either end of a lane a destination lies, so no trip ends inside a junction's mouth: at least this, and with
+// room beyond (#264) at least the room the car's class needs (its body and a standstill gap), so a car stopping at its
+// destination has no part of its body in a junction's box.
 constexpr Real kPlaceMargin = 2.0;
 // A part of the road counts for trips only with at least this many lanes: a car is never sent round a scrap.
 constexpr std::size_t kSmallestTripPart = 8;

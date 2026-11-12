@@ -53,7 +53,37 @@ bool operator==(const JunctionPlan& a, const JunctionPlan& b) {
     return a.waitInsideAt == b.waitInsideAt && a.arrivalFixed == b.arrivalFixed && a.arrivalTick == b.arrivalTick && a.arrivalAt == b.arrivalAt &&
            a.cameToRest == b.cameToRest && a.restAt == b.restAt && a.committed == b.committed &&
            a.committedTick == b.committedTick && a.decision == b.decision && a.mindChanges == b.mindChanges &&
-           a.judged == b.judged;
+           a.judged == b.judged && a.room == b.room;
+}
+
+bool operator==(const RoomClaim& a, const RoomClaim& b) {
+    return a.state == b.state && a.asked == b.asked && a.askedTick == b.askedTick && a.toWaitInside == b.toWaitInside &&
+           a.chained == b.chained && a.through == b.through && a.lane == b.lane && a.laneAt == b.laneAt &&
+           a.need == b.need && a.had == b.had && a.refusal == b.refusal && a.by == b.by && a.at == b.at;
+}
+
+const char* roomStateWords(RoomState s) {
+    switch (s) {
+    case RoomState::None: return "not asked";
+    case RoomState::Asked: return "asked";
+    case RoomState::Granted: return "granted";
+    case RoomState::Refused: return "refused";
+    }
+    return "";
+}
+
+const char* roomRefusalWords(RoomRefusal r) {
+    switch (r) {
+    case RoomRefusal::None: return "not refused";
+    case RoomRefusal::NoRoom: return "no room beyond";
+    case RoomRefusal::CarAheadFirst: return "the car ahead in my lane asks first";
+    case RoomRefusal::LightsAhead: return "my body will not fit before the next lights, which will not let me in as I get there";
+    case RoomRefusal::MustStopAhead: return "my body will not fit before the next junction, where I must stop";
+    case RoomRefusal::TooShort: return "no stretch I could stop in within reach (a road-data problem)";
+    case RoomRefusal::NotPlanned: return "my way does not reach far enough to say where I would stop";
+    case RoomRefusal::NoStopToWait: return "to wait inside I need room to stop just beyond, and there is no such stretch";
+    }
+    return "";
 }
 
 const char* giveWayDecisionWords(GiveWayDecision d) {
@@ -242,6 +272,19 @@ uint64_t junctionPlansHash(const JunctionPlans& plans) {
         h.pod(p.judged.have);
         h.pod(static_cast<uint8_t>(p.judged.by));
         h.pod(p.judged.stopAlong);
+        h.pod(static_cast<uint8_t>(p.room.state));
+        h.pod(static_cast<uint8_t>(p.room.asked));
+        h.pod(p.room.askedTick);
+        h.pod(static_cast<uint8_t>(p.room.toWaitInside));
+        h.pod(static_cast<uint8_t>(p.room.chained));
+        h.pod(p.room.through);
+        h.pod(p.room.lane.index);
+        h.pod(p.room.laneAt);
+        h.pod(p.room.need);
+        h.pod(p.room.had);
+        h.pod(static_cast<uint8_t>(p.room.refusal));
+        h.pod(p.room.by.index);
+        h.pod(p.room.at.index);
     }
     return h.h;
 }
@@ -284,6 +327,30 @@ std::string describeGiveWay(const LaneGraph& roads, const RightOfWay& row, const
     return out;
 }
 
+std::string describeRoom(const JunctionPlan& p) {
+    const RoomClaim& r = p.room;
+    if (r.state == RoomState::None && !r.asked) return "not asked";
+    std::string out = roomStateWords(r.state);
+    switch (r.state) {
+    case RoomState::None: out = "not held (asked first at tick " + std::to_string(r.askedTick) + ")"; break;
+    case RoomState::Asked: break;
+    case RoomState::Granted:
+        out += r.chained ? " as part of the claim at the junction before (my body will not fit between the two)"
+                         : (r.toWaitInside ? " to wait inside" : "");
+        if (r.through > 1) out += ", through " + std::to_string(r.through) + " junctions";
+        out += ": " + one(r.need) + " m on lane " + std::to_string(r.lane.index) + " (there were " + one(r.had) + " m)";
+        break;
+    case RoomState::Refused:
+        out += std::string(": ") + roomRefusalWords(r.refusal);
+        if (r.by.valid()) out += ", behind car " + std::to_string(r.by.index);
+        if (r.at.valid()) out += ", at junction " + std::to_string(r.at.index);
+        if (r.refusal == RoomRefusal::NoRoom) out += " (I need " + one(r.need) + " m; there are " + one(r.had) + " m)";
+        break;
+    }
+    if (r.asked && r.state != RoomState::None) out += "; asked first at tick " + std::to_string(r.askedTick);
+    return out;
+}
+
 std::string describeJunctionPlans(const LaneGraph& roads, const RightOfWay& row, const Car& car,
                                   const JunctionPlans& plans, double now) {
     if (plans.count == 0) return "junctions ahead: none in view\n";
@@ -296,6 +363,7 @@ std::string describeJunctionPlans(const LaneGraph& roads, const RightOfWay& row,
         out += ahead >= 0 ? "its start " + one(ahead) + " m ahead" : "its start " + one(-ahead) + " m behind my front";
         out += " (planned at tick " + std::to_string(p.madeAtTick) + ")\n";
         out += "    decided: " + describeGiveWay(roads, row, p, now) + "\n";
+        if (p.room.asked || p.room.state != RoomState::None) out += "    room beyond: " + describeRoom(p) + "\n";
         if (!p.connector.valid() || p.connector.index >= roads.paths.size()) continue;
         const engine::Path& path = roads.paths[p.connector.index];
         const uint32_t phases =

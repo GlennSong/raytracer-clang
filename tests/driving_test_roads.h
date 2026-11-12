@@ -56,6 +56,9 @@ Heading farTurnFrom(Heading h, driving::DrivesOn drivesOn);
 struct TestRoadSpec {
     uint32_t lanesEachWay = 1;
     Real roadLength = 100;        // metres of lane between two junction boxes (a straight road: each section's length)
+    // A GRID'S EAST-WEST ROADS between columns c and c + 1 are this long, where given (more columns: roadLength): two
+    // junctions a few metres apart, as the lab's junctions 11 and 14 are (issue #264).
+    std::vector<Real> columnRoadLengths;
     Real laneWidth = 3.5;
     Real cornerRadius = 6;        // how far a junction box reaches past the roads' edges: the near turn's kerb corner
     Real speedLimit = 13.4;       // m/s (30 mph), on every lane and connector

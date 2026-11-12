@@ -12,7 +12,8 @@
 //   - an ARROW to another car, of some KIND. Each kind is either a matter of SPACE (the car is in my way; there is no
 //     room beyond for me) or of RIGHT OF WAY (I am giving way to it). The tick gives "behind" (the car ahead holds me back)
 //     and "giving way to" (a stop at a junction's line that names the car given way to: Binding::stopFor, issue #262);
-//     "no room beyond" waits for task D5. Adding a kind is one enum value and one row of kArrowKinds.
+//     and "waiting for room behind the tail of" (a stop at a junction's line for room beyond it that names the car whose
+//     tail bounds the room: StopFor::NoRoom, issue #264). Adding a kind is one enum value and one row of kArrowKinds.
 //   - a LEAF: something that is not another car (a place to stop by given by a rule, a top speed, the end of its way).
 //   - NONE: held back by nothing at all. That is the worst bug there is (a car standing still for no reason), so those
 //     cars are listed on their own.
@@ -50,7 +51,7 @@ enum class WaitSort : uint8_t {
 enum class ArrowKind : uint8_t {
     Behind,         // the car ahead is what limits me
     GivingWay,      // I am giving way to that car: stopped at a junction's line for it (#262)
-    NoRoomBeyond,   // there is no room past the junction: I wait for the tail of that car (a later task)
+    NoRoomBeyond,   // there is no room past the junction: I wait for the tail of that car (#264)
 };
 constexpr uint8_t kArrowKindCount = 3;
 

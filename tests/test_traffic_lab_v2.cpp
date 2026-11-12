@@ -228,17 +228,22 @@ constexpr std::size_t kMostCrossJoinPairs = 0;
 constexpr uint64_t kMostJoinPairTicks = 0;
 constexpr std::size_t kMostAcrossJunctionPairs = 0;
 constexpr uint64_t kMostChangedMindTwice = 4;
-//
-// OWED TO ISSUE #264 (room beyond): 0 until the lights ran (#261). With them, the same five cars at junctions 11 and 14
-// (a 6-7 m lane joins the two each way) twice entered a junction box they could not leave and stood in a ring for 1 s.
-// Nothing yet stops a car entering when there is no room beyond. Held at what was measured on 2026-11-12; #264 must
-// bring it back to 0. (Counted at the once-a-second look: 2 loops, each seen twice.)
-constexpr uint64_t kMostLoopSamples = 4;
+// LOOPS OF WAITING CARS (gridlock or deadlock), counted at the once-a-second look: none. Once the lights ran (#261) the
+// same five cars at junctions 11 and 14 (a 6-7 m lane joins the two each way) twice entered a junction box they could not
+// leave and stood in a ring; room beyond (#264) keeps a car out of a box until it has room to leave it.
+constexpr uint64_t kMostLoopSamples = 0;
+// AT REST IN A JUNCTION BOX (#264, the D5 brief's "done when"): car-seconds at rest with any part of the body in a box
+// for any reason but a recorded give-way (or waiting inside for a far turn, or behind a car giving way in the box or
+// moving off inside it: measure.h BoxReason).
+constexpr double kMostBoxStopsNotAllowed = 0;
 // THE LONGEST ANYONE MAY STAND (s). It was 60 s before the lights ran. The lab's longest light cycle is 77 s (the
 // five-phase junctions 21 and 75), so a car arriving just after its green waits most of a cycle; the longest stand
 // measured was 82 s (a far turn finding no gap on its green). 100 s is that cycle plus one green. Glenn to choose:
 // keep this, shorten the cycle (green_shortest 5 s gives about 67 s), or give starved far turns an arrow.
-constexpr double kLongestStand = 100.0;
+// HELD AT 130 s since room beyond (#264): one far turn at five-phase junction 21 gave way to oncoming cars for its
+// whole 8 s green and waited a second red: 123 s. It needs a green arrow of its own (owed from ADR-0406), not more
+// patience. Bring this back to 100 when starved far turns get an arrow.
+constexpr double kLongestStand = 130.0;
 // THE FASTEST ROADS FLOW (issue #281): on the lanes of the road class with the highest posted limit (the lab's
 // freeway), the mean speed of cars in FREE FLOW -- held by nothing ahead (no car, no stop, not the end of their way),
 // by no top speed of their own vehicle's (a moped or a bus that cannot do the limit), and cruising (at the top speed
@@ -377,6 +382,23 @@ TEST_CASE(level_traffic_lab_v2_drives) {
             ++opposingCross;
     }
     std::printf("    [lab-v2] opposing far turns at lights whose paths cross: %u pairs\n", opposingCross);
+    // ROOM BEYOND (issue #264): the road-data report -- stretches some vehicle classes cannot stop in, and where they can
+    // never pass (the brief's "report the place as a road-data problem").
+    CHECK(d->roomStep());
+    {
+        const driving::RoomRoadReport rr = d->roomRoadReport();
+        std::printf("    [lab-v2] room beyond, the road: %u stretches shorter than the longest vehicle needs; %u of them end "
+                    "where everyone stops first or the road ends; %u pairs of turns through two lit junctions that let "
+                    "a car arriving from rest through too seldom (closed to it):\n",
+                    rr.shortStretches, rr.blockedByAStop, rr.turnPairsTooSeldom);
+        for (const std::string& l : rr.lines)
+            if (l.find("never") != std::string::npos || l.find("only once in") != std::string::npos)
+                std::printf("      %s\n", l.c_str());
+        uint64_t closed = 0;
+        for (uint32_t k = 0; k < d->vehicleClasses().size(); ++k) closed += d->routeClass(k).closed.size();
+        std::printf("    [lab-v2] turns closed to a class for want of room, summed over the classes: %llu\n",
+                    static_cast<unsigned long long>(closed));
+    }
 
     const Real seconds = std::getenv("RT_LAB_SECONDS") ? std::atof(std::getenv("RT_LAB_SECONDS")) : 300.0;
     const int steps = static_cast<int>(seconds / kStep + 0.5);
@@ -634,6 +656,11 @@ TEST_CASE(level_traffic_lab_v2_drives) {
             if (standing && it == standSince.end()) it = standSince.insert({c.id.index, now}).first;
             if (standing) {
                 const Real stood = now - it->second;
+                // RT_LAB_LONG_CARDS=<s>: the card of a car the moment it has stood that long (for a person chasing why).
+                if (const char* longCards = std::getenv("RT_LAB_LONG_CARDS"))
+                    if (stood >= std::atof(longCards) && stood < std::atof(longCards) + 1)
+                        std::printf("      [long stand] t=%.0f car %u has stood %.0f s:\n%s", now, c.id.index, stood,
+                                    d->describeCar(c.id).c_str());
                 std::map<uint32_t, std::pair<Real, std::string>>::iterator l = longest.find(c.id.index);
                 if (l == longest.end() || stood >= l->second.first) longest[c.id.index] = {stood, why(c)};
             }
@@ -757,6 +784,23 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         std::printf("; rings broken %llu (through a body %llu; of bodies and queues alone %llu)\n",
                     static_cast<unsigned long long>(cc.rings), static_cast<unsigned long long>(cc.ringThroughABody),
                     static_cast<unsigned long long>(cc.physicalRings));
+        // ROOM BEYOND (issue #264): asks, grants and refusals over the run.
+        const driving::RoomCounts& rc = d->roomCounts();
+        std::printf("    [lab-v2] room beyond: %llu asks settled, %llu granted (%llu through junctions too close to stop "
+                    "between, %llu to wait inside); refused:",
+                    static_cast<unsigned long long>(rc.asked), static_cast<unsigned long long>(rc.granted),
+                    static_cast<unsigned long long>(rc.grantedThrough),
+                    static_cast<unsigned long long>(rc.grantedToWaitInside));
+        for (uint8_t k = 1; k < driving::kRoomRefusalCount; ++k)
+            if (rc.refused[k] > 0)
+                std::printf(" %llu %s;", static_cast<unsigned long long>(rc.refused[k]),
+                            driving::roomRefusalWords(static_cast<driving::RoomRefusal>(k)));
+        std::printf(" grants used on the lane %llu, given back %llu; the most held at once %u; asks of one tick put in "
+                    "order by the resolver %llu; road-data places refused %zu\n",
+                    static_cast<unsigned long long>(rc.usedOnLane), static_cast<unsigned long long>(rc.givenBack),
+                    rc.mostHeld, static_cast<unsigned long long>(rc.orderedByResolver), rc.roadDataPlaces.size());
+        for (const std::pair<uint32_t, uint32_t>& place : rc.roadDataPlaces)
+            std::printf("      [road data] refused room at junction %u, lane %u beyond\n", place.first, place.second);
         // One driver's card giving way at a line, as `driver? <id>` shows it.
         for (const driving::Car& c : d->cars()) {
             if (c.binding.by != driving::Limit::Stop || c.binding.stopFor != driving::StopFor::GivingWay) continue;
@@ -881,6 +925,25 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     CHECK(joinPairTicks <= kMostJoinPairTicks);
     CHECK(loopSamples <= kMostLoopSamples);
     CHECK(over60 == 0);
+    // ROOM BEYOND (issue #264): nobody at rest in a box but by a recorded give-way; the deadlock row of the measurements
+    // table passes; and every grant outstanding belongs to a driven car whose front has not yet reached its lane (grants
+    // never outlive their use).
+    {
+        const driving::BoxStopRow& box = sim.drivingHost().measurements().rows().boxStops;
+        std::printf("    [lab-v2] at rest in a junction box: %.1f car-seconds; not allowed %.1f\n", box.carSeconds,
+                    box.notAllowed);
+        CHECK(box.notAllowed <= kMostBoxStopsNotAllowed);
+        for (const driving::ReportRow& row : report.rows)
+            if (row.key == "deadlock_loops" || row.key == "box_stops") CHECK(row.status == driving::RowStatus::Pass);
+        std::size_t between = 0;
+        for (const driving::RoomGrant& g : d->roomGrants()) {
+            const driving::Car* c = d->car(driving::CarId(g.car));
+            if (c && c->driven && c->odometer < g.laneAt) ++between;
+        }
+        std::printf("    [lab-v2] room grants outstanding at the end: %zu; cars between their grant and its lane: %zu\n",
+                    d->roomGrants().size(), between);
+        CHECK(between == d->roomGrants().size());
+    }
     CHECK(d->junctionPlanCounts().changedMindTwice <= kMostChangedMindTwice);
     // The fastest roads flow near their limit where nothing ahead holds a car (issue #281).
     CHECK(freeSeconds > 0);

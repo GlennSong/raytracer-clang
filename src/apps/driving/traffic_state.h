@@ -96,12 +96,16 @@ enum class StopFor : uint8_t {
     GivingWay,   // giving way at a junction's line: to the car named with it
     FullStop,    // a full stop at a junction's line before going on (a stop sign, an all-way stop): the junction's own
                  // control, so the car still announces that it will cross, after stopping
+    NoRoom,      // waiting at a junction's line for room beyond it (issue #264, room.h): for the tail of the car named with
+                 // it, or (none named) for the lights or the stop at the next junction to let it through. Not the
+                 // junction's own traffic: the car announces that it is not going, so cross traffic uses the time
 };
-constexpr uint8_t kStopForCount = 3;
+constexpr uint8_t kStopForCount = 4;
 
 struct Binding {
     Limit by = Limit::Nothing;
-    CarId car;                // CarAhead: which car; Stop: the car it gives way to (none for a plain place)
+    CarId car;                // CarAhead: which car; Stop: the car it gives way to, or waits for room behind (none for
+                              // a plain place)
     RuleIndex rule = kNoRule; // Stop, TopSpeed: which rule
     StopFor stopFor = StopFor::Place;   // Stop: what it waits for
 };
@@ -117,7 +121,7 @@ struct HeldAnswers {
     double stopAt = 0;             // the odometer reading at which its front is to be at rest
     RuleIndex stopRule = kNoRule;
     StopFor stopFor = StopFor::Place;   // what the stop waits for
-    CarId stopCar;                 // GivingWay: the car it gives way to
+    CarId stopCar;                 // GivingWay: the car it gives way to; NoRoom: the car whose tail bounds the room
     Real topSpeed = 0;             // the top speed to aim for, m/s: a rule's, or the vehicle class's when none gave one
     RuleIndex topSpeedRule = kNoRule;   // kNoRule: the class's own
 };

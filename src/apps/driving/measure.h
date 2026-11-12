@@ -46,6 +46,11 @@
 //                                                                    a turn at rest: angle_rad, moved_m)
 //   junction_stops          car_seconds, behind_a_car_s, at_a_stop_s, top_speed_s, way_end_s, nothing_s, and one
 //                           stop_rule:<rule name>_s per rule that stopped a car on a connector (no offenders)
+//   box_stops               car_seconds, not_allowed_s, and <reason>_s for each BoxReason key (giving_way_s,
+//                           behind_giving_way_s, behind_moving_in_box_s, behind_other_s, waiting_for_room_s,
+//                           stop_by_rule_s, top_speed_s,
+//                           way_end_s, nothing_s), and one stop_rule:<rule name>_s per rule  (offender numbers: reason,
+//                           binding_car)
 //   overlaps                pair_ticks, pairs, worst_overlap_m               (offender numbers: other_car, overlap_m, path)
 //   over_own_limit          car_seconds, checked_car_seconds, worst_excess_mps  (offender numbers: speed, my_limit, path)
 //   bend_speed              car_seconds, checked_car_seconds, worst_side_accel  (offender numbers: speed, radius_m,
@@ -327,6 +332,45 @@ struct JunctionStopRow {
     void note(const Binding& binding, double dt);
 };
 
+// AT REST IN A JUNCTION BOX (issue #264, the D5 brief's "done when"): a car waiting (wait_graph.h isWaiting) with any
+// part of its body in a box -- on a connector by more than at_line_within, or across a crosswalk -- by why. Read from
+// what held it, following a car held behind another to the head of its queue:
+enum class BoxReason : uint8_t {
+    GivingWay,         // a stop that gives way to a car (StopFor::GivingWay): a recorded give-way, inside the junction or
+                       // waiting inside for a far turn. Allowed.
+    BehindGivingWay,   // behind a car (and so on) whose head is itself in a box giving way. Allowed: the give-way holds it.
+    BehindMovingInBox, // behind a car (and so on) moving off inside a box: a queue inside, starting off. Allowed.
+    BehindOther,       // behind a car whose head is held by anything else, or moving off beyond the box: a queue
+                       // reaching back into the box
+    WaitingForRoom,    // a stop for room beyond (StopFor::NoRoom) with its body already in a box
+    StopByRule,        // a stop by any other rule (a red, a yellow, a full stop, its destination, ...): by rule below
+    TopSpeed,          // held by a top speed
+    WayEnd,            // at the end of its way
+    Nothing,           // held by nothing at all
+};
+constexpr uint8_t kBoxReasonCount = 9;
+const char* boxReasonKey(BoxReason r);     // "giving_way", "behind_giving_way", ...
+const char* boxReasonWords(BoxReason r);   // in words
+bool boxReasonAllowed(BoxReason r);        // GivingWay, BehindGivingWay and BehindMovingInBox
+// IS ANY PART OF THE CAR'S BODY IN A JUNCTION BOX: over a connector by more than `atLineWithin`, or over a crosswalk.
+bool bodyInBox(const engine::LaneGraph& roads, const VehicleClasses& classes, const Car& car, Real atLineWithin);
+// WHY A WAITING CAR IN A BOX IS THERE (see BoxReason). `inBox` says, for a car record, whether its body is in a box.
+BoxReason boxReason(const std::vector<Car>& cars, const PathLists& lists, const Car& car,
+                    bool (*inBox)(const Car& car, const void* context), const void* context);
+
+struct BoxStopRow {
+    double carSeconds = 0;
+    double byReason[kBoxReasonCount] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+    std::map<RuleIndex, double> byStopRule;   // StopByRule: car-seconds by the rule that stopped it
+    double notAllowed = 0;                    // car-seconds for a reason that is not allowed
+    Offenders offenders;                      // one per spell of a car at rest in a box for a reason not allowed
+    void note(CarId car, uint64_t tick, double seconds, double dt, BoxReason why, const Binding& binding);
+    void notInBox(CarId car);
+
+private:
+    std::set<uint32_t> bad_;   // cars at rest in a box for a reason not allowed, last tick
+};
+
 // OVERLAPPING BODIES.
 struct OverlapRow {
     uint64_t pairTicks = 0;
@@ -393,6 +437,7 @@ struct MeasureRows {
     JumpRow jumps;
     TurnRow turns;
     JunctionStopRow junctionStops;
+    BoxStopRow boxStops;
     OverlapRow overlaps;
     OverLimitRow overOwnLimit;
     BendRow bends;
@@ -450,6 +495,7 @@ private:
     void lookAtCar(const Driving& d, const Car& c, const Seen* before, double now, double dt, Seen& out);
     Seen seeCar(const Driving& d, const Car& c) const;
     void lookForOverlaps(const Driving& d, double now);
+    void lookForBoxStops(const Driving& d, double now, double dt);
 
     const Driving* driving_ = nullptr;
     std::vector<PathPoint> lines_;

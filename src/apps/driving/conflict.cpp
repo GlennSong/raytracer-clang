@@ -504,6 +504,24 @@ bool ConflictResolver::goesFirst(const engine::LaneGraph& roads, engine::Crossin
     return (s->conflict.first.who == me) == s->resolution.firstGoes;
 }
 
+Answer ConflictResolver::order(uint64_t a, uint64_t b, Question* by) const {
+    if (by) *by = Question::None;
+    if (a == b) return Answer::NoAnswer;
+    const uint64_t lo = std::min(a, b), hi = std::max(a, b);
+    // byPair_ lists settled_ by (first, second, group): the pair's record in the lowest group comes first.
+    const std::vector<uint32_t>::const_iterator it =
+        std::lower_bound(byPair_.begin(), byPair_.end(), std::make_pair(lo, hi),
+                         [this](uint32_t k, const std::pair<uint64_t, uint64_t>& key) {
+                             const SettledConflict& s = settled_[k];
+                             return std::make_pair(s.conflict.first.who, s.conflict.second.who) < key;
+                         });
+    if (it == byPair_.end()) return Answer::NoAnswer;
+    const SettledConflict& s = settled_[*it];
+    if (s.conflict.first.who != lo || s.conflict.second.who != hi) return Answer::NoAnswer;
+    if (by) *by = s.resolution.by;
+    return (a == lo) == s.resolution.firstGoes ? Answer::First : Answer::Second;
+}
+
 uint64_t ConflictResolver::hash() const {
     engine::bundle::Fnv h;
     h.pod(static_cast<uint64_t>(settled_.size()));

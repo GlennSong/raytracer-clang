@@ -19,7 +19,9 @@
 //      whose `arrived` fact is yes ends its trip instead: a Parked event, and the car stays where it is, placed and
 //      undriven. Every decision reads the cars as they stood at the start of the tick and this tick's board; the
 //      answers are applied only once all are made, so the order cars are visited in changes nothing.
-//   2. SETTLE CLAIMS: nothing yet (junctions and lane changes bring claims).
+//   2. SETTLE CLAIMS: with the room step (room.h registerRoomFacts), the room beyond each junction that drivers asked
+//      for this tick is granted or refused, one car at a time in one fixed order (room.h RoomLedger), and grants held
+//      are kept or let go. Lane changes will bring claims of their own (task E1).
 //   3. MOVE: every driven car works out its speed from its held answers and a fresh look at the car ahead (act.h),
 //      moves along its held way, carrying over onto the next paths as many times as it must, and records what held it
 //      back. Every car reads the state as it was at the start of the step and writes a second copy; the copies then
@@ -43,6 +45,7 @@
 #include "apps/driving/junction_plan.h"   // each driver's plan for the junctions ahead
 #include "apps/driving/notice.h"
 #include "apps/driving/right_of_way.h"    // who gives way to whom, worked out at load
+#include "apps/driving/room.h"            // room beyond a junction, granted one car at a time
 #include "apps/driving/signal_programme.h"   // the traffic lights' clock: a pure function of the time
 #include "apps/driving/road_rules.h"
 #include "apps/driving/route.h"
@@ -155,6 +158,9 @@ struct JunctionPlanCounts {
     // ... not counting waits INSIDE the junction (issue #263): a driver past its line, or too fast to stop at it, that
     // stopped inside for a car the resolver put first. Counted here, each stop once.
     uint64_t waitedInside = 0;
+    // ... nor switches made while held at the line for room beyond (issue #264): it cannot go whatever it judges, and
+    // announces that it is not going.
+    uint64_t switchedWhileHeldForRoom = 0;
     // The gaps taken after giving way: the smallest and largest gap had, and the smallest gap needed (seconds).
     Real smallestGapTaken = 0, largestGapTaken = 0, smallestGapNeeded = 0;
 };
@@ -237,6 +243,15 @@ public:
     // board, and its counts summed over every tick so far.
     const ConflictResolver& resolver() const { return resolver_; }
     const ConflictCounts& conflictCounts() const { return conflictTotals_; }
+    // ROOM BEYOND (issue #264): on when the rules came with a registry that has the room step (room.h registerRoomFacts,
+    // after the junction step); its numbers; how the room went (asks, grants, refusals); the grants outstanding after the
+    // last tick; and the road-data report: stretches some vehicle classes cannot stop in, and where they can never pass
+    // (worked out when asked, from the road, the rules and the vehicle classes).
+    bool roomStep() const { return roomOn_; }
+    const RoomNumbers& roomNumbers() const { return roomNumbers_; }
+    const RoomCounts& roomCounts() const { return room_.counts(); }
+    const std::vector<RoomGrant>& roomGrants() const { return room_.grants(); }
+    RoomRoadReport roomRoadReport() const;
     // ONE NUMBER OVER EVERY DRIVER'S JUNCTION PLANS (in car order) and the plan counts and caps, kept apart from
     // stateHash, which leaves them out while nothing a car does reads them.
     uint64_t planHash() const;
@@ -287,6 +302,11 @@ public:
     const Route* route(TripId id) const;
     // What binding the vehicle classes to the road had to say (a class tag the road does not know), one line each.
     const std::vector<std::string>& routeNotes() const { return routeNotes_; }
+    // THE CLASS AS ROUTES FOR IT ARE FOUND (route.h): bound to the road, lane changes as the settings say, and with the
+    // room step the turns it could never (or too seldom) be granted room through closed to it (room.h
+    // turnsClosedForRoom). A host that
+    // finds places to send cars uses the same, so it never picks a place only a closed turn reaches.
+    RouteClass routeClass(uint32_t vehicleClass) const;
 
     // STEER A TRIP (design 3.1: the host steers trips, never cars). Each is refused (false) for a stale handle or a
     // place not on the road.
@@ -372,6 +392,11 @@ private:
         PlanUpdate planUpdate;      // what updating them did
         GiveWayVerdict verdict;     // what it judged about giving way at them (the junction step only)
         std::array<Real, kMaxJunctionPlans> lineIn{};   // ... and when the board had it reaching each one's line
+        // ROOM BEYOND (the room step only): the plan it asks room at (kMaxJunctionPlans: none), whether to wait inside,
+        // and where it waits if refused (what its facts read).
+        std::size_t roomAsk = kMaxJunctionPlans;
+        bool roomAskInside = false;
+        RoomStop roomStop;
     };
     // Counts and traces what one update of a car's plans did.
     void notePlanUpdate(const PlanUpdate& u, CarId car, Trip& t, const JunctionPlans& plans);
@@ -396,6 +421,9 @@ private:
     using LineTimes = std::array<std::pair<engine::PathId, Real>, kMaxJunctionPlans>;
     // The trip was routed again: its plans go at once (each noted).
     void dropPlansForNewRoute(Trip& t);
+    // Closes to each class's routes the turns it could never (or too seldom) be granted room through (room.h
+    // turnsClosedForRoom; none without the room step). Run when the rules or the vehicle classes are handed over.
+    void closeTurnsForRoom();
 
     const engine::LaneGraph* roads_ = nullptr;
     VehicleClasses vehicleClasses_;
@@ -436,6 +464,11 @@ private:
     ConflictResolver resolver_;           // ... and its conflicts settled from it, once a tick
     std::vector<std::pair<uint64_t, uint64_t>> behind_;   // ... with each car held behind the car ahead (working memory)
     ConflictCounts conflictTotals_;       // the resolver's counts over every tick (not read by the tick)
+    bool roomOn_ = false;                 // the room step (room.h hasRoomStep)
+    RoomNumbers roomNumbers_;             // ... its numbers
+    RoomRoads roomRoads_;                 // ... the road as it reads it (built by useRules)
+    RoomLedger room_;                     // ... the grants, settled once a tick
+    std::vector<RoomSeat> roomSeats_;     // ... every driven car as the settle step sees it (working memory)
 
     // Working memory reused from tick to tick (never part of the state).
     std::vector<Car> carsNext_;           // the second copy of the cars the move step writes

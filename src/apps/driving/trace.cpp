@@ -88,6 +88,9 @@ std::string entryWords(const Driving& d, const TraceEntry& e) {
         what = "a stop" + whyWords(d, e.why, e.binding.rule);
         if (e.binding.stopFor == StopFor::GivingWay && e.binding.car.valid())
             what += ", giving way to " + carWords(e.binding.car);
+        if (e.binding.stopFor == StopFor::NoRoom)
+            what += e.binding.car.valid() ? ", waiting for room beyond behind " + carWords(e.binding.car)
+                                          : std::string(", waiting for room beyond");
         break;
     case Limit::TopSpeed:
         what = e.binding.rule == kNoRule ? std::string("its vehicle class's top speed")
@@ -295,6 +298,14 @@ std::string describeCar(const Driving& d, CarId id) {
                     const JunctionPlan& p = t->junctions.plans[k];
                     if (p.decision != GiveWayDecision::GiveWay) continue;
                     out += "; " + describeGiveWay(*roads, d.rightOfWay(), p, d.clockSeconds());
+                    break;
+                }
+            // Waiting for room beyond (#264): why it was refused, at the plan it was refused at.
+            if (b.stopFor == StopFor::NoRoom)
+                for (std::size_t k = 0; k < t->junctions.count; ++k) {
+                    const JunctionPlan& p = t->junctions.plans[k];
+                    if (p.room.state != RoomState::Refused) continue;
+                    out += "; room beyond junction " + std::to_string(p.junction.index) + " " + describeRoom(p);
                     break;
                 }
             break;

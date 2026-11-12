@@ -37,7 +37,51 @@ void Driving::attachMeasurements(Measurements* m) {
     if (m && !m->begun()) m->begin(*this);
 }
 
-void Driving::settleClaims() {}
+// SETTLE CLAIMS (design 7.1 step 2): the room beyond each junction asked for in this tick's plan step, granted one car at
+// a time in one fixed order (room.h). Every driven car is a seat, in car-id order: its grants are kept or let go, and its
+// position counts against the room others ask for.
+void Driving::settleClaims() {
+    if (!roomOn_ || !roads_) return;
+    findTripsOfRecords();
+    roomSeats_.clear();
+    for (std::size_t i = 0; i < cars_.size(); ++i) {
+        const Car& c = cars_[i];
+        Trip* t = trips_.get(tripOfRecord_[i]);
+        if (!c.driven || !t || c.vehicleClass >= vehicleClasses_.size()) continue;
+        RoomSeat s;
+        s.car = &c;
+        s.plans = &t->junctions;
+        s.way = &t->way;
+        s.holds = &t->holds;
+        s.cls = &vehicleClasses_.at(c.vehicleClass);
+        roomSeats_.push_back(s);
+    }
+    const RoomWorld world{*roads_,  rightOfWay_,    ruleSet_, roadRules_,  vehicleClasses_, cars_,
+                          pathLists_, roomRoads_, roomNumbers_, resolver_, lightsRun_,     junctionNumbers_.comfortableSideAccel,
+                          tickCount_, clockSeconds_};
+    room_.settle(world, roomSeats_);
+}
+
+void Driving::closeTurnsForRoom() {
+    if (!roads_ || !hasRules_) return;
+    for (std::size_t i = 0; i < routeClasses_.size() && i < vehicleClasses_.size(); ++i)
+        routeClasses_[i].closed =
+            roomOn_ ? turnsClosedForRoom(*roads_, rightOfWay_, ruleSet_, roadRules_, roomRoads_, roomNumbers_, lightsRun_,
+                                         junctionNumbers_.comfortableSideAccel, vehicleClasses_.at(i))
+                    : std::vector<engine::PathId>();
+}
+
+RouteClass Driving::routeClass(uint32_t vehicleClass) const {
+    RouteClass cls = vehicleClass < routeClasses_.size() ? routeClasses_[vehicleClass] : RouteClass();
+    cls.laneChanges = settings_.laneChanges;
+    return cls;
+}
+
+RoomRoadReport Driving::roomRoadReport() const {
+    if (!roomOn_ || !roads_) return RoomRoadReport();
+    return reportRoomRoads(*roads_, rightOfWay_, ruleSet_, roadRules_, vehicleClasses_, roomRoads_, roomNumbers_,
+                           lightsRun_, junctionNumbers_.comfortableSideAccel);
+}
 
 bool Driving::onRoad(const PathPoint& p) const {
     if (!roads_ || !p.path.valid() || p.path.index >= roads_->paths.size()) return false;
@@ -87,6 +131,14 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
     // The lights' clock, when the host registered it (buildRoadRules then bound the lights as running, not dark).
     LightTiming lightTiming;
     if (roadRules.lightsRun && !readLightTiming(ruleSet, lightTiming, why)) return false;
+    // Room beyond (#264), when the registry has it: it needs the junction step (its asks come from the judgement).
+    const bool room = hasRoomStep(facts);
+    if (room && !junctions)
+        return refuse(why, std::string(kRoomReaderName) + " needs the junction step (registerJunctionFacts) too");
+    RoomNumbers roomNumbers;
+    if (room && !readRoomNumbers(ruleSet, roomNumbers, why)) return false;
+    roomOn_ = room;
+    roomNumbers_ = roomNumbers;
     lightsRun_ = roadRules.lightsRun;
     lightTiming_ = lightTiming;
     junctionsOn_ = junctions;
@@ -110,6 +162,9 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
         rightOfWay_ = buildRightOfWay(*roads_, ruleSet_, roadRules_);
         // ... and every junction's traffic lights timed, with the far turns' places to wait inside checked (#261).
         if (lightsRun_) timeSignalProgrammes(*roads_, roadRules_, lightTiming_, rightOfWay_);
+        // ... and the road as room beyond reads it: what leads into each lane, and where its room begins (#264).
+        roomRoads_ = roomOn_ ? studyRoomRoads(*roads_, roomNumbers_.clearOfCrosswalk) : RoomRoads();
+        closeTurnsForRoom();
     }
     for (std::pair<const CarId, TripId>& entry : tripOfCar_)
         if (Trip* t = trips_.get(entry.second)) t->junctions = JunctionPlans();
@@ -186,8 +241,13 @@ void Driving::applyVerdict(const GiveWayVerdict& v, const std::array<Real, kMaxJ
             } else {
                 ++planCounts_.decidedGiveWay;
             }
+            // Held at the line for room beyond (#264): it cannot go whatever it judges, and announces that it is not going,
+            // so its judgement turning with the cross traffic is no change of mind anyone acts on: counted on its own.
+            const bool heldForRoom = plan.room.state == RoomState::Refused;
             if (inside) {
                 if (d == GiveWayDecision::GiveWay) ++planCounts_.waitedInside;
+            } else if (heldForRoom) {
+                ++planCounts_.switchedWhileHeldForRoom;
             } else if (plan.decision != GiveWayDecision::Undecided && ++plan.mindChanges == 2) {
                 ++planCounts_.changedMindTwice;
             }
@@ -255,6 +315,8 @@ void Driving::announce() {
             const bool held = lamp == Lamp::Red || lamp == Lamp::Yellow;
             noteAtTheLine(plans.plans[k], c, cls.brake, n.atLineWithin, tickCount_, clockSeconds_, red, held);
         }
+        // Granted room through junctions too close to stop between (#264): committed at the first, at all of them.
+        if (roomOn_) commitThrough(plans);
         for (std::size_t k = 0; k < plans.count; ++k) {
             const JunctionPlan& p = plans.plans[k];
             if (!(p.startOdometer > c.odometer) || !p.connector.valid()) continue;
@@ -443,7 +505,21 @@ void Driving::plan() {
                                                     roads_->paths[jp.connector.index].length);
             }
         }
-        p.way = wayAhead(t->route, *roads_, c.path, c.along, lookAhead, p.legReached);
+        // The way ahead, and the junctions on it: plans kept, dropped and made before the driver notices anything. With
+        // room beyond (#264), as far again as a claim at the nearest junction needs: through each junction its body
+        // would not fit before (room.h roomReach; at most room_through_junctions more looks).
+        for (uint32_t look = 0;; ++look) {
+            p.way = wayAhead(t->route, *roads_, c.path, c.along, lookAhead, p.legReached);
+            p.junctions = t->junctions;
+            p.planUpdate = PlanUpdate();
+            updateJunctionPlans(*roads_, rightOfWay_, c, cls.length, p.way, tickCount_, clockSeconds_, p.junctions,
+                                p.planUpdate);
+            if (!roomOn_ || look >= roomNumbers_.throughJunctions) break;
+            const Real further = roomReach(*roads_, roomRoads_, p.junctions, c, p.way,
+                                           roomNeeded(cls, roomNumbers_.standstillGap), roomNumbers_);
+            if (!(further > lookAhead)) break;
+            lookAhead = further;
+        }
         Real reach = -c.along;
         for (const engine::PathId path : p.way.paths) reach += roads_->paths[path.index].length;
         p.wayEnds = reach < lookAhead && p.way.paths.size() < kMaxFollowedPaths;
@@ -452,10 +528,6 @@ void Driving::plan() {
             ++capCounts_.lookAheadsCut;
             capCounts_.lastLookAheadCut = c.id;
         }
-        // The junctions on the way ahead: plans kept, dropped and made before the driver notices anything.
-        p.junctions = t->junctions;
-        updateJunctionPlans(*roads_, rightOfWay_, c, cls.length, p.way, tickCount_, clockSeconds_, p.junctions,
-                            p.planUpdate);
         // ... and whether it must give way at them, judged from this tick's board.
         if (junctionsOn_) {
             GiveWayInputs in{*roads_,   rightOfWay_, ruleSet_,   roadRules_,
@@ -470,6 +542,12 @@ void Driving::plan() {
             }
             judgeGiveWay(in, p.verdict);
             p.lineIn = in.lineIn;
+            // Room beyond (#264): deciding to go at a junction it holds no room at is asking for it; refused at its last
+            // ask, it waits at that line (its facts read where).
+            if (roomOn_) {
+                p.roomAsk = roomToAsk(p.junctions, c, p.verdict, roomNumbers_, &p.roomAskInside);
+                p.roomStop = roomStopFor(p.junctions, c, roomNumbers_);
+            }
         }
 
         DriverView view{c,          cls,       t->person,  p.way,         *roads_,     cars_,     pathLists_,
@@ -478,6 +556,7 @@ void Driving::plan() {
             view.board = &board_;
             view.giveWay = &p.verdict;
         }
+        if (roomOn_) view.room = &p.roomStop;
         // What it decides now it holds until its next turn to decide (#281: a bend's speed allows for that).
         view.decideInterval = static_cast<Real>(every) * step_;
         noticeFacts(view, facts_, wanted_, noticed_, noticeScratch_);
@@ -498,7 +577,8 @@ void Driving::plan() {
             const FactSlot slot = r < rules_.program.rules.size() ? rules_.program.rules[r].stopAt : kNoFact;
             if (slot < facts_.size()) {
                 p.held.stopFor = facts_.at(slot).stopFor;
-                if (p.held.stopFor == StopFor::GivingWay) p.held.stopCar = noticed_[slot].aboutCar;
+                if (p.held.stopFor == StopFor::GivingWay || p.held.stopFor == StopFor::NoRoom)
+                    p.held.stopCar = noticed_[slot].aboutCar;
             }
         }
         // The top speed to aim for: the rules' when it is below what the car can do, else the class's own.
@@ -534,6 +614,7 @@ void Driving::plan() {
         t->junctions = p.junctions;
         notePlanUpdate(p.planUpdate, c.id, *t, t->junctions);
         applyVerdict(p.verdict, p.lineIn, c, *t);
+        if (roomOn_) askForRoom(t->junctions, p.roomAsk, p.roomAskInside, tickCount_);
         t->way = std::move(p.way);
         t->wayAt = 0;
         t->wayEnds = p.wayEnds;
@@ -701,6 +782,7 @@ void Driving::setVehicleClasses(VehicleClasses classes) {
         for (const VehicleClass& c : vehicleClasses_.all())
             routeClasses_.push_back(bindRouteClass(*roads_, c, &routeNotes_));
         rebuildPathLists(*roads_, vehicleClasses_, cars_, pathLists_);
+        closeTurnsForRoom();
     }
 }
 
@@ -708,9 +790,7 @@ Route Driving::routeFor(const Car& c, const PathPoint& to) const {
     PathPoint front;
     front.path = c.path;
     front.along = c.along;
-    RouteClass cls = c.vehicleClass < routeClasses_.size() ? routeClasses_[c.vehicleClass] : RouteClass();
-    cls.laneChanges = settings_.laneChanges;
-    return findRoute(*roads_, routeBounds_, cls, front, to);
+    return findRoute(*roads_, routeBounds_, routeClass(c.vehicleClass), front, to);
 }
 
 void Driving::queueEvent(EventKind kind, CarId car, TripId trip, PersonId person) {
@@ -968,6 +1048,7 @@ uint64_t Driving::stateHash() const {
     h.pod(capCounts_.lookAheadsCut);
     h.pod(capCounts_.lastLookAheadCut.index);
     h.pod(static_cast<uint8_t>(junctionsOn_));
+    h.pod(static_cast<uint8_t>(roomOn_));
     // The trips, in car order.
     h.pod(static_cast<uint64_t>(tripOfCar_.size()));
     for (const std::pair<const CarId, TripId>& entry : tripOfCar_) {

@@ -18,7 +18,8 @@
 //     with its front at the crossing point's stretch. A car whose front is already on that stretch cannot keep out of
 //     it, and goes on. The judgement records to whom, at which crossing point, why that car goes first, the gaps, and
 //     where it stops.
-// Room beyond the junction is task D5.
+// Room beyond the junction is room.h's (issue #264): a car that decides to go asks for it, and waits at the line while
+// it is refused.
 //
 // WHO GOES FIRST is the conflict resolver's (conflict.h): one record per pair of cars, settled once a tick, so the one
 // that goes first never looks at the one going second (if both looked, both would wait) and no two cars wait for each
@@ -36,7 +37,8 @@
 //     deciding further out, in a queue say, is deciding on guesses that change before it gets there;
 //   - not NOT GOING there (held, blocked by a stopped car beyond the line): such a driver still judges, and stops if it
 //     must, but a clear road is no decision to go: it may be let go this very decision, and must not then cross without
-//     having judged;
+//     having judged. A driver held at the line only by its own wait for room beyond (room.h) is not held so: deciding to
+//     go is how it asks again;
 //   - not still OWING A FULL STOP at the line (below): it decides once it has come to rest there (ADR-0403).
 // A driver that is going has passed all three.
 //
@@ -51,7 +53,9 @@
 //
 // SEVERAL JUNCTIONS IN VIEW: the nearest first; the first where it must give way is where it stops. If that is not the
 // nearest and its body would not fit between the two junctions (the next line nearer the end of the connector before it
-// than its length and a standstill gap), it stops at the line before instead (task D5 completes this with room claims).
+// than its length and a standstill gap), it stops at the line before instead. Room beyond (room.h) does the same for the
+// room and the lights at the next junction: a car whose body would not fit between the two is granted room at the first
+// only with room beyond the second and that junction's light green for it as it gets there.
 //
 // THE FACTS a rule set reads (registerJunctionFacts): must_give_way, give_way_line (the place to stop by, which waits for
 // the car given way to: the junction's line, or inside the junction short of the crossing point), give_way_gap and
@@ -123,7 +127,8 @@ constexpr const char* kFactSignRank = "sign_rank";                    // word: t
 // junction must not hide a red just beyond it -- or else the nearest. Absent where there is none (no lights, or dark).
 // What my turn's lamp shows there: "green", "yellow", "red", "red_may_turn" (signal_programme.h lampWords).
 constexpr const char* kFactLight = "light";                           // word
-// Where I stop for it: its line (even where my body would not fit between the junction before and it: see give_way.cpp).
+// Where I stop for it: its line. (Where my body would not fit between the junction before and it, room beyond keeps me
+// at the line before until this light will be green as I get there: room.h.)
 // A rule set says { when = { "light", "is", "red" }, give = { stop_at = "light_line" } }.
 constexpr const char* kFactLightLine = "light_line";                  // place
 // THE DILEMMA: can I stop at light_line, holding what I decide now for my decide interval and then braking at the rule
@@ -162,6 +167,15 @@ bool readJunctionNumbers(const RuleSet& rules, JunctionNumbers& out, std::string
 
 // A junction's control: its row of the rule set's `control` table, or null (no junction, or no row).
 const ControlKind* junctionControl(const RightOfWay& row, const RuleSet& rules, engine::JunctionId junction);
+// Does `lane` carry, at its end (within `atLineWithin`), a device with a stop line (a stop sign)?
+bool stopLineAtEnd(const engine::LaneGraph& roads, const RuleSet& rules, const RoadRules& roadRules, engine::PathId lane,
+                   Real atLineWithin);
+// MUST EVERY CAR TAKING `connector` COME TO REST AT ITS LINE FIRST: its junction's control makes everyone stop (an
+// all-way stop), or the lane it leaves carries a stop line at its end (a stop sign). The judgement reads it (a car owing
+// that stop decides nothing until it has made it), and so does room beyond (room.h: nobody passes through such a junction
+// without stopping).
+bool stopsEveryoneFirst(const engine::LaneGraph& roads, const RightOfWay& row, const RuleSet& rules,
+                        const RoadRules& roadRules, engine::PathId connector, Real atLineWithin);
 
 // IS THE STOP A CAR HOLDS THE JUNCTION'S OWN: to give way where the plan's judgement put it (the line, or inside the
 // junction short of a crossing point), or a full stop first at the plan's line (each within at_line_within). Then the
@@ -208,6 +222,10 @@ struct GiveWayVerdict {
     // Per plan (in the plans' order): what was decided this time (Undecided: not judged, kept as it was), and why.
     std::array<GiveWayDecision, kMaxJunctionPlans> decision{};
     std::array<GiveWayJudgement, kMaxJunctionPlans> judgement{};
+    // Per plan: judged this time with nothing to give way to, owing no full stop there -- whether or not that counted as
+    // a decision to go (a driver not going there, held or just released, decides nothing; room beyond asks anyway when
+    // such a car is about to move off its line: room.h roomToAsk).
+    std::array<bool, kMaxJunctionPlans> clear{};
     bool committed = false;          // past the last waiting point of its nearest junction
     // THE NEAREST JUNCTION WHOSE LINE IS STILL AHEAD: how far its line is, whether the car came to rest there, whether
     // its control makes everyone stop first, and the rank of the sign on the car's approach (RuleSet::ranks; an approach

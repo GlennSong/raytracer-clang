@@ -49,10 +49,12 @@ namespace driving {
 
 using engine::Real;
 
-// How many junctions ahead a driver plans for at once. At the lab's look-ahead (about 50-90 m) two or three junctions of
-// a tight downtown grid are in view; four leaves room. A junction past the fourth is planned for once a nearer one is
-// cleared (counted: CapCounts::junctionPlansCut).
-constexpr std::size_t kMaxJunctionPlans = 4;
+// How many junctions ahead a driver plans for at once. A driver looks ahead its junction look-ahead time (10 s in the
+// lab): at 14 m/s that is 140 m, and where the lab's lights stand 25 m apart (junctions 14, 11, 110 and 8: connectors of
+// 20 m and links of 6 m) five junctions were in view with the one under the car, which cut 35 plans in five minutes once
+// the lights' green wave let cars run that fast (issue #264). Six leaves room. A junction past the last is planned for
+// once a nearer one is cleared (counted: CapCounts::junctionPlansCut).
+constexpr std::size_t kMaxJunctionPlans = 6;
 // How many waiting points a plan keeps: the line and up to three places inside the junction. A connector with more gaps
 // a car fits in keeps the first ones (counted: CapCounts::waitingPointsCut); the last kept is then its last waiting
 // point, which errs toward committing late.
@@ -92,6 +94,55 @@ struct GiveWayJudgement {
 };
 bool operator==(const GiveWayJudgement& a, const GiveWayJudgement& b);
 
+// ROOM BEYOND A JUNCTION (issue #264, task D5; room.h does the work): whether the driver has asked for, been granted or
+// been refused room on the lane its connector joins.
+enum class RoomState : uint8_t {
+    None,      // not asked (or given back, or used: its front reached the lane)
+    Asked,     // asked at this tick's decision; settled in this tick's settle step
+    Granted,   // granted: it may enter; counted against the lane's room until its front is on the lane
+    Refused,   // refused at its last ask: it waits at the line and asks again at its next decision
+};
+constexpr uint8_t kRoomStateCount = 4;
+const char* roomStateWords(RoomState s);   // "not asked", "asked", "granted", "refused"
+
+// WHY ROOM WAS REFUSED.
+enum class RoomRefusal : uint8_t {
+    None,
+    NoRoom,          // the room beyond is shorter than the car needs (behind a car's tail, or taken by cars on the way in)
+    CarAheadFirst,   // a car ahead of it in its lane, short of the same line, has not been granted room yet
+    LightsAhead,     // its body will not fit before the next junction, whose light for its turn will not let it in (green
+                     // or yellow) from when it gets there until the rule set's room_arrival_slack later
+    MustStopAhead,   // its body will not fit before the next junction, where it must stop (a stop sign, an all-way stop)
+    TooShort,        // its body will not fit before any of the next room_through_junctions junctions' lines: the road
+                     // has a stretch no vehicle of this length can ever stop in (a road-data problem)
+    NotPlanned,      // its way or its plans do not reach far enough to say where it would stop
+    NoStopToWait,    // it asked to wait inside, but beyond the junction there is no stretch it could stop in (it would
+                     // have to pass through the next junction too, which waiting inside cannot promise)
+};
+constexpr uint8_t kRoomRefusalCount = 8;
+const char* roomRefusalWords(RoomRefusal r);   // in words, for the driver card and the lab's printout
+
+// WHAT A DRIVER REMEMBERS OF ITS CLAIM ON THE ROOM BEYOND ONE JUNCTION (room.h). A grant is a remembered fact: it holds
+// until the car's front reaches the lane (then the car is counted where it is), or the driver gives it back (it decides
+// to give way at the line, or its approach starts afresh at a red), or the plan goes.
+struct RoomClaim {
+    RoomState state = RoomState::None;
+    bool asked = false;              // it has asked here at least once ...
+    uint64_t askedTick = 0;          // ... first at this tick (cars that asked earlier are granted first)
+    bool toWaitInside = false;       // the last ask was to pull forward and wait inside (D4), not to go through
+    bool chained = false;            // granted as part of the claim made at the junction before: the car's body would not
+                                     // fit between the two, so it passes through this one without stopping
+    uint8_t through = 0;             // granted or refused at the head of a claim: how many junctions it covers (1: this)
+    engine::PathId lane;             // granted: the lane its connector joins, which the grant counts against ...
+    double laneAt = 0;               // ... until its front's odometer reaches this (the lane's start)
+    Real need = 0;                   // metres: its length (and trailer) and a standstill gap
+    Real had = 0;                    // metres of room there were at its last ask
+    RoomRefusal refusal = RoomRefusal::None;   // refused: why ...
+    CarId by;                        // ... behind whose tail (NoRoom, CarAheadFirst), when a car is to blame
+    engine::JunctionId at;           // ... and at which junction (LightsAhead, MustStopAhead, TooShort)
+};
+bool operator==(const RoomClaim& a, const RoomClaim& b);
+
 // ONE JUNCTION AHEAD, as a driver plans for it.
 struct JunctionPlan {
     engine::JunctionId junction;
@@ -126,6 +177,8 @@ struct JunctionPlan {
     GiveWayDecision decision = GiveWayDecision::Undecided;
     uint8_t mindChanges = 0;
     GiveWayJudgement judged;
+    // ROOM BEYOND (issue #264, room.h): its claim on the room on the lane its connector joins.
+    RoomClaim room;
 
     // Where along the connector the car is committed once its front is past it.
     Real lastWaitingPoint() const { return waitingCount > 0 ? waitingAt[waitingCount - 1] : Real(0); }
@@ -198,6 +251,9 @@ uint64_t junctionPlansHash(const JunctionPlans& plans);
 // to rest at the line.
 std::string describeJunctionPlans(const engine::LaneGraph& roads, const RightOfWay& row, const Car& car,
                                   const JunctionPlans& plans, double now = -1);
+// ITS CLAIM ON THE ROOM BEYOND one junction, in words: "granted: 6.8 m on lane 1083 (there were 14.2 m)", "refused: no
+// room beyond, behind car 40 (I need 6.8 m; there are 1.6 m)".
+std::string describeRoom(const JunctionPlan& plan);
 // WHAT A DRIVER DECIDED about one junction, in words: "giving way to car 12 on the far turn from the north (connector
 // 345), at crossing point 6789: a gap of 2.1 s; I need 4.1 s; its arrival at the line ... t=40.2 s, ...".
 std::string describeGiveWay(const engine::LaneGraph& roads, const RightOfWay& row, const JunctionPlan& plan,

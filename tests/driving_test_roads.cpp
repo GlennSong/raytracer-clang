@@ -251,7 +251,12 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
     // Half the junction box's side: the road's half width (every lane each way) and the kerb corner.
     const Real halfBox = Real(lanes) * spec.laneWidth + spec.cornerRadius;
     const Real spacing = spec.roadLength + 2 * halfBox;
-    auto centre = [&](uint32_t r, uint32_t c) { return Vec2(Real(c) * spacing, Real(r) * spacing); };
+    // Each column's x: the east-west roads between columns c and c + 1 are spec.columnRoadLengths[c] long where given.
+    std::vector<Real> columnX(cols, 0);
+    for (uint32_t c = 1; c < cols; ++c)
+        columnX[c] = columnX[c - 1] + 2 * halfBox +
+                     (c - 1 < spec.columnRoadLengths.size() ? spec.columnRoadLengths[c - 1] : spec.roadLength);
+    auto centre = [&](uint32_t r, uint32_t c) { return Vec2(columnX[c], Real(r) * spacing); };
     // The junction one step from (r, c) heading h, when it is on the grid.
     auto step = [&](uint32_t r, uint32_t c, Heading h, uint32_t& nr, uint32_t& nc) {
         const Vec2 d = headingVector(h);
