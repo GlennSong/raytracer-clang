@@ -17968,10 +17968,13 @@ lanes. The owner wants to watch it drive the lab.
   tier pass. Their old trip, bays and in-between state are cleared at the hand-over. After every tick the new model's
   host (`city_driving.h`, `DrivingHost`) writes each car's place into its agent and vehicle (the middle of the body from
   `carPose`, the rear-to-front direction, speed, a state label), so drawing, the walkers' car checks, the map and the
-  camera read it unchanged. **v1 is unchanged, bit for bit:** a state hash over every agent and vehicle
+  camera read it unchanged. **v1 is unchanged:** a state hash over every agent and vehicle
   (`tests/test_traffic_lab_v2.cpp`, `level_v1_state_is_unchanged`) on the lab run as v1 for 2 minutes at 60 steps a
-  second, and on river_town (8,890 agents: walkers, buses, cabs, tiers) for a minute, is identical before and after
-  this change at every print.
+  second, and on river_town (8,890 agents: walkers, buses, cabs, tiers) for a minute, was identical before and after
+  this change at every print -- compared by hand then. (Corrected by ADR-0410, #284: "bit for bit" claimed more than
+  was checked. What is pinned now: the test CHECKS four hashes on each level against numbers written in it, taken on
+  this machine's build; the old model's code is shown unchanged since the rebuild began by `git diff 3e86063c..HEAD --
+  src/apps/citysim/`, which adds only the new model's host and the seam's `drivenByV2` exclusions.)
 - **Trips anywhere** (`driving/trip_places.h`): places are on the lanes (never a connector) of parts with at least 8
   lanes, for the vehicle class and the way routes are found; a car is put down with room round it (4 m at load, 70 m
   while traffic moves) and sent to a place in its own part, so a route always exists; the picks are stateless hashes
@@ -18986,4 +18989,105 @@ same turn). It is the owed protected arrow for starved far turns (ADR-0406, ADR-
 the limit is left at 180 s and the test fails on that one check. In the congested test, a 12 m bus's straight body cuts
 inside a tight turn and touches a car on a path beside it, outside every shared stretch (the same with all of #284's fixes
 off): review item 9, long-vehicle swing, its own task; the test prints these and checks the rest.
+
+## ADR-0410 — Cars that wait too long: protected far turns where the road warrants them, ways on the lights never serve closed, a driver refused room for long takes another way; and tests that can fail (#284)
+
+Words: a FAR TURN crosses the oncoming traffic; it is PROTECTED when it goes only on its own green arrow -- a green in a
+phase where nothing it would give way to is green (traffic engineers' "protected-only" phasing) -- and PERMITTED when it
+goes on the plain green, giving way. A WARRANT is a condition that, when it holds, calls for something (here: protection).
+A CHAIN is a run of turns taken one after another through junctions too close together for a car to stop between
+(ADR-0407); a WAY ON is the turns after the first of a chain. A STATE HASH is one number folded over everything the model
+holds; PINNED means a test checks it against a number written in the test.
+
+**Context.** The milestone-1 review (#284) left two liveness faults and a list of tests that could hardly fail. (1) At
+six-approach junction 21 a permitted far turn gave way to a steady oncoming stream through two and three 7 s greens and
+stood 176-200 s; the five-minute test was knowingly red on its longest stand (ADR-0409). (2) In the soak, car 82 stood
+1,129 s at junction 106: its claim for room had to pass through junction 87 to junction 88's light, which never let a car
+from rest at 106 in; load-time closures closed only whole turns, and the near turn at 88 was fine, so the turn at 106
+stayed open, and the car, a leaf in the wait-for graph, was in no loop and nothing reported it.
+
+**Decision.**
+- **A. Protected far turns, where the road warrants them (data).** A control with lights may list WARRANTS
+  (`protected_when`, `rule_set.h ArrowWarrant`): each asks road facts worked out at load for one turn -- how many lanes of
+  the approaches facing it carry straight-on traffic across its path, their highest limit, how many approaches the
+  junction has -- and a `gives_way_on_green` turn for which one holds is protected at that junction: the phase builder
+  (`right_of_way.cpp`) treats it as conflicting with what it would give way to, so the colouring gives it a green of its
+  own approach's with nothing it crosses from the approach facing it. (A turn that meets nothing oncoming is not marked.)
+  The lab's warrants: oncoming limit above 45 mph (state and city guides, unverified: CREDITS), and five or more
+  approaches ([~] after the FHWA Signal Timing Manual's factors, 4.3.4 and 4.3.6: at such junctions every approach's green
+  is short, so a permitted far turn finds no gap). Left out on purpose: "three or more oncoming lanes" -- the sources
+  disagree, and in the lab it would protect nearly every arterial far turn (their oncoming arterials carry three lanes).
+  Result: 23 far turns protected, at junctions 0, 21, 75, 91 and 99 (the five with five or more approaches); phases and cycle
+  before -> after: junction 0 4/59.5 s -> 5/73.6 s, 21 5/77.4 s -> 6/92.8 s, 75 5/77.2 s -> 6/89.3 s, 91 4/60.0 s ->
+  5/74.9 s, 99 4/55.3 s -> 5/68.2 s; every other light unchanged (all lights: cycles 40.0-92.8 s, was 40.0-77.4 s; 95
+  phases over 38 junctions, was 90). The programmes pass `checkSignalProgrammes` (no two crossing movements green together
+  unless one may give way); yellow and all-red follow the ITE formulas as before. Nothing in the lane graph or the plan
+  changed: no lane graph version bump, no road mesh change. The `arrow` mechanism (a leading arrow, then the plain green)
+  is kept as it was, unused by the lab: tried first, with an arrow phase of `arrow_when` warrants, it added a 7 s green per
+  arrow phase and gave junction 75 nine phases and a 106 s cycle.
+- **B. Ways on the lights never serve are closed, the chain and not the turn** (`room.h chainsClosedForRoom`, `route.h
+  ClosedChains`). Every chain the room step's load check finds never (or too seldom) letting a class through -- the road
+  ends, everyone stops first, no stretch it fits in, the lights never line up -- is kept per class as a small tree of
+  turns; the router's search carries "partway through a closed chain" as part of its state (a node is a path and a place
+  in that tree) and never takes the turn that completes one. A turn with no way on at all stays closed whole, as before.
+  31 chains closed over the classes (152 whole turns, 150 before). The way a car follows prefers the connector the search
+  took for each turn (`bestStepOn`), so the driven way is the routed one.
+- **C. A driver refused room for long asks for another way** (`Driving::askAnotherWay`; design 9.6 point 2). Refused at
+  the junction it waits at, having asked there for the rule set's `room_refused_another_way` (the lab: 60 s, [~] under a
+  cycle of its longest lights), it asks the router for a way from where it is that does not take that turn, and takes it
+  only if its first turn's light shows green (a driver gives up its turn for one it can take now, not for another red);
+  otherwise it waits on and asks again no sooner than that long after. A route change, never a teleport or a push
+  through. Rule sets with 0 never ask (the unit tests' room staging).
+- **D. A wait that can never end is reported** (`Driving::waitCanNeverEnd`, the measurements' `endless_waits` row,
+  target none): a car refused room for a reason that cannot change -- its body fits nowhere within
+  room_through_junctions, everyone stops first ahead, its claim's chain is one closed as never lining up, or its turn is
+  closed whole. The router avoids every such way, so a spell here points at a car routed or put down past them.
+- **E. Coordinating two close lights as one programme** was considered for the class-turns closed for room: the
+  too-seldom pairs come from five places -- junctions 106/87/88 (3.8-6.1 m apart: every class), 75/90, 91/100, 27/28,
+  38/40 (10-12 m: buses and fire engines only) -- 25 pairs, six of them never in turn. Junctions 3.8 m apart are one
+  junction in all but name (a road-data question for the builder); a joint programme for the others means planning phases
+  across two junctions. Not small; owed (the light clock's coordination, ADR-0406).
+- **F. Tests that can fail.** The old model's state hashes are CHECKED against numbers in `level_v1_state_is_unchanged`
+  (ADR-0399 corrected). "Standing with no reason" now also counts a reason that no longer applies (`waitReasonHolds`:
+  the car ahead is on its way, the car it gives way to is announced on a crossing point ahead of it at its decision, the
+  stop it holds is not behind it, a plain stop at a lit line is not one whose lamp has shown green since before its last
+  decision; a car the host took off the road after the tick that named it still counts as a reason). A `no_progress` row
+  catches a car on a trip that advanced less than `progress_least` (2 m) over `progress_window` (60 s) and is not moving
+  off, unless held by a reason that still applies. Same-every-run compares every tick; the five-minute run pins its final
+  state hash (`kFiveMinuteStateHash`: a change that moves the traffic updates it and says why). The soak has its own
+  limit on drivers changing their minds twice. The host registers counting lines at every lit junction's line, so the
+  queue rows have data; the first-car row then read 0.19 s against the plan's 1.5-2.5 s, which is START-UP LOST TIME
+  counted from the green, not from a car beginning to move -- so that row keeps its figure with no target until it is
+  counted from the green and drivers have a start-up reaction. The boundary test follows includes through an allow-list
+  of engine headers. `CitySim::build` starts the new model and its host over (a rebuild used to keep the old seats and
+  then refuse the hand-over).
+
+- **G. A chain claimed behind a car that stops between** (found by the one soak run of this work). A claim through close
+  junctions now waits, as at its own line, for a car ahead of it on its way that will reach a junction it passes through
+  first and holds no grant there (`RoomRefusal::CarAheadFirst` at that junction). Before, a pickup granted through
+  junctions 14 and 11 behind a moped short enough to stop between them took the room beyond 11 the moped then needed:
+  the moped waited at 11 for room behind the pickup's tail, the pickup behind the moped, from t = 456 s for good (a
+  two-car gridlock, the pickup's tail in 14's box).
+
+**Measured** (the lab, 300 drivers; before = 7021e1b8):
+
+| five minutes | before | after |
+|---|---|---|
+| trips arrived | 420 | 425 |
+| mean speed, every car (m/s) | 8.82 | 8.85 |
+| ... connectors / arterial / collector / freeway / local lanes | 6.04 / 3.88 / 9.33 / 12.91 / 3.33 | 6.12 / 4.20 / 9.27 / 12.91 / 3.21 |
+| longest stand | 200 s (car 252, far turn at 21, red) | 92 s (car 257, room beyond 75) |
+| longest red-light stand | 200 s | 80 s (car 66) |
+| mean wait at lights | 6.7 s | 7.0 s |
+| bodies touching / entries on red / loops | 0 / 0 / 0 | 0 / 0 / 0 |
+| the model's tick, mean (worst) | 0.411 ms (0.97) | 0.411 ms (0.92) |
+| measuring it | 0.400 ms | 0.419 ms |
+
+The one soak run (before G; the soak is otherwise left to the end of the milestone): windows' trips 425/481/483/482/466/
+471 (2,808; was 2,844), no touching, no deadlock, nobody waiting with no reason or with a wait that can never end, car 82's
+wait gone; but G's gridlock from 456 s (one car in a box 1,346 s), one entry on red at 808.78 s (car 128 onto connector
+2154 at junction 14, inside that jam; not chased), and the queue-headway row failing at 4.66 s a car over 5 gaps (the lab's
+own figure has said 7 s a car since #261; the row only now has lines to read). With G, 500 s of the lab show no loop; the
+soak's limits (two of the longest cycle, 185.6 s) are UNVERIFIED until the milestone's soak. The same build shows stands
+of up to 151 s between 300 and 500 s ("no room beyond"), past the five-minute limit's window.
 

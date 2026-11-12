@@ -84,6 +84,9 @@ struct Trip {
     // How far along the route the car has got: the first leg its front can be on (route.h's `fromLeg`). Moved on at
     // each decision; back to 0 whenever the trip is routed again.
     uint32_t legReached = 0;
+    // ANOTHER WAY (issue #284): the tick its driver last asked for another way, refused room at a junction for longer
+    // than the rule set's room_refused_another_way (0: never). It asks again no sooner than that long after.
+    uint64_t askedAnotherWayTick = 0;
     // THE WAY AHEAD as of the driver's last decision (route.h wayAhead): the paths the car moves along until it decides
     // again, its path at that moment first. The move step never takes the car past the end of the last of them.
     WayAhead way;
@@ -163,6 +166,10 @@ struct JunctionPlanCounts {
     uint64_t switchedWhileHeldForRoom = 0;
     // Decisions to stop at a crossing point on a LANE, giving way to a car the resolver put first there (issue #284).
     uint64_t gaveWayOnALane = 0;
+    // ANOTHER WAY (issue #284): drivers refused room at a junction for longer than room_refused_another_way that asked
+    // the router for a way avoiding that turn, and of them, those given one (the rest keep their way and wait on).
+    uint64_t askedAnotherWay = 0;
+    uint64_t tookAnotherWay = 0;
     // The gaps taken after giving way: the smallest and largest gap had, and the smallest gap needed (seconds).
     Real smallestGapTaken = 0, largestGapTaken = 0, smallestGapNeeded = 0;
 };
@@ -354,6 +361,19 @@ public:
     // WHO IS WAITING FOR WHOM, from the cars as they stand now (wait_graph.h), and the same as plain text with the
     // rules named.
     WaitReport waitReport() const;
+    // WHETHER THE REASON A WAITING CAR NAMES STILL APPLIES to it now (issue #284: before, a car at rest always named
+    // something, so "waiting for no reason" could hardly be found): the car it is behind is on the road and on its way
+    // ahead; the car it gives way to is announced on a crossing point ahead of it; the car whose tail bounds its room is
+    // the one its refused claim names; the place it stops by is still held and not behind it; a plain stop at a line
+    // whose lights run is not one whose lamp has shown green since before the driver's last decision; the end of its
+    // way is the end. False (with what failed, when `why` is given) is waiting for no reason: waitReport lists the car so.
+    bool waitReasonHolds(const Car& c, std::string* why = nullptr) const;
+    // A WAIT THAT CAN NEVER END (issue #284): the car stands refused room beyond the nearest junction it waits at for a
+    // reason that cannot change -- its body fits nowhere within room_through_junctions, everyone stops first at the next
+    // junction, or the turns its claim passes through are a way on the lights never let it through (route.h
+    // ClosedChains::never), or a turn closed to its class whole. The router avoids all of these, so a car found here was
+    // put down or routed past them some other way (a host's placement, a stale route); the measurements report it.
+    bool waitCanNeverEnd(const Car& c, std::string* why = nullptr) const;
     std::string describeWaiting(const WaitReport& report) const;
     // The graph's regulation kinds bound to the rule set's devices (useRules), for code that reads facts the way a
     // driver does (measure.h).
@@ -430,6 +450,11 @@ private:
     using LineTimes = std::array<std::pair<engine::PathId, Real>, kMaxJunctionPlans>;
     // The trip was routed again: its plans go at once (each noted).
     void dropPlansForNewRoute(Trip& t);
+    // ANOTHER WAY (issue #284; design 9.6 point 2): a driver refused room at the nearest junction it waits at, having asked
+    // there for longer than room_refused_another_way (and not asked for another way that long), asks the router for a
+    // way from where it is that does not take that turn. Found, the trip takes it (its plans dropped, as any new route);
+    // not found, it keeps its way and waits on. Never a push through: the car only ever changes where it means to go.
+    void askAnotherWay(Car& c, Trip& t);
     // Closes to each class's routes the turns it could never (or too seldom) be granted room through (room.h
     // turnsClosedForRoom; none without the room step). Run when the rules or the vehicle classes are handed over.
     void closeTurnsForRoom();

@@ -448,6 +448,17 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     nav_ = &graph;
     // "There and back by car" for the whole build, once (engine::stronglyConnected).
     const std::vector<int> buildCarComp = engine::stronglyConnected(graph, /*onFoot=*/false);
+    // THE NEW DRIVING MODEL STARTS OVER TOO (issue #284): the agents and vehicles it was handed are about to go. Its host
+    // forgets them (seats kept would name new agents as the new model's and keep them from the old one), and the model
+    // is made afresh on the same road with the same vehicle classes: no cars, no trips, no rules until startDrivingV2.
+    if (drivingV2_) {
+        drivingV2_->attachMeasurements(nullptr);
+        driving::VehicleClasses classes = drivingV2_->vehicleClasses();
+        const engine::LaneGraph* roads = drivingV2_->roads();
+        drivingV2_.emplace(roads);
+        drivingV2_->setVehicleClasses(std::move(classes));
+    }
+    drivingHost_.reset();
     agents_.clear();
     vehicles_.clear();
     sensed_.clear();

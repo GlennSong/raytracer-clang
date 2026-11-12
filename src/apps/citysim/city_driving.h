@@ -73,6 +73,11 @@ class DrivingHost {
 public:
     // Whether `begin` has run: the new model drives some agents.
     bool active() const { return active_; }
+    // BACK TO NOTHING HANDED OVER (issue #284): no seats, no places, counts and costs at zero, a fresh measurements table.
+    // CitySim::build calls it, as a rebuild makes new agents and vehicles: seats kept from the last build would name
+    // agents that are not the new model's, and keep them from the old one. The host detaches the old measurements from
+    // its Driving first.
+    void reset();
 
     // HAND OVER: the new model drives the cars of `who` (agent indices, each a driver with a vehicle), each as the
     // driving class of its vehicle's fleet slot (`classOfSlot`: per slot, an index into d.vehicleClasses(), or -1 for

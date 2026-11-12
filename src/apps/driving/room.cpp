@@ -163,6 +163,7 @@ bool registerRoomFacts(FactRegistry& registry, std::vector<std::string>* problem
     reader.numbers.push_back(need(kNumberRoomToWaitInside, UnitFamily::Ratio));
     reader.numbers.push_back(need(kNumberRoomArrivalSlack, UnitFamily::Time));
     reader.numbers.push_back(need(kNumberRoomCyclesThrough, UnitFamily::Ratio));
+    reader.numbers.push_back(need(kNumberRoomAnotherWay, UnitFamily::Time));
     std::string why;
     if (!registry.addReader(reader, &why)) {
         ok = false;
@@ -174,10 +175,10 @@ bool registerRoomFacts(FactRegistry& registry, std::vector<std::string>* problem
 bool hasRoomStep(const FactRegistry& registry) { return registry.findReader(kRoomReaderName) != nullptr; }
 
 bool readRoomNumbers(const RuleSet& rules, RoomNumbers& out, std::string* why) {
-    constexpr std::size_t kCount = 7;
+    constexpr std::size_t kCount = 8;
     const char* names[kCount] = {kNumberStandstillGap,        kNumberAtLineWithin,      kNumberRoomThroughJunctions,
                                  kNumberRoomClearOfCrosswalk, kNumberRoomToWaitInside, kNumberRoomArrivalSlack,
-                                 kNumberRoomCyclesThrough};
+                                 kNumberRoomCyclesThrough,    kNumberRoomAnotherWay};
     double values[kCount] = {};
     for (std::size_t i = 0; i < kCount; ++i) {
         const Number* n = rules.findNumber(names[i]);
@@ -195,6 +196,7 @@ bool readRoomNumbers(const RuleSet& rules, RoomNumbers& out, std::string* why) {
     out.toWaitInside = values[4] != 0;
     out.arrivalSlack = static_cast<Real>(std::max(0.0, values[5]));
     out.cyclesThrough = static_cast<Real>(std::max(0.0, values[6]));
+    out.anotherWayAfter = static_cast<Real>(std::max(0.0, values[7]));
     return true;
 }
 
@@ -371,13 +373,16 @@ void waysThrough(const engine::LaneGraph& roads, const RightOfWay& row, const Ru
         const Real nextLine = chain.lineAt[chain.count - 1] + roads.paths[lastTurn.index].length + s.length;
         for (uint32_t k = last.next.first; k < last.next.end(); ++k) {
             const engine::PathId next = roads.nextPaths[k];
-            if (stopsEveryoneFirst(roads, row, rules, roadRules, next, numbers.atLineWithin)) {
-                if (!visit(chain, ChainEnds::Never)) return false;
-                continue;
-            }
             chain.turns[chain.count] = next;
             chain.lineAt[chain.count] = nextLine;
             ++chain.count;
+            if (stopsEveryoneFirst(roads, row, rules, roadRules, next, numbers.atLineWithin)) {
+                // (the chain handed over ends with the turn where everyone stops first: issue #284 closes that chain)
+                const bool goOn = visit(chain, ChainEnds::Never);
+                --chain.count;
+                if (!goOn) return false;
+                continue;
+            }
             const bool goOn = walk();
             --chain.count;
             if (!goOn) return false;
@@ -427,6 +432,34 @@ std::vector<engine::PathId> turnsClosedForRoom(const engine::LaneGraph& roads, c
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
     return out;
+}
+
+ClosedChains chainsClosedForRoom(const engine::LaneGraph& roads, const RightOfWay& row, const RuleSet& rules,
+                                 const RoadRules& roadRules, const RoomRoads& layout, const RoomNumbers& numbers,
+                                 bool lightsRun, Real comfortableSideAccel, const VehicleClass& cls,
+                                 const std::vector<engine::PathId>& closedTurns) {
+    std::vector<std::vector<engine::PathId>> chains;
+    std::vector<uint8_t> never;
+    const Real need = roomNeeded(cls, numbers.standstillGap);
+    for (uint32_t l = 0; l < roads.paths.size(); ++l) {
+        const engine::PathId lane(l);
+        const std::pair<const engine::PathId*, const engine::PathId*> in = layout.connectorsInto(lane);
+        if (in.first == in.second || roads.paths[l].kind != engine::PathKind::Lane) continue;
+        const StretchShape s = stretchFrom(roads, lane);
+        if (s.length - layout.roomFrom[l] >= need) continue;
+        for (const engine::PathId* c1 = in.first; c1 != in.second; ++c1) {
+            if (std::binary_search(closedTurns.begin(), closedTurns.end(), *c1)) continue;   // closed whole already
+            waysThrough(roads, row, rules, roadRules, layout, numbers, lightsRun, comfortableSideAccel, cls, *c1,
+                        [&](const TurnChain& chain, ChainEnds ends) {
+                            if (ends == ChainEnds::Through || chain.count < 2) return true;
+                            chains.push_back(std::vector<engine::PathId>(chain.turns.begin(),
+                                                                         chain.turns.begin() + chain.count));
+                            never.push_back(ends == ChainEnds::Never ? 1 : 0);
+                            return true;
+                        });
+        }
+    }
+    return buildClosedChains(std::move(chains), never);
 }
 
 RoomRoadReport reportRoomRoads(const engine::LaneGraph& roads, const RightOfWay& row, const RuleSet& rules,
@@ -1104,6 +1137,20 @@ void RoomLedger::settle(const RoomWorld& world, std::vector<RoomSeat>& seats) {
                 a.granted = false;
                 a.refusal = RoomRefusal::NoStopToWait;
                 a.at = engine::JunctionId();
+            }
+            // A CLAIM THROUGH CLOSE JUNCTIONS waits, as at its own line, for a car ahead of it on its way that will reach
+            // a junction it passes through first and holds no grant there (issue #284: the soak's first gridlock. A pickup
+            // granted through junctions 14 and 11 behind a moped -- short enough to stop between them -- took the room
+            // beyond 11 the moped then needed; the moped waited at 11 for room behind the pickup's tail, the pickup behind
+            // the moped, for good.)
+            for (uint8_t j = 1; a.granted && j < a.junctions && j < kMaxRoomJunctions; ++j) {
+                if (a.plans[j] >= plans.count) break;
+                const CarId first = aheadWithoutRoom(world, seats, seat, plans.plans[a.plans[j]]);
+                if (!first.valid()) continue;
+                a.granted = false;
+                a.refusal = RoomRefusal::CarAheadFirst;
+                a.by = first;
+                a.at = plans.plans[a.plans[j]].junction;
             }
         }
         r.had = a.room;

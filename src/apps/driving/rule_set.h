@@ -122,6 +122,37 @@ inline bool hasMovement(MovementMask mask, Movement m) { return (mask & (1u << s
 // The one thing a turn on red may have to do first, as the rule-set file writes it: come to a full stop.
 constexpr const char* kWordFullStop = "full_stop";
 
+// A WARRANT FOR A PROTECTED TURN (issue #284; ADR-0410): one condition on the road at a junction with lights under which
+// a movement that would go on the plain green giving way (`gives_way_on_green`, the far turn) goes ONLY ON ITS OWN GREEN
+// ARROW there: a green in a phase where nothing it would give way to from the approach facing it is green. Traffic
+// engineers decide this per approach from what they can count and see (FHWA Traffic Signal Timing Manual 2008, section
+// 4.3.6: volumes, the number of opposing through lanes, the cycle, the opposing speed, sight distance, crashes); the model
+// has the road alone, so a warrant asks only road facts, each worked out at load for one turn:
+//   - OPPOSING LANES: how many lanes of the approaches facing the turn carry straight-on traffic across its path;
+//   - OPPOSING LIMIT: the highest limit on those lanes (m/s);
+//   - APPROACHES: how many approaches the junction has.
+// Every condition a warrant gives must hold; a turn is protected when any one warrant does. A condition not given is not
+// asked. Numbers are converted when read (a limit written in mph is stored in m/s).
+struct ArrowWarrant {
+    std::string name;                    // what it is for, in words
+    std::string source;                  // where it came from
+    bool hasSource = false;
+    uint32_t opposingLanesAtLeast = 0;   // 0: not asked
+    bool asksOpposingLimit = false;
+    double opposingLimitAbove = 0;       // m/s: the opposing limit must be above this
+    double writtenLimit = 0;             // ... as written
+    std::string limitUnit;               // ... and its unit
+    uint32_t approachesAtLeast = 0;      // 0: not asked
+};
+// The facts a warrant is asked of, for one turn (right_of_way.cpp works them out).
+struct ArrowFacts {
+    uint32_t opposingLanes = 0;
+    double opposingLimit = 0;   // m/s
+    uint32_t approaches = 0;
+};
+// Whether `w` holds for a turn with facts `f`.
+bool warrantHolds(const ArrowWarrant& w, const ArrowFacts& f);
+
 // ONE KIND OF JUNCTION CONTROL (a row of the rule set's `control` table): the questions that settle two turns, and, for
 // a control with lights (one whose settle list asks `light`), how its turns are grouped into phases.
 struct ControlKind {
@@ -134,6 +165,10 @@ struct ControlKind {
     // Turns given their own green arrow: a phase of their own, before the phase their approach shares with the one facing
     // it, in which they go and what they meet waits.
     MovementMask arrow = 0;
+    // PROTECTED TURNS (`protected_when`): a `givesWayOnGreen` turn for which one of these warrants holds at a junction is
+    // protected there: it never shares a green with what it would give way to from the approach facing it, so the phases
+    // give it a green of its own (right_of_way.h). Empty: no turn is.
+    std::vector<ArrowWarrant> protectedWhen;
     // A turn that may be made on a red, giving way to everything (turn_on_red = { movement = ..., after = ... }).
     bool turnOnRed = false;
     Movement turnOnRedMovement = Movement::NearTurn;
@@ -178,7 +213,7 @@ struct RuleSet {
     const Number* findDefaultLimit(const std::string& roadClass) const;
     // Position of a rank name in `ranks` (0 goes first), or kNoRank.
     int rankIndex(const std::string& rankName) const;
-    // How many numbers (default limits among them) came without a source. A later check fails a real rule set when
+    // How many numbers (default limits and green-arrow warrants among them) came without a source. A later check fails a real rule set when
     // this is not zero.
     std::size_t unsourcedNumberCount() const;
 };

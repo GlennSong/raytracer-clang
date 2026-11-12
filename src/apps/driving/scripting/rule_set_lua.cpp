@@ -46,6 +46,10 @@ constexpr const char* kKeySettle = "settle";
 constexpr const char* kKeyEveryoneStops = "everyone_stops";
 constexpr const char* kKeyGivesWayOnGreen = "gives_way_on_green";
 constexpr const char* kKeyArrow = "arrow";
+constexpr const char* kKeyProtectedWhen = "protected_when";
+constexpr const char* kKeyOpposingLanes = "opposing_lanes";
+constexpr const char* kKeyOpposingLimitAbove = "opposing_limit_above";
+constexpr const char* kKeyApproaches = "approaches";
 constexpr const char* kKeyTurnOnRed = "turn_on_red";
 constexpr const char* kKeyMovement = "movement";
 constexpr const char* kKeyAfter = "after";
@@ -106,6 +110,101 @@ protected:
             } else {
                 out.push_back(m);
             }
+        }
+        return ok;
+    }
+
+    // A whole count of at least one under `key` in the table at `table` (0 when absent). False (reported) on a fault.
+    bool countField(int table, const std::string& path, const char* key, uint32_t& out) {
+        const int top = lua_gettop(L);
+        const int v = pushField(table, key);
+        bool ok = true;
+        if (!lua_isnil(L, v)) {
+            const double d = lua_type(L, v) == LUA_TNUMBER ? lua_tonumber(L, v) : 0;
+            if (lua_type(L, v) != LUA_TNUMBER || !(d >= 1) || d != std::floor(d) || d > 1e6) {
+                fail(path + "." + key, "is " + describe(v) + ", expected a whole number of at least 1");
+                ok = false;
+            } else {
+                out = static_cast<uint32_t>(d);
+            }
+        }
+        lua_settop(L, top);
+        return ok;
+    }
+
+    // protected_when: a list of warrants for a protected turn (rule_set.h ArrowWarrant), each
+    // { name = "...", opposing_lanes = N, opposing_limit_above = { v, unit = "..." }, approaches = N, source = "..." }
+    // with at least one condition. False (reported) on any fault.
+    bool arrowWarrants(int idx, const std::string& path, std::vector<ArrowWarrant>& out) {
+        if (!lua_istable(L, idx)) {
+            fail(path, "is " + describe(idx) + ", expected a list of warrants");
+            return false;
+        }
+        bool ok = true;
+        const lua_Integer n = static_cast<lua_Integer>(lua_rawlen(L, idx));
+        if (n == 0) {
+            fail(path, "is empty, expected at least one warrant (leave it out when no turn is protected)");
+            return false;
+        }
+        for (lua_Integer i = 1; i <= n; ++i) {
+            const int top = lua_gettop(L);
+            lua_rawgeti(L, idx, i);
+            const int wt = lua_gettop(L);
+            const std::string wPath = path + "[" + std::to_string(i) + "]";
+            if (!lua_istable(L, wt)) {
+                fail(wPath, "is " + describe(wt) + ", expected a warrant table");
+                ok = false;
+                lua_settop(L, top);
+                continue;
+            }
+            checkKeys(wt, wPath, {kKeyName, kKeyOpposingLanes, kKeyOpposingLimitAbove, kKeyApproaches, kKeySource});
+            ArrowWarrant w;
+            const int nm = pushField(wt, kKeyName);
+            if (!stringAt(nm, w.name) || w.name.empty()) {
+                fail(wPath + "." + kKeyName, "is " + describe(nm) + ", expected what the warrant is for, in words");
+                ok = false;
+            }
+            lua_settop(L, wt);
+            if (!countField(wt, wPath, kKeyOpposingLanes, w.opposingLanesAtLeast)) ok = false;
+            if (!countField(wt, wPath, kKeyApproaches, w.approachesAtLeast)) ok = false;
+            const int lim = pushField(wt, kKeyOpposingLimitAbove);
+            const std::string limPath = wPath + "." + kKeyOpposingLimitAbove;
+            if (lua_istable(L, lim)) {
+                checkKeys(lim, limPath, {kKeyUnit}, {std::to_string(kNumberValueSlot)});
+                double factor = 0;
+                UnitFamily family = UnitFamily::Ratio;
+                bool limitOk = readUnit(lim, limPath, w.limitUnit, factor);
+                if (limitOk && unitFamily(w.limitUnit, family) && family != UnitFamily::Speed) {
+                    fail(limPath + "." + kKeyUnit, "is \"" + w.limitUnit + "\", which is " + unitFamilyWords(family) +
+                                                       "; a limit is a speed");
+                    limitOk = false;
+                }
+                lua_rawgeti(L, lim, kNumberValueSlot);
+                if (lua_type(L, -1) == LUA_TNUMBER && std::isfinite(lua_tonumber(L, -1)) && lua_tonumber(L, -1) >= 0) {
+                    w.writtenLimit = lua_tonumber(L, -1);
+                } else {
+                    fail(limPath + "[1]", "is " + describe(lua_gettop(L)) + ", expected the speed itself, not below 0");
+                    limitOk = false;
+                }
+                if (limitOk) {
+                    w.asksOpposingLimit = true;
+                    w.opposingLimitAbove = w.writtenLimit * factor;
+                } else {
+                    ok = false;
+                }
+            } else if (!lua_isnil(L, lim)) {
+                fail(limPath, "is " + describe(lim) + ", expected { speed, unit = \"...\" }");
+                ok = false;
+            }
+            lua_settop(L, wt);
+            readSource(wt, wPath, w.source, w.hasSource);
+            if (w.opposingLanesAtLeast == 0 && w.approachesAtLeast == 0 && !w.asksOpposingLimit) {
+                fail(wPath, "asks nothing; expected at least one of " + std::string(kKeyOpposingLanes) + ", " +
+                                kKeyOpposingLimitAbove + ", " + kKeyApproaches);
+                ok = false;
+            }
+            out.push_back(w);
+            lua_settop(L, top);
         }
         return ok;
     }
@@ -204,8 +303,8 @@ protected:
         std::vector<std::string> odd;
         keysOf(list, names, odd);
         for (const std::string& o : odd) fail(path, "has the key " + o + ", which is not a name; expected control names");
-        const std::vector<std::string> allowed = {kKeySettle, kKeyEveryoneStops, kKeyGivesWayOnGreen, kKeyArrow,
-                                                  kKeyTurnOnRed, kKeyWhenDark};
+        const std::vector<std::string> allowed = {kKeySettle,    kKeyEveryoneStops, kKeyGivesWayOnGreen, kKeyArrow,
+                                                  kKeyProtectedWhen, kKeyTurnOnRed, kKeyWhenDark};
         std::vector<ControlKind> controls;
         for (const std::string& name : names) {
             const int mark = lua_gettop(L);
@@ -245,6 +344,18 @@ protected:
                     else k.givesWayOnGreen = mask;
                 }
                 lua_settop(L, mark + 1);
+            }
+            {
+                const int v = pushField(ct, kKeyProtectedWhen);
+                if (!lua_isnil(L, v) && !arrowWarrants(v, controlPath + "." + kKeyProtectedWhen, k.protectedWhen))
+                    ok = false;
+                lua_settop(L, mark + 1);
+                if (!k.protectedWhen.empty() && k.givesWayOnGreen == 0) {
+                    fail(controlPath + "." + kKeyProtectedWhen,
+                         "gives warrants for protected turns, but the control's `" + std::string(kKeyGivesWayOnGreen) +
+                             "` names no movement that would otherwise go on the plain green giving way");
+                    ok = false;
+                }
             }
             {
                 const int v = pushField(ct, kKeyTurnOnRed);
@@ -287,7 +398,8 @@ protected:
                 lua_settop(L, mark + 1);
             }
             // Lights' tables mean nothing to a control with no lights: a slip of the pen, said so.
-            if (!k.hasLights() && (k.givesWayOnGreen != 0 || k.arrow != 0 || k.turnOnRed || !k.whenDark.empty())) {
+            if (!k.hasLights() && (k.givesWayOnGreen != 0 || k.arrow != 0 || !k.protectedWhen.empty() || k.turnOnRed ||
+                                   !k.whenDark.empty())) {
                 fail(controlPath, "gives " + std::string(kKeyGivesWayOnGreen) + ", " + kKeyArrow + ", " + kKeyTurnOnRed +
                                       " or " + kKeyWhenDark + ", which only a control whose settle list asks \"" +
                                       settleQuestionWord(SettleQuestion::Light) + "\" can use");

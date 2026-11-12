@@ -157,6 +157,7 @@ std::string rulesLua(const std::string& control, bool room = false, bool roomToW
                    ", unit = 'ratio', source = 'test' },\n"
                    "    room_arrival_slack = { 2, unit = 's', source = 'test: the lab' },\n"
                    "    room_cycles_through = { 1.5, unit = 'ratio', source = 'test: the lab' },\n"
+                   "    room_refused_another_way = { 0, unit = 's', source = 'test: never (the room tests stage waits)' },\n"
              : std::string();
     const std::string roomRule =
         room ? "    { name = 'no room beyond', when = 'no_room_beyond', give = { stop_at = 'room_line' } },\n"

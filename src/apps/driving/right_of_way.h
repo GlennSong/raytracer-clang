@@ -34,7 +34,12 @@
 // grouping is the old signal controller's (colouring what conflicts, ADR-0060, ADR-0109), applied first to whole
 // approaches (so a plain four-way gets its classic two phases), then to single turns: any turn that meets nothing
 // already green in a phase is added to it. A movement in the control's `arrow` list that would have to give way in its
-// phase gets an ARROW PHASE of its own just before it, green for those turns only. A turn the control allows on red
+// phase gets an ARROW PHASE of its own just before it, green for those turns only (then it may still go on the plain
+// green, giving way). PROTECTED TURNS (issue #284): a `gives_way_on_green` movement for which one of the control's
+// `protected_when` warrants holds at this junction (rule_set.h ArrowWarrant: the oncoming lanes it crosses, their
+// limit, the junction's approaches -- the road's facts) is never green with what it would give way to: the colouring
+// above treats the pair as conflicting, so the turn's green comes in a phase of its own approach's, with nothing it
+// crosses from the approach facing it (a green arrow; ConnectorRules::protectedTurn). A turn the control allows on red
 // (`turn_on_red`) is "red, may turn" in every phase where it is not green. Phases are in order; their timing and the clock
 // that walks them are signal_programme.h's (task D2, #261), which fills the timing fields below.
 //
@@ -145,6 +150,7 @@ struct ConnectorRules {
     uint32_t approach = kNoApproach;   // an index into RightOfWay::approaches
     uint32_t indexInJunction = 0;      // its place in its junction's connectors
     Movement movement = Movement::Straight;   // the connector's own stated turn (B2's), never worked out again
+    bool protectedTurn = false;        // it goes only on its own green arrow here (issue #284)
     engine::Range gaps;                // into RightOfWay::gaps: the clear stretches between its crossing stretches
     Real firstStretchAt = 0;           // where its first crossing stretch begins (its length when it has none)
     // WHERE A FAR TURN MAY WAIT INSIDE THE JUNCTION on its green, giving way (the road builder's Path::waitInsideAt, kept
@@ -164,6 +170,7 @@ struct RightOfWayCounts {
     uint32_t junctions = 0;
     uint32_t junctionsWithLights = 0;
     uint32_t phases = 0;               // over the junctions with lights
+    uint32_t protectedTurns = 0;       // turns going only on their own green arrow (rule_set.h ArrowWarrant)
     uint32_t meetings = 0;             // path-to-path crossing records answered
     uint32_t settledAtLoad = 0;        // ... where one gives way, at every phase
     uint32_t askWhileDriving = 0;      // ... asked while driving at some phase
@@ -195,6 +202,9 @@ struct RightOfWay {
     // What the loader noted, one plain line each, in id order: junctions whose control the rule set lacks, and pairs
     // left to the lower path id.
     std::vector<std::string> notes;
+    // EVERY PROTECTED TURN (issue #284), one line each in junction then connector order: the warrant that protected it and
+    // the facts it was asked of.
+    std::vector<std::string> protectedNotes;
 
     // The answer for crossing record `crossing` at phase `phase` of its junction (0 for a junction with no lights); null
     // for an unknown record, one with no answer, or a phase out of range.

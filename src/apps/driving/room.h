@@ -92,6 +92,7 @@
 #include "apps/driving/notice.h"          // FactRegistry, WayAhead
 #include "apps/driving/right_of_way.h"
 #include "apps/driving/road_rules.h"
+#include "apps/driving/route.h"           // ClosedChains: the ways on closed to a class
 #include "apps/driving/rule_set.h"
 #include "apps/driving/traffic_state.h"
 #include "apps/driving/vehicle_class.h"
@@ -115,6 +116,7 @@ constexpr const char* kNumberRoomClearOfCrosswalk = "room_clear_of_crosswalk";  
 constexpr const char* kNumberRoomToWaitInside = "room_to_wait_inside";          // ratio: 1, waiting inside needs room
 constexpr const char* kNumberRoomArrivalSlack = "room_arrival_slack";   // s: a light passed through lets it in this long
 constexpr const char* kNumberRoomCyclesThrough = "room_cycles_through";   // ratio: turns lined up less often close
+constexpr const char* kNumberRoomAnotherWay = "room_refused_another_way";  // s: refused this long, ask for another way
 // The name the room step reads the rule set under, in the problems buildRoadRules reports.
 constexpr const char* kRoomReaderName = "the room step (room beyond a junction, asked for and granted one car at a time)";
 
@@ -137,6 +139,7 @@ struct RoomNumbers {
     bool toWaitInside = true;        // room_to_wait_inside (not zero)
     Real arrivalSlack = 0;           // room_arrival_slack
     Real cyclesThrough = 0;          // room_cycles_through
+    Real anotherWayAfter = 0;        // room_refused_another_way
 };
 
 // Adds the facts above and the room step as a reader of its numbers. A host registers it after the junction step
@@ -200,6 +203,18 @@ std::vector<engine::PathId> turnsClosedForRoom(const engine::LaneGraph& roads, c
                                                const RuleSet& rules, const RoadRules& roadRules, const RoomRoads& layout,
                                                const RoomNumbers& numbers, bool lightsRun, Real comfortableSideAccel,
                                                const VehicleClass& cls);
+// THE WAYS ON CLOSED TO A CLASS for want of room (issue #284): where a turn stays open because SOME way on from it lets
+// the class through, every other chain of turns from it -- each taken straight after the one before, through junctions
+// too close for the class to stop between -- whose claim could never be granted (the road ends, everyone stops first, no
+// stretch it fits within room_through_junctions, or the lights on it never line up: `never`) or too seldom (less often
+// than once in room_cycles_through of the longest cycle). The soak's car 82 stood 1,129 s at junction 106 for one: on
+// through junction 87, straight on at 88 never lined up while the near turn at 88 did, so the turn at 106 stayed open.
+// The router never takes the turns of a closed chain one after another (route.h ClosedChains); `closedTurns` (sorted,
+// turnsClosedForRoom's) are left out, being closed whole.
+ClosedChains chainsClosedForRoom(const engine::LaneGraph& roads, const RightOfWay& row, const RuleSet& rules,
+                                 const RoadRules& roadRules, const RoomRoads& layout, const RoomNumbers& numbers,
+                                 bool lightsRun, Real comfortableSideAccel, const VehicleClass& cls,
+                                 const std::vector<engine::PathId>& closedTurns);
 
 // ---- Asking (the plan step) -----------------------------------------------------------------------------------------
 

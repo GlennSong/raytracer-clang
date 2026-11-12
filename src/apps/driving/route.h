@@ -47,6 +47,34 @@ constexpr Real kLaneChangeCostSeconds = 4.0;
 // "This lane cannot finish the route": no number of lane changes from it gets the car to its destination.
 constexpr uint32_t kCannotFinish = 0xFFFFFFFFu;
 
+// WAYS ON CLOSED TO A CLASS (issue #284; room.h chainsClosedForRoom): chains of turns, each taken straight after the one
+// before through junctions too close together for the class to stop between, that the class could never (or too
+// seldom) be granted room through -- the lights on the way never line up for a car arriving from rest at the first line.
+// The first turn alone may be fine (another way on from it is), so it is the CHAIN that is closed, not the turn. Kept as
+// a tree over the chains' turns: node 0 is the root (no chain under way); each node's children are the turns that can
+// follow it, sorted, and a node is CLOSED when the chain to it is. The router walks it as it takes turns (step).
+constexpr uint32_t kChainClosed = 0xFFFFFFFFu;
+struct ClosedChains {
+    struct Node {
+        engine::PathId turn;          // the turn taken to reach this node (none for the root)
+        uint32_t firstChild = 0;      // its children are nodes[firstChild, firstChild + childCount), sorted by turn
+        uint32_t childCount = 0;
+        bool closed = false;          // the chain ending here is closed to the class
+        bool never = false;           // ... and its lights never line up for it at all (not merely too seldom)
+    };
+    std::vector<Node> nodes;          // empty: nothing closed
+    uint32_t chains = 0;              // how many closed chains it holds
+
+    bool empty() const { return chains == 0; }
+    // THE STATE AFTER TAKING TURN `turn` in state `state`: the child for that turn (kChainClosed when the chain it
+    // completes is closed); 0 when no closed chain goes on that way (a chain under way that turns elsewhere is over).
+    uint32_t step(uint32_t state, engine::PathId turn) const;
+    // Whether the chain of turns `turns` (`count` of them, from its first) is closed, and whether it never lines up.
+    bool closedChain(const engine::PathId* turns, std::size_t count, bool* never = nullptr) const;
+};
+// BUILDS THE TREE from closed chains (each two turns or more; `never` per chain: its lights never line up at all).
+ClosedChains buildClosedChains(std::vector<std::vector<engine::PathId>> chains, const std::vector<uint8_t>& never);
+
 // A VEHICLE CLASS AS THE ROUTER SEES IT ON ONE GRAPH: its tag names turned into the graph's tag bits, its tightest
 // turn and its top speed. Built once per graph and class (bindRouteClass).
 struct RouteClass {
@@ -60,6 +88,8 @@ struct RouteClass {
     // turnsClosedForRoom: into a stretch it cannot stop in, with every way on through the next junction barred to it).
     // Driving fills it once it has the rules; bindRouteClass leaves it empty.
     std::vector<engine::PathId> closed;
+    // WAYS ON CLOSED to the class (above): a route never takes the turns of one in a row. Filled with `closed`.
+    ClosedChains closedChains;
 };
 
 // BINDS A CLASS TO A GRAPH: each of its tag names to the graph's bit for it. A tag the graph does not know is not an

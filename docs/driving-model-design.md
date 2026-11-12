@@ -1216,6 +1216,17 @@ them seen clear of every car that could make it wait, its arrival allowing for t
 every tick until the first line. Which ordering decisions live in the resolver, which in the rule set and which outside on
 purpose is ADR-0409's table.
 
+*As built* (point 2 and waits that cannot end; review #284, ADR-0410): **a wait for room that can never end is avoided,
+then given up, then reported.** The router never takes the turns of a chain through close junctions that the class could
+never (or too seldom) be granted room through -- the chain is closed, not its first turn, which may lead on fine another
+way (the soak's car 82 stood 1,129 s for want of this). A driver refused room at a line for the rule set's
+`room_refused_another_way` asks for a way from where it stands that avoids that turn, and takes it if its first turn's
+light lets it in now (a decision, shown in the counts; the route changes, the car does not move). And a car refused room
+for a reason that cannot change (it fits nowhere ahead, everyone stops first there, or its claim is a chain that never
+lines up) is counted by the measurements' `endless_waits` row, target none. Separately, a far turn that would give way on
+its green is PROTECTED -- green only when nothing it crosses from the approach facing it is -- where the rule set's
+warrants say so (`protected_when`), so a steady oncoming stream cannot starve it.
+
 ## 10. Routes and lane changes
 
 **Routes.** The router works on sections and connectors, starting from the lane the car is actually in and the way it

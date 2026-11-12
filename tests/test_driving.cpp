@@ -213,28 +213,108 @@ TEST_CASE(driving_state_hash_same_calls_same_hash) {
     for (std::size_t t = 1; t < first.size(); ++t) CHECK(first[t] != first[t - 1]);
 }
 
-// THE BOUNDARY (design 3): every file directly in src/apps/driving includes nothing from the city sim, the renderer,
-// the entity world, the physics wrapper or Lua. (Its scripting/ folder, when it comes, is the one place that reads Lua.)
-TEST_CASE(driving_includes_nothing_past_its_boundary) {
-    const std::filesystem::path dir = std::filesystem::path(RT_SOURCE_DIR) / "src" / "apps" / "driving";
-    const std::vector<std::string> forbidden = {"citysim", "renderer", "engine/world.h", "physics", "Jolt", "lua",
-                                                "scripting"};
-    std::vector<std::filesystem::path> files;
-    for (const std::filesystem::directory_entry& e : std::filesystem::directory_iterator(dir))
-        if (e.is_regular_file()) files.push_back(e.path());
-    std::sort(files.begin(), files.end());
-    CHECK(files.size() >= 2u);
-    for (const std::filesystem::path& f : files) {
-        std::ifstream in(f);
+// THE BOUNDARY (design 3; issue #284). The library -- every file directly in src/apps/driving -- may include, outside
+// itself, only the engine headers on an ALLOW-LIST, and those are FOLLOWED: everything they include in turn must be on
+// the list too, so the entity world, the renderer, the city sim, the physics wrapper or Lua cannot come in through a
+// header the library does include. (Before, a word list was matched against the library's own include lines only.) Its
+// scripting/ folder, the one place that reads Lua, has its own list: the library's and the script VM's headers. Angle
+// includes must be the standard library's (no folder, no ".h") or the JSON reader the bundle code uses.
+namespace {
+
+struct IncludeWalk {
+    std::filesystem::path src;
+    std::vector<std::string> allowed;        // headers outside src/apps/driving, as paths under src/
+    std::vector<std::string> external;       // headers from outside src/ (a third-party include path), by name
+    std::vector<std::string> seen;           // every file reached, as paths under src/
+    std::vector<std::string> breaches;
+
+    std::string underSrc(const std::filesystem::path& p) const {
+        return std::filesystem::relative(std::filesystem::weakly_canonical(p), src).generic_string();
+    }
+    void walk(const std::filesystem::path& file) {
+        const std::string me = underSrc(file);
+        if (std::find(seen.begin(), seen.end(), me) != seen.end()) return;
+        seen.push_back(me);
+        std::ifstream in(file);
         std::string line;
         while (std::getline(in, line)) {
             const std::size_t inc = line.find("#include");
-            if (inc == std::string::npos) continue;
-            for (const std::string& word : forbidden) {
-                if (line.find(word, inc) == std::string::npos) continue;
-                std::printf("    %s includes past the boundary: %s\n", f.filename().string().c_str(), line.c_str());
-                CHECK(false);
+            if (inc == std::string::npos || line.find_first_not_of(" \t") != inc) continue;
+            const std::size_t q = line.find('"', inc), a = line.find('<', inc);
+            if (q != std::string::npos) {
+                const std::string name = line.substr(q + 1, line.find('"', q + 1) - q - 1);
+                std::filesystem::path found = file.parent_path() / name;
+                if (!std::filesystem::exists(found)) found = src / name;
+                if (!std::filesystem::exists(found)) {
+                    if (std::find(external.begin(), external.end(), name) == external.end())
+                        breaches.push_back(me + " includes \"" + name + "\", which is not under src/ nor allowed");
+                    continue;
+                }
+                const std::string there = underSrc(found);
+                const bool inLibrary = there.rfind("apps/driving/", 0) == 0;
+                if (!inLibrary && std::find(allowed.begin(), allowed.end(), there) == allowed.end())
+                    breaches.push_back(me + " includes " + there + ", which is not on the allow-list");
+                else
+                    walk(found);
+            } else if (a != std::string::npos) {
+                const std::string name = line.substr(a + 1, line.find('>', a + 1) - a - 1);
+                const bool standard = name.find('/') == std::string::npos && name.find(".h") == std::string::npos;
+                if (!standard && name != "nlohmann/json.hpp")
+                    breaches.push_back(me + " includes <" + name + ">, which is not the standard library's");
             }
         }
     }
+};
+
+// The engine headers the library may include, and with them everything they include.
+const std::vector<std::string> kLibraryAllowed = {
+    "engine/procgen/city/roads/lane_graph.h",   // the road it drives on (read, never owned)
+    "engine/procgen/city/polygon.h",            // ... which the lane graph's plan shapes use
+    "engine/bundle/bundle.h",                   // the repo's hash (FNV) folded field by field
+    "engine/bundle/binary_stream.h",            // ... which bundle.h brings
+    "rt_math.h", "hash.h", "handle.h", "slot_map.h", "proc_rng.h",
+};
+// ... and the scripting folder's, besides: the Lua VM it reads rule sets with, and the placement policy's plain form.
+const std::vector<std::string> kScriptingAllowed = {
+    "engine/scripting/lua_state.h", "engine/scripting/script_vm.h", "engine/procgen/city/roads/lanes/control_plan.h",
+    "engine/procgen/city/roads/lanes/road_graph_spec.h", "engine/procgen/city/road_spec.h",
+    "engine/procgen/city/polyline.h",
+};
+
+std::vector<std::string> breachesOf(const std::filesystem::path& dir, const std::vector<std::string>& allowed,
+                                    const std::vector<std::string>& external, std::size_t* files) {
+    IncludeWalk w;
+    w.src = std::filesystem::weakly_canonical(std::filesystem::path(RT_SOURCE_DIR) / "src");
+    w.allowed = allowed;
+    w.external = external;
+    std::vector<std::filesystem::path> roots;
+    for (const std::filesystem::directory_entry& e : std::filesystem::directory_iterator(dir))
+        if (e.is_regular_file()) roots.push_back(e.path());
+    std::sort(roots.begin(), roots.end());
+    for (const std::filesystem::path& f : roots) w.walk(f);
+    if (files) *files = w.seen.size();
+    return w.breaches;
+}
+
+}  // namespace
+
+TEST_CASE(driving_includes_nothing_past_its_boundary) {
+    const std::filesystem::path dir = std::filesystem::path(RT_SOURCE_DIR) / "src" / "apps" / "driving";
+    std::size_t files = 0;
+    const std::vector<std::string> lib = breachesOf(dir, kLibraryAllowed, {}, &files);
+    for (const std::string& b : lib) std::printf("    the library: %s\n", b.c_str());
+    CHECK(lib.empty());
+    CHECK(files > 40u);   // the library's files and the allowed headers, followed
+    std::vector<std::string> scriptingAllowed = kLibraryAllowed;
+    scriptingAllowed.insert(scriptingAllowed.end(), kScriptingAllowed.begin(), kScriptingAllowed.end());
+    const std::vector<std::string> scripting =
+        breachesOf(dir / "scripting", scriptingAllowed, {"lua.h", "lualib.h", "lauxlib.h"}, nullptr);
+    for (const std::string& b : scripting) std::printf("    its scripting folder: %s\n", b.c_str());
+    CHECK(scripting.empty());
+    // The walk does see a breach: the entity world is not on the list.
+    IncludeWalk probe;
+    probe.src = std::filesystem::weakly_canonical(std::filesystem::path(RT_SOURCE_DIR) / "src");
+    probe.allowed = kLibraryAllowed;
+    probe.walk(probe.src / "engine" / "level_loader.h");
+    CHECK(!probe.breaches.empty());
 }

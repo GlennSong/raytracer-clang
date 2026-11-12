@@ -752,8 +752,9 @@ MeasurementReport buildReport(const MeasureRows& m, const std::vector<std::strin
     rep.drivenCars = m.drivenCars;
 
     {
-        ReportRow r = makeRow("standing_no_reason", "Standing still with no reason",
-                              "none: every driven car at rest is waiting for something it can name");
+        ReportRow r = makeRow("standing_no_reason", "Standing still with no reason (nothing named, or a reason that no "
+                                                    "longer applies)",
+                              "none: every driven car at rest is waiting for something it can name, that still holds");
         r.status = zeroTarget(m.noReason.spells > 0);
         r.values = {named("car_seconds", m.noReason.carSeconds, "", "car-seconds"),
                     named("longest_spell_s", m.noReason.longestSpell, "the longest spell", "s"),
@@ -761,6 +762,39 @@ MeasurementReport buildReport(const MeasureRows& m, const std::vector<std::strin
         r.summary = fmt("%.1f", m.noReason.carSeconds) + " car-seconds in " + count(m.noReason.spells) +
                     " spells; the longest " + fmt("%.1f", m.noReason.longestSpell) + " s";
         r.offenders = m.noReason.offenders;
+        rep.rows.push_back(r);
+    }
+    {
+        ReportRow r = makeRow("endless_waits",
+                              "Waiting with no way it can end (refused room beyond for a reason that cannot change)",
+                              "none: the router avoids every such way");
+        r.status = zeroTarget(m.endless.spells > 0);
+        r.values = {named("car_seconds", m.endless.carSeconds, "", "car-seconds"),
+                    named("longest_spell_s", m.endless.longestSpell, "the longest spell", "s"),
+                    named("spells", static_cast<double>(m.endless.spells), "spells", "")};
+        r.summary = fmt("%.1f", m.endless.carSeconds) + " car-seconds in " + count(m.endless.spells) +
+                    " spells; the longest " + fmt("%.1f", m.endless.longestSpell) + " s";
+        r.offenders = m.endless.offenders;
+        rep.rows.push_back(r);
+    }
+    {
+        ReportRow r = makeRow("no_progress",
+                              "No progress (a car on a trip advancing less than progress_least over progress_window, "
+                              "standing or creeping), with no reason that applies",
+                              "none, but for cars held by a reason that still applies");
+        const ProgressRow& p = m.progress;
+        r.status = !m.progressMeasured ? RowStatus::NotMeasured : zeroTarget(p.unexcused.spells > 0);
+        r.values = {named("car_seconds", p.carSeconds, "", "car-seconds without progress"),
+                    named("unexcused_s", p.unexcused.carSeconds, "with no reason that applies", "car-seconds"),
+                    named("longest_spell_s", p.unexcused.longestSpell, "the longest such spell", "s"),
+                    named("spells", static_cast<double>(p.unexcused.spells), "spells", "")};
+        r.summary = !m.progressMeasured
+                        ? std::string("not measured (the rule set has no progress_window and progress_least)")
+                        : fmt("%.1f", p.carSeconds) + " car-seconds without progress, " +
+                              fmt("%.1f", p.unexcused.carSeconds) + " of them with no reason that applies, in " +
+                              count(p.unexcused.spells) + " spells; the longest " + fmt("%.1f", p.unexcused.longestSpell) +
+                              " s";
+        r.offenders = p.unexcused.offenders;
         rep.rows.push_back(r);
     }
     rep.rows.push_back(loopRow("deadlock_loops",
@@ -921,13 +955,15 @@ MeasurementReport buildReport(const MeasureRows& m, const std::vector<std::strin
         h.summary = f.gaps == 0 ? "no queue of " + count(kSaturationFromCar) + " or more seen at a counting line"
                                 : fmt("%.2f", f.secondsPerCar) + " s per car, over " + count(f.gaps) + " gaps in " +
                                       count(f.bursts) + " queues";
+        // (Issue #284: no target. The plan's "about 2 s" is traffic engineers' start-up lost time, counted from the
+        // GREEN; this row counts from the first car beginning to move, so a car at rest at its line reads a fraction
+        // of a second whatever the drivers do. Fed by the lab's lit lines it read 0.19 s. The row keeps the figure;
+        // the target waits for drivers with a start-up reaction and a row counted from the green.)
         ReportRow s = makeRow("queue_start_up",
                               "How a queue empties: the first car, from beginning to move to crossing the line",
-                              "1.5 to 2.5 s (the plan: about 2 s)");
-        s.status = f.bursts == 0 ? RowStatus::NoData
-                                 : (f.firstCarDelay >= kStartUpLowest && f.firstCarDelay <= kStartUpHighest
-                                        ? RowStatus::Pass
-                                        : RowStatus::Fail);
+                              "none set yet: the plan's 1.5 to 2.5 s (about 2 s) is counted from the green, not from "
+                              "moving off; owed with a start-up reaction");
+        s.status = f.bursts == 0 ? RowStatus::NoData : RowStatus::NoTarget;
         s.values = {named("first_car_delay_s", f.firstCarDelay, "", "s"),
                     named("bursts", static_cast<double>(f.bursts), "queues", "")};
         s.summary = f.bursts == 0 ? std::string("no queue seen at a counting line")
@@ -1090,7 +1126,27 @@ bool MeasurementReport::writeJson(const std::string& path, std::string* why) con
 std::size_t Measurements::addCountingLine(const PathPoint& at) {
     lines_.push_back(at);
     crossings_.emplace_back();
+    linesOnPath_[at.path.index].push_back(lines_.size() - 1);
     return lines_.size() - 1;
+}
+
+bool registerMeasureNeeds(FactRegistry& registry, std::vector<std::string>* problems) {
+    ReaderSpec reader;
+    reader.name = kMeasureReaderName;
+    reader.meaning = "finds cars on a trip that make no progress for a long while, standing or creeping";
+    for (const std::pair<const char*, UnitFamily>& n :
+         {std::make_pair(kNumberProgressWindow, UnitFamily::Time), std::make_pair(kNumberProgressLeast, UnitFamily::Length)}) {
+        FactNeed need;
+        need.name = n.first;
+        need.family = n.second;
+        reader.numbers.push_back(need);
+    }
+    std::string why;
+    if (!registry.addReader(reader, &why)) {
+        if (problems) problems->push_back(why);
+        return false;
+    }
+    return true;
 }
 
 Measurements::Seen Measurements::seeCar(const Driving& d, const Car& c) const {
@@ -1128,6 +1184,43 @@ void Measurements::begin(const Driving& d) {
     wantLimit_.clear();
     const FactSlot slot = d.facts().find(kFactMyLimit);
     if (slot != kNoFact) wantLimit_.push_back(slot);
+    // The no-progress row: its numbers, and a ring per car sized once (one look a second over the window).
+    const Number* window = d.hasRules() ? d.ruleSet().findNumber(kNumberProgressWindow) : nullptr;
+    const Number* least = d.hasRules() ? d.ruleSet().findNumber(kNumberProgressLeast) : nullptr;
+    rows_.progressMeasured = window && least && window->value >= kLoopSampleSeconds;
+    progressWindow_ = rows_.progressMeasured ? window->value : 0;
+    progressLeast_ = rows_.progressMeasured ? least->value : 0;
+    progressSlots_ = rows_.progressMeasured ? static_cast<std::size_t>(progressWindow_ / kLoopSampleSeconds + 0.5) + 1 : 0;
+    progress_.clear();
+    lastProgressSample_ = d.clockSeconds();
+}
+
+void Measurements::lookForProgress(const Driving& d, double now, double sampleDt) {
+    if (!rows_.progressMeasured) return;
+    for (const Car& c : d.cars()) {
+        if (c.id.index >= progress_.size()) progress_.resize(c.id.index + 1);
+        Progress& p = progress_[c.id.index];
+        const TripId trip = d.tripOf(c.id);
+        if (!c.driven || !trip.valid() || trip != p.trip) {   // a new trip (or none): its window starts again
+            p.filled = p.next = 0;
+            p.trip = trip;
+            rows_.progress.unexcused.forget(c.id);
+            if (!c.driven || !trip.valid()) continue;
+        }
+        if (p.odometer.size() != progressSlots_) p.odometer.assign(progressSlots_, 0);
+        p.odometer[p.next] = c.odometer;
+        p.next = (p.next + 1) % progressSlots_;
+        if (p.filled < progressSlots_) ++p.filled;
+        // The window is full: the oldest look is the one about to be overwritten. Stuck: it advanced less than the least
+        // over the window, and at its speed now would not advance that much over another (a car moving off after a long
+        // wait is making progress from that moment).
+        bool stuck = false;
+        if (p.filled == progressSlots_)
+            stuck = c.odometer - p.odometer[p.next] < progressLeast_ && c.speed * progressWindow_ < progressLeast_ &&
+                    !(c.acceleration > 0);
+        if (stuck) rows_.progress.carSeconds += sampleDt;
+        rows_.progress.unexcused.note(c.id, d.tickCount(), now, sampleDt, stuck && !d.waitReasonHolds(c));
+    }
 }
 
 void Measurements::lookAtCar(const Driving& d, const Car& c, const Seen* before, double now, double dt, Seen& out) {
@@ -1159,22 +1252,34 @@ void Measurements::lookAtCar(const Driving& d, const Car& c, const Seen* before,
             c.vehicleClass < d.vehicleClasses().size() ? d.vehicleClasses().at(c.vehicleClass).tightestTurnRadius : 0;
         rows_.turns.note(c.id, tick, now, planAngle(before->bodyX, before->bodyZ, out.bodyX, out.bodyZ), moved,
                          tightest);
-        if (moved > kMovedNoiseMetres) {
-            for (std::size_t i = 0; i < lines_.size(); ++i) {
-                double reach = 0;
-                if (!crossesLine(before->front, out.front, moved, lines_[i], &reach)) continue;
-                LineCrossing x;
-                x.car = c.id;
-                x.tick = tick;
-                x.seconds = lastClock_ + dt * (reach / moved);
-                x.restLeftAt = out.restLeftAt;
-                x.restDistance = before->odometer + reach - out.restOdometer;
-                crossings_[i].push_back(x);
+        if (moved > kMovedNoiseMetres && !linesOnPath_.empty()) {
+            // Only the lines on the path it was on and the path it is on now (a line on a path crossed whole in one tick
+            // is not seen: crossesLine).
+            for (int side = 0; side < 2; ++side) {
+                const engine::PathId p = side == 0 ? before->front.path : out.front.path;
+                if (side == 1 && p == before->front.path) break;
+                const std::map<uint32_t, std::vector<std::size_t>>::const_iterator on = linesOnPath_.find(p.index);
+                if (on == linesOnPath_.end()) continue;
+                for (const std::size_t i : on->second) {
+                    double reach = 0;
+                    if (!crossesLine(before->front, out.front, moved, lines_[i], &reach)) continue;
+                    LineCrossing x;
+                    x.car = c.id;
+                    x.tick = tick;
+                    x.seconds = lastClock_ + dt * (reach / moved);
+                    x.restLeftAt = out.restLeftAt;
+                    x.restDistance = before->odometer + reach - out.restOdometer;
+                    crossings_[i].push_back(x);
+                }
             }
         }
     }
 
-    rows_.noReason.note(c.id, tick, now, dt, isWaiting(c) && waitReasonOf(c).sort == ReasonSort::None);
+    // Waiting with nothing named, or naming a reason that no longer applies (issue #284).
+    rows_.noReason.note(c.id, tick, now, dt,
+                        isWaiting(c) && (waitReasonOf(c).sort == ReasonSort::None || !d.waitReasonHolds(c)));
+    // Waiting for room it can never be given (issue #284).
+    rows_.endless.note(c.id, tick, now, dt, d.waitCanNeverEnd(c));
 
     const engine::LaneGraph* roads = d.roads();
     if (!c.driven || !knownPath(roads, c.path) || c.vehicleClass >= d.vehicleClasses().size()) {
@@ -1353,24 +1458,31 @@ void Measurements::observe(const Driving& d) {
     seenNext_.clear();
     std::size_t k = 0;
     uint32_t driven = 0;
+    const auto forget = [&](CarId car) {
+        rows_.noReason.forget(car);
+        rows_.endless.forget(car);
+        rows_.progress.unexcused.forget(car);
+    };
     for (const Car& c : d.cars()) {
-        while (k < seen_.size() && seen_[k].car < c.id) rows_.noReason.forget(seen_[k++].car);
+        while (k < seen_.size() && seen_[k].car < c.id) forget(seen_[k++].car);
         const Seen* before = k < seen_.size() && seen_[k].car == c.id ? &seen_[k] : nullptr;
         Seen out;
         lookAtCar(d, c, before, now, dt, out);
         seenNext_.push_back(out);
         if (c.driven) ++driven;
     }
-    while (k < seen_.size()) rows_.noReason.forget(seen_[k++].car);
+    while (k < seen_.size()) forget(seen_[k++].car);
     seen_.swap(seenNext_);
 
     lookForOverlaps(d, now);
     lookForTouches(d, now);
     lookForBoxStops(d, now, dt);
 
-    // The loops, once a second of simulated time.
+    // The loops and the no-progress row, once a second of simulated time.
     if (!sampledLoops_ || now >= nextLoopSample_ - kClockSlackSeconds) {
         rows_.loops.note(d.waitReport().loops, d.tickCount(), now);
+        lookForProgress(d, now, now - lastProgressSample_);
+        lastProgressSample_ = now;
         sampledLoops_ = true;
         nextLoopSample_ = now + kLoopSampleSeconds;
     }

@@ -45,7 +45,9 @@ bool loadDrivingRules(const std::string& file, driving::Driving& d, std::string*
     driving::FactRegistry facts;
     std::vector<std::string> problems;
     std::string reason;
-    if (!driving::registerBuiltInFacts(facts, &problems) || !driving::registerMoveNeeds(facts, &reason)) {
+    // (The measurements' no-progress row reads two numbers too, issue #284: declared, so a rule set without them is named.)
+    if (!driving::registerBuiltInFacts(facts, &problems) || !driving::registerMoveNeeds(facts, &reason) ||
+        !driving::registerMeasureNeeds(facts, &problems)) {
         problems.push_back(reason);
         std::string all;
         for (const std::string& p : problems) all += (all.empty() ? "" : "; ") + p;
@@ -170,6 +172,19 @@ void DrivingHost::mirror(const driving::Driving& d, Seat& s, std::vector<Agent>&
     }
 }
 
+void DrivingHost::reset() {
+    active_ = false;
+    seed_ = 0;
+    seats_.clear();
+    seatOfAgent_.clear();
+    seatOfCar_.clear();
+    placesOfClass_.clear();
+    placesFound_.clear();
+    measurements_ = std::make_unique<driving::Measurements>();
+    counts_ = DrivingCounts();
+    cost_ = Cost();
+}
+
 std::string DrivingHost::begin(driving::Driving& d, std::vector<Agent>& agents, std::vector<SimVehicle>& vehicles,
                                const std::vector<int>& who, const std::vector<int>& classOfSlot, uint32_t seed) {
     if (!d.roads() || !d.hasRules() || d.vehicleClasses().empty()) return "the new model has no road, rules or vehicles";
@@ -199,6 +214,28 @@ std::string DrivingHost::begin(driving::Driving& d, std::vector<Agent>& agents, 
     }
     counts_ = DrivingCounts();
     counts_.drivers = static_cast<uint32_t>(seats_.size());
+    // THE COUNTING LINES (issue #284): the line of every junction whose lights run a programme -- the end of each lane
+    // that leads into its connectors -- so the measurements' queue rows see queues empty over them (before, the host
+    // registered none and those rows had no data). Only lit lines: the rows' targets are a queue leaving on a green
+    // (saturation flow), not cars taking turns at a stop sign. In path order, before the measurements begin.
+    if (measurements_->countingLines().empty()) {
+        const engine::LaneGraph& roads = *d.roads();
+        for (uint32_t p = 0; p < roads.paths.size(); ++p) {
+            const engine::Path& lane = roads.paths[p];
+            if (lane.kind != engine::PathKind::Lane || lane.next.count == 0) continue;
+            const engine::PathId first = roads.nextPaths[lane.next.first];
+            if (!first.valid() || first.index >= roads.paths.size() ||
+                roads.paths[first.index].kind != engine::PathKind::Connector)
+                continue;
+            const engine::JunctionId j = roads.paths[first.index].junction;
+            if (!j.valid() || j.index >= d.rightOfWay().junctions.size() || !d.rightOfWay().junctions[j.index].running())
+                continue;
+            driving::PathPoint line;
+            line.path = engine::PathId(p);
+            line.along = lane.length;
+            measurements_->addCountingLine(line);
+        }
+    }
     d.attachMeasurements(measurements_.get());
     // The bodies-touching row measures each car at the size it is DRAWN (its fleet slot's body), which may differ from
     // its driving class's (the class takes the first slot of its name).

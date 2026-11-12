@@ -42,12 +42,33 @@ rule_set = {
     -- Source: CVC 21451 (a) (on a green, go, giving way to traffic lawfully in the junction), 21801 (a) (a left turn --
     -- the far turn here -- yields to oncoming traffic) and 21453 (a) (stop at a red). TURN ON RED: after a full stop at
     -- the red, the near turn may be made, giving way to everyone (CVC 21453 (b), the right turn on red where traffic
-    -- keeps right; section unverified). No arrows: far turns go on the plain green, giving way ([~] protected far turns
-    -- would lengthen every cycle; add `arrow = { "far_turn" }` to try them). WHILE DARK (a host that runs no light clock):
-    -- lights stuck on one phase would hold half their approaches at a red for ever, so a junction with lights is treated
-    -- as an all-way stop, as the law treats a signal that is out (CVC 21800 (d)(1): at inoperative signals, stop, then go
-    -- on when it is safe) or flashing red (CVC 21457 (a)).
+    -- keeps right; section unverified). WHILE DARK (a host that runs no light clock): lights stuck on one phase would hold
+    -- half their approaches at a red for ever, so a junction with lights is treated as an all-way stop, as the law treats
+    -- a signal that is out (CVC 21800 (d)(1): at inoperative signals, stop, then go on when it is safe) or flashing red
+    -- (CVC 21457 (a)).
+    -- PROTECTED FAR TURNS (issue #284): a far turn goes on the plain green, giving way, except where a warrant below holds
+    -- for it; there it is PROTECTED: it goes only on its own green arrow, in a phase where nothing it would give way to is
+    -- green (traffic engineers' "protected-only" phasing). Traffic engineers choose this per approach from traffic counts,
+    -- the oncoming lanes and speed, sight lines and crashes (FHWA Traffic Signal Timing Manual 2008, section 4.3.6); the
+    -- lab has the road alone, so only the road's facts are asked: the oncoming lanes the turn crosses, their limit, and
+    -- how many approaches the junction has. (`arrow = { "far_turn" }` would instead give every far turn a leading arrow
+    -- and let it go on the plain green after it.) Left out on purpose: the published "three or more oncoming lanes"
+    -- (Arizona DOT; Eugene, Oregon; Wisconsin DOT asks it only above 45 mph; Broward County only above four lanes). The
+    -- sources disagree, and in the lab it would protect almost every far turn on an arterial (their oncoming
+    -- arterials carry three lanes), adding a phase to nearly every light, where the measured fault was at one junction.
     signal = { settle = { "light", "movement" }, gives_way_on_green = { "far_turn" },
+               protected_when = {
+                 -- Fast oncoming traffic: a gap judged against it is a long one, and a misjudged one a hard crash.
+                 { name = "oncoming traffic faster than 45 mph", opposing_limit_above = { 45, unit = "mph" },
+                   source = "Arizona DOT Traffic Guidelines and Processes 612 (2015), Eugene OR and Wisconsin DOT guidance: protected-only left turns where the opposing speed is above 45 mph (read in search summaries; the documents themselves unread)" },
+                 -- Many approaches: each approach's green is short (each of five or six phases takes its turn), so a far
+                 -- turn that must find a gap in the oncoming stream finds none for several cycles. The manual lists the
+                 -- cycle and the green among the factors (section 4.3.6) and says multi-leg geometry may need its own
+                 -- phasing (4.3.4, split phasing); the number five is a [~] judgement for the lab, the junction count
+                 -- standing in for the green the turn would get.
+                 { name = "five or more approaches", approaches = 5,
+                   source = "[~] after FHWA Traffic Signal Timing Manual 2008 (FHWA-HOP-08-024), sections 4.3.4 and 4.3.6; measured in the lab: a far turn at six-approach junction 21 gave way through two and three 7 s greens and stood 176-200 s (issue #284)" },
+               },
                turn_on_red = { movement = "near_turn", after = "full_stop" }, when_dark = "all_way_stop" },
     -- AN ALL-WAY STOP: everyone stops at the line; then whoever got there first goes; of two arriving together, the one
     -- coming from the other's kerb side; then by movement. Source: CVC 22450 (a) (stop at the limit line of a stop
@@ -131,10 +152,23 @@ rule_set = {
     -- Two lights so close that a car cannot stop between them, whose programmes let a car through both (as above, from
     -- rest at the first line on its green) less often than once in this many of the longer of their cycles: the two are
     -- not coordinated for that turn, so it is closed to the vehicles the stretch between is too short for, as a turn too
-    -- tight for them is, and routes go round. A road-data problem the lab reports at load: such lights want one
+    -- tight for them is, and routes go round; where only some ways on from a turn are like that, those chains of turns
+    -- are closed, not the turn (issue #284). A road-data problem the lab reports at load: such lights want one
     -- programme between them (the light clock's owed work, ADR-0406).
     room_cycles_through = { 1.5, unit = "ratio",
       source = "[~] a guess to tune: once a cycle is coordinated; twice as long apart is a wait of two cycles at the first line" },
+    -- ANOTHER WAY (issue #284; design 9.6 point 2): a driver refused room at a junction's line, having asked there this
+    -- long, asks for a way from where it is that does not take that turn, and takes one if there is one (otherwise it
+    -- waits on); it asks again no sooner than this long after. A driver's choice of where to go, never a push through.
+    room_refused_another_way = { 60, unit = "s",
+      source = "[~] a guess to tune: about one of the lab's longer light cycles (the six-approach junctions run 89-93 s), so a car waits out at least most of a cycle before it gives up its turn" },
+
+    -- THE MEASUREMENTS' NO-PROGRESS ROW (issue #284; the lab's judge, not a driving rule): a car on a trip that advanced
+    -- less than progress_least over the last progress_window, and is not moving off, makes no progress; it is excused
+    -- while what holds it still applies (a car ahead, a red, a car it gives way to). A car creeping a few centimetres
+    -- every few seconds is never "standing", so only this row sees it.
+    progress_window = { 60, unit = "s", source = "[~] a guess to tune: about a light cycle" },
+    progress_least = { 2.0, unit = "m", source = "[~] a guess to tune: less than half a car's length" },
 
     -- THE TRAFFIC LIGHTS' TIMING (issue #261), worked out for every junction with lights when the level loads.
     -- YELLOW (the warning that red is coming) = reaction time + approach speed / (2 x deceleration + 2 x gravity x grade):

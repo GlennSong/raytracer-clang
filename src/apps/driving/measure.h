@@ -39,7 +39,9 @@
 //   }
 // The rows and their value keys:
 //   standing_no_reason      car_seconds, longest_spell_s, spells               (offender numbers: spell_s)
-//   deadlock_loops          loops, longest_s, most_cars                        (offender numbers: cars, lasted_s)
+//   endless_waits           car_seconds, longest_spell_s, spells               (offender numbers: spell_s)
+//   no_progress             car_seconds, unexcused_s, longest_spell_s, spells  (offender numbers: spell_s)
+//   deadlock_loops         loops, longest_s, most_cars                        (offender numbers: cars, lasted_s)
 //   gridlock_loops          loops, longest_s, most_cars                        (offender numbers: cars, lasted_s)
 //   jumps                   ticks, worst_excess_m                  (offender numbers: moved_m, speed_before, speed_after)
 //   tight_turns             too_tight, pivots, worst_ratio         (offender numbers: turn_per_m, allowed_per_m, moved_m;
@@ -131,11 +133,10 @@ constexpr double kQueueStartNearMetres = 10.0;
 // traffic engineers read it from the fourth or fifth).
 constexpr std::size_t kSaturationFromCar = 4;
 // THE PLAN'S BANDS. One car every ~1.9 seconds once the queue is moving (FHWA's saturation flow, about 1,900 cars an
-// hour per lane): 1.7 to 2.1 s, a tenth either side. The first car loses about 2 seconds getting going: 1.5 to 2.5 s.
+// hour per lane): 1.7 to 2.1 s, a tenth either side. (The first car loses about 2 seconds getting going, counted from
+// the green: the start-up row counts from moving off, so it holds no band until it is counted from the green; #284.)
 constexpr double kHeadwayLowest = 1.7;
 constexpr double kHeadwayHighest = 2.1;
-constexpr double kStartUpLowest = 1.5;
-constexpr double kStartUpHighest = 2.5;
 
 // ---- What the report holds -----------------------------------------------------------------------------------------
 
@@ -533,9 +534,35 @@ struct CostRow {
     void note(double milliseconds, std::size_t drivenCars);
 };
 
+// WAITING WITH NO WAY IT CAN END (issue #284): a car refused room beyond a junction for a reason that cannot change
+// (Driving::waitCanNeverEnd), in spells per car, kept as the standing-with-no-reason row keeps its spells. Target: none.
+// The router avoids every such way (room.h turnsClosedForRoom, chainsClosedForRoom), so a spell here points at a car
+// routed or put down past them.
+using EndlessWaitRow = NoReasonRow;
+
+// NO PROGRESS (issue #284): a car on a trip whose odometer advanced less than the rule set's progress_least metres over
+// its last progress_window seconds -- a car creeping a few centimetres every few seconds is never "standing", so the
+// rows above cannot see it. Looked at once a second. EXCUSED while what holds it names a reason that still applies
+// (Driving::waitReasonHolds: a car ahead on its way, a stop it still holds, a car it gives way to ...); the rest are
+// offenders, in spells per car. Target: none unexcused.
+struct ProgressRow {
+    double carSeconds = 0;        // car-seconds without progress over the window, excused or not
+    NoReasonRow unexcused;        // ... the spells with no reason that applies
+};
+
+// What the no-progress row reads from the rule set (Measurements reads them when the rule set has them; a host that
+// wants the row declares them with registerMeasureNeeds, so a rule set without them is refused, named).
+constexpr const char* kNumberProgressWindow = "progress_window";   // s
+constexpr const char* kNumberProgressLeast = "progress_least";     // m
+constexpr const char* kMeasureReaderName = "the measurements table (the no-progress row)";
+bool registerMeasureNeeds(FactRegistry& registry, std::vector<std::string>* problems = nullptr);
+
 // ALL THE COUNTS, which buildReport turns into the table.
 struct MeasureRows {
     NoReasonRow noReason;
+    EndlessWaitRow endless;
+    ProgressRow progress;
+    bool progressMeasured = false;    // the rule set has the no-progress row's numbers
     LoopRow loops;
     JumpRow jumps;
     TurnRow turns;
@@ -604,10 +631,24 @@ private:
     void lookForOverlaps(const Driving& d, double now);
     void lookForTouches(const Driving& d, double now);
     void lookForBoxStops(const Driving& d, double now, double dt);
+    // The no-progress row, once a second: each driven car's odometer then, kept for progress_window seconds.
+    void lookForProgress(const Driving& d, double now, double sampleDt);
 
     const Driving* driving_ = nullptr;
     std::vector<PathPoint> lines_;
     std::vector<std::vector<LineCrossing>> crossings_;   // per line, in the order they crossed
+    std::map<uint32_t, std::vector<std::size_t>> linesOnPath_;   // the counting lines on each path, by path id
+    // THE NO-PROGRESS ROW's memory: per car id, its odometer at each once-a-second look of the window (a ring, sized once
+    // when the window is known), how many are filled, the next slot, and the trip it was on.
+    struct Progress {
+        std::vector<double> odometer;
+        std::size_t filled = 0, next = 0;
+        TripId trip;
+    };
+    std::vector<Progress> progress_;
+    double progressWindow_ = 0, progressLeast_ = 0;
+    std::size_t progressSlots_ = 0;
+    double lastProgressSample_ = 0;
     std::vector<Seen> seen_;                             // by car id
     std::vector<Seen> seenNext_;
     double lastClock_ = 0;

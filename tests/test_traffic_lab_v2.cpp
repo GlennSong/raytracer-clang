@@ -17,7 +17,7 @@
 // drives on, as text.
 //
 // level_traffic_lab_v2_same_every_run: the lab loaded twice and run a minute each: the driving model's state hash is the
-// same at every second.
+// same at every tick. (Across builds, the five-minute run pins its final state hash: kFiveMinuteStateHash.)
 //
 // level_traffic_lab_v2_soak (issue #265; only with RT_LAB_SOAK=1): thirty simulated minutes, reported per five-minute
 // window -- trips arrived, mean speed by road class, the longest wait at a line and stand anywhere, loops, cars waiting
@@ -30,9 +30,12 @@
 //
 // level_v1_state_is_unchanged: two levels driven by the OLD model alone -- the traffic lab with its citysim block set
 // back to "v1", and river_town (walkers, buses, cabs, the far tiers) -- each stepped for a while, with one number
-// folded over every agent's driving and walking state and every vehicle's pose, printed as it goes. The numbers are
-// compared by hand between a build before a change to the old model's code and after it: equal numbers are the proof
-// that a v1 level behaves bit for bit as before.
+// folded over every agent's driving and walking state and every vehicle's pose, printed as it goes and CHECKED against
+// the numbers pinned in the test (kV1LabHashes, kV1RiverHashes; issue #284): equal numbers say a v1 level does what it
+// did when they were taken, on this machine's build.
+//
+// level_traffic_lab_v2_rebuild_hands_over_again: the city built a second time hands its drivers to the new model again,
+// with the host's seats, counts and measurements started over (issue #284).
 
 #include "test_framework.h"
 
@@ -126,21 +129,27 @@ struct LoadedCity {
     }
 };
 
-// Steps `city` `seconds` in steps of `dt`, printing the old model's state hash every `printEvery` seconds.
-void runAndHash(const std::string& level, const std::string& driving, Real seconds, Real dt, Real printEvery) {
+// Steps `city` `seconds` in steps of `dt`, printing the old model's state hash every `printEvery` seconds, and returns
+// those hashes.
+std::vector<uint64_t> runAndHash(const std::string& level, const std::string& driving, Real seconds, Real dt,
+                                 Real printEvery) {
+    std::vector<uint64_t> out;
     LoadedCity lc(level, driving);
     CHECK(lc.ok);
-    if (!lc.ok) return;
+    if (!lc.ok) return out;
     const int steps = static_cast<int>(seconds / dt + 0.5);
     const int every = static_cast<int>(printEvery / dt + 0.5);
     std::printf("    [v1-hash] %s (driving %s): %zu agents\n", level.c_str(), driving.empty() ? "as the level says" : driving.c_str(),
                 lc.city.sim().agents().size());
     for (int i = 1; i <= steps; ++i) {
         lc.city.step(lc.world, dt);
-        if (i % every == 0)
-            std::printf("    [v1-hash] %s t=%6.1f s: %016llx\n", level.c_str(), i * dt,
-                        static_cast<unsigned long long>(simStateHash(lc.city.sim())));
+        if (i % every == 0) {
+            out.push_back(simStateHash(lc.city.sim()));
+            std::printf("    [v1-hash] %s t=%6.1f s: 0x%016llxull\n", level.c_str(), i * dt,
+                        static_cast<unsigned long long>(out.back()));
+        }
     }
+    return out;
 }
 
 // ---- The new model's lab ---------------------------------------------------------------------------------------------
@@ -188,29 +197,48 @@ constexpr uint64_t kMostLoopSamples = 0;
 // for any reason but a recorded give-way (or waiting inside for a far turn, or behind a car giving way in the box or
 // moving off inside it: measure.h BoxReason).
 constexpr double kMostBoxStopsNotAllowed = 0;
-// THE LONGEST ANYONE MAY STAND (s). It was 60 s before the lights ran. The lab's longest light cycle is 77 s (the
-// five-phase junctions 21 and 75), so a car arriving just after its green waits most of a cycle; the longest stand
-// measured was 82 s (a far turn finding no gap on its green). 100 s is that cycle plus one green. Glenn to choose:
-// keep this, shorten the cycle (green_shortest 5 s gives about 67 s), or give starved far turns an arrow.
-// HELD AT 130 s since room beyond (#264): one far turn at five-phase junction 21 gave way to oncoming cars for its
-// whole 8 s green and waited a second red: 123 s. It needs a green arrow of its own (owed from ADR-0406), not more
-// patience. Bring this back to 100 when starved far turns get an arrow.
-// HELD AT 180 s since #283 (cars now follow at splits, which moves the traffic): a motorcycle's far turn by connector 2271
-// at the same junction 21, at its line, gave way to the oncoming stream through two greens (to cars 172 and 218, then 184
-// and 129) and stood 176 s. The same owed arrow (ADR-0406), not patience.
-constexpr double kLongestStand = 180.0;
-// THE SOAK'S HELD FIGURES (thirty minutes, issue #265), each a known fault owed elsewhere:
-// - one car stands for good: car 82 at junction 106's line from t = 670 s, refused room because its claim must pass
-//   through junction 87 to junction 88's light, which never lets a car from rest at 106 in as it gets there; a queue of up to
-//   six stands behind it. The load check now follows the whole chain (ADR-0408) but can close only whole turns, and the
-//   near turn at 88 is fine, so the turn at 106 stays open. Owed: routes that avoid a bad continuation, or a driver refused
-//   for good taking another way (design 9.6 point 2). No issue yet.
-// ENTRIES ON RED: none. Held at 1 until #284 (ADR-0409): a car committed through two close junctions (11 then 14) on a
-// prediction that the second light would let it in was held behind a slower car and arrived after the red. A claim through
-// close junctions now allows for the car ahead, needs its way seen clear of anything that could make it wait, and is worked
-// out afresh every tick until the first line.
-constexpr double kSoakLongestStand = 1130.0;
+// THE LONGEST ANYONE MAY STAND (s): 100. History: 60 s before the lights ran; 100 s once they did (the longest cycle,
+// 77 s, plus one green); held at 130 s by room beyond (#264) and at 180 s by #283, because a far turn at six-approach
+// junction 21 gave way to the oncoming stream through two and three 7 s greens and stood 176-200 s.
+// BACK TO 100 s since #284 (ADR-0410), for two reasons together:
+//   - PROTECTED FAR TURNS: the rule set's `protected_when` warrants give a far turn at a junction of five or more
+//     approaches its own green arrow (it never shares a green with the oncoming stream), so it is never starved of gaps.
+//     Junction 21's cycle went 77 -> 93 s and 75's 77 -> 89 s; their far turns now stand at most one red (the longest
+//     red-light stand measured 80 s).
+//   - ANOTHER WAY: a car refused room beyond for room_refused_another_way (60 s) takes another way if one it may take
+//     now exists (its turn green), and otherwise waits on. The longest stand measured is 92 s: car 257 at junction 75,
+//     refused room behind a queue reaching back from the next light, then granted.
+// The figure moves with the traffic (the same build with the another-way time at 30/45/60/90 s, before a driver took
+// another way only onto a green, measured 169/92/118/88 s), so it is a limit with little to spare, not a target met
+// with room: a change that moves the traffic may cross it and must say why.
+constexpr double kLongestStand = 100.0;
+// THE FIVE-MINUTE RUN'S FINAL STATE HASH (issue #284), pinned: the driving model's state after 18,000 ticks of the lab.
+// Any change to what cars do changes it, so a change that moves the traffic must be acknowledged here, by updating this
+// number in the same change and saying why in its report -- never left to drift. (Same every run within a build is the
+// test below; this pins it across builds.) Checked only for the full five minutes (not with RT_LAB_SECONDS).
+constexpr uint64_t kFiveMinuteStateHash = 0x986066aea5828fadull;   // #284 (ADR-0410)
+// THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
+// - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
+//   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's
+//   green ends waits out the rest of a cycle (at most one cycle); a queue ahead of it that does not all clear in one
+//   green costs it at most one more. Refused room beyond for room_refused_another_way (60 s, under one cycle) it takes
+//   another way if one is green, so that wait is inside the same two cycles. (Until #284 the limit was held at 1,130 s:
+//   car 82 at junction 106 stood for good, refused room because its claim had to pass through junction 87 to junction
+//   88's light, which never let a car from rest at 106 in as it got there. The router now never takes those turns one
+//   after another -- the chain is closed to the class, not the turn: room.h chainsClosedForRoom -- and the measurements'
+//   endless_waits row reports any wait that can never end, target none.) UNVERIFIED: the one soak run with #284's work
+//   (before the fix for a chain claimed behind a car that stops between, room.cpp) formed a two-car gridlock at junctions
+//   14/11 at t = 456 s and stood one car 1,346 s; that fix removes it over 500 s, but no soak has run since (it is run
+//   once at the end of the milestone).
+// - ENTRIES ON RED: none. Held at 1 until #284 (ADR-0409): a car committed through two close junctions (11 then 14) on
+//   a prediction that the second light would let it in was held behind a slower car and arrived after the red. A claim
+//   through close junctions now allows for the car ahead, needs its way seen clear of anything that could make it wait,
+//   and is worked out afresh every tick until the first line.
+// - DRIVERS THAT CHANGED THEIR MINDS TWICE on one approach, over the thirty minutes: its own limit (the five-minute
+//   one, kMostChangedMindTwice, is for five). Measured 12 in the first soak (71e12216); see kSoakMostChangedMindTwice.
+constexpr double kSoakStandCycles = 2.0;
 constexpr uint64_t kSoakMostEnteredOnRed = 0;
+constexpr uint64_t kSoakMostChangedMindTwice = 12;
 // THE FASTEST ROADS FLOW (issue #281): on the lanes of the road class with the highest posted limit (the lab's
 // freeway), the mean speed of cars in FREE FLOW -- held by nothing ahead (no car, no stop, not the end of their way),
 // by no top speed of their own vehicle's (a moped or a bus that cannot do the limit), and cruising (at the top speed
@@ -344,6 +372,11 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         std::printf("    [lab-v2] one four-way's table:\n%s", d->describeJunction(engine::JunctionId(j)).c_str());
         break;
     }
+    // RT_LAB_JUNCTION=<id>: that junction's table in words too (for a person chasing one junction).
+    if (const char* one = std::getenv("RT_LAB_JUNCTION"))
+        if (static_cast<uint32_t>(std::atoi(one)) < roads.junctions.size())
+            std::printf("    [lab-v2] junction %s's table:\n%s", one,
+                        d->describeJunction(engine::JunctionId(static_cast<uint32_t>(std::atoi(one)))).c_str());
     // THE LIGHTS' PROGRAMMES (issue #261): how many phases the lit junctions have, and every programme's timing.
     std::map<uint32_t, uint32_t> byPhases;
     for (uint32_t j = 0; j < roads.junctions.size(); ++j)
@@ -388,10 +421,14 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         for (const std::string& l : rr.lines)
             if (l.find("never") != std::string::npos || l.find("only once in") != std::string::npos)
                 std::printf("      %s\n", l.c_str());
-        uint64_t closed = 0;
-        for (uint32_t k = 0; k < d->vehicleClasses().size(); ++k) closed += d->routeClass(k).closed.size();
-        std::printf("    [lab-v2] turns closed to a class for want of room, summed over the classes: %llu\n",
-                    static_cast<unsigned long long>(closed));
+        uint64_t closed = 0, chains = 0;
+        for (uint32_t k = 0; k < d->vehicleClasses().size(); ++k) {
+            closed += d->routeClass(k).closed.size();
+            chains += d->routeClass(k).closedChains.chains;
+        }
+        std::printf("    [lab-v2] turns closed to a class for want of room, summed over the classes: %llu; ways on (chains "
+                    "of turns through close junctions) closed to a class: %llu\n",
+                    static_cast<unsigned long long>(closed), static_cast<unsigned long long>(chains));
     }
 
     const Real seconds = std::getenv("RT_LAB_SECONDS") ? std::atof(std::getenv("RT_LAB_SECONDS")) : 300.0;
@@ -501,7 +538,10 @@ TEST_CASE(level_traffic_lab_v2_drives) {
             double from = 0, to = 0;
             if (std::sscanf(watch, "%u,%lf,%lf", &wc, &from, &to) == 3 && now >= from && now <= to &&
                 d->car(driving::CarId(wc))) {
-                std::printf("---- t=%.3f\n%s", now, d->describeCar(driving::CarId(wc)).c_str());
+                std::string stale;
+                const bool holds = d->waitReasonHolds(*d->car(driving::CarId(wc)), &stale);
+                std::printf("---- t=%.3f%s%s\n%s", now, holds ? "" : " | its reason no longer applies: ",
+                            holds ? "" : stale.c_str(), d->describeCar(driving::CarId(wc)).c_str());
                 const driving::JunctionPlans* plans = d->junctionPlans(driving::CarId(wc));
                 for (std::size_t k = 0; plans && k < plans->count; ++k) {
                     const engine::Path& p = roads.paths[plans->plans[k].connector.index];
@@ -743,6 +783,10 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                     pc.smallestGapNeeded, static_cast<unsigned long long>(pc.changedMindTwice),
                     static_cast<unsigned long long>(pc.waitedInside), static_cast<unsigned long long>(pc.gaveWayOnALane),
                     d->board().most());
+        // ANOTHER WAY (issue #284): drivers refused room for long that asked for a way avoiding that turn, and took one.
+        std::printf("    [lab-v2] another way: %llu drivers refused room for room_refused_another_way asked for one, %llu "
+                    "took one\n",
+                    static_cast<unsigned long long>(pc.askedAnotherWay), static_cast<unsigned long long>(pc.tookAnotherWay));
         // WHO GOES FIRST (issue #263): the conflicts the one resolver settled over the run, by the question that decided.
         const driving::ConflictCounts& cc = d->conflictCounts();
         std::printf("    [lab-v2] who goes first: %llu conflicts settled (summed over the ticks); by question:",
@@ -799,16 +843,16 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                                                const std::pair<Real, std::pair<uint32_t, std::string>>& y) {
         return x.first != y.first ? x.first > y.first : x.second.first < y.second.first;
     });
-    int over60 = 0;
-    std::map<std::string, int> over60Why;
+    int overLongest = 0;   // cars that stood longer than kLongestStand
+    std::map<std::string, int> overLongestWhy;
     for (const std::pair<Real, std::pair<uint32_t, std::string>>& s : stands)
         if (s.first > kLongestStand) {
-            ++over60;
+            ++overLongest;
             const std::string& w = s.second.second;
-            ++over60Why[w.rfind("behind car", 0) == 0 ? std::string("behind a car") : w];
+            ++overLongestWhy[w.rfind("behind car", 0) == 0 ? std::string("behind a car") : w];
         }
-    std::printf("    [lab-v2] cars that stood more than %.0f s at a time: %d\n", kLongestStand, over60);
-    for (const std::pair<const std::string, int>& w : over60Why) std::printf("      %4d %s\n", w.second, w.first.c_str());
+    std::printf("    [lab-v2] cars that stood more than %.0f s at a time: %d\n", kLongestStand, overLongest);
+    for (const std::pair<const std::string, int>& w : overLongestWhy) std::printf("      %4d %s\n", w.second, w.first.c_str());
     std::printf("    [lab-v2] %zu cars were seen standing at a once-a-second look; the longest (stood at least this long):\n",
                 stands.size());
     for (std::size_t k = 0; k < stands.size() && k < 8; ++k)
@@ -896,7 +940,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     // path, and a ring through that waiting is broken at an answer.
     CHECK(joinPairTicks <= kMostJoinPairTicks);
     CHECK(loopSamples <= kMostLoopSamples);
-    CHECK(over60 == 0);
+    CHECK(overLongest == 0);
     // ROOM BEYOND (issue #264): nobody at rest in a box but by a recorded give-way; the deadlock row of the measurements
     // table passes; and every grant outstanding belongs to a driven car whose front has not yet reached its lane (grants
     // never outlive their use).
@@ -910,7 +954,14 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         std::size_t between = 0;
         for (const driving::RoomGrant& g : d->roomGrants()) {
             const driving::Car* c = d->car(driving::CarId(g.car));
-            if (c && c->driven && c->odometer < g.laneAt) ++between;
+            // (A front that reached the lane in the last tick's move is let go at the next settle step.)
+            if (c && c->driven && (c->odometer < g.laneAt || c->path == g.lane)) {
+                ++between;
+                continue;
+            }
+            std::printf("      [grant outside] car %u lane %u at odometer %.2f, the car %s at %.2f:\n%s", g.car,
+                        g.lane.index, g.laneAt, c ? (c->driven ? "driven" : "not driven") : "gone",
+                        c ? c->odometer : 0.0, c ? d->describeCar(c->id).c_str() : "");
         }
         std::printf("    [lab-v2] room grants outstanding at the end: %zu; cars between their grant and its lane: %zu\n",
                     d->roomGrants().size(), between);
@@ -925,6 +976,12 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     CHECK(d->rightOfWay().counts.junctionsTimed > 0 && d->rightOfWay().counts.junctionsDark == 0);
     CHECK(litCrossings > 0);
     CHECK(enteredOnRed == 0);
+    // NOTHING THE CARS DO HAS MOVED unseen (kFiveMinuteStateHash).
+    if (steps == static_cast<int>(300.0 / kStep + 0.5)) {
+        std::printf("    [lab-v2] the final state hash %016llx (pinned %016llx)\n",
+                    static_cast<unsigned long long>(d->stateHash()), static_cast<unsigned long long>(kFiveMinuteStateHash));
+        CHECK(d->stateHash() == kFiveMinuteStateHash);
+    }
 }
 
 TEST_CASE(level_traffic_lab_v2_same_every_run) {
@@ -936,24 +993,27 @@ TEST_CASE(level_traffic_lab_v2_same_every_run) {
         const driving::Driving* d = lc.city.sim().drivingV2();
         CHECK(d != nullptr);
         if (!d) return;
-        int differ = 0, plansDiffer = 0;
+        // EVERY TICK (issue #284: it was once a second, so two runs could part and meet again between looks unseen).
+        int differ = 0, plansDiffer = 0, firstDiffer = -1;
         for (int i = 1; i <= 60 * 60; ++i) {
             lc.city.step(lc.world, kStep);
-            if (i % 60 != 0) continue;
             const uint64_t h = d->stateHash();
             const uint64_t p = d->planHash();   // the drivers' junction plans (#260), kept apart from the state hash
             if (run == 0) {
                 first.push_back(h);
                 firstPlans.push_back(p);
             } else {
-                if (first[static_cast<std::size_t>(i / 60 - 1)] != h) ++differ;
-                if (firstPlans[static_cast<std::size_t>(i / 60 - 1)] != p) ++plansDiffer;
+                if (first[static_cast<std::size_t>(i - 1)] != h) {
+                    ++differ;
+                    if (firstDiffer < 0) firstDiffer = i;
+                }
+                if (firstPlans[static_cast<std::size_t>(i - 1)] != p) ++plansDiffer;
             }
         }
         if (run == 1) {
-            std::printf("    [lab-v2] two runs of a minute: %d of %zu per-second state hashes differ, %d plan hashes; last "
-                        "%016llx\n",
-                        differ, first.size(), plansDiffer, static_cast<unsigned long long>(d->stateHash()));
+            std::printf("    [lab-v2] two runs of a minute: %d of %zu per-tick state hashes differ (the first at tick %d), "
+                        "%d plan hashes; last %016llx\n",
+                        differ, first.size(), firstDiffer, plansDiffer, static_cast<unsigned long long>(d->stateHash()));
             CHECK(differ == 0);
             CHECK(plansDiffer == 0);
         }
@@ -1176,19 +1236,29 @@ TEST_CASE(level_traffic_lab_v2_soak) {
 
         // WHAT THE SOAK HOLDS. Every window: nobody waits for no reason, no deadlock (a loop with a right of way in it),
         // nobody at rest in a box but by a recorded give-way, following holds on one path; over the run, no body touches
-        // another, entries on red and the longest stand as held (kSoakMostEnteredOnRed, kSoakLongestStand).
+        // another, entries on red, the longest stand (kSoakStandCycles of the longest cycle) and the drivers that changed
+        // their minds twice as limited (kSoakMostEnteredOnRed, kSoakMostChangedMindTwice); the measurements table passes
+        // (its endless_waits and no_progress rows among it).
+        const double soakLongestStand = kSoakStandCycles * d->rightOfWay().counts.longestCycle;
+        const driving::JunctionPlanCounts& pc = d->junctionPlanCounts();
+        std::printf("    [lab-soak] the longest stand allowed: %.0f x the longest cycle %.1f s = %.1f s; drivers that "
+                    "changed their minds twice %llu; another way: %llu asked, %llu took one\n",
+                    kSoakStandCycles, d->rightOfWay().counts.longestCycle, soakLongestStand,
+                    static_cast<unsigned long long>(pc.changedMindTwice),
+                    static_cast<unsigned long long>(pc.askedAnotherWay), static_cast<unsigned long long>(pc.tookAnotherWay));
         uint64_t touchesAll = 0, enteredOnRed = 0;
         for (const SoakWindow& x : windows) {
             CHECK(x.noReasonSamples == 0);
             CHECK(x.deadlocks == 0);
             CHECK(x.boxNotAllowed <= kMostBoxStopsNotAllowed);
             CHECK(x.onePathPairTicks == 0);
-            CHECK(x.longestStand <= kSoakLongestStand);
+            CHECK(x.longestStand <= soakLongestStand);
             enteredOnRed += x.enteredOnRed;
             for (uint8_t t = 0; t < driving::kTouchKindCount; ++t) touchesAll += x.touchSpells[t];
         }
         CHECK(touchesAll <= kMostTouchSpellsSoak);
         CHECK(enteredOnRed <= kSoakMostEnteredOnRed);
+        CHECK(pc.changedMindTwice <= kSoakMostChangedMindTwice);
         CHECK(m.report().passed());
         CHECK(sim.drivingHost().counts().placed == sim.drivingHost().counts().drivers);
         CHECK(sim.drivingHost().counts().noRoomYet == 0);
@@ -1260,7 +1330,59 @@ TEST_CASE(level_traffic_lab_v2_refused_rules_leave_the_old_model_driving) {
     CHECK(moving > 100);
 }
 
+// THE CITY BUILT AGAIN (issue #284): CitySim::build starts the new model's host over. Before, a rebuild kept the old
+// seats: the host still said it drove the last build's agents, so handing the new drivers over was refused ("the new
+// model already drives this level's drivers") and the level fell back to the old model -- or, built directly, the old
+// model skipped agents whose indices happened to match old seats.
+TEST_CASE(level_traffic_lab_v2_rebuild_hands_over_again) {
+    LoadedCity lc("traffic_lab.json", "");
+    CHECK(lc.ok);
+    if (!lc.ok) return;
+    for (int i = 0; i < 60 * 5; ++i) lc.city.step(lc.world, kStep);
+    const uint32_t drivers = lc.city.sim().drivingHost().counts().drivers;
+    CHECK(drivers > 0);
+    CHECK(lc.city.build(lc.world, lc.assets.get(), nullptr));
+    const citysim::CitySim& sim = lc.city.sim();
+    CHECK(sim.drivingV2() != nullptr);
+    CHECK(sim.drivingHost().active());
+    if (!sim.drivingV2() || !sim.drivingHost().active()) return;
+    const citysim::DrivingCounts& n = sim.drivingHost().counts();
+    std::printf("    [lab-v2] built again: %u drivers handed over (%u the first time), %u placed, %llu trips begun, %zu cars "
+                "in the model\n",
+                n.drivers, drivers, n.placed, static_cast<unsigned long long>(n.tripsBegun), sim.drivingV2()->carCount());
+    CHECK(n.drivers == drivers);
+    CHECK(n.placed == n.drivers);
+    CHECK(n.tripsBegun == n.placed);   // counted afresh, not carried over
+    CHECK(sim.drivingV2()->carCount() == n.placed);
+    // Every agent the host says it drives is a driver of this build, and the old model drives the rest.
+    uint32_t handed = 0;
+    for (std::size_t i = 0; i < sim.agents().size(); ++i) {
+        if (!sim.drivenByV2(static_cast<int>(i))) continue;
+        ++handed;
+        CHECK(sim.agents()[i].mode == citysim::Agent::Mode::Driver && sim.agents()[i].vehicle >= 0);
+    }
+    CHECK(handed == n.drivers);
+    for (int i = 0; i < 60 * 20; ++i) lc.city.step(lc.world, kStep);
+    CHECK(sim.drivingHost().measurements().report().passed());
+}
+
+// THE OLD MODEL'S STATE, PINNED (issue #284: before, this printed the hashes for a person to compare by hand). Taken on
+// 7021e1b8 with the #284 work, none of which reaches the old model (below). The old model's code is the same as before the rebuild began: `git diff 3e86063c..HEAD --
+// src/apps/citysim/` shows only additions -- the new model's host (city_driving.*), CitySim's hand-over to it
+// (startDrivingV2, setDrivingRoads, the driving v2 tick), and the seam's exclusions, each `if (drivenByV2(i)) continue`
+// or a grid placement skipped for such an agent, which on a level the new model does not drive is never true; CitySim::
+// build starting the new model over (#284) does nothing on such a level either. A change to the old model's code that
+// changes these numbers changes what v1 levels do: it must say so and update them in the same change.
+// traffic_lab as v1: t = 30, 60, 90, 120 s
+constexpr uint64_t kV1LabHashes[] = {0xc986a7df6eb1a143ull, 0xf9a798b9a88a80afull, 0x9c837cdab19c3d3cull,
+                                     0x12e916f1e4bc0225ull};
+// river_town: t = 15, 30, 45, 60 s
+constexpr uint64_t kV1RiverHashes[] = {0xf131e7b3521590c2ull, 0x97f03bee42dfacf0ull, 0xf091e2f8d51d0c6eull,
+                                       0x1cea9a39a79f85f4ull};
+
 TEST_CASE(level_v1_state_is_unchanged) {
-    runAndHash("traffic_lab.json", "v1", 120.0, 1.0 / 60.0, 30.0);
-    runAndHash("river_town.json", "", 60.0, 1.0 / 30.0, 15.0);
+    const std::vector<uint64_t> lab = runAndHash("traffic_lab.json", "v1", 120.0, 1.0 / 60.0, 30.0);
+    const std::vector<uint64_t> river = runAndHash("river_town.json", "", 60.0, 1.0 / 30.0, 15.0);
+    CHECK(lab == std::vector<uint64_t>(std::begin(kV1LabHashes), std::end(kV1LabHashes)));
+    CHECK(river == std::vector<uint64_t>(std::begin(kV1RiverHashes), std::end(kV1RiverHashes)));
 }

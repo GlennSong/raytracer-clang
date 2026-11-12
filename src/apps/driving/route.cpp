@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace driving {
@@ -114,11 +116,13 @@ int legWithLane(const Route& r, PathId lane, uint32_t fromLeg) {
 }
 
 // How a car leaving `lane` (in leg `leg`, not the last) leads on into the next leg: the step it takes out of the
-// lane's end (a connector, or the next leg's lane itself) whose lane in the next leg needs the fewest changes still
-// (the lower path id on a tie). None when the lane does not lead on.
+// lane's end (a connector, or the next leg's lane itself) whose lane in the next leg needs the fewest changes still;
+// on a tie, the connector the search itself took for this turn (it chose that one with the ways on closed to the class
+// in view, issue #284), then the lower path id. None when the lane does not lead on.
 PathId bestStepOn(const Route& r, const LaneGraph& g, uint32_t leg, PathId lane, uint32_t* changes) {
     PathId best;
     uint32_t bestChanges = kCannotFinish;
+    const PathId searched = leg < r.turns.size() ? r.turns[leg].connector : PathId();
     forEachNext(g, lane, [&](PathId q) {
         PathId into = q;
         if (g.paths[q.index].kind == PathKind::Connector) {
@@ -128,7 +132,8 @@ PathId bestStepOn(const Route& r, const LaneGraph& g, uint32_t leg, PathId lane,
         }
         const uint32_t c = changesIn(r, leg + 1, into);
         if (c == kCannotFinish) return;
-        if (c < bestChanges || (c == bestChanges && q < best)) {
+        const bool preferred = q == searched && best != searched;
+        if (c < bestChanges || (c == bestChanges && (preferred || (best != searched && q < best)))) {
             bestChanges = c;
             best = q;
         }
@@ -159,6 +164,98 @@ Route noRoute(Route r, NoRouteWhy why, const std::string& words) {
 }
 
 }  // namespace
+
+// ---- ways on closed to a class (issue #284) -------------------------------------------------------------------------
+
+namespace {
+
+// Adds the children of `parent` for the chains [begin, end) (sorted, all sharing their first `depth` turns): one node per
+// distinct turn at `depth`, side by side, then each one's own children.
+void addChainChildren(ClosedChains& out, const std::vector<std::vector<PathId>>& chains,
+                      const std::vector<uint8_t>& never, std::size_t begin, std::size_t end, std::size_t depth,
+                      uint32_t parent) {
+    std::vector<std::pair<std::size_t, std::size_t>> groups;   // [from, to) of the chains with each turn at `depth`
+    for (std::size_t k = begin; k < end;) {
+        if (chains[k].size() <= depth) {
+            ++k;
+            continue;
+        }
+        std::size_t e = k + 1;
+        while (e < end && chains[e].size() > depth && chains[e][depth] == chains[k][depth]) ++e;
+        groups.push_back({k, e});
+        k = e;
+    }
+    out.nodes[parent].firstChild = static_cast<uint32_t>(out.nodes.size());
+    out.nodes[parent].childCount = static_cast<uint32_t>(groups.size());
+    for (const std::pair<std::size_t, std::size_t>& g : groups) {
+        ClosedChains::Node node;
+        node.turn = chains[g.first][depth];
+        for (std::size_t k = g.first; k < g.second; ++k)
+            if (chains[k].size() == depth + 1) {
+                node.closed = true;
+                node.never = node.never || never[k] != 0;
+            }
+        out.nodes.push_back(node);
+    }
+    for (std::size_t i = 0; i < groups.size(); ++i)
+        addChainChildren(out, chains, never, groups[i].first, groups[i].second, depth + 1,
+                         out.nodes[parent].firstChild + static_cast<uint32_t>(i));
+}
+
+uint32_t childFor(const ClosedChains& c, uint32_t state, PathId turn) {
+    const ClosedChains::Node& node = c.nodes[state];
+    const ClosedChains::Node* first = c.nodes.data() + node.firstChild;
+    const ClosedChains::Node* last = first + node.childCount;
+    const ClosedChains::Node* it =
+        std::lower_bound(first, last, turn, [](const ClosedChains::Node& x, PathId t) { return x.turn < t; });
+    return it != last && it->turn == turn ? static_cast<uint32_t>(it - c.nodes.data()) : 0;
+}
+
+}  // namespace
+
+ClosedChains buildClosedChains(std::vector<std::vector<PathId>> chains, const std::vector<uint8_t>& never) {
+    ClosedChains out;
+    std::vector<std::pair<std::vector<PathId>, uint8_t>> sorted;
+    for (std::size_t k = 0; k < chains.size(); ++k)
+        if (chains[k].size() >= 2) sorted.push_back({std::move(chains[k]), k < never.size() ? never[k] : uint8_t(0)});
+    std::sort(sorted.begin(), sorted.end());
+    std::vector<std::vector<PathId>> list;
+    std::vector<uint8_t> nev;
+    for (const std::pair<std::vector<PathId>, uint8_t>& s : sorted) {
+        if (!list.empty() && list.back() == s.first) {
+            nev.back() = static_cast<uint8_t>(nev.back() | s.second);
+            continue;
+        }
+        list.push_back(s.first);
+        nev.push_back(s.second);
+    }
+    if (list.empty()) return out;
+    out.chains = static_cast<uint32_t>(list.size());
+    out.nodes.push_back(ClosedChains::Node());
+    addChainChildren(out, list, nev, 0, list.size(), 0, 0);
+    return out;
+}
+
+uint32_t ClosedChains::step(uint32_t state, PathId turn) const {
+    if (nodes.empty() || state >= nodes.size()) return 0;
+    const uint32_t child = childFor(*this, state, turn);
+    if (child == 0) return 0;
+    return nodes[child].closed ? kChainClosed : child;
+}
+
+bool ClosedChains::closedChain(const PathId* turns, std::size_t count, bool* never) const {
+    if (never) *never = false;
+    uint32_t state = 0;
+    for (std::size_t k = 0; k < count && !nodes.empty(); ++k) {
+        state = childFor(*this, state, turns[k]);
+        if (state == 0) return false;
+        if (nodes[state].closed) {
+            if (never) *never = nodes[state].never;
+            return k + 1 == count;
+        }
+    }
+    return false;
+}
 
 // ---- classes and paths -------------------------------------------------------------------------------------------
 
@@ -261,10 +358,19 @@ Route findRoute(const LaneGraph& roads, const RouteBounds& bounds, const RouteCl
     const uint32_t startCount = static_cast<uint32_t>(startNodes.size());
     const uint32_t destNode = n + startCount;
     const uint32_t nodeCount = destNode + 1;
-    auto nodePath = [&](uint32_t u) { return u < n ? PathId(u) : (u < destNode ? startNodes[u - n] : to.path); };
+    // WAYS ON CLOSED TO THE CLASS (issue #284; RouteClass::closedChains): after the nodes above come nodes for "path p,
+    // from its start, partway through a closed chain's turns" (the chain's state, a node of its tree), made as the search
+    // reaches them; a car in such a state may not take the turn that completes a closed chain.
+    std::vector<PathId> chainNodePath;
+    std::vector<uint32_t> chainNodeState;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> chainNodeOf;   // (path, chain state) -> node
+    auto nodePath = [&](uint32_t u) {
+        return u < n ? PathId(u) : (u < destNode ? startNodes[u - n] : u == destNode ? to.path : chainNodePath[u - nodeCount]);
+    };
+    auto nodeState = [&](uint32_t u) -> uint32_t { return u < nodeCount ? 0u : chainNodeState[u - nodeCount]; };
     auto nodeEntry = [&](uint32_t u) -> Real {
-        if (u < n) return 0;
-        if (u >= destNode) return to.along;
+        if (u < n || u > destNode) return 0;
+        if (u == destNode) return to.along;
         const PathId p = startNodes[u - n];
         return p == from.path ? from.along : startShare * roads.paths[p.index].length;
     };
@@ -309,6 +415,21 @@ Route findRoute(const LaneGraph& roads, const RouteBounds& bounds, const RouteCl
     std::vector<uint32_t> pred(nodeCount, kNoNode);
     std::vector<uint8_t> bySidestep(nodeCount, 0);
     std::vector<HeapItem> heap;
+    // The node for path `p` from its start in chain state `state` (0: the plain node).
+    auto nodeFor = [&](PathId p, uint32_t state) -> uint32_t {
+        if (state == 0) return p.index;
+        const std::pair<uint32_t, uint32_t> key(p.index, state);
+        const std::map<std::pair<uint32_t, uint32_t>, uint32_t>::const_iterator it = chainNodeOf.find(key);
+        if (it != chainNodeOf.end()) return it->second;
+        const uint32_t v = nodeCount + static_cast<uint32_t>(chainNodePath.size());
+        chainNodePath.push_back(p);
+        chainNodeState.push_back(state);
+        chainNodeOf.emplace(key, v);
+        best.push_back(kForever);
+        pred.push_back(kNoNode);
+        bySidestep.push_back(0);
+        return v;
+    };
     auto reach = [&](uint32_t v, uint32_t from_, Real cost, bool sideways) {
         if (!(cost < best[v])) return;
         best[v] = cost;
@@ -343,10 +464,17 @@ Route findRoute(const LaneGraph& roads, const RouteBounds& bounds, const RouteCl
             // The destination, when it lies ahead on this path.
             if (p == to.path && to.along + kAlongTolerance >= entry)
                 reach(destNode, u, item.cost + perMetre * std::max(Real(0), to.along - entry), false);
-            // On along the path's end.
+            // On along the path's end (a turn that completes a closed chain is not taken).
             const Real toEnd = item.cost + perMetre * (path.length - entry);
+            const uint32_t state = nodeState(u);
             forEachNext(roads, p, [&](PathId q) {
-                if (mayUse(roads, cls, q)) reach(q.index, u, toEnd, false);
+                if (!mayUse(roads, cls, q)) return;
+                uint32_t next = state;
+                if (roads.paths[q.index].kind == PathKind::Connector && !cls.closedChains.empty()) {
+                    next = cls.closedChains.step(state, q);
+                    if (next == kChainClosed) return;
+                }
+                reach(nodeFor(q, next), u, toEnd, false);
             });
         }
         // Sideways, into the lane beside (a start node goes to the start node beside it), when the class may.
@@ -354,8 +482,9 @@ Route findRoute(const LaneGraph& roads, const RouteBounds& bounds, const RouteCl
             for (const bool towardKerb : {false, true}) {
                 const PathId beside = sidestep(roads, p, towardKerb);
                 if (!beside.valid() || !mayUse(roads, cls, beside)) continue;
-                const uint32_t v = u < n ? beside.index : n + roads.paths[beside.index].indexInSection;
-                if (u >= n && !startInSection) continue;
+                const bool startNode = u >= n && u < destNode;
+                if (startNode && !startInSection) continue;
+                const uint32_t v = startNode ? n + roads.paths[beside.index].indexInSection : nodeFor(beside, nodeState(u));
                 reach(v, u, item.cost + kLaneChangeCostSeconds, true);
             }
         }
@@ -689,6 +818,8 @@ uint64_t routeHash(const Route& route) {
     h.pod(static_cast<uint8_t>(route.vehicle.laneChanges));
     h.pod(static_cast<uint64_t>(route.vehicle.closed.size()));
     for (const engine::PathId c : route.vehicle.closed) h.pod(c.index);
+    h.pod(route.vehicle.closedChains.chains);
+    h.pod(static_cast<uint64_t>(route.vehicle.closedChains.nodes.size()));
     h.pod(route.startConnector.index);
     h.pod(route.endConnector.index);
     h.pod(static_cast<uint64_t>(route.legs.size()));

@@ -150,6 +150,13 @@ bool movementOf(const std::string& word, Movement& out) {
 
 std::string movementWords() { return wordList(kMovementWords); }
 
+bool warrantHolds(const ArrowWarrant& w, const ArrowFacts& f) {
+    if (w.opposingLanesAtLeast > 0 && f.opposingLanes < w.opposingLanesAtLeast) return false;
+    if (w.asksOpposingLimit && !(f.opposingLimit > w.opposingLimitAbove)) return false;
+    if (w.approachesAtLeast > 0 && f.approaches < w.approachesAtLeast) return false;
+    return true;
+}
+
 bool ControlKind::hasLights() const {
     return std::find(settle.begin(), settle.end(), SettleQuestion::Light) != settle.end();
 }
@@ -184,6 +191,9 @@ std::size_t RuleSet::unsourcedNumberCount() const {
     for (const std::vector<Number>* table : {&numbers, &defaultLimits})
         for (const Number& n : *table)
             if (!n.hasSource) ++count;
+    for (const ControlKind& k : controls)   // a protected turn's warrant carries numbers too
+        for (const ArrowWarrant& w : k.protectedWhen)
+            if (!w.hasSource) ++count;
     return count;
 }
 

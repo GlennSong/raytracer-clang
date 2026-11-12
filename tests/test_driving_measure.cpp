@@ -374,12 +374,13 @@ TEST_CASE(measure_9_queue_figures_by_hand) {
     CHECK(f.gaps == 5u && f.bursts == 2u);
     CHECK_APPROX(f.firstCarDelay, 1.8, 1e-9);
 
-    // In the table: 1.86 s is inside the band, 1.8 s too.
+    // In the table: 1.86 s is inside the band. The first car's 1.8 s is measured with no target (issue #284: the plan's
+    // band is counted from the green, the row from moving off).
     MeasureRows rows;
     rows.queues = bursts;
     rows.queueLine = {0, 0};
     CHECK(rowOf(rows, "queue_headway").status == RowStatus::Pass);
-    CHECK(rowOf(rows, "queue_start_up").status == RowStatus::Pass);
+    CHECK(rowOf(rows, "queue_start_up").status == RowStatus::NoTarget);
     // No queue at all: nothing to see, which fails nothing.
     CHECK(rowOf(MeasureRows(), "queue_headway").status == RowStatus::NoData);
     CHECK(!std::isfinite(queueFigures({}).secondsPerCar));
@@ -397,8 +398,9 @@ TEST_CASE(measure_10_describe_and_json) {
     std::printf("%s", text.c_str());
     // The passing row, and the failing row with its offender under it.
     const std::string passing =
-        "  pass              Standing still with no reason: 0.0 car-seconds in 0 spells; the longest 0.0 s. Target: "
-        "none: every driven car at rest is waiting for something it can name.\n";
+        "  pass              Standing still with no reason (nothing named, or a reason that no longer applies): 0.0 "
+        "car-seconds in 0 spells; the longest 0.0 s. Target: none: every driven car at rest is waiting for something it "
+        "can name, that still holds.\n";
     const std::string failing =
         "  FAIL              Jumps (a front moving further in a tick than its speed could carry it): 1 car-ticks; the "
         "worst 4.890 m further than its speed allows. Target: none.\n"

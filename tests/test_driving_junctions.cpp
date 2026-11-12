@@ -299,6 +299,58 @@ TEST_CASE(junction_table_1_four_way_lights_two_phases) {
     std::printf("    %d meetings at the four-way, each checked at both phases\n", n);
 }
 
+// PROTECTED FAR TURNS BY WARRANT (issue #284): with a warrant that holds at the four-way (four approaches or more) its far
+// turns are never green with anything they cross from the approach facing them, and get greens of their own (more
+// phases); with one that does not hold (five or more) the table is the plain two-phase one.
+TEST_CASE(junction_table_2b_four_way_far_turns_protected_by_warrant) {
+    TestRoads t = driving_test::gridRoads(3, 3);
+    ControlKind k = signal(false);
+    ArrowWarrant w;
+    w.name = "four or more approaches";
+    w.hasSource = true;
+    w.approachesAtLeast = 4;
+    k.protectedWhen = {w};
+    const RightOfWay row = tableFor(t.graph, rulesWith(k));
+    const engine::JunctionId j = t.junction(1, 1);
+    const JunctionRules& jr = row.junctions[j.index];
+    std::printf("    protected: %u turns over the grid, %u phases at the four-way\n", row.counts.protectedTurns,
+                jr.phases.count);
+    CHECK(row.counts.protectedTurns > 0u);
+    CHECK(jr.phases.count > 2u);
+    const engine::LaneGraph& g = t.graph;
+    const engine::Junction& jn = g.junctions[j.index];
+    uint32_t checked = 0, protectedHere = 0;
+    for (uint32_t i = 0; i < jn.connectors.count; ++i)
+        protectedHere += row.paths[g.junctionConnectors[jn.connectors.first + i].index].protectedTurn ? 1u : 0u;
+    CHECK(protectedHere > 0u);
+    for (uint32_t x = jn.crossings.first; x < jn.crossings.end(); ++x) {
+        const engine::CrossingPoint& rec = g.crossings[x];
+        if (rec.otherSide != engine::OtherSide::Path || rec.meeting == engine::Meeting::Split) continue;
+        const engine::PathId o = rec.otherPath();
+        if (!row.paths[rec.a.index].protectedTurn && !row.paths[o.index].protectedTurn) continue;
+        const engine::Vec2 ha = row.approaches[row.paths[rec.a.index].approach].heading;
+        const engine::Vec2 ho = row.approaches[row.paths[o.index].approach].heading;
+        if (!(engine::dot(ha, ho) < kFacingDot)) continue;
+        for (uint32_t ph = 0; ph < jr.phases.count; ++ph) {
+            ++checked;
+            CHECK(!(row.light(g, rec.a, ph) == Light::Green && row.light(g, o, ph) == Light::Green));
+        }
+    }
+    CHECK(checked > 0u);
+    for (uint32_t i = 0; i < jn.connectors.count; ++i) {   // every protected turn has a green of its own somewhere
+        const engine::PathId c = g.junctionConnectors[jn.connectors.first + i];
+        if (!row.paths[c.index].protectedTurn) continue;
+        bool green = false;
+        for (uint32_t ph = 0; ph < jr.phases.count; ++ph) green = green || row.light(g, c, ph) == Light::Green;
+        CHECK(green);
+    }
+    k.protectedWhen[0].approachesAtLeast = 5;
+    TestRoads t2 = driving_test::gridRoads(3, 3);
+    const RightOfWay plain = tableFor(t2.graph, rulesWith(k));
+    CHECK(plain.counts.protectedTurns == 0u);
+    CHECK(plain.junctions[t2.junction(1, 1).index].phases.count == 2u);
+}
+
 TEST_CASE(junction_table_2_four_way_lights_with_far_turn_arrows) {
     TestRoads t = driving_test::gridRoads(3, 3);
     const RightOfWay row = tableFor(t.graph, rulesWith(signal(true)));

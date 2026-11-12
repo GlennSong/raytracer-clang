@@ -68,11 +68,18 @@ void Driving::settleClaims() {
 
 void Driving::closeTurnsForRoom() {
     if (!roads_ || !hasRules_) return;
-    for (std::size_t i = 0; i < routeClasses_.size() && i < vehicleClasses_.size(); ++i)
+    for (std::size_t i = 0; i < routeClasses_.size() && i < vehicleClasses_.size(); ++i) {
         routeClasses_[i].closed =
             roomOn_ ? turnsClosedForRoom(*roads_, rightOfWay_, ruleSet_, roadRules_, roomRoads_, roomNumbers_, lightsRun_,
                                          junctionNumbers_.comfortableSideAccel, vehicleClasses_.at(i))
                     : std::vector<engine::PathId>();
+        // ... and the ways on from an open turn that never (or too seldom) let it through (issue #284).
+        routeClasses_[i].closedChains =
+            roomOn_ ? chainsClosedForRoom(*roads_, rightOfWay_, ruleSet_, roadRules_, roomRoads_, roomNumbers_, lightsRun_,
+                                          junctionNumbers_.comfortableSideAccel, vehicleClasses_.at(i),
+                                          routeClasses_[i].closed)
+                    : ClosedChains();
+    }
 }
 
 RouteClass Driving::routeClass(uint32_t vehicleClass) const {
@@ -664,6 +671,9 @@ void Driving::plan() {
             t->trace.heldStop = p.stopWhy;
             t->trace.heldTopSpeed = p.topSpeedWhy;
         }
+        // Refused room for long at the junction it waits at: it asks for another way (issue #284). Visited in car order,
+        // after its own decision is applied; a route found changes only this car's trip.
+        if (roomOn_) askAnotherWay(c, *t);
     }
 }
 
@@ -971,6 +981,46 @@ void Driving::dropPlansForNewRoute(Trip& t) {
     notePlanUpdate(u, t.car, t, t.junctions);
 }
 
+void Driving::askAnotherWay(Car& c, Trip& t) {
+    if (!(roomNumbers_.anotherWayAfter > 0) || !(step_ > 0)) return;
+    const double after = static_cast<double>(roomNumbers_.anotherWayAfter);
+    if (t.askedAnotherWayTick > 0 && static_cast<double>(tickCount_ - t.askedAnotherWayTick) * step_ < after) return;
+    // The nearest junction whose line its front has not passed: refused there, having asked that long?
+    const JunctionPlan* refused = nullptr;
+    for (std::size_t k = 0; k < t.junctions.count && k < kMaxJunctionPlans; ++k) {
+        const JunctionPlan& p = t.junctions.plans[k];
+        if (!p.connector.valid() || p.startOdometer - c.odometer < -roomNumbers_.atLineWithin) continue;
+        if (p.room.state == RoomState::Refused && p.room.asked &&
+            static_cast<double>(tickCount_ - p.room.askedTick) * step_ >= after)
+            refused = &p;
+        break;
+    }
+    if (!refused) return;
+    t.askedAnotherWayTick = tickCount_;
+    ++planCounts_.askedAnotherWay;
+    // A way from where it is that does not take that turn (closed for this one search only).
+    RouteClass cls = routeClass(c.vehicleClass);
+    const std::vector<engine::PathId>::iterator at = std::lower_bound(cls.closed.begin(), cls.closed.end(), refused->connector);
+    if (at == cls.closed.end() || *at != refused->connector) cls.closed.insert(at, refused->connector);
+    PathPoint front;
+    front.path = c.path;
+    front.along = c.along;
+    Route route = findRoute(*roads_, routeBounds_, cls, front, t.destination);
+    if (!route.found) return;   // no other way: it keeps its own and waits on (the measurements report a wait that cannot end)
+    // ... that it can take now: the first turn of the new way, where lights run there, shows green (a driver gives up its
+    // turn for one it sees it may take, not for another red; otherwise it waits on and asks again later).
+    const engine::PathId firstTurn = !route.turns.empty() ? route.turns[0].connector : route.endConnector;
+    if (lightsRun_ && firstTurn.valid() && lampAt(*roads_, rightOfWay_, firstTurn, clockSeconds_) != Lamp::Green &&
+        lampAt(*roads_, rightOfWay_, firstTurn, clockSeconds_) != Lamp::Dark)
+        return;
+    route.vehicle = routeClass(c.vehicleClass);   // later questions of the route see the class as it is
+    ++planCounts_.tookAnotherWay;
+    t.route = std::move(route);
+    t.legReached = 0;
+    c.held.decided = false;   // decides again on its next tick, on the new route
+    dropPlansForNewRoute(t);
+}
+
 bool Driving::reroute(TripId id) {
     Trip* t = trips_.get(id);
     if (!t) return false;
@@ -1109,6 +1159,7 @@ uint64_t Driving::stateHash() const {
         }
         h.pod(routeHash(t->route));
         h.pod(t->legReached);
+        h.pod(t->askedAnotherWayTick);
         h.pod(t->wayAt);
         h.pod(static_cast<uint8_t>(t->wayEnds));
         h.pod(static_cast<uint64_t>(t->way.paths.size()));
@@ -1156,10 +1207,158 @@ uint64_t Driving::traceHash() const {
 }
 
 WaitReport Driving::waitReport() const {
-    WaitReport r = analyseWaiting(waitingCars(cars_));
+    std::vector<WaitingCar> waiting = waitingCars(cars_);
+    // A reason named that no longer applies is no reason (issue #284): such a car counts as waiting for none.
+    for (WaitingCar& w : waiting)
+        if (w.why.sort != ReasonSort::None) {
+            const Car* c = car(w.car);
+            if (c && !waitReasonHolds(*c)) w.why = WaitReason();
+        }
+    WaitReport r = analyseWaiting(std::move(waiting));
     for (const Car& c : cars_)
         if (c.driven) ++r.driven;
     return r;
+}
+
+bool Driving::waitCanNeverEnd(const Car& c, std::string* why) const {
+    if (!roads_ || !roomOn_ || !isWaiting(c) || c.binding.by != Limit::Stop || c.binding.stopFor != StopFor::NoRoom)
+        return false;
+    const std::map<CarId, TripId>::const_iterator tripIt = tripOfCar_.find(c.id);
+    const Trip* t = tripIt != tripOfCar_.end() ? trips_.get(tripIt->second) : nullptr;
+    if (!t || c.vehicleClass >= routeClasses_.size()) return false;
+    const RouteClass& cls = routeClasses_[c.vehicleClass];
+    for (std::size_t k = 0; k < t->junctions.count && k < kMaxJunctionPlans; ++k) {
+        const JunctionPlan& p = t->junctions.plans[k];
+        if (!p.connector.valid() || p.startOdometer - c.odometer < -roomNumbers_.atLineWithin) continue;
+        if (p.room.state != RoomState::Refused) return false;
+        // (Words only when asked: this runs for every refused car every tick the measurements watch.)
+        const auto say = [&](const std::string& what) {
+            if (why)
+                *why = "at junction " + std::to_string(p.junction.index) + " by connector " +
+                       std::to_string(p.connector.index) + ": " + what;
+            return true;
+        };
+        if (p.room.refusal == RoomRefusal::TooShort || p.room.refusal == RoomRefusal::MustStopAhead)
+            return say(roomRefusalWords(p.room.refusal));
+        if (std::binary_search(cls.closed.begin(), cls.closed.end(), p.connector))
+            return say("a turn closed to its class for want of room");
+        if (p.room.refusal != RoomRefusal::LightsAhead) return false;
+        std::array<engine::PathId, kMaxJunctionPlans> chain{};
+        std::size_t n = 0;
+        for (std::size_t j = k; j < t->junctions.count && j < kMaxJunctionPlans && n < std::max<std::size_t>(p.room.through, 2);
+             ++j)
+            chain[n++] = t->junctions.plans[j].connector;
+        // The claim's chain, or any longer chain through the plans the car has (the claim may have stopped short).
+        for (std::size_t len = 2; len <= n; ++len) {
+            bool never = false;
+            if (cls.closedChains.closedChain(chain.data(), len, &never) && never)
+                return say("the lights on the way on through the next junctions never let it through");
+        }
+        return false;
+    }
+    return false;
+}
+
+bool Driving::waitReasonHolds(const Car& c, std::string* why) const {
+    const auto no = [&](const std::string& reason) {
+        if (why) *why = reason;
+        return false;
+    };
+    if (!roads_) return no("no road");
+    const Binding& b = c.binding;
+    if (b.by == Limit::Nothing) return no("held by nothing");
+    const std::map<CarId, TripId>::const_iterator tripIt = tripOfCar_.find(c.id);
+    const Trip* t = tripIt != tripOfCar_.end() ? trips_.get(tripIt->second) : nullptr;
+    if (!t) return no("on no trip");
+    const auto knownPath = [](const engine::LaneGraph& g, engine::PathId p) { return p.valid() && p.index < g.paths.size(); };
+    // The paths it knows its way along, from where its front is: the named car must be on one of them (or on a path
+    // leaving the same lane as one of them: the car ahead at a split, traffic_state.h carAhead).
+    const auto onMyWay = [&](const Car& other) {
+        const auto touches = [&](engine::PathId p) {
+            for (std::size_t k = t->wayAt; k < t->way.paths.size(); ++k) {
+                const engine::PathId w = t->way.paths[k];
+                if (w == p) return true;
+                if (knownPath(*roads_, w) && knownPath(*roads_, p) &&
+                    roads_->paths[w.index].kind == engine::PathKind::Connector &&
+                    roads_->paths[p.index].kind == engine::PathKind::Connector &&
+                    roads_->paths[w.index].from == roads_->paths[p.index].from)
+                    return true;
+            }
+            return p == c.path;
+        };
+        if (touches(other.path)) return true;
+        for (std::size_t k = 0; k < other.trailCount && k < kMaxTrail; ++k)
+            if (touches(other.trail[k])) return true;
+        return false;
+    };
+    // The paths whose crossing points it may give way at: its plans' connectors and the paths of its way (#284: lanes too).
+    const auto announcedOnMine = [&](CarId other) {
+        const auto onPath = [&](engine::PathId p) {
+            if (!knownPath(*roads_, p)) return false;
+            const engine::Range xs = roads_->paths[p.index].crossings;
+            for (uint32_t x = xs.first; x < xs.end() && x < roads_->pathCrossings.size(); ++x)
+                for (const Announcement& a : board_.on(roads_->pathCrossings[x]))
+                    if (a.who == other.index) return true;
+            return false;
+        };
+        for (std::size_t k = 0; k < t->junctions.count && k < kMaxJunctionPlans; ++k)
+            if (onPath(t->junctions.plans[k].connector)) return true;
+        for (std::size_t k = t->wayAt; k < t->way.paths.size(); ++k)
+            if (onPath(t->way.paths[k])) return true;
+        return false;
+    };
+    switch (b.by) {
+    case Limit::CarAhead: {
+        // (A car named that is no longer on the road was taken off by the host after this tick's move, which named it:
+        // the driver sees that at its next look. The tick itself never names a car that is not placed.)
+        const Car* other = car(b.car);
+        if (other && other->id == c.id) return no("behind itself");
+        if (other && !onMyWay(*other))
+            return no("behind car " + std::to_string(b.car.index) + ", which is not on its way ahead");
+        return true;
+    }
+    case Limit::Stop: {
+        if (!c.held.hasStop || c.held.stopRule != b.rule) return no("a stop it no longer holds");
+        if (c.held.stopAt < c.odometer - static_cast<double>(junctionNumbers_.atLineWithin))
+            return no("a place to stop that is behind it");
+        if (b.car.valid()) {
+            const Car* other = car(b.car);
+            if (other && other->id == c.id) return no("waiting for itself");   // (gone from the road: as above)
+            // (Read against this tick's board only on a tick the driver decided: between decisions it holds what it
+            // decided, by the board then, for up to one decide interval.)
+            const uint32_t every = std::max<uint32_t>(1, settings_.decideEveryTicks);
+            const bool decidedNow = tickCount_ > 0 && (tickCount_ - 1) % every == c.id.index % every;
+            if (givesWay(b.stopFor) && junctionsOn_ && decidedNow && !announcedOnMine(b.car))
+                return no("giving way to car " + std::to_string(b.car.index) +
+                          ", which is announced on none of the crossing points ahead of it");
+            // (Waiting for room behind a car's tail: the car is on the road, above. Which car bounds the room is settled
+            // again after each decision -- the same tick's settle step may refuse it for another reason -- and the
+            // driver acts on that at its next decision, so the claim is not read against it.)
+        }
+        // A PLAIN STOP AT A LINE WHERE THE LIGHTS RUN (a red, a yellow) whose lamp has shown green for longer than a
+        // decision: the driver has decided since with the light green, so whatever the stop is for, it is not that lamp.
+        if (b.stopFor == StopFor::Place && lightsRun_) {
+            const double interval = static_cast<double>(std::max<uint32_t>(1, settings_.decideEveryTicks) + 1) * step_;
+            for (std::size_t k = 0; k < t->junctions.count && k < kMaxJunctionPlans; ++k) {
+                const JunctionPlan& p = t->junctions.plans[k];
+                if (std::fabs(p.startOdometer - c.held.stopAt) > static_cast<double>(junctionNumbers_.atLineWithin))
+                    continue;
+                if (lampAt(*roads_, rightOfWay_, p.connector, clockSeconds_) == Lamp::Green &&
+                    lampAt(*roads_, rightOfWay_, p.connector, clockSeconds_ - interval) == Lamp::Green)
+                    return no("a stop at junction " + std::to_string(p.junction.index) +
+                              "'s line, whose lamp has shown green since before its last decision");
+            }
+        }
+        return true;
+    }
+    case Limit::WayEnd:
+        if (!t->wayEnds) return no("the end of a way that does not end");
+        return true;
+    case Limit::TopSpeed:
+    case Limit::Nothing:
+        break;
+    }
+    return b.by == Limit::TopSpeed;
 }
 
 std::string Driving::describeWaiting(const WaitReport& report) const {
@@ -1193,6 +1392,8 @@ uint64_t Driving::planHash() const {
     h.pod(planCounts_.mostCrossings);
     h.pod(planCounts_.mostCrossingsConnector.index);
     h.pod(planCounts_.mostAtOnce);
+    h.pod(planCounts_.askedAnotherWay);
+    h.pod(planCounts_.tookAnotherWay);
     h.pod(capCounts_.junctionPlansCut);
     h.pod(capCounts_.lastJunctionPlanCut.index);
     h.pod(capCounts_.waitingPointsCut);

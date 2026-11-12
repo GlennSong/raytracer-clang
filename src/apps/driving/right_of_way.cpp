@@ -113,19 +113,62 @@ struct JunctionWork {
     std::vector<PathId> conn;
     std::vector<uint32_t> app;        // local approach of each connector
     std::vector<Movement> mov;
+    std::vector<PathId> from;         // the lane each connector leaves
+    std::vector<Real> fromLimit;      // ... and the limit in force on it (m/s)
     std::vector<Vec2> heading;        // per local approach
     std::vector<uint8_t> meet;        // n * n: a cross or a join between the two
+    std::vector<uint8_t> prot;        // per connector: 1 where it is a protected turn here (protected_when)
     uint32_t n = 0;
 
     bool meets(uint32_t i, uint32_t k) const { return meet[i * n + k] != 0; }
+    // Turn i may go on a plain green giving way to what it meets from the approach facing it: a `gives_way_on_green`
+    // movement not protected here.
+    bool givesWayOnGreen(const ControlKind& ck, uint32_t i) const {
+        return hasMovement(ck.givesWayOnGreen, mov[i]) && !(i < prot.size() && prot[i]);
+    }
 };
 
+// THE ROAD FACTS A PROTECTED TURN'S WARRANT ASKS for turn i (rule_set.h ArrowWarrant): the lanes of the approaches facing
+// it whose straight-on connectors meet its path, the highest limit on them, and how many approaches the junction has.
+ArrowFacts arrowFactsOf(const JunctionWork& w, uint32_t i) {
+    ArrowFacts f;
+    f.approaches = static_cast<uint32_t>(w.heading.size());
+    std::vector<PathId> lanes;
+    for (uint32_t k = 0; k < w.n; ++k) {
+        if (w.app[k] == w.app[i] || w.mov[k] != Movement::Straight || !w.meets(i, k) ||
+            !facing(w.heading[w.app[i]], w.heading[w.app[k]]))
+            continue;
+        if (std::find(lanes.begin(), lanes.end(), w.from[k]) == lanes.end()) lanes.push_back(w.from[k]);
+        f.opposingLimit = std::max(f.opposingLimit, static_cast<double>(w.fromLimit[k]));
+    }
+    f.opposingLanes = static_cast<uint32_t>(lanes.size());
+    return f;
+}
+
+// WHETHER TURN i IS PROTECTED here: a movement that would go on the plain green giving way to something it meets from an
+// approach facing it, for which one of the control's `protected_when` warrants holds. `which` gets the warrant that held.
+bool protectedTurn(const JunctionWork& w, const ControlKind& ck, uint32_t i, const ArrowWarrant** which = nullptr) {
+    if (which) *which = nullptr;
+    if (!hasMovement(ck.givesWayOnGreen, w.mov[i]) || ck.protectedWhen.empty()) return false;
+    bool meetsOncoming = false;
+    for (uint32_t k = 0; k < w.n && !meetsOncoming; ++k)
+        meetsOncoming = w.app[k] != w.app[i] && w.meets(i, k) && facing(w.heading[w.app[i]], w.heading[w.app[k]]);
+    if (!meetsOncoming) return false;   // nothing to give way to on its green: protecting it changes nothing
+    const ArrowFacts f = arrowFactsOf(w, i);
+    for (const ArrowWarrant& wr : ck.protectedWhen)
+        if (warrantHolds(wr, f)) {
+            if (which) *which = &wr;
+            return true;
+        }
+    return false;
+}
+
 // May turns i and k of a junction with control `ck` be green together? Yes when they don't meet, come from one approach,
-// or come from approaches facing each other and one of them may go on a plain green, giving way.
+// or come from approaches facing each other and one of them may go on a plain green, giving way (and is not protected).
 bool conflict(const JunctionWork& w, const ControlKind& ck, uint32_t i, uint32_t k) {
     if (i == k || w.app[i] == w.app[k] || !w.meets(i, k)) return false;
     const bool shared = facing(w.heading[w.app[i]], w.heading[w.app[k]]) &&
-                        (hasMovement(ck.givesWayOnGreen, w.mov[i]) || hasMovement(ck.givesWayOnGreen, w.mov[k]));
+                        (w.givesWayOnGreen(ck, i) || w.givesWayOnGreen(ck, k));
     return !shared;
 }
 
@@ -287,6 +330,12 @@ MeetingAnswer settleBetweenJunctions(const RuleSet& rules, const RightOfWay& row
     return out;
 }
 
+std::string one(Real v) {
+    char b[48];
+    std::snprintf(b, sizeof b, "%.1f", v);
+    return b;
+}
+
 }  // namespace
 
 bool operator==(const MeetingAnswer& a, const MeetingAnswer& b) {
@@ -384,6 +433,9 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
             w.conn.push_back(c);
             w.app.push_back(local);
             w.mov.push_back(movementOfTurn(cp.turn));
+            w.from.push_back(from);
+            w.fromLimit.push_back(from.valid() && from.index < roads.paths.size() ? roadRules.baseLimit(roads, from)
+                                                                                 : Real(0));
             ConnectorRules& cr = out.paths[c.index];
             cr.approach = jr.approaches.first + local;
             cr.indexInJunction = i;
@@ -403,6 +455,10 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
         // The lights.
         if (jr.control == kNoControl || !rules.controls[jr.control].hasLights()) continue;
         const ControlKind& ck = rules.controls[jr.control];
+        // PROTECTED TURNS (issue #284): those the control's warrants protect here never share a green with what they
+        // would give way to.
+        w.prot.assign(w.n, 0);
+        for (uint32_t i = 0; i < w.n; ++i) w.prot[i] = protectedTurn(w, ck, i) ? 1 : 0;
         const std::vector<std::pair<bool, std::vector<uint8_t>>> phases = buildPhases(w, ck);
         jr.phases.first = static_cast<uint32_t>(out.phases.size());
         for (const std::pair<bool, std::vector<uint8_t>>& ph : phases) {
@@ -421,6 +477,19 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
         jr.phases.count = static_cast<uint32_t>(phases.size());
         ++out.counts.junctionsWithLights;
         out.counts.phases += jr.phases.count;
+        // PROTECTED TURNS (issue #284), each with the warrant that protected it and the facts it was asked of.
+        for (uint32_t i = 0; i < w.n; ++i) {
+            const ArrowWarrant* which = nullptr;
+            if (!protectedTurn(w, ck, i, &which) || !which) continue;
+            out.paths[w.conn[i].index].protectedTurn = true;
+            const ArrowFacts f = arrowFactsOf(w, i);
+            ++out.counts.protectedTurns;
+            out.protectedNotes.push_back("junction " + std::to_string(j) + ": " + pathTurnWords(roads, out, w.conn[i]) +
+                                         " goes only on its own green arrow (" + which->name + "): it crosses " +
+                                         std::to_string(f.opposingLanes) + " oncoming lanes, limit " +
+                                         one(static_cast<Real>(f.opposingLimit)) + " m/s; " +
+                                         std::to_string(f.approaches) + " approaches");
+        }
     }
 
     // Every meeting of two paths, in id order.
@@ -574,12 +643,6 @@ std::string pathTurnWords(const LaneGraph& roads, const RightOfWay& row, PathId 
 
 namespace {
 
-std::string one(Real v) {
-    char b[48];
-    std::snprintf(b, sizeof b, "%.1f", v);
-    return b;
-}
-
 const char* meetingWord(engine::Meeting m) {
     switch (m) {
     case engine::Meeting::Cross: return "cross";
@@ -684,6 +747,9 @@ std::string describeRightOfWay(const RightOfWay& row) {
                "-" + one(n.longestCycle) + " s; " + std::to_string(n.waitInsidePoints) +
                " far turns may wait inside on their green (" + std::to_string(n.waitInsideDropped) +
                " places the builder marked refused at load)\n";
+    if (n.junctionsWithLights > 0)
+        out += "  protected turns (going only on their own green arrow): " + std::to_string(n.protectedTurns) + "\n";
+    for (const std::string& a : row.protectedNotes) out += "  " + a + "\n";
     for (std::size_t i = 0; i < row.notes.size() && i < kNotesShown; ++i) out += "  " + row.notes[i] + "\n";
     if (row.notes.size() > kNotesShown)
         out += "  ... and " + std::to_string(row.notes.size() - kNotesShown) + " more notes\n";

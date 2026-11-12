@@ -550,3 +550,30 @@ TEST_CASE(route_timing_1000_routes_on_a_40_by_40_grid) {
         CHECK(found == kRoutes);
     }
 }
+
+// WAYS ON CLOSED TO A CLASS (issue #284): the tree of closed chains closes the turn that completes a chain, never the
+// first turn alone; a chain under way that turns elsewhere is over; and it tells "never" from "too seldom".
+TEST_CASE(route_closed_chains_close_the_chain_not_the_turn) {
+    using engine::PathId;
+    // Closed: 10 then 20 (never), and 10 then 30 then 40 (too seldom). Listed out of order, one twice.
+    const ClosedChains c = buildClosedChains({{PathId(10), PathId(30), PathId(40)}, {PathId(10), PathId(20)},
+                                              {PathId(10), PathId(20)}, {PathId(5)}},
+                                             {0, 1, 0, 1});
+    CHECK(c.chains == 2u);   // the one-turn "chain" is not a chain; the repeat counted once
+    const uint32_t after10 = c.step(0, PathId(10));
+    CHECK(after10 != 0u && after10 != kChainClosed);    // the first turn stays open
+    CHECK(c.step(after10, PathId(20)) == kChainClosed); // ... the turn completing a closed chain does not
+    const uint32_t after30 = c.step(after10, PathId(30));
+    CHECK(after30 != 0u && after30 != kChainClosed);
+    CHECK(c.step(after30, PathId(40)) == kChainClosed);
+    CHECK(c.step(after30, PathId(41)) == 0u);           // another way on from 30: the chain is over
+    CHECK(c.step(after10, PathId(50)) == 0u);
+    CHECK(c.step(0, PathId(20)) == 0u);                 // 20 alone is fine
+    const PathId twoTurns[] = {PathId(10), PathId(20)};
+    const PathId threeTurns[] = {PathId(10), PathId(30), PathId(40)};
+    bool never = false;
+    CHECK(c.closedChain(twoTurns, 2, &never) && never);
+    CHECK(c.closedChain(threeTurns, 3, &never) && !never);
+    CHECK(!c.closedChain(threeTurns, 2, &never));
+    CHECK(buildClosedChains({}, {}).empty());
+}
