@@ -80,7 +80,12 @@ public:
             const bundle::ProducerIdentity c = city->identity(in);
             k = bundle::fnv1a(&c.key, sizeof(c.key), k); id.inputs = c.inputs;
         } else k = bundle::fnv1aStr("nocity", k);
-        k = bundle::fnv1aStr(in.level.value("citysim", nlohmann::json::object()).dump(), k);
+        // The city sim's block, all but which driving model drives the cars (citysim.driving): that is chosen at load
+        // and changes no lot, so switching a level to the new model must not re-bake its lots. Erased only where it
+        // is, so every level without one keeps its key.
+        nlohmann::json citysimKey = in.level.value("citysim", nlohmann::json::object());
+        if (citysimKey.is_object()) citysimKey.erase("driving");
+        k = bundle::fnv1aStr(citysimKey.dump(), k);
         // The ground the lots stand on: the terrain and water blocks, and the cell it is drawn at -- the terrain
         // without its forest, which the loader places at load and the lots never read (a species mix tweak on the
         // island must not re-bake its 8.8 GB of city; a level with no forest keys exactly as before)

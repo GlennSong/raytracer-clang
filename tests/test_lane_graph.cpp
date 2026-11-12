@@ -4,8 +4,12 @@
 
 #include "../src/engine/bundle/bundle.h"
 #include "../src/engine/procgen/city/roads/lane_graph.h"
+#include "../src/engine/procgen/city/roads/lanes/lane_graph_cache.h"   // a level's lane graph saved and read back
 
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
@@ -471,4 +475,247 @@ TEST_CASE(lane_graph_reachable_parts_follow_next_and_lane_changes) {
     CHECK(solid.sizes.size() == 5);
     // the same answer every run
     CHECK(reachableParts(loop).partOf == parts.partOf);
+}
+
+// ---- A LEVEL'S LANE GRAPH SAVED AND READ BACK (lane_graph_cache.h) ------------------------------------------------------
+
+namespace {
+namespace fs = std::filesystem;
+using roads::lanes::LaneGraphOptions;
+using roads::lanes::LaneGraphSummary;
+using roads::lanes::VehicleSize;
+
+// A stand-in for the roads' key (the city producer's, in a level).
+constexpr uint64_t kTestRoadsKey = 0x5eed0f0ad5c0ffeeULL;
+
+// A fresh, empty folder for one test's files, under the system's temporary folder.
+std::string cacheTestDir(const char* tag) {
+    const fs::path d = fs::temp_directory_path() / (std::string("rt_lane_graph_cache_") + tag);
+    std::error_code ec;
+    fs::remove_all(d, ec);
+    fs::create_directories(d, ec);
+    return d.string();
+}
+std::vector<uint8_t> fileBytes(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    return std::vector<uint8_t>(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+}
+void putFile(const std::string& path, const std::vector<uint8_t>& bytes) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+}
+// The crossroads as the builder would report it: one turn refused, one problem line, a share a car can get round.
+LaneGraphSummary crossroadsSummary(const LaneGraph& g) {
+    roads::lanes::LaneGraphBuild b;
+    b.graph = g;
+    roads::lanes::JunctionNote note;
+    note.turnsStated = 13;
+    note.turnsBuilt = 12;
+    note.turnsRefused = 1;
+    b.junctionNotes.push_back(note);
+    b.problems.push_back("junction 0: a turn refused (for the test)");
+    b.reachableShare = 2.0 / 9.0;
+    return roads::lanes::summarizeLaneGraph(b);
+}
+// Two vehicle tags, as a host passes them (sorted by tag).
+LaneGraphOptions testVehicles() {
+    LaneGraphOptions o;
+    VehicleSize bus, car;
+    bus.tag = "bus";
+    bus.turningRadius = 9.0;
+    bus.width = 2.55;
+    car.tag = "car";
+    car.turningRadius = 5.0;
+    car.width = 1.9;
+    o.vehicles = {bus, car};
+    return o;
+}
+}  // namespace
+
+// SAVE THEN LOAD: the same graph, field for field and line for line, connectors and all, and the same summary; and two
+// saves of one graph are the same bytes.
+TEST_CASE(lane_graph_cache_saves_and_loads_the_same_graph) {
+    const std::string dir = cacheTestDir("round_trip");
+    const LaneGraph g = makeCrossroads();
+    const LaneGraphSummary s = crossroadsSummary(g);
+    CHECK(s.paths == 21 && s.lanes == 9 && s.connectors == 12 && s.sections == 8 && s.junctions == 1);
+    CHECK(s.refusedTurns == 1 && s.problems == 1);
+    const uint64_t key = roads::lanes::laneGraphCacheKey(kTestRoadsKey, testVehicles());
+    const std::string path = roads::lanes::laneGraphCachePath(dir, key);
+    std::string err;
+    CHECK(roads::lanes::writeLaneGraphCache(path, key, g, s, &err));
+    CHECK(err.empty());
+    LaneGraph back;
+    LaneGraphSummary backSummary;
+    CHECK(roads::lanes::readLaneGraphCache(path, key, back, backSummary, &err));
+    CHECK(back == g);
+    CHECK(dumpText(back) == dumpText(g));
+    CHECK(back.junctions[0].connectors.count == 12);   // the connectors came back with it
+    CHECK(backSummary == s);
+    std::printf("    %s\n", roads::lanes::describeLaneGraphSummary(backSummary).c_str());
+    // the same bytes every time, and nothing left behind under a temporary name
+    const std::string again = dir + "/again.lanegraph";
+    CHECK(roads::lanes::writeLaneGraphCache(again, key, back, backSummary, &err));
+    CHECK(fileBytes(path) == fileBytes(again));
+    std::size_t files = 0;
+    for (const fs::directory_entry& e : fs::directory_iterator(dir)) {
+        (void)e;
+        ++files;
+    }
+    CHECK(files == 2);
+    std::printf("    %zu bytes on disk\n", fileBytes(path).size());
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+// THE KEY sees everything the graph is made from: the roads, each vehicle's tag, turning radius and width and their order,
+// the control, and the builder's version. The same inputs give the same key.
+TEST_CASE(lane_graph_cache_key_changes_with_the_vehicles_and_the_builder_version) {
+    const LaneGraphOptions base = testVehicles();
+    const uint64_t k = roads::lanes::laneGraphCacheKey(kTestRoadsKey, base);
+    CHECK(k == roads::lanes::laneGraphCacheKey(kTestRoadsKey, testVehicles()));
+    CHECK(k == roads::lanes::laneGraphCacheKey(kTestRoadsKey, base, roads::lanes::kLaneGraphBuildVersion));
+    std::vector<std::pair<const char*, uint64_t>> changed;
+    changed.push_back({"other roads", roads::lanes::laneGraphCacheKey(kTestRoadsKey + 1, base)});
+    changed.push_back({"the builder's version bumped",
+                       roads::lanes::laneGraphCacheKey(kTestRoadsKey, base, roads::lanes::kLaneGraphBuildVersion + 1)});
+    {
+        LaneGraphOptions o = base;
+        o.vehicles[0].tag = "coach";
+        changed.push_back({"a tag renamed", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
+    }
+    {
+        LaneGraphOptions o = base;
+        o.vehicles[0].turningRadius += 0.01;
+        changed.push_back({"a turning radius", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
+    }
+    {
+        LaneGraphOptions o = base;
+        o.vehicles[1].width += 0.01;
+        changed.push_back({"a width", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
+    }
+    {
+        LaneGraphOptions o = base;
+        std::swap(o.vehicles[0], o.vehicles[1]);
+        changed.push_back({"the order", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
+    }
+    {
+        LaneGraphOptions o = base;
+        o.vehicles.pop_back();
+        changed.push_back({"a vehicle fewer", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
+    }
+    {
+        LaneGraphOptions o = base;
+        o.vehicles.push_back(o.vehicles.back());
+        o.vehicles.back().tag = "moped";
+        changed.push_back({"a vehicle more", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
+    }
+    {   // the same letters split differently between two tags
+        LaneGraphOptions a = base, b = base;
+        a.vehicles[0].tag = "ab";
+        a.vehicles[1].tag = "c";
+        b.vehicles[0].tag = "a";
+        b.vehicles[1].tag = "bc";
+        CHECK(roads::lanes::laneGraphCacheKey(kTestRoadsKey, a) != roads::lanes::laneGraphCacheKey(kTestRoadsKey, b));
+    }
+    {
+        LaneGraphOptions o = base;
+        o.control = "planned";
+        changed.push_back({"the control", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
+    }
+    for (std::size_t i = 0; i < changed.size(); ++i) {
+        if (changed[i].second == k) std::printf("    the key did not change with %s\n", changed[i].first);
+        CHECK(changed[i].second != k);
+        for (std::size_t j = 0; j < i; ++j) CHECK(changed[i].second != changed[j].second);
+    }
+    // ...and a file saved under one key is refused when read for another
+    const std::string dir = cacheTestDir("key");
+    const LaneGraph g = makeCrossroads();
+    const std::string path = roads::lanes::laneGraphCachePath(dir, k);
+    std::string err;
+    CHECK(roads::lanes::writeLaneGraphCache(path, k, g, crossroadsSummary(g), &err));
+    LaneGraph out;
+    LaneGraphSummary outSummary;
+    CHECK(!roads::lanes::readLaneGraphCache(path, changed[1].second, out, outSummary, &err));
+    CHECK(err.find("made for key") != std::string::npos);
+    CHECK(out.paths.empty());
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+// A BAD FILE is refused with a reason, never a crash: missing, not a bundle, cut short anywhere, any byte changed (unless
+// it is padding between sections, which changes nothing read), or a summary that disagrees with its graph.
+TEST_CASE(lane_graph_cache_refuses_a_bad_file) {
+    const std::string dir = cacheTestDir("bad");
+    const LaneGraph g = makeCrossroads();
+    const LaneGraphSummary s = crossroadsSummary(g);
+    const uint64_t key = roads::lanes::laneGraphCacheKey(kTestRoadsKey, testVehicles());
+    const std::string good = roads::lanes::laneGraphCachePath(dir, key);
+    std::string err;
+    CHECK(roads::lanes::writeLaneGraphCache(good, key, g, s, &err));
+    const std::vector<uint8_t> bytes = fileBytes(good);
+    const std::string bad = dir + "/bad.lanegraph";
+    LaneGraph out;
+    LaneGraphSummary outSummary;
+
+    CHECK(!roads::lanes::readLaneGraphCache(dir + "/missing.lanegraph", key, out, outSummary, &err));
+    CHECK(err.find("no such file") != std::string::npos);
+    {
+        const std::string text = "not a lane graph at all\n";
+        putFile(bad, std::vector<uint8_t>(text.begin(), text.end()));
+        CHECK(!roads::lanes::readLaneGraphCache(bad, key, out, outSummary, &err));
+        CHECK(!err.empty());
+    }
+    // cut short anywhere (every 7th length, and every length over the last 1 KB, where the table of contents is)
+    int cuts = 0;
+    for (std::size_t n = 0; n < bytes.size(); n += (n + 1024 < bytes.size() ? 7 : 1)) {
+        putFile(bad, std::vector<uint8_t>(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(n)));
+        err.clear();
+        const bool read = roads::lanes::readLaneGraphCache(bad, key, out, outSummary, &err);
+        if (read) {
+            std::printf("    a file cut to %zu of %zu bytes was read\n", n, bytes.size());
+            CHECK(!read);
+            break;
+        }
+        CHECK(!err.empty());
+        CHECK(out.paths.empty());
+        ++cuts;
+    }
+    // every 5th byte changed (every byte of the last 1 KB): refused, or read back exactly as written
+    int refused = 0, harmless = 0;
+    for (std::size_t i = 0; i < bytes.size(); i += (i + 1024 < bytes.size() ? 5 : 1)) {
+        std::vector<uint8_t> changed = bytes;
+        changed[i] = static_cast<uint8_t>(~changed[i]);
+        putFile(bad, changed);
+        err.clear();
+        if (roads::lanes::readLaneGraphCache(bad, key, out, outSummary, &err)) {
+            CHECK(out == g && outSummary == s);
+            ++harmless;
+        } else {
+            CHECK(!err.empty());
+            ++refused;
+        }
+    }
+    std::printf("    %d cut-short files refused; %d changed bytes refused, %d in padding changed nothing\n", cuts, refused,
+                harmless);
+    CHECK(refused > 0);
+    {   // a sound file whose summary does not count its own graph
+        LaneGraphSummary wrong = s;
+        ++wrong.connectors;
+        CHECK(roads::lanes::writeLaneGraphCache(bad, key, g, wrong, &err));
+        CHECK(!roads::lanes::readLaneGraphCache(bad, key, out, outSummary, &err));
+        CHECK(err.find("does not agree") != std::string::npos);
+    }
+    {   // a sound file of a graph that fails its check
+        LaneGraph broken = g;
+        broken.sectionLanes[0] = PathId(999);
+        CHECK(roads::lanes::writeLaneGraphCache(bad, key, broken, s, &err));
+        CHECK(!roads::lanes::readLaneGraphCache(bad, key, out, outSummary, &err));
+        CHECK(err.find("out of range") != std::string::npos);
+    }
+    // and the good file still reads
+    CHECK(roads::lanes::readLaneGraphCache(good, key, out, outSummary, &err));
+    CHECK(out == g);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
 }

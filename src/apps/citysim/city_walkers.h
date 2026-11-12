@@ -51,7 +51,7 @@ private:
     std::string whoQuery_, whoResult_ = "none";   // `who? <id>`: asked once, answered every step
     engine::ControlCommands::Binding answerWho_;
     std::string driverQuery_, driverResult_ = "none";   // `driver? <car>`: asked once, answered every step, like who?
-    engine::ControlCommands::Binding answerDriver_, answerWaiting_;
+    engine::ControlCommands::Binding answerDriver_, answerWaiting_, answerLaneGraph_;
     void spawnWalkers(engine::FrameContext& ctx);
     void driveWalkers(engine::FrameContext& ctx);
 

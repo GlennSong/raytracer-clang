@@ -258,6 +258,15 @@ driving::VehicleClasses builtInDrivingClasses() {
     return out;
 }
 
+void CitySim::setDrivingRoads(std::shared_ptr<const engine::LaneGraph> roads, std::string report) {
+    if (!drivingV2_) return;
+    driving::VehicleClasses classes = drivingV2_->vehicleClasses();
+    drivingRoads_ = std::move(roads);
+    drivingRoadsReport_ = std::move(report);
+    drivingV2_.emplace(drivingRoads_.get());
+    drivingV2_->setVehicleClasses(std::move(classes));
+}
+
 Real CitySim::vehicleLength(int agentIndex) const {
     const Agent& a = agents_[agentIndex];
     if (a.mode == Agent::Mode::Driver && a.vehicle >= 0 &&

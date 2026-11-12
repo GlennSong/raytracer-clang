@@ -276,6 +276,12 @@
   "usage": "knock?"
  },
  {
+  "name": "lanegraph?",
+  "owner": "engine",
+  "summary": "The new driving model's lane graph: paths, sections, junctions, connectors, refused turns, how much a car can get round, and whether it came from the cache or was built.",
+  "usage": "lanegraph?"
+ },
+ {
   "name": "ledger",
   "owner": "engine",
   "summary": "The frame-time ledger: capture to CSV, stop, or a summary now.",

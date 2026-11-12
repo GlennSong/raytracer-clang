@@ -100,6 +100,37 @@ TEST_CASE(driving_vehicle_classes_found_by_index_and_name) {
     CHECK(d.vehicleClasses().find("runabout") != nullptr);
 }
 
+// WHAT EACH TAG ASKS OF A CONNECTOR: the widest turning circle and the widest body among the classes carrying it, every
+// tag once, sorted by name whatever order the classes came in.
+TEST_CASE(driving_tag_sizes_take_the_most_demanding_class_per_tag) {
+    VehicleClasses table;
+    VehicleClass van = deriveVehicleClass("van", 5.5, 2.1, 3.4, kSteerDegrees);
+    van.tags = {"goods", "van"};
+    VehicleClass truck = deriveVehicleClass("truck", 8.0, 2.5, 4.8, kSteerDegrees);
+    truck.tags = {"goods", "truck"};
+    VehicleClass cab = goodCar("cab");
+    cab.tags = {"car", "taxi"};
+    table.add(van);
+    table.add(truck);
+    table.add(goodCar("runabout"));
+    table.add(cab);
+    const std::vector<TagSize> sizes = tagSizes(table);
+    CHECK(sizes.size() == 5u);
+    const char* order[] = {"car", "goods", "taxi", "truck", "van"};
+    for (std::size_t i = 0; i < sizes.size() && i < 5; ++i) CHECK(sizes[i].tag == order[i]);
+    if (sizes.size() != 5u) return;
+    CHECK(sizes[0].turningRadius == goodCar("x").tightestTurnRadius && sizes[0].width == kWidth);
+    // goods: the truck's circle and body, wider than the van's
+    CHECK(sizes[1].turningRadius == truck.tightestTurnRadius && sizes[1].width == truck.width);
+    CHECK(sizes[1].turningRadius > van.tightestTurnRadius);
+    CHECK(sizes[4].turningRadius == van.tightestTurnRadius && sizes[4].width == van.width);
+    // every class fits every one of its own tags
+    for (const VehicleClass& c : table.all())
+        for (const TagSize& t : sizes)
+            if (c.hasTag(t.tag)) CHECK(c.tightestTurnRadius <= t.turningRadius && c.width <= t.width);
+    CHECK(tagSizes(VehicleClasses()).empty());
+}
+
 TEST_CASE(driving_vehicle_class_validate_names_each_problem) {
     {
         VehicleClass c = goodCar("");

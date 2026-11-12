@@ -75,7 +75,8 @@
     "driverRole": "lab_driver",
     "driverRoleShare": 1.0,
     "dormancy": false,
-    "realLanes": true
+    "realLanes": true,
+    "driving": "v2"
   },
   "dayNight": {
     "dayMinutes": 1440.0,

@@ -2171,3 +2171,113 @@ TEST_CASE(lanes_lane_graph_lists_a_two_lane_section_offside_to_kerb) {
     std::printf("    v2: %d two-lane sections along its spine and %d against it, offside lane nearer the centre in each\n", checked[0], checked[1]);
     CHECK(checked[0] > 0 && checked[1] > 0);
 }
+
+// ---- A LEVEL'S LANE GRAPH FROM ITS CACHE (lane_graph_cache.h) -----------------------------------------------------------
+#include "engine/procgen/city/roads/lanes/lane_graph_cache.h"
+
+namespace {
+// A level holding one lane-built city, the given lanelab graph, as the loader reads it.
+engine::bundle::LevelInputs cacheTestLevel(const std::string& graphName) {
+    engine::bundle::LevelInputs in;
+    in.levelPath = "lane_graph_cache_test.json";   // named only; the key reads the graph file, not the level file
+    in.levelDir = ".";
+    in.level = {{"entities", nlohmann::json::array({{{"shape", "lanelab"},
+                                                     {"lanelab", {{"graph", std::string(RT_SOURCE_DIR) + "/assets/lanelab/" + graphName + ".json"}}}}})}};
+    return in;
+}
+LaneGraphOptions cacheTestVehicles() {
+    LaneGraphOptions o;
+    VehicleSize car, longVehicle;
+    car.tag = kLaneGraphTestTag;
+    car.turningRadius = kTestCarRadius;
+    car.width = kTestCarWidth;
+    longVehicle.tag = kLaneGraphLongTag;
+    longVehicle.turningRadius = kTestLongRadius;
+    longVehicle.width = kTestLongWidth;
+    o.vehicles = {car, longVehicle};
+    return o;
+}
+std::vector<char> cacheFileBytes(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    return std::vector<char>(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+}
+void putCacheFile(const std::string& path, const std::vector<char>& bytes) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+}
+}  // namespace
+
+// BUILT ONCE, THEN READ: the first load builds the roads and the graph and saves it; the next reads the file with no road
+// build and gets the very same graph; a lost file is built again to the same bytes; a damaged or cut-short file is
+// refused, built again and written over; no cache folder means built every time and nothing written.
+TEST_CASE(lanes_a_level_lane_graph_is_built_once_then_read_from_its_cache) {
+    namespace fs = std::filesystem;
+    const fs::path dirPath = fs::temp_directory_path() / "rt_lanes_lane_graph_cache";
+    std::error_code ec;
+    fs::remove_all(dirPath, ec);
+    const std::string dir = dirPath.string();
+    const engine::bundle::LevelInputs in = cacheTestLevel("hill_junction");
+    const LaneGraphOptions opts = cacheTestVehicles();
+
+    const LevelLaneGraph first = obtainLevelLaneGraph(in, opts, dir);
+    std::printf("    first load: %s\n", describeLevelLaneGraph(first).c_str());
+    CHECK(first.graph != nullptr);
+    if (!first.graph) return;
+    CHECK(!first.fromCache && first.saved && first.roadSeconds > 0);
+    CHECK(first.key == laneGraphCacheKey(levelRoadsKey(in), opts));
+    CHECK(levelRoadsKey(in) != 0);
+    CHECK(first.notes.empty());
+    CHECK(first.summary.connectors > 0);
+    // the very graph the lane graph tests build from the same roads
+    CHECK(*first.graph == laneGraphOf("hill_junction").graph);
+    CHECK(first.summary == summarizeLaneGraph(laneGraphOf("hill_junction")));
+    const std::vector<char> bytes = cacheFileBytes(first.path);
+    CHECK(!bytes.empty());
+
+    const LevelLaneGraph second = obtainLevelLaneGraph(in, opts, dir);
+    std::printf("    second load: %s\n", describeLevelLaneGraph(second).c_str());
+    CHECK(second.fromCache && !second.saved && second.roadSeconds == 0);
+    CHECK(second.graph != nullptr && *second.graph == *first.graph);
+    CHECK(second.summary == first.summary);
+    CHECK(dumpText(*second.graph) == dumpText(*first.graph));
+
+    // lost: built again, to the same bytes
+    fs::remove(first.path, ec);
+    const LevelLaneGraph rebuilt = obtainLevelLaneGraph(in, opts, dir);
+    CHECK(!rebuilt.fromCache && rebuilt.saved);
+    CHECK(cacheFileBytes(first.path) == bytes);
+
+    // damaged in the middle of the graph, or cut short: refused (a note says why), built again, written over
+    for (int damage = 0; damage < 2; ++damage) {
+        std::vector<char> bad = bytes;
+        if (damage == 0) bad[bad.size() / 2] = static_cast<char>(~bad[bad.size() / 2]);
+        else bad.resize(bad.size() / 2);
+        putCacheFile(first.path, bad);
+        const LevelLaneGraph again = obtainLevelLaneGraph(in, opts, dir);
+        CHECK(!again.fromCache && again.saved);
+        CHECK(again.graph != nullptr && *again.graph == *first.graph);
+        CHECK(again.notes.size() == 1 && again.notes[0].find("refused") != std::string::npos);
+        if (!again.notes.empty()) std::printf("    %s\n", again.notes[0].c_str());
+        CHECK(cacheFileBytes(first.path) == bytes);
+        CHECK(obtainLevelLaneGraph(in, opts, dir).fromCache);
+    }
+
+    // other vehicles: another key, another file; the first stays
+    LaneGraphOptions fewer = opts;
+    fewer.vehicles.pop_back();
+    const LevelLaneGraph other = obtainLevelLaneGraph(in, fewer, dir);
+    CHECK(other.key != first.key && other.path != first.path && !other.fromCache);
+    CHECK(fs::exists(first.path, ec));
+
+    // no cache folder (RT_NOCACHE): built, nothing written
+    const LevelLaneGraph uncached = obtainLevelLaneGraph(in, opts, std::string());
+    CHECK(uncached.graph != nullptr && !uncached.fromCache && !uncached.saved && uncached.path.empty());
+    CHECK(*uncached.graph == *first.graph);
+
+    // a level with no lane-built city: no graph, and why
+    engine::bundle::LevelInputs empty;
+    empty.level = {{"entities", nlohmann::json::array()}};
+    const LevelLaneGraph none = obtainLevelLaneGraph(empty, opts, dir);
+    CHECK(none.graph == nullptr && !none.error.empty());
+    fs::remove_all(dirPath, ec);
+}

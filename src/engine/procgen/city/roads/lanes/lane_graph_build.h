@@ -97,6 +97,14 @@ inline double offsideness(double normalOffset, int dir) { return normalOffset * 
 // dir, so a point along perp of it lies offside where offsideness says a positive offset does; the kerb is the other way.
 inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 
+// THE LANE GRAPH BUILDER'S VERSION. A saved lane graph (lane_graph_cache.h) is keyed by the roads it was built from,
+// the vehicles its connectors were checked against and this number, so BUMP IT whenever what buildLaneGraph or
+// connectJunctions (lane_graph_connect.h) makes can change -- a new rule for which turns exist, a connector's shape, a
+// tolerance above -- or every level in v2 keeps loading the graph the old code built. (A change to the roads themselves
+// is the lanes tag's, kLanesBuildTag, which keys the roads; a change to the file format is LGRF's own version.)
+// History: git log -G kLaneGraphBuildVersion.
+constexpr uint32_t kLaneGraphBuildVersion = 1;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
+
 // A VEHICLE TAG and how it turns: the tightest radius its path may have, and its width (metres). Passed in by the
 // caller (the engine does not know the driving model's vehicles); a connector tighter than the radius is closed to it.
 struct VehicleSize {

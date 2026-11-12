@@ -1045,6 +1045,9 @@ struct CitySimConfig {
     // WHICH DRIVING MODEL (#234): "v1", today's, drives the cars; "v2" also runs the new driving library (src/apps/
     // driving) alongside it, ticking an empty world until later tasks hand it the cars.
     std::string driving = "v1";
+    // The level file this block came from (the loader's path): under v2 the city sim keys and builds the level's lane
+    // graph from it (lane_graph_cache.h). Empty for a level not loaded from a file.
+    std::string levelPath;
     float hailChance = 0.0f;
     float hailMinMetres = 400.0f;
     // BUSES (city_bus.h): `busRoutes` derived loops of `busStops` stops, with

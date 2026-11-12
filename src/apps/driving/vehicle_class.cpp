@@ -84,6 +84,26 @@ const VehicleClass* VehicleClasses::find(const std::string& name) const {
     return i < 0 ? nullptr : &classes_[static_cast<std::size_t>(i)];
 }
 
+std::vector<TagSize> tagSizes(const VehicleClasses& classes) {
+    std::vector<TagSize> out;
+    for (const VehicleClass& c : classes.all())
+        for (const std::string& tag : c.tags) {
+            std::vector<TagSize>::iterator it = std::lower_bound(
+                out.begin(), out.end(), tag, [](const TagSize& t, const std::string& name) { return t.tag < name; });
+            if (it == out.end() || it->tag != tag) {
+                TagSize t;
+                t.tag = tag;
+                t.turningRadius = c.tightestTurnRadius;
+                t.width = c.width;
+                out.insert(it, t);
+                continue;
+            }
+            it->turningRadius = std::max(it->turningRadius, c.tightestTurnRadius);
+            it->width = std::max(it->width, c.width);
+        }
+    return out;
+}
+
 std::vector<std::string> validate(const VehicleClass& c) {
     std::vector<std::string> out;
     const std::string who = c.name.empty() ? std::string("a vehicle class") : c.name;

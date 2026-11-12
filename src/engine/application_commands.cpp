@@ -907,6 +907,10 @@ void Application::registerCityVerbs() {
     commandTable.add("waiting?", "waiting?",
                      "Who is waiting for whom in the new driving model: counts, loops, the longest queue and its head.",
                      unanswered("a CityWalkerSystem: play mode on a city level"));
+    // `lanegraph?`: the road the new driving model drives on (citysim.driving = "v2")
+    commandTable.add("lanegraph?", "lanegraph?",
+                     "The new driving model's lane graph: paths, sections, junctions, connectors, refused turns, how much a car can get round, and whether it came from the cache or was built.",
+                     unanswered("a CityWalkerSystem: play mode on a city level"));
 }
 
 // Asking the ground and the buildings

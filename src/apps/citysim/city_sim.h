@@ -23,7 +23,9 @@
 #include "traffic_signal.h"
 #include "../driving/driving.h"   // the new driving model (#234; citysim.driving = "v2")
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <queue>
 #include <map>
@@ -1240,6 +1242,12 @@ public:
     void useDrivingV2(bool on) { if (on) drivingV2_.emplace(); else drivingV2_.reset(); }
     // ...and the kinds of vehicle it knows (#248: one class per fleet class, read with the fleet). No-op under v1.
     void setDrivingVehicleClasses(driving::VehicleClasses c) { if (drivingV2_) drivingV2_->setVehicleClasses(std::move(c)); }
+    // ...and the road it drives on: the level's lane graph (lane_graph_cache.h), held here for as long as the model
+    // reads it, with the one line that says what it holds and where it came from (the load's log, `lanegraph?`). The
+    // model is made again on the new road, keeping its vehicle classes; it has no cars yet, so nothing else is lost.
+    // No-op under v1.
+    void setDrivingRoads(std::shared_ptr<const engine::LaneGraph> roads, std::string report);
+    const std::string& drivingRoadsReport() const { return drivingRoadsReport_; }
     // The new model, read-only; null when the level drives v1.
     const driving::Driving* drivingV2() const { return drivingV2_ ? &*drivingV2_ : nullptr; }
     // Does this agent drive one trip straight into the next (the level's wander mode, or a roaming role's day)?
@@ -2056,6 +2064,9 @@ private:
     LaneMap laneMap_;           // the real lanes on each link (#218): empty = the link's line plus an offset
     bool useRealLanes_ = false; // draw cars on them (citysim.realLanes)
     std::optional<driving::Driving> drivingV2_;   // the new driving model, when the level asks for it (useDrivingV2)
+    // Its road (setDrivingRoads): shared, so its address stays put while the model holds a pointer to it.
+    std::shared_ptr<const engine::LaneGraph> drivingRoads_;
+    std::string drivingRoadsReport_ = "no lane graph yet";
     // Three-tier traffic state (P4): the fed bubble centre, the fixed-frame
     // counter the V buckets key off (frameIndex_ % vTickDivisor — no wall
     // clock), and the lifetime transition counters the tests gate on.

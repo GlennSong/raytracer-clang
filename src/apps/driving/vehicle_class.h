@@ -113,6 +113,21 @@ private:
     std::vector<VehicleClass> classes_;
 };
 
+// WHAT EACH VEHICLE TAG ASKS OF A PATH THROUGH A JUNCTION. The road builder opens each connector to vehicle TAGS (a
+// lane's `open_to` names tags, design 5.4), checking it against one turning radius and one width per tag. A class may
+// use a path open to any one of its tags (route.h mayUse), so each tag must stand for the most demanding class that
+// carries it: its turning radius is the LARGEST tightest-turn radius among them, its width the widest body. Then a
+// connector open to a tag is one every class with that tag can drive. (Radii and widths are the classes' own, derived
+// from the body and the wheels: deriveVehicleClass.)
+struct TagSize {
+    std::string tag;
+    Real turningRadius = 0;
+    Real width = 0;
+};
+// Every tag any class carries, sorted by name, so the list (and the road checked against it) does not depend on the
+// order the classes were added in.
+std::vector<TagSize> tagSizes(const VehicleClasses& classes);
+
 // WHAT IS WRONG with a class, in plain words, one line each (empty when nothing is). Checks: a name; positive length,
 // width and wheelbase, the wheelbase no longer than the vehicle; a turning radius no tighter than the steepest possible
 // steer allows for the wheelbase; positive speeding-up, braking and top speed; hardest braking at least the

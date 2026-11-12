@@ -759,6 +759,11 @@ void CityWalkerSystem::onStart(engine::FrameContext& ctx) {
             const driving::Driving* d = city_.sim().drivingV2();
             return "ok " + (d ? oneLine(d->describeWaiting(d->waitReport())) : std::string(kDrivingV2Off));
         });
+        // `lanegraph?`: the road the new model drives on -- the load's own line: what it holds, and whether it came from
+        // the cache or was built (and how long that took)
+        answerLaneGraph_ = ctx.commands->bind("lanegraph?", "CityWalkerSystem", [this](const engine::ControlCommand&) -> std::string {
+            return "ok " + (city_.sim().drivingV2() ? city_.sim().drivingRoadsReport() : std::string(kDrivingV2Off));
+        });
     }
 }
 
