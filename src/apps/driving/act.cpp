@@ -17,11 +17,16 @@ FactNeed need(const char* name, UnitFamily family) {
     return n;
 }
 
-// How far something going at `speed` takes to stop braking at `brake`; zero for a brake of zero or below (it stops
-// dead) or a speed of zero.
-Real stoppingDistance(Real speed, Real brake) { return brake > 0 ? speed * speed / (kTwo * brake) : Real(0); }
-
 }  // namespace
+
+Real stoppingDistance(Real speed, Real brake, Real reaction) {
+    const Real v = std::max(Real(0), speed);
+    return v * std::max(Real(0), reaction) + (brake > 0 ? v * v / (kTwo * brake) : Real(0));
+}
+
+bool canStopWithin(Real distance, Real speed, Real brake, Real reaction) {
+    return stoppingDistance(speed, brake, reaction) <= distance;
+}
 
 bool registerMoveNeeds(FactRegistry& registry, std::string* why) {
     ReaderSpec spec;

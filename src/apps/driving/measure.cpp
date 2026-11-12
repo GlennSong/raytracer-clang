@@ -374,14 +374,14 @@ BoxReason boxReason(const std::vector<Car>& cars, const PathLists& lists, const 
     case Limit::TopSpeed: return BoxReason::TopSpeed;
     case Limit::WayEnd: return BoxReason::WayEnd;
     case Limit::Stop:
-        if (car.binding.stopFor == StopFor::GivingWay) return BoxReason::GivingWay;
+        if (givesWay(car.binding.stopFor)) return BoxReason::GivingWay;
         if (car.binding.stopFor == StopFor::NoRoom) return BoxReason::WaitingForRoom;
         return BoxReason::StopByRule;
     case Limit::CarAhead: break;
     }
     // Held by the car ahead, but itself holding a stop to give way further on (a far turn waiting inside behind another):
     // its own decision is a recorded give-way.
-    if (car.held.hasStop && car.held.stopFor == StopFor::GivingWay) return BoxReason::GivingWay;
+    if (car.held.hasStop && givesWay(car.held.stopFor)) return BoxReason::GivingWay;
     // Behind a car: follow the queue to its head (each waiting, held by the car ahead), no further than the cars there are.
     const Car* head = &car;
     for (std::size_t steps = 0; steps <= cars.size(); ++steps) {
@@ -399,7 +399,7 @@ BoxReason boxReason(const std::vector<Car>& cars, const PathLists& lists, const 
         }
         head = ahead;
     }
-    if (head && head->binding.by == Limit::Stop && head->binding.stopFor == StopFor::GivingWay && inBox(*head, context))
+    if (head && head->binding.by == Limit::Stop && givesWay(head->binding.stopFor) && inBox(*head, context))
         return BoxReason::BehindGivingWay;
     return BoxReason::BehindOther;
 }
@@ -767,7 +767,8 @@ MeasurementReport buildReport(const MeasureRows& m, const std::vector<std::strin
                                "Deadlock loops (cars waiting on each other in a ring, a right of way among them)",
                                "none", m.loops.deadlock, true));
     rep.rows.push_back(loopRow("gridlock_loops",
-                               "Gridlock loops (cars waiting on each other in a ring, every one for room)",
+                               "Gridlock loops (cars waiting on each other in a ring, every one for space: room beyond, "
+                               "the car ahead, or a body on a crossing point)",
                                "none set yet: a road-design or demand problem, not a bug", m.loops.gridlock, false));
     {
         ReportRow r = makeRow("jumps", "Jumps (a front moving further in a tick than its speed could carry it)", "none");

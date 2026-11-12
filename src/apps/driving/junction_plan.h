@@ -16,7 +16,10 @@
 // standing in another path's crossing stretch. The first is always the line (the connector's start). After it, for
 // each clear gap between two crossing stretches (RightOfWay's gaps) at least as long as the car, the end of that gap:
 // the front stopped short of the next stretch with the tail clear of the one before. The last of them is the car's LAST
-// WAITING POINT: once its front is past it, the car is COMMITTED (task D4 orders committed cars by when they passed it).
+// WAITING POINT. The car is COMMITTED (task D4 orders committed cars by when) once it can no longer wait there or short
+// of the crossing stretch that follows it: its front is on that stretch (JunctionPlan::commitAt), or it cannot stop short
+// of it braking as hard as it can (issue #284: before, a car was committed a centimetre past the line, since the line is
+// the last waiting point of most connectors, and a car that rolled a few ticks over its line outranked the main road).
 // A long vehicle has fewer waiting points than a short one at the same junction, which is the point: it cannot wait
 // where it does not fit. At lights (issue #261) a far turn may also wait at its connector's place to wait inside
 // (waitInsideAt below), where its body stands across the cross street's paths, which have a red: that is a waiting point
@@ -71,12 +74,10 @@ enum class GiveWayCause : uint8_t {
     None,           // nothing to give way to: no meeting it must judge has anyone announced on it
     Gap,            // a gap judged against a car's announcement (the car, the crossing, the gap needed and had)
     NextJunction,   // it gives way at the next junction, and there is no room for its body between the two
-    // a car from its own lane stands inside the junction to give way (a far turn waiting for its gap, issue #261), its
-    // tail on the stretch where our two turns leave the lane: it waits behind it, as behind a car ahead (the car and the
-    // crossing as for Gap). Not this junction's traffic: it announces that it is not going beyond.
-    BehindInMyLane,
+    // (A car from its own lane standing inside the junction on a split's stretch is not given way to here: since #283 it
+    // is the car ahead, followed, traffic_state.h carAhead. Issue #284 took out the special case that did it here.)
 };
-constexpr uint8_t kGiveWayCauseCount = 4;
+constexpr uint8_t kGiveWayCauseCount = 3;
 
 // THE JUDGEMENT BEHIND A DECISION: to whom, where, and the gaps. For Go, the tightest gap the driver accepted (none
 // when nobody was there to judge); for GiveWay, the first meeting where the gap fell short.
@@ -118,8 +119,11 @@ enum class RoomRefusal : uint8_t {
     NotPlanned,      // its way or its plans do not reach far enough to say where it would stop
     NoStopToWait,    // it asked to wait inside, but beyond the junction there is no stretch it could stop in (it would
                      // have to pass through the next junction too, which waiting inside cannot promise)
+    GivesWayAhead,   // its body will not fit before the next junction, where its turn gives way to (or asks while
+                     // driving with) a car it cannot see will be clear of it as it gets there (issue #284): it could only
+                     // wait for that car with its tail in the box behind
 };
-constexpr uint8_t kRoomRefusalCount = 8;
+constexpr uint8_t kRoomRefusalCount = 9;
 const char* roomRefusalWords(RoomRefusal r);   // in words, for the driver card and the lab's printout
 
 // WHAT A DRIVER REMEMBERS OF ITS CLAIM ON THE ROOM BEYOND ONE JUNCTION (room.h). A grant is a remembered fact: it holds
@@ -157,6 +161,10 @@ struct JunctionPlan {
     // (right_of_way.h ConnectorRules::waitInsideAt) when its whole body fits past the line; it is one of waitingAt.
     // kNoWaitInside: nowhere.
     Real waitInsideAt = engine::kNoWaitInside;
+    // WHERE THE CAR COMMITS, metres along the connector (issue #284): the start of the first crossing stretch at or beyond
+    // its last waiting point (splits left out, as for the waiting points), or the connector's length when none lies there.
+    // Its front reaching it, or being unable to stop short of it at its hardest braking, commits the car (noteAtTheLine).
+    Real commitAt = 0;
 
     // WHAT THE CAR REMEMBERS OF THE LINE (issue #262). Its ARRIVAL: when it reaches its line, fixed once, the first
     // time its driver judged this junction -- as the tick its own estimate then had it reaching the line -- or, where it
@@ -164,7 +172,8 @@ struct JunctionPlan {
     // stop before the line. "Who reached their line first" settles the pairs asked while driving, by these (give_way.h
     // says why it is fixed when first judged rather than read off the line as each car gets there). CAME TO REST at the
     // line: "I came to rest at this line", which a full stop needs before the car may go (noteAtTheLine, every tick).
-    // COMMITTED: its front is past its last waiting point (design 9.4); task D4 orders committed cars by when.
+    // COMMITTED: it can no longer wait at its last waiting point or short of the stretch after it (design 9.4; commitAt
+    // above); task D4 orders committed cars by when.
     bool arrivalFixed = false;
     uint64_t arrivalTick = 0;
     double arrivalAt = 0;
@@ -180,7 +189,7 @@ struct JunctionPlan {
     // ROOM BEYOND (issue #264, room.h): its claim on the room on the lane its connector joins.
     RoomClaim room;
 
-    // Where along the connector the car is committed once its front is past it.
+    // The last place along the connector where its front may wait (commitAt is where waiting there ends).
     Real lastWaitingPoint() const { return waitingCount > 0 ? waitingAt[waitingCount - 1] : Real(0); }
 };
 bool operator==(const JunctionPlan& a, const JunctionPlan& b);

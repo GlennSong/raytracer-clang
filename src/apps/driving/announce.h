@@ -7,13 +7,19 @@
 // At the start of every tick, every driven car with a junction within its look-ahead TIME (the rule set's
 // `junction_look_ahead`, about 8 seconds: a far-off slow car announces nothing, so it holds nobody) writes, for each
 // crossing point along its connector through that junction, an ANNOUNCEMENT: when it expects its front to reach its
-// stretch there, when its tail will be past the stretch's end (vehicle length matters here), the speed it will hold
-// through the junction, whether it must stop at the line first, when it arrives at the line (fixed once, for who goes
-// first: give_way.h), whether it is going
-// (it can no longer stop before the line), and whether it is NOT GOING (it is stopping before the crossing for a reason
-// other than this junction's traffic: a hold, its destination, a stop at an earlier junction, a stopped car beyond the
-// line). A car on a LANE that crosses a junction's connector (ADR-0400's carry-overs) announces too, as going: a lane
-// has no line to wait at.
+// stretch there, when its tail will be past the stretch's end (vehicle length matters here), when it arrives at the line
+// (fixed once, for who goes first: give_way.h), whether it is going (it can no longer stop before the line), whether it
+// CANNOT STOP short of the crossing at its hardest braking (issue #284), and whether it is NOT GOING (it is stopping
+// before the crossing for a reason other than this junction's traffic: a hold, its destination, a stop at an earlier
+// junction, a stopped car beyond the line). A car on a LANE that crosses a junction's connector (ADR-0400's carry-overs)
+// announces too, with the same flags read off the crossing's stretch (a lane has no line: it never arrives at one and
+// never commits; who goes first there is the rule set's `between_junctions` and the resolver's, issue #284).
+//
+// HONEST CLEAR TIMES (issue #284). A car that will come to rest before its tail is past a stretch -- it holds a stop
+// there for any reason (giving way inside, a red at the next close junction, a hold, no room beyond), or a stopped car
+// beyond its line limits how far its front can get -- is NEVER clear of it (kNever): nobody plans to go behind it. Only
+// a full stop at its own line, which the estimate already counts, does not make it so. What it would clear in if it went
+// on now is announced apart (clearIfGoing): the judgement reads it for its own car, deciding whether to go.
 //
 // THE ESTIMATE of "when" is one shared function, from the car's own state alone (secondsToCover and its kin below):
 // not stopping first, the time to cover the distance speeding up or slowing toward the speed it will hold through the
@@ -63,27 +69,23 @@ struct Announcement {
     engine::CrossingId crossing;   // which crossing point (road data: ADR-0400)
     engine::PathId onPath;         // which of the crossing's two paths the announcer is on
     Real arriveIn = 0;             // seconds from now until its front reaches its stretch (0: on it or past its start)
-    Real clearIn = 0;              // ... until its tail is past the stretch's end (kNever: it will stop on it)
-    Real speedThere = 0;           // the speed it expects to hold through the junction, m/s
-    bool stopsFirst = false;       // it must come to rest at its line first (an all-way stop it has not yet stopped at)
+    Real clearIn = 0;              // ... until its tail is past the stretch's end (kNever: it will come to rest before
+                                   // then: HONEST CLEAR TIMES above)
+    Real clearIfGoing = 0;         // ... were it to go on now, whatever stop it holds (its own judgement reads this)
     bool notGoing = false;         // it is stopping before this crossing for a reason other than this junction's traffic
-    bool going = false;            // it will not stop before its line: past it, too fast to stop there comfortably while
-                                   // not giving way, or a car on a lane; not when it waits inside short of this crossing
-    bool waitsInside = false;      // it is past its line, waiting inside the junction short of this crossing point to give
-                                   // way (task D4): nobody may plan to go behind it, as it may wait a while
+                                   // (never while its body is on the stretch, or it cannot stop short of it)
+    bool going = false;            // it will not stop before its line: past it, or too fast to stop there comfortably
+                                   // while not giving way; not when it waits inside short of this crossing. (A car on a
+                                   // lane: it cannot stop comfortably short of the stretch.)
+    bool cannotStop = false;       // it cannot keep its front short of the stretch even braking as hard as it can (after
+                                   // one decide interval, unless it already holds a stop there): it will be on it
     bool arrivalFixed = false;     // its arrival at its line is fixed (JunctionPlan::arrivalFixed)
     uint64_t arrivalTick = 0;      // ... at this tick ("equal to within a tick" compares these)
-    double arrivalAt = 0;          // ... and this clock time
-    bool committed = false;        // its front is past its last waiting point (design 9.4; task D4 orders by it)
+    bool committed = false;        // it can no longer wait short of its next crossing stretch (JunctionPlan::commitAt;
+                                   // design 9.4; task D4 orders by it)
     uint64_t committedTick = 0;
-    Real waited = 0;               // seconds it has stood at its line
-    // Whom it decided to give way to at this junction, at its last decision (kNoOne: nobody). A car giving way to me
-    // does not go before me, whatever else is true (give_way.h).
-    uint64_t waitingFor = kNoOne;
     AnnouncerKind kind = AnnouncerKind::Car;
     uint64_t who = 0;              // an opaque id (a car's CarId index): for the driver card and for tie-breaks
-
-    static constexpr uint64_t kNoOne = ~uint64_t(0);
 };
 
 // THE ANNOUNCEMENTS ON ONE CROSSING POINT (or on a run of them), a view into the board, in board order.
@@ -172,18 +174,26 @@ Real speedThrough(const engine::LaneGraph& roads, const RoadRules& roadRules, en
 bool isGoing(const JunctionPlan& plan, double odometer, Real speed, Real brake, double heldStopAt, Real within = 0);
 // The odometer reading of the stop a car holds, or kNever.
 double heldStopOf(const Car& car);
+// CAN THE CAR STILL KEEP ITS FRONT SHORT OF a point `distance` metres ahead, braking as hard as it can (`hardestBrake`)?
+// It reacts first for `reaction` seconds (its decide interval: what it is told now it acts on at its next decision)
+// unless it already holds a stop at or short of that point, which the move step obeys every tick (`holdsStopShort`). A
+// point at or behind its front (distance 0 or less) it cannot keep short of. The test behind Announcement::cannotStop and
+// committing (issue #284), over act.h canStopWithin.
+bool canKeepShort(Real distance, Real speed, Real hardestBrake, Real reaction, bool holdsStopShort);
 
 // NOTES WHAT THE CAR'S OWN STATE SAYS ABOUT THE LINE of `plan`, at tick `tick` and clock `now`: it came to rest at the
 // line (within the rule set's at_line_within), it is committed, and -- when its arrival is not yet fixed -- it arrives
 // now, because it came to rest at the line or can no longer stop before it. Each, once noted, stays for the plan's life.
-// COMMITTED: its front past its last waiting point; or, when `redForMe` (its turn's light shows red: issue #261), past
-// the line by more than at_line_within: inside on a red, it may not wait for anyone of the next green. CAME TO REST is
+// COMMITTED: it cannot keep its front short of the plan's commitAt (its first crossing stretch beyond its last waiting
+// point) braking as hard as it can (`hardestBrake`, after `reaction` seconds: canKeepShort), or its front is on it; or,
+// when `redForMe` (its turn's light shows red: issue #261), past the line by more than at_line_within: inside on a red,
+// it may not wait for anyone of the next green (it entered lawfully; the next green waits for it). CAME TO REST is
 // not noted while `heldByLight` (its light shows red, not "red, may turn", or yellow): standing at a red is not waiting
 // for this junction's traffic, so its patience, and its arrival for who goes first, start when its light turns green.
 // (A car held at its line for room beyond keeps its arrival: started afresh at each grant, it was put after every car
 // that came meanwhile, gave the room back to give way to them, and lost it again: issue #264.)
-void noteAtTheLine(JunctionPlan& plan, const Car& car, Real brake, Real atLineWithin, uint64_t tick, double now,
-                   bool redForMe = false, bool heldByLight = false);
+void noteAtTheLine(JunctionPlan& plan, const Car& car, Real brake, Real hardestBrake, Real reaction, Real atLineWithin,
+                   uint64_t tick, double now, bool redForMe = false, bool heldByLight = false);
 // FIXES THE CAR'S ARRIVAL at `plan`'s line, when not yet fixed: `lineIn` seconds from now (tick `tick`, clock `now`,
 // ticks of `step` seconds), its own estimate when its driver first judges the junction.
 void fixArrival(JunctionPlan& plan, Real lineIn, uint64_t tick, double now, Real step);
@@ -196,7 +206,10 @@ struct PlanAnnouncer {
     double odometer = 0;
     Real length = 0;               // its body, metres
     Mover move;                    // speedThrough worked out for this connector
-    double heldStop = kNever;      // the odometer reading of the stop it holds, whatever it is for (isGoing)
+    Real hardestBrake = 0;         // m/s2: whether it can still keep short of a crossing (cannotStop)
+    double heldStop = kNever;      // the odometer reading of the stop it holds, whatever it is for (isGoing; HONEST
+                                   // CLEAR TIMES: a stop before a stretch's end, but for the full stop counted by
+                                   // stopsFirst, means it is never clear of it)
     Real reaction = 0;             // seconds between its decisions: it is going if it will be by its next one
     Real shift = 0;                // seconds added to every time: how much later than its own estimate the queue makes it
     bool stopsFirst = false;       // it must come to rest at the line first (it holds a full stop there: StopFor)
@@ -206,7 +219,8 @@ struct PlanAnnouncer {
     double frontLimit = kNever;    // the odometer reading its front cannot pass (a stopped car beyond the line, less the
                                    // standstill gap; kNever: none): it is not going for a crossing beyond, and is never
                                    // clear of one it would stop on
-    Real waited = 0;               // seconds at rest at the line
+    bool neverClear = false;       // queued for this line behind a car that holds a stop at or short of it (not a full
+                                   // stop first): it comes to rest behind that car, short of every stretch's end
 };
 
 // ANNOUNCES every crossing point along `plan`'s connector whose stretch the car's tail is not yet past (crossings with
@@ -215,11 +229,28 @@ struct PlanAnnouncer {
 void announcePlan(const engine::LaneGraph& roads, const JunctionPlan& plan, const PlanAnnouncer& car,
                   AnnouncementBoard& out);
 
-// ANNOUNCES the crossing points along a LANE the car's body is on or its way runs along (connector-and-lane meetings),
-// as going: `laneStart` is metres from the car's front to the lane's start (below zero when it is behind the front).
-// Only those it will reach within `lookAheadTime` seconds.
-void announceLane(const engine::LaneGraph& roads, engine::PathId lane, Real laneStart, CarId who, Real length,
-                  const Mover& move, Real lookAheadTime, AnnouncementBoard& out);
+// ONE CAR ANNOUNCING THE CROSSING POINTS OF ONE LANE (connector-and-lane meetings, filed under no junction).
+struct LaneAnnouncer {
+    CarId who;
+    double odometer = 0;
+    Real length = 0;               // its body, metres
+    Mover move;                    // speedThrough: the top speed it holds
+    Real hardestBrake = 0;         // m/s2
+    Real reaction = 0;             // seconds between its decisions
+    Real lookAheadTime = 0;        // the rule set's junction_look_ahead: crossing points further off are not announced
+    Real atLineWithin = 0;         // the rule set's at_line_within: its own stop to give way at a stretch is "at" it
+    double heldStop = kNever;      // the odometer reading of the stop it holds, whatever it is for
+    StopFor heldStopFor = StopFor::Place;   // ... and what that stop is for
+};
+
+// ANNOUNCES the crossing points along a LANE the car's body is on or its way runs along: `laneStart` is metres from the
+// car's front to the lane's start (below zero when it is behind the front). Only those it will reach within the
+// look-ahead time. A lane has no line: the car never arrives at one and never commits; it is GOING when it cannot stop
+// short of the stretch braking comfortably, CANNOT STOP as a plan's car, NOT GOING when it holds a stop short of the
+// stretch that is not its own giving way there (give_way.h: a lane car keeps out of the way of a car the resolver puts
+// first by stopping with its front at the stretch), and never clear of a stretch it holds a stop before the end of.
+void announceLane(const engine::LaneGraph& roads, engine::PathId lane, Real laneStart, const LaneAnnouncer& car,
+                  AnnouncementBoard& out);
 
 }  // namespace driving
 

@@ -88,6 +88,8 @@ std::string entryWords(const Driving& d, const TraceEntry& e) {
         what = "a stop" + whyWords(d, e.why, e.binding.rule);
         if (e.binding.stopFor == StopFor::GivingWay && e.binding.car.valid())
             what += ", giving way to " + carWords(e.binding.car);
+        if (e.binding.stopFor == StopFor::ForABody && e.binding.car.valid())
+            what += ", waiting for the body of " + carWords(e.binding.car) + " to clear the crossing point";
         if (e.binding.stopFor == StopFor::NoRoom)
             what += e.binding.car.valid() ? ", waiting for room beyond behind " + carWords(e.binding.car)
                                           : std::string(", waiting for room beyond");
@@ -293,7 +295,7 @@ std::string describeCar(const Driving& d, CarId id) {
             out += "a stop " + one(static_cast<Real>(c->held.stopAt - c->odometer)) + " m ahead, by rule " +
                    ruleName(d, b.rule);
             // Giving way: to whom, where, the gap it has and the gap it needs (the plan it gives way at says).
-            if (b.stopFor == StopFor::GivingWay && roads)
+            if (givesWay(b.stopFor) && roads)
                 for (std::size_t k = 0; k < t->junctions.count; ++k) {
                     const JunctionPlan& p = t->junctions.plans[k];
                     if (p.decision != GiveWayDecision::GiveWay) continue;

@@ -35,6 +35,16 @@
 //  23. (D4 staged test 2) with no gap all green, it completes on the change, and the cross street goes after it;
 //  24. (D4 staged test 5) opposing far turns (the shape where they pass in front of each other; the grid makes no other);
 //  25. (D4 staged test 6, lights) ten minutes of random traffic at a four-way with lights.
+//  JUNCTION SAFETY (review #284; each fails with its fix switched off by hand, but f2, a guard):
+//  284 a. the hard gap is never below the vehicle's own stopping time;
+//  284 b. a car held with its body across a crossing is never clear of it: nobody goes in behind it;
+//  284 d. a car on a lane keeps out of the way of a body on its crossing point with another junction's connector, and
+//         the rule set's `between_junctions` settles who goes first there;
+//  284 e. rolling over the line does not commit: the main road still goes first;
+//  284 f1. a claim through close junctions is granted only with the next junction's turn seen clear;
+//  284 f2. ten minutes at two close lights: nobody enters on red, nobody rests in a box;
+//  284 h. congested random traffic of mixed classes: no two bodies on one path or a shared stretch touch; and the
+//         light programmes are checked when the rules are handed over.
 
 #include "test_framework.h"
 
@@ -135,8 +145,10 @@ const char* kFile = "d3_test.lua";
 
 // The rule set: the control row the test asks for, the junction numbers, and the rules of the lab plus the two full
 // stops (an all-way stop and a stop sign), written as data. With `room`, the lab's room-beyond numbers and its rule
-// (issue #264); `roomToWaitInside` is the rule set's room_to_wait_inside.
-std::string rulesLua(const std::string& control, bool room = false, bool roomToWaitInside = true) {
+// (issue #264); `roomToWaitInside` is the rule set's room_to_wait_inside. `extra`: more of the rule set's top level, as
+// written (issue #284: `between_junctions`).
+std::string rulesLua(const std::string& control, bool room = false, bool roomToWaitInside = true,
+                     const std::string& extra = "") {
     const std::string roomNumbers =
         room ? std::string("    room_through_junctions = { 3, unit = 'ratio', source = 'test: the lab' },\n"
                            "    room_clear_of_crosswalk = { 0.5, unit = 'm', source = 'test: the lab' },\n"
@@ -154,6 +166,7 @@ rule_set = { name = 'd3', drives_on = 'left', ranks = { 'priority', 'give_way', 
   devices = { stop = { means = { stop_line = true, rank = 'stop' } } },
   control = { test_uncontrolled = )LUA" + control + R"LUA( },
   movement_rank = { 'straight', 'near_turn', 'far_turn', 'u_turn' },
+)LUA" + extra + R"LUA(
   numbers = {
     standstill_gap = { 2, unit = 'm', source = 'test' },
     comfortable_side_accel = { 2, unit = 'm/s2', source = 'test' },
@@ -275,6 +288,11 @@ struct Sim {
     bool ok = false;
     // Seen while running.
     std::set<std::pair<uint32_t, uint32_t>> overlapping;    // pairs of cars whose bodies overlapped on the plan
+    // ... of them, pairs whose bodies lay on one path, or both on the stretches of a crossing point between their paths,
+    // as they overlapped: what following and the conflict resolver keep apart. (The rest touch outside every shared
+    // stretch: a long body's straight rectangle reaching outside its path's band in a bend, review #284 item 9, not
+    // modelled yet.)
+    std::set<std::pair<uint32_t, uint32_t>> overlappingWhereTheyMeet;
     std::map<uint32_t, Real> lowestSpeed, mostBraking;      // per car (braking: the most negative acceleration, until
                                                             // its front has left the junction for the lane beyond)
     std::map<uint32_t, uint64_t> enteredJunction;           // per car: the tick its front first came onto a connector
@@ -325,7 +343,8 @@ struct Sim {
     }
     Sim(const Sim&) = delete;
 
-    bool giveRules(const char* control) {
+    // `extra`: more of the rule set's top level (rulesLua).
+    bool giveRules(const char* control, const std::string& extra = "") {
         FactRegistry facts;
         if (!registerBuiltInFacts(facts) || !registerMoveNeeds(facts)) return false;
         engine::ScriptVM vm;
@@ -333,7 +352,8 @@ struct Sim {
         RuleSet ruleSet;
         AnswerVocabulary vocabulary;
         CompiledRules rules;
-        if (!vm.doString(rulesLua(control, roomOn, roomToWaitInside), &err) || !loadRuleSet(vm, kFile, ruleSet, &err)) {
+        if (!vm.doString(rulesLua(control, roomOn, roomToWaitInside, extra), &err) ||
+            !loadRuleSet(vm, kFile, ruleSet, &err)) {
             std::printf("    rule set: %s\n", err.c_str());
             return false;
         }
@@ -442,9 +462,10 @@ struct Sim {
         for (std::size_t a = 0; a < bodies.size(); ++a)
             for (std::size_t b = a + 1; b < bodies.size(); ++b) {
                 if (((bodies[a].front - bodies[b].front).length()) > 30) continue;
-                if (overlap(bodies[a], bodies[b]) &&
-                    overlapping.insert({bodies[a].car.index, bodies[b].car.index}).second &&
-                    std::getenv("RT_GIVE_WAY_OVERLAP_CARDS"))   // the two cards at a pair's first overlap
+                if (!overlap(bodies[a], bodies[b])) continue;
+                const std::pair<uint32_t, uint32_t> pair(bodies[a].car.index, bodies[b].car.index);
+                if (bodiesMeet(bodies[a].car, bodies[b].car)) overlappingWhereTheyMeet.insert(pair);
+                if (overlapping.insert(pair).second && std::getenv("RT_GIVE_WAY_OVERLAP_CARDS"))
                     std::printf("---- overlap t=%.2f\n%s%s", d.clockSeconds(), d.describeCar(bodies[a].car).c_str(),
                                 d.describeCar(bodies[b].car).c_str());
             }
@@ -491,6 +512,32 @@ struct Sim {
     void run(Real seconds) {
         const int steps = static_cast<int>(seconds / kStep + 0.5);
         for (int i = 0; i < steps; ++i) step();
+    }
+    // Do the bodies of cars `x` and `y` lie on one path, or both on the stretches of a crossing point between their two
+    // paths (what following and the conflict resolver keep apart)?
+    bool bodiesMeet(CarId x, CarId y) const {
+        const Car* cx = d.car(x);
+        const Car* cy = d.car(y);
+        if (!cx || !cy) return false;
+        const Body bx = layBody(t.graph, *cx, d.vehicleClasses().at(cx->vehicleClass).length);
+        const Body by = layBody(t.graph, *cy, d.vehicleClasses().at(cy->vehicleClass).length);
+        for (std::size_t i = 0; i < bx.count; ++i)
+            for (std::size_t k = 0; k < by.count; ++k) {
+                const engine::PathId px = bx.pieces[i].path, py = by.pieces[k].path;
+                if (px == py) return true;
+                const engine::Path& p = t.graph.paths[px.index];
+                for (uint32_t c = p.crossings.first; c < p.crossings.end(); ++c) {
+                    const engine::CrossingPoint& rec = t.graph.crossings[t.graph.pathCrossings[c].index];
+                    if (rec.otherSide != engine::OtherSide::Path || (rec.a == px ? rec.otherPath() : rec.a) != py) continue;
+                    const bool xIsA = rec.a == px;
+                    const Real xFrom = xIsA ? rec.aFrom : rec.otherFrom, xTo = xIsA ? rec.aTo : rec.otherTo;
+                    const Real yFrom = xIsA ? rec.otherFrom : rec.aFrom, yTo = xIsA ? rec.otherTo : rec.aTo;
+                    if (bx.pieces[i].front > xFrom && bx.pieces[i].rear < xTo && by.pieces[k].front > yFrom &&
+                        by.pieces[k].rear < yTo)
+                        return true;
+                }
+            }
+        return false;
     }
     // The cars in the order their fronts first came into a junction, with the tick.
     std::vector<std::pair<uint64_t, uint32_t>> entryOrder() const {
@@ -796,17 +843,20 @@ TEST_CASE(give_way_8_a_long_vehicle_tail_blocks_the_crossing) {
     // A 12 m bus straight on from the south arrives first; a car straight on from the west must wait for its tail.
     approach(s, 0, 1, 1, kNorth, 26, kNorth, 1);
     approach(s, 1, 1, 1, kEast, 30, kEast);
-    // Its announcement on their crossing point clears much later than it arrives: by its length at least.
+    // Its announcement on their crossing point clears much later than it arrives: by its length at least (at the speed it
+    // holds through the junction; read as if it goes on, whatever stop it holds: clearIfGoing).
     Real busSpan = 0;
+    const engine::PathId conn = s.t.connector(1, 1, kNorth, 0, kNorth, 0);
+    const Real busThrough = speedThrough(s.t.graph, s.d.roadRules(), conn, s.d.vehicleClasses().at(1).topSpeed,
+                                         s.d.junctionNumbers().comfortableSideAccel);
     for (int i = 0; i < static_cast<int>(30 / kStep); ++i) {
         s.step();
-        const engine::PathId conn = s.t.connector(1, 1, kNorth, 0, kNorth, 0);
         const engine::Path& p = s.t.graph.paths[conn.index];
         for (uint32_t k = p.crossings.first; k < p.crossings.end(); ++k) {
             const engine::CrossingId cid = s.t.graph.pathCrossings[k];
             const Announcement* a = s.d.board().find(cid, 0, conn);
             if (!a || s.t.graph.crossings[cid.index].meeting != engine::Meeting::Cross) continue;
-            if (a->arriveIn > 0 && a->speedThere > 0) busSpan = std::max(busSpan, (a->clearIn - a->arriveIn) * a->speedThere);
+            if (a->arriveIn > 0) busSpan = std::max(busSpan, (a->clearIfGoing - a->arriveIn) * busThrough);
         }
     }
     s.report("long vehicle");
@@ -1100,6 +1150,18 @@ TEST_CASE(give_way_15_the_card_and_the_wait_graph_name_who) {
 
 namespace {
 
+// Where along `path` its crossing point with `other` begins (metres), or -1 when the two have none.
+Real stretchWith(const Sim& s, engine::PathId path, engine::PathId other) {
+    const engine::Path& p = s.t.graph.paths[path.index];
+    for (uint32_t k = p.crossings.first; k < p.crossings.end(); ++k) {
+        const engine::CrossingPoint& rec = s.t.graph.crossings[s.t.graph.pathCrossings[k].index];
+        if (rec.otherSide != engine::OtherSide::Path) continue;
+        const bool iAmA = rec.a == path;
+        if ((iAmA ? rec.otherPath() : rec.a) == other) return iAmA ? rec.aFrom : rec.otherFrom;
+    }
+    return -1;
+}
+
 // Is car `car` giving way to car `other` now, because of question `by` (conflict.h)?
 bool givingWayBecause(const Sim& s, uint32_t car, uint32_t other, Question by) {
     const JunctionPlans* plans = s.d.junctionPlans(CarId(car));
@@ -1169,7 +1231,10 @@ TEST_CASE(give_way_17_a_car_merging_ahead_is_followed_not_hit) {
     // The lab's second #263 failure: two cars coming onto one lane from different paths overlapped on it. A slow truck
     // (car 0) stops at a stop sign and takes its near turn into the main road while the main road is empty as far as it
     // can see; car 1, with right of way on the main road, starts from rest far back, speeds up, and reaches the join
-    // while the truck is still on it. The truck committed first: car 1 keeps behind it.
+    // while the truck is still on it. The truck's body is on the join first: car 1 keeps behind it.
+    // (Since #284 the truck commits only once its front is on the join's stretch, or it cannot stop short of it: car 1 is
+    // held by the host at rest 60 m back until the truck's front is there, so it is "on it" before car 1 sets off. Let go
+    // earlier, car 1 now goes first and the truck waits: give_way_284_e.)
     Heading fromNear = kNorth;
     for (const Heading h : {kNorth, kSouth})
         if (driving_test::nearTurnFrom(h, DrivesOn::Left) == kEast) fromNear = h;
@@ -1179,23 +1244,252 @@ TEST_CASE(give_way_17_a_car_merging_ahead_is_followed_not_hit) {
     standStopSign(roads.graph, roads.laneArriving(1, 1, fromNear, 0));
     Sim s(std::move(roads), kMinorStop);
     CHECK(s.ok);
-    // Car 1 starts at rest 60 m back: beyond what a car at rest looks ahead (act.h kLookAheadFloor), so it has not
-    // planned the junction, nor announced, when the truck decides.
     approach(s, 0, 1, 1, fromNear, 0.5, kEast, 2);
-    approach(s, 1, 1, 1, kEast, 60, kEast);
-    s.step();
-    CHECK(s.d.junctionPlans(CarId(1)) && s.d.junctionPlans(CarId(1))->count == 0);
-    bool followed = false;
+    const TripId car1 = approach(s, 1, 1, 1, kEast, 60, kEast);
+    const engine::PathId lane1 = s.t.laneArriving(1, 1, kEast, 0);
+    CHECK(s.d.placeHold(car1, 1, at(lane1, s.t.graph.paths[lane1.index].length - 59.5)));
+    const engine::PathId truckPath = s.t.connector(1, 1, fromNear, 0, kEast, 0);
+    const Real joinAt = stretchWith(s, truckPath, s.t.connector(1, 1, kEast, 0, kEast, 0));
+    CHECK(joinAt > 0);
+    bool released = false, followed = false;
     for (int i = 0; i < static_cast<int>(90 / kStep); ++i) {   // the truck is slow: both arrive within 90 s
+        const Car* truck = s.d.car(CarId(0));
+        if (!released && truck && truck->path == truckPath && truck->along > joinAt) {
+            CHECK(s.d.releaseHold(car1, 1));
+            released = true;
+        }
         s.step();
         followed = followed || givingWayBecause(s, 1, 0, Question::CommittedFirst) ||
-                   givingWayBecause(s, 1, 0, Question::OnIt);
+                   givingWayBecause(s, 1, 0, Question::OnIt) || givingWayBecause(s, 1, 0, Question::CannotStop);
+        // ... or, the truck on the lane after the join by the time car 1 gets there, held back by it as the car ahead.
+        const Car* c1 = s.d.car(CarId(1));
+        followed = followed || (c1 && c1->binding.by == Limit::CarAhead && c1->binding.car == CarId(0));
     }
     s.report("merging ahead");
     s.checkClean();
+    CHECK(released);
     CHECK(s.arrived == 2);
     CHECK(s.entryOrder().size() == 2 && s.entryOrder()[0].second == 0);
     CHECK(followed);
+}
+
+// ---- Issue #284: the junction-safety fixes, each on a hand-made junction ----------------------------------------------
+
+TEST_CASE(give_way_284_e_rolling_over_the_line_does_not_commit_the_main_road_goes_first) {
+    // ITEM E. The staging of give_way_17 before #284: a slow truck (car 0) at a stop sign creeps over its line into its near
+    // turn while car 1, with right of way on the main road, speeds up from rest 60 m back. Before #284 the truck was
+    // COMMITTED a centimetre past its line (its last waiting point is the line) and "committed first" outranked the
+    // give-way table: car 1 gave way to a truck that could still have stopped. Now the truck commits only when its front is
+    // on the join's stretch, or it cannot stop short of it braking as hard as it can: while it can wait, the table says
+    // who goes first, and car 1, on the main road, goes first. Nobody touches either way.
+    Heading fromNear = kNorth;
+    for (const Heading h : {kNorth, kSouth})
+        if (driving_test::nearTurnFrom(h, DrivesOn::Left) == kEast) fromNear = h;
+    TestRoadSpec spec;
+    spec.roadLength = 200;
+    TestRoads roads = driving_test::gridRoads(3, 3, spec);
+    standStopSign(roads.graph, roads.laneArriving(1, 1, fromNear, 0));
+    Sim s(std::move(roads), kMinorStop);
+    CHECK(s.ok);
+    approach(s, 0, 1, 1, fromNear, 0.5, kEast, 2);
+    approach(s, 1, 1, 1, kEast, 60, kEast);
+    const engine::PathId truckPath = s.t.connector(1, 1, fromNear, 0, kEast, 0);
+    const Real joinAt = stretchWith(s, truckPath, s.t.connector(1, 1, kEast, 0, kEast, 0));
+    bool committedShort = false, followedShort = false, truckGaveWay = false;
+    for (int i = 0; i < static_cast<int>(90 / kStep); ++i) {
+        s.step();
+        const Car* truck = s.d.car(CarId(0));
+        const JunctionPlans* plans = s.d.junctionPlans(CarId(0));
+        if (!truck || !plans || plans->count == 0) continue;
+        const bool shortOfJoin = !(truck->path == truckPath && truck->along > joinAt);
+        // Committed with its front short of its first crossing stretch (commitAt), while it could still stop short of it
+        // at its hardest braking: the defect. (Before #284 it was committed a centimetre past its line.)
+        const JunctionPlan& p = plans->plans[0];
+        const VehicleClass& cls = s.d.vehicleClasses().at(truck->vehicleClass);
+        const Real toCommit = static_cast<Real>(p.startOdometer + p.commitAt - truck->odometer);
+        const bool canStop = toCommit > 0 && canStopWithin(toCommit, truck->speed, cls.hardestBrake, 6 * kStep);
+        committedShort = committedShort || (p.committed && canStop && truck->odometer > p.startOdometer);
+        followedShort = followedShort || (shortOfJoin && givingWayBecause(s, 1, 0, Question::CommittedFirst));
+        truckGaveWay = truckGaveWay || givingWayBecause(s, 0, 1, Question::Table);
+    }
+    s.report("rolling over the line");
+    s.checkClean();
+    CHECK(s.arrived == 2);
+    CHECK(!committedShort);
+    CHECK(!followedShort);
+    CHECK(truckGaveWay);
+}
+
+namespace {
+
+// The stretch of the crossing point between `path` and `other`, along `path` (from, to); (-1, -1) for none.
+std::pair<Real, Real> stretchOf(const Sim& s, engine::PathId path, engine::PathId other) {
+    const engine::Path& p = s.t.graph.paths[path.index];
+    for (uint32_t k = p.crossings.first; k < p.crossings.end(); ++k) {
+        const engine::CrossingPoint& rec = s.t.graph.crossings[s.t.graph.pathCrossings[k].index];
+        if (rec.otherSide != engine::OtherSide::Path) continue;
+        const bool iAmA = rec.a == path;
+        if ((iAmA ? rec.otherPath() : rec.a) == other)
+            return iAmA ? std::make_pair(rec.aFrom, rec.aTo) : std::make_pair(rec.otherFrom, rec.otherTo);
+    }
+    return {-1, -1};
+}
+
+}  // namespace
+
+TEST_CASE(give_way_284_b_a_car_that_will_stop_on_the_crossing_is_never_clear_of_it) {
+    // ITEM B. Car 0, on the main road with right of way, is held by the host INSIDE the junction, its tail 0.3 m short of
+    // the end of the stretch it shares with car 1's path; car 1 waits at a stop sign across it. Before #284 car 0
+    // announced it would clear that stretch in well under a second (its estimate as if it went on), so car 1 planned to go
+    // BEHIND it, entered, and came to rest inside the box against a body that did not move. Now a car that holds a stop
+    // before its tail is clear of a stretch is NEVER clear of it (announce.h HONEST CLEAR TIMES): car 1 waits at its line
+    // until car 0 is let go.
+    TestRoads roads = driving_test::gridRoads(3, 3);
+    standStopSign(roads.graph, roads.laneArriving(1, 1, kNorth, 0));
+    Sim s(std::move(roads), kMinorStop);
+    CHECK(s.ok);
+    const engine::PathId kPath = s.t.connector(1, 1, kNorth, 0, kNorth, 0);
+    // The main-road direction car 1 crosses second (further along its connector): car 1 then arrives there later.
+    Heading main = kEast;
+    Real furthest = -1;
+    for (const Heading h : {kEast, kWest}) {
+        const Real at = stretchWith(s, kPath, s.t.connector(1, 1, h, 0, h, 0));
+        if (at > furthest) {
+            furthest = at;
+            main = h;
+        }
+    }
+    const engine::PathId hPath = s.t.connector(1, 1, main, 0, main, 0);
+    const std::pair<Real, Real> hStretch = stretchOf(s, hPath, kPath);
+    CHECK(hStretch.second > 0);
+    const Real hLength = s.d.vehicleClasses().at(0).length;
+    const TripId held = approach(s, 0, 1, 1, main, 30, main);
+    CHECK(s.d.placeHold(held, 1, at(hPath, hStretch.second + hLength - 0.3)));
+    approach(s, 1, 1, 1, kNorth, 0.5, kNorth);
+    const engine::CrossingId shared = [&]() {
+        const engine::Path& p = s.t.graph.paths[hPath.index];
+        for (uint32_t k = p.crossings.first; k < p.crossings.end(); ++k) {
+            const engine::CrossingId c = s.t.graph.pathCrossings[k];
+            const engine::CrossingPoint& rec = s.t.graph.crossings[c.index];
+            if (rec.otherSide == engine::OtherSide::Path && (rec.a == kPath || rec.otherPath() == kPath)) return c;
+        }
+        return engine::CrossingId();
+    }();
+    CHECK(shared.valid());
+    bool honest = false, dishonest = false;
+    for (int i = 0; i < static_cast<int>(25 / kStep); ++i) {
+        s.step();
+        const Car* h = s.d.car(CarId(0));
+        if (!h || h->speed > kStandingBelow || h->path != hPath) continue;
+        const Announcement* a = s.d.board().find(shared, 0, hPath);
+        if (!a) continue;
+        honest = honest || a->clearIn == kNever;
+        dishonest = dishonest || a->clearIn != kNever;
+    }
+    std::printf("    car 0 held inside: its clear time on the shared crossing point was announced never: %s; finite: %s; "
+                "car 1 entered its connector while it stood: %s\n",
+                honest ? "yes" : "no", dishonest ? "yes" : "no", s.enteredJunction.count(1) ? "yes" : "no");
+    CHECK(honest && !dishonest);
+    CHECK(s.enteredJunction.count(1) == 0);   // car 1 never went in behind a body that was not going to move
+    CHECK(s.d.releaseHold(held, 1));
+    s.run(40);
+    s.report("held inside, never clear");
+    s.checkClean();
+    CHECK(s.arrived == 2);
+}
+
+namespace {
+
+// A MEETING BETWEEN A LANE AND ANOTHER JUNCTION'S CONNECTOR, filed under no junction (ADR-0400's carry-overs), made by
+// hand as give_way_11 makes one between two connectors: lane `lane` (40-46 m along it) against connector `conn` (4-10 m
+// along it). The geometry is the test's; the record is what the model reads.
+void addLaneMeeting(TestRoads& roads, engine::PathId lane, engine::PathId conn) {
+    engine::CrossingPoint rec;
+    const bool laneIsA = lane < conn;
+    rec.a = laneIsA ? lane : conn;
+    rec.other = (laneIsA ? conn : lane).index;
+    rec.meeting = engine::Meeting::Cross;
+    rec.aFrom = laneIsA ? 40 : 4;
+    rec.aTo = laneIsA ? 46 : 10;
+    rec.otherFrom = laneIsA ? 4 : 40;
+    rec.otherTo = laneIsA ? 10 : 46;
+    roads.graph.crossings.push_back(rec);
+    engine::indexCrossings(roads.graph);
+}
+
+}  // namespace
+
+TEST_CASE(give_way_284_d_a_car_on_a_lane_keeps_out_of_the_way_of_a_body_on_its_crossing_point) {
+    // ITEM D. A slow truck (car 0) on a connector of junction (1, 2) and car 1 on the lane between junctions (1, 1) and
+    // (1, 2) share a meeting filed under no junction. The truck is held by the host with its body on the meeting's
+    // stretch; car 1, held at rest 20 m short of its own stretch, is let go once the truck stands there. The resolver puts
+    // the truck first (its body is on it). Before #284 a lane car announced itself going and arrived first, and never
+    // judged: put second, it drove onto its stretch with the truck's body on the other. Now it judges its lane's crossing
+    // points too and stops short of the stretch until the truck, let go in its turn, is clear. Who goes first between
+    // junctions otherwise is the rule set's: with `between_junctions` = sign_rank, movement, the lane (no sign, straight
+    // on) goes before the truck's far turn, settled at load.
+    TestRoads roads = driving_test::gridRoads(3, 4);
+    const engine::PathId lane = roads.laneLeaving(1, 1, kEast, 0);
+    const Heading far = driving_test::farTurnFrom(kNorth, DrivesOn::Left);
+    const engine::PathId conn = roads.connector(1, 2, kNorth, 0, far, 0);
+    CHECK(lane.valid() && conn.valid());
+    addLaneMeeting(roads, lane, conn);
+    Sim s(std::move(roads), kUncontrolled);
+    CHECK(s.ok);
+    const TripId truckTrip = approach(s, 0, 1, 2, kNorth, 1, far, 2);   // the slow truck, 1 m short of its line
+    CHECK(s.d.placeHold(truckTrip, 1, at(conn, 8)));                     // its body 1-8 m along: across 4-10 m
+    const TripId car1 = s.add(1, lane, 20, s.t.laneLeaving(1, 2, kEast, 0), 90);
+    CHECK(s.d.placeHold(car1, 1, at(lane, 20.5)));
+    const auto bothOn = [&]() {
+        const auto onStretch = [&](const Car* c, engine::PathId p, Real from, Real to) {
+            if (!c) return false;
+            const Body body = layBody(s.t.graph, *c, s.d.vehicleClasses().at(c->vehicleClass).length);
+            for (std::size_t k = 0; k < body.count; ++k)
+                if (body.pieces[k].path == p && body.pieces[k].front > from && body.pieces[k].rear < to) return true;
+            return false;
+        };
+        return onStretch(s.d.car(CarId(0)), conn, 4, 10) && onStretch(s.d.car(CarId(1)), lane, 40, 46);
+    };
+    bool released = false, truckReleased = false;
+    double releasedAt = 0;
+    int both = 0;
+    for (int i = 0; i < static_cast<int>(120 / kStep); ++i) {
+        const Car* truck = s.d.car(CarId(0));
+        if (!released && truck && truck->path == conn && truck->speed < kStandingBelow && truck->along > 7) {
+            CHECK(s.d.releaseHold(car1, 1));
+            released = true;
+            releasedAt = s.d.clockSeconds();
+        }
+        if (released && !truckReleased && s.d.clockSeconds() > releasedAt + 15) {
+            CHECK(s.d.releaseHold(truckTrip, 1));
+            truckReleased = true;
+        }
+        s.step();
+        both += bothOn();
+    }
+    s.report("a lane against a connector");
+    s.checkClean();
+    std::printf("    ticks with both on the meeting: %d; stops on a lane to give way: %llu\n", both,
+                static_cast<unsigned long long>(s.d.junctionPlanCounts().gaveWayOnALane));
+    CHECK(released);
+    CHECK(both == 0);
+    CHECK(s.d.junctionPlanCounts().gaveWayOnALane >= 1u);
+    CHECK(s.arrived == 2);
+
+    // THE RULE SET'S ORDER BETWEEN JUNCTIONS: settled at load, the lane (straight on, no sign) before the far turn.
+    CHECK(s.giveRules(kUncontrolled, "  between_junctions = { settle = { 'sign_rank', 'movement', 'arrived_first' } },\n"));
+    const RightOfWay& row = s.d.rightOfWay();
+    const engine::CrossingId meeting(static_cast<uint32_t>(s.t.graph.crossings.size() - 1));
+    const MeetingAnswer* answer = row.answer(meeting);
+    CHECK(answer != nullptr);
+    if (answer) {
+        engine::PathId other;
+        CHECK(myTurn(s.t.graph, *answer, meeting, lane, &other) == MyTurn::GoFirst);
+        CHECK(other == conn);
+        CHECK(answer->by == SettledBy::Movement);
+    }
+    // ... and a list that asks something meaningless between junctions is refused when the rule set is read.
+    CHECK(!s.giveRules(kUncontrolled, "  between_junctions = { settle = { 'kerb_side' } },\n"));
 }
 
 // ---- 18 to 25. Traffic lights by movement, timed from the rule set (issue #261, task D2) -------------------------------
@@ -1970,6 +2264,223 @@ TEST_CASE(room_34_the_back_of_a_moving_queue_is_where_it_would_come_to_rest) {
         CHECK_APPROX(a.room, rear + braking - kTestStandstillGap, 1e-6);
         CHECK(a.granted == (moving == 1));
     }
+}
+
+// ---- Issue #284 (continued): the hard gap, claims through close junctions, congested traffic --------------------------
+
+TEST_CASE(give_way_284_a_the_hard_gap_is_never_below_the_cars_own_stopping_time) {
+    // ITEM A. A driver that has decided to go keeps going while the gap stays above the HARD gap. Before #284 that was the
+    // rule set's gap_hard, 1.0 s, for every vehicle: a 12 m bus at 35 mph (15.6 m/s) needs about 1.6 s of travel to stop,
+    // so a gap that closed to 1.2 s left it unable to stop short, told to give way to a car with right of way. Now the hard
+    // gap is the larger of gap_hard and the vehicle's own stopping time (one decide interval, then its hardest braking),
+    // and the comfortable gap never falls below it.
+    Sim s(driving_test::gridRoads(3, 3), kUncontrolled);
+    CHECK(s.ok);
+    const JunctionNumbers& n = s.d.junctionNumbers();
+    const VehicleClass& bus = s.d.vehicleClasses().at(1);
+    const Real decide = DrivingSettings::kDefaultDecideEveryTicks * kStep;
+    const Real v = 35 * 0.44704;
+    const Real stopping = decide + v / (2 * bus.hardestBrake);
+    std::printf("    the bus's hardest braking %.1f m/s2: at 35 mph it needs %.2f s to stop; the hard gap is %.2f s (gap_hard "
+                "%.2f s); at rest %.2f s\n",
+                bus.hardestBrake, stopping, hardGap(n, v, bus.hardestBrake, decide), n.gapHard,
+                hardGap(n, 0, bus.hardestBrake, decide));
+    CHECK(stopping > n.gapHard);
+    CHECK_APPROX(hardGap(n, v, bus.hardestBrake, decide), stopping, 1e-9);
+    CHECK_APPROX(hardGap(n, 0, bus.hardestBrake, decide), n.gapHard, 1e-9);   // a car at rest: the rule set's floor
+    CHECK(comfortableGap(n, 1000, 1, hardGap(n, v, bus.hardestBrake, decide)) >= stopping - 1e-9);
+    // ... and a gap it keeps going on is one it can still stop short in: travelling at v, the distance the hard gap covers
+    // is at least its stopping distance.
+    CHECK(canStopWithin(hardGap(n, v, bus.hardestBrake, decide) * v, v, bus.hardestBrake, decide));
+}
+
+TEST_CASE(give_way_284_f1_no_claim_through_close_junctions_takes_the_next_junctions_traffic_turn) {
+    // ITEM F, the grant. The lab's 11/14 shape (two uncontrolled junctions 6 m apart: a car cannot stop between). Car 0
+    // waits at the first junction's line to go straight through it and take the far turn at the second, across car 1,
+    // which comes straight on at the second from the other side and goes first there (by the table's fall-back: straight
+    // on before the far turn). Before #284 car 0 was granted room through both at once, committed at the first junction,
+    // and so was COMMITTED THROUGH the second, taking car 1's turn there. Now the claim is granted only when car 0 sees its
+    // turn at the second junction clear: at the tick it is granted, car 1's announcement on their crossing point leaves car
+    // 0 the comfortable gap one way or the other. (Car 1 may still wait for car 0 later, if car 0 went ahead with the gap
+    // and was slower than it reckoned: that is first in goes first, not a turn taken.)
+    Sim s(elevenFourteen(6), kUncontrolled, DrivingSettings::kDefaultDecideEveryTicks, false, true);
+    CHECK(s.ok);
+    const Heading far = driving_test::farTurnFrom(kEast, DrivesOn::Left);
+    const engine::PathId from = s.t.laneArriving(1, 1, kEast, 0);
+    const engine::PathId to = s.t.laneLeaving(1, 2, far, 0);
+    CHECK(from.valid() && to.valid());
+    s.add(0, from, s.t.graph.paths[from.index].length - 0.5, to, s.t.graph.paths[to.index].length - 10);
+    // Car 1 straight on westward through both junctions (bound beyond the first: the link is only 6 m).
+    const engine::PathId from1 = s.t.laneArriving(1, 2, kWest, 0), to1 = s.t.laneLeaving(1, 1, kWest, 0);
+    s.add(1, from1, s.t.graph.paths[from1.index].length - 40, to1, s.t.graph.paths[to1.index].length - 10);
+    const engine::PathId turn = s.t.connector(1, 2, kEast, 0, far, 0);
+    const engine::PathId oncoming = s.t.connector(1, 2, kWest, 0, kWest, 0);
+    const engine::CrossingId shared = [&]() {
+        const engine::Path& p = s.t.graph.paths[turn.index];
+        for (uint32_t k = p.crossings.first; k < p.crossings.end(); ++k) {
+            const engine::CrossingId c = s.t.graph.pathCrossings[k];
+            const engine::CrossingPoint& rec = s.t.graph.crossings[c.index];
+            if (rec.otherSide == engine::OtherSide::Path && (rec.a == oncoming || rec.otherPath() == oncoming)) return c;
+        }
+        return engine::CrossingId();
+    }();
+    CHECK(shared.valid());
+    bool granted = false, grantedClear = false;
+    Real gapAtGrant = 0;
+    for (int i = 0; i < static_cast<int>(60 / kStep) && shared.valid(); ++i) {
+        s.step();
+        const JunctionPlans* plans = s.d.junctionPlans(CarId(0));
+        if (granted || !plans || plans->count == 0 || plans->plans[0].room.state != RoomState::Granted) continue;
+        granted = true;
+        CHECK(plans->plans[0].room.through > 1);
+        // At the grant: car 0's and car 1's announcements on their crossing point at the second junction.
+        const Announcement* mine = s.d.board().find(shared, 0, turn);
+        const Announcement* theirs = s.d.board().find(shared, 1, oncoming);
+        const Real gap = s.d.junctionNumbers().gapComfortable;
+        grantedClear = !theirs || (mine && (mine->clearIfGoing + gap <= theirs->arriveIn ||
+                                            theirs->clearIn + gap <= mine->arriveIn));
+        gapAtGrant = !theirs || !mine ? kNever
+                                      : std::max(theirs->arriveIn - mine->clearIfGoing, mine->arriveIn - theirs->clearIn);
+    }
+    if (shared.valid()) s.run(30);
+    const RoomCounts& rc = s.d.roomCounts();
+    const uint64_t refusedForTheTurn = rc.refused[static_cast<std::size_t>(RoomRefusal::GivesWayAhead)];
+    s.report("a claim through close junctions, the next junction's traffic");
+    std::printf("    claims refused while the way was not seen clear: %llu; granted through both with car 1's gap at the "
+                "second junction %.1f s\n",
+                static_cast<unsigned long long>(refusedForTheTurn), gapAtGrant);
+    s.checkClean();
+    CHECK(granted);
+    CHECK(grantedClear);
+    CHECK(refusedForTheTurn >= 1u);
+    CHECK(s.arrived == 2);
+    CHECK(s.boxTicksNotAllowed == 0);
+}
+
+TEST_CASE(give_way_284_f2_a_claim_through_close_lights_is_checked_again_until_the_line) {
+    // ITEM F, the prediction. The lab's 11/14 shape with the lab's lights (two junctions 6 m apart: a car cannot stop
+    // between), fed from every arm for ten minutes as room_32 feeds it. A claim through both is timed for the
+    // second light to let the car in as it gets there. Before #284 that prediction was made once, from the car's own speed:
+    // a car held up on the way (behind a slower car, or inside the first junction by a car that committed before it) could
+    // reach the second light after its red, and either go in on the red or stop with its tail in the first box. Now the
+    // car's arrival allows for the car ahead of it, the claim needs its way through both junctions seen clear of every car
+    // that could make it wait, and it is worked out afresh every tick while the car can still stop at the first line
+    // (given back if it no longer holds). Nobody enters on red, nobody rests in a box but by giving way.
+    Sim s(elevenFourteen(6), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true, true);
+    CHECK(s.ok);
+    uint32_t next = 0;
+    // (Fed harder -- a car every 6 s an arm -- the shape's two uncoordinated programmes back queues up through the boxes
+    // whether or not these fixes are in: room beyond's own business, not this test's.)
+    const int unaccounted = feedElevenFourteen(s, 10 * 60, next, 20);
+    for (int i = 0; i < 300 * 60 && !s.d.cars().empty(); ++i) s.step();
+    const RoomCounts& rc = s.d.roomCounts();
+    s.report("a claim through close lights, checked again");
+    std::printf("    claims through both: %llu granted; refused for the lights %llu, for a way not seen clear %llu; given back "
+                "on a fresh look %llu; entered on red %llu; at rest in a box not giving way %llu car-ticks; %zu cars left\n",
+                static_cast<unsigned long long>(rc.grantedThrough),
+                static_cast<unsigned long long>(rc.refused[static_cast<std::size_t>(RoomRefusal::LightsAhead)]),
+                static_cast<unsigned long long>(rc.refused[static_cast<std::size_t>(RoomRefusal::GivesWayAhead)]),
+                static_cast<unsigned long long>(rc.chainsGivenBack), static_cast<unsigned long long>(s.enteredOnRed),
+                static_cast<unsigned long long>(s.boxTicksNotAllowed), s.d.cars().size());
+    CHECK(unaccounted == 0);
+    CHECK(s.enteredOnRed == 0);
+    CHECK(s.boxTicksNotAllowed == 0);
+    CHECK(s.overlapping.empty());
+    CHECK(s.noReason == 0);
+    CHECK(rc.grantedThrough > 0u);
+}
+
+namespace {
+
+// CONGESTED RANDOM TRAFFIC through junction (r, c) of `s` from the headings `ins`: a new car on every arm every 1-2 s
+// when there is room for it, of a class drawn from the slow small truck, the 12 m bus and the car, each bound out by a
+// hashed heading; arrived cars are taken off. Every pair of bodies is checked every tick (Sim::step).
+void congestedTraffic(Sim& s, uint32_t r, uint32_t c, const std::vector<Heading>& ins, Real seconds) {
+    uint32_t next = 0;
+    std::map<int, Real> nextAt;
+    const int steps = static_cast<int>(seconds / kStep);
+    for (int i = 0; i < steps; ++i) {
+        const Real now = static_cast<Real>(s.d.clockSeconds());
+        for (std::size_t a = 0; a < ins.size(); ++a) {
+            if (now < nextAt[static_cast<int>(a)]) continue;
+            const engine::PathId lane = s.t.laneArriving(r, c, ins[a], 0);
+            if (!carsOnStretch(s.d.pathLists(), lane, 0, 16).empty()) continue;
+            const uint32_t pick = engine::bundle::fnv1a(&next, sizeof next, 0x284u) % 4;
+            const Heading outs[] = {ins[a], driving_test::nearTurnFrom(ins[a], DrivesOn::Left),
+                                    driving_test::farTurnFrom(ins[a], DrivesOn::Left), ins[a]};
+            const engine::PathId out = s.t.laneLeaving(r, c, outs[pick], 0);
+            if (!out.valid() || !s.t.connector(r, c, ins[a], 0, outs[pick], 0).valid()) {
+                nextAt[static_cast<int>(a)] = now + 1;
+                continue;
+            }
+            const uint32_t cls = (next * 2246822519u >> 7) % 3;   // the car, the bus, the slow truck, in turn-ish
+            s.add(next, lane, 14, out, s.t.graph.paths[out.index].length - 14, cls);
+            ++next;
+            nextAt[static_cast<int>(a)] = now + 1 + static_cast<Real>((next * 2654435761u) % 1000) / 1000;
+        }
+        s.step();
+    }
+}
+
+}  // namespace
+
+TEST_CASE(give_way_284_h_congested_random_traffic_mixed_classes_no_body_touches_another) {
+    // ITEM H. The random traffic of give_way_14 had no congestion: a car every few seconds per arm. Here one arrives on every
+    // arm every 1-2 s when there is room, a mix of cars, 12 m buses and slow 7 m trucks, for five minutes each at an
+    // uncontrolled four-way, an all-way stop and a four-way with the lab's lights, with room beyond: queues stand on
+    // every arm. Every pair of bodies is checked every tick: no two on one path, or both on the stretches of a crossing
+    // point between their paths, may touch; no ring of waiting with a right of way in it (a deadlock); nobody waits for no
+    // reason; nobody rests in the box but by giving way. Pairs that touch OUTSIDE every shared stretch are printed, not
+    // checked: a 12 m bus's straight body cuts inside a tight turn by about 1.5 m and reaches a car beside its path, which
+    // the lane graph's stretches do not allow for yet (review #284 item 9, its own task; with all of #284's fixes switched
+    // off the same run shows the same kind).
+    struct Case {
+        const char* name;
+        const char* control;
+        bool lights;
+    };
+    for (const Case& k : {Case{"uncontrolled", kUncontrolled, false}, Case{"all-way stop", kAllWayStop, false},
+                          Case{"lights", kLabLights, true}}) {
+        Sim s(driving_test::gridRoads(3, 3), k.control, DrivingSettings::kDefaultDecideEveryTicks, k.lights, true);
+        CHECK(s.ok);
+        congestedTraffic(s, 1, 1, {kEast, kNorth, kWest, kSouth}, 5 * 60);
+        uint64_t deadlocks = 0;
+        for (const WaitLoop& l : s.loops) deadlocks += l.kind == LoopClass::Deadlock;
+        std::printf("    congested, %s: %zu pairs overlapped (%zu on one path or a shared stretch), %llu deadlock loop samples (%zu "
+                    "loops in all), %llu waiting with no reason, %llu arrived, %zu still on the road; at rest in a box not "
+                    "giving way %llu car-ticks; the resolver counted %llu conflicts whose car going second could not stop "
+                    "short\n",
+                    k.name, s.overlapping.size(), s.overlappingWhereTheyMeet.size(),
+                    static_cast<unsigned long long>(deadlocks), s.loops.size(),
+                    static_cast<unsigned long long>(s.noReason), static_cast<unsigned long long>(s.arrived),
+                    s.d.cars().size(), static_cast<unsigned long long>(s.boxTicksNotAllowed),
+                    static_cast<unsigned long long>(s.d.conflictCounts().secondCannotStop));
+        for (const std::pair<uint32_t, uint32_t>& p : s.overlapping)
+            std::printf("      cars %u and %u overlapped%s\n", p.first, p.second,
+                        s.overlappingWhereTheyMeet.count(p) ? " on one path or a shared stretch"
+                                                            : " outside every shared stretch (a long body in a bend)");
+        CHECK(s.overlappingWhereTheyMeet.empty());
+        CHECK(deadlocks == 0);
+        CHECK(s.noReason == 0);
+        CHECK(s.boxTicksNotAllowed == 0);
+        CHECK(s.arrived > 40);
+    }
+}
+
+TEST_CASE(give_way_284_h_the_light_programmes_are_checked_when_the_rules_are_handed_over) {
+    // ITEM H. checkSignalProgrammes (no two movements whose paths meet let in together unless the rule set allows it) ran
+    // only in tests. Now Driving::useRules runs it once the programmes are timed and keeps what it finds
+    // (signalProblems), among the right-of-way table's notes too, so a host that reports the table reports a breach.
+    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    CHECK(s.ok);
+    const std::vector<std::string> direct = checkSignalProgrammes(s.t.graph, s.d.ruleSet(), s.d.rightOfWay());
+    CHECK(s.d.signalProblems() == direct);
+    CHECK(s.d.signalProblems().empty());
+    for (const std::string& note : s.d.rightOfWay().notes) CHECK(note.find("unsafe programme") == std::string::npos);
+    // Dark (no light clock): nothing runs, so nothing is checked.
+    Sim dark(driving_test::gridRoads(3, 3), kLabLights);
+    CHECK(dark.ok);
+    CHECK(dark.d.signalProblems().empty());
 }
 
 #endif  // RT_ENABLE_SCRIPTING

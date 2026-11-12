@@ -69,6 +69,9 @@ struct NoticedFact {
     Real seconds = 0;
     bool hasMetres = false;
     Real metres = 0;
+    // A place to stop by that gives way (StopFor::GivingWay) to a car whose body is already on the crossing point: the
+    // stop is then StopFor::ForABody, a matter of space (issue #284).
+    bool forABody = false;
 };
 bool operator==(const NoticedFact& a, const NoticedFact& b);   // every field that means something, exactly
 inline bool operator!=(const NoticedFact& a, const NoticedFact& b) { return !(a == b); }

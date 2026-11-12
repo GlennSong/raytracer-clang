@@ -50,6 +50,7 @@ constexpr const char* kKeyTurnOnRed = "turn_on_red";
 constexpr const char* kKeyMovement = "movement";
 constexpr const char* kKeyAfter = "after";
 constexpr const char* kKeyWhenDark = "when_dark";
+constexpr const char* kKeyBetweenJunctions = "between_junctions";
 
 // A number's value is the first entry of its table.
 constexpr lua_Integer kNumberValueSlot = 1;
@@ -82,6 +83,7 @@ public:
         readPersonality(root, out);
         readMovementRank(root, out);
         readControls(root, out);
+        readBetweenJunctions(root, out);
         lua_settop(L, base);
         return clean();
     }
@@ -125,6 +127,65 @@ protected:
         lua_settop(L, top);
     }
 
+    // A settle list at `idx`: one or more questions, each once. False (reported) on any fault.
+    bool settleList(int idx, const std::string& settlePath, std::vector<SettleQuestion>& out) {
+        std::vector<std::string> words;
+        bool ok = true;
+        if (!stringList(idx, settlePath, false, words)) {
+            ok = false;
+        } else if (words.empty()) {
+            fail(settlePath, "is empty, expected at least one of (" + settleQuestionWords() + ")");
+            ok = false;
+        }
+        for (const std::string& w : words) {
+            SettleQuestion q = SettleQuestion::Light;
+            if (!settleQuestionOf(w, q)) {
+                fail(settlePath, "names \"" + w + "\", which is not one of the questions (" + settleQuestionWords() + ")");
+                ok = false;
+            } else if (std::find(out.begin(), out.end(), q) != out.end()) {
+                fail(settlePath, "asks \"" + w + "\" twice, expected each question once");
+                ok = false;
+            } else {
+                out.push_back(q);
+            }
+        }
+        return ok;
+    }
+
+    // between_junctions: optional (issue #284); how a meeting filed under no junction is settled, { settle = { ... } }:
+    // only the questions that mean something there (no lights, and no approaches of one junction to compare).
+    void readBetweenJunctions(int root, RuleSet& out) {
+        const int top = lua_gettop(L);
+        const int v = pushField(root, kKeyBetweenJunctions);
+        const std::string path = std::string(kRoot) + "." + kKeyBetweenJunctions;
+        if (lua_isnil(L, v)) {
+            lua_settop(L, top);
+            return;
+        }
+        if (!lua_istable(L, v)) {
+            fail(path, "is " + describe(v) + ", expected { " + kKeySettle + " = { ... } }");
+            lua_settop(L, top);
+            return;
+        }
+        checkKeys(v, path, {kKeySettle});
+        std::vector<SettleQuestion> settle;
+        bool ok = settleList(pushField(v, kKeySettle), path + "." + kKeySettle, settle);
+        for (const SettleQuestion q : settle)
+            if (q == SettleQuestion::Light || q == SettleQuestion::KerbSide) {
+                fail(path + "." + kKeySettle, "asks \"" + std::string(settleQuestionWord(q)) +
+                                                  "\", which means nothing between junctions (expected " +
+                                                  settleQuestionWord(SettleQuestion::SignRank) + ", " +
+                                                  settleQuestionWord(SettleQuestion::Movement) + " or " +
+                                                  settleQuestionWord(SettleQuestion::ArrivedFirst) + ")");
+                ok = false;
+            }
+        if (ok) {
+            out.hasBetweenJunctions = true;
+            out.betweenJunctions = settle;
+        }
+        lua_settop(L, top);
+    }
+
     // control: optional; each kind of junction control.
     void readControls(int root, RuleSet& out) {
         const int top = lua_gettop(L);
@@ -162,27 +223,7 @@ protected:
             // settle: required, a list of questions, each once.
             {
                 const int v = pushField(ct, kKeySettle);
-                const std::string settlePath = controlPath + "." + kKeySettle;
-                std::vector<std::string> words;
-                if (!stringList(v, settlePath, false, words)) {
-                    ok = false;
-                } else if (words.empty()) {
-                    fail(settlePath, "is empty, expected at least one of (" + settleQuestionWords() + ")");
-                    ok = false;
-                }
-                for (const std::string& w : words) {
-                    SettleQuestion q = SettleQuestion::Light;
-                    if (!settleQuestionOf(w, q)) {
-                        fail(settlePath, "names \"" + w + "\", which is not one of the questions (" +
-                                             settleQuestionWords() + ")");
-                        ok = false;
-                    } else if (std::find(k.settle.begin(), k.settle.end(), q) != k.settle.end()) {
-                        fail(settlePath, "asks \"" + w + "\" twice, expected each question once");
-                        ok = false;
-                    } else {
-                        k.settle.push_back(q);
-                    }
-                }
+                if (!settleList(v, controlPath + "." + kKeySettle, k.settle)) ok = false;
                 lua_settop(L, mark + 1);
             }
             {

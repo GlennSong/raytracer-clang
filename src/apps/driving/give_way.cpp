@@ -1,6 +1,6 @@
 #include "apps/driving/give_way.h"
 
-#include "apps/driving/act.h"   // kSettingGapKept, kNumberStandstillGap
+#include "apps/driving/act.h"   // kSettingGapKept, kNumberStandstillGap; canStopWithin, stoppingDistance
 #include "apps/driving/road_rules.h"   // RoadRules::device: what a regulation on the road means
 
 #include <algorithm>
@@ -11,8 +11,6 @@
 namespace driving {
 
 namespace {
-
-constexpr Real kTwo = 2;   // the 2 in v^2 = 2 a s
 
 bool knownPath(const engine::LaneGraph& roads, engine::PathId p) { return p.valid() && p.index < roads.paths.size(); }
 
@@ -35,13 +33,42 @@ bool announcedNotGoing(const GiveWayInputs& in, const JunctionPlan& p) {
     return false;
 }
 
+// THE GAP I HAVE to car `e` (announced on crossing point `cid`, on `otherPath`), which the resolver puts before me by
+// question `by`, from my own announcement there `mine`: AHEAD of it, my tail clear before its front arrives, reading my
+// clear time were I to go now (I may hold a stop I am deciding whether to drop); BEHIND it, my front arriving after its
+// tail is clear, reading its HONEST clear time (announce.h: never, while it will come to rest before its tail is clear, so
+// nobody goes behind a car waiting inside the junction or at its line). A body on the crossing point, a car that cannot
+// stop short of it, or a car committed before me, I may only follow (conflict.h followOnly). The larger of the two.
+Real gapTo(const Announcement& mine, const Announcement& e, Question by) {
+    const bool follow = followOnly(by);
+    const Real ahead = follow ? -kNever : e.arriveIn - mine.clearIfGoing;
+    const Real behind = mine.arriveIn - e.clearIn;
+    return std::max(ahead, behind);
+}
+
+// Notes car `e` in `j` when it is the tightest gap so far (or one too small), and says whether the gap is too small.
+bool judgeOne(const Announcement& e, engine::CrossingId cid, engine::PathId otherPath, Question by, Real have, Real need,
+              bool& tightest, GiveWayJudgement& j) {
+    if (have < need || !tightest || have < j.have) {
+        j.cause = GiveWayCause::Gap;
+        j.other = CarId(static_cast<uint32_t>(e.who));
+        j.crossing = cid;
+        j.otherPath = otherPath;
+        j.need = need;
+        j.have = have;
+        j.by = by;
+        tightest = true;
+    }
+    return have < need;
+}
+
 // Fills `j` and says whether I must give way at plan `p`'s junction: for each crossing point along its connector, each car
-// announced there that the resolver puts before me. For Go, `j` keeps the tightest gap I accepted.
-bool judgeMeetings(const GiveWayInputs& in, const JunctionPlan& p, Real patience, GiveWayJudgement& j) {
+// announced there that the resolver puts before me. For Go, `j` keeps the tightest gap I accepted. `hard`: my hard gap.
+bool judgeMeetings(const GiveWayInputs& in, const JunctionPlan& p, Real patience, Real hard, GiveWayJudgement& j) {
     const engine::Path& conn = in.roads.paths[p.connector.index];
     const Real waited = p.cameToRest ? static_cast<Real>(std::max(0.0, in.now - p.restAt)) : Real(0);
     // Having decided to go, a driver keeps going unless the hard gap is broken; until then it needs the comfortable one.
-    const Real needed = p.decision == GiveWayDecision::Go ? in.numbers.gapHard : comfortableGap(in.numbers, waited, patience);
+    const Real needed = p.decision == GiveWayDecision::Go ? hard : comfortableGap(in.numbers, waited, patience, hard);
     bool tightest = false;
     for (uint32_t k = conn.crossings.first; k < conn.crossings.end() && k < in.roads.pathCrossings.size(); ++k) {
         const engine::CrossingId cid = in.roads.pathCrossings[k];
@@ -50,59 +77,71 @@ bool judgeMeetings(const GiveWayInputs& in, const JunctionPlan& p, Real patience
         const MeetingAnswer* answer = in.row.answer(cid, currentPhase(in.row, rec.junction, in.now));
         if (!answer) continue;
         engine::PathId otherPath;
-        const bool split = myTurn(in.roads, *answer, cid, p.connector, &otherPath) == MyTurn::Neither;
+        // A SPLIT (two turns leaving my lane): nobody gives way; the car behind follows the car ahead, along either path
+        // while its body is on the split's stretch (traffic_state.h carAhead, since #283).
+        if (myTurn(in.roads, *answer, cid, p.connector, &otherPath) == MyTurn::Neither) continue;
         const Announcement* mine = in.board.find(cid, in.me.id.index, p.connector);
         if (!mine) continue;   // my tail is past it, or I have not announced it
-        if (split) {
-            // A SPLIT (two turns leaving my lane): the car behind follows the car ahead. But a car standing inside the
-            // junction to give way (a far turn waiting for its gap, issue #261) may have its tail off our lane and still
-            // on the split's stretch, where following no longer sees it: its body blocks the stretch (the D4 brief's
-            // rule 1), and I may only come behind it.
-            for (const Announcement& e : in.board.on(cid)) {
-                if (e.onPath != otherPath || e.who == in.me.id.index || e.arriveIn > 0 ||
-                    e.waitingFor == Announcement::kNoOne)
-                    continue;
-                const Real have = mine->arriveIn - e.clearIn;
-                if (have < needed || !tightest || have < j.have) {
-                    j.cause = GiveWayCause::BehindInMyLane;
-                    j.other = CarId(static_cast<uint32_t>(e.who));
-                    j.crossing = cid;
-                    j.otherPath = otherPath;
-                    j.need = needed;
-                    j.have = have;
-                    j.by = Question::OnIt;
-                    tightest = true;
-                }
-                if (have < needed) return true;
-            }
-            continue;
-        }
         for (const Announcement& e : in.board.on(cid)) {
+            // A car NOT GOING (stopping short of this crossing point for something else) is passed over: nobody is coming.
+            // Not an order between the two (conflict.h says why it is kept out of the resolver); never a body on the
+            // stretch, nor a car that cannot stop short of it (announce.h).
             if (e.onPath != otherPath || e.who == in.me.id.index || e.notGoing) continue;
             // Who goes first is the resolver's; the one that goes first never looks at the other.
             Question by = Question::None;
             if (in.resolver.goesFirst(in.roads, cid, in.me.id.index, e.who, &by)) continue;
-            // Ahead of it: my tail clear before its front arrives. Behind it: my front arriving after its tail is clear --
-            // never behind a car WAITING INSIDE the junction for somebody else (task D4): it may not go when its estimate
-            // says, and once I had committed "behind" it, it would have to wait for me, inside the box, for as long as
-            // cars kept doing so. A body on the crossing point, or a car committed before me, I may only follow.
-            const bool follow = followOnly(by);
-            const Real need = needed;
-            const Real ahead = follow ? -kNever : e.arriveIn - mine->clearIn;
-            const Real behind = follow || !e.waitsInside ? mine->arriveIn - e.clearIn : -kNever;
-            const Real have = std::max(ahead, behind);
-            if (have < need || !tightest || have < j.have) {
-                j.cause = GiveWayCause::Gap;
-                j.other = CarId(static_cast<uint32_t>(e.who));
-                j.crossing = cid;
-                j.otherPath = otherPath;
-                j.need = need;
-                j.have = have;
-                j.by = by;
-                tightest = true;
-            }
-            if (have < need) return true;
+            if (judgeOne(e, cid, otherPath, by, gapTo(*mine, e, by), needed, tightest, j)) return true;
         }
+    }
+    return false;
+}
+
+// A LANE'S CROSSING POINTS AHEAD (issue #284): where a lane on my way meets a connector (ADR-0400's carry-overs, filed
+// under no junction), I keep out of the way of a car the resolver puts before me there, as a car on a connector does. A
+// lane has no line to wait at, so I am going already: the gap I need is the hard one, and if it is broken I stop with my
+// front at the crossing point's stretch. Once stopped there (I hold that stop), I go on again by the comfortable gap, as
+// a driver at a line decides to go: else I would stop and start with every decision. A stretch my front is on already I
+// cannot keep out of (the resolver then has the other wait for my body: on_it). Says whether I must stop, the nearest
+// such place (metres from my front) and why.
+bool judgeLanes(const GiveWayInputs& in, Real hard, Real patience, GiveWayJudgement& j, Real& toStop) {
+    if (!in.way) return false;
+    const std::vector<engine::PathId>& way = in.way->paths;
+    const bool wayIsMine = !way.empty() && way[0] == in.me.path;
+    const std::size_t count = wayIsMine ? way.size() : 1;
+    Real start = -in.me.along;   // where the k-th path of the way begins, metres ahead of my front
+    for (std::size_t k = 0; k < count; ++k) {
+        const engine::PathId lane = wayIsMine ? way[k] : in.me.path;
+        if (!knownPath(in.roads, lane)) break;
+        const engine::Path& path = in.roads.paths[lane.index];
+        if (path.kind == engine::PathKind::Lane) {
+            for (uint32_t x = path.crossings.first; x < path.crossings.end() && x < in.roads.pathCrossings.size(); ++x) {
+                const engine::CrossingId cid = in.roads.pathCrossings[x];
+                const engine::CrossingPoint& rec = in.roads.crossings[cid.index];
+                if (rec.otherSide != engine::OtherSide::Path) continue;
+                const MeetingAnswer* answer = in.row.answer(cid, currentPhase(in.row, rec.junction, in.now));
+                engine::PathId otherPath;
+                if (!answer || myTurn(in.roads, *answer, cid, lane, &otherPath) == MyTurn::Neither) continue;
+                const Real toStart = start + (rec.a == lane ? rec.aFrom : rec.otherFrom);
+                if (!(toStart > 0)) continue;   // my front is on it: I go first there (on_it)
+                const Announcement* mine = in.board.find(cid, in.me.id.index, lane);
+                if (!mine) continue;   // beyond my look-ahead: not announced, not judged yet
+                const bool stoppedHere = in.me.held.hasStop && givesWay(in.me.held.stopFor) &&
+                                         std::fabs(in.me.held.stopAt - (in.me.odometer + toStart)) <=
+                                             in.numbers.atLineWithin;
+                const Real need = stoppedHere ? comfortableGap(in.numbers, 0, patience, hard) : hard;
+                bool tightest = false;
+                for (const Announcement& e : in.board.on(cid)) {
+                    if (e.onPath != otherPath || e.who == in.me.id.index || e.notGoing) continue;
+                    Question by = Question::None;
+                    if (in.resolver.goesFirst(in.roads, cid, in.me.id.index, e.who, &by)) continue;
+                    if (judgeOne(e, cid, otherPath, by, gapTo(*mine, e, by), need, tightest, j)) {
+                        toStop = toStart;
+                        return true;
+                    }
+                }
+            }
+        }
+        start += path.length;
     }
     return false;
 }
@@ -153,6 +192,9 @@ void noticeGiveWayLine(const DriverView& v, NoticeScratch&, NoticedFact& out) {
     out.present = true;
     out.number = g->toLine;
     about(out, *g);
+    // Waiting for a body already on the crossing point: a matter of space, as behind a car (wait_graph.h), not of right of
+    // way. A ring of such waits is gridlock, never an order to go (issue #284).
+    out.forABody = g->why.cause == GiveWayCause::Gap && g->why.by == Question::OnIt;
 }
 void noticeGiveWayGap(const DriverView& v, NoticeScratch&, NoticedFact& out) {
     const GiveWayVerdict* g = verdictOf(v);
@@ -234,7 +276,7 @@ bool stopIsJunctionsOwn(const Car& c, const JunctionPlan& p, Real atLineWithin) 
     if (!c.held.hasStop) return false;
     if (c.held.stopFor == StopFor::FullStop) return std::fabs(c.held.stopAt - p.startOdometer) <= atLineWithin;
     // Giving way where the judgement put it: the line, or inside the junction (stopAlong).
-    return c.held.stopFor == StopFor::GivingWay && p.decision == GiveWayDecision::GiveWay &&
+    return givesWay(c.held.stopFor) && p.decision == GiveWayDecision::GiveWay &&
            p.judged.cause == GiveWayCause::Gap &&
            std::fabs(c.held.stopAt - (p.startOdometer + p.judged.stopAlong)) <= atLineWithin;
 }
@@ -269,8 +311,15 @@ bool stopsEveryoneFirst(const engine::LaneGraph& roads, const RightOfWay& row, c
            stopLineAtEnd(roads, rules, roadRules, roads.paths[connector.index].from, atLineWithin);
 }
 
-Real comfortableGap(const JunctionNumbers& n, Real waited, Real patience) {
-    const Real floor = std::max(n.gapFloor, n.gapHard);
+Real hardGap(const JunctionNumbers& n, Real speed, Real hardestBrake, Real reaction) {
+    // The seconds of travel at my speed now that my stopping distance takes; a car at rest needs only its reaction.
+    const Real v = std::max(Real(0), speed);
+    const Real stopping = v > 0 ? stoppingDistance(v, hardestBrake, reaction) / v : std::max(Real(0), reaction);
+    return std::max(n.gapHard, stopping);
+}
+
+Real comfortableGap(const JunctionNumbers& n, Real waited, Real patience, Real hard) {
+    const Real floor = std::max(n.gapFloor, std::max(n.gapHard, hard));
     const Real shrink = patience > 0 ? n.gapShrink / patience : Real(0);
     return std::max(floor, n.gapComfortable - std::max(Real(0), waited) * shrink);
 }
@@ -329,22 +378,30 @@ void judgeGiveWay(const GiveWayInputs& in, GiveWayVerdict& out) {
         // timed for. Once I hold a stop at that line I keep it while my hardest braking still can make it: a driver who
         // has begun to stop does not change its mind and run on as it nears the line (a class that brakes more gently
         // than the yellow assumes would otherwise find itself "unable to stop" a car's length short).
-        const Real v = std::max(Real(0), me.speed);
         const Real reach = out.toLightLine + in.numbers.atLineWithin;
-        const Real stopping = v * in.reaction + (in.lights->deceleration > 0 ? v * v / (kTwo * in.lights->deceleration)
-                                                                              : Real(0));
         // (Whatever rule's stop at that line won: giving way there as well stops it at the same place.)
         const bool holding = me.held.hasStop && std::fabs(me.held.stopAt - line) <= in.numbers.atLineWithin;
-        const bool canStillStop = in.hardestBrake > 0 && v * v / (kTwo * in.hardestBrake) <= reach;
-        out.canStopForLight = stopping <= reach || (holding && canStillStop);
+        out.canStopForLight = canStopWithin(reach, me.speed, in.lights->deceleration, in.reaction) ||
+                              (holding && canStopWithin(reach, me.speed, in.hardestBrake));
     }
     const Real patience = static_cast<Real>(personalValue(in.numbers.patience, in.numbers.patienceHash, in.person));
+    // MY HARD GAP (issue #284): never below my own stopping time, so a gap I keep going on is one I can still stop short in
+    // when it closes.
+    const Real hard = hardGap(in.numbers, me.speed, in.hardestBrake, in.reaction);
+
+    // THE LANES AHEAD (issue #284): a crossing point on a lane where a car the resolver puts first leaves me too small a
+    // gap. Nothing beyond such a stop is decided this time: I stop there first.
+    GiveWayJudgement laneWhy;
+    Real laneToStop = kNever;
+    const bool laneStop = judgeLanes(in, hard, patience, laneWhy, laneToStop);
 
     for (std::size_t i = 0; i < plans.count && i < kMaxJunctionPlans; ++i) {
         const JunctionPlan& p = plans.plans[i];
         if (!knownPath(in.roads, p.connector)) continue;
         // Too far to have announced it: nothing here or beyond is judged yet.
         if (!(in.lineIn[i] <= in.numbers.lookAheadTime)) break;
+        // Beyond a stop on a lane I must make first: not judged yet.
+        if (laneStop && p.startOdometer - me.odometer > static_cast<double>(laneToStop)) break;
         // Past the line, or no longer able to stop before it braking comfortably: GOING. It no longer stops at the line,
         // and has passed every gate below; but it still keeps out of the way of a car the resolver puts before it (a body
         // on a crossing point, a car committed before it), waiting inside the junction (task D4).
@@ -359,17 +416,20 @@ void judgeGiveWay(const GiveWayInputs& in, GiveWayVerdict& out) {
             // A driver that has not yet decided decides only once it nears the point where it could no longer stop at
             // the line: its comfortable stopping distance, one decision's travel, and the line's own reach. Deciding
             // further out (in a queue, say) would be deciding on guesses that change before it gets there.
-            const Real decideWithin = (brake > 0 ? me.speed * me.speed / (kTwo * brake) : Real(0)) +
-                                      me.speed * in.reaction + in.numbers.atLineWithin;
-            if (p.decision == GiveWayDecision::Undecided && toLine > decideWithin) break;
+            if (p.decision == GiveWayDecision::Undecided &&
+                canStopWithin(static_cast<Real>(toLine) - in.numbers.atLineWithin, me.speed, brake, in.reaction))
+                break;
             // Not going there, as it announced (held, a stopped car beyond its line it cannot pass, a queue that is not
             // going): others do not wait for it. It still judges, and stops at the line if it must give way (it may be
             // let go this very decision), but a clear road is no decision to go: it has not decided anything there yet.
             // One exception: a car whose only stop at this line is its own wait for room beyond (room.h) judges and
             // decides as ever, since deciding to go is when it asks for room again (it announced "not going" so that cross
             // traffic would use the time).
-            const bool waitingForRoomHere = me.held.hasStop && me.held.stopFor == StopFor::NoRoom &&
-                                            std::fabs(me.held.stopAt - p.startOdometer) <= in.numbers.atLineWithin;
+            // (Refused room here at its last ask: whichever rule's stop at the line won, a wait for room or a give-way.)
+            const bool waitingForRoomHere =
+                p.room.state == RoomState::Refused ||
+                (me.held.hasStop && me.held.stopFor == StopFor::NoRoom &&
+                 std::fabs(me.held.stopAt - p.startOdometer) <= in.numbers.atLineWithin);
             notGoing = !waitingForRoomHere && announcedNotGoing(in, p);
             // Still owing a full stop at this line (it holds one there, the junction's control makes everyone stop, or the
             // lane it arrives by carries a device with a stop line at its end) and not yet at rest there: held there as
@@ -382,10 +442,13 @@ void judgeGiveWay(const GiveWayInputs& in, GiveWayVerdict& out) {
         }
 
         GiveWayJudgement j;
-        bool give = judgeMeetings(in, p, patience, j);
+        bool give = judgeMeetings(in, p, patience, hard, j);
         if (give && going) {
-            // Inside the junction, short of the crossing point. A front already on its stretch cannot keep out of it:
-            // it goes on, and the resolver has the other wait for its body (on_it) from the next tick.
+            // Inside the junction, short of the crossing point. A front already on its stretch cannot keep out of it. The
+            // resolver puts such a car second only when the other's body is on a crossing point they share as well (a car
+            // whose front is on a stretch is on it, and cannot stop short of it, which questions 1 and 2 put first): both
+            // bodies are there already, and it goes on, there being nowhere short to stop. (A car not yet on the stretch
+            // that cannot keep short of it and is put second is counted: ConflictCounts::secondCannotStop.)
             const Real frontAlong = static_cast<Real>(me.odometer - p.startOdometer);
             j.stopAlong = insideStop(in, p, j.crossing, frontAlong);
             if (!(j.stopAlong > frontAlong)) {
@@ -434,6 +497,14 @@ void judgeGiveWay(const GiveWayInputs& in, GiveWayVerdict& out) {
         out.toLine = static_cast<Real>(plans.plans[at].startOdometer + out.judgement[at].stopAlong - me.odometer);
         out.why = out.judgement[at];
         break;
+    }
+    // A stop on a lane nearer than any junction's: that is where I stop (no plan holds it).
+    if (laneStop && (!out.giveWay || laneToStop < out.toLine)) {
+        out.giveWay = true;
+        out.onALane = true;
+        out.stopPlan = static_cast<uint8_t>(kMaxJunctionPlans);
+        out.toLine = laneToStop;
+        out.why = laneWhy;
     }
 }
 

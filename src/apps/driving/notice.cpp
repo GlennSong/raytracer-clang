@@ -379,7 +379,7 @@ bool operator==(const NoticedFact& a, const NoticedFact& b) {
     if (!a.present) return true;
     return a.number == b.number && a.yes == b.yes && a.word == b.word && a.aboutCar == b.aboutCar &&
            a.aboutPath == b.aboutPath && a.hasSeconds == b.hasSeconds && (!a.hasSeconds || a.seconds == b.seconds) &&
-           a.hasMetres == b.hasMetres && (!a.hasMetres || a.metres == b.metres);
+           a.hasMetres == b.hasMetres && (!a.hasMetres || a.metres == b.metres) && a.forABody == b.forABody;
 }
 
 WayAhead followOnlyWay(const engine::LaneGraph& roads, engine::PathId path, Real along, Real lookAhead) {

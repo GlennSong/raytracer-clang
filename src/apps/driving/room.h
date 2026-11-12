@@ -51,10 +51,14 @@
 // JUNCTIONS CLOSE TOGETHER. When the stretch beyond is shorter than the car needs, it cannot stop there: the claim goes
 // on through the next junction and is granted only if (a) there is room beyond THAT junction, (b) nothing rests on the
 // way between (each car on the way is held behind the one ahead, so a car resting there leaves no room further on), (c)
-// the next junction does not make everyone stop first (a stop sign, an all-way stop), and (d) where it has lights, its
+// the next junction does not make everyone stop first (a stop sign, an all-way stop), (d) where it has lights, its
 // light for the car's next turn will let it in -- green, or yellow, which a car committed through does not stop for --
-// from when the car reckons to get there until room_arrival_slack later, in case it is slower than it reckoned (the lamp
-// is a pure function of the clock: signal_programme.h). Up to room_through_junctions junctions (three, the brief); beyond
+// from when the car reckons to get there (its own estimate, and never before the car ahead of it on the way gets there:
+// arrivalThrough) until room_arrival_slack later, in case it is slower than it reckoned (the lamp is a pure function of
+// the clock: signal_programme.h), and (e) at each crossing point of its next turn, it SEES the way clear as it gets
+// there: every car announced on the other path that the conflict resolver puts before it now leaves it the comfortable
+// gap (issue #284: before, a chain committed the car through the next junction without judging whether its turn gives
+// way there; committed, it went before that junction's own traffic, which then had to stop for it). Up to room_through_junctions junctions (three, the brief); beyond
 // that the road has a stretch no vehicle of this length can ever stop in, and the claim is refused as a road-data
 // problem. The junctions passed through hold their part of the grant too (RoomClaim::chained), and once the car is
 // committed at the first it is committed at them (commitThrough). Waiting inside a junction needs room to stop just
@@ -64,7 +68,11 @@
 //
 // A GRANT HOLDS until the car's front reaches the lane (it is then counted where it is), or the driver gives it back:
 // short of the line, it now holds a stop at or before the line for something else (it decided to give way at the line, a
-// red stops it, a hold) -- or the claim at the junction before was given back. A grant lives on the junction plan, so a
+// red stops it, a hold) -- or the claim at the junction before was given back. A CLAIM THROUGH CLOSE JUNCTIONS IS CHECKED
+// AGAIN every tick while the car is short of the first line and can still stop at it (its hardest braking, after one
+// decide interval): (d) and (e) above, from where the car is now; failing, the grant is given back and the car stops at
+// the line, as refused (issue #284: the prediction was made once, and the soak saw one car committed through on it held
+// behind a slower car and reach the second light after its red). A grant lives on the junction plan, so a
 // plan dropped (through it, the way changed, the trip routed again or ended) takes its grant with it: grants cannot leak.
 //
 // POLICY AND MECHANISM: every number (the gap, how many junctions, the crosswalk clearance, whether waiting inside needs
@@ -266,6 +274,12 @@ struct RoomWorld {
     Real comfortableSideAccel = 0;      // the speed a car holds through a junction (announce.h speedThrough)
     uint64_t tick = 0;
     double now = 0;
+    // ISSUE #284: this tick's board (a claim through close junctions sees whether its onward turns are clear: null, no
+    // such check), the gap that clear means (the rule set's gap_comfortable) and the seconds between a driver's decisions
+    // (how soon a car told to stop acts on it).
+    const AnnouncementBoard* board = nullptr;
+    Real gapNeeded = 0;
+    Real reaction = 0;
 };
 
 // HOW THE ROOM WENT, since the ledger was made.
@@ -277,6 +291,8 @@ struct RoomCounts {
     std::array<uint64_t, kRoomRefusalCount> refused{};   // ... refused, by why
     uint64_t usedOnLane = 0;            // grants held until the car's front reached the lane
     uint64_t givenBack = 0;             // grants given back before the car entered (gave way at the line, a red, ...)
+    uint64_t chainsGivenBack = 0;       // ... of them, claims through close junctions checked again and found no longer
+                                        // to hold (the lights or the onward turn's gaps), while the car could still stop
     uint64_t orderedByResolver = 0;     // pairs of asks in one tick put in order by the conflict resolver
     uint32_t mostHeld = 0;              // the most grants outstanding at once
     std::vector<std::pair<uint32_t, uint32_t>> roadDataPlaces;   // (junction, lane) refused TooShort or MustStopAhead
@@ -342,6 +358,16 @@ private:
     };
 
     void keepOrLetGo(const RoomWorld& world, RoomSeat& seat);
+    // WHEN THE CAR OF `seat` REACHES A POINT `distance` metres ahead along its way, seconds: its own estimate (announce.h
+    // secondsToCover, at `connector`'s speed through), and no earlier than the car ahead of it on the way covers that
+    // distance and a standstill gap more (that car's own estimate from its speed now): a slower car on the way between is
+    // waited for (issue #284).
+    Real arrivalThrough(const RoomWorld& world, const RoomSeat& seat, engine::PathId connector, Real distance);
+    // A CLAIM THROUGH CLOSE JUNCTIONS granted at plan `k`, checked again from where the car is now: each chained junction's
+    // light lets it in as it gets there, and its onward turn is seen clear. False, with why and where, when it no longer
+    // holds.
+    bool chainHolds(const RoomWorld& world, const RoomSeat& seat, std::size_t k, RoomRefusal& why,
+                    engine::JunctionId& at);
     void orderSameTick(const RoomWorld& world, std::size_t first, std::size_t end);
     // The car ahead of the claimant in its lane, short of the plan's line, that holds no grant there (none: nobody).
     CarId aheadWithoutRoom(const RoomWorld& world, const std::vector<RoomSeat>& seats, const RoomSeat& seat,

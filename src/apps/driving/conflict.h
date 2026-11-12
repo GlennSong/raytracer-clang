@@ -20,31 +20,52 @@
 //   1. on_it          -- whose body is already on a crossing point the two share (its front is past the stretch's
 //                        start and its tail not past its end): that one goes first. A body on a stretch blocks it for
 //                        everyone, whoever has right of way (the brief's rule 1). Both on one: no answer.
-//   2. committed_first -- who committed first: a committed car before one that is not; two committed cars by the tick
-//                        each committed. "First in goes first" (the brief's rule 2; design 9.4).
-//   3. table          -- the give-way table's settled answer (right_of_way.h: the lights, the signs, the movement, the
-//                        lower path id, as the junction's control lists them in the rule set). "Asked while driving",
-//                        or answers that disagree across the crossing points the two share: no answer.
-//   4. going          -- who can no longer stop at its line: it goes before one that can (D3).
-//   5. arrived_first  -- who reached its line first, by its fixed arrival tick; a car whose arrival is fixed before one
-//                        whose is not (D3).
-//   6. fallback       -- the table's fall-back for a meeting asked while driving (kerb side, movement, lower path id,
+//   2. cannot_stop    -- who cannot keep its front short of a crossing point the two share even braking as hard as it
+//                        can (after one decide interval, unless it already holds a stop there: announce.h): it will be
+//                        on it, whatever it is told, so it goes first (issue #284: before, the car told to go second was
+//                        assumed able to stop, and one that could not drove on, a reversal nobody saw). Both: no answer
+//                        (counted: ConflictCounts::secondCannotStop).
+//   3. committed_first -- who committed first: a committed car before one that is not; two committed cars by the tick
+//                        each committed. "First in goes first" (the brief's rule 2; design 9.4). A car commits once it can
+//                        no longer wait short of its next crossing stretch (junction_plan.h commitAt; issue #284).
+//   4. table          -- the give-way table's settled answer (right_of_way.h: the lights, the signs, the movement, the
+//                        lower path id, as the junction's control lists them in the rule set; for meetings filed under no
+//                        junction, the rule set's `between_junctions`). "Asked while driving", or answers that disagree
+//                        across the crossing points the two share: no answer.
+//   5. going          -- who can no longer stop at its line: it goes before one that can (D3).
+//   6. arrived_first  -- who reached its line first, by its fixed arrival tick; a car whose arrival is fixed before one
+//                        whose is not (D3; a car on a lane has no line, so never arrives).
+//   7. fallback       -- the table's fall-back for a meeting asked while driving (kerb side, movement, lower path id,
 //                        as the control lists them).
-//   7. lower_id       -- the lower car id goes first. It cannot tie, so every conflict gets an answer.
+//   8. lower_id       -- the lower car id goes first. It cannot tie, so every conflict gets an answer.
 //
-// Why this order. Questions 1 and 2 are the brief's rules 1 and 2, asked before anything else because once a car is
-// inside it cannot give way at the line any more: it can only be waited for. Questions 3 to 6 are D3's giving way for
-// cars not yet committed, in D3's order (the table's settled answers first; then, where the table says "ask while
-// driving", going, arrival, the fall-back). Question 7 is the tie-break that cannot tie.
+// Why this order. Questions 1 and 2 are about where the cars physically will be: a body on the stretch, a car that will
+// be there whatever it is told. No rule of the road can change those, so they come first. Question 3 is the brief's rule
+// 2: once a car is inside it cannot give way at the line any more, it can only be waited for. Questions 4 to 7 are D3's
+// giving way for cars not yet committed, in D3's order (the table's settled answers first; then, where the table says
+// "ask while driving", going, arrival, the fall-back). Question 8 is the tie-break that cannot tie.
+//
+// NOT HERE, ON PURPOSE: a car announced NOT GOING (stopping short of the crossing for a reason other than this meeting --
+// a hold, a red, no room beyond, a stopped car beyond its line) is passed over by the judgement of a car that would give
+// way to it (give_way.h): there is nobody coming to wait for. That is not an order between the two, and as one (issue
+// #284 tried a question `not_going` here) it made the not-going car give way in its turn: as a car's not going is read off
+// the stop it held at its last decision -- a red that has just turned green, say -- the two swapped places every decision
+// and stood in two-car rings of giving way (the hand-made lights_23 and room_32 runs). A body on the stretch, or a car that
+// cannot stop short of it, is never announced not going (announce.h).
 //
 // WHAT THE ONE WHO GOES SECOND DOES is the judgement's (give_way.h), not this file's: it keeps out of the other's way by
-// the gaps the rule set gives. Questions 1 and 2 also say it may only come BEHIND the other (followOnly): an earlier
-// committed car's crossing point, or one a body is on, is "a car to follow until its tail is clear" -- never one to
-// dash ahead of.
+// the gaps the rule set gives (the hard one never below its own stopping time: issue #284). Questions 1, 2 and 3 also say
+// it may only come BEHIND the other (followOnly): an earlier committed car's crossing point, one a body is on, or one a
+// car that cannot stop is coming onto, is "a car to follow until its tail is clear" -- never one to dash ahead of. Going
+// behind a car reads that car's honest clear time (announce.h): never, while it will come to rest before its tail is
+// clear, so nobody plans to go behind a car waiting inside the junction, or at its line (this replaced D4's separate guard
+// for cars waiting inside).
 //
 // POLICY AND MECHANISM. Who yields to whom at a meeting (the questions a control asks, the ranks, which turns give way
-// on a green), every gap and every number live in the rule set (assets/scripts/rules/*.lua), read into the give-way
-// table at load. This file is the mechanism: it holds no number and names no kind of control, sign or vehicle.
+// on a green, the order between junctions), every gap and every number live in the rule set
+// (assets/scripts/rules/*.lua), read into the give-way table at load. This file is the mechanism: it holds no rule-set
+// number and names no kind of control, sign or vehicle. (It holds one cap of its own, kMaxQueueLooked, on how far along
+// a queue it looks for a ring: counted when it cuts.)
 //
 // THE FOUR GUARANTEES (tests/test_driving_conflict.cpp checks each):
 //   - CONSISTENT: a conflict is ONE record per pair of cars per group, worked out once a tick from the sealed board, so
@@ -54,21 +75,23 @@
 //   - NO RINGS: the "goes after" arrows of every conflict, in every group together, are checked for loops (a car
 //     reaching itself by following them), with the arrows nobody can turn round: a car held BEHIND the car ahead of it in
 //     its lane (the host passes these in; a queue is looked along to the next car in a conflict), and a conflict settled
-//     by on_it (a body is where it is: a body on a crossing point the two share in one group counts in each of their
-//     groups). All groups together, because a car can be held at one junction's line by its conflict at the next (its
-//     body would not fit between the two: give_way.h), and two junctions' paths can overlap. Every loop lies inside
-//     one strongly connected part of the arrows (Tarjan's method: a part where each car can reach each other). Inside
-//     such a part the cars are put in one TOTAL ORDER: an order that keeps every fixed arrow (each car after the ones
-//     it is held behind or must wait for the body of), choosing among the cars free to come next by ringOrder below
-//     (committed first, by when; then going; then by arrival; then the lower id); and each conflict inside the part is
-//     answered by it. Inside the part every arrow now follows one order, which has no loop; arrows between parts were
-//     already loop free, so the whole has none. Most rings are the table's own (an all-way stop where each of four cars
-//     has another on its kerb side, reaching it in one tick): broken by the lower id, as D3 did. A loop of fixed arrows
-//     alone is counted (physicalRings): the order then first sets aside a queue arrow (putting a car before the one ahead
-//     of it in its lane answers nothing it does), and only if bodies alone are locked round (ringThroughABody, never seen
-//     in the lab) a body's; the wait-for graph shows any such loop.
-//   - ONE MORE GUARD, in the judgement (give_way.h): nobody plans to go BEHIND a car that waits inside the junction for
-//     somebody else. Committing behind it would put it after you, and a stream of such cars would hold it in the box.
+//     by on_it or cannot_stop (a body is where it is, and a car that cannot stop will be there: a body on a crossing
+//     point the two share in one group counts in each of their groups). All groups together, because a car can be held
+//     at one junction's line by its conflict at the next (its body would not fit between the two: give_way.h), and two
+//     junctions' paths can overlap. Every loop lies inside one strongly connected part of the arrows (Tarjan's method: a
+//     part where each car can reach each other). Inside such a part the cars are put in one TOTAL ORDER: an order that
+//     keeps every fixed arrow (each car after the ones it is held behind or must wait for the body of), choosing among
+//     the cars free to come next by ringOrder below (as the questions: cannot stop first, committed first by when,
+//     going, by arrival, the lower id); and each conflict inside the part is answered by it. Inside the
+//     part every arrow now follows one order, which has no loop; arrows between parts were already loop free, so the
+//     whole has none. Most rings are the table's own (an all-way stop where each of four cars has another on its kerb
+//     side, reaching it in one tick): broken by the lower id, as D3 did. A loop of fixed arrows alone is counted: the
+//     order first sets aside a queue arrow (putting a car before the one ahead of it in its lane answers nothing it does:
+//     physicalRings). THE ONE EXCEPTION: a loop of bodies (and cars that cannot stop) alone, which no answer can undo, is
+//     LEFT STANDING (bodyRings): an answer by on_it or cannot_stop is never overruled, since overruling it would tell a
+//     car to drive through another (issue #284: before, one car was placed anyway and told to go). Each car in it waits
+//     for a body: the wait-for graph shows the loop as GRIDLOCK (wait_graph.h, an arrow about space), never as an order
+//     to go.
 //   - DETERMINISTIC: built from the board (itself sorted), walked in crossing-id order, sorted by (group, car, car,
 //     crossing): no pointer, no unordered container, no clock.
 //
@@ -95,6 +118,7 @@ class AnnouncementBoard;
 enum class Question : uint8_t {
     None,
     OnIt,
+    CannotStop,
     CommittedFirst,
     Table,
     Going,
@@ -103,20 +127,24 @@ enum class Question : uint8_t {
     LowerId,
     Ring,
 };
-constexpr uint8_t kQuestionCount = 9;
-// "on_it", "committed_first", ... (the names above).
+constexpr uint8_t kQuestionCount = 10;
+// "on_it", "cannot_stop", "committed_first", ... (the names above).
 const char* questionName(Question q);
 // What it means when it decided, from the side of the one going second: "its body is already on the crossing point",
 // "it committed first", ...
 const char* questionWords(Question q);
-// The one going second may only come behind the other, never go ahead of it.
+// The one going second may only come behind the other, never go ahead of it (on_it, cannot_stop, committed_first).
 bool followOnly(Question q);
+// An answer nobody can turn round, since it says where a car physically is or will be (on_it, cannot_stop): a ring never
+// overrules it.
+bool fixedAnswer(Question q);
 
 // ONE CAR'S SIDE OF A CONFLICT, as the board shows it over the crossing points the two share in one group.
 struct Side {
     uint64_t who = 0;                // the car (Announcement::who)
     bool onIt = false;               // its body is on one of the shared crossing points' stretches
-    bool committed = false;          // past its last waiting point
+    bool cannotStop = false;         // it cannot keep short of one of them braking as hard as it can (or is on it)
+    bool committed = false;         // it can no longer wait short of its next crossing stretch
     uint64_t committedTick = 0;      // ... since this tick (the earliest, over the shared crossing points)
     bool going = false;              // it can no longer stop at its line
     bool arrivalFixed = false;
@@ -145,6 +173,7 @@ bool operator==(const Resolution& a, const Resolution& b);
 
 // THE QUESTIONS, each a pure function (see the top of this file).
 Answer askOnIt(const Conflict& c);
+Answer askCannotStop(const Conflict& c);
 Answer askCommittedFirst(const Conflict& c);
 Answer askTable(const Conflict& c);
 Answer askGoing(const Conflict& c);
@@ -157,13 +186,14 @@ struct QuestionSpec {
     Question question;
     Answer (*ask)(const Conflict&);
 };
-constexpr std::size_t kAskedQuestions = 7;
+constexpr std::size_t kAskedQuestions = 8;
 extern const std::array<QuestionSpec, kAskedQuestions> kQuestions;
 
 // ASKS THE QUESTIONS IN ORDER until one answers. Always answers (two sides with one id: the first goes, by LowerId).
 Resolution resolve(const Conflict& c);
-// THE TOTAL ORDER a ring is broken by: does `a` go before `b`? Committed before not, earlier commit first; then going
-// before not; then a fixed arrival before none, earlier first; then the lower id. Strict and total over distinct ids.
+// THE TOTAL ORDER a ring is broken by: does `a` go before `b`? As the questions: one that cannot stop before one that
+// can; committed before not, earlier commit first; then going before not; then a fixed arrival before none, earlier
+// first; then the lower id. Strict and total over distinct ids.
 bool ringOrder(const Side& a, const Side& b);
 
 // ONE CONFLICT AS SETTLED THIS TICK.
@@ -179,9 +209,12 @@ struct ConflictCounts {
     uint64_t conflicts = 0;
     std::array<uint64_t, kQuestionCount> byQuestion{};   // conflicts answered by each question (Ring included)
     uint64_t rings = 0;                                  // strongly connected parts holding a loop, answered by the order
-    uint64_t ringThroughABody = 0;                       // conflicts settled by on_it that a ring overruled (a loop of
-                                                         // fixed arrows: should stay 0)
-    uint64_t physicalRings = 0;                          // loops of fixed arrows alone (bodies and queues)
+    uint64_t physicalRings = 0;                          // loops of fixed arrows alone, untied at a queue arrow
+    uint64_t bodyRings = 0;                              // loops of bodies (and cars that cannot stop) alone: LEFT
+                                                         // STANDING, never answered by telling a car to go (gridlock)
+    uint64_t secondCannotStop = 0;                       // conflicts whose car going second cannot keep short of the
+                                                         // crossing either (both cannot stop, or it cannot and the
+                                                         // other's body is there): it cannot comply. Should stay 0
     uint64_t queuesCut = 0;                              // queues not looked along past kMaxQueueLooked cars
 };
 // Adds `b` to `a`.

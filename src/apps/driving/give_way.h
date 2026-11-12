@@ -8,29 +8,42 @@
 // (announce.h). For each crossing point along its connector, and each car announced there that goes BEFORE it -- which
 // the one conflict resolver says (conflict.h), never this file --:
 //   - it may go AHEAD of that car if its own tail will be clear of the stretch before that car's front arrives, by the
-//     gap it needs; or BEHIND it if it arrives after that car's tail is clear, by the gap it needs. Where the resolver
-//     says the other goes first because its body is already on the crossing point or because it committed first
-//     (conflict.h followOnly), only BEHIND, by the same gaps: that car's crossing point is "a car to follow until its tail
-//     is clear";
+//     gap it needs (its own clear time read as if it went now: announce.h clearIfGoing); or BEHIND it if it arrives after
+//     that car's tail is clear, by the gap it needs (that car's HONEST clear time: never, while it will come to rest
+//     before its tail is clear, so nobody plans to go behind a car waiting inside the junction or at its line). Where the
+//     resolver says the other goes first because its body is already on the crossing point, it cannot stop short of it,
+//     or it committed first (conflict.h followOnly), only BEHIND, by the same gaps: that car's crossing point is "a car to
+//     follow until its tail is clear";
 //   - otherwise it must GIVE WAY. Where it stops: at the junction's line (the connector's start) while it can still stop
 //     there braking comfortably; once it cannot (it is past the line, committed or not, or too fast to stop at it), INSIDE
 //     the junction, short of the crossing point: at the last of its waiting points (junction_plan.h) before it, or else
 //     with its front at the crossing point's stretch. A car whose front is already on that stretch cannot keep out of
-//     it, and goes on. The judgement records to whom, at which crossing point, why that car goes first, the gaps, and
-//     where it stops.
+//     it, and goes on: the resolver puts it second only when the other's body is on a crossing point they share as well
+//     (it cannot stop short of a stretch it is on, which the resolver's cannot_stop puts first). The judgement records to
+//     whom, at which crossing point, why that car goes first, the gaps, and where it stops.
+//   - A CAR ON A LANE that meets a connector (ADR-0400's carry-overs, filed under no junction; issue #284) judges those
+//     crossing points too, against the cars the resolver puts first there (who has priority between junctions is the rule
+//     set's `between_junctions`): a lane has no line, so it is going already and needs the hard gap; broken, it stops with
+//     its front at the crossing point's stretch. Before, a lane car never judged and the resolver could still put it
+//     second.
 // Room beyond the junction is room.h's (issue #264): a car that decides to go asks for it, and waits at the line while
 // it is refused.
 //
 // WHO GOES FIRST is the conflict resolver's (conflict.h): one record per pair of cars, settled once a tick, so the one
 // that goes first never looks at the one going second (if both looked, both would wait) and no two cars wait for each
 // other in a ring. Committed cars judge too: a car inside the junction still keeps out of the way of a body on a
-// crossing point and of a car that committed before it.
-// A car announced as NOT GOING (stopping short of the crossing for another reason) is passed over.
+// crossing point and of a car that committed before it. A car announced as NOT GOING (stopping short of the crossing for
+// another reason) is passed over: nobody is coming. It is never a body on the stretch, nor a car that cannot stop short
+// of it (announce.h; issue #284: before, a body on the stretch announced as not going was passed over too). Why this is
+// not one of the resolver's questions: conflict.h, "NOT HERE, ON PURPOSE".
 //
-// NO DITHERING: two gaps from the rule set, a comfortable one and a smaller hard one. A driver decides to go by the
-// comfortable one; once it has decided, it keeps going unless the hard one is broken; and once it could no longer stop
-// before the line at comfortable braking, it is going (announce.h isGoing): it no longer stops at the line, and stops
-// inside only for a car the resolver puts before it whose gap the hard one breaks.
+// NO DITHERING: two gaps, a comfortable one and a smaller hard one. A driver decides to go by the comfortable one; once it
+// has decided, it keeps going unless the hard one is broken; and once it could no longer stop before the line at
+// comfortable braking, it is going (announce.h isGoing): it no longer stops at the line, and stops inside only for a car
+// the resolver puts before it whose gap the hard one breaks. THE HARD GAP is the rule set's gap_hard, or the car's own
+// STOPPING TIME if that is longer (hardGap): the seconds of travel at its speed now that one decide interval and its
+// hardest braking take, so that when a gap it kept going on closes it can still stop short (issue #284: a bus at 35 mph
+// needs about 1.6 s, and gap_hard is 1.0 s).
 // WHEN A DRIVER DECIDES TO GO (not who goes first: these say when a clear road counts as a decision), in one place,
 // judgeGiveWay:
 //   - within its decision horizon (its comfortable stopping distance, one decision's travel and at_line_within):
@@ -68,8 +81,8 @@
 // lights ahead, where it stops for them and whether it can (the dilemma at a yellow); the rule set's rules act on them.
 // WAITING INSIDE: on its own green, a far turn that must give way at a crossing point at or beyond its place to wait
 // inside (JunctionPlan::waitInsideAt) pulls forward to it instead of stopping at the line. A car from the same lane that
-// would leave by another turn (a split) waits behind a car standing inside on the split's stretch (cause BehindInMyLane:
-// its tail may be off the lane, where following no longer sees it), and is not this junction's traffic while it does.
+// would leave by another turn (a split) follows a car standing inside on the split's stretch as the car ahead
+// (traffic_state.h carAhead, since #283), and announces itself not going beyond it (a stopped car beyond its line).
 //
 // Same result every run: the board is sorted, the resolver settles each conflict once a tick from it, and crossing points
 // are read in their order along the connector.
@@ -185,9 +198,14 @@ bool stopIsJunctionsOwn(const Car& car, const JunctionPlan& plan, Real atLineWit
 // MUST THE CAR COME TO REST at the plan's line first: it holds a full stop there and has not yet come to rest.
 bool stopsFirstAt(const Car& car, const JunctionPlan& plan, Real atLineWithin);
 
+// THE HARD GAP of a car at `speed` (issue #284): the rule set's gap_hard, or its STOPPING TIME if that is longer -- the
+// seconds of travel at that speed its stopping distance takes, reacting for `reaction` seconds (its decide interval) and
+// then braking at `hardestBrake` (act.h stoppingDistance). A car at rest needs its reaction time at least.
+Real hardGap(const JunctionNumbers& n, Real speed, Real hardestBrake, Real reaction);
 // THE COMFORTABLE GAP after waiting `waited` seconds at the line, for a person of patience `patience`: shrunk from
-// gap_comfortable at gap_shrink / patience seconds per second waited, never below the larger of gap_floor and gap_hard.
-Real comfortableGap(const JunctionNumbers& n, Real waited, Real patience);
+// gap_comfortable at gap_shrink / patience seconds per second waited, never below the largest of gap_floor, gap_hard and
+// the car's own hard gap `hard`.
+Real comfortableGap(const JunctionNumbers& n, Real waited, Real patience, Real hard = 0);
 
 // WHAT ONE DRIVER JUDGES FROM.
 struct GiveWayInputs {
@@ -209,13 +227,18 @@ struct GiveWayInputs {
     std::array<Real, kMaxJunctionPlans> lineIn{};
     // The light clock's numbers when the lights run a programme (signal_programme.h); null when they are dark.
     const LightTiming* lights = nullptr;
-    Real hardestBrake = 0;    // my hardest braking, m/s2 (a driver already stopping for a light keeps stopping while it can)
+    Real hardestBrake = 0;    // my hardest braking, m/s2 (a driver already stopping for a light keeps stopping while it
+                              // can; my hard gap)
+    // My way ahead, its first path the one my front is on: the lanes on it whose crossing points I judge (issue #284).
+    // Null: no lanes are judged.
+    const WayAhead* way = nullptr;
 };
 
 // WHAT ONE DRIVER JUDGED.
 struct GiveWayVerdict {
     bool judged = false;             // the junction step ran for this driver
     bool giveWay = false;            // it must give way somewhere ahead
+    bool onALane = false;            // ... at a crossing point on a lane (no plan holds it; stopPlan is kMaxJunctionPlans)
     uint8_t stopPlan = 0;            // ... at this plan's junction (its line, or inside: why.stopAlong)
     Real toLine = 0;                 // ... stopping this many metres from its front
     GiveWayJudgement why;            // ... and why (to whom, the gaps)
@@ -226,7 +249,7 @@ struct GiveWayVerdict {
     // a decision to go (a driver not going there, held or just released, decides nothing; room beyond asks anyway when
     // such a car is about to move off its line: room.h roomToAsk).
     std::array<bool, kMaxJunctionPlans> clear{};
-    bool committed = false;          // past the last waiting point of its nearest junction
+    bool committed = false;          // committed at its nearest junction (junction_plan.h commitAt)
     // THE NEAREST JUNCTION WHOSE LINE IS STILL AHEAD: how far its line is, whether the car came to rest there, whether
     // its control makes everyone stop first, and the rank of the sign on the car's approach (RuleSet::ranks; an approach
     // with no ranked sign shares the first, as right_of_way.h reads it).

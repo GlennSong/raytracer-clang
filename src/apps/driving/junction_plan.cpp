@@ -3,6 +3,7 @@
 #include "apps/driving/signal_programme.h"   // the phase and the light now, for the driver card
 #include "engine/bundle/bundle.h"   // Fnv: the repo's 64-bit hash folded field by field
 
+#include <algorithm>
 #include <cstdio>
 
 namespace driving {
@@ -50,7 +51,7 @@ bool operator==(const JunctionPlan& a, const JunctionPlan& b) {
         return false;
     for (std::size_t i = 0; i < a.waitingCount && i < kMaxWaitingPoints; ++i)
         if (a.waitingAt[i] != b.waitingAt[i]) return false;
-    return a.waitInsideAt == b.waitInsideAt && a.arrivalFixed == b.arrivalFixed && a.arrivalTick == b.arrivalTick && a.arrivalAt == b.arrivalAt &&
+    return a.waitInsideAt == b.waitInsideAt && a.commitAt == b.commitAt && a.arrivalFixed == b.arrivalFixed && a.arrivalTick == b.arrivalTick && a.arrivalAt == b.arrivalAt &&
            a.cameToRest == b.cameToRest && a.restAt == b.restAt && a.committed == b.committed &&
            a.committedTick == b.committedTick && a.decision == b.decision && a.mindChanges == b.mindChanges &&
            a.judged == b.judged && a.room == b.room;
@@ -82,6 +83,8 @@ const char* roomRefusalWords(RoomRefusal r) {
     case RoomRefusal::TooShort: return "no stretch I could stop in within reach (a road-data problem)";
     case RoomRefusal::NotPlanned: return "my way does not reach far enough to say where I would stop";
     case RoomRefusal::NoStopToWait: return "to wait inside I need room to stop just beyond, and there is no such stretch";
+    case RoomRefusal::GivesWayAhead:
+        return "my body will not fit before the next junction, where my turn gives way to a car I cannot see will be clear";
     }
     return "";
 }
@@ -161,6 +164,19 @@ bool findWaitingPoints(const LaneGraph& roads, const RightOfWay& row, PathId con
                 plan.waitingAt[at] = inside;
             }
         }
+    }
+    // WHERE IT COMMITS: the first crossing stretch at or beyond its last waiting point (the stretches its waiting points
+    // are made from: splits left out), its front at the waiting point itself when that lies on a stretch; the connector's
+    // end when no stretch lies beyond.
+    const engine::Path& path = roads.paths[connector.index];
+    const Real last = plan.lastWaitingPoint();
+    plan.commitAt = path.length;
+    for (uint32_t i = path.crossings.first; i < path.crossings.end() && i < roads.pathCrossings.size(); ++i) {
+        const engine::CrossingPoint& rec = roads.crossings[roads.pathCrossings[i].index];
+        if (rec.meeting == engine::Meeting::Split) continue;
+        const bool iAmA = rec.a == connector;
+        const Real from = iAmA ? rec.aFrom : rec.otherFrom, to = iAmA ? rec.aTo : rec.otherTo;
+        if (to > last) plan.commitAt = std::min(plan.commitAt, std::max(from, last));
     }
     return fitted;
 }
@@ -255,6 +271,7 @@ uint64_t junctionPlansHash(const JunctionPlans& plans) {
         h.pod(p.waitingCount);
         for (std::size_t k = 0; k < p.waitingCount; ++k) h.pod(p.waitingAt[k]);
         h.pod(p.waitInsideAt);
+        h.pod(p.commitAt);
         h.pod(static_cast<uint8_t>(p.arrivalFixed));
         h.pod(p.arrivalTick);
         h.pod(p.arrivalAt);
@@ -310,10 +327,6 @@ std::string describeGiveWay(const LaneGraph& roads, const RightOfWay& row, const
             out += j.stopAlong > 0 ? ", waiting inside the junction " + one(j.stopAlong) + " m along" : ", at the line";
         } else if (j.cause == GiveWayCause::NextJunction) {
             out += ": I give way at the next junction and my body would not fit between the two";
-        } else if (j.cause == GiveWayCause::BehindInMyLane) {
-            out += ": behind car " + std::to_string(j.other.index) + " on " + other + ", from my lane, standing inside " +
-                   "the junction on the stretch where our turns leave the lane (crossing point " +
-                   std::to_string(j.crossing.index) + ")";
         }
         break;
     }
@@ -323,7 +336,7 @@ std::string describeGiveWay(const LaneGraph& roads, const RightOfWay& row, const
         out += ", came to rest there at t=" + one(p.restAt) + " s";
         if (now >= p.restAt) out += " (" + one(now - p.restAt) + " s ago)";
     }
-    if (p.committed) out += "; committed (past its last waiting point)";
+    if (p.committed) out += "; committed (it can no longer wait short of the stretch " + one(p.commitAt) + " m along)";
     return out;
 }
 

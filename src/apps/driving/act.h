@@ -84,6 +84,16 @@ Real lookAheadDistance(Real speed, Real comfortableBrake);
 // THE REACTION TIME in the hard limit: the driver's decide interval, or the step if that is longer (s).
 Real reactionTime(Real decideInterval, Real step);
 
+// HOW FAR A CAR GOES BEFORE IT IS AT REST (m): `reaction` seconds at `speed`, then braking evenly at `brake` (the speed
+// squared over twice the braking). A braking of zero or below is read as stopping dead (no braking distance), as the hard
+// limit reads the car ahead's. THE one stopping sum: every "can it stop" question in the model (is a car going at its
+// line, can it stop for a yellow, may it decide yet, can it keep out of a crossing point, is it committed, can it still
+// give a claim for room back) is canStopWithin over it, each with the braking and reaction its question names.
+Real stoppingDistance(Real speed, Real brake, Real reaction = 0);
+// CAN A CAR AT `speed` COME TO REST WITHIN `distance` METRES, reacting for `reaction` seconds and then braking at `brake`?
+// (Its stoppingDistance is at most `distance`; a distance below zero is never enough: the point is behind it.)
+bool canStopWithin(Real distance, Real speed, Real brake, Real reaction = 0);
+
 // ---- The two formulas -------------------------------------------------------------------------------------------------
 
 // WHAT THE FORMULAS NEED TO KNOW about a driver and its car.

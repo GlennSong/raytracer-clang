@@ -24,8 +24,9 @@
 //
 // KINDS OF MEETING. A cross or a join is settled as above. A split (two turns from one lane) is settled by nobody: the
 // car behind follows the car ahead. A meeting filed under no junction (two junctions' paths, or a connector and a lane,
-// crowded together; ADR-0400) has no control to ask: it is "ask while driving", falling back on the lower path id, and
-// noted. A crosswalk's or a track's crossing point gets no answer here: people and trains announce (design 4).
+// crowded together; ADR-0400) has no junction control to ask: it is settled by the rule set's `between_junctions` list,
+// asked of each path's own sign and movement (a lane: no sign, straight on; issue #284), or, where the rule set has none,
+// "ask while driving", falling back on the lower path id. A crosswalk's or a track's crossing point gets no answer here: people and trains announce (design 4).
 //
 // LIGHTS. A control whose settle list asks `light` has a signal programme: PHASES, each a set of turns that are green
 // together. Two turns may be green in one phase only if they don't meet, or come from approaches facing each other and

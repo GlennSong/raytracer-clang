@@ -1,5 +1,6 @@
 #include "apps/driving/announce.h"
 
+#include "apps/driving/act.h"       // canStopWithin: the one stopping sum
 #include "apps/driving/notice.h"    // kStandingBelow
 #include "engine/bundle/bundle.h"   // Fnv: the repo's 64-bit hash folded field by field
 
@@ -87,18 +88,14 @@ uint64_t boardHash(const AnnouncementBoard& board) {
         h.pod(a.onPath.index);
         h.pod(a.arriveIn);
         h.pod(a.clearIn);
-        h.pod(a.speedThere);
-        h.pod(static_cast<uint8_t>(a.stopsFirst));
+        h.pod(a.clearIfGoing);
         h.pod(static_cast<uint8_t>(a.notGoing));
         h.pod(static_cast<uint8_t>(a.going));
+        h.pod(static_cast<uint8_t>(a.cannotStop));
         h.pod(static_cast<uint8_t>(a.arrivalFixed));
         h.pod(a.arrivalTick);
-        h.pod(a.arrivalAt);
         h.pod(static_cast<uint8_t>(a.committed));
-        h.pod(static_cast<uint8_t>(a.waitsInside));
         h.pod(a.committedTick);
-        h.pod(a.waited);
-        h.pod(a.waitingFor);
         h.pod(static_cast<uint8_t>(a.kind));
         h.pod(a.who);
     }
@@ -168,13 +165,17 @@ bool isGoing(const JunctionPlan& plan, double odometer, Real speed, Real brake, 
     if (plan.decision == GiveWayDecision::GiveWay || heldStopAt <= plan.startOdometer) return false;
     // Looking a decision ahead only for a driver that has decided to go: one that has not decided yet must still judge.
     const Real ahead = plan.decision == GiveWayDecision::Go ? std::max(Real(0), within) : Real(0);
-    return brake > 0 && speed * speed / (kTwo * brake) + speed * ahead > toLine;
+    return !canStopWithin(static_cast<Real>(toLine), speed, brake, ahead);
 }
 
 double heldStopOf(const Car& car) { return car.held.hasStop ? car.held.stopAt : static_cast<double>(kNever); }
 
-void noteAtTheLine(JunctionPlan& plan, const Car& car, Real brake, Real atLineWithin, uint64_t tick, double now,
-                   bool redForMe, bool heldByLight) {
+bool canKeepShort(Real distance, Real speed, Real hardestBrake, Real reaction, bool holdsStopShort) {
+    return distance > 0 && canStopWithin(distance, speed, hardestBrake, holdsStopShort ? Real(0) : reaction);
+}
+
+void noteAtTheLine(JunctionPlan& plan, const Car& car, Real brake, Real hardestBrake, Real reaction, Real atLineWithin,
+                   uint64_t tick, double now, bool redForMe, bool heldByLight) {
     const double odometer = car.odometer;
     const Real speed = car.speed;
     const double toLine = plan.startOdometer - odometer;
@@ -200,8 +201,13 @@ void noteAtTheLine(JunctionPlan& plan, const Car& car, Real brake, Real atLineWi
         plan.arrivalTick = tick;
         plan.arrivalAt = now;
     }
-    if (!plan.committed && (odometer > plan.startOdometer + plan.lastWaitingPoint() ||
-                            (redForMe && odometer > plan.startOdometer + atLineWithin))) {
+    // COMMITTED (issue #284): no longer able to keep its front short of the first crossing stretch beyond its last waiting
+    // point -- on it, or unable to stop short of it braking as hard as it can. Not merely past the line: a car that rolled
+    // a few ticks over its line can still wait there, and committed, it would go before the main road's traffic.
+    const double commitAt = plan.startOdometer + plan.commitAt;
+    const bool cannotWait = !canKeepShort(static_cast<Real>(commitAt - odometer), speed, hardestBrake, reaction,
+                                          heldStopOf(car) <= commitAt);
+    if (!plan.committed && (cannotWait || (redForMe && odometer > plan.startOdometer + atLineWithin))) {
         plan.committed = true;
         plan.committedTick = tick;
     }
@@ -222,10 +228,6 @@ void announcePlan(const engine::LaneGraph& roads, const JunctionPlan& plan, cons
     if (!knownPath(roads, plan.connector)) return;
     const engine::Path& path = roads.paths[plan.connector.index];
     const bool going = isGoing(plan, car.odometer, car.move.speed, car.move.brake, car.heldStop, car.reaction);
-    const uint64_t waitingFor = plan.decision == GiveWayDecision::GiveWay && plan.judged.cause == GiveWayCause::Gap &&
-                                        plan.judged.other.valid()
-                                    ? plan.judged.other.index
-                                    : Announcement::kNoOne;
     const Real toLine = static_cast<Real>(plan.startOdometer - car.odometer);
     const auto when = [&](Real distance) {
         return car.stopsFirst ? secondsToCoverStoppingFirst(distance, toLine, car.move)
@@ -249,33 +251,34 @@ void announcePlan(const engine::LaneGraph& roads, const JunctionPlan& plan, cons
         a.crossing = cid;
         a.onPath = plan.connector;
         a.arriveIn = toStart > 0 ? when(toStart) + car.shift : Real(0);
-        a.clearIn = when(toClear) + car.shift;
-        a.speedThere = car.move.speedThrough;
-        a.stopsFirst = car.stopsFirst;
+        a.clearIfGoing = when(toClear) + car.shift;
+        // CANNOT STOP short of the stretch braking as hard as it can (or its front is on it already): it will be on it,
+        // whatever it is told now (issue #284; the resolver's cannot_stop).
+        a.cannotStop = !canKeepShort(toStart, car.move.speed, car.hardestBrake, car.reaction, car.heldStop <= startAt);
         // Waiting inside the junction to give way (task D4): not going through the crossing points at or beyond where it
         // waits (its stop is a stretch's start or a waiting point, which is one), though it is past its line.
         const bool waitsShort =
             plan.decision == GiveWayDecision::GiveWay && plan.judged.stopAlong > 0 && from >= plan.judged.stopAlong;
         a.going = going && !waitsShort;
-        a.waitsInside = waitsShort;
-        // Not going: stopping short of the stretch, or (while it can still stop at the line) for another reason.
-        a.notGoing = (car.notGoing && !going) || car.heldStopAt < startAt || car.frontLimit < startAt;
-        // A front that cannot get far enough for the tail to clear the stretch: never clear of it.
-        if (!a.notGoing && car.frontLimit < clearAt) a.clearIn = kNever;
-        a.arrivalFixed = plan.arrivalFixed;
+        // Not going: stopping short of the stretch, or (while it can still stop at the line) for another reason. Never
+        // while it cannot keep short of the stretch: a body on it, or one that will be, is there whatever it means to do.
+        a.notGoing = !a.cannotStop &&
+                     ((car.notGoing && !going) || car.heldStopAt < startAt || car.frontLimit < startAt);
+        // HONEST CLEAR TIMES (issue #284): it comes to rest before its tail is past the stretch -- a stop it holds there
+        // (the full stop at its own line excepted: the estimate counts it), a stopped car beyond its line it cannot pass,
+        // or a queue whose car in front holds such a stop -- so it is never clear of it.
+        const bool stopsBeforeClear = car.heldStop < clearAt && !car.stopsFirst;
+        a.clearIn = stopsBeforeClear || car.neverClear || car.frontLimit < clearAt ? kNever : a.clearIfGoing;        a.arrivalFixed = plan.arrivalFixed;
         a.arrivalTick = plan.arrivalTick;
-        a.arrivalAt = plan.arrivalAt;
         a.committed = plan.committed;
         a.committedTick = plan.committedTick;
-        a.waited = car.waited;
-        a.waitingFor = waitingFor;
         a.who = car.who.index;
         out.add(a);
     }
 }
 
-void announceLane(const engine::LaneGraph& roads, engine::PathId lane, Real laneStart, CarId who, Real length,
-                  const Mover& move, Real lookAheadTime, AnnouncementBoard& out) {
+void announceLane(const engine::LaneGraph& roads, engine::PathId lane, Real laneStart, const LaneAnnouncer& car,
+                  AnnouncementBoard& out) {
     if (!knownPath(roads, lane)) return;
     const engine::Path& path = roads.paths[lane.index];
     for (uint32_t k = path.crossings.first; k < path.crossings.end() && k < roads.pathCrossings.size(); ++k) {
@@ -284,19 +287,27 @@ void announceLane(const engine::LaneGraph& roads, engine::PathId lane, Real lane
         if (rec.otherSide != engine::OtherSide::Path) continue;
         const bool iAmA = rec.a == lane;
         const Real toStart = laneStart + (iAmA ? rec.aFrom : rec.otherFrom);
-        const Real toClear = laneStart + (iAmA ? rec.aTo : rec.otherTo) + length;
+        const Real toClear = laneStart + (iAmA ? rec.aTo : rec.otherTo) + car.length;
         if (!(toClear > 0)) continue;
         Announcement a;
         a.crossing = cid;
         a.onPath = lane;
-        a.arriveIn = toStart > 0 ? secondsToCover(toStart, move) : Real(0);
-        if (a.arriveIn > lookAheadTime) continue;
-        a.clearIn = secondsToCover(toClear, move);
-        a.speedThere = move.speedThrough;
-        // A lane has no line to wait at: the car on it is going, and "arrived" before anyone.
-        a.going = true;
-        a.arrivalFixed = true;
-        a.who = who.index;
+        a.arriveIn = toStart > 0 ? secondsToCover(toStart, car.move) : Real(0);
+        if (a.arriveIn > car.lookAheadTime) continue;
+        const double startAt = car.odometer + toStart, clearAt = car.odometer + toClear;
+        const bool holdsShort = car.heldStop <= startAt;
+        // A lane has no line: read off the stretch itself (issue #284; before, a lane car announced itself going and
+        // arrived first, always, and never judged).
+        a.cannotStop = !canKeepShort(toStart, car.move.speed, car.hardestBrake, car.reaction, holdsShort);
+        a.going = !(toStart > 0) || (!holdsShort && !canStopWithin(toStart, car.move.speed, car.move.brake, car.reaction));
+        // Its own stop to give way here (give_way.h: its front at the stretch) is this meeting's; any other stop short of
+        // the stretch means it is not coming.
+        const bool ownStop = (car.heldStopFor == StopFor::GivingWay || car.heldStopFor == StopFor::ForABody) &&
+                             std::fabs(car.heldStop - startAt) <= car.atLineWithin;
+        a.notGoing = !a.cannotStop && holdsShort && !ownStop;
+        a.clearIfGoing = secondsToCover(toClear, car.move);
+        a.clearIn = car.heldStop < clearAt ? kNever : a.clearIfGoing;
+        a.who = car.who.index;
         out.add(a);
     }
 }

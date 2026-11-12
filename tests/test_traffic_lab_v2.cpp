@@ -205,11 +205,12 @@ constexpr double kLongestStand = 180.0;
 //   six stands behind it. The load check now follows the whole chain (ADR-0408) but can close only whole turns, and the
 //   near turn at 88 is fine, so the turn at 106 stays open. Owed: routes that avoid a bad continuation, or a driver refused
 //   for good taking another way (design 9.6 point 2). No issue yet.
-// - one car in about 4,500 enters a lit junction on red: committed through two close junctions (11 then 14) on a
-//   prediction that the second light lets it in, then held behind a slower car; the prediction is never rechecked (review
-//   #284 item 8).
+// ENTRIES ON RED: none. Held at 1 until #284 (ADR-0409): a car committed through two close junctions (11 then 14) on a
+// prediction that the second light would let it in was held behind a slower car and arrived after the red. A claim through
+// close junctions now allows for the car ahead, needs its way seen clear of anything that could make it wait, and is worked
+// out afresh every tick until the first line.
 constexpr double kSoakLongestStand = 1130.0;
-constexpr uint64_t kSoakMostEnteredOnRed = 1;
+constexpr uint64_t kSoakMostEnteredOnRed = 0;
 // THE FASTEST ROADS FLOW (issue #281): on the lanes of the road class with the highest posted limit (the lab's
 // freeway), the mean speed of cars in FREE FLOW -- held by nothing ahead (no car, no stop, not the end of their way),
 // by no top speed of their own vehicle's (a moped or a bus that cannot do the limit), and cruising (at the top speed
@@ -355,9 +356,11 @@ TEST_CASE(level_traffic_lab_v2_drives) {
             std::printf("    [lab-v2] %s", driving::describeProgramme(roads, d->rightOfWay(), engine::JunctionId(j)).c_str());
     // Every lit junction, every phase and stage: no two movements whose paths meet let traffic in together, unless the rule
     // set lets one give way (a far turn on a plain green).
+    // (Since #284 the model makes this check itself when the rules are handed over, and keeps what it found.)
     const std::vector<std::string> unsafe = driving::checkSignalProgrammes(roads, d->ruleSet(), d->rightOfWay());
     for (const std::string& u : unsafe) std::printf("      [unsafe programme] %s\n", u.c_str());
     CHECK(unsafe.empty());
+    CHECK(d->signalProblems() == unsafe);
     // Opposing far turns at lights whose paths cross (D4's staged test 5, the shape the synthetic grid cannot make).
     uint32_t opposingCross = 0;
     for (uint32_t c = 0; c < roads.crossings.size(); ++c) {
@@ -611,6 +614,19 @@ TEST_CASE(level_traffic_lab_v2_drives) {
             }
         }
         overlappingBefore.swap(overlappingNow);
+        // RT_LAB_CANNOT_COMPLY_LOG: every tick, each conflict whose car going second cannot stop short of the crossing
+        // point it is not yet on (issue #284; ConflictCounts::secondCannotStop), with the question that decided it.
+        if (std::getenv("RT_LAB_CANNOT_COMPLY_LOG"))
+            for (const driving::SettledConflict& s : d->resolver().conflicts()) {
+                const driving::Side& second = s.resolution.firstGoes ? s.conflict.second : s.conflict.first;
+                const driving::Side& first = s.resolution.firstGoes ? s.conflict.first : s.conflict.second;
+                if (!second.cannotStop || second.onIt) continue;
+                std::printf("      [cannot comply] t=%.2f group %u: car %llu (on it %d, cannot stop %d, committed %d) "
+                            "goes before car %llu, by %s\n",
+                            now, s.group, static_cast<unsigned long long>(first.who), first.onIt, first.cannotStop,
+                            first.committed, static_cast<unsigned long long>(second.who),
+                            driving::questionName(s.resolution.by));
+            }
         if (i % perSecond != 0) continue;
 
         // A DRIVER THAT CHANGED ITS MIND MORE THAN ONCE on one approach: its card, the first time, when asked.
@@ -720,11 +736,13 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         // GIVING WAY (issue #262): what drivers decided at junctions, and the board.
         std::printf("    [lab-v2] give way: %llu decisions to go, %llu to give way; %llu went after giving way, taking gaps "
                     "of %.2f-%.2f s (the smallest needed %.2f s); %llu plans where the driver changed its mind more than "
-                    "once; %llu waits inside a junction; the board held at most %zu announcements\n",
+                    "once; %llu waits inside a junction; %llu stops on a lane to give way (#284); the board held at most "
+                    "%zu announcements\n",
                     static_cast<unsigned long long>(pc.decidedGo), static_cast<unsigned long long>(pc.decidedGiveWay),
                     static_cast<unsigned long long>(pc.wentAfterGivingWay), pc.smallestGapTaken, pc.largestGapTaken,
                     pc.smallestGapNeeded, static_cast<unsigned long long>(pc.changedMindTwice),
-                    static_cast<unsigned long long>(pc.waitedInside), d->board().most());
+                    static_cast<unsigned long long>(pc.waitedInside), static_cast<unsigned long long>(pc.gaveWayOnALane),
+                    d->board().most());
         // WHO GOES FIRST (issue #263): the conflicts the one resolver settled over the run, by the question that decided.
         const driving::ConflictCounts& cc = d->conflictCounts();
         std::printf("    [lab-v2] who goes first: %llu conflicts settled (summed over the ticks); by question:",
@@ -733,9 +751,10 @@ TEST_CASE(level_traffic_lab_v2_drives) {
             if (cc.byQuestion[q] > 0)
                 std::printf(" %s %llu", driving::questionName(static_cast<driving::Question>(q)),
                             static_cast<unsigned long long>(cc.byQuestion[q]));
-        std::printf("; rings broken %llu (through a body %llu; of bodies and queues alone %llu)\n",
-                    static_cast<unsigned long long>(cc.rings), static_cast<unsigned long long>(cc.ringThroughABody),
-                    static_cast<unsigned long long>(cc.physicalRings));
+        std::printf("; rings broken %llu (untied at a queue %llu; of bodies alone, left standing %llu); conflicts whose "
+                    "car going second could not stop short (#284) %llu\n",
+                    static_cast<unsigned long long>(cc.rings), static_cast<unsigned long long>(cc.physicalRings),
+                    static_cast<unsigned long long>(cc.bodyRings), static_cast<unsigned long long>(cc.secondCannotStop));
         // ROOM BEYOND (issue #264): asks, grants and refusals over the run.
         const driving::RoomCounts& rc = d->roomCounts();
         std::printf("    [lab-v2] room beyond: %llu asks settled, %llu granted (%llu through junctions too close to stop "
@@ -747,10 +766,12 @@ TEST_CASE(level_traffic_lab_v2_drives) {
             if (rc.refused[k] > 0)
                 std::printf(" %llu %s;", static_cast<unsigned long long>(rc.refused[k]),
                             driving::roomRefusalWords(static_cast<driving::RoomRefusal>(k)));
-        std::printf(" grants used on the lane %llu, given back %llu; the most held at once %u; asks of one tick put in "
-                    "order by the resolver %llu; road-data places refused %zu\n",
+        std::printf(" grants used on the lane %llu, given back %llu (%llu claims through close junctions checked again and "
+                    "no longer holding, #284); the most held at once %u; asks of one tick put in order by the resolver "
+                    "%llu; road-data places refused %zu\n",
                     static_cast<unsigned long long>(rc.usedOnLane), static_cast<unsigned long long>(rc.givenBack),
-                    rc.mostHeld, static_cast<unsigned long long>(rc.orderedByResolver), rc.roadDataPlaces.size());
+                    static_cast<unsigned long long>(rc.chainsGivenBack), rc.mostHeld,
+                    static_cast<unsigned long long>(rc.orderedByResolver), rc.roadDataPlaces.size());
         for (const std::pair<uint32_t, uint32_t>& place : rc.roadDataPlaces)
             std::printf("      [road data] refused room at junction %u, lane %u beyond\n", place.first, place.second);
         // One driver's card giving way at a line, as `driver? <id>` shows it.
@@ -1003,6 +1024,7 @@ TEST_CASE(level_traffic_lab_v2_soak) {
         // What the counters stood at when the window began.
         uint64_t arrivals0 = 0, onePath0 = 0, touch0[driving::kTouchKindCount] = {};
         double box0[driving::kBoxReasonCount] = {}, notAllowed0 = 0, modelMs0 = 0;
+        uint64_t boxOffendersSeen = 0;
         constexpr Real kAtTheLine = 2.0;
         for (int i = 1; i <= steps; ++i) {
             city.step(lc.world, kStep);
@@ -1029,7 +1051,12 @@ TEST_CASE(level_traffic_lab_v2_soak) {
                     const driving::Lamp lamp = driving::lampAt(roads, d->rightOfWay(), c.path, d->clockSeconds() - kStep);
                     if (lamp != driving::Lamp::Dark) {
                         ++w.litCrossings;
-                        if (lamp == driving::Lamp::Red) ++w.enteredOnRed;
+                        if (lamp == driving::Lamp::Red) {
+                            ++w.enteredOnRed;
+                            // Its card, for a person chasing why (as the five-minute run prints its red runners).
+                            std::printf("      [red-runner] t=%.2f car %u onto connector %u at %.1f m/s:\n%s", now,
+                                        c.id.index, c.path.index, c.speed, d->describeCar(c.id).c_str());
+                        }
                     }
                 }
                 frontPath[c.id.index] = c.path.index;
@@ -1042,6 +1069,17 @@ TEST_CASE(level_traffic_lab_v2_soak) {
                 if (!atLine && lw != lineWaitSince.end()) lineWaitSince.erase(lw);
             }
             if (i % perMinute == 0) hashes.push_back(d->stateHash());
+            // A new spell of a car at rest in a box for a reason not allowed: its card, for a person chasing why.
+            {
+                const driving::Offenders& bad = m.rows().boxStops.offenders;
+                if (bad.total > boxOffendersSeen) {
+                    boxOffendersSeen = bad.total;
+                    if (!bad.kept.empty()) {
+                        const driving::CarId car = bad.kept.back().car;
+                        std::printf("      [box offender] t=%.2f car %u:\n%s", now, car.index, d->describeCar(car).c_str());
+                    }
+                }
+            }
             if (i % perSecond == 0) {
                 const driving::WaitReport wr = d->waitReport();
                 w.noReasonSamples += wr.noReason.size();

@@ -235,6 +235,58 @@ bool ask(SettleQuestion q, const JunctionWork& w, const RightOfWay& row, const J
     return false;
 }
 
+// A MEETING FILED UNDER NO JUNCTION, between paths `a` (the record's side A) and `b` (issue #284): the rule set's
+// `between_junctions` list asked of each path's own approach (its sign; a lane, or a connector of an approach with no
+// ranked sign, shares the first rank) and its own movement (a lane: straight on); arrived_first asks while driving and
+// the rest of the list gives the fall-back; nothing told apart, the lower path id gives way. Without the list, asked
+// while driving, falling back on the lower path id (as before).
+MeetingAnswer settleBetweenJunctions(const RuleSet& rules, const RightOfWay& row, PathId a, PathId b) {
+    MeetingAnswer out;
+    out.who = GivesWay::Ask;
+    out.by = SettledBy::AcrossJunctions;
+    out.fallback = GivesWay::A;
+    out.fallbackBy = SettledBy::LowerPathId;
+    if (!rules.hasBetweenJunctions) return out;
+    const auto rankOf = [&](PathId p) {
+        const uint32_t app = p.index < row.paths.size() ? row.paths[p.index].approach : kNoApproach;
+        return app < row.approaches.size() ? row.approaches[app].signRank : 0;
+    };
+    const auto movementOf = [&](PathId p) {
+        return p.index < row.paths.size() ? row.paths[p.index].movement : Movement::Straight;
+    };
+    bool asking = false;
+    for (const SettleQuestion q : rules.betweenJunctions) {
+        GivesWay who = GivesWay::A;
+        bool told = false;
+        if (q == SettleQuestion::ArrivedFirst) {
+            asking = true;
+            continue;
+        }
+        if (q == SettleQuestion::SignRank && rankOf(a) != rankOf(b)) {
+            who = rankOf(a) > rankOf(b) ? GivesWay::A : GivesWay::Other;
+            told = true;
+        }
+        if (q == SettleQuestion::Movement && rules.movementRankOf(movementOf(a)) != rules.movementRankOf(movementOf(b))) {
+            who = rules.movementRankOf(movementOf(a)) > rules.movementRankOf(movementOf(b)) ? GivesWay::A : GivesWay::Other;
+            told = true;
+        }
+        if (!told) continue;
+        if (asking) {
+            out.fallback = who;
+            out.fallbackBy = static_cast<SettledBy>(q);
+        } else {
+            out.who = who;
+            out.by = static_cast<SettledBy>(q);
+        }
+        return out;
+    }
+    if (!asking) {
+        out.who = GivesWay::A;   // nothing told them apart: the lower path id (side A) gives way
+        out.by = SettledBy::LowerPathId;
+    }
+    return out;
+}
+
 }  // namespace
 
 bool operator==(const MeetingAnswer& a, const MeetingAnswer& b) {
@@ -391,15 +443,14 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
             continue;
         }
         if (!rec.junction.valid()) {
-            MeetingAnswer a;
-            a.who = GivesWay::Ask;
-            a.by = SettledBy::AcrossJunctions;
-            a.fallback = GivesWay::A;
-            a.fallbackBy = SettledBy::LowerPathId;
+            // BETWEEN JUNCTIONS (issue #284): the rule set's `between_junctions`, or else asked while driving.
+            const MeetingAnswer a = settleBetweenJunctions(rules, out, rec.a, o);
             out.answers.push_back(a);
             ++out.counts.acrossJunctions;
-            ++out.counts.askWhileDriving;
-            ++out.counts.byLowerPathId;
+            if (a.who == GivesWay::Ask) ++out.counts.askWhileDriving;
+            else ++out.counts.settledAtLoad;
+            if (a.by == SettledBy::LowerPathId || (a.who == GivesWay::Ask && a.fallbackBy == SettledBy::LowerPathId))
+                ++out.counts.byLowerPathId;
             continue;
         }
         const uint32_t j = rec.junction.index;

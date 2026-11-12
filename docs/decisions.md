@@ -18432,7 +18432,9 @@ arriving in one tick (capped at eight cars) in a third. The owner asked for one 
   brief's rules 1 and 2, asked first because once a car is inside it can only be waited for; the rest is D3's order for
   cars not yet committed. Drivers look the answer up (`goesFirst`); `give_way.cpp` holds no ordering of its own any more
   (its ring search, `goFirstWhenAsked`, and the cap `kMaxTieGroup` with `CapCounts::tieGroupsCut` are gone). The
-  resolver holds no number and names no kind; every gap stays in the rule set.
+  resolver holds no rule-set number and names no kind; every gap stays in the rule set. *(Corrected by ADR-0409, after
+  review #284: "holds no number" was not true. It holds one cap of its own, `kMaxQueueLooked` (16), how far along a queue
+  it looks for a ring, counted when it cuts.)*
 - **The guarantees, and how each is made.** CONSISTENT: one record per pair per group, worked out once from the board
   everyone reads, so A before B means B after A whoever asks; a body on a crossing point the two share in one group
   counts in each of their groups. ALWAYS AN ANSWER: lower_id. NO RINGS: all conflicts' arrows ("goes after") together,
@@ -18493,8 +18495,10 @@ arriving in one tick (capped at eight cars) in a third. The owner asked for one 
 
 Conflicts settled over the run (summed over ticks): on_it 227k, committed_first 271k, table 232k, going 13k,
 arrived_first 84k, fallback 255k, by a ring's order 35k; rings broken 14,320 tick-instances, through a body 0, of
-bodies and queues alone 17. The freeway free-flow check and the measurements table pass; the state hash is the same at
-every second of two runs. The lab test's limits are back to 0 (`kMostCrossJoinPairs`, `kMostJoinPairTicks`) and the
+bodies and queues alone 17. The freeway free-flow check passes; the state hash is the same at every second of two runs.
+*(Corrected by ADR-0409, after review #284: this said "the measurements table passes", which nothing checked -- the lab
+test did not then require the table to pass, and its overlap row looked along one path only. Since #283 (ADR-0408) the
+test requires the whole table to pass, every pair of bodies is checked every tick, and it does.)* The lab test's limits are back to 0 (`kMostCrossJoinPairs`, `kMostJoinPairTicks`) and the
 across-junction one is 0 too (`kMostAcrossJunctionPairs`).
 On the hand-made roads (`tests/test_driving_give_way.cpp`): 16, a slow truck stops at its stop sign and commits across
 the path of a car with right of way by the signs, held at its line; the car, let go as the truck nears their crossing
@@ -18860,4 +18864,126 @@ average for 300 cars.
 - Ramps meeting the street on the oncoming side (#282): the planner lands every touch-down ramp on the street's centre
   line (`interchange.cpp`), so its one connector crosses both oncoming connectors; the crossing points exist and the cars
   give way there, so nothing touches, but queues stand in the oncoming lanes. Road plan, not driving model.
+
+## ADR-0409 — Junction safety from what cars can do: a car that cannot stop goes first, honest clear times, rings of bodies left standing, lane cars judge, committing when a car can no longer wait, claims through close junctions judged and checked again (#284)
+
+Words: the RESOLVER is the one conflict resolver (ADR-0405, `conflict.h`), which says who goes first wherever two
+announced cars meet; a car CANNOT STOP short of a crossing point when, reacting for one decide interval (unless it already
+holds a stop there) and then braking as hard as it can, its front would still reach the crossing point's stretch; its
+STOPPING TIME is the seconds of travel at its speed now that this stopping distance takes; its CLEAR TIME on a crossing
+point is when its tail will be past the stretch; a car is COMMITTED once it can no longer wait anywhere short of its next
+crossing stretch; a CHAIN is one claim for room through junctions too close together to stop between (ADR-0407).
+
+**Context.** Review #284 found that the resolver's four guarantees held for its records, not for what cars do: an answer
+was treated as safe without checking that the car told to go second could comply, or that the times cars announced were
+honest. Six defects (items 3-7 of the review and the stale prediction of item 8), and nine decisions about who goes first
+made outside the resolver. None of 3-7 showed as a touching body in thirty minutes of the lab (ADR-0408); item 8 showed as
+one entry on red.
+
+**Decision.**
+- **A. The car told to go second must be able to stop.** Every announcement says whether its car cannot stop short of the
+  crossing point (`Announcement::cannotStop`, over `act.h canStopWithin`, the one stopping sum the model now has), and the
+  resolver's second question, `cannot_stop`, right after `on_it`, puts such a car first: whatever the table says, it will
+  be there. Its answer, like `on_it`'s, is one nobody can turn round (`fixedAnswer`) and the car going second may only
+  follow it. Both unable: no answer there, and the conflict is counted (`ConflictCounts::secondCannotStop`, the car going
+  second not yet on the stretch) so it is never silent. The HARD GAP a driver keeps going on is no longer the rule set's
+  1.0 s for every vehicle but the larger of that (a floor) and the vehicle's own stopping time (`hardGap`); the comfortable
+  gap never falls below it. A going car whose front is already on the stretch still goes on: the resolver puts it second
+  only when the other's body is on a shared crossing point too.
+- **B. Honest clear times.** A car that will come to rest before its tail is past a stretch -- any stop it holds there
+  (giving way inside, a red at the next close junction, a hold, a wait for room) but the full stop at its own line the
+  estimate already counts, a stopped car beyond its line, or a queue whose front car holds such a stop -- announces it is
+  NEVER clear of it. What it would clear in were it to go on now is announced apart (`clearIfGoing`): the judgement reads
+  that for its own car (deciding whether to drop its stop), and the honest one for everyone else. Nobody plans to go behind
+  a car waiting inside the junction or at its line: D4's separate guard for cars waiting inside (`waitsInside`) is gone,
+  replaced by the rule.
+- **C. Never overrule on_it.** Inside a strongly connected part of the arrows, an answer by `on_it` or `cannot_stop` is
+  never changed to fit the ring's order. A loop of such answers alone (bodies locked round) is LEFT STANDING and counted
+  (`bodyRings`); each car in it waits for a body, a stop now marked `StopFor::ForABody`, which the wait-for graph draws as
+  an arrow about space ("waiting for the body of"), so the loop is reported as GRIDLOCK (the measurements' gridlock row),
+  never answered by telling a car to drive through another. `ringThroughABody` is gone with the case it counted.
+- **D. Lane cars judge.** A car on a lane that meets another junction's connector (ADR-0400's carry-overs) announces from
+  the crossing point's stretch as a car on a connector does from its line (going when it cannot stop comfortably short of
+  it, cannot-stop, not going for a stop of another kind short of it, honest clear time; it never arrives at a line and never
+  commits), and judges those crossing points against the cars the resolver puts first there: it needs the hard gap (it has
+  no line to wait at) and, once stopped there, the comfortable one to go on. Who goes first between junctions is the rule
+  set's new `between_junctions` settle list, asked of each path's own sign and movement (a lane: no sign, straight on); the
+  lab's is `{ "sign_rank", "movement", "arrived_first" }`, as its stop control ([~]: the law has no rule for paths that
+  touch between junctions). A rule set without it keeps "ask while driving, fall back on the lower path id"; one that asks
+  `light` or `kerb_side` there is refused when it is read.
+- **E. When a car counts as committed.** At its plan's `commitAt` -- the first crossing stretch at or beyond its last
+  waiting point (splits left out), or the connector's end -- not a centimetre past the line: committed once its front is
+  there, or it cannot stop short of it braking as hard as it can. A car that rolled a few ticks over its line can still
+  wait, and the give-way table, not "committed first", decides between it and the main road. (On a red, past the line by
+  more than at_line_within still commits it: below.)
+- **F. Claims through close junctions.** A chain is granted only if, at every junction it passes through and at the first,
+  the car SEES its way clear: every car announced on a path it crosses there that the resolver puts first now, or that will
+  reach the crossing point before it (it could commit first and hold the car inside), leaves it the comfortable gap one way
+  or the other (`seenClearThrough`; refused as `RoomRefusal::GivesWayAhead` otherwise). Its arrival at the next light
+  allows for the car ahead of it on the way (`arrivalThrough`). And while the car is short of the first line and can still
+  stop there (hardest braking, one decide interval), the lights and the clear way are worked out afresh every tick
+  (`chainHolds`); failing, the grant is given back as refused and the car stops at the line (`chainsGivenBack`).
+- **G. One place.** Every ordering decision the review listed outside the resolver is now one of three things:
+
+  | Decision (review #284) | Now |
+  |---|---|
+  | split rule hard-coding `OnIt` (give_way) | Gone. Split meetings are "nobody gives way" by shape; the car behind follows the car ahead along either path (`carAhead`, since #283). Deliberately outside: following, not ordering. |
+  | skipping not-going announcers, even with their body on the stretch | The defect is fixed: a car whose body is on the stretch, or that cannot stop short of it, is never announced as not going. The skip itself stays in the judgement, deliberately: it is not an order between two cars but "nobody is coming". Tried as a resolver question (`not_going`) and dropped: as an order it made the not-going car give way in its turn, and since not going is read off the stop a car held at its last decision (a red just turned green, a refused claim) the two swapped places each decision and stood in two-car rings of giving way (hand-made `lights_23`, `room_32`). |
+  | never going behind a car waiting inside | Gone: honest clear times (B). |
+  | the loser on the stretch goes anyway | Inside: `cannot_stop` (A); what is left (two bodies already on shared stretches) is counted. |
+  | lane cars always first | Gone (D): honest flags, the resolver, and the rule set's `between_junctions`. |
+  | meetings filed under no junction | Rule set: `between_junctions` (D). |
+  | commit-through feeding `committed_first` | Deliberately outside as a flag (`commitThrough`: a car with no place to wait between two junctions is committed at both), ordered inside by `committed_first`; made safe by F, since a chain is granted only with its way seen clear. |
+  | first-come order for room | Deliberately outside: the room ledger grants by first ask, then the resolver's order (ADR-0407: room following the resolver alone starved a car 145 s at J75). Room is a claim on space, not a crossing point. |
+  | a red makes a car committed | Deliberately outside as a flag (`noteAtTheLine`: past its line by more than at_line_within on a red, it entered lawfully and the next green waits for it), ordered inside by `committed_first`. |
+
+- **H.** The three "can it stop" sums (going at the line, the yellow's dilemma, when to decide) and room's "where would it
+  come to rest" are now `act.h stoppingDistance` / `canStopWithin`. Dead since D4 and deleted: `Announcement::waited`,
+  `speedThere`, `stopsFirst`, `arrivalAt`, and `waitingFor` (its one reader was the split special case; the stale comment
+  went with it), `waitsInside`, `PlanAnnouncer::waited`, `GiveWayCause::BehindInMyLane`. `checkSignalProgrammes` runs in
+  `useRules` once the programmes are timed (`Driving::signalProblems`, first among the table's notes). The no-rings fuzz
+  passes queue arrows; a congested random-traffic test (a car every 1-2 s on every arm, cars, 12 m buses and slow trucks).
+
+**Tests** (each on a hand-made junction, each failing with its fix switched off by hand, as ADR-0405 did): `conflict_6`
+(A: a bus that cannot stop goes first; both unable is counted), `give_way_284_a` (A: the hard gap is the bus's stopping
+time), `give_way_284_b` (B: a car held across a crossing announces never clear; the stop-sign car waits at its line; off:
+it went in behind a body that did not move), `conflict_5` (C: three bodies in a ring left standing, each told to wait,
+shown as gridlock; off: one told to go through another), `give_way_284_d` (D: a lane car stops short of a held truck's
+body; off: 76 ticks with both on the meeting; and the rule set's `between_junctions` settles lane before far turn),
+`give_way_284_e` (E: give_way_17's old staging; the truck no longer commits a centimetre past its line, the main road goes
+first; give_way_17 restaged so the truck's body is on the join before the car sets off), `give_way_284_f1` (F: a chain is
+granted only with the next junction's turn seen clear; off: granted at once with a gap of -0.9 s); `give_way_284_f2` (ten
+minutes at two close lights: nobody enters on red or rests in a box; a guard, passing either way), `give_way_284_h_*`
+(congested traffic; the programmes checked at load). 180 driving tests.
+
+**Measured** (the lab, 300 drivers; before = 71e12216):
+
+| | before (5 min) | after (5 min) | before (30 min soak) | after (30 min soak) |
+|---|---|---|---|---|
+| bodies touching (spells) | 0 | 0 | 0 | 0 |
+| fronts onto a connector on red | 0 | 0 | 1 | 0 (`kSoakMostEnteredOnRed` back to 0) |
+| loops at the once-a-second looks | 0 | 0 | 0 | 0 |
+| longest stand | 176 s | 200 s | 1,129 s (car 82) | 1,129 s (car 82, the same) |
+| trips arrived | 421 | 420 | 2,846 | 2,844 |
+| mean speed (every car, every tick) | 8.84 m/s | 8.82 m/s | | |
+| at rest in a box, car-seconds (not allowed) | 119.5 (0) | 79.0 (0) | 770.4 (0) | 512.6 (0) |
+| drivers changing their minds twice | 3 | 1 | | |
+| the model's tick, mean (worst) | 0.437 ms (0.92) | 0.411 ms (1.15) | 0.40-0.43 ms | 0.41-0.60 ms (other work on the machine in windows 4-6) |
+
+The soak's state hash is the same at every simulated minute of its two runs (0 of 30 differ); throughput holds (last
+window 477, mean after the first 485) and no memory figure grows. A run of it before the last part of F (the way through the
+FIRST junction seen clear too) showed why that part is needed: a car granted through junctions 58 and 73 was held inside 58
+for a far turn that committed before it, reached 73 at its red and stood 13 s with its tail in 58's box.
+
+Over the five minutes: who goes first, by question, on_it 166k, cannot_stop 46k, committed_first 99k (was 198k: committing
+later), table 684k (was 611k), ring 4k; rings broken 2,749 (was 3,743), none of bodies alone; conflicts whose car going
+second could not stop short, summed over ticks, 228 (two cars meeting at two junctions at once, both unable, untied by who
+reached the stretch first; no body touched). Room: 45 chains granted (46 before), 2 refused as the way not seen clear.
+
+**Not met, and why.** The five-minute run's longest stand is 200 s against `kLongestStand` 180 s: a slow small truck's far
+turn at five-phase junction 21 found no gap in a continuous oncoming stream through three greens (before: 176 s, car 43, the
+same turn). It is the owed protected arrow for starved far turns (ADR-0406, ADR-0407, ADR-0408), not part of this work;
+the limit is left at 180 s and the test fails on that one check. In the congested test, a 12 m bus's straight body cuts
+inside a tight turn and touches a car on a path beside it, outside every shared stretch (the same with all of #284's fixes
+off): review item 9, long-vehicle swing, its own task; the test prints these and checks the rest.
 

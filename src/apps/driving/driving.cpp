@@ -56,9 +56,13 @@ void Driving::settleClaims() {
         s.cls = &vehicleClasses_.at(c.vehicleClass);
         roomSeats_.push_back(s);
     }
-    const RoomWorld world{*roads_,  rightOfWay_,    ruleSet_, roadRules_,  vehicleClasses_, cars_,
-                          pathLists_, roomRoads_, roomNumbers_, resolver_, lightsRun_,     junctionNumbers_.comfortableSideAccel,
-                          tickCount_, clockSeconds_};
+    RoomWorld world{*roads_,  rightOfWay_,    ruleSet_, roadRules_,  vehicleClasses_, cars_,
+                    pathLists_, roomRoads_, roomNumbers_, resolver_, lightsRun_,     junctionNumbers_.comfortableSideAccel,
+                    tickCount_, clockSeconds_};
+    // A claim through close junctions sees whether its onward turns are clear by this tick's board (issue #284).
+    world.board = &board_;
+    world.gapNeeded = junctionNumbers_.gapComfortable;
+    world.reaction = static_cast<Real>(std::max<uint32_t>(1, settings_.decideEveryTicks)) * step_;
     room_.settle(world, roomSeats_);
 }
 
@@ -162,6 +166,13 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
         rightOfWay_ = buildRightOfWay(*roads_, ruleSet_, roadRules_);
         // ... and every junction's traffic lights timed, with the far turns' places to wait inside checked (#261).
         if (lightsRun_) timeSignalProgrammes(*roads_, roadRules_, lightTiming_, rightOfWay_);
+        // ... and checked: no stage lets in together two movements whose paths meet unless the rule set allows it. A
+        // breach is reported (signalProblems, and in the table's notes), not refused: the host decides (issue #284).
+        signalProblems_ = lightsRun_ ? checkSignalProgrammes(*roads_, ruleSet_, rightOfWay_) : std::vector<std::string>();
+        // (First among the notes, so a host printing only the first few still shows them.)
+        for (std::size_t i = 0; i < signalProblems_.size(); ++i)
+            rightOfWay_.notes.insert(rightOfWay_.notes.begin() + static_cast<std::ptrdiff_t>(i),
+                                     "unsafe programme: " + signalProblems_[i]);
         // ... and the road as room beyond reads it: what leads into each lane, and where its room begins (#264).
         roomRoads_ = roomOn_ ? studyRoomRoads(*roads_, roomNumbers_.clearOfCrosswalk) : RoomRoads();
         closeTurnsForRoom();
@@ -298,6 +309,8 @@ void Driving::announce() {
     lineTimes_.resize(cars_.size());
     lineOrder_.clear();
 
+    // Seconds between a driver's decisions: what it is told now, it acts on at its next one.
+    const Real reaction = static_cast<Real>(std::max<uint32_t>(1, settings_.decideEveryTicks)) * step_;
     // 1. Each car's own notes, and its nearest line.
     for (std::size_t i = 0; i < cars_.size(); ++i) {
         LineTimes& times = lineTimes_[i];
@@ -313,7 +326,8 @@ void Driving::announce() {
             const Lamp lamp = lightsRun_ ? lampAt(*roads_, rightOfWay_, plans.plans[k].connector, clockSeconds_) : Lamp::Dark;
             const bool red = lamp == Lamp::Red || lamp == Lamp::RedMayTurn;
             const bool held = lamp == Lamp::Red || lamp == Lamp::Yellow;
-            noteAtTheLine(plans.plans[k], c, cls.brake, n.atLineWithin, tickCount_, clockSeconds_, red, held);
+            noteAtTheLine(plans.plans[k], c, cls.brake, cls.hardestBrake, reaction, n.atLineWithin, tickCount_,
+                          clockSeconds_, red, held);
         }
         // Granted room through junctions too close to stop between (#264): committed at the first, at all of them.
         if (roomOn_) commitThrough(plans);
@@ -335,8 +349,16 @@ void Driving::announce() {
                                                          : secondsToCover(static_cast<Real>(w.toLine), m);
             w.in = w.ownIn;
             // Stopping short of the line for something that is not this junction's traffic.
-            w.notGoing = c.held.hasStop && !stopIsJunctionsOwn(c, p, n.atLineWithin) &&
-                         c.held.stopAt <= p.startOdometer + n.atLineWithin;
+            // ... or refused room beyond it at its last ask: it may not enter, whichever rule's stop at the line won (a
+            // give-way there as well): read off the claim, so being put second for it does not make it look going again
+            // (issue #284).
+            w.notGoing = (c.held.hasStop && !stopIsJunctionsOwn(c, p, n.atLineWithin) &&
+                          c.held.stopAt <= p.startOdometer + n.atLineWithin) ||
+                         p.room.state == RoomState::Refused;
+            // Stopping at or short of the line for anything but the full stop the estimate counts: the car behind it
+            // comes to rest behind it, and so is never clear of anything beyond the line either (HONEST CLEAR TIMES).
+            w.stopsShort = c.held.hasStop && c.held.stopAt <= p.startOdometer + n.atLineWithin &&
+                           !stopsFirstAt(c, p, n.atLineWithin);
             // A car too far off to announce even by its own estimate needs no queue worked out (a queue only delays).
             if (w.ownIn <= n.lookAheadTime) lineOrder_.push_back(static_cast<uint32_t>(i));
             break;
@@ -376,6 +398,7 @@ void Driving::announce() {
             // Queued for the same line.
             w.in = std::max(w.in, wa.in + interval);
             w.notGoing = w.notGoing || wa.notGoing;
+            w.neverClear = w.neverClear || wa.neverClear || wa.stopsShort;
         } else if (ahead.gap >= w.toLine) {
             if (a->speed < kStandingBelow) {
                 // Standing beyond my line: my front gets no further than a standstill gap behind it.
@@ -410,16 +433,17 @@ void Driving::announce() {
             a.length = cls.length;
             a.move = base;
             a.move.speedThrough = speedThrough(*roads_, roadRules_, p.connector, cls.topSpeed, n.comfortableSideAccel);
+            a.hardestBrake = cls.hardestBrake;
             a.heldStop = heldStopOf(c);
-            a.reaction = static_cast<Real>(std::max<uint32_t>(1, settings_.decideEveryTicks)) * step_;
+            a.reaction = reaction;
             a.stopsFirst = stopsFirstAt(c, p, n.atLineWithin);
             const bool queued = w.has && k >= w.plan;
             a.shift = queued ? w.in - w.ownIn : Real(0);
             a.notGoing = queued && w.notGoing;
+            a.neverClear = queued && w.neverClear;
             a.heldStopAt = c.held.hasStop && !stopIsJunctionsOwn(c, p, n.atLineWithin) ? c.held.stopAt
                                                                                         : static_cast<double>(kNever);
             a.frontLimit = w.frontLimit;
-            a.waited = p.cameToRest ? static_cast<Real>(std::max(0.0, clockSeconds_ - p.restAt)) : Real(0);
             // When it reaches the line; a junction beyond the look-ahead time is not announced, nor any after it.
             const Real toLine = static_cast<Real>(p.startOdometer - c.odometer);
             const Real lineIn =
@@ -429,25 +453,35 @@ void Driving::announce() {
             lineTimes_[i][k] = {p.connector, lineIn};
             announcePlan(*roads_, p, a, board_);
         }
-        // The lanes its body is on and its way runs along, where a lane meets a junction's connector: as going.
-        Mover lane = base;
-        lane.speedThrough = c.held.topSpeed > 0 ? c.held.topSpeed : cls.topSpeed;
+        // The lanes its body is on and its way runs along, where a lane meets a junction's connector (issue #284: read off
+        // the crossing point's stretch, as a plan's car reads its line).
+        LaneAnnouncer lane;
+        lane.who = c.id;
+        lane.odometer = c.odometer;
+        lane.length = cls.length;
+        lane.move = base;
+        lane.move.speedThrough = c.held.topSpeed > 0 ? c.held.topSpeed : cls.topSpeed;
+        lane.hardestBrake = cls.hardestBrake;
+        lane.reaction = reaction;
+        lane.lookAheadTime = n.lookAheadTime;
+        lane.atLineWithin = n.atLineWithin;
+        lane.heldStop = heldStopOf(c);
+        lane.heldStopFor = c.held.stopFor;
         Real start = -c.along;
         for (std::size_t k = 0; k < c.trailCount && k < kMaxTrail; ++k) {
             start -= roads_->paths[c.trail[k].index].length;
             if (roads_->paths[c.trail[k].index].kind == engine::PathKind::Lane)
-                announceLane(*roads_, c.trail[k], start, c.id, cls.length, lane, n.lookAheadTime, board_);
+                announceLane(*roads_, c.trail[k], start, lane, board_);
         }
         start = -c.along;
-        if (roads_->paths[c.path.index].kind == engine::PathKind::Lane)
-            announceLane(*roads_, c.path, start, c.id, cls.length, lane, n.lookAheadTime, board_);
+        if (roads_->paths[c.path.index].kind == engine::PathKind::Lane) announceLane(*roads_, c.path, start, lane, board_);
         start += roads_->paths[c.path.index].length;
         const std::vector<engine::PathId>& way = t->way.paths;
         if (t->wayAt < way.size() && way[t->wayAt] == c.path)
             for (std::size_t k = t->wayAt + 1; k < way.size(); ++k) {
-                if (secondsToCover(start, lane) > n.lookAheadTime) break;
+                if (secondsToCover(start, lane.move) > n.lookAheadTime) break;
                 if (roads_->paths[way[k].index].kind == engine::PathKind::Lane)
-                    announceLane(*roads_, way[k], start, c.id, cls.length, lane, n.lookAheadTime, board_);
+                    announceLane(*roads_, way[k], start, lane, board_);
                 start += roads_->paths[way[k].index].length;
             }
     }
@@ -534,6 +568,7 @@ void Driving::plan() {
                              board_,    resolver_,   junctionNumbers_, c,
                              cls.length, cls.brake,  static_cast<Real>(every) * step_, t->person,
                              clockSeconds_, p.junctions, {}, lightsRun_ ? &lightTiming_ : nullptr, cls.hardestBrake};
+            in.way = &p.way;   // the lanes on it judge their crossing points too (issue #284)
             for (std::size_t k = 0; k < kMaxJunctionPlans; ++k) {
                 in.lineIn[k] = kNever;
                 if (k >= p.junctions.count) continue;
@@ -577,7 +612,9 @@ void Driving::plan() {
             const FactSlot slot = r < rules_.program.rules.size() ? rules_.program.rules[r].stopAt : kNoFact;
             if (slot < facts_.size()) {
                 p.held.stopFor = facts_.at(slot).stopFor;
-                if (p.held.stopFor == StopFor::GivingWay || p.held.stopFor == StopFor::NoRoom)
+                // Giving way to a body already on the crossing point: a matter of space (issue #284; wait_graph.h).
+                if (p.held.stopFor == StopFor::GivingWay && noticed_[slot].forABody) p.held.stopFor = StopFor::ForABody;
+                if (givesWay(p.held.stopFor) || p.held.stopFor == StopFor::NoRoom)
                     p.held.stopCar = noticed_[slot].aboutCar;
             }
         }
@@ -610,6 +647,10 @@ void Driving::plan() {
             trips_.erase(p.trip);
             continue;
         }
+        // A stop on a lane to give way (issue #284), counted as it begins: the stop the car now holds, not before.
+        if (p.verdict.onALane && p.held.hasStop && givesWay(p.held.stopFor) &&
+            !(c.held.hasStop && givesWay(c.held.stopFor)))
+            ++planCounts_.gaveWayOnALane;
         c.held = p.held;
         t->junctions = p.junctions;
         notePlanUpdate(p.planUpdate, c.id, *t, t->junctions);

@@ -90,7 +90,8 @@ constexpr uint8_t kLimitCount = 5;
 
 // WHAT A PLACE TO STOP BY WAITS FOR (issue #262): only the place itself (a destination, a hold, a lane's end), or
 // another car the driver is GIVING WAY to (then the stop names that car, and the wait-for graph draws a right-of-way
-// arrow to it). Which one a stop is comes from the place fact that gave it (FactSpec::stopFor in notice.h).
+// arrow to it). Which one a stop is comes from the place fact that gave it (FactSpec::stopFor in notice.h; a giving-way
+// place may say it waits for a body: NoticedFact::forABody).
 enum class StopFor : uint8_t {
     Place,       // the place itself
     GivingWay,   // giving way at a junction's line: to the car named with it
@@ -99,8 +100,12 @@ enum class StopFor : uint8_t {
     NoRoom,      // waiting at a junction's line for room beyond it (issue #264, room.h): for the tail of the car named with
                  // it, or (none named) for the lights or the stop at the next junction to let it through. Not the
                  // junction's own traffic: the car announces that it is not going, so cross traffic uses the time
+    ForABody,    // giving way, as GivingWay, to a car whose body is already on the crossing point (the resolver's on_it):
+                 // a matter of space, as behind a car, so a ring of such waits is gridlock, not deadlock (issue #284)
 };
-constexpr uint8_t kStopForCount = 4;
+constexpr uint8_t kStopForCount = 5;
+// A STOP TO GIVE WAY, to a car (GivingWay) or to a body on the crossing point (ForABody): the junction's own.
+inline bool givesWay(StopFor s) { return s == StopFor::GivingWay || s == StopFor::ForABody; }
 
 struct Binding {
     Limit by = Limit::Nothing;

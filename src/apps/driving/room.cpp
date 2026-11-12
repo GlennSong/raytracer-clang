@@ -17,7 +17,6 @@ namespace driving {
 
 namespace {
 
-constexpr Real kTwo = 2;   // the 2 in v^2 = 2 a s
 // HOW OFTEN A LIGHT IS LOOKED AT while checking that it stays green for a car passing through (seconds). A light's
 // shortest stage (an all-red, at least the rule set's all_red_shortest) is far longer.
 constexpr Real kLampLookEvery = 0.25;
@@ -73,6 +72,43 @@ bool letsInThrough(const engine::LaneGraph& roads, const RightOfWay& row, engine
         if (lamp != Lamp::Green && lamp != Lamp::Yellow) return false;
         if (!(t < window)) return true;
     }
+}
+
+// DOES CAR `me` SEE ITS TURN `next` CLEAR as it passes through it without stopping (issue #284)? A claim through close
+// junctions holds only if the car waits nowhere on the way: committed through (commitThrough), it would go before every
+// car at the next junction that has not committed (the resolver's committed_first), so taking nobody's turn there, and
+// it must not be made to wait inside a junction it passes through, or it reaches the next one later than its claim was
+// timed for (the soak: a car held inside junction 58 for a far turn that committed before it, then at junction 73's red
+// with its tail in 58's box). So at each crossing point along `next`, every car announced on the other path that the
+// resolver puts before the car now (by the table at the phase that junction is in, by its arrival, ...), or that will
+// reach the crossing point before it does (it may commit first), must leave it the gap, one way or the other, by the
+// car's own announcements there (as if it went on now: clearIfGoing; it may hold a stop at the first line). A car not
+// going is passed over, as the judgement does. A crossing point the car has not announced cannot be seen: not clear. A
+// car not yet announced is further off than the look-ahead time; arriving after the car, committed through, it gives way
+// to it, as to any committed car. With no board (no junction step), nothing is judged.
+bool seenClearThrough(const RoomWorld& world, CarId me, engine::PathId next) {
+    if (!world.board || !knownPath(world.roads, next)) return true;
+    const engine::Path& p = world.roads.paths[next.index];
+    for (uint32_t k = p.crossings.first; k < p.crossings.end() && k < world.roads.pathCrossings.size(); ++k) {
+        const engine::CrossingId cid = world.roads.pathCrossings[k];
+        const engine::CrossingPoint& rec = world.roads.crossings[cid.index];
+        if (rec.otherSide != engine::OtherSide::Path) continue;
+        const MeetingAnswer* answer = world.row.answer(cid, currentPhase(world.row, rec.junction, world.now));
+        engine::PathId other;
+        if (!answer || myTurn(world.roads, *answer, cid, next, &other) == MyTurn::Neither) continue;
+        const Announcement* mine = world.board->find(cid, me.index, next);
+        for (const Announcement& e : world.board->on(cid)) {
+            if (e.onPath != other || e.who == me.index || e.notGoing) continue;
+            Question by = Question::None;
+            const bool meFirst = world.resolver.goesFirst(world.roads, cid, me.index, e.who, &by);
+            if (meFirst && !(mine && e.arriveIn < mine->arriveIn)) continue;
+            if (!mine) return false;
+            const bool ahead = !followOnly(by) && mine->clearIfGoing + world.gapNeeded <= e.arriveIn;
+            const bool behind = e.clearIn + world.gapNeeded <= mine->arriveIn;
+            if (!ahead && !behind) return false;
+        }
+    }
+    return true;
 }
 
 // THE ONE LANE THE ROAD RUNS ON INTO after `from`, where it does not branch: a connector's lane, or a lane's single next
@@ -605,6 +641,23 @@ void RoomLedger::keepOrLetGo(const RoomWorld& world, RoomSeat& seat) {
             }
             continue;
         }
+        // A CLAIM THROUGH CLOSE JUNCTIONS, checked again from where the car is now, while it is short of the line and can
+        // still stop at it (its hardest braking, after one decide interval) (issue #284). No longer holding, it is given
+        // back as refused: the car stops at the line (roomStopFor) and asks again when it next means to go.
+        const double toLine = p.startOdometer - c.odometer;
+        RoomRefusal why = RoomRefusal::None;
+        engine::JunctionId where;
+        if (r.through > 1 && toLine > 0 &&
+            canStopWithin(static_cast<Real>(toLine), c.speed, seat.cls->hardestBrake, world.reaction) &&
+            !chainHolds(world, seat, k, why, where)) {
+            r.state = RoomState::Refused;
+            r.refusal = why;
+            r.at = where;
+            r.by = CarId();
+            ++counts_.givenBack;
+            ++counts_.chainsGivenBack;
+            continue;
+        }
         // Given back: short of the line, its driver now means to stop there or before for something else (it decided to
         // give way at the line, a red stops it, a hold): it asks again when it means to go.
         const bool shortOfLine = c.odometer < p.startOdometer + atLine;
@@ -615,6 +668,69 @@ void RoomLedger::keepOrLetGo(const RoomWorld& world, RoomSeat& seat) {
             ++counts_.givenBack;
         }
     }
+}
+
+Real RoomLedger::arrivalThrough(const RoomWorld& world, const RoomSeat& seat, engine::PathId connector, Real distance) {
+    const Car& c = *seat.car;
+    const VehicleClass& cls = *seat.cls;
+    const Real d = std::max(Real(0), distance);
+    Mover m;
+    m.speed = c.speed;
+    m.speedUp = cls.speedUp;
+    m.brake = cls.brake;
+    m.speedThrough = speedThrough(world.roads, world.roadRules, connector, cls.topSpeed, world.comfortableSideAccel);
+    Real eta = secondsToCover(d, m);
+    // The car ahead on the way: I get there no sooner than it has covered the gap between us and the distance, and a
+    // standstill gap more at my speed through.
+    pathsAfter_.clear();
+    const std::vector<engine::PathId>& way = seat.way->paths;
+    if (!way.empty() && way[0] == c.path)
+        for (std::size_t k = 1; k < way.size(); ++k) pathsAfter_.push_back(way[k]);
+    const Neighbour n = carAhead(world.roads, world.cars, world.lists, c.id, pathsAfter_, d);
+    if (!n.found()) return eta;
+    const Car* a = findCar(world.cars, world.lists, n.car);
+    if (!a || a->vehicleClass >= world.classes.size()) return eta;
+    const VehicleClass& ac = world.classes.at(a->vehicleClass);
+    Mover am;
+    am.speed = a->speed;
+    am.speedUp = ac.speedUp;
+    am.brake = ac.brake;
+    am.speedThrough = speedThrough(world.roads, world.roadRules, connector, ac.topSpeed, world.comfortableSideAccel);
+    const Real behindIt = secondsToCover(std::max(Real(0), d - n.gap), am) +
+                          world.numbers.standstillGap / std::max(m.speedThrough, kSlowestThrough);
+    return std::max(eta, behindIt);
+}
+
+bool RoomLedger::chainHolds(const RoomWorld& world, const RoomSeat& seat, std::size_t k, RoomRefusal& why,
+                            engine::JunctionId& at) {
+    const JunctionPlans& plans = *seat.plans;
+    const Car& c = *seat.car;
+    if (!seenClearThrough(world, c.id, plans.plans[k].connector)) {
+        why = RoomRefusal::GivesWayAhead;
+        at = plans.plans[k].junction;
+        return false;
+    }
+    for (std::size_t j = k + 1; j < plans.count && j < kMaxJunctionPlans; ++j) {
+        const JunctionPlan& q = plans.plans[j];
+        if (q.room.state != RoomState::Granted || !q.room.chained) break;
+        const engine::JunctionId jn = q.junction;
+        if (world.lightsRun && lightsRunAt(world.row, jn)) {
+            const Real eta =
+                arrivalThrough(world, seat, plans.plans[k].connector, static_cast<Real>(q.startOdometer - c.odometer));
+            if (!letsInThrough(world.roads, world.row, q.connector, world.now + static_cast<double>(eta),
+                               world.numbers.arrivalSlack)) {
+                why = RoomRefusal::LightsAhead;
+                at = jn;
+                return false;
+            }
+        }
+        if (!seenClearThrough(world, c.id, q.connector)) {
+            why = RoomRefusal::GivesWayAhead;
+            at = jn;
+            return false;
+        }
+    }
+    return true;
 }
 
 void RoomLedger::addGrant(const RoomGrant& g) {
@@ -759,18 +875,18 @@ RoomAnswer RoomLedger::measure(const RoomWorld& world, const RoomSeat& seat, std
             return ans;
         }
         if (world.lightsRun && lightsRunAt(world.row, jn)) {
-            Mover m;
-            m.speed = c.speed;
-            m.speedUp = cls.speedUp;
-            m.brake = cls.brake;
-            m.speedThrough =
-                speedThrough(roads, world.roadRules, p.connector, cls.topSpeed, world.comfortableSideAccel);
             const Real toThatLine = static_cast<Real>(laneStart - c.odometer) + s.end;
-            const Real eta = secondsToCover(std::max(Real(0), toThatLine), m);
+            const Real eta = arrivalThrough(world, seat, p.connector, toThatLine);
             if (!letsInThrough(roads, world.row, next, world.now + static_cast<double>(eta), n.arrivalSlack)) {
                 ans.refusal = RoomRefusal::LightsAhead;
                 return ans;
             }
+        }
+        // ... and its turn there seen clear as it gets there: it could only wait for a car it gives way to with its tail in
+        // the box behind (issue #284).
+        if (!seenClearThrough(world, c.id, next)) {
+            ans.refusal = RoomRefusal::GivesWayAhead;
+            return ans;
         }
         Seg g;
         g.path = next;
@@ -783,6 +899,12 @@ RoomAnswer RoomLedger::measure(const RoomWorld& world, const RoomSeat& seat, std
         ++junctions;
     }
     ans.junctions = junctions;
+    // Through junctions too close to stop between, it must not be made to wait inside the first either (issue #284).
+    if (junctions > 1 && !seenClearThrough(world, c.id, p.connector)) {
+        ans.refusal = RoomRefusal::GivesWayAhead;
+        ans.at = p.junction;
+        return ans;
+    }
     ans.at = engine::JunctionId();
 
     // 2. THE CARS ON THE WAY, each once: its rear-most point on it, and its front if that is on it.
@@ -884,7 +1006,7 @@ RoomAnswer RoomLedger::measure(const RoomWorld& world, const RoomSeat& seat, std
         if (!rec || rec->vehicleClass >= world.classes.size()) continue;
         const VehicleClass& oc = world.classes.at(rec->vehicleClass);
         const Real speed = std::max(Real(0), rec->speed);
-        const Real braking = oc.brake > 0 ? speed * speed / (kTwo * oc.brake) : Real(0);
+        const Real braking = stoppingDistance(speed, oc.brake);
         const Real restRear = o.frontOn ? std::min(o.front + braking, limit) - bodyLength(oc) : o.rear + braking;
         if (restRear - n.standstillGap < limit) {
             limit = restRear - n.standstillGap;

@@ -161,6 +161,8 @@ struct JunctionPlanCounts {
     // ... nor switches made while held at the line for room beyond (issue #264): it cannot go whatever it judges, and
     // announces that it is not going.
     uint64_t switchedWhileHeldForRoom = 0;
+    // Decisions to stop at a crossing point on a LANE, giving way to a car the resolver put first there (issue #284).
+    uint64_t gaveWayOnALane = 0;
     // The gaps taken after giving way: the smallest and largest gap had, and the smallest gap needed (seconds).
     Real smallestGapTaken = 0, largestGapTaken = 0, smallestGapNeeded = 0;
 };
@@ -231,6 +233,11 @@ public:
     // drivers read, for anything that draws or reports the lights (Dark where none runs).
     bool lightsRun() const { return lightsRun_; }
     const LightTiming& lightTiming() const { return lightTiming_; }
+    // THE SAFETY CHECK ON THE PROGRAMMES, made by useRules once they are timed (signal_programme.h
+    // checkSignalProgrammes; issue #284): each stage where two movements whose paths meet would let traffic in together
+    // without the rule set allowing it, in plain words. Empty when sound, or when no light runs. Also among the right-of-way
+    // table's notes (describeRightOfWay prints them), so a host that reports the table reports these.
+    const std::vector<std::string>& signalProblems() const { return signalProblems_; }
     Lamp lamp(engine::PathId connector) const {
         return lightsRun_ && roads_ ? lampAt(*roads_, rightOfWay_, connector, clockSeconds_) : Lamp::Dark;
     }
@@ -413,6 +420,8 @@ private:
         Real ownIn = 0;               // seconds to reach it, by its own estimate
         Real in = 0;                  // ... and no earlier than the car ahead queued for the same line
         bool notGoing = false;        // stopping short of the line for another reason, or queued behind such a car
+        bool stopsShort = false;      // it holds a stop at or short of the line (not a full stop first there)
+        bool neverClear = false;      // queued for the line behind a car that stops short of it (or behind such a car)
         double frontLimit = kNever;   // the odometer reading its front cannot pass (a stopped car beyond the line)
         engine::PathId fromLane;      // the lane the connector leaves: cars queued for one line share it
         Real through = 0;             // the speed it will hold through that junction
@@ -458,6 +467,7 @@ private:
     bool junctionsOn_ = false;            // the junction step (give_way.h hasJunctionStep)
     bool lightsRun_ = false;              // the lights run a programme (road_rules.h RoadRules::lightsRun)
     LightTiming lightTiming_;             // ... by these numbers (signal_programme.h)
+    std::vector<std::string> signalProblems_;   // ... and what checkSignalProgrammes found at load
     Real step_ = 0;                       // the step of the tick under way, seconds (the decide interval is a number of them)
     JunctionNumbers junctionNumbers_;
     AnnouncementBoard board_;             // rewritten at the start of every plan step

@@ -13,7 +13,10 @@
 //     room beyond for me) or of RIGHT OF WAY (I am giving way to it). The tick gives "behind" (the car ahead holds me back)
 //     and "giving way to" (a stop at a junction's line that names the car given way to: Binding::stopFor, issue #262);
 //     and "waiting for room behind the tail of" (a stop at a junction's line for room beyond it that names the car whose
-//     tail bounds the room: StopFor::NoRoom, issue #264). Adding a kind is one enum value and one row of kArrowKinds.
+//     tail bounds the room: StopFor::NoRoom, issue #264); and "waiting for the body of" (giving way to a car whose body is
+//     already on the crossing point: StopFor::ForABody, issue #284 -- space, since no rule of the road moves a body: a
+//     ring of bodies the conflict resolver leaves standing shows as gridlock, never as an order to go). Adding a kind is
+//     one enum value and one row of kArrowKinds.
 //   - a LEAF: something that is not another car (a place to stop by given by a rule, a top speed, the end of its way).
 //   - NONE: held back by nothing at all. That is the worst bug there is (a car standing still for no reason), so those
 //     cars are listed on their own.
@@ -52,8 +55,9 @@ enum class ArrowKind : uint8_t {
     Behind,         // the car ahead is what limits me
     GivingWay,      // I am giving way to that car: stopped at a junction's line for it (#262)
     NoRoomBeyond,   // there is no room past the junction: I wait for the tail of that car (#264)
+    ForABody,       // that car's body is already on the crossing point I must cross: I wait for it to clear it (#284)
 };
-constexpr uint8_t kArrowKindCount = 3;
+constexpr uint8_t kArrowKindCount = 4;
 
 // One row per arrow kind, in enum order: the words for it ("car 3 <words> car 9") and what it is about.
 struct ArrowKindInfo {
@@ -65,6 +69,7 @@ constexpr ArrowKindInfo kArrowKinds[kArrowKindCount] = {
     {ArrowKind::Behind, "behind", WaitSort::Space},
     {ArrowKind::GivingWay, "giving way to", WaitSort::RightOfWay},
     {ArrowKind::NoRoomBeyond, "waiting for room behind the tail of", WaitSort::Space},
+    {ArrowKind::ForABody, "waiting for the body of", WaitSort::Space},
 };
 const ArrowKindInfo& arrowKindInfo(ArrowKind kind);
 

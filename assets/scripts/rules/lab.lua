@@ -69,6 +69,13 @@ rule_set = {
   -- turn between them and the U-turn last are [~] judgements: the near turn crosses no oncoming stream, the U-turn
   -- crosses every one.
   movement_rank = { "straight", "near_turn", "far_turn", "u_turn" },
+  -- BETWEEN JUNCTIONS (issue #284): where two paths touch outside any one junction -- a lane passing close by another
+  -- junction's connector, or two junctions' connectors crowded together -- there is no control to ask. They go by the
+  -- sign each path comes from (a lane carries none: it is the road), then the kind of turn (a lane runs straight on), then
+  -- who got there first. As at a stop or give-way sign on the minor road: CVC 21802 (a), 21803 (a) (give way to traffic
+  -- on the other road) and 21801 (a) (the far turn gives way). [~] a judgement: the law has no rule for two paths that
+  -- touch between junctions; this treats the one coming from the busier road as the road.
+  between_junctions = { settle = { "sign_rank", "movement", "arrived_first" } },
 
   numbers = {
     -- The gap kept to the car ahead when both stand still: the Intelligent Driver Model's s0.

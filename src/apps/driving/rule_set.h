@@ -159,6 +159,12 @@ struct RuleSet {
     // every listed one).
     std::vector<ControlKind> controls;
     std::vector<Movement> movementRank;
+    // BETWEEN JUNCTIONS (optional; issue #284): how a meeting filed under no junction is settled -- two junctions' paths,
+    // or a lane and a connector, crowded together (ADR-0400) -- as a settle list asked of each path's own approach and
+    // movement (a lane: no sign, straight on). Only sign_rank, movement and arrived_first mean anything there. Absent
+    // (hasBetweenJunctions false): such a meeting is asked while driving, falling back on the lower path id.
+    bool hasBetweenJunctions = false;
+    std::vector<SettleQuestion> betweenJunctions;
 
     const Device* findDevice(const std::string& deviceName) const;
     const ControlKind* findControl(const std::string& controlName) const;

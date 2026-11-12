@@ -1202,6 +1202,20 @@ and the arrows between parts already had none. A loop made of bodies and queues 
 counted; the lab has none through bodies. One more guard keeps a car waiting inside from being held there: nobody plans
 to go "behind" it, because committing behind it would put it after them.
 
+*As built* (review #284, ADR-0409): **the guarantees now hold for what cars can do, not only for the resolver's
+records.** A car that cannot keep its front short of a crossing point even braking as hard as it can announces so
+(`cannotStop`), and the resolver's second question, `cannot_stop`, puts it first: nobody is told to give way who cannot;
+the hard gap a driver keeps going on is never below its own stopping time. A car that will come to rest before its tail is
+past a stretch (waiting inside, a red at the next close junction, a hold, no room) is never clear of it, so nobody plans to
+go behind it (this replaced the separate guard above). A loop of bodies alone is left standing and shows as gridlock (an
+arrow about space, `StopFor::ForABody`), never answered by telling a car to drive through another. Cars on a lane that
+meets another junction's connector judge those crossing points too, and who goes first there is the rule set's
+`between_junctions`. A car is committed once it can no longer wait short of its next crossing stretch (on it, or unable to
+stop short of it), not a centimetre past its line. A claim through close junctions is granted only with its way through
+them seen clear of every car that could make it wait, its arrival allowing for the car ahead, and is worked out afresh
+every tick until the first line. Which ordering decisions live in the resolver, which in the rule set and which outside on
+purpose is ADR-0409's table.
+
 ## 10. Routes and lane changes
 
 **Routes.** The router works on sections and connectors, starting from the lane the car is actually in and the way it
