@@ -1,9 +1,12 @@
 #include "engine/glb_export.h"
+#include "engine/text/font.h"   // TextImage
 
 #include <tinygltf/tiny_gltf.h>
+#include <tinygltf/stb_image_write.h>
 
 #include <algorithm>
 #include <cstring>
+#include <map>
 
 namespace engine {
 
@@ -35,6 +38,29 @@ bool writeGlb(const std::vector<GlbEntry>& entries, const std::string& path, con
     auto addAccessor = [&](int view, int compType, int type, size_t count) {
         tinygltf::Accessor a; a.bufferView = view; a.byteOffset = 0; a.componentType = compType; a.type = type; a.count = count; model.accessors.push_back(a); return static_cast<int>(model.accessors.size() - 1);
     };
+    // each picture once, as PNG bytes in the buffer, in the order entries first name it
+    std::map<const TextImage*, int> textureOf;
+    auto textureFor = [&](const TextImage* img) {
+        const std::map<const TextImage*, int>::const_iterator found = textureOf.find(img);
+        if (found != textureOf.end()) return found->second;
+        std::vector<unsigned char> png;
+        stbi_write_png_to_func([](void* ctx, void* data, int size) {
+            std::vector<unsigned char>* out = static_cast<std::vector<unsigned char>*>(ctx);
+            const unsigned char* b = static_cast<const unsigned char*>(data);
+            out->insert(out->end(), b, b + size);
+        }, &png, img->w, img->h, 4, img->rgba.data(), img->w * 4);
+        tinygltf::Image image; image.name = "page" + std::to_string(model.images.size()); image.mimeType = "image/png";
+        image.bufferView = addView(png.data(), png.size(), 0);
+        model.images.push_back(image);
+        tinygltf::Sampler sampler; sampler.magFilter = TINYGLTF_TEXTURE_FILTER_LINEAR; sampler.minFilter = TINYGLTF_TEXTURE_FILTER_LINEAR_MIPMAP_LINEAR;
+        sampler.wrapS = sampler.wrapT = TINYGLTF_TEXTURE_WRAP_CLAMP_TO_EDGE;
+        model.samplers.push_back(sampler);
+        tinygltf::Texture tex; tex.source = static_cast<int>(model.images.size() - 1); tex.sampler = static_cast<int>(model.samplers.size() - 1);
+        model.textures.push_back(tex);
+        const int id = static_cast<int>(model.textures.size() - 1);
+        textureOf.emplace(img, id);
+        return id;
+    };
     for (const GlbEntry& e : entries) {
         if (!e.mesh) continue; const RenderMesh& m = *e.mesh; if (m.vertices.empty() || m.indices.empty()) continue;
         const size_t n = m.vertices.size();
@@ -58,7 +84,10 @@ bool writeGlb(const std::vector<GlbEntry>& entries, const std::string& path, con
         const int aTan = addAccessor(vTan, TINYGLTF_COMPONENT_TYPE_FLOAT, TINYGLTF_TYPE_VEC4, n);
         const int aUv = addAccessor(vUv, TINYGLTF_COMPONENT_TYPE_FLOAT, TINYGLTF_TYPE_VEC2, n);
         const int aIdx = addAccessor(vIdx, TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT, TINYGLTF_TYPE_SCALAR, m.indices.size());
-        tinygltf::Material mat; mat.name = e.name; mat.pbrMetallicRoughness.baseColorFactor = {e.color.x, e.color.y, e.color.z, 1.0}; mat.pbrMetallicRoughness.metallicFactor = 0.0; mat.pbrMetallicRoughness.roughnessFactor = e.roughness; mat.doubleSided = true;
+        tinygltf::Material mat; mat.name = e.name; mat.pbrMetallicRoughness.baseColorFactor = {e.color.x, e.color.y, e.color.z, 1.0}; mat.pbrMetallicRoughness.metallicFactor = e.metallic; mat.pbrMetallicRoughness.roughnessFactor = e.roughness; mat.doubleSided = true;
+        if (e.texture && e.texture->w > 0) mat.pbrMetallicRoughness.baseColorTexture.index = textureFor(e.texture);
+        if (e.alphaCut) { mat.alphaMode = "MASK"; mat.alphaCutoff = 0.5; }
+        if (e.materialExtras.is_object() && !e.materialExtras.empty()) mat.extras = toTinyValue(e.materialExtras);
         model.materials.push_back(mat);
         tinygltf::Primitive prim; prim.attributes["POSITION"] = aPos; prim.attributes["NORMAL"] = aNrm; prim.attributes["TANGENT"] = aTan; prim.attributes["TEXCOORD_0"] = aUv;
         if (!uniform) { const int vCol = addView(col.data(), col.size() * 4, TINYGLTF_TARGET_ARRAY_BUFFER); prim.attributes["COLOR_0"] = addAccessor(vCol, TINYGLTF_COMPONENT_TYPE_FLOAT, TINYGLTF_TYPE_VEC3, n); }

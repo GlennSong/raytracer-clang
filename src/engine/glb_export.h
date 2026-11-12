@@ -15,12 +15,21 @@
 
 namespace engine {
 
+struct TextImage;
+
 struct GlbEntry {
     std::string name;            // node, mesh and material name
     const RenderMesh* mesh = nullptr;
     Vec3 color{0.7, 0.7, 0.7};   // material base colour
     float roughness = 0.9f;
     nlohmann::json extras;       // per-node extras (object or null)
+    // A picture on the surface (TEXCOORD_0), embedded as PNG once however many entries share it: a sign face's
+    // atlas page. `alphaCut`: transparent texels are not drawn (glTF alphaMode MASK at 0.5), as the engine's
+    // FLAG_ALPHA_TEST does.
+    const TextImage* texture = nullptr;
+    bool alphaCut = false;
+    float metallic = 0.0f;
+    nlohmann::json materialExtras;   // per-material extras (object or null): data a renderer may use later
 };
 
 bool writeGlb(const std::vector<GlbEntry>& entries, const std::string& path, const nlohmann::json& sceneExtras, std::string* error);

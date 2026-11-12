@@ -452,23 +452,42 @@ std::string signFaceSvg(const SignFace& f, double x, double y, double k) {
     const Font* font = signFont();
     const double capRatio = font ? font->capHeight(100.0f) / 100.0 : 0.7;   // cap height per em
     // text as the font's own OUTLINES (Font::svgPath): the face renders the same in any viewer
+    float xScale = 1.0f;   // the element's condensing, for text()
     auto text = [&](const std::string& t, double tx, double baseline, double cap, const std::string& color, const std::string& anchor) {
         if (!font) {
             o << "<text x=\"" << tx << "\" y=\"" << baseline << "\" font-size=\"" << cap / capRatio << "\" fill=\"" << color << "\" text-anchor=\"" << anchor << "\">" << t << "</text>";
             return;
         }
         const float P = static_cast<float>(cap / capRatio);   // the em that gives this cap height
-        const double w = font->measure(t, P);
+        const double w = font->measure(t, P, xScale);
         const double x0 = anchor == "middle" ? tx - w / 2 : anchor == "end" ? tx - w : tx;
-        o << "<path fill=\"" << color << "\" d=\"" << font->svgPath(t, static_cast<float>(x0), static_cast<float>(baseline), P) << "\"/>";
+        o << "<path fill=\"" << color << "\" d=\"" << font->svgPath(t, static_cast<float>(x0), static_cast<float>(baseline), P, xScale) << "\"/>";
     };
     o << "<g transform=\"translate(" << x << ' ' << y << ") scale(" << k << ")\">";
     for (const SignElem& e : f.elems)
         if (e.kind == "tab") o << "<rect x=\"" << e.x << "\" y=\"" << e.y << "\" width=\"" << e.w << "\" height=\"" << e.h + 0.08 << "\" rx=\"0.1\" fill=\"" << kGreen
                                << "\" stroke=\"#fff\" stroke-width=\"0.04\"/>", text(e.text, e.x + e.w / 2, e.y + e.h * 0.5 + e.cap / 2, e.cap, "#fff", "middle");
-    o << "<rect width=\"" << f.w << "\" height=\"" << f.h << "\" rx=\"0.12\" fill=\"" << f.background << "\"/>";
+    if (f.background != "none") o << "<rect width=\"" << f.w << "\" height=\"" << f.h << "\" rx=\"0.12\" fill=\"" << f.background << "\"/>";
     for (const SignElem& e : f.elems) {
-        if (e.kind == "rect" && e.anchor == "stroke")
+        xScale = static_cast<float>(e.xScale);
+        if (e.kind == "poly" || e.kind == "line") {
+            // a symbol's points sit millimetres apart: written finer than the rest of the face
+            o.precision(4);
+            if (e.kind == "poly") {
+                o << "<path fill-rule=\"evenodd\" fill=\"" << e.color << "\" d=\"";
+                for (const std::vector<std::pair<double, double>>& ring : e.rings) {
+                    for (std::size_t i = 0; i < ring.size(); ++i) o << (i ? "L" : "M") << ring[i].first << ' ' << ring[i].second;
+                    o << "Z";
+                }
+                o << "\"/>";
+            } else if (!e.rings.empty()) {
+                o << "<polyline fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke=\"" << e.color << "\" stroke-width=\""
+                  << e.cap << "\" points=\"";
+                for (const std::pair<double, double>& p : e.rings[0]) o << p.first << ',' << p.second << ' ';
+                o << "\"/>";
+            }
+            o.precision(2);
+        } else if (e.kind == "rect" && e.anchor == "stroke")
             o << "<rect x=\"" << e.x << "\" y=\"" << e.y << "\" width=\"" << e.w << "\" height=\"" << e.h << "\" rx=\"" << e.radius << "\" fill=\"none\" stroke=\"" << e.color << "\" stroke-width=\"" << e.cap << "\"/>";
         else if (e.kind == "rect")
             o << "<rect x=\"" << e.x << "\" y=\"" << e.y << "\" width=\"" << e.w << "\" height=\"" << e.h << "\" fill=\"" << e.color << "\"/>";

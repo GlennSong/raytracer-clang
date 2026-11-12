@@ -25,6 +25,12 @@ namespace engine {
 // One face, drawn at `pxPerMetre`; `tabAbove` gets the metres of exit tab over the panel's top edge.
 TextImage rasterizeSignFace(const SignFace& f, const Font& font, double pxPerMetre, double* tabAbove = nullptr);
 
+// SHELF-PACK face images onto square pages, in order, a pixel of air round each: the pages, and where each image's
+// top-left corner went (`places[i]`: its page, and x, y such that the image sits at x + 1, y + 1; page -1 when it is
+// bigger than a page). The road-sign atlas and the sign kit (sign_kit.h) both pack through this.
+struct SignImagePlace { int page = -1; int x = 0, y = 0; };
+std::vector<TextImage> packSignImages(const std::vector<TextImage>& images, int pageSize, std::vector<SignImagePlace>& places);
+
 struct RoadSignAtlas {
     std::vector<TextImage> pages;
     struct Slot {

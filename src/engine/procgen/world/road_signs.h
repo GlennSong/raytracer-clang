@@ -34,18 +34,24 @@ namespace engine {
 
 // A piece of a sign face, in metres from its top-left corner.
 struct SignElem {
-    std::string kind;          // "rect", "text", "shield", "arrow", "disc"
+    std::string kind;          // "rect", "text", "shield", "arrow", "disc", "poly", "line"
     double x = 0, y = 0, w = 0, h = 0;
     std::string text;          // text; a shield's number
-    double cap = 0;            // text: cap height (m); y is its baseline
+    double cap = 0;            // text: cap height (m); y is its baseline. "line" and a stroked rect: the stroke's width
     std::string color = "#ffffff";
     std::string anchor = "start";   // text: start, middle, end
     double angle = 0;          // arrow: degrees clockwise from straight up (-45: up and left)
     double radius = 0;         // rect: corner radius
+    double xScale = 1;         // text: letters this much narrower (< 1) than the font draws them (a condensed series)
+    // "poly": a flat shape filled from these rings, even-odd (a ring inside another is a hole: a border band, a
+    // circle's outline); "line": rings[0] drawn as a stroke `cap` wide with round ends and joints (a symbol's limbs)
+    std::vector<std::vector<std::pair<double, double>>> rings;
 };
 
 struct SignFace {
     double w = 1, h = 1;
+    // the panel's colour, filled as a rounded rectangle under the elements; "none": no panel (the face draws its own
+    // plate shape with "poly" elements -- an octagon, a triangle, a diamond -- and is transparent outside it)
     std::string background = "#00693f";   // the US guide-sign green
     std::vector<SignElem> elems;
 };

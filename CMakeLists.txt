@@ -687,6 +687,22 @@ add_executable(rt_bake tools/rt_bake.cpp)
 target_link_libraries(rt_bake PRIVATE engine_core Threads::Threads)
 target_include_directories(rt_bake PRIVATE src)
 
+# The sign kit (ahead of #241): US road signs as data (assets/scripts/signs_us.lua over sign_kit.lua), faces drawn
+# into the road-sign atlas (ADR-0110), models from the mesh words. sign_tool writes the gallery (out/signlab);
+# sign_tests: every sign builds, passes the mesh audit, is deterministic, and a sign written only in Lua builds.
+if(RT_ENABLE_SCRIPTING)
+    target_sources(engine_core PRIVATE src/engine/procgen/world/sign_kit.cpp src/engine/scripting/sign_kit_lua.cpp)
+    add_executable(sign_tool tools/sign_tool.cpp)
+    target_include_directories(sign_tool PRIVATE src)
+    target_compile_options(sign_tool PRIVATE -Wall -Wextra)
+    target_link_libraries(sign_tool PRIVATE engine_core)
+    add_executable(sign_tests tests/main.cpp tests/test_sign_kit.cpp)
+    target_include_directories(sign_tests PRIVATE src tests)
+    target_compile_options(sign_tests PRIVATE -Wall -Wextra)
+    target_link_libraries(sign_tests PRIVATE engine_core)
+    add_test(NAME sign_tests COMMAND sign_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
+
 # ============================================================
 # Audio (ADR-0069) — miniaudio, a single-header C submodule pinned at a
 # release tag, sealed behind AudioEngine. Cross-platform and device-optional

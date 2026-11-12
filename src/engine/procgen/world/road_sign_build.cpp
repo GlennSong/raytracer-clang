@@ -68,11 +68,12 @@ TextImage rasterizeSignFace(const SignFace& f, const Font& font, double k, doubl
     auto X = [&](double m) { return 1.0 + m * k; };
     auto Y = [&](double m) { return 1.0 + (m + oy) * k; };
     const float capRatio = font.capHeight(100.0f) / 100.0f;
-    auto text = [&](const std::string& t, double x, double baseline, double cap, const uint8_t c[4], const std::string& anchor) {
+    auto text = [&](const std::string& t, double x, double baseline, double cap, const uint8_t c[4], const std::string& anchor,
+                    double xScale = 1.0) {
         const float P = static_cast<float>(cap * k / capRatio);
-        const double w = font.measure(t, P);
+        const double w = font.measure(t, P, static_cast<float>(xScale));
         const double x0 = anchor == "middle" ? X(x) - w / 2 : anchor == "end" ? X(x) - w : X(x);
-        font.draw(img, t, static_cast<float>(x0), static_cast<float>(Y(baseline)), P, c);
+        font.draw(img, t, static_cast<float>(x0), static_cast<float>(Y(baseline)), P, c, static_cast<float>(xScale));
     };
     uint8_t bg[4], white[4], green[4], black[4];
     parseHex(f.background, bg);
@@ -88,11 +89,47 @@ TextImage rasterizeSignFace(const SignFace& f, const Font& font, double k, doubl
                       [&](double x, double y) { return inRoundRect(x, y, X(e.x + 0.04), Y(e.y + 0.04), (e.w - 0.08) * k, (e.h) * k, 0.08 * k); });
             text(e.text, e.x + e.w / 2, e.y + e.h * 0.5 + e.cap / 2, e.cap, white, "middle");
         }
-    fillShape(img, X(0), Y(0), X(f.w), Y(f.h), bg, [&](double x, double y) { return inRoundRect(x, y, X(0), Y(0), f.w * k, f.h * k, 0.12 * k); });
+    if (f.background != "none")
+        fillShape(img, X(0), Y(0), X(f.w), Y(f.h), bg, [&](double x, double y) { return inRoundRect(x, y, X(0), Y(0), f.w * k, f.h * k, 0.12 * k); });
     for (const SignElem& e : f.elems) {
         uint8_t c[4];
         parseHex(e.color, c);
-        if (e.kind == "rect" && e.anchor == "stroke") {
+        if ((e.kind == "poly" || e.kind == "line") && !e.rings.empty()) {
+            // a flat shape (rings filled even-odd) or a stroke along rings[0], in pixels
+            std::vector<std::vector<std::pair<double, double>>> px;
+            double bx0 = 1e30, by0 = 1e30, bx1 = -1e30, by1 = -1e30;
+            for (const std::vector<std::pair<double, double>>& ring : e.rings) {
+                px.emplace_back();
+                for (const std::pair<double, double>& p : ring) {
+                    px.back().push_back({X(p.first), Y(p.second)});
+                    bx0 = std::min(bx0, px.back().back().first); bx1 = std::max(bx1, px.back().back().first);
+                    by0 = std::min(by0, px.back().back().second); by1 = std::max(by1, px.back().back().second);
+                }
+                if (e.kind == "line") break;
+            }
+            if (e.kind == "poly") {
+                fillShape(img, bx0, by0, bx1, by1, c, [&](double x, double y) {
+                    bool in = false;
+                    for (const std::vector<std::pair<double, double>>& ring : px)
+                        if (ring.size() >= 3 && inPolygon(ring, x, y)) in = !in;
+                    return in;
+                });
+            } else {
+                const double r = e.cap * k / 2, r2 = r * r;
+                const std::vector<std::pair<double, double>>& P = px[0];
+                fillShape(img, bx0 - r, by0 - r, bx1 + r, by1 + r, c, [&](double x, double y) {
+                    for (std::size_t i = 0; i < P.size(); ++i) {
+                        const std::pair<double, double>& a = P[i];
+                        const std::pair<double, double>& b = P[i + 1 < P.size() ? i + 1 : i];
+                        const double dx = b.first - a.first, dy = b.second - a.second, len2 = dx * dx + dy * dy;
+                        const double t = len2 > 0 ? std::clamp(((x - a.first) * dx + (y - a.second) * dy) / len2, 0.0, 1.0) : 0.0;
+                        const double ex = a.first + dx * t - x, ey = a.second + dy * t - y;
+                        if (ex * ex + ey * ey <= r2) return true;
+                    }
+                    return false;
+                });
+            }
+        } else if (e.kind == "rect" && e.anchor == "stroke") {
             // a border: the ring between the rect and the rect inset by its width
             const double sw = e.cap;
             fillShape(img, X(e.x - sw / 2), Y(e.y - sw / 2), X(e.x + e.w + sw / 2), Y(e.y + e.h + sw / 2), c, [&](double x, double y) {
@@ -105,7 +142,7 @@ TextImage rasterizeSignFace(const SignFace& f, const Font& font, double k, doubl
             const double cx = X(e.x + e.w / 2), cy = Y(e.y + e.h / 2), r = e.w / 2 * k;
             fillShape(img, cx - r, cy - r, cx + r, cy + r, c, [&](double x, double y) { return (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r; });
         } else if (e.kind == "text") {
-            text(e.text, e.x, e.y, e.cap, c, e.anchor);
+            text(e.text, e.x, e.y, e.cap, c, e.anchor, e.xScale);
         } else if (e.kind == "shield") {
             // white, a flat top and a pointed foot (the SVG's quadratic curves, sampled), a black rim
             std::vector<std::pair<double, double>> P;
@@ -142,6 +179,29 @@ TextImage rasterizeSignFace(const SignFace& f, const Font& font, double k, doubl
         }
     }
     return img;
+}
+
+std::vector<TextImage> packSignImages(const std::vector<TextImage>& images, int pageSize, std::vector<SignImagePlace>& places) {
+    std::vector<TextImage> pages;
+    places.assign(images.size(), SignImagePlace());
+    const uint8_t clear[4] = {0, 0, 0, 0};
+    int x = 0, y = 0, rowH = 0;
+    auto newPage = [&] { TextImage p; p.resize(pageSize, pageSize, clear); pages.push_back(std::move(p)); x = y = rowH = 0; };
+    newPage();
+    for (std::size_t i = 0; i < images.size(); ++i) {
+        const TextImage& face = images[i];
+        if (face.w + 2 > pageSize || face.h + 2 > pageSize) continue;
+        if (x + face.w + 2 > pageSize) { x = 0; y += rowH + 2; rowH = 0; }
+        if (y + face.h + 2 > pageSize) newPage();
+        TextImage& pg = pages.back();
+        for (int j = 0; j < face.h; ++j)
+            std::copy_n(&face.rgba[static_cast<std::size_t>(j) * face.w * 4], static_cast<std::size_t>(face.w) * 4,
+                        &pg.rgba[(static_cast<std::size_t>(y + 1 + j) * pageSize + x + 1) * 4]);
+        places[i] = {static_cast<int>(pages.size()) - 1, x, y};
+        x += face.w + 2;
+        rowH = std::max(rowH, face.h);
+    }
+    return pages;
 }
 
 nlohmann::json roadSignsToJson(const std::vector<IslandSign>& signs) {
@@ -210,35 +270,33 @@ RoadSignAtlas bakeRoadSignAtlas(const std::vector<IslandSign>& signs, const Font
         }
     }
     // BAKE: faces shelf-packed onto pages, a pixel of air round each
-    const uint8_t clear[4] = {0, 0, 0, 0};
-    int x = 0, y = 0, rowH = 0;
-    auto newPage = [&] { TextImage p; p.resize(pageSize, pageSize, clear); at.pages.push_back(std::move(p)); x = y = rowH = 0; };
-    newPage();
+    std::vector<SignFace> faces;
+    std::vector<TextImage> images;
+    std::vector<double> tabs;
     for (const IslandSign& s : signs) {
-        const SignFace f = layoutSign(s);
+        faces.push_back(layoutSign(s));
         double tab = 0;
-        const TextImage face = rasterizeSignFace(f, font, k, &tab);
-        if (face.w + 2 > pageSize || face.h + 2 > pageSize) { at.slots.push_back({}); continue; }
-        if (x + face.w + 2 > pageSize) { x = 0; y += rowH + 2; rowH = 0; }
-        if (y + face.h + 2 > pageSize) newPage();
-        TextImage& pg = at.pages.back();
-        for (int j = 0; j < face.h; ++j)
-            std::copy_n(&face.rgba[static_cast<std::size_t>(j) * face.w * 4], static_cast<std::size_t>(face.w) * 4,
-                        &pg.rgba[(static_cast<std::size_t>(y + 1 + j) * pageSize + x + 1) * 4]);
+        images.push_back(rasterizeSignFace(faces.back(), font, k, &tab));
+        tabs.push_back(tab);
+    }
+    std::vector<SignImagePlace> places;
+    at.pages = packSignImages(images, pageSize, places);
+    for (std::size_t i = 0; i < images.size(); ++i) {
+        const SignImagePlace& p = places[i];
+        const TextImage& face = images[i];
+        if (p.page < 0) { at.slots.push_back({}); continue; }
         RoadSignAtlas::Slot sl;
-        sl.page = static_cast<int>(at.pages.size()) - 1;
-        // the face's panel and tab, inside the canvas's one-pixel margin
-        sl.u0 = static_cast<float>(x + 2) / pageSize;
-        sl.v0 = static_cast<float>(y + 2) / pageSize;
-        sl.u1 = static_cast<float>(x + face.w) / pageSize;
-        sl.v1 = static_cast<float>(y + face.h) / pageSize;
-        sl.w = f.w;
-        sl.h = f.h;
-        sl.tab = tab;
-        for (const SignElem& e : f.elems) if (e.kind == "tab") sl.tabW = e.w;
+        sl.page = p.page;
+        // the face's panel and tab, inside the canvas's one-pixel margin (the canvas is at x + 1, y + 1)
+        sl.u0 = static_cast<float>(p.x + 2) / pageSize;
+        sl.v0 = static_cast<float>(p.y + 2) / pageSize;
+        sl.u1 = static_cast<float>(p.x + face.w) / pageSize;
+        sl.v1 = static_cast<float>(p.y + face.h) / pageSize;
+        sl.w = faces[i].w;
+        sl.h = faces[i].h;
+        sl.tab = tabs[i];
+        for (const SignElem& e : faces[i].elems) if (e.kind == "tab") sl.tabW = e.w;
         at.slots.push_back(sl);
-        x += face.w + 2;
-        rowH = std::max(rowH, face.h);
     }
     if (!meta.empty()) {
         std::error_code ec;
