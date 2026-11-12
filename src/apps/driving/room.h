@@ -164,11 +164,14 @@ RoomRoads studyRoomRoads(const engine::LaneGraph& roads, Real clearOfCrosswalk);
 // vehicles can only pass through the next junction without stopping), whether that junction makes everyone stop first
 // (then they can never use it), and, where both junctions have lights, each pair of turns through the two whose lights
 // let a car arriving from rest through less often than once in room_cycles_through of the longer cycle (then such a car
-// waits at the first line that long, or for ever: the two lights want one programme). One line each.
+// waits at the first line that long, or for ever: the two lights want one programme). Where the stretch after the next
+// junction is too short as well, the whole chain of turns the claim passes through is judged the same way, the lights of
+// every junction on it together (issue #265). One line each.
 struct RoomRoadReport {
     uint32_t shortStretches = 0;         // stretches shorter than the longest vehicle class needs
     uint32_t blockedByAStop = 0;         // ... ending at a junction where everyone stops first: some class never fits
-    uint32_t turnPairsTooSeldom = 0;     // pairs of turns at two lit junctions that let it through too seldom
+    uint32_t turnPairsTooSeldom = 0;     // chains of turns through lit junctions that let it through too seldom
+    uint32_t turnChainsTooSeldom = 0;    // ... of them, chains through three junctions or more
     std::vector<std::string> lines;
 };
 RoomRoadReport reportRoomRoads(const engine::LaneGraph& roads, const RightOfWay& row, const RuleSet& rules,
@@ -176,9 +179,12 @@ RoomRoadReport reportRoomRoads(const engine::LaneGraph& roads, const RightOfWay&
                                const RoomNumbers& numbers, bool lightsRun, Real comfortableSideAccel);
 
 // THE TURNS CLOSED TO A CLASS for want of room, sorted: a connector into a stretch the class cannot stop in where every
-// way on through the next junction is barred to it -- the road ends there, everyone stops first there, or (both
-// junctions with lights) the two lights let the class through, arriving from rest at the first line on its green, less
-// often than once in room_cycles_through of the longer cycle, or never: the two programmes are not coordinated for it.
+// way on through the next junctions (as many as the claim would pass through: room_through_junctions) is barred to it --
+// the road ends, everyone stops first, no stretch it can stop in comes within the limit, or the lights on the way let the
+// class through, arriving from rest at the first line on its green, less often than once in room_cycles_through of the
+// longest cycle, or never: the programmes are not coordinated for it. (Before #265 only the next junction was looked at,
+// so a chain through two close junctions to lights that never let the car in could be routed, and its car waited for
+// ever: the soak found one wait of 1,129 s.)
 // A car routed through one would wait at its line that long or for ever,
 // so Driving closes them to the class's routes (route.h RouteClass::closed), as a turn too tight for it is closed; the
 // report above names them.

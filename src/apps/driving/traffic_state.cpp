@@ -170,6 +170,37 @@ Neighbour carAhead(const engine::LaneGraph& roads, const std::vector<Car>& cars,
             best.gap = gap;
         }
     }
+    // THE CARS ON A SPLIT'S OTHER PATH (issue #283). Two paths leaving one lane run within touching distance over the
+    // split's stretch (ADR-0400), and there the car behind follows the car ahead (right_of_way.h SettledBy::Split): a
+    // car whose body is on the other path's stretch, and whose front is further along than mine, is a car ahead of me,
+    // at the place its rear is level with on my path (the two stretches matched end to end). Without this, a car that
+    // left my lane by the other path vanished from my following as soon as its tail was off the lane.
+    const auto splitSiblings = [&](engine::PathId path, Real toStart) {
+        const engine::Path& p = roads.paths[path.index];
+        for (uint32_t k = p.crossings.first; k < p.crossings.end() && k < roads.pathCrossings.size(); ++k) {
+            const engine::CrossingPoint& rec = roads.crossings[roads.pathCrossings[k].index];
+            if (rec.otherSide != engine::OtherSide::Path || rec.meeting != engine::Meeting::Split) continue;
+            const bool mineIsA = rec.a == path;
+            const engine::PathId other = mineIsA ? rec.otherPath() : rec.a;
+            if (!knownPath(roads, other)) continue;
+            const Real myFrom = mineIsA ? rec.aFrom : rec.otherFrom, myTo = mineIsA ? rec.aTo : rec.otherTo;
+            const Real theirFrom = mineIsA ? rec.otherFrom : rec.aFrom, theirTo = mineIsA ? rec.otherTo : rec.aTo;
+            if (toStart + myTo <= 0) continue;   // my front is past the stretch: the two paths are apart here
+            const Real scale = theirTo > theirFrom ? (myTo - myFrom) / (theirTo - theirFrom) : Real(1);
+            for (const PathEntry& e : lists.on(other)) {
+                if (e.car == me || e.rear > theirTo || e.front < theirFrom) continue;
+                const Real frontHere = myFrom + (e.front - theirFrom) * scale;
+                const Real rearHere = myFrom + (std::max(e.rear, theirFrom) - theirFrom) * scale;
+                if (toStart + frontHere <= 0) continue;   // not ahead of my front
+                const Real gap = toStart + rearHere;
+                if (gap <= lookAhead && nearer(e, gap, best)) {
+                    best.car = e.car;
+                    best.gap = gap;
+                }
+            }
+        }
+    };
+    splitSiblings(mine->path, -mine->along);
     // On the paths ahead, each starting `toStart` metres past my front.
     Real toStart = roads.paths[mine->path.index].length - mine->along;
     for (const engine::PathId path : pathsAhead) {
@@ -182,6 +213,7 @@ Neighbour carAhead(const engine::LaneGraph& roads, const std::vector<Car>& cars,
                 best.gap = gap;
             }
         }
+        splitSiblings(path, toStart);
         toStart += roads.paths[path.index].length;
     }
     if (best.found()) {

@@ -5,8 +5,10 @@
 #include "apps/driving/signal_programme.h"   // lampAt: the lights, a pure function of the clock
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <limits>
 #include <tuple>
 #include <utility>
@@ -229,25 +231,52 @@ StretchShape stretchFrom(const engine::LaneGraph& roads, engine::PathId lane) {
     return s;
 }
 
-// HOW LONG A CAR OF CLASS `cls` CAN WAIT at `c1`'s line, at rest, for the two lights to let it through `c2` (the turn
-// after a stretch of `length` it cannot stop in): the longest time between moments when `c1` is green and `c2` lets it in
-// from its arrival for room_arrival_slack, over a few of the longer cycle (taken as repeating), seconds. Zero where
-// either junction's lights do not run; kFar where the two never line up.
-Real longestWaitInTurn(const engine::LaneGraph& roads, const RightOfWay& row, const RoadRules& roadRules,
-                       engine::PathId c1, engine::PathId c2, Real length, const VehicleClass& cls,
-                       const RoomNumbers& numbers, bool lightsRun, Real comfortableSideAccel) {
-    const engine::JunctionId from = roads.paths[c1.index].junction, to = roads.paths[c2.index].junction;
-    if (!lightsRun || !lightsRunAt(row, from) || !lightsRunAt(row, to)) return 0;
-    const Real horizon = kReportCycles * std::max(row.junctions[from.index].cycle, row.junctions[to.index].cycle);
+// ONE WAY THROUGH JUNCTIONS TOO CLOSE TO STOP BETWEEN, as a claim for room passes through them (RoomLedger::measure):
+// the turns taken one after another without stopping, the first at the line the car waits at, and how far beyond that
+// line each turn begins (metres; the first's is 0).
+struct TurnChain {
+    std::array<engine::PathId, kMaxRoomJunctions> turns{};
+    std::array<Real, kMaxRoomJunctions> lineAt{};
+    std::size_t count = 0;
+};
+
+// HOW LONG A CAR OF CLASS `cls` CAN WAIT at the chain's first line, at rest, for the lights to let it through every turn
+// of the chain: the longest time between moments when the first turn is green and each later turn with lights lets it
+// in from its arrival for room_arrival_slack, over a few of the longest cycle (taken as repeating), seconds. Zero where
+// the first junction's lights do not run or no later one's do; kFar where they never line up. `cycle` gets the longest
+// cycle of the chain's lights.
+Real longestWaitThrough(const engine::LaneGraph& roads, const RightOfWay& row, const RoadRules& roadRules,
+                        const TurnChain& chain, const VehicleClass& cls, const RoomNumbers& numbers, bool lightsRun,
+                        Real comfortableSideAccel, Real* cycle = nullptr) {
+    if (cycle) *cycle = 0;
+    if (!lightsRun || chain.count < 2) return 0;
+    const engine::PathId c1 = chain.turns[0];
+    if (!lightsRunAt(row, roads.paths[c1.index].junction)) return 0;
+    Real longestCycle = row.junctions[roads.paths[c1.index].junction.index].cycle;
+    bool laterLights = false;
+    for (std::size_t j = 1; j < chain.count; ++j) {
+        const engine::JunctionId at = roads.paths[chain.turns[j].index].junction;
+        if (!lightsRunAt(row, at)) continue;
+        laterLights = true;
+        longestCycle = std::max(longestCycle, row.junctions[at.index].cycle);
+    }
+    if (!laterLights) return 0;
+    if (cycle) *cycle = longestCycle;
+    const Real horizon = kReportCycles * longestCycle;
     Mover m;
     m.speedUp = cls.speedUp;
     m.brake = cls.brake;
     m.speedThrough = speedThrough(roads, roadRules, c1, cls.topSpeed, comfortableSideAccel);
-    const Real eta = secondsToCover(roads.paths[c1.index].length + length, m);
+    std::array<Real, kMaxRoomJunctions> eta{};
+    for (std::size_t j = 1; j < chain.count; ++j) eta[j] = secondsToCover(chain.lineAt[j], m);
     Real first = -1, last = -1, longest = 0;
     for (Real t = 0; t < horizon; t += kLampLookEvery) {
-        if (lampAt(roads, row, c1, t) != Lamp::Green || !letsInThrough(roads, row, c2, t + eta, numbers.arrivalSlack))
-            continue;
+        if (lampAt(roads, row, c1, t) != Lamp::Green) continue;
+        bool through = true;
+        for (std::size_t j = 1; j < chain.count && through; ++j)
+            through = !lightsRunAt(row, roads.paths[chain.turns[j].index].junction) ||
+                      letsInThrough(roads, row, chain.turns[j], t + eta[j], numbers.arrivalSlack);
+        if (!through) continue;
         if (last >= 0) longest = std::max(longest, t - last);
         if (first < 0) first = t;
         last = t;
@@ -256,16 +285,77 @@ Real longestWaitInTurn(const engine::LaneGraph& roads, const RightOfWay& row, co
     return std::max(longest, horizon - last + first);   // and round the end, the lights repeating
 }
 
-// ... as a share of the longer of the two junctions' cycles (how many cycles a car may wait there).
+// ... as a share of the longest cycle of the chain's lights (how many cycles a car may wait there).
 Real longestWaitInCycles(const engine::LaneGraph& roads, const RightOfWay& row, const RoadRules& roadRules,
-                         engine::PathId c1, engine::PathId c2, Real length, const VehicleClass& cls,
-                         const RoomNumbers& numbers, bool lightsRun, Real comfortableSideAccel) {
+                         const TurnChain& chain, const VehicleClass& cls, const RoomNumbers& numbers, bool lightsRun,
+                         Real comfortableSideAccel) {
+    Real cycle = 0;
     const Real wait =
-        longestWaitInTurn(roads, row, roadRules, c1, c2, length, cls, numbers, lightsRun, comfortableSideAccel);
+        longestWaitThrough(roads, row, roadRules, chain, cls, numbers, lightsRun, comfortableSideAccel, &cycle);
     if (!(wait > 0) || !std::isfinite(wait)) return wait;
-    const Real cycle = std::max(row.junctions[roads.paths[c1.index].junction.index].cycle,
-                                row.junctions[roads.paths[c2.index].junction.index].cycle);
     return cycle > 0 ? wait / cycle : kFar;
+}
+
+// THE WAYS A CAR OF CLASS `cls` WAITING AT `c1`'s LINE CAN BE GRANTED ROOM THROUGH, `c1` leading into a stretch too short
+// for it (issue #265): every chain of turns its claim would pass through, as RoomLedger::measure goes on (each next
+// junction's turns while the stretch before it is too short), up to room_through_junctions, ending in a stretch it can
+// stop in. Each chain is handed to `visit` with how it ends: THROUGH (it lets the car through often enough: once in
+// room_cycles_through of its longest cycle, arriving from rest), TOO SELDOM (it ends in such a stretch, but its lights line
+// up less often than that), or NEVER (no stretch to stop in within the limit, everyone stops first at a junction on it,
+// or its lights never line up). `visit` returns false to stop looking. Same chains, same order, every run (the graph's
+// order). Before #265 only the next junction's turns were looked at, so a car whose claim had to pass through two close
+// junctions to lights that never let it in as it got there was sent that way and waited for ever.
+enum class ChainEnds : uint8_t { Through, TooSeldom, Never };
+template <typename Visit>
+void waysThrough(const engine::LaneGraph& roads, const RightOfWay& row, const RuleSet& rules, const RoadRules& roadRules,
+                 const RoomRoads& layout, const RoomNumbers& numbers, bool lightsRun, Real comfortableSideAccel,
+                 const VehicleClass& cls, engine::PathId c1, Visit visit) {
+    const Real need = roomNeeded(cls, numbers.standstillGap);
+    const std::size_t most = std::min<std::size_t>(numbers.throughJunctions, kMaxRoomJunctions);
+    TurnChain chain;
+    chain.turns[0] = c1;
+    chain.count = 1;
+    // Walks on from the chain's last turn; false once `visit` asks to stop.
+    const std::function<bool()> walk = [&]() -> bool {
+        const engine::PathId lastTurn = chain.turns[chain.count - 1];
+        const engine::PathId lane = onlyNext(roads, lastTurn);
+        if (!knownPath(roads, lane)) return visit(chain, ChainEnds::Never);
+        const StretchShape s = stretchFrom(roads, lane);
+        const Real room = s.length - (lane.index < layout.roomFrom.size() ? layout.roomFrom[lane.index] : Real(0));
+        if (room >= need) {
+            if (chain.count < 2) return visit(chain, ChainEnds::Through);
+            const Real cycles =
+                longestWaitInCycles(roads, row, roadRules, chain, cls, numbers, lightsRun, comfortableSideAccel);
+            return visit(chain, cycles <= numbers.cyclesThrough ? ChainEnds::Through
+                                : std::isfinite(cycles)         ? ChainEnds::TooSeldom
+                                                                : ChainEnds::Never);
+        }
+        if (!s.atJunction || chain.count >= most) return visit(chain, ChainEnds::Never);
+        const engine::Path& last = roads.paths[s.last.index];
+        const Real nextLine = chain.lineAt[chain.count - 1] + roads.paths[lastTurn.index].length + s.length;
+        for (uint32_t k = last.next.first; k < last.next.end(); ++k) {
+            const engine::PathId next = roads.nextPaths[k];
+            if (stopsEveryoneFirst(roads, row, rules, roadRules, next, numbers.atLineWithin)) {
+                if (!visit(chain, ChainEnds::Never)) return false;
+                continue;
+            }
+            chain.turns[chain.count] = next;
+            chain.lineAt[chain.count] = nextLine;
+            ++chain.count;
+            const bool goOn = walk();
+            --chain.count;
+            if (!goOn) return false;
+        }
+        return true;
+    };
+    walk();
+}
+
+// The chain in words: "connector a then b then c".
+std::string chainWords(const TurnChain& chain) {
+    std::string out = "connector " + std::to_string(chain.turns[0].index);
+    for (std::size_t j = 1; j < chain.count; ++j) out += " then " + std::to_string(chain.turns[j].index);
+    return out;
 }
 
 }  // namespace
@@ -282,15 +372,19 @@ std::vector<engine::PathId> turnsClosedForRoom(const engine::LaneGraph& roads, c
         if (in.first == in.second || roads.paths[l].kind != engine::PathKind::Lane) continue;
         const StretchShape s = stretchFrom(roads, lane);
         if (s.length - layout.roomFrom[l] >= need) continue;
-        const engine::Path& last = roads.paths[s.last.index];
+        // Closed when no way on lets the class through often enough. (The router closes turns one at a time, so where
+        // one way on is fine and another never is -- the soak's 1,129 s at junction 106: on through 87, straight on at
+        // 88 never in turn, the near turn at 88 fine -- the turn stays open and a car routed the bad way still waits
+        // for ever. Closing the turn whenever any way on never works was tried: 183 turns closed instead of 150, and
+        // the traffic it pushed elsewhere stood up to 145 s for room in five minutes. Owed: routes that avoid a bad
+        // continuation, or a driver refused for good taking another way (design 9.6 point 2).)
         for (const engine::PathId* c1 = in.first; c1 != in.second; ++c1) {
             bool someWay = false;
-            for (uint32_t k = last.next.first; s.atJunction && k < last.next.end() && !someWay; ++k) {
-                const engine::PathId c2 = roads.nextPaths[k];
-                someWay = !stopsEveryoneFirst(roads, row, rules, roadRules, c2, numbers.atLineWithin) &&
-                          longestWaitInCycles(roads, row, roadRules, *c1, c2, s.length, cls, numbers, lightsRun,
-                                              comfortableSideAccel) <= numbers.cyclesThrough;
-            }
+            waysThrough(roads, row, rules, roadRules, layout, numbers, lightsRun, comfortableSideAccel, cls, *c1,
+                        [&](const TurnChain&, ChainEnds ends) {
+                            someWay = ends == ChainEnds::Through;
+                            return !someWay;
+                        });
             if (!someWay) out.push_back(*c1);
         }
     }
@@ -340,21 +434,28 @@ RoomRoadReport reportRoomRoads(const engine::LaneGraph& roads, const RightOfWay&
         // Two junctions with lights: each pair of turns through the two whose lights let the shortest class that does not
         // fit through, arriving from rest at the first line, less often than once in room_cycles_through of the longer
         // cycle (sampled over a few of it): closed to it (turnsClosedForRoom).
-        if (atJunction && lightsRun && lightsRunAt(row, from) && lightsRunAt(row, to)) {
+        // Through two junctions, or more where the stretch after the next is too short too (the chains the claim passes
+        // through, issue #265).
+        if (atJunction && lightsRun && lightsRunAt(row, from)) {
             for (const engine::PathId* c1 = in.first; c1 != in.second; ++c1)
-                for (uint32_t k = last.next.first; k < last.next.end(); ++k) {
-                    const engine::PathId c2 = roads.nextPaths[k];
-                    if (longestWaitInCycles(roads, row, roadRules, *c1, c2, length, *shortest, numbers, lightsRun,
-                                            comfortableSideAccel) <= numbers.cyclesThrough)
-                        continue;
-                    const Real wait = longestWaitInTurn(roads, row, roadRules, *c1, c2, length, *shortest, numbers,
-                                                        lightsRun, comfortableSideAccel);
-                    ++out.turnPairsTooSeldom;
-                    line += "; connector " + std::to_string(c1->index) + " then " + std::to_string(c2.index) + ": " +
-                            (std::isfinite(wait) ? "in turn for it only once in " + one(wait) + " s"
-                                                 : std::string("never in turn for it")) +
-                            " (it would wait at junction " + std::to_string(from.index) + "'s line)";
-                }
+                waysThrough(roads, row, rules, roadRules, layout, numbers, lightsRun, comfortableSideAccel, *shortest, *c1,
+                            [&](const TurnChain& chain, ChainEnds ends) {
+                                if (ends == ChainEnds::Through || chain.count < 2) return true;
+                                const Real wait = longestWaitThrough(roads, row, roadRules, chain, *shortest, numbers,
+                                                                     lightsRun, comfortableSideAccel);
+                                // (lights that line up often enough, or none: it was refused for another reason)
+                                if (!(wait > 0) ||
+                                    longestWaitInCycles(roads, row, roadRules, chain, *shortest, numbers, lightsRun,
+                                                        comfortableSideAccel) <= numbers.cyclesThrough)
+                                    return true;
+                                ++out.turnPairsTooSeldom;
+                                if (chain.count > 2) ++out.turnChainsTooSeldom;
+                                line += "; " + chainWords(chain) + ": " +
+                                        (std::isfinite(wait) ? "in turn for it only once in " + one(wait) + " s"
+                                                             : std::string("never in turn for it")) +
+                                        " (it would wait at junction " + std::to_string(from.index) + "'s line)";
+                                return true;
+                            });
         }
         out.lines.push_back(line);
     }

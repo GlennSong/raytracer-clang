@@ -18782,3 +18782,82 @@ programme (ADR-0406's owed work), which is what the closed turns and the 77-s wa
 brief's 1.9 s a car from a queue is not met by the following model on the hand-made roads (2.75 s); room beyond does not
 slow it.
 
+## ADR-0408 — Every pair of drawn bodies checked every tick; at a split the car behind follows; claims through close junctions checked whole at load; the thirty-minute soak (#283, #265)
+
+Words: a BODY is a car as the host draws it, a rectangle on the plan; a SPLIT is two paths leaving one lane (ADR-0400: a
+crossing point from the start of both to where they are clear of each other); a CHAIN is one claim for room passing through
+junctions too close together to stop between (ADR-0407); the SOAK is a long run of the lab (thirty simulated minutes).
+
+**Context.** Glenn, in the traffic lab on 2026-11-12: "I see cars still going through themselves." The five-minute lab test
+said 0. It was measuring something narrower than what he saw: it compared bodies once a second, as a rectangle from rear
+bumper to front bumper (the chord, shorter than the car through a bend), and failed only on the "cross" and "join" kinds;
+splits (2 pairs every five minutes) and pairs with no crossing point were printed and let pass. The measurements table's
+overlap row looks along one path's list only, and the test never required the table to pass (review #284).
+
+**Decision.**
+- **Bodies are checked against bodies, knowing nothing of paths** (`measure.h` TouchRow, the row `bodies_touching`, target
+  none). Every tick, every pair of cars on the road, driven or not, as the host draws them: the middle halfway between the
+  bumpers `carPose` gives, pointing rear to front, as long and wide as the DRAWN vehicle (the host tells the measurements
+  each car's fleet-slot size, `Measurements::setDrawnSize`; it equals the class's in the lab, so no case of "drawn larger
+  than the model" arose). Cheap: a sweep along x over the bodies' boxes, then the exact rectangle test (separating axes) on
+  the few pairs whose boxes meet; bodies whose roads differ by more than 1 m in height are on different decks. Each spell
+  (first tick to last) is kept with both cars' paths, speeds and what held them, its place, depth and length, and SORTED
+  afterwards by how their paths relate: on one path; a split; a cross or join under one junction; a lane against a
+  connector; connectors of two junctions; no crossing point with the two centre lines within touching distance (the
+  crossing stage missed a pair); no crossing point and centre lines apart (a body swinging outside its band). The lab
+  test's once-a-second check is gone; the test requires the row at 0 and the whole table to pass, and every driver's car
+  in the model.
+- **What it found, and the one fix it needed: splits.** Five minutes: 2 spells, both splits. Thirty minutes: 14 spells, all
+  splits, up to 2.8 m deep and 3.4 s long; 8 of them at junction 21, where a straight-on connector and a far turn leave one
+  lane and run within touching distance for 57 m (crossing point 1433): the straight-on car drove up alongside and through
+  the far-turner slowing for its bend. Nothing else touched in thirty minutes: no cross or join (the resolver holds), no
+  lane against a connector, no pair the crossing stage missed, no long body swinging out (the lab has no bus; its longest
+  vehicle is a 7 m truck). The give-way table already said what should happen at a split -- "by shape: they leave one lane,
+  and the car behind follows" (ADR-0401) -- but following could not see the car ahead once its tail was off the shared lane.
+  Now it can: in `carAhead`, a car whose body lies on the OTHER path's stretch of a split, and whose front is further along
+  than mine, is a car ahead, its rear placed where it is level on my path (the two stretches matched end to end). Through
+  the split record the ordering is the crossing points', and the hard "could I stop in time" limit sees it too. Not done
+  through the conflict resolver: a resolver answer stops the second car at its line until the first car's tail clears the
+  whole split stretch (57 m at junction 21), which is not how anyone drives; following is the design's own word for it.
+- **A claim through close junctions is checked whole at load** (`room.cpp` waysThrough, used by `turnsClosedForRoom` and
+  the road-data report). The soak found a car that stood 1,129 s at junction 106's line "for room beyond", with a queue of
+  six behind it: its claim had to pass through junction 87 (the stretch after 106 is 6 m) and junction 87's exit stretch is
+  too short as well, so it ran on to junction 88, whose light never let a car starting from rest at 106 in as it got there.
+  The load check that closes such turns (ADR-0407) only looked one junction on. It now follows every chain the claim could
+  take, up to `room_through_junctions`, and closes the first turn when no chain lets the class through once in
+  `room_cycles_through` of the longest cycle on it. In the lab that closes 39 more turns summed over the classes (150, was
+  111) and names 11 chains through three junctions too seldom in turn, 5 of them never (106 -> 87 -> 88 among them).
+  **It does not free car 82.** The router closes whole turns, and from junction 106's turn 3473 one way on (the near turn
+  at 88) is fine while straight on at 88 never is; the turn stays open and a car routed straight on still waits for ever.
+  Closing a turn whenever any way on never works was tried and dropped: 183 turns closed, and the traffic pushed elsewhere
+  stood up to 145 s for room in five minutes. What it needs is owed: routes that avoid a bad continuation, or a driver
+  refused for good taking another way (design 9.6 point 2).
+
+**The soak** (`level_traffic_lab_v2_soak`, only with `RT_LAB_SOAK=1`; about 14 minutes of wall clock with its second run):
+per five-minute window, trips arrived, mean speed by road class, the longest wait at a line and stand anywhere, loops,
+cars waiting for no reason, entries on red, overlaps of every kind, time at rest in a box by why, the model's tick cost, and
+the model's working memory (room grants, junction plans, announcements, conflicts, trips); throughput must not fall away
+(last window at least 75% of the mean after the first) and no memory figure may grow more than 25% from the first half to
+the second; then the lab again, its state hash equal at every simulated minute (0 of 30 differ). First run, with the split
+fix: no body touched another in thirty minutes; arrivals per window 421 (from rest), then 499, 479, 498, 473, 476 (no
+decay); no car waiting for no reason, no deadlock or gridlock loop, nobody at rest in a box but giving way; room grants,
+junction plans, announcements and trips flat from the first half to the second; the model's tick about 0.4-0.6 ms on
+average for 300 cars.
+
+**Not fixed here, and who owes it.**
+- Car 82's wait at junction 106 (above): held in the soak at its measured length (`kSoakLongestStand`, 1,130 s).
+- One car in about 4,500 entered a lit junction on red in thirty minutes (held in the soak at 1): committed through two close junctions (11 then 14) on
+  a prediction that the second light would let it in, it was then held behind a slower car and arrived after the red. The
+  claim's light prediction is never rechecked (review #284 item 8). A design question for the room step.
+- A far turn at five-phase junction 21 that finds no gap in its green waits two cycles (176 s in five minutes; the lab
+  test's `kLongestStand` held at 180 s, was 130): ADR-0406's owed protected arrow.
+- The measurements table's queue rows never have data in the lab: the host registers no counting lines
+  (`Measurements::addCountingLine`), so "how a queue empties" is measured only by the lab test's own reckoning.
+- Review #284's other junction items (a car told to go second that cannot stop; a car that will stop across a crossing
+  announcing a finite clear time; a ring of bodies broken by overruling `on_it`; lane cars never judging lane-against-
+  connector crossings; committed a centimetre past the line) produced no touching body in thirty minutes of the lab (no
+  ring through a body was ever broken), so they are left to their own tasks with this row as their measure.
+- Ramps meeting the street on the oncoming side (#282): the planner lands every touch-down ramp on the street's centre
+  line (`interchange.cpp`), so its one connector crosses both oncoming connectors; the crossing points exist and the cars
+  give way there, so nothing touches, but queues stand in the oncoming lanes. Road plan, not driving model.
+

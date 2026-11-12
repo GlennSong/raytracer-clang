@@ -52,6 +52,9 @@
 //                           way_end_s, nothing_s), and one stop_rule:<rule name>_s per rule  (offender numbers: reason,
 //                           binding_car)
 //   overlaps                pair_ticks, pairs, worst_overlap_m               (offender numbers: other_car, overlap_m, path)
+//   bodies_touching         pair_ticks, spells, worst_depth_m, and <kind>_spells for each TouchKind key (one_path,
+//                           split, in_junction, lane_and_connector, two_junctions, no_record_paths_close,
+//                           no_record_body_swing)   (offender numbers: other_car, depth_m, kind, path, other_path)
 //   over_own_limit          car_seconds, checked_car_seconds, worst_excess_mps  (offender numbers: speed, my_limit, path)
 //   bend_speed              car_seconds, checked_car_seconds, worst_side_accel  (offender numbers: speed, radius_m,
 //                           side_accel)
@@ -385,6 +388,106 @@ private:
     std::set<std::pair<uint32_t, uint32_t>> lastTick_;
 };
 
+// ---- Body against body (issue #283) --------------------------------------------------------------------------------
+//
+// The overlaps row above looks along each path's list, so it cannot see two cars on DIFFERENT paths whose bodies touch.
+// This one knows nothing about paths: every tick, every pair of car bodies as the host draws them -- a rectangle on the
+// plan, its middle halfway between the bumpers carPose gives, pointing from the rear bumper to the front, as long and
+// wide as the drawn vehicle -- is tested for overlap. Only afterwards is each overlap SORTED by how the two cars' paths
+// relate, so the count says where to look.
+
+// A CAR'S BODY ON THE PLAN, as the host draws it.
+struct PlanBody {
+    CarId car;
+    double x = 0, z = 0;            // its middle
+    double ux = 1, uz = 0;          // unit, from its rear to its front
+    double halfLength = 0, halfWidth = 0;
+    double height = 0;              // the road's height under its middle
+};
+// The drawn body of a car at `pose`, `length` long and `width` wide (the host's drawing centres the vehicle between the
+// bumpers and points it from the rear bumper to the front: citysim DrivingHost::mirror).
+PlanBody planBody(CarId car, const CarPose& pose, double length, double width);
+// HOW DEEP TWO BODIES OVERLAP on the plan: the shortest push that would part them (metres; separating axes over the
+// two rectangles), or zero when they do not overlap.
+double bodyOverlapDepth(const PlanBody& a, const PlanBody& b);
+// Two bodies whose roads differ in height by more than this are on different decks (a street under a bridge), not
+// touching: the road builder's same-level figure (Rules::sameLevelDz), which the crossing points use too.
+constexpr double kTouchSameLevelMetres = 1.0;
+// Overlaps shallower than this (metres) are rounding, not touching: a millimetre.
+constexpr double kTouchToleranceMetres = 1e-3;
+
+// HOW THE PATHS OF TWO TOUCHING CARS RELATE, the first that fits, in this order.
+enum class TouchKind : uint8_t {
+    OnePath,            // both bodies are listed on one path: following (or after a join) failed
+    Split,              // their paths leave one lane: a split crossing point between them
+    InJunction,         // a cross or join crossing point filed under one junction: the conflict resolver's to order
+    LaneAndConnector,   // a crossing point filed under no junction, between a lane and a connector
+    TwoJunctions,       // a crossing point filed under no junction, between connectors of two junctions
+    NoRecordClose,      // no crossing point, yet the two bodies' stretches of path centre line come within the two
+                        // half widths: the paths themselves are too close (two lanes side by side, or a pair the
+                        // crossing stage does not pair)
+    NoRecordSwing,      // no crossing point, and the centre lines stay apart: a body reaches outside its path's band
+                        // (a long body through a bend lies on the chord, its corners swing out)
+};
+constexpr uint8_t kTouchKindCount = 7;
+const char* touchKindKey(TouchKind k);     // "one_path", "split", ...
+const char* touchKindWords(TouchKind k);   // in words
+
+// ONE CAR IN A TOUCH, as it was when the touch began.
+struct TouchSide {
+    CarId car;
+    engine::PathId path;            // its front's path
+    Real along = 0;
+    Real speed = 0;
+    bool driven = false;
+    Binding binding;
+    bool drawnBigger = false;       // the host draws it larger than its vehicle class (the model's body)
+};
+
+// ONE SPELL OF TWO BODIES TOUCHING: from the first tick they overlap to the last.
+struct TouchSpell {
+    TouchSide a, b;                 // a the lower car id
+    TouchKind kind = TouchKind::NoRecordSwing;
+    uint32_t crossing = engine::kNoIndex;   // the crossing point that sorted it (a record's kinds), else none
+    uint32_t junction = engine::kNoIndex;   // ... and the junction it is filed under
+    double x = 0, z = 0;            // where, when it began: between the two middles
+    double bandGap = 0;             // the closest the two stretches of centre line came, less both half widths (m;
+                                    // below zero: the bands overlap)
+    uint64_t firstTick = 0, lastTick = 0;
+    double firstSeconds = 0, lastSeconds = 0;
+    double worstDepth = 0;
+    double seconds() const { return lastSeconds - firstSeconds; }
+};
+
+// SORTS a touch between cars `a` and `b` (a the lower id): the kind, and the crossing point and junction that decided
+// it (when one did), and the band gap.
+TouchKind sortTouch(const engine::LaneGraph& roads, const VehicleClasses& classes, const PathLists& lists, const Car& a,
+                    const Car& b, uint32_t* crossing, uint32_t* junction, double* bandGap);
+
+// HOW MANY SPELLS the row keeps whole (every one is counted beyond).
+constexpr std::size_t kTouchSpellsKept = 2048;
+
+struct TouchRow {
+    uint64_t pairTicks = 0;
+    uint64_t spells = 0;
+    double worstDepth = 0;
+    uint64_t spellsByKind[kTouchKindCount] = {};
+    uint64_t pairTicksByKind[kTouchKindCount] = {};
+    double worstByKind[kTouchKindCount] = {};
+    uint64_t spellsOneNotDriven = 0;   // spells where one car was not driven (left at its destination)
+    uint64_t spellsOneAtRest = 0;      // ... where one car stood when it began
+    uint64_t spellsDrawnBigger = 0;    // ... where one car is drawn larger than its class
+    std::vector<TouchSpell> kept;      // the spells that have ended, the first kTouchSpellsKept
+    Offenders offenders;               // one per spell (when it began)
+    // This tick's touches (each as a spell of one tick: its depth now in worstDepth), lower car first, in pair order.
+    void note(const std::vector<TouchSpell>& now, uint64_t tick, double seconds);
+    // The spells still going (for a report at the end of a run), in pair order.
+    std::vector<TouchSpell> open() const;
+
+private:
+    std::map<std::pair<uint32_t, uint32_t>, TouchSpell> open_;
+};
+
 // FASTER THAN THE DRIVER'S OWN LIMIT (my_limit) by more than kOverLimitToleranceMps. One offender per spell over,
 // showing the worst moment of it.
 struct OverLimitRow {
@@ -439,6 +542,7 @@ struct MeasureRows {
     JunctionStopRow junctionStops;
     BoxStopRow boxStops;
     OverlapRow overlaps;
+    TouchRow touches;
     OverLimitRow overOwnLimit;
     BendRow bends;
     std::vector<QueueBurst> queues;   // every queue at every line, in line order then time
@@ -471,6 +575,9 @@ public:
     void observe(const Driving& d);
     // What a tick cost on the wall clock, as the caller timed it, and how many cars were driven in it.
     void noteTickCost(double milliseconds, std::size_t drivenCars) { rows_.cost.note(milliseconds, drivenCars); }
+    // THE SIZE THE HOST DRAWS car `car` at (metres), for the body-against-body row; a car not given one is drawn at its
+    // vehicle class's size.
+    void setDrawnSize(CarId car, double length, double width);
 
     const MeasureRows& rows() const { return rows_; }
     // The table so far.
@@ -495,6 +602,7 @@ private:
     void lookAtCar(const Driving& d, const Car& c, const Seen* before, double now, double dt, Seen& out);
     Seen seeCar(const Driving& d, const Car& c) const;
     void lookForOverlaps(const Driving& d, double now);
+    void lookForTouches(const Driving& d, double now);
     void lookForBoxStops(const Driving& d, double now, double dt);
 
     const Driving* driving_ = nullptr;
@@ -512,6 +620,12 @@ private:
     NoticeScratch scratch_;
     std::vector<FactSlot> wantLimit_;
     std::vector<std::pair<OverlapPair, engine::PathId>> overlapsFound_;
+    // Body against body: the drawn sizes (by car id; zero length: the class's), and working memory kept between ticks.
+    std::vector<std::pair<double, double>> drawnSize_;
+    std::vector<PlanBody> bodies_;
+    std::vector<std::size_t> bodyRecord_;   // per body: its record in d.cars()
+    std::vector<std::size_t> sweep_;        // bodies in order of their lowest x
+    std::vector<TouchSpell> touchesFound_;
 };
 
 // ONE TICK, TIMED: ticks `d` and hands what it cost on the wall clock to the measurements attached to it (none: only

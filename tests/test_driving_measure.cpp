@@ -157,6 +157,53 @@ TEST_CASE(measure_3_overlapping_bodies) {
     CHECK_APPROX(numberOf(r.offenders.kept[0], "path"), 17, kEps);
 }
 
+// BODY AGAINST BODY (issue #283): two drawn bodies, as rectangles on the plan; their depth; and the row's spells.
+TEST_CASE(measure_3b_bodies_touching_on_the_plan) {
+    const auto body = [](uint32_t car, double x, double z, double ux, double uz, double length, double width) {
+        CarPose pose;
+        pose.front = engine::Vec3(x + ux * length * 0.5, 0, z + uz * length * 0.5);
+        pose.rear = engine::Vec3(x - ux * length * 0.5, 0, z - uz * length * 0.5);
+        pose.body = engine::Vec3(ux, 0, uz);
+        pose.travel = pose.body;
+        return planBody(CarId(car), pose, length, width);
+    };
+    // Side by side, 1.5 m apart, 1.8 m wide: 0.3 m deep. 2 m apart: clear.
+    const PlanBody a = body(1, 0, 0, 1, 0, 4.5, 1.8);
+    CHECK_APPROX(bodyOverlapDepth(a, body(2, 0, 1.5, 1, 0, 4.5, 1.8)), 0.3, kEps);
+    CHECK(bodyOverlapDepth(a, body(2, 0, 2.0, 1, 0, 4.5, 1.8)) == 0);
+    // Nose to tail, 0.5 m into it: 0.5 m deep; across it at right angles, its nose 0.4 m into my side: 0.4 m.
+    CHECK_APPROX(bodyOverlapDepth(a, body(3, 4.0, 0, 1, 0, 4.5, 1.8)), 0.5, kEps);
+    CHECK_APPROX(bodyOverlapDepth(a, body(4, 0, 0.9 + 2.25 - 0.4, 0, -1, 4.5, 1.8)), 0.4, kEps);
+    // A body turned 45 degrees whose side passes just clear of my corner: boxes square to the plan would overlap, the
+    // rectangles do not.
+    const double r = std::sqrt(0.5);
+    CHECK(bodyOverlapDepth(a, body(5, 3.85, 2.5, r, r, 4.5, 1.8)) == 0);
+
+    // The row: a pair touching for three ticks, gone, then back: two spells, four pair-ticks, by its kind.
+    TouchSpell t;
+    t.a.car = CarId(1);
+    t.b.car = CarId(2);
+    t.kind = TouchKind::Split;
+    t.worstDepth = 0.3;
+    TouchRow row;
+    for (uint64_t k = 10; k < 13; ++k) row.note({t}, k, static_cast<double>(k) * kTick);
+    row.note({}, 13, 13 * kTick);
+    t.worstDepth = 0.5;
+    row.note({t}, 14, 14 * kTick);
+    CHECK(row.spells == 2u && row.pairTicks == 4u);
+    CHECK(row.spellsByKind[static_cast<uint8_t>(TouchKind::Split)] == 2u);
+    CHECK_APPROX(row.worstDepth, 0.5, kEps);
+    CHECK(row.kept.size() == 1u && row.kept[0].firstTick == 10u && row.kept[0].lastTick == 12u);
+    CHECK(row.open().size() == 1u && row.open()[0].firstTick == 14u);
+    MeasureRows rows;
+    rows.touches = row;
+    const ReportRow rep = rowOf(rows, "bodies_touching");
+    CHECK(rep.status == RowStatus::Fail);
+    CHECK(rep.offenders.total == 2u);
+    CHECK(!rep.offenders.kept.empty() && std::fabs(numberOf(rep.offenders.kept[0], "other_car") - 2) < kEps);
+    CHECK(rowOf(MeasureRows(), "bodies_touching").status == RowStatus::Pass);
+}
+
 TEST_CASE(measure_4_speed_over_the_drivers_own_limit) {
     MeasureRows rows;
     // Car 6 at 13.8 m/s under a limit of 13.4: within the tolerance. Then a second at 15 m/s.

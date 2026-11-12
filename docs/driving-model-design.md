@@ -966,6 +966,11 @@ Look-ahead is always measured in metres along the route, through however many pa
 junction is at the end of this lane": the old model broke when roads were cut into 4 m pieces, and connectors will be
 shorter than that.
 
+*As built* (#283, ADR-0408): **at a split** (two paths leaving one lane) the car ahead may have left by the other path while
+the two still run within touching distance (57 m at the lab's junction 21). A car whose body lies on the other path's
+stretch of the split, its front further along than mine, is my car ahead, its rear placed where it is level on my path
+(`carAhead`). Before this, a car that turned off my lane vanished from my following as soon as its tail left the lane.
+
 ## 8. Speed and following
 
 One formula decides acceleration, and every stop answer goes through it.
@@ -1156,7 +1161,9 @@ let the car in (green or yellow) as it gets there and for `room_arrival_slack` a
 turn a class could never (or, at two uncoordinated lights, too seldom: `room_cycles_through`) be granted room through is
 closed to that class's routes at load and reported as a road-data problem. This replaced #261's "stop at the line before
 when the body won't fit" for lights. The measurements row `box_stops` checks the brief's "done when" (nobody at rest in a box
-but by a recorded give-way).
+but by a recorded give-way). *Since #265 (ADR-0408)* the load check follows the whole chain a claim could pass through, up to
+`room_through_junctions`, with every light on it: the soak found a car waiting 1,129 s at a turn whose claim ran through
+two close junctions to a light that never let it in, which the old one-junction check had left open.
 
 ### 9.6 Why this can't deadlock, and what can still freeze
 
@@ -1279,6 +1286,9 @@ simulated drivers take.
 - **The wait-for graph** (section 9.6) comes from the same reasons.
 - **The measurements table** in the plan is one module, `measure`, run by the lab tests and available live. Each row
   is a count or a distribution with the cars that broke it listed, so a failure points at a car and a moment.
+  *As built* (#283, ADR-0408): the row `bodies_touching` tests every pair of car bodies, as the host draws them, every
+  tick, knowing nothing of paths, and sorts each spell afterwards by how the two paths relate. The lab's five-minute test
+  and the thirty-minute soak (`level_traffic_lab_v2_soak`, `RT_LAB_SOAK=1`) require it at none and the whole table to pass.
 - **Replay.** Because a run is the same every time, a failing lab run is reproduced by its seed and tick number.
 
 ## 14. Drawbacks

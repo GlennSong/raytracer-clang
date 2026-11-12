@@ -439,6 +439,207 @@ void OverlapRow::note(const std::vector<std::pair<OverlapPair, engine::PathId>>&
     lastTick_.swap(now);
 }
 
+// ---- Body against body -----------------------------------------------------------------------------------------------
+
+PlanBody planBody(CarId car, const CarPose& pose, double length, double width) {
+    PlanBody b;
+    b.car = car;
+    b.x = (pose.front.x + pose.rear.x) * 0.5;
+    b.z = (pose.front.z + pose.rear.z) * 0.5;
+    b.height = (pose.front.y + pose.rear.y) * 0.5;
+    double ux = pose.body.x, uz = pose.body.z;
+    double n = std::sqrt(ux * ux + uz * uz);
+    if (!(n > 0)) {
+        ux = pose.travel.x;
+        uz = pose.travel.z;
+        n = std::sqrt(ux * ux + uz * uz);
+    }
+    if (n > 0) {
+        b.ux = ux / n;
+        b.uz = uz / n;
+    }
+    b.halfLength = length * 0.5;
+    b.halfWidth = width * 0.5;
+    return b;
+}
+
+namespace {
+
+// How far a body reaches along a unit direction (dx, dz) from its middle (half its extent projected on the direction).
+double reachAlong(const PlanBody& b, double dx, double dz) {
+    return b.halfLength * std::fabs(b.ux * dx + b.uz * dz) + b.halfWidth * std::fabs(-b.uz * dx + b.ux * dz);
+}
+
+}  // namespace
+
+double bodyOverlapDepth(const PlanBody& a, const PlanBody& b) {
+    // The four axes of two rectangles: each one's length and width directions. The depth on an axis is how far the
+    // two projections overlap; the shallowest is the push that parts them, and any axis with none parts them already.
+    const double axes[4][2] = {{a.ux, a.uz}, {-a.uz, a.ux}, {b.ux, b.uz}, {-b.uz, b.ux}};
+    const double cx = b.x - a.x, cz = b.z - a.z;
+    double depth = std::numeric_limits<double>::infinity();
+    for (const double* axis : axes) {
+        const double apart = std::fabs(cx * axis[0] + cz * axis[1]);
+        const double d = reachAlong(a, axis[0], axis[1]) + reachAlong(b, axis[0], axis[1]) - apart;
+        if (!(d > 0)) return 0;
+        depth = std::min(depth, d);
+    }
+    return depth;
+}
+
+namespace {
+
+struct TouchKindWords {
+    TouchKind kind;
+    const char* key;
+    const char* words;
+};
+constexpr TouchKindWords kTouchKindWords[kTouchKindCount] = {
+    {TouchKind::OnePath, "one_path", "on one path (following, or after a join, failed)"},
+    {TouchKind::Split, "split", "a split (two paths leaving one lane)"},
+    {TouchKind::InJunction, "in_junction", "a cross or join inside one junction (the conflict resolver's to order)"},
+    {TouchKind::LaneAndConnector, "lane_and_connector", "a lane against a connector (filed under no junction)"},
+    {TouchKind::TwoJunctions, "two_junctions", "connectors of two junctions (filed under no junction)"},
+    {TouchKind::NoRecordClose, "no_record_paths_close",
+     "no crossing point, the paths' centre lines within the two half widths"},
+    {TouchKind::NoRecordSwing, "no_record_body_swing",
+     "no crossing point, centre lines apart: a body reaching outside its path's band"},
+};
+
+// The stretches of path a car's body covers (its class's length), front path first.
+Body bodyOf(const engine::LaneGraph& roads, const VehicleClasses& classes, const Car& c) {
+    const Real length = c.vehicleClass < classes.size() ? classes.at(c.vehicleClass).length : Real(0);
+    return layBody(roads, c, length);
+}
+
+// Does a body piece on `path` overlap [from, to] of it?
+bool coversStretch(const Body& body, engine::PathId path, Real from, Real to) {
+    for (std::size_t k = 0; k < body.count; ++k)
+        if (body.pieces[k].path == path && body.pieces[k].front >= from && body.pieces[k].rear <= to) return true;
+    return false;
+}
+
+// The step the band gap samples the centre lines at (metres): the crossing points' own step (lane_graph_crossings.h).
+constexpr double kBandStep = 0.25;
+
+}  // namespace
+
+const char* touchKindKey(TouchKind k) { return kTouchKindWords[static_cast<uint8_t>(k)].key; }
+const char* touchKindWords(TouchKind k) { return kTouchKindWords[static_cast<uint8_t>(k)].words; }
+
+TouchKind sortTouch(const engine::LaneGraph& roads, const VehicleClasses& classes, const PathLists& lists, const Car& a,
+                    const Car& b, uint32_t* crossing, uint32_t* junction, double* bandGap) {
+    if (crossing) *crossing = engine::kNoIndex;
+    if (junction) *junction = engine::kNoIndex;
+    const Body ba = bodyOf(roads, classes, a), bb = bodyOf(roads, classes, b);
+    // The band gap: the closest the two bodies' stretches of centre line come, less both half widths.
+    {
+        double closest = std::numeric_limits<double>::infinity();
+        for (std::size_t i = 0; i < ba.count; ++i)
+            for (double s = ba.pieces[i].rear; s <= ba.pieces[i].front + kBandStep * 0.5; s += kBandStep) {
+                const engine::Vec2 p = roads.pointAt(ba.pieces[i].path, std::min(s, ba.pieces[i].front));
+                for (std::size_t j = 0; j < bb.count; ++j)
+                    for (double t = bb.pieces[j].rear; t <= bb.pieces[j].front + kBandStep * 0.5; t += kBandStep) {
+                        const engine::Vec2 q = roads.pointAt(bb.pieces[j].path, std::min(t, bb.pieces[j].front));
+                        closest = std::min(closest, (p - q).length());
+                    }
+            }
+        const double half = (a.vehicleClass < classes.size() ? classes.at(a.vehicleClass).width * 0.5 : 0) +
+                            (b.vehicleClass < classes.size() ? classes.at(b.vehicleClass).width * 0.5 : 0);
+        if (bandGap) *bandGap = closest - half;
+    }
+    // Listed together on one path.
+    for (std::size_t i = 0; i < ba.count; ++i)
+        for (const PathEntry& e : lists.on(ba.pieces[i].path))
+            if (e.car == b.id) return TouchKind::OnePath;
+    // A crossing point between the paths their bodies are on, over the stretches the bodies cover: the first kind in the
+    // enum's order wins.
+    TouchKind best = TouchKind::NoRecordSwing;
+    bool found = false;
+    for (std::size_t i = 0; i < ba.count; ++i) {
+        const engine::PathId pa = ba.pieces[i].path;
+        const engine::Path& path = roads.paths[pa.index];
+        for (uint32_t k = path.crossings.first; k < path.crossings.end(); ++k) {
+            const engine::CrossingId cid = roads.pathCrossings[k];
+            const engine::CrossingPoint& rec = roads.crossings[cid.index];
+            if (rec.otherSide != engine::OtherSide::Path) continue;
+            const bool aIsA = rec.a == pa;
+            const engine::PathId other = aIsA ? rec.otherPath() : rec.a;
+            const Real myFrom = aIsA ? rec.aFrom : rec.otherFrom, myTo = aIsA ? rec.aTo : rec.otherTo;
+            const Real theirFrom = aIsA ? rec.otherFrom : rec.aFrom, theirTo = aIsA ? rec.otherTo : rec.aTo;
+            if (!coversStretch(ba, pa, myFrom, myTo) || !coversStretch(bb, other, theirFrom, theirTo)) continue;
+            TouchKind kind = TouchKind::InJunction;
+            if (rec.meeting == engine::Meeting::Split) kind = TouchKind::Split;
+            else if (!rec.junction.valid())
+                kind = path.kind != roads.paths[other.index].kind ? TouchKind::LaneAndConnector : TouchKind::TwoJunctions;
+            if (!found || static_cast<uint8_t>(kind) < static_cast<uint8_t>(best)) {
+                best = kind;
+                found = true;
+                if (crossing) *crossing = cid.index;
+                if (junction) *junction = rec.junction.index;
+            }
+        }
+    }
+    if (found) return best;
+    return bandGap && *bandGap < 0 ? TouchKind::NoRecordClose : TouchKind::NoRecordSwing;
+}
+
+void TouchRow::note(const std::vector<TouchSpell>& now, uint64_t tick, double seconds) {
+    // Spells that did not go on this tick have ended: keep them whole (the first kTouchSpellsKept).
+    std::map<std::pair<uint32_t, uint32_t>, TouchSpell>::iterator it = open_.begin();
+    std::size_t k = 0;
+    while (it != open_.end()) {
+        while (k < now.size() && std::make_pair(now[k].a.car.index, now[k].b.car.index) < it->first) ++k;
+        const bool goesOn = k < now.size() && std::make_pair(now[k].a.car.index, now[k].b.car.index) == it->first;
+        if (goesOn) {
+            ++it;
+            continue;
+        }
+        if (kept.size() < kTouchSpellsKept) kept.push_back(it->second);
+        it = open_.erase(it);
+    }
+    for (const TouchSpell& t : now) {
+        const std::pair<uint32_t, uint32_t> key(t.a.car.index, t.b.car.index);
+        const uint8_t kind = static_cast<uint8_t>(t.kind);
+        ++pairTicks;
+        worstDepth = std::max(worstDepth, t.worstDepth);
+        std::map<std::pair<uint32_t, uint32_t>, TouchSpell>::iterator o = open_.find(key);
+        if (o != open_.end()) {
+            ++pairTicksByKind[static_cast<uint8_t>(o->second.kind)];
+            worstByKind[static_cast<uint8_t>(o->second.kind)] =
+                std::max(worstByKind[static_cast<uint8_t>(o->second.kind)], t.worstDepth);
+            o->second.lastTick = tick;
+            o->second.lastSeconds = seconds;
+            o->second.worstDepth = std::max(o->second.worstDepth, t.worstDepth);
+            continue;
+        }
+        // A new spell, sorted by how it began.
+        TouchSpell s = t;
+        s.firstTick = s.lastTick = tick;
+        s.firstSeconds = s.lastSeconds = seconds;
+        open_.emplace(key, s);
+        ++spells;
+        ++spellsByKind[kind];
+        ++pairTicksByKind[kind];
+        worstByKind[kind] = std::max(worstByKind[kind], t.worstDepth);
+        spellsOneNotDriven += !t.a.driven || !t.b.driven;
+        spellsOneAtRest += t.a.speed < kStandingBelow || t.b.speed < kStandingBelow;
+        spellsDrawnBigger += t.a.drawnBigger || t.b.drawnBigger;
+        offenders.offer(offender(t.a.car, tick, seconds,
+                                 {named("other_car", t.b.car.index, "with car", ""),
+                                  named("depth_m", t.worstDepth, "by", "m"),
+                                  named("kind", kind, "kind", ""),
+                                  named("path", t.a.path.index, "on path", ""),
+                                  named("other_path", t.b.path.index, "against path", "")}));
+    }
+}
+
+std::vector<TouchSpell> TouchRow::open() const {
+    std::vector<TouchSpell> out;
+    for (const std::pair<const std::pair<uint32_t, uint32_t>, TouchSpell>& o : open_) out.push_back(o.second);
+    return out;
+}
+
 void OverLimitRow::note(CarId car, uint64_t tick, double seconds, double dt, double speed, double myLimit,
                         engine::PathId path) {
     checkedCarSeconds += dt;
@@ -654,6 +855,29 @@ MeasurementReport buildReport(const MeasureRows& m, const std::vector<std::strin
         r.summary = count(m.overlaps.pairTicks) + " pair-ticks, " + count(m.overlaps.pairs.size()) +
                     " pairs of cars; the worst overlap " + fmt("%.3f", m.overlaps.worstOverlap) + " m";
         r.offenders = m.overlaps.offenders;
+        rep.rows.push_back(r);
+    }
+    {
+        const TouchRow& t = m.touches;
+        ReportRow r = makeRow("bodies_touching",
+                              "Bodies touching on the plan, any two cars, as drawn (every pair, every tick, paths not "
+                              "consulted), sorted by how their paths relate",
+                              "none");
+        r.status = zeroTarget(t.spells > 0);
+        r.values = {named("pair_ticks", static_cast<double>(t.pairTicks), "pair-ticks", ""),
+                    named("spells", static_cast<double>(t.spells), "spells", ""),
+                    named("worst_depth_m", t.worstDepth, "the deepest", "m")};
+        std::string parts;
+        for (uint8_t k = 0; k < kTouchKindCount; ++k) {
+            r.values.push_back(named((std::string(touchKindKey(static_cast<TouchKind>(k))) + "_spells").c_str(),
+                                     static_cast<double>(t.spellsByKind[k]), "", "spells"));
+            if (t.spellsByKind[k] > 0)
+                parts += std::string(parts.empty() ? "" : "; ") + count(t.spellsByKind[k]) + " " +
+                         touchKindWords(static_cast<TouchKind>(k));
+        }
+        r.summary = count(t.spells) + " spells over " + count(t.pairTicks) + " pair-ticks; the deepest " +
+                    fmt("%.3f", t.worstDepth) + " m" + (parts.empty() ? "" : ": " + parts);
+        r.offenders = t.offenders;
         rep.rows.push_back(r);
     }
     {
@@ -1000,6 +1224,86 @@ void Measurements::lookForOverlaps(const Driving& d, double now) {
     rows_.overlaps.note(overlapsFound_, d.tickCount(), now);
 }
 
+void Measurements::setDrawnSize(CarId car, double length, double width) {
+    if (!car.valid()) return;
+    if (car.index >= drawnSize_.size()) drawnSize_.resize(car.index + 1, {0.0, 0.0});
+    drawnSize_[car.index] = {length, width};
+}
+
+void Measurements::lookForTouches(const Driving& d, double now) {
+    touchesFound_.clear();
+    const engine::LaneGraph* roads = d.roads();
+    if (!roads) return;
+    const VehicleClasses& classes = d.vehicleClasses();
+    // Every car on the road, driven or not, as the host draws it.
+    bodies_.clear();
+    bodyRecord_.clear();
+    for (std::size_t r = 0; r < d.cars().size(); ++r) {
+        const Car& c = d.cars()[r];
+        if (!knownPath(roads, c.path) || c.vehicleClass >= classes.size()) continue;
+        const VehicleClass& cls = classes.at(c.vehicleClass);
+        double length = cls.length, width = cls.width;
+        if (c.id.index < drawnSize_.size() && drawnSize_[c.id.index].first > 0) {
+            length = drawnSize_[c.id.index].first;
+            width = drawnSize_[c.id.index].second;
+        }
+        bodies_.push_back(planBody(c.id, carPose(*roads, classes, d.ruleSet(), c), length, width));
+        bodyRecord_.push_back(r);
+    }
+    // THE BROAD PHASE: bodies in order of the lowest x their box on the plan reaches (then car id); sweeping along x,
+    // each is tested only against those whose boxes it reaches into.
+    sweep_.resize(bodies_.size());
+    for (std::size_t i = 0; i < sweep_.size(); ++i) sweep_[i] = i;
+    const auto lowX = [&](std::size_t i) { return bodies_[i].x - reachAlong(bodies_[i], 1, 0); };
+    std::sort(sweep_.begin(), sweep_.end(), [&](std::size_t p, std::size_t q) {
+        const double lp = lowX(p), lq = lowX(q);
+        return lp != lq ? lp < lq : bodies_[p].car < bodies_[q].car;
+    });
+    for (std::size_t s = 0; s < sweep_.size(); ++s) {
+        const PlanBody& a = bodies_[sweep_[s]];
+        const double highX = a.x + reachAlong(a, 1, 0);
+        const double reachZ = reachAlong(a, 0, 1);
+        for (std::size_t t = s + 1; t < sweep_.size() && lowX(sweep_[t]) <= highX; ++t) {
+            const PlanBody& b = bodies_[sweep_[t]];
+            if (std::fabs(b.z - a.z) > reachZ + reachAlong(b, 0, 1)) continue;
+            if (std::fabs(b.height - a.height) > kTouchSameLevelMetres) continue;
+            const double depth = bodyOverlapDepth(a, b);
+            if (!(depth > kTouchToleranceMetres)) continue;
+            const bool aFirst = a.car < b.car;
+            const Car& ca = d.cars()[bodyRecord_[aFirst ? sweep_[s] : sweep_[t]]];
+            const Car& cb = d.cars()[bodyRecord_[aFirst ? sweep_[t] : sweep_[s]]];
+            const PlanBody& pa = aFirst ? a : b;
+            const PlanBody& pb = aFirst ? b : a;
+            TouchSpell spell;
+            const auto side = [&](const Car& c, const PlanBody& p) {
+                TouchSide o;
+                o.car = c.id;
+                o.path = c.path;
+                o.along = c.along;
+                o.speed = c.speed;
+                o.driven = c.driven;
+                o.binding = c.binding;
+                const VehicleClass& cls = classes.at(c.vehicleClass);
+                o.drawnBigger = p.halfLength * 2 > cls.length + kTouchToleranceMetres ||
+                                p.halfWidth * 2 > cls.width + kTouchToleranceMetres;
+                return o;
+            };
+            spell.a = side(ca, pa);
+            spell.b = side(cb, pb);
+            spell.kind = sortTouch(*roads, classes, d.pathLists(), ca, cb, &spell.crossing, &spell.junction,
+                                   &spell.bandGap);
+            spell.x = (pa.x + pb.x) * 0.5;
+            spell.z = (pa.z + pb.z) * 0.5;
+            spell.worstDepth = depth;
+            touchesFound_.push_back(spell);
+        }
+    }
+    std::sort(touchesFound_.begin(), touchesFound_.end(), [](const TouchSpell& p, const TouchSpell& q) {
+        return p.a.car != q.a.car ? p.a.car < q.a.car : p.b.car < q.b.car;
+    });
+    rows_.touches.note(touchesFound_, d.tickCount(), now);
+}
+
 namespace {
 
 // What bodyInBox needs, passed through boxReason to look at the car at the head of a queue.
@@ -1060,6 +1364,7 @@ void Measurements::observe(const Driving& d) {
     seen_.swap(seenNext_);
 
     lookForOverlaps(d, now);
+    lookForTouches(d, now);
     lookForBoxStops(d, now, dt);
 
     // The loops, once a second of simulated time.

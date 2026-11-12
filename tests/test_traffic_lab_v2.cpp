@@ -7,15 +7,23 @@
 //
 // level_traffic_lab_v2_drives: the lab as it ships (citysim.driving "v2", rules/lab.lua) for five simulated minutes at
 // the viewer's 60 steps a second. Every second it asks the wait-for graph who is waiting and why (a car waiting for no
-// reason fails the test), tracks how long each car has stood, and looks for two cars' bodies overlapping (on the same
-// path, or where different paths cross or join, sorted by the kind of meeting of their paths: fails beyond what giving
-// way left, issue #262). It measures queues emptying over junction lines and the longest wait at a line, and counts
-// what drivers decided at junctions. Every two seconds it measures each car's tyres against the drawn road (CityRenderSystem::wheelGaps), sorted
-// by where the car is: on a slope, a banked curve, over a crest or in a dip, or on the flat. At the end it prints the
-// measurements table (driving/measure.h), `driving?`, `waiting?` and the cars that stood longest, with why.
+// reason fails the test) and tracks how long each car has stood. Every tick the measurements' bodies_touching row tests
+// every pair of drawn car bodies for overlap, whatever their paths, and sorts each spell by how their paths relate
+// (issue #283; RT_LAB_TOUCH_LOG=1 lists every spell); none may touch. It measures queues emptying over junction lines and
+// the longest wait at a line, and counts what drivers decided at junctions. Every two seconds it measures each car's
+// tyres against the drawn road (CityRenderSystem::wheelGaps), sorted by where the car is: on a slope, a banked curve,
+// over a crest or in a dip, or on the flat. At the end it prints the measurements table (driving/measure.h), `driving?`,
+// `waiting?` and the cars that stood longest, with why. RT_LAB_LANEGRAPH_DUMP=<file> writes the lane graph the level
+// drives on, as text.
 //
 // level_traffic_lab_v2_same_every_run: the lab loaded twice and run a minute each: the driving model's state hash is the
 // same at every second.
+//
+// level_traffic_lab_v2_soak (issue #265; only with RT_LAB_SOAK=1): thirty simulated minutes, reported per five-minute
+// window -- trips arrived, mean speed by road class, the longest wait at a line and stand anywhere, loops, cars waiting
+// for no reason, entries on red, overlaps of every kind, time at rest in a box by why, the tick's cost, and the model's
+// working memory (room grants, junction plans, announcements, conflicts, trips) -- with throughput and memory checked
+// for growth over the run; then the lab again, its state hash every minute equal to the first run's.
 //
 // level_traffic_lab_v2_refused_rules_leave_the_old_model_driving: a rule set that is refused (missing, or one with
 // faults: RT_LAB_RULES=<file>) leaves the lab loading, the new model off and the old one driving.
@@ -139,66 +147,6 @@ void runAndHash(const std::string& level, const std::string& driving, Real secon
 
 constexpr Real kStep = 1.0 / 60.0;   // the viewer's fixed step, and the sim's tick on the lab (localHz 0)
 
-// A CAR'S BODY on the plan: a rectangle from its rear bumper to its front, its width across.
-struct Footprint {
-    driving::CarId car;
-    Vec2 rear, front;
-    Real halfWidth = 0;
-    Real height = 0;   // the road's height under the middle of the body
-};
-// Two bodies whose roads are further apart in height than this are on different decks (a street under a bridge), not
-// overlapping: the road builder's own same-level figure (Rules::sameLevelDz), which the crossing points use too.
-constexpr Real kSameLevelWithin = 1.0;
-
-// Do two bodies overlap on the plan (separating axes over the two rectangles)?
-bool overlap(const Footprint& a, const Footprint& b) {
-    const auto corners = [](const Footprint& f, Vec2 out[4]) {
-        Vec2 d = f.front - f.rear;
-        const Real len = d.length();
-        d = len > 1e-9 ? d * (1.0 / len) : Vec2(1, 0);
-        const Vec2 side(-d.y * f.halfWidth, d.x * f.halfWidth);
-        out[0] = f.rear + side;
-        out[1] = f.front + side;
-        out[2] = f.front - side;
-        out[3] = f.rear - side;
-    };
-    Vec2 ca[4], cb[4];
-    corners(a, ca);
-    corners(b, cb);
-    for (const Vec2* poly : {ca, cb})
-        for (int e = 0; e < 4; ++e) {
-            const Vec2 edge = poly[(e + 1) % 4] - poly[e];
-            const Vec2 axis(-edge.y, edge.x);
-            Real loA = 1e30, hiA = -1e30, loB = 1e30, hiB = -1e30;
-            for (int k = 0; k < 4; ++k) {
-                const Real pa = ca[k].x * axis.x + ca[k].y * axis.y, pb = cb[k].x * axis.x + cb[k].y * axis.y;
-                loA = std::min(loA, pa);
-                hiA = std::max(hiA, pa);
-                loB = std::min(loB, pb);
-                hiB = std::max(hiB, pb);
-            }
-            if (hiA <= loB || hiB <= loA) return false;
-        }
-    return true;
-}
-
-// Are two cars listed together on any path (bodies on the same lane or connector)?
-bool sharePath(const driving::PathLists& lists, const engine::LaneGraph& roads, driving::CarId a, driving::CarId b,
-               const driving::Car& ca) {
-    std::vector<engine::PathId> paths{ca.path};
-    for (std::size_t k = 0; k < ca.trailCount; ++k) paths.push_back(ca.trail[k]);
-    (void)roads;
-    for (const engine::PathId p : paths) {
-        bool hasA = false, hasB = false;
-        for (const driving::PathEntry& e : lists.on(p)) {
-            hasA = hasA || e.car == a;
-            hasB = hasB || e.car == b;
-        }
-        if (hasA && hasB) return true;
-    }
-    return false;
-}
-
 // THE WAY EACH CAR CAME ONTO THE PATHS IT IS ON: for its last few front paths, the path it was on just before. Two cars
 // overlapping on one path that came onto it from DIFFERENT paths met where the paths join (no merge rule yet); from
 // the same path, the follower ran into the car ahead (following failed).
@@ -218,16 +166,20 @@ struct WayIn {
     }
 };
 
-// WHAT THE FIVE-MINUTE RUN MAY SHOW, so a later change cannot make it worse unseen. Pairs of cars seen overlapping on
-// the plan (sampled each second) where their paths cross or join inside one junction, and where they meet filed under no
-// junction; pair-ticks of overlap on the lane after a join: none, since first in goes first inside the junction (issue
-// #263, ADR-0405: before it, a car that gave way and then went was crossed by the car it had given way to, one pair
-// overlapped 44 ticks after a join, and junction 75's long connector 3010 drove through a car waiting on lane 766).
-// Drivers that changed their minds twice on one approach: at most four (waits inside a junction are counted apart).
-constexpr std::size_t kMostCrossJoinPairs = 0;
+// WHAT THE FIVE-MINUTE RUN MAY SHOW, so a later change cannot make it worse unseen. Pair-ticks of overlap on the lane
+// after a join: none, since first in goes first inside the junction (issue #263, ADR-0405: before it, a car that gave way
+// and then went was crossed by the car it had given way to, one pair overlapped 44 ticks after a join, and junction 75's
+// long connector 3010 drove through a car waiting on lane 766). Drivers that changed their minds twice on one approach:
+// at most four (waits inside a junction are counted apart).
 constexpr uint64_t kMostJoinPairTicks = 0;
-constexpr std::size_t kMostAcrossJunctionPairs = 0;
 constexpr uint64_t kMostChangedMindTwice = 4;
+// BODY AGAINST BODY (issue #283): spells of two drawn bodies overlapping on the plan, any two cars, every tick, whatever
+// their paths (measure.h TouchRow). None, in the five-minute run and in the soak. This replaced a once-a-second check
+// here that measured bodies by the chord between their bumpers and held only crosses and joins: it saw the splits (two
+// paths leaving one lane: 2 pairs in five minutes, 14 spells up to 2.8 m deep in thirty) and let them pass. Since #283 the
+// car behind at a split follows the car ahead along the other path (traffic_state.h carAhead).
+constexpr uint64_t kMostTouchSpells = 0;
+constexpr uint64_t kMostTouchSpellsSoak = 0;
 // LOOPS OF WAITING CARS (gridlock or deadlock), counted at the once-a-second look: none. Once the lights ran (#261) the
 // same five cars at junctions 11 and 14 (a 6-7 m lane joins the two each way) twice entered a junction box they could not
 // leave and stood in a ring; room beyond (#264) keeps a car out of a box until it has room to leave it.
@@ -243,7 +195,21 @@ constexpr double kMostBoxStopsNotAllowed = 0;
 // HELD AT 130 s since room beyond (#264): one far turn at five-phase junction 21 gave way to oncoming cars for its
 // whole 8 s green and waited a second red: 123 s. It needs a green arrow of its own (owed from ADR-0406), not more
 // patience. Bring this back to 100 when starved far turns get an arrow.
-constexpr double kLongestStand = 130.0;
+// HELD AT 180 s since #283 (cars now follow at splits, which moves the traffic): a motorcycle's far turn by connector 2271
+// at the same junction 21, at its line, gave way to the oncoming stream through two greens (to cars 172 and 218, then 184
+// and 129) and stood 176 s. The same owed arrow (ADR-0406), not patience.
+constexpr double kLongestStand = 180.0;
+// THE SOAK'S HELD FIGURES (thirty minutes, issue #265), each a known fault owed elsewhere:
+// - one car stands for good: car 82 at junction 106's line from t = 670 s, refused room because its claim must pass
+//   through junction 87 to junction 88's light, which never lets a car from rest at 106 in as it gets there; a queue of up to
+//   six stands behind it. The load check now follows the whole chain (ADR-0408) but can close only whole turns, and the
+//   near turn at 88 is fine, so the turn at 106 stays open. Owed: routes that avoid a bad continuation, or a driver refused
+//   for good taking another way (design 9.6 point 2). No issue yet.
+// - one car in about 4,500 enters a lit junction on red: committed through two close junctions (11 then 14) on a
+//   prediction that the second light lets it in, then held behind a slower car; the prediction is never rechecked (review
+//   #284 item 8).
+constexpr double kSoakLongestStand = 1130.0;
+constexpr uint64_t kSoakMostEnteredOnRed = 1;
 // THE FASTEST ROADS FLOW (issue #281): on the lanes of the road class with the highest posted limit (the lab's
 // freeway), the mean speed of cars in FREE FLOW -- held by nothing ahead (no car, no stop, not the end of their way),
 // by no top speed of their own vehicle's (a moped or a bus that cannot do the limit), and cruising (at the top speed
@@ -267,44 +233,6 @@ struct SpeedTally {
     Real mean() const { return carSeconds > 0 ? metres / carSeconds : 0; }
 };
 
-// WHERE TWO CARS' PATHS MEET, for an overlap on the plan between cars on different paths: the kind of the first crossing
-// point found between any path one body is on and any path the other's is on (crossings filed under a junction first,
-// as each path lists them), or none.
-enum class MeetKind { Cross, Join, Split, CrossAcross, JoinAcross, None };
-constexpr int kMeetKindCount = 6;
-const char* meetWords(MeetKind k) {
-    switch (k) {
-        case MeetKind::Cross: return "a cross inside one junction";
-        case MeetKind::Join: return "a join inside one junction";
-        case MeetKind::Split: return "a split (two paths leaving one lane)";
-        case MeetKind::CrossAcross: return "a cross filed under no junction (two junctions, or a connector and a lane)";
-        case MeetKind::JoinAcross: return "a join filed under no junction";
-        case MeetKind::None: return "no crossing point between their paths";
-    }
-    return "?";
-}
-MeetKind meetingOf(const engine::LaneGraph& roads, const driving::Car& a, const driving::Car& b, uint32_t* crossing) {
-    std::vector<engine::PathId> pa{a.path}, pb{b.path};
-    for (std::size_t k = 0; k < a.trailCount; ++k) pa.push_back(a.trail[k]);
-    for (std::size_t k = 0; k < b.trailCount; ++k) pb.push_back(b.trail[k]);
-    for (const engine::PathId p : pa) {
-        const engine::Path& path = roads.paths[p.index];
-        for (uint32_t k = path.crossings.first; k < path.crossings.end(); ++k) {
-            const engine::CrossingId cid = roads.pathCrossings[k];
-            const engine::CrossingPoint& rec = roads.crossings[cid.index];
-            if (rec.otherSide != engine::OtherSide::Path) continue;
-            const engine::PathId other = rec.a == p ? rec.otherPath() : rec.a;
-            if (std::find(pb.begin(), pb.end(), other) == pb.end()) continue;
-            if (crossing) *crossing = cid.index;
-            const bool across = !rec.junction.valid();
-            if (rec.meeting == engine::Meeting::Split) return MeetKind::Split;
-            if (rec.meeting == engine::Meeting::Join) return across ? MeetKind::JoinAcross : MeetKind::Join;
-            return across ? MeetKind::CrossAcross : MeetKind::Cross;
-        }
-    }
-    return MeetKind::None;
-}
-
 // WHERE A CAR IS, for the tyre check: on a slope, a banked curve, over a crest or in a dip, or on the flat.
 enum class Ground { Flat, Slope, Banked, Crest, Dip };
 constexpr int kGroundCount = 5;
@@ -321,6 +249,61 @@ const char* groundWords(Ground g) {
 constexpr Real kSlopeAbove = 0.02;        // a body pitched more than 2% is on a slope
 constexpr Real kBankAbove = 0.01;         // ... rolled more than 1% is on a banked curve
 constexpr Real kGradeChangeAbove = 0.01;  // the road's grade differs front to rear by more than 1%: a crest or a dip
+
+// WHAT HELD A CAR, in words (its binding).
+std::string bindingWords(const driving::Driving& d, const driving::Binding& b) {
+    switch (b.by) {
+        case driving::Limit::CarAhead: return "behind car " + std::to_string(b.car.index);
+        case driving::Limit::Stop:
+        case driving::Limit::TopSpeed:
+            return std::string(b.by == driving::Limit::Stop ? "stopping for" : "top speed from") + " rule \"" +
+                   (b.rule < d.rules().labels.rules.size() ? d.rules().labels.rules[b.rule] : std::string("?")) + "\"" +
+                   (b.car.valid() ? " (car " + std::to_string(b.car.index) + ")" : std::string());
+        case driving::Limit::WayEnd: return "at the end of its way";
+        case driving::Limit::Nothing: return "free road";
+    }
+    return "?";
+}
+
+const char* pathKindWord(const engine::LaneGraph& roads, engine::PathId p) {
+    return p.valid() && p.index < roads.paths.size() && roads.paths[p.index].kind == engine::PathKind::Connector
+               ? "connector"
+               : "lane";
+}
+
+// One side of a touch, in words.
+std::string touchSideWords(const driving::Driving& d, const driving::TouchSide& s) {
+    char b[256];
+    std::snprintf(b, sizeof b, "car %u (%s) on %s %u at %.1f m, %.1f m/s, %s%s", s.car.index,
+                  d.car(s.car) ? d.vehicleClasses().at(d.car(s.car)->vehicleClass).name.c_str() : "?",
+                  pathKindWord(*d.roads(), s.path), s.path.index, s.along, s.speed,
+                  s.driven ? bindingWords(d, s.binding).c_str() : "not driven", s.drawnBigger ? ", drawn bigger" : "");
+    return b;
+}
+
+// BODY AGAINST BODY (issue #283): the breakdown by kind, and with RT_LAB_TOUCH_LOG set, every spell.
+void printTouches(const driving::Driving& d, const driving::TouchRow& t) {
+    std::printf("    [lab-v2] bodies touching on the plan, as drawn, every pair every tick: %llu spells over %llu "
+                "pair-ticks, the deepest %.3f m; one car not driven in %llu, one at rest in %llu, one drawn bigger than "
+                "its class in %llu; by how their paths relate (spells, pair-ticks, deepest):\n",
+                static_cast<unsigned long long>(t.spells), static_cast<unsigned long long>(t.pairTicks), t.worstDepth,
+                static_cast<unsigned long long>(t.spellsOneNotDriven), static_cast<unsigned long long>(t.spellsOneAtRest),
+                static_cast<unsigned long long>(t.spellsDrawnBigger));
+    for (uint8_t k = 0; k < driving::kTouchKindCount; ++k)
+        std::printf("      %-90s %5llu %7llu %6.3f\n", driving::touchKindWords(static_cast<driving::TouchKind>(k)),
+                    static_cast<unsigned long long>(t.spellsByKind[k]),
+                    static_cast<unsigned long long>(t.pairTicksByKind[k]), t.worstByKind[k]);
+    if (!std::getenv("RT_LAB_TOUCH_LOG")) return;
+    std::vector<driving::TouchSpell> all = t.kept;
+    for (const driving::TouchSpell& s : t.open()) all.push_back(s);
+    for (const driving::TouchSpell& s : all)
+        std::printf("      [touch] t=%.2f..%.2f (%.2f s) at (%.1f, %.1f) kind %s crossing %d junction %d band gap %.2f "
+                    "depth %.3f | %s | %s\n",
+                    s.firstSeconds, s.lastSeconds, s.seconds(), s.x, s.z, driving::touchKindKey(s.kind),
+                    s.crossing == engine::kNoIndex ? -1 : static_cast<int>(s.crossing),
+                    s.junction == engine::kNoIndex ? -1 : static_cast<int>(s.junction), s.bandGap, s.worstDepth,
+                    touchSideWords(d, s.a).c_str(), touchSideWords(d, s.b).c_str());
+}
 
 struct WheelStats {
     int cars = 0;
@@ -344,6 +327,14 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     CHECK(sim.drivingHost().active());
     const engine::LaneGraph& roads = *d->roads();
     std::printf("    [lab-v2] at load: %s\n", sim.drivingHost().describe(*d).c_str());
+    // RT_LAB_LANEGRAPH_DUMP=<file>: the lane graph the level drives on, as text (its path and crossing ids are the ones
+    // every line below names; a graph built by lanes_tool from the plan alone may number them differently).
+    if (const char* dumpTo = std::getenv("RT_LAB_LANEGRAPH_DUMP"))
+        if (std::FILE* f = std::fopen(dumpTo, "w")) {
+            const std::string text = engine::dumpText(roads);
+            std::fwrite(text.data(), 1, text.size(), f);
+            std::fclose(f);
+        }
     // WHO GIVES WAY TO WHOM (issue #260): the table's counts, and one four-way's table in words, for checking by hand.
     std::printf("    [lab-v2] %s", driving::describeRightOfWay(d->rightOfWay()).c_str());
     for (uint32_t j = 0; j < roads.junctions.size(); ++j) {
@@ -405,8 +396,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     const int perSecond = static_cast<int>(1.0 / kStep + 0.5);
     std::map<uint32_t, Real> standSince;                  // car -> when it began to stand (driven cars only)
     std::map<uint32_t, std::pair<Real, std::string>> longest;   // car -> its longest stand, and why (at the end of it)
-    uint64_t noReason = 0, loopSamples = 0, sameOverlapSamples = 0, crossOverlapSamples = 0, waitSamples = 0;
-    std::set<std::pair<uint32_t, uint32_t>> sameOverlapPairs, crossOverlapPairs;
+    uint64_t noReason = 0, loopSamples = 0, waitSamples = 0;
     WheelStats wheels[kGroundCount];
     Real worstGap = 0, steepestPitch = 0, steepestRoll = 0;
     std::vector<Real> gaps;
@@ -434,9 +424,6 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     uint64_t joinPairTicks = 0, followPairTicks = 0, joinSpells = 0, followSpells = 0;
     Real worstFollowOverlap = 0;
     std::set<std::pair<uint32_t, uint32_t>> joinPairs, followPairs;
-    // Overlaps on the plan between cars on different paths, by the kind of meeting of their paths (sampled each second).
-    uint64_t meetSamples[kMeetKindCount] = {};
-    std::set<std::pair<uint32_t, uint32_t>> meetPairs[kMeetKindCount];
     // QUEUES EMPTYING AT JUNCTION LINES: a car's front leaving an arriving lane for a connector crosses that lane's line;
     // the queue figures come from those crossings (measure.h findQueueBursts), as the measurements table reads them.
     struct RestSeen {
@@ -666,42 +653,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
             }
             if (!standing && it != standSince.end()) standSince.erase(it);
         }
-        // BODIES OVERLAPPING: on a shared path (following must hold), or where different paths cross or join.
-        std::vector<Footprint> bodies;
-        for (const driving::Car& c : d->cars()) {
-            const driving::CarPose p = driving::carPose(roads, d->vehicleClasses(), d->ruleSet(), c);
-            Footprint f;
-            f.car = c.id;
-            f.rear = Vec2(p.rear.x, p.rear.z);
-            f.front = Vec2(p.front.x, p.front.z);
-            f.halfWidth = d->vehicleClasses().at(c.vehicleClass).width * 0.5;
-            f.height = (p.rear.y + p.front.y) * 0.5;
-            bodies.push_back(f);
-        }
-        for (std::size_t a = 0; a < bodies.size(); ++a)
-            for (std::size_t b = a + 1; b < bodies.size(); ++b) {
-                const Vec2 ma = (bodies[a].rear + bodies[a].front) * 0.5, mb = (bodies[b].rear + bodies[b].front) * 0.5;
-                if ((ma - mb).length() > 25.0) continue;
-                if (std::fabs(bodies[a].height - bodies[b].height) > kSameLevelWithin) continue;
-                if (!overlap(bodies[a], bodies[b])) continue;
-                const std::pair<uint32_t, uint32_t> key(bodies[a].car.index, bodies[b].car.index);
-                if (sharePath(d->pathLists(), roads, bodies[a].car, bodies[b].car, d->cars()[a])) {
-                    ++sameOverlapSamples;   // (counted per tick above, from the lists)
-                    sameOverlapPairs.insert(key);
-                } else {
-                    ++crossOverlapSamples;
-                    crossOverlapPairs.insert(key);
-                    uint32_t crossing = engine::kNoIndex;
-                    const MeetKind kind = meetingOf(roads, d->cars()[a], d->cars()[b], &crossing);
-                    ++meetSamples[static_cast<int>(kind)];
-                    const bool fresh = meetPairs[static_cast<int>(kind)].insert(key).second;
-                    if (fresh && std::getenv("RT_LAB_OVERLAP_LOG")) {
-                        std::printf("      [cross-overlap] t=%.0f cars %u and %u, %s (crossing %u)\n", now, key.first,
-                                    key.second, meetWords(kind), crossing);
-                        std::printf("%s%s", d->describeCar(bodies[a].car).c_str(), d->describeCar(bodies[b].car).c_str());
-                    }
-                }
-            }
+        // (Bodies touching on the plan, any two cars, are measured every tick by the measurements' bodies_touching row.)
         // THE TYRES AGAINST THE DRAWN ROAD, every ten seconds.
         if (i % (perSecond * 2) == 0) {
             for (std::size_t ai = 0; ai < sim.agents().size(); ++ai) {
@@ -846,14 +798,6 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                 static_cast<unsigned long long>(followPairTicks), static_cast<unsigned long long>(followSpells),
                 followPairs.size(), worstFollowOverlap, static_cast<unsigned long long>(joinPairTicks),
                 static_cast<unsigned long long>(joinSpells), joinPairs.size());
-    std::printf("    [lab-v2] bodies overlapping on the plan, sampled each second: sharing a path %llu (%zu pairs); on "
-                "different paths, where they cross or join %llu (%zu pairs)\n",
-                static_cast<unsigned long long>(sameOverlapSamples), sameOverlapPairs.size(),
-                static_cast<unsigned long long>(crossOverlapSamples), crossOverlapPairs.size());
-    std::printf("    [lab-v2] ... on different paths, by where their paths meet (samples, pairs):\n");
-    for (int k = 0; k < kMeetKindCount; ++k)
-        std::printf("      %-75s %4llu  %4zu\n", meetWords(static_cast<MeetKind>(k)),
-                    static_cast<unsigned long long>(meetSamples[k]), meetPairs[k].size());
     // The queues emptying over junction lines, and the longest wait at a line.
     {
         std::vector<driving::QueueBurst> bursts;
@@ -908,20 +852,27 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                     h.second.first > 0 ? 100.0 * h.second.second / h.second.first : 0.0, h.first.c_str());
     const driving::MeasurementReport report = sim.drivingHost().measurements().report();
     std::printf("    [lab-v2] the measurements table:\n%s\n", report.describe().c_str());
+    // BODY AGAINST BODY (issue #283): every pair of drawn bodies every tick, sorted by how their paths relate.
+    const driving::TouchRow& touches = sim.drivingHost().measurements().rows().touches;
+    printTouches(*d, touches);
+    CHECK(touches.spells <= kMostTouchSpells);
+    // THE WHOLE TABLE PASSES (issue #284: the test used to check rows one by one and never the table), and every driver's
+    // car is in the model: a car the host could not put down again stays drawn where it was, outside the model, where
+    // nothing could see it (city_driving.cpp; issue #284).
+    CHECK(report.passed());
+    CHECK(sim.drivingHost().counts().placed == sim.drivingHost().counts().drivers);
+    CHECK(sim.drivingHost().counts().noRoomYet == 0);
 
     CHECK(noReason == 0);
     CHECK(followPairTicks == 0);   // following holds
     CHECK(worstGap < 0.03);
     CHECK(sim.drivingHost().counts().arrivals > 0);
-    // GIVING WAY AND INSIDE THE JUNCTION (issues #262 and #263, ADR-0402 and ADR-0405). No two cars that obeyed the rules
-    // overlap where their paths cross or join, inside a junction or across two, nor on the lane after a join; no loop of
-    // waiting cars; nobody stands longer than kLongestStand. That includes the road-data case ADR-0400 lists (junction 75's long connector
-    // 3010 passes within touching distance of the ends of lanes where cars wait at junction 90's line): a car on the
-    // connector now waits for a body on its path, and a ring through that waiting is broken at an answer.
-    CHECK(meetPairs[static_cast<int>(MeetKind::Cross)].size() + meetPairs[static_cast<int>(MeetKind::Join)].size() <=
-          kMostCrossJoinPairs);
-    CHECK(meetPairs[static_cast<int>(MeetKind::CrossAcross)].size() + meetPairs[static_cast<int>(MeetKind::JoinAcross)].size() <=
-          kMostAcrossJunctionPairs);
+    // GIVING WAY AND INSIDE THE JUNCTION (issues #262 and #263, ADR-0402 and ADR-0405). No two bodies touch anywhere (the
+    // bodies_touching row, checked above: crosses, joins, splits, a lane against a connector, paths with no crossing
+    // point), nor overlap on the lane after a join; no loop of waiting cars; nobody stands longer than kLongestStand.
+    // That includes the road-data case ADR-0400 lists (junction 75's long connector 3010 passes within touching distance
+    // of the ends of lanes where cars wait at junction 90's line): a car on the connector now waits for a body on its
+    // path, and a ring through that waiting is broken at an answer.
     CHECK(joinPairTicks <= kMostJoinPairTicks);
     CHECK(loopSamples <= kMostLoopSamples);
     CHECK(over60 == 0);
@@ -986,6 +937,271 @@ TEST_CASE(level_traffic_lab_v2_same_every_run) {
             CHECK(plansDiffer == 0);
         }
     }
+}
+
+// ---- The soak (issue #265) -------------------------------------------------------------------------------------------
+
+// THE SOAK'S WINDOW: what the measurements are cut into (simulated seconds), and how long it runs by default (s).
+constexpr Real kSoakWindow = 300.0;
+constexpr Real kSoakSeconds = 1800.0;
+// Throughput must not decay: arrivals in the last window at least this share of the mean over the windows after the
+// first (the first starts from rest). A jam building over the run (gridlock spreading) shows as arrivals falling away.
+constexpr double kSoakLeastThroughputShare = 0.75;
+// Nothing may grow without bound: each figure of the model's memory in the second half of the run no higher than this
+// share of its highest in the first half (the lab's demand is steady, so its working memory is too).
+constexpr double kSoakMemoryGrowth = 1.25;
+
+// ONE WINDOW OF THE SOAK.
+struct SoakWindow {
+    uint64_t arrivals = 0;
+    std::map<std::string, SpeedTally> speedByClass;
+    Real longestLineWait = 0;     // at a junction's line, as the five-minute test measures it (s)
+    Real longestStand = 0;        // any stand, waiting as the wait-for graph means it (s)
+    uint64_t loopSamples = 0;     // loops seen at the once-a-second looks
+    uint64_t deadlocks = 0, gridlocks = 0;   // loops by class, at those looks
+    uint64_t noReasonSamples = 0; // cars waiting for no reason, at those looks
+    uint64_t enteredOnRed = 0, litCrossings = 0;
+    uint64_t onePathPairTicks = 0;               // the overlaps row (bodies on one path)
+    uint64_t touchSpells[driving::kTouchKindCount] = {};   // body against body, new spells by kind
+    double boxSeconds[driving::kBoxReasonCount] = {};
+    double boxNotAllowed = 0;
+    double tickMsSum = 0, tickMsWorst = 0;
+    uint64_t ticks = 0;
+    // The model's working memory, the highest seen at the once-a-second looks.
+    std::size_t grants = 0, plans = 0, announcements = 0, conflicts = 0, trips = 0, keptSpells = 0;
+};
+
+TEST_CASE(level_traffic_lab_v2_soak) {
+    // A long run: off unless asked for (RT_LAB_SOAK=1), so the level suite stays quick. RT_LAB_SOAK_SECONDS sets the
+    // length (default 30 simulated minutes); RT_LAB_SOAK_TWICE=0 skips the second run that checks the state hash.
+    if (!std::getenv("RT_LAB_SOAK")) {
+        std::printf("    [lab-soak] skipped: set RT_LAB_SOAK=1 to run the 30-minute soak (about 12 minutes of wall clock "
+                    "with its second run)\n");
+        return;
+    }
+    const Real seconds = std::getenv("RT_LAB_SOAK_SECONDS") ? std::atof(std::getenv("RT_LAB_SOAK_SECONDS")) : kSoakSeconds;
+    const int steps = static_cast<int>(seconds / kStep + 0.5);
+    const int perSecond = static_cast<int>(1.0 / kStep + 0.5);
+    const int perWindow = static_cast<int>(kSoakWindow / kStep + 0.5);
+    const int perMinute = perSecond * 60;
+    std::vector<uint64_t> hashes;   // the state hash every simulated minute, for the second run
+    std::vector<SoakWindow> windows;
+    {
+        LoadedCity lc("traffic_lab.json", "");
+        CHECK(lc.ok);
+        if (!lc.ok) return;
+        citysim::CityRenderSystem& city = lc.city;
+        const citysim::CitySim& sim = city.sim();
+        const driving::Driving* d = sim.drivingV2();
+        CHECK(d != nullptr);
+        if (!d) return;
+        const engine::LaneGraph& roads = *d->roads();
+        const driving::Measurements& m = sim.drivingHost().measurements();
+        std::map<uint32_t, uint32_t> frontPath;
+        std::map<uint32_t, Real> standSince, lineWaitSince;
+        SoakWindow w;
+        // What the counters stood at when the window began.
+        uint64_t arrivals0 = 0, onePath0 = 0, touch0[driving::kTouchKindCount] = {};
+        double box0[driving::kBoxReasonCount] = {}, notAllowed0 = 0, modelMs0 = 0;
+        constexpr Real kAtTheLine = 2.0;
+        for (int i = 1; i <= steps; ++i) {
+            city.step(lc.world, kStep);
+            const Real now = i * kStep;
+            ++w.ticks;
+            {
+                const double ms = sim.drivingHost().cost().modelMs - modelMs0;
+                modelMs0 = sim.drivingHost().cost().modelMs;
+                w.tickMsSum += ms;
+                w.tickMsWorst = std::max(w.tickMsWorst, ms);
+            }
+            for (const driving::Car& c : d->cars()) {
+                if (!c.driven) continue;
+                const engine::Path& p = roads.paths[c.path.index];
+                const bool lane = p.kind == engine::PathKind::Lane && p.section.valid();
+                const NameIndex cls = lane ? roads.sections[p.section.index].roadClass : kNoName;
+                w.speedByClass[lane && cls < roads.roadClassNames.size() ? roads.roadClassNames[cls]
+                                                                         : std::string("connectors")]
+                    .add(c.speed, kStep);
+                // A front leaving a lane for a connector where the lights run: what its lamp showed as the tick began.
+                std::map<uint32_t, uint32_t>::iterator fp = frontPath.find(c.id.index);
+                if (fp != frontPath.end() && fp->second != c.path.index && p.kind == engine::PathKind::Connector &&
+                    p.from.index == fp->second) {
+                    const driving::Lamp lamp = driving::lampAt(roads, d->rightOfWay(), c.path, d->clockSeconds() - kStep);
+                    if (lamp != driving::Lamp::Dark) {
+                        ++w.litCrossings;
+                        if (lamp == driving::Lamp::Red) ++w.enteredOnRed;
+                    }
+                }
+                frontPath[c.id.index] = c.path.index;
+                const bool atLine = p.kind == engine::PathKind::Lane && p.next.count > 0 &&
+                                    roads.paths[roads.nextPaths[p.next.first].index].kind == engine::PathKind::Connector &&
+                                    p.length - c.along <= kAtTheLine && driving::isWaiting(c);
+                std::map<uint32_t, Real>::iterator lw = lineWaitSince.find(c.id.index);
+                if (atLine && lw == lineWaitSince.end()) lineWaitSince[c.id.index] = now;
+                if (atLine && lw != lineWaitSince.end()) w.longestLineWait = std::max(w.longestLineWait, now - lw->second);
+                if (!atLine && lw != lineWaitSince.end()) lineWaitSince.erase(lw);
+            }
+            if (i % perMinute == 0) hashes.push_back(d->stateHash());
+            if (i % perSecond == 0) {
+                const driving::WaitReport wr = d->waitReport();
+                w.noReasonSamples += wr.noReason.size();
+                w.loopSamples += wr.loops.size();
+                w.deadlocks += wr.deadlocks;
+                w.gridlocks += wr.gridlocks;
+                for (const driving::Car& c : d->cars()) {
+                    const bool standing = driving::isWaiting(c);
+                    std::map<uint32_t, Real>::iterator it = standSince.find(c.id.index);
+                    if (standing && it == standSince.end()) it = standSince.insert({c.id.index, now}).first;
+                    if (standing) w.longestStand = std::max(w.longestStand, now - it->second);
+                    if (!standing && it != standSince.end()) standSince.erase(it);
+                }
+                std::size_t plans = 0;
+                for (const driving::Car& c : d->cars())
+                    if (const driving::JunctionPlans* jp = d->junctionPlans(c.id)) plans += jp->count;
+                w.grants = std::max(w.grants, d->roomGrants().size());
+                w.plans = std::max(w.plans, plans);
+                w.announcements = std::max(w.announcements, d->board().size());
+                w.conflicts = std::max(w.conflicts, d->resolver().conflicts().size());
+                w.trips = std::max(w.trips, d->tripCount());
+                w.keptSpells = std::max(w.keptSpells, m.rows().touches.kept.size());
+            }
+            if (i % perWindow != 0 && i != steps) continue;
+            // The window ends: the counters' growth over it.
+            const citysim::DrivingCounts& counts = sim.drivingHost().counts();
+            const driving::MeasureRows& rows = m.rows();
+            w.arrivals = counts.arrivals - arrivals0;
+            arrivals0 = counts.arrivals;
+            w.onePathPairTicks = rows.overlaps.pairTicks - onePath0;
+            onePath0 = rows.overlaps.pairTicks;
+            for (uint8_t k = 0; k < driving::kTouchKindCount; ++k) {
+                w.touchSpells[k] = rows.touches.spellsByKind[k] - touch0[k];
+                touch0[k] = rows.touches.spellsByKind[k];
+            }
+            for (uint8_t k = 0; k < driving::kBoxReasonCount; ++k) {
+                w.boxSeconds[k] = rows.boxStops.byReason[k] - box0[k];
+                box0[k] = rows.boxStops.byReason[k];
+            }
+            w.boxNotAllowed = rows.boxStops.notAllowed - notAllowed0;
+            notAllowed0 = rows.boxStops.notAllowed;
+            windows.push_back(w);
+            std::printf("    [lab-soak] window %zu ends t=%.0f s: state hash %016llx\n", windows.size(), now,
+                        static_cast<unsigned long long>(d->stateHash()));
+            w = SoakWindow();
+        }
+        // THE TABLE, one line per window.
+        std::printf("    [lab-soak] %.0f simulated seconds in %zu windows of %.0f s:\n", seconds, windows.size(), kSoakWindow);
+        std::printf("      %-6s %8s %6s %6s %6s %6s %6s %7s %7s %5s %5s %5s %4s %6s %8s %8s %6s %6s %6s %6s %5s\n", "window",
+                    "arrived", "free", "art", "coll", "local", "conn", "lineW", "stand", "loops", "noRsn", "red",
+                    "1path", "touch", "boxGW", "boxNot", "msMean", "msMax", "grants", "plans", "board");
+        for (std::size_t k = 0; k < windows.size(); ++k) {
+            const SoakWindow& x = windows[k];
+            const auto speed = [&](const char* cls) {
+                std::map<std::string, SpeedTally>::const_iterator it = x.speedByClass.find(cls);
+                return it == x.speedByClass.end() ? 0.0 : it->second.mean();
+            };
+            uint64_t touchesAll = 0;
+            for (uint8_t t = 0; t < driving::kTouchKindCount; ++t) touchesAll += x.touchSpells[t];
+            std::printf("      %-6zu %8llu %6.2f %6.2f %6.2f %6.2f %6.2f %7.1f %7.1f %5llu %5llu %5llu %4llu %6llu %8.1f "
+                        "%8.1f %6.3f %6.2f %6zu %6zu %5zu\n",
+                        k + 1, static_cast<unsigned long long>(x.arrivals), speed("freeway"), speed("arterial"),
+                        speed("collector"), speed("local"), speed("connectors"), x.longestLineWait, x.longestStand,
+                        static_cast<unsigned long long>(x.loopSamples), static_cast<unsigned long long>(x.noReasonSamples),
+                        static_cast<unsigned long long>(x.enteredOnRed), static_cast<unsigned long long>(x.onePathPairTicks),
+                        static_cast<unsigned long long>(touchesAll),
+                        x.boxSeconds[static_cast<int>(driving::BoxReason::GivingWay)], x.boxNotAllowed,
+                        x.ticks ? x.tickMsSum / static_cast<double>(x.ticks) : 0.0, x.tickMsWorst, x.grants, x.plans,
+                        x.announcements);
+        }
+        std::printf("      (arrived: trips ended; speeds m/s by road class: freeway, arterial, collector, local, and on "
+                    "connectors; lineW: the longest wait at a junction's line, stand: the longest stand anywhere (s); "
+                    "loops: waiting loops at the once-a-second looks; noRsn: cars waiting for no reason at those looks; "
+                    "red: fronts onto a connector on a red; 1path: pair-ticks of bodies overlapping on one path; touch: "
+                    "new spells of bodies touching, any kind; boxGW / boxNot: car-seconds at rest in a box giving way / "
+                    "for a reason not allowed; ms: the model's tick on the wall clock; grants, plans, board: room "
+                    "grants, junction plans and announcements, the most at once)\n");
+        for (std::size_t k = 0; k < windows.size(); ++k) {
+            const SoakWindow& x = windows[k];
+            std::printf("      window %zu: touches by kind:", k + 1);
+            for (uint8_t t = 0; t < driving::kTouchKindCount; ++t)
+                if (x.touchSpells[t] > 0)
+                    std::printf(" %llu %s;", static_cast<unsigned long long>(x.touchSpells[t]),
+                                driving::touchKindKey(static_cast<driving::TouchKind>(t)));
+            std::printf(" loops: %llu deadlock, %llu gridlock; at rest in a box by reason:",
+                        static_cast<unsigned long long>(x.deadlocks), static_cast<unsigned long long>(x.gridlocks));
+            for (uint8_t r = 0; r < driving::kBoxReasonCount; ++r)
+                if (x.boxSeconds[r] > 0)
+                    std::printf(" %s %.1f;", driving::boxReasonKey(static_cast<driving::BoxReason>(r)), x.boxSeconds[r]);
+            std::printf(" memory: conflicts %zu, trips %zu, kept touch spells %zu\n", x.conflicts, x.trips, x.keptSpells);
+        }
+        printTouches(*d, m.rows().touches);
+        std::printf("    [lab-soak] the measurements table:\n%s\n", m.report().describe().c_str());
+
+        // WHAT THE SOAK HOLDS. Every window: nobody waits for no reason, no deadlock (a loop with a right of way in it),
+        // nobody at rest in a box but by a recorded give-way, following holds on one path; over the run, no body touches
+        // another, entries on red and the longest stand as held (kSoakMostEnteredOnRed, kSoakLongestStand).
+        uint64_t touchesAll = 0, enteredOnRed = 0;
+        for (const SoakWindow& x : windows) {
+            CHECK(x.noReasonSamples == 0);
+            CHECK(x.deadlocks == 0);
+            CHECK(x.boxNotAllowed <= kMostBoxStopsNotAllowed);
+            CHECK(x.onePathPairTicks == 0);
+            CHECK(x.longestStand <= kSoakLongestStand);
+            enteredOnRed += x.enteredOnRed;
+            for (uint8_t t = 0; t < driving::kTouchKindCount; ++t) touchesAll += x.touchSpells[t];
+        }
+        CHECK(touchesAll <= kMostTouchSpellsSoak);
+        CHECK(enteredOnRed <= kSoakMostEnteredOnRed);
+        CHECK(m.report().passed());
+        CHECK(sim.drivingHost().counts().placed == sim.drivingHost().counts().drivers);
+        CHECK(sim.drivingHost().counts().noRoomYet == 0);
+        // Throughput does not decay, and memory does not grow.
+        if (windows.size() >= 3) {
+            double mean = 0;
+            for (std::size_t k = 1; k < windows.size(); ++k) mean += static_cast<double>(windows[k].arrivals);
+            mean /= static_cast<double>(windows.size() - 1);
+            std::printf("    [lab-soak] arrivals: the last window %llu, the mean after the first %.1f\n",
+                        static_cast<unsigned long long>(windows.back().arrivals), mean);
+            CHECK(static_cast<double>(windows.back().arrivals) >= kSoakLeastThroughputShare * mean);
+            const std::size_t half = windows.size() / 2;
+            const auto grows = [&](std::size_t SoakWindow::*field, const char* name) {
+                std::size_t early = 0, late = 0;
+                for (std::size_t k = 0; k < windows.size(); ++k)
+                    (k < half ? early : late) = std::max(k < half ? early : late, windows[k].*field);
+                std::printf("    [lab-soak] %s: the most at once %zu in the first half, %zu in the second\n", name, early, late);
+                return static_cast<double>(late) > kSoakMemoryGrowth * static_cast<double>(std::max<std::size_t>(early, 1));
+            };
+            CHECK(!grows(&SoakWindow::grants, "room grants"));
+            CHECK(!grows(&SoakWindow::plans, "junction plans"));
+            CHECK(!grows(&SoakWindow::announcements, "announcements"));
+            // (Conflicts are printed, not held: how many pairs of cars meet in one tick is the traffic's load at that
+            // moment, kept in memory reused from tick to tick, and rises with the queues near junctions; 93 at most in
+            // the first half of the first soak, 124 in the second.)
+            grows(&SoakWindow::conflicts, "conflicts (printed only)");
+            CHECK(!grows(&SoakWindow::trips, "trips"));
+        }
+    }
+    // SAME EVERY RUN over the long run: the lab again, its state hash every simulated minute equal to the first run's.
+    if (std::getenv("RT_LAB_SOAK_TWICE") && std::string(std::getenv("RT_LAB_SOAK_TWICE")) == "0") return;
+    LoadedCity again("traffic_lab.json", "");
+    CHECK(again.ok);
+    if (!again.ok) return;
+    const driving::Driving* d2 = again.city.sim().drivingV2();
+    CHECK(d2 != nullptr);
+    if (!d2) return;
+    std::size_t differ = 0, compared = 0;
+    for (int i = 1; i <= steps; ++i) {
+        again.city.step(again.world, kStep);
+        if (i % perMinute != 0) continue;
+        const std::size_t k = static_cast<std::size_t>(i / perMinute - 1);
+        if (k < hashes.size()) {
+            ++compared;
+            differ += hashes[k] != d2->stateHash();
+        }
+    }
+    std::printf("    [lab-soak] the second run: %zu of %zu per-minute state hashes differ; last %016llx\n", differ, compared,
+                static_cast<unsigned long long>(d2->stateHash()));
+    CHECK(compared == hashes.size());
+    CHECK(differ == 0);
 }
 
 // A RULE SET THAT IS REFUSED (here: one that is not there; RT_LAB_RULES names another to try) leaves the lab loading

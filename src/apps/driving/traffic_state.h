@@ -239,6 +239,10 @@ struct Neighbour {
 // `gap` runs from my front to ITS REAR -- which may be on another path than its front, so a car whose front has moved
 // on but whose tail is still on my path or one before its front is found by its tail. A car listed Beside in my lane
 // counts. I never find myself. A car overlapping my front has a gap below zero. A tie goes to the lower car id.
+// WHERE TWO PATHS LEAVE ONE LANE (a split crossing point, ADR-0400), a car whose body lies on the OTHER path's stretch of
+// the split and whose front is further along than mine is also a car ahead, its rear placed where it is level with on
+// my path (the two stretches matched end to end): the car behind follows the car ahead until their paths are apart
+// (issue #283, ADR-0408).
 Neighbour carAhead(const engine::LaneGraph& roads, const std::vector<Car>& cars, const PathLists& lists, CarId me,
                    const std::vector<engine::PathId>& pathsAhead, Real lookAhead);
 

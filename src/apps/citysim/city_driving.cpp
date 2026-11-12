@@ -200,6 +200,12 @@ std::string DrivingHost::begin(driving::Driving& d, std::vector<Agent>& agents, 
     counts_ = DrivingCounts();
     counts_.drivers = static_cast<uint32_t>(seats_.size());
     d.attachMeasurements(measurements_.get());
+    // The bodies-touching row measures each car at the size it is DRAWN (its fleet slot's body), which may differ from
+    // its driving class's (the class takes the first slot of its name).
+    for (const Seat& s : seats_) {
+        const SimVehicle& v = vehicles[s.car.index];
+        measurements_->setDrawnSize(s.car, v.length, v.width);
+    }
     for (Seat& s : seats_) {
         if (!putDown(d, s, kStartRoom)) continue;
         sendOn(d, s);

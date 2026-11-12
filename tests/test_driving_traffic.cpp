@@ -409,6 +409,65 @@ TEST_CASE(driving_car_ahead_across_tiny_paths) {
     CHECK(!carAhead(g, d.cars(), d.pathLists(), CarId(7), ahead, 1000).found());
 }
 
+// ---- 5b. the car ahead at a split (issue #283) ------------------------------------------------------------------
+
+// A 20 m lane (path 0) leading into two 30 m connectors (1 and 2) that run side by side 1 m apart along +x, filed as a
+// split over their first 20 m.
+engine::LaneGraph splitGraph() {
+    engine::LaneGraph g;
+    const auto add = [&](engine::Vec2 a, engine::Vec2 b, engine::PathKind kind) {
+        engine::Path p;
+        p.kind = kind;
+        p.curve = g.addCurve({a, b}, {0, 0});
+        p.length = (b - a).length();
+        g.paths.push_back(p);
+    };
+    add(engine::Vec2(-20, 0), engine::Vec2(0, 0), engine::PathKind::Lane);
+    add(engine::Vec2(0, 0), engine::Vec2(30, 0), engine::PathKind::Connector);
+    add(engine::Vec2(0, 1), engine::Vec2(30, 1), engine::PathKind::Connector);
+    g.paths[0].next.first = 0;
+    g.paths[0].next.count = 2;
+    g.nextPaths.push_back(pid(1));
+    g.nextPaths.push_back(pid(2));
+    g.paths[1].from = pid(0);
+    g.paths[2].from = pid(0);
+    engine::CrossingPoint x;
+    x.a = pid(1);
+    x.otherSide = engine::OtherSide::Path;
+    x.other = 2;
+    x.meeting = engine::Meeting::Split;
+    x.aFrom = 0;
+    x.aTo = 20;
+    x.otherFrom = 0;
+    x.otherTo = 20;
+    g.crossings.push_back(x);
+    engine::indexCrossings(g);
+    return g;
+}
+
+TEST_CASE(driving_car_ahead_at_a_split_follows_the_other_path) {
+    const engine::LaneGraph g = splitGraph();
+    Driving d(&g);
+    d.setVehicleClasses(testClasses());
+    std::string why;
+    // The leader went by connector 2 and is 10 m along it (its whole body off the lane); I am on the lane, 5 m short of
+    // its end, going by connector 1.
+    CHECK(d.placeCar(CarId(1), kCar, at(0, 15), {}, &why));
+    CHECK(d.placeCar(CarId(2), kCar, at(2, 10), {}, &why));
+    const Neighbour n = carAhead(g, d.cars(), d.pathLists(), CarId(1), {pid(1)}, 100);
+    CHECK(n.car == CarId(2));
+    CHECK_APPROX(n.gap, 5 + (10 - kCarLength), kEps);   // to its rear, level on my connector
+    // ... and on my connector, 2 m behind its rear; it never sees me (I am behind it).
+    CHECK(d.removeCar(CarId(1), &why));
+    CHECK(d.placeCar(CarId(1), kCar, at(1, 3.5), {pid(0)}, &why));
+    CHECK_APPROX(carAhead(g, d.cars(), d.pathLists(), CarId(1), {}, 100).gap, 10 - kCarLength - 3.5, kEps);
+    CHECK(!carAhead(g, d.cars(), d.pathLists(), CarId(2), {}, 100).found());
+    // Past the split's stretch the two paths are apart: a leader there is nobody's car ahead.
+    CHECK(d.removeCar(CarId(2), &why));
+    CHECK(d.placeCar(CarId(2), kCar, at(2, 29), {}, &why));
+    CHECK(!carAhead(g, d.cars(), d.pathLists(), CarId(1), {}, 100).found());
+}
+
 // ---- 6. the car behind, and who is on a stretch ------------------------------------------------------------------
 
 TEST_CASE(driving_car_behind_and_cars_on_stretch) {
