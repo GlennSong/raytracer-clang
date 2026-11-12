@@ -92,12 +92,17 @@ struct TestRoads {
     engine::SectionId straightSection(uint32_t i, bool eastward) const;
     engine::PathId straightLane(uint32_t i, bool eastward, uint32_t k) const;
 
+    // ---- ring names ----
+    // Lane k of side i of a ring (counted the way traffic runs round it).
+    engine::PathId ringLane(uint32_t i, uint32_t k) const;
+
     // Lane k of a section (0 = offside-most); not valid when there is none.
     engine::PathId laneOf(engine::SectionId s, uint32_t k) const;
 
     // Where things are, by index (filled by the builders).
     std::vector<engine::SectionId> leavingSections;   // grid: ((row * cols + col) * kHeadingCount + heading)
     std::vector<engine::SectionId> straightSections;  // straight road: i * 2 + (eastward ? 0 : 1)
+    std::vector<engine::SectionId> ringSections;      // ring: side i
 };
 
 // A STRAIGHT ROAD of `sections` sections each way, laid west to east from x = 0, each `roadLength` long, the lanes of
@@ -106,6 +111,11 @@ TestRoads straightRoad(uint32_t sections, const TestRoadSpec& spec = TestRoadSpe
 // The same, with each section its own length (west to east): a long approach onto a run of very short sections, as a
 // junction cut into short paths gives (spec.roadLength is not read).
 TestRoads straightRoadOf(const std::vector<Real>& sectionLengths, const TestRoadSpec& spec = TestRoadSpec());
+
+// A CLOSED RING of one-way road: `sides` straight sections, each `roadLength` long, laid as a regular polygon
+// anticlockwise seen from above, each side's lanes leading straight into the same lanes of the next and the last side's
+// into the first's (no junctions). A car can drive round it for ever.
+TestRoads ringRoad(uint32_t sides, const TestRoadSpec& spec = TestRoadSpec());
 
 // A GRID of `rows` by `cols` junctions, junction (r, c) at the plan point (c, r) times the junction spacing.
 TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec = TestRoadSpec());

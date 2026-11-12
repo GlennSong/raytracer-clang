@@ -173,6 +173,10 @@ engine::PathId TestRoads::straightLane(uint32_t i, bool eastward, uint32_t k) co
     return laneOf(straightSection(i, eastward), k);
 }
 
+engine::PathId TestRoads::ringLane(uint32_t i, uint32_t k) const {
+    return i < ringSections.size() ? laneOf(ringSections[i], k) : engine::PathId();
+}
+
 // ---- builders ------------------------------------------------------------------------------------------------------
 
 TestRoads straightRoad(uint32_t sections, const TestRoadSpec& spec) {
@@ -203,6 +207,32 @@ TestRoads straightRoadOf(const std::vector<Real>& sectionLengths, const TestRoad
             nexts[t.straightLane(i + 1, false, k).index].push_back(t.straightLane(i, false, k));
         }
     }
+    writeNextLists(g, nexts);
+    return t;
+}
+
+TestRoads ringRoad(uint32_t sides, const TestRoadSpec& spec) {
+    TestRoads t;
+    t.spec = spec;
+    LaneGraph& g = t.graph;
+    addNames(g);
+    // The polygon's corners round a circle whose chord between neighbours is roadLength.
+    const Real radius = spec.roadLength / (2 * std::sin(kPi / Real(sides)));
+    std::vector<Vec2> corners;
+    for (uint32_t i = 0; i < sides; ++i) {
+        const Real a = 2 * kPi * Real(i) / Real(sides);
+        corners.push_back(Vec2(std::cos(a), std::sin(a)) * radius);
+    }
+    for (uint32_t i = 0; i < sides; ++i) {
+        const Vec2 start = corners[i];
+        const Vec2 end = corners[(i + 1) % sides];
+        const Vec2 kerb = engine::perp(engine::normalize(end - start)) * driving::kerbwardPerpSign(spec.drivesOn);
+        t.ringSections.push_back(addSection(g, spec, start, end, kerb));
+    }
+    std::vector<std::vector<PathId>> nexts(g.paths.size());
+    for (uint32_t i = 0; i < sides; ++i)
+        for (uint32_t k = 0; k < spec.lanesEachWay; ++k)
+            nexts[t.ringLane(i, k).index].push_back(t.ringLane((i + 1) % sides, k));
     writeNextLists(g, nexts);
     return t;
 }

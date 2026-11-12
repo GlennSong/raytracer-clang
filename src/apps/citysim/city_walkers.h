@@ -50,6 +50,8 @@ private:
     engine::ControlAnswers answers_;   // walkers? knock? flicker? activities? speeders?
     std::string whoQuery_, whoResult_ = "none";   // `who? <id>`: asked once, answered every step
     engine::ControlCommands::Binding answerWho_;
+    std::string driverQuery_, driverResult_ = "none";   // `driver? <car>`: asked once, answered every step, like who?
+    engine::ControlCommands::Binding answerDriver_, answerWaiting_;
     void spawnWalkers(engine::FrameContext& ctx);
     void driveWalkers(engine::FrameContext& ctx);
 

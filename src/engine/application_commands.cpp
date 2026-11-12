@@ -900,6 +900,13 @@ void Application::registerCityVerbs() {
     commandTable.add("who?", "who? [agent id]",
                      "With an id, ask about any agent; alone, read the answer (refreshed every step).",
                      unanswered("a CityWalkerSystem: play mode on a city level"));
+    // `driver? <car>`: the new driving model's card for one car (citysim.driving = "v2"); `waiting?`: who waits for whom
+    commandTable.add("driver?", "driver? [car id]",
+                     "With an id, ask for a car's driver card in the new driving model; alone, read it (refreshed every step).",
+                     unanswered("a CityWalkerSystem: play mode on a city level"));
+    commandTable.add("waiting?", "waiting?",
+                     "Who is waiting for whom in the new driving model: counts, loops, the longest queue and its head.",
+                     unanswered("a CityWalkerSystem: play mode on a city level"));
 }
 
 // Asking the ground and the buildings

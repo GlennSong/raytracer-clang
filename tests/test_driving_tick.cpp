@@ -342,6 +342,10 @@ struct Watch {
             if (c.speed < 0) note(negativeSpeeds, "car " + std::to_string(c.id.index) + " has a speed below zero");
             if (c.driven && c.speed == 0 && c.binding.by == Limit::Nothing)
                 note(restingForNothing, "car " + std::to_string(c.id.index) + " is at rest held back by nothing");
+            // The same, as the wait-for graph sees it (wait_graph.h): a waiting car with no reason would be on its
+            // no-reason list.
+            else if (isWaiting(c) && waitReasonOf(c).sort == ReasonSort::None)
+                note(restingForNothing, "car " + std::to_string(c.id.index) + " is waiting for no reason");
         }
         const engine::LaneGraph& g = *d.roads();
         for (uint32_t p = 0; p < g.paths.size(); ++p) {
@@ -1180,6 +1184,316 @@ TEST_CASE(tick_timing_lists_and_a_thousand_driven_cars) {
         std::printf("    one tick, %u driven cars on a 10x10 grid (%zu paths): %.0f us (%u moving)\n", trips,
                     t.graph.paths.size(), us, moving);
     }
+}
+
+// ---- Seeing why (#256): the trace, the driver card and the wait-for graph on a live tick -----------------------------
+//
+// (The wait-for graph on hand-built lists, and the ring on its own, are in test_driving_trace.cpp.)
+//   T1. a car drives off, catches a slower car, follows it and stops at a hold: its trace has one entry per change of
+//       what limits it, in order, and none on the ticks between; ending the trip drops the trace;
+//   T2. tracing on or off: the same state hash at every tick of 2,000 with 50 cars on a grid;
+//   T3. the driver card for a free-road car, a following car, a car at a hold, a parked car and an unknown id;
+//   T4. a closed ring full of cars at rest: one loop, gridlock, every car in it; with one car fewer the cars move up,
+//       and no tick has a car waiting for no reason;
+//   T5. a queue behind a held car: no loop, a chain as long as the queue, headed by the hold's rule by name.
+
+namespace {
+
+constexpr uint32_t kSlow = 3;            // a test class index: an ordinary car with a low top speed
+constexpr Real kSlowTopSpeed = 6.0;      // m/s
+VehicleClasses classesWithSlow() {
+    VehicleClasses c = testClasses();
+    VehicleClass slow = driving_test::testCarClass();
+    slow.name = "test_slow_car";
+    slow.topSpeed = kSlowTopSpeed;
+    c.add(slow);
+    return c;
+}
+
+// One change of what held a car back: the tick count after it, and the new binding.
+struct Change {
+    uint64_t tick = 0;
+    Binding binding;
+};
+
+}  // namespace
+
+TEST_CASE(trace_T1_one_entry_per_change_in_order) {
+    const Straight road(10, 100);
+    const TestRules rules(ruleSetLua(kAllRules));
+    World w(road.graph(), rules);
+    w.d.setVehicleClasses(classesWithSlow());
+    constexpr Real dt = 1.0 / 60;
+    constexpr Real kHoldX = 700;
+    CHECK(placeAt(w.d, road, 2, 200, kSlow));
+    CHECK(placeAt(w.d, road, 1, 10));
+    CHECK(w.d.beginTrip(CarId(2), 2, road.point(990)).valid());
+    const TripId trip = w.d.beginTrip(CarId(1), 1, road.point(990));
+    CHECK(trip.valid());
+    CHECK(w.d.placeHold(trip, 7, road.point(kHoldX)));
+    // Watch what limits car 1 after every tick, and keep each change.
+    std::vector<Change> changes;
+    Watch watch;
+    for (int k = 0; k < static_cast<int>(150 / dt); ++k) {
+        w.d.tick(dt);
+        watch.look(w.d);
+        const Car& c = *w.d.car(CarId(1));
+        if (changes.empty() || changes.back().binding != c.binding) changes.push_back(Change{w.d.tickCount(), c.binding});
+    }
+    const Car& c = *w.d.car(CarId(1));
+    CHECK(c.speed == 0 && c.binding.by == Limit::Stop && c.binding.rule == rules.rule("held"));
+    const CarTrace* trace = w.d.trace(CarId(1));
+    CHECK(trace != nullptr);
+    if (!trace) return;
+    std::string seen;
+    for (const Change& ch : changes)
+        seen += " " + std::to_string(static_cast<int>(ch.binding.by)) + "@" + std::to_string(ch.tick);
+    std::printf("    changes (limit@tick):%s\n", seen.c_str());
+    // The story, exactly: free road as it moves off, then the speed limit; the slower car once it comes in sight, far
+    // off, eases it a little; the speed limit again (the easing formula weighs the two, and while the slower car is
+    // still far the limit takes more off); the slower car for good as it closes; then the hold, once the slower car
+    // has gone on past it.
+    const std::vector<Binding> story = {
+        Binding(),
+        Binding{Limit::TopSpeed, CarId(), rules.rule("speed limit")},
+        Binding{Limit::CarAhead, CarId(2), kNoRule},
+        Binding{Limit::TopSpeed, CarId(), rules.rule("speed limit")},
+        Binding{Limit::CarAhead, CarId(2), kNoRule},
+        Binding{Limit::Stop, CarId(), rules.rule("held")},
+    };
+    CHECK(changes.size() == story.size());
+    for (std::size_t i = 0; i < changes.size() && i < story.size(); ++i) CHECK(changes[i].binding == story[i]);
+    // The first two come on the first two ticks.
+    CHECK(changes.size() >= 2u && changes[0].tick == 1u && changes[1].tick == 2u);
+    // The trace holds exactly those changes, at the ticks they happened, and nothing for the ticks between.
+    CHECK(trace->written == changes.size());
+    const std::size_t from = changes.size() > kTraceLength ? changes.size() - kTraceLength : 0;
+    CHECK(trace->size() == changes.size() - from);
+    for (std::size_t i = 0; i < trace->size() && from + i < changes.size(); ++i) {
+        const TraceEntry& e = trace->oldestFirst(i);
+        CHECK(e.tick == changes[from + i].tick && e.binding == changes[from + i].binding);
+    }
+    // The stop's entry carries the hold rule's reason, with the value it read.
+    const TraceEntry* last = trace->latest();
+    CHECK(last && last->why.rule == rules.rule("held") && last->why.kept > 0);
+    std::printf("%s", w.d.describeCar(CarId(1)).c_str());
+    watch.check("trace story");
+    // Ending the trip drops the trace.
+    CHECK(w.d.endTrip(trip));
+    CHECK(w.d.trace(CarId(1)) == nullptr);
+}
+
+TEST_CASE(trace_T2_tracing_on_or_off_same_state_hash) {
+    const TestRoads t = driving_test::gridRoads(4, 4);
+    const TestRules rules(ruleSetLua(kAllRules));
+    std::vector<engine::PathId> lanes;
+    for (uint32_t i = 0; i < t.graph.paths.size(); ++i)
+        if (t.graph.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
+    constexpr uint32_t kCars = 50;
+    constexpr int kTicks = 2000;
+    constexpr Real dt = 1.0 / 60;
+    std::vector<uint64_t> hashes[2];
+    uint64_t traceHashes[2] = {0, 0};
+    uint64_t entries[2] = {0, 0};
+    for (int pass = 0; pass < 2; ++pass) {
+        World w(t.graph, rules);
+        DrivingSettings s;
+        s.trace = pass == 0;
+        w.d.setSettings(s);
+        for (uint32_t k = 0; k < kCars; ++k) {
+            const engine::PathId lane = lanes[k % lanes.size()];
+            CHECK(w.d.placeCar(CarId(k), kOrdinary, at(lane, 10 + static_cast<Real>(k / lanes.size()) * 30)));
+            const engine::PathId to = lanes[engine::hashPair(256, k) % lanes.size()];
+            w.d.beginTrip(CarId(k), k, at(to, 50));
+        }
+        for (int k = 0; k < kTicks; ++k) {
+            w.d.tick(dt);
+            hashes[pass].push_back(w.d.stateHash());
+        }
+        traceHashes[pass] = w.d.traceHash();
+        for (const Car& c : w.d.cars())
+            if (const CarTrace* tr = w.d.trace(c.id)) entries[pass] += tr->written;
+    }
+    CHECK(hashes[0].size() == static_cast<std::size_t>(kTicks));
+    CHECK(hashes[0] == hashes[1]);
+    CHECK(entries[0] > 0u && entries[1] == 0u);
+    CHECK(traceHashes[0] != traceHashes[1]);
+    std::printf("    %u cars, %d ticks: the same state hash at every tick with tracing on and off (%llu entries "
+                "written with it on)\n",
+                kCars, kTicks, static_cast<unsigned long long>(entries[0]));
+}
+
+TEST_CASE(trace_T3_driver_cards) {
+    const TestRules rules(ruleSetLua(kAllRules));
+    constexpr Real dt = 1.0 / 60;
+    const Straight road(6, 100);
+    Watch watch;
+    // A car on free road, at the speed limit.
+    {
+        World w(road.graph(), rules);
+        CHECK(placeAt(w.d, road, 14, 10));
+        CHECK(w.d.beginTrip(CarId(14), 5, road.point(590)).valid());
+        run(w.d, 15, dt, watch);
+        const std::string card = w.d.describeCar(CarId(14));
+        std::printf("%s", card.c_str());
+        CHECK(card == "car 14, class \"test_car\", driven by person 5, trip to lane 10 at 90.0 m (446 m, about 33 s "
+                      "to go)\n"
+                      "on lane 2 at 43.7 m, 13.2 m/s, speeding up\n"
+                      "now: its top speed of 13.4 m/s, by rule \"speed limit\"\n"
+                      "held: no stop; top speed 13.4 m/s (speed limit: my_limit is 13.4 m/s)\n"
+                      "recent:\n"
+                      "  t=0.0 s  free road; 0.0 m/s on lane 0 at 10.0 m\n"
+                      "  t=0.0 s  a top speed (speed limit: my_limit is 13.4 m/s); 0.0 m/s on lane 0 at 10.0 m\n");
+    }
+    // A car following a slower one.
+    {
+        World w(road.graph(), rules);
+        w.d.setVehicleClasses(classesWithSlow());
+        CHECK(placeAt(w.d, road, 9, 60, kSlow));
+        CHECK(placeAt(w.d, road, 14, 10));
+        CHECK(w.d.beginTrip(CarId(9), 6, road.point(590)).valid());
+        CHECK(w.d.beginTrip(CarId(14), 5, road.point(590)).valid());
+        run(w.d, 30, dt, watch);
+        const std::string card = w.d.describeCar(CarId(14));
+        std::printf("%s", card.c_str());
+        CHECK(card == "car 14, class \"test_car\", driven by person 5, trip to lane 10 at 90.0 m (379 m, about 28 s "
+                      "to go)\n"
+                      "on lane 4 at 10.8 m, 6.0 m/s, steady\n"
+                      "now: following car 9, 11.2 m ahead, doing 6.0 m/s\n"
+                      "held: no stop; top speed 13.4 m/s (speed limit: my_limit is 13.4 m/s)\n"
+                      "recent:\n"
+                      "  t=0.0 s  following car 9; 0.0 m/s on lane 0 at 10.0 m\n");
+    }
+    // A car held at a hold.
+    {
+        World w(road.graph(), rules);
+        CHECK(placeAt(w.d, road, 14, 10));
+        const TripId trip = w.d.beginTrip(CarId(14), 5, road.point(590));
+        CHECK(w.d.placeHold(trip, 3, road.point(150)));
+        run(w.d, 30, dt, watch);
+        const std::string card = w.d.describeCar(CarId(14));
+        std::printf("%s", card.c_str());
+        CHECK(card == "car 14, class \"test_car\", driven by person 5, trip to lane 10 at 90.0 m (440 m, about 33 s "
+                      "to go)\n"
+                      "on lane 2 at 50.0 m, 0.0 m/s, at rest\n"
+                      "now: a stop 0.0 m ahead, by rule \"held\"\n"
+                      "held: stop in 0.0 m (held: hold_ahead is 0.0 m); top speed 13.4 m/s (speed limit: my_limit is "
+                      "13.4 m/s)\n"
+                      "recent:\n"
+                      "  t=0.0 s  free road; 0.0 m/s on lane 0 at 10.0 m\n"
+                      "  t=0.0 s  a top speed (speed limit: my_limit is 13.4 m/s); 0.0 m/s on lane 0 at 10.0 m\n"
+                      "  t=10.4 s  a stop (held: hold_ahead is 66.5 m); 12.3 m/s on lane 0 at 83.7 m\n");
+        // A parked car, and a car that is not there.
+        CHECK(placeAt(w.d, road, 20, 400));
+        const std::string parked = w.d.describeCar(CarId(20));
+        const std::string unknown = w.d.describeCar(CarId(77));
+        std::printf("%s%s", parked.c_str(), unknown.c_str());
+        CHECK(parked == "car 20, class \"test_car\", parked on lane 6 at 100.0 m: nobody is driving it\n");
+        CHECK(unknown == "no such car: 77 is not on the road in the new driving model\n");
+    }
+    watch.check("driver cards");
+}
+
+namespace {
+
+// A RING of four 52 m sides (208 m round): room for exactly 32 ordinary cars bumper to bumper at the standstill gap.
+constexpr uint32_t kRingSides = 4;
+constexpr Real kRingSide = 52;
+constexpr uint32_t kRingCars = 32;
+constexpr Real kRingSpacing = kRingSide * kRingSides / kRingCars;   // 6.5 m: a 4.5 m car and the 2 m standstill gap
+
+TestRoads ringOfFour() {
+    TestRoadSpec spec;
+    spec.roadLength = kRingSide;
+    return driving_test::ringRoad(kRingSides, spec);
+}
+
+// Car k's front `k` spacings and one car length round the ring from the start of side 0; its trip is to the middle of
+// the side two on from its own. Every car but `skip` (CarId::kNone: none skipped).
+void fillRing(World& w, const TestRoads& ring, uint32_t skip) {
+    const Real length = w.d.vehicleClasses().at(kOrdinary).length;
+    for (uint32_t k = 0; k < kRingCars; ++k) {
+        if (k == skip) continue;
+        const Real s = k * kRingSpacing + length;
+        const uint32_t side = static_cast<uint32_t>(s / kRingSide) % kRingSides;
+        std::string why;
+        CHECK(w.d.placeCar(CarId(k), kOrdinary, at(ring.ringLane(side, 0), s - side * kRingSide), {}, &why));
+        if (!why.empty()) std::printf("    placeCar %u: %s\n", k, why.c_str());
+        CHECK(w.d.beginTrip(CarId(k), k, at(ring.ringLane((side + 2) % kRingSides, 0), kRingSide / 2)).valid());
+    }
+}
+
+}  // namespace
+
+TEST_CASE(trace_T4_full_ring_is_one_gridlock_loop) {
+    const TestRoads ring = ringOfFour();
+    const TestRules rules(ruleSetLua(kAllRules));
+    constexpr Real dt = 1.0 / 60;
+    {
+        World w(ring.graph, rules);
+        fillRing(w, ring, CarId::kNone);
+        Watch watch;
+        run(w.d, 2, dt, watch);
+        const WaitReport r = w.d.waitReport();
+        CHECK(r.waiting == kRingCars && r.noReason.empty());
+        CHECK(r.loops.size() == 1u && r.gridlocks == 1u && r.deadlocks == 0u);
+        if (!r.loops.empty()) {
+            CHECK(r.loops[0].cars.size() == kRingCars && r.loops[0].kind == LoopClass::Gridlock);
+            for (uint32_t k = 0; k < r.loops[0].cars.size(); ++k) CHECK(r.loops[0].cars[k] == CarId(k));
+        }
+        const std::string text = w.d.describeWaiting(r);
+        std::printf("%s", text.substr(0, text.find(':', text.find("loop 1")) + 1).c_str());
+        std::printf(" ...\n");
+        watch.check("full ring");
+    }
+    {
+        // One car fewer: the gap travels back round the ring, every car moving up into it in turn.
+        World w(ring.graph, rules);
+        fillRing(w, ring, 0);
+        Watch watch;
+        uint64_t ticksWithNoReason = 0, ticksWithLoops = 0;
+        for (int k = 0; k < static_cast<int>(30 / dt); ++k) {
+            w.d.tick(dt);
+            watch.look(w.d);
+            const WaitReport r = w.d.waitReport();
+            if (!r.noReason.empty()) ++ticksWithNoReason;
+            if (!r.loops.empty()) ++ticksWithLoops;
+        }
+        uint32_t movedUp = 0;
+        for (const Car& c : w.d.cars())
+            if (c.odometer > 0) ++movedUp;
+        CHECK(ticksWithNoReason == 0u);
+        CHECK(ticksWithLoops == 0u);
+        CHECK(movedUp >= kRingCars / 2);
+        std::printf("    one car fewer: %u of %u cars moved up in 30 s; no tick with a car waiting for no reason, none "
+                    "with a loop\n",
+                    movedUp, kRingCars - 1);
+        watch.check("ring with a gap");
+    }
+}
+
+TEST_CASE(trace_T5_queue_behind_a_hold_is_a_chain) {
+    const Straight road(6, 100);
+    const TestRules rules(ruleSetLua(kAllRules));
+    World w(road.graph(), rules);
+    constexpr Real dt = 1.0 / 60;
+    constexpr uint32_t kQueue = 6;
+    TripId head;
+    for (uint32_t k = 0; k < kQueue; ++k) {
+        CHECK(placeAt(w.d, road, k + 1, 200 - k * 15.0));
+        const TripId t = w.d.beginTrip(CarId(k + 1), k + 1, road.point(590));
+        if (k == 0) head = t;
+    }
+    CHECK(w.d.placeHold(head, 1, road.point(300)));
+    Watch watch;
+    run(w.d, 60, dt, watch);
+    const WaitReport r = w.d.waitReport();
+    CHECK(r.waiting == kQueue && r.noReason.empty() && r.loops.empty());
+    CHECK(r.longestChain == kQueue && r.longestHead == CarId(1) && r.longestBack == CarId(kQueue));
+    const std::string text = w.d.describeWaiting(r);
+    std::printf("%s", text.c_str());
+    CHECK(text.find("a stop by rule \"held\": 1 queue, 6 cars in all, the longest 6") != std::string::npos);
+    watch.check("queue behind a hold");
 }
 
 #endif  // RT_ENABLE_SCRIPTING

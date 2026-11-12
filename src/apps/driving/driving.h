@@ -34,8 +34,10 @@
 #include "apps/driving/road_rules.h"
 #include "apps/driving/route.h"
 #include "apps/driving/rule_set.h"
+#include "apps/driving/trace.h"           // each driven car's recent decisions, and the driver card
 #include "apps/driving/traffic_state.h"   // CarId, PathPoint, Car, Hold, the per-path lists
 #include "apps/driving/vehicle_class.h"
+#include "apps/driving/wait_graph.h"      // who is waiting for whom
 #include "slot_map.h"
 
 #include <cstddef>
@@ -72,6 +74,9 @@ struct Trip {
     // the destination's). Then its end is a place to come to rest at; otherwise it is only where the driver stopped
     // looking, a limit it never comes near.
     bool wayEnds = false;
+    // WHAT THE DRIVER DECIDED RECENTLY (trace.h), and the reasons behind what it holds now. Written only while
+    // DrivingSettings::trace is on; never read by the tick, and left out of stateHash (traceHash folds it).
+    CarTrace trace;
 };
 
 // HOW THE TICK RUNS, set by the host (or a test). These numbers move to the rule set's `detail` table (design 7.2) in
@@ -82,6 +87,9 @@ struct DrivingSettings {
     // turn). At 60 ticks a second the default is the design's "near" rate, 10 decisions a second. Zero is taken as 1.
     static constexpr uint32_t kDefaultDecideEveryTicks = 6;
     uint32_t decideEveryTicks = kDefaultDecideEveryTicks;
+    // Keep each driven car's trace (trace.h). It only records: switching it off changes nothing a car does, and the
+    // state hash is the same either way.
+    bool trace = true;
 };
 
 // WHEN A FIXED CAP CUT SOMETHING SHORT, counted so it is never silent (both are covered by the state hash). Each
@@ -220,6 +228,20 @@ public:
     // folded in a fixed order: the same start and the same calls give the same number at every tick.
     uint64_t stateHash() const;
 
+    // ---- Seeing why (trace.h, wait_graph.h; issue #256). All read-only: none of it changes what a car does. ----
+    // The car's trip, or a null handle when it is on none.
+    TripId tripOf(CarId car) const;
+    // The car's trace, or null when it is on no trip (the ring goes with the trip).
+    const CarTrace* trace(CarId car) const;
+    // ONE NUMBER OVER EVERY TRACE, in car order (kept apart from stateHash, which leaves the traces out).
+    uint64_t traceHash() const;
+    // THE DRIVER CARD of a car, as plain text (trace.h describeCar).
+    std::string describeCar(CarId car) const { return driving::describeCar(*this, car); }
+    // WHO IS WAITING FOR WHOM, from the cars as they stand now (wait_graph.h), and the same as plain text with the
+    // rules named.
+    WaitReport waitReport() const;
+    std::string describeWaiting(const WaitReport& report) const;
+
 private:
     // The three steps of a tick, in order (design 7.1).
     void plan();            // each driver due works out what it wants; reads last tick's state, writes nothing shared
@@ -245,6 +267,8 @@ private:
         WayAhead way;
         bool wayEnds = false;
         uint32_t legReached = 0;
+        TracedReason stopWhy;       // the reasons behind `held`, kept only while tracing
+        TracedReason topSpeedWhy;
     };
 
     const engine::LaneGraph* roads_ = nullptr;

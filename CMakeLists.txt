@@ -499,8 +499,10 @@ add_library(driving STATIC
     src/apps/driving/road_rules.cpp      # the graph's regulation kinds bound to the rule set's devices (#251)
     src/apps/driving/route.cpp           # routes over sections and connectors, and which lanes lead on (#254)
     src/apps/driving/rule_set.cpp
+    src/apps/driving/trace.cpp           # each car's recent decisions, and the driver card (#256)
     src/apps/driving/traffic_state.cpp   # each car's record and each path's cars in order (#249)
     src/apps/driving/vehicle_class.cpp
+    src/apps/driving/wait_graph.cpp      # who is waiting for whom, and its loops (#256)
 )
 target_compile_options(driving PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(driving PUBLIC engine_core)
@@ -517,6 +519,7 @@ add_executable(driving_tests tests/main.cpp tests/test_driving.cpp tests/test_dr
     tests/test_driving_vehicles.cpp tests/test_driving_traffic.cpp tests/test_driving_notice.cpp
     tests/test_driving_decide.cpp tests/test_driving_route.cpp
     tests/test_driving_tick.cpp     # the three-step tick: speed, following, stopping, arriving (#253)
+    tests/test_driving_trace.cpp    # the decision trace, the driver card and the wait-for graph (#256)
     tests/driving_test_roads.cpp)   # small realistic road networks for the driving tests (#254)
 target_include_directories(driving_tests PRIVATE src tests)
 target_compile_options(driving_tests PRIVATE -Wall -Wextra)

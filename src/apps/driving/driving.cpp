@@ -167,6 +167,11 @@ void Driving::plan() {
             p.held.topSpeed = std::max(Real(0), decision_.topSpeed.speed);
             p.held.topSpeedRule = decision_.topSpeed.why.rule;
         }
+        if (settings_.trace) {
+            // The reasons behind what it will hold, copied out before the next driver's decision reuses decision_.
+            if (p.held.hasStop) p.stopWhy = keepReason(decision_, decision_.stop.why);
+            if (p.held.topSpeedRule != kNoRule) p.topSpeedWhy = keepReason(decision_, decision_.topSpeed.why);
+        }
         planned_.push_back(std::move(p));
     }
 
@@ -189,6 +194,10 @@ void Driving::plan() {
         t->wayAt = 0;
         t->wayEnds = p.wayEnds;
         t->legReached = p.legReached;
+        if (settings_.trace) {
+            t->trace.heldStop = p.stopWhy;
+            t->trace.heldTopSpeed = p.topSpeedWhy;
+        }
     }
 }
 
@@ -309,6 +318,29 @@ void Driving::move(Real dt) {
             capCounts_.lastTailOffTrail = c.id;
         }
         for (std::size_t k = out.trailCount; k < kMaxTrail; ++k) out.trail[k] = engine::PathId();
+
+        // THE TRACE: a new entry only when what limits the car changed (or its trip's first). Only written, never read
+        // by the tick.
+        if (settings_.trace) {
+            const TraceEntry* last = t->trace.latest();
+            if (!last || last->binding != out.binding) {
+                TraceEntry e;
+                e.tick = tickCount_ + 1;
+                e.seconds = clockSeconds_ + dt;
+                e.binding = out.binding;
+                e.speed = out.speed;
+                e.path = out.path;
+                e.along = out.along;
+                if (out.binding.by == Limit::Stop && out.binding.rule == t->trace.heldStop.rule)
+                    e.why = t->trace.heldStop;
+                else if (out.binding.by == Limit::TopSpeed && out.binding.rule != kNoRule &&
+                         out.binding.rule == t->trace.heldTopSpeed.rule)
+                    e.why = t->trace.heldTopSpeed;
+                else
+                    e.why.rule = out.binding.rule;
+                t->trace.add(e);
+            }
+        }
     }
 
     cars_.swap(carsNext_);
@@ -606,6 +638,40 @@ uint64_t Driving::stateHash() const {
         h.pod(e.tick);
     }
     return h.h;
+}
+
+// ---- Seeing why --------------------------------------------------------------------------------------------------------
+
+TripId Driving::tripOf(CarId car) const {
+    const std::map<CarId, TripId>::const_iterator it = tripOfCar_.find(car);
+    return it == tripOfCar_.end() ? TripId{} : it->second;
+}
+
+const CarTrace* Driving::trace(CarId car) const {
+    const Trip* t = trips_.get(tripOf(car));
+    return t ? &t->trace : nullptr;
+}
+
+uint64_t Driving::traceHash() const {
+    engine::bundle::Fnv h;
+    h.pod(static_cast<uint64_t>(tripOfCar_.size()));
+    for (const std::pair<const CarId, TripId>& entry : tripOfCar_) {
+        const Trip* t = trips_.get(entry.second);
+        h.pod(entry.first.index);
+        h.pod(t ? driving::traceHash(t->trace) : uint64_t(0));
+    }
+    return h.h;
+}
+
+WaitReport Driving::waitReport() const {
+    WaitReport r = analyseWaiting(waitingCars(cars_));
+    for (const Car& c : cars_)
+        if (c.driven) ++r.driven;
+    return r;
+}
+
+std::string Driving::describeWaiting(const WaitReport& report) const {
+    return driving::describeWaiting(report, hasRules_ ? &rules_.labels.rules : nullptr);
 }
 
 }  // namespace driving

@@ -724,6 +724,15 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                                ragdolls_.describe(pw));
 }
 
+// The answer to `driver?` and `waiting?` when the level drives the old model.
+static constexpr const char* kDrivingV2Off = "the new driving model is off on this level (it runs when citysim.driving = \"v2\")";
+// A control reply is one line: the driving library's text, its lines joined by " | ".
+static std::string oneLine(std::string text) {
+    while (!text.empty() && text.back() == '\n') text.pop_back();
+    for (std::size_t at = text.find('\n'); at != std::string::npos; at = text.find('\n', at)) text.replace(at, 1, " | ");
+    return text;
+}
+
 void CityWalkerSystem::onStart(engine::FrameContext& ctx) {
     onKnock_ = ctx.events.listen<engine::KnockRequest>([this](const engine::KnockRequest&) { knockPending_ = true; });
     for (const char* q : {"walkers?", "knock?", "flicker?", "activities?", "speeders?"})
@@ -737,6 +746,20 @@ void CityWalkerSystem::onStart(engine::FrameContext& ctx) {
             }
             return "ok " + whoResult_;
         });
+    // `driver? <car>` / `driver?`: the same for a car in the new driving model; `waiting?` answers at once.
+    if (ctx.commands != nullptr) {
+        answerDriver_ = ctx.commands->bind("driver?", "CityWalkerSystem", [this](const engine::ControlCommand& cmd) -> std::string {
+            if (!cmd.args.empty()) {
+                driverQuery_ = cmd.args[0];
+                return "ok staged (poll `driver?`)";
+            }
+            return "ok " + driverResult_;
+        });
+        answerWaiting_ = ctx.commands->bind("waiting?", "CityWalkerSystem", [this](const engine::ControlCommand&) -> std::string {
+            const driving::Driving* d = city_.sim().drivingV2();
+            return "ok " + (d ? oneLine(d->describeWaiting(d->waitReport())) : std::string(kDrivingV2Off));
+        });
+    }
 }
 
 void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
@@ -757,6 +780,13 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                 }
             whoResult_ = q + ": " + r;
         }
+    }
+    // `driver? <car>`: the car's driver card, answered every step while asked (poll `driver?`)
+    if (!driverQuery_.empty()) {
+        const driving::Driving* d = city_.sim().drivingV2();
+        driverResult_ = driverQuery_ + ": " +
+                        (d ? oneLine(d->describeCar(driving::CarId(static_cast<uint32_t>(std::atoi(driverQuery_.c_str())))))
+                           : std::string(kDrivingV2Off));
     }
     // The population scan: this step's slice of it (the whole pass spans the 2 s window).
     {

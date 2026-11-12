@@ -132,6 +132,12 @@
   "usage": "drive_to <x> <z>"
  },
  {
+  "name": "driver?",
+  "owner": "engine",
+  "summary": "With an id, ask for a car's driver card in the new driving model; alone, read it (refreshed every step).",
+  "usage": "driver? [car id]"
+ },
+ {
   "name": "elevator",
   "owner": "engine",
   "summary": "Press the elevator call key, or move the panel's floor selection by delta.",
@@ -550,6 +556,12 @@
   "owner": "engine",
   "summary": "Debug view: 0 normal, 1 AO, 2 SSR (rays muted), 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades, 9 roughness (what reflects), 10 environment reflection alone; plus wireframe.",
   "usage": "view <0-10> [wire 0-2]"
+ },
+ {
+  "name": "waiting?",
+  "owner": "engine",
+  "summary": "Who is waiting for whom in the new driving model: counts, loops, the longest queue and its head.",
+  "usage": "waiting?"
  },
  {
   "name": "walk_to",
