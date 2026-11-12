@@ -213,8 +213,8 @@ LaneGraph makeCrossroads() {
     meet(northToEast, OtherSide::Path, westToEast, Meeting::Join, len(northToEast) - 2, len(northToEast),
          len(westToEast) - 2, len(westToEast));
     meet(westToEast, OtherSide::Path, westToNorth, Meeting::Split, 0, 2, 0, 2);
-    j.crossings = Range{0, static_cast<uint32_t>(g.crossings.size())};
     g.junctions.push_back(j);
+    indexCrossings(g);   // the junction's range of them, and each path's list
 
     // Three spaces along the kerb lane.
     for (int s = 0; s < 3; ++s) {
@@ -293,7 +293,8 @@ TEST_CASE(lane_graph_text_dump_reads_by_hand) {
     CHECK(dumpPath(g, PathId(connectorId(0, 1))) ==
           "connector 9: far turn, from lane 0 into lane 3, 9.2 m, tightest radius 9.0 m, 3.0 m wide, junction 0, "
           "may wait inside at 4.6 m, tags turn, open to car, bus, bike, speed limit 6.7 m/s\n"
-          "  curve: (5.0, -1.5, 0.0) (-1.5, 5.0, 0.0)\n");
+          "  curve: (5.0, -1.5, 0.0) (-1.5, 5.0, 0.0)\n"
+          "  crossing points along it: 2 from 0.0 m, 3 from 0.0 m\n");
     CHECK(dumpCrossing(g, CrossingId(4)) ==
           "crossing point 4, junction 0: connector 10 crosses connector 13; on connector 10 from 3.0 to 6.5 m, "
           "on connector 13 from 3.5 to 7.0 m\n");
@@ -365,6 +366,39 @@ TEST_CASE(lane_graph_validate_names_each_fault) {
         LaneGraph g = good;
         std::swap(g.junctionLanes[g.junctions[0].leaving.first], g.junctionLanes[g.junctions[0].leaving.first + 1]);
         CHECK(hasProblem(validate(g), "junction 0: its leaving lanes are not in id order (1 after 3)"));
+    }
+    {   // a join that stops short of the end of its paths: a gap where nobody is looking (crossing point 5: 10 joins 20)
+        LaneGraph g = good;
+        g.crossings[5].aTo -= 1;
+        CHECK(hasProblem(validate(g), "crossing point 5: a join, but its stretches end"));
+    }
+    {   // a split of two connectors that do not leave one lane
+        LaneGraph g = good;
+        g.crossings[4].meeting = Meeting::Split;
+        g.crossings[4].aFrom = g.crossings[4].otherFrom = 0;
+        CHECK(hasProblem(validate(g), "crossing point 4: a split, but no path leads into both connector 10 and connector 13"));
+    }
+    {   // two connectors of one junction filed under none
+        LaneGraph g = good;
+        g.crossings[4].junction = JunctionId();
+        CHECK(hasProblem(validate(g), "crossing point 4 is filed under no junction, but connector 10 and connector 13 are both "
+                                      "connectors of junction 0"));
+    }
+    {   // one meeting recorded twice
+        LaneGraph g = good;
+        g.crossings.insert(g.crossings.begin() + 5, g.crossings[4]);
+        g.junctions[0].crossings.count += 1;
+        CHECK(hasProblem(validate(g), "crossing point 5 and crossing point 4 record one meeting of connector 10 and connector 13 twice"));
+    }
+    {   // a path's list missing one of its crossing points
+        LaneGraph g = good;
+        g.paths[connectorId(0, 2)].crossings.count -= 1;
+        CHECK(hasProblem(validate(g), "the paths' crossing point lists hold 13 entries, but the crossing points name paths 14 times"));
+    }
+    {   // a path's list naming a crossing point not on it
+        LaneGraph g = good;
+        g.pathCrossings[g.paths[connectorId(0, 1)].crossings.first] = CrossingId(4);
+        CHECK(hasProblem(validate(g), "connector 9 lists crossing point 4, which is not on it"));
     }
 }
 

@@ -126,6 +126,8 @@ struct Path {
     Real waitInsideAt = kNoWaitInside;   // connectors: where along it a car may wait inside the junction
     Range next;                          // into LaneGraph::nextPaths: lanes, what leaves its end; connectors, the lane
     Range regulations;                   // into LaneGraph::regulations, sorted by distance along
+    Range crossings;                     // into LaneGraph::pathCrossings: the crossing points it is part of (as either
+                                         // side), by where their stretch on it begins, then by id (indexCrossings)
 };
 
 // The line between two neighbouring lanes of a section: from which lane a car may cross it. Neither = a solid line.
@@ -147,12 +149,23 @@ struct Section {
 // TWO THINGS THAT MEET, and the stretch of each where bodies could touch. `a` is always a path; the other side is a
 // path (then a < b, so each pair is stored once), a crosswalk or a rail track. For a crosswalk the other stretch runs
 // across the walk from where it starts; for a track, along its line.
+//
+// Two paths meet in one of three ways: their paths pass through each other (Cross: the stretch on each from where the
+// bodies could first touch to where they no longer can), they end in the same lane (Join: from where they first come
+// within touching distance to the end of both), or they start from the same lane (Split: from the start of both to
+// where they are clear). Two paths can meet more than once: each meeting is its own record.
+//
+// Where it is filed. Two connectors of one junction: `junction` is that junction. Two paths that do not run through one
+// junction -- connectors of two junctions, or a connector and a lane, crowded together where a large merged junction or
+// a carry-on brings them within touching distance -- have no junction: that is the mark that they reach across
+// junctions, and they are stored after every junction's own, found from their paths' lists (Path::crossings). A
+// crosswalk's or a track's record is filed under the crosswalk's junction (none for one out on a road).
 struct CrossingPoint {
     PathId a;
     OtherSide otherSide = OtherSide::Path;
     Meeting meeting = Meeting::Cross;
     uint32_t other = kNoIndex;                     // a path, crosswalk or track index, by otherSide
-    JunctionId junction;                           // the junction it lies in; none for one out on a road
+    JunctionId junction;                           // the junction it lies in; none for one out on a road, or across two
     Real aFrom = 0, aTo = 0;                       // along a
     Real otherFrom = 0, otherTo = 0;               // along the other
 
@@ -214,7 +227,8 @@ struct LaneGraph {
     std::vector<Path> paths;
     std::vector<Section> sections;
     std::vector<Junction> junctions;
-    std::vector<CrossingPoint> crossings;   // junction by junction, then by (a, other side, other, aFrom)
+    std::vector<CrossingPoint> crossings;   // junction by junction (those on no junction last), then by (a, other side,
+                                            // other, aFrom)
     std::vector<Crosswalk> crosswalks;      // junction by junction (those on no junction last)
     std::vector<Track> tracks;
     std::vector<Regulation> regulations;    // path by path, then by distance along
@@ -229,6 +243,7 @@ struct LaneGraph {
     std::vector<LaneLine> laneLines;
     std::vector<PathId> junctionConnectors;
     std::vector<PathId> junctionLanes;  // the lanes arriving at and leaving each junction
+    std::vector<CrossingId> pathCrossings;   // each path's crossing points (Path::crossings)
     std::vector<Vec2> planPoints;       // junction boxes, crosswalk outlines, track lines
 
     // A name's index in a table, or kNoName.
@@ -266,11 +281,21 @@ bool operator==(const CarSpace& a, const CarSpace& b);
 bool operator==(const LaneGraph& a, const LaneGraph& b);   // field for field, exactly
 inline bool operator!=(const LaneGraph& a, const LaneGraph& b) { return !(a == b); }
 
+// FILES THE CROSSING POINTS once g.crossings holds them in any order: sorts them junction by junction (those on no
+// junction last), then by (a, other side, other, aFrom); sets each junction's crossings range; and lists each path's
+// crossing points (Path::crossings into pathCrossings: as `a` or as the other path), by where the stretch on that path
+// begins, then by id. Whoever fills g.crossings calls it: the road builder, a test's hand-made graph.
+void indexCrossings(LaneGraph& g);
+
 // THE STRUCTURAL CHECKS (design 5.3; the geometric ones come with the road builder): every index and range in
 // bounds, every enum value known, every tag inside its name table, lanes and their sections agreeing both ways,
 // connectors and their junctions agreeing both ways, a connector's from-lane listing it as next, lists sorted,
 // stretches running forwards, a junction's arriving lanes ending and its leaving lanes beginning within
-// kJunctionEndReach of its outline. Returns the problems in plain words, each naming what and where; empty = sound.
+// kJunctionEndReach of its outline. Crossing points: their stretches on their paths, two paths filed under a junction
+// both its connectors (and two filed under none not), a split starting both paths from a lane they both leave, a join
+// reaching the end of both into a lane they both enter, no two records of one pair overlapping on both paths, and each
+// path's list holding exactly the records that name it, in order. Returns the problems in plain words, each naming
+// what and where; empty = sound.
 std::vector<std::string> validate(const LaneGraph& g);
 
 // THE PARTS OF THE GRAPH A CAR CAN GO ROUND (issue #238): sets of paths that can all reach one another, following each

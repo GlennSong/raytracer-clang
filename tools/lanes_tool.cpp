@@ -1,9 +1,10 @@
 // lanes_tool — the headless host for the lanes road builder (ADR-0083, ADR-0089).
 //   lanes_tool build <graph.json> [--out <dir>]     build, print the summary and invariants, write <name>.glb/.svg/stats.json
 //                      [--probe x y r] [--quick] [--holes] [--walls]   heights and steps around a point; --quick skips the invariant sweep and the exports; --holes lists unpaved holes; --walls lists parapets that end on drivable road
-//   lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width ...]   the lane graph (#237, #238):
-//                      lane_graph.txt (its dump), problems.txt, reach.txt (how much a car can get round, and why not the
-//                      rest) and lane_graph.svg (lanes by section, junction outlines, connectors by turn, refusals)
+//   lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width ...] [--junction J ...]   the lane graph
+//                      (#237, #238, #239): lane_graph.txt (its dump), problems.txt, reach.txt (how much a car can get
+//                      round, and why not the rest) and lane_graph.svg (lanes by section, junction outlines, connectors by
+//                      turn, refusals, crossing points by kind); with --junction, junction_J.svg and junction_J.txt close up
 //   lanes_tool terrain <graph.json> <out.json> [step]   the scene's natural ground on a grid (for a map)
 //   lanes_tool interchange-demo <out.json>   write the system-interchange test scene: a curved elevated ring over a radial
 //                      expressway at ground level, its four ramps, and the expressway's inner leg becoming a boulevard
@@ -171,10 +172,14 @@ int main(int argc, char** argv) {
         // its text dump, its problems, how much of it a car can get round, and a plan SVG in --out.
         // --vehicle tag:radius:width (again for each): a vehicle tag every lane is open to, the tightest radius its path
         // may have and its width (metres). None given: the tool's two test vehicles below.
+        // --junction J (again for each): also junction_J.svg, the plan close up round junction J, and junction_J.txt, its
+        // connectors and every crossing point on them.
         std::string outDir = ".";
         LaneGraphOptions lgo;
+        std::vector<uint32_t> closeUps;
         for (int i = 3; i + 1 < argc; ++i) {
             if (std::strcmp(argv[i], "--out") == 0) outDir = argv[i + 1];
+            if (std::strcmp(argv[i], "--junction") == 0) closeUps.push_back(static_cast<uint32_t>(std::atoi(argv[i + 1])));
             if (std::strcmp(argv[i], "--vehicle") == 0) {
                 const std::string spec = argv[i + 1];
                 const std::size_t a = spec.find(':'), b = a == std::string::npos ? a : spec.find(':', a + 1);
@@ -239,6 +244,16 @@ int main(int argc, char** argv) {
                         G.vehicleTagNames[i].c_str());
         for (const std::pair<std::string, std::vector<uint32_t>>& o : lg.outside)
             std::printf("  outside the largest part: %zu lanes %s\n", o.second.size(), o.first.c_str());
+        {
+            const CrossingReport& cr = lg.crossings;
+            std::printf("  crossing points: %zu (%u crosses, %u joins, %u splits between two paths; %u with crosswalks); of "
+                        "the path pairs, %u reach across two junctions and %u are a connector and a lane; the busiest "
+                        "junction %u has %u; %u junctions with two or more connectors have none; %.0f ms\n",
+                        G.crossings.size(), cr.byMeeting[static_cast<int>(Meeting::Cross)],
+                        cr.byMeeting[static_cast<int>(Meeting::Join)], cr.byMeeting[static_cast<int>(Meeting::Split)],
+                        cr.withCrosswalks, cr.betweenJunctions, cr.withLanes, cr.busiestJunction, cr.busiestCount,
+                        cr.junctionsWithout, cr.milliseconds);
+        }
         const std::string dumpPath = outDir + "/lane_graph.txt", problemsPath = outDir + "/problems.txt", svgPath = outDir + "/lane_graph.svg";
         const std::string reachPath = outDir + "/reach.txt";
         { std::ofstream f(dumpPath); f << dumpText(G); if (!f) { std::fprintf(stderr, "lanes: cannot write %s\n", dumpPath.c_str()); return 1; } }
@@ -261,11 +276,43 @@ int main(int argc, char** argv) {
             if (r.from.valid()) marks.refusedTurns.push_back(r.at);
         if (!writeLaneGraphSvg(G, svgPath, marks)) { std::fprintf(stderr, "lanes: cannot write %s\n", svgPath.c_str()); return 1; }
         std::printf("wrote %s, %s, %s, %s\n", dumpPath.c_str(), problemsPath.c_str(), reachPath.c_str(), svgPath.c_str());
+        for (uint32_t j : closeUps) {
+            if (j >= G.junctions.size()) { std::fprintf(stderr, "lanes: no junction %u (%zu junctions)\n", j, G.junctions.size()); return 2; }
+            const Junction& jn = G.junctions[j];
+            // the window: the junction's outline and its connectors, and a margin round them
+            constexpr double kCloseUpMargin = 8.0;
+            std::vector<Vec2> pts(G.planPoints.begin() + jn.box.first, G.planPoints.begin() + jn.box.end());
+            for (uint32_t k = jn.connectors.first; k < jn.connectors.end(); ++k) {
+                const Range& c = G.paths[G.junctionConnectors[k].index].curve;
+                pts.insert(pts.end(), G.points.begin() + c.first, G.points.begin() + c.end());
+            }
+            LaneGraphSvgMarks close = marks;
+            close.cropped = true;
+            bounds(pts, close.cropLo, close.cropHi);
+            close.cropLo = close.cropLo - Vec2(kCloseUpMargin, kCloseUpMargin);
+            close.cropHi = close.cropHi + Vec2(kCloseUpMargin, kCloseUpMargin);
+            const std::string base = outDir + "/junction_" + std::to_string(j);
+            if (!writeLaneGraphSvg(G, base + ".svg", close)) { std::fprintf(stderr, "lanes: cannot write %s.svg\n", base.c_str()); return 1; }
+            // its connectors, then every crossing point on one of them, in id order
+            std::ofstream f(base + ".txt");
+            std::vector<uint32_t> records;
+            for (uint32_t k = jn.connectors.first; k < jn.connectors.end(); ++k) {
+                const PathId c = G.junctionConnectors[k];
+                f << engine::dumpPath(G, c);
+                for (uint32_t m = G.paths[c.index].crossings.first; m < G.paths[c.index].crossings.end(); ++m)
+                    records.push_back(G.pathCrossings[m].index);
+            }
+            std::sort(records.begin(), records.end());
+            records.erase(std::unique(records.begin(), records.end()), records.end());
+            for (uint32_t c : records) f << dumpCrossing(G, CrossingId(c));
+            std::printf("wrote %s.svg, %s.txt (%u connectors, %zu crossing points)\n", base.c_str(), base.c_str(),
+                        jn.connectors.count, records.size());
+        }
         return 0;
     }
     if (argc < 3 || (std::strcmp(argv[1], "build") != 0 && std::strcmp(argv[1], "twin") != 0 && std::strcmp(argv[1], "blocks") != 0)) {
         std::fprintf(stderr, "usage: lanes_tool build <graph.json> [--out <dir>]\n"
-                             "       lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width ...]   (the lane graph: dump, problems, reach, plan SVG)\n"
+                             "       lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width ...] [--junction J ...]   (the lane graph: dump, problems, reach, plan SVG; junction close-ups)\n"
                              "       lanes_tool design <graph.json> <out.json> [--plan-crossings]   (the graph with every road's planned profile; built again, taken as given)\n"
                              "                    [--ramp-width M] [--ramp-shoulder M]   ramp carriageway (default 4.5 m lane, 2.5 m shoulder)\n");
         return 2;

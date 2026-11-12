@@ -489,7 +489,11 @@ Sketch only; field names are for the implementer to settle.
 - a parking space is called `CarSpace`, because the word for a kind of lane is data and may not appear in the code;
 - tags, regulation kinds, controls and road classes are name tables carried by the graph, at most 32 names for
   each set of tags;
-- one path is 96 bytes plus its curve points; curves are stored in full precision until the island is measured.
+- one path is 104 bytes plus its curve points; curves are stored in full precision until the island is measured;
+- crossing points (task B3, ADR-0400) come in three kinds, cross, join and **split** (two paths leaving one lane);
+  each path lists the ones it is part of (`Path::crossings`, by where they begin along it), so a record stored once is
+  found from either path; two paths that do not run through one junction (two junctions' connectors, or a connector and
+  a lane) are filed under no junction.
 
 ```cpp
 struct LanePath {                 // a lane or a connector

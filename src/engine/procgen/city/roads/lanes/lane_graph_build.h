@@ -98,12 +98,14 @@ inline double offsideness(double normalOffset, int dir) { return normalOffset * 
 inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 
 // THE LANE GRAPH BUILDER'S VERSION. A saved lane graph (lane_graph_cache.h) is keyed by the roads it was built from,
-// the vehicles its connectors were checked against and this number, so BUMP IT whenever what buildLaneGraph or
-// connectJunctions (lane_graph_connect.h) makes can change -- a new rule for which turns exist, a connector's shape, a
-// tolerance above -- or every level in v2 keeps loading the graph the old code built. (A change to the roads themselves
+// the vehicles its connectors were checked against and this number, so BUMP IT whenever what buildLaneGraph,
+// connectJunctions (lane_graph_connect.h) or findCrossingPoints (lane_graph_crossings.h) makes can change -- a new rule
+// for which turns exist, a connector's shape, a tolerance above or there -- or every level in v2 keeps loading the graph
+// the old code built. (A change to the roads themselves
 // is the lanes tag's, kLanesBuildTag, which keys the roads; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
-constexpr uint32_t kLaneGraphBuildVersion = 1;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
+constexpr uint32_t kLaneGraphBuildVersion = 2;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
+                                                 // 2: crossing points (#239, ADR-0400)
 
 // A VEHICLE TAG and how it turns: the tightest radius its path may have, and its width (metres). Passed in by the
 // caller (the engine does not know the driving model's vehicles); a connector tighter than the radius is closed to it.
@@ -141,6 +143,19 @@ struct Refusal {
     PathId from, to;            // not valid when the whole junction is refused
     Turn turn = Turn::None;
     Vec2 at;
+};
+
+// HOW THE CROSSING POINTS CAME OUT (lane_graph_crossings.h findCrossingPoints), counted.
+struct CrossingReport {
+    uint32_t byMeeting[kMeetingCount] = {};   // records between two paths, by Meeting (cross, join, split)
+    uint32_t withCrosswalks = 0;              // records of a path over a crosswalk
+    uint32_t betweenJunctions = 0;            // ... of the path records: connectors of two junctions
+    uint32_t withLanes = 0;                   // ... a connector and a lane
+    uint32_t busiestJunction = kNoIndex;      // the junction with the most records filed under it (the lowest of equals)
+    uint32_t busiestCount = 0;
+    uint32_t junctionsWithout = 0;            // junctions with two or more connectors and no record
+    std::vector<std::string> problems;        // anything that looks wrong, in plain words with its place
+    double milliseconds = 0;
 };
 
 // Which builder lane a lane path was cut from, and the stretch of it: metres along the builder lane in the way cars
@@ -184,9 +199,10 @@ struct LaneGraphBuild {
     ReachableParts reach;
     double reachableShare = 0;
     std::vector<std::pair<std::string, std::vector<uint32_t>>> outside;
+    CrossingReport crossings;              // the crossing points (their problems are in `problems` too)
     double milliseconds = 0;               // the whole of buildLaneGraph
     double boxMilliseconds = 0;            // ... of which finding the paint's junction boxes
-    double connectMilliseconds = 0;        // ... of which the connectors
+    double connectMilliseconds = 0;        // ... of which the connectors (the crossing points: crossings.milliseconds)
 };
 
 // The lane graph of a built road network, its problems, and where each path came from.

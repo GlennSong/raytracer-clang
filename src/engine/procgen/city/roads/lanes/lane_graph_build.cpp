@@ -3,6 +3,7 @@
 #include "engine/procgen/city/polygon.h"                     // convexHull, pointInPolygon
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"       // the junction boxes the paint finds
 #include "engine/procgen/city/roads/lanes/lane_graph_connect.h"   // the paths through junctions
+#include "engine/procgen/city/roads/lanes/lane_graph_crossings.h"   // where they cross, join and split
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 
 #include <algorithm>
@@ -1226,6 +1227,13 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
         G.nextPaths.insert(G.nextPaths.end(), next[p].begin(), next[p].end());
         G.paths[p].next.count = static_cast<uint32_t>(next[p].size());
     }
+
+    // ---- where the paths cross, join and split (the vehicles' widths, the builder's same-level figure) --------------
+    CrossingOptions co;
+    co.vehicles = opts.vehicles;
+    co.clearance = g.rules.sameLevelDz;
+    out.crossings = findCrossingPoints(G, co);
+    out.problems.insert(out.problems.end(), out.crossings.problems.begin(), out.crossings.problems.end());
 
     for (const std::string& p : validate(G)) out.problems.push_back("lane graph: " + p);
     reachReport(out);

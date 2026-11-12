@@ -12,9 +12,10 @@ namespace engine {
 
 namespace {
 
-// The section's magic and the version this build writes and reads (2: junctions list their arriving and leaving lanes).
+// The section's magic and the version this build writes and reads (2: junctions list their arriving and leaving lanes;
+// 3: each path lists its crossing points).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 2;
+constexpr uint32_t kVersion = 3;
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
 // A closed outline (a junction's box, a crosswalk) has at least this many corners; a track's line two points.
@@ -133,6 +134,7 @@ void putItem(BinWriter& w, const Path& p) {
     w.put(p.waitInsideAt);
     putItem(w, p.next);
     putItem(w, p.regulations);
+    putItem(w, p.crossings);
 }
 void putItem(BinWriter& w, const Section& s) {
     putItem(w, s.lanes);
@@ -202,7 +204,8 @@ bool getItem(BinReader& r, Path& p) {
     return getEnum(r, p.kind) && getEnum(r, p.turn) && r.get(p.laneTags) && r.get(p.vehicleTags) &&
            getItem(r, p.curve) && r.get(p.length) && r.get(p.width) && r.get(p.tightestRadius) &&
            r.get(p.speedLimit) && getItem(r, p.section) && r.get(p.indexInSection) && getItem(r, p.junction) &&
-           getItem(r, p.from) && r.get(p.waitInsideAt) && getItem(r, p.next) && getItem(r, p.regulations);
+           getItem(r, p.from) && r.get(p.waitInsideAt) && getItem(r, p.next) && getItem(r, p.regulations) &&
+           getItem(r, p.crossings);
 }
 bool getItem(BinReader& r, Section& s) { return getItem(r, s.lanes) && getItem(r, s.lines) && r.get(s.roadClass); }
 bool getItem(BinReader& r, Junction& j) {
@@ -328,6 +331,49 @@ Range LaneGraph::addPlanPoints(const std::vector<Vec2>& pts) {
     return r;
 }
 
+void indexCrossings(LaneGraph& g) {
+    // junction by junction, those on no junction (kNoIndex) last; then (a, other side, other, aFrom), and the rest of
+    // the record so equal keys still sort one way
+    std::stable_sort(g.crossings.begin(), g.crossings.end(), [](const CrossingPoint& x, const CrossingPoint& y) {
+        if (x.junction.index != y.junction.index) return x.junction.index < y.junction.index;
+        if (x.a != y.a) return x.a < y.a;
+        if (x.otherSide != y.otherSide) return static_cast<uint8_t>(x.otherSide) < static_cast<uint8_t>(y.otherSide);
+        if (x.other != y.other) return x.other < y.other;
+        if (x.aFrom != y.aFrom) return x.aFrom < y.aFrom;
+        return x.otherFrom < y.otherFrom;
+    });
+    std::size_t k = 0;
+    for (uint32_t j = 0; j < g.junctions.size(); ++j) {
+        while (k < g.crossings.size() && g.crossings[k].junction.index < j) ++k;
+        Range& r = g.junctions[j].crossings;
+        r.first = static_cast<uint32_t>(k);
+        while (k < g.crossings.size() && g.crossings[k].junction.index == j) ++k;
+        r.count = static_cast<uint32_t>(k) - r.first;
+    }
+    // each path's list: (path, where the stretch on it begins, record), sorted
+    struct Entry { uint32_t path; Real start; uint32_t crossing; };
+    std::vector<Entry> entries;
+    for (uint32_t c = 0; c < g.crossings.size(); ++c) {
+        const CrossingPoint& x = g.crossings[c];
+        entries.push_back(Entry{x.a.index, x.aFrom, c});
+        if (x.otherSide == OtherSide::Path) entries.push_back(Entry{x.other, x.otherFrom, c});
+    }
+    std::sort(entries.begin(), entries.end(), [](const Entry& x, const Entry& y) {
+        if (x.path != y.path) return x.path < y.path;
+        if (x.start != y.start) return x.start < y.start;
+        return x.crossing < y.crossing;
+    });
+    g.pathCrossings.clear();
+    std::size_t e = 0;
+    for (uint32_t p = 0; p < g.paths.size(); ++p) {
+        Range& r = g.paths[p].crossings;
+        r.first = static_cast<uint32_t>(g.pathCrossings.size());
+        while (e < entries.size() && entries[e].path < p) ++e;   // (a path out of range: skipped, validate names it)
+        while (e < entries.size() && entries[e].path == p) g.pathCrossings.push_back(CrossingId(entries[e++].crossing));
+        r.count = static_cast<uint32_t>(g.pathCrossings.size()) - r.first;
+    }
+}
+
 // ---- equality ---------------------------------------------------------------------------------------------------
 
 namespace {
@@ -342,7 +388,7 @@ bool operator==(const Path& a, const Path& b) {
            a.curve == b.curve && a.length == b.length && a.width == b.width && a.tightestRadius == b.tightestRadius &&
            a.speedLimit == b.speedLimit && a.section == b.section && a.indexInSection == b.indexInSection &&
            a.junction == b.junction && a.from == b.from && a.waitInsideAt == b.waitInsideAt && a.next == b.next &&
-           a.regulations == b.regulations;
+           a.regulations == b.regulations && a.crossings == b.crossings;
 }
 bool operator==(const Section& a, const Section& b) {
     return a.lanes == b.lanes && a.lines == b.lines && a.roadClass == b.roadClass;
@@ -373,7 +419,7 @@ bool operator==(const LaneGraph& a, const LaneGraph& b) {
            sameVec2s(a.points, b.points) && a.along == b.along && a.heights == b.heights &&
            a.nextPaths == b.nextPaths && a.sectionLanes == b.sectionLanes && a.laneLines == b.laneLines &&
            a.junctionConnectors == b.junctionConnectors && a.junctionLanes == b.junctionLanes &&
-           sameVec2s(a.planPoints, b.planPoints);
+           a.pathCrossings == b.pathCrossings && sameVec2s(a.planPoints, b.planPoints);
 }
 
 // ---- validate ---------------------------------------------------------------------------------------------------
@@ -640,7 +686,30 @@ std::vector<std::string> validate(const LaneGraph& g) {
         return k >= r.first && k < r.end();
     };
 
-    // Crossing points.
+    // Crossing points. What leads into each path (the paths listing it as next), for the splits: two paths split where
+    // one path leads into both.
+    std::vector<std::vector<uint32_t>> ledFrom;
+    if (!g.crossings.empty()) {
+        ledFrom.resize(nPaths);
+        for (uint32_t i = 0; i < nPaths; ++i)
+            if (inRange(g.paths[i].next, g.nextPaths.size()))
+                for (uint32_t k = g.paths[i].next.first; k < g.paths[i].next.end(); ++k)
+                    if (g.nextPaths[k].index < nPaths) ledFrom[g.nextPaths[k].index].push_back(i);
+    }
+    // Whether some path is in both lists (each in id order, as next lists and ledFrom are).
+    auto shareOne = [](const PathId* a, std::size_t na, const PathId* b, std::size_t nb) {
+        for (std::size_t i = 0, j = 0; i < na && j < nb;) {
+            if (a[i] == b[j]) return true;
+            if (a[i] < b[j]) ++i;
+            else ++j;
+        }
+        return false;
+    };
+    auto nextOf = [&](uint32_t p, std::size_t& n) -> const PathId* {
+        const Range r = g.paths[p].next;
+        n = inRange(r, g.nextPaths.size()) ? r.count : 0;
+        return g.nextPaths.data() + (n ? r.first : 0);
+    };
     for (uint32_t c = 0; c < g.crossings.size(); ++c) {
         const CrossingPoint& x = g.crossings[c];
         const std::string who = fmt("crossing point %u", c);
@@ -659,6 +728,44 @@ std::vector<std::string> validate(const LaneGraph& g) {
                 if (!(x.a.index < x.other))
                     out.push_back(fmt("%s: its paths must be stored lower id first (%u, %u)", who.c_str(), x.a.index, x.other));
                 checkStretch(who, x.other, x.otherFrom, x.otherTo);
+                const Path& pa = g.paths[x.a.index];
+                const Path& pb = g.paths[x.other];
+                const std::string an = pathName(g, x.a.index), bn = pathName(g, x.other);
+                // filed under the junction both run through, or under none when they do not run through one
+                const bool oneJunction = pa.kind == PathKind::Connector && pb.kind == PathKind::Connector &&
+                                         pa.junction.valid() && pa.junction == pb.junction;
+                if (x.junction.valid() && !(oneJunction && pa.junction == x.junction))
+                    out.push_back(fmt("%s is filed under junction %u, but %s and %s are not both its connectors", who.c_str(),
+                                      x.junction.index, an.c_str(), bn.c_str()));
+                if (!x.junction.valid() && oneJunction)
+                    out.push_back(fmt("%s is filed under no junction, but %s and %s are both connectors of junction %u",
+                                      who.c_str(), an.c_str(), bn.c_str(), pa.junction.index));
+                if (x.meeting == Meeting::Split) {
+                    if (x.aFrom != 0 || x.otherFrom != 0)
+                        out.push_back(fmt("%s: a split, but its stretches start %.2f m along %s and %.2f m along %s, not at "
+                                          "their starts", who.c_str(), x.aFrom, an.c_str(), x.otherFrom, bn.c_str()));
+                    const std::vector<uint32_t>& fa = ledFrom[x.a.index];
+                    const std::vector<uint32_t>& fb = ledFrom[x.other];
+                    bool shared = false;
+                    for (std::size_t i = 0, j = 0; i < fa.size() && j < fb.size() && !shared;) {
+                        shared = fa[i] == fb[j];
+                        if (fa[i] < fb[j]) ++i;
+                        else ++j;
+                    }
+                    if (!shared)
+                        out.push_back(fmt("%s: a split, but no path leads into both %s and %s", who.c_str(), an.c_str(), bn.c_str()));
+                }
+                if (x.meeting == Meeting::Join) {
+                    if (std::fabs(x.aTo - pa.length) > kLengthTolerance || std::fabs(x.otherTo - pb.length) > kLengthTolerance)
+                        out.push_back(fmt("%s: a join, but its stretches end %.2f m along %s (%.2f m long) and %.2f m along "
+                                          "%s (%.2f m long), not at their ends", who.c_str(), x.aTo, an.c_str(), pa.length,
+                                          x.otherTo, bn.c_str(), pb.length));
+                    std::size_t na = 0, nb = 0;
+                    const PathId* qa = nextOf(x.a.index, na);
+                    const PathId* qb = nextOf(x.other, nb);
+                    if (!shareOne(qa, na, qb, nb))
+                        out.push_back(fmt("%s: a join, but %s and %s lead into no path in common", who.c_str(), an.c_str(), bn.c_str()));
+                }
             }
             break;
         case OtherSide::Crosswalk:
@@ -667,6 +774,11 @@ std::vector<std::string> validate(const LaneGraph& g) {
             const std::size_t n = walk ? g.crosswalks.size() : g.tracks.size();
             if (x.other >= n)
                 out.push_back(fmt("%s: %s %u is out of range (%zu)", who.c_str(), walk ? "crosswalk" : "track", x.other, n));
+            else if (walk && x.junction != g.crosswalks[x.other].junction)
+                out.push_back(fmt("%s is filed under %s, but its crosswalk lies in %s", who.c_str(),
+                                  x.junction.valid() ? fmt("junction %u", x.junction.index).c_str() : "no junction",
+                                  g.crosswalks[x.other].junction.valid()
+                                      ? fmt("junction %u", g.crosswalks[x.other].junction.index).c_str() : "none"));
             if (x.meeting != Meeting::Cross)
                 out.push_back(fmt("%s: a %s can only be crossed, not %s", who.c_str(), walk ? "crosswalk" : "track",
                                   meetingWord(x.meeting)));
@@ -695,7 +807,59 @@ std::vector<std::string> validate(const LaneGraph& g) {
                 : y.other != x.other ? y.other < x.other
                 : y.aFrom <= x.aFrom;
             if (!ordered) out.push_back(fmt("%s is out of order after crossing point %u", who.c_str(), c - 1));
+            // one meeting recorded once: two records of one pair never overlap on both
+            if (y.a == x.a && y.otherSide == x.otherSide && y.other == x.other && x.aFrom <= y.aTo && y.aFrom <= x.aTo &&
+                x.otherFrom <= y.otherTo && y.otherFrom <= x.otherTo)
+                out.push_back(fmt("%s and crossing point %u record one meeting of %s and %s twice (their stretches overlap on "
+                                  "both)", who.c_str(), c - 1, pathName(g, x.a.index).c_str(), otherName(g, x).c_str()));
         }
+        // those on no junction after every junction's own
+        if (c > 0 && !g.crossings[c - 1].junction.valid() && x.junction.valid())
+            out.push_back(fmt("%s (junction %u) comes after crossing point %u, which lies on no junction", who.c_str(),
+                              x.junction.index, c - 1));
+    }
+    // Each path's list of its crossing points: in range, each naming the path, by where its stretch on the path begins
+    // (then id); and together they hold each record once for each path it names (a list holds no record twice, and
+    // names only its own path, so equal counts mean every record is in the list of each of its paths).
+    {
+        std::size_t named = 0, listed = 0;
+        for (const CrossingPoint& x : g.crossings) named += x.otherSide == OtherSide::Path ? 2 : 1;
+        for (uint32_t i = 0; i < nPaths; ++i) {
+            const Range& r = g.paths[i].crossings;
+            const std::string who = pathName(g, i);
+            if (!inRange(r, g.pathCrossings.size())) {
+                out.push_back(fmt("%s: its crossing points (%u to %u) are out of range (%zu entries)", who.c_str(), r.first,
+                                  r.end(), g.pathCrossings.size()));
+                continue;
+            }
+            listed += r.count;
+            Real lastStart = 0;
+            uint32_t lastId = kNoIndex;
+            for (uint32_t k = r.first; k < r.end(); ++k) {
+                const uint32_t c = g.pathCrossings[k].index;
+                if (c >= g.crossings.size()) {
+                    out.push_back(fmt("%s lists crossing point %u, out of range (%zu)", who.c_str(), c, g.crossings.size()));
+                    lastId = kNoIndex;
+                    continue;
+                }
+                const CrossingPoint& x = g.crossings[c];
+                const bool asA = x.a.index == i, asOther = x.otherSide == OtherSide::Path && x.other == i;
+                if (!asA && !asOther) {
+                    out.push_back(fmt("%s lists crossing point %u, which is not on it", who.c_str(), c));
+                    lastId = kNoIndex;
+                    continue;
+                }
+                const Real start = asA ? x.aFrom : x.otherFrom;
+                if (lastId != kNoIndex && !(lastStart < start || (lastStart == start && lastId < c)))
+                    out.push_back(fmt("%s: its crossing points are out of order (%u, from %.2f m, after %u, from %.2f m)",
+                                      who.c_str(), c, start, lastId, lastStart));
+                lastStart = start;
+                lastId = c;
+            }
+        }
+        if (listed != named)
+            out.push_back(fmt("the paths' crossing point lists hold %zu entries, but the crossing points name paths %zu times",
+                              listed, named));
     }
 
     // Crosswalks and tracks.
@@ -917,13 +1081,35 @@ std::string dumpPath(const LaneGraph& g, PathId id) {
         out += fmt("  regulation %u: %s at %.1f m, value %.1f\n", k, nameOf(g.regulationKindNames, r.kind).c_str(), r.at,
                    r.value);
     }
+    if (p.crossings.count > 0) {
+        out += "  crossing points along it:";
+        for (uint32_t k = p.crossings.first; k < safeEnd(p.crossings, g.pathCrossings.size()); ++k) {
+            const uint32_t c = g.pathCrossings[k].index;
+            const char* sep = k == p.crossings.first ? "" : ",";
+            if (c >= g.crossings.size()) {
+                out += fmt("%s %u (out of range)", sep, c);
+                continue;
+            }
+            const CrossingPoint& x = g.crossings[c];
+            out += fmt("%s %u from %.1f m", sep, c, x.a == id ? x.aFrom : x.otherFrom);
+        }
+        out += "\n";
+    }
     return out;
 }
 
 std::string dumpCrossing(const LaneGraph& g, CrossingId id) {
     if (id.index >= g.crossings.size()) return fmt("crossing point %u: out of range\n", id.index);
     const CrossingPoint& c = g.crossings[id.index];
-    const std::string where = c.junction.valid() ? fmt("junction %u", c.junction.index) : std::string("on the road");
+    // where it is filed: its junction; two paths of no one junction, the junctions they run through; else on the road
+    auto junctionOf = [&](uint32_t p) {
+        if (p >= g.paths.size() || g.paths[p].kind != PathKind::Connector) return std::string("a lane");
+        return fmt("junction %u", g.paths[p].junction.index);
+    };
+    const std::string where = c.junction.valid() ? fmt("junction %u", c.junction.index)
+                              : c.otherSide == OtherSide::Path
+                                  ? "between " + junctionOf(c.a.index) + " and " + junctionOf(c.other)
+                                  : std::string("on the road");
     const std::string a = pathName(g, c.a.index), b = otherName(g, c);
     return fmt("crossing point %u, %s: %s %s %s; on %s from %.1f to %.1f m, on %s from %.1f to %.1f m\n", id.index,
                where.c_str(), a.c_str(), meetingWord(c.meeting), b.c_str(), a.c_str(), c.aFrom, c.aTo, b.c_str(),
@@ -1009,6 +1195,7 @@ void putLaneGraph(bundle::BinWriter& w, const LaneGraph& g) {
     putList(w, g.laneLines);
     putList(w, g.junctionConnectors);
     putList(w, g.junctionLanes);
+    putList(w, g.pathCrossings);
     putList(w, g.planPoints);
 }
 
@@ -1038,6 +1225,7 @@ bool getLaneGraph(bundle::BinReader& r, LaneGraph& g, std::string* err) {
                     getList(r, in.laneLines, "lane lines", err) &&
                     getList(r, in.junctionConnectors, "junction connectors", err) &&
                     getList(r, in.junctionLanes, "junction lanes", err) &&
+                    getList(r, in.pathCrossings, "path crossing points", err) &&
                     getList(r, in.planPoints, "plan points", err);
     if (!ok) return false;
     if (r.remaining() != 0) {

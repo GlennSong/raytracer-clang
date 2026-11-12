@@ -1,0 +1,73 @@
+#ifndef RAYTRACER_ENGINE_PROCGEN_CITY_ROADS_LANES_LANE_GRAPH_CROSSINGS_H
+#define RAYTRACER_ENGINE_PROCGEN_CITY_ROADS_LANES_LANE_GRAPH_CROSSINGS_H
+
+// WHERE PATHS THROUGH A JUNCTION CROSS, JOIN AND SPLIT (issue #239, docs/driving-briefs/B3-crossing-points.md,
+// ADR-0400). For every pair of paths whose cars could touch, the stretch of each path where they could: the table the
+// junction tasks (who gives way, first in goes first, room beyond) read. Shape only: it does not say who gives way.
+//
+// HOW "COULD TOUCH" IS MEASURED. Both centre lines are walked in steps of kCrossingStep. Two points can touch when they
+// are closer, in plan, than half the widest vehicle allowed on the one path, plus half the widest allowed on the other,
+// plus kCrossingMargin -- and their heights are within the road builder's same-level figure (a bridge over a street is
+// not a crossing). Vehicle widths, not lane widths: the caller passes each vehicle tag's width, as it does for the
+// connectors. Every pair of samples of the two paths is tested, so the touching pairs form patches in "distance along
+// the one path, distance along the other"; each patch is one meeting, and its reach along each path is that path's
+// stretch, widened by one step each way (the true edge lies within a step of the last sample that touches).
+//
+// WHICH KIND. A patch holding both paths' starts, of two paths one path leads into, is a SPLIT (from the start of both
+// to where they are clear). One holding both ends, of two paths that lead into one path, is a JOIN (from where they first
+// touch to the end of both). One holding the end of one path and the start of a path that follows it (directly, or
+// through paths shorter than touching distance) is no meeting at all: one car following another, dropped. Any other is
+// a CROSS. Two paths that cross twice make two records.
+//
+// WHICH PAIRS. Every connector against every path near it: the other connectors of its junction, the connectors of
+// other junctions, and lanes. A pair that is not two connectors of one junction (a large merged junction or a carry-on
+// bringing two junctions' paths, or a connector and a lane, within touching distance) is filed under no junction and
+// counted in the report. Two lanes are never paired: lanes meeting outside junctions are the builder's own check
+// (LaneGraphBuild::crossingsOutside). A CROSSWALK gives one record for each path whose body could be on it: the stretch
+// of the path whose points come within the vehicle's half width and the margin of the walk's area, and the stretch of
+// the walk (from the middle of its outline's first edge to the middle of the edge halfway round, the way people walk
+// across) the body covers. Rail tracks are owed: nothing fills the graph's tracks yet, and a track's width is not in it.
+//
+// It fills g.crossings and files them (indexCrossings), replacing what was there. Same graph, same table, every run.
+
+#include "engine/procgen/city/roads/lane_graph.h"
+#include "engine/procgen/city/roads/lanes/lane_graph_build.h"   // VehicleSize, CrossingReport
+
+#include <cstdint>
+#include <vector>
+
+namespace engine {
+namespace roads::lanes {
+
+// How far apart the samples along each centre line are (metres).
+constexpr double kCrossingStep = 0.25;
+// How close two bodies may come, side to side, and still count as clear of each other (metres): room for a body's sway
+// in its lane and the sampling. Two widest vehicles side by side in the narrowest lanes the builder lays (3.7 m apart)
+// stay clear with it; turn lanes that do not are a builder fault, reported, not hidden by a smaller margin.
+constexpr double kCrossingMargin = 0.5;
+// A meeting covering at least this share of both paths' lengths is reported as suspicious: two paths that run within
+// touching distance nearly all the way (two turn lanes too close together, or connectors laid over each other).
+constexpr double kNearlyWholeShare = 0.9;
+// A junction with more records than this is reported: the junction plan and every car's checks there grow with it.
+// (A four-way of one lane each way with every turn has 40.)
+constexpr uint32_t kManyCrossingPoints = 400;
+
+struct CrossingOptions {
+    // Each vehicle tag's width (its turning radius is not read here). A path is as wide as the widest vehicle allowed on
+    // it; a path open to no tag with a width counts its own width.
+    std::vector<VehicleSize> vehicles;
+    // Two points are at one level when their heights differ by no more than this (metres): the road builder's same-level
+    // figure, Rules::sameLevelDz.
+    double clearance = 1.0;
+};
+
+// THE CROSSING POINTS OF A GRAPH whose paths, junctions and next lists are made: fills g.crossings, each junction's
+// range and each path's list, and says how it went. Its problems: meetings covering nearly the whole of both paths, a
+// junction with more than kManyCrossingPoints records, and a meeting of two paths that lies outside every junction's
+// outline (more than kJunctionEndReach out).
+CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts);
+
+}  // namespace roads::lanes
+}  // namespace engine
+
+#endif

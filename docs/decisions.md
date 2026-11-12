@@ -18005,3 +18005,85 @@ driver's decide interval. Route costs with default limits. The A2 seam proper (r
 model writes the agent's fields). `lanegraph?` and `driving?` on the commands page. Checking the drawing in
 `editor_app`.
 
+## ADR-0400 — Where paths through a junction cross, join and split: the crossing points (#239)
+
+Words: a CROSSING POINT is a record of two paths whose cars could touch, with the stretch of each path where they could;
+a CROSS is two paths passing through each other, a JOIN two paths ending in the same lane, a SPLIT two paths leaving the
+same lane; a CONNECTOR is the path through a junction from one lane to another (ADR-0398).
+
+**Context.** Driving model task B3 (`docs/driving-briefs/B3-crossing-points.md`). The junction tasks after it (D1 who
+gives way, D3 announcing and giving way, D4 first in goes first, D5 room beyond) all read a table of where paths meet.
+The lab's cars drive through each other today (119 pairs overlapping where paths cross, 15 spells where paths join),
+because nothing says where paths meet.
+
+**Decision.**
+- **One function finds them**, `findCrossingPoints` (`lanes/lane_graph_crossings.h`), run by the lane graph builder after
+  the connectors, on any graph (the tests run it on hand-made junctions). Both centre lines are walked every 0.25 m; two
+  sample points can touch when, in plan, they are closer than half the widest vehicle allowed on the one path plus half
+  the widest on the other plus a margin of 0.5 m (`kCrossingMargin`), and their heights are within the road builder's
+  same-level figure (`Rules::sameLevelDz`, 1 m): a bridge over a street is no crossing. Widths are the vehicles' (passed
+  in as for the connectors), not the lanes'; they are not stored in the graph.
+- **Each meeting is a patch** of touching sample pairs (in "metres along the one, metres along the other", joined to
+  neighbours one sample along either path); its reach along each path, widened by one sample each way so it never falls
+  short of the true edge, is that path's stretch. A patch holding both starts, of two paths one path leads into, is a
+  **split** (from 0 on both); one holding both ends, of two paths that lead into one path, a **join** (to the end of both,
+  exactly); one holding the end of one path and the start of a path that follows it (directly or through paths shorter
+  than touching distance) is a car following another and is dropped; any other is a **cross**. Two paths meeting twice
+  make two records; two patches whose stretches overlap on both paths are one.
+- **Which pairs**: every connector against every path within touching distance (found through a grid of every path's
+  samples): its own junction's connectors, other junctions' connectors, and lanes. Lanes are never paired with lanes
+  (meetings of lanes outside junctions are the builder's own check). A crosswalk gives one record for each path whose
+  body could be on it, its other stretch measured across the walk (from the middle of its outline's first edge to the
+  middle of the edge halfway round); rail tracks are owed (nothing fills them, and the graph has no track width).
+- **Stored once, found from either path.** A record keeps the lower path id first. Two connectors of one junction are
+  filed under it; two paths that do not run through one junction (connectors of two junctions, a connector and a lane)
+  are filed under no junction, after every junction's own: that is their mark. Every path lists the records it is part
+  of (`Path::crossings`, a range into `LaneGraph::pathCrossings`, by where the stretch on that path begins, then id), as
+  `Junction::arriving` lists lanes. `indexCrossings` files them; `validate` checks the stretches lie on their paths, the
+  filing (both paths the junction's connectors, or not), a split starting both paths from a path leading into both, a
+  join reaching the end of both into a path both lead into, no meeting recorded twice, the order, and that each path's
+  list holds exactly the records naming it. The lane graph file is LGRF version 3; the builder version
+  (`kLaneGraphBuildVersion`) is 2, so every level's cached graph is built again once.
+- **Problems listed**, for a person to look at, not failures: two paths within touching distance for 90% or more of both
+  their lengths (two turn lanes too close: a builder fault, the margin is not raised to hide it), a junction with more
+  than 400 records, and a meeting of two paths outside every junction's outline.
+
+**Pairs, not places.** The brief asks for the textbook figures: 16 crosses, 8 joins, 8 splits for a four-way of one lane
+each way, 3/3/3 for a T. The textbook counts *places*: three paths leaving one lane part at two places. The table holds
+*pairs*, which is what the junction plan asks about (who gives way to whom), and all three pairs of the three paths
+leaving a lane are real (a car turning off still has its tail across the path of the car behind going another way). So
+the hand-made four-way has 16 crosses, 12 joins and 12 splits; the T 3/3/3 (two paths per lane, pairs and places agree).
+
+**Measured** (`lanes_tool lanegraph`, its car 1.9 m and long vehicle 2.6 m wide):
+
+| Roads | Records | Cross / join / split | Across junctions / with a lane | Busiest junction | Problems | Time |
+|---|---|---|---|---|---|---|
+| grid_city | 874 | 499 / 188 / 187 | 0 / 125 | 66 | 28 | 19 ms |
+| ring_city | 810 | 490 / 160 / 160 | 0 / 136 | 66 | 30 | 22 ms |
+| hill_junction | 66 | 44 / 12 / 10 | 0 / 11 | 55 | 3 | 2 ms |
+| traffic_lab | 6,077 | 3,748 / 1,187 / 1,142 | 6 / 15 | 291 (junction 21, 32 connectors) | 5 | 0.25 s |
+
+The lab: every junction with connectors has records except the 13 carry-ons (lanes side by side going straight on, clear
+of one another). Its 5 problems and 6 records across junctions are one connector: junction 75's 76 m connector 2996 (a
+ramp end on a street) runs over junction 90's connectors and lanes. The other 9 connector-and-lane records are ramp lanes
+starting or ending beside a junction's corner, within touching distance of its connectors. grid_city and ring_city have
+3.0 m lanes, narrower than two 2.6 m vehicles and the margin: their side-by-side connectors and the lanes beside them
+touch, and are listed (28 and 30 problems), as the brief asks. The lab's graph file grew from 4,485,403 to 4,854,043
+bytes (+8%); the crossing points add about a quarter of a second to its 4.5 s graph build.
+
+Checked by hand, the lab's junction 3 (a four-way, one lane each way, 12 connectors): 18 crosses, 12 joins, 12 splits.
+The two crosses beyond the textbook's 16 are the opposite far turns (connectors 1986 with 1993, 1988 with 1995): in this
+junction's 20 m box they pass within touching distance; in the hand-made one with a wider box they pass clear. Straight
+1987 crosses straight 1992 from 5.0 to 11.4 m along it (two bodies 3.1 m apart either side of the crossing, plus the
+widening); each join runs to the end of both (1985 joins 1992 from 5.7 to 11.8 m, its full length, and 13.7 to 20.5 m,
+1992's). The lab's junction 43 (a T, a through road of two lanes each way, 8 connectors): 5 crosses, 3 joins, 3 splits;
+the far turn 2553 crosses the far turn 2554 and both straights from the other side; the through road's offside straights
+meet nothing. `lanes_tool lanegraph <lab> --junction 3 --junction 43` writes both close up (`junction_J.svg/.txt`).
+
+**Not changed.** The road builder's output: ring_city, grid_city and traffic_lab build byte-identical meshes before and
+after. The lab drives exactly as before (the crossing points are data nobody reads yet).
+
+**Owed.** Rail tracks at street level (when the builder records tracks, with a width). Crosswalks from the builder (the
+finder handles them; none are filled yet). Who gives way at each record (D1). A margin from the rule set, should it ever
+depend on speed.
+
