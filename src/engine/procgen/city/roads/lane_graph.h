@@ -273,6 +273,21 @@ inline bool operator!=(const LaneGraph& a, const LaneGraph& b) { return !(a == b
 // kJunctionEndReach of its outline. Returns the problems in plain words, each naming what and where; empty = sound.
 std::vector<std::string> validate(const LaneGraph& g);
 
+// THE PARTS OF THE GRAPH A CAR CAN GO ROUND (issue #238): sets of paths that can all reach one another, following each
+// path's next list and the lane changes its section's lines allow (from a lane to its neighbour where the line between
+// them may be crossed from that lane's side). A car on any path of a part can get to every other path of that part and
+// back; a path in a part of its own is a dead end, or a road nothing leads into, or both. (Graph theory calls the parts
+// strongly connected components.) Parts are numbered by their lowest path id, so the answer is the same every run.
+struct ReachableParts {
+    std::vector<uint32_t> partOf;   // per path: its part
+    std::vector<uint32_t> sizes;    // per part: how many paths it holds
+    uint32_t largest = 0;           // the part with the most paths (the lowest numbered of equals); 0 when there are none
+};
+ReachableParts reachableParts(const LaneGraph& g);
+// What `from` leads to in one step: its next paths, then the lanes beside it it may change into (both in id order).
+// What reachableParts follows; an index out of range leads nowhere.
+std::vector<PathId> stepsFrom(const LaneGraph& g, PathId from);
+
 // THE WHOLE GRAPH AS TEXT, in id order, with the names from the name tables: for a person checking a junction by
 // hand, and for tests to compare. Same graph, same text, every run.
 std::string dumpText(const LaneGraph& g);

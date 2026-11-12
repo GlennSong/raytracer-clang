@@ -754,6 +754,92 @@ std::vector<std::string> validate(const LaneGraph& g) {
     return out;
 }
 
+// ---- where a car can go -----------------------------------------------------------------------------------------
+
+std::vector<PathId> stepsFrom(const LaneGraph& g, PathId from) {
+    std::vector<PathId> out;
+    if (!from.valid() || from.index >= g.paths.size()) return out;
+    const Path& p = g.paths[from.index];
+    if (inRange(p.next, g.nextPaths.size()))
+        for (uint32_t k = p.next.first; k < p.next.end(); ++k)
+            if (g.nextPaths[k].index < g.paths.size()) out.push_back(g.nextPaths[k]);
+    if (p.kind != PathKind::Lane || p.section.index >= g.sections.size()) return out;
+    const Section& s = g.sections[p.section.index];
+    if (!inRange(s.lanes, g.sectionLanes.size()) || !inRange(s.lines, g.laneLines.size())) return out;
+    const uint32_t k = p.indexInSection;
+    // the line on its offside (between lane k - 1 and k), crossed from the kerb side; the one on its kerb side (between
+    // lane k and k + 1), crossed from the offside
+    if (k > 0 && k - 1 < s.lines.count && g.laneLines[s.lines.first + k - 1].crossFromKerbside)
+        out.push_back(g.sectionLanes[s.lanes.first + k - 1]);
+    if (k + 1 < s.lanes.count && k < s.lines.count && g.laneLines[s.lines.first + k].crossFromOffside)
+        out.push_back(g.sectionLanes[s.lanes.first + k + 1]);
+    return out;
+}
+
+ReachableParts reachableParts(const LaneGraph& g) {
+    // Tarjan's walk, kept on an explicit stack (an island's lanes would overflow the call stack): each path gets the
+    // order it was first reached in and the lowest such order it can get back to; a path that can get back to no path
+    // reached before it closes a part, everything above it on the stack.
+    const uint32_t n = static_cast<uint32_t>(g.paths.size());
+    const uint32_t kUnseen = kNoIndex;
+    std::vector<uint32_t> order(n, kUnseen), low(n, 0), tarjanPart(n, kUnseen);
+    std::vector<char> onStack(n, 0);
+    std::vector<uint32_t> stack;
+    struct Frame { uint32_t path; std::vector<PathId> steps; std::size_t next; };
+    std::vector<Frame> walk;
+    uint32_t reached = 0, parts = 0;
+    for (uint32_t root = 0; root < n; ++root) {
+        if (order[root] != kUnseen) continue;
+        walk.push_back(Frame{root, stepsFrom(g, PathId(root)), 0});
+        order[root] = low[root] = reached++;
+        stack.push_back(root);
+        onStack[root] = 1;
+        while (!walk.empty()) {
+            Frame& f = walk.back();
+            if (f.next < f.steps.size()) {
+                const uint32_t q = f.steps[f.next++].index;
+                if (order[q] == kUnseen) {
+                    order[q] = low[q] = reached++;
+                    stack.push_back(q);
+                    onStack[q] = 1;
+                    walk.push_back(Frame{q, stepsFrom(g, PathId(q)), 0});
+                } else if (onStack[q]) {
+                    low[f.path] = std::min(low[f.path], order[q]);
+                }
+                continue;
+            }
+            const uint32_t p = f.path;
+            walk.pop_back();
+            if (!walk.empty()) low[walk.back().path] = std::min(low[walk.back().path], low[p]);
+            if (low[p] != order[p]) continue;
+            for (;;) {
+                const uint32_t q = stack.back();
+                stack.pop_back();
+                onStack[q] = 0;
+                tarjanPart[q] = parts;
+                if (q == p) break;
+            }
+            ++parts;
+        }
+    }
+    // number the parts by their lowest path
+    ReachableParts out;
+    out.partOf.assign(n, 0);
+    std::vector<uint32_t> number(parts, kUnseen);
+    for (uint32_t p = 0; p < n; ++p) {
+        uint32_t& id = number[tarjanPart[p]];
+        if (id == kUnseen) {
+            id = static_cast<uint32_t>(out.sizes.size());
+            out.sizes.push_back(0);
+        }
+        out.partOf[p] = id;
+        ++out.sizes[id];
+    }
+    for (uint32_t i = 0; i < out.sizes.size(); ++i)
+        if (out.sizes[i] > out.sizes[out.largest]) out.largest = i;
+    return out;
+}
+
 // ---- text dump --------------------------------------------------------------------------------------------------
 
 std::string dumpSection(const LaneGraph& g, SectionId id) {

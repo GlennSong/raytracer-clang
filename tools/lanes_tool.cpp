@@ -1,8 +1,9 @@
 // lanes_tool — the headless host for the lanes road builder (ADR-0083, ADR-0089).
 //   lanes_tool build <graph.json> [--out <dir>]     build, print the summary and invariants, write <name>.glb/.svg/stats.json
 //                      [--probe x y r] [--quick] [--holes] [--walls]   heights and steps around a point; --quick skips the invariant sweep and the exports; --holes lists unpaved holes; --walls lists parapets that end on drivable road
-//   lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle-tags a,b]   the lane graph (#237): lane_graph.txt (its
-//                      dump), problems.txt and lane_graph.svg (lanes by section, junction outlines, arriving/leaving ends)
+//   lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width ...]   the lane graph (#237, #238):
+//                      lane_graph.txt (its dump), problems.txt, reach.txt (how much a car can get round, and why not the
+//                      rest) and lane_graph.svg (lanes by section, junction outlines, connectors by turn, refusals)
 //   lanes_tool terrain <graph.json> <out.json> [step]   the scene's natural ground on a grid (for a map)
 //   lanes_tool interchange-demo <out.json>   write the system-interchange test scene: a curved elevated ring over a radial
 //                      expressway at ground level, its four ramps, and the expressway's inner leg becoming a boulevard
@@ -166,20 +167,37 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (argc >= 3 && std::strcmp(argv[1], "lanegraph") == 0) {
-        // THE LANE GRAPH (#237): the built lanes cut into sections, with the junctions; its text dump, its problems and
-        // a plan SVG in --out. --vehicle-tags a,b,c: the vehicle tags every lane is open to (none by default).
+        // THE LANE GRAPH (#237, #238): the built lanes cut into sections, the junctions and the connectors through them;
+        // its text dump, its problems, how much of it a car can get round, and a plan SVG in --out.
+        // --vehicle tag:radius:width (again for each): a vehicle tag every lane is open to, the tightest radius its path
+        // may have and its width (metres). None given: the tool's two test vehicles below.
         std::string outDir = ".";
         LaneGraphOptions lgo;
         for (int i = 3; i + 1 < argc; ++i) {
             if (std::strcmp(argv[i], "--out") == 0) outDir = argv[i + 1];
-            if (std::strcmp(argv[i], "--vehicle-tags") == 0) {
-                std::string list = argv[i + 1];
-                for (std::size_t at = 0; at <= list.size();) {
-                    const std::size_t comma = std::min(list.find(',', at), list.size());
-                    if (comma > at) lgo.vehicleTags.push_back(list.substr(at, comma - at));
-                    at = comma + 1;
-                }
+            if (std::strcmp(argv[i], "--vehicle") == 0) {
+                const std::string spec = argv[i + 1];
+                const std::size_t a = spec.find(':'), b = a == std::string::npos ? a : spec.find(':', a + 1);
+                if (b == std::string::npos) { std::fprintf(stderr, "lanes: --vehicle wants tag:radius:width, not %s\n", spec.c_str()); return 2; }
+                VehicleSize v;
+                v.tag = spec.substr(0, a);
+                v.turningRadius = std::atof(spec.substr(a + 1, b - a - 1).c_str());
+                v.width = std::atof(spec.substr(b + 1).c_str());
+                lgo.vehicles.push_back(v);
             }
+        }
+        // The tool's test vehicles: a car (about a 5 m turning radius, 1.9 m wide) and a long vehicle (a bus or a
+        // lorry: about 10 m, 2.6 m). Names and sizes for looking at the lab's roads; the driving model's own vehicles
+        // are its data, passed in by whoever builds the graph for it.
+        if (lgo.vehicles.empty()) {
+            VehicleSize car, longVehicle;
+            car.tag = "car";
+            car.turningRadius = 5.0;
+            car.width = 1.9;
+            longVehicle.tag = "long_vehicle";
+            longVehicle.turningRadius = 10.0;
+            longVehicle.width = 2.6;
+            lgo.vehicles = {car, longVehicle};
         }
         if (!makeOutDir(outDir)) return 1;
         const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
@@ -187,29 +205,67 @@ int main(int argc, char** argv) {
         try { rp = build(RoadLabGraph::load(argv[2])); } catch (const std::exception& e) { std::fprintf(stderr, "lanes: %s\n", e.what()); return 1; }
         const double buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         const LaneGraphBuild lg = buildLaneGraph(*rp, lgo);
+        const LaneGraph& G = lg.graph;
         uint32_t lanes = 0;
-        for (const Path& p : lg.graph.paths) lanes += p.kind == PathKind::Lane ? 1 : 0;
-        std::printf("%s: %u lane paths, %zu sections, %zu junctions, %zu problems; lane graph %.0f ms (%.0f of it the paint's "
-                    "junction boxes), the build before it %.0f ms",
-                    rp->graph.name.c_str(), lanes, lg.graph.sections.size(), lg.graph.junctions.size(), lg.problems.size(),
-                    lg.milliseconds, lg.boxMilliseconds, buildMs);
+        for (const Path& p : G.paths) lanes += p.kind == PathKind::Lane ? 1 : 0;
+        uint32_t full = 0, partly = 0, refused = 0, noTurns = 0, carryOns = 0, nodes = 0, refusedTurns = 0;
+        for (const JunctionNote& n : lg.junctionNotes) {
+            carryOns += n.origin == JunctionOrigin::CarryOn ? 1 : 0;
+            nodes += n.origin == JunctionOrigin::Node ? 1 : 0;
+            refusedTurns += n.turnsRefused;
+            if (n.turnsStated == 0) ++noTurns;
+            else if (n.turnsRefused == 0) ++full;
+            else if (n.turnsRefused < n.turnsStated) ++partly;
+            else ++refused;
+        }
+        std::printf("%s: %u lane paths, %zu connectors (%u straight on, %u near turns, %u far turns), %u turns refused; "
+                    "%zu sections, %zu junctions (%u fully connected, %u partly, %u refused, %u with no turns; %u of them "
+                    "carry-ons, %u nodes), %zu problems; largest part a car can get round: %.1f%% of the lane paths\n",
+                    rp->graph.name.c_str(), lanes, G.paths.size() - lanes, lg.connectorsByTurn[static_cast<int>(Turn::Straight)],
+                    lg.connectorsByTurn[static_cast<int>(Turn::NearTurn)], lg.connectorsByTurn[static_cast<int>(Turn::FarTurn)],
+                    refusedTurns, G.sections.size(), G.junctions.size(), full, partly, refused, noTurns, carryOns, nodes,
+                    lg.problems.size(), 100.0 * lg.reachableShare);
+        std::printf("  lane graph %.0f ms (%.0f of it the paint's junction boxes, %.0f the connectors), the build before it %.0f ms",
+                    lg.milliseconds, lg.boxMilliseconds, lg.connectMilliseconds, buildMs);
         for (const char* stage : {"lanes", "profiles", "footprints", "surfaces"})
             if (rp->timings.count(stage)) std::printf(", %s %.0f", stage, 1000 * rp->timings.at(stage));
-        std::printf("\n  left out: %u connector lanes, %u track/footway lanes; %u junctions merged, %u lane ends cut at an outline "
-                    "(no stop line of their own), %u lanes joined end to end across roads, %u places two roads' lanes cross "
-                    "outside every junction\n",
-                    lg.connectorsLeftOut, lg.otherLanesLeftOut, lg.mergedJunctions, lg.endsAtOutline, lg.roadJoins, lg.crossingsOutside);
+        std::printf("\n  left out: %u connector lanes, %u track/footway lanes; %u junctions merged, %u ramp ends on a street, %u lane "
+                    "ends cut at an outline (no stop line of their own), %u lanes joined end to end across roads, %zu lane ends "
+                    "unjoined, %u places two roads' lanes cross outside every junction; %u lanes tidied, %u short sections merged\n",
+                    lg.connectorsLeftOut, lg.otherLanesLeftOut, lg.mergedJunctions, lg.rampEnds, lg.endsAtOutline, lg.roadJoins,
+                    lg.unjoined.size(), lg.crossingsOutside, lg.tidiedLanes, lg.mergedSections);
+        for (std::size_t i = 0; i < G.vehicleTagNames.size() && i < lg.closedTo.size(); ++i)
+            std::printf("  %u connectors closed to %s (too tight for it, or it would leave the paved road)\n", lg.closedTo[i],
+                        G.vehicleTagNames[i].c_str());
+        for (const std::pair<std::string, std::vector<uint32_t>>& o : lg.outside)
+            std::printf("  outside the largest part: %zu lanes %s\n", o.second.size(), o.first.c_str());
         const std::string dumpPath = outDir + "/lane_graph.txt", problemsPath = outDir + "/problems.txt", svgPath = outDir + "/lane_graph.svg";
-        { std::ofstream f(dumpPath); f << dumpText(lg.graph); if (!f) { std::fprintf(stderr, "lanes: cannot write %s\n", dumpPath.c_str()); return 1; } }
+        const std::string reachPath = outDir + "/reach.txt";
+        { std::ofstream f(dumpPath); f << dumpText(G); if (!f) { std::fprintf(stderr, "lanes: cannot write %s\n", dumpPath.c_str()); return 1; } }
         { std::ofstream f(problemsPath); for (const std::string& p : lg.problems) f << p << "\n"; }
+        {
+            std::ofstream f(reachPath);
+            f << "largest part a car can get round: " << lg.reach.sizes[lg.reach.largest] << " paths (" << 100.0 * lg.reachableShare
+              << "% of the lane paths)\n";
+            for (const std::pair<std::string, std::vector<uint32_t>>& o : lg.outside) {
+                f << o.second.size() << " lanes " << o.first << ":";
+                for (uint32_t p : o.second) f << " " << p;
+                f << "\n";
+            }
+        }
         for (std::size_t i = 0; i < lg.problems.size() && i < 10; ++i) std::printf("  problem: %s\n", lg.problems[i].c_str());
-        if (!writeLaneGraphSvg(lg.graph, svgPath)) { std::fprintf(stderr, "lanes: cannot write %s\n", svgPath.c_str()); return 1; }
-        std::printf("wrote %s, %s, %s\n", dumpPath.c_str(), problemsPath.c_str(), svgPath.c_str());
+        LaneGraphSvgMarks marks;
+        for (uint32_t j = 0; j < lg.junctionNotes.size(); ++j)
+            if (lg.junctionNotes[j].refused) marks.refusedJunctions.push_back(j);
+        for (const Refusal& r : lg.refusals)
+            if (r.from.valid()) marks.refusedTurns.push_back(r.at);
+        if (!writeLaneGraphSvg(G, svgPath, marks)) { std::fprintf(stderr, "lanes: cannot write %s\n", svgPath.c_str()); return 1; }
+        std::printf("wrote %s, %s, %s, %s\n", dumpPath.c_str(), problemsPath.c_str(), reachPath.c_str(), svgPath.c_str());
         return 0;
     }
     if (argc < 3 || (std::strcmp(argv[1], "build") != 0 && std::strcmp(argv[1], "twin") != 0 && std::strcmp(argv[1], "blocks") != 0)) {
         std::fprintf(stderr, "usage: lanes_tool build <graph.json> [--out <dir>]\n"
-                             "       lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle-tags a,b]   (the lane graph: dump, problems, plan SVG)\n"
+                             "       lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width ...]   (the lane graph: dump, problems, reach, plan SVG)\n"
                              "       lanes_tool design <graph.json> <out.json> [--plan-crossings]   (the graph with every road's planned profile; built again, taken as given)\n"
                              "                    [--ramp-width M] [--ramp-shoulder M]   ramp carriageway (default 4.5 m lane, 2.5 m shoulder)\n");
         return 2;

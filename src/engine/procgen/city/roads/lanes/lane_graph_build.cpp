@@ -2,6 +2,7 @@
 
 #include "engine/procgen/city/polygon.h"                     // convexHull, pointInPolygon
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"       // the junction boxes the paint finds
+#include "engine/procgen/city/roads/lanes/lane_graph_connect.h"   // the paths through junctions
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 
 #include <algorithm>
@@ -20,10 +21,8 @@ namespace {
 
 // Two cuts along a corridor closer than this are one cut (metres).
 constexpr double kCutTolerance = 1e-3;
-// A lane ending nearer than this to where another begins, but not within the join tolerances, is reported (metres) ...
-constexpr double kNearMiss = 0.5;
-// ... when the two run within this of the same way (degrees): a lane beside, not across.
-constexpr double kNearMissDegrees = 45.0;
+// How many points either side of a fold are searched for where the lane crosses itself.
+constexpr std::size_t kFoldSearch = 16;
 // Centre-line points closer together than this are passed over when a bend is measured: too short to measure (metres).
 constexpr double kMinBendChord = 0.05;
 // A cut this close to a centre-line point drops that point rather than leave a sliver segment (metres).
@@ -46,14 +45,54 @@ void addProblem(std::vector<std::string>& to, const char* f, ...) {
     to.push_back(msg);
 }
 
-// WHICH WAY IS THE OFFSIDE, for a lane `normalOffset` from its road's spine (along the spine's left normal, perp())
-// running `dir` (+1 along the spine, -1 against it): the larger the result, the nearer the middle of the road. The
-// builder lays a road's forward lanes on the negative side of the spine's left normal and its backward lanes on the
-// positive side, and names each direction's lanes from the median outwards (laneSlots: f0 and b0 are the innermost; a
-// pocket's "inner" lane is the one with the largest offset x dir), so offset x dir grows toward the middle. In the
-// world the plan is mirrored (plan y is world z), so a forward lane on the plan's right of its spine is on the driver's
-// left: that is how this engine's roads keep left. Nothing else here says which side is which.
-double offsideness(double normalOffset, int dir) { return normalOffset * static_cast<double>(dir); }
+// CUTS THE FOLD OUT OF A LANE that runs backwards for a stretch (on the inside of a corner of its road sharper than its
+// offset from the road's spine, the builder's offset points loop back on themselves): `forward[k]` is the way its road
+// runs at point k. Where the lane before a backward run crosses the lane after it, the lane runs to that crossing and
+// on from it; where it does not, every point that would take it backwards is dropped. `u` (each point's distance
+// along its road) is kept in step. Returns whether anything was cut.
+bool cutFolds(std::vector<Vec2>& xy, std::vector<double>& u, const std::vector<Vec2>& forward) {
+    bool cut = false;
+    std::vector<Vec2> fw = forward;
+    for (std::size_t k = 1; k < xy.size(); ++k) {
+        if (dot(xy[k] - xy[k - 1], fw[k]) >= 0) continue;
+        // the backward run: segments kb .. ke - 1 (segment k joins point k - 1 to point k)
+        const std::size_t kb = k;
+        std::size_t ke = k;
+        while (ke < xy.size() && dot(xy[ke] - xy[ke - 1], fw[ke]) < 0) ++ke;
+        bool joined = false;
+        for (std::size_t j = ke; j < xy.size() && j <= ke + kFoldSearch && !joined; ++j)
+            for (std::size_t i = kb - 1; i >= 1 && i + kFoldSearch >= kb && !joined; --i) {
+                Vec2 at;
+                if (!segmentsCross(xy[i - 1], xy[i], xy[j - 1], xy[j], at)) continue;
+                const double len = distance(xy[i - 1], xy[i]);
+                const double f = len > 0 ? distance(xy[i - 1], at) / len : 0;
+                const double uAt = u[i - 1] + f * (u[i] - u[i - 1]);
+                // points 0 .. i - 1, the crossing, then j onwards
+                xy.erase(xy.begin() + static_cast<std::ptrdiff_t>(i), xy.begin() + static_cast<std::ptrdiff_t>(j));
+                u.erase(u.begin() + static_cast<std::ptrdiff_t>(i), u.begin() + static_cast<std::ptrdiff_t>(j));
+                fw.erase(fw.begin() + static_cast<std::ptrdiff_t>(i), fw.begin() + static_cast<std::ptrdiff_t>(j));
+                xy.insert(xy.begin() + static_cast<std::ptrdiff_t>(i), at);
+                u.insert(u.begin() + static_cast<std::ptrdiff_t>(i), uAt);
+                fw.insert(fw.begin() + static_cast<std::ptrdiff_t>(i), fw[i - 1]);
+                joined = true;
+            }
+        if (!joined) {   // no loop to cut: drop the points that run back, up to one ahead of the last kept again
+            std::size_t j = kb;
+            while (j < xy.size() && dot(xy[j] - xy[kb - 1], fw[j]) <= 0) ++j;
+            j = std::min(j, xy.size() - 1);   // (never the lane's own end)
+            if (j == kb) {   // nothing to drop without losing the end: leave it
+                k = ke - 1;
+                continue;
+            }
+            xy.erase(xy.begin() + static_cast<std::ptrdiff_t>(kb), xy.begin() + static_cast<std::ptrdiff_t>(j));
+            u.erase(u.begin() + static_cast<std::ptrdiff_t>(kb), u.begin() + static_cast<std::ptrdiff_t>(j));
+            fw.erase(fw.begin() + static_cast<std::ptrdiff_t>(kb), fw.begin() + static_cast<std::ptrdiff_t>(j));
+        }
+        cut = true;
+        k = kb - 1;   // look again from just before the fold
+    }
+    return cut;
+}
 
 // A builder lane read the way cars drive it: its points, the distance along it to each, and how far along its own road
 // (the way it runs) each was laid (empty when the builder did not lay it point by point along its road's spine).
@@ -115,17 +154,20 @@ CorridorKey corridorKey(int edge, int dir) { return CorridorKey(edge, dir > 0 ? 
 
 // A STRETCH OF A CORRIDOR INSIDE A JUNCTION: [ua, ub] belongs to junction `junction`. `stopLineAt*`: that end is a stop
 // line of the corridor's own road (it has a junction box there), not where its lanes cross the junction's outline.
+// `solidBefore`: the lines between lanes are solid on the approach (not at a carry-on or a node, where nothing stops).
 struct Interval {
     double ua = 0, ub = 0;
     int junction = -1;
     bool stopLineAtStart = true, stopLineAtEnd = true;
+    bool solidBefore = true;
 };
 
-// One of the paint's junction boxes, on its street.
+// One of the paint's junction boxes, on its street; or a road's end given up to a carry-on junction.
 struct Box {
     int edge = -1;
     JunctionSpan span;
     double sa = 0, sb = 0;   // the stretch of the street's spine it takes, stop line to stop line (clamped to the road)
+    int carryOn = -1;        // a carry-on's or a node's (which one): its end of the road, as far back as the connectors need
 };
 
 int findRoot(std::vector<int>& parent, int i) {
@@ -227,7 +269,7 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
     }
     std::sort(G.laneTagNames.begin(), G.laneTagNames.end());
     G.laneTagNames.erase(std::unique(G.laneTagNames.begin(), G.laneTagNames.end()), G.laneTagNames.end());
-    G.vehicleTagNames = opts.vehicleTags;
+    for (const VehicleSize& v : opts.vehicles) G.vehicleTagNames.push_back(v.tag);
     std::sort(G.vehicleTagNames.begin(), G.vehicleTagNames.end());
     G.vehicleTagNames.erase(std::unique(G.vehicleTagNames.begin(), G.vehicleTagNames.end()), G.vehicleTagNames.end());
     G.controlNames = {opts.control};
@@ -239,6 +281,7 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
 
     // ---- every kept lane the way cars drive it, and how far along its own road each point was laid ------------------
     std::vector<TravelLane> travel(nLanes);
+    out.laneLengths.assign(nLanes, 0.0);
     std::map<int, std::vector<Vec2>> spineTangents;   // per road, as the builder framed it
     for (std::size_t li = 0; li < nLanes; ++li) {
         if (!kept[li]) continue;
@@ -248,6 +291,7 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
         T.xy = l.xy;
         if (l.dir < 0) std::reverse(T.xy.begin(), T.xy.end());
         T.s = stations(T.xy);
+        out.laneLengths[li] = T.s.back();
         std::vector<Vec2>& tangent = spineTangents[l.parent];
         if (tangent.empty()) {
             std::vector<Vec2> normal;
@@ -258,19 +302,27 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
         const std::size_t n = l.xy.size();
         double back = 0;
         Vec2 backAt;
+        std::vector<Vec2> forward;   // the way its road runs at each point
         for (std::size_t k = 0; k < n; ++k) {
             const std::size_t i = static_cast<std::size_t>(first) + (l.dir > 0 ? k : n - 1 - k);
             T.u.push_back(l.dir > 0 ? e.s[i] : e.s.back() - e.s[i]);
+            forward.push_back(tangent[i] * static_cast<double>(l.dir));
             // a lane on the inside of a sharp corner of its road runs backwards for a stretch there
-            if (k > 0 && dot(T.xy[k] - T.xy[k - 1], tangent[i] * static_cast<double>(l.dir)) < 0) {
+            if (k > 0 && dot(T.xy[k] - T.xy[k - 1], forward[k]) < 0) {
                 back += distance(T.xy[k], T.xy[k - 1]);
                 if (backAt.x == 0 && backAt.y == 0) backAt = T.xy[k];
             }
         }
-        if (back > kCutTolerance)
+        if (back > kCutTolerance) {
+            // tidied: the fold cut out of the lane graph's copy, so distance along it always moves forward
+            cutFolds(T.xy, T.u, forward);
+            T.s = stations(T.xy);
+            out.laneLengths[li] = T.s.back();
+            ++out.tidiedLanes;
             addProblem(out.problems, "lane %s runs backwards for %.2f m near (%.1f, %.1f): it lies on the inside of a corner of "
-                                     "road %s sharper than its offset from the road's spine", l.id.c_str(), back, backAt.x,
-                       backAt.y, e.id.c_str());
+                                     "road %s sharper than its offset from the road's spine; tidied (the fold cut out, %.2f m "
+                                     "shorter)", l.id.c_str(), back, backAt.x, backAt.y, e.id.c_str(), l.s.back() - T.s.back());
+        }
     }
 
     // ---- corridors and their members ---------------------------------------------------------------------------------
@@ -368,18 +420,48 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
         n = perp(tangentAtStation(T.xy, T.s, t));
     };
     auto covers = [](const Member& m, double u) { return u >= m.u0() - kCutTolerance && u <= m.u1() + kCutTolerance; };
+    // The way a member runs at corridor distance u.
+    auto memberDir = [&](const Member& m, double u) {
+        const TravelLane& T = travel[static_cast<std::size_t>(m.lane)];
+        return tangentAtStation(T.xy, T.s, m.tauAtCut(u));
+    };
+    // A corridor's lanes across it at u, offside to kerb (by where they lie across the road there): their builder lanes,
+    // points and directions.
+    struct Across { std::vector<const Member*> members; std::vector<Vec2> at, dir; };
+    auto across = [&](const Corridor& c, double u) {
+        const EdgeSpec& e = edgeAt(c.edge);
+        const double sigma = c.dir > 0 ? u : c.length - u;
+        const Vec2 spineAt = pointAt(e.xy, e.s, sigma), spineNormal = perp(tangentAtStation(e.xy, e.s, sigma));
+        std::vector<std::pair<double, const Member*>> order;
+        for (const Member& m : c.members) {
+            if (!covers(m, u)) continue;
+            Vec2 p, n;
+            memberPoint(m, u, p, n);
+            order.emplace_back(offsideness(dot(p - spineAt, spineNormal), c.dir), &m);
+        }
+        std::sort(order.begin(), order.end(), [](const std::pair<double, const Member*>& a, const std::pair<double, const Member*>& b) {
+            return a.first != b.first ? a.first > b.first : a.second->lane < b.second->lane;
+        });
+        Across a;
+        for (const std::pair<double, const Member*>& o : order) {
+            Vec2 p, n;
+            memberPoint(*o.second, u, p, n);
+            a.members.push_back(o.second);
+            a.at.push_back(p);
+            a.dir.push_back(memberDir(*o.second, u));
+        }
+        return a;
+    };
 
     // ---- junctions: the paint's boxes, one junction per crossing ----------------------------------------------------
     const std::chrono::steady_clock::time_point tBoxes = std::chrono::steady_clock::now();
     const LaneLookup look(r.pavement);
-    const std::map<int, std::vector<JunctionSpan>> spans = junctionSpans(r, look);
+    const std::map<int, std::vector<JunctionSpan>> spans = junctionSpans(r, look, kJunctionParallelForGraph);
     out.boxMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tBoxes).count();
     std::vector<Box> boxes;
-    std::map<int, std::pair<std::size_t, std::size_t>> boxesOfEdge;   // edge -> (first box, count)
     for (const std::pair<const int, std::vector<JunctionSpan>>& kv : spans) {
         const EdgeSpec& e = edgeAt(kv.first);
         if (g.cls(e).track || g.cls(e).footway) continue;
-        boxesOfEdge[kv.first] = std::make_pair(boxes.size(), kv.second.size());
         for (const JunctionSpan& sp : kv.second) {
             Box b;
             b.edge = kv.first;
@@ -389,8 +471,130 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
             boxes.push_back(b);
         }
     }
+
+    // ---- carry-ons and nodes: road ends meeting outside every box, their lanes just missing ---------------------------
+    std::vector<int> roadEndsOfNode;   // per carry-on or node (Box::carryOn): how many road ends meet there
+    {
+        // whether a box of the road's own reaches spine station s
+        auto boxedAt = [&](int edge, double s) {
+            const std::map<int, std::vector<JunctionSpan>>::const_iterator it = spans.find(edge);
+            if (it == spans.end()) return false;
+            for (const JunctionSpan& sp : it->second)
+                if (s >= sp.s0 - kStopLineBack - kCutTolerance && s <= sp.s1 + kStopLineBack + kCutTolerance) return true;
+            return false;
+        };
+        struct LaneEnd { CorridorKey corridor; int lane; Vec2 at, dir; };
+        std::vector<LaneEnd> laneEnds, laneStarts;
+        for (const std::pair<const CorridorKey, Corridor>& kc : corridors) {
+            const Corridor& c = kc.second;
+            const double sEnd = c.dir > 0 ? c.length : 0.0, sStart = c.dir > 0 ? 0.0 : c.length;
+            for (const Member& m : c.members) {
+                const TravelLane& T = travel[static_cast<std::size_t>(m.lane)];
+                if (std::fabs(m.u1() - c.length) <= kCutTolerance && m.to >= T.s.back() - kCutTolerance && !boxedAt(c.edge, sEnd))
+                    laneEnds.push_back(LaneEnd{kc.first, m.lane, T.xy.back(), tangentAtStation(T.xy, T.s, T.s.back())});
+                if (m.u0() <= kCutTolerance && m.from <= kCutTolerance && !boxedAt(c.edge, sStart))
+                    laneStarts.push_back(LaneEnd{kc.first, m.lane, T.xy.front(), tangentAtStation(T.xy, T.s, 0)});
+            }
+        }
+        // which corridors' lanes start near which corridors' lane ends, and whether any of them miss
+        const double joinCos = std::cos(kJoinDegrees / kDegreesPerRadian), nearCos = std::cos(kNearMissDegrees / kDegreesPerRadian);
+        // (end's corridor, start's corridor) -> whether any lane misses, and the builder lanes that meet (end, start)
+        struct Met { bool miss = false; std::vector<std::pair<int, int>> lanes; };
+        std::map<std::pair<CorridorKey, CorridorKey>, Met> met;
+        for (const LaneEnd& a : laneEnds)
+            for (const LaneEnd& b : laneStarts) {
+                const double gap = distance(a.at, b.at), cosine = dot(a.dir, b.dir);
+                if (a.lane == b.lane || gap > kNearMiss || cosine < nearCos) continue;
+                Met& m = met[std::make_pair(a.corridor, b.corridor)];
+                m.miss = m.miss || gap > kJoinDistance || cosine < joinCos;
+                m.lanes.emplace_back(a.lane, b.lane);
+            }
+        // which end of its road a corridor's end (or start) is: 0 the spine's start, 1 its end
+        using RoadEnd = std::pair<int, int>;
+        auto roadEnd = [](const CorridorKey& k, bool corridorEnd) { return RoadEnd(k.first, corridorEnd == (k.second == 0) ? 1 : 0); };
+        // the road ends that meet, grouped: two meet where a lane of one ends near where a lane of the other begins. A
+        // group where any lane just misses becomes a junction of its own: a carry-on where it is two road ends, a node
+        // where it is more (roads meeting end to end with no box)
+        std::vector<RoadEnd> ends;
+        for (const std::pair<const std::pair<CorridorKey, CorridorKey>, Met>& kv : met) {
+            ends.push_back(roadEnd(kv.first.first, true));
+            ends.push_back(roadEnd(kv.first.second, false));
+        }
+        std::sort(ends.begin(), ends.end());
+        ends.erase(std::unique(ends.begin(), ends.end()), ends.end());
+        auto endIndex = [&](const RoadEnd& e) { return static_cast<int>(std::lower_bound(ends.begin(), ends.end(), e) - ends.begin()); };
+        std::vector<int> endRoot(ends.size());
+        std::iota(endRoot.begin(), endRoot.end(), 0);
+        for (const std::pair<const std::pair<CorridorKey, CorridorKey>, Met>& kv : met)
+            unite(endRoot, endIndex(roadEnd(kv.first.first, true)), endIndex(roadEnd(kv.first.second, false)));
+        std::map<int, std::vector<const std::pair<const std::pair<CorridorKey, CorridorKey>, Met>*>> meetings;   // group (its root) -> its meetings
+        std::map<int, bool> anyMiss;
+        for (const std::pair<const std::pair<CorridorKey, CorridorKey>, Met>& kv : met) {
+            const int root = findRoot(endRoot, endIndex(roadEnd(kv.first.first, true)));
+            meetings[root].push_back(&kv);
+            anyMiss[root] = anyMiss[root] || kv.second.miss;
+        }
+        double widestTurn = 0;   // the largest turning radius of the vehicles: what a carry-on's connectors should allow
+        for (const VehicleSize& v : opts.vehicles) widestTurn = std::max(widestTurn, v.turningRadius);
+        for (const std::pair<const int, std::vector<const std::pair<const std::pair<CorridorKey, CorridorKey>, Met>*>>& node : meetings) {
+            if (!anyMiss[node.first]) continue;
+            std::vector<RoadEnd> members;
+            for (std::size_t i = 0; i < ends.size(); ++i)
+                if (findRoot(endRoot, static_cast<int>(i)) == node.first) members.push_back(ends[i]);
+            // how far back each road gives up: the first trim whose straight-on connectors (each lane end into the start
+            // it met) suit the widest-turning vehicle
+            double shortest = kNoBend;
+            for (const RoadEnd& end : members) shortest = std::min(shortest, edgeAt(end.first).s.back());
+            double trim = 0;
+            for (double d : kCarryOnTrims) {
+                if (d > kCarryOnTrimShare * shortest) break;
+                trim = d;
+                double tightest = kNoBend;
+                for (const std::pair<const std::pair<CorridorKey, CorridorKey>, Met>* m : node.second) {
+                    const Corridor& ca = corridors.at(m->first.first);
+                    const Corridor& cb = corridors.at(m->first.second);
+                    const Across xa = across(ca, ca.length - d), xb = across(cb, d);
+                    for (const std::pair<int, int>& lanes : m->second.lanes) {
+                        std::size_t ia = xa.members.size(), ib = xb.members.size();
+                        for (std::size_t i = 0; i < xa.members.size(); ++i)
+                            if (xa.members[i]->lane == lanes.first) ia = i;
+                        for (std::size_t i = 0; i < xb.members.size(); ++i)
+                            if (xb.members[i]->lane == lanes.second) ib = i;
+                        if (ia == xa.members.size() || ib == xb.members.size()) continue;
+                        const ConnectorShape s = connectorShape(xa.at[ia], xa.dir[ia], xb.at[ib], xb.dir[ib]);
+                        tightest = std::min(tightest, s.ok ? s.tightestRadius : 0.0);
+                    }
+                }
+                if (tightest >= widestTurn) break;
+            }
+            if (trim == 0) trim = kCarryOnTrimShare * shortest;
+            for (const RoadEnd& end : members) {
+                const EdgeSpec& e = edgeAt(end.first);
+                Box b;
+                b.edge = end.first;
+                b.sa = end.second == 1 ? e.s.back() - trim : 0.0;
+                b.sb = end.second == 1 ? e.s.back() : trim;
+                b.span.s0 = b.sa;
+                b.span.s1 = b.sb;
+                b.carryOn = static_cast<int>(roadEndsOfNode.size());
+                boxes.push_back(b);
+            }
+            roadEndsOfNode.push_back(static_cast<int>(members.size()));
+        }
+    }
+    // the boxes by road, then along it (the paint's come so already; the carry-ons' join them in place)
+    std::stable_sort(boxes.begin(), boxes.end(), [](const Box& a, const Box& b) { return a.edge != b.edge ? a.edge < b.edge : a.sa < b.sa; });
+    std::map<int, std::pair<std::size_t, std::size_t>> boxesOfEdge;   // edge -> (first box, count)
+    for (std::size_t b = 0; b < boxes.size(); ++b) {
+        std::pair<std::size_t, std::size_t>& range = boxesOfEdge.emplace(boxes[b].edge, std::make_pair(b, std::size_t(0))).first->second;
+        ++range.second;
+    }
     std::vector<int> root(boxes.size());
     std::iota(root.begin(), root.end(), 0);
+    // a carry-on's two boxes are one junction
+    for (std::size_t a = 0; a < boxes.size(); ++a)
+        for (std::size_t b = a + 1; b < boxes.size(); ++b)
+            if (boxes[a].carryOn >= 0 && boxes[a].carryOn == boxes[b].carryOn) unite(root, static_cast<int>(a), static_cast<int>(b));
     // two streets' boxes are one junction where each street's box lies on the other street's
     for (std::size_t a = 0; a < boxes.size(); ++a) {
         const EdgeSpec& ea = edgeAt(boxes[a].edge);
@@ -410,6 +614,29 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
         if (boxes[b].edge == boxes[b - 1].edge && boxes[b].sa < boxes[b - 1].sb)
             if (unite(root, static_cast<int>(b - 1), static_cast<int>(b))) ++out.mergedJunctions;
 
+    // AN OUTLINE from the lines across a junction's roads where its lanes stop (`legs`, each an edge of it), joined
+    // corner to corner in order round the junction (a convex hull would leave a skewed street's stop line inside it);
+    // with fewer than two, the convex hull of `all` (the lane ends there).
+    struct Leg { Vec2 a, b, mid; };
+    auto ringOf = [](std::vector<Leg> legs, const std::vector<Vec2>& all) -> std::vector<Vec2> {
+        std::vector<Vec2> ring;
+        if (legs.size() < 2) return convexHull(all);
+        Vec2 centre;
+        for (const Leg& leg : legs) centre += leg.mid;
+        centre = centre / static_cast<double>(legs.size());
+        for (Leg& leg : legs)
+            if (cross(leg.a - centre, leg.b - centre) < 0) std::swap(leg.a, leg.b);   // a to b runs anticlockwise
+        std::sort(legs.begin(), legs.end(), [&](const Leg& x, const Leg& y) {
+            return std::atan2(x.mid.y - centre.y, x.mid.x - centre.x) < std::atan2(y.mid.y - centre.y, y.mid.x - centre.x);
+        });
+        for (const Leg& leg : legs) {
+            ring.push_back(leg.a);
+            ring.push_back(leg.b);
+        }
+        return ring;
+    };
+    std::vector<std::vector<Leg>> stopLegs;     // per junction: its roads' stop lines
+    std::vector<std::vector<Vec2>> stopEnds;    // per junction: the lane ends at them (and at its roads' ends inside it)
     std::vector<int> junctionOfBox;
     std::vector<std::vector<std::size_t>> boxesOfJunction;
     std::vector<std::vector<Vec2>> outline;
@@ -441,10 +668,11 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
         // the convex hull of them and of the road ends inside the junction
         outline.assign(boxesOfJunction.size(), {});
         outlineBounds.assign(boxesOfJunction.size(), Bounds());
+        stopLegs.assign(boxesOfJunction.size(), {});
+        stopEnds.assign(boxesOfJunction.size(), {});
         for (std::size_t j = 0; j < boxesOfJunction.size(); ++j) {
-            struct Leg { Vec2 a, b, mid; };
-            std::vector<Leg> legs;
-            std::vector<Vec2> all;
+            std::vector<Leg>& legs = stopLegs[j];
+            std::vector<Vec2>& all = stopEnds[j];
             for (std::size_t b : boxesOfJunction[j]) {
                 const EdgeSpec& e = edgeAt(boxes[b].edge);
                 for (double s : {boxes[b].sa, boxes[b].sb}) {
@@ -482,22 +710,7 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
                     legs.push_back(leg);
                 }
             }
-            if (legs.size() >= 2) {
-                Vec2 centre;
-                for (const Leg& leg : legs) centre += leg.mid;
-                centre = centre / static_cast<double>(legs.size());
-                for (Leg& leg : legs)
-                    if (cross(leg.a - centre, leg.b - centre) < 0) std::swap(leg.a, leg.b);   // a to b runs anticlockwise
-                std::sort(legs.begin(), legs.end(), [&](const Leg& x, const Leg& y) {
-                    return std::atan2(x.mid.y - centre.y, x.mid.x - centre.x) < std::atan2(y.mid.y - centre.y, y.mid.x - centre.x);
-                });
-                for (const Leg& leg : legs) {
-                    outline[j].push_back(leg.a);
-                    outline[j].push_back(leg.b);
-                }
-            } else {
-                outline[j] = convexHull(all);
-            }
+            outline[j] = ringOf(legs, all);
             for (const Vec2& p : outline[j]) outlineBounds[j].add(p);
         }
         // each corridor's stretches inside junctions: its own road's boxes, stop line to stop line ...
@@ -511,6 +724,7 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
                 iv.junction = junctionOfBox[b];
                 iv.ua = dir > 0 ? boxes[b].sa : it->second.length - boxes[b].sb;
                 iv.ub = dir > 0 ? boxes[b].sb : it->second.length - boxes[b].sa;
+                iv.solidBefore = boxes[b].carryOn < 0;
                 intervals[key].push_back(iv);
             }
         // ... and wherever a lane runs into a junction's outline at its level, deeper than kJunctionEndReach: a road with
@@ -581,7 +795,10 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
                         }
                     }
                     // (an end the two share within a cut's tolerance is a stop line if either says so)
-                    if (iv.ua <= one.back().ua + kCutTolerance) one.back().stopLineAtStart = one.back().stopLineAtStart || iv.stopLineAtStart;
+                    if (iv.ua <= one.back().ua + kCutTolerance) {
+                        one.back().stopLineAtStart = one.back().stopLineAtStart || iv.stopLineAtStart;
+                        one.back().solidBefore = one.back().solidBefore || iv.solidBefore;
+                    }
                     if (iv.ub > one.back().ub + kCutTolerance) {
                         one.back().ub = iv.ub;
                         one.back().stopLineAtEnd = iv.stopLineAtEnd;
@@ -594,9 +811,73 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
             }
             list = one;
         }
+        // a ramp that ends on a street (no gore on a host lane there) runs inside the street from the junction it runs
+        // into to its own end: that stretch is the junction's
+        out.rampEnds = 0;
+        for (std::pair<const CorridorKey, std::vector<Interval>>& ki : intervals) {
+            const Corridor& c = corridors.at(ki.first);
+            const EdgeSpec& e = edgeAt(c.edge);
+            std::vector<Interval>& list = ki.second;
+            if (!e.isRamp() || list.empty()) continue;
+            for (int end = 0; end < 2; ++end) {   // the ramp's spine start, its end
+                const RampAnchor& anchor = end == 0 ? e.from : e.to;
+                if (anchor.edge.empty() || e.anchorIdx[end] >= 0 || !g.index.count(anchor.edge)) continue;
+                if ((end == 0) == (c.dir > 0)) {   // that end is where the corridor starts
+                    if (list.front().ua > kCutTolerance && list.front().ua <= kRampEndReach) {
+                        list.front().ua = 0;
+                        list.front().stopLineAtStart = false;
+                        ++out.rampEnds;
+                    }
+                } else if (list.back().ub < c.length - kCutTolerance && list.back().ub >= c.length - kRampEndReach) {
+                    list.back().ub = c.length;
+                    list.back().stopLineAtEnd = false;
+                    ++out.rampEnds;
+                }
+            }
+        }
         if (!merged) break;
         if (round + 1 == kMergeRounds)
             addProblem(out.problems, "junctions still overlap after %d rounds of merging", kMergeRounds);
+    }
+    // An outline takes in the lanes cut where they cross it (a road with no box of its own there). A road meeting the
+    // outline at a slant has its lanes cut together where the last of them leaves it, the first ones some way out; where
+    // one stands farther out than kJunctionEndReach, the line across them there becomes an edge of the outline too.
+    {
+        std::vector<std::vector<Leg>> extra(boxesOfJunction.size());
+        for (const std::pair<const CorridorKey, std::vector<Interval>>& ki : intervals) {
+            const Corridor& c = corridors.at(ki.first);
+            for (const Interval& iv : ki.second)
+                for (int side = 0; side < 2; ++side) {
+                    const double u = side == 0 ? iv.ua : iv.ub;
+                    if ((side == 0 ? iv.stopLineAtStart : iv.stopLineAtEnd) || u <= kCutTolerance || u >= c.length - kCutTolerance) continue;
+                    const std::size_t j = static_cast<std::size_t>(iv.junction);
+                    const Across x = across(c, u);
+                    bool far = false;
+                    for (const Vec2& p : x.at) far = far || distToPolyline(p, outline[j], true) > kJunctionEndReach;
+                    if (!far) continue;
+                    const double halfFront = laneAt(x.members.front()->lane).w / 2, halfBack = laneAt(x.members.back()->lane).w / 2;
+                    const Vec2 side0 = distance(x.at.back(), x.at.front()) > kCutTolerance ? normalize(x.at.back() - x.at.front())
+                                                                                         : perp(x.dir.front());
+                    Leg leg;
+                    leg.a = x.at.front() - side0 * halfFront;
+                    leg.b = x.at.back() + side0 * halfBack;
+                    leg.mid = (leg.a + leg.b) * 0.5;
+                    extra[j].push_back(leg);
+                }
+        }
+        for (std::size_t j = 0; j < extra.size(); ++j) {
+            if (extra[j].empty()) continue;
+            std::vector<Leg> legs = stopLegs[j];
+            std::vector<Vec2> all = stopEnds[j];
+            for (const Leg& leg : extra[j]) {
+                legs.push_back(leg);
+                all.push_back(leg.a);
+                all.push_back(leg.b);
+            }
+            outline[j] = ringOf(legs, all);
+            outlineBounds[j] = Bounds();
+            for (const Vec2& p : outline[j]) outlineBounds[j].add(p);
+        }
     }
 
     // ---- sections and lane paths -------------------------------------------------------------------------------------
@@ -619,17 +900,54 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
             const double solidFrom = iv.ua - kSolidBeforeStopLine;
             int beside = 0;
             for (const Member& m : c.members) beside += covers(m, solidFrom) ? 1 : 0;
-            if (solidFrom > 0 && beside >= 2) cuts.push_back(solidFrom);
+            if (iv.solidBefore && solidFrom > 0 && beside >= 2) cuts.push_back(solidFrom);
         }
         std::sort(cuts.begin(), cuts.end());
         std::vector<double> cut;
         for (double x : cuts)
             if (cut.empty() || x - cut.back() > kCutTolerance) cut.push_back(x);
+        // a section shorter than kShortestSection outside a junction is merged into its neighbour where one of its cuts
+        // is only a lane beginning or ending (not a junction's, not the road's end): that cut goes, and the lanes that
+        // began or ended there are carried straight on to the neighbour's cut
+        auto fixedCut = [&](double x) {
+            if (x <= kCutTolerance || x >= c.length - kCutTolerance) return true;
+            for (const Interval& iv : ivs)
+                if (std::fabs(x - iv.ua) <= kCutTolerance || std::fabs(x - iv.ub) <= kCutTolerance) return true;
+            return false;
+        };
+        std::vector<double> removed;
+        for (bool again = true; again;) {
+            again = false;
+            for (std::size_t i = 0; i + 1 < cut.size() && !again; ++i) {
+                if (cut[i + 1] - cut[i] >= kShortestSection) continue;
+                bool inJunction = false;
+                for (const Interval& iv : ivs)
+                    inJunction = inJunction || (cut[i] >= iv.ua - kCutTolerance && cut[i + 1] <= iv.ub + kCutTolerance);
+                if (inJunction) continue;
+                std::size_t drop = cut.size();
+                if (i + 2 < cut.size() && !fixedCut(cut[i + 1])) drop = i + 1;
+                else if (i > 0 && !fixedCut(cut[i])) drop = i;
+                if (drop == cut.size()) continue;
+                removed.push_back(cut[drop]);
+                cut.erase(cut.begin() + static_cast<std::ptrdiff_t>(drop));
+                ++out.mergedSections;
+                again = true;
+            }
+        }
+        // whether a member's end x is a cut merged away inside (c0, c1)
+        auto mergedAway = [&](double x, double c0, double c1) {
+            if (x <= c0 + kCutTolerance || x >= c1 - kCutTolerance) return false;
+            for (double y : removed)
+                if (std::fabs(x - y) <= kCutTolerance) return true;
+            return false;
+        };
         for (std::size_t i = 0; i + 1 < cut.size(); ++i) {
             const double c0 = cut[i], c1 = cut[i + 1];
             std::vector<const Member*> here;
             for (const Member& m : c.members)
-                if (m.u0() <= c0 + kCutTolerance && m.u1() >= c1 - kCutTolerance) here.push_back(&m);
+                if ((m.u0() <= c0 + kCutTolerance || mergedAway(m.u0(), c0, c1)) &&
+                    (m.u1() >= c1 - kCutTolerance || mergedAway(m.u1(), c0, c1)))
+                    here.push_back(&m);
             if (here.empty()) continue;
             const Interval* inside = nullptr;
             const Interval* arriving = nullptr;
@@ -639,7 +957,7 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
                 if (c0 >= iv.ua - kCutTolerance && c1 <= iv.ub + kCutTolerance) inside = &iv;
                 if (std::fabs(c1 - iv.ua) <= kCutTolerance) arriving = &iv;
                 if (std::fabs(c0 - iv.ub) <= kCutTolerance) leaving = &iv;
-                if (c1 <= iv.ua + kCutTolerance && c0 >= iv.ua - kSolidBeforeStopLine - kCutTolerance) solid = true;
+                if (iv.solidBefore && c1 <= iv.ua + kCutTolerance && c0 >= iv.ua - kSolidBeforeStopLine - kCutTolerance) solid = true;
             }
             if (inside) {   // the junction's: the connectors' ground
                 for (const Member* m : here)
@@ -669,8 +987,18 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
                 const Member& m = *order[k].second;
                 const Lane& l = laneAt(m.lane);
                 const TravelLane& T = travel[static_cast<std::size_t>(m.lane)];
-                const double ta = m.tauAtCut(c0), tb = m.tauAtCut(c1);
-                const std::vector<Vec2> pts = sliceAtStations(T.xy, T.s, ta, tb, kSliceGap);
+                const double ta = m.tauAtCut(std::max(c0, m.u0())), tb = m.tauAtCut(std::min(c1, m.u1()));
+                std::vector<Vec2> pts = sliceAtStations(T.xy, T.s, ta, tb, kSliceGap);
+                // a lane that began or ended at a cut merged away: carried straight on to the line across the road at
+                // the section's own cut
+                auto carried = [&](const Vec2& from, const Vec2& way, double u) {
+                    const double sigma = c.dir > 0 ? u : c.length - u;
+                    const Vec2 spine = pointAt(e.xy, e.s, sigma), along = tangentAtStation(e.xy, e.s, sigma) * static_cast<double>(c.dir);
+                    const double rate = dot(way, along);
+                    return rate > 0 ? from + way * (dot(spine - from, along) / rate) : from;
+                };
+                if (m.u0() > c0 + kCutTolerance) pts.insert(pts.begin(), carried(pts.front(), tangentAtStation(T.xy, T.s, ta), c0));
+                if (m.u1() < c1 - kCutTolerance) pts.push_back(carried(pts.back(), tangentAtStation(T.xy, T.s, tb), c1));
                 std::vector<double> z;
                 for (const Vec2& p : pts) z.push_back(H.deck(m.lane, p));
                 if (k == 0) where = pts.front();
@@ -701,8 +1029,9 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
             for (std::size_t k = 0; k + 1 < order.size(); ++k) {
                 bool endsOrBegins = false;
                 for (const Member* m : {order[k].second, order[k + 1].second}) {
-                    const bool ends = std::fabs(m->u1() - c1) <= kCutTolerance && !arriving;
-                    const bool begins = std::fabs(m->u0() - c0) <= kCutTolerance && !leaving;
+                    // (a lane carried on to the cut ends or begins here too)
+                    const bool ends = m->u1() <= c1 + kCutTolerance && !arriving;
+                    const bool begins = m->u0() >= c0 - kCutTolerance && !leaving;
                     endsOrBegins = endsOrBegins || ends || begins;
                 }
                 LaneLine line;
@@ -765,17 +1094,12 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
                 next[p].push_back(PathId(q));
                 ++out.roadJoins;
             } else if (gap <= kNearMiss && cosine >= nearCos) {
+                out.unjoined.emplace_back(p, q);
                 addProblem(out.problems, "lane %u ends at (%.2f, %.2f), %.3f m and %.1f degrees from where lane %u begins: "
-                                         "not joined", p, end.x, end.y, gap,
+                                         "not joined (its road does not carry on as that one alone)", p, end.x, end.y, gap,
                            std::acos(std::min(1.0, cosine)) * kDegreesPerRadian, q);
             }
         }
-    }
-    for (uint32_t p = 0; p < G.paths.size(); ++p) {
-        std::sort(next[p].begin(), next[p].end());
-        G.paths[p].next.first = static_cast<uint32_t>(G.nextPaths.size());
-        G.nextPaths.insert(G.nextPaths.end(), next[p].begin(), next[p].end());
-        G.paths[p].next.count = static_cast<uint32_t>(next[p].size());
     }
 
     // ---- the junction records ----------------------------------------------------------------------------------------
@@ -812,20 +1136,30 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
         const Vec2 at = outline[j].empty() ? Vec2() : centroid(outline[j]);
         std::string roads;
         int lastEdge = -1;   // (a junction's boxes come street by street)
+        bool carryOn = true;   // made of one carry-on's or node's boxes alone
         for (std::size_t b : boxesOfJunction[j]) {
             if (boxes[b].edge != lastEdge) roads += (roads.empty() ? "" : ", ") + edgeAt(boxes[b].edge).id;
             lastEdge = boxes[b].edge;
+            carryOn = carryOn && boxes[b].carryOn >= 0 && boxes[b].carryOn == boxes[boxesOfJunction[j].front()].carryOn;
         }
-        if (outline[j].size() < 3)
-            addProblem(out.problems, "junction %zu at (%.1f, %.1f) (roads %s): its outline has %zu corners", j, at.x, at.y,
-                       roads.c_str(), outline[j].size());
-        // an outline that crosses itself: two of its streets' stop lines overlap, the streets meeting at a sharp angle
-        // (their lanes cross outside the paint's box)
+        JunctionNote note;
+        note.origin = !carryOn ? JunctionOrigin::Box
+                      : roadEndsOfNode[static_cast<std::size_t>(boxes[boxesOfJunction[j].front()].carryOn)] == 2 ? JunctionOrigin::CarryOn
+                                                                                                                 : JunctionOrigin::Node;
+        note.at = at;
+        note.roads = roads;
+        // an outline with too few corners, or one that crosses itself (two of its streets' stop lines overlap, the
+        // streets meeting at too sharp an angle for the junction test): refused, no connectors there
         const std::size_t n = outline[j].size();
         const bool tangled = crossesItself(outline[j]);
+        note.refused = n < 3 || tangled;
+        out.junctionNotes.push_back(note);
+        if (n < 3)
+            addProblem(out.problems, "junction %zu at (%.1f, %.1f) (roads %s): refused: its outline has %zu corners", j, at.x,
+                       at.y, roads.c_str(), n);
         if (tangled)
-            addProblem(out.problems, "junction %zu at (%.1f, %.1f) (roads %s): its outline crosses itself (two streets meet at "
-                                     "a sharp angle and their stop lines overlap)", j, at.x, at.y, roads.c_str());
+            addProblem(out.problems, "junction %zu at (%.1f, %.1f) (roads %s): refused: its roads meet at too shallow an angle "
+                                     "for the junction test (its outline crosses itself)", j, at.x, at.y, roads.c_str());
         // a lane path lying inside the outline, at the junction's level (more than kJunctionEndReach in from it)
         std::vector<double> levels;
         for (const PathId& p : arrivingAt[j]) levels.push_back(G.heightAt(p, G.paths[p.index].length));
@@ -843,7 +1177,7 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
                            j, at.x, at.y, roads.c_str(), p, q.x, q.y);
                 break;
             }
-        if (arrivingAt[j].size() < 2 || leavingFrom[j].size() < 2)
+        if (!carryOn && (arrivingAt[j].size() < 2 || leavingFrom[j].size() < 2))
             addProblem(out.problems, "junction %zu at (%.1f, %.1f) (roads %s): %zu lanes arriving and %zu leaving", j, at.x,
                        at.y, roads.c_str(), arrivingAt[j].size(), leavingFrom[j].size());
     }
@@ -882,7 +1216,19 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
         }
     }
 
+    // ---- the paths through the junctions, then every next list -----------------------------------------------------
+    const std::chrono::steady_clock::time_point tConnect = std::chrono::steady_clock::now();
+    connectJunctions(r, look, opts.vehicles, next, out);
+    out.connectMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tConnect).count();
+    for (uint32_t p = 0; p < G.paths.size(); ++p) {
+        std::sort(next[p].begin(), next[p].end());
+        G.paths[p].next.first = static_cast<uint32_t>(G.nextPaths.size());
+        G.nextPaths.insert(G.nextPaths.end(), next[p].begin(), next[p].end());
+        G.paths[p].next.count = static_cast<uint32_t>(next[p].size());
+    }
+
     for (const std::string& p : validate(G)) out.problems.push_back("lane graph: " + p);
+    reachReport(out);
     out.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     return out;
 }

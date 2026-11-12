@@ -17869,3 +17869,75 @@ for a car with a 6 m turning circle.
 **Owed.** The east interchange's turn-back; turning circles per vehicle (#219: the path's tightest radius against
 the car's); merges (#221); the cities onto real lanes.
 
+## ADR-0398 — A drivable path for every turn at every junction of the lane graph (#238)
+
+Words: a CONNECTOR is the path a car follows through a junction from the lane it arrives in to the lane it leaves by; a
+NEAR TURN stays by the kerb, a FAR TURN crosses the oncoming traffic; a CARRY-ON is where one road's end runs on as
+another's with no junction; a PART a car can get round is a set of paths that can all reach one another (graph theory's
+strongly connected component).
+
+**Context.** Driving model task B2 (`docs/driving-briefs/B2-connectors.md`). B1 (#237) cut the built roads into the lane
+graph's lanes and sections and recorded each junction's arriving and leaving lanes, but nothing joined them: no car could
+pass its first junction. The owner wants to watch the new model drive `traffic_lab` soon, so the lab's graph has to be
+routable, and its real-road faults (lane ends just missing, folds at sharp corners, junction outlines crossing themselves,
+ramps ending on streets unseen) dealt with in the lane graph without changing what the road builder makes.
+
+**Decision.**
+- **Which turns exist is one pure function**, `junctionTurns` (`lanes/lane_graph_connect.h`): a junction's legs (a
+  section's lanes at it, offside to kerb, with its road and heading) in, `(from lane, to lane, kind)` out. Kind by the
+  angle turned (under 30 degrees straight on; of two straight-looking exits the straighter); near or far by the sign of
+  the turn and `kerbPerpSign()`, which comes from the one function that says which side is the offside. Pairing as the
+  brief's table: straight on into the leaving lane nearest sideways (measured across the way halfway between the two
+  legs, so a kink moves neither); near turn kerb-most into kerb-most; far turn offside-most into offside-most; an approach
+  with no way straight on shares its lanes between the turns, lane k into lane k. Every turn between two different
+  roads; never back onto the road it came from. **Owed:** the planner calls the same function and stores the answer in
+  the road graph; today the lane graph builder calls it.
+- **The shape** (`connectorShape`): 5 cm straight off the lane (so connectors sharing a lane share that end piece bit for
+  bit), then straight, the largest circular arc that fits where the two lane lines cross, straight; a biarc (two arcs)
+  where they don't cross ahead (a jog, an S), or where two arcs bend more gently than the one that fits (the lines
+  crossing close by one end): the tightest point is what matters. Ends are the lanes' own points and heights, exactly; heights in between
+  blend the two lanes' deck heights (the lanes' own height function).
+- **Vehicles come from the caller** as (tag, tightest turning radius, width); the engine does not include the driving
+  library. A connector too tight for a vehicle is closed to it. Swept at a vehicle's width (0.1 m more each side, sampled
+  every 0.1 m) against the lanes' footprints at its level (the builder's paved road, kerb returns included), it is closed
+  to each vehicle it would take off the road -- widest first, and where the largest arc cuts the kerb's corner, up to 16
+  smaller arcs are tried down to the tightest vehicle's radius, keeping the one that keeps most vehicles. Refused, with a
+  line giving its place and reason, only when no vehicle is left. (The brief refuses when the widest vehicle leaves the
+  road; closing per vehicle keeps a corner a lorry cannot make open to cars. The check itself is not loosened.)
+- **Junction finding**, the lane graph's own (the paint keeps its numbers and output): the parallel test at 0.95 (about
+  18 degrees) instead of the paint's 0.7 -- the six outlines that crossed themselves where streets meet at 35 degrees
+  become proper junctions, and ramp ends crossing a street's lanes are found; a ramp ending on a street (no gore on a host
+  lane) is the junction's from the outline to its end (within 40 m); an outline takes in, as an edge, the line across
+  lanes cut where they leave it at a slant. An outline that still crosses itself is refused and reported.
+- **Carry-ons and nodes**: road ends whose lanes just miss (over 1 cm or 1 degree, under 0.5 m and 45 degrees) become a
+  junction of their own; each road gives up the stretch by its end (1, 2, 4 or 8 m, at most a quarter of it) that lets
+  every met pair be a bend the widest-turning vehicle can drive. Two road ends: all straight on; three or more (a node):
+  turns as at any junction. No solid lines before them. Under 1 cm and 1 degree, lanes join with `next` as before.
+- **Tidying, the lane graph's copy only**: a lane folding back on the inside of a sharp corner has the fold cut out where
+  it crosses itself (reported, "tidied"); a section under 2 m outside a junction, at a cut where a lane begins or ends, is
+  merged into its neighbour, that lane carried straight on to the neighbour's cut.
+- **Routable is measured**: `reachableParts` (`lane_graph.h`, engine side) follows next lists and the lane changes the
+  lines allow; `reachReport` gives the largest part's share of the lane paths and groups the lanes outside it by why.
+
+**Measured** (`lanes_tool lanegraph`, the tool's car 5 m / 1.9 m and long vehicle 10 m / 2.6 m):
+
+| Roads | Lane paths | Connectors (straight / near / far) | Refused | Junctions full / partly | Problems | Largest part |
+|---|---|---|---|---|---|---|
+| grid_city | 192 | 276 (101 / 87 / 88) | 3 | 32 / 1 | 3 | 85.4% |
+| hill_junction | 27 | 15 (7 / 4 / 4) | 0 | 1 / 0 | 0 | 14.8% |
+| ring_city | 242 | 256 (112 / 72 / 72) | 0 | 33 / 0 | 1 | 52.9% |
+| valley_viaduct | 17 | 2 (2 / 0 / 0) | 2 | 0 / 1 | 2 | 23.5% |
+| traffic_lab | 1,927 | 1,997 (981 / 497 / 519) | 50 | 136 / 32 | 64 | 97.7% |
+
+The lab's problems went from 99 (58 lane ends not joined, 14 folds, 6 short sections, 6 outlines crossing themselves, 15
+crossings outside junctions) to 64: 14 folds tidied, 27 turns too tight for a 5 m car, 23 that take even a car off the
+paved road. No junction is refused. Of the lanes outside the largest part, 29 are at the lab's open edges (roads that
+just end, or start with no way in) and small loops cut off by them; 5 are cut off by refused turns. The small scenes' low shares are their open edges (roads that just end). The road
+builder's output is unchanged: ring_city, grid_city and traffic_lab build byte-identical meshes before and after.
+
+**Owed.** Storing the turns in the road graph; which lanes may make which turn (lane kinds and arrows, parking, bus and
+bike lanes) once the planner states them; the builder leaves wedges under 0.5 m² unpaved at the outside of a kink
+(pavement.cpp's closing skips them), which refuses some carry-on straight-ons (two on the lab's freeway kinks, one on a
+street); near turns at tight corners need the builder's kerb returns or stop lines to change for a 5 m car; the
+connector checks take 3.1 s of the lab's 4.1 s (the sweep, every 0.1 m).
+

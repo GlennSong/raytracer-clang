@@ -1557,12 +1557,19 @@ TEST_CASE(lanes_print_expand_cost_per_city) {
     }
 }
 
-// ---- THE LANE GRAPH FROM THE BUILT LANES (#237) ------------------------------------------------------------------------
+// ---- THE LANE GRAPH FROM THE BUILT LANES (#237), ITS CONNECTORS (#238) ----------------------------------------------------
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"
+#include "engine/procgen/city/roads/lanes/lane_graph_connect.h"
+#include <map>
+#include <set>
 
 namespace {
-// The one vehicle tag the tests open every lane to (a test's name, not a kind of vehicle).
+// The vehicle tags the tests open every lane to (tests' names, not kinds of vehicle), with the sizes the connectors are
+// checked against: a car-sized one and a long one (turning radius and width, metres).
 constexpr const char* kLaneGraphTestTag = "test_any";
+constexpr const char* kLaneGraphLongTag = "test_long";
+constexpr double kTestCarRadius = 5.0, kTestCarWidth = 1.9;
+constexpr double kTestLongRadius = 10.0, kTestLongWidth = 2.6;
 // A builder lane's paths and its stretches inside junctions may miss its length by this much (metres).
 constexpr double kLaneCoverTolerance = 0.01;
 // A section's lanes start (and end) within this of the section's start along its road's spine (metres).
@@ -1577,7 +1584,14 @@ const LaneGraphBuild& laneGraphOf(const std::string& name) {
     std::map<std::string, LaneGraphBuild>::iterator it = cache.find(name);
     if (it == cache.end()) {
         LaneGraphOptions o;
-        o.vehicleTags = {kLaneGraphTestTag};
+        VehicleSize car, longVehicle;
+        car.tag = kLaneGraphTestTag;
+        car.turningRadius = kTestCarRadius;
+        car.width = kTestCarWidth;
+        longVehicle.tag = kLaneGraphLongTag;
+        longVehicle.turningRadius = kTestLongRadius;
+        longVehicle.width = kTestLongWidth;
+        o.vehicles = {car, longVehicle};
         it = cache.emplace(name, buildLaneGraph(scene(name), o)).first;
     }
     return it->second;
@@ -1623,10 +1637,13 @@ void checkLaneGraph(const std::string& name) {
     CHECK(lg.sources.size() == G.paths.size() && lg.sectionSources.size() == G.sections.size());
     if (lg.sources.size() != G.paths.size() || lg.sectionSources.size() != G.sections.size()) return;
 
-    // 2. every builder lane cars drive covered once, end to end, by its paths and its stretches inside junctions
+    // 2. every builder lane cars drive covered once, end to end, by its paths and its stretches inside junctions (as the
+    // graph reads it: a fold tidied out of it is not counted; a lane carried on past its end to a merged section's cut
+    // covers only its own stretch)
     const LaneSet& L = r.lanes;
     std::vector<std::vector<uint32_t>> ofLane(L.lanes.size());
-    for (uint32_t p = 0; p < G.paths.size(); ++p) ofLane[static_cast<std::size_t>(lg.sources[p].lane)].push_back(p);
+    for (uint32_t p = 0; p < G.paths.size(); ++p)
+        if (G.paths[p].kind == PathKind::Lane) ofLane[static_cast<std::size_t>(lg.sources[p].lane)].push_back(p);
     int badCover = 0;
     for (std::size_t li = 0; li < L.lanes.size(); ++li) {
         if (lg.leftOut[li]) { CHECK(ofLane[li].empty()); continue; }
@@ -1637,18 +1654,19 @@ void checkLaneGraph(const std::string& name) {
         for (uint32_t p : ps) {
             overlap = overlap || lg.sources[p].from < reached - kLaneCoverTolerance;
             reached = lg.sources[p].to;
-            total += G.paths[p].length;
+            total += lg.sources[p].to - lg.sources[p].from;
         }
-        if (overlap || std::fabs(total - L.lanes[li].s.back()) > kLaneCoverTolerance) {
+        if (overlap || std::fabs(total - lg.laneLengths[li]) > kLaneCoverTolerance) {
             if (badCover++ < 4) std::printf("      lane %s: paths and junction stretches %.3f m of %.3f m%s\n", L.lanes[li].id.c_str(), total,
-                                            L.lanes[li].s.back(), overlap ? ", overlapping" : "");
+                                            lg.laneLengths[li], overlap ? ", overlapping" : "");
         }
+        CHECK(lg.laneLengths[li] <= L.lanes[li].s.back() + kLaneCoverTolerance);
     }
     CHECK(badCover == 0);
-    // each lane path in exactly one section
+    // each lane path in exactly one section, and no connector in any
     std::vector<int> inSections(G.paths.size(), 0);
     for (const PathId& p : G.sectionLanes) ++inSections[p.index];
-    for (uint32_t p = 0; p < G.paths.size(); ++p) CHECK(inSections[p] == 1);
+    for (uint32_t p = 0; p < G.paths.size(); ++p) CHECK(inSections[p] == (G.paths[p].kind == PathKind::Lane ? 1 : 0));
     // a section's lanes start together and end together (on one line across the road, through its spine at the section's
     // start and end); neighbours side by side; a short section reported
     int badShare = 0, badNeighbours = 0;
@@ -1682,12 +1700,13 @@ void checkLaneGraph(const std::string& name) {
     // where one lane follows another, they join within 1 cm and 1 degree -- or, where a builder lane is carried on into
     // the next section, they turn no more than the builder's lane itself turns there (a cut on a bend tighter than
     // about 29 m reads the two sides' directions half a metre apart, kTangentHalfSpan, and a lane kinked at a
-    // sample turns at it whether cut there or not): the cut adds no kink
+    // sample turns at it whether cut there or not): the cut adds no kink. (Lanes and connectors: checkConnectors.)
     int badJoins = 0, onBends = 0;
     const double joinCos = std::cos(kJoinDegrees * 3.14159265358979 / 180.0);
     for (uint32_t p = 0; p < G.paths.size(); ++p)
         for (uint32_t k = G.paths[p].next.first; k < G.paths[p].next.end(); ++k) {
             const PathId q = G.nextPaths[k];
+            if (G.paths[p].kind != PathKind::Lane || G.paths[q.index].kind != PathKind::Lane) continue;
             const double gap = distance(G.pointAt(PathId(p), G.paths[p].length), G.pointAt(q, 0));
             const double cosine = dot(G.directionAt(PathId(p), G.paths[p].length), G.directionAt(q, 0));
             double allowed = joinCos;
@@ -1712,7 +1731,8 @@ void checkLaneGraph(const std::string& name) {
     int inside = 0, skipped = 0;
     for (uint32_t j = 0; j < G.junctions.size(); ++j) {
         const Junction& jn = G.junctions[j];
-        if (jn.arriving.count < 2 || jn.leaving.count < 2) CHECK(anyProblemWith(lg, "junction " + std::to_string(j) + " at"));
+        if (lg.junctionNotes[j].origin == JunctionOrigin::Box && (jn.arriving.count < 2 || jn.leaving.count < 2))
+            CHECK(anyProblemWith(lg, "junction " + std::to_string(j) + " at"));
         const std::vector<Vec2> outline(G.planPoints.begin() + jn.box.first, G.planPoints.begin() + jn.box.end());
         std::vector<double> levels;
         for (uint32_t k = jn.arriving.first; k < jn.arriving.end(); ++k) {
@@ -1725,9 +1745,9 @@ void checkLaneGraph(const std::string& name) {
             CHECK(distToPolyline(G.pointAt(p, 0), outline, true) <= kJunctionEndReach);
             levels.push_back(G.heightAt(p, 0));
         }
-        if (anyProblemWith(lg, "junction " + std::to_string(j) + " at") || levels.empty()) { ++skipped; continue; }
+        if (lg.junctionNotes[j].refused || levels.empty()) { ++skipped; continue; }
         for (uint32_t p = 0; p < G.paths.size(); ++p)
-            for (uint32_t k = G.paths[p].curve.first; k < G.paths[p].curve.end(); ++k) {
+            for (uint32_t k = G.paths[p].curve.first; k < G.paths[p].curve.end() && G.paths[p].kind == PathKind::Lane; ++k) {
                 const Vec2 q = G.points[k];
                 if (!pointInPolygon(outline, q) || distToPolyline(q, outline, true) <= kJunctionEndReach) continue;
                 double nearest = 1e300;
@@ -1737,10 +1757,337 @@ void checkLaneGraph(const std::string& name) {
                 break;
             }
     }
-    if (skipped) std::printf("      (%d junctions listed in the problems were not searched for lanes inside them)\n", skipped);
+    if (skipped) std::printf("      (%d junctions refused were not searched for lanes inside them)\n", skipped);
     CHECK(inside == 0);
 }
+
+// The direction a path's own centre line runs at its start (or end): its first (last) piece.
+Vec2 endPieceDirection(const LaneGraph& G, PathId p, bool atStart) {
+    const Range c = G.paths[p.index].curve;
+    return atStart ? normalize(G.points[c.first + 1] - G.points[c.first]) : normalize(G.points[c.end() - 1] - G.points[c.end() - 2]);
+}
+
+// THE CONNECTORS' CHECKS (#238's "done when"): every stated turn made or refused, once; the ends meet their lanes; no
+// connector tighter than a vehicle allowed on it, nor taking one off the paved road; connectors sharing a lane share
+// that end bit for bit.
+void checkConnectors(const std::string& name) {
+    const Result& r = scene(name);
+    const LaneGraphBuild& lg = laneGraphOf(name);
+    const LaneGraph& G = lg.graph;
+    uint32_t connectors = 0;
+    for (const Path& p : G.paths) connectors += p.kind == PathKind::Connector ? 1 : 0;
+    std::printf("    [connectors] %s: %u connectors (%u straight on, %u near, %u far), %zu turns refused, largest part a car can "
+                "get round %.1f%% of the lanes, connectors %.0f ms\n", name.c_str(), connectors,
+                lg.connectorsByTurn[static_cast<int>(Turn::Straight)], lg.connectorsByTurn[static_cast<int>(Turn::NearTurn)],
+                lg.connectorsByTurn[static_cast<int>(Turn::FarTurn)], lg.refusals.size(), 100 * lg.reachableShare,
+                lg.connectMilliseconds);
+    CHECK(validate(G).empty());
+    CHECK(lg.junctionNotes.size() == G.junctions.size());
+    if (lg.junctionNotes.size() != G.junctions.size()) return;
+
+    // every stated turn: one connector, or one refusal (a line in the problems; a refused junction's line for all of them)
+    std::vector<uint32_t> refusedAt(G.junctions.size(), 0);
+    for (const Refusal& ref : lg.refusals) refusedAt[ref.junction] += ref.from.valid() ? 1 : 0;
+    int badCounts = 0;
+    for (uint32_t j = 0; j < G.junctions.size(); ++j) {
+        const JunctionNote& n = lg.junctionNotes[j];
+        const Junction& jn = G.junctions[j];
+        bool counted = n.turnsStated == n.turnsBuilt + n.turnsRefused && jn.connectors.count == n.turnsBuilt;
+        counted = counted && (n.refused ? refusedAt[j] == 0 && anyProblemWith(lg, "junction " + std::to_string(j) + " at")
+                                        : refusedAt[j] == n.turnsRefused);
+        // one connector per (from, to)
+        std::set<std::pair<uint32_t, uint32_t>> pairs;
+        for (uint32_t k = jn.connectors.first; k < jn.connectors.end(); ++k) {
+            const Path& c = G.paths[G.junctionConnectors[k].index];
+            counted = counted && pairs.insert(std::make_pair(c.from.index, G.nextPaths[c.next.first].index)).second;
+        }
+        if (!counted && badCounts++ < 4)
+            std::printf("      junction %u: %u turns stated, %u built, %u refused (%u refusals listed), %u connectors\n", j,
+                        n.turnsStated, n.turnsBuilt, n.turnsRefused, refusedAt[j], jn.connectors.count);
+    }
+    CHECK(badCounts == 0);
+    int problemRefusals = 0;
+    for (const std::string& p : lg.problems) problemRefusals += p.find(" is refused, at (") != std::string::npos ? 1 : 0;
+    CHECK(static_cast<std::size_t>(problemRefusals) == lg.refusals.size() - [&] {
+        std::size_t whole = 0;
+        for (const Refusal& ref : lg.refusals) whole += ref.from.valid() ? 0 : 1;
+        return whole;
+    }());
+
+    // the ends: in position within 1 cm and direction within 1 degree of their lanes' (the lane's direction as the graph
+    // reads it; the connector's, its own end piece); the tightest bend no tighter than any vehicle allowed on it; swept at
+    // the widest of them, on the paved road
+    const LaneLookup look(r.pavement);
+    const double joinCos = std::cos(kJoinDegrees * 3.14159265358979 / 180.0);
+    auto paved = [&](const Vec2& p, double z) {
+        for (int li : look.grid.at(p)) {
+            const Box2& b = look.box[static_cast<std::size_t>(li)];
+            if (p.x < b.minX || p.x > b.maxX || p.y < b.minY || p.y > b.maxY || !look.footprint[static_cast<std::size_t>(li)].contains(p)) continue;
+            if (std::fabs(r.heights->deck(li, p) - z) <= r.graph.rules.sameLevelDz) return true;
+        }
+        return false;
+    };
+    const double radiusOf[2] = {kTestCarRadius, kTestLongRadius}, widthOf[2] = {kTestCarWidth, kTestLongWidth};
+    const NameIndex tagOf[2] = {LaneGraph::nameIndex(G.vehicleTagNames, kLaneGraphTestTag), LaneGraph::nameIndex(G.vehicleTagNames, kLaneGraphLongTag)};
+    int badEnds = 0, badRadius = 0, offRoad = 0;
+    for (uint32_t c = 0; c < G.paths.size(); ++c) {
+        const Path& p = G.paths[c];
+        if (p.kind != PathKind::Connector) continue;
+        const PathId from = p.from, into = G.nextPaths[p.next.first];
+        const double gapIn = distance(G.pointAt(from, G.paths[from.index].length), G.pointAt(PathId(c), 0));
+        const double gapOut = distance(G.pointAt(PathId(c), p.length), G.pointAt(into, 0));
+        const double cosIn = dot(G.directionAt(from, G.paths[from.index].length), endPieceDirection(G, PathId(c), true));
+        const double cosOut = dot(endPieceDirection(G, PathId(c), false), G.directionAt(into, 0));
+        const double dzIn = std::fabs(G.heightAt(from, G.paths[from.index].length) - G.heightAt(PathId(c), 0));
+        const double dzOut = std::fabs(G.heightAt(PathId(c), p.length) - G.heightAt(into, 0));
+        if (gapIn > kJoinDistance || gapOut > kJoinDistance || cosIn < joinCos || cosOut < joinCos || dzIn > kJoinDistance || dzOut > kJoinDistance)
+            if (badEnds++ < 4) std::printf("      connector %u: ends %.4f / %.4f m off, cos %.6f / %.6f, heights %.4f / %.4f m off\n", c,
+                                           gapIn, gapOut, cosIn, cosOut, dzIn, dzOut);
+        double widest = -1;
+        for (int v = 0; v < 2; ++v) {
+            if (tagOf[v] == kNoName || !(p.vehicleTags & (TagMask(1) << tagOf[v]))) continue;
+            if (p.tightestRadius < radiusOf[v] - 1e-6 && badRadius++ < 4)
+                std::printf("      connector %u: tightest bend %.2f m, open to a vehicle that needs %.2f m\n", c, p.tightestRadius, radiusOf[v]);
+            widest = std::max(widest, widthOf[v]);
+        }
+        CHECK(widest >= 0);   // open to someone, or it would have been refused
+        // (at the vehicle's own width, every kSweepStep along as the builder samples it: a crack between the lanes'
+        // footprints narrower than a sample's step can pass between two samples, here as there)
+        const int samples = std::max(1, static_cast<int>(std::ceil(p.length / kSweepStep)));
+        for (int k = 0; k <= samples && widest >= 0; ++k) {
+            const double s = p.length * k / samples;
+            const Vec2 at = G.pointAt(PathId(c), s), side = perp(G.directionAt(PathId(c), s)) * (widest / 2);
+            if (!paved(at + side, G.heightAt(PathId(c), s)) || !paved(at - side, G.heightAt(PathId(c), s))) {
+                if (offRoad++ < 4)
+                    std::printf("      connector %u (%s, %.1f m, tightest %.1f m) swept %.1f m wide leaves the paved road %.2f m along it, "
+                                "at (%.2f, %.2f)\n", c, p.turn == Turn::Straight ? "straight on" : "a turn", p.length,
+                                p.tightestRadius, widest, s, at.x, at.y);
+                break;
+            }
+        }
+    }
+    CHECK(badEnds == 0);
+    CHECK(badRadius == 0);
+    CHECK(offRoad == 0);
+
+    // connectors leaving one lane start with the same piece, and those into one lane end with the same piece, bit for bit
+    std::map<uint32_t, uint32_t> firstFrom, firstInto;
+    int unshared = 0;
+    for (uint32_t c = 0; c < G.paths.size(); ++c) {
+        const Path& p = G.paths[c];
+        if (p.kind != PathKind::Connector) continue;
+        const uint32_t into = G.nextPaths[p.next.first].index;
+        const std::map<uint32_t, uint32_t>::iterator a = firstFrom.emplace(p.from.index, c).first;
+        const std::map<uint32_t, uint32_t>::iterator b = firstInto.emplace(into, c).first;
+        const Range ra = G.paths[a->second].curve, rb = G.paths[b->second].curve;
+        const bool sameStart = G.points[ra.first].x == G.points[p.curve.first].x && G.points[ra.first].y == G.points[p.curve.first].y &&
+                               G.points[ra.first + 1].x == G.points[p.curve.first + 1].x && G.points[ra.first + 1].y == G.points[p.curve.first + 1].y &&
+                               G.heights[ra.first] == G.heights[p.curve.first];
+        const bool sameEnd = G.points[rb.end() - 1].x == G.points[p.curve.end() - 1].x && G.points[rb.end() - 1].y == G.points[p.curve.end() - 1].y &&
+                             G.points[rb.end() - 2].x == G.points[p.curve.end() - 2].x && G.points[rb.end() - 2].y == G.points[p.curve.end() - 2].y &&
+                             G.heights[rb.end() - 1] == G.heights[p.curve.end() - 1];
+        if ((!sameStart || !sameEnd) && unshared++ < 4) std::printf("      connector %u does not share its %s exactly\n", c, sameStart ? "end" : "start");
+    }
+    CHECK(unshared == 0);
+}
 }  // namespace
+
+TEST_CASE(lanes_connectors_of_grid_city_meet_their_lanes_and_fit_their_vehicles) { checkConnectors("grid_city"); }
+TEST_CASE(lanes_connectors_of_hill_junction_meet_their_lanes_and_fit_their_vehicles) { checkConnectors("hill_junction"); }
+TEST_CASE(lanes_connectors_of_ring_city_meet_their_lanes_and_fit_their_vehicles) { checkConnectors("ring_city"); }
+TEST_CASE(lanes_connectors_of_valley_viaduct_meet_their_lanes_and_fit_their_vehicles) { checkConnectors("valley_viaduct"); }
+TEST_CASE(lanes_connectors_of_the_traffic_lab_meet_their_lanes_and_fit_their_vehicles) { checkConnectors("planned/traffic_lab_lanelab"); }
+
+// THE TRAFFIC LAB IS ROUTABLE (#238): a car on almost any lane can get to almost any other -- the largest set of lanes
+// that can all reach one another holds at least 90% of them -- and no lane end is half-joined.
+TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
+    const LaneGraphBuild& lg = laneGraphOf("planned/traffic_lab_lanelab");
+    std::printf("    traffic lab: %.1f%% of the lanes in the largest part a car can get round\n", 100 * lg.reachableShare);
+    for (const std::pair<std::string, std::vector<uint32_t>>& o : lg.outside) std::printf("      %zu lanes %s\n", o.second.size(), o.first.c_str());
+    CHECK(lg.reachableShare >= 0.9);
+    CHECK(lg.unjoined.empty());
+    CHECK(lg.crossingsOutside == 0);
+    // every problem is a refusal with its place, or a fold tidied
+    for (const std::string& p : lg.problems) {
+        const bool known = p.find(" is refused, at (") != std::string::npos || p.find("; tidied (") != std::string::npos ||
+                           p.find(": refused: ") != std::string::npos;
+        if (!known) std::printf("      problem: %s\n", p.c_str());
+        CHECK(known);
+    }
+}
+
+// ---- which turns a junction offers, on hand-made junctions -------------------------------------------------------------
+namespace {
+// A hand-made junction's legs: roads arriving from the given compass bearings (degrees, the way they point away from the
+// junction's middle), `lanes` lanes each way, 3.5 m wide, ends 10 m out. Lane ids: road r's arriving lane k is
+// r * 100 + k, its leaving lane k r * 100 + 50 + k (k offside to kerb).
+constexpr double kHandLaneWidth = 3.5, kHandReach = 10.0, kHandDegrees = 3.14159265358979 / 180.0;
+void handJunction(const std::vector<double>& bearings, const std::vector<uint32_t>& lanesEachWay, double kerbPerp, bool mirrored,
+                  std::vector<TurnLeg>& arriving, std::vector<TurnLeg>& leaving) {
+    arriving.clear();
+    leaving.clear();
+    for (std::size_t r = 0; r < bearings.size(); ++r) {
+        Vec2 out(std::cos(bearings[r] * kHandDegrees), std::sin(bearings[r] * kHandDegrees));
+        if (mirrored) out.y = -out.y;
+        TurnLeg in, away;
+        in.road = away.road = static_cast<int>(r);
+        in.dir = 1;
+        away.dir = -1;
+        in.heading = out * -1.0;
+        away.heading = out;
+        for (uint32_t k = 0; k < lanesEachWay[r]; ++k) {
+            const double offset = (k + 0.5) * kHandLaneWidth;   // kerbward of the middle line
+            in.lanes.push_back(static_cast<uint32_t>(r * 100 + k));
+            in.ends.push_back(out * kHandReach + perp(in.heading) * (kerbPerp * offset));
+            away.lanes.push_back(static_cast<uint32_t>(r * 100 + 50 + k));
+            away.ends.push_back(out * kHandReach + perp(away.heading) * (kerbPerp * offset));
+        }
+        arriving.push_back(in);
+        leaving.push_back(away);
+    }
+}
+std::vector<JunctionTurn> handTurns(const std::vector<double>& bearings, const std::vector<uint32_t>& lanes, double kerbPerp = -1,
+                                    bool mirrored = false) {
+    std::vector<TurnLeg> a, l;
+    handJunction(bearings, lanes, kerbPerp, mirrored, a, l);
+    TurnRules rules;
+    rules.kerbPerpSign = kerbPerp;
+    return junctionTurns(a, l, rules);
+}
+int countTurns(const std::vector<JunctionTurn>& ts, Turn kind) {
+    int n = 0;
+    for (const JunctionTurn& t : ts) n += t.turn == kind ? 1 : 0;
+    return n;
+}
+bool hasTurn(const std::vector<JunctionTurn>& ts, uint32_t from, uint32_t to, Turn kind) {
+    for (const JunctionTurn& t : ts)
+        if (t.from == from && t.to == to && t.turn == kind) return true;
+    return false;
+}
+// Whether two lists of turns are the same, kinds and all.
+bool sameTurns(const std::vector<JunctionTurn>& a, const std::vector<JunctionTurn>& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (a[i].from != b[i].from || a[i].to != b[i].to || a[i].turn != b[i].turn) return false;
+    return true;
+}
+}  // namespace
+
+TEST_CASE(lanes_junction_turns_four_way_one_lane_each_way_has_twelve) {
+    // roads to the east, north, west and south; kerb on perp(direction) * -1 (this engine's side)
+    const std::vector<JunctionTurn> ts = handTurns({0, 90, 180, 270}, {1, 1, 1, 1});
+    CHECK(ts.size() == 12);
+    CHECK(countTurns(ts, Turn::Straight) == 4 && countTurns(ts, Turn::NearTurn) == 4 && countTurns(ts, Turn::FarTurn) == 4);
+    // arriving from the east (heading west), the kerb is on perp(west) * -1 = north: the near turn goes north (road 1)
+    CHECK(hasTurn(ts, 0, 150, Turn::NearTurn));
+    CHECK(hasTurn(ts, 0, 250, Turn::Straight));
+    CHECK(hasTurn(ts, 0, 350, Turn::FarTurn));
+    for (const JunctionTurn& t : ts) CHECK(t.from / 100 != t.to / 100);   // never back the way it came
+}
+
+TEST_CASE(lanes_junction_turns_two_lanes_each_way_pair_kerb_and_offside) {
+    const std::vector<JunctionTurn> ts = handTurns({0, 90, 180, 270}, {2, 2, 2, 2});
+    // straight on lane by lane; the near turn from the kerb lane (1) into the kerb lane; the far turn offside to offside
+    CHECK(countTurns(ts, Turn::Straight) == 8 && countTurns(ts, Turn::NearTurn) == 4 && countTurns(ts, Turn::FarTurn) == 4);
+    CHECK(hasTurn(ts, 0, 250, Turn::Straight) && hasTurn(ts, 1, 251, Turn::Straight));
+    CHECK(hasTurn(ts, 1, 151, Turn::NearTurn) && !hasTurn(ts, 0, 150, Turn::NearTurn));
+    CHECK(hasTurn(ts, 0, 350, Turn::FarTurn) && !hasTurn(ts, 1, 351, Turn::FarTurn));
+}
+
+TEST_CASE(lanes_junction_turns_a_t_shares_the_stem_between_its_turns) {
+    // a through road east-west, a stem to the south; two lanes each way
+    const std::vector<JunctionTurn> ts = handTurns({0, 180, 270}, {2, 2, 2});
+    // the stem (road 2) has no way straight on: its offside lane takes the far turn, its kerb lane the near turn
+    CHECK(hasTurn(ts, 200, 0 * 100 + 50 + 0, Turn::FarTurn) || hasTurn(ts, 200, 1 * 100 + 50 + 0, Turn::FarTurn));
+    int fromStem = 0;
+    for (const JunctionTurn& t : ts)
+        if (t.from / 100 == 2) {
+            ++fromStem;
+            CHECK((t.turn == Turn::FarTurn && t.from == 200 && t.to % 50 == 0) || (t.turn == Turn::NearTurn && t.from == 201 && t.to % 50 == 1));
+        }
+    CHECK(fromStem == 2);
+    // six movements in all, as a T has: two from each road (the through road: straight on and one turn into the stem)
+    std::set<std::pair<uint32_t, uint32_t>> movements;
+    for (const JunctionTurn& t : ts) movements.insert(std::make_pair(t.from / 100, t.to / 100));
+    CHECK(movements.size() == 6);
+}
+
+TEST_CASE(lanes_junction_turns_into_a_road_with_fewer_lanes_take_the_nearest) {
+    // three lanes arrive from the west (road 1) and go straight on into two leaving east (road 0)
+    const std::vector<JunctionTurn> ts = handTurns({0, 180}, {2, 3});
+    // the lanes line up from the middle line out: the third, kerb-most, goes into the nearest, the kerb lane
+    CHECK(hasTurn(ts, 100, 50, Turn::Straight));
+    CHECK(hasTurn(ts, 101, 51, Turn::Straight));
+    CHECK(hasTurn(ts, 102, 51, Turn::Straight));
+    CHECK(countTurns(ts, Turn::Straight) == 3 + 2);   // and the two lanes coming back the other way into three: each one
+}
+
+TEST_CASE(lanes_junction_turns_skewed_four_way_classifies_by_angle) {
+    // the cross road meets at 60 degrees: the straight-on legs are still straight on, the turns near or far by side
+    const std::vector<JunctionTurn> ts = handTurns({0, 60, 180, 240}, {1, 1, 1, 1});
+    CHECK(ts.size() == 12);
+    CHECK(countTurns(ts, Turn::Straight) == 4 && countTurns(ts, Turn::NearTurn) == 4 && countTurns(ts, Turn::FarTurn) == 4);
+}
+
+TEST_CASE(lanes_junction_turns_five_way_one_straight_on_per_road) {
+    // five roads; the one 20 degrees off straight on and the one 35 degrees off: the straighter is straight on
+    const std::vector<JunctionTurn> ts = handTurns({0, 90, 160, 215, 270}, {1, 1, 1, 1, 1});
+    CHECK(ts.size() == 20);
+    for (uint32_t r = 0; r < 5; ++r) {
+        int straight = 0;
+        for (const JunctionTurn& t : ts) straight += t.from / 100 == r && t.turn == Turn::Straight ? 1 : 0;
+        CHECK(straight <= 1);
+    }
+    CHECK(hasTurn(ts, 0, 250, Turn::Straight));   // from the east: 160 is 20 degrees off straight on, 215 is 35
+    CHECK(!hasTurn(ts, 0, 350, Turn::Straight));
+}
+
+TEST_CASE(lanes_junction_turns_mirrored_mirror_their_sides_and_nothing_else) {
+    for (const std::vector<double>& bearings : {std::vector<double>{0, 90, 180, 270}, std::vector<double>{0, 60, 180, 240},
+                                                std::vector<double>{0, 90, 160, 215, 270}, std::vector<double>{0, 180, 270}}) {
+        const std::vector<uint32_t> lanes(bearings.size(), 2);
+        const std::vector<JunctionTurn> asBuilt = handTurns(bearings, lanes, -1, false);
+        // the same junction seen in a mirror, its traffic keeping to the other side: the same turns, the same kinds (a near
+        // turn is still the one by the kerb, now turning the other way)
+        CHECK(sameTurns(asBuilt, handTurns(bearings, lanes, 1, true)));
+        // mirrored alone, one lane each way: the same pairs, near and far swapped
+        const std::vector<uint32_t> one(bearings.size(), 1);
+        const std::vector<JunctionTurn> a = handTurns(bearings, one, -1, false), b = handTurns(bearings, one, -1, true);
+        CHECK(a.size() == b.size());
+        for (std::size_t i = 0; i < a.size() && i < b.size(); ++i) {
+            CHECK(a[i].from == b[i].from && a[i].to == b[i].to);
+            const Turn swapped = a[i].turn == Turn::NearTurn ? Turn::FarTurn : a[i].turn == Turn::FarTurn ? Turn::NearTurn : a[i].turn;
+            CHECK(b[i].turn == swapped);
+        }
+    }
+}
+
+// THE SHAPE: a quarter turn between two lane ends 8 m from where their lines cross is straight, an arc of the largest
+// radius that fits, straight; its ends exactly the lanes'.
+TEST_CASE(lanes_connector_shape_is_straight_arc_straight_with_the_largest_arc) {
+    const Vec2 from(0, -8), fromDir(0, 1), to(6, 0), toDir(1, 0);   // lines cross at (0, 0): 8 m and 6 m away
+    const ConnectorShape s = connectorShape(from, fromDir, to, toDir);
+    CHECK(s.ok && s.singleArc);
+    CHECK_APPROX(s.tightestRadius, 6.0 - kConnectorLeadIn, 1e-9);   // the shorter reach, less the lead-in, at 90 degrees
+    CHECK(s.points.front().x == from.x && s.points.front().y == from.y);
+    CHECK(s.points.back().x == to.x && s.points.back().y == to.y);
+    CHECK(dot(normalize(s.points[1] - s.points[0]), fromDir) > 1 - 1e-12);
+    CHECK(dot(normalize(s.points.back() - s.points[s.points.size() - 2]), toDir) > 1 - 1e-12);
+    // every point lies on the lead-in, the straight before the arc, or the circle round (R, -R) from the cross
+    const double R = s.tightestRadius;
+    for (const Vec2& p : s.points) {
+        const bool onStraights = (std::fabs(p.x) < 1e-9 && p.y <= -R + 1e-9) || (std::fabs(p.y) < 1e-9 && p.x >= R - 1e-9);
+        CHECK(onStraights || std::fabs(distance(p, Vec2(R, -R)) - R) < 1e-9);
+    }
+    // asked for no more than 4 m, it bends at 4 m
+    CHECK_APPROX(connectorShape(from, fromDir, to, toDir, 4.0).tightestRadius, 4.0, 1e-9);
+    // a jog sideways along one direction: two arcs
+    const ConnectorShape jog = connectorShape(Vec2(0, 0), Vec2(1, 0), Vec2(10, 1), Vec2(1, 0));
+    CHECK(jog.ok && !jog.singleArc && jog.tightestRadius > 1 && std::isfinite(jog.tightestRadius));
+    // straight on along one line: no bend
+    const ConnectorShape line = connectorShape(Vec2(0, 0), Vec2(1, 0), Vec2(10, 0), Vec2(1, 0));
+    CHECK(line.ok && line.tightestRadius == kNoBend);
+}
 
 TEST_CASE(lanes_lane_graph_of_grid_city_is_sound_and_covers_every_lane) { checkLaneGraph("grid_city"); }
 TEST_CASE(lanes_lane_graph_of_hill_junction_is_sound_and_covers_every_lane) { checkLaneGraph("hill_junction"); }

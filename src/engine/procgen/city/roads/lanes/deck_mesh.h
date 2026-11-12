@@ -65,14 +65,20 @@ struct JunctionSpan {
     int crossRank = -1;
     std::vector<int> crossEdges;
 };
+// The paint's PARALLEL TEST: a crossing lane whose direction there is within this (|cos| of the angle between them) of
+// the street's runs beside it, not across it (0.7: closer than about 46 degrees). The paint's number; a caller with its
+// own reason passes another (the lane graph, lane_graph_build.h kJunctionParallelForGraph).
+constexpr double kJunctionParallel = 0.7;
 // Whether a point on street lane `li` (heading `t` there) is inside an intersection: inside a CROSSING road's lane at
 // the same level. Parallel overlaps (a gore, an aux lane beside its host) and grade-separated ones (a street under a
 // viaduct) are not. Returns the crossing road's rank, or -1; `crossEdges` (optional) gets the crossing lanes' roads.
+// `parallelCos`: the parallel test's threshold (above: beside, not across).
 int junctionCrossRank(const Result& r, const LaneLookup& look, size_t li, const Vec2& p, const Vec2& t,
-                      std::vector<int>* crossEdges = nullptr);
+                      std::vector<int>* crossEdges = nullptr, double parallelCos = kJunctionParallel);
 // Every street's junction boxes (graph edge index -> its boxes, in station order, a divided cross road's two merged
 // into one). Streets only: ramps, freeways, tracks and classes ranked below 1 have none of their own.
-std::map<int, std::vector<JunctionSpan>> junctionSpans(const Result& r, const LaneLookup& look);
+std::map<int, std::vector<JunctionSpan>> junctionSpans(const Result& r, const LaneLookup& look,
+                                                       double parallelCos = kJunctionParallel);
 
 // Every track lane's railhead line, in running order, with the platforms beside it (rail_track.h).
 std::vector<RailTrack> railTracks(const Result& r);

@@ -419,3 +419,56 @@ TEST_CASE(lane_graph_refuses_a_bad_file) {
                 bytes.size());
     CHECK(refused > 0);
 }
+
+namespace {
+// A bare graph for reachableParts (only what it reads): `sectionSizes` sections of lanes in path order, the lines in
+// each crossable as `line` says, and the next lists.
+LaneGraph reachGraph(const std::vector<uint32_t>& sectionSizes, const LaneLine& line, const std::vector<std::vector<uint32_t>>& next) {
+    LaneGraph g;
+    for (uint32_t s = 0; s < sectionSizes.size(); ++s) {
+        Section sec;
+        sec.lanes = Range{static_cast<uint32_t>(g.sectionLanes.size()), sectionSizes[s]};
+        sec.lines = Range{static_cast<uint32_t>(g.laneLines.size()), sectionSizes[s] - 1};
+        for (uint32_t k = 0; k < sectionSizes[s]; ++k) {
+            Path p;
+            p.section = SectionId(s);
+            p.indexInSection = k;
+            g.sectionLanes.push_back(PathId(static_cast<uint32_t>(g.paths.size())));
+            g.paths.push_back(p);
+            if (k + 1 < sectionSizes[s]) g.laneLines.push_back(line);
+        }
+        g.sections.push_back(sec);
+    }
+    for (std::size_t p = 0; p < g.paths.size() && p < next.size(); ++p) {
+        g.paths[p].next = Range{static_cast<uint32_t>(g.nextPaths.size()), static_cast<uint32_t>(next[p].size())};
+        for (uint32_t q : next[p]) g.nextPaths.push_back(PathId(q));
+    }
+    return g;
+}
+}  // namespace
+
+// WHERE A CAR CAN GO ROUND (#238): the parts of the graph whose paths all reach one another, following next lists and
+// the lane changes the lines allow.
+TEST_CASE(lane_graph_reachable_parts_follow_next_and_lane_changes) {
+    // the crossroads: every arm leads in and out once, no way round: each path a part of its own, but the west arm's
+    // arriving lane and the lane at its kerb, which a car may move between either way
+    const ReachableParts cross = reachableParts(makeCrossroads());
+    CHECK(cross.sizes.size() == 20);
+    CHECK(cross.partOf[4] == cross.partOf[kKerbLane] && cross.largest == cross.partOf[4] && cross.sizes[cross.largest] == 2);
+    // a loop: lane 0 may move over into lane 1 beside it, 1 leads into 2, 2 back into 0; lane 3 leads into the loop and
+    // nothing leads into it; lane 4 is led into from the loop and leads nowhere
+    LaneLine oneWay;
+    oneWay.crossFromOffside = true;
+    const LaneGraph loop = reachGraph({2, 1, 1, 1}, oneWay, {{}, {2}, {0, 4}, {0}, {}});
+    const ReachableParts parts = reachableParts(loop);
+    CHECK(parts.sizes.size() == 3);
+    CHECK(parts.partOf[0] == 0 && parts.partOf[1] == 0 && parts.partOf[2] == 0);
+    CHECK(parts.sizes[parts.largest] == 3 && parts.largest == 0);
+    CHECK(parts.partOf[3] == 1 && parts.partOf[4] == 2);   // numbered by their lowest path
+    CHECK(stepsFrom(loop, PathId(0)).size() == 1 && stepsFrom(loop, PathId(1)).size() == 1);   // 1 may not move back into 0
+    // the line solid: lane 0 cannot move over into lane 1, so nothing goes round: five parts of one path
+    const ReachableParts solid = reachableParts(reachGraph({2, 1, 1, 1}, LaneLine(), {{}, {2}, {0, 4}, {0}, {}}));
+    CHECK(solid.sizes.size() == 5);
+    // the same answer every run
+    CHECK(reachableParts(loop).partOf == parts.partOf);
+}

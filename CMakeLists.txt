@@ -640,6 +640,7 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/city_producer.cpp
             src/engine/procgen/city/roads/lanes/lots_producer.cpp
             src/engine/procgen/city/roads/lanes/lane_graph_build.cpp   # the lane graph from the built lanes (#237)
+            src/engine/procgen/city/roads/lanes/lane_graph_connect.cpp   # the paths through its junctions (#238)
             src/engine/procgen/city/roads/lanes_builder.cpp
         )
         target_link_libraries(engine_core PRIVATE Clipper2 CDT::CDT)

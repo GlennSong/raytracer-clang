@@ -89,9 +89,19 @@ const char* const kGraphSvgColours[] = {"#1f77b4", "#d62728", "#2ca02c", "#9467b
                                         "#17becf", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22"};
 constexpr std::size_t kGraphSvgColourCount = sizeof(kGraphSvgColours) / sizeof(kGraphSvgColours[0]);
 constexpr std::size_t kGraphSvgColourStride = 3;
+// Connectors: thinner and dashed, so they read apart from the lanes, in a colour per turn (indexed by Turn).
+constexpr double kGraphSvgConnectorStroke = 0.22;
+constexpr double kGraphSvgConnectorArrowLength = 0.9, kGraphSvgConnectorArrowHalfWidth = 0.4;
+const char* const kGraphSvgConnectorDash = "0.8 0.35";
+const char* const kGraphSvgTurnColours[] = {"#000000", "#1565c0", "#2e7d32", "#e65100", "#6a1b9a"};
+const char* const kGraphSvgTurnNames[] = {"", "straight on", "near turn", "far turn", "U-turn"};
+// Refused: junction outlines and crosses in this red; a cross's half size; the key's text size and line spacing.
+const char* const kGraphSvgRefused = "#d50000";
+constexpr double kGraphSvgRefusedCross = 1.2, kGraphSvgRefusedStroke = 0.35;
+constexpr double kGraphSvgKeySize = 3.0, kGraphSvgKeyLine = 4.0;
 }  // namespace
 
-bool writeLaneGraphSvg(const LaneGraph& g, const std::string& path) {
+bool writeLaneGraphSvg(const LaneGraph& g, const std::string& path, const LaneGraphSvgMarks& marks) {
     double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
     for (const std::vector<Vec2>* set : {&g.points, &g.planPoints})
         for (const Vec2& p : *set) { x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y); }
@@ -103,13 +113,15 @@ bool writeLaneGraphSvg(const LaneGraph& g, const std::string& path) {
     auto Y = [&](double y) { return y1 - y + kGraphSvgMargin; };   // plan y up, as the builder's plan SVG
     f << "<svg xmlns='http://www.w3.org/2000/svg' width='" << W * kGraphSvgPixelsPerMetre << "' height='" << Hh * kGraphSvgPixelsPerMetre
       << "' viewBox='0 0 " << W << " " << Hh << "' font-family='sans-serif'>\n";
+    f << "<!-- plan point (x, y) is drawn at (x - " << x0 - kGraphSvgMargin << ", " << y1 + kGraphSvgMargin << " - y) -->\n";
     f << "<rect width='100%' height='100%' fill='#fbfaf7'/>\n";
-    // junction outlines, with their ids
+    // junction outlines, with their ids (refused ones in red)
     f << "<g id='junctions' fill='#f3d9a4' fill-opacity='0.55' stroke='#b07a1e' stroke-width='" << kGraphSvgOutlineStroke << "'>\n";
     for (uint32_t j = 0; j < g.junctions.size(); ++j) {
         const Range& b = g.junctions[j].box;
         if (b.end() > g.planPoints.size() || b.count == 0) continue;
-        f << "<polygon points='";
+        const bool refused = std::find(marks.refusedJunctions.begin(), marks.refusedJunctions.end(), j) != marks.refusedJunctions.end();
+        f << "<polygon" << (refused ? std::string(" fill='") + kGraphSvgRefused + "' stroke='" + kGraphSvgRefused + "'" : std::string()) << " points='";
         Vec2 c;
         for (uint32_t k = b.first; k < b.end(); ++k) { f << X(g.planPoints[k].x) << "," << Y(g.planPoints[k].y) << " "; c += g.planPoints[k]; }
         c = c / static_cast<double>(b.count);
@@ -121,7 +133,7 @@ bool writeLaneGraphSvg(const LaneGraph& g, const std::string& path) {
     f << "<g id='lanes' fill='none' stroke-width='" << kGraphSvgLaneStroke << "'>\n";
     for (uint32_t p = 0; p < g.paths.size(); ++p) {
         const Path& path = g.paths[p];
-        if (path.curve.end() > g.points.size()) continue;
+        if (path.curve.end() > g.points.size() || path.kind != PathKind::Lane) continue;
         const char* colour = kGraphSvgColours[(static_cast<std::size_t>(path.section.index) * kGraphSvgColourStride) % kGraphSvgColourCount];
         f << "<polyline stroke='" << colour << "' points='";
         for (uint32_t k = path.curve.first; k < path.curve.end(); ++k) f << X(g.points[k].x) << "," << Y(g.points[k].y) << " ";
@@ -166,6 +178,39 @@ bool writeLaneGraphSvg(const LaneGraph& g, const std::string& path) {
               << "' height='" << 2 * kGraphSvgEndMark << "' stroke='#2e7d32'/>\n";
         }
     }
+    f << "</g>\n";
+    // connectors, coloured by turn, each with a small arrowhead at its end
+    f << "<g id='connectors' fill='none' stroke-width='" << kGraphSvgConnectorStroke << "' stroke-dasharray='" << kGraphSvgConnectorDash << "'>\n";
+    for (uint32_t p = 0; p < g.paths.size(); ++p) {
+        const Path& path = g.paths[p];
+        if (path.curve.end() > g.points.size() || path.kind != PathKind::Connector) continue;
+        const std::size_t turn = static_cast<std::size_t>(path.turn) < kTurnCount ? static_cast<std::size_t>(path.turn) : 0;
+        const char* colour = kGraphSvgTurnColours[turn];
+        f << "<polyline stroke='" << colour << "' points='";
+        for (uint32_t k = path.curve.first; k < path.curve.end(); ++k) f << X(g.points[k].x) << "," << Y(g.points[k].y) << " ";
+        f << "'/>\n";
+        const Vec2 tip = g.pointAt(PathId(p), path.length), d = g.directionAt(PathId(p), path.length), n = perp(d);
+        const Vec2 b0 = tip - d * kGraphSvgConnectorArrowLength + n * kGraphSvgConnectorArrowHalfWidth;
+        const Vec2 b1 = tip - d * kGraphSvgConnectorArrowLength - n * kGraphSvgConnectorArrowHalfWidth;
+        f << "<polygon fill='" << colour << "' stroke='none' points='" << X(tip.x) << "," << Y(tip.y) << " " << X(b0.x) << "," << Y(b0.y)
+          << " " << X(b1.x) << "," << Y(b1.y) << "'/>\n";
+    }
+    f << "</g>\n";
+    // refused turns: a red cross where each is
+    f << "<g id='refused-turns' stroke='" << kGraphSvgRefused << "' stroke-width='" << kGraphSvgRefusedStroke << "'>\n";
+    for (const Vec2& q : marks.refusedTurns) {
+        const double c = kGraphSvgRefusedCross;
+        f << "<path d='M" << X(q.x) - c << " " << Y(q.y) - c << " L" << X(q.x) + c << " " << Y(q.y) + c << " M" << X(q.x) - c << " "
+          << Y(q.y) + c << " L" << X(q.x) + c << " " << Y(q.y) - c << "'/>\n";
+    }
+    f << "</g>\n";
+    // the key, in the corner at the picture's origin
+    f << "<g id='key' font-size='" << kGraphSvgKeySize << "'>\n";
+    double keyY = kGraphSvgKeyLine;
+    for (std::size_t t = 1; t < kTurnCount; ++t, keyY += kGraphSvgKeyLine)
+        f << "<text x='" << kGraphSvgKeyLine << "' y='" << keyY << "' fill='" << kGraphSvgTurnColours[t] << "'>connector: "
+          << kGraphSvgTurnNames[t] << "</text>\n";
+    f << "<text x='" << kGraphSvgKeyLine << "' y='" << keyY << "' fill='" << kGraphSvgRefused << "'>refused: junction (red), turn (cross)</text>\n";
     f << "</g>\n</svg>\n";
     return static_cast<bool>(f);
 }

@@ -702,11 +702,9 @@ void platformKit(RenderMesh& plat, RenderMesh& concrete, RenderMesh& canopy, Ren
     }
 }
 
-// The junction test's numbers: two decks within kJunctionSameLevel of each other are one level; a crossing lane whose
-// direction there is within kJunctionParallel (|cos|) of the street's runs beside it, not across it; a street lane is
-// sampled every kJunctionSampleStep metres along it.
+// The junction test's numbers: two decks within kJunctionSameLevel of each other are one level; a street lane is
+// sampled every kJunctionSampleStep metres along it. (The parallel test's number, kJunctionParallel, is in the header.)
 constexpr double kJunctionSameLevel = 1.0;
-constexpr double kJunctionParallel = 0.7;
 constexpr double kJunctionSampleStep = 2.0;
 
 // A list of road indices, sorted and without repeats.
@@ -720,7 +718,8 @@ void sortUnique(std::vector<int>& v) {
 LaneLookup::LaneLookup(const Pavement& pavement)
     : box(laneBoxes(pavement.footprints)), grid(box, pavement.footprints), footprint(prepareAll(pavement.footprints)) {}
 
-int junctionCrossRank(const Result& r, const LaneLookup& look, size_t li, const Vec2& p, const Vec2& t, std::vector<int>* crossEdges) {
+int junctionCrossRank(const Result& r, const LaneLookup& look, size_t li, const Vec2& p, const Vec2& t, std::vector<int>* crossEdges,
+                      double parallelCos) {
     const LaneSet& L = r.lanes; const DeckHeight& H = *r.heights;
     const Lane& l = L.lanes[li]; if (l.isConnector()) return -1;
     const double zl = H.deck(static_cast<int>(li), p); int best = -1;
@@ -731,14 +730,14 @@ int junctionCrossRank(const Result& r, const LaneLookup& look, size_t li, const 
         if (p.x < b.minX || p.x > b.maxX || p.y < b.minY || p.y > b.maxY || !look.footprint[oj].contains(p)) continue;
         if (std::fabs(H.deck(static_cast<int>(oj), p) - zl) > kJunctionSameLevel) continue;
         Projection pr = project(o.xy, o.s, p);
-        if (std::fabs(dot(t, tangentAtStation(o.xy, o.s, pr.station))) > kJunctionParallel) continue;
+        if (std::fabs(dot(t, tangentAtStation(o.xy, o.s, pr.station))) > parallelCos) continue;
         best = std::max(best, r.graph.cls(r.graph.edges[static_cast<size_t>(o.parent)]).rank);
         if (crossEdges) crossEdges->push_back(o.parent);
     }
     return best;
 }
 
-std::map<int, std::vector<JunctionSpan>> junctionSpans(const Result& r, const LaneLookup& look) {
+std::map<int, std::vector<JunctionSpan>> junctionSpans(const Result& r, const LaneLookup& look, double parallelCos) {
     const LaneSet& L = r.lanes;
     // per street, the parent-station spans where its lanes run through a box
     std::map<int, std::vector<JunctionSpan>> spans;
@@ -749,7 +748,7 @@ std::map<int, std::vector<JunctionSpan>> junctionSpans(const Result& r, const La
         int n = std::max(2, static_cast<int>(l.s.back() / kJunctionSampleStep) + 1); double in0 = -1, inLast = 0; int rankMax = -1;
         for (int k = 0; k <= n; ++k) {
             int cr = -1; double st = 0; hits.clear();
-            if (k < n) { double ls = l.s.back() * k / (n - 1); Vec2 p = pointAt(l.xy, l.s, ls); Vec2 t = tangentAtStation(l.xy, l.s, ls); cr = junctionCrossRank(r, look, li, p, t, &hits); st = project(e.xy, e.s, p).station; }
+            if (k < n) { double ls = l.s.back() * k / (n - 1); Vec2 p = pointAt(l.xy, l.s, ls); Vec2 t = tangentAtStation(l.xy, l.s, ls); cr = junctionCrossRank(r, look, li, p, t, &hits, parallelCos); st = project(e.xy, e.s, p).station; }
             if (cr >= 0) { if (in0 < 0) { in0 = st; rankMax = cr; crossing.clear(); } inLast = st; rankMax = std::max(rankMax, cr); crossing.insert(crossing.end(), hits.begin(), hits.end()); }
             else if (in0 >= 0) { sortUnique(crossing); spans[l.parent].push_back({std::min(in0, inLast), std::max(in0, inLast), rankMax, crossing}); in0 = -1; }
         }
