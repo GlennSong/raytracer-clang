@@ -191,7 +191,9 @@ std::string ruleSetLua(const std::vector<const char*>& rules, const Spread& s = 
                       "control = { test_uncontrolled = { settle = { 'arrived_first', 'kerb_side', 'movement' } } }, "
                       "numbers = { "
                       "comfortable_side_accel = { 2, unit = 'm/s2', source = 'test' }, ";
-    if (withMoveNeeds) lua += "standstill_gap = { " + num(kStandstillGap) + ", unit = 'm', source = 'test' }, ";
+    if (withMoveNeeds)
+        lua += "standstill_gap = { " + num(kStandstillGap) + ", unit = 'm', source = 'test' }, "
+               "anticipation = { 0, unit = 's', source = 'test: the following written against it' }, ";
     lua += "}, personality = { speed_habit = { usual = " + num(s.habitUsual) + ", low = " + num(s.habitLow) +
            ", high = " + num(s.habitHigh) + ", unit = 'ratio' }, ";
     if (withMoveNeeds)
@@ -418,7 +420,7 @@ struct World {
 
 // ---- The rules handed over ---------------------------------------------------------------------------------------------
 
-TEST_CASE(tick_rules_need_gap_kept_and_standstill_gap) {
+TEST_CASE(tick_rules_need_gap_kept_standstill_gap_and_anticipation) {
     const Straight road(2, 100);
     // A rule set without them: buildRoadRules names the move step and each.
     const TestRules lacking(ruleSetLua(kAllRules, Spread(), false));
@@ -426,13 +428,14 @@ TEST_CASE(tick_rules_need_gap_kept_and_standstill_gap) {
     RoadRules rr;
     std::vector<std::string> problems;
     CHECK(!buildRoadRules(road.graph(), lacking.ruleSet, lacking.facts, rr, &problems));
-    CHECK(problems.size() == 2u);
+    CHECK(problems.size() == 3u);
     for (const std::string& p : problems) {
         CHECK(p.find(kMoveReaderName) != std::string::npos);
         std::printf("      %s\n", p.c_str());
     }
-    CHECK(problems.size() == 2u && problems[0].find(kNumberStandstillGap) != std::string::npos &&
-          problems[1].find(kSettingGapKept) != std::string::npos);
+    CHECK(problems.size() == 3u && problems[0].find(kNumberStandstillGap) != std::string::npos &&
+          problems[1].find(kNumberAnticipation) != std::string::npos &&
+          problems[2].find(kSettingGapKept) != std::string::npos);
     // ... and Driving refuses it rather than move cars by numbers it does not have.
     Driving d(&road.graph());
     std::string why;

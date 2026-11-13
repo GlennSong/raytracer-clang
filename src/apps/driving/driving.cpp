@@ -132,9 +132,11 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
                                "\" fact (registerBuiltInFacts adds it): the library ends a trip by it");
     const PersonalSetting* gapKept = ruleSet.findPersonal(kSettingGapKept);
     const Number* standstill = ruleSet.findNumber(kNumberStandstillGap);
-    if (!gapKept || !standstill)
+    const Number* anticipation = ruleSet.findNumber(kNumberAnticipation);
+    if (!gapKept || !standstill || !anticipation)
         return refuse(why, "rule set \"" + ruleSet.name + "\" lacks the setting \"" + kSettingGapKept +
-                               "\" or the number \"" + kNumberStandstillGap + "\", which " + kMoveReaderName +
+                               "\" or the number \"" + kNumberStandstillGap + "\" or \"" + kNumberAnticipation +
+                               "\", which " + kMoveReaderName +
                                " reads (buildRoadRules reports it, given a registry with registerMoveNeeds)");
     // The junction step, when the registry has it: its numbers must all be there (buildRoadRules names any missing).
     const bool junctions = hasJunctionStep(facts);
@@ -158,6 +160,7 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
     gapKept_ = *gapKept;
     gapKeptHash_ = settingNameHash(kSettingGapKept);
     standstillGap_ = static_cast<Real>(standstill->value);
+    anticipation_ = static_cast<Real>(std::max(0.0, anticipation->value));
     ruleSet_ = std::move(ruleSet);
     facts_ = std::move(facts);
     vocabulary_ = std::move(vocabulary);
@@ -747,6 +750,7 @@ void Driving::move(Real dt) {
         f.hardestBrake = cls.hardestBrake;
         f.gapKept = static_cast<Real>(personalValue(gapKept_, gapKeptHash_, t->person));
         f.standstillGap = standstillGap_;
+        f.anticipation = anticipation_;
         const StepOutcome step = stepSpeed(f, c.speed, c.held.topSpeed, c.held.topSpeedRule, ahead, count, dt, reaction);
 
         Car& out = carsNext_[i];

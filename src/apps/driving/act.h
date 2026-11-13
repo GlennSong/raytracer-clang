@@ -53,10 +53,17 @@ using engine::Real;
 constexpr const char* kSettingGapKept = "gap_kept";
 // The rule-set number: the gap kept to the car ahead when both stand still (s0), a length.
 constexpr const char* kNumberStandstillGap = "standstill_gap";
+// The rule-set number: how far ahead in time a driver reckons the gap to a car PULLING AWAY from it (tau_a), a time.
+// Easing reads the gap as it will be that much later, the car ahead keeping its lead in speed (the "temporal
+// anticipation" of Treiber, Kesting & Helbing 2006, constant-speed heuristic, s' = s - tau_a * (v - v_ahead)), taken
+// only while the gap is opening: closing in, the easing formula's own braking term already reads the closing speed.
+// Without it a car at rest behind one moving off reads only the gap, still the standstill gap, and so starts late and
+// slowly, car after car: a queue at a green emptied at 2.6 s a car where drivers manage about 1.9 s (issue #284).
+constexpr const char* kNumberAnticipation = "anticipation";
 // The name the move step reads the rule set under, in the problems buildRoadRules reports.
 constexpr const char* kMoveReaderName = "the move step (speeding up, following and stopping)";
 
-// Declares the two above in `registry` (a ReaderSpec), so buildRoadRules reports a rule set that lacks either. False
+// Declares the three above in `registry` (a ReaderSpec), so buildRoadRules reports a rule set that lacks either. False
 // (with the reason) when it was declared already.
 bool registerMoveNeeds(FactRegistry& registry, std::string* why = nullptr);
 
@@ -103,6 +110,7 @@ struct Follower {
     Real hardestBrake = 0;   // b_max: hardest braking, m/s2 (the class's)
     Real gapKept = 0;        // T: seconds of gap this driver keeps (gap_kept)
     Real standstillGap = 0;  // s0: metres between the two when both stand (standstill_gap)
+    Real anticipation = 0;   // tau_a: seconds a gap to a car pulling away is read ahead, easing only (anticipation)
 };
 
 // EASING ON AN EMPTY ROAD: a * (1 - (v / v_top)^4) up to the top speed; above it, comfortable braking down to it.

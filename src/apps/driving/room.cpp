@@ -22,6 +22,11 @@ namespace {
 constexpr Real kLampLookEvery = 0.25;
 // HOW MANY CYCLES the load-time report looks over for two lights' greens to line up (of the longer of the two cycles).
 constexpr Real kReportCycles = 4;
+// ... and how long, when the chain's lights run cycles of different lengths, which drift against each other (seconds):
+// an hour, long enough for the lab's to come round (40 s against 42.9 s: once in ten minutes).
+constexpr Real kMixedCyclesLook = 3600;
+// Two cycles this close (seconds) are one: the same programme length, lining up the same way every cycle.
+constexpr Real kSameCycleWithin = 0.01;
 constexpr Real kFar = std::numeric_limits<Real>::infinity();
 
 bool knownPath(const engine::LaneGraph& roads, engine::PathId p) { return p.valid() && p.index < roads.paths.size(); }
@@ -305,21 +310,48 @@ Real longestWaitThrough(const engine::LaneGraph& roads, const RightOfWay& row, c
     }
     if (!laterLights) return 0;
     if (cycle) *cycle = longestCycle;
-    const Real horizon = kReportCycles * longestCycle;
+    // HOW LONG TO LOOK: lights of one cycle repeat together every cycle, so a few of it show every way they line up.
+    // Lights of different cycles drift against each other (two of 40 s and 42.9 s by 2.9 s a cycle, round in about ten
+    // minutes), and how they line up at the start says nothing of later: a car can then wait many cycles where they do
+    // not (the soak: 137 s at junction 88 for 87, a chain the first few cycles showed lining up). Those are looked at for
+    // kMixedCyclesLook (issue #284).
+    bool oneCycle = true;
+    for (std::size_t j = 1; j < chain.count; ++j) {
+        const engine::JunctionId at = roads.paths[chain.turns[j].index].junction;
+        if (lightsRunAt(row, at) &&
+            std::fabs(row.junctions[at.index].cycle - row.junctions[roads.paths[c1.index].junction.index].cycle) >
+                kSameCycleWithin)
+            oneCycle = false;
+    }
+    const Real horizon =
+        oneCycle ? kReportCycles * longestCycle : std::max(kReportCycles * longestCycle, kMixedCyclesLook);
     Mover m;
     m.speedUp = cls.speedUp;
     m.brake = cls.brake;
     m.speedThrough = speedThrough(roads, roadRules, c1, cls.topSpeed, comfortableSideAccel);
     std::array<Real, kMaxRoomJunctions> eta{};
     for (std::size_t j = 1; j < chain.count; ++j) eta[j] = secondsToCover(chain.lineAt[j], m);
+    // A MOMENT TO GO FROM REST AT THE FIRST LINE (issue #284, the soak's 301 s at junction 90): its turn green, and still
+    // green when the car's front is at_line_within past the line -- short of that a yellow stops it again (the dilemma:
+    // it can still stop at the line), so a green's last second is no moment to go from rest -- and every later light
+    // letting it in as it gets there. And the moments that work must last a look's step at least: the car asks at
+    // moments of its own, a decide interval apart, and one instant that works between two of them is one it misses.
+    const Real pastLine = secondsToCover(numbers.atLineWithin, m);
+    const auto goesThrough = [&](Real t) {
+        if (lampAt(roads, row, c1, t) != Lamp::Green || lampAt(roads, row, c1, t + pastLine) != Lamp::Green) return false;
+        for (std::size_t j = 1; j < chain.count; ++j)
+            if (lightsRunAt(row, roads.paths[chain.turns[j].index].junction) &&
+                !letsInThrough(roads, row, chain.turns[j], t + eta[j], numbers.arrivalSlack))
+                return false;
+        return true;
+    };
     Real first = -1, last = -1, longest = 0;
+    bool now = goesThrough(0);
     for (Real t = 0; t < horizon; t += kLampLookEvery) {
-        if (lampAt(roads, row, c1, t) != Lamp::Green) continue;
-        bool through = true;
-        for (std::size_t j = 1; j < chain.count && through; ++j)
-            through = !lightsRunAt(row, roads.paths[chain.turns[j].index].junction) ||
-                      letsInThrough(roads, row, chain.turns[j], t + eta[j], numbers.arrivalSlack);
-        if (!through) continue;
+        const bool soon = goesThrough(t + kLampLookEvery);
+        const bool both = now && soon;
+        now = soon;
+        if (!both) continue;
         if (last >= 0) longest = std::max(longest, t - last);
         if (first < 0) first = t;
         last = t;
@@ -977,17 +1009,31 @@ RoomAnswer RoomLedger::measure(const RoomWorld& world, const RoomSeat& seat, std
 
     // 3. IN TRANSIT to each stretch's first lane: on a connector into it (not the car's own way), or granted room on it
     // with its front not there yet; and FIRST IN THE QUEUE for it: refused room on it before this car first asked, and
-    // waiting at its line for it (through a red too); each once, and none already on the way.
+    // waiting at its line for it (through a red too); each once, and none already on the way. A car refused room on it
+    // and waiting at its line with its front a few centimetres onto its connector (rolled over the line as the refusal
+    // came) is first in the queue by when it asked, not in transit: counted as in transit, two cars refused for one lane
+    // at two lines each counted the other ahead of it and neither was granted (a two-car ring the five-minute lab showed
+    // at junction 62 once drivers moved off sooner, issue #284).
     const uint64_t myAsk = plans.plans[k].room.asked ? plans.plans[k].room.askedTick : world.tick;
     transit_.clear();
     for (std::size_t s = 0; s < stretches_.size(); ++s) {
         const engine::PathId lane = stretches_[s].firstLane;
         const engine::PathId mine = s > 0 ? stretches_[s - 1].intoNext : engine::PathId();
+        Waiting first;
+        first.lane = lane;
+        const std::vector<Waiting>::const_iterator waitingFrom =
+            std::lower_bound(waiting_.begin(), waiting_.end(), first,
+                             [](const Waiting& a, const Waiting& b) { return a.lane.index < b.lane.index; });
+        const auto waitsForIt = [&](CarId car) {
+            for (std::vector<Waiting>::const_iterator w = waitingFrom; w != waiting_.end() && w->lane == lane; ++w)
+                if (w->car == car.index) return true;
+            return false;
+        };
         const std::pair<const engine::PathId*, const engine::PathId*> in = world.layout.connectorsInto(lane);
         for (const engine::PathId* conn = in.first; conn != in.second; ++conn) {
             if (*conn == mine) continue;
             for (const PathEntry& e : world.lists.on(*conn))
-                if (e.why == OnPath::Front && e.car != c.id) transit_.push_back(e.car.index);
+                if (e.why == OnPath::Front && e.car != c.id && !waitsForIt(e.car)) transit_.push_back(e.car.index);
         }
         RoomGrant key;
         key.lane = lane;
@@ -997,12 +1043,7 @@ RoomAnswer RoomLedger::measure(const RoomWorld& world, const RoomSeat& seat, std
                                   [](const RoomGrant& a, const RoomGrant& b) { return a.lane.index < b.lane.index; });
              g != grants.end() && g->lane == lane; ++g)
             if (g->car != c.id.index && g->odometer < g->laneAt) transit_.push_back(g->car);
-        Waiting first;
-        first.lane = lane;
-        for (std::vector<Waiting>::const_iterator w =
-                 std::lower_bound(waiting_.begin(), waiting_.end(), first,
-                                  [](const Waiting& a, const Waiting& b) { return a.lane.index < b.lane.index; });
-             w != waiting_.end() && w->lane == lane; ++w)
+        for (std::vector<Waiting>::const_iterator w = waitingFrom; w != waiting_.end() && w->lane == lane; ++w)
             if (w->car != c.id.index && std::make_pair(w->askedTick, w->car) < std::make_pair(myAsk, c.id.index))
                 transit_.push_back(w->car);
     }

@@ -19370,3 +19370,122 @@ change, because its roads did (with the old lab graph put back they are the pinn
 
 **Revisit when** the junction corners are given room for lorries, when a city with frontage roads is re-planned (its
 side streets near interchanges will close as here), or when a one-way frontage road is wanted beside an expressway.
+
+## ADR-0414 — Chains through close lights are left open only where a car from rest can really use them; a car pulling away is read ahead, and city drivers keep city gaps; a queue is timed only over the cars that stood in it (#284)
+
+Words: a CHAIN is a run of turns taken one after another through junctions too close together for a car to stop between
+(ADR-0407); its claim for room beyond is granted only if each light on it will let the car in as it gets there. The
+LOAD-TIME CHECK is the work done once when the rules are handed over that closes, per vehicle class, the chains whose
+lights do not line up for a car leaving from rest at the first line often enough (`room_cycles_through`, ADR-0410 B). The
+DILEMMA is the yellow rule's question "can I still stop at the line?" (ADR-0406). SATURATION HEADWAY is traffic engineers'
+name for the seconds between one car and the next crossing the stop line once a standing queue is moving steadily, read
+from the fourth car of the queue on (FHWA Signal Timing Manual 3.3.2; about 1.9 s: 1,900 cars an hour a lane). IDM is the
+following formula of the move step (design 8): its T is the seconds of gap a driver keeps (`gap_kept`), its s0 the
+standstill gap. ANTICIPATION here is reading the gap to the car ahead as it will be a moment later (Treiber, Kesting &
+Helbing 2006, "temporal anticipation"). A BEAT is how long two lights of slightly different cycle take to drift once
+round against each other.
+
+**Context.** The thirty-minute soak at d005eb06 failed two rows.
+(1) Window 6 stood a car 301 s (limit: two of the longest cycle, 186.7 s) and counted 270.9 car-seconds at rest in a box
+giving way. The one instrumented soak run (`RT_LAB_LONG_CARDS`, the soak's cards every 60 s of a long stand) named it: car
+122, an offroad (speed-up 1.2 m/s2), at junction 90's line, straight on by connector 2949, its front 0.1 m over the line,
+refused room every green since t = 1,517 s: "my body will not fit before the next lights, which will not let me in as I
+get there, at junction 100" (42 m on, straight by 3124). Both lights run 40 s cycles; 2949 is green 36.7-10.5 s and 3124
+green 18.6-33.1 s (yellow to 36.7) in the cycle: the two are anti-coordinated, and a car from rest at 90 (8.4 s to 100's
+line) gets in only if it leaves in the last quarter second of 90's green. The load-time check counted that instant
+and left the chain open; in the run the car was granted once a cycle, at 10.4 s, and a tenth of a second later 90's
+yellow stopped it again (it could still stop: its front was not yet `at_line_within` past the line). Its tail lay
+across junction 75's far turn 2748 between the two junctions, so car 208 waited inside 75 for its body for 199 s (that
+is the box time; allowed, a recorded give-way), and two more cars queued behind. Window 2's 137 s was the same kind:
+car 285, a motorcycle, at junction 88's far turn 2943, refused for junction 87's light (28 m on). Those two lights run
+40 s and 42.9 s cycles, so how they line up drifts by 2.9 s a cycle and comes round in about ten minutes; the check
+looked at four cycles from the clock's zero (where they lined up well) and left the chain open, while from t = 322 s
+they did not line up for minutes (the car took another way after 137 s).
+(2) "How a queue empties" read 3.50 s a car over 77 gaps in the soak (3.94 s over 3 in five minutes), target 1.7-2.1 s.
+Two causes. The measurement counted cars that were not standing in the queue: a car stopped 30 m back for something
+else, and cars that pulled up behind the queue after it had begun to move (or stopped at the line on the red that ended
+the green) -- in the five minutes, 2 of the 3 gaps from the fourth car on. And the behaviour: ten cars queued at a green,
+the lab's own rule set, every car going straight on, emptied at 2.60 s a car (`queue_35` at HEAD). The IDM at rest reads
+only the gap, which is the standstill gap until the car ahead has pulled well away, so each car starts late and slowly;
+and the lab's `gap_kept` (1.5 s usual, 1.1-2.0) was the freeway calibration (Treiber, Hennecke & Helbing 2000: 1.6 s),
+where the IDM fitted to city traffic with lights gives 1.03-1.51 s (Kesting & Treiber 2008).
+
+**Decision.**
+- **A. The load-time check counts only moments a car from rest can use** (`room.cpp longestWaitThrough`). A moment t
+  counts if the first turn is green at t AND still green when the car, from rest at its line, has its front
+  `at_line_within` past it (`secondsToCover(at_line_within)`, about 1.2-1.6 s by class; short of that the dilemma stops
+  it for a yellow), and every later light lets it in as it gets there; and the moments that work must last a look's step
+  (0.25 s, longer than the decide interval), since a car asks at moments of its own. No new rule-set number: the
+  at_line_within the dilemma already uses.
+- **B. Lights of different cycles are looked at for an hour** (`kMixedCyclesLook`, 3,600 s), not four cycles: long
+  enough for the lab's 40 s and 42.9 s lights to come round (a beat of about 600 s). Lights of one cycle repeat together
+  every cycle and keep four. Load cost: below.
+- **C. A car pulling away is read ahead** (`act.h Follower::anticipation`, the rule set's new number `anticipation`,
+  read by the move step and required like `standstill_gap`). Easing reads the gap to a car ahead that is faster than me as
+  it will be `anticipation` seconds on: gap + anticipation x (its speed - mine) (the constant-speed anticipation of
+  Treiber, Kesting & Helbing 2006, section 2.3). Only on the opening side: closing in, the IDM's own braking term already
+  reads the closing speed, and the stop-and-follow behaviour everywhere else is left as it was. The hard limit (the
+  Krauss safe speed) reads the gap as it is, so following can still always stop (the "following can't crash" proof is
+  untouched). The lab: 2.0 s (the top of the paper's 0-2 s reaction times; [~] tuned).
+- **D. City gaps** (data): the lab's `gap_kept` 1.5 (1.1-2.0) -> 1.1 (0.8-1.5) s, inside Kesting & Treiber's city fits
+  (1.03-1.51 s) and the HDM paper's 1.1 s.
+- **E. A queue is the cars that stood in it, and the headway is read going straight on** (`measure.h
+  findQueueBursts`, `queueFigures`). A car stays in the queue only if it had come to rest no later than the car before it
+  began to move (it was standing when that one moved off), it began to move no earlier, and it stood behind it by no more
+  than one standing place (`kQueueSpacingMetres`, 15 m: the longest body, a bus, and the standstill gap). The first car
+  that fails ends the queue, uncounted. `LineCrossing::restCameAt` carries when each car came to rest and
+  `LineCrossing::straight` whether it went straight on. The row's figure is read over the gaps where both cars went
+  straight on, from the gap before the fourth car (FHWA 3.3.2: the 1,900 an hour is for through passenger cars, read from
+  the fourth); the figure with every turn is printed beside it with no target. With that, the five minutes' queues of
+  four or more (all far turns, or behind a bus, crossing the line at 2-3 m/s for the bend) no longer count against a
+  straight-on band. Classes are NOT filtered: a bus or a truck going straight on in a queue counts at its own pace
+  (traffic engineers count it as about two cars; not done here).
+- **F. A car refused room at its line, its front a few centimetres onto its connector, is first in the queue by when it
+  asked, not in transit** (`room.cpp RoomLedger::measure`). The second five-minute run of this work showed a two-car ring
+  at junction 62 at t = 32 s: car 148 at its line and motorcycle 253 with its front 0.0 m onto its connector, both refused
+  room on one lane, each counted the other ahead of it (253 as "in transit", being on a connector into the lane; 148 as
+  "first in the queue", having asked earlier). Now a car listed as waiting at its line for that lane is counted only by
+  when it asked.
+
+**What was not done.** The first-car row (start-up lost time, about 2 s counted from the green) keeps no target: drivers
+still have no start-up reaction to the green, and the row still counts from moving off; neither fell out of this work.
+Coordinating close lights as one programme (ADR-0410 E) would let chains like 90-100 be used rather than closed; owed.
+
+**Measured.** The lab, 300 drivers, five minutes (before = d005eb06, `out/zz_final`; after = this work's
+third five-minute run, which had every change but the measurement's straight-on figure, a measurement only):
+
+| five minutes | before | after |
+|---|---|---|
+| trips arrived | 464 | 490 |
+| mean speed, every car (m/s) | 9.96 | 10.48 |
+| longest stand / longest wait at a line | 72 s / 72.6 s (car 110, red) | 73 s / 74.0 s (car 110, red) |
+| bodies touching / entered on red / loops | 0 / 0 / 0 | 0 / 0 / 0 |
+| queue row, from the fourth car on | 3.94 s over 3 gaps (every turn; 2 of the 3 cars not standing in the queue) | straight on: no queue of four going straight on in five minutes (no data); every turn: 3.14 s over 4 gaps, all far turns or behind a bus |
+| the model's tick, mean (worst) | 0.478 ms (2.94) | 0.512 ms (2.20) |
+| turns closed to a class for want of room / chains closed | 90 / 14 | 131 / 14 |
+| level load | 1.28 s | 1.28 s (the hour-long look costs nothing measurable) |
+
+The five-minute state hash is retaken (`kFiveMinuteStateHash` 0xcb8d84ad283044fb). The first five-minute run with A and B
+alone (before C, D, F) arrived 464 trips as before; A and B move the traffic little in five minutes. THE SOAK WAS NOT RUN
+after this work (the owner stopped the work before it for a review of the driving module): whether window 6's stand and
+the soak's queue row now pass is UNVERIFIED. What is known: car 122's chain (90 then 100) is closed to its class by A at
+load, and car 285's (88 then 87) falls under B; the soak's straight-on queue figure is unknown, and the lab's fleet
+(trucks and buses at 0.8 m/s2, cars at 1.2-2.0) will read slower than `queue_35`'s 1.96 s for 1.5 m/s2 cars.
+
+**Tests** (`driving_tests`, each a few seconds): `queue_35_ten_cars_at_a_green_empty_at_the_saturation_headway` (ten
+cars at the grid's middle light, the lab's rule set with a longer cycle; the measurements' own counting line; 2.60 s a car
+before, 1.96 s after; band 1.7-2.1 s); `room_36_every_chain_left_open_through_close_lights_lets_a_car_from_rest_through`
+(the lab's lights at two junctions 2, 4 or 6 m apart, their offsets moved by seven green-wave speeds; every two-turn chain
+the check leaves open is driven by a car at rest at the first line as its turn goes green, which must get through within
+room_cycles_through + 1 cycles: with the old check 6 open chains never let it through, the car standing at its line on
+its own red exactly as car 122 did; with A, 63 open chains all through, the longest 7.2 s from the green, 126 closed);
+`measure_9` (a car that pulled up after the car before moved off, and one standing 30 m behind it, end the queue);
+`tick_rules_need_gap_kept_standstill_gap_and_anticipation`. The other driving tests' rule sets carry `anticipation = 0`,
+so the following they were written against is unchanged. With `anticipation = 2` in the give-way tests' rule set (tried,
+not kept), every test held but `give_way_284_f2` (ten minutes at two lights 6 m apart), where one car entered on red: car
+15, committed through both junctions, held inside the first by a body on its crossing point for some seconds, reached the
+second after its red. A timing the anticipation shifted into a hole ADR-0409/0410 G guard against, not closed here;
+the lab (below) entered nothing on red.
+
+**Revisit when** close lights are coordinated (the chains closed by A may then open), when drivers get a start-up
+reaction to the green, or when the queue row should be read in passenger-car equivalents.

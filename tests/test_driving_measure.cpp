@@ -68,8 +68,10 @@ WaitLoop loopOf(const std::vector<uint32_t>& cars, LoopClass kind) {
     return l;
 }
 
-LineCrossing crossing(uint32_t car, double seconds, double restLeftAt, double restDistance) {
+// (`restCameAt`: when it came to rest; by default at the start, standing in the queue before anyone moved.)
+LineCrossing crossing(uint32_t car, double seconds, double restLeftAt, double restDistance, double restCameAt = 0) {
     LineCrossing x;
+    x.restCameAt = restCameAt;
     x.car = CarId(car);
     x.tick = static_cast<uint64_t>(std::lround(seconds * 60));
     x.seconds = seconds;
@@ -373,6 +375,33 @@ TEST_CASE(measure_9_queue_figures_by_hand) {
     CHECK_APPROX(f.secondsPerCar, 1.86, 1e-9);
     CHECK(f.gaps == 5u && f.bursts == 2u);
     CHECK_APPROX(f.firstCarDelay, 1.8, 1e-9);
+
+    // NOT IN THE QUEUE AS IT BEGAN TO EMPTY (issue #284): car 6 pulled up behind the queue once it was moving (it came to
+    // rest at 13.5 s, after car 5 had begun to move at 13.2 s), so the queue ends after car 5; and a car standing 30 m behind the car before it (held for something else) is
+    // no part of it either.
+    {
+        std::vector<LineCrossing> late = clean;
+        late[5].restCameAt = 13.5;   // car 6 came to rest after car 5 began to move (13.2 s)
+        bursts = findQueueBursts(late);
+        CHECK(bursts.size() == 1u && bursts[0].gaps.size() == 4u);
+        std::vector<LineCrossing> farBack = clean;
+        farBack[5].restDistance = 27.0 + 30.0;   // car 6 stood 30 m behind where car 5 stood
+        bursts = findQueueBursts(farBack);
+        CHECK(bursts.size() == 1u && bursts[0].gaps.size() == 4u);
+        // A TURN in the queue: car 5 turned (its gap, and the one after it, are not straight on): the saturation
+        // headway reads the gap before car 4 alone (1.9 s); every turn included, all three (1.9 s too, by hand).
+        std::vector<LineCrossing> turning = clean;
+        turning[4].straight = false;
+        turning[4].seconds = 21.4;   // a turn crossing the line slower: 2.9 s after car 4
+        turning[5].seconds = 23.3;
+        bursts = findQueueBursts(turning);
+        CHECK(bursts.size() == 1u && bursts[0].gaps.size() == 5u);
+        const QueueFigures t = queueFigures(bursts);
+        CHECK(t.gaps == 1u && t.gapsAll == 3u);
+        CHECK_APPROX(t.secondsPerCar, 1.9, 1e-9);
+        CHECK_APPROX(t.secondsPerCarAll, (1.9 + 2.9 + 1.9) / 3, 1e-9);
+    }
+    bursts = findQueueBursts(two);
 
     // In the table: 1.86 s is inside the band. The first car's 1.8 s is measured with no target (issue #284: the plan's
     // band is counted from the green, the row from moving off).

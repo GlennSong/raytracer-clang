@@ -219,7 +219,10 @@ constexpr double kLongestStand = 100.0;
 // Any change to what cars do changes it, so a change that moves the traffic must be acknowledged here, by updating this
 // number in the same change and saying why in its report -- never left to drift. (Same every run within a build is the
 // test below; this pins it across builds.) Checked only for the full five minutes (not with RT_LAB_SECONDS).
-constexpr uint64_t kFiveMinuteStateHash = 0x7381989eed43cec0ull;   // retaken: lab re-planned (ADR-0413), buses and per-size crossing records (ADR-0412)
+// Retaken for ADR-0414: chains through close lights closed where no car from rest could use them (load-time check), a car
+// pulling away read ahead (the rule set's `anticipation`) and city gaps (`gap_kept` 1.1 s), and room beyond counting a
+// refused car at its line by when it asked, not as in transit. (Before: 0x7381989eed43cec0, ADR-0412/0413.)
+constexpr uint64_t kFiveMinuteStateHash = 0xcb8d84ad283044fbull;
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's
@@ -471,10 +474,11 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     // the queue figures come from those crossings (measure.h findQueueBursts), as the measurements table reads them.
     struct RestSeen {
         bool atRest = true;
-        double restLeftAt = -1, restOdometer = 0;
+        double restLeftAt = -1, restOdometer = 0, restCameAt = -1;
     };
     std::map<uint32_t, RestSeen> rest;
     std::map<uint32_t, std::vector<driving::LineCrossing>> lineCrossings;   // by arriving lane
+    std::map<uint32_t, std::vector<std::string>> lineCrossingNotes;         // ... and what each car was (RT_LAB_QUEUE_LOG)
     std::map<uint32_t, uint32_t> frontPath;
     // AT LIGHTS (issue #261): fronts crossing a line where the lights run, by what the turn's lamp showed; and how long
     // each such car stood on the lane it arrived by (from its first standing on it to crossing; queueing included).
@@ -566,6 +570,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                 r.restLeftAt = now - kStep;
                 r.restOdometer = c.odometer;
             }
+            if (atRest && (!r.atRest || r.restCameAt < 0)) r.restCameAt = now;
             r.atRest = atRest;
             std::map<uint32_t, uint32_t>::iterator fp = frontPath.find(c.id.index);
             if (fp != frontPath.end() && fp->second != c.path.index &&
@@ -577,11 +582,24 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                 x.seconds = now;
                 x.restLeftAt = r.restLeftAt;
                 x.restDistance = (c.odometer - c.along) - r.restOdometer;
+                x.restCameAt = r.restCameAt;
+                x.straight = roads.paths[c.path.index].turn == engine::Turn::Straight;
                 lineCrossings[fp->second].push_back(x);
                 // AT LIGHTS (issue #261): what the car's turn showed as the tick began (what its driver decided by), and
                 // how long it stood on the lane it arrived by.
                 const driving::Lamp lamp =
                     driving::lampAt(roads, d->rightOfWay(), c.path, d->clockSeconds() - kStep);
+                // RT_LAB_QUEUE_LOG: what each crossing car was (for a person reading the queues' gaps).
+                if (std::getenv("RT_LAB_QUEUE_LOG")) {
+                    static const char* const kTurns[] = {"none", "straight", "near", "far", "u"};
+                    static const char* const kLamps[] = {"dark", "green", "yellow", "red", "red-may-turn"};
+                    char note[160];
+                    std::snprintf(note, sizeof note, "car %u %s %s lamp %s rest %.2f-%.2f from %.1f m speed %.1f",
+                                  c.id.index, d->vehicleClasses().at(c.vehicleClass).name.c_str(),
+                                  kTurns[static_cast<int>(roads.paths[c.path.index].turn)],
+                                  kLamps[static_cast<int>(lamp)], r.restCameAt, r.restLeftAt, x.restDistance, c.speed);
+                    lineCrossingNotes[fp->second].push_back(note);
+                }
                 if (lamp != driving::Lamp::Dark) {
                     ++litCrossings;
                     if (lamp == driving::Lamp::Red) {
@@ -872,6 +890,18 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         for (const std::pair<const uint32_t, std::vector<driving::LineCrossing>>& line : lineCrossings)
             for (const driving::QueueBurst& b : driving::findQueueBursts(line.second)) bursts.push_back(b);
         const driving::QueueFigures q = driving::queueFigures(bursts);
+        // RT_LAB_QUEUE_LOG: every queue of the fourth car or more, car by car, with the gap before each.
+        if (std::getenv("RT_LAB_QUEUE_LOG"))
+            for (const std::pair<const uint32_t, std::vector<driving::LineCrossing>>& line : lineCrossings)
+                for (const driving::QueueBurst& b : driving::findQueueBursts(line.second)) {
+                    if (b.gaps.size() + 1 < driving::kSaturationFromCar) continue;
+                    std::size_t k = 0;
+                    while (k < line.second.size() && !(line.second[k].car == b.firstCar && line.second[k].seconds == b.seconds)) ++k;
+                    std::printf("    [queue] lane %u at t=%.2f:\n", line.first, b.seconds);
+                    const std::vector<std::string>& notes = lineCrossingNotes[line.first];
+                    for (std::size_t g = 0; g <= b.gaps.size() && k + g < notes.size(); ++g)
+                        std::printf("      %5.2f  %s\n", g == 0 ? 0.0 : b.gaps[g - 1], notes[k + g].c_str());
+                }
         // The lab's queues are short: every gap from the second car on, as well as the plan's figure (from the fourth).
         double allGaps = 0;
         std::size_t gapCount = 0;
@@ -881,10 +911,10 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                 ++gapCount;
             }
         std::printf("    [lab-v2] queues emptying over junction lines: %zu queues; %zu gaps from the second car on, %.2f s "
-                    "a car on average; %zu from the %zuth car on, %.2f s a car; the first car %.2f s from moving off to "
-                    "its line\n",
+                    "a car on average; %zu from the %zuth car on going straight on, %.2f s a car (%zu turns included, "
+                    "%.2f s a car); the first car %.2f s from moving off to its line\n",
                     q.bursts, gapCount, gapCount ? allGaps / static_cast<double>(gapCount) : 0.0, q.gaps,
-                    driving::kSaturationFromCar, q.secondsPerCar, q.firstCarDelay);
+                    driving::kSaturationFromCar, q.secondsPerCar, q.gapsAll, q.secondsPerCarAll, q.firstCarDelay);
         std::printf("    [lab-v2] the longest wait at a junction's line: %.1f s (car %u, at the end of it: %s)\n",
                     longestLineWait, longestLineWaitCar, longestLineWaitWhy.c_str());
     }
@@ -1154,6 +1184,27 @@ TEST_CASE(level_traffic_lab_v2_soak) {
                     std::map<uint32_t, Real>::iterator it = standSince.find(c.id.index);
                     if (standing && it == standSince.end()) it = standSince.insert({c.id.index, now}).first;
                     if (standing) w.longestStand = std::max(w.longestStand, now - it->second);
+                    // RT_LAB_LONG_CARDS=<s>: the card of a car the moment it has stood that long, and every 60 s after,
+                    // with the announcements on its junctions' crossing points (for a person chasing why).
+                    if (const char* longCards = std::getenv("RT_LAB_LONG_CARDS")) {
+                        const Real stood = standing ? now - it->second : 0;
+                        const Real from = std::atof(longCards);
+                        if (standing && stood >= from && std::fmod(stood - from, Real(60)) < 0.5) {
+                            std::printf("      [long stand] t=%.0f car %u has stood %.0f s:\n%s", now, c.id.index, stood,
+                                        d->describeCar(c.id).c_str());
+                            const driving::JunctionPlans* plans = d->junctionPlans(c.id);
+                            for (std::size_t k = 0; plans && k < plans->count; ++k) {
+                                const engine::Path& p = roads.paths[plans->plans[k].connector.index];
+                                for (uint32_t x = p.crossings.first; x < p.crossings.end(); ++x)
+                                    for (const driving::Announcement& a : d->board().on(roads.pathCrossings[x]))
+                                        std::printf("  board: crossing %u car %llu path %u arrive %.2f clear %.2f going "
+                                                    "%d fixed %d notGoing %d\n",
+                                                    a.crossing.index, static_cast<unsigned long long>(a.who),
+                                                    a.onPath.index, a.arriveIn, a.clearIn, a.going, a.arrivalFixed,
+                                                    a.notGoing);
+                            }
+                        }
+                    }
                     if (!standing && it != standSince.end()) standSince.erase(it);
                 }
                 std::size_t plans = 0;

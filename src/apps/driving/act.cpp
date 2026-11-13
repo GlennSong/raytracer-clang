@@ -33,6 +33,7 @@ bool registerMoveNeeds(FactRegistry& registry, std::string* why) {
     spec.name = kMoveReaderName;
     spec.meaning = "works out each driven car's speed from its held answers and the car ahead, every tick";
     spec.numbers.push_back(need(kNumberStandstillGap, UnitFamily::Length));
+    spec.numbers.push_back(need(kNumberAnticipation, UnitFamily::Time));
     spec.settings.push_back(need(kSettingGapKept, UnitFamily::Time));
     return registry.addReader(spec, why);
 }
@@ -92,8 +93,11 @@ StepOutcome stepSpeed(const Follower& f, Real speed, Real topSpeed, RuleIndex to
         const Obstacle& o = obstacles[i];
         if (o.hardOnly) continue;
         // A place to stop by (and a true end of the way) is a stopped car whose rear stands one standstill gap past
-        // it.
-        const Real gap = o.kind == Limit::CarAhead ? o.distance : o.distance + f.standstillGap;
+        // it. A car ahead pulling away: the gap as it will be `anticipation` seconds on (easing only; the hard limit
+        // below reads the gap as it is).
+        const Real gap = o.kind == Limit::CarAhead
+                             ? o.distance + f.anticipation * std::max(Real(0), o.speed - speed)
+                             : o.distance + f.standstillGap;
         const Real speedAhead = o.kind == Limit::CarAhead ? o.speed : Real(0);
         const Real taken = f.speedUp - easingAcceleration(f, speed, topSpeed, gap, speedAhead);
         if (taken > mostTaken) {

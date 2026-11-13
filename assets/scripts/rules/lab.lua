@@ -102,6 +102,13 @@ rule_set = {
     -- The gap kept to the car ahead when both stand still: the Intelligent Driver Model's s0.
     standstill_gap = { 2.0, unit = "m",
       source = "Treiber, Hennecke & Helbing 2000, Congested traffic states in empirical observations and microscopic simulations, table 1 (s0 = 2 m)" },
+    -- How far ahead in time a driver reckons the gap to a car PULLING AWAY from it: easing reads the gap as it will be
+    -- that much later, the car ahead keeping its lead in speed. Without it a car at rest behind one moving off sees
+    -- only the standstill gap, so it starts late and slowly, car after car, and a queue at a green empties at 2.6 s a
+    -- car where drivers manage about 1.9 s (issue #284, ADR-0414). Closing in is not anticipated: the following formula's
+    -- own braking term reads the closing speed already. Never read by the hard limit, which keeps every car able to stop.
+    anticipation = { 2.0, unit = "s",
+      source = "Treiber, Kesting & Helbing 2006, Delays, inaccuracies and anticipation in microscopic traffic models (Physica A 360), section 2.3, temporal anticipation s' = s - T' dv by the constant-velocity heuristic, reaction times T' 0-2 s (table 1); here the opening side only; 2 s, the top of that range, a [~] judgement tuned with gap_kept against the saturation headway (driving test queue_35: 1.96 s a car)" },
     -- How hard a driver lets the car be pushed sideways round a bend before slowing for it (speed squared over the
     -- bend's radius). About a fifth of g: a 10 m corner at 10 mph, a 100 m curve at 30 mph.
     comfortable_side_accel = { 2.0, unit = "m/s2",
@@ -220,9 +227,10 @@ rule_set = {
     -- How far above or below the limit this person drives.
     speed_habit = { usual = 1.0, low = 0.92, high = 1.08, unit = "ratio",
       source = "[~] a guess to tune: drivers spread a few miles an hour either side of the limit" },
-    -- The seconds of travel this person keeps behind the car ahead: the Intelligent Driver Model's T.
-    gap_kept = { usual = 1.5, low = 1.1, high = 2.0, unit = "s",
-      source = "[~] round Treiber, Hennecke & Helbing 2000, table 1 (T = 1.6 s); the spread a guess to tune" },
+    -- The seconds of travel this person keeps behind the car ahead: the Intelligent Driver Model's T. City drivers: the
+    -- freeway calibration's 1.5-1.6 s left queues at lights emptying at 2.6 s a car (issue #284, ADR-0414).
+    gap_kept = { usual = 1.1, low = 0.8, high = 1.5, unit = "s",
+      source = "Kesting & Treiber 2008, Calibrating car-following models using trajectory data: methodological study (TRR 2088), table 1: the IDM fitted to city traffic with lights in Stuttgart, T = 1.03-1.51 s; Treiber, Kesting & Helbing 2006 simulate with T = 1.1 s (table 1); the spread a guess to tune" },
     -- How slowly this person's comfortable gap shrinks while waiting at a line (gap_shrink is divided by it): a patient
     -- driver (2) waits twice as long before taking a smaller gap.
     patience = { usual = 1.0, low = 0.5, high = 2.0, unit = "ratio", source = "[~] a guess to tune" },

@@ -1007,6 +1007,12 @@ One formula decides acceleration, and every stop answer goes through it.
 All numbers are per vehicle class or per person, from data. Speed is never negative; a car at rest stays at rest
 until its binding answer lets it go.
 
+*As built* (#284, ADR-0414): **a car pulling away is read ahead.** Easing reads the gap to a car ahead that is faster
+than me as it will be the rule set's `anticipation` seconds on (the gap plus that time the difference in speed: the
+temporal anticipation of Treiber, Kesting & Helbing 2006, taken on the opening side only); the hard limit reads the gap
+as it is. Without it a queue at a green emptied at 2.6 s a car (each car at rest saw only the standstill gap until the
+car ahead had pulled well away); with it, and the lab's city `gap_kept` (1.1 s usual), 1.96 s (driving test `queue_35`).
+
 ## 9. Junctions
 
 This is the part the old model got wrong, so it is specified most tightly. Everything here is built on crossing
@@ -1163,7 +1169,12 @@ closed to that class's routes at load and reported as a road-data problem. This 
 when the body won't fit" for lights. The measurements row `box_stops` checks the brief's "done when" (nobody at rest in a box
 but by a recorded give-way). *Since #265 (ADR-0408)* the load check follows the whole chain a claim could pass through, up to
 `room_through_junctions`, with every light on it: the soak found a car waiting 1,129 s at a turn whose claim ran through
-two close junctions to a light that never let it in, which the old one-junction check had left open.
+two close junctions to a light that never let it in, which the old one-junction check had left open. *Since ADR-0414*
+a moment counts as one a car from rest at the first line can go only if its turn is still green when its front is
+`at_line_within` past the line (short of that a yellow stops it again), and only if the moments that work last a look's
+step (0.25 s, longer than a decide interval); lights of different cycles, which drift against each other, are looked at
+for an hour, not four cycles. The soak found a car standing 301 s at junction 90 for a chain through 100 that lined up
+only in the last instant of 90's green.
 
 ### 9.6 Why this can't deadlock, and what can still freeze
 

@@ -129,8 +129,11 @@ constexpr double kQueueQuietSeconds = 10.0;
 // "Nearby": the first car of a queue was at rest no further back from the line than this (metres): two car lengths,
 // so a first car that stopped a little short of the line still counts.
 constexpr double kQueueStartNearMetres = 10.0;
+// ONE STANDING PLACE in a queue: a car stood no further behind where the car before it stood than this (metres): the
+// longest body the fleets drive (an 11.45 m bus), the standstill gap, and a little over.
+constexpr double kQueueSpacingMetres = 15.0;
 // The steady rate is read from the gap before this car of the queue on (the first few cars are still getting going;
-// traffic engineers read it from the fourth or fifth).
+// traffic engineers read it from the fourth: FHWA Signal Timing Manual 3.3.2).
 constexpr std::size_t kSaturationFromCar = 4;
 // THE PLAN'S BANDS. One car every ~1.9 seconds once the queue is moving (FHWA's saturation flow, about 1,900 cars an
 // hour per lane): 1.7 to 2.1 s, a tenth either side. (The first car loses about 2 seconds getting going, counted from
@@ -243,28 +246,43 @@ struct LineCrossing {
     // the line (metres).
     double restLeftAt = -1;
     double restDistance = 0;
+    // When it came to rest there (negative: never seen at rest).
+    double restCameAt = -1;
+    // It went straight on over the line (the connector its front came onto is a straight-on turn).
+    bool straight = true;
 };
 
 // ONE QUEUE EMPTYING over a line: after kQueueQuietSeconds with no crossing, a car crossed that began to move from rest
 // no more than kQueueStartNearMetres short of the line (the first car). The cars after it are in the queue while each
-// crosses less than kQueueQuietSeconds after the one before AND began to move from rest no earlier than the first car
-// did (it was standing in the queue when the first car moved off). The first crossing that fails ends the queue and is
-// not counted: a straggler that never stopped is not part of it.
+// crosses less than kQueueQuietSeconds after the one before AND was standing in the queue behind that one when it moved
+// off: it had come to rest no later than the car before it began to move, it began to move no earlier, and it stood
+// behind it by no more than kQueueSpacingMetres (one standing place). The first crossing that fails ends the queue and
+// is not counted: a straggler that never stopped, a car that pulled up behind the queue once it was moving (or stopped
+// at the line on the red that ended the green: it came to rest after the car before had gone), or one that stood far
+// back for something else, is not part of it (traffic engineers time the queue standing at the start of the green,
+// FHWA Signal Timing Manual 3.3.2; issue #284).
 struct QueueBurst {
     CarId firstCar;
     uint64_t tick = 0;              // when the first car crossed
     double seconds = 0;
     double firstCarDelay = 0;       // from the first car beginning to move to its front crossing the line
     std::vector<double> gaps;       // gaps[i]: from car i + 1's crossing to car i + 2's (cars counted from 1)
+    std::vector<uint8_t> straight;  // straight[i]: both cars of gaps[i] went straight on
 };
 // The queues in one line's crossings (in the order they crossed).
 std::vector<QueueBurst> findQueueBursts(const std::vector<LineCrossing>& crossings);
 
 // THE QUEUE FIGURES over any number of queues: the average gap from car kSaturationFromCar on (the gap before it, the
-// gap before the next, ...), and the average first-car delay. Not finite when there is nothing to average.
+// gap before the next, ...), and the average first-car delay. Not finite when there is nothing to average. The
+// saturation headway is traffic engineers' figure for cars going straight on (FHWA Signal Timing Manual 3.3.2: the 1,900
+// an hour is for through passenger cars; turns are slower by their own factors): it is read over the gaps where both cars
+// went straight on (issue #284: the lab's five-minute queues of four or more were far turns, crossing the line at 2-3 m/s
+// for the bend). The figure over every gap, turns included, is kept beside it, with no target.
 struct QueueFigures {
-    double secondsPerCar = 0;       // traffic engineers' "saturation headway"
+    double secondsPerCar = 0;       // traffic engineers' "saturation headway": straight on
     std::size_t gaps = 0;           // how many gaps went into it
+    double secondsPerCarAll = 0;    // ... over every gap from car kSaturationFromCar on, turns included
+    std::size_t gapsAll = 0;
     double firstCarDelay = 0;       // ... their "start-up lost time", as the plan words it
     std::size_t bursts = 0;
 };
@@ -625,6 +643,7 @@ private:
         bool atRest = true;
         double restLeftAt = -1;       // when it last began to move from rest (negative: never seen)
         double restOdometer = 0;      // its odometer then
+        double restCameAt = -1;       // when it last came to rest (negative: never seen)
     };
 
     void lookAtCar(const Driving& d, const Car& c, const Seen* before, double now, double dt, Seen& out);

@@ -173,16 +173,20 @@ std::vector<QueueBurst> findQueueBursts(const std::vector<LineCrossing>& crossin
     double lastCrossing = 0;
     bool inBurst = false;
     QueueBurst burst;
-    double firstRestLeft = 0;
     double lastCounted = 0;
+    const LineCrossing* ahead = nullptr;   // the queue's last car counted
     for (const LineCrossing& x : crossings) {
         if (inBurst) {
             const bool stays = x.seconds - lastCounted < kQueueQuietSeconds && x.restLeftAt >= 0 &&
-                               x.restLeftAt >= firstRestLeft;
+                               x.restCameAt >= 0 && x.restCameAt <= ahead->restLeftAt &&
+                               x.restLeftAt >= ahead->restLeftAt && x.restDistance >= ahead->restDistance &&
+                               x.restDistance - ahead->restDistance <= kQueueSpacingMetres;
             if (stays) {
                 burst.gaps.push_back(x.seconds - lastCounted);
+                burst.straight.push_back(x.straight && ahead->straight ? 1 : 0);
                 lastCounted = x.seconds;
                 lastCrossing = x.seconds;
+                ahead = &x;
                 continue;
             }
             out.push_back(burst);
@@ -197,8 +201,8 @@ std::vector<QueueBurst> findQueueBursts(const std::vector<LineCrossing>& crossin
             burst.tick = x.tick;
             burst.seconds = x.seconds;
             burst.firstCarDelay = x.seconds - x.restLeftAt;
-            firstRestLeft = x.restLeftAt;
             lastCounted = x.seconds;
+            ahead = &x;
             inBurst = true;
         }
         anyBefore = true;
@@ -210,11 +214,14 @@ std::vector<QueueBurst> findQueueBursts(const std::vector<LineCrossing>& crossin
 
 QueueFigures queueFigures(const std::vector<QueueBurst>& bursts) {
     QueueFigures f;
-    double gapSum = 0, delaySum = 0;
+    double gapSum = 0, allSum = 0, delaySum = 0;
     // The gap before car n is gaps[n - 2] (cars counted from 1).
     const std::size_t firstGap = kSaturationFromCar >= 2 ? kSaturationFromCar - 2 : 0;
     for (const QueueBurst& b : bursts) {
         for (std::size_t i = firstGap; i < b.gaps.size(); ++i) {
+            allSum += b.gaps[i];
+            ++f.gapsAll;
+            if (i < b.straight.size() && !b.straight[i]) continue;
             gapSum += b.gaps[i];
             ++f.gaps;
         }
@@ -222,6 +229,7 @@ QueueFigures queueFigures(const std::vector<QueueBurst>& bursts) {
         ++f.bursts;
     }
     f.secondsPerCar = f.gaps > 0 ? gapSum / static_cast<double>(f.gaps) : kNoValue;
+    f.secondsPerCarAll = f.gapsAll > 0 ? allSum / static_cast<double>(f.gapsAll) : kNoValue;
     f.firstCarDelay = f.bursts > 0 ? delaySum / static_cast<double>(f.bursts) : kNoValue;
     return f;
 }
@@ -945,7 +953,8 @@ MeasurementReport buildReport(const MeasureRows& m, const std::vector<std::strin
     }
     {
         const QueueFigures f = queueFigures(m.queues);
-        ReportRow h = makeRow("queue_headway", "How a queue empties: seconds per car from the fourth car on",
+        ReportRow h = makeRow("queue_headway",
+                              "How a queue empties: seconds per car from the fourth car on, both cars going straight on",
                               "1.7 to 2.1 s (the plan: about 1.9 s)");
         h.status = f.gaps == 0 ? RowStatus::NoData
                                : (f.secondsPerCar >= kHeadwayLowest && f.secondsPerCar <= kHeadwayHighest
@@ -953,10 +962,17 @@ MeasurementReport buildReport(const MeasureRows& m, const std::vector<std::strin
                                       : RowStatus::Fail);
         h.values = {named("seconds_per_car", f.secondsPerCar, "", "s per car"),
                     named("gaps", static_cast<double>(f.gaps), "gaps", ""),
-                    named("bursts", static_cast<double>(f.bursts), "queues", "")};
-        h.summary = f.gaps == 0 ? "no queue of " + count(kSaturationFromCar) + " or more seen at a counting line"
-                                : fmt("%.2f", f.secondsPerCar) + " s per car, over " + count(f.gaps) + " gaps in " +
-                                      count(f.bursts) + " queues";
+                    named("bursts", static_cast<double>(f.bursts), "queues", ""),
+                    named("seconds_per_car_every_turn", f.secondsPerCarAll, "every turn", "s per car"),
+                    named("gaps_every_turn", static_cast<double>(f.gapsAll), "gaps", "")};
+        const std::string everyTurn = f.gapsAll == 0 ? std::string()
+                                                     : "; turns included " + fmt("%.2f", f.secondsPerCarAll) +
+                                                           " s per car over " + count(f.gapsAll) + " gaps (no target)";
+        h.summary = (f.gaps == 0 ? "no queue of " + count(kSaturationFromCar) + " or more going straight on seen at a "
+                                                                                  "counting line"
+                                 : fmt("%.2f", f.secondsPerCar) + " s per car, over " + count(f.gaps) + " gaps in " +
+                                       count(f.bursts) + " queues") +
+                    everyTurn;
         // (Issue #284: no target. The plan's "about 2 s" is traffic engineers' start-up lost time, counted from the
         // GREEN; this row counts from the first car beginning to move, so a car at rest at its line reads a fraction
         // of a second whatever the drivers do. Fed by the lab's lit lines it read 0.19 s. The row keeps the figure;
@@ -1161,6 +1177,7 @@ Measurements::Seen Measurements::seeCar(const Driving& d, const Car& c) const {
     s.front.along = c.along;
     s.speed = c.speed;
     s.atRest = c.speed < kStandingBelow;
+    s.restCameAt = s.atRest ? d.clockSeconds() : kNotYet;
     if (knownPath(d.roads(), c.path)) {
         const CarPose pose = carPose(*d.roads(), d.vehicleClasses(), d.ruleSet(), c);
         s.frontAt = pose.front;
@@ -1234,16 +1251,20 @@ void Measurements::lookAtCar(const Driving& d, const Car& c, const Seen* before,
                            (out.trip.valid() ? out.trip == before->trip : c.odometer >= before->odometer);
     out.restLeftAt = before && sameDrive ? before->restLeftAt : kNotYet;
     out.restOdometer = before && sameDrive ? before->restOdometer : 0;
+    out.restCameAt = before && sameDrive ? before->restCameAt : kNotYet;
     if (before && !before->driven && !c.driven) {
         // Parked both times: it keeps what it was.
         out.restLeftAt = before->restLeftAt;
         out.restOdometer = before->restOdometer;
+        out.restCameAt = before->restCameAt;
     }
     if (before && (sameDrive || !before->driven) && before->atRest && !out.atRest) {
         // It began to move during this tick.
         out.restLeftAt = lastClock_;
         out.restOdometer = before->odometer;
     }
+    // It came to rest during this tick (or is first seen at rest on this drive).
+    if (out.atRest && (!before || !sameDrive || !before->atRest)) out.restCameAt = now;
 
     if (sameDrive) {
         const double moved = c.odometer - before->odometer;
@@ -1271,6 +1292,11 @@ void Measurements::lookAtCar(const Driving& d, const Car& c, const Seen* before,
                     x.seconds = lastClock_ + dt * (reach / moved);
                     x.restLeftAt = out.restLeftAt;
                     x.restDistance = before->odometer + reach - out.restOdometer;
+                    x.restCameAt = out.restCameAt;
+                    const engine::LaneGraph* g = d.roads();
+                    x.straight = !knownPath(g, out.front.path) ||
+                                 g->paths[out.front.path.index].kind != engine::PathKind::Connector ||
+                                 g->paths[out.front.path.index].turn == engine::Turn::Straight;
                     crossings_[i].push_back(x);
                 }
             }

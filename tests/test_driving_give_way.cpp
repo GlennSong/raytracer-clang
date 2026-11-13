@@ -47,6 +47,10 @@
 //         light programmes are checked when the rules are handed over;
 //  284 i. a 12 m bus cutting inside its far turn beside a car's near turn: ordered by a crossing point once the road
 //         builder sweeps bodies at their length (ADR-0412), touching where no record lay before.
+//  QUEUES AND CLOSE LIGHTS (issue #284, ADR-0414; the lab's own rule set, assets/scripts/rules/lab.lua):
+//  35. ten cars queued at a red empty over the line at the saturation headway, 1.7-2.1 s a car from the fourth on;
+//  36. every chain of two turns through two close lights that the load-time check leaves open lets a car at rest at the
+//      first line through (the soak's 301 s at junction 90: open chains no car could ever use).
 
 #include "test_framework.h"
 
@@ -66,9 +70,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -172,6 +178,7 @@ rule_set = { name = 'd3', drives_on = 'left', ranks = { 'priority', 'give_way', 
 )LUA" + extra + R"LUA(
   numbers = {
     standstill_gap = { 2, unit = 'm', source = 'test' },
+    anticipation = { 0, unit = 's', source = 'test: the following written against it' },
     comfortable_side_accel = { 2, unit = 'm/s2', source = 'test' },
     junction_look_ahead = { 10, unit = 's', source = 'test' },
     gap_comfortable = { 2.5, unit = 's', source = 'test' },
@@ -365,7 +372,20 @@ struct Sim {
         d.setSettings(s);
         ok = giveRules(control);
     }
+    // A WHOLE RULE SET written as Lua (a level's own, read from its file, with any test changes after it), every grid
+    // junction under its control `controlName`; the light clock and the room step registered.
+    Sim(TestRoads roads, const std::string& ruleCode, const std::string& controlName)
+        : t(std::move(roads)), d(&t.graph), classes(simClasses()), lightsOn(true), roomOn(true) {
+        t.graph.controlNames = {controlName};
+        d.setVehicleClasses(classes);
+        DrivingSettings s;
+        s.laneChanges = false;
+        d.setSettings(s);
+        fullRules = ruleCode;
+        ok = giveRules("");
+    }
     Sim(const Sim&) = delete;
+    std::string fullRules;   // the whole rule set, when given (in place of rulesLua)
 
     // `extra`: more of the rule set's top level (rulesLua).
     bool giveRules(const char* control, const std::string& extra = "") {
@@ -376,7 +396,7 @@ struct Sim {
         RuleSet ruleSet;
         AnswerVocabulary vocabulary;
         CompiledRules rules;
-        if (!vm.doString(rulesLua(control, roomOn, roomToWaitInside, extra), &err) ||
+        if (!vm.doString(fullRules.empty() ? rulesLua(control, roomOn, roomToWaitInside, extra) : fullRules, &err) ||
             !loadRuleSet(vm, kFile, ruleSet, &err)) {
             std::printf("    rule set: %s\n", err.c_str());
             return false;
@@ -2103,6 +2123,136 @@ TEST_CASE(room_29_a_green_with_room_beyond_empties_a_queue_one_car_every_two_sec
     // changes nothing here.
     CHECK(mean[1] > 0);
     CHECK(mean[1] <= mean[0] + 0.05);
+}
+
+// The lab's own rule set (assets/scripts/rules/lab.lua) as Lua, with `more` after it (a test's changes to it).
+std::string labRules(const std::string& more = "") {
+    std::ifstream f(std::string(RT_SOURCE_DIR) + "/assets/scripts/rules/lab.lua");
+    std::stringstream code;
+    code << f.rdbuf();
+    return code.str() + "\n" + more;
+}
+
+TEST_CASE(queue_35_ten_cars_at_a_green_empty_at_the_saturation_headway) {
+    // THE LAB'S DRIVERS AT ONE LIGHT (the measurements row queue_headway, in seconds): ten ordinary cars queued at a red
+    // on the lane arriving at the grid's middle junction from the west, each one standstill gap behind the next, all
+    // going straight on, the lane beyond empty. The rule set is the lab's own, with one change: a longer cycle, so
+    // all ten cross in one green. The measurements' own counting line at the lane's end times them, as in the lab:
+    // from the fourth car on, a car every 1.7-2.1 s (traffic engineers' saturation headway, about 1.9 s).
+    const std::string rules =
+        labRules("rule_set.numbers.signal_cycle = { 90, unit = 's', source = 'test: one green for ten cars' }\n");
+    TestRoadSpec spec;
+    spec.roadLength = 120;
+    Sim s(driving_test::gridRoads(3, 3, spec), rules, "signal");
+    CHECK(s.ok);
+    if (!s.ok) return;
+    const engine::PathId lane = s.t.laneArriving(1, 1, kEast, 0);
+    const engine::PathId straight = turnAt(s, 1, 1, kEast, kEast);
+    Measurements m;
+    PathPoint line;
+    line.path = lane;
+    line.along = s.t.graph.paths[lane.index].length;
+    m.addCountingLine(line);
+    s.d.attachMeasurements(&m);
+    CHECK(stepUntilLamp(s, straight, Lamp::Red, 200));
+    constexpr uint32_t kCars = 10;
+    for (uint32_t i = 0; i < kCars; ++i) approach(s, i, 1, 1, kEast, 1 + i * (4.5 + kTestStandstillGap), kEast);
+    CHECK(stepUntilLamp(s, straight, Lamp::Green, 200));
+    const double green = s.d.clockSeconds();
+    s.run(45);
+    std::vector<double> crossed;
+    for (uint32_t i = 0; i < kCars; ++i)
+        for (const std::pair<uint32_t, double>& e : s.enteredConnector[i])
+            if (e.first == straight.index) crossed.push_back(e.second - green);
+    std::sort(crossed.begin(), crossed.end());
+    std::printf("    crossed the line, seconds after the green:");
+    for (const double t : crossed) std::printf(" %.2f", t);
+    std::printf("\n");
+    const MeasurementReport rep = m.report();
+    const ReportRow* row = rep.row("queue_headway");
+    CHECK(row != nullptr);
+    if (!row) return;
+    std::printf("    %s\n", row->summary.c_str());
+    CHECK(crossed.size() == kCars);
+    const double perCar = row->values[0].value;
+    CHECK(row->values[1].value == kCars - kSaturationFromCar + 1);   // every gap from the fourth car on, one queue
+    CHECK(perCar >= kHeadwayLowest && perCar <= kHeadwayHighest);
+    CHECK(s.boxTicksNotAllowed == 0);
+    s.checkClean();
+}
+
+TEST_CASE(room_36_every_chain_left_open_through_close_lights_lets_a_car_from_rest_through) {
+    // THE SOAK'S 301 s (issue #284, ADR-0414): a car stood at junction 90's line, refused room every green because its
+    // claim ran on through junction 100's light, 42 m on, which turned red as 90's turned green. The load-time check
+    // had left the chain open: a car leaving from rest in the last instant of 90's green would get to 100 just as it
+    // turned green. But a car moving off then is caught by the yellow before its front is past its line, so no car ever
+    // could. Here the lab's lights at two junctions a few metres apart (the 11/14 shape), their offsets moved by the
+    // green wave's speed: for every chain of two turns through both that the check leaves open to the car, one car at rest
+    // at the first line as its turn goes green, bound on through the second, gets through within room_cycles_through of
+    // the cycle and one cycle more. A chain the check closes is routed round, and not asked.
+    uint32_t tried = 0, closed = 0, through = 0, routedRound = 0;
+    double longestWait = 0;
+    for (const char* wave : {"10", "20", "30", "45", "60", "90", "150"})
+        for (const Real link : {Real(2), Real(4), Real(6)}) {
+            const std::string more = std::string("rule_set.numbers.signal_wave_speed = { ") + wave +
+                                     ", unit = 'mph', source = 'test: the lights at another offset' }\n";
+            for (int chainIndex = 0; chainIndex < 9; ++chainIndex) {
+                TestRoadSpec spec;
+                spec.columnRoadLengths = {100, link, 100};
+                Sim s(driving_test::gridRoads(3, 4, spec), labRules(more), "signal");
+                CHECK(s.ok);
+                if (!s.ok) return;
+                const Heading ins[3] = {kEast, kSouth, kNorth};   // into (1,1): from the west, the north, the south
+                const Heading outs[3] = {kEast, kNorth, kSouth};  // out of (1,2)
+                const Heading in = ins[chainIndex / 3], out = outs[chainIndex % 3];
+                const engine::PathId c1 = s.t.connector(1, 1, in, 0, kEast, 0);
+                const engine::PathId c2 = s.t.connector(1, 2, kEast, 0, out, 0);
+                if (!c1.valid() || !c2.valid()) continue;
+                const engine::PathId turns[2] = {c1, c2};
+                const RouteClass rc = s.d.routeClass(0);
+                if (std::binary_search(rc.closed.begin(), rc.closed.end(), c1) || rc.closedChains.closedChain(turns, 2)) {
+                    ++closed;
+                    continue;
+                }
+                ++tried;
+                CHECK(stepUntilLamp(s, c1, Lamp::Green, 200));
+                const double green = s.d.clockSeconds();
+                const engine::PathId lane = s.t.graph.paths[c1.index].from;
+                const engine::PathId dest = s.t.graph.nextPaths[s.t.graph.paths[c2.index].next.first];
+                s.add(0, lane, s.t.graph.paths[lane.index].length - 0.5, dest, s.t.graph.paths[dest.index].length - 10);
+                const double cycle = s.d.rightOfWay().counts.longestCycle;
+                const double limit = (s.d.roomNumbers().cyclesThrough + 1) * cycle;
+                double reached = -1;
+                bool viaC1 = false;
+                for (int i = 0; i < static_cast<int>(limit / kStep) && reached < 0; ++i) {
+                    s.step();
+                    for (const std::pair<uint32_t, double>& e : s.enteredConnector[0]) {
+                        if (e.first == c1.index) viaC1 = true;
+                        if (e.first == c2.index) reached = e.second - green;
+                    }
+                }
+                if (reached < 0 && !viaC1 && s.d.car(CarId(0)) && s.d.car(CarId(0))->path != lane) {
+                    ++routedRound;   // the router sent it another way (it never waited at c1's line)
+                    continue;
+                }
+                if (reached >= 0) {
+                    ++through;
+                    longestWait = std::max(longestWait, reached);
+                } else {
+                    std::printf("    wave %s mph, link %.0f m: chain %u then %u left open, but the car at rest at the first "
+                                "line did not get through in %.0f s:\n%s",
+                                wave, link, c1.index, c2.index, limit, s.d.describeCar(CarId(0)).c_str());
+                }
+                CHECK(reached >= 0);
+                CHECK(s.enteredOnRed == 0);
+                CHECK(s.boxTicksNotAllowed == 0);
+            }
+        }
+    std::printf("    chains of two turns through close lights: %u left open and tried (%u through, the longest %.1f s from "
+                "the green; %u routed round), %u closed to the car\n",
+                tried, through, longestWait, routedRound, closed);
+    CHECK(tried > 0);
+    CHECK(closed > 0);
 }
 
 TEST_CASE(room_30_no_car_comes_to_rest_on_the_far_crosswalk) {

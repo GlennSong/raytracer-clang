@@ -494,6 +494,7 @@ private:
     PersonalSetting gapKept_;             // the setting gap_kept, and its name's hash (personalValue)
     uint32_t gapKeptHash_ = 0;
     Real standstillGap_ = 0;
+    Real anticipation_ = 0;                // the rule set's anticipation (act.h), seconds
     bool junctionsOn_ = false;            // the junction step (give_way.h hasJunctionStep)
     bool lightsRun_ = false;              // the lights run a programme (road_rules.h RoadRules::lightsRun)
     LightTiming lightTiming_;             // ... by these numbers (signal_programme.h)
