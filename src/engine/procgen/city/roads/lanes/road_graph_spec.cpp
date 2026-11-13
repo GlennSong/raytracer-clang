@@ -111,9 +111,11 @@ RampAnchor readAnchor(const nlohmann::json& j, const LaneLayout& hostLanes) {
     if (j.is_string()) { a.edge = j.get<std::string>(); return a; }
     a.edge = j.at("edge").get<std::string>(); a.side = j.value("side", std::string("right"));
     // the kerb lane by name (#282: a road side is the kerb or the offside, never left or right): "kerb" the forward
-    // lanes' (on the spine's right in plan coordinates), "back-kerb" the backward lanes'
+    // lanes' (on the spine's right in plan coordinates), "back-kerb" the backward lanes'; "offside" the forward lanes'
+    // lane on the other side, by the centre line (on a one-way road, the lane nearest a freeway on that side: ADR-0413)
     if (a.side == "kerb") a.side = "right";
     else if (a.side == "back-kerb") a.side = "back-right";
+    else if (a.side == "offside") a.side = "left";
     if (j.contains("s")) { a.hasStation = true; a.s = j.at("s").get<double>(); a.set = true; }
     else if (j.contains("x")) { a.axis = 'x'; a.coord = j.at("x").get<double>(); a.set = true; }
     else if (j.contains("y")) { a.axis = 'y'; a.coord = j.at("y").get<double>(); a.set = true; }
@@ -325,6 +327,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         if (ej.contains("floor")) for (const auto& fp : ej["floor"]) e.floorPts.push_back({fp.at(0).get<double>(), fp.at(1).get<double>(), fp.at(2).get<double>(), fp.size() > 3 ? fp.at(3).get<double>() : 0.0});
         e.speedLimit = num(ej, "speed_limit", 0.0);
         e.speedLimitHand = ej.value("speed_limit_hand", false);
+        e.frontageOf = ej.value("frontage_of", std::string());
         if (!(e.speedLimit >= 0.0)) throw std::runtime_error("edge " + e.id + ": speed_limit must be a speed in m/s, 0 or more");
         auto hostLanes = [&](const nlohmann::json& a) { if (a.is_object()) { const EdgeSpec* h = g.find(a.at("edge").get<std::string>()); if (h) return h->lanes; } return e.lanes; };
         if (ej.contains("landing")) {

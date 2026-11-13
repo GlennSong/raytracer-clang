@@ -155,9 +155,17 @@ int main(int argc, char** argv) {
                 std::printf("%s: %d ramps, %zu ends land wrongly\n", argv[i], ramps, fs.size());
                 for (const RampLandingFault& f : fs) { std::printf("  %s\n", describe(f).c_str()); planned += f.declared ? 1 : 0; }
                 faults += static_cast<int>(fs.size());
+                // and the frontage roads the ramps land on, as planned (ADR-0413): always planned, so always refused
+                int frontage = 0;
+                for (const EdgeSpec& e : g.edges) frontage += e.frontageOf.empty() ? 0 : 1;
+                const std::vector<FrontageFault> ffs = checkFrontageRoads(g);
+                if (frontage > 0) std::printf("%s: %d frontage road pieces, %zu run wrongly\n", argv[i], frontage, ffs.size());
+                for (const FrontageFault& f : ffs) std::printf("  %s\n", describe(f).c_str());
+                faults += static_cast<int>(ffs.size());
+                planned += static_cast<int>(ffs.size());
             } catch (const std::exception& ex) { std::fprintf(stderr, "lanes: %s: %s\n", argv[i], ex.what()); }
         }
-        std::printf("%d ramp ends land wrongly in all, %d of them planned (build() refuses those)\n", faults, planned);
+        std::printf("%d ramp ends land wrongly (or frontage roads run wrongly) in all, %d of them planned (build() refuses those)\n", faults, planned);
         return 0;
     }
     if (argc == 3 && std::strcmp(argv[1], "interchange-demo") == 0) {

@@ -300,8 +300,10 @@ rule_set = {
       -- which two busy multi-lane roads crossing meet; [~] taken as met by the class).
       { name = "arterials cross: lights", when = { major = { "boulevard", "arterial" }, minor = { "boulevard", "arterial" }, approaches = { min = 3 } },
         control = "signal" },
-      -- An arterial meeting a collector: lights too ([~] by the class, as above).
-      { name = "an arterial meets a collector: lights", when = { major = { "boulevard", "arterial" }, minor = "collector", approaches = { min = 3 } },
+      -- An arterial meeting a collector: lights too ([~] by the class, as above). Two approaches are enough when the
+      -- collector is one-way: a frontage road running past the T where a spoke ends on it (ADR-0413), its traffic and the
+      -- arterial's both arriving there; two-way roads of three arms or more always bring three.
+      { name = "an arterial meets a collector: lights", when = { major = { "boulevard", "arterial" }, minor = "collector", approaches = { min = 2 } },
         control = "signal" },
       -- A local street meeting a busier road: a stop sign on the local street (MUTCD 2009 section 2B.05: "intersection
       -- of a less important road with a main road").

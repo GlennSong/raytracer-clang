@@ -1590,10 +1590,20 @@ LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) {
         for (uint32_t a = 0; a < G.paths.size(); ++a)
             for (uint32_t b = a + 1; b < G.paths.size(); ++b) {
                 if (roadOf(a) == roadOf(b) || !pathBounds[a].overlaps(pathBounds[b])) continue;
+                // Two paths parting from one point (a lane born out of another: a ramp's lane of its own) or meeting at one
+                // (dying into it) leave it side by side, at a slant of a degree or two, each a polyline sampled a step apart
+                // at its own stations: within a couple of steps of that point the two lines can cross and cross back with
+                // nobody crossing anything. (A ramp's deceleration lane leaving the freeway's kerb lane did, 0.8 m from where
+                // they part, once the planner moved its gore a third of a metre: ADR-0413.)
+                const double parting = 2.0 * g.rules.step;
+                const bool sharedFront = distance(pathPoints[a].front(), pathPoints[b].front()) < kNearMiss;
+                const bool sharedBack = distance(pathPoints[a].back(), pathPoints[b].back()) < kNearMiss;
                 for (const Vec2& x : crossings(pathPoints[a], pathPoints[b])) {
                     bool nearEnd = false;   // lanes born out of or dying into another touch it at their ends
                     for (uint32_t p : {a, b})
                         nearEnd = nearEnd || distance(x, pathPoints[p].front()) < kNearMiss || distance(x, pathPoints[p].back()) < kNearMiss;
+                    nearEnd = nearEnd || (sharedFront && distance(x, pathPoints[a].front()) < parting) ||
+                              (sharedBack && distance(x, pathPoints[a].back()) < parting);
                     if (nearEnd) continue;
                     const double za = H.deck(out.sources[a].lane, x), zb = H.deck(out.sources[b].lane, x);
                     if (std::fabs(za - zb) > g.rules.sameLevelDz) continue;

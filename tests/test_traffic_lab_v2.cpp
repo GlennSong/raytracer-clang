@@ -1376,9 +1376,11 @@ TEST_CASE(level_traffic_lab_v2_rebuild_hands_over_again) {
 // or a grid placement skipped for such an agent, which on a level the new model does not drive is never true; CitySim::
 // build starting the new model over (#284) does nothing on such a level either. A change to the old model's code that
 // changes these numbers changes what v1 levels do: it must say so and update them in the same change.
-// traffic_lab as v1: t = 30, 60, 90, 120 s
-constexpr uint64_t kV1LabHashes[] = {0xc986a7df6eb1a143ull, 0xf9a798b9a88a80afull, 0x9c837cdab19c3d3cull,
-                                     0x12e916f1e4bc0225ull};
+// traffic_lab as v1: t = 30, 60, 90, 120 s. Taken again when the lab was re-planned with one-way frontage roads
+// (ADR-0413): its ROADS changed, not the old model's code (with the old lab roads put back, the earlier numbers still
+// came out; river_town's below did not move).
+constexpr uint64_t kV1LabHashes[] = {0x71f6d213b1feea70ull, 0x3721785c12c569a1ull, 0xc49b17d829d1de91ull,
+                                     0x876a11bc449f94d8ull};
 // river_town: t = 15, 30, 45, 60 s
 constexpr uint64_t kV1RiverHashes[] = {0xf131e7b3521590c2ull, 0x97f03bee42dfacf0ull, 0xf091e2f8d51d0c6eull,
                                        0x1cea9a39a79f85f4ull};

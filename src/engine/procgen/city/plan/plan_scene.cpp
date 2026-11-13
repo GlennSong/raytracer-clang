@@ -114,6 +114,7 @@ FreewaySection freewaySection(const Brief& b, Real medianGap) {
     f.carriageHalf = f.lanes * f.laneW / 2 + Real(2.5);
     f.carriage = f.carriageHalf + medianGap / 2;
     f.edgeReach = f.carriage + f.carriageHalf;
+    f.frontage = b.freewayWidth * Real(0.5) + Real(35);
     return f;
 }
 
@@ -415,9 +416,60 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         for (const auto& c : chains) if (!roads::lanes::crossings(c, pts).empty()) return true;
         return false;
     };
-    auto street = [&](const std::string& sid, RoadClass k, const std::vector<Vec2>& pts) {
-        edges.push_back({{"id", sid}, {"class", className(k)}, {"path", {{"points", pointsJson(pts)}}}});
-        rampStreets.push_back({sid, pts, closable(k, pts), className(k)});
+    // THE FRONTAGE ROADS ARE ONE-WAY (ADR-0413). The plan draws a road along each side of the ring at the corridor's
+    // half-width (FreewaySection::frontage); a street lying there the whole of its length, running along the ring, is one
+    // of them -- the frontage road of the carriageway on its side. It is planned one-way, the way that carriageway runs
+    // (a, on the route's right in plan coordinates, runs with the route; b against it), with its class's lanes one way,
+    // and says whose frontage road it is ("frontage_of") for the builder to check. So a ramp beside the freeway meets the
+    // lanes going its way on the road's near half, and joins or leaves them at grade, crossing nothing.
+    std::vector<std::vector<double>> chainSt;
+    for (const std::vector<Vec2>& c : chains) chainSt.push_back(stations(c));
+    struct FrontageAt { int chain = -1; bool aSide = true, reverse = false; };
+    auto frontageAt = [&](const std::vector<Vec2>& pts) {
+        constexpr double kOff = 5.0;   // metres either way of the frontage line: the plan's ring and its roads are sampled curves
+        FrontageAt out;
+        if (pts.size() < 2 || chains.empty()) return out;
+        int sides = 0, chainAtMiddle = -1;
+        double along = 0;
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            double bd = 1e30;
+            std::size_t bk = 0;
+            roads::lanes::Projection bp;
+            for (std::size_t k = 0; k < chains.size(); ++k) {
+                const roads::lanes::Projection pr = roads::lanes::project(chains[k], chainSt[k], pts[i]);
+                if (pr.distance < bd) { bd = pr.distance; bk = k; bp = pr; }
+            }
+            if (std::fabs(bd - fs.frontage) > kOff) return FrontageAt{};
+            const Vec2 t = roads::lanes::tangentAtStation(chains[bk], chainSt[bk], bp.station);
+            const Vec2 foot = roads::lanes::pointAt(chains[bk], chainSt[bk], bp.station);
+            const Vec2 d = i + 1 < pts.size() ? pts[i + 1] - pts[i] : pts[i] - pts[i - 1];
+            if (d.length() < 1e-9 || std::fabs(dot(normalize(d), t)) < 0.85) return FrontageAt{};   // across the ring, not along it
+            sides += dot(pts[i] - foot, leftOf(t)) < 0 ? -1 : 1;
+            along += dot(normalize(d), t);
+            if (i == pts.size() / 2) chainAtMiddle = static_cast<int>(bk);
+        }
+        if (std::abs(sides) != static_cast<int>(pts.size())) return FrontageAt{};   // on both sides: not one road beside it
+        out.chain = chainAtMiddle;
+        out.aSide = sides < 0;                         // on the route's right: a's side
+        out.reverse = (along > 0) != out.aSide;        // a's frontage road runs with the route, b's against it
+        return out;
+    };
+    auto street = [&](const std::string& sid, RoadClass k, std::vector<Vec2> pts) {
+        json e = {{"id", sid}, {"class", className(k)}};
+        roads::lanes::RampStreet rs{sid, {}, closable(k, pts), className(k)};
+        const FrontageAt fa = frontageAt(pts);
+        if (fa.chain >= 0) {
+            if (fa.reverse) std::reverse(pts.begin(), pts.end());
+            const int lanes = roads::lanes::roadClass(className(k)).lanes.fwd;   // its class's lanes, one way
+            e["lanes"] = {{"fwd", lanes}, {"back", 0}};
+            e["frontage_of"] = "fw" + std::to_string(fa.chain) + (fa.aSide ? "_a" : "_b");
+            rs.oneWayLanes = lanes;
+            rs.closable = false;
+        }
+        e["path"] = {{"points", pointsJson(pts)}};
+        rs.xy = pts;
+        edges.push_back(e);
+        rampStreets.push_back(rs);
     };
     auto piece = [](const std::vector<Vec2>& pts, double s0, double s1) {
         const std::vector<double> st = stations(pts);
@@ -445,6 +497,53 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         const std::vector<double> st = stations(c.pts);
         (t->spur == kRingEnd ? ringTeePoints : teePoints[t->spur])[static_cast<std::size_t>(t->end)] =
             {roads::lanes::pointAt(c.pts, st, t->s0), roads::lanes::pointAt(c.pts, st, t->s1)};
+    }
+    // STREETS A DIAMOND MAY CLOSE FOR ITS RAMPS' ROOM along a one-way frontage road (ADR-0413; RampStreet::spare): ones
+    // whose closing strands nothing -- a dead end, or a local street meeting a frontage road whose other end is a
+    // junction still joined to it some other way. A dead end inside the freeway's corridor (a stub run in under the deck)
+    // may also be closed where a ramp passes over it too low, like a street passing under the ring.
+    {
+        auto meeting = [&](std::size_t self, const Vec2& q) {
+            std::vector<std::size_t> out;
+            for (std::size_t j = 0; j < rampStreets.size(); ++j)
+                if (j != self && ((rampStreets[j].xy.front() - q).length() < 1.0 || (rampStreets[j].xy.back() - q).length() < 1.0)) out.push_back(j);
+            return out;
+        };
+        // still joined without street `skip`: from one end of it to the other through the rest of the streets
+        auto joinedWithout = [&](std::size_t skip) {
+            std::vector<char> seen(rampStreets.size(), 0);
+            std::vector<Vec2> todo{rampStreets[skip].xy.front()};
+            const Vec2 goal = rampStreets[skip].xy.back();
+            while (!todo.empty()) {
+                const Vec2 q = todo.back();
+                todo.pop_back();
+                if ((q - goal).length() < 1.0) return true;
+                for (std::size_t j : meeting(skip, q)) {
+                    if (seen[j]) continue;
+                    seen[j] = 1;
+                    todo.push_back(rampStreets[j].xy.front());
+                    todo.push_back(rampStreets[j].xy.back());
+                }
+            }
+            return false;
+        };
+        for (std::size_t i = 0; i < rampStreets.size(); ++i) {
+            roads::lanes::RampStreet& rs = rampStreets[i];
+            if (rs.oneWayLanes > 0 || rs.xy.size() < 2) continue;
+            const std::vector<std::size_t> m0 = meeting(i, rs.xy.front()), m1 = meeting(i, rs.xy.back());
+            if (m0.empty() != m1.empty()) {   // a dead end
+                rs.spare = true;
+                const Vec2 free = m0.empty() ? rs.xy.front() : rs.xy.back();
+                for (std::size_t k = 0; k < chains.size(); ++k)
+                    if (roads::lanes::project(chains[k], chainSt[k], free).distance < fs.frontage) rs.closable = true;
+                continue;
+            }
+            if (rs.cls != className(RoadClass::Local) || m0.empty()) continue;
+            bool onFrontage = false;
+            for (std::size_t j : m0) onFrontage = onFrontage || rampStreets[j].oneWayLanes > 0;
+            for (std::size_t j : m1) onFrontage = onFrontage || rampStreets[j].oneWayLanes > 0;
+            if (onFrontage && m0.size() >= 2 && m1.size() >= 2 && joinedWithout(i)) rs.spare = true;
+        }
     }
 
     if (std::getenv("RT_PLAN_WHY") && ground) {
@@ -652,6 +751,41 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         carriageways(loopId, slice(routeA, nFrom - 1, nFrom - 1 + nLoop), slice(routeB, nFrom - 1, nFrom - 1 + nLoop), floors);
     }
 
+    // ONE ROAD WHERE A RAMP'S LANE RUNS ON (ADR-0413): the pieces of a one-way frontage road a built ramp's lane of its
+    // own runs along, the streets between them closed, become one edge under the first piece's id (in its traffic's
+    // order, each piece's end meeting the next one's start). `renamed`: a piece's id -> the edge it is part of now.
+    std::map<std::string, std::string> renamed;
+    auto currentId = [&](std::string id) { while (renamed.count(id)) id = renamed[id]; return id; };
+    auto edgeAt = [&](const std::string& id) {
+        for (std::size_t i = 0; i < edges.size(); ++i) if (edges[i].value("id", std::string()) == id) return i;
+        return edges.size();
+    };
+    auto join = [&](const std::vector<std::vector<std::string>>& runs) {
+        for (const std::vector<std::string>& run : runs) {
+            std::vector<std::string> ids;
+            for (const std::string& id : run) {
+                const std::string cur = currentId(id);
+                if (std::find(ids.begin(), ids.end(), cur) == ids.end()) ids.push_back(cur);
+            }
+            const std::size_t keep = ids.empty() ? edges.size() : edgeAt(ids.front());
+            if (ids.size() < 2 || keep == edges.size()) continue;
+            json pts = edges[keep]["path"]["points"];
+            for (std::size_t i = 1; i < ids.size(); ++i) {
+                const std::size_t ei = edgeAt(ids[i]);
+                if (ei == edges.size()) continue;
+                const json& more = edges[ei]["path"]["points"];
+                for (std::size_t q = 1; q < more.size(); ++q) pts.push_back(more[q]);
+                edges.erase(edges.begin() + static_cast<std::ptrdiff_t>(ei));
+                renamed[ids[i]] = ids.front();
+                for (roads::lanes::RampStreet& rs : rampStreets) if (rs.id == ids[i]) rs.xy.clear();
+            }
+            edges[edgeAt(ids.front())]["path"]["points"] = pts;
+            std::vector<Vec2> xy;
+            for (const json& q : pts) xy.emplace_back(q[0].get<double>(), q[1].get<double>());
+            for (roads::lanes::RampStreet& rs : rampStreets) if (rs.id == ids.front()) rs.xy = xy;
+            if (std::getenv("RT_PLAN_WHY")) std::printf("[plan] frontage road %s: %zu pieces joined for a ramp's lane of its own\n", ids.front().c_str(), ids.size());
+        }
+    };
     // THE RAMPS, after every edge they anchor to. Each ring chain gets diamonds onto the streets
     // beside it, clear of the system interchange; each expressway gets its interchange.
     if (opt.ramps) {
@@ -681,7 +815,8 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
                 edges.erase(std::remove_if(edges.begin(), edges.end(), [&](const json& e) { return e["id"] == id; }), edges.end());
                 for (roads::lanes::RampStreet& rs : rampStreets) if (rs.id == id) rs.xy.clear();
             }
-            if (std::getenv("RT_PLAN_WHY") && !dr.closed.empty()) std::printf("[plan] %s: %zu streets under the ring closed for ramps\n", dop.aId.c_str(), dr.closed.size());
+            join(dr.joined);
+            if (std::getenv("RT_PLAN_WHY") && !dr.closed.empty()) std::printf("[plan] %s: %zu streets closed for ramps\n", dop.aId.c_str(), dr.closed.size());
             if (std::getenv("RT_PLAN_WHY"))
                 std::printf("[plan] %s: %d diamonds of %d crossings (oblique %d, spacing %d, no terminal %d, no landing %d, no room %d, over a street %d)\n",
                             dop.aId.c_str(), dr.built, dr.candidates, dr.rejectedOblique, dr.rejectedSpacing, dr.rejectedTerminal,
@@ -712,6 +847,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             dop.deck = deckOf(plan.loop, floorsOf[loopId]);
             const roads::lanes::DiamondResult dr = roads::lanes::diamondRamps(plan.loop, rampStreets, dop);
             for (const json& r : dr.ramps) edges.push_back(r);
+            join(dr.joined);
             if (std::getenv("RT_PLAN_WHY"))
                 std::printf("[plan] the loop: %d diamonds of %d crossings (oblique %d, spacing %d, no terminal %d, no room %d, over a street %d)\n",
                             dr.built, dr.candidates, dr.rejectedOblique, dr.rejectedSpacing, dr.rejectedTerminal, dr.rejectedRoom, dr.rejectedConflict);
@@ -722,6 +858,23 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
                 std::printf("[plan] expressway %zu x ring chain %zu: %s\n", at.spur, at.chain,
                             at.r.built ? "system interchange, four ramps" : ("no interchange: " + at.r.why).c_str());
         }
+        // every ramp names the road its pieces were joined into (ADR-0413)
+        if (!renamed.empty())
+            for (json& e : edges) {
+                if (e.value("class", std::string()) != "ramp") continue;
+                for (const char* end : {"from", "to"}) {
+                    if (!e.contains(end)) continue;
+                    json& v = e[end];
+                    if (v.is_string()) v = currentId(v.get<std::string>());
+                    else if (v.is_object() && v.contains("edge")) v["edge"] = currentId(v["edge"].get<std::string>());
+                }
+                if (e.contains("landing")) {
+                    json& L = e["landing"];
+                    if (L.contains("street")) L["street"] = currentId(L["street"].get<std::string>());
+                    if (L.contains("crossing") && L["crossing"].is_object() && L["crossing"].contains("street"))
+                        L["crossing"]["street"] = currentId(L["crossing"]["street"].get<std::string>());
+                }
+            }
     }
     // MOUNTAIN ROADS (brief.world.mountainRoads): a road that climbs out of the city -- to a pass, a
     // hilltop, a lookout -- routed over the scene's own ground within its class's grade

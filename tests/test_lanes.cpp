@@ -1851,12 +1851,14 @@ void checkConnectors(const std::string& name) {
             widest = std::max(widest, widthOf[v]);
         }
         CHECK(widest >= 0);   // open to someone, or it would have been refused
-        // (at the vehicle's own width, every kSweepStep along as the builder samples it: a crack between the lanes'
-        // footprints narrower than a sample's step can pass between two samples, here as there)
+        // (at the vehicle's own width and the builder's margin either side, every kSweepStep along, as the builder samples
+        // it: a crack between the lanes' footprints narrower than a sample's step can pass between two samples, along the
+        // line or across it, here as there -- the lab's one-way frontage roads put a hairline one, under 0.1 m wide and
+        // paved either side of it, exactly half a car's width inside a near turn's corner: ADR-0413)
         const int samples = std::max(1, static_cast<int>(std::ceil(p.length / kSweepStep)));
         for (int k = 0; k <= samples && widest >= 0; ++k) {
             const double s = p.length * k / samples;
-            const Vec2 at = G.pointAt(PathId(c), s), side = perp(G.directionAt(PathId(c), s)) * (widest / 2);
+            const Vec2 at = G.pointAt(PathId(c), s), side = perp(G.directionAt(PathId(c), s)) * (widest / 2 + kSweepMargin);
             if (!paved(at + side, G.heightAt(PathId(c), s)) || !paved(at - side, G.heightAt(PathId(c), s))) {
                 if (offRoad++ < 4)
                     std::printf("      connector %u (%s, %.1f m, tightest %.1f m) swept %.1f m wide leaves the paved road %.2f m along it, "
@@ -3033,7 +3035,7 @@ std::vector<RampStreet> frontageStreets(bool sideStreet) {
     }
     return s;
 }
-DiamondResult frontageDiamond(bool sideStreet) {
+DiamondResult frontageDiamond(const std::vector<RampStreet>& streets) {
     std::vector<Vec2> route;
     for (double x = 0; x <= 2000.0; x += 10.0) route.push_back(Vec2(x, 0));
     DiamondOptions o;
@@ -3047,12 +3049,12 @@ DiamondResult frontageDiamond(bool sideStreet) {
     o.gRamp = roadClass("ramp").gMax;
     o.decel = 70; o.taperOff = 50; o.aux = 90; o.taperOn = 60;
     o.deck = [](double) { return 8.4; };
-    return diamondRamps(route, frontageStreets(sideStreet), o);
+    return diamondRamps(route, streets, o);
 }
 }  // namespace
 
 TEST_CASE(lanes_the_planner_lands_frontage_ramps_on_the_far_carriageway_over_the_road) {
-    const DiamondResult dr = frontageDiamond(false);
+    const DiamondResult dr = frontageDiamond(frontageStreets(false));
     CHECK(dr.built == 1);
     CHECK(dr.ramps.size() == 4);
     const double clear = Rules().underClearance + std::max(roadClass("ramp").thick, roadClass("collector").thick) + Rules().structureDepth;
@@ -3096,9 +3098,176 @@ TEST_CASE(lanes_the_planner_lands_frontage_ramps_on_the_far_carriageway_over_the
 }
 
 TEST_CASE(lanes_the_planner_refuses_a_diamond_with_no_room_to_land_rather_than_landing_on_the_centre_line) {
-    const DiamondResult dr = frontageDiamond(true);
+    const DiamondResult dr = frontageDiamond(frontageStreets(true));
     std::printf("    built %d, refused for want of a landing %d\n", dr.built, dr.rejectedLanding);
     CHECK(dr.built == 0);
     CHECK(dr.rejectedLanding >= 1);   // (the crossing, met at a vertex of the route, may be found twice)
     CHECK(dr.ramps.empty());
+}
+
+// ---- one-way frontage roads: a ramp joins the lane nearest the freeway at grade (ADR-0413) ---------------------------
+namespace {
+// oneRampScene's street made one-way: its two lanes both running +x (lanes centred: the offside lane, f0, on the +y side)
+nlohmann::json oneWayRampScene(const nlohmann::json& to, const std::vector<std::array<double, 2>>& path, const nlohmann::json& landing) {
+    nlohmann::json g = oneRampScene(to, path, landing);
+    g["edges"][0]["lanes"] = {{"fwd", 2}, {"back", 0}};
+    return g;
+}
+// running +x alongside the street's +y side, from the north-west
+const std::vector<std::array<double, 2>> kAlongsideNorth = {{40, 60}, {100, 40}, {160, 22}, {200, 14}, {240, 10}};
+// running -x alongside the +y side, from the north-east: against a road running +x
+const std::vector<std::array<double, 2>> kAgainstNorth = {{460, 60}, {400, 40}, {340, 22}, {300, 14}, {260, 10}};
+nlohmann::json offsideAnchor() { return {{"edge", "st"}, {"at", {250, 0}}, {"side", "offside"}, {"aux", 30}, {"taper", 20}}; }
+}  // namespace
+
+// A RAMP MERGING INTO A ONE-WAY ROAD going its way, beside the road's lane nearest it (its offside lane: the ramp comes
+// from that side), is built and passes; the same ramp running the other way is refused; and a ramp beside a TWO-WAY
+// road's offside lane is refused, its lane of its own standing in the carriageway coming the other way.
+TEST_CASE(lanes_a_ramp_merging_beside_a_one_way_roads_lane_nearest_it_is_built_and_one_against_it_refused) {
+    const nlohmann::json near = {{"street", "st"}, {"joins", "merge"}, {"carriageway", "forward"}, {"half", "near"}, {"crossing", "none"}};
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(oneWayRampScene(offsideAnchor(), kAlongsideNorth, near)));
+    for (const RampLandingFault& f : checkRampLandings(r->graph)) std::printf("    fault: %s\n", describe(f).c_str());
+    CHECK(checkRampLandings(r->graph).empty());
+    CHECK(r->graph.find("r")->anchorLanes.at("to") == "st.f0");   // the one-way road's offside lane
+    checkInvariants(*r);
+    // going the other way along the one-way road: refused
+    CHECK(refuses(oneWayRampScene(offsideAnchor(), kAgainstNorth, near), "runs against it"));
+    // beside a two-way road's offside lane: refused
+    CHECK(refuses(oneRampScene(offsideAnchor(), kAlongsideNorth, near), "offside lane"));
+    // and a ramp planned to cross nothing that crosses the street at grade to its lane: refused (the near half of a
+    // two-way road beside the ramp coming from the north is the backward carriageway; its forward kerb lane is beyond)
+    CHECK(refuses(oneRampScene(kerbAnchor("kerb"), kAlongsideNorth, near), "at grade"));
+}
+
+// A FRONTAGE ROAD AS PLANNED is checked: one-way, running the way the carriageway it is planned beside runs. Planned
+// beside a carriageway running the other way, or with lanes both ways, the graph is refused, naming the road.
+TEST_CASE(lanes_the_builder_refuses_a_frontage_road_that_does_not_run_the_freeways_way) {
+    auto scene = [](bool runsWithIt, bool oneWay) {
+        nlohmann::json g;
+        g["name"] = "frontage";
+        nlohmann::json fr = {{"id", "fr"}, {"class", "collector"}, {"frontage_of", "fw"},
+                             {"path", {{"type", "polyline"}, {"points", runsWithIt ? nlohmann::json{{0, -50}, {600, -50}} : nlohmann::json{{600, -50}, {0, -50}}}}}};
+        if (oneWay) fr["lanes"] = {{"fwd", 2}, {"back", 0}};
+        g["edges"] = nlohmann::json::array({{{"id", "fw"}, {"class", "freeway"}, {"path", {{"type", "polyline"}, {"points", {{0, 0}, {600, 0}}}}}}, fr});
+        return g;
+    };
+    CHECK(checkFrontageRoads(RoadLabGraph::fromJson(scene(true, true))).empty());
+    auto refused = [](const nlohmann::json& g, const char* naming) {
+        try { (void)build(RoadLabGraph::fromJson(g)); } catch (const std::runtime_error& e) {
+            std::printf("    refused: %s\n", e.what());
+            return std::string(e.what()).find("frontage road fr") != std::string::npos && std::string(e.what()).find(naming) != std::string::npos;
+        }
+        return false;
+    };
+    CHECK(refused(scene(false, true), "run against it"));
+    CHECK(refused(scene(true, false), "lanes both ways"));
+}
+
+// THE PLANNER LANDS A DIAMOND BETWEEN ONE-WAY FRONTAGE ROADS AT GRADE (ADR-0413): the freeway of the test above, its
+// frontage roads one-way the way the carriageway beside each runs (south, a's side: +x; north, b's: -x). All four ramps
+// come down beside their frontage road and join or leave its lane nearest the freeway -- the offside lane -- on the near
+// half, crossing nothing (no floor point, no crossing). As built, every ramp lands as planned and every frontage road
+// runs as planned. With a local street cutting the south road 100 m short of the crossing, where a's off-ramp needs its
+// lane of its own: a street that may go (spare) is closed and the two pieces are one road for the ramp; one that may not
+// leaves no room, and the diamond is refused.
+namespace {
+std::vector<RampStreet> oneWayFrontageStreets(bool sideStreet, bool spare) {
+    std::vector<RampStreet> s = {
+        {"x_s", {{1000.0, -250.0}, {1000.0, -50.0}}, false, "collector"}, {"x_m", {{1000.0, -50.0}, {1000.0, 50.0}}, false, "collector"},
+        {"x_n", {{1000.0, 50.0}, {1000.0, 250.0}}, false, "collector"},
+        {"f_s1", {{0.0, -50.0}, {sideStreet ? 900.0 : 1000.0, -50.0}}, false, "collector", 2}, {"f_s2", {{1000.0, -50.0}, {2000.0, -50.0}}, false, "collector", 2},
+        {"f_n1", {{1000.0, 50.0}, {0.0, 50.0}}, false, "collector", 2}, {"f_n2", {{2000.0, 50.0}, {1000.0, 50.0}}, false, "collector", 2}};
+    if (sideStreet) {
+        s.push_back({"f_s1b", {{900.0, -50.0}, {1000.0, -50.0}}, false, "collector", 2});
+        s.push_back({"side", {{900.0, -50.0}, {900.0, -250.0}}, false, "local", 0, spare});
+    }
+    return s;
+}
+// the scene as plan_scene writes it: the freeway's carriageways, the streets (closed ones left out, joined pieces one
+// edge under the first's id), the frontage roads one-way with whose frontage road each is, and the ramps
+nlohmann::json oneWayFrontageScene(const std::vector<RampStreet>& streets, const DiamondResult& dr) {
+    auto line = [](const std::vector<Vec2>& v) { nlohmann::json p = nlohmann::json::array(); for (const Vec2& q : v) p.push_back({q.x, q.y}); return p; };
+    nlohmann::json g;
+    g["name"] = "one_way_frontage_diamond";
+    g["edges"] = nlohmann::json::array();
+    std::vector<Vec2> a, b;
+    for (double x = 0; x <= 2000.0; x += 10.0) { a.push_back(Vec2(x, -7)); b.push_back(Vec2(2000 - x, 7)); }
+    nlohmann::json floor = nlohmann::json::array();
+    for (double x = 0; x <= 2000.0; x += 30.0) floor.push_back({x, 0.0, 8.4, 15.0});
+    g["edges"].push_back({{"id", "fw_a"}, {"class", "freeway"}, {"floor", floor}, {"path", {{"type", "polyline"}, {"points", line(a)}}}});
+    g["edges"].push_back({{"id", "fw_b"}, {"class", "freeway"}, {"floor", floor}, {"path", {{"type", "polyline"}, {"points", line(b)}}}});
+    for (const RampStreet& s : streets) {
+        if (std::find(dr.closed.begin(), dr.closed.end(), s.id) != dr.closed.end()) continue;
+        std::vector<Vec2> xy = s.xy;
+        bool absorbed = false;
+        for (const std::vector<std::string>& run : dr.joined) {
+            if (run.front() == s.id)
+                for (std::size_t i = 1; i < run.size(); ++i)
+                    for (const RampStreet& t : streets) if (t.id == run[i]) xy.insert(xy.end(), t.xy.begin() + 1, t.xy.end());
+            absorbed = absorbed || std::find(run.begin() + 1, run.end(), s.id) != run.end();
+        }
+        if (absorbed) continue;
+        nlohmann::json e = {{"id", s.id}, {"class", s.cls}, {"path", {{"type", "polyline"}, {"points", line(xy)}}}};
+        if (s.oneWayLanes > 0) {
+            e["lanes"] = {{"fwd", s.oneWayLanes}, {"back", 0}};
+            e["frontage_of"] = xy.front().y < 0 ? "fw_a" : "fw_b";
+        }
+        g["edges"].push_back(e);
+    }
+    for (const nlohmann::json& e : dr.ramps) g["edges"].push_back(e);
+    return g;
+}
+}  // namespace
+
+TEST_CASE(lanes_the_planner_lands_a_diamond_between_one_way_frontage_roads_at_grade_on_the_lane_nearest_the_freeway) {
+    const std::vector<RampStreet> streets = oneWayFrontageStreets(false, false);
+    const DiamondResult dr = frontageDiamond(streets);
+    CHECK(dr.built == 1);
+    CHECK(dr.ramps.size() == 4);
+    CHECK(dr.closed.empty());
+    for (const nlohmann::json& e : dr.ramps) {
+        const bool off = e["id"].get<std::string>().find("_off") != std::string::npos;
+        const nlohmann::json& street = off ? e["to"] : e["from"];
+        const nlohmann::json& L = e["landing"];
+        std::printf("    %s: %s %s's %s carriageway (%s half) beside its %s lane, crossing %s; floor %s\n", e["id"].get<std::string>().c_str(),
+                    L["joins"].get<std::string>().c_str(), L["street"].get<std::string>().c_str(), L["carriageway"].get<std::string>().c_str(),
+                    L["half"].get<std::string>().c_str(), street["side"].get<std::string>().c_str(), L["crossing"].dump().c_str(),
+                    e.contains("floor") ? e["floor"].dump().c_str() : "none");
+        CHECK(street.is_object() && street["edge"] == L["street"]);
+        CHECK(L["joins"] == "merge" && L["half"] == "near" && L["carriageway"] == "forward" && L["crossing"] == "none");
+        CHECK(!e.contains("floor"));   // nothing to hold it over
+        CHECK(street["side"] == "offside");
+        const bool a = e["id"].get<std::string>().rfind("d0_0_a", 0) == 0;
+        CHECK(L["street"].get<std::string>().rfind(a ? "f_s" : "f_n", 0) == 0);
+    }
+    // as built: the ramps land as planned, crossing nothing, and the frontage roads run as planned
+    const nlohmann::json g = oneWayFrontageScene(streets, dr);
+    if (const char* outPath = std::getenv("RT_LANES_SCENE_OUT")) std::ofstream(outPath) << g.dump(1) << "\n";   // for lanes_tool to draw
+    RoadLabGraph rg = RoadLabGraph::fromJson(g);
+    (void)expand(rg);
+    for (const RampLandingFault& f : checkRampLandings(rg)) std::printf("    fault: %s\n", describe(f).c_str());
+    CHECK(checkRampLandings(rg).empty());
+    CHECK(checkFrontageRoads(rg).empty());
+    for (const nlohmann::json& e : dr.ramps) {   // its own path never meets its frontage road's line
+        const EdgeSpec& ramp = *rg.find(e["id"].get<std::string>());
+        CHECK(crossings(ramp.xy, rg.find(e["landing"]["street"].get<std::string>())->xy).empty());
+    }
+
+    // a side street 100 m short of the crossing, which may go: closed, and the south road's two pieces one road
+    const std::vector<RampStreet> withSpare = oneWayFrontageStreets(true, true);
+    const DiamondResult ds = frontageDiamond(withSpare);
+    std::printf("    with a spare side street: built %d, closed %zu, joined %zu\n", ds.built, ds.closed.size(), ds.joined.size());
+    CHECK(ds.built == 1);
+    CHECK(ds.closed == std::vector<std::string>{"side"});
+    CHECK(ds.joined.size() == 1 && ds.joined[0] == (std::vector<std::string>{"f_s1", "f_s1b"}));
+    RoadLabGraph rs = RoadLabGraph::fromJson(oneWayFrontageScene(withSpare, ds));
+    (void)expand(rs);
+    for (const RampLandingFault& f : checkRampLandings(rs)) std::printf("    fault: %s\n", describe(f).c_str());
+    CHECK(checkRampLandings(rs).empty());
+    CHECK(rs.find("d0_0_a_off")->landing.street == "f_s1");
+    // ...and one that may not: no room, the diamond refused
+    const DiamondResult dn = frontageDiamond(oneWayFrontageStreets(true, false));
+    std::printf("    with a side street that may not go: built %d, refused for want of a landing %d\n", dn.built, dn.rejectedLanding);
+    CHECK(dn.built == 0);
+    CHECK(dn.rejectedLanding >= 1);
 }

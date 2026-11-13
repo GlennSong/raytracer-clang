@@ -32,9 +32,18 @@ struct Check { std::string name, detail; bool ok; };
 // `declared`: the ramp carries a planned landing. build() REFUSES such a ramp (throws, naming it): the plan and the
 // roads disagree, and the planner is the one to fix. A ramp with none (planned before the rule, or by hand) only warns:
 // Result::rampLandings, and lanes_tool.
+// A ramp planned to merge crossing nothing ("crossing": "none") must not cross its street at grade, and one anchored
+// beside a street's offside lane needs a one-way street (ADR-0413).
 struct RampLandingFault { std::string ramp, street, what; Vec2 at; bool declared = false; };
 std::vector<RampLandingFault> checkRampLandings(const RoadLabGraph& g);
 std::string describe(const RampLandingFault& f);
+
+// A FRONTAGE ROAD AS PLANNED, CHECKED (ADR-0413): a road whose plan names the freeway carriageway it runs beside
+// ("frontage_of") must be one-way, its lanes running the way that carriageway's traffic runs where the two are beside
+// each other. Always planned intent: build() refuses a graph with any such fault, naming the road.
+struct FrontageFault { std::string road, what; Vec2 at; };
+std::vector<FrontageFault> checkFrontageRoads(const RoadLabGraph& g);
+std::string describe(const FrontageFault& f);
 
 struct Result {
     RoadLabGraph graph;

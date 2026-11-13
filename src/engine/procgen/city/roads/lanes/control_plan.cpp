@@ -128,13 +128,18 @@ void settleRoles(JunctionFacts& j, const ControlPolicy& policy) {
     if (best != worst) {
         for (std::size_t a : app) j.arms[a].major = policy.classRank(j.arms[a].roadClass) == best;
     } else {
-        // Every approach on one class: the one pair running straight through, if there is exactly one, is the major road.
+        // Every approach on one class: the one road running straight through, if there is exactly one, is the major road
+        // -- a pair of arms heading straight at each other, at least one of them arriving (a ONE-WAY road runs through on
+        // one approach and one way out: a frontage road, ADR-0413), with an approach besides it.
         const double headOn = -std::cos(kStraightOnDegrees * DEG_TO_RAD);
         std::vector<std::pair<std::size_t, std::size_t>> through;
-        for (std::size_t x = 0; x < app.size(); ++x)
-            for (std::size_t y = x + 1; y < app.size(); ++y)
-                if (dot(j.arms[app[x]].heading, j.arms[app[y]].heading) < headOn) through.emplace_back(app[x], app[y]);
-        const bool oneThrough = through.size() == 1 && app.size() > 2;
+        for (std::size_t x = 0; x < j.arms.size(); ++x)
+            for (std::size_t y = x + 1; y < j.arms.size(); ++y)
+                if ((j.arms[x].arriving > 0 || j.arms[y].arriving > 0) && dot(j.arms[x].heading, j.arms[y].heading) < headOn)
+                    through.emplace_back(x, y);
+        bool besides = false;
+        for (std::size_t a : app) besides = besides || (through.size() == 1 && a != through[0].first && a != through[0].second);
+        const bool oneThrough = through.size() == 1 && besides;
         for (std::size_t a : app)
             j.arms[a].major = !oneThrough || a == through[0].first || a == through[0].second;
     }

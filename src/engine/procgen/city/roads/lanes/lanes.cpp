@@ -64,6 +64,10 @@ std::vector<RampLandingFault> checkRampLandings(const RoadLabGraph& g) {
                 if (landing && L.joins != "merge") fault(host->id, "planned to meet " + host->id + " at a junction, but it is anchored beside a lane", e.xy[i]);
                 if (landing && !L.carriageway.empty() && L.carriageway != cw)
                     fault(host->id, "planned for " + host->id + "'s " + L.carriageway + " carriageway, but anchored beside its " + cw + " lanes", e.xy[i]);
+                // beside the offside lane, its lane of its own lies by the centre line: only a one-way road has room there
+                // (ADR-0413); on a two-way road it would stand in the carriageway coming the other way
+                if (a.side == "left" && host->lanes.back > 0)
+                    fault(host->id, "anchored beside " + host->id + "'s offside lane, where its lane of its own would stand in the carriageway coming the other way", e.xy[i]);
                 continue;
             }
             // a bare end: where it meets the street, and which way it is going there
@@ -97,6 +101,41 @@ std::vector<RampLandingFault> checkRampLandings(const RoadLabGraph& g) {
             }
         } else if (L.crossingKind != "none" && !L.crossingKind.empty()) {
             fault(L.crossingStreet, "planned crossing of kind \"" + L.crossingKind + "\": only \"over\" or \"none\" is built", L.crossingAt);
+        } else if (L.joins == "merge") {
+            // planned to cross nothing: its own path, lane of its own and all, never crosses the street it merges into
+            if (const EdgeSpec* host = g.find(L.street))
+                for (const Vec2& x : crossings(e.xy, host->xy)) fault(host->id, "crosses " + host->id + " at grade, planned to cross nothing", x);
+        }
+    }
+    return out;
+}
+
+std::string describe(const FrontageFault& f) {
+    char at[64];
+    std::snprintf(at, sizeof at, " at (%.1f, %.1f)", f.at.x, f.at.y);
+    return "frontage road " + f.road + ": " + f.what + at;
+}
+
+std::vector<FrontageFault> checkFrontageRoads(const RoadLabGraph& g) {
+    std::vector<FrontageFault> out;
+    for (const EdgeSpec& e : g.edges) {
+        if (e.frontageOf.empty() || e.xy.size() < 2) continue;
+        const Vec2 mid = pointAt(e.xy, e.s, e.s.back() / 2);
+        const EdgeSpec* cw = g.find(e.frontageOf);
+        if (!cw || cw->xy.size() < 2) { out.push_back({e.id, "planned beside " + e.frontageOf + ", which is not in the graph", mid}); continue; }
+        if ((e.lanes.fwd > 0) == (e.lanes.back > 0)) { out.push_back({e.id, "planned one-way beside " + cw->id + ", but it has lanes both ways (or none)", mid}); continue; }
+        if ((cw->lanes.fwd > 0) == (cw->lanes.back > 0)) { out.push_back({e.id, "planned beside " + cw->id + ", which is not a one-way carriageway", mid}); continue; }
+        // its traffic's way and the carriageway's, where they are beside each other: at its middle and a quarter in from each end
+        for (double u : {0.25, 0.5, 0.75}) {
+            const double st = e.s.back() * u;
+            const Vec2 p = pointAt(e.xy, e.s, st);
+            const Vec2 way = tangentAtStation(e.xy, e.s, st) * (e.lanes.fwd > 0 ? 1.0 : -1.0);
+            const Projection pr = project(cw->xy, cw->s, p);
+            const Vec2 cwWay = tangentAt(cw->xy, pr.segment) * (cw->lanes.fwd > 0 ? 1.0 : -1.0);
+            if (dot(way, cwWay) < 0.5) {
+                out.push_back({e.id, "planned to run the way " + cw->id + " runs, but its lanes run against it (or across it) here", p});
+                break;
+            }
         }
     }
     return out;
@@ -160,6 +199,7 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     // THE RAMPS' LANDINGS (#282): a planned one that does not land as planned is refused; the rest warn
     {
         std::string refused;
+        for (const FrontageFault& f : checkFrontageRoads(g)) refused += (refused.empty() ? "" : "; ") + describe(f);   // (ADR-0413)
         for (const RampLandingFault& f : checkRampLandings(g)) {
             if (f.declared) refused += (refused.empty() ? "" : "; ") + describe(f);
             else r.rampLandings.push_back(f);

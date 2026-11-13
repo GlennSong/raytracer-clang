@@ -30,6 +30,15 @@
 // must come down, or the road has no room for the lane of its own clear of its junctions -- that
 // side cannot land, and the diamond is refused (ADR-0411: on the traffic lab, every diamond).
 //
+// A ONE-WAY FRONTAGE ROAD (ADR-0413) runs the way the freeway carriageway beside it runs, so the
+// lanes going the ramp's way are on the near half: the ramp joins or leaves the lane NEAREST THE
+// FREEWAY, by its lane of its own beside it, at grade, crossing nothing. That lane is the road's
+// offside lane when the freeway is on its offside (anchor side "offside"), its kerb lane when on its
+// kerb side. Its room is found along the road: where the stretch beside the crossing is too short, the
+// ramp's lane may run on into the next piece of the same one-way road, closing the streets that cut it
+// there when every one of them can go (`closable` or `spare`); the pieces are then one road
+// (DiamondResult::joined). A one-way road running the other way cannot take the ramp.
+//
 // A ramp is as long as its climb needs at the RAMP's grade under the builder's smoothstep
 // profile (steepest at 1.5x the mean), measured to the ground where it lands, plus the part
 // of it within reach of that street. A diamond whose ramps would pass over another street
@@ -62,6 +71,13 @@ struct RampStreet {
     // Its road class (the class table's name, roadClass): which lanes it has each way, how wide, its sidewalk -- where
     // a ramp touching down beside it joins or leaves its kerb lane. Empty: a local street.
     std::string cls;
+    // A ONE-WAY road (ADR-0413): this many lanes, every one running the way its points run (a frontage road, planned
+    // one-way the way the freeway carriageway beside it runs); 0: its class's lanes, both ways.
+    int oneWayLanes = 0;
+    // A side street a diamond may close to give a ramp's lane of its own room along a one-way road it meets (ADR-0413):
+    // a dead end, or a local street whose other end is a junction, so closing it strands nothing. For that room only: a
+    // ramp passing over it too low is refused, as for any street that is not `closable`.
+    bool spare = false;
 };
 
 struct DiamondOptions {
@@ -114,6 +130,10 @@ struct DiamondResult {
     int rejectedLanding = 0;   // a side whose road beside the freeway has no room to land it on the carriageway going its way (#282)
     double squarestRejected = 0;
     std::vector<std::string> closed;   // closable streets the built diamonds closed: drop their edges
+    // PIECES OF ONE ONE-WAY ROAD that a built ramp's lane of its own runs along, in the order its traffic runs (ADR-0413).
+    // The streets that cut the road between them are closed, so from here they are one road: written as one edge under
+    // the first piece's id, the id the ramp names (the builder lays a lane of its own along one road).
+    std::vector<std::vector<std::string>> joined;
 };
 
 // `route` is the freeway's centreline (resampled); `streets` are what its ramps may land on.

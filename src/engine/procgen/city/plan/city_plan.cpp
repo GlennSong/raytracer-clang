@@ -980,7 +980,7 @@ CityPlan generatePlan(const Brief& B) {
     const Real ang = B.gridAngleDeg * PI / 180.0;
     const Frame F{B.center, Vec2(std::cos(ang), std::sin(ang)), Vec2(-std::sin(ang), std::cos(ang))};
     const Real outerR = B.size * 0.5 - B.outerMargin;
-    const Real corridorHalf = B.freewayWidth * 0.5 + 35.0;
+    const Real corridorHalf = freewaySection(B).frontage;   // out to the frontage roads either side of the ring
     // --- LAND (world.land, ADR-0106): a city sited on an island is shaped BY the island. Glenn: "The
     // city also needs to fit the terrain. Part of the city is in the water and another part looks
     // embedded into the mountain." So the land comes first: the city's FOOTPRINT is the buildable

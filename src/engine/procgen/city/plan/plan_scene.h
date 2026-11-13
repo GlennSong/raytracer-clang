@@ -49,6 +49,9 @@ struct FreewaySection {
     Real carriageHalf = 10;     // a carriageway's half-width, shoulders included
     Real carriage = 12;         // centreline -> a carriageway's centreline
     Real edgeReach = 22;        // centreline -> the outer edge of the pavement
+    // centreline -> the FRONTAGE ROADS either side of the ring (the corridor's half-width): the plan draws them here, and
+    // the scene finds them here to make them one-way (ADR-0413)
+    Real frontage = 50;
 };
 FreewaySection freewaySection(const Brief& b, Real medianGap = SceneOptions{}.medianGap);
 roads::lanes::SystemOptions systemOptions();

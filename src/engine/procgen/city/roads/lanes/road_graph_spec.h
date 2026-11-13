@@ -223,6 +223,10 @@ struct EdgeSpec {
     // ("speed_limit_hand": true): set by a person, so re-planning keeps it.
     double speedLimit = 0.0;
     bool speedLimitHand = false;
+    // A FRONTAGE ROAD AS PLANNED (ADR-0413; "frontage_of": the id of the freeway carriageway it runs beside): a one-way
+    // road, every lane running the way that carriageway's traffic runs, so a ramp joins or leaves it at grade on its lane
+    // nearest the freeway. The builder checks it (checkFrontageRoads); empty: not one.
+    std::string frontageOf;
     // resolved geometry and profile
     std::vector<Vec2> xy;                // spine, resampled at rules.step
     std::vector<double> s, z, t;         // station, deck height, terrain height along the spine

@@ -19153,7 +19153,7 @@ the heights stated; the builder refuses a ramp that joins a carriageway going th
   interchange (the city plan, or the planner closing them as it closes streets under the ring), (3) a ramp ending as an
   arm of a junction on the frontage road, under its control (as d0_0_b_off and d0_0_a_on end today, at the planned
   junctions j111, stop signs, and j122, lights) -- which crosses the oncoming traffic at grade under that control,
-  against the rule as written.
+  against the rule as written. (Chosen: (1), ADR-0413.)
 - **E. What a re-plan would do now, anywhere.** No planned city has room either: run on their briefs, the planner keeps
   only the system interchanges' ramps -- metro_planned 52 -> 8 ramps, metro_mountain 52 -> 8, piedmont 32 -> 8,
   metro_v2_test 8 -> 0, river_town 8 -> 8 (it had no diamonds) -- and lands no touch-down in any of them (written to a
@@ -19276,3 +19276,97 @@ test 4.1 -> 7.7 s and the crossing points 0.24 -> 3.2 s; paid once per change of
 
 **Revisit when** the lab with buses is run (its five-minute hash is stale: new records and buses in the mix), when
 lanes carry who may use them, or when articulated vehicles arrive.
+
+## ADR-0413 — The roads beside the ring freeway run one way, the freeway's way, so every ramp joins or leaves the lane nearest the freeway at grade, crossing nothing; the traffic lab re-planned so (#282)
+
+Words: a FRONTAGE ROAD is the street the plan runs along each side of the ring freeway, at the edge of its corridor (50 m
+from the freeway's centre line in the lab). ONE-WAY: every lane of the road runs the same way. GOING THE FREEWAY'S WAY:
+the same way as the freeway carriageway on that side. The LANE NEAREST THE FREEWAY of a frontage road is, here, its
+OFFSIDE lane (the lane by the road's centre, away from its kerb); its KERB lane is on the side away from the freeway. A LANE OF ITS OWN is the extra lane a ramp brings beside a road where it
+joins it (a MERGE LANE and its TAPER, where it narrows away) or leaves it (a DECELERATION LANE and its taper). A ramp's
+LANDING is its end on a street as the planner meant it (ADR-0411). A SPARE street is a side street the interchange
+planner may close to make room for a ramp's lane of its own: one whose closing strands nothing. A CORNER TURN is a turn
+whose path hugs one corner of a junction (a near turn always; on a one-way road, every turn).
+
+**Context.** ADR-0411 made the planner land a ramp on the carriageway going its way, over the road beside the freeway
+when that carriageway is the far one, and found that no planned city had the ~280 m of road free of side streets a ramp
+needs to come down on the far side: re-planned, the lab lost every diamond. Glenn chose its option 1: frontage roads one
+way, each the way the freeway carriageway beside it runs. Then the lanes going a ramp's way are on the road's near half,
+and the ramp joins or leaves them from beside the road, at grade, crossing nothing and flying over nothing.
+
+**Decision.**
+- **A. The plan states it.** `planToLanesScene` finds the frontage roads where the plan draws them (`FreewaySection::
+  frontage`, now the one number the plan and the scene both read): a street lying at that offset from a ring chain the
+  whole of its length, along it, on one side. It writes each one-way (`"lanes": {"fwd": N, "back": 0}`, N its class's
+  lanes one way: 2 for the lab's collectors), its points in the direction of travel, and names the carriageway it runs
+  beside (`"frontage_of": "fw1_b"`). The class stays a collector, so the rule set's limits and placement rows still
+  apply. Only the ring's frontage roads; the outer loop's town streets stay two-way (their ramps land as ADR-0411 says).
+- **B. The builder checks it** (`checkFrontageRoads`, run in `build()` and by `lanes_tool landings`): a road planned as
+  a frontage road must be one-way and its lanes must run the way its carriageway runs where the two are beside each
+  other; otherwise the graph is refused, naming the road. `checkRampLandings` gains two checks: a ramp anchored beside a
+  road's offside lane needs a one-way road (on a two-way road its lane of its own would stand in the carriageway coming
+  the other way), and a ramp planned to cross nothing (`"crossing": "none"`) must not cross its street at grade. A ramp
+  merging onto a one-way road going its way passes; one going the other way is refused ("runs against it"), as before.
+- **C. The planner anchors to the lane nearest the freeway** (`diamondRamps`, `landOn`). On a road with no lanes the
+  other way, the lane a ramp takes is whichever of the carriageway's kerb lane and its offside lane is nearer the
+  freeway; the anchor names it `"side": "offside"` (read as the builder's old "left"; no new data says left or right).
+  Its landing says `"carriageway": "forward", "half": "near", "crossing": "none"`, and there is no floor point. Two-way
+  roads keep ADR-0411's landing over the road, unchanged.
+- **D. Room along the road.** One-way roads need only the room for the lane of its own and its mouths (an off-ramp
+  145 m between junctions, an on-ramp 115 m), but the lab's frontage roads are cut every ~100 m by side streets. Where
+  the piece of road beside the crossing is too short, the ramp's lane runs on into the next piece of the same one-way
+  road, through a junction whose other streets can all go: `closable` ones (a short street passing under the ring, and
+  now a dead end run in under the deck) or `spare` ones (a dead end, or a local street meeting a frontage road whose
+  other end is a junction still joined to the rest some other way). Those are closed, and the pieces become ONE road
+  (`DiamondResult::joined`; the scene writes them as one edge under the first piece's id and renames every ramp's
+  reference), because the builder lays a lane of its own along one road. A ramp that still has no room is refused with
+  the old counter and warning, never landed wrongly. (This is ADR-0411 D's option 2 in the small: the planner closes the
+  one or two side streets in the way, as it already closes streets under the ring.)
+- **E. Junction controls on one-way roads.** The control planner (`settleRoles`) finds "the one road running straight
+  through" among all a junction's arms, not only those traffic arrives by, so a one-way road through a T is its major
+  road and the stem stops. The lab's rule set lets two approaches be enough for "an arterial meets a collector: lights"
+  (`approaches = { min = 2 }`): where a spoke ends on a one-way frontage road only two ways arrive; two-way roads of
+  three arms always bring three, so nothing else changes.
+- **F. The lane graph's "two roads cross outside every junction" check** no longer counts the hairline crossings two
+  paths make within two sample steps of the point where one is born out of the other (a ramp's deceleration lane leaving
+  the freeway's kerb lane crossed it 0.8 m along once its gore moved a third of a metre). Only the problem count changes;
+  no path or record does.
+
+**The traffic lab, re-planned** (`city_plan scene assets/city_plans/traffic_lab.json ...`, then `city_plan controls ...
+rules/lab.lua --write`; no other level or city re-planned or re-baked, no lanes tag bump). Two diamonds before and after,
+at the same spokes (west and east); eight ramps, all landing on the lane nearest the freeway at grade, `lanes_tool
+landings`: 0 of 8 wrong (before: 8 on a centre line, warnings), 61 frontage pieces, 0 running wrongly. 22 streets
+closed (11 a side of the ring): the 4 collectors under the ring, 15 dead-end stubs run in under the deck, and 3 local
+streets from midtown for the ramps' room; 7 frontage pieces joined into others. Lane graph (`lanes_tool lanegraph`,
+the lab fleet's sizes): lane paths 1,927 -> 1,684, connectors 2,022 -> 1,748, junctions 168 -> 155, crossing points
+13,104 -> 11,825, turns refused 25 -> 16, ramp ends on a street 6 -> 0, junctions with lights 38 -> 39, connectors
+closed to cars 294 -> 278, buses 500 -> 489, trucks 389 -> 380; lanes in the largest part any vehicle can get round
+97.9% -> 97.3% (outside: dead-end stubs and two arterial loop pieces, as before; every frontage, ramp and freeway lane
+is in it).
+
+**What it does not settle: big vehicles cannot turn on or off a one-way road.** Every turn on or off a one-way road is a
+corner turn: its lane runs beside the junction's corner whichever way it turns. The lab's junction boxes leave a corner
+turn about 5.5 m of radius (half a lane plus the box's 3.5 m beyond the road's lanes), which is why near turns were
+already closed to every four-wheeled class there. Counting only the paths each vehicle tag may use, lanes in the largest
+part it can get round: car 90.4% -> 91.8%, van 90.3% -> 80.7%, bus 88.1% -> 78.9%, truck and goods 90.3% -> 64.3% --
+trucks no longer reach the freeway or the frontage roads at all, vans and the bus only one half of the ring. The fix is
+the junction's corner (room for a kerb radius a lorry can turn, stop lines set back to it), a change to the road builder
+and its paint, so a lanes tag bump and a re-bake of every level: Glenn's call. A lane-graph-only alternative (a vehicle
+too big for the corner may turn from the next lane over) would touch only the lab, the one level that drives on the lane
+graph.
+
+**Tests** (`lanes_tests`): a ramp merging beside a one-way road's offside lane going its way is built and passes every
+invariant; the same ramp running the other way, one beside a two-way road's offside lane, and one crossing its street
+at grade to reach its lane are refused; a frontage road planned beside a carriageway it runs against, or with lanes both
+ways, is refused; the planner lands all four ramps of a diamond between one-way frontage roads at grade on the offside
+lane, crossing nothing, with no floor point, and as built they land as planned (`lanes_tool build` of that scene passes
+every invariant); with a spare side street 100 m short of the crossing it is closed and the two pieces joined; with one
+that may not go, the diamond is refused. The ADR-0411 tests stand. The lab's connector test now sweeps a body at its
+width and the builder's margin either side, as the builder does: the new geometry put a hairline crack between two
+lanes' footprints (under 0.1 m, paved either side) exactly half a car's width inside one near turn.
+
+**The old model's pinned state** (`level_v1_state_is_unchanged`): river_town's four hashes are unchanged; the lab's
+change, because its roads did (with the old lab graph put back they are the pinned four exactly).
+
+**Revisit when** the junction corners are given room for lorries, when a city with frontage roads is re-planned (its
+side streets near interchanges will close as here), or when a one-way frontage road is wanted beside an expressway.
