@@ -398,6 +398,20 @@ void carryControlPlan(const RoadLabGraph& g, const std::string& unplannedControl
         e.spineIn = arriving == (src.dir > 0);
         return e;
     };
+    // WHERE THE ROAD FILE STATES A STREET ONLY CARRIES ON (ADR-0419: no junction): road -> the stations of those street
+    // ends. A lane end there needs no arm; a junction the builder made of nothing else takes the plan's carry-on control.
+    std::map<int, std::vector<double>> carryOnAt;
+    for (const PlannedStreet& st : g.streets)
+        for (std::size_t k = 0; k < 2; ++k)
+            if (!st.carriesOn[k].empty()) carryOnAt[g.index.at(st.road)].push_back(k == 0 ? st.from : st.to);
+    auto carriesOn = [&](int edge, double s) {
+        const std::map<int, std::vector<double>>::const_iterator it = carryOnAt.find(edge);
+        if (it == carryOnAt.end()) return false;
+        for (double at : it->second)
+            if (std::fabs(at - s) <= kPlannedArmReach) return true;
+        return false;
+    };
+    std::vector<char> sawCarryOn(G.junctions.size(), 0);
     std::vector<std::vector<std::pair<PathId, ArmRef>>> arrivingArms(G.junctions.size());   // arriving lanes, their arms
     std::vector<std::vector<uint32_t>> builtOf(g.junctions.size());
     std::vector<uint32_t> lanesOnArm;   // per (planned junction, arm), flattened: arriving lanes matched to it
@@ -417,6 +431,10 @@ void carryControlPlan(const RoadLabGraph& g, const std::string& unplannedControl
                 uint32_t inside = 0;
                 if (e.edge >= 0 && insideAt(e.edge, e.s, inside)) {   // between two nodes of one planned junction: its, no sign
                     planned.insert(inside);
+                    continue;
+                }
+                if (e.edge >= 0 && !armOf(e.edge, e.spineIn, e.s, ref) && carriesOn(e.edge, e.s)) {   // a stated carry-on
+                    sawCarryOn[j] = 1;
                     continue;
                 }
                 if (e.edge < 0 || !armOf(e.edge, e.spineIn, e.s, ref)) {
@@ -443,6 +461,11 @@ void carryControlPlan(const RoadLabGraph& g, const std::string& unplannedControl
     for (uint32_t j = 0; j < G.junctions.size(); ++j) {
         const std::vector<uint32_t>& planned = out.plannedOf[j];
         const JunctionNote& note = out.junctionNotes[j];
+        if (planned.empty() && sawCarryOn[j] && !g.carryOnControl.empty()) {   // only where streets carry on: no junction stated
+            ++rep.carryOns;
+            controlOf[j] = g.carryOnControl;
+            continue;
+        }
         if (planned.empty()) {
             ++rep.notPlanned;
             addProblem(out.problems, "junction %u at (%.1f, %.1f) (roads %s): no planned junction names it; it is left "

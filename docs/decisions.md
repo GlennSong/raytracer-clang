@@ -19854,7 +19854,8 @@ trip no freeway way exists from where the person stands, before or after) 189.1 
 values retaken: `kV1LabHashes`, `kV1RiverHashes` (with the nav given its lanes the old way by a temporary switch, since
 removed, all eight old values came out). `kFiveMinuteStateHash` (the new driving's lab) did not move.
 
-**Which road ends are one junction: looked at, not changed.** Today two road-end points are one junction when they lie
+**Which road ends are one junction: looked at, not changed** (Glenn then chose the proposal below: built in ADR-0419).
+Today two road-end points are one junction when they lie
 closer along a road than both their reaches (the widest other road's half width + 5.2 m + 6 m), chained. The rule
 proposed: one junction when the street between their stop lines is shorter than a stated storage length (a city bus
 and a gap, 14 m). Close-ups of the biggest (~/Pictures/Raytracer/road-model/, red rings the points):
@@ -19887,3 +19888,80 @@ fallback: a second source.
 
 **Revisit when** step 7 builds the nav from the model (the lane match's road-finding goes); when Glenn picks the junction
 rule; when the planner should state parking per street rather than per class.
+
+## ADR-0419 — Which road ends are one junction: no room for a car between the stop lines, or a divided road's two carriageways; a street that only carries on is no junction
+**Status:** Provisional · **Date:** 2026-11-13
+
+Words: a JUNCTION POINT (a node) is where road ends meet, a ramp's free end meets a street, or two roads cross at grade.
+A STOP LINE stands back from a junction point along each road by the widest other road's half width (the area the
+crossing traffic needs) and 5.2 m. STORAGE is the street a vehicle needs to wait in between two junctions. A DIVIDED
+ROAD is one road built as two one-way roads, its CARRIAGEWAYS. The PAINT is the road builder's own markings, which find
+junction areas ("boxes") from the built lanes.
+
+**Context.** ADR-0418 looked at the old grouping (points closer than both their reaches -- the widest other road's half
+width + 5.2 m + 6 m -- chained) against the ground: it lumped separate junctions, often through a point where a street
+merely bends or carries on, which it gave an area it does not have (traffic_lab j7, 122 m across). A "bus" storage rule
+(14 m) made corridors up to 200 m. Glenn approved the proposal: no room for even a car; a carry-on is no junction; the
+planner states divided roads; re-bake traffic_lab alone if needed.
+
+**Decision.**
+- **One rule** (`findJunctions`, used by the planner's layout, the one-off tool and the control planner alike): two
+  junction points next to each other along a road are one junction when the stretch between their stop lines is shorter
+  than the road file's `rules.storage` (default 6.5 m: a car, 4.5 m, and its gap); the +6 m slack is gone. And by
+  construction: where the two carriageways of a divided road meet one street, their points are one junction however far
+  apart. Nothing else groups them.
+- **A carry-on is no junction.** A point of two arms (one road running on as another, or a bend) has no area, no stop
+  line and joins no group. The streets say so: each of the two streets names the other at that end, `"carries_on": [null,
+  "s13"]` (at its `from`, at its `to`), its junction there null. The model carries it (`ModelStreet::carriesOn`, model
+  version 3).
+- **Divided roads are stated**: a top-level `"divided": [["bv0_in", "bv0_out"], ...]` (layout: the bake key does not see
+  it). The planner writes it for each boulevard pair it lays (plan_scene.cpp). For the existing files the one-off tool
+  found the pairs from what they state: two roads whose ids are one name with `_in` and `_out`, of one class, each
+  one-way -- the planner's own naming (bv0/bv1 in river_town, metro_mountain, metro_planned; bc0/bc1 in metro_v2_test;
+  bt0/bt1 and bv0/bv1 in piedmont). It found no `_in`/`_out` road without its partner. `frontage_of` (traffic_lab's 61
+  frontage roads) was not used: two frontage roads either side of a freeway are a diamond's two ends, not one road.
+- **The builder's own junction at a carry-on** (the paint still draws a box at a bend, until step 9): the control plan
+  states the control the policy gives a place of two arms (`"carry_on_control"`: the lab's "unmarked"), and the lane
+  graph gives it there without reporting it. The model lists such boxes as "the paint draws a box where street X carries
+  on into Y".
+- **Rewritten** (`lanes_tool layout --write --fresh`): river_town, metro_v2_test, piedmont, metro_mountain, metro_planned,
+  island_8_nature, ring_city, light_rail_lab (rail_loop has no junctions: unchanged). Bake keys unchanged for river_town,
+  agent_lab, metro_v2_test, piedmont, metro_mountain, metro_planned, island_8_nature (`rt_bake --status` before and
+  after; the three that were already out of date would be the same keys).
+- **traffic_lab keeps its old grouping.** Re-planned (`city_plan controls ... rules/lab.lua`) it went from 156 junctions
+  (28 lights, 30 all-way stops, 78 stops, 20 unmarked carry-ons) to 141 (27 lights, 30 all-way stops, 84 stops; 21
+  carry-ons), and was re-baked alone. But its lane graph then held one built junction made of two planned ones, j85
+  (lights) and j96 (a stop), at (193.2, 314.9) (roads s141, s166, s168-s171, s220): the paint merges junction boxes
+  closer than 12 m along a street into one, a rule of its own the new grouping no longer matches there. The lane graph
+  leaves such a junction "not_planned", and the lab's rule set refuses a road with a control it has no rule for, so the
+  new driving switched itself off and `level_traffic_lab_v2_drives` failed before measuring anything (the first try,
+  before the carry-on control, had 10 such junctions). Neither the limits nor the driving were touched; the lab's road
+  file was put back and its old bundle is current again. Fixing it means the builder painting the stated junctions
+  (design step 9), not another grouping rule.
+
+**What it does.** Junctions: river_town 151 -> 144, metro_v2_test 200 -> 202, piedmont 616 -> 615, metro_mountain 988 ->
+991, metro_planned 986 -> 990, island_8_nature 1391 -> 1373, ring_city 37 -> 25, light_rail_lab 25 -> 21, traffic_lab
+156 (kept). The ten biggest (metres across, before -> after): river_town 89 89 77 60 58 55 54 50 46 44 -> 89 89 54 50 46
+44 38 31 31 30; metro_v2_test 148 124 99 78 65 53 52 48 44 43 -> 118 75 61 61 53 52 48 46 44 42; metro_mountain 152 107
+97 94 90 81 73 72 70 62 -> 62 56 54 54 40 38 37 36 36 35; piedmont 146 140 80 80 68 59 57 57 56 49 -> 140 80 80 68 67 59
+56 49 49 43; island_8_nature 38 34 30 30 30 29 28 19 19 18 -> 30 30 29 28 19 19 18 18 16 12. The comparison's splits
+(model junctions another form splits into several; nav / paint / lane graph): river_town 27/11/15 -> 24/3/11,
+metro_v2_test 20/13/17 -> 18/9/12, island_8_nature 12/6/9 -> 9/3/6, traffic_lab 15/8/6 (kept).
+
+**What the biggest are** (close-ups in ~/Pictures/Raytracer/road-model/*_after_*.png): river_town j14 (two staggered
+crossings whose areas touch), j0 (a boulevard pair meeting the arterial at two Ts, one by construction, and a side street
+touching), j119 (a big junction and a local street forking off the collector 31 m before it at a shallow angle: by the
+rule's stop lines no room; on the drawn ground perhaps 20 m of collector -- the stop-line estimate does not fit a shallow
+fork), j35, j135 (areas touching): one junction each. traffic_lab's five under the rule (not applied) were each one too,
+and its old 122 m j7, chained through a bend, broke into its real parts. Still chains of SEPARATE crossings whose areas
+abut with only crosswalks between, along a diagonal avenue through a grid: metro_v2_test j143 (118 m, three crossings) and
+piedmont j297 (140 m, four): nothing can wait between them, so by the rule they are one, but they are a planning fault
+(a diagonal cut through a grid), for the planner -- no rule was added.
+
+**Alternatives.** A per-vehicle storage (a bus): makes 200 m corridors (ADR-0418). Grouping by the paint's 12 m: a second
+rule, the one being replaced. Re-baking traffic_lab with its new grouping and a "not_planned" rule in lab.lua: makes up
+a control the plan did not state.
+
+**Revisit when** the builder paints from the stated junctions (step 9: traffic_lab can take the rule then); when the
+planner states its junctions as it plans them instead of the rule being applied to its road ends; if the diagonal
+corridors are re-planned.

@@ -398,122 +398,6 @@
     {
      "at": 0.0,
      "heading": 0.0,
-     "road": "ew0",
-     "spine": "out",
-     "street": "ew0/0"
-    },
-    {
-     "at": 0.0,
-     "heading": 90.0,
-     "road": "ns0",
-     "spine": "out",
-     "street": "ns0/0"
-    }
-   ],
-   "at": [
-    -300.0,
-    -300.0
-   ],
-   "id": "j0",
-   "through": [
-    [
-     0,
-     1
-    ]
-   ]
-  },
-  {
-   "arms": [
-    {
-     "at": 0.0,
-     "heading": 0.0,
-     "road": "ew4",
-     "spine": "out",
-     "street": "ew4/0"
-    },
-    {
-     "at": 600.0,
-     "heading": 270.0,
-     "road": "ns0",
-     "spine": "in",
-     "street": "ns0/3"
-    }
-   ],
-   "at": [
-    -300.0,
-    300.0
-   ],
-   "id": "j1",
-   "through": [
-    [
-     0,
-     1
-    ]
-   ]
-  },
-  {
-   "arms": [
-    {
-     "at": 0.0,
-     "heading": 90.0,
-     "road": "ns4",
-     "spine": "out",
-     "street": "ns4/0"
-    },
-    {
-     "at": 600.0,
-     "heading": 180.0,
-     "road": "ew0",
-     "spine": "in",
-     "street": "ew0/3"
-    }
-   ],
-   "at": [
-    300.0,
-    -300.0
-   ],
-   "id": "j2",
-   "through": [
-    [
-     0,
-     1
-    ]
-   ]
-  },
-  {
-   "arms": [
-    {
-     "at": 600.0,
-     "heading": 180.0,
-     "road": "ew4",
-     "spine": "in",
-     "street": "ew4/3"
-    },
-    {
-     "at": 600.0,
-     "heading": 270.0,
-     "road": "ns4",
-     "spine": "in",
-     "street": "ns4/3"
-    }
-   ],
-   "at": [
-    300.0,
-    300.0
-   ],
-   "id": "j3",
-   "through": [
-    [
-     0,
-     1
-    ]
-   ]
-  },
-  {
-   "arms": [
-    {
-     "at": 0.0,
-     "heading": 0.0,
      "road": "ew1",
      "spine": "out",
      "street": "ew1/0"
@@ -537,7 +421,7 @@
     -300.0,
     -150.0
    ],
-   "id": "j4",
+   "id": "j0",
    "through": [
     [
      1,
@@ -573,7 +457,7 @@
     -300.0,
     0.0
    ],
-   "id": "j5",
+   "id": "j1",
    "through": [
     [
      1,
@@ -609,7 +493,7 @@
     -300.0,
     150.0
    ],
-   "id": "j6",
+   "id": "j2",
    "through": [
     [
      1,
@@ -645,7 +529,7 @@
     -150.0,
     -300.0
    ],
-   "id": "j7",
+   "id": "j3",
    "through": [
     [
      0,
@@ -681,7 +565,7 @@
     0.0,
     -300.0
    ],
-   "id": "j8",
+   "id": "j4",
    "through": [
     [
      0,
@@ -717,7 +601,7 @@
     150.0,
     -300.0
    ],
-   "id": "j9",
+   "id": "j5",
    "through": [
     [
      0,
@@ -758,6 +642,183 @@
    ],
    "at": [
     -150.0,
+    -150.0
+   ],
+   "id": "j6",
+   "through": [
+    [
+     0,
+     2
+    ],
+    [
+     1,
+     3
+    ]
+   ]
+  },
+  {
+   "arms": [
+    {
+     "at": 150.0,
+     "heading": 0.0,
+     "road": "ew2",
+     "spine": "out",
+     "street": "ew2/1"
+    },
+    {
+     "at": 300.0,
+     "heading": 90.0,
+     "road": "ns1",
+     "spine": "out",
+     "street": "ns1/2"
+    },
+    {
+     "at": 150.0,
+     "heading": 180.0,
+     "road": "ew2",
+     "spine": "in",
+     "street": "ew2/0"
+    },
+    {
+     "at": 300.0,
+     "heading": 270.0,
+     "road": "ns1",
+     "spine": "in",
+     "street": "ns1/1"
+    }
+   ],
+   "at": [
+    -150.0,
+    0.0
+   ],
+   "id": "j7",
+   "through": [
+    [
+     0,
+     2
+    ],
+    [
+     1,
+     3
+    ]
+   ]
+  },
+  {
+   "arms": [
+    {
+     "at": 150.0,
+     "heading": 0.0,
+     "road": "ew3",
+     "spine": "out",
+     "street": "ew3/1"
+    },
+    {
+     "at": 450.0,
+     "heading": 90.0,
+     "road": "ns1",
+     "spine": "out",
+     "street": "ns1/3"
+    },
+    {
+     "at": 150.0,
+     "heading": 180.0,
+     "road": "ew3",
+     "spine": "in",
+     "street": "ew3/0"
+    },
+    {
+     "at": 450.0,
+     "heading": 270.0,
+     "road": "ns1",
+     "spine": "in",
+     "street": "ns1/2"
+    }
+   ],
+   "at": [
+    -150.0,
+    150.0
+   ],
+   "id": "j8",
+   "through": [
+    [
+     0,
+     2
+    ],
+    [
+     1,
+     3
+    ]
+   ]
+  },
+  {
+   "arms": [
+    {
+     "at": 150.0,
+     "heading": 0.0,
+     "road": "ew4",
+     "spine": "out",
+     "street": "ew4/1"
+    },
+    {
+     "at": 150.0,
+     "heading": 180.0,
+     "road": "ew4",
+     "spine": "in",
+     "street": "ew4/0"
+    },
+    {
+     "at": 600.0,
+     "heading": 270.0,
+     "road": "ns1",
+     "spine": "in",
+     "street": "ns1/3"
+    }
+   ],
+   "at": [
+    -150.0,
+    300.0
+   ],
+   "id": "j9",
+   "through": [
+    [
+     0,
+     1
+    ]
+   ]
+  },
+  {
+   "arms": [
+    {
+     "at": 300.0,
+     "heading": 0.0,
+     "road": "ew1",
+     "spine": "out",
+     "street": "ew1/2"
+    },
+    {
+     "at": 150.0,
+     "heading": 90.0,
+     "road": "ns2",
+     "spine": "out",
+     "street": "ns2/1"
+    },
+    {
+     "at": 300.0,
+     "heading": 180.0,
+     "road": "ew1",
+     "spine": "in",
+     "street": "ew1/1"
+    },
+    {
+     "at": 150.0,
+     "heading": 270.0,
+     "road": "ns2",
+     "spine": "in",
+     "street": "ns2/0"
+    }
+   ],
+   "at": [
+    0.0,
     -150.0
    ],
    "id": "j10",
@@ -775,183 +836,6 @@
   {
    "arms": [
     {
-     "at": 150.0,
-     "heading": 0.0,
-     "road": "ew2",
-     "spine": "out",
-     "street": "ew2/1"
-    },
-    {
-     "at": 300.0,
-     "heading": 90.0,
-     "road": "ns1",
-     "spine": "out",
-     "street": "ns1/2"
-    },
-    {
-     "at": 150.0,
-     "heading": 180.0,
-     "road": "ew2",
-     "spine": "in",
-     "street": "ew2/0"
-    },
-    {
-     "at": 300.0,
-     "heading": 270.0,
-     "road": "ns1",
-     "spine": "in",
-     "street": "ns1/1"
-    }
-   ],
-   "at": [
-    -150.0,
-    0.0
-   ],
-   "id": "j11",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ]
-  },
-  {
-   "arms": [
-    {
-     "at": 150.0,
-     "heading": 0.0,
-     "road": "ew3",
-     "spine": "out",
-     "street": "ew3/1"
-    },
-    {
-     "at": 450.0,
-     "heading": 90.0,
-     "road": "ns1",
-     "spine": "out",
-     "street": "ns1/3"
-    },
-    {
-     "at": 150.0,
-     "heading": 180.0,
-     "road": "ew3",
-     "spine": "in",
-     "street": "ew3/0"
-    },
-    {
-     "at": 450.0,
-     "heading": 270.0,
-     "road": "ns1",
-     "spine": "in",
-     "street": "ns1/2"
-    }
-   ],
-   "at": [
-    -150.0,
-    150.0
-   ],
-   "id": "j12",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ]
-  },
-  {
-   "arms": [
-    {
-     "at": 150.0,
-     "heading": 0.0,
-     "road": "ew4",
-     "spine": "out",
-     "street": "ew4/1"
-    },
-    {
-     "at": 150.0,
-     "heading": 180.0,
-     "road": "ew4",
-     "spine": "in",
-     "street": "ew4/0"
-    },
-    {
-     "at": 600.0,
-     "heading": 270.0,
-     "road": "ns1",
-     "spine": "in",
-     "street": "ns1/3"
-    }
-   ],
-   "at": [
-    -150.0,
-    300.0
-   ],
-   "id": "j13",
-   "through": [
-    [
-     0,
-     1
-    ]
-   ]
-  },
-  {
-   "arms": [
-    {
-     "at": 300.0,
-     "heading": 0.0,
-     "road": "ew1",
-     "spine": "out",
-     "street": "ew1/2"
-    },
-    {
-     "at": 150.0,
-     "heading": 90.0,
-     "road": "ns2",
-     "spine": "out",
-     "street": "ns2/1"
-    },
-    {
-     "at": 300.0,
-     "heading": 180.0,
-     "road": "ew1",
-     "spine": "in",
-     "street": "ew1/1"
-    },
-    {
-     "at": 150.0,
-     "heading": 270.0,
-     "road": "ns2",
-     "spine": "in",
-     "street": "ns2/0"
-    }
-   ],
-   "at": [
-    0.0,
-    -150.0
-   ],
-   "id": "j14",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ]
-  },
-  {
-   "arms": [
-    {
      "at": 450.0,
      "heading": 0.0,
      "road": "ew1",
@@ -984,7 +868,7 @@
     150.0,
     -150.0
    ],
-   "id": "j15",
+   "id": "j11",
    "through": [
     [
      0,
@@ -1024,7 +908,7 @@
     300.0,
     -150.0
    ],
-   "id": "j16",
+   "id": "j12",
    "through": [
     [
      0,
@@ -1067,7 +951,7 @@
     0.0,
     0.0
    ],
-   "id": "j17",
+   "id": "j13",
    "through": [
     [
      0,
@@ -1114,7 +998,7 @@
     0.0,
     150.0
    ],
-   "id": "j18",
+   "id": "j14",
    "through": [
     [
      0,
@@ -1154,7 +1038,7 @@
     0.0,
     300.0
    ],
-   "id": "j19",
+   "id": "j15",
    "through": [
     [
      0,
@@ -1197,7 +1081,7 @@
     150.0,
     0.0
    ],
-   "id": "j20",
+   "id": "j16",
    "through": [
     [
      0,
@@ -1237,7 +1121,7 @@
     300.0,
     0.0
    ],
-   "id": "j21",
+   "id": "j17",
    "through": [
     [
      0,
@@ -1280,7 +1164,7 @@
     150.0,
     150.0
    ],
-   "id": "j22",
+   "id": "j18",
    "through": [
     [
      0,
@@ -1320,7 +1204,7 @@
     150.0,
     300.0
    ],
-   "id": "j23",
+   "id": "j19",
    "through": [
     [
      0,
@@ -1356,7 +1240,7 @@
     300.0,
     150.0
    ],
-   "id": "j24",
+   "id": "j20",
    "through": [
     [
      0,
@@ -1367,11 +1251,15 @@
  ],
  "streets": [
   {
+   "carries_on": [
+    "ew0/0",
+    null
+   ],
    "from": 0.0,
    "id": "ns0/0",
    "junctions": [
-    "j0",
-    "j4"
+    null,
+    "j0"
    ],
    "road": "ns0",
    "to": 150.0
@@ -1380,8 +1268,8 @@
    "from": 150.0,
    "id": "ns0/1",
    "junctions": [
-    "j4",
-    "j5"
+    "j0",
+    "j1"
    ],
    "road": "ns0",
    "to": 300.0
@@ -1390,28 +1278,36 @@
    "from": 300.0,
    "id": "ns0/2",
    "junctions": [
-    "j5",
-    "j6"
+    "j1",
+    "j2"
    ],
    "road": "ns0",
    "to": 450.0
   },
   {
+   "carries_on": [
+    null,
+    "ew4/0"
+   ],
    "from": 450.0,
    "id": "ns0/3",
    "junctions": [
-    "j6",
-    "j1"
+    "j2",
+    null
    ],
    "road": "ns0",
    "to": 600.0
   },
   {
+   "carries_on": [
+    "ns0/0",
+    null
+   ],
    "from": 0.0,
    "id": "ew0/0",
    "junctions": [
-    "j0",
-    "j7"
+    null,
+    "j3"
    ],
    "road": "ew0",
    "to": 150.0
@@ -1420,8 +1316,8 @@
    "from": 150.0,
    "id": "ew0/1",
    "junctions": [
-    "j7",
-    "j8"
+    "j3",
+    "j4"
    ],
    "road": "ew0",
    "to": 300.0
@@ -1430,18 +1326,22 @@
    "from": 300.0,
    "id": "ew0/2",
    "junctions": [
-    "j8",
-    "j9"
+    "j4",
+    "j5"
    ],
    "road": "ew0",
    "to": 450.0
   },
   {
+   "carries_on": [
+    null,
+    "ns4/0"
+   ],
    "from": 450.0,
    "id": "ew0/3",
    "junctions": [
-    "j9",
-    "j2"
+    "j5",
+    null
    ],
    "road": "ew0",
    "to": 600.0
@@ -1450,8 +1350,8 @@
    "from": 0.0,
    "id": "ns1/0",
    "junctions": [
-    "j7",
-    "j10"
+    "j3",
+    "j6"
    ],
    "road": "ns1",
    "to": 150.0
@@ -1460,8 +1360,8 @@
    "from": 150.0,
    "id": "ns1/1",
    "junctions": [
-    "j10",
-    "j11"
+    "j6",
+    "j7"
    ],
    "road": "ns1",
    "to": 300.0
@@ -1470,8 +1370,8 @@
    "from": 300.0,
    "id": "ns1/2",
    "junctions": [
-    "j11",
-    "j12"
+    "j7",
+    "j8"
    ],
    "road": "ns1",
    "to": 450.0
@@ -1480,8 +1380,8 @@
    "from": 450.0,
    "id": "ns1/3",
    "junctions": [
-    "j12",
-    "j13"
+    "j8",
+    "j9"
    ],
    "road": "ns1",
    "to": 600.0
@@ -1490,8 +1390,8 @@
    "from": 0.0,
    "id": "ew1/0",
    "junctions": [
-    "j4",
-    "j10"
+    "j0",
+    "j6"
    ],
    "road": "ew1",
    "to": 150.0
@@ -1500,8 +1400,8 @@
    "from": 150.0,
    "id": "ew1/1",
    "junctions": [
-    "j10",
-    "j14"
+    "j6",
+    "j10"
    ],
    "road": "ew1",
    "to": 300.0
@@ -1510,8 +1410,8 @@
    "from": 300.0,
    "id": "ew1/2",
    "junctions": [
-    "j14",
-    "j15"
+    "j10",
+    "j11"
    ],
    "road": "ew1",
    "to": 450.0
@@ -1520,8 +1420,8 @@
    "from": 450.0,
    "id": "ew1/3",
    "junctions": [
-    "j15",
-    "j16"
+    "j11",
+    "j12"
    ],
    "road": "ew1",
    "to": 600.0
@@ -1530,8 +1430,8 @@
    "from": 0.0,
    "id": "ns2/0",
    "junctions": [
-    "j8",
-    "j14"
+    "j4",
+    "j10"
    ],
    "road": "ns2",
    "to": 150.0
@@ -1540,8 +1440,8 @@
    "from": 150.0,
    "id": "ns2/1",
    "junctions": [
-    "j14",
-    "j17"
+    "j10",
+    "j13"
    ],
    "road": "ns2",
    "to": 300.0
@@ -1550,8 +1450,8 @@
    "from": 300.0,
    "id": "ns2/2",
    "junctions": [
-    "j17",
-    "j18"
+    "j13",
+    "j14"
    ],
    "road": "ns2",
    "to": 450.0
@@ -1560,8 +1460,8 @@
    "from": 450.0,
    "id": "ns2/3",
    "junctions": [
-    "j18",
-    "j19"
+    "j14",
+    "j15"
    ],
    "road": "ns2",
    "to": 600.0
@@ -1570,8 +1470,8 @@
    "from": 0.0,
    "id": "ew2/0",
    "junctions": [
-    "j5",
-    "j11"
+    "j1",
+    "j7"
    ],
    "road": "ew2",
    "to": 150.0
@@ -1580,8 +1480,8 @@
    "from": 150.0,
    "id": "ew2/1",
    "junctions": [
-    "j11",
-    "j17"
+    "j7",
+    "j13"
    ],
    "road": "ew2",
    "to": 300.0
@@ -1590,8 +1490,8 @@
    "from": 300.0,
    "id": "ew2/2",
    "junctions": [
-    "j17",
-    "j20"
+    "j13",
+    "j16"
    ],
    "road": "ew2",
    "to": 450.0
@@ -1600,8 +1500,8 @@
    "from": 450.0,
    "id": "ew2/3",
    "junctions": [
-    "j20",
-    "j21"
+    "j16",
+    "j17"
    ],
    "road": "ew2",
    "to": 600.0
@@ -1610,8 +1510,8 @@
    "from": 0.0,
    "id": "ns3/0",
    "junctions": [
-    "j9",
-    "j15"
+    "j5",
+    "j11"
    ],
    "road": "ns3",
    "to": 150.0
@@ -1620,8 +1520,8 @@
    "from": 150.0,
    "id": "ns3/1",
    "junctions": [
-    "j15",
-    "j20"
+    "j11",
+    "j16"
    ],
    "road": "ns3",
    "to": 300.0
@@ -1630,8 +1530,8 @@
    "from": 300.0,
    "id": "ns3/2",
    "junctions": [
-    "j20",
-    "j22"
+    "j16",
+    "j18"
    ],
    "road": "ns3",
    "to": 450.0
@@ -1640,8 +1540,8 @@
    "from": 450.0,
    "id": "ns3/3",
    "junctions": [
-    "j22",
-    "j23"
+    "j18",
+    "j19"
    ],
    "road": "ns3",
    "to": 600.0
@@ -1650,8 +1550,8 @@
    "from": 0.0,
    "id": "ew3/0",
    "junctions": [
-    "j6",
-    "j12"
+    "j2",
+    "j8"
    ],
    "road": "ew3",
    "to": 150.0
@@ -1660,8 +1560,8 @@
    "from": 150.0,
    "id": "ew3/1",
    "junctions": [
-    "j12",
-    "j18"
+    "j8",
+    "j14"
    ],
    "road": "ew3",
    "to": 300.0
@@ -1670,8 +1570,8 @@
    "from": 300.0,
    "id": "ew3/2",
    "junctions": [
-    "j18",
-    "j22"
+    "j14",
+    "j18"
    ],
    "road": "ew3",
    "to": 450.0
@@ -1680,18 +1580,22 @@
    "from": 450.0,
    "id": "ew3/3",
    "junctions": [
-    "j22",
-    "j24"
+    "j18",
+    "j20"
    ],
    "road": "ew3",
    "to": 600.0
   },
   {
+   "carries_on": [
+    "ew0/3",
+    null
+   ],
    "from": 0.0,
    "id": "ns4/0",
    "junctions": [
-    "j2",
-    "j16"
+    null,
+    "j12"
    ],
    "road": "ns4",
    "to": 150.0
@@ -1700,8 +1604,8 @@
    "from": 150.0,
    "id": "ns4/1",
    "junctions": [
-    "j16",
-    "j21"
+    "j12",
+    "j17"
    ],
    "road": "ns4",
    "to": 300.0
@@ -1710,28 +1614,36 @@
    "from": 300.0,
    "id": "ns4/2",
    "junctions": [
-    "j21",
-    "j24"
+    "j17",
+    "j20"
    ],
    "road": "ns4",
    "to": 450.0
   },
   {
+   "carries_on": [
+    null,
+    "ew4/3"
+   ],
    "from": 450.0,
    "id": "ns4/3",
    "junctions": [
-    "j24",
-    "j3"
+    "j20",
+    null
    ],
    "road": "ns4",
    "to": 600.0
   },
   {
+   "carries_on": [
+    "ns0/3",
+    null
+   ],
    "from": 0.0,
    "id": "ew4/0",
    "junctions": [
-    "j1",
-    "j13"
+    null,
+    "j9"
    ],
    "road": "ew4",
    "to": 150.0
@@ -1740,8 +1652,8 @@
    "from": 150.0,
    "id": "ew4/1",
    "junctions": [
-    "j13",
-    "j19"
+    "j9",
+    "j15"
    ],
    "road": "ew4",
    "to": 300.0
@@ -1750,18 +1662,22 @@
    "from": 300.0,
    "id": "ew4/2",
    "junctions": [
-    "j19",
-    "j23"
+    "j15",
+    "j19"
    ],
    "road": "ew4",
    "to": 450.0
   },
   {
+   "carries_on": [
+    null,
+    "ns4/3"
+   ],
    "from": 450.0,
    "id": "ew4/3",
    "junctions": [
-    "j23",
-    "j3"
+    "j19",
+    null
    ],
    "road": "ew4",
    "to": 600.0

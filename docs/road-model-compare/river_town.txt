@@ -2,14 +2,14 @@ THE ROAD MODEL OF river_town AGAINST THE OLD FORMS
 
 How "the same junction" is decided: another form's junction within 12 m of the model junction's centre or of one of its arms' points (where the arm meets it). How a street is compared: the nav link along its middle (within 3 m, heading within 25 degrees).
 
-JUNCTIONS. The model holds 151 (15 of them two arms: a street carrying on, which no other form calls a junction).
+JUNCTIONS. The model holds 144 (0 of them two arms: a street carrying on, which no other form calls a junction).
 
 1. Against the nav graph's junction nodes (nodes where three or more roads meet, after its own knot merging):
-  model 151, nav 197: 113 matched one to one; 11 only in the model; 13 only in the nav; 0 of the nav's hold two model junctions or more as one; 27 model junctions the nav splits into two or more
-  of those only in the model, 11 are two-arm junctions; the rest:
+  model 144, nav 197: 120 matched one to one; 0 only in the model; 17 only in the nav; 0 of the nav's hold two model junctions or more as one; 24 model junctions the nav splits into two or more
+  of those only in the model, 0 are two-arm junctions; the rest:
   only in the nav, at streets (1):
     nav node 57 at (-135.7, 92.1), 6 links, knot spread 0.0 m
-  only in the nav, at freeway or ramp gores (12; the model holds a ramp's anchored end as a ramp, not a junction):
+  only in the nav, at freeway or ramp gores (16; the model holds a ramp's anchored end as a ramp, not a junction):
     nav node 634 at (-634.2, 264.3), 3 links
     nav node 656 at (-34.3, -84.8), 3 links
     nav node 669 at (-377.1, 16.0), 3 links
@@ -18,61 +18,70 @@ JUNCTIONS. The model holds 151 (15 of them two arms: a street carrying on, which
     nav node 780 at (56.1, 1279.5), 3 links
     nav node 788 at (387.9, 1151.3), 3 links
     nav node 790 at (432.7, 1120.8), 3 links
-    ... and 4 more
+    ... and 8 more
   nav nodes that hold two model junctions or more as one (the nav's knots):
   model junctions the nav splits into several nodes:
     j14 at (-534.0, 628.2): 4 nav junction nodes, 89.3 m apart at most
-    j0 at (-306.2, 211.5): 5 nav junction nodes, 88.6 m apart at most
-    j34 at (-417.8, 916.6): 4 nav junction nodes, 77.4 m apart at most
-    j126 at (526.6, 670.3): 3 nav junction nodes, 60.3 m apart at most
-    j18 at (-490.2, 796.0): 4 nav junction nodes, 57.8 m apart at most
-    j11 at (-521.8, 497.1): 3 nav junction nodes, 54.6 m apart at most
-    j113 at (491.7, 417.6): 5 nav junction nodes, 54.3 m apart at most
-    j85 at (401.8, 287.3): 3 nav junction nodes, 46.7 m apart at most
-    ... and 19 more
+    j0 at (-296.2, 205.1): 5 nav junction nodes, 88.6 m apart at most
+    j119 at (491.6, 418.4): 5 nav junction nodes, 54.3 m apart at most
+    j35 at (-408.1, 925.7): 3 nav junction nodes, 50.0 m apart at most
+    j135 at (-437.3, 345.6): 3 nav junction nodes, 46.4 m apart at most
+    j23 at (-145.8, 100.6): 3 nav junction nodes, 41.2 m apart at most
+    j19 at (-517.2, 721.2): 2 nav junction nodes, 37.8 m apart at most
+    j8 at (-264.8, 492.9): 2 nav junction nodes, 30.9 m apart at most
+    ... and 16 more
 
 2. Against the paint's junction boxes (a box along each street; boxes whose middles lie within 24 m of each other are one painted junction here):
-  model 151, paint 146: 123 matched one to one; 17 only in the model; 0 only in the paint; 0 of the paint's hold two model junctions or more as one; 11 model junctions the paint splits into two or more
+  model 144, paint 146: 138 matched one to one; 3 only in the model; 1 only in the paint; 0 of the paint's hold two model junctions or more as one; 3 model junctions the paint splits into two or more
   model junctions of three arms or more with no box (3):
-    j54 at (35.1, 337.9), 3 arms
-    j71 at (105.4, 432.1), 3 arms
-    j122 at (272.0, 978.2), 3 arms
-  boxes no model junction holds (0):
+    j56 at (35.1, 337.9), 3 arms
+    j75 at (105.4, 432.1), 3 arms
+    j120 at (442.8, 299.8), 3 arms
+  boxes no model junction holds (2):
+    box on s344, stations 65.7 to 76.0, at (-509.3, 199.0)
+    box on s325, stations 141.5 to 148.7, at (-503.2, 197.4)
   boxes holding two model junctions or more (0):
 
 3. Against the lane graph's junctions (built from the paint's boxes, its carry-ons and its nodes):
-  model 151, lane graph 162: 128 matched one to one; 8 only in the model; 1 only in the lane graph; 0 of the lane graph's hold two model junctions or more as one; 15 model junctions the lane graph splits into two or more
-  only in the lane graph, by what it was made from: 1 box
-    lane graph junction 40 (box) at (-424.4, 904.5), roads s59, s61, s62, s63, s64, s65, s296, s297
-  model junctions of three arms or more with no lane graph junction (0):
+  model 144, lane graph 162: 131 matched one to one; 2 only in the model; 7 only in the lane graph; 0 of the lane graph's hold two model junctions or more as one; 11 model junctions the lane graph splits into two or more
+  only in the lane graph, by what it was made from: 3 box, 4 carry-on
+    lane graph junction 156 (box) at (-506.0, 203.6), roads s325, s344
+    lane graph junction 158 (carry-on) at (24.8, 1281.0), roads fw0_a, fw1_a
+    lane graph junction 159 (carry-on) at (5.2, -85.2), roads fw0_a, fw1_a
+    lane graph junction 160 (carry-on) at (4.7, -61.2), roads fw0_b, fw1_b
+    lane graph junction 161 (carry-on) at (24.5, 1257.0), roads fw0_b, fw1_b
+    lane graph junction 145 (box) at (565.1, 394.3), roads s277, s337
+    lane graph junction 157 (box) at (539.8, 289.2), roads s346, s347
+  model junctions of three arms or more with no lane graph junction (2):
+    j37 at (-447.0, 889.2), 4 arms
+    j120 at (442.8, 299.8), 3 arms
   lane graph junctions that hold two model junctions or more as one:
   model junctions the lane graph splits into several:
-    j0 at (-306.2, 211.5): 3 lane graph junctions
-    j7 at (-394.0, 475.2): 3 lane graph junctions
-    j126 at (526.6, 670.3): 3 lane graph junctions
+    j0 at (-296.2, 205.1): 3 lane graph junctions
+    j7 at (-387.2, 477.7): 3 lane graph junctions
     j6 at (-240.9, 378.5): 2 lane graph junctions
-    j11 at (-521.8, 497.1): 2 lane graph junctions
     j14 at (-534.0, 628.2): 2 lane graph junctions
-    j18 at (-490.2, 796.0): 2 lane graph junctions
     j19 at (-517.2, 721.2): 2 lane graph junctions
-    ... and 7 more
+    j35 at (-408.1, 925.7): 2 lane graph junctions
+    j40 at (71.7, 58.3): 2 lane graph junctions
+    j86 at (-96.0, 1122.1): 2 lane graph junctions
+    ... and 3 more
 
-STREETS. 315 of the model's streets that cars drive compared with the nav link along their middle.
-  no nav link along it: 1
-    s248_1 (local, 40 m) at (290.5, 985.9)
+STREETS. 325 of the model's streets that cars drive compared with the nav link along their middle.
+  no nav link along it: 0
   lanes each way differ: 0
   one-way differs: 0
   class differs: 0
-  length differs (the nav's chain of links between its junction nodes against the street, by more than 5 m and 10%): 22
-    fw0_a at (-668.1, 589.5): model 2218 m from j138 to j139, nav chain 1469 m
-    fw1_a at (708.4, 610.1): model 2144 m from j139 to j138, nav chain 1414 m
-    s344 at (-529.9, 224.6): model 76 m from j135 to j136, nav chain 225 m
-    s347 at (562.5, 275.1): model 53 m from (none) to j137, nav chain 151 m
-    s277 at (540.5, 409.2): model 77 m from j113 to j129, nav chain 169 m
-    s337 at (532.5, 400.4): model 87 m from j113 to j129, nav chain 169 m
-    s325 at (-451.6, 245.9): model 149 m from j4 to j136, nav chain 225 m
-    fw3_a at (-431.6, -37.8): model 320 m from j146 to j147, nav chain 248 m
-    ... and 14 more
+  length differs (the nav's chain of links between its junction nodes against the street, by more than 5 m and 10%): 23
+    fw0_a at (-668.1, 589.5): model 2218 m from (none) to (none), nav chain 1469 m
+    fw1_a at (708.4, 610.1): model 2144 m from (none) to (none), nav chain 1414 m
+    s344 at (-529.9, 224.6): model 76 m from j141 to (none), nav chain 225 m
+    s287 at (-417.6, 470.4): model 10 m from j7 to (none), nav chain 124 m
+    s347 at (562.5, 275.1): model 53 m from (none) to (none), nav chain 151 m
+    s277 at (540.5, 409.2): model 77 m from j119 to (none), nav chain 169 m
+    s337 at (532.5, 400.4): model 87 m from j119 to (none), nav chain 169 m
+    s325 at (-451.6, 245.9): model 149 m from j4 to (none), nav chain 225 m
+    ... and 15 more
 
 THE LANE MATCH (the city sim's: which nav links the builder's lanes were found under): 1874 drivable links, 1798 matched, 6 with another lane count, 70 where a lane starts or ends along the link, 0 with no lane found
   model streets whose nav link was not matched: 8
@@ -109,21 +118,23 @@ LANES. 1438 of the model's lanes on roads cars drive: 1234 made into lane-graph 
     ... and 196 more
   lane-graph sections whose lanes of one road, offside to kerb, are not in the model's slot order: 0
   lane-graph sections holding lanes of two roads or more side by side (a ramp's lane of its own beside its host): 16
-  (of the lanes made into no lane path: a lane on a road lying wholly inside a junction is on no street in the model either: 204 of them)
+  (of the lanes made into no lane path: a lane on a road lying wholly inside a junction is on no street in the model either: 188 of them)
 
 WHERE THE OLD FORMS DISAGREE WITH EACH OTHER (the evidence). At the model's junctions of three arms or more, which forms have a junction there:
-  nav yes, paint no, lane graph yes        3
-  nav yes, paint yes, lane graph yes       133
-  junctions where the nav, the paint and the lane graph do not all say the same (one has it and another not, or one knots it with a neighbour and another does not, or they split it differently): 22
-    j85 at (401.8, 287.3), 8 arms: nav yes, paint yes, lane graph yes; nav nodes 3, lane graph junctions 1
-    j0 at (-306.2, 211.5), 7 arms: nav yes, paint yes, lane graph yes; nav nodes 5, lane graph junctions 3
+  nav yes, paint no, lane graph no         1
+  nav yes, paint no, lane graph yes        2
+  nav yes, paint yes, lane graph no        1
+  nav yes, paint yes, lane graph yes       140
+  junctions where the nav, the paint and the lane graph do not all say the same (one has it and another not, or one knots it with a neighbour and another does not, or they split it differently): 23
+    j0 at (-296.2, 205.1), 7 arms: nav yes, paint yes, lane graph yes; nav nodes 5, lane graph junctions 3
+    j90 at (400.4, 284.2), 7 arms: nav yes, paint yes, lane graph yes; nav nodes 2, lane graph junctions 1
     j8 at (-264.8, 492.9), 6 arms: nav yes, paint yes, lane graph yes; nav nodes 2, lane graph junctions 1
-    j11 at (-521.8, 497.1), 6 arms: nav yes, paint yes, lane graph yes; nav nodes 3, lane graph junctions 2
     j14 at (-534.0, 628.2), 6 arms: nav yes, paint yes, lane graph yes; nav nodes 4, lane graph junctions 2
-    j34 at (-417.8, 916.6), 6 arms: nav yes, paint yes, lane graph yes; nav nodes 4, lane graph junctions 1
-    j113 at (491.7, 417.6), 6 arms: nav yes, paint yes, lane graph yes; nav nodes 5, lane graph junctions 1
-    j130 at (-437.3, 345.6), 6 arms: nav yes, paint yes, lane graph yes; nav nodes 3, lane graph junctions 2
-    ... and 14 more
+    j35 at (-408.1, 925.7), 6 arms: nav yes, paint yes, lane graph yes; nav nodes 3, lane graph junctions 2
+    j119 at (491.6, 418.4), 6 arms: nav yes, paint yes, lane graph yes; nav nodes 5, lane graph junctions 1
+    j135 at (-437.3, 345.6), 6 arms: nav yes, paint yes, lane graph yes; nav nodes 3, lane graph junctions 2
+    j23 at (-145.8, 100.6), 5 arms: nav yes, paint yes, lane graph yes; nav nodes 3, lane graph junctions 1
+    ... and 15 more
   streets where the nav's lanes along it and the lane graph's section there differ: 0
 
 WHAT THE MODEL DOES NOT STATE YET (left empty):
@@ -139,16 +150,16 @@ WHAT THE MODEL DOES NOT STATE YET (left empty):
   - blocks and their uses: the city plan has them, the road file does not carry them
   - signal groups: nothing states them (each driving model works its own out)
 
-WHERE THE BUILD DOES NOT MATCH WHAT WAS STATED (the model's own problems): 31
+WHERE THE BUILD DOES NOT MATCH WHAT WAS STATED (the model's own problems): 22
     junction j6: the paint found no box where its arm on s284 (station 0.0) meets it, at (-255.8, 378.7)
     junction j6: the paint found no box where its arm on s7 (station 87.5) meets it, at (-255.9, 378.7)
-    junction j7: the paint found no box where its arm on s320 (station 83.8) meets it, at (-422.3, 469.2)
-    junction j42: the paint found no box where its arm on s142 (station 87.9) meets it, at (-41.1, 449.6)
-    junction j42: the paint found no box where its arm on s139 (station 97.2) meets it, at (-41.1, 449.6)
-    junction j54: the paint found no box where its arm on s106 (station 46.5) meets it, at (35.1, 338.0)
-    junction j54: the paint found no box where its arm on s104 (station 42.3) meets it, at (35.1, 337.9)
-    junction j54: the paint found no box where its arm on s136 (station 58.7) meets it, at (35.1, 337.9)
-    ... and 23 more
+    junction j7: the paint found no box where its arm on s287 (station 0.0) meets it, at (-412.9, 471.7)
+    junction j18: the paint found no box where its arm on s29 (station 0.0) meets it, at (-490.1, 807.4)
+    junction j44: the paint found no box where its arm on s142 (station 87.9) meets it, at (-41.1, 449.6)
+    junction j44: the paint found no box where its arm on s139 (station 97.2) meets it, at (-41.1, 449.6)
+    junction j56: the paint found no box where its arm on s106 (station 46.5) meets it, at (35.1, 338.0)
+    junction j56: the paint found no box where its arm on s104 (station 42.3) meets it, at (35.1, 337.9)
+    ... and 14 more
 
 (nav graph 0.0 s, lane graph 10.9 s)
-(the road build 37.4 s, the model 0.70 s, the comparison 11.0 s)
+(the road build 38.2 s, the model 0.69 s, the comparison 11.0 s)

@@ -23,6 +23,7 @@
 #include "engine/procgen/city/roads/lanes/control_plan.h"
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"
 #include "engine/procgen/city/roads/lanes/lanes.h"
+#include "engine/procgen/city/roads/lanes/road_layout.h"   // the streets: where one only carries on
 
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -204,11 +205,12 @@ LaneGraphOptions testVehicles() {
     return o;
 }
 
-// The small graph with its plan written in.
+// The small graph with its plan written in, and its layout (the streets, which say where one only carries on).
 nlohmann::json plannedGraph(ControlPlan* planOut = nullptr) {
     nlohmann::json g = smallGraph();
     const ControlPlan plan = planControls(RoadLabGraph::fromJson(g), testPolicy());
     writeControlPlan(g, plan);
+    writeLayout(g, deriveLayout(RoadLabGraph::fromJson(g), LayoutSource::Inferred));
     if (planOut) *planOut = plan;
     return g;
 }
@@ -253,9 +255,12 @@ TEST_CASE(control_plan_2_a_planned_road_graph_is_carried_through) {
     const nlohmann::json g = plannedGraph(&plan);
     std::printf("    %s", describeControlPlan(plan).c_str());
     CHECK(plan.problems.empty());
-    // The plan as written: three junctions; the crossing and the T stop the local street; the bend has nothing.
-    CHECK(g["junctions"].size() == 3u);
-    CHECK(g["junctions"][0]["control"] == "stop" && g["junctions"][1]["control"] == "stop" && g["junctions"][2]["control"] == "unmarked");
+    // The plan as written: two junctions, the crossing and the T, each stopping the local street. The bend is no junction
+    // (ADR-0419: a street carrying on, as the layout's streets say); the builder's own junction there takes the plan's
+    // carry-on control, the policy's for a place of two arms: nothing.
+    CHECK(g["junctions"].size() == 2u);
+    CHECK(g["junctions"][0]["control"] == "stop" && g["junctions"][1]["control"] == "stop");
+    CHECK(plan.carryOns == 1u && g.value("carry_on_control", std::string()) == "unmarked");
     // The one-way street's arm has nothing arriving, so no sign is planned on it; the local streets' arms carry "stop".
     for (const nlohmann::json& a : g["junctions"][1]["arms"]) {
         const bool signed_ = a.contains("regulations");
@@ -278,13 +283,18 @@ TEST_CASE(control_plan_2_a_planned_road_graph_is_carried_through) {
     CHECK(lg.controlPlan.declared);
     CHECK(lg.controlPlan.notPlanned == 0 && lg.controlPlan.conflicts == 0 && lg.controlPlan.lanesOffPlan == 0 &&
           lg.controlPlan.signsWithNoLane == 0);
+    CHECK(lg.controlPlan.carryOns == 1u);   // the builder's own junction at the bend: the plan's carry-on control
     CHECK(G.junctions.size() >= 2u);
-    // Each built junction carries its planned junction's control; the stop signs stand where the local streets arrive.
+    // Each built junction carries its planned junction's control (the bend's, the carry-on control); the stop signs stand
+    // where the local streets arrive.
     uint32_t stopsSeen = 0;
     for (uint32_t j = 0; j < G.junctions.size(); ++j) {
         const Junction& jn = G.junctions[j];
+        if (lg.plannedOf[j].empty()) {
+            CHECK(G.controlNames[jn.control] == road.carryOnControl);
+            continue;
+        }
         CHECK(lg.plannedOf[j].size() == 1u);
-        if (lg.plannedOf[j].empty()) continue;
         const PlannedJunction& pj = road.junctions[lg.plannedOf[j][0]];
         CHECK(G.controlNames[jn.control] == pj.control);
         for (uint32_t k = jn.arriving.first; k < jn.arriving.end(); ++k) {
@@ -318,8 +328,12 @@ TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_report
         for (const nlohmann::json& j : g["junctions"])
             if (j["id"] != "j1") kept.push_back(j);
         g["junctions"] = kept;
+        for (nlohmann::json& st : g["streets"])   // (the streets that ended at it end at no junction now)
+            for (nlohmann::json& end : st["junctions"])
+                if (end == "j1") end = nullptr;
         const LaneGraphBuild lg = laneGraphFrom(g);
         CHECK(lg.controlPlan.notPlanned == 1u);
+        CHECK(lg.controlPlan.carryOns == 1u);   // the bend: the plan's carry-on control, not reported
         CHECK(hasProblem(lg, "no planned junction names it; it is left \"not_planned\""));
         uint32_t unplanned = 0;
         for (const Junction& jn : lg.graph.junctions) unplanned += lg.graph.controlNames[jn.control] == kControlNotPlanned ? 1 : 0;
@@ -344,6 +358,8 @@ TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_report
         for (const nlohmann::json& a : g["junctions"][0]["arms"]) (a["road"] == "l0" ? moveArms : keepArms).push_back(a);
         g["junctions"][0]["arms"] = keepArms;
         split["arms"] = moveArms;
+        g["junctions"][0].erase("through");   // (the layout's pairs of arms no longer fit the arms moved)
+        split.erase("through");
         g["junctions"].push_back(split);
         const LaneGraphBuild lg = laneGraphFrom(g);
         CHECK(lg.controlPlan.conflicts == 1u);
@@ -373,7 +389,7 @@ TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_report
         bool kept = false;
         for (const nlohmann::json& j : g2["junctions"]) kept = kept || (j["id"] == "j1" && j["control"] == "signal" && j.value("hand", false));
         CHECK(kept);
-        CHECK(g2["junctions"].size() == 3u);
+        CHECK(g2["junctions"].size() == 2u);
     }
 }
 

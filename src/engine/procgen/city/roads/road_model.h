@@ -111,6 +111,9 @@ struct ModelStreet {
     uint32_t edge = kNoIndex;        // the road-file edge's index
     Real from = 0, to = 0;           // stations along the road's spine
     std::array<ModelJunctionId, 2> junctions;   // at `from`, at `to` (none: a dead end, or a ramp's anchored end)
+    // at `from`, at `to`: the street this one carries on into where no junction is (one road running on as another, or a
+    // bend: ADR-0419); none: a junction, a dead end or a ramp's anchored end
+    std::array<ModelStreetId, 2> carriesOn;
     ModelSection section;
     bool oneWay = false;
     Real speedLimit = 0;             // metres per second; 0: none posted
@@ -237,9 +240,9 @@ std::string roadModelSvg(const RoadModel& m);      // junctions and streets with
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 2;    // 2: a street's kerb parking (ADR-0418)
+constexpr uint32_t kRoadModelFormat = 3;    // 2: a street's kerb parking (ADR-0418); 3: where a street carries on (ADR-0419)
 // The version of what assembleRoadModel makes: bump when it can make a different model from the same build.
-constexpr uint32_t kRoadModelVersion = 2;   // 2: a street's kerb parking (ADR-0418)
+constexpr uint32_t kRoadModelVersion = 3;   // 2: a street's kerb parking (ADR-0418); 3: carrying on, no two-arm junctions (ADR-0419)
 void putRoadModel(bundle::BinWriter& w, const RoadModel& m);
 bool getRoadModel(bundle::BinReader& r, RoadModel& m, std::string* err);
 

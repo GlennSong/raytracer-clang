@@ -309,6 +309,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         R.step = num(r, "step", R.step); R.sameLevelDz = num(r, "same_level_dz", R.sameLevelDz); R.blendLen = num(r, "blend_len", R.blendLen); R.closing = num(r, "closing", R.closing);
         R.bridgeH = num(r, "bridge_h", R.bridgeH); R.pierSpacing = num(r, "pier_spacing", R.pierSpacing); R.slope = num(r, "slope", R.slope); R.conformW = num(r, "conform_w", R.conformW); R.underClearance = num(r, "under_clearance", R.underClearance); R.structureDepth = num(r, "structure_depth", R.structureDepth);
         R.rampLevelDz = num(r, "ramp_level_dz", R.rampLevelDz);
+        R.storage = num(r, "storage", R.storage);
         if (r.contains("freeway_separates") && r["freeway_separates"].is_boolean()) R.freewaySeparates = r["freeway_separates"].get<bool>();
         R.skirt = num(r, "skirt", R.skirt); R.skirtDrop = num(r, "skirt_drop", R.skirtDrop); R.endpointTol = num(r, "endpoint_tol", R.endpointTol);
     }
@@ -464,7 +465,31 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                     if (!st.junctions[k].empty() && !junctionIds.count(st.junctions[k]))
                         throw std::runtime_error("street " + st.id + ": names unknown junction " + st.junctions[k]);
                 }
+            if (sj.contains("carries_on"))
+                for (std::size_t k = 0; k < 2 && k < sj["carries_on"].size(); ++k) {
+                    const nlohmann::json& v = sj["carries_on"][k];
+                    st.carriesOn[k] = v.is_string() ? v.get<std::string>() : std::string();
+                }
             g.streets.push_back(st);
+        }
+        std::set<std::string> streetIds;
+        for (const PlannedStreet& st : g.streets) streetIds.insert(st.id);
+        for (const PlannedStreet& st : g.streets)
+            for (const std::string& c : st.carriesOn)
+                if (!c.empty() && !streetIds.count(c)) throw std::runtime_error("street " + st.id + ": carries on into unknown street " + c);
+    }
+    if (spec.contains("carry_on_control")) g.carryOnControl = spec["carry_on_control"].get<std::string>();
+    if (spec.contains("divided")) {
+        // THE DIVIDED ROADS (DividedPair): two roads that exist, each in one pair at most
+        g.listsDivided = true;
+        std::set<std::string> paired;
+        for (const nlohmann::json& pj : spec["divided"]) {
+            const DividedPair p{pj.at(0).get<std::string>(), pj.at(1).get<std::string>()};
+            for (const std::string& r : p) {
+                if (!g.index.count(r)) throw std::runtime_error("divided: names unknown road " + r);
+                if (!paired.insert(r).second) throw std::runtime_error("divided: road " + r + " is in two pairs");
+            }
+            g.divided.push_back(p);
         }
     }
     if (g.edges.empty()) throw std::runtime_error("graph has no edges");

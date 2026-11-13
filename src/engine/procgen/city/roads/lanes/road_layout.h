@@ -57,16 +57,24 @@ constexpr double kShortestStreet = 0.5;
 struct RoadLayout {
     std::vector<PlannedJunction> junctions;   // in id order
     std::vector<PlannedStreet> streets;       // in road order, then along each road
+    std::vector<DividedPair> divided;         // the divided roads' carriageway pairs (the graph's own list, or found)
     bool keptList = false;                    // the junctions are the graph's own list, as it stated them
     std::vector<std::string> notes;           // what could not be settled, in words (an arm with no street, ...)
 };
 
+// THE DIVIDED ROADS OF A FILE THAT STATES NONE (ADR-0419), from what it does state: two roads whose ids are one name with
+// "_in" and "_out" (the planner's own naming of a boulevard pair, plan_scene.cpp), of one class, each one-way. A road
+// whose id ends so but has no such partner is named in `unpaired`, with why.
+std::vector<DividedPair> dividedFromIds(const RoadLabGraph& g, std::vector<std::string>* unpaired = nullptr);
+
 // THE LAYOUT OF A ROAD GRAPH (see the top of this file). `g` needs its spines resolved (fromJson), not its heights.
 RoadLayout deriveLayout(const RoadLabGraph& g, LayoutSource source);
 // The junctions deriveLayout finds when the graph lists none (control_plan.h findJunctions, with the source's end
-// tolerance and the graph's at-grade crossings), with their facts and nodes.
+// tolerance, the graph's at-grade crossings and its divided roads -- found from its ids when it states none and the
+// source is Inferred), with their facts and nodes; `carryOns` (optional, out): where a street only carries on.
 struct JunctionFacts;
-std::vector<JunctionFacts> layoutJunctionFacts(const RoadLabGraph& g, LayoutSource source);
+struct CarryOn;
+std::vector<JunctionFacts> layoutJunctionFacts(const RoadLabGraph& g, LayoutSource source, std::vector<CarryOn>* carryOns = nullptr);
 // In words: counts by number of arms, streets, dead ends, the notes.
 std::string describeLayout(const RoadLayout& layout);
 

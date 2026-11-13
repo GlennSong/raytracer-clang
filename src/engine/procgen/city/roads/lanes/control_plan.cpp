@@ -1,6 +1,6 @@
 #include "engine/procgen/city/roads/lanes/control_plan.h"
 
-#include "engine/procgen/city/roads/lanes/deck_mesh.h"            // kStopLineBack, kJunctionMergeGap: the builder's figures
+#include "engine/procgen/city/roads/lanes/deck_mesh.h"            // kStopLineBack: where the paint's stop lines stand
 #include "engine/procgen/city/roads/lanes/lane_expand.h"          // expand: ramps composed as the builder composes them
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"     // kRampEndReach: how far a ramp runs on inside a street
 #include "engine/procgen/city/roads/lanes/lane_graph_connect.h"   // kStraightOnDegrees: the one "straight on"
@@ -24,8 +24,6 @@ namespace {
 // Stations and points are written to the road graph to the centimetre, so the file reads cleanly and a re-plan of the
 // same roads writes the same bytes.
 constexpr double kWrittenPrecision = 100.0;
-// An arm needs road beyond the junction: a node this close to a road's end has nothing of it on that side (metres).
-constexpr double kArmReachesPast = 0.5;
 
 std::string fmt(const char* f, ...) {
     char buf[1024];
@@ -60,6 +58,7 @@ struct Node {
     std::vector<NodePoint> points;
     bool rampEnd = false;
     int ramp = -1;   // the ramp whose free end it is
+    bool crossing = false;   // two roads crossing at grade (the caller's), not road ends meeting
 };
 
 int findRoot(std::vector<int>& parent, int i) {
@@ -290,21 +289,70 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
             if (!a || !b || a == b || a->isRamp() || b->isRamp() || !carsDrive(g, *a) || !carsDrive(g, *b)) continue;
             Node node;
             node.at = c.at;
+            node.crossing = true;
             node.points.push_back(NodePoint{g.index.at(c.a), project(a->xy, a->s, c.at).station});
             node.points.push_back(NodePoint{g.index.at(c.b), project(b->xy, b->s, c.at).station});
             nodes.push_back(node);
         }
 
-    // ---- nodes so close along a road that the builder makes them one junction: grouped ------------------------------
-    // How far a node's junction reaches along road `via`: the widest other road there, its stop line's setback, and half
-    // the gap the builder merges junctions across. (ADR-0418 looked at this rule against the ground and at the stated
-    // "storage" rule the owner proposed in its place; both chain junctions into corridors up to 200 m across, so the rule
-    // is left as it was until the owner chooses: see that ADR.)
-    auto reach = [&](const Node& n, int via) {
+    // ---- a node where a street only carries on (two arms) is no junction (ADR-0419) -----------------------------------
+    auto armsAt = [&](const Node& n) {
+        int arms = 0;
+        for (const NodePoint& p : n.points) {
+            const EdgeSpec& e = g.edges[static_cast<std::size_t>(p.edge)];
+            arms += (p.s > kArmReachesPast ? 1 : 0) + (p.s < e.s.back() - kArmReachesPast ? 1 : 0);
+        }
+        return arms;
+    };
+    {
+        std::vector<Node> kept;
+        for (Node& n : nodes) {
+            if (armsAt(n) >= 3) {
+                kept.push_back(std::move(n));
+                continue;
+            }
+            // (a crossing the caller names where both roads END is the place their road ends already meet: that node holds
+            // them, and a crossing of two arms is nothing more)
+            if (how.carryOns && !n.crossing && n.points.size() == 2) {
+                CarryOn c;
+                c.at = n.at;
+                for (std::size_t k = 0; k < 2; ++k) {
+                    c.roads[k] = g.edges[static_cast<std::size_t>(n.points[k].edge)].id;
+                    c.stations[k] = n.points[k].s;
+                }
+                how.carryOns->push_back(c);
+            }
+        }
+        nodes.swap(kept);
+    }
+
+    // ---- nodes with no room for a car between them, and a divided road's two carriageways: ONE junction (ADR-0419) ----
+    // (control_plan.h, above findJunctions: the rule.) Along road `via`, a node's stop line stands back from it by the
+    // widest other road there and kStopLineBack.
+    auto stopLineBack = [&](const Node& n, int via) {
         double hw = 0;
         for (const NodePoint& p : n.points)
             if (p.edge != via) hw = std::max(hw, g.hw(g.edges[static_cast<std::size_t>(p.edge)]));
-        return hw + kStopLineBack + kJunctionMergeGap / 2;
+        return hw + kStopLineBack;
+    };
+    // each carriageway of a divided road -> its partner
+    std::map<int, int> partner;
+    for (const DividedPair& p : how.divided ? *how.divided : g.divided) {
+        const EdgeSpec* a = g.find(p[0]);
+        const EdgeSpec* b = g.find(p[1]);
+        if (!a || !b) continue;
+        partner[g.index.at(p[0])] = g.index.at(p[1]);
+        partner[g.index.at(p[1])] = g.index.at(p[0]);
+    }
+    // the two nodes hold the two carriageways of one divided road, neither of them the road they lie along
+    auto carriagewaysMeet = [&](const Node& a, const Node& b, int via) {
+        for (const NodePoint& p : a.points) {
+            const std::map<int, int>::const_iterator it = partner.find(p.edge);
+            if (p.edge == via || it == partner.end() || it->second == via) continue;
+            for (const NodePoint& q : b.points)
+                if (q.edge == it->second) return true;
+        }
+        return false;
     };
     std::vector<int> parent(nodes.size());
     std::iota(parent.begin(), parent.end(), 0);
@@ -316,9 +364,10 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
         for (std::size_t k = 0; k + 1 < kv.second.size(); ++k) {
             const int a = kv.second[k].second, b = kv.second[k + 1].second;
             if (a == b) continue;
-            const double gap = kv.second[k + 1].first - kv.second[k].first;
-            if (gap < reach(nodes[static_cast<std::size_t>(a)], kv.first) + reach(nodes[static_cast<std::size_t>(b)], kv.first))
-                unite(parent, a, b);
+            const Node& na = nodes[static_cast<std::size_t>(a)];
+            const Node& nb = nodes[static_cast<std::size_t>(b)];
+            const double between = kv.second[k + 1].first - kv.second[k].first - stopLineBack(na, kv.first) - stopLineBack(nb, kv.first);
+            if (between < g.rules.storage || carriagewaysMeet(na, nb, kv.first) || carriagewaysMeet(nb, na, kv.first)) unite(parent, a, b);
         }
     }
 
@@ -380,7 +429,44 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
 
 ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy) {
     ControlPlan plan;
-    std::vector<JunctionFacts> all = findJunctions(g, policy);
+    std::vector<CarryOn> carryOns;
+    JunctionFinding how;
+    how.carryOns = &carryOns;
+    std::vector<JunctionFacts> all = findJunctions(g, policy, how);
+    // the places where a street only carries on: what the policy gives a place of two arms, the same everywhere
+    plan.carryOns = static_cast<uint32_t>(carryOns.size());
+    {
+        RoadLabGraph ge = g;
+        expand(ge);   // (the ramps' spines composed, as findJunctions composes them)
+        std::set<std::string> controls;
+        for (const CarryOn& c : carryOns) {
+            JunctionFacts j;
+            j.id = "carry-on";
+            j.at = c.at;
+            for (std::size_t k = 0; k < 2; ++k) {
+                const EdgeSpec* e = ge.find(c.roads[k]);
+                if (!e || e->xy.size() < 2) continue;
+                ArmFacts a;
+                a.road = e->id;
+                a.roadClass = e->cls;
+                a.at = c.stations[k];
+                a.spineIn = c.stations[k] > kArmReachesPast;   // the road ends here: its spine runs in
+                const Vec2 t = tangentAtStation(e->xy, e->s, a.at);
+                a.heading = a.spineIn ? t : t * -1.0;
+                a.arriving = a.spineIn ? e->lanes.fwd : e->lanes.back;
+                a.leaving = a.spineIn ? e->lanes.back : e->lanes.fwd;
+                a.limit = e->speedLimitHand ? e->speedLimit : policy.postedLimit(e->cls);
+                j.arms.push_back(a);
+            }
+            settleRoles(j, policy);
+            const ControlChoice choice = chooseControl(j, policy, {});
+            if (choice.row >= 0) controls.insert(choice.control);
+        }
+        if (controls.size() == 1) plan.carryOnControl = *controls.begin();
+        else if (controls.size() > 1)
+            plan.problems.push_back(fmt("the places where a street only carries on are given %zu different controls by the policy; none is "
+                                        "written", controls.size()));
+    }
     // hand-written junctions are kept; a planned junction sharing an arm's road end with one is left to it
     std::set<std::pair<std::string, bool>> handArms;
     std::vector<Decided> before;
@@ -497,6 +583,8 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan) {
         list.push_back(j);
     }
     scene["junctions"] = list;
+    if (!plan.carryOnControl.empty()) scene["carry_on_control"] = plan.carryOnControl;
+    else scene.erase("carry_on_control");
     std::map<std::string, double> limitOf(plan.limits.begin(), plan.limits.end());
     for (nlohmann::json& e : scene["edges"]) {
         const std::map<std::string, double>::const_iterator it = limitOf.find(e.at("id").get<std::string>());
@@ -513,6 +601,8 @@ std::string describeControlPlan(const ControlPlan& plan) {
     out += "\n  by the policy's rows:";
     for (std::size_t i = 0; i < plan.byRow.size(); ++i)
         out += fmt("%s %u \"%s\"", i ? "," : "", plan.byRow[i].second, plan.byRow[i].first.c_str());
+    out += fmt("\n  places where a street only carries on (no junction): %u; the control the builder's own junction there takes: %s",
+               plan.carryOns, plan.carryOnControl.empty() ? "none stated" : plan.carryOnControl.c_str());
     out += "\n  regulations stood where approaches arrive:";
     if (plan.signs.empty()) out += " none";
     for (std::size_t i = 0; i < plan.signs.size(); ++i)

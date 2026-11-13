@@ -135,6 +135,16 @@ RoadModel assembleRoadModel(const Result& r) {
         S.frontageOf = e.frontageOf;
         m.streets.push_back(std::move(S));
     }
+    // where a street only carries on into another (no junction there: ADR-0419), as the road file states it
+    {
+        std::map<std::string, uint32_t> streetIndex;
+        for (std::size_t i = 0; i < m.streets.size(); ++i) streetIndex[m.streets[i].id] = static_cast<uint32_t>(i);
+        for (std::size_t i = 0; i < g.streets.size() && i < m.streets.size(); ++i)
+            for (std::size_t k = 0; k < 2; ++k) {
+                const std::map<std::string, uint32_t>::const_iterator it = streetIndex.find(g.streets[i].carriesOn[k]);
+                if (it != streetIndex.end()) m.streets[i].carriesOn[k] = ModelStreetId(it->second);
+            }
+    }
 
     // ---- lanes, as the builder laid them: their curves, heights, slots, streets and end junctions ----------------------
     for (std::size_t li = 0; li < r.lanes.lanes.size(); ++li) {
@@ -306,7 +316,22 @@ RoadModel assembleRoadModel(const Result& r) {
             const EdgeSpec& e = g.edges[static_cast<std::size_t>(bx.first)];
             const roads::lanes::JunctionSpan& sp = bx.second[b];
             const Vec2 p = roads::lanes::pointAt(e.xy, e.s, 0.5 * (sp.s0 + sp.s1));
-            if (h == boxHeldBy.end())
+            // where the road file states that a street only carries on (ADR-0419): the paint still draws a box at a bend or
+            // where one road runs on as another, by its own rule, until the builder paints the stated junctions (step 9)
+            std::string carriesOn;
+            for (const ModelStreet& S : m.streets) {
+                if (S.edge != static_cast<uint32_t>(bx.first)) continue;
+                for (std::size_t k = 0; k < 2; ++k) {
+                    const Real end = k == 0 ? S.from : S.to;
+                    if (S.carriesOn[k].valid() && end >= sp.s0 - 1.0 && end <= sp.s1 + 1.0)
+                        carriesOn = S.id + " carries on into " + m.streets[S.carriesOn[k].index].id;
+                }
+            }
+            if (h == boxHeldBy.end() && !carriesOn.empty())
+                m.problems.push_back(fmt("the paint draws a junction box on %s (stations %.1f to %.1f) at (%.1f, %.1f) where street %s: the road "
+                                         "file states no junction there (the paint keeps its own rule until step 9)",
+                                         e.id.c_str(), sp.s0, sp.s1, p.x, p.y, carriesOn.c_str()));
+            else if (h == boxHeldBy.end())
                 m.problems.push_back(fmt("the paint found a junction box on %s (stations %.1f to %.1f) at (%.1f, %.1f) that no stated junction holds",
                                          e.id.c_str(), sp.s0, sp.s1, p.x, p.y));
             else if (h->second.size() > 1) {
@@ -669,8 +694,8 @@ template <class IO, class S> void fields(IO& io, S& s, ModelSection*) {
     io(s.parking); io(s.track); io(s.footway);
 }
 template <class IO, class S> void fields(IO& io, S& s, ModelStreet*) {
-    io(s.id); io(s.road); io(s.edge); io(s.from); io(s.to); io(s.junctions); io(s.section); io(s.oneWay); io(s.speedLimit); io(s.lotsFrom);
-    io(s.lotsTo); io(s.frontageOf); io(s.lanes);
+    io(s.id); io(s.road); io(s.edge); io(s.from); io(s.to); io(s.junctions); io(s.carriesOn); io(s.section); io(s.oneWay); io(s.speedLimit);
+    io(s.lotsFrom); io(s.lotsTo); io(s.frontageOf); io(s.lanes);
 }
 template <class IO, class S> void fields(IO& io, S& s, ModelLaneSpan*) { io(s.street); io(s.from); io(s.to); }
 template <class IO, class L> void fields(IO& io, L& l, ModelLane*) {

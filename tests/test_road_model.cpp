@@ -21,6 +21,8 @@
 
 #include "engine/bundle/bake.h"
 #include "engine/procgen/city/plan/plan_scene.h"
+#include "engine/procgen/city/roads/lanes/control_plan.h"     // findJunctions: the one grouping
+#include "engine/procgen/city/roads/lanes/deck_mesh.h"        // kStopLineBack
 #include "engine/procgen/city/roads/lanes/lane_graph_cache.h"   // levelRoadsKey: the city's bake key
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"
@@ -270,10 +272,16 @@ TEST_CASE(road_model_3_lanes_carry_their_streets_and_the_model_holds_what_is_sta
         CHECK(a.spineIn ? a.stopLine < a.boxEdge : a.stopLine > a.boxEdge);
     }
     CHECK(J.through.size() == 2u);   // the arterial and the local street both carry on through
-    // the bend at (0, 150) is a junction of two arms, one street carrying on into the other
+    // the bend at (0, 150) is NO junction (ADR-0419): the street l1 carries on into l3 there, and each says so
     int twoArm = 0;
     for (const ModelJunction& j : m.junctions) twoArm += j.arms.size() == 2 ? 1 : 0;
-    CHECK(twoArm == 1);
+    CHECK(twoArm == 0);
+    const ModelStreetId l1 = streetNamed(m, "l1"), l3 = streetNamed(m, "l3");
+    CHECK(l1.valid() && l3.valid());
+    if (l1.valid() && l3.valid()) {
+        CHECK(m.streets[l1.index].carriesOn[1] == l3 && !m.streets[l1.index].junctions[1].valid());
+        CHECK(m.streets[l3.index].carriesOn[0] == l1 && !m.streets[l3.index].junctions[0].valid());
+    }
     // what is not stated is listed, and nothing is filled in: no control, no turn paths
     bool turns = false, controls = false;
     for (const std::string& s : m.notStated) {
@@ -282,7 +290,9 @@ TEST_CASE(road_model_3_lanes_carry_their_streets_and_the_model_holds_what_is_sta
     }
     CHECK(turns && controls);
     for (const ModelJunction& j : m.junctions) CHECK(j.control.empty());
-    CHECK(m.problems.empty());
+    // the only problems: the paint still draws its box at the bend (both roads' ends), where the file states no junction
+    CHECK(m.problems.size() == 2u);
+    for (const std::string& p : m.problems) CHECK(p.find("carries on into") != std::string::npos);
 }
 
 TEST_CASE(road_model_3b_a_ramps_merge_is_its_stated_anchor) {
@@ -399,12 +409,14 @@ TEST_CASE(road_model_6_compared_with_the_old_forms) {
     const Built& b = smallBuilt();
     const RoadModelComparison c = compareRoadModel(b.model, *b.r);
     std::printf("%s", c.text.c_str());
-    // the crossing and the T are junctions of every form, one to one; the nav has no junction node the model has not (a
-    // bend of two arms is a junction to the model alone: a street carrying on, which the nav calls no junction)
+    // the crossing and the T are junctions of every form, one to one; the nav has no junction node the model has not (the
+    // bend is no junction to the model either since ADR-0419: a street carrying on)
     CHECK(c.nav.matched >= 2u && c.paint.matched >= 2u && c.laneGraph.matched >= 2u);
-    CHECK(c.modelTwoArm == 1u);
-    CHECK(c.nav.onlyModel <= c.modelTwoArm);
-    CHECK(c.nav.onlyOther == 0u && c.paint.onlyOther == 0u && c.laneGraph.onlyOther == 0u);
+    CHECK(c.modelTwoArm == 0u);
+    CHECK(c.nav.onlyModel == 0u);
+    CHECK(c.nav.onlyOther == 0u);
+    // the paint (and the lane graph, built from its boxes) still makes the bend a junction, by its own rule until step 9
+    CHECK(c.paint.onlyOther <= 1u && c.laneGraph.onlyOther <= 1u);
     CHECK(c.nav.otherKnots == 0u && c.nav.modelKnots == 0u);
     // every street cars drive has its nav link, with the model's lanes each way and its one-way
     CHECK(c.streetsCompared == static_cast<uint32_t>(b.model.streets.size()));
@@ -447,7 +459,7 @@ TEST_CASE(road_model_7_kerb_parking_is_the_road_file_s_statement) {
         CHECK(bands.size() == 1u && bands.count(engine::RoadClass::Local) == 1u);
         if (bands.count(engine::RoadClass::Local)) CHECK_APPROX(bands.at(engine::RoadClass::Local).second, 2.5, 1e-9);
         for (const ModelStreet& s : b.model.streets) CHECK(s.section.parking == (s.section.roadClass == "local" ? 2.5 : 0.0));
-        CHECK(b.model.problems.empty());
+        for (const std::string& p : b.model.problems) CHECK(p.find("kerb parking") == std::string::npos);
     }
     // the file says its locals do not park: no band at all
     {
@@ -477,4 +489,53 @@ TEST_CASE(road_model_7_kerb_parking_is_the_road_file_s_statement) {
         for (const std::string& p : m.problems) said += p.find("kerb parking") != std::string::npos ? 1 : 0;
         CHECK(said == 4);   // l0..l3, once each
     }
+}
+
+// ---- 8. which road ends are ONE junction (ADR-0419) ---------------------------------------------------------------------
+
+namespace {
+// An arterial west to east, cut where two streets end on it from the north, `apart` metres apart (at x = 0 and x = apart):
+// the classes' own sections (an arterial's half width 11 m, a boulevard's 5.5 m). `cls` the two streets' class; `pair`
+// states them as a divided road's two carriageways.
+nlohmann::json twoTees(double apart, const std::string& cls, bool pair) {
+    auto road = [](const std::string& id, const std::string& c, const Vec2& a, const Vec2& b) {
+        return nlohmann::json{{"id", id}, {"class", c}, {"path", {{"type", "polyline"}, {"points", {{a.x, a.y}, {b.x, b.y}}}}}};
+    };
+    nlohmann::json g;
+    g["name"] = "two_tees";
+    g["edges"] = nlohmann::json::array({road("a0", "arterial", Vec2(-200, 0), Vec2(0, 0)), road("a1", "arterial", Vec2(0, 0), Vec2(apart, 0)),
+                                        road("a2", "arterial", Vec2(apart, 0), Vec2(apart + 200, 0)),
+                                        road("t_in", cls, Vec2(0, 0), Vec2(0, 150)), road("t_out", cls, Vec2(apart, 150), Vec2(apart, 0))});
+    if (pair) g["divided"] = nlohmann::json::array({nlohmann::json::array({"t_in", "t_out"})});
+    return g;
+}
+std::size_t junctionsOf(const nlohmann::json& g) { return findJunctions(RoadLabGraph::fromJson(g), ControlPolicy()).size(); }
+}  // namespace
+
+TEST_CASE(road_model_8_one_junction_is_no_room_for_a_car_between_stop_lines) {
+    // between the two Ts' stop lines along the arterial: `apart` less (11 + 5.2) at each (the arterial is the widest other
+    // road at both); one junction when that is under the storage length (6.5 m, a car and its gap)
+    const double reach = 2.0 * (11.0 + kStopLineBack);
+    CHECK(junctionsOf(twoTees(reach + 6.0, "local", false)) == 1u);   // 6 m between: no car fits
+    CHECK(junctionsOf(twoTees(reach + 7.0, "local", false)) == 2u);   // 7 m: a car can wait
+    // the storage length is the road file's to state
+    nlohmann::json g = twoTees(reach + 7.0, "local", false);
+    g["rules"]["storage"] = 8.0;
+    CHECK(junctionsOf(g) == 1u);
+    // a divided road's two carriageways meeting one street are one junction by construction, however far apart
+    CHECK(junctionsOf(twoTees(60.0, "boulevard", false)) == 2u);
+    CHECK(junctionsOf(twoTees(60.0, "boulevard", true)) == 1u);
+    // the layout tool finds the pair from the planner's own naming when the file states none, and writes it in
+    const RoadLayout L = deriveLayout(RoadLabGraph::fromJson(twoTees(60.0, "boulevard", false)), LayoutSource::Inferred);
+    CHECK(L.divided.size() == 1u && L.junctions.size() == 1u);
+    // where a street only carries on (two road ends meeting at a bend, nothing else there) is no junction, and the two
+    // streets name each other
+    nlohmann::json bend;
+    bend["name"] = "bend";
+    bend["edges"] = nlohmann::json::array({{{"id", "p"}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{0, 0}, {100, 0}}}}}},
+                                           {{"id", "q"}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{100, 0}, {150, 80}}}}}}});
+    CHECK(junctionsOf(bend) == 0u);
+    const RoadLayout B = deriveLayout(RoadLabGraph::fromJson(bend), LayoutSource::Inferred);
+    CHECK(B.junctions.empty() && B.streets.size() == 2u);
+    if (B.streets.size() == 2u) CHECK(B.streets[0].carriesOn[1] == "q" && B.streets[1].carriesOn[0] == "p");
 }

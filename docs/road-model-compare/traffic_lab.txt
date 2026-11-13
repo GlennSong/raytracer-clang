@@ -150,5 +150,5 @@ WHERE THE BUILD DOES NOT MATCH WHAT WAS STATED (the model's own problems): 40
     junction j101: the paint found no box where its arm on s213 (station 84.0) meets it, at (363.5, 83.3)
     ... and 32 more
 
-(nav graph 0.0 s, lane graph 4.1 s)
-(the road build 12.1 s, the model 0.41 s, the comparison 4.1 s)
+(nav graph 0.0 s, lane graph 4.3 s)
+(the road build 11.9 s, the model 0.42 s, the comparison 4.4 s)

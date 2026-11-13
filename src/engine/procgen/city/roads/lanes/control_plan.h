@@ -145,14 +145,35 @@ ControlChoice chooseControl(const JunctionFacts& j, const ControlPolicy& policy,
 // road model's layout (road_layout.h) also asks for a tighter tolerance (the planner's: the ends it made from one point)
 // and for the places two roads cars drive cross AT GRADE away from any shared end, which the caller names (the graph's
 // declared crossings, or the planner's crossing policy): each is a node of both roads, at their stations there.
+//
+// An arm needs road beyond the junction: a node this close to a road's end has nothing of it on that side (metres).
+constexpr double kArmReachesPast = 0.5;
+
+// A PLACE WHERE A STREET ONLY CARRIES ON (ADR-0419): a node of two arms -- two road ends meeting with nothing else there,
+// one road running on as another, or a bend -- is no junction: no area, no stop line, never grouped with one. The caller
+// may ask for them (`carryOns`).
+struct CarryOn {
+    Vec2 at;
+    std::array<std::string, 2> roads;     // the two roads
+    std::array<double, 2> stations{};     // each one's station there (its start, 0, or its end)
+};
 struct JunctionFinding {
     double endTolerance = -1;                              // < 0: the graph's rules.endpointTol
     const std::vector<CrossingSpec>* atGrade = nullptr;    // crossings of kind "at_grade" to make nodes of (others skipped)
+    const std::vector<DividedPair>* divided = nullptr;     // the divided roads' carriageway pairs; null: the graph's own list
+    std::vector<CarryOn>* carryOns = nullptr;              // out: the places where a street only carries on
 };
 
 // THE NODES AND JUNCTIONS OF A ROAD GRAPH, with their facts (roles settled), in id order ("j0", "j1", ...: by their
 // first node, nodes in road order). Roads cars do not drive (tracks, footways, roads with no lanes) take no part. The
 // ramps' spines are composed from their anchors first, as the builder composes them, so stations agree with its.
+//
+// WHICH NODES ARE ONE JUNCTION (ADR-0419), the one rule: two nodes next to each other along a road are one junction when
+// the stretch of that road between their stop lines is shorter than the graph's storage length (Rules::storage, one car
+// and its gap): not even a car could wait between them. Along road `via` a node's stop line stands back from it by the
+// widest other road there (half its width: the area the crossing traffic needs) and kStopLineBack. And by construction:
+// where the two carriageways of a divided road (`divided`) meet the same street, their nodes, next to each other along it,
+// are one junction however far apart. Nothing else groups them.
 std::vector<JunctionFacts> findJunctions(const RoadLabGraph& g, const ControlPolicy& policy,
                                          const JunctionFinding& how = JunctionFinding());
 
@@ -166,10 +187,15 @@ struct ControlPlan {
     std::vector<std::pair<std::string, uint32_t>> byRow;       // junctions per row, in the policy's order
     std::vector<std::pair<std::string, uint32_t>> signs;       // approaches signed, per regulation kind, by name
     uint32_t handKept = 0;                                  // hand-written junctions kept as they were
+    // WHERE A STREET ONLY CARRIES ON (ADR-0419: no junction) the road builder may still lay lanes through a junction of
+    // its own until it builds the stated ones (design step 9): the control the policy gives a place of two arms there,
+    // the same at every such place (written as the graph's "carry_on_control"; empty: the graph has none)
+    std::string carryOnControl;
+    uint32_t carryOns = 0;                                  // places where a street only carries on
 };
 // Plans `g` with `policy`: every junction the graph's nodes make, decided most important first; hand-written junctions
 // (PlannedJunction::hand) kept, and any junction sharing a road end with one is left to it; every road's posted limit
-// from the policy (a road whose limit is hand-set keeps it).
+// from the policy (a road whose limit is hand-set keeps it); the places where a street only carries on, one control.
 ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy);
 // WRITES THE PLAN INTO A ROAD GRAPH'S JSON: its "junctions" list replaced, and each road's "speed_limit" set (or
 // removed where none is posted), leaving everything else as it was. `scene` must be the graph `plan` was made from.

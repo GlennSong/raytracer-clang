@@ -113,7 +113,19 @@ nlohmann::json junctionJson(const PlannedJunction& pj) {
 nlohmann::json streetJson(const PlannedStreet& st) {
     nlohmann::json ends = nlohmann::json::array();
     for (const std::string& j : st.junctions) ends.push_back(j.empty() ? nlohmann::json() : nlohmann::json(j));
-    return {{"id", st.id}, {"road", st.road}, {"from", st.from}, {"to", st.to}, {"junctions", ends}};
+    nlohmann::json s = {{"id", st.id}, {"road", st.road}, {"from", st.from}, {"to", st.to}, {"junctions", ends}};
+    if (!st.carriesOn[0].empty() || !st.carriesOn[1].empty()) {
+        nlohmann::json on = nlohmann::json::array();
+        for (const std::string& c : st.carriesOn) on.push_back(c.empty() ? nlohmann::json() : nlohmann::json(c));
+        s["carries_on"] = on;
+    }
+    return s;
+}
+
+nlohmann::json dividedJson(const std::vector<DividedPair>& divided) {
+    nlohmann::json list = nlohmann::json::array();
+    for (const DividedPair& p : divided) list.push_back({p[0], p[1]});
+    return list;
 }
 
 // ---- a JSON text read where it lies: just enough to find members and their bytes, never re-written -------------------
@@ -241,13 +253,47 @@ std::string leadOf(const std::string& s, const Member& m) { return s.substr(m.le
 
 }  // namespace
 
-std::vector<JunctionFacts> layoutJunctionFacts(const RoadLabGraph& graph, LayoutSource source) {
+std::vector<DividedPair> dividedFromIds(const RoadLabGraph& g, std::vector<std::string>* unpaired) {
+    std::vector<DividedPair> out;
+    auto oneWay = [](const EdgeSpec& e) { return (e.lanes.fwd > 0) != (e.lanes.back > 0); };
+    auto endsWith = [](const std::string& s, const std::string& tail) {
+        return s.size() > tail.size() && s.compare(s.size() - tail.size(), tail.size(), tail) == 0;
+    };
+    for (const EdgeSpec& e : g.edges) {
+        const bool in = endsWith(e.id, "_in"), outward = endsWith(e.id, "_out");
+        if (!in && !outward) continue;
+        const std::string name = e.id.substr(0, e.id.size() - (in ? 3 : 4));
+        const EdgeSpec* other = g.find(name + (in ? "_out" : "_in"));
+        std::string why;
+        if (!other) why = "no road " + name + (in ? "_out" : "_in");
+        else if (other->cls != e.cls) why = "its partner " + other->id + " is of another class (" + other->cls + ")";
+        else if (!oneWay(e) || !oneWay(*other)) why = "it or its partner is not one-way";
+        if (!why.empty()) {
+            if (unpaired) unpaired->push_back("road " + e.id + ": no divided pair (" + why + ")");
+            continue;
+        }
+        if (in) out.push_back(DividedPair{e.id, other->id});
+    }
+    return out;
+}
+
+namespace {
+// The graph's divided roads: as it states them, else (a file made before they were stated) found from its ids.
+std::vector<DividedPair> dividedOf(const RoadLabGraph& graph, LayoutSource source, std::vector<std::string>* unpaired = nullptr) {
+    return graph.listsDivided || source == LayoutSource::Planner ? graph.divided : dividedFromIds(graph, unpaired);
+}
+}  // namespace
+
+std::vector<JunctionFacts> layoutJunctionFacts(const RoadLabGraph& graph, LayoutSource source, std::vector<CarryOn>* carryOns) {
     // two roads meeting away from a shared end: as the graph declares them, else as the planner's crossing policy has
     // them (planCrossings: the planner's own, which city_plan's design step writes into the scene as its crossings)
     const std::vector<CrossingSpec> crossings = graph.declaresCrossings ? graph.crossings : crossingsFromJson(planCrossings(graph));
+    const std::vector<DividedPair> divided = dividedOf(graph, source);
     JunctionFinding how;
     how.endTolerance = source == LayoutSource::Planner ? kPlannerSameEnd : -1.0;
     how.atGrade = &crossings;
+    how.divided = &divided;
+    how.carryOns = carryOns;
     return findJunctions(graph, ControlPolicy(), how);
 }
 
@@ -255,12 +301,18 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
     RoadLayout out;
     RoadLabGraph g = graph;
     (void)expand(g);   // the ramps composed from their anchors: the builder's stations
+    out.divided = dividedOf(graph, source, &out.notes);
+    std::vector<CarryOn> carryOns;   // where a street only carries on (no junction): its two streets name each other
     // ---- the junctions: the graph's own list as it states them, or found ----------------------------------------------
     if (graph.listsJunctions) {
         out.junctions = graph.junctions;
         out.keptList = true;
+        // (the places a street carries on, as the control plan finds its nodes: city_plan controls wrote the list so)
+        JunctionFinding how;
+        how.carryOns = &carryOns;
+        (void)findJunctions(graph, ControlPolicy(), how);
     } else {
-        for (const JunctionFacts& f : layoutJunctionFacts(graph, source)) {
+        for (const JunctionFacts& f : layoutJunctionFacts(graph, source, &carryOns)) {
             PlannedJunction pj;
             pj.id = f.id;
             pj.at = Vec2(written(f.at.x), written(f.at.y));
@@ -352,9 +404,26 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
             out.streets.push_back(mine[k]);
         }
     }
-    // ---- each arm's street ---------------------------------------------------------------------------------------------
     std::map<std::string, std::vector<std::size_t>> streetsOf;
     for (std::size_t i = 0; i < out.streets.size(); ++i) streetsOf[out.streets[i].road].push_back(i);
+    // ---- where a street only carries on: no junction, and its two streets name each other (ADR-0419) ------------------
+    for (const CarryOn& c : carryOns) {
+        std::array<int, 2> st{-1, -1}, end{0, 0};
+        for (std::size_t k = 0; k < 2; ++k) {
+            end[k] = c.stations[k] < kArmReachesPast ? 0 : 1;   // the road's start, or its end
+            for (std::size_t i : streetsOf[c.roads[k]]) {
+                const PlannedStreet& s = out.streets[i];
+                if (end[k] == 0 ? s.from < kSameStation : s.to >= written(c.stations[k]) - kSameStation) st[k] = static_cast<int>(i);
+            }
+        }
+        if (st[0] < 0 || st[1] < 0) {
+            out.notes.push_back("roads " + c.roads[0] + " and " + c.roads[1] + " carry on into each other where no street ends");
+            continue;
+        }
+        out.streets[static_cast<std::size_t>(st[0])].carriesOn[static_cast<std::size_t>(end[0])] = out.streets[static_cast<std::size_t>(st[1])].id;
+        out.streets[static_cast<std::size_t>(st[1])].carriesOn[static_cast<std::size_t>(end[1])] = out.streets[static_cast<std::size_t>(st[0])].id;
+    }
+    // ---- each arm's street ---------------------------------------------------------------------------------------------
     for (PlannedJunction& pj : out.junctions)
         for (PlannedArm& a : pj.arms) {
             a.street.clear();
@@ -379,16 +448,19 @@ std::string describeLayout(const RoadLayout& layout) {
         ++byArms[pj.arms.size()];
         through += static_cast<uint32_t>(pj.through.size());
     }
-    uint32_t deadEnds = 0, bothJunctions = 0;
+    uint32_t deadEnds = 0, bothJunctions = 0, carryOnEnds = 0;
     for (const PlannedStreet& st : layout.streets) {
         deadEnds += (st.junctions[0].empty() ? 1u : 0u) + (st.junctions[1].empty() ? 1u : 0u);
         bothJunctions += !st.junctions[0].empty() && !st.junctions[1].empty() ? 1u : 0u;
+        carryOnEnds += (st.carriesOn[0].empty() ? 0u : 1u) + (st.carriesOn[1].empty() ? 0u : 1u);
     }
-    char buf[256];
-    std::snprintf(buf, sizeof buf, "%zu junctions (%s), %zu streets (%u with a junction at both ends, %u ends at no junction), %u through pairs",
+    char buf[384];
+    std::snprintf(buf, sizeof buf, "%zu junctions (%s), %zu streets (%u with a junction at both ends, %u ends at no junction, %u of those "
+                  "carrying on into another street), %u through pairs, %zu divided roads",
                   layout.junctions.size(), layout.keptList ? "the graph's own list, kept" : "found", layout.streets.size(), bothJunctions,
-                  deadEnds, through);
+                  deadEnds, carryOnEnds, through, layout.divided.size());
     std::string out = buf;
+    for (const DividedPair& p : layout.divided) out += "\n  divided road: " + p[0] + " and " + p[1];
     out += "\n  junctions by arms:";
     for (const std::pair<const std::size_t, uint32_t>& b : byArms) out += " " + std::to_string(b.second) + " with " + std::to_string(b.first) + ";";
     out += "\n";
@@ -402,6 +474,7 @@ void writeLayout(nlohmann::json& scene, const RoadLayout& layout) {
     for (const PlannedStreet& st : layout.streets) streets.push_back(streetJson(st));
     scene["junctions"] = junctions;
     scene["streets"] = streets;
+    if (!layout.divided.empty()) scene["divided"] = dividedJson(layout.divided);
 }
 
 std::string stripLayoutText(const std::string& text) {
@@ -414,7 +487,7 @@ std::string stripLayoutText(const std::string& text) {
     std::vector<std::size_t> elems, arms;
     for (std::size_t k = 0; k < top.size(); ++k) {
         const Member& m = top[k];
-        if (m.key == "streets") cut.push_back(removal(top, k));
+        if (m.key == "streets" || m.key == "divided") cut.push_back(removal(top, k));
         if (m.key != "junctions" || !t.elements(m.valueBegin, elems)) continue;
         bool controls = false;
         for (std::size_t e : elems)
@@ -459,6 +532,7 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
     std::vector<Member> top;
     if (!t.members(t.ws(0), top) || top.empty()) return fail("the file is not a JSON object with members");
     if (memberNamed(top, "streets")) return fail("the file already has a \"streets\" list (strip it first)");
+    if (memberNamed(top, "divided")) return fail("the file already has a \"divided\" list (strip it first)");
     const Member& last = top.back();
     const std::string lead = leadOf(text, last);
     const std::size_t nl = lead.rfind('\n');
@@ -513,6 +587,7 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
     nlohmann::json streets = nlohmann::json::array();
     for (const PlannedStreet& st : layout.streets) streets.push_back(streetJson(st));
     tail += "," + lead + "\"streets\": " + valueText(streets);
+    if (!layout.divided.empty()) tail += "," + lead + "\"divided\": " + valueText(dividedJson(layout.divided));
     ins.emplace_back(last.valueEnd, tail);
     std::stable_sort(ins.begin(), ins.end(), [](const std::pair<std::size_t, std::string>& a, const std::pair<std::size_t, std::string>& b) {
         return a.first < b.first;

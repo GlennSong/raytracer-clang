@@ -357,6 +357,9 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
     const std::vector<std::vector<Vec2>> chains = ringChains(plan);
     const std::vector<SystemAt> systems = systemInterchanges(plan, chains);
     json edges = json::array();
+    // THE DIVIDED ROADS this plan builds (ADR-0419): each boulevard pair's two carriageways, stated, so where both meet the
+    // same street the layout makes them one junction by construction
+    std::vector<std::array<std::string, 2>> divided;
 
     // THE STREETS, one edge per chain between junctions — except where an expressway's boulevard
     // pair meets midtown's boulevard, whose chain is cut in three at the pair's two Ts.
@@ -679,6 +682,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             edges.push_back({{"id", idp + "_in"}, {"class", "boulevard"}, {"path", {{"points", pointsJson(cubic(aEnd, aEnd - dir * reach, tA + dir * reach, tA, 16))}}}});
             edges.push_back({{"id", idp + "_out"}, {"class", "boulevard"}, {"path", {{"points", pointsJson(cubic(tB, tB + dir * reach, bEnd - dir * reach, bEnd, 16))}}}});
         }
+        divided.push_back({idp + "_in", idp + "_out"});
     };
     auto found = [](const std::array<Vec2, 2>& t) { return t[0].lengthSquared() != 0 || t[1].lengthSquared() != 0; };
     // A TEARDROP turns a freeway's outbound carriageway back into its inbound one where it ends with
@@ -1074,6 +1078,15 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         edges = std::move(kept);
         std::printf("[plan] rivers: %zu in the world; %d bridges, %d streets cut back from the water\n",
                     hy->rivers().size(), bridges, cuts);
+    }
+    // the divided roads whose two carriageways both survived (a river can cut a road back)
+    {
+        std::set<std::string> ids;
+        for (const json& e : edges) ids.insert(e.at("id").get<std::string>());
+        json list = json::array();
+        for (const std::array<std::string, 2>& p : divided)
+            if (ids.count(p[0]) && ids.count(p[1])) list.push_back({p[0], p[1]});
+        if (!list.empty()) scene["divided"] = list;
     }
     scene["edges"] = std::move(edges);
     // THE LAYOUT, from birth (road_layout.h, ADR-0417): the junctions where the roads this plan laid meet -- the ends it

@@ -220,6 +220,8 @@ struct ControlPlanReport {
                                                  // the planned one's control)
     uint32_t merged = 0;                         // built junctions holding two or more planned ones of one control
     uint32_t notPlanned = 0;                     // built junctions no planned one names (left not_planned, reported)
+    uint32_t carryOns = 0;                       // built junctions only where the file states streets carry on (ADR-0419):
+                                                 // the plan's carry-on control, not reported
     uint32_t conflicts = 0;                      // built junctions holding planned ones of different controls (likewise)
     uint32_t lanesOffPlan = 0;                   // lanes of a built junction whose road has no planned arm there
     uint32_t signsWithNoLane = 0;                // planned arm regulations with no lane arriving to stand them on

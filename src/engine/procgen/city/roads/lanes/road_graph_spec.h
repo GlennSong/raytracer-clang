@@ -111,11 +111,22 @@ struct PlannedJunction {
 // empty: none -- a dead end, or a ramp's end anchored to a lane of its host, which the ramp itself states). An edge that
 // passes through junctions is several streets; the stretches of it inside a junction belong to no street. Authored at the
 // graph's top level: "streets": [{"id": "s12/1", "road": "s12", "from": 40.2, "to": 131.7, "junctions": ["j3", "j9"]}].
+// WHERE A STREET ONLY CARRIES ON (ADR-0419): two road ends that meet with nothing else there (one road running on as
+// another, or a bend) are no junction -- no junction area, no stop line. Each of the two streets names the other at that
+// end: "carries_on": [null, "s13"] (at `from`, at `to`; written only where one is set). One street carrying on, in two
+// road-file edges.
 struct PlannedStreet {
     std::string id, road;
     double from = 0, to = 0;
     std::array<std::string, 2> junctions;   // at `from`, at `to`
+    std::array<std::string, 2> carriesOn;   // the street this one carries on into at `from`, at `to` (empty: none)
 };
+
+// A DIVIDED ROAD'S TWO CARRIAGEWAYS AS PLANNED (ADR-0419): two one-way road-file edges that are one road, its two ways.
+// Where both meet the same street, the planner built them as ONE junction there, however far apart along the street
+// their two ends are. Authored at the graph's top level: "divided": [["bv0_in", "bv0_out"]]. Part of the layout: the
+// bake key does not see it (road_layout.h stripLayoutText).
+using DividedPair = std::array<std::string, 2>;
 
 // A CROSSING AS PLANNED (ADR-0215, Glenn: "the planner and builder should know the intent of the roads so it's not
 // guessing"): where two roads cross or one ends on the other away from a shared node, what the plan means there --
@@ -188,6 +199,11 @@ struct Rules {
     double underClearance = 5.0, structureDepth = 1.6;   // free height under a deck's structure over any road it crosses, and the girder depth below the slab
     bool freewaySeparates = false;             // a freeway is never met at grade by a road crossing it (not a ramp): structure at any height. Off by default -- authored scenes (freeway_cross, ring_city) cross streets over freeways at grade -- and on for the island (ADR-0114)
     double rampLevelDz = 1.5;                  // a ramp within this of a street it crosses is at grade with it (the street meets it); above, it is structure (the ramp clears it)
+    // STORAGE ("storage", metres; ADR-0419): the street a car needs to wait in between two junctions -- a car's length
+    // and the gap behind it (4.5 m + 2 m). Two junction points next to each other along a road whose stretch between
+    // their stop lines is shorter than this are ONE junction: not even a car could wait between them. (A longer vehicle
+    // that cannot wait there is the driving's to keep out: it checks the room beyond for each vehicle class.)
+    double storage = 6.5;
 };
 
 constexpr double kFootwayStairGrade = 0.15;
@@ -297,6 +313,12 @@ struct RoadLabGraph {
     std::vector<PlannedJunction> junctions;
     bool declaresJunctions = false;       // the list names each junction's CONTROL (the control plan); see PlannedArm
     bool listsJunctions = false;          // the graph carried a "junctions" list at all, with controls or without
+    // WHERE A STREET ONLY CARRIES ON (no junction, ADR-0419) the lane graph builder may still make a junction of its own
+    // until the builder builds the stated ones: the control the plan gives it there ("carry_on_control"; control_plan.h)
+    std::string carryOnControl;
+    // THE DIVIDED ROADS AS PLANNED (DividedPair); `listsDivided`: the graph carried the list.
+    std::vector<DividedPair> divided;
+    bool listsDivided = false;
     // THE STREETS AS PLANNED (PlannedStreet); `listsStreets`: the graph carried the list.
     std::vector<PlannedStreet> streets;
     bool listsStreets = false;
