@@ -28,6 +28,7 @@
 #include "../engine/systems/nature_collider_system.h"
 #include "../apps/citysim/city_render.h"
 #include "../apps/citysim/city_spectate.h"
+#include "../apps/citysim/city_trip.h"
 #include "../apps/citysim/city_traffic_audio.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "../apps/citysim/city_physics.h"
@@ -192,7 +193,10 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // agents and follows one (drive/walk their life with ring + cone lit). Reads
     // poses + drives ctx.view.camera only — no physics — so it sits OUTSIDE the
     // Jolt block, after CameraSystem/PlayerSystem so its override wins the frame.
-    addSystem<citysim::CitySpectateSystem>(citySys);
+    auto& spectateSys = addSystem<citysim::CitySpectateSystem>(citySys);
+    // A person sent somewhere (ADR-0415, the one-agent lab): `trip near|far|to|at|mark`, Y / I. Plans the trip, carries
+    // out its legs with the sim's own verbs, draws the plan and has spectate follow the person.
+    addSystem<citysim::CityTripSystem>(citySys, spectateSys);
     // Ambient traffic's engine note (the citysim adapter over
     // engine::engineSoundFor — VehicleSystem voices the physical cars against
     // the same core). Reads agent poses + drives voices only, so it sits
