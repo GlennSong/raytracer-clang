@@ -297,7 +297,9 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
 
     // ---- nodes so close along a road that the builder makes them one junction: grouped ------------------------------
     // How far a node's junction reaches along road `via`: the widest other road there, its stop line's setback, and half
-    // the gap the builder merges junctions across.
+    // the gap the builder merges junctions across. (ADR-0418 looked at this rule against the ground and at the stated
+    // "storage" rule the owner proposed in its place; both chain junctions into corridors up to 200 m across, so the rule
+    // is left as it was until the owner chooses: see that ADR.)
     auto reach = [&](const Node& n, int via) {
         double hw = 0;
         for (const NodePoint& p : n.points)
@@ -340,6 +342,7 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
         for (int n : members[m]) {
             const Node& node = nodes[static_cast<std::size_t>(n)];
             j.at += node.at;
+            j.nodes.push_back(node.at);
             j.rampEnd = j.rampEnd || node.rampEnd;
             if (node.ramp >= 0) ramps.insert(node.ramp);
             for (const NodePoint& p : node.points) stations[p.edge].push_back(p.s);

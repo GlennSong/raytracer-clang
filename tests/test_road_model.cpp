@@ -12,7 +12,9 @@
 //   4. the questions: the street, lane and station nearest a point; the streets at a junction in order; a street's lanes;
 //      what a lane leads to; what is attached to a street or a junction;
 //   5. saved and read back, and its own cache file, keyed;
-//   6. the comparison with the old forms runs on a small scene and agrees where they must.
+//   6. the comparison with the old forms runs on a small scene and agrees where they must;
+//   7. kerb parking is the road file's statement (ADR-0418): the twin's band, the model's section, and a statement that
+//      cannot be built named.
 
 #include "test_framework.h"
 #include "planned_city.h"
@@ -23,6 +25,8 @@
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"
 #include "engine/procgen/city/roads/lanes/road_model_compare.h"
+#include "engine/procgen/city/roads/lanes/road_twin.h"   // roadTwin: the kerb parking band it hands the sim
+#include "engine/procgen/city/roads/road_entity.h"      // navRoadGraph
 #include "engine/procgen/city/roads/road_model.h"
 
 #include <nlohmann/json.hpp>
@@ -407,4 +411,70 @@ TEST_CASE(road_model_6_compared_with_the_old_forms) {
     CHECK(c.streetsWithoutLink == 0u && c.oneWayDiffers == 0u);
     CHECK(c.lanesWithPaths == c.modelRoadLanes);
     CHECK(c.text.find("WHAT THE MODEL DOES NOT STATE YET") != std::string::npos);
+    // ONE LANE COUNT (ADR-0418): every drivable link gets its road's stated lanes, so no street's nav lanes differ from
+    // the road file's; and the sim's kerbside bays lie only in a band a road states
+    CHECK(c.linksStated == c.linksDrivable);
+    CHECK(c.laneCountDiffers == 0u);
+    CHECK(c.baysOffStatedParking == 0u);
+}
+
+// ---- 7. kerb parking is stated (ADR-0418) --------------------------------------------------------------------------------
+
+namespace {
+// The kerb parking bands the road twin hands the sim (navRoadGraph's edges: parkWidth), by the twin edge's class.
+std::map<engine::RoadClass, std::pair<int, double>> twinBands(const Result& r) {
+    std::map<engine::RoadClass, std::pair<int, double>> out;   // class -> (edges with a band, the widest band)
+    for (const engine::RoadEdge& e : engine::navRoadGraph(roadTwin(r, 60.0, false, /*forNav=*/true), nullptr).edges) {
+        if (e.parkWidth <= 0) continue;
+        std::pair<int, double>& o = out[e.klass];
+        ++o.first;
+        o.second = std::max(o.second, static_cast<double>(e.parkWidth));
+    }
+    return out;
+}
+}  // namespace
+
+TEST_CASE(road_model_7_kerb_parking_is_the_road_file_s_statement) {
+    // the class table: a local street parks along both kerbs, 2.5 m over its 6 m lane; no other class parks
+    CHECK(roadClass("local").lanes.parking == 2.5);
+    for (const std::pair<const std::string, RoadClassSpec>& c : roadClasses())
+        if (c.first != "local") CHECK(c.second.lanes.parking == 0.0);
+    // the small graph (the table's local and arterial, and a one-way class of its own): the twin's bands are the locals'
+    // stated 2.5 m and nothing else's; the model's street sections say the same
+    {
+        const Built& b = smallBuilt();
+        const std::map<engine::RoadClass, std::pair<int, double>> bands = twinBands(*b.r);
+        CHECK(bands.size() == 1u && bands.count(engine::RoadClass::Local) == 1u);
+        if (bands.count(engine::RoadClass::Local)) CHECK_APPROX(bands.at(engine::RoadClass::Local).second, 2.5, 1e-9);
+        for (const ModelStreet& s : b.model.streets) CHECK(s.section.parking == (s.section.roadClass == "local" ? 2.5 : 0.0));
+        CHECK(b.model.problems.empty());
+    }
+    // the file says its locals do not park: no band at all
+    {
+        nlohmann::json g = smallGraphWithLayout();
+        g["classes"]["local"] = {{"parking", 0.0}};
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+        CHECK(twinBands(*r).empty());
+        for (const ModelStreet& s : assembleRoadModel(*r).streets) CHECK(s.section.parking == 0.0);
+    }
+    // ...or that it parks 2.0 m: the band is 2.0 m
+    {
+        nlohmann::json g = smallGraphWithLayout();
+        g["classes"]["local"] = {{"parking", 2.0}};
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+        const std::map<engine::RoadClass, std::pair<int, double>> bands = twinBands(*r);
+        CHECK(bands.count(engine::RoadClass::Local) == 1u);
+        if (bands.count(engine::RoadClass::Local)) CHECK_APPROX(bands.at(engine::RoadClass::Local).second, 2.0, 1e-9);
+    }
+    // a local of 3.5 m lanes cannot hold the table's 2.5 m and a travel lane: no band, and the model says so by name
+    {
+        nlohmann::json g = smallGraphWithLayout();
+        g["classes"]["local"] = {{"w", 3.5}};
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+        CHECK(twinBands(*r).empty());
+        const RoadModel m = assembleRoadModel(*r);
+        int said = 0;
+        for (const std::string& p : m.problems) said += p.find("kerb parking") != std::string::npos ? 1 : 0;
+        CHECK(said == 4);   // l0..l3, once each
+    }
 }

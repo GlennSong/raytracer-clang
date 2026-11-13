@@ -1,7 +1,9 @@
 # One road network: design
 
-Status: approved; steps 1 and 2 built (2026-11-13, ADR-0417) beside the old forms, no reader moved yet. The comparison
-of the model with the old forms is in docs/road-model-compare/. Next: Glenn reads the comparison before step 3.
+Status: approved; steps 1 and 2 built (2026-11-13, ADR-0417) beside the old forms. Two fixes the comparison showed were
+needed came before any reader moves (ADR-0418): a street has one lane count, with its kerb parking stated in its
+cross-section (built); and which road ends make one junction should follow one stated rule (looked at; the rule is
+Glenn's to choose). The comparison of the model with the old forms is in docs/road-model-compare/.
 
 ## The goal
 
@@ -49,8 +51,8 @@ What that costs, by the inventory's count:
   depending on who asks. "Straight on" is 20, 30, 32 or 35 degrees. "One junction" is decided five different ways.
 - **About 4,500 lines exist only to guess**, plus about 1,800 lines that make the twin, plus the junction and turn
   inference inside the lane graph.
-- **Facts with no home.** Parking is invented by the twin. Signal phases are worked out separately by the old and new
-  driving. Street names exist only in memory after load.
+- **Facts with no home.** Parking was invented by the twin (stated since ADR-0418). Signal phases are worked out
+  separately by the old and new driving. Street names exist only in memory after load.
 - **Faults that are really one fault**: phantom junctions from lanes that miss by 1.5 cm, three junctions 4 m apart,
   ramps with no way on, signal heads that disagree with the lights, buildings nobody can reach, 27% of river_town
   closed to the new driver.
@@ -62,7 +64,11 @@ What that costs, by the inventory's count:
 Everything below lives in one structure, called the road model in the rest of this document.
 
 - **Junctions.** Position and height, the arms in order round it, which pairs of arms are one street continuing
-  through, its control, and its outline on the ground.
+  through, its control, and its outline on the ground. Which road ends make ONE junction is still the control plan's
+  distance rule (two points closer than both their reaches: the widest other road's half width, the stop line's 5.2 m
+  and 6 m more). ADR-0418 tried the rule "one junction when the street between two stop lines is shorter than a bus
+  needs" (14 m) against the ground and found it, like the old rule, chains whole corridors of close junctions into one
+  (up to 200 m across); the rule is Glenn's to choose (the options and their counts are in ADR-0418).
 - **Streets.** The junction at each end, the centre line, the class, the cross-section, one-way or two-way, the speed
   limit, the name, and whether buildings may front it.
 - **Lanes.** For each street: its lanes from the centre-line side to the kerb side, each with its kind (through, turn
@@ -72,7 +78,11 @@ Everything below lives in one structure, called the road model in the rest of th
 - **Controls and signs.** Per junction and per arm: the control, signs, stop-line station, signal groups.
 - **Crossings.** Where two roads cross without meeting: which goes over, the clearance, the bridge and its piers.
 - **Ramps.** The road they leave, the road they join, the lane and station at each end, and the merge length.
-- **Parking.** Kerb parking as part of a street's cross-section, and the spaces along it.
+- **Parking.** Kerb parking as part of a street's cross-section, and the spaces along it. Built (ADR-0418): the road
+  class table states it (`parking`, the width of a band along each kerb, over the kerb side of the kerb lane: a planned
+  local street's 6 m lane is 3.5 m to drive in and 2.5 m to park in), a road may restate it, and the twin's band, the
+  sim's bays and the model's cross-section all read that one statement. It is not a lane of its own: the lanes each way
+  are the travel lanes, the one lane count every reader uses. The spaces along it are still laid by the sim at load.
 - **Walking.** Sidewalks as part of the cross-section, footpaths as streets of their own class, and crosswalks at each
   arm.
 - **Rail.** Tracks, platforms and stations. Rail is already a class of road in the road file and stays in the model.
@@ -140,6 +150,7 @@ reader has gone.
 |---|---|---|---|
 | 1 | The planner writes junctions and streets with ids into the road file. Hand-made road files get them from a one-off tool that writes today's inference into the file for a person to check. | No | Yes (ADR-0417). One list of junctions: the control plan's "junctions" list, extended. The bake key ignores the new parts. |
 | 2 | The builder carries those ids onto every lane it lays and keeps its stop lines and junction outlines. The whole model is stored in the bake beside the old forms. A test compares the model with the twin on every level and lists the differences. | Bake gains a section; meshes unchanged | Yes, with two differences: the model is stored in its own cache file (cache/roadmodel), not in the bake, so nothing re-bakes; and the builder has no junction outline to keep, only the paint's junction boxes (a stretch along each street), which it keeps. The comparison ran on three levels, not every level. |
+| 2b | Two fixes before any reader moves: a street has one lane count (the road file's), with its kerb parking stated in its cross-section; and which road ends are one junction follows one stated rule. | No | The lane count, yes (ADR-0418). The nav graph is still built from the bake's road graph, whose edges carry no road id, so each nav link gets its road's stated lanes through the lane match (the road whose centre line the link lies on): an interim until step 7. The current city sim drives differently (streets gained travel lanes); its pinned values were retaken. The junction rule: looked at, not changed (ADR-0418: the proposed rule chains corridors; Glenn to choose). Note: traffic_lab's junction list carries its control plan, and the bake key hashes that list, so regrouping it re-bakes the lab. |
 | 3 | Readers that only label things move first: street names, name signs, the map. | No | |
 | 4 | Street furniture, signal poles and lights read the model's junctions and controls. Signal heads and the lights now agree. | No | |
 | 5 | Lots, block frontage and door facing read the model's blocks and streets. The second twin is deleted. | Lots re-bake | |
@@ -156,8 +167,10 @@ roads everywhere.
 - The road twin and the second twin for lots, and the code that thins, splits, welds and re-joins them.
 - The lane match.
 - The lane graph's junction finding, carry-on junctions, lane-order measuring and turn guessing.
-- The control plan's own grouping of junctions.
-- Two of the three cross-section models.
+- The control plan's own grouping of junctions (still a distance rule worked out from the road ends, see ADR-0418; the
+  paint's own "boxes within 12 m are one junction" is a second rule, until step 9).
+- Two of the three cross-section models (since ADR-0418 the road_rules one, DesignRules, is read by no system, only its
+  own tests; the twin's RoadSpec bands are made from the road class table).
 - The per-system inferences listed in the inventory: junction boxes and stop lines in the old driving, signal
   junctions and phases, street chains for names and trees, block frontage votes, and the rest.
 

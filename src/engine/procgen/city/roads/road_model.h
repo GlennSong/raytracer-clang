@@ -18,11 +18,13 @@
 //
 // WHO STATES WHAT (design section 2). Everything here is copied from a stage that states it, never worked out:
 //   - the road file (the planner, or the one-off layout tool): junctions and their arms, headings and through pairs,
-//     streets, classes and cross-sections, one-way, speed limits, controls and signs, crossings, ramps and their anchors;
+//     streets, classes and cross-sections (with their kerb parking, ADR-0418), one-way, speed limits, controls and signs,
+//     crossings, ramps and their anchors;
 //   - the road builder: each lane's curve, heights and slot, the streets it runs along, the junction at each end, the
 //     ramps' merges (host lane, station, length, taper), the paint's junction boxes and stop lines.
 // Where nothing states a part yet (turn paths through junctions, which lines between lanes may be crossed, crosswalks,
-// parking, street names, blocks, signal groups), it is EMPTY, and the model's `notStated` list says so. Where the build
+// the parking spaces along a kerb, street names, blocks, signal groups), it is EMPTY, and the model's `notStated` list
+// says so. Where the build
 // does not match what was stated (a box the paint found that no stated junction holds, an arm with no box), it is in
 // `problems`, with its place.
 //
@@ -93,11 +95,14 @@ struct ModelJunction {
 };
 
 // What a street is made of across its width (design section 1: the cross-section), from its road's class and the road
-// file's lanes.
+// file's lanes. The lanes each way are the TRAVEL lanes: the one lane count the builder lays and the city sim drives
+// (ADR-0418). KERB PARKING is a band along each kerb, over the kerb side of the kerb lane each way (roads/lanes
+// LaneLayout::parking): `parking` its width where the road states one that fits (streetSection), 0 none.
 struct ModelSection {
     std::string roadClass;
     int lanesForward = 0, lanesBackward = 0;   // forward: running along the spine
     Real laneWidth = 0, medianGap = 0, median = 0, shoulder = 0, sidewalk = 0;
+    Real parking = 0;                          // the kerb parking band's width along each kerb (m); 0: none
     bool track = false, footway = false;
 };
 
@@ -232,9 +237,9 @@ std::string roadModelSvg(const RoadModel& m);      // junctions and streets with
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 1;
+constexpr uint32_t kRoadModelFormat = 2;    // 2: a street's kerb parking (ADR-0418)
 // The version of what assembleRoadModel makes: bump when it can make a different model from the same build.
-constexpr uint32_t kRoadModelVersion = 1;
+constexpr uint32_t kRoadModelVersion = 2;   // 2: a street's kerb parking (ADR-0418)
 void putRoadModel(bundle::BinWriter& w, const RoadModel& m);
 bool getRoadModel(bundle::BinReader& r, RoadModel& m, std::string* err);
 

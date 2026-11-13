@@ -1,7 +1,9 @@
 #include "test_framework.h"
 
 #include "../src/engine/ai/nav_graph.h"
+#include "../src/engine/procgen/city/roads/lanes/road_graph_spec.h"   // the road class table
 
+#include <algorithm>
 #include <cmath>
 
 using namespace engine;
@@ -49,13 +51,21 @@ TEST_CASE(nav_link_geometry) {
     CHECK_APPROX(mid.y, 0.0, 1e-9);
 }
 
-TEST_CASE(nav_lane_count_from_width) {
-    // Local 8m -> 1 lane each way; arterial 16m -> 2 lanes each way.
+// A link's lanes are its class's row of the road class table, whatever its width (ADR-0418: one lane count; a city
+// built from a road file then gives each link its own road's, LaneMap::stateLanes).
+TEST_CASE(nav_lane_count_is_the_road_class_table_s) {
+    for (const RoadClass k : {RoadClass::Local, RoadClass::Collector, RoadClass::Arterial, RoadClass::Freeway, RoadClass::Ramp}) {
+        RoadGraph g;
+        g.nodes = { {Vec2(0, 0)}, {Vec2(10, 0)} };
+        g.edges = { RoadEdge{0, 1, 16, k, 0} };
+        const NavGraph nav = buildNavGraph(g);
+        const roads::lanes::RoadClassSpec& row = roads::lanes::roadClass(roadClassName(k));
+        CHECK(nav.links[0].lanes == std::max(row.lanes.fwd, row.lanes.back));
+    }
     RoadGraph g;
     g.nodes = { {Vec2(0, 0)}, {Vec2(10, 0)} };
     g.edges = { RoadEdge{0, 1, 16, RoadClass::Arterial, 0} };
-    NavGraph nav = buildNavGraph(g);
-    CHECK(nav.links[0].lanes == 2);
+    CHECK(buildNavGraph(g).links[0].lanes == 3);   // the table's arterial: three lanes each way, as the builder lays it
 
     NavGraph local = buildNavGraph(straightRoad());
     CHECK(local.links[0].lanes == 1);

@@ -99,6 +99,7 @@ RoadModel assembleRoadModel(const Result& r) {
     }
 
     // ---- streets, their cross-sections from their road's class and lanes ----------------------------------------------
+    std::set<uint32_t> parkingRefused;   // roads already reported for kerb parking that does not fit
     for (const PlannedStreet& st : g.streets) {
         ModelStreet S;
         S.id = st.id;
@@ -119,6 +120,14 @@ RoadModel assembleRoadModel(const Result& r) {
         S.section.sidewalk = c.sidewalk;
         S.section.track = c.track;
         S.section.footway = c.footway;
+        {
+            // the kerb parking the road states (its class's, or its own), where it fits (ADR-0418)
+            bool fits = true;
+            S.section.parking = c.track || c.footway ? 0.0 : roads::lanes::kerbParking(g, e, &fits);
+            if (!fits && !c.track && !c.footway && parkingRefused.insert(S.edge).second)
+                m.problems.push_back(fmt("road %s (%s): it states %.1f m of kerb parking, which would leave a travel lane under %.1f m; none is "
+                                         "built", e.id.c_str(), e.cls.c_str(), e.lanes.parking, roads::lanes::kMinTravelLane));
+        }
         S.oneWay = e.lanes.back == 0 && e.lanes.fwd > 0;
         S.speedLimit = e.speedLimit;
         S.lotsFrom = e.lotsFrom;
@@ -325,7 +334,7 @@ RoadModel assembleRoadModel(const Result& r) {
     m.notStated.push_back("which lines between lanes may be crossed: nothing states them");
     m.notStated.push_back("junction outlines on the ground: the builder has none (the paint's boxes are kept as stretches along each road)");
     m.notStated.push_back("crosswalks: nothing states them (the paint draws a zebra at each box)");
-    m.notStated.push_back("kerb parking and its spaces: nothing states them (the road twin invents them)");
+    m.notStated.push_back("parking spaces: the kerb parking band is stated (each street's cross-section), the spaces along it are not (the city sim lays them at load)");
     m.notStated.push_back("street names: nothing states them (generated at load, stored nowhere)");
     m.notStated.push_back("blocks and their uses: the city plan has them, the road file does not carry them");
     m.notStated.push_back("signal groups: nothing states them (each driving model works its own out)");
@@ -476,9 +485,10 @@ std::string dumpRoadModel(const RoadModel& m) {
         for (const ModelStretch& st : J.boxes) out += fmt("  paint box: %s %.2f to %.2f\n", st.road.c_str(), st.from, st.to);
     }
     for (const ModelStreet& S : m.streets) {
-        out += fmt("street %s: road %s %.2f to %.2f, junctions %s -> %s, %s %d+%d lanes of %.2f m%s, limit %s, %zu lanes:",
+        out += fmt("street %s: road %s %.2f to %.2f, junctions %s -> %s, %s %d+%d lanes of %.2f m%s%s, limit %s, %zu lanes:",
                    S.id.c_str(), S.road.c_str(), S.from, S.to, junctionName(m, S.junctions[0]).c_str(), junctionName(m, S.junctions[1]).c_str(),
                    S.section.roadClass.c_str(), S.section.lanesForward, S.section.lanesBackward, S.section.laneWidth, S.oneWay ? " one-way" : "",
+                   S.section.parking > 0 ? fmt(", kerb parking %.2f m", S.section.parking).c_str() : "",
                    S.speedLimit > 0 ? fmt("%.2f", S.speedLimit).c_str() : "-", S.lanes.size());
         for (ModelLaneId l : S.lanes) out += " " + m.lanes[l.index].id;
         out += "\n";
@@ -656,7 +666,7 @@ template <class IO, class J> void fields(IO& io, J& j, ModelJunction*) {
 }
 template <class IO, class S> void fields(IO& io, S& s, ModelSection*) {
     io(s.roadClass); io(s.lanesForward); io(s.lanesBackward); io(s.laneWidth); io(s.medianGap); io(s.median); io(s.shoulder); io(s.sidewalk);
-    io(s.track); io(s.footway);
+    io(s.parking); io(s.track); io(s.footway);
 }
 template <class IO, class S> void fields(IO& io, S& s, ModelStreet*) {
     io(s.id); io(s.road); io(s.edge); io(s.from); io(s.to); io(s.junctions); io(s.section); io(s.oneWay); io(s.speedLimit); io(s.lotsFrom);

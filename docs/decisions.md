@@ -19776,3 +19776,114 @@ risk to the meshes. Storing the model in the bake now: re-bakes every level.
 **Revisit when** step 3 moves the first reader to the model; when the model goes into the bake; when the grouping of
 nodes into one junction is decided (the design deletes the control plan's grouping, but the model's junctions are it
 today).
+
+## ADR-0418 — A street has one lane count, the road file's, and its kerb parking is stated there; which road ends are one junction was looked at and left for Glenn
+**Status:** Provisional · **Date:** 2026-11-13
+
+Words: the NAV GRAPH is the street map the current city sim routes and drives on, built at load from the road graph in
+the level's bake. A LINK is one straight piece of it, one way. The LANE MATCH (citysim LaneMap) finds the builder's lanes
+under each link. The ROAD CLASS TABLE is the list of road classes (local, collector, arterial, ...) with their lanes each
+way; a road file carries its own copy and a road may restate its lanes. KERB PARKING is where cars park along the kerb.
+A JUNCTION BOX is the paved area where roads meet; a STOP LINE stands 5.2 m back from it.
+
+**Context.** The comparison of ADR-0417 found the nav graph giving about half of all streets a different number of lanes
+each way from the road file and the built road (river_town 154 of 315 streets, traffic_lab 153, metro_v2_test 165).
+Glenn: "The lane counting disagreement seems like a big problem." The suspicion was that part of it was a convention:
+built lanes = travel lanes + one lane parked in.
+
+**What was measured** (each drivable link, by the road it lies on; built lanes each way against the nav's, the lane
+match's outcome, the twin's parking band, the sim's kerbside bays):
+
+| level | class (built each way) | links | nav lanes | matched with the kerb lane dropped "for parking" | parking band | bays |
+|---|---|---|---|---|---|---|
+| river_town | arterial 3/3 | 553 | 2 | 528 | 0 | 0 |
+| | collector 2/2 | 139 | 1 | 126 | 0 | 0 |
+| | freeway 4/0 | 270 | 3 | 270 | 0 | 0 |
+| | boulevard 3/0 | 41 | 1 | 0 (never matched) | 0 | 0 |
+| | local 1/1 (6 m lanes) | 726 | 1 | 0 | 726 | 2304 |
+| | ramp 1/0 | 145 | 1 | 0 | 0 | 0 |
+| traffic_lab | arterial 3/3 / collector 2/0 / collector 2/2 / freeway 4/0 | 332 / 152 / 18 / 168 | 2 / 1 / 1 / 3 | 331 / 152 / 17 / 168 | 0 | 0 |
+| | local 1/1 / ramp 1/0 | 450 / 91 | 1 / 1 | 0 | 450 / 0 | 1298 / 0 |
+| metro_v2_test | arterial 3/3 / collector 2/2 / freeway 4/0 / boulevard 3/0 | 514 / 390 / 212 / 21 | 2 / 1 / 3 / 1 | 506 / 383 / 212 / 0 | 0 | 0 |
+| | local 1/1 / ramp 1/0 | 928 / 86 | 1 / 1 | 0 | 928 / 0 | 2738 / 0 |
+
+So EVERY difference was an error, none was parking: the nav took its lanes from a different table (road_rules
+`lanesForClass`: an arterial 2 a way, a collector 1, a freeway carriageway 3, and a boulevard counted as a local), and the
+lane match then dropped the kerb lane it could not use "for the parking" -- on roads where no band was ever made and no
+car ever parked. Streets per case: river_town 112 arterial + 28 collector + 8 freeway + 6 boulevard = 154; traffic_lab 84 +
+65 + 4 = 153; metro_v2_test 108 + 52 + 2 + 3 = 165. The only kerb parking anywhere was the planned LOCAL street's: the
+twin carved a 2.5 m band out of its 12 m carriageway, i.e. out of the kerb side of its one 6 m lane each way (3.5 m to
+drive in). The twin's rule ("2.5 m if the rest leaves lanes of 3.2 m or more") gave a band to that class and to no other
+class on any shipped level road file (checked over all 22 tracked road files; the one lab exception, hill_junction's
+arterial, is not a level).
+
+**Decision.**
+- **One statement of the lanes and the parking: the road class table** (roads/lanes `LaneLayout`, a road's own `lanes` may
+  restate it). `fwd`/`back` are the TRAVEL lanes, the one lane count every reader uses. New: `parking`, the width of a
+  kerb parking band along each kerb, lying over the kerb side of the kerb lane; not a lane of its own. The table states
+  today's convention as data: `local` parks 2.5 m, no other class parks. A class a road file invents starts from the
+  local row without its parking. `classJson` writes it, so newly planned files state it. A statement that would leave a
+  travel lane under `kMinTravelLane` (3.2 m) is not built and the road model names it as a problem.
+- **The readers.** `streetSection` (road_graph_spec) is the one reader of the stated parking: the road twin's band (and so
+  the sim's kerbside bays) and the road model's cross-section (`ModelSection::parking`, model version 2) come from it.
+  The twin's invented 2.5 m is gone; `roadSpecStreetParking` now takes the width it is given. Every shipped level's twin
+  is byte-for-byte what it was (the stated widths reproduce the old bands exactly), so the baked road graphs stay right.
+- **`lanesForClass` is deleted** (and its test). The nav graph gives a link its class's row of the road class table
+  (`buildNavGraph`), then a city built from a road file gives each link its own road's stated lanes.
+- **How the nav gets them without a re-bake.** The baked road graph's edges carry no road id, so the lane match now also
+  says which road each link runs along: of the roads with lanes running the link's way at its middle, the one whose
+  centre line lies nearest the middle (the twin cut the link from that line, to 1.5 m). The loader publishes each road's
+  centre line and stated lanes (`LevelLanes::roads`, `::stated`); `LaneMap::stateLanes` writes the lanes into the nav,
+  before anything reads a lane count (the density, the bays, the signals, the sim). This is an INTERIM, until step 7
+  rebuilds the nav from the model with ids. Unresolved links (no lane at their middle) keep their class's lanes: 0 of
+  1874 on river_town, 3 of 1214 on traffic_lab (local links, whose class row is the same 1), 0 of 2151 on metro_v2_test.
+  (Choosing by "most lanes at the middle" was tried first: it put ramp links beside a freeway onto the freeway and local
+  links onto arterials; the centre line fixed every case.)
+- **The lane match** matches against the stated count and never drops a kerb lane.
+
+**What it does.** `lanes_tool compare`: streets whose lanes differ 154 / 153 / 165 -> 0 / 0 / 0; links matched to real
+lanes 1760 -> 1798 of 1874 (river_town), 1203 -> 1201 of 1214, 2121 -> 2118 of 2151; kerbside bays unchanged (2304 / 1298
+/ 2738), none on a road that states no parking. The current city sim (river_town, 5 sim minutes): agents 8890 -> 9577
+(its traffic is sized by lane-kilometres, and the lanes are now counted right: drivers 1957 -> 2645), trips begun 1883 ->
+1925, drivers moving at the end 176 -> 189, mean speed of moving near drivers 2.80 -> 2.53 m/s, drivers that used the
+freeway 73 -> 85, kerb bays taken 1479 -> 1849 of 2128, moving cars in a lane past the first 47% -> 59%. Worse: the
+mean speed (more cars) and fuller kerbs; the cars-per-lane-km figure was tuned on the old counts and is Glenn's to
+retune or keep. The one-agent lab (`agent_lab_probe.py --speed 4`) arrives on every trip: near 56.4 -> 56.7 s real, 0
+stops, freeway top speed 104 -> 106 km/h; far 175.6 -> 192.0 s, 10 -> 12 stops; freeway (run on its own: after the far
+trip no freeway way exists from where the person stands, before or after) 189.1 -> 189.2 s, 11 -> 10 stops. Pinned
+values retaken: `kV1LabHashes`, `kV1RiverHashes` (with the nav given its lanes the old way by a temporary switch, since
+removed, all eight old values came out). `kFiveMinuteStateHash` (the new driving's lab) did not move.
+
+**Which road ends are one junction: looked at, not changed.** Today two road-end points are one junction when they lie
+closer along a road than both their reaches (the widest other road's half width + 5.2 m + 6 m), chained. The rule
+proposed: one junction when the street between their stop lines is shorter than a stated storage length (a city bus
+and a gap, 14 m). Close-ups of the biggest (~/Pictures/Raytracer/road-model/, red rings the points):
+- really one junction (boxes touching, nothing can stand between): river_town j14 (two staggered crossings of the
+  arterial, 3 m apart), j34, j18, j113, j85 (an 8-arm place the paint draws as one box); traffic_lab j84;
+- one by construction: river_town j0 (a boulevard pair meeting the arterial at two Ts, plus a side street touching);
+- several junctions wrongly lumped: river_town j126 (a third T 20 m of arterial further on), j11 (two crossings 15 m
+  apart); traffic_lab j7 (chained through a BEND -- a point where one street only carries on, which the rule gives a
+  box it does not have -- to a T 25 m beyond), j93.
+The proposed rule, built and run on all ten files: river_town 151 -> 148 junctions, traffic_lab 156 -> 155 (lights 28 ->
+30), metro_v2_test 200 -> 196, piedmont 616 -> 611, metro_mountain 988 -> 983, metro_planned 986 -> 981, island_8_nature
+1391 -> 1381. It fixed the bend case but, being pairwise and chained like the old one, made bigger corridors: river_town
+j4 113.8 m (three boxes along a diagonal), metro_v2_test j126 200.8 m (a diagonal avenue's five boxes plus two grid
+crossings off it). A 200 m "junction" is not one, so the rule was not shipped and the files were left as they were.
+Measured with the same code at other storage lengths (largest five, metres): river_town 6.5 m 161 junctions (89, 54, 50,
+46, 44); 12 m 154 (89, 89, 77, 60, 54); 14 m 148 (114, 89, 89, 85, 85); traffic_lab 6.5 m 162 (99, 61, 49, 40, 37);
+metro_v2_test 6.5 m 216 (118, 61, 61, 53, 52), 14 m 196 (201, 124, 122, 102, 78).
+**Proposed instead, for Glenn**: (1) a point where a street only carries on or bends has no box and no stop line; (2)
+"one junction" when NOTHING can wait between the stop lines -- the shortest ordinary vehicle and its gap (a car, about
+6.5 m), leaving the bus case to the driving's own room check per vehicle class (it already closes turns "for want of
+room"); (3) the planner states pairs it builds as one (a boulevard pair's two Ts), since the road file has no such
+statement today. What still chains under it is boxes that really touch (a diagonal through a grid): a planning fault to
+fix in the planner, not a junction rule. Also found: traffic_lab's junction list carries its control plan, and the bake
+key hashes that list, so any regrouping of the lab re-bakes it.
+
+**Alternatives.** Kerb parking as a lane of its own (the brief's example: "the kerb-most lane each way is a parking
+lane"): a planned local street has ONE lane each way, so that would leave it none to drive in, and building it as two
+lanes changes the meshes. Storing a road id on the baked edges: re-bakes every level. Keeping `lanesForClass` as the
+fallback: a second source.
+
+**Revisit when** step 7 builds the nav from the model (the lane match's road-finding goes); when Glenn picks the junction
+rule; when the planner should state parking per street rather than per class.

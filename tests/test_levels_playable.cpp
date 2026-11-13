@@ -4959,8 +4959,8 @@ TEST_CASE(level_real_lanes_match_the_baked_roads) {
         }
         std::sort(oldGap.begin(), oldGap.end());
         const double mean = oldGap.empty() ? 0 : std::accumulate(oldGap.begin(), oldGap.end(), 0.0) / oldGap.size();
-        std::printf("    [lanes] %-14s %zu lanes, %d of %d drivable links matched (%d leaving the kerb lane to parking; %d other count, %d partial, %d none)\n", name,
-                    ll->lanes.size(), lm.matched, lm.drivable, lm.kerbParking, lm.countDiffers, lm.partial, lm.none);
+        std::printf("    [lanes] %-14s %zu lanes, %d of %d drivable links matched (%d other count, %d partial, %d none); %d carry their road's "
+                    "stated lanes (ADR-0418)\n", name, ll->lanes.size(), lm.matched, lm.drivable, lm.countDiffers, lm.partial, lm.none, lm.resolved);
         std::printf("    [lanes] %-14s roads on the baked spines: %d points, worst %.3f m, %d over 5 cm; lanes in the carriageway: "
                     "%d samples, %d past its edge by > 15 cm (worst %+.2f m)\n", name, roadPts, roadWorst, roadOff, lanePts, laneOut, laneWorst);
         {

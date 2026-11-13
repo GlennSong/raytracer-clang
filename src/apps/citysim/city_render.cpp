@@ -378,6 +378,24 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         if (mixed) LOG_INFO << "[citysim] " << mixed << " deck-to-street links resolved to absolute heights at both ends";
     }
 
+    // THE REAL LANES (#218), and THE ONE LANE COUNT (ADR-0418): the lanes the builder laid (published at load,
+    // engine::LevelLanes) matched to the links, which also says which road each link runs along -- and so the lanes its
+    // road file states that way, which every link the match resolves now carries. Before anything reads a lane count
+    // (the density, the bays, the signals, the sim).
+    LaneMap laneMap;
+    bool haveLaneMap = false;
+    world.each<engine::LevelLanes>([&](Entity, engine::LevelLanes& ll) {
+        if (ll.lanes.empty() || haveLaneMap) return;
+        haveLaneMap = true;
+        laneMap.build(nav_, ll.lanes, ll.roads, ll.stated);
+        const int stated = laneMap.stateLanes(nav_);
+        LOG_INFO << "[citysim] real lanes: " << laneMap.matched << " of " << laneMap.drivable << " drivable links matched ("
+                 << laneMap.countDiffers << " with another lane count, " << laneMap.partial << " where a lane starts or ends along the link, "
+                 << laneMap.none << " with no lane found); the rest keep the centreline offsets";
+        LOG_INFO << "[citysim] lanes as the road file states them: " << stated << " of " << laneMap.drivable
+                 << " drivable links (the rest, with no lane at their middle, keep their class's lanes)";
+    });
+
     // Connectivity truth (device: "I don't see the freeway connected yet"):
     // walk the built nav and report whether a car can actually reach the
     // corridor from the streets and come back. If either direction is zero,
@@ -770,16 +788,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
 #endif
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.build(nav_, carCount, pedCount, params_.seed);
-    // THE REAL LANES (#218): the lanes the builder laid (published at load, engine::LevelLanes) matched to the links
-    world.each<engine::LevelLanes>([&](Entity, engine::LevelLanes& ll) {
-        if (ll.lanes.empty()) return;
-        LaneMap lm;
-        lm.build(nav_, ll.lanes);
-        LOG_INFO << "[citysim] real lanes: " << lm.matched << " of " << lm.drivable << " drivable links matched (" << lm.countDiffers
-                 << " with another lane count, " << lm.partial << " where a lane starts or ends along the link, " << lm.none
-                 << " with no lane found; " << lm.kerbParking << " leaving the kerb lane to the parking); the rest keep the centreline offsets";
-        sim_.setLaneMap(std::move(lm));
-    });
+    if (haveLaneMap) sim_.setLaneMap(std::move(laneMap));   // (matched above, before the lane counts were read)
     {
         bool real = params_.realLanes;
         if (const char* e = std::getenv("RT_REAL_LANES")) real = e[0] == '1';

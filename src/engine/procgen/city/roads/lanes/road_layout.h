@@ -63,6 +63,10 @@ struct RoadLayout {
 
 // THE LAYOUT OF A ROAD GRAPH (see the top of this file). `g` needs its spines resolved (fromJson), not its heights.
 RoadLayout deriveLayout(const RoadLabGraph& g, LayoutSource source);
+// The junctions deriveLayout finds when the graph lists none (control_plan.h findJunctions, with the source's end
+// tolerance and the graph's at-grade crossings), with their facts and nodes.
+struct JunctionFacts;
+std::vector<JunctionFacts> layoutJunctionFacts(const RoadLabGraph& g, LayoutSource source);
 // In words: counts by number of arms, streets, dead ends, the notes.
 std::string describeLayout(const RoadLayout& layout);
 

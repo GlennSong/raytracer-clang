@@ -53,6 +53,8 @@ struct RoadModelComparison {
     uint32_t modelRoadLanes = 0, lanesWithPaths = 0, lanesWithoutPaths = 0, sectionsOutOfOrder = 0;
     // the lane match
     int linksDrivable = 0, linksMatched = 0, linksCountDiffers = 0, linksPartial = 0, linksNone = 0;
+    int linksStated = 0;                    // drivable links given their road's stated lanes (ADR-0418); the rest keep their class's
+    uint32_t baysOffStatedParking = 0;      // the sim's kerbside bays on a road that states no kerb parking, or off its band
     uint32_t streetsWithUnmatchedLink = 0;
     // the old forms against each other, at the model's junctions and streets
     uint32_t junctionsFormsDisagree = 0, streetsFormsDisagree = 0;

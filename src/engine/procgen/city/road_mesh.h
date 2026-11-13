@@ -47,7 +47,7 @@ struct UnionSpine {
     bool   closed = false;
     // The road class this chain carries (from the graph edge). Lets the welder's
     // markings, crosswalk gate, and lane dashes vary by CLASS instead of guessing
-    // from width — the single lanesForClass() source (road-unification-plan P1).
+    // from width (road-unification-plan P1).
     RoadClass klass = RoadClass::Local;
     // Semantic access bits (road_access::k*): PER-END, from the chain's
     // first and last edges (a chain's two ends can differ — an Intersection

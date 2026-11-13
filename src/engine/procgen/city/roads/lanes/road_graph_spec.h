@@ -23,12 +23,24 @@
 namespace engine {
 namespace roads::lanes {
 
+// A road's lanes, as its class states them (and a road's own "lanes" may restate). `fwd` and `back` are the TRAVEL
+// lanes each way: what the builder lays and what the city sim drives -- one lane count for every reader (ADR-0418).
+//
+// KERB PARKING (`parking`, ADR-0418): a band this many metres wide along each kerb edge of the carriageway (the paved
+// width between the kerbs), where cars park; traffic keeps to the rest. It is not a lane of its own: the builder lays the
+// lanes as stated, and the band lies over the kerb side of the kerb lane each way (a planned city's local street: one
+// 6 m lane each way, the kerb 2.5 m of it the parking). 0: no parking. A band that would leave a travel lane narrower
+// than kMinTravelLane is not built, and the road model says so. streetSection (below) is the one reader.
 struct LaneLayout {
     double w = 3.5;          // lane width
     int fwd = 1, back = 0;   // lanes per direction; forward lanes lie on the RIGHT of the spine direction
     double gap = 0.0;        // median between directions (two-way roads)
     double dovetail = 60.0;  // ramps with fwd >= 2: station where the second lane starts dying into the first
+    double parking = 0.0;    // kerb parking: the band's width along each kerb (above); 0 none
 };
+
+// The narrowest travel lane kerb parking may leave (metres): a band that would leave less is not built.
+constexpr double kMinTravelLane = 3.2;
 
 struct PocketSpec {
     std::string id, kind = "turn", side = "right";
@@ -308,6 +320,17 @@ struct RoadLabGraph {
 // The engine band list for a class: [Sidewalk][Shoulder][Travel dir -1 x back][Median gap][Travel dir +1 x fwd][Shoulder][Sidewalk],
 // one-way roads centred. Lane offsets are derived from RoadSpec::bandSpan, so the lane model is the engine's.
 RoadSpec bandsFor(const RoadClassSpec& c, const LaneLayout& layout);
+
+// THE STREET'S CROSS-SECTION AS THE CITY READS IT (ADR-0418): the engine band list the road twin hands the city sim --
+// the carriageway (the road's lanes and shoulders: 2 x (hw + shoulder)) split into travel bands and, where the road states
+// kerb parking that fits (LaneLayout::parking), a Parking band that wide along each kerb, carved out of the carriageway's
+// edges (so it lies over the kerb side of the kerb lane; the carriageway's width never moves). The one reader of the
+// stated parking: the twin's band (which the sim lays its kerbside bays in) and the road model both come from here.
+// `e` is a whole road-file edge.
+RoadSpec streetSection(const RoadLabGraph& g, const EdgeSpec& e);
+// The kerb parking `e` really has along each kerb: its stated width where it fits, else 0. `fits` (optional): false when
+// it states parking that would leave a travel lane narrower than kMinTravelLane.
+double kerbParking(const RoadLabGraph& g, const EdgeSpec& e, bool* fits = nullptr);
 
 // (name, left-normal offset from the spine, direction) of each Travel band, from the RoadSpec.
 struct LaneSlot { std::string name; double offset; int dir; };

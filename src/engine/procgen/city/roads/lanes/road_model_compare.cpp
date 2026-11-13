@@ -1,5 +1,6 @@
 #include "engine/procgen/city/roads/lanes/road_model_compare.h"
 
+#include "apps/citysim/city_sim.h"                            // the kerbside bays the city sim lays
 #include "apps/citysim/lane_map.h"                            // the lane match the city sim makes
 #include "engine/ai/nav_graph.h"
 #include "engine/components.h"                                // TrafficLane: the lanes as the loader publishes them
@@ -150,7 +151,7 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
     }
     const RoadEntity twin = roadTwin(r, 60.0, false, /*forNav=*/true);
     const RoadGraph navRoads = navRoadGraph(twin, ground ? ground : HeightField());
-    const NavGraph nav = buildNavGraph(navRoads);
+    NavGraph nav = buildNavGraph(navRoads);   // (its lanes set from the road file below, as the sim's are: ADR-0418)
     std::vector<std::vector<int>> incident(nav.nodes.size());
     for (int l = 0; l < nav.linkCount(); ++l) {
         incident[static_cast<std::size_t>(nav.links[static_cast<std::size_t>(l)].from)].push_back(l);
@@ -393,8 +394,16 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
         t.kind = l.kind;
         traffic.push_back(std::move(t));
     }
+    // each road's centre line and stated lanes, as the loader publishes them (engine::LevelLanes::roads, ::stated)
+    std::vector<std::vector<Vec2>> spines;
+    std::vector<engine::StatedLanes> statedLanes;
+    for (const EdgeSpec& e : g.edges) {
+        spines.push_back(e.xy);
+        statedLanes.push_back({e.lanes.fwd, e.lanes.back});
+    }
     citysim::LaneMap lm;
-    lm.build(nav, traffic);
+    lm.build(nav, traffic, spines, statedLanes);
+    out.linksStated = lm.stateLanes(nav);   // THE NAV'S LANES FROM THE ROAD FILE, as CityRenderSystem sets them
     out.linksDrivable = lm.drivable;
     out.linksMatched = lm.matched;
     out.linksCountDiffers = lm.countDiffers;
@@ -476,6 +485,69 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
              "another lane count, %d where a lane starts or ends along the link, %d with no lane found\n",
              lm.drivable, lm.matched, lm.countDiffers, lm.partial, lm.none);
     T += fmt("  model streets whose nav link was not matched: %u\n", out.streetsWithUnmatchedLink) + unmatched.text();
+
+    // ---- the lane count and the kerb parking, by road class (ADR-0418) ------------------------------------------------------
+    {
+        // the sim's kerbside bays, laid on this nav as the city sim lays them (no agents)
+        citysim::CitySim sim;
+        sim.build(nav, 0, 0, 5);
+        struct Row {
+            int links = 0, differ = 0, matched = 0, otherCount = 0, partial = 0, none = 0, band = 0, bays = 0;
+            std::map<int, int> navLanes;   // the nav's lanes -> links
+        };
+        std::map<std::string, Row> rows;
+        std::map<std::string, int> noRoad;   // links with no road found under them, by the nav's class
+        std::vector<int> baysOn(static_cast<std::size_t>(nav.linkCount()), 0);
+        for (const citysim::CitySim::ParkingBay& b : sim.parkingBays())
+            if (b.garage < 0 && b.link >= 0 && b.link < nav.linkCount()) ++baysOn[static_cast<std::size_t>(b.link)];
+        for (int l = 0; l < nav.linkCount(); ++l) {
+            const NavLink& L = nav.links[static_cast<std::size_t>(l)];
+            if (L.footpath) continue;
+            const int road = lm.roadOf(l);
+            if (road < 0 || static_cast<std::size_t>(road) >= g.edges.size()) {
+                ++noRoad[className(L.klass)];
+                out.baysOffStatedParking += static_cast<uint32_t>(baysOn[static_cast<std::size_t>(l)]);
+                continue;
+            }
+            const EdgeSpec& e = g.edges[static_cast<std::size_t>(road)];
+            const double parking = kerbParking(g, e);
+            Row& row = rows[fmt("%-10s %d/%d, kerb parking %.1f m", e.cls.c_str(), e.lanes.fwd, e.lanes.back, parking)];
+            ++row.links;
+            ++row.navLanes[L.lanes];
+            const int statedThisWay = lm.wayOf(l) > 0 ? e.lanes.fwd : e.lanes.back;
+            row.differ += L.lanes != statedThisWay ? 1 : 0;
+            switch (lm.outcomeOf(l)) {
+                case citysim::LaneMap::Outcome::Matched: ++row.matched; break;
+                case citysim::LaneMap::Outcome::CountDiffers: ++row.otherCount; break;
+                case citysim::LaneMap::Outcome::Partial: ++row.partial; break;
+                default: ++row.none; break;
+            }
+            row.band += L.parkWidth > 0 ? 1 : 0;
+            const int bays = baysOn[static_cast<std::size_t>(l)];
+            row.bays += bays;
+            // a bay is only ever in a band its road states: none where it states no parking, and the band's width
+            if (bays > 0 && (parking <= 0 || std::fabs(L.parkWidth - parking) > 1e-6)) out.baysOffStatedParking += static_cast<uint32_t>(bays);
+        }
+        T += fmt("\nLANES EACH WAY AND KERB PARKING BY ROAD CLASS (each drivable nav link, by the road the lane match finds under it; the "
+                 "road file's lanes along/against its spine, and its kerb parking as built): %d of %d links carry their road's stated lanes\n",
+                 out.linksStated, lm.drivable);
+        T += fmt("  %-44s %6s %-18s %7s %8s %8s %8s %6s %6s %6s\n", "class, lanes along/against, kerb parking", "links", "nav lanes (links)",
+                 "differ", "matched", "other n", "partial", "none", "band", "bays");
+        for (const std::pair<const std::string, Row>& kv : rows) {
+            std::string lanes;
+            for (const std::pair<const int, int>& n : kv.second.navLanes) lanes += fmt("%s%d: %d", lanes.empty() ? "" : ", ", n.first, n.second);
+            const Row& r = kv.second;
+            T += fmt("  %-44s %6d %-18s %7d %8d %8d %8d %6d %6d %6d\n", kv.first.c_str(), r.links, lanes.c_str(), r.differ, r.matched, r.otherCount,
+                     r.partial, r.none, r.band, r.bays);
+        }
+        std::string nr;
+        for (const std::pair<const std::string, int>& n : noRoad) nr += fmt("%s%d %s", nr.empty() ? "" : ", ", n.second, n.first.c_str());
+        T += fmt("  links with no lane at their middle (no road found; they keep their class's lanes): %s\n", nr.empty() ? "none" : nr.c_str());
+        T += fmt("  (differ: links whose nav lanes are not their road's stated lanes that way; matched / other n / partial / none: the lane "
+                 "match's outcome; band: links with a kerb parking band; bays: the sim's kerbside bays)\n");
+        T += fmt("  the sim's kerbside bays: %zu; on a road that states no kerb parking, or off its stated band: %u\n", sim.parkingBays().size(),
+                 out.baysOffStatedParking);
+    }
 
     // ---- lanes against the lane graph's lane paths ------------------------------------------------------------------------------
     std::vector<uint32_t> pathsOf(r.lanes.lanes.size(), 0);

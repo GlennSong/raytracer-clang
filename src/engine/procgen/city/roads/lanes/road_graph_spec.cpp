@@ -38,6 +38,11 @@ const std::map<std::string, RoadClassSpec>& roadClasses() {
         // space because it's hard to drive when they're that narrow"): 1.0 m left 9 m of deck to hold a car on
         add("rural",      3.5,          1,  1,  2.5,     0.0,     0.0,   1,   0.10,  60.0,  0.5);
         add("ramp",       4.5,          1,  0,  2.5,     0.0,     0.0,   0,   0.09,  40.0,  1.0);
+        // KERB PARKING (ADR-0418): a local street parks along both kerbs, a 2.5 m band over the kerb side of its 6 m lane
+        // each way (3.5 m of it to drive in). Measured before it was stated: the road twin carved exactly this band out
+        // of every planned local street and out of no other class on any shipped level -- a collector's or an
+        // arterial's kerb lane was never parked in. Every other class: none.
+        m["local"].lanes.parking = 2.5;
         add("divider",    0.0,          0,  0,  0.0,     0.0,     1.5,  -1,   1.0,   1.0,   0.0);
         // THE MOUNTAIN ROAD: the rural section, graded as mountain roads are, cutting through what it cannot climb
         // (ADR-0116), with GUARDRAILS (ADR-0117, Glenn: "the mountain road needs railguards at some places") on its
@@ -87,6 +92,7 @@ nlohmann::json classJson(const RoadClassSpec& c) {
                         {"window", c.window}};
     if (c.median != 0) j["median"] = c.median;
     if (c.lanes.gap != 0) j["gap"] = c.lanes.gap;
+    if (c.lanes.parking != 0) j["parking"] = c.lanes.parking;
     if (c.balance != 0) j["balance"] = c.balance;
     if (c.track) j["track"] = true;
     if (c.footway) j["footway"] = true;
@@ -222,6 +228,20 @@ std::vector<const EdgeSpec*> RoadLabGraph::paved() const {
     std::vector<const EdgeSpec*> out; for (const EdgeSpec& e : edges) if (e.laneCount() > 0) out.push_back(&e); return out;
 }
 
+RoadSpec streetSection(const RoadLabGraph& g, const EdgeSpec& e) {
+    const RoadClassSpec& c = g.cls(e);
+    const double carriageway = 2.0 * (g.hw(e) + c.shoulder);
+    const int perDir = std::max(1, std::max(c.lanes.fwd, c.lanes.back));
+    return roadSpecStreetParking(carriageway, perDir, c.sidewalk, 0.15, e.lanes.parking, kMinTravelLane);
+}
+
+double kerbParking(const RoadLabGraph& g, const EdgeSpec& e, bool* fits) {
+    double offset = 0, width = 0;
+    const bool has = e.lanes.parking > 0 && roadSpecParkingBand(streetSection(g, e), +1, offset, width);
+    if (fits) *fits = has || e.lanes.parking <= 0;
+    return has ? width : 0.0;
+}
+
 std::array<double, 4> RoadLabGraph::bounds() const {
     if (terrain.hasBounds) return terrain.bounds;
     double x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300, m = 0;
@@ -261,10 +281,13 @@ std::vector<LaneSlot> laneSlots(const RoadClassSpec& c, const LaneLayout& L) {
 RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::string& baseDir) {
     RoadLabGraph g; g.name = spec.value("name", std::string("roads")); g.classes = roadClasses();
     if (spec.contains("classes")) for (auto it = spec["classes"].begin(); it != spec["classes"].end(); ++it) {
-        RoadClassSpec& c = g.classes[it.key()]; if (c.name.empty()) { c = g.classes.at("local"); c.name = it.key(); }
+        // a class the table does not know starts from the local row -- but parks only where it says so: the local row's
+        // kerb parking belongs to the local row's section (ADR-0418)
+        RoadClassSpec& c = g.classes[it.key()]; if (c.name.empty()) { c = g.classes.at("local"); c.name = it.key(); c.lanes.parking = 0.0; }
         const nlohmann::json& j = it.value();
         c.lanes.w = num(j, "w", c.lanes.w); c.lanes.fwd = static_cast<int>(num(j, "fwd", c.lanes.fwd)); c.lanes.back = static_cast<int>(num(j, "back", c.lanes.back));
         c.lanes.gap = num(j, "gap", c.lanes.gap); c.shoulder = num(j, "shoulder", c.shoulder); c.sidewalk = num(j, "sidewalk", c.sidewalk); c.median = num(j, "median", c.median);
+        c.lanes.parking = num(j, "parking", c.lanes.parking);
         c.rank = static_cast<int>(num(j, "rank", c.rank)); c.gMax = num(j, "g_max", c.gMax); c.window = num(j, "window", c.window); c.balance = num(j, "balance", c.balance); c.thick = num(j, "thick", c.thick);
         if (j.contains("track") && j["track"].is_boolean()) c.track = j["track"].get<bool>();
         if (j.contains("footway") && j["footway"].is_boolean()) c.footway = j["footway"].get<bool>();
@@ -310,6 +333,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         if (ej.contains("lanes")) {
             const auto& l = ej["lanes"]; e.lanes.w = num(l, "w", e.lanes.w); e.lanes.fwd = static_cast<int>(num(l, "fwd", e.lanes.fwd)); e.lanes.back = static_cast<int>(num(l, "back", e.lanes.back));
             e.lanes.gap = num(l, "gap", e.lanes.gap); e.lanes.dovetail = num(l, "dovetail", e.lanes.dovetail);
+            e.lanes.parking = num(l, "parking", e.lanes.parking);
             if (l.contains("pockets")) for (const auto& p : l["pockets"]) {
                 PocketSpec P; P.id = p.at("id").get<std::string>(); P.kind = p.value("kind", std::string("turn")); P.side = p.value("side", std::string("right"));
                 P.dir = p.value("dir", std::string("fwd")) == "back" ? -1 : +1; P.s0 = p.at("s0").get<double>(); P.s1 = p.at("s1").get<double>();

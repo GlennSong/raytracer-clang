@@ -38,19 +38,16 @@ using CrossSection = std::vector<LaneSpec>;
 double carriagewayWidth(const CrossSection& xs);
 // Full right-of-way width, including sidewalks.
 double totalWidth(const CrossSection& xs);
-// Count of Driving lanes (both directions) — the single `lanesAt()`-style query
-// so painted dividers, junction dashes, and nav lanes never disagree.
+// Count of Driving lanes (both directions) in a cross-section.
 int    drivingLaneCount(const CrossSection& xs);
 
-// THE single lane-count query keyed on road CLASS (via its default cross-section).
-// Markings, junction dashes, and nav all call this instead of re-deriving lanes
-// from width with three different constants (road_mesh.cpp:969/1563 laneWidth 3.5,
-// nav_graph.cpp:209 params) — so lane k is the same lane everywhere. Callers that
-// need PER-DIRECTION lanes on a two-way road pass `perDirection` (half, min 1).
-int    lanesForClass(RoadClass c, bool perDirection = false);
-
-// THE PER-CLASS CROSS-SECTIONS (ADR-0052/0053): each class's lanes, sidewalks and median, and the lane count nav and
-// the markings read (lanesForClass). Its grades are the road class table's (roads/lanes road_graph_spec, ADR-0276).
+// (lanesForClass, the lane count by class the nav graph read from the table below, is gone (ADR-0418): it said an
+// arterial had two lanes a way where the road class table and the builder say three. A street's lanes are its road
+// file's class table's (roads/lanes LaneLayout); the nav reads them there.)
+//
+// THE PER-CLASS CROSS-SECTIONS (ADR-0052/0053): each class's lanes, sidewalks and median. NO SYSTEM READS THEIR LANE
+// COUNTS (ADR-0418: the road class table, roads/lanes road_graph_spec, states every street's lanes); only their own
+// tests do. Its grades are the road class table's (ADR-0276).
 // The network policy that lived beside it -- roundabout promotion, bridge clearance, deck thickness, ramp grade -- went
 // with the lattice builder that read it (ADR-0278).
 //

@@ -241,6 +241,16 @@ std::string leadOf(const std::string& s, const Member& m) { return s.substr(m.le
 
 }  // namespace
 
+std::vector<JunctionFacts> layoutJunctionFacts(const RoadLabGraph& graph, LayoutSource source) {
+    // two roads meeting away from a shared end: as the graph declares them, else as the planner's crossing policy has
+    // them (planCrossings: the planner's own, which city_plan's design step writes into the scene as its crossings)
+    const std::vector<CrossingSpec> crossings = graph.declaresCrossings ? graph.crossings : crossingsFromJson(planCrossings(graph));
+    JunctionFinding how;
+    how.endTolerance = source == LayoutSource::Planner ? kPlannerSameEnd : -1.0;
+    how.atGrade = &crossings;
+    return findJunctions(graph, ControlPolicy(), how);
+}
+
 RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
     RoadLayout out;
     RoadLabGraph g = graph;
@@ -250,13 +260,7 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
         out.junctions = graph.junctions;
         out.keptList = true;
     } else {
-        // two roads meeting away from a shared end: as the graph declares them, else as the planner's crossing policy has
-        // them (planCrossings: the planner's own, which city_plan's design step writes into the scene as its crossings)
-        const std::vector<CrossingSpec> crossings = graph.declaresCrossings ? graph.crossings : crossingsFromJson(planCrossings(graph));
-        JunctionFinding how;
-        how.endTolerance = source == LayoutSource::Planner ? kPlannerSameEnd : -1.0;
-        how.atGrade = &crossings;
-        for (const JunctionFacts& f : findJunctions(graph, ControlPolicy(), how)) {
+        for (const JunctionFacts& f : layoutJunctionFacts(graph, source)) {
             PlannedJunction pj;
             pj.id = f.id;
             pj.at = Vec2(written(f.at.x), written(f.at.y));

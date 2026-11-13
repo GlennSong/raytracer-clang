@@ -83,9 +83,11 @@ RoadSpec roadSpecFromLegacy(double width, bool oneWay, double sidewalkWidth,
 // only, which is honest: you cannot park on it. This replaces the legacy shim
 // for generated streets, which split the WHOLE carriageway into travel lanes and
 // so left the sim parking cars in the outermost travel lane against the kerb.
+// `parkWidth` is the road's STATED kerb parking (roads/lanes LaneLayout::parking,
+// read through streetSection, ADR-0418); 0 gives the travel lanes alone.
 RoadSpec roadSpecStreetParking(double carriageway, int lanesPerDir,
                                double sidewalkWidth, double curbWidth,
-                               double parkWidth = 2.5, double minLane = 3.2);
+                               double parkWidth, double minLane);
 
 // The kerbside Parking band on `side` (-1 = the left end of the band list,
 // +1 = the right end), in the form every consumer needs: the lateral offset from

@@ -49,7 +49,7 @@ namespace {
 // generated street does — same as tests/test_city_parking.cpp.
 RoadEntity slopedCross() {
     RoadEntity net;
-    net.graph.specs = { roadSpecStreetParking(12.0, 1, 3.5, 0.25) };
+    net.graph.specs = { roadSpecStreetParking(12.0, 1, 3.5, 0.25, 2.5, 3.2) };
     net.look.defaultWidth = net.graph.specs[0].carriagewayWidth();
     net.look.sidewalk = 2.5;
     net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(0, 140)},

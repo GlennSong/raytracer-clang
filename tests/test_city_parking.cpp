@@ -31,7 +31,7 @@ namespace {
 // now (the old "Local and >= 9 m wide" heuristic is gone), so the fixture has to
 // resolve one exactly the way a generated street does.
 NavGraph wideCross() {
-    const RoadSpec spec = roadSpecStreetParking(12.0, 1, 3.5, 0.25);
+    const RoadSpec spec = roadSpecStreetParking(12.0, 1, 3.5, 0.25, 2.5, 3.2);
     double off = 0, w = 0;
     roadSpecParkingBand(spec, +1, off, w);
     RoadGraph g;
@@ -51,7 +51,7 @@ NavGraph wideCross() {
 // `radius` (0 = dead straight). Dead ends at both ends, so the whole thing is a
 // single chain — which is the unit bays are laid along.
 NavGraph oneStreet(double len, int segs, double radius) {
-    const RoadSpec spec = roadSpecStreetParking(12.0, 1, 3.5, 0.25);
+    const RoadSpec spec = roadSpecStreetParking(12.0, 1, 3.5, 0.25, 2.5, 3.2);
     double off = 0, w = 0;
     roadSpecParkingBand(spec, +1, off, w);
     RoadGraph g;
@@ -287,7 +287,7 @@ TEST_CASE(parking_bay_hit_rate_is_reported) {
 // front of its portal. In a crossroads with no kerbside parking at all, drivers park up a garage: in its bays, the car
 // left on its deck (at the stall, at the deck's height), and they drive out again.
 TEST_CASE(drivers_park_up_a_garage_and_drive_out_again) {
-    const RoadSpec spec = roadSpecStreetParking(12.0, 1, 3.5, 0.25);
+    const RoadSpec spec = roadSpecStreetParking(12.0, 1, 3.5, 0.25, 2.5, 3.2);
     RoadGraph g;
     g.nodes = { { Vec2(0, 0) }, { Vec2(0, 100) }, { Vec2(0, -100) }, { Vec2(100, 0) }, { Vec2(-100, 0) } };
     for (int arm = 1; arm <= 4; ++arm)

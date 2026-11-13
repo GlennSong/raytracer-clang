@@ -64,16 +64,7 @@ JUNCTIONS. The model holds 156 (20 of them two arms: a street carrying on, which
 
 STREETS. 293 of the model's streets that cars drive compared with the nav link along their middle.
   no nav link along it: 0
-  lanes each way differ: 153
-    fw0_a (freeway) at (-531.9, 10.3): along: nav 3, model 4;
-    fw1_a (freeway) at (531.8, -10.3): along: nav 3, model 4;
-    fw0_b (freeway) at (-507.9, 9.8): along: nav 3, model 4;
-    fw1_b (freeway) at (507.8, -9.8): along: nav 3, model 4;
-    s242 (collector) at (458.0, 105.3): along: nav 1, model 2;
-    s343 (collector) at (561.0, -100.6): along: nav 1, model 2;
-    s239 (collector) at (459.4, -99.1): along: nav 1, model 2;
-    s277 (collector) at (561.2, 99.3): along: nav 1, model 2;
-    ... and 145 more
+  lanes each way differ: 0
   one-way differs: 0
   class differs: 0
   length differs (the nav's chain of links between its junction nodes against the street, by more than 5 m and 10%): 31
@@ -87,8 +78,20 @@ STREETS. 293 of the model's streets that cars drive compared with the nav link a
     s340 at (462.7, -332.8): model 106 m from j149 to j150, nav chain 551 m
     ... and 23 more
 
-THE LANE MATCH (the city sim's: which nav links the builder's lanes were found under): 1214 drivable links, 1203 matched, 0 with another lane count, 8 where a lane starts or ends along the link, 3 with no lane found
+THE LANE MATCH (the city sim's: which nav links the builder's lanes were found under): 1214 drivable links, 1201 matched, 2 with another lane count, 8 where a lane starts or ends along the link, 3 with no lane found
   model streets whose nav link was not matched: 0
+
+LANES EACH WAY AND KERB PARKING BY ROAD CLASS (each drivable nav link, by the road the lane match finds under it; the road file's lanes along/against its spine, and its kerb parking as built): 1211 of 1214 links carry their road's stated lanes
+  class, lanes along/against, kerb parking      links nav lanes (links)   differ  matched  other n  partial   none   band   bays
+  arterial   3/3, kerb parking 0.0 m              332 3: 332                   0      331        1        0      0      0      0
+  collector  2/0, kerb parking 0.0 m              152 2: 152                   0      152        0        0      0      0      0
+  collector  2/2, kerb parking 0.0 m               18 2: 18                    0       17        1        0      0      0      0
+  freeway    4/0, kerb parking 0.0 m              168 4: 168                   0      168        0        0      0      0      0
+  local      1/1, kerb parking 2.5 m              450 1: 450                   0      450        0        0      0    450   1298
+  ramp       1/0, kerb parking 0.0 m               91 1: 91                    0       83        0        8      0      0      0
+  links with no lane at their middle (no road found; they keep their class's lanes): 3 local
+  (differ: links whose nav lanes are not their road's stated lanes that way; matched / other n / partial / none: the lane match's outcome; band: links with a kerb parking band; bays: the sim's kerbside bays)
+  the sim's kerbside bays: 1298; on a road that states no kerb parking, or off its stated band: 0
 
 LANES. 1118 of the model's lanes on roads cars drive: 996 made into lane-graph lane paths, 122 into none.
     s30.b2 (through, slot 2, 49 m)
@@ -117,16 +120,13 @@ WHERE THE OLD FORMS DISAGREE WITH EACH OTHER (the evidence). At the model's junc
     j93 at (349.6, -152.8), 5 arms: nav yes, paint yes, lane graph yes; nav nodes 3, lane graph junctions 2
     j4 at (-326.9, -172.3), 4 arms: nav yes, paint yes, lane graph yes; nav nodes 2, lane graph junctions 1
     ... and 5 more
-  streets where the nav's lanes along it and the lane graph's section there differ: 152
-    fw0_a at (-531.9, 10.3): along it the nav drives 3 lanes, the lane graph's section there has 4 (the model's class: 4)
-    fw1_a at (531.8, -10.3): along it the nav drives 3 lanes, the lane graph's section there has 4 (the model's class: 4)
-    fw0_b at (-507.9, 9.8): along it the nav drives 3 lanes, the lane graph's section there has 4 (the model's class: 4)
-    fw1_b at (507.8, -9.8): along it the nav drives 3 lanes, the lane graph's section there has 4 (the model's class: 4)
-    s242 at (458.0, 105.3): along it the nav drives 1 lanes, the lane graph's section there has 3 (the model's class: 2)
-    s343 at (561.0, -100.6): along it the nav drives 1 lanes, the lane graph's section there has 3 (the model's class: 2)
-    s239 at (459.4, -99.1): along it the nav drives 1 lanes, the lane graph's section there has 2 (the model's class: 2)
-    s277 at (561.2, 99.3): along it the nav drives 1 lanes, the lane graph's section there has 2 (the model's class: 2)
-    ... and 144 more
+  streets where the nav's lanes along it and the lane graph's section there differ: 6
+    s242 at (458.0, 105.3): along it the nav drives 2 lanes, the lane graph's section there has 3 (the model's class: 2)
+    s343 at (561.0, -100.6): along it the nav drives 2 lanes, the lane graph's section there has 3 (the model's class: 2)
+    s260 at (-452.9, -125.6): along it the nav drives 2 lanes, the lane graph's section there has 3 (the model's class: 2)
+    s315 at (-557.3, -119.7): along it the nav drives 2 lanes, the lane graph's section there has 3 (the model's class: 2)
+    s311 at (-569.3, 28.4): along it the nav drives 2 lanes, the lane graph's section there has 3 (the model's class: 2)
+    s257 at (-468.9, 31.7): along it the nav drives 2 lanes, the lane graph's section there has 3 (the model's class: 2)
 
 WHAT THE MODEL DOES NOT STATE YET (left empty):
   - crossings: the road file declares none (the design stage works them out from heights)
@@ -134,7 +134,7 @@ WHAT THE MODEL DOES NOT STATE YET (left empty):
   - which lines between lanes may be crossed: nothing states them
   - junction outlines on the ground: the builder has none (the paint's boxes are kept as stretches along each road)
   - crosswalks: nothing states them (the paint draws a zebra at each box)
-  - kerb parking and its spaces: nothing states them (the road twin invents them)
+  - parking spaces: the kerb parking band is stated (each street's cross-section), the spaces along it are not (the city sim lays them at load)
   - street names: nothing states them (generated at load, stored nowhere)
   - blocks and their uses: the city plan has them, the road file does not carry them
   - signal groups: nothing states them (each driving model works its own out)
@@ -151,4 +151,4 @@ WHERE THE BUILD DOES NOT MATCH WHAT WAS STATED (the model's own problems): 40
     ... and 32 more
 
 (nav graph 0.0 s, lane graph 4.1 s)
-(the road build 11.9 s, the model 0.43 s, the comparison 4.1 s)
+(the road build 12.1 s, the model 0.41 s, the comparison 4.1 s)

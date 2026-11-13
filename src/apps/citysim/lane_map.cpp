@@ -1,5 +1,7 @@
 #include "lane_map.h"
 
+#include "../../engine/procgen/city/polyline.h"   // distToPolyline
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -55,10 +57,38 @@ Vec2 laneAt(const LinkLane& l, Real t) {
 
 }  // namespace
 
-void LaneMap::build(const engine::NavGraph& nav, const std::vector<engine::TrafficLane>& lanes) {
-    links_.assign(static_cast<std::size_t>(nav.linkCount()), {});
-    drivable = matched = countDiffers = partial = none = kerbParking = 0;
+void LaneMap::build(const engine::NavGraph& nav, const std::vector<engine::TrafficLane>& lanes,
+                    const std::vector<std::vector<Vec2>>& roads, const std::vector<engine::StatedLanes>& stated) {
+    const std::size_t nLinks = static_cast<std::size_t>(nav.linkCount());
+    links_.assign(nLinks, {});
+    roadOf_.assign(nLinks, -1);
+    wayOf_.assign(nLinks, 0);
+    stated_.assign(nLinks, -1);
+    outcome_.assign(nLinks, Outcome::NotDrivable);
+    drivable = matched = countDiffers = partial = none = resolved = 0;
     counts.clear();
+    // THE ROAD UNDER A LINK: of the roads with lanes running its way at its middle `M` (`byRoad`: road -> (lanes, summed
+    // |lateral|)), the one whose centre line lies nearest M -- the link was cut from that line (the road twin keeps a
+    // road's spine to 1.5 m). Without the centre lines: the one with the most lanes there (ties: the nearer).
+    auto pickRoad = [&roads](const std::map<int, std::pair<int, Real>>& byRoad, const Vec2& M) {
+        int road = byRoad.begin()->first;
+        Real best = 1e30;
+        for (const auto& [p, r] : byRoad) {
+            if (static_cast<std::size_t>(p) >= roads.size() || roads[static_cast<std::size_t>(p)].size() < 2) {
+                best = 1e30;   // a road without its line: by the lanes, for all of them
+                break;
+            }
+            const Real d = engine::distToPolyline(M, roads[static_cast<std::size_t>(p)]);
+            if (d < best) { best = d; road = p; }
+        }
+        if (best < 1e29) return road;
+        road = byRoad.begin()->first;
+        for (const auto& [p, r] : byRoad) {
+            const std::pair<int, Real>& b = byRoad.at(road);
+            if (r.first > b.first || (r.first == b.first && r.second / r.first < b.second / b.first)) road = p;
+        }
+        return road;
+    };
     // the travel lanes, with their stations, and a grid of their points (16 m cells) to find the ones near a link
     // (in TRAVEL order: a lane against its road, dir -1, keeps the road's point order)
     struct Src { const engine::TrafficLane* lane; std::vector<Vec2> xy; std::vector<Real> s; };
@@ -86,7 +116,8 @@ void LaneMap::build(const engine::NavGraph& nav, const std::vector<engine::Traff
         ++drivable;
         const Vec2 A = nav.nodes[static_cast<std::size_t>(L.from)], B = nav.nodes[static_cast<std::size_t>(L.to)];
         const Real len = (B - A).length();
-        if (len < 1e-6) { ++none; continue; }
+        Outcome& outcome = outcome_[static_cast<std::size_t>(li)];
+        if (len < 1e-6) { ++none; outcome = Outcome::None; continue; }
         const Vec2 d = (B - A) * (1.0 / len), kerb = engine::rightOf(d), M = (A + B) * 0.5;
         // how far from the link's line a lane of it may lie: the whole carriageway either side, and a little
         const Real reach = 0.5 * std::max<Real>(L.width, L.lanes * 3.5 * (L.oneWay ? 1 : 2)) + 2.0;
@@ -104,6 +135,8 @@ void LaneMap::build(const engine::NavGraph& nav, const std::vector<engine::Traff
         struct Hit { Real lateral; LinkLane lane; const engine::TrafficLane* src = nullptr; };
         std::vector<Hit> hits;
         bool sawPartial = false;
+        std::map<int, std::pair<int, Real>> atMiddle;   // road -> (its lanes running this way at the middle, summed |lateral|)
+        std::map<int, int> waySum;                       // road -> the sum of those lanes' ways along it
         for (int k : cand) {
             const Src& e = src[static_cast<std::size_t>(k)];
             const std::vector<Vec2>& xy = e.xy;
@@ -114,6 +147,14 @@ void LaneMap::build(const engine::NavGraph& nav, const std::vector<engine::Traff
             const Vec2 tan = b - a;
             const Real tl = tan.length();
             if (tl < 1e-6 || (tan.x * d.x + tan.y * d.y) / tl < 0.8) continue;
+            // (a lane of the road under the link, whether or not it runs the link's whole length)
+            if (e.lane->parent >= 0) {
+                const Vec2 pMid = pointAt(xy, e.s, pm.s);
+                std::pair<int, Real>& m = atMiddle[e.lane->parent];
+                ++m.first;
+                m.second += std::fabs((pMid.x - M.x) * kerb.x + (pMid.y - M.y) * kerb.y);
+                waySum[e.lane->parent] += e.lane->dir;
+            }
             // ...over its whole length
             const Proj pa = project(xy, e.s, A), pb = project(xy, e.s, B);
             if (pa.past > 1.0 || pb.past > 1.0 || pa.dist > reach || pb.dist > reach || pb.s <= pa.s) { sawPartial = true; continue; }
@@ -130,31 +171,54 @@ void LaneMap::build(const engine::NavGraph& nav, const std::vector<engine::Traff
             const Vec2 pM = pointAt(xy, e.s, pm.s);
             hits.push_back({(pM.x - M.x) * kerb.x + (pM.y - M.y) * kerb.y, std::move(ll), e.lane});
         }
-        if (hits.empty()) { ++(sawPartial ? partial : none); continue; }
-        // ONE ROAD's lanes: near a junction a crossing road's lane can run this way for a while (its spine bends in);
-        // keep the road with the most lanes along the link (ties: the one nearer the link's line)
-        {
-            std::map<int, std::pair<int, Real>> byRoad;   // parent -> (lanes, summed |lateral|)
-            for (const Hit& h : hits) { auto& r = byRoad[h.src->parent]; ++r.first; r.second += std::fabs(h.lateral); }
-            int road = hits.front().src->parent;
-            for (const auto& [p, r] : byRoad) {
-                const auto& b = byRoad[road];
-                if (r.first > b.first || (r.first == b.first && r.second / r.first < b.second / b.first)) road = p;
+        // THE ROAD UNDER THE LINK, the way the link runs along it, and the lanes its road file states that way
+        if (!atMiddle.empty()) {
+            const int road = pickRoad(atMiddle, M);
+            roadOf_[static_cast<std::size_t>(li)] = road;
+            wayOf_[static_cast<std::size_t>(li)] = waySum[road] >= 0 ? 1 : -1;
+            if (static_cast<std::size_t>(road) < stated.size()) {
+                const engine::StatedLanes& s = stated[static_cast<std::size_t>(road)];
+                const int n = wayOf_[static_cast<std::size_t>(li)] > 0 ? s.along : s.against;
+                if (n > 0) {
+                    stated_[static_cast<std::size_t>(li)] = n;
+                    ++resolved;
+                }
             }
+        }
+        if (hits.empty()) {
+            ++(sawPartial ? partial : none);
+            outcome = sawPartial ? Outcome::Partial : Outcome::None;
+            continue;
+        }
+        // ONE ROAD's lanes: near a junction a crossing road's lane can run this way for a while (its spine bends in);
+        // keep the road under the link (a lane always has its road: the road was found from these very lanes)
+        {
+            const int road = roadOf_[static_cast<std::size_t>(li)];
             hits.erase(std::remove_if(hits.begin(), hits.end(), [&](const Hit& h) { return h.src->parent != road; }), hits.end());
+            if (hits.empty()) { ++partial; outcome = Outcome::Partial; continue; }   // its own lanes start or end along it
         }
         std::sort(hits.begin(), hits.end(), [](const Hit& x, const Hit& y) { return x.lateral < y.lateral; });   // offside first
-        const int want = std::max(1, L.lanes);
+        // THE STATED LANES (the road file's, ADR-0418), all of them travel lanes: none is left over "for the parking" --
+        // kerb parking is a band of the kerb lane where a road states it (roads/lanes LaneLayout::parking), never a lane
+        // of its own. A link whose road is not known keeps the nav graph's own count.
+        const int want = stated_[static_cast<std::size_t>(li)] > 0 ? stated_[static_cast<std::size_t>(li)] : std::max(1, L.lanes);
         ++counts[{want, static_cast<int>(hits.size())}];
-        // THE KERB LANE IS THE PARKING LANE: the sim counts its lanes from the road's width less the parking it lines the
-        // kerbs with (laneSpacingFor), so a road the builder laid three lanes a way is two to drive in and the bays -- the
-        // kerb-most lane stays the parking's
-        if (static_cast<int>(hits.size()) == want + 1) { hits.pop_back(); ++kerbParking; }
-        if (static_cast<int>(hits.size()) != want) { ++countDiffers; continue; }
+        if (static_cast<int>(hits.size()) != want) { ++countDiffers; outcome = Outcome::CountDiffers; continue; }
         std::vector<LinkLane>& out = links_[static_cast<std::size_t>(li)];
         for (Hit& h : hits) out.push_back(std::move(h.lane));
         ++matched;
+        outcome = Outcome::Matched;
     }
+}
+
+int LaneMap::stateLanes(engine::NavGraph& nav) const {
+    int set = 0;
+    for (std::size_t li = 0; li < stated_.size() && li < nav.links.size(); ++li)
+        if (stated_[li] > 0) {
+            nav.links[li].lanes = stated_[li];
+            ++set;
+        }
+    return set;
 }
 
 Vec2 LaneMap::point(int link, Real t, Real laneF) const {

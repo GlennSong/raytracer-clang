@@ -13,6 +13,10 @@
 //   lanes_tool model <graph.json> [--out <dir>]   build the roads and assemble THE ROAD MODEL: model.txt, report.txt, model.svg
 //   lanes_tool compare <graph.json> [--out <dir>]   the model files too, and the road model against the old forms (twin/nav, paint boxes, lane graph,
 //                      lane match): compare.txt
+//   lanes_tool junctions <graph.json> [--top N]   the junctions the file's grouping makes (the control plan's where the file
+//                      plans controls, else the layout's), each with its nodes and its size (the most any two nodes lie
+//                      apart), the biggest first (ADR-0418)
+#include "engine/procgen/city/roads/lanes/control_plan.h"   // junctions: findJunctions, the one grouping
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/road_design.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"   // layout: the road file's junctions and streets (ADR-0417)
@@ -181,6 +185,51 @@ int main(int argc, char** argv) {
             } catch (const std::exception& ex) { std::fprintf(stderr, "lanes: %s: %s\n", argv[i], ex.what()); }
         }
         std::printf("%d ramp ends land wrongly (or frontage roads run wrongly) in all, %d of them planned (build() refuses those)\n", faults, planned);
+        return 0;
+    }
+    if (argc >= 3 && std::strcmp(argv[1], "junctions") == 0) {
+        // THE JUNCTIONS AS THE FILE'S GROUPING MAKES THEM (control_plan.h findJunctions): the control plan's where the file
+        // plans controls (city_plan controls finds them so), else the layout's (lanes_tool layout --fresh); each with its
+        // nodes and its size, the biggest first. One line per junction: "junction <id> at <x> <y> nodes <n> size <m> roads
+        // <a,b,..> points <x,y> ..." (a script reads them to draw the close-ups).
+        std::size_t top = 20;
+        for (int i = 3; i + 1 < argc; ++i)
+            if (std::strcmp(argv[i], "--top") == 0) top = static_cast<std::size_t>(std::atoi(argv[i + 1]));
+        std::vector<JunctionFacts> js;
+        bool controls = false;
+        try {
+            const RoadLabGraph g = RoadLabGraph::load(argv[2]);
+            controls = g.declaresJunctions;
+            js = controls ? findJunctions(g, ControlPolicy()) : layoutJunctionFacts(g, LayoutSource::Inferred);
+        } catch (const std::exception& ex) { std::fprintf(stderr, "lanes_tool: %s: %s\n", argv[2], ex.what()); return 1; }
+        auto sizeOf = [](const JunctionFacts& j) {
+            double s = 0;
+            for (const Vec2& a : j.nodes)
+                for (const Vec2& b : j.nodes) s = std::max(s, (a - b).length());
+            return s;
+        };
+        std::vector<std::size_t> order(js.size());
+        for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return sizeOf(js[a]) > sizeOf(js[b]); });
+        std::size_t multi = 0;
+        for (const JunctionFacts& j : js) multi += j.nodes.size() > 1 ? 1 : 0;
+        std::printf("%s: %zu junctions (%s's grouping), %zu of them of two nodes or more\n", argv[2], js.size(),
+                    controls ? "the control plan" : "the layout", multi);
+        for (std::size_t k = 0; k < order.size() && k < top; ++k) {
+            const JunctionFacts& j = js[order[k]];
+            std::set<std::string> roads;
+            for (const ArmFacts& a : j.arms) roads.insert(a.road);
+            for (const PlannedStretch& st : j.inside) roads.insert(st.road);
+            std::string rs, pts;
+            for (const std::string& r : roads) rs += (rs.empty() ? "" : ",") + r;
+            for (const Vec2& p : j.nodes) {
+                char b[64];
+                std::snprintf(b, sizeof b, " %.1f,%.1f", p.x, p.y);
+                pts += b;
+            }
+            std::printf("junction %s at %.1f %.1f nodes %zu size %.1f arms %zu roads %s points%s\n", j.id.c_str(), j.at.x, j.at.y,
+                        j.nodes.size(), sizeOf(j), j.arms.size(), rs.c_str(), pts.c_str());
+        }
         return 0;
     }
     if (argc >= 3 && std::strcmp(argv[1], "layout") == 0) {

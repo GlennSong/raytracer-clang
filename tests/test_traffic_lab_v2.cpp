@@ -1430,11 +1430,17 @@ TEST_CASE(level_traffic_lab_v2_rebuild_hands_over_again) {
 // traffic_lab as v1: t = 30, 60, 90, 120 s. Taken again when the lab was re-planned with one-way frontage roads
 // (ADR-0413): its ROADS changed, not the old model's code (with the old lab roads put back, the earlier numbers still
 // came out; river_town's below did not move).
-constexpr uint64_t kV1LabHashes[] = {0x71f6d213b1feea70ull, 0x3721785c12c569a1ull, 0xc49b17d829d1de91ull,
-                                     0x876a11bc449f94d8ull};
+// Both taken again with ONE LANE COUNT (ADR-0418): the sim's links now carry the lanes their road file states (an
+// arterial three a way, not two; a collector two, not one; a freeway carriageway four, not three; a boulevard three, not
+// one), so streets gained travel lanes, the lane match no longer leaves a kerb lane "to the parking", and a city that
+// sizes its traffic by lane-kilometres (river_town) deals more cars. Its ROADS' lane counts changed, not the old model's
+// driving: with the nav given its lanes the old way (a temporary switch, removed), the earlier numbers -- 71f6d213...,
+// f131e7b3..., all eight -- still came out.
+constexpr uint64_t kV1LabHashes[] = {0x787bbb8cad76b402ull, 0xfd480345d78d0026ull, 0xce43eccec2735354ull,
+                                     0x2cda6f411bb6bca8ull};
 // river_town: t = 15, 30, 45, 60 s
-constexpr uint64_t kV1RiverHashes[] = {0xf131e7b3521590c2ull, 0x97f03bee42dfacf0ull, 0xf091e2f8d51d0c6eull,
-                                       0x1cea9a39a79f85f4ull};
+constexpr uint64_t kV1RiverHashes[] = {0x943f48adddca7360ull, 0xb2477e17542d405aull, 0xc65e9c4c0bf9a152ull,
+                                       0x5a6e7fe223e87006ull};
 
 TEST_CASE(level_v1_state_is_unchanged) {
     // The lab as v1 with the fleet it had when the hashes were taken: its own fleet now deals a city bus into its traffic

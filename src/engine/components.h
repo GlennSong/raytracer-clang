@@ -1179,10 +1179,18 @@ struct TrafficLane {
     int dir = 1;
     std::string kind;
 };
+// A road's travel lanes each way AS ITS ROAD FILE STATES THEM (its class's, or its own "lanes": roads/lanes LaneLayout,
+// ADR-0418), copied at load: `along` its spine (the forward lanes), `against` it. The sim's links take their lane count
+// from here, through the lane match (citysim LaneMap), never from a table of their own.
+struct StatedLanes {
+    int along = 0, against = 0;
+};
 struct LevelLanes {
     std::vector<TrafficLane> lanes;
     // each road's centreline after expand (graph edge index -> points), for checking the recompute against the bake
     std::vector<std::vector<Vec2>> roads;
+    // each road's stated travel lanes (graph edge index -> them), beside `roads`
+    std::vector<StatedLanes> stated;
 };
 
 // The DECK a road entity's mesh actually rode (RoadDeckField), stored by the

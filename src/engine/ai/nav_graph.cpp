@@ -2,7 +2,7 @@
 #include "../procgen/city/polyline.h"   // distToSegment
 
 #include "../procgen/city/road_semantics.h"
-#include "../procgen/city/road_rules.h"
+#include "../procgen/city/roads/lanes/road_graph_spec.h"   // the road class table: each class's lanes
 
 #include <algorithm>
 #include <cmath>
@@ -249,11 +249,14 @@ NavGraph buildNavGraph(const RoadGraph& roadsIn, const NavBuildParams& params) {
         // Lanes per direction from carriageway width. A ONE-WAY link owns its
         // whole width; a two-way road splits it between the directions.
         l.oneWay = e.oneWay || (params.oneWayRamps && e.klass == RoadClass::Ramp);
-        // Lanes per direction from the road's CLASS (the single lanesForClass
-        // source), not width / laneWidth — so nav lanes agree with the painted
-        // dividers and junction dashes. Every link is one carriageway-direction,
-        // so the per-direction count is what a car follows.
-        l.lanes = std::max(1, lanesForClass(e.klass, /*perDirection=*/true));
+        // Lanes in this direction: the ROAD CLASS TABLE's row for the link's class (the most it carries each way: a
+        // two-way row's lanes each way, a one-way row's all of them). The road graph's edges do not say which road-file
+        // road they came from, so this is the class's lane count; a city built from a road file then sets each link's
+        // own, as its road states it (citysim LaneMap::stateLanes, ADR-0418).
+        {
+            const roads::lanes::RoadClassSpec& row = roads::lanes::roadClass(roadClassName(e.klass));
+            l.lanes = std::max(1, std::max(row.lanes.fwd, row.lanes.back));
+        }
         l.walkable = e.walkable;
         l.access = e.access;   // semantic layer (#17)
         l.parkOffset = e.parkOffset;   // kerbside Parking band (roads-v2 spec)

@@ -678,7 +678,10 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
                 world.each<engine::LevelLanes>([&](Entity, engine::LevelLanes& l) { if (!out) out = &l; });
                 if (!out) out = &world.add<engine::LevelLanes>(world.create(), engine::LevelLanes{});
                 const int roadBase = static_cast<int>(out->roads.size());
-                for (const EdgeSpec& es : g.edges) out->roads.push_back(es.xy);
+                for (const EdgeSpec& es : g.edges) {
+                    out->roads.push_back(es.xy);
+                    out->stated.push_back({es.lanes.fwd, es.lanes.back});   // the one lane count (ADR-0418)
+                }
                 for (const Lane& l : L.lanes) {
                     engine::TrafficLane t;
                     t.xy = l.xy;

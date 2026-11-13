@@ -149,12 +149,9 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
         // street's actual asphalt. The sim's kerbside bays are laid in a road's own Parking band
         // (NavLink::parkWidth, resolved from this spec by navRoadGraph), and a twin with no spec
         // has no band, so a lane-built city parked 2249 cars on the verge and none in a bay.
-        // Freeways, ramps and deck runs get none: you do not park on them.
-        if (!deckEarthwork) {
-            const double carriageway = 2.0 * (r.graph.hw(atGradeRamp ? *r.graph.find(e.id) : e) + cs.shoulder);
-            const int perDir = std::max(1, std::max(cs.lanes.fwd, cs.lanes.back));
-            L.spec = roadSpecStreetParking(carriageway, perDir, cs.sidewalk, 0.15);
-        }
+        // Freeways, ramps and deck runs get none: you do not park on them. The band is the road's STATED kerb parking
+        // (LaneLayout::parking, ADR-0418; streetSection reads it), not one the twin makes up.
+        if (!deckEarthwork) L.spec = streetSection(r.graph, atGradeRamp ? *r.graph.find(e.id) : e);
         // Corners only (Douglas-Peucker at 0.25 m), capped at `nodeSpacing` between nodes: a straight
         // street becomes ONE chord between its junctions. The lot pass insets each block face by
         // the sidewalk with a miter offset that collapses on runs of collinear vertices — a face

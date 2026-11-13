@@ -37,7 +37,10 @@ struct NavLink {
     Real length = 0;                    // segment length (m)
     Real width = 8;                     // carriageway width of the source road (m)
     RoadClass klass = RoadClass::Local;
-    int lanes = 1;                      // lanes available in THIS direction
+    // Travel lanes in THIS direction. buildNavGraph gives every link its class's row of the road class table (roads/lanes
+    // roadClass); a city built from a road file then takes each link's lanes from the road it runs along, as that file
+    // states them (citysim LaneMap::stateLanes, ADR-0418). Kerb parking is not a lane: it is parkWidth below.
+    int lanes = 1;
     int layer = 0;                      // grade-separation level (0 = ground, >0 = bridge)
     // Carriageway height above ground at each end (from RoadNode.elev):
     // agents lerp it along the link, so a corridor deck or a descending ramp
