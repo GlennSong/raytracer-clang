@@ -321,8 +321,8 @@ int main(int argc, char** argv) {
         std::printf("%zu bundles under %s, %zu stale (%s)\n", rep.entries.size(), root.c_str(), stale, humanBytes(rep.staleBytes).c_str());
         if (!yes && stale) std::printf("dry run: pass --yes to delete the stale bundles\n"); else if (yes) std::printf("removed %zu\n", rep.removed);
         if (!outRoot.empty()) return 0;
-        // The terrain, population and lane graph files, by the levels that used them (engine/bundle/cache_use.h).
-        const CachePruneReport files = pruneCacheFiles({"cache/terrain", "cache/population", "cache/lanegraph"}, yes);
+        // The terrain, population, lane graph and road model files, by the levels that used them (engine/bundle/cache_use.h).
+        const CachePruneReport files = pruneCacheFiles({"cache/terrain", "cache/population", "cache/lanegraph", "cache/roadmodel"}, yes);
         size_t fileStale = 0, unowned = 0;
         for (const CacheFileEntry& f : files.files) {
             fileStale += f.stale; unowned += !f.owned;

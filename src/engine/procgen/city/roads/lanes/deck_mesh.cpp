@@ -737,6 +737,10 @@ int junctionCrossRank(const Result& r, const LaneLookup& look, size_t li, const 
     return best;
 }
 
+bool paintsJunctionBoxes(const RoadLabGraph& g, const EdgeSpec& e) {
+    return !(e.isRamp() || e.cls == "freeway" || g.cls(e).rank < 1 || trackClass(g, e.cls));
+}
+
 std::map<int, std::vector<JunctionSpan>> junctionSpans(const Result& r, const LaneLookup& look, double parallelCos) {
     const LaneSet& L = r.lanes;
     // per street, the parent-station spans where its lanes run through a box
@@ -744,7 +748,7 @@ std::map<int, std::vector<JunctionSpan>> junctionSpans(const Result& r, const La
     std::vector<int> hits, crossing;
     for (size_t li = 0; li < L.lanes.size(); ++li) {
         const Lane& l = L.lanes[li]; if (l.isConnector() || l.parent < 0 || l.s.size() < 2) continue;
-        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; if (e.isRamp() || e.cls == "freeway" || r.graph.cls(e).rank < 1 || trackClass(r.graph, e.cls)) continue;
+        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; if (!paintsJunctionBoxes(r.graph, e)) continue;
         int n = std::max(2, static_cast<int>(l.s.back() / kJunctionSampleStep) + 1); double in0 = -1, inLast = 0; int rankMax = -1;
         for (int k = 0; k <= n; ++k) {
             int cr = -1; double st = 0; hits.clear();
@@ -843,7 +847,9 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     // the viaduct is pavement in plan but not a continuation of this deck.
     // Every point query below asks "which lanes' footprints contain q": the boxes once, a grid of them, never
     // a bounds() over a footprint's vertices per call (that was a 100 s stall on metro).
-    const LaneLookup look(r.pavement); const std::vector<Box2>& laneBox = look.box; const LaneGrid& laneGrid = look.grid; const std::vector<PreparedSet>& footprint = look.footprint;
+    // (the build's own lookup when it kept one: the same footprints, prepared once)
+    std::shared_ptr<const LaneLookup> ownLook = r.lookup ? r.lookup : std::make_shared<const LaneLookup>(r.pavement);
+    const LaneLookup& look = *ownLook; const std::vector<Box2>& laneBox = look.box; const LaneGrid& laneGrid = look.grid; const std::vector<PreparedSet>& footprint = look.footprint;
     auto sameLevelPavedAt = [&](const Vec2& q, double z) {
         for (int ojI : laneGrid.at(q)) {
             const size_t oj = static_cast<size_t>(ojI); const Box2& bb = laneBox[oj];
@@ -1002,7 +1008,8 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     // Junction boxes (junctionCrossRank, junctionSpans): lane paint stops inside them (lane lines running through a
     // junction read as a mess), and the spans of them along each street get a zebra crosswalk and a stop bar per approach.
     auto inBox = [&](size_t li, const Vec2& p, const Vec2& t) { return junctionCrossRank(r, look, li, p, t); };
-    const std::map<int, std::vector<JunctionSpan>> boxes = junctionSpans(r, look);   // parent edge -> merged junction spans
+    // parent edge -> merged junction spans: the build's, kept in its Result (the same call, made once there)
+    const std::map<int, std::vector<JunctionSpan>> boxes = r.hasJunctionBoxes ? r.junctionBoxes : junctionSpans(r, look);
     // a point on a street lane inside one of its road's merged boxes (the median gap of a divided cross road included)
     auto inSpan = [&](const Lane& l, const Vec2& p) {
         auto it = boxes.find(l.parent); if (it == boxes.end()) return false;

@@ -207,12 +207,12 @@ ControlChoice chooseControl(const JunctionFacts& j, const ControlPolicy& policy,
     return out;
 }
 
-std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const ControlPolicy& policy) {
+std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const ControlPolicy& policy, const JunctionFinding& how) {
     // The ramps as the builder lays them: their spines composed from their anchors (lane_expand.h expand, the same
     // call the builder makes), so a ramp's stations here are the builder's.
     RoadLabGraph g = graph;
     expand(g);
-    const double tol = g.rules.endpointTol;
+    const double tol = how.endTolerance >= 0 ? how.endTolerance : g.rules.endpointTol;
     // ---- the nodes: road ends at one point (ends within the graph's endpoint tolerance), in road order --------------
     std::vector<Node> nodes;
     std::map<std::pair<long long, long long>, std::vector<int>> grid;   // cell -> nodes with an end in it
@@ -280,6 +280,20 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
             nodes.push_back(node);
         }
     }
+    // two roads crossing at grade, as the caller names them: a node of both, at each one's station there (a ramp's ends
+    // are its own nodes above, so a crossing naming a ramp is not one of these)
+    if (how.atGrade)
+        for (const CrossingSpec& c : *how.atGrade) {
+            if (c.kind != "at_grade") continue;
+            const EdgeSpec* a = g.find(c.a);
+            const EdgeSpec* b = g.find(c.b);
+            if (!a || !b || a == b || a->isRamp() || b->isRamp() || !carsDrive(g, *a) || !carsDrive(g, *b)) continue;
+            Node node;
+            node.at = c.at;
+            node.points.push_back(NodePoint{g.index.at(c.a), project(a->xy, a->s, c.at).station});
+            node.points.push_back(NodePoint{g.index.at(c.b), project(b->xy, b->s, c.at).station});
+            nodes.push_back(node);
+        }
 
     // ---- nodes so close along a road that the builder makes them one junction: grouped ------------------------------
     // How far a node's junction reaches along road `via`: the widest other road there, its stop line's setback, and half
@@ -437,6 +451,12 @@ ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy) {
 }
 
 void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan) {
+    // THE ROAD MODEL'S MEMBERS of a junction already listed (road_graph_spec.h PlannedArm: street, heading, through) are
+    // kept where the same junction is planned again: by its id, and each arm by its road, station and way
+    std::map<std::string, nlohmann::json> listed;
+    if (scene.contains("junctions") && scene["junctions"].is_array())
+        for (const nlohmann::json& j : scene["junctions"])
+            if (j.is_object() && j.contains("id")) listed[j["id"].get<std::string>()] = j;
     nlohmann::json list = nlohmann::json::array();
     for (const PlannedJunction& pj : plan.junctions) {
         nlohmann::json j;
@@ -452,9 +472,20 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan) {
             aj["at"] = a.at;
             aj["spine"] = a.spineIn ? "in" : "out";
             if (!a.regulations.empty()) aj["regulations"] = a.regulations;
+            const std::map<std::string, nlohmann::json>::const_iterator was = listed.find(pj.id);
+            if (was != listed.end() && was->second.contains("arms"))
+                for (const nlohmann::json& old : was->second["arms"])
+                    if (old.value("road", std::string()) == a.road && old.value("spine", std::string()) == aj["spine"].get<std::string>() &&
+                        std::fabs(old.value("at", -1e30) - a.at) < 1e-6)
+                        for (const char* key : {"street", "heading"})
+                            if (old.contains(key)) aj[key] = old[key];
             arms.push_back(aj);
         }
         j["arms"] = arms;
+        {
+            const std::map<std::string, nlohmann::json>::const_iterator was = listed.find(pj.id);
+            if (was != listed.end() && was->second.contains("through") && was->second["arms"].size() == arms.size()) j["through"] = was->second["through"];
+        }
         if (!pj.inside.empty()) {
             nlohmann::json inside = nlohmann::json::array();
             for (const PlannedStretch& st : pj.inside) inside.push_back({{"road", st.road}, {"from", st.from}, {"to", st.to}});

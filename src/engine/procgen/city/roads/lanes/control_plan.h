@@ -140,10 +140,20 @@ struct ControlChoice {
 // The first row of `policy` that holds for `j` (whose roles are settled), given the junctions decided before it.
 ControlChoice chooseControl(const JunctionFacts& j, const ControlPolicy& policy, const std::vector<Decided>& before);
 
+// HOW THE NODES ARE FOUND. The control plan's default: road ends within the graph's endpoint tolerance are one node. The
+// road model's layout (road_layout.h) also asks for a tighter tolerance (the planner's: the ends it made from one point)
+// and for the places two roads cars drive cross AT GRADE away from any shared end, which the caller names (the graph's
+// declared crossings, or the planner's crossing policy): each is a node of both roads, at their stations there.
+struct JunctionFinding {
+    double endTolerance = -1;                              // < 0: the graph's rules.endpointTol
+    const std::vector<CrossingSpec>* atGrade = nullptr;    // crossings of kind "at_grade" to make nodes of (others skipped)
+};
+
 // THE NODES AND JUNCTIONS OF A ROAD GRAPH, with their facts (roles settled), in id order ("j0", "j1", ...: by their
 // first node, nodes in road order). Roads cars do not drive (tracks, footways, roads with no lanes) take no part. The
 // ramps' spines are composed from their anchors first, as the builder composes them, so stations agree with its.
-std::vector<JunctionFacts> findJunctions(const RoadLabGraph& g, const ControlPolicy& policy);
+std::vector<JunctionFacts> findJunctions(const RoadLabGraph& g, const ControlPolicy& policy,
+                                         const JunctionFinding& how = JunctionFinding());
 
 // THE WHOLE PLAN for a road graph.
 struct ControlPlan {

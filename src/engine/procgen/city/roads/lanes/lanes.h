@@ -45,6 +45,17 @@ struct FrontageFault { std::string road, what; Vec2 at; };
 std::vector<FrontageFault> checkFrontageRoads(const RoadLabGraph& g);
 std::string describe(const FrontageFault& f);
 
+// One junction box along a street: the stretch of the street's spine (stations s0 to s1) where its lanes run inside a
+// crossing road's lanes at the same level, the highest class rank among those crossing roads, and which roads they are
+// (graph edge indices, ascending). The paint finds them (deck_mesh.h junctionSpans); each approach's stop line stands
+// kStopLineBack outside the end of the box it arrives at.
+struct JunctionSpan {
+    double s0 = 0, s1 = 0;
+    int crossRank = -1;
+    std::vector<int> crossEdges;
+};
+struct LaneLookup;   // deck_mesh.h: which lanes' footprints hold a point, asked many times
+
 struct Result {
     RoadLabGraph graph;
     LaneSet lanes;
@@ -61,6 +72,14 @@ struct Result {
     std::vector<std::string> undeclaredCrossings;   // a graph that declares its crossings: the ones it did not (ADR-0215)
     std::vector<RampLandingFault> rampLandings;     // ramp ends that land wrongly, none planned (warnings; #282)
     std::map<std::string, double> timings;
+    // THE PAINT'S JUNCTION BOXES, KEPT (road model step 2, ADR-0417): each street's boxes (graph edge index -> boxes in
+    // station order; deck_mesh.h junctionSpans with the paint's own parallel test), found once at the end of build() --
+    // the paint (buildMeshes) draws its crosswalks, arrows and stop bars from these, and the road model reads each arm's
+    // stop line and the junction's extent along each street from them. `lookup`: the lane footprints prepared for point
+    // tests that found them, for the mesher to use again.
+    std::map<int, std::vector<JunctionSpan>> junctionBoxes;
+    bool hasJunctionBoxes = false;
+    std::shared_ptr<const LaneLookup> lookup;
 };
 
 // A step in the driving surface: a deck boundary edge (a slab side face) standing more than kerb height

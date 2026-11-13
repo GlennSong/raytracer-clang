@@ -5,6 +5,7 @@
 #include "../roads/lanes/interchange.h"   // ONE ramp generator, shared with the level importer
 #include "../roads/lanes/polyline_ops.h"   // stations/pointAt: sampling along the route
 #include "../roads/lanes/road_graph_spec.h"
+#include "../roads/lanes/road_layout.h"   // the scene's junctions and streets, with ids (ADR-0417)
 #include "../roads/lanes/terrain_recipe.h"
 #include "../terrain_route.h"   // mountain roads: grade-limited routes over the ground
 #include "../roads/lanes/vertical_profile.h"   // profileAlong, kDesignGrade: the deck the diamonds are sized against   // makeTerrain: the same ground the builder will make
@@ -1075,6 +1076,10 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
                     hy->rivers().size(), bridges, cuts);
     }
     scene["edges"] = std::move(edges);
+    // THE LAYOUT, from birth (road_layout.h, ADR-0417): the junctions where the roads this plan laid meet -- the ends it
+    // made from one point, the ramps' ends where their anchors say -- and the streets between them, with ids. Nothing
+    // above changes: the edges, classes and ramps are as they were, and the bake's key does not see the layout.
+    roads::lanes::writeLayout(scene, roads::lanes::deriveLayout(roads::lanes::RoadLabGraph::fromJson(scene), roads::lanes::LayoutSource::Planner));
     return scene;
 }
 

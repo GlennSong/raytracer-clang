@@ -1,4 +1,5 @@
 #include "engine/procgen/city/roads/lanes/lanes.h"
+#include "engine/procgen/city/roads/lanes/deck_mesh.h"   // junctionSpans, LaneLookup: the paint's junction boxes, kept
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"   // kJunctionParallelForGraph: a ramp end along a street
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_design.h"
@@ -280,7 +281,18 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         terrainVsDeck(r.pavement.decks, r.terrain, r.conform);
         r.timings["terrain.vsDeck"] = secondsSince(tv);
     }
-    r.timings["terrain"] = secondsSince(t1); r.seconds = secondsSince(t0); stage(4, "done", 1.0);
+    r.timings["terrain"] = secondsSince(t1);
+    // 7. THE PAINT'S JUNCTION BOXES, found once and kept (ADR-0417): what the mesher paints from, and what the road model
+    // reads each arm's stop line from (they read only the lanes, footprints and deck heights, all settled above)
+    {
+        const auto tj = std::chrono::steady_clock::now();
+        std::shared_ptr<const LaneLookup> look = std::make_shared<const LaneLookup>(r.pavement);
+        r.junctionBoxes = junctionSpans(r, *look);
+        r.hasJunctionBoxes = true;
+        r.lookup = std::move(look);
+        r.timings["junction boxes"] = secondsSince(tj);
+    }
+    r.seconds = secondsSince(t0); stage(4, "done", 1.0);
     return rp;
 }
 

@@ -662,6 +662,8 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/swept_body.cpp   # the ground a long body covers along a path (#284)
             src/engine/procgen/city/roads/lanes/lane_graph_cache.cpp   # a level's lane graph saved and read back
             src/engine/procgen/city/roads/lanes/control_plan.cpp   # every junction's control and every road's limit, planned (#240)
+            src/engine/procgen/city/roads/lanes/road_layout.cpp   # the road file's junctions and streets, with ids (ADR-0417)
+            src/engine/procgen/city/roads/road_model.cpp   # the one road model, assembled from a build (ADR-0417)
             src/engine/procgen/city/roads/lanes_builder.cpp
         )
         target_link_libraries(engine_core PRIVATE Clipper2 CDT::CDT)
@@ -669,13 +671,17 @@ if(RT_BUILD_ROADS_LANES)
         target_compile_definitions(engine_core PUBLIC RT_ROADS_LANES=1)
 
         # Headless hosts: the same builder, no window.
-        add_executable(lanes_tool tools/lanes_tool.cpp)
+        # (road_model_compare.cpp reads the city sim's lane match, so it lives with the two hosts that ask for it)
+        add_executable(lanes_tool tools/lanes_tool.cpp
+            src/engine/procgen/city/roads/lanes/road_model_compare.cpp)   # the road model against the old forms (ADR-0417)
         target_include_directories(lanes_tool PRIVATE src)
         target_compile_options(lanes_tool PRIVATE -Wall -Wextra)
         target_link_libraries(lanes_tool PRIVATE engine_core citysim)
 
         add_executable(lanes_tests tests/main.cpp tests/test_lanes.cpp
-            tests/test_control_plan.cpp)   # every junction's control and every road's limit, planned and carried (#240)
+            tests/test_control_plan.cpp   # every junction's control and every road's limit, planned and carried (#240)
+            tests/test_road_model.cpp     # the road file's layout and the one road model (ADR-0417)
+            src/engine/procgen/city/roads/lanes/road_model_compare.cpp)
         target_include_directories(lanes_tests PRIVATE src tests)
         target_compile_options(lanes_tests PRIVATE -Wall -Wextra)
         target_compile_definitions(lanes_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

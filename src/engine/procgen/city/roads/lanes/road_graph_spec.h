@@ -62,11 +62,24 @@ struct ConnectorSpec { std::string from, to; double toS = 0; };
 // that lead out of it, and names the stretches of road lying between its nodes as `inside` ({"road", "from", "to"},
 // stations along the road's spine): the builder may still make two junctions there, joined by such a stretch, and
 // both take this one's control. `hand`: written by a person, so re-planning keeps it as it is.
+//
+// THE SAME LIST IS THE ROAD MODEL'S JUNCTIONS (docs/road-model-design.md step 1, ADR-0417): one list of junctions in a
+// road file, never two. Besides the control plan's fields, a junction may say which STREET each arm is (`street`, an id
+// from the graph's "streets" list), the way the arm leaves the junction (`heading`, degrees in plan coordinates,
+// counter-clockwise from +x), and which pairs of its arms are one street carrying on through it (`through`: arm indices).
+// A list that carries no control at all is the layout alone: it plans no control, and every junction says so (the lane
+// graph builder then gives each junction the options' one control, as a graph with no list always did). A list where
+// some junctions name a control and some do not is refused: a control plan that leaves a junction out is the plan's
+// fault. The road model's own members (street, heading, through, and the "streets" list) are not part of the city's
+// bake key (city_producer.cpp, road_layout.h stripLayoutText): writing them into a file re-bakes nothing.
 struct PlannedArm {
     std::string road;
     double at = 0;                          // station along the road's spine
     bool spineIn = true;                    // the spine runs into the junction here
     std::vector<std::string> regulations;   // kinds standing at the end of each lane that arrives by this arm
+    std::string street;                     // the street this arm is (PlannedStreet::id); empty: not stated
+    bool hasHeading = false;
+    double heading = 0;                     // degrees: the way the arm leaves the junction, plan coordinates
 };
 struct PlannedStretch {
     std::string road;
@@ -77,7 +90,19 @@ struct PlannedJunction {
     Vec2 at;
     std::vector<PlannedArm> arms;
     std::vector<PlannedStretch> inside;     // the stretches of road lying between its nodes
+    std::vector<std::array<int, 2>> through;   // pairs of arms (indices into arms) that are one street carrying on through
     bool hand = false;
+};
+
+// A STREET AS PLANNED (road-model-design.md step 1): a stretch of one road-file edge from one junction to the next, or to
+// a dead end -- `from` and `to` stations along the edge's spine, and the junction at each end (a PlannedJunction id;
+// empty: none -- a dead end, or a ramp's end anchored to a lane of its host, which the ramp itself states). An edge that
+// passes through junctions is several streets; the stretches of it inside a junction belong to no street. Authored at the
+// graph's top level: "streets": [{"id": "s12/1", "road": "s12", "from": 40.2, "to": 131.7, "junctions": ["j3", "j9"]}].
+struct PlannedStreet {
+    std::string id, road;
+    double from = 0, to = 0;
+    std::array<std::string, 2> junctions;   // at `from`, at `to`
 };
 
 // A CROSSING AS PLANNED (ADR-0215, Glenn: "the planner and builder should know the intent of the roads so it's not
@@ -253,11 +278,16 @@ struct RoadLabGraph {
     std::vector<ConnectorSpec> connectors;
     std::vector<CrossingSpec> crossings;  // as planned (see CrossingSpec)
     bool declaresCrossings = false;       // the graph carried a "crossings" list: every crossing is on it
-    // THE CONTROL PLAN (see PlannedJunction). A graph that carries the "junctions" list DECLARES every junction's control:
-    // the lane graph builder reports a junction it builds that no planned one names. Without the list (every graph
-    // before #240), each junction carries the lane graph options' one control, as before.
+    // THE CONTROL PLAN (see PlannedJunction). A graph whose "junctions" list names controls DECLARES every junction's
+    // control: the lane graph builder reports a junction it builds that no planned one names. Without the list, or with a
+    // list that names no control (the road model's layout alone), each junction carries the lane graph options' one
+    // control, as before.
     std::vector<PlannedJunction> junctions;
-    bool declaresJunctions = false;
+    bool declaresJunctions = false;       // the list names each junction's CONTROL (the control plan); see PlannedArm
+    bool listsJunctions = false;          // the graph carried a "junctions" list at all, with controls or without
+    // THE STREETS AS PLANNED (PlannedStreet); `listsStreets`: the graph carried the list.
+    std::vector<PlannedStreet> streets;
+    bool listsStreets = false;
     bool designed() const;               // every road with a spine carries its planned profile
     std::map<std::string, int> index;    // edge id -> position in edges
     // the planned crossing of edges a and b nearest p (within `within` m), or null

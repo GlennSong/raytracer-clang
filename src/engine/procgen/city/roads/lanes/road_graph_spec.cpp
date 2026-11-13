@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <set>
 #include <stdexcept>
 
 namespace engine {
@@ -371,9 +372,11 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         }
     }
     if (spec.contains("junctions")) {
-        // THE CONTROL PLAN (PlannedJunction): read as written; a road an arm names must exist, and every junction must
-        // name a control (a junction left without one is the plan's fault, never filled in here).
-        g.declaresJunctions = true;
+        // THE CONTROL PLAN (PlannedJunction): read as written; a road an arm names must exist, and where the list names
+        // controls every junction must name one (a junction left without one is the plan's fault, never filled in here).
+        // A list naming none is the road model's layout alone: it declares no control.
+        g.listsJunctions = true;
+        for (const nlohmann::json& jj : spec["junctions"]) g.declaresJunctions = g.declaresJunctions || jj.contains("control");
         for (const nlohmann::json& jj : spec["junctions"]) {
             PlannedJunction pj;
             pj.id = jj.at("id").get<std::string>();
@@ -381,7 +384,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
             pj.why = jj.value("why", std::string());
             pj.hand = jj.value("hand", false);
             if (jj.contains("at")) pj.at = Vec2(jj["at"].at(0).get<double>(), jj["at"].at(1).get<double>());
-            if (pj.control.empty()) throw std::runtime_error("junction " + pj.id + ": names no control");
+            if (g.declaresJunctions && pj.control.empty()) throw std::runtime_error("junction " + pj.id + ": names no control");
             for (const nlohmann::json& aj : jj.at("arms")) {
                 PlannedArm a;
                 a.road = aj.at("road").get<std::string>();
@@ -391,8 +394,18 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                 a.spineIn = spine == "in";
                 if (aj.contains("regulations")) a.regulations = aj["regulations"].get<std::vector<std::string>>();
                 if (!g.index.count(a.road)) throw std::runtime_error("junction " + pj.id + ": arm names unknown road " + a.road);
+                a.street = aj.value("street", std::string());
+                if (aj.contains("heading")) { a.hasHeading = true; a.heading = aj["heading"].get<double>(); }
                 pj.arms.push_back(a);
             }
+            if (jj.contains("through"))
+                for (const nlohmann::json& tj : jj["through"]) {
+                    const std::array<int, 2> pair = {tj.at(0).get<int>(), tj.at(1).get<int>()};
+                    for (int k : pair)
+                        if (k < 0 || k >= static_cast<int>(pj.arms.size()))
+                            throw std::runtime_error("junction " + pj.id + ": through names arm " + std::to_string(k) + ", which it does not have");
+                    pj.through.push_back(pair);
+                }
             if (jj.contains("inside"))
                 for (const nlohmann::json& sj : jj["inside"]) {
                     PlannedStretch st;
@@ -404,6 +417,30 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                     pj.inside.push_back(st);
                 }
             g.junctions.push_back(pj);
+        }
+    }
+    if (spec.contains("streets")) {
+        // THE STREETS (PlannedStreet): read as written; the road must exist, the stretch run forwards, and each end name a
+        // junction of the list (or none)
+        g.listsStreets = true;
+        std::set<std::string> junctionIds;
+        for (const PlannedJunction& pj : g.junctions) junctionIds.insert(pj.id);
+        for (const nlohmann::json& sj : spec["streets"]) {
+            PlannedStreet st;
+            st.id = sj.at("id").get<std::string>();
+            st.road = sj.at("road").get<std::string>();
+            st.from = sj.at("from").get<double>();
+            st.to = sj.at("to").get<double>();
+            if (!g.index.count(st.road)) throw std::runtime_error("street " + st.id + ": names unknown road " + st.road);
+            if (!(st.from <= st.to)) throw std::runtime_error("street " + st.id + ": runs backwards along " + st.road);
+            if (sj.contains("junctions"))
+                for (std::size_t k = 0; k < 2 && k < sj["junctions"].size(); ++k) {
+                    const nlohmann::json& v = sj["junctions"][k];
+                    st.junctions[k] = v.is_string() ? v.get<std::string>() : std::string();
+                    if (!st.junctions[k].empty() && !junctionIds.count(st.junctions[k]))
+                        throw std::runtime_error("street " + st.id + ": names unknown junction " + st.junctions[k]);
+                }
+            g.streets.push_back(st);
         }
     }
     if (g.edges.empty()) throw std::runtime_error("graph has no edges");

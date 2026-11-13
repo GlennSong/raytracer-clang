@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
+#include <map>
 #include <stdexcept>
 
 namespace engine {
@@ -34,15 +36,17 @@ LaneSlot anchorSlot(const RoadLabGraph& g, const EdgeSpec& host, const std::stri
     throw std::runtime_error("ramp anchor: host " + host.id + " has no lane on side " + side);
 }
 
-namespace {
-
-double hostStation(const EdgeSpec& host, const RampAnchor& a) {
+double anchorStation(const EdgeSpec& host, const RampAnchor& a) {
     if (a.hasStation) return a.s;
     if (a.axis == 'p') return project(host.xy, host.s, Vec2(a.px, a.py)).station;
     size_t best = 0; double bd = 1e300;
     for (size_t i = 0; i < host.xy.size(); ++i) { double d = std::fabs((a.axis == 'x' ? host.xy[i].x : host.xy[i].y) - a.coord); if (d < bd) { bd = d; best = i; } }
     return host.s[best];
 }
+
+namespace {
+
+double hostStation(const EdgeSpec& host, const RampAnchor& a) { return anchorStation(host, a); }
 
 // Points along the host spine at stations ss, displaced by off.
 std::vector<Vec2> hostPath(const EdgeSpec& host, const std::vector<double>& ss, const std::vector<double>& off) {
@@ -95,6 +99,9 @@ void roadLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
     for (const LaneSlot& sl : slots) {
         std::vector<double> off(e.xy.size(), sl.offset);
         out.lanes.push_back(ribbonLane(e.id + "." + sl.name, ei, "through", e.cls, w, sl.dir, e.xy, nrm, off));
+        out.lanes.back().slot = std::atoi(sl.name.c_str() + 1);   // f0 / b0: by the centre line (laneSlots' names)
+        out.lanes.back().spineFrom = e.s.front();
+        out.lanes.back().spineTo = e.s.back();
     }
     for (const PocketSpec& pk : e.pockets) {
         int d = pk.dir; std::vector<LaneSlot> cand; for (const LaneSlot& sl : slots) if (sl.dir == d) cand.push_back(sl);
@@ -105,13 +112,21 @@ void roadLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
         double baseOff = (pk.side == "right" ? outer : inner)->offset; double sgn = pk.side == "right" ? -d : d;
         double ti = pk.taper > 0 ? pk.taper : 10 * w, to = pk.taperOut;
         std::vector<Vec2> sp, nn; std::vector<double> off;
+        double first = -1, last = -1;
         for (size_t i = 0; i < e.xy.size(); ++i) {
             double st = e.s[i]; if (st < pk.s0 || st > pk.s1) continue;
             double birth = d > 0 ? smoothstep01((st - pk.s0) / ti) : smoothstep01((pk.s1 - st) / ti);
             double death = to <= 0 ? 1.0 : (d > 0 ? smoothstep01((pk.s1 - st) / to) : smoothstep01((st - pk.s0) / to));
             sp.push_back(e.xy[i]); nn.push_back(nrm[i]); off.push_back(baseOff + sgn * w * std::min(birth, death));
+            if (first < 0) first = st;
+            last = st;
         }
-        if (sp.size() >= 2) out.lanes.push_back(ribbonLane(e.id + "." + pk.id, ei, pk.kind, e.cls, w, d, sp, nn, off));
+        if (sp.size() >= 2) {
+            out.lanes.push_back(ribbonLane(e.id + "." + pk.id, ei, pk.kind, e.cls, w, d, sp, nn, off));
+            out.lanes.back().slot = pk.side == "right" ? static_cast<int>(cand.size()) : -1;   // beyond the kerb lane, or inside lane 0
+            out.lanes.back().spineFrom = first;
+            out.lanes.back().spineTo = last;
+        }
     }
 }
 
@@ -119,10 +134,56 @@ void rampLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
     const EdgeSpec& e = g.edges[static_cast<size_t>(ei)]; std::vector<Vec2> tan, nrm; frames(e.xy, tan, nrm); double w = e.lanes.w;
     std::vector<double> zero(e.xy.size(), 0.0);
     out.lanes.push_back(ribbonLane(e.id + ".f0", ei, "ramp", e.cls, w, +1, e.xy, nrm, zero));
+    out.lanes.back().slot = 0;
+    out.lanes.back().spineFrom = e.s.front();
+    out.lanes.back().spineTo = e.s.back();
     if (e.lanes.fwd >= 2) {                                        // the second lane dies into the first: the dovetail
         double dv = e.lanes.dovetail, tap = 20 * w; std::vector<Vec2> sp, nn; std::vector<double> off;
-        for (size_t i = 0; i < e.xy.size(); ++i) { if (e.s[i] > dv + tap) break; sp.push_back(e.xy[i]); nn.push_back(nrm[i]); off.push_back(-w * (1 - smoothstep01((e.s[i] - dv) / tap))); }
-        if (sp.size() >= 2) out.lanes.push_back(ribbonLane(e.id + ".f1", ei, "ramp", e.cls, w, +1, sp, nn, off));
+        double last = 0;
+        for (size_t i = 0; i < e.xy.size(); ++i) { if (e.s[i] > dv + tap) break; sp.push_back(e.xy[i]); nn.push_back(nrm[i]); off.push_back(-w * (1 - smoothstep01((e.s[i] - dv) / tap))); last = e.s[i]; }
+        if (sp.size() >= 2) {
+            out.lanes.push_back(ribbonLane(e.id + ".f1", ei, "ramp", e.cls, w, +1, sp, nn, off));
+            out.lanes.back().slot = 1;
+            out.lanes.back().spineFrom = e.s.front();
+            out.lanes.back().spineTo = last;
+        }
+    }
+}
+
+// A lane reaches a street's end when its stretch of spine comes within this of it (metres): the streets' stations are
+// written to the centimetre.
+constexpr double kReachesStreetEnd = 0.01;
+
+// THE LANES ON THE ROAD MODEL'S STREETS (Lane: streets, junctionAtStart, junctionAtEnd), read from the graph's stated
+// streets and junctions; nothing is measured but where the lane's own stretch of spine lies.
+void placeOnStreets(const RoadLabGraph& g, LaneSet& L) {
+    if (g.streets.empty()) return;
+    std::map<std::string, std::vector<int>> streetsOf;   // road id -> its streets, along its spine
+    for (std::size_t i = 0; i < g.streets.size(); ++i) streetsOf[g.streets[i].road].push_back(static_cast<int>(i));
+    for (std::pair<const std::string, std::vector<int>>& kv : streetsOf)
+        std::stable_sort(kv.second.begin(), kv.second.end(), [&](int a, int b) { return g.streets[static_cast<size_t>(a)].from < g.streets[static_cast<size_t>(b)].from; });
+    std::map<std::string, int> junctionIndex;
+    for (std::size_t j = 0; j < g.junctions.size(); ++j) junctionIndex[g.junctions[j].id] = static_cast<int>(j);
+    auto junctionOf = [&](const std::string& id) {
+        const std::map<std::string, int>::const_iterator it = junctionIndex.find(id);
+        return id.empty() || it == junctionIndex.end() ? -1 : it->second;
+    };
+    for (Lane& l : L.lanes) {
+        if (l.parent < 0) continue;
+        const std::map<std::string, std::vector<int>>::const_iterator it = streetsOf.find(g.edges[static_cast<size_t>(l.parent)].id);
+        if (it == streetsOf.end()) continue;
+        for (int si : it->second) {
+            const PlannedStreet& st = g.streets[static_cast<size_t>(si)];
+            const double lo = std::max(l.spineFrom, st.from), hi = std::min(l.spineTo, st.to);
+            if (hi > lo) l.streets.push_back(LaneStreetSpan{si, lo, hi});
+        }
+        if (l.streets.empty()) continue;
+        const PlannedStreet& first = g.streets[static_cast<size_t>(l.streets.front().street)];
+        const PlannedStreet& last = g.streets[static_cast<size_t>(l.streets.back().street)];
+        const int atFrom = l.spineFrom <= first.from + kReachesStreetEnd ? junctionOf(first.junctions[0]) : -1;
+        const int atTo = l.spineTo >= last.to - kReachesStreetEnd ? junctionOf(last.junctions[1]) : -1;
+        l.junctionAtStart = l.dir > 0 ? atFrom : atTo;
+        l.junctionAtEnd = l.dir > 0 ? atTo : atFrom;
     }
 }
 
@@ -164,6 +225,7 @@ LaneSet expand(RoadLabGraph& g) {
         Lane ln = ribbonLane(A.id + ">" + B.id, -1, "connector", A.cls, A.w, +1, xy, nrm, zero); ln.srcLane = a; ln.dstLane = b;
         L.byId[ln.id] = static_cast<int>(L.lanes.size()); L.lanes.push_back(std::move(ln));
     }
+    placeOnStreets(g, L);
     return L;
 }
 

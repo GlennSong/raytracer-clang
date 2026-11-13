@@ -19675,3 +19675,104 @@ between the town's far corners), or when lights enter the router's price.
 **Not done here (part 2 of the request):** driving to an AREA round the destination and searching for parking. It
 needs a new driving state in the sim (search speed, take the first free bay passed on its own side, circle the block
 with the area growing), seeded parked cars, and the planner's expected search time; see the hand-back.
+
+## ADR-0417 — One road model, steps 1 and 2: the road file states its junctions and streets with ids, the builder carries them onto its lanes, and the whole model is assembled beside the old forms and compared with them
+**Status:** Provisional · **Date:** 2026-11-13
+
+Words: a JUNCTION is where roads meet at one level; an ARM is one road's way out of it. A STREET is one stretch of road
+from a junction to the next (or a dead end). A STATION is distance along a road-file edge's centre line. A lane's SLOT is
+its place across the road among the lanes running its way, counted from the centre-line side (0) to the kerb side. The
+LAYOUT is the road file's junctions and streets. The OLD FORMS are the descriptions of the roads the engine works out
+today, each from another: the road twin and the nav graph built from it, the paint's junction boxes, the lane graph,
+and the lane match (which nav links the builder's lanes lie under).
+
+**Context.** docs/road-model-design.md (approved): the same roads are described about seven times, each worked out
+from another, none the master. Glenn: "a single comprehensive representation only", "one place that has it all that
+we can add information to or query from". Steps 1 and 2 put that one model in place BESIDE the old forms, change nothing
+a player can see, and stop at a comparison.
+
+**Decision.**
+- **One list of junctions in a road file.** The control plan's `junctions` list (#240) is the road model's list. A
+  junction may now also say each arm's `street` and `heading` (degrees, the way the arm leaves) and its `through` pairs
+  (arms that are one street carrying on). A list that names no control at all is the layout alone and plans no control
+  (the lane graph then gives every junction its one default control, as before); a list where some name a control and
+  some do not is still refused. A new `streets` list: `{id, road, from, to, junctions: [a, b]}`. An edge that passes
+  through junctions is several streets (`s12/0`, `s12/1`); the stretches inside a junction belong to no street.
+- **A junction is what the control plan already calls one**: one node, or several nodes the builder's own figures make
+  one junction (`findJunctions`). Kept, so traffic_lab's existing list (156 junctions, 15 spread over several nodes) is
+  the model's list unchanged. The design's end state deletes this grouping; until then it is the one rule.
+  `findJunctions` gained options (`JunctionFinding`): a tighter end tolerance and at-grade crossings as nodes. The control
+  plan's own call is unchanged.
+- **The planner writes it** (`road_layout.h deriveLayout`, `LayoutSource::Planner`): `planToLanesScene`, the island scene
+  writer, and city_plan's design step (again, once the crossings are planned). Road ends meet where the planner made them
+  at one point (1 cm, it writes to the centimetre); ramp ends where their anchors say; at-grade crossings where the
+  planner's crossing policy (`planCrossings`) says. Checked: river_town, traffic_lab and metro_v2_test's briefs give scenes
+  identical to before apart from the two new lists.
+- **Existing road files** got it once from `lanes_tool layout --write` (`LayoutSource::Inferred`: ends within the
+  file's endpoint tolerance, 0.5 m; the planner's crossing policy where the file declares no crossings), written in
+  place: nothing else in the file moves by a byte. Written into: planned/{river_town, traffic_lab, metro_v2_test,
+  piedmont, metro_mountain, metro_planned, island_8_nature} and ring_city, rail_loop, light_rail_lab. Not into the
+  untracked files.
+- **The bake does not see it.** The city's bake key hashed the whole road file. It now hashes the file with the layout
+  taken out (`stripLayoutText`: the `streets` list; a junctions list naming no control; in a control plan's list, each
+  junction's `through` and each arm's `street` and `heading`), byte for byte what the file was before. Proved: the bundle
+  keys `rt_bake --status` prints for river_town, traffic_lab, agent_lab, metro_v2_test, piedmont, metro_mountain,
+  island_8_nature, metro_planned, wheel_lab, rail_lab and light_rail_lab are identical before and after the files were
+  written; the lane graph's cache key is built on the same key. A unit test writes a layout into a file and checks the
+  producer's key is equal.
+- **The builder carries the ids** (`expand`): every lane gets its slot, the stretch of its road's spine it is laid
+  along, the streets it runs along (a lane is NOT cut per street; it carries a list of (street, station range), the
+  simpler of the two and the one that cannot change a mesh), and the junction at each end the way its traffic runs. The
+  paint's junction boxes (`junctionSpans`) are found once at the end of `build()` and kept in `Result` (with the lane
+  lookup that found them); the mesher paints from those. river_town's `lanes_tool build` writes a byte-identical .glb
+  and .svg before and after.
+- **The road model** (`roads/road_model.h`): junctions (position, height, arms in order, through pairs, control, the
+  stretches inside it, the paint's boxes holding it), streets (cross-section from the class and the file's lanes,
+  one-way, posted limit, lots range, frontage), lanes (curve, heights, the spine station of each point, slot, streets,
+  end junctions), connections (a ramp leaving or merging into its host's lane at its anchor, with its stated length and
+  taper; declared connectors), ramps, crossings. Each arm's stop line is the paint's (kStopLineBack outside the box the
+  arm's road enters). Indices reuse the lane graph's `GraphIndex` and `Range`. Assembled from a `Result` by one
+  function; saved field by field (one field list read and written by the same code; equality compares the saved
+  bytes); stored in its own cache file, `cache/roadmodel/<key>.roadmodel`, keyed by the city's key, the layout's bytes
+  and `kRoadModelVersion`. NOT in the level bundle: that would re-bake every level. Moving it into the bake is a later
+  step. Nothing reads it yet.
+- **Not stated, left empty** (and listed in the model's report): turn paths through junctions, which lines between
+  lanes may be crossed, junction outlines on the ground (the builder has none: only the paint's boxes, a stretch along
+  each street, which the model keeps), crosswalks, parking, street names, blocks, signal groups; and per file controls,
+  limits and crossings where the file plans none.
+- **Questions**: the street, lane and station nearest a point (with the height); the streets at a junction in order;
+  a street's lanes; what a lane leads to (its end junction and stated connections); what is attached to a street or a
+  junction. Unit tested on a small scene.
+- **The comparison** (`lanes_tool compare`, `road_model_compare.h`, a lanes_tests case): the model against the nav
+  graph, the paint's boxes and the lane graph (junctions matched within 12 m of the junction's centre or its arms'
+  points), streets against nav links (lanes, one-way, class, length), lanes against lane-graph lane paths, the lane
+  match, and where the old forms disagree with each other. Reports in docs/road-model-compare/.
+
+**What the comparison found (river_town / traffic_lab / metro_v2_test).**
+- The nav's lane counts come from a different cross-section model (`lanesForClass`, `DesignRules`) than the road file's
+  class table: 154 / 153 / 165 streets carry different lanes each way (freeway carriageways 3 against 4, arterials 2
+  against 3), and the lane graph, built from the builder's lanes, agrees with the model, not the nav.
+- Junctions: the forms agree one to one on most (nav 113/121/167, paint 123/125/179, lane graph 128/138/180 of
+  151/156/200). The nav splits 27/15/20 of the model's junctions into several nodes, up to 89 m apart (those are the
+  control plan's multi-node junctions); the lane graph splits 15/6/17. The nav has 12/8/8 extra nodes at freeway and
+  ramp gores (the model holds those as ramps). No form ever holds two model junctions as one, except once in the lane
+  graph on metro_v2_test and once in the paint on traffic_lab.
+- The paint finds no box at 31/39/26 arms the file states (shallow-angle junctions, where its parallel test calls two
+  roads side by side, and roads carrying on end to end), and at one junction on traffic_lab and metro_v2_test it paints
+  a box no stated junction holds.
+- Streets: the nav's chain of links between its junction nodes is a different length from the street at 22/31/38 (the
+  freeway runs through gore nodes the model does not call junctions; grouped junctions are long).
+- Lanes: every road lane outside a junction became a lane-graph lane path; 204/122/114 lanes on roads lying wholly
+  inside a junction became none (and are on no street in the model either). Within each road, the lane graph's
+  offside-to-kerb order is the model's slot order everywhere.
+- island_8_nature (12 min 39 s, 10.5 of them the road build): 1391 model junctions; one to one with the nav 1357, the
+  paint 1370, the lane graph 1374; 1355 streets with different lanes each way in the nav; 63 arms or boxes where the
+  build does not match the file.
+
+**Alternatives.** A second list of junctions beside the control plan's: refused by the brief (two lists). Re-planning
+the old road files: refused, it would change their roads. Cutting lanes per street: more work for the same answer and a
+risk to the meshes. Storing the model in the bake now: re-bakes every level.
+
+**Revisit when** step 3 moves the first reader to the model; when the model goes into the bake; when the grouping of
+nodes into one junction is decided (the design deletes the control plan's grouping, but the model's junctions are it
+today).

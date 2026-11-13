@@ -8,8 +8,16 @@
 //   lanes_tool terrain <graph.json> <out.json> [step]   the scene's natural ground on a grid (for a map)
 //   lanes_tool interchange-demo <out.json>   write the system-interchange test scene: a curved elevated ring over a radial
 //                      expressway at ground level, its four ramps, and the expressway's inner leg becoming a boulevard
+//   lanes_tool layout <graph.json> [--write] [--fresh]   the road file's junctions and streets with ids (ADR-0417); --write
+//                      puts them into the file in place (the bake key does not see them)
+//   lanes_tool model <graph.json> [--out <dir>]   build the roads and assemble THE ROAD MODEL: model.txt, report.txt, model.svg
+//   lanes_tool compare <graph.json> [--out <dir>]   the model files too, and the road model against the old forms (twin/nav, paint boxes, lane graph,
+//                      lane match): compare.txt
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/road_design.h"
+#include "engine/procgen/city/roads/lanes/road_layout.h"   // layout: the road file's junctions and streets (ADR-0417)
+#include "engine/procgen/city/roads/lanes/road_model_compare.h"   // compare: the road model against the old forms
+#include "engine/procgen/city/roads/road_model.h"   // model: the one road model (ADR-0417)
 #include "engine/procgen/city/roads/lanes/road_twin.h"
 #include "engine/procgen/city/roads/lanes/block_audit.h"
 #include "engine/procgen/city/road_network.h"   // extractBlocks: the lot pass's face walk
@@ -45,6 +53,13 @@ namespace {
 // The --out folder, made with every folder above it (`out/lanelab/x` when `out/lanelab` is not there yet). Says so
 // and returns false when it cannot be made: a plain mkdir made only the last folder, failed silently, and the tool
 // went on to print "wrote ..." for files it had not written.
+// The compare report's last line: how long each part took.
+std::string fmtSeconds(double build, double model, double compare) {
+    char b[160];
+    std::snprintf(b, sizeof b, "(the road build %.1f s, the model %.2f s, the comparison %.1f s)\n", build, model, compare);
+    return b;
+}
+
 bool makeOutDir(const std::string& dir) {
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
@@ -166,6 +181,79 @@ int main(int argc, char** argv) {
             } catch (const std::exception& ex) { std::fprintf(stderr, "lanes: %s: %s\n", argv[i], ex.what()); }
         }
         std::printf("%d ramp ends land wrongly (or frontage roads run wrongly) in all, %d of them planned (build() refuses those)\n", faults, planned);
+        return 0;
+    }
+    if (argc >= 3 && std::strcmp(argv[1], "layout") == 0) {
+        // THE ROAD FILE'S LAYOUT (road_layout.h, ADR-0417): its junctions and streets with ids, derived ONCE from what the
+        // file holds today (LayoutSource::Inferred: ends within the endpoint tolerance, the planner's crossing policy where
+        // the file declares no crossings), printed; --write puts it into the file in place, nothing else moving by a byte,
+        // for a person to read and correct. A layout the file already has is kept (--fresh derives it again); a control
+        // plan's junctions list is kept as stated and given its streets.
+        bool write = false, fresh = false;
+        for (int i = 3; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--write") == 0) write = true;
+            if (std::strcmp(argv[i], "--fresh") == 0) fresh = true;
+        }
+        std::string text;
+        {
+            std::ifstream f(argv[2], std::ios::binary);
+            if (!f) { std::fprintf(stderr, "lanes_tool: cannot read %s\n", argv[2]); return 1; }
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            text = ss.str();
+        }
+        const std::string base = stripLayoutText(text);
+        const std::string dir = std::filesystem::path(argv[2]).parent_path().string();
+        RoadLayout layout;
+        try {
+            const nlohmann::json spec = nlohmann::json::parse(fresh ? base : text);
+            layout = deriveLayout(RoadLabGraph::fromJson(spec, dir.empty() ? "." : dir), LayoutSource::Inferred);
+        } catch (const std::exception& ex) { std::fprintf(stderr, "lanes_tool: %s: %s\n", argv[2], ex.what()); return 1; }
+        std::printf("%s: %s", argv[2], describeLayout(layout).c_str());
+        if (!write) return 0;
+        std::string err;
+        const std::string out = insertLayoutText(base, layout, &err);
+        if (out.empty()) { std::fprintf(stderr, "lanes_tool: %s: not written: %s\n", argv[2], err.c_str()); return 1; }
+        try { (void)RoadLabGraph::fromJson(nlohmann::json::parse(out), dir.empty() ? "." : dir); }
+        catch (const std::exception& ex) { std::fprintf(stderr, "lanes_tool: %s: the file written would not read back (%s); not written\n", argv[2], ex.what()); return 1; }
+        {
+            std::ofstream f(argv[2], std::ios::binary);
+            f << out;
+        }
+        std::printf("wrote the layout into %s (%zu bytes more; the bytes the bake keys are unchanged: %s)\n", argv[2], out.size() - base.size(),
+                    stripLayoutText(out) == base ? "yes" : "NO");
+        return 0;
+    }
+    if (argc >= 3 && (std::strcmp(argv[1], "model") == 0 || std::strcmp(argv[1], "compare") == 0)) {
+        // THE ROAD MODEL (road_model.h, ADR-0417): the roads built, the model assembled from the build; `model` writes its
+        // dump (model.txt), its report (report.txt: what it holds, what is not stated, where the build does not match) and
+        // a map (model.svg); `compare` writes the model against the old forms (compare.txt, road_model_compare.h).
+        const bool compare = std::strcmp(argv[1], "compare") == 0;
+        std::string outDir = ".";
+        for (int i = 3; i + 1 < argc; ++i)
+            if (std::strcmp(argv[i], "--out") == 0) outDir = argv[i + 1];
+        if (!makeOutDir(outDir)) return 1;
+        const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        std::unique_ptr<Result> rp;
+        try { rp = build(RoadLabGraph::load(argv[2])); } catch (const std::exception& e) { std::fprintf(stderr, "lanes: %s\n", e.what()); return 1; }
+        const double buildSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        const std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
+        const RoadModel model = assembleRoadModel(*rp);
+        const double modelSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count();
+        std::printf("%s: built in %.1f s, the model assembled in %.2f s: %zu junctions, %zu streets, %zu lanes, %zu connections, %zu problems\n", argv[2],
+                    buildSeconds, modelSeconds, model.junctions.size(), model.streets.size(), model.lanes.size(), model.connections.size(),
+                    model.problems.size());
+        std::ofstream(outDir + "/model.txt") << dumpRoadModel(model);
+        std::ofstream(outDir + "/report.txt") << reportRoadModel(model);
+        std::ofstream(outDir + "/model.svg") << roadModelSvg(model);
+        std::printf("wrote %s/model.txt, report.txt, model.svg\n", outDir.c_str());
+        if (!compare) return 0;
+        const std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
+        const RoadModelComparison c = compareRoadModel(model, *rp);
+        const double compareSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t2).count();
+        const std::string text = c.text + fmtSeconds(buildSeconds, modelSeconds, compareSeconds);
+        std::ofstream(outDir + "/compare.txt") << text;
+        std::printf("%s", text.c_str());
         return 0;
     }
     if (argc == 3 && std::strcmp(argv[1], "interchange-demo") == 0) {
@@ -432,6 +520,9 @@ int main(int argc, char** argv) {
                              "       lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width[:length] ...] [--junction J ...]   (the lane graph: dump, problems, reach, plan SVG; junction close-ups)\n"
                              "       lanes_tool design <graph.json> <out.json> [--plan-crossings]   (the graph with every road's planned profile; built again, taken as given)\n"
                              "       lanes_tool landings <graph.json> ...   (each ramp end on a street: on the carriageway going its way? #282)\n"
+                             "       lanes_tool layout <graph.json> [--write] [--fresh]   (the road file's junctions and streets with ids; --write puts them in the file, ADR-0417)\n"
+                             "       lanes_tool model <graph.json> [--out <dir>]   (the road model: model.txt, report.txt, model.svg)\n"
+                             "       lanes_tool compare <graph.json> [--out <dir>]   (the road model against the twin/nav, paint boxes, lane graph and lane match: compare.txt)\n"
                              "                    [--ramp-width M] [--ramp-shoulder M]   ramp carriageway (default 4.5 m lane, 2.5 m shoulder)\n");
         return 2;
     }

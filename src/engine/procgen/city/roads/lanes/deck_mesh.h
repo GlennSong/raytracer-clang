@@ -57,14 +57,7 @@ constexpr double kStopLineBack = 5.2;
 // carriageways sit a median apart.
 constexpr double kJunctionMergeGap = 12.0;
 
-// One junction box along a street: the stretch of the street's spine (stations s0 to s1) where its lanes run inside a
-// crossing road's lanes at the same level, the highest class rank among those crossing roads, and which roads they are
-// (graph edge indices, ascending).
-struct JunctionSpan {
-    double s0 = 0, s1 = 0;
-    int crossRank = -1;
-    std::vector<int> crossEdges;
-};
+// (JunctionSpan, one junction box along a street, is in lanes.h: the build keeps the paint's boxes in its Result.)
 // The paint's PARALLEL TEST: a crossing lane whose direction there is within this (|cos| of the angle between them) of
 // the street's runs beside it, not across it (0.7: closer than about 46 degrees). The paint's number; a caller with its
 // own reason passes another (the lane graph, lane_graph_build.h kJunctionParallelForGraph).
@@ -75,8 +68,11 @@ constexpr double kJunctionParallel = 0.7;
 // `parallelCos`: the parallel test's threshold (above: beside, not across).
 int junctionCrossRank(const Result& r, const LaneLookup& look, size_t li, const Vec2& p, const Vec2& t,
                       std::vector<int>* crossEdges = nullptr, double parallelCos = kJunctionParallel);
+// Whether the paint finds junction boxes along a road of its own: streets only -- not ramps, freeways, tracks, nor classes
+// ranked below 1.
+bool paintsJunctionBoxes(const RoadLabGraph& g, const EdgeSpec& e);
 // Every street's junction boxes (graph edge index -> its boxes, in station order, a divided cross road's two merged
-// into one). Streets only: ramps, freeways, tracks and classes ranked below 1 have none of their own.
+// into one). Streets only (paintsJunctionBoxes).
 std::map<int, std::vector<JunctionSpan>> junctionSpans(const Result& r, const LaneLookup& look,
                                                        double parallelCos = kJunctionParallel);
 

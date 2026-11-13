@@ -16,7 +16,8 @@ Everything lives under `cache/` in the checkout the game runs from (each worktre
 | `cache/terrain/maps_*.bin`, `weather_*.bin` | the cover maps, the weathered ground | the terrain settings | ~65 MB each; slow to remake |
 | `cache/population/<hash>.pop` | who lives and works where | places, street graph, agents, buses | small |
 | `cache/lanegraph/<key>.lanegraph` | the **lane graph** the new driving model drives on (levels with `citysim.driving = "v2"` only): every lane and every path through a junction. A bundle file holding one graph. Built at the first load from the roads (the road build again, ~16 s on the traffic lab), read in a fraction of a second after (`lane_graph_cache.h`) | the city producer's key (lanes tag + road graph), the fleet's vehicle sizes by tag, `kLaneGraphBuildVersion` | a few MB |
-| `*.uses` beside the terrain, population and lane graph files | which levels used the file, and when (ADR-0256) | | tiny |
+| `cache/roadmodel/<key>.roadmodel` | the **road model** (ADR-0417, `road_model.h`): junctions, streets, lanes and what connects them, with ids. Nothing reads it yet. Built from the roads by `obtainLevelRoadModel` | the city producer's key, the road file's layout (which that key leaves out), `kRoadModelVersion` | a few MB |
+| `*.uses` beside the terrain, population, lane graph and road model files | which levels used the file, and when (ADR-0256) | | tiny |
 | `cache/fields`, `cache/road_signs`, `cache/clouds` | textures, sign atlases, cloud fields | their own inputs | small |
 
 Every one of these is a **cache**: deleting it is always safe; it is rebuilt on the next load.
@@ -35,6 +36,10 @@ A producer's **key** is a hash of: its tag, the lot format version (`lotcache::k
 Real width, scripting on/off, the level JSON blocks it reads (`terrain`, `water`, `citysim`, road
 entities), the render cell, the spawn point, the style books (`style_book.lua`, `archetype_book.lua`) —
 and, for `lots`, **the `city` key**. So the stages chain: new roads always mean new lots.
+
+The road file's LAYOUT (its junctions' streets, headings and through pairs, and its `streets` list: ADR-0417) is not in
+the `city` key: the key hashes the file with those parts taken out (`stripLayoutText`), because no stage of the bake reads
+them. Writing or editing a layout re-bakes nothing.
 
 On load (`obtainForLevel`): if a bundle with every producer's current key exists, it is opened (a hit,
 well under a second). Otherwise the level is baked: a producer whose key matches an older bundle is

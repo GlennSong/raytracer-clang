@@ -29,6 +29,7 @@
 #include "engine/procgen/city/implicit.h"   // simplifyLoop (a place's limits in its hub)
 #include "engine/procgen/city/roads/lanes/lanes.h"         // designedGraph: the scene designed before it is written
 #include "engine/procgen/city/roads/lanes/road_design.h"   // planCrossings: the planner's crossing policy
+#include "engine/procgen/city/roads/lanes/road_layout.h"   // the scene's junctions and streets, with ids (ADR-0417)
 #include "engine/procgen/city/street_names.h"
 #include "engine/ai/nav_graph.h"
 #include "engine/ai/pathfind.h"
@@ -90,6 +91,20 @@ static void designScene(nlohmann::json& scene) {
     std::printf("designed: %zu crossings planned, node mismatch %.1f cm, %d lifted to clear, %zu not in the plan (%.0f s)\n", scene["crossings"].size(),
                 100 * rep.nodeMismatchAfter, rep.lifted, rep.undeclared.size(), std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
     for (std::size_t i = 0; i < rep.undeclared.size() && i < 10; ++i) std::printf("  not in the plan: %s\n", rep.undeclared[i].c_str());
+    // THE LAYOUT AGAIN (road_layout.h, ADR-0417), now the crossings are planned: two streets the policy has meet at grade
+    // away from a shared end are a junction too, and roads added since the scene was written (rail, its ways in) get
+    // their streets. A list carrying controls (a control plan) is the plan's and stays as it is.
+    bool controls = false;
+    if (scene.contains("junctions"))
+        for (const nlohmann::json& j : scene["junctions"]) controls = controls || j.contains("control");
+    if (!controls) {
+        scene.erase("junctions");
+        scene.erase("streets");
+        const engine::roads::lanes::RoadLayout layout = engine::roads::lanes::deriveLayout(
+            engine::roads::lanes::RoadLabGraph::fromJson(scene), engine::roads::lanes::LayoutSource::Planner);
+        engine::roads::lanes::writeLayout(scene, layout);
+        std::printf("layout: %s", engine::roads::lanes::describeLayout(layout).c_str());
+    }
 }
 
 // THE ISLAND LOOP into a lanes graph (island_rail.h islandRailLoop): a station at every town (the level's hubs),

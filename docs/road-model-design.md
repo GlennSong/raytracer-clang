@@ -1,6 +1,7 @@
 # One road network: design
 
-Status: proposal for Glenn to read (2026-11-13). No code has been changed for it.
+Status: approved; steps 1 and 2 built (2026-11-13, ADR-0417) beside the old forms, no reader moved yet. The comparison
+of the model with the old forms is in docs/road-model-compare/. Next: Glenn reads the comparison before step 3.
 
 ## The goal
 
@@ -135,17 +136,17 @@ Small and fixed, so readers stop walking raw data:
 One reader moves at a time. After each step every level still loads and plays, and the old form stays until its last
 reader has gone.
 
-| Step | What changes | Re-bake? |
-|---|---|---|
-| 1 | The planner writes junctions and streets with ids into the road file. Hand-made road files get them from a one-off tool that writes today's inference into the file for a person to check. | No |
-| 2 | The builder carries those ids onto every lane it lays and keeps its stop lines and junction outlines. The whole model is stored in the bake beside the old forms. A test compares the model with the twin on every level and lists the differences. | Bake gains a section; meshes unchanged |
-| 3 | Readers that only label things move first: street names, name signs, the map. | No |
-| 4 | Street furniture, signal poles and lights read the model's junctions and controls. Signal heads and the lights now agree. | No |
-| 5 | Lots, block frontage and door facing read the model's blocks and streets. The second twin is deleted. | Lots re-bake |
-| 6 | Buses, rail riders and parking attach to streets by id. Parking becomes part of the cross-section. | No |
-| 7 | Routing reads the model at street level. The twin and both routing-graph copies are deleted. This changes what the current city sim does, so its pinned test values are retaken once, knowingly. | No |
-| 8 | Lane-level driving reads the model's lanes and connections. The lane match and the lane graph's inference are deleted; its measuring of conflicts and bends stays. The one-agent lab's car moves to the new driver here. | No |
-| 9 | The builder paints junctions from the stated junctions and builds corners to a stated radius, so every stated turn fits. | Every level |
+| Step | What changes | Re-bake? | Built |
+|---|---|---|---|
+| 1 | The planner writes junctions and streets with ids into the road file. Hand-made road files get them from a one-off tool that writes today's inference into the file for a person to check. | No | Yes (ADR-0417). One list of junctions: the control plan's "junctions" list, extended. The bake key ignores the new parts. |
+| 2 | The builder carries those ids onto every lane it lays and keeps its stop lines and junction outlines. The whole model is stored in the bake beside the old forms. A test compares the model with the twin on every level and lists the differences. | Bake gains a section; meshes unchanged | Yes, with two differences: the model is stored in its own cache file (cache/roadmodel), not in the bake, so nothing re-bakes; and the builder has no junction outline to keep, only the paint's junction boxes (a stretch along each street), which it keeps. The comparison ran on three levels, not every level. |
+| 3 | Readers that only label things move first: street names, name signs, the map. | No | |
+| 4 | Street furniture, signal poles and lights read the model's junctions and controls. Signal heads and the lights now agree. | No | |
+| 5 | Lots, block frontage and door facing read the model's blocks and streets. The second twin is deleted. | Lots re-bake | |
+| 6 | Buses, rail riders and parking attach to streets by id. Parking becomes part of the cross-section. | No | |
+| 7 | Routing reads the model at street level. The twin and both routing-graph copies are deleted. This changes what the current city sim does, so its pinned test values are retaken once, knowingly. | No | |
+| 8 | Lane-level driving reads the model's lanes and connections. The lane match and the lane graph's inference are deleted; its measuring of conflicts and bends stays. The one-agent lab's car moves to the new driver here. | No | |
+| 9 | The builder paints junctions from the stated junctions and builds corners to a stated radius, so every stated turn fits. | Every level | |
 
 Steps 1 and 2 are the foundation and change nothing a player can see. Step 9 is the only one that changes the drawn
 roads everywhere.

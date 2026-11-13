@@ -1,5 +1,6 @@
 #include "island_scene.h"
 #include "../city/roads/lanes/road_graph_spec.h"   // the road class table (the mountain row)
+#include "../city/roads/lanes/road_layout.h"       // the scene's junctions and streets, with ids (ADR-0417)
 #include "../city/polyline.h"   // segmentsCross, nearestOnPolyline
 
 #include <algorithm>
@@ -413,6 +414,9 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
                         {"seed", static_cast<int>(w.terrain.value("seed", 1u))},
                         {"octaves", json::array({json::array({0.0, 500.0})})},   // no relief of its own: the island is the ground
                         {"base", w.terrain}};
+    // THE LAYOUT, from birth (road_layout.h, ADR-0417): one list of junctions and streets for the whole island -- every
+    // place's streets and the island roads ending in them -- with ids; each place scene's own was for that scene alone
+    roads::lanes::writeLayout(scene, roads::lanes::deriveLayout(roads::lanes::RoadLabGraph::fromJson(scene), roads::lanes::LayoutSource::Planner));
     return scene;
 }
 

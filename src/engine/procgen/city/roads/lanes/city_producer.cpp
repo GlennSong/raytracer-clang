@@ -4,6 +4,7 @@
 #include "engine/procgen/city/roads/lanes/block_audit.h"
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
 #include "engine/procgen/city/roads/lanes/lots_producer.h"
+#include "engine/procgen/city/roads/lanes/road_layout.h"   // stripLayoutText: the road model's layout keys nothing
 #include "engine/procgen/city/roads/lanes/road_twin.h"
 #include "engine/procgen/city/roads/road_builder.h"   // roadBuilderName: lanes is the default
 #include "engine/procgen/terrain_field.h"
@@ -12,7 +13,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -53,6 +56,17 @@ bool graphHasTrack(const nlohmann::json& spec) {
 
 double secondsSince(const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); }
 
+// A file's bytes and its modification time (seconds, as fnv1aFile records it); false when it cannot be read.
+bool readWholeFile(const std::string& path, std::string& bytes, int64_t* mtime) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    std::error_code ec;
+    const std::filesystem::file_time_type t = std::filesystem::last_write_time(path, ec);
+    *mtime = ec ? 0 : static_cast<int64_t>(std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count());
+    return true;
+}
+
 class CityProducer final : public bundle::BundleProducer {
 public:
     std::string name() const override { return kCityProducerName; }
@@ -65,14 +79,22 @@ public:
         const double cell = cityRenderCell(in.level); k = bundle::fnv1a(&cell, sizeof(cell), k);
         for (const CityEntity& e : cityEntities(in.level)) {
             k = bundle::fnv1aStr("entity" + std::to_string(e.ordinal), k);
-            if (e.inlineGraph) { k = bundle::fnv1aStr(e.block.dump(), k); continue; }
+            if (e.inlineGraph) { k = bundle::fnv1aStr(stripLayoutText(e.block.dump()), k); continue; }
             // The level's sidewalk override is built into the city (loadCityGraph), so it keys it: without it,
             // a level sharing the graph handed its city forward (bake.cpp's donor search matches this key) --
             // metro_lanes' 5-6 m sidewalks got the lab metro's narrower ones, one hole more, and 2 buildings.
             // Hashed only when present, so a level without one keeps its key.
             if (e.block.contains("sidewalks")) k = bundle::fnv1aStr("sidewalks" + e.block["sidewalks"].dump(), k);
+            // The graph file's bytes WITHOUT THE ROAD MODEL'S LAYOUT (road_layout.h stripLayoutText: each junction's
+            // streets, headings and through pairs, and the streets list): no stage of the bake reads them, so writing them
+            // into a file keeps its key. A file without them hashes exactly as it always did.
             bundle::InputFile f; f.path = e.graphPath; uint64_t fk = bundle::kFnvOffset;
-            if (bundle::fnv1aFile(e.graphPath, fk, &f.bytes, &f.mtime)) { f.fnv = fk; k = bundle::fnv1a(&fk, sizeof(fk), k); }
+            std::string bytes;
+            if (readWholeFile(e.graphPath, bytes, &f.mtime)) {
+                const std::string keyed = stripLayoutText(bytes);
+                fk = bundle::fnv1a(keyed.data(), keyed.size(), fk);
+                f.bytes = keyed.size(); f.fnv = fk; k = bundle::fnv1a(&fk, sizeof(fk), k);
+            }
             else k = bundle::fnv1aStr("missing:" + e.graphPath, k);
             id.inputs.push_back(f);
             std::ifstream gf(e.graphPath); nlohmann::json spec; try { gf >> spec; } catch (const std::exception&) { spec = nlohmann::json(); }
