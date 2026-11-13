@@ -1085,6 +1085,9 @@ struct CitySimConfig {
                                          // (plan-only demarcation levels)
     bool wander = false;                 // agents take perpetual random trips
     bool schedule = true;                // false: nobody keeps a day; everyone waits at home to be sent (the trip lab)
+    // THE LAB PERSON'S HOME (`"homeNear": [x, z]`, ADR-0416): the first resident with a car lives in the home nearest
+    // this point, their car parked outside it. Empty: wherever the population put them.
+    std::vector<double> homeNear;
     bool ambientBus = false;             // a test lab's ambient rotation includes the bus body (wheel_lab)
                                          // (no schedule) — the lab car keeps lapping
     // Scripted goal tables (ADR-0064): the loaded TEXT of the level's

@@ -1361,6 +1361,10 @@ public:
     // car parked outside, the person indoors -- and held there for a director (`directed`), going only where they are
     // sent. Set before seedFromSchedule.
     void setDaySchedule(bool on) { daySchedule_ = on; }
+    // THE LAB PERSON'S HOME (citysim.homeNear, ADR-0416): agent `agentIndex` lives at `home` from now on -- its door,
+    // its node, where it rests. After assignPlaces, before seedFromSchedule (which puts them and their car there).
+    // False when out of range or `home` is not a place.
+    bool moveHome(int agentIndex, const PlaceMap& places, PlaceId home);
     bool daySchedule() const { return daySchedule_; }
     // A LEVEL's ROLE FOR ITS DRIVERS (#214; citysim.driverRole): `share` of the private drivers (never a bus, a cab or
     // a service vehicle) take role `name` -- the traffic lab gives lab_driver, always driving. After the cabs and

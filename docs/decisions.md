@@ -19610,3 +19610,68 @@ population plans its trips this way.
 - Not done: getting in and out is still instant (no door swing -- the city's cars have no door leaves, only the bus --
   no pause, no seated pose change); the person reaches the car's kerb side and is then in it. The walker model walks a
   street's link on its own kerb side only, so a walk back the way the person faces crosses the street to begin.
+
+## ADR-0416 — The trip lab's drive is priced by the router's own road times, says which roads it uses, and the lab can send the person on the freeway
+**Status:** Provisional · **Date:** 2026-11-13
+
+Words: a ROAD CLASS is the router's kind of road (freeway, ramp, arterial, collector, local). A ROAD KIND is what
+the trip plan calls a group of them ("streets", "freeway", "ramps"; travel.lua). The RING is river_town's freeway
+loop round the town; a STUB is the short piece of freeway from the ring's interchange to a boulevard into town.
+
+**Context.** Glenn: "I have still yet to see the agent get on the freeway or anything", and then "could we start the
+agent near the freeway and then have them get into the car to get to the restaurant?" The trip planner (ADR-0415)
+priced the car at one flat 30 km/h over the route's length, while the router (`engine::findRoute`) had chosen that
+route by time per road class, so the plan's minutes ignored the very thing that would make a freeway pay.
+
+**Decision.**
+- **One rule for a link's time.** `engine::linkTravelSeconds` (pathfind.h) is what `findRoute` charges a link -- its
+  length at its class speed, a street junction's few seconds, the U-turn minute -- now a function the router calls
+  and `engine::routeSeconds` sums. A drive leg's minutes are `routeSeconds` of its route (the bits off the network at
+  a local street's speed) plus the row's start and end minutes. The router's numbers are unchanged (the pinned v1
+  hashes are equal). travel.lua's `speed_kmh` is for footpaths only: a roads row that gives one is refused.
+- **The roads a drive uses** are data: travel.lua `road_kinds`, each a name, the road classes it covers, an optional
+  colour, and `count` for a kind said as how many stretches ("2 ramps"). Each road leg carries its metres per kind;
+  `trip?` says "car 2103 m 9.7 min: 1,783 m streets, 320 m freeway" and the box adds "car on: ...". The drawn line
+  takes the kind's colour where it has one (freeway orange, ramps amber), else the way's own.
+- **`trip freeway`, key U** (free in the city game; arena's U binding is only on hot-reload levels): of the
+  buildings the person can drive to, the one whose fastest drive runs furthest on the freeway, a restaurant before any
+  other kind. The router is not bent. When no building's fastest drive uses the freeway it says so, with the closest
+  call: one doubled search (`engine::travelSecondsVia`: the fastest time with and without a freeway link) gives, per
+  building, how much slower the freeway would be. For a pick it also gives the best drive that keeps to the streets.
+- **Where the person lives is a level setting**, `citysim.homeNear: [x, z]`: the first resident with a car moves to
+  the home nearest the point (`CitySim::moveHome`, after the population is decided, before the city is seeded, so
+  their car is parked outside it as anyone's). agent_lab sets it to (-590, -210): the houses at the end of the
+  south-west stub.
+- `who?` names the road under a car when it is a freeway or a ramp (as it did a footpath), for the probe.
+
+**What river_town's roads allow (measured).** From the old home (160, 808) none of the 778 buildings the person can
+drive to has a fastest drive using the freeway. Searching every home and every restaurant (the doubled search), the
+ring is never the fastest way between two places inside it: the best case is 87 s slower than the streets. The reason
+is the interchanges: at both of them the ramps join the ring to the stub's OUTBOUND carriageway (from the ring) and
+leave from its INBOUND one (onto the ring), so a car from town must drive out to the stub's end, turn round and come
+back before it can get on, and a car leaving the ring is sent out to the end and back the same way; a trip across town
+by the ring pays about 650 m of stub twice. Inside a 1.2 km town the streets always win. The only places whose drive
+uses the freeway at all are the two small clusters of houses beyond the stubs' ends (homes #898-904 south-west,
+#8-16 north-east), which have no other way out: from there every drive uses 320 m of stub, none the ring. The
+north-east cluster cannot be a destination (nowhere to leave the car from which its doors can be walked to). So the
+lab's home is the south-west cluster, and `trip freeway` from it goes to restaurant #55 (121, 1117): car 9.7 min
+planned (1,783 m streets, 320 m freeway); no drive there avoids the stub.
+
+**What the existing driving did on it** (agent_lab_probe --keys --trips freeway, sim speed 2): it went onto the stub at
+19 km/h from the turnaround street, reached 106 km/h on it, came off onto the boulevard at 33 km/h, then met 11 red
+lights in town (81 s standing). No on-ramp, merge or off-ramp happened (the stub joins the streets directly). The drive
+took 7.2 min against 9.7 planned (the row's 2 + 3 fixed minutes are mostly not spent; the lights are not in the
+router's price). The line keeps the lane the car is changing into, so on a multi-lane road it leaves the car sideways
+for a few metres while the car eases over.
+
+**Alternatives.** Bending the router (a freeway bonus, lower street speeds) to make the lab show the ring: refused,
+it would change every resident's routes for a demonstration. Fixing the interchanges so a town car can get on without
+the turnaround: that is the lane graph's ramps (river_town's are all `side: right` in a drive-on-left world, which
+may be the cause -- not checked), outside this change.
+
+**Revisit when** the interchange ramps are fixed (then re-run `trip freeway` from the old home: the ring may pay
+between the town's far corners), or when lights enter the router's price.
+
+**Not done here (part 2 of the request):** driving to an AREA round the destination and searching for parking. It
+needs a new driving state in the sim (search speed, take the first free bay passed on its own side, circle the block
+with the area growing), seeded parked cars, and the planner's expected search time; see the hand-back.

@@ -261,18 +261,6 @@ std::vector<SidewalkCrossing> findSidewalkRoadCrossings(
     return out;
 }
 
-const char* roadClassName(RoadClass k) {
-    switch (k) {
-        case RoadClass::Freeway:   return "freeway";
-        case RoadClass::Ramp:      return "ramp";
-        case RoadClass::Arterial:  return "arterial";
-        case RoadClass::Collector: return "collector";
-        case RoadClass::Local:     return "local";
-        case RoadClass::Alley:     return "alley";
-    }
-    return "?";
-}
-
 bool writeCityMapSvg(const std::string& path, const CityMapData& data,
                      const CityMapLayers& layers,
                      const std::vector<const RoadDeckField*>& decks) {

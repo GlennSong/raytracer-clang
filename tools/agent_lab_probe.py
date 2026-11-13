@@ -10,6 +10,10 @@ process (never by name: the owner runs `viewer` too).
     python3 tools/agent_lab_probe.py                    # real time
     python3 tools/agent_lab_probe.py --speed 4          # the sim at 4x (`sim speed 4`)
     python3 tools/agent_lab_probe.py --keys --trips far # one far trip, started with the I key
+    python3 tools/agent_lab_probe.py --keys --trips freeway   # the freeway trip (ADR-0416), started with the U key
+
+On the drive it says every change of road kind (street / ramp / freeway) with the car's speed, the top speed on the
+freeway, and shoots the transitions onto it, along it and off it.
 """
 import argparse
 import os
@@ -40,10 +44,13 @@ def shoot(sock, shots, name, t0):
 
 
 def who(sock):
-    """The person's line from `who?` (staged on agent 0 at the start): state, speed, position."""
+    """The person's line from `who?` (staged on agent 0 at the start): position, speed, state, and the kind of road
+    under them (street, ramp, freeway, footpath)."""
     line = rtctl.send(sock, "who?", timeout=30)
     m = re.search(r"pos ([-\d.]+) ([-\d.]+) speed ([-\d.]+) .*? state (\w+)", line)
-    return (float(m.group(1)), float(m.group(2)), float(m.group(3)), m.group(4)) if m else None
+    k = re.search(r"link -?\d+( \((\w+)\))?", line)
+    road = (k.group(2) if k and k.group(2) else "street")
+    return (float(m.group(1)), float(m.group(2)), float(m.group(3)), m.group(4), road) if m else None
 
 
 def run_trip(sock, kind, number, shots, timeout, key=None):
@@ -60,7 +67,7 @@ def run_trip(sock, kind, number, shots, timeout, key=None):
         line = rtctl.send(sock, "trip?", timeout=30)
         if line.startswith(f"ok trip {number}:"):
             break
-        if "refused" in line or "trip near:" in line or "trip far:" in line:
+        if "refused" in line or "trip near:" in line or "trip far:" in line or "trip freeway:" in line:
             print("not started:", line)
             return False
         time.sleep(0.2)
@@ -72,6 +79,10 @@ def run_trip(sock, kind, number, shots, timeout, key=None):
     still_since = None
     first_left = None
     stops = []
+    road_was = None
+    road_since = 0.0
+    on_freeway_top = 0.0
+    been_on_freeway = False
     line = ""
     while time.time() - t0 < timeout:
         time.sleep(0.25)
@@ -112,7 +123,23 @@ def run_trip(sock, kind, number, shots, timeout, key=None):
             else:
                 stops.append((now, 0.25, w[0], w[1], "walker waiting"))
         if way == "car" and w:
-            x, z, speed, state = w
+            x, z, speed, state, road = w
+            # THE ROADS (ADR-0416): every change of road kind, the speed at it; shots onto, along and off the freeway
+            if road != road_was:
+                print(f"  {now:6.1f} s  onto {road} at {x:.0f} {z:.0f}, {speed * 3.6:.0f} km/h ({state})")
+                if road in ("ramp", "freeway") and "fw_onto" not in taken:
+                    taken.add("fw_onto")
+                    shoot(sock, shots, f"trip_{tag}_fw_1_onto_{road}", t0)
+                if road == "street" and been_on_freeway and "fw_off" not in taken:
+                    taken.add("fw_off")
+                    shoot(sock, shots, f"trip_{tag}_fw_3_off", t0)
+                road_was, road_since = road, now
+            if road == "freeway":
+                been_on_freeway = True
+                on_freeway_top = max(on_freeway_top, speed)
+                if "fw_on" not in taken and (speed > 22.0 or now - road_since > 8.0):
+                    taken.add("fw_on")
+                    shoot(sock, shots, f"trip_{tag}_fw_2_on_freeway", t0)
             if "off" not in taken and drive_start is not None and now - drive_start > 2.0 and speed > 1.0:
                 taken.add("off")
                 shoot(sock, shots, f"trip_{tag}_1_set_off", t0)
@@ -130,6 +157,8 @@ def run_trip(sock, kind, number, shots, timeout, key=None):
     if "arrived after" in line:
         shoot(sock, shots, f"trip_{tag}_4_arrived", t0)
     print("final:", line)
+    if been_on_freeway:
+        print(f"  top speed on the freeway: {on_freeway_top * 3.6:.0f} km/h")
     for at, dur, x, z, state in stops:
         print(f"  {'walker' if state.startswith('walker') else 'car'} stood {dur:5.1f} s from {at:6.1f} s at {x:.1f} {z:.1f} ({state})")
     done = "arrived after" in line
@@ -148,7 +177,7 @@ def main():
     ap.add_argument("--trips", nargs="+", default=["near", "far"],
                     help="what to send after `trip`, in order (e.g. far, or \"to 96\")")
     ap.add_argument("--keys", action="store_true",
-                    help="start near and far trips with the lab's keys (tap Y / tap I) instead of the verb")
+                    help="start near, far and freeway trips with the lab's keys (tap Y / I / U) instead of the verb")
     args = ap.parse_args()
     os.makedirs(args.shots, exist_ok=True)
     os.makedirs(os.path.dirname(args.log), exist_ok=True)
@@ -168,7 +197,7 @@ def main():
         if args.speed > 0:
             print("sim speed:", rtctl.send(sock, f"sim speed {args.speed}"))
         for number, kind in enumerate(args.trips, start=1):
-            key = {"near": "Y", "far": "I"}.get(kind) if args.keys else None
+            key = {"near": "Y", "far": "I", "freeway": "U"}.get(kind) if args.keys else None
             ok = run_trip(sock, kind, number, args.shots, args.timeout, key) and ok
     finally:
         rtctl.stop(proc)

@@ -4,6 +4,7 @@
 #include "polygon.h"
 #include "road_spec.h"          // RoadSpec — the band table RoadEdge::spec indexes
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace engine {
@@ -21,6 +22,10 @@ namespace engine {
 // appended members fall through to sensible defaults in older code; DesignRules gives the
 // real classes parameters — ADR-0052.)
 enum class RoadClass : uint8_t { Freeway, Arterial, Collector, Local, Ramp, Alley };
+// A class's name in data ("freeway", "ramp", "arterial", "collector", "local", "alley"), and back: false when the
+// name is none of them (travel.lua names the classes a drive is told apart by, ADR-0416).
+const char* roadClassName(RoadClass k);
+bool parseRoadClass(const std::string& name, RoadClass& out);
 
 // What MEETS at a node — not how many edges (roads-v2.2 semantic layer,
 // issue #17). Auto = unclassified; classifyRoadGraph (road_semantics.h)

@@ -28,7 +28,10 @@ using engine::Vec2;
 struct TravelMode {
     std::string name;            // "walk", "car"
     bool roads = false;          // its network: the roads (a vehicle's routing) or the footpaths (a walker's)
-    Real speed = 1.4;            // m/s, door to door on its network (the table says km/h)
+    // m/s, door to door, on the FOOTPATHS (the table says km/h). A way on the roads has none: its minutes are the
+    // router's own time for the route (engine::routeSeconds: each road class at its speed, a few seconds a street
+    // junction), the time it chose the route by (ADR-0416).
+    Real speed = 1.4;
     Real startMinutes = 0;       // fixed minutes at the start of a leg of it (unlocking, pulling out)
     Real endMinutes = 0;         // ...and at its end (finding the space, parking, locking)
     bool ownVehicle = false;     // needs a vehicle the person owns, standing somewhere
@@ -37,10 +40,23 @@ struct TravelMode {
     engine::Vec3 colour{1, 1, 1};   // its colour when a plan is drawn
 };
 
-// The whole table: the ways, in order (the order breaks ties), and the distance bands a person picks a destination
-// from when told "somewhere near" / "somewhere far" (straight-line metres).
+// A KIND OF ROAD a drive is told apart by (travel.lua `road_kinds`): the road classes it covers, what the plan calls
+// it ("freeway"), and the colour its part of the drawn line takes (none: the way's own). A kind counted rather than
+// measured (`count`: ramps) is said as how many separate stretches of it there are ("2 ramps").
+struct RoadKind {
+    std::string name, one;                  // "ramps", and one of them: "ramp"
+    std::vector<engine::RoadClass> classes;
+    bool hasColour = false;
+    engine::Vec3 colour{1, 1, 1};
+    bool count = false;
+};
+
+// The whole table: the ways, in order (the order breaks ties), the kinds of road, and the distance bands a person
+// picks a destination from when told "somewhere near" / "somewhere far" (straight-line metres).
 struct TravelCatalog {
     std::vector<TravelMode> modes;
+    std::vector<RoadKind> roadKinds;
+    int roadKindOf(engine::RoadClass k) const;   // the kind a class belongs to; -1 when none lists it
     Real nearMin = 150, nearMax = 600;
     Real farMin = 900, farMax = 4000;
     int find(const std::string& name) const;   // a row by name; -1 when there is none
@@ -53,7 +69,13 @@ struct TripLeg {
     engine::Route route;         // links of the leg's network (empty when from and to share a node)
     int fromNode = -1, toNode = -1;
     Real metres = 0;             // the route plus the bits off the network at each end
-    Real minutes = 0;            // metres at the way's speed, plus its start and end minutes
+    // On foot: metres at the way's speed. On the roads: the router's time for the route (engine::routeSeconds),
+    // the bits off the network at a local street's speed. Plus the way's start and end minutes either way.
+    Real minutes = 0;
+    // ON THE ROADS: metres on each of the catalog's road kinds (roadKinds' order; the bits off the network count as
+    // the street they join), and how many separate stretches of each
+    std::vector<Real> kindMetres;
+    std::vector<int> kindStretches;
 };
 
 // One way of making the whole trip.
@@ -98,6 +120,13 @@ TripPlan planTrip(const engine::NavGraph& nav, const TravelCatalog& cat, const T
 
 // "car 6.0 min (2.0 walk + 3.0 car + 1.0 walk)", or "car -- no car" when it is not possible.
 std::string describeOption(const TravelCatalog& cat, const TripOption& o);
+
+// A road leg's roads: "420 m streets, 1,350 m freeway, 2 ramps" (empty for a leg on foot, or with no kinds listed).
+std::string describeRoads(const TravelCatalog& cat, const TripLeg& leg);
+// Metres on the road kind named `name` in a leg (0 when the catalog has no such kind).
+Real kindMetres(const TravelCatalog& cat, const TripLeg& leg, const std::string& name);
+// Whole metres with the thousands marked: "1,350 m".
+std::string metresText(Real m);
 
 }  // namespace citysim
 

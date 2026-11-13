@@ -43,6 +43,86 @@ Real Route::length(const NavGraph& g) const {
     return total;
 }
 
+Real linkTravelSeconds(const NavGraph& graph, int inLink, int li, int goalNode, bool onFoot, Real costScale) {
+    const NavLink& link = graph.links[static_cast<std::size_t>(li)];
+    // ON FOOT every link is walked at one pace, so a walk's cost is its length (at the local street's speed, to keep
+    // the units): a pedestrian costed by the CARS' class speed took a collector round a block over a footpath 24 m
+    // shorter across it, because a collector "is faster" (ADR-0265, footpaths_are_walked_across_a_block_and_never_driven)
+    Real step = link.length / (onFoot ? classSpeed(RoadClass::Local) : classSpeed(link.klass));
+    if (!onFoot && link.to != goalNode && link.klass != RoadClass::Freeway &&
+        link.klass != RoadClass::Ramp && graph.isJunction(link.to))
+        step += kStreetJunctionDelay;
+    step *= std::max<Real>(1.0, costScale);
+    // A U-TURN COSTS (#218): a car turning back on itself at a node -- onto the street it came along, or a
+    // one-way beside it -- needs a junction as wide as two turning circles, and a driver goes round the block
+    // instead. Priced only where there is another way on (a dead end's only way out is back). Node-based, so it
+    // reads the link the node was reached by: what the drivers of the traffic lab's diamond interchanges
+    // were doing when they spun round on the spot (170 degrees inside the junction).
+    // (not onto or off a ramp or the freeway: an interchange's straight-segment ramps meet their roads at
+    // angles that read as a reversal where the lanes only diverge or merge -- priced, the city plan's
+    // freeway lost a quarter of its commutes, 20.5% -> 14.6%)
+    if (!onFoot && inLink >= 0) {
+        const auto isMotorway = [](RoadClass c) { return c == RoadClass::Ramp || c == RoadClass::Freeway; };
+        if (graph.outLinks[static_cast<std::size_t>(link.from)].size() > 1 &&
+            !isMotorway(graph.links[static_cast<std::size_t>(inLink)].klass) && !isMotorway(link.klass)) {
+            const Vec2 a = graph.direction(inLink), b = graph.direction(li);
+            if (a.x * b.x + a.y * b.y < kUTurnCos) step += kUTurnPenalty;
+        }
+    }
+    return step;
+}
+
+Real routeSeconds(const NavGraph& graph, const Route& route, bool onFoot) {
+    if (route.links.empty()) return 0;
+    const int goal = graph.links[static_cast<std::size_t>(route.links.back())].to;
+    Real total = 0;
+    int in = -1;
+    for (int li : route.links) {
+        total += linkTravelSeconds(graph, in, li, goal, onFoot);
+        in = li;
+    }
+    return total;
+}
+
+void travelSecondsVia(const NavGraph& graph, int startNode, const std::vector<char>& through,
+                      std::vector<Real>& without, std::vector<Real>& via) {
+    const std::size_t n = static_cast<std::size_t>(graph.nodeCount());
+    const Real INF = std::numeric_limits<Real>::infinity();
+    // state = node * 2 + (a `through` link used yet); each state's time and the link it was reached by
+    std::vector<Real> t(n * 2, INF);
+    std::vector<int> came(n * 2, -1);
+    without.assign(n, INF);
+    via.assign(n, INF);
+    if (startNode < 0 || static_cast<std::size_t>(startNode) >= n) return;
+    using Q = std::pair<Real, std::size_t>;
+    std::priority_queue<Q, std::vector<Q>, std::greater<Q>> open;
+    t[static_cast<std::size_t>(startNode) * 2] = 0;
+    open.push({0, static_cast<std::size_t>(startNode) * 2});
+    while (!open.empty()) {
+        const Q cur = open.top();
+        open.pop();
+        if (cur.first > t[cur.second]) continue;
+        const int u = static_cast<int>(cur.second / 2);
+        const bool used = (cur.second & 1) != 0;
+        for (int li : graph.outLinks[static_cast<std::size_t>(u)]) {
+            const NavLink& link = graph.links[static_cast<std::size_t>(li)];
+            if (link.footpath) continue;
+            const bool now = used || (static_cast<std::size_t>(li) < through.size() && through[static_cast<std::size_t>(li)]);
+            const std::size_t s = static_cast<std::size_t>(link.to) * 2 + (now ? 1 : 0);
+            const Real v = cur.first + linkTravelSeconds(graph, came[cur.second], li, -1, false);
+            if (v < t[s]) {
+                t[s] = v;
+                came[s] = li;
+                open.push({v, s});
+            }
+        }
+    }
+    for (std::size_t i = 0; i < n; ++i) {
+        without[i] = t[i * 2];
+        via[i] = t[i * 2 + 1];
+    }
+}
+
 RouteStats& routeStats() {
     thread_local RouteStats s;
     return s;
@@ -105,9 +185,7 @@ Route findRouteImpl(const NavGraph& graph, int startNode, int goalNode, bool onF
         sc.came[static_cast<std::size_t>(u)] = link;
     };
 
-    // ON FOOT every link is walked at one pace, so a walk's cost is its length (at the local street's speed, to keep
-    // the units): a pedestrian costed by the CARS' class speed took a collector round a block over a footpath 24 m
-    // shorter across it, because a collector "is faster" (ADR-0265, footpaths_are_walked_across_a_block_and_never_driven)
+    // (on foot, one pace: linkTravelSeconds)
     const Real footSpeed = classSpeed(RoadClass::Local);
     auto heuristic = [&](int node) {
         return distance(graph.nodes[node], graph.nodes[goalNode]) / (onFoot ? footSpeed : kMaxSpeed);
@@ -148,29 +226,11 @@ Route findRouteImpl(const NavGraph& graph, int startNode, int goalNode, bool onF
                        link.klass == RoadClass::Ramp || !link.walkable))
                 continue;
             if (!onFoot && link.footpath) continue;   // a walk: never a vehicle's
-            Real step = link.length / (onFoot ? footSpeed : classSpeed(link.klass));
-            if (!onFoot && link.to != goalNode && link.klass != RoadClass::Freeway &&
-                link.klass != RoadClass::Ramp && graph.isJunction(link.to))
-                step += kStreetJunctionDelay;
-            if (linkCostScale && static_cast<std::size_t>(li) < linkCostScale->size())
-                step *= std::max<Real>(1.0, (*linkCostScale)[static_cast<std::size_t>(li)]);
-            // A U-TURN COSTS (#218): a car turning back on itself at a node -- onto the street it came along, or a
-            // one-way beside it -- needs a junction as wide as two turning circles, and a driver goes round the block
-            // instead. Priced only where there is another way on (a dead end's only way out is back). Node-based, so it
-            // reads the link the node was reached by: what the drivers of the traffic lab's diamond interchanges
-            // were doing when they spun round on the spot (170 degrees inside the junction).
-            if (!onFoot && u != startNode && sc.stamp[static_cast<std::size_t>(u)] == gen) {
-                const int in = sc.came[static_cast<std::size_t>(u)];
-                // (not onto or off a ramp or the freeway: an interchange's straight-segment ramps meet their roads at
-                // angles that read as a reversal where the lanes only diverge or merge -- priced, the city plan's
-                // freeway lost a quarter of its commutes, 20.5% -> 14.6%)
-                const auto isMotorway = [](RoadClass c) { return c == RoadClass::Ramp || c == RoadClass::Freeway; };
-                if (in >= 0 && graph.outLinks[u].size() > 1 && !isMotorway(graph.links[static_cast<std::size_t>(in)].klass) &&
-                    !isMotorway(link.klass)) {
-                    const Vec2 a = graph.direction(in), b = graph.direction(li);
-                    if (a.x * b.x + a.y * b.y < kUTurnCos) step += kUTurnPenalty;
-                }
-            }
+            const int in = (u != startNode && sc.stamp[static_cast<std::size_t>(u)] == gen)
+                               ? sc.came[static_cast<std::size_t>(u)] : -1;
+            const Real scale = (linkCostScale && static_cast<std::size_t>(li) < linkCostScale->size())
+                                   ? (*linkCostScale)[static_cast<std::size_t>(li)] : Real(1);
+            const Real step = linkTravelSeconds(graph, in, li, goalNode, onFoot, scale);
             Real tentative = gOf(u) + step;
             if (tentative + 1e-12 < gOf(link.to)) {
                 setG(link.to, tentative, li);

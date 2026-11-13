@@ -111,6 +111,10 @@ struct Place {
     bool openAt(Real clock) const;
 };
 
+// A place's DOORSTEP: its sidewalk entrance nudged toward the building site, so a resting body stands at the door --
+// clearly off the carriageway.
+inline Vec2 placeDoor(const Place& p) { return p.entrance + (p.site - p.entrance) * 0.4; }
+
 // Indexes places by type and answers nearest-of-type queries. Build it by
 // add()-ing each building; the entrance is snapped against the NavGraph at add
 // time so a place is routable the moment it exists.

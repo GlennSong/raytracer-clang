@@ -213,7 +213,14 @@ TEST_CASE(trip_plan_travel_lua_reads_and_refuses_what_it_cannot_plan_with) {
     CHECK(cat.modes.size() == 2 && cat.find("walk") == 0 && cat.find("car") == 1);
     CHECK(!cat.modes[0].roads && !cat.modes[0].ownVehicle && cat.modes[0].access == -1);
     CHECK(cat.modes[1].roads && cat.modes[1].ownVehicle && cat.modes[1].access == 0);
-    CHECK(std::fabs(cat.modes[0].speed - 5.0 / 3.6) < 1e-9 && std::fabs(cat.modes[1].speed - 30.0 / 3.6) < 1e-9);
+    // a walk's speed is the table's; a drive has none (its minutes are the router's time by road class, ADR-0416)
+    CHECK(std::fabs(cat.modes[0].speed - 5.0 / 3.6) < 1e-9 && cat.modes[1].speed == 0);
+    // the kinds of road a drive is told apart by: every class the router drives in one of them, the freeway its own
+    for (engine::RoadClass k : {engine::RoadClass::Freeway, engine::RoadClass::Arterial, engine::RoadClass::Collector,
+                                engine::RoadClass::Local, engine::RoadClass::Ramp})
+        CHECK(cat.roadKindOf(k) >= 0);
+    CHECK(cat.roadKindOf(engine::RoadClass::Freeway) != cat.roadKindOf(engine::RoadClass::Local));
+    CHECK(cat.roadKinds[static_cast<std::size_t>(cat.roadKindOf(engine::RoadClass::Freeway))].hasColour);
     CHECK(cat.nearMin < cat.nearMax && cat.nearMax <= cat.farMin && cat.farMin < cat.farMax);
     auto refused = [&](const std::string& edit, const std::string& why) {
         ScriptVM bad;
@@ -228,6 +235,9 @@ TEST_CASE(trip_plan_travel_lua_reads_and_refuses_what_it_cannot_plan_with) {
     refused("travel.modes[2].access = nil", "access");
     refused("travel.modes[1].network = 'canals'", "canals");
     refused("travel.modes[1].speed_kmh = 0", "speed_kmh");
+    refused("travel.modes[2].speed_kmh = 30", "router");
+    refused("travel.road_kinds[1].classes = { 'boulevard' }", "boulevard");
+    refused("travel.road_kinds[1].classes = { 'freeway' }", "listed twice");
     refused("travel.modes[2].access = 'car'", "needs a vehicle itself");
     refused("travel.far = { 900, 100 }", "far");
 }

@@ -39,6 +39,21 @@ Route findRoute(const NavGraph& graph, int startNode, int goalNode,
                 bool onFoot = false,
                 const std::vector<Real>* linkCostScale = nullptr);
 
+// WHAT findRoute CHARGES FOR ONE LINK (seconds), the one rule for the router and for anyone pricing a route it found
+// (the trip planner's minutes, ADR-0416): the link's length at its class speed (on foot, one pace), plus a street
+// junction at its end (not at `goalNode`, not on a freeway or a ramp), times `costScale` (>= 1), plus a U-turn from
+// `inLink` (the link it is entered from; -1 at the route's start) priced as a minute.
+Real linkTravelSeconds(const NavGraph& graph, int inLink, int link, int goalNode, bool onFoot, Real costScale = 1);
+// A route's travel time: the sum of linkTravelSeconds along it, the time findRoute minimised (no cost scale).
+Real routeSeconds(const NavGraph& graph, const Route& route, bool onFoot = false);
+
+// HOW MUCH A ROUTE THROUGH SOME LINKS COSTS (by car): the router's time from `startNode` to every node, twice -- by
+// the fastest route that uses none of the links with `through[link]` set (`without`), and by the fastest that uses at
+// least one (`via`; the freeway, ADR-0416) -- one Dijkstra over the graph doubled. linkTravelSeconds' rule, the street
+// junction at the end of the last link included (no goal is known). Unreachable: infinity.
+void travelSecondsVia(const NavGraph& graph, int startNode, const std::vector<char>& through,
+                      std::vector<Real>& without, std::vector<Real>& via);
+
 // Running totals of every findRoute on this thread (diagnostics: what a spike spent routing).
 struct RouteStats {
     long calls = 0; long expanded = 0; double ms = 0.0;

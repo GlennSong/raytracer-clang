@@ -19,8 +19,9 @@
 // (where to, the options and their minutes, the choice, the leg under way), and the spectate camera following the
 // person from the moment the trip starts. `trip?` answers all of it in one line for a director.
 //
-// Keys (on a level that keeps no day schedule, citysim.schedule = false: the trip lab): Y = trip near, I = trip far.
-// Verbs (any city level): trip near|far|to <place name or id>|at <x> <z>|mark (the map's waypoint),
+// Keys (on a level that keeps no day schedule, citysim.schedule = false: the trip lab): Y = trip near, I = trip far,
+// U = trip freeway (ADR-0416: the building whose drive from here uses the freeway furthest).
+// Verbs (any city level): trip near|far|freeway|to <place name or id>|at <x> <z>|mark (the map's waypoint),
 // and trip?.
 
 #include "../../engine/control/control_commands.h"
@@ -53,6 +54,7 @@ private:
     void take(engine::FrameContext& ctx, const std::string& request);
     int person() const;                                      // the agent who travels; -1 when the city has none
     bool pickPlace(bool far, PlaceId& out, std::string& why);
+    bool pickFreeway(PlaceId& out, std::string& why);       // the building whose drive uses the freeway furthest
     void begin(engine::FrameContext& ctx, Vec2 dest, PlaceId place, const std::string& label);
     TripRequest requestTo(Vec2 dest, const std::vector<int>& ruledOut) const;
     bool plan(const std::string& note);                     // (re)plan from where the person stands
@@ -62,7 +64,9 @@ private:
     engine::Vec2 walkTarget(std::size_t k) const;           // where walk leg k ends: a door, or the car's
     std::vector<engine::Vec2> footSteps(engine::Vec2 from, engine::Vec2 to) const;   // off the paths: via the pavement
     void draw(engine::FrameContext& ctx);
-    std::vector<engine::Vec3> legLine(std::size_t k) const;   // leg k of the choice as it will be travelled
+    // leg k of the choice as it will be travelled, and each point's colour (the way's, or its kind of road's)
+    std::vector<engine::Vec3> legLine(std::size_t k, std::vector<engine::Vec3>& colours) const;
+    engine::Vec3 roadColour(int link, const engine::Vec3& way) const;
     Real metresLeft() const;
     std::string placeLabel(PlaceId id) const;
 
@@ -95,6 +99,8 @@ private:
     Real plannedMinutes_ = 0;    // the choice's minutes when first planned
     std::vector<Real> legActual_; // the minutes each leg done so far took (trip? sets them against the plan's)
     std::vector<std::vector<engine::Vec3>> lines_;   // each leg's line as last drawn (a leg to come: drawn once)
+    std::vector<std::vector<engine::Vec3>> lineColours_;   // ...each point's colour
+    std::string freewayNote_;    // what the last freeway pick found (trip? and the box say it)
 };
 
 }  // namespace citysim

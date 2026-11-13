@@ -60,6 +60,7 @@
     "vehicles": "vehicles.lua",
     "wander": false,
     "schedule": false,
+    "homeNear": [-590.0, -210.0],
     "busCommuteShare": 0.0,
     "graph": "assets/lanelab/planned/river_town_lanelab.json"
   },

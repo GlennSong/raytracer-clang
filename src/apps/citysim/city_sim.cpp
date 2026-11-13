@@ -954,6 +954,21 @@ struct PopTail {
 };
 }  // namespace
 
+bool CitySim::moveHome(int agentIndex, const PlaceMap& places, PlaceId home) {
+    if (!nav_ || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()) || home == kNoPlace ||
+        home >= static_cast<PlaceId>(places.size()))
+        return false;
+    Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+    const int node = nav_->nearestNode(places[home].entrance);   // (assignPlaces' nodeOf)
+    if (node < 0) return false;
+    a.homePlace = home;
+    a.home = node;
+    a.homeDoor = placeDoor(places[home]);
+    a.restNode = node;
+    a.pos = a.mode == Agent::Mode::Pedestrian ? a.homeDoor : idlePose(node, a.mode, a.brain);
+    return true;
+}
+
 void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     relationships_.clear();
     for (Agent& a : agents_) { a.homePlace = kNoPlace; a.workPlace = kNoPlace; a.household = -1; a.age = 0; a.stage = -1; }
@@ -1082,12 +1097,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         return who.archetype == Agent::Mode::Pedestrian ? walkable(h, w) : commutable(h, w);
     };
 
-    // A place's DOORSTEP: its sidewalk entrance nudged toward the building site,
-    // so a resting body stands at the door — clearly off the carriageway.
-    auto doorOf = [&](PlaceId id) {
-        const Place& p = places[id];
-        return p.entrance + (p.site - p.entrance) * 0.4;
-    };
+    auto doorOf = [&](PlaceId id) { return placeDoor(places[id]); };
     // Everywhere people go OUT to: every place but a home. What outings and
     // lunch breaks choose from at trip time (pickOuting / pickLunch).
     for (const Place& p : places.places()) {
@@ -3983,7 +3993,7 @@ void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
         if ((p.tags & kLibrary) && lib == kNoPlace) lib = p.id;
     }
     if (halls.empty() || teach.empty()) return;
-    auto doorOf = [&](PlaceId id) { const Place& p = places[id]; return p.entrance + (p.site - p.entrance) * 0.4; };
+    auto doorOf = [&](PlaceId id) { return placeDoor(places[id]); };
     // the halls a student can live in: routable to every teaching hall and back on foot
     struct Hall { PlaceId id; int node; };
     std::vector<Hall> live;
@@ -6982,10 +6992,13 @@ std::string CitySim::describeAgent(int i) const {
     const int st = static_cast<int>(a.state);
     auto actName = [&](int d) { return d >= 0 && d < static_cast<int>(catalog_.defs.size()) ? catalog_.defs[static_cast<std::size_t>(d)].name.c_str() : "-"; };
     int link = -1;
-    bool foot = false;
+    const char* linkKind = "";   // " (footpath)", " (freeway)", " (ramp)": what the link under them is, when not a street
     if (a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size())) {
         link = a.route.links[static_cast<std::size_t>(a.leg)];
-        if (nav_ && link >= 0 && link < nav_->linkCount()) foot = nav_->links[static_cast<std::size_t>(link)].footpath;
+        if (nav_ && link >= 0 && link < nav_->linkCount()) {
+            const engine::NavLink& L = nav_->links[static_cast<std::size_t>(link)];
+            linkKind = L.footpath ? " (footpath)" : L.klass == engine::RoadClass::Freeway ? " (freeway)" : L.klass == engine::RoadClass::Ramp ? " (ramp)" : "";
+        }
     }
     const char* sess = "-";
     if (a.session >= 0 && a.session < static_cast<int>(sessions_.size())) {
@@ -7003,7 +7016,7 @@ std::string CitySim::describeAgent(int i) const {
                   static_cast<double>(bodyScale(i)), rideName(rideOf(i)), "DVK"[static_cast<int>(a.tier)], a.pos.x, a.pos.y,
                   a.speed, a.heading.x, a.heading.y, a.moving ? 1 : 0, st >= 0 && st < 8 ? kStates[st] : "?", a.indoors ? 1 : 0,
                   pedVisible(i) ? 1 : 0, a.tripVenue, a.tripSeat, a.seatPhase, actName(a.tripActivity), actName(a.atActivity),
-                  a.session, sess, a.sessionRole, a.leg, a.route.links.size(), link, foot ? " (footpath)" : "", a.distOnLeg,
+                  a.session, sess, a.sessionRole, a.leg, a.route.links.size(), link, linkKind, a.distOnLeg,
                   a.restDwell, a.goalHours, a.tethered ? 1 : 0, a.bodyLag, a.playerControlled ? 1 : 0, a.lateralOffset, a.leanTarget);
     return b;
 }

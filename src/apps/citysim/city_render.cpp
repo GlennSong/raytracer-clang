@@ -292,6 +292,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.physicalCars = c.physicalCars;
         params_.wander = c.wander;
         params_.schedule = c.schedule;
+        params_.homeNear = c.homeNear;
         params_.ambientBus = c.ambientBus;
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
@@ -1270,6 +1271,22 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                  << sports << " by a sports field (" << campusJog << " campus jog)";
     }
     LOG_INFO << "[citysim] startup: assignPlaces " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
+    // THE LAB PERSON'S HOME (citysim.homeNear, ADR-0416): the first resident with a car moves to the home nearest the
+    // point, before the city is seeded -- so the seeding parks their car outside it, as anyone's
+    if (params_.homeNear.size() == 2) {
+        const Vec2 at(params_.homeNear[0], params_.homeNear[1]);
+        const PlaceId home = places_.nearest(PlaceType::Home, at);
+        int who = -1;
+        for (std::size_t i = 0; i < sim_.agents().size() && who < 0; ++i) {
+            const Agent& a = sim_.agents()[i];
+            if (a.homePlace != kNoPlace && a.car >= 0 && !a.released && !a.playerControlled) who = static_cast<int>(i);
+        }
+        if (home != kNoPlace && who >= 0 && sim_.moveHome(who, places_, home))
+            LOG_INFO << "[citysim] homeNear " << at.x << " " << at.y << ": person " << who << " lives in home #" << home
+                     << " at " << places_[home].entrance.x << " " << places_[home].entrance.y;
+        else
+            LOG_WARN << "[citysim] homeNear " << at.x << " " << at.y << ": no home or no resident with a car -- ignored";
+    }
     if (sim_.populationCache().used)
         LOG_INFO << "[citysim] population: " << (sim_.populationCache().hit ? "read from" : "decided, cached in")
                  << " cache/population/" << std::hex << sim_.populationCache().key << std::dec << ".pop";

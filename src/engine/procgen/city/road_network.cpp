@@ -7,6 +7,25 @@
 
 namespace engine {
 
+const char* roadClassName(RoadClass k) {
+    switch (k) {
+        case RoadClass::Freeway:   return "freeway";
+        case RoadClass::Ramp:      return "ramp";
+        case RoadClass::Arterial:  return "arterial";
+        case RoadClass::Collector: return "collector";
+        case RoadClass::Local:     return "local";
+        case RoadClass::Alley:     return "alley";
+    }
+    return "?";
+}
+
+bool parseRoadClass(const std::string& name, RoadClass& out) {
+    for (RoadClass k : {RoadClass::Freeway, RoadClass::Arterial, RoadClass::Collector, RoadClass::Local,
+                        RoadClass::Ramp, RoadClass::Alley})
+        if (name == roadClassName(k)) { out = k; return true; }
+    return false;
+}
+
 int RoadGraph::addNode(const Vec2& p, Real tol) {
     Real tol2 = tol * tol;
     for (std::size_t i = 0; i < nodes.size(); ++i)

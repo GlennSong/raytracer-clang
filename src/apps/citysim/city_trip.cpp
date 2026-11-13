@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 
 namespace citysim {
 
@@ -35,6 +36,14 @@ std::string lower(std::string s) {
     return s;
 }
 
+// The nearest node a car can leave from (a place's nearest node can be a park path's)
+int roadNode(const engine::NavGraph& nav, engine::Vec2 p) {
+    for (int n : nav.nearestNodes(p, 8))
+        for (int li : nav.outLinks[static_cast<std::size_t>(n)])
+            if (!nav.links[static_cast<std::size_t>(li)].footpath) return n;
+    return -1;
+}
+
 std::string fmt(const char* f, double a) {
     char b[64];
     std::snprintf(b, sizeof(b), f, a);
@@ -45,10 +54,12 @@ std::string fmt(const char* f, double a) {
 void CityTripSystem::onStart(engine::FrameContext& ctx) {
     ctx.actions.bindButton("trip_near", engine::KeyCode::Y);
     ctx.actions.bindButton("trip_far", engine::KeyCode::I);
+    ctx.actions.bindButton("trip_freeway", engine::KeyCode::U);
     if (ctx.commands) {
-        ctx.commands->add("trip", "trip near|far|to <place name or id>|at <x> <z>|mark",
-                          "Send the city's person somewhere -- near or far (they pick the building), a place, a point, "
-                          "or the map's waypoint -- to plan the trip and make it; poll trip?.",
+        ctx.commands->add("trip", "trip near|far|freeway|to <place name or id>|at <x> <z>|mark",
+                          "Send the city's person somewhere -- near or far (they pick the building), the building whose "
+                          "drive uses the freeway furthest, a place, a point, or the map's waypoint -- to plan the trip "
+                          "and make it; poll trip?.",
                           [this](const engine::ControlCommand& c) { return stage(c); }, kOwner);
         ctx.commands->add("trip?", "trip?",
                           "The person's trip: where to, every option with its legs and minutes, the choice and why, "
@@ -92,10 +103,10 @@ void CityTripSystem::fixedUpdate(engine::FrameContext& ctx) {
 }
 
 std::string CityTripSystem::stage(const engine::ControlCommand& cmd) {
-    const std::string usage = "err usage: trip near|far|to <place name or id>|at <x> <z>|mark";
+    const std::string usage = "err usage: trip near|far|freeway|to <place name or id>|at <x> <z>|mark";
     if (cmd.args.empty()) return usage;
     const std::string what = lower(cmd.args[0]);
-    if (what == "near" || what == "far" || what == "mark") {
+    if (what == "near" || what == "far" || what == "freeway" || what == "mark") {
         requests_.push_back(what);
     } else if (what == "at") {
         if (cmd.args.size() < 3) return usage;
@@ -170,6 +181,95 @@ bool CityTripSystem::pickPlace(bool far, PlaceId& out, std::string& why) {
     return false;
 }
 
+// THE FREEWAY TRIP (ADR-0416; Glenn: "I have still yet to see the agent get on the freeway ... could we start the
+// agent near the freeway and then have them get into the car to get to the restaurant?"): of the buildings the person
+// can drive to from where they stand, the one whose planned drive -- the router's fastest, as any trip's -- runs
+// furthest on the freeway, a restaurant before any other kind. The router is not bent: a drive that does not pay to
+// take the freeway does not take it, and when no building's does, the person says so. For the pick, the plan's
+// minutes are set against the best drive that keeps to the streets (the same router, the freeway and its ramps
+// priced out), so the choice can be checked.
+bool CityTripSystem::pickFreeway(PlaceId& out, std::string& why) {
+    const CitySim& sim = city_.sim();
+    const engine::NavGraph& nav = *sim.graph();
+    const Agent& a = sim.agents()[static_cast<std::size_t>(who_)];
+    const std::vector<int> none;
+    int drivable = 0, onFreeway = 0;
+    Real best = 0;
+    bool bestIsRestaurant = false;
+    PlaceId pick = kNoPlace;
+    TripLeg pickDrive;
+    for (const Place& p : city_.places().places()) {
+        if (p.id == a.homePlace || !placeIsIndoors(p.type)) continue;   // a building, not their own home
+        const TripRequest req = requestTo(p.entrance, none);
+        if (req.vehicles.empty()) { why = "the person has no car"; return false; }
+        const OwnedVehicle& v = req.vehicles.front();
+        TripLeg drive;
+        if (!planLeg(nav, travel_, v.mode, v.at, v.leaveAt, drive)) continue;
+        ++drivable;
+        Real fw = 0;
+        for (int li : drive.route.links)
+            if (nav.links[static_cast<std::size_t>(li)].klass == engine::RoadClass::Freeway)
+                fw += nav.links[static_cast<std::size_t>(li)].length;
+        if (fw <= 0) continue;
+        ++onFreeway;
+        const bool restaurant = p.type == PlaceType::Restaurant;
+        if ((restaurant && !bestIsRestaurant) || (restaurant == bestIsRestaurant && fw > best)) {
+            best = fw;
+            bestIsRestaurant = restaurant;
+            pick = p.id;
+            pickDrive = drive;
+        }
+    }
+    freewayNote_ = std::to_string(onFreeway) + " of the " + std::to_string(drivable) +
+                   " buildings the person can drive to from " + fmt("%.0f", a.pos.x) + " " + fmt("%.0f", a.pos.y) +
+                   " have a fastest drive that uses the freeway";
+    if (pick == kNoPlace) {
+        // HOW CLOSE IT CAME: the router's time to each building on the streets alone and through the freeway (one
+        // doubled search from the car's node), and the building where the freeway loses least
+        std::vector<char> freeway(static_cast<std::size_t>(nav.linkCount()), 0);
+        for (int li = 0; li < nav.linkCount(); ++li)
+            freeway[static_cast<std::size_t>(li)] = nav.links[static_cast<std::size_t>(li)].klass == engine::RoadClass::Freeway;
+        std::vector<Real> streets, via;
+        engine::travelSecondsVia(nav, roadNode(nav, sim.vehicles()[static_cast<std::size_t>(a.car)].pos), freeway, streets, via);
+        Real least = std::numeric_limits<Real>::infinity();
+        PlaceId closest = kNoPlace;
+        for (const Place& p : city_.places().places()) {
+            if (p.id == a.homePlace || !placeIsIndoors(p.type)) continue;
+            const int to = roadNode(nav, p.entrance);
+            if (to < 0 || !std::isfinite(via[static_cast<std::size_t>(to)])) continue;
+            const Real slower = via[static_cast<std::size_t>(to)] - streets[static_cast<std::size_t>(to)];
+            if (slower < least) { least = slower; closest = p.id; }
+        }
+        why = "the fastest drive to every building stays on streets (" + freewayNote_ + ")" +
+              (closest == kNoPlace ? std::string("; the freeway cannot be reached from here")
+                                   : "; by the freeway the closest call is " + placeLabel(closest) + ", " +
+                                         fmt("%.0f s", least) + " slower than by the streets");
+        return false;
+    }
+    // ...against the best drive on the streets alone: the router's own, with the freeway and its ramps priced out
+    std::vector<Real> streetsOnly(static_cast<std::size_t>(nav.linkCount()), 1.0);
+    for (int li = 0; li < nav.linkCount(); ++li) {
+        const engine::RoadClass k = nav.links[static_cast<std::size_t>(li)].klass;
+        if (k == engine::RoadClass::Freeway || k == engine::RoadClass::Ramp) streetsOnly[static_cast<std::size_t>(li)] = 1e6;
+    }
+    const TravelMode& car = travel_.modes[static_cast<std::size_t>(pickDrive.mode)];
+    const engine::Route streets = engine::findRoute(nav, pickDrive.fromNode, pickDrive.toNode, false, &streetsOnly);
+    std::string versus = "no drive there keeps to the streets";
+    if (streets.valid() && std::none_of(streets.links.begin(), streets.links.end(), [&](int li) {
+            return streetsOnly[static_cast<std::size_t>(li)] > 1.0;
+        })) {
+        const Real off = pickDrive.metres - pickDrive.route.length(nav);
+        const Real minutes = (engine::routeSeconds(nav, streets) + off / engine::classSpeed(engine::RoadClass::Local)) / 60.0 +
+                             car.startMinutes + car.endMinutes;
+        versus = "the best drive on streets alone is " + metresText(streets.length(nav) + off) + ", " +
+                 fmt("%.1f min", minutes);
+    }
+    freewayNote_ += "; this one's drive is " + fmt("%.1f min", pickDrive.minutes) + " (" + describeRoads(travel_, pickDrive) +
+                    "), " + versus;
+    out = pick;
+    return true;
+}
+
 void CityTripSystem::take(engine::FrameContext& ctx, const std::string& request) {
     if (!city_.built() || !city_.sim().graph()) { note_ = "the city is not built yet"; return; }
     if (!haveTravel_) { note_ = travelError_; return; }
@@ -180,12 +280,19 @@ void CityTripSystem::take(engine::FrameContext& ctx, const std::string& request)
     if (a.vehicle >= 0) { note_ = "refused \"trip " + request + "\": the person is driving; ask again once they are out"; return; }
     who_ = p;
     const std::string what = request.substr(0, request.find(' '));
+    if (what != "freeway") freewayNote_.clear();
     const std::string arg = request.size() > what.size() ? request.substr(what.size() + 1) : "";
     if (what == "near" || what == "far") {
         PlaceId id = kNoPlace;
         std::string why;
         if (!pickPlace(what == "far", id, why)) { note_ = "trip " + what + ": " + why; return; }
         begin(ctx, city_.places()[id].entrance, id, placeLabel(id) + ", picked " + what);
+    } else if (what == "freeway") {
+        PlaceId id = kNoPlace;
+        std::string why;
+        const bool found = pickFreeway(id, why);
+        if (!found) { note_ = "trip freeway: " + why; return; }
+        begin(ctx, city_.places()[id].entrance, id, placeLabel(id) + ", picked for the freeway");
     } else if (what == "to") {
         const PlaceMap& places = city_.places();
         PlaceId id = kNoPlace;
@@ -440,6 +547,7 @@ void CityTripSystem::update(engine::FrameContext& ctx) {
     const bool lab = city_.built() && !city_.sim().daySchedule();
     if (lab && ctx.actions.pressed("trip_near")) requests_.push_back("near");
     if (lab && ctx.actions.pressed("trip_far")) requests_.push_back("far");
+    if (lab && ctx.actions.pressed("trip_freeway")) requests_.push_back("freeway");
     std::vector<std::string> requests;
     requests.swap(requests_);
     for (const std::string& r : requests) take(ctx, r);
@@ -483,12 +591,16 @@ Real CityTripSystem::metresLeft() const {
 // door, the reserved bay the car pulls into) and, on foot, on to the point it is for; a leg still to come is its
 // planned route cut to the stretch alongside its two end points and joined to them. Every point stands on the surface
 // under it: a car's on its link's driving surface, a walker's on the ground.
-std::vector<Vec3> CityTripSystem::legLine(std::size_t k) const {
+std::vector<Vec3> CityTripSystem::legLine(std::size_t k, std::vector<Vec3>& colours) const {
     const CitySim& sim = city_.sim();
     const TripLeg& L = plan_.choice()->legs[k];
     const Agent& a = sim.agents()[static_cast<std::size_t>(who_)];
+    const Vec3 way = travel_.modes[static_cast<std::size_t>(L.mode)].colour;
     std::vector<Vec3> pts;
+    colours.clear();
+    // a point on the surface under it, in the colour of the road it is on (a car's: its kind of road's, ADR-0416)
     auto on = [&](Vec2 p, int link, Real station, bool car) {
+        colours.push_back(car ? roadColour(link, way) : way);
         return Vec3(p.x, city_.surfaceY(car ? link : -1, station, p) + kPlanLift, p.y);
     };
     auto straight = [&](Vec2 b) {   // a piece off the network, on the ground
@@ -543,17 +655,27 @@ std::vector<Vec3> CityTripSystem::legLine(std::size_t k) const {
     return pts;
 }
 
+// The colour of the line on `link` for a way drawn in `way`: its kind of road's, where travel.lua gives that kind one.
+Vec3 CityTripSystem::roadColour(int link, const Vec3& way) const {
+    const engine::NavGraph* nav = city_.sim().graph();
+    if (!nav || link < 0 || link >= nav->linkCount()) return way;
+    const int kind = travel_.roadKindOf(nav->links[static_cast<std::size_t>(link)].klass);
+    return kind >= 0 && travel_.roadKinds[static_cast<std::size_t>(kind)].hasColour
+               ? travel_.roadKinds[static_cast<std::size_t>(kind)].colour : way;
+}
+
 void CityTripSystem::draw(engine::FrameContext& ctx) {
     if (!active_) return;
     if (plan_.valid() && !arrived_) {
         const TripOption& o = *plan_.choice();
         if (lines_.size() != o.legs.size()) lines_.assign(o.legs.size(), {});
+        if (lineColours_.size() != o.legs.size()) lineColours_.assign(o.legs.size(), {});
         for (std::size_t k = static_cast<std::size_t>(leg_); k < o.legs.size(); ++k) {
             // (a leg to come is the same line every frame: drawn once; the leg under way follows its traveller)
             const bool live = k == static_cast<std::size_t>(leg_) && legUnderWay_;
-            if (live || lines_[k].empty()) lines_[k] = legLine(k);
-            const Vec3 c = travel_.modes[static_cast<std::size_t>(o.legs[k].mode)].colour;
-            for (std::size_t i = 1; i < lines_[k].size(); ++i) ctx.debug.line(lines_[k][i - 1], lines_[k][i], c);
+            if (live || lines_[k].empty()) lines_[k] = legLine(k, lineColours_[k]);
+            for (std::size_t i = 1; i < lines_[k].size(); ++i)
+                ctx.debug.line(lines_[k][i - 1], lines_[k][i], lineColours_[k][i]);
         }
     }
     const Vec3 foot(dest_.x, city_.surfaceY(-1, 0, dest_) + kPlanLift, dest_.y);
@@ -572,7 +694,7 @@ std::string CityTripSystem::status() const {
         return "no trip yet: person " + std::to_string(p) + " at " + fmt("%.1f", a.pos.x) + " " + fmt("%.1f", a.pos.y) +
                (a.indoors ? " (indoors)" : "") + (a.vehicle >= 0 ? " (driving)" : "") +
                (a.car >= 0 ? ", owns car " + std::to_string(a.car) : ", no car") +
-               " (trip near|far|to <place>|at <x> <z>|mark; keys Y near, I far)" +
+               " (trip near|far|freeway|to <place>|at <x> <z>|mark; keys Y near, I far, U freeway)" +
                (note_.empty() ? std::string() : " | " + note_);
     }
     std::string s = "trip " + std::to_string(trips_) + ": person " + std::to_string(who_) + " to " + where_ + " at " +
@@ -582,9 +704,12 @@ std::string CityTripSystem::status() const {
         s += " " + describeOption(travel_, o);
         if (!o.legs.empty()) {
             s += " [";
-            for (std::size_t k = 0; k < o.legs.size(); ++k)
+            for (std::size_t k = 0; k < o.legs.size(); ++k) {
+                const std::string roads = describeRoads(travel_, o.legs[k]);
                 s += (k ? ", " : "") + travel_.modes[static_cast<std::size_t>(o.legs[k].mode)].name + " " +
-                     fmt("%.0f m", o.legs[k].metres) + " " + fmt("%.1f min", o.legs[k].minutes);
+                     fmt("%.0f m", o.legs[k].metres) + " " + fmt("%.1f min", o.legs[k].minutes) +
+                     (roads.empty() ? "" : ": " + roads);
+            }
             s += "]";
         }
         s += ";";
@@ -613,6 +738,7 @@ std::string CityTripSystem::status() const {
         s += " | person at " + fmt("%.1f", a.pos.x) + " " + fmt("%.1f", a.pos.y) +
              (a.vehicle >= 0 ? " (driving)" : a.indoors ? " (indoors)" : " (on foot)");
     }
+    if (!freewayNote_.empty()) s += " | freeway: " + freewayNote_;
     if (!note_.empty()) s += " | " + note_;
     return s;
 }
@@ -624,12 +750,18 @@ void CityTripSystem::render(engine::FrameContext& ctx) {
     if (!active_) {
         // (the keys' hint on the trip lab only: elsewhere nothing is drawn until a `trip` verb starts one)
         if (!haveTravel_ || city_.sim().daySchedule() || person() < 0) return;
-        lines.push_back("Y: trip somewhere near    I: trip somewhere far");
+        lines.push_back("Y: trip somewhere near    I: trip somewhere far    U: a trip on the freeway");
         if (!note_.empty()) lines.push_back(note_);
     } else {
         lines.push_back("Going to " + where_);
         for (std::size_t i = 0; i < plan_.options.size(); ++i)
             lines.push_back((static_cast<int>(i) == plan_.chosen ? "> " : "   ") + describeOption(travel_, plan_.options[i]));
+        if (plan_.valid())   // the chosen way's roads, leg by leg (ADR-0416)
+            for (const TripLeg& L : plan_.choice()->legs) {
+                const std::string roads = describeRoads(travel_, L);
+                if (!roads.empty())
+                    lines.push_back("   " + travel_.modes[static_cast<std::size_t>(L.mode)].name + " on: " + roads);
+            }
         if (!plan_.valid()) {
             lines.push_back("No way there from here");
         } else if (arrived_) {

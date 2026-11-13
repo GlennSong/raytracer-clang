@@ -5943,6 +5943,13 @@ bool LevelLoader::load(const std::string& path,
         cfg.showPlan = cs.value("showPlan", false);
         cfg.wander = cs.value("wander", cfg.wander);
         cfg.schedule = cs.value("schedule", cfg.schedule);
+        if (cs.contains("homeNear")) {
+            const auto& hn = cs["homeNear"];
+            if (hn.is_array() && hn.size() == 2 && hn[0].is_number() && hn[1].is_number())
+                cfg.homeNear = {hn[0].get<double>(), hn[1].get<double>()};
+            else
+                LOG_WARN << "citysim: homeNear must be [x, z] -- ignored";
+        }
         cfg.ambientBus = cs.value("ambientBus", cfg.ambientBus);
         // Scripted goal tables (ADR-0064): `"agents": "agents.lua"` names a
         // goal-table script; its TEXT rides the config so the citysim bridge
