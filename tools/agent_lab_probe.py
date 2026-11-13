@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """agent_lab_probe: the one-agent lab (ADR-0415) run with nobody at the keyboard.
 
-Launches the viewer on agent_lab, waits for the city, then for `trip near` and then `trip far`: sends it, polls
-`trip?` until the person has arrived (or the timeout), prints the plan and the time taken, and takes one screenshot
-mid-trip (the follow camera's view) into ~/Pictures/Raytracer/agent-lab/. Stops the viewer it started, by its own
+Launches the viewer on agent_lab, waits for the city, then for `trip near` and then `trip far`: sends it (or taps the
+lab's key, --keys), polls `trip?` and the person's `who?` until they have arrived (or the timeout), prints the plan,
+the time taken and every time the car stood still, and takes the follow camera's screenshots of the transitions --
+before getting in, setting off, a junction turn, just out of the car, arrived -- into ~/Pictures/Raytracer/agent-lab/. Stops the viewer it started, by its own
 process (never by name: the owner runs `viewer` too).
 
     python3 tools/agent_lab_probe.py                    # real time
     python3 tools/agent_lab_probe.py --speed 4          # the sim at 4x (`sim speed 4`)
+    python3 tools/agent_lab_probe.py --keys --trips far # one far trip, started with the I key
 """
 import argparse
 import os
@@ -28,9 +30,30 @@ def wait_for_file(path, timeout=20.0):
     return False
 
 
-def run_trip(sock, kind, number, shots, timeout):
+def shoot(sock, shots, name, t0):
+    path = os.path.join(shots, name + ".png")
+    if os.path.exists(path):
+        os.remove(path)
+    rtctl.send(sock, f"shot {path}")
+    ok = wait_for_file(path)
+    print(f"  {time.time() - t0:6.1f} s  shot {path}" + ("" if ok else " (did not land)"))
+
+
+def who(sock):
+    """The person's line from `who?` (staged on agent 0 at the start): state, speed, position."""
+    line = rtctl.send(sock, "who?", timeout=30)
+    m = re.search(r"pos ([-\d.]+) ([-\d.]+) speed ([-\d.]+) .*? state (\w+)", line)
+    return (float(m.group(1)), float(m.group(2)), float(m.group(3)), m.group(4)) if m else None
+
+
+def run_trip(sock, kind, number, shots, timeout, key=None):
+    """One trip, sent as `trip <kind>` or, with `key`, by tapping that key through the viewer's input. Polls `trip?`
+    and the person's `who?` line four times a second; takes the screenshots of the transitions (before getting in,
+    setting off, a junction turn, just out of the car, arrived) and reports every time the car stood still for over a
+    second during the drive, where, and in what state (waiting: a red light; yielding: someone in the way)."""
     print(f"\n=== trip {kind} ===")
-    print("send:", rtctl.send(sock, f"trip {kind}"))
+    print("send:", rtctl.send(sock, f"tap {key}" if key else f"trip {kind}"))
+    tag = re.sub(r"[^A-Za-z0-9]+", "_", kind)
     t0 = time.time()
     # the trip begins on the viewer's next frame: until trip? names it, it still describes the last one
     while time.time() - t0 < 30:
@@ -41,38 +64,76 @@ def run_trip(sock, kind, number, shots, timeout):
             print("not started:", line)
             return False
         time.sleep(0.2)
-    first_left = None
-    shot_taken = False
+    print("plan:", line)
+    rtctl.send(sock, "who? 0")
+    taken = set()
     last_leg = None
+    drive_start = None
+    still_since = None
+    first_left = None
+    stops = []
     line = ""
     while time.time() - t0 < timeout:
-        time.sleep(1.0)
+        time.sleep(0.25)
         line = rtctl.send(sock, "trip?", timeout=30)
-        if first_left is None and "| options:" in line:
-            print("plan:", line)
-        leg = re.search(r"\| leg (\d+)/(\d+) (\S+) (under way|starting)", line)
-        left = re.search(r"(\d+) m left", line)
-        if leg and leg.group(1) != last_leg:
-            last_leg = leg.group(1)
-            print(f"  {time.time() - t0:6.1f} s  leg {leg.group(1)}/{leg.group(2)} by {leg.group(3)}"
-                  + (f", {left.group(1)} m left" if left else ""))
-        if left:
-            metres = int(left.group(1))
-            if first_left is None:
-                first_left = metres
-            if not shot_taken and first_left and metres <= first_left * 0.5:
-                path = os.path.join(shots, "trip_%s_mid.png" % re.sub(r"[^A-Za-z0-9]+", "_", kind))
-                if os.path.exists(path):
-                    os.remove(path)
-                rtctl.send(sock, f"shot {path}")
-                shot_taken = wait_for_file(path)
-                print(f"  {time.time() - t0:6.1f} s  shot {path}" + ("" if shot_taken else " (did not land)"))
         if "arrived after" in line or "no way there" in line:
             break
+        leg = re.search(r"\| leg (\d+)/(\d+) (\S+) (under way|starting)", line)
+        left = re.search(r"(\d+) m left", line)
+        w = who(sock)
+        now = time.time() - t0
+        if not leg:
+            continue
+        n, total, way = int(leg.group(1)), int(leg.group(2)), leg.group(3)
+        if leg.group(1) != last_leg:
+            last_leg = leg.group(1)
+            print(f"  {now:6.1f} s  leg {n}/{total} by {way}" + (f", {left.group(1)} m left" if left else ""))
+            if way == "car":
+                drive_start = now
+            if n > 1 and way == "walk" and total > 1 and "out" not in taken:
+                taken.add("out")
+                shoot(sock, shots, f"trip_{tag}_3_out", t0)
+        if total > 1 and n == 1 and way == "walk" and w and "in" not in taken:
+            # before getting in: within a few metres of the end of the walk to the car (its metres are the first
+            # leg's in the chosen option's list)
+            parts = re.findall(r"\[walk (\d+) m [\d.]+ min, car (\d+) m [\d.]+ min, walk (\d+) m", line)
+            if parts and left and int(left.group(1)) - int(parts[-1][1]) - int(parts[-1][2]) <= 4:
+                taken.add("in")
+                shoot(sock, shots, f"trip_{tag}_0_before_in", t0)
+        if total == 1 and left and "mid" not in taken:   # a one-leg trip: one shot halfway
+            first_left = first_left or int(left.group(1))
+            if int(left.group(1)) <= first_left * 0.5:
+                taken.add("mid")
+                shoot(sock, shots, f"trip_{tag}_2_mid", t0)
+        if w and n == int(total) and way == "walk" and w[2] < 0.05 and w[3] == "waiting":
+            # (a kerb or a crossing light): one entry per wait, its length grown while it lasts
+            if stops and stops[-1][4] == "walker waiting" and now - (stops[-1][0] + stops[-1][1]) < 0.6:
+                stops[-1] = (stops[-1][0], now - stops[-1][0], stops[-1][2], stops[-1][3], stops[-1][4])
+            else:
+                stops.append((now, 0.25, w[0], w[1], "walker waiting"))
+        if way == "car" and w:
+            x, z, speed, state = w
+            if "off" not in taken and drive_start is not None and now - drive_start > 2.0 and speed > 1.0:
+                taken.add("off")
+                shoot(sock, shots, f"trip_{tag}_1_set_off", t0)
+            if "turn" not in taken and drive_start is not None and now - drive_start > 8.0 and state == "turning" and speed > 2.0:
+                taken.add("turn")
+                shoot(sock, shots, f"trip_{tag}_2_turn", t0)
+            if speed < 0.05:
+                if still_since is None:
+                    still_since = (now, x, z, state)
+            elif still_since is not None:
+                if now - still_since[0] > 1.0:
+                    stops.append((still_since[0], now - still_since[0], still_since[1], still_since[2], still_since[3]))
+                still_since = None
     took = time.time() - t0
+    if "arrived after" in line:
+        shoot(sock, shots, f"trip_{tag}_4_arrived", t0)
     print("final:", line)
+    for at, dur, x, z, state in stops:
+        print(f"  {'walker' if state.startswith('walker') else 'car'} stood {dur:5.1f} s from {at:6.1f} s at {x:.1f} {z:.1f} ({state})")
     done = "arrived after" in line
-    print(f"trip {kind}: {'ARRIVED' if done else 'NOT ARRIVED'} in {took:.1f} s real")
+    print(f"trip {kind}: {'ARRIVED' if done else 'NOT ARRIVED'} in {took:.1f} s real, {len(stops)} stops")
     return done
 
 
@@ -86,6 +147,8 @@ def main():
     ap.add_argument("--log", default="out/zz_agentlab/probe_viewer.log")
     ap.add_argument("--trips", nargs="+", default=["near", "far"],
                     help="what to send after `trip`, in order (e.g. far, or \"to 96\")")
+    ap.add_argument("--keys", action="store_true",
+                    help="start near and far trips with the lab's keys (tap Y / tap I) instead of the verb")
     args = ap.parse_args()
     os.makedirs(args.shots, exist_ok=True)
     os.makedirs(os.path.dirname(args.log), exist_ok=True)
@@ -105,7 +168,8 @@ def main():
         if args.speed > 0:
             print("sim speed:", rtctl.send(sock, f"sim speed {args.speed}"))
         for number, kind in enumerate(args.trips, start=1):
-            ok = run_trip(sock, kind, number, args.shots, args.timeout) and ok
+            key = {"near": "Y", "far": "I"}.get(kind) if args.keys else None
+            ok = run_trip(sock, kind, number, args.shots, args.timeout, key) and ok
     finally:
         rtctl.stop(proc)
     print("\nprobe", "OK" if ok else "FAILED", f"({time.time() - t0:.0f} s in all)")

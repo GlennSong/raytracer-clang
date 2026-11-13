@@ -19577,3 +19577,36 @@ a park walk is one (the pavement's route does not lead into it), which is why ne
 **Revisit when** a second way needs a vehicle (bike: an owned-vehicle slot per kind), when the bus or the train join
 (`sendAgentByBus` / `sendAgentByTrain` are the verbs; a ride leg's minutes need the timetable), or when the whole
 population plans its trips this way.
+
+**As built, after the owner first watched it (2026-11-13).** What he saw, what it was, and what changed:
+- *"Strange knots" in the line, and the car not on its line or in its lane.* The line was drawn link by link from
+  `NavGraph::laneCenter` (a fixed 3.5 m lane, not the link's own spacing), its pieces joined straight at each node; at
+  a turn the incoming and outgoing lane lines cross before the node, so every turn drew a small loop. The car is placed
+  by `CitySim::refreshPose` (each link's lane spacing, the corner blends, the junction turn curve), so it left the line
+  at every junction. The line is now `CitySim::walkPoses`: a copy of the person moved along their route two metres at a
+  time and placed by refreshPose itself (made `const`), the car's drawn pull out of and into its bay included
+  (`CityRenderSystem::drawnPlace`), each point on the surface under it (a car's on its link's driving surface, a
+  walker's on the ground; no straight chords, so nothing lifts off the road). A leg still to come is its planned route
+  cut to the stretch alongside its two ends.
+- *The freeze in a junction.* The level's player stood at (0, 600): node 172, the middle of the downtown junction that
+  every far trip from home turns through. The car came round the turn and yielded to the player's body (Yielding, a
+  person in its cone) 3.9 m short of the node, mid-turn, for 13 s, then crept on. The player now starts in the block
+  behind the person's home (160.5, 825.9), 32 m from any road. A far trip now stops only at red lights: nine of them
+  on the last run, 4-42 s each, 3.5 of the drive's 5.8 minutes (one car meets every light on its own timer).
+- *"The path showed he would walk all the way down the street ... then snapped into his car."* `sendAgentTo` started
+  a walker at rest from the nearest node, and startTrip put them there: 19.5 m from the front door in one jump. They
+  then walked back the other way and got in from 12.7 m. Now a walker at rest sets off from where they stand, on the
+  pavement beside them: the link of the street's pair whose pavement it is (ahead), or the other (across the street,
+  back the other way), whichever is the shorter walk. A walk whose end is within reach (`kBoardReach`) -- the car in
+  front of the house, a door beside where the car is left -- and the last steps of any walk, off the pavement to a
+  door or the car, are walked (`CitySim::stepAgentToward`) out to the pavement, along it and in, not routed round the
+  block. The walk to the car ends beside it on the kerb side, level with the front seat.
+- A car still in its bay leaves from the bay's own street (routed from the node ahead of the bay), so startTrip pulls
+  it out at the bay's station; from the nearest node, which can be the one behind it, it was drawn reversing up the
+  street. When the drive starts the bay the sim reserved replaces the planner's estimate as where it ends, and the walk
+  after it is routed again from that bay (its planned minutes kept).
+- `trip?` gives each leg done as actual/planned minutes (a far trip: walk 0.3/0.3, car 5.8/6.9, walk 1.2/1.3 -- the
+  drive's 2 + 3 fixed minutes to set off and park took seconds; its red lights took 3.5 minutes instead).
+- Not done: getting in and out is still instant (no door swing -- the city's cars have no door leaves, only the bus --
+  no pause, no seated pose change); the person reaches the car's kerb side and is then in it. The walker model walks a
+  street's link on its own kerb side only, so a walk back the way the person faces crosses the street to begin.

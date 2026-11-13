@@ -10,10 +10,12 @@
 // trip planner (trip_plan.h) prices every way of travelling, they take the cheapest, and its legs are carried out in
 // order with the sim's own verbs: walk (sendAgentTo on foot), get in (boardVehicle), drive to a space near the door
 // (sendAgentTo in the car: the sim reserves the space), get out (alightVehicle leaves the car in it), walk to the
-// door. A leg that cannot be started re-plans from where the person stands without that way of travelling, and the
-// trip says so.
+// door. A walk's last few steps off the pavement -- to the car, to a door -- and a walk short enough to need no route
+// are walked out to the pavement, along it and in (stepAgentToward). A leg that cannot be started re-plans from where
+// the person stands without that way of travelling, and the trip says so.
 //
-// Seen: the plan's legs drawn along their routes in each way's colour, the destination marked, a few lines on screen
+// Seen: the plan's legs drawn along the way they will be travelled (CitySim::walkPoses: the sim's own placing), in
+// each way's colour, the destination marked, a few lines on screen
 // (where to, the options and their minutes, the choice, the leg under way), and the spectate camera following the
 // person from the moment the trip starts. `trip?` answers all of it in one line for a director.
 //
@@ -57,7 +59,10 @@ private:
     void step();                                            // start the next leg, or see the current one through
     bool startLeg();
     void finishLeg();
-    void draw(engine::FrameContext& ctx) const;
+    engine::Vec2 walkTarget(std::size_t k) const;           // where walk leg k ends: a door, or the car's
+    std::vector<engine::Vec2> footSteps(engine::Vec2 from, engine::Vec2 to) const;   // off the paths: via the pavement
+    void draw(engine::FrameContext& ctx);
+    std::vector<engine::Vec3> legLine(std::size_t k) const;   // leg k of the choice as it will be travelled
     Real metresLeft() const;
     std::string placeLabel(PlaceId id) const;
 
@@ -79,12 +84,17 @@ private:
     std::vector<int> ruledOut_;  // ways a leg of which could not be done, this trip
     int leg_ = 0;                // in the chosen option
     bool legUnderWay_ = false;
+    bool straight_ = false;      // the leg's last steps (or all of it), walked straight off the paths
+    bool straightDone_ = false;  // ...and there
+    std::vector<engine::Vec2> steps_;   // ...the points it goes by (footSteps), the next first
     bool arrived_ = false;
     std::string note_;           // what happened on the way (a re-plan, a failure)
     int trips_ = 0;              // trips begun: the person's dice for the next pick
     double simTime_ = 0;         // sim seconds (fixed steps), the trip's clock
     double startedAt_ = 0, legStartedAt_ = 0, arrivedAt_ = 0;
     Real plannedMinutes_ = 0;    // the choice's minutes when first planned
+    std::vector<Real> legActual_; // the minutes each leg done so far took (trip? sets them against the plan's)
+    std::vector<std::vector<engine::Vec3>> lines_;   // each leg's line as last drawn (a leg to come: drawn once)
 };
 
 }  // namespace citysim

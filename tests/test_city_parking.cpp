@@ -347,3 +347,47 @@ TEST_CASE(a_parking_lot_is_stalls_for_the_drivers) {
         for (std::size_t j = i + 1; j < st.size(); ++j) CHECK((st[i].at - st[j].at).length() > 2.6);
     }
 }
+
+// THE TRIP LAB'S WALKER (ADR-0415 as built): a person at rest beside a street sets off from where they stand -- not
+// from the nearest junction, which put them there in one jump (19.5 m from a front door) to walk back past it -- and
+// the line the lab draws for them (walkPoses: the stepper's own placing, sampled) starts where they are and runs on
+// without a jump or a turn back, to where they stop.
+TEST_CASE(trip_plan_walker_sets_off_where_it_stands_and_its_line_is_its_way) {
+    NavGraph nav = wideCross();
+    CitySim sim;
+    sim.build(nav, 0, 1, 5);
+    CHECK(sim.agents().size() == 1);
+    if (sim.agents().size() != 1) return;
+    sim.setAgentDirected(0, true);
+    // to the east pavement of the north arm, halfway up it; then wait for them to stop there
+    CHECK(sim.sendAgentTo(0, Vec2(9, 50)));
+    for (int i = 0; i < 6000 && sim.agents()[0].moving; ++i) sim.step(0.05);
+    const Agent& a = sim.agents()[0];
+    CHECK(!a.moving);
+    const Vec2 rest = a.pos;
+    CHECK(std::fabs(rest.y - 50.0) < 3.0);
+    // further up the same pavement: set off from right here, along the one link beside them
+    CHECK(sim.sendAgentTo(0, Vec2(9, 85)));
+    CHECK((a.pos - rest).length() < 0.5);
+    CHECK(a.route.links.size() == 1);
+    std::vector<Vec2> line;
+    sim.walkPoses(0, 2.0, [&](const Agent& c) { line.push_back(c.pos); });
+    CHECK(line.size() > 10);
+    if (line.empty()) return;
+    CHECK((line.front() - a.pos).length() < 1e-6);
+    for (std::size_t i = 1; i < line.size(); ++i) {
+        CHECK((line[i] - line[i - 1]).length() <= 2.0 + 1e-6);   // no jump
+        CHECK(line[i].y >= line[i - 1].y - 1e-6);                 // never back the way it came
+    }
+    CHECK(std::fabs(line.back().y - 85.0) < 1.0);   // ...to beside the point it is for
+    // and walking it, the person keeps to that line
+    Real worst = 0;
+    for (int i = 0; i < 6000 && a.moving; ++i) {
+        sim.step(0.05);
+        Real nearest = 1e30;
+        for (const Vec2& p : line) nearest = std::min(nearest, (p - a.pos).length());
+        worst = std::max(worst, nearest);
+    }
+    std::printf("[trip lab] walker: %zu line points, furthest off the line %.2f m\n", line.size(), worst);
+    CHECK(worst < 1.5);
+}

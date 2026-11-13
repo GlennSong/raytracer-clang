@@ -425,6 +425,55 @@ std::vector<Vec2> CitySim::lanePath(int agentIndex, Real step) const {
     return out;
 }
 
+void CitySim::walkPoses(int agentIndex, Real step, const std::function<void(const Agent&)>& visit,
+                        const engine::Route* route, Agent::Mode mode) const {
+    if (!nav_ || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return;
+    Agent c = agents_[static_cast<std::size_t>(agentIndex)];
+    if (route) {
+        c.route = *route;
+        c.mode = mode;
+        c.leg = 0;
+        c.distOnLeg = 0;
+        c.lane = 0;
+        c.laneF = 0;
+        c.stopAtDist = -1;
+        c.targetBay = -1;
+        c.pullLen = 0;
+        c.arrivedLink = -1;
+    } else if (!c.moving) {
+        return;
+    }
+    const int n = static_cast<int>(c.route.links.size());
+    if (n == 0 || c.leg >= n) return;
+    c.moving = true;
+    c.speed = 0;
+    c.laneF = static_cast<float>(c.lane);   // the lane it is in or changing to: where the rest of the way lies
+    // where the route ends: its stop-short, or the reserved bay's station on its last link, or the link's end
+    const int lastLink = c.route.links.back();
+    Real end = nav_->links[static_cast<std::size_t>(lastLink)].length;
+    if (c.stopAtDist >= 0) end = std::min(end, c.stopAtDist);
+    if (c.targetBay >= 0 && c.targetBay < static_cast<int>(bays_.size()) &&
+        bays_[static_cast<std::size_t>(c.targetBay)].link == lastLink)
+        end = std::min(end, bays_[static_cast<std::size_t>(c.targetBay)].station);
+    step = std::max(step, Real(0.25));
+    for (int guard = 0; guard < 100000; ++guard) {
+        const bool last = c.leg == n - 1 && c.distOnLeg >= end - 1e-6;
+        if (last) c.distOnLeg = end;
+        refreshPose(c);
+        c.tickFromPos = c.pos;      // a pose, not a motion: drawn where it is
+        c.tickFromPullS = c.pullS;
+        visit(c);
+        if (last) return;
+        c.distOnLeg += step;
+        c.pullS += static_cast<float>(step);
+        while (c.leg + 1 < n && c.distOnLeg > nav_->links[static_cast<std::size_t>(c.route.links[static_cast<std::size_t>(c.leg)])].length) {
+            c.distOnLeg -= nav_->links[static_cast<std::size_t>(c.route.links[static_cast<std::size_t>(c.leg)])].length;
+            ++c.leg;
+        }
+        if (c.leg == n - 1 && c.distOnLeg > end) c.distOnLeg = end;
+    }
+}
+
 uint32_t CitySim::rnd() { return rng_.bits(); }
 Real CitySim::rndUnit() { return rng_.next(); }
 
@@ -4829,7 +4878,7 @@ Real CitySim::pullOutWeight(const Agent& a, Real pullS) {
     return 1 - t * t * (3 - 2 * t);
 }
 
-void CitySim::refreshPose(Agent& a) {
+void CitySim::refreshPose(Agent& a) const {
     if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) return;
     int li = a.route.links[a.leg];
     Real L = nav_->links[li].length;

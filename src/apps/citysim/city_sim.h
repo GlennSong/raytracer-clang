@@ -24,6 +24,8 @@
 #include "../driving/driving.h"   // the new driving model (#234; citysim.driving = "v2")
 #include "city_driving.h"         // ...and the city sim's side of it: the drivers handed over (#255)
 #include <cstdint>
+#include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -958,6 +960,32 @@ public:
         return true;
     }
 
+    // A FEW STEPS OFF THE PATHS (ADR-0415 as built: the trip lab's person from their front door to their car, from
+    // the car to a door beside it). A walker at rest, not under way, is moved straight toward `to` at `speed` for
+    // `dt` seconds, facing the way it goes; true once it is there. The paths are a walker's only way about otherwise:
+    // a walk of twenty metres along its own pavement to a car behind it was routed across the street, along the far
+    // pavement and back. The caller keeps it short (within kBoardReach) and clear of the carriageway.
+    bool stepAgentToward(int agentIndex, engine::Vec2 to, Real speed, Real dt) {
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return false;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        if (a.mode != Agent::Mode::Pedestrian || a.moving) return false;
+        a.indoors = false;
+        a.state = Agent::State::Walking;
+        const engine::Vec2 d = to - a.pos;
+        const Real L = d.length(), step = speed * dt;
+        if (L <= step) {
+            a.pos = to;
+            a.speed = 0;
+            a.state = Agent::State::Resting;
+        } else {
+            a.heading = d * (1.0 / L);
+            a.pos = a.pos + a.heading * step;
+            a.speed = speed;
+        }
+        grid_.place(agentIndex, a.pos);
+        return L <= step;
+    }
+
     // Get out again, on the kerb beside the car, leaving it where it stands.
     bool alightVehicle(int agentIndex) {
         if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()))
@@ -1114,22 +1142,25 @@ public:
         // that never moves again. Measured: a 40 m errand moved the ghost 290 m.
         // An agent already under way therefore finishes the leg it stands on and
         // routes from the node AHEAD of it, and the leg is prepended below.
-        const int legLink =
+        int legLink =
             (a.moving && a.route.valid() &&
              a.leg < static_cast<int>(a.route.links.size()))
                 ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
-        const int from = legLink >= 0
-                             ? nav_->links[static_cast<std::size_t>(legLink)].to
-                             : nav_->nearestNode(a.pos);
+        Real keepDist = a.distOnLeg;
+        const bool onFoot = a.mode == Agent::Mode::Pedestrian;
+        int from = legLink >= 0 ? nav_->links[static_cast<std::size_t>(legLink)].to : nav_->nearestNode(a.pos);
+        // A CAR STILL IN ITS BAY (ADR-0415 as built) leaves from the bay's own street: routed from the node AHEAD of
+        // the bay, startTrip pulls it out at the bay's station. From the nearest node, which can be the one behind
+        // it, the drive began back there -- the car drawn reversing out of its space up the street.
+        if (legLink < 0 && !onFoot && !a.moving && a.parkedBay >= 0 && a.parkedBay < static_cast<int>(bays_.size()) &&
+            (bays_[static_cast<std::size_t>(a.parkedBay)].pos - a.pos).length() < 3.0)
+            from = nav_->links[static_cast<std::size_t>(bays_[static_cast<std::size_t>(a.parkedBay)].link)].to;
         if (from < 0) return false;
         // A DESTINATION THAT ROUTES. The single nearest node to `dest` can have
         // no path from here at all — 394 -> 86 in metro are 32 m apart with no
         // route for a pedestrian OR a car (different components of the graph),
         // and every walk_to that snapped to such a node was refused. Try the
         // nearest few and take the first that routes.
-        engine::Route route;
-        int to = -1;
-        int finalLink = -1;
         // ARRIVE ALONG THE STREET THE DESTINATION IS ON. A door, a parked car
         // and a bus stop all belong to a LINK, not to a junction, so routing to
         // the nearest node leaves the agent wherever that junction happens to
@@ -1137,39 +1168,90 @@ public:
         // Routing to the near end of the destination's own link and appending
         // that link makes the last street it walks the one it was sent to, and
         // the stop-short below then lands it beside the address.
-        if (a.mode == Agent::Mode::Pedestrian) {
-            int dl = nav_->nearestLink(dest);
-            // ...ON THE DESTINATION'S SIDE OF IT. A street is two links, one each way, and a walker walks a link on
-            // its kerb side (rightOf its direction); the nearest link is either of the pair, so half the errands
-            // ended on the far pavement, a carriageway from the door (measured: 24.9 m from a civic entrance).
-            if (dl >= 0 && static_cast<std::size_t>(dl) < twinOf_.size() && twinOf_[static_cast<std::size_t>(dl)] >= 0 &&
-                !nav_->links[static_cast<std::size_t>(dl)].footpath &&
-                dot(dest - nav_->nodes[static_cast<std::size_t>(nav_->links[static_cast<std::size_t>(dl)].from)],
-                    engine::rightOf(nav_->direction(dl))) < 0)
-                dl = twinOf_[static_cast<std::size_t>(dl)];
+        // ...ON THE DESTINATION'S SIDE OF IT. A street is two links, one each way, and a walker walks a link on
+        // its kerb side (rightOf its direction); the nearest link is either of the pair, so half the errands
+        // ended on the far pavement, a carriageway from the door (measured: 24.9 m from a civic entrance).
+        auto sideLink = [&](int l, engine::Vec2 p) {
+            if (l >= 0 && static_cast<std::size_t>(l) < twinOf_.size() && twinOf_[static_cast<std::size_t>(l)] >= 0 &&
+                !nav_->links[static_cast<std::size_t>(l)].footpath &&
+                dot(p - nav_->nodes[static_cast<std::size_t>(nav_->links[static_cast<std::size_t>(l)].from)],
+                    engine::rightOf(nav_->direction(l))) < 0)
+                return twinOf_[static_cast<std::size_t>(l)];
+            return l;
+        };
+        auto stationOn = [&](int l, engine::Vec2 p) {   // metres along link l level with p
+            const engine::NavLink& L = nav_->links[static_cast<std::size_t>(l)];
+            const engine::Vec2 A = nav_->nodes[static_cast<std::size_t>(L.from)];
+            return std::clamp(dot(p - A, nav_->direction(l)), Real(0), L.length);
+        };
+        const int dl = onFoot ? sideLink(nav_->nearestLink(dest), dest) : -1;
+        auto routeFrom = [&](int fromNode, engine::Route& route, int& to, int& finalLink) {
+            route = engine::Route{};
+            to = -1;
+            finalLink = -1;
             if (dl >= 0) {
                 const engine::NavLink& L = nav_->links[static_cast<std::size_t>(dl)];
-                if (L.from != from) {
-                    engine::Route r = engine::findRoute(*nav_, from, L.from, true);
+                if (L.from != fromNode) {
+                    engine::Route r = engine::findRoute(*nav_, fromNode, L.from, true);
                     if (r.valid()) { route = std::move(r); to = L.from; finalLink = dl; }
-                } else if (L.to != from) {
-                    engine::Route r = engine::findRoute(*nav_, from, L.to, true);
+                } else if (L.to != fromNode) {
+                    engine::Route r = engine::findRoute(*nav_, fromNode, L.to, true);
                     if (r.valid()) { route = std::move(r); to = L.to; }
                 }
             }
+            if (to < 0) for (int cand : nearestNodesTo(dest, 8)) {
+                if (cand == fromNode) continue;
+                engine::Route r = engine::findRoute(*nav_, fromNode, cand, onFoot);
+                if (r.valid()) { route = std::move(r); to = cand; break; }
+            }
+            return to >= 0;
+        };
+        engine::Route route;
+        int to = -1;
+        int finalLink = -1;
+        bool alongOwnLink = false;   // the whole walk is along the link they stand beside
+        if (legLink < 0 && onFoot && !a.moving) {
+            // A WALKER AT REST (out of a door, out of a car) sets off along the pavement it stands on, from where it
+            // stands (ADR-0415 as built). Routed from the nearest node, startTrip put it AT that node -- 19.5 m from
+            // a front door in one jump -- and it then walked back past where it had been. Of the street's two links
+            // it takes the one whose pavement it is on, ahead, or the other (across the street) back the other way:
+            // whichever is the shorter walk.
+            const int own = sideLink(nav_->nearestLink(a.pos), a.pos);
+            Real best = std::numeric_limits<Real>::infinity();
+            for (int k = 0; k < 2 && own >= 0; ++k) {
+                const int c = k == 0 ? own
+                              : (static_cast<std::size_t>(own) < twinOf_.size() && !nav_->links[static_cast<std::size_t>(own)].footpath)
+                                  ? twinOf_[static_cast<std::size_t>(own)] : -1;
+                if (c < 0) continue;
+                const Real Lc = nav_->links[static_cast<std::size_t>(c)].length;
+                const Real at = stationOn(c, a.pos);
+                if (c == dl && stationOn(dl, dest) >= at) {   // the door is further along this very pavement
+                    const Real cost = stationOn(dl, dest) - at;
+                    if (cost < best) { best = cost; legLink = c; keepDist = at; alongOwnLink = true; }
+                    continue;
+                }
+                engine::Route r;
+                int t = -1, fl = -1;
+                if (!routeFrom(nav_->links[static_cast<std::size_t>(c)].to, r, t, fl)) continue;
+                const Real cost = (Lc - at) + r.length(*nav_) + (fl >= 0 ? stationOn(fl, dest) : Real(0));
+                if (cost < best) {
+                    best = cost; legLink = c; keepDist = at; alongOwnLink = false;
+                    route = std::move(r); to = t; finalLink = fl;
+                    from = nav_->links[static_cast<std::size_t>(c)].to;
+                }
+            }
         }
-        if (to < 0) for (int cand : nearestNodesTo(dest, 8)) {
-            if (cand == from) continue;
-            engine::Route r = engine::findRoute(*nav_, from, cand,
-                                                a.mode == Agent::Mode::Pedestrian);
-            if (r.valid()) { route = std::move(r); to = cand; break; }
-        }
+        if (!alongOwnLink && to < 0) routeFrom(from, route, to, finalLink);
         // NOTHING has been mutated yet, so a refusal really does leave the agent
         // its day. startTrip's no-path branch parks the agent, clears its route
         // and keeps the caller's goal — validating first is what makes this
         // function's contract ("the agent keeps its current plan") true.
-        if (to < 0) return false;
-        const Real keepDist = a.distOnLeg;
+        if (!alongOwnLink && to < 0) return false;
+        if (alongOwnLink) {   // (the route is that one link: startTrip lays it, from its start)
+            from = nav_->links[static_cast<std::size_t>(legLink)].from;
+            to = nav_->links[static_cast<std::size_t>(legLink)].to;
+            finalLink = -1;
+        }
         // WAKE THEM. A sleeping agent is not in the active list at all, so the
         // stepper never reaches it: the errand sets moving, a valid route and a
         // destination, and the agent stands in its doorway until its OWN alarm
@@ -1179,6 +1261,14 @@ public:
         a.wakeAt = -1;
         startTrip(a, from, to, /*fromRest=*/!a.moving);
         if (!a.route.valid()) return false;
+        if (alongOwnLink) {
+            a.route.links.assign(1, legLink);
+            a.leg = 0;
+            a.distOnLeg = keepDist;
+            refreshPose(a);
+            a.tickFromPos = a.pos;
+            legLink = -1;   // (laid, not prepended)
+        }
         if (finalLink >= 0 &&
             (a.route.links.empty() ||
              a.route.links.back() != finalLink))
@@ -1191,6 +1281,7 @@ public:
             a.leg = 0;
             a.distOnLeg = keepDist;
             refreshPose(a);
+            a.tickFromPos = a.pos;   // (startTrip set the tick's start at the node: drawn from there, it slid back)
         }
         // END AT THE POINT, not at the node. Project the destination onto the
         // last link of the route: if it lies alongside it, that is where the
@@ -1239,6 +1330,14 @@ public:
     // path the ADR-0062 bridge follows from the car's real pose. Empty when the
     // agent has no active route.
     std::vector<engine::Vec2> lanePath(int agentIndex, Real step = 3.0) const;
+    // THE WAY AN AGENT WILL BE POSED (ADR-0415, the trip lab's line): a copy of agent `agentIndex` moved along its
+    // route `step` metres at a time, from where it is to where the route ends -- its stop-short point, or the station
+    // of the bay it is driving to -- each copy placed by refreshPose, the one rule that puts a walker on its pavement
+    // and a car in its lane, round the corners and through the junction turns, as the stepper places the real one.
+    // With `route`, the copy is set off from that route's start instead, as `mode` (a leg not yet begun: a car in
+    // lane 0). `visit` sees each copy in turn (the first where the walk begins). Nothing in the sim changes.
+    void walkPoses(int agentIndex, Real step, const std::function<void(const Agent&)>& visit,
+                   const engine::Route* route = nullptr, Agent::Mode mode = Agent::Mode::Pedestrian) const;
 
     // Is `pos` inside a junction box (within a junction node's widest incident
     // half-width + `margin`)? The bridge uses this for don't-block-the-box (a
@@ -1904,7 +2003,7 @@ private:
     void measureCommute(const engine::NavGraph& graph);   // median commute (see .cpp)
     Real brainUnit(Agent& a);   // per-agent deterministic roll for faults
     uint32_t tripRnd(Agent& a); // per-agent stream for TRIP decisions (see .cpp)
-    void refreshPose(Agent& a);
+    void refreshPose(Agent& a) const;   // (const: it places `a` and reads the sim, so walkPoses can pose copies)
     void steer(Agent& a, Real dt);   // rate-limited heading (bounded turn radius)
 
     engine::Vec2 idlePose(int node, Agent::Mode mode, uint32_t brain) const;

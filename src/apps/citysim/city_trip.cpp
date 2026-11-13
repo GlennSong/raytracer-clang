@@ -25,6 +25,7 @@ using engine::Vec3;
 
 namespace {
 constexpr Real kPlanLift = 0.4;                          // the plan's line, above the surface it follows (m)
+constexpr Real kLineStep = 2.0;                          // ...a point every this many metres along the way (m)
 constexpr Real kMarkHeight = 14.0;                       // the destination's post (m)
 const Vec3 kMarkColour(1.00, 0.78, 0.16);                // the waypoint's gold (the map's and the watch's)
 const char* kOwner = "CityTripSystem";
@@ -75,7 +76,20 @@ void CityTripSystem::onStop(engine::FrameContext& ctx) {
     ui_.release(ctx.renderer);
 }
 
-void CityTripSystem::fixedUpdate(engine::FrameContext& ctx) { simTime_ += ctx.clock.fixedStep(); }
+void CityTripSystem::fixedUpdate(engine::FrameContext& ctx) {
+    simTime_ += ctx.clock.fixedStep();
+    // the straight steps of a walk (step() sees them through)
+    if (active_ && straight_ && !arrived_ && plan_.valid() && who_ >= 0 && city_.built()) {
+        const int walk = plan_.choice()->legs[static_cast<std::size_t>(leg_)].mode;
+        if (steps_.empty())
+            steps_ = footSteps(city_.sim().agents()[static_cast<std::size_t>(who_)].pos, walkTarget(static_cast<std::size_t>(leg_)));
+        if (city_.simMutable().stepAgentToward(who_, steps_.front(), travel_.modes[static_cast<std::size_t>(walk)].speed,
+                                               ctx.clock.fixedStep())) {
+            steps_.erase(steps_.begin());
+            straightDone_ = steps_.empty();
+        }
+    }
+}
 
 std::string CityTripSystem::stage(const engine::ControlCommand& cmd) {
     const std::string usage = "err usage: trip near|far|to <place name or id>|at <x> <z>|mark";
@@ -249,8 +263,12 @@ TripRequest CityTripSystem::requestTo(Vec2 dest_, const std::vector<int>& ruledO
 bool CityTripSystem::plan(const std::string& note) {
     const CitySim& sim = city_.sim();
     plan_ = planTrip(*sim.graph(), travel_, requestTo(dest_, ruledOut_));
+    lines_.clear();
+    legActual_.clear();
     leg_ = 0;
     legUnderWay_ = false;
+    straight_ = straightDone_ = false;
+    steps_.clear();
     arrived_ = false;
     if (!note.empty()) note_ = note;
     LOG_INFO << "[trip] person " << who_ << " to " << where_ << " at " << dest_.x << "," << dest_.y << ": "
@@ -276,8 +294,13 @@ bool CityTripSystem::startLeg() {
         else if (!sim.boardVehicle(who_, a.car)) why = "could not get into the " + m.name;
         else LOG_INFO << "[trip] person " << who_ << " got into the " << m.name;
     }
-    if (why.empty()) {
-        if (sim.sendAgentTo(who_, L.to)) {
+    const Vec2 target = walkTarget(static_cast<std::size_t>(leg_));
+    if (why.empty() && !m.roads && (target - a.pos).length() <= kBoardReach) {
+        // A FEW STEPS: walked straight (stepAgentToward), not routed round the block
+        straight_ = true;
+        legUnderWay_ = true;
+    } else if (why.empty()) {
+        if (sim.sendAgentTo(who_, m.roads ? L.to : target)) {
             legUnderWay_ = true;
         } else if ((L.to - a.pos).length() <= kBoardReach) {
             // Within reach and nothing routes closer (a park's door on a walk the pavement does not lead into): they
@@ -288,6 +311,22 @@ bool CityTripSystem::startLeg() {
         } else {
             why = "no route from here by " + m.name;
         }
+    }
+    if (why.empty() && m.ownVehicle && a.targetBay >= 0 && a.targetBay < static_cast<int>(sim.parkingBays().size())) {
+        // THE BAY IS KNOWN NOW (the sim reserved it as the drive began): the drive ends there, and the walk after it
+        // starts there -- routed again from it, its planned minutes kept (the planner's bay was an estimate)
+        TripOption& oc = plan_.options[static_cast<std::size_t>(plan_.chosen)];
+        const Vec2 bay = sim.parkingBays()[static_cast<std::size_t>(a.targetBay)].pos;
+        oc.legs[static_cast<std::size_t>(leg_)].to = bay;
+        if (static_cast<std::size_t>(leg_) + 1 < oc.legs.size()) {
+            TripLeg& next = oc.legs[static_cast<std::size_t>(leg_) + 1];
+            TripLeg again;
+            if (planLeg(*sim.graph(), travel_, next.mode, bay, next.to, again)) {
+                again.minutes = next.minutes;
+                next = std::move(again);
+            }
+        }
+        lines_.clear();
     }
     if (why.empty()) {
         legStartedAt_ = simTime_;
@@ -325,8 +364,11 @@ void CityTripSystem::finishLeg() {
              << "), " << fmt("%.1f m", (a.pos - L.to).length()) << " from its end"
              << (!m.ownVehicle ? std::string() : a.parkedBay >= 0 ? ", the " + m.name + " left in a parking bay"
                                                        : ", the " + m.name + " left where it stopped");
+    legActual_.push_back(static_cast<Real>((simTime_ - legStartedAt_) / 60.0));
     ++leg_;
     legUnderWay_ = false;
+    straight_ = straightDone_ = false;
+    steps_.clear();
     if (leg_ >= static_cast<int>(o.legs.size())) {
         arrived_ = true;
         arrivedAt_ = simTime_;
@@ -339,8 +381,58 @@ void CityTripSystem::finishLeg() {
 void CityTripSystem::step() {
     if (!active_ || arrived_ || !plan_.valid() || who_ < 0) return;
     if (!legUnderWay_) { startLeg(); return; }
-    if (city_.sim().agents()[static_cast<std::size_t>(who_)].moving) return;
+    const Agent& a = city_.sim().agents()[static_cast<std::size_t>(who_)];
+    if (straight_) {
+        if (straightDone_) finishLeg();
+        return;
+    }
+    if (a.moving) return;
+    // ON FOOT, the routed walk over: the last few steps off the pavement (to the car, to a door) are walked straight
+    const TravelMode& m = travel_.modes[static_cast<std::size_t>(plan_.choice()->legs[static_cast<std::size_t>(leg_)].mode)];
+    const Vec2 target = walkTarget(static_cast<std::size_t>(leg_));
+    const Real off = (target - a.pos).length();
+    if (!m.roads && a.mode == Agent::Mode::Pedestrian && off > 0.3 && off <= kBoardReach) { straight_ = true; return; }
     finishLeg();
+}
+
+// WHERE A WALK LEG ENDS: at the car's door when the leg after it is by the car (beside it, on the kerb side, level
+// with the front seat), else at the leg's end (a door).
+Vec2 CityTripSystem::walkTarget(std::size_t k) const {
+    const TripOption& o = *plan_.choice();
+    const CitySim& sim = city_.sim();
+    const Agent& a = sim.agents()[static_cast<std::size_t>(who_)];
+    if (k + 1 < o.legs.size() && travel_.modes[static_cast<std::size_t>(o.legs[k + 1].mode)].ownVehicle &&
+        a.car >= 0 && a.car < static_cast<int>(sim.vehicles().size())) {
+        const SimVehicle& v = sim.vehicles()[static_cast<std::size_t>(a.car)];
+        const Real hl = v.heading.length();
+        const Vec2 f = hl > 1e-6 ? v.heading * (1.0 / hl) : Vec2(0, 1);
+        return v.pos + engine::rightOf(f) * (v.width * 0.5 + 0.5) + f * (v.length * 0.1);
+    }
+    return o.legs[k].to;
+}
+
+// A FEW STEPS OFF THE PATHS, as a person takes them: out to the pavement, along it, and in to where they are going --
+// not straight along a front wall or across a corner. The pavement is the walkers' own (the verge they keep), on the
+// side of the street the point is on.
+std::vector<Vec2> CityTripSystem::footSteps(Vec2 from, Vec2 to) const {
+    const CitySim& sim = city_.sim();
+    const engine::NavGraph& nav = *sim.graph();
+    const Real verge = sim.walkerVerge(sim.agents()[static_cast<std::size_t>(who_)]);
+    auto pavement = [&](Vec2 p) {
+        const int l = nav.nearestLink(p);
+        if (l < 0) return p;
+        const engine::NavLink& L = nav.links[static_cast<std::size_t>(l)];
+        const Vec2 A = nav.nodes[static_cast<std::size_t>(L.from)];
+        const Real t = L.length > 1e-6 ? std::clamp(dot(p - A, nav.direction(l)) / L.length, Real(0), Real(1)) : Real(0);
+        const Vec2 q = nav.pointOnLink(l, t);
+        const Vec2 side = nav.sidewalkPoint(l, t, verge) - q;
+        return dot(p - q, side) >= 0 ? q + side : q - side;   // (the pavement on p's side of the street)
+    };
+    std::vector<Vec2> steps;
+    for (const Vec2 p : {pavement(from), pavement(to), to})
+        if ((p - (steps.empty() ? from : steps.back())).length() > 0.5) steps.push_back(p);
+    if (steps.empty() || (steps.back() - to).length() > 1e-6) steps.push_back(to);
+    return steps;
 }
 
 void CityTripSystem::update(engine::FrameContext& ctx) {
@@ -373,57 +465,98 @@ Real CityTripSystem::metresLeft() const {
             }
             left -= a.distOnLeg;
         }
+        if (straight_) {
+            Vec2 at = a.pos;
+            for (const Vec2 p : steps_.empty() ? std::vector<Vec2>{walkTarget(static_cast<std::size_t>(leg_))} : steps_) {
+                left += (p - at).length();
+                at = p;
+            }
+        }
     }
     return std::max(Real(0), left);
 }
 
-// THE PLAN, DRAWN: each leg still to come along its route, in its way's colour -- the one under way along the route
-// the person is really on -- and the destination's gold post.
-void CityTripSystem::draw(engine::FrameContext& ctx) const {
-    if (!active_) return;
-    const engine::NavGraph& nav = *city_.sim().graph();
-    int lane = 0;   // a planned drive on the lane by the centre line; the drive under way on the car's own lane
-    auto at = [&](int li, Real t, bool roads) {
-        const engine::NavLink& L = nav.links[static_cast<std::size_t>(li)];
-        const Vec2 p = roads ? nav.laneCenter(li, std::min(lane, std::max(0, L.lanes - 1)), t)
-                             : (L.footpath ? L.footA + (L.footB - L.footA) * t : nav.sidewalkPoint(li, t));
-        return Vec3(p.x, city_.surfaceY(li, t * L.length, p) + kPlanLift, p.y);
+// THE PLAN, DRAWN (ADR-0415 as built): each leg still to come as the line its traveller will be posed along --
+// CitySim::walkPoses, the stepper's own rule for the pavement, the lane, the corners and the junction turns, sampled
+// every couple of metres -- so the person and the car are on their line through every turn, with nothing doubling
+// back. The leg under way runs from where the traveller is drawn to where its route ends (the stop-short beside the
+// door, the reserved bay the car pulls into) and, on foot, on to the point it is for; a leg still to come is its
+// planned route cut to the stretch alongside its two end points and joined to them. Every point stands on the surface
+// under it: a car's on its link's driving surface, a walker's on the ground.
+std::vector<Vec3> CityTripSystem::legLine(std::size_t k) const {
+    const CitySim& sim = city_.sim();
+    const TripLeg& L = plan_.choice()->legs[k];
+    const Agent& a = sim.agents()[static_cast<std::size_t>(who_)];
+    std::vector<Vec3> pts;
+    auto on = [&](Vec2 p, int link, Real station, bool car) {
+        return Vec3(p.x, city_.surfaceY(car ? link : -1, station, p) + kPlanLift, p.y);
     };
-    auto ground = [&](Vec2 p) { return Vec3(p.x, city_.surfaceY(-1, 0, p) + kPlanLift, p.y); };
-    // (links are straight: one segment each; `firstT` is how far along the first one the line starts; `from`, when
-    // given, is the point off the network it starts from -- the leg under way starts where the person is, on it)
-    auto drawLinks = [&](const std::vector<int>& links, std::size_t first, Real firstT, bool roads, Vec3 c,
-                         const Vec2* from, Vec2 to) {
-        bool haveLast = from != nullptr;
-        Vec3 last = from ? ground(*from) : Vec3();
-        for (std::size_t k = first; k < links.size(); ++k) {
-            const Vec3 a = at(links[k], k == first ? firstT : 0, roads), b = at(links[k], 1, roads);
-            if (haveLast) ctx.debug.line(last, a, c);
-            ctx.debug.line(a, b, c);
-            last = b;
-            haveLast = true;
+    auto straight = [&](Vec2 b) {   // a piece off the network, on the ground
+        const Vec2 a0(pts.back().x, pts.back().z);
+        const int n = std::max(1, static_cast<int>(std::ceil((b - a0).length() / kLineStep)));
+        for (int i = 1; i <= n; ++i) pts.push_back(on(a0 + (b - a0) * (static_cast<Real>(i) / n), -1, 0, false));
+    };
+    auto linkOf = [](const Agent& c) { return c.leg < static_cast<int>(c.route.links.size()) ? c.route.links[static_cast<std::size_t>(c.leg)] : -1; };
+    auto drawnAt = [&](const Agent& c, int index) {   // where a pose is drawn: a car with its pull out of / into its bay
+        if (c.mode != Agent::Mode::Driver) return index >= 0 ? city_.drawnAgentPos(index) : c.pos;
+        return city_.drawnPlace(c);
+    };
+    if (k == static_cast<std::size_t>(leg_) && legUnderWay_) {
+        const bool car = a.mode == Agent::Mode::Driver;
+        pts.push_back(on(drawnAt(a, who_), linkOf(a), a.distOnLeg, car));
+        bool first = true;
+        sim.walkPoses(who_, kLineStep, [&](const Agent& c) {
+            if (first) { first = false; return; }   // (where it is: drawn above)
+            pts.push_back(on(drawnAt(c, -1), linkOf(c), c.distOnLeg, car));
+        });
+        if (!car) {   // on foot, on from the pavement to the door (or the car's): the steps still to take
+            const Vec2 here(pts.back().x, pts.back().z);
+            for (const Vec2 p : straight_ && !steps_.empty() ? steps_ : footSteps(here, walkTarget(k))) straight(p);
         }
-        if (haveLast) ctx.debug.line(last, ground(to), c);
-    };
+        return pts;
+    }
+    // A LEG TO COME: its planned route, cut where it passes its ends
+    const bool car = travel_.modes[static_cast<std::size_t>(L.mode)].roads;
+    struct S { Vec2 p; int link; Real station; int leg; };
+    std::vector<S> ss;
+    if (!L.route.links.empty())
+        sim.walkPoses(who_, kLineStep, [&](const Agent& c) { ss.push_back({c.pos, linkOf(c), c.distOnLeg, c.leg}); },
+                      &L.route, car ? Agent::Mode::Driver : Agent::Mode::Pedestrian);
+    pts.push_back(on(L.from, -1, 0, false));
+    if (!ss.empty()) {
+        const int lastLeg = static_cast<int>(L.route.links.size()) - 1;
+        std::size_t i0 = 0, i1 = ss.size() - 1;
+        Real b0 = 1e30, b1 = 1e30;
+        for (std::size_t i = 0; i < ss.size(); ++i)
+            if (ss[i].leg == 0 && (ss[i].p - L.from).length() < b0) { b0 = (ss[i].p - L.from).length(); i0 = i; }
+        for (std::size_t i = i0; i < ss.size(); ++i)
+            if (ss[i].leg == lastLeg && (ss[i].p - L.to).length() < b1) { b1 = (ss[i].p - L.to).length(); i1 = i; }
+        straight(ss[i0].p);
+        for (std::size_t i = i0 + 1; i <= i1; ++i) pts.push_back(on(ss[i].p, ss[i].link, ss[i].station, car));
+    }
+    if (car) {
+        straight(L.to);
+    } else {
+        const Vec2 here(pts.back().x, pts.back().z);
+        for (const Vec2 p : footSteps(here, walkTarget(k))) straight(p);
+    }
+    return pts;
+}
+
+void CityTripSystem::draw(engine::FrameContext& ctx) {
+    if (!active_) return;
     if (plan_.valid() && !arrived_) {
         const TripOption& o = *plan_.choice();
-        const Agent& a = city_.sim().agents()[static_cast<std::size_t>(who_)];
+        if (lines_.size() != o.legs.size()) lines_.assign(o.legs.size(), {});
         for (std::size_t k = static_cast<std::size_t>(leg_); k < o.legs.size(); ++k) {
-            const TripLeg& L = o.legs[k];
-            const TravelMode& m = travel_.modes[static_cast<std::size_t>(L.mode)];
-            if (k == static_cast<std::size_t>(leg_) && legUnderWay_ && a.moving && a.leg >= 0 &&
-                a.leg < static_cast<int>(a.route.links.size())) {
-                const Real len = nav.links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])].length;
-                lane = a.lane;
-                drawLinks(a.route.links, static_cast<std::size_t>(a.leg), len > 1e-6 ? std::min(Real(1), a.distOnLeg / len) : 0,
-                          a.mode == Agent::Mode::Driver, m.colour, nullptr, L.to);
-            } else {
-                lane = 0;
-                drawLinks(L.route.links, 0, 0, m.roads, m.colour, &L.from, L.to);
-            }
+            // (a leg to come is the same line every frame: drawn once; the leg under way follows its traveller)
+            const bool live = k == static_cast<std::size_t>(leg_) && legUnderWay_;
+            if (live || lines_[k].empty()) lines_[k] = legLine(k);
+            const Vec3 c = travel_.modes[static_cast<std::size_t>(o.legs[k].mode)].colour;
+            for (std::size_t i = 1; i < lines_[k].size(); ++i) ctx.debug.line(lines_[k][i - 1], lines_[k][i], c);
         }
     }
-    const Vec3 foot = ground(dest_);
+    const Vec3 foot(dest_.x, city_.surfaceY(-1, 0, dest_) + kPlanLift, dest_.y);
     ctx.debug.line(foot, foot + Vec3(0, kMarkHeight, 0), kMarkColour);
     ctx.debug.circle(foot, Vec3(0, 1, 0), 2.5, kMarkColour);
     ctx.debug.circle(foot + Vec3(0, kMarkHeight, 0), Vec3(0, 1, 0), 1.0, kMarkColour);
@@ -468,6 +601,12 @@ std::string CityTripSystem::status() const {
         s += " | leg " + std::to_string(leg_ + 1) + "/" + std::to_string(o.legs.size()) + " " +
              travel_.modes[static_cast<std::size_t>(L.mode)].name + (legUnderWay_ ? " under way" : " starting") + ", " +
              fmt("%.0f m left", metresLeft()) + ", " + fmt("%.1f min", (simTime_ - startedAt_) / 60.0) + " so far";
+    }
+    if (!legActual_.empty()) {   // each leg done: its minutes, against the plan's
+        s += " | legs (actual/planned min):";
+        for (std::size_t k = 0; k < legActual_.size() && k < o.legs.size(); ++k)
+            s += (k ? ", " : " ") + travel_.modes[static_cast<std::size_t>(o.legs[k].mode)].name + " " +
+                 fmt("%.1f", legActual_[k]) + "/" + fmt("%.1f", o.legs[k].minutes);
     }
     {
         const Agent& a = city_.sim().agents()[static_cast<std::size_t>(who_)];

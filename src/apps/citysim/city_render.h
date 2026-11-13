@@ -322,6 +322,12 @@ public:
     // crowd's instances follow -- agentPose). Between ticks the raw position holds still and then hops; at a slowed
     // tick (the adaptive rate, down to 7.5 Hz) a walker posed from it read as flickering at superspeed.
     engine::Vec2 drawnAgentPos(int agentIndex, engine::Vec2* heading = nullptr) const;
+    // Where a pose -- an agent's, or a copy of one (CitySim::walkPoses) -- is DRAWN on the ground plane: agentPose's
+    // place, a car's pull out of and into its bay included (the trip lab's line, ADR-0415).
+    engine::Vec2 drawnPlace(const Agent& a) const {
+        const engine::Mat4 m = agentPose(a);
+        return engine::Vec2(m.m[0][3], m.m[2][3]);
+    }
     // Is anyone in this driver's car? Only while it is on a trip (moving; a bus or a cab on duty; the car you ride)
     bool carOccupied(int agentIndex) const;
     int loadMultiplier() const { return loadMul_; }
