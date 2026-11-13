@@ -234,18 +234,21 @@ struct PlanUpdate {
     bool waitingPointsCut = false;    // a new plan had more waiting points than kMaxWaitingPoints
 };
 
-// THE WAITING POINTS of a car `carLength` long on `connector` (see the top of this file), into `plan`'s waitingAt.
+// THE WAITING POINTS of a car `carLength` long on `connector` (see the top of this file), into `plan`'s waitingAt, and
+// where it commits (the first crossing stretch beyond the last of them that concerns a car carrying `tags`, ADR-0412).
 // True when they all fitted, false when kMaxWaitingPoints cut them short.
 bool findWaitingPoints(const engine::LaneGraph& roads, const RightOfWay& row, engine::PathId connector, Real carLength,
-                       JunctionPlan& plan);
+                       JunctionPlan& plan, engine::TagMask tags = engine::kEveryVehicle);
 
 // UPDATES A DRIVER'S PLANS at a decision. `car` is the car as it stands (front, odometer, trail); `way` its new way
 // ahead, starting with the path its front is on (a way that does not is read as that path alone); `carLength` its
 // vehicle's length; `tick` and `seconds` stamp the notes. Plans whose connector is still on the way, or still under the
 // car's body, are kept as they are; the rest are dropped (Cleared when the car's front is past the connector's start,
-// else WayChanged); connectors on the way with no plan get one, in way order, up to kMaxJunctionPlans.
+// else WayChanged); connectors on the way with no plan get one, in way order, up to kMaxJunctionPlans. `tags`: its
+// vehicle class's tags on these roads (findWaitingPoints).
 void updateJunctionPlans(const engine::LaneGraph& roads, const RightOfWay& row, const Car& car, Real carLength,
-                         const WayAhead& way, uint64_t tick, double seconds, JunctionPlans& plans, PlanUpdate& out);
+                         const WayAhead& way, uint64_t tick, double seconds, JunctionPlans& plans, PlanUpdate& out,
+                         engine::TagMask tags = engine::kEveryVehicle);
 
 // DROPS EVERY PLAN (the trip was routed again), noting each as `why`.
 void dropJunctionPlans(uint64_t tick, double seconds, PlanChange why, JunctionPlans& plans, PlanUpdate& out);

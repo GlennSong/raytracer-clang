@@ -2827,6 +2827,110 @@ TEST_CASE(lanes_crossing_points_of_ring_city) { checkCrossings("ring_city"); }
 TEST_CASE(lanes_crossing_points_of_hill_junction) { checkCrossings("hill_junction"); }
 TEST_CASE(lanes_crossing_points_of_the_traffic_lab) { checkCrossings("planned/traffic_lab_lanelab"); }
 
+// ---- LONG BODIES (review #284 item 9, ADR-0412: swept_body.h) ----------------------------------------------------------
+#include "engine/procgen/city/roads/lanes/swept_body.h"
+
+namespace {
+// A quarter circle of radius `r` round the origin, from (r, 0) heading +y to (0, r) heading -x, a point every degree.
+std::vector<Vec2> quarterArc(double r) {
+    std::vector<Vec2> pts;
+    for (int d = 0; d <= 90; ++d) pts.push_back(Vec2(r * std::cos(d * kHandDegrees), r * std::sin(d * kHandDegrees)));
+    return pts;
+}
+// Two turns side by side, round the origin at radii `inner` and `outer`, each from a straight lane of its own into one
+// of its own (kMiniLaneLength each), one junction.
+LaneGraph twoTurnsSideBySide(double inner, double outer) {
+    LaneGraph g = emptyTestGraph();
+    std::vector<std::vector<PathId>> next;
+    std::vector<PathId> in, out;
+    std::vector<Vec2> ends;
+    for (const double r : {inner, outer}) {
+        const std::vector<Vec2> arc = quarterArc(r);
+        const uint32_t a = addTestPath(g, next, PathKind::Lane, {Vec2(r, -kMiniLaneLength), arc.front()}, {0, 0});
+        const uint32_t b = addTestPath(g, next, PathKind::Lane, {arc.back(), Vec2(-kMiniLaneLength, r)}, {0, 0});
+        ownSection(g, a);
+        ownSection(g, b);
+        const uint32_t c = addTestPath(g, next, PathKind::Connector, arc, std::vector<Real>(arc.size(), 0));
+        g.paths[c].turn = Turn::FarTurn;
+        g.paths[c].junction = JunctionId(0);
+        g.paths[c].from = PathId(a);
+        g.paths[c].tightestRadius = r;
+        next[a].push_back(PathId(c));
+        next[c].push_back(PathId(b));
+        g.junctionConnectors.push_back(PathId(c));
+        in.push_back(PathId(a));
+        out.push_back(PathId(b));
+        ends.push_back(arc.front());
+        ends.push_back(arc.back());
+    }
+    finishTestGraph(g, next, in, out, ends);
+    return g;
+}
+}  // namespace
+
+TEST_CASE(lanes_a_long_body_cuts_inside_a_bend_by_its_chord) {
+    // The one body rule (lane_graph.h bodyOnPlan): bumpers on the line, the body on the chord. Round a 10 m circle a 12 m
+    // body's middle lies R (1 - cos(L / 2R)) = 1.75 m inside the line; a body of no length, and any body on a straight,
+    // sweeps the line's own point.
+    const double r = 10, length = 12;
+    const std::vector<Vec2> arc = quarterArc(r);
+    const BodyLine line = makeBodyLine({Vec2(r, -kMiniLaneLength), arc.front()}, arc, {arc.back(), Vec2(-kMiniLaneLength, r)},
+                                       length);
+    const double middle = line.length / 2;
+    std::vector<Vec2> spots;
+    sweptPoints(line, middle, length, spots);
+    double deepest = 0;
+    for (const Vec2& q : spots) deepest = std::max(deepest, r - q.length());
+    const double expected = r * (1 - std::cos(length / (2 * r)));
+    std::printf("    a 12 m body round a 10 m bend: %zu swept points, the deepest %.3f m inside the line (the chord: %.3f m)\n",
+                spots.size(), deepest, expected);
+    CHECK(std::fabs(deepest - expected) < 0.02);
+    const PlanRectangle body = bodyAt(line, middle + length / 2, length, 2.5);
+    CHECK(std::fabs((r - body.middle.length()) - expected) < 0.02);
+    CHECK(std::fabs(body.halfLength - length / 2) < 1e-12 && std::fabs(body.halfWidth - 1.25) < 1e-12);
+    spots.clear();
+    sweptPoints(line, middle, 0, spots);
+    CHECK(spots.size() == 1u && std::fabs(spots[0].length() - r) < 0.01);
+    spots.clear();
+    sweptPoints(line, -kMiniLaneLength + 1, length, spots);   // well back on the straight lane: the line's own point
+    CHECK(spots.size() == 1u);
+}
+
+TEST_CASE(lanes_crossing_points_reach_where_a_long_body_swings_beside_another_turn) {
+    // Two turns side by side, 3.5 m apart round 10 m and 13.5 m: their centre lines never come within the long test
+    // vehicle's touching distance (2.6 m wide, so 3.1 m), so swept as points they share no record. Swept at 12 m the outer
+    // body's middle cuts about 1.3 m inside its line, toward the inner turn: the two turns get records, crosses, and on
+    // the outer turn none starts at its start -- a body standing at its line, still straight on the lane behind, is clear;
+    // only once its front has come round far enough does its middle reach the inner turn. (The inner turn's bodies swing
+    // away from the outer, so they touch the outer bus near their own ends: two meetings, one near each.) With the car
+    // tag 4.5 m long (its swing within the margin: short) every record concerns the long tag on at least one side, and
+    // none concerns two cars: their own bodies never touch here.
+    LaneGraph points = twoTurnsSideBySide(10, 13.5), swept = points;
+    CrossingOptions o = crossingTestOptions();
+    CHECK(findCrossingPoints(points, o).byMeeting[static_cast<int>(Meeting::Cross)] == 0u);
+    for (VehicleSize& v : o.vehicles) v.length = v.tag == kLaneGraphLongTag ? 12 : 4.5;
+    const CrossingReport rep = findCrossingPoints(swept, o);
+    const TagMask carTag = TagMask(1) << LaneGraph::nameIndex(swept.vehicleTagNames, kLaneGraphTestTag);
+    const uint32_t innerTurn = 2, outerTurn = 5;   // (addTestPath order: lane, lane, connector for each radius)
+    CHECK(swept.paths[innerTurn].kind == PathKind::Connector && swept.paths[outerTurn].kind == PathKind::Connector);
+    int between = 0;
+    for (uint32_t k = 0; k < swept.crossings.size(); ++k) {
+        const CrossingPoint& x = swept.crossings[k];
+        if (x.otherSide != OtherSide::Path || x.a.index != innerTurn || x.other != outerTurn) continue;
+        ++between;
+        std::printf("    %s", dumpCrossing(swept, CrossingId(k)).c_str());
+        CHECK(x.meeting == Meeting::Cross);
+        CHECK(x.otherFrom > 0 && x.otherTo <= swept.paths[outerTurn].length);
+        CHECK(x.aFrom >= 0 && x.aTo > x.aFrom && x.aTo <= swept.paths[innerTurn].length);
+        CHECK(!(x.concerns(x.a, carTag) && x.concerns(x.otherPath(), carTag)));   // never two cars
+    }
+    std::printf("    two turns 3.5 m apart, a 12 m body: %d records between them; %u found only for length, %u made longer\n",
+                between, rep.onlyForLength, rep.widenedForLength);
+    CHECK(between >= 1);
+    CHECK(rep.onlyForLength >= 1u);
+    CHECK(validate(swept).empty());
+}
+
 // ---- a ramp's end on a street: on the carriageway going its way (#282, ADR-0411) ------------------------------------
 #include "engine/procgen/city/roads/lanes/interchange.h"
 namespace {

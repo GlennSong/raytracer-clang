@@ -1,7 +1,8 @@
 #include "engine/procgen/city/roads/lanes/lane_graph_crossings.h"
 
 #include "engine/procgen/city/polygon.h"    // bounds, pointInPolygon
-#include "engine/procgen/city/polyline.h"   // distToPolyline
+#include "engine/procgen/city/polyline.h"   // distToPolyline, distSegmentToSegment
+#include "engine/procgen/city/roads/lanes/swept_body.h"   // a long body along a path (#284 item 9)
 
 #include <algorithm>
 #include <chrono>
@@ -91,19 +92,14 @@ struct Patch {
     bool startEnd = false;     // the start of A with the end of B
 };
 
-// Every meeting of A and B: sample pairs closer in plan than `reach`, at one level (heights within `clearance`).
-std::vector<Patch> meetings(const Sampled& A, const Sampled& B, double reach, double clearance) {
+// THE PATCHES of touching sample pairs, given the samples of A (`ia`, rising) and of B (`ib`) that may touch at all,
+// whether sample i of A touches sample j of B (`touches`), and each path's last sample.
+// `visit(patch, i, j)` is shown each touching pair once the patches are known, by the index of the patch it is in.
+template <typename Touches, typename Visit>
+std::vector<Patch> patchesOf(const std::vector<std::size_t>& ia, const std::vector<std::size_t>& ib, std::size_t lastA,
+                             std::size_t lastB, const Touches& touches, const Visit& visit) {
     std::vector<Patch> out;
-    // only the samples of each near the other's bounds can touch it
-    std::vector<std::size_t> ia, ib;
-    for (std::size_t i = 0; i < A.xy.size(); ++i)
-        if (insideGrown(A.xy[i], B.lo, B.hi, reach)) ia.push_back(i);
-    if (ia.empty()) return out;
-    for (std::size_t j = 0; j < B.xy.size(); ++j)
-        if (insideGrown(B.xy[j], A.lo, A.hi, reach)) ib.push_back(j);
-    if (ib.empty()) return out;
     const std::size_t rows = ia.size(), cols = ib.size();
-    const double reach2 = reach * reach;
     // each touching cell's patch, by union-find (-1: not touching)
     std::vector<int> parent(rows * cols, -1);
     auto find = [&](int c) {
@@ -119,11 +115,8 @@ std::vector<Patch> meetings(const Sampled& A, const Sampled& B, double reach, do
         if (a != b) parent[static_cast<std::size_t>(std::max(a, b))] = std::min(a, b);
     };
     for (std::size_t r = 0; r < rows; ++r) {
-        const Vec2 p = A.xy[ia[r]];
-        const double zp = A.z[ia[r]];
         for (std::size_t c = 0; c < cols; ++c) {
-            const Vec2 d = p - B.xy[ib[c]];
-            if (!(d.x * d.x + d.y * d.y < reach2) || std::fabs(zp - B.z[ib[c]]) > clearance) continue;
+            if (!touches(ia[r], ib[c])) continue;
             const int cell = static_cast<int>(r * cols + c);
             parent[static_cast<std::size_t>(cell)] = cell;
             // the neighbours already visited: one sample back along B, and the row one sample back along A
@@ -158,11 +151,222 @@ std::vector<Patch> meetings(const Sampled& A, const Sampled& B, double reach, do
             p.j0 = std::min(p.j0, j);
             p.j1 = std::max(p.j1, j);
             p.startsBoth = p.startsBoth || (i == 0 && j == 0);
-            p.endsBoth = p.endsBoth || (i == A.last() && j == B.last());
-            p.endStart = p.endStart || (i == A.last() && j == 0);
-            p.startEnd = p.startEnd || (i == 0 && j == B.last());
+            p.endsBoth = p.endsBoth || (i == lastA && j == lastB);
+            p.endStart = p.endStart || (i == lastA && j == 0);
+            p.startEnd = p.startEnd || (i == 0 && j == lastB);
+            visit(static_cast<std::size_t>(patchOf[static_cast<std::size_t>(root)]), i, j);
         }
     return out;
+}
+
+// Every meeting of A and B: sample pairs closer in plan than `reach`, at one level (heights within `clearance`).
+std::vector<Patch> meetings(const Sampled& A, const Sampled& B, double reach, double clearance) {
+    // only the samples of each near the other's bounds can touch it
+    std::vector<std::size_t> ia, ib;
+    for (std::size_t i = 0; i < A.xy.size(); ++i)
+        if (insideGrown(A.xy[i], B.lo, B.hi, reach)) ia.push_back(i);
+    if (ia.empty()) return {};
+    for (std::size_t j = 0; j < B.xy.size(); ++j)
+        if (insideGrown(B.xy[j], A.lo, A.hi, reach)) ib.push_back(j);
+    if (ib.empty()) return {};
+    const double reach2 = reach * reach;
+    return patchesOf(
+        ia, ib, A.last(), B.last(),
+        [&](std::size_t i, std::size_t j) {
+            const Vec2 d = A.xy[i] - B.xy[j];
+            return d.x * d.x + d.y * d.y < reach2 && std::fabs(A.z[i] - B.z[j]) <= clearance;
+        },
+        [](std::size_t, std::size_t, std::size_t) {});
+}
+
+// ONE PATH'S BODIES (issue #284 item 9, ADR-0412): the longest vehicle allowed on it, its front placed every
+// kCrossingStep or less from the path's start to its length past the path's end (while any of it is still on the path),
+// and at each front the body's middle line from its rear end to its front end (lane_graph.h bodyOnPlan, swept_body.h
+// bodyAt), along every line the body may lie along there: through each path leading in where its rear is still on one,
+// and each path it leads to where its front is already on one. Half its width round that line holds the whole body.
+// The heights are the path's under the body's middle; the bounds are each front's lines' and all of them.
+struct Bodies {
+    std::vector<double> front;                    // per sample: the front, metres along the path (past its end: on the next)
+    std::vector<double> z;
+    std::vector<uint32_t> firstLine;              // per sample and one more: sample i's lines are lines[first[i], [i + 1])
+    std::vector<std::pair<Vec2, Vec2>> lines;     // rear end, front end
+    std::vector<Vec2> lo, hi;
+    Vec2 allLo, allHi;
+    double halfWidth = 0, length = 0, pathLength = 0;
+    std::size_t last() const { return front.size() - 1; }
+};
+
+Bodies bodiesOf(const LaneGraph& g, uint32_t p, double step, double halfWidth, double bodyLength,
+                const std::vector<BodyLine>& ways) {
+    Bodies out;
+    out.halfWidth = halfWidth;
+    out.length = bodyLength;
+    out.pathLength = g.paths[p].length;
+    const double span = out.pathLength + bodyLength;
+    const int n = std::max(1, static_cast<int>(std::ceil(span / step)));
+    std::vector<Vec2> all;
+    for (int k = 0; k <= n; ++k) {
+        const double s = k == n ? span : span * k / n;
+        out.front.push_back(s);
+        out.z.push_back(g.heightAt(PathId(p), std::min(std::max(s - bodyLength / 2, 0.0), out.pathLength)));
+        const std::size_t first = out.lines.size();
+        out.firstLine.push_back(static_cast<uint32_t>(first));
+        // every way gives the same body unless its rear is on a path leading in or its front on one it leads to
+        const bool atAnEnd = s < bodyLength || s > out.pathLength;
+        for (std::size_t w = 0; w < (atAnEnd ? ways.size() : std::min<std::size_t>(ways.size(), 1)); ++w) {
+            const PlanRectangle body = bodyAt(ways[w], s, bodyLength, 2 * halfWidth);
+            const std::pair<Vec2, Vec2> line(body.alongMiddle(0), body.alongMiddle(1));
+            bool again = false;
+            for (std::size_t m = first; m < out.lines.size() && !again; ++m)
+                again = distance(out.lines[m].first, line.first) < kSweptSamePoint &&
+                        distance(out.lines[m].second, line.second) < kSweptSamePoint;
+            if (!again) out.lines.push_back(line);
+        }
+        Vec2 lo(1e300, 1e300), hi(-1e300, -1e300);
+        for (std::size_t m = first; m < out.lines.size(); ++m)
+            for (const Vec2& q : {out.lines[m].first, out.lines[m].second}) {
+                lo = Vec2(std::min(lo.x, q.x), std::min(lo.y, q.y));
+                hi = Vec2(std::max(hi.x, q.x), std::max(hi.y, q.y));
+                all.push_back(q);
+            }
+        out.lo.push_back(lo);
+        out.hi.push_back(hi);
+    }
+    out.firstLine.push_back(static_cast<uint32_t>(out.lines.size()));
+    bounds(all, out.allLo, out.allHi);
+    return out;
+}
+
+// Whether two boxes come within `by` of each other.
+bool boxesWithin(const Vec2& alo, const Vec2& ahi, const Vec2& blo, const Vec2& bhi, double by) {
+    return ahi.x >= blo.x - by && alo.x <= bhi.x + by && ahi.y >= blo.y - by && alo.y <= bhi.y + by;
+}
+
+// ONE MEETING OF TWO PATHS' BODIES, on each path (metres along it): the touching bodies' fronts and rears (the hindmost
+// front, the foremost rear) and the places where they touch, nearest and farthest.
+struct BodySide {
+    double firstFront = 1e300, lastRear = -1e300, touchFrom = 1e300, touchTo = -1e300;
+    void note(double front, double length, double touch) {
+        firstFront = std::min(firstFront, front);
+        lastRear = std::max(lastRear, front - length);
+        touchFrom = std::min(touchFrom, touch);
+        touchTo = std::max(touchTo, touch);
+    }
+};
+struct BodyMeeting {
+    BodySide a, b;
+};
+
+// Every meeting of A's bodies and B's: pairs of fronts whose bodies' middle lines come closer than `reach` (half of
+// each body's width and the margin), at one level.
+std::vector<BodyMeeting> bodyMeetings(const Bodies& A, const Bodies& B, double reach, double clearance) {
+    std::vector<std::size_t> ia, ib;
+    for (std::size_t i = 0; i < A.front.size(); ++i)
+        if (boxesWithin(A.lo[i], A.hi[i], B.allLo, B.allHi, reach)) ia.push_back(i);
+    if (ia.empty()) return {};
+    for (std::size_t j = 0; j < B.front.size(); ++j)
+        if (boxesWithin(B.lo[j], B.hi[j], A.allLo, A.allHi, reach)) ib.push_back(j);
+    if (ib.empty()) return {};
+    // Where along each path the two bodies of fronts i and j touch (the nearest points of their middle lines, as
+    // metres along: a body's middle line runs from its length behind its front to its front); false if they do not.
+    const auto touchAt = [&](std::size_t i, std::size_t j, double& atA, double& atB) {
+        if (std::fabs(A.z[i] - B.z[j]) > clearance || !boxesWithin(A.lo[i], A.hi[i], B.lo[j], B.hi[j], reach)) return false;
+        double nearest = reach;
+        for (uint32_t a = A.firstLine[i]; a < A.firstLine[i + 1]; ++a)
+            for (uint32_t b = B.firstLine[j]; b < B.firstLine[j + 1]; ++b) {
+                Real ta = 0, tb = 0;
+                const double d = distSegmentToSegment(A.lines[a].first, A.lines[a].second, B.lines[b].first,
+                                                      B.lines[b].second, &ta, &tb);
+                if (!(d < nearest)) continue;
+                nearest = d;
+                atA = A.front[i] - A.length * (1 - ta);
+                atB = B.front[j] - B.length * (1 - tb);
+            }
+        return nearest < reach;
+    };
+    std::vector<BodyMeeting> out;
+    const std::vector<Patch> patches = patchesOf(
+        ia, ib, A.last(), B.last(),
+        [&](std::size_t i, std::size_t j) {
+            double atA = 0, atB = 0;
+            return touchAt(i, j, atA, atB);
+        },
+        [&](std::size_t patch, std::size_t i, std::size_t j) {
+            if (out.size() <= patch) out.resize(patch + 1);
+            double atA = 0, atB = 0;
+            touchAt(i, j, atA, atB);
+            out[patch].a.note(A.front[i], A.length, atA);
+            out[patch].b.note(B.front[j], B.length, atB);
+        });
+    return out;
+}
+
+// A MEETING'S STRETCH OF ONE PATH. The driving model counts a body as on a stretch when its front is past the stretch's
+// start and its rear short of its end, so every touching body must be: the stretch starts no later than the hindmost
+// touching front and ends no earlier than the foremost touching rear. Where those two overlap that is the stretch, the
+// shortest that holds them all. Where they do not (a short touch, by part of a long body) any one place between them
+// serves: the place they touch, kept a little way past the path's start where it can be, so that a body standing at its
+// line, its front at the start and all of it on the straight lane behind, is not on a stretch only bodies half round the
+// turn reach. Then widened by a sample each way (the true edge lies within a step of the last sample that touches) and
+// clamped onto the path. False when the touch lies wholly off the path (on the part of a body still on the path before,
+// or already on the next: their own pair's record).
+bool bodyStretchOn(const BodySide& s, double pathLength, std::pair<double, double>& out) {
+    if (s.touchTo < 0 || s.touchFrom > pathLength) return false;
+    double from = s.firstFront, to = s.lastRear;
+    if (from > to) {
+        const double place = std::min(std::max(std::max((s.touchFrom + s.touchTo) / 2, 2 * kCrossingStep), s.lastRear),
+                                      s.firstFront);
+        from = to = place;
+    }
+    out.first = std::min(std::max(from - kCrossingStep, 0.0), pathLength);
+    out.second = std::min(std::max(to + kCrossingStep, 0.0), pathLength);
+    return true;
+}
+
+// HOW FAR A BODY `length` LONG CUTS INSIDE a bend of radius `radius` at its middle (its chord's sagitta: the bumpers on
+// the curve), metres; nothing on a straight.
+double swingRound(double length, double radius) {
+    if (!(length > 0) || !std::isfinite(radius) || !(radius > 0)) return 0;
+    return radius * (1 - std::cos(std::min(length / (2 * radius), 1.5707963267948966)));
+}
+
+// ONE BODY PART of a path (see findCrossingPoints): the tags it stands for, whether its bodies have a length that swings
+// out of the first pass's reach, and its bodies (an index into the parts' bodies).
+struct BodyPart {
+    TagMask tags = 0;
+    bool isLong = false;
+    uint32_t bodies = 0;
+};
+
+// THE RECORDS OF ONE PAIR OF PATHS for one pair of body parts: the tags on `a` and on the other path they concern.
+struct SizedRecords {
+    TagMask aTags = kEveryVehicle, otherTags = kEveryVehicle;
+    std::vector<CrossingPoint> records;
+};
+
+// RECORDS THAT COME OUT THE SAME ARE ONE: two pairs of parts with the same records and the same tags on one path become
+// one, their tags on the other path joined (first across `a`, then across the other path, until nothing joins); a set of
+// tags that covers every part of its path (`allA`, `allOther`: the tags of all of a path's parts) concerns every
+// vehicle.
+void sameRecordsJoined(std::vector<SizedRecords>& sized, TagMask allA, TagMask allOther) {
+    for (bool joined = true; joined;) {
+        joined = false;
+        for (std::size_t i = 0; i < sized.size() && !joined; ++i)
+            for (std::size_t j = i + 1; j < sized.size() && !joined; ++j) {
+                SizedRecords& x = sized[i];
+                const SizedRecords& y = sized[j];
+                if (x.records != y.records) continue;
+                if (x.otherTags == y.otherTags) x.aTags |= y.aTags;
+                else if (x.aTags == y.aTags) x.otherTags |= y.otherTags;
+                else continue;
+                sized.erase(sized.begin() + static_cast<std::ptrdiff_t>(j));
+                joined = true;
+            }
+    }
+    for (SizedRecords& s : sized) {
+        if ((s.aTags & allA) == allA) s.aTags = kEveryVehicle;
+        if ((s.otherTags & allOther) == allOther) s.otherTags = kEveryVehicle;
+    }
 }
 
 // A path's stretch from a patch's reach along it (samples i0 to i1), widened by one sample each way.
@@ -214,20 +418,30 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
     const uint32_t n = static_cast<uint32_t>(g.paths.size());
     const double step = kCrossingStep, margin = kCrossingMargin, clearance = opts.clearance;
 
-    // each vehicle tag's width, where the caller gave one (-1: none)
+    // each vehicle tag's width and length, where the caller gave one (width -1: none)
     std::vector<double> tagWidth(std::min<std::size_t>(g.vehicleTagNames.size(), kMaxTagNames), -1.0);
+    std::vector<double> tagLength(tagWidth.size(), 0.0);
     for (std::size_t i = 0; i < tagWidth.size(); ++i)
         for (const VehicleSize& v : opts.vehicles)
-            if (v.tag == g.vehicleTagNames[i]) tagWidth[i] = std::max(tagWidth[i], v.width);
-    // half the widest vehicle allowed on each path (its own width where no vehicle on it has one), and every path sampled
+            if (v.tag == g.vehicleTagNames[i]) {
+                tagWidth[i] = std::max(tagWidth[i], v.width);
+                tagLength[i] = std::max(tagLength[i], v.length);
+            }
+    // half the widest vehicle allowed on each path (its own width where no vehicle on it has one), the longest, and
+    // every path sampled
     std::vector<Sampled> samples(n);
-    double widest = 0;
+    std::vector<double> longestOn(n, 0.0);
+    double widest = 0, longestAnywhere = 0;
     for (uint32_t p = 0; p < n; ++p) {
         double w = -1;
         for (std::size_t i = 0; i < tagWidth.size(); ++i)
-            if (g.paths[p].vehicleTags & (TagMask(1) << i)) w = std::max(w, tagWidth[i]);
+            if (g.paths[p].vehicleTags & (TagMask(1) << i)) {
+                w = std::max(w, tagWidth[i]);
+                longestOn[p] = std::max(longestOn[p], tagLength[i]);
+            }
         if (w < 0) w = g.paths[p].width;
         widest = std::max(widest, w);
+        longestAnywhere = std::max(longestAnywhere, longestOn[p]);
         samples[p] = samplePath(g, p, step, w / 2);
     }
     const double farthestReach = widest + margin;
@@ -286,6 +500,122 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
         index.entries.erase(std::unique(index.entries.begin(), index.entries.end()), index.entries.end());
     }
 
+    // LONG BODIES (issue #284 item 9, ADR-0412), when any vehicle has a length: each path's BODY PARTS -- one per size of
+    // body that swings out of the first pass's reach on it (its tags of one width and length whose swing round the path's
+    // tightest bend is more than kSwingCoveredByMargin), placed along every way into and on from it; and one for all its
+    // other tags, its bodies points on its line at their widest width -- and a spatial index of each path's longest
+    // (points every half cell along each body's middle line, so two lines within touching distance have points within
+    // two cells of each other).
+    std::vector<std::vector<BodyPart>> parts;
+    std::vector<Bodies> partBodies;
+    std::vector<uint32_t> indexBodies;   // per path: its longest part's bodies
+    std::vector<char> hasLong(n, 0);
+    const auto allTagsOn = [&](uint32_t p) {
+        TagMask all = 0;
+        for (const BodyPart& b : parts[p]) all |= b.tags;
+        return all;
+    };
+    CellIndex bodyIndex;
+    bodyIndex.cell = index.cell;
+    // the cells round a set of middle lines' points (two cells either way)
+    auto bodyKeys = [&](const Bodies& b) {
+        std::vector<uint64_t> keys;
+        const double spacing = bodyIndex.cell / 2;
+        for (const std::pair<Vec2, Vec2>& line : b.lines) {
+            const int pieces = std::max(1, static_cast<int>(std::ceil(distance(line.first, line.second) / spacing)));
+            for (int k = 0; k <= pieces; ++k) {
+                const Vec2 q = line.first + (line.second - line.first) * (static_cast<double>(k) / pieces);
+                keys.push_back(CellIndex::key(bodyIndex.at(q.x), bodyIndex.at(q.y)));
+            }
+        }
+        std::sort(keys.begin(), keys.end());
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+        return keys;
+    };
+    if (longestAnywhere > 0) {
+        parts.resize(n);
+        indexBodies.assign(n, 0);
+        for (uint32_t p = 0; p < n; ++p) {
+            const Path& path = g.paths[p];
+            const std::vector<Vec2> own = pathPoints(g, PathId(p));
+            // its tags: the sizes that swing out of reach here, and the rest. Sizes whose reach here (half the width and
+            // the swing round the tightest bend) is within kSwingCoveredByMargin of a larger one's go with it, its part's
+            // body as wide and as long as the widest and longest of them: the margin covers the difference.
+            struct Size {
+                double width = 0, length = 0;
+                TagMask tags = 0;
+                double reach = 0;
+            };
+            std::vector<Size> longSizes;
+            TagMask shortTags = 0;
+            double shortWidth = -1;
+            for (std::size_t i = 0; i < tagWidth.size(); ++i) {
+                const TagMask bit = TagMask(1) << i;
+                if (!(path.vehicleTags & bit)) continue;
+                const double swing = swingRound(tagLength[i], path.tightestRadius);
+                if (tagWidth[i] < 0 || swing <= kSwingCoveredByMargin) {
+                    shortTags |= bit;
+                    shortWidth = std::max(shortWidth, tagWidth[i]);
+                    continue;
+                }
+                longSizes.push_back(Size{tagWidth[i], tagLength[i], bit, tagWidth[i] / 2 + swing});
+            }
+            std::sort(longSizes.begin(), longSizes.end(), [](const Size& x, const Size& y) {
+                return x.reach != y.reach ? x.reach > y.reach : x.tags < y.tags;
+            });
+            {
+                std::vector<Size> grouped;
+                for (const Size& s : longSizes) {
+                    std::vector<Size>::iterator it = std::find_if(grouped.begin(), grouped.end(), [&](const Size& gr) {
+                        return gr.reach - s.reach <= kSwingCoveredByMargin;
+                    });
+                    if (it == grouped.end()) {
+                        grouped.push_back(s);
+                        continue;
+                    }
+                    it->width = std::max(it->width, s.width);
+                    it->length = std::max(it->length, s.length);
+                    it->tags |= s.tags;
+                }
+                longSizes.swap(grouped);
+            }
+            if (shortWidth < 0) shortWidth = path.width;
+            hasLong[p] = longSizes.empty() ? 0 : 1;
+            // the short part: its bodies points on its own line (it has one even with no tag left, for a path open to
+            // nobody: the other path's long bodies still meet its first-pass records)
+            if (shortTags != 0 || longSizes.empty()) {
+                parts[p].push_back(BodyPart{shortTags, false, static_cast<uint32_t>(partBodies.size())});
+                partBodies.push_back(bodiesOf(g, p, step, shortWidth / 2, 0, {makeBodyLine({}, own, {}, 0)}));
+                indexBodies[p] = parts[p].back().bodies;
+            }
+            // each long part. A connector's bodies lie back along the lane it leaves and on along the lane it joins: its
+            // swing through the turn, from the first metre to where its rear leaves it, is the connector's, and so are its
+            // records. A lane's lie straight on past its own ends: a body still half round the turn behind it is the
+            // turn's (its tail is on that connector), so a car that came in straight never inherits a turning bus's swing.
+            double longestHere = 0;
+            for (const Size& s : longSizes) {
+                std::vector<std::vector<Vec2>> before, after;
+                if (path.kind == PathKind::Connector) {
+                    for (uint32_t q : ledFrom[p]) before.push_back(pathPoints(g, PathId(q)));
+                    for (uint32_t q : leadsTo[p]) after.push_back(pathPoints(g, PathId(q)));
+                }
+                if (before.empty()) before.emplace_back();
+                if (after.empty()) after.emplace_back();
+                std::vector<BodyLine> ways;
+                for (const std::vector<Vec2>& b : before)
+                    for (const std::vector<Vec2>& a : after) ways.push_back(makeBodyLine(b, own, a, s.length));
+                parts[p].push_back(BodyPart{s.tags, true, static_cast<uint32_t>(partBodies.size())});
+                partBodies.push_back(bodiesOf(g, p, step, s.width / 2, s.length, ways));
+                if (s.length > longestHere) {
+                    longestHere = s.length;
+                    indexBodies[p] = parts[p].back().bodies;
+                }
+            }
+            for (uint64_t k : bodyKeys(partBodies[indexBodies[p]])) bodyIndex.entries.emplace_back(k, p);
+        }
+        std::sort(bodyIndex.entries.begin(), bodyIndex.entries.end());
+    }
+
     // ---- two paths: every connector against every path near it ----
     for (uint32_t c = 0; c < n; ++c) {
         if (g.paths[c].kind != PathKind::Connector) continue;
@@ -296,7 +626,21 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
             for (int64_t dx = -1; dx <= 1; ++dx)
                 for (int64_t dy = -1; dy <= 1; ++dy) keys.push_back(CellIndex::key(ix + dx, iy + dy));
         }
-        for (uint32_t q : index.pathsIn(keys)) {
+        std::vector<uint32_t> near = index.pathsIn(keys);
+        if (!parts.empty()) {   // ... and every path whose longest bodies come near its own
+            std::vector<uint64_t> around;
+            for (uint64_t k : bodyKeys(partBodies[indexBodies[c]])) {
+                const int64_t ix = static_cast<int32_t>(static_cast<uint32_t>(k >> 32));
+                const int64_t iy = static_cast<int32_t>(static_cast<uint32_t>(k & 0xFFFFFFFFu));
+                for (int64_t dx = -2; dx <= 2; ++dx)
+                    for (int64_t dy = -2; dy <= 2; ++dy) around.push_back(CellIndex::key(ix + dx, iy + dy));
+            }
+            const std::vector<uint32_t> more = bodyIndex.pathsIn(around);
+            near.insert(near.end(), more.begin(), more.end());
+            std::sort(near.begin(), near.end());
+            near.erase(std::unique(near.begin(), near.end()), near.end());
+        }
+        for (uint32_t q : near) {
             // (a pair of connectors is taken once, from the lower; a lane never starts a pair)
             if (q == c || (g.paths[q].kind == PathKind::Connector && q < c)) continue;
             const Sampled& B = samples[q];
@@ -329,28 +673,102 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
             }
             // two meetings of the pair whose stretches (widened) overlap on both paths are one meeting; a split or a join
             // keeps its kind
-            std::sort(found.begin(), found.end(), [](const CrossingPoint& x, const CrossingPoint& y) { return x.aFrom < y.aFrom; });
-            for (bool merged = true; merged;) {
-                merged = false;
-                for (std::size_t i = 0; i < found.size() && !merged; ++i)
-                    for (std::size_t j = i + 1; j < found.size() && !merged; ++j) {
-                        CrossingPoint& x = found[i];
-                        const CrossingPoint& y = found[j];
-                        if (!(x.aFrom <= y.aTo && y.aFrom <= x.aTo && x.otherFrom <= y.otherTo && y.otherFrom <= x.otherTo)) continue;
-                        x.aFrom = std::min(x.aFrom, y.aFrom);
-                        x.aTo = std::max(x.aTo, y.aTo);
-                        x.otherFrom = std::min(x.otherFrom, y.otherFrom);
-                        x.otherTo = std::max(x.otherTo, y.otherTo);
-                        if (x.meeting == Meeting::Cross) x.meeting = y.meeting;
-                        found.erase(found.begin() + static_cast<std::ptrdiff_t>(j));
-                        merged = true;
+            const auto mergeOverlapping = [](std::vector<CrossingPoint>& list) {
+                std::sort(list.begin(), list.end(), [](const CrossingPoint& x, const CrossingPoint& y) { return x.aFrom < y.aFrom; });
+                for (bool merged = true; merged;) {
+                    merged = false;
+                    for (std::size_t i = 0; i < list.size() && !merged; ++i)
+                        for (std::size_t j = i + 1; j < list.size() && !merged; ++j) {
+                            CrossingPoint& x = list[i];
+                            const CrossingPoint& y = list[j];
+                            if (!(x.aFrom <= y.aTo && y.aFrom <= x.aTo && x.otherFrom <= y.otherTo && y.otherFrom <= x.otherTo))
+                                continue;
+                            x.aFrom = std::min(x.aFrom, y.aFrom);
+                            x.aTo = std::max(x.aTo, y.aTo);
+                            x.otherFrom = std::min(x.otherFrom, y.otherFrom);
+                            x.otherTo = std::max(x.otherTo, y.otherTo);
+                            if (x.meeting == Meeting::Cross) x.meeting = y.meeting;
+                            list.erase(list.begin() + static_cast<std::ptrdiff_t>(j));
+                            merged = true;
+                        }
+                }
+            };
+            mergeOverlapping(found);
+            // LONG BODIES, SIZE BY SIZE (ADR-0412): for each pair of body sizes, one on each path (its own size groups, or
+            // its short bodies), the first pass's records widened where those two bodies touch at their length, and
+            // crosses of their own where they touch outside every record (longSweep); each concerns only the tags of its
+            // two sizes. Pairs of sizes that come out the same are recorded once (sameRecordsJoined). Two paths one of
+            // which leads into the other are a car following another, never a meeting of long bodies.
+            std::vector<SizedRecords> sized;
+            if (!parts.empty() && (hasLong[c] || hasLong[q])) {
+                const double reachLong = reach + std::max(longestOn[c], longestOn[q]);
+                const bool following = follows(c, q, reachLong) || follows(q, c, reachLong);
+                const bool cFirst = c < q;
+                for (const BodyPart& pc : parts[c])
+                    for (const BodyPart& pq : parts[q]) {
+                        SizedRecords s;
+                        s.aTags = cFirst ? pc.tags : pq.tags;
+                        s.otherTags = cFirst ? pq.tags : pc.tags;
+                        s.records = found;
+                        if ((pc.isLong || pq.isLong) && !following) {
+                            const Bodies& bc = partBodies[pc.bodies];
+                            const Bodies& bq = partBodies[pq.bodies];
+                            const double sizedReach = bc.halfWidth + bq.halfWidth + margin;
+                            for (const BodyMeeting& m : bodyMeetings(bc, bq, sizedReach, clearance)) {
+                                std::pair<double, double> sa, sb;
+                                if (!bodyStretchOn(m.a, g.paths[c].length, sa) || !bodyStretchOn(m.b, g.paths[q].length, sb))
+                                    continue;
+                                const std::pair<double, double> onA = cFirst ? sa : sb, onOther = cFirst ? sb : sa;
+                                bool widened = false;
+                                for (CrossingPoint& x : s.records) {
+                                    if (!(x.aFrom <= onA.second && onA.first <= x.aTo && x.otherFrom <= onOther.second &&
+                                          onOther.first <= x.otherTo))
+                                        continue;
+                                    if (onA.first < x.aFrom || onA.second > x.aTo || onOther.first < x.otherFrom ||
+                                        onOther.second > x.otherTo)
+                                        ++rep.widenedForLength;
+                                    x.aFrom = std::min(x.aFrom, onA.first);
+                                    x.aTo = std::max(x.aTo, onA.second);
+                                    x.otherFrom = std::min(x.otherFrom, onOther.first);
+                                    x.otherTo = std::max(x.otherTo, onOther.second);
+                                    widened = true;
+                                    break;
+                                }
+                                if (widened) continue;
+                                CrossingPoint x;
+                                x.meeting = Meeting::Cross;
+                                x.otherSide = OtherSide::Path;
+                                x.a = PathId(cFirst ? c : q);
+                                x.other = cFirst ? q : c;
+                                x.aFrom = onA.first;
+                                x.aTo = onA.second;
+                                x.otherFrom = onOther.first;
+                                x.otherTo = onOther.second;
+                                const Path& pathQ = g.paths[q];
+                                if (pathQ.kind == PathKind::Connector && pathQ.junction == g.paths[c].junction)
+                                    x.junction = g.paths[c].junction;
+                                s.records.push_back(x);
+                                ++rep.onlyForLength;
+                            }
+                            mergeOverlapping(s.records);
+                        }
+                        sized.push_back(std::move(s));
                     }
+                sameRecordsJoined(sized, allTagsOn(cFirst ? c : q), allTagsOn(cFirst ? q : c));
+            } else {
+                SizedRecords s;
+                s.records = found;
+                sized.push_back(std::move(s));
             }
-            for (const CrossingPoint& x : found) {
-                ++rep.byMeeting[static_cast<std::size_t>(x.meeting)];
-                if (!x.junction.valid()) ++(g.paths[q].kind == PathKind::Connector ? rep.betweenJunctions : rep.withLanes);
-                g.crossings.push_back(x);
-            }
+            for (const SizedRecords& s : sized)
+                for (CrossingPoint x : s.records) {
+                    x.aTags = s.aTags;
+                    x.otherTags = s.otherTags;
+                    ++rep.byMeeting[static_cast<std::size_t>(x.meeting)];
+                    if (!x.junction.valid()) ++(g.paths[q].kind == PathKind::Connector ? rep.betweenJunctions : rep.withLanes);
+                    if (x.aTags != kEveryVehicle || x.otherTags != kEveryVehicle) ++rep.forSomeVehicles;
+                    g.crossings.push_back(x);
+                }
         }
     }
 

@@ -1,7 +1,7 @@
 // lanes_tool — the headless host for the lanes road builder (ADR-0083, ADR-0089).
 //   lanes_tool build <graph.json> [--out <dir>]     build, print the summary and invariants, write <name>.glb/.svg/stats.json
 //                      [--probe x y r] [--quick] [--holes] [--walls]   heights and steps around a point; --quick skips the invariant sweep and the exports; --holes lists unpaved holes; --walls lists parapets that end on drivable road
-//   lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width ...] [--junction J ...]   the lane graph
+//   lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width[:length] ...] [--junction J ...]   the lane graph
 //                      (#237, #238, #239): lane_graph.txt (its dump), problems.txt, reach.txt (how much a car can get
 //                      round, and why not the rest) and lane_graph.svg (lanes by section, junction outlines, connectors by
 //                      turn, refusals, crossing points by kind); with --junction, junction_J.svg and junction_J.txt close up
@@ -190,8 +190,9 @@ int main(int argc, char** argv) {
     if (argc >= 3 && std::strcmp(argv[1], "lanegraph") == 0) {
         // THE LANE GRAPH (#237, #238): the built lanes cut into sections, the junctions and the connectors through them;
         // its text dump, its problems, how much of it a car can get round, and a plan SVG in --out.
-        // --vehicle tag:radius:width (again for each): a vehicle tag every lane is open to, the tightest radius its path
-        // may have and its width (metres). None given: the tool's two test vehicles below.
+        // --vehicle tag:radius:width[:length] (again for each): a vehicle tag every lane is open to, the tightest radius
+        // its path may have, its width and its body's length (metres; none: swept as a point). None given: the tool's two
+        // test vehicles below.
         // --junction J (again for each): also junction_J.svg, the plan close up round junction J, and junction_J.txt, its
         // connectors and every crossing point on them.
         std::string outDir = ".";
@@ -203,11 +204,13 @@ int main(int argc, char** argv) {
             if (std::strcmp(argv[i], "--vehicle") == 0) {
                 const std::string spec = argv[i + 1];
                 const std::size_t a = spec.find(':'), b = a == std::string::npos ? a : spec.find(':', a + 1);
-                if (b == std::string::npos) { std::fprintf(stderr, "lanes: --vehicle wants tag:radius:width, not %s\n", spec.c_str()); return 2; }
+                if (b == std::string::npos) { std::fprintf(stderr, "lanes: --vehicle wants tag:radius:width[:length], not %s\n", spec.c_str()); return 2; }
+                const std::size_t c = spec.find(':', b + 1);   // the body's length, when given (#284 item 9)
                 VehicleSize v;
                 v.tag = spec.substr(0, a);
                 v.turningRadius = std::atof(spec.substr(a + 1, b - a - 1).c_str());
-                v.width = std::atof(spec.substr(b + 1).c_str());
+                v.width = std::atof(spec.substr(b + 1, c == std::string::npos ? std::string::npos : c - b - 1).c_str());
+                if (c != std::string::npos) v.length = std::atof(spec.substr(c + 1).c_str());
                 lgo.vehicles.push_back(v);
             }
         }
@@ -269,11 +272,11 @@ int main(int argc, char** argv) {
             std::printf("  crossing points: %zu (%u crosses, %u joins, %u splits between two paths; %u with crosswalks); of "
                         "the path pairs, %u reach across two junctions and %u are a connector and a lane; the busiest "
                         "junction %u has %u; %u junctions with two or more connectors have none; %u far turns have a "
-                        "place to wait inside; %.0f ms\n",
+                        "place to wait inside; long bodies: %u records of their own, %u made longer; %.0f ms\n",
                         G.crossings.size(), cr.byMeeting[static_cast<int>(Meeting::Cross)],
                         cr.byMeeting[static_cast<int>(Meeting::Join)], cr.byMeeting[static_cast<int>(Meeting::Split)],
                         cr.withCrosswalks, cr.betweenJunctions, cr.withLanes, cr.busiestJunction, cr.busiestCount,
-                        cr.junctionsWithout, cr.waitInsidePoints, cr.milliseconds);
+                        cr.junctionsWithout, cr.waitInsidePoints, cr.onlyForLength, cr.widenedForLength, cr.milliseconds);
         }
         {
             // the control plan carried through (#240)
@@ -418,7 +421,7 @@ int main(int argc, char** argv) {
     }
     if (argc < 3 || (std::strcmp(argv[1], "build") != 0 && std::strcmp(argv[1], "twin") != 0 && std::strcmp(argv[1], "blocks") != 0)) {
         std::fprintf(stderr, "usage: lanes_tool build <graph.json> [--out <dir>]\n"
-                             "       lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width ...] [--junction J ...]   (the lane graph: dump, problems, reach, plan SVG; junction close-ups)\n"
+                             "       lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width[:length] ...] [--junction J ...]   (the lane graph: dump, problems, reach, plan SVG; junction close-ups)\n"
                              "       lanes_tool design <graph.json> <out.json> [--plan-crossings]   (the graph with every road's planned profile; built again, taken as given)\n"
                              "       lanes_tool landings <graph.json> ...   (each ramp end on a street: on the carriageway going its way? #282)\n"
                              "                    [--ramp-width M] [--ramp-shoulder M]   ramp carriageway (default 4.5 m lane, 2.5 m shoulder)\n");

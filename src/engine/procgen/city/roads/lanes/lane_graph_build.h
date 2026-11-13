@@ -182,18 +182,25 @@ inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 // the old code built. (A change to the roads themselves
 // is the lanes tag's, kLanesBuildTag, which keys the roads; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
-constexpr uint32_t kLaneGraphBuildVersion = 5;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
+constexpr uint32_t kLaneGraphBuildVersion = 6;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
                                                  // 2: crossing points (#239, ADR-0400)
                                                  // 3: the control plan carried through: controls, signs, limits (#240)
                                                  // 4: each path's bend profile, measured as a vehicle feels it (#281)
                                                  // 5: far turns' places to wait inside the junction (#261, ADR-0406)
+                                                 // 6: bodies swept at their length: the paved-road test and the
+                                                 //    crossing points' reach (#284 item 9, ADR-0412)
 
-// A VEHICLE TAG and how it turns: the tightest radius its path may have, and its width (metres). Passed in by the
+// A VEHICLE TAG and its body: the tightest radius its path may have, its width and its length (metres). Passed in by the
 // caller (the engine does not know the driving model's vehicles); a connector tighter than the radius is closed to it.
+// The length is nose to tail of the one rigid body that follows the path (engine::bodyOnPlan): through a bend that body
+// lies on the chord between its bumpers and cuts inside the line, so it is swept at its length both where the builder
+// checks a turn stays on the paved road and where it finds which paths' bodies can touch (swept_body.h). Zero: a body
+// with no length, swept as a point on the line (the builder before #284 item 9).
 struct VehicleSize {
     std::string tag;
     double turningRadius = 0;
     double width = 0;
+    double length = 0;
 };
 
 struct LaneGraphOptions {
@@ -255,6 +262,10 @@ struct CrossingReport {
     uint32_t busiestCount = 0;
     uint32_t junctionsWithout = 0;            // junctions with two or more connectors and no record
     uint32_t waitInsidePoints = 0;            // far turns given a place to wait inside (placeWaitInsidePoints)
+    // LONG BODIES (ADR-0412): records of two paths found only because a long body cuts inside a bend, and records made
+    // longer by it (counted before records of one pair are merged)
+    uint32_t onlyForLength = 0, widenedForLength = 0;
+    uint32_t forSomeVehicles = 0;             // records that concern only some vehicle tags on a side (the rest: all)
     std::vector<std::string> problems;        // anything that looks wrong, in plain words with its place
     double milliseconds = 0;
 };

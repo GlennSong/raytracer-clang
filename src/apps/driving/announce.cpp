@@ -236,7 +236,7 @@ void announcePlan(const engine::LaneGraph& roads, const JunctionPlan& plan, cons
     for (uint32_t k = path.crossings.first; k < path.crossings.end() && k < roads.pathCrossings.size(); ++k) {
         const engine::CrossingId cid = roads.pathCrossings[k];
         const engine::CrossingPoint& rec = roads.crossings[cid.index];
-        if (rec.otherSide != engine::OtherSide::Path) continue;
+        if (rec.otherSide != engine::OtherSide::Path || !rec.concerns(plan.connector, car.tags)) continue;
         const bool iAmA = rec.a == plan.connector;
         const Real from = iAmA ? rec.aFrom : rec.otherFrom;
         const Real to = iAmA ? rec.aTo : rec.otherTo;
@@ -284,7 +284,7 @@ void announceLane(const engine::LaneGraph& roads, engine::PathId lane, Real lane
     for (uint32_t k = path.crossings.first; k < path.crossings.end() && k < roads.pathCrossings.size(); ++k) {
         const engine::CrossingId cid = roads.pathCrossings[k];
         const engine::CrossingPoint& rec = roads.crossings[cid.index];
-        if (rec.otherSide != engine::OtherSide::Path) continue;
+        if (rec.otherSide != engine::OtherSide::Path || !rec.concerns(lane, car.tags)) continue;
         const bool iAmA = rec.a == lane;
         const Real toStart = laneStart + (iAmA ? rec.aFrom : rec.otherFrom);
         const Real toClear = laneStart + (iAmA ? rec.aTo : rec.otherTo) + car.length;

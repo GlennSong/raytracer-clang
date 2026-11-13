@@ -63,6 +63,7 @@ void Driving::settleClaims() {
     world.board = &board_;
     world.gapNeeded = junctionNumbers_.gapComfortable;
     world.reaction = static_cast<Real>(std::max<uint32_t>(1, settings_.decideEveryTicks)) * step_;
+    world.routeClasses = &routeClasses_;
     room_.settle(world, roomSeats_);
 }
 
@@ -438,6 +439,7 @@ void Driving::announce() {
             a.who = c.id;
             a.odometer = c.odometer;
             a.length = cls.length;
+            a.tags = tagsOf(c.vehicleClass);
             a.move = base;
             a.move.speedThrough = speedThrough(*roads_, roadRules_, p.connector, cls.topSpeed, n.comfortableSideAccel);
             a.hardestBrake = cls.hardestBrake;
@@ -466,6 +468,7 @@ void Driving::announce() {
         lane.who = c.id;
         lane.odometer = c.odometer;
         lane.length = cls.length;
+        lane.tags = tagsOf(c.vehicleClass);
         lane.move = base;
         lane.move.speedThrough = c.held.topSpeed > 0 ? c.held.topSpeed : cls.topSpeed;
         lane.hardestBrake = cls.hardestBrake;
@@ -554,7 +557,7 @@ void Driving::plan() {
             p.junctions = t->junctions;
             p.planUpdate = PlanUpdate();
             updateJunctionPlans(*roads_, rightOfWay_, c, cls.length, p.way, tickCount_, clockSeconds_, p.junctions,
-                                p.planUpdate);
+                                p.planUpdate, tagsOf(c.vehicleClass));
             if (!roomOn_ || look >= roomNumbers_.throughJunctions) break;
             const Real further = roomReach(*roads_, roomRoads_, p.junctions, c, p.way,
                                            roomNeeded(cls, roomNumbers_.standstillGap), roomNumbers_);

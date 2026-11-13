@@ -52,7 +52,10 @@ Real laneOffset(const TestRoadSpec& spec, uint32_t k) { return (Real(k) + Real(0
 Path makePath(LaneGraph& g, const TestRoadSpec& spec, PathKind kind, const std::vector<Vec2>& pts) {
     Path p;
     p.kind = kind;
-    p.vehicleTags = engine::TagMask(1);   // the test vehicle tag, name 0
+    // every one of the spec's vehicle tags (names 0 ...)
+    p.vehicleTags = spec.vehicleTags.size() >= engine::kMaxTagNames
+                        ? engine::kEveryVehicle
+                        : (engine::TagMask(1) << spec.vehicleTags.size()) - 1;
     p.curve = g.addCurve(pts, std::vector<Real>(pts.size(), 0));
     p.length = g.along[p.curve.end() - 1];
     p.width = spec.laneWidth;
@@ -82,9 +85,9 @@ SectionId addSection(LaneGraph& g, const TestRoadSpec& spec, const Vec2& start, 
     return id;
 }
 
-// The names every test graph carries.
-void addNames(LaneGraph& g) {
-    g.vehicleTagNames = {kTestVehicleTag};
+// The names every test graph carries (its vehicle tags: the spec's).
+void addNames(LaneGraph& g, const TestRoadSpec& spec) {
+    g.vehicleTagNames = spec.vehicleTags;
     g.roadClassNames = {kTestRoadClass};
     g.controlNames = {kTestControl};
 }
@@ -192,7 +195,7 @@ TestRoads straightRoadOf(const std::vector<Real>& sectionLengths, const TestRoad
     const uint32_t sections = static_cast<uint32_t>(sectionLengths.size());
     t.sectionCount = sections;
     LaneGraph& g = t.graph;
-    addNames(g);
+    addNames(g, spec);
     const Vec2 east = headingVector(Heading::East);
     Real x = 0;
     for (uint32_t i = 0; i < sections; ++i) {
@@ -218,7 +221,7 @@ TestRoads ringRoad(uint32_t sides, const TestRoadSpec& spec) {
     TestRoads t;
     t.spec = spec;
     LaneGraph& g = t.graph;
-    addNames(g);
+    addNames(g, spec);
     // The polygon's corners round a circle whose chord between neighbours is roadLength.
     const Real radius = spec.roadLength / (2 * std::sin(kPi / Real(sides)));
     std::vector<Vec2> corners;
@@ -246,7 +249,7 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
     t.rows = rows;
     t.cols = cols;
     LaneGraph& g = t.graph;
-    addNames(g);
+    addNames(g, spec);
     const uint32_t lanes = spec.lanesEachWay;
     // Half the junction box's side: the road's half width (every lane each way) and the kerb corner.
     const Real halfBox = Real(lanes) * spec.laneWidth + spec.cornerRadius;
@@ -360,10 +363,20 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
 #ifdef RT_ROADS_LANES
     // Where the connectors of each junction cross, join and split, as the road builder finds them.
     engine::roads::lanes::CrossingOptions crossingOptions;
-    engine::roads::lanes::VehicleSize car;
-    car.tag = kTestVehicleTag;
-    car.width = kCarWidth;
-    crossingOptions.vehicles.push_back(car);
+    if (spec.crossingBodies.empty()) {
+        engine::roads::lanes::VehicleSize car;
+        car.tag = kTestVehicleTag;
+        car.width = kCarWidth;
+        crossingOptions.vehicles.push_back(car);
+    }
+    for (const driving::TagSize& b : spec.crossingBodies) {
+        engine::roads::lanes::VehicleSize v;
+        v.tag = b.tag;
+        v.turningRadius = b.turningRadius;
+        v.width = b.width;
+        v.length = b.length;
+        crossingOptions.vehicles.push_back(v);
+    }
     engine::roads::lanes::findCrossingPoints(g, crossingOptions);
     // ... and where a far turn may wait inside its junction, as the road builder places it (#261).
     engine::roads::lanes::placeWaitInsidePoints(g);

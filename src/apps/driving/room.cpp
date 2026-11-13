@@ -85,14 +85,19 @@ bool letsInThrough(const engine::LaneGraph& roads, const RightOfWay& row, engine
 // car's own announcements there (as if it went on now: clearIfGoing; it may hold a stop at the first line). A car not
 // going is passed over, as the judgement does. A crossing point the car has not announced cannot be seen: not clear. A
 // car not yet announced is further off than the look-ahead time; arriving after the car, committed through, it gives way
-// to it, as to any committed car. With no board (no junction step), nothing is judged.
-bool seenClearThrough(const RoomWorld& world, CarId me, engine::PathId next) {
+// to it, as to any committed car. With no board (no junction step), nothing is judged. A crossing point that does not
+// concern the car (made for a longer body than its own, ADR-0412) is not its to see.
+bool seenClearThrough(const RoomWorld& world, const Car& car, engine::PathId next) {
     if (!world.board || !knownPath(world.roads, next)) return true;
+    const CarId me = car.id;
+    const engine::TagMask myTags = world.routeClasses && car.vehicleClass < world.routeClasses->size()
+                                       ? (*world.routeClasses)[car.vehicleClass].tags
+                                       : engine::kEveryVehicle;
     const engine::Path& p = world.roads.paths[next.index];
     for (uint32_t k = p.crossings.first; k < p.crossings.end() && k < world.roads.pathCrossings.size(); ++k) {
         const engine::CrossingId cid = world.roads.pathCrossings[k];
         const engine::CrossingPoint& rec = world.roads.crossings[cid.index];
-        if (rec.otherSide != engine::OtherSide::Path) continue;
+        if (rec.otherSide != engine::OtherSide::Path || !rec.concerns(next, myTags)) continue;
         const MeetingAnswer* answer = world.row.answer(cid, currentPhase(world.row, rec.junction, world.now));
         engine::PathId other;
         if (!answer || myTurn(world.roads, *answer, cid, next, &other) == MyTurn::Neither) continue;
@@ -738,7 +743,7 @@ bool RoomLedger::chainHolds(const RoomWorld& world, const RoomSeat& seat, std::s
                             engine::JunctionId& at) {
     const JunctionPlans& plans = *seat.plans;
     const Car& c = *seat.car;
-    if (!seenClearThrough(world, c.id, plans.plans[k].connector)) {
+    if (!seenClearThrough(world, c, plans.plans[k].connector)) {
         why = RoomRefusal::GivesWayAhead;
         at = plans.plans[k].junction;
         return false;
@@ -757,7 +762,7 @@ bool RoomLedger::chainHolds(const RoomWorld& world, const RoomSeat& seat, std::s
                 return false;
             }
         }
-        if (!seenClearThrough(world, c.id, q.connector)) {
+        if (!seenClearThrough(world, c, q.connector)) {
             why = RoomRefusal::GivesWayAhead;
             at = jn;
             return false;
@@ -917,7 +922,7 @@ RoomAnswer RoomLedger::measure(const RoomWorld& world, const RoomSeat& seat, std
         }
         // ... and its turn there seen clear as it gets there: it could only wait for a car it gives way to with its tail in
         // the box behind (issue #284).
-        if (!seenClearThrough(world, c.id, next)) {
+        if (!seenClearThrough(world, c, next)) {
             ans.refusal = RoomRefusal::GivesWayAhead;
             return ans;
         }
@@ -933,7 +938,7 @@ RoomAnswer RoomLedger::measure(const RoomWorld& world, const RoomSeat& seat, std
     }
     ans.junctions = junctions;
     // Through junctions too close to stop between, it must not be made to wait inside the first either (issue #284).
-    if (junctions > 1 && !seenClearThrough(world, c.id, p.connector)) {
+    if (junctions > 1 && !seenClearThrough(world, c, p.connector)) {
         ans.refusal = RoomRefusal::GivesWayAhead;
         ans.at = p.junction;
         return ans;

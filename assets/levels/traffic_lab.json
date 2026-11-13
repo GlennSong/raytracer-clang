@@ -62,6 +62,8 @@
   "citysim": {
     "seed": 214,
     "vehicles": "vehicles.lua",
+    "fleet": "fleet_lab",
+    "ambientBus": true,
     "cars": 300,
     "pedestrians": 0,
     "wander": false,

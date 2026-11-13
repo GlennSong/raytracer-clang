@@ -14,9 +14,9 @@ namespace {
 
 // The section's magic and the version this build writes and reads (2: junctions list their arriving and leaving lanes;
 // 3: each path lists its crossing points; 4: a regulation covers a stretch, from and to, issue #240; 5: each path's bend
-// profile, issue #281).
+// profile, issue #281; 6: each crossing point's vehicle tags on each side, ADR-0412).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 5;
+constexpr uint32_t kVersion = 6;
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
 // A closed outline (a junction's box, a crosswalk) has at least this many corners; a track's line two points.
@@ -162,6 +162,8 @@ void putItem(BinWriter& w, const CrossingPoint& c) {
     w.put(c.aTo);
     w.put(c.otherFrom);
     w.put(c.otherTo);
+    w.put(c.aTags);
+    w.put(c.otherTags);
 }
 void putItem(BinWriter& w, const Crosswalk& c) {
     putItem(w, c.outline);
@@ -221,7 +223,8 @@ bool getItem(BinReader& r, Junction& j) {
 }
 bool getItem(BinReader& r, CrossingPoint& c) {
     return getItem(r, c.a) && getEnum(r, c.otherSide) && getEnum(r, c.meeting) && r.get(c.other) &&
-           getItem(r, c.junction) && r.get(c.aFrom) && r.get(c.aTo) && r.get(c.otherFrom) && r.get(c.otherTo);
+           getItem(r, c.junction) && r.get(c.aFrom) && r.get(c.aTo) && r.get(c.otherFrom) && r.get(c.otherTo) &&
+           r.get(c.aTags) && r.get(c.otherTags);
 }
 bool getItem(BinReader& r, Crosswalk& c) { return getItem(r, c.outline) && getItem(r, c.junction) && r.get(c.walkLink); }
 bool getItem(BinReader& r, Track& t) { return getItem(r, t.line) && r.get(t.railTrack); }
@@ -331,6 +334,17 @@ Real LaneGraph::gradeAt(PathId path, Real distanceAlong) const {
     return (valueAtStation(s, h, r.count, after) - valueAtStation(s, h, r.count, before)) / run;
 }
 
+PlanRectangle bodyOnPlan(const Vec2& front, const Vec2& rear, const Vec2& travel, Real length, Real width) {
+    PlanRectangle b;
+    b.middle = (front + rear) * Real(0.5);
+    const Vec2 span = front - rear;
+    if (span.length() > kShortestBodySpan) b.forward = normalize(span);
+    else if (travel.length() > kShortestBodySpan) b.forward = normalize(travel);
+    b.halfLength = length * Real(0.5);
+    b.halfWidth = width * Real(0.5);
+    return b;
+}
+
 Range LaneGraph::addPlanPoints(const std::vector<Vec2>& pts) {
     Range r;
     r.first = static_cast<uint32_t>(planPoints.size());
@@ -419,7 +433,9 @@ void indexCrossings(LaneGraph& g) {
         if (x.otherSide != y.otherSide) return static_cast<uint8_t>(x.otherSide) < static_cast<uint8_t>(y.otherSide);
         if (x.other != y.other) return x.other < y.other;
         if (x.aFrom != y.aFrom) return x.aFrom < y.aFrom;
-        return x.otherFrom < y.otherFrom;
+        if (x.otherFrom != y.otherFrom) return x.otherFrom < y.otherFrom;
+        if (x.aTags != y.aTags) return x.aTags < y.aTags;
+        return x.otherTags < y.otherTags;
     });
     std::size_t k = 0;
     for (uint32_t j = 0; j < g.junctions.size(); ++j) {
@@ -475,7 +491,7 @@ bool operator==(const Section& a, const Section& b) {
 bool operator==(const CrossingPoint& a, const CrossingPoint& b) {
     return a.a == b.a && a.otherSide == b.otherSide && a.meeting == b.meeting && a.other == b.other &&
            a.junction == b.junction && a.aFrom == b.aFrom && a.aTo == b.aTo && a.otherFrom == b.otherFrom &&
-           a.otherTo == b.otherTo;
+           a.otherTo == b.otherTo && a.aTags == b.aTags && a.otherTags == b.otherTags;
 }
 bool operator==(const Crosswalk& a, const Crosswalk& b) {
     return a.outline == b.outline && a.junction == b.junction && a.walkLink == b.walkLink;
@@ -826,6 +842,15 @@ std::vector<std::string> validate(const LaneGraph& g) {
         }
         if (static_cast<uint8_t>(x.meeting) >= kMeetingCount)
             out.push_back(fmt("%s: unknown kind of meeting %u", who.c_str(), static_cast<unsigned>(x.meeting)));
+        // the vehicles it concerns: every one, or some of the graph's vehicle tags (at least one)
+        for (const TagMask tags : {x.aTags, x.otherTags}) {
+            const TagMask known = g.vehicleTagNames.size() >= kMaxTagNames
+                                      ? kEveryVehicle
+                                      : (TagMask(1) << g.vehicleTagNames.size()) - 1;
+            if (tags != kEveryVehicle && (tags == 0 || (tags & ~known) != 0))
+                out.push_back(fmt("%s: concerns vehicle tags 0x%x, not a set of the graph's %zu", who.c_str(), tags,
+                                  g.vehicleTagNames.size()));
+        }
         checkStretch(who, x.a.index, x.aFrom, x.aTo);
         switch (x.otherSide) {
         case OtherSide::Path:
@@ -914,9 +939,10 @@ std::vector<std::string> validate(const LaneGraph& g) {
                 : y.other != x.other ? y.other < x.other
                 : y.aFrom <= x.aFrom;
             if (!ordered) out.push_back(fmt("%s is out of order after crossing point %u", who.c_str(), c - 1));
-            // one meeting recorded once: two records of one pair never overlap on both
+            // one meeting recorded once: two records of one pair that concern one pair of vehicles never overlap on both
             if (y.a == x.a && y.otherSide == x.otherSide && y.other == x.other && x.aFrom <= y.aTo && y.aFrom <= x.aTo &&
-                x.otherFrom <= y.otherTo && y.otherFrom <= x.otherTo)
+                x.otherFrom <= y.otherTo && y.otherFrom <= x.otherTo && (x.aTags & y.aTags) != 0 &&
+                (x.otherTags & y.otherTags) != 0)
                 out.push_back(fmt("%s and crossing point %u record one meeting of %s and %s twice (their stretches overlap on "
                                   "both)", who.c_str(), c - 1, pathName(g, x.a.index).c_str(), otherName(g, x).c_str()));
         }
@@ -1234,9 +1260,22 @@ std::string dumpCrossing(const LaneGraph& g, CrossingId id) {
                                   ? "between " + junctionOf(c.a.index) + " and " + junctionOf(c.other)
                                   : std::string("on the road");
     const std::string a = pathName(g, c.a.index), b = otherName(g, c);
-    return fmt("crossing point %u, %s: %s %s %s; on %s from %.1f to %.1f m, on %s from %.1f to %.1f m\n", id.index,
+    // the vehicles it concerns, by tag name, where not every vehicle
+    auto tagWords = [&](TagMask tags) {
+        std::string s;
+        for (uint32_t i = 0; i < g.vehicleTagNames.size() && i < kMaxTagNames; ++i)
+            if (tags & (TagMask(1) << i)) s += (s.empty() ? "" : ", ") + g.vehicleTagNames[i];
+        return s;
+    };
+    const std::string concerns = c.aTags == kEveryVehicle && c.otherTags == kEveryVehicle
+                                     ? std::string()
+                                     : fmt("; for %s on %s, %s on %s",
+                                           c.aTags == kEveryVehicle ? "any vehicle" : tagWords(c.aTags).c_str(), a.c_str(),
+                                           c.otherTags == kEveryVehicle ? "any vehicle" : tagWords(c.otherTags).c_str(),
+                                           b.c_str());
+    return fmt("crossing point %u, %s: %s %s %s; on %s from %.1f to %.1f m, on %s from %.1f to %.1f m%s\n", id.index,
                where.c_str(), a.c_str(), meetingWord(c.meeting), b.c_str(), a.c_str(), c.aFrom, c.aTo, b.c_str(),
-               c.otherFrom, c.otherTo);
+               c.otherFrom, c.otherTo, concerns.c_str());
 }
 
 std::string dumpText(const LaneGraph& g) {

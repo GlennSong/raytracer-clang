@@ -1,6 +1,7 @@
 #include "apps/driving/measure.h"
 
 #include "apps/driving/act.h"   // lookAheadDistance: how far a driver looks, for reading its own limit as it does
+#include "apps/driving/route.h"   // bindRouteClass: a class's vehicle tags, for the records that concern it
 
 #include <nlohmann/json.hpp>
 
@@ -442,24 +443,19 @@ void OverlapRow::note(const std::vector<std::pair<OverlapPair, engine::PathId>>&
 // ---- Body against body -----------------------------------------------------------------------------------------------
 
 PlanBody planBody(CarId car, const CarPose& pose, double length, double width) {
+    // The lane graph's one body rule (engine::bodyOnPlan), so what is measured here is what the road builder swept.
+    const engine::PlanRectangle r =
+        engine::bodyOnPlan(engine::Vec2(pose.front.x, pose.front.z), engine::Vec2(pose.rear.x, pose.rear.z),
+                           engine::Vec2(pose.travel.x, pose.travel.z), length, width);
     PlanBody b;
     b.car = car;
-    b.x = (pose.front.x + pose.rear.x) * 0.5;
-    b.z = (pose.front.z + pose.rear.z) * 0.5;
+    b.x = r.middle.x;
+    b.z = r.middle.y;
     b.height = (pose.front.y + pose.rear.y) * 0.5;
-    double ux = pose.body.x, uz = pose.body.z;
-    double n = std::sqrt(ux * ux + uz * uz);
-    if (!(n > 0)) {
-        ux = pose.travel.x;
-        uz = pose.travel.z;
-        n = std::sqrt(ux * ux + uz * uz);
-    }
-    if (n > 0) {
-        b.ux = ux / n;
-        b.uz = uz / n;
-    }
-    b.halfLength = length * 0.5;
-    b.halfWidth = width * 0.5;
+    b.ux = r.forward.x;
+    b.uz = r.forward.y;
+    b.halfLength = r.halfLength;
+    b.halfWidth = r.halfWidth;
     return b;
 }
 
@@ -556,6 +552,11 @@ TouchKind sortTouch(const engine::LaneGraph& roads, const VehicleClasses& classe
     // enum's order wins.
     TouchKind best = TouchKind::NoRecordSwing;
     bool found = false;
+    // Only records that concern both cars (ADR-0412: one made for a longer body is not theirs).
+    const engine::TagMask tagsA = a.vehicleClass < classes.size() ? bindRouteClass(roads, classes.at(a.vehicleClass)).tags
+                                                                  : engine::kEveryVehicle;
+    const engine::TagMask tagsB = b.vehicleClass < classes.size() ? bindRouteClass(roads, classes.at(b.vehicleClass)).tags
+                                                                  : engine::kEveryVehicle;
     for (std::size_t i = 0; i < ba.count; ++i) {
         const engine::PathId pa = ba.pieces[i].path;
         const engine::Path& path = roads.paths[pa.index];
@@ -565,6 +566,7 @@ TouchKind sortTouch(const engine::LaneGraph& roads, const VehicleClasses& classe
             if (rec.otherSide != engine::OtherSide::Path) continue;
             const bool aIsA = rec.a == pa;
             const engine::PathId other = aIsA ? rec.otherPath() : rec.a;
+            if (!rec.concerns(pa, tagsA) || !rec.concerns(other, tagsB)) continue;
             const Real myFrom = aIsA ? rec.aFrom : rec.otherFrom, myTo = aIsA ? rec.aTo : rec.otherTo;
             const Real theirFrom = aIsA ? rec.otherFrom : rec.aFrom, theirTo = aIsA ? rec.otherTo : rec.aTo;
             if (!coversStretch(ba, pa, myFrom, myTo) || !coversStretch(bb, other, theirFrom, theirTo)) continue;

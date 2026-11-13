@@ -77,6 +77,8 @@ constexpr NameIndex kNoName = 0xFFFFFFFFu;
 // A set of names from one table: bit i set = name i is in the set. So a table holds at most kMaxTagNames names.
 using TagMask = uint32_t;
 constexpr uint32_t kMaxTagNames = 32;
+// Every vehicle, whatever its tags (a crossing point's CrossingPoint::aTags / otherTags).
+constexpr TagMask kEveryVehicle = ~TagMask(0);
 
 // A stretch of one of the graph's shared arrays: `count` entries from `first`.
 struct Range {
@@ -197,8 +199,18 @@ struct CrossingPoint {
     JunctionId junction;                           // the junction it lies in; none for one out on a road, or across two
     Real aFrom = 0, aTo = 0;                       // along a
     Real otherFrom = 0, otherTo = 0;               // along the other
+    // WHICH VEHICLES IT CONCERNS, on each side (issue #284 item 9, ADR-0412): a vehicle on `a` is concerned when it
+    // carries one of aTags, one on the other path when it carries one of otherTags (bits of vehicleTagNames);
+    // kEveryVehicle concerns every vehicle. Where long bodies cut inside a bend the road builder records a meeting once
+    // for each pair of body sizes that meet differently, so two vehicles meet only where their own bodies could.
+    TagMask aTags = kEveryVehicle, otherTags = kEveryVehicle;
 
     PathId otherPath() const { return otherSide == OtherSide::Path ? PathId(other) : PathId(); }
+    // Whether it concerns a vehicle carrying `vehicleTags` on `path` (one of its two paths; a path it does not name: no).
+    bool concerns(PathId path, TagMask vehicleTags) const {
+        const TagMask mine = path == a ? aTags : (otherSide == OtherSide::Path && path.index == other) ? otherTags : 0;
+        return mine == kEveryVehicle || (mine & vehicleTags) != 0;
+    }
     CrosswalkId otherCrosswalk() const { return otherSide == OtherSide::Crosswalk ? CrosswalkId(other) : CrosswalkId(); }
     TrackId otherTrack() const { return otherSide == OtherSide::Track ? TrackId(other) : TrackId(); }
 };
@@ -326,6 +338,28 @@ bool operator==(const Regulation& a, const Regulation& b);
 bool operator==(const CarSpace& a, const CarSpace& b);
 bool operator==(const LaneGraph& a, const LaneGraph& b);   // field for field, exactly
 inline bool operator!=(const LaneGraph& a, const LaneGraph& b) { return !(a == b); }
+
+// A VEHICLE'S BODY ON THE PLAN (issue #284, review item 9, ADR-0412): the ONE rule for where a body that follows a
+// path lies, read by the road builder (does a turn fit on the paved road, which paths' bodies can touch) and by the
+// driving model (where a car is drawn and measured, driving/traffic_state.h carPose, driving/measure.h planBody), so the
+// graph and the measurements agree. The middle of the front bumper is on the path; the middle of the rear bumper is on
+// the path `length` metres back along it (and along the paths that led to it); the body is a rectangle `length` long
+// and `width` wide, centred halfway between the two bumpers and pointing from the rear one to the front one. Through a
+// bend the two bumpers are on the curve and the body lies along the chord between them, so its middle cuts inside the
+// bend: a 12 m bus on a 10 m radius turn lies about 1.7 m inside the line its front follows (the SWING; traffic
+// engineers call it off-tracking).
+struct PlanRectangle {
+    Vec2 middle;
+    Vec2 forward = Vec2(1, 0);   // unit, from the rear end to the front end
+    Real halfLength = 0, halfWidth = 0;
+    // The point on its middle line `share` of the way from its rear end (0) to its front end (1).
+    Vec2 alongMiddle(Real share) const { return middle + forward * ((share - Real(0.5)) * 2 * halfLength); }
+};
+// Bumpers closer together than this are one place: the body then points the way the front travels (metres).
+constexpr Real kShortestBodySpan = 1e-9;
+// The body whose front bumper's middle is at `front` and rear bumper's middle at `rear` (plan points); `travel` (the
+// way the front is going) where the two are one place, and failing that +x.
+PlanRectangle bodyOnPlan(const Vec2& front, const Vec2& rear, const Vec2& travel, Real length, Real width);
 
 // FILES THE CROSSING POINTS once g.crossings holds them in any order: sorts them junction by junction (those on no
 // junction last), then by (a, other side, other, aFrom); sets each junction's crossings range; and lists each path's

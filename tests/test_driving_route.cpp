@@ -577,3 +577,81 @@ TEST_CASE(route_closed_chains_close_the_chain_not_the_turn) {
     CHECK(!c.closedChain(threeTurns, 2, &never));
     CHECK(buildClosedChains({}, {}).empty());
 }
+
+#ifdef RT_ROADS_LANES
+#include "engine/procgen/city/roads/lanes/lane_graph_build.h"
+#include "engine/procgen/city/roads/lanes/lanes.h"
+
+#include <memory>
+
+namespace {
+
+// A real junction's lane graph, as the road builder makes it for these vehicle classes (driving::tagSizes); with
+// `withLength` false, the same sizes swept as points (each body's length left out, as before #284 item 9).
+engine::roads::lanes::LaneGraphBuild builtFor(const engine::roads::lanes::Result& roads, const VehicleClasses& classes,
+                                             bool withLength) {
+    engine::roads::lanes::LaneGraphOptions o;
+    for (const TagSize& t : tagSizes(classes)) {
+        engine::roads::lanes::VehicleSize v;
+        v.tag = t.tag;
+        v.turningRadius = t.turningRadius;
+        v.width = t.width;
+        v.length = withLength ? t.length : 0;
+        o.vehicles.push_back(v);
+    }
+    return engine::roads::lanes::buildLaneGraph(roads, o);
+}
+
+}  // namespace
+
+TEST_CASE(route_a_long_body_is_never_sent_round_a_turn_its_swing_takes_off_the_road) {
+    // ITEM 9 OF REVIEW #284 (ADR-0412). The road builder sweeps each turn at each vehicle's length: a 12 m bus whose turning
+    // circle fits a turn can still swing its middle over the kerb there, and that turn is closed to it (its tag) while a
+    // car's stays open. The router reads only the tags, so it never sends the bus that way. On the lab's hill junction.
+    const std::unique_ptr<engine::roads::lanes::Result> roads = engine::roads::lanes::build(
+        engine::roads::lanes::RoadLabGraph::load(std::string(RT_SOURCE_DIR) + "/assets/lanelab/hill_junction.json"));
+    VehicleClasses classes;
+    classes.add(driving_test::testCarClass({"test_car_tag"}));
+    VehicleClass bus = deriveVehicleClass("test_bus", 12.0, 2.55, 5.7, 38);
+    bus.tags = {"test_bus_tag"};
+    classes.add(bus);
+    const engine::roads::lanes::LaneGraphBuild asPoints = builtFor(*roads, classes, false);
+    const engine::roads::lanes::LaneGraphBuild swept = builtFor(*roads, classes, true);
+    const engine::LaneGraph& g = swept.graph;
+    const RouteClass car = bindRouteClass(g, classes.at(0)), longBody = bindRouteClass(g, classes.at(1));
+    // The connectors open to the bus swept as a point and closed to it swept at its length, open to the car either way.
+    uint32_t closedForLength = 0, routed = 0;
+    for (uint32_t c = 0; c < g.paths.size(); ++c) {
+        const engine::Path& p = g.paths[c];
+        if (p.kind != engine::PathKind::Connector || mayUse(g, longBody, engine::PathId(c))) continue;
+        bool openAsPoint = false;
+        for (uint32_t k = 0; k < asPoints.graph.paths.size(); ++k) {
+            const engine::Path& q = asPoints.graph.paths[k];
+            if (q.kind == engine::PathKind::Connector && q.from == p.from && asPoints.graph.nextPaths[q.next.first] ==
+                                                                                   g.nextPaths[p.next.first])
+                openAsPoint = mayUse(asPoints.graph, bindRouteClass(asPoints.graph, classes.at(1)), engine::PathId(k));
+        }
+        if (!openAsPoint || !mayUse(g, car, engine::PathId(c))) continue;
+        ++closedForLength;
+        CHECK(p.tightestRadius >= classes.at(1).tightestTurnRadius);   // closed for its swing, not its turning circle
+        // A trip from the lane before the turn to the lane after it: the car takes the turn; the bus never does.
+        const engine::PathId from = p.from, to = g.nextPaths[p.next.first];
+        const PathPoint start = at(from, g.paths[from.index].length * 0.5);
+        const PathPoint end = at(to, std::min<Real>(10, g.paths[to.index].length * 0.5));
+        const Route carRoute = findRoute(g, studyRoads(g), car, start, end);
+        const Route busRoute = findRoute(g, studyRoads(g), longBody, start, end);
+        bool carTurns = false, busTurns = false;
+        for (const RouteTurn& t : carRoute.turns) carTurns = carTurns || t.connector == engine::PathId(c);
+        for (const RouteTurn& t : busRoute.turns) busTurns = busTurns || t.connector == engine::PathId(c);
+        CHECK(carRoute.found && carTurns);
+        CHECK(!busTurns);
+        routed += busRoute.found ? 1 : 0;
+    }
+    const engine::NameIndex busTag = engine::LaneGraph::nameIndex(g.vehicleTagNames, "test_bus_tag");
+    std::printf("    hill junction: %u connectors closed to the bus only for its length (%u of them with another way round "
+                "for it); closed to it: %u swept as a point, %u at its length\n", closedForLength, routed,
+                busTag < asPoints.closedTo.size() ? asPoints.closedTo[busTag] : 0u,
+                busTag < swept.closedTo.size() ? swept.closedTo[busTag] : 0u);
+    CHECK(closedForLength > 0u);
+}
+#endif  // RT_ROADS_LANES

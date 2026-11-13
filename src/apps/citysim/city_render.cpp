@@ -802,7 +802,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
     // THE ROAD THE NEW MODEL DRIVES ON (v2 only: a v1 level does none of this): the level's lane graph, read from its
     // cache or built from the roads and saved (lane_graph_cache.h). Its connectors are checked against the fleet's own
-    // vehicles: one turning radius and width per vehicle tag, the most demanding class carrying it (driving::tagSizes).
+    // vehicles: one turning radius, width and length per vehicle tag, the most demanding class carrying it
+    // (driving::tagSizes); the length sweeps long bodies through bends (ADR-0412).
     if (const driving::Driving* d2 = sim_.drivingV2()) {
         engine::roads::lanes::LaneGraphOptions lgo;
         std::string tagsLine;
@@ -811,15 +812,18 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             v.tag = t.tag;
             v.turningRadius = t.turningRadius;
             v.width = t.width;
+            v.length = t.length;
             lgo.vehicles.push_back(v);
-            char b[96];
-            std::snprintf(b, sizeof b, "%s%s %.2f m / %.2f m", tagsLine.empty() ? "" : ", ", t.tag.c_str(), t.turningRadius, t.width);
+            char b[128];
+            std::snprintf(b, sizeof b, "%s%s %.2f m / %.2f m / %.2f m", tagsLine.empty() ? "" : ", ", t.tag.c_str(),
+                          t.turningRadius, t.width, t.length);
             tagsLine += b;
         }
         if (lgo.vehicles.empty())
             LOG_WARN << "[citysim] driving v2: no vehicle class carries a tag, so no connector is open to anyone";
         else
-            LOG_INFO << "[citysim] driving v2: connectors checked for (tag, tightest turning radius / width) " << tagsLine;
+            LOG_INFO << "[citysim] driving v2: connectors checked for (tag, tightest turning radius / width / length) "
+                     << tagsLine;
         engine::bundle::LevelInputs li;
         std::string err;
         if (params_.levelPath.empty() || !engine::bundle::loadLevelInputs(params_.levelPath, li, &err)) {

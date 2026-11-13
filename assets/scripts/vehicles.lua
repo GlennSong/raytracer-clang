@@ -781,11 +781,20 @@ local function isBus(s) return s.kit == "bus" or s.kit == "bus_standing" end
 for _, s in ipairs(FLEET_SLOTS) do if not isBus(s) and s.kit ~= "fire_engine" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
 for _, s in ipairs(FLEET_SLOTS) do if s.kit == "fire_engine" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
 for _, s in ipairs(FLEET_SLOTS) do if isBus(s) then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
+-- THE TRAFFIC LAB'S FLEET (#284 item 9): the ordinary cars and trucks (no cab, no fire engine) and ONE city bus last,
+-- for a level that puts the bus in its ambient rotation (citysim.ambientBus): every sixteenth car is then a 11.5 m bus,
+-- so the driving model's lab tests always have long bodies turning among the cars. The box truck is the lorry.
+local LAB_SLOTS = {}
+for _, s in ipairs(FLEET_SLOTS) do
+  if not isBus(s) and s.kit ~= "fire_engine" and s.kit ~= "taxi" then LAB_SLOTS[#LAB_SLOTS + 1] = s end
+end
+for _, s in ipairs(FLEET_SLOTS) do if s.kit == "bus" then LAB_SLOTS[#LAB_SLOTS + 1] = s end end
 
 -- The named fleets. A level picks one with `citysim.fleet` (level_loader points vehicle.fleet at it);
 -- without one it gets the kit fleet.
 vehicle.fleet_kit = catalogue(FLEET_SLOTS)
 vehicle.fleet_mixed = catalogue(MIXED_SLOTS)
+vehicle.fleet_lab = catalogue(LAB_SLOTS)
 vehicle.fleet = vehicle.fleet_kit
 
 return vehicle

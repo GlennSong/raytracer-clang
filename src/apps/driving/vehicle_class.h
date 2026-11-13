@@ -114,15 +114,18 @@ private:
 };
 
 // WHAT EACH VEHICLE TAG ASKS OF A PATH THROUGH A JUNCTION. The road builder opens each connector to vehicle TAGS (a
-// lane's `open_to` names tags, design 5.4), checking it against one turning radius and one width per tag. A class may
-// use a path open to any one of its tags (route.h mayUse), so each tag must stand for the most demanding class that
-// carries it: its turning radius is the LARGEST tightest-turn radius among them, its width the widest body. Then a
-// connector open to a tag is one every class with that tag can drive. (Radii and widths are the classes' own, derived
-// from the body and the wheels: deriveVehicleClass.)
+// lane's `open_to` names tags, design 5.4), checking it against one turning radius, one width and one length per tag. A
+// class may use a path open to any one of its tags (route.h mayUse), so each tag must stand for the most demanding class
+// that carries it: its turning radius is the LARGEST tightest-turn radius among them, its width the widest body, its
+// length the longest (the body that cuts furthest inside a bend, ADR-0412). Then a connector open to a tag is one every
+// class with that tag can drive, and the crossing points reach as far as any of their bodies swing. (Radii, widths and
+// lengths are the classes' own, derived from the body and the wheels: deriveVehicleClass. A trailer's length is not
+// in it: the body the driving model places, carPose, is the vehicle's own, and nothing places a trailer yet.)
 struct TagSize {
     std::string tag;
     Real turningRadius = 0;
     Real width = 0;
+    Real length = 0;
 };
 // Every tag any class carries, sorted by name, so the list (and the road checked against it) does not depend on the
 // order the classes were added in.

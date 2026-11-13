@@ -95,11 +95,13 @@ std::vector<TagSize> tagSizes(const VehicleClasses& classes) {
                 t.tag = tag;
                 t.turningRadius = c.tightestTurnRadius;
                 t.width = c.width;
+                t.length = c.length;
                 out.insert(it, t);
                 continue;
             }
             it->turningRadius = std::max(it->turningRadius, c.tightestTurnRadius);
             it->width = std::max(it->width, c.width);
+            it->length = std::max(it->length, c.length);
         }
     return out;
 }

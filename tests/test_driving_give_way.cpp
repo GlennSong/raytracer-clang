@@ -43,8 +43,10 @@
 //  284 e. rolling over the line does not commit: the main road still goes first;
 //  284 f1. a claim through close junctions is granted only with the next junction's turn seen clear;
 //  284 f2. ten minutes at two close lights: nobody enters on red, nobody rests in a box;
-//  284 h. congested random traffic of mixed classes: no two bodies on one path or a shared stretch touch; and the
-//         light programmes are checked when the rules are handed over.
+//  284 h. congested random traffic of mixed classes: no two bodies touch anywhere (12 m buses included); and the
+//         light programmes are checked when the rules are handed over;
+//  284 i. a 12 m bus cutting inside its far turn beside a car's near turn: ordered by a crossing point once the road
+//         builder sweeps bodies at their length (ADR-0412), touching where no record lay before.
 
 #include "test_framework.h"
 
@@ -281,6 +283,36 @@ bool overlap(const Footprint& a, const Footprint& b) {
     return true;
 }
 
+// THE SCENARIOS' VEHICLE CLASSES: 0 the ordinary test car (4.5 m), 1 a 12 m bus, 2 a slow, loaded small truck (the
+// lab's #263 cases): 7 m, very slow to speed up, never faster than 6 m/s. Each carries the test vehicle tag (every test
+// road's but sweptFor's is open to it alone) and a tag of its own (sweptFor's roads are open to those: a kind of
+// vehicle, as in a level's fleet).
+constexpr const char* kSimCarTag = "test_sim_car";
+constexpr const char* kSimBusTag = "test_sim_bus";
+constexpr const char* kSimTruckTag = "test_sim_truck";
+VehicleClasses simClasses() {
+    VehicleClasses classes;
+    classes.add(driving_test::testCarClass({driving_test::kTestVehicleTag, kSimCarTag}));
+    VehicleClass bus = deriveVehicleClass("test_bus", 12.0, 2.5, 6.0, 40);
+    bus.tags = {driving_test::kTestVehicleTag, kSimBusTag};
+    classes.add(bus);
+    VehicleClass truck = deriveVehicleClass("test_slow_truck", 7.0, 2.3, 4.5, 40);
+    truck.tags = {driving_test::kTestVehicleTag, kSimTruckTag};
+    truck.speedUp = 0.2;
+    truck.topSpeed = 6.0;
+    classes.add(truck);
+    return classes;
+}
+// Test roads open to each class by its own tag, whose crossing points are found for those bodies, swept at their length
+// and recorded for the sizes they concern (ADR-0412), as the road builder finds them for a level's own fleet.
+TestRoadSpec sweptFor(TestRoadSpec spec = TestRoadSpec()) {
+    spec.vehicleTags = {kSimBusTag, kSimCarTag, kSimTruckTag};
+    spec.crossingBodies.clear();
+    for (const TagSize& t : tagSizes(simClasses()))
+        if (t.tag != driving_test::kTestVehicleTag) spec.crossingBodies.push_back(t);
+    return spec;
+}
+
 // ONE SCENARIO: the roads, the model on them with the junction step, and what was seen while it ran.
 struct Sim {
     TestRoads t;
@@ -324,17 +356,8 @@ struct Sim {
     // (issue #264), with the rule set's room_to_wait_inside as `roomToWaitInside`.
     Sim(TestRoads roads, const char* control, uint32_t decideEvery = DrivingSettings::kDefaultDecideEveryTicks,
         bool lights = false, bool room = false, bool roomWaitInside = true)
-        : t(std::move(roads)), d(&t.graph), lightsOn(lights), roomOn(room), roomToWaitInside(roomWaitInside) {
-        classes.add(driving_test::testCarClass());
-        VehicleClass bus = deriveVehicleClass("test_bus", 12.0, 2.5, 6.0, 40);
-        bus.tags = {driving_test::kTestVehicleTag};
-        classes.add(bus);
-        // Class 2: a slow, loaded small truck (the lab's #263 cases): 7 m, very slow to speed up, never faster than 6 m/s.
-        VehicleClass truck = deriveVehicleClass("test_slow_truck", 7.0, 2.3, 4.5, 40);
-        truck.tags = {driving_test::kTestVehicleTag};
-        truck.speedUp = 0.2;
-        truck.topSpeed = 6.0;
-        classes.add(truck);
+        : t(std::move(roads)), d(&t.graph), classes(simClasses()), lightsOn(lights), roomOn(room),
+          roomToWaitInside(roomWaitInside) {
         d.setVehicleClasses(classes);
         DrivingSettings s;
         s.decideEveryTicks = decideEvery;
@@ -2431,10 +2454,11 @@ TEST_CASE(give_way_284_h_congested_random_traffic_mixed_classes_no_body_touches_
     // uncontrolled four-way, an all-way stop and a four-way with the lab's lights, with room beyond: queues stand on
     // every arm. Every pair of bodies is checked every tick: no two on one path, or both on the stretches of a crossing
     // point between their paths, may touch; no ring of waiting with a right of way in it (a deadlock); nobody waits for no
-    // reason; nobody rests in the box but by giving way. Pairs that touch OUTSIDE every shared stretch are printed, not
-    // checked: a 12 m bus's straight body cuts inside a tight turn by about 1.5 m and reaches a car beside its path, which
-    // the lane graph's stretches do not allow for yet (review #284 item 9, its own task; with all of #284's fixes switched
-    // off the same run shows the same kind).
+    // reason; nobody rests in the box but by giving way. And (review #284 item 9, ADR-0412) no two bodies touch ANYWHERE:
+    // a 12 m bus's straight body cuts inside a tight turn by about 1.5 m and reached a car beside its path where no
+    // crossing point lay (three such buses, one per control, before the crossing points were found for the scenarios'
+    // own bodies swept at their lengths: sweptFor). Both this test's own overlap check and the measurements' every-pair
+    // body check must see nothing.
     struct Case {
         const char* name;
         const char* control;
@@ -2442,8 +2466,10 @@ TEST_CASE(give_way_284_h_congested_random_traffic_mixed_classes_no_body_touches_
     };
     for (const Case& k : {Case{"uncontrolled", kUncontrolled, false}, Case{"all-way stop", kAllWayStop, false},
                           Case{"lights", kLabLights, true}}) {
-        Sim s(driving_test::gridRoads(3, 3), k.control, DrivingSettings::kDefaultDecideEveryTicks, k.lights, true);
+        Sim s(driving_test::gridRoads(3, 3, sweptFor()), k.control, DrivingSettings::kDefaultDecideEveryTicks, k.lights, true);
         CHECK(s.ok);
+        Measurements m;
+        s.d.attachMeasurements(&m);
         congestedTraffic(s, 1, 1, {kEast, kNorth, kWest, kSouth}, 5 * 60);
         uint64_t deadlocks = 0;
         for (const WaitLoop& l : s.loops) deadlocks += l.kind == LoopClass::Deadlock;
@@ -2460,7 +2486,16 @@ TEST_CASE(give_way_284_h_congested_random_traffic_mixed_classes_no_body_touches_
             std::printf("      cars %u and %u overlapped%s\n", p.first, p.second,
                         s.overlappingWhereTheyMeet.count(p) ? " on one path or a shared stretch"
                                                             : " outside every shared stretch (a long body in a bend)");
-        CHECK(s.overlappingWhereTheyMeet.empty());
+        uint64_t touchSpells = 0;
+        for (uint8_t t = 0; t < kTouchKindCount; ++t) {
+            touchSpells += m.rows().touches.spellsByKind[t];
+            if (m.rows().touches.spellsByKind[t])
+                std::printf("      every-pair check: %llu spells %s\n",
+                            static_cast<unsigned long long>(m.rows().touches.spellsByKind[t]),
+                            touchKindWords(static_cast<TouchKind>(t)));
+        }
+        CHECK(s.overlapping.empty());
+        CHECK(touchSpells == 0u);
         CHECK(deadlocks == 0);
         CHECK(s.noReason == 0);
         CHECK(s.boxTicksNotAllowed == 0);
@@ -2482,6 +2517,78 @@ TEST_CASE(give_way_284_h_the_light_programmes_are_checked_when_the_rules_are_han
     Sim dark(driving_test::gridRoads(3, 3), kLabLights);
     CHECK(dark.ok);
     CHECK(dark.d.signalProblems().empty());
+}
+
+namespace {
+
+// A 12 M BUS TURNING BESIDE A CAR (review #284 item 9): at the middle junction of the 3 x 3 grid, the bus arriving
+// heading west takes the far turn to the south (an 11 m quarter circle) while a car arriving heading north takes the
+// near turn to the east. The two centre lines never come within touching distance, but the bus's body lies on the
+// chord between its bumpers and cuts about 1.5 m inside its turn, across the car's. The crossing points are found for
+// the scenarios' own bodies (sweptFor): `sweepLength` false sweeps them as before bodies had lengths (each place a
+// point on the line, the same widths), true at their lengths. What the measurements' every-pair body check saw, by kind.
+struct BusBesideCar {
+    uint64_t spells[kTouchKindCount] = {};
+    uint64_t allSpells = 0;
+    bool recordBetween = false;     // a crossing point between the bus's turn and the car's
+    uint64_t gaveWay = 0;           // drivers who decided to give way
+    uint64_t arrived = 0;
+};
+BusBesideCar busBesideCar(bool sweepLength) {
+    TestRoadSpec spec = sweptFor();
+    if (!sweepLength)
+        for (TagSize& b : spec.crossingBodies) b.length = 0;
+    Sim s(driving_test::gridRoads(3, 3, spec), kUncontrolled);
+    CHECK(s.ok);
+    Measurements m;
+    s.d.attachMeasurements(&m);
+    const engine::PathId busLane = s.t.laneArriving(1, 1, Heading::West, 0), busOut = s.t.laneLeaving(1, 1, Heading::South, 0);
+    const engine::PathId carLane = s.t.laneArriving(1, 1, Heading::North, 0), carOut = s.t.laneLeaving(1, 1, Heading::East, 0);
+    const engine::PathId busTurn = s.t.connector(1, 1, Heading::West, 0, Heading::South, 0);
+    const engine::PathId carTurn = s.t.connector(1, 1, Heading::North, 0, Heading::East, 0);
+    // The bus 15 m from its line, the car 6 m from its own (both from rest): the car reaches its turn while the bus is
+    // half round its own. (Placed further back, the car comes after the bus has gone, and with the record nothing touches
+    // either; swept as points the bus still reaches it from 6 m back to 40.)
+    const Real carBack = 6;
+    s.add(1, busLane, s.t.graph.paths[busLane.index].length - 15, busOut, 60, 1);
+    s.add(2, carLane, s.t.graph.paths[carLane.index].length - carBack, carOut, 60, 0);
+    s.run(40);
+    BusBesideCar out;
+    for (uint8_t k = 0; k < kTouchKindCount; ++k) {
+        out.spells[k] = m.rows().touches.spellsByKind[k];
+        out.allSpells += out.spells[k];
+    }
+    for (const engine::CrossingPoint& x : s.t.graph.crossings)
+        if (x.otherSide == engine::OtherSide::Path &&
+            ((x.a == busTurn && x.otherPath() == carTurn) || (x.a == carTurn && x.otherPath() == busTurn)))
+            out.recordBetween = true;
+    out.gaveWay = s.d.junctionPlanCounts().decidedGiveWay;
+    out.arrived = s.arrived;
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE(give_way_284_i_a_bus_cutting_inside_its_turn_is_ordered_against_the_car_beside_it) {
+    // ITEM 9. Swept as points on the line, the two turns have no crossing point, both drivers go, and the every-pair body
+    // check sees the bus's body reach the car where no record lets anyone know: "no record, body swing". Swept at their
+    // lengths (ADR-0412), the two turns get a crossing point, the conflict resolver orders the two cars on it like any
+    // other, one gives way, and no two bodies touch at all.
+    const BusBesideCar before = busBesideCar(false), after = busBesideCar(true);
+    const uint8_t swing = static_cast<uint8_t>(TouchKind::NoRecordSwing);
+    std::printf("    a 12 m bus beside a car: swept as points %llu touch spells (%llu body swing), record between the turns %d, "
+                "%llu gave way; swept at their lengths %llu touch spells, record %d, %llu gave way; arrived %llu and %llu\n",
+                static_cast<unsigned long long>(before.allSpells), static_cast<unsigned long long>(before.spells[swing]),
+                before.recordBetween, static_cast<unsigned long long>(before.gaveWay),
+                static_cast<unsigned long long>(after.allSpells), after.recordBetween,
+                static_cast<unsigned long long>(after.gaveWay), static_cast<unsigned long long>(before.arrived),
+                static_cast<unsigned long long>(after.arrived));
+    CHECK(!before.recordBetween);
+    CHECK(before.spells[swing] > 0u);
+    CHECK(after.recordBetween);
+    CHECK(after.allSpells == 0u);
+    CHECK(after.gaveWay > 0u);
+    CHECK(after.arrived == 2u);
 }
 
 #endif  // RT_ENABLE_SCRIPTING

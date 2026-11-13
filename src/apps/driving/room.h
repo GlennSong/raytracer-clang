@@ -295,6 +295,9 @@ struct RoomWorld {
     const AnnouncementBoard* board = nullptr;
     Real gapNeeded = 0;
     Real reaction = 0;
+    // Each vehicle class bound to the road (by class index): its vehicle tags, for the crossing points that concern it
+    // (ADR-0412: a record made for a longer body is not the class's). Null: every record concerns every car.
+    const std::vector<RouteClass>* routeClasses = nullptr;
 };
 
 // HOW THE ROOM WENT, since the ledger was made.

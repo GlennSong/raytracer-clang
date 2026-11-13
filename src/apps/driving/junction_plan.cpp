@@ -131,7 +131,7 @@ const char* turnWords(engine::Turn t) {
 }
 
 bool findWaitingPoints(const LaneGraph& roads, const RightOfWay& row, PathId connector, Real carLength,
-                       JunctionPlan& plan) {
+                       JunctionPlan& plan, engine::TagMask tags) {
     plan.waitingAt.fill(0);
     plan.waitingAt[0] = 0;   // the line
     plan.waitingCount = 1;
@@ -173,7 +173,7 @@ bool findWaitingPoints(const LaneGraph& roads, const RightOfWay& row, PathId con
     plan.commitAt = path.length;
     for (uint32_t i = path.crossings.first; i < path.crossings.end() && i < roads.pathCrossings.size(); ++i) {
         const engine::CrossingPoint& rec = roads.crossings[roads.pathCrossings[i].index];
-        if (rec.meeting == engine::Meeting::Split) continue;
+        if (rec.meeting == engine::Meeting::Split || !rec.concerns(connector, tags)) continue;
         const bool iAmA = rec.a == connector;
         const Real from = iAmA ? rec.aFrom : rec.otherFrom, to = iAmA ? rec.aTo : rec.otherTo;
         if (to > last) plan.commitAt = std::min(plan.commitAt, std::max(from, last));
@@ -182,7 +182,8 @@ bool findWaitingPoints(const LaneGraph& roads, const RightOfWay& row, PathId con
 }
 
 void updateJunctionPlans(const LaneGraph& roads, const RightOfWay& row, const Car& car, Real carLength,
-                         const WayAhead& way, uint64_t tick, double seconds, JunctionPlans& plans, PlanUpdate& out) {
+                         const WayAhead& way, uint64_t tick, double seconds, JunctionPlans& plans, PlanUpdate& out,
+                         engine::TagMask tags) {
     const JunctionPlans old = plans;
     std::array<uint8_t, kMaxJunctionPlans> kept{};
     plans.count = 0;
@@ -229,7 +230,7 @@ void updateJunctionPlans(const LaneGraph& roads, const RightOfWay& row, const Ca
                 plan.startOdometer = car.odometer + startAt;
                 plan.madeAtTick = tick;
                 plan.crossingCount = path.crossings.count;
-                if (!findWaitingPoints(roads, row, p, carLength, plan)) out.waitingPointsCut = true;
+                if (!findWaitingPoints(roads, row, p, carLength, plan, tags)) out.waitingPointsCut = true;
                 plans.plans[plans.count++] = plan;
                 ++out.made;
                 note(out, tick, seconds, PlanChange::Made, plan);

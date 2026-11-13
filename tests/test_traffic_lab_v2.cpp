@@ -55,6 +55,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -114,8 +115,9 @@ struct LoadedCity {
     bool ok = false;
 
     // Loads `level`, sets its citysim block's driving model to `driving` and its rule set to `rules` (empty: as the
-    // level says), builds the city.
-    LoadedCity(const std::string& level, const std::string& driving, const std::string& rules = std::string()) {
+    // level says), lets `adjust` change anything else in the block (none: nothing), builds the city.
+    LoadedCity(const std::string& level, const std::string& driving, const std::string& rules = std::string(),
+               const std::function<void(CitySimConfig&)>& adjust = nullptr) {
         uploader = std::make_unique<RendererMeshUploader>(*renderer);
         assets = std::make_unique<AssetManager>(*uploader);
         if (!LevelLoader::load(std::string(RT_SOURCE_DIR) + "/assets/levels/" + level, world, *renderer, view, *assets,
@@ -124,17 +126,18 @@ struct LoadedCity {
         world.each<CitySimConfig>([&](Entity, CitySimConfig& c) {
             if (!driving.empty()) c.driving = driving;
             if (!rules.empty()) c.drivingRules = rules;
+            if (adjust) adjust(c);
         });
         ok = city.build(world, assets.get(), nullptr);
     }
 };
 
 // Steps `city` `seconds` in steps of `dt`, printing the old model's state hash every `printEvery` seconds, and returns
-// those hashes.
+// those hashes. `adjust`: as LoadedCity's.
 std::vector<uint64_t> runAndHash(const std::string& level, const std::string& driving, Real seconds, Real dt,
-                                 Real printEvery) {
+                                 Real printEvery, const std::function<void(CitySimConfig&)>& adjust = nullptr) {
     std::vector<uint64_t> out;
-    LoadedCity lc(level, driving);
+    LoadedCity lc(level, driving, std::string(), adjust);
     CHECK(lc.ok);
     if (!lc.ok) return out;
     const int steps = static_cast<int>(seconds / dt + 0.5);
@@ -1381,7 +1384,13 @@ constexpr uint64_t kV1RiverHashes[] = {0xf131e7b3521590c2ull, 0x97f03bee42dfacf0
                                        0x1cea9a39a79f85f4ull};
 
 TEST_CASE(level_v1_state_is_unchanged) {
-    const std::vector<uint64_t> lab = runAndHash("traffic_lab.json", "v1", 120.0, 1.0 / 60.0, 30.0);
+    // The lab as v1 with the fleet it had when the hashes were taken: its own fleet now deals a city bus into its traffic
+    // (#284 item 9, ADR-0412: citysim.fleet "fleet_lab", ambientBus), a change of the level's data for the new model's
+    // tests, not of the old model's code, which this pin guards.
+    const std::vector<uint64_t> lab = runAndHash("traffic_lab.json", "v1", 120.0, 1.0 / 60.0, 30.0, [](CitySimConfig& c) {
+        c.fleet.clear();
+        c.ambientBus = false;
+    });
     const std::vector<uint64_t> river = runAndHash("river_town.json", "", 60.0, 1.0 / 30.0, 15.0);
     CHECK(lab == std::vector<uint64_t>(std::begin(kV1LabHashes), std::end(kV1LabHashes)));
     CHECK(river == std::vector<uint64_t>(std::begin(kV1RiverHashes), std::end(kV1RiverHashes)));

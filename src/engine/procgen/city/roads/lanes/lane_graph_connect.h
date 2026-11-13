@@ -113,11 +113,14 @@ constexpr double kSweepMargin = 0.1;
 
 // THE CONNECTORS OF EVERY JUNCTION in the build's graph: for each junction (in id order) its stated turns
 // (junctionTurns over its arriving and leaving lanes, a leg per section; a carry-on's all straight on), each given its
-// shape and checked against `vehicles` (each vehicle tag's tightest turning radius and width; a tag with none is not
-// limited): closed to each vehicle tighter than its turning radius, then to each whose width (and kSweepMargin each
-// side), swept along it every kSweepStep, leaves the lanes' footprints at its level (the paved road as the builder made
-// it, its kerb returns included), widest first -- trying smaller arcs where the largest cuts a corner; refused when no
-// vehicle remains. A junction the build refused (out.junctionNotes) gets none. Adds the
+// shape and checked against `vehicles` (each vehicle tag's tightest turning radius, width and length; a tag with none is
+// not limited): closed to each vehicle tighter than its turning radius, then to each whose body (its width and
+// kSweepMargin each side; for a body with a length, as far across the line as its swept points reach, swept_body.h,
+// from where its front comes onto the connector to where its rear leaves it), swept along it every kSweepStep, leaves
+// the lanes' footprints at its level (the paved road as the builder made it, its kerb returns included), widest first
+// -- trying smaller arcs where the largest cuts a corner; refused when no vehicle remains. A body that fits a turn's
+// radius but whose length swings it over the kerb is closed there, so a router asking whether the class may use the
+// connector (its vehicle tags) never sends it that way. A junction the build refused (out.junctionNotes) gets none. Adds the
 // connectors to the graph (their junction lists them, their from-lane lists them in `next`, which the caller writes
 // into the graph), the refusal lines to out.problems, the refusals to out.refusals.
 void connectJunctions(const Result& r, const LaneLookup& look, const std::vector<VehicleSize>& vehicles,

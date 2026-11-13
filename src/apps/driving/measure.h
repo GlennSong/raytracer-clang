@@ -406,7 +406,8 @@ struct PlanBody {
     double height = 0;              // the road's height under its middle
 };
 // The drawn body of a car at `pose`, `length` long and `width` wide (the host's drawing centres the vehicle between the
-// bumpers and points it from the rear bumper to the front: citysim DrivingHost::mirror).
+// bumpers and points it from the rear bumper to the front: citysim DrivingHost::mirror). The lane graph's own body rule
+// (engine::bodyOnPlan), the one the road builder sweeps along each path for its crossing points (ADR-0412).
 PlanBody planBody(CarId car, const CarPose& pose, double length, double width);
 // HOW DEEP TWO BODIES OVERLAP on the plan: the shortest push that would part them (metres; separating axes over the
 // two rectangles), or zero when they do not overlap.

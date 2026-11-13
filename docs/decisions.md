@@ -19172,3 +19172,107 @@ between frontage roads on their far carriageways over the road, and the builder 
 by hand, `lanes_tool build`, that scene passes every invariant); with a street meeting the far side where a ramp must
 come down, the planner refuses the diamond. `no_ramp_is_anchored_at_the_end_of_its_road` now looks at freeway anchors
 only: a ramp's anchor on a street is placed clear of that street's junctions by A.
+
+## ADR-0412 — A long vehicle's body is swept through bends: a turn that would put it over the kerb is closed to it, and paths whose bodies would touch get crossing points for those body sizes only (#284 item 9)
+
+Words: a vehicle's BODY, to the driving model, is a rectangle as long and wide as the vehicle, with the middle of its
+front bumper on the line it follows and the middle of its rear bumper on that line its length further back. Through a
+bend the two bumpers are on the curve and the body lies along the straight line between them (the CHORD), so its
+middle cuts inside the bend: the SWING (traffic engineers call it off-tracking). A 12 m bus on a 10 m turn lies 1.75 m
+inside the line its front follows; a 4.5 m car about 0.25 m. A CROSSING POINT is the lane graph's record that two paths'
+bodies can touch: on each path, a STRETCH (metres along it) where a body must be for that, read by the driving model as
+"its front is past the stretch's start and its rear short of its end". A TAG is a vehicle-kind name a path is open to
+("bus", "car"); each tag is checked at the size of the most demanding vehicle class carrying it.
+
+**Context.** Review #284 item 9: the lane graph knew each vehicle tag's turning radius and width, not its length, so it
+neither checked a long body's swing against the kerb nor recorded where it reaches a neighbouring path. A congested unit
+test showed 12 m buses cutting inside tight turns through cars beside them where no crossing point lay ("no record, body
+swing" in the every-pair body check of ADR-0408). The lab has no buses, so its tests could not see it.
+
+**Decision.**
+- **A. One body rule, shared.** `engine::bodyOnPlan` (lane_graph.h) places the rectangle from its two bumpers; the
+  driving model's measured body (`planBody`, measure.cpp) now calls it, and the road builder sweeps it, so what is built
+  for and what is measured are the same shape. `carPose` already put the rear bumper its length back along the paths.
+- **B. Length in the vehicle sizes.** `VehicleSize::length` (lane_graph_build.h), `TagSize::length` (the longest class
+  carrying the tag, vehicle_class.h), passed by the city host and in the lane-graph cache key; builder version 6, LGRF
+  version 6 (a crossing point carries the vehicle tags it concerns on each side, D).
+- **C. The paved-road test sweeps the body** (lane_graph_connect.cpp, swept_body.h). For each place along a connector,
+  every body covering it (its front anywhere from that place to its length further on, its rear on the lane before, its
+  front on the lane after) has a point on its middle line level with the place; the test checks the paved road at the
+  farthest of them either way across the line, plus half the width and the 0.1 m margin, from where the front comes onto
+  the connector to where the rear leaves it. A body no wider and no longer than one that stays on the road is taken to
+  stay on it. A turn whose radius a class can manage but whose swing puts its middle over the kerb is closed to its tag,
+  so a router asking which paths a class may use never sends it that way (`route_a_long_body_is_never_sent_...`).
+- **D. Crossing points per pair of body sizes** (lane_graph_crossings.cpp). The first pass is the old one, unchanged
+  (centre-line points, the widest body's half width). Then, on each path, the vehicle tags whose swing round its
+  tightest bend is more than the crossing margin (0.5 m, which always covered a car's sway: `kSwingCoveredByMargin`) are
+  its LONG PARTS, tags whose reach is within the margin of each other's making one; the rest are its SHORT PART. For
+  each pair of parts, one on each path, the pair's records are a copy of the first pass's widened by those two bodies'
+  meetings: each part's body (a short part's is a point on the line) with its front every 0.25 m from the path's start
+  to its length past its end, and the pairs of fronts whose bodies' middle lines come within half of each width plus the
+  margin. Each such patch becomes a stretch on each path that every touching body is on: from the hindmost touching
+  front to the foremost touching rear, or, for a short touch by part of a long body, the place they touch. It widens the
+  copy's record it overlaps, or is a cross of its own. Each record then says which tags it concerns on each side
+  (`CrossingPoint::aTags`, `otherTags`; `concerns(path, tags)`); pairs of parts whose records come out the same are
+  recorded once with their tags joined, and tags covering all of a path's parts concern every vehicle. Two paths with no
+  long part get the first pass's records alone, concerning everyone, as before. So two vehicles meet where their own
+  two bodies could touch: a car beside a turn a bus could swing over is held only by a bus there. Choices in it, each
+  from a failure of an earlier try:
+  - **Per size, not for the biggest allowed.** Records sized for the longest body allowed on each path held every car
+    to a bus's swing (every lane is open to every tag); in the congested test at lights two slow trucks taking opposing
+    far turns each gave way to the straight-on car queued behind the other (a deadlock), 15 cars arrived of 40.
+  - **By body, not by place.** The first try marked every place any body could cover ("swept points"), which made a bus
+    standing at its line, straight on its lane, "on" a crossing that only bodies half round the turn reach. Cars at
+    their stop lines then blocked each other in rings; the congested test's arrivals fell from 61/56/51 to 7/35/4.
+  - **A connector's bodies follow its lanes; a lane's run straight on.** A lane swept with the turn that leads into it
+    made every car coming onto it straight inherit a turning bus's swing. The swing behind a lane's start is the turn's,
+    whose record holds the bus while its tail is still on it.
+  - **Half the margin as the threshold** made every car a long part on most of the lab's turns: three times the records
+    and nothing different in the unit scenes.
+  Records between paths one of which leads into the other (following) are never made. Crosswalks are not swept (owed).
+- **D2. The driving model reads it in one rule at the per-car look-ups.** `CrossingPoint::concerns(path, tags)` (lane
+  graph), with each class's tags bound to the road (`Driving::tagsOf`, the route class's tags), applied where a car
+  takes up the records of its way: what it ANNOUNCES (`announcePlan`, `announceLane`: a record not concerning it gets no
+  announcement, so it neither judges there nor is judged -- `give_way` and the conflict resolver only read the board),
+  where it COMMITS (`findWaitingPoints`), whether its onward turns are SEEN CLEAR for room beyond (`seenClearThrough`),
+  and how the measurements SORT a touch (`sortTouch`). No second resolver. What stays for every class (worked out at
+  load, per path): the gaps between stretches that give the waiting points inside a junction (`findGaps`), the
+  wait-inside check, and the lights' clearing distance (`clearDistance`) read every record of a path, so a bus-sized
+  record can shorten a car's waiting points or lengthen a yellow (conservative; not measured).
+- **E. The traffic lab drives buses** (data only): `vehicles.lua` gains `fleet_lab` (the ordinary cars and trucks, no
+  cab, no fire engine, one city bus last) and `traffic_lab.json` picks it with `ambientBus`: every sixteenth car is an
+  11.45 m bus, 18 of the 300 by the slot arithmetic (not yet seen in a run); the 6.7 m box truck is the lorry. The old model's pinned hashes are taken with the lab's
+  old fleet (`level_v1_state_is_unchanged` sets it back), as they guard the old model's code, not the lab's data.
+
+**Trailers are not swept.** The class data can describe one (`trailer = { length, hitch_ahead }`, read into
+`VehicleClass::trailerLength` and `hitchAheadOfBackAxle`), but no vehicle has one, the body the driving model places and
+measures (`carPose`) is the vehicle's own, and where the back axle sits along the body is not in the class (only the
+wheelbase), so the hitch cannot be placed. Owed with articulated vehicles: the back axle's place, a second body pinned
+at the hitch, and carPose placing it.
+
+**What it does not settle (measured on the unit scenes; the lab tests are run later).**
+- **Widths are still the widest's in the first pass** (its records concern everyone), as before.
+- **Two lanes are still never paired**, so a long body swinging out of its lane on a curved multi-lane road meets the
+  lane beside it with no record (unmeasured).
+- **Many records at the busiest junctions**: the lab's junction 21 has 699 (its first-pass 302), and two junctions pass
+  the 400 the builder reports; every car still loops over a path's whole list, skipping those not its own.
+
+**Tests.** `give_way_284_i_...`: a 12 m bus's far turn beside a car's near turn at the 3 x 3 grid's middle junction;
+swept as points, no record between the turns and the every-pair check counts a "no record, body swing" touch; swept at
+their lengths, a record, the car gives way, nothing touches. `give_way_284_h_...` (three controls, congested, 12 m buses,
+each class on a tag of its own as in a level's fleet) requires no touch of any kind besides its old checks: 56, 49 and 46
+cars arrived (it needs more than 40), no deadlock, no touch. `lanes_a_long_body_cuts_inside_a_bend_by_its_chord` (the
+sweep's depth against R (1 - cos(L / 2R))), `lanes_crossing_points_reach_where_a_long_body_swings_beside_another_turn`
+(a car beside a swinging bus gets a record for that pair only; two cars none), `route_a_long_body_is_never_sent_round_
+a_turn_its_swing_takes_off_the_road` (hill junction: four turns closed to a 12 m bus for its length only, open to the
+car, never routed for the bus).
+
+**The lab's lane graph** (`lanes_tool lanegraph`, its fleet's sizes; before: the kit fleet with no lengths, as HEAD
+built it): crossing points 6,197 -> 13,104 (the bus, the car and the trucks are sizes of their own on its tight turns;
+263 records found only for length, 6,604 copies made longer), connector-and-lane records 15 -> 254, far turns with a
+place to wait inside 420 -> 418, connectors closed to the bus 369 -> 500 (to cars 275 -> 294: the fleet's longest
+car-tagged class, a 5.6 m pickup). Build time: the whole lane graph 5.5 s -> 12.0 s, of which the connectors' paved
+test 4.1 -> 7.7 s and the crossing points 0.24 -> 3.2 s; paid once per change of roads or fleet (the graph is cached).
+
+**Revisit when** the lab with buses is run (its five-minute hash is stale: new records and buses in the mix), when
+lanes carry who may use them, or when articulated vehicles arrive.

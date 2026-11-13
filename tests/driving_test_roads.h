@@ -70,6 +70,12 @@ struct TestRoadSpec {
         Heading in = Heading::East, out = Heading::East;
     };
     std::vector<RefusedTurn> refused;
+    // THE BODIES A GRID'S CROSSING POINTS ARE FOUND FOR (each tag's most demanding body, driving::tagSizes; the road
+    // builder sweeps each path at the widest and longest allowed on it, ADR-0412). Empty: the test car's width alone, its
+    // length not swept (the crossing points the driving tests were written against).
+    std::vector<driving::TagSize> crossingBodies;
+    // THE VEHICLE TAGS every path is open to (the graph's vehicle tag names, in this order). Default: the test tag alone.
+    std::vector<std::string> vehicleTags{kTestVehicleTag};
     TestRoadSpec() {
         line.crossFromOffside = true;
         line.crossFromKerbside = true;

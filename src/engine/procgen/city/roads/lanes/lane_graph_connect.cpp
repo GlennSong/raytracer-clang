@@ -3,6 +3,7 @@
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"          // LaneLookup: the lane footprints, for the paved test
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
+#include "engine/procgen/city/roads/lanes/swept_body.h"         // a long body's sweep, for the paved test
 
 #include <algorithm>
 #include <cmath>
@@ -347,8 +348,11 @@ void connectJunctions(const Result& r, const LaneLookup& look, const std::vector
                 TagMask open = 0, closed = 0;
                 bool tooTight = false;        // every vehicle closed for its radius
                 double narrowestOff = -1;     // else the narrowest width swept off the paved road (-1: none)
+                double offLength = 0;         // ... and that body's length
                 Vec2 offAt;
             };
+            // the lanes either side, for sweeping a long body that lies partly on them (swept_body.h)
+            const std::vector<Vec2> beforePoints = pathPoints(G, a), afterPoints = pathPoints(G, b);
             auto attempt = [&](double maxRadius) {
                 Trial tr;
                 tr.shape = connectorShape(p0, d0, p1, d1, maxRadius);
@@ -373,31 +377,89 @@ void connectJunctions(const Result& r, const LaneLookup& look, const std::vector
                 }
                 tr.z.front() = G.heights[from.curve.end() - 1];
                 tr.z.back() = G.heights[into.curve.first];
-                // Swept `width` wide (and kSweepMargin more each side), whether it leaves the paved road (and where).
-                auto leavesPavement = [&](double width, Vec2& at) {
-                    const int samples = std::max(1, static_cast<int>(std::ceil(length / kSweepStep)));
-                    for (int k = 0; k <= samples; ++k) {
-                        const double s = length * k / samples;
-                        const Vec2 c = pointAt(tr.shape.points, tr.along, s), n = perp(tangentAtStation(tr.shape.points, tr.along, s));
+                // A body `width` wide and `bodyLength` long (and kSweepMargin more each side) swept along it: whether it
+                // leaves the paved road, and where. A body of no length is the line's own point at every place along the
+                // connector; a long one (swept_body.h) covers, at each place, its swept points' spread across the line --
+                // from where its front comes onto the connector (its rear bodyLength back on the arriving lane) to where
+                // its rear leaves it -- so a bus whose middle cuts inside a near turn's kerb corner is caught there.
+                // `tryFirst`: a place along to test before the rest (where a bigger body left the road: a smaller one that
+                // leaves it usually does so there too), or none.
+                auto leavesPavement = [&](double width, double bodyLength, Vec2& at, double& leftAt, const double* tryFirst) {
+                    const bool swept = bodyLength > 0;
+                    const BodyLine line = swept ? makeBodyLine(beforePoints, tr.shape.points, afterPoints, bodyLength) : BodyLine();
+                    const double first = swept ? -bodyLength : 0.0, span = length + (swept ? 2 * bodyLength : 0.0);
+                    const int samples = std::max(1, static_cast<int>(std::ceil(span / kSweepStep)));
+                    std::vector<Vec2> spots;
+                    // the sample nearest `tryFirst`, when it is within this sweep (the same samples, so the same answer)
+                    const int hint = tryFirst && *tryFirst >= first && *tryFirst <= first + span
+                                         ? static_cast<int>(std::lround((*tryFirst - first) / span * samples))
+                                         : -1;
+                    for (int k = hint >= 0 ? -1 : 0; k <= samples; ++k) {
+                        const double s = first + span * (k < 0 ? hint : k) / samples;
+                        leftAt = s;
+                        const bool onIt = s >= 0 && s <= length;
+                        const Vec2 c = onIt ? pointAt(tr.shape.points, tr.along, s) : line.pointAt(s);
+                        const Vec2 n = perp(onIt ? tangentAtStation(tr.shape.points, tr.along, s) : line.directionAt(s));
                         const double h = interp(tr.along, tr.z, s);
+                        // how far the body reaches across the line here, either way (the line itself always: the body
+                        // whose front is here; 0 and 0 for a body of no length)
+                        double lo = 0, hi = 0;
+                        if (swept) {
+                            spots.clear();
+                            sweptPoints(line, s, bodyLength, spots);
+                            for (const Vec2& q : spots) {
+                                lo = std::min(lo, dot(q - c, n));
+                                hi = std::max(hi, dot(q - c, n));
+                            }
+                        }
                         for (const double side : {-1.0, 1.0}) {
-                            at = c + n * (side * (width / 2 + kSweepMargin));
+                            // on the lanes either side, only where the body reaches beyond its own line: a lane's own band
+                            // is the builder's, never questioned here
+                            if (!onIt && (side < 0 ? lo : hi) * side < kSweptSamePoint) continue;
+                            at = c + n * (side < 0 ? lo - width / 2 - kSweepMargin : hi + width / 2 + kSweepMargin);
                             if (!paved(at, h)) return true;
                         }
                     }
                     return false;
                 };
-                std::vector<double> widths;
+                // Each body size among the open vehicles, widest first (then longest). A body no wider and no longer than
+                // one that stays on the road is taken to stay on it; one at least as wide and as long as one that leaves
+                // it, to leave it.
+                struct BodySize {
+                    double width = 0, length = 0;
+                };
+                std::vector<BodySize> sizes;
                 for (uint32_t i = 0; i < tagCount; ++i)
-                    if (tr.open & (TagMask(1) << i)) widths.push_back(sizeOf[i] ? sizeOf[i]->width : 0.0);
-                if (tagCount == 0) widths.push_back(0.0);
-                std::sort(widths.begin(), widths.end(), [](double x, double y) { return x > y; });
-                widths.erase(std::unique(widths.begin(), widths.end()), widths.end());
-                for (double w : widths) {
-                    if (!leavesPavement(w, tr.offAt)) break;
-                    tr.narrowestOff = w;
-                    for (uint32_t i = 0; i < tagCount; ++i)
-                        if ((tr.open & (TagMask(1) << i)) && (sizeOf[i] ? sizeOf[i]->width : 0.0) >= w) tr.closed |= TagMask(1) << i;
+                    if (tr.open & (TagMask(1) << i))
+                        sizes.push_back(sizeOf[i] ? BodySize{sizeOf[i]->width, sizeOf[i]->length} : BodySize());
+                if (tagCount == 0) sizes.push_back(BodySize());
+                std::sort(sizes.begin(), sizes.end(), [](const BodySize& x, const BodySize& y) {
+                    return x.width != y.width ? x.width > y.width : x.length > y.length;
+                });
+                sizes.erase(std::unique(sizes.begin(), sizes.end(), [](const BodySize& x, const BodySize& y) {
+                                return x.width == y.width && x.length == y.length;
+                            }), sizes.end());
+                std::vector<BodySize> stayOn;
+                bool anyOff = false;
+                double offAlong = 0, leftAt = 0;
+                for (const BodySize& z : sizes) {
+                    bool within = false;
+                    for (const BodySize& on : stayOn) within = within || (z.width <= on.width && z.length <= on.length);
+                    if (within) continue;
+                    // (a body of no length is swept in order from the start, as before bodies had lengths: the same
+                    // answer and the same place reported)
+                    if (!leavesPavement(z.width, z.length, tr.offAt, leftAt, anyOff && z.length > 0 ? &offAlong : nullptr)) {
+                        stayOn.push_back(z);
+                        continue;
+                    }
+                    anyOff = true;
+                    offAlong = leftAt;
+                    tr.narrowestOff = z.width;
+                    tr.offLength = z.length;
+                    for (uint32_t i = 0; i < tagCount; ++i) {
+                        const double w = sizeOf[i] ? sizeOf[i]->width : 0.0, l = sizeOf[i] ? sizeOf[i]->length : 0.0;
+                        if ((tr.open & (TagMask(1) << i)) && w >= z.width && l >= z.length) tr.closed |= TagMask(1) << i;
+                    }
                     tr.open &= ~tr.closed;
                 }
                 return tr;
@@ -439,8 +501,9 @@ void connectJunctions(const Result& r, const LaneLookup& look, const std::vector
                                    "tightest-turning needs %.1f m)", best.shape.tightestRadius, tightestTurn));
                 else
                     addRefusal(j, &t, best.offAt,
-                               fmt("swept %.1f m wide (the narrowest vehicle allowed on both lanes, and %.1f m more each side) "
-                                   "it leaves the paved road%s", best.narrowestOff, kSweepMargin,
+                               fmt("swept %.1f m wide%s (the smallest vehicle allowed on both lanes, and %.1f m more each "
+                                   "side) it leaves the paved road%s", best.narrowestOff,
+                                   best.offLength > 0 ? fmt(" and %.1f m long", best.offLength).c_str() : "", kSweepMargin,
                                    smallest < largest ? fmt(", on every arc from %.1f m down to %.1f m", largest, smallest).c_str() : ""));
                 ++note.turnsRefused;
                 continue;

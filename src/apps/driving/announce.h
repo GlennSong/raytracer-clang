@@ -221,11 +221,13 @@ struct PlanAnnouncer {
                                    // clear of one it would stop on
     bool neverClear = false;       // queued for this line behind a car that holds a stop at or short of it (not a full
                                    // stop first): it comes to rest behind that car, short of every stretch's end
+    engine::TagMask tags = engine::kEveryVehicle;   // its vehicle class's tags on these roads (which records concern it)
 };
 
 // ANNOUNCES every crossing point along `plan`'s connector whose stretch the car's tail is not yet past (crossings with
-// another path only: people and trains announce for themselves). The plan's remembered state gives arrival, going and
-// committed.
+// another path only: people and trains announce for themselves) and that concerns the car (CrossingPoint::concerns: a
+// record the road builder made for a longer body than its own is not its, ADR-0412; with no announcement there it
+// neither judges there nor is judged). The plan's remembered state gives arrival, going and committed.
 void announcePlan(const engine::LaneGraph& roads, const JunctionPlan& plan, const PlanAnnouncer& car,
                   AnnouncementBoard& out);
 
@@ -241,9 +243,11 @@ struct LaneAnnouncer {
     Real atLineWithin = 0;         // the rule set's at_line_within: its own stop to give way at a stretch is "at" it
     double heldStop = kNever;      // the odometer reading of the stop it holds, whatever it is for
     StopFor heldStopFor = StopFor::Place;   // ... and what that stop is for
+    engine::TagMask tags = engine::kEveryVehicle;   // its vehicle class's tags on these roads (which records concern it)
 };
 
-// ANNOUNCES the crossing points along a LANE the car's body is on or its way runs along: `laneStart` is metres from the
+// ANNOUNCES the crossing points along a LANE the car's body is on or its way runs along, those that concern it (as a
+// plan's car): `laneStart` is metres from the
 // car's front to the lane's start (below zero when it is behind the front). Only those it will reach within the
 // look-ahead time. A lane has no line: the car never arrives at one and never commits; it is GOING when it cannot stop
 // short of the stretch braking comfortably, CANNOT STOP as a plan's car, NOT GOING when it holds a stop short of the

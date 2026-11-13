@@ -123,6 +123,7 @@ uint64_t laneGraphCacheKey(uint64_t roadsKey, const LaneGraphOptions& opts, uint
         k.str(v.tag);
         k.pod(v.turningRadius);
         k.pod(v.width);
+        k.pod(v.length);   // (since builder version 6: bodies swept at their length, ADR-0412)
     }
     return k.h;
 }

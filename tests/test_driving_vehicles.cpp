@@ -120,14 +120,15 @@ TEST_CASE(driving_tag_sizes_take_the_most_demanding_class_per_tag) {
     for (std::size_t i = 0; i < sizes.size() && i < 5; ++i) CHECK(sizes[i].tag == order[i]);
     if (sizes.size() != 5u) return;
     CHECK(sizes[0].turningRadius == goodCar("x").tightestTurnRadius && sizes[0].width == kWidth);
-    // goods: the truck's circle and body, wider than the van's
+    // goods: the truck's circle and body, wider and longer than the van's (the length sweeps bends, ADR-0412)
     CHECK(sizes[1].turningRadius == truck.tightestTurnRadius && sizes[1].width == truck.width);
+    CHECK(sizes[1].length == truck.length && sizes[1].length > van.length);
     CHECK(sizes[1].turningRadius > van.tightestTurnRadius);
-    CHECK(sizes[4].turningRadius == van.tightestTurnRadius && sizes[4].width == van.width);
+    CHECK(sizes[4].turningRadius == van.tightestTurnRadius && sizes[4].width == van.width && sizes[4].length == van.length);
     // every class fits every one of its own tags
     for (const VehicleClass& c : table.all())
         for (const TagSize& t : sizes)
-            if (c.hasTag(t.tag)) CHECK(c.tightestTurnRadius <= t.turningRadius && c.width <= t.width);
+            if (c.hasTag(t.tag)) CHECK(c.tightestTurnRadius <= t.turningRadius && c.width <= t.width && c.length <= t.length);
     CHECK(tagSizes(VehicleClasses()).empty());
 }
 

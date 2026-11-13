@@ -56,6 +56,26 @@ inline bool segmentsCross(const Vec2& a, const Vec2& b, const Vec2& c, const Vec
     return true;
 }
 
+// HOW FAR APART THE SEGMENTS a->b and c->d come: 0 where they cross, else the nearest of each one's ends to the other.
+// `tab` and `tcd`, when given: the fractions along a->b and c->d of the two nearest points (where they cross, the
+// crossing; the first nearest of the four end tests wins a tie).
+inline Real distSegmentToSegment(const Vec2& a, const Vec2& b, const Vec2& c, const Vec2& d, Real* tab = nullptr,
+                                 Real* tcd = nullptr) {
+    Real t = 0, u = 0;
+    if (lineCross(a, b, c, d, t, u) && t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+        if (tab) *tab = t;
+        if (tcd) *tcd = u;
+        return 0;
+    }
+    const Real ends[4] = {distToSegment(a, c, d), distToSegment(b, c, d), distToSegment(c, a, b), distToSegment(d, a, b)};
+    int best = 0;
+    for (int k = 1; k < 4; ++k)
+        if (ends[k] < ends[best]) best = k;
+    if (tab) *tab = best == 0 ? 0 : best == 1 ? 1 : segmentParam(best == 2 ? c : d, a, b);
+    if (tcd) *tcd = best == 2 ? 0 : best == 3 ? 1 : segmentParam(best == 0 ? a : b, c, d);
+    return ends[best];
+}
+
 // THE NEAREST POINT OF A POLYLINE (closed: a ring, its last point joined to its first). The first nearest segment
 // wins a tie.
 struct PolylineNearest {
