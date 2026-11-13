@@ -134,14 +134,26 @@ bool CityTripSystem::pickPlace(bool far, PlaceId& out, std::string& why) {
         if (d < lo || d > hi) continue;
         (p.type == PlaceType::Home ? homes : places).push_back(p.id);
     }
-    const std::vector<PlaceId>& from = places.empty() ? homes : places;
-    if (from.empty()) {
+    if (places.empty() && homes.empty()) {
         why = "no building " + fmt("%.0f", lo) + "-" + fmt("%.0f m", hi) + " from where the person stands";
         return false;
     }
+    // The person picks one THEY CAN GET TO: starting from their own pick, the first building the planner finds a way
+    // to (shops and the like before other people's homes). A building across water with no bridge in walking or
+    // driving reach is passed over, not picked and then given up on.
     const uint32_t h = engine::hashPair(a.brain, static_cast<uint32_t>(trips_ * 2 + (far ? 1 : 0)));
-    out = from[h % from.size()];
-    return true;
+    const std::vector<int> none;
+    for (const std::vector<PlaceId>* from : {&places, &homes}) {
+        for (std::size_t k = 0; k < from->size(); ++k) {
+            const PlaceId id = (*from)[(h + k) % from->size()];
+            if (!planTrip(*city_.sim().graph(), travel_, requestTo(city_.places()[id].entrance, none)).valid()) continue;
+            out = id;
+            return true;
+        }
+    }
+    why = "no building " + fmt("%.0f", lo) + "-" + fmt("%.0f m", hi) + " away that the person can get to (" +
+          std::to_string(places.size() + homes.size()) + " in range, none with a way there)";
+    return false;
 }
 
 void CityTripSystem::take(engine::FrameContext& ctx, const std::string& request) {
@@ -207,13 +219,14 @@ void CityTripSystem::begin(engine::FrameContext& ctx, Vec2 dest, PlaceId place, 
     spectate_.follow(who_);
 }
 
-bool CityTripSystem::plan(const std::string& note) {
+// WHAT THE PLANNER IS ASKED for a trip to `dest` from where the person stands, with what they own.
+TripRequest CityTripSystem::requestTo(Vec2 dest_, const std::vector<int>& ruledOut) const {
     const CitySim& sim = city_.sim();
     const Agent& a = sim.agents()[static_cast<std::size_t>(who_)];
     TripRequest req;
     req.from = a.pos;
     req.to = dest_;
-    req.ruledOut = ruledOut_;
+    req.ruledOut = ruledOut;
     // THE CAR THEY OWN (Agent::car) is driven on the roads, so it serves every way that needs a vehicle of one's own
     // and uses the roads; it would be left in the free space nearest the destination (the sim reserves the one nearest
     // the destination's street when the drive starts: this is the planner's estimate of it).
@@ -230,7 +243,12 @@ bool CityTripSystem::plan(const std::string& note) {
             if (travel_.modes[i].ownVehicle && travel_.modes[i].roads)
                 req.vehicles.push_back(OwnedVehicle{static_cast<int>(i), v.pos, leaveAt});
     }
-    plan_ = planTrip(*sim.graph(), travel_, req);
+    return req;
+}
+
+bool CityTripSystem::plan(const std::string& note) {
+    const CitySim& sim = city_.sim();
+    plan_ = planTrip(*sim.graph(), travel_, requestTo(dest_, ruledOut_));
     leg_ = 0;
     legUnderWay_ = false;
     arrived_ = false;

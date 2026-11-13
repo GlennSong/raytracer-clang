@@ -24,6 +24,9 @@ travel = {
   },
   -- Where a person picks a destination when told "somewhere near" or "somewhere far": straight-line metres from
   -- where they stand.
-  near = { 150, 600 },
-  far = { 900, 4000 },
+  -- river_town is about 1.2 km across and the person's home is near its middle, so "far" starts at 450 m: from
+  -- home nothing reachable stands 900 m off. (A share of the reachable buildings, nearest third and farthest third,
+  -- would fit any town; these are plain metres for now.)
+  near = { 100, 450 },
+  far = { 450, 4000 },
 }

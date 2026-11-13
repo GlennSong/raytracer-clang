@@ -52,6 +52,7 @@ private:
     int person() const;                                      // the agent who travels; -1 when the city has none
     bool pickPlace(bool far, PlaceId& out, std::string& why);
     void begin(engine::FrameContext& ctx, Vec2 dest, PlaceId place, const std::string& label);
+    TripRequest requestTo(Vec2 dest, const std::vector<int>& ruledOut) const;
     bool plan(const std::string& note);                     // (re)plan from where the person stands
     void step();                                            // start the next leg, or see the current one through
     bool startLeg();
