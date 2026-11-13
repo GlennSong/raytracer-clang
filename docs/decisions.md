@@ -19489,3 +19489,91 @@ the lab (below) entered nothing on red.
 
 **Revisit when** close lights are coordinated (the chains closed by A may then open), when drivers get a start-up
 reaction to the green, or when the queue row should be read in passenger-car equivalents.
+
+## ADR-0415 — The one-agent lab: a person picks where to go, prices every way of getting there from a table, and carries out the cheapest leg by leg with the sim's own verbs
+**Status:** Provisional · **Date:** 2026-11-12
+
+Words: a TRIP is going from where a person stands to a door. A WAY OF TRAVELLING is walking, driving (later cycling,
+the bus, the train). A LEG is one stretch of a trip by one way (walk to the car, drive, walk to the door). An OPTION is
+one way of making the whole trip, as its legs. WEIGHTED MINUTES are a leg's minutes times how much the person minds a
+minute of that way (1 = a plain minute).
+
+**Context.** Glenn: "Can we build a new lab... in it put 1 agent, that agent's car, and that's it. The agent should
+decide where to go and how to get there... Is it a nearby location or a distant one. And that agent then decides how to
+do it. Bike, car, walk etc. plan the trip and then we can see their path and follow the agent until they reach their
+destination." His wider point: the simulation should be built from the agent outward -- someone with somewhere to go
+works out how, plans the legs, then carries them out. Until now the city's people had no such step: the goal tables
+send a car owner in their car, a walker on foot, and nobody chooses.
+
+**Decision.**
+- **The ways of travelling are a table** (`assets/scripts/travel.lua`, read by `scripting/travel_lua.h`): one row per
+  way -- name, network (`footpaths` or `roads`), average speed, fixed minutes to start and end a leg (unlocking,
+  parking), whether it needs a vehicle the person owns and which way reaches that vehicle (`access`), a weight, and the
+  colour it is drawn in -- plus the near and far distance bands a person picks a destination from. No C++ copy.
+- **The planner is pure** (`trip_plan.h`): given the nav graph, where the person is, where they are going and the
+  vehicles they own (where each stands and where it would be left), it builds one option per row: a way with no vehicle
+  goes door to door; a way with one is "access way to the vehicle, the vehicle to where it is left, access way to the
+  door". Each leg is routed on its way's network between the nearest nodes that connect (the nearest eight at each end
+  are tried, as `sendAgentTo` does), its metres are the route plus the bits off the network, its minutes metres at the
+  row's speed plus the row's fixed minutes. The choice is the fewest weighted minutes; a tie goes to the earlier row.
+  It returns a one-line reason ("walk 18.1 min, car 6.2 min (0.3 walk + 5.6 car + 0.3 walk): car"). It names no way.
+- **Carrying it out** (`city_trip.h`, `CityTripSystem`) uses verbs the sim already had for possession (ADR-0091), in
+  order: a leg by a way that needs a vehicle starts with `boardVehicle` (within `kBoardReach`, now shared with
+  possession), every leg is `sendAgentTo` (which walks or drives by what the person is now), and a vehicle leg ends with
+  `alightVehicle`. A leg is over when the person stops moving. A leg that cannot start (the car out of reach, no route)
+  rules its way out for this trip and re-plans from where the person stands, saying so in `trip?` and the log.
+- **Changes to those verbs, every one reached only by a directed agent (possession, a trip), so the ordinary city
+  and the pinned v1 hashes are untouched:**
+  - `startTrip` no longer puts a DIRECTED car owner who is on foot back in their car (GET BACK IN, `remountOwnedCar`):
+    found because "walk all the way" and "walk to the car" both drove -- the person was in the car the moment they set
+    off. Nor does it take their car out of its garage or free its bay while they walk. Getting in is `boardVehicle`.
+  - `sendAgentTo`, on foot, arrives on the destination's side of its street: a street is two links, one each way, each
+    walked on its own kerb side, and the nearest link was either of the pair, so half the errands ended on the far
+    pavement (measured: 24.9 m from a civic door). It now takes the twin whose pavement the destination is beside.
+  - `sendAgentTo` no longer projects a stop-short from the destination onto a drive the sim routed to a reserved
+    parking bay (it pulled up short of the bay).
+  - `alightVehicle` leaves the car IN that bay once the drive to it has ended (arrived along the bay's street: the
+    test an ordinary arrival parks by), the driver getting out beside it (at a garage, at its door), and lets the
+    reservation go otherwise (it used to be held for ever). Not by distance: a bay whose station lay inside a
+    junction's box was one the car could not stop at, and it came to rest 21 m on, in the lane.
+- **Two fixes to the walkers drawn without a physics body** (beyond 140 m of the player, `CityWalkerSystem`), found
+  because the camera following the person showed nobody: their last-step pose (`PrevTransform`) was never moved on, so
+  the renderer drew them between where they spawned (a fixed height near zero) and where they are, under the pavement;
+  and their pose was not reported, so spectate could not follow them at all. Both now done as for a bodied walker.
+- **The person picks the building.** `trip near` / `trip far`: a building (any place but a park: Glenn, "We should have
+  buildings for the agent to go to") whose door is within the band from where they
+  stand, not their own home, not a home at all while any other kind of place lies in the band, chosen by their own bits
+  and the count of trips they have made (the same pick every run). `trip to <id, name or kind>` and `trip at <x> <z>`
+  are the owner's picks; `trip mark` is the map's waypoint. `trip?` answers: where to, every option with its legs, the
+  choice and why, the leg under way, metres left, and "arrived after N min (planned M)".
+- **No day schedule for the lab** (`citysim.schedule = false`, `CitySim::setDaySchedule`): everyone is seeded at home
+  -- out of the car, which stays in its bay, the person indoors -- and held for a director, so the person waits for a
+  trip. A clock jump leaves a held person where they are.
+- **Seen:** the legs still to come drawn along their routes in each way's colour (the leg under way along the route the
+  person is really on), a gold post at the destination (debug lines, ADR-0067), a few lines of text top left (the game
+  UI layer), and the spectate camera following the person from the start of the trip -- kept on them while they have no
+  body to show, re-framed when they get into or out of the car, and without K's debug rings and nav lines, which buried
+  the plan's line (`CitySpectateSystem::follow`). Keys: Y = trip near, I = trip far (both were free), on a level with
+  `schedule = false` only; the verbs work on any city level.
+- **The table's first numbers:** walk 5 km/h; car 30 km/h door to door, 2 minutes to set off and 3 to park. With 1 and
+  1.5 the person drove 330 m to a grocery 350 m away (3.9 minutes against 4.1 on foot), which reads wrong.
+
+**Alternatives.** A planner inside `CitySim` (the goal tables' trip start): it would have changed every resident's
+behaviour and the pinned v1 hashes; the lab first, the population when it is proven. A planner that drives the new
+driving model (`src/apps/driving`): it cannot run on river_town yet. Speeds from the road classes rather than the table:
+better for the car, but the table is the one place a way's numbers live, and the owner asked for them there.
+
+**Consequences / what is simple for now.** The car's minutes are an average speed, not the route's road classes and
+lights. Where the car will be left is the planner's estimate (the free bay nearest the destination); the sim picks the
+real bay near the destination's street when the drive starts, and the walk from it is routed from where the person
+really gets out. The car is the agent's one owned vehicle (`Agent::car`), serving every row that needs a vehicle and
+uses the roads: a bike needs its own owned slot and its execution (riding on the footpaths at its speed). A new trip is
+refused while the person is at the wheel (getting out mid-street would leave the car in the lane). Only river_town's
+lab level sets `schedule = false`; elsewhere the trip verbs still work on the first resident with a home and a car,
+holding their day off for the trip and after it. A leg whose end does not route from where the person stands but lies
+within reach (25 m) is taken as done where they stand, and `trip?` says how far from the door that is: a park's door on
+a park walk is one (the pavement's route does not lead into it), which is why near and far pick buildings.
+
+**Revisit when** a second way needs a vehicle (bike: an owned-vehicle slot per kind), when the bus or the train join
+(`sendAgentByBus` / `sendAgentByTrain` are the verbs; a ride leg's minutes need the timetable), or when the whole
+population plans its trips this way.

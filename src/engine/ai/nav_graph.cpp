@@ -56,6 +56,16 @@ int NavGraph::nearestNode(const Vec2& p) const {
     return best;
 }
 
+std::vector<int> NavGraph::nearestNodes(const Vec2& p, int k) const {
+    std::vector<int> idx(static_cast<std::size_t>(nodeCount()));
+    for (int i = 0; i < nodeCount(); ++i) idx[static_cast<std::size_t>(i)] = i;
+    k = std::max(0, std::min(k, nodeCount()));
+    auto d2 = [&](int i) { return (nodes[static_cast<std::size_t>(i)] - p).lengthSquared(); };
+    std::partial_sort(idx.begin(), idx.begin() + k, idx.end(), [&](int A, int B) { return d2(A) < d2(B); });
+    idx.resize(static_cast<std::size_t>(k));
+    return idx;
+}
+
 int NavGraph::nearestLink(const Vec2& p) const {
     int best = -1;
     Real bestD = 0;

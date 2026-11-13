@@ -59,6 +59,10 @@ public:
     // Inspection (tests / debug): the current spectate state.
     bool spectating() const { return spectating_; }
     int followedAgent() const { return current_; }
+    // Follow this agent from the next frame, as if K and [ ] had picked it (the trip lab: a person sent somewhere is
+    // followed there) but leaving the debug widgets as they are, and stay on it while it has no body to show
+    // (indoors, between car and pavement) rather than moving on to someone else. K, [ or ] let go of it as before.
+    void follow(int agentIndex) { pendingFollow_ = agentIndex; }
 
 private:
     // Frame the chase camera for the followed agent's mode: a longer arm for a
@@ -72,6 +76,10 @@ private:
     bool spectating_ = false;
     int current_ = -1;             // index into sim().agents(), or -1
     bool widgetsWereOn_ = false;   // debug-widget state captured on spectate-on
+    // The mode the chase is framed for: a followed walker who gets into a car (or out of one) is re-framed.
+    Agent::Mode framedFor_ = Agent::Mode::Pedestrian;
+    int pendingFollow_ = -1;       // follow()'s agent, taken up by the next update
+    bool held_ = false;            // following follow()'s agent: kept through frames it has no body
 };
 
 }  // namespace citysim

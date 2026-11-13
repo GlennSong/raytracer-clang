@@ -69,6 +69,7 @@ void CitySpectateSystem::configureFollowFor(Agent::Mode mode) {
         follow_.targetHeight = 1.2;
         follow_.orbitPitch = -12.0;
     }
+    framedFor_ = mode;
 }
 
 void CitySpectateSystem::stopSpectating(engine::FrameContext& /*ctx*/) {
@@ -98,7 +99,20 @@ void CitySpectateSystem::update(engine::FrameContext& ctx) {
         } else {
             stopSpectating(ctx);
         }
+        held_ = false;
     }
+    // follow(): this agent, from now. Unlike K it leaves the debug widgets as they are: the caller draws its own
+    // (the trip's plan line), and the nav graph's lines all round would bury it -- J still shows them.
+    if (pendingFollow_ >= 0 && pendingFollow_ < count) {
+        if (!spectating_) {
+            spectating_ = true;
+            widgetsWereOn_ = render_.debugWidgets();
+        }
+        current_ = pendingFollow_;
+        configureFollowFor(agents[static_cast<std::size_t>(current_)].mode);
+        held_ = true;
+    }
+    pendingFollow_ = -1;
 
     if (!spectating_) return;   // OFF: PlayerSystem / CameraSystem own the view.
 
@@ -106,10 +120,12 @@ void CitySpectateSystem::update(engine::FrameContext& ctx) {
     if (ctx.actions.pressed("spectate_next")) {
         const int sel = nextSpectatable(agents, current_, +1);
         if (sel >= 0) { current_ = sel; configureFollowFor(agents[current_].mode); }
+        held_ = false;
     }
     if (ctx.actions.pressed("spectate_prev")) {
         const int sel = nextSpectatable(agents, current_, -1);
         if (sel >= 0) { current_ = sel; configureFollowFor(agents[current_].mode); }
+        held_ = false;
     }
 
     // Stale-selection guard: the agent vector may have changed, or the followed
@@ -130,10 +146,14 @@ void CitySpectateSystem::update(engine::FrameContext& ctx) {
     Vec3 worldPos;
     Vec2 heading;
     if (!render_.agentWorldPose(current_, worldPos, heading)) {
+        if (held_) return;   // the agent we were asked to follow: wait for its body
         const int sel = nextSpectatable(agents, current_, +1);
         if (sel >= 0) { current_ = sel; configureFollowFor(agents[current_].mode); }
         return;
     }
+    // In or out of a car: the chase framed for what it is now.
+    if (agents[static_cast<std::size_t>(current_)].mode != framedFor_)
+        configureFollowFor(agents[static_cast<std::size_t>(current_)].mode);
 
     // Chase the pose. Feed ZOOM ONLY (mirrors PlayerSystem's third-person branch):
     // the heading owns the yaw, so a full update() would double-apply look input.

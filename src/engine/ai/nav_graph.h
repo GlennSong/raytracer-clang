@@ -170,6 +170,9 @@ struct NavGraph {
     // Return -1 if the graph is empty.
     int nearestNode(const Vec2& p) const;
     int nearestLink(const Vec2& p) const;
+    // The `k` nodes nearest `p`, nearest first (any node, walks' included) -- for trying the next when the nearest
+    // does not route. A linear scan plus a partial sort: a director's question, not a per-frame one.
+    std::vector<int> nearestNodes(const Vec2& p, int k) const;
 };
 
 // Build a NavGraph from an already-sampled RoadGraph (e.g. netGraph(net), or any

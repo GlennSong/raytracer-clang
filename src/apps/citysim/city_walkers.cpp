@@ -469,6 +469,11 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 w.handoff = L > ease ? w.handoff * ((L - ease) / L) : Vec2(0, 0);
                 dp = dp + w.handoff;
             }
+            // The renderer draws between the last step's pose and this one (PrevTransform), as for a body below: left
+            // alone, the last step's pose stayed the one the walker spawned with -- a fixed height near the world's
+            // zero, where it was made -- and a walker posed from the plan was drawn somewhere on the line from there,
+            // under the pavement (the trip lab's followed person, walking away from the player, was never seen).
+            if (PrevTransform* pt = world.get<PrevTransform>(w.entity)) pt->value = *t;
             t->position = Vec3(dp.x, city_.floorAt(w.agentId, dp.x, dp.y) + kCapsuleHalf + kCapsuleRadius, dp.y);
             if (g.speed > 0.05) w.facing = hd;
             t->orientation = Quat::fromAxisAngle(
@@ -477,6 +482,9 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             if (Renderable* r = world.get<Renderable>(w.entity))
                 r->mesh = poseMesh(ctx.assets, w.outfit, pose, sim.bodyScale(w.agentId));
             watchDrawn(w, Vec2(t->position.x, t->position.z), 1, dt, sim);
+            // ...and where it is DRAWN is where it is: the spectate camera follows it there (a walker past the body
+            // radius was a pose nobody reported, so a followed person walking away from the player lost the camera)
+            widgetPoses.push_back(CityRenderSystem::ExternalAgentPose{w.agentId, dp, w.facing, g.pos, -1});
             continue;
         }
 

@@ -61,15 +61,7 @@ const char* stateLabel(Agent::State s) {
 constexpr engine::Real kLookRadiusPlaces = 250.0;
 constexpr engine::Real kLookRadiusAgents = 40.0;
 constexpr int kLookMaxAgents = 6;
-// How close you have to be to open a car door. Measured rather than guessed: a
-// walker sent to a parked car stops on the PAVEMENT, and the car is parked on
-// the far side of the carriageway — 8.3 m off the street's centreline one way,
-// the footway the other, about 20 m apart on a metro street with nothing
-// wrong. Reaching a car you can see across the road is a person crossing it,
-// so the reach is a street's width. Getting to the STREET is still the
-// director's problem, which is the part that matters.
-constexpr engine::Real kBoardReach = 25.0;
-// ...and how close to a door you have to be to walk through it.
+// How close to a door you have to be to walk through it (as close as to a car: kBoardReach, city_sim.h).
 constexpr engine::Real kEnterReach = 25.0;
 
 char tierLabel(Agent::Tier t) {

@@ -577,6 +577,8 @@ add_library(citysim STATIC
     src/apps/citysim/city_driving.cpp   # the drivers handed to the new driving model (v2, #255)
     src/apps/citysim/city_render.cpp
     src/apps/citysim/city_spectate.cpp   # spectate camera: cycle + follow NPCs (headless-safe)
+    src/apps/citysim/trip_plan.cpp       # the trip planner: every way of travelling priced leg by leg (ADR-0415)
+    src/apps/citysim/city_trip.cpp       # a person sent somewhere: the plan carried out, drawn and followed
     src/apps/citysim/city_traffic_audio.cpp   # ambient traffic engine note (voice pool)
     src/apps/citysim/city_meshes.cpp
 )
@@ -592,6 +594,7 @@ if(RT_ENABLE_SCRIPTING)
         src/apps/citysim/scripting/place_kinds_lua.cpp
         src/apps/citysim/scripting/people_lua.cpp
         src/apps/citysim/scripting/signals_lua.cpp
+        src/apps/citysim/scripting/travel_lua.cpp
         src/apps/citysim/scripting/vehicle_body.cpp
     )
 endif()
@@ -973,6 +976,7 @@ add_executable(run_tests
     tests/test_city_possess.cpp
     tests/test_city_flow.cpp
     tests/test_city_spectate.cpp
+    tests/test_trip_plan.cpp
     tests/test_places.cpp
     tests/test_screen_project.cpp
     tests/test_relationships.cpp

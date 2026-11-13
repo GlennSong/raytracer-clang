@@ -7,6 +7,7 @@
 #include "../src/apps/citysim/scripting/place_kinds_lua.h"
 #include "../src/apps/citysim/scripting/people_lua.h"
 #include "../src/apps/citysim/scripting/signals_lua.h"
+#include "../src/apps/citysim/scripting/travel_lua.h"
 #include "../src/engine/scripting/script_vm.h"
 
 #include <cmath>
@@ -197,6 +198,38 @@ TEST_CASE(people_lua_is_the_built_in_people) {
     CHECK(std::fabs(cpp.heightAt(5) - 0.62) < 1e-9 && std::fabs(cpp.heightAt(17) - 0.97) < 1e-9);
     CHECK(cpp.heightAt(8) > 0.62 && cpp.heightAt(8) < cpp.heightAt(12));
     CHECK(std::fabs(cpp.heightAt(30) - 1.0) < 0.01 && cpp.heightAt(80) < cpp.heightAt(30));
+}
+
+// THE WAYS OF TRAVELLING (travel.lua, ADR-0415): the shipped table reads -- walk, then the car reached on foot -- and a
+// table that would leave the planner guessing is refused with the reason. (There is no C++ copy to keep equal.)
+TEST_CASE(trip_plan_travel_lua_reads_and_refuses_what_it_cannot_plan_with) {
+    ScriptVM vm;
+    std::string err;
+    CHECK(vm.doString(readFile(std::string(RT_SOURCE_DIR) + "/assets/scripts/travel.lua"), &err));
+    TravelCatalog cat;
+    const bool ok = loadTravelCatalog(vm, cat, &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
+    CHECK(cat.modes.size() == 2 && cat.find("walk") == 0 && cat.find("car") == 1);
+    CHECK(!cat.modes[0].roads && !cat.modes[0].ownVehicle && cat.modes[0].access == -1);
+    CHECK(cat.modes[1].roads && cat.modes[1].ownVehicle && cat.modes[1].access == 0);
+    CHECK(std::fabs(cat.modes[0].speed - 5.0 / 3.6) < 1e-9 && std::fabs(cat.modes[1].speed - 30.0 / 3.6) < 1e-9);
+    CHECK(cat.nearMin < cat.nearMax && cat.nearMax <= cat.farMin && cat.farMin < cat.farMax);
+    auto refused = [&](const std::string& edit, const std::string& why) {
+        ScriptVM bad;
+        std::string e;
+        CHECK(bad.doString(readFile(std::string(RT_SOURCE_DIR) + "/assets/scripts/travel.lua") + "\n" + edit, &e));
+        TravelCatalog c;
+        CHECK(!loadTravelCatalog(bad, c, &e));
+        if (e.find(why) == std::string::npos) std::printf("    `%s` refused with: %s\n", edit.c_str(), e.c_str());
+        CHECK(e.find(why) != std::string::npos);
+    };
+    refused("travel.modes[2].access = 'teleport'", "teleport");
+    refused("travel.modes[2].access = nil", "access");
+    refused("travel.modes[1].network = 'canals'", "canals");
+    refused("travel.modes[1].speed_kmh = 0", "speed_kmh");
+    refused("travel.modes[2].access = 'car'", "needs a vehicle itself");
+    refused("travel.far = { 900, 100 }", "far");
 }
 
 // THE SIGNALS' CYCLE: signals.lua is SignalTiming's defaults, and a time that is not positive is refused.

@@ -2235,7 +2235,10 @@ void CitySim::placeFromSchedule(int idx) {
         const std::size_t i = static_cast<std::size_t>(idx);
         Agent& a = agents_[i];
         if (a.playerControlled || a.released) return;
-        Snapshot s = scheduleSnapshot(a, clockHours_);
+        // With no day schedule a person the director has is left where the director has them (a clock jump re-seeds);
+        // everyone else is at home.
+        if (!daySchedule_ && a.directed) return;
+        Snapshot s = daySchedule_ ? scheduleSnapshot(a, clockHours_) : Snapshot{};
         const bool evening = s.where == Snapshot::Where::ToEvening || s.where == Snapshot::Where::AtEvening ||
                              s.where == Snapshot::Where::FromEvening;
         // the night out's states, by name (they share their labels with the day's: GoOut wears Outing like a
@@ -2423,6 +2426,22 @@ void CitySim::placeFromSchedule(int idx) {
                 vehicles_[a.car].parkedY = a.parkedBay >= 0 && a.parkedBay < static_cast<int>(bays_.size())
                                                ? bays_[static_cast<std::size_t>(a.parkedBay)].y : Real(-1e30);
                 parkedGrid_.place(a.car, a.pos);
+            }
+            // NO DAY TO KEEP (citysim.schedule = false): out of the car it was parked with, which stays in its space,
+            // and indoors at home, held there for a director (ADR-0091) -- the trip lab's person, waiting to be sent.
+            if (!daySchedule_) {
+                if (a.mode == Agent::Mode::Driver) {
+                    if (a.vehicle >= 0 && a.vehicle < static_cast<int>(vehicles_.size()))
+                        vehicles_[static_cast<std::size_t>(a.vehicle)].driver = -1;
+                    a.vehicle = -1;
+                    a.mode = Agent::Mode::Pedestrian;
+                }
+                if (a.homePlace != kNoPlace) {
+                    a.pos = a.homeDoor;
+                    a.indoors = true;
+                }
+                a.state = Agent::State::Resting;
+                a.directed = true;
             }
         } else {
             // Under way. Launch the real trip, then run the far-tier advance for
@@ -4582,11 +4601,15 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     // past the kerb, on the pavement. Pulling out from there drew every such car sliding off the sidewalk into the
     // street (Glenn), so it comes out in its lane instead; and a trip that finds no route leaves it in the garage
     // rather than parked on the pavement in plain view (the 40 cars heaped outside one tower's door).
-    const bool wasOffStreet = a.car >= 0 && a.car < static_cast<int>(vehicles_.size()) &&
+    // A DIRECTOR'S ERRAND GOES BY WHAT THE AGENT IS NOW (sendAgentTo; ADR-0091, ADR-0415): a directed car owner on
+    // foot WALKS -- not put back in its car (GET BACK IN, remountOwnedCar), its car left in its garage or its bay.
+    // Getting in is the director's boardVehicle. Everyone else takes their car whenever it is there, as before.
+    const bool takesCar = !a.directed || a.mode == Agent::Mode::Driver;
+    const bool wasOffStreet = takesCar && a.car >= 0 && a.car < static_cast<int>(vehicles_.size()) &&
                               vehicles_[static_cast<std::size_t>(a.car)].offStreet;
     const Real wasParkedY = wasOffStreet ? vehicles_[static_cast<std::size_t>(a.car)].parkedY : Real(-1e30);
-    remountOwnedCar(a);
-    if (a.car >= 0 && a.car < static_cast<int>(vehicles_.size()))
+    if (takesCar) remountOwnedCar(a);
+    if (takesCar && a.car >= 0 && a.car < static_cast<int>(vehicles_.size()))
     {
         vehicles_[static_cast<std::size_t>(a.car)].offStreet = false;   // out of the garage
         vehicles_[static_cast<std::size_t>(a.car)].parkedY = -1e30;    // (and down off its deck)
@@ -4715,7 +4738,7 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     a.restDwell = 0;
     int leaveStation = -1;
     Real leaveAt = 0;
-    if (a.parkedBay >= 0 && a.parkedBay < static_cast<int>(bays_.size())) {
+    if (takesCar && a.parkedBay >= 0 && a.parkedBay < static_cast<int>(bays_.size())) {   // (a walker's car stays put)
         if (a.parkedBay == leavingBay) {
             leaveStation = bays_[static_cast<std::size_t>(a.parkedBay)].link;
             leaveAt = bays_[static_cast<std::size_t>(a.parkedBay)].station;

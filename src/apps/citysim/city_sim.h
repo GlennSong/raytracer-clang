@@ -436,6 +436,12 @@ driving::VehicleClasses builtInDrivingClasses();
 // walked to exactly. Beyond this it is not really "along that street" and the
 // agent arrives at the node instead.
 constexpr Real kErrandOffLink = 15.0;
+// How close you have to be to open a car door (possession's `board`, a trip's getting in). Measured rather than
+// guessed: a walker sent to a parked car stops on the PAVEMENT, and the car is parked on the far side of the
+// carriageway — 8.3 m off the street's centreline one way, the footway the other, about 20 m apart on a metro street
+// with nothing wrong. Reaching a car you can see across the road is a person crossing it, so the reach is a street's
+// width. Getting to the STREET is still the director's problem, which is the part that matters.
+constexpr Real kBoardReach = 25.0;
 
 struct SimVehicle {
     Real length = 4.2;
@@ -960,8 +966,36 @@ public:
         if (a.vehicle < 0 || a.vehicle >= static_cast<int>(vehicles_.size()))
             return false;
         SimVehicle& v = vehicles_[static_cast<std::size_t>(a.vehicle)];
-        v.pos = a.pos;
-        v.heading = a.heading;
+        // INTO ITS SPACE. A drive sent to a destination (sendAgentTo) was routed to a free bay near it, reserved for
+        // this car. When that drive has ENDED -- arrived along the bay's own street, the same test an ordinary arrival
+        // parks by (arriveOrChain) -- the car is left IN the bay, not in the lane, and its driver gets out beside it
+        // (at a garage, at its door on the street: the stall is up a deck). Not by distance: a bay whose station lies
+        // inside a junction's box is one a car cannot stop at, and it came to rest 21 m on. Mid-drive, or anywhere
+        // else, the reservation is let go and the car stays where it stands.
+        const int self = agentIndex;
+        engine::Vec2 carPos = a.pos, carHeading = a.heading;
+        if (a.targetBay >= 0 && a.targetBay < static_cast<int>(bays_.size()) &&
+            bays_[static_cast<std::size_t>(a.targetBay)].occupant == self) {
+            const ParkingBay& b = bays_[static_cast<std::size_t>(a.targetBay)];
+            const bool driveEnded = !a.moving && a.route.valid() && a.route.links.back() == b.link &&
+                                    a.leg >= static_cast<int>(a.route.links.size());
+            if (driveEnded) {
+                a.parkedBay = a.targetBay;
+                carPos = b.pos;
+                carHeading = b.heading;
+                v.parkedY = b.y;
+                // out of a kerb space beside it; at a garage, out at its door on the street (the stall is up a deck)
+                if (b.garage < 0) {
+                    a.pos = b.pos;
+                    a.heading = b.heading;
+                }
+            } else {
+                bays_[static_cast<std::size_t>(a.targetBay)].occupant = -1;
+            }
+        }
+        a.targetBay = -1;
+        v.pos = carPos;
+        v.heading = carHeading;
         v.driver = -1;
         parkedGrid_.place(a.vehicle, v.pos);
         a.vehicle = -1;
@@ -1104,7 +1138,15 @@ public:
         // that link makes the last street it walks the one it was sent to, and
         // the stop-short below then lands it beside the address.
         if (a.mode == Agent::Mode::Pedestrian) {
-            const int dl = nav_->nearestLink(dest);
+            int dl = nav_->nearestLink(dest);
+            // ...ON THE DESTINATION'S SIDE OF IT. A street is two links, one each way, and a walker walks a link on
+            // its kerb side (rightOf its direction); the nearest link is either of the pair, so half the errands
+            // ended on the far pavement, a carriageway from the door (measured: 24.9 m from a civic entrance).
+            if (dl >= 0 && static_cast<std::size_t>(dl) < twinOf_.size() && twinOf_[static_cast<std::size_t>(dl)] >= 0 &&
+                !nav_->links[static_cast<std::size_t>(dl)].footpath &&
+                dot(dest - nav_->nodes[static_cast<std::size_t>(nav_->links[static_cast<std::size_t>(dl)].from)],
+                    engine::rightOf(nav_->direction(dl))) < 0)
+                dl = twinOf_[static_cast<std::size_t>(dl)];
             if (dl >= 0) {
                 const engine::NavLink& L = nav_->links[static_cast<std::size_t>(dl)];
                 if (L.from != from) {
@@ -1155,8 +1197,10 @@ public:
         // agent stops. A destination that is not beside its final street (a
         // door round the corner) keeps the old behaviour and arrives at the
         // node, which is the honest answer rather than a wrong one.
+        // A DRIVE TO A RESERVED BAY (startTrip found one near the goal) ends AT the bay: the stepper stops it at the
+        // bay's station, and a stop-short projected from the door could pull up short of the space.
         a.stopAtDist = -1;
-        if (!a.route.links.empty()) {
+        if (!a.route.links.empty() && a.targetBay < 0) {
             const engine::NavLink& last =
                 nav_->links[static_cast<std::size_t>(a.route.links.back())];
             const engine::Vec2 A = nav_->nodes[static_cast<std::size_t>(last.from)];
@@ -1187,19 +1231,7 @@ public:
     // The `k` nav nodes nearest `p`, nearest first. Linear scan + partial sort:
     // a director's command, not a per-frame path (nearestNode is a scan too).
     std::vector<int> nearestNodesTo(engine::Vec2 p, int k) const {
-        std::vector<int> idx;
-        if (!nav_) return idx;
-        const int n = nav_->nodeCount();
-        idx.resize(static_cast<std::size_t>(n));
-        for (int i = 0; i < n; ++i) idx[static_cast<std::size_t>(i)] = i;
-        k = std::min(k, n);
-        auto d2 = [&](int i) {
-            return (nav_->nodes[static_cast<std::size_t>(i)] - p).lengthSquared();
-        };
-        std::partial_sort(idx.begin(), idx.begin() + k, idx.end(),
-                          [&](int A, int B) { return d2(A) < d2(B); });
-        idx.resize(static_cast<std::size_t>(k));
-        return idx;
+        return nav_ ? nav_->nearestNodes(p, k) : std::vector<int>{};
     }
 
     // Sample agent `agentIndex`'s current route as a polyline of lane-centre
@@ -1226,6 +1258,11 @@ public:
     // whatever tables are set — call setGoalTables after it, not before).
     void setWander(bool on);
     bool wander() const { return wander_; }
+    // NO DAY SCHEDULE (citysim.schedule = false; the trip lab, ADR-0415): everyone is seeded at home -- a car owner's
+    // car parked outside, the person indoors -- and held there for a director (`directed`), going only where they are
+    // sent. Set before seedFromSchedule.
+    void setDaySchedule(bool on) { daySchedule_ = on; }
+    bool daySchedule() const { return daySchedule_; }
     // A LEVEL's ROLE FOR ITS DRIVERS (#214; citysim.driverRole): `share` of the private drivers (never a bus, a cab or
     // a service vehicle) take role `name` -- the traffic lab gives lab_driver, always driving. After the cabs and
     // buses are marked. Returns how many took it (0 when the role is unknown).
@@ -2076,6 +2113,7 @@ private:
     std::vector<uint8_t> crowdHas_;
     Real thinkPeriod_ = 0.35;   // reactive re-decide cadence (s), staggered per agent
     bool wander_ = false;       // lab mode: perpetual random trips, no schedule
+    bool daySchedule_ = true;   // false: everyone at home, held for a director (setDaySchedule)
     LaneMap laneMap_;           // the real lanes on each link (#218): empty = the link's line plus an offset
     bool useRealLanes_ = false; // draw cars on them (citysim.realLanes)
     std::optional<driving::Driving> drivingV2_;   // the new driving model, when the level asks for it (useDrivingV2)

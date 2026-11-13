@@ -291,6 +291,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.busMaxWalk = c.busMaxWalk;
         params_.physicalCars = c.physicalCars;
         params_.wander = c.wander;
+        params_.schedule = c.schedule;
         params_.ambientBus = c.ambientBus;
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
@@ -983,6 +984,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     }
     sim_.setPerceptionReliability(params_.perceptionReliability);
     sim_.setWander(params_.wander);
+    sim_.setDaySchedule(params_.schedule);
     // Three-tier traffic (P4): the level's opt-in. The bubble only engages
     // once a player position is fed each fixed step (see step() below) — the
     // build warm-up therefore runs everything K, exactly as before.

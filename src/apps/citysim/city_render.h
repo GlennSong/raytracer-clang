@@ -112,6 +112,7 @@ struct CityRenderParams {
     bool adaptiveRate = true;
     bool debugWidgets = false;             // draw each agent's footprint + trajectory
     bool wander = false;                   // perpetual random trips (the agent lab)
+    bool schedule = true;                  // false: everyone waits at home to be sent (CitySim::setDaySchedule)
     bool ambientBus = false;               // ambient rotation includes the bus body (wheel_lab)
     // Scripted goal tables (ADR-0064): the SOURCE of an agents.lua-style script
     // whose archetype tables replace the sim's built-ins at build. Loaded from
@@ -327,6 +328,9 @@ public:
     CitySim& simMutable() { return sim_; }   // ADR-0062 bridge: release ejected drivers
     const PlaceMap& places() const { return places_; }
     const engine::NavGraph& nav() const { return nav_; }
+    // The height things drawn along a route stand on: link `link`'s surface at `station` (deckYAt), the ground for
+    // link -1 (the trip lab's plan line and its destination mark).
+    Real surfaceY(int link, Real station, engine::Vec2 p) const { return deckYAt(link, station, p); }
     // Cars are split across several instance groups, one per body/colour variant
     // (an InstanceGroup shares one mesh, so variety needs multiple groups).
     const std::vector<engine::Entity>& carGroups() const { return carGroups_; }
