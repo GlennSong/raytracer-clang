@@ -219,7 +219,7 @@ constexpr double kLongestStand = 100.0;
 // Any change to what cars do changes it, so a change that moves the traffic must be acknowledged here, by updating this
 // number in the same change and saying why in its report -- never left to drift. (Same every run within a build is the
 // test below; this pins it across builds.) Checked only for the full five minutes (not with RT_LAB_SECONDS).
-constexpr uint64_t kFiveMinuteStateHash = 0x986066aea5828fadull;   // #284 (ADR-0410)
+constexpr uint64_t kFiveMinuteStateHash = 0x7381989eed43cec0ull;   // retaken: lab re-planned (ADR-0413), buses and per-size crossing records (ADR-0412)
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's
