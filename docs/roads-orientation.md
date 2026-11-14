@@ -247,5 +247,11 @@ data rows.
   its spine; a lane with nothing left once its folds are cut; "runs along none of the streets nor inside a junction";
   "lies part way along its road"; a lone centimetre hole between two streets' stations with no junction beside it; the
   turns-placed count mismatch (cannot happen by construction). None arises in a hand scene; each needs degenerate input.
+- The stop line where the paint has no box (`stopLineFromMouth`, 39 arms in traffic_lab) has no expected value written
+  by hand anywhere: the test and the lane level call the same function. Pin at least one arm against a number worked
+  out from the scene.
+- On a lane named as tidied, the allowed slack (the written cut) applies to each lane path, not once to the lane.
+- The model's stop line itself is only checked as "stated and outside the box edge" (`test_road_model.cpp`) and on one
+  hand-made grid_city arm against the paint.
 - traffic_lab's known joins and the scenes' non-right-angle join gaps and turns are snapshots of builder output, not
   values worked out by hand.
