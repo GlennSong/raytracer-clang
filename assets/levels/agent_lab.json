@@ -62,7 +62,8 @@
     "schedule": false,
     "homeNear": [-590.0, -210.0],
     "busCommuteShare": 0.0,
-    "graph": "assets/lanelab/planned/river_town_lanelab.json"
+    "controlSigns": true,
+    "graph": "assets/lanelab/planned/agent_lab_lanelab.json"
   },
   "dayNight": {
     "dayMinutes": 1440.0,
@@ -80,7 +81,7 @@
       ],
       "road": {
         "builder": "lanes",
-        "graph": "assets/lanelab/planned/river_town_lanelab.json",
+        "graph": "assets/lanelab/planned/agent_lab_lanelab.json",
         "sidewalks": {
           "arterial": 6.0,
           "collector": 5.5,

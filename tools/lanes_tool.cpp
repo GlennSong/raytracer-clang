@@ -15,7 +15,11 @@
 //                      city sim's old rule lit (lit.json: the loader's RT_CONTROL_DUMP) get a signal, the rest none (ADR-0421)
 //   lanes_tool model <graph.json> [--out <dir>]   build the roads and assemble THE ROAD MODEL: model.txt, report.txt, model.svg
 //   lanes_tool compare <graph.json> [--out <dir>]   the model files too, and the road model against the old forms (twin/nav, paint boxes, lane graph,
-//                      lane match): compare.txt
+//                      lane match): compare.txt; and the regions the streets enclose against the pavement's holes
+//                      (ADR-0423): regions.txt, regions.svg
+//   lanes_tool regions-lots <level.json> [--out <dir>]   the level's lots grown again in memory from its bundle (run with
+//                      RT_BUNDLE_WRITE=0), dumped beside the stored ones (lots_grown.txt, lots_stored.txt), and the regions
+//                      against the lot pass's frontage edges and doors (regions_lots.txt, ADR-0423). Writes nothing else.
 //   lanes_tool junctions <graph.json> [--top N]   the junctions the file's grouping makes (the control plan's where the file
 //                      plans controls, else the layout's), each with its nodes and its size (the most any two nodes lie
 //                      apart), the biggest first (ADR-0418)
@@ -27,6 +31,9 @@
 #include "engine/procgen/city/roads/road_model.h"   // model: the one road model (ADR-0417)
 #include "engine/procgen/city/roads/lanes/road_twin.h"
 #include "engine/procgen/city/roads/lanes/block_audit.h"
+#include "engine/procgen/city/roads/lanes/city_producer.h"   // regions-lots: the level's city bundle and its products
+#include "engine/procgen/city/roads/lanes/lots_producer.h"   // regions-lots: the lot pass grown again in memory
+#include "engine/procgen/city/lot_cache.h"                   // regions-lots: the lots the bundle stores
 #include "engine/procgen/city/road_network.h"   // extractBlocks: the lot pass's face walk
 #include "engine/procgen/city/polygon.h"
 #include "engine/procgen/city/roads/lanes/geom2d.h"
@@ -143,6 +150,47 @@ nlohmann::json interchangeDemo() {
     for (const json& r : sr.ramps) edges.push_back(r);
     scene["edges"] = edges;
     return scene;
+}
+
+// EVERY LOT IN WORDS (regions-lots): its kind, recipe, block, site and size, its lot line, its plan, its frontage edge (the
+// lot line its front door looks out through) and every door with where it faces, to the tenth of a millimetre -- two
+// grows of the same city compare byte for byte.
+std::string lotDump(const std::vector<LotBuilding>& lots) {
+    std::string out;
+    char buf[512];
+    auto ring = [&](const char* what, const std::vector<Vec2>& pts) {
+        out += what;
+        for (const Vec2& p : pts) {
+            std::snprintf(buf, sizeof buf, " (%.4f, %.4f)", p.x, p.y);
+            out += buf;
+        }
+        out += "\n";
+    };
+    for (std::size_t i = 0; i < lots.size(); ++i) {
+        const LotBuilding& b = lots[i];
+        std::snprintf(buf, sizeof buf, "lot %zu: %s %s block %d district %s site (%.4f, %.4f) yaw %.5f size %.4f x %.4f x %.4f base %.4f ground %.4f units %zu\n",
+                      i, b.type.c_str(), b.recipe.c_str(), b.block, b.district.c_str(), b.site.x, b.site.y, b.yaw, b.width, b.depth, b.height, b.baseY,
+                      b.groundY, b.units.size());
+        out += buf;
+        ring("  lot line:", b.lot);
+        ring("  plan:", b.plan);
+        Vec2 door, n;
+        const int k = lotFrontageEdge(b, &door, &n);
+        if (k >= 0) {
+            const Vec2 a = b.lot[static_cast<std::size_t>(k)], e = b.lot[(static_cast<std::size_t>(k) + 1) % b.lot.size()];
+            std::snprintf(buf, sizeof buf, "  frontage edge %d: (%.4f, %.4f) to (%.4f, %.4f)\n", k, a.x, a.y, e.x, e.y);
+            out += buf;
+        } else {
+            out += "  frontage edge: none\n";
+        }
+        for (const BuildingUnit& u : b.units)
+            for (const DoorSpec& d : u.doors) {
+                std::snprintf(buf, sizeof buf, "  door at (%.4f, %.4f) facing (%.5f, %.5f) %.3f x %.3f%s%s\n", d.foot.x, d.foot.y, d.normal.x, d.normal.y,
+                              d.width, d.height, d.back ? " back" : "", d.open ? " open" : "");
+                out += buf;
+            }
+    }
+    return out;
 }
 
 }  // namespace
@@ -392,7 +440,58 @@ int main(int argc, char** argv) {
         const double compareSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t2).count();
         const std::string text = c.text + fmtSeconds(buildSeconds, modelSeconds, compareSeconds);
         std::ofstream(outDir + "/compare.txt") << text;
-        std::printf("%s", text.c_str());
+        // the regions enclosed by streets (ADR-0423): every region in words, and a map with the pavement's holes over it
+        std::ofstream(outDir + "/regions.txt") << reportEnclosedRegions(model, c.enclosed);
+        std::ofstream(outDir + "/regions.svg") << enclosedRegionsSvg(model, c.enclosed, &c.holes);
+        std::printf("%swrote %s/compare.txt, regions.txt, regions.svg\n", text.c_str(), outDir.c_str());
+        return 0;
+    }
+    if (argc >= 3 && std::strcmp(argv[1], "regions-lots") == 0) {
+        // THE REGIONS AGAINST THE LOT PASS (ADR-0423's evidence; moves nothing, saves nothing but the files named here): the
+        // level's city bundle as it is (run with RT_BUNDLE_WRITE=0: a bundle that is not current is baked in memory, never
+        // written), its lots grown again in memory by the existing lot pass from the bundle's own city products, every lot
+        // dumped (lots_grown.txt) beside the lots the bundle stores (lots_stored.txt), and the region comparison
+        // (regions_lots.txt; road_model_compare.h compareRegionsWithLots)
+        std::string outDir = ".";
+        for (int i = 3; i + 1 < argc; ++i)
+            if (std::strcmp(argv[i], "--out") == 0) outDir = argv[i + 1];
+        if (!makeOutDir(outDir)) return 1;
+        bundle::LevelInputs in;
+        std::string err;
+        if (!bundle::loadLevelInputs(argv[2], in, &err)) { std::fprintf(stderr, "lanes_tool: %s: %s\n", argv[2], err.c_str()); return 1; }
+        const std::vector<CityEntity> ents = cityEntities(in.level);
+        if (ents.empty()) { std::fprintf(stderr, "lanes_tool: %s has no lane-built city\n", argv[2]); return 1; }
+        std::string status;
+        const std::shared_ptr<bundle::Bundle> b = levelCityBundle(in, &status);
+        std::printf("bundle: %s\n", status.c_str());
+        if (!b) return 1;
+        CityProducts p;
+        if (!readCityProducts(*b, ents.back().ordinal, p, &err)) { std::fprintf(stderr, "lanes_tool: %s\n", err.c_str()); return 1; }
+        NetLotResult stored;
+        if (!lotcache::readLotResult(*b, kLotsSectionPrefix, stored, &err, false)) { std::fprintf(stderr, "lanes_tool: stored lots: %s\n", err.c_str()); return 1; }
+        LotsCityInputs city;   // the lots producer's inputs, from the same sections it reads
+        city.hasTerrain = p.hasTerrain;
+        city.ground = p.ground;
+        city.holes = p.holes;
+        city.nav = p.lotNav;
+        city.pavedSidewalk = p.bands.sidewalkWidth;
+        city.deck = p.deck;
+        city.rails = p.rails;
+        const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        const NetLotResult grown = growLotsForLevel(in, city);
+        std::printf("grew %zu lots in memory in %.1f s (the bundle stores %zu)\n", grown.lots.size(),
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), stored.lots.size());
+        const std::string dumpGrown = lotDump(grown.lots), dumpStored = lotDump(stored.lots);
+        std::ofstream(outDir + "/lots_grown.txt") << dumpGrown;
+        std::ofstream(outDir + "/lots_stored.txt") << dumpStored;
+        std::printf("the lots grown in memory and the lots the bundle stores dump %s\n", dumpGrown == dumpStored ? "byte-identical" : "DIFFERENTLY");
+        RoadLabGraph g = loadCityGraph(ents.back());
+        (void)expand(g);   // the planned layer reads the ramps composed (as the loader does)
+        const RoadModel model = plannedRoadModel(g);
+        const EnclosedRegions er = enclosedRegions(model);
+        const RegionLotComparison c = compareRegionsWithLots(model, er, p.holes, grown.lots, p.lotNav);
+        std::ofstream(outDir + "/regions_lots.txt") << c.text;
+        std::printf("%swrote %s/lots_grown.txt, lots_stored.txt, regions_lots.txt\n", c.text.c_str(), outDir.c_str());
         return 0;
     }
     if (argc == 3 && std::strcmp(argv[1], "interchange-demo") == 0) {
@@ -661,7 +760,8 @@ int main(int argc, char** argv) {
                              "       lanes_tool landings <graph.json> ...   (each ramp end on a street: on the carriageway going its way? #282)\n"
                              "       lanes_tool layout <graph.json> [--write] [--fresh] [--names]   (the road file's junctions and streets with ids; --write puts them in the file, ADR-0417; --names their names, ADR-0420)\n"
                              "       lanes_tool model <graph.json> [--out <dir>]   (the road model: model.txt, report.txt, model.svg)\n"
-                             "       lanes_tool compare <graph.json> [--out <dir>]   (the road model against the twin/nav, paint boxes, lane graph and lane match: compare.txt)\n"
+                             "       lanes_tool compare <graph.json> [--out <dir>]   (the road model against the twin/nav, paint boxes, lane graph and lane match: compare.txt; regions.txt, regions.svg)\n"
+                             "       lanes_tool regions-lots <level.json> [--out <dir>]   (the regions against the lot pass, its lots grown in memory: regions_lots.txt, lot dumps)\n"
                              "                    [--ramp-width M] [--ramp-shoulder M]   ramp carriageway (default 4.5 m lane, 2.5 m shoulder)\n");
         return 2;
     }

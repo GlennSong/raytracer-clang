@@ -23,8 +23,12 @@
 // This file is compiled into lanes_tool and lanes_tests only: it reads the city sim's lane match.
 
 #include "engine/procgen/city/roads/road_model.h"
+#include "engine/procgen/city/city_lots.h"     // LotBuilding: the lot pass's output, compared with the regions
+#include "engine/procgen/city/road_network.h"  // RoadGraph: the lot pass's road graph
 
+#include <map>
 #include <string>
+#include <vector>
 
 namespace engine {
 namespace roads::lanes {
@@ -58,11 +62,44 @@ struct RoadModelComparison {
     uint32_t streetsWithUnmatchedLink = 0;
     // the old forms against each other, at the model's junctions and streets
     uint32_t junctionsFormsDisagree = 0, streetsFormsDisagree = 0;
+    // THE REGIONS ENCLOSED BY STREETS (road_model.h enclosedRegions, ADR-0423) against the pavement's holes (block_audit.h
+    // pavementHoles, as the city producer cuts them: kHoleMinArea and up), tied by a point inside each hole lying inside a
+    // region's outline: holes no region holds, regions holding no hole, regions holding several
+    EnclosedRegions enclosed;               // the answer, kept here for the map (the tool writes it); nothing saves it
+    std::vector<std::vector<Vec2>> holes;
+    uint32_t holesWithoutRegion = 0, regionsWithoutHole = 0, regionsWithSeveralHoles = 0;
     std::string text;                       // the whole report, in words
 };
 
+// The pavement holes the city producer keeps (city_producer.cpp: pavementHoles(r, this)), square metres.
+constexpr double kHoleMinArea = 2000.0;
+
 // Compares `model` (assembled from `r`) with the old forms built from `r`.
 RoadModelComparison compareRoadModel(const RoadModel& model, const Result& r);
+
+// THE REGIONS AGAINST THE LOT PASS (ADR-0423's evidence; it moves nothing): for a level's lots as the existing lot pass
+// grows them, each lot's FRONTAGE EDGE (the lot line its front door looks out through, lotFrontageEdge) given the street the
+// old nearest-road vote would give it (city_lots.cpp's rule: at the edge's quarter points, the road-graph edge nearest within
+// 60 m beyond its half width; the majority; that graph edge tied to the model street whose centre line passes nearest it)
+// and the street the enclosed region holding the lot says bounds that edge (of the region's bounding streets, the one whose
+// centre line passes nearest the quarter points; the majority). Where they differ, why, grouped. The same for each front
+// door (the old rule: it faces the nearest street-class, at-grade road-graph edge from the lot's site). Lots whose frontage
+// the old vote gives a freeway or ramp. Every pavement hole tied to its region.
+struct RegionLotComparison {
+    uint32_t holes = 0, holesInRegion = 0;
+    uint32_t lots = 0, lotsWithFrontage = 0, lotsInRegion = 0;
+    uint32_t frontagesCompared = 0, frontagesDiffer = 0;
+    uint32_t doorsCompared = 0, doorsDiffer = 0;
+    uint32_t frontOnPassedOver = 0;         // lots whose frontage the old vote gives a freeway or ramp street
+    uint32_t frontVotedNotStreet = 0;       // ...or whose frontage the old vote's own test calls no street (freeway, ramp, deck)
+    std::map<std::string, uint32_t> frontageCauses, doorCauses;
+    std::string text;
+};
+RegionLotComparison compareRegionsWithLots(const RoadModel& m, const EnclosedRegions& er, const std::vector<std::vector<Vec2>>& holes,
+                                           const std::vector<LotBuilding>& lots, const RoadGraph& lotRoads);
+// A built lot's frontage edge: the index of the lot line (b.lot[k] to b.lot[k + 1]) its first front door looks out
+// through; -1 when it has no front door or no lot line. `door`, `normal` (optional, out): that door.
+int lotFrontageEdge(const LotBuilding& b, Vec2* door = nullptr, Vec2* normal = nullptr);
 
 }  // namespace roads::lanes
 }  // namespace engine

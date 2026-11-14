@@ -10,6 +10,7 @@
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_twin.h"         // classOf: the engine's class of a road
 #include "engine/procgen/city/polyline.h"                      // simplifyRun, distToSegment
+#include "engine/procgen/city/polygon.h"                       // pointInPolygon, interiorPoint: the regions' outlines
 #include "engine/asset_root.h"                                 // assetPath: the attachment kinds' file
 #include "log.h"
 
@@ -520,6 +521,7 @@ AttachmentKinds parseAttachmentKinds(const nlohmann::json& doc) {
             if (k.contains("controls") && k["controls"].is_array())
                 for (const nlohmann::json& c : k["controls"])
                     if (c.is_string()) kind.controls.push_back(c.get<std::string>());
+            if (k.contains("sign") && k["sign"].is_object()) kind.sign = k["sign"];
             if (kind.on == "street" || kind.on == "junction" || kind.on == "arm") out.kinds.push_back(kind);
         }
     if (doc.contains("uses") && doc["uses"].is_object())
@@ -687,6 +689,504 @@ ModelLaneId laneNamed(const RoadModel& m, const std::string& id) {
     for (std::size_t i = 0; i < m.lanes.size(); ++i)
         if (m.lanes[i].id == id) return ModelLaneId(static_cast<uint32_t>(i));
     return ModelLaneId();
+}
+
+// ---- the regions enclosed by streets (a look-up: nothing here is kept) ---------------------------------------------------
+
+namespace {
+
+// A junction whose walked arms' mouths lie further apart than this (metres) was spread over several points by the plan.
+constexpr Real kSpreadMouths = 1.0;
+// How far past its furthest mouth a spread junction's circle reaches (metres): where its arms' order round it is read.
+constexpr Real kSpreadMargin = 5.0;
+// Two walked streets whose centre lines cross within this of an end of either meet there (metres): not a crossing.
+constexpr Real kCrossingEndReach = 1.0;
+// A face of the walk under this (square metres, either sign) encloses nothing.
+constexpr Real kNoArea = 0.5;
+// A dead end within this of a passed-over street's centre line is said to end beside it (metres; words only).
+constexpr Real kDeadEndBeside = 60.0;
+
+// One step of the walk: a street and the way it is walked (forward: from its `from` to its `to`).
+uint32_t stepOf(uint32_t street, bool forward) { return 2 * street + (forward ? 0u : 1u); }
+
+Real degreesOf(const Vec2& d) {
+    const Real a = std::atan2(d.y, d.x) / DEG_TO_RAD;
+    return a < 0 ? a + 360 : a;
+}
+
+void appendStreetLine(const RoadModel& m, const ModelStreet& S, bool forward, std::vector<Vec2>& out) {
+    for (uint32_t i = 0; i < S.line.count; ++i) {
+        const Vec2& p = m.linePoints[forward ? S.line.first + i : S.line.end() - 1 - i];
+        if (out.empty() || (out.back() - p).length() > 1e-6) out.push_back(p);
+    }
+}
+
+std::string regionStreet(const RoadModel& m, ModelStreetId s) { return s.valid() ? m.streets[s.index].id : std::string("(none)"); }
+
+}  // namespace
+
+EnclosedRegions enclosedRegions(const RoadModel& m, const RegionWalk& rules) {
+    EnclosedRegions out;
+    const uint32_t S = static_cast<uint32_t>(m.streets.size());
+    auto note = [](std::vector<RegionWalkNote>& list, ModelStreetId s, ModelJunctionId j, const Vec2& at, const std::string& why,
+                   ModelStreetId other = ModelStreetId()) {
+        RegionWalkNote n;
+        n.street = s;
+        n.other = other;
+        n.junction = j;
+        n.at = at;
+        n.why = why;
+        list.push_back(std::move(n));
+    };
+    auto endName = [](int e) { return e == 0 ? "`from`" : "`to`"; };
+
+    // ---- the streets walked: every street with a centre line, but those of a passed-over class -------------------------
+    std::vector<char> walked(S, 0);
+    for (uint32_t s = 0; s < S; ++s) {
+        const ModelStreet& st = m.streets[s];
+        if (std::find(rules.passOver.begin(), rules.passOver.end(), st.section.klass) != rules.passOver.end()) {
+            out.passedOver.push_back(ModelStreetId(s));
+            continue;
+        }
+        if (st.line.count < 2) {
+            note(out.problems, ModelStreetId(s), ModelJunctionId(), Vec2(), "it has no centre line: not walked");
+            continue;
+        }
+        walked[s] = 1;
+        ++out.walked;
+    }
+    auto streetEnd = [&](uint32_t s, int e) {   // a street's centre line at its end e (0: `from`, 1: `to`)
+        const Range& L = m.streets[s].line;
+        return e == 0 ? m.linePoints[L.first] : m.linePoints[L.end() - 1];
+    };
+
+    // ---- each walked street end's arm, as the junctions list them (the arms lead the walk) ------------------------------
+    struct EndArm {
+        int32_t junction = -1, arm = -1;
+    };
+    std::vector<std::array<EndArm, 2>> endArm(S);
+    for (uint32_t j = 0; j < m.junctions.size(); ++j) {
+        const ModelJunction& J = m.junctions[j];
+        for (uint32_t a = 0; a < J.arms.size(); ++a) {
+            const ModelArm& arm = J.arms[a];
+            if (!arm.street.valid() || arm.street.index >= S || !walked[arm.street.index]) continue;
+            const uint32_t s = arm.street.index;
+            const int e = arm.spineIn ? 1 : 0;
+            if (endArm[s][e].junction >= 0) {
+                note(out.problems, arm.street, ModelJunctionId(j), streetEnd(s, e),
+                     fmt("arm %u of junction %s and arm %d of junction %s are both its %s end: the first leads the walk", a, J.id.c_str(),
+                         endArm[s][e].arm, m.junctions[static_cast<std::size_t>(endArm[s][e].junction)].id.c_str(), endName(e)));
+                continue;
+            }
+            endArm[s][e] = EndArm{static_cast<int32_t>(j), static_cast<int32_t>(a)};
+            const ModelJunctionId named = m.streets[s].junctions[static_cast<std::size_t>(e)];
+            if (named != ModelJunctionId(j))
+                note(out.problems, arm.street, ModelJunctionId(j), streetEnd(s, e),
+                     fmt("arm %u of junction %s is its %s end, which names %s: the arm leads the walk", a, J.id.c_str(), endName(e),
+                         named.valid() ? ("junction " + m.junctions[named.index].id).c_str() : "no junction"));
+        }
+    }
+    for (uint32_t s = 0; s < S; ++s) {
+        if (!walked[s]) continue;
+        for (int e = 0; e < 2; ++e) {
+            const ModelJunctionId named = m.streets[s].junctions[static_cast<std::size_t>(e)];
+            if (named.valid() && endArm[s][e].junction < 0)
+                note(out.problems, ModelStreetId(s), named, streetEnd(s, e),
+                     fmt("its %s end names junction %s, which lists no arm for it: walked round there", endName(e), m.junctions[named.index].id.c_str()));
+        }
+    }
+
+    // ---- each junction's walked arms in order round it --------------------------------------------------------------------
+    std::vector<std::vector<uint32_t>> order(m.junctions.size());
+    std::vector<std::vector<int32_t>> posOf(m.junctions.size());
+    for (uint32_t j = 0; j < m.junctions.size(); ++j) {
+        const ModelJunction& J = m.junctions[j];
+        posOf[j].assign(J.arms.size(), -1);
+        std::vector<uint32_t> arms;
+        std::vector<Vec2> mouths;
+        for (uint32_t a = 0; a < J.arms.size(); ++a) {
+            const ModelArm& arm = J.arms[a];
+            if (!arm.street.valid() || arm.street.index >= S || !walked[arm.street.index]) continue;
+            const EndArm& ea = endArm[arm.street.index][arm.spineIn ? 1 : 0];
+            if (ea.junction != static_cast<int32_t>(j) || ea.arm != static_cast<int32_t>(a)) continue;
+            arms.push_back(a);
+            mouths.push_back(streetEnd(arm.street.index, arm.spineIn ? 1 : 0));
+        }
+        if (arms.empty()) continue;
+        Real spread = 0, reach = 0;
+        for (std::size_t i = 0; i < mouths.size(); ++i) {
+            reach = std::max(reach, (mouths[i] - J.at).length());
+            for (std::size_t k = i + 1; k < mouths.size(); ++k) spread = std::max(spread, (mouths[i] - mouths[k]).length());
+        }
+        const bool spreadOut = spread > kSpreadMouths;
+        std::vector<Real> byHeading(arms.size()), key(arms.size());
+        for (std::size_t i = 0; i < arms.size(); ++i) {
+            const ModelArm& arm = J.arms[arms[i]];
+            const uint32_t s = arm.street.index;
+            const bool atFrom = !arm.spineIn;   // the street leaves the junction from its `from` end
+            const Range& L = m.streets[s].line;
+            auto lineAt = [&](uint32_t k) { return m.linePoints[atFrom ? L.first + k : L.end() - 1 - k]; };   // k-th point outward
+            // its way out: the stated heading, else its centre line's first step
+            byHeading[i] = stated(arm.heading) ? std::fmod(arm.heading + 360.0, 360.0) : degreesOf(lineAt(1) - lineAt(0));
+            key[i] = byHeading[i];
+            if (!spreadOut) continue;
+            // a spread junction: where the arm's street leaves the circle holding every mouth (its far end if it never does)
+            const Real R = reach + kSpreadMargin;
+            Vec2 exitAt = lineAt(L.count - 1);
+            for (uint32_t k = 0; k + 1 < L.count; ++k) {
+                const Vec2 p = lineAt(k), q = lineAt(k + 1);
+                if ((q - J.at).length() < R) continue;
+                const Vec2 d = q - p, f = p - J.at;
+                const Real A = dot(d, d), B = 2 * dot(f, d), C = dot(f, f) - R * R;
+                const Real disc = B * B - 4 * A * C;
+                const Real t = A > 1e-12 && disc >= 0 ? std::clamp((-B + std::sqrt(disc)) / (2 * A), Real(0), Real(1)) : Real(1);
+                exitAt = p + d * t;
+                break;
+            }
+            key[i] = degreesOf(exitAt - J.at);
+        }
+        std::vector<uint32_t> sorted(arms.size()), headingSorted(arms.size());
+        for (uint32_t i = 0; i < sorted.size(); ++i) sorted[i] = headingSorted[i] = i;
+        std::stable_sort(sorted.begin(), sorted.end(), [&](uint32_t x, uint32_t y) { return key[x] < key[y]; });
+        std::stable_sort(headingSorted.begin(), headingSorted.end(), [&](uint32_t x, uint32_t y) { return byHeading[x] < byHeading[y]; });
+        if (spreadOut) {
+            ++out.spreadJunctions;
+            // the same cyclic order? (turn the heading order to start where the other does)
+            const std::vector<uint32_t>::iterator at = std::find(headingSorted.begin(), headingSorted.end(), sorted.front());
+            std::rotate(headingSorted.begin(), at, headingSorted.end());
+            if (headingSorted != sorted) ++out.spreadOrderDiffers;
+        }
+        for (uint32_t i = 0; i < sorted.size(); ++i) {
+            order[j].push_back(arms[sorted[i]]);
+            posOf[j][arms[sorted[i]]] = static_cast<int32_t>(i);
+        }
+    }
+
+    // ---- where a walked street carries on into another (no junction there) ----------------------------------------------
+    std::vector<std::array<int64_t, 2>> carry(S, std::array<int64_t, 2>{-1, -1});   // the step it carries on into, at each end
+    for (uint32_t s = 0; s < S; ++s) {
+        if (!walked[s]) continue;
+        for (int e = 0; e < 2; ++e) {
+            if (endArm[s][e].junction >= 0) continue;
+            const ModelStreetId t = m.streets[s].carriesOn[static_cast<std::size_t>(e)];
+            if (!t.valid() || t.index >= S) continue;
+            const Vec2 at = streetEnd(s, e);
+            if (!walked[t.index]) {
+                note(out.turnedRound, ModelStreetId(s), ModelJunctionId(), at,
+                     "it carries on into " + m.streets[t.index].id + " (" + m.streets[t.index].section.roadClass + ", passed over): walked round there", t);
+                continue;
+            }
+            int back = -1;
+            for (int k = 0; k < 2; ++k)
+                if (m.streets[t.index].carriesOn[static_cast<std::size_t>(k)] == ModelStreetId(s) && !(t.index == s && k == e)) back = k;
+            if (back < 0) {
+                note(out.problems, ModelStreetId(s), ModelJunctionId(), at, "it carries on into " + m.streets[t.index].id + ", which does not name it back: walked round there", t);
+                continue;
+            }
+            if (endArm[t.index][back].junction >= 0) {
+                note(out.problems, ModelStreetId(s), ModelJunctionId(static_cast<uint32_t>(endArm[t.index][back].junction)), at,
+                     "it carries on into " + m.streets[t.index].id + ", whose end there is an arm of a junction: walked round there", t);
+                continue;
+            }
+            carry[s][static_cast<std::size_t>(e)] = stepOf(t.index, back == 0);
+        }
+    }
+
+    // ---- the dead ends (walked round), each with the passed-over street passing nearest it, if one is beside it ---------
+    for (uint32_t s = 0; s < S; ++s) {
+        if (!walked[s]) continue;
+        for (int e = 0; e < 2; ++e) {
+            if (endArm[s][e].junction >= 0 || carry[s][static_cast<std::size_t>(e)] >= 0 || m.streets[s].carriesOn[static_cast<std::size_t>(e)].valid())
+                continue;   // a junction, a carry-on, or a carry-on already said (turnedRound, problems)
+            if (m.streets[s].junctions[static_cast<std::size_t>(e)].valid()) continue;   // said in problems
+            const Vec2 at = streetEnd(s, e);
+            ModelStreetId beside;
+            Real near = kDeadEndBeside;
+            for (ModelStreetId p : out.passedOver) {
+                const Range& L = m.streets[p.index].line;
+                for (uint32_t k = L.first; k + 1 < L.end(); ++k) {
+                    const Real d = distToSegment(at, m.linePoints[k], m.linePoints[k + 1]);
+                    if (d < near) {
+                        near = d;
+                        beside = p;
+                    }
+                }
+            }
+            note(out.deadEnds, ModelStreetId(s), ModelJunctionId(), at,
+                 beside.valid() ? fmt("a dead end %.0f m from %s (%s, passed over): walked round", near, m.streets[beside.index].id.c_str(),
+                                      m.streets[beside.index].section.roadClass.c_str())
+                                : std::string("a dead end: walked round"),
+                 beside);
+        }
+    }
+
+    // ---- the step after each step: leave by the next arm clockwise, carry on, or turn round -----------------------------
+    struct Next {
+        uint32_t step;
+        RegionStepEnd end;
+        ModelJunctionId junction;
+    };
+    auto after = [&](uint32_t h) {
+        const uint32_t s = h / 2;
+        const bool forward = h % 2 == 0;
+        const int e = forward ? 1 : 0;
+        const EndArm ea = endArm[s][e];
+        if (ea.junction >= 0) {
+            const std::vector<uint32_t>& o = order[static_cast<std::size_t>(ea.junction)];
+            const std::size_t n = o.size();
+            const std::size_t p = static_cast<std::size_t>(posOf[static_cast<std::size_t>(ea.junction)][static_cast<std::size_t>(ea.arm)]);
+            const ModelArm& leave = m.junctions[static_cast<std::size_t>(ea.junction)].arms[o[(p + n - 1) % n]];
+            return Next{stepOf(leave.street.index, !leave.spineIn), RegionStepEnd::Junction, ModelJunctionId(static_cast<uint32_t>(ea.junction))};
+        }
+        if (carry[s][static_cast<std::size_t>(e)] >= 0)
+            return Next{static_cast<uint32_t>(carry[s][static_cast<std::size_t>(e)]), RegionStepEnd::CarriesOn, ModelJunctionId()};
+        return Next{stepOf(s, !forward), RegionStepEnd::TurnsRound, ModelJunctionId()};
+    };
+
+    // ---- the faces: every step walked once; the pieces of network they belong to ----------------------------------------
+    std::vector<uint32_t> parent(S);
+    for (uint32_t s = 0; s < S; ++s) parent[s] = s;
+    auto root = [&](uint32_t s) {
+        while (parent[s] != s) s = parent[s] = parent[parent[s]];
+        return s;
+    };
+    std::vector<char> seen(2 * static_cast<std::size_t>(S), 0);
+    std::vector<EnclosedRegion> faces;
+    for (uint32_t h0 = 0; h0 < 2 * S; ++h0) {
+        if (!walked[h0 / 2] || seen[h0]) continue;
+        EnclosedRegion f;
+        uint32_t h = h0;
+        do {
+            seen[h] = 1;
+            const Next n = after(h);
+            RegionBound b;
+            b.street = ModelStreetId(h / 2);
+            b.spineForward = h % 2 == 0;
+            b.side = b.spineForward ? RegionSide::Ccw : RegionSide::Cw;   // the land is on the walk's counter-clockwise side
+            b.end = n.end;
+            b.junction = n.junction;
+            f.bounds.push_back(b);
+            appendStreetLine(m, m.streets[h / 2], b.spineForward, f.outline);
+            parent[root(h / 2)] = root(n.step / 2);
+            h = n.step;
+        } while (h != h0 && !seen[h]);
+        if (h != h0)   // cannot happen while each step has one step after it and one before it; said if it does
+            note(out.unplanar, f.bounds.front().street, ModelJunctionId(), f.outline.empty() ? Vec2() : f.outline.front(),
+                 "the walk met a step it had already walked from elsewhere: it did not close");
+        if (f.outline.size() >= 2 && (f.outline.front() - f.outline.back()).length() < 1e-6) f.outline.pop_back();
+        f.area = signedArea(f.outline);
+        for (const RegionBound& b : f.bounds)
+            if (b.junction.valid() && (f.corners.empty() || f.corners.back() != b.junction)) f.corners.push_back(b.junction);
+        if (f.corners.size() > 1 && f.corners.front() == f.corners.back()) f.corners.pop_back();
+        faces.push_back(std::move(f));
+    }
+
+    // ---- each piece's outer face (the one walked most clockwise); the rest are regions, medians, or say where the walk
+    //      went wrong ------------------------------------------------------------------------------------------------------
+    std::map<uint32_t, std::vector<std::size_t>> byPiece;
+    for (std::size_t i = 0; i < faces.size(); ++i) byPiece[root(faces[i].bounds.front().street.index)].push_back(i);
+    out.pieces = static_cast<uint32_t>(byPiece.size());
+    auto isMedian = [&](const EnclosedRegion& f) {
+        std::string name;
+        for (const RegionBound& b : f.bounds) {
+            if (!m.streets[b.street.index].oneWay) return false;
+            const std::string n = streetName(m, b.street);
+            if (n.empty() || (!name.empty() && n != name)) return false;
+            name = n;
+        }
+        return !f.bounds.empty();
+    };
+    std::vector<std::pair<uint32_t, std::size_t>> outerOf;   // (piece, index into out.outer)
+    std::vector<uint32_t> regionPiece;
+    for (const std::pair<const uint32_t, std::vector<std::size_t>>& piece : byPiece) {
+        std::size_t outer = piece.second.front();
+        for (std::size_t i : piece.second)
+            if (faces[i].area < faces[outer].area) outer = i;
+        for (std::size_t i : piece.second) {
+            EnclosedRegion& f = faces[i];
+            if (i == outer) {
+                outerOf.emplace_back(piece.first, out.outer.size());
+                out.outer.push_back(std::move(f));
+            } else if (f.area > kNoArea) {
+                if (isMedian(f)) {
+                    out.medians.push_back(std::move(f));
+                } else {
+                    regionPiece.push_back(piece.first);
+                    out.regions.push_back(std::move(f));
+                }
+            } else {
+                note(out.unplanar, f.bounds.front().street, ModelJunctionId(), f.outline.empty() ? Vec2() : f.outline.front(),
+                     fmt("a face of %zu steps walked %s (%.0f m2) besides its piece's outer face: streets crossing without a junction, or "
+                         "arms out of order", f.bounds.size(), f.area < 0 ? "clockwise" : "round nothing", f.area));
+            }
+        }
+    }
+
+    // ---- walked streets crossing with no junction there -------------------------------------------------------------------
+    {
+        std::vector<std::array<Vec2, 2>> box(S);
+        for (uint32_t s = 0; s < S; ++s) {
+            if (!walked[s]) continue;
+            Vec2 lo = streetEnd(s, 0), hi = lo;
+            const Range& L = m.streets[s].line;
+            for (uint32_t k = L.first; k < L.end(); ++k) {
+                lo = Vec2(std::min(lo.x, m.linePoints[k].x), std::min(lo.y, m.linePoints[k].y));
+                hi = Vec2(std::max(hi.x, m.linePoints[k].x), std::max(hi.y, m.linePoints[k].y));
+            }
+            box[s] = {lo, hi};
+        }
+        for (uint32_t s = 0; s < S; ++s) {
+            if (!walked[s]) continue;
+            for (uint32_t t = s + 1; t < S; ++t) {
+                if (!walked[t] || box[s][1].x < box[t][0].x || box[t][1].x < box[s][0].x || box[s][1].y < box[t][0].y || box[t][1].y < box[s][0].y)
+                    continue;
+                const Range& A = m.streets[s].line;
+                const Range& B = m.streets[t].line;
+                bool found = false;
+                for (uint32_t i = A.first; i + 1 < A.end() && !found; ++i)
+                    for (uint32_t k = B.first; k + 1 < B.end() && !found; ++k) {
+                        Vec2 at;
+                        if (!segmentsCross(m.linePoints[i], m.linePoints[i + 1], m.linePoints[k], m.linePoints[k + 1], at)) continue;
+                        bool nearEnd = false;
+                        for (int e = 0; e < 2; ++e)
+                            nearEnd = nearEnd || (at - streetEnd(s, e)).length() < kCrossingEndReach || (at - streetEnd(t, e)).length() < kCrossingEndReach;
+                        if (nearEnd) continue;
+                        note(out.crossings, ModelStreetId(s), ModelJunctionId(), at, "crosses " + m.streets[t].id + " with no junction there", ModelStreetId(t));
+                        found = true;
+                    }
+            }
+        }
+    }
+
+    // ---- pieces of network standing inside another piece's region ---------------------------------------------------------
+    for (const std::pair<uint32_t, std::size_t>& po : outerOf) {
+        const EnclosedRegion& o = out.outer[po.second];
+        const ModelStreet& first = m.streets[o.bounds.front().street.index];
+        const Vec2 p = m.linePoints[first.line.first + first.line.count / 2];
+        int in = -1;
+        for (std::size_t r = 0; r < out.regions.size(); ++r)
+            if (regionPiece[r] != po.first && pointInPolygon(out.regions[r].outline, p) && (in < 0 || out.regions[r].area < out.regions[static_cast<std::size_t>(in)].area))
+                in = static_cast<int>(r);
+        if (in >= 0)
+            note(out.nested, o.bounds.front().street, ModelJunctionId(), p,
+                 fmt("a piece of network (%zu steps round it) stands inside region %d: a hole in it", o.bounds.size(), in));
+    }
+    return out;
+}
+
+int regionAt(const EnclosedRegions& er, const Vec2& p) {
+    int best = -1;
+    for (std::size_t r = 0; r < er.regions.size(); ++r)
+        if (pointInPolygon(er.regions[r].outline, p) && (best < 0 || er.regions[r].area < er.regions[static_cast<std::size_t>(best)].area))
+            best = static_cast<int>(r);
+    return best;
+}
+
+std::string reportEnclosedRegions(const RoadModel& m, const EnclosedRegions& er) {
+    auto bounds = [&](const EnclosedRegion& f) {
+        std::string s;
+        for (const RegionBound& b : f.bounds) {
+            s += regionStreet(m, b.street) + (b.side == RegionSide::Ccw ? " (ccw)" : " (cw)");
+            s += b.end == RegionStepEnd::Junction ? " > " + m.junctions[b.junction.index].id + " > "
+                 : b.end == RegionStepEnd::CarriesOn ? " > carries on > " : " > turns round > ";
+        }
+        return s.empty() ? s : s.substr(0, s.size() - 3);
+    };
+    auto notes = [&](const char* head, const std::vector<RegionWalkNote>& list) {
+        std::string s = fmt("%s: %zu\n", head, list.size());
+        for (const RegionWalkNote& n : list)
+            s += fmt("    street %s%s at (%.1f, %.1f): %s\n", regionStreet(m, n.street).c_str(),
+                     n.junction.valid() ? (", junction " + m.junctions[n.junction.index].id).c_str() : "", n.at.x, n.at.y, n.why.c_str());
+        return s;
+    };
+    std::string passed;
+    {
+        std::map<std::string, uint32_t> byClass;
+        for (ModelStreetId s : er.passedOver) ++byClass[m.streets[s.index].section.roadClass];
+        for (const std::pair<const std::string, uint32_t>& c : byClass) passed += fmt(" %u %s;", c.second, c.first.c_str());
+    }
+    Real total = 0;
+    for (const EnclosedRegion& r : er.regions) total += r.area;
+    std::string out = fmt("THE REGIONS ENCLOSED BY STREETS OF %s (a look-up worked out from the road model; nothing here is kept)\n\n", m.name.c_str());
+    out += fmt("  %u streets walked; %zu passed over (by class:%s); %u pieces of network\n", er.walked, er.passedOver.size(), passed.c_str(), er.pieces);
+    out += fmt("  %zu regions (%.0f m2 in all), %zu medians (faces between the two carriageways of one road), %zu outer faces\n", er.regions.size(),
+               total, er.medians.size(), er.outer.size());
+    out += fmt("  junctions spread over several points: %u (%u of them ordered differently by their headings alone)\n\n", er.spreadJunctions,
+               er.spreadOrderDiffers);
+    out += notes("Where what is stated does not agree with itself (the walk followed the arms, turned round where nothing led on)", er.problems);
+    out += notes("Where a street carries on into a passed-over street (walked round there, as a dead end)", er.turnedRound);
+    out += notes("Dead ends (walked round: they split nothing, close nothing)", er.deadEnds);
+    out += notes("Walked streets crossing with no junction (the regions there overlap)", er.crossings);
+    out += notes("Faces the walk could not close as regions (walked clockwise or round nothing, besides an outer face)", er.unplanar);
+    out += notes("Pieces of network inside another piece's region", er.nested);
+    out += "\nRegions (bounds in order round each, counter-clockwise; (ccw)/(cw): the side of the street, by its from-to direction, "
+           "the region lies on; then how the step ends):\n";
+    for (std::size_t r = 0; r < er.regions.size(); ++r) {
+        const Vec2 c = interiorPoint(er.regions[r].outline);
+        out += fmt("  region %zu: %.0f m2 at (%.1f, %.1f), %zu corners: ", r, er.regions[r].area, c.x, c.y, er.regions[r].corners.size());
+        out += bounds(er.regions[r]) + "\n";
+    }
+    out += "Medians:\n";
+    for (const EnclosedRegion& f : er.medians) out += fmt("  %.0f m2: ", f.area) + bounds(f) + "\n";
+    out += "Outer faces (one per piece of network):\n";
+    for (const EnclosedRegion& f : er.outer) out += fmt("  %zu steps, %.0f m2 (clockwise)\n", f.bounds.size(), f.area);
+    return out;
+}
+
+std::string enclosedRegionsSvg(const RoadModel& m, const EnclosedRegions& er, const std::vector<std::vector<Vec2>>* overlay) {
+    double x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30;
+    for (const Vec2& p : m.linePoints) { x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y); }
+    if (m.linePoints.empty()) { x0 = y0 = 0; x1 = y1 = 1; }
+    const double pad = 30, w = x1 - x0 + 2 * pad, h = y1 - y0 + 2 * pad;
+    std::string out = fmt("<svg xmlns='http://www.w3.org/2000/svg' viewBox='%.1f %.1f %.1f %.1f' font-family='sans-serif'>\n", x0 - pad, -(y1 + pad), w, h);
+    out += fmt("<rect x='%.1f' y='%.1f' width='%.1f' height='%.1f' fill='#fbfaf6'/>\n<g transform='scale(1,-1)'>\n", x0 - pad, -(y1 + pad), w, h);
+    auto colour = [](std::size_t i) {   // each region its own: hues a golden angle apart, two lightnesses alternating
+        const double hue = std::fmod(static_cast<double>(i) * 137.508, 360.0) / 60.0, l = i % 2 ? 0.68 : 0.78, sat = 0.55;
+        const double c = (1 - std::fabs(2 * l - 1)) * sat, x = c * (1 - std::fabs(std::fmod(hue, 2.0) - 1)), mm = l - c / 2;
+        double r = 0, g = 0, b = 0;
+        if (hue < 1) { r = c; g = x; } else if (hue < 2) { r = x; g = c; } else if (hue < 3) { g = c; b = x; }
+        else if (hue < 4) { g = x; b = c; } else if (hue < 5) { r = x; b = c; } else { r = c; b = x; }
+        return fmt("#%02x%02x%02x", static_cast<int>((r + mm) * 255), static_cast<int>((g + mm) * 255), static_cast<int>((b + mm) * 255));
+    };
+    auto ring = [&](const std::vector<Vec2>& pts, const std::string& style) {
+        out += "<polygon " + style + " points='";
+        for (const Vec2& p : pts) out += fmt("%.1f,%.1f ", p.x, p.y);
+        out += "'/>\n";
+    };
+    for (std::size_t r = 0; r < er.regions.size(); ++r) ring(er.regions[r].outline, "fill='" + colour(r) + "' stroke='none'");
+    for (const EnclosedRegion& f : er.medians) ring(f.outline, "fill='#999' fill-opacity='0.5' stroke='none'");
+    // the streets: walked ones by their travel width, passed-over ones dashed
+    std::vector<char> passed(m.streets.size(), 0);
+    for (ModelStreetId s : er.passedOver) passed[s.index] = 1;
+    for (std::size_t s = 0; s < m.streets.size(); ++s) {
+        const ModelStreet& S = m.streets[s];
+        if (S.line.count < 2) continue;
+        out += passed[s] ? "<polyline fill='none' stroke='#777' stroke-width='3' stroke-dasharray='10 6' stroke-opacity='0.8' points='"
+                         : fmt("<polyline fill='none' stroke='#333' stroke-width='%.1f' stroke-opacity='0.85' stroke-linecap='round' points='",
+                               std::max(2.0, 0.5 * S.travelWidth()));
+        for (uint32_t k = S.line.first; k < S.line.end(); ++k) out += fmt("%.1f,%.1f ", m.linePoints[k].x, m.linePoints[k].y);
+        out += "'/>\n";
+    }
+    if (overlay)
+        for (const std::vector<Vec2>& r : *overlay) ring(r, "fill='none' stroke='#000' stroke-width='1' stroke-dasharray='4 3'");
+    for (const ModelJunction& J : m.junctions) out += fmt("<circle cx='%.1f' cy='%.1f' r='3' fill='#c33'/>\n", J.at.x, J.at.y);
+    for (const RegionWalkNote& n : er.crossings) out += fmt("<circle cx='%.1f' cy='%.1f' r='9' fill='none' stroke='#e00' stroke-width='3'/>\n", n.at.x, n.at.y);
+    out += "</g>\n";
+    // labels upright: each street's id at the middle of its centre line, each region's number inside it
+    for (std::size_t s = 0; s < m.streets.size(); ++s) {
+        const ModelStreet& S = m.streets[s];
+        if (S.line.count < 2) continue;
+        const uint32_t k = S.line.first + (S.line.count - 1) / 2;
+        const Vec2 p = (m.linePoints[k] + m.linePoints[k + 1]) * 0.5;
+        out += fmt("<text x='%.1f' y='%.1f' font-size='7' fill='%s' text-anchor='middle' stroke='#fff' stroke-width='1.6' paint-order='stroke'>%s</text>\n",
+                   p.x, -p.y + 2.5, passed[s] ? "#666" : "#123", S.id.c_str());
+    }
+    for (std::size_t r = 0; r < er.regions.size(); ++r) {
+        const Vec2 c = interiorPoint(er.regions[r].outline);
+        out += fmt("<text x='%.1f' y='%.1f' font-size='12' font-weight='bold' fill='#000' text-anchor='middle'>R%zu</text>\n", c.x, -c.y + 4, r);
+    }
+    out += "</svg>\n";
+    return out;
 }
 
 // ---- in words and on a map --------------------------------------------------------------------------------------------

@@ -4,8 +4,11 @@
 #include "apps/citysim/lane_map.h"                            // the lane match the city sim makes
 #include "engine/ai/nav_graph.h"
 #include "engine/components.h"                                // TrafficLane: the lanes as the loader publishes them
+#include "engine/procgen/city/roads/lanes/block_audit.h"         // pavementHoles: the holes the regions are compared with
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"
 #include "engine/procgen/city/roads/lanes/lanes.h"
+#include "engine/procgen/city/polygon.h"                        // interiorPoint, pointInPolygon
+#include "engine/procgen/city/polyline.h"                       // distToSegment
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_twin.h"
 #include "engine/procgen/city/roads/road_entity.h"            // navRoadGraph
@@ -112,6 +115,27 @@ std::string names(const RoadModel& m, const std::vector<uint32_t>& js) {
 }
 
 const char* className(RoadClass k) { return roadClassName(k); }
+
+// The passed-over street (freeway, ramp) whose centre line comes nearest a ring's outline within `reach` (invalid: none):
+// land the pavement closes with it, which the streets alone do not enclose.
+ModelStreetId passedOverBeside(const RoadModel& m, const EnclosedRegions& er, const std::vector<Vec2>& ring, double reach) {
+    ModelStreetId out;
+    double best = reach;
+    for (ModelStreetId s : er.passedOver) {
+        const Range& L = m.streets[s.index].line;
+        for (uint32_t k = L.first; k < L.end(); ++k)
+            for (std::size_t q = 0; q < ring.size(); ++q) {
+                const double d = distToSegment(m.linePoints[k], ring[q], ring[(q + 1) % ring.size()]);
+                if (d < best) {
+                    best = d;
+                    out = s;
+                }
+            }
+    }
+    return out;
+}
+// Land beside a passed-over street (metres from a hole's outline to its centre line): a freeway's half width and verge.
+constexpr double kBesidePassedOver = 40.0;
 
 }  // namespace
 
@@ -628,6 +652,111 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
         T += fmt("  streets where the nav's lanes along it and the lane graph's section there differ: %u\n", out.streetsFormsDisagree) + formsDisagree.text();
     }
 
+    // ---- the regions enclosed by streets against the pavement's holes (ADR-0423) ----------------------------------------
+    {
+        out.enclosed = enclosedRegions(m);
+        const EnclosedRegions& er = out.enclosed;
+        out.holes = pavementHoles(r, kHoleMinArea);
+        // every hole, however small, by region: to say why a region holds no kept hole
+        std::vector<double> biggestSmall(er.regions.size(), 0.0);
+        for (const Ring& h : pavementHoles(r, 1.0)) {
+            const int reg = regionAt(er, interiorPoint(h));
+            if (reg >= 0) biggestSmall[static_cast<std::size_t>(reg)] = std::max(biggestSmall[static_cast<std::size_t>(reg)], std::fabs(signedArea(h)));
+        }
+        std::vector<uint32_t> holesIn(er.regions.size(), 0);
+        uint32_t noRegionBeside = 0, noHoleSmall = 0;
+        Examples noRegion, noHole, several;
+        // the streets whose centre lines come within `reach` of a ring's points, with their classes: what lies round it
+        auto streetsNear = [&](const std::vector<Vec2>& ring, double reach) {
+            std::string s;
+            uint32_t n = 0;
+            for (std::size_t k = 0; k < m.streets.size(); ++k) {
+                const ModelStreet& S = m.streets[k];
+                double d = 1e30;
+                for (uint32_t i = S.line.first; i < S.line.end() && d > reach; ++i)
+                    for (std::size_t q = 0; q < ring.size(); ++q) d = std::min(d, distance(ring[q], m.linePoints[i]));
+                if (d > reach) continue;
+                if (++n <= 6) s += (s.empty() ? "" : ", ") + S.id + " (" + S.section.roadClass + ")";
+            }
+            return n > 6 ? s + fmt(" and %u more", n - 6) : s;
+        };
+        for (const std::vector<Vec2>& h : out.holes) {
+            const Vec2 p = interiorPoint(h);
+            const int reg = regionAt(er, p);
+            const double a = std::fabs(signedArea(h));
+            if (reg >= 0) { ++holesIn[static_cast<std::size_t>(reg)]; continue; }
+            ++out.holesWithoutRegion;
+            bool inMedian = false;
+            for (const EnclosedRegion& f : er.medians) inMedian = inMedian || pointInPolygon(f.outline, p);
+            const ModelStreetId beside = passedOverBeside(m, er, h, kBesidePassedOver);
+            noRegionBeside += beside.valid() ? 1u : 0u;
+            noRegion.add(a, fmt("hole of %.0f m2 at (%.1f, %.1f)%s%s; streets within 40 m of its outline: ", a, p.x, p.y, inMedian ? ", inside a median" : "",
+                                beside.valid() ? (", closed with " + m.streets[beside.index].id + " (passed over)").c_str() : "") +
+                                streetsNear(h, 40.0));
+        }
+        for (std::size_t k = 0; k < er.regions.size(); ++k) {
+            const EnclosedRegion& R = er.regions[k];
+            const Vec2 c = interiorPoint(R.outline);
+            std::string bounds;
+            for (const RegionBound& b : R.bounds) bounds += (bounds.empty() ? "" : " ") + m.streets[b.street.index].id;
+            if (holesIn[k] >= 2) {
+                ++out.regionsWithSeveralHoles;
+                several.add(R.area, fmt("region %zu (%.0f m2) at (%.1f, %.1f): %u holes; bounded by ", k, R.area, c.x, c.y, holesIn[k]) + bounds);
+            }
+            if (holesIn[k] > 0) continue;
+            ++out.regionsWithoutHole;
+            const double biggest = biggestSmall[k];
+            noHoleSmall += biggest > 0 ? 1u : 0u;
+            noHole.add(R.area, fmt("region %zu (%.0f m2) at (%.1f, %.1f), bounded by ", k, R.area, c.x, c.y) + bounds + ": " +
+                                   (biggest > 0 ? fmt("its largest hole is %.0f m2, under the %.0f m2 the producer keeps", biggest, kHoleMinArea)
+                                                : std::string("no pavement hole at all (the pavement covers it)")));
+        }
+        // the divided roads the road file states, against the medians the walk found
+        uint32_t pairsWithMedian = 0;
+        for (const DividedPair& d : g.divided) {
+            bool found = false;
+            for (const EnclosedRegion& f : er.medians)
+                for (const RegionBound& b : f.bounds) found = found || m.streets[b.street.index].road == d[0] || m.streets[b.street.index].road == d[1];
+            pairsWithMedian += found ? 1u : 0u;
+        }
+        T += "\nTHE REGIONS ENCLOSED BY STREETS AGAINST THE PAVEMENT'S HOLES (ADR-0423). The regions: the road model's answer (road_model.h "
+             "enclosedRegions: a walk round the stated streets and junctions, freeways and ramps passed over). The holes: the built "
+             "pavement's (block_audit.h pavementHoles), as the city producer keeps them";
+        T += fmt(" (%.0f m2 and up). A hole is tied to the region whose outline (its bounding streets' centre lines) holds a point inside "
+                 "the hole.\n", kHoleMinArea);
+        T += fmt("  %zu regions, %zu medians, %zu outer faces; %u streets walked, %zu passed over; %u junctions spread over several points "
+                 "(%u ordered differently by heading alone)\n", er.regions.size(), er.medians.size(), er.outer.size(), er.walked,
+                 er.passedOver.size(), er.spreadJunctions, er.spreadOrderDiffers);
+        T += fmt("  the walk: %zu places where what is stated does not agree with itself, %zu streets carrying on into a passed-over one "
+                 "(walked round), %zu crossings with no junction, %zu faces it could not close as regions, %zu pieces inside another's region\n",
+                 er.problems.size(), er.turnedRound.size(), er.crossings.size(), er.unplanar.size(), er.nested.size());
+        T += fmt("  divided roads the road file states: %zu; with a median the walk found between their carriageways: %u\n", g.divided.size(),
+                 pairsWithMedian);
+        T += fmt("  %zu holes: %zu in a region, %u in none (%u of those closed with a freeway or ramp: its centre line within %.0f m of the hole's "
+                 "outline; the streets alone do not enclose that land)\n", out.holes.size(), out.holes.size() - out.holesWithoutRegion,
+                 out.holesWithoutRegion, noRegionBeside, kBesidePassedOver) +
+             noRegion.text();
+        {
+            uint32_t beside = 0;
+            for (const RegionWalkNote& n : er.deadEnds) beside += n.other.valid() ? 1u : 0u;
+            T += fmt("  dead ends the walk went round: %zu (%u within 60 m of a freeway or ramp)\n", er.deadEnds.size(), beside);
+        }
+        T += fmt("  regions holding no hole: %u (%u of them hold a smaller hole, which the producer drops; %u none at all)\n", out.regionsWithoutHole,
+                 noHoleSmall, out.regionsWithoutHole - noHoleSmall) + noHole.text();
+        T += fmt("  regions holding two holes or more (the pavement splits the land the streets enclose): %u\n", out.regionsWithSeveralHoles) +
+             several.text();
+        {
+            Examples ex;
+            for (const RegionWalkNote& n : er.problems)
+                ex.add(0, "stated facts disagree: street " + m.streets[n.street.index].id + fmt(" at (%.1f, %.1f): ", n.at.x, n.at.y) + n.why);
+            for (const RegionWalkNote& n : er.crossings)
+                ex.add(0, "crossing: street " + m.streets[n.street.index].id + fmt(" at (%.1f, %.1f): ", n.at.x, n.at.y) + n.why);
+            for (const RegionWalkNote& n : er.unplanar)
+                ex.add(0, "not closed: street " + m.streets[n.street.index].id + fmt(" at (%.1f, %.1f): ", n.at.x, n.at.y) + n.why);
+            T += fmt("  where the walk could not close a region as stated: %zu\n", er.problems.size() + er.crossings.size() + er.unplanar.size()) + ex.text();
+        }
+    }
+
     // ---- what the model does not state yet ---------------------------------------------------------------------------------
     T += "\nWHAT THE MODEL DOES NOT STATE YET (left empty):\n";
     for (const std::string& s : m.notStated) T += "  - " + s + "\n";
@@ -638,6 +767,246 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
         T += ex.text();
     }
     T += fmt("\n(nav graph %.1f s, lane graph %.1f s)\n", navSeconds, lgSeconds);
+    return out;
+}
+
+// ---- the regions against the lot pass (ADR-0423's evidence) -------------------------------------------------------------
+
+int lotFrontageEdge(const LotBuilding& b, Vec2* door, Vec2* normal) {
+    const std::size_t n = b.lot.size();
+    if (n < 3) return -1;
+    const DoorSpec* front = nullptr;
+    for (const BuildingUnit& u : b.units) {
+        for (const DoorSpec& d : u.doors)
+            if (!d.back && d.normal.length() > 1e-6) {
+                front = &d;
+                break;
+            }
+        if (front) break;
+    }
+    if (!front) return -1;
+    const Vec2 dir = normalize(front->normal);
+    int best = -1;
+    Real bestT = 1e30;
+    for (std::size_t k = 0; k < n; ++k) {   // the lot line the door's ray meets first
+        const Vec2 a = b.lot[k], e = b.lot[(k + 1) % n] - a;
+        const Real den = cross(dir, e);
+        if (std::fabs(den) < 1e-12) continue;
+        const Real t = cross(a - front->foot, e) / den, u = cross(a - front->foot, dir) / den;
+        if (t > 0 && u >= 0 && u <= 1 && t < bestT) {
+            bestT = t;
+            best = static_cast<int>(k);
+        }
+    }
+    if (best < 0) {   // the door stands outside its lot line: the lot line nearest a step out of it
+        Real d = 1e30;
+        const Vec2 step = front->foot + dir;
+        for (std::size_t k = 0; k < n; ++k) {
+            const Real dk = distToSegment(step, b.lot[k], b.lot[(k + 1) % n]);
+            if (dk < d) {
+                d = dk;
+                best = static_cast<int>(k);
+            }
+        }
+    }
+    if (door) *door = front->foot;
+    if (normal) *normal = dir;
+    return best;
+}
+
+RegionLotComparison compareRegionsWithLots(const RoadModel& m, const EnclosedRegions& er, const std::vector<std::vector<Vec2>>& holes,
+                                           const std::vector<LotBuilding>& lots, const RoadGraph& rg) {
+    RegionLotComparison out;
+    constexpr Real kVoteReach = 60;     // city_lots.cpp's vote: no road within 60 m beyond its half width
+    constexpr Real kTieReach = 8;       // a road-graph point lies on the model street whose centre line passes within this
+    constexpr std::size_t kCauseExamples = 3;
+    std::vector<char> passed(m.streets.size(), 0);
+    for (ModelStreetId s : er.passedOver) passed[s.index] = 1;
+    // which regions each street bounds
+    std::vector<std::set<uint32_t>> boundsOf(m.streets.size());
+    for (std::size_t r = 0; r < er.regions.size(); ++r)
+        for (const RegionBound& b : er.regions[r].bounds) boundsOf[b.street.index].insert(static_cast<uint32_t>(r));
+    auto streetLineDistance = [&](uint32_t s, const Vec2& q) {
+        const Range& L = m.streets[s].line;
+        Real d = 1e30;
+        for (uint32_t k = L.first; k + 1 < L.end(); ++k) d = std::min(d, distToSegment(q, m.linePoints[k], m.linePoints[k + 1]));
+        return d;
+    };
+    // city_lots.cpp faces(): a building fronts a street, never a freeway or a ramp, and never a deck
+    auto faces = [](const RoadEdge& e) { return e.klass != RoadClass::Freeway && e.klass != RoadClass::Ramp && e.layer == 0; };
+    // the road-graph edge nearest q: by the vote's measure (beyond its half width, within kVoteReach, any edge), or by the
+    // door's (to its centre line, street edges only, any distance); the point on it nearest q
+    struct Hit {
+        int edge = -1;
+        Vec2 on;
+    };
+    auto nearestEdge = [&](const Vec2& q, bool doorRule) {
+        Hit h;
+        Real best = doorRule ? Real(1e30) : kVoteReach;
+        for (std::size_t ei = 0; ei < rg.edges.size(); ++ei) {
+            const RoadEdge& e = rg.edges[ei];
+            if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(rg.nodes.size()) || e.b >= static_cast<int>(rg.nodes.size())) continue;
+            if (doorRule && !faces(e)) continue;
+            const Vec2& ra = rg.nodes[static_cast<std::size_t>(e.a)].pos;
+            const Vec2& rb = rg.nodes[static_cast<std::size_t>(e.b)].pos;
+            const Vec2 ab = rb - ra;
+            const Real l2 = ab.lengthSquared();
+            const Real u = l2 > 1e-12 ? std::clamp(dot(q - ra, ab) / l2, Real(0), Real(1)) : Real(0);
+            const Vec2 cp = ra + ab * u;
+            const Real d = (q - cp).length() - (doorRule ? Real(0) : e.width * Real(0.5));
+            if (d < best) {
+                best = d;
+                h.edge = static_cast<int>(ei);
+                h.on = cp;
+            }
+        }
+        return h;
+    };
+    auto modelStreetOf = [&](const Hit& h) { return h.edge < 0 ? ModelStreetId() : nearestStreet(m, h.on, kTieReach); };
+    auto majority = [](const std::array<ModelStreetId, 3>& v) { return v[0] == v[1] || v[0] == v[2] ? v[0] : v[1]; };
+    auto sid = [&](ModelStreetId s) { return s.valid() ? m.streets[s.index].id : std::string("(none)"); };
+    // why the old rule's street is not the region's
+    auto cause = [&](int region, bool found, ModelStreetId old, ModelStreetId mine, bool besidePassed) -> std::string {
+        if (region < 0)
+            return besidePassed ? "no region holds the lot: its pavement hole is closed with a freeway or ramp, not by streets alone"
+                                : "no region holds the lot";
+        if (!found) return "the old rule found no road in reach";
+        if (!old.valid()) return "the old rule's road lies on no stated street's centre line (inside a junction)";
+        if (passed[old.index]) return "the old rule picked a freeway or ramp";
+        const EnclosedRegion& R = er.regions[static_cast<std::size_t>(region)];
+        if (boundsOf[old.index].count(static_cast<uint32_t>(region)) == 0)
+            return boundsOf[old.index].empty() ? "the old rule picked a street that bounds no region"
+                                               : "the old rule picked a street across the block (it bounds a neighbouring region, not this one)";
+        const std::size_t n = R.bounds.size();
+        for (std::size_t i = 0; i < n; ++i) {
+            const RegionBound& a = R.bounds[i];
+            const RegionBound& b = R.bounds[(i + 1) % n];
+            const bool pair = (a.street == mine && b.street == old) || (a.street == old && b.street == mine);
+            if (!pair) continue;
+            if (a.end == RegionStepEnd::CarriesOn) return "the old rule picked the street the region's street carries on into (a bend, no junction)";
+            if (a.end == RegionStepEnd::Junction) return "the old rule picked the crossing street at a corner of the region";
+        }
+        return "the old rule picked another street bounding the same region (not at a corner)";
+    };
+    std::map<std::string, std::vector<std::string>> frontEx, doorEx;
+    std::vector<char> holeBeside(holes.size(), 0);   // a hole in no region, closed with a freeway or ramp
+    uint32_t holesBeside = 0;
+    for (std::size_t i = 0; i < holes.size(); ++i) {
+        ++out.holes;
+        if (regionAt(er, interiorPoint(holes[i])) >= 0) {
+            ++out.holesInRegion;
+            continue;
+        }
+        holeBeside[i] = passedOverBeside(m, er, holes[i], kBesidePassedOver).valid() ? 1 : 0;
+        holesBeside += static_cast<uint32_t>(holeBeside[i]);
+    }
+    auto lotBesidePassed = [&](const LotBuilding& b) {   // the lot stands in a hole no region holds, closed with a freeway or ramp
+        const Vec2 p = interiorPoint(b.lot);
+        for (std::size_t i = 0; i < holes.size(); ++i)
+            if (holeBeside[i] && pointInPolygon(holes[i], p)) return true;
+        return false;
+    };
+    uint32_t lotsRanged = 0, offRange = 0, frontDifferInRegion = 0, doorDifferInRegion = 0;
+    for (const ModelStreet& S : m.streets) lotsRanged += S.lotsFrom >= 0 || S.lotsTo >= 0 ? 1u : 0u;
+    for (std::size_t li = 0; li < lots.size(); ++li) {
+        const LotBuilding& b = lots[li];
+        ++out.lots;
+        Vec2 doorAt, doorN;
+        const int k = lotFrontageEdge(b, &doorAt, &doorN);
+        if (k < 0) continue;
+        ++out.lotsWithFrontage;
+        const Vec2 ea = b.lot[static_cast<std::size_t>(k)], eb = b.lot[(static_cast<std::size_t>(k) + 1) % b.lot.size()];
+        const Vec2 mid = (ea + eb) * 0.5;
+        const int region = regionAt(er, interiorPoint(b.lot));
+        out.lotsInRegion += region >= 0 ? 1u : 0u;
+        // the old vote at the edge's quarter points, and the region's street there
+        std::array<ModelStreetId, 3> oldAt, mineAt;
+        int notStreet = 0, found = 0;
+        for (int qi = 0; qi < 3; ++qi) {
+            const Vec2 q = ea + (eb - ea) * (0.25 * (qi + 1));
+            const Hit h = nearestEdge(q, false);
+            found += h.edge >= 0 ? 1 : 0;
+            if (h.edge >= 0 && !faces(rg.edges[static_cast<std::size_t>(h.edge)])) ++notStreet;
+            oldAt[static_cast<std::size_t>(qi)] = modelStreetOf(h);
+            if (region < 0) continue;
+            Real best = 1e30;
+            for (const RegionBound& rb : er.regions[static_cast<std::size_t>(region)].bounds) {
+                const Real d = streetLineDistance(rb.street.index, q);
+                if (d < best) {
+                    best = d;
+                    mineAt[static_cast<std::size_t>(qi)] = rb.street;
+                }
+            }
+        }
+        const ModelStreetId old = majority(oldAt), mine = majority(mineAt);
+        out.frontVotedNotStreet += notStreet >= 2 ? 1u : 0u;
+        out.frontOnPassedOver += old.valid() && passed[old.index] ? 1u : 0u;
+        if (mine.valid() && (m.streets[mine.index].lotsFrom >= 0 || m.streets[mine.index].lotsTo >= 0)) {
+            // where along its road the frontage stands: the street's `from` station plus the distance along its line
+            const ModelStreet& S = m.streets[mine.index];
+            Real along = 0, bestD = 1e30, at = S.from;
+            for (uint32_t i = S.line.first; i + 1 < S.line.end(); ++i) {
+                const Vec2 p = m.linePoints[i], q = m.linePoints[i + 1];
+                const Real l = (q - p).length(), d = distToSegment(mid, p, q);
+                if (d < bestD) {
+                    bestD = d;
+                    at = S.from + along + (l > 1e-9 ? std::clamp(dot(mid - p, q - p) / l, Real(0), l) : Real(0));
+                }
+                along += l;
+            }
+            offRange += (S.lotsFrom >= 0 && at < S.lotsFrom) || (S.lotsTo >= 0 && at > S.lotsTo) ? 1u : 0u;
+        }
+        ++out.frontagesCompared;
+        const bool beside = region < 0 && lotBesidePassed(b);
+        if (old != mine || region < 0) {
+            ++out.frontagesDiffer;
+            frontDifferInRegion += region >= 0 ? 1u : 0u;
+            const std::string c = cause(region, found >= 2, old, mine, beside);
+            ++out.frontageCauses[c];
+            if (frontEx[c].size() < kCauseExamples)
+                frontEx[c].push_back(fmt("lot %zu (%s) frontage at (%.1f, %.1f): old %s, region %d says %s", li, b.recipe.empty() ? b.type.c_str() : b.recipe.c_str(),
+                                         mid.x, mid.y, sid(old).c_str(), region, sid(mine).c_str()));
+        }
+        // the front door: the old rule's street from the lot's site, against the region's street for the frontage
+        const Hit dh = nearestEdge(b.site, true);
+        const ModelStreetId doorOld = modelStreetOf(dh);
+        ++out.doorsCompared;
+        if (doorOld != mine || region < 0) {
+            ++out.doorsDiffer;
+            doorDifferInRegion += region >= 0 ? 1u : 0u;
+            const std::string c = cause(region, dh.edge >= 0, doorOld, mine, beside);
+            ++out.doorCauses[c];
+            if (doorEx[c].size() < kCauseExamples)
+                doorEx[c].push_back(fmt("lot %zu (%s) door at (%.1f, %.1f) facing (%.2f, %.2f): old %s, region %d says %s", li,
+                                        b.recipe.empty() ? b.type.c_str() : b.recipe.c_str(), doorAt.x, doorAt.y, doorN.x, doorN.y, sid(doorOld).c_str(),
+                                        region, sid(mine).c_str()));
+        }
+    }
+    std::string& T = out.text;
+    T = fmt("THE REGIONS ENCLOSED BY STREETS AGAINST THE LOT PASS OF %s (ADR-0423's evidence: nothing moved, nothing saved)\n\n", m.name.c_str());
+    T += "How: each lot's FRONTAGE EDGE is the lot line its front door looks out through. The OLD street for it: city_lots.cpp's vote "
+         "(at the edge's quarter points the road-graph edge nearest within 60 m beyond its half width, the majority), that graph edge "
+         "tied to the model street whose centre line passes within 8 m of the point on it. The REGION's street: of the bounding streets "
+         "of the region holding the lot, the one whose centre line passes nearest the quarter points (the majority). A door's OLD street: "
+         "the nearest street-class, at-grade road-graph edge from the lot's site (city_lots.cpp), tied the same way.\n\n";
+    T += fmt("  pavement holes %u: %u tied to a region, %u to none (%u of those closed with a freeway or ramp)\n", out.holes, out.holesInRegion,
+             out.holes - out.holesInRegion, holesBeside);
+    T += fmt("  lots %u: %u with a frontage edge (a front door), %u of those in a region\n", out.lots, out.lotsWithFrontage, out.lotsInRegion);
+    T += fmt("  frontage edges whose old street is not the region's: %u of %u (%u of the %u in a region)\n", out.frontagesDiffer, out.frontagesCompared,
+             frontDifferInRegion, out.lotsInRegion);
+    for (const std::pair<const std::string, uint32_t>& c : out.frontageCauses) {
+        T += fmt("    %4u  ", c.second) + c.first + "\n";
+        for (const std::string& e : frontEx[c.first]) T += "            " + e + "\n";
+    }
+    T += fmt("  front doors whose old street is not the region's street for their frontage: %u of %u (%u of the %u in a region)\n", out.doorsDiffer,
+             out.doorsCompared, doorDifferInRegion, out.lotsInRegion);
+    for (const std::pair<const std::string, uint32_t>& c : out.doorCauses) {
+        T += fmt("    %4u  ", c.second) + c.first + "\n";
+        for (const std::string& e : doorEx[c.first]) T += "            " + e + "\n";
+    }
+    T += fmt("  lots whose frontage the old vote gives a freeway or ramp street: %u; whose frontage the vote's own test calls no street "
+             "(the nearest road a freeway, ramp or deck at two quarter points or more): %u\n", out.frontOnPassedOver, out.frontVotedNotStreet);
+    T += fmt("  streets stating where buildings may front them (lots range): %u; lots fronting a street outside its range: %u\n", lotsRanged, offRange);
     return out;
 }
 

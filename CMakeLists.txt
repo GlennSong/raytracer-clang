@@ -665,6 +665,7 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/control_plan.cpp   # every junction's control and every road's limit, planned (#240)
             src/engine/procgen/city/roads/lanes/road_layout.cpp   # the road file's junctions and streets, with ids (ADR-0417)
             src/engine/procgen/city/roads/road_model.cpp   # the one road model, assembled from a build (ADR-0417)
+            src/engine/procgen/city/roads/control_signs.cpp   # the signs that follow from its facts (ADR-0424)
             src/engine/procgen/city/roads/lanes_builder.cpp
         )
         target_link_libraries(engine_core PRIVATE Clipper2 CDT::CDT)

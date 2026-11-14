@@ -7,7 +7,7 @@
 //       scorecard line; with several variants, OUT_DIR/contact.png side by side.
 //   city_plan brief
 //       prints the default brief, to copy and edit.
-//   city_plan controls GRAPH.json RULES.lua [--write] [--report FILE] [--compare [--layout] [--compare-json FILE]]
+//   city_plan controls GRAPH.json RULES.lua [--layout] [--write [--controls-only]] [--report FILE] [--compare [--compare-json FILE]]
 //       THE CONTROL PLAN (issue #240): every junction of a road graph given a
 //       control and every road a posted limit, by the rule set's placement policy
 //       (RULES is under assets/scripts, e.g. rules/lab.lua); prints the counts,
@@ -64,7 +64,7 @@ static int usage() {
                  "usage: city_plan generate BRIEF.json OUT_DIR [--variants N]\n"
                  "       city_plan scene BRIEF.json OUT_SCENE.json [--no-ramps]\n"
                  "       city_plan brief\n"
-                 "       city_plan controls GRAPH.json RULES.lua [--write] [--report FILE]   every junction's control and every road's limit, by the rule set's placement policy (#240)\n"
+                 "       city_plan controls GRAPH.json RULES.lua [--write [--controls-only]] [--report FILE]   every junction's control and every road's limit, by the rule set's placement policy (#240); --controls-only: the junctions alone, no limits (the bake key keeps)\n"
                  "                 [--compare [--layout] [--compare-json FILE]]   plan in memory and set it beside what the file states; never writes (ADR-0422)\n"
                  "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n"
                  "       city_plan island SEED OUT_DIR [--variants N]   island worlds on the map: terrain, sites, ring freeway (ADR-0105)\n"
@@ -1055,12 +1055,15 @@ int main(int argc, char** argv) {
         // writes the file. --compare-json PATH: each junction's stated and planned control, for a map.
         // --layout: the junctions found as the file's layout finds them (lanes_tool layout's, road_layout.h
         // planLayoutControls), so a file laid out by that tool is planned on its own junctions.
-        bool write = false, compare = false, onLayout = false;
+        // --controls-only (ADR-0424): with --write, the junctions list alone (controls and signs): no posted limits and no
+        // carry-on control, which the bake key hashes, so the level keeps its city's bake.
+        bool write = false, compare = false, onLayout = false, controlsOnly = false;
         std::string reportPath, compareJson;
         for (int a = 4; a < argc; ++a) {
             if (std::string(argv[a]) == "--write") write = true;
             if (std::string(argv[a]) == "--compare") compare = true;
             if (std::string(argv[a]) == "--layout") onLayout = true;
+            if (std::string(argv[a]) == "--controls-only") controlsOnly = true;
             if (std::string(argv[a]) == "--report" && a + 1 < argc) reportPath = argv[a + 1];
             if (std::string(argv[a]) == "--compare-json" && a + 1 < argc) compareJson = argv[a + 1];
         }
@@ -1213,7 +1216,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (write) {
-            engine::roads::lanes::writeControlPlan(scene, plan);
+            engine::roads::lanes::writeControlPlan(scene, plan, controlsOnly);
             std::ofstream o(graphPath);
             if (!o) { std::fprintf(stderr, "city_plan: cannot write %s\n", graphPath.c_str()); return 1; }
             o << scene.dump(1) << "\n";

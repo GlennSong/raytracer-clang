@@ -201,7 +201,10 @@ struct ControlPlan {
 ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, const JunctionFinding& finding = JunctionFinding());
 // WRITES THE PLAN INTO A ROAD GRAPH'S JSON: its "junctions" list replaced, and each road's "speed_limit" set (or
 // removed where none is posted), leaving everything else as it was. `scene` must be the graph `plan` was made from.
-void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan);
+// `junctionsOnly` (ADR-0424): the "junctions" list alone -- each junction's control and its arms' signs -- and no posted
+// limit or carry-on control, which are in what the bake key hashes (keyedRoadFileText): a level states its controls and
+// signs without re-baking its city.
+void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junctionsOnly = false);
 // The plan's counts in words, a few lines, and one line per problem.
 std::string describeControlPlan(const ControlPlan& plan);
 

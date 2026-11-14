@@ -539,7 +539,7 @@ ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, con
     return plan;
 }
 
-void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan) {
+void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junctionsOnly) {
     // THE ROAD MODEL'S MEMBERS of a junction already listed (road_graph_spec.h PlannedArm: street, heading, through) are
     // kept where the same junction is planned again: by its id, and each arm by its road, station and way
     std::map<std::string, nlohmann::json> listed;
@@ -554,27 +554,61 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan) {
         j["control"] = pj.control;
         if (!pj.why.empty()) j["why"] = pj.why;
         if (pj.hand) j["hand"] = true;
+        const std::map<std::string, nlohmann::json>::const_iterator was = listed.find(pj.id);
+        const bool wasListed = was != listed.end() && was->second.contains("arms") && was->second["arms"].is_array();
         nlohmann::json arms = nlohmann::json::array();
+        std::vector<int> oldIndex;   // each arm written: the listed arm it is (-1: none)
         for (const PlannedArm& a : pj.arms) {
             nlohmann::json aj;
             aj["road"] = a.road;
             aj["at"] = a.at;
             aj["spine"] = a.spineIn ? "in" : "out";
             if (!a.regulations.empty()) aj["regulations"] = a.regulations;
-            const std::map<std::string, nlohmann::json>::const_iterator was = listed.find(pj.id);
-            if (was != listed.end() && was->second.contains("arms"))
-                for (const nlohmann::json& old : was->second["arms"])
+            int found = -1;
+            if (wasListed)
+                for (std::size_t k = 0; k < was->second["arms"].size() && found < 0; ++k) {
+                    const nlohmann::json& old = was->second["arms"][k];
                     if (old.value("road", std::string()) == a.road && old.value("spine", std::string()) == aj["spine"].get<std::string>() &&
-                        std::fabs(old.value("at", -1e30) - a.at) < 1e-6)
+                        std::fabs(old.value("at", -1e30) - a.at) < 1e-6) {
+                        found = static_cast<int>(k);
                         for (const char* key : {"street", "heading"})
                             if (old.contains(key)) aj[key] = old[key];
+                    }
+                }
+            oldIndex.push_back(found);
             arms.push_back(aj);
         }
-        j["arms"] = arms;
-        {
-            const std::map<std::string, nlohmann::json>::const_iterator was = listed.find(pj.id);
-            if (was != listed.end() && was->second.contains("through") && was->second["arms"].size() == arms.size()) j["through"] = was->second["through"];
+        // THE LISTED ORDER KEPT (ADR-0424): where every planned arm is one listed arm and no listed arm is left over, the
+        // arms are written in the list's own order (round the junction, by heading), so its `through` pairs -- indices into
+        // the arms -- still name the same arms. (Written in the plan's order, a through pair named two other arms.)
+        // Otherwise the plan's order, and each through pair whose two arms were both kept, renumbered.
+        if (wasListed) {
+            const std::size_t listedArms = was->second["arms"].size();
+            std::vector<int> newIndex(listedArms, -1);   // a listed arm -> where it is written
+            bool permutation = oldIndex.size() == listedArms;
+            for (std::size_t n = 0; n < oldIndex.size(); ++n) {
+                if (oldIndex[n] < 0 || newIndex[static_cast<std::size_t>(oldIndex[n])] >= 0) { permutation = false; continue; }
+                newIndex[static_cast<std::size_t>(oldIndex[n])] = static_cast<int>(n);
+            }
+            if (permutation) {
+                nlohmann::json ordered = nlohmann::json::array();
+                for (std::size_t k = 0; k < listedArms; ++k) ordered.push_back(arms[static_cast<std::size_t>(newIndex[k])]);
+                arms = ordered;
+                for (std::size_t k = 0; k < listedArms; ++k) newIndex[k] = static_cast<int>(k);
+            }
+            if (was->second.contains("through") && was->second["through"].is_array()) {
+                nlohmann::json through = nlohmann::json::array();
+                for (const nlohmann::json& pair : was->second["through"]) {
+                    if (!pair.is_array() || pair.size() != 2) continue;
+                    const int a0 = pair[0].get<int>(), a1 = pair[1].get<int>();
+                    if (a0 < 0 || a1 < 0 || static_cast<std::size_t>(a0) >= listedArms || static_cast<std::size_t>(a1) >= listedArms) continue;
+                    if (newIndex[static_cast<std::size_t>(a0)] < 0 || newIndex[static_cast<std::size_t>(a1)] < 0) continue;
+                    through.push_back({newIndex[static_cast<std::size_t>(a0)], newIndex[static_cast<std::size_t>(a1)]});
+                }
+                if (!through.empty()) j["through"] = through;
+            }
         }
+        j["arms"] = arms;
         if (!pj.inside.empty()) {
             nlohmann::json inside = nlohmann::json::array();
             for (const PlannedStretch& st : pj.inside) inside.push_back({{"road", st.road}, {"from", st.from}, {"to", st.to}});
@@ -583,6 +617,7 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan) {
         list.push_back(j);
     }
     scene["junctions"] = list;
+    if (junctionsOnly) return;
     if (!plan.carryOnControl.empty()) scene["carry_on_control"] = plan.carryOnControl;
     else scene.erase("carry_on_control");
     std::map<std::string, double> limitOf(plan.limits.begin(), plan.limits.end());

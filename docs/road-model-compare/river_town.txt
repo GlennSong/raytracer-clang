@@ -137,8 +137,35 @@ WHERE THE OLD FORMS DISAGREE WITH EACH OTHER (the evidence). At the model's junc
     ... and 15 more
   streets where the nav's lanes along it and the lane graph's section there differ: 0
 
+THE REGIONS ENCLOSED BY STREETS AGAINST THE PAVEMENT'S HOLES (ADR-0423). The regions: the road model's answer (road_model.h enclosedRegions: a walk round the stated streets and junctions, freeways and ramps passed over). The holes: the built pavement's (block_audit.h pavementHoles), as the city producer keeps them (2000 m2 and up). A hole is tied to the region whose outline (its bounding streets' centre lines) holds a point inside the hole.
+  125 regions, 0 medians, 3 outer faces; 309 streets walked, 16 passed over; 32 junctions spread over several points (9 ordered differently by heading alone)
+  the walk: 0 places where what is stated does not agree with itself, 8 streets carrying on into a passed-over one (walked round), 0 crossings with no junction, 0 faces it could not close as regions, 0 pieces inside another's region
+  divided roads the road file states: 2; with a median the walk found between their carriageways: 0
+  140 holes: 100 in a region, 40 in none (40 of those closed with a freeway or ramp: its centre line within 40 m of the hole's outline; the streets alone do not enclose that land)
+    hole of 36692 m2 at (643.6, 829.7), closed with x0_inR_loop (passed over); streets within 40 m of its outline: s234 (arterial), s236 (local), s246 (arterial), s248_2 (local), s256 (local), s258 (local) and 30 more
+    hole of 26913 m2 at (-588.6, 272.7), closed with x1_inR_loop (passed over); streets within 40 m of its outline: s0 (local), s2 (local), s4 (arterial), s278 (arterial), s284 (collector), s316 (arterial) and 18 more
+    hole of 22780 m2 at (221.0, 1085.1), closed with x0_inL_loop (passed over); streets within 40 m of its outline: s216 (local), s218 (local), s220 (arterial), s245 (arterial), s247 (arterial), s248_0 (local) and 11 more
+    hole of 16937 m2 at (590.5, 392.3), closed with fw1_b (passed over); streets within 40 m of its outline: s227 (arterial), s228 (collector), s251 (local), s257 (local), s277 (local), s279 (arterial) and 8 more
+    hole of 16672 m2 at (-207.7, 43.9), closed with x1_inL_loop (passed over); streets within 40 m of its outline: s34 (arterial), s36 (arterial), s38 (local), s272 (arterial), s326 (arterial), s327 (local) and 5 more
+    hole of 10840 m2 at (-184.7, 1170.0), closed with fw0_b (passed over); streets within 40 m of its outline: s125 (arterial), s158 (arterial), s160 (arterial), s161 (arterial), s305 (arterial), s307 (local) and 3 more
+    hole of 9771 m2 at (429.5, 1034.2), closed with x0_inR_loop (passed over); streets within 40 m of its outline: s270/0 (arterial), fw1_a (freeway), fw1_b (freeway), fw2_b (freeway), bv0_out (boulevard), x0_inR_loop (ramp) and 1 more
+    hole of 9434 m2 at (306.8, 1115.6), closed with x0_inL_loop (passed over); streets within 40 m of its outline: fw1_a (freeway), fw1_b (freeway), fw2_a (freeway), fw2_b (freeway), bv0_in (boulevard), bv0_out (boulevard) and 2 more
+    ... and 32 more
+  dead ends the walk went round: 31 (30 within 60 m of a freeway or ramp)
+  regions holding no hole: 25 (21 of them hold a smaller hole, which the producer drops; 4 none at all)
+    region 19 (5182 m2) at (-191.0, 149.4), bounded by s34 s38 s272: its largest hole is 1475 m2, under the 2000 m2 the producer keeps
+    region 21 (5104 m2) at (-71.3, 98.2), bounded by s36 s326 s66: its largest hole is 1420 m2, under the 2000 m2 the producer keeps
+    region 14 (4830 m2) at (-491.0, 678.5), bounded by s20 s24 s294 s21: its largest hole is 1733 m2, under the 2000 m2 the producer keeps
+    region 3 (4828 m2) at (-367.8, 317.1), bounded by s3 s6 s323 s4: its largest hole is 1809 m2, under the 2000 m2 the producer keeps
+    region 114 (4737 m2) at (495.5, 533.6), bounded by s256 s257 s280 s259: its largest hole is 1642 m2, under the 2000 m2 the producer keeps
+    region 79 (4670 m2) at (211.9, 441.3), bounded by s170 s199 s173: its largest hole is 1414 m2, under the 2000 m2 the producer keeps
+    region 26 (4539 m2) at (-210.4, 501.3), bounded by s48 s79 s50: its largest hole is 1222 m2, under the 2000 m2 the producer keeps
+    region 34 (4302 m2) at (-365.6, 942.3), bounded by s63 s94 s97: its largest hole is 1296 m2, under the 2000 m2 the producer keeps
+    ... and 17 more
+  regions holding two holes or more (the pavement splits the land the streets enclose): 0
+  where the walk could not close a region as stated: 0
+
 WHAT THE MODEL DOES NOT STATE YET (left empty):
-  - controls and signs: the road file plans none (city_plan controls)
   - speed limits: no road posts one (the rule set's default for each class holds)
   - crossings: the road file declares none (the design stage works them out from heights)
   - turn paths through junctions: nothing states them (the lane graph works them out)
@@ -146,7 +173,6 @@ WHAT THE MODEL DOES NOT STATE YET (left empty):
   - junction outlines on the ground: the builder has none (the paint's boxes are kept as stretches along each road)
   - crosswalks: nothing states them (the paint draws a zebra at each box)
   - parking spaces: the kerb parking band is stated (each street's cross-section), the spaces along it are not (the city sim lays them at load)
-  - street names: nothing states them (generated at load, stored nowhere)
   - blocks and their uses: the city plan has them, the road file does not carry them
   - signal groups: nothing states them (each driving model works its own out)
 
@@ -161,5 +187,5 @@ WHERE THE BUILD DOES NOT MATCH WHAT WAS STATED (the model's own problems): 22
     junction j56: the paint found no box where its arm on s104 (station 42.3) meets it, at (35.1, 337.9)
     ... and 14 more
 
-(nav graph 0.0 s, lane graph 10.9 s)
-(the road build 38.2 s, the model 0.69 s, the comparison 11.0 s)
+(nav graph 0.0 s, lane graph 11.1 s)
+(the road build 39.1 s, the model 0.73 s, the comparison 11.9 s)

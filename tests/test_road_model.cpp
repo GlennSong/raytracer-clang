@@ -31,7 +31,15 @@
 #include "engine/procgen/city/roads/lanes/road_twin.h"   // roadTwin: the kerb parking band it hands the sim
 #include "engine/procgen/city/roads/road_entity.h"      // navRoadGraph
 #include "engine/procgen/city/roads/road_model.h"
+#include "engine/procgen/city/roads/control_signs.h"   // the signs that follow from the facts (ADR-0424)
+#include "engine/ai/nav_graph.h"                        // rightOf: the kerb side
+#include "engine/script_assets.h"                       // loadScriptCode: the rule set's file
 #include "apps/citysim/control_policy_file.h"   // loadControlPolicy: the shared placement policy (ADR-0422)
+#ifdef RT_ENABLE_SCRIPTING
+#include "apps/driving/rule_set.h"
+#include "apps/driving/scripting/rule_set_lua.h"   // loadRuleSet: what each sign means is the rule set's device
+#include "engine/scripting/script_vm.h"
+#endif
 
 #include <nlohmann/json.hpp>
 
@@ -704,4 +712,248 @@ TEST_CASE(road_model_8_one_junction_is_no_room_for_a_car_between_stop_lines) {
     const RoadLayout B = deriveLayout(RoadLabGraph::fromJson(bend), LayoutSource::Inferred);
     CHECK(B.junctions.empty() && B.streets.size() == 2u);
     if (B.streets.size() == 2u) CHECK(B.streets[0].carriesOn[1] == "q" && B.streets[1].carriesOn[0] == "p");
+}
+
+// ---- 9. the signs that follow from the facts (ADR-0424) ----------------------------------------------------------------
+
+namespace {
+// The small graph with its one-way street turned to run INTO the T at (200, 0) (its exit end there), its layout written,
+// and controls stated by hand: an all-way stop at the crossing (0, 0), the T giving way on its local street.
+nlohmann::json signedGraph() {
+    nlohmann::json g = smallGraph();
+    for (nlohmann::json& e : g["edges"])
+        if (e["id"] == "o0") e["path"]["points"] = {{200, 150}, {200, 0}};
+    const RoadLabGraph graph = RoadLabGraph::fromJson(g);
+    RoadLayout layout = deriveLayout(graph, LayoutSource::Inferred);
+    writeLayout(g, layout);
+    for (nlohmann::json& j : g["junctions"]) {
+        const bool cross = std::fabs(j["at"][0].get<double>()) < 1.0;
+        j["control"] = cross ? "all_way_stop" : "give_way";
+        for (nlohmann::json& a : j["arms"]) {
+            if (cross) a["regulations"] = {"stop"};
+            else if (a["road"] == "l2") a["regulations"] = {"give_way"};
+        }
+    }
+    return g;
+}
+}  // namespace
+
+TEST_CASE(road_model_9_the_signs_follow_from_the_facts) {
+    // THE ROWS are data: each kind with a `sign` row, in priority order, every one read
+    std::vector<std::string> problems;
+    const std::vector<engine::ControlSignRule> rules = engine::controlSignRules(attachmentKinds(), &problems);
+    for (const std::string& p : problems) std::printf("    %s\n", p.c_str());
+    CHECK(problems.empty());
+    std::set<std::string> kinds;
+    for (std::size_t i = 0; i < rules.size(); ++i) {
+        kinds.insert(rules[i].kind);
+        if (i) CHECK(rules[i - 1].priority <= rules[i].priority);
+        CHECK(!rules[i].source.empty());
+    }
+    CHECK(kinds == std::set<std::string>({"stop_sign", "give_way_sign", "do_not_enter_sign", "one_way_sign"}));
+#ifdef RT_ENABLE_SCRIPTING
+    // ...and what each means is the rule set's device (rules/lab.lua `devices`)
+    {
+        engine::ScriptVM vm;
+        driving::RuleSet rs;
+        std::string err;
+        const std::string code = engine::loadScriptCode(citysim::kDefaultRuleSet, "");
+        CHECK(!code.empty() && vm.doString(code, &err) && driving::loadRuleSet(vm, citysim::kDefaultRuleSet, rs, &err));
+        for (const engine::ControlSignRule& r : rules) {
+            if (r.means.empty()) continue;
+            bool device = false;
+            for (const driving::Device& d : rs.devices) device = device || d.name == r.means;
+            CHECK(device);
+            CHECK(r.regulation == r.means);   // it stands where the arm states that sign
+        }
+    }
+#endif
+
+    const RoadModel m = plannedRoadModel(RoadLabGraph::fromJson(signedGraph()));
+    const engine::ControlSignPlan plan = engine::placeControlSigns(m, rules, nullptr, {});
+    for (const std::string& n : plan.notes) std::printf("    %s\n", n.c_str());
+    CHECK(plan.notes.empty());
+    std::map<std::string, int> count;
+    for (const engine::PlacedSign& s : plan.signs) ++count[s.kind];
+    // four STOP signs at the all-way stop, each with its ALL WAY plaque; one YIELD on the T's local street; one DO NOT
+    // ENTER at the one-way street's exit end; a ONE WAY sign facing each of the two arterial approaches that cross it
+    CHECK(count["stop_sign"] == 4);
+    CHECK(count["give_way_sign"] == 1);
+    CHECK(count["do_not_enter_sign"] == 1);
+    CHECK(count["one_way_sign"] == 2);
+    std::vector<std::string> arrows;
+    for (const engine::PlacedSign& s : plan.signs) {
+        const ModelJunction& J = m.junctions[static_cast<std::size_t>(s.junction)];
+        const ModelArm& a = J.arms[static_cast<std::size_t>(s.arm)];
+        const ModelStreet& S = m.streets[a.street.index];
+        Vec2 mouth;
+        CHECK(armMouth(m, J, static_cast<std::size_t>(s.arm), mouth));
+        const Vec2 d(std::cos(a.heading * DEG_TO_RAD), std::sin(a.heading * DEG_TO_RAD));
+        const Vec2 off = s.at - mouth;
+        // on the pavement: past the kerb across the arm's line, never on the carriageway
+        CHECK(std::fabs(dot(off, rightOf(d))) > kerbOffset(S) + 0.5);
+        // attached to its arm through the model
+        RoadModel withSign = m;
+        ModelAttachment at;
+        at.kind = s.kind;
+        at.junction = ModelJunctionId(static_cast<uint32_t>(s.junction));
+        at.arm = s.arm;
+        at.at = s.at;
+        CHECK(attach(withSign, at));
+        if (s.kind == "stop_sign" || s.kind == "give_way_sign") {
+            // at the stop line, 0.6 m toward the junction; on the kerb side of the traffic arriving by the arm, facing it
+            CHECK(std::fabs(dot(off, d) - (stopLineFromMouth(m, J, static_cast<std::size_t>(s.arm)) - 0.6)) < 1e-6);
+            CHECK(dot(off, rightOf(d * -1.0)) > 0);
+            CHECK((s.face - d).length() < 1e-9);
+            CHECK(s.look.value("sign", std::string()) == (s.kind == "stop_sign" ? "stop" : "yield"));
+            CHECK(s.look.contains("plaques") == (J.control == "all_way_stop"));
+        } else if (s.kind == "do_not_enter_sign") {
+            // at the street's exit end, facing back into the junction, on the kerb side of a car that would drive in
+            CHECK(a.road == "o0" && a.spineIn);
+            CHECK((s.face + d).length() < 1e-9);
+            CHECK(dot(off, rightOf(d)) > 0);
+        } else {
+            // parallel to the one-way street, facing an arterial approach; the street runs one way, so the two readers,
+            // facing each other across it, see its arrow point opposite ways
+            CHECK(a.road == "o0");
+            CHECK(std::fabs(dot(s.face, d)) < 0.05);
+            arrows.push_back(s.look.value("arrow", std::string()));
+        }
+    }
+    CHECK(arrows.size() == 2u && arrows[0] != arrows[1]);
+    // two signs on one spot are back to back, never one standing in the other
+    for (std::size_t i = 0; i < plan.signs.size(); ++i)
+        for (std::size_t k = i + 1; k < plan.signs.size(); ++k)
+            if ((plan.signs[i].at - plan.signs[k].at).length() < 1.0) CHECK(dot(plan.signs[i].face, plan.signs[k].face) < -0.9);
+    // NO ROOM: a sign whose spot is on the carriageway, or too near something already standing, is not placed, and said
+    const engine::ControlSignPlan onRoad = engine::placeControlSigns(m, rules, [](const Vec2&) { return Real(1); }, {});
+    CHECK(onRoad.signs.empty() && onRoad.notes.size() == plan.signs.size());
+    std::vector<Vec2> standing;
+    for (const engine::PlacedSign& s : plan.signs)
+        if (s.kind == "give_way_sign") standing.push_back(s.at + Vec2(0.3, 0));
+    const engine::ControlSignPlan crowded = engine::placeControlSigns(m, rules, nullptr, standing);
+    CHECK(crowded.signs.size() + 1 == plan.signs.size() && crowded.refused.at("give_way_sign") == 1);
+    // A ROAD FILE THAT STATES NO SIGNS gets none of the regulation signs (the one-way street's signs follow from its lanes)
+    nlohmann::json bare = signedGraph();
+    for (nlohmann::json& j : bare["junctions"]) {
+        j.erase("control");
+        for (nlohmann::json& a : j["arms"]) a.erase("regulations");
+    }
+    const engine::ControlSignPlan none = engine::placeControlSigns(plannedRoadModel(RoadLabGraph::fromJson(bare)), rules, nullptr, {});
+    for (const engine::PlacedSign& s : none.signs) CHECK(s.kind == "do_not_enter_sign" || s.kind == "one_way_sign");
+}
+
+// ---- 10. the regions enclosed by streets (ADR-0423) ---------------------------------------------------------------------
+
+namespace {
+// A GRID OF STREETS for the regions: rows at y = 0, 100, 200, 300 and columns at x = 0 and 100 (local streets), and at
+// x = 200 a DIVIDED ROAD: two one-way carriageways 12 m apart (x = 194 running +y, x = 206 running -y, stated as one road),
+// each row cut where it meets them. The grid's outer corners are bends (a row carries on as a column). A local street
+// leaves the junction at (100, 100) and ends inside the block beyond it, at (160, 160): a dead end. A column at x = 300
+// closes the east side. Its layout and names written, as the one-off tool writes them.
+nlohmann::json regionGrid() {
+    nlohmann::json g;
+    g["name"] = "region_grid";
+    g["classes"]["oneway"] = {{"w", 3.5}, {"fwd", 1}, {"back", 0}, {"sidewalk", 2.0}, {"g_max", 0.09}, {"window", 40}, {"thick", 0.5}};
+    auto road = [](const std::string& id, const std::string& cls, const std::vector<Vec2>& pts) {
+        nlohmann::json p = nlohmann::json::array();
+        for (const Vec2& q : pts) p.push_back({q.x, q.y});
+        return nlohmann::json{{"id", id}, {"class", cls}, {"path", {{"type", "polyline"}, {"points", p}}}};
+    };
+    nlohmann::json edges = nlohmann::json::array();
+    const double xs[] = {0, 100, 194, 206, 300};
+    for (int j = 0; j < 4; ++j)   // the rows, one edge between each pair of crossings
+        for (int i = 0; i + 1 < 5; ++i)
+            edges.push_back(road("r" + std::to_string(j) + "_" + std::to_string(i), "local", {Vec2(xs[i], 100.0 * j), Vec2(xs[i + 1], 100.0 * j)}));
+    for (int j = 0; j < 3; ++j) {
+        const double y0 = 100.0 * j, y1 = y0 + 100;
+        edges.push_back(road("c0_" + std::to_string(j), "local", {Vec2(0, y0), Vec2(0, y1)}));
+        edges.push_back(road("c1_" + std::to_string(j), "local", {Vec2(100, y0), Vec2(100, y1)}));
+        edges.push_back(road("c4_" + std::to_string(j), "local", {Vec2(300, y0), Vec2(300, y1)}));
+        edges.push_back(road("dv_a" + std::to_string(j), "oneway", {Vec2(194, y0), Vec2(194, y1)}));   // +y
+        edges.push_back(road("dv_b" + std::to_string(j), "oneway", {Vec2(206, y1), Vec2(206, y0)}));   // -y
+    }
+    edges.push_back(road("dead", "local", {Vec2(100, 100), Vec2(160, 160)}));
+    g["edges"] = edges;
+    nlohmann::json divided = nlohmann::json::array();
+    for (int j = 0; j < 3; ++j) divided.push_back({"dv_a" + std::to_string(j), "dv_b" + std::to_string(j)});
+    g["divided"] = divided;
+    const RoadLabGraph graph = RoadLabGraph::fromJson(g);
+    RoadLayout layout = deriveLayout(graph, LayoutSource::Inferred);
+    nameLayout(layout, graph);
+    writeLayout(g, layout);
+    return g;
+}
+}  // namespace
+
+TEST_CASE(road_model_10_the_regions_enclosed_by_streets) {
+    RoadLabGraph g = RoadLabGraph::fromJson(regionGrid());
+    (void)expand(g);
+    const RoadModel m = plannedRoadModel(g);
+    const EnclosedRegions er = enclosedRegions(m);
+    std::printf("%s", reportEnclosedRegions(m, er).c_str());
+    // THE LAND: three columns of blocks (0-100, 100-194, 206-300) in three rows; between the carriageways, three medians, no
+    // region; one outer face; the walk closed everything as stated
+    CHECK(er.regions.size() == 9);
+    CHECK(er.medians.size() == 3);
+    CHECK(er.outer.size() == 1 && er.pieces == 1);
+    CHECK(er.problems.empty() && er.crossings.empty() && er.unplanar.empty() && er.nested.empty());
+    CHECK(er.passedOver.empty() && er.walked == m.streets.size());
+    // EACH BOUNDED IN ORDER, counter-clockwise: every step starts where the one before it ended (at the junction it named,
+    // or on the street it carried on into, or back along itself where it turned round), and the region lies on the
+    // side each bound says
+    for (const EnclosedRegion& R : er.regions) {
+        CHECK(R.area > 0 && R.bounds.size() >= 3);
+        for (std::size_t i = 0; i < R.bounds.size(); ++i) {
+            const RegionBound& a = R.bounds[i];
+            const RegionBound& b = R.bounds[(i + 1) % R.bounds.size()];
+            const ModelStreet& A = m.streets[a.street.index];
+            const ModelStreet& B = m.streets[b.street.index];
+            const int aEnd = a.spineForward ? 1 : 0, bStart = b.spineForward ? 0 : 1;
+            if (a.end == RegionStepEnd::Junction) {
+                CHECK(A.junctions[static_cast<std::size_t>(aEnd)] == a.junction);
+                CHECK(B.junctions[static_cast<std::size_t>(bStart)] == a.junction);
+            } else if (a.end == RegionStepEnd::CarriesOn) {
+                CHECK(A.carriesOn[static_cast<std::size_t>(aEnd)] == b.street);
+            } else {
+                CHECK(b.street == a.street && b.spineForward != a.spineForward);
+            }
+            // the side: a point a metre off the middle of the street, on the stated side, lies inside the outline
+            const Vec2 p0 = m.linePoints[A.line.first], p1 = m.linePoints[A.line.end() - 1];
+            const Vec2 dir = normalize(p1 - p0), ccw(-dir.y, dir.x);
+            const Vec2 off = (p0 + p1) * 0.5 + (a.side == RegionSide::Ccw ? ccw : ccw * -1.0);
+            CHECK(pointInPolygon(R.outline, off));
+        }
+        CHECK(R.corners.size() >= 2);
+    }
+    // THE OUTER CORNER at (0, 0) is a bend, no junction: the block there is bounded by the row carrying on into the column
+    {
+        const int r = regionAt(er, Vec2(50, 50));
+        CHECK(r >= 0);
+        bool carries = false;
+        if (r >= 0)
+            for (const RegionBound& b : er.regions[static_cast<std::size_t>(r)].bounds) carries = carries || b.end == RegionStepEnd::CarriesOn;
+        CHECK(carries);
+    }
+    // A DEAD END INSIDE A BLOCK splits nothing: the block it stands in is one region, walked down one side of it and back
+    // up the other
+    {
+        const int r = regionAt(er, Vec2(170, 120));
+        CHECK(r >= 0 && r == regionAt(er, Vec2(120, 180)));
+        uint32_t sides = 0;
+        if (r >= 0)
+            for (const RegionBound& b : er.regions[static_cast<std::size_t>(r)].bounds) sides += m.streets[b.street.index].road == "dead" ? 1u : 0u;
+        CHECK(sides == 2);
+        CHECK(er.deadEnds.size() == 1);
+    }
+    // THE MEDIAN between the carriageways is no region
+    CHECK(regionAt(er, Vec2(200, 50)) < 0);
+    bool inMedian = false;
+    for (const EnclosedRegion& f : er.medians) inMedian = inMedian || pointInPolygon(f.outline, Vec2(200, 150));
+    CHECK(inMedian);
+    // A LOOK-UP: asked twice, the same answer; the model itself unchanged by the asking
+    const RoadModel before = m;
+    const EnclosedRegions again = enclosedRegions(m);
+    CHECK(again.regions.size() == er.regions.size() && m == before);
+    for (std::size_t i = 0; i < er.regions.size() && i < again.regions.size(); ++i) CHECK(again.regions[i].outline.size() == er.regions[i].outline.size());
 }

@@ -71,6 +71,7 @@
 #include "procgen/city/roads/lanes/block_audit.h"  // sceneBlocks: city blocks straight from the pavement
 #include "procgen/city/roads/lanes/city_producer.h" // the city as a bundle producer (ADR-0084)
 #include "procgen/city/roads/road_model.h"          // the road model's planned layer at load (ADR-0420)
+#include "procgen/city/roads/control_signs.h"       // the signs that follow from its facts (ADR-0424)
 #include "procgen/city/roads/lanes/lots_producer.h" // the lot pass as the second producer (milestone B)
 #include "bundle/bake.h"
 #endif
@@ -99,6 +100,7 @@
 #include "scripting/script_vm.h"
 #include "scripting/procgen_bindings.h"
 #include "scripting/vehicle_spec.h"
+#include "scripting/sign_kit_lua.h"   // the sign kit: the control signs' faces and models (ADR-0424)
 #endif
 #include "scripting/street_props_spec.h"   // (plain data: the reader itself needs scripting)
 #include "model_importer.h"
@@ -3971,6 +3973,172 @@ static void attachFurniture(engine::LevelRoadModel* level, const engine::StreetF
     (void)level; (void)plan;
 #endif
 }
+#ifdef RT_ROADS_LANES
+// THE SIGNS THAT FOLLOW FROM THE ROAD'S FACTS (ADR-0424): each city's, placed by the `sign` rows of
+// assets/data/road_attachments.json over its road model (control_signs.h), clear of the drawn carriageway and of what
+// stands already (the signal poles).
+struct CityControlSigns {
+    int city = -1;
+    engine::ControlSignPlan plan;
+};
+static std::vector<CityControlSigns> planControlSignsOf(const engine::LevelRoadModel* level,
+                                                        const std::function<Real(const Vec2&)>& carriagewayDepth,
+                                                        const std::vector<Vec2>& standing) {
+    std::vector<CityControlSigns> out;
+    if (!level) return out;
+    std::vector<std::string> problems;
+    const std::vector<engine::ControlSignRule> rules = engine::controlSignRules(engine::attachmentKinds(), &problems);
+    for (const std::string& p : problems) LOG_WARN << "[signs] " << p;
+    if (rules.empty()) return out;
+    std::map<std::string, int> placed, refused;
+    std::vector<std::string> notes;
+    for (std::size_t c = 0; c < level->cities.size(); ++c) {
+        if (!level->cities[c]) continue;
+        CityControlSigns cs;
+        cs.city = static_cast<int>(c);
+        cs.plan = engine::placeControlSigns(*level->cities[c], rules, carriagewayDepth, standing);
+        for (const std::pair<const std::string, int>& kv : cs.plan.placed) placed[kv.first] += kv.second;
+        for (const std::pair<const std::string, int>& kv : cs.plan.refused) refused[kv.first] += kv.second;
+        notes.insert(notes.end(), cs.plan.notes.begin(), cs.plan.notes.end());
+        out.push_back(std::move(cs));
+    }
+    std::string said;
+    for (const engine::ControlSignRule& r : rules)
+        said += (said.empty() ? "" : ", ") + std::to_string(placed[r.kind]) + " " + r.kind + " (" + std::to_string(refused[r.kind]) + " not placed)";
+    LOG_INFO << "[signs] the signs that follow from the road's facts (ADR-0424): " << said;
+    for (std::size_t i = 0; i < notes.size() && i < 12; ++i) LOG_INFO << "[signs]   not placed: " << notes[i];
+    return out;
+}
+// WHAT GIVES WAY TO THEM (the placement policy's priority: law and safety first): a lamp, street tree or kerb prop whose
+// foot is within a sign's keeps_clear is not planted.
+static void clearRoomForSigns(engine::StreetFurniturePlan& plan, const std::vector<CityControlSigns>& signs) {
+    auto nearSign = [&](const Vec3& p) {
+        for (const CityControlSigns& cs : signs)
+            for (const engine::PlacedSign& s : cs.plan.signs)
+                if ((Vec2(p.x, p.z) - s.at).length() < s.keepsClear) return true;
+        return false;
+    };
+    std::size_t lamps = 0;
+    for (std::size_t i = plan.lampBases.size(); i-- > 0;)
+        if (nearSign(plan.lampBases[i])) {
+            plan.lampBases.erase(plan.lampBases.begin() + static_cast<std::ptrdiff_t>(i));
+            if (i < plan.lampHeads.size()) plan.lampHeads.erase(plan.lampHeads.begin() + static_cast<std::ptrdiff_t>(i));
+            ++lamps;
+        }
+    const std::size_t trees = plan.trees.size(), props = plan.props.size();
+    plan.trees.erase(std::remove_if(plan.trees.begin(), plan.trees.end(), [&](const engine::StreetTree& t) { return nearSign(t.base); }),
+                     plan.trees.end());
+    plan.props.erase(std::remove_if(plan.props.begin(), plan.props.end(), [&](const engine::KerbProp& k) { return nearSign(k.base); }),
+                     plan.props.end());
+    if (lamps || trees != plan.trees.size() || props != plan.props.size())
+        LOG_INFO << "[signs] gave the signs room: " << lamps << " lamps, " << (trees - plan.trees.size()) << " street trees, "
+                 << (props - plan.props.size()) << " kerb props not planted";
+}
+// Each sign attached to the arm it stands at.
+static void attachControlSigns(engine::LevelRoadModel* level, const std::vector<CityControlSigns>& signs) {
+    if (!level) return;
+    int refused = 0;
+    std::string why;
+    for (const CityControlSigns& cs : signs) {
+        if (cs.city < 0 || static_cast<std::size_t>(cs.city) >= level->cities.size() || !level->cities[static_cast<std::size_t>(cs.city)]) continue;
+        engine::RoadModel& m = *level->cities[static_cast<std::size_t>(cs.city)];
+        for (const engine::PlacedSign& s : cs.plan.signs) {
+            engine::ModelAttachment a;
+            a.kind = s.kind;
+            a.junction = engine::ModelJunctionId(static_cast<uint32_t>(s.junction));
+            a.arm = s.arm;
+            a.at = s.at;
+            if (!engine::attach(m, a, &why)) ++refused;
+        }
+    }
+    if (refused) LOG_WARN << "[signs] " << refused << " signs not attached to the road model: " << why;
+}
+// RT_SIGN_DUMP=<file>: every sign placed (its kind, junction, arm, where, which way it faces, its look) and every one not.
+static void dumpControlSigns(const engine::LevelRoadModel* level, const std::vector<CityControlSigns>& signs, const char* path) {
+    nlohmann::json d;
+    d["signs"] = nlohmann::json::array();
+    d["not_placed"] = nlohmann::json::array();
+    for (const CityControlSigns& cs : signs) {
+        const engine::RoadModel* m = level && cs.city >= 0 && static_cast<std::size_t>(cs.city) < level->cities.size()
+                                         ? level->cities[static_cast<std::size_t>(cs.city)].get() : nullptr;
+        for (const engine::PlacedSign& s : cs.plan.signs) {
+            const engine::ModelJunction* J = m && s.junction >= 0 ? &m->junctions[static_cast<std::size_t>(s.junction)] : nullptr;
+            d["signs"].push_back({{"city", cs.city}, {"kind", s.kind}, {"junction", J ? J->id : std::string()},
+                                  {"control", J ? J->control : std::string()}, {"arm", s.arm},
+                                  {"road", J ? J->arms[static_cast<std::size_t>(s.arm)].road : std::string()},
+                                  {"at", {s.at.x, s.at.y}}, {"face", {s.face.x, s.face.y}}, {"reader", s.reader}, {"look", s.look}});
+        }
+        for (const std::string& n : cs.plan.notes) d["not_placed"].push_back(n);
+    }
+    std::ofstream(path) << d.dump(1) << "\n";
+}
+#endif
+#if defined(RT_ROADS_LANES) && defined(RT_ENABLE_SCRIPTING)
+// DRAWN BY THE SIGN KIT (sign_kit.h): one request per distinct look, built once (faces into atlas pages, the models from
+// the catalogue), each part instanced at every sign of that look, a group per part per 280 m cell. Each sign's model frame
+// (x the reader's right, y up, z toward the reader) is turned so z is its face's way, its post's foot on `ground`.
+static void drawControlSigns(World& world, Renderer& renderer, AssetManager& assets, const std::vector<CityControlSigns>& signs,
+                             const std::function<Real(Real, Real)>& ground, const std::string& levelDir, double drawDistance,
+                             const std::function<void(InstanceGroup&, Real)>& groupBounds) {
+    std::vector<std::string> lookKeys;
+    std::vector<nlohmann::json> requests;
+    std::vector<std::vector<Mat4>> placed;   // per look: each sign's transform
+    for (const CityControlSigns& cs : signs)
+        for (const engine::PlacedSign& s : cs.plan.signs) {
+            const std::string key = s.look.dump();
+            std::size_t i = std::find(lookKeys.begin(), lookKeys.end(), key) - lookKeys.begin();
+            if (i == lookKeys.size()) {
+                lookKeys.push_back(key);
+                requests.push_back(s.look);
+                placed.emplace_back();
+            }
+            const Real y = ground ? ground(s.at.x, s.at.y) : Real(0);
+            placed[i].push_back(Mat4::translate(s.at.x, y, s.at.y) * Mat4::rotateY(std::atan2(s.face.x, s.face.y)));
+        }
+    if (requests.empty()) return;
+    const engine::Font* font = engine::signFont();
+    if (!font) { LOG_WARN << "[signs] no sign font: the control signs are not drawn"; return; }
+    engine::SignKit kit;
+    std::string err;
+    engine::SignKitBuild build;
+    if (!kit.load("signs_us.lua", levelDir, &err) || !kit.build(requests, *font, build, &err)) {
+        LOG_WARN << "[signs] the sign kit: " << err << " -- the control signs are not drawn";
+        return;
+    }
+    std::vector<TextureHandle> pages;
+    for (const engine::TextImage& pg : build.pages) pages.push_back(renderer.uploadTexture(pg.w, pg.h, 4, pg.rgba.data()));
+    constexpr Real kCell = 280.0;
+    std::size_t groups = 0;
+    for (std::size_t i = 0; i < requests.size() && i < build.models.size(); ++i) {
+        std::map<std::pair<int, int>, std::vector<Mat4>> cells;
+        for (const Mat4& m : placed[i])
+            cells[{static_cast<int>(std::floor(m.m[0][3] / kCell)), static_cast<int>(std::floor(m.m[2][3] / kCell))}].push_back(m);
+        const engine::SignModel& model = build.models[i];
+        for (std::size_t p = 0; p < model.parts.size(); ++p) {
+            const engine::SignModelPart& part = model.parts[p];
+            if (part.mesh.vertices.empty()) continue;
+            const MeshHandle mesh = assets.acquireMesh(part.mesh, "roads:controlsign:" + std::to_string(i) + ":" + std::to_string(p));
+            for (const std::pair<const std::pair<int, int>, std::vector<Mat4>>& cell : cells) {
+                InstanceGroup g;
+                g.mesh = mesh;
+                g.material.albedo = Vec3(1, 1, 1);   // the colour rides the verts (the kit paints them), the face the page
+                g.material.metallic = part.material.metallic;
+                g.material.roughness = part.material.roughness;
+                if (part.page >= 0 && static_cast<std::size_t>(part.page) < pages.size())
+                    g.material.albedoMap = pages[static_cast<std::size_t>(part.page)];
+                g.transforms = cell.second;
+                groupBounds(g, 4.0);
+                g.drawDistance = drawDistance;
+                g.drawClass = engine::DrawClass::Furniture;
+                world.add<InstanceGroup>(world.create(), g);
+                ++groups;
+            }
+        }
+    }
+    LOG_INFO << "[signs] drawn by the sign kit: " << requests.size() << " looks, " << build.pages.size() << " atlas page(s), "
+             << groups << " instance groups";
+}
+#endif
 // How many named streets the level has: distinct names, city by city (a name is a run of the model's streets).
 static std::size_t namedStreetCount(const engine::LevelRoadModel* level) {
     std::size_t n = 0;
@@ -8033,6 +8201,14 @@ bool LevelLoader::load(const std::string& path,
                     g_loadedScriptFiles.push_back(sp);
             }
 #endif
+            // THE SIGNS THAT FOLLOW FROM THE ROAD'S FACTS (ADR-0424): stop, give-way, do-not-enter and one-way signs, in a
+            // level that asks for them (citysim.controlSigns; agent_lab first) and whose road file states its controls.
+            // Placed with the furniture, after the signal poles and before what gives way to them.
+            const bool controlSignsWanted = modelFurniture && root.contains("citysim") && root["citysim"].is_object() &&
+                                            root["citysim"].value("controlSigns", false);
+#ifdef RT_ROADS_LANES
+            std::vector<CityControlSigns> controlSigns;
+#endif
             const engine::StreetFurniturePlan fplan =
                 [&] {
                     engine::StreetFurnitureParams fp;
@@ -8154,6 +8330,24 @@ bool LevelLoader::load(const std::string& path,
                         if (planned.trees.size() != before)
                             LOG_INFO << "[furniture] " << (before - planned.trees.size()) << " street trees left out under decks and tracks";
                     }
+#ifdef RT_ROADS_LANES
+                    // the control signs: off the drawn asphalt (the deck, and the kerb line round the junctions' corners),
+                    // clear of the signal poles; then the lamps, trees and kerb props in their room give way
+                    if (controlSignsWanted) {
+                        const engine::RoadDeckField* deck = fp.deck;
+                        std::shared_ptr<const engine::KerbLine> kerb;
+                        if (fp.kerbLoops) kerb = std::make_shared<const engine::KerbLine>(fp.kerbLoops);
+                        const std::function<Real(const Vec2&)> depth = [deck, kerb](const Vec2& p) -> Real {
+                            Real d = deck ? static_cast<Real>(deck->depthInside(p.x, p.y)) : Real(0);
+                            if (kerb) d = std::max(d, kerb->depth(p));
+                            return d;
+                        };
+                        std::vector<Vec2> standing;
+                        for (const engine::SignalSpot& s : planned.signals) standing.push_back(Vec2(s.base.x, s.base.z));
+                        controlSigns = planControlSignsOf(furnitureModel, depth, standing);
+                        clearRoomForSigns(planned, controlSigns);
+                    }
+#endif
                     return planned;
                 }();
             if (!fplan.unpoledApproaches.empty()) {
@@ -8190,6 +8384,12 @@ bool LevelLoader::load(const std::string& path,
                 sharedPole.push_back(shared ? 1 : 0);
             }
             if (modelFurniture) attachFurniture(furnitureModel, fplan);
+#ifdef RT_ROADS_LANES
+            if (controlSignsWanted) {
+                attachControlSigns(furnitureModel, controlSigns);
+                if (const char* dumpPath = std::getenv("RT_SIGN_DUMP")) dumpControlSigns(furnitureModel, controlSigns, dumpPath);
+            }
+#endif
             // RT_FURNITURE_DUMP=<file>: which junctions the sim's signals light and which have poles (each tied to the
             // road model's junctions by position, the interim tie), the poles, lamps and trees -- what a before-and-
             // after comparison reads (ADR-0421)
@@ -8359,6 +8559,11 @@ bool LevelLoader::load(const std::string& path,
                     });
                     std::vector<Vec3> avoid;
                     for (const engine::SignalSpot& s : fplan.signals) avoid.push_back(s.base);
+#ifdef RT_ROADS_LANES
+                    // ...and the control signs, placed first (law and safety, ADR-0424)
+                    for (const CityControlSigns& cs : controlSigns)
+                        for (const engine::PlacedSign& s : cs.plan.signs) avoid.push_back(Vec3(s.at.x, 0, s.at.y));
+#endif
                     const std::vector<engine::StreetSignPost> posts =
                         engine::planStreetSigns(corners, combined, furnGround, sp, avoid);
                     attachSignBlades(roadModel, posts);
@@ -8438,6 +8643,12 @@ bool LevelLoader::load(const std::string& path,
                     }
                 }
             }
+#if defined(RT_ROADS_LANES) && defined(RT_ENABLE_SCRIPTING)
+            // THE CONTROL SIGNS DRAWN (ADR-0424), as far off as the name signs
+            if (controlSignsWanted)
+                drawControlSigns(world, renderer, assets, controlSigns, furnGround, levelDir,
+                                 root["citysim"].value("streetSignDistance", 260.0), groupBounds);
+#endif
             // KERB LIFE (the city's next ten #3): street trees in their pits, litter bins, bike racks, news boxes --
             // instanced in 280 m cells like the lamps. The trees are the lot pass's street-tree kit (growTree, three
             // varieties), bark and leaves as two groups a cell.

@@ -56,6 +56,9 @@ Vec2 centroid(const Poly2& poly);      // area centroid (falls back to vertex me
 Real perimeter(const Poly2& poly);
 void bounds(const Poly2& poly, Vec2& lo, Vec2& hi);
 bool pointInPolygon(const Poly2& poly, const Vec2& p);   // ray-cast, edge-inclusive-ish
+// A point inside `poly` (by pointInPolygon): its centroid when that is inside, else the middle of the widest stretch
+// inside along the horizontal line through the centroid (a C- or L-shaped ring's centroid can lie outside it).
+Vec2 interiorPoint(const Poly2& poly);
 
 // Oriented minimum-area bounding box, aligned to a convex-hull edge (the optimal
 // rectangle is always edge-aligned). axis[0]/axis[1] are unit and perpendicular;

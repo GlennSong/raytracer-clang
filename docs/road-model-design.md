@@ -90,7 +90,10 @@ Everything below lives in one structure, called the road model in the rest of th
 - **Walking.** Sidewalks as part of the cross-section, footpaths as streets of their own class, and crosswalks at each
   arm.
 - **Rail.** Tracks, platforms and stations. Rail is already a class of road in the road file and stays in the model.
-- **Blocks.** The land between streets, with which streets bound each block and what the block is for.
+
+It holds no **blocks** (ADR-0423). The land between the streets is a question the model answers (section 6: the regions
+the streets enclose); blocks, what each is for, its lots, buildings and doors belong to the city-building side (the
+architect), which asks that question and reads the roads by id.
 
 Every junction, street, lane and connection has an **id that never changes** once given. That is what lets anything
 else attach to the roads: a bus stop is "street 41, station 120, kerb side"; a building's door is "faces street 41";
@@ -102,7 +105,8 @@ Each fact has exactly one writer. Later stages add; they never rewrite and never
 
 | Stage | Writes |
 |---|---|
-| The planner | junctions, streets, classes and cross-sections, one-way, controls, speed limits, crossings, ramps, blocks and their uses, names |
+| The planner | junctions, streets, classes and cross-sections, one-way, controls, speed limits, crossings, ramps, names |
+| The architect (the city-building side, not the road model) | blocks and their uses, lots, buildings, doors: from the regions the streets enclose (section 6) |
 | The road builder | each lane's curve and heights, stop-line stations, junction outlines, turn paths through junctions, merge stretches, crosswalk positions, bridges and piers, parking spaces |
 | Load time | nothing about the roads. It may build look-up tables (see 4) |
 
@@ -143,7 +147,12 @@ Small and fixed, so readers stop walking raw data:
 - the streets at a junction, in order; the turns allowed from a lane
 - the lanes of a street; what a lane leads to
 - a route between two places, at street level or lane level
-- what is attached to a street or junction (stops, signs, names, doors)
+- what is attached to a street or junction (stops, signs, names)
+- the regions the streets enclose (ADR-0423, `enclosedRegions`): each region's bounding streets in order round it, which
+  side of each faces it (counter-clockwise or clockwise of the street's from-to direction), and the junctions at its
+  corners. A look-up (section 4): worked out on request by a walk round the stated streets and junctions (next arm
+  clockwise at each junction; carry-ons followed; dead ends walked round; freeways and ramps passed over; the face
+  between a divided road's carriageways is a median, no region), never saved, no ids, no use
 
 ## How to get there without breaking the game
 
@@ -158,8 +167,8 @@ reader has gone.
 | 3 | Readers that only label things move first: street names, name signs, the map. | No | Yes (ADR-0420). The model has a planned layer, read from the road file alone at load and published level-wide (`LevelRoadModel`); names are stated in the road file (`streets[].name`, written once into the existing files, bake keys unchanged) and are attachments of the model, as are the name signs. Differences: a name's run follows every stated through pair, carry-on and divided pair, so some runs are long and cross classes (and in metro_v2_test two junctions have one name on every arm); the attachment kinds live in their own data file (assets/data/road_attachments.json); a junction the plan spread over several points gets one sign post, not one per point; the island keeps its place names. Sign posts are walker obstacles, so river_town's pinned v1 state moves with them (not retaken here). |
 | 4 | Street furniture, signal poles and lights read the model's junctions and controls. Signal heads and the lights now agree. | No | Yes (ADR-0421). Every road file states each junction's control: the one-off tool (`lanes_tool controls`) wrote what the city sim's old rule lit, once (lit when any of a junction's nav nodes was); traffic_lab keeps its planned controls. The city sim's signals and the furniture's poles both read the stated control; the poles stand one per arm of a lit junction; lamps, trees and kerb props keep clear of the model's junctions; a street's planting follows its stated run. Differences: the nav graph has no junction ids yet, so its nodes are tied to the model's junctions by position in one helper (`LevelRoadModel::junctionAt`), an interim until step 7; the bake key no longer sees the junctions list at all (controls and signs included), and the lane graph keys the control plan itself, so traffic_lab re-baked once (meshes byte-identical); stop and give-way signs are not drawn anywhere today and were not added; a road file with no control plan (the planner's fresh output, until the tool runs) still takes the old rule. |
 | 4b | The placement policy, part one: every junction's control by shared rules (see "Placement policy" below). The planner states controls in every new road file; existing levels are only compared. | No | Yes (ADR-0422): the lab's rows moved to assets/scripts/rules/control_policy.lua, shared; the planner and the island scene writer state controls; `city_plan controls ... --compare` sets the policy beside a file. No existing road file changed. |
-| 5 | Lots, block frontage and door facing read the model's blocks and streets. The second twin is deleted. | Lots re-bake | |
-| 5b | The placement policy, part two: the signs that follow from controls (stop, give way, do not enter), then the rest of the street furniture, each as rows of the policy, reading the block uses step 5 gives. | No | |
+| 5 | UNDER REDESIGN (ADR-0423). The road model's part is one question: the regions the streets enclose. Blocks, their use, lots, buildings and doors belong to the city-building side (the architect), which reads the roads by id; alleys (streets the lot pass invents) are an open question. Then the lot pass reads the regions and the model's streets, and the second twin is deleted. | Lots re-bake | The question, yes (ADR-0423), with the evidence in memory; nothing moved. river_town: 125 regions; 40 of the build's 140 pavement holes (226 of 485 lots with a front door) stand on land the streets do not enclose, closed by the freeway ring (30 dead-end spokes end at it with no junction); of the lots in a region, the old vote names another street for 5 frontages and the old door rule for 13 doors; no lot fronts a freeway or ramp. Three findings: (a) the lot pass reads its road graph at about 76 places and merges its own alley graph in, so alleys must become stated streets before the pass can read the model alone; (b) deleting the second twin (lotNav, bundle section roads/lotnav) changes the city bundle's layout: a format version bump, or re-baking every lanes level (the owner decides); (c) the planner no longer reproduces river_town's road file (`city_plan scene assets/city_plans/river_town.json` gives 420 edges against the file's 374, 365 ids shared, 21 identical paths), so river_town's block uses cannot be recovered without re-planning its roads. |
+| 5b | The placement policy, part two: the signs that follow from controls (stop, give way, do not enter), then the rest of the street furniture, each as rows of the policy, reading the block uses step 5 gives. | No | The signs begun, in one level (ADR-0424): stop, give-way, do-not-enter and one-way signs as four rows (the `sign` of four attachment kinds in assets/data/road_attachments.json), placed at load from the stated controls, signs and one-way streets, attached to their arms and drawn by the sign kit, in agent_lab only (`citysim.controlSigns`), on its own road file (river_town's, with the policy's controls written in by `city_plan controls --controls-only`). agent_lab re-baked its lots once (the lots key hashes the level's `citysim` block); the city's key is unchanged. The rest of the furniture is not rows yet. |
 | 6 | Buses, rail riders and parking attach to streets by id, reading what the policy placed. Parking becomes part of the cross-section. | No | |
 | 7 | Routing reads the model at street level. The twin and both routing-graph copies are deleted. This changes what the current city sim does, so its pinned test values are retaken once, knowingly. | No | |
 | 8 | Lane-level driving reads the model's lanes and connections. The lane match and the lane graph's inference are deleted; its measuring of conflicts and bends stays. The one-agent lab's car moves to the new driver here. | No | |
@@ -213,6 +222,25 @@ when the level is built.
   signs are checked against that rule set's.
 - The planner states controls in every new road file, and so does the island scene writer.
 - Each junction records the row that decided it, as its `why`.
+
+**Part two, begun: the signs that follow from the facts** (ADR-0424).
+- One row per sign kind, as the `sign` of its attachment kind in assets/data/road_attachments.json (not in
+  control_policy.lua: the level loader reads them, and the driving library's reader is the planner's), with the parts
+  above: what it places (the kind), attaches to an arm, when (the arm's stated sign, or its street's stated one-way end),
+  whose traffic it faces, where exactly (side, metres past the stop line, metres out from the kerb), what it keeps clear
+  of, its priority, its look (a sign kit request) and its source (MUTCD 2B.05, 2B.10, 2B.37, 2B.40, 2A.19; [~] marks).
+
+  | Row | Places | When | Faces | Where |
+  |---|---|---|---|---|
+  | stop_sign | STOP (R1-1), ALL WAY plaque at an all-way stop | the arm states `stop` | traffic arriving by the arm | its kerb side, 0.6 m past the stop line, 0.6 m out from the kerb |
+  | give_way_sign | YIELD (R1-2) | the arm states `give_way` | traffic arriving by the arm | as STOP |
+  | do_not_enter_sign | DO NOT ENTER (R5-1) | a one-way street's exit end | traffic that would drive in | kerb side of that traffic, else across the arm |
+  | one_way_sign | ONE WAY (R6-1), arrow the street's way | a one-way street meets a junction | each arm crossing it | near kerb-side or far off-side corner, parallel to the street |
+
+- Priority by the conflicts rule: the signs first (they keep clear of the signal poles), and lamps, street trees and kerb
+  props within a sign's room give way. A sign with no room, or whose spot is on the drawn carriageway, is not placed and
+  is reported.
+- Only in a level that asks (`citysim.controlSigns`; agent_lab).
 
 **What the control rows can see today.** These are the facts the control planner works from (control_plan.h
 JunctionFacts). Some are stated in the road file; others are measured:

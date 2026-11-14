@@ -20202,3 +20202,197 @@ file itself: the driving library may not touch files.
 
 **Revisit when** the comparison has been read and river_town (and the rest) are to be re-planned by the policy; when the
 signs that follow from the controls are drawn (design step 5b).
+
+## ADR-0423 — Blocks are the architect's: the road model answers "which land do the streets enclose?", and nothing moved yet
+**Status:** Provisional · **Date:** 2026-11-14 (written after ADR-0424, numbered before it: the number was kept for this
+step of the road model; it stands here, in number order)
+
+Words used here:
+- A **region** is a piece of land the stated streets close round: the streets bounding it in order, which side of each
+  faces it, and the junctions at its corners. It is an ANSWER the road model gives, not something it holds.
+- A **block** is what the city-building side (the **architect**: the lot pass, city_lots.cpp, and what plans buildings)
+  makes of a region: its use, its lots, a big building, its doors.
+- A **pavement hole** is a gap in the built pavement (block_audit.h `pavementHoles`): today's blocks are cut from them.
+- A **look-up** (design section 4) is worked out from the model on request, holds no fact of its own, is never saved and
+  never edited.
+- **Passed over**: left out of the walk. A **dead end** is a street end with no junction and nothing carried on into.
+- A **median** is the thin face between the two carriageways of one road.
+- The **second twin** (`lotNav`, the bundle section `roads/lotnav`) is the copy of the road graph the lot pass reads.
+- **ccw / cw**: the side of a street reached by turning its from-to direction a quarter turn counter-clockwise /
+  clockwise in plan (this world drives on the left; nothing here says left or right).
+
+**Context.** Design step 5 had the road model hold blocks. The owner: "It doesn't really make sense for blocks to live in
+the road. A block is a customer that looks at the roads as a source of truth to find the buildable regions near roads or
+enclosed by roads. The city planning code that constructs buildings (the architect) should own that, use the roads as the
+source of truth for where to place blocks, then subdivide blocks into lots or plant a big building there."
+
+**Decision.**
+- **The road model holds no blocks** (no record, no attachment kind, nothing in a road file). It answers one more
+  question: `enclosedRegions(const RoadModel&)` (road_model.h), with `regionAt`, a report and a map. A region has no id
+  and no use; nothing saves it.
+- **How the answer is worked out**: a walk round the stated streets and junctions. Each street is walked both ways;
+  arriving at a junction the walk leaves by the next arm clockwise, so the land is always on the walk's counter-clockwise
+  side and each enclosed region is walked counter-clockwise; each connected piece of network has one outer face (walked
+  clockwise), which is no region.
+  - Arms in order round a junction by their stated heading; where the plan spread a junction over several points, by
+    where each arm's street leaves the circle round the junction that holds every mouth (two arms of a spread junction
+    can leave with the same heading: a divided road's two carriageways do).
+  - A street that carries on as another (no junction) is followed; a dead end is walked round, so it splits nothing.
+  - **Freeways and ramps are passed over** (`RegionWalk::passOver`, by the street's stated class): they meet the city's
+    streets at no junction, crossing on decks or running beside; walking them would make crossings without junctions.
+    A street that carries on into one is walked round there.
+  - A face bounded only by one-way streets all of one stated name (a divided road's carriageways share their name) is a
+    median, no region. (The model does not carry the road file's `divided` list; adding it is a format bump.)
+  - Where the stated facts disagree (an arm and a street's end naming different junctions, a carry-on not named back),
+    the walk follows the arms, turns round where nothing leads on, and lists the place. Crossings of walked streets with
+    no junction, and faces walked clockwise besides an outer face, are listed too.
+- **The evidence, in memory only.** `lanes_tool compare` gains a section, the regions against the pavement's holes (and
+  writes regions.txt and regions.svg); `lanes_tool regions-lots <level>` grows the level's lots again in memory from its
+  bundle, dumps them beside the stored ones, and sets each lot's frontage and front door against the region's street.
+
+**river_town.**
+- 309 streets walked, 16 passed over (8 freeway, 8 ramp); 3 pieces of network (the city, and the two turnaround loops at
+  the freeways' ends, tn0 and tn1, which meet the city only by freeway); **125 regions**, 0 medians, 3 outer faces. 32
+  junctions are spread over several points (9 of them would be ordered differently by heading alone). The walk closed
+  everything as stated: no disagreement, no crossing without a junction, no face it could not close. 8 street ends carry
+  on into a freeway (the boulevards bv0/bv1 and the loops tn0/tn1) and 31 are dead ends, **30 of them within 25 m of the
+  freeway ring** (the spokes out from the city's edge street, s304-s347): they end at the freeway with no junction.
+- **Holes against regions** (the build's 140 holes of 2000 m² and up): 100 in a region, **40 in none, every one closed
+  with a freeway or ramp** (the band between the city's edge street and the freeway ring, cut by the dead-end spokes,
+  and the land inside the interchange loops); 25 regions hold no kept hole (21 hold a smaller one the producer drops,
+  under 2000 m²; 4, all under 4300 m², hold none at all); no region holds two. The largest holes in no region: 36692 m² at (644, 830), 26913 m² at (-589, 273), 22780 m²
+  at (221, 1085). Picture: ~/Pictures/Raytracer/road-model/regions_river_town.png.
+- **The lots** (645 records, 485 with a front door; the bundle's 141 holes): every one of the 226 lots in no region stands
+  on that freeway-closed land. Of the 259 in a region, the old nearest-road vote names a different street for the
+  frontage of **5**: 2 the crossing street at the region's corner (lots 563, 564, paseo shops at (107, 104), (91, 146)), 2
+  a road point inside a junction (lot 325 at (-520, 612), lot 516 at (-279, 207)), 1 the boulevard bv1_in, which bounds
+  no region (lot 517 at (-267, 197)). The old door rule faces a different street for **13**: 8 the crossing street at a
+  corner (lot 108 at (-82, 1048), lot 190 at (-128, 881), lot 263 at (-364, 730)), 2 another street of the same region
+  (lot 318 at (-255, 622), lot 565 at (121, 107)), 2 inside a junction, 1 bv1_in. **No lot fronts a freeway or ramp**
+  by the old vote, and no road states a lots range.
+- **Nothing changed**: the lots grown in memory and the lots the bundle stores dump byte-identical; the bundles' keys
+  are unchanged; no road file, level or bundle was written.
+
+**Not done; what step 5 needs decided (A3).**
+- **The freeway-closed land.** 226 of river_town's 485 lots with a front door (47%) stand on land the streets do not
+  enclose. Either a freeway (at
+  grade) may bound a region (a side no lot fronts), or the planner states the streets that close it (the spokes meeting
+  a frontage street at junctions), or that land has no buildings. The owner decides.
+- **Where "lots may front this street" is stated**: today a class rule in code (city_lots.cpp `faces`) and the walk's
+  `passOver` default; a placement-policy row over street class would state both once.
+- **Alleys**: the lot pass invents its own (its `alleyGraph`, merged into its road graph); they must become stated
+  streets before the pass can read the model alone.
+- **The bundle**: deleting the second twin changes the city bundle's layout: a format version bump, or re-baking every
+  lanes level.
+- **river_town's block uses** cannot be recovered without re-planning its roads (the planner no longer reproduces its
+  road file).
+- The divided pairs are not in the model (the median test reads names); the walk does not use the existing face walk
+  (road_network.h `extractBlocks`), which gives polygons from node positions without street ids, sides or corners.
+
+**Alternatives.** Blocks in the road model or the road file: the owner's design says no. Walking the built pavement
+(today's holes): measured, not stated, and it cannot say which street bounds what. Freeways walked: they would cross the
+city's streets with no junction, and the regions would overlap.
+
+**Revisit when** step 5 moves the lot pass onto the regions (A3's decisions above).
+
+## ADR-0424 — The placement policy, part two begun: stop, give-way, do-not-enter and one-way signs follow from the road's facts, in agent_lab
+**Status:** Provisional · **Date:** 2026-11-14
+
+Words used here:
+- An **arm** is one road's way into or out of a junction; its **mouth** is where its street's centre line meets the
+  junction. An arm's **stated signs** are the road file's `junctions[].arms[].regulations` (ADR-0422 writes them).
+- A **stop line** is where traffic arriving by an arm stops. Here it is ADR-0419's rule, read from the stated sections:
+  the widest other street at the same node, half its travel width, plus 5.2 m (`kStopLineBack`), out from the mouth.
+- The **kerb** is the edge of the travel lanes (and shoulder); the **pavement** is past it. **Kerb side** is the side of a
+  lane toward the kerb; **off side** toward the centre line (the world drives on the left; `rightOf(direction)` is the
+  kerb side of traffic going that way).
+- A **sign row** is one entry of the placement policy: what it places, what it attaches to, when, where exactly, what
+  it keeps clear of, its priority, what it looks like and its source.
+- The **sign kit** is the US signs as data (assets/scripts/signs_us.lua over sign_kit.lua, `SignKit`): faces drawn into
+  atlas pages, models from the mesh words. It had STOP, YIELD, the ALL WAY plaque, DO NOT ENTER and ONE WAY already;
+  no face was made.
+- **MUTCD**: the US Manual on Uniform Traffic Control Devices, 2009 edition. Its paragraphs cited below were read
+  2026-11-14 at mutcd.fhwa.dot.gov through a page-summary tool (quoted back, not read line by line).
+
+**Context.** Step 4 (ADR-0421) drew no stop or give-way sign anywhere; ADR-0422 made the shared policy state each
+junction's control and the signs on its arms. The owner asked for the signs those facts call for to stand on the street
+in one level, agent_lab, as rows of the placement policy, without changing river_town or traffic_lab.
+
+**Decision.**
+- **agent_lab has its own road file.** assets/lanelab/planned/agent_lab_lanelab.json is river_town's file with the shared
+  policy's controls and signs written in (`city_plan controls ... rules/lab.lua --layout --write --controls-only`):
+  33 signal, 32 all-way stop, 78 stop, 1 give way, 0 unmarked, 266 arms signed stop and 1 give way. Outside its
+  junctions list it is river_town's file byte for byte, the junctions differ only in `control`, `why` and `regulations`.
+  river_town's file and level are untouched; its traffic keeps its old controls.
+- **`--controls-only`** (`writeControlPlan(..., junctionsOnly)`): writes the junctions list alone. The ordinary write
+  also posts each road's limit and a carry-on control, which are in what the city's bake key hashes; this does not.
+- **A bug fixed on the way: a written junction keeps its arms' order.** `writeControlPlan` wrote a junction's arms in the
+  plan's order but copied the file's `through` pairs (indices into the arms) unchanged; on river_town's file 141 of 144
+  junctions came out with their arms in another order, so their through pairs named other arms (j1's paired s0 with s4,
+  where the file pairs s3 with s0). Now, where the planned arms are the listed arms, they are
+  written in the list's order (and `through` stands); otherwise each pair is renumbered, or dropped if an arm is gone.
+  This also changes what the planner's scene writer writes where its arm order differed (no shipped file re-written).
+- **The rows live in assets/data/road_attachments.json, one per sign kind, in the kind's `sign`.** Four new kinds:
+  `stop_sign`, `give_way_sign`, `do_not_enter_sign`, `one_way_sign`, each `on: "arm"`. Why there and not in
+  control_policy.lua: control_policy.lua decides FACTS and is read by the planner through the driving library's reader;
+  the level loader (engine_core) may not depend on that library, and the signal poles' own rule (`controls: ["signal"]`,
+  ADR-0421) already lives in this file. So one entry is the whole sign: what it means (`means` names the rule set's
+  device: stop, give_way; a one-way street's signs name none, as one-way is a fact of the lanes), when (`regulation`, or
+  `one_way_end`: exit or any; optional `controls`), whose traffic it faces (arriving, entering, crossing), where
+  (`side`, `from_stop_line`, `from_kerb`), what it keeps clear of (`keeps_clear`), `priority`, the look (a sign kit
+  request; `look_at` per control: the ALL WAY plaque at an all-way stop) and `source`. The file's head lists every word.
+  - STOP and YIELD: on the kerb side of the arriving traffic, 0.6 m past the stop line toward the junction (between it
+    and the crosswalk's near edge; MUTCD 2B.10 paras 01, 13, 14), 0.6 m out from the kerb (2A.19 para 10), facing the
+    arriving traffic; ALL WAY below each STOP at an all-way stop (2B.05 para 04).
+  - DO NOT ENTER at a one-way street's exit end, on the kerb side of a car that would drive in, facing it (2B.37 para
+    02); where that side has no room (a divided road's narrow median), the stated second place across the arm
+    (`else_side: "off"`, para 05).
+  - ONE WAY parallel to the one-way street, facing each arm that crosses it (more than 30 degrees off its line [~]), on
+    the near kerb-side corner or the far off-side corner (2B.40 paras 02, 07); two readers whose corners are one share
+    its post back to back, and a reader already served by a sign facing its way gets no second.
+  - Numbers marked [~] in the file are guesses to tune: the 0.6 m past the stop line, the ONE WAY's 3.0 m, the 30
+    degrees.
+- **Placing is pure and refuses rather than moves** (src/engine/procgen/city/roads/control_signs.h,
+  `placeControlSigns`): rows by priority over the whole model, so a lower priority never takes a higher one's room; a
+  spot on the drawn carriageway (the deck, or inside the kerb line round the junctions' corners) or within `keeps_clear`
+  of what already stands (the signal poles, signs placed before) is not placed, and is reported with its place. Lamps,
+  street trees and kerb props within a sign's `keeps_clear` give way (law and safety first); the name-sign posts keep
+  clear of the signs.
+- **Each sign is an attachment on its arm** (the model's `attach`, ADR-0420). `RT_SIGN_DUMP=<file>` writes every sign and
+  every refusal.
+- **Drawn by the sign kit at load**: one request per distinct look (six in agent_lab), built once into one atlas page,
+  each part instanced per 280 m cell, its model turned so its face points at its readers, its post's foot on the
+  pavement.
+- **Only where asked**: `citysim.controlSigns: true` (agent_lab), and only where the road file states controls. traffic_lab
+  states signs too but does not ask, so it is unchanged.
+
+**What stands in agent_lab** (one load, 2026-11-14): 259 STOP (128 with the ALL WAY plaque), 1 YIELD (river_town's j3, at
+about (-331, 349)), 2 DO NOT ENTER (j0's bv1_in; j129's bv0_in, on its stated second side), 5 ONE WAY (j0 and j129, the
+boulevard carriageways). Not placed: 7 STOP whose spot is on the drawn carriageway (j7, j19, j28, j64, j72, j115, j130:
+skewed or crowded corners), 1 ONE WAY at j129 (on the carriageway). Gave way: 6 lamps, 1 street tree, 29 kerb props.
+Signal poles: 139, all at the 33 junctions stated `signal`. Pictures: ~/Pictures/Raytracer/road-model/signs_*.png.
+
+**The bake.** The city's key does not see the junctions list (ADR-0421), and the controls-only write leaves the rest of
+the file byte for byte: a copy of river_town's level pointed at the new file has river_town's key. But the lots
+producer hashes the level's whole `citysim` block, which holds the graph's path and now `controlSigns`, so agent_lab
+re-baked once (lots re-run, the city copied forward; the old bundle removed). river_town's and traffic_lab's bundles are
+unchanged.
+
+**Not done.**
+- The one-agent lab's car is driven by the old driving, which does not obey stop or give-way signs: it drives through
+  them. The new driving (rules/lab.lua) reads the stated signs, but agent_lab does not use it.
+- The paint does not read the stated signs (it is baked with the city): no stop bars or give-way teeth were added.
+- The signs are not walker obstacles or colliders yet: a person walks through a post.
+- No other level asks for the signs; river_town keeps its old-rule controls (ADR-0421).
+- A second DO NOT ENTER on the far side (2B.37 para 05) and the ONE WAY's place near the signal faces at lights (2B.40
+  para 08) are not placed.
+- The stop line is ADR-0419's rule read from the planned layer, not the paint's; where they differ, a sign stands a
+  little off the painted line.
+
+**Alternatives.** The rows in control_policy.lua: the policy's own file, but the loader would need the driving library's
+reader or a second one. Moving a refused sign until it fits: the design says a rule that finds no room is skipped and
+reported, never squeezed in. Drawing with the island's road-sign system (ADR-0110): its kinds are C++ branches, and it
+has no STOP or YIELD.
+
+**Revisit when** the new driving drives agent_lab (it will obey the signs); when the paint reads the stated signs; when
+another level is planned by the policy and asks for the signs; when the signs become obstacles.

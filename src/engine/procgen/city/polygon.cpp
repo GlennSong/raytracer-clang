@@ -73,6 +73,27 @@ bool pointInPolygon(const Poly2& poly, const Vec2& p) {
     return inside;
 }
 
+Vec2 interiorPoint(const Poly2& poly) {
+    const Vec2 c = centroid(poly);
+    if (poly.size() < 3 || pointInPolygon(poly, c)) return c;
+    // where the boundary crosses the line y = c.y, in order along it: the stretches between pairs are inside
+    std::vector<Real> xs;
+    for (std::size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+        const Vec2& a = poly[i];
+        const Vec2& b = poly[j];
+        if ((a.y > c.y) != (b.y > c.y)) xs.push_back((b.x - a.x) * (c.y - a.y) / (b.y - a.y) + a.x);
+    }
+    std::sort(xs.begin(), xs.end());
+    Vec2 best = c;
+    Real widest = -1;
+    for (std::size_t k = 0; k + 1 < xs.size(); k += 2)
+        if (xs[k + 1] - xs[k] > widest) {
+            widest = xs[k + 1] - xs[k];
+            best = Vec2((xs[k] + xs[k + 1]) * 0.5, c.y);
+        }
+    return best;
+}
+
 Poly2 convexHull(const Poly2& points) {
     Poly2 pts = points;
     std::sort(pts.begin(), pts.end(), [](const Vec2& a, const Vec2& b) {
