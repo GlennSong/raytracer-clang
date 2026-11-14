@@ -3,7 +3,7 @@
 
 // The procedural city as the first bundle producer (ADR-0084). For every shape:"lanelab" entity of a
 // level it runs the lane lab and writes what the loader instantiates — the material meshes split by
-// render cell, the conformed ground, the road twin (nav graph, freeway right-of-way) and the un-inset
+// render cell, the conformed ground, the road twin (the lot pass's graph, freeway right-of-way) and the un-inset
 // pavement holes the lot pass turns into blocks — under `city/e<ordinal>/...`. The loader reads exactly
 // these sections back (readCityProducts) and instantiates from them whether they came from disk or from a
 // build a moment ago, so a cold level and a cached level are the same geometry to the byte.
@@ -63,9 +63,10 @@ struct CityCellMesh { int cx = 0, cz = 0; bundle::PackedMesh mesh; };
 struct CityProducts {
     bool hasTerrain = false;
     bundle::HeightGridBlob ground;
-    RoadEntity twin;                 // class-faithful roadTwin()
-    RoadGraph nav;                   // navRoadGraph(nav twin, ground): what the sim ROUTES on -- travel-lane widths (ADR-0115)
-    RoadGraph lotNav;                // navRoadGraph(twin, ground): the same streets at the LOT clearance widths -- the lot pass
+    RoadEntity twin;                 // class-faithful roadTwin(): what the lot twin below is sampled from
+    // (the sim's routing twin, `roads/nav`, is no longer made: every agent routes on the street map built from the road
+    // model at load, ADR-0425. A bundle baked before still holds the section; nothing reads it.)
+    RoadGraph lotNav;                // navRoadGraph(twin, ground): the streets at the LOT clearance widths -- the lot pass
                                      // keeps buildings width/2 + clearance off them and walks doors to their kerbs
     std::vector<Ring> holes;         // un-inset pavement holes >= 2000 m² (blocks after the level's sidewalk inset)
     // THE DRIVING SURFACE, as a queryable field, and the kerb line around it. Everything the

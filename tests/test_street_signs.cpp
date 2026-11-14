@@ -61,14 +61,10 @@ RoadModel modelOf(const nlohmann::json& scene) {
 }
 
 // The model's streets as drawn carriageways (what a post keeps clear of): each centre line, its travel width.
-RoadGraph carriageways(const RoadModel& m) {
-    RoadGraph g;
+std::vector<SignCarriageway> carriageways(const RoadModel& m) {
+    std::vector<SignCarriageway> g;
     for (const ModelStreet& s : m.streets)
-        for (uint32_t k = s.line.first; k + 1 < s.line.end(); ++k) {
-            g.nodes.push_back(RoadNode{m.linePoints[k]});
-            g.nodes.push_back(RoadNode{m.linePoints[k + 1]});
-            g.addEdge(static_cast<int>(g.nodes.size()) - 2, static_cast<int>(g.nodes.size()) - 1, s.travelWidth());
-        }
+        for (uint32_t k = s.line.first; k + 1 < s.line.end(); ++k) g.push_back({m.linePoints[k], m.linePoints[k + 1], s.travelWidth()});
     return g;
 }
 

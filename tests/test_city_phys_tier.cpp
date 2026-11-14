@@ -15,6 +15,7 @@
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/world.h"
+#include "street_map_test_util.h"   // a test world's street map, from its road entities (ADR-0425)
 
 #include <algorithm>
 #include <cmath>
@@ -82,7 +83,7 @@ Real upDot(const Quat& q) { return q.rotate(Vec3(0, 1, 0)).y; }
 
 TEST_CASE(city_phys_tier_soak) {
     World world;
-    world.add<RoadEntity>(world.create(), cityGrid());
+    testmap::addRoads(world, cityGrid());
 
     CityRenderParams params;
     params.cars = 40;   // busy near the player (24 had drifted to 5 within the ring)
@@ -234,7 +235,7 @@ TEST_CASE(city_phys_tier_soak) {
 // far cars always account for every driver, and walking away releases all.
 TEST_CASE(city_phys_tier_with_tiering) {
     World world;
-    world.add<RoadEntity>(world.create(), cityGrid());
+    testmap::addRoads(world, cityGrid());
 
     CityRenderParams params;
     params.cars = 24;
@@ -319,7 +320,7 @@ TEST_CASE(city_phys_tier_with_tiering) {
 // and then physically walks the player into one to prove it blocks.
 TEST_CASE(city_every_drawn_car_is_solid) {
     World world;
-    world.add<RoadEntity>(world.create(), cityGrid());
+    testmap::addRoads(world, cityGrid());
 
     CityRenderParams params;
     params.cars = 24;
@@ -472,7 +473,7 @@ struct TrafficLook {
 };
 TrafficLook watchTraffic(bool physicalTier, uint32_t seed = 7) {
     World world;
-    world.add<RoadEntity>(world.create(), cityGrid());
+    testmap::addRoads(world, cityGrid());
     CityRenderParams params;
     params.cars = 24;
     params.pedestrians = 0;
@@ -600,7 +601,7 @@ TEST_CASE(city_drawn_traffic_rolls_on_its_wheels) {
 // else -- every drawn cab is a taxi, every drawn taxi a cab -- and the off-roader and the moped are in the rotation.
 TEST_CASE(city_cabs_draw_as_taxis_and_only_cabs_do) {
     World world;
-    world.add<RoadEntity>(world.create(), cityGrid());
+    testmap::addRoads(world, cityGrid());
     CityRenderParams params;
     params.cars = 40;
     params.pedestrians = 0;
@@ -668,7 +669,7 @@ Real footOverlap(const Foot& a, const Foot& b) {
 
 TEST_CASE(city_phys_tier_packed_junction_does_not_pile_up) {
     World world;
-    world.add<RoadEntity>(world.create(), cityGrid());
+    testmap::addRoads(world, cityGrid());
     CityRenderParams params;
     params.cars = 160;
     params.pedestrians = 0;
@@ -853,7 +854,7 @@ TEST_CASE(city_phys_tier_packed_junction_does_not_pile_up) {
 // was 4.0 for all of them.
 TEST_CASE(every_fleet_car_launches_as_the_traffic_plan_asks) {
     World world;
-    world.add<RoadEntity>(world.create(), cityGrid());
+    testmap::addRoads(world, cityGrid());
     CityRenderParams params;
     params.cars = 4;
     params.pedestrians = 0;
@@ -889,7 +890,7 @@ TEST_CASE(every_fleet_car_launches_as_the_traffic_plan_asks) {
 // share.
 TEST_CASE(every_fleet_car_is_put_down_on_its_own_springs) {
     World world;
-    world.add<RoadEntity>(world.create(), cityGrid());
+    testmap::addRoads(world, cityGrid());
     CityRenderParams params;
     params.cars = 4;
     params.pedestrians = 0;

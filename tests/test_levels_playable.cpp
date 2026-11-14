@@ -95,6 +95,38 @@ std::string levelsDir() {
 // the nodes, and every number here was tuned on the other one. RT_CITYSIM_LEVEL
 // points them at it, so "does the sim work on a lane-built city" is a measurement
 // rather than an opinion.
+// THE LEVEL'S STREET MAP (engine::LevelStreetMap, ADR-0425: built from the road model at load, every agent routes on it) as
+// a road graph of its pieces -- a two-way street's two links once, with their widths and classes: what the measurements
+// below walk. Empty when the level has none.
+engine::RoadGraph streetMapGraph(World& world) {
+    engine::RoadGraph g;
+    std::shared_ptr<const engine::NavGraph> map;
+    world.each<engine::LevelStreetMap>([&](Entity, engine::LevelStreetMap& m) { if (!map && m.map) map = m.map; });
+    if (!map) return g;
+    for (int n = 0; n < map->streetNodeCount(); ++n) g.nodes.push_back(engine::RoadNode{map->nodes[static_cast<std::size_t>(n)]});
+    for (int li = 0; li < map->streetLinkCount(); ++li) {
+        const engine::NavLink& L = map->links[static_cast<std::size_t>(li)];
+        if (!L.footpath) g.addEdge(L.from, L.to, L.width, L.klass);
+    }
+    return g;
+}
+
+// RT_LEVELS=a,b: true when no list is set or the level's file name contains one of the substrings.
+bool levelPicked(const std::string& name) {
+    const char* only = std::getenv("RT_LEVELS");
+    if (!only || !*only) return true;
+    const std::string list = only;
+    std::size_t start = 0;
+    while (start <= list.size()) {
+        const std::size_t comma = list.find(',', start);
+        const std::string sub = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        if (!sub.empty() && name.find(sub) != std::string::npos) return true;
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    return false;
+}
+
 std::string simLevelPath() {
     const char* only = std::getenv("RT_CITYSIM_LEVEL");
     const std::string name = only && *only ? std::string(only) : std::string("metro_v2_test");
@@ -146,11 +178,7 @@ std::vector<std::string> shippedLevels() {
         if (name.find(".cameras.json") != std::string::npos) continue;
         if (name.find(".signs.json") != std::string::npos) continue;   // a road-sign plan (ADR-0110), read by its level
         // RT_LEVELS=a,b: only levels whose file name contains one of the substrings (timing one level).
-        if (const char* only = std::getenv("RT_LEVELS"); only && *only) {
-            bool keep = false; std::string list = only; size_t start = 0;
-            while (start <= list.size()) { const size_t comma = list.find(',', start); const std::string sub = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start); if (!sub.empty() && name.find(sub) != std::string::npos) keep = true; if (comma == std::string::npos) break; start = comma + 1; }
-            if (!keep) continue;
-        }
+        if (!levelPicked(name)) continue;
         if (skipHeavy() && isHeavyLevel(name)) { std::printf("    [levels] skipped (heavy, RT_LEVEL_TESTS_SKIP_HEAVY): %s\n", name.c_str()); continue; }
         out.push_back(name);
     }
@@ -746,7 +774,7 @@ TEST_CASE(level_print_buildings_in_the_carriageway) {
         const CityMap* cm = nullptr;
         world.each<CityMap>([&](Entity, CityMap& m) { if (!cm) cm = &m; });
         if (!cb || !cm || !cm->data) continue;
-        const RoadGraph& rg = cm->data->roads;
+        const NavGraph& rg = cm->data->nav;   // the street map (ADR-0425)
         int offenders = 0;
         Real worst = 0; Vec2 worstAt(0, 0); std::size_t worstRec = 0;
         for (std::size_t i = 0; i < cb->records.size(); ++i) {
@@ -754,10 +782,10 @@ TEST_CASE(level_print_buildings_in_the_carriageway) {
             if (r.plan.size() < 3) continue;
             bool bad = false;
             for (const Vec2& v : r.plan) {
-                for (std::size_t e = 0; e < rg.edges.size(); ++e) {
-                    const RoadEdge& ed = rg.edges[e];
-                    if (ed.a < 0 || ed.b < 0) continue;
-                    const Real d = distToSegment(v, rg.nodes[ed.a].pos, rg.nodes[ed.b].pos);
+                for (int e = 0; e < rg.streetLinkCount(); ++e) {
+                    const NavLink& ed = rg.links[static_cast<std::size_t>(e)];
+                    const Real d = distToSegment(v, rg.nodes[static_cast<std::size_t>(ed.from)],
+                                                 rg.nodes[static_cast<std::size_t>(ed.to)]);
                     const Real into = ed.width * Real(0.5) - d;   // >0 = inside the lane
                     if (into > Real(0.25)) {
                         bad = true;
@@ -1074,10 +1102,8 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
     world.each<engine::RoadEntity>([&](Entity, engine::RoadEntity& net) {
         sidewalk = std::max(sidewalk, static_cast<Real>(net.look.sidewalk));
     });
-    const RoadGraph* graph = nullptr;
-    world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) {
-        if (!graph) graph = &g.graph;
-    });
+    const RoadGraph streets = streetMapGraph(world);
+    const RoadGraph* graph = streets.edges.empty() ? nullptr : &streets;
     const StreetFurniture* sf = nullptr;
     world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& f) {
         if (!sf) sf = &f;
@@ -2278,8 +2304,10 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
                                           view, assets, false);
     CHECK(loaded);
     if (!loaded) return;
-    const engine::RoadGraph* graph = nullptr;
-    world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) { if (!graph) graph = &g.graph; });
+    // the street map, which a post keeps clear of (as the loader plans the posts: ADR-0425)
+    std::shared_ptr<const engine::NavGraph> streetMap;
+    world.each<engine::LevelStreetMap>([&](Entity, engine::LevelStreetMap& m) { if (!streetMap && m.map) streetMap = m.map; });
+    const engine::NavGraph* graph = streetMap.get();
     // THE NAMES AND THE JUNCTIONS ARE THE LEVEL'S ROAD MODEL'S (ADR-0420)
     const engine::LevelRoadModel* level = nullptr;
     world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!level) level = &m; });
@@ -2310,7 +2338,8 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
         const std::string n = engine::streetName(model, engine::ModelStreetId(static_cast<uint32_t>(s)));
         if (!n.empty()) namedStreets.insert(n);
     }
-    const std::vector<engine::StreetSignPost> posts = engine::planStreetSigns(signCorners, *graph, nullptr, sp);
+    const std::vector<engine::SignCarriageway> carriageways = engine::carriagewaysOf(*graph);
+    const std::vector<engine::StreetSignPost> posts = engine::planStreetSigns(signCorners, carriageways, nullptr, sp);
     const engine::SignAtlas atlas = engine::buildSignAtlas(*font, posts, sp);
     int fits = 0, legible = 0, abbreviated = 0, condensed = 0, wrongNames = 0, inRoad = 0;
     float minCap = 1e9f;
@@ -2333,9 +2362,9 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
         // In ANY carriageway (not just this junction's): distance to every
         // edge's centreline segment against its half-width.
         const Vec2 q(post.base.x, post.base.z);
-        for (const auto& ed : graph->edges) {
-            const Vec2 a = graph->nodes[static_cast<std::size_t>(ed.a)].pos;
-            const Vec2 b = graph->nodes[static_cast<std::size_t>(ed.b)].pos;
+        for (const engine::SignCarriageway& ed : carriageways) {
+            const Vec2 a = ed.a;
+            const Vec2 b = ed.b;
             const Vec2 ab = b - a;
             const Real l2 = ab.x * ab.x + ab.y * ab.y;
             const Real t = l2 > 1e-12 ? std::clamp(((q.x - a.x) * ab.x + (q.y - a.y) * ab.y) / l2, 0.0, 1.0) : 0.0;
@@ -2390,7 +2419,7 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
 // products — build / ground / navGraph. The engine reads road facts from EIGHT
 // channels across ~76 sites: RoadEntity (28), terrain.flatten (21), the spec's
 // parking band (11), freewayROW (10), look.sidewalk (3), RoadDeck (2),
-// LevelRoadGraph (1), RoadBandDebug. The lattice fills all eight as a SIDE
+// the level's road graph (1; the street map built from the road model since ADR-0425), RoadBandDebug. The lattice fills all eight as a SIDE
 // EFFECT of being a RoadEntity that carries a graph. So a second builder can
 // satisfy 100% of the declared interface and still produce a city where cars
 // sink into the asphalt, nobody can park, signal poles stand in the road and
@@ -2441,10 +2470,7 @@ CityFacts gatherCityFacts(const std::string& levelName) {
                                  assets, /*editorMode=*/false);
     if (!f.loaded) return f;
 
-    engine::RoadGraph nav;
-    world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) {
-        if (!g.graph.edges.empty()) nav = g.graph;
-    });
+    const engine::RoadGraph nav = streetMapGraph(world);
     f.navNodes = nav.nodes.size();
     f.navEdges = nav.edges.size();
 
@@ -2531,6 +2557,7 @@ TEST_CASE(every_builder_publishes_a_complete_city) {
     // One level per builder. Adding a builder means adding a level here.
     const char* kCities[] = {"metro_v2_test.json", "river_town.json"};
     for (const char* name : kCities) {
+        if (!levelPicked(name)) continue;   // RT_LEVELS=a,b picks among them
         const CityFacts f = gatherCityFacts(name);
         CHECK(f.loaded);
         if (!f.loaded) { std::printf("    [city] %s FAILED TO LOAD\n", name); continue; }
@@ -2653,6 +2680,7 @@ void note(RoadIntrusion& r, const std::vector<const engine::RoadDeckField*>& dec
 TEST_CASE(city_furniture_never_stands_in_a_road) {
     const char* kCities[] = {"metro_v2_test.json", "river_town.json"};
     for (const char* name : kCities) {
+        if (!levelPicked(name)) continue;   // RT_LEVELS=a,b picks among them
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -2793,6 +2821,7 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
 TEST_CASE(front_doors_face_their_street) {
     const char* kCities[] = {"metro_v2_test.json", "river_town.json"};
     for (const char* name : kCities) {
+        if (!levelPicked(name)) continue;   // RT_LEVELS=a,b picks among them
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -2802,10 +2831,7 @@ TEST_CASE(front_doors_face_their_street) {
             CHECK(false);
             continue;
         }
-        engine::RoadGraph nav;
-        world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) {
-            if (!g.graph.edges.empty()) nav = g.graph;
-        });
+        const engine::RoadGraph nav = streetMapGraph(world);
         CHECK(!nav.edges.empty());
         if (nav.edges.empty()) continue;
 
@@ -2902,6 +2928,7 @@ TEST_CASE(front_doors_face_their_street) {
 TEST_CASE(scenery_is_planted_on_the_ground) {
     const char* kCities[] = {"metro_v2_test.json", "river_town.json"};
     for (const char* name : kCities) {
+        if (!levelPicked(name)) continue;   // RT_LEVELS=a,b picks among them
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -3056,6 +3083,7 @@ std::vector<std::vector<uint32_t>> meshPieces(const RenderMesh& m) {
 TEST_CASE(lot_dressing_is_planted_on_the_ground) {
     const char* kCities[] = {"metro_v2_test.json", "river_town.json"};
     for (const char* name : kCities) {
+        if (!levelPicked(name)) continue;   // RT_LEVELS=a,b picks among them
         std::unique_ptr<Renderer> renderer = Renderer::create();
         CapturingUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -3322,6 +3350,7 @@ TEST_CASE(lot_dressing_is_planted_on_the_ground) {
 TEST_CASE(freeway_census_links_routes_and_traffic) {
     const char* kCities[] = {"river_town.json", "metro_v2_test.json"};
     for (const char* name : kCities) {
+        if (!levelPicked(name)) continue;   // RT_LEVELS=a,b picks among them
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -3597,6 +3626,7 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
 TEST_CASE(block_census_lots_per_block) {
     const char* kCities[] = {"river_town.json", "metro_v2_test.json"};
     for (const char* name : kCities) {
+        if (!levelPicked(name)) continue;   // RT_LEVELS=a,b picks among them
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -4625,8 +4655,7 @@ TEST_CASE(level_river_town_streets_are_drivable_grades) {
     World world;
     RenderView view;
     CHECK(LevelLoader::load(levelsDir() + "/river_town.json", world, *renderer, view, assets, /*editorMode=*/false));
-    engine::RoadGraph nav;
-    world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) { if (!g.graph.edges.empty()) nav = g.graph; });
+    const engine::RoadGraph nav = streetMapGraph(world);
     std::vector<const engine::RoadDeckField*> decks;
     world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { decks.push_back(&d.field); });
     struct Steep { double grade; engine::Vec2 at; int klass; };
@@ -4866,6 +4895,8 @@ struct SpineIndex {   // the baked spines' segments, by 10 m cell
 
 TEST_CASE(level_real_lanes_match_the_baked_roads) {
     for (const char* name : {"traffic_lab", "metro_v2_test", "river_town"}) {
+        // RT_LEVELS=a,b: only levels whose name contains one of them (as the level census)
+        if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(only).find(name) == std::string::npos) continue;
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -4978,8 +5009,9 @@ TEST_CASE(level_real_lanes_match_the_baked_roads) {
         }
         std::sort(oldGap.begin(), oldGap.end());
         const double mean = oldGap.empty() ? 0 : std::accumulate(oldGap.begin(), oldGap.end(), 0.0) / oldGap.size();
-        std::printf("    [lanes] %-14s %zu lanes, %d of %d drivable links matched (%d other count, %d partial, %d none); %d carry their road's "
-                    "stated lanes (ADR-0418)\n", name, ll->lanes.size(), lm.matched, lm.drivable, lm.countDiffers, lm.partial, lm.none, lm.resolved);
+        std::printf("    [lanes] %-14s %zu lanes, %d of %d drivable links matched (%d other count, %d partial, %d none), tied by their road, "
+                    "way, stretch and slot (ADR-0425)\n", name, ll->lanes.size(), lm.matched, lm.drivable, lm.countDiffers, lm.partial, lm.none);
+        for (const std::string& u : lm.untied) std::printf("    [lanes] %-14s %s\n", name, u.c_str());
         std::printf("    [lanes] %-14s roads on the baked spines: %d points, worst %.3f m, %d over 5 cm; lanes in the carriageway: "
                     "%d samples, %d past its edge by > 15 cm (worst %+.2f m)\n", name, roadPts, roadWorst, roadOff, lanePts, laneOut, laneWorst);
         {

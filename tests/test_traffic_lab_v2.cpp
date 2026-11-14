@@ -1440,14 +1440,18 @@ TEST_CASE(level_traffic_lab_v2_rebuild_hands_over_again) {
 // as v1 now lights the 28 junctions its own plan states (the old rule lit 76), and on river_town every point of a
 // junction stated lit is lit and poles stand one an arm. With the old signalled set and old furniture put back (a
 // temporary switch, removed) the earlier numbers -- 787bbb8c..., a749b074... -- came out exactly.
-constexpr uint64_t kV1LabHashes[] = {0x95361f07f682a28cull, 0x335f747ef03fbe37ull, 0x1635c459b431087full,
-                                     0x60592356ecaa1176ull};
+// Both taken again when every agent's street map came to be built from the road model (ADR-0425): its nodes and
+// links differ from the old thinned copy's, a junction lying over several points runs one signal plan, and bus lines
+// are derived afresh. With the street map built the old way (a temporary switch, removed) the earlier numbers --
+// 95361f07..., 2b9fd098... -- came out exactly.
+constexpr uint64_t kV1LabHashes[] = {0x6161808458034f6cull, 0xdc44f2a4eba36a97ull, 0x619965545bd8c04cull,
+                                     0x4350d0f0759ece61ull};
 // river_town: t = 15, 30, 45, 60 s. Taken again when street name signs moved onto the road model (ADR-0420): a sign
 // post is street furniture, walkers steer round furniture, and the posts stand at different corners (one a junction,
 // 182 -> 144). With the posts put back where they stood (a temporary switch, removed) the earlier numbers -- 943f48ad...
 // -- came out exactly; the lab, which has no walkers, did not move.
-constexpr uint64_t kV1RiverHashes[] = {0x2b9fd0985ace2c92ull, 0xb2007bf85d95c105ull, 0x3c30289318b2cf0aull,
-                                       0x532215ed97f16d3bull};
+constexpr uint64_t kV1RiverHashes[] = {0xe8a31a7c99904cfdull, 0x5e9f6a872434cf02ull, 0x7407d0c363d6ca49ull,
+                                       0xbfd7473425925330ull};
 
 TEST_CASE(level_v1_state_is_unchanged) {
     // The lab as v1 with the fleet it had when the hashes were taken: its own fleet now deals a city bus into its traffic

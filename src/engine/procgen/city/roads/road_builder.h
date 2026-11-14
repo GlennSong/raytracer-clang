@@ -108,13 +108,12 @@ public:
     // What the ground must become before the surface exists — see GroundPlan.
     // The terrain pre-pass asks this against the NATURAL ground.
     virtual GroundPlan ground(const RoadBuildInput& in) const = 0;
-    // The centrelines everything routes on: nav, traffic, furniture, signs, map.
-    virtual RoadGraph navGraph(const RoadBuildInput& in) const = 0;
-    // Is that graph THE level's road graph? The default says no: the loader then
-    // applies navRoadGraph() downstream to every RoadEntity in the world, as it
-    // did for the retired lattice. A builder that paves a city (lanes) says yes — its graph is the twin of what it
-    // actually built, and nothing downstream can re-derive that from the recipe.
-    virtual bool ownsNavGraph() const { return false; }
+    // The streets the LOT PASS reads (a door faces one, a building keeps clear of them): the lanes builder's lot twin
+    // (roads/lotnav). Not what agents route on: that is the street map, built from the road model at load (ADR-0425).
+    virtual RoadGraph lotStreets(const RoadBuildInput& in) const = 0;
+    // Does this builder pave a whole city (its blocks, its ground, its road model)? The lanes builder does; a mesher
+    // that only carves the ground it was given does not.
+    virtual bool pavesCity() const { return false; }
 };
 
 inline constexpr const char* kDefaultRoadBuilder = "lanes";

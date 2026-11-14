@@ -896,28 +896,21 @@ struct CityMap {
 // (milliseconds; its built layer stays in cache/roadmodel). What the readers that only label the roads read: the
 // street names (the model's name attachments), the name signs (attached to the junction arms they stand at, as the
 // loader plans them), the map, and a bus stop's street; and (ADR-0421) which junctions are lit -- the street furniture's
-// signal poles, the city sim's signals -- and the junctions and streets the lamps and trees keep to.
+// signal poles, the city sim's signals -- and the junctions and streets the lamps and trees keep to. Since ADR-0425 the
+// street map carries every node's junction and every link's street, so nothing is tied to the model by position.
 struct RoadModel;
 struct NavGraph;
 struct LevelRoadModel {
     std::vector<std::shared_ptr<RoadModel>> cities;
-    // The named street nearest `p` over every city (its name; empty when none is within `reach` metres).
+    // The named street nearest `p` over every city (its name; empty when none is within `reach` metres): the model's
+    // own question (road_model.h streetNameNear), for a label (a bus stop's street).
     std::string streetNameNear(const Vec2& p, Real reach = 40.0) const;
 
-    // THE INTERIM TIE (ADR-0421; until design step 7 gives the nav graph the model's ids): a point -- a nav node, a
-    // lamp -- is tied to the model by POSITION, here and nowhere else. A node belongs to the junction one of whose
-    // points (its centre, or where one of its arms' streets meets it) lies nearest, within kTieReach; a point belongs to
-    // the street whose centre line passes nearest, within `reach`.
-    static constexpr Real kTieReach = 15.0;
+    // A place on the model: a city and a junction (and one of its arms), or a street.
     struct Place {
         int city = -1, junction = -1, arm = -1, street = -1;
         bool valid() const { return city >= 0; }
     };
-    Place junctionAt(const Vec2& p, Real reach = kTieReach) const;
-    // The arm of `j`'s junction a road leaves it by, from `p` heading `outward`: the arm whose heading is within
-    // 40 degrees, the one whose mouth is nearest `p` (arm -1: none).
-    Place armAt(Place j, const Vec2& p, const Vec2& outward) const;
-    Place streetAt(const Vec2& p, Real reach) const;
     // Every junction's points (its centre and its arms' mouths), every city: what lamps and trees keep clear of.
     std::vector<Vec2> junctionPoints() const;
     // A key the same for every street of one stated run (its name: a run is named as one), or the street's own id.
@@ -926,14 +919,11 @@ struct LevelRoadModel {
     bool controlsStated() const;
     // Is this junction's stated control one the signal poles stand for (road_attachments.json, "signal_pole")?
     bool lit(const Place& j) const;
-    // THE SIM'S SIGNALS FROM THE STATED CONTROLS: each intersection node of `nav` tied to a junction gets that
-    // junction's light; an intersection node tied to none (`untied` counts them) gets none. Does nothing when no
-    // control is stated (the old rule stays: NavGraph::signalledByOldRule).
-    void stateSignals(NavGraph& nav, int* untied = nullptr) const;
-
-    // (streetAt's buckets: every street's centre-line segments by 25 m cell, built on first use)
-    struct StreetCells;
-    mutable std::shared_ptr<const StreetCells> streetCells_;
+    // THE SIM'S SIGNALS FROM THE STATED CONTROLS (ADR-0425): each intersection node of the street map `nav` gets its own
+    // junction's light (by the junction id it carries); every other node none. A road file that states no control at all
+    // lights nothing (`stated` out: false then; the loader says what to run). `untied`: intersection nodes carrying no
+    // junction (none on a street map built from the model).
+    void stateSignals(NavGraph& nav, int* untied = nullptr, bool* stated = nullptr) const;
 };
 
 struct AuthoredPlace {
@@ -1190,37 +1180,41 @@ struct OpenSigns {
 // for where they are"). The loader plans and SPAWNS every signal pole and
 // street lamp from the roads' deterministic nav graph; this component tells
 // the sim where they stand. The sim animates lenses / reacts to phases only.
-// THE level's road network (§10): streets and corridor chains welded into
-// ONE derived graph at load. Every consumer — the citysim nav build, street
-// furniture, editor queries — reads this; nothing merges graphs privately.
-// (Supersedes the P8.4 ExtraNavGraph bolt-on, which only the sim could see.)
-struct LevelRoadGraph {
-    RoadGraph graph;
-};
-
 // THE CITY's REAL LANES (#218): every lane the lanes builder laid, recomputed at load from the level's own graph by the
 // builder's first step (expand -- the input the bake was built from, ~60 ms on the island) and published as plain
 // lines, so the traffic sim drives the painted lanes instead of a centreline plus an offset. `kind` is the builder's:
 // through | turn | slip | aux | ramp | connector. `parent` is the lane's road (graph edge index), `dir` +1 along it.
+// WHERE EACH LANE LIES ON ITS ROAD (ADR-0417's ids, read by the lane match since ADR-0425): `slot`, its place across the
+// lanes running its way, from the centre-line side (0) to the kerb side (a pocket born on the kerb side is one past the
+// last, one on the centre-line side -1); `spineFrom` / `spineTo`, the stretch of its road's spine it is laid along; and
+// `stations`, each point's station along that spine (a lane is laid point for point beside its spine's samples).
 struct TrafficLane {
     std::vector<Vec2> xy;
     double w = 3.5;
     int parent = -1;
     int dir = 1;
     std::string kind;
-};
-// A road's travel lanes each way AS ITS ROAD FILE STATES THEM (its class's, or its own "lanes": roads/lanes LaneLayout,
-// ADR-0418), copied at load: `along` its spine (the forward lanes), `against` it. The sim's links take their lane count
-// from here, through the lane match (citysim LaneMap), never from a table of their own.
-struct StatedLanes {
-    int along = 0, against = 0;
+    int slot = -1;
+    double spineFrom = 0, spineTo = 0;
+    std::vector<double> stations;
 };
 struct LevelLanes {
     std::vector<TrafficLane> lanes;
     // each road's centreline after expand (graph edge index -> points), for checking the recompute against the bake
     std::vector<std::vector<Vec2>> roads;
-    // each road's stated travel lanes (graph edge index -> them), beside `roads`
-    std::vector<StatedLanes> stated;
+    // where each city's roads begin in `roads` (a TrafficLane's `parent` is that plus its road's index in its road
+    // file): city c's road e is roads[cityRoads[c] + e]. In the order LevelRoadModel lists the cities.
+    std::vector<int> cityRoads;
+};
+
+// THE LEVEL'S STREET MAP (docs/road-model-design.md step 7, ADR-0425): the one graph every agent routes, drives and walks
+// on -- every lane-built city's, in the level's order -- built once at load from the road model's planned layer and the
+// drawn deck (roads/street_map.h), and shared: the furniture plan reads it, the city sim copies it and appends its walks.
+// A look-up table: every link and node carries its ids into the model; nothing in it is saved. `errors`: a city whose
+// road file lacks a fact the map needs (it has no streets on the map: no traffic there).
+struct LevelStreetMap {
+    std::shared_ptr<NavGraph> map;
+    std::vector<std::string> errors;
 };
 
 // The DECK a road entity's mesh actually rode (RoadDeckField), stored by the

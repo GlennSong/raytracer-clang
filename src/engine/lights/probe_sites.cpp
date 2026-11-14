@@ -1,5 +1,5 @@
 #include "probe_sites.h"
-#include "../procgen/city/road_network.h"
+#include "../ai/nav_graph.h"   // the street map the sites stand along
 
 #include <algorithm>
 #include <cmath>
@@ -12,7 +12,7 @@ namespace {
 uint64_t mergeKey(int64_t cx, int64_t cz) { return (static_cast<uint64_t>(cx) << 32) ^ static_cast<uint64_t>(static_cast<uint32_t>(cz)); }
 }  // namespace
 
-void placeProbeSites(const RoadGraph& g, const ProbeGroundFn& ground, const ProbeRules& rules, std::vector<ProbeSite>& out) {
+void placeProbeSites(const NavGraph& map, const ProbeGroundFn& ground, const ProbeRules& rules, std::vector<ProbeSite>& out) {
     const double spacing = std::max(rules.spacing, 5.0);
     const double merge = std::max(rules.merge, 1.0);
     // the sites so far, by merge cell, so a junction's arms share one
@@ -30,22 +30,23 @@ void placeProbeSites(const RoadGraph& g, const ProbeGroundFn& ground, const Prob
             }
         return false;
     };
-    // a node's carriageway height (absolute)
-    auto nodeY = [&](const RoadNode& n) {
-        return n.elevAbsolute ? static_cast<double>(n.elev) : ground(n.pos.x, n.pos.y) + n.elev;
-    };
-    for (const RoadEdge& e : g.edges) {
-        if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(g.nodes.size()) || e.b >= static_cast<int>(g.nodes.size())) continue;
-        const RoadNode& na = g.nodes[static_cast<std::size_t>(e.a)];
-        const RoadNode& nb = g.nodes[static_cast<std::size_t>(e.b)];
-        const double dx = nb.pos.x - na.pos.x, dz = nb.pos.y - na.pos.y;
+    // the street map's links as pieces of road, each once (a two-way street's two links are one piece), each end's height
+    // as its link carries it: an absolute deck height, or a height above the ground
+    std::unordered_map<uint64_t, char> done;
+    for (int li = 0; li < map.streetLinkCount(); ++li) {
+        const NavLink& e = map.links[static_cast<std::size_t>(li)];
+        if (e.footpath || e.from < 0 || e.to < 0) continue;
+        if (!done.emplace(mergeKey(std::min(e.from, e.to), std::max(e.from, e.to)), 1).second) continue;
+        const Vec2 pa = map.nodes[static_cast<std::size_t>(e.from)], pb = map.nodes[static_cast<std::size_t>(e.to)];
+        const double dx = pb.x - pa.x, dz = pb.y - pa.y;
         const double len = std::sqrt(dx * dx + dz * dz);
         if (len < 1e-3) continue;
         const double ux = dx / len, uz = dz / len;
         const int n = std::max(1, static_cast<int>(std::lround(len / spacing)));
         // at grade both ends: follow the ground between them; a deck or a ramp: the line between its ends
-        const bool atGrade = !na.elevAbsolute && !nb.elevAbsolute;
-        const double ya = nodeY(na), yb = nodeY(nb);
+        const bool atGrade = !e.elevAbsA && !e.elevAbsB;
+        const double ya = e.elevAbsA ? e.elevA : ground(pa.x, pa.y) + e.elevA;
+        const double yb = e.elevAbsB ? e.elevB : ground(pb.x, pb.y) + e.elevB;
         // the box: the piece of street this site stands for (with a little overlap), past the kerbs to the frontages
         const double along = len / n * 0.5 + 5.0;
         const double across = e.width * 0.5 + rules.side;
@@ -53,8 +54,8 @@ void placeProbeSites(const RoadGraph& g, const ProbeGroundFn& ground, const Prob
         const double hz = std::fabs(uz) * along + std::fabs(ux) * across;
         for (int k = 0; k < n; ++k) {
             const double t = (k + 0.5) / n;
-            const double x = na.pos.x + dx * t, z = na.pos.y + dz * t;
-            const double road = atGrade ? ground(x, z) + na.elev + (nb.elev - na.elev) * t : ya + (yb - ya) * t;
+            const double x = pa.x + dx * t, z = pa.y + dz * t;
+            const double road = atGrade ? ground(x, z) + e.elevA + (e.elevB - e.elevA) * t : ya + (yb - ya) * t;
             ProbeSite s;
             s.position = Vec3(x, road + rules.height, z);
             if (nearOne(s.position)) continue;

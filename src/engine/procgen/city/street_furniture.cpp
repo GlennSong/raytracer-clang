@@ -550,6 +550,7 @@ StreetFurniturePlan planStreetFurniture(
             const Real y = gy(sp.x, sp.y) + L.layer * kLayerLift;
             out.lampBases.push_back(Vec3(sp.x, y, sp.y));
             out.lampHeads.push_back(Vec3(sp.x, y + p.lampHeight, sp.y));
+            out.lampLinks.push_back(li);
             const int cx = static_cast<int>(std::floor(sp.x / cell));
             const int cz = static_cast<int>(std::floor(sp.y / cell));
             grid[cellKey(cx, cz)].push_back({sp, dir});

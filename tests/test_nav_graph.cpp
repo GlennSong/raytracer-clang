@@ -51,8 +51,9 @@ TEST_CASE(nav_link_geometry) {
     CHECK_APPROX(mid.y, 0.0, 1e-9);
 }
 
-// A link's lanes are its class's row of the road class table, whatever its width (ADR-0418: one lane count; a city
-// built from a road file then gives each link its own road's, LaneMap::stateLanes).
+// A link's lanes are its class's row of the road class table, whatever its width (ADR-0418: one lane count), on a graph
+// made from a hand-made road graph; a city's street map takes each link's from its street's stated cross-section
+// (street_map.h, ADR-0425).
 TEST_CASE(nav_lane_count_is_the_road_class_table_s) {
     for (const RoadClass k : {RoadClass::Local, RoadClass::Collector, RoadClass::Arterial, RoadClass::Freeway, RoadClass::Ramp}) {
         RoadGraph g;

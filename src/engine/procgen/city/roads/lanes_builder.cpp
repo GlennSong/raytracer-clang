@@ -5,7 +5,8 @@
 // and because the loader, rt_bake and the editor's bake button must all get the
 // same city to the byte. So this builder does not build — it OBTAINS, and hands
 // the three products out of what the city producer made: the conformed ground, the
-// cell meshes, and the class-faithful twin that everything routes on.
+// cell meshes, and the lot pass's twin of the streets (agents route on the street map the loader builds from the
+// road model, ADR-0425).
 //
 // That is also why it needs the level rather than just the road entity.
 #include "road_builder.h"
@@ -70,16 +71,15 @@ public:
         return out;
     }
 
-    // What everything routes on: the twin derived from the built pavement, not from
-    // the plan that produced it (the pavement is the source of truth).
-    RoadGraph navGraph(const RoadBuildInput& in) const override {
+    // The streets the lot pass reads: the lot twin (roads/lotnav), as the bake's lots producer reads it.
+    RoadGraph lotStreets(const RoadBuildInput& in) const override {
         const lanes::CityProducts* p = products(in);
-        return p ? p->nav : RoadGraph{};
+        return p ? p->lotNav : RoadGraph{};
     }
-    bool ownsNavGraph() const override { return true; }
+    bool pavesCity() const override { return true; }
 
 private:
-    // One obtain per level, not one per question: ground(), build() and navGraph()
+    // One obtain per level, not one per question: ground(), build() and lotStreets()
     // are three views of the same city.
     const lanes::CityProducts* products(const RoadBuildInput& in) const {
         // A caller working from the level's JSON ALONE has no level to obtain against.
@@ -127,7 +127,7 @@ private:
             return nullptr;
         }
         LOG_INFO << "[roads/lanes] " << in.levelPath << " e" << ordinal << ": " << p.cells.size()
-                 << " cell meshes, " << p.nav.edges.size() << " nav edges, " << p.holes.size()
+                 << " cell meshes, " << p.lotNav.edges.size() << " lot twin edges, " << p.holes.size()
                  << " pavement holes, bundle " << status;
         slot = std::move(p);
         return &*slot;

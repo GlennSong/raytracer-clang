@@ -251,8 +251,8 @@ NavGraph buildNavGraph(const RoadGraph& roadsIn, const NavBuildParams& params) {
         l.oneWay = e.oneWay || (params.oneWayRamps && e.klass == RoadClass::Ramp);
         // Lanes in this direction: the ROAD CLASS TABLE's row for the link's class (the most it carries each way: a
         // two-way row's lanes each way, a one-way row's all of them). The road graph's edges do not say which road-file
-        // road they came from, so this is the class's lane count; a city built from a road file then sets each link's
-        // own, as its road states it (citysim LaneMap::stateLanes, ADR-0418).
+        // road they came from, so this is the class's lane count. A city built from a road file does not come through
+        // here: its street map takes each link's lanes from its street's stated cross-section (street_map.h, ADR-0425).
         {
             const roads::lanes::RoadClassSpec& row = roads::lanes::roadClass(roadClassName(e.klass));
             l.lanes = std::max(1, std::max(row.lanes.fwd, row.lanes.back));
@@ -350,6 +350,8 @@ NavGraph::FootpathReport NavGraph::appendFootpaths(const std::vector<std::array<
         nodeSpread.push_back(0);
         nodeKind.push_back(0);
         footNode.push_back(1);
+        if (!nodeJunction.empty()) nodeJunction.push_back(-1);
+        if (!nodeCity.empty()) nodeCity.push_back(-1);
     }
     rep.nodes = static_cast<int>(pts.size());
     // a walk link each way; the walker keeps 0.45 m right of the walk's line, so two ways pass

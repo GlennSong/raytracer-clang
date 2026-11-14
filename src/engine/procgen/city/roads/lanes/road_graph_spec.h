@@ -97,11 +97,27 @@ struct PlannedStretch {
     std::string road;
     double from = 0, to = 0;                // stations along the road's spine, from <= to
 };
+// ONE POINT OF A JUNCTION SPREAD OVER SEVERAL (ADR-0425): where roads meet inside it -- the road ends that meet there, a
+// road's station where another ends on its side, or where two roads cross at grade. Each of its points is a road and a
+// station along that road's spine, written to the centimetre as the arms' are. Authored on the junction:
+//   "nodes": [{"at": [x, y], "points": [{"road": "s21", "at": 90.89}, {"road": "s313", "at": 24.13}]}, ...]
+// A junction with no stretch of road inside it is one point (its `at`) and lists none. A junction with stretches inside it
+// lists every one of its points, so a reader joins its arms and its inside stretches by these stations, never by where
+// they lie (the street map, road_model.h). Part of the layout: the bake key and the lane graph's key do not see it.
+struct PlannedNodePoint {
+    std::string road;
+    double at = 0;
+};
+struct PlannedNode {
+    Vec2 at;
+    std::vector<PlannedNodePoint> points;
+};
 struct PlannedJunction {
     std::string id, control, why;
     Vec2 at;
     std::vector<PlannedArm> arms;
     std::vector<PlannedStretch> inside;     // the stretches of road lying between its nodes
+    std::vector<PlannedNode> nodes;         // its points, when it has stretches inside it (see PlannedNode)
     std::vector<std::array<int, 2>> through;   // pairs of arms (indices into arms) that are one street carrying on through
     bool hand = false;
 };

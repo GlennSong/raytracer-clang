@@ -167,6 +167,7 @@ struct StreetFurniturePlan {
     int unarmedApproaches = 0;     // signalled approaches no model arm takes (with approachArm): phased, no pole
     std::vector<Vec3> lampBases;   // pole feet (instance translations)
     std::vector<Vec3> lampHeads;   // bulb positions (night point lights)
+    std::vector<int> lampLinks;    // the link each lamp lights, beside lampBases (its street: the link's, ADR-0425)
     std::vector<StreetTree> trees; // kerb life (StreetFurnitureParams::kerbLife)
     std::vector<KerbProp> props;
     int planted[8] = {0};          // street links by StreetPlanting::Scheme (with a character)

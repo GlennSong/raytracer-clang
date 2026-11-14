@@ -15,6 +15,7 @@
 #include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/systems/physics_system.h"
 #include "../src/engine/world.h"
+#include "street_map_test_util.h"   // a test world's street map, from its road entities (ADR-0425)
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -68,7 +69,7 @@ Vec3 inFrame(const Mat4& pose, const Vec3& p) { return pose.inverse().transformP
 
 TEST_CASE(a_bus_passenger_rides_in_the_bus_frame) {
     World world;
-    world.add<RoadEntity>(world.create(), rideGrid());
+    testmap::addRoads(world, rideGrid());
     CityRenderParams params;
     params.cars = 12;
     params.pedestrians = 0;
@@ -216,7 +217,7 @@ TEST_CASE(a_bus_passenger_rides_in_the_bus_frame) {
 // arriving at its stop at 5.6 m/s and standing still the next tick.
 TEST_CASE(a_bus_glides_at_the_city_s_sim_rate) {
     World world;
-    world.add<RoadEntity>(world.create(), rideGrid());
+    testmap::addRoads(world, rideGrid());
     CityRenderParams params;
     params.cars = 12;
     params.pedestrians = 0;

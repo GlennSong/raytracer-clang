@@ -58,7 +58,7 @@ RoadClass classOf(const EdgeSpec& e) {
     return RoadClass::Local;
 }
 
-RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forNav) {
+RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots) {
     RoadEntity net; net.look.sidewalk = 3.5;
     std::vector<Line> lines;
     // A ramp is one lanelab edge but two things to the city: at grade, beside the street it leaves
@@ -138,12 +138,8 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
         // + clearance from every sampled centreline, so the width is where the embankment lives.
         const RoadClassSpec& cs = atGradeRamp ? r.graph.classes.at(r.graph.find(e.id)->cls) : r.graph.cls(e);
         L.w = 2.0 * (r.graph.hw(atGradeRamp ? *r.graph.find(e.id) : e) + cs.shoulder + kTwinTolerance + (deckEarthwork ? r.graph.rules.conformW : 0.0));
-        // ...except for TRAFFIC on a deck. The nav graph takes this width as the carriageway a
-        // one-way link's lanes are spread across, and a freeway's lot-clearance band (earthwork,
-        // shoulders, tolerance: ~31 m) put three lanes 10 m apart. The nav twin carries the
-        // travel lanes' own width.
+        // ...except on a deck: the carriageway's travel lanes alone (as the twin always carried them there)
         if (deckEarthwork && !forLots) L.w = 2.0 * r.graph.hw(e);
-        if (forNav) L.w = 2.0 * r.graph.hw(atGradeRamp ? *r.graph.find(e.id) : e);   // every road: its travel lanes
         // THE CROSS-SECTION, so the city can park on it. `w` above is the LOT clearance band —
         // padded by the twin tolerance and, on a deck, by the whole earthwork — and is not a
         // street's actual asphalt. The sim's kerbside bays are laid in a road's own Parking band

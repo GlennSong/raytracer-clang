@@ -26,7 +26,6 @@ namespace engine {
 // poles are the furniture plan, the trees are the spawned instance groups.
 // Where two layers disagree, the disagreement is the finding.
 struct CityMapData {
-    RoadGraph roads;                       // the unified street graph (the sidewalk census's road labels and nodes)
     // THE STREETS AND JUNCTIONS THE MAP DRAWS, from the level's road model (ADR-0420; components.h LevelRoadModel): each
     // street's centre line, the width its travel lanes take (its stated cross-section), its engine class and its name;
     // each junction's place. Copied numbers, no fact of their own (the loader fills them from the model).
@@ -48,7 +47,7 @@ struct CityMapData {
     struct Hub { Vec2 pos; int kind = 0; std::string name; };
     std::vector<Hub> hubs;                 // district hubs (polycentric zoning)
     double hubRadius = 220.0;
-    NavGraph nav;                          // the planner's graph (lanes)
+    NavGraph nav;                          // the street map (ADR-0425): the sidewalk census labels a place with its links
     StreetFurniturePlan furniture;         // signal poles + lamp posts
     // The mesher's curb/sidewalk band: closed loops around every asphalt
     // union (exterior outlines and block-interior holes), the band riding

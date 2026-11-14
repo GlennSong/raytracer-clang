@@ -1,4 +1,5 @@
 #include "probe_system.h"
+#include "../ai/nav_graph.h"   // the street map the sites stand along
 #include "../components.h"
 #include "../lights/light_kinds.h"   // lightBook().probes
 #include "../procgen/height_pyramid.h"
@@ -24,11 +25,11 @@ bool probesOff() {
 }
 }  // namespace
 
-// The sites along the level's road network (LevelRoadGraph: the streets and corridors welded at load, as drawn),
+// The sites along the level's streets (LevelStreetMap: the street map built from the road model at load, ADR-0425),
 // again whenever it changes (a level, a re-plan).
 void ProbeSystem::placeSites(FrameContext& ctx) {
     std::size_t roads = 0;
-    ctx.world.each<LevelRoadGraph>([&](Entity, LevelRoadGraph& g) { roads += g.graph.edges.size() + 1; });
+    ctx.world.each<LevelStreetMap>([&](Entity, LevelStreetMap& m) { roads += (m.map ? m.map->links.size() : 0) + 1; });
     if (roads == roadsSeen_) return;
     roadsSeen_ = roads;
     const auto t0 = std::chrono::steady_clock::now();
@@ -41,7 +42,7 @@ void ProbeSystem::placeSites(FrameContext& ctx) {
     };
     sites_.clear();
     const ProbeRules& rules = lightBook().probes;
-    ctx.world.each<LevelRoadGraph>([&](Entity, LevelRoadGraph& g) { placeProbeSites(g.graph, ground, rules, sites_); });
+    ctx.world.each<LevelStreetMap>([&](Entity, LevelStreetMap& m) { if (m.map) placeProbeSites(*m.map, ground, rules, sites_); });
     streetCount_ = sites_.size();
     storeyKey_ = 0;
     storeyRecord_ = nullptr;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 
 namespace citysim {
 
@@ -18,8 +19,26 @@ void SignalController::build(const engine::NavGraph& graph, const SignalTiming& 
     nodeOf_.assign(graph.linkCount(), -1);
     leftArrow_.assign(graph.linkCount(), 0);
     nodes_.clear();
+    // ONE JUNCTION, ONE SIGNAL (ADR-0425): a junction the plan spread over several points (the street map carries each
+    // point's junction id) runs one plan for all its points -- keyed by its lowest lit point -- so its approaches share one
+    // cycle, as one junction's do. Before, each point ran its own unsynchronised cycle, and a car through the junction met
+    // a second red inside the box (the old map's knot merge had hidden this by welding points within 7 m into one).
+    // A node with no junction id (a hand-made graph) is its own key, as before.
+    planOfNode_.assign(static_cast<std::size_t>(graph.nodeCount()), -1);
+    {
+        std::map<std::pair<int, int>, int> lowest;   // (city, junction) -> its lowest lit point
+        for (int n = 0; n < graph.nodeCount(); ++n) {
+            if (graph.junctionOf(n) < 0 || !graph.signalControlled(n)) continue;
+            const std::pair<int, int> j(graph.cityOf(n), graph.junctionOf(n));
+            if (lowest.find(j) == lowest.end()) lowest[j] = n;
+        }
+        for (int n = 0; n < graph.nodeCount(); ++n) {
+            const std::map<std::pair<int, int>, int>::const_iterator it = lowest.find({graph.cityOf(n), graph.junctionOf(n)});
+            planOfNode_[static_cast<std::size_t>(n)] = graph.junctionOf(n) >= 0 && it != lowest.end() ? it->second : n;
+        }
+    }
 
-    // Inbound street approaches per junction node.
+    // Inbound street approaches per junction (its plan's key).
     std::unordered_map<int, std::vector<int>> inbound;
     for (int li = 0; li < graph.linkCount(); ++li) {
         const engine::NavLink& L = graph.links[li];
@@ -32,7 +51,9 @@ void SignalController::build(const engine::NavGraph& graph, const SignalTiming& 
         // landing no longer sneaks past a raw outLinks >= 4 count.
         if (!(L.access & engine::road_access::kSignalable)) continue;   // ramp arm
         if (!graph.signalControlled(L.to)) continue;
-        inbound[L.to].push_back(li);
+        // a link from one point of a junction to another is inside its box already: no light faces it
+        if (L.junction >= 0 && L.junction == graph.junctionOf(L.to) && L.city == graph.cityOf(L.to)) continue;
+        inbound[planOfNode_[static_cast<std::size_t>(L.to)]].push_back(li);
     }
 
     // CONFLICT-BASED grouping (roads-v2.1 R3): two approaches conflict unless
@@ -160,7 +181,8 @@ bool SignalController::walkWindowAt(int node) const {
 }
 
 double SignalController::walkRemainingAt(int node) const {
-    const auto it = nodes_.find(node);
+    const int key = node >= 0 && node < static_cast<int>(planOfNode_.size()) ? planOfNode_[static_cast<std::size_t>(node)] : node;
+    const auto it = nodes_.find(key);
     if (it == nodes_.end()) return 0.0;
     double period = 0;
     const double t = cycleAt(it->second, period);

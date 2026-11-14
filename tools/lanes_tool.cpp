@@ -8,14 +8,15 @@
 //   lanes_tool terrain <graph.json> <out.json> [step]   the scene's natural ground on a grid (for a map)
 //   lanes_tool interchange-demo <out.json>   write the system-interchange test scene: a curved elevated ring over a radial
 //                      expressway at ground level, its four ramps, and the expressway's inner leg becoming a boulevard
-//   lanes_tool layout <graph.json> [--write] [--fresh] [--names]   the road file's junctions and streets with ids (ADR-0417);
-//                      --write puts them into the file in place (the bake key does not see them); --names names the
-//                      streets' runs once, from the planner's generator, keeping names the file has (ADR-0420)
-//   lanes_tool controls <graph.json> <city> <lit.json> [--write]   every junction's control stated once: the junctions the
-//                      city sim's old rule lit (lit.json: the loader's RT_CONTROL_DUMP) get a signal, the rest none (ADR-0421)
+//   lanes_tool layout <graph.json> [--write] [--fresh] [--names] [--nodes]   the road file's junctions and streets with ids
+//                      (ADR-0417); --write puts them into the file in place (the bake key does not see them); --names names
+//                      the streets' runs once, from the planner's generator, keeping names the file has (ADR-0420); --nodes
+//                      the points of each junction spread over several, once, as the layout finds them (ADR-0425)
+//   lanes_tool streetmap <graph.json> [--route x0 z0 x1 z1]   the street map agents route on, built from the file's road
+//                      model alone, in words; --route: a car's route between two points, street by street (ADR-0425)
 //   lanes_tool model <graph.json> [--out <dir>]   build the roads and assemble THE ROAD MODEL: model.txt, report.txt, model.svg
-//   lanes_tool compare <graph.json> [--out <dir>]   the model files too, and the road model against the old forms (twin/nav, paint boxes, lane graph,
-//                      lane match): compare.txt; and the regions the streets enclose against the pavement's holes
+//   lanes_tool compare <graph.json> [--out <dir>]   the model files too, and the road model against the street map, the paint's boxes,
+//                      the lane graph and the lane match: compare.txt; and the regions the streets enclose against the pavement's holes
 //                      (ADR-0423): regions.txt, regions.svg
 //   lanes_tool regions-lots <level.json> [--out <dir>]   the level's lots grown again in memory from its bundle (run with
 //                      RT_BUNDLE_WRITE=0), dumped beside the stored ones (lots_grown.txt, lots_stored.txt), and the regions
@@ -29,6 +30,8 @@
 #include "engine/procgen/city/roads/lanes/road_layout.h"   // layout: the road file's junctions and streets (ADR-0417)
 #include "engine/procgen/city/roads/lanes/road_model_compare.h"   // compare: the road model against the old forms
 #include "engine/procgen/city/roads/road_model.h"   // model: the one road model (ADR-0417)
+#include "engine/procgen/city/roads/street_map.h"   // streetmap: the graph agents route on, from the model (ADR-0425)
+#include "engine/ai/pathfind.h"                     // streetmap --route
 #include "engine/procgen/city/roads/lanes/road_twin.h"
 #include "engine/procgen/city/roads/lanes/block_audit.h"
 #include "engine/procgen/city/roads/lanes/city_producer.h"   // regions-lots: the level's city bundle and its products
@@ -283,66 +286,6 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    if (argc >= 5 && std::strcmp(argv[1], "controls") == 0) {
-        // EVERY JUNCTION'S CONTROL, STATED ONCE (ADR-0421): lit.json is what the loader wrote under RT_CONTROL_DUMP for
-        // the level this file is city <city> of -- the junctions the city sim's old rule lit (any of their intersection
-        // nodes). Each gets the control the signal poles stand for (road_attachments.json "signal_pole"), every other
-        // junction the rule sets' "no control" (road_attachments.json "controls"."none"). A junction that states a
-        // control keeps it. Written into the file in place, for a person to read and edit; the bake key does not see it.
-        std::string text;
-        {
-            std::ifstream f(argv[2], std::ios::binary);
-            if (!f) { std::fprintf(stderr, "lanes_tool: cannot read %s\n", argv[2]); return 1; }
-            std::ostringstream ss;
-            ss << f.rdbuf();
-            text = ss.str();
-        }
-        const int city = std::atoi(argv[3]);
-        nlohmann::json lit, kindsDoc;
-        try {
-            std::ifstream lf(argv[4]);
-            lf >> lit;
-            std::ifstream kf("assets/data/road_attachments.json");
-            kf >> kindsDoc;
-        } catch (const std::exception& ex) { std::fprintf(stderr, "lanes_tool: %s\n", ex.what()); return 1; }
-        const bool write = argc >= 6 && std::strcmp(argv[5], "--write") == 0;
-        const AttachmentKind* pole = attachmentKinds().find(attachmentKinds().use("signal_pole"));
-        const std::string none = kindsDoc.contains("controls") ? kindsDoc["controls"].value("none", std::string()) : std::string();
-        if (!pole || pole->controls.empty() || none.empty()) {
-            std::fprintf(stderr, "lanes_tool: road_attachments.json names no control for signal_pole or for none\n");
-            return 1;
-        }
-        std::set<std::string> litIds;
-        if (lit.contains("cities") && city >= 0 && city < static_cast<int>(lit["cities"].size()))
-            for (const nlohmann::json& id : lit["cities"][static_cast<std::size_t>(city)]["lit"]) litIds.insert(id.get<std::string>());
-        const nlohmann::json spec = nlohmann::json::parse(text);
-        std::vector<std::pair<std::string, std::string>> controls;
-        int signals = 0, unlit = 0, kept = 0;
-        for (const nlohmann::json& j : spec["junctions"]) {
-            const std::string id = j.value("id", std::string());
-            if (j.contains("control")) {
-                ++kept;
-                controls.emplace_back(id, std::string());
-                continue;
-            }
-            const bool on = litIds.count(id) > 0;
-            (on ? signals : unlit) += 1;
-            controls.emplace_back(id, on ? pole->controls.front() : none);
-        }
-        std::printf("%s: %d junctions lit (%s), %d not (%s), %d kept as stated\n", argv[2], signals, pole->controls.front().c_str(),
-                    unlit, none.c_str(), kept);
-        if (!write) return 0;
-        std::string err;
-        const std::string out = insertJunctionControlsText(text, controls, &err);
-        if (out.empty()) { std::fprintf(stderr, "lanes_tool: %s: not written: %s\n", argv[2], err.c_str()); return 1; }
-        const std::string dir = std::filesystem::path(argv[2]).parent_path().string();
-        try { (void)RoadLabGraph::fromJson(nlohmann::json::parse(out), dir.empty() ? "." : dir); }
-        catch (const std::exception& ex) { std::fprintf(stderr, "lanes_tool: %s: would not read back (%s); not written\n", argv[2], ex.what()); return 1; }
-        std::ofstream(argv[2], std::ios::binary) << out;
-        std::printf("wrote the controls into %s (%zu bytes more; the bytes the bake keys are unchanged: %s)\n", argv[2],
-                    out.size() - text.size(), keyedRoadFileText(out) == keyedRoadFileText(text) ? "yes" : "NO");
-        return 0;
-    }
     if (argc >= 3 && std::strcmp(argv[1], "layout") == 0) {
         // THE ROAD FILE'S LAYOUT (road_layout.h, ADR-0417): its junctions and streets with ids, derived ONCE from what the
         // file holds today (LayoutSource::Inferred: ends within the endpoint tolerance, the planner's crossing policy where
@@ -352,11 +295,15 @@ int main(int argc, char** argv) {
         // --names (ADR-0420): the streets' names, ONCE, from the planner's generator (street_names.h) over the runs the file
         // states (through pairs, carries_on, divided roads), written into its streets in place for a person to read and
         // edit; a name the file already has is kept. A layout written again keeps the names the file had.
-        bool write = false, fresh = false, names = false;
+        // --nodes (ADR-0425): the points of each junction the layout spread over several (which roads meet at each), ONCE,
+        // as the layout finds them, written into the file's own junctions in place for a person to read: what the street
+        // map joins a spread junction's arms and inside stretches by.
+        bool write = false, fresh = false, names = false, nodes = false;
         for (int i = 3; i < argc; ++i) {
             if (std::strcmp(argv[i], "--write") == 0) write = true;
             if (std::strcmp(argv[i], "--fresh") == 0) fresh = true;
             if (std::strcmp(argv[i], "--names") == 0) names = true;
+            if (std::strcmp(argv[i], "--nodes") == 0) nodes = true;
         }
         std::string text;
         {
@@ -373,6 +320,34 @@ int main(int argc, char** argv) {
         try {
             const RoadLabGraph stated = RoadLabGraph::fromJson(nlohmann::json::parse(text), dir.empty() ? "." : dir);
             keep = namedStretches(stated.streets);
+            if (nodes) {
+                std::vector<std::string> notes;
+                const std::vector<JunctionNodes> found = junctionNodes(stated, LayoutSource::Inferred, &notes);
+                std::size_t spread = 0, points = 0, listed = 0;
+                for (const JunctionNodes& jn : found) {
+                    spread += 1;
+                    points += jn.nodes.size();
+                }
+                for (const PlannedJunction& pj : stated.junctions) listed += pj.nodes.empty() ? 0 : 1;
+                std::printf("%s: %zu junctions over several points, %zu points found for them (%zu junctions list theirs already)\n", argv[2],
+                            spread, points, listed);
+                for (const std::string& n : notes) std::printf("  note: %s\n", n.c_str());
+                if (!write) return 0;
+                // (a node no junction of the file holds is reported and left out; an arm or an inside stretch at no node, or
+                // at two, is a node list that does not fit the file: refused)
+                for (const std::string& n : notes)
+                    if (n.rfind("junction ", 0) == 0) { std::fprintf(stderr, "lanes_tool: %s: not written: the nodes do not fit the file's junctions (notes above)\n", argv[2]); return 1; }
+                std::string err;
+                const std::string out = insertJunctionNodesText(text, stated, found, &err);
+                if (out.empty()) { std::fprintf(stderr, "lanes_tool: %s: not written: %s\n", argv[2], err.c_str()); return 1; }
+                try { (void)RoadLabGraph::fromJson(nlohmann::json::parse(out), dir.empty() ? "." : dir); }
+                catch (const std::exception& ex) { std::fprintf(stderr, "lanes_tool: %s: would not read back (%s); not written\n", argv[2], ex.what()); return 1; }
+                std::ofstream(argv[2], std::ios::binary) << out;
+                std::printf("wrote the nodes into %s (%zu bytes more; the bytes the bake keys are unchanged: %s; the lane graph's key is unchanged: %s)\n",
+                            argv[2], out.size() - text.size(), keyedRoadFileText(out) == keyedRoadFileText(text) ? "yes" : "NO",
+                            junctionPlanKey(nlohmann::json::parse(out)) == junctionPlanKey(nlohmann::json::parse(text)) ? "yes" : "NO");
+                return 0;
+            }
             if (names && !fresh && stated.listsStreets) {
                 // the file's own streets, as they are: only their names are added
                 std::vector<PlannedStreet> streets = stated.streets;
@@ -410,6 +385,36 @@ int main(int argc, char** argv) {
         std::printf("wrote the layout into %s (%zu bytes more; the bytes the bake keys are unchanged: %s)\n", argv[2], out.size() - base.size(),
                     stripLayoutText(out) == base ? "yes" : "NO");
         return 0;
+    }
+    if (argc >= 3 && std::strcmp(argv[1], "streetmap") == 0) {
+        // THE STREET MAP (street_map.h, ADR-0425): the graph agents route on, built from the road file's planned layer alone
+        // (no build: no deck heights), in words -- its counts and every place the stated facts leave unjoined
+        try {
+            RoadLabGraph g = RoadLabGraph::load(argv[2]);
+            (void)expand(g);   // the ramps composed, as the loader reads them
+            const RoadModel model = plannedRoadModel(g);
+            NavGraph map;
+            StreetMapReport rep;
+            const bool ok = appendStreetMap(map, model, 0, nullptr, &rep);
+            std::printf("%s: %s\n", argv[2], describeStreetMap(rep).c_str());
+            // --route x0 z0 x1 z1: the car's route between the nodes nearest two points, street by street, with its time
+            for (int i = 3; i + 4 < argc; ++i) {
+                if (std::strcmp(argv[i], "--route") != 0) continue;
+                const int a = map.nearestNode(Vec2(std::atof(argv[i + 1]), std::atof(argv[i + 2])));
+                const int b = map.nearestNode(Vec2(std::atof(argv[i + 3]), std::atof(argv[i + 4])));
+                const Route r = findRoute(map, a, b, false);
+                std::printf("route %d -> %d: %zu links, %.1f m, %.1f s\n", a, b, r.links.size(), r.length(map), routeSeconds(map, r, false));
+                for (std::size_t k = 0; k < r.links.size(); ++k) {
+                    const NavLink& L = map.links[static_cast<std::size_t>(r.links[k])];
+                    const Vec2 p = map.nodes[static_cast<std::size_t>(L.from)];
+                    std::printf("  %s %s (%.0f, %.0f) %.0f m, %.1f s%s\n",
+                                L.street >= 0 ? model.streets[static_cast<std::size_t>(L.street)].id.c_str() : "inside",
+                                L.junction >= 0 ? model.junctions[static_cast<std::size_t>(L.junction)].id.c_str() : "", p.x, p.y, L.length,
+                                linkTravelSeconds(map, k > 0 ? r.links[k - 1] : -1, r.links[k], b, false), map.isJunction(L.to) ? " (junction)" : "");
+                }
+            }
+            return ok ? 0 : 1;
+        } catch (const std::exception& e) { std::fprintf(stderr, "lanes_tool: %s\n", e.what()); return 1; }
     }
     if (argc >= 3 && (std::strcmp(argv[1], "model") == 0 || std::strcmp(argv[1], "compare") == 0)) {
         // THE ROAD MODEL (road_model.h, ADR-0417): the roads built, the model assembled from the build; `model` writes its

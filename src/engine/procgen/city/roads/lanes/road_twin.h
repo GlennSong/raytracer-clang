@@ -21,17 +21,14 @@ namespace roads::lanes {
 // parcelled straight across the pavement (metro: 66 of 100 block feet on built pavement, every one over
 // 300 m² across a ramp). In this mode every deck run is emitted as a street-class edge — a face
 // boundary — and planarised with the streets; its earthwork width still keeps buildings off. The
-// class-faithful twin (default) is what the unified road graph, the nav and the map read.
+// class-faithful twin (default) is what the lot pass reads today (roads/lotnav, sampled by navRoadGraph). It is
+// the LOT PASS's copy of the roads alone: agents route on the street map built from the road model (ADR-0425),
+// and this twin goes when the lot pass reads the model (design step 5).
 // Which engine RoadClass a lanes edge carries. ONE mapping — the twin, the deck field and
 // anything else that has to speak both vocabularies reads it here.
 RoadClass classOf(const EdgeSpec& e);
 
-// `forNav`: the twin the NAV graph is built from -- every edge's width is its travel lanes' own
-// (2 x the lanes' half-width), not the lot clearance band. The sim spreads a direction's lanes across
-// half the link width, and the padded band (shoulder + spine tolerance) put a car 1.25 m off its
-// painted lane on the island pass -- onto the shoulder, into a pier (Glenn: "ai cars don't drive in
-// the middle of the lane").
-RoadEntity roadTwin(const Result& r, double nodeSpacing = 60.0, bool forLots = false, bool forNav = false);
+RoadEntity roadTwin(const Result& r, double nodeSpacing = 60.0, bool forLots = false);
 
 }  // namespace roads::lanes
 }  // namespace engine

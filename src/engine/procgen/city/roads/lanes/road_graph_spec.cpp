@@ -441,6 +441,19 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                     if (!(st.from <= st.to)) throw std::runtime_error("junction " + pj.id + ": inside stretch of " + st.road + " runs backwards");
                     pj.inside.push_back(st);
                 }
+            if (jj.contains("nodes"))
+                for (const nlohmann::json& nj : jj["nodes"]) {
+                    PlannedNode n;
+                    n.at = Vec2(nj.at("at").at(0).get<double>(), nj.at("at").at(1).get<double>());
+                    for (const nlohmann::json& pt : nj.at("points")) {
+                        PlannedNodePoint p;
+                        p.road = pt.at("road").get<std::string>();
+                        p.at = pt.at("at").get<double>();
+                        if (!g.index.count(p.road)) throw std::runtime_error("junction " + pj.id + ": a node names unknown road " + p.road);
+                        n.points.push_back(p);
+                    }
+                    pj.nodes.push_back(n);
+                }
             g.junctions.push_back(pj);
         }
     }

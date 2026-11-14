@@ -22,7 +22,7 @@ using namespace engine;
 namespace {
 CityMapData smallCity() {
     CityMapData m;
-    RoadGraph& g = m.roads;
+    RoadGraph g;
     g.nodes = {RoadNode{Vec2(0, 0)}, RoadNode{Vec2(200, 0)}, RoadNode{Vec2(200, 200)},
                RoadNode{Vec2(0, 200)}};
     g.addEdge(0, 1, 10.0);

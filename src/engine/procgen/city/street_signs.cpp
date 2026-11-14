@@ -69,22 +69,31 @@ Real SignBlade::widthM() const {
     return hPx > 0 ? heightM * static_cast<Real>(wPx) / static_cast<Real>(hPx) : 0.0;
 }
 
-std::vector<StreetSignPost> planStreetSigns(const std::vector<SignCorner>& corners, const RoadGraph& g,
+std::vector<SignCarriageway> carriagewaysOf(const NavGraph& streets) {
+    std::vector<SignCarriageway> out;
+    std::set<std::pair<int, int>> seen;   // (a two-way street's two links: one carriageway)
+    for (int li = 0; li < streets.streetLinkCount(); ++li) {
+        const NavLink& L = streets.links[static_cast<std::size_t>(li)];
+        if (L.footpath || L.from < 0 || L.to < 0) continue;
+        if (!seen.insert({std::min(L.from, L.to), std::max(L.from, L.to)}).second) continue;
+        out.push_back({streets.nodes[static_cast<std::size_t>(L.from)], streets.nodes[static_cast<std::size_t>(L.to)], L.width});
+    }
+    return out;
+}
+
+std::vector<StreetSignPost> planStreetSigns(const std::vector<SignCorner>& corners, const std::vector<SignCarriageway>& g,
                                             const std::function<Real(Real, Real)>& ground,
                                             const StreetSignParams& p,
                                             const std::vector<Vec3>& avoid) {
     std::vector<StreetSignPost> out;
-    const int N = static_cast<int>(g.nodes.size());
     struct Arm { Vec2 point, dir; Real angle; Real hw; const SignCorner::Arm* src; };
     // Every carriageway, bucketed: a corner must clear the NEIGHBOURS' roads
     // too (a parallel street, a nearby junction's arm), not only its own.
     constexpr Real kCell = 40.0;
     std::map<std::pair<int, int>, std::vector<int>> edgeCells;
-    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
-        const RoadEdge& ed = g.edges[static_cast<std::size_t>(e)];
-        if (ed.a < 0 || ed.b < 0 || ed.a >= N || ed.b >= N) continue;
-        const Vec2 a = g.nodes[static_cast<std::size_t>(ed.a)].pos;
-        const Vec2 b = g.nodes[static_cast<std::size_t>(ed.b)].pos;
+    for (int e = 0; e < static_cast<int>(g.size()); ++e) {
+        const SignCarriageway& ed = g[static_cast<std::size_t>(e)];
+        const Vec2 a = ed.a, b = ed.b;
         const int x0 = static_cast<int>(std::floor((std::min(a.x, b.x) - ed.width) / kCell));
         const int x1 = static_cast<int>(std::floor((std::max(a.x, b.x) + ed.width) / kCell));
         const int z0 = static_cast<int>(std::floor((std::min(a.y, b.y) - ed.width) / kCell));
@@ -97,13 +106,11 @@ std::vector<StreetSignPost> planStreetSigns(const std::vector<SignCorner>& corne
                                         static_cast<int>(std::floor(q.y / kCell))});
         if (it == edgeCells.end()) return false;
         for (int e : it->second) {
-            const RoadEdge& ed = g.edges[static_cast<std::size_t>(e)];
-            const Vec2 a = g.nodes[static_cast<std::size_t>(ed.a)].pos;
-            const Vec2 b = g.nodes[static_cast<std::size_t>(ed.b)].pos;
-            const Vec2 ab = b - a;
+            const SignCarriageway& ed = g[static_cast<std::size_t>(e)];
+            const Vec2 ab = ed.b - ed.a;
             const Real l = ab.length();
             if (l < 1e-9) continue;
-            if (distToRay(q, a, ab * (1.0 / l), l) < ed.width * 0.5 + gap) return true;
+            if (distToRay(q, ed.a, ab * (1.0 / l), l) < ed.width * 0.5 + gap) return true;
         }
         return false;
     };
@@ -220,7 +227,6 @@ std::vector<StreetSignPost> planStreetSigns(const std::vector<SignCorner>& corne
         }
         out.push_back(std::move(post));
     }
-    (void)N;
     return out;
 }
 

@@ -1,0 +1,139 @@
+THE STREET MAP FROM THE ROAD MODEL, SET BESIDE THE OLD ONE: agent_lab (ADR-0425, step 7 stage 1)
+
+Old: the city sim's map today (the road twin's nav: its centre lines thinned to 1.5 m, crossings planarised, ramp ends welded
+within 40 m, dead ends bridged within 20 m, junction points merged within 7 m; its lane counts from the road file through the
+lane match). New: built from the road model's planned layer and the drawn deck, nothing joined by distance (street_map.h).
+Both have the parks' and the quad's walks appended the same way (NavGraph::appendFootpaths).
+
+city 0: 970 nodes, 1871 links: 144 junctions (191 points), 16 places a street carries on, 16 ramp gores, 31 dead ends; 170 links inside junctions
+
+1. NODES AND LINKS
+   old: 1045 street nodes, 1874 street links (0 with the walks: 1978 nodes, 3852 links)
+   new: 970 street nodes, 1871 street links (0 with the walks: 1903 nodes, 3849 links)
+   drivable links by class (old / new): arterial 554 / 576; collector 138 / 152; freeway 270 / 258; local 794 / 777; ramp 118 / 108;
+
+2. THE LARGEST PART A CAR CAN GET ROUND AND BACK (strongly connected by car)
+   old: 1874 of 1874 drivable links (100.0%)
+   new: 1871 of 1871 drivable links (100.0%)
+   new streets with links outside it: 0
+   places the new map is cut where the old one was joined: 0
+
+3. TRIPS: 500 seeded pairs (seed 20261114), a home to a shop (any place not a home, park, office or civic: 362 homes, 322 shops),
+   each end at the node nearest its door's entrance on that map (as the sim routes), routed by findRoute
+   by car: routable in both 492, old only 0, new only 8, neither 0 (of 500)
+     new minus old, time (s): mean -7.7; 5% -27.9, 25% -11.6, median -5.8, 75% -0.0, 95% +1.0
+     new minus old, length (m): mean -6.4; 5% -94.0, 25% -11.7, median -0.0, 75% +7.8, 95% +59.3
+     using the freeway: old 28, new 29; with a turn round on the way: old 0, new 0
+   on foot: routable in both 464, old only 0, new only 7, neither 29 (of 500)
+     new minus old, time (s): mean -0.0; 5% -2.9, 25% -0.2, median +0.0, 75% +0.3, 95% +2.5
+     new minus old, length (m): mean -0.1; 5% -23.3, 25% -1.8, median +0.0, 75% +2.3, 95% +20.0
+     with a turn round on the way: old 0, new 0
+   the ten trips by car whose time moved most:
+   1. place 668 (-429, 308) to place 132 (-393, 1064): old 169 s 1045 m, new 114 s 865 m
+      old: arterial 159 m from (-418, 321); collector 84 m from (-505, 454); arterial 10 m from (-422, 469); collector 31 m from (-413, 472); arterial 670 m from (-383, 478); local 91 m from (-340, 1002);
+      new: inside j135 46 m from (-423, 328); s318(arterial) 104 m from (-452, 364); s316(arterial) 44 m from (-505, 454); inside j11 10 m from (-521, 495); s290(arterial) 64 m from (-525, 505); inside j14 90 m from (-537, 568); s294(arterial) 47 m from (-532, 657); inside j19 38 m from (-522, 703); s295(arterial) 50 m from (-512, 739); inside j18 31 m from (-498, 787); s29(arterial) 36 m from (-490, 807); s296(arterial) 57 m from (-476, 840); s65(arterial) 48 m from (-447, 889); inside j35 30 m from (-418, 928); s97(arterial) 67 m from (-398, 949); inside j52 11 m from (-349, 994); s309(local) 91 m from (-340, 1002);
+   2. place 518 (-520, 609) to place 886 (83, -13): old 166 s 1087 m, new 111 s 939 m
+      old: arterial 253 m from (-538, 598); collector 227 m from (-452, 364); arterial 384 m from (-226, 378); local 85 m from (-46, 138); arterial 72 m from (-14, 60); local 66 m from (58, 57);
+      new: inside j14 30 m from (-538, 598); s290(arterial) 64 m from (-537, 568); inside j11 10 m from (-525, 505); s316(arterial) 44 m from (-521, 495); s318(arterial) 104 m from (-505, 454); inside j135 46 m from (-452, 364); s323(arterial) 39 m from (-423, 328); inside j4 28 m from (-398, 297); s278(arterial) 73 m from (-379, 277); inside j0 89 m from (-326, 227); s272(arterial) 120 m from (-260, 167); inside j23 45 m from (-160, 102); s326(arterial) 93 m from (-119, 86); inside j39 15 m from (-29, 63); s68(arterial) 72 m from (-14, 60); s330(local) 66 m from (58, 57);
+   3. place 496 (-583, 645) to place 862 (171, 36): old 184 s 1264 m, new 130 s 1089 m
+      old: local 33 m from (-565, 658); arterial 459 m from (-532, 657); collector 319 m from (-260, 478); arterial 453 m from (56, 439);
+      new: s314(local) 33 m from (-565, 658); inside j14 90 m from (-532, 657); s290(arterial) 64 m from (-537, 568); inside j11 10 m from (-525, 505); s316(arterial) 44 m from (-521, 495); s318(arterial) 104 m from (-505, 454); inside j135 46 m from (-452, 364); s323(arterial) 39 m from (-423, 328); inside j4 28 m from (-398, 297); s278(arterial) 73 m from (-379, 277); inside j0 89 m from (-326, 227); s272(arterial) 120 m from (-260, 167); inside j23 45 m from (-160, 102); s326(arterial) 93 m from (-119, 86); inside j39 15 m from (-29, 63); s68(arterial) 72 m from (-14, 60); inside j40 28 m from (58, 57); s329(arterial) 55 m from (86, 60); s331(arterial) 40 m from (139, 71);
+   4. place 668 (-429, 308) to place 94 (-253, 1116): old 178 s 1188 m, new 126 s 964 m
+      old: arterial 159 m from (-418, 321); collector 84 m from (-505, 454); arterial 10 m from (-422, 469); collector 31 m from (-413, 472); arterial 719 m from (-383, 478); local 92 m from (-233, 965); arterial 93 m from (-269, 1049);
+      new: inside j135 46 m from (-423, 328); s318(arterial) 104 m from (-452, 364); s316(arterial) 44 m from (-505, 454); inside j11 10 m from (-521, 495); s290(arterial) 64 m from (-525, 505); inside j14 90 m from (-537, 568); s294(arterial) 47 m from (-532, 657); inside j19 38 m from (-522, 703); s295(arterial) 50 m from (-512, 739); inside j18 31 m from (-498, 787); s29(arterial) 36 m from (-490, 807); s296(arterial) 57 m from (-476, 840); s65(arterial) 48 m from (-447, 889); inside j35 30 m from (-418, 928); s97(arterial) 67 m from (-398, 949); inside j52 11 m from (-349, 994); s126(arterial) 86 m from (-340, 1002); s125(arterial) 59 m from (-269, 1049); s308(arterial) 47 m from (-220, 1080);
+   5. place 848 (274, 129) to place 53 (102, 1126): old 204 s 1353 m, new 160 s 1122 m
+      old: local 189 m from (256, 135); collector 101 m from (192, 313); arterial 905 m from (93, 329); local 63 m from (37, 1068); arterial 95 m from (13, 1126);
+      new: s164(arterial) 39 m from (256, 135); s193(arterial) 60 m from (285, 161); inside j103 21 m from (328, 202); s334(arterial) 83 m from (343, 217); inside j90 21 m from (398, 280); s226(arterial) 113 m from (404, 299); s229(arterial) 46 m from (371, 406); s231(arterial) 65 m from (358, 450); s233(arterial) 64 m from (336, 511); s235(arterial) 65 m from (313, 572); s237(arterial) 65 m from (292, 632); s239(arterial) 65 m from (270, 693); s241(arterial) 65 m from (250, 754); s243(arterial) 66 m from (230, 816); s245(arterial) 68 m from (209, 878); s247(arterial) 77 m from (185, 943); s249(arterial) 86 m from (157, 1014); inside j116 16 m from (142, 1098); s298(arterial) 37 m from (127, 1093);
+   6. place 900 (-581, -191) to place 139 (-419, 989): old 222 s 1606 m (freeway), new 178 s 1572 m (freeway)
+      old: local 202 m from (-593, -182); freeway 320 m from (-523, -169); local 109 m from (-340, 93); arterial 29 m from (-282, 186); local 94 m from (-260, 167); arterial 807 m from (-169, 191); local 45 m from (-398, 949);
+      new: tn1(local) 202 m from (-593, -182); fw3_a(freeway) 320 m from (-523, -169); bv1_in(local) 109 m from (-340, 93); inside j0 60 m from (-282, 186); s278(arterial) 73 m from (-326, 227); inside j4 28 m from (-379, 277); s323(arterial) 39 m from (-398, 297); inside j135 46 m from (-423, 328); s318(arterial) 104 m from (-452, 364); s316(arterial) 44 m from (-505, 454); inside j11 10 m from (-521, 495); s290(arterial) 64 m from (-525, 505); inside j14 90 m from (-537, 568); s294(arterial) 47 m from (-532, 657); inside j19 38 m from (-522, 703); s295(arterial) 50 m from (-512, 739); inside j18 31 m from (-498, 787); s29(arterial) 36 m from (-490, 807); s296(arterial) 57 m from (-476, 840); s65(arterial) 48 m from (-447, 889); inside j35 30 m from (-418, 928); s310(local) 46 m from (-398, 949);
+   7. place 899 (-546, -195) to place 189 (-432, 973): old 199 s 1425 m (freeway), new 155 s 1390 m (freeway)
+      old: local 20 m from (-531, -187); freeway 320 m from (-523, -169); local 109 m from (-340, 93); arterial 29 m from (-282, 186); local 94 m from (-260, 167); arterial 807 m from (-169, 191); local 45 m from (-398, 949);
+      new: tn1(local) 20 m from (-531, -187); fw3_a(freeway) 320 m from (-523, -169); bv1_in(local) 109 m from (-340, 93); inside j0 60 m from (-282, 186); s278(arterial) 73 m from (-326, 227); inside j4 28 m from (-379, 277); s323(arterial) 39 m from (-398, 297); inside j135 46 m from (-423, 328); s318(arterial) 104 m from (-452, 364); s316(arterial) 44 m from (-505, 454); inside j11 10 m from (-521, 495); s290(arterial) 64 m from (-525, 505); inside j14 90 m from (-537, 568); s294(arterial) 47 m from (-532, 657); inside j19 38 m from (-522, 703); s295(arterial) 50 m from (-512, 739); inside j18 31 m from (-498, 787); s29(arterial) 36 m from (-490, 807); s296(arterial) 57 m from (-476, 840); s65(arterial) 48 m from (-447, 889); inside j35 30 m from (-418, 928); s310(local) 46 m from (-398, 949);
+   8. place 680 (-454, 270) to place 102 (-314, 1096): old 183 s 1235 m, new 140 s 1018 m
+      old: arterial 1073 m from (-451, 246); local 162 m from (-233, 965);
+      new: s325(arterial) 50 m from (-434, 263); s323(arterial) 39 m from (-398, 297); inside j135 46 m from (-423, 328); s318(arterial) 104 m from (-452, 364); s316(arterial) 44 m from (-505, 454); inside j11 10 m from (-521, 495); s290(arterial) 64 m from (-525, 505); inside j14 90 m from (-537, 568); s294(arterial) 47 m from (-532, 657); inside j19 38 m from (-522, 703); s295(arterial) 50 m from (-512, 739); inside j18 31 m from (-498, 787); s29(arterial) 36 m from (-490, 807); s296(arterial) 57 m from (-476, 840); s65(arterial) 48 m from (-447, 889); inside j35 30 m from (-418, 928); s97(arterial) 67 m from (-398, 949); inside j52 11 m from (-349, 994); s126(arterial) 86 m from (-340, 1002); s127(local) 70 m from (-269, 1049);
+   9. place 680 (-454, 270) to place 162 (-215, 1063): old 178 s 1223 m, new 135 s 1007 m
+      old: arterial 1073 m from (-451, 246); local 92 m from (-233, 965); arterial 58 m from (-269, 1049);
+      new: s325(arterial) 50 m from (-434, 263); s323(arterial) 39 m from (-398, 297); inside j135 46 m from (-423, 328); s318(arterial) 104 m from (-452, 364); s316(arterial) 44 m from (-505, 454); inside j11 10 m from (-521, 495); s290(arterial) 64 m from (-525, 505); inside j14 90 m from (-537, 568); s294(arterial) 47 m from (-532, 657); inside j19 38 m from (-522, 703); s295(arterial) 50 m from (-512, 739); inside j18 31 m from (-498, 787); s29(arterial) 36 m from (-490, 807); s296(arterial) 57 m from (-476, 840); s65(arterial) 48 m from (-447, 889); inside j35 30 m from (-418, 928); s97(arterial) 67 m from (-398, 949); inside j52 11 m from (-349, 994); s126(arterial) 86 m from (-340, 1002); s125(arterial) 59 m from (-269, 1049);
+   10. place 51 (90, 1129) to place 458 (649, 667): old 171 s 1203 m, new 129 s 953 m
+      old: arterial 95 m from (107, 1108); local 63 m from (13, 1126); arterial 657 m from (37, 1068); local 145 m from (467, 830); collector 242 m from (590, 907);
+      new: s298(arterial) 37 m from (94, 1112); inside j116 16 m from (127, 1093); s249(arterial) 86 m from (142, 1098); s247(arterial) 77 m from (157, 1014); s245(arterial) 68 m from (185, 943); s246(arterial) 117 m from (209, 878); s270/0(arterial) 153 m from (318, 919); s270/1(arterial) 64 m from (432, 883); inside j134 13 m from (467, 830); s289(arterial) 69 m from (470, 818); inside j133 7 m from (501, 756); s286(arterial) 55 m from (504, 749); inside j132 23 m from (521, 698); s301(local) 135 m from (527, 675); s338(collector) 31 m from (658, 708);
+   by car only on the new map: place 826 (-159, 78) to place 791 (86, 163)
+   by car only on the new map: place 164 (-237, 1051) to place 338 (110, 785)
+   by car only on the new map: place 612 (-366, 500) to place 237 (-211, 941)
+   by car only on the new map: place 612 (-366, 500) to place 61 (284, 1009)
+   by car only on the new map: place 612 (-366, 500) to place 778 (112, 93)
+   by car only on the new map: place 67 (176, 1148) to place 165 (-237, 1051)
+   by car only on the new map: place 826 (-159, 78) to place 789 (95, 140)
+   by car only on the new map: place 612 (-366, 500) to place 410 (-16, 696)
+
+4. PLACES OFF THE LARGEST PART (a car cannot get there and back) ON THE OLD MAP, and on the new
+   place 164 (home) door (-237, 1051): old OFF by car, OFF on foot; new on by car, on on foot (new node at -268, 1052)
+   place 165 (other) door (-237, 1051): old OFF by car, OFF on foot; new on by car, on on foot (new node at -268, 1052)
+   place 612 (home) door (-366, 500): old OFF by car, OFF on foot; new on by car, on on foot (new node at -383, 479)
+   place 826 (home) door (-159, 78): old OFF by car, OFF on foot; new on by car, on on foot (new node at -153, 102)
+   places off it: old 4, new 0 (of 906)
+
+5. THE FREEWAY AS THE ROAD FILE STATES IT
+   ramp x0_outR_link: leaves fw1_a at 1526 joins fw2_b at 282
+   ramp x0_outL_link: leaves fw2_a at 52 joins fw1_a at 1913
+   ramp x0_inR_loop: leaves fw1_b at 470 joins fw2_b at 32
+   ramp x0_inL_loop: leaves fw2_a at 302 joins fw1_b at 351
+   ramp x1_outR_link: leaves fw0_a at 1590 joins fw3_b at 290
+   ramp x1_outL_link: leaves fw3_a at 30 joins fw0_a at 1978
+   ramp x1_inR_loop: leaves fw0_b at 479 joins fw3_b at 40
+   ramp x1_inL_loop: leaves fw3_a at 280 joins fw0_b at 361
+   fw0_a (freeway) carries on at its start into fw1_a (freeway)
+   fw0_a (freeway) carries on at its end into fw1_a (freeway)
+   fw0_b (freeway) carries on at its start into fw1_b (freeway)
+   fw0_b (freeway) carries on at its end into fw1_b (freeway)
+   fw2_a (freeway) carries on at its start into tn0 (boulevard)
+   fw2_a (freeway) carries on at its end into bv0_in (boulevard)
+   fw2_b (freeway) carries on at its start into bv0_out (boulevard)
+   fw2_b (freeway) carries on at its end into tn0 (boulevard)
+   tn0 (boulevard) carries on at its start into fw2_b (freeway)
+   tn0 (boulevard) carries on at its end into fw2_a (freeway)
+   bv0_in (boulevard) carries on at its start into fw2_a (freeway)
+   bv0_out (boulevard) carries on at its end into fw2_b (freeway)
+   fw3_a (freeway) carries on at its start into tn1 (boulevard)
+   fw3_a (freeway) carries on at its end into bv1_in (boulevard)
+   fw3_b (freeway) carries on at its start into bv1_out (boulevard)
+   fw3_b (freeway) carries on at its end into tn1 (boulevard)
+   tn1 (boulevard) carries on at its start into fw3_b (freeway)
+   tn1 (boulevard) carries on at its end into fw3_a (freeway)
+   bv1_in (boulevard) carries on at its start into fw3_a (freeway)
+   bv1_out (boulevard) carries on at its end into fw3_b (freeway)
+   from junction j0 (-296, 205) onto freeway fw0_a at (-15, 1280):
+      new: bv1_out(local) 116 m from (-312, 213); fw3_b(freeway) 320 m from (-360, 107); tn1(local) 259 m from (-543, -155); fw3_a(freeway) 30 m from (-523, -169); x1_outL_link(ramp) 314 m from (-506, -145); fw0_a(freeway) 239 m from (-232, -60); fw1_a(freeway) 2144 m from (5, -85); fw0_a(freeway) 40 m from (25, 1281);
+      old: local 116 m from (-312, 213); freeway 320 m from (-360, 107); local 259 m from (-543, -155); ramp 546 m from (-523, -169); freeway 2223 m from (-34, -85);
+   from junction j0 (-296, 205) onto freeway fw0_b at (-54, -60):
+      new: bv1_out(local) 116 m from (-312, 213); fw3_b(freeway) 320 m from (-360, 107); tn1(local) 259 m from (-543, -155); fw3_a(freeway) 280 m from (-523, -169); x1_inL_loop(ramp) 328 m from (-363, 61); fw0_b(freeway) 1780 m from (-348, 3); fw1_b(freeway) 2069 m from (25, 1257); fw0_b(freeway) 59 m from (5, -61);
+      old: local 116 m from (-312, 213); freeway 320 m from (-360, 107); local 259 m from (-543, -155); freeway 248 m from (-523, -169); local 158 m from (-381, 34); ramp 234 m from (-267, 119); freeway 3876 m from (-377, 16);
+   from junction j0 (-296, 205) onto freeway fw1_a at (36, -84):
+      new: bv1_out(local) 116 m from (-312, 213); fw3_b(freeway) 320 m from (-360, 107); tn1(local) 259 m from (-543, -155); fw3_a(freeway) 30 m from (-523, -169); x1_outL_link(ramp) 314 m from (-506, -145); fw0_a(freeway) 239 m from (-232, -60); fw1_a(freeway) 30 m from (5, -85);
+      old: local 116 m from (-312, 213); freeway 320 m from (-360, 107); local 259 m from (-543, -155); ramp 546 m from (-523, -169); freeway 70 m from (-34, -85);
+   from junction j0 (-296, 205) onto freeway fw1_b at (63, 1255):
+      new: bv1_out(local) 116 m from (-312, 213); fw3_b(freeway) 320 m from (-360, 107); tn1(local) 259 m from (-543, -155); fw3_a(freeway) 280 m from (-523, -169); x1_inL_loop(ramp) 328 m from (-363, 61); fw0_b(freeway) 1780 m from (-348, 3); fw1_b(freeway) 38 m from (25, 1257);
+      old: local 116 m from (-312, 213); freeway 320 m from (-360, 107); local 259 m from (-543, -155); freeway 248 m from (-523, -169); local 158 m from (-381, 34); ramp 234 m from (-267, 119); freeway 1786 m from (-377, 16);
+   from junction j0 (-296, 205) onto freeway fw2_a at (523, 1305):
+      new: bv1_out(local) 116 m from (-312, 213); fw3_b(freeway) 320 m from (-360, 107); tn1(local) 259 m from (-543, -155); fw3_a(freeway) 30 m from (-523, -169); x1_outL_link(ramp) 314 m from (-506, -145); fw0_a(freeway) 239 m from (-232, -60); fw1_a(freeway) 1526 m from (5, -85); x0_outR_link(ramp) 301 m from (569, 1029); fw2_b(freeway) 52 m from (542, 1290); tn0(local) 259 m from (574, 1332); fw2_a(freeway) 52 m from (555, 1346);
+      old: local 116 m from (-312, 213); freeway 320 m from (-360, 107); local 259 m from (-543, -155); ramp 546 m from (-523, -169); freeway 1414 m from (-34, -85); ramp 509 m from (653, 903); local 259 m from (574, 1332); ramp 65 m from (555, 1346);
+   from junction j0 (-296, 205) onto freeway fw2_b at (391, 1091):
+      new: inside j0 45 m from (-312, 213); s0(local) 66 m from (-302, 234); s5(arterial) 116 m from (-321, 296); s42(arterial) 55 m from (-209, 326); s44(arterial) 106 m from (-226, 378); inside j8 31 m from (-260, 478); s50(arterial) 96 m from (-270, 508); s83(arterial) 94 m from (-178, 538); s112(arterial) 94 m from (-89, 569); s147(arterial) 94 m from (0, 600); s179(arterial) 94 m from (89, 631); s208(arterial) 97 m from (178, 662); s239(arterial) 65 m from (270, 693); s241(arterial) 65 m from (250, 754); s243(arterial) 66 m from (230, 816); s246(arterial) 117 m from (209, 878); s248_2(local) 52 m from (318, 919); bv0_out(local) 122 m from (298, 968); fw2_b(freeway) 32 m from (371, 1066);
+      old: arterial 1345 m from (-312, 213); local 175 m from (318, 919); freeway 41 m from (371, 1066);
+   from junction j0 (-296, 205) onto freeway fw3_a at (-506, -145):
+      new: bv1_out(local) 116 m from (-312, 213); fw3_b(freeway) 320 m from (-360, 107); tn1(local) 259 m from (-543, -155); fw3_a(freeway) 30 m from (-523, -169);
+      old: local 116 m from (-312, 213); freeway 320 m from (-360, 107); local 259 m from (-543, -155); freeway 40 m from (-523, -169);
+   from junction j0 (-296, 205) onto freeway fw3_b at (-382, 74):
+      new: bv1_out(local) 116 m from (-312, 213); fw3_b(freeway) 40 m from (-360, 107);
+      old: local 116 m from (-312, 213); freeway 40 m from (-360, 107);
+
+AFTER STAGE 3 (added 2026-11-14, ADR-0425). Sections 1 to 5 above are the stage 1 comparison as run, before stage 2 moved
+any reader. Three things changed the new map since:
+  - ONE PIECE BETWEEN TWO POINTS: where a junction's stated points put two of its stretches between the same two points,
+    only the first is laid now. The stage 1 map laid both: parallel duplicate links over one piece of road, which left
+    cars on them blind to each other.
+  - The router charges a junction's delay once, not at each of its points.
+  - A ramp keeps its own line to its gore station; one short link joins it to the node on its host (16 more nodes and links).
+  agent_lab has river_town's roads: the same street map (984 nodes, 1821 links).

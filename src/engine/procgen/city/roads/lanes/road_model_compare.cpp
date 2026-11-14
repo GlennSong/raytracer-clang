@@ -10,8 +10,8 @@
 #include "engine/procgen/city/polygon.h"                        // interiorPoint, pointInPolygon
 #include "engine/procgen/city/polyline.h"                       // distToSegment
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
-#include "engine/procgen/city/roads/lanes/road_twin.h"
-#include "engine/procgen/city/roads/road_entity.h"            // navRoadGraph
+#include "engine/procgen/city/roads/lanes/road_twin.h"           // classOf: the engine's class of a road
+#include "engine/procgen/city/roads/street_map.h"               // the street map, from the model (ADR-0425)
 #include "rt_math.h"
 
 #include <algorithm>
@@ -166,16 +166,15 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
         if (J.arms.size() == 2) ++out.modelTwoArm;
     }
 
-    // ---- the nav graph, as the city sim builds it ------------------------------------------------------------------------
+    // ---- the street map, as the loader builds it from the model (ADR-0425; the old twin's nav it replaced is gone) --------
     const auto tNav = std::chrono::steady_clock::now();
-    HeightField ground;
-    if (r.hasTerrain) {
-        std::shared_ptr<HeightGrid> grid = std::make_shared<HeightGrid>(r.terrain);
-        ground = [grid](double x, double z) { return grid->sample(x, z); };
+    NavGraph nav;
+    {
+        StreetMapReport mapReport;
+        (void)appendStreetMap(nav, m, 0, nullptr, &mapReport);   // (no deck: nothing here reads the heights)
+        for (const std::string& n : mapReport.notes) T += "  street map note: " + n + "\n";
+        for (const std::string& e : mapReport.errors) T += "  street map error: " + e + "\n";
     }
-    const RoadEntity twin = roadTwin(r, 60.0, false, /*forNav=*/true);
-    const RoadGraph navRoads = navRoadGraph(twin, ground ? ground : HeightField());
-    NavGraph nav = buildNavGraph(navRoads);   // (its lanes set from the road file below, as the sim's are: ADR-0418)
     std::vector<std::vector<int>> incident(nav.nodes.size());
     for (int l = 0; l < nav.linkCount(); ++l) {
         incident[static_cast<std::size_t>(nav.links[static_cast<std::size_t>(l)].from)].push_back(l);
@@ -408,7 +407,10 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
         }
         return len;
     };
-    std::vector<engine::TrafficLane> traffic;
+    // the lanes as the loader publishes them (engine::LevelLanes: each with its slot, its stretch of spine and its stations)
+    engine::LevelLanes published;
+    published.cityRoads.push_back(0);
+    for (const EdgeSpec& e : g.edges) published.roads.push_back(e.xy);
     for (const Lane& l : r.lanes.lanes) {
         engine::TrafficLane t;
         t.xy = l.xy;
@@ -416,18 +418,26 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
         t.parent = l.parent;
         t.dir = l.dir;
         t.kind = l.kind;
-        traffic.push_back(std::move(t));
-    }
-    // each road's centre line and stated lanes, as the loader publishes them (engine::LevelLanes::roads, ::stated)
-    std::vector<std::vector<Vec2>> spines;
-    std::vector<engine::StatedLanes> statedLanes;
-    for (const EdgeSpec& e : g.edges) {
-        spines.push_back(e.xy);
-        statedLanes.push_back({e.lanes.fwd, e.lanes.back});
+        t.slot = l.slot;
+        t.spineFrom = l.spineFrom;
+        t.spineTo = l.spineTo;
+        if (l.parent >= 0) {
+            const EdgeSpec& e = g.edges[static_cast<std::size_t>(l.parent)];
+            const std::size_t i0 = static_cast<std::size_t>(std::lower_bound(e.s.begin(), e.s.end(), l.spineFrom - 1e-9) - e.s.begin());
+            for (std::size_t k = 0; k < l.xy.size() && i0 + k < e.s.size(); ++k) t.stations.push_back(e.s[i0 + k]);
+            if (t.stations.size() != t.xy.size()) t.stations.clear();
+        }
+        published.lanes.push_back(std::move(t));
     }
     citysim::LaneMap lm;
-    lm.build(nav, traffic, spines, statedLanes);
-    out.linksStated = lm.stateLanes(nav);   // THE NAV'S LANES FROM THE ROAD FILE, as CityRenderSystem sets them
+    lm.build(nav, published);
+    // every link's lanes are its road's stated lanes that way (the street map copies them: ADR-0425)
+    out.linksStated = 0;
+    for (const NavLink& L : nav.links) {
+        if (L.footpath || L.road < 0 || static_cast<std::size_t>(L.road) >= g.edges.size()) continue;
+        const EdgeSpec& e = g.edges[static_cast<std::size_t>(L.road)];
+        out.linksStated += L.lanes == std::max(1, L.stationTo >= L.stationFrom ? e.lanes.fwd : e.lanes.back) ? 1 : 0;
+    }
     out.linksDrivable = lm.drivable;
     out.linksMatched = lm.matched;
     out.linksCountDiffers = lm.countDiffers;
@@ -527,7 +537,7 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
         for (int l = 0; l < nav.linkCount(); ++l) {
             const NavLink& L = nav.links[static_cast<std::size_t>(l)];
             if (L.footpath) continue;
-            const int road = lm.roadOf(l);
+            const int road = L.road;
             if (road < 0 || static_cast<std::size_t>(road) >= g.edges.size()) {
                 ++noRoad[className(L.klass)];
                 out.baysOffStatedParking += static_cast<uint32_t>(baysOn[static_cast<std::size_t>(l)]);
@@ -538,7 +548,7 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
             Row& row = rows[fmt("%-10s %d/%d, kerb parking %.1f m", e.cls.c_str(), e.lanes.fwd, e.lanes.back, parking)];
             ++row.links;
             ++row.navLanes[L.lanes];
-            const int statedThisWay = lm.wayOf(l) > 0 ? e.lanes.fwd : e.lanes.back;
+            const int statedThisWay = L.stationTo >= L.stationFrom ? e.lanes.fwd : e.lanes.back;
             row.differ += L.lanes != statedThisWay ? 1 : 0;
             switch (lm.outcomeOf(l)) {
                 case citysim::LaneMap::Outcome::Matched: ++row.matched; break;

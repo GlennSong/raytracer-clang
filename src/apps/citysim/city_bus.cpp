@@ -214,8 +214,26 @@ void BusNetwork::buildRegional(const engine::NavGraph& nav) {
     if (route.valid()) routes_.push_back(std::move(route));
 }
 
+// A BUS NEVER DRIVES A WALK. A city line is found with the pedestrian rule (no freeway, no ramp, a one-way street's
+// forward link only), and that rule walks the parks' and quads' paths too: a line found across a park put a stop on a
+// path node no car can reach, and its bus skipped that leg for ever (ADR-0425, found when the street map came in).
+// The walks are priced out of the search, and a leg that still uses one is refused.
+static std::vector<Real> walksPricedOut(const engine::NavGraph& nav) {
+    std::vector<Real> price(nav.links.size(), 1.0);
+    for (std::size_t li = 0; li < nav.links.size(); ++li)
+        if (nav.links[li].footpath) price[li] = 1e6;
+    return price;
+}
+
+static bool usesAWalk(const engine::NavGraph& nav, const engine::Route& r) {
+    for (int li : r.links)
+        if (nav.links[static_cast<std::size_t>(li)].footpath) return true;
+    return false;
+}
+
 BusRoute BusNetwork::reverseOf(const BusRoute& f, const engine::NavGraph& nav) const {
     BusRoute r;
+    const std::vector<Real> busWalkPrice = walksPricedOut(nav);
     const std::size_t n = f.stops.size();
     if (n < 2) return r;
     r.network = f.network;
@@ -229,8 +247,9 @@ BusRoute BusNetwork::reverseOf(const BusRoute& f, const engine::NavGraph& nav) c
     for (std::size_t k = 0; k < n; ++k) {
         // a city bus keeps to streets (the pedestrian rule skips freeways and ramps; one-way streets keep their
         // forward link only, so it is still a legal drive); the regional drives anything
-        legs[k] = engine::findRoute(nav, f.stops[from[k]].node, f.stops[from[(k + 1) % n]].node, /*onFoot=*/!f.regional);
-        if (legs[k].links.empty()) return BusRoute{};
+        legs[k] = engine::findRoute(nav, f.stops[from[k]].node, f.stops[from[(k + 1) % n]].node, /*onFoot=*/!f.regional,
+                                    &busWalkPrice);
+        if (legs[k].links.empty() || usesAWalk(nav, legs[k])) return BusRoute{};
     }
     Real metres = 0, seconds = 0;
     for (std::size_t k = 0; k < n; ++k) {
@@ -399,6 +418,7 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
         if (back != linkAt.end()) ++streetUses[static_cast<std::size_t>(back->second)];
     };
     std::vector<Real> costScale(nav.links.size(), 1.0);
+    const std::vector<Real> busWalkPrice = walksPricedOut(nav);
 
     for (int r = 0; r < routeCount; ++r) {
         // CONSECUTIVE hubs, rotated by route. The first cut strided by two
@@ -449,16 +469,16 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
             const int a0 = ring[k], b0 = ring[(k + 1) % ring.size()];
             if (a0 == b0) continue;
             for (std::size_t li = 0; li < costScale.size(); ++li)
-                costScale[li] = 1.0 + kReusePrice * streetUses[li];
+                costScale[li] = (1.0 + kReusePrice * streetUses[li]) * busWalkPrice[li];
             // STREETS ONLY: the pedestrian rule skips freeways and ramps, and
             // a city bus has nobody to serve on either. One-way streets keep
             // only their forward link in the graph, so this is still a legal
             // drive.
             engine::Route leg =
                 engine::findRoute(nav, a0, b0, /*onFoot=*/true, &costScale);
-            if (leg.links.empty()) { ok = false; break; }
-            const engine::Route plain = engine::findRoute(nav, a0, b0, /*onFoot=*/true);
-            if (!plain.links.empty() && leg.length(nav) > kMaxDetour * plain.length(nav))
+            if (leg.links.empty() || usesAWalk(nav, leg)) { ok = false; break; }
+            const engine::Route plain = engine::findRoute(nav, a0, b0, /*onFoot=*/true, &busWalkPrice);
+            if (!plain.links.empty() && !usesAWalk(nav, plain) && leg.length(nav) > kMaxDetour * plain.length(nav))
                 leg = plain;
             if (pathNodes.empty()) pathNodes.push_back(a0);
             for (int li : leg.links) {

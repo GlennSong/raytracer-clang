@@ -111,6 +111,9 @@ struct JunctionFacts {
     std::vector<ArmFacts> arms;
     std::vector<PlannedStretch> inside;   // stretches of road lying between nodes grouped into it
     std::vector<Vec2> nodes;              // where its nodes are (the road-end points grouped into it), in node order
+    // each node's points: the roads meeting there and each one's station (written to the centimetre), in node order --
+    // what a layout states as the junction's nodes (road_graph_spec.h PlannedNode, ADR-0425)
+    std::vector<std::vector<PlannedNodePoint>> nodePoints;
     bool rampEnd = false;              // a ramp's free end is in it
     // Worked out by settleRoles. The minor facts are over the minor approaches, or over every approach when no approach
     // is minor (minorClass is then the least important class there, which is the major one).

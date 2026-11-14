@@ -585,7 +585,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                 RoadEntity net;   // the builder builds the city from its bundle; the entity carries only the look
                 // (the ground a lane-built city stands on comes from its builder: GroundPlan)
                 roads::RoadBuilder& rb = roads::roadBuilderFor(roadBlock);
-                if (rb.ownsNavGraph()) {   // a builder that paves a whole city knows its blocks
+                if (rb.pavesCity()) {   // a builder that paves a whole city knows its blocks
                     roads::RoadBuildInput in;
                     in.road = &net;
                     in.ground = levelGround;
@@ -596,7 +596,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                     const roads::RoadProducts built = rb.build(in);   // a bundle hit, not a rebuild
                     if (!built.holes.empty()) {
                         cityHoles = built.holes;
-                        cityStreets = rb.navGraph(in);   // the streets a door faces
+                        cityStreets = rb.lotStreets(in);   // the streets a door faces: the lot pass's, as the game's loader reads them
                         cityPavedSidewalk = built.bands.sidewalkWidth;
                     }
                 }

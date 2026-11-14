@@ -8,6 +8,7 @@
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/world.h"
+#include "street_map_test_util.h"   // a test world's street map, from its road entities (ADR-0425)
 #include <cmath>
 #include <fstream>
 #include <sstream>
@@ -68,7 +69,7 @@ bool sameColour(const Renderer::UiQuad& q, const float* c) {
 
 TEST_CASE(city_map_tool_draws_you_facing_the_way_you_look) {
     World world;
-    world.add<RoadEntity>(world.create(), mapGrid());
+    testmap::addRoads(world, mapGrid());
     CityRenderParams params;
     params.cars = 12;
     params.pedestrians = 0;
@@ -153,7 +154,7 @@ TEST_CASE(city_map_tool_draws_you_facing_the_way_you_look) {
 // in the route's colour, a few pixels wide at any zoom, and clipped to the panel -- a line never paints the frame.
 TEST_CASE(city_map_tool_draws_the_bus_lines_live_inside_the_panel) {
     World world;
-    world.add<RoadEntity>(world.create(), mapGrid());
+    testmap::addRoads(world, mapGrid());
     CityRenderParams params;
     params.cars = 0;
     params.pedestrians = 0;

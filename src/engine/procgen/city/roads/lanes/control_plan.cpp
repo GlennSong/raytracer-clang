@@ -392,6 +392,9 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
             const Node& node = nodes[static_cast<std::size_t>(n)];
             j.at += node.at;
             j.nodes.push_back(node.at);
+            j.nodePoints.emplace_back();
+            for (const NodePoint& p : node.points)
+                j.nodePoints.back().push_back(PlannedNodePoint{g.edges[static_cast<std::size_t>(p.edge)].id, written(p.s)});
             j.rampEnd = j.rampEnd || node.rampEnd;
             if (node.ramp >= 0) ramps.insert(node.ramp);
             for (const NodePoint& p : node.points) stations[p.edge].push_back(p.s);
@@ -523,6 +526,10 @@ ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, con
             pj.arms.push_back(arm);
         }
         pj.inside = j.inside;
+        // a junction over several points says which roads meet at each (road_graph_spec.h PlannedNode, ADR-0425)
+        if (!j.inside.empty())
+            for (std::size_t n = 0; n < j.nodes.size() && n < j.nodePoints.size(); ++n)
+                pj.nodes.push_back(PlannedNode{Vec2(written(j.nodes[n].x), written(j.nodes[n].y)), j.nodePoints[n]});
         plan.junctions.push_back(pj);
         plan.facts.push_back(j);
         count(plan.byControl, pj.control);
@@ -613,6 +620,20 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junct
             nlohmann::json inside = nlohmann::json::array();
             for (const PlannedStretch& st : pj.inside) inside.push_back({{"road", st.road}, {"from", st.from}, {"to", st.to}});
             j["inside"] = inside;
+        }
+        // THE JUNCTION'S POINTS (ADR-0425): the plan's where it has them, else the listed junction's (a list written
+        // before the plan, its stretches inside the same)
+        if (!pj.nodes.empty()) {
+            nlohmann::json nodes = nlohmann::json::array();
+            for (const PlannedNode& n : pj.nodes) {
+                nlohmann::json points = nlohmann::json::array();
+                for (const PlannedNodePoint& p : n.points) points.push_back({{"road", p.road}, {"at", p.at}});
+                nodes.push_back({{"at", {n.at.x, n.at.y}}, {"points", points}});
+            }
+            j["nodes"] = nodes;
+        } else if (was != listed.end() && was->second.contains("nodes") && j.contains("inside") && was->second.contains("inside") &&
+                   was->second["inside"] == j["inside"]) {
+            j["nodes"] = was->second["nodes"];
         }
         list.push_back(j);
     }

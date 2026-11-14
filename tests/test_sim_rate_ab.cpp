@@ -15,6 +15,7 @@
 #include "../src/engine/procgen/city/plan/city_plan.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/world.h"
+#include "street_map_test_util.h"   // a test world's street map, from its road entities (ADR-0425)
 
 #include <chrono>
 #include <cstdio>
@@ -48,7 +49,7 @@ struct Census { int active = 0, far = 0, moving = 0; double cpuMs = 0;
 // Step `simSeconds` of SIMULATED time and report the tier split at the end.
 Census run(Real localHz, Real simSeconds, const RoadEntity& net) {
     World world;
-    world.add<RoadEntity>(world.create(), net);
+    testmap::addRoads(world, net);
     CityRenderParams p;
     p.cars = 3000; p.pedestrians = 1800; p.seed = 7;
     p.tieredAgents = true;

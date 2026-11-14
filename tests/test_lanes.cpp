@@ -103,6 +103,8 @@ TEST_CASE(lanes_graph_loads_and_expands_the_valley_scene) {
 #include "engine/procgen/city/polygon.h"
 #include "apps/citysim/city_sim.h"
 #include "engine/ai/nav_graph.h"
+#include "engine/procgen/city/roads/road_model.h"   // plannedRoadModel: the street map's source (ADR-0425)
+#include "engine/procgen/city/roads/street_map.h"   // appendStreetMap
 #include <algorithm>
 #include <cstdio>
 #include <set>
@@ -257,17 +259,21 @@ TEST_CASE(lanes_road_twin_closes_every_ring_city_block_and_each_survives_the_sid
 }
 
 // THE REGRESSION THAT WOULD HAVE CAUGHT "half on the sidewalk" (parking round), on the road the city DRIVES:
-// the nav twin a lane-built city's sim runs on (city_producer: navRoadGraph(roadTwin(r, 60, false, forNav)),
-// its streets' cross-sections from road_twin's roadSpecStreetParking). Every bay the sim mints lives inside the
+// the street map a lane-built city's sim runs on (ADR-0425: built from the road model at load, each street's kerb
+// parking band from its stated cross-section, streetSection). Every bay the sim mints lives inside the
 // Parking band of its own road -- never a bare travel lane, the stall between the last travel lane and the kerb,
 // the widest car in the fleet fitting inside the band. (It ran on the old metro grower's generate recipe until
-// that retired, ADR-0267.) On a planned city: the lab scenes' streets carry two travel lanes in 12 m and have
-// no room for a band, while a planned city's local street is one 6 m lane each way, parked along.
+// that retired, ADR-0267, then on the road twin's nav until ADR-0425.) On a planned city: the lab scenes' streets carry
+// two travel lanes in 12 m and have no room for a band, while a planned city's local street is one 6 m lane each way,
+// parked along. (river_town: its road file states its spread junctions' points, which a street map needs.)
 TEST_CASE(lanes_parking_bays_live_inside_the_road_s_parking_band) {
     std::size_t totalBays = 0;
-    for (const char* name : {"planned/metro_v2_test_lanelab"}) {
-        const Result& r = scene(name);
-        const engine::NavGraph nav = engine::buildNavGraph(engine::navRoadGraph(roadTwin(r, 60.0, false, /*forNav=*/true), nullptr));
+    for (const char* name : {"planned/river_town_lanelab"}) {
+        RoadLabGraph g = RoadLabGraph::load(std::string(RT_SOURCE_DIR) + "/assets/lanelab/" + name + ".json");
+        (void)expand(g);   // the ramps composed, as the loader reads them
+        engine::NavGraph nav;
+        engine::StreetMapReport rep;
+        CHECK(engine::appendStreetMap(nav, engine::plannedRoadModel(g), 0, nullptr, &rep));
         citysim::CitySim sim;
         sim.build(nav, 0, 0, 5);
         const auto& bays = sim.parkingBays();
@@ -297,7 +303,7 @@ TEST_CASE(lanes_parking_bays_live_inside_the_road_s_parking_band) {
         totalBays += bays.size();
     }
     std::printf("[parking] %zu bays\n", totalBays);
-    CHECK(totalBays >= 2400u);   // measured 2611 (2026-10-29): a city parked along, not a handful of bays
+    CHECK(totalBays >= 2000u);   // river_town's street map: 2114 (ADR-0425): a city parked along, not a handful of bays
 }
 
 // The same seam on CURVED streets: curve_blocks is a bezier arterial crossed by three straight
@@ -453,13 +459,13 @@ TEST_CASE(lanes_city_products_round_trip_through_a_bundle) {   // to the byte, b
     using namespace engine::bundle;
     const Result& r = scene("ring_city");
     CityProducts p = cityProductsFromResult(r, 250.0);
-    CHECK(p.hasTerrain == r.hasTerrain); CHECK(!p.cells.empty()); CHECK(!p.holes.empty()); CHECK(p.nav.nodes.size() > 10);
+    CHECK(p.hasTerrain == r.hasTerrain); CHECK(!p.cells.empty()); CHECK(!p.holes.empty()); CHECK(p.twin.graph.nodes.size() > 10);
     size_t tris = 0; for (const CityCellMesh& c : p.cells) tris += c.mesh.triangleCount(); CHECK(tris > 100000);
     BundleWriter w; w.openMemory(); writeCityProducts(w, 0, p); nlohmann::json manifest = nlohmann::json::object(); std::string err; CHECK(w.finish(manifest, &err));
     std::unique_ptr<Bundle> b = Bundle::fromMemory(w.memory(), &err); CHECK(b != nullptr); if (!b) return;
     CityProducts q; CHECK(readCityProducts(*b, 0, q, &err)); if (!err.empty()) std::printf("    %s\n", err.c_str());
     CHECK(q.hasTerrain == p.hasTerrain && q.cell == p.cell && q.ground.z == p.ground.z && q.ground.nx == p.ground.nx);
-    CHECK(q.twin.graph.nodes.size() == p.twin.graph.nodes.size() && q.twin.graph.edges.size() == p.twin.graph.edges.size() && q.nav.edges.size() == p.nav.edges.size());
+    CHECK(q.twin.graph.nodes.size() == p.twin.graph.nodes.size() && q.twin.graph.edges.size() == p.twin.graph.edges.size());
     for (size_t i = 0; i < p.twin.graph.nodes.size() && i < q.twin.graph.nodes.size(); ++i) CHECK(p.twin.graph.nodes[i].pos.x == q.twin.graph.nodes[i].pos.x && p.twin.graph.nodes[i].elev == q.twin.graph.nodes[i].elev);
     CHECK(q.holes.size() == p.holes.size()); for (size_t i = 0; i < p.holes.size() && i < q.holes.size(); ++i) CHECK(sameRing(p.holes[i], q.holes[i]));
     CHECK(q.cells.size() == p.cells.size());
@@ -542,8 +548,8 @@ TEST_CASE(lanes_a_road_entity_that_names_the_builder_is_the_same_city) {
     // the loader publishes ITS twin and does not re-derive one from the recipe.
     engine::roads::RoadBuilder* b = engine::roads::roadBuilder("lanes");
     CHECK(b != nullptr); if (!b) return;
-    CHECK(b->ownsNavGraph());
-    CHECK(engine::roads::roadBuilderFor(plain.level["entities"][static_cast<std::size_t>(idx)]["road"]).ownsNavGraph());
+    CHECK(b->pavesCity());
+    CHECK(engine::roads::roadBuilderFor(plain.level["entities"][static_cast<std::size_t>(idx)]["road"]).pavesCity());
 }
 
 TEST_CASE(lanes_bundle_glb_view_reads_back_through_the_engine_importer) {

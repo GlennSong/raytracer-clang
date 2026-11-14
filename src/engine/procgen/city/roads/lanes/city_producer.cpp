@@ -319,7 +319,6 @@ CityProducts cityProductsFromResult(const Result& r, double renderCell, bool wit
     p.twin = roadTwin(r);
     HeightField ground;
     if (p.hasTerrain) { auto grid = std::make_shared<HeightGrid>(r.terrain); ground = [grid](double x, double z) { return grid->sample(x, z); }; }
-    p.nav = navRoadGraph(roadTwin(r, 60.0, false, /*forNav=*/true), ground ? ground : HeightField());   // lanes at their painted centres
     p.lotNav = navRoadGraph(p.twin, ground ? ground : HeightField());   // the lot pass's clearance widths, as before
     p.holes = pavementHoles(r, 2000.0);
     p.deck = deckFromResult(r);
@@ -353,7 +352,7 @@ CityProducts cityProductsFromResult(const Result& r, double renderCell, bool wit
     std::map<std::string, double> timings = r.timings; timings["twin"] = tTwin; timings["meshes"] = tMeshes; timings["pack"] = tPack; if (withInvariants) timings["invariants"] = secondsSince(t3);
     p.report = {{"summary", summary(r)}, {"invariants", inv}, {"checked", withInvariants}, {"timings", timings}, {"seconds", r.seconds}, {"lanes", r.lanes.lanes.size()}, {"triangles", triangles},
                 {"meshBytes", bytes}, {"materials", materials}, {"cells", p.cells.size()}, {"holes", p.holes.size()}, {"deckSpines", p.deck.spines.size()}, {"kerbLoops", p.bands.loops.size()}, {"twinNodes", p.twin.graph.nodes.size()}, {"twinEdges", p.twin.graph.edges.size()},
-                {"navNodes", p.nav.nodes.size()}, {"navEdges", p.nav.edges.size()}, {"railTracks", p.rails.size()}, {"hasTerrain", p.hasTerrain}};
+                {"railTracks", p.rails.size()}, {"hasTerrain", p.hasTerrain}};
     return p;
 }
 
@@ -362,7 +361,6 @@ void writeCityProducts(bundle::BundleWriter& w, int ordinal, const CityProducts&
     w.addJson(pre + "meta", nlohmann::json{{"format", kCityFormatVersion}, {"tag", kLanesBuildTag}, {"hasTerrain", p.hasTerrain}, {"cell", p.cell}});
     if (p.hasTerrain) { BinWriter b; bundle::putHeightGrid(b, p.ground); w.add(pre + "ground", b.bytes); }
     { BinWriter b; bundle::putRoadEntity(b, p.twin); w.add(pre + "roads/twin", b.bytes); }
-    { BinWriter b; bundle::putRoadGraph(b, p.nav); w.add(pre + "roads/nav", b.bytes); }
     { BinWriter b; bundle::putRoadGraph(b, p.lotNav); w.add(pre + "roads/lotnav", b.bytes); }
     { BinWriter b; bundle::putRings(b, p.holes); w.add(pre + "blocks/holes", b.bytes); }
     { BinWriter b; bundle::putDeckField(b, p.deck); w.add(pre + "roads/deck", b.bytes); }
@@ -391,7 +389,8 @@ bool readCityProducts(const bundle::Bundle& b, int ordinal, CityProducts& p, std
     bundle::Bundle::View v;
     if (p.hasTerrain) { if (!section("ground", v)) return fail("ground: missing"); BinReader r(v.data, v.size); if (!bundle::getHeightGrid(r, p.ground)) return fail("ground: unreadable"); }
     if (!section("roads/twin", v)) return fail("roads/twin: missing"); { BinReader r(v.data, v.size); if (!bundle::getRoadEntity(r, p.twin)) return fail("roads/twin: unreadable"); }
-    if (!section("roads/nav", v)) return fail("roads/nav: missing"); { BinReader r(v.data, v.size); if (!bundle::getRoadGraph(r, p.nav)) return fail("roads/nav: unreadable"); }
+    // (roads/nav, the sim's old routing twin, is in bundles baked before ADR-0425 and is not read: the street map is built
+    // from the road model at load)
     if (!section("roads/lotnav", v)) return fail("roads/lotnav: missing"); { BinReader r(v.data, v.size); if (!bundle::getRoadGraph(r, p.lotNav)) return fail("roads/lotnav: unreadable"); }
     if (!section("blocks/holes", v)) return fail("blocks/holes: missing"); { BinReader r(v.data, v.size); if (!bundle::getRings(r, p.holes)) return fail("blocks/holes: unreadable"); }
     // The deck and the kerb line (2026-09-20): a bundle baked before they existed has neither,

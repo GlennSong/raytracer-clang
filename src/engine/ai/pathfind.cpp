@@ -49,8 +49,11 @@ Real linkTravelSeconds(const NavGraph& graph, int inLink, int li, int goalNode, 
     // the units): a pedestrian costed by the CARS' class speed took a collector round a block over a footpath 24 m
     // shorter across it, because a collector "is faster" (ADR-0265, footpaths_are_walked_across_a_block_and_never_driven)
     Real step = link.length / (onFoot ? classSpeed(RoadClass::Local) : classSpeed(link.klass));
+    // (ONCE A JUNCTION, ADR-0425: a link inside a junction, from one of its points to another -- a junction the plan spread
+    // over several -- is already in it; the delay was charged on the way in)
+    const bool withinJunction = link.junction >= 0 && link.junction == graph.junctionOf(link.to);
     if (!onFoot && link.to != goalNode && link.klass != RoadClass::Freeway &&
-        link.klass != RoadClass::Ramp && graph.isJunction(link.to))
+        link.klass != RoadClass::Ramp && graph.isJunction(link.to) && !withinJunction)
         step += kStreetJunctionDelay;
     step *= std::max<Real>(1.0, costScale);
     // A U-TURN COSTS (#218): a car turning back on itself at a node -- onto the street it came along, or a

@@ -20396,3 +20396,143 @@ has no STOP or YIELD.
 
 **Revisit when** the new driving drives agent_lab (it will obey the signs); when the paint reads the stated signs; when
 another level is planned by the policy and asks for the signs; when the signs become obstacles.
+
+## ADR-0425 — One road model, step 7: every agent routes on one street map built from the road model; the routing twin is gone
+**Status:** Provisional · **Date:** 2026-11-14
+
+Words used here:
+- The **street map** is the graph of nodes and one-way links that the city sim's people, cars and buses route, drive
+  and walk on (the `NavGraph` structure, as before). Until now it was made from the **road twin**: a thinned copy of the
+  built roads' centre lines, made at bake time and stored in the bundle (section `roads/nav`), then re-joined at load
+  (junction points within 7 m merged into one, the "knot merge"). Now it is built at load from the **road model's
+  planned layer** (what the road file states: roads, streets, junctions, ramps, carry-ons) and the drawn deck's heights.
+- A **spread junction** is one the plan made of several points (it has stretches of road inside it). Its **points**
+  are stated in the road file: `junctions[].nodes`, each `{"at": [x, y], "points": [{"road", "at"}]}` (which road
+  passes through that point, and at what station along it).
+- A **station** is a distance along a road's centre line, in metres.
+- The **gore** is where a ramp leaves or joins the road it is anchored to (its host).
+- The **lane match** ties each link of the street map to the lanes the builder laid under it (`LaneMap` in the city
+  sim), so cars drive in the painted lanes.
+- **Lit**: a junction whose stated control is a signal; its nodes run signal phases.
+
+**Context.** docs/road-model-design.md step 7: routing reads the model at street level, and the twin and both
+routing-graph copies (the sim's own `buildNavGraph` of the twin, and the loader's for the street furniture) are
+deleted. The nav graph had no road or junction ids, so the lights were tied to junctions by position
+(`LevelRoadModel::junctionAt`, ADR-0421), lane counts and lanes by nearest geometry (the lane match), and furniture
+by position. Measured on river_town, agent_lab and traffic_lab only.
+
+**Decision.**
+- **One street map per level** (`engine::LevelStreetMap`, src/engine/procgen/city/roads/street_map.h/.cpp,
+  `appendStreetMap`): built once at load, per city, in `publishCityProducts`, and shared. The furniture plan reads it;
+  the city sim copies it and appends its walks (parks' and quads' paths, `NavGraph::appendFootpaths`, as before). The
+  map, buses, rail riders, parking, walkers and the trip planner read the sim's copy. It is never saved.
+- **What is joined, and by what** (no distance or angle decides anything): a junction with nothing inside it is one
+  node at its stated `at`; a spread junction is one node per stated point, a street ending at the point that holds its
+  arm's road and station, each stretch inside it laid between the points on that road in station order; a street that
+  carries on as another shares a node with it; a ramp anchored to a host road is a node on the host at the stated gore
+  station (splitting the host street there), the ramp driven from its own gore station along itself; anything else is
+  a dead end. What the stated facts leave unjoined is a note in the load log, never patched.
+- **Along a street**: the centre line kept to within 1.5 m with a node at least every 60 m (the old map's grain);
+  links each way the street's stated lanes run; lanes, class, one-way, width and kerb parking copied from the street's
+  stated cross-section; heights: freeway and ramp links take the drawn deck's absolute heights at their stations, the
+  rest sit on the ground.
+- **Ids on the map**: every link carries its city, street (or the junction it lies inside), road, the stations at its
+  two ends and the arms it leaves and enters by; every node its junction. The lights, the furniture's approach arms and
+  a street's planting run read these ids.
+- **One piece between two points, each way.** Where the stated points put two stretches of one junction between the
+  same two points (two roads both stated at both), the first is laid that way and the rest are a note: parallel
+  duplicate links over one piece of road. 31 such stretches in river_town and agent_lab, 7 in traffic_lab.
+- **One junction, one signal.** The signal controller (citysim traffic_signal.cpp) runs one plan for all the points of
+  a spread junction (keyed by its lowest lit point), and a link from one of its points to another, being inside its box
+  already, faces no light. Before, each point ran its own cycle: a car through the junction met a second red inside the
+  box, and river_town's cars stood in junction boxes for over 5 s more than twice as often as on the old map (3,851
+  against 1,649 samples in `metro_junctions_stay_clear`; 1,920 now). The old map hid this: its knot merge welded points
+  within 7 m into one node. Hand-made graphs (no junction ids) keep one plan per node. The poles already stood one per
+  arm of the junction, so heads and lights still agree.
+- **A ramp keeps its own line to its gore.** The gore's node stands on the host's centre line, beside the ramp's; the
+  ramp's links run along its own line to its gore station, and one short link crosses from there to the host's node.
+  (With the host's node put in place of the ramp line's first point, that first link cut a chord across the ramp's
+  curve, and river_town had cars up to 1 m off the drawn deck in `freeway_census_links_routes_and_traffic`; 0 now, as
+  on the old map.)
+- **The points are stated once, by a one-off tool.** `lanes_tool layout <file> --nodes --write` writes each spread
+  junction's points into the road file, from the layout's own junction finding (ADR-0419: the road ends one junction
+  holds) plus the carry-ons. Written into river_town (30 junctions, 77 points), agent_lab (the same) and traffic_lab
+  (15 junctions, 46 points). The bake key does not see them (the junctions list is stripped before keying), so nothing
+  re-baked: `rt_bake --status` before and after shows the same three bundles current. A road file with a spread
+  junction and no points gets **no street map and no traffic**, and the load log names the command to run.
+- **The lights read junction ids.** `LevelRoadModel::stateSignals` lights a node when its own junction's stated
+  control is a signal. A road file that states no controls lights nothing, and the loader warns, naming
+  `city_plan controls <file> rules/lab.lua --layout --write --controls-only`. The old "four approaches" rule survives
+  only for hand-made graphs (tests, the planner's scoring), renamed `NavGraph::signalledByDegree`.
+- **The lane match ties by ids**: a link's lanes are the laid lanes of its road (`LevelLanes::cityRoads`), running its
+  way (station order), covering its stretch of the road's spine, in slots 0 to lanes-1. A link nothing ties is listed
+  in the load log. Lane counts come from the street, not from the match.
+- **The router charges a junction's delay once**: a link from one point of a spread junction to another is already
+  inside it, so it pays no second `kStreetJunctionDelay`.
+- **A city bus never drives a walk.** City lines are found with the pedestrian rule, which also walks the parks'
+  paths; on the new map a line was found across a park path and put a stop on a path node no car can reach (its bus
+  skipped that leg 9,000 times in five minutes). The walks are now priced out of the line search and a leg that still
+  uses one is refused (city_bus.cpp `walksPricedOut`, `usesAWalk`).
+- **Formats**: the road model's cache format goes 4 to 5 (cache/roadmodel only; it rebuilds itself). No bundle
+  layout or version change: new bakes no longer write `roads/nav`; old bundles keep it, unread.
+
+**Deleted** (nothing reads them): the twin's routing copy (`roadTwin(..., forNav)`), producing and requiring
+`roads/nav`, `CityProducts::nav`; the loader's and the sim's routing builds of the twin (`LevelRoadGraph`, its two
+publishers and the sim's private merge of road entities); the position bridges `LevelRoadModel::junctionAt`,
+`armAt`, `streetAt` (and their cell grid); the lane match's nearest-geometry search and `stateLanes`;
+`dumpOldRuleControls` and `lanes_tool controls` (the one-off tool of ADR-0421, done); `CityMapData::roads` (the
+map draws the street map). `RoadBuilder::navGraph`/`ownsNavGraph` are renamed `lotStreets`/`pavesCity`.
+
+**Kept, and why**: the road twin itself, `navRoadGraph`, `sampleNetGraph`, `joinDanglingEnds` and
+`classifyRoadGraph`: the lot pass reads its own copy of the twin (`lotNav`, bundle section `roads/lotnav`) until step
+5; `buildNavGraph` and its knot merge: the planner's scoring and hand-made test graphs.
+
+**Measured** (river_town, five simulated minutes at 30 Hz, the old values from a temporary worktree of the parent
+commit a348ed61, which reproduced the old run exactly):
+
+| | old map | street map | |
+|---|---|---|---|
+| street nodes, links | 1,045, 1,874 | 984, 1,821 | |
+| links tied to laid lanes | 1,798 (76 partly, or another count) | 1,821 of 1,821 | |
+| people (from lane-km) | 9,577 | 9,452 | -1.3% |
+| trips begun | 1,913 | 1,980 | +3.5% |
+| drivers moving, mean over each second | 376.9 | 373.1 | -1.0% |
+| their mean speed (near the player) | 3.87 (2.49) m/s | 4.52 (2.77) m/s | +17% (+11%) |
+| drivers ever on the freeway; on it at once, mean | 87; 13.1 | 89; 18.8 | +2%; +44% |
+| drivers whose route held the freeway | 184 | 166 | -10% |
+| kerb bays (taken) | 2,128 (1,849) | 2,114 (1,832) | -0.7% (-0.9%) |
+| bus stops; stop arrivals at stops | 122; 100 at 95 | 116; 106 at 96 | -4.9%; +6% |
+| walkers in the road (of those in view) | 29.8 of 213.2 | 28.2 of 217.5 | 14.0% to 13.0% |
+| 2,000 door-to-door drives: routed, by freeway, mean | 1,975, 98, 119 s | 1,989, 96, 111 s | |
+
+Why the bigger moves. Speed: a spread junction is one signal now (one green crosses it) and its delay is paid once.
+Time on the freeway: a ramp now leaves at its stated gore, so the 556 m of ramp-class link that ran beside the freeway on
+the old map is freeway driving now; that explains some of the 44%, not all of it (the drivers' routes hold the freeway
+less often, 166 against 184, and the probes' freeway legs take the same 10 s as before): not explained further. Bus
+arrivals: the eight lines are derived afresh from the new map (stops sit on nodes), shorter and covering more of the
+city within 120 m of a stop. People: the density counts lane-km, which fell 1.1% with the ramp stretches beside the
+freeway. Trips begun, kerb bays and walkers moved less than 5%.
+
+Probes in agent_lab (sim speed 4; real seconds, and the trip's own minutes): near trip, 77 s, 3 stops, 3.3 min
+before; 85 s, 2 stops, 3.6 min now. Far trip, 150 s, 5 stops, 6.5 min before; 127 s, 5 stops, 5.5 min now. The freeway
+trip, 180 s, 7 stops, 7.8 min before; 179 s, 5 stops, 7.7 min now, top speed 99 km/h (104): on at (-513, -160) from
+street tn1 and off at (-337, 93) onto bv1_in, as before; the road file joins tn1 and bv1_in end to end with the freeway,
+so neither trip uses a ramp-class link, on either map. traffic_lab's new driving (`level_traffic_lab_v2_drives`)
+passes. The v1 pins moved (below).
+
+**Not done.**
+- Every other lanes level is untested. One whose road file has a junction spread over several points (the planner
+  makes them) has no stated points yet: it loads with no street map and no traffic, and the log says to run
+  `lanes_tool layout <its road file> --nodes --write` (and for a person to check what it wrote).
+- The pinned v1 values (`kV1LabHashes`, `kV1RiverHashes`) moved and are not retaken here. traffic_lab's: 0x6161808458034f6c,
+  0xdc44f2a4eba36a97, 0x619965545bd8c04c, 0x4350d0f0759ece61; river_town's (9,452 people): 0xe8a31a7c99904cfd,
+  0x5e9f6a872434cf02, 0x7407d0c363d6ca49, 0xbfd7473425925330.
+- Four `metro_*` level tests fail on river_town (`RT_CITYSIM_LEVEL=river_town`) on the old map and the new alike: their
+  numbers are metro_v2_test's (24 buses, 5 m/s mean speed, fewer than 300 junction-box samples, the deck tolerances).
+- Some stated points look wrong: in river_town's j23, s31 is stated at the third point 1 m before it reaches the
+  second, so a link runs between them that no road follows. The tool wrote what the layout's junction finding gives;
+  it is a fact for the planner (step 9's stated junctions) to settle, not something the map should guess around.
+- The offline tracer's lots (level_scene.cpp) now read the lot twin (`lotStreets`), as the game's loader does.
+
+**Revisit when** the lot pass reads the model (step 5: the twin goes); when the planner states every junction's points
+itself (no tool); when the lane-level driving reads the model's lanes (step 8).

@@ -1000,27 +1000,25 @@ void Application::registerGroundVerbs() {
         const CityMap* map = nullptr;
         worldState.each<CityMap>([&](Entity, CityMap& m) { if (!map) map = &m; });
         if (map && map->data) {
-            const engine::RoadGraph& g = map->data->roads;
+            // the street map's street links (ADR-0425; a two-way street's two links lie on one line, so either answers)
+            const engine::NavGraph& g = map->data->nav;
             double bestD = 1e30, bestW = 0;
             int bestE = -1;
-            for (std::size_t e = 0; e < g.edges.size(); ++e) {
-                const engine::RoadEdge& ed = g.edges[e];
-                if (ed.a < 0 || ed.b < 0 ||
-                    ed.a >= static_cast<int>(g.nodes.size()) ||
-                    ed.b >= static_cast<int>(g.nodes.size())) continue;
-                const engine::Vec2& A = g.nodes[ed.a].pos;
-                const engine::Vec2& B = g.nodes[ed.b].pos;
+            for (int e = 0; e < g.streetLinkCount(); ++e) {
+                const engine::NavLink& ed = g.links[static_cast<std::size_t>(e)];
+                const engine::Vec2& A = g.nodes[static_cast<std::size_t>(ed.from)];
+                const engine::Vec2& B = g.nodes[static_cast<std::size_t>(ed.to)];
                 engine::Vec2 ab = B - A;
                 const double l2 = ab.x * ab.x + ab.y * ab.y;
                 double t = l2 > 1e-12 ? ((q.x - A.x) * ab.x + (q.y - A.y) * ab.y) / l2 : 0.0;
                 t = t < 0 ? 0 : (t > 1 ? 1 : t);
                 const engine::Vec2 P(A.x + ab.x * t, A.y + ab.y * t);
                 const double d = std::sqrt((q.x - P.x) * (q.x - P.x) + (q.y - P.y) * (q.y - P.y));
-                if (d < bestD) { bestD = d; bestW = ed.width; bestE = static_cast<int>(e); }
+                if (d < bestD) { bestD = d; bestW = ed.width; bestE = e; }
             }
             if (bestE >= 0) {
                 const double into = bestW * 0.5 - bestD;
-                out += " | road edge " + std::to_string(bestE) + " width " +
+                out += " | street link " + std::to_string(bestE) + " width " +
                        std::to_string(bestW) + " centreline " + std::to_string(bestD) + " m";
                 out += into > 0 ? (" -- IN THE CARRIAGEWAY by " + std::to_string(into) + " m")
                                 : (" (clear by " + std::to_string(-into) + " m)");

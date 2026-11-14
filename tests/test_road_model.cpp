@@ -607,10 +607,11 @@ TEST_CASE(road_model_6_compared_with_the_old_forms) {
 // ---- 7. kerb parking is stated (ADR-0418) --------------------------------------------------------------------------------
 
 namespace {
-// The kerb parking bands the road twin hands the sim (navRoadGraph's edges: parkWidth), by the twin edge's class.
+// The kerb parking bands the road twin carries (navRoadGraph's edges: parkWidth; the lot pass's twin since ADR-0425), by
+// the twin edge's class.
 std::map<engine::RoadClass, std::pair<int, double>> twinBands(const Result& r) {
     std::map<engine::RoadClass, std::pair<int, double>> out;   // class -> (edges with a band, the widest band)
-    for (const engine::RoadEdge& e : engine::navRoadGraph(roadTwin(r, 60.0, false, /*forNav=*/true), nullptr).edges) {
+    for (const engine::RoadEdge& e : engine::navRoadGraph(roadTwin(r), nullptr).edges) {
         if (e.parkWidth <= 0) continue;
         std::pair<int, double>& o = out[e.klass];
         ++o.first;

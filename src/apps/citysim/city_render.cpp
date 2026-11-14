@@ -307,20 +307,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         garages_ = c.garages;               // the parking garages you can drive into
     });
 
-    // Merge every RoadEntity's constrained graph into one combined graph (a level
-    // with several road entities yields one city). Matches TrafficSystem.
-    RoadGraph combined;
+    // The road entities' look: the lift and the sidewalk width the sim draws its people and cars with.
     heightAt_ = std::move(ground);   // caller-supplied sampler (test worlds)
     roadLift_ = 0.0;
     world.each<RoadEntity>([&](Entity, RoadEntity& net) {
-        RoadGraph g = navRoadGraph(net, heightAt_);
-        int base = static_cast<int>(combined.nodes.size());
-        for (const RoadNode& n : g.nodes) combined.nodes.push_back(n);
-        for (RoadEdge e : g.edges) {
-            e.a += base;
-            e.b += base;
-            combined.edges.push_back(e);
-        }
         roadLift_ = std::max(roadLift_, static_cast<Real>(net.look.lift));
         sidewalk_ = std::max(sidewalk_, static_cast<Real>(net.look.sidewalk));
     });
@@ -341,26 +331,16 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             return engine::terrainHeight(*params, *noise, x, z);
         };
     });
-    // §10: the LEVEL owns the one road graph — streets + corridor chains
-    // welded at load (LevelRoadGraph). When present it replaces the private
-    // RoadEntity merge above wholesale; the merge remains only so loader-less
-    // test worlds (bare RoadEntity components) still drive.
-    world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) {
-        if (!g.graph.edges.empty()) combined = g.graph;
-    });
-    if (combined.nodes.empty() || combined.edges.empty()) return false;
-
-    nav_ = engine::buildNavGraph(combined);
-    if (nav_.linkCount() == 0) return false;
-    // WHICH NODES ARE SIGNALLED: their road-model junction's stated control (ADR-0421), as the loader's furniture plan
-    // states its own nav build -- so the phases and the poles agree. No stated control: the old rule.
-    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) {
-        if (!m.controlsStated()) return;
-        int untied = 0;
-        m.stateSignals(nav_, &untied);
-        LOG_INFO << "[citysim] signals from the road model's stated controls (" << untied
-                 << " intersection nodes tied to no junction: unlit)";
-    });
+    // THE LEVEL'S STREET MAP (docs/road-model-design.md step 7, ADR-0425): the one map, built at load from the road model
+    // (engine::LevelStreetMap), every link and node carrying its street's and junction's ids, its signals stated by its
+    // junctions' controls -- the same map the furniture was planned on, so a pole's link is this link. The sim copies it
+    // and appends its walks (below).
+    {
+        std::shared_ptr<const engine::NavGraph> map;
+        world.each<engine::LevelStreetMap>([&](Entity, engine::LevelStreetMap& m) { if (!map && m.map) map = m.map; });
+        if (!map || map->linkCount() == 0) return false;
+        nav_ = *map;
+    }
     // HEIGHTS RESOLVED ONCE, where the ground is known (review of #35 / the ramp-foot sink): every link end
     // gets its ABSOLUTE carriageway Y (elevA/B on an absolute link -- what draws the car) and its height
     // ABOVE THE GROUND (aboveA/B -- what the sim's same-level tests compare). A deck-to-street link (one
@@ -387,22 +367,19 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         if (mixed) LOG_INFO << "[citysim] " << mixed << " deck-to-street links resolved to absolute heights at both ends";
     }
 
-    // THE REAL LANES (#218), and THE ONE LANE COUNT (ADR-0418): the lanes the builder laid (published at load,
-    // engine::LevelLanes) matched to the links, which also says which road each link runs along -- and so the lanes its
-    // road file states that way, which every link the match resolves now carries. Before anything reads a lane count
-    // (the density, the bays, the signals, the sim).
+    // THE REAL LANES (#218): the lanes the builder laid (published at load, engine::LevelLanes) tied to the links by the
+    // link's road, the way it runs, its stretch of that road and each lane's slot (ADR-0425). Each link's lane count is its
+    // street's stated cross-section already (the street map copies it).
     LaneMap laneMap;
     bool haveLaneMap = false;
     world.each<engine::LevelLanes>([&](Entity, engine::LevelLanes& ll) {
         if (ll.lanes.empty() || haveLaneMap) return;
         haveLaneMap = true;
-        laneMap.build(nav_, ll.lanes, ll.roads, ll.stated);
-        const int stated = laneMap.stateLanes(nav_);
+        laneMap.build(nav_, ll);
         LOG_INFO << "[citysim] real lanes: " << laneMap.matched << " of " << laneMap.drivable << " drivable links matched ("
                  << laneMap.countDiffers << " with another lane count, " << laneMap.partial << " where a lane starts or ends along the link, "
                  << laneMap.none << " with no lane found); the rest keep the centreline offsets";
-        LOG_INFO << "[citysim] lanes as the road file states them: " << stated << " of " << laneMap.drivable
-                 << " drivable links (the rest, with no lane at their middle, keep their class's lanes)";
+        for (const std::string& w : laneMap.untied) LOG_INFO << "[citysim] real lanes: " << w;
     });
 
     // Connectivity truth (device: "I don't see the freeway connected yet"):

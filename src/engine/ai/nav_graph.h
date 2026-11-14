@@ -38,8 +38,8 @@ struct NavLink {
     Real width = 8;                     // carriageway width of the source road (m)
     RoadClass klass = RoadClass::Local;
     // Travel lanes in THIS direction. buildNavGraph gives every link its class's row of the road class table (roads/lanes
-    // roadClass); a city built from a road file then takes each link's lanes from the road it runs along, as that file
-    // states them (citysim LaneMap::stateLanes, ADR-0418). Kerb parking is not a lane: it is parkWidth below.
+    // roadClass); a city built from a road file has a street map instead, whose links carry the lanes their street
+    // states (street_map.h, ADR-0425). Kerb parking is not a lane: it is parkWidth below.
     int lanes = 1;
     int layer = 0;                      // grade-separation level (0 = ground, >0 = bridge)
     // Carriageway height above ground at each end (from RoadNode.elev):
@@ -81,6 +81,14 @@ struct NavLink {
     // carriageway: a connector from a street node starts on that street's pavement, not in its middle.
     bool footpath = false;
     Vec2 footA, footB;
+    // WHERE IT LIES ON THE ROAD MODEL (ADR-0425: a street map built from the model, roads/street_map.h; a graph built
+    // from a hand-made road graph has none of them): the city (an index into LevelRoadModel::cities), the street it runs
+    // along (-1: a link inside a junction, or a walk), the junction it lies inside (-1: none), the road (the road file's
+    // edge) and the stations along that road's spine at its `from` and `to` ends, and the arm of the junction it leaves
+    // by at `from` and arrives by at `to` (-1: no junction arm there).
+    int city = -1, street = -1, junction = -1, road = -1;
+    Real stationFrom = 0, stationTo = 0;
+    int armOut = -1, armIn = -1;
 };
 
 // Semantic signal predicate (roads-v2.2 #17/S5): a node is signal-CONTROLLED
@@ -107,10 +115,20 @@ struct NavGraph {
     // with one, so a home, a job or a car's goal stays on the streets; walks are found by ROUTING through them.
     std::vector<uint8_t> footNode;
     // THE STATED SIGNALS (ADR-0421): 1 on a node whose road-model junction's stated control is a signal, 0 on every
-    // other node. Filled by stateNavSignals (road_model.h) where the level has a road model; empty = nothing stated,
-    // and signalControlled falls back to the old rule below (loader-less test worlds, a road file with no control
-    // plan, and the one-off tool that writes today's outcome into the road files).
+    // other node. A level's street map always has them (LevelRoadModel::stateSignals, by each node's junction id:
+    // ADR-0425; a road file that states no control lights nothing, and the loader says so). Empty only on a graph made
+    // from a HAND-MADE road graph (buildNavGraph: test worlds, the planner's scoring graph), which no road file
+    // describes: there signalControlled reads the degree rule below.
     std::vector<uint8_t> statedSignal;
+    // WHERE EACH NODE LIES ON THE ROAD MODEL (ADR-0425; empty for a graph built from a hand-made road graph): the junction
+    // it is a point of (an index into its city's RoadModel::junctions; -1: none) and its city (-1: none).
+    std::vector<int> nodeJunction, nodeCity;
+    int junctionOf(int node) const {
+        return node >= 0 && node < static_cast<int>(nodeJunction.size()) ? nodeJunction[static_cast<std::size_t>(node)] : -1;
+    }
+    int cityOf(int node) const {
+        return node >= 0 && node < static_cast<int>(nodeCity.size()) ? nodeCity[static_cast<std::size_t>(node)] : -1;
+    }
 
     JunctionKind kindOf(int node) const {
         return node >= 0 && node < static_cast<int>(nodeKind.size())
@@ -144,14 +162,14 @@ struct NavGraph {
             if (links[ol].access & road_access::kSignalable) ++k;
         return k;
     }
-    // See the comment above the struct. With signals stated, the node's junction's stated control decides
-    // (statedSignal); the old rule is kept as signalledByOldRule, what the one-off tool states once.
+    // See the comment above the struct. With signals stated (every level's street map), the node's junction's stated
+    // control decides (statedSignal); a hand-made graph's (no road file states it) by its degree.
     bool signalControlled(int node) const {
         if (!statedSignal.empty())
             return node >= 0 && node < static_cast<int>(statedSignal.size()) && statedSignal[static_cast<std::size_t>(node)] != 0;
-        return signalledByOldRule(node);
+        return signalledByDegree(node);
     }
-    bool signalledByOldRule(int node) const {
+    bool signalledByDegree(int node) const {
         return kindOf(node) == JunctionKind::Intersection &&
                signalableApproaches(node) >= 4;
     }

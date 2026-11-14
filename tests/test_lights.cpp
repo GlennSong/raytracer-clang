@@ -6,6 +6,7 @@
 #include "test_framework.h"
 #include "../src/engine/lights/light_picker.h"
 #include "../src/engine/lights/probe_sites.h"
+#include "../src/engine/ai/nav_graph.h"   // buildNavGraph: the probes stand along a street map
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/components.h"   // drawClassName
 #include "../src/engine/scripting/lights_lua.h"
@@ -205,7 +206,7 @@ TEST_CASE(probe_sites_line_the_streets) {
     const ProbeGroundFn ground = [](double, double) { return 2.0; };
     ProbeRules rules;
     std::vector<ProbeSite> sites;
-    placeProbeSites(g, ground, rules, sites);
+    placeProbeSites(buildNavGraph(g), ground, rules, sites);   // (a street map made from a hand-made graph)
     CHECK(sites.size() == 5u + 4u + 5u);
     for (const ProbeSite& s : sites) {
         CHECK(s.boxMin.x < s.position.x && s.position.x < s.boxMax.x);
@@ -236,7 +237,7 @@ TEST_CASE(probe_sites_line_the_streets) {
     on.a = 0; on.b = 2;
     j.edges = {oe, on};
     std::vector<ProbeSite> js;
-    placeProbeSites(j, ground, rules, js);
+    placeProbeSites(buildNavGraph(j), ground, rules, js);
     CHECK(js.size() == 1u);
 }
 

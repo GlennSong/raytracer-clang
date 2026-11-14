@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iomanip>
 #include <map>
+#include <set>
 #include <sstream>
 #include <unordered_map>
 
@@ -148,21 +149,31 @@ std::vector<SidewalkCrossing> findSidewalkRoadCrossings(
     const CityMapData& data, const std::vector<const RoadDeckField*>& decks,
     double tolerance, double mergeRadius) {
     std::vector<SidewalkCrossing> out;
-    const RoadGraph& g = data.roads;
-    const int N = static_cast<int>(g.nodes.size());
+    // the street map's links (ADR-0425), each street piece once: only to LABEL a hit with its road, and its ends' degree
+    struct Piece { int a, b; RoadClass klass; double width; };
+    std::vector<Piece> pieces;
+    {
+        std::set<std::pair<int, int>> seen;
+        for (int li = 0; li < data.nav.streetLinkCount(); ++li) {
+            const NavLink& L = data.nav.links[static_cast<std::size_t>(li)];
+            if (L.footpath || !seen.insert({std::min(L.from, L.to), std::max(L.from, L.to)}).second) continue;
+            pieces.push_back({L.from, L.to, L.klass, L.width});
+        }
+    }
+    const std::vector<Vec2>& nodes = data.nav.nodes;
+    const int N = data.nav.streetNodeCount();
     if (decks.empty() || data.curbLoops.empty()) return out;
-    // A spatial hash of the graph edges, only to LABEL a hit with its road.
+    // A spatial hash of the pieces, only to LABEL a hit with its road.
     const double cell = 32.0;
     std::unordered_map<long long, std::vector<int>> cells;
     auto key = [](int cx, int cz) {
         return (static_cast<long long>(cx) << 32) ^ (static_cast<long long>(cz) & 0xffffffffLL);
     };
     auto cellOf = [&](double v) { return static_cast<int>(std::floor(v / cell)); };
-    for (int ei = 0; ei < static_cast<int>(g.edges.size()); ++ei) {
-        const RoadEdge& e = g.edges[ei];
-        if (e.a < 0 || e.b < 0 || e.a >= N || e.b >= N) continue;
-        const Vec2& A = g.nodes[e.a].pos;
-        const Vec2& B = g.nodes[e.b].pos;
+    for (int ei = 0; ei < static_cast<int>(pieces.size()); ++ei) {
+        const Piece& e = pieces[static_cast<std::size_t>(ei)];
+        const Vec2& A = nodes[static_cast<std::size_t>(e.a)];
+        const Vec2& B = nodes[static_cast<std::size_t>(e.b)];
         const double hw = e.width;
         for (int cz = cellOf(std::min(A.y, B.y) - hw); cz <= cellOf(std::max(A.y, B.y) + hw); ++cz)
             for (int cx = cellOf(std::min(A.x, B.x) - hw); cx <= cellOf(std::max(A.x, B.x) + hw); ++cx)
@@ -174,7 +185,8 @@ std::vector<SidewalkCrossing> findSidewalkRoadCrossings(
         auto it = cells.find(key(cellOf(p.x), cellOf(p.y)));
         if (it == cells.end()) return best;
         for (int ei : it->second) {
-            const double d = distToSegment(p, g.nodes[g.edges[ei].a].pos, g.nodes[g.edges[ei].b].pos);
+            const Piece& e = pieces[static_cast<std::size_t>(ei)];
+            const double d = distToSegment(p, nodes[static_cast<std::size_t>(e.a)], nodes[static_cast<std::size_t>(e.b)]);
             if (d < bestD) { bestD = d; best = ei; }
         }
         return best;
@@ -234,27 +246,27 @@ std::vector<SidewalkCrossing> findSidewalkRoadCrossings(
         }
         c.spanMetres = std::hypot(maxX - minX, maxZ - minZ);
         c.edge = nearestEdge(c.pos);
-        if (c.edge >= 0) { c.klass = g.edges[c.edge].klass; c.width = g.edges[c.edge].width; }
+        if (c.edge >= 0) { c.klass = pieces[static_cast<std::size_t>(c.edge)].klass; c.width = pieces[static_cast<std::size_t>(c.edge)].width; }
         out.push_back(c);
     }
-    // Dead-end stubs: degree from the edges, nearest degree-1 node per place.
-    std::vector<int> degree(N, 0);
-    for (const RoadEdge& e : g.edges)
-        if (e.a >= 0 && e.b >= 0 && e.a < N && e.b < N) { ++degree[e.a]; ++degree[e.b]; }
+    // Dead-end stubs: degree from the pieces, nearest degree-1 node per place.
+    std::vector<int> degree(static_cast<std::size_t>(std::max(0, N)), 0);
+    for (const Piece& e : pieces)
+        if (e.a >= 0 && e.b >= 0 && e.a < N && e.b < N) { ++degree[static_cast<std::size_t>(e.a)]; ++degree[static_cast<std::size_t>(e.b)]; }
     for (SidewalkCrossing& c : out) {
         double best = 25.0, nearest = 15.0;
         int nearestNode = -1;
         for (int v = 0; v < N; ++v) {
-            const double d = (g.nodes[v].pos - c.pos).length();
-            if (degree[v] == 1 && d < best) { best = d; c.deadEndDist = d; }
-            if (d < nearest) { nearest = d; c.nodeDist = d; c.nodeDegree = degree[v]; nearestNode = v; }
+            const double d = (nodes[static_cast<std::size_t>(v)] - c.pos).length();
+            if (degree[static_cast<std::size_t>(v)] == 1 && d < best) { best = d; c.deadEndDist = d; }
+            if (d < nearest) { nearest = d; c.nodeDist = d; c.nodeDegree = degree[static_cast<std::size_t>(v)]; nearestNode = v; }
         }
         if (nearestNode >= 0) {
             for (int v = 0; v < N; ++v) {
-                if ((g.nodes[v].pos - g.nodes[nearestNode].pos).length() > 2.0) continue;
+                if ((nodes[static_cast<std::size_t>(v)] - nodes[static_cast<std::size_t>(nearestNode)]).length() > 2.0) continue;
                 ++c.coincident;
                 if (!c.coincidentDegrees.empty()) c.coincidentDegrees += "+";
-                c.coincidentDegrees += std::to_string(degree[v]);
+                c.coincidentDegrees += std::to_string(degree[static_cast<std::size_t>(v)]);
             }
         }
     }
@@ -266,13 +278,12 @@ std::vector<SidewalkCrossing> findSidewalkRoadCrossings(
 bool writeCityMapSvg(const std::string& path, const CityMapData& data,
                      const CityMapLayers& layers,
                      const std::vector<const RoadDeckField*>& decks) {
-    const RoadGraph& g = data.roads;
     double minX = 1e30, minZ = 1e30, maxX = -1e30, maxZ = -1e30;
     auto grow = [&](double x, double z) {
         minX = std::min(minX, x); maxX = std::max(maxX, x);
         minZ = std::min(minZ, z); maxZ = std::max(maxZ, z);
     };
-    for (const RoadNode& n : g.nodes) grow(n.pos.x, n.pos.y);
+    for (int n = 0; n < data.nav.streetNodeCount(); ++n) grow(data.nav.nodes[static_cast<std::size_t>(n)].x, data.nav.nodes[static_cast<std::size_t>(n)].y);
     for (const CityMapData::Street& s : data.streets) for (const Vec2& v : s.line) grow(v.x, v.y);
     for (const Poly2& p : data.blocks) for (const Vec2& v : p) grow(v.x, v.y);
     for (const CityMapData::Building& b : data.buildings) for (const Vec2& v : b.plan) grow(v.x, v.y);
@@ -659,7 +670,7 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
     }
     out << "</svg>\n";
     LOG_INFO << "[citymap] wrote " << path << " (" << drawn << " layers: " << layers.toList() << "; "
-             << g.edges.size() << " edges, " << data.curbLoops.size() << " curb loops, "
+             << data.nav.streetLinkCount() << " street links, " << data.curbLoops.size() << " curb loops, "
              << data.buildings.size() << " buildings, " << data.objects.size() << " objects)";
     return static_cast<bool>(out);
 }

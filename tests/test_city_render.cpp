@@ -10,6 +10,7 @@
 #include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/vehicle_lamps.h"   // the lit-lamp mask bits (ADR-0342)
 #include "../src/engine/world.h"
+#include "street_map_test_util.h"   // a test world's street map, from its road entities (ADR-0425)
 
 #include <algorithm>
 #include <cmath>
@@ -97,7 +98,7 @@ std::size_t carTotal(World& world, const CityRenderSystem& city) {
 
 TEST_CASE(city_render_builds_from_roadnet) {
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
 
     CityRenderParams p = cityParams();
     p.cars = 8;
@@ -123,7 +124,7 @@ TEST_CASE(city_render_builds_from_roadnet) {
 
 TEST_CASE(city_render_debug_widgets) {
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
 
     CityRenderParams p = cityParams();
     p.cars = 5;
@@ -156,7 +157,7 @@ TEST_CASE(debug_widgets_ring_the_real_car_when_cars_are_external) {
     // a ring around the ghost is an empty circle on the ground. Drivers with no
     // reported car draw no ring; pedestrian rings are unaffected.
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 4;
     p.pedestrians = 3;
@@ -218,7 +219,7 @@ TEST_CASE(external_peds_stop_the_instanced_bake_and_ring_real_walkers) {
     // must not bake instanced ped boxes (they'd draw twice), and a ped's debug
     // ring follows the bridge-reported REAL body — unreported walkers draw none.
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 2;
     p.pedestrians = 3;
@@ -271,7 +272,7 @@ TEST_CASE(commandeered_car_leaves_the_instanced_fleet) {
     // the sim releases its agent and the instanced fleet must drop that car (the
     // real Vehicle takes its visual place). Widgets drop it too.
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 5;
     p.pedestrians = 0;
@@ -287,7 +288,7 @@ TEST_CASE(commandeered_car_leaves_the_instanced_fleet) {
 
 TEST_CASE(city_render_car_colliders_scale_with_the_fleet) {
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
     CityRenderSystem city(cityParams());
     CHECK(city.build(world, nullptr));
 
@@ -318,7 +319,7 @@ TEST_CASE(city_render_build_fails_without_roads) {
 
 TEST_CASE(city_render_agents_move_when_stepped) {
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
 
     CityRenderParams p = cityParams();
     p.cars = 12;
@@ -354,7 +355,7 @@ TEST_CASE(city_render_agents_move_when_stepped) {
 
 TEST_CASE(city_render_signals_light_up_and_change_state) {
     World world;
-    world.add<RoadEntity>(world.create(), crossRoads());
+    testmap::addRoads(world, crossRoads());
 
     CityRenderParams p = cityParams();
     p.cars = 6;
@@ -403,7 +404,7 @@ TEST_CASE(car_headlights_track_the_night_clock) {
         StubUploader up;
         AssetManager assets(up);
         World world;
-        world.add<RoadEntity>(world.create(), squareLoop());
+        testmap::addRoads(world, squareLoop());
         CityRenderParams p = cityParams();
         p.cars = 6;
         p.pedestrians = 0;
@@ -443,7 +444,7 @@ TEST_CASE(car_brake_lights_come_on_when_holding) {
     StubUploader up;
     AssetManager assets(up);
     World world;
-    world.add<RoadEntity>(world.create(), crossRoads());   // signalled junction
+    testmap::addRoads(world, crossRoads());   // signalled junction
     CityRenderParams p = cityParams();
     p.cars = 8;
     p.pedestrians = 0;
@@ -462,7 +463,7 @@ TEST_CASE(car_turn_signals_flash_on_turns) {
     StubUploader up;
     AssetManager assets(up);
     World world;
-    world.add<RoadEntity>(world.create(), crossRoads());
+    testmap::addRoads(world, crossRoads());
     CityRenderParams p = cityParams();
     p.cars = 8;
     p.pedestrians = 0;
@@ -483,7 +484,7 @@ TEST_CASE(externally_owned_cars_draw_no_lamps) {
     // ADR-0062: a car owned by the vehicle bridge isn't drawn here, so it lights no
     // lamps here either (its real Vehicle owns them) — even at night.
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 5;
     p.pedestrians = 0;
@@ -516,7 +517,7 @@ TEST_CASE(signal_poles_stand_outside_the_carriageway) {
     net.graph.addEdge(0, 4, net.look.defaultWidth);
 
     World world;
-    world.add<RoadEntity>(world.create(), net);
+    testmap::addRoads(world, net);
     CityRenderSystem city(cityParams());
     CHECK(city.build(world, nullptr));
 
@@ -536,7 +537,7 @@ TEST_CASE(signal_poles_stand_outside_the_carriageway) {
 
 TEST_CASE(crosswalks_sit_at_junction_mouths) {
     World world;
-    world.add<RoadEntity>(world.create(), crossRoads());   // 4-arm cross, width 10
+    testmap::addRoads(world, crossRoads());   // 4-arm cross, width 10
     CityRenderSystem city(cityParams());
     CHECK(city.build(world, nullptr));
 
@@ -569,7 +570,7 @@ TEST_CASE(level_citysim_config_overrides_build_params) {
     // entity) decides the population — the agent lab runs 1 car + 1 walker while
     // grown.json keeps the default bustle. The entity must beat the constructor.
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
     CitySimConfig cfg;
     cfg.cars = 1;
     cfg.pedestrians = 1;
@@ -609,7 +610,7 @@ TEST_CASE(agent_lab_theta_circuit_is_navigable) {
     net.graph.addEdge(4, 5, net.look.defaultWidth);
 
     World world;
-    world.add<RoadEntity>(world.create(), net);
+    testmap::addRoads(world, net);
     CitySimConfig cfg;
     cfg.cars = 1;
     cfg.pedestrians = 1;
@@ -689,7 +690,7 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
     // per junction node, baked once at build) and the VISION CONES (one wedge per
     // moving agent, in its mode's group).
     World world;
-    world.add<RoadEntity>(world.create(), crossRoads());
+    testmap::addRoads(world, crossRoads());
     CityRenderParams p = cityParams();
     p.cars = 4;
     p.pedestrians = 3;
@@ -737,7 +738,7 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
 
 TEST_CASE(debug_navgraph_and_cones_vanish_when_the_hud_is_off) {
     World world;
-    world.add<RoadEntity>(world.create(), crossRoads());
+    testmap::addRoads(world, crossRoads());
     CityRenderParams p = cityParams();
     p.cars = 4;
     p.pedestrians = 3;
@@ -844,7 +845,7 @@ TEST_CASE(car_pose_probe_no_vibration_on_jagged_ground) {
         const double steps = 0.22 * (std::floor(x / 2.0) + std::floor(z / 2.0));
         return slope + std::fmod(std::fabs(steps), 0.44);
     };
-    world.add<RoadEntity>(world.create(), net);
+    testmap::addRoads(world, net, ground);
 
     CityRenderParams params = cityParams();
     params.cars = 4;
@@ -888,7 +889,7 @@ TEST_CASE(density_population_scales_with_the_graph) {
     // counts derived from lane-km / sidewalk-km, so a bigger city gets more
     // traffic from the same recipe, and explicit counts stay overrides.
     auto build = [](RoadEntity net, int cars, Real perLaneKm, World& world) {
-        world.add<RoadEntity>(world.create(), std::move(net));
+        testmap::addRoads(world, std::move(net));
         CityRenderParams p = cityParams();
         p.cars = cars;
         p.pedestrians = -1;
@@ -972,8 +973,8 @@ TEST_CASE(city_sim_rate_default_is_every_step) {
     // localHz 0 must reproduce the historical tick exactly — every existing
     // level and gate depends on it.
     World a, b;
-    a.add<RoadEntity>(a.create(), squareLoop());
-    b.add<RoadEntity>(b.create(), squareLoop());
+    testmap::addRoads(a, squareLoop());
+    testmap::addRoads(b, squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 6; p.pedestrians = 0; p.seed = 5;
     p.wander = true;              // drive continuously (no schedule window)
@@ -996,8 +997,8 @@ TEST_CASE(city_sim_rate_30hz_covers_the_same_ground) {
     // Half the ticks, twice the dt: the fleet must travel a comparable
     // distance (coarser integration, not slower traffic).
     World a, b;
-    a.add<RoadEntity>(a.create(), squareLoop());
-    b.add<RoadEntity>(b.create(), squareLoop());
+    testmap::addRoads(a, squareLoop());
+    testmap::addRoads(b, squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 8; p.pedestrians = 0; p.seed = 5;
     p.wander = true;              // drive continuously (no schedule window)
@@ -1021,7 +1022,7 @@ TEST_CASE(city_sim_rate_poses_keep_moving_between_ticks) {
     // baked poses must still advance (extrapolated along heading), or cars
     // freeze for a step and then teleport.
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 8; p.pedestrians = 0; p.seed = 5;
     p.wander = true;              // drive continuously (no schedule window)
@@ -1082,7 +1083,7 @@ TEST_CASE(city_sim_far_tier_refreshes_on_a_clock_not_a_tick_count) {
         big.graph.addEdge(1, 2, big.look.defaultWidth);
         big.graph.addEdge(2, 3, big.look.defaultWidth);
         big.graph.addEdge(3, 0, big.look.defaultWidth);
-        world.add<RoadEntity>(world.create(), big);
+        testmap::addRoads(world, big);
         CityRenderParams p = cityParams();
         p.cars = 60; p.pedestrians = 0; p.seed = 5;
         p.wander = true;
@@ -1135,7 +1136,7 @@ TEST_CASE(fleet_bridge_holds_a_promotable_body_per_variant) {
     AssetManager assets(up);
 
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 8;
     p.pedestrians = 0;
@@ -1242,7 +1243,7 @@ TEST_CASE(fleet_length_comes_from_the_asset_not_from_cpp) {
     AssetManager assets(up);
 
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 10;               // more drivers than slots: the mapping must wrap
     p.pedestrians = 0;
@@ -1282,7 +1283,7 @@ TEST_CASE(fleet_bridge_reports_no_promotable_body_without_a_script) {
     AssetManager assets(up);
 
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
     CityRenderParams p;                // deliberately NO vehicle catalogue
     p.cars = 4;
     p.pedestrians = 0;
@@ -1304,7 +1305,7 @@ TEST_CASE(city_clock_follows_the_sky_in_lockstep) {
     StubUploader up;
     AssetManager assets(up);
     World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
+    testmap::addRoads(world, squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 12;
     p.pedestrians = 8;

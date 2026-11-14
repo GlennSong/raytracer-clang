@@ -75,7 +75,8 @@ private:
     struct NodePlan { int groups = 0; double offset = 0; std::vector<double> lead; };   // lead: per group, its arrow's seconds (0: none)
     std::vector<int> phase_;    // per link: -1 = no signal, else group index
     std::vector<char> leftArrow_;   // per link: its left turn has a lead arrow
-    std::vector<int> nodeOf_;   // per link: the junction node it enters
+    std::vector<int> nodeOf_;   // per link: the key of the junction's plan it enters (see planOfNode_)
+    std::vector<int> planOfNode_;   // per node: its junction's plan key (its junction's lowest lit point; else itself)
     std::unordered_map<int, NodePlan> nodes_;   // per signalled junction
     SignalTiming t_;
     double clock_ = 0.0;

@@ -148,6 +148,25 @@ std::string insertStreetNamesText(const std::string& text, const std::vector<Pla
 std::string insertJunctionControlsText(const std::string& text, const std::vector<std::pair<std::string, std::string>>& controls,
                                        std::string* err = nullptr);
 
+// ---- a junction's points (ADR-0425) -------------------------------------------------------------------------------------
+// A junction the layout spread over several points (it has stretches of road inside it) states which roads meet at each
+// (road_graph_spec.h PlannedNode): what the street map joins its arms and inside stretches by. The planner writes them as
+// it lays out a city (deriveLayout, planControls). A file whose layout was written before them gets them ONCE from the
+// one-off tool (`lanes_tool layout <file> --nodes --write`): the nodes as the layout finds them (layoutJunctionFacts:
+// today's inference, `source`'s end tolerance), each placed in the one junction of the file that holds all its points (an
+// arm there, or an inside stretch running past it, to the centimetre). `notes`: a node no junction holds, an arm at no
+// node or at two, an inside stretch's end at no node.
+struct JunctionNodes {
+    std::string junction;
+    std::vector<PlannedNode> nodes;
+};
+std::vector<JunctionNodes> junctionNodes(const RoadLabGraph& g, LayoutSource source, std::vector<std::string>* notes = nullptr);
+// WRITES THEM INTO A ROAD FILE'S TEXT IN PLACE: a "nodes" member in each listed junction that has none and has nodes (the
+// file's own list, `g` read from it). Nothing else moves; the bake key (keyedRoadFileText) and the lane graph's key
+// (junctionPlanKey) do not see it. Empty (with `err`) when the list does not fit.
+std::string insertJunctionNodesText(const std::string& text, const RoadLabGraph& g, const std::vector<JunctionNodes>& nodes,
+                                    std::string* err = nullptr);
+
 }  // namespace roads::lanes
 }  // namespace engine
 

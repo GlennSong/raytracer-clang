@@ -63,7 +63,61 @@ constexpr const char* kBuiltLayerAbsent =
     "the built layer: lanes, connections, junction heights, the paint's boxes and stop lines are not here (a planned-only "
     "model, read from the road file: assembleRoadModel adds them from a road build; cache/roadmodel holds one)";
 
+// A ROAD'S CENTRE LINE between two stations of its spine, its straight runs thinned to within kLineTolerance, appended to
+// the model's lines with each point's station (ADR-0425).
+Range appendLine(RoadModel& m, const EdgeSpec& e, Real from, Real to) {
+    Range out;
+    if (e.xy.size() < 2) return out;
+    std::vector<Vec2> pts{roads::lanes::pointAt(e.xy, e.s, from)};
+    std::vector<Real> st{from};
+    for (std::size_t i = 0; i < e.xy.size(); ++i)
+        if (e.s[i] > from + 1e-6 && e.s[i] < to - 1e-6) {
+            pts.push_back(e.xy[i]);
+            st.push_back(e.s[i]);
+        }
+    pts.push_back(roads::lanes::pointAt(e.xy, e.s, to));
+    st.push_back(to);
+    out.first = static_cast<uint32_t>(m.linePoints.size());
+    for (std::size_t i : simplifyRun(pts, kLineTolerance)) {
+        m.linePoints.push_back(pts[i]);
+        m.lineStations.push_back(st[i]);
+    }
+    out.count = static_cast<uint32_t>(m.linePoints.size()) - out.first;
+    return out;
+}
+
+// A ROAD'S CROSS-SECTION, from its class and its own lanes (`fits` out: false when its stated kerb parking does not fit).
+ModelSection sectionOf(const RoadLabGraph& g, const EdgeSpec& e, bool* fits) {
+    const RoadClassSpec& c = g.cls(e);
+    ModelSection s;
+    s.roadClass = e.cls;
+    s.klass = roads::lanes::classOf(e);
+    s.lanesForward = e.lanes.fwd;
+    s.lanesBackward = e.lanes.back;
+    s.laneWidth = e.lanes.w;
+    s.medianGap = e.lanes.gap;
+    s.median = c.median;
+    s.shoulder = c.shoulder;
+    s.sidewalk = c.sidewalk;
+    s.track = c.track;
+    s.footway = c.footway;
+    // the kerb parking the road states (its class's, or its own), where it fits (ADR-0418), and where its band lies
+    *fits = true;
+    s.parking = c.track || c.footway ? 0.0 : roads::lanes::kerbParking(g, e, fits);
+    if (c.track || c.footway) *fits = true;
+    if (s.parking > 0) {
+        double offset = 0, width = 0;
+        if (roadSpecParkingBand(roads::lanes::streetSection(g, e), +1, offset, width)) s.parkingOffset = offset;
+    }
+    return s;
+}
+
 }  // namespace
+
+bool junctionLit(const ModelJunction& J) {
+    const AttachmentKind* pole = attachmentKinds().find(attachmentKinds().use("signal_pole"));
+    return !J.control.empty() && pole && !pole->controls.empty() && pole->standsFor(J.control);
+}
 
 // ---- the planned layer and the model of a build -------------------------------------------------------------------------
 
@@ -102,7 +156,27 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
             J.arms.push_back(arm);
         }
         for (const std::array<int, 2>& t : pj.through) J.through.push_back({static_cast<uint32_t>(t[0]), static_cast<uint32_t>(t[1])});
-        for (const roads::lanes::PlannedStretch& st : pj.inside) J.inside.push_back(ModelStretch{st.road, st.from, st.to});
+        for (const roads::lanes::PlannedStretch& st : pj.inside) {
+            // a stretch of road inside the junction, with what the street map needs to drive it (ADR-0425)
+            ModelStretch in{st.road, st.from, st.to};
+            const std::map<std::string, int>::const_iterator ei = g.index.find(st.road);
+            if (ei != g.index.end()) {
+                const EdgeSpec& e = g.edges[static_cast<std::size_t>(ei->second)];
+                in.edge = static_cast<uint32_t>(ei->second);
+                in.line = appendLine(m, e, st.from, st.to);
+                bool fits = true;
+                in.section = sectionOf(g, e, &fits);
+                in.oneWay = (e.lanes.fwd > 0) != (e.lanes.back > 0);
+            }
+            J.inside.push_back(in);
+        }
+        for (const roads::lanes::PlannedNode& pn : pj.nodes) {
+            ModelNode n;
+            n.at = pn.at;
+            for (const roads::lanes::PlannedNodePoint& p : pn.points)
+                n.points.push_back(ModelNodePoint{static_cast<uint32_t>(g.index.at(p.road)), p.at});
+            J.nodes.push_back(n);
+        }
         m.junctions.push_back(std::move(J));
     }
 
@@ -117,23 +191,10 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
         S.to = st.to;
         S.junctions = {junctionOf(st.junctions[0]), junctionOf(st.junctions[1])};
         const EdgeSpec& e = g.edges[S.edge];
-        const RoadClassSpec& c = g.cls(e);
-        S.section.roadClass = e.cls;
-        S.section.klass = roads::lanes::classOf(e);
-        S.section.lanesForward = e.lanes.fwd;
-        S.section.lanesBackward = e.lanes.back;
-        S.section.laneWidth = e.lanes.w;
-        S.section.medianGap = e.lanes.gap;
-        S.section.median = c.median;
-        S.section.shoulder = c.shoulder;
-        S.section.sidewalk = c.sidewalk;
-        S.section.track = c.track;
-        S.section.footway = c.footway;
         {
-            // the kerb parking the road states (its class's, or its own), where it fits (ADR-0418)
             bool fits = true;
-            S.section.parking = c.track || c.footway ? 0.0 : roads::lanes::kerbParking(g, e, &fits);
-            if (!fits && !c.track && !c.footway && parkingRefused.insert(S.edge).second)
+            S.section = sectionOf(g, e, &fits);
+            if (!fits && parkingRefused.insert(S.edge).second)
                 m.problems.push_back(fmt("road %s (%s): it states %.1f m of kerb parking, which would leave a travel lane under %.1f m; none is "
                                          "built", e.id.c_str(), e.cls.c_str(), e.lanes.parking, roads::lanes::kMinTravelLane));
         }
@@ -143,15 +204,7 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
         S.lotsTo = e.lotsTo;
         S.frontageOf = e.frontageOf;
         // its centre line: the road's spine from `from` to `to`, its straight runs thinned to within kLineTolerance
-        if (e.xy.size() >= 2) {
-            std::vector<Vec2> pts{roads::lanes::pointAt(e.xy, e.s, st.from)};
-            for (std::size_t i = 0; i < e.xy.size(); ++i)
-                if (e.s[i] > st.from + 1e-6 && e.s[i] < st.to - 1e-6) pts.push_back(e.xy[i]);
-            pts.push_back(roads::lanes::pointAt(e.xy, e.s, st.to));
-            S.line.first = static_cast<uint32_t>(m.linePoints.size());
-            for (std::size_t i : simplifyRun(pts, kLineTolerance)) m.linePoints.push_back(pts[i]);
-            S.line.count = static_cast<uint32_t>(m.linePoints.size()) - S.line.first;
-        }
+        S.line = appendLine(m, e, st.from, st.to);
         m.streets.push_back(std::move(S));
     }
     // where a street only carries on into another (no junction there: ADR-0419), as the road file states it
@@ -180,6 +233,9 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
                 E.kind = RampEndKind::Anchored;
                 E.hostLane = hl != e.anchorLanes.end() ? hl->second : std::string();
                 E.hostStation = host ? roads::lanes::anchorStation(*host, a) : kNotStated;
+                // where the ramp's own spine reaches the gore (its composed geometry: lane_expand.h composeRamp)
+                const int gore = e.anchorIdx[end];
+                if (gore >= 0 && static_cast<std::size_t>(gore) < e.s.size()) E.rampStation = e.s[static_cast<std::size_t>(gore)];
                 E.length = end == 0 ? a.decel : a.aux;
                 E.taper = a.taper > 0 ? a.taper : (host ? 30 * host->lanes.w : 0.0);
             } else if (!a.edge.empty()) {
@@ -1358,7 +1414,8 @@ template <class T> constexpr bool isRecord() {
     return std::is_same<T, ModelArm>::value || std::is_same<T, ModelStretch>::value || std::is_same<T, ModelJunction>::value ||
            std::is_same<T, ModelSection>::value || std::is_same<T, ModelStreet>::value || std::is_same<T, ModelLaneSpan>::value ||
            std::is_same<T, ModelLane>::value || std::is_same<T, ModelConnection>::value || std::is_same<T, ModelRampEnd>::value ||
-           std::is_same<T, ModelRamp>::value || std::is_same<T, ModelCrossing>::value || std::is_same<T, ModelAttachment>::value;
+           std::is_same<T, ModelRamp>::value || std::is_same<T, ModelCrossing>::value || std::is_same<T, ModelAttachment>::value ||
+           std::is_same<T, ModelNode>::value || std::is_same<T, ModelNodePoint>::value;
 }
 
 struct Writer {
@@ -1412,9 +1469,13 @@ struct Reader {
 template <class IO, class Arm> void fields(IO& io, Arm& a, ModelArm*) {
     io(a.street); io(a.road); io(a.station); io(a.spineIn); io(a.heading); io(a.regulations); io(a.boxEdge); io(a.stopLine);
 }
-template <class IO, class S> void fields(IO& io, S& s, ModelStretch*) { io(s.road); io(s.from); io(s.to); }
+template <class IO, class S> void fields(IO& io, S& s, ModelStretch*) {
+    io(s.road); io(s.from); io(s.to); io(s.edge); io(s.line); io(s.section); io(s.oneWay);
+}
+template <class IO, class P> void fields(IO& io, P& p, ModelNodePoint*) { io(p.edge); io(p.station); }
+template <class IO, class N> void fields(IO& io, N& n, ModelNode*) { io(n.at); io(n.points); }
 template <class IO, class J> void fields(IO& io, J& j, ModelJunction*) {
-    io(j.id); io(j.at); io(j.height); io(j.arms); io(j.through); io(j.control); io(j.why); io(j.inside); io(j.boxes);
+    io(j.id); io(j.at); io(j.height); io(j.arms); io(j.through); io(j.control); io(j.why); io(j.inside); io(j.nodes); io(j.boxes);
 }
 template <class IO, class S> void fields(IO& io, S& s, ModelSection*) {
     io(s.roadClass);
@@ -1422,7 +1483,7 @@ template <class IO, class S> void fields(IO& io, S& s, ModelSection*) {
     io(klass);
     s.klass = static_cast<RoadClass>(klass);
     io(s.lanesForward); io(s.lanesBackward); io(s.laneWidth); io(s.medianGap); io(s.median); io(s.shoulder); io(s.sidewalk);
-    io(s.parking); io(s.track); io(s.footway);
+    io(s.parking); io(s.parkingOffset); io(s.track); io(s.footway);
 }
 template <class IO, class S> void fields(IO& io, S& s, ModelStreet*) {
     io(s.id); io(s.road); io(s.edge); io(s.from); io(s.to); io(s.junctions); io(s.carriesOn); io(s.section); io(s.oneWay); io(s.speedLimit);
@@ -1446,7 +1507,7 @@ template <class IO, class E> void fields(IO& io, E& e, ModelRampEnd*) {
     uint8_t kind = static_cast<uint8_t>(e.kind);
     io(kind);
     e.kind = static_cast<RampEndKind>(kind);
-    io(e.host); io(e.hostLane); io(e.hostStation); io(e.length); io(e.taper);
+    io(e.host); io(e.hostLane); io(e.hostStation); io(e.rampStation); io(e.length); io(e.taper);
 }
 template <class IO, class R> void fields(IO& io, R& r, ModelRamp*) {
     io(r.edge); io(r.ends); io(r.landingPlanned); io(r.landingStreet); io(r.landingJoins); io(r.landingCarriageway); io(r.landingCrossing);
@@ -1455,7 +1516,8 @@ template <class IO, class X> void fields(IO& io, X& x, ModelCrossing*) { io(x.a)
 
 template <class IO, class M> void modelFields(IO& io, M& m) {
     io(m.name); io(m.built); io(m.junctions); io(m.streets); io(m.lanes); io(m.connections); io(m.ramps); io(m.crossings); io(m.points);
-    io(m.along); io(m.heights); io(m.spineStations); io(m.linePoints); io(m.attachments); io(m.notStated); io(m.problems);
+    io(m.along); io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.notStated);
+    io(m.problems);
 }
 
 }  // namespace
