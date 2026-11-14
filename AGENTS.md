@@ -471,6 +471,51 @@ Two git behaviours that make this look worse than it is: `git branch -d` tests "
 on an older one; and a checkout is blocked by a locally-modified file the target branch
 deletes — save that file aside and restore it after, never stash-and-forget.
 
+## Helpers (Agent Rule)
+
+A helper is a sub-agent the main session hands a task to. Glenn, 2026-11-14, on starting a fresh helper
+for every step: "It's like hiring and firing a complete engineer each time you want a new feature."
+
+**Keep the helper that knows the code.**
+- One long-lived helper per area of the code (roads, driving, the city-building code). Its next task,
+  a fix to its own work, and review comments on it all go to that same helper. Never restart a helper
+  whose next task is related to what it was just doing.
+- Replace it only when its memory has been compressed too often to trust.
+- Each area has a short orientation page in `docs/` (what each file holds, who reads what, the rules
+  that apply), written by the helper that knows it, so a new helper starts warm.
+- A reviewer is the exception: it starts fresh on purpose, because the author defends its own code.
+
+**Run independent work in parallel.**
+- Only when the pieces are independent: no file edited by two helpers. Shared core files (the road
+  model, the lane graph headers) have one owner at a time.
+- Only one helper at a time may make a change that forces levels to re-bake.
+- At most two code-writing helpers at once. Reviewers only read and do not count.
+
+**Where each one works.**
+- The area's helper works in Glenn's folder, on the one working branch.
+- A parallel helper gets a temporary work tree, `.claude/worktrees/tmp-<task>`, on a local branch
+  `tmp/<task>` cut from the working branch's latest commit, with its own build folder on disk. This
+  is the one exception to "one working branch". The branch is never pushed.
+- A helper in a work tree changes nothing outside it, pushes nothing, and stops only its own
+  processes. It bakes only the small test scene and the levels its task names.
+
+**Review, then merge.**
+- A fresh reviewer reads each helper's change on its own. The main session builds it and runs the
+  tests itself before merging.
+- Merges go into the working branch one at a time. After each, the other work trees take the new
+  state before their own review.
+- Pinned test values (state hashes) are retaken once, in Glenn's folder after the merge, never in a
+  work tree.
+- A failed review blocks the merge, except for a problem Glenn has already agreed to defer; that is
+  written into the commit.
+- When two changes collide, the helper that owns the area resolves it and it is reviewed again.
+
+**Afterwards.** The work tree, its branch, its build folder and its bakes are deleted straight after
+the merge. Glenn is told when a parallel helper starts (what, where) and when it is merged.
+
+**Keep tasks short.** Split a big step into pieces of about an hour. Iterate on a small test scene
+that builds in seconds; run the full levels once at the end.
+
 ## Coding Standards
 
 ### Naming Conventions

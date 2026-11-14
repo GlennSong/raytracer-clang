@@ -343,6 +343,15 @@ struct RoadLabGraph {
     // THE STREETS AS PLANNED (PlannedStreet); `listsStreets`: the graph carried the list.
     std::vector<PlannedStreet> streets;
     bool listsStreets = false;
+    // THE LANE LEVEL'S RULES (ADR-0426), stated at the graph's top level, "lane_rules": {"solid_before_stop_line": 20.0}:
+    // how far back from a stop line the lines between lanes running the same way are solid (no changing lanes on the
+    // approach to a junction). The lane level (lanes/lane_level.h) reads them; nothing of the bake does (the bake key leaves
+    // them out: road_layout.h keyedRoadFileText). `statesLaneRules`: the graph carried the member.
+    struct LaneRules {
+        double solidBeforeStopLine = 0;
+    };
+    LaneRules laneRules;
+    bool statesLaneRules = false;
     bool designed() const;               // every road with a spine carries its planned profile
     std::map<std::string, int> index;    // edge id -> position in edges
     // the planned crossing of edges a and b nearest p (within `within` m), or null

@@ -14,9 +14,10 @@ namespace {
 
 // The section's magic and the version this build writes and reads (2: junctions list their arriving and leaving lanes;
 // 3: each path lists its crossing points; 4: a regulation covers a stretch, from and to, issue #240; 5: each path's bend
-// profile, issue #281; 6: each crossing point's vehicle tags on each side, ADR-0412).
+// profile, issue #281; 6: each crossing point's vehicle tags on each side, ADR-0412; 7: each path's and junction's ids on
+// the road model, ADR-0426).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 6;
+constexpr uint32_t kVersion = 7;
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
 // A closed outline (a junction's box, a crosswalk) has at least this many corners; a track's line two points.
@@ -137,6 +138,9 @@ void putItem(BinWriter& w, const Path& p) {
     putItem(w, p.next);
     putItem(w, p.regulations);
     putItem(w, p.crossings);
+    w.put(p.street);
+    w.put(p.modelLane);
+    w.put(p.modelTurn);
 }
 void putItem(BinWriter& w, const Section& s) {
     putItem(w, s.lanes);
@@ -151,6 +155,7 @@ void putItem(BinWriter& w, const Junction& j) {
     putItem(w, j.box);
     putItem(w, j.arriving);
     putItem(w, j.leaving);
+    w.put(j.modelJunction);
 }
 void putItem(BinWriter& w, const CrossingPoint& c) {
     putItem(w, c.a);
@@ -214,12 +219,12 @@ bool getItem(BinReader& r, Path& p) {
            getItem(r, p.curve) && r.get(p.length) && r.get(p.width) && r.get(p.tightestRadius) &&
            getItem(r, p.bends) && r.get(p.speedLimit) && getItem(r, p.section) && r.get(p.indexInSection) && getItem(r, p.junction) &&
            getItem(r, p.from) && r.get(p.waitInsideAt) && getItem(r, p.next) && getItem(r, p.regulations) &&
-           getItem(r, p.crossings);
+           getItem(r, p.crossings) && r.get(p.street) && r.get(p.modelLane) && r.get(p.modelTurn);
 }
 bool getItem(BinReader& r, Section& s) { return getItem(r, s.lanes) && getItem(r, s.lines) && r.get(s.roadClass); }
 bool getItem(BinReader& r, Junction& j) {
     return getItem(r, j.connectors) && getItem(r, j.crossings) && getItem(r, j.crosswalks) && r.get(j.control) &&
-           getItem(r, j.box) && getItem(r, j.arriving) && getItem(r, j.leaving);
+           getItem(r, j.box) && getItem(r, j.arriving) && getItem(r, j.leaving) && r.get(j.modelJunction);
 }
 bool getItem(BinReader& r, CrossingPoint& c) {
     return getItem(r, c.a) && getEnum(r, c.otherSide) && getEnum(r, c.meeting) && r.get(c.other) &&
@@ -483,7 +488,8 @@ bool operator==(const Path& a, const Path& b) {
            a.curve == b.curve && a.length == b.length && a.width == b.width && a.tightestRadius == b.tightestRadius &&
            a.bends == b.bends && a.speedLimit == b.speedLimit && a.section == b.section && a.indexInSection == b.indexInSection &&
            a.junction == b.junction && a.from == b.from && a.waitInsideAt == b.waitInsideAt && a.next == b.next &&
-           a.regulations == b.regulations && a.crossings == b.crossings;
+           a.regulations == b.regulations && a.crossings == b.crossings && a.street == b.street && a.modelLane == b.modelLane &&
+           a.modelTurn == b.modelTurn;
 }
 bool operator==(const Section& a, const Section& b) {
     return a.lanes == b.lanes && a.lines == b.lines && a.roadClass == b.roadClass;
@@ -499,7 +505,8 @@ bool operator==(const Crosswalk& a, const Crosswalk& b) {
 bool operator==(const Track& a, const Track& b) { return a.line == b.line && a.railTrack == b.railTrack; }
 bool operator==(const Junction& a, const Junction& b) {
     return a.connectors == b.connectors && a.crossings == b.crossings && a.crosswalks == b.crosswalks &&
-           a.control == b.control && a.box == b.box && a.arriving == b.arriving && a.leaving == b.leaving;
+           a.control == b.control && a.box == b.box && a.arriving == b.arriving && a.leaving == b.leaving &&
+           a.modelJunction == b.modelJunction;
 }
 bool operator==(const Regulation& a, const Regulation& b) {
     return a.kind == b.kind && a.path == b.path && a.from == b.from && a.to == b.to && a.value == b.value;
@@ -1206,6 +1213,14 @@ std::string dumpPath(const LaneGraph& g, PathId id) {
                    namesOf(g.laneTagNames, p.laneTags).c_str(), namesOf(g.vehicleTagNames, p.vehicleTags).c_str(),
                    p.speedLimit);
     }
+    // where it is on the road model (ADR-0426), when it says
+    if (p.street != kNoIndex || p.modelLane != kNoIndex || p.modelTurn != kNoIndex) {
+        out += "  on the road model:";
+        if (p.street != kNoIndex) out += fmt(" street %u", p.street);
+        if (p.modelLane != kNoIndex) out += fmt(" lane %u", p.modelLane);
+        if (p.modelTurn != kNoIndex) out += fmt(" turn %u", p.modelTurn);
+        out += "\n";
+    }
     out += "  curve:";
     const std::size_t curveEnd = std::min({g.points.size(), g.along.size(), g.heights.size(),
                                            static_cast<std::size_t>(safeEnd(p.curve, g.points.size()))});
@@ -1301,9 +1316,10 @@ std::string dumpText(const LaneGraph& g) {
     for (uint32_t i = 0; i < g.paths.size(); ++i) out += dumpPath(g, PathId(i));
     for (uint32_t j = 0; j < g.junctions.size(); ++j) {
         const Junction& jn = g.junctions[j];
-        out += fmt("junction %u: control %s, crossing points %u to %u, crosswalks %u to %u\n", j,
+        out += fmt("junction %u: control %s, crossing points %u to %u, crosswalks %u to %u%s\n", j,
                    nameOf(g.controlNames, jn.control).c_str(), jn.crossings.first, jn.crossings.end(),
-                   jn.crosswalks.first, jn.crosswalks.end());
+                   jn.crosswalks.first, jn.crosswalks.end(),
+                   jn.modelJunction != kNoIndex ? fmt(", the road model's junction %u", jn.modelJunction).c_str() : "");
         out += "  connectors:";
         for (uint32_t k = jn.connectors.first; k < safeEnd(jn.connectors, g.junctionConnectors.size()); ++k)
             out += fmt(" %u", g.junctionConnectors[k].index);

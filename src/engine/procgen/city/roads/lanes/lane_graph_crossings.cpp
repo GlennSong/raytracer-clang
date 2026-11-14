@@ -616,9 +616,21 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
         std::sort(bodyIndex.entries.begin(), bodyIndex.entries.end());
     }
 
-    // ---- two paths: every connector against every path near it ----
+    // ---- two paths: every connector against every path near it; and two lanes that part from one path or join into one
+    // (a lane leaving its host, or merging into it: ADR-0426) ----
+    std::vector<char> branching(n, 0);   // a lane that parts from, or joins into, a path another lane does too
+    for (uint32_t p = 0; p < n; ++p) {
+        for (const std::vector<uint32_t>* sharing : {&leadsTo[p], &ledFrom[p]}) {
+            uint32_t lanes = 0;
+            for (uint32_t q : *sharing) lanes += g.paths[q].kind == PathKind::Lane ? 1u : 0u;
+            if (lanes < 2) continue;
+            for (uint32_t q : *sharing)
+                if (g.paths[q].kind == PathKind::Lane) branching[q] = 1;
+        }
+    }
     for (uint32_t c = 0; c < n; ++c) {
-        if (g.paths[c].kind != PathKind::Connector) continue;
+        const bool laneFirst = g.paths[c].kind == PathKind::Lane;
+        if (laneFirst && !branching[c]) continue;
         const Sampled& A = samples[c];
         std::vector<uint64_t> keys;
         for (const Vec2& q : A.xy) {
@@ -641,8 +653,12 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
             near.erase(std::unique(near.begin(), near.end()), near.end());
         }
         for (uint32_t q : near) {
-            // (a pair of connectors is taken once, from the lower; a lane never starts a pair)
+            // (a pair of connectors is taken once, from the lower; a lane starts a pair only with a higher lane it parts
+            // from one path with, or joins into one with)
             if (q == c || (g.paths[q].kind == PathKind::Connector && q < c)) continue;
+            if (laneFirst && (g.paths[q].kind != PathKind::Lane || q < c ||
+                              !(shareOne(ledFrom[c], ledFrom[q]) || shareOne(leadsTo[c], leadsTo[q]))))
+                continue;
             const Sampled& B = samples[q];
             const double reach = A.halfWidth + B.halfWidth + margin;
             std::vector<CrossingPoint> found;
@@ -882,7 +898,8 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
                 continue;
             inside = pointInPolygon(outlines[j], at) || distToPolyline(at, outlines[j], true) <= kJunctionEndReach;
         }
-        if (!inside)
+        // (two lanes meet out on the road by design: one leaving or merging into its host)
+        if (!inside && (pa.kind == PathKind::Connector || pb.kind == PathKind::Connector))
             addProblem(rep.problems, "crossing points: %s and %s meet at (%.1f, %.1f) (%s, crossing point %u), outside every "
                                      "junction's outline", an.c_str(), bn.c_str(), at.x, at.y, kindWord(x.meeting), c);
     }

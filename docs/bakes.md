@@ -15,7 +15,7 @@ Everything lives under `cache/` in the checkout the game runs from (each worktre
 | `cache/terrain/<hash>.pyramid` | the baked ground mesh (terrain with every lot flatten folded in) | the ground's content, flattens included | 145–385 MB |
 | `cache/terrain/maps_*.bin`, `weather_*.bin` | the cover maps, the weathered ground | the terrain settings | ~65 MB each; slow to remake |
 | `cache/population/<hash>.pop` | who lives and works where | places, street graph, agents, buses | small |
-| `cache/lanegraph/<key>.lanegraph` | the **lane graph** the new driving model drives on (levels with `citysim.driving = "v2"` only): every lane and every path through a junction. A bundle file holding one graph. Built at the first load from the roads (the road build again, ~16 s on the traffic lab), read in a fraction of a second after (`lane_graph_cache.h`) | the city producer's key (lanes tag + road graph), the fleet's vehicle sizes by tag, `kLaneGraphBuildVersion` | a few MB |
+| `cache/lanegraph/<key>.lanegraph` | the **lane graph** the new driving model drives on (levels with `citysim.driving = "v2"` only): every lane and every path through a junction, built from the road model (ADR-0426). A bundle file holding one graph. Built at the first load from the roads (the road build again, ~45 s on the traffic lab with the lane level), read in a fraction of a second after (`lane_graph_cache.h`) | the city producer's key (lanes tag + road graph), the road file's lane-level facts the bake key leaves out (junctions, streets, divided pairs, `lane_rules`: `laneLevelKey`), the turn table's hash (`assets/data/lane_turns.json`), the fleet's vehicle sizes by tag, `kLaneGraphBuildVersion` | a few MB |
 | `cache/roadmodel/<key>.roadmodel` | the **road model** (ADR-0417, `road_model.h`): junctions, streets, lanes and what connects them, with ids. Nothing reads it yet. Built from the roads by `obtainLevelRoadModel` | the city producer's key, the road file's layout (which that key leaves out), `kRoadModelVersion` | a few MB |
 | `*.uses` beside the terrain, population, lane graph and road model files | which levels used the file, and when (ADR-0256) | | tiny |
 | `cache/fields`, `cache/road_signs`, `cache/clouds` | textures, sign atlases, cloud fields | their own inputs | small |
@@ -105,8 +105,9 @@ stage reads against its key.
 - **`kLotsBuildTag`**: any change to what the lot pass OUTPUTS — sculpting (parks, quad, sports field),
   recipes and massing, lot selection (campus, big box), grading, anything stored in a `LotBuilding` or a
   part mesh.
-- **`kLaneGraphBuildVersion`** (`lane_graph_build.h`): any change to the lane graph the driving model reads (which
-  turns exist, a connector's shape, the builder's tolerances). It keys only the `cache/lanegraph` files, so a bump
+- **`kLaneGraphBuildVersion`** (`lane_graph_build.h`): any change to the lane graph the driving model reads (a
+  connector's shape, how the table is built from the road model; which turns exist is the turn table's, which keys
+  itself). It keys only the `cache/lanegraph` files, so a bump
   rebuilds those at the next v2 load and touches no bake.
 - **`kLanesBuildTag`**: any change to the roads the lanes builder produces. **`kRailBuildTag`**: any change
   to the track and stations (keyed only by graphs with a track class).

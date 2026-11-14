@@ -493,6 +493,15 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                 if (!c.empty() && !streetIds.count(c)) throw std::runtime_error("street " + st.id + ": carries on into unknown street " + c);
     }
     if (spec.contains("carry_on_control")) g.carryOnControl = spec["carry_on_control"].get<std::string>();
+    if (spec.contains("lane_rules")) {
+        // THE LANE LEVEL'S RULES (ADR-0426): every rule it reads, stated
+        const nlohmann::json& lr = spec["lane_rules"];
+        if (!lr.is_object() || !lr.contains("solid_before_stop_line") || !lr["solid_before_stop_line"].is_number() ||
+            lr["solid_before_stop_line"].get<double>() < 0)
+            throw std::runtime_error("lane_rules: wants {\"solid_before_stop_line\": metres, zero or more}");
+        g.laneRules.solidBeforeStopLine = lr["solid_before_stop_line"].get<double>();
+        g.statesLaneRules = true;
+    }
     if (spec.contains("divided")) {
         // THE DIVIDED ROADS (DividedPair): two roads that exist, each in one pair at most
         g.listsDivided = true;

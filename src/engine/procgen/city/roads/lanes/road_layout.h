@@ -100,13 +100,18 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
 // goes with the comma before it (or, the first of its object, the one after it), so text the layout was inserted into
 // comes back byte for byte. Text with none of them is returned as it was.
 std::string stripLayoutText(const std::string& text);
-// WHAT THE CITY'S BAKE KEY HASHES (city_producer.cpp): the file with its "streets", "divided" and "junctions" lists
-// taken out whole -- the junctions with their controls and signs too (ADR-0421: no stage of the bake reads any of
-// them; the lane graph, which reads the controls and signs, keys them itself, junctionPlanKey).
+// WHAT THE CITY'S BAKE KEY HASHES (city_producer.cpp): the file with its "streets", "divided", "junctions" and
+// "lane_rules" members taken out whole -- the junctions with their controls and signs too (ADR-0421: no stage of the
+// bake reads any of them; the lane graph, which reads them, keys them itself, laneLevelKey, ADR-0426).
 std::string keyedRoadFileText(const std::string& text);
-// THE CONTROL PLAN AS THE LANE GRAPH READS IT, hashed: the road file's "junctions" list (each junction's control, its
-// arms and their signs), canonically dumped; 0 for a file with none. Mixed into the lane graph's cache key.
-uint64_t junctionPlanKey(const nlohmann::json& spec);
+// WHAT THE LANE LEVEL READS OF A ROAD FILE THAT THE BAKE KEY LEAVES OUT (ADR-0426), hashed: its "junctions" (without
+// their points, "nodes", which only the street map reads), "streets", "divided" and "lane_rules" members, as dumped; 0
+// for a file with none. Mixed into the lane graph's cache key.
+uint64_t laneLevelKey(const nlohmann::json& spec);
+// WRITES THE LANE LEVEL'S RULES INTO A ROAD FILE'S TEXT IN PLACE (ADR-0426): a "lane_rules" member after its last one,
+// {"solid_before_stop_line": metres}. Nothing else moves; the bake key does not see it (checked). Empty (with `err`)
+// when the file states them already.
+std::string insertLaneRulesText(const std::string& text, double solidBeforeStopLine, std::string* err = nullptr);
 
 // ---- the streets' names (ADR-0420) --------------------------------------------------------------------------------------
 // A RUN is the streets that are one street carrying on, as the file states it: the two streets of a junction's `through`
@@ -163,7 +168,7 @@ struct JunctionNodes {
 std::vector<JunctionNodes> junctionNodes(const RoadLabGraph& g, LayoutSource source, std::vector<std::string>* notes = nullptr);
 // WRITES THEM INTO A ROAD FILE'S TEXT IN PLACE: a "nodes" member in each listed junction that has none and has nodes (the
 // file's own list, `g` read from it). Nothing else moves; the bake key (keyedRoadFileText) and the lane graph's key
-// (junctionPlanKey) do not see it. Empty (with `err`) when the list does not fit.
+// (laneLevelKey) do not see it. Empty (with `err`) when the list does not fit.
 std::string insertJunctionNodesText(const std::string& text, const RoadLabGraph& g, const std::vector<JunctionNodes>& nodes,
                                     std::string* err = nullptr);
 

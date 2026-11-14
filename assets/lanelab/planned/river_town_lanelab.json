@@ -42343,5 +42343,6 @@
    "bv1_in",
    "bv1_out"
   ]
- ]
+ ],
+ "lane_rules": {"solid_before_stop_line":20.0}
 }

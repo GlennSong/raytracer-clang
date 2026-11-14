@@ -584,6 +584,8 @@ TEST_CASE(route_closed_chains_close_the_chain_not_the_turn) {
 
 #include <memory>
 
+#include "lane_level_scene.h"   // a lab scene with the lane level's facts stated in memory (ADR-0426)
+
 namespace {
 
 // A real junction's lane graph, as the road builder makes it for these vehicle classes (driving::tagSizes); with
@@ -608,8 +610,9 @@ TEST_CASE(route_a_long_body_is_never_sent_round_a_turn_its_swing_takes_off_the_r
     // ITEM 9 OF REVIEW #284 (ADR-0412). The road builder sweeps each turn at each vehicle's length: a 12 m bus whose turning
     // circle fits a turn can still swing its middle over the kerb there, and that turn is closed to it (its tag) while a
     // car's stays open. The router reads only the tags, so it never sends the bus that way. On the lab's hill junction.
-    const std::unique_ptr<engine::roads::lanes::Result> roads = engine::roads::lanes::build(
-        engine::roads::lanes::RoadLabGraph::load(std::string(RT_SOURCE_DIR) + "/assets/lanelab/hill_junction.json"));
+    // (the lab scene with the facts the lane level reads, stated in memory: lane_level_scene.h)
+    const std::unique_ptr<engine::roads::lanes::Result> roads =
+        lane_level_test::buildWithLaneLevelFacts(std::string(RT_SOURCE_DIR) + "/assets/lanelab/hill_junction.json");
     VehicleClasses classes;
     classes.add(driving_test::testCarClass({"test_car_tag"}));
     VehicleClass bus = deriveVehicleClass("test_bus", 12.0, 2.55, 5.7, 38);

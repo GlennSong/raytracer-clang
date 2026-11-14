@@ -3,7 +3,9 @@
 #include "engine/bundle/bundle.h"
 #include "engine/bundle/cache_use.h"
 #include "engine/procgen/city/roads/lanes/city_producer.h"   // the roads' key, the city entities, loadCityGraph
-#include "engine/procgen/city/roads/lanes/road_layout.h"     // junctionPlanKey: the control plan, keyed here
+#include "engine/procgen/city/roads/lanes/road_layout.h"     // laneLevelKey: the layout and lane rules, keyed here
+#include "engine/procgen/city/roads/lanes/lane_level.h"      // the lane level from the road model (ADR-0426)
+#include "engine/procgen/city/roads/lane_turns.h"            // laneTurnRules: the turns' table, keyed here
 
 #include <nlohmann/json.hpp>
 
@@ -117,8 +119,6 @@ uint64_t laneGraphCacheKey(uint64_t roadsKey, const LaneGraphOptions& opts, uint
     k.pod(builderVersion);
     k.pod(roadsKey);
     // Each string's length goes in before it, so ("ab", "c") and ("a", "bc") are different keys.
-    k.pod(static_cast<uint64_t>(opts.control.size()));
-    k.str(opts.control);
     k.pod(static_cast<uint64_t>(opts.vehicles.size()));
     for (const VehicleSize& v : opts.vehicles) {
         k.pod(static_cast<uint64_t>(v.tag.size()));
@@ -223,9 +223,12 @@ LevelLaneGraph obtainLevelLaneGraph(const bundle::LevelInputs& in, const LaneGra
             std::ifstream gf(cities.front().graphPath);
             try { gf >> spec; } catch (const std::exception&) { spec = nlohmann::json(); }
         }
-        const uint64_t plan = junctionPlanKey(spec);
-        const uint64_t roads = levelRoadsKey(in);
-        out.key = laneGraphCacheKey(plan == 0 ? roads : bundle::fnv1a(&plan, sizeof(plan), roads), opts);
+        // the layout and the lane rules the lane level reads by id (the roads' key leaves them out), and the table the
+        // turns are stated by (ADR-0426)
+        const uint64_t layout = laneLevelKey(spec), turns = laneTurnRules().hash;
+        uint64_t roads = levelRoadsKey(in);
+        roads = bundle::fnv1a(&layout, sizeof(layout), roads);
+        out.key = laneGraphCacheKey(bundle::fnv1a(&turns, sizeof(turns), roads), opts);
     }
 
     if (!cacheDir.empty()) {
@@ -258,9 +261,16 @@ LevelLaneGraph obtainLevelLaneGraph(const bundle::LevelInputs& in, const LaneGra
     }
     out.roadSeconds = secondsSince(t0);
     const std::chrono::steady_clock::time_point tg = std::chrono::steady_clock::now();
-    LaneGraphBuild built = buildLaneGraph(*roads, opts);
+    // THE LANE LEVEL, A TABLE BUILT FROM THE ROAD MODEL (ADR-0426): the model of this build, then the table from it
+    const RoadModel model = assembleRoadModel(*roads);
+    LaneGraphBuild built = buildLaneLevel(*roads, model, opts);
     roads.reset();
     out.graphSeconds = secondsSince(tg);
+    if (!built.error.empty()) {
+        out.error = built.error;
+        out.seconds = secondsSince(t0);
+        return out;
+    }
     out.summary = summarizeLaneGraph(built);
     // A graph that fails its own check would be refused by the reader on every later load and rebuilt each time: say so
     // now, and drive on it (the check is about the file as much as the graph).

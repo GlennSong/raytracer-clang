@@ -1,6 +1,6 @@
 #include "engine/procgen/city/roads/lanes/road_layout.h"
 
-#include "engine/bundle/bundle.h"                                 // fnv1aStr: junctionPlanKey
+#include "engine/bundle/bundle.h"                                 // fnv1aStr: laneLevelKey
 
 #include "engine/procgen/city/roads/lanes/control_plan.h"        // findJunctions: the nodes and their grouping, once
 #include "engine/procgen/city/roads/lanes/lane_expand.h"         // expand: ramps composed as the builder composes them
@@ -509,16 +509,6 @@ void writeLayout(nlohmann::json& scene, const RoadLayout& layout) {
     if (!layout.divided.empty()) scene["divided"] = dividedJson(layout.divided);
 }
 
-uint64_t junctionPlanKey(const nlohmann::json& spec) {
-    if (!spec.is_object() || !spec.contains("junctions")) return 0;
-    // (a junction's points, ADR-0425, are the road model's: the lane graph does not read them, so they key nothing)
-    nlohmann::json list = spec["junctions"];
-    if (list.is_array())
-        for (nlohmann::json& j : list)
-            if (j.is_object()) j.erase("nodes");
-    return bundle::fnv1aStr("junctions|" + list.dump());
-}
-
 // The text with the cut members taken out, each with its comma.
 static std::string cutText(const std::string& text, std::vector<std::pair<std::size_t, std::size_t>> cut) {
     if (cut.empty()) return text;
@@ -542,10 +532,45 @@ std::string keyedRoadFileText(const std::string& text) {
     std::vector<std::pair<std::size_t, std::size_t>> cut;
     // The streets, the divided pairs, and the whole junctions list with its controls and signs (ADR-0421): no stage of
     // the bake reads any of them (the meshes, paint, deck and road graph come from the edges); the lane graph, which
-    // reads the controls and signs, keys them itself (junctionPlanKey).
+    // reads them, keys them itself (laneLevelKey). Likewise the lane level's rules (ADR-0426).
     for (std::size_t k = 0; k < top.size(); ++k)
-        if (top[k].key == "streets" || top[k].key == "divided" || top[k].key == "junctions") cut.push_back(removal(top, k));
+        if (top[k].key == "streets" || top[k].key == "divided" || top[k].key == "junctions" || top[k].key == "lane_rules")
+            cut.push_back(removal(top, k));
     return cutText(text, cut);
+}
+
+uint64_t laneLevelKey(const nlohmann::json& spec) {
+    // the layout, which the lane level reads by id (its streets and carry-ons, the divided pairs, the junctions' arms,
+    // through pairs, controls and signs) and the lane level's rules (ADR-0426): what keyedRoadFileText leaves out. A
+    // junction's points (ADR-0425) are the street map's: the lane level does not read them, so they key nothing.
+    if (!spec.is_object()) return 0;
+    std::string text;
+    for (const char* key : {"junctions", "streets", "divided", "lane_rules"}) {
+        if (!spec.contains(key)) continue;
+        nlohmann::json member = spec[key];
+        if (std::string(key) == "junctions" && member.is_array())
+            for (nlohmann::json& j : member)
+                if (j.is_object()) j.erase("nodes");
+        text += std::string(key) + "|" + member.dump() + "|";
+    }
+    return text.empty() ? 0 : bundle::fnv1aStr(text);
+}
+
+std::string insertLaneRulesText(const std::string& text, double solidBeforeStopLine, std::string* err) {
+    auto fail = [&](const std::string& why) {
+        if (err) *err = why;
+        return std::string();
+    };
+    const Text t(text);
+    std::vector<Member> top;
+    if (!t.members(t.ws(0), top) || top.empty()) return fail("the file is not a JSON object with members");
+    if (memberNamed(top, "lane_rules")) return fail("the file already states its \"lane_rules\"");
+    const Member& last = top.back();
+    const std::string value = nlohmann::json{{"solid_before_stop_line", solidBeforeStopLine}}.dump();
+    std::string out = text;
+    out.insert(last.valueEnd, "," + leadOf(text, last) + "\"lane_rules\": " + value);
+    if (keyedRoadFileText(out) != keyedRoadFileText(text)) return fail("writing it would change what the bake key sees");
+    return out;
 }
 
 std::string stripLayoutText(const std::string& text) {

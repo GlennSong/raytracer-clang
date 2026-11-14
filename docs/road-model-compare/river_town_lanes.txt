@@ -1,0 +1,215 @@
+THE LANE LEVEL OF river_town: BUILT FROM THE ROAD MODEL (NEW) AGAINST THE LANE GRAPH WORKED OUT FROM THE BUILT ROADS (OLD)
+
+Step 8, stage 1 (ADR-0426). Both from one road build, side by side; the old one is what the new driving drives on
+today. Vehicle classes the corners are fitted for and whose reach is counted (tag: turning radius / width / length): bus 7.30 / 2.55 / 11.45 m; car 6.15 / 2.05 / 5.57 m; goods 7.45 / 2.30 / 6.69 m; moped 1.92 / 0.70 / 1.70 m; motorcycle 2.73 / 0.70 / 2.09 m; truck 7.45 / 2.25 / 6.69 m; van 7.10 / 2.30 / 6.34 m;
+
+1. WHAT EACH HOLDS (old -> new)
+  lane paths 2111 -> 1974; sections 931 -> 893; junctions 162 -> 144 (the road model states 144)
+  connectors 2192 -> 2116: straight on 1030 -> 954, near turns 582 -> 567, far turns 580 -> 595
+  crossing records 14784 -> 16517: crosses 9279 -> 10826, joins 2840 -> 2908, splits 2665 -> 2783; between a connector and a lane or two lanes 306 -> 480; across two junctions 27 -> 0; far turns with a place to wait inside 490 -> 509
+  problem lines 664 -> 890; lanes tidied (a fold cut out) 47 -> 47; kinks in lanes 434 -> 440, in connectors 2 -> 0, where paths join 48 -> 60 (worst 10.2 -> 159.4 degrees)
+  stop lines (new): 551 the paint's, 20 by ADR-0419's rule where the paint found no box, 0 by it where the paint's box holds two stated junctions
+  joins the model states (new): 55 where a street carries on as another, 6 where a lane leaves its host, 6 where one merges into its host; 60 of them with lines that do not meet (each in the problems)
+
+2. TURNS: STATED (THE ROAD MODEL'S, ADR-0426) AGAINST THE OLD GRAPH'S CONNECTORS
+  A turn is named by its two lanes (the builder's lane ids: arriving, leaving).
+  stated 2235 (built 2116; 119 not built, closed to every class: corner faults); old connectors 2192 (and 75 turns it refused)
+  in both 1959 (of which 9 the old graph called another kind of turn); only stated 276; only old 233
+  kind differs, 2: the old graph called it a far_turn; e.g. straight s195.f0 -> s227.f0 at j90; straight s226.b0 -> s336.f0 at j90
+  kind differs, 1: the old graph called it a near_turn; e.g. far_turn s277.b0 -> s251.f0 at j119
+  kind differs, 6: the old graph called it a straight; e.g. far_turn s18.f0 -> s315.f0 at j14; near_turn s21.f2 -> s314.f0 at j14; near_turn s104.f0 -> s136.b1 at j56; near_turn s172.f2 -> s140.b1 at j75; far_turn s315.b0 -> s18.b0 at j14; near_turn s324.b0 -> s284.b1 at j135
+  only stated, 222: the old graph made no turn from this lane into that road (its angle rule, or it gave the turn to another lane); e.g. far_turn s0.b0 -> s38.b0 at j0 [stated, not built: a corner fault]; far_turn s0.b0 -> s272.b0 at j0 [stated, not built: a corner fault]; near_turn s2.b0 -> s38.b0 at j0 [stated, not built: a corner fault]; far_turn s2.b0 -> s272.b0 at j0; straight s4.f2 -> s325.f2 at j4 [stated, not built: a corner fault]; far_turn s6.f0 -> s284.b0 at j135 [stated, not built: a corner fault]
+  only stated, 39: the old graph refused it (its corner; or its junction refused whole); e.g. far_turn s10.f0 -> s49.f0 at j8 [stated, not built: a corner fault]; far_turn s10.f0 -> s50.f0 at j8 [stated, not built: a corner fault]; near_turn s10.f1 -> s13.b2 at j8 [stated, not built: a corner fault]; far_turn s13.f0 -> s10.b0 at j8 [stated, not built: a corner fault]; near_turn s13.f2 -> s44.b2 at j8 [stated, not built: a corner fault]; near_turn s13.f2 -> s48.f1 at j8 [stated, not built: a corner fault]
+  only stated, 15: the old graph turned this lane into another lane of that road (its nearest-sideways or kerb/offside rule); e.g. straight s4.f1 -> s325.f1 at j4; far_turn s23.f0 -> s29.f0 at j18; far_turn s43.f0 -> s105.b0 at j28; far_turn s81.b0 -> s48.b0 at j29; far_turn s134.f0 -> s167.f0 at j72; far_turn s142.f0 -> s78.b0 at j44
+  only old, 25: the model states no junction there (a street carrying on, or a lane leaving or joining its host): the lanes are joined directly, no connector; e.g. near_turn s325.f0 -> s344.b0; near_turn s325.f2 -> s344.b1; far_turn s337.f0 -> s277.b0; far_turn s337.f1 -> s277.b0; far_turn s344.f0 -> s325.b0; far_turn s344.f1 -> s325.b1
+  only old, 190: the table gives this lane no turn into that road (one lane per turn from its side; a turn from a lane of a road the old junction finding merged in; or a U-turn); e.g. far_turn s0.b0 -> s274_1.b0; far_turn s2.b0 -> s274_1.b0; straight s7.f0 -> s45.b0; near_turn s18.f0 -> s313.b2; far_turn s21.f0 -> s313.f0; straight s21.f0 -> s314.f0
+  only old, 18: the table turns this lane into another lane of that road (same slot, or same side); e.g. straight s4.f1 -> s325.f0; near_turn s6.f0 -> s323.b2; near_turn s23.f0 -> s29.f2; straight s43.f0 -> s105.b1; near_turn s81.b0 -> s48.b1; near_turn s98.b0 -> s329.b2
+
+3. LANE PATHS WITH NOTHING AFTER THEM (a dead end: no next path)
+  old 116, new 79
+  old, 8: a ramp's lane; e.g. x1_outL_link.f0 (path 1936) at (-34.3, -90.5); x1_inL_loop.f0 (path 1949) at (-374.7, 21.0); x0_outL_link.f0 (path 1980) at (56.3, 1285.3); x0_inL_loop.f0 (path 1993) at (385.1, 1146.6); x0_inR_loop.f0 (path 2033) at (414.4, 1113.5); x0_outR_link.f0 (path 2042) at (578.6, 1328.3)
+  old, 41: on arterial; e.g. s12.f0 (path 48) at (-411.5, 474.0); s12.f1 (path 49) at (-412.4, 477.6); s12.f2 (path 50) at (-413.4, 481.1); s12.b0 (path 51) at (-393.8, 474.8); s12.b1 (path 52) at (-392.9, 471.2); s12.b2 (path 53) at (-392.0, 467.7)
+  old, 12: on boulevard; e.g. tn0.f0 (path 2043) at (558.1, 1344.3); tn0.f1 (path 2044) at (555.0, 1346.3); tn0.f2 (path 2045) at (551.9, 1348.3); bv0_out.f0 (path 2052) at (368.2, 1068.2); bv0_out.f1 (path 2053) at (371.1, 1066.0); bv0_out.f2 (path 2054) at (374.0, 1063.8)
+  old, 19: on collector; e.g. s9.f0 (path 34) at (-411.2, 474.0); s9.f1 (path 35) at (-411.7, 477.9); s9.b0 (path 36) at (-393.0, 472.4); s9.b1 (path 37) at (-392.4, 468.4); s10.b0 (path 44) at (-373.0, 479.0); s10.b1 (path 45) at (-373.4, 483.0)
+  old, 16: on freeway; e.g. fw2_a.f0 (path 2021) at (356.5, 1077.2); fw2_a.f1 (path 2022) at (353.5, 1079.4); fw2_a.f2 (path 2023) at (350.5, 1081.7); fw2_a.f3 (path 2024) at (347.5, 1084.0); fw2_b.f0 (path 2038) at (569.6, 1335.2); fw2_b.f1 (path 2039) at (572.6, 1332.9)
+  old, 20: on local; e.g. s11.b0 (path 47) at (-391.3, 492.6); s127.f0 (path 590) at (-331.6, 1178.8); s281.f0 (path 1500) at (664.6, 468.6); s297.f0 (path 1609) at (-570.9, 975.6); s304.f0 (path 1646) at (73.5, 1246.0); s306.f0 (path 1666) at (-35.6, 1268.1)
+  new, 2: a ramp's lane, a street that just ends (no junction, nothing carried on into); e.g. x0_outR_link.f0 (path 1966) at (578.6, 1328.3); x1_outR_link.f0 (path 1970) at (-547.6, -151.9)
+  new, 21: on arterial, a street that just ends (no junction, nothing carried on into); e.g. s283.f0 (path 1504) at (685.9, 579.0); s283.f1 (path 1505) at (686.1, 575.4); s283.f2 (path 1506) at (686.4, 571.7); s300.b0 (path 1606) at (533.5, 598.1); s300.b1 (path 1607) at (529.9, 598.0); s300.b2 (path 1608) at (526.2, 597.9)
+  new, 22: on arterial, at a junction with no turn out of it (corner faults); e.g. s13.b1 (path 48) at (-373.5, 487.2); s44.f1 (path 196) at (-249.6, 465.6); s49.b1 (path 218) at (-280.0, 520.2); s59.f1 (path 314) at (-396.9, 887.9); s62.f1 (path 322) at (-435.7, 897.9); s163.b2 (path 879) at (252.9, 122.0)
+  new, 10: on collector, a street that just ends (no junction, nothing carried on into); e.g. s319.f0 (path 1701) at (-639.7, 440.2); s319.f1 (path 1702) at (-640.3, 444.1); s338.b0 (path 1799) at (661.9, 645.9); s338.b1 (path 1800) at (657.9, 645.6); s341.f0 (path 1825) at (562.6, 963.2); s341.f1 (path 1826) at (566.1, 965.2)
+  new, 1: on collector, at a junction with no turn out of it (corner faults); e.g. s346.b1 (path 1857) at (459.1, 305.6)
+  new, 2: on collector, where its street carries on (no lane to join); e.g. s320.f0 (path 1707) at (-422.1, 467.2); s320.f1 (path 1708) at (-421.6, 463.2)
+  new, 19: on local, a street that just ends (no junction, nothing carried on into); e.g. s127.f0 (path 587) at (-331.6, 1178.8); s281.f0 (path 1497) at (664.6, 468.6); s297.f0 (path 1588) at (-570.9, 975.6); s304.f0 (path 1625) at (73.5, 1246.0); s306.f0 (path 1639) at (-35.6, 1268.1); s307.f0 (path 1641) at (-132.1, 1262.3)
+  new, 2: on local, at a junction with no turn out of it (corner faults); e.g. s261.f0 (path 1395) at (518.1, 630.4); s269.f0 (path 1421) at (422.3, 876.4)
+  each ramp's lane, its last lane path's next (old -> new):
+    x0_outR_link.f0: nothing -> nothing
+    x0_outL_link.f0: nothing -> fw1_a.f3
+    x0_inR_loop.f0: nothing -> fw2_b.f3
+    x0_inL_loop.f0: nothing -> fw1_b.f3
+    x1_outR_link.f0: nothing -> nothing
+    x1_outL_link.f0: nothing -> fw0_a.f3
+    x1_inR_loop.f0: nothing -> fw3_b.f3
+    x1_inL_loop.f0: nothing -> fw0_b.f3
+
+4. THE SHARE OF THE LANE PATHS IN THE LARGEST PART EACH CLASS CAN GET ROUND AND BACK (a car on any of them can reach every other and return)
+  'with lane changes': also across the lines a section's lanes may change over (as the old graph's reach figure); 'without': next paths only (what a car can do today: the driving changes no lanes yet). Freeway: lane paths on the freeway class in that part, of all freeway lane paths.
+  tag        with lane changes (old -> new)    without (old -> new)    freeway lanes reached, without (old -> new)
+  bus          46.5% ->   50.3%                  21.9% ->   23.4%       0/160 -> 4/80
+  car          71.8% ->   80.0%                  36.6% ->   40.6%       0/160 -> 8/80
+  goods        65.5% ->   73.7%                  28.9% ->   33.0%       0/160 -> 8/80
+  moped        79.4% ->   87.5%                  52.2% ->   59.2%       0/160 -> 8/80
+  motorcycle   78.9% ->   86.2%                  51.3% ->   59.2%       0/160 -> 8/80
+  truck        65.5% ->   73.7%                  28.9% ->   33.0%       0/160 -> 8/80
+  van          66.5% ->   75.1%                  29.5% ->   33.7%       0/160 -> 8/80
+
+5. THE MODEL'S JUNCTIONS THE OLD GRAPH SPLIT OR MERGED (the new table has one junction per stated junction its lanes reach, by construction)
+  split into several old junctions: 11: j0 at (-296.2, 205.1) into 3; j6 at (-240.9, 378.5) into 2; j7 at (-387.2, 477.7) into 2; j14 at (-534.0, 628.2) into 2; j19 at (-517.2, 721.2) into 2; j35 at (-408.1, 925.7) into 2; j40 at (71.7, 58.3) into 2; j86 at (-96.0, 1122.1) into 2; j129 at (285.2, 972.9) into 2; j132 at (524.2, 686.3) into 2; j135 at (-437.3, 345.6) into 2;
+  old junctions holding two model junctions or more: 2: old 40 at (-424.4, 904.5) = j35+j37; old 96 at (412.0, 293.0) = j90+j120;
+  old junctions holding no model junction (its own carry-on or node junctions): 8: old 145 at (565.1, 394.3), roads s277, s337; old 148 at (-422.0, 468.2), roads s287, s320; old 156 at (-506.0, 203.6), roads s325, s344; old 157 at (539.8, 289.2), roads s346, s347; old 158 at (24.8, 1281.0), roads fw0_a, fw1_a; old 159 at (5.2, -85.2), roads fw0_a, fw1_a; old 160 at (4.7, -61.2), roads fw0_b, fw1_b; old 161 at (24.5, 1257.0), roads fw0_b, fw1_b;
+  model junctions in no old junction: 0
+  new: 144 lane-level junctions, one per model junction; model junctions with none (no lane reaches them): 0
+
+6. WHERE THE BUILDER'S PAINT DISAGREES WITH THE STATED JUNCTIONS (the stated junctions are followed; the paint is fixed in step 9)
+  - junction j6: the paint found no box where its arm on s284 (station 0.0) meets it, at (-255.8, 378.7)
+  - junction j6: the paint found no box where its arm on s7 (station 87.5) meets it, at (-255.9, 378.7)
+  - junction j7: the paint found no box where its arm on s287 (station 0.0) meets it, at (-412.9, 471.7)
+  - junction j18: the paint found no box where its arm on s29 (station 0.0) meets it, at (-490.1, 807.4)
+  - junction j44: the paint found no box where its arm on s142 (station 87.9) meets it, at (-41.1, 449.6)
+  - junction j44: the paint found no box where its arm on s139 (station 97.2) meets it, at (-41.1, 449.6)
+  - junction j56: the paint found no box where its arm on s106 (station 46.5) meets it, at (35.1, 338.0)
+  - junction j56: the paint found no box where its arm on s104 (station 42.3) meets it, at (35.1, 337.9)
+  - junction j56: the paint found no box where its arm on s136 (station 58.7) meets it, at (35.1, 337.9)
+  - junction j72: the paint found no box where its arm on s137 (station 100.5) meets it, at (192.4, 313.4)
+  - junction j72: the paint found no box where its arm on s134 (station 90.7) meets it, at (192.4, 313.4)
+  - junction j75: the paint found no box where its arm on s172 (station 49.6) meets it, at (105.4, 432.1)
+  - junction j75: the paint found no box where its arm on s140 (station 50.4) meets it, at (105.4, 432.1)
+  - junction j75: the paint found no box where its arm on s169 (station 56.6) meets it, at (105.4, 432.1)
+  - junction j119: the paint found no box where its arm on s230 (station 81.9) meets it, at (453.1, 406.9)
+  - junction j120: the paint found no box where its arm on s228 (station 39.3) meets it, at (442.8, 299.8)
+  - junction j120: the paint found no box where its arm on s345 (station 0.0) meets it, at (442.8, 299.8)
+  - junction j120: the paint found no box where its arm on s346 (station 0.0) meets it, at (442.8, 299.8)
+  - junction j129: the paint found no box where its arm on bv0_in (station 129.9) meets it, at (272.0, 978.2)
+  - junction j129: the paint found no box where its arm on s248_0 (station 93.7) meets it, at (272.0, 978.2)
+  - the paint draws a junction box on s325 (stations 141.5 to 148.7) at (-503.2, 197.4) where street s325 carries on into s344: the road file states no junction there (the paint keeps its own rule until step 9)
+  - the paint draws a junction box on s344 (stations 65.7 to 76.0) at (-509.3, 199.0) where street s344 carries on into s325: the road file states no junction there (the paint keeps its own rule until step 9)
+
+7. CORNER FAULTS: STATED TURNS WHOSE DRAWN CORNER DOES NOT FIT A CLASS (the work list for step 9)
+  3345 faults over 862 of the 2235 stated turns; by class: (every class) 31; bus 831; car 416; goods 637; moped 88; motorcycle 92; truck 635; van 615;
+  by why: 1207 its body swept along it leaves the paved road; 2107 its tightest bend tighter than the class turns in; 31 no lane path to start from or end on (no room between stop lines);
+  the list, one line per turn: river_town_corner_faults.txt
+
+8. THE NEW TABLE'S PROBLEM LINES, by their first words (a few of each; all in problems.txt)
+  7 x "crossing points: connector and connector are within touching distance for":
+      crossing points: connector 2690 and connector 2700 are within touching distance for 100% and 100% of their lengths (a join, crossing point 6556, at (-43.6, 454.2)): two paths laid nearly over each other
+      crossing points: connector 2864 and connector 2866 are within touching distance for 97% and 100% of their lengths (a join, crossing point 7744, at (34.8, 332.0)): two paths laid nearly over each other
+      crossing points: connector 3104 and connector 3108 are within touching distance for 100% and 100% of their lengths (a join, crossing point 8998, at (190.3, 307.3)): two paths laid nearly over each other
+      crossing points: connector 3110 and connector 3111 are within touching distance for 100% and 99% of their lengths (a split, crossing point 9036, at (194.5, 312.9)): two paths laid nearly over each other
+  27 x "crossing points: connector and connector meet at (a cross, crossing":
+      crossing points: connector 2538 and connector 2557 meet at (-426.0, 916.2) (a cross, crossing point 5207), outside every junction's outline
+      crossing points: connector 2538 and connector 2557 meet at (-426.1, 916.2) (a cross, crossing point 5208), outside every junction's outline
+      crossing points: connector 2538 and connector 2558 meet at (-425.9, 916.2) (a cross, crossing point 5209), outside every junction's outline
+      crossing points: connector 2538 and connector 2558 meet at (-426.0, 916.2) (a cross, crossing point 5210), outside every junction's outline
+  25 x "crossing points: connector and connector meet at (a join, crossing":
+      crossing points: connector 2538 and connector 2543 meet at (-429.8, 914.9) (a join, crossing point 5189), outside every junction's outline
+      crossing points: connector 2538 and connector 2543 meet at (-430.0, 914.8) (a join, crossing point 5190), outside every junction's outline
+      crossing points: connector 2543 and connector 2564 meet at (-430.1, 916.0) (a join, crossing point 5375), outside every junction's outline
+      crossing points: connector 2543 and connector 2564 meet at (-430.2, 915.9) (a join, crossing point 5376), outside every junction's outline
+  24 x "crossing points: connector and connector meet at (a split, crossing":
+      crossing points: connector 2549 and connector 2553 meet at (-417.0, 888.0) (a split, crossing point 5431), outside every junction's outline
+      crossing points: connector 2552 and connector 2553 meet at (-417.4, 888.1) (a split, crossing point 5463), outside every junction's outline
+      crossing points: connector 2552 and connector 2553 meet at (-417.6, 888.0) (a split, crossing point 5464), outside every junction's outline
+      crossing points: connector 2557 and connector 2559 meet at (-428.2, 912.5) (a split, crossing point 5529), outside every junction's outline
+  7 x "crossing points: junction has more than a slow junction for":
+      crossing points: junction 0 has 404, more than 400: a slow junction for the junction plan and for every car there
+      crossing points: junction 14 has 915, more than 400: a slow junction for the junction plan and for every car there
+      crossing points: junction 23 has 500, more than 400: a slow junction for the junction plan and for every car there
+      crossing points: junction 35 has 467, more than 400: a slow junction for the junction plan and for every car there
+  82 x "crossing points: lane and connector meet at (a cross, crossing":
+      crossing points: lane 34 and connector 2111 meet at (-342.0, 481.2) (a cross, crossing point 16043), outside every junction's outline
+      crossing points: lane 34 and connector 2111 meet at (-342.1, 481.2) (a cross, crossing point 16044), outside every junction's outline
+      crossing points: lane 35 and connector 2111 meet at (-339.3, 485.3) (a cross, crossing point 16045), outside every junction's outline
+      crossing points: lane 35 and connector 2111 meet at (-339.3, 485.3) (a cross, crossing point 16046), outside every junction's outline
+  24 x "junction the far_turn from lane into lane fits no vehicle:":
+      junction j0: the far_turn from lane s38.f0 into lane s2.f0 fits no vehicle: swept 0.7 m wide and 1.7 m long (the smallest vehicle allowed on both lanes, and 0.1 m more each side) it leaves the paved road (it stays stated; a corner fault)
+      junction j0: the far_turn from lane s0.b0 into lane s38.b0 fits no vehicle: swept 0.7 m wide and 1.7 m long (the smallest vehicle allowed on both lanes, and 0.1 m more each side) it leaves the paved road, on every arc from 46.4 m down to 1.9 m (it stays stated; a corner fault)
+      junction j0: the far_turn from lane s0.b0 into lane s272.b0 fits no vehicle: swept 0.7 m wide and 1.7 m long (the smallest vehicle allowed on both lanes, and 0.1 m more each side) it leaves the paved road, on every arc from 172.8 m down to 1.9 m (it stays stated; a corner fault)
+      junction j0: the far_turn from lane bv1_in.f0 into lane s0.f0 fits no vehicle: swept 0.7 m wide and 1.7 m long (the smallest vehicle allowed on both lanes, and 0.1 m more each side) it leaves the paved road (it stays stated; a corner fault)
+  45 x "junction the near_turn from lane into lane fits no vehicle:":
+      junction j0: the near_turn from lane s2.b0 into lane s38.b0 fits no vehicle: swept 0.7 m wide and 1.7 m long (the smallest vehicle allowed on both lanes, and 0.1 m more each side) it leaves the paved road (it stays stated; a corner fault)
+      junction j0: the near_turn from lane s38.f0 into lane s0.f0 fits no vehicle: swept 0.7 m wide and 1.7 m long (the smallest vehicle allowed on both lanes, and 0.1 m more each side) it leaves the paved road, on every arc from 40.4 m down to 1.9 m (it stays stated; a corner fault)
+      junction j0: the near_turn from lane bv1_in.f1 into lane s2.f0 fits no vehicle: swept 0.7 m wide and 1.7 m long (the smallest vehicle allowed on both lanes, and 0.1 m more each side) it leaves the paved road (it stays stated; a corner fault)
+      junction j0: the near_turn from lane bv1_in.f2 into lane s2.f0 fits no vehicle: swept 0.7 m wide and 1.7 m long (the smallest vehicle allowed on both lanes, and 0.1 m more each side) it leaves the paved road (it stays stated; a corner fault)
+  19 x "junction the straight from lane into lane fits no vehicle:":
+      junction j4: the straight from lane s4.f2 into lane s325.f2 fits no vehicle: swept 0.7 m wide and 1.7 m long (the smallest vehicle allowed on both lanes, and 0.1 m more each side) it leaves the paved road (it stays stated; a corner fault)
+      junction j8: the straight from lane s49.b2 into lane s44.b2 fits no vehicle: swept 0.7 m wide and 1.7 m long (the smallest vehicle allowed on both lanes, and 0.1 m more each side) it leaves the paved road (it stays stated; a corner fault)
+      junction j8: the straight from lane s49.b1 into lane s44.b1 fits no vehicle: swept 0.7 m wide and 1.7 m long (the smallest vehicle allowed on both lanes, and 0.1 m more each side) it leaves the paved road (it stays stated; a corner fault)
+      junction j8: the straight from lane s49.b0 into lane s44.b0 fits no vehicle: swept 0.7 m wide and 1.7 m long (the smallest vehicle allowed on both lanes, and 0.1 m more each side) it leaves the paved road (it stays stated; a corner fault)
+  21 x "kink: connector leads into lane with its heading jumping degrees":
+      kink: connector 1997 leads into lane 144 with its heading jumping 3.7 degrees at (-238.8, 169.6) (more than 3)
+      kink: connector 2090 leads into lane 32 with its heading jumping 3.5 degrees at (-269.4, 378.2) (more than 3)
+      kink: connector 2092 leads into lane 1511 with its heading jumping 3.3 degrees at (-267.0, 380.8) (more than 3)
+      kink: connector 2102 leads into lane 38 with its heading jumping 3.1 degrees at (-372.6, 475.0) (more than 3)
+  14 x "kink: lane leads into connector with its heading jumping degrees":
+      kink: lane 81 leads into connector 2201 with its heading jumping 3.6 degrees at (-519.2, 648.0) (more than 3)
+      kink: lane 113 leads into connector 2363 with its heading jumping 3.0 degrees at (-155.4, 119.0) (more than 3)
+      kink: lane 342 leads into connector 2609 with its heading jumping 3.7 degrees at (-23.9, 76.8) (more than 3)
+      kink: lane 647 leads into connector 3098 with its heading jumping 3.8 degrees at (107.0, 315.6) (more than 3)
+  25 x "kink: lane leads into lane with its heading jumping degrees":
+      kink: lane 1459 leads into lane 1793 with its heading jumping 159.4 degrees at (575.5, 395.1) (more than 3)
+      kink: lane 1731 leads into lane 1839 with its heading jumping 83.8 degrees at (-504.4, 196.4) (more than 3)
+      kink: lane 1732 leads into lane 1840 with its heading jumping 83.2 degrees at (-501.4, 199.1) (more than 3)
+      kink: lane 1733 leads into lane 1840 with its heading jumping 82.8 degrees at (-501.4, 199.1) (more than 3)
+  440 x "kink: the line of lane (lane path jumps degrees at":
+      kink: the line of lane s46.b0 (lane path 200) jumps 8.5 degrees at one point, 11.2 m along it at (-199.5, 381.5), beyond the bend around it (more than 3): kept as drawn, and the bend profile slows for it
+      kink: the line of lane s46.b0 (lane path 200) jumps 9.4 degrees at one point, 12.5 m along it at (-200.9, 381.6), beyond the bend around it (more than 3): kept as drawn, and the bend profile slows for it
+      kink: the line of lane s46.b1 (lane path 201) jumps 7.5 degrees at one point, 11.2 m along it at (-198.8, 385.4), beyond the bend around it (more than 3): kept as drawn, and the bend profile slows for it
+      kink: the line of lane s46.b1 (lane path 201) jumps 8.9 degrees at one point, 13.1 m along it at (-200.8, 385.6), beyond the bend around it (more than 3): kept as drawn, and the bend profile slows for it
+  7 x "lane (slot carries on from street into which has no":
+      lane s325.f2 (slot 2) carries on from street s325 into s344, which has no lane in its slot: into lane s344.b1 (slot 1)
+      lane s337.f1 (slot 1) carries on from street s337 into s277, which has no lane in its slot: into lane s277.b0 (slot 0)
+      lane s346.f1 (slot 1) carries on from street s346 into s347, which has no lane in its slot: into lane s347.b0 (slot 0)
+      lane fw2_a.f3 (slot 3) carries on from street fw2_a into bv0_in, which has no lane in its slot: into lane bv0_in.f2 (slot 2)
+  55 x "lane carries on from street into lane of street their":
+      lane s277.f0 carries on from street s277 into lane s337.b0 of street s337, their lines 4.923 m apart at (574.02, 390.42): joined
+      lane s325.f0 carries on from street s325 into lane s344.b0 of street s344, their lines 2.567 m apart at (-506.98, 196.61): joined
+      lane s325.f1 carries on from street s325 into lane s344.b1 of street s344, their lines 7.701 m apart at (-509.09, 199.61): joined
+      lane s325.f2 carries on from street s325 into lane s344.b1 of street s344, their lines 10.414 m apart at (-511.20, 202.61): joined
+  2 x "lane leaves lane at station along where has no lane":
+      lane x0_outL_link.f0 leaves lane fw2_a.f3 at station -99.86 along fw2_a, where fw2_a.f3 has no lane path to meet it (inside a junction, or past its lane): not joined
+      lane x1_outL_link.f0 leaves lane fw3_a.f3 at station -122.25 along fw3_a, where fw3_a.f3 has no lane path to meet it (inside a junction, or past its lane): not joined
+  2 x "lane merges into lane at station along where has no":
+      lane x0_outR_link.f0 merges into lane fw2_b.f3 at station 482.27 along fw2_b, where fw2_b.f3 has no lane path to meet it (inside a junction, or past its lane): not joined
+      lane x1_outR_link.f0 merges into lane fw3_b.f3 at station 490.25 along fw3_b, where fw3_b.f3 has no lane path to meet it (inside a junction, or past its lane): not joined
+  5 x "lane merges into lane their lines m apart at joined":
+      lane x0_inR_loop.f0 merges into lane fw2_b.f3, their lines 0.250 m apart at (414.57, 1113.67): joined
+      lane x0_inL_loop.f0 merges into lane fw1_b.f3, their lines 0.250 m apart at (385.31, 1146.47): joined
+      lane x1_outL_link.f0 merges into lane fw0_a.f3, their lines 0.021 m apart at (-34.33, -90.51): joined
+      lane x1_inR_loop.f0 merges into lane fw3_b.f3, their lines 0.250 m apart at (-405.54, 51.07): joined
+  10 x "lane on street no room between its stop lines to":
+      lane s228.b1 on street s228: no room between its stop lines (32.05 to 23.08 along road s228): no lane path there
+      lane s228.b0 on street s228: no room between its stop lines (32.05 to 23.08 along road s228): no lane path there
+      lane s228.f0 on street s228: no room between its stop lines (32.05 to 23.08 along road s228): no lane path there
+      lane s228.f1 on street s228: no room between its stop lines (32.05 to 23.08 along road s228): no lane path there
+  47 x "lane runs backwards for m near it lies on the":
+      lane s32.f1 runs backwards for 0.97 m near (-146.8, 102.5): it lies on the inside of a corner of road s32 sharper than its offset from the road's spine; tidied (the fold cut out, 1.98 m shorter)
+      lane s32.f2 runs backwards for 2.85 m near (-144.1, 105.0): it lies on the inside of a corner of road s32 sharper than its offset from the road's spine; tidied (the fold cut out, 5.85 m shorter)
+      lane s35.b2 runs backwards for 2.78 m near (-145.5, 97.0): it lies on the inside of a corner of road s35 sharper than its offset from the road's spine; tidied (the fold cut out, 5.66 m shorter)
+      lane s35.b1 runs backwards for 0.91 m near (-147.3, 100.2): it lies on the inside of a corner of road s35 sharper than its offset from the road's spine; tidied (the fold cut out, 1.84 m shorter)
+  2 x "street carries on into where no lane leaves: lane leads":
+      street s320 carries on into s287, where no lane leaves: lane s320.f0 leads nowhere there
+      street s320 carries on into s287, where no lane leaves: lane s320.f1 leads nowhere there
+
+9. AFTER THIS REPORT WAS WRITTEN (two fixes to the new table; the old graph is deleted, so the sections above are not
+   regenerated; the corner-fault list beside this file is the final one)
+  - Turns at junctions a street passes through mid-way (an arm whose street runs on through the junction rather than
+    ending at it) were missed when the turns were stated per lane end; they are now stated per street end. Stated turns
+    2235 -> 2255, connectors 2116 -> 2136 (straight on 966, near turns 571, far turns 599), still 119 fitting no class.
+  - Junction outlines are drawn with the arms' stop lines joined in the order they lie round their middle; the stated
+    heading order drew 18 outlines here that crossed themselves. 10 still do, where two arms' stop lines overlap
+    (j29, j35, j37, j44, j56, j72, j75, j90, j92, j120): each is a problem line, a corner for step 9.
+  - Final: 1974 lane paths, 893 sections, 144 junctions, 830 problem lines; crossing records 16575.
+    Corner faults 3363 over 866 stated turns: every class 31, bus 835, car 418, goods 641, moped 88, motorcycle 92,
+    truck 639, van 619.
+    Largest part, with lane changes / without: bus 50.9% / 23.8%; car 80.9% / 41.1%; goods 74.2% / 33.4%; moped
+    88.8% / 60.0%; motorcycle 87.2% / 59.9%; truck 74.2% / 33.4%; van 75.7% / 34.1%. Freeway lane paths reached
+    without lane changes: 8 of 80 (bus 4).

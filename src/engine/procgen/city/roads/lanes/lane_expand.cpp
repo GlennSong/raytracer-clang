@@ -96,7 +96,9 @@ void roadLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
     const EdgeSpec& e = g.edges[static_cast<size_t>(ei)]; const RoadClassSpec& c = g.cls(e);
     std::vector<Vec2> tan, nrm; frames(e.xy, tan, nrm); double w = e.lanes.w;
     std::vector<LaneSlot> slots = laneSlots(c, e.lanes);
+    std::map<std::string, int> laneOfSlot;   // a slot's name -> its lane's index (what a pocket is swept out of)
     for (const LaneSlot& sl : slots) {
+        laneOfSlot[sl.name] = static_cast<int>(out.lanes.size());
         std::vector<double> off(e.xy.size(), sl.offset);
         out.lanes.push_back(ribbonLane(e.id + "." + sl.name, ei, "through", e.cls, w, sl.dir, e.xy, nrm, off));
         out.lanes.back().slot = std::atoi(sl.name.c_str() + 1);   // f0 / b0: by the centre line (laneSlots' names)
@@ -126,6 +128,10 @@ void roadLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
             out.lanes.back().slot = pk.side == "right" ? static_cast<int>(cand.size()) : -1;   // beyond the kerb lane, or inside lane 0
             out.lanes.back().spineFrom = first;
             out.lanes.back().spineTo = last;
+            // swept out of the lane on its side (its offset at birth is that lane's), and back into it where it tapers out
+            const int host = laneOfSlot.at((pk.side == "right" ? outer : inner)->name);
+            out.lanes.back().sweptFrom = host;
+            if (to > 0) out.lanes.back().diesInto = host;
         }
     }
 }
@@ -146,13 +152,10 @@ void rampLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
             out.lanes.back().slot = 1;
             out.lanes.back().spineFrom = e.s.front();
             out.lanes.back().spineTo = last;
+            out.lanes.back().diesInto = static_cast<int>(out.lanes.size()) - 2;   // into the ramp's first lane
         }
     }
 }
-
-// A lane reaches a street's end when its stretch of spine comes within this of it (metres): the streets' stations are
-// written to the centimetre.
-constexpr double kReachesStreetEnd = 0.01;
 
 // THE LANES ON THE ROAD MODEL'S STREETS (Lane: streets, junctionAtStart, junctionAtEnd), read from the graph's stated
 // streets and junctions; nothing is measured but where the lane's own stretch of spine lies.

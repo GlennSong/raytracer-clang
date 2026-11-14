@@ -20536,3 +20536,116 @@ passes. The v1 pins moved (below).
 
 **Revisit when** the lot pass reads the model (step 5: the twin goes); when the planner states every junction's points
 itself (no tool); when the lane-level driving reads the model's lanes (step 8).
+
+## ADR-0426 — One road model, step 8: the new driving's lane graph is a table built from the road model's lanes, connections and stated turns
+**Status:** Provisional · **Date:** 2026-11-14
+
+Words used here:
+- The **lane graph** is what the new driving (city sim driving "v2", the driving library) drives on: every lane as a
+  **lane path**, every way through a junction as a **connector**, the **sections** (lanes of one road running one way
+  side by side), **crossing records** (where two paths' bodies could touch: crosses, joins, splits) and each
+  junction's control. Its data types (`LaneGraph`, lane_graph.h) and the driving library's reading code are unchanged.
+- The **road model** (ADR-0417) states the roads once with ids: junctions and their **arms** (each street's way in and
+  out), **through pairs** (two arms that are one street carrying on), streets, lanes with their **slot** (place across
+  the road, counted from the centre-line side), and **connections** (one lane leaving or joining another).
+- A **stop line** is where traffic arriving by an arm stops. The **paint** is the road builder's road markings; its
+  **junction box** is the stretch along each street it paints as junction.
+- **Near turn**: the turn that crosses no oncoming traffic (towards the kerb side; in this world, which drives on the
+  left, a turn to the left). **Far turn**: the one across the oncoming traffic. Never "left" or "right" in the code.
+- A **corner fault**: a stated turn whose drawn corner does not fit a vehicle class (too tight for its turning
+  circle, or its body would leave the paved road). The turn stays stated; it is closed to that class.
+- A **ramp** lane **merges** when it joins its host road's lane over a stretch and **diverges** when it leaves it.
+- **Carry on**: a street that continues as another street with no junction between them.
+- **[~]** in a data file marks a guess to tune, not a citation.
+
+**Context.** docs/road-model-design.md step 8. The lane graph was worked out from the built roads: it found
+junctions from overlapping lanes and paint boxes, joined lane ends that missed by up to 1.5 m, measured the order of
+lanes across a road, matched the control plan's arms to built roads by distance, and guessed turns by the angle
+between arms. Its ramps all ended in nothing (traffic_lab: 8 of 8 ramp lanes dead ends), it split one stated junction
+into several (traffic_lab 7, river_town 11) and merged others, and river_town's car could get round 73% of the lanes.
+
+**Decision.**
+- **Turns are stated once, in data** (`assets/data/lane_turns.json`, read by `src/engine/procgen/city/roads/lane_turns.h`,
+  applied in one function, `turnsAtJunction`). A turn's kind comes from the arms' stated order round the junction
+  (their stated headings), the through pairs and which side the kerb is: the through partner is straight on; arms on
+  the kerb side before it are near turns; the rest far turns. No angle decides it. Where an arm has no partner and
+  another arm stands exactly halfway round, the side is not stated: it is taken as a far turn and reported. Which
+  arriving lanes take which turn, and into which leaving lanes, is five rows: straight on, every through lane into the
+  same slot ([~], CVC 21658 (a) read across the junction); near turn from the one lane nearest the kerb into the lane
+  nearest the kerb (CVC 22100 (a), read for driving on the left); far turn from the one lane nearest the centre line
+  into the lane nearest it (CVC 22100 (b)); and, where an arm cannot go straight on, its lanes shared between the two
+  turns, the kerb side taking the larger half ([~], MUTCD 3B.20 lane-use arrows for multiple turn lanes). The table's
+  hash keys both the road model's and the lane graph's caches. The turns are written into the **road model**
+  (`RoadModel::turns`: junction, arms, arriving and leaving lane, kind, the row that stated it; model format 6), not
+  into the road files: they follow by one rule from facts the road file already states, so writing them would be a
+  second copy of the same fact.
+- **The lane graph is a table built from the model** (`src/engine/procgen/city/roads/lanes/lane_level.h/.cpp`,
+  `buildLaneLevel`). Every lane path carries its street and model lane, every connector its model turn, every junction
+  its model junction. A lane path is a stretch of one built lane along one street, from stop line to stop line. What
+  follows a lane is all stated: the next stretch of the same lane; across a carry-on, the lane of the same slot on the
+  next street (any gap joined and reported, never a junction); where a ramp or pocket leaves its host, the host lane
+  is cut where their lines meet and leads into both; where one merges, its end leads into the host lane from the
+  station where they meet (the builder now records that station, `ModelConnection::meets`, and which host lane a
+  pocket was swept from or a dropped lane dies into, `Lane::sweptFrom` / `diesInto`; meshes byte-identical); at a
+  junction, one connector per stated turn, shaped by the existing connector shaping from the arriving lane's stop
+  line to the leaving lane's start and fitted to the drawn corner for each class. A class it does not fit is closed on
+  it and the fault is listed (`lanes_tool lanegraph` writes `corner_faults.txt`); a turn that fits no class has no
+  connector, and its fault says why.
+- **Stop lines** are the builder's kept stop lines of the stated arm (the paint's box, 5.2 m outside it), except where
+  the paint found no box for that arm or its box holds two stated junctions: there ADR-0419's rule from the stated
+  cross-sections. The stated junctions are followed, never the paint's grouping; each disagreement is reported.
+- **Which lines between lanes may be crossed**: between two through lanes, solid for the last stretch before the stop
+  line they run to; every other line may be crossed both ways. The length is stated in each road file,
+  `"lane_rules": {"solid_before_stop_line": 20.0}`, written by `lanes_tool layout <file> --lane-rules 20 --write`
+  into traffic_lab's and river_town's road files (48 bytes each; the bake key does not see it). 20 m is the value the
+  old builder used (`kSolidBeforeStopLine`, which the planner's interchange code still reads).
+- **One path.** A road file lacking junctions, streets, controls or lane rules gets no lane graph; the error names the
+  commands to run. There is no fallback to the old builder.
+- **Junction outlines** (the area that must not be blocked) run across each arm's lanes at its stop line, the arms'
+  lines joined in the order they lie round their middle: the stated heading order drew 23 outlines that crossed
+  themselves. This ordering is a drawing choice, not a fact; an outline that still crosses itself is a problem line.
+- **Deleted**: the lane graph's junction finding, carry-on and node junctions, near-miss joining of lane ends, lane
+  order measuring, planned-arm matching by distance (`carryControlPlan`), the turn guessing by angle
+  (`junctionTurns`, `connectJunctions`), and the lane graph's own control options. `lane_graph_build.cpp` 1,729 ->
+  268 lines (the fold tidying and bend measuring stay); `lane_graph_connect.cpp` 668 -> 463 (connector shaping and the
+  corner fit stay). `junctionPlanKey` gave way to `laneLevelKey`. The city sim's lane match (`LaneMap`) stays: the old
+  driving (v1) reads it.
+
+**Stage 1: compared beside the old graph** (`docs/road-model-compare/<level>_lanes.txt` and `_corner_faults.txt`).
+traffic_lab: lane paths 1684 -> 1615, connectors 1748 -> 1741, junctions 155 -> 156 (one per stated junction), dead
+ends 30 -> 24, all 8 ramp lanes now joined both ways (0 dead). Share of the lanes a car can get round, without lane
+changes 41.4% -> 43.1% (with 91.8% -> 92.1%); freeway lanes reachable by car without lane changes 0 -> 11 of 64; a
+truck still reaches none. river_town: lane paths 2111 -> 1974, junctions 162 -> 144, dead ends 116 -> 79; car 36.6% ->
+41.1% without lane changes, 71.8% -> 80.9% with. The stated turns and the old graph's agree on 1571 of traffic_lab's
+and 1959 of river_town's; the rest are listed with why. Corner faults: traffic_lab 2219 over 540 stated turns (bus
+537, car 329, goods 424, moped 47, motorcycle 49, truck 423, van 410); river_town 3363 over 866 (31 closed to every
+class; bus 835, car 418, goods 641, moped 88, motorcycle 92, truck 639, van 619). The paint and the stated junctions
+disagree at 39 arms with no box and one box no junction holds in traffic_lab, at 20 arms and two boxes on a carry-on
+in river_town; no paint box holds two stated junctions in either.
+
+**Stage 2: the host drives on the new table.** traffic_lab, five minutes, 300 cars: trips arrived 415 (490 before),
+0 bodies touching, 0 entered on red, 0 loops, tick 0.49 ms (0.51), ramps used 6 of 8. The state hash was retaken once:
+`kFiveMinuteStateHash = 0xa29c554aa56bbd3e` (was 0xcb8d84ad283044fb). Two held limits fail and are left failing, not
+loosened, with a comment naming them: 13 cars stood over 100 s (car 92, 261 s, giving way on the frontage road where an
+off-ramp's lane merges into it between junctions: two lanes there have no sign rank, no movement and no line, so the
+driving's fall-back, the lower path id gives way, decides it every time; and cars at the now single seven-arm lights of
+junction 0, whose cycle is 115 s); and the queue row, 2.76 s a car against 1.7 to 2.1 s. Neither the driving library's
+junction code nor the rule set's numbers were changed. Two ramps carry no car: their host's kerb lanes end at the
+freeway joints j153/j154, whose stated turns all leave the paved road (corner faults). `level_traffic_lab_v2_same_every_run`,
+`..._rebuild_hands_over_again` and `level_v1_state_is_unchanged` pass.
+
+**Consequences.**
+- A lane's street and a junction's id are on every path: later readers ask the model, not the geometry.
+- What the build does not fit is now named rather than patched: corner faults per class and turn (the work list for
+  step 9), paint disagreements, carry-on gaps, outlines that cross themselves.
+- river_town's table is not drivable for one car anywhere in town yet: without lane changes a car can get round 41% of
+  its lanes, with them 81%; lane changes are the next need, then the corner faults (step 9), the dead-end spokes at
+  the freeway ring, the hairpin and gapped carry-ons (s277/s337, s325/s344), and two ramps (x0_outR_link,
+  x1_outR_link) whose stated merge runs past the end of the host lane.
+
+**Not done.** The one-agent lab's car still drives the old way; no lane changes, parking or driver behaviour; other
+lanes levels have no `lane_rules` and get no lane graph until the tool writes it; every ramp carried at least once is
+not asserted (it does not hold); the 30-minute soak was not run.
+
+**Revisit when** the builder draws corners to fit every stated turn and paints the stated junctions (step 9); when
+the driving changes lanes.

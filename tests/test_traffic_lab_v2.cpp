@@ -222,7 +222,10 @@ constexpr double kLongestStand = 100.0;
 // Retaken for ADR-0414: chains through close lights closed where no car from rest could use them (load-time check), a car
 // pulling away read ahead (the rule set's `anticipation`) and city gaps (`gap_kept` 1.1 s), and room beyond counting a
 // refused car at its line by when it asked, not as in transit. (Before: 0x7381989eed43cec0, ADR-0412/0413.)
-constexpr uint64_t kFiveMinuteStateHash = 0xcb8d84ad283044fbull;
+// Retaken for ADR-0426 (step 8 of the road model): the lab drives on the lane level built from the road model -- one
+// junction per stated junction (a spread junction one junction, one signal plan), the stated turns, ramps that lead on
+// and off -- so every route and every wait moved. (Before: 0xcb8d84ad283044fb, ADR-0414.)
+constexpr uint64_t kFiveMinuteStateHash = 0xa29c554aa56bbd3eull;
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's
@@ -509,6 +512,12 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     Real freeShareSum = 0, freeSeconds = 0, fastestSeconds = 0;
     // what held cars on the fastest class's lanes: car-seconds, and their speed over the posted limit summed over them
     std::map<std::string, std::pair<Real, Real>> fastestHeldBy;
+    // the ramps (ADR-0426): each ramp lane on the road model (Path::modelLane) -> the cars seen on it
+    std::map<uint32_t, std::set<uint32_t>> carsOnRamp;
+    for (const engine::Path& p : roads.paths)
+        if (p.kind == engine::PathKind::Lane && p.section.valid() &&
+            roads.roadClassNames[roads.sections[p.section.index].roadClass] == "ramp")
+            carsOnRamp[p.modelLane];
     for (int i = 1; i <= steps; ++i) {
         city.step(lc.world, kStep);
         const Real now = i * kStep;
@@ -520,6 +529,9 @@ TEST_CASE(level_traffic_lab_v2_drives) {
             byClass[lane && cls < roads.roadClassNames.size() ? "lanes, " + roads.roadClassNames[cls]
                                                               : std::string("connectors (inside junctions)")]
                 .add(c.speed, kStep);
+            // THE RAMPS USED (ADR-0426): every car seen on a ramp's lane, by the ramp's lane on the road model
+            if (lane && cls < roads.roadClassNames.size() && roads.roadClassNames[cls] == "ramp")
+                carsOnRamp[p.modelLane].insert(c.id.index);
             everyone.add(c.speed, kStep);
             if (!lane || cls != fastestClass) continue;
             if (!(p.speedLimit > 0)) continue;
@@ -948,12 +960,33 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     for (const std::pair<const std::string, std::pair<Real, Real>>& h : fastestHeldBy)
         std::printf("      %6.0f car-seconds at %3.0f%%: %s\n", h.second.first,
                     h.second.first > 0 ? 100.0 * h.second.second / h.second.first : 0.0, h.first.c_str());
+    // THE RAMPS USED (ADR-0426): since the lane level is built from the road model a ramp's lane leads out of its host
+    // and into the road it joins, so a ramp is a way on and off; how many cars each carried in the run.
+    {
+        uint32_t used = 0;
+        std::printf("    [lab-v2] cars seen on each ramp (its lane on the road model, where it starts):");
+        for (const std::pair<const uint32_t, std::set<uint32_t>>& r : carsOnRamp) {
+            Vec2 at;
+            for (uint32_t p = 0; p < roads.paths.size(); ++p)
+                if (roads.paths[p].kind == engine::PathKind::Lane && roads.paths[p].modelLane == r.first) {
+                    at = roads.pointAt(engine::PathId(p), 0);
+                    break;
+                }
+            std::printf(" lane %u at (%.0f, %.0f): %zu;", r.first, at.x, at.y, r.second.size());
+            used += r.second.empty() ? 0 : 1;
+        }
+        std::printf("\n    [lab-v2] ramps used: %u of %zu\n", used, carsOnRamp.size());
+    }
     const driving::MeasurementReport report = sim.drivingHost().measurements().report();
     std::printf("    [lab-v2] the measurements table:\n%s\n", report.describe().c_str());
     // BODY AGAINST BODY (issue #283): every pair of drawn bodies every tick, sorted by how their paths relate.
     const driving::TouchRow& touches = sim.drivingHost().measurements().rows().touches;
     printTouches(*d, touches);
     CHECK(touches.spells <= kMostTouchSpells);
+    // FAILS SINCE ADR-0426 on one row, "How a queue empties" (2.76 s a car over 9 gaps from the fourth car on, target 1.7
+    // to 2.1 s; it passed on the lane graph worked out from the built roads). Left failing, not loosened: the lane level
+    // moved which lines queue form at (one junction per stated junction), and the driving's start-up is the driving
+    // library's, out of step 8's scope. See ADR-0426.
     // THE WHOLE TABLE PASSES (issue #284: the test used to check rows one by one and never the table), and every driver's
     // car is in the model: a car the host could not put down again stays drawn where it was, outside the model, where
     // nothing could see it (city_driving.cpp; issue #284).
@@ -973,6 +1006,14 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     // path, and a ring through that waiting is broken at an answer.
     CHECK(joinPairTicks <= kMostJoinPairTicks);
     CHECK(loopSamples <= kMostLoopSamples);
+    // FAILS SINCE ADR-0426 (13 cars over kLongestStand, not loosened): car 92 stood 261 s on the frontage road s311's
+    // offside lane where the off-ramp d0_0_a_off merges into it (lane 1457 joins ramp lane 1607 near (-562, 80)), giving
+    // way to the ramp's cars every time -- two lanes meeting between junctions are settled by the rule set's
+    // between_junctions questions, and two lanes have no sign rank, no movement and no line to arrive at, so the
+    // fall-back (the lower path id gives way) decides it -- with cars 97 and 184 behind it; and cars stood up to 143 s at
+    // red lights, the lab's longest cycle now 115 s (junction 0, which the lane level holds as the one stated junction it
+    // is: a spread junction of seven arms, one signal plan of seven phases, where the old graph split it in two; 92.8 s
+    // before). Both are the driving's (merging, signal plans), out of step 8's scope. See ADR-0426.
     CHECK(overLongest == 0);
     // ROOM BEYOND (issue #264): nobody at rest in a box but by a recorded give-way; the deadlock row of the measurements
     // table passes; and every grant outstanding belongs to a driven car whose front has not yet reached its lane (grants

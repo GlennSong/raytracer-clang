@@ -27064,5 +27064,6 @@
    "road": "d1_0_b_on",
    "to": 432.4
   }
- ]
+ ],
+ "lane_rules": {"solid_before_stop_line":20.0}
 }

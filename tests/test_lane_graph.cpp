@@ -847,11 +847,6 @@ TEST_CASE(lane_graph_cache_key_changes_with_the_vehicles_and_the_builder_version
         b.vehicles[1].tag = "bc";
         CHECK(roads::lanes::laneGraphCacheKey(kTestRoadsKey, a) != roads::lanes::laneGraphCacheKey(kTestRoadsKey, b));
     }
-    {
-        LaneGraphOptions o = base;
-        o.control = "planned";
-        changed.push_back({"the control", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
-    }
     for (std::size_t i = 0; i < changed.size(); ++i) {
         if (changed[i].second == k) std::printf("    the key did not change with %s\n", changed[i].first);
         CHECK(changed[i].second != k);

@@ -1,49 +1,16 @@
 #ifndef RAYTRACER_ENGINE_PROCGEN_CITY_ROADS_LANES_LANE_GRAPH_BUILD_H
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROADS_LANES_LANE_GRAPH_BUILD_H
 
-// THE LANE GRAPH FROM THE BUILT ROADS (issue #237, driving-model-design.md 5.2): reads the lanes the road builder laid
-// and cuts them into the lane graph's lanes and sections, and records its junctions. It reads; it never changes what the
-// builder made.
-//
-// - A CORRIDOR is one road's lanes running one way, plus the stretch of a ramp's lane that runs beside it (the ramp's
-//   deceleration lane before the gore where it leaves, or its merge lane after the gore where it joins: the builder's
-//   ramp anchors say which host lane). Distances along a corridor are measured along its road's spine, in the way the
-//   traffic runs.
-// - A corridor is CUT wherever a lane in it begins or ends (a turn pocket opening, a lane dropping, a ramp's lane
-//   arriving or leaving), at every junction, and where the approach to a stop line begins (the lines there are solid).
-//   Between two cuts every lane runs the whole way: one SECTION, its lanes listed from the offside to the kerb.
-// - JUNCTIONS are the paint's junction boxes (deck_mesh.h junctionSpans), found with the lane graph's own, looser
-//   parallel test (kJunctionParallelForGraph: streets meeting at 35 degrees are a junction, not two roads side by
-//   side; the paint keeps its own number): each street's lanes stop at the stop line kStopLineBack before the box and
-//   start again as far beyond it; what lies between is the junction's, for the connectors. A junction's outline runs
-//   round its stop lines. A lane of a road with no box of its own there (a ramp ending on a street, a freeway crossing
-//   at grade) is cut where it crosses that outline; a ramp that ends on a street (no gore on a host lane) is the
-//   junction's from that outline to its end, within kRampEndReach. An outline that crosses itself is REFUSED: reported,
-//   and no connectors are made there. Each junction lists the lanes arriving at it and leaving it.
-// - Where one road CARRIES ON AS ANOTHER with no junction (its end meets exactly one other road's end) and their lanes
-//   just miss (more than kJoinDistance or kJoinDegrees apart, less than kNearMiss and kNearMissDegrees), the two meet at
-//   a junction of their own, a CARRY-ON: each road gives up the stretch by its end it needs for a connector a vehicle
-//   can drive (kCarryOnTrims), and the connectors there all go straight on. Where three or more road ends meet so (a
-//   ramp ending where a street begins, beside the ramp that leaves it), they are a NODE junction, its turns stated as
-//   at any junction. Where lanes meet exactly, a lane simply leads into the next road's lane.
-// - What follows a lane is the lane it carries on as in the next section, the lane of the next road that begins exactly
-//   where it ends, or (a lane arriving at a junction) the connectors leaving it (lane_graph_connect.h).
-// - TIDYING, in the lane graph only (the builder's lanes are not touched): a lane on the inside of a corner of its road
-//   sharper than its offset folds back on itself there; the fold is cut out so its distance along always moves forward
-//   (reported, "tidied"). A section shorter than kShortestSection where a lane begins or ends (a turn pocket ending a
-//   metre before the stop line) is merged into its neighbour, the lanes that begin or end there carried straight on
-//   to the neighbour's cut.
-// - Not turned into lane paths: the builder's hand-declared connector lanes, and the lanes of track and footway classes
-//   (no car drives them).
-// - THE CONTROL PLAN (issue #240, control_plan.h) is carried through, never worked out here: every lane posts its
-//   road's `speed_limit` and every connector that of the lane it joins; where the road graph plans its junctions, each
-//   junction takes the control of the planned junction its lanes' arms belong to (kPlannedArmReach), and each arm's
-//   regulations stand at the end of every lane arriving by it. A junction the plan does not name, one holding planned
-//   junctions of different controls, a lane whose road the plan gives no arm there and a regulation on an arm no lane
-//   arrives by are reported; the junction is left kControlNotPlanned.
-//
-// It needs the whole build (the junction boxes come from the lane footprints and deck heights): seconds on a city, so
-// it is not run at level load (see the report on #237).
+// THE LANE GRAPH'S BUILD: WHAT IS MEASURED, AND WHAT A BUILD REPORTS (issue #237, driving-model-design.md 5.2). Since
+// ADR-0426 the lane graph is a table built from the road model (lane_level.h buildLaneLevel: paths, sections, junctions,
+// next links, controls and signs by the model's ids). What stays here is what the design keeps as measurement on top of
+// it, and the shapes they share:
+//   - how tightly each path bends, as a vehicle feels it (measureBends), and the kinks a driver would feel (findKinks);
+//   - the tidying of a lane on the inside of a corner sharper than its offset, which folds back on itself (cutFolds);
+//   - which side of a lane its kerb is (offsideness, kerbPerpSign): the one statement of it;
+//   - the vehicles a build is checked against (VehicleSize), and what a build reports (LaneGraphBuild).
+// The paths through junctions (connector shapes, the corner-fit test) are lane_graph_connect.h; where two paths' bodies
+// could touch, lane_graph_crossings.h.
 
 #include "engine/procgen/city/roads/lane_graph.h"
 #include "engine/procgen/city/roads/lanes/lanes.h"
@@ -55,33 +22,18 @@
 namespace engine {
 namespace roads::lanes {
 
-// The control every junction carries when the road graph plans none (a graph with no "junctions" list), and the one a
-// junction gets when the graph's plan does not name it or names it twice over (both reported). Not a kind of control:
-// the absence of a plan, so whatever reads it can say so -- a rule set that has no row for it refuses the graph.
-constexpr const char* kControlNotPlanned = "not_planned";
-// THE CONTROL PLAN CARRIED THROUGH (issue #240; control_plan.h writes it into the road graph). Each lane arriving at or
-// leaving a built junction is matched to the planned arm of its road on the same side of the junction (the road's
-// spine running in or out) whose station is nearest where the lane ends or begins, and no further than this (metres
-// along the road): a ramp's lanes leave a street up to kRampEndReach from the ramp's end. A built junction takes the
-// control of the planned junction its lanes' arms belong to.
-constexpr double kPlannedArmReach = 50.0;
-// How far before a junction's stop line the lines between lanes are solid (metres). To become rule-set data.
+// How far before a junction's stop line a merging ramp lane must have ended, as the PLANNER lays an interchange's ramps
+// (interchange.cpp; metres). The lane level reads the road file's own statement of the solid stretch before a stop line
+// (`lane_rules.solid_before_stop_line`, ADR-0426), which the one-off tool wrote as this same 20 m into the files that
+// have it; the planner does not write it yet.
 constexpr double kSolidBeforeStopLine = 20.0;
-// A section shorter than this is merged into its neighbour where a lane begins or ends at one of its cuts, and
-// reported with its place where not (metres).
-constexpr double kShortestSection = 2.0;
-// The lane graph's parallel test (deck_mesh.h junctionCrossRank): a crossing lane within this (|cos| of the angle) of
-// a street's direction runs beside it. About 18 degrees -- looser than the paint's 46, so streets meeting at 35 degrees
-// and a ramp's end crossing a street are junctions, while a gore or an aux lane beside its host is not.
+// The builder's parallel test for a ramp's bare end along a street (lanes.cpp checkRampLandings; deck_mesh.h
+// junctionCrossRank): a crossing lane within this (|cos| of the angle) of a street's direction runs beside it. About 18
+// degrees, looser than the paint's 46.
 constexpr double kJunctionParallelForGraph = 0.95;
-// A ramp that ends on a street (no gore on a host lane) belongs to the junction its lanes run into within this of its
-// end (metres along the ramp): the stretch between the junction and the ramp's own end lies inside the street.
+// How far a ramp that ends on a street (no gore on a host lane) may run on inside the street's lanes (metres along the
+// ramp): what the control planner reads to find a ramp's free end in a junction (control_plan.cpp).
 constexpr double kRampEndReach = 40.0;
-// How far back from where they meet two roads carrying on as one give up to a carry-on junction (metres, each): the
-// first that lets every connector there be as wide a bend as the widest-turning vehicle needs, else the last.
-constexpr double kCarryOnTrims[] = {1.0, 2.0, 4.0, 8.0};
-// ... but never more than this share of either road's length.
-constexpr double kCarryOnTrimShare = 0.25;
 // Bends gentler than this radius count as straight when a path's tightest radius is measured (metres).
 constexpr double kStraightEnoughRadius = 1000.0;
 
@@ -149,19 +101,14 @@ struct Kink {
 };
 // The kinks of a centre line (as measureBends reads its points), in order along it.
 std::vector<Kink> findKinks(const Vec2* xy, const double* along, std::size_t count);
-// A lane point within this height of a junction's lane ends is at the junction's level (metres): a lane passing under
-// or over a junction is not in it.
-constexpr double kJunctionLevelReach = 2.0;
-// One lane leads into another where its end is within this of the other's start (metres) ...
-constexpr double kJoinDistance = 0.01;
-// ... and the two run the same way within this (degrees).
-constexpr double kJoinDegrees = 1.0;
-// A lane ending nearer than this to where another begins, but not within the join tolerances, just misses it (metres)
-// -- joined by a carry-on junction where its road carries on as one other road, else reported ...
-constexpr double kNearMiss = 0.5;
-// ... when the two run within this of the same way (degrees): a lane beside, not across. A carry-on's connectors are
-// all straight on (turned through less than this).
-constexpr double kNearMissDegrees = 45.0;
+
+// CUTS THE FOLD OUT OF A LANE that runs backwards for a stretch (on the inside of a corner of its road sharper than its
+// offset from the road's spine, the builder's offset points loop back on themselves): `forward[k]` is the way its road
+// runs at point k. Where the lane before a backward run crosses the lane after it, the lane runs to that crossing and
+// on from it; where it does not, every point that would take it backwards is dropped. `u` (each point's distance
+// along its road) is kept in step. Returns whether anything was cut. In the lane graph's copy only: the builder's lanes
+// are never touched (the lane graph reports each lane it tidies).
+bool cutFolds(std::vector<Vec2>& xy, std::vector<double>& u, const std::vector<Vec2>& forward);
 
 // WHICH WAY IS THE OFFSIDE, for a lane `normalOffset` from its road's spine (along the spine's left normal, perp())
 // running `dir` (+1 along the spine, -1 against it): the larger the result, the nearer the middle of the road. The
@@ -176,19 +123,20 @@ inline double offsideness(double normalOffset, int dir) { return normalOffset * 
 inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 
 // THE LANE GRAPH BUILDER'S VERSION. A saved lane graph (lane_graph_cache.h) is keyed by the roads it was built from,
-// the vehicles its connectors were checked against and this number, so BUMP IT whenever what buildLaneGraph,
-// connectJunctions (lane_graph_connect.h) or findCrossingPoints (lane_graph_crossings.h) makes can change -- a new rule
-// for which turns exist, a connector's shape, a tolerance above or there -- or every level in v2 keeps loading the graph
-// the old code built. (A change to the roads themselves
-// is the lanes tag's, kLanesBuildTag, which keys the roads; a change to the file format is LGRF's own version.)
+// the vehicles its connectors were checked against and this number, so BUMP IT whenever what buildLaneLevel
+// (lane_level.h), fitConnector (lane_graph_connect.h) or findCrossingPoints (lane_graph_crossings.h) makes can change --
+// a connector's shape, a tolerance there -- or every level in v2 keeps loading the graph the old code built. (A change to
+// the roads themselves is the lanes tag's, kLanesBuildTag, which keys the roads; to the road file's layout, lane rules
+// or the turns' table, the cache key's own; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
-constexpr uint32_t kLaneGraphBuildVersion = 6;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
+constexpr uint32_t kLaneGraphBuildVersion = 7;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
                                                  // 2: crossing points (#239, ADR-0400)
                                                  // 3: the control plan carried through: controls, signs, limits (#240)
                                                  // 4: each path's bend profile, measured as a vehicle feels it (#281)
                                                  // 5: far turns' places to wait inside the junction (#261, ADR-0406)
                                                  // 6: bodies swept at their length: the paved-road test and the
                                                  //    crossing points' reach (#284 item 9, ADR-0412)
+                                                 // 7: a table built from the road model (lane_level.h, ADR-0426)
 
 // A VEHICLE TAG and its body: the tightest radius its path may have, its width and its length (metres). Passed in by the
 // caller (the engine does not know the driving model's vehicles); a connector tighter than the radius is closed to it.
@@ -206,50 +154,30 @@ struct VehicleSize {
 struct LaneGraphOptions {
     // Every lane is open to every one of these vehicle tags, until lane kinds carry who may use them (a later task).
     std::vector<VehicleSize> vehicles;
-    // The control every junction carries when the road graph plans none (RoadLabGraph::declaresJunctions false).
-    std::string control = kControlNotPlanned;
 };
 
-// HOW THE CONTROL PLAN CAME THROUGH, counted (all zero for a graph that plans none).
+// THE STATED CONTROLS AND SIGNS, counted as the lane level carries them (every junction's control is the road file's).
 struct ControlPlanReport {
-    bool declared = false;                       // the road graph carries a plan
-    uint32_t planned = 0;                        // planned junctions
-    uint32_t plannedNotBuilt = 0;                // ... no built junction's lanes meet any of their arms (two roads
-                                                 // whose lanes simply run on into each other: no junction is built)
-    uint32_t plannedSpread = 0;                  // ... whose arms the builder made into several junctions (each takes
-                                                 // the planned one's control)
-    uint32_t merged = 0;                         // built junctions holding two or more planned ones of one control
-    uint32_t notPlanned = 0;                     // built junctions no planned one names (left not_planned, reported)
-    uint32_t carryOns = 0;                       // built junctions only where the file states streets carry on (ADR-0419):
-                                                 // the plan's carry-on control, not reported
-    uint32_t conflicts = 0;                      // built junctions holding planned ones of different controls (likewise)
-    uint32_t lanesOffPlan = 0;                   // lanes of a built junction whose road has no planned arm there
-    uint32_t signsWithNoLane = 0;                // planned arm regulations with no lane arriving to stand them on
-    std::vector<std::pair<std::string, uint32_t>> byControl;   // built junctions per control, by name
+    bool declared = false;                       // the road file states its controls
+    uint32_t planned = 0;                        // stated junctions
+    std::vector<std::pair<std::string, uint32_t>> byControl;   // lane-level junctions per control, by name
     std::vector<std::pair<std::string, uint32_t>> regulations; // regulations stood, per kind, by name
     uint32_t lanesPosted = 0;                    // lane paths with a posted limit
     uint32_t connectorsPosted = 0;               // connectors with a posted limit (the lane they join's)
 };
 
-// What a junction was made from, and how it fared, by junction id.
-enum class JunctionOrigin : uint8_t {
-    Box,       // the paint's junction boxes, one or more merged
-    CarryOn,   // where one road carries on as another and their lanes just miss
-    Node,      // where three or more roads meet end to end with no box, and lanes just miss
-};
+// How a junction fared, by lane-level junction id.
 struct JunctionNote {
-    JunctionOrigin origin = JunctionOrigin::Box;
-    Vec2 at;                    // the middle of its outline
-    std::string roads;          // the roads that meet there, by id
-    bool refused = false;       // no connectors: its outline is unusable (the problems say why)
-    uint32_t turnsStated = 0;   // the turns junctionTurns states there
+    Vec2 at;                    // the stated junction's place
+    std::string roads;          // the roads of its arms, by id
+    uint32_t turnsStated = 0;   // the turns the road model states there
     uint32_t turnsBuilt = 0;    // ... made into connectors (some may be closed to some vehicles)
-    uint32_t turnsRefused = 0;  // ... refused (each with a line in the problems; all of them when the junction is)
+    uint32_t turnsRefused = 0;  // ... fitting no vehicle, or with no lane path to take them (each a corner fault)
 };
-// A turn not built, and why, where.
+// A stated turn with no connector (it fits no vehicle), and where.
 struct Refusal {
     uint32_t junction = 0;
-    PathId from, to;            // not valid when the whole junction is refused
+    PathId from, to;
     Turn turn = Turn::None;
     Vec2 at;
 };
@@ -286,32 +214,47 @@ struct SectionSource {
     double from = 0, to = 0;
 };
 
+// A CORNER FAULT (ADR-0426): a stated turn whose drawn corner does not fit a vehicle class -- its tightest bend tighter
+// than the class turns in, or its body swept along it leaving the paved road, or no arc joining the two lane ends at all
+// -- or that has no lane path to start or end on. The turn stays stated in the road model; the lane level closes it to
+// that class. The work list for design step 9 (the builder drawing every corner to fit its stated turns).
+struct CornerFault {
+    uint32_t turn = kNoIndex;     // the road model's turn (RoadModel::turns)
+    std::string tag;              // the vehicle tag it does not fit; empty: every one (no arc, no lane path)
+    std::string why;              // in words
+    Vec2 at;
+};
+
 struct LaneGraphBuild {
     LaneGraph graph;
+    // A fact the lane level cannot be built without, missing from the road file, in words naming what to run; empty when
+    // it was built (lane_level.h). The graph is empty then.
+    std::string error;
+    std::vector<CornerFault> cornerFaults;   // the stated turns whose corners do not fit, per class (lane_level.h)
+    // where the lane level joined two lanes the model states lead one into the other (lane_level.h): how many at places a
+    // street carries on as another, where a lane leaves its host and where one merges into its host; of them, how many
+    // whose lines did not meet (each also a line in the problems, with the gap)
+    uint32_t carryOnJoins = 0, divergeJoins = 0, mergeJoins = 0, joinsWithGap = 0;
+    // each arm's stop line, by where it came from: the paint's (its box holds this junction alone), ADR-0419's rule where
+    // the paint found no box, or where the paint's box holds another stated junction too (each such box a problem line)
+    uint32_t stopLinesPainted = 0, stopLinesNoBox = 0, stopLinesSharedBox = 0;
+    std::vector<std::string> paintDisagrees;   // each place the paint's boxes and the stated junctions disagree
     std::vector<std::string> problems;     // in plain words, each with its place; empty = nothing to look at
     std::vector<PathSource> sources;       // per path (a connector's: lane -1, no builder lane)
     std::vector<SectionSource> sectionSources;   // per section
-    std::vector<double> insideJunctions;   // per builder lane: metres of it inside junction outlines (the connectors')
     std::vector<double> laneLengths;       // per builder lane: its length as the graph reads it (a fold tidied away)
     std::vector<char> leftOut;             // per builder lane: 1 = made into no lane path (a connector, a track, a footway)
     std::vector<JunctionNote> junctionNotes;   // per junction
-    std::vector<Refusal> refusals;         // every turn not built, by junction then turn
-    std::vector<std::pair<uint32_t, uint32_t>> unjoined;   // lane ends not joined: (the lane, the lane it just misses)
+    std::vector<Refusal> refusals;         // every stated turn with no connector, by junction then turn
     uint32_t connectorsLeftOut = 0;        // builder connector lanes left out
     uint32_t otherLanesLeftOut = 0;        // track and footway lanes left out
-    uint32_t mergedJunctions = 0;          // junction boxes that overlapped another junction's, made one
-    uint32_t endsAtOutline = 0;            // arriving and leaving lanes cut at an outline: no stop line of their own
-    uint32_t roadJoins = 0;                // lanes leading into the next road's lane where two roads meet end to end
-    uint32_t crossingsOutside = 0;         // places two roads' lanes cross at one level outside every junction
     uint32_t tidiedLanes = 0;              // lanes whose fold at a sharp corner was cut out
-    uint32_t mergedSections = 0;           // short sections merged into a neighbour
     // KINKS (issue #281, findKinks), each also a line in the problems with its place: in the builder's lane lines, in
     // the connectors' lines, and where one path leads into the next with its heading jumping by more than
     // kKinkDegrees. The largest jump of each, in degrees.
     uint32_t laneKinks = 0, connectorKinks = 0, joinKinks = 0;
     double worstLaneKink = 0, worstConnectorKink = 0, worstJoinKink = 0;
     std::size_t bendPieceBytes = 0;        // the bend profiles' memory (the pieces and each path's range)
-    uint32_t rampEnds = 0;                 // ramp ends on a street taken into the junction they run into
     uint32_t connectorsByTurn[kTurnCount] = {};   // connectors made, by Turn
     std::vector<uint32_t> closedTo;        // per vehicle tag name: connectors too tight for it (closed to it)
     // How much of the graph a car can get round (lane_graph_connect.h reachReport): the parts, the largest's share of
@@ -320,15 +263,13 @@ struct LaneGraphBuild {
     double reachableShare = 0;
     std::vector<std::pair<std::string, std::vector<uint32_t>>> outside;
     CrossingReport crossings;              // the crossing points (their problems are in `problems` too)
-    ControlPlanReport controlPlan;         // the control plan carried through (its problems are in `problems`)
-    std::vector<std::vector<uint32_t>> plannedOf;   // per built junction: the planned junctions (RoadLabGraph::junctions
-                                                    // indexes) it holds, in index order
-    double milliseconds = 0;             // the whole of buildLaneGraph
-    double boxMilliseconds = 0;            // ... of which finding the paint's junction boxes
+    ControlPlanReport controlPlan;         // the stated controls and signs, carried through
+    double milliseconds = 0;               // the whole of buildLaneLevel
     double connectMilliseconds = 0;        // ... of which the connectors (the crossing points: crossings.milliseconds)
 };
 
-// The lane graph of a built road network, its problems, and where each path came from.
+// THE LANE GRAPH OF A BUILT ROAD NETWORK: its road model assembled from it (road_model.h assembleRoadModel), and the lane
+// level built from that (lane_level.h buildLaneLevel). `error` names what a road file lacking a fact must run.
 LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts);
 
 }  // namespace roads::lanes

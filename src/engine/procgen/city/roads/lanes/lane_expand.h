@@ -40,12 +40,21 @@ struct Lane {
     //   ends, the way its traffic runs: the junction at that end of the street it begins or ends on, when the lane
     //   reaches that end of the street; -1 otherwise (a pocket born or dying along the street, a dead end, a ramp's
     //   anchored end).
+    //   `sweptFrom` / `diesInto` (ADR-0426): a lane born along its road out of a neighbour, or dying into one -- a turn
+    //   pocket swept out of the lane on its side (and back into it where it tapers out), a ramp's second lane dying into
+    //   its first -- names that lane (an index into LaneSet::lanes); -1 otherwise. (A ramp's lane leaving or joining its
+    //   host is stated by the ramp's anchors, EdgeSpec::anchorLanes.)
     int slot = -1;
     double spineFrom = 0, spineTo = 0;
     std::vector<LaneStreetSpan> streets;
     int junctionAtStart = -1, junctionAtEnd = -1;
+    int sweptFrom = -1, diesInto = -1;
     bool isConnector() const { return kind == "connector"; }
 };
+
+// A lane reaches a street's end when its stretch of spine comes within this of it (metres): the streets' stations are
+// written to the centimetre.
+constexpr double kReachesStreetEnd = 0.01;
 
 struct LaneSet {
     std::vector<Lane> lanes;

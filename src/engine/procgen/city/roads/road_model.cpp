@@ -9,6 +9,7 @@
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_twin.h"         // classOf: the engine's class of a road
+#include "engine/procgen/city/roads/lane_turns.h"              // the stated turns through each junction (ADR-0426)
 #include "engine/procgen/city/polyline.h"                      // simplifyRun, distToSegment
 #include "engine/procgen/city/polygon.h"                       // pointInPolygon, interiorPoint: the regions' outlines
 #include "engine/asset_root.h"                                 // assetPath: the attachment kinds' file
@@ -282,8 +283,10 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
     if (!anyLimit) m.notStated.push_back("speed limits: no road posts one (the rule set's default for each class holds)");
     if (!anyName) m.notStated.push_back("street names: the road file names no street (lanes_tool layout --names writes them)");
     if (!g.declaresCrossings) m.notStated.push_back("crossings: the road file declares none (the design stage works them out from heights)");
-    m.notStated.push_back("turn paths through junctions: nothing states them (the lane graph works them out)");
-    m.notStated.push_back("which lines between lanes may be crossed: nothing states them");
+    m.notStated.push_back("turn paths through junctions: the turns are stated (the built layer's `turns`, ADR-0426); the path each "
+                          "follows is the lane level's (lane_level.h), not held here");
+    m.notStated.push_back("which lines between lanes may be crossed: the lane level's, from the lanes' kinds and the road file's "
+                          "`lane_rules` (ADR-0426), not held here");
     m.notStated.push_back("junction outlines on the ground: the builder has none (the paint's boxes are kept as stretches along each road)");
     m.notStated.push_back("crosswalks: nothing states them (the paint draws a zebra at each box)");
     m.notStated.push_back("parking spaces: the kerb parking band is stated (each street's cross-section), the spaces along it are not (the city sim lays them at load)");
@@ -362,6 +365,11 @@ RoadModel assembleRoadModel(const Result& r) {
                     C.hostStation = E.hostStation;
                     C.length = E.length;
                     C.taper = E.taper;
+                    // where the ramp's line leaves (or meets) its host lane's: composeRamp lays its deceleration lane from
+                    // the gore less the length and taper, and its auxiliary lane to the gore plus them, the way the host
+                    // lane runs
+                    const double way = r.lanes.lanes[static_cast<std::size_t>(hostLane)].dir > 0 ? 1.0 : -1.0;
+                    if (stated(E.hostStation)) C.meets = E.hostStation + (end == 0 ? -way : way) * (E.length + E.taper);
                     m.connections.push_back(C);
                 } else {
                     m.problems.push_back(fmt("ramp %s: its %s end names host lane \"%s\", which the builder did not lay", R.edge.c_str(),
@@ -379,6 +387,91 @@ RoadModel assembleRoadModel(const Result& r) {
         C.to = ModelLaneId(static_cast<uint32_t>(b));
         C.hostStation = c.toS;
         m.connections.push_back(C);
+    }
+    // ...and the lanes the builder sweeps out of a neighbour along its road (a turn pocket) or into one (a pocket that
+    // tapers out, a ramp's second lane): its own records (Lane::sweptFrom, diesInto), at the lane's own ends
+    for (std::size_t li = 0; li < r.lanes.lanes.size(); ++li) {
+        const Lane& l = r.lanes.lanes[li];
+        if (l.parent < 0) continue;
+        const EdgeSpec& e = g.edges[static_cast<std::size_t>(l.parent)];
+        const roads::lanes::PocketSpec* pocket = nullptr;
+        for (const roads::lanes::PocketSpec& pk : e.pockets)
+            if (e.id + "." + pk.id == l.id) pocket = &pk;
+        const double start = l.dir > 0 ? l.spineFrom : l.spineTo, end = l.dir > 0 ? l.spineTo : l.spineFrom;
+        if (l.sweptFrom >= 0) {
+            ModelConnection C;
+            C.kind = ConnectionKind::Diverge;
+            C.from = ModelLaneId(static_cast<uint32_t>(l.sweptFrom));
+            C.to = ModelLaneId(static_cast<uint32_t>(li));
+            C.taper = pocket ? (pocket->taper > 0 ? pocket->taper : 10 * l.w) : 0.0;
+            C.hostStation = start + l.dir * C.taper;
+            C.meets = start;
+            m.connections.push_back(C);
+        }
+        if (l.diesInto >= 0) {
+            ModelConnection C;
+            C.kind = ConnectionKind::Merge;
+            C.from = ModelLaneId(static_cast<uint32_t>(li));
+            C.to = ModelLaneId(static_cast<uint32_t>(l.diesInto));
+            C.taper = pocket ? pocket->taperOut : 0.0;
+            C.hostStation = end - l.dir * C.taper;
+            C.meets = end;
+            m.connections.push_back(C);
+        }
+    }
+
+    // ---- the turns through each junction (ADR-0426): stated once, by the rows of assets/data/lane_turns.json over its
+    // arms (their stated headings and through pairs), the lanes arriving and leaving by each (their kinds and slots) and
+    // its control
+    {
+        const LaneTurnRules& rules = laneTurnRules();
+        if (rules.rows.empty()) m.problems.push_back("no rows in assets/data/lane_turns.json: no junction offers a turn");
+        // per junction and arm: the lanes arriving and leaving by it (the street it is, the way the lane runs there)
+        std::vector<std::vector<TurnArm>> armsOf(m.junctions.size());
+        for (std::size_t j = 0; j < m.junctions.size(); ++j) {
+            armsOf[j].resize(m.junctions[j].arms.size());
+            for (std::size_t a = 0; a < m.junctions[j].arms.size(); ++a) {
+                armsOf[j][a].hasHeading = stated(m.junctions[j].arms[a].heading);
+                armsOf[j][a].heading = armsOf[j][a].hasHeading ? m.junctions[j].arms[a].heading : 0.0;
+            }
+        }
+        // each lane, street by street: where its stretch reaches an end of the street that names a junction, it arrives at
+        // that junction (the way it runs) or leaves it, by the arm that street is there (a lane runs on through a junction
+        // its road passes through mid-way: the streets either side are two arms)
+        for (std::size_t li = 0; li < m.lanes.size(); ++li) {
+            const ModelLane& L = m.lanes[li];
+            for (const ModelLaneSpan& sp : L.streets) {
+                const ModelStreet& S = m.streets[sp.street.index];
+                for (int end = 0; end < 2; ++end) {
+                    const Real at = end == 0 ? S.from : S.to;
+                    if (std::fabs((end == 0 ? sp.from : sp.to) - at) > roads::lanes::kReachesStreetEnd) continue;
+                    const ModelJunctionId j = S.junctions[static_cast<std::size_t>(end)];
+                    if (!j.valid()) continue;
+                    const bool arriving = (end == 1) == (L.dir > 0);   // it runs toward this end
+                    for (std::size_t a = 0; a < m.junctions[j.index].arms.size(); ++a) {
+                        const ModelArm& arm = m.junctions[j.index].arms[a];
+                        if (arm.street != sp.street || arm.spineIn != (end == 1)) continue;
+                        TurnArmLane tl{static_cast<uint32_t>(li), L.kind, L.slot};
+                        (arriving ? armsOf[j.index][a].arriving : armsOf[j.index][a].leaving).push_back(tl);
+                    }
+                }
+            }
+        }
+        for (std::size_t j = 0; j < m.junctions.size(); ++j) {
+            std::vector<std::string> notes;
+            for (const StatedTurn& t : turnsAtJunction(armsOf[j], m.junctions[j].through, m.junctions[j].control, rules, &notes)) {
+                ModelTurn T;
+                T.junction = ModelJunctionId(static_cast<uint32_t>(j));
+                T.fromArm = t.fromArm;
+                T.toArm = t.toArm;
+                T.from = ModelLaneId(t.from);
+                T.to = ModelLaneId(t.to);
+                T.turn = t.turn;
+                T.row = t.row;
+                m.turns.push_back(T);
+            }
+            for (const std::string& n : notes) m.problems.push_back("junction " + m.junctions[j].id + ": " + n);
+        }
     }
 
     // ---- the paint's boxes: each arm's box edge and stop line; boxes and arms that do not meet -------------------------
@@ -544,6 +637,8 @@ LeadsTo leadsTo(const RoadModel& m, ModelLaneId lane) {
     out.junction = m.lanes[lane.index].atEnd;
     for (std::size_t c = 0; c < m.connections.size(); ++c)
         if (m.connections[c].from == lane) out.connections.push_back(static_cast<uint32_t>(c));
+    for (std::size_t t = 0; t < m.turns.size(); ++t)
+        if (m.turns[t].from == lane) out.turns.push_back(static_cast<uint32_t>(t));
     return out;
 }
 
@@ -1295,9 +1390,12 @@ std::string dumpRoadModel(const RoadModel& m) {
         out += "\n";
     }
     for (const ModelConnection& c : m.connections)
-        out += fmt("connection: %s %s %s at host station %.2f (length %.1f, taper %.1f)%s\n", m.lanes[c.from.index].id.c_str(),
-                   connectionName(c.kind), m.lanes[c.to.index].id.c_str(), c.hostStation, c.length, c.taper,
-                   c.ramp.empty() ? "" : (" ramp " + c.ramp).c_str());
+        out += fmt("connection: %s %s %s at host station %.2f (length %.1f, taper %.1f; the lines meet at %s)%s\n",
+                   m.lanes[c.from.index].id.c_str(), connectionName(c.kind), m.lanes[c.to.index].id.c_str(), c.hostStation, c.length,
+                   c.taper, num(c.meets).c_str(), c.ramp.empty() ? "" : (" ramp " + c.ramp).c_str());
+    for (const ModelTurn& t : m.turns)
+        out += fmt("turn at %s: arm %u into arm %u, %s, lane %s into lane %s (row %u)\n", junctionName(m, t.junction).c_str(), t.fromArm,
+                   t.toArm, turnKey(t.turn), m.lanes[t.from.index].id.c_str(), m.lanes[t.to.index].id.c_str(), t.row);
     for (const ModelRamp& R : m.ramps) {
         out += "ramp " + R.edge + ":";
         for (int end = 0; end < 2; ++end) {
@@ -1349,8 +1447,15 @@ std::string reportRoadModel(const RoadModel& m) {
     out += fmt("  %zu streets\n", m.streets.size());
     out += fmt("  %zu lanes (%u on roads, %u of them on stated streets, %u reaching a junction at an end; the rest connectors)\n", m.lanes.size(),
                roadLanes, lanesOnStreets, lanesWithEnds);
-    out += fmt("  %zu connections: %u ramps leaving a lane, %u ramps merging into one, %u declared connectors\n", m.connections.size(), diverge,
+    out += fmt("  %zu connections: %u lanes leaving a lane, %u lanes merging into one, %u declared connectors\n", m.connections.size(), diverge,
                merge, joins);
+    {
+        uint32_t byTurn[kTurnCount] = {};
+        for (const ModelTurn& t : m.turns) ++byTurn[static_cast<std::size_t>(t.turn)];
+        out += fmt("  %zu turns through junctions (ADR-0426): %u straight on, %u near turns, %u far turns\n", m.turns.size(),
+                   byTurn[static_cast<std::size_t>(Turn::Straight)], byTurn[static_cast<std::size_t>(Turn::NearTurn)],
+                   byTurn[static_cast<std::size_t>(Turn::FarTurn)]);
+    }
     out += fmt("  %zu ramps, %zu crossings\n", m.ramps.size(), m.crossings.size());
     {
         std::map<std::string, uint32_t> byKind;
@@ -1415,7 +1520,7 @@ template <class T> constexpr bool isRecord() {
            std::is_same<T, ModelSection>::value || std::is_same<T, ModelStreet>::value || std::is_same<T, ModelLaneSpan>::value ||
            std::is_same<T, ModelLane>::value || std::is_same<T, ModelConnection>::value || std::is_same<T, ModelRampEnd>::value ||
            std::is_same<T, ModelRamp>::value || std::is_same<T, ModelCrossing>::value || std::is_same<T, ModelAttachment>::value ||
-           std::is_same<T, ModelNode>::value || std::is_same<T, ModelNodePoint>::value;
+           std::is_same<T, ModelNode>::value || std::is_same<T, ModelNodePoint>::value || std::is_same<T, ModelTurn>::value;
 }
 
 struct Writer {
@@ -1501,7 +1606,14 @@ template <class IO, class C> void fields(IO& io, C& c, ModelConnection*) {
     uint8_t kind = static_cast<uint8_t>(c.kind);
     io(kind);
     c.kind = static_cast<ConnectionKind>(kind);
-    io(c.from); io(c.to); io(c.ramp); io(c.hostStation); io(c.length); io(c.taper);
+    io(c.from); io(c.to); io(c.ramp); io(c.hostStation); io(c.length); io(c.taper); io(c.meets);
+}
+template <class IO, class T> void fields(IO& io, T& t, ModelTurn*) {
+    io(t.junction); io(t.fromArm); io(t.toArm); io(t.from); io(t.to);
+    uint8_t turn = static_cast<uint8_t>(t.turn);
+    io(turn);
+    t.turn = static_cast<Turn>(turn);
+    io(t.row);
 }
 template <class IO, class E> void fields(IO& io, E& e, ModelRampEnd*) {
     uint8_t kind = static_cast<uint8_t>(e.kind);
@@ -1515,7 +1627,7 @@ template <class IO, class R> void fields(IO& io, R& r, ModelRamp*) {
 template <class IO, class X> void fields(IO& io, X& x, ModelCrossing*) { io(x.a); io(x.b); io(x.kind); io(x.over); io(x.at); io(x.clearance); }
 
 template <class IO, class M> void modelFields(IO& io, M& m) {
-    io(m.name); io(m.built); io(m.junctions); io(m.streets); io(m.lanes); io(m.connections); io(m.ramps); io(m.crossings); io(m.points);
+    io(m.name); io(m.built); io(m.junctions); io(m.streets); io(m.lanes); io(m.connections); io(m.turns); io(m.ramps); io(m.crossings); io(m.points);
     io(m.along); io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.notStated);
     io(m.problems);
 }
@@ -1642,6 +1754,9 @@ ObtainedRoadModel obtainLevelRoadModel(const bundle::LevelInputs& in, const std:
     uint64_t layoutHash = bundle::kFnvOffset;
     if (city.inlineGraph) layoutHash = bundle::fnv1aStr(city.block.dump(), layoutHash);
     else if (!bundle::fnv1aFile(city.graphPath, layoutHash)) layoutHash = bundle::fnv1aStr("missing:" + city.graphPath);
+    // ...and the table the turns are stated by (ADR-0426)
+    const uint64_t turnRules = laneTurnRules().hash;
+    layoutHash = bundle::fnv1a(&turnRules, sizeof turnRules, layoutHash);
     out.key = roadModelCacheKey(roads::lanes::levelRoadsKey(in), layoutHash);
     if (!cacheDir.empty()) {
         out.path = roadModelCachePath(cacheDir, out.key);

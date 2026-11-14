@@ -159,6 +159,11 @@ struct Path {
     Range regulations;                   // into LaneGraph::regulations, sorted by distance along
     Range crossings;                     // into LaneGraph::pathCrossings: the crossing points it is part of (as either
                                          // side), by where their stretch on it begins, then by id (indexCrossings)
+    // WHERE IT IS ON THE ROAD MODEL (road_model.h; ADR-0426), by the model's ids: a lane its street and its lane (the
+    // builder's lane it was cut from); a connector the stated turn it follows. kNoIndex: none (a hand-made graph).
+    uint32_t street = kNoIndex;
+    uint32_t modelLane = kNoIndex;
+    uint32_t modelTurn = kNoIndex;
 };
 
 // The line between two neighbouring lanes of a section: from which lane a car may cross it. Neither = a solid line.
@@ -240,6 +245,7 @@ struct Junction {
     Range box;                 // into LaneGraph::planPoints: the outline of the area that must not be blocked
     Range arriving;            // into LaneGraph::junctionLanes: the lanes ending at its outline (at a stop line), id order
     Range leaving;             // into LaneGraph::junctionLanes: the lanes beginning at its outline, in id order
+    uint32_t modelJunction = kNoIndex;   // the road model's junction it is (road_model.h; ADR-0426); kNoIndex: none
 };
 
 // A RULE STANDING ON A PATH: a kind (a LaneGraph::regulationKindNames entry), the stretch of the path where it applies

@@ -333,18 +333,14 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
         T += fmt("  boxes no model junction holds (%zu):\n", unheld.all.size()) + unheld.text();
         T += fmt("  boxes holding two model junctions or more (%zu):\n", shared.all.size()) + shared.text();
     }
-    T += "\n3. Against the lane graph's junctions (built from the paint's boxes, its carry-ons and its nodes):\n";
+    T += "\n3. Against the lane graph's junctions (since ADR-0426 a table built from the model: one per stated junction its lanes reach):\n";
     T += agreementText("lane graph", out.laneGraph);
     {
         Examples onlyLg, lgKnots, modelSplit, onlyModel;
-        std::map<int, uint32_t> onlyByOrigin;
-        static const char* kOrigin[] = {"box", "carry-on", "node"};
         for (std::size_t o = 0; o < lgAt.size(); ++o) {
             const JunctionNote& n = lg.junctionNotes[o];
-            if (pl.ofOther[o].empty()) {
-                ++onlyByOrigin[static_cast<int>(n.origin)];
-                onlyLg.add(static_cast<double>(n.turnsStated), fmt("lane graph junction %zu (%s) at (%.1f, %.1f), roads %s", o, kOrigin[static_cast<int>(n.origin)], n.at.x, n.at.y, n.roads.c_str()));
-            }
+            if (pl.ofOther[o].empty())
+                onlyLg.add(static_cast<double>(n.turnsStated), fmt("lane graph junction %zu at (%.1f, %.1f), roads %s", o, n.at.x, n.at.y, n.roads.c_str()));
             if (pl.ofOther[o].size() >= 2) {
                 double apart = 0;
                 for (uint32_t a : pl.ofOther[o]) for (uint32_t b : pl.ofOther[o]) apart = std::max(apart, distance(m.junctions[a].at, m.junctions[b].at));
@@ -355,9 +351,7 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
             if (pl.ofModel[j].size() >= 2) modelSplit.add(static_cast<double>(pl.ofModel[j].size()), fmt("%s at (%.1f, %.1f): %zu lane graph junctions", m.junctions[j].id.c_str(), m.junctions[j].at.x, m.junctions[j].at.y, pl.ofModel[j].size()));
             if (pl.ofModel[j].empty() && m.junctions[j].arms.size() >= 3) onlyModel.add(static_cast<double>(m.junctions[j].arms.size()), fmt("%s at (%.1f, %.1f), %zu arms", m.junctions[j].id.c_str(), m.junctions[j].at.x, m.junctions[j].at.y, m.junctions[j].arms.size()));
         }
-        std::string origins;
-        for (const std::pair<const int, uint32_t>& b : onlyByOrigin) origins += fmt("%s%u %s", origins.empty() ? "" : ", ", b.second, kOrigin[b.first]);
-        T += fmt("  only in the lane graph, by what it was made from: %s\n", origins.empty() ? "none" : origins.c_str()) + onlyLg.text();
+        T += fmt("  only in the lane graph: %zu\n", onlyLg.all.size()) + onlyLg.text();
         T += fmt("  model junctions of three arms or more with no lane graph junction (%zu):\n", onlyModel.all.size()) + onlyModel.text();
         T += "  lane graph junctions that hold two model junctions or more as one:\n" + lgKnots.text();
         T += "  model junctions the lane graph splits into several:\n" + modelSplit.text();

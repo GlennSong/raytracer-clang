@@ -47,6 +47,8 @@
 #include <algorithm>
 #include <cmath>
 #include "engine/procgen/city/roads/lanes/lanes_export.h"
+#include "engine/procgen/city/roads/lanes/lane_level.h"      // the lane level from the road model (ADR-0426)
+#include "engine/procgen/city/roads/lane_turns.h"            // turnKey
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"
 #include "engine/procgen/city/roads/lanes/interchange.h"
 #include "engine/procgen/city/roads/lanes/terrain_recipe.h"
@@ -298,12 +300,16 @@ int main(int argc, char** argv) {
         // --nodes (ADR-0425): the points of each junction the layout spread over several (which roads meet at each), ONCE,
         // as the layout finds them, written into the file's own junctions in place for a person to read: what the street
         // map joins a spread junction's arms and inside stretches by.
+        // --lane-rules M (ADR-0426): the lane level's rules, ONCE, written into the file for a person to read and edit: how far
+        // back from a stop line the lines between lanes are solid (M metres). Nothing else moves; the bake key does not see it.
         bool write = false, fresh = false, names = false, nodes = false;
+        double laneRules = -1;
         for (int i = 3; i < argc; ++i) {
             if (std::strcmp(argv[i], "--write") == 0) write = true;
             if (std::strcmp(argv[i], "--fresh") == 0) fresh = true;
             if (std::strcmp(argv[i], "--names") == 0) names = true;
             if (std::strcmp(argv[i], "--nodes") == 0) nodes = true;
+            if (std::strcmp(argv[i], "--lane-rules") == 0 && i + 1 < argc) laneRules = std::atof(argv[i + 1]);
         }
         std::string text;
         {
@@ -312,6 +318,21 @@ int main(int argc, char** argv) {
             std::ostringstream ss;
             ss << f.rdbuf();
             text = ss.str();
+        }
+        if (laneRules >= 0) {
+            std::string err;
+            const std::string out = insertLaneRulesText(text, laneRules, &err);
+            if (out.empty()) { std::fprintf(stderr, "lanes_tool: %s: %s\n", argv[2], err.c_str()); return 1; }
+            const std::string dir = std::filesystem::path(argv[2]).parent_path().string();
+            try { (void)RoadLabGraph::fromJson(nlohmann::json::parse(out), dir.empty() ? "." : dir); }
+            catch (const std::exception& ex) { std::fprintf(stderr, "lanes_tool: %s: would not read back (%s); not written\n", argv[2], ex.what()); return 1; }
+            std::printf("%s: lane rules: the lines between lanes solid %.1f m before a stop line%s\n", argv[2], laneRules,
+                        write ? "" : " (not written: --write)");
+            if (!write) return 0;
+            std::ofstream(argv[2], std::ios::binary) << out;
+            std::printf("wrote \"lane_rules\" into %s (%zu bytes more; the bytes the bake keys are unchanged: %s)\n", argv[2],
+                        out.size() - text.size(), keyedRoadFileText(out) == keyedRoadFileText(text) ? "yes" : "NO");
+            return 0;
         }
         const std::string base = stripLayoutText(text);
         const std::string dir = std::filesystem::path(argv[2]).parent_path().string();
@@ -345,7 +366,7 @@ int main(int argc, char** argv) {
                 std::ofstream(argv[2], std::ios::binary) << out;
                 std::printf("wrote the nodes into %s (%zu bytes more; the bytes the bake keys are unchanged: %s; the lane graph's key is unchanged: %s)\n",
                             argv[2], out.size() - text.size(), keyedRoadFileText(out) == keyedRoadFileText(text) ? "yes" : "NO",
-                            junctionPlanKey(nlohmann::json::parse(out)) == junctionPlanKey(nlohmann::json::parse(text)) ? "yes" : "NO");
+                            laneLevelKey(nlohmann::json::parse(out)) == laneLevelKey(nlohmann::json::parse(text)) ? "yes" : "NO");
                 return 0;
             }
             if (names && !fresh && stated.listsStreets) {
@@ -571,41 +592,93 @@ int main(int argc, char** argv) {
         std::unique_ptr<Result> rp;
         try { rp = build(RoadLabGraph::load(argv[2])); } catch (const std::exception& e) { std::fprintf(stderr, "lanes: %s\n", e.what()); return 1; }
         const double buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-        const LaneGraphBuild lg = buildLaneGraph(*rp, lgo);
+        // THE LANE LEVEL (ADR-0426): a table built from the road model of this build
+        const RoadModel model = assembleRoadModel(*rp);
+        const LaneGraphBuild lg = buildLaneLevel(*rp, model, lgo);
+        if (!lg.error.empty()) { std::fprintf(stderr, "lanes: %s\n", lg.error.c_str()); return 1; }
         const LaneGraph& G = lg.graph;
         uint32_t lanes = 0;
         for (const Path& p : G.paths) lanes += p.kind == PathKind::Lane ? 1 : 0;
-        uint32_t full = 0, partly = 0, refused = 0, noTurns = 0, carryOns = 0, nodes = 0, refusedTurns = 0;
+        uint32_t full = 0, partly = 0, refused = 0, noTurns = 0, refusedTurns = 0;
         for (const JunctionNote& n : lg.junctionNotes) {
-            carryOns += n.origin == JunctionOrigin::CarryOn ? 1 : 0;
-            nodes += n.origin == JunctionOrigin::Node ? 1 : 0;
             refusedTurns += n.turnsRefused;
             if (n.turnsStated == 0) ++noTurns;
             else if (n.turnsRefused == 0) ++full;
             else if (n.turnsRefused < n.turnsStated) ++partly;
             else ++refused;
         }
-        std::printf("%s: %u lane paths, %zu connectors (%u straight on, %u near turns, %u far turns), %u turns refused; "
-                    "%zu sections, %zu junctions (%u fully connected, %u partly, %u refused, %u with no turns; %u of them "
-                    "carry-ons, %u nodes), %zu problems; largest part a car can get round: %.1f%% of the lane paths\n",
+        std::printf("%s: %u lane paths, %zu connectors (%u straight on, %u near turns, %u far turns) of %zu stated turns, %u fitting no "
+                    "vehicle; %zu sections, %zu junctions (%u with every stated turn built, %u some, %u none, %u with no turns), %zu "
+                    "problems; largest part a car can get round: %.1f%% of the lane paths\n",
                     rp->graph.name.c_str(), lanes, G.paths.size() - lanes, lg.connectorsByTurn[static_cast<int>(Turn::Straight)],
                     lg.connectorsByTurn[static_cast<int>(Turn::NearTurn)], lg.connectorsByTurn[static_cast<int>(Turn::FarTurn)],
-                    refusedTurns, G.sections.size(), G.junctions.size(), full, partly, refused, noTurns, carryOns, nodes,
+                    model.turns.size(), refusedTurns, G.sections.size(), G.junctions.size(), full, partly, refused, noTurns,
                     lg.problems.size(), 100.0 * lg.reachableShare);
-        std::printf("  lane graph %.0f ms (%.0f of it the paint's junction boxes, %.0f the connectors), the build before it %.0f ms",
-                    lg.milliseconds, lg.boxMilliseconds, lg.connectMilliseconds, buildMs);
+        std::printf("  lane level %.0f ms (%.0f of it the connectors), the build before it %.0f ms", lg.milliseconds,
+                    lg.connectMilliseconds, buildMs);
         for (const char* stage : {"lanes", "profiles", "footprints", "surfaces"})
             if (rp->timings.count(stage)) std::printf(", %s %.0f", stage, 1000 * rp->timings.at(stage));
-        std::printf("\n  left out: %u connector lanes, %u track/footway lanes; %u junctions merged, %u ramp ends on a street, %u lane "
-                    "ends cut at an outline (no stop line of their own), %u lanes joined end to end across roads, %zu lane ends "
-                    "unjoined, %u places two roads' lanes cross outside every junction; %u lanes tidied, %u short sections merged\n",
-                    lg.connectorsLeftOut, lg.otherLanesLeftOut, lg.mergedJunctions, lg.rampEnds, lg.endsAtOutline, lg.roadJoins,
-                    lg.unjoined.size(), lg.crossingsOutside, lg.tidiedLanes, lg.mergedSections);
+        std::printf("\n  left out: %u connector lanes, %u track/footway lanes; %u lanes tidied; stop lines: %u the paint's, %u by "
+                    "ADR-0419's rule (no box), %u by it (the paint's box holds two stated junctions); joined as stated: %u where a "
+                    "street carries on, %u where a lane leaves its host, %u where one merges into it, %u of them with a gap\n",
+                    lg.connectorsLeftOut, lg.otherLanesLeftOut, lg.tidiedLanes, lg.stopLinesPainted, lg.stopLinesNoBox,
+                    lg.stopLinesSharedBox, lg.carryOnJoins, lg.divergeJoins, lg.mergeJoins, lg.joinsWithGap);
+        {
+            // THE CORNER FAULTS (ADR-0426): the stated turns whose drawn corner does not fit a class, by class; one line per
+            // turn in corner_faults.txt (the work list for step 9)
+            std::map<std::string, uint32_t> byTag;
+            std::map<uint32_t, std::string> perTurn;
+            for (const CornerFault& f : lg.cornerFaults) {
+                ++byTag[f.tag.empty() ? std::string("every class") : f.tag];
+                char b[96];
+                std::snprintf(b, sizeof b, " (%.1f, %.1f)", f.at.x, f.at.y);
+                perTurn[f.turn] += " [" + (f.tag.empty() ? std::string("every class") : f.tag) + ": " + f.why + b + "]";
+            }
+            std::printf("  corner faults: %zu over %zu stated turns;", lg.cornerFaults.size(), perTurn.size());
+            for (const std::pair<const std::string, uint32_t>& t : byTag) std::printf(" %s %u;", t.first.c_str(), t.second);
+            std::printf("\n");
+            std::ofstream f(outDir + "/corner_faults.txt");
+            for (const std::pair<const uint32_t, std::string>& t : perTurn) {
+                const ModelTurn& mt = model.turns[t.first];
+                f << model.junctions[mt.junction.index].id << " arm " << mt.fromArm << " -> " << mt.toArm << " " << turnKey(mt.turn) << " "
+                  << model.lanes[mt.from.index].id << " -> " << model.lanes[mt.to.index].id << ":" << t.second << "\n";
+            }
+        }
         for (std::size_t i = 0; i < G.vehicleTagNames.size() && i < lg.closedTo.size(); ++i)
             std::printf("  %u connectors closed to %s (too tight for it, or it would leave the paved road)\n", lg.closedTo[i],
                         G.vehicleTagNames[i].c_str());
         for (const std::pair<std::string, std::vector<uint32_t>>& o : lg.outside)
             std::printf("  outside the largest part: %zu lanes %s\n", o.second.size(), o.first.c_str());
+        // EACH VEHICLE TAG'S REACH (ADR-0426): the share of the lane paths in the largest part a vehicle of the tag can get
+        // round and back, the paths it may use only (its tag, no bend tighter than it turns), with the lane changes the lines
+        // allow and with next paths alone (what a car can do while the driving changes no lanes); and the freeway's lane
+        // paths in that part (next paths alone)
+        for (const VehicleSize& v : lgo.vehicles) {
+            const NameIndex bit = LaneGraph::nameIndex(G.vehicleTagNames, v.tag);
+            double share[2] = {0, 0};
+            uint32_t freeway = 0, freewayAll = 0;
+            for (int changes = 1; changes >= 0; --changes) {
+                ReachRules rr;
+                rr.laneChanges = changes != 0;
+                rr.open.assign(G.paths.size(), 0);
+                for (uint32_t p = 0; p < G.paths.size(); ++p)
+                    rr.open[p] = bit < kMaxTagNames && (G.paths[p].vehicleTags & (TagMask(1) << bit)) && G.paths[p].tightestRadius >= v.turningRadius;
+                const ReachableParts parts = reachableParts(G, rr);
+                uint32_t in = 0;
+                freeway = freewayAll = 0;
+                for (uint32_t p = 0; p < G.paths.size(); ++p) {
+                    if (G.paths[p].kind != PathKind::Lane) continue;
+                    const bool inLargest = !parts.sizes.empty() && parts.partOf[p] == parts.largest && rr.open[p];
+                    in += inLargest ? 1 : 0;
+                    const bool fw = G.roadClassNames[G.sections[G.paths[p].section.index].roadClass] == "freeway";
+                    freewayAll += fw ? 1 : 0;
+                    freeway += fw && inLargest ? 1 : 0;
+                }
+                share[changes] = lanes ? 100.0 * in / lanes : 0.0;
+            }
+            std::printf("  %s: %.1f%% of the lane paths in the largest part it can get round with lane changes, %.1f%% without; freeway "
+                        "lane paths in it without: %u of %u\n", v.tag.c_str(), share[1], share[0], freeway, freewayAll);
+        }
         {
             const CrossingReport& cr = lg.crossings;
             std::printf("  crossing points: %zu (%u crosses, %u joins, %u splits between two paths; %u with crosswalks); of "
@@ -618,23 +691,16 @@ int main(int argc, char** argv) {
                         cr.junctionsWithout, cr.waitInsidePoints, cr.onlyForLength, cr.widenedForLength, cr.milliseconds);
         }
         {
-            // the control plan carried through (#240)
+            // the stated controls and signs, carried through (#240)
             const ControlPlanReport& cp = lg.controlPlan;
             std::string controls, kinds;
             for (const std::pair<std::string, uint32_t>& c : cp.byControl)
                 controls += (controls.empty() ? "" : ", ") + std::to_string(c.second) + " " + c.first;
             for (const std::pair<std::string, uint32_t>& k : cp.regulations)
                 kinds += (kinds.empty() ? "" : ", ") + std::to_string(k.second) + " " + k.first;
-            if (!cp.declared)
-                std::printf("  control plan: none in the road graph; every junction \"%s\"\n", lgo.control.c_str());
-            else
-                std::printf("  control plan: %u planned junctions (%u spread over several built ones, %u with no junction built "
-                            "there); built junctions: %s; %u holding two or more planned ones of one control, %u no planned "
-                            "one names, %u holding planned ones that differ; %u lanes off the plan, %u planned signs with no "
-                            "lane; at arriving lanes' ends: %s; posted limits on %u lanes and %u connectors\n",
-                            cp.planned, cp.plannedSpread, cp.plannedNotBuilt, controls.c_str(), cp.merged, cp.notPlanned,
-                            cp.conflicts, cp.lanesOffPlan, cp.signsWithNoLane, kinds.empty() ? "nothing" : kinds.c_str(),
-                            cp.lanesPosted, cp.connectorsPosted);
+            std::printf("  controls: %u stated junctions; lane-level junctions: %s; at arriving lanes' ends: %s; posted limits on %u lanes "
+                        "and %u connectors\n", cp.planned, controls.c_str(), kinds.empty() ? "nothing" : kinds.c_str(), cp.lanesPosted,
+                        cp.connectorsPosted);
         }
         {
             // THE BENDS BY ROAD CLASS (#281): each path's tightest measured bend (its bend profile's tightest piece), lanes
@@ -696,10 +762,7 @@ int main(int argc, char** argv) {
         }
         for (std::size_t i = 0; i < lg.problems.size() && i < 10; ++i) std::printf("  problem: %s\n", lg.problems[i].c_str());
         LaneGraphSvgMarks marks;
-        for (uint32_t j = 0; j < lg.junctionNotes.size(); ++j)
-            if (lg.junctionNotes[j].refused) marks.refusedJunctions.push_back(j);
-        for (const Refusal& r : lg.refusals)
-            if (r.from.valid()) marks.refusedTurns.push_back(r.at);
+        for (const Refusal& r : lg.refusals) marks.refusedTurns.push_back(r.at);
         if (!writeLaneGraphSvg(G, svgPath, marks)) { std::fprintf(stderr, "lanes: cannot write %s\n", svgPath.c_str()); return 1; }
         std::printf("wrote %s, %s, %s, %s\n", dumpPath.c_str(), problemsPath.c_str(), reachPath.c_str(), svgPath.c_str());
         for (uint32_t j : closeUps) {
@@ -733,16 +796,16 @@ int main(int argc, char** argv) {
                     if (in) f << line << "\n";
                 }
             }
-            if (j < lg.plannedOf.size())
-                for (uint32_t pj : lg.plannedOf[j]) {
-                    const PlannedJunction& p = rp->graph.junctions[pj];
-                    f << "planned as " << p.id << " at (" << p.at.x << ", " << p.at.y << "): " << p.control << ", \"" << p.why << "\"\n";
-                    for (const PlannedArm& a : p.arms) {
-                        f << "  arm: road " << a.road << ", its spine running " << (a.spineIn ? "in" : "out") << " at " << a.at << " m";
-                        for (const std::string& r : a.regulations) f << ", " << r;
-                        f << "\n";
-                    }
+            if (jn.modelJunction < rp->graph.junctions.size()) {
+                // the stated junction it is (the road model's junction of the same index: the road file's list)
+                const PlannedJunction& p = rp->graph.junctions[jn.modelJunction];
+                f << "stated as " << p.id << " at (" << p.at.x << ", " << p.at.y << "): " << p.control << ", \"" << p.why << "\"\n";
+                for (const PlannedArm& a : p.arms) {
+                    f << "  arm: road " << a.road << ", its spine running " << (a.spineIn ? "in" : "out") << " at " << a.at << " m";
+                    for (const std::string& r : a.regulations) f << ", " << r;
+                    f << "\n";
                 }
+            }
             std::vector<uint32_t> records;
             for (uint32_t k = jn.connectors.first; k < jn.connectors.end(); ++k) {
                 const PathId c = G.junctionConnectors[k];

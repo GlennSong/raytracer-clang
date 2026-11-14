@@ -211,6 +211,7 @@ nlohmann::json plannedGraph(ControlPlan* planOut = nullptr) {
     const ControlPlan plan = planControls(RoadLabGraph::fromJson(g), testPolicy());
     writeControlPlan(g, plan);
     writeLayout(g, deriveLayout(RoadLabGraph::fromJson(g), LayoutSource::Inferred));
+    g["lane_rules"] = {{"solid_before_stop_line", 20.0}};   // the lane level's rules (ADR-0426)
     if (planOut) *planOut = plan;
     return g;
 }
@@ -276,26 +277,18 @@ TEST_CASE(control_plan_2_a_planned_road_graph_is_carried_through) {
     const LaneGraphBuild& lg = plannedBuild();
     const LaneGraph& G = lg.graph;
     const RoadLabGraph road = RoadLabGraph::fromJson(g);
-    std::printf("    control plan: %u planned, %u not built, %u spread; %u not planned, %u conflicts, %u lanes off the plan, %u "
-                "signs with no lane\n", lg.controlPlan.planned, lg.controlPlan.plannedNotBuilt, lg.controlPlan.plannedSpread,
-                lg.controlPlan.notPlanned, lg.controlPlan.conflicts, lg.controlPlan.lanesOffPlan, lg.controlPlan.signsWithNoLane);
+    std::printf("    controls: %u stated junctions, %zu lane-level junctions\n", lg.controlPlan.planned, G.junctions.size());
     for (const std::string& p : lg.problems) std::printf("    problem: %s\n", p.c_str());
+    CHECK(lg.error.empty());
     CHECK(lg.controlPlan.declared);
-    CHECK(lg.controlPlan.notPlanned == 0 && lg.controlPlan.conflicts == 0 && lg.controlPlan.lanesOffPlan == 0 &&
-          lg.controlPlan.signsWithNoLane == 0);
-    CHECK(lg.controlPlan.carryOns == 1u);   // the builder's own junction at the bend: the plan's carry-on control
-    CHECK(G.junctions.size() >= 2u);
-    // Each built junction carries its planned junction's control (the bend's, the carry-on control); the stop signs stand
-    // where the local streets arrive.
+    // ONE JUNCTION PER STATED JUNCTION (the lane level is a table built from the road model, ADR-0426): the bend is no
+    // junction (its streets carry on, their lanes joined lane to lane), so two, each carrying its stated junction's
+    // control; the stop signs stand where the local streets arrive.
+    CHECK(G.junctions.size() == 2u);
     uint32_t stopsSeen = 0;
     for (uint32_t j = 0; j < G.junctions.size(); ++j) {
         const Junction& jn = G.junctions[j];
-        if (lg.plannedOf[j].empty()) {
-            CHECK(G.controlNames[jn.control] == road.carryOnControl);
-            continue;
-        }
-        CHECK(lg.plannedOf[j].size() == 1u);
-        const PlannedJunction& pj = road.junctions[lg.plannedOf[j][0]];
+        const PlannedJunction& pj = road.junctions[jn.modelJunction];
         CHECK(G.controlNames[jn.control] == pj.control);
         for (uint32_t k = jn.arriving.first; k < jn.arriving.end(); ++k) {
             const PathId lane = G.junctionLanes[k];
@@ -321,7 +314,8 @@ TEST_CASE(control_plan_2_a_planned_road_graph_is_carried_through) {
 // ---- 3. a missing control, an impossible sign ----------------------------------------------------------------------------
 
 TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_reported) {
-    // The T at (200, 0) left out of the plan: the builder names it and leaves it not planned (it never makes one up).
+    // The T at (200, 0) left out of the file's list: the lane level makes no junction there (it never makes one up): the
+    // streets that ended at it end at no junction now, so their lanes there lead nowhere.
     {
         nlohmann::json g = plannedGraph();
         nlohmann::json kept = nlohmann::json::array();
@@ -332,12 +326,9 @@ TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_report
             for (nlohmann::json& end : st["junctions"])
                 if (end == "j1") end = nullptr;
         const LaneGraphBuild lg = laneGraphFrom(g);
-        CHECK(lg.controlPlan.notPlanned == 1u);
-        CHECK(lg.controlPlan.carryOns == 1u);   // the bend: the plan's carry-on control, not reported
-        CHECK(hasProblem(lg, "no planned junction names it; it is left \"not_planned\""));
-        uint32_t unplanned = 0;
-        for (const Junction& jn : lg.graph.junctions) unplanned += lg.graph.controlNames[jn.control] == kControlNotPlanned ? 1 : 0;
-        CHECK(unplanned == 1u);
+        CHECK(lg.error.empty());
+        CHECK(lg.graph.junctions.size() == 1u);
+        CHECK(lg.graph.controlNames[lg.graph.junctions[0].control] == "stop");
     }
     // A stop sign written by hand on the one-way street's arm, which no lane arrives by: impossible, reported.
     {
@@ -345,26 +336,11 @@ TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_report
         for (nlohmann::json& a : g["junctions"][1]["arms"])
             if (a["road"] == "o0") a["regulations"] = {"stop"};
         const LaneGraphBuild lg = laneGraphFrom(g);
-        CHECK(lg.controlPlan.signsWithNoLane == 1u);
-        CHECK(hasProblem(lg, "planned junction j1: its arm on road o0 (spine out at 0.0 m) carries \"stop\", but no lane arrives by it there"));
+        for (const std::string& p : lg.problems) std::printf("    problem: %s\n", p.c_str());
+        CHECK(hasProblem(lg, "junction j1: its arm on road o0 carries \"stop\", but no lane arrives by it"));
     }
-    // Two planned junctions given to one built junction with different controls: neither is picked.
-    {
-        nlohmann::json g = plannedGraph();
-        nlohmann::json split = g["junctions"][0];
-        split["id"] = "j9";
-        split["control"] = "signal";
-        nlohmann::json keepArms = nlohmann::json::array(), moveArms = nlohmann::json::array();
-        for (const nlohmann::json& a : g["junctions"][0]["arms"]) (a["road"] == "l0" ? moveArms : keepArms).push_back(a);
-        g["junctions"][0]["arms"] = keepArms;
-        split["arms"] = moveArms;
-        g["junctions"][0].erase("through");   // (the layout's pairs of arms no longer fit the arms moved)
-        split.erase("through");
-        g["junctions"].push_back(split);
-        const LaneGraphBuild lg = laneGraphFrom(g);
-        CHECK(lg.controlPlan.conflicts == 1u);
-        CHECK(hasProblem(lg, "the builder made one junction of planned junctions j0 (stop), j9 (signal), whose controls differ"));
-    }
+    // (Two stated junctions are two junctions of the lane level, whatever the paint draws: since ADR-0426 nothing groups
+    // them, so the case of one built junction holding two planned ones of different controls cannot arise.)
     // A junction naming no control is no plan at all: the road graph is refused as it is read.
     {
         nlohmann::json g = plannedGraph();
