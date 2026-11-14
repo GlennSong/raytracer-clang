@@ -378,10 +378,14 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
         if (data.streets.empty()) LOG_WARN << "[citymap] roads layer: the level has no road model; no streets drawn";
         ++drawn;
     }
-    // --- junctions: a ring at each of the road model's junctions ------------------------------------------------------
+    // --- junctions: a ring at each of the road model's junctions, filled green where the sim signals it (ADR-0421) -----
     if (layers.junctions) {
         out << "<g id='layer-junctions' fill='white' fill-opacity='0.8' stroke='#b0122b' stroke-width='1.2'>\n";
-        for (const Vec2& j : data.junctions) out << "<circle cx='" << j.x << "' cy='" << j.y << "' r='4'/>\n";
+        for (std::size_t i = 0; i < data.junctions.size(); ++i) {
+            const Vec2& j = data.junctions[i];
+            const bool lit = i < data.junctionLit.size() && data.junctionLit[i];
+            out << "<circle cx='" << j.x << "' cy='" << j.y << (lit ? "' r='6' fill='#2e9e3e' fill-opacity='1'/>\n" : "' r='4'/>\n");
+        }
         out << "</g>\n";
         ++drawn;
     }
@@ -603,7 +607,8 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
         entry(layers.roads, "layer-roads", sw("#7c7c7c", "none", 8),
               "streets by class (the road model; stroke = travel lanes' width), " + std::to_string(data.streets.size()) + " streets");
         entry(layers.junctions, "layer-junctions", sw("white", "#b0122b", 8),
-              "junctions (the road model's), " + std::to_string(data.junctions.size()));
+              "junctions (the road model's), " + std::to_string(data.junctions.size()) + "; green: lit (the sim signals it), " +
+                  std::to_string(std::count(data.junctionLit.begin(), data.junctionLit.end(), uint8_t(1))));
         entry(layers.streetNames, "layer-names", sw("#1a1a1a", "none", 8), "street names (the road file's), " + std::to_string(labels) + " labels");
         entry(layers.curbs, "layer-curbs", sw("none", "#4a4036", 8), "curb lines (asphalt union outline)");
         entry(layers.gaps, "layer-gaps", sw("none", "#d81b60", 8),

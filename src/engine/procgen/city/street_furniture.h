@@ -23,6 +23,7 @@ struct SignalSpot {
     Vec3 base;
     Vec3 face;
     int link = -1;
+    int64_t arm = -1;   // the road-model arm it governs (StreetFurnitureParams::approachArm's key), -1: none
 };
 
 // WHAT A STREET IS LIKE, for its planting (Glenn: "some have trees, some don't, some have them spaced differently ...
@@ -133,6 +134,14 @@ struct StreetFurnitureParams {
         bool mainOnly = false;
     };
     std::vector<KerbKind> kerbKinds;
+    // THE ROAD MODEL (ADR-0421; empty / null: the nav graph's own nodes and a street's bearing, as before).
+    // Which model junction arm a signalled approach link governs (a key, one per arm of the level; -1: none), and how
+    // far the link's node stands from that arm's mouth (out): one pole per arm.
+    std::function<int64_t(int link, Real* mouthDistance)> approachArm;
+    // Where junctions are: every model junction's centre and arm mouths (lamps, trees and kerb props keep clear).
+    std::vector<Vec2> junctionPoints;
+    // A key the same along one stated street run (the trees' "same street"), 0: none (the bearing key then).
+    std::function<uint64_t(int link)> streetRun;
 };
 
 // A street tree (its pit's centre, on the pavement), its size and which of the tree kit's varieties it is.
@@ -155,6 +164,7 @@ struct StreetFurniturePlan {
     // drawn city is missing a light (Glenn: "the stoplights aren't showing up in some
     // places").
     std::vector<Vec2> unpoledApproaches;
+    int unarmedApproaches = 0;     // signalled approaches no model arm takes (with approachArm): phased, no pole
     std::vector<Vec3> lampBases;   // pole feet (instance translations)
     std::vector<Vec3> lampHeads;   // bulb positions (night point lights)
     std::vector<StreetTree> trees; // kerb life (StreetFurnitureParams::kerbLife)

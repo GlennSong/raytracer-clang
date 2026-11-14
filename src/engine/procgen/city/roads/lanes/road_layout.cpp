@@ -1,5 +1,7 @@
 #include "engine/procgen/city/roads/lanes/road_layout.h"
 
+#include "engine/bundle/bundle.h"                                 // fnv1aStr: junctionPlanKey
+
 #include "engine/procgen/city/roads/lanes/control_plan.h"        // findJunctions: the nodes and their grouping, once
 #include "engine/procgen/city/roads/lanes/lane_expand.h"         // expand: ramps composed as the builder composes them
 #include "engine/procgen/city/roads/lanes/lane_graph_connect.h"  // kStraightOnDegrees: the one "straight on"
@@ -480,6 +482,40 @@ void writeLayout(nlohmann::json& scene, const RoadLayout& layout) {
     if (!layout.divided.empty()) scene["divided"] = dividedJson(layout.divided);
 }
 
+uint64_t junctionPlanKey(const nlohmann::json& spec) {
+    if (!spec.is_object() || !spec.contains("junctions")) return 0;
+    return bundle::fnv1aStr("junctions|" + spec["junctions"].dump());
+}
+
+// The text with the cut members taken out, each with its comma.
+static std::string cutText(const std::string& text, std::vector<std::pair<std::size_t, std::size_t>> cut) {
+    if (cut.empty()) return text;
+    std::sort(cut.begin(), cut.end());
+    std::string out;
+    out.reserve(text.size());
+    std::size_t at = 0;
+    for (const std::pair<std::size_t, std::size_t>& c : cut) {
+        if (c.first < at) continue;   // (never: the members cut do not overlap)
+        out.append(text, at, c.first - at);
+        at = c.second;
+    }
+    out.append(text, at, kNone);
+    return out;
+}
+
+std::string keyedRoadFileText(const std::string& text) {
+    const Text t(text);
+    std::vector<Member> top;
+    if (!t.members(t.ws(0), top)) return text;
+    std::vector<std::pair<std::size_t, std::size_t>> cut;
+    // The streets, the divided pairs, and the whole junctions list with its controls and signs (ADR-0421): no stage of
+    // the bake reads any of them (the meshes, paint, deck and road graph come from the edges); the lane graph, which
+    // reads the controls and signs, keys them itself (junctionPlanKey).
+    for (std::size_t k = 0; k < top.size(); ++k)
+        if (top[k].key == "streets" || top[k].key == "divided" || top[k].key == "junctions") cut.push_back(removal(top, k));
+    return cutText(text, cut);
+}
+
 std::string stripLayoutText(const std::string& text) {
     const Text t(text);
     const std::size_t open = t.ws(0);
@@ -512,18 +548,7 @@ std::string stripLayoutText(const std::string& text) {
             }
         }
     }
-    if (cut.empty()) return text;
-    std::sort(cut.begin(), cut.end());
-    std::string out;
-    out.reserve(text.size());
-    std::size_t at = 0;
-    for (const std::pair<std::size_t, std::size_t>& c : cut) {
-        if (c.first < at) continue;   // (never: the members cut do not overlap)
-        out.append(text, at, c.first - at);
-        at = c.second;
-    }
-    out.append(text, at, kNone);
-    return out;
+    return cutText(text, cut);
 }
 
 std::string insertLayoutText(const std::string& text, const RoadLayout& layout, std::string* err) {
@@ -760,7 +785,11 @@ NamingReport nameLayout(RoadLayout& layout, const RoadLabGraph& g, const std::ve
     return nameStreetRuns(layout.streets, layout.junctions, layout.divided, g, streetNameBook(), keep);
 }
 
-std::string insertStreetNamesText(const std::string& text, const std::vector<PlannedStreet>& streets, std::string* err) {
+// ONE MEMBER WRITTEN INTO EACH OBJECT OF A TOP-LEVEL LIST, in place: `member` with the value given for the object's id
+// (in list order: `values` holds one entry per object, its id and the value, null for none), after its last member,
+// unless it has the member already. Nothing else moves by a byte.
+static std::string insertListMembersText(const std::string& text, const char* list, const char* member,
+                                         const std::vector<std::pair<std::string, nlohmann::json>>& values, std::string* err) {
     auto fail = [&](const std::string& why) {
         if (err) *err = why;
         return std::string();
@@ -768,18 +797,18 @@ std::string insertStreetNamesText(const std::string& text, const std::vector<Pla
     const Text t(text);
     std::vector<Member> top, sm;
     if (!t.members(t.ws(0), top)) return fail("the file is not a JSON object with members");
-    const Member* list = memberNamed(top, "streets");
+    const Member* listed = memberNamed(top, list);
     std::vector<std::size_t> elems;
-    if (!list || !t.elements(list->valueBegin, elems)) return fail("the file has no \"streets\" list");
-    if (elems.size() != streets.size()) return fail("the file's \"streets\" list and the streets named differ in length");
+    if (!listed || !t.elements(listed->valueBegin, elems)) return fail(std::string("the file has no \"") + list + "\" list");
+    if (elems.size() != values.size()) return fail(std::string("the file's \"") + list + "\" list and the values given differ in length");
     std::vector<std::pair<std::size_t, std::string>> ins;
     for (std::size_t i = 0; i < elems.size(); ++i) {
-        if (!t.members(elems[i], sm) || sm.empty()) return fail("street " + std::to_string(i) + " is not an object");
+        if (!t.members(elems[i], sm) || sm.empty()) return fail(std::string(list) + " " + std::to_string(i) + " is not an object");
         const Member* id = memberNamed(sm, "id");
-        if (!id || text.substr(id->valueBegin, id->valueEnd - id->valueBegin) != nlohmann::json(streets[i].id).dump())
-            return fail("street " + std::to_string(i) + " is not " + streets[i].id + " in the file");
-        if (memberNamed(sm, "name") || streets[i].name.empty()) continue;
-        ins.emplace_back(sm.back().valueEnd, "," + leadOf(text, sm.back()) + "\"name\": " + nlohmann::json(streets[i].name).dump());
+        if (!id || text.substr(id->valueBegin, id->valueEnd - id->valueBegin) != nlohmann::json(values[i].first).dump())
+            return fail(std::string(list) + " " + std::to_string(i) + " is not " + values[i].first + " in the file");
+        if (memberNamed(sm, member) || values[i].second.is_null()) continue;
+        ins.emplace_back(sm.back().valueEnd, "," + leadOf(text, sm.back()) + "\"" + member + "\": " + values[i].second.dump());
     }
     std::string out;
     out.reserve(text.size() + ins.size() * 32);
@@ -790,8 +819,22 @@ std::string insertStreetNamesText(const std::string& text, const std::vector<Pla
         at = i.first;
     }
     out.append(text, at, kNone);
-    if (stripLayoutText(out) != stripLayoutText(text)) return fail("the names, written in, change what the bake key hashes");
+    if (keyedRoadFileText(out) != keyedRoadFileText(text)) return fail(std::string("the ") + member + "s, written in, change what the bake key hashes");
     return out;
+}
+
+std::string insertStreetNamesText(const std::string& text, const std::vector<PlannedStreet>& streets, std::string* err) {
+    std::vector<std::pair<std::string, nlohmann::json>> values;
+    for (const PlannedStreet& s : streets) values.emplace_back(s.id, s.name.empty() ? nlohmann::json() : nlohmann::json(s.name));
+    return insertListMembersText(text, "streets", "name", values, err);
+}
+
+std::string insertJunctionControlsText(const std::string& text, const std::vector<std::pair<std::string, std::string>>& controls,
+                                       std::string* err) {
+    std::vector<std::pair<std::string, nlohmann::json>> values;
+    for (const std::pair<std::string, std::string>& c : controls)
+        values.emplace_back(c.first, c.second.empty() ? nlohmann::json() : nlohmann::json(c.second));
+    return insertListMembersText(text, "junctions", "control", values, err);
 }
 
 }  // namespace roads::lanes

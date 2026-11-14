@@ -11,6 +11,8 @@
 //   lanes_tool layout <graph.json> [--write] [--fresh] [--names]   the road file's junctions and streets with ids (ADR-0417);
 //                      --write puts them into the file in place (the bake key does not see them); --names names the
 //                      streets' runs once, from the planner's generator, keeping names the file has (ADR-0420)
+//   lanes_tool controls <graph.json> <city> <lit.json> [--write]   every junction's control stated once: the junctions the
+//                      city sim's old rule lit (lit.json: the loader's RT_CONTROL_DUMP) get a signal, the rest none (ADR-0421)
 //   lanes_tool model <graph.json> [--out <dir>]   build the roads and assemble THE ROAD MODEL: model.txt, report.txt, model.svg
 //   lanes_tool compare <graph.json> [--out <dir>]   the model files too, and the road model against the old forms (twin/nav, paint boxes, lane graph,
 //                      lane match): compare.txt
@@ -231,6 +233,66 @@ int main(int argc, char** argv) {
             std::printf("junction %s at %.1f %.1f nodes %zu size %.1f arms %zu roads %s points%s\n", j.id.c_str(), j.at.x, j.at.y,
                         j.nodes.size(), sizeOf(j), j.arms.size(), rs.c_str(), pts.c_str());
         }
+        return 0;
+    }
+    if (argc >= 5 && std::strcmp(argv[1], "controls") == 0) {
+        // EVERY JUNCTION'S CONTROL, STATED ONCE (ADR-0421): lit.json is what the loader wrote under RT_CONTROL_DUMP for
+        // the level this file is city <city> of -- the junctions the city sim's old rule lit (any of their intersection
+        // nodes). Each gets the control the signal poles stand for (road_attachments.json "signal_pole"), every other
+        // junction the rule sets' "no control" (road_attachments.json "controls"."none"). A junction that states a
+        // control keeps it. Written into the file in place, for a person to read and edit; the bake key does not see it.
+        std::string text;
+        {
+            std::ifstream f(argv[2], std::ios::binary);
+            if (!f) { std::fprintf(stderr, "lanes_tool: cannot read %s\n", argv[2]); return 1; }
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            text = ss.str();
+        }
+        const int city = std::atoi(argv[3]);
+        nlohmann::json lit, kindsDoc;
+        try {
+            std::ifstream lf(argv[4]);
+            lf >> lit;
+            std::ifstream kf("assets/data/road_attachments.json");
+            kf >> kindsDoc;
+        } catch (const std::exception& ex) { std::fprintf(stderr, "lanes_tool: %s\n", ex.what()); return 1; }
+        const bool write = argc >= 6 && std::strcmp(argv[5], "--write") == 0;
+        const AttachmentKind* pole = attachmentKinds().find(attachmentKinds().use("signal_pole"));
+        const std::string none = kindsDoc.contains("controls") ? kindsDoc["controls"].value("none", std::string()) : std::string();
+        if (!pole || pole->controls.empty() || none.empty()) {
+            std::fprintf(stderr, "lanes_tool: road_attachments.json names no control for signal_pole or for none\n");
+            return 1;
+        }
+        std::set<std::string> litIds;
+        if (lit.contains("cities") && city >= 0 && city < static_cast<int>(lit["cities"].size()))
+            for (const nlohmann::json& id : lit["cities"][static_cast<std::size_t>(city)]["lit"]) litIds.insert(id.get<std::string>());
+        const nlohmann::json spec = nlohmann::json::parse(text);
+        std::vector<std::pair<std::string, std::string>> controls;
+        int signals = 0, unlit = 0, kept = 0;
+        for (const nlohmann::json& j : spec["junctions"]) {
+            const std::string id = j.value("id", std::string());
+            if (j.contains("control")) {
+                ++kept;
+                controls.emplace_back(id, std::string());
+                continue;
+            }
+            const bool on = litIds.count(id) > 0;
+            (on ? signals : unlit) += 1;
+            controls.emplace_back(id, on ? pole->controls.front() : none);
+        }
+        std::printf("%s: %d junctions lit (%s), %d not (%s), %d kept as stated\n", argv[2], signals, pole->controls.front().c_str(),
+                    unlit, none.c_str(), kept);
+        if (!write) return 0;
+        std::string err;
+        const std::string out = insertJunctionControlsText(text, controls, &err);
+        if (out.empty()) { std::fprintf(stderr, "lanes_tool: %s: not written: %s\n", argv[2], err.c_str()); return 1; }
+        const std::string dir = std::filesystem::path(argv[2]).parent_path().string();
+        try { (void)RoadLabGraph::fromJson(nlohmann::json::parse(out), dir.empty() ? "." : dir); }
+        catch (const std::exception& ex) { std::fprintf(stderr, "lanes_tool: %s: would not read back (%s); not written\n", argv[2], ex.what()); return 1; }
+        std::ofstream(argv[2], std::ios::binary) << out;
+        std::printf("wrote the controls into %s (%zu bytes more; the bytes the bake keys are unchanged: %s)\n", argv[2],
+                    out.size() - text.size(), keyedRoadFileText(out) == keyedRoadFileText(text) ? "yes" : "NO");
         return 0;
     }
     if (argc >= 3 && std::strcmp(argv[1], "layout") == 0) {

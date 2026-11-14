@@ -106,6 +106,11 @@ struct NavGraph {
     // 1 on a node only footpaths meet (a park's or the quad's walks, appendFootpaths): nearestNode() never answers
     // with one, so a home, a job or a car's goal stays on the streets; walks are found by ROUTING through them.
     std::vector<uint8_t> footNode;
+    // THE STATED SIGNALS (ADR-0421): 1 on a node whose road-model junction's stated control is a signal, 0 on every
+    // other node. Filled by stateNavSignals (road_model.h) where the level has a road model; empty = nothing stated,
+    // and signalControlled falls back to the old rule below (loader-less test worlds, a road file with no control
+    // plan, and the one-off tool that writes today's outcome into the road files).
+    std::vector<uint8_t> statedSignal;
 
     JunctionKind kindOf(int node) const {
         return node >= 0 && node < static_cast<int>(nodeKind.size())
@@ -139,8 +144,14 @@ struct NavGraph {
             if (links[ol].access & road_access::kSignalable) ++k;
         return k;
     }
-    // See the comment above the struct.
+    // See the comment above the struct. With signals stated, the node's junction's stated control decides
+    // (statedSignal); the old rule is kept as signalledByOldRule, what the one-off tool states once.
     bool signalControlled(int node) const {
+        if (!statedSignal.empty())
+            return node >= 0 && node < static_cast<int>(statedSignal.size()) && statedSignal[static_cast<std::size_t>(node)] != 0;
+        return signalledByOldRule(node);
+    }
+    bool signalledByOldRule(int node) const {
         return kindOf(node) == JunctionKind::Intersection &&
                signalableApproaches(node) >= 4;
     }

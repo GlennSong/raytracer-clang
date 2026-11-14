@@ -455,6 +455,25 @@ TEST_CASE(road_model_4b_a_name_is_a_stated_run) {
     const NamingReport rep = nameStreetRuns(again, reread.junctions, reread.divided, reread, streetNameBook(), namedStretches(reread.streets));
     CHECK(rep.generated == 0u && rep.kept == rep.runs);
     for (std::size_t s = 0; s < again.size(); ++s) CHECK(again[s].name == streets[s].name);
+
+    // EVERY JUNCTION'S CONTROL, stated once (ADR-0421): written in place; the bake key (keyedRoadFileText) does not see
+    // it, the lane graph's key (junctionPlanKey) does, and the model reads it back
+    std::vector<std::pair<std::string, std::string>> controls;
+    for (std::size_t j = 0; j < reread.junctions.size(); ++j)
+        controls.emplace_back(reread.junctions[j].id, j == 0 ? "signal" : "unmarked");
+    const std::string controlled = insertJunctionControlsText(named, controls, &err);
+    CHECK(!controlled.empty());
+    CHECK(keyedRoadFileText(controlled) == keyedRoadFileText(named));
+    CHECK(keyedRoadFileText(controlled) == keyedRoadFileText(bare.dump(1)));
+    CHECK(junctionPlanKey(nlohmann::json::parse(controlled)) != junctionPlanKey(nlohmann::json::parse(named)));
+    const RoadLabGraph withControls = RoadLabGraph::fromJson(nlohmann::json::parse(controlled));
+    CHECK(withControls.declaresJunctions);
+    const RoadModel cm = plannedRoadModel(withControls);
+    CHECK(!cm.junctions.empty() && cm.junctions[0].control == "signal");
+    for (std::size_t j = 1; j < cm.junctions.size(); ++j) CHECK(cm.junctions[j].control == "unmarked");
+    // the signal poles stand for the stated "signal", by the data (road_attachments.json)
+    const AttachmentKind* pole = attachmentKinds().find(attachmentKinds().use("signal_pole"));
+    CHECK(pole && pole->on == "arm" && pole->standsFor("signal") && !pole->standsFor("unmarked"));
 }
 
 // ---- 5. saved and read back ----------------------------------------------------------------------------------------------

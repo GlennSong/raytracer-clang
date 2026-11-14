@@ -79,19 +79,19 @@ public:
         const double cell = cityRenderCell(in.level); k = bundle::fnv1a(&cell, sizeof(cell), k);
         for (const CityEntity& e : cityEntities(in.level)) {
             k = bundle::fnv1aStr("entity" + std::to_string(e.ordinal), k);
-            if (e.inlineGraph) { k = bundle::fnv1aStr(stripLayoutText(e.block.dump()), k); continue; }
+            if (e.inlineGraph) { k = bundle::fnv1aStr(keyedRoadFileText(e.block.dump()), k); continue; }
             // The level's sidewalk override is built into the city (loadCityGraph), so it keys it: without it,
             // a level sharing the graph handed its city forward (bake.cpp's donor search matches this key) --
             // metro_lanes' 5-6 m sidewalks got the lab metro's narrower ones, one hole more, and 2 buildings.
             // Hashed only when present, so a level without one keeps its key.
             if (e.block.contains("sidewalks")) k = bundle::fnv1aStr("sidewalks" + e.block["sidewalks"].dump(), k);
-            // The graph file's bytes WITHOUT THE ROAD MODEL'S LAYOUT (road_layout.h stripLayoutText: each junction's
-            // streets, headings and through pairs, and the streets list): no stage of the bake reads them, so writing them
-            // into a file keeps its key. A file without them hashes exactly as it always did.
+            // The graph file's bytes WITHOUT THE ROAD MODEL'S JUNCTIONS AND STREETS (road_layout.h keyedRoadFileText:
+            // the junctions list with its controls and signs, the streets list, the divided pairs): no stage of the
+            // bake reads them, so writing them into a file keeps its key (ADR-0421; the lane graph keys the controls).
             bundle::InputFile f; f.path = e.graphPath; uint64_t fk = bundle::kFnvOffset;
             std::string bytes;
             if (readWholeFile(e.graphPath, bytes, &f.mtime)) {
-                const std::string keyed = stripLayoutText(bytes);
+                const std::string keyed = keyedRoadFileText(bytes);
                 fk = bundle::fnv1a(keyed.data(), keyed.size(), fk);
                 f.bytes = keyed.size(); f.fnv = fk; k = bundle::fnv1a(&fk, sizeof(fk), k);
             }

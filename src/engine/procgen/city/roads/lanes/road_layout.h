@@ -92,8 +92,15 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
 // THE FILE WITHOUT ITS LAYOUT: the "streets" list taken out; a "junctions" list naming no control taken out whole; in one
 // that names controls (the control plan's), each junction's "through" and each arm's "street" and "heading". Each member
 // goes with the comma before it (or, the first of its object, the one after it), so text the layout was inserted into
-// comes back byte for byte. Text with none of them is returned as it was. What the city's bake key hashes.
+// comes back byte for byte. Text with none of them is returned as it was.
 std::string stripLayoutText(const std::string& text);
+// WHAT THE CITY'S BAKE KEY HASHES (city_producer.cpp): the file with its "streets", "divided" and "junctions" lists
+// taken out whole -- the junctions with their controls and signs too (ADR-0421: no stage of the bake reads any of
+// them; the lane graph, which reads the controls and signs, keys them itself, junctionPlanKey).
+std::string keyedRoadFileText(const std::string& text);
+// THE CONTROL PLAN AS THE LANE GRAPH READS IT, hashed: the road file's "junctions" list (each junction's control, its
+// arms and their signs), canonically dumped; 0 for a file with none. Mixed into the lane graph's cache key.
+uint64_t junctionPlanKey(const nlohmann::json& spec);
 
 // ---- the streets' names (ADR-0420) --------------------------------------------------------------------------------------
 // A RUN is the streets that are one street carrying on, as the file states it: the two streets of a junction's `through`
@@ -129,6 +136,11 @@ NamingReport nameLayout(RoadLayout& layout, const RoadLabGraph& g, const std::ve
 // none, from `streets` (the file's own list, in its order). Nothing else moves; stripped, the text is as it was (the bake
 // key does not see it). Empty (with `err`) when the list does not fit.
 std::string insertStreetNamesText(const std::string& text, const std::vector<PlannedStreet>& streets, std::string* err = nullptr);
+// WRITES EACH JUNCTION'S CONTROL INTO A ROAD FILE'S TEXT IN PLACE (ADR-0421): a "control" in each junction object of its
+// "junctions" list that has none, from `controls` (each junction's id and control, in the list's order; empty: none).
+// Nothing else moves; the bake key does not see it (keyedRoadFileText). Empty (with `err`) when the list does not fit.
+std::string insertJunctionControlsText(const std::string& text, const std::vector<std::pair<std::string, std::string>>& controls,
+                                       std::string* err = nullptr);
 
 }  // namespace roads::lanes
 }  // namespace engine

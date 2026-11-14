@@ -149,6 +149,10 @@ struct ModelStreet {
 struct AttachmentKind {
     std::string name, on;
     bool names = false;
+    // The junction controls this kind stands for (the rule sets' control kinds: a signal pole stands for "signal"),
+    // empty for a kind that stands at any junction (ADR-0421)
+    std::vector<std::string> controls;
+    bool standsFor(const std::string& control) const;
 };
 struct AttachmentKinds {
     std::vector<AttachmentKind> kinds;
@@ -307,6 +311,10 @@ std::vector<NamedArm> namedArmsAt(const RoadModel& m, ModelJunctionId j);
 // THE NAMED STREET NEAREST a plan point, by the streets' centre lines (planned layer), within `reach` metres; its name,
 // and `distance` (optional, out). Empty when none is in reach.
 std::string streetNameNear(const RoadModel& m, const Vec2& p, Real reach = 40, Real* distance = nullptr);
+// WHERE AN ARM MEETS ITS JUNCTION: its street's centre line at that end (false: the arm has no street with a line).
+bool armMouth(const RoadModel& m, const ModelJunction& J, std::size_t arm, Vec2& out);
+// THE STREET NEAREST a plan point by the centre lines, named or not, within `reach` (invalid: none); `distance` out.
+ModelStreetId nearestStreet(const RoadModel& m, const Vec2& p, Real reach, Real* distance = nullptr);
 
 // Lookups by name.
 ModelJunctionId junctionNamed(const RoadModel& m, const std::string& id);

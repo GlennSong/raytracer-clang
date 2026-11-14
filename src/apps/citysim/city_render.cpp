@@ -352,6 +352,15 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
 
     nav_ = engine::buildNavGraph(combined);
     if (nav_.linkCount() == 0) return false;
+    // WHICH NODES ARE SIGNALLED: their road-model junction's stated control (ADR-0421), as the loader's furniture plan
+    // states its own nav build -- so the phases and the poles agree. No stated control: the old rule.
+    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) {
+        if (!m.controlsStated()) return;
+        int untied = 0;
+        m.stateSignals(nav_, &untied);
+        LOG_INFO << "[citysim] signals from the road model's stated controls (" << untied
+                 << " intersection nodes tied to no junction: unlit)";
+    });
     // HEIGHTS RESOLVED ONCE, where the ground is known (review of #35 / the ramp-foot sink): every link end
     // gets its ABSOLUTE carriageway Y (elevA/B on an absolute link -- what draws the car) and its height
     // ABOVE THE GROUND (aboveA/B -- what the sim's same-level tests compare). A deck-to-street link (one

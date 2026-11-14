@@ -3869,6 +3869,107 @@ static void attachSignBlades(engine::LevelRoadModel* level, const std::vector<en
     (void)posts;
 #endif
 }
+// A model arm as one key for the furniture planner (StreetFurnitureParams::approachArm): city, junction, arm.
+static int64_t packArm(const engine::LevelRoadModel::Place& a) {
+    return (static_cast<int64_t>(a.city) << 40) | (static_cast<int64_t>(a.junction) << 16) | static_cast<int64_t>(a.arm);
+}
+static engine::LevelRoadModel::Place unpackArm(int64_t k) {
+    engine::LevelRoadModel::Place a;
+    a.city = static_cast<int>(k >> 40);
+    a.junction = static_cast<int>((k >> 16) & 0xFFFFFF);
+    a.arm = static_cast<int>(k & 0xFFFF);
+    return a;
+}
+// THE ONE-OFF TOOL'S INPUT (RT_CONTROL_DUMP=<file>, ADR-0421): what the city sim's old rule (NavGraph::
+// signalledByOldRule) lights, junction by junction of the road model -- lit when any of its intersection nodes is --
+// with every junction whose nodes the rule treated differently, and the lit nodes tied to no junction. `lanes_tool
+// controls` writes it into the road files once; nothing at load reads it back.
+static void dumpOldRuleControls(const engine::LevelRoadModel* level, const engine::NavGraph& nav, const char* path) {
+#ifdef RT_ROADS_LANES
+    if (!level) return;
+    struct Seen { int lit = 0, dark = 0; };
+    std::map<std::pair<int, int>, Seen> seen;
+    nlohmann::json untiedLit = nlohmann::json::array();
+    for (int n = 0; n < nav.streetNodeCount(); ++n) {
+        if (nav.kindOf(n) != engine::JunctionKind::Intersection) continue;
+        const Vec2 at = nav.nodes[static_cast<std::size_t>(n)];
+        const bool lit = nav.signalledByOldRule(n);
+        const engine::LevelRoadModel::Place j = level->junctionAt(at);
+        if (!j.valid()) {
+            if (lit) untiedLit.push_back({at.x, at.y});
+            continue;
+        }
+        Seen& s = seen[{j.city, j.junction}];
+        (lit ? s.lit : s.dark) += 1;
+    }
+    nlohmann::json out;
+    out["cities"] = nlohmann::json::array();
+    nlohmann::json mixed = nlohmann::json::array();
+    for (std::size_t c = 0; c < level->cities.size(); ++c) {
+        nlohmann::json lit = nlohmann::json::array();
+        if (level->cities[c])
+            for (std::size_t j = 0; j < level->cities[c]->junctions.size(); ++j) {
+                const std::map<std::pair<int, int>, Seen>::const_iterator it = seen.find({static_cast<int>(c), static_cast<int>(j)});
+                if (it == seen.end()) continue;
+                const engine::ModelJunction& J = level->cities[c]->junctions[j];
+                if (it->second.lit > 0) lit.push_back(J.id);
+                if (it->second.lit > 0 && it->second.dark > 0)
+                    mixed.push_back({{"city", c}, {"junction", J.id}, {"lit_nodes", it->second.lit},
+                                     {"dark_nodes", it->second.dark}, {"at", {J.at.x, J.at.y}}});
+            }
+        out["cities"].push_back({{"lit", lit}});
+    }
+    out["mixed"] = mixed;
+    out["untied_lit_nodes"] = untiedLit;
+    std::ofstream(path) << out.dump(1) << "\n";
+    LOG_INFO << "[roads] the old rule's lit junctions written to " << path << " (" << mixed.size()
+             << " junctions part lit, " << untiedLit.size() << " lit nodes tied to no junction)";
+#else
+    (void)level; (void)nav; (void)path;
+#endif
+}
+// Each signal pole and its head attached to the arm it governs, each lamp to the street it lights (ADR-0421).
+static void attachFurniture(engine::LevelRoadModel* level, const engine::StreetFurniturePlan& plan) {
+#ifdef RT_ROADS_LANES
+    if (!level) return;
+    const engine::AttachmentKinds& kinds = engine::attachmentKinds();
+    int poles = 0, lamps = 0, refused = 0, untiedLamps = 0;
+    std::string why;
+    for (const engine::SignalSpot& s : plan.signals) {
+        if (s.arm < 0) continue;
+        const engine::LevelRoadModel::Place a = unpackArm(s.arm);
+        if (a.city < 0 || static_cast<std::size_t>(a.city) >= level->cities.size() || !level->cities[static_cast<std::size_t>(a.city)]) continue;
+        engine::RoadModel& m = *level->cities[static_cast<std::size_t>(a.city)];
+        for (const char* role : {"signal_pole", "signal_head"}) {
+            engine::ModelAttachment at;
+            at.kind = kinds.use(role);
+            at.junction = engine::ModelJunctionId(static_cast<uint32_t>(a.junction));
+            at.arm = a.arm;
+            at.at = Vec2(s.base.x, s.base.z);
+            if (!engine::attach(m, at, &why)) ++refused;
+        }
+        ++poles;
+    }
+    for (const Vec3& b : plan.lampBases) {
+        const engine::LevelRoadModel::Place s = level->streetAt(Vec2(b.x, b.z), 20.0);
+        if (!s.valid()) {
+            ++untiedLamps;
+            continue;
+        }
+        engine::ModelAttachment at;
+        at.kind = kinds.use("street_lamp");
+        at.street = engine::ModelStreetId(static_cast<uint32_t>(s.street));
+        at.at = Vec2(b.x, b.z);
+        if (engine::attach(*level->cities[static_cast<std::size_t>(s.city)], at, &why)) ++lamps;
+        else ++refused;
+    }
+    LOG_INFO << "[furniture] attached to the road model: " << poles << " signal poles and their heads (to their arms), "
+             << lamps << " lamps (to their streets; " << untiedLamps << " lamps on no street within 20 m)";
+    if (refused) LOG_WARN << "[furniture] " << refused << " attachments refused: " << why;
+#else
+    (void)level; (void)plan;
+#endif
+}
 // How many named streets the level has: distinct names, city by city (a name is a run of the model's streets).
 static std::size_t namedStreetCount(const engine::LevelRoadModel* level) {
     std::size_t n = 0;
@@ -3945,6 +4046,25 @@ static std::shared_ptr<engine::CityMapData> assembleCityMap(
         const engine::LevelRoadModel* roadModel = nullptr;
         world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& rm) { if (!roadModel) roadModel = &rm; });
         mapStreetsOf(roadModel, *m);
+        // Each model junction LIT when the sim signals any node tied to it (ADR-0421: what the city does, drawn)
+        m->junctionLit.assign(m->junctions.size(), 0);
+        if (roadModel) {
+            std::vector<std::size_t> first;   // each city's first junction in map.junctions (mapStreetsOf's order)
+            std::size_t at = 0;
+#ifdef RT_ROADS_LANES
+            for (const std::shared_ptr<engine::RoadModel>& mp : roadModel->cities) {
+                first.push_back(at);
+                at += mp ? mp->junctions.size() : 0;
+            }
+#endif
+            for (int n = 0; n < nav.streetNodeCount(); ++n) {
+                if (!nav.signalControlled(n)) continue;
+                const engine::LevelRoadModel::Place j = roadModel->junctionAt(nav.nodes[static_cast<std::size_t>(n)]);
+                if (!j.valid() || static_cast<std::size_t>(j.city) >= first.size()) continue;
+                const std::size_t i = first[static_cast<std::size_t>(j.city)] + static_cast<std::size_t>(j.junction);
+                if (i < m->junctionLit.size()) m->junctionLit[i] = 1;
+            }
+        }
     }
     m->nav = nav;
     m->furniture = plan;
@@ -7851,7 +7971,22 @@ bool LevelLoader::load(const std::string& path,
             }
         }
         if (!combined.edges.empty()) {
-            const engine::NavGraph nav = engine::buildNavGraph(combined);
+            engine::NavGraph nav = engine::buildNavGraph(combined);
+            // THE ROAD MODEL'S JUNCTIONS AND CONTROLS (ADR-0421): the nodes lit by their junction's stated control (the
+            // city sim states its own nav graph the same way, CityRenderSystem), the poles one per arm of a lit
+            // junction, lamps and trees clear of the model's junctions, a street's planting by its stated run.
+            engine::LevelRoadModel* furnitureModel = nullptr;
+            world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!furnitureModel) furnitureModel = &m; });
+            if (const char* dump = std::getenv("RT_CONTROL_DUMP")) dumpOldRuleControls(furnitureModel, nav, dump);
+            const bool modelFurniture = furnitureModel && furnitureModel->controlsStated();
+            if (modelFurniture) {
+                int untied = 0;
+                furnitureModel->stateSignals(nav, &untied);
+                int lit = 0;
+                for (uint8_t s : nav.statedSignal) lit += s ? 1 : 0;
+                LOG_INFO << "[furniture] signals from the road model's stated controls: " << lit << " nav nodes lit; "
+                         << untied << " intersection nodes tied to no junction (unlit; interim tie by position, ADR-0421)";
+            }
             // THE KERB PROPS THAT ARE DATA (street_props.lua, ADR-0354): the hydrants and their kind, and the bodies
             // of what the planner places
             engine::StreetPropsSpec streetProps;
@@ -7868,6 +8003,32 @@ bool LevelLoader::load(const std::string& path,
                     engine::StreetFurnitureParams fp;
                     for (const engine::StreetPropKind& k : streetProps.kinds)
                         fp.kerbKinds.push_back({k.every, k.verge, k.junction, k.mainOnly});
+#ifdef RT_ROADS_LANES
+                    if (modelFurniture) {
+                        const engine::LevelRoadModel* rm = furnitureModel;
+                        fp.junctionPoints = rm->junctionPoints();
+                        fp.approachArm = [rm, &nav](int li, Real* mouth) -> int64_t {
+                            const engine::NavLink& L = nav.links[static_cast<std::size_t>(li)];
+                            const Vec2 node = nav.nodes[static_cast<std::size_t>(L.to)];
+                            const engine::LevelRoadModel::Place j = rm->junctionAt(node);
+                            const Vec2 d = nav.direction(li);
+                            const engine::LevelRoadModel::Place a = rm->armAt(j, node, Vec2(-d.x, -d.y));
+                            if (a.arm < 0) return -1;
+                            if (mouth) {
+                                Vec2 at;
+                                const engine::RoadModel& m = *rm->cities[static_cast<std::size_t>(a.city)];
+                                *mouth = engine::armMouth(m, m.junctions[static_cast<std::size_t>(a.junction)],
+                                                          static_cast<std::size_t>(a.arm), at) ? (at - node).length() : 0.0;
+                            }
+                            return packArm(a);
+                        };
+                        fp.streetRun = [rm, &nav](int li) -> uint64_t {
+                            const engine::NavLink& L = nav.links[static_cast<std::size_t>(li)];
+                            const Vec2 mid = (nav.nodes[static_cast<std::size_t>(L.from)] + nav.nodes[static_cast<std::size_t>(L.to)]) * 0.5;
+                            return rm->runKey(rm->streetAt(mid, 10.0));
+                        };
+                    }
+#endif
                     world.each<engine::RoadEntity>(
                         [&](Entity, engine::RoadEntity& net) {
                             fp.sidewalkWidth = std::max(
@@ -7992,6 +8153,40 @@ bool LevelLoader::load(const std::string& path,
                 sig.shared = shared;
                 sf.signalPoles.push_back(sig);
                 sharedPole.push_back(shared ? 1 : 0);
+            }
+            if (modelFurniture) attachFurniture(furnitureModel, fplan);
+            // RT_FURNITURE_DUMP=<file>: which junctions the sim's signals light and which have poles (each tied to the
+            // road model's junctions by position, the interim tie), the poles, lamps and trees -- what a before-and-
+            // after comparison reads (ADR-0421)
+            if (const char* dumpPath = std::getenv("RT_FURNITURE_DUMP")) {
+                nlohmann::json d;
+                auto junctionId = [&](const Vec2& at) -> std::string {
+                    if (!furnitureModel) return std::string();
+                    const engine::LevelRoadModel::Place j = furnitureModel->junctionAt(at);
+                    if (!j.valid()) return std::string();
+#ifdef RT_ROADS_LANES
+                    return std::to_string(j.city) + ":" + furnitureModel->cities[static_cast<std::size_t>(j.city)]->junctions[static_cast<std::size_t>(j.junction)].id;
+#else
+                    return std::string();
+#endif
+                };
+                d["signalled_nodes"] = nlohmann::json::array();
+                for (int n = 0; n < nav.streetNodeCount(); ++n)
+                    if (nav.signalControlled(n)) {
+                        const Vec2 at = nav.nodes[static_cast<std::size_t>(n)];
+                        d["signalled_nodes"].push_back({{"at", {at.x, at.y}}, {"junction", junctionId(at)}});
+                    }
+                d["poles"] = nlohmann::json::array();
+                for (const engine::StreetFurniture::Signal& s : sf.signalPoles) {
+                    const engine::NavLink& L = nav.links[static_cast<std::size_t>(s.link)];
+                    d["poles"].push_back({{"at", {s.base.x, s.base.z}}, {"face", {s.face.x, s.face.z}}, {"link", s.link},
+                                          {"shared", s.shared}, {"junction", junctionId(nav.nodes[static_cast<std::size_t>(L.to)])}});
+                }
+                d["lamps"] = fplan.lampBases.size();
+                d["trees"] = fplan.trees.size();
+                d["unpoled_approaches"] = fplan.unpoledApproaches.size();
+                d["unarmed_approaches"] = fplan.unarmedApproaches;
+                std::ofstream(dumpPath) << d.dump(1) << "\n";
             }
             {
                 const double hubRadius =

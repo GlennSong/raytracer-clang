@@ -895,12 +895,45 @@ struct CityMap {
 // it, in the order the level lists them -- each city's PLANNED LAYER, read from its road file when the level loads
 // (milliseconds; its built layer stays in cache/roadmodel). What the readers that only label the roads read: the
 // street names (the model's name attachments), the name signs (attached to the junction arms they stand at, as the
-// loader plans them), the map, and a bus stop's street.
+// loader plans them), the map, and a bus stop's street; and (ADR-0421) which junctions are lit -- the street furniture's
+// signal poles, the city sim's signals -- and the junctions and streets the lamps and trees keep to.
 struct RoadModel;
+struct NavGraph;
 struct LevelRoadModel {
     std::vector<std::shared_ptr<RoadModel>> cities;
     // The named street nearest `p` over every city (its name; empty when none is within `reach` metres).
     std::string streetNameNear(const Vec2& p, Real reach = 40.0) const;
+
+    // THE INTERIM TIE (ADR-0421; until design step 7 gives the nav graph the model's ids): a point -- a nav node, a
+    // lamp -- is tied to the model by POSITION, here and nowhere else. A node belongs to the junction one of whose
+    // points (its centre, or where one of its arms' streets meets it) lies nearest, within kTieReach; a point belongs to
+    // the street whose centre line passes nearest, within `reach`.
+    static constexpr Real kTieReach = 15.0;
+    struct Place {
+        int city = -1, junction = -1, arm = -1, street = -1;
+        bool valid() const { return city >= 0; }
+    };
+    Place junctionAt(const Vec2& p, Real reach = kTieReach) const;
+    // The arm of `j`'s junction a road leaves it by, from `p` heading `outward`: the arm whose heading is within
+    // 40 degrees, the one whose mouth is nearest `p` (arm -1: none).
+    Place armAt(Place j, const Vec2& p, const Vec2& outward) const;
+    Place streetAt(const Vec2& p, Real reach) const;
+    // Every junction's points (its centre and its arms' mouths), every city: what lamps and trees keep clear of.
+    std::vector<Vec2> junctionPoints() const;
+    // A key the same for every street of one stated run (its name: a run is named as one), or the street's own id.
+    uint64_t runKey(const Place& s) const;
+    // Does any junction state a control (the road file carries a control plan)?
+    bool controlsStated() const;
+    // Is this junction's stated control one the signal poles stand for (road_attachments.json, "signal_pole")?
+    bool lit(const Place& j) const;
+    // THE SIM'S SIGNALS FROM THE STATED CONTROLS: each intersection node of `nav` tied to a junction gets that
+    // junction's light; an intersection node tied to none (`untied` counts them) gets none. Does nothing when no
+    // control is stated (the old rule stays: NavGraph::signalledByOldRule).
+    void stateSignals(NavGraph& nav, int* untied = nullptr) const;
+
+    // (streetAt's buckets: every street's centre-line segments by 25 m cell, built on first use)
+    struct StreetCells;
+    mutable std::shared_ptr<const StreetCells> streetCells_;
 };
 
 struct AuthoredPlace {

@@ -3,6 +3,7 @@
 #include "engine/bundle/bundle.h"
 #include "engine/bundle/cache_use.h"
 #include "engine/procgen/city/roads/lanes/city_producer.h"   // the roads' key, the city entities, loadCityGraph
+#include "engine/procgen/city/roads/lanes/road_layout.h"     // junctionPlanKey: the control plan, keyed here
 
 #include <nlohmann/json.hpp>
 
@@ -10,6 +11,7 @@
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <utility>
 
 #ifndef _WIN32
@@ -213,7 +215,18 @@ LevelLaneGraph obtainLevelLaneGraph(const bundle::LevelInputs& in, const LaneGra
         out.notes.push_back("city " + std::to_string(cities[i].ordinal) + " (" +
                             (cities[i].inlineGraph ? std::string("an inline graph") : cities[i].graphPath) +
                             ") has no lane graph: the driving model drives the first city only");
-    out.key = laneGraphCacheKey(levelRoadsKey(in), opts);
+    // The roads' key, and the first city's control plan (the roads' key no longer sees it: keyedRoadFileText, ADR-0421)
+    {
+        nlohmann::json spec;
+        if (cities.front().inlineGraph) spec = cities.front().block;
+        else {
+            std::ifstream gf(cities.front().graphPath);
+            try { gf >> spec; } catch (const std::exception&) { spec = nlohmann::json(); }
+        }
+        const uint64_t plan = junctionPlanKey(spec);
+        const uint64_t roads = levelRoadsKey(in);
+        out.key = laneGraphCacheKey(plan == 0 ? roads : bundle::fnv1a(&plan, sizeof(plan), roads), opts);
+    }
 
     if (!cacheDir.empty()) {
         out.path = laneGraphCachePath(cacheDir, out.key);

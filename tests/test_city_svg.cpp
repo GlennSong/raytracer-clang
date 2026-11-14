@@ -41,6 +41,7 @@ CityMapData smallCity() {
         s.name = sideNames[i];
         m.streets.push_back(s);
         m.junctions.push_back(g.nodes[static_cast<std::size_t>(i)].pos);
+        m.junctionLit.push_back(i == 2 ? 1 : 0);   // the sim signals one of them (ADR-0421)
     }
     // The asphalt's outer outline (CCW in x/z), a curb loop 5 m outside the
     // centrelines, and the inner block hole.
@@ -83,7 +84,8 @@ TEST_CASE(city_map_draws_every_layer_as_its_own_group) {
     CHECK(svg.find("stroke-width='10.0'") != std::string::npos);     // a street at its width
     CHECK(svg.find("Acme Street") != std::string::npos);             // a street's stated name, along it
     CHECK(svg.find("Harbour Road") != std::string::npos);
-    CHECK(svg.find("cx='200.0' cy='200.0' r='4'") != std::string::npos);   // a junction of the model
+    CHECK(svg.find("cx='0.0' cy='200.0' r='4'") != std::string::npos);     // a junction of the model, not lit
+    CHECK(svg.find("cx='200.0' cy='200.0' r='6' fill='#2e9e3e'") != std::string::npos);   // ...and one the sim signals
     CHECK(svg.find("stroke-width='3.5'") != std::string::npos);      // the sidewalk band
     CHECK(m.furniture.signals.size() > 0 || m.furniture.lampBases.size() > 0);
 }

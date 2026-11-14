@@ -20051,3 +20051,90 @@ river_town j0 it stood inside a block.
 
 **Revisit when** the planner states its through pairs with names in mind (a cross street stated as a through pair that
 bends 156 degrees makes one name meet itself); step 4 moves the furniture and signal poles to the model.
+
+## ADR-0421 — One road model, step 4: every junction's control is stated, and the city sim's lights, the signal poles, the lamps and the trees read it
+**Status:** Provisional · **Date:** 2026-11-13
+
+Words: a junction's CONTROL is what governs it: `signal` (traffic lights), `stop`, `all_way_stop`, `give_way`, or
+`unmarked` (no control), the rule sets' words (assets/scripts/rules/lab.lua). A junction is LIT when its control is a
+signal. The NAV GRAPH is the existing city sim's graph of links and nodes (one node where links meet); a junction of
+the road model may cover several nav nodes. The OLD RULE is how the sim chose lights before: a node is lit when it is an
+intersection with four or more street approaches. A SIGNAL POLE stands on a kerb corner and carries one HEAD facing the
+traffic arriving by one arm. The BAKE KEY decides whether a level's baked meshes are current; the LANE GRAPH is the new
+driving model's road, cached under its own key.
+
+**Context.** Step 4 of docs/road-model-design.md. Before it, three places decided which junctions had lights, each its
+own way: the street furniture planned poles at nav nodes the old rule lit (one per approach bearing, 15-degree bins),
+then merged poles within 2.5 m; the city sim's signal controller lit the same nodes; and the control plan in the road
+file (only traffic_lab had one) was read by the new driving alone. Lamps kept clear of nav junction nodes, and a street's
+planting was keyed on its bearing (to 10 degrees).
+
+**Decision.**
+- **Every road file states every junction's control.** The one-off tool `lanes_tool controls <file> <city> <lit.json>
+  --write` writes, once, what the game does today: the loader (under `RT_CONTROL_DUMP`) lists the junctions the old rule
+  lit on that level's own nav graph -- a junction is lit when ANY of its nav nodes was -- and the tool writes `signal`
+  there and `unmarked` everywhere else, into each junction object in place, for a person to read and edit. The words
+  come from data: road_attachments.json says which controls a signal pole stands for (`signal`) and the "no control"
+  word (`unmarked`). traffic_lab keeps its planned controls (28 signals, 30 all-way stops, 78 stops, 20 unmarked).
+  Written: river_town (105 lit of 144), metro_v2_test (124 of 202), piedmont (346 of 615), island_8_nature (750 of
+  1373), light_rail_lab (9 of 21), ring_city (13 of 25), metro_mountain (439 of 991), metro_planned (438 of 990).
+  rail_loop has no junctions. For the levels whose bake is out of date (piedmont, metro_mountain, metro_planned,
+  wheel_lab) the city was built in memory for the dump (`RT_BUNDLE_WRITE=0`), not re-baked. Junctions the old rule lit
+  only in part (some nodes lit, some not), now lit whole: river_town 9, metro_v2_test 5, traffic_lab 6 (kept to its
+  plan), piedmont 7, metro_mountain 9, metro_planned 9, island_8_nature 3; the report lists them.
+- **The bake key no longer sees the junctions list** (controls and signs included): `keyedRoadFileText` takes out the
+  "junctions", "streets" and "divided" lists whole. No stage of the bake reads them (the meshes, paint, deck and road
+  graph come from the edges; paint uses class rank). The lane graph, which does read the controls and signs, now keys the
+  road file's junction plan itself (`junctionPlanKey`). Keys before and after: unchanged for river_town, agent_lab,
+  metro_v2_test, piedmont, metro_mountain, metro_planned, island_8_nature, wheel_lab, rail_lab, light_rail_lab;
+  traffic_lab's changed (its key hashed its control plan) from 346ce02f9a08933f to 53b013dc5ac95d9a, and it was
+  re-baked alone: every section byte-identical but the build report (its timings).
+- **The sim's lights read the stated control.** `NavGraph::signalControlled` reads `statedSignal` when the level states
+  controls; `LevelRoadModel::stateSignals` fills it: each intersection node gets the control of the model junction it
+  belongs to. The nav graph has no junction ids yet (design step 7), so a node is tied to a junction by POSITION, in one
+  helper (`LevelRoadModel::junctionAt`: the junction one of whose points -- its centre or an arm's mouth -- is nearest,
+  within 15 m). This is an interim. A node tied to no junction gets no light (river_town 4, metro_v2_test 5,
+  traffic_lab 10, island_8_nature 18; none of them was lit by the old rule either). Phases and timings are unchanged.
+- **The poles read the stated control too, one per arm.** The furniture planner places poles where the sim's lights are
+  (the same `signalControlled`), and with the model it keeps ONE pole per arm of the model junction (the approach whose
+  node is nearest the arm's mouth), instead of one per node and bearing. Where a pole can stand is unchanged (the kerb
+  corner, walked off the deck and the kerb line).
+- **Lamps, trees and kerb props keep clear of the model's junctions** (their centres and arm mouths), not of nav nodes,
+  and a street's planting is keyed on its stated RUN (its name; a street of no run, its own id), not its bearing.
+- **Attached.** Each pole and its head is attached to the arm it governs (kinds `signal_pole`, `signal_head`, on an arm,
+  standing for `signal`), each lamp to the street it lights (`street_lamp`, by the interim tie: the street within 20 m).
+- **The map** draws a lit junction as a filled green ring (the sim signals it).
+
+**What it does.** Before -> after (junctions are the road model's; "lit" = the sim signals any of its nodes):
+
+| | junctions lit | with poles | lit without a pole, or a pole unlit | poles = heads | lit nav nodes | lamps | street trees |
+|---|---|---|---|---|---|---|---|
+| river_town | 105 -> 105 | 105 -> 105 | 0 -> 0 | 434 -> 427 | 108 -> 124 | 1739 -> 1737 | 1985 -> 2264 |
+| metro_v2_test | 124 -> 124 | 124 -> 124 | 0 -> 0 | 494 -> 501 | 124 -> 134 | 2141 -> 2143 | 2151 -> 2175 |
+| traffic_lab | 76 -> 28 | 76 -> 28 | 0 -> 0 | 321 -> 113 | 81 -> 51 | 1430 -> 1426 | 2660 -> 2717 |
+
+No junction of river_town or metro_v2_test went from lit to unlit or back: the tool wrote what the old rule lit. What
+changed there is inside junctions the old rule lit only in part (river_town 9: j6, j7, j18, j23, j35, j43, j91, j119,
+j135; metro_v2_test 5: j0, j16, j19, j31, j163): their dark nodes are lit now (16 and 10 nodes), and their poles stand
+one per arm instead of one per node and bearing. traffic_lab now does what its plan says (28 signals, not the old
+rule's 76 junctions): 12 junctions became lit and 60 unlit, each by its stated control. The trees changed because a
+street's planting is drawn per run now, not per bearing.
+
+**What else moved.** Poles and lamps are furniture walkers steer round, and lights change traffic, so the pinned
+old-model state moves. With the old signalled set and the old furniture put back (a temporary switch, removed), both
+pins come out exactly (traffic_lab 0x787bbb8c..., river_town 0xa749b074...). The new values (not retaken here):
+traffic_lab 0x95361f07f682a28c, 0x335f747ef03fbe37, 0x1635c459b431087f, 0x60592356ecaa1176; river_town
+0x2b9fd0985ace2c92, 0xb2007bf85d95c105, 0x3c30289318b2cf0a, 0x532215ed97f16d3b.
+
+**Not done.** Stop and give-way signs: nothing draws them on a lanes level today (traffic_lab has no signs file), so none
+were added. The pole merge pass (2.5 m) is idle where controls are stated (0 merged on river_town, metro_v2_test,
+traffic_lab and island_8_nature, before and after; one pole per arm by construction); it stays for a road file that
+states no control. The city sim's own pole sites (`signalSite`) and its "adopt the placed poles only when the link
+counts match" stay: a signalled approach no arm takes still needs a site for its walker obstacle, and a world with no
+loader (tests) draws its own.
+
+**Alternatives.** A new placement policy (which junctions deserve lights): not this step. Tying nodes to junctions by
+the lanes' junction ids: the nav graph does not carry them until step 7.
+
+**Revisit when** step 7 gives the nav graph the model's ids (the position tie goes); the planner states controls as it
+plans (today a fresh road file takes the old rule until the tool runs).

@@ -98,9 +98,13 @@ bool wouldCreateCycle(World& world, Entity child, Entity parent) {
 }  // namespace engine
 
 
+#include "ai/nav_graph.h"   // LevelRoadModel::stateSignals
+#include "bundle/bundle.h"  // fnv1aStr: LevelRoadModel::runKey
 #ifdef RT_ROADS_LANES
+#include "procgen/city/polyline.h"           // distToSegment
 #include "procgen/city/roads/road_model.h"
 #endif
+#include <map>
 
 namespace engine {
 
@@ -123,5 +127,185 @@ std::string LevelRoadModel::streetNameNear(const Vec2& p, Real reach) const {
 #endif
     return out;
 }
+
+#ifdef RT_ROADS_LANES
+struct LevelRoadModel::StreetCells {
+    static constexpr Real kCell = 25.0;
+    struct Seg { int city, street; Vec2 a, b; };
+    struct Point { int city, junction; Vec2 at; };
+    std::map<std::pair<int, int>, std::vector<Seg>> cells;
+    std::map<std::pair<int, int>, std::vector<Point>> junctions;   // each junction's centre and arm mouths
+    static std::pair<int, int> cellOf(const Vec2& p) {
+        return {static_cast<int>(std::floor(p.x / kCell)), static_cast<int>(std::floor(p.y / kCell))};
+    }
+};
+
+static std::shared_ptr<const LevelRoadModel::StreetCells> buildCells(const std::vector<std::shared_ptr<RoadModel>>& cities) {
+    using Cells = LevelRoadModel::StreetCells;
+    std::shared_ptr<Cells> idx = std::make_shared<Cells>();
+    for (std::size_t c = 0; c < cities.size(); ++c) {
+        if (!cities[c]) continue;
+        const RoadModel& m = *cities[c];
+        for (std::size_t s = 0; s < m.streets.size(); ++s) {
+            const Range& L = m.streets[s].line;
+            for (uint32_t k = L.first; L.count >= 2 && k + 1 < L.end(); ++k) {
+                const Vec2 a = m.linePoints[k], b = m.linePoints[k + 1];
+                const std::pair<int, int> lo = Cells::cellOf(Vec2(std::min(a.x, b.x), std::min(a.y, b.y)));
+                const std::pair<int, int> hi = Cells::cellOf(Vec2(std::max(a.x, b.x), std::max(a.y, b.y)));
+                for (int x = lo.first; x <= hi.first; ++x)
+                    for (int z = lo.second; z <= hi.second; ++z)
+                        idx->cells[{x, z}].push_back({static_cast<int>(c), static_cast<int>(s), a, b});
+            }
+        }
+        for (std::size_t j = 0; j < m.junctions.size(); ++j) {
+            const ModelJunction& J = m.junctions[j];
+            idx->junctions[Cells::cellOf(J.at)].push_back({static_cast<int>(c), static_cast<int>(j), J.at});
+            for (std::size_t k = 0; k < J.arms.size(); ++k) {
+                Vec2 mouth;
+                if (armMouth(m, J, k, mouth)) idx->junctions[Cells::cellOf(mouth)].push_back({static_cast<int>(c), static_cast<int>(j), mouth});
+            }
+        }
+    }
+    return idx;
+}
+
+LevelRoadModel::Place LevelRoadModel::junctionAt(const Vec2& p, Real reach) const {
+    using Cells = LevelRoadModel::StreetCells;
+    if (!streetCells_) streetCells_ = buildCells(cities);
+    Place out;
+    Real best = reach;
+    const int r = static_cast<int>(std::ceil(reach / Cells::kCell));
+    const std::pair<int, int> c0 = Cells::cellOf(p);
+    for (int dx = -r; dx <= r; ++dx)
+        for (int dz = -r; dz <= r; ++dz) {
+            const std::map<std::pair<int, int>, std::vector<Cells::Point>>::const_iterator it =
+                streetCells_->junctions.find({c0.first + dx, c0.second + dz});
+            if (it == streetCells_->junctions.end()) continue;
+            for (const Cells::Point& q : it->second) {
+                const Real d = (q.at - p).length();
+                // (ties: the lower city, then the lower junction)
+                if (d < best || (d == best && out.valid() && (q.city < out.city || (q.city == out.city && q.junction < out.junction)))) {
+                    best = d;
+                    out.city = q.city;
+                    out.junction = q.junction;
+                }
+            }
+        }
+    return out;
+}
+
+LevelRoadModel::Place LevelRoadModel::armAt(Place j, const Vec2& p, const Vec2& outward) const {
+    j.arm = -1;
+    if (!j.valid() || j.junction < 0 || !cities[static_cast<std::size_t>(j.city)]) return j;
+    const RoadModel& m = *cities[static_cast<std::size_t>(j.city)];
+    const ModelJunction& J = m.junctions[static_cast<std::size_t>(j.junction)];
+    const Real len = outward.length();
+    if (len < 1e-9) return j;
+    const Vec2 out = outward * (1.0 / len);
+    const Real cosLimit = std::cos(40.0 * DEG_TO_RAD);
+    Real best = 1e30;
+    for (std::size_t k = 0; k < J.arms.size(); ++k) {
+        const ModelArm& a = J.arms[k];
+        Vec2 mouth;
+        if (!stated(a.heading) || !armMouth(m, J, k, mouth)) continue;
+        const Vec2 h(std::cos(a.heading * DEG_TO_RAD), std::sin(a.heading * DEG_TO_RAD));
+        if (dot(h, out) < cosLimit) continue;
+        const Real d = (mouth - p).length();
+        if (d < best) {
+            best = d;
+            j.arm = static_cast<int>(k);
+            j.street = static_cast<int>(a.street.index);
+        }
+    }
+    return j;
+}
+
+LevelRoadModel::Place LevelRoadModel::streetAt(const Vec2& p, Real reach) const {
+    using Cells = LevelRoadModel::StreetCells;
+    if (!streetCells_) streetCells_ = buildCells(cities);
+    Place out;
+    Real best = reach;
+    const int r = static_cast<int>(std::ceil(reach / Cells::kCell));
+    const int cx = static_cast<int>(std::floor(p.x / Cells::kCell)), cz = static_cast<int>(std::floor(p.y / Cells::kCell));
+    for (int dx = -r; dx <= r; ++dx)
+        for (int dz = -r; dz <= r; ++dz) {
+            const std::map<std::pair<int, int>, std::vector<Cells::Seg>>::const_iterator it = streetCells_->cells.find({cx + dx, cz + dz});
+            if (it == streetCells_->cells.end()) continue;
+            for (const Cells::Seg& s : it->second) {
+                const Real d = distToSegment(p, s.a, s.b);
+                // (ties: the lower city, then the lower street, as a scan in order would keep)
+                if (d < best || (d == best && out.valid() && (s.city < out.city || (s.city == out.city && s.street < out.street)))) {
+                    best = d;
+                    out.city = s.city;
+                    out.street = s.street;
+                }
+            }
+        }
+    return out;
+}
+
+std::vector<Vec2> LevelRoadModel::junctionPoints() const {
+    std::vector<Vec2> out;
+    for (const std::shared_ptr<RoadModel>& mp : cities) {
+        if (!mp) continue;
+        for (const ModelJunction& J : mp->junctions) {
+            out.push_back(J.at);
+            for (std::size_t k = 0; k < J.arms.size(); ++k) {
+                Vec2 mouth;
+                if (armMouth(*mp, J, k, mouth) && (mouth - J.at).length() > 0.5) out.push_back(mouth);
+            }
+        }
+    }
+    return out;
+}
+
+uint64_t LevelRoadModel::runKey(const Place& s) const {
+    if (s.city < 0 || s.street < 0 || !cities[static_cast<std::size_t>(s.city)]) return 0;
+    const RoadModel& m = *cities[static_cast<std::size_t>(s.city)];
+    const std::string name = streetName(m, ModelStreetId(static_cast<uint32_t>(s.street)));
+    const std::string key = std::to_string(s.city) + "|" +
+                            (name.empty() ? "street|" + m.streets[static_cast<std::size_t>(s.street)].id : "run|" + name);
+    return bundle::fnv1aStr(key);
+}
+
+bool LevelRoadModel::controlsStated() const {
+    for (const std::shared_ptr<RoadModel>& m : cities)
+        if (m)
+            for (const ModelJunction& J : m->junctions)
+                if (!J.control.empty()) return true;
+    return false;
+}
+
+bool LevelRoadModel::lit(const Place& j) const {
+    if (!j.valid() || j.junction < 0 || !cities[static_cast<std::size_t>(j.city)]) return false;
+    const ModelJunction& J = cities[static_cast<std::size_t>(j.city)]->junctions[static_cast<std::size_t>(j.junction)];
+    const AttachmentKind* pole = attachmentKinds().find(attachmentKinds().use("signal_pole"));
+    return !J.control.empty() && pole && !pole->controls.empty() && pole->standsFor(J.control);
+}
+
+void LevelRoadModel::stateSignals(NavGraph& nav, int* untied) const {
+    if (untied) *untied = 0;
+    if (!controlsStated()) return;
+    nav.statedSignal.assign(static_cast<std::size_t>(nav.nodeCount()), 0);
+    for (int n = 0; n < nav.streetNodeCount(); ++n) {
+        if (nav.kindOf(n) != JunctionKind::Intersection) continue;
+        const Place j = junctionAt(nav.nodes[static_cast<std::size_t>(n)]);
+        if (!j.valid()) {
+            if (untied) ++*untied;
+            continue;
+        }
+        nav.statedSignal[static_cast<std::size_t>(n)] = lit(j) ? 1 : 0;
+    }
+}
+#else
+LevelRoadModel::Place LevelRoadModel::junctionAt(const Vec2&, Real) const { return Place{}; }
+LevelRoadModel::Place LevelRoadModel::armAt(Place j, const Vec2&, const Vec2&) const { return j; }
+LevelRoadModel::Place LevelRoadModel::streetAt(const Vec2&, Real) const { return Place{}; }
+std::vector<Vec2> LevelRoadModel::junctionPoints() const { return {}; }
+uint64_t LevelRoadModel::runKey(const Place&) const { return 0; }
+bool LevelRoadModel::controlsStated() const { return false; }
+bool LevelRoadModel::lit(const Place&) const { return false; }
+void LevelRoadModel::stateSignals(NavGraph&, int* untied) const { if (untied) *untied = 0; }
+#endif
 
 }  // namespace engine

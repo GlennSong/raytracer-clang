@@ -504,6 +504,10 @@ std::string AttachmentKinds::use(const std::string& role) const {
     return std::string();
 }
 
+bool AttachmentKind::standsFor(const std::string& control) const {
+    return controls.empty() || std::find(controls.begin(), controls.end(), control) != controls.end();
+}
+
 AttachmentKinds parseAttachmentKinds(const nlohmann::json& doc) {
     AttachmentKinds out;
     if (doc.contains("kinds") && doc["kinds"].is_object())
@@ -513,6 +517,9 @@ AttachmentKinds parseAttachmentKinds(const nlohmann::json& doc) {
             kind.name = name;
             kind.on = k.value("on", std::string());
             kind.names = k.value("names", false);
+            if (k.contains("controls") && k["controls"].is_array())
+                for (const nlohmann::json& c : k["controls"])
+                    if (c.is_string()) kind.controls.push_back(c.get<std::string>());
             if (kind.on == "street" || kind.on == "junction" || kind.on == "arm") out.kinds.push_back(kind);
         }
     if (doc.contains("uses") && doc["uses"].is_object())
@@ -538,7 +545,10 @@ const AttachmentKinds& attachmentKinds() {
             // the shipped file's kinds, so a stripped install still names its streets
             LOG_WARN << "[roads] no usable assets/data/road_attachments.json: the built-in attachment kinds";
             k = parseAttachmentKinds(nlohmann::json::parse(R"({"kinds": {"street_name": {"on": "street", "names": true},
-                "name_sign": {"on": "arm"}}, "uses": {"street_name": "street_name", "name_sign": "name_sign"}})"));
+                "name_sign": {"on": "arm"}, "signal_pole": {"on": "arm", "controls": ["signal"]},
+                "signal_head": {"on": "arm", "controls": ["signal"]}, "street_lamp": {"on": "street"}},
+                "uses": {"street_name": "street_name", "name_sign": "name_sign", "signal_pole": "signal_pole",
+                "signal_head": "signal_head", "street_lamp": "street_lamp"}})"));
         }
         return k;
     }();
@@ -604,11 +614,10 @@ std::vector<NamedArm> namedArmsAt(const RoadModel& m, ModelJunctionId j) {
         if (!a.street.valid() || !stated(a.heading)) continue;
         const ModelStreet& S = m.streets[a.street.index];
         const std::string name = streetName(m, a.street);
-        if (name.empty() || S.line.count < 2) continue;
         NamedArm n;
+        if (name.empty() || !armMouth(m, J, k, n.point)) continue;
         n.arm = static_cast<int>(k);
         n.street = a.street;
-        n.point = a.spineIn ? m.linePoints[S.line.end() - 1] : m.linePoints[S.line.first];   // its street's end at the junction
         n.dir = Vec2(std::cos(a.heading * DEG_TO_RAD), std::sin(a.heading * DEG_TO_RAD));
         n.travelWidth = S.travelWidth();
         n.name = name;
@@ -617,6 +626,32 @@ std::vector<NamedArm> namedArmsAt(const RoadModel& m, ModelJunctionId j) {
     std::stable_sort(out.begin(), out.end(), [&](const NamedArm& x, const NamedArm& y) {
         return J.arms[static_cast<std::size_t>(x.arm)].heading < J.arms[static_cast<std::size_t>(y.arm)].heading;
     });
+    return out;
+}
+
+bool armMouth(const RoadModel& m, const ModelJunction& J, std::size_t arm, Vec2& out) {
+    if (arm >= J.arms.size()) return false;
+    const ModelArm& a = J.arms[arm];
+    if (!a.street.valid() || a.street.index >= m.streets.size()) return false;
+    const Range& L = m.streets[a.street.index].line;
+    if (L.count < 2) return false;
+    out = a.spineIn ? m.linePoints[L.end() - 1] : m.linePoints[L.first];   // its street's end at the junction
+    return true;
+}
+
+ModelStreetId nearestStreet(const RoadModel& m, const Vec2& p, Real reach, Real* distance) {
+    Real best = reach;
+    ModelStreetId out;
+    for (std::size_t s = 0; s < m.streets.size(); ++s) {
+        const Range& L = m.streets[s].line;
+        if (L.count < 2) continue;
+        Real d = best;
+        for (uint32_t k = L.first; k + 1 < L.end(); ++k) d = std::min(d, distToSegment(p, m.linePoints[k], m.linePoints[k + 1]));
+        if (d >= best) continue;
+        best = d;
+        out = ModelStreetId(static_cast<uint32_t>(s));
+    }
+    if (distance) *distance = out.valid() ? best : kNotStated;
     return out;
 }
 

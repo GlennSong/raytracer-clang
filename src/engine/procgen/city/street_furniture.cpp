@@ -221,7 +221,12 @@ StreetFurniturePlan planStreetFurniture(
     // gone. The pole stands on the near-right curb corner, backed off by the
     // widest crossing road (and a knot-merged junction's spread) so it never
     // lands in a carriageway.
-    std::map<std::pair<int, int>, int> armBest;   // (node, bearing bin) -> link
+    // With the road model (p.approachArm, ADR-0421): ONE pole per ARM OF THE MODEL JUNCTION -- the approach nearest the
+    // arm's mouth, then the widest, longest, lowest index -- so a junction the plan spread over several nav nodes stands
+    // one set, not one per node; an approach no arm takes gets no pole (it is still phased).
+    std::map<std::pair<int64_t, int>, int> armBest;   // (node, bearing bin) or (model arm, -1) -> link
+    std::map<int, Real> mouthOf;                        // link -> its node's distance from the arm's mouth
+    std::map<int, int64_t> armOfLink;
     for (int li = 0; li < nav.linkCount(); ++li) {
         const NavLink& L = nav.links[li];
         // Semantic signal predicate (#17/S5), shared with the controller and
@@ -229,18 +234,34 @@ StreetFurniturePlan planStreetFurniture(
         if (!(L.access & road_access::kSignalable)) continue;
         if (!nav.signalControlled(L.to)) continue;
         Vec2 d = nav.direction(li);
-        int bin = static_cast<int>(std::lround(std::atan2(d.y, d.x) /
-                                               (PI / 12.0)));
-        bin = ((bin % 24) + 24) % 24;
-        const auto key = std::make_pair(L.to, bin);
-        auto it = armBest.find(key);
+        std::pair<int64_t, int> key;
+        if (p.approachArm) {
+            Real mouth = 0;
+            const int64_t arm = p.approachArm(li, &mouth);
+            if (arm < 0) {
+                ++out.unarmedApproaches;
+                continue;
+            }
+            key = std::make_pair(arm, -1);
+            mouthOf[li] = mouth;
+            armOfLink[li] = arm;
+        } else {
+            int bin = static_cast<int>(std::lround(std::atan2(d.y, d.x) /
+                                                   (PI / 12.0)));
+            bin = ((bin % 24) + 24) % 24;
+            key = std::make_pair(static_cast<int64_t>(L.to), bin);
+        }
+        std::map<std::pair<int64_t, int>, int>::iterator it = armBest.find(key);
         if (it != armBest.end()) {
             const NavLink& W = nav.links[it->second];
+            const Real mL = p.approachArm ? mouthOf[li] : 0, mW = p.approachArm ? mouthOf[it->second] : 0;
             const bool better =
-                L.width > W.width ||
-                (L.width == W.width &&
-                 (L.length > W.length ||
-                  (L.length == W.length && li < it->second)));
+                mL < mW - 1.0 ||
+                (std::fabs(mL - mW) <= 1.0 &&
+                 (L.width > W.width ||
+                  (L.width == W.width &&
+                   (L.length > W.length ||
+                    (L.length == W.length && li < it->second)))));
             if (!better) continue;
             it->second = li;
         } else {
@@ -389,8 +410,29 @@ StreetFurniturePlan planStreetFurniture(
                       corner.y);
         s.face = Vec3(-d.x, 0, -d.y);   // head faces its approaching traffic
         s.link = li;
+        const std::map<int, int64_t>::const_iterator armIt = armOfLink.find(li);
+        s.arm = armIt == armOfLink.end() ? -1 : armIt->second;
         out.signals.push_back(s);
     }
+
+    // THE MODEL'S JUNCTIONS (p.junctionPoints, ADR-0421): how far a point is from the nearest junction's centre or arm
+    // mouth, bucketed by 20 m cells; with none given, the nav graph's junction nodes as before.
+    constexpr Real kJunctionCell = 20.0;
+    std::map<std::pair<int, int>, std::vector<Vec2>> junctionCells;
+    for (const Vec2& j : p.junctionPoints)
+        junctionCells[{static_cast<int>(std::floor(j.x / kJunctionCell)), static_cast<int>(std::floor(j.y / kJunctionCell))}].push_back(j);
+    auto modelJunctionDist = [&](const Vec2& v) {
+        Real d = 1e30;
+        const int cx = static_cast<int>(std::floor(v.x / kJunctionCell)), cz = static_cast<int>(std::floor(v.y / kJunctionCell));
+        for (int dx = -2; dx <= 2; ++dx)
+            for (int dz = -2; dz <= 2; ++dz) {
+                const std::map<std::pair<int, int>, std::vector<Vec2>>::const_iterator it = junctionCells.find({cx + dx, cz + dz});
+                if (it == junctionCells.end()) continue;
+                for (const Vec2& j : it->second) d = std::min(d, (v - j).length());
+            }
+        return d;   // (exact within 40 m: every clearance here is under that)
+    };
+    const bool modelJunctions = !p.junctionPoints.empty();
 
     // LAMPS: march each link's RIGHT sidewalk — a two-way road contributes one
     // directed link per direction, so both sides light up and the pattern
@@ -490,10 +532,11 @@ StreetFurniturePlan planStreetFurniture(
             // curve vertex, and treating those as junctions blanked the
             // curved avenues that make up most of this city.
             const bool nearJunction =
-                (nav.isJunction(L.to) &&
-                 (sp - nav.nodes[L.to]).length() < p.junctionClear) ||
-                (nav.isJunction(L.from) &&
-                 (sp - nav.nodes[L.from]).length() < p.junctionClear);
+                modelJunctions ? modelJunctionDist(sp) < p.junctionClear :
+                ((nav.isJunction(L.to) &&
+                  (sp - nav.nodes[L.to]).length() < p.junctionClear) ||
+                 (nav.isJunction(L.from) &&
+                  (sp - nav.nodes[L.from]).length() < p.junctionClear));
             if (nearJunction) continue;
             if (insideAnyCarriageway(sp)) continue;
             // ...and off the DRAWN asphalt. insideAnyCarriageway reasons from link
@@ -553,6 +596,7 @@ StreetFurniturePlan planStreetFurniture(
         return true;
     };
     auto distToJunction = [&](const NavLink& L, const Vec2& v) {
+        if (modelJunctions) return modelJunctionDist(v);
         Real d = 1e30;
         if (nav.isJunction(L.to)) d = std::min(d, (v - nav.nodes[L.to]).length());
         if (nav.isJunction(L.from)) d = std::min(d, (v - nav.nodes[L.from]).length());
@@ -596,9 +640,14 @@ StreetFurniturePlan planStreetFurniture(
             const Vec2 mid = (a + b) * Real(0.5);
             const long long off = static_cast<long long>(std::llround(dot(mid, Vec2(-lineDir.y, lineDir.x)) / 30.0));
             const long long along = static_cast<long long>(std::floor(dot(mid, lineDir) / 700.0));
-            uint64_t k = 0x9E3779B97F4A7C15ull ^ (static_cast<uint64_t>(ab) * 0xBF58476D1CE4E5B9ull) ^
-                         (static_cast<uint64_t>(off) * 0x94D049BB133111EBull) ^ (static_cast<uint64_t>(along) * 0xD6E8FEB86659FD93ull) ^
-                         static_cast<uint64_t>(L.klass) * 0x2545F4914F6CDD1Dull;
+            // With the road model (p.streetRun, ADR-0421) the key is the street's stated RUN, not its bearing: every
+            // street of one run planted one way, round its bends too
+            const uint64_t run = p.streetRun ? p.streetRun(li) : 0;
+            uint64_t k = run != 0
+                ? 0x9E3779B97F4A7C15ull ^ (run * 0xBF58476D1CE4E5B9ull) ^ static_cast<uint64_t>(L.klass) * 0x2545F4914F6CDD1Dull
+                : 0x9E3779B97F4A7C15ull ^ (static_cast<uint64_t>(ab) * 0xBF58476D1CE4E5B9ull) ^
+                  (static_cast<uint64_t>(off) * 0x94D049BB133111EBull) ^ (static_cast<uint64_t>(along) * 0xD6E8FEB86659FD93ull) ^
+                  static_cast<uint64_t>(L.klass) * 0x2545F4914F6CDD1Dull;
             k ^= k >> 31; k *= 0xBF58476D1CE4E5B9ull; k ^= k >> 29;
             pl = choosePlanting(p.character(mid), L.klass, (k & 0xFFFF) / 65536.0, ((k >> 16) & 0xFFFF) / 65536.0);
             ++out.planted[std::min<int>(pl.scheme, 7)];
