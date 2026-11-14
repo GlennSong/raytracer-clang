@@ -40,7 +40,10 @@ bool loadRuleSet(engine::ScriptVM& vm, const std::string& fileName, RuleSet& out
 // READS THE PLACEMENT POLICY (issue #240; engine/procgen/city/roads/lanes/control_plan.h) out of the same file: the
 // rule set's `placement` table, which the city planner uses to give every junction a control and every road a posted
 // limit. `rules` is the rule set loadRuleSet read from that file; the policy is checked against it, so a row naming a
-// control the rule set has no row for, or a sign it has no device for, is an error. The table:
+// control the rule set has no row for, or a sign it has no device for, is an error. The table is either
+// `placement = { policy = "rules/control_policy.lua" }` -- a file (under assets/scripts) defining the global
+// `control_policy`, the policy every city shares (ADR-0422), read in its place; the reader opens no files, so the caller
+// runs that file in `vm` first (apps/citysim/control_policy_file.h does) -- or the policy itself:
 //   placement = {
 //     class_order = { "freeway", "arterial", ... },          -- road classes, the most important first
 //     speed_limits = { arterial = { 35, unit = "mph", source = "..." }, ... },   -- posted per class (optional)

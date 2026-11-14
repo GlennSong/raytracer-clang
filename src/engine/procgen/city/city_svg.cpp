@@ -279,7 +279,9 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
     if (minX > maxX) { LOG_ERROR << "[citymap] nothing to draw"; return false; }
     const double pad = 60.0;
     minX -= pad; minZ -= pad; maxX += pad; maxZ += pad;
-    const double w = maxX - minX, h = maxZ - minZ;
+    // THE LEGEND STANDS BESIDE THE DRAWING (ADR-0422), never over it: the page is widened by its panel.
+    const double legendW = layers.legend ? 980.0 : 0.0;
+    const double w = maxX - minX + legendW, h = std::max(maxZ - minZ, layers.legend ? 40.0 + 30.0 * 24 : 0.0);
 
     std::ofstream out(path);
     if (!out) {
@@ -383,6 +385,14 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
         out << "<g id='layer-junctions' fill='white' fill-opacity='0.8' stroke='#b0122b' stroke-width='1.2'>\n";
         for (std::size_t i = 0; i < data.junctions.size(); ++i) {
             const Vec2& j = data.junctions[i];
+            if (i < data.junctionControl.size()) {
+                // each control its own colour (the data's: CityMapData::controlColours); no colour named: grey
+                std::string fill = "#9e9e9e";
+                for (const std::pair<std::string, std::string>& kc : data.controlColours)
+                    if (kc.first == data.junctionControl[i]) fill = kc.second;
+                out << "<circle cx='" << j.x << "' cy='" << j.y << "' r='7' fill='" << fill << "' fill-opacity='1'/>\n";
+                continue;
+            }
             const bool lit = i < data.junctionLit.size() && data.junctionLit[i];
             out << "<circle cx='" << j.x << "' cy='" << j.y << (lit ? "' r='6' fill='#2e9e3e' fill-opacity='1'/>\n" : "' r='4'/>\n");
         }
@@ -571,10 +581,10 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
 
     // --- legend: one clickable entry per drawn layer, counts, scale bar ----------------
     if (layers.legend) {
-        const double lx = minX + 24, ly = minZ + 40;
+        const double lx = maxX + 24, ly = minZ + 40;
         out << "<g id='layer-legend' font-size='22' fill='#222'>\n";
-        out << "<rect x='" << lx - 12 << "' y='" << ly - 30 << "' width='560' height='"
-            << 40 + 30 * 17 << "' fill='white' fill-opacity='0.8' stroke='#999'/>\n";
+        out << "<rect x='" << lx - 12 << "' y='" << ly - 30 << "' width='" << legendW - 30 << "' height='"
+            << 40 + 30 * 23 << "' fill='white' fill-opacity='0.8' stroke='#999'/>\n";
         out << "<text x='" << lx << "' y='" << ly << "' font-weight='bold'>city map · 1 unit = 1 m · y = world z · click a row to toggle its layer</text>\n";
         int row = 1;
         auto entry = [&](bool on, const char* id, const std::string& swatch, const std::string& text) {
@@ -606,9 +616,23 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
                   " m wide, outside " + std::to_string(data.curbLoops.size()) + " curb loops");
         entry(layers.roads, "layer-roads", sw("#7c7c7c", "none", 8),
               "streets by class (the road model; stroke = travel lanes' width), " + std::to_string(data.streets.size()) + " streets");
-        entry(layers.junctions, "layer-junctions", sw("white", "#b0122b", 8),
-              "junctions (the road model's), " + std::to_string(data.junctions.size()) + "; green: lit (the sim signals it), " +
-                  std::to_string(std::count(data.junctionLit.begin(), data.junctionLit.end(), uint8_t(1))));
+        if (data.junctionControl.empty())
+            entry(layers.junctions, "layer-junctions", sw("white", "#b0122b", 8),
+                  "junctions (the road model's), " + std::to_string(data.junctions.size()) + "; green: lit (the sim signals it), " +
+                      std::to_string(std::count(data.junctionLit.begin(), data.junctionLit.end(), uint8_t(1))));
+        else {
+            entry(layers.junctions, "layer-junctions", sw("white", "#b0122b", 8),
+                  "junctions (the road model's), " + std::to_string(data.junctions.size()) + ", by control" +
+                      (data.controlsFrom.empty() ? std::string() : " (" + data.controlsFrom + ")") + ":");
+            long listed = 0;
+            for (const std::pair<std::string, std::string>& kc : data.controlColours) {
+                const long n = std::count(data.junctionControl.begin(), data.junctionControl.end(), kc.first);
+                listed += n;
+                entry(layers.junctions, "layer-junctions", sw(kc.second, "#b0122b", 8), "    " + kc.first + ": " + std::to_string(n));
+            }
+            const long other = static_cast<long>(data.junctionControl.size()) - listed;
+            if (other > 0) entry(layers.junctions, "layer-junctions", sw("#9e9e9e", "#b0122b", 8), "    anything else: " + std::to_string(other));
+        }
         entry(layers.streetNames, "layer-names", sw("#1a1a1a", "none", 8), "street names (the road file's), " + std::to_string(labels) + " labels");
         entry(layers.curbs, "layer-curbs", sw("none", "#4a4036", 8), "curb lines (asphalt union outline)");
         entry(layers.gaps, "layer-gaps", sw("none", "#d81b60", 8),

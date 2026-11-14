@@ -7,7 +7,7 @@
 //       scorecard line; with several variants, OUT_DIR/contact.png side by side.
 //   city_plan brief
 //       prints the default brief, to copy and edit.
-//   city_plan controls GRAPH.json RULES.lua [--write] [--report FILE]
+//   city_plan controls GRAPH.json RULES.lua [--write] [--report FILE] [--compare [--layout] [--compare-json FILE]]
 //       THE CONTROL PLAN (issue #240): every junction of a road graph given a
 //       control and every road a posted limit, by the rule set's placement policy
 //       (RULES is under assets/scripts, e.g. rules/lab.lua); prints the counts,
@@ -40,6 +40,7 @@
 #include <chrono>
 #include <cctype>
 #include "engine/procgen/city/roads/lanes/control_plan.h"   // the control plan (#240)
+#include "apps/citysim/control_policy_file.h"               // the shared control placement policy, read (ADR-0422)
 #include "engine/script_assets.h"                           // loadScriptCode: the rule set's file
 #ifdef RT_ENABLE_SCRIPTING
 #include "apps/driving/scripting/rule_set_lua.h"           // the rule set and its placement policy
@@ -64,6 +65,7 @@ static int usage() {
                  "       city_plan scene BRIEF.json OUT_SCENE.json [--no-ramps]\n"
                  "       city_plan brief\n"
                  "       city_plan controls GRAPH.json RULES.lua [--write] [--report FILE]   every junction's control and every road's limit, by the rule set's placement policy (#240)\n"
+                 "                 [--compare [--layout] [--compare-json FILE]]   plan in memory and set it beside what the file states; never writes (ADR-0422)\n"
                  "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n"
                  "       city_plan island SEED OUT_DIR [--variants N]   island worlds on the map: terrain, sites, ring freeway (ADR-0105)\n"
                  "       city_plan island-cities SEED OUT_DIR [--terrain LEVEL.json] [--png] [--view X Z HALF NAME]...   that island's cities and towns planned on its land, mapped, and extra close-ups (ADR-0106);\n"
@@ -170,6 +172,19 @@ static void addCityRail(nlohmann::json& graph, const nlohmann::json& level, cons
             for (const nlohmann::json& e : r.ways) added.push_back(e);
         }
     for (const nlohmann::json& e : added) graph["edges"].push_back(e);
+}
+
+// THE SHARED CONTROL PLACEMENT POLICY (ADR-0422), through the default rule set; null (with a message) when the build
+// has no scripting or the policy does not read -- then a fresh scene states no controls, as before.
+static const engine::roads::lanes::ControlPolicy* sharedControlPolicy() {
+    static engine::roads::lanes::ControlPolicy policy;
+    static int state = 0;   // 0 not read, 1 read, -1 refused
+    if (state == 0) {
+        std::string err;
+        state = citysim::loadControlPolicy(citysim::kDefaultRuleSet, policy, &err) ? 1 : -1;
+        if (state < 0) std::fprintf(stderr, "city_plan: the shared control policy did not read (%s): no controls stated\n", err.c_str());
+    }
+    return state > 0 ? &policy : nullptr;
 }
 
 int main(int argc, char** argv) {
@@ -605,6 +620,7 @@ int main(int argc, char** argv) {
             const auto t0 = std::chrono::steady_clock::now();
             std::vector<nlohmann::json> placeScenes(w.sites.size());
             for (std::size_t k = 0; k < w.sites.size(); ++k) placeScenes[k] = planToLanesScene(plans[k], SceneOptions{});
+            sceneOpt.controls = sharedControlPolicy();   // the island's controls, stated (ADR-0422)
             nlohmann::json scene = engine::islandLanesScene(w, placeScenes, sceneOpt);
             const std::string scenePath = "assets/lanelab/planned/" + levelName + "_lanelab.json";
             std::ofstream(scenePath) << scene.dump(1) << "\n";
@@ -1035,33 +1051,38 @@ int main(int argc, char** argv) {
 #ifdef RT_ENABLE_SCRIPTING
         // THE CONTROL PLAN (issue #240): the rule set's placement policy over the road graph, written into it.
         const std::string graphPath = argv[2], rulesFile = argv[3];
-        bool write = false;
-        std::string reportPath;
+        // --compare (ADR-0422): plan in memory and set the plan beside what the file states, junction by junction; never
+        // writes the file. --compare-json PATH: each junction's stated and planned control, for a map.
+        // --layout: the junctions found as the file's layout finds them (lanes_tool layout's, road_layout.h
+        // planLayoutControls), so a file laid out by that tool is planned on its own junctions.
+        bool write = false, compare = false, onLayout = false;
+        std::string reportPath, compareJson;
         for (int a = 4; a < argc; ++a) {
             if (std::string(argv[a]) == "--write") write = true;
+            if (std::string(argv[a]) == "--compare") compare = true;
+            if (std::string(argv[a]) == "--layout") onLayout = true;
             if (std::string(argv[a]) == "--report" && a + 1 < argc) reportPath = argv[a + 1];
+            if (std::string(argv[a]) == "--compare-json" && a + 1 < argc) compareJson = argv[a + 1];
         }
+        if (compare) write = false;
         nlohmann::json scene;
         {
             std::ifstream in(graphPath);
             if (!in) { std::fprintf(stderr, "city_plan: cannot read %s\n", graphPath.c_str()); return 1; }
             try { in >> scene; } catch (const std::exception& e) { std::fprintf(stderr, "city_plan: %s: %s\n", graphPath.c_str(), e.what()); return 1; }
         }
-        const std::string code = engine::loadScriptCode(rulesFile, "");
-        if (code.empty()) { std::fprintf(stderr, "city_plan: %s: not found under assets/scripts (or it is empty)\n", rulesFile.c_str()); return 1; }
-        engine::ScriptVM vm;
         std::string err;
-        driving::RuleSet rules;
         engine::roads::lanes::ControlPolicy policy;
-        if (!vm.doString(code, &err) || !driving::loadRuleSet(vm, rulesFile, rules, &err) ||
-            !driving::loadPlacementPolicy(vm, rulesFile, rules, policy, &err)) {
+        if (!citysim::loadControlPolicy(rulesFile, policy, &err)) {
             std::fprintf(stderr, "city_plan: %s\n", err.c_str());
             return 1;
         }
         const std::string dir = graphPath.find('/') == std::string::npos ? "." : graphPath.substr(0, graphPath.rfind('/'));
         engine::roads::lanes::ControlPlan plan;
         try {
-            plan = engine::roads::lanes::planControls(engine::roads::lanes::RoadLabGraph::fromJson(scene, dir), policy);
+            const engine::roads::lanes::RoadLabGraph g = engine::roads::lanes::RoadLabGraph::fromJson(scene, dir);
+            plan = onLayout ? engine::roads::lanes::planLayoutControls(g, engine::roads::lanes::LayoutSource::Inferred, policy)
+                            : engine::roads::lanes::planControls(g, policy);
         } catch (const std::exception& e) { std::fprintf(stderr, "city_plan: %s: %s\n", graphPath.c_str(), e.what()); return 1; }
         std::printf("%s: %s", graphPath.c_str(), engine::roads::lanes::describeControlPlan(plan).c_str());
         if (!reportPath.empty()) {
@@ -1072,6 +1093,124 @@ int main(int argc, char** argv) {
                   << engine::roads::lanes::describeFacts(plan.facts[i]) << "\n";
             }
             std::printf("wrote %s\n", reportPath.c_str());
+        }
+        if (compare) {
+            // WHAT THE FILE STATES, by junction id
+            struct Stated { std::string control, why; std::vector<std::string> signs; engine::Vec2 at; };
+            std::map<std::string, Stated> stated;
+            std::map<std::string, uint32_t> statedCount, plannedCount;
+            if (scene.contains("junctions"))
+                for (const nlohmann::json& j : scene["junctions"]) {
+                    Stated s;
+                    s.control = j.value("control", std::string("(none)"));
+                    s.why = j.value("why", std::string());
+                    if (j.contains("at")) s.at = engine::Vec2(j["at"][0].get<double>(), j["at"][1].get<double>());
+                    if (j.contains("arms"))
+                        for (const nlohmann::json& a : j["arms"]) s.signs.push_back(a.contains("regulations") ? a["regulations"].dump() : "[]");
+                    stated[j.value("id", std::string())] = s;
+                    ++statedCount[s.control];
+                }
+            // LIT: the control the signal poles stand for (road_attachments.json's signal_pole kind, ADR-0421)
+            std::string lit;
+            {
+                nlohmann::json kinds;
+                std::ifstream kf("assets/data/road_attachments.json");
+                try { kf >> kinds; } catch (const std::exception&) { kinds = nlohmann::json(); }
+                const std::string poleKind = kinds.contains("uses") ? kinds["uses"].value("signal_pole", std::string()) : std::string();
+                if (kinds.contains("kinds") && kinds["kinds"].contains(poleKind) && kinds["kinds"][poleKind].contains("controls") &&
+                    !kinds["kinds"][poleKind]["controls"].empty())
+                    lit = kinds["kinds"][poleKind]["controls"][0].get<std::string>();
+            }
+            uint32_t same = 0, sameWhy = 0, sameSigns = 0, unmatched = 0, catchAll = 0;
+            std::string unmatchedEx;   // the planned junctions no stated one stands within a metre of (grouped another way)
+            // groups: (stated lit?, planned lit?) -> row -> junctions
+            using Where = std::pair<std::string, engine::Vec2>;   // the stated junction's id, and where it is
+            std::map<std::string, std::vector<Where>> litNotPolicy, policyNotLit, differ;
+            nlohmann::json out = nlohmann::json::array();
+            const std::string lastRow = policy.rows.empty() ? std::string() : policy.rows.back().name;
+            for (const engine::roads::lanes::PlannedJunction& pj : plan.junctions) {
+                ++plannedCount[pj.control];
+                catchAll += pj.why == lastRow ? 1u : 0u;
+                // the stated junction at the same place (ids are numbered by the grouping, so a file grouped another
+                // way numbers them another way, and a junction's centre moves with its grouping): its id when it stands
+                // there, else the nearest within 8 m (junctions stand farther apart than that)
+                std::map<std::string, Stated>::const_iterator it = stated.find(pj.id);
+                if (it == stated.end() || (it->second.at - pj.at).length() > 1.0) {
+                    it = stated.end();
+                    double best = 8.0;
+                    for (std::map<std::string, Stated>::const_iterator s = stated.begin(); s != stated.end(); ++s)
+                        if ((s->second.at - pj.at).length() < best) {
+                            best = (s->second.at - pj.at).length();
+                            it = s;
+                        }
+                }
+                if (it == stated.end()) {
+                    ++unmatched;
+                    char b[128];
+                    std::snprintf(b, sizeof b, " %s (%.0f, %.0f) %s;", pj.id.c_str(), pj.at.x, pj.at.y, pj.control.c_str());
+                    unmatchedEx += b;
+                    continue;
+                }
+                const Stated& s = it->second;
+                std::vector<std::string> signs;
+                for (const engine::roads::lanes::PlannedArm& a : pj.arms) signs.push_back(nlohmann::json(a.regulations).dump());
+                same += s.control == pj.control ? 1u : 0u;
+                sameWhy += s.why == pj.why ? 1u : 0u;
+                sameSigns += s.signs == signs ? 1u : 0u;
+                const Where where(it->first, s.at);
+                if (s.control != pj.control) differ[s.control + " -> " + pj.control].push_back(where);
+                if (s.control == lit && pj.control != lit) litNotPolicy[pj.why].push_back(where);
+                if (s.control != lit && pj.control == lit) policyNotLit[pj.why].push_back(where);
+                out.push_back({{"id", it->first}, {"at", {s.at.x, s.at.y}}, {"stated", s.control}, {"policy", pj.control}, {"why", pj.why}});
+            }
+            auto counts = [](const std::map<std::string, uint32_t>& m) {
+                std::string o;
+                for (const std::pair<const std::string, uint32_t>& kv : m) o += (o.empty() ? "" : ", ") + std::to_string(kv.second) + " " + kv.first;
+                return o;
+            };
+            std::printf("COMPARE %s (in memory; the file is not written)\n  stated today: %s\n  under the policy: %s\n", graphPath.c_str(),
+                        counts(statedCount).c_str(), counts(plannedCount).c_str());
+            std::printf("  junctions matched by id and place: %zu of %zu (%u unmatched); same control %u, same row (why) %u, same signs %u\n",
+                        plan.junctions.size() - unmatched, plan.junctions.size(), unmatched, same, sameWhy, sameSigns);
+            if (unmatched) std::printf("  planned junctions with no stated one at their place (the file groups them another way, or their centres moved more than 8 m):%s\n", unmatchedEx.c_str());
+            auto groups = [](const char* title, const std::map<std::string, std::vector<Where>>& g) {
+                uint32_t n = 0;
+                for (const std::pair<const std::string, std::vector<Where>>& kv : g) n += static_cast<uint32_t>(kv.second.size());
+                std::printf("  %s: %u\n", title, n);
+                for (const std::pair<const std::string, std::vector<Where>>& kv : g) {
+                    std::string ex;
+                    for (std::size_t i = 0; i < kv.second.size() && i < 3; ++i) {
+                        char b[96];
+                        std::snprintf(b, sizeof b, "%s%s (%.0f, %.0f)", i ? ", " : "", kv.second[i].first.c_str(), kv.second[i].second.x,
+                                      kv.second[i].second.y);
+                        ex += b;
+                    }
+                    std::printf("    %zu  %s  e.g. %s\n", kv.second.size(), kv.first.c_str(), ex.c_str());
+                }
+            };
+            groups("lit today, not under the policy (by the row that decided)", litNotPolicy);
+            groups("lit under the policy, not today (by the row that decided)", policyNotLit);
+            groups("control differs (stated -> policy)", differ);
+            std::printf("  decided by the last row (\"%s\": nothing else applied): %u\n", lastRow.c_str(), catchAll);
+            // FACTS THE POLICY NEEDS THAT THE FILE DOES NOT STATE: an arm with no road class, or no lanes either way
+            uint32_t noClass = 0, noLanes = 0;
+            std::string noClassEx;
+            for (const engine::roads::lanes::JunctionFacts& f : plan.facts)
+                for (const engine::roads::lanes::ArmFacts& a : f.arms) {
+                    if (a.roadClass.empty()) {
+                        ++noClass;
+                        if (noClassEx.size() < 60) noClassEx += " " + f.id;
+                    }
+                    if (a.arriving == 0 && a.leaving == 0) ++noLanes;
+                }
+            std::printf("  facts not stated: %u arms with no road class%s; %u arms with no lanes either way; problems: %zu\n", noClass,
+                        noClassEx.c_str(), noLanes, plan.problems.size());
+            for (const std::string& p : plan.problems) std::printf("    %s\n", p.c_str());
+            if (!compareJson.empty()) {
+                std::ofstream(compareJson) << out.dump(1) << "\n";
+                std::printf("wrote %s\n", compareJson.c_str());
+            }
+            return 0;
         }
         if (write) {
             engine::roads::lanes::writeControlPlan(scene, plan);
@@ -1101,6 +1240,7 @@ int main(int argc, char** argv) {
         SceneOptions so;
         for (int i = 4; i < argc; ++i)
             if (std::string(argv[i]) == "--no-ramps") so.ramps = false;
+        so.controls = sharedControlPolicy();   // every junction's control, stated (ADR-0422)
         CityPlan plan = generatePlan(base);
         const PlanScore s = evaluatePlan(plan);
         const nlohmann::json scene = planToLanesScene(plan, so);

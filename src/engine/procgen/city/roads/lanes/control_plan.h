@@ -196,7 +196,9 @@ struct ControlPlan {
 // Plans `g` with `policy`: every junction the graph's nodes make, decided most important first; hand-written junctions
 // (PlannedJunction::hand) kept, and any junction sharing a road end with one is left to it; every road's posted limit
 // from the policy (a road whose limit is hand-set keeps it); the places where a street only carries on, one control.
-ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy);
+// `finding`: how the junctions are found (the default, the control plan's own; the road model's layout passes its own,
+// road_layout.h planLayoutControls, so the controls land on the junctions the layout wrote, ADR-0422).
+ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, const JunctionFinding& finding = JunctionFinding());
 // WRITES THE PLAN INTO A ROAD GRAPH'S JSON: its "junctions" list replaced, and each road's "speed_limit" set (or
 // removed where none is posted), leaving everything else as it was. `scene` must be the graph `plan` was made from.
 void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan);

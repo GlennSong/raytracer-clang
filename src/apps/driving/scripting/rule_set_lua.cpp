@@ -747,6 +747,8 @@ protected:
 // ---- The placement policy (issue #240) -------------------------------------------------------------------------------
 
 constexpr const char* kKeyPlacement = "placement";
+constexpr const char* kKeyPolicy = "policy";              // placement.policy: the shared policy's file (ADR-0422)
+constexpr const char* kSharedPolicy = "control_policy";   // the global that file defines
 constexpr const char* kKeyClassOrder = "class_order";
 constexpr const char* kKeySpeedLimits = "speed_limits";
 constexpr const char* kKeyJunctions = "junctions";
@@ -781,7 +783,26 @@ public:
             lua_settop(L, base);
             return false;
         }
-        const int p = pushField(lua_gettop(L), kKeyPlacement);
+        int p = pushField(lua_gettop(L), kKeyPlacement);
+        // THE SHARED POLICY (ADR-0422): `placement = { policy = "rules/control_policy.lua" }` names the file that holds it.
+        // The reader opens no files (the driving library's boundary): the caller runs that file in this VM first
+        // (citysim's control_policy_file.h does both), and its global `control_policy` is read as the placement table,
+        // checked against this rule set as before.
+        if (lua_istable(L, p)) {
+            const int named = pushField(p, kKeyPolicy);
+            if (lua_type(L, named) == LUA_TSTRING) {
+                const std::string file = lua_tostring(L, named);
+                checkKeys(p, path, {kKeyPolicy});
+                lua_getglobal(L, kSharedPolicy);
+                p = lua_gettop(L);
+                if (!lua_istable(L, p)) {
+                    fail(path + "." + kKeyPolicy, "names " + file + ", but no table `" + kSharedPolicy +
+                                                      "` is defined: run that file in this VM before reading the policy");
+                    lua_settop(L, base);
+                    return false;
+                }
+            }
+        }
         if (!lua_istable(L, p)) {
             fail(path, "is " + describe(p) + ", expected the placement policy { " + kKeyClassOrder + ", " + kKeySpeedLimits +
                            ", " + kKeyJunctions + " }");

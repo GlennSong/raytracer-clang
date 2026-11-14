@@ -157,14 +157,76 @@ reader has gone.
 | 2b | Two fixes before any reader moves: a street has one lane count (the road file's), with its kerb parking stated in its cross-section; and which road ends are one junction follows one stated rule. | No | The lane count, yes (ADR-0418). The nav graph is still built from the bake's road graph, whose edges carry no road id, so each nav link gets its road's stated lanes through the lane match (the road whose centre line the link lies on): an interim until step 7. The current city sim drives differently (streets gained travel lanes); its pinned values were retaken. The junction rule: built (ADR-0419) and written into nine road files; traffic_lab keeps its old grouping, because the paint's own "boxes within 12 m are one junction" merges two of the new rule's junctions (one with lights, one with a stop) into one, which the lab's rule set cannot drive (until step 9 paints the stated junctions). |
 | 3 | Readers that only label things move first: street names, name signs, the map. | No | Yes (ADR-0420). The model has a planned layer, read from the road file alone at load and published level-wide (`LevelRoadModel`); names are stated in the road file (`streets[].name`, written once into the existing files, bake keys unchanged) and are attachments of the model, as are the name signs. Differences: a name's run follows every stated through pair, carry-on and divided pair, so some runs are long and cross classes (and in metro_v2_test two junctions have one name on every arm); the attachment kinds live in their own data file (assets/data/road_attachments.json); a junction the plan spread over several points gets one sign post, not one per point; the island keeps its place names. Sign posts are walker obstacles, so river_town's pinned v1 state moves with them (not retaken here). |
 | 4 | Street furniture, signal poles and lights read the model's junctions and controls. Signal heads and the lights now agree. | No | Yes (ADR-0421). Every road file states each junction's control: the one-off tool (`lanes_tool controls`) wrote what the city sim's old rule lit, once (lit when any of a junction's nav nodes was); traffic_lab keeps its planned controls. The city sim's signals and the furniture's poles both read the stated control; the poles stand one per arm of a lit junction; lamps, trees and kerb props keep clear of the model's junctions; a street's planting follows its stated run. Differences: the nav graph has no junction ids yet, so its nodes are tied to the model's junctions by position in one helper (`LevelRoadModel::junctionAt`), an interim until step 7; the bake key no longer sees the junctions list at all (controls and signs included), and the lane graph keys the control plan itself, so traffic_lab re-baked once (meshes byte-identical); stop and give-way signs are not drawn anywhere today and were not added; a road file with no control plan (the planner's fresh output, until the tool runs) still takes the old rule. |
+| 4b | The placement policy, part one: every junction's control by shared rules (see "Placement policy" below). The planner states controls in every new road file; existing levels are only compared. | No | Yes (ADR-0422): the lab's rows moved to assets/scripts/rules/control_policy.lua, shared; the planner and the island scene writer state controls; `city_plan controls ... --compare` sets the policy beside a file. No existing road file changed. |
 | 5 | Lots, block frontage and door facing read the model's blocks and streets. The second twin is deleted. | Lots re-bake | |
-| 6 | Buses, rail riders and parking attach to streets by id. Parking becomes part of the cross-section. | No | |
+| 5b | The placement policy, part two: the signs that follow from controls (stop, give way, do not enter), then the rest of the street furniture, each as rows of the policy, reading the block uses step 5 gives. | No | |
+| 6 | Buses, rail riders and parking attach to streets by id, reading what the policy placed. Parking becomes part of the cross-section. | No | |
 | 7 | Routing reads the model at street level. The twin and both routing-graph copies are deleted. This changes what the current city sim does, so its pinned test values are retaken once, knowingly. | No | |
 | 8 | Lane-level driving reads the model's lanes and connections. The lane match and the lane graph's inference are deleted; its measuring of conflicts and bends stays. The one-agent lab's car moves to the new driver here. | No | |
 | 9 | The builder paints junctions from the stated junctions and builds corners to a stated radius, so every stated turn fits. | Every level | |
 
 Steps 1 and 2 are the foundation and change nothing a player can see. Step 9 is the only one that changes the drawn
 roads everywhere.
+
+## Placement policy
+
+Words: a FACT here is something about the road that changes how people behave on it: a junction's control (traffic
+lights, an all-way stop, a stop or give-way sign on the minor road, or nothing), which arm stops or gives way, which way
+a one-way street runs, where buses stop. An OBJECT is something that stands on the street: a signal pole and its head, a
+stop sign, a tree, a lamp, a bin, a hydrant, a bench, a newspaper box. The KERB is the line where the road meets the
+pavement; objects stand along it.
+
+**Two kinds of thing, decided in order.** First the facts, by rules over what the road model states. Then the objects:
+some follow from a fact (poles and heads at a lit junction, a stop sign at an arm that must stop, a give-way sign, a
+"do not enter" sign at the exit end of a one-way street, a shelter at a bus stop); the rest serve the street, spaced by
+the street's type (trees, lamps, hydrants, bins, newspaper boxes, benches).
+
+**Every rule is one row of data, always with the same parts:**
+- what it places: a kind from the attachments table (assets/data/road_attachments.json);
+- what it attaches to: a junction, an arm, or a street on one side;
+- when: conditions over STATED facts only (the classes meeting, the number of arms, one-way, the pavement's width,
+  the neighbouring block's use), never over something measured;
+- how many, or at what spacing;
+- where exactly: the set-back from the kerb, the distance from the junction;
+- what it keeps clear of;
+- a priority;
+- its source: a citation (a manual, a vehicle code) or, marked as such, a guess to tune.
+
+**Conflicts.** The kerb along each street is a line whose stretches are claimed in priority order: law and safety
+first (signals, stop and give-way signs, do-not-enter), then transit (bus stops and shelters), then utilities
+(hydrants, lamps), then amenities (bins, benches, newspaper boxes), then trees. A rule that finds no room is skipped
+and reported, never squeezed in.
+
+**Results are attachments on the road model.** Facts that change behaviour are written into the road file by the
+planner, so a person can read and edit them, and the bake never sees them. Decoration is generated from the policy
+when the level is built.
+
+**Order of building.**
+1. Controls (step 4b, ADR-0422).
+2. Lots and blocks (step 5), which give the policy each block's use.
+3. The signs that follow from controls, then the rest of the furniture as rows (step 5b).
+4. Buses, rail and parking read what the policy placed (step 6).
+
+**Part one, built: the controls** (ADR-0422).
+- The rows live in assets/scripts/rules/control_policy.lua, shared by every city.
+- A rule set refers to it: the lab's says `placement = { policy = "rules/control_policy.lua" }`. Each row's control and
+  signs are checked against that rule set's.
+- The planner states controls in every new road file, and so does the island scene writer.
+- Each junction records the row that decided it, as its `why`.
+
+**What the control rows can see today.** These are the facts the control planner works from (control_plan.h
+JunctionFacts). Some are stated in the road file; others are measured:
+
+| Fact | Stated or measured | What should replace a measured one |
+|---|---|---|
+| How many arms a junction has | Stated: the junction's arms list | — |
+| Each arm's road class | Stated: the road file's class of the edge | — |
+| Lanes arriving and leaving by an arm | Stated: the road file's lane counts (ADR-0418) | — |
+| Each road's posted limit | Stated: from the policy's class limits, written into the edge | — |
+| Whether a ramp's free end is in the junction | Stated: the ramp's `from`/`to` naming the street it ends on | — |
+| Which approaches are MAJOR among equals (the road running straight through a T) | Measured: two arms arriving within kStraightOnDegrees of head on | The junction's stated `through` pairs (step 1). Not done here: it would re-decide the lab's junctions. |
+| Which road ends make one junction | Stated since ADR-0419 (the layout's junction list). The control planner can still find them itself from road ends, as the lab's own planning does. | The layout's list, always: planLayoutControls does this for new road files. |
+| `apart` (no lights within so many metres of another) | Measured: distance between junction centres | Distance along the street between stated junctions. No row uses it today. |
 
 ## What gets deleted at the end
 

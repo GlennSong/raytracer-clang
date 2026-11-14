@@ -14,6 +14,7 @@
 #include "../../hydrology.h"
 #include "city_plan.h"
 #include "../roads/lanes/interchange.h"
+#include "../roads/lanes/control_plan.h"   // ControlPolicy: the controls a fresh scene states (ADR-0422)
 
 #include <nlohmann/json.hpp>
 
@@ -27,7 +28,15 @@ struct SceneOptions {
     Real clearance = 8.0;           // the deck's height over a street it crosses
     int diamondsPerRoute = 6;       // interchanges per freeway route
     Real interchangeSpacing = 650;  // least distance between them along the route
+    // THE CONTROL PLACEMENT POLICY (ADR-0422; the driving library's loadControlPolicy reads the shared one): given, the
+    // scene's last step plans every junction's control, its signs and the row that decided it (`why`), and each road's
+    // posted limit (control_plan.h planControls), and writes them in, so a fresh road file states its controls. Null:
+    // none stated (a place's scene the island re-plans as a whole).
+    const roads::lanes::ControlPolicy* controls = nullptr;
 };
+
+// THE CONTROLS, STATED: `policy` over the scene's junctions (its layout already written), written into it.
+roads::lanes::ControlPlan stateControls(nlohmann::json& scene, const roads::lanes::ControlPolicy& policy);
 
 // The scene, ready for `lanes_tool build` or a level's road entity.
 nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt = {});

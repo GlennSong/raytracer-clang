@@ -85,6 +85,7 @@
 #include "text/font.h"                  // signFont
 #include "procgen/city/water_mesh.h"  // buildWaterMesh (ocean/lake surface)
 #include "ai/nav_graph.h"             // buildNavGraph (street furniture plan)
+#include "asset_root.h"               // assetPath: the map's control colours (road_attachments.json)
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
 #include "procgen/tree_recipe.h"
@@ -4065,6 +4066,40 @@ static std::shared_ptr<engine::CityMapData> assembleCityMap(
                 if (i < m->junctionLit.size()) m->junctionLit[i] = 1;
             }
         }
+#ifdef RT_ROADS_LANES
+        // EACH JUNCTION'S CONTROL (ADR-0422), as the road file states it -- or, for a comparison picture only,
+        // RT_MAP_JUNCTION_CONTROLS=<json>: a list of {id, policy} (`city_plan controls ... --compare-json`), drawn in its
+        // place. Colours: road_attachments.json controls.map. The map alone reads them.
+        if (roadModel && roadModel->controlsStated()) {
+            std::map<std::string, std::string> shown;
+            if (const char* over = std::getenv("RT_MAP_JUNCTION_CONTROLS")) {
+                std::ifstream in(over);
+                nlohmann::json list;
+                try { in >> list; } catch (const std::exception&) { list = nlohmann::json::array(); }
+                for (const nlohmann::json& e : list)
+                    if (e.contains("id") && e.contains("policy")) shown[e["id"].get<std::string>()] = e["policy"].get<std::string>();
+                m->controlsFrom = "under the placement policy, " + std::filesystem::path(over).filename().string();
+            } else {
+                m->controlsFrom = "as the road file states them";
+            }
+            for (const std::shared_ptr<engine::RoadModel>& mp : roadModel->cities) {
+                if (!mp) continue;
+                for (const engine::ModelJunction& J : mp->junctions) {
+                    const std::map<std::string, std::string>::const_iterator it = shown.find(J.id);
+                    m->junctionControl.push_back(std::getenv("RT_MAP_JUNCTION_CONTROLS") ? (it == shown.end() ? std::string("(no policy match)") : it->second)
+                                                                                        : J.control);
+                }
+            }
+            nlohmann::json kinds;
+            std::ifstream kf(engine::assetPath("assets/data/road_attachments.json"));
+            try { kf >> kinds; } catch (const std::exception&) { kinds = nlohmann::json(); }
+            if (kinds.contains("controls") && kinds["controls"].contains("map")) {
+                const nlohmann::json& colours = kinds["controls"]["map"];
+                for (nlohmann::json::const_iterator kc = colours.begin(); kc != colours.end(); ++kc)
+                    if (kc.value().is_string() && kc.key().rfind('_', 0) != 0) m->controlColours.emplace_back(kc.key(), kc.value().get<std::string>());
+            }
+        }
+#endif
     }
     m->nav = nav;
     m->furniture = plan;

@@ -46,14 +46,19 @@ namespace {
 constexpr Heading kHeadings[] = {Heading::East, Heading::North, Heading::West, Heading::South};
 constexpr uint32_t kRow = 1, kCol = 1;   // the grid's middle junction: a four-way
 
-// The lab's rule set and placement policy, read from the file the lab ships.
+// The lab's rule set and placement policy, read from the files the lab ships: its rule set, and the shared policy it
+// names (rules/control_policy.lua, ADR-0422), run in the same VM first as the reader asks.
 bool labRules(RuleSet& rules, ControlPolicy& policy) {
-    std::ifstream f(std::string(RT_SOURCE_DIR) + "/assets/scripts/rules/lab.lua");
-    std::stringstream code;
-    code << f.rdbuf();
+    std::stringstream code, shared;
+    {
+        std::ifstream f(std::string(RT_SOURCE_DIR) + "/assets/scripts/rules/lab.lua");
+        code << f.rdbuf();
+        std::ifstream p(std::string(RT_SOURCE_DIR) + "/assets/scripts/rules/control_policy.lua");
+        shared << p.rdbuf();
+    }
     engine::ScriptVM vm;
     std::string err;
-    const bool ok = vm.doString(code.str(), &err) && loadRuleSet(vm, "lab.lua", rules, &err) &&
+    const bool ok = vm.doString(code.str(), &err) && vm.doString(shared.str(), &err) && loadRuleSet(vm, "lab.lua", rules, &err) &&
                     loadPlacementPolicy(vm, "lab.lua", rules, policy, &err);
     if (!ok) std::printf("    %s\n", err.c_str());
     return ok;

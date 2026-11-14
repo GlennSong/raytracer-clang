@@ -76,6 +76,12 @@ RoadLayout deriveLayout(const RoadLabGraph& g, LayoutSource source);
 struct JunctionFacts;
 struct CarryOn;
 std::vector<JunctionFacts> layoutJunctionFacts(const RoadLabGraph& g, LayoutSource source, std::vector<CarryOn>* carryOns = nullptr);
+// THE CONTROLS ON THE LAYOUT'S OWN JUNCTIONS (ADR-0422): control_plan.h planControls, its junctions found as the layout
+// finds them (`source`'s end tolerance, the graph's or the planner's crossings, the divided pairs), so a plan written
+// into a scene whose layout is written already (writeControlPlan) names the same junctions its streets do.
+struct ControlPlan;
+struct ControlPolicy;
+ControlPlan planLayoutControls(const RoadLabGraph& g, LayoutSource source, const ControlPolicy& policy);
 // In words: counts by number of arms, streets, dead ends, the notes.
 std::string describeLayout(const RoadLayout& layout);
 

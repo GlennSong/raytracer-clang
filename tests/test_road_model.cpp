@@ -31,6 +31,7 @@
 #include "engine/procgen/city/roads/lanes/road_twin.h"   // roadTwin: the kerb parking band it hands the sim
 #include "engine/procgen/city/roads/road_entity.h"      // navRoadGraph
 #include "engine/procgen/city/roads/road_model.h"
+#include "apps/citysim/control_policy_file.h"   // loadControlPolicy: the shared placement policy (ADR-0422)
 
 #include <nlohmann/json.hpp>
 
@@ -118,6 +119,56 @@ const Built& smallBuilt() {
 }
 
 }  // namespace
+
+// ---- 0. a fresh road file states its controls (ADR-0422) -------------------------------------------------------------
+
+#ifdef RT_ENABLE_SCRIPTING
+TEST_CASE(road_model_0_a_planned_city_states_every_junctions_control) {
+    // THE SHARED POLICY, through the default rule set, as the planner reads it
+    ControlPolicy policy;
+    std::string err;
+    CHECK(citysim::loadControlPolicy(citysim::kDefaultRuleSet, policy, &err));
+    if (policy.rows.empty()) {
+        std::printf("    %s\n", err.c_str());
+        return;
+    }
+    engine::plan::SceneOptions so;
+    so.controls = &policy;
+    const nlohmann::json scene = engine::plan::planToLanesScene(engine::plan::generatePlan(citytest::roundBrief(11)), so);
+    const RoadLabGraph g = RoadLabGraph::fromJson(scene);
+    CHECK(g.declaresJunctions && !g.junctions.empty());
+    // every junction has a control, and the row that decided it (its `why`) is a row of the policy giving that control
+    std::map<std::string, std::string> controlOfRow;
+    for (const PolicyRow& r : policy.rows) controlOfRow[r.name] = r.control;
+    std::map<std::string, uint32_t> byControl;
+    uint32_t decided = 0;
+    for (const PlannedJunction& pj : g.junctions) {
+        CHECK(!pj.control.empty());
+        const std::map<std::string, std::string>::const_iterator row = controlOfRow.find(pj.why);
+        const bool byRow = row != controlOfRow.end() && row->second == pj.control;
+        CHECK(byRow);
+        decided += byRow ? 1u : 0u;
+        ++byControl[pj.control];
+        // a junction whose row stands signs carries them on some arm
+        bool signs = false;
+        for (const PlannedArm& a : pj.arms) signs = signs || !a.regulations.empty();
+        for (const PolicyRow& r : policy.rows)
+            if (r.name == pj.why && (!r.minorSigns.empty() || !r.majorSigns.empty())) CHECK(signs);
+    }
+    std::string counts;
+    for (const std::pair<const std::string, uint32_t>& kv : byControl) counts += " " + std::to_string(kv.second) + " " + kv.first;
+    std::printf("    a planned city: %zu junctions, %u decided by a row of the policy:%s\n", g.junctions.size(), decided, counts.c_str());
+    CHECK(decided == g.junctions.size());
+    // the layout the planner wrote stays with the controls: the model reads both
+    const RoadModel m = plannedRoadModel(g);
+    CHECK(m.junctions.size() == g.junctions.size());
+    for (const ModelJunction& J : m.junctions) CHECK(!J.control.empty());
+    for (const ModelJunction& J : m.junctions)
+        for (const ModelArm& a : J.arms) CHECK(a.street.valid());
+    // without a policy, the scene states none (a place's scene, which the island plans again as a whole)
+    CHECK(!RoadLabGraph::fromJson(engine::plan::planToLanesScene(engine::plan::generatePlan(citytest::roundBrief(11)))).declaresJunctions);
+}
+#endif
 
 // ---- 1. the planner and the tool agree --------------------------------------------------------------------------------
 

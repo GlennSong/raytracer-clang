@@ -40,6 +40,11 @@ struct CityMapData {
     std::vector<Street> streets;
     std::vector<Vec2> junctions;
     std::vector<uint8_t> junctionLit;      // per junction: 1 when the city sim signals it (ADR-0421); empty: not known
+    // Per junction: its control (ADR-0422), each drawn in its own colour (control -> colour, the data's); empty: the
+    // lit rings above instead. `controlsFrom`: where the controls came from, for the legend.
+    std::vector<std::string> junctionControl;
+    std::vector<std::pair<std::string, std::string>> controlColours;
+    std::string controlsFrom;
     struct Hub { Vec2 pos; int kind = 0; std::string name; };
     std::vector<Hub> hubs;                 // district hubs (polycentric zoning)
     double hubRadius = 220.0;

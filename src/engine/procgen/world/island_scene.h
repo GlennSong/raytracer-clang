@@ -15,6 +15,7 @@
 //   * one terrain grid over the island's land, at 20 m, on the island's own (eroded) ground.
 
 #include "island_world.h"
+#include "../city/roads/lanes/control_plan.h"   // ControlPolicy: the controls the island's road file states (ADR-0422)
 
 #include <nlohmann/json.hpp>
 #include <vector>
@@ -22,6 +23,9 @@
 namespace engine {
 
 struct IslandSceneOptions {
+    // THE CONTROL PLACEMENT POLICY (ADR-0422): given, the island's last step states every junction's control over the
+    // whole island's junctions (plan_scene.h stateControls), as a planned city's scene does. Null: none stated.
+    const roads::lanes::ControlPolicy* controls = nullptr;
     double carriage = 12.0;       // freeway centreline -> a carriageway's centreline
     double underClearance = 8.2;  // deck over the road under it (under_clearance 5 + slab + structure 1.6: the builder asks 7.8)
     double bridgeOverWater = 6.0; // deck over a river's water

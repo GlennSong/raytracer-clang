@@ -302,6 +302,17 @@ std::vector<JunctionFacts> layoutJunctionFacts(const RoadLabGraph& graph, Layout
     return findJunctions(graph, ControlPolicy(), how);
 }
 
+ControlPlan planLayoutControls(const RoadLabGraph& graph, LayoutSource source, const ControlPolicy& policy) {
+    // the junctions found as layoutJunctionFacts finds them, so each control lands on a junction the layout wrote
+    const std::vector<CrossingSpec> crossings = graph.declaresCrossings ? graph.crossings : crossingsFromJson(planCrossings(graph));
+    const std::vector<DividedPair> divided = dividedOf(graph, source);
+    JunctionFinding how;
+    how.endTolerance = source == LayoutSource::Planner ? kPlannerSameEnd : -1.0;
+    how.atGrade = &crossings;
+    how.divided = &divided;
+    return planControls(graph, policy, how);
+}
+
 RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
     RoadLayout out;
     RoadLabGraph g = graph;

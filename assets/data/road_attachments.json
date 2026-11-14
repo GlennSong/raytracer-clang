@@ -34,6 +34,14 @@
       "The control the one-off tool states at a junction the old rule leaves dark (`lanes_tool controls`, ADR-0421):",
       "the rule sets' word for no control. A lit junction gets the control signal_pole stands for."
     ],
-    "none": "unmarked"
+    "none": "unmarked",
+    "map": {
+      "_comment": "Each control's colour on the city map's junction layer (city_svg.h, ADR-0422).",
+      "signal": "#2e9e3e",
+      "all_way_stop": "#7b1fa2",
+      "stop": "#d32f2f",
+      "give_way": "#f9a825",
+      "unmarked": "#ffffff"
+    }
   }
 }

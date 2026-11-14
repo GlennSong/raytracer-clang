@@ -553,6 +553,7 @@ add_test(NAME driving_tests COMMAND driving_tests WORKING_DIRECTORY ${CMAKE_SOUR
 # host alongside Jolt, exactly as engine_core keeps Jolt systems out).
 # ============================================================
 add_library(citysim STATIC
+    src/apps/citysim/control_policy_file.cpp   # the shared control placement policy, read from its files (ADR-0422)
     src/apps/citysim/traffic_signal.cpp
     src/apps/citysim/traffic_rules.cpp
     src/apps/citysim/city_goals.cpp

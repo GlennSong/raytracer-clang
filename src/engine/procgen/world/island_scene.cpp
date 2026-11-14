@@ -1,6 +1,7 @@
 #include "island_scene.h"
 #include "../city/roads/lanes/road_graph_spec.h"   // the road class table (the mountain row)
 #include "../city/roads/lanes/road_layout.h"       // the scene's junctions and streets, with ids (ADR-0417)
+#include "../city/plan/plan_scene.h"              // stateControls: every junction's control, stated (ADR-0422)
 #include "../city/polyline.h"   // segmentsCross, nearestOnPolyline
 
 #include <algorithm>
@@ -434,6 +435,8 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
         roads::lanes::nameLayout(layout, g, keep);
         roads::lanes::writeLayout(scene, layout);
     }
+    // And, last, EVERY JUNCTION'S CONTROL (ADR-0422), over the whole island's junctions.
+    if (o.controls) plan::stateControls(scene, *o.controls);
     return scene;
 }
 

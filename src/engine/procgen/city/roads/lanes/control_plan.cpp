@@ -427,10 +427,10 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
     return out;
 }
 
-ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy) {
+ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, const JunctionFinding& finding) {
     ControlPlan plan;
     std::vector<CarryOn> carryOns;
-    JunctionFinding how;
+    JunctionFinding how = finding;
     how.carryOns = &carryOns;
     std::vector<JunctionFacts> all = findJunctions(g, policy, how);
     // the places where a street only carries on: what the policy gives a place of two arms, the same everywhere

@@ -1100,7 +1100,16 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         roads::lanes::nameLayout(layout, g);
         roads::lanes::writeLayout(scene, layout);
     }
+    // And, last, EVERY JUNCTION'S CONTROL (ADR-0422): the shared placement policy over the junctions just written.
+    if (opt.controls) stateControls(scene, *opt.controls);
     return scene;
+}
+
+roads::lanes::ControlPlan stateControls(nlohmann::json& scene, const roads::lanes::ControlPolicy& policy) {
+    const roads::lanes::ControlPlan plan =
+        roads::lanes::planLayoutControls(roads::lanes::RoadLabGraph::fromJson(scene), roads::lanes::LayoutSource::Planner, policy);
+    roads::lanes::writeControlPlan(scene, plan);
+    return plan;
 }
 
 }  // namespace plan

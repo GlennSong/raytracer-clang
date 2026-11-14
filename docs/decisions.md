@@ -20138,3 +20138,67 @@ the lanes' junction ids: the nav graph does not carry them until step 7.
 
 **Revisit when** step 7 gives the nav graph the model's ids (the position tie goes); the planner states controls as it
 plans (today a fresh road file takes the old rule until the tool runs).
+
+## ADR-0422 — The placement policy, part one: every junction's control by one shared set of rules, stated by the planner; existing levels only compared
+**Status:** Provisional · **Date:** 2026-11-14
+
+Words: a junction's CONTROL is what governs it: `signal` (traffic lights), `all_way_stop`, `stop` or `give_way` signs on
+its minor road, or `unmarked` (nothing). The PLACEMENT POLICY is a list of rows; each row has conditions over the
+junction's facts (the classes meeting, how many arms and approaches, whether a ramp ends there) and a decision (a
+control and its signs), with a source. The first row whose conditions hold decides, and its name is written as the
+junction's `why`. A RULE SET is the driving model's rules of the road (assets/scripts/rules/lab.lua); the policy's
+words must be its words. docs/road-model-design.md "Placement policy" gives the whole plan (facts first, then the
+objects that follow from them or serve the street) and the building order.
+
+**Context.** Step 4 (ADR-0421) left the city sim's old lit rule in place because a newly planned city states no
+controls. The owner widened the fix into a placement policy for all street furniture; this is its first part: the
+controls.
+
+**Decision.**
+- **One shared policy file.** The eleven junction rows, `class_order` and `speed_limits` moved from lab.lua's
+  `placement` table, unchanged, to assets/scripts/rules/control_policy.lua (a global `control_policy`). No row was the
+  lab's own (none names a place), so the lab overrides nothing; lab.lua now says `placement = { policy =
+  "rules/control_policy.lua" }`. The driving library's reader opens no files (its boundary test), so a host runs both
+  files in one VM: `citysim::loadControlPolicy(ruleSetFile, ...)` (apps/citysim/control_policy_file.h); the reader
+  checks the shared rows against the rule set as before. The driving model at run time reads only the rule set, never
+  `placement`, so nothing it does moved.
+- **The planner states controls.** `SceneOptions::controls` and `IslandSceneOptions::controls`: given a policy, the
+  scene's last step plans every junction's control, signs and `why`, and each road's posted limit, on the layout's own
+  junctions (`planLayoutControls`, so the plan names the same junctions the streets do), and writes them in.
+  `city_plan scene` and `city_plan island-cities --level` pass the shared policy; a place's scene, which the island plans
+  again as a whole, states none.
+- **Existing levels: compared, not written.** `city_plan controls GRAPH rules/lab.lua --compare [--layout]
+  [--compare-json PATH]` plans in memory and sets the plan beside what the file states, by junction place; it never
+  writes. No road file changed.
+- **The map** draws each junction's control in its own colour (road_attachments.json `controls.map`), and its legend now
+  stands beside the drawing, not over it.
+
+**The lab is unchanged by the move.** Planned with the policy read through the shared file, and with lab.lua as it was
+before the move, the plans written are byte-identical (and so are the per-junction reports). Re-planned with today's
+code, the lab comes out 141 junctions (30 all-way stop, 27 signal, 84 stop) against the 156 its file states (28
+signal, 30 all-way stop, 78 stop, 20 unmarked): the file keeps its grouping from before the one junction rule
+(ADR-0419), and today's planner groups the road ends by that rule. Of the 141, the 131 that stand where a junction of
+the file stands have the same control, the same `why` and the same signs, every one; the other 10 are junctions the rule
+groups differently. This was so before the move too.
+
+**river_town under the policy** (in memory; its file states 105 signal, 39 unmarked, from step 4's old-rule tool):
+32 all-way stop, 1 give way, 33 signal, 78 stop, 0 unmarked, on all 144 of its junctions.
+- Lit today, not under the policy: 83. 51 "a local street meets a busier road: the local street stops" (e.g. j1, j2,
+  j7); 32 "local streets cross: an all-way stop" (e.g. j9, j10, j16).
+- Lit under the policy, not today: 11. 7 "arterials cross: lights" (e.g. j4, j22, j66); 2 "an arterial meets a
+  collector: lights" (j75, j120); 2 "five or more roads meet: lights" (j0, j14).
+- No junction fell to the last row; no fact the rows need is missing (every arm has a class and lanes).
+
+**Facts the rows see.** Stated: the arms, each arm's class, its lanes, its posted limit, a ramp's end. Measured: which
+of two equal roads runs straight through a T (by the angle between arms: the stated `through` pairs should replace it,
+not done here as it could re-decide junctions), and the `apart` distance (no row uses it). The grouping of road ends
+into junctions is stated by the layout; the lab's own planning still finds it from the road ends.
+
+**Not done (this task ends at the comparison).** No existing road file's controls were changed; the old lit rule is not
+deleted; no sign is drawn; no reader moved.
+
+**Alternatives.** Copying the rows into each rule set: two copies to keep in step. Letting the reader load the shared
+file itself: the driving library may not touch files.
+
+**Revisit when** the comparison has been read and river_town (and the rest) are to be re-planned by the policy; when the
+signs that follow from the controls are drawn (design step 5b).
