@@ -27,6 +27,7 @@
 
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -280,7 +281,7 @@ TEST_CASE(control_plan_2_a_planned_road_graph_is_carried_through) {
     std::printf("    controls: %u stated junctions, %zu lane-level junctions\n", lg.controlPlan.planned, G.junctions.size());
     for (const std::string& p : lg.problems) std::printf("    problem: %s\n", p.c_str());
     CHECK(lg.error.empty());
-    CHECK(lg.controlPlan.declared);
+    CHECK(lg.controlPlan.planned == road.junctions.size());
     // ONE JUNCTION PER STATED JUNCTION (the lane level is a table built from the road model, ADR-0426): the bend is no
     // junction (its streets carry on, their lanes joined lane to lane), so two, each carrying its stated junction's
     // control; the stop signs stand where the local streets arrive.
@@ -315,7 +316,8 @@ TEST_CASE(control_plan_2_a_planned_road_graph_is_carried_through) {
 
 TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_reported) {
     // The T at (200, 0) left out of the file's list: the lane level makes no junction there (it never makes one up): the
-    // streets that ended at it end at no junction now, so their lanes there lead nowhere.
+    // streets that ended at it end at no junction now, so their lanes there lead nowhere -- and that is REPORTED: the
+    // streets' ends meet other roads where the road file states no junction (the planner's to state).
     {
         nlohmann::json g = plannedGraph();
         nlohmann::json kept = nlohmann::json::array();
@@ -329,6 +331,15 @@ TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_report
         CHECK(lg.error.empty());
         CHECK(lg.graph.junctions.size() == 1u);
         CHECK(lg.graph.controlNames[lg.graph.junctions[0].control] == "stop");
+        // the four street ends the left-out junction held: a1's and l2's ends there, a2's and o0's starts
+        std::set<std::string> said;
+        for (const std::string& p : lg.problems) {
+            if (p.find("but the road file states no junction there") == std::string::npos) continue;
+            std::printf("    problem: %s\n", p.c_str());
+            said.insert(p.substr(0, p.find(" at (")));
+        }
+        CHECK(said == std::set<std::string>({"street a1: its `to` end", "street a2: its `from` end", "street l2: its `to` end",
+                                             "street o0: its `from` end"}));
     }
     // A stop sign written by hand on the one-way street's arm, which no lane arrives by: impossible, reported.
     {

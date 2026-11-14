@@ -43,10 +43,11 @@
 // names -- read in milliseconds (plannedRoadModel), and published when a level loads (components.h LevelRoadModel), for
 // the readers that only label the roads (street names, name signs, the map). The BUILT LAYER is what the road build adds
 // -- lanes with their curves and heights, connections, junction heights, the paint's boxes and stop lines -- assembled
-// from a build (assembleRoadModel = the planned layer + the built parts), stored in its own cache file (cache/roadmodel,
-// below), keyed by the city's bake key, the layout's bytes and kRoadModelVersion; not in the level's bake yet (that would
-// re-bake every level). A planned-only model is the same structure with its built parts empty, `built` false, and its
-// `notStated` list says which.
+// from a build (assembleRoadModel = the planned layer + the built parts) by whoever has the build: the lane graph's
+// cache (lane_graph_cache.h obtainLevelLaneGraph) and lanes_tool. It is not saved on its own (its cache file, which nothing
+// read, went in the review of ADR-0426; old cache/roadmodel files are rt_bake --prune's) and not in the level's bake (that
+// would re-bake every level). A planned-only model is the same structure with its built parts empty, `built` false, and
+// its `notStated` list says which.
 //
 // ATTACHMENTS (design section 1: "a bus stop is street 41, station 120, kerb side"). Anything that belongs to a street or
 // a junction is attached to it by id: its KIND is data (assets/data/road_attachments.json: what it may attach to -- a
@@ -73,9 +74,6 @@ namespace roads::lanes {
 struct Result;
 struct RoadLabGraph;
 }  // namespace roads::lanes
-namespace bundle {
-struct LevelInputs;
-}  // namespace bundle
 
 struct ModelJunctionTag {};
 struct ModelStreetTag {};
@@ -479,30 +477,10 @@ constexpr uint32_t kRoadModelFormat = 6;    // 2: a street's kerb parking (ADR-0
                                             // 5: a spread junction's points, inside stretches' lines and sections, the centre
                                             //    lines' stations, a ramp's gore along itself, the parking band's middle (ADR-0425)
                                             // 6: the turns through each junction, where a diverge or merge meets its host (ADR-0426)
-// The version of what assembleRoadModel makes: bump when it can make a different model from the same build.
-constexpr uint32_t kRoadModelVersion = 6;   // 2: a street's kerb parking (ADR-0418); 3: carrying on, no two-arm junctions (ADR-0419);
-                                            // 4: names as attachments, centre lines (ADR-0420); 5: what the street map reads (ADR-0425)
-                                            // 6: the stated turns, pockets' connections (ADR-0426)
+// (The version of what assembleRoadModel makes, kRoadModelVersion, keyed only the model's own cache file; both went in
+// ADR-0426's review. The lane graph, which assembles the model from its build, keys its own builder version.)
 void putRoadModel(bundle::BinWriter& w, const RoadModel& m);
 bool getRoadModel(bundle::BinReader& r, RoadModel& m, std::string* err);
-
-// ITS OWN CACHE FILE beside the level's other caches: cache/roadmodel/<key>.roadmodel, a bundle holding the model, keyed
-// by the city's bake key (lane_graph_cache.h levelRoadsKey: the lanes tag and the road file without its layout), the road
-// file's layout (stripped out of that key, so hashed here) and kRoadModelVersion.
-constexpr const char* kRoadModelCacheDir = "cache/roadmodel";
-uint64_t roadModelCacheKey(uint64_t roadsKey, uint64_t layoutHash, uint32_t version = kRoadModelVersion);
-std::string roadModelCachePath(const std::string& dir, uint64_t key);
-bool writeRoadModelCache(const std::string& path, uint64_t key, const RoadModel& m, std::string* err);
-bool readRoadModelCache(const std::string& path, uint64_t key, RoadModel& m, std::string* err);
-// A LEVEL'S ROAD MODEL, from the cache or built (the road build, then assembleRoadModel) and saved. The first city only,
-// as the lane graph. Null and `err` when the level has no lane-built city or the build fails.
-struct ObtainedRoadModel {
-    std::shared_ptr<const RoadModel> model;
-    uint64_t key = 0;
-    std::string path;
-    bool fromCache = false, saved = false;
-};
-ObtainedRoadModel obtainLevelRoadModel(const bundle::LevelInputs& in, const std::string& cacheDir, std::string* err);
 
 }  // namespace engine
 

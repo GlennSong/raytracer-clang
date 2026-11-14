@@ -250,7 +250,7 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
     // a road end alone is a dead end, not a junction
     nodes.erase(std::remove_if(nodes.begin(), nodes.end(), [](const Node& n) { return n.points.size() < 2; }), nodes.end());
     // ramps ending on a street's side: a ramp may run on inside the street's lanes for up to kRampEndReach before it
-    // ends (the builder makes that stretch the junction's), so the junction is where the ramp comes out of the street's
+    // ends (that stretch lies inside the street's paved road), so the junction is where the ramp comes out of the street's
     // lanes: the ramp's stretch from there to its end lies inside it, and the street meets it there
     for (std::size_t ei = 0; ei < g.edges.size(); ++ei) {
         const EdgeSpec& e = g.edges[ei];

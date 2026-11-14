@@ -1,11 +1,7 @@
 #include "engine/procgen/city/roads/road_model.h"
 
-#include "engine/bundle/bake.h"
 #include "engine/bundle/bundle.h"
-#include "engine/bundle/cache_use.h"
-#include "engine/procgen/city/roads/lanes/city_producer.h"     // cityEntities, loadCityGraph
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"         // kStopLineBack, kJunctionMergeGap, paintsJunctionBoxes
-#include "engine/procgen/city/roads/lanes/lane_graph_cache.h"  // levelRoadsKey: the roads' key
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_twin.h"         // classOf: the engine's class of a road
@@ -20,16 +16,11 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
-#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
 #include <set>
 #include <type_traits>
-
-#ifndef _WIN32
-#include <unistd.h>
-#endif
 
 namespace engine {
 
@@ -62,7 +53,7 @@ constexpr Real kLineTolerance = 0.1;
 // The first entry of `notStated` in a planned-only model (assembleRoadModel takes it out).
 constexpr const char* kBuiltLayerAbsent =
     "the built layer: lanes, connections, junction heights, the paint's boxes and stop lines are not here (a planned-only "
-    "model, read from the road file: assembleRoadModel adds them from a road build; cache/roadmodel holds one)";
+    "model, read from the road file: assembleRoadModel adds them from a road build, as the lane graph does)";
 
 // A ROAD'S CENTRE LINE between two stations of its spine, its straight runs thinned to within kLineTolerance, appended to
 // the model's lines with each point's station (ADR-0425).
@@ -451,7 +442,7 @@ RoadModel assembleRoadModel(const Result& r) {
                     for (std::size_t a = 0; a < m.junctions[j.index].arms.size(); ++a) {
                         const ModelArm& arm = m.junctions[j.index].arms[a];
                         if (arm.street != sp.street || arm.spineIn != (end == 1)) continue;
-                        TurnArmLane tl{static_cast<uint32_t>(li), L.kind, L.slot};
+                        TurnArmLane tl{static_cast<uint32_t>(li), L.kind, L.slot, L.id};
                         (arriving ? armsOf[j.index][a].arriving : armsOf[j.index][a].leaving).push_back(tl);
                     }
                 }
@@ -1667,125 +1658,6 @@ bool operator==(const RoadModel& a, const RoadModel& b) {
     putRoadModel(wa, a);
     putRoadModel(wb, b);
     return wa.bytes == wb.bytes;
-}
-
-// ---- its own cache file -------------------------------------------------------------------------------------------------
-
-namespace {
-constexpr const char* kModelSection = "roadmodel/model";
-constexpr const char* kManifestField = "roadmodel";
-constexpr const char* kCacheKind = "roadmodel";
-
-std::string processTag() {
-#ifndef _WIN32
-    return std::to_string(static_cast<long>(::getpid()));
-#else
-    return "0";
-#endif
-}
-bool fail(std::string* err, const std::string& why) {
-    if (err) *err = why;
-    return false;
-}
-}  // namespace
-
-uint64_t roadModelCacheKey(uint64_t roadsKey, uint64_t layoutHash, uint32_t version) {
-    bundle::Fnv k;
-    k.str("roadmodel");
-    k.pod(kRoadModelFormat);
-    k.pod(version);
-    k.pod(roadsKey);
-    k.pod(layoutHash);
-    return k.h;
-}
-
-std::string roadModelCachePath(const std::string& dir, uint64_t key) { return dir + "/" + bundle::hex16(key) + ".roadmodel"; }
-
-bool writeRoadModelCache(const std::string& path, uint64_t key, const RoadModel& m, std::string* err) {
-    std::error_code ec;
-    const std::filesystem::path parent = std::filesystem::path(path).parent_path();
-    if (!parent.empty()) std::filesystem::create_directories(parent, ec);
-    const std::string tmp = path + ".tmp-" + processTag();
-    {
-        bundle::BundleWriter w;
-        std::string why;
-        if (!w.openFile(tmp, &why)) return fail(err, "road model cache: " + why);
-        bundle::BinWriter bytes;
-        putRoadModel(bytes, m);
-        nlohmann::json manifest;
-        manifest[kManifestField] = {{"format", kRoadModelFormat}, {"key", bundle::hex16(key)}};
-        if (!w.add(kModelSection, bytes.bytes) || !w.finish(manifest, &why)) {
-            std::filesystem::remove(tmp, ec);
-            return fail(err, "road model cache: cannot write " + tmp + (why.empty() ? std::string() : ": " + why));
-        }
-    }
-    std::filesystem::rename(tmp, path, ec);
-    if (ec) {
-        std::filesystem::remove(tmp, ec);
-        return fail(err, "road model cache: cannot move " + tmp + " into place");
-    }
-    return true;
-}
-
-bool readRoadModelCache(const std::string& path, uint64_t key, RoadModel& m, std::string* err) {
-    m = RoadModel();
-    std::string why;
-    const std::unique_ptr<bundle::Bundle> b = bundle::Bundle::open(path, &why);
-    if (!b) return fail(err, why);
-    const nlohmann::json& man = b->manifest();
-    if (!man.contains(kManifestField) || !man[kManifestField].is_object()) return fail(err, path + ": not a road model cache");
-    if (man[kManifestField].value("format", 0u) != kRoadModelFormat) return fail(err, path + ": another layout");
-    if (man[kManifestField].value("key", std::string()) != bundle::hex16(key)) return fail(err, path + ": made for another key");
-    if (!b->checkSection(kModelSection)) return fail(err, path + ": its model's bytes no longer match their hash");
-    const bundle::Bundle::View v = b->section(kModelSection);
-    bundle::BinReader r(v.data, v.size);
-    return getRoadModel(r, m, err);
-}
-
-ObtainedRoadModel obtainLevelRoadModel(const bundle::LevelInputs& in, const std::string& cacheDir, std::string* err) {
-    ObtainedRoadModel out;
-    const std::vector<roads::lanes::CityEntity> cities = roads::lanes::cityEntities(in.level);
-    if (cities.empty()) {
-        fail(err, "the level has no lane-built city");
-        return out;
-    }
-    const roads::lanes::CityEntity& city = cities.front();
-    // the layout is not in the roads' key (stripped out, so the bake does not see it): hashed here, the whole file
-    uint64_t layoutHash = bundle::kFnvOffset;
-    if (city.inlineGraph) layoutHash = bundle::fnv1aStr(city.block.dump(), layoutHash);
-    else if (!bundle::fnv1aFile(city.graphPath, layoutHash)) layoutHash = bundle::fnv1aStr("missing:" + city.graphPath);
-    // ...and the table the turns are stated by (ADR-0426)
-    const uint64_t turnRules = laneTurnRules().hash;
-    layoutHash = bundle::fnv1a(&turnRules, sizeof turnRules, layoutHash);
-    out.key = roadModelCacheKey(roads::lanes::levelRoadsKey(in), layoutHash);
-    if (!cacheDir.empty()) {
-        out.path = roadModelCachePath(cacheDir, out.key);
-        std::error_code ec;
-        if (std::filesystem::exists(out.path, ec)) {
-            RoadModel m;
-            if (readRoadModelCache(out.path, out.key, m, nullptr)) {
-                out.model = std::make_shared<const RoadModel>(std::move(m));
-                out.fromCache = true;
-                bundle::noteCacheUse(out.path, kCacheKind);
-                return out;
-            }
-        }
-    }
-    std::unique_ptr<roads::lanes::Result> roads;
-    try {
-        roads::lanes::BuildOptions bo;
-        bo.threads = in.threads;
-        roads = roads::lanes::build(roads::lanes::loadCityGraph(city), bo);
-    } catch (const std::exception& ex) {
-        fail(err, std::string("the road build failed: ") + ex.what());
-        return out;
-    }
-    out.model = std::make_shared<const RoadModel>(assembleRoadModel(*roads));
-    if (!out.path.empty() && writeRoadModelCache(out.path, out.key, *out.model, err)) {
-        out.saved = true;
-        bundle::noteCacheUse(out.path, kCacheKind);
-    }
-    return out;
 }
 
 }  // namespace engine

@@ -130,6 +130,11 @@ uint64_t laneGraphCacheKey(uint64_t roadsKey, const LaneGraphOptions& opts, uint
     return k.h;
 }
 
+uint64_t laneLevelCacheKey(uint64_t roadsKey, uint64_t laneFacts, uint64_t turnTable, const LaneGraphOptions& opts) {
+    uint64_t roads = bundle::fnv1a(&laneFacts, sizeof(laneFacts), roadsKey);
+    return laneGraphCacheKey(bundle::fnv1a(&turnTable, sizeof(turnTable), roads), opts);
+}
+
 std::string laneGraphCachePath(const std::string& dir, uint64_t key) {
     return dir + "/" + bundle::hex16(key) + ".lanegraph";
 }
@@ -225,10 +230,7 @@ LevelLaneGraph obtainLevelLaneGraph(const bundle::LevelInputs& in, const LaneGra
         }
         // the layout and the lane rules the lane level reads by id (the roads' key leaves them out), and the table the
         // turns are stated by (ADR-0426)
-        const uint64_t layout = laneLevelKey(spec), turns = laneTurnRules().hash;
-        uint64_t roads = levelRoadsKey(in);
-        roads = bundle::fnv1a(&layout, sizeof(layout), roads);
-        out.key = laneGraphCacheKey(bundle::fnv1a(&turns, sizeof(turns), roads), opts);
+        out.key = laneLevelCacheKey(levelRoadsKey(in), laneLevelKey(spec), laneTurnRules().hash, opts);
     }
 
     if (!cacheDir.empty()) {

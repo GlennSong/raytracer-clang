@@ -27,12 +27,14 @@ namespace roads::lanes {
 // (`lane_rules.solid_before_stop_line`, ADR-0426), which the one-off tool wrote as this same 20 m into the files that
 // have it; the planner does not write it yet.
 constexpr double kSolidBeforeStopLine = 20.0;
-// The builder's parallel test for a ramp's bare end along a street (lanes.cpp checkRampLandings; deck_mesh.h
-// junctionCrossRank): a crossing lane within this (|cos| of the angle) of a street's direction runs beside it. About 18
-// degrees, looser than the paint's 46.
+// The ramp-landing check's parallel test (lanes.cpp checkRampLandings, its one reader since ADR-0426: the lane graph
+// worked out from the built roads used it too, and is gone): a ramp's bare end within this (|cos| of the angle) of a
+// street's direction runs along it, and is judged; one at a wider angle is an arm of a junction there. About 18 degrees,
+// looser than the paint's 46 (deck_mesh.h kJunctionParallel). Its name is from that old reader.
 constexpr double kJunctionParallelForGraph = 0.95;
 // How far a ramp that ends on a street (no gore on a host lane) may run on inside the street's lanes (metres along the
-// ramp): what the control planner reads to find a ramp's free end in a junction (control_plan.cpp).
+// ramp): what the control planner reads to find where such a ramp comes out of the street's lanes, the junction's place
+// (control_plan.cpp findJunctions, its one reader since ADR-0426).
 constexpr double kRampEndReach = 40.0;
 // Bends gentler than this radius count as straight when a path's tightest radius is measured (metres).
 constexpr double kStraightEnoughRadius = 1000.0;
@@ -129,7 +131,7 @@ inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 // the roads themselves is the lanes tag's, kLanesBuildTag, which keys the roads; to the road file's layout, lane rules
 // or the turns' table, the cache key's own; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
-constexpr uint32_t kLaneGraphBuildVersion = 7;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
+constexpr uint32_t kLaneGraphBuildVersion = 8;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
                                                  // 2: crossing points (#239, ADR-0400)
                                                  // 3: the control plan carried through: controls, signs, limits (#240)
                                                  // 4: each path's bend profile, measured as a vehicle feels it (#281)
@@ -137,6 +139,10 @@ constexpr uint32_t kLaneGraphBuildVersion = 7;   // 1: the graph of #237 and the
                                                  // 6: bodies swept at their length: the paved-road test and the
                                                  //    crossing points' reach (#284 item 9, ADR-0412)
                                                  // 7: a table built from the road model (lane_level.h, ADR-0426)
+                                                 // 8: ADR-0426's review: a street's end at a junction with no stop line
+                                                 //    for its arm is joined to nothing across it; an arm whose lanes' ways
+                                                 //    across cancel is left out of the outline; turns placed by junction
+                                                 //    (no shipped level changes)
 
 // A VEHICLE TAG and its body: the tightest radius its path may have, its width and its length (metres). Passed in by the
 // caller (the engine does not know the driving model's vehicles); a connector tighter than the radius is closed to it.
@@ -158,7 +164,6 @@ struct LaneGraphOptions {
 
 // THE STATED CONTROLS AND SIGNS, counted as the lane level carries them (every junction's control is the road file's).
 struct ControlPlanReport {
-    bool declared = false;                       // the road file states its controls
     uint32_t planned = 0;                        // stated junctions
     std::vector<std::pair<std::string, uint32_t>> byControl;   // lane-level junctions per control, by name
     std::vector<std::pair<std::string, uint32_t>> regulations; // regulations stood, per kind, by name
@@ -172,14 +177,31 @@ struct JunctionNote {
     std::string roads;          // the roads of its arms, by id
     uint32_t turnsStated = 0;   // the turns the road model states there
     uint32_t turnsBuilt = 0;    // ... made into connectors (some may be closed to some vehicles)
-    uint32_t turnsRefused = 0;  // ... fitting no vehicle, or with no lane path to take them (each a corner fault)
+    uint32_t turnsRefused = 0;  // ... with no connector: fitting no vehicle (a corner fault), or with no lane path to take them
 };
-// A stated turn with no connector (it fits no vehicle), and where.
+// A stated turn with no connector, why, and where: its corner fits no vehicle (a corner fault for every class), or there
+// is no lane path to start it from or end it on (the lanes stop short of the junction: not the corner's fault). `from` and
+// `to` are the lane paths it would join; with no lane path, the missing one is invalid.
+enum class RefusalWhy : uint8_t { FitsNoVehicle, NoLanePath };
 struct Refusal {
     uint32_t junction = 0;
     PathId from, to;
     Turn turn = Turn::None;
+    RefusalWhy why = RefusalWhy::FitsNoVehicle;
+    uint32_t modelTurn = kNoIndex;   // the road model's turn (RoadModel::turns)
     Vec2 at;
+};
+// A STRETCH OF A LANE CARS DRIVE THAT NO LANE PATH COVERS, in metres along the lane the way cars drive it (PathSource's
+// measure), and its own cause, recorded where the stretch was left out: inside a stated junction (`junction`, the model's:
+// between its street's end there and the arm's stop line, or on a stretch of road the file states inside it), or said in
+// `why` -- a street with no room between its stop lines (a problem line), a hole of a centimetre or two between two of
+// the lane's streets' stated stations (the file's rounding: listed, no problem line), or nothing recorded (a problem
+// line). Every such lane is covered end to end by its lane paths and these.
+struct LaneGap {
+    uint32_t lane = 0;            // the builder's lane
+    double from = 0, to = 0;
+    uint32_t junction = kNoIndex; // the model junction it lies inside; kNoIndex: see `why`
+    std::string why;
 };
 
 // HOW THE CROSSING POINTS CAME OUT (lane_graph_crossings.h findCrossingPoints), counted.
@@ -216,11 +238,12 @@ struct SectionSource {
 
 // A CORNER FAULT (ADR-0426): a stated turn whose drawn corner does not fit a vehicle class -- its tightest bend tighter
 // than the class turns in, or its body swept along it leaving the paved road, or no arc joining the two lane ends at all
-// -- or that has no lane path to start or end on. The turn stays stated in the road model; the lane level closes it to
-// that class. The work list for design step 9 (the builder drawing every corner to fit its stated turns).
+// -- or that no vehicle may use (no vehicle open on both its lanes). The turn stays stated in the road model; the lane
+// level closes it to that class. The work list for design step 9 (the builder drawing every corner to fit its stated
+// turns). (A turn with no lane path to start or end on is no corner's fault: a Refusal of its own, RefusalWhy::NoLanePath.)
 struct CornerFault {
     uint32_t turn = kNoIndex;     // the road model's turn (RoadModel::turns)
-    std::string tag;              // the vehicle tag it does not fit; empty: every one (no arc, no lane path)
+    std::string tag;              // the vehicle tag it does not fit; empty: every one (no arc, no vehicle on both lanes)
     std::string why;              // in words
     Vec2 at;
 };
@@ -238,16 +261,20 @@ struct LaneGraphBuild {
     // each arm's stop line, by where it came from: the paint's (its box holds this junction alone), ADR-0419's rule where
     // the paint found no box, or where the paint's box holds another stated junction too (each such box a problem line)
     uint32_t stopLinesPainted = 0, stopLinesNoBox = 0, stopLinesSharedBox = 0;
-    std::vector<std::string> paintDisagrees;   // each place the paint's boxes and the stated junctions disagree
+    // (where the paint and the stated junctions disagree is the road model's to say: RoadModel::problems)
     std::vector<std::string> problems;     // in plain words, each with its place; empty = nothing to look at
     std::vector<PathSource> sources;       // per path (a connector's: lane -1, no builder lane)
     std::vector<SectionSource> sectionSources;   // per section
     std::vector<double> laneLengths;       // per builder lane: its length as the graph reads it (a fold tidied away)
-    std::vector<char> leftOut;             // per builder lane: 1 = made into no lane path (a connector, a track, a footway)
+    // per builder lane: 1 = made into no lane path (a connector, a track, a footway; or a lane cars drive that could not
+    // be, counted in drivenLanesLeftOut, each a line in the problems)
+    std::vector<char> leftOut;
+    std::vector<LaneGap> laneGaps;         // every stretch of a kept lane no lane path covers, and why
     std::vector<JunctionNote> junctionNotes;   // per junction
     std::vector<Refusal> refusals;         // every stated turn with no connector, by junction then turn
     uint32_t connectorsLeftOut = 0;        // builder connector lanes left out
     uint32_t otherLanesLeftOut = 0;        // track and footway lanes left out
+    uint32_t drivenLanesLeftOut = 0;       // lanes cars drive made into no lane path (each a line in the problems)
     uint32_t tidiedLanes = 0;              // lanes whose fold at a sharp corner was cut out
     // KINKS (issue #281, findKinks), each also a line in the problems with its place: in the builder's lane lines, in
     // the connectors' lines, and where one path leads into the next with its heading jumping by more than

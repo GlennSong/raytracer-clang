@@ -104,6 +104,17 @@ nlohmann::json planCrossings(const RoadLabGraph& spec) {
     return out;
 }
 
+bool roadEndMeetsAnother(const RoadLabGraph& g, const EdgeSpec& e, int end) {
+    if (e.xy.size() < 2) return false;
+    const Vec2 q = end ? e.xy.back() : e.xy.front();
+    for (const EdgeSpec& o : g.edges) {
+        if (&o == &e || o.xy.size() < 2) continue;
+        if (std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= g.rules.endpointTol) return true;
+        if (project(o.xy, o.s, q).distance <= g.hw(o) + g.hw(e)) return true;
+    }
+    return false;
+}
+
 DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain) {
     if (g.designed()) return applyDesign(g, terrain);
     DesignReport rep;
@@ -114,18 +125,12 @@ DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain) {
     for (EdgeSpec& e : g.edges) {
         if (e.xy.size() < 2) continue;
         for (int k = 0; k < 2; ++k) {
-            const Vec2 q = k ? e.xy.back() : e.xy.front();
             bool met = false;
             // a FOOTWAY's end its own floor holds stays up: a footbridge ends over the far platform, not on the ground
             // there (any class at all lifted the island's diamond ramps off the ground at their ends: 0.5 % steeper)
             if (g.cls(e).footway) for (const auto& fp : e.floorPts)
                 if (std::fabs(project(e.xy, e.s, Vec2(fp[0], fp[1])).station - (k ? e.s.back() : 0.0)) <= fp[3]) met = true;
-            for (const EdgeSpec& o : g.edges) {
-                if (met) break;
-                if (&o == &e || o.xy.size() < 2) continue;
-                if (std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= R.endpointTol) { met = true; break; }
-                if (project(o.xy, o.s, q).distance <= g.hw(o) + g.hw(e)) { met = true; break; }
-            }
+            met = met || roadEndMeetsAnother(g, e, k);
             e.openEnd[k] = !met;
         }
     }

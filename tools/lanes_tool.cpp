@@ -2,16 +2,21 @@
 //   lanes_tool build <graph.json> [--out <dir>]     build, print the summary and invariants, write <name>.glb/.svg/stats.json
 //                      [--probe x y r] [--quick] [--holes] [--walls]   heights and steps around a point; --quick skips the invariant sweep and the exports; --holes lists unpaved holes; --walls lists parapets that end on drivable road
 //   lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width[:length] ...] [--junction J ...]   the lane graph
-//                      (#237, #238, #239): lane_graph.txt (its dump), problems.txt, reach.txt (how much a car can get
+//                      (#237, #238, #239; built from the road model since ADR-0426): lane_graph.txt (its dump), problems.txt,
+//                      model_problems.txt (the road model's own), corner_faults.txt, reach.txt (how much a car can get
 //                      round, and why not the rest) and lane_graph.svg (lanes by section, junction outlines, connectors by
-//                      turn, refusals, crossing points by kind); with --junction, junction_J.svg and junction_J.txt close up
+//                      turn, refused turns as red crosses -- at the corner's middle where the turn fits no vehicle, at the
+//                      junction's centre where no lane path takes it -- crossing points by kind); with --junction,
+//                      junction_J.svg and junction_J.txt close up
 //   lanes_tool terrain <graph.json> <out.json> [step]   the scene's natural ground on a grid (for a map)
 //   lanes_tool interchange-demo <out.json>   write the system-interchange test scene: a curved elevated ring over a radial
 //                      expressway at ground level, its four ramps, and the expressway's inner leg becoming a boulevard
-//   lanes_tool layout <graph.json> [--write] [--fresh] [--names] [--nodes]   the road file's junctions and streets with ids
-//                      (ADR-0417); --write puts them into the file in place (the bake key does not see them); --names names
-//                      the streets' runs once, from the planner's generator, keeping names the file has (ADR-0420); --nodes
-//                      the points of each junction spread over several, once, as the layout finds them (ADR-0425)
+//   lanes_tool layout <graph.json> [--write] [--fresh] [--names] [--nodes] [--lane-rules M]   the road file's junctions and
+//                      streets with ids (ADR-0417); --write puts them into the file in place (the bake key does not see them);
+//                      --names names the streets' runs once, from the planner's generator, keeping names the file has
+//                      (ADR-0420); --nodes the points of each junction spread over several, once, as the layout finds them
+//                      (ADR-0425); --lane-rules M the lane level's rules, the solid stretch before a stop line M metres
+//                      (ADR-0426)
 //   lanes_tool streetmap <graph.json> [--route x0 z0 x1 z1]   the street map agents route on, built from the file's road
 //                      model alone, in words; --route: a car's route between two points, street by street (ADR-0425)
 //   lanes_tool model <graph.json> [--out <dir>]   build the roads and assemble THE ROAD MODEL: model.txt, report.txt, model.svg
@@ -599,21 +604,32 @@ int main(int argc, char** argv) {
         const LaneGraph& G = lg.graph;
         uint32_t lanes = 0;
         for (const Path& p : G.paths) lanes += p.kind == PathKind::Lane ? 1 : 0;
-        uint32_t full = 0, partly = 0, refused = 0, noTurns = 0, refusedTurns = 0;
+        uint32_t full = 0, partly = 0, refused = 0, noTurns = 0, fitsNone = 0, noPath = 0;
         for (const JunctionNote& n : lg.junctionNotes) {
-            refusedTurns += n.turnsRefused;
             if (n.turnsStated == 0) ++noTurns;
             else if (n.turnsRefused == 0) ++full;
             else if (n.turnsRefused < n.turnsStated) ++partly;
             else ++refused;
         }
+        for (const Refusal& ref : lg.refusals) ++(ref.why == RefusalWhy::NoLanePath ? noPath : fitsNone);
         std::printf("%s: %u lane paths, %zu connectors (%u straight on, %u near turns, %u far turns) of %zu stated turns, %u fitting no "
-                    "vehicle; %zu sections, %zu junctions (%u with every stated turn built, %u some, %u none, %u with no turns), %zu "
-                    "problems; largest part a car can get round: %.1f%% of the lane paths\n",
+                    "vehicle, %u with no lane path to take them; %zu sections, %zu junctions (%u with every stated turn built, %u some, "
+                    "%u none, %u with no turns), %zu problems; largest part a car can get round: %.1f%% of the lane paths\n",
                     rp->graph.name.c_str(), lanes, G.paths.size() - lanes, lg.connectorsByTurn[static_cast<int>(Turn::Straight)],
                     lg.connectorsByTurn[static_cast<int>(Turn::NearTurn)], lg.connectorsByTurn[static_cast<int>(Turn::FarTurn)],
-                    model.turns.size(), refusedTurns, G.sections.size(), G.junctions.size(), full, partly, refused, noTurns,
+                    model.turns.size(), fitsNone, noPath, G.sections.size(), G.junctions.size(), full, partly, refused, noTurns,
                     lg.problems.size(), 100.0 * lg.reachableShare);
+        {
+            // THE ROAD MODEL'S OWN PROBLEMS (its one home: where the paint and the stated junctions disagree, the stated
+            // turns it could not settle -- an arriving lane that takes no turn, an arm with no heading), in model_problems.txt
+            std::ofstream f(outDir + "/model_problems.txt");
+            for (const std::string& p : model.problems) f << p << "\n";
+            uint32_t inJunctions = 0, other = 0;
+            for (const LaneGap& gp : lg.laneGaps) ++(gp.junction != kNoIndex ? inJunctions : other);
+            std::printf("  the road model's own problems: %zu (model_problems.txt); lane stretches with no lane path: %u inside a "
+                        "junction, %u for another reason (each in the problems); %u lanes cars drive made into no lane path\n",
+                        model.problems.size(), inJunctions, other, lg.drivenLanesLeftOut);
+        }
         std::printf("  lane level %.0f ms (%.0f of it the connectors), the build before it %.0f ms", lg.milliseconds,
                     lg.connectMilliseconds, buildMs);
         for (const char* stage : {"lanes", "profiles", "footprints", "surfaces"})

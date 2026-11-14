@@ -46,6 +46,8 @@ LaneTurnRules parseLaneTurnRules(const nlohmann::json& doc, std::vector<std::str
 // assets/data/lane_turns.json, read once. No built-in copy: a missing or unreadable file gives no rows (and says why in
 // the log), so no junction offers a turn and the lane-level table reports it.
 const LaneTurnRules& laneTurnRules();
+// The hash of a table's file, its bytes as they are (a comment edit moves it too): LaneTurnRules::hash.
+uint64_t laneTurnTableHash(const std::string& text);
 
 // ONE ARM AS THE TABLE SEES IT: its stated heading, and its arriving and leaving lanes, each with its kind and slot (the
 // caller's lane ids, in any order).
@@ -53,6 +55,7 @@ struct TurnArmLane {
     uint32_t lane = 0;
     std::string kind;
     int slot = 0;
+    std::string name;   // for the notes (the builder's lane id); empty: its number
 };
 struct TurnArm {
     double heading = 0;                  // degrees, the way the arm leaves the junction, plan coordinates
@@ -79,8 +82,10 @@ std::vector<Turn> turnKindsFrom(const std::vector<TurnArm>& arms, const std::vec
 bool kerbSideCounterClockwise();
 
 // THE TURNS A JUNCTION OFFERS, every arriving lane into every leaving lane the rows give it, in the order (arriving arm,
-// leaving arm, from lane, to lane). `control`: the junction's stated control. `notes` (optional): what could not be
-// settled, in words (an arm with no heading, a side taken as far, a turn with no lane to take it).
+// leaving arm, from lane, to lane). Every row whose conditions hold applies (a turn two rows state is kept once).
+// `control`: the junction's stated control. `notes` (optional): what could not be settled, in words -- an arm with no
+// heading; a side taken as far; an arriving lane that takes no turn, because no row covers its kind there or because the
+// junction offers its arm no way out at all.
 // `kerbCcw`: which side the kerb is (kerbSideCounterClockwise; a test of a mirrored world passes the other).
 std::vector<StatedTurn> turnsAtJunction(const std::vector<TurnArm>& arms, const std::vector<std::array<uint32_t, 2>>& through,
                                         const std::string& control, const LaneTurnRules& rules,

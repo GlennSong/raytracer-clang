@@ -50,7 +50,11 @@ LaneTurnRules parseLaneTurnRules(const nlohmann::json& doc, std::vector<std::str
         const nlohmann::json& r = rows[i];
         LaneTurnRow row;
         if (!r.is_object() || !r.contains("turn") || !r["turn"].is_string() || !turnOf(r["turn"].get<std::string>(), row.turn)) {
-            bad(i, "its \"turn\" is not one of straight, near_turn, far_turn, u_turn");
+            bad(i, "its \"turn\" is not one of straight, near_turn, far_turn");
+            continue;
+        }
+        if (row.turn == Turn::UTurn) {   // turnKindsFrom never names an arm a U-turn: such a row could never apply
+            bad(i, "a u_turn row could never apply: no junction offers a U-turn (turnKindsFrom)");
             continue;
         }
         const std::string when = r.value("when", std::string("any"));
@@ -130,11 +134,13 @@ const LaneTurnRules& laneTurnRules() {
         std::vector<std::string> problems;
         LaneTurnRules r = parseLaneTurnRules(doc, &problems);
         for (const std::string& p : problems) LOG_WARN << "[roads] " << p;
-        r.hash = bundle::fnv1aStr(text);
+        r.hash = laneTurnTableHash(text);
         return r;
     }();
     return rules;
 }
+
+uint64_t laneTurnTableHash(const std::string& text) { return bundle::fnv1aStr(text); }
 
 bool kerbSideCounterClockwise() {
     // Arriving traffic on an arm whose heading (the way it leaves the junction) is h runs the other way, -dir(h); its
@@ -211,6 +217,7 @@ std::vector<StatedTurn> turnsAtJunction(const std::vector<TurnArm>& arms, const 
         for (uint32_t b = 0; b < arms.size(); ++b)
             if (kinds[b] != Turn::None && !arms[b].leaving.empty()) offers[static_cast<std::size_t>(kinds[b])] = true;
         const bool straightOn = offers[static_cast<std::size_t>(Turn::Straight)];
+        const std::size_t before = out.size();
         for (uint32_t ri = 0; ri < rules.rows.size(); ++ri) {
             const LaneTurnRow& row = rules.rows[ri];
             if (row.when == LaneTurnRow::When::StraightOn && !straightOn) continue;
@@ -254,6 +261,18 @@ std::vector<StatedTurn> turnsAtJunction(const std::vector<TurnArm>& arms, const 
                     out.push_back(t);
                 }
             }
+        }
+        // every arriving lane that takes no turn here, and why: said, never dropped
+        bool offersAny = false;
+        for (bool o : offers) offersAny = offersAny || o;
+        for (const TurnArmLane& l : arms[a].arriving) {
+            bool takes = false;
+            for (std::size_t k = before; k < out.size() && !takes; ++k) takes = out[k].from == l.lane;
+            if (takes) continue;
+            const std::string name = l.name.empty() ? "#" + std::to_string(l.lane) : l.name;
+            note("arm " + std::to_string(a) + ": arriving lane " + name + " (kind " + l.kind + ", slot " + std::to_string(l.slot) +
+                 ") takes no turn: " + (offersAny ? "no row of lane_turns.json gives a " + l.kind + " lane a turn here"
+                                                  : std::string("no other arm of the junction has a lane leaving by it")));
         }
     }
     std::sort(out.begin(), out.end(), [](const StatedTurn& x, const StatedTurn& y) {

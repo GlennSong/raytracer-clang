@@ -25,7 +25,8 @@ struct LaneGraphSvgMarks {
 // THE LANE GRAPH AS A PLAN PICTURE: every lane path's centre line with an arrowhead at its end and its id, coloured by
 // section; a tick across the road where each section starts; junction outlines; the ends of arriving lanes (red
 // circles) and the starts of leaving lanes (green squares); the connectors, thinner, coloured by their turn (a key in
-// the corner); refused junctions in red and refused turns as red crosses; each crossing point's stretch drawn wide and
+// the corner); refused junctions in red and refused turns as red crosses (lanes_tool puts a turn that fits no vehicle at
+// its corner's middle, one with no lane path to take it at its junction's centre); each crossing point's stretch drawn wide and
 // pale over each of its paths, with a mark at the middle of the stretch on its first path, coloured by its kind (cross,
 // join, split; a circle when filed under a junction, a square when it reaches across junctions or is out on a road);
 // each junction's control (a coloured disc above its id, the control's name beneath), and a triangle at the end of each

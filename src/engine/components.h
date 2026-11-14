@@ -893,7 +893,7 @@ struct CityMap {
 
 // THE LEVEL'S ROAD MODEL (procgen/city/roads/road_model.h, ADR-0420): one per level, covering every lane-built city in
 // it, in the order the level lists them -- each city's PLANNED LAYER, read from its road file when the level loads
-// (milliseconds; its built layer stays in cache/roadmodel). What the readers that only label the roads read: the
+// (milliseconds; its built layer is assembled only where a road build is at hand: the lane graph). What the readers that only label the roads read: the
 // street names (the model's name attachments), the name signs (attached to the junction arms they stand at, as the
 // loader plans them), the map, and a bus stop's street; and (ADR-0421) which junctions are lit -- the street furniture's
 // signal poles, the city sim's signals -- and the junctions and streets the lamps and trees keep to. Since ADR-0425 the

@@ -88,6 +88,7 @@ struct ConnectorFit {
     TagMask open = 0, closed = 0;         // the vehicle tags it is open and closed to
     std::vector<std::string> whyClosed;   // per vehicle tag: why it is closed (empty: open, or not on both lanes)
     bool noArc = false;
+    bool noSharedVehicle = false;         // no vehicle tag is open on both its lanes (so none is tried)
     std::string why;                      // when it is open to nobody: why, in words
     Vec2 at;                              // where (the middle of the two lane ends, or where a body left the road)
 };

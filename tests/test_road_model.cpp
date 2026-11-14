@@ -557,28 +557,7 @@ TEST_CASE(road_model_5_saved_and_read_back) {
     bundle::BinReader shortReader(w.bytes.data(), w.bytes.size() / 2);
     RoadModel half;
     CHECK(!getRoadModel(shortReader, half, &err));
-    // its own cache file: written, read back equal, refused for another key
-    const std::string dir = scratchDir("cache");
-    const uint64_t key = roadModelCacheKey(1234, 5678);
-    CHECK(key != roadModelCacheKey(1234, 5679) && key != roadModelCacheKey(1235, 5678) && key != roadModelCacheKey(1234, 5678, kRoadModelVersion + 1));
-    const std::string path = roadModelCachePath(dir, key);
-    CHECK(writeRoadModelCache(path, key, m, &err));
-    RoadModel read;
-    CHECK(readRoadModelCache(path, key, read, &err) && read == m);
-    CHECK(!readRoadModelCache(path, key + 1, read, &err));
-    // a level's: built and saved the first time, read from the file the second
-    const std::string graphPath = dir + "/graph.json";
-    std::ofstream(graphPath) << smallGraphWithLayout().dump(1);
-    bundle::LevelInputs in;
-    in.levelPath = dir + "/level.json";
-    in.levelDir = dir;
-    in.level = {{"entities", nlohmann::json::array({{{"shape", "road"}, {"road", {{"graph", graphPath}}}}})}};
-    const ObtainedRoadModel first = obtainLevelRoadModel(in, dir + "/roadmodel", &err);
-    CHECK(first.model && first.saved && !first.fromCache);
-    const ObtainedRoadModel second = obtainLevelRoadModel(in, dir + "/roadmodel", &err);
-    CHECK(second.model && second.fromCache && second.key == first.key);
-    if (first.model && second.model) CHECK(*first.model == *second.model);
-    std::filesystem::remove_all(dir);
+    // (the model's own cache file, which nothing read, went in ADR-0426's review)
 }
 
 // ---- 6. the comparison with the old forms --------------------------------------------------------------------------------
@@ -1148,4 +1127,292 @@ TEST_CASE(road_model_13_a_ramp_is_a_way_on_at_the_lane_level) {
         }
         CHECK(join);
     }
+}
+
+// ---- 14. the turn table, junction by junction, by hand (lane_turns.h, assets/data/lane_turns.json) -----------------------
+
+namespace {
+// A junction by hand: one arm per heading (degrees, plan coordinates), each with `lanes[a]` lanes arriving and leaving,
+// all of kind `kind` (slots 0 from the centre-line side). Arm a's arriving lane of slot s is 100 a + s, its leaving lane
+// of slot s 100 a + 50 + s.
+std::vector<TurnArm> handJunction(const std::vector<double>& headings, const std::vector<int>& lanes, const std::string& kind = "through") {
+    std::vector<TurnArm> arms(headings.size());
+    for (std::size_t a = 0; a < headings.size(); ++a) {
+        arms[a].heading = headings[a];
+        arms[a].hasHeading = true;
+        for (int s = 0; s < lanes[a]; ++s) {
+            arms[a].arriving.push_back(TurnArmLane{static_cast<uint32_t>(100 * a + s), kind, s});
+            arms[a].leaving.push_back(TurnArmLane{static_cast<uint32_t>(100 * a + 50 + s), kind, s});
+        }
+    }
+    return arms;
+}
+using TurnSet = std::set<std::tuple<uint32_t, uint32_t, Turn>>;   // (from lane, into lane, kind)
+TurnSet turnSet(const std::vector<StatedTurn>& ts) {
+    TurnSet out;
+    for (const StatedTurn& t : ts) out.insert(std::make_tuple(t.from, t.to, t.turn));
+    return out;
+}
+void printTurns(const char* what, const TurnSet& s) {
+    std::printf("      %s:", what);
+    for (const std::tuple<uint32_t, uint32_t, Turn>& t : s) std::printf(" %u>%u %s;", std::get<0>(t), std::get<1>(t), turnKey(std::get<2>(t)));
+    std::printf("\n");
+}
+}  // namespace
+
+TEST_CASE(road_model_14_the_turn_table_by_hand) {
+    const LaneTurnRules& rules = laneTurnRules();
+    CHECK(rules.rows.size() == 5u);
+    const Turn S = Turn::Straight, N = Turn::NearTurn, F = Turn::FarTurn;
+    // THE KERB SIDE IN THIS WORLD: counter-clockwise from an arriving arm, in plan coordinates (kerbPerpSign < 0)
+    CHECK(kerbSideCounterClockwise());
+    // A FOUR-WAY, one lane each way, arms leaving east (0), north (1), west (2), south (3), east-west and north-south
+    // through pairs: exactly twelve turns. From each arm: straight on into its partner; the near turn into the next arm
+    // counter-clockwise (the kerb side); the far turn into the one clockwise.
+    {
+        const std::vector<TurnArm> arms = handJunction({0, 90, 180, 270}, {1, 1, 1, 1});
+        const TurnSet got = turnSet(turnsAtJunction(arms, {{0, 2}, {1, 3}}, "all_way_stop", rules, nullptr, true));
+        const TurnSet want = {{0, 250, S}, {0, 150, N}, {0, 350, F},     // from the east arm
+                              {100, 350, S}, {100, 250, N}, {100, 50, F},  // from the north
+                              {200, 50, S}, {200, 350, N}, {200, 150, F},  // from the west
+                              {300, 150, S}, {300, 50, N}, {300, 250, F}}; // from the south
+        if (got != want) printTurns("four-way", got);
+        CHECK(got == want);
+        // the mirrored world (kerb clockwise): near and far change places, straight on stays
+        const TurnSet mirrored = turnSet(turnsAtJunction(arms, {{0, 2}, {1, 3}}, "all_way_stop", rules, nullptr, false));
+        const TurnSet wantMirrored = {{0, 250, S}, {0, 350, N}, {0, 150, F},   {100, 350, S}, {100, 50, N}, {100, 250, F},
+                                      {200, 50, S}, {200, 150, N}, {200, 350, F}, {300, 150, S}, {300, 250, N}, {300, 50, F}};
+        if (mirrored != wantMirrored) printTurns("four-way mirrored", mirrored);
+        CHECK(mirrored == wantMirrored);
+    }
+    // KERB-SIDE AND CENTRE-LINE-SIDE PAIRING: three lanes each way east-west, two north-south. From the west: every lane
+    // straight on in its own slot; the near turn from the kerb lane (slot 2) into the south arm's kerb lane (slot 1); the
+    // far turn from the centre-line lane (slot 0) into the north arm's centre-line lane (slot 0).
+    {
+        const std::vector<TurnArm> arms = handJunction({0, 90, 180, 270}, {3, 2, 3, 2});
+        TurnSet fromWest;
+        for (const StatedTurn& t : turnsAtJunction(arms, {{0, 2}, {1, 3}}, "signal", rules, nullptr, true))
+            if (t.fromArm == 2) fromWest.insert(std::make_tuple(t.from, t.to, t.turn));
+        const TurnSet want = {{200, 50, S}, {201, 51, S}, {202, 52, S}, {202, 351, N}, {200, 150, F}};
+        if (fromWest != want) printTurns("from the west", fromWest);
+        CHECK(fromWest == want);
+    }
+    // FEWER LANES LEAVING THAN ARRIVING: three lanes arrive from the west, two leave east: straight on by slot, the kerb lane
+    // into the nearest slot there is (slot 1)
+    {
+        std::vector<TurnArm> arms = handJunction({0, 180}, {2, 3});
+        TurnSet got = turnSet(turnsAtJunction(arms, {{0, 1}}, "unmarked", rules, nullptr, true));
+        TurnSet fromWest;
+        for (const std::tuple<uint32_t, uint32_t, Turn>& t : got)
+            if (std::get<0>(t) >= 100) fromWest.insert(t);
+        const TurnSet want = {{100, 50, S}, {101, 51, S}, {102, 51, S}};
+        if (fromWest != want) printTurns("three into two", fromWest);
+        CHECK(fromWest == want);
+    }
+    // A T's STEM (south, no way straight on): the arm counter-clockwise from it (east) is its near turn, the other (west)
+    // its far turn. Both `no_straight_on` rows: with three stem lanes the kerb side's larger share (slots 2 and 1) take the
+    // near turn, kerb lane into kerb lane, and the centre-line side's smaller (slot 0) the far turn; with one lane, it
+    // takes both.
+    {
+        const std::vector<TurnArm> arms = handJunction({0, 180, 270}, {2, 2, 3});
+        TurnSet fromStem;
+        for (const StatedTurn& t : turnsAtJunction(arms, {{0, 1}}, "stop", rules, nullptr, true))
+            if (t.fromArm == 2) fromStem.insert(std::make_tuple(t.from, t.to, t.turn));
+        const TurnSet want = {{202, 51, N}, {201, 50, N}, {200, 150, F}};
+        if (fromStem != want) printTurns("T stem, three lanes", fromStem);
+        CHECK(fromStem == want);
+        const std::vector<TurnArm> one = handJunction({0, 180, 270}, {1, 1, 1});
+        TurnSet fromOne;
+        for (const StatedTurn& t : turnsAtJunction(one, {{0, 1}}, "stop", rules, nullptr, true))
+            if (t.fromArm == 2) fromOne.insert(std::make_tuple(t.from, t.to, t.turn));
+        const TurnSet wantOne = {{200, 50, N}, {200, 150, F}};
+        if (fromOne != wantOne) printTurns("T stem, one lane", fromOne);
+        CHECK(fromOne == wantOne);
+        // and the T's through road: from the east (arm 0) the stem lies clockwise, a far turn; from the west, a near turn
+        TurnSet fromThrough;
+        for (const StatedTurn& t : turnsAtJunction(one, {{0, 1}}, "stop", rules, nullptr, true))
+            if (t.fromArm != 2) fromThrough.insert(std::make_tuple(t.from, t.to, t.turn));
+        const TurnSet wantThrough = {{0, 150, S}, {0, 250, F}, {100, 50, S}, {100, 250, N}};
+        if (fromThrough != wantThrough) printTurns("T through road", fromThrough);
+        CHECK(fromThrough == wantThrough);
+    }
+    // A FIVE-WAY, one lane each way, arms at 0, 60, 150, 200 and 290 degrees, 0 and 2 a through pair. From arm 0: near into
+    // 1 (counter-clockwise before its partner), far into 3 and 4. From arm 1, no partner: an odd ring has no halfway arm;
+    // near into the two counter-clockwise (2, 3), far into the other two (4, 0), its one lane taking both kinds.
+    {
+        const std::vector<TurnArm> arms = handJunction({0, 60, 150, 200, 290}, {1, 1, 1, 1, 1});
+        std::vector<std::string> notes;
+        const std::vector<StatedTurn> ts = turnsAtJunction(arms, {{0, 2}}, "signal", rules, &notes, true);
+        TurnSet from0, from1;
+        for (const StatedTurn& t : ts) {
+            if (t.fromArm == 0) from0.insert(std::make_tuple(t.from, t.to, t.turn));
+            if (t.fromArm == 1) from1.insert(std::make_tuple(t.from, t.to, t.turn));
+        }
+        const TurnSet want0 = {{0, 250, S}, {0, 150, N}, {0, 350, F}, {0, 450, F}};
+        const TurnSet want1 = {{100, 250, N}, {100, 350, N}, {100, 450, F}, {100, 50, F}};
+        if (from0 != want0) printTurns("five-way from 0", from0);
+        if (from1 != want1) printTurns("five-way from 1", from1);
+        CHECK(from0 == want0);
+        CHECK(from1 == want1);
+        for (const std::string& n : notes) CHECK(n.find("halfway") == std::string::npos);
+    }
+    // A ROW FOR SOME CONTROLS ONLY: a table whose far turn is offered at a stop only; a u_turn row is refused when read (no
+    // junction offers a U-turn: it could never apply)
+    {
+        const nlohmann::json doc = {{"turns", nlohmann::json::array({
+            {{"turn", "straight"}, {"when", "any"}, {"kinds", {"through"}}, {"lanes", "every"}, {"into", "same_slot"}, {"source", "test"}},
+            {{"turn", "far_turn"}, {"when", "any"}, {"controls", {"stop"}}, {"kinds", {"through"}}, {"lanes", {{"from", "centre"}, {"count", 1u}}},
+             {"into", "same_side"}, {"source", "test"}},
+            {{"turn", "u_turn"}, {"kinds", {"through"}}, {"lanes", "every"}, {"into", "same_slot"}, {"source", "test"}}})}};
+        std::vector<std::string> problems;
+        const LaneTurnRules table = parseLaneTurnRules(doc, &problems);
+        CHECK(table.rows.size() == 2u && problems.size() == 1u);
+        if (problems.size() == 1u) CHECK(problems.front().find("u_turn") != std::string::npos);
+        const std::vector<TurnArm> arms = handJunction({0, 90, 180, 270}, {1, 1, 1, 1});
+        const TurnSet atStop = turnSet(turnsAtJunction(arms, {{0, 2}, {1, 3}}, "stop", table, nullptr, true));
+        const TurnSet atSignal = turnSet(turnsAtJunction(arms, {{0, 2}, {1, 3}}, "signal", table, nullptr, true));
+        CHECK(atStop.size() == 8u && atSignal.size() == 4u);
+        for (const std::tuple<uint32_t, uint32_t, Turn>& t : atSignal) CHECK(std::get<2>(t) == S);
+        CHECK(atStop.count(std::make_tuple(200u, 150u, F)) == 1u);
+    }
+    // AN ARRIVING LANE NO ROW COVERS IS SAID, never dropped quietly: a ramp's lane (the table names no `ramp` kind) arriving
+    // at a junction, and an arm with nowhere to go
+    {
+        std::vector<TurnArm> arms = handJunction({0, 90, 180, 270}, {1, 1, 1, 1});
+        arms[3].arriving.front().kind = "ramp";
+        arms[3].arriving.front().name = "offramp.f0";
+        std::vector<std::string> notes;
+        const std::vector<StatedTurn> ts = turnsAtJunction(arms, {{0, 2}, {1, 3}}, "stop", rules, &notes, true);
+        for (const StatedTurn& t : ts) CHECK(t.from != 300u);
+        bool said = false;
+        for (const std::string& n : notes) said = said || (n.find("offramp.f0") != std::string::npos && n.find("takes no turn") != std::string::npos);
+        CHECK(said);
+        // two arms, the east one with no lane leaving by it: the west arm's lane has nowhere to go (said); the east's goes on
+        std::vector<TurnArm> deadEnd = handJunction({0, 180}, {1, 1});
+        deadEnd[0].leaving.clear();
+        notes.clear();
+        const TurnSet two = turnSet(turnsAtJunction(deadEnd, {{0, 1}}, "unmarked", rules, &notes, true));
+        CHECK(two == TurnSet({{0, 150, S}}));
+        CHECK(notes.size() == 1u);
+        if (notes.size() == 1u) CHECK(notes.front().find("arriving lane #100") != std::string::npos && notes.front().find("no other arm") != std::string::npos);
+    }
+}
+
+// ---- 15. a lane leaving its host and one merging into it, at the lane level (grid_city's freeway exit and entry) ----------
+
+TEST_CASE(road_model_15_a_diverge_and_a_merge_at_the_lane_level) {
+    const std::unique_ptr<Result> r = lane_level_test::buildWithLaneLevelFacts(std::string(RT_SOURCE_DIR) + "/assets/lanelab/grid_city.json");
+    const RoadModel m = assembleRoadModel(*r);
+    const LaneGraphBuild lg = buildLaneLevel(*r, m, oneCar());
+    CHECK(lg.error.empty());
+    const LaneGraph& G = lg.graph;
+    uint32_t diverges = 0, merges = 0;
+    for (const ModelConnection& c : m.connections) {
+        if (c.ramp != "exit" && c.ramp != "entry") continue;
+        if (c.kind == ConnectionKind::Diverge && c.ramp == "exit") {
+            // THE EXIT: the host lane's path ending where their lines meet leads on along the host AND into the exit's
+            // first path; the two paths' bodies split there (a measured crossing point)
+            const std::vector<uint32_t> ramp = pathsOfLane(lg, c.to.index), host = pathsOfLane(lg, c.from.index);
+            CHECK(!ramp.empty() && !host.empty());
+            if (ramp.empty()) continue;
+            int from = -1;
+            for (uint32_t h : host)
+                if (leadsInto(G, h, ramp.front())) from = static_cast<int>(h);
+            CHECK(from >= 0);
+            if (from < 0) continue;
+            ++diverges;
+            CHECK(G.paths[static_cast<std::size_t>(from)].next.count == 2u);
+            bool onAlong = false;
+            for (uint32_t k = G.paths[static_cast<std::size_t>(from)].next.first; k < G.paths[static_cast<std::size_t>(from)].next.end(); ++k)
+                onAlong = onAlong || G.paths[G.nextPaths[k].index].modelLane == c.from.index;
+            CHECK(onAlong);
+            CHECK(distance(G.pointAt(PathId(static_cast<uint32_t>(from)), G.paths[static_cast<std::size_t>(from)].length),
+                           G.pointAt(PathId(ramp.front()), 0)) <= 0.01);
+        }
+        if (c.kind == ConnectionKind::Merge && c.ramp == "entry" && c.to.index < m.lanes.size() && m.lanes[c.to.index].edge != m.lanes[c.from.index].edge) {
+            // THE ENTRY: the ramp's last path leads into the host lane's path starting where their lines meet, and only there
+            const std::vector<uint32_t> ramp = pathsOfLane(lg, c.from.index);
+            CHECK(!ramp.empty());
+            if (ramp.empty()) continue;
+            const Path& last = G.paths[ramp.back()];
+            CHECK(last.next.count == 1u);
+            if (last.next.count != 1u) continue;
+            ++merges;
+            CHECK(G.paths[G.nextPaths[last.next.first].index].modelLane == c.to.index);
+            CHECK(distance(G.pointAt(PathId(ramp.back()), last.length), G.pointAt(G.nextPaths[last.next.first], 0)) <= 0.01);
+        }
+    }
+    std::printf("      [lane level] grid_city: %u diverges and %u merges checked\n", diverges, merges);
+    // grid_city has one exit ramp and one entry ramp off its freeway, each of one lane (the file's edges `exit` and
+    // `entry`, class ramp with one lane): exactly one diverge and one merge
+    CHECK(diverges == 1u && merges == 1u);
+    CHECK(lg.divergeJoins == 1u && lg.mergeJoins == 1u);
+}
+
+// ---- 16. what the lane level says instead of joining: a junction arm with no stop line, a turn naming no junction ----------
+
+TEST_CASE(road_model_16_the_lane_level_reports_what_it_cannot_join) {
+    // A STREET'S END AT A JUNCTION WITH NO ARM FOR IT: hill_junction's one junction, with both arms of the road that runs
+    // through it (its lanes are one builder lane each, on the streets either side) taken out of the stated arms. Each of
+    // that road's streets still names the junction at its end, so its lanes run on to the street's end there -- and are
+    // NOT joined across it to the same lane on the far street (the join an equal station would have made), and each end
+    // is a problem line.
+    nlohmann::json g = lane_level_test::withLaneLevelFacts(nlohmann::json::parse(slurp(std::string(RT_SOURCE_DIR) + "/assets/lanelab/hill_junction.json")));
+    nlohmann::json& J = g["junctions"][0];
+    const std::string road = J["arms"][0]["road"].get<std::string>();
+    std::vector<int> newIndex;
+    nlohmann::json arms = nlohmann::json::array();
+    for (const nlohmann::json& a : J["arms"]) {
+        newIndex.push_back(a["road"] == road ? -1 : static_cast<int>(arms.size()));
+        if (a["road"] != road) arms.push_back(a);
+    }
+    nlohmann::json through = nlohmann::json::array();
+    for (const nlohmann::json& t : J["through"]) {
+        const int a = newIndex[t[0].get<std::size_t>()], b = newIndex[t[1].get<std::size_t>()];
+        if (a >= 0 && b >= 0) through.push_back({a, b});
+    }
+    J["arms"] = arms;
+    J["through"] = through;
+    std::vector<std::string> streetsOfRoad;
+    for (const nlohmann::json& st : g["streets"])
+        if (st["road"] == road) streetsOfRoad.push_back(st["id"].get<std::string>());
+    CHECK(streetsOfRoad.size() == 2u);   // the road runs through the junction: a street each side
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+    const RoadModel m = assembleRoadModel(*r);
+    const LaneGraphBuild lg = buildLaneLevel(*r, m, oneCar());
+    CHECK(lg.error.empty());
+    for (const std::string& st : streetsOfRoad) {
+        bool said = false;
+        for (const std::string& p : lg.problems)
+            said = said || (p.find("street " + st + ": its ") == 0 && p.find("names junction " + J["id"].get<std::string>() + ", which has no arm with a "
+                                                                              "stop line for it") != std::string::npos);
+        CHECK(said);
+    }
+    uint32_t joinedAcross = 0, lanesOfRoad = 0;
+    const LaneGraph& G = lg.graph;
+    for (uint32_t p = 0; p < G.paths.size(); ++p) {
+        if (G.paths[p].kind != PathKind::Lane || m.lanes[G.paths[p].modelLane].edge != r->graph.index.at(road)) continue;
+        ++lanesOfRoad;
+        for (uint32_t k = G.paths[p].next.first; k < G.paths[p].next.end(); ++k) {
+            const Path& q = G.paths[G.nextPaths[k].index];
+            joinedAcross += q.kind == PathKind::Lane && q.modelLane == G.paths[p].modelLane && q.street != G.paths[p].street ? 1 : 0;
+        }
+    }
+    CHECK(lanesOfRoad > 0u);
+    CHECK(joinedAcross == 0u);
+
+    // A STATED TURN NAMING NO JUNCTION of the model: not built, and said (never dropped quietly)
+    const std::unique_ptr<Result> r2 = lane_level_test::buildWithLaneLevelFacts(std::string(RT_SOURCE_DIR) + "/assets/lanelab/hill_junction.json");
+    RoadModel m2 = assembleRoadModel(*r2);
+    const std::size_t stated = m2.turns.size();
+    CHECK(stated > 0u);
+    ModelTurn stray = m2.turns.front();
+    stray.junction = ModelJunctionId(static_cast<uint32_t>(m2.junctions.size() + 7));
+    m2.turns.push_back(stray);
+    const LaneGraphBuild lg2 = buildLaneLevel(*r2, m2, oneCar());
+    const std::string expect = "stated turn " + std::to_string(stated) + " names no junction of the road model: not built";
+    CHECK(std::find(lg2.problems.begin(), lg2.problems.end(), expect) != lg2.problems.end());
+    uint32_t connectors = 0;
+    for (const Path& p : lg2.graph.paths) connectors += p.kind == PathKind::Connector ? 1 : 0;
+    CHECK(connectors + lg2.refusals.size() == stated);   // every turn at a junction built or refused; the stray neither
 }

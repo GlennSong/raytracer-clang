@@ -964,6 +964,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     // and into the road it joins, so a ramp is a way on and off; how many cars each carried in the run.
     {
         uint32_t used = 0;
+        std::set<uint32_t> unused;
         std::printf("    [lab-v2] cars seen on each ramp (its lane on the road model, where it starts):");
         for (const std::pair<const uint32_t, std::set<uint32_t>>& r : carsOnRamp) {
             Vec2 at;
@@ -974,8 +975,18 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                 }
             std::printf(" lane %u at (%.0f, %.0f): %zu;", r.first, at.x, at.y, r.second.size());
             used += r.second.empty() ? 0 : 1;
+            if (r.second.empty()) unused.insert(r.first);
         }
         std::printf("\n    [lab-v2] ramps used: %u of %zu\n", used, carsOnRamp.size());
+        // AS IT STANDS (ADR-0426), so a ramp going dead fails: 6 of the 8 ramps carry cars in the five minutes. The two that
+        // carry none are the on-ramp d0_0_a_on (model lane 1111, starting at (-563, -74)) and the off-ramp d1_0_a_off
+        // (model lane 1114, at (356, -403)): the freeway kerb lanes on their ways end at the freeway joints j153 and j154,
+        // whose stated turns all leave the paved road (corner faults, step 9), so no route of the run uses either. When step 9 fits those corners, this list shrinks: write the new numbers here.
+        if (steps == static_cast<int>(300.0 / kStep + 0.5)) {
+            CHECK(carsOnRamp.size() == 8u);
+            CHECK(used == 6u);
+            CHECK(unused == std::set<uint32_t>({1111u, 1114u}));
+        }
     }
     const driving::MeasurementReport report = sim.drivingHost().measurements().report();
     std::printf("    [lab-v2] the measurements table:\n%s\n", report.describe().c_str());

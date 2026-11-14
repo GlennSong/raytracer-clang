@@ -26,6 +26,12 @@ struct DesignReport {
 
 DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain);
 
+// WHETHER ANOTHER ROAD MEETS ROAD `e`'S END (`end` 0: its start, 1: its end): another road ends within the rules'
+// endpointTol of it, or its paved band (the two roads' half widths) covers it. The design stage's test for an open end
+// (one it brings down to the ground); the lane level reads it to tell a road that just ends from one that meets others
+// where the road file states no junction (reported, never joined).
+bool roadEndMeetsAnother(const RoadLabGraph& g, const EdgeSpec& e, int end);
+
 // THE PLANNER'S CROSSING POLICY (ADR-0215 step 3): every place two of the graph's roads meet away from a shared node --
 // their centrelines crossing, or one ending on the other's interior -- found with the design stage's own geometry, and
 // what the plan means there, by what the two roads are:

@@ -23,7 +23,7 @@ struct Check { std::string name, detail; bool ok; };
 // A RAMP'S END ON A STREET, CHECKED (#282, ADR-0411). A ramp's traffic must reach the street's carriageway going its way
 // without standing in, or crossing at grade, the one coming the other way. Each ramp end on a road is checked:
 //   - an end anchored to a host lane (a lane of its own beside it) must run the way that lane runs;
-//   - a bare end running ALONG the street (the lane graph's parallel test, kJunctionParallelForGraph) must not end on
+//   - a bare end running ALONG the street (this check's parallel test, lane_graph_build.h kJunctionParallelForGraph) must not end on
 //     the street's centre line, nor on the carriageway running against it (a bare end meeting the street at an angle is
 //     an arm of a junction there, and is not judged here);
 //   - a ramp whose landing was planned ("landing", RampLanding) must land as planned: on that street, by that kind of

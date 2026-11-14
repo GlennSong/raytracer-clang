@@ -34,7 +34,7 @@ Under `src/engine/procgen/city/roads/`:
 
 | File | What it holds |
 |---|---|
-| `road_model.h/.cpp` | The model: types, planned and built layers, save/load, `dump`, `streetNameNear`. Its own cache (`obtainLevelRoadModel`, cache/roadmodel) has no caller outside this file today: nothing loads a saved built model. |
+| `road_model.h/.cpp` | The model: types, planned and built layers, save/load, `dump`, `streetNameNear`. It has no cache file of its own (the unread one went in ADR-0426's review); the lane graph's cache assembles the built layer from its road build. |
 | `street_map.h/.cpp` | The street map every agent routes, drives and walks on (`NavGraph`), built at load from the planned layer and the deck heights (ADR-0425). |
 | `lane_turns.h/.cpp` | Which arriving lane takes which turn: reads `assets/data/lane_turns.json`; `turnsAtJunction` is the one function that applies it (ADR-0426). |
 | `control_signs.h/.cpp` | The stop, give-way, do-not-enter and one-way signs that follow from stated facts (ADR-0424). Also ADR-0419's stop-line rule, `stopLineFromMouth`. |
@@ -129,7 +129,7 @@ facts with the tools (`lanes_tool layout ... --write`, `--names`, `--nodes`, `--
 
 - **`assets/data/lane_turns.json`**: five rows: straight on, near turn and far turn, plus how an arm with no way
   straight on shares its lanes. They say which arriving lanes take each turn and into which leaving lanes. `[~]`
-  marks a guess. Its hash keys both caches.
+  marks a guess. Its hash keys the lane graph's cache (`laneTurnTableHash`, the file's bytes).
 - **`assets/data/road_attachments.json`**: what may attach to a street, junction or arm (names, signal poles, signs).
   A `sign` row is a whole sign: when, facing whom, where, its look.
 - **`assets/scripts/rules/control_policy.lua`**: the placement policy. Class order, posted limits with sources, and
@@ -159,8 +159,9 @@ The fleet for `--vehicle`, as step 8 used it: `bus:7.30:2.55:11.45 car:6.15:2.05
 moped:1.92:0.70:1.70 motorcycle:2.73:0.70:2.09 truck:7.45:2.25:6.69 van:7.10:2.30:6.34`.
 
 Tests (`RT_TEST_FILTER` is a substring of the case name):
-- `./build-viewer/lanes_tests`: 111 cases, about 4 to 5 minutes whole. Filters: `road_model` (16 cases, quick),
-  `lanes_the_traffic_lab`, `connectors_of`.
+- `./build-viewer/lanes_tests`: 115 cases, about 4 to 5 minutes whole. Filters: `road_model` (20 cases, quick),
+  `lanes_lane_graph_of` (the five scenes' lane-graph checks against what each scene is known to hold: `LaneGraphKnown`
+  in test_lanes.cpp), `lanes_the_traffic_lab`, `connectors_of`.
 - `./build-viewer/driving_tests`: 186 cases on hand-made graphs, about a minute *(roughly)*.
 - `run_tests`, **always filtered**: `lane_graph`, `nav`, `route`, `trip_plan`, `control`, `signal`, `park`,
   `sign`, `map`. Seconds to a minute each *(roughly)*.
@@ -213,8 +214,10 @@ data rows.
   2. The queue row: 2.76 s a car against 1.7–2.1 s.
   Neither the driving's junction code nor the rule-set numbers were changed.
 - **Corner faults = step 9's work list**: `docs/road-model-compare/<level>_corner_faults.txt`. traffic_lab 2219 over
-  540 turns; river_town 3363 over 866, 31 closed to every class. traffic_lab j5's four near turns (6.0 m) are too
-  tight even for a car.
+  540 turns; river_town 3332 over 835 (its 31 turns with no lane path, on s228 and s287, are refusals of their own
+  kind since the review, not corner faults). traffic_lab j5's four near turns (6.0 m) are too tight even for a car.
+- **Street ends that meet another road with no junction stated** (problem lines since the review): traffic_lab 17 (the
+  spokes at its ring), river_town 24: the planner's to state.
 - **Two traffic_lab ramps carry no car** (d0_0_a_on, d1_0_a_off). Their hosts' kerb lanes end at freeway joints
   j153/j154, whose stated turns all leave the paved road.
 - **river_town planner faults**: hairpin and gapped carry-ons (s277/s337 159°, s325/s344 4.9–10 m). x0_outR_link
@@ -225,3 +228,24 @@ data rows.
 - **Deferred levels**: every lanes level but traffic_lab and river_town lacks `lane_rules`. Levels without
   `junctions[].nodes` get no street map (agent_lab, river_town and traffic_lab have them). The one-agent lab's car
   still drives v1. Steps 5, 6 and 9 are open (design step table).
+- **Real cases the lane-graph checks found and name** (test_lanes.cpp, per scene): lanes of two roads crossing at one
+  level before their stop lines at traffic_lab j0 (s33 and s36, four), j84 (s147, s149) and j22's approach (s57, s60);
+  ring_city's two ramps crossing at grade; grid_city's boulevard lane crossing a local street's at a 100-degree carry-on.
+
+## 9. Test gaps still open
+
+- `LaneGraphKnown::insideRoads` entries that no longer apply never fail (a road listed but no longer inside a junction
+  passes); the same for `tidied` amounts larger than needed.
+- Pins by count alone, where two members can swap unseen: each scene's problem lines by kind (traffic_lab names its
+  outlines, gap joins and unstated junctions by id; the rest are counts), the joins made per kind, traffic_lab's
+  road-model problems by kind (its halfway notes are by id).
+- Collinear overlap: two lanes of different roads lying along each other are not found by the crossing check
+  (`segmentsCross` finds only a crossing).
+- A lane path passing inside a junction (part 3 of `checkLaneGraph`) is still judged against the lane level's own
+  outline, which is drawn through the lane paths' ends.
+- Report branches with no test: an outline arm whose lanes' ways across cancel; a lane not laid point for point beside
+  its spine; a lane with nothing left once its folds are cut; "runs along none of the streets nor inside a junction";
+  "lies part way along its road"; a lone centimetre hole between two streets' stations with no junction beside it; the
+  turns-placed count mismatch (cannot happen by construction). None arises in a hand scene; each needs degenerate input.
+- traffic_lab's known joins and the scenes' non-right-angle join gaps and turns are snapshots of builder output, not
+  values worked out by hand.

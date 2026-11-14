@@ -71,18 +71,8 @@ j6 arm 3 -> 4 near_turn s7.f0 -> s42.b2: off the paved road near (-248.8, 366.6)
 j6 arm 4 -> 0 near_turn s42.f2 -> s46.f1: too tight (4.0 m) for bus car goods truck van;
 j6 arm 4 -> 2 far_turn s42.f0 -> s284.f0: too tight (1.9 m) for bus car goods motorcycle truck van;
 j7 arm 0 -> 1 near_turn s10.b1 -> s13.f2: too tight (4.6 m) for bus car goods truck van;
-j7 arm 0 -> 3 far_turn s10.b0 -> s287.f0: [every class: the far_turn from lane s10.b0 into lane s287.f0 has no lane path to end on (-387.2, 477.7)]
 j7 arm 1 -> 0 far_turn s13.b0 -> s10.f0: too tight (4.2 m) for bus car goods truck van;
 j7 arm 1 -> 2 near_turn s13.b2 -> s11.f0: too tight (7.2 m) for bus goods truck; off the paved road near (-380.0, 492.7) for car van;
-j7 arm 1 -> 3 straight s13.b2 -> s287.f2: [every class: the straight from lane s13.b2 into lane s287.f2 has no lane path to end on (-387.2, 477.7)]
-j7 arm 1 -> 3 straight s13.b1 -> s287.f1: [every class: the straight from lane s13.b1 into lane s287.f1 has no lane path to end on (-387.2, 477.7)]
-j7 arm 1 -> 3 straight s13.b0 -> s287.f0: [every class: the straight from lane s13.b0 into lane s287.f0 has no lane path to end on (-387.2, 477.7)]
-j7 arm 2 -> 3 near_turn s11.b0 -> s287.f2: [every class: the near_turn from lane s11.b0 into lane s287.f2 has no lane path to end on (-387.2, 477.7)]
-j7 arm 3 -> 0 near_turn s287.b2 -> s10.f1: [every class: the near_turn from lane s287.b2 into lane s10.f1 has no lane path to start from (-387.2, 477.7)]
-j7 arm 3 -> 1 straight s287.b2 -> s13.f2: [every class: the straight from lane s287.b2 into lane s13.f2 has no lane path to start from (-387.2, 477.7)]
-j7 arm 3 -> 1 straight s287.b1 -> s13.f1: [every class: the straight from lane s287.b1 into lane s13.f1 has no lane path to start from (-387.2, 477.7)]
-j7 arm 3 -> 1 straight s287.b0 -> s13.f0: [every class: the straight from lane s287.b0 into lane s13.f0 has no lane path to start from (-387.2, 477.7)]
-j7 arm 3 -> 2 far_turn s287.b0 -> s11.f0: [every class: the far_turn from lane s287.b0 into lane s11.f0 has no lane path to start from (-387.2, 477.7)]
 j8 arm 0 -> 1 near_turn s50.b2 -> s49.f2: too tight (5.0 m) for bus car goods truck van;
 j8 arm 0 -> 2 near_turn s50.b2 -> s10.b1: off the paved road near (-267.5, 502.8) for bus car goods truck van;
 j8 arm 0 -> 4 far_turn s50.b0 -> s44.b0: off the paved road near (-267.6, 501.2) for bus car goods moped motorcycle truck van;
@@ -530,14 +520,6 @@ j89 arm 0 -> 2 far_turn s195.b0 -> s192.b0: off the paved road near (311.1, 261.
 j89 arm 1 -> 2 near_turn s166.f2 -> s192.b0: too tight (3.9 m) for bus car goods truck van; off the paved road near (303.6, 254.2) for moped motorcycle;
 j89 arm 2 -> 0 near_turn s192.f0 -> s195.f2: too tight (4.2 m) for bus car goods truck van; off the paved road near (313.6, 255.4) for moped motorcycle;
 j89 arm 2 -> 1 far_turn s192.f0 -> s166.b0: off the paved road near (304.3, 258.8) for bus;
-j90 arm 0 -> 1 near_turn s228.b1 -> s227.f2: [every class: the near_turn from lane s228.b1 into lane s227.f2 has no lane path to start from (400.4, 284.2)]
-j90 arm 0 -> 2 near_turn s228.b1 -> s226.f2: [every class: the near_turn from lane s228.b1 into lane s226.f2 has no lane path to start from (400.4, 284.2)]
-j90 arm 0 -> 3 straight s228.b1 -> s167.b1: [every class: the straight from lane s228.b1 into lane s167.b1 has no lane path to start from (400.4, 284.2)]
-j90 arm 0 -> 3 straight s228.b0 -> s167.b0: [every class: the straight from lane s228.b0 into lane s167.b0 has no lane path to start from (400.4, 284.2)]
-j90 arm 0 -> 4 far_turn s228.b0 -> s195.b0: [every class: the far_turn from lane s228.b0 into lane s195.b0 has no lane path to start from (400.4, 284.2)]
-j90 arm 0 -> 5 far_turn s228.b0 -> s334.b0: [every class: the far_turn from lane s228.b0 into lane s334.b0 has no lane path to start from (400.4, 284.2)]
-j90 arm 0 -> 6 far_turn s228.b0 -> s336.f0: [every class: the far_turn from lane s228.b0 into lane s336.f0 has no lane path to start from (400.4, 284.2)]
-j90 arm 1 -> 0 far_turn s227.b0 -> s228.f0: [every class: the far_turn from lane s227.b0 into lane s228.f0 has no lane path to end on (400.4, 284.2)]
 j90 arm 1 -> 2 near_turn s227.b2 -> s226.f2: too tight (4.0 m) for bus car goods truck van;
 j90 arm 1 -> 3 near_turn s227.b2 -> s167.b1: off the paved road near (399.5, 313.6) for bus goods truck van;
 j90 arm 1 -> 4 straight s227.b2 -> s195.b2: off the paved road near (399.5, 311.2) for bus car goods truck van;
@@ -545,24 +527,18 @@ j90 arm 1 -> 4 straight s227.b1 -> s195.b1: off the paved road near (401.6, 308.
 j90 arm 1 -> 4 straight s227.b0 -> s195.b0: off the paved road near (403.6, 305.5) for bus goods truck van;
 j90 arm 1 -> 5 far_turn s227.b0 -> s334.b0: off the paved road near (394.0, 279.1) for bus car goods moped motorcycle truck van;
 j90 arm 1 -> 6 far_turn s227.b0 -> s336.f0: off the paved road near (415.7, 292.4) for bus goods truck van;
-j90 arm 2 -> 0 far_turn s226.b0 -> s228.f0: [every class: the far_turn from lane s226.b0 into lane s228.f0 has no lane path to end on (400.4, 284.2)]
 j90 arm 2 -> 1 far_turn s226.b0 -> s227.f0: off the paved road near (409.5, 314.7) for bus goods truck van;
 j90 arm 2 -> 3 near_turn s226.b2 -> s167.b1: too tight (4.5 m) for bus car goods truck van;
 j90 arm 2 -> 4 near_turn s226.b2 -> s195.b2: off the paved road near (382.5, 306.4) for bus; too tight (7.4 m) for goods truck;
 j90 arm 2 -> 5 near_turn s226.b2 -> s334.b2: off the paved road near (383.9, 294.5) for bus car goods truck van;
-j90 arm 3 -> 0 straight s167.f0 -> s228.f0: [every class: the straight from lane s167.f0 into lane s228.f0 has no lane path to end on (400.4, 284.2)]
-j90 arm 3 -> 0 straight s167.f1 -> s228.f1: [every class: the straight from lane s167.f1 into lane s228.f1 has no lane path to end on (400.4, 284.2)]
 j90 arm 3 -> 1 far_turn s167.f0 -> s227.f0: off the paved road near (403.9, 306.3) for bus goods truck van;
 j90 arm 3 -> 4 near_turn s167.f1 -> s195.b2: too tight (3.2 m) for bus car goods truck van;
 j90 arm 3 -> 5 near_turn s167.f1 -> s334.b2: off the paved road near (381.8, 285.0) for bus car goods truck van;
-j90 arm 4 -> 0 near_turn s195.f2 -> s228.f1: [every class: the near_turn from lane s195.f2 into lane s228.f1 has no lane path to end on (400.4, 284.2)]
 j90 arm 4 -> 1 straight s195.f0 -> s227.f0: off the paved road near (405.7, 302.7) for bus goods truck van;
 j90 arm 4 -> 1 straight s195.f1 -> s227.f1: off the paved road near (407.7, 299.9) for bus goods truck van;
 j90 arm 4 -> 1 straight s195.f2 -> s227.f2: off the paved road near (409.8, 297.0) for bus goods truck van;
 j90 arm 4 -> 3 far_turn s195.f0 -> s167.b0: too tight (5.7 m) for bus car goods truck van;
 j90 arm 4 -> 5 near_turn s195.f2 -> s334.b2: too tight (0.9 m) for bus car goods moped motorcycle truck van;
-j90 arm 5 -> 0 near_turn s334.f1 -> s228.f0: [every class: the near_turn from lane s334.f1 into lane s228.f0 has no lane path to end on (400.4, 284.2)]
-j90 arm 5 -> 0 near_turn s334.f2 -> s228.f1: [every class: the near_turn from lane s334.f2 into lane s228.f1 has no lane path to end on (400.4, 284.2)]
 j90 arm 5 -> 1 near_turn s334.f1 -> s227.f1: off the paved road near (398.9, 272.0) for bus car goods moped motorcycle truck van;
 j90 arm 5 -> 1 near_turn s334.f2 -> s227.f2: off the paved road near (401.8, 269.7) for bus car goods moped motorcycle truck van;
 j90 arm 5 -> 2 far_turn s334.f0 -> s226.f0: off the paved road near (393.5, 292.4) for bus goods truck van;
@@ -570,7 +546,6 @@ j90 arm 5 -> 3 far_turn s334.f0 -> s167.b0: off the paved road near (386.1, 285.
 j90 arm 5 -> 4 far_turn s334.f0 -> s195.b0: off the paved road near (387.3, 281.7) for bus goods truck van;
 j90 arm 5 -> 6 near_turn s334.f1 -> s336.f0: too tight (6.5 m) for bus goods truck van;
 j90 arm 5 -> 6 near_turn s334.f2 -> s336.f0: too tight (5.7 m) for bus car goods truck van;
-j90 arm 6 -> 0 near_turn s336.b0 -> s228.f1: [every class: the near_turn from lane s336.b0 into lane s228.f1 has no lane path to end on (400.4, 284.2)]
 j90 arm 6 -> 1 near_turn s336.b0 -> s227.f2: off the paved road near (422.0, 291.4) for bus goods truck van;
 j90 arm 6 -> 5 far_turn s336.b0 -> s334.b0: off the paved road near (399.9, 272.0) for bus goods truck van;
 j91 arm 0 -> 1 near_turn s173.b2 -> s171.f0: too tight (6.0 m) for bus car goods truck van;
@@ -746,14 +721,8 @@ j119 arm 5 -> 0 near_turn s337.b1 -> s279.b2: too tight (5.0 m) for bus car good
 j119 arm 5 -> 1 near_turn s337.b1 -> s251.f0: off the paved road near (496.4, 422.4) for bus;
 j119 arm 5 -> 2 straight s337.b1 -> s230.b1: off the paved road near (453.1, 413.3) for bus car goods moped motorcycle truck van;
 j119 arm 5 -> 4 far_turn s337.b0 -> s277.f0: too tight (6.1 m) for bus car goods truck van;
-j120 arm 0 -> 1 near_turn s228.f1 -> s345.f2: [every class: the near_turn from lane s228.f1 into lane s345.f2 has no lane path to start from (442.8, 299.8)]
-j120 arm 0 -> 2 straight s228.f0 -> s346.f0: [every class: the straight from lane s228.f0 into lane s346.f0 has no lane path to start from (442.8, 299.8)]
-j120 arm 0 -> 2 straight s228.f1 -> s346.f1: [every class: the straight from lane s228.f1 into lane s346.f1 has no lane path to start from (442.8, 299.8)]
-j120 arm 1 -> 0 far_turn s345.b0 -> s228.b0: [every class: the far_turn from lane s345.b0 into lane s228.b0 has no lane path to end on (442.8, 299.8)]
 j120 arm 1 -> 2 near_turn s345.b2 -> s346.f1: too tight (2.4 m) for bus car goods motorcycle truck van;
 j120 arm 1 -> 2 near_turn s345.b1 -> s346.f0: too tight (0.6 m) for bus car goods moped motorcycle truck van;
-j120 arm 2 -> 0 straight s346.b1 -> s228.b1: [every class: the straight from lane s346.b1 into lane s228.b1 has no lane path to end on (442.8, 299.8)]
-j120 arm 2 -> 0 straight s346.b0 -> s228.b0: [every class: the straight from lane s346.b0 into lane s228.b0 has no lane path to end on (442.8, 299.8)]
 j120 arm 2 -> 1 far_turn s346.b0 -> s345.f0: too tight (6.1 m) for bus car goods truck van;
 j121 arm 0 -> 1 near_turn s257.b0 -> s256.f0: too tight (6.3 m) for bus goods truck van;
 j121 arm 0 -> 3 far_turn s257.b0 -> s251.b0: off the paved road near (474.8, 488.1) for bus goods truck;

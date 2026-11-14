@@ -213,3 +213,9 @@ today. Vehicle classes the corners are fitted for and whose reach is counted (ta
     Largest part, with lane changes / without: bus 50.9% / 23.8%; car 80.9% / 41.1%; goods 74.2% / 33.4%; moped
     88.8% / 60.0%; motorcycle 87.2% / 59.9%; truck 74.2% / 33.4%; van 75.7% / 34.1%. Freeway lane paths reached
     without lane changes: 8 of 80 (bus 4).
+  - Review of ADR-0426: the 31 stated turns with no lane path to take them (their lanes stop short of the junction:
+    the streets s228 and s287, with no room between their stop lines) are no corner's fault: each is now a refusal of its
+    own kind with a problem line, and the corner-fault list beside this file no longer holds them. Corner faults
+    3332 over 835 stated turns: bus 835, car 418, goods 641, moped 88, motorcycle 92, truck 639, van 619. The table is
+    otherwise unchanged (lane_graph.txt byte for byte); 24 street ends that meet another road where the road file states
+    no junction are now problem lines.

@@ -15,8 +15,8 @@
 //   - a STOP LINE is the builder's kept stop-line station of the stated arm (the paint's box, kStopLineBack outside it:
 //     ModelArm::stopLine), where the paint's box holds that junction alone; else ADR-0419's rule read from the stated
 //     cross-sections (control_signs.h stopLineFromMouth): where the paint found no box, or where its box holds two stated
-//     junctions (the paint's own "boxes within 12 m are one" until step 9; each such place reported). The STATED
-//     junctions are followed, never the paint's grouping;
+//     junctions (the paint's own "boxes within 12 m are one" until step 9; each such place in the road model's problems,
+//     their one home). The STATED junctions are followed, never the paint's grouping;
 //   - SECTIONS are the lanes of one road running one way between cuts: where a lane path begins or ends, where a lane
 //     leaves or joins its host (the connections' `meets`), and where the solid lines before a stop line begin. Lanes
 //     side by side are ordered by their slot (the builder's, from the centre-line side), never by where they lie;
@@ -29,7 +29,13 @@
 //   - a CONNECTOR is the builder's addition: the path a stated turn follows, from the arriving lane's end at its stop line
 //     to the leaving lane's start, shaped by the existing connector shaping and fitted to the drawn corner for each
 //     vehicle class (lane_graph_connect.h fitConnector). A class it does not fit is closed on it and a CORNER FAULT is
-//     reported against the turn; a turn that fits no class has no connector (its fault says why) -- it stays stated;
+//     reported against the turn; a turn that fits no class has no connector (its fault says why) -- it stays stated; a
+//     turn with no lane path to start or end on (its lanes stop short of the junction) has none either: a Refusal of its
+//     own kind (RefusalWhy::NoLanePath), no corner's fault. Every stated turn is built or refused, checked;
+//   - WHAT IS NOT JOINED, SAID: a street's end with no junction and nothing it carries on into, where its road meets
+//     another (the design stage's roadEndMeetsAnother; a road that just ends, or a ramp's anchored end, is no problem);
+//     a street's end at a junction with no stop line for its arm (nothing joined across it); every stretch of a lane no
+//     lane path covers, outside a junction (LaneGraphBuild::laneGaps, with why);
 //   - WHICH LINES BETWEEN LANES MAY BE CROSSED: between two through lanes, solid within the road file's
 //     `lane_rules.solid_before_stop_line` of the stop line they run to; every other line may be crossed both ways (beside
 //     a lane that begins or ends, or of another kind);
@@ -37,8 +43,8 @@
 //     arriving by it; each lane its street's posted limit, each connector the limit of the lane it joins;
 //   - the junction's OUTLINE (the area that must not be blocked) runs across each arm's lanes at its stop line, the
 //     arms' lines joined in the order they lie round their middle (a drawing, not a fact: the stated heading order drew
-//     5 of traffic_lab's outlines and 18 of river_town's crossing themselves); an outline that still crosses itself, where two arms' stop
-//     lines overlap, is reported (traffic_lab j0 and j22, river_town ten: corners for step 9).
+//     5 of traffic_lab's outlines and 18 of river_town's crossing themselves); an outline that still crosses itself,
+//     where two arms' stop lines overlap, is reported (traffic_lab j0 and j22, river_town ten: corners for step 9).
 // Tidying, in the table only (the builder's lanes are not touched): a lane on the inside of a corner sharper than its
 // offset folds back on itself; the fold is cut out (cutFolds) and reported.
 //

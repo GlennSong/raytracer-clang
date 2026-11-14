@@ -68,10 +68,14 @@ LaneGraphSummary summarizeLaneGraph(const LaneGraphBuild& built);
 // car can get round 97.7% of the lane paths".
 std::string describeLaneGraphSummary(const LaneGraphSummary& s);
 
-// THE CACHE KEY of the lane graph built from roads `roadsKey` with `opts` (its vehicles in their order, and its
-// control), by builder version `builderVersion` (a parameter so a test can show a bump changes it).
+// THE CACHE KEY of the lane graph built from roads `roadsKey` with `opts` (its vehicles in their order), by builder
+// version `builderVersion` (a parameter so a test can show a bump changes it).
 uint64_t laneGraphCacheKey(uint64_t roadsKey, const LaneGraphOptions& opts,
                            uint32_t builderVersion = kLaneGraphBuildVersion);
+// A LEVEL'S KEY, as obtainLevelLaneGraph makes it: the roads' key, the road file's lane-level facts (road_layout.h
+// laneLevelKey: its junctions, streets, divided pairs and lane rules) and the turn table's hash (laneTurnRules().hash),
+// then laneGraphCacheKey. Any of them changing makes another key.
+uint64_t laneLevelCacheKey(uint64_t roadsKey, uint64_t laneFacts, uint64_t turnTable, const LaneGraphOptions& opts);
 // The file for a key in `dir`: <dir>/<key as 16 hex digits>.lanegraph
 std::string laneGraphCachePath(const std::string& dir, uint64_t key);
 

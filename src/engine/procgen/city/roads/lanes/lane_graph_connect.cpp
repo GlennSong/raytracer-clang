@@ -186,6 +186,7 @@ ConnectorFit fitConnector(const Result& r, const LaneLookup& look, const LaneGra
     fit.at = (p0 + p1) * 0.5;
     const TagMask allowed = from.vehicleTags & into.vehicleTags;
     if (tagCount > 0 && allowed == 0) {
+        fit.noSharedVehicle = true;
         fit.why = "no vehicle may use both lanes";
         return fit;
     }
@@ -415,9 +416,11 @@ void reachReport(LaneGraphBuild& out) {
         return seen;
     };
     const std::vector<char> getsBack = spread(behind);
-    // the lanes at a stated turn with no connector (a corner fault for every class), both ways
+    // the lanes at a stated turn whose corner fits no vehicle (a corner fault for every class), both ways (a turn with no
+    // lane path to take it is not the corner's: its lanes' reasons are their roads')
     std::vector<char> intoRefused(n, 0), outOfRefused(n, 0);
     for (const Refusal& ref : out.refusals) {
+        if (ref.why != RefusalWhy::FitsNoVehicle) continue;
         intoRefused[ref.from.index] = 1;
         outOfRefused[ref.to.index] = 1;
     }

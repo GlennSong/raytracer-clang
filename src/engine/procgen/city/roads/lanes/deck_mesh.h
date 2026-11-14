@@ -59,8 +59,8 @@ constexpr double kJunctionMergeGap = 12.0;
 
 // (JunctionSpan, one junction box along a street, is in lanes.h: the build keeps the paint's boxes in its Result.)
 // The paint's PARALLEL TEST: a crossing lane whose direction there is within this (|cos| of the angle between them) of
-// the street's runs beside it, not across it (0.7: closer than about 46 degrees). The paint's number; a caller with its
-// own reason passes another (the lane graph, lane_graph_build.h kJunctionParallelForGraph).
+// the street's runs beside it, not across it (0.7: closer than about 46 degrees). The paint's number. (The ramp-landing
+// check has its own, looser one: lane_graph_build.h kJunctionParallelForGraph.)
 constexpr double kJunctionParallel = 0.7;
 // Whether a point on street lane `li` (heading `t` there) is inside an intersection: inside a CROSSING road's lane at
 // the same level. Parallel overlaps (a gore, an aux lane beside its host) and grade-separated ones (a street under a

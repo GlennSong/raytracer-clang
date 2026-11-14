@@ -20647,5 +20647,28 @@ freeway joints j153/j154, whose stated turns all leave the paved road (corner fa
 lanes levels have no `lane_rules` and get no lane graph until the tool writes it; every ramp carried at least once is
 not asserted (it does not hold); the 30-minute soak was not run.
 
+**Review (2026-11-14), nothing the table holds changed** (traffic_lab's and river_town's lane_graph.txt byte for byte,
+the five-minute state hash unchanged). What was dropped quietly is now said: an arriving lane no row of the turn table
+covers (a note in the road model's problems; none in the two levels, and no ramp ends at a junction there); a street end
+that meets another road where the road file states no junction (17 in traffic_lab, the spokes at its ring; 24 in
+river_town); a lane cars drive made into no lane path, and every stretch of a lane no lane path covers, with why
+(`LaneGraphBuild::laneGaps`: inside a junction, or said); a street end at a junction with no stop line for its arm (not
+joined across; none in the two levels); a stated turn with no lane path is a refusal of its own kind
+(`RefusalWhy::NoLanePath`), no longer a corner fault (river_town's 31, on s228 and s287: corner faults 3332 over 835);
+every stated turn is checked to be built or refused. The paint's disagreements with the stated junctions have one home,
+the road model's problems (`lanes_tool lanegraph` writes them to model_problems.txt). A `u_turn` row in the turn table is
+refused when read (no junction offers one), and the table's words say every matching row applies. The road model's own
+cache file, which nothing read, is gone. The tests weakened in step 8 are back: every lane covered end to end by its
+paths and listed gaps, no lane path inside a junction (traffic_lab j93's one, listed), joins between lanes held to 1 cm
+and a degree but for each scene's listed joins, the traffic lab's problems by count and id, the turn table by hand
+scenes, a diverge and a merge, the lane graph's key moving with the turn table and the lane rules, and the lab's ramps
+(6 of 8 carry cars; d0_0_a_on and d1_0_a_off none, listed). A second review round made the tests' expectations
+written values, never the builder's own counters: each scene names its lanes with no lane path, its gaps outside
+junctions, the roads stated inside spread junctions, its known joins with their gap and turn, and its lanes of two roads
+crossing at one level outside every junction -- now measured from the centre lines (grid_city 1, ring_city 1, traffic_lab
+3 at j0 and j84, where two arms meet at a sharp angle and their lanes cross before the stop lines); a gap "inside a
+junction" must lie inside its outline or on a stretch the file states inside it; each gap's cause is recorded where the
+stretch is left out. A builder change dropping a stretch and a lane was seen to fail the test, then undone.
+
 **Revisit when** the builder draws corners to fit every stated turn and paints the stated junctions (step 9); when
 the driving changes lanes.
