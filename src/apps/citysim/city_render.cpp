@@ -2825,17 +2825,18 @@ void CityRenderSystem::makeBusSigns(engine::FrameContext& ctx) {
     }
     busSignOff_ = row("NOT IN SERVICE");
     // THE NEXT STOP, inside (Glenn, 2026-11-06: "an interior facing display that shows the stop that you're heading
-    // towards next"): each stop by the street it stands on, the nearest named one (StreetDirectory); one row per
-    // street, shared by every stop on it. A stop with no street in reach shows its line's label instead.
-    const engine::StreetDirectory* streets = nullptr;
-    ctx.world.each<engine::StreetDirectory>([&](Entity, engine::StreetDirectory& d) { streets = &d; });
+    // towards next"): each stop by the street it stands on, the nearest named one (the level's road model: its streets'
+    // names, ADR-0420); one row per street, shared by every stop on it. A stop with no street in reach shows its line's
+    // label instead.
+    const engine::LevelRoadModel* streets = nullptr;
+    ctx.world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& d) { streets = &d; });
     busStopRow_.assign(static_cast<std::size_t>(net.routeCount()), {});
     int named = 0;
     for (int r = 0; r < net.routeCount(); ++r) {
         const citysim::BusRoute& br = net.route(r);
         std::vector<int>& rows = busStopRow_[static_cast<std::size_t>(r)];
         for (const citysim::BusStop& st : br.stops) {
-            std::string name = streets ? streets->nearestName(st.pos) : std::string();
+            std::string name = streets ? streets->streetNameNear(st.pos) : std::string();
             for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
             rows.push_back(name.empty() ? busSignRow_[static_cast<std::size_t>(r)] : row("NEXT|" + name));
             named += name.empty() ? 0 : 1;

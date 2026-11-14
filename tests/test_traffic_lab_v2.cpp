@@ -1438,9 +1438,12 @@ TEST_CASE(level_traffic_lab_v2_rebuild_hands_over_again) {
 // f131e7b3..., all eight -- still came out.
 constexpr uint64_t kV1LabHashes[] = {0x787bbb8cad76b402ull, 0xfd480345d78d0026ull, 0xce43eccec2735354ull,
                                      0x2cda6f411bb6bca8ull};
-// river_town: t = 15, 30, 45, 60 s
-constexpr uint64_t kV1RiverHashes[] = {0x943f48adddca7360ull, 0xb2477e17542d405aull, 0xc65e9c4c0bf9a152ull,
-                                       0x5a6e7fe223e87006ull};
+// river_town: t = 15, 30, 45, 60 s. Taken again when street name signs moved onto the road model (ADR-0420): a sign
+// post is street furniture, walkers steer round furniture, and the posts stand at different corners (one a junction,
+// 182 -> 144). With the posts put back where they stood (a temporary switch, removed) the earlier numbers -- 943f48ad...
+// -- came out exactly; the lab, which has no walkers, did not move.
+constexpr uint64_t kV1RiverHashes[] = {0xa749b074c38152f6ull, 0x26e708550790dc07ull, 0x2601337e616d2d86ull,
+                                       0xf0a0fc5cd128f7dfull};
 
 TEST_CASE(level_v1_state_is_unchanged) {
     // The lab as v1 with the fleet it had when the hashes were taken: its own fleet now deals a city bus into its traffic

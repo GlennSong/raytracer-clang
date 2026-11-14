@@ -26,7 +26,19 @@ namespace engine {
 // poles are the furniture plan, the trees are the spawned instance groups.
 // Where two layers disagree, the disagreement is the finding.
 struct CityMapData {
-    RoadGraph roads;                       // the unified street graph
+    RoadGraph roads;                       // the unified street graph (the sidewalk census's road labels and nodes)
+    // THE STREETS AND JUNCTIONS THE MAP DRAWS, from the level's road model (ADR-0420; components.h LevelRoadModel): each
+    // street's centre line, the width its travel lanes take (its stated cross-section), its engine class and its name;
+    // each junction's place. Copied numbers, no fact of their own (the loader fills them from the model).
+    struct Street {
+        std::vector<Vec2> line;
+        double width = 0;
+        RoadClass klass = RoadClass::Local;
+        bool track = false, footway = false;
+        std::string name;
+    };
+    std::vector<Street> streets;
+    std::vector<Vec2> junctions;
     struct Hub { Vec2 pos; int kind = 0; std::string name; };
     std::vector<Hub> hubs;                 // district hubs (polycentric zoning)
     double hubRadius = 220.0;
@@ -58,7 +70,8 @@ struct CityMapData {
 struct CityMapLayers {
     bool roads = true, curbs = true, sidewalks = true, gaps = true, nav = true,
          furniture = true, objects = true, blocks = true, lots = true, buildings = true,
-         districts = true, places = true, doors = true, conflicts = true, legend = true;
+         districts = true, places = true, doors = true, conflicts = true, legend = true,
+         junctions = true, streetNames = true;   // the road model's junctions; the streets' names along them ("names")
     // "roads,sidewalks,furniture" → only those (unknown names are ignored,
     // reported by the writer's log line); "all" or "" → everything.
     static CityMapLayers fromList(const std::string& csv);

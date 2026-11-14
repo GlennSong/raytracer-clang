@@ -23,18 +23,33 @@
 //   - the road builder: each lane's curve, heights and slot, the streets it runs along, the junction at each end, the
 //     ramps' merges (host lane, station, length, taper), the paint's junction boxes and stop lines.
 // Where nothing states a part yet (turn paths through junctions, which lines between lanes may be crossed, crosswalks,
-// the parking spaces along a kerb, street names, blocks, signal groups), it is EMPTY, and the model's `notStated` list
-// says so. Where the build
+// the parking spaces along a kerb, blocks, signal groups), it is EMPTY, and the model's `notStated` list says so. Street
+// names are stated since ADR-0420 (the road file's streets[].name), as ATTACHMENTS (below). Where the build
 // does not match what was stated (a box the paint found that no stated junction holds, an arm with no box), it is in
 // `problems`, with its place.
 //
 // IDS. A junction or street is named by the road file's id; a lane by the builder's lane id (edge.f0, edge.pocket, ...).
 // Inside the model they are indices into its arrays (GraphIndex, as the lane graph uses), stable for one road file.
 //
-// STORED in its own cache file (cache/roadmodel, road_model_cache below), keyed by the city's bake key, the layout's
-// bytes and kRoadModelVersion. Not in the level's bake yet: that would re-bake every level (a later step).
+// TWO LAYERS, ONE MODEL (ADR-0420). The PLANNED LAYER is everything the road file alone states -- junctions, arms,
+// streets and their centre lines, cross-sections, one-way, carrying on, through pairs, divided roads, ramps, crossings,
+// names -- read in milliseconds (plannedRoadModel), and published when a level loads (components.h LevelRoadModel), for
+// the readers that only label the roads (street names, name signs, the map). The BUILT LAYER is what the road build adds
+// -- lanes with their curves and heights, connections, junction heights, the paint's boxes and stop lines -- assembled
+// from a build (assembleRoadModel = the planned layer + the built parts), stored in its own cache file (cache/roadmodel,
+// below), keyed by the city's bake key, the layout's bytes and kRoadModelVersion; not in the level's bake yet (that would
+// re-bake every level). A planned-only model is the same structure with its built parts empty, `built` false, and its
+// `notStated` list says which.
+//
+// ATTACHMENTS (design section 1: "a bus stop is street 41, station 120, kerb side"). Anything that belongs to a street or
+// a junction is attached to it by id: its KIND is data (assets/data/road_attachments.json: what it may attach to -- a
+// street, a junction, or an arm of a junction), never a branch in code. The first users: a street's NAME (from the road
+// file) and a NAME SIGN at a junction arm (the loader's sign plan).
 
+#include "engine/procgen/city/road_network.h"        // RoadClass: the engine's class of a street
 #include "engine/procgen/city/roads/lane_graph.h"   // GraphIndex, Range, kNoIndex: the lane graph's index types
+
+#include <nlohmann/json.hpp>
 
 #include <array>
 #include <cmath>
@@ -48,6 +63,7 @@ namespace engine {
 
 namespace roads::lanes {
 struct Result;
+struct RoadLabGraph;
 }  // namespace roads::lanes
 namespace bundle {
 struct LevelInputs;
@@ -100,6 +116,7 @@ struct ModelJunction {
 // LaneLayout::parking): `parking` its width where the road states one that fits (streetSection), 0 none.
 struct ModelSection {
     std::string roadClass;
+    RoadClass klass = RoadClass::Local;        // the engine's class for it (roads/lanes classOf: the one mapping)
     int lanesForward = 0, lanesBackward = 0;   // forward: running along the spine
     Real laneWidth = 0, medianGap = 0, median = 0, shoulder = 0, sidewalk = 0;
     Real parking = 0;                          // the kerb parking band's width along each kerb (m); 0: none
@@ -119,7 +136,41 @@ struct ModelStreet {
     Real speedLimit = 0;             // metres per second; 0: none posted
     Real lotsFrom = -1, lotsTo = -1; // where buildings may front it (the road's lots_range); -1: all of it
     std::string frontageOf;          // a frontage road: the freeway carriageway it runs beside
-    std::vector<ModelLaneId> lanes;  // its lanes, forward then backward, each by slot from the centre line
+    Range line;                      // into linePoints: its centre line, `from` to `to` (planned: the road file's spine)
+    std::vector<ModelLaneId> lanes;  // its lanes, forward then backward, each by slot from the centre line (built layer)
+    // The width the travel lanes take across, both ways (lanes x width + the median gap): what the map draws.
+    Real travelWidth() const {
+        return (section.lanesForward + section.lanesBackward) * section.laneWidth + section.medianGap;
+    }
+};
+
+// WHAT A KIND OF ATTACHMENT IS (assets/data/road_attachments.json): its name, what it attaches to ("street", "junction"
+// or "arm"), and whether it is the street's name (what a reader asks for when it wants one).
+struct AttachmentKind {
+    std::string name, on;
+    bool names = false;
+};
+struct AttachmentKinds {
+    std::vector<AttachmentKind> kinds;
+    std::vector<std::pair<std::string, std::string>> uses;   // a reader's role -> the kind it writes or reads
+    const AttachmentKind* find(const std::string& name) const;
+    std::string use(const std::string& role) const;          // the kind a role uses (empty: none)
+};
+AttachmentKinds parseAttachmentKinds(const nlohmann::json& doc);
+// assets/data/road_attachments.json, read once; a built-in copy of the shipped kinds when the file is missing.
+const AttachmentKinds& attachmentKinds();
+
+// ONE THING ATTACHED TO THE ROADS. On a street: `street` (and `station` along its road; kNotStated: the whole street). On a
+// junction: `junction`. On an arm: `junction` and `arm`, and `street` is the arm's street. `text`: what it says (a name).
+// `at`: where it stands in plan, when the attaching reader placed it (a sign's post); kNotStated when not.
+struct ModelAttachment {
+    std::string kind;
+    ModelStreetId street;
+    ModelJunctionId junction;
+    int arm = -1;
+    Real station = kNotStated;
+    std::string text;
+    Vec2 at = Vec2(kNotStated, kNotStated);
 };
 
 // One lane's stretch on one street.
@@ -177,6 +228,7 @@ struct ModelCrossing {
 
 struct RoadModel {
     std::string name;
+    bool built = false;                   // the built layer is here (assembleRoadModel); false: the planned layer alone
     std::vector<ModelJunction> junctions;
     std::vector<ModelStreet> streets;
     std::vector<ModelLane> lanes;
@@ -188,6 +240,8 @@ struct RoadModel {
     // spine's samples; a connector's: kNotStated)
     std::vector<Vec2> points;
     std::vector<Real> along, heights, spineStations;
+    std::vector<Vec2> linePoints;         // the streets' centre lines (ModelStreet::line ranges into it)
+    std::vector<ModelAttachment> attachments;   // in the order attached
     std::vector<std::string> notStated;   // the parts of the design nothing states yet, in words
     std::vector<std::string> problems;    // where the build does not match what was stated, each with its place
 };
@@ -196,8 +250,18 @@ struct RoadModel {
 bool operator==(const RoadModel& a, const RoadModel& b);
 inline bool operator!=(const RoadModel& a, const RoadModel& b) { return !(a == b); }
 
-// THE MODEL OF A BUILT ROAD NETWORK: everything the road file and the build state (see the top of this file).
+// THE PLANNED LAYER: everything the road file states, read from it alone (no road build: milliseconds). `g` with its ramps
+// composed (lane_expand.h expand), so stations are the builder's. The built parts empty; `built` false.
+RoadModel plannedRoadModel(const roads::lanes::RoadLabGraph& g);
+// THE MODEL OF A BUILT ROAD NETWORK: the planned layer of the build's graph and everything the build states (see the top
+// of this file).
 RoadModel assembleRoadModel(const roads::lanes::Result& r);
+
+// ATTACHES `a` to the model: refused (false, and why in `err`) when its kind is not in `kinds`, or it is not on what its
+// kind attaches to (a street kind needs a street of the model; a junction kind a junction; an arm kind a junction and one
+// of its arms, and then its street is the arm's).
+bool attach(RoadModel& m, ModelAttachment a, const AttachmentKinds& kinds, std::string* err = nullptr);
+bool attach(RoadModel& m, ModelAttachment a, std::string* err = nullptr);   // the shipped kinds
 
 // ---- the questions (design section 6) ---------------------------------------------------------------------------------
 // The street, lane and station nearest a plan point (any lane on any street; within `within` metres, else none), and the
@@ -223,10 +287,26 @@ struct LeadsTo {
     std::vector<uint32_t> connections;   // indices into RoadModel::connections
 };
 LeadsTo leadsTo(const RoadModel& m, ModelLaneId lane);
-// What is attached to a street or a junction, in words, one line each: a street's limit, ramps anchored to it, crossings
-// on it, lots; a junction's control and the signs on its arms.
-std::vector<std::string> attachedToStreet(const RoadModel& m, ModelStreetId s);
-std::vector<std::string> attachedToJunction(const RoadModel& m, ModelJunctionId j);
+// WHAT IS ATTACHED to a street (on it, or on a junction arm that is it) or to a junction (on it, or on one of its arms):
+// indices into RoadModel::attachments, in the order attached.
+std::vector<uint32_t> attachedToStreet(const RoadModel& m, ModelStreetId s);
+std::vector<uint32_t> attachedToJunction(const RoadModel& m, ModelJunctionId j);
+// A STREET'S NAME: the text of its attachment whose kind names the street (empty: it carries none).
+std::string streetName(const RoadModel& m, ModelStreetId s, const AttachmentKinds& kinds = attachmentKinds());
+// THE NAMED STREETS AT A JUNCTION, arm by arm in order round it (by heading): each arm whose street has a name, with
+// where it meets the junction (its street's centre line at that end), the way it leaves (its stated heading), its
+// street's travel width, and the name. What the name signs read.
+struct NamedArm {
+    int arm = -1;
+    ModelStreetId street;
+    Vec2 point, dir;
+    Real travelWidth = 0;
+    std::string name;
+};
+std::vector<NamedArm> namedArmsAt(const RoadModel& m, ModelJunctionId j);
+// THE NAMED STREET NEAREST a plan point, by the streets' centre lines (planned layer), within `reach` metres; its name,
+// and `distance` (optional, out). Empty when none is in reach.
+std::string streetNameNear(const RoadModel& m, const Vec2& p, Real reach = 40, Real* distance = nullptr);
 
 // Lookups by name.
 ModelJunctionId junctionNamed(const RoadModel& m, const std::string& id);
@@ -240,9 +320,11 @@ std::string roadModelSvg(const RoadModel& m);      // junctions and streets with
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 3;    // 2: a street's kerb parking (ADR-0418); 3: where a street carries on (ADR-0419)
+constexpr uint32_t kRoadModelFormat = 4;    // 2: a street's kerb parking (ADR-0418); 3: where a street carries on (ADR-0419);
+                                            // 4: the planned layer's centre lines, engine class and attachments (ADR-0420)
 // The version of what assembleRoadModel makes: bump when it can make a different model from the same build.
-constexpr uint32_t kRoadModelVersion = 3;   // 2: a street's kerb parking (ADR-0418); 3: carrying on, no two-arm junctions (ADR-0419)
+constexpr uint32_t kRoadModelVersion = 4;   // 2: a street's kerb parking (ADR-0418); 3: carrying on, no two-arm junctions (ADR-0419);
+                                            // 4: names as attachments, centre lines (ADR-0420)
 void putRoadModel(bundle::BinWriter& w, const RoadModel& m);
 bool getRoadModel(bundle::BinReader& r, RoadModel& m, std::string* err);
 
@@ -256,13 +338,13 @@ bool writeRoadModelCache(const std::string& path, uint64_t key, const RoadModel&
 bool readRoadModelCache(const std::string& path, uint64_t key, RoadModel& m, std::string* err);
 // A LEVEL'S ROAD MODEL, from the cache or built (the road build, then assembleRoadModel) and saved. The first city only,
 // as the lane graph. Null and `err` when the level has no lane-built city or the build fails.
-struct LevelRoadModel {
+struct ObtainedRoadModel {
     std::shared_ptr<const RoadModel> model;
     uint64_t key = 0;
     std::string path;
     bool fromCache = false, saved = false;
 };
-LevelRoadModel obtainLevelRoadModel(const bundle::LevelInputs& in, const std::string& cacheDir, std::string* err);
+ObtainedRoadModel obtainLevelRoadModel(const bundle::LevelInputs& in, const std::string& cacheDir, std::string* err);
 
 }  // namespace engine
 

@@ -35,6 +35,7 @@
 // stage of the bake reads it).
 
 #include "engine/procgen/city/roads/lanes/road_graph_spec.h"
+#include "engine/procgen/city/street_names.h"   // StreetNameBook: the planner's name generator
 
 #include <nlohmann/json.hpp>
 
@@ -93,6 +94,41 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
 // goes with the comma before it (or, the first of its object, the one after it), so text the layout was inserted into
 // comes back byte for byte. Text with none of them is returned as it was. What the city's bake key hashes.
 std::string stripLayoutText(const std::string& text);
+
+// ---- the streets' names (ADR-0420) --------------------------------------------------------------------------------------
+// A RUN is the streets that are one street carrying on, as the file states it: the two streets of a junction's `through`
+// pair, a street and the one it `carries_on` into, and every street of a divided road's two carriageways. Only streets of
+// a class that carries a name take part (`named`, per street); a run never passes through one that does not (a freeway
+// that carries on as a boulevard). Runs in order of their first street; each run's streets in layout order.
+std::vector<std::vector<std::size_t>> streetRuns(const std::vector<PlannedJunction>& junctions, const std::vector<PlannedStreet>& streets,
+                                                 const std::vector<DividedPair>& divided, const std::vector<char>& named);
+// Whether a street of graph `g` carries a name: its road's class is not one the book leaves unnamed, nor a track or a
+// footway, and it has lanes.
+std::vector<char> namedStreets(const RoadLabGraph& g, const std::vector<PlannedStreet>& streets, const StreetNameBook& book);
+// A name a file already states, on a stretch of a road (what a re-derived layout keeps: the street of that road whose
+// middle lies in the stretch takes it).
+struct NamedStretch {
+    std::string road;
+    double from = 0, to = 0;
+    std::string name;
+};
+std::vector<NamedStretch> namedStretches(const std::vector<PlannedStreet>& streets, const std::string& roadPrefix = std::string());
+// NAMES EVERY RUN: a run with a street under a kept name takes that name (its longest such street's); every other run
+// gets a new one from the book (street_names.h nameRuns: by the run's length, its widest carriageway -- a divided road's
+// two together -- and the class of its longest street), never one already kept. Writes `name` into each street of each
+// run (and clears it on a street that carries none).
+struct NamingReport {
+    uint32_t runs = 0, kept = 0, generated = 0, streets = 0;
+};
+NamingReport nameStreetRuns(std::vector<PlannedStreet>& streets, const std::vector<PlannedJunction>& junctions,
+                            const std::vector<DividedPair>& divided, const RoadLabGraph& g, const StreetNameBook& book,
+                            const std::vector<NamedStretch>& keep = {});
+// The same for a layout, with the shipped book.
+NamingReport nameLayout(RoadLayout& layout, const RoadLabGraph& g, const std::vector<NamedStretch>& keep = {});
+// WRITES THE STREETS' NAMES INTO A ROAD FILE'S TEXT IN PLACE: a "name" in each street object of its "streets" list that has
+// none, from `streets` (the file's own list, in its order). Nothing else moves; stripped, the text is as it was (the bake
+// key does not see it). Empty (with `err`) when the list does not fit.
+std::string insertStreetNamesText(const std::string& text, const std::vector<PlannedStreet>& streets, std::string* err = nullptr);
 
 }  // namespace roads::lanes
 }  // namespace engine

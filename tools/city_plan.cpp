@@ -98,12 +98,18 @@ static void designScene(nlohmann::json& scene) {
     if (scene.contains("junctions"))
         for (const nlohmann::json& j : scene["junctions"]) controls = controls || j.contains("control");
     if (!controls) {
+        // the streets' names the scene already states are kept (ADR-0420): only new runs are named
+        std::vector<engine::roads::lanes::NamedStretch> keep;
+        if (scene.contains("streets"))
+            keep = engine::roads::lanes::namedStretches(engine::roads::lanes::RoadLabGraph::fromJson(scene).streets);
         scene.erase("junctions");
         scene.erase("streets");
-        const engine::roads::lanes::RoadLayout layout = engine::roads::lanes::deriveLayout(
-            engine::roads::lanes::RoadLabGraph::fromJson(scene), engine::roads::lanes::LayoutSource::Planner);
+        const engine::roads::lanes::RoadLabGraph g = engine::roads::lanes::RoadLabGraph::fromJson(scene);
+        engine::roads::lanes::RoadLayout layout = engine::roads::lanes::deriveLayout(g, engine::roads::lanes::LayoutSource::Planner);
+        const engine::roads::lanes::NamingReport names = engine::roads::lanes::nameLayout(layout, g, keep);
         engine::roads::lanes::writeLayout(scene, layout);
-        std::printf("layout: %s", engine::roads::lanes::describeLayout(layout).c_str());
+        std::printf("layout: %s  names: %u runs, %u kept, %u new\n", engine::roads::lanes::describeLayout(layout).c_str(), names.runs,
+                    names.kept, names.generated);
     }
 }
 
@@ -315,18 +321,40 @@ int main(int argc, char** argv) {
             else if (!plan.ringArc.empty()) engine::joinFreewayToRing(w, static_cast<int>(k), plan.ringArc, false);
             else if (!plan.ring.empty()) engine::joinFreewayToRing(w, static_cast<int>(k), plan.ring, true);
             {
-                // the arterials' junctions, each with its street's name (street_names.h), for the links
-                engine::StreetNamingParams np;
-                np.seed = b.seed;
-                const engine::StreetNaming naming = engine::nameStreets(plan.streets, np);
+                // the arterials' junctions, each with its street's name, for the links. THE NAME IS THE PLANNER'S
+                // (ADR-0420): the one its scene gives the street that plan chain became (planToLanesScene names chain i's
+                // road "s<i>", or its pieces "s<i>_..."); a chain the scene closed or joined into another has none
+                std::map<std::size_t, std::string> nameOfChain;
+                {
+                    const nlohmann::json named = planToLanesScene(plan);
+                    std::map<std::string, std::string> nameOfRoad;
+                    for (const nlohmann::json& sj : named.value("streets", nlohmann::json::array()))
+                        if (sj.contains("name") && !nameOfRoad.count(sj.at("road").get<std::string>()))
+                            nameOfRoad[sj.at("road").get<std::string>()] = sj["name"].get<std::string>();
+                    const std::vector<PlanChain> chains = chainsOf(plan.streets);
+                    for (std::size_t i = 0; i < chains.size(); ++i) {
+                        const std::string sid = "s" + std::to_string(i);
+                        for (const std::pair<const std::string, std::string>& rn : nameOfRoad)
+                            if (rn.first == sid || rn.first.rfind(sid + "_", 0) == 0) { nameOfChain[i] = rn.second; break; }
+                    }
+                }
+                std::map<std::pair<int, int>, std::size_t> chainOfEdge;
+                {
+                    const std::vector<PlanChain> chains = chainsOf(plan.streets);
+                    for (std::size_t i = 0; i < chains.size(); ++i)
+                        for (std::size_t q = 0; q + 1 < chains[i].nodes.size(); ++q)
+                            chainOfEdge[std::minmax(chains[i].nodes[q], chains[i].nodes[q + 1])] = i;
+                }
                 std::vector<engine::Vec2> art;
                 std::vector<std::string> names;
                 for (std::size_t ei = 0; ei < plan.streets.edges.size(); ++ei) {
                     const auto& e = plan.streets.edges[ei];
                     if (e.klass != engine::RoadClass::Arterial) continue;
-                    const int st = naming.streetOf(static_cast<int>(ei));
-                    const std::string nm = st >= 0 ? engine::abbreviateStreetName(naming.streets[static_cast<std::size_t>(st)].name) : std::string();
-                    for (int nd : {e.a, e.b}) { art.push_back(plan.streets.nodes[static_cast<std::size_t>(nd)].pos); names.push_back(nm); }
+                    const std::map<std::pair<int, int>, std::size_t>::const_iterator ch = chainOfEdge.find(std::minmax(e.a, e.b));
+                    const std::map<std::size_t, std::string>::const_iterator nm =
+                        ch == chainOfEdge.end() ? nameOfChain.end() : nameOfChain.find(ch->second);
+                    const std::string name = nm == nameOfChain.end() ? std::string() : engine::abbreviateStreetName(nm->second);
+                    for (int nd : {e.a, e.b}) { art.push_back(plan.streets.nodes[static_cast<std::size_t>(nd)].pos); names.push_back(name); }
                 }
                 // (a place with no arterial -- a hamlet's street is a local one -- offers all its junctions: the roads
                 // that run into it join where they meet it)

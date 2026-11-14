@@ -3,11 +3,15 @@
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/street_names.h"
 #include "../src/engine/procgen/city/street_signs.h"
+#include "../src/engine/procgen/city/roads/lanes/lane_expand.h"
+#include "../src/engine/procgen/city/roads/lanes/road_layout.h"
+#include "../src/engine/procgen/city/roads/road_model.h"
 #include "../src/engine/text/font.h"
 
 #include <nlohmann/json.hpp>
 
 #include <cmath>
+#include <iterator>
 #include <map>
 #include <set>
 #include <string>
@@ -17,56 +21,93 @@ using namespace engine;
 // STREET NAMES AND THEIR SIGNS (Glenn, 2026-09-19: "It would be nice to have in
 // world signs for streets ... composite textures and store a list of all the
 // street sign textures and map them to the right signs and make sure they fit
-// and are legible").
+// and are legible"). Since ADR-0420 a street's name is the road file's (a run of
+// streets that are one street carrying on, named by the planner) and a sign stands
+// at a junction of the road model where two named streets meet.
 
 namespace {
 
-// A grid of streets sampled every `step` metres, like metro's polylines: a
-// junction every `pitch`, plain nodes between. Rows 12 m wide, columns 9 m.
-RoadGraph sampledGrid(int n, Real pitch, Real step) {
-    RoadGraph g;
-    std::map<std::pair<long, long>, int> at;
-    auto node = [&](Real x, Real z) {
-        const auto key = std::make_pair(std::lround(x * 10), std::lround(z * 10));
-        auto it = at.find(key);
-        if (it != at.end()) return it->second;
-        g.nodes.push_back(RoadNode{Vec2(x, z)});
-        at[key] = static_cast<int>(g.nodes.size()) - 1;
-        return static_cast<int>(g.nodes.size()) - 1;
-    };
-    const int k = static_cast<int>(std::lround(pitch / step));
+// A GRID OF ROADS as a road file: n rows (east-west, 12 m: one 6 m lane each way) and n columns (north-south, 9 m:
+// 4.5 m lanes), `pitch` apart, each row and column a road per block, meeting at the grid's points, and running on half a
+// block past the grid's edge (so its outer corners are crossings, not bends where a row would carry on as a column).
+// Its layout derived as the one-off tool does, and named with `book`.
+nlohmann::json gridScene(int n, Real pitch, const StreetNameBook& book) {
+    nlohmann::json g;
+    g["name"] = "grid";
+    g["classes"]["row"] = {{"w", 6.0}, {"fwd", 1}, {"back", 1}, {"sidewalk", 0.0}, {"g_max", 0.1}, {"window", 40}, {"thick", 0.5}};
+    g["classes"]["col"] = {{"w", 4.5}, {"fwd", 1}, {"back", 1}, {"sidewalk", 0.0}, {"g_max", 0.1}, {"window", 40}, {"thick", 0.5}};
+    nlohmann::json edges = nlohmann::json::array();
     for (int j = 0; j < n; ++j)
-        for (int i = 0; i + 1 < n; ++i)
-            for (int s = 0; s < k; ++s) {
-                g.addEdge(node(i * pitch + s * step, j * pitch),
-                          node(i * pitch + (s + 1) * step, j * pitch), 12.0);
-                g.addEdge(node(j * pitch, i * pitch + s * step),
-                          node(j * pitch, i * pitch + (s + 1) * step), 9.0);
-            }
+        for (int i = -1; i < n; ++i) {
+            const Real a = i < 0 ? -0.5 * pitch : i * pitch, b = i + 1 >= n ? (n - 0.5) * pitch : (i + 1) * pitch;
+            edges.push_back({{"id", "r" + std::to_string(j) + "_" + std::to_string(i + 1)}, {"class", "row"},
+                             {"path", {{"points", {{a, j * pitch}, {b, j * pitch}}}}}});
+            edges.push_back({{"id", "c" + std::to_string(j) + "_" + std::to_string(i + 1)}, {"class", "col"},
+                             {"path", {{"points", {{j * pitch, a}, {j * pitch, b}}}}}});
+        }
+    g["edges"] = edges;
+    const roads::lanes::RoadLabGraph graph = roads::lanes::RoadLabGraph::fromJson(g);
+    roads::lanes::RoadLayout layout = roads::lanes::deriveLayout(graph, roads::lanes::LayoutSource::Inferred);
+    roads::lanes::nameStreetRuns(layout.streets, layout.junctions, layout.divided, graph, book);
+    roads::lanes::writeLayout(g, layout);
     return g;
+}
+
+// The scene's planned road model (as a level loads it).
+RoadModel modelOf(const nlohmann::json& scene) {
+    roads::lanes::RoadLabGraph g = roads::lanes::RoadLabGraph::fromJson(scene);
+    (void)roads::lanes::expand(g);
+    return plannedRoadModel(g);
+}
+
+// The model's streets as drawn carriageways (what a post keeps clear of): each centre line, its travel width.
+RoadGraph carriageways(const RoadModel& m) {
+    RoadGraph g;
+    for (const ModelStreet& s : m.streets)
+        for (uint32_t k = s.line.first; k + 1 < s.line.end(); ++k) {
+            g.nodes.push_back(RoadNode{m.linePoints[k]});
+            g.nodes.push_back(RoadNode{m.linePoints[k + 1]});
+            g.addEdge(static_cast<int>(g.nodes.size()) - 2, static_cast<int>(g.nodes.size()) - 1, s.travelWidth());
+        }
+    return g;
+}
+
+// Every junction of the model where named streets meet, as the loader hands them to the sign plan.
+std::vector<SignCorner> cornersOf(const RoadModel& m) {
+    std::vector<SignCorner> out;
+    for (std::size_t j = 0; j < m.junctions.size(); ++j) {
+        SignCorner c;
+        c.city = 0;
+        c.junction = static_cast<int>(j);
+        for (const NamedArm& a : namedArmsAt(m, ModelJunctionId(static_cast<uint32_t>(j))))
+            c.arms.push_back({a.arm, a.point, a.dir, a.travelWidth * 0.5, a.name});
+        out.push_back(c);
+    }
+    return out;
 }
 
 }  // namespace
 
 TEST_CASE(street_names_follow_a_street_through_its_junctions) {
-    const RoadGraph g = sampledGrid(4, 80.0, 4.0);
-    const StreetNaming n = nameStreets(g);
-    // 4 rows + 4 columns, each one street end to end -- not 3 stubs apiece.
-    CHECK(n.streets.size() == 8);
-    std::set<std::string> names;
-    for (const Street& s : n.streets) {
-        names.insert(s.name);
-        CHECK(std::fabs(s.length - 240.0) < 1e-6);
+    const RoadModel m = modelOf(gridScene(4, 80.0, streetNameBook()));
+    // 4 rows + 4 columns, each one street end to end (its through pairs) -- not 3 stubs apiece: 8 names
+    std::map<std::string, Real> lengthOf;
+    for (std::size_t s = 0; s < m.streets.size(); ++s) {
+        const std::string name = streetName(m, ModelStreetId(static_cast<uint32_t>(s)));
+        CHECK(!name.empty());
+        lengthOf[name] += m.streets[s].to - m.streets[s].from;
     }
-    CHECK(names.size() == n.streets.size());   // unique
-    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) CHECK(n.streetOf(e) >= 0);
-    // Rows (12 m) and columns (9 m) never share a street.
-    for (const Street& s : n.streets)
-        for (int e : s.edges) CHECK(g.edges[static_cast<std::size_t>(e)].width == s.width);
-    // Deterministic.
-    const StreetNaming again = nameStreets(g);
-    for (std::size_t i = 0; i < n.streets.size(); ++i)
-        CHECK(again.streets[i].name == n.streets[i].name);
+    CHECK(lengthOf.size() == 8u);   // unique per run
+    for (const auto& [name, len] : lengthOf) CHECK(std::fabs(len - 320.0) < 1.0);   // three blocks and two half blocks
+    // rows (12 m) and columns (9 m) never share a name
+    std::map<std::string, std::set<std::string>> classesOf;
+    for (std::size_t s = 0; s < m.streets.size(); ++s)
+        classesOf[streetName(m, ModelStreetId(static_cast<uint32_t>(s)))].insert(m.streets[s].section.roadClass);
+    for (const auto& [name, cls] : classesOf) CHECK(cls.size() == 1u);
+    // deterministic
+    const RoadModel again = modelOf(gridScene(4, 80.0, streetNameBook()));
+    for (std::size_t s = 0; s < m.streets.size(); ++s)
+        CHECK(streetName(again, ModelStreetId(static_cast<uint32_t>(s))) == streetName(m, ModelStreetId(static_cast<uint32_t>(s))));
     CHECK(abbreviateStreetName("Oak Boulevard") == "Oak Blvd");
     CHECK(abbreviateStreetName("Market Street") == "Market St");
     CHECK(abbreviateStreetName("Mill") == "Mill");
@@ -74,14 +115,15 @@ TEST_CASE(street_names_follow_a_street_through_its_junctions) {
 
 // THE NAMES ARE CONTENT, NOT CODE (Glenn, 2026-09-20: "I'm starting to wonder
 // if some of this shouldn't be data and not baked into the C++").
-// assets/data/streets.json holds the words, the suffix a width carries and the
-// sign shop's abbreviations; the C++ holds only the algorithm.
+// assets/data/streets.json holds the words, the suffix a width carries, the classes
+// that carry no name and the sign shop's abbreviations; the C++ holds only the algorithm.
 TEST_CASE(street_names_come_from_the_streets_asset) {
     // The shipped book really loaded (not the built-in fallback).
     const StreetNameBook& shipped = streetNameBook();
     CHECK(shipped.fromAsset);
     CHECK(shipped.banks.size() >= 2);
     CHECK(shipped.abbreviations.count("Boulevard") == 1);
+    CHECK(shipped.unnamed.count("freeway") == 1 && shipped.unnamed.count("ramp") == 1);
 
     // A book authored here names the city from ITS words and suffixes.
     const nlohmann::json doc = nlohmann::json::parse(R"({
@@ -94,42 +136,45 @@ TEST_CASE(street_names_come_from_the_streets_asset) {
     })");
     const StreetNameBook book = parseStreetNameBook(doc);
     CHECK(book.usable());
-    const RoadGraph g = sampledGrid(4, 80.0, 4.0);
-    const StreetNaming n = nameStreets(g, book);
-    CHECK(n.streets.size() == 8);
-    for (const Street& s : n.streets) {
-        const std::string word = s.name.substr(0, s.name.find(' '));
-        const std::string suffix = s.name.substr(s.name.find(' ') + 1);
+    const RoadModel m = modelOf(gridScene(4, 80.0, book));
+    std::set<std::string> names;
+    for (std::size_t s = 0; s < m.streets.size(); ++s) {
+        const std::string name = streetName(m, ModelStreetId(static_cast<uint32_t>(s)));
+        names.insert(name);
+        const std::string word = name.substr(0, name.find(' '));
+        const std::string suffix = name.substr(name.find(' ') + 1);
         CHECK(word == "Tabby" || word == "Calico" || word == "Tortoise" || word == "Siamese");
         // Rows are 12 m (Causeway), columns 9 m (Mews).
-        CHECK(suffix == (s.width >= 11 ? "Causeway" : "Mews"));
+        CHECK(suffix == (m.streets[s].travelWidth() >= 11 ? "Causeway" : "Mews"));
     }
+    CHECK(names.size() == 8u);
+    // the generator alone: a class suffix wins over the width; a kept name is never given again
+    const std::vector<std::string> two = nameRuns({{100, 20, "alley"}, {50, 5, "local"}}, book, 0, {"Tabby Mews"});
+    CHECK(two[0].substr(two[0].find(' ') + 1) == "Ginnel");
+    CHECK(two[1] != "Tabby Mews" && two[1].rfind("Tabby", 0) != 0);
     CHECK(abbreviateStreetName("Calico Causeway", book) == "Calico Cswy");
     // The shipped book does not know "Causeway"; a book is self-contained.
     CHECK(abbreviateStreetName("Calico Causeway", shipped) == "Calico Causeway");
 }
 
 TEST_CASE(street_signs_stand_on_the_corner_with_the_right_names) {
-    const RoadGraph g = sampledGrid(4, 80.0, 4.0);
-    const StreetNaming n = nameStreets(g);
+    const RoadModel m = modelOf(gridScene(4, 80.0, streetNameBook()));
     StreetSignParams p;
-    const std::vector<StreetSignPost> posts =
-        planStreetSigns(g, n, [](Real, Real) { return 0.0; }, p);
-    // Every junction (degree >= 3) gets a post: 4 corners are degree 2, so
-    // 16 - 4 = 12 junctions.
-    CHECK(posts.size() == 12);
+    const std::vector<StreetSignPost> posts = planStreetSigns(cornersOf(m), carriageways(m), [](Real, Real) { return 0.0; }, p);
+    // Every junction gets a post: the grid's 16 crossings
+    CHECK(m.junctions.size() == 16u);
+    CHECK(posts.size() == 16u);
     for (const StreetSignPost& post : posts) {
-        const Vec2 o = g.nodes[static_cast<std::size_t>(post.node)].pos;
-        // The blades name exactly the streets that meet here.
-        std::set<int> want, have;
-        for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
-            const RoadEdge& ed = g.edges[static_cast<std::size_t>(e)];
-            if (ed.a == post.node || ed.b == post.node) want.insert(n.streetOf(e));
-        }
+        const ModelJunction& J = m.junctions[static_cast<std::size_t>(post.junction)];
+        const Vec2 o = J.at;
+        // The blades name exactly the streets that meet here, each attached to an arm that is its street.
+        std::set<std::string> want, have;
+        for (const NamedArm& a : namedArmsAt(m, ModelJunctionId(static_cast<uint32_t>(post.junction)))) want.insert(a.name);
         for (const StreetSignBlade& b : post.blades) {
-            have.insert(b.street);
+            have.insert(b.name);
+            CHECK(b.arm >= 0 && streetName(m, J.arms[static_cast<std::size_t>(b.arm)].street) == b.name);
             // Parallel to its street: rows run along X, columns along Z.
-            const bool row = n.streets[static_cast<std::size_t>(b.street)].width == 12.0;
+            const bool row = m.streets[J.arms[static_cast<std::size_t>(b.arm)].street.index].section.roadClass == "row";
             CHECK(row ? std::fabs(b.along.y) < 1e-6 : std::fabs(b.along.x) < 1e-6);
         }
         CHECK(have == want);
@@ -139,34 +184,55 @@ TEST_CASE(street_signs_stand_on_the_corner_with_the_right_names) {
         CHECK(dx >= 4.5 + p.kerbGap * 0.9);   // the 9 m column's
         CHECK(dx < 4.5 + p.sidewalkWidth + 3.0 && dz < 6.0 + p.sidewalkWidth + 3.0);
     }
+    // each blade attached to the model, at the arm it names
+    RoadModel withSigns = m;
+    int attached = 0;
+    for (const StreetSignPost& post : posts)
+        for (const StreetSignBlade& b : post.blades) {
+            ModelAttachment a;
+            a.kind = attachmentKinds().use("name_sign");
+            a.junction = ModelJunctionId(static_cast<uint32_t>(post.junction));
+            a.arm = b.arm;
+            a.text = b.name;
+            attached += attach(withSigns, a) ? 1 : 0;
+        }
+    std::size_t blades = 0;
+    for (const StreetSignPost& post : posts) blades += post.blades.size();
+    CHECK(attached == static_cast<int>(blades));
 }
 
 TEST_CASE(street_sign_blades_fit_and_are_legible) {
     const Font* font = signFont();
     CHECK(font != nullptr);
     if (!font) return;
-    // A name no blade holds at full size: it must abbreviate / condense,
-    // never clip.
-    RoadGraph g = sampledGrid(3, 80.0, 4.0);
-    StreetNaming n = nameStreets(g);
-    n.streets[0].name = "Seventeenth Boulevard";
-    n.streets[1].name = "Exchange Parkway";
+    // A name no blade holds at full size: it must abbreviate / condense, never clip.
+    RoadModel m = modelOf(gridScene(3, 80.0, streetNameBook()));
+    std::vector<SignCorner> corners = cornersOf(m);
+    std::set<std::string> names;
+    for (const SignCorner& c : corners) for (const SignCorner::Arm& a : c.arms) names.insert(a.name);
+    CHECK(names.size() >= 2u);
+    const std::string first = *names.begin(), second = *std::next(names.begin());
+    for (SignCorner& c : corners)
+        for (SignCorner::Arm& a : c.arms) {
+            if (a.name == first) a.name = "Seventeenth Boulevard";
+            else if (a.name == second) a.name = "Exchange Parkway";
+        }
     StreetSignParams p;
-    const auto posts = planStreetSigns(g, n, [](Real, Real) { return 0.0; }, p);
-    const SignAtlas atlas = buildSignAtlas(*font, n, posts, p);
+    const auto posts = planStreetSigns(corners, carriageways(m), [](Real, Real) { return 0.0; }, p);
+    const SignAtlas atlas = buildSignAtlas(*font, posts, p);
     CHECK(!atlas.pages.empty());
     const int pad = static_cast<int>(std::lround(p.bladePx * 0.28));
     for (const auto& [s, b] : atlas.blades) {
-        std::printf("    [sign] %-24s -> \"%s\" %d px wide, capitals %.1f px%s%s\n",
-                    n.streets[static_cast<std::size_t>(s)].name.c_str(), b.text.c_str(), b.wPx,
-                    b.capPx, b.abbreviated ? ", abbreviated" : "",
-                    b.xScale < 0.999f ? ", condensed" : "");
+        std::printf("    [sign] %-24s -> \"%s\" %d px wide, capitals %.1f px%s%s\n", s.c_str(), b.text.c_str(), b.wPx, b.capPx,
+                    b.abbreviated ? ", abbreviated" : "", b.xScale < 0.999f ? ", condensed" : "");
         CHECK(b.textPx + 2 * pad <= b.wPx + 1);            // the lettering fits the blade
         CHECK(b.capPx >= 0.40f * p.bladePx);               // and is not shrunk illegible
         CHECK(b.widthM() <= p.maxBladeWidth + 1e-6);
         CHECK(b.u1 > b.u0 && b.v1 > b.v0 && b.u1 <= 1.0f && b.v1 <= 1.0f);
     }
-    const SignBlade& longest = atlas.blades.at(0);
+    CHECK(atlas.blades.count("Seventeenth Boulevard") == 1u);
+    if (!atlas.blades.count("Seventeenth Boulevard")) return;
+    const SignBlade& longest = atlas.blades.at("Seventeenth Boulevard");
     CHECK(longest.abbreviated);                              // "Seventeenth Blvd"
     CHECK(longest.text == "Seventeenth Blvd");
     // The lettering is really there: the blade's pixels hold white ink.
@@ -180,13 +246,13 @@ TEST_CASE(street_sign_blades_fit_and_are_legible) {
     CHECK(white > 200);
 
     // Meshes: two faces per blade, each a quad.
-    const StreetSignMeshes m = buildStreetSignMeshes(posts, atlas, p);
+    const StreetSignMeshes sm = buildStreetSignMeshes(posts, atlas, p);
     std::size_t quads = 0;
-    for (const auto& c : m.blades) quads += c.mesh.indices.size() / 6;
+    for (const auto& c : sm.blades) quads += c.mesh.indices.size() / 6;
     std::size_t blades = 0;
     for (const auto& post : posts) blades += post.blades.size();
     CHECK(quads == blades * 2);
-    CHECK(m.posts.size() == posts.size());
+    CHECK(sm.posts.size() == posts.size());
 }
 
 // NEON (storefronts stage 3): a bar's name in script tube, a club's in tube letters -- pale glass on a dark plate by

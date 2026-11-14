@@ -10,7 +10,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <map>
+#include <set>
 #include <tuple>
 
 namespace engine {
@@ -119,6 +121,7 @@ nlohmann::json streetJson(const PlannedStreet& st) {
         for (const std::string& c : st.carriesOn) on.push_back(c.empty() ? nlohmann::json() : nlohmann::json(c));
         s["carries_on"] = on;
     }
+    if (!st.name.empty()) s["name"] = st.name;
     return s;
 }
 
@@ -602,6 +605,192 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
     }
     out.append(text, at, kNone);
     if (stripLayoutText(out) != text) return fail("the layout, written in, does not strip back to the file it was written into");
+    return out;
+}
+
+// ---- the streets' names (ADR-0420) ------------------------------------------------------------------------------------
+
+std::vector<std::vector<std::size_t>> streetRuns(const std::vector<PlannedJunction>& junctions, const std::vector<PlannedStreet>& streets,
+                                                 const std::vector<DividedPair>& divided, const std::vector<char>& named) {
+    std::map<std::string, std::size_t> index;
+    std::map<std::string, std::vector<std::size_t>> ofRoad;
+    for (std::size_t i = 0; i < streets.size(); ++i) {
+        index[streets[i].id] = i;
+        ofRoad[streets[i].road].push_back(i);
+    }
+    std::vector<std::size_t> parent(streets.size());
+    for (std::size_t i = 0; i < parent.size(); ++i) parent[i] = i;
+    std::function<std::size_t(std::size_t)> root = [&](std::size_t i) { return parent[i] == i ? i : parent[i] = root(parent[i]); };
+    auto isNamed = [&](std::size_t i) { return i < named.size() && named[i]; };
+    auto unite = [&](std::size_t a, std::size_t b) {
+        if (!isNamed(a) || !isNamed(b)) return;
+        a = root(a);
+        b = root(b);
+        if (a != b) parent[std::max(a, b)] = std::min(a, b);
+    };
+    auto streetIndex = [&](const std::string& id, std::size_t& out) {
+        const std::map<std::string, std::size_t>::const_iterator it = index.find(id);
+        if (it == index.end()) return false;
+        out = it->second;
+        return true;
+    };
+    for (const PlannedJunction& j : junctions)
+        for (const std::array<int, 2>& t : j.through) {
+            std::size_t a = 0, b = 0;
+            if (t[0] < 0 || t[1] < 0 || static_cast<std::size_t>(t[0]) >= j.arms.size() || static_cast<std::size_t>(t[1]) >= j.arms.size()) continue;
+            if (streetIndex(j.arms[static_cast<std::size_t>(t[0])].street, a) && streetIndex(j.arms[static_cast<std::size_t>(t[1])].street, b)) unite(a, b);
+        }
+    for (std::size_t i = 0; i < streets.size(); ++i)
+        for (const std::string& c : streets[i].carriesOn) {
+            std::size_t b = 0;
+            if (!c.empty() && streetIndex(c, b)) unite(i, b);
+        }
+    for (const DividedPair& p : divided) {
+        std::vector<std::size_t> both;
+        for (const std::string& road : p) {
+            const std::map<std::string, std::vector<std::size_t>>::const_iterator it = ofRoad.find(road);
+            if (it != ofRoad.end()) both.insert(both.end(), it->second.begin(), it->second.end());
+        }
+        for (std::size_t k = 1; k < both.size(); ++k) unite(both.front(), both[k]);
+    }
+    std::vector<std::vector<std::size_t>> runs;
+    std::map<std::size_t, std::size_t> runOfRoot;
+    for (std::size_t i = 0; i < streets.size(); ++i) {
+        if (!isNamed(i)) continue;
+        const std::size_t r = root(i);
+        const std::map<std::size_t, std::size_t>::const_iterator it = runOfRoot.find(r);
+        if (it == runOfRoot.end()) {
+            runOfRoot[r] = runs.size();
+            runs.push_back({i});
+        } else {
+            runs[it->second].push_back(i);
+        }
+    }
+    return runs;
+}
+
+std::vector<char> namedStreets(const RoadLabGraph& g, const std::vector<PlannedStreet>& streets, const StreetNameBook& book) {
+    std::vector<char> out(streets.size(), 0);
+    for (std::size_t i = 0; i < streets.size(); ++i) {
+        const EdgeSpec* e = g.find(streets[i].road);
+        if (!e || e->laneCount() == 0) continue;
+        const RoadClassSpec& c = g.cls(*e);
+        out[i] = book.unnamed.count(e->cls) || c.track || c.footway ? 0 : 1;
+    }
+    return out;
+}
+
+std::vector<NamedStretch> namedStretches(const std::vector<PlannedStreet>& streets, const std::string& roadPrefix) {
+    std::vector<NamedStretch> out;
+    for (const PlannedStreet& s : streets)
+        if (!s.name.empty()) out.push_back(NamedStretch{roadPrefix + s.road, s.from, s.to, s.name});
+    return out;
+}
+
+NamingReport nameStreetRuns(std::vector<PlannedStreet>& streets, const std::vector<PlannedJunction>& junctions,
+                            const std::vector<DividedPair>& divided, const RoadLabGraph& g, const StreetNameBook& book,
+                            const std::vector<NamedStretch>& keep) {
+    NamingReport rep;
+    const std::vector<char> named = namedStreets(g, streets, book);
+    const std::vector<std::vector<std::size_t>> runs = streetRuns(junctions, streets, divided, named);
+    std::map<std::string, std::vector<const NamedStretch*>> keptOn;
+    std::set<std::string> taken;
+    for (const NamedStretch& k : keep) {
+        keptOn[k.road].push_back(&k);
+        taken.insert(k.name);
+    }
+    std::map<std::string, std::string> partner;
+    for (const DividedPair& p : divided) {
+        partner[p[0]] = p[1];
+        partner[p[1]] = p[0];
+    }
+    auto travelWidth = [&](const std::string& road) {
+        const EdgeSpec* e = g.find(road);
+        return e ? e->laneCount() * e->lanes.w + e->lanes.gap : 0.0;
+    };
+    std::vector<std::string> runName(runs.size());
+    std::vector<RunToName> toName;
+    std::vector<std::size_t> toNameRun;
+    for (std::size_t r = 0; r < runs.size(); ++r) {
+        RunToName shape;
+        double longest = -1, longestKept = -1;
+        for (std::size_t i : runs[r]) {
+            const PlannedStreet& s = streets[i];
+            const double len = s.to - s.from;
+            shape.length += len;
+            double w = travelWidth(s.road);
+            const std::map<std::string, std::string>::const_iterator pt = partner.find(s.road);
+            if (pt != partner.end()) w += travelWidth(pt->second);
+            shape.width = std::max(shape.width, w);
+            if (len > longest) {
+                longest = len;
+                const EdgeSpec* e = g.find(s.road);
+                shape.roadClass = e ? e->cls : std::string();
+            }
+            const double mid = 0.5 * (s.from + s.to);
+            const std::map<std::string, std::vector<const NamedStretch*>>::const_iterator kt = keptOn.find(s.road);
+            if (kt != keptOn.end())
+                for (const NamedStretch* k : kt->second)
+                    if (mid >= k->from - 1e-6 && mid <= k->to + 1e-6 && len > longestKept) {
+                        longestKept = len;
+                        runName[r] = k->name;
+                    }
+        }
+        if (runName[r].empty()) {
+            toName.push_back(shape);
+            toNameRun.push_back(r);
+        } else {
+            ++rep.kept;
+        }
+    }
+    const std::vector<std::string> fresh = nameRuns(toName, book, 0, taken);
+    for (std::size_t k = 0; k < fresh.size(); ++k) runName[toNameRun[k]] = fresh[k];
+    rep.generated = static_cast<uint32_t>(fresh.size());
+    rep.runs = static_cast<uint32_t>(runs.size());
+    for (PlannedStreet& s : streets) s.name.clear();
+    for (std::size_t r = 0; r < runs.size(); ++r)
+        for (std::size_t i : runs[r]) {
+            streets[i].name = runName[r];
+            ++rep.streets;
+        }
+    return rep;
+}
+
+NamingReport nameLayout(RoadLayout& layout, const RoadLabGraph& g, const std::vector<NamedStretch>& keep) {
+    return nameStreetRuns(layout.streets, layout.junctions, layout.divided, g, streetNameBook(), keep);
+}
+
+std::string insertStreetNamesText(const std::string& text, const std::vector<PlannedStreet>& streets, std::string* err) {
+    auto fail = [&](const std::string& why) {
+        if (err) *err = why;
+        return std::string();
+    };
+    const Text t(text);
+    std::vector<Member> top, sm;
+    if (!t.members(t.ws(0), top)) return fail("the file is not a JSON object with members");
+    const Member* list = memberNamed(top, "streets");
+    std::vector<std::size_t> elems;
+    if (!list || !t.elements(list->valueBegin, elems)) return fail("the file has no \"streets\" list");
+    if (elems.size() != streets.size()) return fail("the file's \"streets\" list and the streets named differ in length");
+    std::vector<std::pair<std::size_t, std::string>> ins;
+    for (std::size_t i = 0; i < elems.size(); ++i) {
+        if (!t.members(elems[i], sm) || sm.empty()) return fail("street " + std::to_string(i) + " is not an object");
+        const Member* id = memberNamed(sm, "id");
+        if (!id || text.substr(id->valueBegin, id->valueEnd - id->valueBegin) != nlohmann::json(streets[i].id).dump())
+            return fail("street " + std::to_string(i) + " is not " + streets[i].id + " in the file");
+        if (memberNamed(sm, "name") || streets[i].name.empty()) continue;
+        ins.emplace_back(sm.back().valueEnd, "," + leadOf(text, sm.back()) + "\"name\": " + nlohmann::json(streets[i].name).dump());
+    }
+    std::string out;
+    out.reserve(text.size() + ins.size() * 32);
+    std::size_t at = 0;
+    for (const std::pair<std::size_t, std::string>& i : ins) {
+        out.append(text, at, i.first - at);
+        out += i.second;
+        at = i.first;
+    }
+    out.append(text, at, kNone);
+    if (stripLayoutText(out) != stripLayoutText(text)) return fail("the names, written in, change what the bake key hashes");
     return out;
 }
 

@@ -70,6 +70,7 @@
 #include "procgen/city/roads/lanes/road_twin.h"   // the derived road graph: nav, furniture, map
 #include "procgen/city/roads/lanes/block_audit.h"  // sceneBlocks: city blocks straight from the pavement
 #include "procgen/city/roads/lanes/city_producer.h" // the city as a bundle producer (ADR-0084)
+#include "procgen/city/roads/road_model.h"          // the road model's planned layer at load (ADR-0420)
 #include "procgen/city/roads/lanes/lots_producer.h" // the lot pass as the second producer (milestone B)
 #include "bundle/bake.h"
 #endif
@@ -80,7 +81,6 @@
 #include "procgen/city/road_mesh.h"
 #include "procgen/city/street_furniture.h"   // build-time signal/lamp placement
 #include "procgen/city/street_kit.h"  // trafficSignalProto, streetLamp
-#include "procgen/city/street_names.h"  // nameStreets
 #include "procgen/city/street_signs.h"  // street name signs
 #include "text/font.h"                  // signFont
 #include "procgen/city/water_mesh.h"  // buildWaterMesh (ocean/lake surface)
@@ -692,6 +692,17 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
                     out->lanes.push_back(std::move(t));
                 }
                 LOG_INFO << "[roads] " << L.lanes.size() << " lanes recomputed for the traffic sim (" << g.edges.size() << " roads)";
+                // THE ROAD MODEL'S PLANNED LAYER (ADR-0420): read from the same road file (its ramps composed, as just now),
+                // one city of the level's one LevelRoadModel, in the order the level lists its cities
+                engine::LevelRoadModel* models = nullptr;
+                world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!models) models = &m; });
+                if (!models) models = &world.add<engine::LevelRoadModel>(world.create(), engine::LevelRoadModel{});
+                std::shared_ptr<engine::RoadModel> model = std::make_shared<engine::RoadModel>(engine::plannedRoadModel(g));
+                std::size_t named = 0;
+                for (std::size_t s = 0; s < model->streets.size(); ++s) named += engine::streetName(*model, engine::ModelStreetId(static_cast<uint32_t>(s))).empty() ? 0 : 1;
+                LOG_INFO << "[roads] road model (planned layer): " << model->junctions.size() << " junctions, " << model->streets.size()
+                         << " streets, " << named << " of them named";
+                models->cities.push_back(std::move(model));
             } catch (const std::exception& ex) {
                 LOG_WARN << "[roads] lanes for the traffic sim: " << ex.what() << " (cars keep the centreline offsets)";
             }
@@ -3808,11 +3819,133 @@ static GrownLots growCityLots(
 // (`citymap <path> [layers]`), and written at load for RT_CITY_SVG (all
 // layers, or RT_CITY_SVG_LAYERS=roads,sidewalks,...) and RT_FURNITURE_SVG
 // (the furniture-centric preset).
+// ---- THE LEVEL'S ROAD MODEL, AS THE LABELLING READERS READ IT (ADR-0420) -------------------------------------------------
+// The junctions to sign: every junction of every city's road model, with its named arms (road_model.h namedArmsAt).
+static std::vector<engine::SignCorner> signCornersOf(const engine::LevelRoadModel* level) {
+    std::vector<engine::SignCorner> out;
+#ifdef RT_ROADS_LANES
+    if (!level) return out;
+    for (std::size_t c = 0; c < level->cities.size(); ++c) {
+        if (!level->cities[c]) continue;
+        const engine::RoadModel& m = *level->cities[c];
+        for (std::size_t j = 0; j < m.junctions.size(); ++j) {
+            engine::SignCorner corner;
+            corner.city = static_cast<int>(c);
+            corner.junction = static_cast<int>(j);
+            for (const engine::NamedArm& a : engine::namedArmsAt(m, engine::ModelJunctionId(static_cast<uint32_t>(j))))
+                corner.arms.push_back({a.arm, a.point, a.dir, a.travelWidth * 0.5, a.name});
+            if (!corner.arms.empty()) out.push_back(std::move(corner));
+        }
+    }
+#else
+    (void)level;
+#endif
+    return out;
+}
+// Each blade of each sign, attached to the junction arm it names (the attachment kind the data gives the name signs).
+static void attachSignBlades(engine::LevelRoadModel* level, const std::vector<engine::StreetSignPost>& posts) {
+#ifdef RT_ROADS_LANES
+    if (!level) return;
+    const std::string kind = engine::attachmentKinds().use("name_sign");
+    int refused = 0;
+    std::string why;
+    for (const engine::StreetSignPost& post : posts) {
+        if (post.city < 0 || static_cast<std::size_t>(post.city) >= level->cities.size() || !level->cities[static_cast<std::size_t>(post.city)])
+            continue;
+        engine::RoadModel& m = *level->cities[static_cast<std::size_t>(post.city)];
+        for (const engine::StreetSignBlade& b : post.blades) {
+            engine::ModelAttachment a;
+            a.kind = kind;
+            a.junction = engine::ModelJunctionId(static_cast<uint32_t>(post.junction));
+            a.arm = b.arm;
+            a.text = b.name;
+            a.at = Vec2(post.base.x, post.base.z);
+            if (!engine::attach(m, a, &why)) ++refused;
+        }
+    }
+    if (refused) LOG_WARN << "[signs] " << refused << " sign blades not attached to the road model: " << why;
+#else
+    (void)level;
+    (void)posts;
+#endif
+}
+// How many named streets the level has: distinct names, city by city (a name is a run of the model's streets).
+static std::size_t namedStreetCount(const engine::LevelRoadModel* level) {
+    std::size_t n = 0;
+#ifdef RT_ROADS_LANES
+    if (level)
+        for (const std::shared_ptr<engine::RoadModel>& m : level->cities) {
+            if (!m) continue;
+            std::set<std::string> names;
+            for (std::size_t s = 0; s < m->streets.size(); ++s) {
+                const std::string name = engine::streetName(*m, engine::ModelStreetId(static_cast<uint32_t>(s)));
+                if (!name.empty()) names.insert(name);
+            }
+            n += names.size();
+        }
+#else
+    (void)level;
+#endif
+    return n;
+}
+// Every named street as JSON: {"streets": [{"city", "id", "name", "line": [[x, z], ...]}]}.
+static nlohmann::json namedStreetsJson(const engine::LevelRoadModel* level) {
+    nlohmann::json d;
+    d["streets"] = nlohmann::json::array();
+#ifdef RT_ROADS_LANES
+    if (level)
+        for (std::size_t c = 0; c < level->cities.size(); ++c) {
+            if (!level->cities[c]) continue;
+            const engine::RoadModel& m = *level->cities[c];
+            for (std::size_t s = 0; s < m.streets.size(); ++s) {
+                const std::string name = engine::streetName(m, engine::ModelStreetId(static_cast<uint32_t>(s)));
+                if (name.empty()) continue;
+                nlohmann::json line = nlohmann::json::array();
+                for (uint32_t k = m.streets[s].line.first; k < m.streets[s].line.end(); ++k) line.push_back({m.linePoints[k].x, m.linePoints[k].y});
+                d["streets"].push_back({{"city", c}, {"id", m.streets[s].id}, {"name", name}, {"line", line}});
+            }
+        }
+#else
+    (void)level;
+#endif
+    return d;
+}
+// The map's streets and junctions: copied from the level's road model (numbers only).
+static void mapStreetsOf(const engine::LevelRoadModel* level, engine::CityMapData& map) {
+#ifdef RT_ROADS_LANES
+    if (!level) return;
+    for (const std::shared_ptr<engine::RoadModel>& mp : level->cities) {
+        if (!mp) continue;
+        const engine::RoadModel& m = *mp;
+        for (std::size_t s = 0; s < m.streets.size(); ++s) {
+            const engine::ModelStreet& S = m.streets[s];
+            engine::CityMapData::Street ms;
+            for (uint32_t k = S.line.first; k < S.line.end(); ++k) ms.line.push_back(m.linePoints[k]);
+            ms.width = S.travelWidth();
+            ms.klass = S.section.klass;
+            ms.track = S.section.track;
+            ms.footway = S.section.footway;
+            ms.name = engine::streetName(m, engine::ModelStreetId(static_cast<uint32_t>(s)));
+            map.streets.push_back(std::move(ms));
+        }
+        for (const engine::ModelJunction& J : m.junctions) map.junctions.push_back(J.at);
+    }
+#else
+    (void)level;
+    (void)map;
+#endif
+}
+
 static std::shared_ptr<engine::CityMapData> assembleCityMap(
         World& world, const engine::RoadGraph& combined, const engine::NavGraph& nav,
         const engine::StreetFurniturePlan& plan, double hubRadius) {
     auto m = std::make_shared<engine::CityMapData>();
     m->roads = combined;
+    {
+        const engine::LevelRoadModel* roadModel = nullptr;
+        world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& rm) { if (!roadModel) roadModel = &rm; });
+        mapStreetsOf(roadModel, *m);
+    }
     m->nav = nav;
     m->furniture = plan;
     m->hubRadius = hubRadius;
@@ -7974,20 +8107,17 @@ bool LevelLoader::load(const std::string& path,
                 }
             }
             // STREET NAME SIGNS (Glenn, 2026-09-19: "It would be nice to have
-            // in world signs for streets"). The streets are named from the
-            // same unified graph; a post at a kerb corner of every junction
-            // carries a blade per street, lettered into a shared atlas
-            // (street_signs.h). Blades merge per cell and atlas page.
+            // in world signs for streets"). The streets' names and the junctions
+            // they meet at are the level's road model's (ADR-0420: the road file
+            // states them); a post at a kerb corner of every junction where two
+            // named streets meet carries a blade per street, lettered into a
+            // shared atlas (street_signs.h), and each blade is ATTACHED to the
+            // junction arm it names. Blades merge per cell and atlas page. Where
+            // a post stands keeps clear of the carriageways as drawn (`combined`).
             {
-                auto naming = std::make_shared<engine::StreetNaming>(engine::nameStreets(combined));
-                engine::StreetDirectory dir;
-                dir.naming = naming;
-                for (const engine::Street& st : naming->streets) {
-                    std::vector<Vec2> line;
-                    for (int n : st.nodes)
-                        if (n >= 0 && n < static_cast<int>(combined.nodes.size())) line.push_back(combined.nodes[static_cast<std::size_t>(n)].pos);
-                    dir.lines.push_back(std::move(line));
-                }
+                engine::LevelRoadModel* roadModel = nullptr;
+                world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!roadModel) roadModel = &m; });
+                const std::vector<engine::SignCorner> corners = signCornersOf(roadModel);
                 const engine::Font* font = engine::signFont();
                 const bool wantSigns = root["citysim"].value("streetSigns", true);
                 if (wantSigns && !font)
@@ -8000,8 +8130,9 @@ bool LevelLoader::load(const std::string& path,
                     std::vector<Vec3> avoid;
                     for (const engine::SignalSpot& s : fplan.signals) avoid.push_back(s.base);
                     const std::vector<engine::StreetSignPost> posts =
-                        engine::planStreetSigns(combined, *naming, furnGround, sp, avoid);
-                    const engine::SignAtlas atlas = engine::buildSignAtlas(*font, *naming, posts, sp);
+                        engine::planStreetSigns(corners, combined, furnGround, sp, avoid);
+                    attachSignBlades(roadModel, posts);
+                    const engine::SignAtlas atlas = engine::buildSignAtlas(*font, posts, sp);
                     const engine::StreetSignMeshes sm = engine::buildStreetSignMeshes(posts, atlas, sp);
                     std::vector<TextureHandle> pages;
                     for (const engine::TextImage& pg : atlas.pages)
@@ -8050,14 +8181,32 @@ bool LevelLoader::load(const std::string& path,
                         condensed += b.xScale < 0.999f ? 1 : 0;
                         minCap = std::min(minCap, b.capPx);
                     }
-                    dir.signPosts = static_cast<int>(posts.size());
-                    LOG_INFO << "[signs] " << naming->streets.size() << " named streets, "
+                    LOG_INFO << "[signs] " << namedStreetCount(roadModel) << " named streets, "
                              << posts.size() << " sign posts, " << atlas.blades.size()
                              << " blades on " << atlas.pages.size() << " atlas page(s); "
                              << abbreviated << " abbreviated, " << condensed
                              << " condensed, smallest capitals " << minCap << " px";
+                    // RT_STREET_DUMP=<file>: every named street (its name and centre line) and every sign post (where,
+                    // and the names on its blades), as JSON -- what a before-and-after comparison of names reads
+                    if (const char* dumpPath = std::getenv("RT_STREET_DUMP")) {
+                        nlohmann::json d = namedStreetsJson(roadModel);
+                        for (const engine::StreetSignPost& post : posts) {
+                            nlohmann::json names = nlohmann::json::array();
+                            for (const engine::StreetSignBlade& b : post.blades) names.push_back(b.name);
+                            std::string junction;   // the model junction it signs
+#ifdef RT_ROADS_LANES
+                            if (roadModel && post.city >= 0 && static_cast<std::size_t>(post.city) < roadModel->cities.size() &&
+                                roadModel->cities[static_cast<std::size_t>(post.city)] && post.junction >= 0 &&
+                                static_cast<std::size_t>(post.junction) < roadModel->cities[static_cast<std::size_t>(post.city)]->junctions.size())
+                                junction = roadModel->cities[static_cast<std::size_t>(post.city)]
+                                               ->junctions[static_cast<std::size_t>(post.junction)].id;
+#endif
+                            d["posts"].push_back({{"at", {post.base.x, post.base.z}}, {"names", names},
+                                                  {"city", post.city}, {"junction", junction}});
+                        }
+                        std::ofstream(dumpPath) << d.dump(1) << "\n";
+                    }
                 }
-                world.add<engine::StreetDirectory>(world.create(), std::move(dir));
             }
             // KERB LIFE (the city's next ten #3): street trees in their pits, litter bins, bike racks, news boxes --
             // instanced in 280 m cells like the lamps. The trees are the lot pass's street-tree kit (growTree, three

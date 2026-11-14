@@ -194,7 +194,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/road_network.cpp
     src/engine/procgen/city/street_kit.cpp
     src/engine/procgen/city/street_furniture.cpp
-    src/engine/procgen/city/street_names.cpp     # streets as named chains (tools/city_street_names.py, in C++)
+    src/engine/procgen/city/street_names.cpp     # the planner's street-name generator (ADR-0420)
     src/engine/procgen/city/street_signs.cpp     # street name signs: plan, lettered atlas, meshes
     src/engine/text/font.cpp                     # TrueType text into images (stb_truetype)
     src/engine/ui/ui_text.cpp                    # the game UI's words: glyph atlases as UI quads (ADR-0250)

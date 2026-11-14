@@ -7,6 +7,7 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <sstream>
 #include <unordered_map>
 
@@ -16,8 +17,8 @@ namespace {
 
 const char* kLayerNames[] = {"roads", "curbs", "sidewalks", "gaps", "nav", "furniture",
                              "objects", "blocks", "lots", "buildings", "districts",
-                             "places", "doors", "conflicts", "legend"};
-constexpr int kLayerCount = 15;
+                             "places", "doors", "conflicts", "legend", "junctions", "names"};
+constexpr int kLayerCount = 17;
 
 bool* layerFlag(CityMapLayers& L, int i) {
     switch (i) {
@@ -25,7 +26,8 @@ bool* layerFlag(CityMapLayers& L, int i) {
         case 3: return &L.gaps;      case 4: return &L.nav;      case 5: return &L.furniture;
         case 6: return &L.objects;   case 7: return &L.blocks;   case 8: return &L.lots;
         case 9: return &L.buildings; case 10: return &L.districts; case 11: return &L.places;
-        case 12: return &L.doors;    case 13: return &L.conflicts;
+        case 12: return &L.doors;    case 13: return &L.conflicts; case 15: return &L.junctions;
+        case 16: return &L.streetNames;
         default: return &L.legend;
     }
 }
@@ -271,6 +273,7 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
         minZ = std::min(minZ, z); maxZ = std::max(maxZ, z);
     };
     for (const RoadNode& n : g.nodes) grow(n.pos.x, n.pos.y);
+    for (const CityMapData::Street& s : data.streets) for (const Vec2& v : s.line) grow(v.x, v.y);
     for (const Poly2& p : data.blocks) for (const Vec2& v : p) grow(v.x, v.y);
     for (const CityMapData::Building& b : data.buildings) for (const Vec2& v : b.plan) grow(v.x, v.y);
     if (minX > maxX) { LOG_ERROR << "[citymap] nothing to draw"; return false; }
@@ -299,7 +302,6 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
            "  if (el) el.setAttribute('opacity', off ? '1' : '0.35');\n"
            "}\n]]></script>\n";
 
-    const int N = static_cast<int>(g.nodes.size());
     int drawn = 0;
 
     // --- districts: lots filled by district, hub rings + labels ------------------
@@ -357,18 +359,29 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
         out << "</g>\n";
         ++drawn;
     }
-    // --- roads: one stroke per edge, width = carriageway, colour = class -----------
+    // --- roads: the road model's streets (ADR-0420), one stroke each, width = its travel lanes, colour = class -----------
     if (layers.roads) {
-        out << "<g id='layer-roads' stroke-linecap='round' fill='none'>\n";
+        out << "<g id='layer-roads' stroke-linecap='round' stroke-linejoin='round' fill='none'>\n";
         const RoadClass order[] = {RoadClass::Freeway, RoadClass::Ramp, RoadClass::Arterial,
                                    RoadClass::Collector, RoadClass::Local, RoadClass::Alley};
         for (RoadClass k : order)
-            for (const RoadEdge& e : g.edges) {
-                if (e.klass != k || e.a < 0 || e.b < 0 || e.a >= N || e.b >= N) continue;
-                out << "<line x1='" << g.nodes[e.a].pos.x << "' y1='" << g.nodes[e.a].pos.y << "' x2='"
-                    << g.nodes[e.b].pos.x << "' y2='" << g.nodes[e.b].pos.y << "' stroke='"
-                    << classColor(k) << "' stroke-width='" << e.width << "'/>\n";
+            for (const CityMapData::Street& s : data.streets) {
+                if (s.klass != k || s.line.size() < 2) continue;
+                out << "<polyline points='";
+                polyPoints(out, s.line);
+                // a track as a dark dashed line; a footway as a thin pale one
+                if (s.track) out << "' stroke='#3d3d3d' stroke-dasharray='6 4' stroke-width='" << s.width * 0.5 << "'/>\n";
+                else if (s.footway) out << "' stroke='#d9cfa8' stroke-width='" << s.width << "'/>\n";
+                else out << "' stroke='" << classColor(k) << "' stroke-width='" << s.width << "'/>\n";
             }
+        out << "</g>\n";
+        if (data.streets.empty()) LOG_WARN << "[citymap] roads layer: the level has no road model; no streets drawn";
+        ++drawn;
+    }
+    // --- junctions: a ring at each of the road model's junctions ------------------------------------------------------
+    if (layers.junctions) {
+        out << "<g id='layer-junctions' fill='white' fill-opacity='0.8' stroke='#b0122b' stroke-width='1.2'>\n";
+        for (const Vec2& j : data.junctions) out << "<circle cx='" << j.x << "' cy='" << j.y << "' r='4'/>\n";
         out << "</g>\n";
         ++drawn;
     }
@@ -430,10 +443,6 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
             out << "<line x1='" << data.nav.nodes[L.from].x << "' y1='" << data.nav.nodes[L.from].y
                 << "' x2='" << data.nav.nodes[L.to].x << "' y2='" << data.nav.nodes[L.to].y << "'/>\n";
         }
-        for (std::size_t ni = 0; ni < data.nav.nodes.size(); ++ni)
-            if (ni < data.nav.outLinks.size() && data.nav.outLinks[ni].size() >= 3)
-                out << "<circle cx='" << data.nav.nodes[ni].x << "' cy='" << data.nav.nodes[ni].y
-                    << "' r='3'/>\n";
         out << "</g>\n";
         ++drawn;
     }
@@ -512,12 +521,56 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
         ++drawn;
     }
 
+    // --- names: each named street's name along it, at its middle; a short street is labelled only where its name has no
+    // longer street to sit on (one label per street of 120 m or more, else the name's longest) -----------------------------
+    int labels = 0;
+    if (layers.streetNames) {
+        out << "<g id='layer-names' font-size='9' fill='#1a1a1a' stroke='#f4f1ea' stroke-width='2.4' paint-order='stroke' "
+               "text-anchor='middle' dominant-baseline='middle'>\n";
+        constexpr double kLabelledLength = 120.0;
+        std::map<std::string, std::pair<double, std::size_t>> longest;   // name -> (its longest street's length, which)
+        std::vector<double> length(data.streets.size(), 0.0);
+        for (std::size_t i = 0; i < data.streets.size(); ++i) {
+            const CityMapData::Street& s = data.streets[i];
+            for (std::size_t k = 0; k + 1 < s.line.size(); ++k) length[i] += (s.line[k + 1] - s.line[k]).length();
+            if (s.name.empty()) continue;
+            std::pair<double, std::size_t>& l = longest[s.name];
+            if (length[i] > l.first) l = {length[i], i};
+        }
+        for (std::size_t i = 0; i < data.streets.size(); ++i) {
+            const CityMapData::Street& s = data.streets[i];
+            if (s.name.empty() || s.line.size() < 2) continue;
+            if (length[i] < kLabelledLength && longest[s.name].second != i) continue;
+            // the point halfway along, and the line's way there, turned to read left to right
+            const double half = length[i] * 0.5;
+            double at = 0;
+            std::size_t k = 0;
+            while (k + 2 < s.line.size()) {
+                const double piece = (s.line[k + 1] - s.line[k]).length();
+                if (at + piece >= half) break;
+                at += piece;
+                ++k;
+            }
+            const Vec2 a = s.line[k], b = s.line[k + 1];
+            const double seg = (b - a).length();
+            const Vec2 p = seg > 1e-9 ? a + (b - a) * std::clamp((half - at) / seg, 0.0, 1.0) : a;
+            double deg = std::atan2(b.y - a.y, b.x - a.x) * 180.0 / PI;
+            if (deg > 90) deg -= 180;
+            if (deg < -90) deg += 180;
+            out << "<text x='" << p.x << "' y='" << p.y << "' transform='rotate(" << deg << " " << p.x << " " << p.y << ")'>"
+                << esc(s.name) << "</text>\n";
+            ++labels;
+        }
+        out << "</g>\n";
+        ++drawn;
+    }
+
     // --- legend: one clickable entry per drawn layer, counts, scale bar ----------------
     if (layers.legend) {
         const double lx = minX + 24, ly = minZ + 40;
         out << "<g id='layer-legend' font-size='22' fill='#222'>\n";
         out << "<rect x='" << lx - 12 << "' y='" << ly - 30 << "' width='560' height='"
-            << 40 + 30 * 14 << "' fill='white' fill-opacity='0.8' stroke='#999'/>\n";
+            << 40 + 30 * 17 << "' fill='white' fill-opacity='0.8' stroke='#999'/>\n";
         out << "<text x='" << lx << "' y='" << ly << "' font-weight='bold'>city map · 1 unit = 1 m · y = world z · click a row to toggle its layer</text>\n";
         int row = 1;
         auto entry = [&](bool on, const char* id, const std::string& swatch, const std::string& text) {
@@ -548,14 +601,17 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
               "sidewalks: the mesher's curb band, " + std::to_string(static_cast<int>(data.sidewalkWidth * 10) / 10.0).substr(0, 4) +
                   " m wide, outside " + std::to_string(data.curbLoops.size()) + " curb loops");
         entry(layers.roads, "layer-roads", sw("#7c7c7c", "none", 8),
-              "streets by class (stroke = carriageway width), " + std::to_string(g.edges.size()) + " edges");
+              "streets by class (the road model; stroke = travel lanes' width), " + std::to_string(data.streets.size()) + " streets");
+        entry(layers.junctions, "layer-junctions", sw("white", "#b0122b", 8),
+              "junctions (the road model's), " + std::to_string(data.junctions.size()));
+        entry(layers.streetNames, "layer-names", sw("#1a1a1a", "none", 8), "street names (the road file's), " + std::to_string(labels) + " labels");
         entry(layers.curbs, "layer-curbs", sw("none", "#4a4036", 8), "curb lines (asphalt union outline)");
         entry(layers.gaps, "layer-gaps", sw("none", "#d81b60", 8),
               "band gaps: non-street mouths (" + std::to_string(data.mouthGaps.size()) + ")");
         entry(layers.buildings, "layer-buildings", sw("#8f8378", "#3f3731", 8),
               "buildings: plan polygons (" + std::to_string(data.buildings.size()) + ")");
         entry(layers.nav, "layer-nav", sw("none", "#0aa2c7", 8),
-              "nav graph: links + junction rings (" + std::to_string(data.nav.linkCount()) + " links)");
+              "nav graph: the city sim's links (" + std::to_string(data.nav.linkCount()) + ")");
         entry(layers.objects, "layer-objects", sw("#2e7d32", "#6a1b9a", 8),
               "planted objects: trees/scenery " + std::to_string(nTrees) + " (green), furniture " +
                   std::to_string(nFurn) + " (purple)");

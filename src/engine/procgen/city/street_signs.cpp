@@ -69,20 +69,13 @@ Real SignBlade::widthM() const {
     return hPx > 0 ? heightM * static_cast<Real>(wPx) / static_cast<Real>(hPx) : 0.0;
 }
 
-std::vector<StreetSignPost> planStreetSigns(const RoadGraph& g, const StreetNaming& names,
+std::vector<StreetSignPost> planStreetSigns(const std::vector<SignCorner>& corners, const RoadGraph& g,
                                             const std::function<Real(Real, Real)>& ground,
                                             const StreetSignParams& p,
                                             const std::vector<Vec3>& avoid) {
     std::vector<StreetSignPost> out;
     const int N = static_cast<int>(g.nodes.size());
-    std::vector<std::vector<int>> at(static_cast<std::size_t>(N));
-    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
-        const RoadEdge& ed = g.edges[static_cast<std::size_t>(e)];
-        if (ed.a < 0 || ed.b < 0 || ed.a >= N || ed.b >= N || ed.a == ed.b) continue;
-        at[static_cast<std::size_t>(ed.a)].push_back(e);
-        at[static_cast<std::size_t>(ed.b)].push_back(e);
-    }
-    struct Arm { Vec2 dir; Real angle; Real hw; int street; };
+    struct Arm { Vec2 point, dir; Real angle; Real hw; const SignCorner::Arm* src; };
     // Every carriageway, bucketed: a corner must clear the NEIGHBOURS' roads
     // too (a parallel street, a nearby junction's arm), not only its own.
     constexpr Real kCell = 40.0;
@@ -114,101 +107,128 @@ std::vector<StreetSignPost> planStreetSigns(const RoadGraph& g, const StreetNami
         }
         return false;
     };
-    for (int n = 0; n < N; ++n) {
-        const std::vector<int>& here = at[static_cast<std::size_t>(n)];
-        if (here.size() < 3) continue;   // a junction, not a bend
-        // A street INTERSECTION (not a ramp landing or a freeway gore).
-        const JunctionKind k = g.nodes[static_cast<std::size_t>(n)].kind;
-        if (k != JunctionKind::Intersection && k != JunctionKind::Auto) continue;
-        const Vec2 o = g.nodes[static_cast<std::size_t>(n)].pos;
+    for (const SignCorner& corner : corners) {
+        // A JUNCTION WHERE TWO OR MORE NAMED STREETS MEET (the model says which: a carry-on is no junction, ADR-0419; a
+        // ramp's landing on a street meets one named street)
         std::vector<Arm> arms;
-        std::set<int> streets;
-        for (int e : here) {
-            const RoadEdge& ed = g.edges[static_cast<std::size_t>(e)];
-            const int m = ed.a == n ? ed.b : ed.a;
-            Vec2 d = g.nodes[static_cast<std::size_t>(m)].pos - o;
-            const Real l = d.length();
-            if (l < 1e-6) continue;
-            d = d * (1.0 / l);
-            const int s = names.streetOf(e);
-            arms.push_back({d, std::atan2(d.y, d.x), ed.width * 0.5, s});
-            if (s >= 0) streets.insert(s);
+        std::set<std::string> streets;
+        for (const SignCorner::Arm& a : corner.arms) {
+            if (a.name.empty() || a.dir.length() < 1e-6) continue;
+            const Vec2 d = a.dir * (1.0 / a.dir.length());
+            arms.push_back({a.point, d, std::atan2(d.y, d.x), a.halfWidth, &a});
+            streets.insert(a.name);
         }
-        if (streets.size() < 2 || arms.size() < 3) continue;
+        if (streets.size() < 2) continue;
         std::sort(arms.begin(), arms.end(), [](const Arm& a, const Arm& b) { return a.angle < b.angle; });
-        Real hwMax = 0;
-        for (const Arm& a : arms) hwMax = std::max(hwMax, a.hw);
 
-        // THE CORNER: between each pair of neighbouring arms, the point on
-        // the bisector that clears both carriageways by kerbGap. Prefer a
-        // true corner (60..150 degrees); the flat side of a T is the fallback.
+        // THE CORNER: between each pair of neighbouring arms, where the two kerb lines meet (each arm's centre line
+        // offset by its half-width plus kerbGap, on the other arm's side), pushed out until it clears every
+        // carriageway. Prefer a true corner (60..150 degrees); the flat side of a T is the fallback.
+        // Each arm runs from where it meets the junction, and a junction the plan spread over several points has its
+        // arms meeting it apart: so the corner comes from the arms' own lines, never from a middle point between
+        // their mouths (which, on a spread junction, is inside a block). A corner whose kerb lines do not meet near
+        // both mouths (two arms leaving a spread junction side by side) is no corner.
         auto clear = [&](Vec2 q) {
             for (const Arm& a : arms)
-                if (distToRay(q, o, a.dir, 40.0) < a.hw + p.kerbGap * 0.9) return false;
+                if (distToRay(q, a.point, a.dir, 40.0) < a.hw + p.kerbGap * 0.9) return false;
             if (inAnyRoad(q, p.kerbGap * 0.6)) return false;
             for (const Vec3& v : avoid)
                 if ((Vec2(v.x, v.z) - q).length() < 1.4) return false;
             return true;
         };
+        // On the sidewalk of BOTH arms: within the band past each one's kerb (measured from its mouth onward).
+        auto onBothSidewalks = [&](Vec2 q, const Arm& a, const Arm& b) {
+            return distToRay(q, a.point, a.dir, 40.0) <= a.hw + p.kerbGap + p.sidewalkWidth + 3.0 &&
+                   distToRay(q, b.point, b.dir, 40.0) <= b.hw + p.kerbGap + p.sidewalkWidth + 3.0;
+        };
+        constexpr Real kReach = 40.0;   // how far along an arm its kerb corner may lie
         bool found = false;
         Vec2 best;
         Real bestScore = 1e30;
+        std::set<std::string> cornerOf;   // the two streets whose corner the post stands on
+        // Every pair of arms, b counter-clockwise of a -- not only neighbours by heading: on a spread junction the arm
+        // between two others may leave from another of its points, and the corner of the two is still a corner. A
+        // pair with a third arm between them at their own mouth has no clear corner (clear() refuses its road).
         const std::size_t K = arms.size();
-        for (std::size_t i = 0; i < K; ++i) {
+        for (std::size_t pair = 0; pair < K * K; ++pair) {
+            const std::size_t i = pair / K, j = (pair / K + 1 + pair % K) % K;
+            if (i == j) continue;
             const Arm& a = arms[i];
-            const Arm& b = arms[(i + 1) % K];
+            const Arm& b = arms[j];
             Real ang = b.angle - a.angle;
             if (ang <= 0) ang += 2 * PI;
-            const Real half = ang * 0.5;
-            const Vec2 bis(std::cos(a.angle + half), std::sin(a.angle + half));
-            const Real hw = std::max(a.hw, b.hw);
-            Real d = (hw + p.kerbGap) / std::sin(std::min(half, PI * 0.5));
-            Vec2 q = o + bis * d;
-            int steps = 0;
-            while (!clear(q) && steps < 16) { d += 0.5; q = o + bis * d; ++steps; }
-            if (!clear(q)) continue;
-            // Out of the sidewalk band into the block: no good.
-            if (d > (hw + p.sidewalkWidth + p.kerbGap) / std::sin(std::min(half, PI * 0.5)) + 3.0)
-                continue;
+            // Each arm's side facing the other (b lies counter-clockwise of a).
+            const Vec2 na(-a.dir.y, a.dir.x);
+            const Vec2 nb(b.dir.y, -b.dir.x);
+            Vec2 out = na + nb;
+            out = out.length() > 1e-6 ? out * (1.0 / out.length())
+                                      : Vec2(std::cos(a.angle + ang * 0.5), std::sin(a.angle + ang * 0.5));
+            const Vec2 pa = a.point + na * (a.hw + p.kerbGap);
+            const Vec2 pb = b.point + nb * (b.hw + p.kerbGap);
+            // pa + a.dir * t = pb + b.dir * u
+            const Real den = a.dir.x * b.dir.y - a.dir.y * b.dir.x;
+            Vec2 q;
+            if (std::fabs(den) > 0.05) {
+                const Vec2 w = pb - pa;
+                const Real t = (w.x * b.dir.y - w.y * b.dir.x) / den;
+                const Real u = (w.x * a.dir.y - w.y * a.dir.x) / den;
+                if (t < -2.0 || u < -2.0 || t > kReach || u > kReach) continue;
+                q = pa + a.dir * t;
+            } else {
+                // The two kerbs run on in one line (the flat side of a T) or side by side (no corner).
+                if ((a.point - b.point).length() > a.hw + b.hw + 2.0 * p.kerbGap) continue;
+                q = (pa + pb) * 0.5;
+            }
+            Real extra = 0;
+            while (!clear(q) && extra < 8.0) { extra += 0.5; q = q + out * 0.5; }
+            if (!clear(q) || !onBothSidewalks(q, a, b)) continue;
             const bool trueCorner = ang > 60.0 * PI / 180.0 && ang < 150.0 * PI / 180.0;
-            const Real score = d + (trueCorner ? 0.0 : 50.0);
-            if (score < bestScore) { bestScore = score; best = q; found = true; }
+            const Real score = extra + (trueCorner ? 0.0 : 50.0);
+            if (score < bestScore) { bestScore = score; best = q; found = true; cornerOf = {a.src->name, b.src->name}; }
         }
         if (!found) continue;
 
         StreetSignPost post;
-        post.node = n;
+        post.city = corner.city;
+        post.junction = corner.junction;
         post.base = Vec3(best.x, ground ? ground(best.x, best.y) : 0.0, best.y);
-        // One blade per street, widest first (the main road on top), at most
-        // three: stacked, each parallel to its street.
-        std::vector<int> order(streets.begin(), streets.end());
-        std::stable_sort(order.begin(), order.end(), [&](int x, int y) {
-            return names.streets[static_cast<std::size_t>(x)].width >
-                   names.streets[static_cast<std::size_t>(y)].width;
-        });
-        if (order.size() > 3) order.resize(3);
-        for (std::size_t bi = 0; bi < order.size(); ++bi) {
-            std::vector<Vec2> dirs;
+        // One blade per street, at most three: the two streets of the corner it stands on, then the widest of the rest
+        // (a junction spread over several points can have more streets than one post names); stacked widest first
+        // (the main road on top; then by name, so the order is the same every run), each parallel to its street.
+        std::vector<std::pair<Real, std::string>> order;
+        for (const std::string& s : streets) {
+            Real w = 0;
             for (const Arm& a : arms)
-                if (a.street == order[bi]) dirs.push_back(a.dir);
-            Vec2 along = dirs.front();
-            if (dirs.size() >= 2) {   // through street: the line it runs on
-                const Vec2 line = dirs[0] - dirs[1];
+                if (a.src->name == s) w = std::max(w, a.hw);
+            order.emplace_back(-w, s);
+        }
+        std::sort(order.begin(), order.end());
+        std::stable_partition(order.begin(), order.end(),
+                              [&](const std::pair<Real, std::string>& o) { return cornerOf.count(o.second) > 0; });
+        if (order.size() > 3) order.resize(3);
+        std::sort(order.begin(), order.end());
+        for (std::size_t bi = 0; bi < order.size(); ++bi) {
+            std::vector<const Arm*> mine;
+            for (const Arm& a : arms)
+                if (a.src->name == order[bi].second) mine.push_back(&a);
+            Vec2 along = mine.front()->dir;
+            if (mine.size() >= 2) {   // through street: the line it runs on
+                const Vec2 line = mine[0]->dir - mine[1]->dir;
                 if (line.length() > 1e-6) along = line * (1.0 / line.length());
             }
-            post.blades.push_back({order[bi], along, p.topBladeY - p.bladeStep * static_cast<Real>(bi)});
+            post.blades.push_back({order[bi].second, mine.front()->src->arm, along, p.topBladeY - p.bladeStep * static_cast<Real>(bi)});
         }
         out.push_back(std::move(post));
     }
+    (void)N;
     return out;
 }
 
-SignAtlas buildSignAtlas(const Font& font, const StreetNaming& names,
-                         const std::vector<StreetSignPost>& posts, const StreetSignParams& p) {
+SignAtlas buildSignAtlas(const Font& font, const std::vector<StreetSignPost>& posts, const StreetSignParams& p) {
     SignAtlas atlas;
-    std::set<int> streets;
+    std::set<std::string> streets;
     for (const StreetSignPost& post : posts)
-        for (const StreetSignBlade& b : post.blades) streets.insert(b.street);
+        for (const StreetSignBlade& b : post.blades) streets.insert(b.name);
     const int H = p.bladePx;
     const int maxW = static_cast<int>(std::floor(H * p.maxBladeWidth / p.bladeHeight));
     const int minW = static_cast<int>(std::ceil(H * p.minBladeWidth / p.bladeHeight));
@@ -219,11 +239,11 @@ SignAtlas buildSignAtlas(const Font& font, const StreetNaming& names,
     const float emFloor = p.capFloorFraction * H / capUnit;
     const float budget = static_cast<float>(maxW - 2 * padX);
 
-    struct Made { int street; SignBlade blade; TextImage img; };
+    struct Made { std::string street; SignBlade blade; TextImage img; };
     std::vector<Made> made;
-    for (int s : streets) {
-        if (s < 0 || s >= static_cast<int>(names.streets.size())) continue;
-        const std::string& name = names.streets[static_cast<std::size_t>(s)].name;
+    for (const std::string& s : streets) {
+        if (s.empty()) continue;
+        const std::string& name = s;
         SignBlade b;
         // Signs abbreviate the suffix, as real blades do ("Market St").
         b.text = abbreviateStreetName(name);
@@ -328,7 +348,7 @@ StreetSignMeshes buildStreetSignMeshes(const std::vector<StreetSignPost>& posts,
         const int cx = static_cast<int>(std::floor(post.base.x / p.cellSize));
         const int cz = static_cast<int>(std::floor(post.base.z / p.cellSize));
         for (const StreetSignBlade& bl : post.blades) {
-            const auto it = atlas.blades.find(bl.street);
+            const std::map<std::string, SignBlade>::const_iterator it = atlas.blades.find(bl.name);
             if (it == atlas.blades.end()) continue;
             const SignBlade& sb = it->second;
             const auto key = std::make_tuple(cx, cz, sb.page);

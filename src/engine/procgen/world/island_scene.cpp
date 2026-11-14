@@ -416,7 +416,24 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
                         {"base", w.terrain}};
     // THE LAYOUT, from birth (road_layout.h, ADR-0417): one list of junctions and streets for the whole island -- every
     // place's streets and the island roads ending in them -- with ids; each place scene's own was for that scene alone
-    roads::lanes::writeLayout(scene, roads::lanes::deriveLayout(roads::lanes::RoadLabGraph::fromJson(scene), roads::lanes::LayoutSource::Planner));
+    // ...and THE STREETS' NAMES (ADR-0420): a place's streets keep the names its plan gave them (by road and stretch,
+    // the place's ids prefixed as above); the runs no place named (an island road, a run across a new junction) are
+    // named from the book, never with a name already given
+    {
+        std::vector<roads::lanes::NamedStretch> keep;
+        for (std::size_t k = 0; k < placeScenes.size(); ++k) {
+            const json& ps = placeScenes[k];
+            if (!ps.is_object() || !ps.contains("streets")) continue;
+            for (const json& sj : ps["streets"])
+                if (sj.contains("name"))
+                    keep.push_back({"p" + std::to_string(k) + "_" + sj.at("road").get<std::string>(), sj.at("from").get<double>(),
+                                    sj.at("to").get<double>(), sj["name"].get<std::string>()});
+        }
+        const roads::lanes::RoadLabGraph g = roads::lanes::RoadLabGraph::fromJson(scene);
+        roads::lanes::RoadLayout layout = roads::lanes::deriveLayout(g, roads::lanes::LayoutSource::Planner);
+        roads::lanes::nameLayout(layout, g, keep);
+        roads::lanes::writeLayout(scene, layout);
+    }
     return scene;
 }
 

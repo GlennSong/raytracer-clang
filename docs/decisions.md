@@ -19965,3 +19965,89 @@ a control the plan did not state.
 **Revisit when** the builder paints from the stated junctions (step 9: traffic_lab can take the rule then); when the
 planner states its junctions as it plans them instead of the rule being applied to its road ends; if the diagonal
 corridors are re-planned.
+
+## ADR-0420 — One road model, step 3: street names are stated in the road file, the model is read at load, and the name signs and the map read it
+**Status:** Provisional · **Date:** 2026-11-13
+
+Words: the ROAD FILE is a level's lanes JSON (assets/lanelab/...), what the planner writes and the road builder reads. The
+ROAD MODEL (ADR-0417) is one structure for a city's roads: its junctions, each junction's ARMS (the streets leaving it,
+with headings), and its STREETS (a stretch of one road between two junctions, with a class and a CROSS-SECTION: lanes
+and widths). A THROUGH PAIR is two arms of one junction that the road file says are one street carrying on. A CARRY-ON is
+a point where one street runs on as another with no junction (ADR-0419). A DIVIDED PAIR is a road built as two one-way
+carriageways. A RUN is the streets joined by those three. An ATTACHMENT is a thing hung on a street or a junction arm by
+id (a name, a sign). The BAKE KEY is the hash that decides whether a level's baked meshes are still current.
+
+**Context.** Step 3 of docs/road-model-design.md: the readers that only label things (street names, name signs, the map)
+move to the model first. Before this, the loader named streets itself at every load: `nameStreets` chained the nav
+graph's edges into streets by angle and width tests, and the signs, the map and the bus's next-stop display read those
+chains. city_plan had its own second naming, and tools/city_street_names.py a third, offline copy.
+
+**Decision.**
+- **Two layers.** `plannedRoadModel(graph)` builds the model from the road file alone (milliseconds): junctions, arms,
+  through pairs, streets with class, cross-section, centre line, one-way, carry-ons, divided pairs, names. It says so:
+  `built = false`, and its first "not stated" note is "the built layer is absent". `assembleRoadModel` (step 2) is now
+  the planned layer plus the built parts (lanes, connections, junction heights, boxes, stop lines), `built = true`.
+  Model format version 4.
+- **Published at load.** The loader builds each city's planned layer right after its lanes and publishes one
+  level-wide `LevelRoadModel` (one model per city, in the level's order), as it does `LevelLanes`. It replaces the
+  loader's `StreetDirectory`.
+- **Names are stated.** Each street in the road file may carry `"name"`. A name belongs to a run; nothing re-derives a
+  run at load -- the loader reads the names as written. The name GENERATOR is kept as the planner's tool (`nameRuns` in
+  street_names.h: longest runs first, a unique word from the book, a suffix by width or class, the book's seed
+  20260918); `nameStreetRuns` in road_layout.h groups the runs from the stated pairs and names them. Streets of the
+  unnamed classes (streets.json `"unnamed"`: freeway, ramp, divider), tracks and footways get no name.
+- **Who writes them.** The planner (`planToLanesScene`) names every new road file. The island keeps each place's own
+  names and only names runs that have none. city_plan's design step keeps the names a scene already has and names new
+  runs; its island arterial names now come from the same planner output (its second naming is gone). For the existing
+  road files the one-off tool wrote names in once: `lanes_tool layout <file> --names --write` names the file's own
+  streets and inserts one `"name"` member into each street object in place, changing nothing else (it checks the text
+  without the streets list is byte-identical). Written: river_town, metro_v2_test, piedmont, metro_mountain,
+  metro_planned, island_8_nature, traffic_lab, ring_city, light_rail_lab, rail_loop.
+- **The bake key ignores names.** It already strips the whole `"streets"` list (ADR-0417). `rt_bake --status` before and
+  after on river_town, traffic_lab, agent_lab, metro_v2_test, piedmont, metro_mountain, island_8_nature, metro_planned,
+  wheel_lab, rail_lab, light_rail_lab: all eleven keys identical, so traffic_lab (whose junction list is in its key) does
+  not re-bake. river_town's baked meshes are byte-identical.
+- **Attachments, kinds as data.** assets/data/road_attachments.json lists the kinds -- `street_name` (on a street, it
+  names it) and `name_sign` (on a junction arm) -- and which kind each role uses. `attach()` checks the kind exists and
+  is put on what the kind says; `attachedToStreet / attachedToJunction`, `streetName`, `namedArmsAt` and
+  `streetNameNear` read them. The model's names are `street_name` attachments; the loader attaches every sign blade it
+  stands up as a `name_sign` on the arm it names (kind, street, junction, arm).
+- **The name signs read the model.** `planStreetSigns` takes one corner list per junction from the model: each arm whose
+  street has a name, with where it meets the junction, its heading and its travel width. A junction with two names or
+  more gets one post. Where the post stands is found from the arms' own lines: the point where two arms' kerb lines meet
+  (centre line offset by half the travel width plus the kerb gap), pushed out until it clears every carriageway as drawn
+  (`combined`) and the signal poles, and kept on both arms' sidewalks. Every pair of arms is tried, so a junction the
+  plan spread over several points still finds the corner at one of them. The post names the two streets of its corner,
+  then the widest of the rest, at most three, widest on top.
+- **The map reads the model.** `CityMapData` gains the model's streets (centre line, travel width, class) and junctions;
+  the roads layer draws streets, not the old graph's edges; new layers `junctions` (a ring at each model junction) and
+  `names` (each name along its street: on every street of 120 m or more, else on the name's longest street).
+- **Deleted** (nothing else read them): `nameStreets` and its chaining (`Street`, `StreetNaming`,
+  `StreetNamingParams`; street_names.cpp 261 -> 165 lines, street_names.h 99 -> 78); the loader's `StreetDirectory` and
+  its chain lines; the signs' nav-graph corner search and street-index blades (the atlas is keyed by name); the map's
+  nav junction rings (the model's junctions replace them); tools/city_street_names.py (216 lines: its job is the one-off
+  tool's `--names`). The bus next-stop display reads `LevelRoadModel::streetNameNear`.
+
+**What it does** (river_town / metro_v2_test). Names: 82 -> 48 / 86 -> 45 distinct names; of the model's 309 / 390
+named streets, 23 / 126 keep the name the old chain under their middle had, the rest carry another (the generator is the
+same, but it names runs, not chains: fewer, longer streets). Signs: 182 -> 144 / 233 -> 192 posts. Every junction with
+two names is signed (144 of 144 / 192 of 192). The posts that went: 25 / 25 junctions the plan spread over several
+points had a post at each (63 -> 25 / 59 -> 24 posts); 7 junctions in metro_v2_test lost their sign because one street
+now runs through them under one name where the old chains broke at a bend and gave the halves two names (j31: the
+planner states River Avenue's cross street as a through pair, so one name meets itself crosswise there; j200 likewise;
+j192/j193 are a ramp meeting Market Parkway). No junction gained a sign. Maps before and after:
+~/Pictures/Raytracer/road-model/map_<level>_before|after.png. Signed corners in the viewer: sign_river_town.png,
+sign_agent_lab.png.
+
+**What else moved.** Sign posts are street furniture, and walkers steer round furniture: so the posts that moved change
+where walkers walk, and river_town's pinned old-model state (`level_v1_state_is_unchanged`) no longer matches. Put back
+at their old positions (a temporary switch, removed), the posts give the pinned values exactly, so nothing else changed.
+traffic_lab's four values are unchanged. river_town's are now 0xa749b074c38152f6, 0x26e708550790dc07, 0x2601337e616d2d86
+and 0xf0a0fc5cd128f7df (t = 15, 30, 45, 60 s). The pin is not retaken here; that is for Glenn.
+
+**Alternatives.** Re-deriving the runs at load from the stated pairs: a run is a decision (which street is "the same
+street"), so it is written once and read after. Keeping the post at the middle of a spread junction's arm mouths: on
+river_town j0 it stood inside a block.
+
+**Revisit when** the planner states its through pairs with names in mind (a cross street stated as a through pair that
+bends 156 degrees makes one name meet itself); step 4 moves the furniture and signal poles to the model.

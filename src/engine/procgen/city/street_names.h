@@ -4,25 +4,22 @@
 // NAMING THE STREETS (Glenn, 2026-09-18: "we should name all of the streets. A
 // street should have a start and end point ... I think that also helps with bus
 // routes and agents addresses"; 2026-09-19: "It would be nice to have in world
-// signs for streets"). The engine port of tools/city_street_names.py.
+// signs for streets").
 //
-// A road graph has EDGES, not streets. What a person calls a street is a CHAIN
-// of edges that carries straight on: you stay on Elm when Elm crosses Oak. So
-// each street grows from an edge both ways -- through every plain (degree-2)
-// node, since a bend is still the same street, and through a junction only
-// onto the straightest continuation of the same width class, within a limit.
-// Then each chain gets a name from a deterministic bank, suffixed by its class
-// (a wide arterial is a Boulevard or Avenue, a narrow one a Lane or Court),
-// unique across the city. Same graph + seed -> same names.
-//
-// Freeways and ramps are not streets here (they carry route numbers, not
-// street names): their edges map to -1.
-
-#include "road_network.h"
+// THE PLANNER'S NAME GENERATOR (ADR-0420). What a person calls a street -- you stay
+// on Elm when Elm crosses Oak -- is a RUN of the road model's streets that are one
+// street carrying on, as the road file states it (a junction's `through` pairs, a
+// street's `carries_on`, a divided road's two carriageways: road_layout.h
+// streetRuns). This file only gives each run a name: from a deterministic bank,
+// suffixed by the run's width (a wide road is a Boulevard or Avenue, a narrow one a
+// Lane or Court) or its class, unique across the city. The planner writes the names
+// into the road file; a level reads them from there (the road model), the same on
+// every load. Nothing here looks at a road's shape.
 
 #include <nlohmann/json.hpp>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -31,8 +28,8 @@ namespace engine {
 // THE CONTENT, AS DATA (Glenn, 2026-09-20: "for the street names you've put
 // them in code. I'm starting to wonder if some of this shouldn't be data and
 // not baked into the C++"). assets/data/streets.json holds the words, what
-// suffix a road of a given width carries, and how a sign shop shortens it;
-// this file holds only the algorithm that uses them.
+// suffix a road of a given width carries, which road classes carry no name, and
+// how a sign shop shortens a name; this file holds only the algorithm.
 struct StreetNameBook {
     std::vector<std::vector<std::string>> banks;   // word pools, drawn from evenly
     struct SuffixRule {
@@ -42,6 +39,7 @@ struct StreetNameBook {
     std::vector<SuffixRule> suffixes;                   // widest first
     std::map<std::string, std::string> classSuffix;     // "alley" -> "Alley"
     std::map<std::string, std::string> abbreviations;   // "Boulevard" -> "Blvd"
+    std::set<std::string> unnamed;                      // road classes that carry no street name ("freeway", "ramp")
     uint32_t seed = 20260918;
     bool fromAsset = false;                             // false = the built-in fallback
     bool usable() const { return !banks.empty() && !suffixes.empty(); }
@@ -54,40 +52,21 @@ StreetNameBook parseStreetNameBook(const nlohmann::json& names);
 // (with a warning) so a stripped install still names its streets.
 const StreetNameBook& streetNameBook();
 
-struct Street {
-    std::string name;
-    RoadClass klass = RoadClass::Local;
-    double width = 0;                // mean carriageway width
-    std::vector<int> edges;          // RoadGraph edge ids, end to end
-    std::vector<int> nodes;          // the node chain (edges.size() + 1)
+// WHAT A RUN TO BE NAMED IS, to the generator: how long (the longest runs draw
+// first, so the main roads take from the full bank), how wide its carriageway is
+// (the suffix rule), and its road class (a class suffix, when the book has one).
+struct RunToName {
     double length = 0;
+    double width = 0;
+    std::string roadClass;
 };
 
-struct StreetNaming {
-    std::vector<Street> streets;
-    std::vector<int> streetOfEdge;   // edge id -> street index, -1 for none
-    int streetOf(int edge) const {
-        return edge >= 0 && edge < static_cast<int>(streetOfEdge.size()) ? streetOfEdge[edge] : -1;
-    }
-};
-
-struct StreetNamingParams {
-    // (The naming CONTENT lives in the book; these are the geometry rules.)
-    // Carrying on THROUGH A JUNCTION: the straightest continuation within this
-    // many degrees, of a width within widthTolerance. (Plain nodes always
-    // continue: a curve is not a new street.)
-    double junctionTurnDeg = 28.0;
-    double widthTolerance = 2.5;   // a width change this big (or more) is a new street
-    // Through a PLAIN node: a curve is still the street, a kink sharper than
-    // 60 degrees at a single node is a corner between two.
-    double cosPlainKink = 0.5;
-    uint32_t seed = 0;   // 0 = the book's own seed
-};
-
-StreetNaming nameStreets(const RoadGraph& g, const StreetNameBook& book,
-                         const StreetNamingParams& p = {});
-// ...with the shipped book (streetNameBook()).
-StreetNaming nameStreets(const RoadGraph& g, const StreetNamingParams& p = {});
+// A NAME FOR EACH RUN, in the runs' order: deterministic in (runs, book, seed);
+// unique, and no word used twice while the banks last. `taken`: names already in
+// use (kept from a road file), never given again and their words not reused.
+// seed 0: the book's own.
+std::vector<std::string> nameRuns(const std::vector<RunToName>& runs, const StreetNameBook& book, uint32_t seed = 0,
+                                  const std::set<std::string>& taken = {});
 
 // The sign-shop short form of a street's suffix ("Boulevard" -> "Blvd"), from
 // the book's abbreviations. Unchanged when there is nothing to shorten.

@@ -24,6 +24,7 @@
 #include "engine/procgen/city/roads/lanes/control_plan.h"     // findJunctions: the one grouping
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"        // kStopLineBack
 #include "engine/procgen/city/roads/lanes/lane_graph_cache.h"   // levelRoadsKey: the city's bake key
+#include "engine/procgen/city/roads/lanes/lane_expand.h"   // expand: the planned layer reads the ramps composed
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"
 #include "engine/procgen/city/roads/lanes/road_model_compare.h"
@@ -73,7 +74,10 @@ nlohmann::json smallGraph() {
 // The small graph with its layout, as the tool writes it.
 nlohmann::json smallGraphWithLayout() {
     nlohmann::json g = smallGraph();
-    writeLayout(g, deriveLayout(RoadLabGraph::fromJson(g), LayoutSource::Inferred));
+    const RoadLabGraph graph = RoadLabGraph::fromJson(g);
+    RoadLayout layout = deriveLayout(graph, LayoutSource::Inferred);
+    nameLayout(layout, graph);   // the streets' names, as the one-off tool writes them (ADR-0420)
+    writeLayout(g, layout);
     return g;
 }
 
@@ -165,6 +169,15 @@ TEST_CASE(road_model_1_the_planner_and_the_layout_tool_agree) {
     for (const PlannedJunction& j : planned.junctions)
         for (const PlannedArm& a : j.arms) armsWithoutStreet += a.street.empty() ? 1 : 0;
     CHECK(armsWithoutStreet == 0);
+    // the planner names its streets from birth (ADR-0420): every street of a class that carries a name has one, and no
+    // other does
+    const std::vector<char> named = namedStreets(planned, planned.streets, streetNameBook());
+    int unnamed = 0, misnamed = 0;
+    for (std::size_t s = 0; s < planned.streets.size(); ++s) {
+        unnamed += named[s] && planned.streets[s].name.empty() ? 1 : 0;
+        misnamed += !named[s] && !planned.streets[s].name.empty() ? 1 : 0;
+    }
+    CHECK(unnamed == 0 && misnamed == 0);
 }
 
 // ---- 2. the bake does not see the layout --------------------------------------------------------------------------------
@@ -354,11 +367,94 @@ TEST_CASE(road_model_4_the_questions) {
     const LeadsTo to = leadsTo(m, laneNamed(m, "a1.f0"));
     CHECK(to.junction.valid() && m.junctions[to.junction.index].at.x > 150);
     CHECK(to.connections.empty());
-    // what is attached: the one-way street says so; a junction says its control is not stated
-    const std::vector<std::string> oneWay = attachedToStreet(m, streetNamed(m, "o0"));
-    CHECK(std::find(oneWay.begin(), oneWay.end(), "one-way") != oneWay.end());
-    const std::vector<std::string> atCross = attachedToJunction(m, cross);
-    CHECK(!atCross.empty() && atCross.front() == "control: not stated");
+    // what is attached (ADR-0420): each named street carries its name; the crossing has nothing yet
+    const std::vector<uint32_t> onO0 = attachedToStreet(m, streetNamed(m, "o0"));
+    CHECK(onO0.size() == 1u);
+    if (!onO0.empty()) CHECK(m.attachments[onO0.front()].text == streetName(m, streetNamed(m, "o0")) && !m.attachments[onO0.front()].text.empty());
+    CHECK(attachedToJunction(m, cross).empty());
+    // a name sign attached to an arm of the crossing: its street is the arm's; the street now lists it too
+    RoadModel signed_ = m;
+    ModelAttachment sign;
+    sign.kind = attachmentKinds().use("name_sign");
+    sign.junction = cross;
+    sign.arm = 0;
+    sign.text = "a blade";
+    std::string why;
+    CHECK(attach(signed_, sign, &why));
+    CHECK(signed_.attachments.back().street == signed_.junctions[cross.index].arms[0].street);
+    CHECK(attachedToJunction(signed_, cross).size() == 1u);
+    CHECK(attachedToStreet(signed_, signed_.junctions[cross.index].arms[0].street).size() == 2u);   // its name, and the sign
+    // refused: a kind the data does not list; an arm kind with no arm; a street kind with no street
+    ModelAttachment bad = sign;
+    bad.kind = "no_such_kind";
+    CHECK(!attach(signed_, bad, &why));
+    bad = sign;
+    bad.arm = 99;
+    CHECK(!attach(signed_, bad, &why));
+    bad = ModelAttachment();
+    bad.kind = attachmentKinds().use("street_name");
+    CHECK(!attach(signed_, bad, &why));
+    // the attachment kinds are data
+    CHECK(attachmentKinds().find(attachmentKinds().use("street_name")) && attachmentKinds().find(attachmentKinds().use("street_name"))->names);
+}
+
+// ---- 4b. names: a run of streets that are one street carrying on has one name, as the road file states it -------------
+
+TEST_CASE(road_model_4b_a_name_is_a_stated_run) {
+    const RoadModel& m = smallBuilt().model;
+    auto name = [&](const char* id) { return streetName(m, streetNamed(m, id)); };
+    // the arterial runs straight through both junctions: one name; the local street crosses at (0, 0) and bends on into
+    // l3 at (0, 150) (a carry-on): one name; at the T the local street from the south runs on as the one-way street north
+    CHECK(!name("a0").empty() && name("a0") == name("a1") && name("a1") == name("a2"));
+    CHECK(!name("l0").empty() && name("l0") == name("l1") && name("l1") == name("l3"));
+    CHECK(!name("l2").empty() && name("l2") == name("o0"));
+    CHECK(name("a0") != name("l0") && name("a0") != name("l2") && name("l0") != name("l2"));
+    // the planned layer, read from the file alone, holds the same junctions, streets and names as the model of the build
+    RoadLabGraph g = RoadLabGraph::fromJson(smallGraphWithLayout());
+    (void)expand(g);
+    const RoadModel planned = plannedRoadModel(g);
+    CHECK(!planned.built && smallBuilt().model.built);
+    CHECK(planned.junctions.size() == m.junctions.size() && planned.streets.size() == m.streets.size());
+    CHECK(planned.lanes.empty() && planned.connections.empty());
+    for (std::size_t s = 0; s < m.streets.size(); ++s) {
+        CHECK(streetName(planned, ModelStreetId(static_cast<uint32_t>(s))) == streetName(m, ModelStreetId(static_cast<uint32_t>(s))));
+        CHECK(planned.streets[s].line.count >= 2);
+    }
+    CHECK(!planned.notStated.empty() && planned.notStated.front().find("the built layer") != std::string::npos);
+    // the name nearest a point beside the arterial
+    CHECK(streetNameNear(planned, Vec2(100, -4)) == name("a1"));
+    CHECK(streetNameNear(planned, Vec2(1000, 1000)).empty());
+    // the named arms at the crossing: four, two names, in order round it
+    const ModelJunctionId cross = planned.streets[streetNamed(planned, "a1").index].junctions[0];
+    const std::vector<NamedArm> arms = namedArmsAt(planned, cross);
+    CHECK(arms.size() == 4u);
+    std::set<std::string> names;
+    for (const NamedArm& a : arms) names.insert(a.name);
+    CHECK(names.size() == 2u);
+    // saved and read back with its attachments
+    bundle::BinWriter w;
+    putRoadModel(w, planned);
+    bundle::BinReader rd(w.bytes.data(), w.bytes.size());
+    RoadModel back;
+    std::string err;
+    CHECK(getRoadModel(rd, back, &err) && back == planned);
+    // the one-off tool writes the names into a file in place; the bake key does not see them
+    const nlohmann::json bare = smallGraph();
+    nlohmann::json laidOut = bare;
+    writeLayout(laidOut, deriveLayout(RoadLabGraph::fromJson(bare), LayoutSource::Inferred));
+    const std::string text = laidOut.dump(1);
+    const RoadLabGraph stated = RoadLabGraph::fromJson(laidOut);
+    std::vector<PlannedStreet> streets = stated.streets;
+    nameStreetRuns(streets, stated.junctions, stated.divided, stated, streetNameBook());
+    const std::string named = insertStreetNamesText(text, streets, &err);
+    CHECK(!named.empty() && stripLayoutText(named) == stripLayoutText(text));
+    const RoadLabGraph reread = RoadLabGraph::fromJson(nlohmann::json::parse(named));
+    for (std::size_t s = 0; s < streets.size(); ++s) CHECK(reread.streets[s].name == streets[s].name);
+    // named again, every name the file states is kept
+    std::vector<PlannedStreet> again = reread.streets;
+    const NamingReport rep = nameStreetRuns(again, reread.junctions, reread.divided, reread, streetNameBook(), namedStretches(reread.streets));
+    CHECK(rep.generated == 0u && rep.kept == rep.runs);
+    for (std::size_t s = 0; s < again.size(); ++s) CHECK(again[s].name == streets[s].name);
 }
 
 // ---- 5. saved and read back ----------------------------------------------------------------------------------------------
@@ -395,9 +491,9 @@ TEST_CASE(road_model_5_saved_and_read_back) {
     in.levelPath = dir + "/level.json";
     in.levelDir = dir;
     in.level = {{"entities", nlohmann::json::array({{{"shape", "road"}, {"road", {{"graph", graphPath}}}}})}};
-    const LevelRoadModel first = obtainLevelRoadModel(in, dir + "/roadmodel", &err);
+    const ObtainedRoadModel first = obtainLevelRoadModel(in, dir + "/roadmodel", &err);
     CHECK(first.model && first.saved && !first.fromCache);
-    const LevelRoadModel second = obtainLevelRoadModel(in, dir + "/roadmodel", &err);
+    const ObtainedRoadModel second = obtainLevelRoadModel(in, dir + "/roadmodel", &err);
     CHECK(second.model && second.fromCache && second.key == first.key);
     if (first.model && second.model) CHECK(*first.model == *second.model);
     std::filesystem::remove_all(dir);

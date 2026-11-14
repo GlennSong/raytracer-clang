@@ -1,0 +1,22 @@
+{
+  "_comment": [
+    "WHAT MAY BE ATTACHED TO THE ROADS (ADR-0420, docs/road-model-design.md section 1: 'every junction, street, lane",
+    "and connection has an id that never changes ... that is what lets anything else attach to the roads'). Each kind",
+    "says what it attaches to: 'street' (a street of the road model, at a station along it or the whole street),",
+    "'junction' (a junction as a whole), or 'arm' (one arm of a junction, which is also its street there). A kind",
+    "that names the street (its 'names' is true) is what a reader asks for when it wants a street's name. The road",
+    "model refuses an attachment of a kind not listed here, or on the wrong thing. Adding a kind (a bus stop, a signal",
+    "head, a door) is an entry here, not code."
+  ],
+  "kinds": {
+    "street_name": { "on": "street", "names": true,
+                     "what": "the street's name, stated in the road file (streets[].name), one per street of its run" },
+    "name_sign": { "on": "arm",
+                   "what": "a street-name sign at a junction: one blade naming the arm's street (street_signs.h)" }
+  },
+  "uses": {
+    "_comment": "Which kind each reader writes or reads, so no reader names a kind in code.",
+    "street_name": "street_name",
+    "name_sign": "name_sign"
+  }
+}

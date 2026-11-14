@@ -891,19 +891,16 @@ struct CityMap {
     std::shared_ptr<const std::vector<SidewalkCrossing>> conflicts;
 };
 
-// THE STREETS BY NAME (procgen/city/street_names.h): every named street as a
-// chain of the level's road-graph edges, published by the loader for the name
-// signs, the map, and addresses.
-struct StreetNaming;
-struct StreetDirectory {
-    std::shared_ptr<const StreetNaming> naming;
-    // each named street's centreline (its node chain's plan positions, in naming->streets order): what a place is
-    // looked up by -- the nearest street names a bus stop (the bus's next-stop display)
-    std::vector<std::vector<Vec2>> lines;
-    // The street nearest `p` (its name; empty when there is none within `reach` metres)
-    std::string nearestName(const Vec2& p, Real reach = 40.0) const;
-    // How many signs stood up (the loader's census; 0 with signs off).
-    int signPosts = 0;
+// THE LEVEL'S ROAD MODEL (procgen/city/roads/road_model.h, ADR-0420): one per level, covering every lane-built city in
+// it, in the order the level lists them -- each city's PLANNED LAYER, read from its road file when the level loads
+// (milliseconds; its built layer stays in cache/roadmodel). What the readers that only label the roads read: the
+// street names (the model's name attachments), the name signs (attached to the junction arms they stand at, as the
+// loader plans them), the map, and a bus stop's street.
+struct RoadModel;
+struct LevelRoadModel {
+    std::vector<std::shared_ptr<RoadModel>> cities;
+    // The named street nearest `p` over every city (its name; empty when none is within `reach` metres).
+    std::string streetNameNear(const Vec2& p, Real reach = 40.0) const;
 };
 
 struct AuthoredPlace {

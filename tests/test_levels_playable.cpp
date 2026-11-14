@@ -49,6 +49,7 @@
 #include "../src/apps/citysim/city_map_raster.h"    // the map tool's picture
 #include "../src/apps/citysim/bus_stop_props.h"     // routeColour
 #include "../src/engine/procgen/city/street_signs.h"   // street name signs
+#include "../src/engine/procgen/city/roads/road_model.h"   // the level's road model: names, junctions (ADR-0420)
 #include "../src/engine/text/font.h"
 #include "../src/engine/system.h"
 #include "../src/engine/world.h"
@@ -2279,33 +2280,38 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
     if (!loaded) return;
     const engine::RoadGraph* graph = nullptr;
     world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) { if (!graph) graph = &g.graph; });
-    const engine::StreetDirectory* dir = nullptr;
-    world.each<engine::StreetDirectory>([&](Entity, engine::StreetDirectory& d) { if (!dir) dir = &d; });
-    CHECK(graph && dir && dir->naming);
-    if (!graph || !dir || !dir->naming) return;
-    const engine::StreetNaming& names = *dir->naming;
+    // THE NAMES AND THE JUNCTIONS ARE THE LEVEL'S ROAD MODEL'S (ADR-0420)
+    const engine::LevelRoadModel* level = nullptr;
+    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!level) level = &m; });
+    CHECK(graph && level && !level->cities.empty() && level->cities.front());
+    if (!graph || !level || level->cities.empty() || !level->cities.front()) return;
+    const engine::RoadModel& model = *level->cities.front();
     const engine::Font* font = engine::signFont();
     CHECK(font != nullptr);
     if (!font) return;
     engine::StreetSignParams sp;
     sp.sidewalkWidth = 3.5;
-    const auto posts = engine::planStreetSigns(*graph, names, nullptr, sp);
-    const engine::SignAtlas atlas = engine::buildSignAtlas(*font, names, posts, sp);
-    // Intersections where two or more named streets meet.
-    std::vector<std::vector<int>> at(graph->nodes.size());
-    for (int e = 0; e < static_cast<int>(graph->edges.size()); ++e) {
-        at[static_cast<std::size_t>(graph->edges[static_cast<std::size_t>(e)].a)].push_back(e);
-        at[static_cast<std::size_t>(graph->edges[static_cast<std::size_t>(e)].b)].push_back(e);
+    std::vector<engine::SignCorner> signCorners;
+    std::set<std::string> namedStreets;
+    int corners = 0;   // junctions where two or more named streets meet
+    for (std::size_t j = 0; j < model.junctions.size(); ++j) {
+        engine::SignCorner c;
+        c.city = 0;
+        c.junction = static_cast<int>(j);
+        std::set<std::string> here;
+        for (const engine::NamedArm& a : engine::namedArmsAt(model, engine::ModelJunctionId(static_cast<uint32_t>(j)))) {
+            c.arms.push_back({a.arm, a.point, a.dir, a.travelWidth * 0.5, a.name});
+            here.insert(a.name);
+        }
+        corners += here.size() >= 2 ? 1 : 0;
+        signCorners.push_back(c);
     }
-    int corners = 0;
-    for (std::size_t n = 0; n < graph->nodes.size(); ++n) {
-        if (at[n].size() < 3) continue;
-        const auto k = graph->nodes[n].kind;
-        if (k != engine::JunctionKind::Intersection && k != engine::JunctionKind::Auto) continue;
-        std::set<int> s;
-        for (int e : at[n]) if (names.streetOf(e) >= 0) s.insert(names.streetOf(e));
-        if (s.size() >= 2) ++corners;
+    for (std::size_t s = 0; s < model.streets.size(); ++s) {
+        const std::string n = engine::streetName(model, engine::ModelStreetId(static_cast<uint32_t>(s)));
+        if (!n.empty()) namedStreets.insert(n);
     }
+    const std::vector<engine::StreetSignPost> posts = engine::planStreetSigns(signCorners, *graph, nullptr, sp);
+    const engine::SignAtlas atlas = engine::buildSignAtlas(*font, posts, sp);
     int fits = 0, legible = 0, abbreviated = 0, condensed = 0, wrongNames = 0, inRoad = 0;
     float minCap = 1e9f;
     const int pad = static_cast<int>(std::lround(sp.bladePx * 0.28));
@@ -2317,10 +2323,9 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
         minCap = std::min(minCap, b.capPx);
     }
     for (const auto& post : posts) {
-        std::set<int> want, have;
-        for (int e : at[static_cast<std::size_t>(post.node)])
-            if (names.streetOf(e) >= 0) want.insert(names.streetOf(e));
-        for (const auto& b : post.blades) have.insert(b.street);
+        std::set<std::string> want, have;
+        for (const engine::SignCorner::Arm& a : signCorners[static_cast<std::size_t>(post.junction)].arms) want.insert(a.name);
+        for (const engine::StreetSignBlade& b : post.blades) have.insert(b.name);
         // Up to three blades: the widest three of the streets here.
         if (!(have.size() == std::min<std::size_t>(3, want.size()) &&
               std::includes(want.begin(), want.end(), have.begin(), have.end())))
@@ -2341,7 +2346,7 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
     std::printf("    [signs] %zu named streets; %d intersections, %zu posts; %zu blades on %zu page(s): "
                 "%d fit, %d legible (smallest capitals %.1f px = %.2f m), %d abbreviated, %d condensed; "
                 "%d posts with wrong names, %d in a carriageway\n",
-                names.streets.size(), corners, posts.size(), atlas.blades.size(), atlas.pages.size(),
+                namedStreets.size(), corners, posts.size(), atlas.blades.size(), atlas.pages.size(),
                 fits, legible, minCap, minCap / sp.bladePx * sp.bladeHeight, abbreviated, condensed,
                 wrongNames, inRoad);
     if (const char* dump = std::getenv("RT_SIGN_ATLAS_DUMP")) {
@@ -2358,7 +2363,21 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
     CHECK(legible == static_cast<int>(atlas.blades.size()));
     CHECK(wrongNames == 0);
     CHECK(inRoad == 0);
-    CHECK(dir->signPosts == static_cast<int>(posts.size()));   // the loader stood the same plan
+    // the loader attached a blade to the junction arm it names, for every blade it stood (the same plan, with the
+    // level's own sidewalk and its signal poles to keep clear of: within a tenth of this one)
+    int attachedBlades = 0, misattached = 0;
+    const std::string signKind = engine::attachmentKinds().use("name_sign");
+    for (const engine::ModelAttachment& a : model.attachments) {
+        if (a.kind != signKind) continue;
+        ++attachedBlades;
+        misattached += a.text == engine::streetName(model, a.street) ? 0 : 1;
+    }
+    std::size_t blades = 0;
+    for (const auto& post : posts) blades += post.blades.size();
+    std::printf("    [signs] the loader attached %d blades to junction arms (%d naming another street); this plan stands %zu\n",
+                attachedBlades, misattached, blades);
+    CHECK(attachedBlades > 0 && misattached == 0);
+    CHECK(static_cast<std::size_t>(attachedBlades) * 10 >= blades * 9 && static_cast<std::size_t>(attachedBlades) <= blades * 11 / 10);
 }
 
 // ============================================================================

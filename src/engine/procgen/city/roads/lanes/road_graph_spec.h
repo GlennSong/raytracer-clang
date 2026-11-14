@@ -115,11 +115,16 @@ struct PlannedJunction {
 // another, or a bend) are no junction -- no junction area, no stop line. Each of the two streets names the other at that
 // end: "carries_on": [null, "s13"] (at `from`, at `to`; written only where one is set). One street carrying on, in two
 // road-file edges.
+// ITS NAME (ADR-0420): "name": "Oak Street", the planner's (or, for a file made before, the one-off layout tool's, for a
+// person to read and edit). Every street of one RUN -- streets that are one street carrying on: a junction's through
+// pairs, carries_on, a divided road's two carriageways (road_layout.h streetRuns) -- carries the same name. Empty: the
+// street carries no name (a freeway, a ramp: assets/data/streets.json "unnamed"), or the file names none.
 struct PlannedStreet {
     std::string id, road;
     double from = 0, to = 0;
     std::array<std::string, 2> junctions;   // at `from`, at `to`
     std::array<std::string, 2> carriesOn;   // the street this one carries on into at `from`, at `to` (empty: none)
+    std::string name;
 };
 
 // A DIVIDED ROAD'S TWO CARRIAGEWAYS AS PLANNED (ADR-0419): two one-way road-file edges that are one road, its two ways.

@@ -2,13 +2,17 @@
   "_comment": [
     "Street naming and sign look as DATA (Glenn, 2026-09-20: 'for the street names",
     "you've put them in code. I'm starting to wonder if some of this shouldn't be",
-    "data and not baked into the C++'). The C++ owns the ALGORITHM -- which edges",
-    "form one street (street_names.h) and how a blade is lettered to fit",
+    "data and not baked into the C++'). The C++ owns the ALGORITHM -- how a run of",
+    "streets gets a name (street_names.h) and how a blade is lettered to fit",
     "(street_signs.h). This file owns the CONTENT: the words, what suffix a road of",
-    "a given width carries, how a sign shop shortens it, and what the blade looks",
-    "like. Edit it and the city renames itself; no rebuild.",
+    "a given width carries, which road classes carry no name, how a sign shop",
+    "shortens a name, and what the blade looks like.",
     "A name is '<word> <suffix>'. Banks are drawn from evenly; a word is used once",
-    "per city while the banks last."
+    "per city while the banks last.",
+    "Since ADR-0420 the PLANNER names the streets and writes the names into the road",
+    "file (lanes_tool layout --names for a file made before); a level reads them",
+    "from there. Edit a name in the road file and its signs and map change; editing",
+    "the words here changes the names only of cities planned (or named) afterwards."
   ],
   "names": {
     "seed": 20260918,
@@ -40,6 +44,7 @@
       { "minWidth": 0,  "choices": ["Lane", "Court", "Place"] }
     ],
     "classSuffix": { "alley": "Alley" },
+    "unnamed": ["freeway", "ramp", "divider"],
     "abbreviations": {
       "Boulevard": "Blvd", "Parkway": "Pkwy", "Avenue": "Ave", "Street": "St",
       "Road": "Rd", "Drive": "Dr", "Lane": "Ln", "Court": "Ct", "Place": "Pl",

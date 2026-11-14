@@ -1092,7 +1092,14 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
     // THE LAYOUT, from birth (road_layout.h, ADR-0417): the junctions where the roads this plan laid meet -- the ends it
     // made from one point, the ramps' ends where their anchors say -- and the streets between them, with ids. Nothing
     // above changes: the edges, classes and ramps are as they were, and the bake's key does not see the layout.
-    roads::lanes::writeLayout(scene, roads::lanes::deriveLayout(roads::lanes::RoadLabGraph::fromJson(scene), roads::lanes::LayoutSource::Planner));
+    // And THE STREETS' NAMES (ADR-0420): each run of streets that is one street carrying on gets one name from the street
+    // name book, written into its streets; a level reads them from there.
+    {
+        const roads::lanes::RoadLabGraph g = roads::lanes::RoadLabGraph::fromJson(scene);
+        roads::lanes::RoadLayout layout = roads::lanes::deriveLayout(g, roads::lanes::LayoutSource::Planner);
+        roads::lanes::nameLayout(layout, g);
+        roads::lanes::writeLayout(scene, layout);
+    }
     return scene;
 }
 

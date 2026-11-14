@@ -98,27 +98,30 @@ bool wouldCreateCycle(World& world, Entity child, Entity parent) {
 }  // namespace engine
 
 
-#include <algorithm>
-#include "procgen/city/street_names.h"
+#ifdef RT_ROADS_LANES
+#include "procgen/city/roads/road_model.h"
+#endif
 
 namespace engine {
 
-std::string StreetDirectory::nearestName(const Vec2& p, Real reach) const {
-    if (!naming) return {};
-    Real best = reach * reach;
-    int pick = -1;
-    for (std::size_t s = 0; s < lines.size() && s < naming->streets.size(); ++s) {
-        const std::vector<Vec2>& L = lines[s];
-        for (std::size_t i = 0; i + 1 < L.size(); ++i) {
-            const Vec2 a = L[i], b = L[i + 1], ab = b - a;
-            const Real l2 = ab.x * ab.x + ab.y * ab.y;
-            const Real t = l2 > 1e-12 ? std::clamp(((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / l2, Real(0), Real(1)) : Real(0);
-            const Real dx = a.x + ab.x * t - p.x, dy = a.y + ab.y * t - p.y;
-            const Real d2 = dx * dx + dy * dy;
-            if (d2 < best) { best = d2; pick = static_cast<int>(s); }
+std::string LevelRoadModel::streetNameNear(const Vec2& p, Real reach) const {
+    std::string out;
+#ifdef RT_ROADS_LANES
+    Real best = reach;
+    for (const std::shared_ptr<RoadModel>& m : cities) {
+        if (!m) continue;
+        Real d = 0;
+        const std::string name = engine::streetNameNear(*m, p, best, &d);
+        if (!name.empty() && d < best) {
+            best = d;
+            out = name;
         }
     }
-    return pick >= 0 ? naming->streets[static_cast<std::size_t>(pick)].name : std::string();
+#else
+    (void)p;
+    (void)reach;
+#endif
+    return out;
 }
 
 }  // namespace engine

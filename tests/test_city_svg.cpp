@@ -31,6 +31,17 @@ CityMapData smallCity() {
     g.addEdge(3, 0, 10.0);
     m.nav = buildNavGraph(g);
     m.furniture = planStreetFurniture(m.nav, [](Real, Real) { return Real(0); });
+    // The road model's streets and junctions (what the loader hands the map, ADR-0420): the loop's four sides at their
+    // travel width, two of them named.
+    const char* const sideNames[] = {"Acme Street", "", "Harbour Road", ""};
+    for (int i = 0; i < 4; ++i) {
+        CityMapData::Street s;
+        s.line = {g.nodes[static_cast<std::size_t>(i)].pos, g.nodes[static_cast<std::size_t>((i + 1) % 4)].pos};
+        s.width = 10.0;
+        s.name = sideNames[i];
+        m.streets.push_back(s);
+        m.junctions.push_back(g.nodes[static_cast<std::size_t>(i)].pos);
+    }
     // The asphalt's outer outline (CCW in x/z), a curb loop 5 m outside the
     // centrelines, and the inner block hole.
     m.curbLoops.push_back({Vec2(-5, -5), Vec2(205, -5), Vec2(205, 205), Vec2(-5, 205)});
@@ -63,13 +74,16 @@ TEST_CASE(city_map_draws_every_layer_as_its_own_group) {
     std::remove(path.c_str());
     int n = 0;
     const char* const* names = CityMapLayers::names(&n);
-    CHECK(n == 15);   // +doors (ADR-0080): the grammar's real apertures
+    CHECK(n == 17);   // +doors (ADR-0080): the grammar's real apertures; +junctions, names (ADR-0420): the road model's
     for (int i = 0; i < n; ++i)
         CHECK(svg.find("id='layer-" + std::string(names[i]) + "'") != std::string::npos);
     CHECK(svg.find("toggleLayer(") != std::string::npos);            // the in-file switches
     CHECK(svg.find("financial") != std::string::npos);               // the district label
     CHECK(svg.find("office Acme") != std::string::npos);             // the place
     CHECK(svg.find("stroke-width='10.0'") != std::string::npos);     // a street at its width
+    CHECK(svg.find("Acme Street") != std::string::npos);             // a street's stated name, along it
+    CHECK(svg.find("Harbour Road") != std::string::npos);
+    CHECK(svg.find("cx='200.0' cy='200.0' r='4'") != std::string::npos);   // a junction of the model
     CHECK(svg.find("stroke-width='3.5'") != std::string::npos);      // the sidewalk band
     CHECK(m.furniture.signals.size() > 0 || m.furniture.lampBases.size() > 0);
 }

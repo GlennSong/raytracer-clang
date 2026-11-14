@@ -470,6 +470,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                     const nlohmann::json& v = sj["carries_on"][k];
                     st.carriesOn[k] = v.is_string() ? v.get<std::string>() : std::string();
                 }
+            st.name = sj.value("name", std::string());
             g.streets.push_back(st);
         }
         std::set<std::string> streetIds;
