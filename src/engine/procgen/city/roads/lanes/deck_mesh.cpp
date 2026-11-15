@@ -307,12 +307,12 @@ bool trackClass(const RoadLabGraph& g, const std::string& cls) {
 bool trackLane(const Result& r, int li) {
     if (li < 0 || li >= static_cast<int>(r.lanes.lanes.size())) return false;
     const Lane& l = r.lanes.lanes[static_cast<size_t>(li)];
-    return !l.isConnector() && l.parent >= 0 && trackClass(r.graph, r.graph.edges[static_cast<size_t>(l.parent)].cls);
+    return !l.isConnector() && l.road() >= 0 && trackClass(r.graph, r.graph.edges[static_cast<size_t>(l.road())].cls);
 }
 
 // A lane's left-normal offset from its parent spine (laneSlots' convention), measured where it starts.
 double laneOffset(const Result& r, const Lane& l) {
-    const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)];
+    const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.road())];
     if (e.xy.size() < 2 || l.xy.empty()) return 0;
     return dot(l.xy.front() - e.xy.front(), perp(tangentAtStation(e.xy, e.s, 0.0)));
 }
@@ -367,7 +367,7 @@ int outerTrack(const Result& r, int ei, int side, double* offOut) {
     int best = -1; double bestOff = 0;
     for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
         const Lane& l = r.lanes.lanes[li];
-        if (l.parent != ei || l.isConnector()) continue;
+        if (l.road() != ei || l.isConnector()) continue;
         const double off = laneOffset(r, l);
         if (off * side <= 0 && !(off == 0 && side > 0)) continue;   // a centred single track serves both sides
         if (best < 0 || off * side > bestOff * side) { best = static_cast<int>(li); bestOff = off; }
@@ -384,7 +384,7 @@ bool footwayClass(const RoadLabGraph& g, const std::string& cls) {
 bool footwayLane(const Result& r, int li) {
     if (li < 0 || li >= static_cast<int>(r.lanes.lanes.size())) return false;
     const Lane& l = r.lanes.lanes[static_cast<size_t>(li)];
-    return !l.isConnector() && l.parent >= 0 && footwayClass(r.graph, r.graph.edges[static_cast<size_t>(l.parent)].cls);
+    return !l.isConnector() && l.road() >= 0 && footwayClass(r.graph, r.graph.edges[static_cast<size_t>(l.road())].cls);
 }
 
 // A STATION STAIR (Glenn, 2026-10-11: "make it accessible"): where a footway crosses a track over its platforms
@@ -413,7 +413,7 @@ std::vector<StationStair> stationStairs(const Result& r) {
         if (!footwayClass(g, f.cls) || f.xy.size() < 2) continue;
         int fl = -1;
         for (size_t li = 0; li < r.lanes.lanes.size(); ++li)
-            if (r.lanes.lanes[li].parent == static_cast<int>(fi) && !r.lanes.lanes[li].isConnector()) { fl = static_cast<int>(li); break; }
+            if (r.lanes.lanes[li].road() == static_cast<int>(fi) && !r.lanes.lanes[li].isConnector()) { fl = static_cast<int>(li); break; }
         if (fl < 0) continue;
         const double hwF = g.hw(f);
         for (size_t ei = 0; ei < g.edges.size(); ++ei) {
@@ -480,7 +480,7 @@ std::vector<StationStair> stationStairs(const Result& r) {
 void footwayStairs(RenderMesh& steps, const Result& r, int li) {
     const Lane& l = r.lanes.lanes[static_cast<size_t>(li)];
     if (l.s.size() < 2 || l.s.back() < 2.0) return;
-    const double len = l.s.back(), ds = 0.05, hx = std::max(0.5, l.w / 2 - 0.1);
+    const double len = l.s.back(), ds = 0.05, hx = std::max(0.5, l.width / 2 - 0.1);
     auto zAt = [&](double st) { return r.heights->deck(li, pointAt(l.xy, l.s, std::clamp(st, 0.0, len))); };
     // the steep stretches, on a 1 m grade read
     std::vector<std::pair<double, double>> runs;
@@ -724,14 +724,14 @@ int junctionCrossRank(const Result& r, const LaneLookup& look, size_t li, const 
     const double zl = H.deck(static_cast<int>(li), p); int best = -1;
     for (int ojI : look.grid.at(p)) {
         const size_t oj = static_cast<size_t>(ojI); const Lane& o = L.lanes[oj];
-        if (oj == li || o.isConnector() || o.parent == l.parent || o.parent < 0 || r.pavement.footprints[oj].empty()) continue;
+        if (oj == li || o.isConnector() || o.road() == l.road() || o.road() < 0 || r.pavement.footprints[oj].empty()) continue;
         const Box2& b = look.box[oj];
         if (p.x < b.minX || p.x > b.maxX || p.y < b.minY || p.y > b.maxY || !look.footprint[oj].contains(p)) continue;
         if (std::fabs(H.deck(static_cast<int>(oj), p) - zl) > kJunctionSameLevel) continue;
         Projection pr = project(o.xy, o.s, p);
         if (std::fabs(dot(t, tangentAtStation(o.xy, o.s, pr.station))) > parallelCos) continue;
-        best = std::max(best, r.graph.cls(r.graph.edges[static_cast<size_t>(o.parent)]).rank);
-        if (crossEdges) crossEdges->push_back(o.parent);
+        best = std::max(best, r.graph.cls(r.graph.edges[static_cast<size_t>(o.road())]).rank);
+        if (crossEdges) crossEdges->push_back(o.road());
     }
     return best;
 }
@@ -826,7 +826,7 @@ std::vector<RailTrack> railTracks(const Result& r) {
     for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
         if (!trackLane(r, static_cast<int>(li))) continue;
         const Lane& l = r.lanes.lanes[li]; if (l.s.size() < 2) continue;
-        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)];
+        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.road())];
         RailTrack t; t.edge = e.id; t.cls = e.cls; t.dir = l.dir >= 0 ? +1 : -1;
         const double len = l.s.back(); const int n = std::max(2, static_cast<int>(std::ceil(len / 2.0)) + 1);
         for (int k = 0; k < n; ++k) {
@@ -838,7 +838,7 @@ std::vector<RailTrack> railTracks(const Result& r) {
         for (const PlatformSpec& P : e.platforms)
             for (int side = -1; side <= 1; side += 2) {
                 if (P.side != 0 && P.side != side) continue;
-                if (outerTrack(r, l.parent, side, nullptr) != static_cast<int>(li)) continue;
+                if (outerTrack(r, l.road(), side, nullptr) != static_cast<int>(li)) continue;
                 const Vec2 q = pointAt(e.xy, e.s, std::clamp((P.s0 + P.s1) / 2, 0.0, e.s.back()));
                 RailStop st; st.name = P.name;
                 const double a = project(l.xy, l.s, pointAt(e.xy, e.s, std::clamp(P.s0, 0.0, e.s.back()))).station;
@@ -852,7 +852,7 @@ std::vector<RailTrack> railTracks(const Result& r) {
                 st.top = r.heights->deck(static_cast<int>(li), pointAt(l.xy, l.s, project(l.xy, l.s, q).station)) + kRailHeadAbove + P.h;
                 // its night lights: under every other canopy lamp, a little below the fitting
                 {
-                    double off = 0; outerTrack(r, l.parent, side, &off);
+                    double off = 0; outerTrack(r, l.road(), side, &off);
                     const double midLat = off + side * (kPlatformGap + P.w / 2);
                     const std::vector<double> ls = canopyLampStations(std::max(0.0, P.s0), std::min(e.s.back(), P.s1));
                     for (std::size_t k = 0; k < ls.size(); k += 2) {
@@ -1007,11 +1007,11 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
     };
     auto isDeckLane = [&](int li) {
         if (li < 0 || li >= static_cast<int>(L.lanes.size())) return false; const Lane& l = L.lanes[static_cast<size_t>(li)];
-        if (l.isConnector() || l.parent < 0) return false; const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; return e.isRamp() || barriered(e.cls);
+        if (l.isConnector() || l.road() < 0) return false; const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.road())]; return e.isRamp() || barriered(e.cls);
     };
     for (size_t li = 0; li < L.lanes.size(); ++li) {
         if (!isDeckLane(static_cast<int>(li))) continue; const Lane& l = L.lanes[li]; if (l.s.size() < 2 || l.s.back() < 8) continue;
-        const double slabThick = r.graph.cls(r.graph.edges[static_cast<size_t>(l.parent)]).thick, gw = 0.7, gd = 1.6;
+        const double slabThick = r.graph.cls(r.graph.edges[static_cast<size_t>(l.road())]).thick, gw = 0.7, gd = 1.6;
         int n = std::max(2, static_cast<int>(l.s.back() / 4.0) + 1); bool prevOn = false; Vec2 pp, pn; double pz = 0;
         for (int k = 0; k < n; ++k) {
             const double st = l.s.back() * k / (n - 1); const Vec2 p = pointAt(l.xy, l.s, st); const Vec2 nrm = perp(tangentAtStation(l.xy, l.s, st));
@@ -1066,8 +1066,8 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
         std::sort(kv.second.begin(), kv.second.end(), [](const JunctionSpan& a, const JunctionSpan& b) { return a.s0 < b.s0; });
     // a point on a street lane inside one of the stated junctions' areas along its road
     auto inSpan = [&](const Lane& l, const Vec2& p) {
-        auto it = boxes.find(l.parent); if (it == boxes.end()) return false;
-        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; const double st = project(e.xy, e.s, p).station;
+        auto it = boxes.find(l.road()); if (it == boxes.end()) return false;
+        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.road())]; const double st = project(e.xy, e.s, p).station;
         for (const JunctionSpan& sp : it->second) if (st >= sp.s0 - 0.5 && st <= sp.s1 + 0.5) return true;
         return false;
     };
@@ -1109,20 +1109,22 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
         return pts[k] + (pts[k + 1] - pts[k]) * f;
     };
     auto covers = [&](size_t li, double s) {
-        return atOrPast(s, L.lanes[li].spineFrom, kLaneLineStation) && atOrBefore(s, L.lanes[li].spineTo, kLaneLineStation);
+        return atOrPast(s, model.lanes[li].spineFrom, kLaneLineStation) && atOrBefore(s, model.lanes[li].spineTo, kLaneLineStation);
     };
-    // the lanes of each road running each way, the centre-line side first (by the builder's slots)
+    // the lanes of each road running each way, the centre-line side first (by the model's slots). From here on a lane's
+    // facts (road, direction, slot, stretch of spine) are read from the model's lane; the builder's lane gives only the
+    // lines to draw along (its centre line and edges).
     std::map<std::pair<int, int>, std::vector<size_t>> sameWay;
     size_t connectorLanes = 0;
     for (size_t li = 0; li < L.lanes.size(); ++li) {
-        const Lane& l = L.lanes[li];
+        const ModelLane& ml = model.lanes[li];
         if (trackLane(r, static_cast<int>(li)) || footwayLane(r, static_cast<int>(li))) continue;   // a track is not painted, nor a path
-        if (l.parent < 0) { ++connectorLanes; continue; }
+        if (!ml.onRoad()) { ++connectorLanes; continue; }
         if (stationOf[li].empty()) continue;
-        sameWay[std::make_pair(l.parent, l.dir)].push_back(li);
+        sameWay[std::make_pair(ml.road(), ml.dir)].push_back(li);
     }
     for (std::pair<const std::pair<int, int>, std::vector<size_t>>& kv : sameWay)
-        std::stable_sort(kv.second.begin(), kv.second.end(), [&](size_t a, size_t b) { return L.lanes[a].slot < L.lanes[b].slot; });
+        std::stable_sort(kv.second.begin(), kv.second.end(), [&](size_t a, size_t b) { return model.lanes[a].slot < model.lanes[b].slot; });
     if (connectorLanes > 0)
         plan.problems.push_back(std::to_string(connectorLanes) + " connector lanes: the road graph states nothing about what lies beside "
                                 "a connector, so no line is painted along one");
@@ -1177,9 +1179,9 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
             if (armsHere != armsAlong.end())
                 for (const ArmAlong& aa : armsHere->second)
                     for (double s : {aa.mouth, aa.boxEdge, aa.stopLine, aa.stopLine - solidBefore, aa.stopLine + solidBefore}) cuts.push_back(s);
-            for (size_t lj : lanesHere) { cuts.push_back(L.lanes[lj].spineFrom); cuts.push_back(L.lanes[lj].spineTo); }
+            for (size_t lj : lanesHere) { cuts.push_back(model.lanes[lj].spineFrom); cuts.push_back(model.lanes[lj].spineTo); }
             if (otherWay != sameWay.end())
-                for (size_t lj : otherWay->second) { cuts.push_back(L.lanes[lj].spineFrom); cuts.push_back(L.lanes[lj].spineTo); }
+                for (size_t lj : otherWay->second) { cuts.push_back(model.lanes[lj].spineFrom); cuts.push_back(model.lanes[lj].spineTo); }
             std::sort(cuts.begin(), cuts.end());
             std::vector<double> at;
             for (double s : cuts)
@@ -1210,7 +1212,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
                         kind = PaintedLineKind::None;   // inside a junction: no paint
                     } else if (side == 0) {
                         for (size_t lj : lanesHere)
-                            if (L.lanes[lj].slot > l.slot && covers(lj, mid)) { other = static_cast<int>(lj); break; }
+                            if (model.lanes[lj].slot > model.lanes[li].slot && covers(lj, mid)) { other = static_cast<int>(lj); break; }
                         if (other >= 0) {
                             // between an arm's stop line and its mouth the lane table has no lanes side by side: no line
                             bool pastStopLine = false;
@@ -1231,7 +1233,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
                         }
                     } else {
                         bool nearerCentre = false, oncoming = false;
-                        for (size_t lj : lanesHere) nearerCentre = nearerCentre || (L.lanes[lj].slot < l.slot && covers(lj, mid));
+                        for (size_t lj : lanesHere) nearerCentre = nearerCentre || (model.lanes[lj].slot < model.lanes[li].slot && covers(lj, mid));
                         if (otherWay != sameWay.end())
                             for (size_t lj : otherWay->second) oncoming = oncoming || covers(lj, mid);
                         const bool sharedCentre = oncoming && !(e.lanes.gap > 0);   // no median stated between the two ways
@@ -1305,10 +1307,10 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
             // the paved width at the crosswalk: this road's lanes there
             struct LL { int li; double lat, w; }; std::vector<LL> ls;
             for (size_t li = 0; li < L.lanes.size(); ++li) {
-                const Lane& l = L.lanes[li]; if (l.parent != pe || l.isConnector() || l.s.size() < 2) continue;
+                const Lane& l = L.lanes[li]; if (l.road() != pe || l.isConnector() || l.s.size() < 2) continue;
                 Projection pr = project(l.xy, l.s, P); if (pr.station < 1.0 || pr.station > l.s.back() - 1.0 || pr.distance > 30.0) continue;
                 Vec2 c = pointAt(l.xy, l.s, pr.station);
-                ls.push_back({static_cast<int>(li), dot(c - P, N), l.w});
+                ls.push_back({static_cast<int>(li), dot(c - P, N), l.width});
             }
             if (ls.empty()) continue;
             double latMin = 1e9, latMax = -1e9; for (const LL& x : ls) { latMin = std::min(latMin, x.lat - x.w / 2); latMax = std::max(latMax, x.lat + x.w / 2); }
@@ -1367,7 +1369,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
                         arrow.station = sTail;
                         Vec2 along;
                         arrow.at = atStation(li, L.lanes[li].xy, sTail, &along);
-                        arrow.heading = along * static_cast<double>(L.lanes[li].dir);
+                        arrow.heading = along * static_cast<double>(model.lanes[li].dir);
                         plan.arrows.push_back(arrow);
                     }
                 }
@@ -1386,7 +1388,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
                 double lo = 1e300, hi = -1e300;
                 size_t loLane = arriving.front(), hiLane = arriving.front();
                 for (size_t li : arriving) {
-                    const double lat = dot(atStation(li, L.lanes[li].xy, sStop, nullptr) - Q, across), half = L.lanes[li].w / 2;
+                    const double lat = dot(atStation(li, L.lanes[li].xy, sStop, nullptr) - Q, across), half = model.lanes[li].width / 2;
                     if (lat - half < lo) { lo = lat - half; loLane = li; }
                     if (lat + half > hi) { hi = lat + half; hiLane = li; }
                     bar.lanes.push_back(static_cast<int>(li));
@@ -1520,7 +1522,7 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
     // meets is a road it carries on into (a mouth, never walled)
     auto isFreewayLane = [&](int li) {
         if (li < 0 || li >= static_cast<int>(L.lanes.size())) return false; const Lane& l = L.lanes[static_cast<size_t>(li)];
-        if (l.isConnector() || l.parent < 0) return false; const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; return e.isRamp() || e.cls == "freeway";
+        if (l.isConnector() || l.road() < 0) return false; const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.road())]; return e.isRamp() || e.cls == "freeway";
     };
     // ...and every road whose class AUTHORS a barrier (the island's mountain road, ADR-0117)
     auto authored = [&](const std::string& cls) {
@@ -1531,7 +1533,7 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
     auto isDeckLane = [&](int li) {
         if (isFreewayLane(li)) return true;
         if (li < 0 || li >= static_cast<int>(L.lanes.size())) return false; const Lane& l = L.lanes[static_cast<size_t>(li)];
-        return !l.isConnector() && l.parent >= 0 && authored(r.graph.edges[static_cast<size_t>(l.parent)].cls);
+        return !l.isConnector() && l.road() >= 0 && authored(r.graph.edges[static_cast<size_t>(l.road())].cls);
     };
     auto pavedLaneAt = [&](const Vec2& q, double z, bool deckOnly) {
         for (int ojI : laneGrid.at(q)) {
@@ -1622,8 +1624,8 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
                 if (hit >= 0 && hit != inLane) { nb = hit; nd = d; break; }
             }
             outLane = nb;
-            const EdgeSpec& me = r.graph.edges[static_cast<size_t>(L.lanes[static_cast<size_t>(inLane)].parent)];
-            const EdgeSpec* ne = outLane >= 0 && L.lanes[static_cast<size_t>(outLane)].parent >= 0 ? &r.graph.edges[static_cast<size_t>(L.lanes[static_cast<size_t>(outLane)].parent)] : nullptr;
+            const EdgeSpec& me = r.graph.edges[static_cast<size_t>(L.lanes[static_cast<size_t>(inLane)].road())];
+            const EdgeSpec* ne = outLane >= 0 && L.lanes[static_cast<size_t>(outLane)].road() >= 0 ? &r.graph.edges[static_cast<size_t>(L.lanes[static_cast<size_t>(outLane)].road())] : nullptr;
             const double hAbove = z[i] - groundAt(pts[i]);
             // A MOUTH IS NOT AN EDGE. The outline is the boundary of the freeway and ramp pavement alone, so it
             // wraps around the END of a ramp where it meets a street — and a barrier laid there seals the exit
@@ -1633,7 +1635,7 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
                 for (const Vec2& q : {pts[i], pts[i] + nrm * 0.6, pts[i] - nrm * 0.6}) {
                     const int hit = pavedLaneAt(q, z[i], false);
                     // another road's pavement (not a freeway or ramp, not this road's own lanes): it carries on
-                    if (hit >= 0 && !isFreewayLane(hit) && L.lanes[static_cast<size_t>(hit)].parent != L.lanes[static_cast<size_t>(inLane)].parent) return true;
+                    if (hit >= 0 && !isFreewayLane(hit) && L.lanes[static_cast<size_t>(hit)].road() != L.lanes[static_cast<size_t>(inLane)].road()) return true;
                 }
                 return false;
             }();

@@ -28,6 +28,11 @@ struct SceneOptions {
     Real clearance = 8.0;           // the deck's height over a street it crosses
     int diamondsPerRoute = 6;       // interchanges per freeway route
     Real interchangeSpacing = 650;  // least distance between them along the route
+    // HOW FAR BEFORE A STOP LINE THE LINES BETWEEN LANES ARE SOLID (metres; no car changes lanes on the approach to a
+    // junction). The plan's one statement of it (ADR-0435): the scene writes it into the road file as
+    // `lane_rules.solid_before_stop_line`, which the lane level and the paint read, and lays its ramps by the same
+    // number (an off-ramp's merge lane ends before that stretch).
+    Real solidBeforeStopLine = 20.0;
     // THE CONTROL PLACEMENT POLICY (ADR-0422; the driving library's loadControlPolicy reads the shared one): given, the
     // scene's last step plans every junction's control, its signs and the row that decided it (`why`), and each road's
     // posted limit (control_plan.h planControls), and writes them in, so a fresh road file states its controls. Null:

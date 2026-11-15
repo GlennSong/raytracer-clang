@@ -18,6 +18,7 @@
 //
 // Units: metres, seconds, radians unless a name says degrees.
 
+#include "engine/procgen/city/roads/vehicle_size.h"
 #include "rt_math.h"
 
 #include <cstddef>
@@ -74,20 +75,12 @@ struct VehicleClass {
     bool hasTag(const std::string& tag) const;   // binary search over the sorted tags
 };
 
-// ONE WHEEL, as far as the wheelbase cares: how far along the body it sits (metres, + toward the nose) and whether it
-// steers.
-struct WheelSpot {
-    Real along = 0;
-    bool steered = false;
-};
-
-// THE WHEELBASE from a wheel layout: the middle of the steered wheels to the middle of the unsteered ones (a tandem's
-// two back axles count as one, at their middle). False when there are no steered or no unsteered wheels.
-bool wheelbaseFromWheels(const std::vector<WheelSpot>& wheels, Real& wheelbase);
-
-// THE TIGHTEST TURN, from the wheelbase and the largest steering angle: the radius at the middle of the back axle is
-// wheelbase / tan(angle) (the simple "bicycle" picture of a car). Zero when the angle is not between 0 and 90 degrees.
-Real tightestTurnRadius(Real wheelbase, Real maxSteerDegrees);
+// THE WHEELBASE from a wheel layout and THE TIGHTEST TURN from the wheelbase and the largest steering angle: the roads'
+// own functions (engine/procgen/city/roads/vehicle_size.h), which read the level's fleet with them (ADR-0435), so the
+// road is checked against the same radius a class drives with.
+using engine::roads::lanes::WheelSpot;
+using engine::roads::lanes::wheelbaseFromWheels;
+using engine::roads::lanes::tightestTurnRadius;
 
 // A CLASS FROM WHAT THE VEHICLE DATA STATES: its name, its body's length and width, its wheelbase and largest
 // steering angle. The authored fields keep their defaults until the `driving` block is read over them.
@@ -120,13 +113,10 @@ private:
 // length the longest (the body that cuts furthest inside a bend, ADR-0412). Then a connector open to a tag is one every
 // class with that tag can drive, and the crossing points reach as far as any of their bodies swing. (Radii, widths and
 // lengths are the classes' own, derived from the body and the wheels: deriveVehicleClass. A trailer's length is not
-// in it: the body the driving model places, carPose, is the vehicle's own, and nothing places a trailer yet.)
-struct TagSize {
-    std::string tag;
-    Real turningRadius = 0;
-    Real width = 0;
-    Real length = 0;
-};
+// in it: the body the driving model places, carPose, is the vehicle's own, and nothing places a trailer yet.) The type
+// and the rule are the roads' (vehicle_size.h VehicleSize, addVehicleSize); a level's road is checked against its own
+// fleet by the roads themselves (lanes/road_model_cache.h levelVehicles), so only tests on hand-made roads call this.
+using TagSize = engine::roads::lanes::VehicleSize;
 // Every tag any class carries, sorted by name, so the list (and the road checked against it) does not depend on the
 // order the classes were added in.
 std::vector<TagSize> tagSizes(const VehicleClasses& classes);

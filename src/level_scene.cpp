@@ -10,7 +10,8 @@
 #include "engine/procgen/city/city_lots.h"   // living-city lots (offline parity)
 #include "engine/procgen/city/roads/road_entity.h"
 #include "engine/procgen/city/roads/road_builder.h"   // ONE road builder interface — the level picks (ADR-0089)
-#include "engine/procgen/city/roads/lanes/lots_producer.h"   // levelLotRoads: the roads as the lot pass reads them
+#include "engine/procgen/city/roads/lanes/lots_producer.h"   // lotRoadInputs: the roads as the lot pass reads them
+#include "engine/procgen/city/roads/lanes/road_model_cache.h"   // obtainLevelRoadModel: the level's one road model
 #include "engine/procgen/noise.h"
 #include "engine/procgen/terrain_field.h"   // HeightField (level ground sampler)
 #include "engine/procgen/earthwork.h"       // the earthwork field (device parity)
@@ -575,7 +576,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         // here is what the loader does before its terrain pre-pass. Without it the offline
         // render of a lane-built city had roads, traffic and no buildings at all.
         std::vector<engine::Poly2> cityHoles;
-        engine::LotRoadInputs cityRoads;   // the streets a door faces and the drawn deck (lots_producer.h levelLotRoads)
+        engine::LotRoadInputs cityRoads;   // the streets a door faces and the drawn deck (lots_producer.h lotRoadInputs)
         double cityPavedSidewalk = 0;
         int lotRoadOrdinal = 0;
         if (levelGround)
@@ -597,11 +598,14 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                     const roads::RoadProducts built = rb.build(in);   // a bundle hit, not a rebuild
                     if (!built.holes.empty()) {
                         cityHoles = built.holes;
-                        // the roads the lot pass reads, as the lots producer makes them (the one definition)
+                        // the roads the lot pass reads: the level's one road model (the offline tracer runs without the
+                        // loader, so it asks the one function that makes it, as the bake does: ADR-0435)
                         engine::bundle::LevelInputs levelInputs;
                         std::string inputsErr;
                         if (engine::bundle::loadLevelInputs(levelPath, levelInputs, &inputsErr))
-                            cityRoads = engine::roads::lanes::levelLotRoads(levelInputs, built.deck);
+                            cityRoads = engine::roads::lanes::lotRoadInputs(
+                                engine::roads::lanes::obtainLevelRoadModel(levelInputs, engine::roads::lanes::levelRoadModelCacheDir()).cities,
+                                built.deck);
                         else
                             LOG_WARN << "[citylots] the level's road file could not be read for the lot pass: " << inputsErr;
                         cityPavedSidewalk = built.bands.sidewalkWidth;

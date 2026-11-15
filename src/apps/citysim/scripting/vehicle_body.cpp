@@ -46,34 +46,8 @@ bool optMeshField(lua_State* L, int t, const char* key, RenderMesh& out,
     return ok;
 }
 
-// Push `vehicle.fleet[slot+1]` onto the stack. On failure the stack is restored
-// to `base` and false is returned with `err` filled.
-bool pushFleetSlot(lua_State* L, int base, int slot, const std::string& where,
-                   std::string* err) {
-    lua_getglobal(L, "vehicle");
-    if (!lua_istable(L, -1)) {
-        lua_settop(L, base);
-        return fail(err, "vehicles.lua: no global `vehicle` table (load it first)");
-    }
-    lua_getfield(L, -1, "fleet");
-    if (!lua_istable(L, -1)) {
-        lua_settop(L, base);
-        return fail(err, "vehicles.lua: no `vehicle.fleet` array");
-    }
-    const int fleet = lua_gettop(L);
-    const int n = static_cast<int>(luaL_len(L, fleet));
-    if (slot < 0 || slot >= n) {
-        lua_settop(L, base);
-        return fail(err, where + ": slot out of range (fleet has " +
-                             std::to_string(n) + ")");
-    }
-    lua_rawgeti(L, fleet, slot + 1);
-    if (!lua_istable(L, -1)) {
-        lua_settop(L, base);
-        return fail(err, where + " is not a table");
-    }
-    return true;
-}
+// (pushFleetSlot, the slot count, a slot's catalogue entry and its handling: the engine's fleet reader,
+// engine/scripting/fleet_lua.h, which the roads read the fleet with too.)
 
 // Append a vertex-coloured box (centred at `c`, dimensions `size`) into `out` —
 // the EXACT primitive citysim's addBox uses (MeshBuilder::box, offset, tint), so
@@ -83,18 +57,6 @@ void addColoredBox(RenderMesh& out, Vec3 size, Vec3 c, Vec3 color) {
 }
 
 }  // namespace
-
-bool selectFleet(ScriptVM& vm, const std::string& name, std::string* err) {
-    lua_State* L = luaState(vm);
-    const int base = lua_gettop(L);
-    lua_getglobal(L, "vehicle");
-    if (!lua_istable(L, -1)) { lua_settop(L, base); return fail(err, "no global `vehicle` table"); }
-    lua_getfield(L, -1, name.c_str());
-    if (!lua_istable(L, -1)) { lua_settop(L, base); return fail(err, "no `vehicle." + name + "` table"); }
-    lua_setfield(L, -2, "fleet");   // vehicle.fleet = vehicle[name]
-    lua_settop(L, base);
-    return true;
-}
 
 bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
                       std::string* err) {
@@ -364,70 +326,13 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
     return true;
 }
 
-int fleetSlotCount(ScriptVM& vm) {
-    lua_State* L = luaState(vm);
-    const int base = lua_gettop(L);
-    int n = 0;
-    lua_getglobal(L, "vehicle");
-    if (lua_istable(L, -1)) {
-        lua_getfield(L, -1, "fleet");
-        if (lua_istable(L, -1)) n = static_cast<int>(luaL_len(L, lua_gettop(L)));
-    }
-    lua_settop(L, base);
-    return n;
-}
-
-bool loadFleetCatalogueEntry(ScriptVM& vm, int slot, Vec3& size,
-                             std::string& className, std::string* err) {
-    lua_State* L = luaState(vm);
-    const int base = lua_gettop(L);
-    const std::string where = "vehicle.fleet[" + std::to_string(slot + 1) + "]";
-    if (!pushFleetSlot(L, base, slot, where, err)) return false;
-    const int rec = lua_gettop(L);
-
-    // Deliberately does NOT touch `build` — reading a car's measurements must
-    // not cost a car's geometry.
-    size = vec3Field(L, rec, "size", Vec3(0, 0, 0));
-    className = strField(L, rec, "class");
-    lua_settop(L, base);
-
-    if (size.x < 0 || size.y < 0 || size.z < 0)
-        return fail(err, where + ": `size` has a negative component");
-    return true;
-}
-
-bool loadFleetHandling(ScriptVM& vm, int slot, VehicleSpec& out, std::string* err) {
-    lua_State* L = luaState(vm);
-    const int base = lua_gettop(L);
-    const std::string where = "vehicle.fleet[" + std::to_string(slot + 1) + "]";
-    if (!pushFleetSlot(L, base, slot, where, err)) return false;
-    lua_getfield(L, lua_gettop(L), "handling");
-    if (!lua_istable(L, -1)) {
-        lua_settop(L, base);
-        return fail(err, where + ": no `handling` table");
-    }
-    VehicleSpec spec;
-    readVehicleHandling(L, lua_gettop(L), spec);
-    lua_settop(L, base);
-    if (spec.config.wheels.size() < 2) return fail(err, where + ": `handling` has no wheels");
-    out = std::move(spec);
-    return true;
-}
-
 bool loadFleetDrivingClass(ScriptVM& vm, int slot, driving::VehicleClass& out, std::string* err) {
-    Vec3 size(0, 0, 0);
-    std::string className;
-    VehicleSpec handling;
-    if (!loadFleetCatalogueEntry(vm, slot, size, className, err) || !loadFleetHandling(vm, slot, handling, err))
-        return false;
+    // its body as it follows a road: the engine's reader, the one the roads are checked with (fleet_lua.h)
+    FleetSlotBody body;
+    if (!loadFleetSlotBody(vm, slot, body, err)) return false;
     const std::string where = "vehicle.fleet[" + std::to_string(slot + 1) + "]";
-    std::vector<driving::WheelSpot> spots;
-    for (const PhysicsWorld::VehicleWheel& w : handling.config.wheels) spots.push_back({w.position.z, w.steered});
-    Real wheelbase = 0;
-    if (!driving::wheelbaseFromWheels(spots, wheelbase))
-        return fail(err, where + ": its wheels give no wheelbase (none of them steers, or all do)");
     driving::VehicleClass c =
-        driving::deriveVehicleClass(className, size.z, size.x, wheelbase, handling.config.maxSteerDegrees);
+        driving::deriveVehicleClass(body.className, body.length, body.width, body.wheelbase, body.maxSteerDegrees);
     lua_State* L = luaState(vm);
     const int base = lua_gettop(L);
     if (!pushFleetSlot(L, base, slot, where, err)) return false;

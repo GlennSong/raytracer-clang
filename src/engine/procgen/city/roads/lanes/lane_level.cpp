@@ -87,6 +87,23 @@ struct Piece {
 
 }  // namespace
 
+std::string laneLevelRefusal(const RoadLabGraph& g, const RoadModel& m, bool builtLayer) {
+    std::vector<std::string> missing;
+    if (!builtLayer) missing.push_back("the road model's built layer for this build (assembleRoadModel)");
+    if (!g.listsJunctions || !g.listsStreets)
+        missing.push_back("its junctions and streets (run `lanes_tool layout <road file> --write`)");
+    if (!g.declaresJunctions)
+        missing.push_back("every junction's control (run `city_plan controls <road file> rules/lab.lua --layout --write --controls-only`)");
+    if (!g.statesLaneRules)
+        missing.push_back("its lane rules (run `lanes_tool layout <road file> --lane-rules 20 --write`)");
+    if (!m.armsInRing)
+        missing.push_back("its junctions' arms listed in their ring (run `" + std::string(kArmOrderCommand) + "`)");
+    if (missing.empty()) return std::string();
+    std::string error = "no lane level for " + g.name + ": the road file does not state ";
+    for (std::size_t i = 0; i < missing.size(); ++i) error += (i ? "; nor " : "") + missing[i];
+    return error;
+}
+
 LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraphOptions& opts) {
     const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
     LaneGraphBuild out;
@@ -100,23 +117,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
     const std::size_t nLanes = r.lanes.lanes.size();
 
     // ---- the facts the lane level cannot be built without ------------------------------------------------------------
-    {
-        std::vector<std::string> missing;
-        if (!m.built || m.lanes.size() != nLanes) missing.push_back("the road model's built layer for this build (assembleRoadModel)");
-        if (!g.listsJunctions || !g.listsStreets)
-            missing.push_back("its junctions and streets (run `lanes_tool layout <road file> --write`)");
-        if (!g.declaresJunctions)
-            missing.push_back("every junction's control (run `city_plan controls <road file> rules/lab.lua --layout --write --controls-only`)");
-        if (!g.statesLaneRules)
-            missing.push_back("its lane rules (run `lanes_tool layout <road file> --lane-rules 20 --write`)");
-        if (!m.armsInRing)
-            missing.push_back("its junctions' arms listed in their ring (run `" + std::string(kArmOrderCommand) + "`)");
-        if (!missing.empty()) {
-            out.error = "no lane level for " + g.name + ": the road file does not state ";
-            for (std::size_t i = 0; i < missing.size(); ++i) out.error += (i ? "; nor " : "") + missing[i];
-            return out;
-        }
-    }
+    out.error = laneLevelRefusal(g, m, m.built && m.lanes.size() == nLanes);
+    if (!out.error.empty()) return out;
     out.leftOut.assign(nLanes, 0);
     out.laneLengths.assign(nLanes, 0.0);
     auto edgeAt = [&](uint32_t e) -> const EdgeSpec& { return g.edges[e]; };

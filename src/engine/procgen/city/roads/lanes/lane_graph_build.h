@@ -14,6 +14,7 @@
 
 #include "engine/procgen/city/roads/lane_graph.h"
 #include "engine/procgen/city/roads/lanes/lanes.h"
+#include "engine/procgen/city/roads/vehicle_size.h"
 
 #include <cstdint>
 #include <string>
@@ -22,11 +23,6 @@
 namespace engine {
 namespace roads::lanes {
 
-// How far before a junction's stop line a merging ramp lane must have ended, as the PLANNER lays an interchange's ramps
-// (interchange.cpp; metres). The lane level reads the road file's own statement of the solid stretch before a stop line
-// (`lane_rules.solid_before_stop_line`, ADR-0426), which the one-off tool wrote as this same 20 m into the files that
-// have it; the planner does not write it yet.
-constexpr double kSolidBeforeStopLine = 20.0;
 // The ramp-landing check's parallel test (lanes.cpp checkRampLandings, its one reader since ADR-0426: the lane graph
 // worked out from the built roads used it too, and is gone): a ramp's bare end within this (|cos| of the angle) of a
 // street's direction runs along it, and is judged; one at a wider angle is an arm of a junction there. About 18 degrees,
@@ -151,19 +147,8 @@ constexpr uint32_t kLaneGraphBuildVersion = 12;  // 12: one tolerance for statio
                                                  // 9: each stated merge marked on its Join (CrossingPoint::merging)
                                                  // 10: turns and outlines read the junction's stated ring (ADR-0427)
 
-// A VEHICLE TAG and its body: the tightest radius its path may have, its width and its length (metres). Passed in by the
-// caller (the engine does not know the driving model's vehicles); a connector tighter than the radius is closed to it.
-// The length is nose to tail of the one rigid body that follows the path (engine::bodyOnPlan): through a bend that body
-// lies on the chord between its bumpers and cuts inside the line, so it is swept at its length both where the builder
-// checks a turn stays on the paved road and where it finds which paths' bodies can touch (swept_body.h). Zero: a body
-// with no length, swept as a point on the line (the builder before #284 item 9).
-struct VehicleSize {
-    std::string tag;
-    double turningRadius = 0;
-    double width = 0;
-    double length = 0;
-};
-
+// (A vehicle tag and its body, VehicleSize: roads/vehicle_size.h. A level's are read from its fleet by
+// road_model_cache.h levelVehicles.)
 struct LaneGraphOptions {
     // Every lane is open to every one of these vehicle tags, until lane kinds carry who may use them (a later task).
     std::vector<VehicleSize> vehicles;

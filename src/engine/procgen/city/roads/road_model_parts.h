@@ -39,6 +39,27 @@ inline bool stated(Real v) { return !std::isnan(v); }
 // shortest street is half a metre.)
 inline bool sameWrittenStation(Real a, Real b) { return approxEqual(a, b, kWrittenStation); }
 
+// THE FACTS OF ONE LANE, DECLARED ONCE (ADR-0435). A lane exists in two forms: the builder's lane while a road is being
+// laid and drawn (lanes/lane_expand.h Lane: these facts plus its centre line, edges and working data) and the road
+// model's lane, the record kept (road_model.h ModelLane: these facts plus where it lies on the streets). Both ARE this
+// struct, so a fact has one name and one type, and the model takes the builder's whole (road_model.cpp builtRoadModel),
+// never field by field. Readers that have the model read the model's.
+struct LaneFacts {
+    std::string id, kind;            // kind: through | turn | slip | aux | ramp | connector
+    uint32_t edge = kNoIndex;        // its road, an index into the road file's edges (none: a connector)
+    int dir = 1;                     // +1 along its road's spine, -1 against it
+    // Its place across its road, counted from the centre-line side to the kerb side among the lanes running its way
+    // (f0 / b0 is 0); a turn pocket born on the kerb side is one beyond the kerb lane, one born on the centre-line
+    // side is -1; a ramp's lanes 0 and 1; a connector -1.
+    int slot = -1;
+    Real width = 0;                  // metres
+    Real spineFrom = 0, spineTo = 0; // the stretch of its road's spine it is laid along (stations, from <= to)
+
+    bool onRoad() const { return edge != kNoIndex; }
+    // Its road's index as a signed number, -1 for none: for code that keeps road indices as int.
+    int road() const { return onRoad() ? static_cast<int>(edge) : -1; }
+};
+
 // THE WAY A STATED HEADING POINTS: a heading in degrees counter-clockwise from +x in plan coordinates (an arm's
 // `heading`, as the layout writes it: lanes/control_plan.h degreesOf), as a unit vector. The one reading of a heading.
 inline Vec2 directionOf(Real degrees) { return Vec2(std::cos(degrees * DEG_TO_RAD), std::sin(degrees * DEG_TO_RAD)); }

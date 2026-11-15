@@ -41,7 +41,7 @@ struct LotsCityInputs {
     bundle::HeightGridBlob ground;
     std::vector<Ring> holes;   // pavement holes (they stop at the back of the drawn sidewalk); cityBlocksFromHoles at grow time
     // The pavement a door walks out to, from the same city products. (The streets a door faces are not a city
-    // product: the grow reads them from the level's road file, levelLotRoads below.)
+    // product: the grow reads them from the level's one road model, lotRoadInputs below.)
     double pavedSidewalk = 0.0;
     // The drawn road decks: the earthwork field is pinned to them (lanesEarthworkField), so the lots grow
     // on the ground the terrain will show -- the streets setting it, not natural ground under a skirt.
@@ -59,9 +59,11 @@ LotsCityInputs lotsCityInputs(const CityProducts& p);
 // model's streets, and each stretch of road inside a junction, by its id, with its centre line, its carriageway's half
 // width (travel lanes, median gap and shoulder), its sidewalk and its class, copied from the model; and the drawn
 // deck. Tracks and footways are left out (no building fronts one). A look-up: made on request, never saved.
-LotRoadInputs lotRoadInputs(const RoadModel& planned, const RoadDeckField& deck);
-// ...for a level: its last lane-built city's road file read (ramps composed) into the road model's planned layer.
-LotRoadInputs levelLotRoads(const bundle::LevelInputs& in, const RoadDeckField& deck);
+LotRoadInputs lotRoadInputs(const RoadModel& model, const RoadDeckField& deck);
+// ...for a level: of its last lane-built city (the one whose blocks the lots grow on), out of the level's one road
+// model as road_model_cache.h obtainLevelRoadModel returns it and the loader publishes it (`cities`; ADR-0435). No
+// city, or one whose road file could not be read: no roads.
+LotRoadInputs lotRoadInputs(const std::vector<std::shared_ptr<RoadModel>>& cities, const RoadDeckField& deck);
 // What of a road file the lot pass reads besides what the city's own key already holds (the roads and their classes):
 // its streets' and its junctions' inside stretches' ids, roads and stations. The lots key hashes it.
 std::string lotRoadsKeyText(const nlohmann::json& roadFile);

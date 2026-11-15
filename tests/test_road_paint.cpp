@@ -265,12 +265,12 @@ TEST_CASE(road_paint_lane_lines_are_solid_exactly_where_the_lane_table_forbids_c
         if (l.kind != PaintedLineKind::Dashed && l.kind != PaintedLineKind::Solid) continue;
         ++paintedBetween;
         const Lane& lane = s.r->lanes.lanes[static_cast<std::size_t>(l.lane)];
-        const double roadLength = s.r->graph.edges[static_cast<std::size_t>(lane.parent)].s.back();
+        const double roadLength = s.r->graph.edges[static_cast<std::size_t>(lane.road())].s.back();
         const double station = 0.5 * (l.from + l.to), u = lane.dir > 0 ? station : roadLength - station;
         bool stated = false;
         for (std::size_t sec = 0; sec < G.sections.size() && !stated; ++sec) {
             const SectionSource& ss = lg.sectionSources[sec];
-            if (ss.edge != lane.parent || ss.dir != lane.dir || u < ss.from || u > ss.to) continue;
+            if (ss.edge != lane.road() || ss.dir != lane.dir || u < ss.from || u > ss.to) continue;
             for (uint32_t k = 0; k + 1 < G.sections[sec].lanes.count; ++k) {
                 if (lg.sources[G.sectionLanes[G.sections[sec].lanes.first + k].index].lane != l.lane ||
                     lg.sources[G.sectionLanes[G.sections[sec].lanes.first + k + 1].index].lane != l.other)

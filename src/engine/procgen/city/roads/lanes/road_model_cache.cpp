@@ -3,8 +3,17 @@
 #include "engine/bundle/bundle.h"
 #include "engine/bundle/cache_use.h"
 #include "engine/procgen/city/roads/lanes/city_producer.h"   // the roads' key, the city entities, loadCityGraph
+#include "engine/procgen/city/roads/lanes/lane_expand.h"     // expand: a road file's ramps composed, as the planned layer reads them
+#include "engine/procgen/city/roads/lanes/lane_level.h"      // laneLevelRefusal: what a road file must state
 #include "engine/procgen/city/roads/lanes/road_layout.h"     // laneLevelKey: the layout and lane rules, keyed here
 #include "engine/procgen/city/roads/lane_turns.h"            // laneTurnRules: the turns' table, keyed here
+#include "engine/script_assets.h"                            // the level's vehicle script: found and read
+#ifdef RT_ENABLE_SCRIPTING
+#include "engine/scripting/fleet_lua.h"                      // the level's fleet: what the roads are checked against
+#include "engine/scripting/procgen_bindings.h"
+#include "engine/scripting/script_modules.h"
+#include "engine/scripting/script_vm.h"
+#endif
 
 #include <nlohmann/json.hpp>
 
@@ -204,8 +213,72 @@ uint64_t levelRoadsKey(const bundle::LevelInputs& in) {
     return p->identity(in).key;
 }
 
-LevelBuiltRoads obtainLevelRoadModel(const bundle::LevelInputs& in, const LaneGraphOptions& opts,
-                                     const std::string& cacheDir) {
+LaneGraphOptions levelVehicles(const bundle::LevelInputs& in, std::vector<std::string>* notes) {
+    LaneGraphOptions out;
+    auto note = [&](const std::string& text) { if (notes) notes->push_back(text); };
+    const nlohmann::json citysim = in.level.is_object() ? in.level.value("citysim", nlohmann::json::object()) : nlohmann::json::object();
+    const std::string file = citysim.is_object() ? citysim.value("vehicles", std::string()) : std::string();
+    if (file.empty()) {
+        note("the level names no vehicle script (citysim.vehicles): its roads are checked for no vehicle");
+        return out;
+    }
+#ifdef RT_ENABLE_SCRIPTING
+    const std::string code = loadScriptCode(file, in.levelDir);
+    if (code.empty()) {
+        note("the level's vehicle script '" + file + "' was not found: its roads are checked for no vehicle");
+        return out;
+    }
+    // The script run as the city sim runs it: the procgen library and the module loader first (vehicles.lua begins
+    // with a `require`), then the level's named fleet. Reading the sizes builds no geometry.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    openModuleLoader(vm, makeModuleSource(in.levelDir));
+    std::string err;
+    if (!vm.doString(code, &err)) {
+        note("the level's vehicle script '" + file + "' failed (" + err + "): its roads are checked for no vehicle");
+        return out;
+    }
+    const std::string fleet = citysim.value("fleet", std::string());
+    if (!fleet.empty() && !selectFleet(vm, fleet, &err))
+        note("the level's fleet '" + fleet + "': " + err + " (keeping the script's default fleet)");
+    out.vehicles = fleetVehicleSizes(vm, notes);
+    if (out.vehicles.empty()) note("no vehicle of the level's fleet carries a tag: no turn is open to anyone");
+#else
+    note("this build has no scripting, so the level's vehicle script is not read: its roads are checked for no vehicle");
+#endif
+    return out;
+}
+
+std::string levelRoadModelCacheDir() {
+    return std::getenv("RT_NOCACHE") ? std::string() : std::string(kRoadModelCacheDir);
+}
+
+namespace {
+
+// A city's road file as read, its ramps composed (what the model's planned layer reads), and that layer. Null (and a
+// note) when the file cannot be read.
+std::shared_ptr<RoadModel> plannedCity(const CityEntity& city, std::vector<std::string>& notes, std::string* refusal) {
+    try {
+        RoadLabGraph g = loadCityGraph(city);
+        (void)expand(g);
+        std::shared_ptr<RoadModel> model = std::make_shared<RoadModel>(plannedRoadModel(g));
+        if (refusal) *refusal = laneLevelRefusal(g, *model, true);
+        return model;
+    } catch (const std::exception& ex) {
+        notes.push_back("city " + std::to_string(city.ordinal) + ": its road file could not be read (" + ex.what() + ")");
+        return nullptr;
+    }
+}
+
+// The first city's built model into `out.model`, from the cache or built and saved; or `out.error`.
+void obtainFirstCity(const bundle::LevelInputs& in, const LaneGraphOptions& opts, const std::string& cacheDir,
+                     const std::vector<CityEntity>& cities, const std::chrono::steady_clock::time_point& t0,
+                     LevelBuiltRoads& out);
+
+}  // namespace
+
+LevelBuiltRoads obtainLevelRoadModel(const bundle::LevelInputs& in, const std::string& cacheDir,
+                                     const LaneGraphOptions* vehicles) {
     const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
     LevelBuiltRoads out;
     const std::vector<CityEntity> cities = cityEntities(in.level);
@@ -214,6 +287,21 @@ LevelBuiltRoads obtainLevelRoadModel(const bundle::LevelInputs& in, const LaneGr
         out.seconds = secondsSince(t0);
         return out;
     }
+    out.vehicles = vehicles ? *vehicles : levelVehicles(in, &out.notes);
+    obtainFirstCity(in, out.vehicles, cacheDir, cities, t0, out);
+    // The first city's model: the built one, or (its file lacks a fact, or its build failed) the planned layer. Every
+    // later city's: its planned layer.
+    out.cities.push_back(out.model ? out.model : plannedCity(cities.front(), out.notes, nullptr));
+    for (std::size_t i = 1; i < cities.size(); ++i) out.cities.push_back(plannedCity(cities[i], out.notes, nullptr));
+    out.seconds = secondsSince(t0);
+    return out;
+}
+
+namespace {
+
+void obtainFirstCity(const bundle::LevelInputs& in, const LaneGraphOptions& opts, const std::string& cacheDir,
+                     const std::vector<CityEntity>& cities, const std::chrono::steady_clock::time_point& t0,
+                     LevelBuiltRoads& out) {
     for (std::size_t i = 1; i < cities.size(); ++i)
         out.notes.push_back("city " + std::to_string(cities[i].ordinal) + " (" +
                             (cities[i].inlineGraph ? std::string("an inline graph") : cities[i].graphPath) +
@@ -241,14 +329,23 @@ LevelBuiltRoads obtainLevelRoadModel(const bundle::LevelInputs& in, const LaneGr
                 out.model = std::make_shared<RoadModel>(std::move(read));
                 out.fromCache = true;
                 bundle::noteCacheUse(out.path, kRoadModelCacheKind);
-                out.seconds = secondsSince(t0);
-                return out;
+                return;
             }
             out.notes.push_back("the saved road model was refused and is built again: " + why);
         }
     }
 
     const CityEntity& city = cities.front();
+    // A road file that does not state what the lane level needs is told so now, from the file alone, before the road
+    // build it would otherwise pay for on every load (nothing is saved for it).
+    {
+        std::string refusal;
+        std::vector<std::string> unread;
+        if (plannedCity(city, unread, &refusal) && !refusal.empty()) {
+            out.error = refusal;
+            return;
+        }
+    }
     std::unique_ptr<Result> roads;
     try {
         BuildOptions bo;
@@ -256,8 +353,7 @@ LevelBuiltRoads obtainLevelRoadModel(const bundle::LevelInputs& in, const LaneGr
         roads = build(loadCityGraph(city), bo);
     } catch (const std::exception& ex) {
         out.error = "the road build failed: " + std::string(ex.what());
-        out.seconds = secondsSince(t0);
-        return out;
+        return;
     }
     out.roadSeconds = secondsSince(t0);
     const std::chrono::steady_clock::time_point tg = std::chrono::steady_clock::now();
@@ -268,8 +364,7 @@ LevelBuiltRoads obtainLevelRoadModel(const bundle::LevelInputs& in, const LaneGr
     out.graphSeconds = secondsSince(tg);
     if (!built.error.empty()) {
         out.error = built.error;
-        out.seconds = secondsSince(t0);
-        return out;
+        return;
     }
     out.summary = summarizeLaneGraph(model->laneLevel, built);
     // A lane level that fails its own check would be refused by the reader on every later load and rebuilt each time: say
@@ -288,9 +383,9 @@ LevelBuiltRoads obtainLevelRoadModel(const bundle::LevelInputs& in, const LaneGr
             out.notes.push_back(why);
         }
     }
-    out.seconds = secondsSince(t0);
-    return out;
 }
+
+}  // namespace
 
 std::string describeLevelRoadModel(const LevelBuiltRoads& lg) {
     if (!lg.model) return "no lane graph: " + lg.error;

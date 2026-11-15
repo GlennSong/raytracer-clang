@@ -892,10 +892,11 @@ struct CityMap {
 };
 
 // THE LEVEL'S ROAD MODEL (procgen/city/roads/road_model.h, ADR-0420): one per level, covering every lane-built city in
-// it, in the order the level lists them -- each city's PLANNED LAYER, read from its road file when the level loads
-// (milliseconds). On a level that drives v2 the host that reads the fleet puts the first city's BUILT model here in its
-// place (lanes, turns and the lane level the driving reads: lanes/road_model_cache.h, ADR-0429), keeping what the loader
-// attached. What the readers that only label the roads read: the
+// it, in the order the level lists them. It is made in one place, lanes/road_model_cache.h obtainLevelRoadModel
+// (ADR-0435), and the loader publishes what that returns: the first city's BUILT model (lanes, turns and the lane level
+// the driving reads, from its cache or built) when its road file states what the lane level needs, otherwise its
+// planned layer; every later city's planned layer. The lot pass and the driving read this object; nothing else makes a
+// road model for a level. What the readers that only label the roads read: the
 // street names (the model's name attachments), the name signs (attached to the junction arms they stand at, as the
 // loader plans them), the map, and a bus stop's street; and (ADR-0421) which junctions are lit -- the street furniture's
 // signal poles, the city sim's signals -- and the junctions and streets the lamps and trees keep to. Since ADR-0425 the
@@ -904,6 +905,9 @@ struct RoadModel;
 struct NavGraph;
 struct LevelRoadModel {
     std::vector<std::shared_ptr<RoadModel>> cities;
+    // What making the first city's lane level found, in one line (the load's log line and the `lanegraph?` answer):
+    // its counts and where it came from, or why there is none.
+    std::string laneLevelReport;
     // THE LEVEL'S STREET MAP (docs/road-model-design.md step 7, ADR-0425): the level-wide routing table, the one graph
     // every agent routes, drives and walks on. It covers every city in `cities`, in their order, and is built once at
     // load from each city's planned layer and the drawn deck (roads/street_map.h appendStreetMap). It is shared: the

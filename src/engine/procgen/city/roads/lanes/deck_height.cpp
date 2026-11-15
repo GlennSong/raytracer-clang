@@ -21,7 +21,7 @@ DeckHeight::DeckHeight(const RoadLabGraph& g, const LaneSet& L) : g_(g), L_(L) {
     for (size_t li = 0; li < L.lanes.size(); ++li) {
         Box2 b{1e300, 1e300, -1e300, -1e300};
         for (const Vec2& q : L.lanes[li].xy) { b.minX = std::min(b.minX, q.x); b.minY = std::min(b.minY, q.y); b.maxX = std::max(b.maxX, q.x); b.maxY = std::max(b.maxY, q.y); }
-        const double grow = L.lanes[li].w / 2 + 15.0 + kIndexReach;
+        const double grow = L.lanes[li].width / 2 + 15.0 + kIndexReach;
         b.minX -= grow; b.minY -= grow; b.maxX += grow; b.maxY += grow;
         box[li] = b;
         if (L.lanes[li].xy.empty()) continue;
@@ -53,7 +53,7 @@ void DeckHeight::setPartners(std::vector<std::vector<int>> partners) {
     partners_ = std::move(partners);
     for (auto& v : roadPartners_) v.clear();
     for (size_t li = 0; li < L_.lanes.size(); ++li) {
-        int e = L_.lanes[li].parent; if (e < 0) continue;
+        int e = L_.lanes[li].road(); if (e < 0) continue;
         for (int q : partners_[li]) roadPartners_[static_cast<size_t>(e)].push_back(q);
     }
     for (auto& v : roadPartners_) {
@@ -75,8 +75,8 @@ void DeckHeight::buildSeams() {
     std::vector<std::vector<int>> roadLanes(g_.edges.size());
     for (size_t li = 0; li < L_.lanes.size(); ++li) {
         const Lane& l = L_.lanes[li];
-        if (l.parent < 0 || static_cast<size_t>(l.parent) >= g_.edges.size() || l.isConnector() || l.xy.size() < 2 || l.s.size() != l.xy.size()) continue;
-        roadLanes[static_cast<size_t>(l.parent)].push_back(static_cast<int>(li));
+        if (l.road() < 0 || static_cast<size_t>(l.road()) >= g_.edges.size() || l.isConnector() || l.xy.size() < 2 || l.s.size() != l.xy.size()) continue;
+        roadLanes[static_cast<size_t>(l.road())].push_back(static_cast<int>(li));
     }
     for (size_t e = 0; e < g_.edges.size(); ++e) {
         if (!edgeGrids_[e] || roadPartners_[e].empty()) continue;
@@ -84,7 +84,7 @@ void DeckHeight::buildSeams() {
             std::vector<double> st;
             for (int li : roadLanes[e]) {
                 const Lane& l = L_.lanes[static_cast<size_t>(li)];
-                const double reach = l.w / 2 + kTouch;
+                const double reach = l.width / 2 + kTouch;
                 size_t k = 0;
                 for (double s = 0; s <= l.s.back() + 1e-9; s += kStep) {
                     while (k + 2 < l.s.size() && l.s[k + 1] < s) ++k;
@@ -147,7 +147,7 @@ int DeckHeight::nearestLane(const std::vector<int>& roads, const Vec2& p, double
 int DeckHeight::nearestLane(const std::vector<char>& want, const Vec2& p, double radius) const {
     int best = -1; double bd = radius;
     auto test = [&](size_t li) {
-        const Lane& l = L_.lanes[li]; if (l.isConnector() || l.parent < 0 || !want[static_cast<size_t>(l.parent)]) return;
+        const Lane& l = L_.lanes[li]; if (l.isConnector() || l.road() < 0 || !want[static_cast<size_t>(l.road())]) return;
         const double d = distanceToLane(static_cast<int>(li), p, radius); if (d < bd) { bd = d; best = static_cast<int>(li); }
     };
     const std::vector<int>* cand = radius <= kIndexReach ? candidates(p) : nullptr;
@@ -167,7 +167,7 @@ double DeckHeight::layerHeight(const std::vector<char>& want, const std::vector<
     // level; skip it and every lane at its height there.
     constexpr double kEdge = 0.05;
     const std::vector<int>* cand = candidates(p);
-    auto usable = [&](int c) { const Lane& l = L_.lanes[static_cast<size_t>(c)]; return !l.isConnector() && l.parent >= 0 && want[static_cast<size_t>(l.parent)]; };
+    auto usable = [&](int c) { const Lane& l = L_.lanes[static_cast<size_t>(c)]; return !l.isConnector() && l.road() >= 0 && want[static_cast<size_t>(l.road())]; };
     auto nearestAtLevel = [&](double ref) {
         int best = -1; double bd = kIndexReach;
         for (int c : *cand) {
@@ -179,7 +179,7 @@ double DeckHeight::layerHeight(const std::vector<char>& want, const std::vector<
     if (band && cand) {   // the layer's own road: the nearest lane whose road has this layer's band reaching p
         int own = -1; double od = std::numeric_limits<double>::infinity();
         for (int c : *cand) {
-            if (!usable(c)) continue; const double w = (*band)[static_cast<size_t>(L_.lanes[static_cast<size_t>(c)].parent)]; if (w <= 0) continue;
+            if (!usable(c)) continue; const double w = (*band)[static_cast<size_t>(L_.lanes[static_cast<size_t>(c)].road())]; if (w <= 0) continue;
             const double d = distanceToLane(c, p, w + 2 * kEdge);
             if (!(d <= w + kEdge) || d >= od || deepInside(c, p, kEdge)) continue;
             od = d; own = c;
@@ -208,8 +208,8 @@ double DeckHeight::layerHeight(const std::vector<char>& want, const std::vector<
 double DeckHeight::distanceToLane(int lane, const Vec2& p, double radius) const {
     const Lane& l = L_.lanes[static_cast<size_t>(lane)];
     if (boundaries_.empty() || boundaries_[static_cast<size_t>(lane)].outers.empty()) {
-        double d = grids_[static_cast<size_t>(lane)]->distanceWithin(p, radius + l.w / 2 + 0.02);
-        return std::isfinite(d) ? std::max(0.0, d - l.w / 2 - 0.01) : std::numeric_limits<double>::infinity();
+        double d = grids_[static_cast<size_t>(lane)]->distanceWithin(p, radius + l.width / 2 + 0.02);
+        return std::isfinite(d) ? std::max(0.0, d - l.width / 2 - 0.01) : std::numeric_limits<double>::infinity();
     }
     // nearest boundary within the radius; inside (outer ring minus holes) means distance 0
     const Boundary& b = boundaries_[static_cast<size_t>(lane)]; double best = std::numeric_limits<double>::infinity();
@@ -229,7 +229,7 @@ double DeckHeight::distanceToLane(int lane, const Vec2& p, double radius) const 
 bool DeckHeight::deepInside(int lane, const Vec2& p, double margin) const {
     const Lane& l = L_.lanes[static_cast<size_t>(lane)];
     if (boundaries_.empty() || boundaries_[static_cast<size_t>(lane)].outers.empty())
-        return grids_[static_cast<size_t>(lane)]->distanceWithin(p, l.w / 2) < l.w / 2 - margin;
+        return grids_[static_cast<size_t>(lane)]->distanceWithin(p, l.width / 2) < l.width / 2 - margin;
     const Boundary& b = boundaries_[static_cast<size_t>(lane)];
     for (const SegmentGrid& g : b.outers) if (std::isfinite(g.distanceWithin(p, margin))) return false;   // on the edge
     for (const SegmentGrid& g : b.holes) if (std::isfinite(g.distanceWithin(p, margin))) return false;
@@ -287,7 +287,7 @@ double DeckHeight::blendTo(double z, int edge, const std::vector<int>& partners,
 
 double DeckHeight::deck(int lane, const Vec2& p) const {
     const Lane& l = L_.lanes[static_cast<size_t>(lane)];
-    return blendTo(own(lane, p), l.isConnector() ? -1 : l.parent, partners_[static_cast<size_t>(lane)], p);
+    return blendTo(own(lane, p), l.isConnector() ? -1 : l.road(), partners_[static_cast<size_t>(lane)], p);
 }
 double DeckHeight::deckRoad(int edge, const Vec2& p) const { return blendTo(ownRoad(edge, p), edge, roadPartners_[static_cast<size_t>(edge)], p); }
 

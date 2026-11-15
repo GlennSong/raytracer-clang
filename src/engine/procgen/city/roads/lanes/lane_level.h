@@ -62,6 +62,12 @@ namespace roads::lanes {
 // again to see what the lane level makes of it.
 LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& m, const LaneGraphOptions& opts);
 
+// WHY A ROAD FILE GETS NO LANE LEVEL, or empty when it states everything the lane level needs: `g` the road file as
+// read (its ramps composed), `m` its road model. `builtLayer`: the model holds the built layer of the build asked about
+// (true to ask of the file alone, before any road is built: road_model_cache.h obtainLevelRoadModel does, so a level
+// whose file lacks a fact never pays a road build to be told so). The text names what to run.
+std::string laneLevelRefusal(const RoadLabGraph& g, const RoadModel& m, bool builtLayer);
+
 }  // namespace roads::lanes
 }  // namespace engine
 

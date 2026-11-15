@@ -169,7 +169,7 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
     struct Cutter { PolySet set; Box2 box; int edge; int lane; };   // height: the edge's envelope, else the lane's own
     std::vector<Cutter> laneCuts, hullCuts, shoulderCuts;
     for (size_t li = 0; li < L.lanes.size(); ++li)
-        if (!out.footprints[li].empty()) laneCuts.push_back({out.footprints[li], bounds(out.footprints[li]), L.lanes[li].parent, static_cast<int>(li)});
+        if (!out.footprints[li].empty()) laneCuts.push_back({out.footprints[li], bounds(out.footprints[li]), L.lanes[li].road(), static_cast<int>(li)});
     for (size_t ei = 0; ei < g.edges.size(); ++ei) {
         const EdgeSpec& e = g.edges[ei]; if (e.laneCount() == 0) continue;
         const RoadClassSpec& c = g.cls(e); const double hw = g.hw(e);
@@ -286,7 +286,7 @@ void buildSurfaces(const RoadLabGraph& g, const LaneSet& L, DeckHeight& H, Pavem
     // chunk, and the chunks are concatenated in order, so the result is the sequential one.
     struct TriLevel { int tri; int owner; };
     std::vector<TriLevel> emit; std::vector<std::set<int>> partnerSets(nl); out.pairs.clear();
-    auto rankKey = [&](int li) { const Lane& l = L.lanes[static_cast<size_t>(li)]; return std::make_pair(L.rank(li, g), -static_cast<double>(l.parent >= 0 ? l.parent : static_cast<int>(nl) + li)); };   // ROAD-level order: lanes of one road tie
+    auto rankKey = [&](int li) { const Lane& l = L.lanes[static_cast<size_t>(li)]; return std::make_pair(L.rank(li, g), -static_cast<double>(l.road() >= 0 ? l.road() : static_cast<int>(nl) + li)); };   // ROAD-level order: lanes of one road tie
     const unsigned nThreads = lanesThreads(threads); const LaneGrid grid(boxes, out.footprints);
     // each footprint converted ONCE for the millions of point tests below (geom2d.h PreparedSet): the island's
     // freeway lanes are single footprints 17 km long, and converting one per triangle made this pass 9 minutes
@@ -341,10 +341,10 @@ void buildSurfaces(const RoadLabGraph& g, const LaneSet& L, DeckHeight& H, Pavem
     const double sCover = std::chrono::duration<double>(std::chrono::steady_clock::now() - tCover0).count();
     // a road's lanes must share ONE deck field: union the partner sets over each parent road (connectors keep their own)
     std::map<int, std::set<int>> byRoad;
-    for (size_t li = 0; li < nl; ++li) if (L.lanes[li].parent >= 0) byRoad[L.lanes[li].parent].insert(partnerSets[li].begin(), partnerSets[li].end());
+    for (size_t li = 0; li < nl; ++li) if (L.lanes[li].road() >= 0) byRoad[L.lanes[li].road()].insert(partnerSets[li].begin(), partnerSets[li].end());
     std::vector<std::vector<int>> partners(nl);
     for (size_t li = 0; li < nl; ++li) {
-        const std::set<int>& src = L.lanes[li].parent >= 0 ? byRoad[L.lanes[li].parent] : partnerSets[li];
+        const std::set<int>& src = L.lanes[li].road() >= 0 ? byRoad[L.lanes[li].road()] : partnerSets[li];
         for (int q : src) if (rankKey(q) > rankKey(static_cast<int>(li))) partners[li].push_back(q);   // strictly higher ROAD: acyclic by construction
         std::sort(partners[li].begin(), partners[li].end(), [&](int a, int b) { return rankKey(a) > rankKey(b); });
     }

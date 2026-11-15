@@ -99,6 +99,11 @@ struct DiamondOptions {
     double rampPeak = 0.0;
     double landing = 20;         // the level approach across a crossing street's half-width
     double diverge = 60;         // gore -> band: the run a ramp takes to pull clear of the deck
+    // How far before a stop line the lines between lanes are solid in the city being planned (metres): an off-ramp's
+    // merge lane on a street has ended before that stretch of the junction ahead (no car changes lanes there). The
+    // planner hands in the number it states in the road file's `lane_rules` (plan/plan_scene.h); there is no other
+    // source, so a caller that lays ramps says it.
+    double solidBeforeStopLine = 0;
     double mouth = 30;           // least distance from a ramp terminal to the next junction on its street,
     double crossMouth = 15;      // and the least, where there is no road beside the freeway to land on
     double splitReach = 120;     // how far along the freeway a side may land from the crossing: a

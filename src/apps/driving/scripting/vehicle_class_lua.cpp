@@ -1,6 +1,7 @@
 #include "apps/driving/scripting/vehicle_class_lua.h"
 
 #include "engine/scripting/lua_state.h"
+#include "engine/scripting/tag_names.h"
 
 #include <algorithm>
 #include <sstream>
@@ -84,16 +85,13 @@ public:
         }
         const lua_Integer n = static_cast<lua_Integer>(luaL_len(L, list));
         if (n == 0) fail(kKeyTags, "is empty: a vehicle needs at least one tag for the lanes to match");
+        // the names: the engine's one reader, which the roads read the fleet's tags with (tag_names.h)
         std::vector<std::string> names;
-        for (lua_Integer i = 1; i <= n; ++i) {
-            lua_rawgeti(L, list, i);
-            if (lua_type(L, -1) == LUA_TSTRING && lua_rawlen(L, -1) > 0) names.push_back(lua_tostring(L, -1));
-            else fail(std::string(kKeyTags) + "[" + std::to_string(i) + "]", "is not a tag name (a non-empty string)");
-            lua_pop(L, 1);
-        }
+        std::vector<int> notNames;
+        engine::readTagNames(L, list, names, &notNames);
+        for (const int i : notNames)
+            fail(std::string(kKeyTags) + "[" + std::to_string(i) + "]", "is not a tag name (a non-empty string)");
         lua_pop(L, 1);
-        std::sort(names.begin(), names.end());
-        names.erase(std::unique(names.begin(), names.end()), names.end());
         out = names;
     }
 

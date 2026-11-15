@@ -12,6 +12,7 @@
 #include "../city/roads/lanes/interchange.h"
 #include "../city/roads/lanes/vertical_profile.h"   // profileAlong: the deck as the builder will make it   // diamondRamps: the one way on and off a freeway
 #include "../city/plan/land_shape.h"             // isoLines: contours, the coastline
+#include "../city/plan/plan_scene.h"             // SceneOptions::solidBeforeStopLine: the lane rule ramps are laid by
 #include "place_names.h"
 #include "island_rail.h"    // the island loop's offset: where its line will run beside the freeway
 #include "island_scene.h"   // the carriageways' offset off the freeway's line
@@ -1146,6 +1147,9 @@ void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>
     for (std::size_t k = 0; k < routes.size(); ++k) {
         const std::vector<Vec2>& route = routes[k];
         roads::lanes::DiamondOptions dop;
+        // (the island lays its freeway's ramps by the planner's lane rule: plan_scene.h; it writes no `lane_rules` of its
+        // own into its road file yet, so its file is still told `lanes_tool layout --lane-rules`)
+        dop.solidBeforeStopLine = plan::SceneOptions().solidBeforeStopLine;
         dop.aId = "fw" + std::to_string(k) + "_a";
         dop.bId = "fw" + std::to_string(k) + "_b";
         // the planner's freeway section (plan_scene.h FreewaySection): four 3.75 m lanes a side

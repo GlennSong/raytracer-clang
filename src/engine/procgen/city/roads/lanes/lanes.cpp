@@ -249,7 +249,7 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     auto onOtherRoad = [&](const EdgeSpec& own, const Vec2& p) {
         const int ownIdx = g.index.at(own.id);
         for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
-            const Lane& l = r.lanes.lanes[li]; if (l.parent == ownIdx || r.pavement.footprints[li].empty()) continue;
+            const Lane& l = r.lanes.lanes[li]; if (l.road() == ownIdx || r.pavement.footprints[li].empty()) continue;
             const PolySet& fp = r.pavement.footprints[li]; const Box2 b = ::engine::roads::lanes::bounds(fp[0]);
             // the pier's square (2.6 m, deck_mesh.cpp) and 1.5 m of clearance round it -- the other road's
             // shoulder is not in its lane footprints, and a pier tested at its centre +-1.5 m stood half on the

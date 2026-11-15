@@ -107,8 +107,10 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
 // the "arms_in_ring" mark); in one
 // that names controls (the control plan's), each junction's "through" and each arm's "street" and "heading". Each member
 // goes with the comma before it (or, the first of its object, the one after it), so text the layout was inserted into
-// comes back byte for byte. Text with none of them is returned as it was.
-std::string stripLayoutText(const std::string& text);
+// comes back byte for byte. Text with none of them is returned as it was. Each kept junction's "nodes" (its points, which
+// `lanes_tool layout --nodes` wrote once) go too, unless `keepNodes`: `lanes_tool layout --write` keeps them, so the
+// layout written again into a file that has not changed gives the same bytes (ADR-0435).
+std::string stripLayoutText(const std::string& text, bool keepNodes = false);
 // WHAT THE CITY'S BAKE KEY HASHES (city_producer.cpp): the file with its "streets", "divided", "junctions",
 // "arms_in_ring" and "lane_rules" members taken out whole -- the junctions with their controls and signs too (ADR-0421;
 // the lane graph, which reads them, keys them itself, laneLevelKey, ADR-0426) -- and then what the paint reads of the

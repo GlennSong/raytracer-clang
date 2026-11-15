@@ -24,7 +24,6 @@ constexpr const char* kKeyDevices = "devices";
 constexpr const char* kKeyNumbers = "numbers";
 constexpr const char* kKeyPersonality = "personality";
 constexpr const char* kKeyMeans = "means";
-constexpr const char* kKeySign = "sign";
 constexpr const char* kKeyUnit = "unit";
 constexpr const char* kKeySource = "source";
 constexpr const char* kKeyUsual = "usual";
@@ -536,7 +535,9 @@ protected:
         std::vector<std::string> odd;
         keysOf(list, names, odd);
         for (const std::string& o : odd) fail(path, "has the key " + o + ", which is not a name; expected device names");
-        const std::vector<std::string> allowed = {kKeyMeans, kKeySign};
+        // (a device states what it means and nothing else: a `sign` code or a `paint` list is refused as an unknown key,
+        // since the sign that stands and the paint are rows of assets/data/road_attachments.json)
+        const std::vector<std::string> allowed = {kKeyMeans};
         std::vector<Device> devices;
         for (const std::string& name : names) {
             const int mark = lua_gettop(L);
@@ -553,13 +554,6 @@ protected:
             const int means = pushField(dt, kKeyMeans);
             if (lua_istable(L, means)) readMeans(means, devicePath + "." + kKeyMeans, out, ranksOk, d);
             else fail(devicePath + "." + kKeyMeans, "is " + describe(means) + ", expected a table of effects");
-            lua_settop(L, mark + 1);
-            const int sign = pushField(dt, kKeySign);
-            if (!lua_isnil(L, sign)) {
-                std::string s;
-                if (stringAt(sign, s)) d.sign = s;
-                else fail(devicePath + "." + kKeySign, "is " + describe(sign) + ", expected a string");
-            }
             devices.push_back(d);
             lua_settop(L, mark);
         }

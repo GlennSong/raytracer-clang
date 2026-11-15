@@ -301,8 +301,10 @@ struct RoadLabGraph {
     bool listsStreets = false;
     // THE LANE LEVEL'S RULES (ADR-0426), stated at the graph's top level, "lane_rules": {"solid_before_stop_line": 20.0}:
     // how far back from a stop line the lines between lanes running the same way are solid (no changing lanes on the
-    // approach to a junction). The lane level (lanes/lane_level.h) reads them; nothing of the bake does (the bake key leaves
-    // them out: road_layout.h keyedRoadFileText). `statesLaneRules`: the graph carried the member.
+    // approach to a junction). THE ROAD FILE IS THE NUMBER'S ONE HOME (ADR-0435): the lane level (lanes/lane_level.h) and
+    // the paint read it here; the planner states it in the file it writes, from the number its ramps are laid by
+    // (plan/plan_scene.h SceneOptions::solidBeforeStopLine). The city's own bake key leaves it out (road_layout.h
+    // keyedRoadFileText); the paint's key holds it. `statesLaneRules`: the graph carried the member.
     struct LaneRules {
         double solidBeforeStopLine = 0;
     };

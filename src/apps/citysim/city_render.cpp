@@ -797,59 +797,31 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         LOG_WARN << "[citysim] driving \"" << params_.driving << "\": unknown model (v1 or v2); keeping v1";
     }
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
-    // THE ROAD THE NEW MODEL DRIVES ON (v2 only: a v1 level does none of this): the lane level of the level's built road
-    // model, read from its cache or built from the roads and saved (road_model_cache.h). Its connectors are checked against the fleet's own
-    // vehicles: one turning radius, width and length per vehicle tag, the most demanding class carrying it
-    // (driving::tagSizes); the length sweeps long bodies through bends (ADR-0412).
+    // THE ROAD THE NEW MODEL DRIVES ON (v2 only: a v1 level does none of this): the lane level of the level's one road
+    // model, as the loader published it (engine::LevelRoadModel, ADR-0435). Nothing is made here: the model was read from
+    // its cache or built by the one function that makes it (road_model_cache.h obtainLevelRoadModel), its turns checked
+    // against the level's own fleet, which that function reads from the same vehicle script this host read above.
     if (const driving::Driving* d2 = sim_.drivingV2()) {
-        engine::roads::lanes::LaneGraphOptions lgo;
-        std::string tagsLine;
-        for (const driving::TagSize& t : driving::tagSizes(d2->vehicleClasses())) {
-            engine::roads::lanes::VehicleSize v;
-            v.tag = t.tag;
-            v.turningRadius = t.turningRadius;
-            v.width = t.width;
-            v.length = t.length;
-            lgo.vehicles.push_back(v);
-            char b[128];
-            std::snprintf(b, sizeof b, "%s%s %.2f m / %.2f m / %.2f m", tagsLine.empty() ? "" : ", ", t.tag.c_str(),
-                          t.turningRadius, t.width, t.length);
-            tagsLine += b;
-        }
-        if (lgo.vehicles.empty())
-            LOG_WARN << "[citysim] driving v2: no vehicle class carries a tag, so no connector is open to anyone";
-        else
-            LOG_INFO << "[citysim] driving v2: connectors checked for (tag, tightest turning radius / width / length) "
-                     << tagsLine;
-        engine::bundle::LevelInputs li;
-        std::string err;
-        if (params_.levelPath.empty() || !engine::bundle::loadLevelInputs(params_.levelPath, li, &err)) {
-            const std::string why = params_.levelPath.empty() ? std::string("the level was not loaded from a file") : err;
-            LOG_WARN << "[citysim] driving v2: no lane graph (" << why << ")";
-            sim_.setDrivingRoads(nullptr, "no lane graph: " + why);
+        std::shared_ptr<engine::RoadModel> model;
+        std::string line = "no lane graph: the level published no road model";
+        world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) {
+            if (model || m.cities.empty()) return;
+            line = m.laneLevelReport;
+            if (m.cities.front() && m.cities.front()->built) model = m.cities.front();
+        });
+        if (model) {
+            LOG_INFO << "[citysim] driving v2 lane graph: " << line;
+            // a class carrying a tag the road was not checked for can use no turn open to that tag: say so
+            const std::vector<std::string>& roadTags = model->laneLevel.vehicleTagNames;
+            for (const driving::VehicleClass& c : d2->vehicleClasses().all())
+                for (const std::string& tag : c.tags)
+                    if (std::find(roadTags.begin(), roadTags.end(), tag) == roadTags.end())
+                        LOG_WARN << "[citysim] driving v2: vehicle class " << c.name << " carries the tag \"" << tag
+                                 << "\", which the level's roads were not checked for";
         } else {
-            const std::string cacheDir = std::getenv("RT_NOCACHE") ? std::string() : std::string(engine::roads::lanes::kRoadModelCacheDir);
-            engine::roads::lanes::LevelBuiltRoads lg = engine::roads::lanes::obtainLevelRoadModel(li, lgo, cacheDir);
-            for (const std::string& n : lg.notes) LOG_WARN << "[citysim] driving v2 lane graph: " << n;
-            const std::string line = engine::roads::lanes::describeLevelRoadModel(lg);
-            if (lg.model) LOG_INFO << "[citysim] driving v2 lane graph: " << line;
-            else LOG_WARN << "[citysim] driving v2: " << line;
-            // THE BUILT MODEL IS THE LEVEL'S ROAD MODEL from here on (ADR-0429): it takes the place of the planned layer the
-            // loader published for the city (the loader cannot build it: the key needs the fleet read just above), keeping
-            // what the loader attached to that layer (name signs, furniture, control signs). The driving reads the model's
-            // lane level, held alive by the model.
-            const std::shared_ptr<engine::RoadModel> model = lg.model;
-            if (model) {
-                bool published = false;
-                world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) {
-                    if (published || m.cities.empty()) return;
-                    if (m.cities.front()) model->attachments = m.cities.front()->attachments;
-                    m.cities.front() = model;
-                    published = true;
-                });
-            }
-            sim_.setDrivingRoads(model ? std::shared_ptr<const engine::LaneGraph>(model, &model->laneLevel) : nullptr, line);
+            LOG_WARN << "[citysim] driving v2: " << line;
         }
+        sim_.setDrivingRoads(model ? std::shared_ptr<const engine::LaneGraph>(model, &model->laneLevel) : nullptr, line);
     }
     // THE FIRE STATIONS' ENGINES (Glenn, 2026-10-13: "a fire truck should be an actual truck"): one parked behind each
     // bay door of every fire station (vehicleBayDoors: the doors the facade draws), its nose to the door, on the bay's

@@ -248,30 +248,40 @@ namespace {
 std::vector<DividedPair> dividedOf(const RoadLabGraph& graph, LayoutSource source, std::vector<std::string>* unpaired = nullptr) {
     return graph.listsDivided || source == LayoutSource::Planner ? graph.divided : dividedFromIds(graph, unpaired);
 }
+
+// HOW THE LAYOUT FINDS A ROAD FILE'S JUNCTIONS: the one set-up, so the layout's junctions (layoutJunctionFacts) and the
+// controls planned onto them (planLayoutControls) are found the same way and each control lands on a junction the
+// layout wrote.
+//   - two roads meeting away from a shared end: as the graph declares them, else as the planner's crossing policy has
+//     them (planCrossings: the planner's own, which city_plan's design step writes into the scene as its crossings);
+//   - the divided roads: as the graph states them, else found from its ids;
+//   - a planner's file joins road ends that are one written place (kWrittenStation); an older file by its storage rule.
+// Holds the lists `how` points into, so it is made in place and never copied.
+struct LayoutFinding {
+    std::vector<CrossingSpec> crossings;
+    std::vector<DividedPair> divided;
+    JunctionFinding how;
+    LayoutFinding(const RoadLabGraph& graph, LayoutSource source, std::vector<CarryOn>* carryOns)
+        : crossings(graph.declaresCrossings ? graph.crossings : crossingsFromJson(planCrossings(graph))),
+          divided(dividedOf(graph, source)) {
+        how.endTolerance = source == LayoutSource::Planner ? kWrittenStation : -1.0;
+        how.atGrade = &crossings;
+        how.divided = &divided;
+        how.carryOns = carryOns;
+    }
+    LayoutFinding(const LayoutFinding&) = delete;
+    LayoutFinding& operator=(const LayoutFinding&) = delete;
+};
 }  // namespace
 
 std::vector<JunctionFacts> layoutJunctionFacts(const RoadLabGraph& graph, LayoutSource source, std::vector<CarryOn>* carryOns) {
-    // two roads meeting away from a shared end: as the graph declares them, else as the planner's crossing policy has
-    // them (planCrossings: the planner's own, which city_plan's design step writes into the scene as its crossings)
-    const std::vector<CrossingSpec> crossings = graph.declaresCrossings ? graph.crossings : crossingsFromJson(planCrossings(graph));
-    const std::vector<DividedPair> divided = dividedOf(graph, source);
-    JunctionFinding how;
-    how.endTolerance = source == LayoutSource::Planner ? kWrittenStation : -1.0;
-    how.atGrade = &crossings;
-    how.divided = &divided;
-    how.carryOns = carryOns;
-    return findJunctions(graph, ControlPolicy(), how);
+    const LayoutFinding finding(graph, source, carryOns);
+    return findJunctions(graph, ControlPolicy(), finding.how);
 }
 
 ControlPlan planLayoutControls(const RoadLabGraph& graph, LayoutSource source, const ControlPolicy& policy) {
-    // the junctions found as layoutJunctionFacts finds them, so each control lands on a junction the layout wrote
-    const std::vector<CrossingSpec> crossings = graph.declaresCrossings ? graph.crossings : crossingsFromJson(planCrossings(graph));
-    const std::vector<DividedPair> divided = dividedOf(graph, source);
-    JunctionFinding how;
-    how.endTolerance = source == LayoutSource::Planner ? kWrittenStation : -1.0;
-    how.atGrade = &crossings;
-    how.divided = &divided;
-    return planControls(graph, policy, how);
+    const LayoutFinding finding(graph, source, nullptr);
+    return planControls(graph, policy, finding.how);
 }
 
 RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
@@ -380,6 +390,14 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
             out.notes.push_back("roads " + c.roads[0] + " and " + c.roads[1] + " carry on into each other where no street ends");
             continue;
         }
+        // A STREET'S END IS AT A JUNCTION OR CARRIES ON, NEVER BOTH (ADR-0435). Where the file's own list states a junction
+        // at this meeting (a control plan that gives carry-ons a control makes each a junction of two arms), the junction
+        // says how the street runs on (its through pair), and every reader asks the junction first (street_map.cpp,
+        // lanes/lane_level.cpp). The grouping above still reports the meeting as a carry-on; stating it too wrote a
+        // second answer nothing read into the file (traffic_lab: 40 street ends).
+        if (out.streets[static_cast<std::size_t>(st[0])].junctions[static_cast<std::size_t>(end[0])].valid() ||
+            out.streets[static_cast<std::size_t>(st[1])].junctions[static_cast<std::size_t>(end[1])].valid())
+            continue;
         out.streets[static_cast<std::size_t>(st[0])].carriesOn[static_cast<std::size_t>(end[0])] = ModelStreetId(static_cast<uint32_t>(st[1]));
         out.streets[static_cast<std::size_t>(st[1])].carriesOn[static_cast<std::size_t>(end[1])] = ModelStreetId(static_cast<uint32_t>(st[0]));
     }
@@ -526,7 +544,7 @@ std::string insertLaneRulesText(const std::string& text, double solidBeforeStopL
     return out;
 }
 
-std::string stripLayoutText(const std::string& text) {
+std::string stripLayoutText(const std::string& text, bool keepNodes) {
     const Text t(text);
     const std::size_t open = t.ws(0);
     std::vector<Member> top;
@@ -550,7 +568,7 @@ std::string stripLayoutText(const std::string& text) {
         for (std::size_t e : elems) {
             if (!t.members(e, jm)) continue;
             for (std::size_t q = 0; q < jm.size(); ++q) {
-                if (jm[q].key == "through" || jm[q].key == "nodes") cut.push_back(removal(jm, q));
+                if (jm[q].key == "through" || (jm[q].key == "nodes" && !keepNodes)) cut.push_back(removal(jm, q));
                 if (jm[q].key != "arms" || !t.elements(jm[q].valueBegin, arms)) continue;
                 for (std::size_t a : arms) {
                     if (!t.members(a, am)) continue;
@@ -620,8 +638,12 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
                 if (!memberNamed(am, "heading") && stated(pj.arms[a].heading)) add += "," + armLead + "\"heading\": " + nlohmann::json(pj.arms[a].heading).dump();
                 if (!add.empty()) ins.emplace_back(am.back().valueEnd, add);
             }
-            if (!memberNamed(jm, "through") && !pj.through.empty())
-                ins.emplace_back(jm.back().valueEnd, "," + leadOf(text, jm.back()) + "\"through\": " + nlohmann::json(pj.through).dump());
+            if (!memberNamed(jm, "through") && !pj.through.empty()) {
+                // after the junction's last member, but before its nodes where the file kept them (a junction is written
+                // "..., through, nodes": written back in that order, a file that has not changed comes out byte for byte)
+                const Member& after = jm.back().key == "nodes" && jm.size() > 1 ? jm[jm.size() - 2] : jm.back();
+                ins.emplace_back(after.valueEnd, "," + leadOf(text, jm.back()) + "\"through\": " + nlohmann::json(pj.through).dump());
+            }
         }
     } else {
         nlohmann::json junctions = nlohmann::json::array();
@@ -646,7 +668,8 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
         at = i.first;
     }
     out.append(text, at, kNone);
-    if (stripLayoutText(out) != text) return fail("the layout, written in, does not strip back to the file it was written into");
+    // (compared with the junctions' nodes out of both: `text` may have kept them, stripLayoutText's keepNodes)
+    if (stripLayoutText(out) != stripLayoutText(text)) return fail("the layout, written in, does not strip back to the file it was written into");
     return out;
 }
 

@@ -273,6 +273,7 @@ const std::vector<std::string> kLibraryAllowed = {
     "engine/procgen/city/polygon.h",            // ... which the lane graph's plan shapes use
     "engine/bundle/bundle.h",                   // the repo's hash (FNV) folded field by field
     "engine/bundle/binary_stream.h",            // ... which bundle.h brings
+    "engine/procgen/city/roads/vehicle_size.h", // the body a road is checked against per tag, and how it is derived (ADR-0435)
     "rt_math.h", "hash.h", "handle.h", "slot_map.h", "proc_rng.h",
 };
 // ... and the scripting folder's, besides: the Lua VM it reads rule sets with, and the placement policy's plain form.
@@ -282,6 +283,7 @@ const std::vector<std::string> kScriptingAllowed = {
     "engine/procgen/city/polyline.h",
     // the road file's junctions and streets are the road model's own types, which road_graph_spec.h brings
     "engine/procgen/city/roads/road_model_parts.h", "engine/procgen/city/road_network.h",
+    "engine/scripting/tag_names.h",   // the one reader of a vehicle's tag list (ADR-0435)
 };
 
 std::vector<std::string> breachesOf(const std::filesystem::path& dir, const std::vector<std::string>& allowed,

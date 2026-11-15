@@ -349,6 +349,10 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         {"ramp", row("ramp", 0, false)},
     };
     scene["rules"] = {{"closing", 3.0}};
+    // THE LANE RULE THE SCENE IS PLANNED FOR (ADR-0435): how far before a stop line the lines between lanes are solid.
+    // Stated in the road file here, from the one number the ramps below are laid by (an off-ramp's merge lane has ended
+    // before that stretch), so the file the lane level and the paint read and the plan cannot say two things.
+    scene["lane_rules"] = {{"solid_before_stop_line", opt.solidBeforeStopLine}};
 
     // The ground this scene declares, evaluated here so the freeway's floors can ride over it.
     const HeightField ground = sceneGround(b);
@@ -799,6 +803,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             dop.aId = "fw" + std::to_string(k) + "_a";
             dop.bId = "fw" + std::to_string(k) + "_b";
             dop.idPrefix = "d" + std::to_string(k);
+            dop.solidBeforeStopLine = opt.solidBeforeStopLine;   // (the number the scene states as its lane rule, above)
             dop.carriage = fs.carriage;
             dop.edgeReach = fs.edgeReach;
             dop.freewayLanes = fs.lanes;
@@ -838,6 +843,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             dop.aId = "fw" + std::to_string(loopId) + "_a";
             dop.bId = "fw" + std::to_string(loopId) + "_b";
             dop.idPrefix = "dl";
+            dop.solidBeforeStopLine = opt.solidBeforeStopLine;   // (the number the scene states as its lane rule, above)
             dop.carriage = fs.carriage;
             dop.edgeReach = fs.edgeReach;
             dop.freewayLanes = fs.lanes;

@@ -60,9 +60,9 @@ struct Device {
     VehicleScope closedTo;
     VehicleScope openTo;
     std::vector<std::string> forbids;   // names of things forbidden, as written
-    std::string sign;                // the sign's code, as written ("" when none)
-    // (What is painted on the road for a device is the `marking` rows of assets/data/road_attachments.json, each naming
-    // the device it means: engine control_signs.h markingsOnArm. A rule set states no paint.)
+    // (Which sign stands for a device, and what is painted on the road for it, are the `sign` and `marking` rows of
+    // assets/data/road_attachments.json, each naming the device it means: engine control_signs.h. A rule set states
+    // neither a sign nor paint: ADR-0434, ADR-0435.)
 };
 
 // ONE TUNABLE NUMBER. `value` is always in metres, seconds, m/s, m/s2 or a plain ratio; the original value and unit

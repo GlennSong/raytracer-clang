@@ -1,6 +1,5 @@
 #include "engine/procgen/city/roads/lanes/interchange.h"
 
-#include "engine/procgen/city/roads/lanes/lane_graph_build.h"   // kSolidBeforeStopLine: where a merge lane must have ended
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_graph_spec.h"
 #include "engine/procgen/city/roads/lanes/vertical_profile.h"
@@ -252,7 +251,7 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         const double rFar = f + edge + o.bandGap + o.rampHalf;
         // THE GORE ON THE STREET: the lane of its own lies along one road (the builder lays it along its host's stations),
         // after the gore for an off-ramp, before it for an on-ramp. An off-ramp's merge lane has ended before the junction
-        // ahead's mouth and the solid lines before its stop line (no car changes lanes there: lane_graph_build.h); an
+        // ahead's mouth and the solid lines before its stop line (no car changes lanes there: DiamondOptions::solidBeforeStopLine); an
         // on-ramp's deceleration lane begins `mouth` past the junction behind. The other end of the lane of its own keeps
         // `mouth` from a junction too, and only a little from where the street merely runs on as the next piece of the
         // same road.
@@ -270,7 +269,7 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         double len = 0, marginAhead = 0, marginBehind = 0, uG = 0;
         while (true) {
             len = stations(xy).back();
-            marginAhead = off ? o.mouth + kSolidBeforeStopLine : (junctionAt(aheadAtEnd) ? o.mouth : 2.0);
+            marginAhead = off ? o.mouth + o.solidBeforeStopLine : (junctionAt(aheadAtEnd) ? o.mouth : 2.0);
             marginBehind = off ? (junctionAt(!aheadAtEnd) ? o.mouth : 2.0) : o.mouth;
             // in "how far along the traffic's way" from the end behind: the gore, then (off) its lane after it
             uG = off ? len - marginAhead - lane : marginBehind + lane;

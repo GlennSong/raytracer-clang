@@ -8,7 +8,7 @@
 #include "engine/procgen/city/lot_cache.h"
 #include "engine/procgen/city/roads/lanes/block_audit.h"
 #include "engine/procgen/city/roads/lanes/city_producer.h"
-#include "engine/procgen/city/roads/lanes/lane_expand.h"   // expand: the road file's ramps composed
+#include "engine/procgen/city/roads/lanes/road_model_cache.h"   // obtainLevelRoadModel: the level's one road model
 #include "engine/procgen/city/roads/lanes/terrain_recipe.h"
 #include "engine/script_assets.h"
 #include "log.h"
@@ -147,7 +147,7 @@ public:
         if (!out.readBack(pre + "blocks/holes", bytes)) return fail(pre + "blocks/holes: missing");
         { BinReader r(bytes.data(), bytes.size()); if (!bundle::getRings(r, city.holes)) return fail(pre + "blocks/holes: unreadable"); }
         // The pavement a door walks out to and the drawn deck — what the loader hands the grow when it grows in
-        // place. (The streets a door faces come from the road file: growLotsForLevel, levelLotRoads.)
+        // place. (The streets a door faces come from the level's one road model: growLotsForLevel, lotRoadInputs.)
         if (!out.readBack(pre + "roads/deck", bytes)) return fail(pre + "roads/deck: missing");
         { BinReader r(bytes.data(), bytes.size()); if (!bundle::getDeckField(r, city.deck)) return fail(pre + "roads/deck: unreadable"); }
         if (!out.readBack(pre + "roads/bands", bytes)) return fail(pre + "roads/bands: missing");
@@ -270,6 +270,10 @@ LotsCityInputs lotsCityInputs(const CityProducts& p) {
     return city;
 }
 
+LotRoadInputs lotRoadInputs(const std::vector<std::shared_ptr<RoadModel>>& cities, const RoadDeckField& deck) {
+    return lotRoadInputs(cities.empty() || !cities.back() ? RoadModel() : *cities.back(), deck);
+}
+
 LotRoadInputs lotRoadInputs(const RoadModel& planned, const RoadDeckField& deck) {
     LotRoadInputs in;
     auto add = [&](const std::string& id, const Range& line, const ModelSection& section) {
@@ -289,14 +293,6 @@ LotRoadInputs lotRoadInputs(const RoadModel& planned, const RoadDeckField& deck)
     drawn->buildIndex();
     in.deck = std::move(drawn);
     return in;
-}
-
-LotRoadInputs levelLotRoads(const bundle::LevelInputs& in, const RoadDeckField& deck) {
-    const std::vector<CityEntity> ents = cityEntities(in.level);
-    if (ents.empty()) return lotRoadInputs(RoadModel(), deck);
-    RoadLabGraph g = loadCityGraph(ents.back());
-    (void)expand(g);   // the planned layer reads the ramps composed (as the loader does)
-    return lotRoadInputs(plannedRoadModel(g), deck);
 }
 
 std::string lotRoadsKeyText(const nlohmann::json& roadFile) {
@@ -365,7 +361,11 @@ NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInput
     gin.holes = &city.holes;
     const std::vector<std::vector<Vec2>> water = levelWaterKeepOut(in.level);   // blocks stand back from rivers (ADR-0104)
     gin.water = &water;
-    const LotRoadInputs roads = levelLotRoads(in, city.deck);   // the streets by id, from the road file; the drawn deck
+    // the streets by id, from the level's one road model (road_model_cache.h: the model the loader publishes, read from
+    // its cache or built here when this runs before any load, as the bake does), and the drawn deck
+    const LevelBuiltRoads levelRoads = obtainLevelRoadModel(in, levelRoadModelCacheDir());
+    for (const std::string& n : levelRoads.notes) LOG_WARN << "[lots] the level's road model: " << n;
+    const LotRoadInputs roads = lotRoadInputs(levelRoads.cities, city.deck);
     gin.roads = &roads;
     gin.pavedSidewalk = city.pavedSidewalk;
     gin.smoothGround = smoothGround;

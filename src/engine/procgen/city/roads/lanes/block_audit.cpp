@@ -559,8 +559,8 @@ BlockAudit auditBlocks(const Result& r, const nlohmann::json& citysim) {
         if (b.pavedArea > 1.0) {
             std::set<std::string> roads;
             for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
-                const Lane& l = r.lanes.lanes[li]; if (l.parent < 0 || r.pavement.footprints[li].empty()) continue;
-                if (setArea(intersectSets(fs, r.pavement.footprints[li])) > 0.5) roads.insert(r.graph.edges[static_cast<size_t>(l.parent)].id);
+                const Lane& l = r.lanes.lanes[li]; if (l.road() < 0 || r.pavement.footprints[li].empty()) continue;
+                if (setArea(intersectSets(fs, r.pavement.footprints[li])) > 0.5) roads.insert(r.graph.edges[static_cast<size_t>(l.road())].id);
             }
             for (const std::string& s : roads) b.roads += (b.roads.empty() ? "" : " ") + s;
         }

@@ -30,12 +30,12 @@ rule_set = {
   drives_on = "left",
   ranks = { "priority", "give_way", "stop" },
   devices = {
-    stop        = { means = { stop_line = true, rank = "stop" },   sign = "R1-1" },
-    give_way    = { means = { rank = "give_way" },                 sign = "R1-2" },
-    speed_limit = { means = { top_speed = "value" },               sign = "R2-1" },
-    no_entry    = { means = { closed_to = "all" },                 sign = "R5-1" },
+    stop        = { means = { stop_line = true, rank = "stop" } },
+    give_way    = { means = { rank = "give_way" } },
+    speed_limit = { means = { top_speed = "value" } },
+    no_entry    = { means = { closed_to = "all" } },
     bus_lane    = { means = { open_to = { "bus", "taxi" } } },
-    no_turn_on_red = { means = { forbids = "turn_on_red" },        sign = "R10-11a" },
+    no_turn_on_red = { means = { forbids = "turn_on_red" } },
   },
   numbers = {
     far_turn_gap      = { 4.1, unit = "s",    source = "HCM 2010 exhibit 19-10" },
@@ -122,7 +122,6 @@ TEST_CASE(rules_example_loads_every_field) {
     if (stop) {
         CHECK(stop->stopLine);
         CHECK(stop->rank == 2);
-        CHECK(stop->sign == "R1-1");
         CHECK(!stop->topSpeedIsValue);
         CHECK(stop->closedTo.kind == VehicleScope::Kind::Unsaid);
     }
@@ -137,7 +136,6 @@ TEST_CASE(rules_example_loads_every_field) {
     if (bus) {
         CHECK(bus->openTo.kind == VehicleScope::Kind::Listed);
         CHECK(bus->openTo.tags.size() == 2u && bus->openTo.tags[0] == "bus" && bus->openTo.tags[1] == "taxi");
-        CHECK(bus->sign.empty());
     }
     const Device* red = r.findDevice("no_turn_on_red");
     CHECK(red && red->forbids.size() == 1u && red->forbids[0] == "turn_on_red");
@@ -218,6 +216,10 @@ TEST_CASE(rules_refused_with_file_and_key_path) {
     // assets/data/road_attachments.json, which the road paint reads. A rule set that states it too is refused.
     expectRefused(withParts("'left'", "stop = { means = { rank = 'stop' }, paint = { 'give_way_teeth' } }", okNumber, okSetting),
                   "rule_set.devices.stop", "paint");
+    // nor is which sign stands for a device (ADR-0435): the `sign` rows of the same table say what stands where, and
+    // nothing ever read a rule set's sign code. A rule set that states one is refused.
+    expectRefused(withParts("'left'", "stop = { means = { rank = 'stop' }, sign = 'R1-1' }", okNumber, okSetting),
+                  "rule_set.devices.stop", "sign");
     expectRefused(withParts("'left'", "b = { means = { open_to = { 3, 4 } } }", okNumber, okSetting),
                   "rule_set.devices.b.means.open_to[1]", "expected a string");
     expectRefused(withParts("'left'", "b = { means = { open_to = 'some' } }", okNumber, okSetting),

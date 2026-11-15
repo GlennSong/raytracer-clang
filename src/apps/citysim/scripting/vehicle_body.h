@@ -3,6 +3,7 @@
 
 #include "../../../renderer/renderer.h"   // RenderMesh, Vertex, Vec3
 #include "../../../engine/scripting/vehicle_spec.h"   // VehicleSpec, readVehicleHandling
+#include "../../../engine/scripting/fleet_lua.h"      // the fleet's slots: count, class and size, handling
 #include "../../driving/vehicle_class.h"              // driving::VehicleClass (#248)
 
 #include <string>
@@ -111,41 +112,12 @@ struct CarBodyRecipe {
 bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
                       std::string* err = nullptr);
 
-// How many slots `vehicle.fleet` declares. THE FLEET'S LENGTH IS THE ASSET'S TO
-// DECIDE: it used to be a C++ constant (the size of city_meshes' colour table),
-// so a thirteenth slot in vehicles.lua was silently never built and a shorter
-// fleet left every missing slot falling back to a box car. Returns 0 when there
-// is no fleet to count (no global, not an array), which the caller reads as
-// "use the built-in fleet".
-int fleetSlotCount(ScriptVM& vm);
+// (How many slots the fleet has, choosing a named fleet, a slot's class and size and its handling: the engine's fleet
+// reader, engine/scripting/fleet_lua.h, included above. The roads read the fleet with it too.)
 
-// Point `vehicle.fleet` at one of the script's NAMED fleets (vehicles.lua: fleet_kit, classic, fleet_mixed),
-// after the script has run -- a level's citysim.fleet. False (err filled, fleet untouched) when there is no
-// such table.
-bool selectFleet(ScriptVM& vm, const std::string& name, std::string* err = nullptr);
-
-// The CATALOGUE half of a slot — its class name and its size — without building
-// any geometry. A recipe may publish its body behind a `build()` function; this
-// never calls it, so reading what a car MEASURES costs nothing while reading
-// what it LOOKS like costs a mesh.car shell. The sim needs only the former, and
-// needs it for every headless run.
-//
-// `size` is left zero when the slot declares none (a legacy recipe): the caller
-// keeps its built-in dimensions for that slot. Returns false only for a missing
-// global, a missing/out-of-range slot, or a malformed entry.
-bool loadFleetCatalogueEntry(ScriptVM& vm, int slot, Vec3& size,
-                             std::string& className, std::string* err = nullptr);
-
-// The HANDLING half of a slot (item 23, #117): its `handling` table -- the same one a drivable spec of its kit or
-// class publishes (vehicles.lua class_handling / kit_handling) -- read by the one handling reader into a spec whose
-// config is what a physical-tier car or a commandeered one drives with. No geometry is built. False (err filled)
-// when the slot has none or it carries no wheels.
-bool loadFleetHandling(ScriptVM& vm, int slot, VehicleSpec& out, std::string* err = nullptr);
-
-// THE SLOT AS THE DRIVING MODEL SEES IT (#248): its class name; length and width from its `size`; the wheelbase from
-// its handling's wheels (steered axle to the middle of the others) and the tightest turn from that and its
-// `max_steer_deg`; then its `driving` block for the rest. No geometry is built. False (err filled) when any part is
-// missing or malformed.
+// THE SLOT AS THE DRIVING MODEL SEES IT (#248): its body as it follows a road (fleet_lua.h loadFleetSlotBody: class
+// name, length, width, wheelbase, largest steering angle) and the tightest turn from that; then its `driving` block for
+// the rest. No geometry is built. False (err filled) when any part is missing or malformed.
 bool loadFleetDrivingClass(ScriptVM& vm, int slot, driving::VehicleClass& out, std::string* err = nullptr);
 
 // THE SLOT AS THE PLAYER'S CAR (ADR-0355; Glenn: "Why is an SUV in the world different than mine? I can't open the

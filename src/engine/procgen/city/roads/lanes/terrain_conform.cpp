@@ -15,7 +15,7 @@ void conformGrid(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& H, H
     struct Owner { bool lane; int index; double rank; double halfWidth; std::unique_ptr<SegmentGrid> grid; double x0, x1, y0, y1; };
     std::vector<Owner> owners;
     auto box = [](const std::vector<Vec2>& xy, Owner& o) { o.x0 = o.y0 = 1e300; o.x1 = o.y1 = -1e300; for (const Vec2& p : xy) { o.x0 = std::min(o.x0, p.x); o.x1 = std::max(o.x1, p.x); o.y0 = std::min(o.y0, p.y); o.y1 = std::max(o.y1, p.y); } };
-    for (size_t li = 0; li < nl; ++li) { owners.push_back({true, static_cast<int>(li), L.rank(static_cast<int>(li), g), L.lanes[li].w / 2, nullptr, 0, 0, 0, 0}); box(L.lanes[li].xy, owners.back()); }
+    for (size_t li = 0; li < nl; ++li) { owners.push_back({true, static_cast<int>(li), L.rank(static_cast<int>(li), g), L.lanes[li].width / 2, nullptr, 0, 0, 0, 0}); box(L.lanes[li].xy, owners.back()); }
     for (size_t ei = 0; ei < g.edges.size(); ++ei) {
         const EdgeSpec& e = g.edges[ei]; if (e.laneCount() == 0) continue; const RoadClassSpec& c = g.cls(e);
         owners.push_back({false, static_cast<int>(ei), c.rank - 0.1, g.sidewalkOuterHalfWidth(e), std::make_unique<SegmentGrid>(e.xy, 8.0), 0, 0, 0, 0}); box(e.xy, owners.back());
@@ -120,8 +120,8 @@ void conformGrid(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& H, H
         // Reach past the lane far enough to cover its SHOULDER: the shoulder slab sits at the lane's own
         // (blended) deck, and terrain out there was only ever clamped to the road's profile, which on a pulled
         // lane sits higher — so grass spiked up through the hard shoulder (Glenn, 2026-09-08).
-        const double sh = l.parent >= 0 ? g.cls(g.edges[static_cast<size_t>(l.parent)]).shoulder : 0.0;
-        const double reach = l.w / 2 + std::max(2.5, sh + 1.0);
+        const double sh = l.road() >= 0 ? g.cls(g.edges[static_cast<size_t>(l.road())]).shoulder : 0.0;
+        const double reach = l.width / 2 + std::max(2.5, sh + 1.0);
         double bx0 = 1e300, bx1 = -1e300, by0 = 1e300, by1 = -1e300;
         for (const Vec2& q : l.xy) { bx0 = std::min(bx0, q.x); bx1 = std::max(bx1, q.x); by0 = std::min(by0, q.y); by1 = std::max(by1, q.y); }
         const int i0 = std::max(0, static_cast<int>((bx0 - reach - grid.x0) / grid.res)), i1 = std::min(grid.nx - 1, static_cast<int>((bx1 + reach - grid.x0) / grid.res) + 1);

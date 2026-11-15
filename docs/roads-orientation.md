@@ -20,13 +20,30 @@ arms, streets, lanes, connections (one lane leaving or joining another) and stat
 the stage that states it and never worked out again. It has two layers:
 
 - **Planned layer** (`plannedRoadModel`). Made from the road file alone: the planner, or the one-off layout tool
-  `lanes_tool layout`, writes the road file. The loader publishes this layer per city as `LevelRoadModel`
-  (components.h).
+  `lanes_tool layout`, writes the road file.
 - **Built layer** (`assembleRoadModel(build, vehicles, report)`). The road builder adds lanes, connections, junction
   heights, the paint's boxes and stop lines, and the stated turns. Its last step fills the model's **lane level**
   (`RoadModel::laneLevel`, ADR-0429): the table of paths the driving drives on, checked against the vehicles named.
-  On a v2 level the host that reads the fleet gets the built model from `cache/roadmodel`
-  (`obtainLevelRoadModel`) and puts it in `LevelRoadModel` in place of the first city's planned layer.
+
+**A level's model is made in one place** (ADR-0435): `obtainLevelRoadModel(level, cacheDir)` in
+`lanes/road_model_cache.h`. It returns one model per lane-built city: the first city's built model (read from
+`cache/roadmodel` or built and saved) when its road file states what the lane level needs, otherwise its planned
+layer; every later city's planned layer. The loader calls it once a load (`lanesLevelRoads` in `level_loader.cpp`) and
+publishes the result as `LevelRoadModel` (components.h). The lot pass grown at load and the driving host read that
+object. The bake's lot producer and the offline tracer run without the loader and call the same function. Nothing else
+makes a road model for a level. A tool or a test that has a road file and no level calls `plannedRoadModel` or
+`assembleRoadModel` itself.
+
+**The vehicles the turns are checked against** are the level's own fleet. `levelVehicles(level)` (same header) runs
+the vehicle script the level names (`citysim.vehicles`, `citysim.fleet`) and reads each vehicle tag's most demanding
+body through the engine's fleet reader (`engine/scripting/fleet_lua.h`, `roads/vehicle_size.h`). The driving library
+derives its vehicle classes with the same functions. So the cache key needs no host, and `rt_bake`, the loader and a
+tool make the same key. Cost: about 1.2 s a load to run the script.
+
+**A lane's facts are declared once** (ADR-0435): `LaneFacts` in `road_model_parts.h` (id, kind, road, direction, slot,
+width, stretch of spine). The builder's `Lane` (lanes/lane_expand.h) and the model's `ModelLane` both are that struct
+plus their own part; `builtRoadModel` takes the builder's facts whole. A lane's road is `edge` (`road()` gives it as an
+int, -1 for a connector) and its width is `width`: the old names `parent` and `w` are gone.
 
 Readers ask the model by id instead of measuring geometry; section 3 lists them. Kinds of attachment (a name, a
 sign) are data, not code.
@@ -50,18 +67,19 @@ Under `src/engine/procgen/city/roads/`:
 | `lanes/road_layout.h/.cpp` | The road file's layout: junctions and streets with ids, the text writers used by `lanes_tool layout`, `keyedRoadFileText` (what the bake key hashes) and `laneLevelKey`. |
 | `lanes/control_plan.h/.cpp` | The control plan: each junction's control and each road's limit, from the placement policy. Also `findJunctions`, the layout's grouping of road ends into junctions by the `rules.storage` rule. Rework: the design wants the planner to state these, not group them (step 9 / design "deleted at the end"). |
 | `lanes/lanes.h/.cpp` | The lanes pipeline: graph to lanes to profiles to pavement to surfaces to terrain. `Result` holds the paint's junction boxes (`junctionBoxes`). The ramp-end check still uses an angle test (`kJunctionParallelForGraph`). |
-| `lanes/lane_expand.h/.cpp` | Roads become lane ribbons: pockets, ramps composed from their gore anchors over their whole stated length (`rampEndDistances`). Records `sweptFrom` / `diesInto` for pockets and ramp lanes. The streets a lane runs along and the junction at each end are held by the model's lane only (`ModelLane`, filled in `builtRoadModel`; ADR-0434). |
+| `lanes/lane_expand.h/.cpp` | Roads become lane ribbons: pockets, ramps composed from their gore anchors over their whole stated length (`rampEndDistances`). The builder's `Lane` is `LaneFacts` plus its centre line, edges and working data (`sweptFrom` / `diesInto` for pockets and ramp lanes; ADR-0435). The streets a lane runs along and the junction at each end are held by the model's lane only (`ModelLane`, filled in `builtRoadModel`; ADR-0434). |
 | `lanes/deck_mesh.h/.cpp` | Meshes and paint. `junctionAreas` gives each stated arm's box edge and stop line (`kStopLineBack`, 5.2 m, outside the box). The paint's lane lines, stop bars and arrows are read off `builtRoadModel` and listed in `RoadPaint` (ADR-0431). `paintFactsKey` is what the paint reads, for the bake key. **Open in step 9**: draw corners to a stated radius. |
 | `lanes/deck_height.*`, `vertical_profile.*`, `road_design.*`, `terrain_conform.*`, `terrain_recipe.*` | Heights: profiles along spines, blended decks, the planner-shared vertical design, cut and fill. |
 | `lanes/pavement.*`, `geom2d.*`, `polyline_ops.*` | 2-D geometry: footprints, the one triangulation, the Clipper2/CDT seam, polyline helpers. |
-| `lanes/interchange.*` | Diamond interchanges (ramps at the streets a freeway crosses). Reads `kSolidBeforeStopLine`. |
+| `lanes/interchange.*` | Diamond interchanges (ramps at the streets a freeway crosses). The solid stretch before a stop line is handed in (`DiamondOptions::solidBeforeStopLine`): the planner's `SceneOptions::solidBeforeStopLine`, which it also writes into the road file's `lane_rules` (ADR-0435). |
+| `vehicle_size.h/.cpp` | The body a road is checked against per vehicle tag (`VehicleSize`, `addVehicleSize`), and how a wheelbase and a tightest turn follow from the vehicle data. The driving library derives its classes with the same functions. |
 | `lanes/lane_level.h/.cpp` | **The lane level as a table built from the model** (`buildLaneLevel`, ADR-0426): the last step of `assembleRoadModel`, which fills `RoadModel::laneLevel` (ADR-0429). The header lists where each part comes from. |
 | `lanes/lane_graph_build.h/.cpp` | What is left of the old builder: report types (`LaneGraphBuild`, `CornerFault`), `cutFolds`, bend profiles, kinks, the vehicle sizes. Has the `kLaneGraphBuildVersion` cache version. |
 | `lanes/lane_graph_connect.h/.cpp` | Connector shaping and `fitConnector`, the per-class corner-fit test that produces corner faults; `reachReport`. Step 9 will change what it reports, not delete it *(unsure)*. |
 | `lanes/lane_graph_crossings.h/.cpp` | Crossing points: where two paths' bodies could touch (a kept measurement). |
 | `lanes/swept_body.*` | The ground a long body covers on a bend. |
-| `lanes/road_model_cache.h/.cpp` | cache/roadmodel: the built road model (lane level inside) saved under one key; `obtainLevelRoadModel` reads it, or builds the roads, calls `assembleRoadModel` and saves. The roads' one cache outside the bake (ADR-0429). |
-| `lanes/city_producer.*`, `lots_producer.*` | The bundle producers: road meshes, ground, the drawn deck and pavement holes; then lots. `lots_producer.h` also makes the roads as the lot pass reads them (`levelLotRoads`, `lotRoadInputs`: the model's streets by id and the deck, ADR-0430). The lot twin (`road_twin.*`, `lotNav`, the sections roads/twin and roads/lotnav) is deleted. |
+| `lanes/road_model_cache.h/.cpp` | **The one maker of a level's road model**, `obtainLevelRoadModel` (ADR-0435; part 1), and cache/roadmodel: the built model (lane level inside) saved under one key. Also `levelVehicles` (the level's fleet as the roads read it) and `levelRoadModelCacheDir`. The roads' one cache outside the bake (ADR-0429). |
+| `lanes/city_producer.*`, `lots_producer.*` | The bundle producers: road meshes, ground, the drawn deck and pavement holes; then lots. `lots_producer.h` turns the level's road model into the roads as the lot pass reads them (`lotRoadInputs`: the model's streets by id and the deck, ADR-0430); it makes no model of its own. The lot twin (`road_twin.*`, `lotNav`, the sections roads/twin and roads/lotnav) is deleted. |
 | `lanes/block_audit.*` | The lot pass run headless and audited. |
 | `lanes/lanes_export.*` | glTF, plan SVG, stats JSON, lane graph plan pictures. |
 
@@ -86,8 +104,16 @@ Tests:
 - **Street map / routing**: `LevelRoadModel::streetMap`, the level-wide routing table held by the one road object
   beside its `cities` (built by `appendStreetMap`, street_map.h, ADR-0425). Read by the city sim, buses, rail riders,
   parking, walkers, the trip planner, furniture, the day/night system and the light probes.
-- **Lane level / driving v2**: the model's own `laneLevel`, filled by `assembleRoadModel` (ADR-0426, ADR-0429); the host hands the driving the lane level of the model in `LevelRoadModel`. Only traffic_lab drives v2
-  (`"driving": "v2"` in its level file).
+- **Lane level / driving v2**: the model's own `laneLevel`, filled by `assembleRoadModel` (ADR-0426, ADR-0429). The
+  host makes nothing: it hands the driving the lane level of the built model the loader published in `LevelRoadModel`
+  (ADR-0435), and warns when a vehicle class carries a tag the roads were not checked for. Only traffic_lab drives v2
+  (`"driving": "v2"` in its level file); river_town and agent_lab get their built model too, since the loader makes it.
+- **The lane table's copies of model facts** (issue #291, open): a junction's control, a path's posted limit, a
+  section's road class, the regulations, a connector's turn kind and the merge mark are still copied into the lane
+  table, because the driving library reads the lane table alone (`const LaneGraph*`) and its 193 tests run on hand-made
+  lane tables with no model. `road_model_12` holds the control, the turn and the limit equal to the model's.
+- **The old driving's lanes** (`LevelLanes`, `TrafficLane` in components.h; `src/apps/citysim/lane_map.*`): the loader
+  still lays the lanes a second time for it (`expand` in `publishCityProducts`). Slated for deletion with v1.
 - **Placement policy**: the planner writes controls and signs into the road file from `control_policy.lua`; the
   model only reads what was written.
 
@@ -136,9 +162,9 @@ Still working roads out for itself:
 | `carry_on_control` | The control the plan gives carry-ons (control_plan.cpp) | yes *(unsure what reads it at load)* |
 | `junctions` | Id, `at`, arms in their ring (street, heading, regulations; see below), `through` (by place in that list), `inside`, `control`, `why`, `nodes` (step 7's points) | no |
 | `arms_in_ring` | `true`: every junction's arms are listed in their ring (ADR-0427; see below) | no |
-| `streets` | Id, road, stations, the junction at each end, `carries_on`, `name` | no |
+| `streets` | Id, road, stations, the junction at each end, `carries_on`, `name`. A street's end is at a junction or carries on, never both (ADR-0435): where a junction is stated the junction's through pair says how the street runs on, and no `carries_on` is written for that end. | no |
 | `divided` | Pairs of roads that are one divided road | no |
-| `lane_rules` | `{"solid_before_stop_line": 20.0}`: the stretch before a stop line where lane lines are solid | no |
+| `lane_rules` | `{"solid_before_stop_line": 20.0}`: the stretch before a stop line where lane lines are solid. The number's one home: the planner writes it (`SceneOptions::solidBeforeStopLine`, the number its ramps are laid by) and the lane level and the paint read it (ADR-0435). | no |
 
 The lane graph's key (`laneLevelKey`) hashes `junctions` (without `nodes`), `arms_in_ring`, `streets`, `divided` and
 `lane_rules`.
@@ -146,6 +172,12 @@ It is one part of the built road model's one cache key (`roadModelCacheKey`). Si
 other road file gets no lane graph, and the error names `lanes_tool layout <file> --lane-rules 20 --write`. Write
 facts with the tools (`lanes_tool layout ... --write`, `--names`, `--nodes`, `--lane-rules`;
 `city_plan controls <file> rules/lab.lua --layout --write --controls-only`), never by hand.
+
+**Writing the layout again changes nothing** (ADR-0435). `lanes_tool layout <file> --write` on a file that has not
+changed gives the same bytes: it keeps each junction's `nodes` where they are (and so their order), writes `through`
+back before them, and states no carry-on at a junction. It prints "the file is unchanged, byte for byte" or "CHANGED".
+`road_model_19` holds this for traffic_lab, river_town and agent_lab. `--fresh` starts the layout over and drops the
+nodes; `--nodes --write` finds them again.
 
 **A junction's arms are listed in their ring** (ADR-0427): counter-clockwise round the junction in plan coordinates
 (the way headings grow). The file says so with `"arms_in_ring": true` beside the junctions list.
@@ -204,16 +236,18 @@ The fleet for `--vehicle`, as step 8 used it: `bus:7.30:2.55:11.45 car:6.15:2.05
 moped:1.92:0.70:1.70 motorcycle:2.73:0.70:2.09 truck:7.45:2.25:6.69 van:7.10:2.30:6.34`.
 
 Tests (`RT_TEST_FILTER` is a substring of the case name):
-- `./build-viewer/lanes_tests`: 115 cases, about 4 to 5 minutes whole. Filters: `road_model` (20 cases, quick),
+- `./build-viewer/lanes_tests`: 124 cases, about 4 to 5 minutes whole. Filters: `road_model` (quick),
   `lanes_lane_graph_of` (the five scenes' lane-graph checks against what each scene is known to hold: `LaneGraphKnown`
   in test_lanes.cpp), `lanes_the_traffic_lab`, `connectors_of`.
-- `./build-viewer/driving_tests`: 186 cases on hand-made graphs, about a minute *(roughly)*.
+- `./build-viewer/driving_tests`: 193 cases on hand-made graphs, about a minute *(roughly)*.
 - `run_tests`, **always filtered**: `lane_graph`, `nav`, `route`, `trip_plan`, `control`, `signal`, `park`,
   `sign`, `map`. Seconds to a minute each *(roughly)*.
 - `level_tests`, **always filtered**:
   - `level_traffic_lab_v2_drives`: about 8 to 9 minutes. It builds the lane graph (~45 s) and runs 300 cars for 5
     simulated minutes. Pins `kFiveMinuteStateHash`. Limit the runs per task.
   - `level_traffic_lab_v2_same_every_run`, `level_traffic_lab_v2_rebuild_hands_over_again`.
+  - `level_traffic_lab_v2_one_road_model`: about 10 s. The loader publishes the built model, the driving drives on
+    that object, and the fleet's sizes as the roads read them (ADR-0435).
   - `RT_LEVELS=river_town,traffic_lab` with `level_real_lanes_match_the_baked_roads` or
     `front_doors_face_their_street`.
 - `python3 tools/agent_lab_probe.py --speed 4`: about 4 minutes; overwrites its shots in
@@ -245,8 +279,10 @@ data rows.
 - **Stale binaries lie.** After changing `keyedRoadFileText`, an old `rt_bake` reported levels "out of date". Rebuild
   `viewer` and `level_tests` before loading a level too.
 - **The cache can hide a change.** The viewer reads cache/roadmodel by key. If the builder's output changes, bump
-  `kLaneGraphBuildVersion`; otherwise a viewer can show an old graph. (The lab test rebuilt the graph each time in
-  step 8 *(unsure whether it ever reads the cache)*.)
+  `kLaneGraphBuildVersion`; otherwise a viewer can show an old graph. Every load reads it now, the lab tests too
+  (the load's log line says "read from the cache" or "built in"). A level whose file is not in the cache pays the
+  road build and the lane level on its first load (river_town: about 71 s), since the loader makes the built model
+  for every level whose road file states enough (ADR-0435).
 - **Two id spaces.** Lab output gives ramp lanes as model lane ids (1110–1117); the driving reports path ids
   (1457, 1607). Do not mix them.
 - **Fold tidying** (`cutFolds`) shortens lanes on tight inside corners, so section share tests must skip tidied lanes.

@@ -1713,15 +1713,15 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
     std::map<std::string, std::string> otherGaps;
     for (std::size_t li = 0; li < L.lanes.size(); ++li) {
         const Lane& l = L.lanes[li];
-        const bool trackOrFootway = l.parent >= 0 && (r.graph.cls(r.graph.edges[static_cast<std::size_t>(l.parent)]).track ||
-                                                      r.graph.cls(r.graph.edges[static_cast<std::size_t>(l.parent)]).footway);
+        const bool trackOrFootway = l.road() >= 0 && (r.graph.cls(r.graph.edges[static_cast<std::size_t>(l.road())]).track ||
+                                                      r.graph.cls(r.graph.edges[static_cast<std::size_t>(l.road())]).footway);
         if (lg.leftOut[li]) {
             CHECK(ofLane[li].empty() && gapsOf[li].empty());
             if (!l.isConnector() && !trackOrFootway) leftOutDriven.insert(l.id);
             continue;
         }
         CHECK(!l.isConnector() && !trackOrFootway);
-        const std::string road = l.parent >= 0 ? r.graph.edges[static_cast<std::size_t>(l.parent)].id : std::string();
+        const std::string road = l.road() >= 0 ? r.graph.edges[static_cast<std::size_t>(l.road())].id : std::string();
         for (const LaneGap* gp : gapsOf[li]) {
             if (gp->junction == kNoIndex) {
                 otherGaps[l.id] = gp->why;
@@ -1744,7 +1744,7 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
             const double lo = std::min(s0, s1), hi = std::max(s0, s1);
             const double tol = kJunctionStretchTolerance + (known.tidied.count(l.id) ? known.tidied.at(l.id) : 0.0);
             bool within = false;
-            for (const std::tuple<double, double, uint32_t>& x : extents[l.parent]) {
+            for (const std::tuple<double, double, uint32_t>& x : extents[l.road()]) {
                 if (std::get<2>(x) != gp->junction) continue;
                 const bool armStretch = std::fabs(lo - std::get<0>(x)) <= tol && std::fabs(hi - std::get<1>(x)) <= tol;
                 const bool onIt = lo >= std::get<0>(x) - tol && hi <= std::get<1>(x) + tol;
@@ -1759,7 +1759,7 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
                 std::printf("      lane %s: %.2f to %.2f m along it (stations %.2f to %.2f of %s), said to be inside junction %s, is not "
                             "that junction's stated stretch:", l.id.c_str(), gp->from, gp->to, lo, hi, road.c_str(),
                             r.graph.junctions[gp->junction].id.c_str());
-                for (const std::tuple<double, double, uint32_t>& x : extents[l.parent])
+                for (const std::tuple<double, double, uint32_t>& x : extents[l.road()])
                     if (std::get<2>(x) == gp->junction) std::printf(" %.2f to %.2f;", std::get<0>(x), std::get<1>(x));
                 std::printf("\n");
             }
@@ -2013,7 +2013,7 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
         };
         constexpr double kCell = 20.0;
         std::map<std::pair<long, long>, std::vector<Seg>> grid;
-        auto roadOfPath = [&](uint32_t p) { return L.lanes[static_cast<std::size_t>(lg.sources[p].lane)].parent; };
+        auto roadOfPath = [&](uint32_t p) { return L.lanes[static_cast<std::size_t>(lg.sources[p].lane)].road(); };
         for (uint32_t p = 0; p < G.paths.size(); ++p) {
             if (G.paths[p].kind != PathKind::Lane) continue;
             for (uint32_t k = G.paths[p].curve.first; k + 1 < G.paths[p].curve.end(); ++k) {
@@ -2565,7 +2565,7 @@ TEST_CASE(lanes_lane_graph_a_grid_city_crossing_checked_by_hand) {
     const Junction& jn = G.junctions[static_cast<std::size_t>(found)];
     CHECK(jn.arriving.count == 8);
     CHECK(jn.leaving.count == 8);
-    auto roadOf = [&](PathId p) { return r.lanes.lanes[static_cast<std::size_t>(lg.sources[p.index].lane)].parent; };
+    auto roadOf = [&](PathId p) { return r.lanes.lanes[static_cast<std::size_t>(lg.sources[p.index].lane)].road(); };
     int fromV2 = 0, fromH2 = 0;
     for (uint32_t k = jn.arriving.first; k < jn.arriving.end(); ++k) {
         fromV2 += roadOf(G.junctionLanes[k]) == v2 ? 1 : 0;
@@ -2589,7 +2589,7 @@ TEST_CASE(lanes_lane_graph_a_grid_city_crossing_checked_by_hand) {
     for (uint32_t k = jn.arriving.first; k < jn.arriving.end(); ++k) {
         const PathId p = G.junctionLanes[k];
         const Lane& l = r.lanes.lanes[static_cast<std::size_t>(lg.sources[p.index].lane)];
-        if (l.parent != v2 || l.dir < 0) continue;
+        if (l.road() != v2 || l.dir < 0) continue;
         const Vec2 end = G.pointAt(p, G.paths[p.index].length);
         const Projection pr = project(e.xy, e.s, end);
         std::printf("    v2 lane %s arrives at %.3f m along v2; the stop bar stands at %.3f m, %.2f m off the spine\n", l.id.c_str(),
@@ -2682,7 +2682,7 @@ TEST_CASE(lanes_a_level_lane_graph_is_built_once_then_read_from_its_cache) {
     const engine::bundle::LevelInputs in = cacheTestLevel(graphPath);
     const LaneGraphOptions opts = cacheTestVehicles();
 
-    const LevelBuiltRoads first = obtainLevelRoadModel(in, opts, dir);
+    const LevelBuiltRoads first = obtainLevelRoadModel(in, dir, &opts);
     std::printf("    first load: %s\n", describeLevelRoadModel(first).c_str());
     CHECK(first.model != nullptr);
     if (!first.model) return;
@@ -2712,13 +2712,13 @@ TEST_CASE(lanes_a_level_lane_graph_is_built_once_then_read_from_its_cache) {
         CHECK(laneLevelKey(otherRules) != facts);
         const std::string otherPath = (dirPath / "hill_junction_rules.json").string();
         std::ofstream(otherPath) << otherRules.dump(1);
-        const LevelBuiltRoads otherKey = obtainLevelRoadModel(cacheTestLevel(otherPath), opts, std::string());
+        const LevelBuiltRoads otherKey = obtainLevelRoadModel(cacheTestLevel(otherPath), std::string(), &opts);
         CHECK(otherKey.key != first.key);
     }
     const std::vector<char> bytes = cacheFileBytes(first.path);
     CHECK(!bytes.empty());
 
-    const LevelBuiltRoads second = obtainLevelRoadModel(in, opts, dir);
+    const LevelBuiltRoads second = obtainLevelRoadModel(in, dir, &opts);
     std::printf("    second load: %s\n", describeLevelRoadModel(second).c_str());
     CHECK(second.fromCache && !second.saved && second.roadSeconds == 0);
     CHECK(second.model != nullptr && *second.model == *first.model);   // the whole model, its lane level in it
@@ -2727,7 +2727,7 @@ TEST_CASE(lanes_a_level_lane_graph_is_built_once_then_read_from_its_cache) {
 
     // lost: built again, to the same bytes
     fs::remove(first.path, ec);
-    const LevelBuiltRoads rebuilt = obtainLevelRoadModel(in, opts, dir);
+    const LevelBuiltRoads rebuilt = obtainLevelRoadModel(in, dir, &opts);
     CHECK(!rebuilt.fromCache && rebuilt.saved);
     CHECK(cacheFileBytes(first.path) == bytes);
 
@@ -2737,31 +2737,31 @@ TEST_CASE(lanes_a_level_lane_graph_is_built_once_then_read_from_its_cache) {
         if (damage == 0) bad[bad.size() / 2] = static_cast<char>(~bad[bad.size() / 2]);
         else bad.resize(bad.size() / 2);
         putCacheFile(first.path, bad);
-        const LevelBuiltRoads again = obtainLevelRoadModel(in, opts, dir);
+        const LevelBuiltRoads again = obtainLevelRoadModel(in, dir, &opts);
         CHECK(!again.fromCache && again.saved);
         CHECK(again.model != nullptr && *again.model == *first.model);
         CHECK(again.notes.size() == 1 && again.notes[0].find("refused") != std::string::npos);
         if (!again.notes.empty()) std::printf("    %s\n", again.notes[0].c_str());
         CHECK(cacheFileBytes(first.path) == bytes);
-        CHECK(obtainLevelRoadModel(in, opts, dir).fromCache);
+        CHECK(obtainLevelRoadModel(in, dir, &opts).fromCache);
     }
 
     // other vehicles: another key, another file; the first stays
     LaneGraphOptions fewer = opts;
     fewer.vehicles.pop_back();
-    const LevelBuiltRoads other = obtainLevelRoadModel(in, fewer, dir);
+    const LevelBuiltRoads other = obtainLevelRoadModel(in, dir, &fewer);
     CHECK(other.key != first.key && other.path != first.path && !other.fromCache);
     CHECK(fs::exists(first.path, ec));
 
     // no cache folder (RT_NOCACHE): built, nothing written
-    const LevelBuiltRoads uncached = obtainLevelRoadModel(in, opts, std::string());
+    const LevelBuiltRoads uncached = obtainLevelRoadModel(in, std::string(), &opts);
     CHECK(uncached.model != nullptr && !uncached.fromCache && !uncached.saved && uncached.path.empty());
     CHECK(*uncached.model == *first.model);
 
     // a level with no lane-built city: no graph, and why
     engine::bundle::LevelInputs empty;
     empty.level = {{"entities", nlohmann::json::array()}};
-    const LevelBuiltRoads none = obtainLevelRoadModel(empty, opts, dir);
+    const LevelBuiltRoads none = obtainLevelRoadModel(empty, dir, &opts);
     CHECK(none.model == nullptr && !none.error.empty());
     fs::remove_all(dirPath, ec);
 }
@@ -3490,6 +3490,7 @@ DiamondResult frontageDiamond(const std::vector<RampStreet>& streets) {
     std::vector<Vec2> route;
     for (double x = 0; x <= 2000.0; x += 10.0) route.push_back(Vec2(x, 0));
     DiamondOptions o;
+    o.solidBeforeStopLine = 20.0;   // this scene's lane rule: an off-ramp's merge lane ends 20 m before the stop line ahead
     o.aId = "fw_a"; o.bId = "fw_b";
     const RoadClassSpec& fw = roadClass("freeway");   // the carriageways below: the class table's, 7 m off the route
     o.carriage = 7.0;

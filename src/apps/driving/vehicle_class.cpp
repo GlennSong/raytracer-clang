@@ -10,31 +10,6 @@ namespace driving {
 
 namespace {
 
-const Real kPi = std::acos(Real(-1));
-constexpr Real kHalfTurnDegrees = 180.0;
-constexpr Real kRightAngleDegrees = 90.0;
-constexpr Real kHalf = 0.5;
-
-Real radians(Real degrees) { return degrees * kPi / kHalfTurnDegrees; }
-
-// The middle of the spread of `along` over the wheels that do (or do not) steer; false when there are none.
-bool middleOf(const std::vector<WheelSpot>& wheels, bool steered, Real& middle) {
-    bool any = false;
-    Real lo = 0, hi = 0;
-    for (const WheelSpot& w : wheels) {
-        if (w.steered != steered) continue;
-        if (!any) {
-            lo = hi = w.along;
-            any = true;
-        } else {
-            lo = std::min(lo, w.along);
-            hi = std::max(hi, w.along);
-        }
-    }
-    if (any) middle = kHalf * (lo + hi);
-    return any;
-}
-
 std::string number(Real v) {
     char buf[32];
     std::snprintf(buf, sizeof buf, "%.3f", v);
@@ -44,18 +19,6 @@ std::string number(Real v) {
 }  // namespace
 
 bool VehicleClass::hasTag(const std::string& tag) const { return std::binary_search(tags.begin(), tags.end(), tag); }
-
-bool wheelbaseFromWheels(const std::vector<WheelSpot>& wheels, Real& wheelbase) {
-    Real front = 0, back = 0;
-    if (!middleOf(wheels, true, front) || !middleOf(wheels, false, back)) return false;
-    wheelbase = std::fabs(front - back);
-    return true;
-}
-
-Real tightestTurnRadius(Real wheelbase, Real maxSteerDegrees) {
-    if (!(maxSteerDegrees > 0) || !(maxSteerDegrees < kRightAngleDegrees)) return 0;
-    return wheelbase / std::tan(radians(maxSteerDegrees));
-}
 
 VehicleClass deriveVehicleClass(const std::string& name, Real length, Real width, Real wheelbase,
                                 Real maxSteerDegrees) {
@@ -87,22 +50,8 @@ const VehicleClass* VehicleClasses::find(const std::string& name) const {
 std::vector<TagSize> tagSizes(const VehicleClasses& classes) {
     std::vector<TagSize> out;
     for (const VehicleClass& c : classes.all())
-        for (const std::string& tag : c.tags) {
-            std::vector<TagSize>::iterator it = std::lower_bound(
-                out.begin(), out.end(), tag, [](const TagSize& t, const std::string& name) { return t.tag < name; });
-            if (it == out.end() || it->tag != tag) {
-                TagSize t;
-                t.tag = tag;
-                t.turningRadius = c.tightestTurnRadius;
-                t.width = c.width;
-                t.length = c.length;
-                out.insert(it, t);
-                continue;
-            }
-            it->turningRadius = std::max(it->turningRadius, c.tightestTurnRadius);
-            it->width = std::max(it->width, c.width);
-            it->length = std::max(it->length, c.length);
-        }
+        for (const std::string& tag : c.tags)
+            engine::roads::lanes::addVehicleSize(out, tag, c.tightestTurnRadius, c.width, c.length);
     return out;
 }
 

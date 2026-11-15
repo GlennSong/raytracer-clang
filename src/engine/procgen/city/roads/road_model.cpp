@@ -318,18 +318,11 @@ RoadModel builtRoadModel(const Result& r) {
     for (std::size_t li = 0; li < r.lanes.lanes.size(); ++li) {
         const Lane& l = r.lanes.lanes[li];
         ModelLane L;
-        L.id = l.id;
-        L.kind = l.kind;
-        L.edge = l.parent >= 0 ? static_cast<uint32_t>(l.parent) : kNoIndex;
-        L.dir = l.dir;
-        L.slot = l.slot;
-        L.width = l.w;
-        L.spineFrom = l.spineFrom;
-        L.spineTo = l.spineTo;
+        static_cast<LaneFacts&>(L) = l;   // the lane's facts, the builder's taken whole (declared once: road_model_parts.h)
         L.curve = Range{static_cast<uint32_t>(m.points.size()), static_cast<uint32_t>(l.xy.size())};
         // the spine sample each point was laid beside (lane_expand.cpp ribbonLane: point k of a lane laid from spineFrom)
         std::size_t i0 = 0;
-        const EdgeSpec* e = l.parent >= 0 ? &g.edges[static_cast<std::size_t>(l.parent)] : nullptr;
+        const EdgeSpec* e = l.onRoad() ? &g.edges[l.edge] : nullptr;
         if (e) i0 = static_cast<std::size_t>(std::lower_bound(e->s.begin(), e->s.end(), l.spineFrom) - e->s.begin());
         for (std::size_t k = 0; k < l.xy.size(); ++k) {
             m.points.push_back(l.xy[k]);
@@ -409,8 +402,8 @@ RoadModel builtRoadModel(const Result& r) {
     // tapers out, a ramp's second lane): its own records (Lane::sweptFrom, diesInto), at the lane's own ends
     for (std::size_t li = 0; li < r.lanes.lanes.size(); ++li) {
         const Lane& l = r.lanes.lanes[li];
-        if (l.parent < 0) continue;
-        const EdgeSpec& e = g.edges[static_cast<std::size_t>(l.parent)];
+        if (l.road() < 0) continue;
+        const EdgeSpec& e = g.edges[static_cast<std::size_t>(l.road())];
         const roads::lanes::PocketSpec* pocket = nullptr;
         for (const roads::lanes::PocketSpec& pk : e.pockets)
             if (e.id + "." + pk.id == l.id) pocket = &pk;

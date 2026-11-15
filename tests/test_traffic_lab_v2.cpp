@@ -41,6 +41,8 @@
 #include "../src/engine/components.h"
 #include "../src/engine/level_loader.h"
 #include "../src/engine/mesh_uploader.h"
+#include "../src/engine/procgen/city/roads/lanes/road_model_cache.h"   // levelVehicles: the fleet the roads are checked against
+#include "../src/engine/procgen/city/roads/road_model.h"
 #include "../src/engine/world.h"
 #include "../src/renderer/renderer.h"
 
@@ -1392,6 +1394,56 @@ TEST_CASE(level_traffic_lab_v2_soak) {
                 static_cast<unsigned long long>(d2->stateHash()));
     CHECK(compared == hashes.size());
     CHECK(differ == 0);
+}
+
+// ONE ROAD MODEL A LEVEL, MADE IN ONE PLACE (ADR-0435). The loader publishes the model `obtainLevelRoadModel` makes: the
+// lab's is the BUILT model (its lane level in it), with what the loader attached on it, and the new driving drives on
+// that very object's lane level -- the host makes none of its own. (Before, the loader published the planned layer and
+// the host swapped a model of its own in, copying the attachments across by hand.) The vehicles its turns are checked
+// against are read from the level's own fleet by the roads, written out here by hand from vehicles.lua's fleet_lab.
+TEST_CASE(level_traffic_lab_v2_one_road_model_is_published_and_driven_on) {
+    LoadedCity lc("traffic_lab.json", "");
+    CHECK(lc.ok);
+    if (!lc.ok) return;
+    int published = 0;
+    const engine::LevelRoadModel* level = nullptr;
+    lc.world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { ++published; level = &m; });
+    CHECK(published == 1);
+    if (!level) return;
+    CHECK(level->cities.size() == 1u);
+    if (level->cities.size() != 1u || !level->cities[0]) return;
+    const engine::RoadModel& model = *level->cities[0];
+    CHECK(model.built);
+    CHECK(model.junctions.size() == 156u && model.streets.size() == 293u);
+    CHECK(model.laneLevel.paths.size() == 3364u);
+    // what the loader attached (name signs, signal poles, lamps, control signs) is on the model that is driven on
+    CHECK(model.attachments.size() > 1500u);
+    CHECK(level->laneLevelReport.find("3364 paths") != std::string::npos);
+    // the driving reads this object's lane level, not a copy and not a model of its own
+    const driving::Driving* d = lc.city.sim().drivingV2();
+    CHECK(d != nullptr);
+    if (d) CHECK(d->roads() == &model.laneLevel);
+    // the vehicles the roads were checked against: the level's own fleet, read by the roads themselves
+    engine::bundle::LevelInputs in;
+    std::string err;
+    CHECK(engine::bundle::loadLevelInputs(std::string(RT_SOURCE_DIR) + "/assets/levels/traffic_lab.json", in, &err));
+    std::vector<std::string> notes;
+    const engine::roads::lanes::LaneGraphOptions fleet = engine::roads::lanes::levelVehicles(in, &notes);
+    CHECK(notes.empty());
+    struct Expected { const char* tag; double radius, width, length; };
+    const Expected expected[] = {{"bus", 7.30, 2.55, 11.45},  {"car", 6.15, 2.05, 5.57},        {"goods", 7.45, 2.30, 6.69},
+                                 {"moped", 1.92, 0.70, 1.70}, {"motorcycle", 2.73, 0.70, 2.09}, {"truck", 7.45, 2.25, 6.69},
+                                 {"van", 7.10, 2.30, 6.34}};
+    constexpr double kWrittenToTheCentimetre = 0.005;   // the list above is written to two places
+    CHECK(fleet.vehicles.size() == 7u);
+    for (std::size_t i = 0; i < fleet.vehicles.size() && i < 7u; ++i) {
+        const engine::roads::lanes::VehicleSize& v = fleet.vehicles[i];
+        CHECK(v.tag == expected[i].tag);
+        CHECK(engine::approxEqual(v.turningRadius, expected[i].radius, kWrittenToTheCentimetre));
+        CHECK(engine::approxEqual(v.width, expected[i].width, kWrittenToTheCentimetre));
+        CHECK(engine::approxEqual(v.length, expected[i].length, kWrittenToTheCentimetre));
+    }
+    CHECK(model.laneLevel.vehicleTagNames.size() == 7u);
 }
 
 // A RULE SET THAT IS REFUSED (here: one that is not there; RT_LAB_RULES names another to try) leaves the lab loading

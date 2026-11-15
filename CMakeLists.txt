@@ -466,6 +466,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/script_system.cpp
         src/engine/scripting/lua_json.cpp
         src/engine/scripting/vehicle_spec.cpp
+        src/engine/scripting/fleet_lua.cpp      # a level's fleet as the engine reads it: slots, sizes, what the roads are checked against (ADR-0435)
         src/engine/scripting/carry_items.cpp
         src/engine/scripting/trades_lua.cpp
         src/engine/scripting/lights_lua.cpp
@@ -665,6 +666,7 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/control_plan.cpp   # every junction's control and every road's limit, planned (#240)
             src/engine/procgen/city/roads/lanes/road_layout.cpp   # the road file's junctions and streets, with ids (ADR-0417)
             src/engine/procgen/city/roads/road_model.cpp   # the one road model, assembled from a build (ADR-0417)
+            src/engine/procgen/city/roads/vehicle_size.cpp   # the body a road is checked against per vehicle tag (ADR-0435)
             src/engine/procgen/city/roads/lane_turns.cpp   # which turns a junction offers, which lane takes each (ADR-0426)
             src/engine/procgen/city/roads/street_map.cpp   # the street map agents route on, from the road model (ADR-0425)
             src/engine/procgen/city/roads/control_signs.cpp   # the signs that follow from its facts (ADR-0424)

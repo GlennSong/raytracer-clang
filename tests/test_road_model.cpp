@@ -176,6 +176,16 @@ TEST_CASE(road_model_0_a_planned_city_states_every_junctions_control) {
         for (const ModelArm& a : J.arms) CHECK(a.street.valid());
     // without a policy, the scene states none (a place's scene, which the island plans again as a whole)
     CHECK(!RoadLabGraph::fromJson(engine::plan::planToLanesScene(engine::plan::generatePlan(citytest::roundBrief(11)))).declaresJunctions);
+    // THE SOLID STRETCH BEFORE A STOP LINE HAS ONE HOME (ADR-0435): the planner states in the road file the number its
+    // ramps are laid by, and the lane level reads the file. As planned: 20 m. Planned for 35 m: the file says 35. (Before,
+    // the planner laid its ramps by a constant of 20 m and wrote nothing, so a file could state any other number.)
+    CHECK(g.statesLaneRules);
+    CHECK(scene.contains("lane_rules") && scene["lane_rules"].value("solid_before_stop_line", -1.0) == 20.0);
+    CHECK(g.laneRules.solidBeforeStopLine == 20.0);
+    engine::plan::SceneOptions longer;
+    longer.solidBeforeStopLine = 35.0;
+    const RoadLabGraph g35 = RoadLabGraph::fromJson(engine::plan::planToLanesScene(engine::plan::generatePlan(citytest::roundBrief(11)), longer));
+    CHECK(g35.statesLaneRules && g35.laneRules.solidBeforeStopLine == 35.0);
 }
 #endif
 
@@ -360,7 +370,7 @@ TEST_CASE(road_model_3_lanes_carry_their_streets_and_the_model_holds_what_is_sta
         lanesOnStreets += l.streets.empty() ? 0 : 1;
         if (l.kind == "through") wrongSlot += l.slot == std::atoi(l.id.c_str() + l.id.rfind('.') + 2) ? 0 : 1;
     }
-    CHECK(lanesOnStreets == static_cast<int>(std::count_if(r.lanes.lanes.begin(), r.lanes.lanes.end(), [](const Lane& l) { return l.parent >= 0; })));
+    CHECK(lanesOnStreets == static_cast<int>(std::count_if(r.lanes.lanes.begin(), r.lanes.lanes.end(), [](const Lane& l) { return l.road() >= 0; })));
     CHECK(wrongSlot == 0);
     // the arterial a1 runs from the crossing at (0, 0) to the T at (200, 0): its forward lanes start at the first and end at
     // the second, its backward lanes the other way round
@@ -1170,6 +1180,13 @@ TEST_CASE(road_model_12_the_lane_level_is_a_table_built_from_the_model) {
     }
     // the controls are the stated ones; the all-way stop's arriving lanes face its stop signs
     for (const Junction& jn : G.junctions) CHECK(G.controlNames[jn.control] == m.junctions[jn.modelJunction].control);
+    // THE LANE TABLE'S COPIES OF MODEL FACTS (issue #291, not yet removed: the driving reads the lane table alone) say
+    // what the model says, by the id each carries: a lane path's limit is its street's, a connector's the turn's kind
+    // (above) and the limit of the lane it joins.
+    for (const Path& p : G.paths) {
+        if (p.kind == PathKind::Lane) CHECK(p.speedLimit == m.streets[p.street].speedLimit);
+        else CHECK(p.speedLimit == G.paths[G.nextPaths[p.next.first].index].speedLimit);
+    }
     // at the crossing, a lane of the arterial arriving from the west turns near into the street on its kerb side
     {
         uint32_t near = 0;
@@ -1787,4 +1804,44 @@ TEST_CASE(road_model_18_the_shipped_road_files_state_their_arms_in_their_ring) {
     CHECK(swapped);
     const ArmRingCheck c = checkArmRings(RoadLabGraph::fromJson(spec, path.substr(0, path.find_last_of('/'))));
     CHECK(c.differ == std::vector<std::string>({"j129"}));
+}
+
+// THE LAYOUT WRITTEN AGAIN INTO A ROAD FILE THAT HAS NOT CHANGED GIVES THE SAME BYTES (ADR-0435): what
+// `lanes_tool layout <file> --write` does, on the three shipped files, in memory. Two things made it change a file
+// before:
+//   - it stated a carry-on at a street end where the file's own list states a junction (a second answer to "how does
+//     this street run on", which no reader asks: traffic_lab, 27 streets, 40 ends);
+//   - it dropped every junction's `nodes` (they came back only with a second command, `--nodes --write`).
+// A street's end is at a junction or carries on, never both: counted here, with each file's own numbers.
+TEST_CASE(road_model_19_the_layout_written_again_into_a_shipped_file_changes_nothing) {
+    struct Shipped { const char* file; std::size_t streetsCarryingOn, carryOnEnds, junctionsWithNodes; };
+    const Shipped files[] = {{"planned/traffic_lab_lanelab.json", 0, 0, 15},
+                             {"planned/river_town_lanelab.json", 22, 32, 30},
+                             {"planned/agent_lab_lanelab.json", 22, 32, 30}};
+    for (const Shipped& f : files) {
+        const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/" + f.file;
+        const std::string text = slurp(path);
+        const RoadLabGraph g = RoadLabGraph::fromJson(nlohmann::json::parse(text), path.substr(0, path.find_last_of('/')));
+        RoadLayout layout = deriveLayout(g, LayoutSource::Inferred);
+        const std::vector<NamedStretch> keep = namedStretches(g.streets);
+        if (!keep.empty()) (void)nameLayout(layout, g, keep);
+        std::string err;
+        const std::string out = insertLayoutText(stripLayoutText(text, true), layout, &err);
+        if (!err.empty()) std::printf("      %s: %s\n", f.file, err.c_str());
+        CHECK(out == text);
+        std::size_t streets = 0, ends = 0, endsAtAJunction = 0, withNodes = 0;
+        for (const ModelStreet& st : layout.streets) {
+            streets += st.carriesOn[0].valid() || st.carriesOn[1].valid() ? 1u : 0u;
+            for (std::size_t k = 0; k < 2; ++k) {
+                ends += st.carriesOn[k].valid() ? 1u : 0u;
+                endsAtAJunction += st.carriesOn[k].valid() && st.junctions[k].valid() ? 1u : 0u;
+            }
+        }
+        for (const ModelJunction& J : g.junctions) withNodes += J.nodes.empty() ? 0u : 1u;
+        std::printf("      %s: %zu streets carry on at %zu ends (%zu of them at a junction); %zu junctions list their nodes; written again: %s\n",
+                    f.file, streets, ends, endsAtAJunction, withNodes, out == text ? "the same bytes" : "CHANGED");
+        CHECK(streets == f.streetsCarryingOn && ends == f.carryOnEnds);
+        CHECK(endsAtAJunction == 0u);
+        CHECK(withNodes == f.junctionsWithNodes);
+    }
 }

@@ -40,13 +40,16 @@
 //
 // TWO LAYERS, ONE MODEL (ADR-0420). The PLANNED LAYER is everything the road file alone states -- junctions, arms,
 // streets and their centre lines, cross-sections, one-way, carrying on, through pairs, divided roads, ramps, crossings,
-// names -- read in milliseconds (plannedRoadModel), and published when a level loads (components.h LevelRoadModel), for
-// the readers that only label the roads (street names, name signs, the map). The BUILT LAYER is what the road build adds
+// names -- read in milliseconds (plannedRoadModel): what the readers that only label the roads read (street names, name
+// signs, the map). The BUILT LAYER is what the road build adds
 // -- lanes with their curves and heights, connections, junction heights, the paint's boxes and stop lines -- assembled
-// from a build (assembleRoadModel = the planned layer + the built parts) by whoever has the build: the level's road model
-// cache (lanes/road_model_cache.h obtainLevelRoadModel) and lanes_tool. The built layer holds THE LANE LEVEL too (ADR-0429,
-// `laneLevel`): the table of paths the driving drives on, filled as the last step of assembling, for the vehicles the
-// caller names. The built model is saved whole, lane level and all, in cache/roadmodel under one key; it is not in the
+// from a build (assembleRoadModel = the planned layer + the built parts) by whoever has the build. A LEVEL'S model is
+// made in one place (ADR-0435): lanes/road_model_cache.h obtainLevelRoadModel, which the loader calls and publishes
+// (components.h LevelRoadModel) -- the built model where the road file states enough, else the planned layer. A tool or
+// a test with a road file and no level calls plannedRoadModel or assembleRoadModel itself. The built layer holds THE
+// LANE LEVEL too (ADR-0429, `laneLevel`): the table of paths the driving drives on, filled as the last step of
+// assembling, for the vehicles named (a level's: its own fleet, read by obtainLevelRoadModel).
+// The built model is saved whole, lane level and all, in cache/roadmodel under one key; it is not in the
 // level's bake (that would re-bake every level). A planned-only model is the same structure with its built parts empty,
 // `built` false, and its `notStated` list says which.
 //
@@ -128,14 +131,11 @@ struct ModelLaneSpan {
     Real from = 0, to = 0;           // stations along the road's spine
 };
 
-struct ModelLane {
-    std::string id, kind;            // kind: the builder's (through, turn, ramp, connector, ...)
-    uint32_t edge = kNoIndex;        // its road (none: a connector)
-    int dir = 1;                     // +1 along the road's spine
-    int slot = -1;                   // its place across (see the top of this file)
-    Real width = 0;
+// THE MODEL'S LANE: the lane's facts (road_model_parts.h LaneFacts: id, kind, road, direction, slot, width, stretch of
+// spine -- the builder's lane's, taken whole) and where it lies: its centre line as kept, the streets it runs along and
+// the junction at each end.
+struct ModelLane : LaneFacts {
     Range curve;                     // into points / along / heights: its centre line, the way it is laid (spine order)
-    Real spineFrom = 0, spineTo = 0; // the stretch of its road's spine it is laid along
     std::vector<ModelLaneSpan> streets;
     ModelJunctionId atStart, atEnd;  // the junction it begins and ends at, the way its traffic runs
 };

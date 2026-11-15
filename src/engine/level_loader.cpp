@@ -73,6 +73,7 @@
 #include "procgen/city/roads/street_map.h"          // the street map every agent routes on, from the model (ADR-0425)
 #include "procgen/city/roads/control_signs.h"       // the signs that follow from its facts (ADR-0424)
 #include "procgen/city/roads/lanes/lots_producer.h" // the lot pass as the second producer (milestone B)
+#include "procgen/city/roads/lanes/road_model_cache.h"   // obtainLevelRoadModel: the level's one road model (ADR-0435)
 #include "bundle/bake.h"
 #endif
 #include "procgen/city/block_grade.h" // grade blocks to their streets (ADR-0075 P2)
@@ -585,7 +586,7 @@ struct LanesPublished {
     // the footprint, so consumers that run before the RoadDeck components exist read it here.
     RoadDeckField deck;
     // The city's ROADS as the lot pass reads them (the road model's streets and the drawn deck: lots_producer.h
-    // levelLotRoads). Filled only when the lots are grown in place; a load that reads its lots from the bundle
+    // lotRoadInputs, over the level's one road model). Filled only when the lots are grown in place; a load that reads its lots from the bundle
     // never asks.
     engine::LotRoadInputs lotRoads;
     // The sidewalk the builder actually PAVED. The lot pass reads LotParams::sidewalkWidth
@@ -600,8 +601,33 @@ struct LanesPublished {
     engine::bundle::LevelInputs inputs;    // the level, for the producers' keys
     std::shared_ptr<engine::bundle::Bundle> bundle;   // the level's city bundle, obtained on the first lanelab entity
     std::string bundleStatus;
+    // THE LEVEL'S ROAD MODEL (ADR-0435), obtained once a load by lanesLevelRoads below: what the loader publishes as
+    // LevelRoadModel and what the lot pass grown in place reads.
+    engine::roads::lanes::LevelBuiltRoads roads;
+    bool roadsObtained = false;
 };
 static LanesPublished g_lanes;
+
+// The level's road model, made on first asking in a load by the one function that makes it (road_model_cache.h): read
+// from its cache or built. Says once what it found.
+static const engine::roads::lanes::LevelBuiltRoads& lanesLevelRoads() {
+    if (g_lanes.roadsObtained) return g_lanes.roads;
+    g_lanes.roadsObtained = true;
+    g_lanes.roads = engine::roads::lanes::obtainLevelRoadModel(g_lanes.inputs, engine::roads::lanes::levelRoadModelCacheDir());
+    for (const std::string& n : g_lanes.roads.notes) LOG_WARN << "[roads] road model: " << n;
+    std::string checked;
+    for (const engine::roads::lanes::VehicleSize& v : g_lanes.roads.vehicles.vehicles) {
+        char b[128];
+        std::snprintf(b, sizeof b, "%s%s %.2f m / %.2f m / %.2f m", checked.empty() ? "" : ", ", v.tag.c_str(), v.turningRadius, v.width, v.length);
+        checked += b;
+    }
+    if (!checked.empty())
+        LOG_INFO << "[roads] road model: turns checked for (tag, tightest turning radius / width / length) " << checked;
+    const std::string line = engine::roads::lanes::describeLevelRoadModel(g_lanes.roads);
+    if (g_lanes.roads.model) LOG_INFO << "[roads] road model, lane level: " << line;
+    else LOG_WARN << "[roads] road model: " << line;
+    return g_lanes.roads;
+}
 
 #endif
 
@@ -669,7 +695,9 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
     // a level test holds them to the baked road surface.
     {
         using namespace engine::roads::lanes;
+        std::size_t cityNumber = 0;   // this city's place among the level's lane-built cities (and in its road model)
         for (const CityEntity& e : cityEntities(in.level)) {
+            const std::size_t cityOfLevel = cityNumber++;
             if (e.entityIndex != in.entityIndex) continue;
             try {
                 RoadLabGraph g = loadCityGraph(e);
@@ -683,8 +711,8 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
                 for (const Lane& l : L.lanes) {
                     engine::TrafficLane t;
                     t.xy = l.xy;
-                    t.w = l.w;
-                    t.parent = l.parent >= 0 ? roadBase + l.parent : -1;
+                    t.w = l.width;
+                    t.parent = l.onRoad() ? roadBase + l.road() : -1;
                     t.dir = l.dir;
                     t.kind = l.kind;
                     // where it lies on its road (ADR-0417's ids, the lane match's since ADR-0425): its slot, its stretch of
@@ -693,8 +721,8 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
                     t.slot = l.slot;
                     t.spineFrom = l.spineFrom;
                     t.spineTo = l.spineTo;
-                    if (l.parent >= 0) {
-                        const EdgeSpec& es = g.edges[static_cast<std::size_t>(l.parent)];
+                    if (l.onRoad()) {
+                        const EdgeSpec& es = g.edges[l.edge];
                         const std::size_t i0 = static_cast<std::size_t>(std::lower_bound(es.s.begin(), es.s.end(), l.spineFrom - 1e-9) - es.s.begin());
                         for (std::size_t k = 0; k < l.xy.size() && i0 + k < es.s.size(); ++k) t.stations.push_back(es.s[i0 + k]);
                         if (t.stations.size() != t.xy.size()) t.stations.clear();   // (laid otherwise: no stations, no match)
@@ -702,21 +730,25 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
                     out->lanes.push_back(std::move(t));
                 }
                 LOG_INFO << "[roads] " << L.lanes.size() << " lanes recomputed for the traffic sim (" << g.edges.size() << " roads)";
-                // THE ROAD MODEL'S PLANNED LAYER (ADR-0420): read from the same road file (its ramps composed, as just now),
-                // one city of the level's one LevelRoadModel, in the order the level lists its cities
+                // THE ROAD MODEL (ADR-0420, ADR-0435): this city's part of the level's one road model, made once a load by the
+                // one function that makes it (lanesLevelRoads: obtainLevelRoadModel) and published here as one city of the
+                // level's one LevelRoadModel, in the order the level lists its cities. The first city's is the built model
+                // (lanes, turns, the lane level the driving reads) when its road file states enough; else the planned layer.
                 engine::LevelRoadModel* models = nullptr;
                 world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!models) models = &m; });
                 if (!models) models = &world.add<engine::LevelRoadModel>(world.create(), engine::LevelRoadModel{});
-                std::shared_ptr<engine::RoadModel> model = std::make_shared<engine::RoadModel>(engine::plannedRoadModel(g));
+                const LevelBuiltRoads& levelRoads = lanesLevelRoads();
+                std::shared_ptr<engine::RoadModel> model = cityOfLevel < levelRoads.cities.size() ? levelRoads.cities[cityOfLevel] : nullptr;                if (!model) throw std::runtime_error("the level's road model has no city " + std::to_string(cityOfLevel));
+                if (cityOfLevel == 0) models->laneLevelReport = describeLevelRoadModel(levelRoads);
                 std::size_t named = 0;
                 for (std::size_t s = 0; s < model->streets.size(); ++s) named += engine::streetName(*model, engine::ModelStreetId(static_cast<uint32_t>(s))).empty() ? 0 : 1;
-                LOG_INFO << "[roads] road model (planned layer): " << model->junctions.size() << " junctions, " << model->streets.size()
+                LOG_INFO << "[roads] road model (" << (model->built ? "built" : "planned layer") << "): " << model->junctions.size() << " junctions, " << model->streets.size()
                          << " streets, " << named << " of them named";
                 // What the road file does not state or states wrongly (ADR-0427: a file whose junctions' arms are not marked as
                 // listed in their ring, and the like): said once here, since only the lane level refuses such a file.
                 if (!model->problems.empty()) {
                     constexpr std::size_t kProblemsShown = 8;
-                    LOG_WARN << "[roads] the road model (planned layer) of city " << models->cities.size() << " has " << model->problems.size()
+                    LOG_WARN << "[roads] the road model of city " << models->cities.size() << " has " << model->problems.size()
                              << " problem" << (model->problems.size() == 1 ? "" : "s") << ":";
                     for (std::size_t i = 0; i < model->problems.size() && i < kProblemsShown; ++i)
                         LOG_WARN << "[roads]   " << model->problems[i];
@@ -3843,8 +3875,8 @@ static GrownLots growCityLots(
         }
         if (!fromBundle) {
             r = engine::NetLotResult(); g.cellParts.clear(); g.bundle.reset();
-            // the roads the grow reads: the one definition, the lots producer's (gin.roads points at it)
-            g_lanes.lotRoads = engine::roads::lanes::levelLotRoads(g_lanes.inputs, g_lanes.deck);
+            // the roads the grow reads: the level's one road model's streets and the drawn deck (gin.roads points at it)
+            g_lanes.lotRoads = engine::roads::lanes::lotRoadInputs(lanesLevelRoads().cities, g_lanes.deck);
             r = engine::growCity(gin);
             LOG_INFO << "[lanelab] grown in place in " << since(tl) << " s";
         }
