@@ -153,11 +153,11 @@ std::vector<Turn> turnKindsFrom(const std::vector<TurnArm>& arms, const std::vec
                                 uint32_t from, bool kerbCcw, std::vector<uint32_t>* halfway) {
     std::vector<Turn> out(arms.size(), Turn::None);
     if (from >= arms.size() || !arms[from].hasHeading) return out;
-    // the arms with a stated heading, counter-clockwise round the junction (by heading; equal headings by index)
+    // the arms with a stated heading, counter-clockwise round the junction: the list's own order, the junction's stated ring
+    // (road_layout.h, ADR-0427; never sorted here)
     std::vector<uint32_t> ring;
     for (uint32_t a = 0; a < arms.size(); ++a)
         if (arms[a].hasHeading) ring.push_back(a);
-    std::stable_sort(ring.begin(), ring.end(), [&](uint32_t a, uint32_t b) { return arms[a].heading < arms[b].heading; });
     const std::size_t n = ring.size();
     const std::size_t at = static_cast<std::size_t>(std::find(ring.begin(), ring.end(), from) - ring.begin());
     auto stepsTo = [&](uint32_t arm) {   // counter-clockwise steps round the ring from `from` to `arm`

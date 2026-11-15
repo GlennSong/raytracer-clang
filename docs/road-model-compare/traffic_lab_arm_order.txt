@@ -1,0 +1,98 @@
+SUMMARY: 3 junctions of 156 ordered otherwise; 4 stated turns changed kind, 10 appeared, 10 went (of 1788 stated now)
+THE SIDE RULE (no through partner stated: near or far by which half of the ring): 56 junctions, 191 turns rely on it; 8 of them notes 'exactly halfway, taken as far'
+REGIONS the streets enclose: 113
+
+THE STATED RING OF EACH JUNCTION'S ARMS AGAINST THE HEADING ORDER THE TURNS READ BEFORE (ADR-0427), traffic_lab
+(each junction whose ring differs; its arms by road, the ring counter-clockwise; each stated turn whose kind changed, appeared or went: from lane > to lane)
+
+j70 (6 arms)
+  heading order: s149 s147 s148 s121 s118 s235
+  stated ring:   s147 s149 s148 s121 s118 s235
+  went:     s118.f2>s149.f0 (near_turn)
+  went:     s121.f0>s147.f0 (far_turn)
+  went:     s147.b0>s149.f0 (far_turn)
+  went:     s149.b0>s147.f2 (near_turn)
+  appeared: s118.f0>s149.f0 (far_turn)
+  appeared: s121.f0>s147.f2 (near_turn)
+  appeared: s147.b2>s149.f0 (near_turn)
+  appeared: s149.b0>s147.f0 (far_turn)
+j84 (7 arms)
+  heading order: s199 s175 s149 s151 s147 s236 s237
+  stated ring:   s199 s175 s151 s149 s147 s236 s237
+  changed:  s149.f0>s151.b0 near_turn -> far_turn
+  went:     s149.f0>s237.f0 (far_turn)
+  changed:  s151.f0>s149.b0 far_turn -> near_turn
+  went:     s151.f0>s237.f1 (near_turn)
+  went:     s237.b1>s149.b0 (near_turn)
+  went:     s237.b0>s151.b0 (far_turn)
+  appeared: s149.f0>s237.f1 (near_turn)
+  appeared: s151.f0>s237.f0 (far_turn)
+  appeared: s237.b1>s151.b0 (near_turn)
+  appeared: s237.b0>s149.b0 (far_turn)
+j93 (5 arms)
+  heading order: s205 s178 s180 s199 s238
+  stated ring:   s205 s180 s178 s199 s238
+  went:     s178.f2>s180.b0 (near_turn)
+  went:     s180.f0>s178.b0 (far_turn)
+  changed:  s180.f0>s238.f0 near_turn -> far_turn
+  changed:  s238.b0>s180.b0 far_turn -> near_turn
+  appeared: s178.f0>s180.b0 (far_turn)
+  appeared: s180.f0>s178.b2 (near_turn)
+
+THE TURNS THAT RELY ON THE SIDE RULE, by junction (the arms with no through partner, then each turn from them)
+  j0 (7 arms): s5 s3 s197 s194 s36: s5.b0>s3.f2 near_turn; s5.b0>s196.f2 near_turn; s5.b0>s197.f0 near_turn; s5.b0>s194.f0 far_turn; s5.b0>s33.b0 far_turn; s5.b0>s36.b0 far_turn; s3.b0>s5.f0 far_turn; s3.b2>s196.f2 near_turn; s3.b1>s196.f1 near_turn; s3.b2>s197.f0 near_turn; s3.b1>s197.f0 near_turn; s3.b2>s194.f1 near_turn; s3.b1>s194.f0 near_turn; s3.b0>s33.b0 far_turn; s3.b0>s36.b0 far_turn; s197.b0>s5.f0 far_turn; s197.b0>s3.f0 far_turn; s197.b0>s196.f0 far_turn; s197.b0>s194.f1 near_turn; s197.b0>s33.b2 near_turn; s197.b0>s36.b0 near_turn; s194.b1>s5.f0 near_turn; s194.b0>s3.f0 far_turn; s194.b0>s196.f0 far_turn; s194.b0>s197.f0 far_turn; s194.b1>s33.b2 near_turn; s194.b1>s36.b0 near_turn; s36.f0>s5.f0 near_turn; s36.f0>s3.f2 near_turn; s36.f0>s196.f2 near_turn; s36.f0>s197.f0 far_turn; s36.f0>s194.f0 far_turn; s36.f0>s33.b0 far_turn;
+  j7 (6 arms): s16 s13: s16.f1>s210.f1 near_turn; s16.f2>s210.f2 near_turn; s16.f1>s230.f1 near_turn; s16.f2>s230.f2 near_turn; s16.f0>s203.f0 far_turn; s16.f0>s10.b0 far_turn; s16.f0>s13.b0 far_turn; s13.f0>s16.b2 near_turn; s13.f0>s210.f2 near_turn; s13.f0>s230.f0 far_turn; s13.f0>s203.f0 far_turn; s13.f0>s10.b0 far_turn;
+  j13 (3 arms): s22: s22.b0>s21.f2 near_turn; s22.b0>s18.b0 far_turn;
+  j18 (6 arms): s31 s219 s23 s28: s31.b0>s29.f0 far_turn; s31.b1>s219.f0 near_turn; s31.b1>s215.b2 near_turn; s31.b0>s23.b0 far_turn; s31.b0>s28.f0 far_turn; s219.b0>s29.f0 far_turn; s219.b0>s31.f0 far_turn; s219.b0>s215.b2 near_turn; s219.b0>s23.b2 near_turn; s219.b0>s28.f0 far_turn; s23.f1>s29.f1 near_turn; s23.f2>s29.f2 near_turn; s23.f0>s31.f0 far_turn; s23.f0>s219.f0 far_turn; s23.f0>s215.b0 far_turn; s23.f1>s28.f0 near_turn; s23.f2>s28.f0 near_turn; s28.b0>s29.f2 near_turn; s28.b0>s31.f1 near_turn; s28.b0>s219.f0 far_turn; s28.b0>s215.b0 far_turn; s28.b0>s23.b0 far_turn;
+  j22 (3 arms): s57: s57.f0>s60.b2 near_turn; s57.f0>s29.b0 far_turn;
+  j23 (3 arms): s31: s31.f0>s252.f0 near_turn; s31.f1>s252.f1 near_turn;
+  j40 (3 arms): s61: s61.f0>s251.f1 near_turn;
+  j43 (3 arms): s65: s65.f0>s265.f1 near_turn;
+  j56 (3 arms): s89: s89.f0>s249.f1 near_turn;
+  j57 (5 arms): s119: s119.b0>s118.f2 near_turn; s119.b0>s116.f0 near_turn; s119.b0>s91.b0 far_turn; s119.b0>s234.f0 far_turn;
+  j58 (3 arms): s92: s92.f0>s266.f1 near_turn;
+  j71 (3 arms): s119: s119.f0>s268.f1 near_turn;
+  j82 (6 arms): s141 s224: s141.f0>s225.f0 far_turn; s141.f0>s142.b0 far_turn; s141.f0>s166.b0 near_turn; s141.f0>s192.b2 near_turn; s141.f0>s224.f0 far_turn; s224.b0>s225.f0 near_turn; s224.b0>s142.b2 near_turn; s224.b0>s141.b0 far_turn; s224.b0>s166.b0 far_turn; s224.b0>s192.b0 far_turn;
+  j83 (3 arms): s144: s144.f0>s247.f1 near_turn;
+  j84 (7 arms): s175 s151 s149 s236 s237: s175.b0>s199.f0 far_turn; s175.b2>s151.b0 near_turn; s175.b1>s151.b0 near_turn; s175.b2>s149.b0 near_turn; s175.b1>s149.b0 near_turn; s175.b2>s147.b2 near_turn; s175.b1>s147.b1 near_turn; s175.b0>s236.f0 far_turn; s175.b0>s237.f0 far_turn; s151.f0>s199.f0 far_turn; s151.f0>s175.f0 far_turn; s151.f0>s149.b0 near_turn; s151.f0>s147.b2 near_turn; s151.f0>s236.f0 near_turn; s151.f0>s237.f0 far_turn; s149.f0>s199.f0 far_turn; s149.f0>s175.f0 far_turn; s149.f0>s151.b0 far_turn; s149.f0>s147.b2 near_turn; s149.f0>s236.f0 near_turn; s149.f0>s237.f1 near_turn; s236.b0>s199.f2 near_turn; s236.b0>s175.f2 near_turn; s236.b0>s151.b0 far_turn; s236.b0>s149.b0 far_turn; s236.b0>s147.b0 far_turn; s236.b0>s237.f1 near_turn; s237.b1>s199.f2 near_turn; s237.b1>s175.f2 near_turn; s237.b1>s151.b0 near_turn; s237.b0>s149.b0 far_turn; s237.b0>s147.b0 far_turn; s237.b0>s236.f0 far_turn;
+  j89 (3 arms): s161: s161.f0>s185.f0 far_turn; s161.f0>s183.b2 near_turn;
+  j90 (3 arms): s163: s163.f0>s186.f0 far_turn; s163.f0>s185.b2 near_turn;
+  j92 (5 arms): s187: s187.f1>s193.f0 near_turn; s187.f2>s193.f1 near_turn; s187.f0>s192.f0 far_turn; s187.f0>s167.b0 far_turn; s187.f1>s218.b1 near_turn; s187.f2>s218.b2 near_turn;
+  j93 (5 arms): s180: s180.f0>s205.f0 far_turn; s180.f0>s178.b2 near_turn; s180.f0>s199.b2 near_turn; s180.f0>s238.f0 far_turn;
+  j94 (3 arms): s182: s182.f0>s208.f0 far_turn; s182.f0>s205.b2 near_turn;
+  j95 (3 arms): s213: s213.b0>s212.f0 far_turn; s213.b2>s184.b2 near_turn; s213.b1>s184.b1 near_turn;
+  j97 (3 arms): s193: s193.f0>s243.f0 near_turn; s193.f1>s243.f1 near_turn;
+  j98 (3 arms): s194: s194.f0>s262.f0 near_turn; s194.f1>s262.f1 near_turn;
+  j99 (3 arms): s197: s197.f0>s261.f1 near_turn;
+  j102 (3 arms): s219: s219.f0>s253.f1 near_turn;
+  j103 (3 arms): s223: s223.f0>s242.f1 near_turn;
+  j104 (3 arms): s224: s224.f0>s244.f1 near_turn;
+  j105 (3 arms): s225: s225.f0>s246.f1 near_turn;
+  j107 (3 arms): s228: s228.f0>s255.f1 near_turn;
+  j108 (3 arms): s229: s229.f0>s256.f1 near_turn;
+  j110 (3 arms): s232: s232.f0>s260.f1 near_turn;
+  j111 (3 arms): s233: s233.f0>s263.f1 near_turn;
+  j113 (3 arms): s235: s235.f0>s270.f1 near_turn;
+  j114 (3 arms): s236: s236.f0>s271.f1 near_turn;
+  j115 (3 arms): s237: s237.f0>s272.f0 near_turn; s237.f1>s272.f1 near_turn;
+  j116 (3 arms): s238: s238.f0>s273.f1 near_turn;
+  j117 (3 arms): s241: s241.f0>s277.f0 far_turn; s241.f1>s277.f1 far_turn; s241.f2>s277.f1 far_turn;
+  j118 (3 arms): s250: s250.f0>s293.f0 far_turn; s250.f1>s293.f1 far_turn; s250.f2>s293.f1 far_turn;
+  j119 (3 arms): s259: s259.f0>s315.f0 far_turn; s259.f1>s315.f1 far_turn; s259.f2>s315.f1 far_turn;
+  j120 (3 arms): s269: s269.f0>s333.f0 far_turn; s269.f1>s333.f1 far_turn; s269.f2>s333.f1 far_turn;
+  j122 (3 arms): s283: s283.b0>s282.f0 far_turn;
+  j125 (3 arms): s288: s288.b0>s287.f0 far_turn;
+  j126 (3 arms): s290: s290.b0>s289.f0 far_turn;
+  j127 (3 arms): s292: s292.b0>s291.f0 far_turn;
+  j128 (3 arms): s295: s295.b0>s294.f0 far_turn;
+  j129 (3 arms): s297: s297.b0>s296.f0 far_turn;
+  j130 (3 arms): s299: s299.b0>s298.f0 far_turn;
+  j131 (3 arms): s301: s301.b0>s300.f0 far_turn;
+  j132 (3 arms): s303: s303.b0>s302.f0 far_turn;
+  j135 (3 arms): s308: s308.b0>s307.f0 far_turn;
+  j142 (3 arms): s326: s326.b0>s325.f0 far_turn;
+  j143 (3 arms): s328: s328.b0>s327.f0 far_turn;
+  j144 (3 arms): s330: s330.b0>s329.f0 far_turn;
+  j145 (3 arms): s332: s332.b0>s331.f0 far_turn;
+  j146 (3 arms): s335: s335.b0>s334.f0 far_turn;
+  j147 (3 arms): s337: s337.b0>s336.f0 far_turn;

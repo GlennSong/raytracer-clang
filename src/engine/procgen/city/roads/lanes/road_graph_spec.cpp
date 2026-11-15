@@ -423,12 +423,19 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                 if (aj.contains("heading")) { a.hasHeading = true; a.heading = aj["heading"].get<double>(); }
                 pj.arms.push_back(a);
             }
+            // (each arm once: the list is an order of the junction's arms, ADR-0427 -- the same road end twice is no ring)
+            for (std::size_t x = 0; x < pj.arms.size(); ++x)
+                for (std::size_t y = x + 1; y < pj.arms.size(); ++y)
+                    if (pj.arms[x].road == pj.arms[y].road && pj.arms[x].at == pj.arms[y].at && pj.arms[x].spineIn == pj.arms[y].spineIn)
+                        throw std::runtime_error("junction " + pj.id + ": arm " + pj.arms[x].road + " at " + std::to_string(pj.arms[x].at) +
+                                                 " is listed twice (arms " + std::to_string(x) + " and " + std::to_string(y) + ")");
             if (jj.contains("through"))
                 for (const nlohmann::json& tj : jj["through"]) {
                     const std::array<int, 2> pair = {tj.at(0).get<int>(), tj.at(1).get<int>()};
                     for (int k : pair)
                         if (k < 0 || k >= static_cast<int>(pj.arms.size()))
                             throw std::runtime_error("junction " + pj.id + ": through names arm " + std::to_string(k) + ", which it does not have");
+                    if (pair[0] == pair[1]) throw std::runtime_error("junction " + pj.id + ": through pairs arm " + std::to_string(pair[0]) + " with itself");
                     pj.through.push_back(pair);
                 }
             if (jj.contains("inside"))
@@ -491,6 +498,11 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         for (const PlannedStreet& st : g.streets)
             for (const std::string& c : st.carriesOn)
                 if (!c.empty() && !streetIds.count(c)) throw std::runtime_error("street " + st.id + ": carries on into unknown street " + c);
+    }
+    if (spec.contains("arms_in_ring")) {
+        // THE JUNCTIONS' ARMS LISTED IN THEIR RING (ADR-0427): the file's word for it, true or absent
+        if (!spec["arms_in_ring"].is_boolean()) throw std::runtime_error("arms_in_ring: wants true (every junction's arms listed counter-clockwise round it)");
+        g.armsInRing = spec["arms_in_ring"].get<bool>();
     }
     if (spec.contains("carry_on_control")) g.carryOnControl = spec["carry_on_control"].get<std::string>();
     if (spec.contains("lane_rules")) {

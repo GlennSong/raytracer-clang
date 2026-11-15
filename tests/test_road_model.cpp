@@ -1416,3 +1416,207 @@ TEST_CASE(road_model_16_the_lane_level_reports_what_it_cannot_join) {
     for (const Path& p : lg2.graph.paths) connectors += p.kind == PathKind::Connector ? 1 : 0;
     CHECK(connectors + lg2.refusals.size() == stated);   // every turn at a junction built or refused; the stray neither
 }
+
+// ---- 17. one stated ring of a junction's arms (ADR-0427) ----------------------------------------------------------------
+
+namespace {
+// A road graph of straight roads, each a polyline from `a` to `b`, and one junction at (0, 0) whose arms are listed in the
+// order given ({road, station, spine in}).
+nlohmann::json ringScene(const std::vector<std::tuple<std::string, Vec2, Vec2>>& roads,
+                         const std::vector<std::tuple<std::string, double, bool>>& arms) {
+    nlohmann::json g;
+    g["name"] = "ring_scene";
+    g["classes"]["oneway"] = {{"w", 3.5}, {"fwd", 1}, {"back", 0}, {"sidewalk", 2.0}, {"g_max", 0.09}, {"window", 40}, {"thick", 0.5}};
+    nlohmann::json edges = nlohmann::json::array();
+    for (const std::tuple<std::string, Vec2, Vec2>& r : roads) {
+        const Vec2 a = std::get<1>(r), b = std::get<2>(r);
+        const bool oneWay = std::get<0>(r).find("bound") != std::string::npos;
+        edges.push_back({{"id", std::get<0>(r)}, {"class", oneWay ? "oneway" : "local"},
+                         {"path", {{"type", "polyline"}, {"points", {{a.x, a.y}, {b.x, b.y}}}}}});
+    }
+    g["edges"] = edges;
+    nlohmann::json list = nlohmann::json::array();
+    for (const std::tuple<std::string, double, bool>& a : arms)
+        list.push_back({{"road", std::get<0>(a)}, {"at", std::get<1>(a)}, {"spine", std::get<2>(a) ? "in" : "out"}});
+    g["junctions"] = nlohmann::json::array({{{"id", "j"}, {"at", {0.0, 0.0}}, {"arms", list}}});
+    return g;
+}
+std::vector<std::string> ringRoads(const nlohmann::json& g, std::vector<std::string>* notes = nullptr) {
+    const RoadLabGraph rg = RoadLabGraph::fromJson(g);
+    std::vector<std::string> out;
+    for (std::size_t i : armRing(rg.junctions.front(), ComposedRoads(rg), notes)) out.push_back(rg.junctions.front().arms[i].road);
+    return out;
+}
+}  // namespace
+
+TEST_CASE(road_model_17_one_stated_ring_of_a_junctions_arms) {
+    // A DIVIDED ROAD CROSSING A STREET, spread over its points (written out by hand): the street east-west (`east` from
+    // (8, 0) out, `west` in to (-8, 0)); the divided road's two one-way carriageways 8 m apart, `northbound` at x = 4 and
+    // `southbound` at x = -4, each cut at the street (their mouths 6 m either side of it). Counter-clockwise from the east
+    // arm: the northbound carriageway leaving north (x = 4 first, on the clockwise side of the pair), the southbound one
+    // arriving from the north (x = -4), the west arm, the southbound carriageway leaving south (x = -4), the northbound one
+    // arriving from the south (x = 4). Listed scrambled; the ring is the one function's.
+    const nlohmann::json divided = ringScene(
+        {{"east", Vec2(8, 0), Vec2(100, 0)}, {"west", Vec2(-100, 0), Vec2(-8, 0)},
+         {"northbound_n", Vec2(4, 6), Vec2(4, 100)}, {"northbound_s", Vec2(4, -100), Vec2(4, -6)},
+         {"southbound_n", Vec2(-4, 100), Vec2(-4, 6)}, {"southbound_s", Vec2(-4, -6), Vec2(-4, -100)}},
+        {{"west", 92.0, true}, {"southbound_s", 0.0, false}, {"east", 0.0, false}, {"northbound_s", 94.0, true},
+         {"southbound_n", 94.0, true}, {"northbound_n", 0.0, false}});
+    std::vector<std::string> notes;
+    const std::vector<std::string> ring = ringRoads(divided, &notes);
+    CHECK(notes.empty());
+    const std::vector<std::string> want = {"east", "northbound_n", "southbound_n", "west", "southbound_s", "northbound_s"};
+    std::printf("      divided crossing ring:");
+    for (const std::string& r : ring) std::printf(" %s", r.c_str());
+    std::printf("\n");
+    CHECK(ring == want);
+    // A SKEWED FIVE-WAY, spread (mouths on a 15 m circle): A east, Q north-east, P from the north mouth heading off at 200
+    // degrees (south of west: it leaves the junction's area at about 155 degrees, between Q and C), C west, D south. By
+    // heading P would come after C; the ring puts it where its road leaves: A, Q, P, C, D.
+    const Vec2 pDir(std::cos(200.0 * 3.14159265358979 / 180.0), std::sin(200.0 * 3.14159265358979 / 180.0));
+    const nlohmann::json fiveWay = ringScene(
+        {{"A", Vec2(15, 0), Vec2(100, 0)}, {"Q", Vec2(10.61, 10.61), Vec2(80, 80)}, {"P", Vec2(0, 15), Vec2(0, 15) + pDir * 30.0},
+         {"C", Vec2(-15, 0), Vec2(-100, 0)}, {"D", Vec2(0, -15), Vec2(0, -100)}},
+        {{"D", 0.0, false}, {"C", 0.0, false}, {"A", 0.0, false}, {"P", 0.0, false}, {"Q", 0.0, false}});
+    CHECK(ringRoads(fiveWay) == std::vector<std::string>({"A", "Q", "P", "C", "D"}));
+    // A ROAD THAT NEVER LEAVES THE CIRCLE (15 m mouths, so a 20 m circle): a three-way whose south road C is 3 m long,
+    // measured by its far end (0, -18) -- south, after A east and B west -- and said
+    notes.clear();
+    const nlohmann::json shortArm = ringScene({{"A", Vec2(15, 0), Vec2(100, 0)}, {"B", Vec2(-15, 0), Vec2(-100, 0)}, {"C", Vec2(0, -15), Vec2(0, -18)}},
+                                              {{"C", 0.0, false}, {"B", 0.0, false}, {"A", 0.0, false}});
+    CHECK(ringRoads(shortArm, &notes) == std::vector<std::string>({"A", "B", "C"}));
+    CHECK(notes.size() == 1u && notes[0].find("(C) never leaves the circle of 20") != std::string::npos);
+
+    // THE TURNS READ THE RING, lane by lane (one lane each way; arm k's arriving lane 100 k, leaving 100 k + 50; a one-way
+    // arm only one of them), in this world (kerb side counter-clockwise) and the mirrored one
+    using TurnSet3 = std::set<std::tuple<uint32_t, uint32_t, Turn>>;
+    const Turn S = Turn::Straight, N = Turn::NearTurn, F = Turn::FarTurn;
+    {
+        // the divided crossing in ring order: east 0, northbound_n 1 (leaving), southbound_n 2 (arriving), west 3,
+        // southbound_s 4 (leaving), northbound_s 5 (arriving); through: east-west, the northbound pair, the southbound pair
+        std::vector<TurnArm> arms(6);
+        for (uint32_t a = 0; a < 6; ++a) {
+            arms[a].hasHeading = true;
+            const bool arriving = a != 1 && a != 4, leaving = a != 2 && a != 5;
+            if (arriving) arms[a].arriving.push_back(TurnArmLane{100 * a, "through", 0});
+            if (leaving) arms[a].leaving.push_back(TurnArmLane{100 * a + 50, "through", 0});
+        }
+        const std::vector<std::array<uint32_t, 2>> through = {{0, 3}, {5, 1}, {2, 4}};
+        auto from = [&](uint32_t arm, bool kerbCcw) {
+            TurnSet3 out;
+            for (const StatedTurn& t : turnsAtJunction(arms, through, "signal", laneTurnRules(), nullptr, kerbCcw))
+                if (t.fromArm == arm) out.insert(std::make_tuple(t.from, t.to, t.turn));
+            return out;
+        };
+        // from the west: straight on east; the near turn south (the southbound carriageway, counter-clockwise before
+        // east); the far turn north (the northbound carriageway)
+        CHECK(from(3, true) == (TurnSet3{{300, 50, S}, {300, 450, N}, {300, 150, F}}));
+        CHECK(from(3, false) == (TurnSet3{{300, 50, S}, {300, 450, F}, {300, 150, N}}));
+        // from the south on the northbound carriageway: straight on north; near east; far west, and far onto the
+        // southbound carriageway going back south (the U-turn across the median: the table states it as a far turn)
+        CHECK(from(5, true) == (TurnSet3{{500, 150, S}, {500, 50, N}, {500, 350, F}, {500, 450, F}}));
+        CHECK(from(5, false) == (TurnSet3{{500, 150, S}, {500, 50, F}, {500, 350, N}, {500, 450, N}}));
+    }
+    {
+        // the five-way in ring order A 0, Q 1, P 2, C 3, D 4, A and C a through pair, each arm with its stated heading (P's
+        // 200 degrees, past C's 180): from A, straight on C, near Q and P (counter-clockwise before C), far D -- by heading
+        // P would have been a far turn
+        std::vector<TurnArm> arms(5);
+        const double headings[5] = {0, 45, 200, 180, 270};
+        for (uint32_t a = 0; a < 5; ++a) {
+            arms[a].hasHeading = true;
+            arms[a].heading = headings[a];
+            arms[a].arriving.push_back(TurnArmLane{100 * a, "through", 0});
+            arms[a].leaving.push_back(TurnArmLane{100 * a + 50, "through", 0});
+        }
+        TurnSet3 fromA, fromAMirrored;
+        for (const StatedTurn& t : turnsAtJunction(arms, {{0, 3}}, "signal", laneTurnRules(), nullptr, true))
+            if (t.fromArm == 0) fromA.insert(std::make_tuple(t.from, t.to, t.turn));
+        for (const StatedTurn& t : turnsAtJunction(arms, {{0, 3}}, "signal", laneTurnRules(), nullptr, false))
+            if (t.fromArm == 0) fromAMirrored.insert(std::make_tuple(t.from, t.to, t.turn));
+        CHECK(fromA == (TurnSet3{{0, 350, S}, {0, 150, N}, {0, 250, N}, {0, 450, F}}));
+        CHECK(fromAMirrored == (TurnSet3{{0, 350, S}, {0, 150, F}, {0, 250, F}, {0, 450, N}}));
+    }
+
+    // THE MARK (ADR-0427). hill_junction with the lane level's facts, its layout derived: written in ring order and marked
+    // "arms_in_ring", the measure agreeing
+    const nlohmann::json laid = lane_level_test::withLaneLevelFacts(nlohmann::json::parse(slurp(std::string(RT_SOURCE_DIR) + "/assets/lanelab/hill_junction.json")));
+    CHECK(laid.value("arms_in_ring", false));
+    CHECK(checkArmRings(RoadLabGraph::fromJson(laid)).differ.empty());
+    auto said = [](const RoadModel& m) {
+        bool s = false;
+        for (const std::string& p : m.problems) s = s || (p.find("\"arms_in_ring\"") != std::string::npos && p.find("--arm-order --write") != std::string::npos);
+        return s;
+    };
+    {
+        // A FILE NOT MARKED: the model says so, naming the command, and the lane level is not built
+        nlohmann::json g = laid;
+        g.erase("arms_in_ring");
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+        const RoadModel m = assembleRoadModel(*r);
+        CHECK(!m.armsInRing);
+        CHECK(said(m));
+        const LaneGraphBuild lg = buildLaneLevel(*r, m, oneCar());
+        std::printf("      %s\n", lg.error.c_str());
+        CHECK(lg.error.find("--arm-order --write") != std::string::npos && lg.graph.paths.empty());
+    }
+    {
+        // A MARKED FILE IS TRUSTED, never measured or re-sorted at load: its one junction's arms listed backwards (the
+        // through pairs following) load as listed, with no problem said and the lane level built; only the check (what
+        // `lanes_tool layout --arm-order` prints) names the junction
+        nlohmann::json g = laid;
+        nlohmann::json& J = g["junctions"][0];
+        const std::size_t n = J["arms"].size();
+        nlohmann::json reversed = nlohmann::json::array();
+        for (std::size_t k = n; k-- > 0;) reversed.push_back(J["arms"][k]);
+        J["arms"] = reversed;
+        for (nlohmann::json& t : J["through"])
+            for (nlohmann::json& a : t) a = static_cast<int>(n - 1 - a.get<std::size_t>());
+        CHECK(n >= 3u);
+        CHECK(checkArmRings(RoadLabGraph::fromJson(g)).differ == std::vector<std::string>({J["id"].get<std::string>()}));
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+        const RoadModel m = assembleRoadModel(*r);
+        CHECK(m.armsInRing);
+        CHECK(!said(m));
+        CHECK(m.junctions[0].arms.size() == n && m.junctions[0].arms[0].road == reversed[0]["road"].get<std::string>());
+        const LaneGraphBuild lg = buildLaneLevel(*r, m, oneCar());
+        CHECK(lg.error.empty());
+    }
+}
+
+// ---- 18. the shipped road files state their arms in their ring (ADR-0427) ----------------------------------------------
+// Each shipped road file that states junctions and that the lane level reads, read raw (as the loader reads it, nothing put
+// in order first): marked "arms_in_ring", and every junction's stated ring the one measure's (the check `lanes_tool layout
+// <file> --arm-order` prints) but for the junctions written here as allowed to differ (a planner's stated ring the measure
+// does not give; none today). Then the check is seen to bite: one junction of a copy put out of order is named.
+TEST_CASE(road_model_18_the_shipped_road_files_state_their_arms_in_their_ring) {
+    const std::vector<std::pair<std::string, std::vector<std::string>>> files = {
+        {"planned/traffic_lab_lanelab.json", {}}, {"planned/river_town_lanelab.json", {}},
+        {"planned/agent_lab_lanelab.json", {}},   {"ring_city.json", {}}};
+    for (const std::pair<std::string, std::vector<std::string>>& f : files) {
+        const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/" + f.first;
+        const RoadLabGraph g = RoadLabGraph::fromJson(nlohmann::json::parse(slurp(path)), path.substr(0, path.find_last_of('/')));
+        const ArmRingCheck c = checkArmRings(g);
+        std::printf("      %s: %s, %zu junctions, %zu differ from the measure, %zu notes\n", f.first.c_str(),
+                    g.armsInRing ? "marked" : "NOT marked", g.junctions.size(), c.differ.size(), c.notes.size());
+        for (const std::string& id : c.differ) std::printf("        differs: %s\n", id.c_str());
+        CHECK(g.armsInRing);
+        CHECK(!g.junctions.empty());
+        CHECK(c.differ == f.second);
+    }
+    // the bite: river_town's j129 (the boulevard's end, four arms) with its first two arms swapped, the through pairs
+    // following -- a copy in memory, the file untouched
+    const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/river_town_lanelab.json";
+    nlohmann::json spec = nlohmann::json::parse(slurp(path));
+    bool swapped = false;
+    for (nlohmann::json& J : spec["junctions"]) {
+        if (J["id"] != "j129") continue;
+        std::swap(J["arms"][0], J["arms"][1]);
+        for (nlohmann::json& t : J["through"])
+            for (nlohmann::json& a : t) a = a.get<int>() == 0 ? 1 : a.get<int>() == 1 ? 0 : a.get<int>();
+        swapped = true;
+    }
+    CHECK(swapped);
+    const ArmRingCheck c = checkArmRings(RoadLabGraph::fromJson(spec, path.substr(0, path.find_last_of('/'))));
+    CHECK(c.differ == std::vector<std::string>({"j129"}));
+}

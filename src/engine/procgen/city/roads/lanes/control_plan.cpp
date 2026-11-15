@@ -5,6 +5,7 @@
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"     // kRampEndReach: how far a ramp runs on inside a street
 #include "engine/procgen/city/roads/lanes/lane_graph_connect.h"   // kStraightOnDegrees: the one "straight on"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
+#include "engine/procgen/city/roads/lanes/road_layout.h"          // armRing: the arms written in their ring (ADR-0427)
 #include "rt_math.h"
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <set>
 #include <tuple>
@@ -553,6 +555,18 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junct
     if (scene.contains("junctions") && scene["junctions"].is_array())
         for (const nlohmann::json& j : scene["junctions"])
             if (j.is_object() && j.contains("id")) listed[j["id"].get<std::string>()] = j;
+    // the scene's roads composed, to measure a ring on (made once, when a junction needs it); the scene's word that its
+    // listed arms are in their ring
+    const bool markedRing = scene.value("arms_in_ring", false);
+    std::unique_ptr<ComposedRoads> composed;
+    auto roads = [&]() -> const ComposedRoads& {
+        if (!composed) {
+            nlohmann::json bare = scene;
+            for (const char* key : {"junctions", "streets", "divided", "arms_in_ring"}) bare.erase(key);
+            composed = std::make_unique<ComposedRoads>(RoadLabGraph::fromJson(bare));
+        }
+        return *composed;
+    };
     nlohmann::json list = nlohmann::json::array();
     for (const PlannedJunction& pj : plan.junctions) {
         nlohmann::json j;
@@ -585,35 +599,41 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junct
             oldIndex.push_back(found);
             arms.push_back(aj);
         }
-        // THE LISTED ORDER KEPT (ADR-0424): where every planned arm is one listed arm and no listed arm is left over, the
-        // arms are written in the list's own order (round the junction, by heading), so its `through` pairs -- indices into
-        // the arms -- still name the same arms. (Written in the plan's order, a through pair named two other arms.)
-        // Otherwise the plan's order, and each through pair whose two arms were both kept, renumbered.
-        if (wasListed) {
-            const std::size_t listedArms = was->second["arms"].size();
-            std::vector<int> newIndex(listedArms, -1);   // a listed arm -> where it is written
-            bool permutation = oldIndex.size() == listedArms;
-            for (std::size_t n = 0; n < oldIndex.size(); ++n) {
-                if (oldIndex[n] < 0 || newIndex[static_cast<std::size_t>(oldIndex[n])] >= 0) { permutation = false; continue; }
-                newIndex[static_cast<std::size_t>(oldIndex[n])] = static_cast<int>(n);
+        // THE ARMS IN THEIR RING (ADR-0427). Where the scene marks its list as in ring order ("arms_in_ring") and every
+        // planned arm is one listed arm with none left over, the list's own order is kept (a planner's stated ring stands);
+        // otherwise the arms go in the order the one measure gives (road_layout.h armRing, on the scene's roads composed).
+        // Either way each listed through pair whose two arms were both kept follows its arms (ADR-0424: written in another
+        // order without renumbering, a through pair named two other arms).
+        const std::size_t listedArms = wasListed ? was->second["arms"].size() : 0;
+        std::vector<int> planOfListed(listedArms, -1);   // a listed arm -> the planned arm it is
+        bool permutation = wasListed && oldIndex.size() == listedArms;
+        for (std::size_t n = 0; n < oldIndex.size(); ++n) {
+            if (oldIndex[n] < 0 || planOfListed[static_cast<std::size_t>(oldIndex[n])] >= 0) { permutation = false; continue; }
+            planOfListed[static_cast<std::size_t>(oldIndex[n])] = static_cast<int>(n);
+        }
+        std::vector<std::size_t> slots;   // each place in the written list -> the planned arm written there
+        if (permutation && markedRing)
+            for (std::size_t k = 0; k < listedArms; ++k) slots.push_back(static_cast<std::size_t>(planOfListed[k]));
+        else
+            slots = armRing(pj, roads());
+        std::vector<int> placeOf(pj.arms.size(), -1);   // a planned arm -> its place in the written list
+        nlohmann::json ordered = nlohmann::json::array();
+        for (std::size_t k = 0; k < slots.size(); ++k) {
+            placeOf[slots[k]] = static_cast<int>(k);
+            ordered.push_back(arms[slots[k]]);
+        }
+        arms = ordered;
+        if (wasListed && was->second.contains("through") && was->second["through"].is_array()) {
+            nlohmann::json through = nlohmann::json::array();
+            for (const nlohmann::json& pair : was->second["through"]) {
+                if (!pair.is_array() || pair.size() != 2) continue;
+                const int a0 = pair[0].get<int>(), a1 = pair[1].get<int>();
+                if (a0 < 0 || a1 < 0 || static_cast<std::size_t>(a0) >= listedArms || static_cast<std::size_t>(a1) >= listedArms) continue;
+                const int n0 = planOfListed[static_cast<std::size_t>(a0)], n1 = planOfListed[static_cast<std::size_t>(a1)];
+                if (n0 < 0 || n1 < 0) continue;
+                through.push_back({placeOf[static_cast<std::size_t>(n0)], placeOf[static_cast<std::size_t>(n1)]});
             }
-            if (permutation) {
-                nlohmann::json ordered = nlohmann::json::array();
-                for (std::size_t k = 0; k < listedArms; ++k) ordered.push_back(arms[static_cast<std::size_t>(newIndex[k])]);
-                arms = ordered;
-                for (std::size_t k = 0; k < listedArms; ++k) newIndex[k] = static_cast<int>(k);
-            }
-            if (was->second.contains("through") && was->second["through"].is_array()) {
-                nlohmann::json through = nlohmann::json::array();
-                for (const nlohmann::json& pair : was->second["through"]) {
-                    if (!pair.is_array() || pair.size() != 2) continue;
-                    const int a0 = pair[0].get<int>(), a1 = pair[1].get<int>();
-                    if (a0 < 0 || a1 < 0 || static_cast<std::size_t>(a0) >= listedArms || static_cast<std::size_t>(a1) >= listedArms) continue;
-                    if (newIndex[static_cast<std::size_t>(a0)] < 0 || newIndex[static_cast<std::size_t>(a1)] < 0) continue;
-                    through.push_back({newIndex[static_cast<std::size_t>(a0)], newIndex[static_cast<std::size_t>(a1)]});
-                }
-                if (!through.empty()) j["through"] = through;
-            }
+            if (!through.empty()) j["through"] = through;
         }
         j["arms"] = arms;
         if (!pj.inside.empty()) {
@@ -638,6 +658,7 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junct
         list.push_back(j);
     }
     scene["junctions"] = list;
+    scene["arms_in_ring"] = true;   // every junction's arms just written in their ring (ADR-0427)
     if (junctionsOnly) return;
     if (!plan.carryOnControl.empty()) scene["carry_on_control"] = plan.carryOnControl;
     else scene.erase("carry_on_control");

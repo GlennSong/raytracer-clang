@@ -327,8 +327,8 @@ ControlPlan planLayoutControls(const RoadLabGraph& graph, LayoutSource source, c
 
 RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
     RoadLayout out;
-    RoadLabGraph g = graph;
-    (void)expand(g);   // the ramps composed from their anchors: the builder's stations
+    const ComposedRoads composed(graph);   // the ramps composed from their anchors: the builder's stations
+    const RoadLabGraph& g = composed.graph();
     out.divided = dividedOf(graph, source, &out.notes);
     std::vector<CarryOn> carryOns;   // where a street only carries on (no junction): its two streets name each other
     // ---- the junctions: the graph's own list as it states them, or found ----------------------------------------------
@@ -359,13 +359,14 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
             out.junctions.push_back(pj);
         }
     }
-    // ---- each arm's heading; the arms in order round a junction found here; the through pairs -------------------------
+    // ---- each arm's heading; the arms of a junction found here put in ring order (armRing: the one place); the through
+    // pairs. (A list the file states is kept as it is, marked or not: `lanes_tool layout --arm-order --write` puts an
+    // unmarked one in ring order and marks it.)
+    out.armsInRing = !out.keptList || graph.armsInRing;
     for (PlannedJunction& pj : out.junctions) {
-        std::vector<Vec2> dirs;
         for (PlannedArm& a : pj.arms) {
             const EdgeSpec* e = g.find(a.road);
             if (!e || e->xy.size() < 2) {
-                dirs.push_back(Vec2(1, 0));
                 out.notes.push_back("junction " + pj.id + ": arm on road " + a.road + " has no spine to measure");
                 continue;
             }
@@ -373,21 +374,10 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
                 a.hasHeading = true;
                 a.heading = degreesOf(armDirection(*e, a.at, a.spineIn));
             }
-            dirs.push_back(directionOf(a.heading));
         }
-        if (!out.keptList) {
-            std::vector<std::size_t> order(pj.arms.size());
-            for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
-            std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return pj.arms[a].heading < pj.arms[b].heading; });
-            std::vector<PlannedArm> arms;
-            std::vector<Vec2> d;
-            for (std::size_t i : order) {
-                arms.push_back(pj.arms[i]);
-                d.push_back(dirs[i]);
-            }
-            pj.arms.swap(arms);
-            dirs.swap(d);
-        }
+        if (!out.keptList) orderArmsRound(pj, composed, &out.notes);
+        std::vector<Vec2> dirs;
+        for (const PlannedArm& a : pj.arms) dirs.push_back(a.hasHeading ? directionOf(a.heading) : Vec2(1, 0));
         if (pj.through.empty()) pj.through = throughPairs(dirs);
     }
     // ---- the streets: each paved road cut at its arms, the stretches inside a junction left out ------------------------
@@ -505,6 +495,8 @@ void writeLayout(nlohmann::json& scene, const RoadLayout& layout) {
     for (const PlannedJunction& pj : layout.junctions) junctions.push_back(junctionJson(pj));
     for (const PlannedStreet& st : layout.streets) streets.push_back(streetJson(st));
     scene["junctions"] = junctions;
+    if (layout.armsInRing) scene["arms_in_ring"] = true;
+    else scene.erase("arms_in_ring");
     scene["streets"] = streets;
     if (!layout.divided.empty()) scene["divided"] = dividedJson(layout.divided);
 }
@@ -532,20 +524,23 @@ std::string keyedRoadFileText(const std::string& text) {
     std::vector<std::pair<std::size_t, std::size_t>> cut;
     // The streets, the divided pairs, and the whole junctions list with its controls and signs (ADR-0421): no stage of
     // the bake reads any of them (the meshes, paint, deck and road graph come from the edges); the lane graph, which
-    // reads them, keys them itself (laneLevelKey). Likewise the lane level's rules (ADR-0426).
+    // reads them, keys them itself (laneLevelKey). Likewise the lane level's rules (ADR-0426) and the arms' ring mark
+    // (ADR-0427).
     for (std::size_t k = 0; k < top.size(); ++k)
-        if (top[k].key == "streets" || top[k].key == "divided" || top[k].key == "junctions" || top[k].key == "lane_rules")
+        if (top[k].key == "streets" || top[k].key == "divided" || top[k].key == "junctions" || top[k].key == "lane_rules" ||
+            top[k].key == "arms_in_ring")
             cut.push_back(removal(top, k));
     return cutText(text, cut);
 }
 
 uint64_t laneLevelKey(const nlohmann::json& spec) {
     // the layout, which the lane level reads by id (its streets and carry-ons, the divided pairs, the junctions' arms,
-    // through pairs, controls and signs) and the lane level's rules (ADR-0426): what keyedRoadFileText leaves out. A
+    // through pairs, controls and signs; the mark that its arms are listed in their ring, ADR-0427) and the lane level's
+    // rules (ADR-0426): what keyedRoadFileText leaves out. A
     // junction's points (ADR-0425) are the street map's: the lane level does not read them, so they key nothing.
     if (!spec.is_object()) return 0;
     std::string text;
-    for (const char* key : {"junctions", "streets", "divided", "lane_rules"}) {
+    for (const char* key : {"junctions", "arms_in_ring", "streets", "divided", "lane_rules"}) {
         if (!spec.contains(key)) continue;
         nlohmann::json member = spec[key];
         if (std::string(key) == "junctions" && member.is_array())
@@ -581,6 +576,7 @@ std::string stripLayoutText(const std::string& text) {
     std::vector<std::pair<std::size_t, std::size_t>> cut;
     std::vector<Member> jm, am;
     std::vector<std::size_t> elems, arms;
+    bool keepsJunctions = false;   // (the arms' ring mark goes with a junctions list cut whole: ADR-0427)
     for (std::size_t k = 0; k < top.size(); ++k) {
         const Member& m = top[k];
         if (m.key == "streets" || m.key == "divided") cut.push_back(removal(top, k));
@@ -592,6 +588,7 @@ std::string stripLayoutText(const std::string& text) {
             cut.push_back(removal(top, k));
             continue;
         }
+        keepsJunctions = true;
         for (std::size_t e : elems) {
             if (!t.members(e, jm)) continue;
             for (std::size_t q = 0; q < jm.size(); ++q) {
@@ -605,6 +602,9 @@ std::string stripLayoutText(const std::string& text) {
             }
         }
     }
+    if (!keepsJunctions)
+        for (std::size_t k = 0; k < top.size(); ++k)
+            if (top[k].key == "arms_in_ring") cut.push_back(removal(top, k));
     return cutText(text, cut);
 }
 
@@ -668,6 +668,7 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
         nlohmann::json junctions = nlohmann::json::array();
         for (const PlannedJunction& pj : layout.junctions) junctions.push_back(junctionJson(pj));
         tail += "," + lead + "\"junctions\": " + valueText(junctions);
+        if (layout.armsInRing) tail += "," + lead + "\"arms_in_ring\": true";
     }
     nlohmann::json streets = nlohmann::json::array();
     for (const PlannedStreet& st : layout.streets) streets.push_back(streetJson(st));
@@ -1031,6 +1032,181 @@ std::string insertJunctionNodesText(const std::string& text, const RoadLabGraph&
         values.emplace_back(pj.id, it == of.end() || it->second->nodes.empty() ? nlohmann::json() : nodesJson(it->second->nodes));
     }
     return insertListMembersText(text, "junctions", "nodes", values, err);
+}
+
+// ---- the order of a junction's arms round it (ADR-0427; road_layout.h) --------------------------------------------------
+
+ComposedRoads::ComposedRoads(const RoadLabGraph& asRead) : g_(asRead) { (void)expand(g_); }
+
+std::vector<std::size_t> armRing(const PlannedJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes) {
+    const RoadLabGraph& g = roads.graph();
+    auto note = [&](const std::string& s) {
+        if (notes) notes->push_back("junction " + pj.id + ": " + s);
+    };
+    const std::size_t n = pj.arms.size();
+    std::vector<Vec2> mouth(n), way(n);
+    std::vector<const EdgeSpec*> edge(n, nullptr);
+    for (std::size_t i = 0; i < n; ++i) {
+        const PlannedArm& a = pj.arms[i];
+        edge[i] = g.find(a.road);
+        if (!edge[i] || edge[i]->xy.size() < 2) {
+            mouth[i] = pj.at;
+            way[i] = a.hasHeading ? directionOf(a.heading) : Vec2(1, 0);
+            note("arm " + std::to_string(i) + " (" + a.road + ") has no spine: measured by its " + (a.hasHeading ? "stated heading" : "list place alone (east)"));
+            continue;
+        }
+        mouth[i] = pointAt(edge[i]->xy, edge[i]->s, a.at);
+        way[i] = a.hasHeading ? directionOf(a.heading) : armDirection(*edge[i], a.at, a.spineIn);
+    }
+    double spread = 0, reach = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        reach = std::max(reach, (mouth[i] - pj.at).length());
+        for (std::size_t k = i + 1; k < n; ++k) spread = std::max(spread, (mouth[i] - mouth[k]).length());
+    }
+    std::vector<double> key(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        key[i] = degreesOf(way[i]);
+        if (!(spread > kArmRingSpreadMouths) || !edge[i] || edge[i]->xy.size() < 2) continue;
+        // spread: where the arm's road leaves the circle holding every mouth, walking its spine outward from the mouth
+        const EdgeSpec& e = *edge[i];
+        const PlannedArm& a = pj.arms[i];
+        const double R = reach + kArmRingSpreadMargin;
+        const std::size_t m = e.xy.size();
+        std::vector<Vec2> out{mouth[i]};
+        if (a.spineIn) {
+            for (std::size_t k = m; k-- > 0;)
+                if (e.s[k] < a.at) out.push_back(e.xy[k]);
+        } else {
+            for (std::size_t k = 0; k < m; ++k)
+                if (e.s[k] > a.at) out.push_back(e.xy[k]);
+        }
+        if (out.size() < 2) {
+            note("arm " + std::to_string(i) + " (" + a.road + ") has no spine beyond its mouth: measured by its heading");
+            continue;
+        }
+        bool left = false;
+        Vec2 exitAt = out.back();
+        for (std::size_t k = 0; k + 1 < out.size(); ++k) {
+            const Vec2 p = out[k], q = out[k + 1];
+            if ((q - pj.at).length() < R) continue;
+            const Vec2 d = q - p, f = p - pj.at;
+            const double A = dot(d, d), B = 2 * dot(f, d), C = dot(f, f) - R * R;
+            const double disc = B * B - 4 * A * C;
+            const double t = A > kArmRingNoLength2 && disc >= 0 ? std::clamp((-B + std::sqrt(disc)) / (2 * A), 0.0, 1.0) : 1.0;
+            exitAt = p + d * t;
+            left = true;
+            break;
+        }
+        if (!left)
+            note("arm " + std::to_string(i) + " (" + a.road + ") never leaves the circle of " + std::to_string(R) +
+                 " m round the junction: measured by its road's far end");
+        if ((exitAt - pj.at).length() > kArmRingAtMiddle) key[i] = degreesOf(exitAt - pj.at);
+        else note("arm " + std::to_string(i) + " (" + a.road + ") leaves at the junction's middle: measured by its heading");
+    }
+    // by the measure alone (a strict order); arms measuring exactly the same keep their listed order, and are said
+    std::vector<std::size_t> order(n);
+    for (std::size_t i = 0; i < n; ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t x, std::size_t y) { return key[x] < key[y]; });
+    for (std::size_t k = 0; k + 1 < n; ++k)
+        if (key[order[k]] == key[order[k + 1]])
+            note("arms " + std::to_string(order[k]) + " (" + pj.arms[order[k]].road + ") and " + std::to_string(order[k + 1]) + " (" +
+                 pj.arms[order[k + 1]].road + ") measure the same direction: kept in their listed order");
+    return order;
+}
+
+void orderArmsRound(PlannedJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes) {
+    const std::vector<std::size_t> order = armRing(pj, roads, notes);
+    std::vector<int> newIndex(pj.arms.size(), -1);
+    std::vector<PlannedArm> arms;
+    for (std::size_t k = 0; k < order.size(); ++k) {
+        newIndex[order[k]] = static_cast<int>(k);
+        arms.push_back(pj.arms[order[k]]);
+    }
+    pj.arms.swap(arms);
+    for (std::array<int, 2>& t : pj.through)
+        for (int& a : t)
+            if (a >= 0 && static_cast<std::size_t>(a) < newIndex.size()) a = newIndex[static_cast<std::size_t>(a)];
+}
+
+bool ringDiffers(const PlannedJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes) {
+    const std::vector<std::size_t> order = armRing(pj, roads, notes);
+    if (order.empty()) return false;
+    const std::size_t start = static_cast<std::size_t>(std::find(order.begin(), order.end(), std::size_t(0)) - order.begin());
+    for (std::size_t k = 0; k < order.size(); ++k)
+        if (order[(start + k) % order.size()] != k) return true;
+    return false;
+}
+
+ArmRingCheck checkArmRings(const RoadLabGraph& asRead) {
+    ArmRingCheck c;
+    const ComposedRoads roads(asRead);
+    for (const PlannedJunction& pj : asRead.junctions)
+        if (ringDiffers(pj, roads, &c.notes)) c.differ.push_back(pj.id);
+    return c;
+}
+
+std::string insertArmOrderText(const std::string& text, const RoadLabGraph& g, std::vector<std::string>* changed, std::string* err,
+                               std::vector<std::string>* notes) {
+    auto fail = [&](const std::string& why) {
+        if (err) *err = why;
+        return std::string();
+    };
+    const ComposedRoads roads(g);
+    const Text t(text);
+    std::vector<Member> top, jm;
+    if (!t.members(t.ws(0), top)) return fail("the file is not a JSON object with members");
+    const Member* listed = memberNamed(top, "junctions");
+    std::vector<std::size_t> elems;
+    if (!listed || !t.elements(listed->valueBegin, elems)) return fail("the file has no \"junctions\" list");
+    if (elems.size() != g.junctions.size()) return fail("the file's \"junctions\" list and the graph read from it differ in length");
+    std::vector<std::pair<std::pair<std::size_t, std::size_t>, std::string>> edits;   // (from, to) replaced by the text
+    for (std::size_t j = 0; j < elems.size(); ++j) {
+        const PlannedJunction& pj = g.junctions[j];
+        if (!t.members(elems[j], jm)) return fail("junction " + std::to_string(j) + " is not an object");
+        const Member* id = memberNamed(jm, "id");
+        if (!id || text.substr(id->valueBegin, id->valueEnd - id->valueBegin) != nlohmann::json(pj.id).dump())
+            return fail("junction " + std::to_string(j) + " is not " + pj.id + " in the file");
+        const std::vector<std::size_t> order = armRing(pj, roads, notes);
+        bool same = true;
+        for (std::size_t k = 0; k < order.size(); ++k) same = same && order[k] == k;
+        if (same) continue;
+        if (changed) changed->push_back(pj.id);
+        const Member* arms = memberNamed(jm, "arms");
+        std::vector<std::size_t> ae;
+        if (!arms || !t.elements(arms->valueBegin, ae) || ae.size() != pj.arms.size())
+            return fail("junction " + pj.id + ": its \"arms\" list does not fit the graph read from the file");
+        // each arm's text moves whole into the slot of the arm it now follows
+        for (std::size_t k = 0; k < ae.size(); ++k) {
+            const std::size_t from = ae[order[k]];
+            const std::string armText = text.substr(from, t.end(from) - from);
+            edits.push_back({{ae[k], t.end(ae[k])}, armText});
+        }
+        const Member* through = memberNamed(jm, "through");
+        if (through) {
+            std::vector<int> newIndex(pj.arms.size(), -1);
+            for (std::size_t k = 0; k < order.size(); ++k) newIndex[order[k]] = static_cast<int>(k);
+            nlohmann::json pairs = nlohmann::json::array();
+            for (const std::array<int, 2>& p : pj.through)
+                pairs.push_back({p[0] >= 0 && static_cast<std::size_t>(p[0]) < newIndex.size() ? newIndex[static_cast<std::size_t>(p[0])] : p[0],
+                                 p[1] >= 0 && static_cast<std::size_t>(p[1]) < newIndex.size() ? newIndex[static_cast<std::size_t>(p[1])] : p[1]});
+            edits.push_back({{through->valueBegin, through->valueEnd}, pairs.dump()});
+        }
+    }
+    // the file's word that its arms are so listed, beside the junctions list (true where it already states it)
+    if (const Member* mark = memberNamed(top, "arms_in_ring")) edits.push_back({{mark->valueBegin, mark->valueEnd}, "true"});
+    else edits.push_back({{listed->valueEnd, listed->valueEnd}, "," + leadOf(text, *listed) + "\"arms_in_ring\": true"});
+    std::sort(edits.begin(), edits.end());
+    std::string out;
+    out.reserve(text.size());
+    std::size_t at = 0;
+    for (const std::pair<std::pair<std::size_t, std::size_t>, std::string>& e : edits) {
+        out.append(text, at, e.first.first - at);
+        out += e.second;
+        at = e.first.second;
+    }
+    out.append(text, at, kNone);
+    if (keyedRoadFileText(out) != keyedRoadFileText(text)) return fail("the arms, put in ring order, change what the bake key hashes");
+    return out;
 }
 
 }  // namespace roads::lanes

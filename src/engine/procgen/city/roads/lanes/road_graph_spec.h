@@ -334,6 +334,13 @@ struct RoadLabGraph {
     std::vector<PlannedJunction> junctions;
     bool declaresJunctions = false;       // the list names each junction's CONTROL (the control plan); see PlannedArm
     bool listsJunctions = false;          // the graph carried a "junctions" list at all, with controls or without
+    // THE JUNCTIONS' ARMS ARE LISTED IN THEIR RING (ADR-0427), stated at the graph's top level beside the junctions list,
+    // "arms_in_ring": true -- the file's word that every junction's "arms" list goes round it counter-clockwise in plan
+    // coordinates (road_layout.h armRing says how its writer worked that out). Its writers: the layout (deriveLayout,
+    // writeLayout), the control plan (writeControlPlan) and the one-off `lanes_tool layout <file> --arm-order --write`.
+    // Every reader trusts a marked file's list order and never measures it again; the lane level refuses an unmarked
+    // file. (Outside the bake key, like the rest of the layout: road_layout.h keyedRoadFileText.)
+    bool armsInRing = false;
     // WHERE A STREET ONLY CARRIES ON (no junction, ADR-0419) the lane graph builder may still make a junction of its own
     // until the builder builds the stated ones: the control the plan gives it there ("carry_on_control"; control_plan.h)
     std::string carryOnControl;

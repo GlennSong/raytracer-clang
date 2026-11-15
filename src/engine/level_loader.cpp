@@ -712,6 +712,17 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
                 for (std::size_t s = 0; s < model->streets.size(); ++s) named += engine::streetName(*model, engine::ModelStreetId(static_cast<uint32_t>(s))).empty() ? 0 : 1;
                 LOG_INFO << "[roads] road model (planned layer): " << model->junctions.size() << " junctions, " << model->streets.size()
                          << " streets, " << named << " of them named";
+                // What the road file does not state or states wrongly (ADR-0427: a file whose junctions' arms are not marked as
+                // listed in their ring, and the like): said once here, since only the lane level refuses such a file.
+                if (!model->problems.empty()) {
+                    constexpr std::size_t kProblemsShown = 8;
+                    LOG_WARN << "[roads] the road model (planned layer) of city " << models->cities.size() << " has " << model->problems.size()
+                             << " problem" << (model->problems.size() == 1 ? "" : "s") << ":";
+                    for (std::size_t i = 0; i < model->problems.size() && i < kProblemsShown; ++i)
+                        LOG_WARN << "[roads]   " << model->problems[i];
+                    if (model->problems.size() > kProblemsShown)
+                        LOG_WARN << "[roads]   and " << (model->problems.size() - kProblemsShown) << " more";
+                }
                 models->cities.push_back(std::move(model));
                 // THE STREET MAP (ADR-0425): this city's, from the model just read and the drawn deck (one spine per road of
                 // the file, in its order: checked, road by road), appended to the level's one map

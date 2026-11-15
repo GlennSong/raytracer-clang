@@ -2335,7 +2335,7 @@ TEST_CASE(lanes_connectors_of_the_traffic_lab_meet_their_lanes_and_fit_their_veh
 // THE TRAFFIC LAB IS ROUTABLE (#238): a car on almost any lane can get to almost any other -- the largest set of lanes
 // that can all reach one another holds at least 90% of them -- and no lane end is half-joined.
 // (Its known problems by count, with the tests' two vehicles: a change to any is a change to look at, then to write here.)
-constexpr uint32_t kTrafficLabFitsNone = 81, kTrafficLabCrossingLines = 17, kTrafficLabKinks = 65;
+constexpr uint32_t kTrafficLabFitsNone = 82, kTrafficLabCrossingLines = 17, kTrafficLabKinks = 65;
 TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
     const LaneGraphBuild& lg = laneGraphOf("planned/traffic_lab_lanelab");
     std::printf("    traffic lab: %.1f%% of the lanes in the largest part a car can get round\n", 100 * lg.reachableShare);
@@ -2405,17 +2405,22 @@ TEST_CASE(lanes_the_traffic_lab_road_model_problems_are_known) {
         else if (p.find(" takes no turn: ") != std::string::npos) kind = "arriving lane taking no turn";
         else if (p.find(" stands halfway round from arm ") != std::string::npos) {
             kind = "halfway, taken as far";
-            halfway.insert(p.substr(0, p.find(" with no through pair")));
+            // named by the arms' roads (their places in the list are the stated ring's, ADR-0427)
+            unsigned a = 0, b = 0;
+            char id[32] = {0};
+            if (std::sscanf(p.c_str(), "junction %31[^:]: arm %u stands halfway round from arm %u", id, &a, &b) == 3)
+                for (const ModelJunction& J : m.junctions)
+                    if (J.id == id && a < J.arms.size() && b < J.arms.size())
+                        halfway.insert(J.id + ": " + J.arms[a].road + " halfway from " + J.arms[b].road);
         }
         if (kind == "other") std::printf("      model problem: %s\n", p.c_str());
         ++byKind[kind];
     }
     for (const std::pair<const std::string, uint32_t>& k : byKind) std::printf("      %u model problems: %s\n", k.second, k.first.c_str());
     CHECK(byKind == (std::map<std::string, uint32_t>{{"arm with no paint box", 39}, {"paint box no junction holds", 1}, {"halfway, taken as far", 8}}));
-    CHECK(halfway == (std::set<std::string>{"junction j7: arm 5 stands halfway round from arm 1", "junction j7: arm 3 stands halfway round from arm 2",
-                                            "junction j18: arm 3 stands halfway round from arm 0", "junction j18: arm 5 stands halfway round from arm 1",
-                                            "junction j18: arm 0 stands halfway round from arm 3", "junction j18: arm 1 stands halfway round from arm 5",
-                                            "junction j82: arm 4 stands halfway round from arm 0", "junction j82: arm 0 stands halfway round from arm 4"}));
+    CHECK(halfway == (std::set<std::string>{"j7: s203 halfway from s16", "j7: s230 halfway from s13", "j18: s219 halfway from s28",
+                                            "j18: s28 halfway from s219", "j18: s23 halfway from s31", "j18: s31 halfway from s23",
+                                            "j82: s141 halfway from s224", "j82: s224 halfway from s141"}));
 }
 
 // THE TRAFFIC LAB'S BENDS LOOK LIKE ITS ROADS (#281): every path's bend profile measured as a vehicle feels it. The
@@ -2483,20 +2488,30 @@ void handJunction(const std::vector<double>& bearings, const std::vector<uint32_
         leaving.push_back(away);
     }
 }
-// THE TURNS OF A HAND-MADE JUNCTION, as the road model states a junction's (lane_turns.h, ADR-0426): its arms by their
-// headings, the roads whose bearings lie within 30 degrees of opposite stated as through pairs (the nearest first, each
-// road in one pair), its lanes by slot. `kerbPerp` and `mirrored` as handJunction's (a mirrored world keeps its kerb on
-// the other side).
+// THE TURNS OF A HAND-MADE JUNCTION, as the road model states a junction's (lane_turns.h, ADR-0426): its arms listed in
+// their ring, counter-clockwise (ADR-0427: the hand scene is the writer of its own ring -- by heading here, every arm
+// meeting at one point), the roads whose bearings lie within 30 degrees of opposite stated as through pairs (the nearest
+// first, each road in one pair), its lanes by slot. `kerbPerp` and `mirrored` as handJunction's (a mirrored world keeps
+// its kerb on the other side, and its ring runs the other way through the roads). The turns come back road by road (the
+// road the turn leaves, the table's row, the road it takes), so a junction and its mirror list them alike.
 std::vector<StatedTurn> handTurns(const std::vector<double>& bearings, const std::vector<uint32_t>& lanes, double kerbPerp,
                                   bool mirrored) {
-    std::vector<TurnArm> arms(bearings.size());
+    std::vector<TurnArm> byRoad(bearings.size());
     for (std::size_t r = 0; r < bearings.size(); ++r) {
-        arms[r].heading = mirrored ? std::fmod(360.0 - bearings[r], 360.0) : bearings[r];
-        arms[r].hasHeading = true;
+        byRoad[r].heading = mirrored ? std::fmod(360.0 - bearings[r], 360.0) : bearings[r];
+        byRoad[r].hasHeading = true;
         for (uint32_t k = 0; k < lanes[r]; ++k) {
-            arms[r].arriving.push_back(TurnArmLane{static_cast<uint32_t>(r * 100 + k), "through", static_cast<int>(k)});
-            arms[r].leaving.push_back(TurnArmLane{static_cast<uint32_t>(r * 100 + 50 + k), "through", static_cast<int>(k)});
+            byRoad[r].arriving.push_back(TurnArmLane{static_cast<uint32_t>(r * 100 + k), "through", static_cast<int>(k)});
+            byRoad[r].leaving.push_back(TurnArmLane{static_cast<uint32_t>(r * 100 + 50 + k), "through", static_cast<int>(k)});
         }
+    }
+    std::vector<uint32_t> roadOf(bearings.size()), armOf(bearings.size());   // the ring: arm -> road, road -> arm
+    for (uint32_t r = 0; r < bearings.size(); ++r) roadOf[r] = r;
+    std::stable_sort(roadOf.begin(), roadOf.end(), [&](uint32_t x, uint32_t y) { return byRoad[x].heading < byRoad[y].heading; });
+    std::vector<TurnArm> arms;
+    for (uint32_t a = 0; a < roadOf.size(); ++a) {
+        armOf[roadOf[a]] = a;
+        arms.push_back(byRoad[roadOf[a]]);
     }
     std::vector<std::pair<double, std::array<uint32_t, 2>>> candidates;
     for (uint32_t a = 0; a < bearings.size(); ++a)
@@ -2511,11 +2526,16 @@ std::vector<StatedTurn> handTurns(const std::vector<double>& bearings, const std
     for (const std::pair<double, std::array<uint32_t, 2>>& c : candidates) {
         if (paired[c.second[0]] || paired[c.second[1]]) continue;
         paired[c.second[0]] = paired[c.second[1]] = 1;
-        pairs.push_back(c.second);
+        pairs.push_back({armOf[c.second[0]], armOf[c.second[1]]});
     }
     // which way round the kerb lies, for this junction's kerb sign (as kerbSideCounterClockwise reads the engine's: a
     // negative sign puts the kerb counter-clockwise from the arm; the mirrored world's headings are its own)
-    return turnsAtJunction(arms, pairs, "unmarked", laneTurnRules(), nullptr, kerbPerp < 0);
+    std::vector<StatedTurn> turns = turnsAtJunction(arms, pairs, "unmarked", laneTurnRules(), nullptr, kerbPerp < 0);
+    for (StatedTurn& t : turns) t.fromArm = roadOf[t.fromArm], t.toArm = roadOf[t.toArm];
+    std::stable_sort(turns.begin(), turns.end(), [](const StatedTurn& x, const StatedTurn& y) {
+        return std::make_tuple(x.fromArm, x.row, x.toArm) < std::make_tuple(y.fromArm, y.row, y.toArm);
+    });
+    return turns;
 }
 }  // namespace
 
@@ -2625,7 +2645,9 @@ LaneGraphKnown trafficLabKnown() {
     k.insideRoads = {"s0", "s1", "s2", "s4", "s26", "s27", "s30", "s34", "s115", "s117", "s145", "s146", "s168", "s169", "s170", "s171", "s172",
                      "s173", "s174", "s176", "s189", "s190", "s191", "s195", "s198", "s200", "s201", "s202", "s204", "s206", "s207", "s211",
                      "s214", "s216", "s217", "s220"};
-    k.inside = {{"j93", 1u}};
+    // (none: j93's one lane path inside it was its outline folding back over its north-west arm, the legs once laid
+    // round by the circle walk; laid round the stated ring, ADR-0427, the outline no longer folds)
+    k.inside = {};
     // its 8 one-lane ramps (the file's d*_*_off and d*_*_on), each anchored at both ends: each leaves one host (8
     // diverges) and merges into another (8 merges) -- an off-ramp leaves a freeway carriageway and merges into a frontage
     // road or street, an on-ramp leaves a street and merges into a freeway carriageway's kerb lane (f3 of four)

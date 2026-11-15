@@ -112,18 +112,42 @@ Still working roads out for itself:
 | Section | What it states | Bake key sees it? |
 |---|---|---|
 | `edges`, `classes`, `terrain`, ramps, pockets, connectors | Roads, their class overrides, ground | yes |
-| `rules` (incl. `storage`, default 6.5 m) | Builder tolerances. `storage` is the waiting room between two junction points below which they are one junction (`findJunctions`). | yes (only `streets`, `divided`, `junctions`, `lane_rules` are cut) |
+| `rules` (incl. `storage`, default 6.5 m) | Builder tolerances. `storage` is the waiting room between two junction points below which they are one junction (`findJunctions`). | yes (only `streets`, `divided`, `junctions`, `arms_in_ring`, `lane_rules` are cut) |
 | `carry_on_control` | The control the plan gives carry-ons (control_plan.cpp) | yes *(unsure what reads it at load)* |
-| `junctions` | Id, `at`, arms in order (street, heading, regulations), `through`, `inside`, `control`, `why`, `nodes` (step 7's points) | no |
+| `junctions` | Id, `at`, arms in their ring (street, heading, regulations; see below), `through` (by place in that list), `inside`, `control`, `why`, `nodes` (step 7's points) | no |
+| `arms_in_ring` | `true`: every junction's arms are listed in their ring (ADR-0427; see below) | no |
 | `streets` | Id, road, stations, the junction at each end, `carries_on`, `name` | no |
 | `divided` | Pairs of roads that are one divided road | no |
 | `lane_rules` | `{"solid_before_stop_line": 20.0}`: the stretch before a stop line where lane lines are solid | no |
 
-The lane graph's key (`laneLevelKey`) hashes `junctions` (without `nodes`), `streets`, `divided` and `lane_rules`.
+The lane graph's key (`laneLevelKey`) hashes `junctions` (without `nodes`), `arms_in_ring`, `streets`, `divided` and
+`lane_rules`.
 Writing those changes no bake, only the lane graph cache. Only traffic_lab and river_town have `lane_rules`. Every
 other road file gets no lane graph, and the error names `lanes_tool layout <file> --lane-rules 20 --write`. Write
 facts with the tools (`lanes_tool layout ... --write`, `--names`, `--nodes`, `--lane-rules`;
 `city_plan controls <file> rules/lab.lua --layout --write --controls-only`), never by hand.
+
+**A junction's arms are listed in their ring** (ADR-0427): counter-clockwise round the junction in plan coordinates
+(the way headings grow). The file says so with `"arms_in_ring": true` beside the junctions list.
+- **Readers trust a marked file.** The turns (`turnKindsFrom`: which arm is straight on, near or far), the regions
+  the streets enclose, the lane level's junction outline and the street signs read the list as it is. Nothing sorts
+  by heading or angle, and nothing measures the ring at load.
+- **An unmarked file** that lists junctions gets one road-model problem line naming the command. The loader logs the
+  model's problems, and the lane level refuses the file. Load checks only the structure: no arm listed twice, and
+  `through` pairs naming two different arms that exist.
+- **One measure** (`armRing` in `road_layout.h`) is used by the writers and the check, never at load. It takes only
+  `ComposedRoads`: the graph with its ramps composed, because an arm's station is a composed-spine station. A compact
+  junction (every mouth within 1 m) is ordered by the arms' headings. A spread one is ordered by where each arm's road
+  leaves a circle 5 m wider than the farthest mouth. Exact ties keep the list order. A road that never leaves the
+  circle, or has no spine beyond its mouth, is noted.
+- **Writers:** the layout (`deriveLayout`, `writeLayout`, `insertLayoutText`), the control plan (`writeControlPlan`),
+  and the one-off `lanes_tool layout <file> --arm-order --write`. The tool orders an old file, renumbers `through` and
+  marks it.
+- **The check:** `lanes_tool layout <file> --arm-order` without `--write` lists each junction whose stated ring
+  differs from the measure, with the measure's notes. It exits 3 when one differs or the file is unmarked.
+  `road_model_18` runs it on the shipped files (traffic_lab, river_town, agent_lab, ring_city), each with a list of
+  junctions allowed to differ (empty).
+- **What moved** when the three level files were put in order is in `docs/road-model-compare/<level>_arm_order.txt`.
 
 ## 5. Data tables
 
@@ -186,8 +210,15 @@ data rows.
 - **Street stations are written to the centimetre.** A lane's end and a street's end, or a ramp's merge station and
   its lane end, differ by millimetres. Compare within `kReachesStreetEnd` (0.01 m, `lane_expand.h`) and snap to the
   lane's own end. Without that, nothing was trimmed at stop lines: 2117 false corner faults, reach 50%.
-- **Stated heading order is not where the stop lines lie.** Joining a spread junction's outline in heading order drew
-  23 self-crossing outlines. The outline is now ordered round its middle (a drawing, not a fact).
+- **Three orderings were one.** The turns once sorted arms by heading, the regions walked a circle and the outline
+  sorted by angle round its middle. At a spread junction they disagreed (river_town 9 junctions, traffic_lab 3). Since
+  ADR-0427 all three read the stated ring. Heading order alone is wrong at a spread junction: two arms can share a
+  heading (j93's two west roads both say 180) or point across each other (j70's s147 and s149). An outline whose
+  legs are joined in ring order must still lay each leg in the right direction: a leg's far point, then its near
+  point. Tying that to the kerb side drew 136 self-crossing outlines.
+- **Measure a ring only on composed roads.** A ramp arm's station is along the composed spine. Measured on the graph
+  as read, a ramp arm is measured in the wrong place (ring_city j0–j3 and metro_planned have such arms). `armRing` takes
+  `ComposedRoads` only, so it cannot be called on the graph as read.
 - **A junction can sit mid-street.** An arm's street may run on through the junction instead of ending there.
   Stating turns per lane end missed those junctions: hill_junction got 0 connectors. Turns are stated per street end.
 - **A ring street can name a carry-on at both ends.** Choose the end that has lanes leaving.
@@ -224,7 +255,16 @@ data rows.
   and x1_outR_link state a merge past the host lane's end. s320 carries on into s287 where no lane leaves. Dead-end
   spokes at the freeway ring. The planner no longer reproduces river_town's road file (ADR-0423). Car reach 41%
   without lane changes, 81% with: lane changes come first.
-- **Outlines that still cross themselves**: traffic_lab j0, j22; river_town ten (problem lines).
+- **Outlines that still cross themselves**: traffic_lab j0, j22; river_town ten (problem lines). They are the same
+  junctions before and after ADR-0427, so the arm order does not cause them. Their arms' lanes cross before the stop
+  lines (j0 s33/s36).
+- **The side rule** (lane_turns.cpp, `turnKindsFrom`): an arm with no through pair stated calls a turn near or far by
+  which half of the ring the other arm lies in. Exactly halfway counts as far. traffic_lab: 56 junctions, 191 turns
+  rely on it, 8 halfway notes. river_town: 43, 192, 25. At spread junctions it can call a turn near that a driver
+  would call far: river_town j0's s2 into bv1_out is a 43-degree turn across the way, but its carriageway leaves the
+  circle on the near side. It is listed per junction in the arm-order tables and is unchanged.
+- **Deferred levels' road files are unmarked** (`arms_in_ring`). They load with a logged problem line and get no lane
+  level until `lanes_tool layout <file> --arm-order --write` is run on them.
 - **Deferred levels**: every lanes level but traffic_lab and river_town lacks `lane_rules`. Levels without
   `junctions[].nodes` get no street map (agent_lab, river_town and traffic_lab have them). The one-agent lab's car
   still drives v1. Steps 5, 6 and 9 are open (design step table).
@@ -250,6 +290,11 @@ data rows.
 - The stop line where the paint has no box (`stopLineFromMouth`, 39 arms in traffic_lab) has no expected value written
   by hand anywhere: the test and the lane level call the same function. Pin at least one arm against a number worked
   out from the scene.
+- The arm-order tables' "heading order" was the old sort rebuilt by a retired report (ties by the old file's list).
+  It was not a run of the old binary. The lane graph diff before/after (connectors per junction) agreed with it on
+  traffic_lab's three junctions.
+- The ring measure's exact-tie note has no hand scene. Both the note that a road never leaves the circle and the
+  check biting are tested.
 - On a lane named as tidied, the allowed slack (the written cut) applies to each lane path, not once to the lane.
 - The model's stop line itself is only checked as "stated and outside the box edge" (`test_road_model.cpp`) and on one
   hand-made grid_city arm against the paint.

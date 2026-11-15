@@ -206,7 +206,9 @@ ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, con
 // removed where none is posted), leaving everything else as it was. `scene` must be the graph `plan` was made from.
 // `junctionsOnly` (ADR-0424): the "junctions" list alone -- each junction's control and its arms' signs -- and no posted
 // limit or carry-on control, which are in what the bake key hashes (keyedRoadFileText): a level states its controls and
-// signs without re-baking its city.
+// signs without re-baking its city. Each junction's arms are written in their ring (ADR-0427): a list the scene marks so
+// ("arms_in_ring") keeps its order where the plan has the same arms; any other by the one measure (road_layout.h armRing);
+// its through pairs follow their arms; and the scene is marked.
 void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junctionsOnly = false);
 // The plan's counts in words, a few lines, and one line per problem.
 std::string describeControlPlan(const ControlPlan& plan);

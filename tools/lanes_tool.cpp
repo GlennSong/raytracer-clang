@@ -307,9 +307,14 @@ int main(int argc, char** argv) {
         // map joins a spread junction's arms and inside stretches by.
         // --lane-rules M (ADR-0426): the lane level's rules, ONCE, written into the file for a person to read and edit: how far
         // back from a stop line the lines between lanes are solid (M metres). Nothing else moves; the bake key does not see it.
-        bool write = false, fresh = false, names = false, nodes = false;
+        // --arm-order (ADR-0427): THE CHECK -- each listed junction whose stated ring (its arms' list order) differs from the
+        // one measure (road_layout.h armRing, on the roads composed), and the measure's notes; exits 3 when any differs or the
+        // file is not marked "arms_in_ring". With --write: each listed junction's arms put in ring order by the measure,
+        // their texts moved whole, the through pairs renumbered, and the file marked; nothing else moves.
+        bool write = false, fresh = false, names = false, nodes = false, armOrder = false;
         double laneRules = -1;
         for (int i = 3; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--arm-order") == 0) armOrder = true;
             if (std::strcmp(argv[i], "--write") == 0) write = true;
             if (std::strcmp(argv[i], "--fresh") == 0) fresh = true;
             if (std::strcmp(argv[i], "--names") == 0) names = true;
@@ -323,6 +328,51 @@ int main(int argc, char** argv) {
             std::ostringstream ss;
             ss << f.rdbuf();
             text = ss.str();
+        }
+        if (armOrder) {
+            // THE RING CHECKED (never a gate: a marked file is trusted at load), or with --write put in ring order and marked
+            const std::string dir = std::filesystem::path(argv[2]).parent_path().string();
+            RoadLabGraph stated;
+            try {
+                stated = RoadLabGraph::fromJson(nlohmann::json::parse(text), dir.empty() ? "." : dir);
+            } catch (const std::exception& ex) {
+                std::fprintf(stderr, "lanes_tool: %s: %s\n", argv[2], ex.what());
+                return 1;
+            }
+            if (!write) {
+                const ArmRingCheck c = checkArmRings(stated);
+                for (const std::string& n : c.notes) std::printf("  note: %s\n", n.c_str());
+                std::printf("%s: %s; %zu of %zu junctions' stated rings differ from the measure%s", argv[2],
+                            stated.armsInRing ? "marked \"arms_in_ring\"" : "NOT marked \"arms_in_ring\"", c.differ.size(),
+                            stated.junctions.size(), c.differ.empty() ? "" : ":");
+                for (const std::string& id : c.differ) std::printf(" %s", id.c_str());
+                std::printf("\n");
+                return c.differ.empty() && stated.armsInRing ? 0 : 3;
+            }
+            std::string err;
+            std::vector<std::string> changed, notes;
+            const std::string out = insertArmOrderText(text, stated, &changed, &err, &notes);
+            if (out.empty()) { std::fprintf(stderr, "lanes_tool: %s: %s\n", argv[2], err.c_str()); return 1; }
+            for (const std::string& n : notes) std::printf("  note: %s\n", n.c_str());
+            std::printf("%s: %zu junctions' arms put in ring order:", argv[2], changed.size());
+            for (const std::string& id : changed) std::printf(" %s", id.c_str());
+            std::printf("\n");
+            try {
+                const RoadLabGraph again = RoadLabGraph::fromJson(nlohmann::json::parse(out), dir.empty() ? "." : dir);
+                const ArmRingCheck c = checkArmRings(again);
+                if (!again.armsInRing || !c.differ.empty()) {
+                    std::fprintf(stderr, "lanes_tool: %s: read back, %s; not written\n", argv[2],
+                                 again.armsInRing ? ("junction " + c.differ.front() + " still differs from the measure").c_str() : "not marked");
+                    return 1;
+                }
+            } catch (const std::exception& ex) {
+                std::fprintf(stderr, "lanes_tool: %s: would not read back (%s); not written\n", argv[2], ex.what());
+                return 1;
+            }
+            std::ofstream(argv[2], std::ios::binary) << out;
+            std::printf("wrote the ring order and \"arms_in_ring\": true into %s (the bytes the bake keys are unchanged: %s)\n", argv[2],
+                        keyedRoadFileText(out) == keyedRoadFileText(text) ? "yes" : "NO");
+            return 0;
         }
         if (laneRules >= 0) {
             std::string err;

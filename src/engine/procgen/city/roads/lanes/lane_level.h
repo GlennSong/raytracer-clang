@@ -42,9 +42,9 @@
 //   - CONTROLS, SIGNS AND LIMITS: each junction's stated control; each arm's stated signs at the end of every lane
 //     arriving by it; each lane its street's posted limit, each connector the limit of the lane it joins;
 //   - the junction's OUTLINE (the area that must not be blocked) runs across each arm's lanes at its stop line, the
-//     arms' lines joined in the order they lie round their middle (a drawing, not a fact: the stated heading order drew
-//     5 of traffic_lab's outlines and 18 of river_town's crossing themselves); an outline that still crosses itself,
-//     where two arms' stop lines overlap, is reported (traffic_lab j0 and j22, river_town ten: corners for step 9).
+//     arms' lines joined in the junction's stated ring order (its arms' list, road_layout.h armRing, ADR-0427: nothing
+//     sorted here); an outline that still crosses itself, where two arms' stop lines overlap, is reported (corners for
+//     step 9). A road file whose arms are not in ring order gets no lane level (`error` names the command).
 // Tidying, in the table only (the builder's lanes are not touched): a lane on the inside of a corner sharper than its
 // offset folds back on itself; the fold is cut out (cutFolds) and reported.
 //

@@ -4,6 +4,7 @@
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"         // kStopLineBack, kJunctionMergeGap, paintsJunctionBoxes
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
+#include "engine/procgen/city/roads/lanes/road_layout.h"       // kArmOrderCommand: an unmarked file's ring (ADR-0427)
 #include "engine/procgen/city/roads/lanes/road_twin.h"         // classOf: the engine's class of a road
 #include "engine/procgen/city/roads/lane_turns.h"              // the stated turns through each junction (ADR-0426)
 #include "engine/procgen/city/polyline.h"                      // simplifyRun, distToSegment
@@ -129,6 +130,12 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
     };
 
     // ---- junctions, as the road file states them -------------------------------------------------------------------
+    // (their arms in the order the file lists them: the stated ring, ADR-0427, where the file marks its lists so -- trusted,
+    // never measured or re-sorted here; a file with junctions and no mark is said, once, naming the command)
+    m.armsInRing = g.armsInRing;
+    if (!g.junctions.empty() && !g.armsInRing)
+        m.problems.push_back("the road file does not state that its junctions' arms are listed in their ring (\"arms_in_ring\"): run `" +
+                             std::string(roads::lanes::kArmOrderCommand) + "`");
     for (const PlannedJunction& pj : g.junctions) {
         ModelJunction J;
         J.id = pj.id;
@@ -286,6 +293,42 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
     return m;
 }
 
+std::vector<std::vector<TurnArm>> turnArmsOf(const RoadModel& m) {
+    // per junction and arm (in its list's order: the stated ring): the lanes arriving and leaving by it (the street it is,
+    // the way the lane runs there), and its heading
+    std::vector<std::vector<TurnArm>> armsOf(m.junctions.size());
+    for (std::size_t j = 0; j < m.junctions.size(); ++j) {
+        armsOf[j].resize(m.junctions[j].arms.size());
+        for (std::size_t a = 0; a < m.junctions[j].arms.size(); ++a) {
+            armsOf[j][a].hasHeading = stated(m.junctions[j].arms[a].heading);
+            armsOf[j][a].heading = armsOf[j][a].hasHeading ? m.junctions[j].arms[a].heading : 0.0;
+        }
+    }
+    // each lane, street by street: where its stretch reaches an end of the street that names a junction, it arrives at
+    // that junction (the way it runs) or leaves it, by the arm that street is there (a lane runs on through a junction its
+    // road passes through mid-way: the streets either side are two arms)
+    for (std::size_t li = 0; li < m.lanes.size(); ++li) {
+        const ModelLane& L = m.lanes[li];
+        for (const ModelLaneSpan& sp : L.streets) {
+            const ModelStreet& S = m.streets[sp.street.index];
+            for (int end = 0; end < 2; ++end) {
+                const Real at = end == 0 ? S.from : S.to;
+                if (std::fabs((end == 0 ? sp.from : sp.to) - at) > roads::lanes::kReachesStreetEnd) continue;
+                const ModelJunctionId j = S.junctions[static_cast<std::size_t>(end)];
+                if (!j.valid()) continue;
+                const bool arriving = (end == 1) == (L.dir > 0);   // it runs toward this end
+                for (std::size_t a = 0; a < m.junctions[j.index].arms.size(); ++a) {
+                    const ModelArm& arm = m.junctions[j.index].arms[a];
+                    if (arm.street != sp.street || arm.spineIn != (end == 1)) continue;
+                    TurnArmLane tl{static_cast<uint32_t>(li), L.kind, L.slot, L.id};
+                    (arriving ? armsOf[j.index][a].arriving : armsOf[j.index][a].leaving).push_back(tl);
+                }
+            }
+        }
+    }
+    return armsOf;
+}
+
 RoadModel assembleRoadModel(const Result& r) {
     const RoadLabGraph& g = r.graph;
     RoadModel m = plannedRoadModel(g);
@@ -417,37 +460,7 @@ RoadModel assembleRoadModel(const Result& r) {
     {
         const LaneTurnRules& rules = laneTurnRules();
         if (rules.rows.empty()) m.problems.push_back("no rows in assets/data/lane_turns.json: no junction offers a turn");
-        // per junction and arm: the lanes arriving and leaving by it (the street it is, the way the lane runs there)
-        std::vector<std::vector<TurnArm>> armsOf(m.junctions.size());
-        for (std::size_t j = 0; j < m.junctions.size(); ++j) {
-            armsOf[j].resize(m.junctions[j].arms.size());
-            for (std::size_t a = 0; a < m.junctions[j].arms.size(); ++a) {
-                armsOf[j][a].hasHeading = stated(m.junctions[j].arms[a].heading);
-                armsOf[j][a].heading = armsOf[j][a].hasHeading ? m.junctions[j].arms[a].heading : 0.0;
-            }
-        }
-        // each lane, street by street: where its stretch reaches an end of the street that names a junction, it arrives at
-        // that junction (the way it runs) or leaves it, by the arm that street is there (a lane runs on through a junction
-        // its road passes through mid-way: the streets either side are two arms)
-        for (std::size_t li = 0; li < m.lanes.size(); ++li) {
-            const ModelLane& L = m.lanes[li];
-            for (const ModelLaneSpan& sp : L.streets) {
-                const ModelStreet& S = m.streets[sp.street.index];
-                for (int end = 0; end < 2; ++end) {
-                    const Real at = end == 0 ? S.from : S.to;
-                    if (std::fabs((end == 0 ? sp.from : sp.to) - at) > roads::lanes::kReachesStreetEnd) continue;
-                    const ModelJunctionId j = S.junctions[static_cast<std::size_t>(end)];
-                    if (!j.valid()) continue;
-                    const bool arriving = (end == 1) == (L.dir > 0);   // it runs toward this end
-                    for (std::size_t a = 0; a < m.junctions[j.index].arms.size(); ++a) {
-                        const ModelArm& arm = m.junctions[j.index].arms[a];
-                        if (arm.street != sp.street || arm.spineIn != (end == 1)) continue;
-                        TurnArmLane tl{static_cast<uint32_t>(li), L.kind, L.slot, L.id};
-                        (arriving ? armsOf[j.index][a].arriving : armsOf[j.index][a].leaving).push_back(tl);
-                    }
-                }
-            }
-        }
+        const std::vector<std::vector<TurnArm>> armsOf = turnArmsOf(m);
         for (std::size_t j = 0; j < m.junctions.size(); ++j) {
             std::vector<std::string> notes;
             for (const StatedTurn& t : turnsAtJunction(armsOf[j], m.junctions[j].through, m.junctions[j].control, rules, &notes)) {
@@ -605,15 +618,8 @@ std::vector<ModelStreetId> streetsAt(const RoadModel& m, ModelJunctionId j) {
     std::vector<ModelStreetId> out;
     if (!j.valid() || j.index >= m.junctions.size()) return out;
     const ModelJunction& J = m.junctions[j.index];
-    std::vector<std::size_t> order(J.arms.size());
-    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
-    std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-        const bool ha = stated(J.arms[a].heading), hb = stated(J.arms[b].heading);
-        if (ha != hb) return ha;
-        return ha && J.arms[a].heading < J.arms[b].heading;
-    });
-    for (std::size_t i : order)
-        if (J.arms[i].street.valid()) out.push_back(J.arms[i].street);
+    for (const ModelArm& a : J.arms)   // (in the stated ring order, the list's own: ADR-0427)
+        if (a.street.valid()) out.push_back(a.street);
     return out;
 }
 
@@ -767,10 +773,7 @@ std::vector<NamedArm> namedArmsAt(const RoadModel& m, ModelJunctionId j) {
         n.name = name;
         out.push_back(n);
     }
-    std::stable_sort(out.begin(), out.end(), [&](const NamedArm& x, const NamedArm& y) {
-        return J.arms[static_cast<std::size_t>(x.arm)].heading < J.arms[static_cast<std::size_t>(y.arm)].heading;
-    });
-    return out;
+    return out;   // (in the stated ring order, the list's own: ADR-0427)
 }
 
 bool armMouth(const RoadModel& m, const ModelJunction& J, std::size_t arm, Vec2& out) {
@@ -837,10 +840,6 @@ ModelLaneId laneNamed(const RoadModel& m, const std::string& id) {
 
 namespace {
 
-// A junction whose walked arms' mouths lie further apart than this (metres) was spread over several points by the plan.
-constexpr Real kSpreadMouths = 1.0;
-// How far past its furthest mouth a spread junction's circle reaches (metres): where its arms' order round it is read.
-constexpr Real kSpreadMargin = 5.0;
 // Two walked streets whose centre lines cross within this of an end of either meet there (metres): not a crossing.
 constexpr Real kCrossingEndReach = 1.0;
 // A face of the walk under this (square metres, either sign) encloses nothing.
@@ -850,11 +849,6 @@ constexpr Real kDeadEndBeside = 60.0;
 
 // One step of the walk: a street and the way it is walked (forward: from its `from` to its `to`).
 uint32_t stepOf(uint32_t street, bool forward) { return 2 * street + (forward ? 0u : 1u); }
-
-Real degreesOf(const Vec2& d) {
-    const Real a = std::atan2(d.y, d.x) / DEG_TO_RAD;
-    return a < 0 ? a + 360 : a;
-}
 
 void appendStreetLine(const RoadModel& m, const ModelStreet& S, bool forward, std::vector<Vec2>& out) {
     for (uint32_t i = 0; i < S.line.count; ++i) {
@@ -938,69 +932,19 @@ EnclosedRegions enclosedRegions(const RoadModel& m, const RegionWalk& rules) {
         }
     }
 
-    // ---- each junction's walked arms in order round it --------------------------------------------------------------------
+    // ---- each junction's walked arms in order round it: the stated ring, its list's own order (ADR-0427) -----------------
     std::vector<std::vector<uint32_t>> order(m.junctions.size());
     std::vector<std::vector<int32_t>> posOf(m.junctions.size());
     for (uint32_t j = 0; j < m.junctions.size(); ++j) {
         const ModelJunction& J = m.junctions[j];
         posOf[j].assign(J.arms.size(), -1);
-        std::vector<uint32_t> arms;
-        std::vector<Vec2> mouths;
         for (uint32_t a = 0; a < J.arms.size(); ++a) {
             const ModelArm& arm = J.arms[a];
             if (!arm.street.valid() || arm.street.index >= S || !walked[arm.street.index]) continue;
             const EndArm& ea = endArm[arm.street.index][arm.spineIn ? 1 : 0];
             if (ea.junction != static_cast<int32_t>(j) || ea.arm != static_cast<int32_t>(a)) continue;
-            arms.push_back(a);
-            mouths.push_back(streetEnd(arm.street.index, arm.spineIn ? 1 : 0));
-        }
-        if (arms.empty()) continue;
-        Real spread = 0, reach = 0;
-        for (std::size_t i = 0; i < mouths.size(); ++i) {
-            reach = std::max(reach, (mouths[i] - J.at).length());
-            for (std::size_t k = i + 1; k < mouths.size(); ++k) spread = std::max(spread, (mouths[i] - mouths[k]).length());
-        }
-        const bool spreadOut = spread > kSpreadMouths;
-        std::vector<Real> byHeading(arms.size()), key(arms.size());
-        for (std::size_t i = 0; i < arms.size(); ++i) {
-            const ModelArm& arm = J.arms[arms[i]];
-            const uint32_t s = arm.street.index;
-            const bool atFrom = !arm.spineIn;   // the street leaves the junction from its `from` end
-            const Range& L = m.streets[s].line;
-            auto lineAt = [&](uint32_t k) { return m.linePoints[atFrom ? L.first + k : L.end() - 1 - k]; };   // k-th point outward
-            // its way out: the stated heading, else its centre line's first step
-            byHeading[i] = stated(arm.heading) ? std::fmod(arm.heading + 360.0, 360.0) : degreesOf(lineAt(1) - lineAt(0));
-            key[i] = byHeading[i];
-            if (!spreadOut) continue;
-            // a spread junction: where the arm's street leaves the circle holding every mouth (its far end if it never does)
-            const Real R = reach + kSpreadMargin;
-            Vec2 exitAt = lineAt(L.count - 1);
-            for (uint32_t k = 0; k + 1 < L.count; ++k) {
-                const Vec2 p = lineAt(k), q = lineAt(k + 1);
-                if ((q - J.at).length() < R) continue;
-                const Vec2 d = q - p, f = p - J.at;
-                const Real A = dot(d, d), B = 2 * dot(f, d), C = dot(f, f) - R * R;
-                const Real disc = B * B - 4 * A * C;
-                const Real t = A > 1e-12 && disc >= 0 ? std::clamp((-B + std::sqrt(disc)) / (2 * A), Real(0), Real(1)) : Real(1);
-                exitAt = p + d * t;
-                break;
-            }
-            key[i] = degreesOf(exitAt - J.at);
-        }
-        std::vector<uint32_t> sorted(arms.size()), headingSorted(arms.size());
-        for (uint32_t i = 0; i < sorted.size(); ++i) sorted[i] = headingSorted[i] = i;
-        std::stable_sort(sorted.begin(), sorted.end(), [&](uint32_t x, uint32_t y) { return key[x] < key[y]; });
-        std::stable_sort(headingSorted.begin(), headingSorted.end(), [&](uint32_t x, uint32_t y) { return byHeading[x] < byHeading[y]; });
-        if (spreadOut) {
-            ++out.spreadJunctions;
-            // the same cyclic order? (turn the heading order to start where the other does)
-            const std::vector<uint32_t>::iterator at = std::find(headingSorted.begin(), headingSorted.end(), sorted.front());
-            std::rotate(headingSorted.begin(), at, headingSorted.end());
-            if (headingSorted != sorted) ++out.spreadOrderDiffers;
-        }
-        for (uint32_t i = 0; i < sorted.size(); ++i) {
-            order[j].push_back(arms[sorted[i]]);
-            posOf[j][arms[sorted[i]]] = static_cast<int32_t>(i);
+            posOf[j][a] = static_cast<int32_t>(order[j].size());
+            order[j].push_back(a);
         }
     }
 
@@ -1253,8 +1197,7 @@ std::string reportEnclosedRegions(const RoadModel& m, const EnclosedRegions& er)
     out += fmt("  %u streets walked; %zu passed over (by class:%s); %u pieces of network\n", er.walked, er.passedOver.size(), passed.c_str(), er.pieces);
     out += fmt("  %zu regions (%.0f m2 in all), %zu medians (faces between the two carriageways of one road), %zu outer faces\n", er.regions.size(),
                total, er.medians.size(), er.outer.size());
-    out += fmt("  junctions spread over several points: %u (%u of them ordered differently by their headings alone)\n\n", er.spreadJunctions,
-               er.spreadOrderDiffers);
+    out += "  (each junction's arms walked in the stated ring order, its list's own: ADR-0427)\n\n";
     out += notes("Where what is stated does not agree with itself (the walk followed the arms, turned round where nothing led on)", er.problems);
     out += notes("Where a street carries on into a passed-over street (walked round there, as a dead end)", er.turnedRound);
     out += notes("Dead ends (walked round: they split nothing, close nothing)", er.deadEnds);
@@ -1620,7 +1563,7 @@ template <class IO, class X> void fields(IO& io, X& x, ModelCrossing*) { io(x.a)
 template <class IO, class M> void modelFields(IO& io, M& m) {
     io(m.name); io(m.built); io(m.junctions); io(m.streets); io(m.lanes); io(m.connections); io(m.turns); io(m.ramps); io(m.crossings); io(m.points);
     io(m.along); io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.notStated);
-    io(m.problems);
+    io(m.problems); io(m.armsInRing);
 }
 
 }  // namespace

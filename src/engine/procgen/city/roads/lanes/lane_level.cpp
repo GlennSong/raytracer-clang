@@ -9,6 +9,7 @@
 #include "engine/procgen/city/roads/lanes/lane_graph_crossings.h"   // where the paths' bodies could touch
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_design.h"         // roadEndMeetsAnother: a road that just ends, or meets others
+#include "engine/procgen/city/roads/lanes/road_layout.h"         // kArmOrderCommand: a file whose arms are not in ring order
 
 #include <algorithm>
 #include <chrono>
@@ -105,6 +106,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
             missing.push_back("every junction's control (run `city_plan controls <road file> rules/lab.lua --layout --write --controls-only`)");
         if (!g.statesLaneRules)
             missing.push_back("its lane rules (run `lanes_tool layout <road file> --lane-rules 20 --write`)");
+        if (!m.armsInRing)
+            missing.push_back("its junctions' arms listed in their ring (run `" + std::string(kArmOrderCommand) + "`)");
         if (!missing.empty()) {
             out.error = "no lane level for " + g.name + ": the road file does not state ";
             for (std::size_t i = 0; i < missing.size(); ++i) out.error += (i ? "; nor " : "") + missing[i];
@@ -672,8 +675,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
         jn.control = LaneGraph::nameIndex(G.controlNames, J.control);
         jn.crossings = Range{static_cast<uint32_t>(G.crossings.size()), 0};
         jn.crosswalks = Range{static_cast<uint32_t>(G.crosswalks.size()), 0};
-        // its outline: across each arm's lanes at its stop line, the arms' lines joined in the order they lie round their
-        // middle (below)
+        // its outline: across each arm's lanes at its stop line, the arms' lines joined in the stated ring order (below)
         {
             struct Leg { Vec2 a, b, mid; };
             std::vector<Leg> legs;
@@ -686,7 +688,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
                         if (pa.second != a) continue;
                         const Real at = arriving ? G.paths[pa.first].length : Real(0);
                         ends.emplace_back(G.pointAt(PathId(pa.first), at), G.paths[pa.first].width / 2);
-                        // the arm's way across: the arriving traffic's kerb side (the leaving traffic runs the other way)
+                        // the arm's way across: the arriving traffic's counter-clockwise normal (the leaving traffic runs the
+                        // other way)
                         across += perp(G.directionAt(PathId(pa.first), at)) * (arriving ? 1.0 : -1.0);
                     }
                 if (ends.empty()) continue;
@@ -712,19 +715,14 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
             if (legs.size() < 2) {
                 ring = convexHull(all);
             } else {
-                // drawn round the legs in order round their middle (where they lie, not their stated headings: a spread or
-                // skewed junction's arms leave in an order their mouths do not keep, and an outline drawn by headings
-                // crosses itself). A drawing of the area that must not be blocked, not a fact the table decides.
-                Vec2 centre;
-                for (const Leg& leg : legs) centre += leg.mid;
-                centre = centre / static_cast<double>(legs.size());
-                std::stable_sort(legs.begin(), legs.end(), [&](const Leg& x, const Leg& y) {
-                    return std::atan2(x.mid.y - centre.y, x.mid.x - centre.x) < std::atan2(y.mid.y - centre.y, y.mid.x - centre.x);
-                });
-                for (Leg& leg : legs) {
-                    if (cross(leg.a - centre, leg.b - centre) < 0) std::swap(leg.a, leg.b);   // a to b runs counter-clockwise
-                    ring.push_back(leg.a);
+                // drawn round the legs in the junction's stated ring order (its arms' list: counter-clockwise, road_layout.h
+                // armRing, ADR-0427), nothing sorted here. `across` is the arriving lanes' counter-clockwise normal (perp of
+                // their way in), which points clockwise round the junction from the arm, so a leg's `b` end (furthest along
+                // it) is its clockwise end: going counter-clockwise round the junction, each leg is drawn from `b` to `a`.
+                // (Plan geometry: which side the kerb is does not enter.)
+                for (const Leg& leg : legs) {
                     ring.push_back(leg.b);
+                    ring.push_back(leg.a);
                 }
             }
             jn.box = G.addPlanPoints(ring);

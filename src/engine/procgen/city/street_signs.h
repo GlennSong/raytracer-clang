@@ -70,7 +70,8 @@ const StreetSignParams& streetSignParams();
 // A JUNCTION TO SIGN, as the road model states it (the loader fills these from the level's model: road_model.h
 // namedArmsAt): which city and junction, and each arm of it that carries a name -- where the arm meets the junction,
 // the way it leaves, its carriageway's half width (the street's stated travel lanes) and its name. Arms with no name
-// (a ramp, a freeway) are not here: their carriageways are cleared as the level's roads are.
+// (a ramp, a freeway) are not here: their carriageways are cleared as the level's roads are. The arms come in the
+// junction's stated ring, counter-clockwise (ADR-0427), and are read in that order.
 struct SignCorner {
     int city = -1, junction = -1;
     struct Arm {

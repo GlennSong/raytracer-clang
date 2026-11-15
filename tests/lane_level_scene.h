@@ -4,8 +4,9 @@
 // A HAND-MADE LAB SCENE WITH THE FACTS THE LANE LEVEL READS (ADR-0426), stated in memory as the one-off tools would write
 // them into a road file: its layout (`lanes_tool layout --write`: junctions and streets as today's inference finds them),
 // every junction's control (here `unmarked`, the rule sets' word for no control, where the scene states none) and its
-// lane rules (`lanes_tool layout --lane-rules 20 --write`). The lab scenes under assets/lanelab predate the layout; the
-// tests read them so, never changing the files.
+// lane rules (`lanes_tool layout --lane-rules 20 --write`). The lab scenes under assets/lanelab that predate the layout
+// are read so, never changing the files; a scene whose file states its junctions already is read as it is -- its arms'
+// ring order and "arms_in_ring" mark included (ADR-0427: never put in order here).
 
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"

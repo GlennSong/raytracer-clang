@@ -70,6 +70,8 @@
 
 namespace engine {
 
+struct TurnArm;   // lane_turns.h
+
 namespace roads::lanes {
 struct Result;
 struct RoadLabGraph;
@@ -307,6 +309,10 @@ struct RoadModel {
     std::vector<ModelAttachment> attachments;   // in the order attached
     std::vector<std::string> notStated;   // the parts of the design nothing states yet, in words
     std::vector<std::string> problems;    // where the build does not match what was stated, each with its place
+    // the road file states that its junctions' arms are listed in their ring ("arms_in_ring", ADR-0427): the readers of the
+    // order (the turns, the regions, the outline, the signs) read the lists as they are. False: a problem line names the
+    // command, and the lane level refuses the file.
+    bool armsInRing = false;
 };
 
 // Field for field, exactly (the saved bytes of each compared).
@@ -319,6 +325,9 @@ RoadModel plannedRoadModel(const roads::lanes::RoadLabGraph& g);
 // THE MODEL OF A BUILT ROAD NETWORK: the planned layer of the build's graph and everything the build states (see the top
 // of this file).
 RoadModel assembleRoadModel(const roads::lanes::Result& r);
+// EACH JUNCTION'S ARMS AS THE TURN TABLE READS THEM (lane_turns.h TurnArm), in the stated ring order (the list's own): each
+// arm's heading and the built lanes arriving and leaving by it. What assembleRoadModel states the turns from.
+std::vector<std::vector<TurnArm>> turnArmsOf(const RoadModel& m);
 
 // ATTACHES `a` to the model: refused (false, and why in `err`) when its kind is not in `kinds`, or it is not on what its
 // kind attaches to (a street kind needs a street of the model; a junction kind a junction; an arm kind a junction and one
@@ -441,8 +450,6 @@ struct EnclosedRegions {
     std::vector<EnclosedRegion> outer;     // each connected piece's outer face: not regions
     std::vector<ModelStreetId> passedOver; // streets of a passed-over class
     uint32_t walked = 0, pieces = 0;       // streets walked; connected pieces of the network walked
-    uint32_t spreadJunctions = 0;          // junctions whose arms meet at different mouths
-    uint32_t spreadOrderDiffers = 0;       // ...of them, where the headings alone would order the arms differently
     std::vector<RegionWalkNote> problems;  // where what is stated does not agree with itself (the walk turned round there)
     std::vector<RegionWalkNote> turnedRound;   // where a street carries on into a passed-over street (walked round)
     // every dead end the walk went round (no junction, nothing carried on into), and the passed-over street passing
@@ -472,7 +479,8 @@ std::string roadModelSvg(const RoadModel& m);      // junctions and streets with
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 6;    // 2: a street's kerb parking (ADR-0418); 3: where a street carries on (ADR-0419);
+constexpr uint32_t kRoadModelFormat = 7;    // 7: whether the file states its arms in their ring (ADR-0427)
+                                            // 2: a street's kerb parking (ADR-0418); 3: where a street carries on (ADR-0419);
                                             // 4: the planned layer's centre lines, engine class and attachments (ADR-0420);
                                             // 5: a spread junction's points, inside stretches' lines and sections, the centre
                                             //    lines' stations, a ramp's gore along itself, the parking band's middle (ADR-0425)

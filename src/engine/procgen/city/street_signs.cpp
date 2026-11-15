@@ -126,7 +126,12 @@ std::vector<StreetSignPost> planStreetSigns(const std::vector<SignCorner>& corne
             streets.insert(a.name);
         }
         if (streets.size() < 2) continue;
-        std::sort(arms.begin(), arms.end(), [](const Arm& a, const Arm& b) { return a.angle < b.angle; });
+        // (in the junction's stated ring, counter-clockwise, as the model lists its arms: road_model.h namedArmsAt,
+        // ADR-0427 -- never sorted by angle here). The walk round it starts at the arm leaving nearest due west going
+        // counter-clockwise (the least angle): where two corners score the same, the first found takes the post, and
+        // starting there keeps every post where it stood before the ring was stated.
+        if (!arms.empty())
+            std::rotate(arms.begin(), std::min_element(arms.begin(), arms.end(), [](const Arm& a, const Arm& b) { return a.angle < b.angle; }), arms.end());
 
         // THE CORNER: between each pair of neighbouring arms, where the two kerb lines meet (each arm's centre line
         // offset by its half-width plus kerbGap, on the other arm's side), pushed out until it clears every

@@ -60,6 +60,7 @@ struct RoadLayout {
     std::vector<PlannedStreet> streets;       // in road order, then along each road
     std::vector<DividedPair> divided;         // the divided roads' carriageway pairs (the graph's own list, or found)
     bool keptList = false;                    // the junctions are the graph's own list, as it stated them
+    bool armsInRing = false;                  // every junction's arms listed in ring order (found here, or a marked list kept)
     std::vector<std::string> notes;           // what could not be settled, in words (an arm with no street, ...)
 };
 
@@ -86,26 +87,29 @@ ControlPlan planLayoutControls(const RoadLabGraph& g, LayoutSource source, const
 std::string describeLayout(const RoadLayout& layout);
 
 // WRITES IT INTO A SCENE'S JSON: the "junctions" list replaced by the layout's (a junction's control-plan members kept
-// as the layout carries them) and the "streets" list set. For a scene the planner is making.
+// as the layout carries them) and the "streets" list set; "arms_in_ring": true where the layout's arms are in their ring
+// (armsInRing, ADR-0427). For a scene the planner is making.
 void writeLayout(nlohmann::json& scene, const RoadLayout& layout);
 
 // WRITES IT INTO A ROAD FILE'S TEXT IN PLACE: nothing else in the file moves by a byte. A file with no "junctions" list
-// gets one (and a "streets" list) after its last member; a file whose list exists (the control plan's, whose junctions
+// gets one (with "arms_in_ring", and a "streets" list) after its last member; a file whose list exists (the control plan's, whose junctions
 // the layout kept: keptList) gets each arm's "street" and "heading" and each junction's "through" written into it. The
 // result, stripped (stripLayoutText), is the text it was made from: checked here, and an empty string (with `err`) when it
 // is not, or when the layout does not fit the file's list.
 std::string insertLayoutText(const std::string& text, const RoadLayout& layout, std::string* err = nullptr);
-// THE FILE WITHOUT ITS LAYOUT: the "streets" list taken out; a "junctions" list naming no control taken out whole; in one
+// THE FILE WITHOUT ITS LAYOUT: the "streets" list taken out; a "junctions" list naming no control taken out whole (with
+// the "arms_in_ring" mark); in one
 // that names controls (the control plan's), each junction's "through" and each arm's "street" and "heading". Each member
 // goes with the comma before it (or, the first of its object, the one after it), so text the layout was inserted into
 // comes back byte for byte. Text with none of them is returned as it was.
 std::string stripLayoutText(const std::string& text);
-// WHAT THE CITY'S BAKE KEY HASHES (city_producer.cpp): the file with its "streets", "divided", "junctions" and
-// "lane_rules" members taken out whole -- the junctions with their controls and signs too (ADR-0421: no stage of the
+// WHAT THE CITY'S BAKE KEY HASHES (city_producer.cpp): the file with its "streets", "divided", "junctions",
+// "arms_in_ring" and "lane_rules" members taken out whole -- the junctions with their controls and signs too (ADR-0421: no stage of the
 // bake reads any of them; the lane graph, which reads them, keys them itself, laneLevelKey, ADR-0426).
 std::string keyedRoadFileText(const std::string& text);
 // WHAT THE LANE LEVEL READS OF A ROAD FILE THAT THE BAKE KEY LEAVES OUT (ADR-0426), hashed: its "junctions" (without
-// their points, "nodes", which only the street map reads), "streets", "divided" and "lane_rules" members, as dumped; 0
+// their points, "nodes", which only the street map reads), "arms_in_ring", "streets", "divided" and "lane_rules"
+// members, as dumped; 0
 // for a file with none. Mixed into the lane graph's cache key.
 uint64_t laneLevelKey(const nlohmann::json& spec);
 // WRITES THE LANE LEVEL'S RULES INTO A ROAD FILE'S TEXT IN PLACE (ADR-0426): a "lane_rules" member after its last one,
@@ -171,6 +175,74 @@ std::vector<JunctionNodes> junctionNodes(const RoadLabGraph& g, LayoutSource sou
 // (laneLevelKey) do not see it. Empty (with `err`) when the list does not fit.
 std::string insertJunctionNodesText(const std::string& text, const RoadLabGraph& g, const std::vector<JunctionNodes>& nodes,
                                     std::string* err = nullptr);
+
+// ---- the order of a junction's arms round it (ADR-0427) -----------------------------------------------------------------
+// A JUNCTION'S ARMS ARE STATED IN RING ORDER: its `arms` list goes round it COUNTER-CLOCKWISE in plan coordinates (the
+// way a heading in degrees grows), and the file says so with its top-level "arms_in_ring": true (RoadLabGraph::armsInRing).
+// Which way the kerb side lies from an arm is the one statement lane_graph_build.h kerbPerpSign (lane_turns.h
+// kerbSideCounterClockwise). Every reader -- the turns (lane_turns.h), the regions the streets enclose (road_model.h
+// enclosedRegions), the junction's outline at the lane level, the street signs -- TRUSTS a marked file's list as it is:
+// nothing sorts arms by heading or by angle, and nothing measures the ring again at load. A planner may state a ring the
+// measure below would not give; the measure only checks (checkArmRings, `lanes_tool layout <file> --arm-order`).
+//
+// THE ONE MEASURE (armRing), used by the writers (deriveLayout, writeControlPlan, insertArmOrderText) and the check, never
+// at load. It is taken on the graph with its ramps composed (ComposedRoads: an arm's `at` is a station along the composed
+// spine). Each arm's MOUTH is the point at its station on its road's spine. Each arm is measured by a direction from the
+// junction's middle (its stated `at`):
+//   - at a junction over one point (every mouth within kArmRingSpreadMouths of every other), the arm's heading (stated,
+//     else the road's way out over its first kArmHeadingReach): the mouths all stand at the middle, so only the way out
+//     tells them apart;
+//   - at a junction spread over several points, the point where the arm's road leaves the circle round the middle that
+//     holds every mouth and kArmRingSpreadMargin more: the mouths stand apart, and an arm's heading at its mouth can point
+//     across another arm (a road leaving its point sideways); where it leaves the junction's area is where its traffic
+//     comes from and goes to.
+// Arms measuring exactly the same keep their listed order, and the measure says so in a note (as it does when a road never
+// leaves the circle -- measured by its far end -- or has no spine beyond its mouth -- measured by its heading).
+// 1 m: the layout writes stations to the centimetre (written), so the mouths of one point agree within centimetres, while
+// the points of a spread junction lie metres apart (a divided road's two carriageways, a skewed crossing's corners); a
+// metre lies between the two.
+constexpr double kArmRingSpreadMouths = 1.0;   // metres: mouths farther apart than this make a junction spread
+// 5 m: about a lane and a half past the farthest mouth -- far enough that every arm's road has left the stretch the
+// junction's other arms share, near enough that a road bending away soon after its mouth is still measured by the way it
+// leaves, not where it ends up.
+constexpr double kArmRingSpreadMargin = 5.0;   // metres beyond the farthest mouth: the circle a spread junction's arms leave
+constexpr double kArmRingAtMiddle = 1e-9;      // metres: a point this near the middle has no direction from it
+constexpr double kArmRingNoLength2 = 1e-12;    // square metres: a spine segment this short has no length to cross the circle on
+
+// A ROAD GRAPH WITH ITS RAMPS COMPOSED from their anchors (lane_expand.h expand), as the builder, the loader and the layout
+// compose it: the only graph an arm's station means what it says on, so the only one the ring is measured on. Made from
+// the graph as read (fromJson); a copy.
+class ComposedRoads {
+public:
+    explicit ComposedRoads(const RoadLabGraph& asRead);
+    const RoadLabGraph& graph() const { return g_; }
+
+private:
+    RoadLabGraph g_;
+};
+// The arms of `pj` in ring order, by the measure above: indices into pj.arms. `notes` (optional): each arm measured
+// otherwise than the rule says, and each pair measuring exactly the same, in words.
+std::vector<std::size_t> armRing(const PlannedJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes = nullptr);
+// Puts pj's arms in ring order (armRing), its `through` pairs renumbered to follow.
+void orderArmsRound(PlannedJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes = nullptr);
+// Whether pj's stated list, read as a ring (any arm first), differs from the measure's.
+bool ringDiffers(const PlannedJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes = nullptr);
+// THE CHECK (never a gate): the junctions of a graph as read whose stated ring differs from the measure (ids, in list
+// order), and the measure's notes.
+struct ArmRingCheck {
+    std::vector<std::string> differ;
+    std::vector<std::string> notes;
+};
+ArmRingCheck checkArmRings(const RoadLabGraph& asRead);
+// WRITES THE RING ORDER INTO A ROAD FILE'S TEXT IN PLACE (the one-off layout tool, `lanes_tool layout <file> --arm-order
+// --write`): each listed junction's `arms` put in ring order (the measure, on the file's graph composed), their texts
+// moved whole, its `through` pairs renumbered, and the file marked "arms_in_ring": true. Nothing else moves (the bake key,
+// which leaves the junctions and the mark out, does not see it; the lane graph's key does). `changed` (optional): the ids
+// of the junctions whose order changed; `notes` (optional): the measure's. Empty (with `err`) when the list does not fit.
+std::string insertArmOrderText(const std::string& text, const RoadLabGraph& asRead, std::vector<std::string>* changed = nullptr,
+                               std::string* err = nullptr, std::vector<std::string>* notes = nullptr);
+// The command that writes the ring order into a road file, for messages that ask for it.
+constexpr const char* kArmOrderCommand = "lanes_tool layout <road file> --arm-order --write";
 
 }  // namespace roads::lanes
 }  // namespace engine

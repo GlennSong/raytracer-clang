@@ -20672,3 +20672,112 @@ stretch is left out. A builder change dropping a stretch and a lane was seen to 
 
 **Revisit when** the builder draws corners to fit every stated turn and paints the stated junctions (step 9); when
 the driving changes lanes.
+
+## ADR-0427 — One stated order of a junction's arms: the list is the ring, the file says so, and every reader trusts it
+**Status:** Provisional · **Date:** 2026-11-14
+
+Words used here:
+- A junction's **arms** are the ways its streets come in and go out (ADR-0417). An arm's **mouth** is the point at its
+  station on its road's spine (the station measured along the spine with ramps composed from their anchors, as the
+  builder composes them). A junction is **compact** when every mouth lies within 1 m of the others. Otherwise it is
+  **spread**: a divided road crossing a street, or a skewed five-way laid out over tens of metres.
+- The **ring** is the arms in order going round the junction counter-clockwise in plan coordinates (the way headings
+  grow).
+- **Near turn / far turn**: as ADR-0426 (near crosses no oncoming traffic). A **through pair** is two arms stated to
+  be one street carrying on. The **side rule** decides an arm with no through pair: a turn is near or far by which
+  half of the ring the other arm lies in.
+- The **mark** is the road file's top-level `"arms_in_ring": true`: the file's word that every junction's `arms` list
+  is its ring.
+
+**What it does.** The order of each junction's `arms` list in a marked road file is a stated fact: the ring. Before,
+three readers each worked out their own order. The turns sorted arms by heading. The enclosed regions walked a circle
+round the junction. The lane level's outline sorted its legs by angle round their middle. At a spread junction these
+disagreed. Two arms can share a heading: traffic_lab j93's two west roads both state 180 degrees, and the tie fell to
+whichever the file listed first. Arms can also leave in the opposite order to their headings, like j70's s147 and
+s149.
+
+**Readers trust the mark.** `turnKindsFrom` (lane_turns.cpp) reads the list's order as the ring. `enclosedRegions`
+and the model's `streetsAt` / `namedArmsAt` read it. The lane level's outline joins its legs in list order, each leg
+laid far point then near point. The street signs read it too: they walk the ring starting at the arm whose angle is
+least, so a tie between two equally good corners still goes to the corner it went to before. Nothing sorts arms by
+heading or angle, and nothing measures the ring at load. A planner may state a ring the measure would not give. A
+later change to the measure's numbers does not make any file wrong.
+- **An unmarked file** that lists junctions gets one problem line in the road model, naming the command. The loader
+  logs the model's problems once (`LOG_WARN`), and the lane level refuses the file with the command named. The
+  deferred levels' road files stay unmarked and say so when loaded.
+- **At load** only the structure is checked: an arm listed twice, a through pair naming a missing arm, or a through
+  pair naming one arm twice is refused.
+- The mark sits beside the junctions list. Like the rest of the layout it is outside the bake key
+  (`keyedRoadFileText`) and inside the lane graph's key (`laneLevelKey`).
+
+**One measure, used by the writers and the check.** `armRing` (`road_layout.h`) works the ring out from the
+geometry:
+- At a compact junction it orders by heading.
+- At a spread junction it orders by the angle, from the junction's `at`, of the point where each arm's road leaves a
+  circle 5 m wider than the farthest mouth. It walks the road's spine outward from the mouth to find that point.
+- Arms measuring exactly the same keep their listed order.
+- It notes each arm measured otherwise than the rule says: a road that never leaves the circle (measured by its far
+  end), no spine beyond the mouth, or no spine at all. It also notes each exact tie.
+
+`armRing` takes only `ComposedRoads`, a copy of the graph with its ramps composed, so it cannot measure stations on
+an uncomposed spine. Its writers:
+- **The layout** (`deriveLayout` / `writeLayout` / `insertLayoutText`) orders the junctions it finds and marks the
+  file. A list the file already states is kept, along with its mark or the lack of one.
+- **The control plan** (`writeControlPlan`) keeps a marked list's order where the plan has the same arms. Otherwise
+  it uses the measure, renumbers the through pairs to follow their arms, and marks the scene.
+- **The one-off tool**, `lanes_tool layout <file> --arm-order --write`, orders and marks an old file in place. It
+  moves whole arms and renumbers `through`.
+
+**The check, never a gate.** Without `--write`, `lanes_tool layout <file> --arm-order` prints the measure's notes
+and each junction whose stated ring differs from the measure. It exits 3 when any junction differs or the file is
+unmarked. `road_model_18` runs the same check (`checkArmRings`) on the shipped files that the lane level reads
+(traffic_lab, river_town, agent_lab, ring_city). Each file has a list, written in the test, of the junctions allowed
+to differ. All four lists are empty, and none of the four files has a note.
+
+**What moved** (`docs/road-model-compare/<level>_arm_order.txt`, the tables written when the three level files were
+put in order; the report that made them is retired):
+- traffic_lab: 3 of 156 junctions ordered otherwise (j70, j84, j93, all spread). 4 turns changed kind, 10 appeared
+  and 10 went (the same arm pair, now from or into another lane). By eye in pictures, every change is the right kind
+  except where the side rule decides (below). j0 did not change.
+- river_town: 9 of 144 (j0, j8, j14, j35, j43, j91, j119, j129, j135). 3 changed kind, 34 appeared, 34 went. j129
+  is a four-arm junction where a divided boulevard ends on a street. Its two carriageways were ordered 0.36 degrees
+  apart the wrong way round. Now the street's turns into the outbound carriageway are near, and the U-turn across the
+  median is far. agent_lab's road file gives the same table.
+- Regions: river_town 125 before and after, every region the same. traffic_lab 113 after.
+- Outlines crossing themselves: traffic_lab 2 before, 2 after (j0, j22); river_town 10 before, 10 after (the same ten).
+  The ring does not cause them.
+- Street signs (traffic_lab and river_town, 280 posts): 1 post moved (river_town j8) and 2 blades name another arm of
+  the same street (river_town j35, j91). These are spread junctions whose ring differs from the angle order. Reading
+  the list from its first arm instead would have moved 221 posts, because ties between equally good corners would go
+  elsewhere.
+- Bake keys did not move: the junctions and the mark are cut from the bake key, and the meshes and maps are
+  byte-identical. Marking the files changed no lane graph (traffic_lab's and river_town's dumps are byte-identical
+  before and after the mark). The lane graph's key moves, and `kLaneGraphBuildVersion` is 10 for the reordering.
+
+**The side rule is unchanged.** It is measured in the tables: traffic_lab 56 junctions and 191 turns rely on it, 8
+of them exactly halfway (taken as far). river_town: 43 junctions, 192 turns, 25 halfway. At spread junctions it can
+disagree with the driver's heading. river_town j0's s2 into bv1_out is now near: the carriageway leaves the circle
+107 degrees round on the near side, though the car turns 43 degrees the far way. traffic_lab j84's upper west road
+into s237 is now far.
+
+**Tests.**
+- `road_model_17_one_stated_ring_of_a_junctions_arms` uses hand scenes with the ring worked out by hand: a divided
+  road crossing a street, a skewed five-way, and a three-way whose short road never leaves the circle (the note
+  checked). It checks the turns lane by lane in this world and the mirrored one. An unmarked file is said and refused
+  with the command named. A marked file with one junction's arms listed backwards loads as listed, with no problem
+  and the lane level built, and only the check names that junction.
+- `road_model_18` reads the shipped files raw. Putting one junction of a copy out of order (river_town j129, first two
+  arms swapped) makes the check name exactly that junction.
+- The road_model_14 compact-junction turn tests pass unchanged. Putting the heading sort back into `turnKindsFrom`
+  fails road_model_17's five-way checks; that was seen, then undone.
+- No test sorts its input. Hand scenes built in code state their arms in ring order. Lab scenes whose layout is
+  derived in memory are ordered and marked by the layout writer, as a file would be. ring_city's file was marked by
+  the tool, with its arms already in ring order.
+
+Pins that moved, each with its cause:
+- traffic_lab's halfway notes are now named by road, not by arm number. They are the same eight arms.
+- traffic_lab "fits no vehicle" went from 81 to 82: j93's corrected turns, one more corner fault.
+- traffic_lab's lane paths inside a junction went from j93: 1 to none. j93's outline no longer folds back over its
+  north-west arm.
+
+**Revisit when** the side rule is replaced by a stated near/far side for arms with no through pair.

@@ -728,9 +728,8 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
              "pavement's (block_audit.h pavementHoles), as the city producer keeps them";
         T += fmt(" (%.0f m2 and up). A hole is tied to the region whose outline (its bounding streets' centre lines) holds a point inside "
                  "the hole.\n", kHoleMinArea);
-        T += fmt("  %zu regions, %zu medians, %zu outer faces; %u streets walked, %zu passed over; %u junctions spread over several points "
-                 "(%u ordered differently by heading alone)\n", er.regions.size(), er.medians.size(), er.outer.size(), er.walked,
-                 er.passedOver.size(), er.spreadJunctions, er.spreadOrderDiffers);
+        T += fmt("  %zu regions, %zu medians, %zu outer faces; %u streets walked, %zu passed over (arms walked in the stated ring order)\n",
+                 er.regions.size(), er.medians.size(), er.outer.size(), er.walked, er.passedOver.size());
         T += fmt("  the walk: %zu places where what is stated does not agree with itself, %zu streets carrying on into a passed-over one "
                  "(walked round), %zu crossings with no junction, %zu faces it could not close as regions, %zu pieces inside another's region\n",
                  er.problems.size(), er.turnedRound.size(), er.crossings.size(), er.unplanar.size(), er.nested.size());

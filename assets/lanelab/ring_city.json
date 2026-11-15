@@ -1829,6 +1829,7 @@
    "control": "unmarked"
   }
  ],
+ "arms_in_ring": true,
  "streets": [
   {
    "carries_on": [

@@ -225,7 +225,9 @@ constexpr double kLongestStand = 100.0;
 // Retaken for ADR-0426 (step 8 of the road model): the lab drives on the lane level built from the road model -- one
 // junction per stated junction (a spread junction one junction, one signal plan), the stated turns, ramps that lead on
 // and off -- so every route and every wait moved. (Before: 0xcb8d84ad283044fb, ADR-0414.)
-constexpr uint64_t kFiveMinuteStateHash = 0xa29c554aa56bbd3eull;
+// Retaken for ADR-0427 (one stated ring of a junction's arms): the turns at three spread junctions (j70, j84, j93) changed
+// kind or lane, so routes through them moved. (Before: 0xa29c554aa56bbd3e, ADR-0426.)
+constexpr uint64_t kFiveMinuteStateHash = 0xade2f58d4ad855d1ull;
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's

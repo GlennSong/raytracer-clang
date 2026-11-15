@@ -2,7 +2,8 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROADS_LANE_TURNS_H
 
 // WHICH TURNS A JUNCTION OFFERS, AND WHICH LANE TAKES EACH (docs/road-model-design.md step 8, ADR-0426): stated once, for
-// the road model, from what the road file states -- the junction's arms in order round it (by their stated headings),
+// the road model, from what the road file states -- the junction's arms in order round it (the list's own order: the
+// stated ring, counter-clockwise, road_layout.h armRing, ADR-0427; a heading only says whether an arm can be turned into),
 // its `through` pairs, each arriving lane's kind and slot, the junction's control -- by the rows of one data table,
 // assets/data/lane_turns.json (its head says every word). No angle and no distance decides anything here.
 //
@@ -72,7 +73,8 @@ struct StatedTurn {
 };
 
 // THE KIND OF EACH TURN FROM ARM `from` (see the table's head): per arm, Turn::None for `from` itself and for an arm with
-// no stated heading. `kerbCcw`: whether the kerb side of arriving traffic lies counter-clockwise round the junction from
+// no stated heading. `arms` IN RING ORDER, counter-clockwise (the junction's stated list: road_layout.h armRing); their
+// headings are not read for the order. `kerbCcw`: whether the kerb side of arriving traffic lies counter-clockwise round the junction from
 // its arm (in plan coordinates); `halfway` (optional, out): the arms taken as far turns only because they stood halfway
 // round with no partner stated.
 std::vector<Turn> turnKindsFrom(const std::vector<TurnArm>& arms, const std::vector<std::array<uint32_t, 2>>& through,
