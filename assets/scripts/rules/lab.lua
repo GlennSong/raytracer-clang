@@ -96,7 +96,18 @@ rule_set = {
   -- who got there first. As at a stop or give-way sign on the minor road: CVC 21802 (a), 21803 (a) (give way to traffic
   -- on the other road) and 21801 (a) (the far turn gives way). [~] a judgement: the law has no rule for two paths that
   -- touch between junctions; this treats the one coming from the busier road as the road.
-  between_junctions = { settle = { "sign_rank", "movement", "arrived_first" } },
+  -- A MERGE BETWEEN JUNCTIONS comes first (`stated_merge`): where the roads state that one lane runs into the lane
+  -- beside it -- a ramp's lane joining the road, a lane that ends -- the car on the lane that joined gives way to the car
+  -- already in the lane it is joining. Only the roads' own statement counts (which lane merges into which); nothing is
+  -- judged from the shape, and a meeting with no stated merge goes on to the questions after it. Source: CVC 21658 (a)
+  -- (a vehicle is not moved out of its lane until that can be done with reasonable safety) and the UK Highway Code
+  -- rules 133 (changing lane: do not force another driver to change course or speed) and 259 (joining a motorway from a
+  -- slip road: give priority to traffic already on it); CVC 21804 (a) (a vehicle entering a highway yields to the
+  -- traffic on it) is the same idea, though its text is about entering from property or an alley. Section and rule
+  -- numbers from memory, unverified against the texts. [~] a judgement: both codes speak of the driver changing lane or
+  -- joining; this reads the lane that ends as the one changing, and where traffic is heavy the Highway Code also asks
+  -- for merging in turn (rule 134), which this does not do.
+  between_junctions = { settle = { "stated_merge", "sign_rank", "movement", "arrived_first" } },
 
   numbers = {
     -- The gap kept to the car ahead when both stand still: the Intelligent Driver Model's s0.

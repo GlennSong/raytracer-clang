@@ -105,7 +105,8 @@ std::string unitWords() {
 namespace {
 
 // THE QUESTIONS' WORDS, in SettleQuestion order.
-const char* const kSettleWords[kSettleQuestionCount] = {"light", "sign_rank", "movement", "kerb_side", "arrived_first"};
+const char* const kSettleWords[kSettleQuestionCount] = {"light",     "sign_rank",     "movement",
+                                                          "kerb_side", "arrived_first", "stated_merge"};
 // THE MOVEMENTS' WORDS, in Movement order.
 const char* const kMovementWords[kMovementCount] = {"straight", "near_turn", "far_turn", "u_turn"};
 

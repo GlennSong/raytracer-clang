@@ -99,8 +99,11 @@ enum class SettleQuestion : uint8_t {
     Movement,       // at load: the kind of turn, by RuleSet::movementRank (earlier goes first)
     KerbSide,       // at load: the one arriving from the other's kerb side goes first
     ArrivedFirst,   // while driving: whoever reached their line first
+    StatedMerge,    // at load: one of the two joined the other's lane by a merge the roads state (a ramp lane into the
+                    // lane beside it, a lane that ends into its neighbour: CrossingPoint::merging); it gives way.
+                    // Says nothing of a meeting the roads state no merge at
 };
-constexpr uint8_t kSettleQuestionCount = 5;
+constexpr uint8_t kSettleQuestionCount = 6;
 // The question's word in a rule-set file ("light", "sign_rank", ...); empty for an unknown one.
 const char* settleQuestionWord(SettleQuestion q);
 // The question a word names; false for a word that is none.
@@ -196,7 +199,8 @@ struct RuleSet {
     std::vector<Movement> movementRank;
     // BETWEEN JUNCTIONS (optional; issue #284): how a meeting filed under no junction is settled -- two junctions' paths,
     // or a lane and a connector, crowded together (ADR-0400) -- as a settle list asked of each path's own approach and
-    // movement (a lane: no sign, straight on). Only sign_rank, movement and arrived_first mean anything there. Absent
+    // movement (a lane: no sign, straight on), and of the meeting itself (stated_merge: which of the two joined the other's
+    // lane). Only stated_merge, sign_rank, movement and arrived_first mean anything there. Absent
     // (hasBetweenJunctions false): such a meeting is asked while driving, falling back on the lower path id.
     bool hasBetweenJunctions = false;
     std::vector<SettleQuestion> betweenJunctions;

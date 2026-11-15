@@ -51,6 +51,12 @@
 //  35. ten cars queued at a red empty over the line at the saturation headway, 1.7-2.1 s a car from the fourth on;
 //  36. every chain of two turns through two close lights that the load-time check leaves open lets a car at rest at the
 //      first line through (the soak's 301 s at junction 90: open chains no car could ever use).
+//  A MERGE BETWEEN JUNCTIONS (ADR-0426; the rule set's `stated_merge` question, on driving_test_roads.h mergeRoads):
+//  merge 1. a through car and a joining car arriving together: the joining car gives way and the through car is not
+//           held, whichever lane has the lower path id;
+//  merge 2. the joining car goes in a 15 s gap between two through cars, and waits out a platoon 3 s apart;
+//  merge 3. a rule set that does not ask the question, or a road that states no merge: the old answer (the lower path id);
+//  merge 4. a stated merge filed under a junction: read where the control asks, noted where it does not.
 
 #include "test_framework.h"
 
@@ -2739,6 +2745,277 @@ TEST_CASE(give_way_284_i_a_bus_cutting_inside_its_turn_is_ordered_against_the_ca
     CHECK(after.allSpells == 0u);
     CHECK(after.gaveWay > 0u);
     CHECK(after.arrived == 2u);
+}
+
+// ---- A merge between junctions: the lane that joined gives way (ADR-0426's driving half) --------------------------------
+
+namespace {
+
+// The rule set's order between junctions WITH the stated merge asked first (as the lab's), and WITHOUT it (as it was).
+const char* kBetweenWithMerge =
+    "  between_junctions = { settle = { 'stated_merge', 'sign_rank', 'movement', 'arrived_first' } },\n";
+const char* kBetweenWithoutMerge = "  between_junctions = { settle = { 'sign_rank', 'movement', 'arrived_first' } },\n";
+
+// WHAT ONE RUN ON THE MERGE ROAD SHOWED (driving_test_roads.h mergeRoads). Cars on the through lane have ids 0, 1, 2
+// ... (front to back); the one car on the joining lane has id kJoiningCar.
+constexpr uint32_t kJoiningCar = 10;
+struct MergeRun {
+    bool ok = false;
+    std::vector<uint32_t> intoBeyond;       // the cars in the order their fronts came onto the lane beyond the merge
+    Real throughMostBraking = 0;            // the most negative acceleration of any through car short of the lane beyond
+    Real throughLowestSpeed = 1e9;          // ... and its lowest speed there, once it was up to 10 m/s
+    Real joiningLowestSpeed = 1e9;          // the joining car's lowest speed on its own lane, once up to 5 m/s
+    std::size_t overlapping = 0;            // pairs of cars whose bodies overlapped at any tick
+    uint64_t arrived = 0;
+    uint64_t loops = 0, noReason = 0;
+    // The table's answer at each of the merge's crossing records, read from the joining lane's side, and what decided.
+    std::vector<MyTurn> joiningTurn;
+    std::vector<MeetingAnswer> answers;
+    RightOfWayCounts counts;
+};
+
+// Cars on the through lane with their fronts `throughAt` metres along it, and one on the joining lane `joiningAt`
+// metres along that, all from rest and all bound for the far end of the lane beyond; run until all have arrived (or
+// `seconds` are up). `between`: the rule set's between_junctions line ("" for none).
+MergeRun runMerge(bool joiningLaneFirst, const char* between, const std::vector<Real>& throughAt, Real joiningAt,
+                  Real seconds = 120, bool stated = true) {
+    MergeRun out;
+    Sim s(driving_test::mergeRoads(joiningLaneFirst, stated), kUncontrolled);
+    if (!s.ok || !s.giveRules(kUncontrolled, between)) return out;
+    out.ok = true;
+    const engine::PathId through = s.t.mergeThrough, joining = s.t.mergeJoining, beyond = s.t.mergeBeyond;
+    const RightOfWay& row = s.d.rightOfWay();
+    out.counts = row.counts;
+    for (const engine::CrossingId c : s.t.mergeJoins) {
+        const MeetingAnswer* a = row.answer(c);
+        CHECK(a != nullptr);
+        if (!a) continue;
+        out.answers.push_back(*a);
+        out.joiningTurn.push_back(myTurn(s.t.graph, *a, c, joining));
+    }
+    const Real destAlong = s.t.graph.paths[beyond.index].length - 10;
+    for (std::size_t k = 0; k < throughAt.size(); ++k) s.add(static_cast<uint32_t>(k), through, throughAt[k], beyond, destAlong);
+    if (joiningAt >= 0) s.add(kJoiningCar, joining, joiningAt, beyond, destAlong);
+    const uint64_t cars = throughAt.size() + (joiningAt >= 0 ? 1 : 0);
+    std::set<uint32_t> seenBeyond, upToSpeed;
+    for (int i = 0; i < static_cast<int>(seconds / kStep) && s.arrived < cars; ++i) {
+        s.step();
+        for (const Car& c : s.d.cars()) {
+            const uint32_t id = c.id.index;
+            if (c.path == beyond) {
+                if (seenBeyond.insert(id).second) out.intoBeyond.push_back(id);
+                continue;
+            }
+            if (id == kJoiningCar) {
+                if (c.speed > 5) upToSpeed.insert(id);
+                if (upToSpeed.count(id)) out.joiningLowestSpeed = std::min(out.joiningLowestSpeed, c.speed);
+            } else {
+                out.throughMostBraking = std::min(out.throughMostBraking, c.acceleration);
+                if (c.speed > 10) upToSpeed.insert(id);
+                if (upToSpeed.count(id)) out.throughLowestSpeed = std::min(out.throughLowestSpeed, c.speed);
+            }
+        }
+    }
+    if (std::getenv("RT_MERGE_REPORT")) s.report("a merge between junctions");
+    out.overlapping = s.overlapping.size();
+    out.arrived = s.arrived;
+    out.loops = s.loops.size();
+    out.noReason = s.noReason;
+    return out;
+}
+
+void printMerge(const char* name, bool joiningLaneFirst, const MergeRun& r) {
+    std::printf("    %s, the %s lane has the lower id: into the lane beyond in the order", name,
+                joiningLaneFirst ? "joining" : "through");
+    for (const uint32_t id : r.intoBeyond) std::printf(" %u", id);
+    std::printf("; through cars braked at most %.2f m/s2, slowest %.2f m/s; the joining car's slowest %.2f m/s; %zu pairs "
+                "overlapped; %llu arrived\n",
+                r.throughMostBraking, r.throughLowestSpeed, r.joiningLowestSpeed, r.overlapping,
+                static_cast<unsigned long long>(r.arrived));
+}
+
+}  // namespace
+
+// THE SCENE'S NUMBERS, written here from the road (driving_test_roads.h mergeRoads): the through lane is 400 m, the
+// joining lane starts 150 m before its end, and every lane's limit is 13.4 m/s. A through car 280 m along its lane and
+// the joining car 30 m along its own are both 120 m short of the point where the lanes become one, both at rest: they
+// arrive together.
+constexpr Real kThroughTogetherAt = 280, kJoiningTogetherAt = 30;
+// A through car held up by the joining car would brake to let it in: without the stated merge, on the road where the
+// through lane has the lower id, it brakes at 1.5 m/s2 and more. "Not held": never braking harder than this light lift.
+constexpr Real kNotHeldBraking = -0.5;
+// ... and never below this once up to speed (the limit is 13.4 m/s; a car is counted up to speed from 10).
+constexpr Real kNotHeldSpeed = 10.0;
+
+TEST_CASE(give_way_merge_1_the_lane_that_joined_gives_way_whichever_has_the_lower_id) {
+    // A through car and a joining car arrive together at a merge between junctions. The roads state that the joining
+    // lane merges into the through lane, and the rule set asks `stated_merge` first: the joining car gives way and the
+    // through car is not held -- on the road where the joining lane has the lower path id AND on the one where the
+    // through lane has, which is the one the old fall-back (the lower path id gives way) got wrong.
+    for (const bool joiningLaneFirst : {true, false}) {
+        const MergeRun r = runMerge(joiningLaneFirst, kBetweenWithMerge, {kThroughTogetherAt}, kJoiningTogetherAt);
+        CHECK(r.ok);
+        printMerge("arriving together", joiningLaneFirst, r);
+        // The table: one record where the two lanes meet (one body size), settled at load by the stated merge, the
+        // joining lane giving way; nothing left to the lower path id.
+        CHECK(r.answers.size() == 1u);
+        for (const MeetingAnswer& a : r.answers) {
+            CHECK(a.by == SettledBy::StatedMerge);
+            CHECK(a.who == (joiningLaneFirst ? GivesWay::A : GivesWay::Other));   // the joining lane's side of the record
+        }
+        for (const MyTurn turn : r.joiningTurn) CHECK(turn == MyTurn::GiveWay);
+        CHECK(r.counts.statedMerges == 1u);
+        CHECK(r.counts.byStatedMerge == 1u);
+        CHECK(r.counts.statedMergesNotAsked == 0u);
+        CHECK(r.counts.byLowerPathId == 0u);
+        CHECK(r.counts.settledAtLoad == 1u && r.counts.askWhileDriving == 0u);
+        // On the road: the through car (0) is first into the lane beyond, the joining car (10) after it.
+        CHECK(r.intoBeyond == std::vector<uint32_t>({0u, kJoiningCar}));
+        CHECK(r.throughMostBraking > kNotHeldBraking);
+        CHECK(r.throughLowestSpeed > kNotHeldSpeed);
+        CHECK(r.overlapping == 0u);
+        CHECK(r.loops == 0u && r.noReason == 0u);
+        CHECK(r.arrived == 2u);
+    }
+}
+
+TEST_CASE(give_way_merge_2_the_joining_car_gets_in_at_a_gap) {
+    // The joining car must not wait for ever while through traffic is light, and must not push into traffic that is not.
+    for (const bool joiningLaneFirst : {true, false}) {
+        // LIGHT TRAFFIC: two through cars 200 m apart, 15 s at the limit. The joining car arrives with the first, gives
+        // way to it, and goes in the gap before the second; neither through car is held.
+        const MergeRun light = runMerge(joiningLaneFirst, kBetweenWithMerge, {kThroughTogetherAt, kThroughTogetherAt - 200},
+                                        kJoiningTogetherAt);
+        CHECK(light.ok);
+        printMerge("two through cars 200 m apart", joiningLaneFirst, light);
+        CHECK(light.intoBeyond == std::vector<uint32_t>({0u, kJoiningCar, 1u}));
+        CHECK(light.throughMostBraking > kNotHeldBraking);
+        CHECK(light.throughLowestSpeed > kNotHeldSpeed);
+        CHECK(light.overlapping == 0u);
+        CHECK(light.loops == 0u && light.noReason == 0u);
+        CHECK(light.arrived == 3u);
+        // A PLATOON: six through cars 40 m apart, 3 s at the limit, the first arriving with the joining car. No gap
+        // among them is one to join in: the joining car waits for all six, holds none of them, and then goes.
+        const MergeRun platoon = runMerge(joiningLaneFirst, kBetweenWithMerge, {280, 240, 200, 160, 120, 80}, kJoiningTogetherAt);
+        CHECK(platoon.ok);
+        printMerge("six through cars 40 m apart", joiningLaneFirst, platoon);
+        CHECK(platoon.intoBeyond == std::vector<uint32_t>({0u, 1u, 2u, 3u, 4u, 5u, kJoiningCar}));
+        CHECK(platoon.throughMostBraking > kNotHeldBraking);
+        CHECK(platoon.throughLowestSpeed > kNotHeldSpeed);
+        CHECK(platoon.overlapping == 0u);
+        CHECK(platoon.loops == 0u && platoon.noReason == 0u);
+        CHECK(platoon.arrived == 7u);
+    }
+}
+
+TEST_CASE(give_way_merge_3_a_rule_set_that_does_not_ask_is_as_before) {
+    // The same road and cars under a rule set whose between_junctions list does not ask `stated_merge` (and under one with
+    // no list at all), and under one that asks it on a road whose two lanes carry no stated merge: the answer is the old
+    // one. Two plain lanes tie on sign and movement and have no line to arrive at, so the meeting is asked while driving
+    // and falls back on the lower path id giving way (the record's side A) -- right by luck where the joining lane has the
+    // lower id, and the wrong way round where the through lane has: there the joining car goes first and the through car
+    // brakes for it.
+    MeetingAnswer old;
+    old.who = GivesWay::Ask;
+    old.by = SettledBy::AcrossJunctions;
+    old.fallback = GivesWay::A;
+    old.fallbackBy = SettledBy::LowerPathId;
+    struct Case {
+        const char* name;
+        const char* between;
+        bool stated;
+    };
+    const Case cases[] = {{"the list without the question", kBetweenWithoutMerge, true},
+                          {"no list", "", true},
+                          {"the question asked where the roads state no merge", kBetweenWithMerge, false}};
+    for (const Case& c : cases)
+        for (const bool joiningLaneFirst : {true, false}) {
+            const MergeRun r = runMerge(joiningLaneFirst, c.between, {kThroughTogetherAt}, kJoiningTogetherAt, 120, c.stated);
+            CHECK(r.ok);
+            printMerge(c.name, joiningLaneFirst, r);
+            CHECK(r.answers.size() == 1u);
+            for (const MeetingAnswer& a : r.answers) CHECK(a == old);
+            for (const MyTurn turn : r.joiningTurn) CHECK(turn == MyTurn::Ask);
+            CHECK(r.counts.byStatedMerge == 0u);
+            CHECK(r.counts.statedMerges == (c.stated ? 1u : 0u));
+            CHECK(r.counts.statedMergesNotAsked == (c.stated ? 1u : 0u));
+            CHECK(r.counts.byLowerPathId == 1u);
+            CHECK(r.counts.askWhileDriving == 1u && r.counts.settledAtLoad == 0u);
+            // On the road: the car on the lane with the lower id gives way.
+            if (joiningLaneFirst) {
+                CHECK(r.intoBeyond == std::vector<uint32_t>({0u, kJoiningCar}));
+                CHECK(r.throughMostBraking > kNotHeldBraking);
+            } else {
+                CHECK(r.intoBeyond == std::vector<uint32_t>({kJoiningCar, 0u}));
+                CHECK(r.throughMostBraking < -1.0);   // the through car is the one held
+            }
+            CHECK(r.overlapping == 0u);
+            CHECK(r.arrived == 2u);
+        }
+}
+
+TEST_CASE(give_way_merge_4_a_stated_merge_filed_under_a_junction_is_read_or_reported) {
+    // No level files a stated merge's join under a junction today. Should one appear: a junction whose control lists
+    // `stated_merge` settles it by that, like any other question; one whose control does not settles it as any other
+    // join, exactly as if it were unmarked, and the loader notes it (never dropped unseen).
+    // The join: at a four-way's junction (1, 1), the far turn of the car heading north and the car going straight on
+    // the way that turn leaves both end in one lane. Each in turn is marked as the one that joined.
+    const Heading out = driving_test::farTurnFrom(kNorth, DrivesOn::Left);
+    const char* kAsksMerge = "{ settle = { 'stated_merge', 'arrived_first', 'kerb_side', 'movement' } }";
+    for (const bool markStraight : {true, false}) {
+        TestRoads roads = driving_test::gridRoads(3, 3);
+        const engine::PathId straight = roads.connector(1, 1, out, 0, out, 0);
+        const engine::PathId far = roads.connector(1, 1, kNorth, 0, out, 0);
+        CHECK(straight.valid() && far.valid());
+        engine::CrossingId join;
+        for (uint32_t c = 0; c < roads.graph.crossings.size(); ++c) {
+            const engine::CrossingPoint& x = roads.graph.crossings[c];
+            if (x.otherSide == engine::OtherSide::Path && x.meeting == engine::Meeting::Join &&
+                ((x.a == straight && x.otherPath() == far) || (x.a == far && x.otherPath() == straight)))
+                join = engine::CrossingId(c);
+        }
+        CHECK(join.valid());
+        if (!join.valid()) return;
+        const engine::PathId joined = markStraight ? straight : far;
+        const engine::PathId other = markStraight ? far : straight;
+        Sim unmarked(TestRoads(roads), kUncontrolled);
+        CHECK(unmarked.ok);
+        const MeetingAnswer* before = unmarked.d.rightOfWay().answer(join);
+        CHECK(before != nullptr);
+        roads.graph.crossings[join.index].merging = joined;
+        roads.graph.crossings[join.index].modelConnection = 0;
+        Sim s(std::move(roads), kUncontrolled);
+        CHECK(s.ok);
+        // NOT ASKED: the old answer, and one note naming the junction and the question.
+        {
+            const RightOfWay& row = s.d.rightOfWay();
+            const MeetingAnswer* a = row.answer(join);
+            CHECK(a != nullptr && before != nullptr);
+            if (a && before) CHECK(*a == *before);
+            CHECK(row.counts.statedMerges == 1u && row.counts.byStatedMerge == 0u && row.counts.statedMergesNotAsked == 1u);
+            uint32_t said = 0;
+            for (const std::string& note : row.notes)
+                said += note.find("by a merge") != std::string::npos && note.find("stated_merge") != std::string::npos &&
+                        note.find("junction 4:") == 0;   // junction (1, 1) of a 3 by 3 grid: row 1 * 3 + column 1
+            CHECK(said == 1u);
+            CHECK(unmarked.d.rightOfWay().notes.size() + 1 == row.notes.size());
+        }
+        // ASKED: the one marked gives way, by the stated merge, read from either side.
+        CHECK(s.giveRules(kAsksMerge));
+        {
+            const RightOfWay& row = s.d.rightOfWay();
+            const MeetingAnswer* a = row.answer(join);
+            CHECK(a != nullptr);
+            if (!a) return;
+            CHECK(a->by == SettledBy::StatedMerge);
+            engine::PathId seen;
+            CHECK(myTurn(s.t.graph, *a, join, joined, &seen) == MyTurn::GiveWay);
+            CHECK(seen == other);
+            CHECK(myTurn(s.t.graph, *a, join, other) == MyTurn::GoFirst);
+            CHECK(row.counts.statedMerges == 1u && row.counts.byStatedMerge == 1u && row.counts.statedMergesNotAsked == 0u);
+            for (const std::string& note : row.notes) CHECK(note.find("by a merge") == std::string::npos);
+        }
+    }
 }
 
 #endif  // RT_ENABLE_SCRIPTING
