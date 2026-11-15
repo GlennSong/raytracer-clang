@@ -141,7 +141,6 @@ struct RoadGraph {
     // Add a node, snapping to an existing one within `tol` (keeps the graph clean).
     int addNode(const Vec2& p, Real tol = 0.5);
     void addEdge(int a, int b, Real width = 8, RoadClass klass = RoadClass::Local);
-    Real edgeWidth(int edgeIndex) const { return edges[edgeIndex].width; }
 };
 
 // DANGLING ENDS become T junctions (device: "can we properly join those
@@ -171,25 +170,6 @@ struct DanglingJoin {
     Real pulledBack = 0;
 };
 std::vector<DanglingJoin> joinDanglingEnds(RoadGraph& g, Real sidewalk);
-
-// A curved road centreline (the arc a ring/roundabout follows). Curves are the
-// source of truth; a curve is SAMPLED into the planar graph as a fine polyline
-// with a bounded chord error, so the planar pipeline (planarize/blocks/parcels)
-// stays segment-based while the road reads as a true curve and lots line the arc.
-// Straight roads are just ordinary edges. (Future: cubic-spline artist roads.)
-struct RoadArc {
-    Vec2 center;
-    Real radius = 0;
-    Real a0 = 0, a1 = 0;        // swept from a0 to a1 (radians, signed)
-    Vec2 at(Real t) const;      // point on the arc, t in [0,1]
-    Real length() const { return std::abs(a1 - a0) * radius; }
-};
-// Sample `arc` from node n0 (at a0) to n1 (at a1) into a chain of edges with
-// intermediate nodes, keeping the chord error <= maxErr (so the polyline is
-// indistinguishable from the true curve). The endpoints stay n0/n1 so spokes
-// attach to them. `minSegs` is a floor for tiny arcs.
-void sampleArc(RoadGraph& g, int n0, int n1, const RoadArc& arc, Real width,
-               RoadClass klass, Real maxErr = 0.15, int minSegs = 1);
 
 // Extract the minimal interior faces (city blocks) of an already-planar graph via
 // a half-edge DCEL "next clockwise" traversal, discarding the unbounded outer

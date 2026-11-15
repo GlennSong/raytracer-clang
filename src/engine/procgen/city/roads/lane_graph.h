@@ -35,23 +35,14 @@
 
 namespace engine {
 
-namespace bundle {
-class BundleWriter;
-class Bundle;
-}  // namespace bundle
-
 struct PathTag {};
 struct SectionTag {};
 struct JunctionTag {};
 struct CrossingTag {};
-struct CrosswalkTag {};
-struct TrackTag {};
 using PathId = GraphIndex<PathTag>;
 using SectionId = GraphIndex<SectionTag>;
 using JunctionId = GraphIndex<JunctionTag>;
 using CrossingId = GraphIndex<CrossingTag>;
-using CrosswalkId = GraphIndex<CrosswalkTag>;
-using TrackId = GraphIndex<TrackTag>;
 
 // An index into one of the graph's NAME tables (vehicleTagNames, regulationKindNames, ...): which regulation kind, which
 // control, which road class. kNone where the table has nothing to say.
@@ -78,7 +69,6 @@ constexpr uint8_t kMeetingCount = 3;
 
 // What the second party of a crossing point is.
 enum class OtherSide : uint8_t { Path, Crosswalk, Track };
-constexpr uint8_t kOtherSideCount = 3;
 
 // A connector with no place to wait inside its junction.
 constexpr Real kNoWaitInside = -1;
@@ -195,8 +185,6 @@ struct CrossingPoint {
         const TagMask mine = path == a ? aTags : (otherSide == OtherSide::Path && path.index == other) ? otherTags : 0;
         return mine == kEveryVehicle || (mine & vehicleTags) != 0;
     }
-    CrosswalkId otherCrosswalk() const { return otherSide == OtherSide::Crosswalk ? CrosswalkId(other) : CrosswalkId(); }
-    TrackId otherTrack() const { return otherSide == OtherSide::Track ? TrackId(other) : TrackId(); }
 };
 
 // A PLACE WHERE PEOPLE WALK ACROSS the road: its area, and the link of the walkers' network it carries.
@@ -400,9 +388,6 @@ std::string dumpCrossing(const LaneGraph& g, CrossingId id);
 // says what and where in `err`; `g` is then empty.
 void putLaneGraph(bundle::BinWriter& w, const LaneGraph& g);
 bool getLaneGraph(bundle::BinReader& r, LaneGraph& g, std::string* err);
-// The same, as the named section of a bundle.
-bool writeLaneGraph(bundle::BundleWriter& out, const std::string& section, const LaneGraph& g);
-bool readLaneGraph(const bundle::Bundle& in, const std::string& section, LaneGraph& g, std::string* err);
 
 }  // namespace engine
 

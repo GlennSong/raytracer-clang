@@ -1,6 +1,6 @@
 # B2 — A drivable path for every turn at every junction
 
-**Read first:** design 5.1–5.3. `src/engine/procgen/city/roads/lanes/README.md`, `lane_expand.h`,
+**Read first:** design 5.1–5.3. `src/engine/procgen/city/roads/lanes/lane_expand.h`,
 `road_graph_spec.h` (`ConnectorSpec`). ADR-0397. The memory of the rule "roads: no guessing" is in design 5.1.
 
 ## The goal

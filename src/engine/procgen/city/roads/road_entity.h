@@ -13,8 +13,7 @@ namespace engine {
 
 // The road entity (ADR-0049, unified per docs/road-graph-unification-plan.md):
 // ONE topology (`RoadGraph` — the same struct every generator returns and the
-// mesher consumes), split from the two things that used to be welded onto it:
-// how it is DRAWN (`RoadLook`) and what the generator KNEW (`RoadPlan`).
+// mesher consumes), split from how it is DRAWN (`RoadLook`).
 //
 // The old `RoadNet` held topology as eight parallel arrays with fallback
 // semantics (a short `edgeWidths` meant "use the default width"), which cost 54
@@ -38,21 +37,10 @@ struct RoadLook {
     double sidewalk = 3.5;        // raised sidewalk width per verge (m)
                                   // (device: "sidewalks should be wider")
     double curb = 0.16;           // curb height (m)
-    double cornerRadius = 3.0;    // rounded kerb-return radius (m)
-    double lift = 0.08;           // raise above the ground (m) — just enough to
+    double lift = 0.08;          // raise above the ground (m) — just enough to
                                   // clear z-fighting; the road should hug the
                                   // ground (device feedback)
     bool   markings = true;
-    bool   crosswalks = true;
-    Vec3   color{0.09, 0.09, 0.10};
-};
-
-// ---- provenance: what the generator knew, for downstream passes ------------
-struct RoadPlan {
-    // Freeway CORRIDOR plans: anchor polylines the loader builds as real corridors
-    // (alignment, profile, interchanges), and the lanes twin's freeways for the lot
-    // pass's fallback band. Never street edges.
-    std::vector<std::vector<Vec2>> freewayPlans;
 };
 
 // ---- the editable road entity/component (replaces RoadNet) -----------------
@@ -75,7 +63,6 @@ struct RoadPlan {
 struct RoadEntity {
     RoadGraph graph;
     RoadLook  look;
-    RoadPlan  plan;
 };
 
 // The terrain sampler roads drape on. One load's state — never stored, never
@@ -115,11 +102,6 @@ RoadGraph navRoadGraph(const RoadEntity& road, const RoadGroundFn& heightAt);
 // The SPEC of edge `ei`: its entry in the graph's spec table when assigned, else a synthesis from the edge's
 // (always-resolved) width + the look's sidewalk/curb -- so every edge answers the band model.
 RoadSpec roadNetEdgeSpec(const RoadEntity& road, int ei);
-
-// The road as JSON (nodes, sparse per-edge widths, layers, tangents, node elevations, the look): the lanes
-// twin's debug dump into a bundle's GLB extras. (Roads are no longer authored as nodes in a level -- the
-// editor's road drawing and the level reader retired with ADR-0267 -- so nothing reads this back.)
-nlohmann::json roadNetToJson(const RoadEntity& road);
 
 }  // namespace engine
 

@@ -41,30 +41,6 @@ void RoadGraph::addEdge(int a, int b, Real width, RoadClass klass) {
     edges.push_back({a, b, width, klass});
 }
 
-Vec2 RoadArc::at(Real t) const {
-    Real a = a0 + (a1 - a0) * t;
-    return center + Vec2(std::cos(a), std::sin(a)) * radius;
-}
-
-void sampleArc(RoadGraph& g, int n0, int n1, const RoadArc& arc, Real width,
-               RoadClass klass, Real maxErr, int minSegs) {
-    Real sweep = std::abs(arc.a1 - arc.a0);
-    int segs = std::max(1, minSegs);
-    if (arc.radius > 1e-6 && maxErr > 0.0) {
-        // Chord error e = R(1 - cos(dTheta/2)); pick the step so e <= maxErr.
-        Real dThetaMax = 2.0 * std::acos(std::max(Real(0), Real(1) - maxErr / arc.radius));
-        if (dThetaMax > 1e-6)
-            segs = std::max(segs, static_cast<int>(std::ceil(sweep / dThetaMax)));
-    }
-    int prev = n0;
-    for (int i = 1; i < segs; ++i) {
-        int mid = g.addNode(arc.at(static_cast<Real>(i) / segs), 0.01);
-        g.addEdge(prev, mid, width, klass);
-        prev = mid;
-    }
-    g.addEdge(prev, n1, width, klass);
-}
-
 std::vector<Poly2> extractBlocks(const RoadGraph& g, Real minArea) {
     std::vector<Poly2> blocks;
     const int nNodes = static_cast<int>(g.nodes.size());

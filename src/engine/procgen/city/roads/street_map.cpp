@@ -177,7 +177,6 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
             L.stationFrom = run.st[i];
             L.stationTo = run.st[k];
             const std::size_t last = nodesAlong.size() - 1;
-            L.armOut = i == 0 ? armAtStart : i == last ? armAtEnd : -1;
             L.armIn = k == 0 ? armAtStart : k == last ? armAtEnd : -1;
             if (deckClass) {
                 Real ya = 0, yb = 0;

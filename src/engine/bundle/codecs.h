@@ -64,11 +64,6 @@ struct HeightGridBlob { double x0 = 0, y0 = 0, res = 1; int32_t nx = 0, ny = 0; 
 void putHeightGrid(BinWriter& w, const HeightGridBlob& g);
 bool getHeightGrid(BinReader& r, HeightGridBlob& g);
 
-void putRoadGraph(BinWriter& w, const RoadGraph& g);
-bool getRoadGraph(BinReader& r, RoadGraph& g);
-void putRoadEntity(BinWriter& w, const RoadEntity& e);   // graph + look + plan (hubs, freeway plans)
-bool getRoadEntity(BinReader& r, RoadEntity& e);
-
 void putRings(BinWriter& w, const std::vector<std::vector<Vec2>>& rings);
 bool getRings(BinReader& r, std::vector<std::vector<Vec2>>& rings);
 

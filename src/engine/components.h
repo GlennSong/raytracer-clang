@@ -910,9 +910,6 @@ struct LevelRoadModel {
     // furniture plan reads it, the city sim copies it and appends its walks. A look-up table: every link and node carries
     // its ids into the model; nothing in it is saved. Null on a level with no lane-built city.
     std::shared_ptr<NavGraph> streetMap;
-    // What stopped a city getting onto the street map: a road file lacking a fact the map needs (that city has no
-    // streets on the map: no traffic there).
-    std::vector<std::string> streetMapErrors;
     // The named street nearest `p` over every city (its name; empty when none is within `reach` metres): the model's
     // own question (road_model.h streetNameNear), for a label (a bus stop's street).
     std::string streetNameNear(const Vec2& p, Real reach = 40.0) const;

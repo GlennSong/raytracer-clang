@@ -36,7 +36,6 @@
 #include "engine/procgen/city/roads/lanes/city_producer.h"   // regions-lots: the level's city bundle and its products
 #include "engine/procgen/city/roads/lanes/lots_producer.h"   // regions-lots: the lot pass grown again in memory
 #include "engine/procgen/city/lot_cache.h"                   // regions-lots: the lots the bundle stores
-#include "engine/procgen/city/road_network.h"   // extractBlocks: the lot pass's face walk
 #include "engine/procgen/city/polygon.h"
 #include "engine/procgen/city/roads/lanes/geom2d.h"
 #include <set>

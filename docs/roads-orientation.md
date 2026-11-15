@@ -64,7 +64,6 @@ Under `src/engine/procgen/city/roads/`:
 | `lanes/city_producer.*`, `lots_producer.*` | The bundle producers: road meshes, ground, the drawn deck and pavement holes; then lots. `lots_producer.h` also makes the roads as the lot pass reads them (`levelLotRoads`, `lotRoadInputs`: the model's streets by id and the deck, ADR-0430). The lot twin (`road_twin.*`, `lotNav`, the sections roads/twin and roads/lotnav) is deleted. |
 | `lanes/block_audit.*` | The lot pass run headless and audited. |
 | `lanes/lanes_export.*` | glTF, plan SVG, stats JSON, lane graph plan pictures. |
-| `lanes/README.md` | Older background on the builder. It still mentions the lattice *(probably stale)*. |
 
 Tools: `tools/lanes_tool.cpp` (all subcommands; its top comment lists them, except `layout --lane-rules`, which it
 does not mention) and `city_plan` (the planner; `city_plan controls`).

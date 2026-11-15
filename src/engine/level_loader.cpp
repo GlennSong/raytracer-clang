@@ -742,10 +742,8 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
                     if (engine::appendStreetMap(*models->streetMap, *models->cities.back(), cityIndex, deck, &rep)) {
                         LOG_INFO << "[roads] street map, city " << cityIndex << ": " << engine::describeStreetMap(rep);
                     } else {
-                        for (const std::string& err : rep.errors) {
+                        for (const std::string& err : rep.errors)
                             LOG_ERROR << "[roads] street map, city " << cityIndex << " (" << e.graphPath << "): " << err;
-                            models->streetMapErrors.push_back(err);
-                        }
                     }
                     // its signals, by each node's junction (one rule: the stated control; a file stating none lights nothing)
                     bool controls = false;

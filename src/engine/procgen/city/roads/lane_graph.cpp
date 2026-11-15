@@ -1440,21 +1440,4 @@ bool getLaneGraph(bundle::BinReader& r, LaneGraph& g, std::string* err) {
     return true;
 }
 
-bool writeLaneGraph(bundle::BundleWriter& out, const std::string& section, const LaneGraph& g) {
-    bundle::BinWriter w;
-    putLaneGraph(w, g);
-    return out.add(section, w.bytes);
-}
-
-bool readLaneGraph(const bundle::Bundle& in, const std::string& section, LaneGraph& g, std::string* err) {
-    const bundle::Bundle::View v = in.section(section);
-    if (v.empty()) {
-        g = LaneGraph();
-        if (err) *err = fmt("lane graph: the bundle has no section %s", section.c_str());
-        return false;
-    }
-    bundle::BinReader r(v.data, v.size);
-    return getLaneGraph(r, g, err);
-}
-
 }  // namespace engine

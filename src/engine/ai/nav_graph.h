@@ -84,11 +84,11 @@ struct NavLink {
     // WHERE IT LIES ON THE ROAD MODEL (ADR-0425: a street map built from the model, roads/street_map.h; a graph built
     // from a hand-made road graph has none of them): the city (an index into LevelRoadModel::cities), the street it runs
     // along (-1: a link inside a junction, or a walk), the junction it lies inside (-1: none), the road (the road file's
-    // edge) and the stations along that road's spine at its `from` and `to` ends, and the arm of the junction it leaves
-    // by at `from` and arrives by at `to` (-1: no junction arm there).
+    // edge) and the stations along that road's spine at its `from` and `to` ends, and the arm of the junction it
+    // arrives by at `to` (-1: no junction arm there).
     int city = -1, street = -1, junction = -1, road = -1;
     Real stationFrom = 0, stationTo = 0;
-    int armOut = -1, armIn = -1;
+    int armIn = -1;
 };
 
 // Semantic signal predicate (roads-v2.2 #17/S5): a node is signal-CONTROLLED

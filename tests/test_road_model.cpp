@@ -426,24 +426,7 @@ TEST_CASE(road_model_3b_a_ramps_merge_is_its_stated_anchor) {
 
 TEST_CASE(road_model_4_the_questions) {
     const RoadModel& m = smallBuilt().model;
-    // nearest to a point beside the arterial halfway between its junctions: street a1, a lane of it, station ~100
-    const NearestOnRoad n = nearestOnRoad(m, Vec2(100, -3));
-    CHECK(n.street.valid() && m.streets[n.street.index].id == "a1");
-    CHECK(n.lane.valid() && m.lanes[n.lane.index].edge == m.streets[n.street.index].edge);
-    CHECK(std::fabs(n.station - 100.0) < 1.0);
-    CHECK(n.distance < 3.0);
-    // nothing near a point far from every road
-    CHECK(!nearestOnRoad(m, Vec2(1000, 1000)).lane.valid());
-    // the crossing's streets in order round it: east (a1), north (l1), west (a0), south (l0)
     const ModelJunctionId cross = m.streets[streetNamed(m, "a1").index].junctions[0];
-    const std::vector<ModelStreetId> round = streetsAt(m, cross);
-    CHECK(round.size() == 4u);
-    if (round.size() == 4u) {
-        CHECK(m.streets[round[0].index].id == "a1");
-        CHECK(m.streets[round[1].index].id == "l1");
-        CHECK(m.streets[round[2].index].id == "a0");
-        CHECK(m.streets[round[3].index].id == "l0");
-    }
     // a street's lanes: forward then backward, by slot from the centre line
     const std::vector<ModelLaneId> lanes = lanesOf(m, streetNamed(m, "a1"));
     CHECK(lanes.size() == 6u);
@@ -456,11 +439,10 @@ TEST_CASE(road_model_4_the_questions) {
     const LeadsTo to = leadsTo(m, laneNamed(m, "a1.f0"));
     CHECK(to.junction.valid() && m.junctions[to.junction.index].at.x > 150);
     CHECK(to.connections.empty());
-    // what is attached (ADR-0420): each named street carries its name; the crossing has nothing yet
+    // what is attached (ADR-0420): each named street carries its name
     const std::vector<uint32_t> onO0 = attachedToStreet(m, streetNamed(m, "o0"));
     CHECK(onO0.size() == 1u);
     if (!onO0.empty()) CHECK(m.attachments[onO0.front()].text == streetName(m, streetNamed(m, "o0")) && !m.attachments[onO0.front()].text.empty());
-    CHECK(attachedToJunction(m, cross).empty());
     // a name sign attached to an arm of the crossing: its street is the arm's; the street now lists it too
     RoadModel signed_ = m;
     ModelAttachment sign;
@@ -471,7 +453,6 @@ TEST_CASE(road_model_4_the_questions) {
     std::string why;
     CHECK(attach(signed_, sign, &why));
     CHECK(signed_.attachments.back().street == signed_.junctions[cross.index].arms[0].street);
-    CHECK(attachedToJunction(signed_, cross).size() == 1u);
     CHECK(attachedToStreet(signed_, signed_.junctions[cross.index].arms[0].street).size() == 2u);   // its name, and the sign
     // refused: a kind the data does not list; an arm kind with no arm; a street kind with no street
     ModelAttachment bad = sign;
@@ -827,121 +808,6 @@ TEST_CASE(road_model_9_the_signs_follow_from_the_facts) {
     }
     const engine::ControlSignPlan none = engine::placeControlSigns(plannedRoadModel(RoadLabGraph::fromJson(bare)), rules, nullptr, {});
     for (const engine::PlacedSign& s : none.signs) CHECK(s.kind == "do_not_enter_sign" || s.kind == "one_way_sign");
-}
-
-// ---- 10. the regions enclosed by streets (ADR-0423) ---------------------------------------------------------------------
-
-namespace {
-// A GRID OF STREETS for the regions: rows at y = 0, 100, 200, 300 and columns at x = 0 and 100 (local streets), and at
-// x = 200 a DIVIDED ROAD: two one-way carriageways 12 m apart (x = 194 running +y, x = 206 running -y, stated as one road),
-// each row cut where it meets them. The grid's outer corners are bends (a row carries on as a column). A local street
-// leaves the junction at (100, 100) and ends inside the block beyond it, at (160, 160): a dead end. A column at x = 300
-// closes the east side. Its layout and names written, as the one-off tool writes them.
-nlohmann::json regionGrid() {
-    nlohmann::json g;
-    g["name"] = "region_grid";
-    g["classes"]["oneway"] = {{"w", 3.5}, {"fwd", 1}, {"back", 0}, {"sidewalk", 2.0}, {"g_max", 0.09}, {"window", 40}, {"thick", 0.5}};
-    auto road = [](const std::string& id, const std::string& cls, const std::vector<Vec2>& pts) {
-        nlohmann::json p = nlohmann::json::array();
-        for (const Vec2& q : pts) p.push_back({q.x, q.y});
-        return nlohmann::json{{"id", id}, {"class", cls}, {"path", {{"type", "polyline"}, {"points", p}}}};
-    };
-    nlohmann::json edges = nlohmann::json::array();
-    const double xs[] = {0, 100, 194, 206, 300};
-    for (int j = 0; j < 4; ++j)   // the rows, one edge between each pair of crossings
-        for (int i = 0; i + 1 < 5; ++i)
-            edges.push_back(road("r" + std::to_string(j) + "_" + std::to_string(i), "local", {Vec2(xs[i], 100.0 * j), Vec2(xs[i + 1], 100.0 * j)}));
-    for (int j = 0; j < 3; ++j) {
-        const double y0 = 100.0 * j, y1 = y0 + 100;
-        edges.push_back(road("c0_" + std::to_string(j), "local", {Vec2(0, y0), Vec2(0, y1)}));
-        edges.push_back(road("c1_" + std::to_string(j), "local", {Vec2(100, y0), Vec2(100, y1)}));
-        edges.push_back(road("c4_" + std::to_string(j), "local", {Vec2(300, y0), Vec2(300, y1)}));
-        edges.push_back(road("dv_a" + std::to_string(j), "oneway", {Vec2(194, y0), Vec2(194, y1)}));   // +y
-        edges.push_back(road("dv_b" + std::to_string(j), "oneway", {Vec2(206, y1), Vec2(206, y0)}));   // -y
-    }
-    edges.push_back(road("dead", "local", {Vec2(100, 100), Vec2(160, 160)}));
-    g["edges"] = edges;
-    nlohmann::json divided = nlohmann::json::array();
-    for (int j = 0; j < 3; ++j) divided.push_back({"dv_a" + std::to_string(j), "dv_b" + std::to_string(j)});
-    g["divided"] = divided;
-    const RoadLabGraph graph = RoadLabGraph::fromJson(g);
-    RoadLayout layout = deriveLayout(graph, LayoutSource::Inferred);
-    nameLayout(layout, graph);
-    writeLayout(g, layout);
-    return g;
-}
-}  // namespace
-
-TEST_CASE(road_model_10_the_regions_enclosed_by_streets) {
-    RoadLabGraph g = RoadLabGraph::fromJson(regionGrid());
-    (void)expand(g);
-    const RoadModel m = plannedRoadModel(g);
-    const EnclosedRegions er = enclosedRegions(m);
-    std::printf("%s", reportEnclosedRegions(m, er).c_str());
-    // THE LAND: three columns of blocks (0-100, 100-194, 206-300) in three rows; between the carriageways, three medians, no
-    // region; one outer face; the walk closed everything as stated
-    CHECK(er.regions.size() == 9);
-    CHECK(er.medians.size() == 3);
-    CHECK(er.outer.size() == 1 && er.pieces == 1);
-    CHECK(er.problems.empty() && er.crossings.empty() && er.unplanar.empty() && er.nested.empty());
-    CHECK(er.passedOver.empty() && er.walked == m.streets.size());
-    // EACH BOUNDED IN ORDER, counter-clockwise: every step starts where the one before it ended (at the junction it named,
-    // or on the street it carried on into, or back along itself where it turned round), and the region lies on the
-    // side each bound says
-    for (const EnclosedRegion& R : er.regions) {
-        CHECK(R.area > 0 && R.bounds.size() >= 3);
-        for (std::size_t i = 0; i < R.bounds.size(); ++i) {
-            const RegionBound& a = R.bounds[i];
-            const RegionBound& b = R.bounds[(i + 1) % R.bounds.size()];
-            const ModelStreet& A = m.streets[a.street.index];
-            const ModelStreet& B = m.streets[b.street.index];
-            const int aEnd = a.spineForward ? 1 : 0, bStart = b.spineForward ? 0 : 1;
-            if (a.end == RegionStepEnd::Junction) {
-                CHECK(A.junctions[static_cast<std::size_t>(aEnd)] == a.junction);
-                CHECK(B.junctions[static_cast<std::size_t>(bStart)] == a.junction);
-            } else if (a.end == RegionStepEnd::CarriesOn) {
-                CHECK(A.carriesOn[static_cast<std::size_t>(aEnd)] == b.street);
-            } else {
-                CHECK(b.street == a.street && b.spineForward != a.spineForward);
-            }
-            // the side: a point a metre off the middle of the street, on the stated side, lies inside the outline
-            const Vec2 p0 = m.linePoints[A.line.first], p1 = m.linePoints[A.line.end() - 1];
-            const Vec2 dir = normalize(p1 - p0), ccw(-dir.y, dir.x);
-            const Vec2 off = (p0 + p1) * 0.5 + (a.side == RegionSide::Ccw ? ccw : ccw * -1.0);
-            CHECK(pointInPolygon(R.outline, off));
-        }
-        CHECK(R.corners.size() >= 2);
-    }
-    // THE OUTER CORNER at (0, 0) is a bend, no junction: the block there is bounded by the row carrying on into the column
-    {
-        const int r = regionAt(er, Vec2(50, 50));
-        CHECK(r >= 0);
-        bool carries = false;
-        if (r >= 0)
-            for (const RegionBound& b : er.regions[static_cast<std::size_t>(r)].bounds) carries = carries || b.end == RegionStepEnd::CarriesOn;
-        CHECK(carries);
-    }
-    // A DEAD END INSIDE A BLOCK splits nothing: the block it stands in is one region, walked down one side of it and back
-    // up the other
-    {
-        const int r = regionAt(er, Vec2(170, 120));
-        CHECK(r >= 0 && r == regionAt(er, Vec2(120, 180)));
-        uint32_t sides = 0;
-        if (r >= 0)
-            for (const RegionBound& b : er.regions[static_cast<std::size_t>(r)].bounds) sides += m.streets[b.street.index].road == "dead" ? 1u : 0u;
-        CHECK(sides == 2);
-        CHECK(er.deadEnds.size() == 1);
-    }
-    // THE MEDIAN between the carriageways is no region
-    CHECK(regionAt(er, Vec2(200, 50)) < 0);
-    bool inMedian = false;
-    for (const EnclosedRegion& f : er.medians) inMedian = inMedian || pointInPolygon(f.outline, Vec2(200, 150));
-    CHECK(inMedian);
-    // A LOOK-UP: asked twice, the same answer; the model itself unchanged by the asking
-    const RoadModel before = m;
-    const EnclosedRegions again = enclosedRegions(m);
-    CHECK(again.regions.size() == er.regions.size() && m == before);
-    for (std::size_t i = 0; i < er.regions.size() && i < again.regions.size(); ++i) CHECK(again.regions[i].outline.size() == er.regions[i].outline.size());
 }
 
 // ---- 11. the lane level: a table built from the road model (step 8, ADR-0426) ---------------------------------------------

@@ -40,9 +40,6 @@ double netMinTurnRadius(const RoadEntity& road) {
 }  // namespace roadnet
 using namespace roadnet;
 
-
-using json = nlohmann::json;
-
 namespace {
 
 bool isZero(const Vec2& v) { return v.x == 0.0 && v.y == 0.0; }
@@ -272,20 +269,6 @@ RoadGraph navRoadGraph(const RoadEntity& road, const RoadGroundFn& heightAt) {
     return constrainedGraph(road, heightAt);
 }
 
-// The FULL sampled+constrained graph, baked corridor edges INCLUDED — the
-// graph the unified mesher builds from (roads-v2.1 R1) and the surface the
-// bake-fidelity gates measure against. (Identical to navRoadGraph since 2e;
-// both names kept for their distinct call-site intents.)
-
-// One UnionSpine per CHAIN (a maximal degree-2 run between junctions/dead-ends), carrying that
-// road's WIDTH — so the weld gets smooth per-road ribbons (no per-edge spikes) AND the right width
-// (arterials stay wider than streets, which a width-less chain trace loses). A pure cycle with no
-// junction (a bare roundabout ring) comes back marked closed, so weldSolid makes it an annulus.
-namespace roadnet {
-
-}  // namespace roadnet
-
-
 RoadSpec roadNetEdgeSpec(const RoadEntity& road, int ei) {
     const RoadGraph& g = road.graph;
     if (ei >= 0 && ei < static_cast<int>(g.edges.size())) {
@@ -297,56 +280,5 @@ RoadSpec roadNetEdgeSpec(const RoadEntity& road, int ei) {
     return roadSpecFromLegacy(road.look.defaultWidth, /*oneWay=*/false,
                               road.look.sidewalk, road.look.curb);
 }
-
-json roadNetToJson(const RoadEntity& road) {
-    const RoadGraph& g = road.graph;
-    json j;
-    json nodes = json::array();
-    for (const RoadNode& p : g.nodes) nodes.push_back({{"x", p.pos.x}, {"z", p.pos.y}});
-    j["nodes"] = std::move(nodes);
-    json edges = json::array();
-    for (const RoadEdge& e : g.edges) {
-        // Reconstruct the sparse form: only a width that differs from the look's
-        // default is an override worth writing ([a, b, width]).
-        const double w = e.width;
-        if (w != road.look.defaultWidth) edges.push_back(json::array({e.a, e.b, w}));
-        else                             edges.push_back(json::array({e.a, e.b}));
-    }
-    j["edges"] = std::move(edges);
-    bool anyLayer = false;
-    for (const RoadEdge& e : g.edges) if (e.layer != 0) { anyLayer = true; break; }
-    if (anyLayer) {
-        json layers = json::array();
-        for (const RoadEdge& e : g.edges) layers.push_back(e.layer);
-        j["edge_layers"] = std::move(layers);
-    }
-    bool anyTan = false;
-    for (const RoadNode& n : g.nodes) if (!isZero(n.tangent)) { anyTan = true; break; }
-    if (anyTan) {
-        json tans = json::array();
-        for (const RoadNode& n : g.nodes)
-            tans.push_back(json::array({n.tangent.x, n.tangent.y}));
-        j["tangents"] = std::move(tans);
-    }
-    bool anyElev = false;
-    for (const RoadNode& n : g.nodes) if (n.elevAbsolute) { anyElev = true; break; }
-    if (anyElev) {
-        json elev = json::array();
-        for (const RoadNode& n : g.nodes)
-            if (n.elevAbsolute) elev.push_back(static_cast<double>(n.elev));
-            else                elev.push_back(nullptr);           // at-grade node
-        j["node_elev"] = std::move(elev);
-    }
-    j["width"] = road.look.defaultWidth;
-    j["sidewalk"] = road.look.sidewalk;
-    j["curb"] = road.look.curb;
-    j["corner_radius"] = road.look.cornerRadius;
-    j["lift"] = road.look.lift;
-    j["markings"] = road.look.markings;
-    j["crosswalks"] = road.look.crosswalks;
-    j["color"] = json::array({road.look.color.x, road.look.color.y, road.look.color.z});
-    return j;
-}
-
 
 }  // namespace engine

@@ -247,19 +247,6 @@ bool attach(RoadModel& m, ModelAttachment a, const AttachmentKinds& kinds, std::
 bool attach(RoadModel& m, ModelAttachment a, std::string* err = nullptr);   // the shipped kinds
 
 // ---- the questions (design section 6) ---------------------------------------------------------------------------------
-// The street, lane and station nearest a plan point (any lane on any street; within `within` metres, else none), and the
-// lane's height there.
-struct NearestOnRoad {
-    ModelStreetId street;
-    ModelLaneId lane;
-    Real station = 0;                // along the street's road's spine
-    Real distance = 0;               // plan metres from the point to the lane's centre line
-    Real height = 0;
-};
-NearestOnRoad nearestOnRoad(const RoadModel& m, const Vec2& p, Real within = 50);
-// The streets at a junction, in order round it (by the arms' headings, counter-clockwise from +x; an arm with no street
-// or heading last, as listed).
-std::vector<ModelStreetId> streetsAt(const RoadModel& m, ModelJunctionId j);
 // The lanes of a street, forward then backward, each by slot from the centre line.
 std::vector<ModelLaneId> lanesOf(const RoadModel& m, ModelStreetId s);
 // What a lane leads to, from stated facts only: the junction its traffic reaches at its end (none: it ends otherwise),
@@ -271,10 +258,9 @@ struct LeadsTo {
     std::vector<uint32_t> turns;         // indices into RoadModel::turns
 };
 LeadsTo leadsTo(const RoadModel& m, ModelLaneId lane);
-// WHAT IS ATTACHED to a street (on it, or on a junction arm that is it) or to a junction (on it, or on one of its arms):
-// indices into RoadModel::attachments, in the order attached.
+// WHAT IS ATTACHED to a street (on it, or on a junction arm that is it): indices into RoadModel::attachments, in the
+// order attached.
 std::vector<uint32_t> attachedToStreet(const RoadModel& m, ModelStreetId s);
-std::vector<uint32_t> attachedToJunction(const RoadModel& m, ModelJunctionId j);
 // A STREET'S NAME: the text of its attachment whose kind names the street (empty: it carries none).
 std::string streetName(const RoadModel& m, ModelStreetId s, const AttachmentKinds& kinds = attachmentKinds());
 // THE NAMED STREETS AT A JUNCTION, arm by arm in order round it (by heading): each arm whose street has a name, with
@@ -293,88 +279,6 @@ std::vector<NamedArm> namedArmsAt(const RoadModel& m, ModelJunctionId j);
 std::string streetNameNear(const RoadModel& m, const Vec2& p, Real reach = 40, Real* distance = nullptr);
 // WHERE AN ARM MEETS ITS JUNCTION: its street's centre line at that end (false: the arm has no street with a line).
 bool armMouth(const RoadModel& m, const ModelJunction& J, std::size_t arm, Vec2& out);
-// THE STREET NEAREST a plan point by the centre lines, named or not, within `reach` (invalid: none); `distance` out.
-ModelStreetId nearestStreet(const RoadModel& m, const Vec2& p, Real reach, Real* distance = nullptr);
-
-// ---- the regions enclosed by streets (design section 6; ADR-0423) --------------------------------------------------------
-// THE LAND BETWEEN THE STREETS, as a QUESTION the model answers, not something it holds. A REGION is a piece of land the
-// stated streets close round: the streets that bound it in order round it, which side of each faces it, and the junctions
-// at its corners. Blocks, their use, lots, buildings and doors are the city-building side's (the architect's): it asks
-// this question and works from the answer. The answer is a LOOK-UP (design section 4): worked out from the model on
-// request, holding no fact of its own (every street, junction and point in it is the model's), never saved (not in the
-// model's bytes, not in any bundle), never edited. A region has no id and no use: its place in one answer's list is
-// only that.
-//
-// HOW IT IS WORKED OUT: a walk round the planar network the stated streets and junctions make. Each street is walked
-// both ways; arriving at a junction the walk leaves by the next arm clockwise from the one it came in by, which keeps
-// the land on the counter-clockwise side of travel (plan coordinates, +x toward +y), so every enclosed region is walked
-// counter-clockwise and each connected piece of network has one OUTER face, walked clockwise, that is no region.
-//   - Arms are ordered by their stated heading. Where the plan spread a junction over several points (its arms meet at
-//     different mouths), by where each arm's street leaves the circle round the junction that holds every mouth: the
-//     arms' cyclic order as the land sees it (two arms can leave a spread junction with the same heading).
-//   - Where a street carries on as another with no junction (`carriesOn`), the walk carries on along it.
-//   - A dead end (no junction, nothing carried on into) is walked round: the walk comes back along the street's other
-//     side, so a dead end splits nothing.
-//   - Streets of the classes in `RegionWalk::passOver` (freeways and ramps) are left out of the walk: they cross the
-//     city on decks or beside it without meeting its streets at junctions, so they bound no land the walk can close.
-//     A street that carries on into one of them is walked round there as a dead end.
-//   - The face between the two carriageways of one road (a MEDIAN: every street bounding it one-way and all of one
-//     stated name, the name a divided road's two carriageways share) is no region.
-//   - Two walked streets whose centre lines cross with no junction there (a bridge of a walked class) make the network
-//     non-planar; the walk still closes, and each such crossing is listed with its place.
-// Where what is stated does not agree with itself (a street's end names a junction that lists no arm for it, an arm a
-// street whose end names another junction, a carry-on not named back), the walk follows the junction's arms and turns
-// round where nothing leads on, and each case is listed in `problems`, with its place.
-
-enum class RegionSide : uint8_t {
-    Ccw,   // the region lies on the side reached by turning the street's from-to direction a quarter turn counter-clockwise
-    Cw     // ...a quarter turn clockwise
-};
-// How one step of the walk round a region ends.
-enum class RegionStepEnd : uint8_t { Junction, CarriesOn, TurnsRound };
-struct RegionBound {
-    ModelStreetId street;
-    bool spineForward = true;        // walked from the street's `from` to its `to` (false: `to` to `from`)
-    RegionSide side = RegionSide::Ccw;   // which side of the street, by its from-to direction, faces the region
-    RegionStepEnd end = RegionStepEnd::Junction;
-    ModelJunctionId junction;        // the junction the step ends at (RegionStepEnd::Junction), else none
-};
-struct EnclosedRegion {
-    std::vector<RegionBound> bounds;        // in order round it, counter-clockwise
-    std::vector<ModelJunctionId> corners;   // the junctions at its corners, in order round it (each visit once)
-    std::vector<Vec2> outline;              // the bounding streets' centre lines joined in that order (counter-clockwise)
-    Real area = 0;                          // signed: > 0 for a region, < 0 for an outer face
-};
-struct RegionWalkNote {
-    ModelStreetId street, other;
-    ModelJunctionId junction;
-    Vec2 at;
-    std::string why;
-};
-struct RegionWalk {
-    // the classes the walk passes over (the stated class of a street, section.klass)
-    std::vector<RoadClass> passOver{RoadClass::Freeway, RoadClass::Ramp};
-};
-struct EnclosedRegions {
-    std::vector<EnclosedRegion> regions;   // the land the streets enclose
-    std::vector<EnclosedRegion> medians;   // faces between the two carriageways of one road: not regions
-    std::vector<EnclosedRegion> outer;     // each connected piece's outer face: not regions
-    std::vector<ModelStreetId> passedOver; // streets of a passed-over class
-    uint32_t walked = 0, pieces = 0;       // streets walked; connected pieces of the network walked
-    std::vector<RegionWalkNote> problems;  // where what is stated does not agree with itself (the walk turned round there)
-    std::vector<RegionWalkNote> turnedRound;   // where a street carries on into a passed-over street (walked round)
-    // every dead end the walk went round (no junction, nothing carried on into), and the passed-over street passing
-    // nearest it within kDeadEndBeside (`other`): land the pavement closes there with a freeway or ramp is no region
-    std::vector<RegionWalkNote> deadEnds;
-    std::vector<RegionWalkNote> crossings; // walked streets crossing with no junction (the regions there overlap)
-    std::vector<RegionWalkNote> unplanar;  // faces walked clockwise besides a piece's outer face (where, which street)
-    std::vector<RegionWalkNote> nested;    // pieces of network standing inside another piece's region (a hole in it)
-};
-EnclosedRegions enclosedRegions(const RoadModel& m, const RegionWalk& rules = RegionWalk());
-// The region whose outline holds `p` (the smallest, where outlines overlap), as an index into `er.regions`; -1: none.
-int regionAt(const EnclosedRegions& er, const Vec2& p);
-// In words (every region with its bounds, every problem).
-std::string reportEnclosedRegions(const RoadModel& m, const EnclosedRegions& er);
 
 // Lookups by name.
 ModelStreetId streetNamed(const RoadModel& m, const std::string& id);

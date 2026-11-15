@@ -266,22 +266,6 @@ TEST_CASE(lane_graph_saves_and_loads_field_for_field) {
     CHECK(err.empty());
     CHECK(back == g);
     CHECK(dumpText(back) == dumpText(g));
-
-    // And through a real bundle section.
-    bundle::BundleWriter w;
-    w.openMemory();
-    CHECK(writeLaneGraph(w, "city/e0/roads/lane_graph", g));
-    nlohmann::json manifest = nlohmann::json::object();
-    CHECK(w.finish(manifest, &err));
-    std::unique_ptr<bundle::Bundle> b = bundle::Bundle::fromMemory(w.memory(), &err);
-    CHECK(b != nullptr);
-    if (b) {
-        LaneGraph viaBundle;
-        CHECK(readLaneGraph(*b, "city/e0/roads/lane_graph", viaBundle, &err));
-        CHECK(viaBundle == g);
-        CHECK(!readLaneGraph(*b, "city/e0/roads/missing", viaBundle, &err));
-        CHECK(err.find("no section") != std::string::npos);
-    }
 }
 
 TEST_CASE(lane_graph_text_dump_reads_by_hand) {
