@@ -45,8 +45,8 @@
 namespace {
 
 // THE FILES THAT HOLD BARE TOLERANCE LITERALS TODAY (2026-11-14), paths under src/, each with how many it held then
-// (a comment, not checked). 22 files, 102 literals, all in the road code; the driving code holds none. Take a file off
-// when its last one is named.
+// (a comment, not checked). 22 files, 102 literals then, all in the road code; the driving code holds none. Take a file
+// off when its last one is named. (21 files since the lot twin, road_twin.cpp with its 6, was deleted: ADR-0430.)
 const std::vector<std::string> kHoldsBareTolerances = {
     "engine/procgen/city/roads/lanes/block_audit.cpp",          // 9
     "engine/procgen/city/roads/lanes/city_producer.cpp",        // 1
@@ -63,7 +63,6 @@ const std::vector<std::string> kHoldsBareTolerances = {
     "engine/procgen/city/roads/lanes/road_design.cpp",          // 3
     "engine/procgen/city/roads/lanes/road_graph_spec.cpp",      // 1
     "engine/procgen/city/roads/lanes/road_layout.cpp",          // 4
-    "engine/procgen/city/roads/lanes/road_twin.cpp",            // 6
     "engine/procgen/city/roads/lanes/terrain_recipe.cpp",       // 2
     "engine/procgen/city/roads/lanes/vertical_profile.cpp",     // 7
     "engine/procgen/city/roads/road_entity.cpp",                // 2

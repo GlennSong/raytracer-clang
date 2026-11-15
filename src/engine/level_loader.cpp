@@ -67,7 +67,6 @@
 #include "procgen/city/roads/lanes/lanes.h"     // the lanes road builder (ADR-0083/0089)
 #include "procgen/city/roads/lanes/lane_expand.h"   // expand: the city's real lanes for the traffic sim (#218)
 #include "procgen/city/roads/lanes/deck_mesh.h"
-#include "procgen/city/roads/lanes/road_twin.h"   // the derived road graph: nav, furniture, map
 #include "procgen/city/roads/lanes/block_audit.h"  // sceneBlocks: city blocks straight from the pavement
 #include "procgen/city/roads/lanes/city_producer.h" // the city as a bundle producer (ADR-0084)
 #include "procgen/city/roads/road_model.h"          // the road model's planned layer at load (ADR-0420)
@@ -585,9 +584,10 @@ struct LanesPublished {
     // middle of the roads (Glenn, 2026-09-20: "There are trees in the roadways"). The deck IS
     // the footprint, so consumers that run before the RoadDeck components exist read it here.
     RoadDeckField deck;
-    // The city's STREETS. growLotBuildings aims every building's door at the nearest point
-    // on this graph; without it a door keeps whichever way its plan happened to run.
-    engine::RoadGraph nav;
+    // The city's ROADS as the lot pass reads them (the road model's streets and the drawn deck: lots_producer.h
+    // levelLotRoads). Filled only when the lots are grown in place; a load that reads its lots from the bundle
+    // never asks.
+    engine::LotRoadInputs lotRoads;
     // The sidewalk the builder actually PAVED. The lot pass reads LotParams::sidewalkWidth
     // to reach its paved plates out to the band and to walk every door to the pavement; it
     // was only ever filled from a lattice net's look, so on a lane-built city it stayed 0
@@ -3795,11 +3795,11 @@ static GrownLots growCityLots(
     gin.enterableAt = enterableAt;
 #ifdef RT_ROADS_LANES
     if (!g_lanes.blocks.empty()) {
-        // The lanes builder paved the whole city: its pavement's holes are the blocks, its twin is
-        // the streets, its kerb band is the pavement a door walks out to.
+        // The lanes builder paved the whole city: its pavement's holes are the blocks, the road model's
+        // streets are what a door faces, its kerb band is the pavement a door walks out to.
         gin.blocks = &g_lanes.blocks;
         gin.water = &g_lanes.water;
-        gin.streets = &g_lanes.nav;
+        gin.roads = &g_lanes.lotRoads;
         gin.pavedSidewalk = g_lanes.pavedSidewalk;
         engine::NetLotResult r; bool fromBundle = false;
         const auto tl = std::chrono::steady_clock::now();
@@ -3845,6 +3845,8 @@ static GrownLots growCityLots(
         }
         if (!fromBundle) {
             r = engine::NetLotResult(); g.cellParts.clear(); g.bundle.reset();
+            // the roads the grow reads: the one definition, the lots producer's (gin.roads points at it)
+            g_lanes.lotRoads = engine::roads::lanes::levelLotRoads(g_lanes.inputs, g_lanes.deck);
             r = engine::growCity(gin);
             LOG_INFO << "[lanelab] grown in place in " << since(tl) << " s";
         }
@@ -4621,7 +4623,6 @@ bool LevelLoader::load(const std::string& path,
                                                                    engine::roads::lanes::kMinBlockWidth, &g_lanes.water);
             g_lanes.deck = cp.deck;
             g_lanes.deck.buildIndex();      // queried by the scatter, below, and by the poke report
-            g_lanes.nav = cp.lotNav;        // the streets a door faces, at the lot clearance widths (the sim routes on cp.nav)
             g_lanes.pavedSidewalk = cp.bands.sidewalkWidth;   // the band a door walks to
             LOG_INFO << "[lanelab] " << g_lanes.blocks.size() << " city blocks published for the terrain pre-pass";
             sharedEroded = engine::roads::lanes::laneErodedBase(root, grid, sharedEroded, &g_lanes.deck);

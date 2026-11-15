@@ -61,8 +61,7 @@ Under `src/engine/procgen/city/roads/`:
 | `lanes/lane_graph_crossings.h/.cpp` | Crossing points: where two paths' bodies could touch (a kept measurement). |
 | `lanes/swept_body.*` | The ground a long body covers on a bend. |
 | `lanes/road_model_cache.h/.cpp` | cache/roadmodel: the built road model (lane level inside) saved under one key; `obtainLevelRoadModel` reads it, or builds the roads, calls `assembleRoadModel` and saves. The roads' one cache outside the bake (ADR-0429). |
-| `lanes/road_twin.h/.cpp` | The lot twin (`lotNav`, bundle section roads/lotnav). Only the lot pass reads it. **Slated for deletion in step 5.** |
-| `lanes/city_producer.*`, `lots_producer.*` | The bundle producers: road meshes, ground, twin and pavement holes; then lots. |
+| `lanes/city_producer.*`, `lots_producer.*` | The bundle producers: road meshes, ground, the drawn deck and pavement holes; then lots. `lots_producer.h` also makes the roads as the lot pass reads them (`levelLotRoads`, `lotRoadInputs`: the model's streets by id and the deck, ADR-0430). The lot twin (`road_twin.*`, `lotNav`, the sections roads/twin and roads/lotnav) is deleted. |
 | `lanes/block_audit.*` | The lot pass run headless and audited. |
 | `lanes/lanes_export.*` | glTF, plan SVG, stats JSON, lane graph plan pictures. |
 | `lanes/README.md` | Older background on the builder. It still mentions the lattice *(probably stale)*. |
@@ -102,7 +101,11 @@ Still working roads out for itself:
 - **Corners**: the builder draws them without a stated radius. The lane level only tests the fit and reports corner
   faults.
 - **The layout's junction grouping** (`findJunctions`, the `rules.storage` rule). It wrote the files' junctions once.
-- **The lot pass**: reads the lot twin, votes on frontages, places doors by its own rule. Step 5.
+- **The lot pass** (partly moved, ADR-0430): it reads the road model's streets and the drawn deck through one look-up
+  (`LotRoads` in `city_lots.cpp`, fed by `LotRoadInputs`), and no copy of the road graph exists. Still worked out by
+  measuring: which street a lot fronts and a door faces is the NEAREST street a building may front, not the street
+  bounding its block as `enclosedRegions` states it; blocks are the gaps in the built pavement; alleys are the lot
+  pass's own segments, not streets of the model.
 - **The planner's scoring**: still builds its own nav graph (`buildNavGraph` in `plan/city_plan.cpp`).
 - **Bus-stop next-stop names**: `streetNameNear` finds the nearest named street within 40 m. The model answers it,
   but by position.

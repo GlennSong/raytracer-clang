@@ -148,6 +148,18 @@ struct RoadDeckField {
     // Any drawn deck within half-width + margin of (x, z) -- tracks and footways included, which heightAt, heightOn
     // and depthInside leave out (they answer for things on a street): what a tree or a rock stays off.
     bool coversAny(double x, double z, double margin) const;
+    // ONE DRAWN ROAD AT A POINT: a junction pad the point lies on (`pad`, nothing else filled), or a road whose
+    // centre line passes within its half width + the margin asked for: how far the point is from that centre line,
+    // the point of the centre line nearest it, the road's half width there and its class.
+    struct RoadAt {
+        bool pad = false;
+        double distance = 0.0, halfWidth = 0.0;
+        Vec2 nearest;
+        RoadClass klass = RoadClass::Local;
+    };
+    // Every drawn road at (x, z), within `margin` of its carriageway (roads only: no track, no footway). `margin` up
+    // to the index's cell (24 m). What keeps a building, a pad or a tree off the asphalt asks this.
+    void roadsAt(double x, double z, double margin, const std::function<void(const RoadAt&)>& fn) const;
     // Spatial hash of pad triangles and spine segments; the builder
     // calls it after filling both (call again after editing by hand).
     void buildIndex();
@@ -155,10 +167,10 @@ struct RoadDeckField {
 
 private:
     // Every drawn surface over (x, z): pad triangles (pad = true) and spines within half-width + margin
-    // (their layer, centreline distance d, half-width hw and road class). heightAt and heightNear choose among these.
-    // (`anyUse`: tracks and footways too; otherwise roads only)
+    // (their layer, centreline distance d, half-width hw, road class and the centreline point nearest (x, z), `on`).
+    // heightAt and heightNear choose among these. (`anyUse`: tracks and footways too; otherwise roads only)
     void surfacesAt(double x, double z, double margin,
-                    const std::function<void(double y, bool pad, int layer, double d, double hw, RoadClass klass)>& fn,
+                    const std::function<void(double y, bool pad, int layer, double d, double hw, RoadClass klass, const Vec2& on)>& fn,
                     bool anyUse = false) const;
     struct Seg { int spine; int i; };        // spine segment (i, i+1)
     std::unordered_map<long long, std::vector<Seg>> cells_;

@@ -26,8 +26,14 @@ Every one of these is a **cache**: deleting it is always safe; it is rebuilt on 
 
 A bundle is built by **producers**, in order, each writing named sections:
 
-1. `city` (lanes levels): the road network — decks, junctions, the nav graph. Tag `kLanesBuildTag` in
-   `procgen/city/roads/lanes/city_producer.cpp`.
+1. `city` (lanes levels): the built roads. Tag `kLanesBuildTag` in `procgen/city/roads/lanes/city_producer.cpp`.
+   Its sections under `city/e<n>/`: `meta`, `ground` (the conformed ground grid), `blocks/holes` (the gaps in the
+   pavement: the city's blocks), `roads/deck` (the drawn road surface, one centre line per road of the file),
+   `roads/bands` (the kerb line), `rail/tracks`, `cells` and `cell/<cx>_<cz>/mesh/<material>`, `report`.
+   It holds NO copy of the road graph (ADR-0430): agents route on the street map made from the road model at load, and
+   the lot pass reads the road model's streets from the road file plus `roads/deck`. A bundle baked before
+   2026-11-14 may still hold `roads/nav`, `roads/twin` and `roads/lotnav`; nothing reads them, and a `city` that is
+   copied forward from such a bundle carries them along until the roads are next built.
 2. `lots`: lots, buildings, parks, the campus, every part mesh, split per 160 m render cell
    (`lots/cell/<cx>_<cz>/parts/<n>`). Tag `kLotsBuildTag` (`lots_producer.cpp`). (The lattice's `citylots`
    and its tag retired with the lattice.)
@@ -40,7 +46,9 @@ and, for `lots`, **the `city` key**. So the stages chain: new roads always mean 
 The road file's LAYOUT (its junctions' streets, headings and through pairs, and its `streets` list: ADR-0417) is mostly
 not in the `city` key: the key hashes the file with those parts taken out (`keyedRoadFileText`). What the paint reads is
 in it (ADR-0428): each stated junction's arms (road, station, way) and its stretches inside. Writing streets, controls,
-signs, names or the arms' order re-bakes nothing; moving an arm re-bakes the city.
+signs, names or the arms' order re-bakes nothing; moving an arm re-bakes the city. The `lots` key also hashes what
+the lot pass reads of the layout (ADR-0430, `lotRoadsKeyText`): each street's and each inside stretch's id, road and
+stations. Adding, removing or re-cutting a street re-grows the lots; renaming one does not.
 
 On load (`obtainForLevel`): if a bundle with every producer's current key exists, it is opened (a hit,
 well under a second). Otherwise the level is baked: a producer whose key matches an older bundle is

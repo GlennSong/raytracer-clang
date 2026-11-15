@@ -91,7 +91,6 @@ TEST_CASE(lanes_graph_loads_and_expands_the_valley_scene) {
 }
 
 #include "engine/procgen/city/roads/lanes/lanes.h"
-#include "engine/procgen/city/roads/lanes/road_twin.h"
 #include "engine/procgen/city/roads/lanes/block_audit.h"
 #include "engine/procgen/city/roads/lanes/city_producer.h"
 #include "engine/procgen/city/roads/lanes/lots_producer.h"
@@ -222,31 +221,6 @@ TEST_CASE(lanes_ring_city_builds_and_holds_its_invariants) {
     CHECK(r.pavement.decks.size() == 1);
 }
 
-// The RoadEntity twin is what the engine's lot pass walks (ADR-0083 integration seam). Ring city's
-// grid is 16 blocks: every one must come out of extractBlocks as a face AND survive the lot pass's
-// first step (inset by the sidewalk). A node every 8 m along a straight street used to leave 44-vertex
-// faces whose miter inset collapsed to nothing — the grid built no buildings at all.
-TEST_CASE(lanes_road_twin_closes_every_ring_city_block_and_each_survives_the_sidewalk_inset) {
-    const Result& r = scene("ring_city");
-    engine::RoadEntity twin = roadTwin(r);
-    std::vector<int> deg(twin.graph.nodes.size(), 0);
-    for (const engine::RoadEdge& e : twin.graph.edges) { ++deg[static_cast<size_t>(e.a)]; ++deg[static_cast<size_t>(e.b)]; }
-    int tees = 0, crosses = 0; for (int d : deg) { tees += d == 3; crosses += d >= 4; }
-    CHECK(tees >= 8);        // the four inner grid lines end on the outer ones (ramp feet on the spokes add more)
-    CHECK(crosses >= 13);    // 4 inner crossings + 8 arterial crossings + the arterials' own (at-grade ramp runs may add one)
-    engine::RoadGraph rg;    // the twin's street subgraph: freeways and ramps left out
-    for (const engine::RoadNode& n : twin.graph.nodes) rg.nodes.push_back({n.pos});
-    for (const engine::RoadEdge& e : twin.graph.edges)
-        if (!e.baked && e.klass != engine::RoadClass::Freeway && e.klass != engine::RoadClass::Ramp) rg.edges.push_back(engine::RoadEdge{e.a, e.b, e.width, engine::RoadClass::Local, 0});
-    std::vector<engine::Poly2> faces = engine::extractBlocks(rg);
-    CHECK(faces.size() == 16);
-    size_t ok = 0, maxVerts = 0;
-    for (const engine::Poly2& f : faces) { maxVerts = std::max(maxVerts, f.size()); engine::Poly2 foot = engine::inset(f, 3.5); if (foot.size() >= 3 && engine::area(foot) > 1000.0) ++ok; }
-    CHECK(ok == faces.size());
-    CHECK(maxVerts <= 12);   // corners and junctions only, never a node every 8 m
-    CHECK(twin.plan.freewayPlans.size() == 8);   // the ring's carriageway arcs: the lot pass's right-of-way band
-}
-
 // THE REGRESSION THAT WOULD HAVE CAUGHT "half on the sidewalk" (parking round), on the road the city DRIVES:
 // the street map a lane-built city's sim runs on (ADR-0425: built from the road model at load, each street's kerb
 // parking band from its stated cross-section, streetSection). Every bay the sim mints lives inside the
@@ -295,66 +269,7 @@ TEST_CASE(lanes_parking_bays_live_inside_the_road_s_parking_band) {
     CHECK(totalBays >= 2000u);   // river_town's street map: 2114 (ADR-0425): a city parked along, not a handful of bays
 }
 
-// The same seam on CURVED streets: curve_blocks is a bezier arterial crossed by three straight
-// locals and closed by two more, so four faces have a curved side whose twin nodes come from
-// Douglas-Peucker. Every face must survive the metro's 5 m sidewalk inset — the failure that put
-// rim-synthesised lots across metro streets was a face dying in that inset on an edge a few metres
-// long (a crossing node beside a corner, a stub under the node tolerance, two junctions almost
-// coincident).
-TEST_CASE(lanes_road_twin_faces_with_curved_sides_survive_the_metro_sidewalk_inset) {
-    const Result& r = scene("curve_blocks");
-    engine::RoadEntity twin = roadTwin(r);
-    engine::RoadGraph rg;
-    for (const engine::RoadNode& n : twin.graph.nodes) rg.nodes.push_back({n.pos});
-    for (const engine::RoadEdge& e : twin.graph.edges)
-        if (!e.baked && e.klass != engine::RoadClass::Freeway && e.klass != engine::RoadClass::Ramp) rg.edges.push_back(engine::RoadEdge{e.a, e.b, e.width, engine::RoadClass::Local, 0});
-    std::vector<engine::Poly2> faces = engine::extractBlocks(rg);
-    CHECK(faces.size() == 4);
-    size_t ok = 0; double shortest = 1e300;
-    for (const engine::Poly2& f : faces) {
-        for (size_t i = 0; i < f.size(); ++i) shortest = std::min(shortest, (f[(i + 1) % f.size()] - f[i]).length());
-        engine::Poly2 foot = engine::inset(f, 5.0); if (foot.size() >= 3 && engine::area(foot) > 500.0) ++ok;
-    }
-    CHECK(ok == faces.size());
-    CHECK(shortest >= 8.0);   // no face edge shorter than the cleanup's floor
-}
-
-// What the block/lot pass reads. On the clean scenes no block
-// foot — the face inset by the sidewalk and pushed clear of the sampled ribbons, as the pass does it —
-// may overlap built pavement. This is the in-code form of "are there broken blocks".
-static double brokenBlockArea(const Result& r, double margin) {
-    engine::RoadEntity twin = roadTwin(r);   // the twin the lot pass reads today
-    engine::RoadGraph rg;
-    for (const engine::RoadNode& n : twin.graph.nodes) rg.nodes.push_back({n.pos});
-    for (const engine::RoadEdge& e : twin.graph.edges)
-        if (!e.baked && e.klass != engine::RoadClass::Freeway && e.klass != engine::RoadClass::Ramp) rg.edges.push_back(engine::RoadEdge{e.a, e.b, e.width, engine::RoadClass::Local, 0});
-    double total = 0;
-    for (const engine::Poly2& f : engine::extractBlocks(rg)) {
-        engine::Poly2 foot = engine::inset(f, margin); if (foot.size() < 3) continue;
-        engine::Poly2 dense;
-        for (size_t i = 0; i < foot.size(); ++i) { const auto& a = foot[i]; const auto& b = foot[(i + 1) % foot.size()]; dense.push_back(a); const int div = static_cast<int>((b - a).length() / 8.0); for (int k = 1; k <= div; ++k) dense.push_back(a + (b - a) * (static_cast<double>(k) / (div + 1))); }
-        for (auto& p : dense) for (int guard = 0; guard < 4; ++guard) {
-            double worstNeed = 0; engine::Vec2 away;
-            for (const engine::RoadEdge& e : twin.graph.edges) {
-                const auto& a = twin.graph.nodes[static_cast<size_t>(e.a)].pos; const auto& b = twin.graph.nodes[static_cast<size_t>(e.b)].pos;
-                engine::Vec2 ab = b - a; double l2 = ab.lengthSquared(); double t = l2 > 1e-12 ? std::max(0.0, std::min(1.0, dot(p - a, ab) / l2)) : 0.0;
-                engine::Vec2 q = a + ab * t; double d = (p - q).length(); double need = e.width * 0.5 + margin + 0.6 - d;
-                if (need > worstNeed) { worstNeed = need; away = d > 1e-6 ? (p - q) * (1.0 / d) : engine::Vec2(0, 1); }
-            }
-            if (worstNeed <= 0.01) break; p = p + away * worstNeed;
-        }
-        if (std::fabs(engine::area(dense)) < 135.0) continue;
-        Ring ring(dense.begin(), dense.end()); total += setArea(intersectSets(fromRing(ring), r.pavement.surface));
-    }
-    return total;
-}
-TEST_CASE(lanes_twin_leaves_no_block_foot_on_built_pavement_in_the_clean_scenes) {
-    CHECK(brokenBlockArea(scene("ring_city"), 5.0) < 1.0);
-    CHECK(brokenBlockArea(scene("curve_blocks"), 5.0) < 1.0);
-    CHECK(brokenBlockArea(scene("hill_junction"), 5.0) < 1.0);
-}
-
-// The engine's OWN block/lot pass on the twin (headless), audited: on the clean scenes no block may carry
+// The engine's OWN block/lot pass on the pavement's holes (headless), audited: on the clean scenes no block may carry
 // a thin protrusion (an 8 m opening removes < 20 m²) or sit on built pavement (> 1 m²). This is the test
 // Glenn asked for: if blocks look like spikes and snakes in-engine, this must fail.
 TEST_CASE(lanes_the_city_block_pass_yields_well_formed_blocks_on_the_clean_scenes) {
@@ -377,22 +292,25 @@ TEST_CASE(lanes_the_city_block_pass_yields_well_formed_blocks_on_the_clean_scene
 TEST_CASE(lanes_planned_city_lots_keep_parks_off_the_pavement_and_front_streets_not_the_freeway) {
     const Result& r = scene("planned/metro_v2_test_lanelab");
     BlockAudit a = auditBlocks(r, {{"sidewalk", 4.0}, {"buildLots", true}, {"seed", 5}});
-    const engine::RoadEntity twin = roadTwin(r);
-    engine::RoadGraph streets, freeway;
-    for (const engine::RoadEdge& e : twin.graph.edges) {
-        engine::RoadGraph& g = (e.klass == engine::RoadClass::Freeway || e.klass == engine::RoadClass::Ramp) ? freeway : streets;
-        const int b = static_cast<int>(g.nodes.size());
-        g.nodes.push_back(twin.graph.nodes[static_cast<size_t>(e.a)]); g.nodes.push_back(twin.graph.nodes[static_cast<size_t>(e.b)]);
-        g.edges.push_back(engine::RoadEdge{b, b + 1, e.width, e.klass, 0});
+    // the build's roads by class: the freeway carriageways and ramps, and every street a building may front
+    // (tracks and footways are neither)
+    std::vector<std::vector<Vec2>> streets, freeway;
+    for (const EdgeSpec& e : r.graph.edges) {
+        if (e.xy.size() < 2) continue;
+        const RoadClassSpec& spec = r.graph.cls(e);
+        if (spec.track || spec.footway) continue;
+        const engine::RoadClass k = classOf(e);
+        (k == engine::RoadClass::Freeway || k == engine::RoadClass::Ramp ? freeway : streets).push_back(e.xy);
     }
-    CHECK(!freeway.edges.empty());   // the case is about a freeway: the planned city must carry one
-    auto nearest = [](const engine::RoadGraph& g, const Vec2& p) {
+    CHECK(!freeway.empty());   // the case is about a freeway: the planned city must carry one
+    auto nearest = [](const std::vector<std::vector<Vec2>>& lines, const Vec2& p) {
         double best = 1e30;
-        for (const engine::RoadEdge& e : g.edges) {
-            const Vec2 A = g.nodes[static_cast<size_t>(e.a)].pos, B = g.nodes[static_cast<size_t>(e.b)].pos, ab = B - A;
-            const double l2 = ab.lengthSquared(); const double t = l2 > 1e-9 ? std::max(0.0, std::min(1.0, dot(p - A, ab) / l2)) : 0.0;
-            best = std::min(best, (p - (A + ab * t)).length());
-        }
+        for (const std::vector<Vec2>& line : lines)
+            for (size_t i = 0; i + 1 < line.size(); ++i) {
+                const Vec2 A = line[i], B = line[i + 1], ab = B - A;
+                const double l2 = ab.lengthSquared(); const double t = l2 > 1e-9 ? std::max(0.0, std::min(1.0, dot(p - A, ab) / l2)) : 0.0;
+                best = std::min(best, (p - (A + ab * t)).length());
+            }
         return best;
     };
     int parks = 0, parksOnPavement = 0, lots = 0, orphans = 0;
@@ -448,14 +366,12 @@ TEST_CASE(lanes_city_products_round_trip_through_a_bundle) {   // to the byte, b
     using namespace engine::bundle;
     const Result& r = scene("ring_city");
     CityProducts p = cityProductsFromResult(r, 250.0);
-    CHECK(p.hasTerrain == r.hasTerrain); CHECK(!p.cells.empty()); CHECK(!p.holes.empty()); CHECK(p.twin.graph.nodes.size() > 10);
+    CHECK(p.hasTerrain == r.hasTerrain); CHECK(!p.cells.empty()); CHECK(!p.holes.empty());
     size_t tris = 0; for (const CityCellMesh& c : p.cells) tris += c.mesh.triangleCount(); CHECK(tris > 100000);
     BundleWriter w; w.openMemory(); writeCityProducts(w, 0, p); nlohmann::json manifest = nlohmann::json::object(); std::string err; CHECK(w.finish(manifest, &err));
     std::unique_ptr<Bundle> b = Bundle::fromMemory(w.memory(), &err); CHECK(b != nullptr); if (!b) return;
     CityProducts q; CHECK(readCityProducts(*b, 0, q, &err)); if (!err.empty()) std::printf("    %s\n", err.c_str());
     CHECK(q.hasTerrain == p.hasTerrain && q.cell == p.cell && q.ground.z == p.ground.z && q.ground.nx == p.ground.nx);
-    CHECK(q.twin.graph.nodes.size() == p.twin.graph.nodes.size() && q.twin.graph.edges.size() == p.twin.graph.edges.size());
-    for (size_t i = 0; i < p.twin.graph.nodes.size() && i < q.twin.graph.nodes.size(); ++i) CHECK(p.twin.graph.nodes[i].pos.x == q.twin.graph.nodes[i].pos.x && p.twin.graph.nodes[i].elev == q.twin.graph.nodes[i].elev);
     CHECK(q.holes.size() == p.holes.size()); for (size_t i = 0; i < p.holes.size() && i < q.holes.size(); ++i) CHECK(sameRing(p.holes[i], q.holes[i]));
     CHECK(q.cells.size() == p.cells.size());
     std::map<std::tuple<std::string, int, int>, const CityCellMesh*> byKey; for (const CityCellMesh& c : q.cells) byKey[{c.mesh.name, c.cx, c.cz}] = &c;
@@ -613,7 +529,7 @@ TEST_CASE(lanes_lots_bake_reads_the_city_products_back_and_is_deterministic) {
     LevelInputs in; std::string err; CHECK(loadLevelInputs("assets/lanelab/levels/ring.json", in, &err));
     // The producer's grow, twice, from the cached ring scene's products: byte-identical lots.
     const CityProducts p = cityProductsFromResult(scene("ring_city"), cityRenderCell(in.level));
-    LotsCityInputs city; city.hasTerrain = p.hasTerrain; city.ground = p.ground; city.holes = p.holes; city.nav = p.lotNav; city.pavedSidewalk = p.bands.sidewalkWidth;
+    LotsCityInputs city; city.hasTerrain = p.hasTerrain; city.ground = p.ground; city.holes = p.holes; city.pavedSidewalk = p.bands.sidewalkWidth;
     // the decks too, as the producer reads them back: they set the earthwork and the 6 m freeway clearance (60c72b30).
     // Without them this grow kept the 8 lots by the ring's ramps that the bake drops: 189 here vs 181 read back.
     city.deck = p.deck;
@@ -658,7 +574,7 @@ TEST_CASE(lanes_every_lot_mesh_passes_the_mesh_audit) {
     struct Restore { std::filesystem::path p; ~Restore() { std::error_code ec; std::filesystem::current_path(p, ec); } } restore{before};
     LevelInputs in; std::string err; CHECK(loadLevelInputs("assets/lanelab/levels/ring.json", in, &err));
     const CityProducts p = cityProductsFromResult(scene("ring_city"), cityRenderCell(in.level));
-    LotsCityInputs city; city.hasTerrain = p.hasTerrain; city.ground = p.ground; city.holes = p.holes; city.nav = p.lotNav; city.pavedSidewalk = p.bands.sidewalkWidth;
+    LotsCityInputs city; city.hasTerrain = p.hasTerrain; city.ground = p.ground; city.holes = p.holes; city.pavedSidewalk = p.bands.sidewalkWidth;
     city.deck = p.deck;
     const NetLotResult g = growLotsForLevel(in, city, nullptr);
     MeshAudit total;

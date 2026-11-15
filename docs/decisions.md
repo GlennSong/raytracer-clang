@@ -20805,3 +20805,19 @@ turn table, the vehicle sizes, the builder version (`lanes/road_model_cache.h`).
 `cache/lanegraph`, `LevelLaneGraph`, `buildLaneGraph`, the report's copy of the graph, the lane tags. The loader still
 publishes the planned layer; the host that reads the fleet swaps the built model into `LevelRoadModel` (the key needs it).
 
+
+## ADR-0430 — The lot pass reads the road model's streets and the drawn deck; the lot twin is deleted
+**Status:** Provisional · **Date:** 2026-11-14
+
+What it does: the code that lays out lots, buildings and doors asks every question about roads through one look-up
+(`LotRoads`, city_lots.cpp), made from `LotRoadInputs`: the road model's streets and stretches inside junctions by id
+(centre line, carriageway half width, sidewalk, class; `lotRoadInputs` in lanes/lots_producer.h) and the drawn deck
+(`RoadDeckField::roadsAt`). Facing and frontage come from the streets; keeping off the asphalt and "under a freeway" from
+the deck. Gone: `road_twin.*`, `CityProducts::twin` and `lotNav`, the bundle sections roads/twin and roads/lotnav (not
+written, not read; an old bundle still loads), `RoadBuilder::lotStreets`, `lanes_tool twin`. The lots key hashes each
+street's id, road and stations; the lots tag is bumped; the lanes tag is not (no road is rebuilt).
+river_town (645 lots -> 648, 130 blocks -> 133): no door turned to another street and no building stands on a carriageway;
+about 105 lots changed, nearly all in the blocks beside the freeway, because the deck draws a freeway's 2.5 m shoulder and
+the twin drew its lanes alone, and because the twin's own rules (streets padded 1.5 m, low ramp runs called local streets,
+dead ends joined, centre lines thinned) are not re-created. Not done: frontage by the street bounding the block
+(`enclosedRegions`), alleys as streets of the model, a street id on the lot record.

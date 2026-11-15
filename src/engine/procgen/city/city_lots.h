@@ -3,6 +3,8 @@
 
 #include "architect.h"      // ArchetypeBook (the Lua-authored selection layer)
 #include "polygon.h"        // Poly2, Vec2
+#include "road_network.h"   // RoadClass (a road's class, as the lot pass reads it)
+#include "road_mesh.h"      // RoadDeckField (the drawn deck the lot pass keeps off)
 #include "shape_grammar.h"  // BuildingParams (the style-book hook's target)
 #include "site_plan.h"      // OpenSpace (the lot's ground around the building)
 #include "../furniture_kit.h"   // Piece (an outdoor piece)
@@ -495,9 +497,35 @@ void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
 //
 // `roads` + `roadClearance` (device: "buildings overlapping sidewalks and poking
 // out onto the street"): when given, every building box is additionally kept at
-// least `edge width/2 + roadClearance` from every road centreline — pass the
-// sidewalk width (+ margin) so towers on wide arterials stay behind the curb.
-struct RoadGraph;   // road_network.h (forward-declared to keep this header light)
+// least `roadClearance` from every drawn road's carriageway.
+//
+// THE ROADS AS THE LOT PASS READS THEM (LotRoadInputs). Two things, and nothing else about the roads:
+//   - the road model's streets, each by its id: its centre line, how wide its carriageway and its sidewalk are and
+//     its class. A door faces the nearest one a building may front; a lot's paving reaches out to its sidewalk.
+//   - the drawn deck (RoadDeckField): the asphalt as built. What keeps buildings, pads and trees off the road, and
+//     what says a lot lies under a freeway, asks it.
+// Both are copied numbers and a built product: this is a look-up made from the road model on request (never saved,
+// holding no fact of its own). A host makes it with roads::lanes::lotRoadInputs (lots_producer.h).
+struct LotRoad {
+    std::string id;            // the road model's street id; for a stretch of road inside a junction, the junction's id
+    std::vector<Vec2> line;    // its centre line
+    Real halfWidth = 0;        // from the centre line to the carriageway's edge (travel lanes and shoulder)
+    Real sidewalk = 0;         // the sidewalk's width beyond that edge (0: none)
+    RoadClass klass = RoadClass::Local;
+    // Carried over the ground on a bridge here: no one's front door (Glenn, 2026-09-30: "assuming the city road
+    // is on the ground in front of the house"). The road model does not state this of a street yet, so a level's
+    // roads all say false (lotRoadInputs); a hand-made scene may say it.
+    bool overGround = false;
+};
+struct LotRoadInputs {
+    std::vector<LotRoad> roads;
+    std::shared_ptr<const RoadDeckField> deck;   // the drawn deck, its index built (null: no keeping off)
+};
+// For a test or a hand-made scene with no road build: the roads as given, and a deck drawn from the same lines at the
+// same half widths (flat, at height 0).
+LotRoadInputs lotRoadsFromLines(std::vector<LotRoad> roads);
+// One straight road from a to b, for the same.
+LotRoad lotRoadSegment(const Vec2& a, const Vec2& b, Real halfWidth, RoadClass klass = RoadClass::Local, Real sidewalk = 0);
 // A building's graded pad: its plan dilated by `apron` (the foundation ring and entrance steps sit just
 // outside the plan) as a flat TerrainFlatten at groundY with the given feather. One derivation for the
 // loader and every audit — a pad that is built one way and checked another is not checked.
@@ -507,7 +535,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           const LotParams& params,
                                           LotPlanDebug* debug = nullptr,
                                           std::vector<RenderMesh>* outParts = nullptr,
-                                          const RoadGraph* roads = nullptr,
+                                          const LotRoadInputs* roads = nullptr,
                                           Real roadClearance = 0.0,
                                           std::vector<RenderMesh>* outFlatParts = nullptr,
                                           std::vector<TerrainFlatten>* outGrade = nullptr);

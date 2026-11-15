@@ -32,7 +32,6 @@
 #include "engine/procgen/city/roads/road_model.h"   // model: the one road model (ADR-0417)
 #include "engine/procgen/city/roads/street_map.h"   // streetmap: the graph agents route on, from the model (ADR-0425)
 #include "engine/ai/pathfind.h"                     // streetmap --route
-#include "engine/procgen/city/roads/lanes/road_twin.h"
 #include "engine/procgen/city/roads/lanes/block_audit.h"
 #include "engine/procgen/city/roads/lanes/city_producer.h"   // regions-lots: the level's city bundle and its products
 #include "engine/procgen/city/roads/lanes/lots_producer.h"   // regions-lots: the lot pass grown again in memory
@@ -515,14 +514,7 @@ int main(int argc, char** argv) {
         if (!readCityProducts(*b, ents.back().ordinal, p, &err)) { std::fprintf(stderr, "lanes_tool: %s\n", err.c_str()); return 1; }
         NetLotResult stored;
         if (!lotcache::readLotResult(*b, kLotsSectionPrefix, stored, &err, false)) { std::fprintf(stderr, "lanes_tool: stored lots: %s\n", err.c_str()); return 1; }
-        LotsCityInputs city;   // the lots producer's inputs, from the same sections it reads
-        city.hasTerrain = p.hasTerrain;
-        city.ground = p.ground;
-        city.holes = p.holes;
-        city.nav = p.lotNav;
-        city.pavedSidewalk = p.bands.sidewalkWidth;
-        city.deck = p.deck;
-        city.rails = p.rails;
+        const LotsCityInputs city = lotsCityInputs(p);   // the lots producer's inputs, from the same sections it reads
         const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
         const NetLotResult grown = growLotsForLevel(in, city);
         std::printf("grew %zu lots in memory in %.1f s (the bundle stores %zu)\n", grown.lots.size(),
@@ -844,7 +836,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    if (argc < 3 || (std::strcmp(argv[1], "build") != 0 && std::strcmp(argv[1], "twin") != 0 && std::strcmp(argv[1], "blocks") != 0)) {
+    if (argc < 3 || (std::strcmp(argv[1], "build") != 0 && std::strcmp(argv[1], "blocks") != 0)) {
         std::fprintf(stderr, "usage: lanes_tool build <graph.json> [--out <dir>]\n"
                              "       lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width[:length] ...] [--junction J ...]   (the lane graph: dump, problems, reach, plan SVG; junction close-ups)\n"
                              "       lanes_tool design <graph.json> <out.json> [--plan-crossings]   (the graph with every road's planned profile; built again, taken as given)\n"
@@ -862,7 +854,7 @@ int main(int argc, char** argv) {
     bool holes = false; for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--holes") == 0) holes = true;
     bool walls = false; for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--walls") == 0) walls = true;
     if (std::strcmp(argv[1], "blocks") == 0) {
-        // blocks <graph.json> [--citysim level.json] [--out dir]: the engine's block/lot pass on the twin, audited and drawn
+        // blocks <graph.json> [--citysim level.json] [--out dir]: the engine's block/lot pass on the pavement's holes, audited and drawn
         using namespace engine::roads::lanes;
         std::string out = ".", cs; for (int i = 3; i + 1 < argc; ++i) { if (std::strcmp(argv[i], "--out") == 0) out = argv[i + 1]; if (std::strcmp(argv[i], "--citysim") == 0) cs = argv[i + 1]; }
         nlohmann::json citysim = nlohmann::json::object();
@@ -897,143 +889,6 @@ int main(int argc, char** argv) {
             }
         }
         return (a.broken || !a.padConflicts.empty()) ? 2 : 0;
-    }
-    if (std::strcmp(argv[1], "twin") == 0) {
-        // twin <graph.json>: the RoadEntity twin's degree census and the block faces the lot pass would walk
-        using namespace engine::roads::lanes;
-        std::unique_ptr<Result> r = build(RoadLabGraph::load(argv[2]));
-        bool forLots = false; for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--lot-twin") == 0) forLots = true;
-        engine::RoadEntity twin = roadTwin(*r, 60.0, forLots);   // default: what the block/lot pass sees today; --lot-twin: the parked variant
-        std::vector<int> deg(twin.graph.nodes.size(), 0);
-        for (const engine::RoadEdge& e : twin.graph.edges) { ++deg[static_cast<size_t>(e.a)]; ++deg[static_cast<size_t>(e.b)]; }
-        int d1 = 0, d3 = 0, d4 = 0; for (int d : deg) { d1 += d == 1; d3 += d == 3; d4 += d >= 4; }
-        std::printf("twin: %zu nodes, %zu edges; degree-1 %d, T %d, X %d\n", twin.graph.nodes.size(), twin.graph.edges.size(), d1, d3, d4);
-        for (int i = 3; i + 3 < argc; ++i) if (std::strcmp(argv[i], "--nodes") == 0) {   // --nodes x y r: the twin's nodes near a point
-            const engine::Vec2 c(std::atof(argv[i + 1]), std::atof(argv[i + 2])); const double rr = std::atof(argv[i + 3]);
-            for (size_t n = 0; n < twin.graph.nodes.size(); ++n) { const auto& p = twin.graph.nodes[n].pos; if ((p - c).length() > rr) continue;
-                std::printf("  node %zu at (%.2f, %.2f) degree %d:", n, p.x, p.y, deg[n]);
-                for (const engine::RoadEdge& e : twin.graph.edges) if (e.a == static_cast<int>(n) || e.b == static_cast<int>(n)) { const auto& o = twin.graph.nodes[static_cast<size_t>(e.a == static_cast<int>(n) ? e.b : e.a)].pos; std::printf(" ->(%.1f,%.1f) c%d w%.1f%s", o.x, o.y, static_cast<int>(e.klass), e.width, e.baked ? " baked" : ""); }
-                std::printf("\n"); }
-        }
-        engine::RoadGraph rg;   // the twin's street subgraph: freeways and ramps left out
-        for (const engine::RoadNode& n : twin.graph.nodes) rg.nodes.push_back({n.pos});
-        for (const engine::RoadEdge& e : twin.graph.edges) {
-            if (e.baked || e.klass == engine::RoadClass::Freeway || e.klass == engine::RoadClass::Ramp) continue;
-            rg.edges.push_back(engine::RoadEdge{e.a, e.b, e.width, engine::RoadClass::Local, 0});
-        }
-        std::vector<engine::Poly2> faces = engine::extractBlocks(rg);
-        std::printf("street subgraph: %zu edges -> %zu faces\n", rg.edges.size(), faces.size());
-        {   // spurs: a face vertex where the boundary turns straight back (a dead end poking into the block)
-            int spurFaces = 0, spurs = 0;
-            for (const auto& f : faces) { int n = 0; for (size_t i = 0; i < f.size(); ++i) { const auto& a = f[(i + f.size() - 1) % f.size()]; const auto& b = f[i]; const auto& c = f[(i + 1) % f.size()]; engine::Vec2 u1 = b - a, u2 = c - b; double l1 = u1.length(), l2 = u2.length(); if (l1 < 1e-6 || l2 < 1e-6) continue; if (dot(u1, u2) / (l1 * l2) < -0.985) ++n; } if (n) { ++spurFaces; spurs += n; } }
-            int dead = 0; for (int d : deg) dead += d == 1;
-            std::printf("spurs: %d faces carry %d dead-end spurs (twin dead ends: %d)\n", spurFaces, spurs, dead);
-        }
-        std::vector<double> areas; for (const auto& f : faces) { double a = 0; for (size_t i = 0; i < f.size(); ++i) { const auto& p = f[i]; const auto& q = f[(i + 1) % f.size()]; a += p.x * q.y - q.x * p.y; } areas.push_back(a / 2); }
-        std::sort(areas.begin(), areas.end());
-        std::printf("face areas (m2):"); for (size_t i = 0; i < areas.size() && i < 40; ++i) std::printf(" %.0f", areas[i]); std::printf("\n");
-        // the lot pass's first step on each face: inset by the road margin (sidewalk). Collinear vertices are the suspect.
-        double margin = 5.0; for (int i = 3; i + 1 < argc; ++i) if (std::strcmp(argv[i], "--margin") == 0) margin = std::atof(argv[i + 1]);
-        size_t ok = 0, dead = 0; double worst = 1e300; size_t maxVerts = 0;
-        for (const auto& f : faces) {
-            maxVerts = std::max(maxVerts, f.size());
-            engine::Poly2 foot = engine::inset(f, margin); double a = 0;
-            for (size_t i = 0; i < foot.size(); ++i) { const auto& p = foot[i]; const auto& q = foot[(i + 1) % foot.size()]; a += p.x * q.y - q.x * p.y; }
-            a = std::fabs(a / 2);
-            if (foot.size() >= 3 && a > 135 && std::isfinite(a)) ++ok;
-            else {   // a dead face: its size, vertex count, centroid and shortest edge (the inset's reversal trigger)
-                ++dead; double fa = 0, cx = 0, cy = 0, shortest = 1e300;
-                for (size_t i = 0; i < f.size(); ++i) { const auto& p = f[i]; const auto& q = f[(i + 1) % f.size()]; fa += p.x * q.y - q.x * p.y; cx += p.x; cy += p.y; shortest = std::min(shortest, std::hypot(q.x - p.x, q.y - p.y)); }
-                std::printf("  dead face: %.0f m2, %zu vertices, shortest edge %.1f m, at (%.0f, %.0f)\n", std::fabs(fa / 2), f.size(), shortest, cx / f.size(), cy / f.size());
-            }
-            worst = std::min(worst, a);
-        }
-        std::printf("inset(face, %.1f): %zu ok, %zu dead (smallest area %.1f, most vertices on a face %zu)\n", margin, ok, dead, worst, maxVerts);
-        // BROKEN BLOCKS: the lot pass's block foot (face inset by the margin) against the BUILT paved surface —
-        // every lane's asphalt, freeways and ramps included. A foot that overlaps pavement is a block the
-        // parceller will fill across a road. Reported with the roads it crosses.
-        {
-            const PolySet& paved = r->pavement.surface; std::vector<std::tuple<double, engine::Vec2, double, std::string>> bad;
-            // the lot pass's second step, reproduced: densify the foot every 8 m and push every vertex clear of the
-            // sampled ribbons (twin edge width/2 + sidewalk clearance), four rounds — city_lots.cpp pushPolyClearOfRoads
-            const double roadClear = margin + 0.6;
-            auto pushClear = [&](engine::Poly2 poly) {
-                engine::Poly2 dense;
-                for (size_t i = 0; i < poly.size(); ++i) { const auto& a = poly[i]; const auto& b = poly[(i + 1) % poly.size()]; dense.push_back(a); const int div = static_cast<int>((b - a).length() / 8.0); for (int k = 1; k <= div; ++k) dense.push_back(a + (b - a) * (static_cast<double>(k) / (div + 1))); }
-                for (auto& v : dense) for (int guard = 0; guard < 4; ++guard) {
-                    double worstNeed = 0; engine::Vec2 away;
-                    for (const engine::RoadEdge& e : twin.graph.edges) {
-                        const auto& a = twin.graph.nodes[static_cast<size_t>(e.a)].pos; const auto& b = twin.graph.nodes[static_cast<size_t>(e.b)].pos;
-                        engine::Vec2 ab = b - a; double l2 = ab.lengthSquared(); double t = l2 > 1e-12 ? std::max(0.0, std::min(1.0, dot(v - a, ab) / l2)) : 0.0;
-                        engine::Vec2 q = a + ab * t; double d = (v - q).length(); double need = e.width * 0.5 + roadClear - d;
-                        if (need > worstNeed) { worstNeed = need; away = d > 1e-6 ? (v - q) * (1.0 / d) : engine::Vec2(0, 1); }
-                    }
-                    if (worstNeed <= 0.01) break; v = v + away * worstNeed;
-                }
-                return dense;
-            };
-            for (const auto& f : faces) {
-                engine::Poly2 foot = engine::inset(f, margin); if (foot.size() < 3) continue;
-                foot = pushClear(foot); if (foot.size() < 3 || std::fabs(engine::area(foot)) < 135.0) continue;
-                Ring ring(foot.begin(), foot.end()); PolySet fs = fromRing(ring); double a = setArea(intersectSets(fs, paved));
-                if (a <= 1.0) continue;
-                std::set<std::string> roads;
-                for (size_t li = 0; li < r->lanes.lanes.size(); ++li) {
-                    const Lane& l = r->lanes.lanes[li]; if (l.parent < 0 || r->pavement.footprints[li].empty()) continue;
-                    if (setArea(intersectSets(fs, r->pavement.footprints[li])) > 0.5) roads.insert(r->graph.edges[static_cast<size_t>(l.parent)].id + "(" + r->graph.edges[static_cast<size_t>(l.parent)].cls + ")");
-                }
-                std::string rs; for (const auto& x : roads) rs += (rs.empty() ? "" : " ") + x;
-                engine::Vec2 c; for (const auto& q : foot) c += q; c = c / static_cast<double>(foot.size());
-                bad.emplace_back(a, c, std::fabs(engine::area(foot)), rs);
-            }
-            std::sort(bad.begin(), bad.end(), [](const auto& x, const auto& y) { return std::get<0>(x) > std::get<0>(y); });
-            double tot = 0; for (const auto& b : bad) tot += std::get<0>(b);
-            std::printf("BROKEN BLOCKS: %zu of %zu block feet overlap built pavement by > 1 m2 (total %.0f m2)\n", bad.size(), faces.size(), tot);
-            for (size_t i = 0; i < bad.size() && i < 12; ++i) std::printf("  %7.0f m2 of a %6.0f m2 block at (%.0f, %.0f) across: %s\n", std::get<0>(bad[i]), std::get<2>(bad[i]), std::get<1>(bad[i]).x, std::get<1>(bad[i]).y, std::get<3>(bad[i]).c_str());
-        }
-        // --at x y: the face that contains the point, and every twin edge with a node inside that face
-        // (a street the face SHOULD have been split by), plus an SVG of the twin around it.
-        for (int i = 3; i + 2 < argc; ++i) if (std::strcmp(argv[i], "--at") == 0) {
-            const engine::Vec2 at(std::atof(argv[i + 1]), std::atof(argv[i + 2]));
-            auto inside = [](const engine::Poly2& f, const engine::Vec2& q) { bool in = false; for (size_t a = 0, b = f.size() - 1; a < f.size(); b = a++) { if ((f[a].y > q.y) != (f[b].y > q.y) && q.x < (f[b].x - f[a].x) * (q.y - f[a].y) / (f[b].y - f[a].y) + f[a].x) in = !in; } return in; };
-            int hit = -1; for (size_t f = 0; f < faces.size(); ++f) if (inside(faces[f], at)) { hit = static_cast<int>(f); break; }
-            if (hit < 0) { std::printf("--at (%.0f, %.0f): no face contains the point\n", at.x, at.y); continue; }
-            const engine::Poly2& F = faces[static_cast<size_t>(hit)]; double ar = 0; for (size_t k = 0; k < F.size(); ++k) { const auto& a = F[k]; const auto& b = F[(k + 1) % F.size()]; ar += a.x * b.y - b.x * a.y; }
-            std::printf("--at (%.0f, %.0f): face %d, %zu vertices, %.0f m2\n", at.x, at.y, hit, F.size(), std::fabs(ar / 2));
-            std::map<std::string, int> interior;   // class:baked -> edges with a node strictly inside the face
-            int nIn = 0;
-            for (const engine::RoadEdge& e : twin.graph.edges) {
-                const engine::Vec2 m = (twin.graph.nodes[static_cast<size_t>(e.a)].pos + twin.graph.nodes[static_cast<size_t>(e.b)].pos) * 0.5;
-                if (!inside(F, m)) continue; ++nIn;
-                std::string key = std::to_string(static_cast<int>(e.klass)) + (e.baked ? ":baked" : ":live"); ++interior[key];
-            }
-            std::printf("  twin edges whose midpoint lies inside this face: %d\n", nIn);
-            // the nearest twin sub-edge of each kind to the point itself: is a street boundary right here, or only a ramp?
-            struct Near { double d = 1e300; int klass = -1; bool baked = false; } nearLive, nearBaked, nearRamp;
-            for (const engine::RoadEdge& e : twin.graph.edges) {
-                const auto& a = twin.graph.nodes[static_cast<size_t>(e.a)].pos; const auto& b = twin.graph.nodes[static_cast<size_t>(e.b)].pos;
-                engine::Vec2 ab = b - a; double l2 = ab.lengthSquared(); double t = l2 > 1e-9 ? std::max(0.0, std::min(1.0, dot(at - a, ab) / l2)) : 0.0;
-                double d = (at - (a + ab * t)).length();
-                Near& n = (e.klass == engine::RoadClass::Ramp || e.klass == engine::RoadClass::Freeway) ? nearRamp : (e.baked ? nearBaked : nearLive);
-                if (d < n.d) { n.d = d; n.klass = static_cast<int>(e.klass); n.baked = e.baked; }
-            }
-            std::printf("  nearest live street sub-edge %.1f m (class %d); nearest baked %.1f m; nearest ramp/freeway %.1f m\n", nearLive.d, nearLive.klass, nearBaked.d, nearRamp.d);
-            for (const auto& kv : interior) std::printf("    class %s -> %d\n", kv.first.c_str(), kv.second);
-            // the SVG: 250 m around the point
-            std::ofstream svg(std::string(argv[2]) + ".twin_at.svg"); const double R = 250;
-            svg << "<svg xmlns='http://www.w3.org/2000/svg' viewBox='" << at.x - R << " " << at.y - R << " " << 2 * R << " " << 2 * R << "'>\n<rect x='" << at.x - R << "' y='" << at.y - R << "' width='" << 2 * R << "' height='" << 2 * R << "' fill='#f4f4ee'/>\n";
-            svg << "<polygon fill='#cfe3ff' fill-opacity='0.6' stroke='#2255aa' stroke-width='1' points='"; for (const auto& q : F) svg << q.x << "," << q.y << " "; svg << "'/>\n";
-            std::vector<int> deg(twin.graph.nodes.size(), 0); for (const engine::RoadEdge& e : twin.graph.edges) { ++deg[static_cast<size_t>(e.a)]; ++deg[static_cast<size_t>(e.b)]; }
-            for (const engine::RoadEdge& e : twin.graph.edges) {
-                const auto& a = twin.graph.nodes[static_cast<size_t>(e.a)].pos; const auto& b = twin.graph.nodes[static_cast<size_t>(e.b)].pos;
-                const char* col = e.klass == engine::RoadClass::Freeway ? "#c33" : e.klass == engine::RoadClass::Ramp ? "#e80" : e.baked ? "#999" : "#223";
-                svg << "<line x1='" << a.x << "' y1='" << a.y << "' x2='" << b.x << "' y2='" << b.y << "' stroke='" << col << "' stroke-width='" << (e.baked ? 1.0 : 1.6) << "'/>\n";
-            }
-            for (size_t n = 0; n < deg.size(); ++n) if (deg[n] != 2) { const auto& q = twin.graph.nodes[n].pos; svg << "<circle cx='" << q.x << "' cy='" << q.y << "' r='2.5' fill='" << (deg[n] == 1 ? "#c00" : deg[n] == 3 ? "#0a0" : "#00c") << "'/>\n"; }
-            svg << "<circle cx='" << at.x << "' cy='" << at.y << "' r='6' fill='none' stroke='#f0f' stroke-width='2'/>\n</svg>\n";
-            std::printf("  wrote %s.twin_at.svg\n", argv[2]);
-        }
-        return 0;
     }
     std::unique_ptr<Result> rp;
     try { rp = build(RoadLabGraph::load(argv[2])); } catch (const std::exception& e) { std::fprintf(stderr, "lanes: %s\n", e.what()); return 1; }

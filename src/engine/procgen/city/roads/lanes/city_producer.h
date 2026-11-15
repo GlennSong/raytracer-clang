@@ -3,7 +3,7 @@
 
 // The procedural city as the first bundle producer (ADR-0084). For every shape:"lanelab" entity of a
 // level it runs the lane lab and writes what the loader instantiates — the material meshes split by
-// render cell, the conformed ground, the road twin (the lot pass's graph, freeway right-of-way) and the un-inset
+// render cell, the conformed ground, the drawn deck and kerb line, and the un-inset
 // pavement holes the lot pass turns into blocks — under `city/e<ordinal>/...`. The loader reads exactly
 // these sections back (readCityProducts) and instantiates from them whether they came from disk or from a
 // build a moment ago, so a cold level and a cached level are the same geometry to the byte.
@@ -63,12 +63,10 @@ struct CityCellMesh { int cx = 0, cz = 0; bundle::PackedMesh mesh; };
 struct CityProducts {
     bool hasTerrain = false;
     bundle::HeightGridBlob ground;
-    RoadEntity twin;                 // class-faithful roadTwin(): what the lot twin below is sampled from
-    // (the sim's routing twin, `roads/nav`, is no longer made: every agent routes on the street map built from the road
-    // model at load, ADR-0425. A bundle baked before still holds the section; nothing reads it.)
-    RoadGraph lotNav;                // navRoadGraph(twin, ground): the streets at the LOT clearance widths -- the lot pass
-                                     // keeps buildings width/2 + clearance off them and walks doors to their kerbs
-    std::vector<Ring> holes;         // un-inset pavement holes >= 2000 m² (blocks after the level's sidewalk inset)
+    // (No copy of the road graph is made: every agent routes on the street map built from the road model at load,
+    // ADR-0425, and the lot pass reads the road model's streets and the deck below, ADR-0430. A bundle baked before
+    // still holds the sections `roads/nav`, `roads/twin` and `roads/lotnav`; nothing reads them.)
+    std::vector<Ring> holes;        // un-inset pavement holes >= 2000 m² (blocks after the level's sidewalk inset)
     // THE DRIVING SURFACE, as a queryable field, and the kerb line around it. Everything the
     // sim stands ON a road reads these: moving traffic, parked cars, painted bays, signal
     // poles, crosswalk decals. Without them a lane-built city hands the sim nothing and it
@@ -84,6 +82,9 @@ struct CityProducts {
 // `withInvariants`: also run the lab's invariant sweep into the report (minutes on metro; the loader never
 // needs it — rt_bake --check and the tests ask for it).
 CityProducts cityProductsFromResult(const Result& r, double renderCell, bool withInvariants = false);
+// The drawn deck of a road build, as the city's products carry it (CityProducts::deck): one spine per road of the
+// file, in its order.
+RoadDeckField deckFromResult(const Result& r);
 void writeCityProducts(bundle::BundleWriter& w, int ordinal, const CityProducts& p);
 bool readCityProducts(const bundle::Bundle& b, int ordinal, CityProducts& p, std::string* err);
 

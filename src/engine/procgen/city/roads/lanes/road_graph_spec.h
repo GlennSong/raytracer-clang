@@ -298,11 +298,15 @@ struct RoadLabGraph {
 // one-way roads centred. Lane offsets are derived from RoadSpec::bandSpan, so the lane model is the engine's.
 RoadSpec bandsFor(const RoadClassSpec& c, const LaneLayout& layout);
 
-// THE STREET'S CROSS-SECTION AS THE CITY READS IT (ADR-0418): the engine band list the road twin hands the city sim --
+// Which engine RoadClass a road-file edge carries. ONE mapping: the road model, the drawn deck and anything else that
+// has to speak both vocabularies reads it here.
+RoadClass classOf(const EdgeSpec& e);
+
+// THE STREET'S CROSS-SECTION AS THE CITY READS IT (ADR-0418): the engine band list of a road-file edge --
 // the carriageway (the road's lanes and shoulders: 2 x (hw + shoulder)) split into travel bands and, where the road states
 // kerb parking that fits (LaneLayout::parking), a Parking band that wide along each kerb, carved out of the carriageway's
 // edges (so it lies over the kerb side of the kerb lane; the carriageway's width never moves). The one reader of the
-// stated parking: the twin's band (which the sim lays its kerbside bays in) and the road model both come from here.
+// stated parking: the road model's kerb parking (which the sim lays its kerbside bays in) comes from here.
 // `e` is a whole road-file edge.
 RoadSpec streetSection(const RoadLabGraph& g, const EdgeSpec& e);
 // The kerb parking `e` really has along each kerb: its stated width where it fits, else 0. `fits` (optional): false when

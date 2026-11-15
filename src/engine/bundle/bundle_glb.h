@@ -6,7 +6,7 @@
 // no knowledge of which producer wrote what. Per material: the cells of each material merged into one glTF
 // mesh (one object per material in Blender). Per cell: one GLB per render cell holding that cell's
 // materials, plus `index.json`, so a district can be imported alone. Scene extras carry the manifest, the
-// small JSON sections, every `/roads/twin` as road JSON and every `/blocks/holes` as rings; node extras
+// small JSON sections and every `/blocks/holes` as rings; node extras
 // carry the material's collision flags.
 
 #include "engine/bundle/bundle.h"

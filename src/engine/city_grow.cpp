@@ -75,8 +75,8 @@ NetLotResult growCity(const CityGrowInputs& in, LotGrowSetup* setupOut) {
         if (s.lp.sidewalkWidth <= 0 && in.pavedSidewalk > 0)
             s.lp.sidewalkWidth = static_cast<Real>(in.pavedSidewalk);
         // THE STREETS, so a door knows which way to face: growLotBuildings aims each
-        // building's faceDir at the nearest point on this graph.
-        const RoadGraph* lotRoads = (in.streets && !in.streets->edges.empty()) ? in.streets : nullptr;
+        // building's faceDir at the nearest street a building may front.
+        const LotRoadInputs* lotRoads = (in.roads && !in.roads->roads.empty()) ? in.roads : nullptr;
         // ...but no clearance from them: these blocks are cut from the BUILT pavement, so the
         // pavement is already outside them, and the old lattice's sidewalk + 0.6 m counted it
         // twice (measured on metro_lanes: 1082 buildings with 0 extra against 977 with it).

@@ -8,7 +8,7 @@
 // "sections" array of name/offset/size/fnv). A reader maps
 // the file once and hands out views into it, so a whole-level load reads every section and a streaming
 // loader touches only the cells it needs — same file, same reader. Sections are named by path convention:
-//     <producer>/<global>                  e.g. city/e0/ground, city/e0/roads/lotnav
+//     <producer>/<global>                  e.g. city/e0/ground, city/e0/roads/deck
 //     <producer>/cell/<cx>_<cz>/<name>     e.g. city/e0/cell/12_-3/mesh/asphalt
 // The bundle knows nothing about what a section holds; codecs (codecs.h) do, each behind its own magic and
 // version. Producers, keys and the bake orchestration live in bake.h.

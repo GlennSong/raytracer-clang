@@ -8,11 +8,13 @@
 #include "engine/procgen/city/lot_cache.h"
 #include "engine/procgen/city/roads/lanes/block_audit.h"
 #include "engine/procgen/city/roads/lanes/city_producer.h"
+#include "engine/procgen/city/roads/lanes/lane_expand.h"   // expand: the road file's ramps composed
 #include "engine/procgen/city/roads/lanes/terrain_recipe.h"
 #include "engine/script_assets.h"
 #include "log.h"
 
 #include <chrono>
+#include <fstream>
 #include <memory>
 #include "../../../../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 #include <algorithm>
@@ -22,7 +24,7 @@ namespace engine {
 namespace roads::lanes {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-11-06.3";   // .3 the furniture upgraded with soft shapes (ADR-0347); .2 the furniture modelled by its Lua recipes (ADR-0346); .1 one annulus / band / fill / skirt for every disc, ring and paved plate (ADR-0345); 2026-11-03.1 a landmark is never planned onto a lot that is already a store, campus, depot or car park (ADR-0314); .3 beach car parks: a curved lot's open frame from its simplified outline; .2 whole blocks of homes rise, courtyard blocks uncapped (ADR-0299); denser housing (ADR-0298); history: git log -G kLotsBuildTag
+const char* const kLotsBuildTag = "2026-11-14.1";   // the lot pass reads the road model's streets and the drawn deck, not a copy of the road graph (ADR-0430); 2026-11-06.3 the furniture upgraded with soft shapes (ADR-0347); .2 the furniture modelled by its Lua recipes (ADR-0346); .1 one annulus / band / fill / skirt for every disc, ring and paved plate (ADR-0345); 2026-11-03.1 a landmark is never planned onto a lot that is already a store, campus, depot or car park (ADR-0314); .3 beach car parks: a curved lot's open frame from its simplified outline; .2 whole blocks of homes rise, courtyard blocks uncapped (ADR-0299); denser housing (ADR-0298); history: git log -G kLotsBuildTag
 //   // .2-.4: soft foliage (emitSoftBox hedges, bushes, beds)   // 2026-09-24.1: grows on terrain, on the loader's ground (laneErodedBase + lotGroundFor, ADR-0095);   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
 
 namespace {
@@ -80,6 +82,17 @@ public:
             const bundle::ProducerIdentity c = city->identity(in);
             k = bundle::fnv1a(&c.key, sizeof(c.key), k); id.inputs = c.inputs;
         } else k = bundle::fnv1aStr("nocity", k);
+        // The streets the lots front, by id (lotRoadsKeyText): the city's key leaves the road file's streets and
+        // junctions out (no road mesh reads them), and the lot pass reads them -- editing a street re-grows the lots.
+        if (const std::vector<CityEntity> ents = cityEntities(in.level); !ents.empty()) {
+            const CityEntity& e = ents.back();
+            nlohmann::json spec = e.block;
+            if (!e.inlineGraph) {
+                std::ifstream gf(e.graphPath);
+                try { gf >> spec; } catch (const std::exception&) { spec = nlohmann::json(); }
+            }
+            k = bundle::fnv1aStr("lotroads|" + lotRoadsKeyText(spec), k);
+        }
         // The city sim's block, all but which driving model drives the cars (citysim.driving): that is chosen at load
         // and changes no lot, so switching a level to the new model must not re-bake its lots. Erased only where it
         // is, so every level without one keeps its key.
@@ -133,13 +146,8 @@ public:
         }
         if (!out.readBack(pre + "blocks/holes", bytes)) return fail(pre + "blocks/holes: missing");
         { BinReader r(bytes.data(), bytes.size()); if (!bundle::getRings(r, city.holes)) return fail(pre + "blocks/holes: unreadable"); }
-        // The streets a door faces and the pavement it walks out to — what the loader hands the
-        // grow when it grows in place. Without them the BAKED city's doors pointed whichever way
-        // the block's plan ran, so a level looked different warm than cold.
-        // at the LOT clearance widths (roads/lotnav, ADR-0115) -- roads/nav is the sim's, at travel widths,
-        // and growing on it moved buildings a metre and a half closer to every street
-        if (!out.readBack(pre + "roads/lotnav", bytes)) return fail(pre + "roads/lotnav: missing");
-        { BinReader r(bytes.data(), bytes.size()); if (!bundle::getRoadGraph(r, city.nav)) return fail(pre + "roads/lotnav: unreadable"); }
+        // The pavement a door walks out to and the drawn deck — what the loader hands the grow when it grows in
+        // place. (The streets a door faces come from the road file: growLotsForLevel, levelLotRoads.)
         if (!out.readBack(pre + "roads/deck", bytes)) return fail(pre + "roads/deck: missing");
         { BinReader r(bytes.data(), bytes.size()); if (!bundle::getDeckField(r, city.deck)) return fail(pre + "roads/deck: unreadable"); }
         if (!out.readBack(pre + "roads/bands", bytes)) return fail(pre + "roads/bands: missing");
@@ -251,6 +259,65 @@ std::shared_ptr<const std::function<double(double, double)>> laneErodedBase(
         });
 }
 
+LotsCityInputs lotsCityInputs(const CityProducts& p) {
+    LotsCityInputs city;
+    city.hasTerrain = p.hasTerrain;
+    city.ground = p.ground;
+    city.holes = p.holes;
+    city.pavedSidewalk = p.bands.sidewalkWidth;
+    city.deck = p.deck;
+    city.rails = p.rails;
+    return city;
+}
+
+LotRoadInputs lotRoadInputs(const RoadModel& planned, const RoadDeckField& deck) {
+    LotRoadInputs in;
+    auto add = [&](const std::string& id, const Range& line, const ModelSection& section) {
+        if (section.track || section.footway || line.count < 2) return;   // no building fronts a track or a footway
+        LotRoad r;
+        r.id = id;
+        r.line.assign(planned.linePoints.begin() + line.first, planned.linePoints.begin() + line.end());
+        // the carriageway, as the deck is drawn (city_producer.cpp deckFromResult): at least one lane wide
+        const int lanes = std::max(1, section.lanesForward + section.lanesBackward);
+        r.halfWidth = (lanes * section.laneWidth + section.medianGap) * Real(0.5) + section.shoulder;
+        r.sidewalk = section.sidewalk;
+        r.klass = section.klass;
+        in.roads.push_back(std::move(r));
+    };
+    for (const ModelStreet& s : planned.streets) add(s.id, s.line, s.section);
+    for (const ModelJunction& j : planned.junctions)
+        for (const ModelStretch& inside : j.inside) add(j.id, inside.line, inside.section);
+    std::shared_ptr<RoadDeckField> drawn = std::make_shared<RoadDeckField>(deck);
+    drawn->buildIndex();
+    in.deck = std::move(drawn);
+    return in;
+}
+
+LotRoadInputs levelLotRoads(const bundle::LevelInputs& in, const RoadDeckField& deck) {
+    const std::vector<CityEntity> ents = cityEntities(in.level);
+    if (ents.empty()) return lotRoadInputs(RoadModel(), deck);
+    RoadLabGraph g = loadCityGraph(ents.back());
+    (void)expand(g);   // the planned layer reads the ramps composed (as the loader does)
+    return lotRoadInputs(plannedRoadModel(g), deck);
+}
+
+std::string lotRoadsKeyText(const nlohmann::json& roadFile) {
+    std::string text;
+    auto stretch = [&](const std::string& id, const nlohmann::json& s) {
+        if (!s.is_object()) return;
+        text += id + "|" + s.value("road", std::string()) + "|" + s.value("from", nlohmann::json()).dump() + "|" + s.value("to", nlohmann::json()).dump() + ";";
+    };
+    if (!roadFile.is_object()) return text;
+    if (roadFile.contains("streets") && roadFile["streets"].is_array())
+        for (const nlohmann::json& s : roadFile["streets"]) stretch(s.is_object() ? s.value("id", std::string()) : std::string(), s);
+    if (roadFile.contains("junctions") && roadFile["junctions"].is_array())
+        for (const nlohmann::json& j : roadFile["junctions"]) {
+            if (!j.is_object() || !j.contains("inside") || !j["inside"].is_array()) continue;
+            for (const nlohmann::json& s : j["inside"]) stretch(j.value("id", std::string()), s);
+        }
+    return text;
+}
+
 NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInputs& city, nlohmann::json* report) {
     const nlohmann::json cs = in.level.value("citysim", nlohmann::json::object());
     // The blocks are the city's pavement holes; there are no nets. The ground: on a level with
@@ -300,7 +367,8 @@ NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInput
     gin.holes = &city.holes;
     const std::vector<std::vector<Vec2>> water = levelWaterKeepOut(in.level);   // blocks stand back from rivers (ADR-0104)
     gin.water = &water;
-    gin.streets = &city.nav;
+    const LotRoadInputs roads = levelLotRoads(in, city.deck);   // the streets by id, from the road file; the drawn deck
+    gin.roads = &roads;
     gin.pavedSidewalk = city.pavedSidewalk;
     gin.smoothGround = smoothGround;
     if (auto nf = lanesNearFreeway(city.deck, 6.0)) gin.nearFreeway = [nf](Real x, Real z) { return nf(x, z); };

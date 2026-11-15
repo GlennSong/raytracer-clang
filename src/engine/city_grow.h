@@ -34,8 +34,8 @@ namespace engine {
 // The blocks a city grows on arrive one of three ways, and a host fills exactly one:
 //
 //   HOLES    a builder that paved a whole city (RoadProducts): the pavement's
-//            holes ARE the blocks, its twin is the streets doors face, and its
-//            kerb band is the pavement a door walks out to.
+//            holes ARE the blocks, the road model's streets are what doors face
+//            (`roads`), and its kerb band is the pavement a door walks out to.
 //   BLOCKS   the same holes, already run through cityBlocksFromHoles.
 //   AUTHORED a level with no roads draws its blocks by hand (citysim.blocks).
 struct CityGrowInputs {
@@ -46,7 +46,7 @@ struct CityGrowInputs {
     const std::vector<Poly2>* holes = nullptr;   // HOLES: un-inset, straight from the builder
     const std::vector<Poly2>* blocks = nullptr;  // HOLES, already run through cityBlocksFromHoles
     const std::vector<std::vector<Vec2>>* water = nullptr;   // HOLES: rivers and lakes the blocks stand back from (levelWaterKeepOut)
-    const RoadGraph* streets = nullptr;          // HOLES: the graph a door faces
+    const LotRoadInputs* roads = nullptr;        // HOLES: the streets a door faces and the drawn deck (city_lots.h)
     double pavedSidewalk = 0.0;                  // HOLES: the band that was actually paved
     LotGroundWithFn groundWith;
     double groundMeshCell = 0.0;

@@ -228,6 +228,16 @@ std::vector<const EdgeSpec*> RoadLabGraph::paved() const {
     std::vector<const EdgeSpec*> out; for (const EdgeSpec& e : edges) if (e.laneCount() > 0) out.push_back(&e); return out;
 }
 
+RoadClass classOf(const EdgeSpec& e) {
+    if (e.isRamp() || e.cls == "ramp") return RoadClass::Ramp;
+    if (e.cls == "freeway") return RoadClass::Freeway;
+    if (e.cls == "arterial") return RoadClass::Arterial;
+    if (e.cls == "collector") return RoadClass::Collector;
+    if (e.cls == "rural") return RoadClass::Collector;   // a country road: collector speeds, no sidewalks
+    if (e.cls == "alley") return RoadClass::Alley;
+    return RoadClass::Local;
+}
+
 RoadSpec streetSection(const RoadLabGraph& g, const EdgeSpec& e) {
     const RoadClassSpec& c = g.cls(e);
     const double carriageway = 2.0 * (g.hw(e) + c.shoulder);

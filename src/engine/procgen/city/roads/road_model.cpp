@@ -6,7 +6,7 @@
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"       // kArmOrderCommand: an unmarked file's ring (ADR-0427)
-#include "engine/procgen/city/roads/lanes/road_twin.h"         // classOf: the engine's class of a road
+#include "engine/procgen/city/roads/lanes/road_graph_spec.h"   // classOf: the engine's class of a road
 #include "engine/procgen/city/roads/lane_turns.h"              // the stated turns through each junction (ADR-0426)
 #include "engine/procgen/city/polyline.h"                      // simplifyRun, distToSegment
 #include "engine/procgen/city/polygon.h"                       // pointInPolygon, interiorPoint: the regions' outlines

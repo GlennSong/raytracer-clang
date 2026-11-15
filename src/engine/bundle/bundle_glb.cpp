@@ -31,10 +31,9 @@ std::vector<MeshSection> meshSections(const Bundle& b) {
 }
 
 nlohmann::json sceneExtras(const Bundle& b) {
-    nlohmann::json x; x["manifest"] = b.manifest(); nlohmann::json roads = nlohmann::json::object(), holes = nlohmann::json::object(), small = nlohmann::json::object();
+    nlohmann::json x; x["manifest"] = b.manifest(); nlohmann::json holes = nlohmann::json::object(), small = nlohmann::json::object();
     for (const std::string& s : b.sections("")) {
         const Bundle::View v = b.section(s);
-        if (s.size() >= 11 && s.compare(s.size() - 11, 11, "/roads/twin") == 0) { RoadEntity e; BinReader r(v.data, v.size); if (getRoadEntity(r, e)) roads[s] = roadNetToJson(e); continue; }
         if (s.size() >= 13 && s.compare(s.size() - 13, 13, "/blocks/holes") == 0) {
             std::vector<std::vector<Vec2>> rings; BinReader r(v.data, v.size);
             if (getRings(r, rings)) { nlohmann::json arr = nlohmann::json::array(); for (const auto& ring : rings) { nlohmann::json rj = nlohmann::json::array(); for (const Vec2& q : ring) rj.push_back({q.x, q.y}); arr.push_back(rj); } holes[s] = arr; }
@@ -42,7 +41,7 @@ nlohmann::json sceneExtras(const Bundle& b) {
         }
         if (v.size < 65536 && v.size > 0 && v.data[0] == '{') { const nlohmann::json j = b.json(s); if (!j.is_null()) small[s] = j; }
     }
-    x["roads"] = roads; x["holes"] = holes; x["json"] = small; return x;
+    x["holes"] = holes; x["json"] = small; return x;
 }
 
 nlohmann::json nodeExtras(const PackedMesh& p, size_t triangles) {

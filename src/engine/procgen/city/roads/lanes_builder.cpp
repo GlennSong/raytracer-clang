@@ -71,16 +71,11 @@ public:
         return out;
     }
 
-    // The streets the lot pass reads: the lot twin (roads/lotnav), as the bake's lots producer reads it.
-    RoadGraph lotStreets(const RoadBuildInput& in) const override {
-        const lanes::CityProducts* p = products(in);
-        return p ? p->lotNav : RoadGraph{};
-    }
     bool pavesCity() const override { return true; }
 
 private:
-    // One obtain per level, not one per question: ground(), build() and lotStreets()
-    // are three views of the same city.
+    // One obtain per level, not one per question: ground() and build()
+    // are two views of the same city.
     const lanes::CityProducts* products(const RoadBuildInput& in) const {
         // A caller working from the level's JSON ALONE has no level to obtain against.
         // It gets nothing, by design and without a complaint: a lane-built city's ground
@@ -127,7 +122,7 @@ private:
             return nullptr;
         }
         LOG_INFO << "[roads/lanes] " << in.levelPath << " e" << ordinal << ": " << p.cells.size()
-                 << " cell meshes, " << p.lotNav.edges.size() << " lot twin edges, " << p.holes.size()
+                 << " cell meshes, " << p.holes.size()
                  << " pavement holes, bundle " << status;
         slot = std::move(p);
         return &*slot;

@@ -5,7 +5,6 @@
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
 #include "engine/procgen/city/roads/lanes/lots_producer.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"   // stripLayoutText: the road model's layout keys nothing
-#include "engine/procgen/city/roads/lanes/road_twin.h"
 #include "engine/procgen/city/roads/road_builder.h"   // roadBuilderName: lanes is the default
 #include "engine/procgen/terrain_field.h"
 #include "log.h"
@@ -230,7 +229,7 @@ RoadLabGraph loadCityGraph(const CityEntity& e) {
 // the sidewalk — because this answers "am I on the road", and a car on the pavement edge is not.
 // No junction pads: a lane city has no separate pad surface, its ribbons simply overlap, and each
 // edge's profile is defined right through the node.
-static RoadDeckField deckFromResult(const Result& r) {
+RoadDeckField deckFromResult(const Result& r) {
     RoadDeckField d;
     d.spines.reserve(r.graph.edges.size());
     for (std::size_t ei = 0; ei < r.graph.edges.size(); ++ei) {
@@ -316,15 +315,11 @@ static CurbBandAudit bandsFromResult(const Result& r) {
 CityProducts cityProductsFromResult(const Result& r, double renderCell, bool withInvariants) {
     CityProducts p; p.cell = renderCell; const auto t0 = std::chrono::steady_clock::now();
     if (r.hasTerrain) { p.hasTerrain = true; p.ground.x0 = r.terrain.x0; p.ground.y0 = r.terrain.y0; p.ground.res = r.terrain.res; p.ground.nx = r.terrain.nx; p.ground.ny = r.terrain.ny; p.ground.z = r.terrain.z; }
-    p.twin = roadTwin(r);
-    HeightField ground;
-    if (p.hasTerrain) { auto grid = std::make_shared<HeightGrid>(r.terrain); ground = [grid](double x, double z) { return grid->sample(x, z); }; }
-    p.lotNav = navRoadGraph(p.twin, ground ? ground : HeightField());   // the lot pass's clearance widths, as before
     p.holes = pavementHoles(r, 2000.0);
     p.deck = deckFromResult(r);
     p.rails = railTracks(r);
     p.bands = bandsFromResult(r);
-    const double tTwin = secondsSince(t0); const auto t1 = std::chrono::steady_clock::now();
+    const double tHolesAndDeck = secondsSince(t0); const auto t1 = std::chrono::steady_clock::now();
     size_t triangles = 0, bytes = 0; nlohmann::json materials = nlohmann::json::array();
     std::vector<NamedMesh> named = buildMeshes(r); const double tMeshes = secondsSince(t1); const auto t2 = std::chrono::steady_clock::now();
     for (const NamedMesh& nm : named) {
@@ -349,9 +344,9 @@ CityProducts cityProductsFromResult(const Result& r, double renderCell, bool wit
     const double tPack = secondsSince(t2); const auto t3 = std::chrono::steady_clock::now();
     nlohmann::json inv = nlohmann::json::array();
     if (withInvariants) for (const Check& c : invariants(r)) inv.push_back({{"name", c.name}, {"ok", c.ok}, {"detail", c.detail}});
-    std::map<std::string, double> timings = r.timings; timings["twin"] = tTwin; timings["meshes"] = tMeshes; timings["pack"] = tPack; if (withInvariants) timings["invariants"] = secondsSince(t3);
+    std::map<std::string, double> timings = r.timings; timings["holes_and_deck"] = tHolesAndDeck; timings["meshes"] = tMeshes; timings["pack"] = tPack; if (withInvariants) timings["invariants"] = secondsSince(t3);
     p.report = {{"summary", summary(r)}, {"invariants", inv}, {"checked", withInvariants}, {"timings", timings}, {"seconds", r.seconds}, {"lanes", r.lanes.lanes.size()}, {"triangles", triangles},
-                {"meshBytes", bytes}, {"materials", materials}, {"cells", p.cells.size()}, {"holes", p.holes.size()}, {"deckSpines", p.deck.spines.size()}, {"kerbLoops", p.bands.loops.size()}, {"twinNodes", p.twin.graph.nodes.size()}, {"twinEdges", p.twin.graph.edges.size()},
+                {"meshBytes", bytes}, {"materials", materials}, {"cells", p.cells.size()}, {"holes", p.holes.size()}, {"deckSpines", p.deck.spines.size()}, {"kerbLoops", p.bands.loops.size()},
                 {"railTracks", p.rails.size()}, {"hasTerrain", p.hasTerrain}};
     return p;
 }
@@ -360,8 +355,6 @@ void writeCityProducts(bundle::BundleWriter& w, int ordinal, const CityProducts&
     const std::string pre = citySectionPrefix(ordinal);
     w.addJson(pre + "meta", nlohmann::json{{"format", kCityFormatVersion}, {"tag", kLanesBuildTag}, {"hasTerrain", p.hasTerrain}, {"cell", p.cell}});
     if (p.hasTerrain) { BinWriter b; bundle::putHeightGrid(b, p.ground); w.add(pre + "ground", b.bytes); }
-    { BinWriter b; bundle::putRoadEntity(b, p.twin); w.add(pre + "roads/twin", b.bytes); }
-    { BinWriter b; bundle::putRoadGraph(b, p.lotNav); w.add(pre + "roads/lotnav", b.bytes); }
     { BinWriter b; bundle::putRings(b, p.holes); w.add(pre + "blocks/holes", b.bytes); }
     { BinWriter b; bundle::putDeckField(b, p.deck); w.add(pre + "roads/deck", b.bytes); }
     { BinWriter b; bundle::putCurbBands(b, p.bands); w.add(pre + "roads/bands", b.bytes); }
@@ -388,10 +381,9 @@ bool readCityProducts(const bundle::Bundle& b, int ordinal, CityProducts& p, std
     auto section = [&](const std::string& name, bundle::Bundle::View& v) { v = b.section(pre + name); return !v.empty(); };
     bundle::Bundle::View v;
     if (p.hasTerrain) { if (!section("ground", v)) return fail("ground: missing"); BinReader r(v.data, v.size); if (!bundle::getHeightGrid(r, p.ground)) return fail("ground: unreadable"); }
-    if (!section("roads/twin", v)) return fail("roads/twin: missing"); { BinReader r(v.data, v.size); if (!bundle::getRoadEntity(r, p.twin)) return fail("roads/twin: unreadable"); }
-    // (roads/nav, the sim's old routing twin, is in bundles baked before ADR-0425 and is not read: the street map is built
-    // from the road model at load)
-    if (!section("roads/lotnav", v)) return fail("roads/lotnav: missing"); { BinReader r(v.data, v.size); if (!bundle::getRoadGraph(r, p.lotNav)) return fail("roads/lotnav: unreadable"); }
+    // (roads/nav, roads/twin and roads/lotnav -- the old copies of the road graph for routing and for the lot pass -- are
+    // in bundles baked before ADR-0425 and ADR-0430 and are not read: the street map and the lot pass's roads are made
+    // from the road model at load and at bake. A bundle baked since does not hold them.)
     if (!section("blocks/holes", v)) return fail("blocks/holes: missing"); { BinReader r(v.data, v.size); if (!bundle::getRings(r, p.holes)) return fail("blocks/holes: unreadable"); }
     // The deck and the kerb line (2026-09-20): a bundle baked before they existed has neither,
     // and the tag bump that introduced them means one cannot be loaded — so a missing section

@@ -218,12 +218,24 @@ double RoadDeckField::depthInside(double x, double z, int* spineOut) const {
 
 bool RoadDeckField::coversAny(double x, double z, double margin) const {
     bool hit = false;
-    surfacesAt(x, z, margin, [&](double, bool, int, double, double, RoadClass) { hit = true; }, true);
+    surfacesAt(x, z, margin, [&](double, bool, int, double, double, RoadClass, const Vec2&) { hit = true; }, true);
     return hit;
 }
 
+void RoadDeckField::roadsAt(double x, double z, double margin, const std::function<void(const RoadAt&)>& fn) const {
+    surfacesAt(x, z, margin, [&](double, bool pad, int, double d, double hw, RoadClass klass, const Vec2& on) {
+        RoadAt r;
+        r.pad = pad;
+        r.distance = d;
+        r.halfWidth = hw;
+        r.nearest = on;
+        r.klass = klass;
+        fn(r);
+    });
+}
+
 void RoadDeckField::surfacesAt(double x, double z, double margin,
-                               const std::function<void(double y, bool pad, int layer, double d, double hw, RoadClass klass)>& fn,
+                               const std::function<void(double y, bool pad, int layer, double d, double hw, RoadClass klass, const Vec2& on)>& fn,
                                bool anyUse) const {
     const long long k = (static_cast<long long>(static_cast<int>(std::floor(x / cell_))) << 32) ^
                         (static_cast<long long>(static_cast<int>(std::floor(z / cell_))) & 0xffffffffLL);
@@ -240,7 +252,7 @@ void RoadDeckField::surfacesAt(double x, double z, double margin,
             if (std::fabs(den) < 1e-12) continue;
             const double w0 = ((t.b.z - t.c.z) * (x - t.c.x) + (t.c.x - t.b.x) * (z - t.c.z)) / den;
             const double w1 = ((t.c.z - t.a.z) * (x - t.c.x) + (t.a.x - t.c.x) * (z - t.c.z)) / den;
-            fn(w0 * t.a.y + w1 * t.b.y + (1.0 - w0 - w1) * t.c.y, true, 0, 0.0, 0.0, RoadClass::Local);
+            fn(w0 * t.a.y + w1 * t.b.y + (1.0 - w0 - w1) * t.c.y, true, 0, 0.0, 0.0, RoadClass::Local, Vec2(x, z));
         }
     }
     auto it = cells_.find(k);
@@ -255,7 +267,8 @@ void RoadDeckField::surfacesAt(double x, double z, double margin,
         const double L2 = ab.lengthSquared();
         double t = L2 < 1e-12 ? 0.0 : dot(q - a, ab) / L2;
         t = t < 0 ? 0 : (t > 1 ? 1 : t);
-        const double d = (a + ab * t - q).length();
+        const Vec2 on = a + ab * t;
+        const double d = (on - q).length();
         const double hw = sp.hw.size() == sp.points.size()
                               ? sp.hw[sg.i] + (sp.hw[sg.i + 1] - sp.hw[sg.i]) * t
                               : sp.halfWidth;
@@ -265,7 +278,7 @@ void RoadDeckField::surfacesAt(double x, double z, double margin,
             const Vec2 fwd = ab * (1.0 / std::sqrt(L2));
             lateral = dot(q - a, Vec2(-fwd.y, fwd.x));
         }
-        fn(sp.sectionY(sg.i, t, lateral), false, sp.layer, d, hw, sp.klass);
+        fn(sp.sectionY(sg.i, t, lateral), false, sp.layer, d, hw, sp.klass, on);
     }
 }
 
@@ -299,7 +312,7 @@ bool RoadDeckField::heightAt(double x, double z, double margin, double* outY) co
     double padY = -1e30;
     int bestLayer = INT_MAX;
     double bestD = 1e30, bestY = 0.0;
-    surfacesAt(x, z, margin, [&](double y, bool isPad, int layer, double d, double, RoadClass) {
+    surfacesAt(x, z, margin, [&](double y, bool isPad, int layer, double d, double, RoadClass, const Vec2&) {
         if (isPad) { if (!pad || y > padY) padY = y; pad = true; return; }
         if (layer > bestLayer || (layer == bestLayer && d >= bestD)) return;
         bestLayer = layer; bestD = d; bestY = y;
@@ -324,7 +337,7 @@ bool RoadDeckField::heightOn(double x, double z, double margin, const RoadClass*
     // nearer); with no spine, a pad within the window.
     struct Pick { bool have = false; bool match = false; double depth = -1e30, y = 0; } sp;
     std::vector<double> pads;
-    surfacesAt(x, z, margin, [&](double y, bool pad, int, double d, double hw, RoadClass k) {
+    surfacesAt(x, z, margin, [&](double y, bool pad, int, double d, double hw, RoadClass k, const Vec2&) {
         if (std::fabs(y - refY) > window) return;
         if (pad) { pads.push_back(y); return; }
         const bool m = klass && k == *klass;

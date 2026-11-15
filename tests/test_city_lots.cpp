@@ -198,9 +198,7 @@ TEST_CASE(alleys_recover_frontage_orphaned_back_rows) {
     // One straight 10 m street far from the downtown rings (residential grain),
     // with blocks 56 m deep behind its 4 m sidewalks on both sides, deep enough
     // that the parcel walk lays TWO rows -- the outer one beyond frontage reach.
-    RoadGraph streets;
-    streets.nodes = { {Vec2(300, 260)}, {Vec2(560, 260)} };
-    streets.edges = { RoadEdge{0, 1, 10, RoadClass::Local, 0} };
+    const LotRoadInputs streets = lotRoadsFromLines({lotRoadSegment(Vec2(300, 260), Vec2(560, 260), 5.0, RoadClass::Local, 4.0)});
     std::vector<Poly2> blocks;
     const Real back = 5.0 + 4.0, depth = 56.0, len = 50.0;   // half the street + the sidewalk
     for (int i = 0; i < 5; ++i) {
@@ -244,10 +242,7 @@ TEST_CASE(lot_buildings_keep_clear_of_roads) {
     LotParams p;
     p.seed = 3;
     p.roadMargin = 6.0;   // deliberately TIGHT: the block reaches into the verge
-    RoadGraph roads;
-    roads.nodes.push_back({Vec2(-105, -200)});
-    roads.nodes.push_back({Vec2(-105, 200)});
-    roads.edges.push_back({0, 1, 13, RoadClass::Arterial, 0});   // wide arterial
+    const LotRoadInputs roads = lotRoadsFromLines({lotRoadSegment(Vec2(-105, -200), Vec2(-105, 200), 6.5, RoadClass::Arterial)});   // wide arterial
     std::vector<Poly2> blocks = {
         {{-101, -45}, {-11, -45}, {-11, 45}, {-101, 45}}};       // hugs the road
     const Real clearance = 4.6;
@@ -1305,10 +1300,8 @@ TEST_CASE(paved_plates_reach_the_sidewalk_and_stop_there) {
         p.seed = seed;
         p.roadMargin = 6.0;
         p.sidewalkWidth = 3.5;
-        RoadGraph roads;
-        roads.nodes.push_back({Vec2(-105, -200)});
-        roads.nodes.push_back({Vec2(-105, 200)});
-        roads.edges.push_back({0, 1, 13, RoadClass::Arterial, 0});   // band edge at x = -105 + 6.5 + 3.5 = -95
+        // band edge at x = -105 + 6.5 + 3.5 = -95
+        const LotRoadInputs roads = lotRoadsFromLines({lotRoadSegment(Vec2(-105, -200), Vec2(-105, 200), 6.5, RoadClass::Arterial, 3.5)});
         std::vector<Poly2> blocks = {{{-101, -45}, {-11, -45}, {-11, 45}, {-101, 45}}};
         const Real clearance = 4.6;
         std::vector<LotBuilding> b = growLotBuildings(blocks, p, nullptr, nullptr, &roads, clearance);
@@ -1377,11 +1370,8 @@ TEST_CASE(a_tower_in_a_plaza_stands_back_from_the_avenue) {
 // a local street 12 m off its east edge: every building faces the street, even the lots nearest the freeway.
 TEST_CASE(buildings_face_the_street_not_the_freeway) {
     const Poly2 block{{0, 0}, {40, 0}, {40, 40}, {0, 40}};
-    RoadGraph roads;
-    const int f0 = roads.addNode({-60, -8}), f1 = roads.addNode({100, -8});
-    roads.addEdge(f0, f1, 22, RoadClass::Freeway);
-    const int s0 = roads.addNode({52, -60}), s1 = roads.addNode({52, 100});
-    roads.addEdge(s0, s1, 8, RoadClass::Local);
+    const LotRoadInputs roads = lotRoadsFromLines({lotRoadSegment(Vec2(-60, -8), Vec2(100, -8), 11.0, RoadClass::Freeway),
+                                                   lotRoadSegment(Vec2(52, -60), Vec2(52, 100), 4.0, RoadClass::Local)});
     LotParams lp;
     lp.seed = 7;
     std::vector<RenderMesh> parts;
@@ -1405,9 +1395,8 @@ TEST_CASE(buildings_face_the_street_not_the_freeway) {
 TEST_CASE(no_lots_are_laid_along_a_freeway) {
     // 120 x 80 block: freeway 12 m off its south edge (z = 0), local street 8 m off its east edge (x = 120)
     const Poly2 block{{0, 0}, {120, 0}, {120, 80}, {0, 80}};
-    RoadGraph roads;
-    roads.addEdge(roads.addNode({-80, -12}), roads.addNode({220, -12}), 22, RoadClass::Freeway);
-    roads.addEdge(roads.addNode({128, -60}), roads.addNode({128, 160}), 8, RoadClass::Local);
+    const LotRoadInputs roads = lotRoadsFromLines({lotRoadSegment(Vec2(-80, -12), Vec2(220, -12), 11.0, RoadClass::Freeway),
+                                                   lotRoadSegment(Vec2(128, -60), Vec2(128, 160), 4.0, RoadClass::Local)});
     LotParams lp;
     lp.seed = 11;
     LotPlanDebug dbg;
@@ -1428,11 +1417,10 @@ TEST_CASE(no_lots_are_laid_along_a_freeway) {
     CHECK(dbg.pNotStreet >= 1);
 
     // A block bordered by freeway alone: nothing to face, nothing built.
-    RoadGraph fw;
-    fw.addEdge(fw.addNode({-80, -12}), fw.addNode({220, -12}), 22, RoadClass::Freeway);
-    fw.addEdge(fw.addNode({-80, 92}), fw.addNode({220, 92}), 22, RoadClass::Freeway);
-    fw.addEdge(fw.addNode({-12, -80}), fw.addNode({-12, 160}), 12, RoadClass::Ramp);
-    fw.addEdge(fw.addNode({132, -80}), fw.addNode({132, 160}), 12, RoadClass::Ramp);
+    const LotRoadInputs fw = lotRoadsFromLines({lotRoadSegment(Vec2(-80, -12), Vec2(220, -12), 11.0, RoadClass::Freeway),
+                                                lotRoadSegment(Vec2(-80, 92), Vec2(220, 92), 11.0, RoadClass::Freeway),
+                                                lotRoadSegment(Vec2(-12, -80), Vec2(-12, 160), 6.0, RoadClass::Ramp),
+                                                lotRoadSegment(Vec2(132, -80), Vec2(132, 160), 6.0, RoadClass::Ramp)});
     std::vector<RenderMesh> parts2;
     const std::vector<LotBuilding> none = growLotBuildings({block}, lp, nullptr, &parts2, &fw, 0.0);
     int built2 = 0; for (const LotBuilding& lb : none) if (!lb.units.empty()) ++built2;
@@ -1445,10 +1433,9 @@ TEST_CASE(no_lots_are_laid_along_a_freeway) {
 // east edge -- the building faces the one it can walk out onto.
 TEST_CASE(buildings_face_an_at_grade_street_not_a_bridge) {
     const Poly2 block{{0, 0}, {40, 0}, {40, 40}, {0, 40}};
-    RoadGraph roads;
-    roads.addEdge(roads.addNode({-60, -6}), roads.addNode({100, -6}), 10, RoadClass::Collector);
-    roads.edges.back().layer = 1;   // on a bridge over the ground here
-    roads.addEdge(roads.addNode({56, -60}), roads.addNode({56, 100}), 8, RoadClass::Local);
+    LotRoad bridge = lotRoadSegment(Vec2(-60, -6), Vec2(100, -6), 5.0, RoadClass::Collector);
+    bridge.overGround = true;   // on a bridge over the ground here
+    const LotRoadInputs roads = lotRoadsFromLines({bridge, lotRoadSegment(Vec2(56, -60), Vec2(56, 100), 4.0, RoadClass::Local)});
     LotParams lp;
     lp.seed = 7;
     std::vector<RenderMesh> parts;
@@ -1471,14 +1458,15 @@ TEST_CASE(buildings_face_an_at_grade_street_not_a_bridge) {
 // pocket parks; downtown, car parks too. Each use is furnished, its fenced or paved ground sealed, and no tree is
 // planted on the playground's rubber or a garden's beds.
 TEST_CASE(lots_that_do_not_build_get_a_use) {
-    RoadGraph roads;
+    std::vector<LotRoad> lines;
     std::vector<Poly2> blocks;
     // a 3 x 3 grid of 90 m blocks, streets 12 m wide between them
     for (int i = 0; i <= 3; ++i) {
         const Real x = i * 102.0 - 6.0;
-        roads.addEdge(roads.addNode({x, -60}), roads.addNode({x, 366}), 12, RoadClass::Local);
-        roads.addEdge(roads.addNode({-60, x}), roads.addNode({366, x}), 12, RoadClass::Local);
+        lines.push_back(lotRoadSegment(Vec2(x, -60), Vec2(x, 366), 6.0, RoadClass::Local));
+        lines.push_back(lotRoadSegment(Vec2(-60, x), Vec2(366, x), 6.0, RoadClass::Local));
     }
+    const LotRoadInputs roads = lotRoadsFromLines(lines);
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j) {
             const Real x0 = i * 102.0 + 6.0, z0 = j * 102.0 + 6.0;

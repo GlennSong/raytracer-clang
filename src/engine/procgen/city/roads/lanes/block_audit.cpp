@@ -4,7 +4,8 @@
 
 #include "engine/level_params.h"
 #include "engine/procgen/city/roads/lanes/geom2d.h"
-#include "engine/procgen/city/roads/lanes/road_twin.h"
+#include "engine/procgen/city/roads/lanes/city_producer.h"   // deckFromResult: the drawn deck the lot pass keeps off
+#include "engine/procgen/city/roads/lanes/lots_producer.h"   // lotRoadInputs: the roads as the lot pass reads them
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include <iomanip>
 #include <algorithm>
@@ -502,9 +503,9 @@ BlockAudit auditBlocks(const Result& r, const nlohmann::json& citysim) {
         std::vector<Poly2> blocks = sceneBlocks(r, 1.5, 2000.0, sidewalk);
         a.holesGiven = blocks.size();
         const bool wantParts = std::getenv("LANELAB_AUDIT_PARTS") != nullptr;   // grow the building meshes too (slow): `lanelab_tool blocks --at` lists them
-        // the streets a door faces and a lot fronts: the graph the loader hands the pass (city_producer's lotNav)
-        HeightField ground; if (grid) ground = [grid](double x, double z) { return grid->sample(x, z); };
-        const RoadGraph streets = navRoadGraph(roadTwin(r), ground);
+        // the streets a door faces and a lot fronts, and the deck it keeps off: the road model's planned layer of this
+        // build's road file and its drawn deck, as the lots producer hands them to the pass (lots_producer.h)
+        const LotRoadInputs streets = lotRoadInputs(plannedRoadModel(r.graph), deckFromResult(r));
         a.grown.lots = growLotBuildings(blocks, lp, &a.grown.plan, wantParts ? &a.grown.parts : nullptr, &streets, 0.0, wantParts ? &a.grown.flatParts : nullptr, &a.grown.gradeFlatten);
         {   // pads and terraces against the pavement: as the loader built them before, and as it builds them now
             std::vector<TerrainFlatten> raw, now;   // `sidewalk` from the block inset above
