@@ -373,7 +373,9 @@ int main(int argc, char** argv) {
                         out.size() - text.size(), bakeKeyUnchanged(out, text) ? "yes" : "NO");
             return 0;
         }
-        const std::string base = stripLayoutText(text);
+        // the file without its layout; its junctions' nodes stay where they are (they are written once, by --nodes, and
+        // the layout written again must not drop them: ADR-0435), except with --fresh, which starts the layout over
+        const std::string base = stripLayoutText(text, !fresh);
         const std::string dir = std::filesystem::path(argv[2]).parent_path().string();
         RoadLayout layout;
         std::vector<NamedStretch> keep;
@@ -420,7 +422,7 @@ int main(int argc, char** argv) {
                 (void)RoadLabGraph::fromJson(nlohmann::json::parse(out), dir.empty() ? "." : dir);
                 std::ofstream(argv[2], std::ios::binary) << out;
                 std::printf("wrote the names into %s (%zu bytes more; the bytes the bake keys are unchanged: %s)\n", argv[2], out.size() - text.size(),
-                            stripLayoutText(out) == base ? "yes" : "NO");
+                            stripLayoutText(out) == stripLayoutText(base) ? "yes" : "NO");
                 return 0;
             }
             const nlohmann::json spec = nlohmann::json::parse(fresh ? base : text);
@@ -442,8 +444,9 @@ int main(int argc, char** argv) {
             std::ofstream f(argv[2], std::ios::binary);
             f << out;
         }
-        std::printf("wrote the layout into %s (%zu bytes more; the bytes the bake keys are unchanged: %s)\n", argv[2], out.size() - base.size(),
-                    stripLayoutText(out) == base ? "yes" : "NO");
+        std::printf("wrote the layout into %s (%zu bytes more; the bytes the bake keys are unchanged: %s; the file is %s)\n", argv[2],
+                    out.size() - base.size(), stripLayoutText(out) == stripLayoutText(base) ? "yes" : "NO",
+                    out == text ? "unchanged, byte for byte" : "CHANGED");
         return 0;
     }
     if (argc >= 3 && std::strcmp(argv[1], "streetmap") == 0) {
@@ -955,9 +958,9 @@ int main(int argc, char** argv) {
         std::printf("\n");
         std::map<std::string, std::array<double, 3>> byClass;   // class -> metres of none/wall/guardrail
         for (const ParapetRun& run : runs) {
-            if (run.lane < 0 || r.lanes.lanes[static_cast<size_t>(run.lane)].parent < 0) continue;
+            if (run.lane < 0 || r.lanes.lanes[static_cast<size_t>(run.lane)].road() < 0) continue;
             double len = 0; for (size_t i = 0; i + 1 < run.pts.size(); ++i) len += distance(run.pts[i], run.pts[i + 1]);
-            const EdgeSpec& e = r.graph.edges[static_cast<size_t>(r.lanes.lanes[static_cast<size_t>(run.lane)].parent)];
+            const EdgeSpec& e = r.graph.edges[static_cast<size_t>(r.lanes.lanes[static_cast<size_t>(run.lane)].road())];
             byClass[e.isRamp() ? std::string("ramp") : e.cls][static_cast<size_t>(run.kind)] += len;
         }
         for (const auto& [cls, m] : byClass) std::printf("         %-10s wall %.0f m, guardrail %.0f m\n", cls.c_str(), m[1], m[2]);
@@ -974,7 +977,7 @@ int main(int argc, char** argv) {
                 const double zg = G.at(i, j);
                 for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
                     const Lane& l = r.lanes.lanes[li]; if (l.xy.size() < 2) continue;
-                    if (project(l.xy, l.s, q).distance > l.w / 2 + 1.0) continue;
+                    if (project(l.xy, l.s, q).distance > l.width / 2 + 1.0) continue;
                     const double excess = zg - r.heights->deck(static_cast<int>(li), q);
                     if (excess > 0.01) { ++over; if (excess > worst) { worst = excess; worstAt = q; worstLane = l.id; } }
                 }
@@ -1104,7 +1107,7 @@ int main(int argc, char** argv) {
         for (const Surface& s : r.pavement.decks) for (size_t ti = 0; ti < s.tris.size(); ++ti) {
             const auto& tr = s.tris[ti]; const engine::Vec2 c = (s.verts[static_cast<size_t>(tr[0])].xy + s.verts[static_cast<size_t>(tr[1])].xy + s.verts[static_cast<size_t>(tr[2])].xy) / 3.0;
             if (std::hypot(c.x - P.x, c.y - P.y) > probeR) continue; const int o = s.triOwner[ti]; const Lane& l = r.lanes.lanes[static_cast<size_t>(o)];
-            const std::string road = l.parent >= 0 ? r.graph.edges[static_cast<size_t>(l.parent)].id : l.id; auto& a = byRoad[road];
+            const std::string road = l.road() >= 0 ? r.graph.edges[static_cast<size_t>(l.road())].id : l.id; auto& a = byRoad[road];
             const double z = (s.verts[static_cast<size_t>(tr[0])].z + s.verts[static_cast<size_t>(tr[1])].z + s.verts[static_cast<size_t>(tr[2])].z) / 3.0;
             if (a[2] == 0) { a[0] = a[1] = z; } a[0] = std::min(a[0], z); a[1] = std::max(a[1], z); a[2] += 1;
         }
