@@ -64,7 +64,7 @@ static int usage() {
                  "usage: city_plan generate BRIEF.json OUT_DIR [--variants N]\n"
                  "       city_plan scene BRIEF.json OUT_SCENE.json [--no-ramps]\n"
                  "       city_plan brief\n"
-                 "       city_plan controls GRAPH.json RULES.lua [--write [--controls-only]] [--report FILE]   every junction's control and every road's limit, by the rule set's placement policy (#240); --controls-only: the junctions alone, no limits (the bake key keeps)\n"
+                 "       city_plan controls GRAPH.json RULES.lua [--write [--controls-only]] [--report FILE]   every junction's control and every road's limit, by the rule set's placement policy (#240); --controls-only: the junctions alone, no limits (the roads keep; the paint reads the controls, so the city re-bakes: ADR-0431)\n"
                  "                 [--compare [--layout] [--compare-json FILE]]   plan in memory and set it beside what the file states; never writes (ADR-0422)\n"
                  "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n"
                  "       city_plan island SEED OUT_DIR [--variants N]   island worlds on the map: terrain, sites, ring freeway (ADR-0105)\n"

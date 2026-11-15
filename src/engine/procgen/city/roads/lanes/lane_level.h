@@ -33,9 +33,10 @@
 //     another (the design stage's roadEndMeetsAnother; a road that just ends, or a ramp's anchored end, is no problem);
 //     a street's end at a junction with no stop line for its arm (nothing joined across it); every stretch of a lane no
 //     lane path covers, outside a junction (LaneGraphBuild::laneGaps, with why);
-//   - WHICH LINES BETWEEN LANES MAY BE CROSSED: between two through lanes, solid within the road file's
-//     `lane_rules.solid_before_stop_line` of the stop line they run to; every other line may be crossed both ways (beside
-//     a lane that begins or ends, or of another kind);
+//   - WHICH LINES BETWEEN LANES MAY BE CROSSED: one rule, lane_turns.h laneLineBetween, which the road paint draws from
+//     too (ADR-0431) -- between two lanes of a kind the turn table's `lane_lines` names (through lanes), solid within the
+//     road file's `lane_rules.solid_before_stop_line` of the stop line both run to; every other line may be crossed both
+//     ways (beside a lane that begins or ends, or of another kind);
 //   - CONTROLS, SIGNS AND LIMITS: each junction's stated control; each arm's stated signs at the end of every lane
 //     arriving by it; each lane its street's posted limit, each connector the limit of the lane it joins;
 //   - the junction's OUTLINE (the area that must not be blocked) runs across each arm's lanes at its stop line, the

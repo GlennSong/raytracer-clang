@@ -1,4 +1,9 @@
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
+#include "engine/procgen/city/roads/control_signs.h"            // markingsOnArm: which arms get a stop bar
+#include "engine/procgen/city/roads/lane_turns.h"               // laneLineBetween: the lines between lanes
+#include "engine/procgen/city/roads/lanes/lane_graph_build.h"   // kerbPerpSign: which side of a lane its kerb is
+#include "engine/procgen/city/roads/road_model.h"               // builtRoadModel: the model the paint is read off
+#include "engine/bundle/bundle.h"                               // fnv1aStr: paintFactsKey
 #include "engine/mesh_builder.h"
 #include "log.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
@@ -765,25 +770,18 @@ std::vector<JunctionArea> junctionAreas(const RoadLabGraph& g) {
                 for (std::size_t side = 0; side < 2; ++side)
                     if (t[side] == k && t[1 - side] < A.arms.size()) ownStreet[t[1 - side]] = true;
             double atPoint = -1, anywhere = 0;
-            int rankAtPoint = -1, rankAnywhere = -1;
             for (std::size_t o = 0; o < A.arms.size(); ++o) {
                 const ArmStop& b = A.arms[o];
                 if (b.edge < 0 || b.edge == a.edge || ownStreet[o]) continue;
                 const EdgeSpec& eo = g.edges[static_cast<std::size_t>(b.edge)];
                 const double hw = g.hw(eo);
-                const int rank = g.cls(eo).rank;
                 anywhere = std::max(anywhere, hw);
-                rankAnywhere = std::max(rankAnywhere, rank);
-                if (atOrBefore((mouth[o] - mouth[k]).length(), kSameJunctionPoint, kSamePoint)) {
-                    atPoint = std::max(atPoint, hw);
-                    rankAtPoint = std::max(rankAtPoint, rank);
-                }
+                if (atOrBefore((mouth[o] - mouth[k]).length(), kSameJunctionPoint, kSamePoint)) atPoint = std::max(atPoint, hw);
             }
             const double back = atPoint >= 0 ? atPoint : anywhere;
             const double away = a.spineIn ? -1.0 : 1.0;   // along the spine, away from the junction
             a.boxEdge = a.station + away * back;
             a.stopLine = a.boxEdge + away * kStopLineBack;
-            a.crossRank = atPoint >= 0 ? rankAtPoint : rankAnywhere;
         }
         // its area along each road: its arms' box edges and mouths there, and the stretches stated inside it
         std::map<int, std::pair<double, double>> along;
@@ -802,6 +800,32 @@ std::vector<JunctionArea> junctionAreas(const RoadLabGraph& g) {
         out.push_back(std::move(A));
     }
     return out;
+}
+
+uint64_t paintFactsKey(const nlohmann::json& spec) {
+    std::string text;
+    if (spec.is_object()) {
+        if (spec.contains("junctions") && spec["junctions"].is_array())
+            for (const nlohmann::json& j : spec["junctions"]) {
+                if (!j.is_object()) continue;
+                text += j.value("id", std::string()) + "|" + j.value("control", std::string()) + "|" +
+                        j.value("arms", nlohmann::json::array()).dump() + "|" + j.value("through", nlohmann::json::array()).dump() + "|";
+            }
+        if (spec.contains("streets") && spec["streets"].is_array())
+            for (nlohmann::json s : spec["streets"]) {
+                if (!s.is_object()) continue;
+                s.erase("name");
+                text += s.dump() + "|";
+            }
+        for (const char* key : {"arms_in_ring", "lane_rules"})
+            if (spec.contains(key)) text += std::string(key) + "|" + spec[key].dump() + "|";
+    }
+    text += "turns|" + std::to_string(laneTurnRules().hash) + "|";
+    const AttachmentKinds& kinds = attachmentKinds();
+    for (const AttachmentKind& k : kinds.kinds)
+        if (k.marking.is_object()) text += k.name + "|" + k.on + "|" + k.marking.dump() + "|";
+    for (const std::string& c : kinds.controlNames) text += c + "|";
+    return bundle::fnv1aStr(text);
 }
 
 std::vector<RailTrack> railTracks(const Result& r) {
@@ -859,7 +883,7 @@ std::vector<RailTrack> railTracks(const Result& r) {
     return out;
 }
 
-std::vector<NamedMesh> buildMeshes(const Result& r) {
+std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
     const RoadLabGraph& g = r.graph; const LaneSet& L = r.lanes; const DeckHeight& H = *r.heights;
     RenderMesh asphalt, concrete, sidewalk, shoulder, median, paintW, paintY, terrain, guardrail, ballast, sleepers, rails, platform;
     RenderMesh canopy, stationSteel, stationLamp;
@@ -1039,7 +1063,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     }
     // THE STATED JUNCTIONS (junctionAreas, step 9): lane paint stops inside their areas and where a lane runs inside a
     // crossing road's lane (junctionCrossRank: lane lines running through a junction read as a mess), and each street arm
-    // gets a zebra crosswalk, lane arrows and a stop bar at its stated stop line.
+    // gets a zebra crosswalk, and the arrows and stop bar the road model states for it.
     auto inBox = [&](size_t li, const Vec2& p, const Vec2& t) { return junctionCrossRank(r, look, li, p, t); };
     const std::vector<JunctionArea> areas = junctionAreas(r.graph);
     std::map<int, std::vector<JunctionSpan>> boxes;   // road -> the stated junctions' areas along it, in station order
@@ -1054,163 +1078,379 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         for (const JunctionSpan& sp : it->second) if (st >= sp.s0 - 0.5 && st <= sp.s1 + 0.5) return true;
         return false;
     };
-    // markings: each lane edge classified by what lies just outside it
+    // ---- WHAT IS PAINTED, DECIDED FROM THE ROAD MODEL (RoadPaint, deck_mesh.h) ------------------------------------------
+    // The three things the paint says about the rules of the road are read off the built road model of this very build
+    // (road_model.h builtRoadModel), never worked out from where the pavement lies:
+    //   - the line between two lanes: lane_turns.h laneLineBetween, the rule the lane level's table is filled from;
+    //   - a stop bar: control_signs.h markingsOnArm, over the arm's stated signs and its junction's stated control;
+    //   - a lane's arrows: the turns the model states from that lane (RoadModel::turns, lane_turns.h turnsAtJunction).
+    // Where the model states nothing, nothing is painted, and `plan.problems` says so once per kind of gap.
+    RoadPaint plan;
+    const RoadModel model = builtRoadModel(r);
+    const LaneTurnRules& turnRules = laneTurnRules();
+    const AttachmentKinds& attachKinds = attachmentKinds();
+    const std::vector<ArmMarkingRule> markingRules = armMarkingRules(attachKinds, &plan.problems);
+    const double solidBefore = g.laneRules.solidBeforeStopLine;
+    if (!g.statesLaneRules)
+        plan.problems.push_back("the road file states no `lane_rules`: no line between lanes is drawn solid before a stop line");
+    const double kerbSign = kerbPerpSign();   // the kerb side of a lane, as a sign on perp(its direction of travel)
+    // each lane's points by the station along its road's spine they were laid beside (the model's: RoadModel::spineStations)
+    std::vector<std::vector<double>> stationOf(L.lanes.size());
+    for (size_t li = 0; li < L.lanes.size(); ++li) {
+        const ModelLane& ml = model.lanes[li];
+        if (ml.edge == kNoIndex || ml.curve.count < 2) continue;
+        std::vector<double> st;
+        for (uint32_t k = ml.curve.first; k < ml.curve.end(); ++k) st.push_back(model.spineStations[k]);
+        bool laid = true;
+        for (double s : st) laid = laid && stated(s);
+        if (laid) stationOf[li] = std::move(st);
+    }
+    // a point of a lane's line (its centre line, or one of its edges: laid point for point) beside spine station `s`
+    auto atStation = [&](size_t li, const std::vector<Vec2>& pts, double s, Vec2* tangent) {
+        const std::vector<double>& st = stationOf[li];
+        std::size_t k = static_cast<std::size_t>(std::upper_bound(st.begin(), st.end(), s) - st.begin());
+        k = std::min(std::max<std::size_t>(k, 1), st.size() - 1) - 1;
+        const double span = st[k + 1] - st[k];
+        const double f = span > 0 ? std::clamp((s - st[k]) / span, 0.0, 1.0) : 0.0;
+        if (tangent) *tangent = normalize(pts[k + 1] - pts[k]);
+        return pts[k] + (pts[k + 1] - pts[k]) * f;
+    };
+    auto covers = [&](size_t li, double s) {
+        return atOrPast(s, L.lanes[li].spineFrom, kLaneLineStation) && atOrBefore(s, L.lanes[li].spineTo, kLaneLineStation);
+    };
+    // the lanes of each road running each way, the centre-line side first (by the builder's slots)
+    std::map<std::pair<int, int>, std::vector<size_t>> sameWay;
+    size_t connectorLanes = 0;
     for (size_t li = 0; li < L.lanes.size(); ++li) {
         const Lane& l = L.lanes[li];
         if (trackLane(r, static_cast<int>(li)) || footwayLane(r, static_cast<int>(li))) continue;   // a track is not painted, nor a path
-        for (int side = 0; side < 2; ++side) {
-            const std::vector<Vec2>& E = side == 0 ? l.left : l.right; std::vector<Vec2> pts; std::vector<double> z; std::vector<int> style;   // 0 edge, 1 lane, 2 centre
-            std::vector<double> Es = stations(E); int n = std::max(2, static_cast<int>(Es.back() / 1.5) + 1);   // (1.5 m: the paint follows a crest)
-            for (int k = 0; k < n; ++k) {
-                double st = Es.back() * k / (n - 1); Vec2 p = pointAt(E, Es, st); Vec2 t = tangentAtStation(E, Es, st); Vec2 nrm = perp(t) * (side == 0 ? 1.0 : -1.0); Vec2 q = p + nrm * 0.3;
-                int sty = (inBox(li, p, t) >= 0 || inSpan(l, p)) ? 3 : 0;   // 3: inside a junction box, no paint
-                for (int ojI : laneGrid.at(q)) {
-                    if (sty != 0) break; const size_t oj = static_cast<size_t>(ojI);
-                    if (oj == li || r.pavement.footprints[oj].empty()) continue; const Box2& b = laneBox[oj];
-                    if (q.x < b.minX || q.x > b.maxX || q.y < b.minY || q.y > b.maxY || !footprint[oj].contains(q)) continue;
-                    const Lane& o = L.lanes[oj]; Projection pr = project(o.xy, o.s, q);
-                    double same = dot(t * static_cast<double>(l.dir), tangentAtStation(o.xy, o.s, pr.station) * static_cast<double>(o.dir)); sty = same > 0 ? 1 : 2;
-                }
-                pts.push_back(p); z.push_back(H.deck(static_cast<int>(li), p) + 0.02); style.push_back(sty);
+        if (l.parent < 0) { ++connectorLanes; continue; }
+        if (stationOf[li].empty()) continue;
+        sameWay[std::make_pair(l.parent, l.dir)].push_back(li);
+    }
+    for (std::pair<const std::pair<int, int>, std::vector<size_t>>& kv : sameWay)
+        std::stable_sort(kv.second.begin(), kv.second.end(), [&](size_t a, size_t b) { return L.lanes[a].slot < L.lanes[b].slot; });
+    if (connectorLanes > 0)
+        plan.problems.push_back(std::to_string(connectorLanes) + " connector lanes: the road graph states nothing about what lies beside "
+                                "a connector, so no line is painted along one");
+    // along each road: every stated arm's mouth, box edge and stop line there (junctionAreas: the model's ModelArm values)
+    struct ArmAlong { double mouth, boxEdge, stopLine; };
+    std::map<int, std::vector<ArmAlong>> armsAlong;
+    for (const JunctionArea& A : areas)
+        for (const ArmStop& as : A.arms)
+            if (as.edge >= 0) armsAlong[as.edge].push_back(ArmAlong{as.station, as.boxEdge, as.stopLine});
+    // a lane at spine station `s`, as the lines' rule reads it: its kind and the stop line its stretch on its street there
+    // runs to (road_model.h laneSpanEnd). `onStreet`: the station is on one of the lane's stated streets.
+    auto besideAt = [&](size_t li, double s, bool& onStreet) {
+        const ModelLane& ml = model.lanes[li];
+        const double roadLength = g.edges[ml.edge].s.back();
+        LaneBesideLine out;
+        out.kind = ml.kind;
+        onStreet = false;
+        for (const ModelLaneSpan& sp : ml.streets) {
+            if (!atOrPast(s, sp.from, kReachesStreetEnd) || !atOrBefore(s, sp.to, kReachesStreetEnd)) continue;
+            onStreet = true;
+            const LaneSpanEnd met = laneSpanEnd(model, sp, ml.dir > 0 ? 1 : 0);
+            if (met.reaches && met.junction.valid() && met.arm >= 0 && stated(met.stopLine)) {
+                out.runsToStopLine = true;
+                out.stopLine = ml.dir > 0 ? met.stopLine : roadLength - met.stopLine;
             }
-            size_t i = 0;
-            while (i < pts.size()) {
-                size_t j = i; while (j + 1 < pts.size() && style[j + 1] == style[i]) ++j;
-                if (j > i) {
-                    std::vector<Vec2> seg(pts.begin() + static_cast<long>(i), pts.begin() + static_cast<long>(j) + 1); std::vector<double> sz(z.begin() + static_cast<long>(i), z.begin() + static_cast<long>(j) + 1);
-                    if (style[i] == 3) {} else if (style[i] == 1) strip(paintW, seg, sz, 0.06, 3.0, 6.0, kPaintWhite); else if (style[i] == 2) strip(paintY, seg, sz, 0.07, 0, 0, kPaintYellow); else strip(paintW, seg, sz, 0.08, 0, 0, kPaintWhite);
+            break;
+        }
+        return out;
+    };
+    // LINES ALONG THE LANES. Each lane's kerb-side edge is the line between it and the next lane toward the kerb (dashed
+    // where the lane table lets it be crossed, solid where not), or the road's edge line where no lane lies beyond; its
+    // centre-line-side edge is drawn only by the lane nearest the centre line: the centre line of a two-way road with no
+    // median (by its forward lane), else an edge line.
+    struct LineRun { std::vector<Vec2> pts; std::vector<double> z; };
+    std::vector<LineRun> lineRuns;   // one per plan.lines entry: what is drawn for it
+    for (const std::pair<const std::pair<int, int>, std::vector<size_t>>& kv : sameWay) {
+        const int parent = kv.first.first, dir = kv.first.second;
+        const EdgeSpec& e = g.edges[static_cast<size_t>(parent)];
+        const double roadLength = e.s.back();
+        const std::vector<size_t>& lanesHere = kv.second;
+        const std::map<std::pair<int, int>, std::vector<size_t>>::const_iterator otherWay = sameWay.find(std::make_pair(parent, -dir));
+        const std::map<int, std::vector<ArmAlong>>::const_iterator armsHere = armsAlong.find(parent);
+        for (size_t li : lanesHere) {
+            const Lane& l = L.lanes[li];
+            const std::vector<double>& st = stationOf[li];
+            // where it is sampled: every 1.5 m (the paint follows a crest), and exactly where an answer can change -- each
+            // arm's mouth, box edge and stop line, where the solid stretch before a stop line begins, where a lane beside
+            // it begins or ends
+            std::vector<double> cuts;
+            const int n = std::max(2, static_cast<int>((st.back() - st.front()) / 1.5) + 1);
+            for (int k = 0; k < n; ++k) cuts.push_back(st.front() + (st.back() - st.front()) * k / (n - 1));
+            if (armsHere != armsAlong.end())
+                for (const ArmAlong& aa : armsHere->second)
+                    for (double s : {aa.mouth, aa.boxEdge, aa.stopLine, aa.stopLine - solidBefore, aa.stopLine + solidBefore}) cuts.push_back(s);
+            for (size_t lj : lanesHere) { cuts.push_back(L.lanes[lj].spineFrom); cuts.push_back(L.lanes[lj].spineTo); }
+            if (otherWay != sameWay.end())
+                for (size_t lj : otherWay->second) { cuts.push_back(L.lanes[lj].spineFrom); cuts.push_back(L.lanes[lj].spineTo); }
+            std::sort(cuts.begin(), cuts.end());
+            std::vector<double> at;
+            for (double s : cuts)
+                if (atOrPast(s, st.front(), 0.0) && atOrBefore(s, st.back(), 0.0) && (at.empty() || strictlyPast(s, at.back(), kLaneLineStation)))
+                    at.push_back(s);
+            if (at.size() < 2) continue;
+            const bool kerbIsPlanLeft = kerbSign * dir > 0;   // (the builder's edge lists are named by the plan's sides of the spine)
+            for (int side = 0; side < 2; ++side) {            // 0: its kerb-side edge, 1: its centre-line-side edge
+                const std::vector<Vec2>& E = (side == 0) == kerbIsPlanLeft ? l.left : l.right;
+                PaintedLine run;
+                LineRun drawn;
+                bool open = false;
+                auto close = [&]() {
+                    if (open && run.kind != PaintedLineKind::None) {
+                        plan.lines.push_back(run);
+                        lineRuns.push_back(std::move(drawn));
+                    }
+                    drawn = LineRun();
+                    open = false;
+                };
+                for (size_t k = 0; k + 1 < at.size(); ++k) {
+                    const double mid = 0.5 * (at[k] + at[k + 1]);
+                    Vec2 t;
+                    const Vec2 pm = atStation(li, E, mid, &t);
+                    PaintedLineKind kind = PaintedLineKind::Edge;
+                    int other = -1;
+                    if (inBox(li, pm, t) >= 0 || inSpan(l, pm)) {
+                        kind = PaintedLineKind::None;   // inside a junction: no paint
+                    } else if (side == 0) {
+                        for (size_t lj : lanesHere)
+                            if (L.lanes[lj].slot > l.slot && covers(lj, mid)) { other = static_cast<int>(lj); break; }
+                        if (other >= 0) {
+                            // between an arm's stop line and its mouth the lane table has no lanes side by side: no line
+                            bool pastStopLine = false;
+                            if (armsHere != armsAlong.end())
+                                for (const ArmAlong& aa : armsHere->second)
+                                    pastStopLine = pastStopLine || (atOrPast(mid, std::min(aa.mouth, aa.stopLine), kLaneLineStation) &&
+                                                                    atOrBefore(mid, std::max(aa.mouth, aa.stopLine), kLaneLineStation));
+                            bool mine = false, theirs = false;
+                            const LaneBesideLine offside = besideAt(li, mid, mine);
+                            const LaneBesideLine kerbside = besideAt(static_cast<size_t>(other), mid, theirs);
+                            if (pastStopLine || !mine || !theirs) {
+                                kind = PaintedLineKind::None;   // on no stated street: the table states no line here
+                            } else {
+                                const double u = dir > 0 ? mid : roadLength - mid;
+                                const LaneLine line = laneLineBetween(turnRules, solidBefore, offside, kerbside, u, u);
+                                kind = line.crossFromOffside && line.crossFromKerbside ? PaintedLineKind::Dashed : PaintedLineKind::Solid;
+                            }
+                        }
+                    } else {
+                        bool nearerCentre = false, oncoming = false;
+                        for (size_t lj : lanesHere) nearerCentre = nearerCentre || (L.lanes[lj].slot < l.slot && covers(lj, mid));
+                        if (otherWay != sameWay.end())
+                            for (size_t lj : otherWay->second) oncoming = oncoming || covers(lj, mid);
+                        const bool sharedCentre = oncoming && !(e.lanes.gap > 0);   // no median stated between the two ways
+                        if (nearerCentre) kind = PaintedLineKind::None;             // (that lane's kerb-side edge is this line)
+                        else if (sharedCentre) kind = dir > 0 ? PaintedLineKind::Centre : PaintedLineKind::None;   // drawn once
+                    }
+                    if (open && (kind != run.kind || other != run.other)) close();
+                    if (!open) {
+                        run = PaintedLine();
+                        run.lane = static_cast<int>(li);
+                        run.other = other;
+                        run.kerbSide = side == 0;
+                        run.kind = kind;
+                        run.from = at[k];
+                        const Vec2 p0 = atStation(li, E, at[k], nullptr);
+                        drawn.pts.push_back(p0);
+                        drawn.z.push_back(H.deck(static_cast<int>(li), p0) + 0.02);
+                        open = true;
+                    }
+                    const Vec2 p1 = atStation(li, E, at[k + 1], nullptr);
+                    run.to = at[k + 1];
+                    run.metres += distance(drawn.pts.back(), p1);
+                    drawn.pts.push_back(p1);
+                    drawn.z.push_back(H.deck(static_cast<int>(li), p1) + 0.02);
                 }
-                i = j + 1;
+                close();
             }
         }
     }
+    for (size_t k = 0; k < plan.lines.size(); ++k) {
+        const LineRun& d = lineRuns[k];
+        switch (plan.lines[k].kind) {
+            case PaintedLineKind::Dashed: strip(paintW, d.pts, d.z, 0.06, 3.0, 6.0, kPaintWhite); break;
+            case PaintedLineKind::Solid: strip(paintW, d.pts, d.z, 0.06, 0, 0, kPaintWhite); break;
+            case PaintedLineKind::Centre: strip(paintY, d.pts, d.z, 0.07, 0, 0, kPaintYellow); break;
+            case PaintedLineKind::Edge: strip(paintW, d.pts, d.z, 0.08, 0, 0, kPaintWhite); break;
+            case PaintedLineKind::None: break;
+        }
+    }
+
+    // AT EACH STREET ARM OF EACH STATED JUNCTION: a zebra crosswalk, then -- from the model -- the arrows in the lanes
+    // arriving by it and the markings its control and signs call for.
     static const std::vector<JunctionSpan> kNoSpans;
-    for (const JunctionArea& area : areas) for (const ArmStop& arm : area.arms) {
-        if (!arm.painted || arm.edge < 0) continue;
-        const int pe = arm.edge;
-        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(pe)]; if (e.s.size() < 2) continue;
-        const double Lr = e.s.back(); const int ownRank = r.graph.cls(e).rank;
-        const std::map<int, std::vector<JunctionSpan>>::const_iterator onRoad = boxes.find(pe);
-        const std::vector<JunctionSpan>& merged = onRoad == boxes.end() ? kNoSpans : onRoad->second;
-        // sign -1: the approach at stations below the box; +1: above. sStop: the arm's stated stop line (junctionAreas)
-        auto paintSide = [&](double sBox, int sign, int crossRank, double sStop) {
+    const std::vector<std::vector<TurnArm>> armLanes = turnArmsOf(model);   // per junction and arm: the lanes arriving by it
+    std::map<std::pair<uint32_t, uint32_t>, std::array<bool, kTurnCount>> turnsFrom;   // (junction, lane) -> the kinds of turn stated
+    for (const ModelTurn& mt : model.turns)
+        turnsFrom[std::make_pair(mt.junction.index, mt.from.index)][static_cast<size_t>(mt.turn)] = true;
+    if (!model.junctions.empty() && !model.armsInRing)
+        plan.problems.push_back("the road file does not state its junctions' arms in their ring, so which turn is which is not stated: "
+                                "no lane arrows are painted");
+    size_t lanesWithoutTurns = 0, noControl = 0;
+    std::set<std::string> unknownControls, unknownShapes;
+    for (size_t j = 0; j < areas.size(); ++j) {
+        const ModelJunction& J = model.junctions[j];
+        bool paintedArm = false;
+        for (size_t a = 0; a < areas[j].arms.size(); ++a) {
+            const ArmStop& arm = areas[j].arms[a];
+            if (!arm.painted || arm.edge < 0) continue;
+            paintedArm = true;
+            const int pe = arm.edge;
+            const EdgeSpec& e = r.graph.edges[static_cast<size_t>(pe)]; if (e.s.size() < 2) continue;
+            const double Lr = e.s.back();
+            const std::map<int, std::vector<JunctionSpan>>::const_iterator onRoad = boxes.find(pe);
+            const std::vector<JunctionSpan>& merged = onRoad == boxes.end() ? kNoSpans : onRoad->second;
+            // sign -1: the approach lies at stations below the box; +1: above. sStop: the arm's stated stop line
+            const double sBox = arm.boxEdge, sStop = arm.stopLine;
+            const int sign = arm.spineIn ? -1 : +1;
             const double sw0 = sBox + sign * kCrosswalkNear, sw1 = sBox + sign * kCrosswalkFar;
-            if (std::min(sw0, sw1) < 2.0 || std::max(sw0, sw1) > Lr - 2.0) return;   // the road ends in this box: no leg here
+            if (std::min(sw0, sw1) < 2.0 || std::max(sw0, sw1) > Lr - 2.0) continue;   // the road ends in this box: no leg here
             const double stMid = 0.5 * (sw0 + sw1); Vec2 P = pointAt(e.xy, e.s, stMid); Vec2 T = tangentAtStation(e.xy, e.s, stMid); Vec2 N = perp(T);
-            struct LL { int li; double lat, w; bool approaching; }; std::vector<LL> ls;
+            // the paved width at the crosswalk: this road's lanes there
+            struct LL { int li; double lat, w; }; std::vector<LL> ls;
             for (size_t li = 0; li < L.lanes.size(); ++li) {
                 const Lane& l = L.lanes[li]; if (l.parent != pe || l.isConnector() || l.s.size() < 2) continue;
                 Projection pr = project(l.xy, l.s, P); if (pr.station < 1.0 || pr.station > l.s.back() - 1.0 || pr.distance > 30.0) continue;
-                Vec2 c = pointAt(l.xy, l.s, pr.station); double lat = dot(c - P, N);
-                bool towardIncreasing = dot(tangentAtStation(l.xy, l.s, pr.station) * static_cast<double>(l.dir), T) > 0;
-                ls.push_back({static_cast<int>(li), lat, l.w, sign < 0 ? towardIncreasing : !towardIncreasing});
+                Vec2 c = pointAt(l.xy, l.s, pr.station);
+                ls.push_back({static_cast<int>(li), dot(c - P, N), l.w});
             }
-            if (ls.empty()) return;
+            if (ls.empty()) continue;
             double latMin = 1e9, latMax = -1e9; for (const LL& x : ls) { latMin = std::min(latMin, x.lat - x.w / 2); latMax = std::max(latMax, x.lat + x.w / 2); }
             auto laneAt = [&](double lat) { int best = ls[0].li; double bd = 1e300; for (const LL& x : ls) { double d = std::fabs(x.lat - lat); if (d < bd) { bd = d; best = x.li; } } return best; };
             auto zAt = [&](int li, const Vec2& q) { return H.deck(li, q) + 0.025; };
             // zebra: stripes along the road, 0.5 m on a 1 m pitch, across the paved width
             Vec2 A = pointAt(e.xy, e.s, sw0), B = pointAt(e.xy, e.s, sw1);
             for (double lat = latMin + 0.55; lat + 0.25 <= latMax - 0.3; lat += 1.0) {
-                int li = laneAt(lat); Vec2 a = A + N * lat, b = B + N * lat;
-                strip(paintW, std::vector<Vec2>{a, b}, std::vector<double>{zAt(li, a), zAt(li, b)}, 0.25, 0, 0, kPaintWhite);
+                int li = laneAt(lat); Vec2 a2 = A + N * lat, b2 = B + N * lat;
+                strip(paintW, std::vector<Vec2>{a2, b2}, std::vector<double>{zAt(li, a2), zAt(li, b2)}, 0.25, 0, 0, kPaintWhite);
             }
-            // LANE ARROWS (Glenn, 2026-09-25: "lane signs like arrows for where to turn ... they should be
-            // a part of the road"): what each approaching lane may do at this junction, painted in it twice
-            // -- 7 m and 30 m before the stop line. The junction's LEGS are the street edges that leave its
-            // box at this level (a road through it gives two, one ending in it one); each leg's angle from
-            // the approach's heading makes it a left, a straight or a right. The movements go to the lanes
-            // by position, the usual way: the leftmost lane turns left (and goes straight, with a lane
-            // beside it that does too), the rightmost turns right, the middle ones go straight; a turn
-            // pocket turns only. Painted where there is a choice of lanes (two or more approaching). The
-            // glyphs are built in plan coordinates pointing at the real legs, so the world's mirror
-            // (interchange.h) flips them with the roads.
-            {
-                std::vector<const LL*> app;
-                for (const LL& x : ls) if (x.approaching) app.push_back(&x);
-                const Vec2 D = T * static_cast<double>(-sign);   // travel into the box
-                const Vec2 Lft = perp(D);                         // the plan's left of travel
-                // the approach lies at stations on the `sign` side of the box: back from the stop line is +sign
-                if (app.size() >= 2 && std::min(sStop, sStop + sign * 40.0) > 2.0 && std::max(sStop, sStop + sign * 40.0) < Lr - 2.0) {
-                    // the box, from just inside it
-                    const Vec2 C = pointAt(e.xy, e.s, sBox) + D * 6.0;   // 6 m into the box
-                    const double zC = H.deck(ls[0].li, pointAt(e.xy, e.s, sStop));
-                    std::set<int> parents;
-                    for (const Vec2& q : {C, C + D * 12.0, C + Lft * 12.0, C - Lft * 12.0, C + D * 6.0})
-                        for (int ojI : laneGrid.at(q)) { const Lane& o = L.lanes[static_cast<size_t>(ojI)]; if (!o.isConnector() && o.parent >= 0) parents.insert(o.parent); }
-                    bool hasL = false, hasS = false, hasR = false;
-                    for (int pe2 : parents) {
-                        const EdgeSpec& e2 = r.graph.edges[static_cast<size_t>(pe2)];
-                        if (e2.isRamp() || e2.cls == "freeway" || e2.s.size() < 2) continue;
-                        const Projection pr2 = project(e2.xy, e2.s, C);
-                        if (pr2.distance > 25.0) continue;
-                        // at this level (not a viaduct overhead or a road underneath)
-                        int anyLane = -1;
-                        for (size_t lj = 0; lj < L.lanes.size() && anyLane < 0; ++lj) if (L.lanes[lj].parent == pe2) anyLane = static_cast<int>(lj);
-                        if (anyLane < 0 || std::fabs(H.deck(anyLane, pointAt(e2.xy, e2.s, pr2.station)) - zC) > 1.5) continue;
-                        for (int w2 : {-1, +1}) {
-                            const double sLeg = pr2.station + w2 * 30.0;
-                            if (sLeg < 0.0 || sLeg > e2.s.back()) continue;   // the edge ends in this junction that way
-                            const Vec2 V = pointAt(e2.xy, e2.s, sLeg) - C;
-                            if (V.length() < 12.0) continue;
-                            const Vec2 v = V / V.length();
-                            const double a = std::atan2(cross(D, v), dot(D, v)) * 180.0 / 3.14159265358979;
-                            if (std::fabs(a) > 150.0) continue;          // the way it came
-                            if (std::fabs(a) < 35.0) hasS = true; else if (a > 0) hasL = true; else hasR = true;
-                        }
-                    }
-                    // the lanes, plan-left first
-                    std::sort(app.begin(), app.end(), [&](const LL* a, const LL* b) { return dot(N * a->lat, Lft) > dot(N * b->lat, Lft); });
-                    const std::size_t n = app.size();
-                    const std::vector<LaneMoves> moves = assignLaneMoves(n, hasL, hasS, hasR,
-                        L.lanes[static_cast<size_t>(app.front()->li)].kind == "turn", L.lanes[static_cast<size_t>(app.back()->li)].kind == "turn");
-                    for (std::size_t i = 0; i < n; ++i) {
-                        const bool mL = moves[i].left, mS = moves[i].straight, mR = moves[i].right;
-                        if (!mL && !mS && !mR) continue;
-                        // the glyph in its lane's frame: u forward from the tail, v to the plan's left
-                        // the second arrow only where the block is long enough that the next junction's
-                        // arrows (painted back from ITS stop line) don't meet it mid-block
-                        double gap = sign < 0 ? sBox : Lr - sBox;
-                        for (const JunctionSpan& o : merged) {
-                            if (sign < 0 && o.s1 < sBox - 1.0) gap = std::min(gap, sBox - o.s1);
-                            if (sign > 0 && o.s0 > sBox + 1.0) gap = std::min(gap, o.s0 - sBox);
-                        }
-                        for (double back : {7.0, 30.0}) {
-                            if (back > 10.0 && gap < 110.0) continue;
-                            const double sTail = sStop + sign * (back + 5.0);
-                            const Vec2 base = pointAt(e.xy, e.s, sTail) + N * app[i]->lat;
-                            auto P = [&](double u, double v) { return base + D * u + Lft * v; };
-                            auto Z = [&](const Vec2& q) { return H.deck(app[i]->li, q) + 0.025; };
-                            auto shaft = [&](std::initializer_list<std::pair<double, double>> uv) {
-                                std::vector<Vec2> pts; std::vector<double> z;
-                                for (const auto& [u, v] : uv) { pts.push_back(P(u, v)); z.push_back(Z(pts.back())); }
-                                strip(paintW, pts, z, 0.15, 0, 0, kPaintWhite);
-                            };
-                            auto head = [&](double u, double v, double du, double dv, double len) {   // base centre, pointing (du, dv)
-                                const Vec2 b = P(u, v), dir = D * du + Lft * dv, side = perp(dir) * 0.45, tip = b + dir * len;
-                                MeshBuilder::emitQuad(paintW, world(b - side, Z(b - side)), world(tip, Z(tip)), world(tip, Z(tip)), world(b + side, Z(b + side)), Vec3(0, 1, 0), kPaintWhite);
-                            };
-                            const double turnAt = mS ? 1.6 : 2.4;   // a turn branches low when a straight arrow carries on above it
-                            shaft({{0.0, 0.0}, {mS ? 3.8 : turnAt, 0.0}});
-                            if (mS) head(3.8, 0.0, 1.0, 0.0, 1.2);
-                            for (int t2 : {+1, -1}) {
-                                if ((t2 > 0 && !mL) || (t2 < 0 && !mR)) continue;
-                                shaft({{turnAt, 0.0}, {turnAt + 0.55, 0.22 * t2}, {turnAt + 0.8, 0.5 * t2}});
-                                head(turnAt + 0.8, 0.5 * t2, 0.0, static_cast<double>(t2), 0.95);
-                            }
-                        }
+            // the lanes arriving by this arm, as the model states them (road_model.h turnArmsOf), that the paint has laid
+            std::vector<size_t> arriving;
+            for (const TurnArmLane& tl : armLanes[j][a].arriving)
+                if (!stationOf[tl.lane].empty()) arriving.push_back(tl.lane);
+            // LANE ARROWS (Glenn, 2026-09-25: "lane signs like arrows for where to turn ... they should be a part of the
+            // road"): in each arriving lane, the turns the model states from it at this junction -- straight on, the near
+            // turn (toward the kerb) and the far turn (across the oncoming traffic). Painted where there is a choice of
+            // lanes (two or more arriving) and room for it: its tail 12 m before the stop line, and again 35 m before it
+            // on a long block. A lane with no stated turn gets none (counted, said once).
+            if (model.armsInRing && arriving.size() >= 2 && std::min(sStop, sStop + sign * 40.0) > 2.0 && std::max(sStop, sStop + sign * 40.0) < Lr - 2.0) {
+                // the second arrow only where the block is long enough that the next junction's arrows (painted back
+                // from ITS stop line) don't meet it mid-block
+                double gap = sign < 0 ? sBox : Lr - sBox;
+                for (const JunctionSpan& o : merged) {
+                    if (sign < 0 && o.s1 < sBox - 1.0) gap = std::min(gap, sBox - o.s1);
+                    if (sign > 0 && o.s0 > sBox + 1.0) gap = std::min(gap, o.s0 - sBox);
+                }
+                for (size_t li : arriving) {
+                    const std::map<std::pair<uint32_t, uint32_t>, std::array<bool, kTurnCount>>::const_iterator turnsHere =
+                        turnsFrom.find(std::make_pair(static_cast<uint32_t>(j), static_cast<uint32_t>(li)));
+                    if (turnsHere == turnsFrom.end()) { ++lanesWithoutTurns; continue; }
+                    const bool straight = turnsHere->second[static_cast<size_t>(Turn::Straight)];
+                    const bool nearTurn = turnsHere->second[static_cast<size_t>(Turn::NearTurn)];
+                    const bool farTurn = turnsHere->second[static_cast<size_t>(Turn::FarTurn)];
+                    if (!straight && !nearTurn && !farTurn) continue;
+                    for (double back : {7.0, 30.0}) {
+                        if (back > 10.0 && gap < 110.0) continue;
+                        const double sTail = sStop + sign * (back + 5.0);
+                        if (!covers(li, sTail)) continue;
+                        PaintedArrow arrow;
+                        arrow.junction = static_cast<int>(j);
+                        arrow.arm = static_cast<int>(a);
+                        arrow.lane = static_cast<int>(li);
+                        arrow.straight = straight;
+                        arrow.nearTurn = nearTurn;
+                        arrow.farTurn = farTurn;
+                        arrow.station = sTail;
+                        Vec2 along;
+                        arrow.at = atStation(li, L.lanes[li].xy, sTail, &along);
+                        arrow.heading = along * static_cast<double>(L.lanes[li].dir);
+                        plan.arrows.push_back(arrow);
                     }
                 }
             }
-            // stop bar across the approaching lanes, a metre before the crosswalk — the minor road stops
-            // for the major one (equal ranks: every approach stops)
-            if (crossRank < ownRank) return;
-            double lo = 1e300, hi = -1e300; for (const LL& x : ls) if (x.approaching) { lo = std::min(lo, x.lat - x.w / 2); hi = std::max(hi, x.lat + x.w / 2); }
-            if (lo < hi) { Vec2 Q = pointAt(e.xy, e.s, sStop); Vec2 a = Q + N * (lo + 0.15), b = Q + N * (hi - 0.15);
-                strip(paintW, std::vector<Vec2>{a, b}, std::vector<double>{zAt(laneAt(lo), a), zAt(laneAt(hi), b)}, 0.25, 0, 0, kPaintWhite); }
-        };
-        paintSide(arm.boxEdge, arm.spineIn ? -1 : +1, arm.crossRank, arm.stopLine);
+            // THE MARKINGS ACROSS THE ARRIVING LANES (a stop bar): the rows that hold for this arm's stated signs and its
+            // junction's stated control (control_signs.h markingsOnArm). No class or rank is asked.
+            for (const ArmMarkingRule* rule : markingsOnArm(J, a, markingRules)) {
+                if (rule->draws != kPaintDrawsBar) { unknownShapes.insert(rule->draws); continue; }
+                if (arriving.empty()) continue;   // nothing arrives by it (the exit of a one-way street)
+                PaintedStopBar bar;
+                bar.junction = static_cast<int>(j);
+                bar.arm = static_cast<int>(a);
+                bar.marking = rule->kind;
+                bar.station = sStop;
+                const Vec2 Q = pointAt(e.xy, e.s, sStop), across = perp(tangentAtStation(e.xy, e.s, sStop));
+                double lo = 1e300, hi = -1e300;
+                size_t loLane = arriving.front(), hiLane = arriving.front();
+                for (size_t li : arriving) {
+                    const double lat = dot(atStation(li, L.lanes[li].xy, sStop, nullptr) - Q, across), half = L.lanes[li].w / 2;
+                    if (lat - half < lo) { lo = lat - half; loLane = li; }
+                    if (lat + half > hi) { hi = lat + half; hiLane = li; }
+                    bar.lanes.push_back(static_cast<int>(li));
+                }
+                bar.from = Q + across * (lo + 0.15);
+                bar.to = Q + across * (hi - 0.15);
+                bar.fromLane = static_cast<int>(loLane);
+                bar.toLane = static_cast<int>(hiLane);
+                plan.stopBars.push_back(bar);
+            }
+        }
+        if (!paintedArm) continue;
+        if (J.control.empty()) ++noControl;
+        else if (std::find(attachKinds.controlNames.begin(), attachKinds.controlNames.end(), J.control) == attachKinds.controlNames.end())
+            unknownControls.insert(J.control);
     }
+    if (lanesWithoutTurns > 0)
+        plan.problems.push_back(std::to_string(lanesWithoutTurns) + " lanes arriving at a painted arm have no stated turn: no arrow in them "
+                                "(the road model's problems name each)");
+    if (noControl > 0)
+        plan.problems.push_back(std::to_string(noControl) + " junctions with painted arms state no control: no stop bar at them unless an "
+                                "arm states a sign");
+    for (const std::string& c : unknownControls)
+        plan.problems.push_back("junction control \"" + c + "\" is not one road_attachments.json knows (controls.map): no marking follows from it");
+    for (const std::string& s : unknownShapes)
+        plan.problems.push_back("a marking row draws \"" + s + "\", a shape the paint does not have: not painted");
+    // ...drawn from the list
+    for (const PaintedArrow& arrow : plan.arrows) {
+        // the glyph in its lane's frame: u forward from the tail, v toward the kerb
+        const Vec2 D = arrow.heading, K = perp(D) * kerbSign;
+        auto G = [&](double u, double v) { return arrow.at + D * u + K * v; };
+        auto Z = [&](const Vec2& q) { return H.deck(arrow.lane, q) + 0.025; };
+        auto shaft = [&](std::initializer_list<std::pair<double, double>> uv) {
+            std::vector<Vec2> pts; std::vector<double> z;
+            for (const std::pair<double, double>& p : uv) { pts.push_back(G(p.first, p.second)); z.push_back(Z(pts.back())); }
+            strip(paintW, pts, z, 0.15, 0, 0, kPaintWhite);
+        };
+        auto head = [&](double u, double v, double du, double dv, double len) {   // base centre, pointing (du, dv)
+            const Vec2 b = G(u, v), dir = D * du + K * dv, side = perp(dir) * 0.45, tip = b + dir * len;
+            MeshBuilder::emitQuad(paintW, world(b - side, Z(b - side)), world(tip, Z(tip)), world(tip, Z(tip)), world(b + side, Z(b + side)), Vec3(0, 1, 0), kPaintWhite);
+        };
+        const double turnAt = arrow.straight ? 1.6 : 2.4;   // a turn branches low when a straight arrow carries on above it
+        shaft({{0.0, 0.0}, {arrow.straight ? 3.8 : turnAt, 0.0}});
+        if (arrow.straight) head(3.8, 0.0, 1.0, 0.0, 1.2);
+        for (int toKerb : {+1, -1}) {   // +1: the near turn, toward the kerb; -1: the far turn
+            if ((toKerb > 0 && !arrow.nearTurn) || (toKerb < 0 && !arrow.farTurn)) continue;
+            shaft({{turnAt, 0.0}, {turnAt + 0.55, 0.22 * toKerb}, {turnAt + 0.8, 0.5 * toKerb}});
+            head(turnAt + 0.8, 0.5 * toKerb, 0.0, static_cast<double>(toKerb), 0.95);
+        }
+    }
+    for (const PaintedStopBar& bar : plan.stopBars)
+        strip(paintW, std::vector<Vec2>{bar.from, bar.to}, std::vector<double>{H.deck(bar.fromLane, bar.from) + 0.025, H.deck(bar.toLane, bar.to) + 0.025}, 0.25, 0, 0, kPaintWhite);
+    {
+        double dashed = 0, solid = 0;
+        std::set<int> arrowLanes;
+        for (const PaintedLine& pl : plan.lines) {
+            if (pl.kind == PaintedLineKind::Dashed) dashed += pl.metres;
+            if (pl.kind == PaintedLineKind::Solid) solid += pl.metres;
+        }
+        for (const PaintedArrow& arrow : plan.arrows) arrowLanes.insert(arrow.lane);
+        std::fprintf(stderr, "lanelab: paint from the road model: %zu arrows in %zu lanes, %zu stop bars, lane lines %.0f m dashed and %.0f m solid; "
+                             "%zu things not stated\n", plan.arrows.size(), arrowLanes.size(), plan.stopBars.size(), dashed, solid, plan.problems.size());
+        for (const std::string& p : plan.problems) LOG_WARN << "[paint] " << p;
+    }
+    if (paint) *paint = std::move(plan);
     // terrain
     if (r.hasTerrain) {
         const HeightGrid& G = r.terrain;
@@ -1241,19 +1481,6 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     add("ballast", ballast, kBallast); add("sleeper", sleepers, kSleeper); add("rail", rails, kRailSteel); add("platform", platform, kPlatform);
     add("canopy", canopy, kCanopySheet); add("station_steel", stationSteel, kStationSteel); add("station_lamp", stationLamp, kStationLamp);
     return out;
-}
-
-std::vector<LaneMoves> assignLaneMoves(std::size_t n, bool hasL, bool hasS, bool hasR, bool leftPocket, bool rightPocket) {
-    std::vector<LaneMoves> m(n);
-    if (n == 1) { m[0] = {hasL, hasS, hasR}; return m; }
-    for (std::size_t i = 0; i < n; ++i) {
-        if (i == 0) { m[i].left = hasL; m[i].straight = hasS && (!leftPocket || !hasL); }                  // leftmost: left (+ straight)
-        else if (i + 1 == n) { m[i].right = hasR; m[i].straight = hasS && (!rightPocket || !hasR); }      // rightmost: right (+ straight)
-        else { m[i].straight = hasS; if (!hasS) { m[i].left = i * 2 < n && hasL; m[i].right = !m[i].left && hasR; } }   // middle
-        // an end lane with nothing its own way still carries on or turns the other (a T's stem: two lanes, left and right)
-        if (!m[i].left && !m[i].straight && !m[i].right) { m[i].straight = hasS; if (!hasS) { m[i].left = hasL && i == 0; m[i].right = hasR && i + 1 == n; } }
-    }
-    return m;
 }
 
 const char* edgeRoleName(EdgeRole role) {

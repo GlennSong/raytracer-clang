@@ -58,6 +58,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+// Whether writing `out` over `text` (a road file's bytes) keeps the city's bake key: the bytes it hashes
+// (keyedRoadFileText) and what the paint reads of the layout (deck_mesh.h paintFactsKey, ADR-0431) are both unchanged.
+static bool bakeKeyUnchanged(const std::string& out, const std::string& text) {
+    using namespace engine::roads::lanes;
+    if (keyedRoadFileText(out) != keyedRoadFileText(text)) return false;
+    const nlohmann::json a = nlohmann::json::parse(out, nullptr, false), b = nlohmann::json::parse(text, nullptr, false);
+    return paintFactsKey(a) == paintFactsKey(b);
+}
 #include <string>
 #include <sys/stat.h>
 
@@ -346,7 +355,7 @@ int main(int argc, char** argv) {
             }
             std::ofstream(argv[2], std::ios::binary) << out;
             std::printf("wrote the ring order and \"arms_in_ring\": true into %s (the bytes the bake keys are unchanged: %s)\n", argv[2],
-                        keyedRoadFileText(out) == keyedRoadFileText(text) ? "yes" : "NO");
+                        bakeKeyUnchanged(out, text) ? "yes" : "NO");
             return 0;
         }
         if (laneRules >= 0) {
@@ -361,7 +370,7 @@ int main(int argc, char** argv) {
             if (!write) return 0;
             std::ofstream(argv[2], std::ios::binary) << out;
             std::printf("wrote \"lane_rules\" into %s (%zu bytes more; the bytes the bake keys are unchanged: %s)\n", argv[2],
-                        out.size() - text.size(), keyedRoadFileText(out) == keyedRoadFileText(text) ? "yes" : "NO");
+                        out.size() - text.size(), bakeKeyUnchanged(out, text) ? "yes" : "NO");
             return 0;
         }
         const std::string base = stripLayoutText(text);
@@ -395,7 +404,7 @@ int main(int argc, char** argv) {
                 catch (const std::exception& ex) { std::fprintf(stderr, "lanes_tool: %s: would not read back (%s); not written\n", argv[2], ex.what()); return 1; }
                 std::ofstream(argv[2], std::ios::binary) << out;
                 std::printf("wrote the nodes into %s (%zu bytes more; the bytes the bake keys are unchanged: %s; the lane graph's key is unchanged: %s)\n",
-                            argv[2], out.size() - text.size(), keyedRoadFileText(out) == keyedRoadFileText(text) ? "yes" : "NO",
+                            argv[2], out.size() - text.size(), bakeKeyUnchanged(out, text) ? "yes" : "NO",
                             laneLevelKey(nlohmann::json::parse(out)) == laneLevelKey(nlohmann::json::parse(text)) ? "yes" : "NO");
                 return 0;
             }

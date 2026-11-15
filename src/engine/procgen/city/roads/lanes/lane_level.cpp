@@ -2,7 +2,7 @@
 
 #include "engine/procgen/city/polygon.h"                            // convexHull
 #include "engine/procgen/city/polyline.h"                           // segmentsCross: an outline crossing itself
-#include "engine/procgen/city/roads/lane_turns.h"                   // turnKey: a turn's word
+#include "engine/procgen/city/roads/lane_turns.h"                   // turnKey: a turn's word; laneLineBetween: the lines' one rule
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"              // LaneLookup: the paved road, for the corner fit
 #include "engine/procgen/city/roads/lanes/lane_graph_connect.h"     // fitConnector, reachReport
 #include "engine/procgen/city/roads/lanes/lane_graph_crossings.h"   // where the paths' bodies could touch
@@ -214,28 +214,15 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
 
     // ---- each arm's stop line: the stated junction's (ModelArm::stopLine, deck_mesh.h junctionAreas -- the one rule the
     // paint draws from too) -------------------------------------------------------------------------------------------------
-    std::vector<std::vector<double>> stopAt(m.junctions.size());
     for (uint32_t j = 0; j < m.junctions.size(); ++j) {
         const ModelJunction& J = m.junctions[j];
-        stopAt[j].assign(J.arms.size(), kNotStated);
         for (uint32_t a = 0; a < J.arms.size(); ++a) {
             const ModelArm& arm = J.arms[a];
-            if (!arm.street.valid()) continue;
-            if (!stated(arm.stopLine)) {
+            if (arm.street.valid() && !stated(arm.stopLine))
                 out.problems.push_back(fmt("junction %s: arm %u (street %s) has no stop line: its road is not in the file", J.id.c_str(), a,
                                            m.streets[arm.street.index].id.c_str()));
-                continue;
-            }
-            stopAt[j][a] = arm.stopLine;
         }
     }
-    // the arm of junction j that street `street` is, at its `to` end (spineIn) or its `from` end
-    auto armOf = [&](uint32_t j, uint32_t street, bool spineIn) {
-        const ModelJunction& J = m.junctions[j];
-        for (uint32_t a = 0; a < J.arms.size(); ++a)
-            if (J.arms[a].street.index == street && J.arms[a].spineIn == spineIn) return static_cast<int>(a);
-        return -1;
-    };
 
     // ---- each lane's stretches along its streets, stop line to stop line ------------------------------------------------
     std::vector<Piece> pieces;
@@ -272,15 +259,16 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             int jLo = -1, aLo = -1, jHi = -1, aHi = -1, endLo = -1, endHi = -1;
             bool noStopLo = false, noStopHi = false;
             for (int end = 0; end < 2; ++end) {
-                const double at = end == 0 ? S.from : S.to;
-                if (std::fabs((end == 0 ? sp.from : sp.to) - at) > kReachesStreetEnd) continue;   // the lane does not reach it
-                const ModelJunctionId J = S.junctions[static_cast<std::size_t>(end)];
+                // which arm it meets there and its stop line: the model's one reading (road_model.h laneSpanEnd)
+                const LaneSpanEnd met = laneSpanEnd(m, sp, end);
+                if (!met.reaches) continue;   // the lane does not reach it
+                const ModelJunctionId J = met.junction;
                 if (!J.valid()) {
                     (end == 0 ? endLo : endHi) = end;
                     continue;
                 }
-                const int a = armOf(J.index, sp.street.index, end == 1);
-                if (a < 0 || !stated(stopAt[J.index][static_cast<std::size_t>(a)])) {
+                const int a = met.arm;
+                if (a < 0 || !stated(met.stopLine)) {
                     out.problems.push_back(fmt("street %s: its %s end names junction %s, which has no arm with a stop line for it: lane %s "
                                                "runs on to the street's end there, joined to nothing across the junction",
                                                S.id.c_str(), end == 0 ? "`from`" : "`to`", m.junctions[J.index].id.c_str(),
@@ -288,7 +276,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                     (end == 0 ? noStopLo : noStopHi) = true;
                     continue;
                 }
-                const double stop = stopAt[J.index][static_cast<std::size_t>(a)];
+                const double stop = met.stopLine;
                 if (end == 0) {
                     lo = std::max(lo, stop);
                     jLo = static_cast<int>(J.index);
@@ -433,17 +421,17 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                 pathU.emplace_back(c0, c1);
                 pc.paths.push_back(id);
             }
-            // the lines between neighbours: solid between two through lanes on the approach to the stop line they run to
-            double approach = -1;
-            for (double s : stops)
-                if (c1 <= s + kCutTolerance && c0 >= s - solid - kCutTolerance) approach = s;
+            // the lines between neighbours: the one rule (lane_turns.h laneLineBetween, which the paint draws from too) --
+            // solid between two lanes that hold their lane, on the approach to the stop line both run to
             for (std::size_t k = 0; k + 1 < in.size(); ++k) {
-                bool solidLine = approach >= 0;
-                for (uint32_t p : {in[k], in[k + 1]})
-                    solidLine = solidLine && L.lanes[pieces[p].lane].kind == "through" && pieces[p].u1 >= approach - kCutTolerance;
-                LaneLine line;
-                line.crossFromOffside = line.crossFromKerbside = !solidLine;
-                G.laneLines.push_back(line);
+                LaneBesideLine beside[2];
+                for (std::size_t side = 0; side < 2; ++side) {
+                    const Piece& pc = pieces[in[k + side]];
+                    beside[side].kind = L.lanes[pc.lane].kind;
+                    beside[side].runsToStopLine = pc.endJunction >= 0;
+                    beside[side].stopLine = pc.u1;
+                }
+                G.laneLines.push_back(laneLineBetween(laneTurnRules(), solid, beside[0], beside[1], c0, c1));
             }
             sec.lanes.count = static_cast<uint32_t>(G.sectionLanes.size()) - sec.lanes.first;
             sec.lines.count = static_cast<uint32_t>(G.laneLines.size()) - sec.lines.first;

@@ -88,6 +88,56 @@ std::vector<ControlSignRule> controlSignRules(const AttachmentKinds& kinds, std:
     return out;
 }
 
+bool armStates(const std::string& regulation, const std::vector<std::string>& controls, const ModelJunction& J, const ModelArm& a) {
+    if (!controls.empty() && std::find(controls.begin(), controls.end(), J.control) == controls.end()) return false;
+    if (!regulation.empty() && std::find(a.regulations.begin(), a.regulations.end(), regulation) == a.regulations.end()) return false;
+    return true;
+}
+
+std::vector<ArmMarkingRule> armMarkingRules(const AttachmentKinds& kinds, std::vector<std::string>* problems) {
+    std::vector<ArmMarkingRule> out;
+    auto fail = [&](const std::string& kind, const std::string& why) {
+        if (problems) problems->push_back("road_attachments.json kinds." + kind + ".marking: " + why);
+    };
+    for (const AttachmentKind& k : kinds.kinds) {
+        if (!k.marking.is_object()) continue;
+        ArmMarkingRule r;
+        r.kind = k.name;
+        if (k.on != "arm") { fail(k.name, "a marking that follows from a fact is painted at an arm (\"on\": \"arm\")"); continue; }
+        r.draws = k.marking.value("draws", std::string());
+        if (r.draws.empty()) { fail(k.name, "it does not say what the paint \"draws\""); continue; }
+        if (k.marking.contains("when_any") && k.marking["when_any"].is_array())
+            for (const nlohmann::json& w : k.marking["when_any"]) {
+                if (!w.is_object()) continue;
+                ArmMarkingRule::When when;
+                when.regulation = w.value("regulation", std::string());
+                if (w.contains("controls") && w["controls"].is_array())
+                    for (const nlohmann::json& c : w["controls"])
+                        if (c.is_string()) when.controls.push_back(c.get<std::string>());
+                // (an entry asking nothing would hold at every arm: refused)
+                if (when.regulation.empty() && when.controls.empty()) continue;
+                r.whenAny.push_back(std::move(when));
+            }
+        if (r.whenAny.empty()) { fail(k.name, "its \"when_any\" lists no entry asking a \"regulation\" or \"controls\""); continue; }
+        r.source = text(k.marking.value("source", nlohmann::json()));
+        out.push_back(std::move(r));
+    }
+    std::stable_sort(out.begin(), out.end(), [](const ArmMarkingRule& a, const ArmMarkingRule& b) { return a.kind < b.kind; });
+    return out;
+}
+
+std::vector<const ArmMarkingRule*> markingsOnArm(const ModelJunction& J, std::size_t arm, const std::vector<ArmMarkingRule>& rules) {
+    std::vector<const ArmMarkingRule*> out;
+    if (arm >= J.arms.size()) return out;
+    for (const ArmMarkingRule& r : rules)
+        for (const ArmMarkingRule::When& w : r.whenAny)
+            if (armStates(w.regulation, w.controls, J, J.arms[arm])) {
+                out.push_back(&r);
+                break;
+            }
+    return out;
+}
+
 Real kerbOffset(const ModelStreet& s) { return s.travelWidth() * 0.5 + s.section.shoulder; }
 
 ControlSignPlan placeControlSigns(const RoadModel& m, const std::vector<ControlSignRule>& rules,
@@ -98,14 +148,12 @@ ControlSignPlan placeControlSigns(const RoadModel& m, const std::vector<ControlS
     for (const ControlSignRule& r : rules) {
         for (std::size_t j = 0; j < m.junctions.size(); ++j) {
             const ModelJunction& J = m.junctions[j];
-            if (!r.controls.empty() && std::find(r.controls.begin(), r.controls.end(), J.control) == r.controls.end()) continue;
             for (std::size_t k = 0; k < J.arms.size(); ++k) {
                 const ModelArm& a = J.arms[k];
                 if (!a.street.valid() || a.street.index >= m.streets.size() || !stated(a.heading)) continue;
                 const ModelStreet& S = m.streets[a.street.index];
-                // WHEN: over the stated facts
-                if (!r.regulation.empty() && std::find(a.regulations.begin(), a.regulations.end(), r.regulation) == a.regulations.end())
-                    continue;
+                // WHEN: over the stated facts (armStates: the reading the road markings share)
+                if (!armStates(r.regulation, r.controls, J, a)) continue;
                 if (!r.oneWayEnd.empty()) {
                     if (!S.oneWay) continue;
                     // a one-way street's traffic runs along its road's spine: it leaves the street here where the spine

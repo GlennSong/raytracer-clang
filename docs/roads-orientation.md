@@ -40,7 +40,7 @@ Under `src/engine/procgen/city/roads/`:
 | `road_model.h/.cpp` | The model: types, planned and built layers, save/load, `dump`, `streetNameNear`. The built model holds the lane level and is saved whole by `lanes/road_model_cache`. |
 | `road_model_parts.h` | The one set of junction, arm, street, node and stretch types (`ModelJunction`, `ModelArm`, `ModelStreet`...). The road file is read into them (`RoadLabGraph::junctions` / `streets`), the layout and the control plan write them, and `plannedRoadModel` copies them whole and adds what only the model knows. A junction or street named by another is a place in the same list, not an id string. `graph_index.h` holds the index types it shares with the lane graph. |
 | `street_map.h/.cpp` | The street map every agent routes, drives and walks on (`NavGraph`), built at load from the planned layer and the deck heights (ADR-0425). |
-| `lane_turns.h/.cpp` | Which arriving lane takes which turn: reads `assets/data/lane_turns.json`; `turnsAtJunction` is the one function that applies it (ADR-0426). |
+| `lane_turns.h/.cpp` | Which arriving lane takes which turn: reads `assets/data/lane_turns.json`; `turnsAtJunction` is the one function that applies it (ADR-0426). Also `laneLineBetween`, the one rule for whether the line between two lanes may be crossed (its lane kinds are the table's `lane_lines`). |
 | `control_signs.h/.cpp` | The stop, give-way, do-not-enter and one-way signs that follow from stated facts (ADR-0424). Also ADR-0419's stop-line rule, `stopLineFromMouth`. |
 | `lane_graph.h/.cpp` | The lane graph's types (paths, sections, junctions, crossing points, regulations), its save/load (LGRF), `validate`, dump, reach. The driving library reads these types. |
 | `road_builder.h/.cpp`, `lanes_builder.cpp` | The roads module's one builder interface and the lanes builder behind it (ADR-0089). |
@@ -51,7 +51,7 @@ Under `src/engine/procgen/city/roads/`:
 | `lanes/control_plan.h/.cpp` | The control plan: each junction's control and each road's limit, from the placement policy. Also `findJunctions`, the layout's grouping of road ends into junctions by the `rules.storage` rule. Rework: the design wants the planner to state these, not group them (step 9 / design "deleted at the end"). |
 | `lanes/lanes.h/.cpp` | The lanes pipeline: graph to lanes to profiles to pavement to surfaces to terrain. `Result` holds the paint's junction boxes (`junctionBoxes`). The ramp-end check still uses an angle test (`kJunctionParallelForGraph`). |
 | `lanes/lane_expand.h/.cpp` | Roads become lane ribbons: pockets, ramps composed from their gore anchors, each lane's streets and junction ends. Records `sweptFrom` / `diesInto` for pockets and ramp lanes. |
-| `lanes/deck_mesh.h/.cpp` | Meshes and paint. `junctionSpans` finds the paint's junction boxes from overlapping lanes; stop lines sit `kStopLineBack` (5.2 m) outside a box. **Rework in step 9**: paint the stated junctions, draw corners to a stated radius. |
+| `lanes/deck_mesh.h/.cpp` | Meshes and paint. `junctionAreas` gives each stated arm's box edge and stop line (`kStopLineBack`, 5.2 m, outside the box). The paint's lane lines, stop bars and arrows are read off `builtRoadModel` and listed in `RoadPaint` (ADR-0431). `paintFactsKey` is what the paint reads, for the bake key. **Open in step 9**: draw corners to a stated radius. |
 | `lanes/deck_height.*`, `vertical_profile.*`, `road_design.*`, `terrain_conform.*`, `terrain_recipe.*` | Heights: profiles along spines, blended decks, the planner-shared vertical design, cut and fill. |
 | `lanes/pavement.*`, `geom2d.*`, `polyline_ops.*` | 2-D geometry: footprints, the one triangulation, the Clipper2/CDT seam, polyline helpers. |
 | `lanes/interchange.*` | Diamond interchanges (ramps at the streets a freeway crosses). Reads `kSolidBeforeStopLine`. |
@@ -97,6 +97,17 @@ Still working roads out for itself:
   the widest crossing road's half width, then `kStopLineBack`. The paint, `ModelArm::stopLine`, the lane level and the
   control signs all read it. A file that states no junctions has its layout derived once, at the top of `build()`.
   The bake key now includes where the stated arms stand.)*
+- *(Gone, ADR-0431: the paint's own lane lines, stop bars and lane arrows. `buildMeshes` builds the model's built layer
+  for its build (`builtRoadModel`) and draws from a list a test can read (`RoadPaint`, `lanes/deck_mesh.h`). The line
+  between two lanes is `laneLineBetween` (`lane_turns.h`), the rule the lane level fills its table from: dashed where it
+  may be crossed, solid where not. A stop bar is `markingsOnArm` (`control_signs.h`) over the `marking` rows of
+  `road_attachments.json`. An arrow is the turns `RoadModel::turns` states from its lane. Which arm a lane meets is
+  `laneSpanEnd` (`road_model.h`), asked by the turns, the lane level and the paint. Nothing stated: nothing painted, and
+  a `[paint]` warning says so once. The city's bake key includes what the paint reads: `paintFactsKey`.)*
+- **The paint, still by measuring**: where a lane lies inside a crossing road's lane (`junctionCrossRank`, a point test
+  that stops lines inside a junction the areas do not cover), the crosswalk's width (the lanes found beside the spine at
+  the crosswalk), and which arms are marked at all (`paintsJunctionBoxes`: not ramps, freeways, tracks, by class name).
+  Lines are painted along no connector lane (nothing states what lies beside one).
 - **Corners**: the builder draws them without a stated radius. The lane level only tests the fit and reports corner
   faults.
 - **The layout's junction grouping** (`findJunctions`, the `rules.storage` rule). It wrote the files' junctions once.
@@ -130,7 +141,7 @@ Still working roads out for itself:
 
 The lane graph's key (`laneLevelKey`) hashes `junctions` (without `nodes`), `arms_in_ring`, `streets`, `divided` and
 `lane_rules`.
-It is one part of the built road model's one cache key (`roadModelCacheKey`). Writing those changes no bake, only the road model cache. Only traffic_lab and river_town have `lane_rules`. Every
+It is one part of the built road model's one cache key (`roadModelCacheKey`). Since ADR-0431 the paint reads the junctions' controls, arms and through pairs, the streets (not their names), `arms_in_ring` and `lane_rules`, so writing those re-bakes the city (`paintFactsKey`); a street's name, a junction's `nodes` or `why`, and `divided` still change no bake. Only traffic_lab and river_town have `lane_rules`. Every
 other road file gets no lane graph, and the error names `lanes_tool layout <file> --lane-rules 20 --write`. Write
 facts with the tools (`lanes_tool layout ... --write`, `--names`, `--nodes`, `--lane-rules`;
 `city_plan controls <file> rules/lab.lua --layout --write --controls-only`), never by hand.

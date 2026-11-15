@@ -521,10 +521,11 @@ std::string keyedRoadFileText(const std::string& text) {
     std::vector<Member> top;
     if (!t.members(t.ws(0), top)) return text;
     std::vector<std::pair<std::size_t, std::size_t>> cut;
-    // The streets, the divided pairs, and the whole junctions list with its controls and signs (ADR-0421): no stage of
-    // the bake reads any of them (the meshes, paint, deck and road graph come from the edges); the lane graph, which
-    // reads them, keys them itself (laneLevelKey). Likewise the lane level's rules (ADR-0426) and the arms' ring mark
-    // (ADR-0427).
+    // The streets, the divided pairs, and the whole junctions list with its controls and signs (ADR-0421) are cut from
+    // these bytes, with the lane level's rules (ADR-0426) and the arms' ring mark (ADR-0427): the meshes, deck and road
+    // graph come from the edges, and the lane graph keys what it reads itself (laneLevelKey). What the PAINT reads of
+    // them (controls, signs, streets, the arms' order, the lane rules: ADR-0431) keys the city beside these bytes, not in
+    // them: deck_mesh.h paintFactsKey, hashed by the city producer.
     // Since step 9 (ADR-0428) the paint draws each stated junction's arms (deck_mesh.h junctionAreas), so what it reads of
     // them -- each junction's arms by road, station and way, and its stretches inside -- is keyed, after the cut text, in
     // an order of its own (the arms' list order, their controls, signs, names and points move no paint).

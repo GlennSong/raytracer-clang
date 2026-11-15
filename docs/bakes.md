@@ -45,8 +45,12 @@ and, for `lots`, **the `city` key**. So the stages chain: new roads always mean 
 
 The road file's LAYOUT (its junctions' streets, headings and through pairs, and its `streets` list: ADR-0417) is mostly
 not in the `city` key: the key hashes the file with those parts taken out (`keyedRoadFileText`). What the paint reads is
-in it (ADR-0428): each stated junction's arms (road, station, way) and its stretches inside. Writing streets, controls,
-signs, names or the arms' order re-bakes nothing; moving an arm re-bakes the city. The `lots` key also hashes what
+in it (ADR-0428): each stated junction's arms (road, station, way) and its stretches inside. Since ADR-0431 the paint's
+lane lines, stop bars and arrows are read off the road model, so the `city` key also hashes what they read
+(`paintFactsKey`, deck_mesh.h): each junction's control, arms (streets, headings, signs, order) and through pairs, the
+streets without their names, `arms_in_ring`, `lane_rules`, the turn table (`assets/data/lane_turns.json`) and the marking
+rows of `assets/data/road_attachments.json`. Writing a control, a sign, a street or the arms' order re-bakes the city;
+writing a street's name, a junction's points or its `why` re-bakes nothing. The `lots` key also hashes what
 the lot pass reads of the layout (ADR-0430, `lotRoadsKeyText`): each street's and each inside stretch's id, road and
 stations. Adding, removing or re-cutting a street re-grows the lots; renaming one does not.
 

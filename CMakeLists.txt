@@ -682,7 +682,8 @@ if(RT_BUILD_ROADS_LANES)
 
         add_executable(lanes_tests tests/main.cpp tests/test_lanes.cpp
             tests/test_control_plan.cpp   # every junction's control and every road's limit, planned and carried (#240)
-            tests/test_road_model.cpp)    # the road file's layout and the one road model (ADR-0417)
+            tests/test_road_model.cpp     # the road file's layout and the one road model (ADR-0417)
+            tests/test_road_paint.cpp)    # the road paint is read off the road model (ADR-0431)
         target_include_directories(lanes_tests PRIVATE src tests)
         target_compile_options(lanes_tests PRIVATE -Wall -Wextra)
         target_compile_definitions(lanes_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

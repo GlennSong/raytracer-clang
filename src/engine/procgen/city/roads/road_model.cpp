@@ -255,6 +255,21 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
     return m;
 }
 
+LaneSpanEnd laneSpanEnd(const RoadModel& m, const ModelLaneSpan& sp, int end) {
+    LaneSpanEnd out;
+    const ModelStreet& S = m.streets[sp.street.index];
+    const Real at = end == 0 ? S.from : S.to;
+    out.reaches = approxEqual(end == 0 ? sp.from : sp.to, at, roads::lanes::kReachesStreetEnd);
+    if (!out.reaches) return out;
+    out.junction = S.junctions[static_cast<std::size_t>(end)];
+    if (!out.junction.valid()) return out;
+    const ModelJunction& J = m.junctions[out.junction.index];
+    for (std::size_t a = 0; a < J.arms.size() && out.arm < 0; ++a)
+        if (J.arms[a].street == sp.street && J.arms[a].spineIn == (end == 1)) out.arm = static_cast<int>(a);
+    if (out.arm >= 0) out.stopLine = J.arms[static_cast<std::size_t>(out.arm)].stopLine;
+    return out;
+}
+
 std::vector<std::vector<TurnArm>> turnArmsOf(const RoadModel& m) {
     // per junction and arm (in its list's order: the stated ring): the lanes arriving and leaving by it (the street it is,
     // the way the lane runs there), and its heading
@@ -272,26 +287,20 @@ std::vector<std::vector<TurnArm>> turnArmsOf(const RoadModel& m) {
     for (std::size_t li = 0; li < m.lanes.size(); ++li) {
         const ModelLane& L = m.lanes[li];
         for (const ModelLaneSpan& sp : L.streets) {
-            const ModelStreet& S = m.streets[sp.street.index];
             for (int end = 0; end < 2; ++end) {
-                const Real at = end == 0 ? S.from : S.to;
-                if (std::fabs((end == 0 ? sp.from : sp.to) - at) > roads::lanes::kReachesStreetEnd) continue;
-                const ModelJunctionId j = S.junctions[static_cast<std::size_t>(end)];
-                if (!j.valid()) continue;
+                const LaneSpanEnd at = laneSpanEnd(m, sp, end);
+                if (!at.reaches || !at.junction.valid() || at.arm < 0) continue;
                 const bool arriving = (end == 1) == (L.dir > 0);   // it runs toward this end
-                for (std::size_t a = 0; a < m.junctions[j.index].arms.size(); ++a) {
-                    const ModelArm& arm = m.junctions[j.index].arms[a];
-                    if (arm.street != sp.street || arm.spineIn != (end == 1)) continue;
-                    TurnArmLane tl{static_cast<uint32_t>(li), L.kind, L.slot, L.id};
-                    (arriving ? armsOf[j.index][a].arriving : armsOf[j.index][a].leaving).push_back(tl);
-                }
+                TurnArm& arm = armsOf[at.junction.index][static_cast<std::size_t>(at.arm)];
+                TurnArmLane tl{static_cast<uint32_t>(li), L.kind, L.slot, L.id};
+                (arriving ? arm.arriving : arm.leaving).push_back(tl);
             }
         }
     }
     return armsOf;
 }
 
-RoadModel assembleRoadModel(const Result& r, const roads::lanes::LaneGraphOptions& opts, roads::lanes::LaneGraphBuild* report) {
+RoadModel builtRoadModel(const Result& r) {
     const RoadLabGraph& g = r.graph;
     RoadModel m = plannedRoadModel(g);
     m.built = true;
@@ -445,7 +454,12 @@ RoadModel assembleRoadModel(const Result& r, const roads::lanes::LaneGraphOption
                 m.problems.push_back(fmt("junction %s: arm %zu (road %s at %.1f) names no street of the road file", J.id.c_str(), k,
                                          J.arms[k].road.c_str(), J.arms[k].station));
 
-    // ---- the lane level: the table of paths, from everything stated above (lanes/lane_level.h) --------------------------
+    return m;
+}
+
+RoadModel assembleRoadModel(const Result& r, const roads::lanes::LaneGraphOptions& opts, roads::lanes::LaneGraphBuild* report) {
+    RoadModel m = builtRoadModel(r);
+    // ---- the lane level: the table of paths, from everything stated in the built layer (lanes/lane_level.h) -------------
     roads::lanes::LaneGraphBuild found = roads::lanes::buildLaneLevel(r, m, opts);
     if (report) *report = std::move(found);
     return m;
@@ -500,11 +514,15 @@ AttachmentKinds parseAttachmentKinds(const nlohmann::json& doc) {
                 for (const nlohmann::json& c : k["controls"])
                     if (c.is_string()) kind.controls.push_back(c.get<std::string>());
             if (k.contains("sign") && k["sign"].is_object()) kind.sign = k["sign"];
+            if (k.contains("marking") && k["marking"].is_object()) kind.marking = k["marking"];
             if (kind.on == "street" || kind.on == "junction" || kind.on == "arm") out.kinds.push_back(kind);
         }
     if (doc.contains("uses") && doc["uses"].is_object())
         for (const auto& [role, kind] : doc["uses"].items())
             if (kind.is_string()) out.uses.emplace_back(role, kind.get<std::string>());
+    if (doc.contains("controls") && doc["controls"].is_object() && doc["controls"].contains("map") && doc["controls"]["map"].is_object())
+        for (const auto& [control, colour] : doc["controls"]["map"].items())
+            if (colour.is_string() && !control.empty() && control[0] != '_') out.controlNames.push_back(control);
     return out;
 }
 

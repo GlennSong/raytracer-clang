@@ -4,6 +4,7 @@
 #include "engine/bundle/bundle.h"                             // fnv1aStr: the table's hash
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"   // kerbPerpSign: which side the kerb is
 #include "log.h"
+#include "rt_math.h"                                        // approxEqual, atOrPast, atOrBefore
 
 #include <algorithm>
 #include <fstream>
@@ -44,6 +45,14 @@ LaneTurnRules parseLaneTurnRules(const nlohmann::json& doc, std::vector<std::str
     if (!doc.is_object() || !doc.contains("turns") || !doc["turns"].is_array()) {
         if (problems) problems->push_back("lane_turns.json: no \"turns\" list");
         return out;
+    }
+    // which lanes hold their lane before a stop line (laneLineBetween); absent: none does, said
+    if (doc.contains("lane_lines") && doc["lane_lines"].is_object() && doc["lane_lines"].contains("hold_before_stop_line") &&
+        doc["lane_lines"]["hold_before_stop_line"].is_array()) {
+        for (const nlohmann::json& k : doc["lane_lines"]["hold_before_stop_line"])
+            if (k.is_string()) out.holdBeforeStopLine.push_back(k.get<std::string>());
+    } else if (problems) {
+        problems->push_back("lane_turns.json: no \"lane_lines\": {\"hold_before_stop_line\": [kinds]}: no line between lanes is solid");
     }
     const nlohmann::json& rows = doc["turns"];
     for (std::size_t i = 0; i < rows.size(); ++i) {
@@ -141,6 +150,21 @@ const LaneTurnRules& laneTurnRules() {
 }
 
 uint64_t laneTurnTableHash(const std::string& text) { return bundle::fnv1aStr(text); }
+
+LaneLine laneLineBetween(const LaneTurnRules& rules, double solidBeforeStopLine, const LaneBesideLine& offside,
+                         const LaneBesideLine& kerbside, double from, double to) {
+    // solid: both lanes hold their lane (the table's kinds), run to one stop line, and the stretch is on its approach
+    bool solid = offside.runsToStopLine && kerbside.runsToStopLine &&
+                 approxEqual(offside.stopLine, kerbside.stopLine, kLaneLineStation) &&
+                 atOrPast(from, offside.stopLine - solidBeforeStopLine, kLaneLineStation) &&
+                 atOrBefore(to, offside.stopLine, kLaneLineStation);
+    for (const LaneBesideLine* lane : {&offside, &kerbside})
+        solid = solid && std::find(rules.holdBeforeStopLine.begin(), rules.holdBeforeStopLine.end(), lane->kind) !=
+                             rules.holdBeforeStopLine.end();
+    LaneLine line;
+    line.crossFromOffside = line.crossFromKerbside = !solid;
+    return line;
+}
 
 bool kerbSideCounterClockwise() {
     // Arriving traffic on an arm whose heading (the way it leaves the junction) is h runs the other way, -dir(h); its

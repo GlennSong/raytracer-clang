@@ -20821,3 +20821,17 @@ about 105 lots changed, nearly all in the blocks beside the freeway, because the
 the twin drew its lanes alone, and because the twin's own rules (streets padded 1.5 m, low ramp runs called local streets,
 dead ends joined, centre lines thinned) are not re-created. Not done: frontage by the street bounding the block
 (`enclosedRegions`), alleys as streets of the model, a street id on the lot record.
+
+
+## ADR-0431 — The road paint is read off the road model: one function each for lane lines, stop bars and lane arrows
+**Status:** Provisional · **Date:** 2026-11-15
+
+What it does: the paint baked into the road meshes no longer works out three rules of the road from where the pavement
+lies. `buildMeshes` builds the model's built layer for its own build (`builtRoadModel`) and draws from a list of
+decisions a test reads (`RoadPaint`, deck_mesh.h). Lane lines: `laneLineBetween` (lane_turns.h), which the lane level
+fills its table from: dashed where the line may be crossed, solid where not (the stretch before a stop line, never drawn
+before); the lane kinds that hold moved from a C++ string compare to `lane_lines` in `assets/data/lane_turns.json`. Stop
+bars: `markingsOnArm` (control_signs.h) over a `marking` row of `road_attachments.json`, read by the sign rows' own
+`armStates`. Arrows: the turns `RoadModel::turns` states from the lane. Which arm a lane meets: `laneSpanEnd`. Gone: the
+0.3 m probe, the leg finding, `assignLaneMoves`, the class-rank stop rule. Nothing stated: nothing painted, said once.
+The city key now holds what the paint reads (`paintFactsKey`); the lanes tag is bumped.

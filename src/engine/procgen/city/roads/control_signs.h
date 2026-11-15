@@ -54,6 +54,31 @@ struct ControlSignRule {
 // road_attachments.json, a missing look) is left out and said in `problems`.
 std::vector<ControlSignRule> controlSignRules(const AttachmentKinds& kinds, std::vector<std::string>* problems = nullptr);
 
+// DOES AN ARM STATE WHAT A ROW ASKS? The one reading of a row's `when` over an arm's stated signs (`regulation`: one of
+// the arm's regulations; empty: not asked) and its junction's stated control (`controls`: one of these; empty: any).
+// The signs (placeControlSigns) and the road markings (markingsOnArm) both ask it.
+bool armStates(const std::string& regulation, const std::vector<std::string>& controls, const ModelJunction& J, const ModelArm& a);
+
+// ONE MARKING ROW (a kind's `marking` in road_attachments.json: that file's top says every part): what the paint draws
+// across the lanes arriving by an arm, and when -- any one of its `when_any` entries holding, each read as a sign row's
+// `when` is (armStates).
+struct ArmMarkingRule {
+    std::string kind;                    // the attachment kind (its key in road_attachments.json)
+    std::string draws;                   // what the paint draws for it (the paint's own shapes: "bar")
+    struct When {
+        std::string regulation;
+        std::vector<std::string> controls;
+    };
+    std::vector<When> whenAny;
+    std::string source;
+};
+// Every kind with a `marking` row, by name. A row that does not read is left out and said in `problems`.
+std::vector<ArmMarkingRule> armMarkingRules(const AttachmentKinds& kinds, std::vector<std::string>* problems = nullptr);
+// WHICH MARKINGS ARE PAINTED ACROSS THE LANES ARRIVING BY AN ARM (is a stop bar painted here?): THE ONE PLACE it is
+// decided, from the arm's stated signs and its junction's stated control by the rows -- never from the roads' classes.
+// The rows that hold, in the rules' order.
+std::vector<const ArmMarkingRule*> markingsOnArm(const ModelJunction& J, std::size_t arm, const std::vector<ArmMarkingRule>& rules);
+
 // How far a street's kerb stands from its centre line: its travel lanes' half width and its shoulder.
 Real kerbOffset(const ModelStreet& s);
 

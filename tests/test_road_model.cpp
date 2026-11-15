@@ -243,9 +243,9 @@ TEST_CASE(road_model_1_the_planner_and_the_layout_tool_agree) {
     CHECK(unnamed == 0 && misnamed == 0);
 }
 
-// ---- 2. the bake sees only where the stated arms stand --------------------------------------------------------------------------------
+// ---- 2. the bake sees where the stated arms stand and what the paint reads of the layout -----------------------------------------------
 
-TEST_CASE(road_model_2_the_bake_key_sees_only_where_the_stated_arms_stand) {
+TEST_CASE(road_model_2_the_bake_key_sees_where_the_arms_stand_and_what_the_paint_reads) {
     // as the planner writes a file (one dump): the dump with its layout strips to the dump without
     const nlohmann::json bare = smallGraph();
     const nlohmann::json with = smallGraphWithLayout();
@@ -287,10 +287,13 @@ TEST_CASE(road_model_2_the_bake_key_sees_only_where_the_stated_arms_stand) {
             for (const ModelArm& a : j.arms) streets = streets && a.street.valid() && engine::stated(a.heading);
         CHECK(streets);
     }
-    // the city's bake key, through the producer (ADR-0428: the paint draws the stated junctions, so where their arms stand
-    // is keyed, and nothing else of the layout): a file stating its junctions' arms (the control plan's list) keys the
-    // same with the layout written into it; moving one arm a metre, or a road fewer, keys otherwise; and a file stating
-    // no junctions keys otherwise than one stating them
+    // the city's bake key, through the producer. ADR-0428: the paint draws the stated junctions, so where their arms stand
+    // is keyed. ADR-0431: the paint's lane lines, stop bars and arrows are read off the road model, so what they read of
+    // the layout is keyed too (deck_mesh.h paintFactsKey): the streets, the arms' streets and headings, the through
+    // pairs, each control. So a file stating its junctions' arms (the control plan's list) keys OTHERWISE with the layout
+    // written into it, and otherwise again with another control; a street's name or a junction's `why` keys nothing;
+    // moving one arm a metre, or a road fewer, keys otherwise; and a file stating no junctions keys otherwise than one
+    // stating them
     nlohmann::json planned = bare;
     for (const ModelJunction& j : layout.junctions) {
         nlohmann::json jj = {{"id", j.id}, {"at", {j.at.x, j.at.y}}, {"control", "stop"}};
@@ -322,7 +325,18 @@ TEST_CASE(road_model_2_the_bake_key_sees_only_where_the_stated_arms_stand) {
     std::printf("    the city's key: %016llx stated, %016llx laid out, %016llx an arm moved, %016llx a road fewer, %016llx no junctions\n",
                 static_cast<unsigned long long>(stated), static_cast<unsigned long long>(laidOut), static_cast<unsigned long long>(armMoved),
                 static_cast<unsigned long long>(otherRoads), static_cast<unsigned long long>(none));
-    CHECK(stated != 0 && stated == laidOut);
+    CHECK(stated != 0 && stated != laidOut);
+    {
+        const std::string laidOutText = insertLayoutText(planned.dump(1), kept, &err);
+        nlohmann::json named = nlohmann::json::parse(laidOutText);
+        CHECK(named.contains("streets") && !named["streets"].empty());
+        if (named.contains("streets") && !named["streets"].empty()) named["streets"][0]["name"] = "Oak Street";
+        named["junctions"][0]["why"] = "written by a test";
+        CHECK(keyOf(named.dump(1)) == keyOf(nlohmann::json::parse(laidOutText).dump(1)));   // a name and a `why` paint nothing
+        nlohmann::json lit = nlohmann::json::parse(laidOutText);
+        lit["junctions"][0]["control"] = "signal";
+        CHECK(keyOf(lit.dump(1)) != keyOf(nlohmann::json::parse(laidOutText).dump(1)));     // a control paints stop bars
+    }
     CHECK(armMoved != stated);
     CHECK(otherRoads != stated);
     CHECK(none != stated);
@@ -1126,7 +1140,14 @@ TEST_CASE(road_model_14_the_turn_table_by_hand) {
     // A ROW FOR SOME CONTROLS ONLY: a table whose far turn is offered at a stop only; a u_turn row is refused when read (no
     // junction offers a U-turn: it could never apply)
     {
-        const nlohmann::json doc = {{"turns", nlohmann::json::array({
+        // (a table with no "lane_lines" says so, once: no line between lanes is solid)
+        {
+            std::vector<std::string> said;
+            const LaneTurnRules none = parseLaneTurnRules(nlohmann::json{{"turns", nlohmann::json::array()}}, &said);
+            CHECK(none.holdBeforeStopLine.empty() && said.size() == 1u);
+            if (said.size() == 1u) CHECK(said.front().find("lane_lines") != std::string::npos);
+        }
+        const nlohmann::json doc = {{"lane_lines", {{"hold_before_stop_line", {"through"}}}}, {"turns", nlohmann::json::array({
             {{"turn", "straight"}, {"when", "any"}, {"kinds", {"through"}}, {"lanes", "every"}, {"into", "same_slot"}, {"source", "test"}},
             {{"turn", "far_turn"}, {"when", "any"}, {"controls", {"stop"}}, {"kinds", {"through"}}, {"lanes", {{"from", "centre"}, {"count", 1u}}},
              {"into", "same_side"}, {"source", "test"}},

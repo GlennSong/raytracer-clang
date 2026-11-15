@@ -24,7 +24,7 @@ namespace engine {
 namespace roads::lanes {
 
 const char* const kRailBuildTag = "2026-10-13.2";   // station steel and track boxes from the mesh library; history: git log -G kRailBuildTag
-const char* const kLanesBuildTag = "2026-11-14.1";   // .1 the paint draws the stated junctions' areas and stop lines, its own box finding gone (ADR-0428); history: git log -G kLanesBuildTag
+const char* const kLanesBuildTag = "2026-11-15.1";   // .1 the paint's lane lines, stop bars and arrows are read off the road model (ADR-0431), and what it reads keys the city; history: git log -G kLanesBuildTag
 //   // .2: the lot pass keeps its clearance-width graph (roads/lotnav)
 //   // .1: the nav twin carries travel-lane widths (cars in the lane centre)
 //   // .3: hidden slab sides dropped, straight runs merged, layer boundaries oriented   // 2026-09-24.1: deck meshes welded, undersides only where a deck stands clear of the ground (ADR-0095)   // .2: slab sides only where they rise above the ground outside   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach   // .2/.3: ramp ends (elevated or at-grade runs) welded to the road they merge into (nav twin)   // .4: one-way carriageways and ramps; the nav gets a deck's travel width   // .5: blocks are the holes of the pavement WITH its sidewalks
@@ -78,15 +78,23 @@ public:
         const double cell = cityRenderCell(in.level); k = bundle::fnv1a(&cell, sizeof(cell), k);
         for (const CityEntity& e : cityEntities(in.level)) {
             k = bundle::fnv1aStr("entity" + std::to_string(e.ordinal), k);
-            if (e.inlineGraph) { k = bundle::fnv1aStr(keyedRoadFileText(e.block.dump()), k); continue; }
+            // (what the paint reads of the layout and of the data tables keys the city too: deck_mesh.h paintFactsKey, ADR-0431)
+            if (e.inlineGraph) {
+                k = bundle::fnv1aStr(keyedRoadFileText(e.block.dump()), k);
+                const uint64_t painted = paintFactsKey(e.block);
+                k = bundle::fnv1a(&painted, sizeof(painted), k);
+                continue;
+            }
             // The level's sidewalk override is built into the city (loadCityGraph), so it keys it: without it,
             // a level sharing the graph handed its city forward (bake.cpp's donor search matches this key) --
             // metro_lanes' 5-6 m sidewalks got the lab metro's narrower ones, one hole more, and 2 buildings.
             // Hashed only when present, so a level without one keeps its key.
             if (e.block.contains("sidewalks")) k = bundle::fnv1aStr("sidewalks" + e.block["sidewalks"].dump(), k);
             // The graph file's bytes WITHOUT THE ROAD MODEL'S JUNCTIONS AND STREETS (road_layout.h keyedRoadFileText:
-            // the junctions list with its controls and signs, the streets list, the divided pairs): no stage of the
-            // bake reads them, so writing them into a file keeps its key (ADR-0421; the lane graph keys the controls).
+            // the junctions list, the streets list, the divided pairs), then WHAT THE PAINT READS OF THEM (deck_mesh.h
+            // paintFactsKey, ADR-0431: the controls, the arms' signs, streets and order, the lane rules, and the turn
+            // and marking tables) -- so writing a control or a sign re-bakes the city, and a street's name or a
+            // junction's points still does not.
             bundle::InputFile f; f.path = e.graphPath; uint64_t fk = bundle::kFnvOffset;
             std::string bytes;
             if (readWholeFile(e.graphPath, bytes, &f.mtime)) {
@@ -97,6 +105,10 @@ public:
             else k = bundle::fnv1aStr("missing:" + e.graphPath, k);
             id.inputs.push_back(f);
             std::ifstream gf(e.graphPath); nlohmann::json spec; try { gf >> spec; } catch (const std::exception&) { spec = nlohmann::json(); }
+            {
+                const uint64_t painted = paintFactsKey(spec);
+                k = bundle::fnv1a(&painted, sizeof(painted), k);
+            }
             // A graph with TRACK classes keys the rail tag too, so the track kit can change without re-baking every
             // road-only level (their key stays what it was)
             if (graphHasTrack(spec)) k = bundle::fnv1aStr(std::string("rail|") + kRailBuildTag, k);

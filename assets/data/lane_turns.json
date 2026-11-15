@@ -35,8 +35,17 @@
     "",
     "A turn a row states is a turn the model holds, whether or not it fits its corner: a turn whose drawn corner is too",
     "tight, or would take a vehicle off the paved road, is a CORNER FAULT against that corner (lanes_tool lanegraph lists",
-    "them), closed to that vehicle class in the lane-level table until the builder draws the corner to fit (step 9)."
+    "them), closed to that vehicle class in the lane-level table until the builder draws the corner to fit (step 9).",
+    "",
+    "LANE LINES (lane_turns.h laneLineBetween: the one rule the lane-level table and the road paint both read). The line",
+    "between two neighbouring lanes may be crossed both ways (painted dashed), except: where both lanes are of a kind",
+    "listed in `hold_before_stop_line` and both run to the same stop line, the line is solid (painted solid, not to be",
+    "crossed) for the road file's `lane_rules.solid_before_stop_line` metres before that stop line."
   ],
+  "lane_lines": {
+    "hold_before_stop_line": ["through"],
+    "source": "[~] CVC 21460 (a solid line is not crossed) with MUTCD 3B.04 para 30 (solid lane lines on junction approaches discourage lane changing); which kinds hold is a guess: a pocket or slip lane is still being moved into there"
+  },
   "turns": [
     {"turn": "straight", "when": "straight_on", "kinds": ["through"], "lanes": "every", "into": "same_slot",
      "source": "[~] each lane carries on in its own lane: CVC 21658 (a) (drive within a single lane) read across the junction; the slot rule is a convention"},

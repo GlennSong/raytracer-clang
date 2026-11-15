@@ -34,7 +34,9 @@ struct NamedMesh { std::string name; RenderMesh mesh; Vec3 color; };
 
 // One mesh per material: asphalt (deck tops and bottoms), concrete (walls, piers), sidewalk,
 // shoulder, median, paint white, paint yellow, terrain. Empty meshes are omitted.
-std::vector<NamedMesh> buildMeshes(const Result& r);
+// `paint` (optional, out): what the paint decided (RoadPaint, below) -- the list the lines, arrows and stop bars are drawn from.
+struct RoadPaint;
+std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint = nullptr);
 
 // WHICH LANES' FOOTPRINTS HOLD A POINT, asked many times: every lane footprint's bounding box once, a coarse grid of
 // them, and the footprints prepared for point tests. Built once per result by whoever asks (the mesher, the lane graph).
@@ -54,8 +56,8 @@ struct LaneLookup {
 //     point of the junction (mouths within kSameJunctionPoint), else anywhere in the junction (ADR-0419's rule): where the
 //     crossing road's lanes begin;
 //   - its STOP LINE, kStopLineBack further back: where traffic arriving by it stops.
-// The paint draws each street arm's crosswalk (kCrosswalkNear to kCrosswalkFar back from the box edge), lane arrows and
-// stop bar (only where the street stops for the crossing road) from these; the road model's ModelArm::boxEdge and
+// The paint draws each street arm's crosswalk (kCrosswalkNear to kCrosswalkFar back from the box edge) from these, and
+// its lane arrows and stop bar where the road model states them (RoadPaint, below); the road model's ModelArm::boxEdge and
 // ::stopLine ARE these; the lane level ends its lanes at these. Nothing finds or groups a junction from overlapping lanes.
 constexpr double kCrosswalkNear = 1.0;
 constexpr double kCrosswalkFar = 4.0;
@@ -68,7 +70,6 @@ struct ArmStop {
     bool spineIn = true;        // the spine runs into the junction here (the approach lies at lower stations)
     double boxEdge = 0;         // where the junction's area begins, along the spine
     double stopLine = 0;        // where traffic arriving by it stops, along the spine
-    int crossRank = -1;         // the highest class rank among the other roads its box edge was measured from
     bool painted = false;       // its road is a street the paint marks (paintsJunctionBoxes)
 };
 // One stated junction's arms (in their list order) and its area along each road it lies on (JunctionSpan: from the
@@ -96,14 +97,55 @@ bool paintsJunctionBoxes(const RoadLabGraph& g, const EdgeSpec& e);
 // Every track lane's railhead line, in running order, with the platforms beside it (rail_track.h).
 std::vector<RailTrack> railTracks(const Result& r);
 
-// LANE ARROWS: what each of an approach's lanes may do at a junction, given the moves the junction
-// offers (hasLeft/Straight/Right, in plan terms) and whether its leftmost / rightmost lane is a turn
-// pocket. Lanes are listed plan-left first. The usual assignment: the leftmost lane turns left (and
-// goes straight unless it is a pocket), the rightmost turns right (likewise), the middle ones go
-// straight -- or, with no straight on offer, split left and right. buildMeshes paints these.
-struct LaneMoves { bool left = false, straight = false, right = false; };
-std::vector<LaneMoves> assignLaneMoves(std::size_t lanes, bool hasLeft, bool hasStraight, bool hasRight,
-                                       bool leftPocket = false, bool rightPocket = false);
+// WHAT THE PAINT SAYS ABOUT THE RULES OF THE ROAD, AS A LIST (what, where) that buildMeshes draws from and a test
+// reads. Every entry is read off the built road model of the same build (road_model.h builtRoadModel), so the paint
+// cannot say something the model does not:
+//   - a LINE along a lane's edge. Between two lanes it is Dashed where the lane table lets it be crossed both ways and
+//     Solid where not (lane_turns.h laneLineBetween, the rule the lane level fills its LaneLine from), drawn only where
+//     both lanes run along a stated street outside a junction's stop lines; the road's Edge line where no lane lies
+//     beyond; the Centre line of a two-way road with no median stated;
+//   - an ARROW in a lane arriving at a junction: the kinds of turn RoadModel::turns states from that lane there;
+//   - a STOP BAR across the lanes arriving by an arm: a marking row of road_attachments.json holding for the arm's stated
+//     signs and its junction's stated control (control_signs.h markingsOnArm).
+// Stations are along the lane's road's spine. Lanes are indices into Result::lanes; junctions and arms into the road
+// file's list (RoadLabGraph::junctions).
+enum class PaintedLineKind : uint8_t { None, Edge, Centre, Dashed, Solid };
+struct PaintedLine {
+    int lane = -1;              // the lane whose edge it is drawn along
+    int other = -1;             // the lane beyond it, toward the kerb (Dashed, Solid); -1: none
+    bool kerbSide = true;       // along the lane's kerb-side edge (false: its centre-line-side edge)
+    PaintedLineKind kind = PaintedLineKind::None;
+    double from = 0, to = 0;    // from <= to
+    double metres = 0;          // its drawn length
+};
+struct PaintedArrow {
+    int junction = -1, arm = -1, lane = -1;
+    bool straight = false, nearTurn = false, farTurn = false;   // near turn: toward the kerb; far turn: across the oncoming traffic
+    double station = 0;         // its tail
+    Vec2 at, heading;           // its tail in plan, and the way it points (the lane's direction of travel there)
+};
+struct PaintedStopBar {
+    int junction = -1, arm = -1;
+    std::string marking;        // the row that called for it (its kind in road_attachments.json)
+    double station = 0;         // the arm's stop line
+    std::vector<int> lanes;     // the arriving lanes it lies across
+    Vec2 from, to;              // its two ends in plan
+    int fromLane = -1, toLane = -1;   // the lanes its ends lie in (for their heights)
+};
+struct RoadPaint {
+    std::vector<PaintedLine> lines;
+    std::vector<PaintedArrow> arrows;
+    std::vector<PaintedStopBar> stopBars;
+    std::vector<std::string> problems;   // what was not painted because nothing states it, once per kind of gap
+};
+// WHAT THE PAINT READS BESIDES THE ROADS THEMSELVES, AS ONE NUMBER FOR THE BAKE KEY (city_producer.cpp): of a road file
+// (`spec`, its JSON) each junction's control, arms (with their streets, headings and signs) and through pairs, the mark
+// that the arms are in ring order, the streets (without their names) and the lane rules; and of the data tables, the
+// turn table (assets/data/lane_turns.json, its bytes' hash) and the marking rows and control names of
+// assets/data/road_attachments.json. Changing any of them re-bakes the city, as the paint is baked into its meshes.
+uint64_t paintFactsKey(const nlohmann::json& spec);
+// The shape a marking row asks for with "draws": "bar" -- the one the paint has.
+constexpr const char* kPaintDrawsBar = "bar";
 
 // The parapet runs the mesher sweeps: a chain of deck-boundary points on an elevated freeway or ramp lane.
 // Exposed so a diagnostic can ask where a wall ENDS — a run whose cap sits on same-level pavement is a wall

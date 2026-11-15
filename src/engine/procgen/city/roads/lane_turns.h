@@ -40,6 +40,9 @@ struct LaneTurnRow {
 };
 struct LaneTurnRules {
     std::vector<LaneTurnRow> rows;
+    // the table's "lane_lines": the kinds of lane that hold their lane on the approach to a stop line (the line between
+    // two of them is solid there: laneLineBetween). Empty: no line is ever solid.
+    std::vector<std::string> holdBeforeStopLine;
     uint64_t hash = 0;                   // of the file's bytes (what keys the caches that hold turns)
 };
 // The rows of a parsed table; a row that does not read is left out and said in `problems`.
@@ -92,6 +95,25 @@ bool kerbSideCounterClockwise();
 std::vector<StatedTurn> turnsAtJunction(const std::vector<TurnArm>& arms, const std::vector<std::array<uint32_t, 2>>& through,
                                         const std::string& control, const LaneTurnRules& rules,
                                         std::vector<std::string>* notes = nullptr, bool kerbCcw = kerbSideCounterClockwise());
+
+// MAY THE LINE BETWEEN TWO NEIGHBOURING LANES BE CROSSED, over a stretch of their road? THE ONE PLACE it is decided: the
+// lane level fills its table's LaneLine from it (lanes/lane_level.cpp, per section) and the paint draws from it
+// (lanes/deck_mesh.cpp: dashed where both ways may cross, solid where not). The rule: the line is solid where both lanes
+// are of a kind the table's "lane_lines" names (LaneTurnRules::holdBeforeStopLine), both run to the same stop line, and
+// the stretch lies within `solidBeforeStopLine` (the road file's `lane_rules.solid_before_stop_line`, metres) before
+// it. Every other line may be crossed both ways.
+//   `offside`, `kerbside`: the two lanes, the one nearer the centre line first: each lane's kind, whether its stretch
+//   on its street runs to a stop line (it reaches the street's end at a junction whose arm there has one), and where
+//   that stop line is; `from`, `to`: the stretch asked about. All three as distances along the road the way the lanes run.
+struct LaneBesideLine {
+    std::string kind;
+    bool runsToStopLine = false;
+    double stopLine = 0;
+};
+// Two distances along a road closer than this are one (metres): the lane level's cuts are made to it.
+constexpr double kLaneLineStation = 1e-3;
+LaneLine laneLineBetween(const LaneTurnRules& rules, double solidBeforeStopLine, const LaneBesideLine& offside,
+                         const LaneBesideLine& kerbside, double from, double to);
 
 const char* turnKey(Turn t);   // the table's word for a kind of turn ("straight", "near_turn", ...)
 

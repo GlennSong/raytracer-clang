@@ -91,10 +91,16 @@ struct AttachmentKind {
     // A SIGN THAT FOLLOWS FROM A FACT (ADR-0424): the kind's placement row as the file writes it (null: the kind is not
     // placed from the facts). control_signs.h reads it.
     nlohmann::json sign;
+    // A MARKING PAINTED ON THE ROAD THAT FOLLOWS FROM A FACT (a stop bar): the kind's `marking` row as the file writes it
+    // (null: none). control_signs.h reads it (armMarkingRules), the paint draws it.
+    nlohmann::json marking;
     bool standsFor(const std::string& control) const;
 };
 struct AttachmentKinds {
     std::vector<AttachmentKind> kinds;
+    // every junction control the file knows (the names under its "controls"."map"): a junction stating any other is one
+    // the paint has no row for, and says so
+    std::vector<std::string> controlNames;
     std::vector<std::pair<std::string, std::string>> uses;   // a reader's role -> the kind it writes or reads
     const AttachmentKind* find(const std::string& name) const;
     std::string use(const std::string& role) const;          // the kind a role uses (empty: none)
@@ -236,6 +242,21 @@ RoadModel plannedRoadModel(const roads::lanes::RoadLabGraph& g);
 // corner faults, where each path came from: for a tool or a test; the model does not keep it).
 RoadModel assembleRoadModel(const roads::lanes::Result& r, const roads::lanes::LaneGraphOptions& opts,
                             roads::lanes::LaneGraphBuild* report = nullptr);
+// THE BUILT LAYER WITHOUT THE LANE LEVEL: the planned layer and everything the build states (lanes, connections, junction
+// heights, the stated turns), `laneLevel` left empty. What assembleRoadModel builds the lane level from, and what the
+// road paint draws from (lanes/deck_mesh.h buildMeshes: the arrows are RoadModel::turns, the stop bars the arms' stated
+// control and signs, the lane lines the lanes' kinds and stop lines), so the paint and the lane level read one model.
+RoadModel builtRoadModel(const roads::lanes::Result& r);
+// WHICH ARM A LANE MEETS AT AN END OF A STREET it runs along (`end` 0: the street's `from`, 1: its `to`), and that arm's
+// stop line. THE ONE PLACE this is read off the stated streets and junctions: the turns' arms (turnArmsOf), the lane
+// level's cut at each stop line (lanes/lane_level.cpp) and the paint's lane lines (lanes/deck_mesh.cpp) all ask it.
+struct LaneSpanEnd {
+    bool reaches = false;            // the lane's stretch comes to that end of the street (within kReachesStreetEnd)
+    ModelJunctionId junction;        // the junction the street names there (none: it carries on, or the road just ends)
+    int arm = -1;                    // the arm of that junction this street is there (-1: the junction lists none for it)
+    Real stopLine = kNotStated;      // that arm's stop line, along the road's spine (not stated: its road is not in the file)
+};
+LaneSpanEnd laneSpanEnd(const RoadModel& m, const ModelLaneSpan& sp, int end);
 // EACH JUNCTION'S ARMS AS THE TURN TABLE READS THEM (lane_turns.h TurnArm), in the stated ring order (the list's own): each
 // arm's heading and the built lanes arriving and leaving by it. What assembleRoadModel states the turns from.
 std::vector<std::vector<TurnArm>> turnArmsOf(const RoadModel& m);
