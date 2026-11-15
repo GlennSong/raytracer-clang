@@ -708,6 +708,9 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         for (const std::pair<uint32_t, uint32_t>& pa : arrivingAt[j]) {
             arriving.push_back(pa.first);
             for (const std::string& reg : J.arms[pa.second].regulations) regulationsOn[pa.first].push_back(reg);
+            // the arm it arrives by and that arm's stated through partner: what says which approaches face each other
+            G.paths[pa.first].arm = pa.second;
+            G.paths[pa.first].throughArm = throughPartner(J.through, pa.second);
         }
         for (const std::pair<uint32_t, uint32_t>& pa : leavingAt[j]) leaving.push_back(pa.first);
         // a sign the file states on an arm no lane arrives by: impossible, reported (never stood elsewhere)

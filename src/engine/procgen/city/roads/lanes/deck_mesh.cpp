@@ -765,14 +765,11 @@ std::vector<JunctionArea> junctionAreas(const RoadLabGraph& g) {
         // every other arm's road but its own and its stated through partner's (the same street carrying on)
         for (std::size_t k = 0; k < A.arms.size(); ++k) {
             ArmStop& a = A.arms[k];
-            std::vector<bool> ownStreet(A.arms.size(), false);
-            for (const std::array<uint32_t, 2>& t : pj.through)
-                for (std::size_t side = 0; side < 2; ++side)
-                    if (t[side] == k && t[1 - side] < A.arms.size()) ownStreet[t[1 - side]] = true;
+            const uint32_t ownStreet = throughPartner(pj.through, static_cast<uint32_t>(k));
             double atPoint = -1, anywhere = 0;
             for (std::size_t o = 0; o < A.arms.size(); ++o) {
                 const ArmStop& b = A.arms[o];
-                if (b.edge < 0 || b.edge == a.edge || ownStreet[o]) continue;
+                if (b.edge < 0 || b.edge == a.edge || o == ownStreet) continue;
                 const EdgeSpec& eo = g.edges[static_cast<std::size_t>(b.edge)];
                 const double hw = g.hw(eo);
                 anywhere = std::max(anywhere, hw);

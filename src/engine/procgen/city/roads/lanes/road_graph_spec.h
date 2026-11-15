@@ -38,6 +38,9 @@ struct LaneLayout {
     double gap = 0.0;        // median between directions (two-way roads)
     double dovetail = 60.0;  // ramps with fwd >= 2: station where the second lane starts dying into the first
     double parking = 0.0;    // kerb parking: the band's width along each kerb (above); 0 none
+    // One-way, and the width the travel lanes take across: the cross-section's one answer to each (road_model_parts.h).
+    bool oneWay() const { return lanesRunOneWay(fwd, back); }
+    double travelWidth() const { return lanesTravelWidth(fwd, back, w, gap); }
 };
 
 // The narrowest travel lane kerb parking may leave (metres): a band that would leave less is not built.
@@ -286,7 +289,10 @@ struct RoadLabGraph {
     EdgeSpec* find(const std::string& id);
     const RoadClassSpec& cls(const EdgeSpec& e) const { return classes.at(e.cls); }
     int rank(const std::string& edgeId) const { return cls(*find(edgeId)).rank; }
-    double hw(const EdgeSpec& e) const;      // half-width of the through lanes
+    // half the width of a road's travel lanes, and the spine to its carriageway's edge (with the class's shoulder): both
+    // the cross-section's one answer (road_model_parts.h), asked for a road-file edge
+    double hw(const EdgeSpec& e) const { return e.lanes.travelWidth() * 0.5; }
+    double carriagewayHalfWidth(const EdgeSpec& e) const { return hw(e) + cls(e).shoulder; }
     std::array<double, 4> bounds() const;    // terrain bounds, or the edges' extent plus a margin
     std::vector<const EdgeSpec*> paved() const;
 

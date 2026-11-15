@@ -248,7 +248,7 @@ DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain) {
                     // and falls away at design grade, so the deck over the far kerb of a 20 m road sat half a
                     // metre low. The floor point holds flat over a half-span covering the lower road's paved band
                     // plus the upper road's own width, measured along the upper road (over the crossing sine).
-                    auto pavedW = [&](const EdgeSpec& e) { const RoadClassSpec& c = g.cls(e); return e.laneCount() * e.lanes.w + e.lanes.gap + 2.0 * c.shoulder; };
+                    auto pavedW = [&](const EdgeSpec& e) { return 2.0 * g.carriagewayHalfWidth(e); };
                     const double sHi = project(hi.xy, hi.s, p).station, sLo = project(lo.xy, lo.s, p).station;
                     auto tangent = [](const EdgeSpec& e, double st) { const Vec2 q0 = pointAt(e.xy, e.s, std::max(0.0, st - 0.5)), q1 = pointAt(e.xy, e.s, std::min(e.s.back(), st + 0.5)); const Vec2 d = q1 - q0; const double L = std::hypot(d.x, d.y); return L > 1e-9 ? d / L : Vec2(1, 0); };
                     const Vec2 th = tangent(hi, sHi), tl = tangent(lo, sLo); const double sinT = std::max(0.25, std::fabs(cross(th, tl)));

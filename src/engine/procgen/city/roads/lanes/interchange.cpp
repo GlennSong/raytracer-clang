@@ -235,7 +235,7 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         // THE LANE IT TAKES: the kerb lane of the carriageway going its way -- or, on a road with no lanes the other way,
         // that carriageway's lane nearest the freeway, its kerb lane or its offside lane, which it reaches crossing nothing
         const std::string kerbName = (L.forward ? "f" : "b") + std::to_string(count - 1);
-        const bool oneWay = (L.forward ? lay.back : lay.fwd) == 0;
+        const bool oneWay = lay.oneWay();   // (it has lanes going the ramp's way: `count`, above)
         double laneOff = 0, reach = 0, outward = 1e300;
         for (const LaneSlot& sl : slots) {
             reach = std::max(reach, std::fabs(sl.offset));

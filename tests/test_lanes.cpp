@@ -2207,7 +2207,8 @@ TEST_CASE(lanes_connectors_of_the_traffic_lab_meet_their_lanes_and_fit_their_veh
 // that can all reach one another holds at least 90% of them -- and no lane end is half-joined.
 // (Its known problems by count, with the tests' two vehicles: a change to any is a change to look at, then to write here.)
 // (step 9, ADR-0428: the stop lines moved to the stated rule -- fits none 82 -> 77, crossing lines 17 -> 29, kinks 65 -> 63)
-constexpr uint32_t kTrafficLabFitsNone = 77, kTrafficLabCrossingLines = 29, kTrafficLabKinks = 63;
+constexpr uint32_t kTrafficLabFitsNone = 76,   // 77 before ADR-0432: the carriageway half width is exact now, not read back off float lane bands
+                    kTrafficLabCrossingLines = 29, kTrafficLabKinks = 63;
 TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
     const LaneGraphBuild& lg = laneGraphOf("planned/traffic_lab_lanelab");
     std::printf("    traffic lab: %.1f%% of the lanes in the largest part a car can get round\n", 100 * lg.reachableShare);

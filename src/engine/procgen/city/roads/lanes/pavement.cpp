@@ -131,7 +131,7 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         const RoadClassSpec& c = g.cls(e); if (c.median > 0 && e.laneCount() == 0) medians.push_back(fromRing(spineRing(e.xy, c.median)));
         if (e.laneCount() == 0) continue; double hw = g.hw(e);
         inner.push_back(fromRing(spineRing(e.xy, hw)));
-        if (c.shoulder > 0) shoulders.push_back(fromRing(spineRing(e.xy, hw + c.shoulder)));
+        if (c.shoulder > 0) shoulders.push_back(fromRing(spineRing(e.xy, g.carriagewayHalfWidth(e))));
         if (c.sidewalk > 0) sidewalks.push_back(fromRing(spineRing(e.xy, hw + c.sidewalk)));
     }
     PolySet hull = unionAll(inner); std::vector<PolySet> medAll = medians; medAll.push_back(hull);
@@ -224,7 +224,7 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         for (size_t ei = 0; ei < g.edges.size(); ++ei) {
             const EdgeSpec& e = g.edges[ei]; if (e.laneCount() == 0) continue;
             const RoadClassSpec& c = g.cls(e); const double hw = g.hw(e);
-            if (c.shoulder > 0) sh.push_back(cutAtLevel(spineRing(e.xy, hw + c.shoulder), static_cast<int>(ei), false));
+            if (c.shoulder > 0) sh.push_back(cutAtLevel(spineRing(e.xy, g.carriagewayHalfWidth(e)), static_cast<int>(ei), false));
             if (c.sidewalk > 0) sw.push_back(cutAtLevel(spineRing(e.xy, hw + c.sidewalk), static_cast<int>(ei), true));
         }
         out.shoulder = sh.empty() ? PolySet{} : unionAll(sh);

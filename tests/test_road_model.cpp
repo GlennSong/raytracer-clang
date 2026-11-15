@@ -32,6 +32,7 @@
 #include "engine/procgen/city/roads/lanes/lane_level.h"     // the lane level from the model (ADR-0426)
 #include "lane_level_scene.h"                               // a scene with the lane level's facts, in memory
 #include "engine/procgen/city/roads/control_signs.h"   // the signs that follow from the facts (ADR-0424)
+#include "engine/procgen/city/roads/street_map.h"      // appendStreetMap: what routing reads
 #include "engine/ai/nav_graph.h"                        // rightOf: the kerb side
 #include "engine/script_assets.h"                       // loadScriptCode: the rule set's file
 #include "apps/citysim/control_policy_file.h"   // loadControlPolicy: the shared placement policy (ADR-0422)
@@ -700,10 +701,19 @@ TEST_CASE(road_model_8_one_junction_is_no_room_for_a_car_between_stop_lines) {
 namespace {
 // The small graph with its one-way street turned to run INTO the T at (200, 0) (its exit end there), its layout written,
 // and controls stated by hand: an all-way stop at the crossing (0, 0), the T giving way on its local street.
-nlohmann::json signedGraph() {
+// `spineAgainstTraffic`: the same street, the same traffic, WRITTEN THE OTHER WAY ROUND -- its spine runs out of the T and
+// its one lane is a backward lane, so its traffic still runs into the T.
+nlohmann::json signedGraph(bool spineAgainstTraffic = false) {
     nlohmann::json g = smallGraph();
-    for (nlohmann::json& e : g["edges"])
-        if (e["id"] == "o0") e["path"]["points"] = {{200, 150}, {200, 0}};
+    for (nlohmann::json& e : g["edges"]) {
+        if (e["id"] != "o0") continue;
+        if (!spineAgainstTraffic) {
+            e["path"]["points"] = {{200, 150}, {200, 0}};
+        } else {
+            e["path"]["points"] = {{200, 0}, {200, 150}};
+            e["lanes"] = {{"fwd", 0}, {"back", 1}};
+        }
+    }
     const RoadLabGraph graph = RoadLabGraph::fromJson(g);
     RoadLayout layout = deriveLayout(graph, LayoutSource::Inferred);
     writeLayout(g, layout);
@@ -772,7 +782,7 @@ TEST_CASE(road_model_9_the_signs_follow_from_the_facts) {
         const Vec2 d(std::cos(a.heading * DEG_TO_RAD), std::sin(a.heading * DEG_TO_RAD));
         const Vec2 off = s.at - mouth;
         // on the pavement: past the kerb across the arm's line, never on the carriageway
-        CHECK(std::fabs(dot(off, rightOf(d))) > kerbOffset(S) + 0.5);
+        CHECK(std::fabs(dot(off, rightOf(d))) > S.section.carriagewayHalfWidth() + 0.5);
         // attached to its arm through the model
         RoadModel withSign = m;
         ModelAttachment at;
@@ -822,6 +832,90 @@ TEST_CASE(road_model_9_the_signs_follow_from_the_facts) {
     }
     const engine::ControlSignPlan none = engine::placeControlSigns(plannedRoadModel(RoadLabGraph::fromJson(bare)), rules, nullptr, {});
     for (const engine::PlacedSign& s : none.signs) CHECK(s.kind == "do_not_enter_sign" || s.kind == "one_way_sign");
+}
+
+// ONE-WAY IS ONE-WAY WHICHEVER WAY THE SPINE IS WRITTEN, AND A STREET HAS ONE WIDTH (ADR-0432). The signed graph's one-way
+// street o0 written the other way round (its spine out of the T at (200, 0), its one lane a backward lane) is the same
+// street with the same traffic. The model stated one-way only for forward lanes, so the signs took this street for
+// two-way (no DO NOT ENTER, no ONE WAY) while routing took it for one-way.
+TEST_CASE(road_model_9b_one_way_is_asked_of_the_cross_section_whichever_way_its_lanes_run) {
+    const std::vector<engine::ControlSignRule> rules = engine::controlSignRules(attachmentKinds());
+    const RoadModel written = plannedRoadModel(RoadLabGraph::fromJson(signedGraph()));
+    const RoadModel turned = plannedRoadModel(RoadLabGraph::fromJson(signedGraph(true)));
+    const ModelStreetId o0 = streetNamed(turned, "o0");
+    CHECK(o0.valid());
+    const ModelSection& sec = turned.streets[o0.index].section;
+    CHECK(sec.lanesForward == 0 && sec.lanesBackward == 1);
+    CHECK(sec.oneWay());
+    CHECK(sec.lanesArriving(false) == 1 && sec.lanesArriving(true) == 0);   // its traffic arrives where the spine runs OUT
+    CHECK_APPROX(sec.travelWidth(), 3.5, 1e-12);
+    // THE SIGNS: the same signs on the same spots, facing the same way, with the same arrows
+    const engine::ControlSignPlan a = engine::placeControlSigns(written, rules, nullptr, {});
+    const engine::ControlSignPlan b = engine::placeControlSigns(turned, rules, nullptr, {});
+    CHECK(b.placed.count("do_not_enter_sign") && b.placed.at("do_not_enter_sign") == 1);
+    CHECK(b.placed.count("one_way_sign") && b.placed.at("one_way_sign") == 2);
+    CHECK(a.signs.size() == b.signs.size());
+    for (const engine::PlacedSign& s : a.signs) {
+        bool same = false;
+        for (const engine::PlacedSign& t : b.signs)
+            same = same || (t.kind == s.kind && (t.at - s.at).length() < 1e-6 && (t.face - s.face).length() < 1e-9 &&
+                            t.look.value("arrow", std::string()) == s.look.value("arrow", std::string()));
+        CHECK(same);
+    }
+    for (const engine::PlacedSign& s : b.signs) {
+        if (s.kind != "do_not_enter_sign") continue;
+        const ModelArm& arm = turned.junctions[static_cast<std::size_t>(s.junction)].arms[static_cast<std::size_t>(s.arm)];
+        CHECK(arm.road == "o0" && !arm.spineIn);   // at the T, its exit end: where its spine runs OUT of the junction
+    }
+    // ROUTING: one link, one way, from its far end (200, 150) into the T
+    engine::NavGraph map;
+    engine::StreetMapReport rep;
+    CHECK(engine::appendStreetMap(map, turned, 0, nullptr, &rep));
+    int along = 0;
+    for (const engine::NavLink& L : map.links) {
+        if (L.street != static_cast<int>(o0.index)) continue;
+        ++along;
+        CHECK(L.oneWay);
+        CHECK_APPROX(L.width, 3.5, 1e-12);
+        CHECK(map.nodes[static_cast<std::size_t>(L.from)].y > map.nodes[static_cast<std::size_t>(L.to)].y);   // toward the T at y = 0
+    }
+    CHECK(along >= 1);
+
+    // ONE WIDTH. A road with two lanes forward and one back, 3.5 m lanes and a 1 m median gap: 3 x 3.5 + 1 = 11.5 m across
+    // (the street map said 1 + 2 x 2 x 3.5 = 15). A one-way road that states a gap has no median to put it in: 2 x 3.5 = 7
+    // (the model said 11). The builder lays exactly these (half widths 5.75 and 3.5).
+    nlohmann::json g = smallGraph();
+    for (nlohmann::json& e : g["edges"]) {
+        if (e["id"] == "l2") e["lanes"] = {{"w", 3.5}, {"fwd", 2}, {"back", 1}, {"gap", 1.0}};
+        if (e["id"] == "o0") e["lanes"] = {{"w", 3.5}, {"fwd", 2}, {"back", 0}, {"gap", 4.0}};
+    }
+    {
+        const RoadLabGraph graph = RoadLabGraph::fromJson(g);
+        RoadLayout layout = deriveLayout(graph, LayoutSource::Inferred);
+        writeLayout(g, layout);
+    }
+    const RoadLabGraph graph = RoadLabGraph::fromJson(g);
+    const RoadModel m = plannedRoadModel(graph);
+    engine::NavGraph widths;
+    CHECK(engine::appendStreetMap(widths, m, 0, nullptr, &rep));
+    struct RoadWidth { const char* road; double width; };
+    for (const RoadWidth& x : {RoadWidth{"l2", 11.5}, RoadWidth{"o0", 7.0}}) {
+        const ModelStreetId s = streetNamed(m, x.road);
+        CHECK(s.valid());
+        CHECK_APPROX(m.streets[s.index].section.travelWidth(), x.width, 1e-12);
+        CHECK_APPROX(graph.hw(*graph.find(x.road)), x.width / 2, 1e-12);
+        double outermost = 0;   // the builder's lanes: the farthest lane's middle and half a lane
+        for (const LaneSlot& slot : laneSlots(graph.cls(*graph.find(x.road)), graph.find(x.road)->lanes))
+            outermost = std::max(outermost, std::fabs(slot.offset) + 1.75);
+        CHECK_APPROX(outermost, x.width / 2, 1e-5);
+        int links = 0;
+        for (const engine::NavLink& L : widths.links) {
+            if (L.street != static_cast<int>(s.index)) continue;
+            ++links;
+            CHECK_APPROX(L.width, x.width, 1e-12);
+        }
+        CHECK(links >= 1);
+    }
 }
 
 // ---- 11. the lane level: a table built from the road model (step 8, ADR-0426) ---------------------------------------------
@@ -971,6 +1065,57 @@ TEST_CASE(road_model_12_the_lane_level_is_a_table_built_from_the_model) {
     LaneGraphBuild none;
     const RoadModel bareModel = assembleRoadModel(*rb, oneCar(), &none);
     CHECK(!none.error.empty() && none.error.find("--lane-rules") != std::string::npos && bareModel.laneLevel.paths.empty());
+}
+
+// TWO APPROACHES FACE EACH OTHER WHERE THE JUNCTION STATES THEIR ARMS AS A THROUGH PAIR (ADR-0432): read from the pair,
+// never from the angle between them. The crossing at (0, 0): the arterial west-east and the local street south-north,
+// four approaches meeting exactly head on, two by two.
+//   - As the layout states it (two through pairs): each approach's one far turn crosses the paths coming from the
+//     approach facing it, so each of the four far turns has a place to wait inside.
+//   - With no pair stated there: no approach is stated to face another, so no far turn has one. (The angle test called
+//     these four head-on approaches facing whatever the junction said: the old answer.)
+TEST_CASE(road_model_12b_approaches_face_each_other_where_a_through_pair_is_stated) {
+    auto farTurnsAtTheCrossing = [](const nlohmann::json& g, uint32_t* waiting, uint32_t* facingLanes) {
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+        LaneGraphBuild lg;
+        const RoadModel m = assembleRoadModel(*r, oneCar(), &lg);
+        const LaneGraph& G = m.laneLevel;
+        CHECK(lg.error.empty());
+        uint32_t cross = kNoIndex;
+        for (uint32_t j = 0; j < m.junctions.size(); ++j)
+            if (m.junctions[j].at.length() < 1.0) cross = j;
+        CHECK(cross != kNoIndex);
+        uint32_t farTurns = 0;
+        *waiting = 0;
+        *facingLanes = 0;
+        for (const Path& p : G.paths) {
+            if (p.kind == PathKind::Lane && p.arm != kNoIndex && p.throughArm != kNoIndex && p.street < m.streets.size() &&
+                (m.streets[p.street].junctions[0].index == cross || m.streets[p.street].junctions[1].index == cross)) {
+                // an arriving lane carries its arm and the partner the junction states for it
+                const uint32_t j = m.streets[p.street].junctions[1].index == cross && m.junctions[cross].arms[p.arm].street.index == p.street
+                                       ? cross : kNoIndex;
+                if (j == cross) {
+                    CHECK(throughPartner(m.junctions[cross].through, p.arm) == p.throughArm);
+                    ++*facingLanes;
+                }
+            }
+            if (p.kind != PathKind::Connector || G.junctions[p.junction.index].modelJunction != cross || p.turn != Turn::FarTurn) continue;
+            ++farTurns;
+            if (p.waitInsideAt != kNoWaitInside) ++*waiting;
+        }
+        return farTurns;
+    };
+    uint32_t waiting = 0, facingLanes = 0;
+    const nlohmann::json stated = laneLevelGraph();
+    CHECK(farTurnsAtTheCrossing(stated, &waiting, &facingLanes) == 4u);
+    CHECK(waiting == 4u);
+    CHECK(facingLanes > 0u);
+    nlohmann::json unstated = stated;
+    for (nlohmann::json& j : unstated["junctions"])
+        if (std::fabs(j["at"][0].get<double>()) < 1.0 && std::fabs(j["at"][1].get<double>()) < 1.0) j.erase("through");
+    CHECK(farTurnsAtTheCrossing(unstated, &waiting, &facingLanes) > 0u);
+    CHECK(waiting == 0u);
+    CHECK(facingLanes == 0u);
 }
 
 TEST_CASE(road_model_13_a_ramp_is_a_way_on_at_the_lane_level) {

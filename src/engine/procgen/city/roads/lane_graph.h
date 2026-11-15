@@ -72,11 +72,13 @@ enum class OtherSide : uint8_t { Path, Crosswalk, Track };
 
 // A connector with no place to wait inside its junction.
 constexpr Real kNoWaitInside = -1;
-// TWO APPROACHES TO A JUNCTION FACE EACH OTHER (their traffic meets head on: "oncoming") when the dot of their unit
-// directions of travel, at the ends of their arriving lanes, is below this: within about 37 degrees of opposite, the
-// figure the old signal controller uses for opposing approaches (ADR-0109). The road builder reads it to place a far
-// turn's waiting point inside the junction (lanes/lane_graph_crossings.h placeWaitInsidePoints); the driving model's
-// right-of-way table reads the same one.
+// TWO APPROACHES TO A JUNCTION FACE EACH OTHER (their traffic meets head on: "oncoming") where the junction STATES their
+// two arms as one road carrying on through (road_model_parts.h throughPartner): each arriving lane carries its arm and
+// that arm's through partner (Path::arm, Path::throughArm, below), and LaneGraph::facing reads them. The road builder
+// places a far turn's waiting point inside the junction by it (lanes/lane_graph_crossings.h placeWaitInsidePoints).
+// NOT YET READ BY THE DRIVING MODEL (ADR-0432): its right-of-way table and signal programme still measure the angle
+// between the two approaches against this figure (apps/driving/right_of_way.h kFacingDot: within about 37 degrees of
+// opposite, where the through pairs are stated within 30). Delete it when they read Path::throughArm.
 constexpr Real kOncomingDot = -0.8;
 // The tightest radius of a path with no bend at all.
 constexpr Real kNoBend = std::numeric_limits<Real>::infinity();
@@ -127,6 +129,12 @@ struct Path {
     uint32_t street = kNoIndex;
     uint32_t modelLane = kNoIndex;
     uint32_t modelTurn = kNoIndex;
+    // A LANE ARRIVING AT A JUNCTION: the arm it arrives by (its place in the junction's stated list of arms), and the arm
+    // the junction states as the same road carrying on through from it (its through partner). kNoIndex: it arrives at no
+    // junction; no through partner is stated. Two arriving lanes of one junction FACE EACH OTHER when one's through
+    // partner is the other's arm (LaneGraph::facing).
+    uint32_t arm = kNoIndex;
+    uint32_t throughArm = kNoIndex;
 };
 
 // The line between two neighbouring lanes of a section: from which lane a car may cross it. Neither = a solid line.
@@ -298,6 +306,14 @@ struct LaneGraph {
     // How steeply it climbs there: metres up per metre along the plan, over the same chord as directionAt (0 where
     // the chord has no plan length).
     Real gradeAt(PathId path, Real distanceAlong) const;
+    // DO THESE TWO APPROACHES FACE EACH OTHER? `a` and `b`: two lanes arriving at ONE junction. Yes where the junction
+    // states their two arms as one road carrying on through (Path::throughArm of one is Path::arm of the other). Read
+    // from the stated pair, never from the angle between them.
+    bool facing(PathId a, PathId b) const {
+        const Path& pa = paths[a.index];
+        const Path& pb = paths[b.index];
+        return pa.throughArm != kNoIndex && pa.arm != kNoIndex && pa.throughArm == pb.arm && pb.throughArm == pa.arm;
+    }
 };
 
 bool operator==(const Path& a, const Path& b);

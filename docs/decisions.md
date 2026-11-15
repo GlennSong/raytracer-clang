@@ -20835,3 +20835,16 @@ bars: `markingsOnArm` (control_signs.h) over a `marking` row of `road_attachment
 `armStates`. Arrows: the turns `RoadModel::turns` states from the lane. Which arm a lane meets: `laneSpanEnd`. Gone: the
 0.3 m probe, the leg finding, `assignLaneMoves`, the class-rank stop rule. Nothing stated: nothing painted, said once.
 The city key now holds what the paint reads (`paintFactsKey`); the lanes tag is bumped.
+
+
+## ADR-0432 — One answer per road question (issue #292): where each now lives
+**Status:** Provisional · **Date:** 2026-11-15
+
+What it does: questions about a road that several files answered, sometimes differently, now have one function each.
+- Is a street one-way: `ModelSection::oneWay()` (road_model_parts.h): lanes one way and none the other, either way along the spine. Which way: `lanesArriving(spineIn)`. The stored `oneWay` flags are gone.
+- How wide is it: `ModelSection::travelWidth()` and `carriagewayHalfWidth()`; a road-file edge asks the same functions (`LaneLayout::travelWidth`, `RoadLabGraph::hw` / `carriagewayHalfWidth`). The median gap counts only between two ways.
+- Which arms are one road carrying on: the junction's stated `through`, written by `throughPairs` (control_plan.h) and read by `throughPartner` (road_model_parts.h). `settleRoles` reads it (`JunctionFacts::through`).
+- Which approaches face each other: `LaneGraph::facing`, over `Path::arm` and `Path::throughArm` (the stated pair). The driving still measures an angle (`kOncomingDot`): owed.
+- Facts to a junction: `junctionOf` (control_plan.h). A road's posted limit: `postedLimitOn` (control_plan.cpp).
+- Two stations are one place: `sameWrittenStation` (road_model_parts.h, 1 cm); only the control plan's two joins use it yet.
+Not done (issue #292 list): the stop-line setback's second copy, the ramp meeting and tapers, the one junction writer, the other station tolerances. Lanes tag bumped (half widths are exact now).

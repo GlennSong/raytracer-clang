@@ -372,6 +372,14 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
             for (uint8_t ii = 0; ii < kHeadingCount; ++ii) {
                 const Heading in = static_cast<Heading>(ii);
                 if (!t.sectionArriving(r, c, in).valid()) continue;
+                // The arm each arriving lane comes in by (named by the way its traffic heads), and the arm that is the same
+                // road carrying on through: the one across the junction, where the grid has a road there.
+                for (uint32_t k = 0; k < lanes; ++k) {
+                    Path& arriving = g.paths[t.laneArriving(r, c, in, k).index];
+                    arriving.arm = ii;
+                    arriving.throughArm =
+                        t.sectionLeaving(r, c, in).valid() ? static_cast<uint32_t>(opposite(in)) : engine::kNoIndex;
+                }
                 for (uint8_t oi = 0; oi < kHeadingCount; ++oi) {
                     const Heading out = static_cast<Heading>(oi);
                     if (out == opposite(in) || !t.sectionLeaving(r, c, out).valid()) continue;

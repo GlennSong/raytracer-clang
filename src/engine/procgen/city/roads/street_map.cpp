@@ -146,9 +146,6 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
     // (`forward` / `backward`: lay that way's links, where the section has lanes that way)
     auto layLinks = [&](const Run& run, const std::vector<int>& nodesAlong, const ModelSection& sec, uint32_t edge, int street, int junction,
                         int armAtStart, int armAtEnd, bool forward = true, bool backward = true) {
-        const bool oneWay = (sec.lanesForward > 0) != (sec.lanesBackward > 0);
-        const int widest = std::max(sec.lanesForward, sec.lanesBackward);
-        const Real width = oneWay ? widest * sec.laneWidth : sec.medianGap + 2.0 * widest * sec.laneWidth;
         const bool walk = sec.sidewalk > 0 && isStreetClass(sec.klass);
         const bool deckClass = isDeckClass(sec.klass);
         uint8_t access = 0;
@@ -162,10 +159,10 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
             L.from = a;
             L.to = b;
             L.length = (map.nodes[static_cast<std::size_t>(b)] - map.nodes[static_cast<std::size_t>(a)]).length();
-            L.width = width;
+            L.width = sec.travelWidth();
             L.klass = sec.klass;
             L.lanes = std::max(1, along ? sec.lanesForward : sec.lanesBackward);
-            L.oneWay = oneWay;
+            L.oneWay = sec.oneWay();
             L.walkable = walk;
             L.access = access;
             L.parkOffset = sec.parking > 0 ? sec.parkingOffset : 0.0;

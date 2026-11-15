@@ -70,16 +70,18 @@ JunctionFacts gridJunction(const TestRoads& t, const std::string& eastWest, cons
                            const ControlPolicy& policy) {
     JunctionFacts j;
     j.id = "grid";
+    std::vector<engine::Vec2> leaves;   // the way each arm leaves the junction: against its arriving traffic
     for (const Heading h : kHeadings) {
         if (!t.laneArriving(kRow, kCol, h, 0).valid()) continue;
         ArmFacts a;
         a.roadClass = h == Heading::East || h == Heading::West ? eastWest : northSouth;
         a.road = a.roadClass;
-        a.heading = driving_test::headingVector(h);
+        leaves.push_back(driving_test::headingVector(h) * Real(-1));
         a.arriving = a.leaving = static_cast<int>(t.spec.lanesEachWay);
         a.limit = policy.postedLimit(a.roadClass);
         j.arms.push_back(a);
     }
+    j.through = engine::roads::lanes::throughPairs(leaves);   // stated as the layout states them
     engine::roads::lanes::settleRoles(j, policy);
     return j;
 }

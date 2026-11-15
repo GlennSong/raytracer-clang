@@ -189,9 +189,9 @@ std::vector<Turn> turnKindsFrom(const std::vector<TurnArm>& arms, const std::vec
         return (k + n - at) % n;
     };
     int partner = -1;
-    for (const std::array<uint32_t, 2>& t : through) {
-        if (t[0] == from && t[1] < arms.size() && arms[t[1]].hasHeading) partner = static_cast<int>(t[1]);
-        if (t[1] == from && t[0] < arms.size() && arms[t[0]].hasHeading) partner = static_cast<int>(t[0]);
+    {
+        const uint32_t stated = throughPartner(through, from);
+        if (stated < arms.size() && arms[stated].hasHeading) partner = static_cast<int>(stated);
     }
     const std::size_t partnerSteps = partner >= 0 ? stepsTo(static_cast<uint32_t>(partner)) : 0;
     for (uint32_t b : ring) {

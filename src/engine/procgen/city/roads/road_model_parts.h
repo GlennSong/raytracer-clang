@@ -32,6 +32,13 @@ using ModelLaneId = GraphIndex<ModelLaneTag>;
 constexpr Real kNotStated = std::numeric_limits<Real>::quiet_NaN();
 inline bool stated(Real v) { return !std::isnan(v); }
 
+// "THESE TWO STATIONS ARE THE SAME PLACE" (ADR-0432): two stations along one road, each read from a road file or worked
+// out from one, are one place when they are within what the file can say -- it writes stations to the centimetre
+// (rt_math.h kWrittenStation). The one answer for every join made by station: an arm and its street's end, a street's
+// end and a junction's point, a re-planned arm and the listed one. (Stated facts on one road are never this close: the
+// shortest street is half a metre.)
+inline bool sameWrittenStation(Real a, Real b) { return approxEqual(a, b, kWrittenStation); }
+
 // ONE ARM: a road's way out of a junction. THE ROAD FILE STATES IT (its junction's "arms": [{"road": "s4", "at": 87.3,
 // "spine": "in", "regulations": ["stop"], "street": "s4/1", "heading": 90}]): the road, the station along its spine where
 // it meets the junction ("at"), whether the spine runs INto the junction there (its forward lanes arrive) or OUT of it, the
@@ -57,6 +64,20 @@ struct ModelArm {
 // LaneLayout::parking): `parking` its width where the road states one that fits (streetSection), 0 none; `parkingOffset`
 // where the band's middle lies, out from the carriageway's middle toward the kerb (the same reading streetSection gives
 // the city sim's bays).
+//
+// THE QUESTIONS EVERY READER ASKS OF A CROSS-SECTION are answered here once (ADR-0432), over the lanes each way:
+//   ONE-WAY: its traffic runs one way only, whichever way along the spine (lanes one way and none the other). WHICH way
+//     is a separate fact: `lanesArriving` at an end of the road.
+//   THE TRAVEL WIDTH: every lane's width, and the median gap where the road has lanes both ways (the gap lies BETWEEN the
+//     two ways, so a one-way road has none) -- what the builder lays (roads/lanes bandsFor), and so what is drawn.
+//   THE CARRIAGEWAY'S HALF WIDTH: half the travel width and one shoulder -- the spine to the edge of the paved road.
+// The road file's lanes (roads/lanes LaneLayout) and the model's section both answer through these functions.
+inline bool lanesRunOneWay(int forward, int backward) { return (forward > 0) != (backward > 0); }
+// (the median gap a road really has: the stated one where it has lanes both ways)
+inline Real lanesMedianGap(int forward, int backward, Real medianGap) { return forward > 0 && backward > 0 ? medianGap : Real(0); }
+inline Real lanesTravelWidth(int forward, int backward, Real laneWidth, Real medianGap) {
+    return (forward + backward) * laneWidth + lanesMedianGap(forward, backward, medianGap);
+}
 struct ModelSection {
     std::string roadClass;
     RoadClass klass = RoadClass::Local;        // the engine's class for it (roads/lanes classOf: the one mapping)
@@ -65,13 +86,23 @@ struct ModelSection {
     Real parking = 0;                          // the kerb parking band's width along each kerb (m); 0: none
     Real parkingOffset = 0;                    // its middle, from the carriageway's middle toward the kerb (m)
     bool track = false, footway = false;
+    // Does its traffic run one way only (either way along the spine)?
+    bool oneWay() const { return lanesRunOneWay(lanesForward, lanesBackward); }
+    // The lanes whose traffic ARRIVES at an end of the road: the forward lanes where the spine runs INTO that end
+    // (`spineIn`, as an arm states it), the backward lanes where it runs out of it. 0: nothing arrives there (the
+    // entry end of a one-way street).
+    int lanesArriving(bool spineIn) const { return spineIn ? lanesForward : lanesBackward; }
+    // The width the travel lanes take across, both ways: what the map draws.
+    Real travelWidth() const { return lanesTravelWidth(lanesForward, lanesBackward, laneWidth, medianGap); }
+    // The spine to the carriageway's edge: where the kerb (or the verge) begins.
+    Real carriagewayHalfWidth() const { return travelWidth() * Real(0.5) + shoulder; }
 };
 
 // A STRETCH OF ROAD INSIDE A JUNCTION (between nodes the planner grouped into it; the road file's "inside": [{"road",
 // "from", "to"}]), or one of the paint's boxes along a road: a road and stations from <= to. The road model adds to a
 // stretch inside a junction what the street map needs to drive it (ADR-0425): its road's index, its centre line between
-// the two stations (`line`, into RoadModel::linePoints, with their stations in RoadModel::lineStations), its road's
-// cross-section and whether it is one-way. A paint box carries none of them.
+// the two stations (`line`, into RoadModel::linePoints, with their stations in RoadModel::lineStations) and its
+// road's cross-section. A paint box carries none of them.
 struct ModelStretch {
     ModelStretch() = default;
     ModelStretch(std::string r, Real f, Real t) : road(std::move(r)), from(f), to(t) {}
@@ -80,7 +111,6 @@ struct ModelStretch {
     uint32_t edge = kNoIndex;        // the road's index (inside stretches; the road model's)
     Range line;
     ModelSection section;
-    bool oneWay = false;
 };
 
 // ONE POINT OF A JUNCTION SPREAD OVER SEVERAL (ADR-0425): where roads meet inside it -- the road ends that meet there, a
@@ -110,6 +140,18 @@ struct ModelNode {
 // layout alone; one where some junctions name a control and some do not is refused. A junction the planner spread over
 // several nodes names the stretches of road lying between them as `inside`. The layout's members (each arm's street and
 // heading, `through`, and the "streets" list) are not part of the city's bake key (road_layout.h keyedRoadFileText).
+//
+// THE ARM THAT IS THE SAME ROAD CARRYING ON THROUGH from `arm`, as a junction's `through` pairs state it; kNoIndex: none
+// is stated. The one reading of the pairs (ADR-0432): which turn is straight on, which approaches face each other, which
+// road is the major one, whose width a stop line stands back by.
+using ThroughPairs = std::vector<std::array<uint32_t, 2>>;
+inline uint32_t throughPartner(const ThroughPairs& through, uint32_t arm) {
+    for (const std::array<uint32_t, 2>& t : through) {
+        if (t[0] == arm) return t[1];
+        if (t[1] == arm) return t[0];
+    }
+    return kNoIndex;
+}
 struct ModelJunction {
     std::string id;
     Vec2 at;
@@ -145,16 +187,11 @@ struct ModelStreet {
                                      // readers ask streetName, the attachment made from it)
     uint32_t edge = kNoIndex;        // the road-file edge's index
     ModelSection section;
-    bool oneWay = false;
-    Real speedLimit = 0;             // metres per second; 0: none posted
+    Real speedLimit = 0;            // metres per second; 0: none posted
     Real lotsFrom = -1, lotsTo = -1; // where buildings may front it (the road's lots_range); -1: all of it
     std::string frontageOf;          // a frontage road: the freeway carriageway it runs beside
     Range line;                      // into linePoints: its centre line, `from` to `to` (planned: the road file's spine)
     std::vector<ModelLaneId> lanes;  // its lanes, forward then backward, each by slot from the centre line (built layer)
-    // The width the travel lanes take across, both ways (lanes x width + the median gap): what the map draws.
-    Real travelWidth() const {
-        return (section.lanesForward + section.lanesBackward) * section.laneWidth + section.medianGap;
-    }
 };
 
 }  // namespace engine

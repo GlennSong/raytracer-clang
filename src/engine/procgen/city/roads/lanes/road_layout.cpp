@@ -22,10 +22,6 @@ namespace roads::lanes {
 
 namespace {
 
-// Stations, points and headings are written to the centimetre (or the hundredth of a degree), so a file reads cleanly
-// and the same roads write the same bytes.
-double written(double v) { return std::round(v * 100.0) / 100.0; }
-
 // Two stations written from one number are equal; this only absorbs the last bit of a sum.
 constexpr double kSameStation = 1e-6;
 
@@ -39,50 +35,6 @@ std::vector<CrossingSpec> crossingsFromJson(const nlohmann::json& list) {
         x.at = Vec2(c.at("at").at(0).get<double>(), c.at("at").at(1).get<double>());
         out.push_back(x);
     }
-    return out;
-}
-
-// The way an arm leaves its junction: from its station, kArmHeadingReach along the road away from the junction.
-Vec2 armDirection(const EdgeSpec& e, double at, bool spineIn) {
-    const double length = e.s.back();
-    const double far = spineIn ? std::max(0.0, at - kArmHeadingReach) : std::min(length, at + kArmHeadingReach);
-    Vec2 d = pointAt(e.xy, e.s, far) - pointAt(e.xy, e.s, at);
-    if (d.length() < 1e-9) {
-        const Vec2 t = tangentAtStation(e.xy, e.s, at);
-        d = spineIn ? t * -1.0 : t;
-    }
-    return d.length() < 1e-9 ? Vec2(1, 0) : normalize(d);
-}
-
-double degreesOf(const Vec2& d) {
-    double a = written(std::atan2(d.y, d.x) * RAD_TO_DEG);
-    if (a < 0) a += 360.0;
-    if (a >= 360.0) a -= 360.0;
-    return a;
-}
-
-Vec2 directionOf(double degrees) { return Vec2(std::cos(degrees * DEG_TO_RAD), std::sin(degrees * DEG_TO_RAD)); }
-
-// The pairs of arms that are one street carrying on through (see the top of road_layout.h).
-std::vector<std::array<uint32_t, 2>> throughPairs(const std::vector<Vec2>& dirs) {
-    std::vector<std::array<uint32_t, 2>> out;
-    if (dirs.size() == 2) return {{0, 1}};
-    const double headOn = -std::cos(kStraightOnDegrees * DEG_TO_RAD);
-    std::vector<std::tuple<double, int, int>> pairs;
-    for (std::size_t i = 0; i < dirs.size(); ++i)
-        for (std::size_t k = i + 1; k < dirs.size(); ++k) {
-            const double d = dot(dirs[i], dirs[k]);
-            if (d < headOn) pairs.emplace_back(d, static_cast<int>(i), static_cast<int>(k));
-        }
-    std::sort(pairs.begin(), pairs.end());
-    std::vector<char> used(dirs.size(), 0);
-    for (const std::tuple<double, int, int>& p : pairs) {
-        const int a = std::get<1>(p), b = std::get<2>(p);
-        if (used[static_cast<std::size_t>(a)] || used[static_cast<std::size_t>(b)]) continue;
-        used[static_cast<std::size_t>(a)] = used[static_cast<std::size_t>(b)] = 1;
-        out.push_back({static_cast<uint32_t>(a), static_cast<uint32_t>(b)});
-    }
-    std::sort(out.begin(), out.end());
     return out;
 }
 
@@ -274,7 +226,6 @@ std::string leadOf(const std::string& s, const Member& m) { return s.substr(m.le
 
 std::vector<DividedPair> dividedFromIds(const RoadLabGraph& g, std::vector<std::string>* unpaired) {
     std::vector<DividedPair> out;
-    auto oneWay = [](const EdgeSpec& e) { return (e.lanes.fwd > 0) != (e.lanes.back > 0); };
     auto endsWith = [](const std::string& s, const std::string& tail) {
         return s.size() > tail.size() && s.compare(s.size() - tail.size(), tail.size(), tail) == 0;
     };
@@ -286,7 +237,7 @@ std::vector<DividedPair> dividedFromIds(const RoadLabGraph& g, std::vector<std::
         std::string why;
         if (!other) why = "no road " + name + (in ? "_out" : "_in");
         else if (other->cls != e.cls) why = "its partner " + other->id + " is of another class (" + other->cls + ")";
-        else if (!oneWay(e) || !oneWay(*other)) why = "it or its partner is not one-way";
+        else if (!e.lanes.oneWay() || !other->lanes.oneWay()) why = "it or its partner is not one-way";
         if (!why.empty()) {
             if (unpaired) unpaired->push_back("road " + e.id + ": no divided pair (" + why + ")");
             continue;
@@ -342,24 +293,7 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
         how.carryOns = &carryOns;
         (void)findJunctions(graph, ControlPolicy(), how);
     } else {
-        for (const JunctionFacts& f : layoutJunctionFacts(graph, source, &carryOns)) {
-            ModelJunction pj;
-            pj.id = f.id;
-            pj.at = Vec2(written(f.at.x), written(f.at.y));
-            for (const ArmFacts& a : f.arms) {
-                ModelArm arm;
-                arm.road = a.road;
-                arm.station = written(a.at);
-                arm.spineIn = a.spineIn;
-                pj.arms.push_back(arm);
-            }
-            pj.inside = f.inside;
-            // a junction over several points says which roads meet at each (ADR-0425); one over a single point needs not
-            if (!f.inside.empty())
-                for (std::size_t n = 0; n < f.nodes.size() && n < f.nodePoints.size(); ++n)
-                    pj.nodes.push_back(ModelNode{Vec2(written(f.nodes[n].x), written(f.nodes[n].y)), f.nodePoints[n]});
-            out.junctions.push_back(pj);
-        }
+        for (const JunctionFacts& f : layoutJunctionFacts(graph, source, &carryOns)) out.junctions.push_back(junctionOf(f));
     }
     // ---- each arm's heading; the arms of a junction found here put in ring order (armRing: the one place); the through
     // pairs. (A list the file states is kept as it is, marked or not: `lanes_tool layout --arm-order --write` puts an
@@ -374,10 +308,19 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
             }
             if (!stated(a.heading)) a.heading = degreesOf(armDirection(*e, a.station, a.spineIn));
         }
-        if (!out.keptList) orderArmsRound(pj, composed, &out.notes);
-        std::vector<Vec2> dirs;
-        for (const ModelArm& a : pj.arms) dirs.push_back(stated(a.heading) ? directionOf(a.heading) : Vec2(1, 0));
-        if (pj.through.empty()) pj.through = throughPairs(dirs);
+        // a junction found here carries the through pairs its facts state (control_plan.h findJunctions: the one rule),
+        // following its arms into their ring; a list the file states and has no pair written for gets them from the same
+        // rule, over its headings as written
+        if (!out.keptList) {
+            orderArmsRound(pj, composed, &out.notes);
+            for (std::array<uint32_t, 2>& t : pj.through)
+                if (t[0] > t[1]) std::swap(t[0], t[1]);
+            std::sort(pj.through.begin(), pj.through.end());
+        } else if (pj.through.empty()) {
+            std::vector<Vec2> dirs;
+            for (const ModelArm& a : pj.arms) dirs.push_back(stated(a.heading) ? directionOf(a.heading) : Vec2(1, 0));
+            pj.through = throughPairs(dirs);
+        }
     }
     // ---- the streets: each paved road cut at its arms, the stretches inside a junction left out ------------------------
     struct Cut {
@@ -797,7 +740,7 @@ NamingReport nameStreetRuns(std::vector<ModelStreet>& streets, const std::vector
     }
     auto travelWidth = [&](const std::string& road) {
         const EdgeSpec* e = g.find(road);
-        return e ? e->laneCount() * e->lanes.w + e->lanes.gap : 0.0;
+        return e ? e->lanes.travelWidth() : 0.0;
     };
     std::vector<std::string> runName(runs.size());
     std::vector<RunToName> toName;

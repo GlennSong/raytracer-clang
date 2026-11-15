@@ -46,11 +46,11 @@ namespace {
 
 // THE FILES THAT HOLD BARE TOLERANCE LITERALS TODAY (2026-11-14), paths under src/, each with how many it held then
 // (a comment, not checked). 22 files, 102 literals then, all in the road code; the driving code holds none. Take a file
-// off when its last one is named. (21 files since the lot twin, road_twin.cpp with its 6, was deleted: ADR-0430.)
+// off when its last one is named. (21 files since the lot twin, road_twin.cpp with its 6, was deleted: ADR-0430; 20 since
+// control_plan.cpp's one became sameWrittenStation: ADR-0432.)
 const std::vector<std::string> kHoldsBareTolerances = {
     "engine/procgen/city/roads/lanes/block_audit.cpp",          // 9
     "engine/procgen/city/roads/lanes/city_producer.cpp",        // 1
-    "engine/procgen/city/roads/lanes/control_plan.cpp",         // 1
     "engine/procgen/city/roads/lanes/deck_height.cpp",          // 2
     "engine/procgen/city/roads/lanes/deck_mesh.cpp",            // 30
     "engine/procgen/city/roads/lanes/geom2d.cpp",               // 4

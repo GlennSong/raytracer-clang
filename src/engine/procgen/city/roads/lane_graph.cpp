@@ -16,9 +16,9 @@ namespace {
 // 3: each path lists its crossing points; 4: a regulation covers a stretch, from and to, issue #240; 5: each path's bend
 // profile, issue #281; 6: each crossing point's vehicle tags on each side, ADR-0412; 7: each path's and junction's ids on
 // the road model, ADR-0426; 8: a Join's stated merge, which path joins and the model's connection, ADR-0426; 9: no lane
-// tags, a lane's kind is the road model's, ADR-0429).
+// tags, a lane's kind is the road model's, ADR-0429; 10: an arriving lane's arm and its stated through partner, ADR-0432).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 9;
+constexpr uint32_t kVersion = 10;
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
 // A closed outline (a junction's box, a crosswalk) has at least this many corners; a track's line two points.
@@ -141,6 +141,8 @@ void putItem(BinWriter& w, const Path& p) {
     w.put(p.street);
     w.put(p.modelLane);
     w.put(p.modelTurn);
+    w.put(p.arm);
+    w.put(p.throughArm);
 }
 void putItem(BinWriter& w, const Section& s) {
     putItem(w, s.lanes);
@@ -221,7 +223,8 @@ bool getItem(BinReader& r, Path& p) {
            getItem(r, p.curve) && r.get(p.length) && r.get(p.width) && r.get(p.tightestRadius) &&
            getItem(r, p.bends) && r.get(p.speedLimit) && getItem(r, p.section) && r.get(p.indexInSection) && getItem(r, p.junction) &&
            getItem(r, p.from) && r.get(p.waitInsideAt) && getItem(r, p.next) && getItem(r, p.regulations) &&
-           getItem(r, p.crossings) && r.get(p.street) && r.get(p.modelLane) && r.get(p.modelTurn);
+           getItem(r, p.crossings) && r.get(p.street) && r.get(p.modelLane) && r.get(p.modelTurn) &&
+           r.get(p.arm) && r.get(p.throughArm);
 }
 bool getItem(BinReader& r, Section& s) { return getItem(r, s.lanes) && getItem(r, s.lines) && r.get(s.roadClass); }
 bool getItem(BinReader& r, Junction& j) {
@@ -491,7 +494,7 @@ bool operator==(const Path& a, const Path& b) {
            a.bends == b.bends && a.speedLimit == b.speedLimit && a.section == b.section && a.indexInSection == b.indexInSection &&
            a.junction == b.junction && a.from == b.from && a.waitInsideAt == b.waitInsideAt && a.next == b.next &&
            a.regulations == b.regulations && a.crossings == b.crossings && a.street == b.street && a.modelLane == b.modelLane &&
-           a.modelTurn == b.modelTurn;
+           a.modelTurn == b.modelTurn && a.arm == b.arm && a.throughArm == b.throughArm;
 }
 bool operator==(const Section& a, const Section& b) {
     return a.lanes == b.lanes && a.lines == b.lines && a.roadClass == b.roadClass;

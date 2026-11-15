@@ -4195,7 +4195,7 @@ static void mapStreetsOf(const engine::LevelRoadModel* level, engine::CityMapDat
             const engine::ModelStreet& S = m.streets[s];
             engine::CityMapData::Street ms;
             for (uint32_t k = S.line.first; k < S.line.end(); ++k) ms.line.push_back(m.linePoints[k]);
-            ms.width = S.travelWidth();
+            ms.width = S.section.travelWidth();
             ms.klass = S.section.klass;
             ms.track = S.section.track;
             ms.footway = S.section.footway;

@@ -49,9 +49,8 @@ enum class LayoutSource : uint8_t { Planner, Inferred };
 
 // The planner writes every point to the centimetre: two road ends it made from one point are within this of each other.
 constexpr double kPlannerSameEnd = 0.01;
-// An arm's heading is measured over this much of its road (metres): enough to read past the curve a junction's corner
-// puts on a road's last metres.
-constexpr double kArmHeadingReach = 15.0;
+// (An arm's heading is measured over kArmHeadingReach of its road: control_plan.h, beside the one rule that states the
+// through pairs from the headings.)
 // A street shorter than this is no street: the stretch between two arms of one junction, or a road's last half metre.
 constexpr double kShortestStreet = 0.5;
 

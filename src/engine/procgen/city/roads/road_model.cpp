@@ -151,7 +151,6 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
             in.line = appendLine(m, e, in.from, in.to);
             bool fits = true;
             in.section = sectionOf(g, e, &fits);
-            in.oneWay = (e.lanes.fwd > 0) != (e.lanes.back > 0);
         }
         for (ModelNode& n : J.nodes)
             for (ModelNodePoint& p : n.points) p.edge = static_cast<uint32_t>(g.index.at(p.road));
@@ -170,7 +169,6 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
                 m.problems.push_back(fmt("road %s (%s): it states %.1f m of kerb parking, which would leave a travel lane under %.1f m; none is "
                                          "built", e.id.c_str(), e.cls.c_str(), e.lanes.parking, roads::lanes::kMinTravelLane));
         }
-        S.oneWay = e.lanes.back == 0 && e.lanes.fwd > 0;
         S.speedLimit = e.speedLimit;
         S.lotsFrom = e.lotsFrom;
         S.lotsTo = e.lotsTo;
@@ -610,7 +608,7 @@ std::vector<NamedArm> namedArmsAt(const RoadModel& m, ModelJunctionId j) {
         n.arm = static_cast<int>(k);
         n.street = a.street;
         n.dir = Vec2(std::cos(a.heading * DEG_TO_RAD), std::sin(a.heading * DEG_TO_RAD));
-        n.travelWidth = S.travelWidth();
+        n.travelWidth = S.section.travelWidth();
         n.name = name;
         out.push_back(n);
     }
@@ -689,7 +687,7 @@ std::string dumpRoadModel(const RoadModel& m) {
     for (const ModelStreet& S : m.streets) {
         out += fmt("street %s: road %s %.2f to %.2f, junctions %s -> %s, %s %d+%d lanes of %.2f m%s%s, limit %s, %zu lanes:",
                    S.id.c_str(), S.road.c_str(), S.from, S.to, junctionName(m, S.junctions[0]).c_str(), junctionName(m, S.junctions[1]).c_str(),
-                   S.section.roadClass.c_str(), S.section.lanesForward, S.section.lanesBackward, S.section.laneWidth, S.oneWay ? " one-way" : "",
+                   S.section.roadClass.c_str(), S.section.lanesForward, S.section.lanesBackward, S.section.laneWidth, S.section.oneWay() ? " one-way" : "",
                    S.section.parking > 0 ? fmt(", kerb parking %.2f m", S.section.parking).c_str() : "",
                    S.speedLimit > 0 ? fmt("%.2f", S.speedLimit).c_str() : "-", S.lanes.size());
         for (ModelLaneId l : S.lanes) out += " " + m.lanes[l.index].id;
@@ -891,7 +889,7 @@ template <class IO, class Arm> void fields(IO& io, Arm& a, ModelArm*) {
     io(a.street); io(a.road); io(a.station); io(a.spineIn); io(a.heading); io(a.regulations); io(a.boxEdge); io(a.stopLine);
 }
 template <class IO, class S> void fields(IO& io, S& s, ModelStretch*) {
-    io(s.road); io(s.from); io(s.to); io(s.edge); io(s.line); io(s.section); io(s.oneWay);
+    io(s.road); io(s.from); io(s.to); io(s.edge); io(s.line); io(s.section);
 }
 template <class IO, class P> void fields(IO& io, P& p, ModelNodePoint*) { io(p.edge); io(p.station); }
 template <class IO, class N> void fields(IO& io, N& n, ModelNode*) { io(n.at); io(n.points); }
@@ -907,7 +905,7 @@ template <class IO, class S> void fields(IO& io, S& s, ModelSection*) {
     io(s.parking); io(s.parkingOffset); io(s.track); io(s.footway);
 }
 template <class IO, class S> void fields(IO& io, S& s, ModelStreet*) {
-    io(s.id); io(s.road); io(s.edge); io(s.from); io(s.to); io(s.junctions); io(s.carriesOn); io(s.section); io(s.oneWay); io(s.speedLimit);
+    io(s.id); io(s.road); io(s.edge); io(s.from); io(s.to); io(s.junctions); io(s.carriesOn); io(s.section); io(s.speedLimit);
     io(s.lotsFrom); io(s.lotsTo); io(s.frontageOf); io(s.line); io(s.lanes);
 }
 template <class IO, class A> void fields(IO& io, A& a, ModelAttachment*) {

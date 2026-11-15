@@ -88,23 +88,35 @@ ControlPolicy testPolicy() {
 }
 
 // One arm arriving heading `heading` (a compass direction on the plan: the way its traffic goes into the junction).
-ArmFacts arm(const std::string& roadClass, const Vec2& heading, int arriving, int leaving, const ControlPolicy& p) {
-    ArmFacts a;
-    a.road = roadClass + "_road";
-    a.roadClass = roadClass;
+struct TestArm {
+    ArmFacts facts;
+    Vec2 heading;
+};
+TestArm arm(const std::string& roadClass, const Vec2& heading, int arriving, int leaving, const ControlPolicy& p) {
+    TestArm a;
+    a.facts.road = roadClass + "_road";
+    a.facts.roadClass = roadClass;
     a.heading = heading;
-    a.arriving = arriving;
-    a.leaving = leaving;
-    a.limit = p.postedLimit(roadClass);
+    a.facts.arriving = arriving;
+    a.facts.leaving = leaving;
+    a.facts.limit = p.postedLimit(roadClass);
     return a;
 }
 const Vec2 kEast(1, 0), kWest(-1, 0), kNorth(0, 1), kSouth(0, -1);
 
-JunctionFacts junction(const std::vector<ArmFacts>& arms, const ControlPolicy& p, const Vec2& at = Vec2()) {
+// A junction of these arms with its through pairs STATED: `through` as given, or (null) as the one rule states them
+// from the ways the arms leave -- what the layout writes into a road file for it.
+JunctionFacts junction(const std::vector<TestArm>& arms, const ControlPolicy& p, const Vec2& at = Vec2(),
+                       const ThroughPairs* through = nullptr) {
     JunctionFacts j;
     j.id = "test";
     j.at = at;
-    j.arms = arms;
+    std::vector<Vec2> leaves;
+    for (const TestArm& a : arms) {
+        j.arms.push_back(a.facts);
+        leaves.push_back(a.heading * -1.0);
+    }
+    j.through = through ? *through : throughPairs(leaves);
     settleRoles(j, p);
     return j;
 }
@@ -174,6 +186,49 @@ TEST_CASE(control_plan_1_the_policy_decides_from_the_facts) {
     ControlPolicy partial = p;
     partial.rows.pop_back();
     CHECK(chooseControl(y, partial, {}).row == -1);
+}
+
+// WHICH ROAD IS THE MAJOR ONE IS READ FROM THE STATED THROUGH PAIR (ADR-0432), never measured again. A T of three local
+// streets: west and east lie in one straight line, the third comes up from the south. The road file STATES the west and
+// south arms as one road carrying on (the main road turns the corner there). So the east arm is the minor road and gives
+// way. Measuring the mouths instead (west and east head on) made the south arm give way: the old answer.
+TEST_CASE(control_plan_1b_the_major_road_is_the_stated_through_pair) {
+    const ControlPolicy p = testPolicy();
+    // the facts alone: the same three arms, the pair stated two ways
+    const std::vector<TestArm> arms = {arm("local", kEast, 1, 1, p), arm("local", kWest, 1, 1, p), arm("local", kNorth, 1, 1, p)};
+    const ThroughPairs corner = {{0, 2}};   // the arm from the west (heading east) and the one from the south
+    const JunctionFacts turned = junction(arms, p, Vec2(), &corner);
+    CHECK(turned.hasMinor && turned.arms[0].major && turned.arms[2].major && !turned.arms[1].major);
+    const ThroughPairs none = {};
+    CHECK(!junction(arms, p, Vec2(), &none).hasMinor);   // no pair stated: no road runs through, none is minor
+
+    // the whole way, through a road file: its layout written, then the pair restated by hand
+    nlohmann::json g;
+    g["name"] = "through_test";
+    auto road = [](const std::string& id, const Vec2& a, const Vec2& b) {
+        return nlohmann::json{{"id", id}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{a.x, a.y}, {b.x, b.y}}}}}};
+    };
+    g["edges"] = nlohmann::json::array({road("w", Vec2(-200, 0), Vec2(0, 0)), road("e", Vec2(0, 0), Vec2(200, 0)),
+                                        road("s", Vec2(0, -150), Vec2(0, 0))});
+    writeLayout(g, deriveLayout(RoadLabGraph::fromJson(g), LayoutSource::Inferred));
+    CHECK(g["junctions"].size() == 1u);
+    nlohmann::json& j = g["junctions"][0];
+    std::map<std::string, int> armOf;
+    for (std::size_t a = 0; a < j["arms"].size(); ++a) armOf[j["arms"][a]["road"].get<std::string>()] = static_cast<int>(a);
+    // as the one rule states it: west and east
+    CHECK(j["through"] == nlohmann::json::array({nlohmann::json::array({std::min(armOf["w"], armOf["e"]), std::max(armOf["w"], armOf["e"])})}));
+    auto givesWay = [&](const nlohmann::json& scene) {
+        const ControlPlan plan = planControls(RoadLabGraph::fromJson(scene), p);
+        std::set<std::string> roads;
+        for (const ModelJunction& pj : plan.junctions)
+            for (const ModelArm& a : pj.arms)
+                if (!a.regulations.empty() && a.regulations.front() == "give_way") roads.insert(a.road);
+        return roads;
+    };
+    CHECK(givesWay(g) == std::set<std::string>({"s"}));
+    // ... restated: the main road is west and south
+    j["through"] = nlohmann::json::array({nlohmann::json::array({std::min(armOf["w"], armOf["s"]), std::max(armOf["w"], armOf["s"])})});
+    CHECK(givesWay(g) == std::set<std::string>({"e"}));
 }
 
 // ---- 2. a road graph planned, written and built ------------------------------------------------------------------------

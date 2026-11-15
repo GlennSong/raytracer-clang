@@ -312,7 +312,8 @@ std::string roadModelSvg(const RoadModel& m);      // junctions and streets with
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 8;    // 8: the lane level, as the lane graph's own bytes (LGRF) after the rest (ADR-0429)
+constexpr uint32_t kRoadModelFormat = 9;    // 9: no stored one-way flag: the cross-section answers it (ADR-0432)
+                                            // 8: the lane level, as the lane graph's own bytes (LGRF) after the rest (ADR-0429)
                                             // 7: whether the file states its arms in their ring (ADR-0427)
                                             // 2: a street's kerb parking (ADR-0418); 3: where a street carries on (ADR-0419);
                                             // 4: the planned layer's centre lines, engine class and attachments (ADR-0420);

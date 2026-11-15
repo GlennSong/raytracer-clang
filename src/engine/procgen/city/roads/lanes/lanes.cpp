@@ -125,8 +125,8 @@ std::vector<FrontageFault> checkFrontageRoads(const RoadLabGraph& g) {
         const Vec2 mid = pointAt(e.xy, e.s, e.s.back() / 2);
         const EdgeSpec* cw = g.find(e.frontageOf);
         if (!cw || cw->xy.size() < 2) { out.push_back({e.id, "planned beside " + e.frontageOf + ", which is not in the graph", mid}); continue; }
-        if ((e.lanes.fwd > 0) == (e.lanes.back > 0)) { out.push_back({e.id, "planned one-way beside " + cw->id + ", but it has lanes both ways (or none)", mid}); continue; }
-        if ((cw->lanes.fwd > 0) == (cw->lanes.back > 0)) { out.push_back({e.id, "planned beside " + cw->id + ", which is not a one-way carriageway", mid}); continue; }
+        if (!e.lanes.oneWay()) { out.push_back({e.id, "planned one-way beside " + cw->id + ", but it has lanes both ways (or none)", mid}); continue; }
+        if (!cw->lanes.oneWay()) { out.push_back({e.id, "planned beside " + cw->id + ", which is not a one-way carriageway", mid}); continue; }
         // its traffic's way and the carriageway's, where they are beside each other: at its middle and a quarter in from each end
         for (double u : {0.25, 0.5, 0.75}) {
             const double st = e.s.back() * u;

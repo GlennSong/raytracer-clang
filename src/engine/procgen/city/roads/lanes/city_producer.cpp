@@ -24,7 +24,7 @@ namespace engine {
 namespace roads::lanes {
 
 const char* const kRailBuildTag = "2026-10-13.2";   // station steel and track boxes from the mesh library; history: git log -G kRailBuildTag
-const char* const kLanesBuildTag = "2026-11-15.1";   // .1 the paint's lane lines, stop bars and arrows are read off the road model (ADR-0431), and what it reads keys the city; history: git log -G kLanesBuildTag
+const char* const kLanesBuildTag = "2026-11-15.2";   // .2 one road half width: half the travel width, exact, where it was read back off the float lane bands (ADR-0432; pavement and stop lines move by rounding only); .1 the paint's lane lines, stop bars and arrows are read off the road model (ADR-0431), and what it reads keys the city; history: git log -G kLanesBuildTag
 //   // .2: the lot pass keeps its clearance-width graph (roads/lotnav)
 //   // .1: the nav twin carries travel-lane widths (cars in the lane centre)
 //   // .3: hidden slab sides dropped, straight runs merged, layer boundaries oriented   // 2026-09-24.1: deck meshes welded, undersides only where a deck stands clear of the ground (ADR-0095)   // .2: slab sides only where they rise above the ground outside   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach   // .2/.3: ramp ends (elevated or at-grade runs) welded to the road they merge into (nav twin)   // .4: one-way carriageways and ramps; the nav gets a deck's travel width   // .5: blocks are the holes of the pavement WITH its sidewalks
@@ -247,9 +247,6 @@ RoadDeckField deckFromResult(const Result& r) {
     for (std::size_t ei = 0; ei < r.graph.edges.size(); ++ei) {
         const EdgeSpec& e = r.graph.edges[ei];
         if (e.xy.size() < 2 || e.z.size() != e.xy.size()) continue;
-        const auto it = r.graph.classes.find(e.cls);
-        const double shoulder = it != r.graph.classes.end() ? it->second.shoulder : 0.0;
-        const double lanes = std::max(1, e.laneCount()) * e.lanes.w + e.lanes.gap;
         UnionSpine s;
         s.points = e.xy;
         // THE HEIGHT THE PAVEMENT WAS DRAWN AT, not the height this edge alone wanted.
@@ -261,7 +258,7 @@ RoadDeckField deckFromResult(const Result& r) {
         s.yAbs.reserve(e.xy.size());
         for (std::size_t k = 0; k < e.xy.size(); ++k)
             s.yAbs.push_back(r.heights ? r.heights->deckRoad(static_cast<int>(ei), e.xy[k]) : e.z[k]);
-        s.halfWidth = lanes * 0.5 + shoulder;
+        s.halfWidth = r.graph.carriagewayHalfWidth(e);
         // AND ACROSS IT (ADR-0223): each lane is drawn at its own blend toward the roads it meets, so the pavement
         // tilts and the centreline alone missed its edges by up to 0.8 m (cars sunk or floating, the ground finish
         // standing over the low edge: metro's grass blobs). The same blend, at each carriageway edge.
@@ -277,7 +274,8 @@ RoadDeckField deckFromResult(const Result& r) {
             }
         }
         s.klass = classOf(e);
-        if (it != r.graph.classes.end()) s.use = it->second.track ? UnionSpine::Use::Track : it->second.footway ? UnionSpine::Use::Footway : UnionSpine::Use::Road;
+        const RoadClassSpec& cls = r.graph.cls(e);   // (every edge's class is in the table: fromJson refuses one that is not)
+        s.use = cls.track ? UnionSpine::Use::Track : cls.footway ? UnionSpine::Use::Footway : UnionSpine::Use::Road;
         s.authoredDeck = e.isRamp() || s.klass == RoadClass::Freeway;
         // A road that bridges is a LAYER above the one it crosses, which is how a 2-D height
         // query tells them apart (RoadDeckField::heightAt). The build already measured it.

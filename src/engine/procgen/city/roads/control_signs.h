@@ -79,9 +79,6 @@ std::vector<ArmMarkingRule> armMarkingRules(const AttachmentKinds& kinds, std::v
 // The rows that hold, in the rules' order.
 std::vector<const ArmMarkingRule*> markingsOnArm(const ModelJunction& J, std::size_t arm, const std::vector<ArmMarkingRule>& rules);
 
-// How far a street's kerb stands from its centre line: its travel lanes' half width and its shoulder.
-Real kerbOffset(const ModelStreet& s);
-
 // ONE SIGN PLACED.
 struct PlacedSign {
     std::string kind;

@@ -64,7 +64,7 @@ RoadModel modelOf(const nlohmann::json& scene) {
 std::vector<SignCarriageway> carriageways(const RoadModel& m) {
     std::vector<SignCarriageway> g;
     for (const ModelStreet& s : m.streets)
-        for (uint32_t k = s.line.first; k + 1 < s.line.end(); ++k) g.push_back({m.linePoints[k], m.linePoints[k + 1], s.travelWidth()});
+        for (uint32_t k = s.line.first; k + 1 < s.line.end(); ++k) g.push_back({m.linePoints[k], m.linePoints[k + 1], s.section.travelWidth()});
     return g;
 }
 
@@ -141,7 +141,7 @@ TEST_CASE(street_names_come_from_the_streets_asset) {
         const std::string suffix = name.substr(name.find(' ') + 1);
         CHECK(word == "Tabby" || word == "Calico" || word == "Tortoise" || word == "Siamese");
         // Rows are 12 m (Causeway), columns 9 m (Mews).
-        CHECK(suffix == (m.streets[s].travelWidth() >= 11 ? "Causeway" : "Mews"));
+        CHECK(suffix == (m.streets[s].section.travelWidth() >= 11 ? "Causeway" : "Mews"));
     }
     CHECK(names.size() == 8u);
     // the generator alone: a class suffix wins over the width; a kept name is never given again

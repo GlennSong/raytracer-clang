@@ -138,8 +138,6 @@ std::vector<const ArmMarkingRule*> markingsOnArm(const ModelJunction& J, std::si
     return out;
 }
 
-Real kerbOffset(const ModelStreet& s) { return s.travelWidth() * 0.5 + s.section.shoulder; }
-
 ControlSignPlan placeControlSigns(const RoadModel& m, const std::vector<ControlSignRule>& rules,
                                   const std::function<Real(const Vec2&)>& carriagewayDepth, std::vector<Vec2> standing) {
     ControlSignPlan plan;
@@ -155,17 +153,16 @@ ControlSignPlan placeControlSigns(const RoadModel& m, const std::vector<ControlS
                 // WHEN: over the stated facts (armStates: the reading the road markings share)
                 if (!armStates(r.regulation, r.controls, J, a)) continue;
                 if (!r.oneWayEnd.empty()) {
-                    if (!S.oneWay) continue;
-                    // a one-way street's traffic runs along its road's spine: it leaves the street here where the spine
-                    // runs into the junction
-                    if (r.oneWayEnd == "exit" && !a.spineIn) continue;
+                    if (!S.section.oneWay()) continue;
+                    // its exit end: the end its traffic arrives at (whichever way along the spine its lanes run)
+                    if (r.oneWayEnd == "exit" && S.section.lanesArriving(a.spineIn) == 0) continue;
                 }
                 Vec2 mouth;
                 if (!armMouth(m, J, k, mouth) || !stated(a.stopLine)) continue;
                 const Real stop = std::fabs(a.stopLine - a.station);   // metres out along the arm from its mouth
                 const Vec2 d = headingDir(a.heading);   // out along the arm, away from the junction
                 const Vec2 along = mouth + d * (stop - r.fromStopLine);
-                const Real out = kerbOffset(S) + r.fromKerb;
+                const Real out = S.section.carriagewayHalfWidth() + r.fromKerb;
                 nlohmann::json look = r.look;
                 {
                     const std::map<std::string, nlohmann::json>::const_iterator la = r.lookAt.find(J.control);
@@ -193,8 +190,7 @@ ControlSignPlan placeControlSigns(const RoadModel& m, const std::vector<ControlS
                         const ModelArm& P = J.arms[p];
                         if (p == k || !P.street.valid() || P.street.index >= m.streets.size() || !stated(P.heading)) continue;
                         const ModelStreet& PS = m.streets[P.street.index];
-                        const bool arrives = PS.oneWay ? P.spineIn : PS.section.lanesForward + PS.section.lanesBackward > 0;
-                        if (!arrives) continue;
+                        if (PS.section.lanesArriving(P.spineIn) == 0) continue;
                         const Vec2 dp = headingDir(P.heading);
                         if (std::fabs(dot(dp, d)) >= crossCos) continue;
                         // this arm on the reader's kerb side: the near corner (toward the reader's arm); on its off side:
@@ -211,7 +207,7 @@ ControlSignPlan placeControlSigns(const RoadModel& m, const std::vector<ControlS
                     if (lk.value("arrow", std::string()) == "traffic") {
                         // the street's traffic, as its reader sees it: the reader's right is rightOf(face) (they look
                         // along -face, and rightOf of a heading is its kerb side, the left)
-                        const Vec2 traffic = a.spineIn ? d * -1.0 : d;
+                        const Vec2 traffic = S.section.lanesArriving(a.spineIn) > 0 ? d * -1.0 : d;
                         lk["arrow"] = dot(traffic, rightOf(sp.face)) > 0 ? "right" : "left";
                     }
                     // BACK TO BACK: a sign of this kind at this arm already standing within keeps_clear and facing the

@@ -218,12 +218,6 @@ const CrossingSpec* RoadLabGraph::declaredCrossing(const std::string& a, const s
     return best;
 }
 
-double RoadLabGraph::hw(const EdgeSpec& e) const {
-    if (e.laneCount() == 0) return 0.0;
-    double m = 0; for (const LaneSlot& l : laneSlots(cls(e), e.lanes)) m = std::max(m, std::fabs(l.offset));
-    return m + e.lanes.w / 2;
-}
-
 std::vector<const EdgeSpec*> RoadLabGraph::paved() const {
     std::vector<const EdgeSpec*> out; for (const EdgeSpec& e : edges) if (e.laneCount() > 0) out.push_back(&e); return out;
 }
@@ -240,7 +234,7 @@ RoadClass classOf(const EdgeSpec& e) {
 
 RoadSpec streetSection(const RoadLabGraph& g, const EdgeSpec& e) {
     const RoadClassSpec& c = g.cls(e);
-    const double carriageway = 2.0 * (g.hw(e) + c.shoulder);
+    const double carriageway = 2.0 * g.carriagewayHalfWidth(e);
     const int perDir = std::max(1, std::max(c.lanes.fwd, c.lanes.back));
     return roadSpecStreetParking(carriageway, perDir, c.sidewalk, 0.15, e.lanes.parking, kMinTravelLane);
 }
@@ -256,7 +250,7 @@ std::array<double, 4> RoadLabGraph::bounds() const {
     if (terrain.hasBounds) return terrain.bounds;
     double x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300, m = 0;
     for (const EdgeSpec& e : edges) {
-        const RoadClassSpec& c = cls(e); m = std::max(m, 4 * (hw(e) + c.sidewalk + c.shoulder));
+        const RoadClassSpec& c = cls(e); m = std::max(m, 4 * (carriagewayHalfWidth(e) + c.sidewalk));
         for (const Vec2& p : e.xy) { x0 = std::min(x0, p.x); x1 = std::max(x1, p.x); y0 = std::min(y0, p.y); y1 = std::max(y1, p.y); }
     }
     return {x0 - m, x1 + m, y0 - m, y1 + m};
@@ -268,7 +262,7 @@ RoadSpec bandsFor(const RoadClassSpec& c, const LaneLayout& L) {
     if (c.sidewalk > 0) spec.bands.push_back(band(BandKind::Sidewalk, c.sidewalk, 0));
     if (c.shoulder > 0) spec.bands.push_back(band(BandKind::Shoulder, c.shoulder, 0));
     for (int k = 0; k < L.back; ++k) spec.bands.push_back(band(BandKind::Travel, L.w, -1));   // left side: backward lanes, outer first
-    if (L.back > 0 && L.gap > 0) spec.bands.push_back(band(BandKind::Median, L.gap, 0));
+    if (lanesMedianGap(L.fwd, L.back, L.gap) > 0) spec.bands.push_back(band(BandKind::Median, L.gap, 0));
     for (int k = 0; k < L.fwd; ++k) spec.bands.push_back(band(BandKind::Travel, L.w, +1));    // right side: forward lanes, inner first
     if (c.shoulder > 0) spec.bands.push_back(band(BandKind::Shoulder, c.shoulder, 0));
     if (c.sidewalk > 0) spec.bands.push_back(band(BandKind::Sidewalk, c.sidewalk, 0));

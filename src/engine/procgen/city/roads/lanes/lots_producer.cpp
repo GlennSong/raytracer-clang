@@ -277,9 +277,7 @@ LotRoadInputs lotRoadInputs(const RoadModel& planned, const RoadDeckField& deck)
         LotRoad r;
         r.id = id;
         r.line.assign(planned.linePoints.begin() + line.first, planned.linePoints.begin() + line.end());
-        // the carriageway, as the deck is drawn (city_producer.cpp deckFromResult): at least one lane wide
-        const int lanes = std::max(1, section.lanesForward + section.lanesBackward);
-        r.halfWidth = (lanes * section.laneWidth + section.medianGap) * Real(0.5) + section.shoulder;
+        r.halfWidth = section.carriagewayHalfWidth();   // (as the deck is drawn: city_producer.cpp deckFromResult)
         r.sidewalk = section.sidewalk;
         r.klass = section.klass;
         in.roads.push_back(std::move(r));

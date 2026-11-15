@@ -36,7 +36,8 @@ std::string fmt(const char* f, ...) {
     return buf;
 }
 
-double written(double v) { return std::round(v * kWrittenPrecision) / kWrittenPrecision; }
+// A vector with no length to speak of: no direction can be read from it.
+constexpr double kNoDirection = 1e-9;
 
 bool carsDrive(const RoadLabGraph& g, const EdgeSpec& e) {
     const RoadClassSpec& c = g.cls(e);
@@ -91,6 +92,84 @@ void count(std::vector<std::pair<std::string, uint32_t>>& tally, const std::stri
 
 }  // namespace
 
+double written(double v) { return std::round(v * kWrittenPrecision) / kWrittenPrecision; }
+
+Vec2 armDirection(const EdgeSpec& e, double at, bool spineIn) {
+    const double length = e.s.back();
+    const double far = spineIn ? std::max(0.0, at - kArmHeadingReach) : std::min(length, at + kArmHeadingReach);
+    Vec2 d = pointAt(e.xy, e.s, far) - pointAt(e.xy, e.s, at);
+    if (d.length() < kNoDirection) {
+        const Vec2 t = tangentAtStation(e.xy, e.s, at);
+        d = spineIn ? t * -1.0 : t;
+    }
+    return d.length() < kNoDirection ? Vec2(1, 0) : normalize(d);
+}
+
+double degreesOf(const Vec2& d) {
+    double a = written(std::atan2(d.y, d.x) * RAD_TO_DEG);
+    if (a < 0) a += 360.0;
+    if (a >= 360.0) a -= 360.0;
+    return a;
+}
+
+Vec2 directionOf(double degrees) { return Vec2(std::cos(degrees * DEG_TO_RAD), std::sin(degrees * DEG_TO_RAD)); }
+
+ThroughPairs throughPairs(const std::vector<Vec2>& dirs) {
+    ThroughPairs out;
+    if (dirs.size() == 2) return {{0, 1}};
+    const double headOn = -std::cos(kStraightOnDegrees * DEG_TO_RAD);
+    std::vector<std::tuple<double, int, int>> pairs;
+    for (std::size_t i = 0; i < dirs.size(); ++i)
+        for (std::size_t k = i + 1; k < dirs.size(); ++k) {
+            const double d = dot(dirs[i], dirs[k]);
+            if (d < headOn) pairs.emplace_back(d, static_cast<int>(i), static_cast<int>(k));
+        }
+    std::sort(pairs.begin(), pairs.end());
+    std::vector<char> used(dirs.size(), 0);
+    for (const std::tuple<double, int, int>& p : pairs) {
+        const int a = std::get<1>(p), b = std::get<2>(p);
+        if (used[static_cast<std::size_t>(a)] || used[static_cast<std::size_t>(b)]) continue;
+        used[static_cast<std::size_t>(a)] = used[static_cast<std::size_t>(b)] = 1;
+        out.push_back({static_cast<uint32_t>(a), static_cast<uint32_t>(b)});
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+namespace {
+
+// THE LIMIT A ROAD POSTS: its own where a person set it, else what the policy posts on its class (0: none).
+double postedLimitOn(const EdgeSpec& e, const ControlPolicy& policy) {
+    return e.speedLimitHand ? e.speedLimit : policy.postedLimit(e.cls);
+}
+
+// One arm of road `e` at station `at`, as the policy sees it: the lanes arriving and leaving by it follow from the way
+// its spine runs there.
+ArmFacts armFacts(const EdgeSpec& e, double at, bool spineIn, const ControlPolicy& policy) {
+    ArmFacts a;
+    a.road = e.id;
+    a.roadClass = e.cls;
+    a.at = at;
+    a.spineIn = spineIn;
+    a.arriving = spineIn ? e.lanes.fwd : e.lanes.back;
+    a.leaving = spineIn ? e.lanes.back : e.lanes.fwd;
+    a.limit = postedLimitOn(e, policy);
+    return a;
+}
+
+// The through pairs of a junction just found, as the one rule states them from its arms' headings as written (the
+// pairs the layout writes into the file for it). `g`: the graph with its ramps composed.
+ThroughPairs statedThrough(const RoadLabGraph& g, const std::vector<ArmFacts>& arms) {
+    std::vector<Vec2> dirs;
+    for (const ArmFacts& a : arms) {
+        const EdgeSpec* e = g.find(a.road);
+        dirs.push_back(e && e->xy.size() >= 2 ? directionOf(degreesOf(armDirection(*e, written(a.at), a.spineIn))) : Vec2(1, 0));
+    }
+    return throughPairs(dirs);
+}
+
+}  // namespace
+
 bool FactRange::holds(bool hasValue, double value) const {
     if (!set) return true;
     return hasValue && value >= lo && value <= hi;
@@ -130,14 +209,13 @@ void settleRoles(JunctionFacts& j, const ControlPolicy& policy) {
         for (std::size_t a : app) j.arms[a].major = policy.classRank(j.arms[a].roadClass) == best;
     } else {
         // Every approach on one class: the one road running straight through, if there is exactly one, is the major road
-        // -- a pair of arms heading straight at each other, at least one of them arriving (a ONE-WAY road runs through on
-        // one approach and one way out: a frontage road, ADR-0413), with an approach besides it.
-        const double headOn = -std::cos(kStraightOnDegrees * DEG_TO_RAD);
+        // -- a pair of arms the junction STATES as one road carrying on (`through`: read, never measured here), at least
+        // one of them arriving (a ONE-WAY road runs through on one approach and one way out: a frontage road, ADR-0413),
+        // with an approach besides it.
         std::vector<std::pair<std::size_t, std::size_t>> through;
-        for (std::size_t x = 0; x < j.arms.size(); ++x)
-            for (std::size_t y = x + 1; y < j.arms.size(); ++y)
-                if ((j.arms[x].arriving > 0 || j.arms[y].arriving > 0) && dot(j.arms[x].heading, j.arms[y].heading) < headOn)
-                    through.emplace_back(x, y);
+        for (const std::array<uint32_t, 2>& t : j.through)
+            if (t[0] < j.arms.size() && t[1] < j.arms.size() && (j.arms[t[0]].arriving > 0 || j.arms[t[1]].arriving > 0))
+                through.emplace_back(t[0], t[1]);
         bool besides = false;
         for (std::size_t a : app) besides = besides || (through.size() == 1 && a != through[0].first && a != through[0].second);
         const bool oneThrough = through.size() == 1 && besides;
@@ -406,30 +484,42 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
             const EdgeSpec& e = g.edges[static_cast<std::size_t>(kv.first)];
             const double lo = *std::min_element(kv.second.begin(), kv.second.end());
             const double hi = *std::max_element(kv.second.begin(), kv.second.end());
-            const double limit = e.speedLimitHand ? e.speedLimit : policy.postedLimit(e.cls);
             if (hi - lo > kArmReachesPast) j.inside.push_back(ModelStretch{e.id, written(lo), written(hi)});
             for (int side = 0; side < 2; ++side) {
                 // side 0: the road before the junction (its spine runs in); side 1: after it (its spine runs out)
                 const bool in = side == 0;
                 if (in ? lo <= kArmReachesPast : hi >= e.s.back() - kArmReachesPast) continue;
-                ArmFacts a;
-                a.road = e.id;
-                a.roadClass = e.cls;
-                a.at = in ? lo : hi;
-                a.spineIn = in;
-                const Vec2 t = tangentAtStation(e.xy, e.s, a.at);
-                a.heading = in ? t : t * -1.0;
-                a.arriving = in ? e.lanes.fwd : e.lanes.back;
-                a.leaving = in ? e.lanes.back : e.lanes.fwd;
-                a.limit = limit;
+                ArmFacts a = armFacts(e, in ? lo : hi, in, policy);
                 a.ramp = ramps.count(kv.first) > 0;
                 j.arms.push_back(a);
             }
         }
+        j.through = statedThrough(g, j.arms);
         settleRoles(j, policy);
         out.push_back(j);
     }
     return out;
+}
+
+ModelJunction junctionOf(const JunctionFacts& f) {
+    ModelJunction pj;
+    pj.id = f.id;
+    pj.at = Vec2(written(f.at.x), written(f.at.y));
+    for (const ArmFacts& a : f.arms) {
+        ModelArm arm;
+        arm.road = a.road;
+        arm.station = written(a.at);
+        arm.spineIn = a.spineIn;
+        pj.arms.push_back(arm);
+    }
+    pj.through = f.through;
+    pj.inside = f.inside;
+    // a junction over several points says which roads meet at each (road_model_parts.h ModelNode, ADR-0425); one over a
+    // single point needs not
+    if (!f.inside.empty())
+        for (std::size_t n = 0; n < f.nodes.size() && n < f.nodePoints.size(); ++n)
+            pj.nodes.push_back(ModelNode{Vec2(written(f.nodes[n].x), written(f.nodes[n].y)), f.nodePoints[n]});
+    return pj;
 }
 
 ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, const JunctionFinding& finding) {
@@ -451,18 +541,10 @@ ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, con
             for (std::size_t k = 0; k < 2; ++k) {
                 const EdgeSpec* e = ge.find(c.roads[k]);
                 if (!e || e->xy.size() < 2) continue;
-                ArmFacts a;
-                a.road = e->id;
-                a.roadClass = e->cls;
-                a.at = c.stations[k];
-                a.spineIn = c.stations[k] > kArmReachesPast;   // the road ends here: its spine runs in
-                const Vec2 t = tangentAtStation(e->xy, e->s, a.at);
-                a.heading = a.spineIn ? t : t * -1.0;
-                a.arriving = a.spineIn ? e->lanes.fwd : e->lanes.back;
-                a.leaving = a.spineIn ? e->lanes.back : e->lanes.fwd;
-                a.limit = e->speedLimitHand ? e->speedLimit : policy.postedLimit(e->cls);
-                j.arms.push_back(a);
+                // (the road ends here: its spine runs in)
+                j.arms.push_back(armFacts(*e, c.stations[k], c.stations[k] > kArmReachesPast, policy));
             }
+            j.through = statedThrough(ge, j.arms);
             settleRoles(j, policy);
             const ControlChoice choice = chooseControl(j, policy, {});
             if (choice.row >= 0) controls.insert(choice.control);
@@ -487,6 +569,30 @@ ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, con
         bool taken = false;
         for (const ArmFacts& a : j.arms) taken = taken || handArms.count(std::make_pair(a.road, a.spineIn)) > 0;
         if (!taken) todo.push_back(j);
+    }
+    // WHICH ARMS ARE ONE ROAD CARRYING ON is the road file's to state. A junction the file already lists with its layout
+    // (the same id, the same arms, every arm's heading written) states its through pairs: they are read as stated, on the
+    // arms as found here, and the roles settled from them. (One the file does not list keeps what throughPairs states
+    // for it: the pairs the layout then writes.)
+    for (JunctionFacts& j : todo) {
+        const ModelJunction* stated = nullptr;
+        for (const ModelJunction& l : g.junctions)
+            if (l.id == j.id) stated = &l;
+        if (!stated || stated->arms.size() != j.arms.size()) continue;
+        std::vector<uint32_t> found(stated->arms.size(), kNoIndex);   // a listed arm -> the arm found here
+        bool same = true;
+        for (std::size_t k = 0; k < stated->arms.size() && same; ++k) {
+            const ModelArm& a = stated->arms[k];
+            for (std::size_t n = 0; n < j.arms.size(); ++n)
+                if (j.arms[n].road == a.road && j.arms[n].spineIn == a.spineIn && sameWrittenStation(written(j.arms[n].at), a.station))
+                    found[k] = static_cast<uint32_t>(n);
+            same = found[k] != kNoIndex && engine::stated(a.heading);
+        }
+        if (!same) continue;
+        j.through.clear();
+        for (const std::array<uint32_t, 2>& t : stated->through)
+            if (t[0] < found.size() && t[1] < found.size()) j.through.push_back({found[t[0]], found[t[1]]});
+        settleRoles(j, policy);
     }
     // decided most important first: the major road's class, then the minor road's, then more lanes, then id order
     std::vector<std::size_t> order(todo.size());
@@ -513,25 +619,13 @@ ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, con
         if (choice[i].row < 0) continue;
         const JunctionFacts& j = todo[i];
         const PolicyRow& row = policy.rows[static_cast<std::size_t>(choice[i].row)];
-        ModelJunction pj;
-        pj.id = j.id;
-        pj.at = Vec2(written(j.at.x), written(j.at.y));
+        ModelJunction pj = junctionOf(j);
         pj.control = choice[i].control;
         pj.why = choice[i].why;
-        for (const ArmFacts& a : j.arms) {
-            ModelArm arm;
-            arm.road = a.road;
-            arm.station = written(a.at);
-            arm.spineIn = a.spineIn;
-            if (a.arriving > 0) arm.regulations = a.major ? row.majorSigns : row.minorSigns;
-            for (const std::string& kind : arm.regulations) count(plan.signs, kind);
-            pj.arms.push_back(arm);
+        for (std::size_t a = 0; a < j.arms.size(); ++a) {
+            if (j.arms[a].arriving > 0) pj.arms[a].regulations = j.arms[a].major ? row.majorSigns : row.minorSigns;
+            for (const std::string& kind : pj.arms[a].regulations) count(plan.signs, kind);
         }
-        pj.inside = j.inside;
-        // a junction over several points says which roads meet at each (road_model_parts.h ModelNode, ADR-0425)
-        if (!j.inside.empty())
-            for (std::size_t n = 0; n < j.nodes.size() && n < j.nodePoints.size(); ++n)
-                pj.nodes.push_back(ModelNode{Vec2(written(j.nodes[n].x), written(j.nodes[n].y)), j.nodePoints[n]});
         plan.junctions.push_back(pj);
         plan.facts.push_back(j);
         count(plan.byControl, pj.control);
@@ -543,7 +637,7 @@ ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, con
     std::sort(plan.signs.begin(), plan.signs.end());
     for (const EdgeSpec& e : g.edges) {
         if (!carsDrive(g, e)) continue;
-        plan.limits.emplace_back(e.id, e.speedLimitHand ? e.speedLimit : policy.postedLimit(e.cls));
+        plan.limits.emplace_back(e.id, postedLimitOn(e, policy));
     }
     return plan;
 }
@@ -590,7 +684,7 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junct
                 for (std::size_t k = 0; k < was->second["arms"].size() && found < 0; ++k) {
                     const nlohmann::json& old = was->second["arms"][k];
                     if (old.value("road", std::string()) == a.road && old.value("spine", std::string()) == aj["spine"].get<std::string>() &&
-                        std::fabs(old.value("at", -1e30) - a.station) < 1e-6) {
+                        sameWrittenStation(old.value("at", kNotStated), a.station)) {
                         found = static_cast<int>(k);
                         for (const char* key : {"street", "heading"})
                             if (old.contains(key)) aj[key] = old[key];

@@ -17,8 +17,8 @@
 //     reported, never settled by picking one;
 //   - an ARM is a road's way into a junction (road_model_parts.h ModelArm); an APPROACH is an arm with lanes arriving;
 //   - the MAJOR approaches are those on the most important class of road there (the policy's `class_order`); where every
-//     approach is of one class and exactly two of them run straight through (a T), those two are the major ones; every
-//     other approach is MINOR. Where no approach is minor (a crossroads of equals), there is no minor road, and the
+//     approach is of one class and exactly one pair of arms is STATED as one road carrying on through (the junction's
+//     `through` pairs: a T), those two are the major ones; every other approach is MINOR. Where no approach is minor (a crossroads of equals), there is no minor road, and the
 //     "minor" facts (class, lanes, limit) are read over every approach instead, so a row asking for a minor class of
 //     `local` holds for a crossroads of local streets.
 //
@@ -96,19 +96,22 @@ struct ArmFacts {
     std::string road, roadClass;
     double at = 0;              // station along the road's spine
     bool spineIn = true;        // the road's spine runs into the junction here
-    Vec2 heading;               // unit: the way traffic arriving by this arm is going as it reaches the junction
-    int arriving = 0;           // lanes arriving by it
+    int arriving = 0;          // lanes arriving by it
     int leaving = 0;            // lanes leaving by it
     double limit = 0;           // the limit posted on the road (m/s), 0 when none
     bool ramp = false;          // a ramp whose free end is in this junction
     bool major = false;         // settled by settleRoles
 };
 
-// ONE JUNCTION, as the policy sees it. Fill `arms` (and rampEnd), then settleRoles works out the rest.
+// ONE JUNCTION, as the policy sees it. Fill `arms`, `through` (and rampEnd), then settleRoles works out the rest.
 struct JunctionFacts {
     std::string id;
     Vec2 at;
     std::vector<ArmFacts> arms;
+    // the pairs of arms that are one road carrying on through, AS STATED: the road file's own where it lists this
+    // junction with its layout (planControls), else what throughPairs states for it -- the pairs the file is then written
+    // with (findJunctions). Never measured again by a reader.
+    ThroughPairs through;
     std::vector<ModelStretch> inside;   // stretches of road lying between nodes grouped into it
     std::vector<Vec2> nodes;              // where its nodes are (the road-end points grouped into it), in node order
     // each node's points: the roads meeting there and each one's station (written to the centimetre), in node order --
@@ -124,9 +127,29 @@ struct JunctionFacts {
     double majorLimit = 0, minorLimit = 0;   // 0: none posted
 };
 
-// WHICH APPROACHES ARE MAJOR, and the facts that follow (see the top of this file). Two approaches run straight
-// through when they arrive within kStraightOnDegrees (lane_graph_connect.h) of head on.
+// WHICH APPROACHES ARE MAJOR, and the facts that follow (see the top of this file). Which arms are one road running
+// through is the junction's stated `through`, read as it is.
 void settleRoles(JunctionFacts& j, const ControlPolicy& policy);
+
+// WHICH ARMS OF A JUNCTION ARE ONE ROAD CARRYING ON THROUGH: THE ONE RULE THAT STATES IT (ADR-0432; road_layout.h says it
+// in words). `dirs`: the way each arm leaves the junction (unit). Two arms always; at a bigger junction the pairs leaving
+// within kStraightOnDegrees (lane_graph_connect.h) of opposite ways, the most nearly opposite first, each arm in one pair
+// at most. Its result is written into the road file; every reader reads the file's pairs (throughPartner).
+ThroughPairs throughPairs(const std::vector<Vec2>& dirs);
+// The way an arm leaves its junction: from its station, kArmHeadingReach along the road away from the junction (unit).
+// The layout writes it as the arm's `heading` (degreesOf: degrees counter-clockwise from +x, to the hundredth; directionOf
+// reads one back), and the through pairs are stated from the headings as written.
+constexpr double kArmHeadingReach = 15.0;   // metres: enough to read past the curve a corner puts on a road's last metres
+Vec2 armDirection(const EdgeSpec& e, double at, bool spineIn);
+double degreesOf(const Vec2& d);
+Vec2 directionOf(double degrees);
+// A number as the road file writes it: stations and points to the centimetre, headings to the hundredth of a degree, so a
+// file reads cleanly and the same roads write the same bytes.
+double written(double v);
+// THE JUNCTION A ROAD FILE STATES FOR THESE FACTS (the one conversion: the layout and the control plan both write it):
+// its id, its place and its arms' stations as written, its through pairs, the stretches inside it and, where it has any,
+// its points. No control, no signs, no headings: the control plan and the layout add those.
+ModelJunction junctionOf(const JunctionFacts& f);
 // The facts in words, one line: "4 arms (4 approaches): major arterial (3 lanes, 15.6 m/s), minor local (1 lane, 11.2
 // m/s)".
 std::string describeFacts(const JunctionFacts& j);
