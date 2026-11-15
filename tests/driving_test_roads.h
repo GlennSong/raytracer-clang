@@ -111,6 +111,14 @@ struct TestRoads {
     // Lane k of side i of a ring (counted the way traffic runs round it).
     engine::PathId ringLane(uint32_t i, uint32_t k) const;
 
+    // ---- merge names (mergeRoads) ----
+    engine::PathId mergeThrough;   // the through lane, up to where the joining lane has run into it
+    engine::PathId mergeJoining;   // the lane that joins it: the one the roads state merges, and so gives way
+    engine::PathId mergeBeyond;    // the one lane both lead into
+    // Every crossing record where the two meet (one per pair of body sizes that meet differently), each marked with
+    // the joining lane as the road builder marks a stated merge.
+    std::vector<engine::CrossingId> mergeJoins;
+
     // Lane k of a section (0 = offside-most); not valid when there is none.
     engine::PathId laneOf(engine::SectionId s, uint32_t k) const;
 
@@ -131,6 +139,18 @@ TestRoads straightRoadOf(const std::vector<Real>& sectionLengths, const TestRoad
 // anticlockwise seen from above, each side's lanes leading straight into the same lanes of the next and the last side's
 // into the first's (no junctions). A car can drive round it for ever.
 TestRoads ringRoad(uint32_t sides, const TestRoadSpec& spec = TestRoadSpec());
+
+// A MERGE BETWEEN JUNCTIONS, as a ramp's lane or a lane that ends makes one: a THROUGH lane running east for
+// kMergeThroughLength metres, and a JOINING lane that starts kMergeAlongside metres before the through lane's end, one
+// lane width to its kerb side, runs beside it and then tapers into it over the last kMergeTaper metres. Both lead into
+// one lane BEYOND (kMergeBeyondLength metres); there is no junction. The through lane is not cut where the joining lane
+// starts, so a car on it meets nothing until the taper. The crossing records where the two lanes' bodies meet are found
+// by the road builder's own finder, and each is marked with the joining lane (CrossingPoint::merging), as the road
+// builder marks a merge the road model states (ADR-0426); `stated` false leaves them unmarked, two lanes that just
+// happen to end in one. `joiningLaneFirst`: the joining lane is made first and so has the LOWER path id; otherwise the
+// through lane has (the same road either way: only the ids differ).
+constexpr Real kMergeThroughLength = 400, kMergeAlongside = 150, kMergeTaper = 60, kMergeBeyondLength = 300;
+TestRoads mergeRoads(bool joiningLaneFirst, bool stated = true, const TestRoadSpec& spec = TestRoadSpec());
 
 // A GRID of `rows` by `cols` junctions, junction (r, c) at the plan point (c, r) times the junction spacing. Its
 // junctions carry real crossing points: where their connectors cross, join and split, found by the road builder's own

@@ -383,6 +383,45 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         std::printf("    [lab-v2] one four-way's table:\n%s", d->describeJunction(engine::JunctionId(j)).c_str());
         break;
     }
+    // MERGES BETWEEN JUNCTIONS (ADR-0426): the lab's road model states eight (a lane of a ramp running into the lane
+    // beside it, a lane that ends), and the road builder marks every crossing record where such a pair of lanes join
+    // with the lane that joined: two records a merge here (one per pair of body sizes that meet differently), sixteen in
+    // all, none filed under a junction. The lab's rule set does NOT ask `stated_merge` yet (assets/scripts/rules/lab.lua
+    // says why: joining is to be reworked first), so the table must report all sixteen as stated but not asked, settle
+    // none of them by the stated merge, and leave each as before: asked while driving, the lower path id to fall back
+    // on. The marks are read here from the lane graph, the answers from the table's records, and both are held against
+    // the table's own counts.
+    {
+        const driving::RightOfWay& row = d->rightOfWay();
+        std::set<uint32_t> statedMerges;   // the road model's connections that state a merge with a record here
+        uint32_t marked = 0, markedUnderAJunction = 0, byStatedMerge = 0, leftToLowerId = 0;
+        for (uint32_t c = 0; c < roads.crossings.size(); ++c) {
+            const engine::CrossingPoint& x = roads.crossings[c];
+            if (x.otherSide != engine::OtherSide::Path || !x.merging.valid()) continue;
+            ++marked;
+            statedMerges.insert(x.modelConnection);
+            markedUnderAJunction += x.junction.valid();
+            const driving::MeetingAnswer* a = row.answer(engine::CrossingId(c));
+            CHECK(a != nullptr);
+            if (!a) continue;
+            byStatedMerge += a->by == driving::SettledBy::StatedMerge || a->fallbackBy == driving::SettledBy::StatedMerge;
+            leftToLowerId += a->who == driving::GivesWay::Ask && a->fallbackBy == driving::SettledBy::LowerPathId;
+        }
+        std::printf("    [lab-v2] merges between junctions: %zu stated merges on %u crossing records (%u filed under a "
+                    "junction); settled by the stated merge %u (the rule set does not ask it yet); asked while driving "
+                    "with the lower path id to fall back on %u; the table counts %u marked, %u by the stated merge, %u "
+                    "stated but not asked\n",
+                    statedMerges.size(), marked, markedUnderAJunction, byStatedMerge, leftToLowerId,
+                    row.counts.statedMerges, row.counts.byStatedMerge, row.counts.statedMergesNotAsked);
+        CHECK(statedMerges.size() == 8u);
+        CHECK(marked == 16u);
+        CHECK(markedUnderAJunction == 0u);
+        CHECK(byStatedMerge == 0u);
+        CHECK(leftToLowerId == 16u);
+        CHECK(row.counts.statedMerges == 16u);
+        CHECK(row.counts.byStatedMerge == 0u);
+        CHECK(row.counts.statedMergesNotAsked == 16u);
+    }
     // RT_LAB_JUNCTION=<id>: that junction's table in words too (for a person chasing one junction).
     if (const char* one = std::getenv("RT_LAB_JUNCTION"))
         if (static_cast<uint32_t>(std::atoi(one)) < roads.junctions.size())

@@ -243,6 +243,80 @@ TestRoads ringRoad(uint32_t sides, const TestRoadSpec& spec) {
     return t;
 }
 
+TestRoads mergeRoads(bool joiningLaneFirst, bool stated, const TestRoadSpec& spec) {
+    TestRoads t;
+    t.spec = spec;
+    LaneGraph& g = t.graph;
+    addNames(g, spec);
+    const Vec2 east = headingVector(Heading::East);
+    const Vec2 kerb = kerbward(Heading::East, spec.drivesOn);
+    // One lane in a section of its own, along `pts`.
+    const auto addLane = [&](const std::vector<Vec2>& pts) {
+        const SectionId id(static_cast<uint32_t>(g.sections.size()));
+        engine::Section sec;
+        sec.roadClass = 0;
+        sec.lanes.first = static_cast<uint32_t>(g.sectionLanes.size());
+        sec.lanes.count = 1;
+        sec.lines.first = static_cast<uint32_t>(g.laneLines.size());
+        Path lane = makePath(g, spec, PathKind::Lane, pts);
+        lane.section = id;
+        lane.indexInSection = 0;
+        const PathId path(static_cast<uint32_t>(g.paths.size()));
+        g.sectionLanes.push_back(path);
+        g.paths.push_back(lane);
+        g.sections.push_back(sec);
+        return path;
+    };
+    const Vec2 joinAt = east * kMergeThroughLength;
+    const std::vector<Vec2> through{Vec2(0, 0), joinAt};
+    const std::vector<Vec2> joining{east * (kMergeThroughLength - kMergeAlongside) + kerb * spec.laneWidth,
+                                    east * (kMergeThroughLength - kMergeTaper) + kerb * spec.laneWidth, joinAt};
+    if (joiningLaneFirst) {
+        t.mergeJoining = addLane(joining);
+        t.mergeThrough = addLane(through);
+    } else {
+        t.mergeThrough = addLane(through);
+        t.mergeJoining = addLane(joining);
+    }
+    t.mergeBeyond = addLane({joinAt, joinAt + east * kMergeBeyondLength});
+    std::vector<std::vector<PathId>> nexts(g.paths.size());
+    nexts[t.mergeThrough.index].push_back(t.mergeBeyond);
+    nexts[t.mergeJoining.index].push_back(t.mergeBeyond);
+    writeNextLists(g, nexts);
+#ifdef RT_ROADS_LANES
+    // Where the two lanes' bodies meet, as the road builder finds it; then the stated merge on each such record.
+    engine::roads::lanes::CrossingOptions crossingOptions;
+    if (spec.crossingBodies.empty()) {
+        engine::roads::lanes::VehicleSize car;
+        car.tag = kTestVehicleTag;
+        car.width = kCarWidth;
+        crossingOptions.vehicles.push_back(car);
+    }
+    for (const driving::TagSize& b : spec.crossingBodies) {
+        engine::roads::lanes::VehicleSize v;
+        v.tag = b.tag;
+        v.turningRadius = b.turningRadius;
+        v.width = b.width;
+        v.length = b.length;
+        crossingOptions.vehicles.push_back(v);
+    }
+    engine::roads::lanes::findCrossingPoints(g, crossingOptions);
+    for (uint32_t c = 0; c < g.crossings.size(); ++c) {
+        engine::CrossingPoint& x = g.crossings[c];
+        if (x.otherSide != engine::OtherSide::Path) continue;
+        const bool theTwo = (x.a == t.mergeJoining && x.otherPath() == t.mergeThrough) ||
+                            (x.a == t.mergeThrough && x.otherPath() == t.mergeJoining);
+        if (!theTwo) continue;
+        t.mergeJoins.push_back(engine::CrossingId(c));
+        if (stated) {
+            x.merging = t.mergeJoining;
+            x.modelConnection = 0;   // the test's one stated connection
+        }
+    }
+#endif
+    return t;
+}
+
 TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
     TestRoads t;
     t.spec = spec;

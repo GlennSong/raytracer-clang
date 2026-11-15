@@ -237,10 +237,21 @@ std::vector<std::pair<bool, std::vector<uint8_t>>> buildPhases(const JunctionWor
     return out;
 }
 
-// What one question says about turns a and b (local indexes) at `phase`: true when it tells them apart, with who gives
-// way in `who` (A for a, Other for b).
+// WHAT THE ROADS STATE at meeting `rec`: true when one of its two paths joined the other's lane by a stated merge
+// (CrossingPoint::merging), with that path's side, the one that gives way, in `who`. The one place the mark DECIDES
+// anything (buildRightOfWay also looks at whether a record is marked, only to count it and to note one never asked).
+bool statedMergeSays(const CrossingPoint& rec, GivesWay& who) {
+    if (!rec.merging.valid()) return false;
+    if (rec.merging == rec.a) who = GivesWay::A;
+    else if (rec.merging == rec.otherPath()) who = GivesWay::Other;
+    else return false;
+    return true;
+}
+
+// What one question says about turns a and b (local indexes; the two sides of meeting `rec`) at `phase`: true when it
+// tells them apart, with who gives way in `who` (A for a, Other for b).
 bool ask(SettleQuestion q, const JunctionWork& w, const RightOfWay& row, const JunctionRules& jr, const RuleSet& rules,
-         uint32_t a, uint32_t b, uint32_t phase, GivesWay& who) {
+         const CrossingPoint& rec, uint32_t a, uint32_t b, uint32_t phase, GivesWay& who) {
     switch (q) {
     case SettleQuestion::Light: {
         if (jr.phases.count == 0 || phase >= jr.phases.count) return false;
@@ -274,16 +285,19 @@ bool ask(SettleQuestion q, const JunctionWork& w, const RightOfWay& row, const J
         return true;
     }
     case SettleQuestion::ArrivedFirst: return true;   // asked while driving
+    case SettleQuestion::StatedMerge: return statedMergeSays(rec, who);
     }
     return false;
 }
 
-// A MEETING FILED UNDER NO JUNCTION, between paths `a` (the record's side A) and `b` (issue #284): the rule set's
-// `between_junctions` list asked of each path's own approach (its sign; a lane, or a connector of an approach with no
-// ranked sign, shares the first rank) and its own movement (a lane: straight on); arrived_first asks while driving and
-// the rest of the list gives the fall-back; nothing told apart, the lower path id gives way. Without the list, asked
-// while driving, falling back on the lower path id (as before).
-MeetingAnswer settleBetweenJunctions(const RuleSet& rules, const RightOfWay& row, PathId a, PathId b) {
+// A MEETING FILED UNDER NO JUNCTION, record `rec`, between its paths `a` (side A) and `b` (issue #284): the rule set's
+// `between_junctions` list asked of the meeting's stated merge (the path that joined the other's lane gives way), of
+// each path's own approach (its sign; a lane, or a connector of an approach with no ranked sign, shares the first rank)
+// and its own movement (a lane: straight on); arrived_first asks while driving and the rest of the list gives the
+// fall-back; nothing told apart, the lower path id gives way. Without the list, asked while driving, falling back on
+// the lower path id (as before).
+MeetingAnswer settleBetweenJunctions(const RuleSet& rules, const RightOfWay& row, const CrossingPoint& rec) {
+    const PathId a = rec.a, b = rec.otherPath();
     MeetingAnswer out;
     out.who = GivesWay::Ask;
     out.by = SettledBy::AcrossJunctions;
@@ -305,6 +319,7 @@ MeetingAnswer settleBetweenJunctions(const RuleSet& rules, const RightOfWay& row
             asking = true;
             continue;
         }
+        if (q == SettleQuestion::StatedMerge) told = statedMergeSays(rec, who);
         if (q == SettleQuestion::SignRank && rankOf(a) != rankOf(b)) {
             who = rankOf(a) > rankOf(b) ? GivesWay::A : GivesWay::Other;
             told = true;
@@ -513,9 +528,17 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
         }
         if (!rec.junction.valid()) {
             // BETWEEN JUNCTIONS (issue #284): the rule set's `between_junctions`, or else asked while driving.
-            const MeetingAnswer a = settleBetweenJunctions(rules, out, rec.a, o);
+            const MeetingAnswer a = settleBetweenJunctions(rules, out, rec);
             out.answers.push_back(a);
             ++out.counts.acrossJunctions;
+            if (rec.merging.valid()) {
+                ++out.counts.statedMerges;
+                const bool asked = std::find(rules.betweenJunctions.begin(), rules.betweenJunctions.end(),
+                                             SettleQuestion::StatedMerge) != rules.betweenJunctions.end();
+                if (a.by == SettledBy::StatedMerge || (a.who == GivesWay::Ask && a.fallbackBy == SettledBy::StatedMerge))
+                    ++out.counts.byStatedMerge;
+                else if (!asked) ++out.counts.statedMergesNotAsked;
+            }
             if (a.who == GivesWay::Ask) ++out.counts.askWhileDriving;
             else ++out.counts.settledAtLoad;
             if (a.by == SettledBy::LowerPathId || (a.who == GivesWay::Ask && a.fallbackBy == SettledBy::LowerPathId))
@@ -528,13 +551,13 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
         const uint32_t ia = out.paths[rec.a.index].indexInJunction, io = out.paths[o.index].indexInJunction;
         const std::vector<SettleQuestion> none;
         const std::vector<SettleQuestion>& settle = jr.control != kNoControl ? rules.controls[jr.control].settle : none;
-        bool anyAsk = false, anyPathId = false;
+        bool anyAsk = false, anyPathId = false, anyStatedMerge = false;
         for (uint32_t ph = 0; ph < jr.phaseCount(); ++ph) {
             MeetingAnswer a;
             bool asking = false, decided = false;
             for (const SettleQuestion q : settle) {
                 GivesWay who = GivesWay::A;
-                if (!ask(q, w, out, jr, rules, ia, io, ph, who)) continue;
+                if (!ask(q, w, out, jr, rules, rec, ia, io, ph, who)) continue;
                 if (q == SettleQuestion::ArrivedFirst) {
                     if (!asking) {
                         asking = true;
@@ -565,7 +588,25 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
                 anyPathId = true;
             }
             anyAsk = anyAsk || asking;
+            anyStatedMerge = anyStatedMerge || a.by == SettledBy::StatedMerge ||
+                             (a.who == GivesWay::Ask && a.fallbackBy == SettledBy::StatedMerge);
             out.answers.push_back(a);
+        }
+        // A STATED MERGE FILED UNDER A JUNCTION (none is, in the levels of 2026-11; the road builder files a merge's joins
+        // under no junction): read by the same question when the junction's control lists it; when it does not, the join
+        // is settled as any other and the loader says so, so a mark is never dropped unseen.
+        if (rec.merging.valid()) {
+            ++out.counts.statedMerges;
+            if (anyStatedMerge) ++out.counts.byStatedMerge;
+            if (std::find(settle.begin(), settle.end(), SettleQuestion::StatedMerge) == settle.end()) {
+                ++out.counts.statedMergesNotAsked;
+                out.notes.push_back("junction " + std::to_string(j) + ": the roads state that " +
+                                    pathTurnWords(roads, out, rec.merging) + " joins the lane of " +
+                                    pathTurnWords(roads, out, rec.merging == rec.a ? o : rec.a) +
+                                    " by a merge, but the junction's control does not ask \"" +
+                                    settleQuestionWord(SettleQuestion::StatedMerge) +
+                                    "\": settled as any other join there");
+            }
         }
         if (anyAsk) ++out.counts.askWhileDriving;
         else ++out.counts.settledAtLoad;
@@ -623,6 +664,7 @@ const char* settledByWords(SettledBy by) {
     case SettledBy::Movement: return "by movement";
     case SettledBy::KerbSide: return "by who comes from the other's kerb side";
     case SettledBy::ArrivedFirst: return "by who reached the line first";
+    case SettledBy::StatedMerge: return "by the merge the roads state: the one that joined the other's lane gives way";
     case SettledBy::LowerPathId: return "by the lower path id (nothing else told them apart)";
     case SettledBy::Split: return "by shape: they leave one lane, and the car behind follows";
     case SettledBy::AcrossJunctions: return "while driving: they meet across two junctions, with no control to ask";
@@ -742,6 +784,10 @@ std::string describeRightOfWay(const RightOfWay& row) {
                       " asked while driving (" + std::to_string(n.acrossJunctions) + " of them across two junctions), " +
                       std::to_string(n.splits) + " splits; " + std::to_string(n.byLowerPathId) +
                       " left in some part to the lower path id\n";
+    if (n.statedMerges > 0)
+        out += "  merges the roads state: " + std::to_string(n.statedMerges) + " meetings marked with the path that joined; at " +
+               std::to_string(n.byStatedMerge) + " it gives way by that; " + std::to_string(n.statedMergesNotAsked) +
+               " where the settle list never asks\n";
     if (n.junctionsTimed > 0)
         out += "  lights running a programme: " + std::to_string(n.junctionsTimed) + " junctions, cycles " + one(n.shortestCycle) +
                "-" + one(n.longestCycle) + " s; " + std::to_string(n.waitInsidePoints) +

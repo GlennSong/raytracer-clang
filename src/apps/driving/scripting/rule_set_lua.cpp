@@ -273,6 +273,7 @@ protected:
             if (q == SettleQuestion::Light || q == SettleQuestion::KerbSide) {
                 fail(path + "." + kKeySettle, "asks \"" + std::string(settleQuestionWord(q)) +
                                                   "\", which means nothing between junctions (expected " +
+                                                  settleQuestionWord(SettleQuestion::StatedMerge) + ", " +
                                                   settleQuestionWord(SettleQuestion::SignRank) + ", " +
                                                   settleQuestionWord(SettleQuestion::Movement) + " or " +
                                                   settleQuestionWord(SettleQuestion::ArrivedFirst) + ")");

@@ -19,13 +19,18 @@
 //     approach found turning from my direction of travel toward the kerb, within the half turn on that side (at a
 //     five-way, only the nearest one is). Two approaches facing each other are on neither's kerb side;
 //   - arrived_first: answered while driving. The answer is "ask while driving", and the rest of the list is still
-//     asked, to find the answer to fall back on if asking ties.
+//     asked, to find the answer to fall back on if asking ties;
+//   - stated_merge: where one of the two paths joined the other's lane by a merge the roads state (a ramp lane running
+//     into the lane beside it, a lane that ends into its neighbour: the lane graph's CrossingPoint::merging, a copy of
+//     the road model's own "lane A merges into lane B"), the one that joined gives way. It says nothing of any other
+//     meeting. Nothing here measures or guesses which lane joined: the record says, or the question passes.
 // If the list runs out with nothing decided, the LOWER PATH ID GIVES WAY, and the table notes the pair.
 //
 // KINDS OF MEETING. A cross or a join is settled as above. A split (two turns from one lane) is settled by nobody: the
 // car behind follows the car ahead. A meeting filed under no junction (two junctions' paths, or a connector and a lane,
 // crowded together; ADR-0400) has no junction control to ask: it is settled by the rule set's `between_junctions` list,
-// asked of each path's own sign and movement (a lane: no sign, straight on; issue #284), or, where the rule set has none,
+// asked of the meeting's stated merge and of each path's own sign and movement (a lane: no sign, straight on; issue
+// #284), or, where the rule set has none,
 // "ask while driving", falling back on the lower path id. A crosswalk's or a track's crossing point gets no answer here: people and trains announce (design 4).
 //
 // LIGHTS. A control whose settle list asks `light` has a signal programme: PHASES, each a set of turns that are green
@@ -77,11 +82,12 @@ enum class SettledBy : uint8_t {
     Movement = static_cast<uint8_t>(SettleQuestion::Movement),
     KerbSide = static_cast<uint8_t>(SettleQuestion::KerbSide),
     ArrivedFirst = static_cast<uint8_t>(SettleQuestion::ArrivedFirst),
+    StatedMerge = static_cast<uint8_t>(SettleQuestion::StatedMerge),   // the one that joined the other's lane gives way
     LowerPathId,       // nothing told them apart: the lower path id gives way
     Split,             // two turns from one lane: nobody gives way
     AcrossJunctions,   // filed under no junction: ask while driving
 };
-constexpr uint8_t kSettledByCount = 8;
+constexpr uint8_t kSettledByCount = 9;
 
 // THE ANSWER FOR ONE MEETING AT ONE PHASE.
 struct MeetingAnswer {
@@ -177,6 +183,12 @@ struct RightOfWayCounts {
     uint32_t splits = 0;
     uint32_t acrossJunctions = 0;      // filed under no junction
     uint32_t byLowerPathId = 0;        // ... decided (or their fall-back decided) by the lower path id, at some phase
+    // STATED MERGES (CrossingPoint::merging): the meetings the roads mark with the path that joined; of them, those the
+    // one that joined gives way at (or would, if asking while driving ties), by the stated_merge question; and those
+    // whose settle list never asks it (each noted when filed under a junction), settled as any other meeting.
+    uint32_t statedMerges = 0;
+    uint32_t byStatedMerge = 0;
+    uint32_t statedMergesNotAsked = 0;
     uint32_t junctionsWithoutControl = 0;   // the rule set has no row for their control
     uint32_t junctionsDark = 0;             // lights with no programme running, treated as their `when_dark` row
     // THE PROGRAMMES (signal_programme.h timeSignalProgrammes).
@@ -199,8 +211,8 @@ struct RightOfWay {
     std::vector<engine::Range> answersOf;
     std::vector<MeetingAnswer> answers;
     RightOfWayCounts counts;
-    // What the loader noted, one plain line each, in id order: junctions whose control the rule set lacks, and pairs
-    // left to the lower path id.
+    // What the loader noted, one plain line each, in id order: junctions whose control the rule set lacks, pairs left
+    // to the lower path id, and a stated merge filed under a junction whose control never asks stated_merge.
     std::vector<std::string> notes;
     // EVERY PROTECTED TURN (issue #284), one line each in junction then connector order: the warrant that protected it and
     // the facts it was asked of.
