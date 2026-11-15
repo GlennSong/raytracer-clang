@@ -131,7 +131,7 @@ inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 // the roads themselves is the lanes tag's, kLanesBuildTag, which keys the roads; to the road file's layout, lane rules
 // or the turns' table, the cache key's own; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
-constexpr uint32_t kLaneGraphBuildVersion = 8;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
+constexpr uint32_t kLaneGraphBuildVersion = 9;   // 1: the graph of #237 and the connectors of #238 (ADR-0398)
                                                  // 2: crossing points (#239, ADR-0400)
                                                  // 3: the control plan carried through: controls, signs, limits (#240)
                                                  // 4: each path's bend profile, measured as a vehicle feels it (#281)
@@ -143,6 +143,7 @@ constexpr uint32_t kLaneGraphBuildVersion = 8;   // 1: the graph of #237 and the
                                                  //    for its arm is joined to nothing across it; an arm whose lanes' ways
                                                  //    across cancel is left out of the outline; turns placed by junction
                                                  //    (no shipped level changes)
+                                                 // 9: each stated merge marked on its Join (CrossingPoint::merging)
 
 // A VEHICLE TAG and its body: the tightest radius its path may have, its width and its length (metres). Passed in by the
 // caller (the engine does not know the driving model's vehicles); a connector tighter than the radius is closed to it.
@@ -258,6 +259,8 @@ struct LaneGraphBuild {
     // street carries on as another, where a lane leaves its host and where one merges into its host; of them, how many
     // whose lines did not meet (each also a line in the problems, with the gap)
     uint32_t carryOnJoins = 0, divergeJoins = 0, mergeJoins = 0, joinsWithGap = 0;
+    // of the merges made, how many are marked on their Join crossing point (CrossingPoint::merging; the rest each a problem)
+    uint32_t statedMerges = 0;
     // each arm's stop line, by where it came from: the paint's (its box holds this junction alone), ADR-0419's rule where
     // the paint found no box, or where the paint's box holds another stated junction too (each such box a problem line)
     uint32_t stopLinesPainted = 0, stopLinesNoBox = 0, stopLinesSharedBox = 0;

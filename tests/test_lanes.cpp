@@ -1657,6 +1657,8 @@ struct LaneGraphKnown {
     // puts it): "lane id @ junction id"
     std::set<std::string> junctionGapsOff;
     uint32_t carryOnJoins = 0, divergeJoins = 0, mergeJoins = 0;   // the joins the model states, made (written from the scene)
+    // the stated merges marked on their Join crossing points: "joining lane>host lane" (builder lane ids)
+    std::set<std::string> merges;
     // the scene's problem lines by kind (problemKind) and count; `pinProblems` false: pinned by a test of its own
     std::map<std::string, uint32_t> problems;
     bool pinProblems = true;
@@ -2033,6 +2035,23 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
         std::printf("      joins made: %u carrying on, %u leaving a host, %u merging (known: %u, %u, %u)\n", lg.carryOnJoins, lg.divergeJoins,
                     lg.mergeJoins, known.carryOnJoins, known.divergeJoins, known.mergeJoins);
     CHECK(lg.carryOnJoins == known.carryOnJoins && lg.divergeJoins == known.divergeJoins && lg.mergeJoins == known.mergeJoins);
+    // EACH STATED MERGE MARKED ON ITS JOIN, with the joining lane as the one that gives way, and no other crossing point
+    // marked: the set of "joining lane>host lane" over the marked records is the scene's, written here
+    {
+        std::set<std::string> marked;
+        for (const CrossingPoint& x : G.crossings) {
+            if (!x.merging.valid()) continue;
+            CHECK(x.meeting == Meeting::Join && x.otherSide == OtherSide::Path);
+            const PathId other = x.merging == x.a ? x.otherPath() : x.a;
+            CHECK(x.merging == x.a || x.merging == x.otherPath());
+            if (!other.valid() || other.index >= G.paths.size()) continue;
+            const std::string key = L.lanes[G.paths[x.merging.index].modelLane].id + ">" + L.lanes[G.paths[other.index].modelLane].id;
+            if (marked.insert(key).second && !known.merges.count(key)) std::printf("      stated merge %s marked (not known)\n", key.c_str());
+        }
+        for (const std::string& k : known.merges)
+            if (!marked.count(k)) std::printf("      stated merge %s not marked on any join\n", k.c_str());
+        CHECK(marked == known.merges);
+    }
     // ITS PROBLEM LINES BY KIND AND COUNT, as written for the scene
     if (known.pinProblems) {
         std::map<std::string, uint32_t> byKind;
@@ -2552,6 +2571,7 @@ LaneGraphKnown gridCityKnown() {
     k.carryOnJoins = 11;   // its 6 corner bends and the boulevard's and local streets' 5 carry-on ends (the layout's)
     k.divergeJoins = 1;    // the exit ramp
     k.mergeJoins = 1;      // the entry ramp
+    k.merges = {"entry.f0>fw_wb.f2"};   // the file: entry's `to` anchor on fw_wb, side right: its outer lane, f2 of three
     // (the one "other": blvd.f1 carrying on into loc_e, which has no lane in its slot)
     k.problems = {{"crossing points", 28}, {"fits no vehicle", 1}, {"join with a gap", 11}, {"kink", 11}, {"other", 1}};
     k.joins = {{"v0.b0>h0.f0", {2.4749, 90.0}}, {"v0.f0>h4.f0", {2.4749, 90.0}}, {"v5.b0>h0.b0", {2.4749, 90.0}},
@@ -2574,6 +2594,8 @@ LaneGraphKnown ringCityKnown() {
     k.carryOnJoins = 32;   // the inner and outer rings' 3 lanes each at their 4 joints (24) and the grid's 8 corner lanes
     k.divergeJoins = 4;    // its 4 exit ramps
     k.mergeJoins = 4;      // its 4 entry ramps
+    // the file: each *_on ramp's `to` anchor on its ring carriageway, side right: the ring's outer lane, f2 of three
+    k.merges = {"n_in_on.f0>in_NE.f2", "e_in_on.f0>in_ES.f2", "e_out_on.f0>out_EN.f2", "n_out_on.f0>out_NW.f2"};
     k.problems = {{"crossing points", 42}, {"fits no vehicle", 4}, {"join with a gap", 28}, {"kink", 8}};
     return k;
 }
@@ -2586,6 +2608,8 @@ LaneGraphKnown hillJunctionKnown() {
 LaneGraphKnown valleyViaductKnown() {
     LaneGraphKnown k;
     k.mergeJoins = 2;   // its ramp's two lanes: the second into the first, the first into its host
+    // the file: ramp (two lanes, "dovetail") anchored `to` fwy, side right: fwy's outer lane f2
+    k.merges = {"ramp.f1>ramp.f0", "ramp.f0>fwy.f2"};
     k.problems = {{"fits no vehicle", 1}};
     return k;
 }
@@ -2602,8 +2626,13 @@ LaneGraphKnown trafficLabKnown() {
                      "s173", "s174", "s176", "s189", "s190", "s191", "s195", "s198", "s200", "s201", "s202", "s204", "s206", "s207", "s211",
                      "s214", "s216", "s217", "s220"};
     k.inside = {{"j93", 1u}};
-    k.divergeJoins = 8;   // its 8 ramps, each one lane: 4 exits leaving a host, 4 entries merging; and its 4 two-lane ramps'
-    k.mergeJoins = 8;     // second lanes merging into their first (the file's d*_* ramps: 4 off, 4 on)
+    // its 8 one-lane ramps (the file's d*_*_off and d*_*_on), each anchored at both ends: each leaves one host (8
+    // diverges) and merges into another (8 merges) -- an off-ramp leaves a freeway carriageway and merges into a frontage
+    // road or street, an on-ramp leaves a street and merges into a freeway carriageway's kerb lane (f3 of four)
+    k.divergeJoins = 8;
+    k.mergeJoins = 8;
+    k.merges = {"d0_0_a_off.f0>s311.f0", "d0_0_b_off.f0>s260.f0", "d1_0_a_off.f0>s343.f0", "d1_0_b_off.f0>s242.f0",
+                "d0_0_a_on.f0>fw0_a.f3", "d0_0_b_on.f0>fw0_b.f3", "d1_0_a_on.f0>fw1_a.f3", "d1_0_b_on.f0>fw1_b.f3"};
     k.pinProblems = false;   // (pinned by lanes_the_traffic_lab_lane_graph_can_be_driven_round)
     k.joins = {{"s257.f0>d0_0_b_on.f0", {0.0, 1.07}}, {"s277.f0>d1_0_a_on.f0", {0.0002, 1.44}}, {"s315.f0>d0_0_a_on.f0", {0.0001, 1.86}},
                {"fw1_a.f3>d1_0_a_off.f0", {0.0109, 0.57}}, {"d0_0_a_off.f0>s311.f0", {0.0, 1.07}}, {"d0_0_b_off.f0>s260.f0", {0.0, 1.07}},
@@ -3326,13 +3355,19 @@ void checkCrossings(const std::string& name) {
         CHECK(std::adjacent_find(intos.begin(), intos.end()) == intos.end());
     }
     std::printf("      %d junctions with two or more connectors and no crossing point, %d of them carry-ons\n", without, carryOns);
-    // found again: the same table, byte for byte
+    // found again: the same table, byte for byte (the stated merges, which the lane level marks on its Joins after they are
+    // found, CrossingPoint::merging, are not the crossings code's: left out of the comparison)
+    LaneGraph found = G;
+    for (CrossingPoint& x : found.crossings) {
+        x.merging = PathId();
+        x.modelConnection = kNoIndex;
+    }
     LaneGraph again = G;
     CrossingOptions co = crossingTestOptions();
     co.clearance = r.graph.rules.sameLevelDz;
     findCrossingPoints(again, co);
     bundle::BinWriter w1, w2;
-    putLaneGraph(w1, G);
+    putLaneGraph(w1, found);
     putLaneGraph(w2, again);
     CHECK(w1.bytes == w2.bytes);
 }

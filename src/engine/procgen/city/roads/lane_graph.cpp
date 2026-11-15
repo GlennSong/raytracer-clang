@@ -15,9 +15,9 @@ namespace {
 // The section's magic and the version this build writes and reads (2: junctions list their arriving and leaving lanes;
 // 3: each path lists its crossing points; 4: a regulation covers a stretch, from and to, issue #240; 5: each path's bend
 // profile, issue #281; 6: each crossing point's vehicle tags on each side, ADR-0412; 7: each path's and junction's ids on
-// the road model, ADR-0426).
+// the road model, ADR-0426; 8: a Join's stated merge, which path joins and the model's connection, ADR-0426).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 7;
+constexpr uint32_t kVersion = 8;
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
 // A closed outline (a junction's box, a crosswalk) has at least this many corners; a track's line two points.
@@ -169,6 +169,8 @@ void putItem(BinWriter& w, const CrossingPoint& c) {
     w.put(c.otherTo);
     w.put(c.aTags);
     w.put(c.otherTags);
+    putItem(w, c.merging);
+    w.put(c.modelConnection);
 }
 void putItem(BinWriter& w, const Crosswalk& c) {
     putItem(w, c.outline);
@@ -229,7 +231,7 @@ bool getItem(BinReader& r, Junction& j) {
 bool getItem(BinReader& r, CrossingPoint& c) {
     return getItem(r, c.a) && getEnum(r, c.otherSide) && getEnum(r, c.meeting) && r.get(c.other) &&
            getItem(r, c.junction) && r.get(c.aFrom) && r.get(c.aTo) && r.get(c.otherFrom) && r.get(c.otherTo) &&
-           r.get(c.aTags) && r.get(c.otherTags);
+           r.get(c.aTags) && r.get(c.otherTags) && getItem(r, c.merging) && r.get(c.modelConnection);
 }
 bool getItem(BinReader& r, Crosswalk& c) { return getItem(r, c.outline) && getItem(r, c.junction) && r.get(c.walkLink); }
 bool getItem(BinReader& r, Track& t) { return getItem(r, t.line) && r.get(t.railTrack); }
@@ -497,7 +499,8 @@ bool operator==(const Section& a, const Section& b) {
 bool operator==(const CrossingPoint& a, const CrossingPoint& b) {
     return a.a == b.a && a.otherSide == b.otherSide && a.meeting == b.meeting && a.other == b.other &&
            a.junction == b.junction && a.aFrom == b.aFrom && a.aTo == b.aTo && a.otherFrom == b.otherFrom &&
-           a.otherTo == b.otherTo && a.aTags == b.aTags && a.otherTags == b.otherTags;
+           a.otherTo == b.otherTo && a.aTags == b.aTags && a.otherTags == b.otherTags && a.merging == b.merging &&
+           a.modelConnection == b.modelConnection;
 }
 bool operator==(const Crosswalk& a, const Crosswalk& b) {
     return a.outline == b.outline && a.junction == b.junction && a.walkLink == b.walkLink;
@@ -849,6 +852,12 @@ std::vector<std::string> validate(const LaneGraph& g) {
         }
         if (static_cast<uint8_t>(x.meeting) >= kMeetingCount)
             out.push_back(fmt("%s: unknown kind of meeting %u", who.c_str(), static_cast<unsigned>(x.meeting)));
+        // a stated merge: on a join of two paths, naming one of them, with its connection
+        if (x.merging.valid() && (x.meeting != Meeting::Join || (x.merging != x.a && x.merging != x.otherPath()) ||
+                                  x.modelConnection == kNoIndex))
+            out.push_back(fmt("%s: says path %u merges, but %s", who.c_str(), x.merging.index,
+                              x.meeting != Meeting::Join ? "it is no join" : x.modelConnection == kNoIndex ? "names no connection"
+                                                                                                        : "that is neither of its paths"));
         // the vehicles it concerns: every one, or some of the graph's vehicle tags (at least one)
         for (const TagMask tags : {x.aTags, x.otherTags}) {
             const TagMask known = g.vehicleTagNames.size() >= kMaxTagNames
@@ -1288,9 +1297,13 @@ std::string dumpCrossing(const LaneGraph& g, CrossingId id) {
                                            c.aTags == kEveryVehicle ? "any vehicle" : tagWords(c.aTags).c_str(), a.c_str(),
                                            c.otherTags == kEveryVehicle ? "any vehicle" : tagWords(c.otherTags).c_str(),
                                            b.c_str());
-    return fmt("crossing point %u, %s: %s %s %s; on %s from %.1f to %.1f m, on %s from %.1f to %.1f m%s\n", id.index,
+    const std::string merge = c.merging.valid()
+                                  ? fmt("; a stated merge (the road model's connection %u): %s joins, and gives way", c.modelConnection,
+                                        pathName(g, c.merging.index).c_str())
+                                  : std::string();
+    return fmt("crossing point %u, %s: %s %s %s; on %s from %.1f to %.1f m, on %s from %.1f to %.1f m%s%s\n", id.index,
                where.c_str(), a.c_str(), meetingWord(c.meeting), b.c_str(), a.c_str(), c.aFrom, c.aTo, b.c_str(),
-               c.otherFrom, c.otherTo, concerns.c_str());
+               c.otherFrom, c.otherTo, concerns.c_str(), merge.c_str());
 }
 
 std::string dumpText(const LaneGraph& g) {

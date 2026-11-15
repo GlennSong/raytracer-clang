@@ -209,6 +209,12 @@ struct CrossingPoint {
     // kEveryVehicle concerns every vehicle. Where long bodies cut inside a bend the road builder records a meeting once
     // for each pair of body sizes that meet differently, so two vehicles meet only where their own bodies could.
     TagMask aTags = kEveryVehicle, otherTags = kEveryVehicle;
+    // A STATED MERGE (ADR-0426): on a Join of two lane paths where one ends into the other's lane by a merge the road
+    // model states -- a ramp's lane into its host's, a pocket or dropped lane tapering into its neighbour -- the path that
+    // joins, and so gives way (it is `a` or the other path), and the model's connection (RoadModel::connections). A copy of
+    // the stated fact, never measured. Invalid / kNoIndex: no stated merge here.
+    PathId merging;
+    uint32_t modelConnection = kNoIndex;
 
     PathId otherPath() const { return otherSide == OtherSide::Path ? PathId(other) : PathId(); }
     // Whether it concerns a vehicle carrying `vehicleTags` on `path` (one of its two paths; a path it does not name: no).

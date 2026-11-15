@@ -590,7 +590,13 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
                 if (std::fabs((endingThere ? pathU[path].second : pathU[path].first) - u) <= kCutTolerance) return static_cast<int>(path);
         return -1;
     };
-    for (const ModelConnection& c : m.connections) {
+    // the stated merges made: the joining lane's last path, the host lane, the connection (marked on their Join, below)
+    struct MadeMerge {
+        uint32_t joining, hostLane, branchLane, connection;
+    };
+    std::vector<MadeMerge> merges;
+    for (uint32_t ci = 0; ci < m.connections.size(); ++ci) {
+        const ModelConnection& c = m.connections[ci];
         if (c.kind == ConnectionKind::Joins) continue;
         const bool diverge = c.kind == ConnectionKind::Diverge;
         const uint32_t host = diverge ? c.from.index : c.to.index, branch = diverge ? c.to.index : c.from.index;
@@ -612,6 +618,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
         const uint32_t into = diverge ? pieces[bp.front()].paths.front() : static_cast<uint32_t>(hp);
         next[from].push_back(PathId(into));
         ++(diverge ? out.divergeJoins : out.mergeJoins);
+        if (!diverge) merges.push_back(MadeMerge{from, host, branch, ci});
         const double gap = joinGap(from, into);
         if (gap > kJoinReported) {
             ++out.joinsWithGap;
@@ -1019,6 +1026,26 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
     co.clearance = g.rules.sameLevelDz;
     out.crossings = findCrossingPoints(G, co);
     out.problems.insert(out.problems.end(), out.crossings.problems.begin(), out.crossings.problems.end());
+    // EACH STATED MERGE ON ITS JOIN (the model's fact, copied; nothing measured decides it): every Join between the joining
+    // lane's last path and a path of its host lane says which joins -- and so gives way -- and which connection states it.
+    // A stated merge whose paths the crossings code found no Join for is said.
+    for (const MadeMerge& mm : merges) {
+        uint32_t marked = 0;
+        for (CrossingPoint& x : G.crossings) {
+            if (x.meeting != Meeting::Join || x.otherSide != OtherSide::Path) continue;
+            const uint32_t other = x.a.index == mm.joining ? x.other : x.other == mm.joining ? x.a.index : kNoIndex;
+            if (other == kNoIndex || other >= G.paths.size() || G.paths[other].kind != PathKind::Lane || G.paths[other].modelLane != mm.hostLane)
+                continue;
+            x.merging = PathId(mm.joining);
+            x.modelConnection = mm.connection;
+            ++marked;
+        }
+        out.statedMerges += marked > 0 ? 1 : 0;
+        if (marked == 0)
+            out.problems.push_back(fmt("lane %s merges into lane %s (the road model's connection %u), but the crossing points hold no join "
+                                       "of their paths: who gives way there is not carried", L.lanes[mm.branchLane].id.c_str(),
+                                       L.lanes[mm.hostLane].id.c_str(), mm.connection));
+    }
     out.crossings.waitInsidePoints = placeWaitInsidePoints(G);
 
     // ---- the counts the old reports read ------------------------------------------------------------------------------
