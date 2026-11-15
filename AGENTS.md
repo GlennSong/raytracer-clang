@@ -551,7 +551,8 @@ Name variables by what they represent, not what type they are.
 - Keep functions short and focused.
 - No comments that restate the code. Comment only when the *why* is non-obvious.
 - Const-correct: mark parameters and methods `const` where appropriate.
-- Comparing computed numbers goes through `approxEqual` and its ordered companions (`atOrBefore`, `strictlyPast`, ...: `src/rt_math.h`) with a named tolerance (`kSamePoint`, `kWrittenStation`, or one named once beside its reason); a bare tolerance (`< 1e-6`) or an exact `<=`/`==` between two computed distances is a bug; where two numbers are meant to be the same thing, state that as a fact (keep one value, or a flag) instead of comparing. `run_tests` (`tolerance_literals`) holds the road and driving code to the first part.
+- Compare two computed numbers with `approxEqual`, `atOrBefore`, `atOrPast`, `strictlyBefore` or `strictlyPast` (`src/rt_math.h`) and a named tolerance (`kSamePoint`, `kWrittenStation`, or one named once beside its reason); a bare tolerance (`< 1e-6`) or an exact `<=`/`==` between two computed distances is a bug, and where two numbers are meant to be the same thing, keep one value or a flag instead of comparing them.
+- A test holds one part of that: no bare small number written with an exponent in road or driving files that are not on its list (`tolerance_literals` in `run_tests`).
 
 ### Build
 - Makefile with clang++, C++17 standard.

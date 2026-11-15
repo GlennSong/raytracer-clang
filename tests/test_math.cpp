@@ -1,6 +1,10 @@
 #include "test_framework.h"
 
 #include "../src/rt_math.h"
+#include "../src/engine/procgen/city/polygon.h"   // the plan-point approxEqual
+
+#include <cmath>
+#include <limits>
 
 using namespace engine;  // namespace migration (ADR-0015)
 
@@ -331,13 +335,9 @@ TEST_CASE(mat4_inverse_view_projection) {
 
 // ---- Comparing computed numbers (rt_math.h: approxEqual and its ordered companions) ----------------------------------
 
-#include "../src/engine/procgen/city/polygon.h"   // the plan-point approxEqual
-
-#include <limits>
-
 namespace {
 
-// How many of the three exclusive questions say yes about (a, b): must be exactly one for finite numbers.
+// How many of the three exclusive questions say yes about (a, b): must be exactly one for any two numbers.
 int exclusiveAnswers(Real a, Real b, Real eps) {
     return (strictlyBefore(a, b, eps) ? 1 : 0) + (approxEqual(a, b, eps) ? 1 : 0) + (strictlyPast(a, b, eps) ? 1 : 0);
 }
@@ -352,16 +352,22 @@ TEST_CASE(approx_compare_exactly_one_of_before_equal_past) {
         Real a;
         bool before, equal, past;
     };
+    // (One step of a double at 9.75 and at 10.25 is 1.8e-15, and each stepped value's difference from 10 is exact, so the
+    // rows "one step outside" and "one step inside" are exactly that.)
     const Row rows[] = {
-        {5.0, true, false, false},       // far before
-        {9.7499, true, false, false},    // just outside the tolerance, before
-        {9.75, false, true, false},      // exactly at the tolerance: the same
-        {9.7501, false, true, false},    // just inside
-        {10.0, false, true, false},      // the same number
-        {10.2499, false, true, false},   // just inside, past
-        {10.25, false, true, false},     // exactly at the tolerance: the same
-        {10.2501, false, false, true},   // just outside, past
-        {15.0, false, false, true},      // far past
+        {5.0, true, false, false},                          // far before
+        {9.7499, true, false, false},                       // just outside the tolerance, before
+        {std::nextafter(9.75, 0.0), true, false, false},    // ONE STEP of a double outside the edge: before
+        {9.75, false, true, false},                         // exactly at the tolerance: the same
+        {std::nextafter(9.75, 11.0), false, true, false},   // one step inside the edge: the same
+        {9.7501, false, true, false},                       // just inside
+        {10.0, false, true, false},                         // the same number
+        {10.2499, false, true, false},                      // just inside, past
+        {std::nextafter(10.25, 0.0), false, true, false},   // one step inside the edge: the same
+        {10.25, false, true, false},                        // exactly at the tolerance: the same
+        {std::nextafter(10.25, 11.0), false, false, true},  // ONE STEP outside the edge: past
+        {10.2501, false, false, true},                      // just outside, past
+        {15.0, false, false, true},                         // far past
     };
     for (const Row& r : rows) {
         CHECK(strictlyBefore(r.a, b, eps) == r.before);
@@ -371,6 +377,8 @@ TEST_CASE(approx_compare_exactly_one_of_before_equal_past) {
         // The two inclusive questions are "before or the same" and "past or the same", from the same number.
         CHECK(atOrBefore(r.a, b, eps) == (r.before || r.equal));
         CHECK(atOrPast(r.a, b, eps) == (r.past || r.equal));
+        CHECK(atOrBefore(r.a, b, eps) == !strictlyPast(r.a, b, eps));
+        CHECK(atOrPast(r.a, b, eps) == !strictlyBefore(r.a, b, eps));
         // Asked the other way round, before and past swap and equal stays.
         CHECK(strictlyBefore(b, r.a, eps) == r.past);
         CHECK(strictlyPast(b, r.a, eps) == r.before);
@@ -424,20 +432,52 @@ TEST_CASE(approx_compare_nan_and_infinities) {
     CHECK(strictlyPast(inf, 5, eps) && atOrPast(inf, 5, eps) && !approxEqual(inf, 5, eps) && !atOrBefore(inf, 5, eps));
     CHECK(strictlyBefore(5, inf, eps) && atOrBefore(5, inf, eps) && !approxEqual(5, inf, eps) && !atOrPast(5, inf, eps));
     CHECK(strictlyBefore(-inf, 5, eps) && strictlyPast(5, -inf, eps));
-    CHECK(strictlyBefore(-inf, inf, eps) && strictlyPast(inf, -inf, eps));
-    // Two infinities of one sign: no answer at all (their difference is not a number).
-    CHECK(exclusiveAnswers(inf, inf, eps) == 0 && !atOrBefore(inf, inf, eps) && !atOrPast(inf, inf, eps));
-    CHECK(exclusiveAnswers(-inf, -inf, eps) == 0);
+    // Infinities of opposite signs: strictly before or past.
+    CHECK(strictlyBefore(-inf, inf, eps) && !approxEqual(-inf, inf, eps) && !atOrPast(-inf, inf, eps));
+    CHECK(strictlyPast(inf, -inf, eps) && !approxEqual(inf, -inf, eps) && !atOrBefore(inf, -inf, eps));
+    // TWO INFINITIES OF ONE SIGN ARE THE SAME: the driving code's "never" against "never". A bare `never <= never` is
+    // true, and so is the question that replaces it; neither is strictly before or past the other.
+    for (const Real never : {inf, -inf}) {
+        CHECK(never <= never);
+        CHECK(approxEqual(never, never, eps) && atOrBefore(never, never, eps) && atOrPast(never, never, eps));
+        CHECK(!strictlyBefore(never, never, eps) && !strictlyPast(never, never, eps));
+        CHECK(approxEqual(never, never, 0) && atOrBefore(never, never, 0));
+    }
+    // So for every pair of numbers, the infinities included: exactly one of the three, and the inclusive questions are
+    // the opposites of the strict ones.
+    for (const Real a : {-inf, -1.0, 0.0, 0.0005, 1.0, inf})
+        for (const Real b : {-inf, -1.0, 0.0, 0.0005, 1.0, inf}) {
+            CHECK(exclusiveAnswers(a, b, eps) == 1);
+            CHECK(atOrBefore(a, b, eps) == !strictlyPast(a, b, eps));
+            CHECK(atOrPast(a, b, eps) == !strictlyBefore(a, b, eps));
+        }
+    // A stop that is "never" is not at or before a start that is somewhere; a stop somewhere is before "never".
+    CHECK(!atOrBefore(inf, 60.6, eps) && atOrBefore(60.6, inf, eps));
     // A NaN tolerance: every question false.
     CHECK(exclusiveAnswers(1, 1, nan) == 0 && !atOrBefore(1, 1, nan) && !atOrPast(1, 1, nan));
+    // The Vec3 one, coordinate by coordinate, takes the same answer for equal infinite coordinates.
+    CHECK(approxEqual(Vec3(inf, 1, -inf), Vec3(inf, 1, -inf)));
+    CHECK(!approxEqual(Vec3(inf, 1, 0), Vec3(-inf, 1, 0)));
 }
 
-TEST_CASE(approx_compare_plan_points) {
-    // Each coordinate within the tolerance, as the Vec3 one.
+TEST_CASE(approx_compare_plan_points_by_distance) {
+    // Two plan points are the same when the DISTANCE between them is within the tolerance (the road code's same-point
+    // checks are all distances), not when each coordinate is.
     const Vec2 p(100.0, -50.0);
-    CHECK(approxEqual(p, Vec2(100.0005, -50.0005), kSamePoint));    // half a millimetre off each way
+    CHECK(approxEqual(p, p, kSamePoint));
+    CHECK(approxEqual(p, Vec2(100.0005, -50.0005), kSamePoint));    // 0.5 mm off each way: 0.71 mm apart
+    // 0.8 mm off each way: each coordinate is inside 1 mm, but the points are 1.13 mm apart.
+    CHECK(!approxEqual(p, Vec2(100.0008, -50.0008), kSamePoint));
+    CHECK(approxEqual(p.x, 100.0008, kSamePoint) && approxEqual(p.y, -50.0008, kSamePoint));
     CHECK(!approxEqual(p, Vec2(100.002, -50.0), kSamePoint));       // 2 mm off in x
     CHECK(!approxEqual(p, Vec2(100.0, -50.002), kSamePoint));       // 2 mm off in y
-    CHECK(approxEqual(p, Vec2(100.002, -50.002), kWrittenStation)); // ... but one written point
-    CHECK(!approxEqual(p, Vec2(std::numeric_limits<Real>::quiet_NaN(), -50.0), kSamePoint));
+    CHECK(approxEqual(p, Vec2(100.002, -50.002), kWrittenStation)); // 2.8 mm apart: one written point
+    // Exactly at the tolerance counts: 3 and 4 apart is 5 apart.
+    CHECK(approxEqual(Vec2(0, 0), Vec2(3, 4), 5.0));
+    CHECK(!approxEqual(Vec2(0, 0), Vec2(3, 4), std::nextafter(5.0, 0.0)));
+    const Real nan = std::numeric_limits<Real>::quiet_NaN();
+    const Real inf = std::numeric_limits<Real>::infinity();
+    CHECK(!approxEqual(p, Vec2(nan, -50.0), kSamePoint));
+    CHECK(approxEqual(Vec2(inf, 1), Vec2(inf, 1), kSamePoint));     // the same point is the same
+    CHECK(!approxEqual(Vec2(inf, 1), Vec2(-inf, 1), kSamePoint));
 }
