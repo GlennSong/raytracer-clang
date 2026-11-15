@@ -5,7 +5,7 @@
 // part of the one road model: where roads meet (a JUNCTION: its arms in order round it, each arm's street and heading,
 // which pairs of arms are one street carrying on through it) and the stretches of road between them (a STREET: one
 // road-file edge from one junction to the next, or to a dead end). Written into the road file's one "junctions" list
-// and its "streets" list (road_graph_spec.h PlannedJunction, PlannedStreet).
+// and its "streets" list (road_model_parts.h ModelJunction, ModelStreet).
 //
 // Words used here:
 //   - a NODE is a place where road ends meet, a ramp's free end on a street's side, or two roads crossing at grade; a
@@ -56,8 +56,8 @@ constexpr double kArmHeadingReach = 15.0;
 constexpr double kShortestStreet = 0.5;
 
 struct RoadLayout {
-    std::vector<PlannedJunction> junctions;   // in id order
-    std::vector<PlannedStreet> streets;       // in road order, then along each road
+    std::vector<ModelJunction> junctions;   // in id order
+    std::vector<ModelStreet> streets;       // in road order, then along each road
     std::vector<DividedPair> divided;         // the divided roads' carriageway pairs (the graph's own list, or found)
     bool keptList = false;                    // the junctions are the graph's own list, as it stated them
     bool armsInRing = false;                  // every junction's arms listed in ring order (found here, or a marked list kept)
@@ -124,11 +124,12 @@ std::string insertLaneRulesText(const std::string& text, double solidBeforeStopL
 // pair, a street and the one it `carries_on` into, and every street of a divided road's two carriageways. Only streets of
 // a class that carries a name take part (`named`, per street); a run never passes through one that does not (a freeway
 // that carries on as a boulevard). Runs in order of their first street; each run's streets in layout order.
-std::vector<std::vector<std::size_t>> streetRuns(const std::vector<PlannedJunction>& junctions, const std::vector<PlannedStreet>& streets,
+// `junctions` and `streets` are one layout's: each arm's street and each carry-on is a place in `streets`.
+std::vector<std::vector<std::size_t>> streetRuns(const std::vector<ModelJunction>& junctions, const std::vector<ModelStreet>& streets,
                                                  const std::vector<DividedPair>& divided, const std::vector<char>& named);
 // Whether a street of graph `g` carries a name: its road's class is not one the book leaves unnamed, nor a track or a
 // footway, and it has lanes.
-std::vector<char> namedStreets(const RoadLabGraph& g, const std::vector<PlannedStreet>& streets, const StreetNameBook& book);
+std::vector<char> namedStreets(const RoadLabGraph& g, const std::vector<ModelStreet>& streets, const StreetNameBook& book);
 // A name a file already states, on a stretch of a road (what a re-derived layout keeps: the street of that road whose
 // middle lies in the stretch takes it).
 struct NamedStretch {
@@ -136,7 +137,7 @@ struct NamedStretch {
     double from = 0, to = 0;
     std::string name;
 };
-std::vector<NamedStretch> namedStretches(const std::vector<PlannedStreet>& streets, const std::string& roadPrefix = std::string());
+std::vector<NamedStretch> namedStretches(const std::vector<ModelStreet>& streets, const std::string& roadPrefix = std::string());
 // NAMES EVERY RUN: a run with a street under a kept name takes that name (its longest such street's); every other run
 // gets a new one from the book (street_names.h nameRuns: by the run's length, its widest carriageway -- a divided road's
 // two together -- and the class of its longest street), never one already kept. Writes `name` into each street of each
@@ -144,7 +145,7 @@ std::vector<NamedStretch> namedStretches(const std::vector<PlannedStreet>& stree
 struct NamingReport {
     uint32_t runs = 0, kept = 0, generated = 0, streets = 0;
 };
-NamingReport nameStreetRuns(std::vector<PlannedStreet>& streets, const std::vector<PlannedJunction>& junctions,
+NamingReport nameStreetRuns(std::vector<ModelStreet>& streets, const std::vector<ModelJunction>& junctions,
                             const std::vector<DividedPair>& divided, const RoadLabGraph& g, const StreetNameBook& book,
                             const std::vector<NamedStretch>& keep = {});
 // The same for a layout, with the shipped book.
@@ -152,7 +153,7 @@ NamingReport nameLayout(RoadLayout& layout, const RoadLabGraph& g, const std::ve
 // WRITES THE STREETS' NAMES INTO A ROAD FILE'S TEXT IN PLACE: a "name" in each street object of its "streets" list that has
 // none, from `streets` (the file's own list, in its order). Nothing else moves; stripped, the text is as it was (the bake
 // key does not see it). Empty (with `err`) when the list does not fit.
-std::string insertStreetNamesText(const std::string& text, const std::vector<PlannedStreet>& streets, std::string* err = nullptr);
+std::string insertStreetNamesText(const std::string& text, const std::vector<ModelStreet>& streets, std::string* err = nullptr);
 // WRITES EACH JUNCTION'S CONTROL INTO A ROAD FILE'S TEXT IN PLACE (ADR-0421): a "control" in each junction object of its
 // "junctions" list that has none, from `controls` (each junction's id and control, in the list's order; empty: none).
 // Nothing else moves; the bake key does not see it (keyedRoadFileText). Empty (with `err`) when the list does not fit.
@@ -161,7 +162,7 @@ std::string insertJunctionControlsText(const std::string& text, const std::vecto
 
 // ---- a junction's points (ADR-0425) -------------------------------------------------------------------------------------
 // A junction the layout spread over several points (it has stretches of road inside it) states which roads meet at each
-// (road_graph_spec.h PlannedNode): what the street map joins its arms and inside stretches by. The planner writes them as
+// (road_model_parts.h ModelNode): what the street map joins its arms and inside stretches by. The planner writes them as
 // it lays out a city (deriveLayout, planControls). A file whose layout was written before them gets them ONCE from the
 // one-off tool (`lanes_tool layout <file> --nodes --write`): the nodes as the layout finds them (layoutJunctionFacts:
 // today's inference, `source`'s end tolerance), each placed in the one junction of the file that holds all its points (an
@@ -169,7 +170,7 @@ std::string insertJunctionControlsText(const std::string& text, const std::vecto
 // node or at two, an inside stretch's end at no node.
 struct JunctionNodes {
     std::string junction;
-    std::vector<PlannedNode> nodes;
+    std::vector<ModelNode> nodes;
 };
 std::vector<JunctionNodes> junctionNodes(const RoadLabGraph& g, LayoutSource source, std::vector<std::string>* notes = nullptr);
 // WRITES THEM INTO A ROAD FILE'S TEXT IN PLACE: a "nodes" member in each listed junction that has none and has nodes (the
@@ -224,11 +225,11 @@ private:
 };
 // The arms of `pj` in ring order, by the measure above: indices into pj.arms. `notes` (optional): each arm measured
 // otherwise than the rule says, and each pair measuring exactly the same, in words.
-std::vector<std::size_t> armRing(const PlannedJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes = nullptr);
+std::vector<std::size_t> armRing(const ModelJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes = nullptr);
 // Puts pj's arms in ring order (armRing), its `through` pairs renumbered to follow.
-void orderArmsRound(PlannedJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes = nullptr);
+void orderArmsRound(ModelJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes = nullptr);
 // Whether pj's stated list, read as a ring (any arm first), differs from the measure's.
-bool ringDiffers(const PlannedJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes = nullptr);
+bool ringDiffers(const ModelJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes = nullptr);
 // THE CHECK (never a gate): the junctions of a graph as read whose stated ring differs from the measure (ids, in list
 // order), and the measure's notes.
 struct ArmRingCheck {

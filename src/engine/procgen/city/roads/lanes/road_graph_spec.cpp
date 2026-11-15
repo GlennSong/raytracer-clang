@@ -396,14 +396,18 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
             g.crossings.push_back(x);
         }
     }
+    // the file names its streets by id; a junction's arm and a street's carry-on hold the street's place in the list
+    std::map<std::string, uint32_t> streetAt;
+    if (spec.contains("streets"))
+        for (std::size_t i = 0; i < spec["streets"].size(); ++i) streetAt[spec["streets"][i].at("id").get<std::string>()] = static_cast<uint32_t>(i);
     if (spec.contains("junctions")) {
-        // THE CONTROL PLAN (PlannedJunction): read as written; a road an arm names must exist, and where the list names
+        // THE CONTROL PLAN (ModelJunction): read as written; a road an arm names must exist, and where the list names
         // controls every junction must name one (a junction left without one is the plan's fault, never filled in here).
         // A list naming none is the road model's layout alone: it declares no control.
         g.listsJunctions = true;
         for (const nlohmann::json& jj : spec["junctions"]) g.declaresJunctions = g.declaresJunctions || jj.contains("control");
         for (const nlohmann::json& jj : spec["junctions"]) {
-            PlannedJunction pj;
+            ModelJunction pj;
             pj.id = jj.at("id").get<std::string>();
             pj.control = jj.value("control", std::string());
             pj.why = jj.value("why", std::string());
@@ -411,23 +415,24 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
             if (jj.contains("at")) pj.at = Vec2(jj["at"].at(0).get<double>(), jj["at"].at(1).get<double>());
             if (g.declaresJunctions && pj.control.empty()) throw std::runtime_error("junction " + pj.id + ": names no control");
             for (const nlohmann::json& aj : jj.at("arms")) {
-                PlannedArm a;
+                ModelArm a;
                 a.road = aj.at("road").get<std::string>();
-                a.at = aj.at("at").get<double>();
+                a.station = aj.at("at").get<double>();
                 const std::string spine = aj.at("spine").get<std::string>();
                 if (spine != "in" && spine != "out") throw std::runtime_error("junction " + pj.id + ": arm " + a.road + ": spine is \"" + spine + "\", expected \"in\" or \"out\"");
                 a.spineIn = spine == "in";
                 if (aj.contains("regulations")) a.regulations = aj["regulations"].get<std::vector<std::string>>();
                 if (!g.index.count(a.road)) throw std::runtime_error("junction " + pj.id + ": arm names unknown road " + a.road);
-                a.street = aj.value("street", std::string());
-                if (aj.contains("heading")) { a.hasHeading = true; a.heading = aj["heading"].get<double>(); }
+                const std::map<std::string, uint32_t>::const_iterator street = streetAt.find(aj.value("street", std::string()));
+                if (street != streetAt.end()) a.street = ModelStreetId(street->second);
+                if (aj.contains("heading")) a.heading = aj["heading"].get<double>();
                 pj.arms.push_back(a);
             }
             // (each arm once: the list is an order of the junction's arms, ADR-0427 -- the same road end twice is no ring)
             for (std::size_t x = 0; x < pj.arms.size(); ++x)
                 for (std::size_t y = x + 1; y < pj.arms.size(); ++y)
-                    if (pj.arms[x].road == pj.arms[y].road && pj.arms[x].at == pj.arms[y].at && pj.arms[x].spineIn == pj.arms[y].spineIn)
-                        throw std::runtime_error("junction " + pj.id + ": arm " + pj.arms[x].road + " at " + std::to_string(pj.arms[x].at) +
+                    if (pj.arms[x].road == pj.arms[y].road && pj.arms[x].station == pj.arms[y].station && pj.arms[x].spineIn == pj.arms[y].spineIn)
+                        throw std::runtime_error("junction " + pj.id + ": arm " + pj.arms[x].road + " at " + std::to_string(pj.arms[x].station) +
                                                  " is listed twice (arms " + std::to_string(x) + " and " + std::to_string(y) + ")");
             if (jj.contains("through"))
                 for (const nlohmann::json& tj : jj["through"]) {
@@ -436,11 +441,11 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                         if (k < 0 || k >= static_cast<int>(pj.arms.size()))
                             throw std::runtime_error("junction " + pj.id + ": through names arm " + std::to_string(k) + ", which it does not have");
                     if (pair[0] == pair[1]) throw std::runtime_error("junction " + pj.id + ": through pairs arm " + std::to_string(pair[0]) + " with itself");
-                    pj.through.push_back(pair);
+                    pj.through.push_back({static_cast<uint32_t>(pair[0]), static_cast<uint32_t>(pair[1])});
                 }
             if (jj.contains("inside"))
                 for (const nlohmann::json& sj : jj["inside"]) {
-                    PlannedStretch st;
+                    ModelStretch st;
                     st.road = sj.at("road").get<std::string>();
                     st.from = sj.at("from").get<double>();
                     st.to = sj.at("to").get<double>();
@@ -450,12 +455,12 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                 }
             if (jj.contains("nodes"))
                 for (const nlohmann::json& nj : jj["nodes"]) {
-                    PlannedNode n;
+                    ModelNode n;
                     n.at = Vec2(nj.at("at").at(0).get<double>(), nj.at("at").at(1).get<double>());
                     for (const nlohmann::json& pt : nj.at("points")) {
-                        PlannedNodePoint p;
+                        ModelNodePoint p;
                         p.road = pt.at("road").get<std::string>();
-                        p.at = pt.at("at").get<double>();
+                        p.station = pt.at("at").get<double>();
                         if (!g.index.count(p.road)) throw std::runtime_error("junction " + pj.id + ": a node names unknown road " + p.road);
                         n.points.push_back(p);
                     }
@@ -465,13 +470,13 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         }
     }
     if (spec.contains("streets")) {
-        // THE STREETS (PlannedStreet): read as written; the road must exist, the stretch run forwards, and each end name a
+        // THE STREETS (ModelStreet): read as written; the road must exist, the stretch run forwards, and each end name a
         // junction of the list (or none)
         g.listsStreets = true;
-        std::set<std::string> junctionIds;
-        for (const PlannedJunction& pj : g.junctions) junctionIds.insert(pj.id);
+        std::map<std::string, uint32_t> junctionAt;
+        for (std::size_t j = 0; j < g.junctions.size(); ++j) junctionAt[g.junctions[j].id] = static_cast<uint32_t>(j);
         for (const nlohmann::json& sj : spec["streets"]) {
-            PlannedStreet st;
+            ModelStreet st;
             st.id = sj.at("id").get<std::string>();
             st.road = sj.at("road").get<std::string>();
             st.from = sj.at("from").get<double>();
@@ -481,23 +486,22 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
             if (sj.contains("junctions"))
                 for (std::size_t k = 0; k < 2 && k < sj["junctions"].size(); ++k) {
                     const nlohmann::json& v = sj["junctions"][k];
-                    st.junctions[k] = v.is_string() ? v.get<std::string>() : std::string();
-                    if (!st.junctions[k].empty() && !junctionIds.count(st.junctions[k]))
-                        throw std::runtime_error("street " + st.id + ": names unknown junction " + st.junctions[k]);
+                    const std::string id = v.is_string() ? v.get<std::string>() : std::string();
+                    if (id.empty()) continue;
+                    if (!junctionAt.count(id)) throw std::runtime_error("street " + st.id + ": names unknown junction " + id);
+                    st.junctions[k] = ModelJunctionId(junctionAt.at(id));
                 }
             if (sj.contains("carries_on"))
                 for (std::size_t k = 0; k < 2 && k < sj["carries_on"].size(); ++k) {
                     const nlohmann::json& v = sj["carries_on"][k];
-                    st.carriesOn[k] = v.is_string() ? v.get<std::string>() : std::string();
+                    const std::string id = v.is_string() ? v.get<std::string>() : std::string();
+                    if (id.empty()) continue;
+                    if (!streetAt.count(id)) throw std::runtime_error("street " + st.id + ": carries on into unknown street " + id);
+                    st.carriesOn[k] = ModelStreetId(streetAt.at(id));
                 }
             st.name = sj.value("name", std::string());
             g.streets.push_back(st);
         }
-        std::set<std::string> streetIds;
-        for (const PlannedStreet& st : g.streets) streetIds.insert(st.id);
-        for (const PlannedStreet& st : g.streets)
-            for (const std::string& c : st.carriesOn)
-                if (!c.empty() && !streetIds.count(c)) throw std::runtime_error("street " + st.id + ": carries on into unknown street " + c);
     }
     if (spec.contains("arms_in_ring")) {
         // THE JUNCTIONS' ARMS LISTED IN THEIR RING (ADR-0427): the file's word for it, true or absent

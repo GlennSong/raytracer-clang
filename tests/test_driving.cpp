@@ -269,6 +269,7 @@ struct IncludeWalk {
 // The engine headers the library may include, and with them everything they include.
 const std::vector<std::string> kLibraryAllowed = {
     "engine/procgen/city/roads/lane_graph.h",   // the road it drives on (read, never owned)
+    "engine/procgen/city/roads/graph_index.h",  // ... whose index types it brings
     "engine/procgen/city/polygon.h",            // ... which the lane graph's plan shapes use
     "engine/bundle/bundle.h",                   // the repo's hash (FNV) folded field by field
     "engine/bundle/binary_stream.h",            // ... which bundle.h brings
@@ -279,6 +280,8 @@ const std::vector<std::string> kScriptingAllowed = {
     "engine/scripting/lua_state.h", "engine/scripting/script_vm.h", "engine/procgen/city/roads/lanes/control_plan.h",
     "engine/procgen/city/roads/lanes/road_graph_spec.h", "engine/procgen/city/road_spec.h",
     "engine/procgen/city/polyline.h",
+    // the road file's junctions and streets are the road model's own types, which road_graph_spec.h brings
+    "engine/procgen/city/roads/road_model_parts.h", "engine/procgen/city/road_network.h",
 };
 
 std::vector<std::string> breachesOf(const std::filesystem::path& dir, const std::vector<std::string>& allowed,

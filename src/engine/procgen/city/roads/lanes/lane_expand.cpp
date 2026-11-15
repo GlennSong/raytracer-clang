@@ -165,24 +165,19 @@ void placeOnStreets(const RoadLabGraph& g, LaneSet& L) {
     for (std::size_t i = 0; i < g.streets.size(); ++i) streetsOf[g.streets[i].road].push_back(static_cast<int>(i));
     for (std::pair<const std::string, std::vector<int>>& kv : streetsOf)
         std::stable_sort(kv.second.begin(), kv.second.end(), [&](int a, int b) { return g.streets[static_cast<size_t>(a)].from < g.streets[static_cast<size_t>(b)].from; });
-    std::map<std::string, int> junctionIndex;
-    for (std::size_t j = 0; j < g.junctions.size(); ++j) junctionIndex[g.junctions[j].id] = static_cast<int>(j);
-    auto junctionOf = [&](const std::string& id) {
-        const std::map<std::string, int>::const_iterator it = junctionIndex.find(id);
-        return id.empty() || it == junctionIndex.end() ? -1 : it->second;
-    };
+    auto junctionOf = [](ModelJunctionId j) { return j.valid() ? static_cast<int>(j.index) : -1; };
     for (Lane& l : L.lanes) {
         if (l.parent < 0) continue;
         const std::map<std::string, std::vector<int>>::const_iterator it = streetsOf.find(g.edges[static_cast<size_t>(l.parent)].id);
         if (it == streetsOf.end()) continue;
         for (int si : it->second) {
-            const PlannedStreet& st = g.streets[static_cast<size_t>(si)];
+            const ModelStreet& st = g.streets[static_cast<size_t>(si)];
             const double lo = std::max(l.spineFrom, st.from), hi = std::min(l.spineTo, st.to);
             if (hi > lo) l.streets.push_back(LaneStreetSpan{si, lo, hi});
         }
         if (l.streets.empty()) continue;
-        const PlannedStreet& first = g.streets[static_cast<size_t>(l.streets.front().street)];
-        const PlannedStreet& last = g.streets[static_cast<size_t>(l.streets.back().street)];
+        const ModelStreet& first = g.streets[static_cast<size_t>(l.streets.front().street)];
+        const ModelStreet& last = g.streets[static_cast<size_t>(l.streets.back().street)];
         const int atFrom = l.spineFrom <= first.from + kReachesStreetEnd ? junctionOf(first.junctions[0]) : -1;
         const int atTo = l.spineTo >= last.to - kReachesStreetEnd ? junctionOf(last.junctions[1]) : -1;
         l.junctionAtStart = l.dir > 0 ? atFrom : atTo;

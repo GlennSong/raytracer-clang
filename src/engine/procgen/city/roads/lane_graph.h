@@ -25,6 +25,7 @@
 
 #include "engine/bundle/binary_stream.h"
 #include "engine/procgen/city/polygon.h"   // Vec2, Real
+#include "engine/procgen/city/roads/graph_index.h"   // GraphIndex, Range, kNoIndex
 
 #include <cstdint>
 #include <limits>
@@ -37,25 +38,6 @@ namespace bundle {
 class BundleWriter;
 class Bundle;
 }  // namespace bundle
-
-// AN INDEX INTO ONE OF THE GRAPH'S ARRAYS, typed by what it points at, so a path's index cannot be passed where a
-// junction's is wanted. kNone is "no such thing" (a lane's junction, a connector's section). (handle.h's Handle is
-// for slots that are freed and reused, and carries a generation; the graph never frees, so it would only double the
-// size of every reference.)
-constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
-
-template <typename Tag>
-struct GraphIndex {
-    static constexpr uint32_t kNone = kNoIndex;
-    uint32_t index = kNone;
-
-    GraphIndex() = default;
-    explicit GraphIndex(uint32_t i) : index(i) {}
-    bool valid() const { return index != kNone; }
-    bool operator==(const GraphIndex& o) const { return index == o.index; }
-    bool operator!=(const GraphIndex& o) const { return index != o.index; }
-    bool operator<(const GraphIndex& o) const { return index < o.index; }
-};
 
 struct PathTag {};
 struct SectionTag {};
@@ -79,15 +61,6 @@ using TagMask = uint32_t;
 constexpr uint32_t kMaxTagNames = 32;
 // Every vehicle, whatever its tags (a crossing point's CrossingPoint::aTags / otherTags).
 constexpr TagMask kEveryVehicle = ~TagMask(0);
-
-// A stretch of one of the graph's shared arrays: `count` entries from `first`.
-struct Range {
-    uint32_t first = 0;
-    uint32_t count = 0;
-    uint32_t end() const { return first + count; }
-    bool operator==(const Range& o) const { return first == o.first && count == o.count; }
-    bool operator!=(const Range& o) const { return !(*this == o); }
-};
 
 // Whether a path runs along a road or through a junction.
 enum class PathKind : uint8_t { Lane, Connector };

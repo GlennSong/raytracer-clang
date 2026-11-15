@@ -1854,7 +1854,7 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
                 const bool armStretch = std::fabs(lo - std::get<0>(x)) <= tol && std::fabs(hi - std::get<1>(x)) <= tol;
                 const bool onIt = lo >= std::get<0>(x) - tol && hi <= std::get<1>(x) + tol;
                 bool inside = false;   // (an inside stretch may hold a shorter gap; an arm's stretch must be matched end to end)
-                for (const PlannedStretch& st : r.graph.junctions[gp->junction].inside)
+                for (const ModelStretch& st : r.graph.junctions[gp->junction].inside)
                     inside = inside || (st.road == road && std::fabs(st.from - std::get<0>(x)) < 1e-9 && std::fabs(st.to - std::get<1>(x)) < 1e-9);
                 within = within || armStretch || (inside && onIt);
             }

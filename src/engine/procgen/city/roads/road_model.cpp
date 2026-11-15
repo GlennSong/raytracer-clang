@@ -29,9 +29,6 @@ namespace {
 
 using roads::lanes::EdgeSpec;
 using roads::lanes::Lane;
-using roads::lanes::PlannedArm;
-using roads::lanes::PlannedJunction;
-using roads::lanes::PlannedStreet;
 using roads::lanes::Result;
 using roads::lanes::RoadClassSpec;
 using roads::lanes::RoadLabGraph;
@@ -117,88 +114,53 @@ bool junctionLit(const ModelJunction& J) {
 RoadModel plannedRoadModel(const RoadLabGraph& g) {
     RoadModel m;
     m.name = g.name;
-    std::map<std::string, uint32_t> streetIndex, junctionIndex;
-    for (std::size_t i = 0; i < g.streets.size(); ++i) streetIndex[g.streets[i].id] = static_cast<uint32_t>(i);
-    for (std::size_t i = 0; i < g.junctions.size(); ++i) junctionIndex[g.junctions[i].id] = static_cast<uint32_t>(i);
-    auto streetOf = [&](const std::string& id) {
-        const std::map<std::string, uint32_t>::const_iterator it = streetIndex.find(id);
-        return it == streetIndex.end() ? ModelStreetId() : ModelStreetId(it->second);
-    };
-    auto junctionOf = [&](const std::string& id) {
-        const std::map<std::string, uint32_t>::const_iterator it = junctionIndex.find(id);
-        return it == junctionIndex.end() ? ModelJunctionId() : ModelJunctionId(it->second);
-    };
-
-    // ---- junctions, as the road file states them -------------------------------------------------------------------
+    // ---- junctions and streets: the road file's own, whole (road_graph_spec.h RoadLabGraph) -----------------------------
     // (their arms in the order the file lists them: the stated ring, ADR-0427, where the file marks its lists so -- trusted,
     // never measured or re-sorted here; a file with junctions and no mark is said, once, naming the command)
+    m.junctions = g.junctions;
+    m.streets = g.streets;
     m.armsInRing = g.armsInRing;
     if (!g.junctions.empty() && !g.armsInRing)
         m.problems.push_back("the road file does not state that its junctions' arms are listed in their ring (\"arms_in_ring\"): run `" +
                              std::string(roads::lanes::kArmOrderCommand) + "`");
-    // (each arm's box edge and stop line, and the junction's area along each road: the one rule, from the stated junction,
-    // deck_mesh.h junctionAreas -- what the paint draws and the lane level ends its lanes at)
+    // What only the model adds to a junction: each arm's box edge and stop line and the junction's area along each road
+    // (the one rule, from the stated junction, deck_mesh.h junctionAreas -- what the paint draws and the lane level ends
+    // its lanes at), and what the street map needs to drive each stretch inside it (ADR-0425).
     const std::vector<roads::lanes::JunctionArea> areas = roads::lanes::junctionAreas(g);
-    for (const PlannedJunction& pj : g.junctions) {
-        const roads::lanes::JunctionArea& area = areas[m.junctions.size()];
-        ModelJunction J;
-        J.id = pj.id;
-        J.at = pj.at;
-        if (g.declaresJunctions) {
-            J.control = pj.control;
-            J.why = pj.why;
+    for (std::size_t j = 0; j < m.junctions.size(); ++j) {
+        ModelJunction& J = m.junctions[j];
+        const roads::lanes::JunctionArea& area = areas[j];
+        if (!g.declaresJunctions) {   // a list that plans no control states none
+            J.control.clear();
+            J.why.clear();
         }
-        for (const PlannedArm& a : pj.arms) {
-            ModelArm arm;
-            arm.street = streetOf(a.street);
-            arm.road = a.road;
-            arm.station = a.at;
-            arm.spineIn = a.spineIn;
-            arm.heading = a.hasHeading ? a.heading : kNotStated;
-            arm.regulations = a.regulations;
-            const roads::lanes::ArmStop& stop = area.arms[J.arms.size()];
+        for (std::size_t a = 0; a < J.arms.size(); ++a) {
+            const roads::lanes::ArmStop& stop = area.arms[a];
             if (stop.edge >= 0) {
-                arm.boxEdge = stop.boxEdge;
-                arm.stopLine = stop.stopLine;
+                J.arms[a].boxEdge = stop.boxEdge;
+                J.arms[a].stopLine = stop.stopLine;
             }
-            J.arms.push_back(arm);
         }
         for (const roads::lanes::JunctionSpan& sp : area.spans) J.boxes.push_back(ModelStretch{g.edges[static_cast<std::size_t>(sp.edge)].id, sp.s0, sp.s1});
-        for (const std::array<int, 2>& t : pj.through) J.through.push_back({static_cast<uint32_t>(t[0]), static_cast<uint32_t>(t[1])});
-        for (const roads::lanes::PlannedStretch& st : pj.inside) {
-            // a stretch of road inside the junction, with what the street map needs to drive it (ADR-0425)
-            ModelStretch in{st.road, st.from, st.to};
-            const std::map<std::string, int>::const_iterator ei = g.index.find(st.road);
-            if (ei != g.index.end()) {
-                const EdgeSpec& e = g.edges[static_cast<std::size_t>(ei->second)];
-                in.edge = static_cast<uint32_t>(ei->second);
-                in.line = appendLine(m, e, st.from, st.to);
-                bool fits = true;
-                in.section = sectionOf(g, e, &fits);
-                in.oneWay = (e.lanes.fwd > 0) != (e.lanes.back > 0);
-            }
-            J.inside.push_back(in);
+        for (ModelStretch& in : J.inside) {
+            const std::map<std::string, int>::const_iterator ei = g.index.find(in.road);
+            if (ei == g.index.end()) continue;
+            const EdgeSpec& e = g.edges[static_cast<std::size_t>(ei->second)];
+            in.edge = static_cast<uint32_t>(ei->second);
+            in.line = appendLine(m, e, in.from, in.to);
+            bool fits = true;
+            in.section = sectionOf(g, e, &fits);
+            in.oneWay = (e.lanes.fwd > 0) != (e.lanes.back > 0);
         }
-        for (const roads::lanes::PlannedNode& pn : pj.nodes) {
-            ModelNode n;
-            n.at = pn.at;
-            for (const roads::lanes::PlannedNodePoint& p : pn.points)
-                n.points.push_back(ModelNodePoint{static_cast<uint32_t>(g.index.at(p.road)), p.at});
-            J.nodes.push_back(n);
-        }
-        m.junctions.push_back(std::move(J));
+        for (ModelNode& n : J.nodes)
+            for (ModelNodePoint& p : n.points) p.edge = static_cast<uint32_t>(g.index.at(p.road));
     }
 
-    // ---- streets, their cross-sections from their road's class and lanes ----------------------------------------------
+    // What only the model adds to a street: its road's index, its cross-section from its road's class and lanes, what its
+    // road posts and allows, and its centre line.
     std::set<uint32_t> parkingRefused;   // roads already reported for kerb parking that does not fit
-    for (const PlannedStreet& st : g.streets) {
-        ModelStreet S;
-        S.id = st.id;
-        S.road = st.road;
-        S.edge = static_cast<uint32_t>(g.index.at(st.road));
-        S.from = st.from;
-        S.to = st.to;
-        S.junctions = {junctionOf(st.junctions[0]), junctionOf(st.junctions[1])};
+    for (ModelStreet& S : m.streets) {
+        S.edge = static_cast<uint32_t>(g.index.at(S.road));
         const EdgeSpec& e = g.edges[S.edge];
         {
             bool fits = true;
@@ -213,18 +175,7 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
         S.lotsTo = e.lotsTo;
         S.frontageOf = e.frontageOf;
         // its centre line: the road's spine from `from` to `to`, its straight runs thinned to within kLineTolerance
-        S.line = appendLine(m, e, st.from, st.to);
-        m.streets.push_back(std::move(S));
-    }
-    // where a street only carries on into another (no junction there: ADR-0419), as the road file states it
-    {
-        std::map<std::string, uint32_t> streetIndex;
-        for (std::size_t i = 0; i < m.streets.size(); ++i) streetIndex[m.streets[i].id] = static_cast<uint32_t>(i);
-        for (std::size_t i = 0; i < g.streets.size() && i < m.streets.size(); ++i)
-            for (std::size_t k = 0; k < 2; ++k) {
-                const std::map<std::string, uint32_t>::const_iterator it = streetIndex.find(g.streets[i].carriesOn[k]);
-                if (it != streetIndex.end()) m.streets[i].carriesOn[k] = ModelStreetId(it->second);
-            }
+        S.line = appendLine(m, e, S.from, S.to);
     }
 
     // ---- ramps, as their anchors state them -------------------------------------------------------------------------------
@@ -269,14 +220,14 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
     {
         const AttachmentKinds& kinds = attachmentKinds();
         const std::string nameKind = kinds.use("street_name");
-        for (std::size_t i = 0; i < g.streets.size() && i < m.streets.size(); ++i) {
-            if (g.streets[i].name.empty()) continue;
+        for (std::size_t i = 0; i < m.streets.size(); ++i) {
+            if (m.streets[i].name.empty()) continue;
             ModelAttachment a;
             a.kind = nameKind;
             a.street = ModelStreetId(static_cast<uint32_t>(i));
-            a.text = g.streets[i].name;
+            a.text = m.streets[i].name;
             std::string why;
-            if (!attach(m, a, kinds, &why)) m.problems.push_back("street " + g.streets[i].id + ": its name is not attached: " + why);
+            if (!attach(m, a, kinds, &why)) m.problems.push_back("street " + m.streets[i].id + ": its name is not attached: " + why);
         }
     }
 
@@ -287,7 +238,7 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
     if (!g.declaresJunctions) m.notStated.push_back("controls and signs: the road file plans none (city_plan controls)");
     bool anyLimit = false, anyName = false;
     for (const EdgeSpec& e : g.edges) anyLimit = anyLimit || e.speedLimit > 0;
-    for (const PlannedStreet& st : g.streets) anyName = anyName || !st.name.empty();
+    for (const ModelStreet& st : g.streets) anyName = anyName || !st.name.empty();
     if (!anyLimit) m.notStated.push_back("speed limits: no road posts one (the rule set's default for each class holds)");
     if (!anyName) m.notStated.push_back("street names: the road file names no street (lanes_tool layout --names writes them)");
     if (!g.declaresCrossings) m.notStated.push_back("crossings: the road file declares none (the design stage works them out from heights)");
@@ -346,12 +297,11 @@ RoadModel assembleRoadModel(const Result& r) {
     m.notStated.erase(std::remove(m.notStated.begin(), m.notStated.end(), std::string(kBuiltLayerAbsent)), m.notStated.end());
 
     // ---- each junction's height: the drawn deck at it, along its first arm's road -------------------------------------
-    for (std::size_t j = 0; j < m.junctions.size() && j < g.junctions.size(); ++j) {
-        const PlannedJunction& pj = g.junctions[j];
-        if (pj.arms.empty() || !r.heights) continue;
-        const EdgeSpec* e = g.find(pj.arms.front().road);
+    for (ModelJunction& J : m.junctions) {
+        if (J.arms.empty() || !r.heights) continue;
+        const EdgeSpec* e = g.find(J.arms.front().road);
         if (e && e->xy.size() >= 2)
-            m.junctions[j].height = r.heights->deckRoad(g.index.at(e->id), roads::lanes::pointAt(e->xy, e->s, pj.arms.front().at));
+            J.height = r.heights->deckRoad(g.index.at(e->id), roads::lanes::pointAt(e->xy, e->s, J.arms.front().station));
     }
 
     // ---- lanes, as the builder laid them: their curves, heights, slots, streets and end junctions ----------------------

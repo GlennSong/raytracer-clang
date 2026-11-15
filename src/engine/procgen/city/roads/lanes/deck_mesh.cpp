@@ -738,20 +738,20 @@ bool paintsJunctionBoxes(const RoadLabGraph& g, const EdgeSpec& e) {
 std::vector<JunctionArea> junctionAreas(const RoadLabGraph& g) {
     std::vector<JunctionArea> out;
     out.reserve(g.junctions.size());
-    for (const PlannedJunction& pj : g.junctions) {
+    for (const ModelJunction& pj : g.junctions) {
         JunctionArea A;
         // each arm's road and mouth
         std::vector<Vec2> mouth(pj.arms.size(), pj.at);
         for (std::size_t k = 0; k < pj.arms.size(); ++k) {
-            const PlannedArm& pa = pj.arms[k];
+            const ModelArm& pa = pj.arms[k];
             ArmStop a;
-            a.station = pa.at;
+            a.station = pa.station;
             a.spineIn = pa.spineIn;
             const std::map<std::string, int>::const_iterator ei = g.index.find(pa.road);
             if (ei != g.index.end()) {
                 a.edge = ei->second;
                 const EdgeSpec& e = g.edges[static_cast<std::size_t>(a.edge)];
-                if (e.xy.size() >= 2) mouth[k] = pointAt(e.xy, e.s, pa.at);
+                if (e.xy.size() >= 2) mouth[k] = pointAt(e.xy, e.s, pa.station);
                 a.painted = paintsJunctionBoxes(g, e);
             }
             A.arms.push_back(a);
@@ -761,10 +761,9 @@ std::vector<JunctionArea> junctionAreas(const RoadLabGraph& g) {
         for (std::size_t k = 0; k < A.arms.size(); ++k) {
             ArmStop& a = A.arms[k];
             std::vector<bool> ownStreet(A.arms.size(), false);
-            for (const std::array<int, 2>& t : pj.through)
-                for (int side = 0; side < 2; ++side)
-                    if (t[side] == static_cast<int>(k) && t[1 - side] >= 0 && static_cast<std::size_t>(t[1 - side]) < A.arms.size())
-                        ownStreet[static_cast<std::size_t>(t[1 - side])] = true;
+            for (const std::array<uint32_t, 2>& t : pj.through)
+                for (std::size_t side = 0; side < 2; ++side)
+                    if (t[side] == k && t[1 - side] < A.arms.size()) ownStreet[t[1 - side]] = true;
             double atPoint = -1, anywhere = 0;
             int rankAtPoint = -1, rankAnywhere = -1;
             for (std::size_t o = 0; o < A.arms.size(); ++o) {
@@ -795,7 +794,7 @@ std::vector<JunctionArea> junctionAreas(const RoadLabGraph& g) {
         };
         for (const ArmStop& a : A.arms)
             if (a.edge >= 0) cover(a.edge, a.boxEdge, a.station);
-        for (const PlannedStretch& st : pj.inside) {
+        for (const ModelStretch& st : pj.inside) {
             const std::map<std::string, int>::const_iterator ei = g.index.find(st.road);
             if (ei != g.index.end()) cover(ei->second, st.from, st.to);
         }

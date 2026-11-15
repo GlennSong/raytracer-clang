@@ -14,6 +14,7 @@
 #include "engine/procgen/city/polyline.h"   // stations
 #include "engine/procgen/city/polygon.h"      // Vec2
 #include "engine/procgen/city/road_spec.h"    // RoadSpec / RoadBand
+#include "engine/procgen/city/roads/road_model_parts.h"   // ModelJunction, ModelStreet: the road file's junctions and streets ARE the model's
 #include <nlohmann/json.hpp>
 #include <array>
 #include <map>
@@ -59,89 +60,6 @@ struct RampAnchor {
 };
 
 struct ConnectorSpec { std::string from, to; double toS = 0; };
-
-// A JUNCTION AS PLANNED: THE CONTROL PLAN (issue #240, driving-model-design.md 5.1; control_plan.h writes it). Which
-// control a junction has (traffic lights, an all-way stop, stop or give-way signs on its minor roads, or nothing) and
-// which regulations stand where each road arrives (a stop sign), decided by the city planner from the rule set's
-// placement policy and written here as INTENT: the lane graph builder carries it through and checks it, never works a
-// control out for itself ("roads: no guessing"). Authored at the graph's top level:
-//   "junctions": [{"id": "j12", "at": [x, y], "control": "stop", "why": "a local street meets a collector",
-//                  "arms": [{"road": "s4", "at": 87.3, "spine": "in", "regulations": ["stop"]}, ...]}]
-// An ARM is one road's way into the junction: the road, the station along its spine where it meets the junction, and
-// whether its spine runs INto the junction there (its forward lanes arrive) or OUT of it (its backward lanes arrive).
-// A road that passes through (a ramp ending on a street's side) is two arms, one each way. A junction the planner
-// spread over several nodes (streets meeting so close together that they make one junction) lists only the arms
-// that lead out of it, and names the stretches of road lying between its nodes as `inside` ({"road", "from", "to"},
-// stations along the road's spine): the builder may still make two junctions there, joined by such a stretch, and
-// both take this one's control. `hand`: written by a person, so re-planning keeps it as it is.
-//
-// THE SAME LIST IS THE ROAD MODEL'S JUNCTIONS (docs/road-model-design.md step 1, ADR-0417): one list of junctions in a
-// road file, never two. Besides the control plan's fields, a junction may say which STREET each arm is (`street`, an id
-// from the graph's "streets" list), the way the arm leaves the junction (`heading`, degrees in plan coordinates,
-// counter-clockwise from +x), and which pairs of its arms are one street carrying on through it (`through`: arm indices).
-// A list that carries no control at all is the layout alone: it plans no control, and every junction says so (the lane
-// graph builder then gives each junction the options' one control, as a graph with no list always did). A list where
-// some junctions name a control and some do not is refused: a control plan that leaves a junction out is the plan's
-// fault. The road model's own members (street, heading, through, and the "streets" list) are not part of the city's
-// bake key (city_producer.cpp, road_layout.h stripLayoutText): writing them into a file re-bakes nothing.
-struct PlannedArm {
-    std::string road;
-    double at = 0;                          // station along the road's spine
-    bool spineIn = true;                    // the spine runs into the junction here
-    std::vector<std::string> regulations;   // kinds standing at the end of each lane that arrives by this arm
-    std::string street;                     // the street this arm is (PlannedStreet::id); empty: not stated
-    bool hasHeading = false;
-    double heading = 0;                     // degrees: the way the arm leaves the junction, plan coordinates
-};
-struct PlannedStretch {
-    std::string road;
-    double from = 0, to = 0;                // stations along the road's spine, from <= to
-};
-// ONE POINT OF A JUNCTION SPREAD OVER SEVERAL (ADR-0425): where roads meet inside it -- the road ends that meet there, a
-// road's station where another ends on its side, or where two roads cross at grade. Each of its points is a road and a
-// station along that road's spine, written to the centimetre as the arms' are. Authored on the junction:
-//   "nodes": [{"at": [x, y], "points": [{"road": "s21", "at": 90.89}, {"road": "s313", "at": 24.13}]}, ...]
-// A junction with no stretch of road inside it is one point (its `at`) and lists none. A junction with stretches inside it
-// lists every one of its points, so a reader joins its arms and its inside stretches by these stations, never by where
-// they lie (the street map, road_model.h). Part of the layout: the bake key and the lane graph's key do not see it.
-struct PlannedNodePoint {
-    std::string road;
-    double at = 0;
-};
-struct PlannedNode {
-    Vec2 at;
-    std::vector<PlannedNodePoint> points;
-};
-struct PlannedJunction {
-    std::string id, control, why;
-    Vec2 at;
-    std::vector<PlannedArm> arms;
-    std::vector<PlannedStretch> inside;     // the stretches of road lying between its nodes
-    std::vector<PlannedNode> nodes;         // its points, when it has stretches inside it (see PlannedNode)
-    std::vector<std::array<int, 2>> through;   // pairs of arms (indices into arms) that are one street carrying on through
-    bool hand = false;
-};
-
-// A STREET AS PLANNED (road-model-design.md step 1): a stretch of one road-file edge from one junction to the next, or to
-// a dead end -- `from` and `to` stations along the edge's spine, and the junction at each end (a PlannedJunction id;
-// empty: none -- a dead end, or a ramp's end anchored to a lane of its host, which the ramp itself states). An edge that
-// passes through junctions is several streets; the stretches of it inside a junction belong to no street. Authored at the
-// graph's top level: "streets": [{"id": "s12/1", "road": "s12", "from": 40.2, "to": 131.7, "junctions": ["j3", "j9"]}].
-// WHERE A STREET ONLY CARRIES ON (ADR-0419): two road ends that meet with nothing else there (one road running on as
-// another, or a bend) are no junction -- no junction area, no stop line. Each of the two streets names the other at that
-// end: "carries_on": [null, "s13"] (at `from`, at `to`; written only where one is set). One street carrying on, in two
-// road-file edges.
-// ITS NAME (ADR-0420): "name": "Oak Street", the planner's (or, for a file made before, the one-off layout tool's, for a
-// person to read and edit). Every street of one RUN -- streets that are one street carrying on: a junction's through
-// pairs, carries_on, a divided road's two carriageways (road_layout.h streetRuns) -- carries the same name. Empty: the
-// street carries no name (a freeway, a ramp: assets/data/streets.json "unnamed"), or the file names none.
-struct PlannedStreet {
-    std::string id, road;
-    double from = 0, to = 0;
-    std::array<std::string, 2> junctions;   // at `from`, at `to`
-    std::array<std::string, 2> carriesOn;   // the street this one carries on into at `from`, at `to` (empty: none)
-    std::string name;
-};
 
 // A DIVIDED ROAD'S TWO CARRIAGEWAYS AS PLANNED (ADR-0419): two one-way road-file edges that are one road, its two ways.
 // Where both meet the same street, the planner built them as ONE junction there, however far apart along the street
@@ -327,12 +245,12 @@ struct RoadLabGraph {
     std::vector<ConnectorSpec> connectors;
     std::vector<CrossingSpec> crossings;  // as planned (see CrossingSpec)
     bool declaresCrossings = false;       // the graph carried a "crossings" list: every crossing is on it
-    // THE CONTROL PLAN (see PlannedJunction). A graph whose "junctions" list names controls DECLARES every junction's
+    // THE CONTROL PLAN (road_model_parts.h ModelJunction). A graph whose "junctions" list names controls DECLARES every junction's
     // control: the lane graph builder reports a junction it builds that no planned one names. Without the list, or with a
     // list that names no control (the road model's layout alone), each junction carries the lane graph options' one
     // control, as before.
-    std::vector<PlannedJunction> junctions;
-    bool declaresJunctions = false;       // the list names each junction's CONTROL (the control plan); see PlannedArm
+    std::vector<ModelJunction> junctions;
+    bool declaresJunctions = false;       // the list names each junction's CONTROL (the control plan)
     bool listsJunctions = false;          // the graph carried a "junctions" list at all, with controls or without
     // THE JUNCTIONS' ARMS ARE LISTED IN THEIR RING (ADR-0427), stated at the graph's top level beside the junctions list,
     // "arms_in_ring": true -- the file's word that every junction's "arms" list goes round it counter-clockwise in plan
@@ -347,8 +265,8 @@ struct RoadLabGraph {
     // THE DIVIDED ROADS AS PLANNED (DividedPair); `listsDivided`: the graph carried the list.
     std::vector<DividedPair> divided;
     bool listsDivided = false;
-    // THE STREETS AS PLANNED (PlannedStreet); `listsStreets`: the graph carried the list.
-    std::vector<PlannedStreet> streets;
+    // THE STREETS AS PLANNED (road_model_parts.h ModelStreet); `listsStreets`: the graph carried the list.
+    std::vector<ModelStreet> streets;
     bool listsStreets = false;
     // THE LANE LEVEL'S RULES (ADR-0426), stated at the graph's top level, "lane_rules": {"solid_before_stop_line": 20.0}:
     // how far back from a stop line the lines between lanes running the same way are solid (no changing lanes on the

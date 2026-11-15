@@ -54,8 +54,8 @@
 // street, a junction, or an arm of a junction), never a branch in code. The first users: a street's NAME (from the road
 // file) and a NAME SIGN at a junction arm (the loader's sign plan).
 
-#include "engine/procgen/city/road_network.h"        // RoadClass: the engine's class of a street
-#include "engine/procgen/city/roads/lane_graph.h"   // GraphIndex, Range, kNoIndex: the lane graph's index types
+#include "engine/procgen/city/roads/lane_graph.h"        // Turn; bundle::BinWriter
+#include "engine/procgen/city/roads/road_model_parts.h"  // junctions, arms, streets: the types the road file is read into
 
 #include <nlohmann/json.hpp>
 
@@ -76,108 +76,6 @@ namespace roads::lanes {
 struct Result;
 struct RoadLabGraph;
 }  // namespace roads::lanes
-
-struct ModelJunctionTag {};
-struct ModelStreetTag {};
-struct ModelLaneTag {};
-using ModelJunctionId = GraphIndex<ModelJunctionTag>;
-using ModelStreetId = GraphIndex<ModelStreetTag>;
-using ModelLaneId = GraphIndex<ModelLaneTag>;
-
-// No station or height stated.
-constexpr Real kNotStated = std::numeric_limits<Real>::quiet_NaN();
-inline bool stated(Real v) { return !std::isnan(v); }
-
-// ONE ARM: a road's way out of a junction.
-struct ModelArm {
-    ModelStreetId street;            // the street this arm is (none: the road file names none)
-    std::string road;                // the road-file edge
-    Real station = 0;                // where the arm meets the junction, along the road's spine
-    bool spineIn = true;             // the road's spine runs INTO the junction here (the street ends here)
-    Real heading = kNotStated;       // degrees, the way the arm leaves the junction, plan coordinates
-    std::vector<std::string> regulations;   // signs standing at the end of each lane arriving by it (the control plan)
-    // where the junction's area begins and where traffic arriving by this arm stops, along its road's spine: the one rule
-    // from the stated junction (deck_mesh.h junctionAreas, ADR-0428) -- what the paint draws and the lane level reads
-    Real boxEdge = kNotStated;
-    Real stopLine = kNotStated;
-};
-
-// What a street is made of across its width (design section 1: the cross-section), from its road's class and the road
-// file's lanes. The lanes each way are the TRAVEL lanes: the one lane count the builder lays and the city sim drives
-// (ADR-0418). KERB PARKING is a band along each kerb, over the kerb side of the kerb lane each way (roads/lanes
-// LaneLayout::parking): `parking` its width where the road states one that fits (streetSection), 0 none; `parkingOffset`
-// where the band's middle lies, out from the carriageway's middle toward the kerb (the same reading streetSection gives
-// the city sim's bays).
-struct ModelSection {
-    std::string roadClass;
-    RoadClass klass = RoadClass::Local;        // the engine's class for it (roads/lanes classOf: the one mapping)
-    int lanesForward = 0, lanesBackward = 0;   // forward: running along the spine
-    Real laneWidth = 0, medianGap = 0, median = 0, shoulder = 0, sidewalk = 0;
-    Real parking = 0;                          // the kerb parking band's width along each kerb (m); 0: none
-    Real parkingOffset = 0;                    // its middle, from the carriageway's middle toward the kerb (m)
-    bool track = false, footway = false;
-};
-
-// A STRETCH OF ROAD INSIDE A JUNCTION (between nodes the planner grouped into it), or one of the paint's boxes along a
-// road: an edge and stations from <= to. A stretch inside a junction also carries what the street map needs to drive it
-// (ADR-0425): its road's centre line between the two stations (`line`, into RoadModel::linePoints, with their stations
-// in RoadModel::lineStations), its road's cross-section and whether it is one-way. A paint box carries none of them.
-struct ModelStretch {
-    ModelStretch() = default;
-    ModelStretch(std::string r, Real f, Real t) : road(std::move(r)), from(f), to(t) {}
-    std::string road;
-    Real from = 0, to = 0;
-    uint32_t edge = kNoIndex;        // the road's index (inside stretches)
-    Range line;
-    ModelSection section;
-    bool oneWay = false;
-};
-
-// ONE POINT OF A JUNCTION SPREAD OVER SEVERAL (ADR-0425; road_graph_spec.h PlannedNode): the roads meeting there, each
-// with its station, as the road file states them. A junction with nothing inside it is one point, its `at`, and lists none.
-struct ModelNodePoint {
-    uint32_t edge = kNoIndex;        // the road
-    Real station = 0;
-};
-struct ModelNode {
-    Vec2 at;
-    std::vector<ModelNodePoint> points;
-};
-
-struct ModelJunction {
-    std::string id;
-    Vec2 at;
-    Real height = kNotStated;        // the drawn deck at `at`, read off the builder's heights along its first arm's road
-    std::vector<ModelArm> arms;      // in order round it (by heading) where the file wrote them so; as written otherwise
-    std::vector<std::array<uint32_t, 2>> through;   // pairs of arms (indices into arms) that are one street carrying on
-    std::string control, why;        // empty control: the road file plans none
-    std::vector<ModelStretch> inside;   // stretches of road inside it
-    std::vector<ModelNode> nodes;       // its points, when stretches lie inside it (ADR-0425)
-    std::vector<ModelStretch> boxes;    // its area along each road it lies on (deck_mesh.h junctionAreas, ADR-0428)
-};
-// Is this junction's stated control one the signal poles stand for (road_attachments.json "signal_pole": lights)?
-bool junctionLit(const ModelJunction& J);
-
-struct ModelStreet {
-    std::string id, road;
-    uint32_t edge = kNoIndex;        // the road-file edge's index
-    Real from = 0, to = 0;           // stations along the road's spine
-    std::array<ModelJunctionId, 2> junctions;   // at `from`, at `to` (none: a dead end, or a ramp's anchored end)
-    // at `from`, at `to`: the street this one carries on into where no junction is (one road running on as another, or a
-    // bend: ADR-0419); none: a junction, a dead end or a ramp's anchored end
-    std::array<ModelStreetId, 2> carriesOn;
-    ModelSection section;
-    bool oneWay = false;
-    Real speedLimit = 0;             // metres per second; 0: none posted
-    Real lotsFrom = -1, lotsTo = -1; // where buildings may front it (the road's lots_range); -1: all of it
-    std::string frontageOf;          // a frontage road: the freeway carriageway it runs beside
-    Range line;                      // into linePoints: its centre line, `from` to `to` (planned: the road file's spine)
-    std::vector<ModelLaneId> lanes;  // its lanes, forward then backward, each by slot from the centre line (built layer)
-    // The width the travel lanes take across, both ways (lanes x width + the median gap): what the map draws.
-    Real travelWidth() const {
-        return (section.lanesForward + section.lanesBackward) * section.laneWidth + section.medianGap;
-    }
-};
 
 // WHAT A KIND OF ATTACHMENT IS (assets/data/road_attachments.json): its name, what it attaches to ("street", "junction"
 // or "arm"), and whether it is the street's name (what a reader asks for when it wants one).

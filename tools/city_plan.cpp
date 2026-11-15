@@ -1091,7 +1091,7 @@ int main(int argc, char** argv) {
         if (!reportPath.empty()) {
             std::ofstream f(reportPath);
             for (std::size_t i = 0, k = plan.handKept; i < plan.facts.size(); ++i, ++k) {
-                const engine::roads::lanes::PlannedJunction& pj = plan.junctions[k];
+                const engine::ModelJunction& pj = plan.junctions[k];
                 f << pj.id << " at (" << pj.at.x << ", " << pj.at.y << "): " << pj.control << ", \"" << pj.why << "\"; "
                   << engine::roads::lanes::describeFacts(plan.facts[i]) << "\n";
             }
@@ -1131,7 +1131,7 @@ int main(int argc, char** argv) {
             std::map<std::string, std::vector<Where>> litNotPolicy, policyNotLit, differ;
             nlohmann::json out = nlohmann::json::array();
             const std::string lastRow = policy.rows.empty() ? std::string() : policy.rows.back().name;
-            for (const engine::roads::lanes::PlannedJunction& pj : plan.junctions) {
+            for (const engine::ModelJunction& pj : plan.junctions) {
                 ++plannedCount[pj.control];
                 catchAll += pj.why == lastRow ? 1u : 0u;
                 // the stated junction at the same place (ids are numbered by the grouping, so a file grouped another
@@ -1156,7 +1156,7 @@ int main(int argc, char** argv) {
                 }
                 const Stated& s = it->second;
                 std::vector<std::string> signs;
-                for (const engine::roads::lanes::PlannedArm& a : pj.arms) signs.push_back(nlohmann::json(a.regulations).dump());
+                for (const engine::ModelArm& a : pj.arms) signs.push_back(nlohmann::json(a.regulations).dump());
                 same += s.control == pj.control ? 1u : 0u;
                 sameWhy += s.why == pj.why ? 1u : 0u;
                 sameSigns += s.signs == signs ? 1u : 0u;

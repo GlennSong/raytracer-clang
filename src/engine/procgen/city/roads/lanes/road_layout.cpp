@@ -64,8 +64,8 @@ double degreesOf(const Vec2& d) {
 Vec2 directionOf(double degrees) { return Vec2(std::cos(degrees * DEG_TO_RAD), std::sin(degrees * DEG_TO_RAD)); }
 
 // The pairs of arms that are one street carrying on through (see the top of road_layout.h).
-std::vector<std::array<int, 2>> throughPairs(const std::vector<Vec2>& dirs) {
-    std::vector<std::array<int, 2>> out;
+std::vector<std::array<uint32_t, 2>> throughPairs(const std::vector<Vec2>& dirs) {
+    std::vector<std::array<uint32_t, 2>> out;
     if (dirs.size() == 2) return {{0, 1}};
     const double headOn = -std::cos(kStraightOnDegrees * DEG_TO_RAD);
     std::vector<std::tuple<double, int, int>> pairs;
@@ -80,24 +80,25 @@ std::vector<std::array<int, 2>> throughPairs(const std::vector<Vec2>& dirs) {
         const int a = std::get<1>(p), b = std::get<2>(p);
         if (used[static_cast<std::size_t>(a)] || used[static_cast<std::size_t>(b)]) continue;
         used[static_cast<std::size_t>(a)] = used[static_cast<std::size_t>(b)] = 1;
-        out.push_back({a, b});
+        out.push_back({static_cast<uint32_t>(a), static_cast<uint32_t>(b)});
     }
     std::sort(out.begin(), out.end());
     return out;
 }
 
-// A spread junction's points (PlannedNode, ADR-0425), as the file writes them.
-nlohmann::json nodesJson(const std::vector<PlannedNode>& nodes) {
+// A spread junction's points (ModelNode, ADR-0425), as the file writes them.
+nlohmann::json nodesJson(const std::vector<ModelNode>& nodes) {
     nlohmann::json list = nlohmann::json::array();
-    for (const PlannedNode& n : nodes) {
+    for (const ModelNode& n : nodes) {
         nlohmann::json points = nlohmann::json::array();
-        for (const PlannedNodePoint& p : n.points) points.push_back({{"road", p.road}, {"at", p.at}});
+        for (const ModelNodePoint& p : n.points) points.push_back({{"road", p.road}, {"at", p.station}});
         list.push_back({{"at", {written(n.at.x), written(n.at.y)}}, {"points", points}});
     }
     return list;
 }
 
-nlohmann::json junctionJson(const PlannedJunction& pj) {
+// A junction as the file writes it; `streets`: the list its arms' streets are places in (their ids are what is written).
+nlohmann::json junctionJson(const ModelJunction& pj, const std::vector<ModelStreet>& streets) {
     nlohmann::json j;
     j["id"] = pj.id;
     j["at"] = {pj.at.x, pj.at.y};
@@ -105,20 +106,20 @@ nlohmann::json junctionJson(const PlannedJunction& pj) {
     if (!pj.why.empty()) j["why"] = pj.why;
     if (pj.hand) j["hand"] = true;
     nlohmann::json arms = nlohmann::json::array();
-    for (const PlannedArm& a : pj.arms) {
+    for (const ModelArm& a : pj.arms) {
         nlohmann::json aj;
         aj["road"] = a.road;
-        aj["at"] = a.at;
+        aj["at"] = a.station;
         aj["spine"] = a.spineIn ? "in" : "out";
         if (!a.regulations.empty()) aj["regulations"] = a.regulations;
-        if (!a.street.empty()) aj["street"] = a.street;
-        if (a.hasHeading) aj["heading"] = a.heading;
+        if (a.street.valid()) aj["street"] = streets[a.street.index].id;
+        if (stated(a.heading)) aj["heading"] = a.heading;
         arms.push_back(aj);
     }
     j["arms"] = arms;
     if (!pj.inside.empty()) {
         nlohmann::json inside = nlohmann::json::array();
-        for (const PlannedStretch& st : pj.inside) inside.push_back({{"road", st.road}, {"from", st.from}, {"to", st.to}});
+        for (const ModelStretch& st : pj.inside) inside.push_back({{"road", st.road}, {"from", st.from}, {"to", st.to}});
         j["inside"] = inside;
     }
     if (!pj.through.empty()) j["through"] = pj.through;
@@ -126,13 +127,14 @@ nlohmann::json junctionJson(const PlannedJunction& pj) {
     return j;
 }
 
-nlohmann::json streetJson(const PlannedStreet& st) {
+// A street as the file writes it; the junctions and streets it names by id are places in `layout`'s lists.
+nlohmann::json streetJson(const ModelStreet& st, const RoadLayout& layout) {
     nlohmann::json ends = nlohmann::json::array();
-    for (const std::string& j : st.junctions) ends.push_back(j.empty() ? nlohmann::json() : nlohmann::json(j));
+    for (const ModelJunctionId j : st.junctions) ends.push_back(j.valid() ? nlohmann::json(layout.junctions[j.index].id) : nlohmann::json());
     nlohmann::json s = {{"id", st.id}, {"road", st.road}, {"from", st.from}, {"to", st.to}, {"junctions", ends}};
-    if (!st.carriesOn[0].empty() || !st.carriesOn[1].empty()) {
+    if (st.carriesOn[0].valid() || st.carriesOn[1].valid()) {
         nlohmann::json on = nlohmann::json::array();
-        for (const std::string& c : st.carriesOn) on.push_back(c.empty() ? nlohmann::json() : nlohmann::json(c));
+        for (const ModelStreetId c : st.carriesOn) on.push_back(c.valid() ? nlohmann::json(layout.streets[c.index].id) : nlohmann::json());
         s["carries_on"] = on;
     }
     if (!st.name.empty()) s["name"] = st.name;
@@ -341,13 +343,13 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
         (void)findJunctions(graph, ControlPolicy(), how);
     } else {
         for (const JunctionFacts& f : layoutJunctionFacts(graph, source, &carryOns)) {
-            PlannedJunction pj;
+            ModelJunction pj;
             pj.id = f.id;
             pj.at = Vec2(written(f.at.x), written(f.at.y));
             for (const ArmFacts& a : f.arms) {
-                PlannedArm arm;
+                ModelArm arm;
                 arm.road = a.road;
-                arm.at = written(a.at);
+                arm.station = written(a.at);
                 arm.spineIn = a.spineIn;
                 pj.arms.push_back(arm);
             }
@@ -355,7 +357,7 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
             // a junction over several points says which roads meet at each (ADR-0425); one over a single point needs not
             if (!f.inside.empty())
                 for (std::size_t n = 0; n < f.nodes.size() && n < f.nodePoints.size(); ++n)
-                    pj.nodes.push_back(PlannedNode{Vec2(written(f.nodes[n].x), written(f.nodes[n].y)), f.nodePoints[n]});
+                    pj.nodes.push_back(ModelNode{Vec2(written(f.nodes[n].x), written(f.nodes[n].y)), f.nodePoints[n]});
             out.junctions.push_back(pj);
         }
     }
@@ -363,21 +365,18 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
     // pairs. (A list the file states is kept as it is, marked or not: `lanes_tool layout --arm-order --write` puts an
     // unmarked one in ring order and marks it.)
     out.armsInRing = !out.keptList || graph.armsInRing;
-    for (PlannedJunction& pj : out.junctions) {
-        for (PlannedArm& a : pj.arms) {
+    for (ModelJunction& pj : out.junctions) {
+        for (ModelArm& a : pj.arms) {
             const EdgeSpec* e = g.find(a.road);
             if (!e || e->xy.size() < 2) {
                 out.notes.push_back("junction " + pj.id + ": arm on road " + a.road + " has no spine to measure");
                 continue;
             }
-            if (!a.hasHeading) {
-                a.hasHeading = true;
-                a.heading = degreesOf(armDirection(*e, a.at, a.spineIn));
-            }
+            if (!stated(a.heading)) a.heading = degreesOf(armDirection(*e, a.station, a.spineIn));
         }
         if (!out.keptList) orderArmsRound(pj, composed, &out.notes);
         std::vector<Vec2> dirs;
-        for (const PlannedArm& a : pj.arms) dirs.push_back(a.hasHeading ? directionOf(a.heading) : Vec2(1, 0));
+        for (const ModelArm& a : pj.arms) dirs.push_back(stated(a.heading) ? directionOf(a.heading) : Vec2(1, 0));
         if (pj.through.empty()) pj.through = throughPairs(dirs);
     }
     // ---- the streets: each paved road cut at its arms, the stretches inside a junction left out ------------------------
@@ -389,8 +388,8 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
     std::map<std::string, std::vector<Cut>> cutsOf;
     std::map<std::string, std::vector<std::pair<double, double>>> insideOf;
     for (std::size_t j = 0; j < out.junctions.size(); ++j) {
-        for (const PlannedArm& a : out.junctions[j].arms) cutsOf[a.road].push_back(Cut{a.at, static_cast<int>(j), a.spineIn});
-        for (const PlannedStretch& st : out.junctions[j].inside) insideOf[st.road].emplace_back(st.from, st.to);
+        for (const ModelArm& a : out.junctions[j].arms) cutsOf[a.road].push_back(Cut{a.station, static_cast<int>(j), a.spineIn});
+        for (const ModelStretch& st : out.junctions[j].inside) insideOf[st.road].emplace_back(st.from, st.to);
     }
     for (const EdgeSpec& e : g.edges) {
         if (e.laneCount() == 0 || e.xy.size() < 2 || e.s.empty()) continue;
@@ -403,7 +402,7 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
         }
         std::sort(at.begin(), at.end());
         at.erase(std::unique(at.begin(), at.end(), [](double a, double b) { return std::fabs(a - b) < kSameStation; }), at.end());
-        std::vector<PlannedStreet> mine;
+        std::vector<ModelStreet> mine;
         for (std::size_t k = 0; k + 1 < at.size(); ++k) {
             const double from = std::max(0.0, at[k]), to = std::min(length, at[k + 1]);
             if (to - from < kShortestStreet) continue;
@@ -411,13 +410,13 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
             bool inside = false;
             for (const std::pair<double, double>& in : insideOf[e.id]) inside = inside || (mid >= in.first && mid <= in.second);
             if (inside) continue;
-            PlannedStreet st;
+            ModelStreet st;
             st.road = e.id;
             st.from = from;
             st.to = to;
             for (const Cut& c : cutsOf[e.id]) {
-                if (!c.spineIn && std::fabs(c.s - from) < kSameStation) st.junctions[0] = out.junctions[static_cast<std::size_t>(c.junction)].id;
-                if (c.spineIn && std::fabs(c.s - to) < kSameStation) st.junctions[1] = out.junctions[static_cast<std::size_t>(c.junction)].id;
+                if (!c.spineIn && std::fabs(c.s - from) < kSameStation) st.junctions[0] = ModelJunctionId(static_cast<uint32_t>(c.junction));
+                if (c.spineIn && std::fabs(c.s - to) < kSameStation) st.junctions[1] = ModelJunctionId(static_cast<uint32_t>(c.junction));
             }
             mine.push_back(st);
         }
@@ -434,7 +433,7 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
         for (std::size_t k = 0; k < 2; ++k) {
             end[k] = c.stations[k] < kArmReachesPast ? 0 : 1;   // the road's start, or its end
             for (std::size_t i : streetsOf[c.roads[k]]) {
-                const PlannedStreet& s = out.streets[i];
+                const ModelStreet& s = out.streets[i];
                 if (end[k] == 0 ? s.from < kSameStation : s.to >= written(c.stations[k]) - kSameStation) st[k] = static_cast<int>(i);
             }
         }
@@ -442,21 +441,21 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
             out.notes.push_back("roads " + c.roads[0] + " and " + c.roads[1] + " carry on into each other where no street ends");
             continue;
         }
-        out.streets[static_cast<std::size_t>(st[0])].carriesOn[static_cast<std::size_t>(end[0])] = out.streets[static_cast<std::size_t>(st[1])].id;
-        out.streets[static_cast<std::size_t>(st[1])].carriesOn[static_cast<std::size_t>(end[1])] = out.streets[static_cast<std::size_t>(st[0])].id;
+        out.streets[static_cast<std::size_t>(st[0])].carriesOn[static_cast<std::size_t>(end[0])] = ModelStreetId(static_cast<uint32_t>(st[1]));
+        out.streets[static_cast<std::size_t>(st[1])].carriesOn[static_cast<std::size_t>(end[1])] = ModelStreetId(static_cast<uint32_t>(st[0]));
     }
     // ---- each arm's street ---------------------------------------------------------------------------------------------
-    for (PlannedJunction& pj : out.junctions)
-        for (PlannedArm& a : pj.arms) {
-            a.street.clear();
+    for (ModelJunction& pj : out.junctions)
+        for (ModelArm& a : pj.arms) {
+            a.street = ModelStreetId();
             for (std::size_t i : streetsOf[a.road]) {
-                const PlannedStreet& st = out.streets[i];
-                if (std::fabs((a.spineIn ? st.to : st.from) - a.at) < kSameStation) a.street = st.id;
+                const ModelStreet& st = out.streets[i];
+                if (std::fabs((a.spineIn ? st.to : st.from) - a.station) < kSameStation) a.street = ModelStreetId(static_cast<uint32_t>(i));
             }
-            if (a.street.empty()) {
+            if (!a.street.valid()) {
                 char buf[256];
                 std::snprintf(buf, sizeof buf, "junction %s: its arm on road %s (spine %s at %.2f m) is no street's end", pj.id.c_str(),
-                              a.road.c_str(), a.spineIn ? "in" : "out", a.at);
+                              a.road.c_str(), a.spineIn ? "in" : "out", a.station);
                 out.notes.push_back(buf);
             }
         }
@@ -466,15 +465,15 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
 std::string describeLayout(const RoadLayout& layout) {
     std::map<std::size_t, uint32_t> byArms;
     uint32_t through = 0;
-    for (const PlannedJunction& pj : layout.junctions) {
+    for (const ModelJunction& pj : layout.junctions) {
         ++byArms[pj.arms.size()];
         through += static_cast<uint32_t>(pj.through.size());
     }
     uint32_t deadEnds = 0, bothJunctions = 0, carryOnEnds = 0;
-    for (const PlannedStreet& st : layout.streets) {
-        deadEnds += (st.junctions[0].empty() ? 1u : 0u) + (st.junctions[1].empty() ? 1u : 0u);
-        bothJunctions += !st.junctions[0].empty() && !st.junctions[1].empty() ? 1u : 0u;
-        carryOnEnds += (st.carriesOn[0].empty() ? 0u : 1u) + (st.carriesOn[1].empty() ? 0u : 1u);
+    for (const ModelStreet& st : layout.streets) {
+        deadEnds += (st.junctions[0].valid() ? 0u : 1u) + (st.junctions[1].valid() ? 0u : 1u);
+        bothJunctions += st.junctions[0].valid() && st.junctions[1].valid() ? 1u : 0u;
+        carryOnEnds += (st.carriesOn[0].valid() ? 1u : 0u) + (st.carriesOn[1].valid() ? 1u : 0u);
     }
     char buf[384];
     std::snprintf(buf, sizeof buf, "%zu junctions (%s), %zu streets (%u with a junction at both ends, %u ends at no junction, %u of those "
@@ -492,8 +491,8 @@ std::string describeLayout(const RoadLayout& layout) {
 
 void writeLayout(nlohmann::json& scene, const RoadLayout& layout) {
     nlohmann::json junctions = nlohmann::json::array(), streets = nlohmann::json::array();
-    for (const PlannedJunction& pj : layout.junctions) junctions.push_back(junctionJson(pj));
-    for (const PlannedStreet& st : layout.streets) streets.push_back(streetJson(st));
+    for (const ModelJunction& pj : layout.junctions) junctions.push_back(junctionJson(pj, layout.streets));
+    for (const ModelStreet& st : layout.streets) streets.push_back(streetJson(st, layout));
     scene["junctions"] = junctions;
     if (layout.armsInRing) scene["arms_in_ring"] = true;
     else scene.erase("arms_in_ring");
@@ -664,7 +663,7 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
         if (!t.elements(jl->valueBegin, elems) || elems.size() != layout.junctions.size())
             return fail("the file's \"junctions\" list and the layout differ in length");
         for (std::size_t i = 0; i < elems.size(); ++i) {
-            const PlannedJunction& pj = layout.junctions[i];
+            const ModelJunction& pj = layout.junctions[i];
             if (!t.members(elems[i], jm) || jm.empty()) return fail("junction " + std::to_string(i) + " is not an object");
             const Member* id = memberNamed(jm, "id");
             if (!id || text.substr(id->valueBegin, id->valueEnd - id->valueBegin) != nlohmann::json(pj.id).dump())
@@ -676,8 +675,9 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
                 if (!t.members(arms[a], am) || am.empty()) return fail("junction " + pj.id + ": arm " + std::to_string(a) + " is not an object");
                 std::string add;
                 const std::string armLead = leadOf(text, am.back());
-                if (!memberNamed(am, "street") && !pj.arms[a].street.empty()) add += "," + armLead + "\"street\": " + nlohmann::json(pj.arms[a].street).dump();
-                if (!memberNamed(am, "heading") && pj.arms[a].hasHeading) add += "," + armLead + "\"heading\": " + nlohmann::json(pj.arms[a].heading).dump();
+                if (!memberNamed(am, "street") && pj.arms[a].street.valid())
+                    add += "," + armLead + "\"street\": " + nlohmann::json(layout.streets[pj.arms[a].street.index].id).dump();
+                if (!memberNamed(am, "heading") && stated(pj.arms[a].heading)) add += "," + armLead + "\"heading\": " + nlohmann::json(pj.arms[a].heading).dump();
                 if (!add.empty()) ins.emplace_back(am.back().valueEnd, add);
             }
             if (!memberNamed(jm, "through") && !pj.through.empty())
@@ -685,12 +685,12 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
         }
     } else {
         nlohmann::json junctions = nlohmann::json::array();
-        for (const PlannedJunction& pj : layout.junctions) junctions.push_back(junctionJson(pj));
+        for (const ModelJunction& pj : layout.junctions) junctions.push_back(junctionJson(pj, layout.streets));
         tail += "," + lead + "\"junctions\": " + valueText(junctions);
         if (layout.armsInRing) tail += "," + lead + "\"arms_in_ring\": true";
     }
     nlohmann::json streets = nlohmann::json::array();
-    for (const PlannedStreet& st : layout.streets) streets.push_back(streetJson(st));
+    for (const ModelStreet& st : layout.streets) streets.push_back(streetJson(st, layout));
     tail += "," + lead + "\"streets\": " + valueText(streets);
     if (!layout.divided.empty()) tail += "," + lead + "\"divided\": " + valueText(dividedJson(layout.divided));
     ins.emplace_back(last.valueEnd, tail);
@@ -712,14 +712,10 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
 
 // ---- the streets' names (ADR-0420) ------------------------------------------------------------------------------------
 
-std::vector<std::vector<std::size_t>> streetRuns(const std::vector<PlannedJunction>& junctions, const std::vector<PlannedStreet>& streets,
+std::vector<std::vector<std::size_t>> streetRuns(const std::vector<ModelJunction>& junctions, const std::vector<ModelStreet>& streets,
                                                  const std::vector<DividedPair>& divided, const std::vector<char>& named) {
-    std::map<std::string, std::size_t> index;
     std::map<std::string, std::vector<std::size_t>> ofRoad;
-    for (std::size_t i = 0; i < streets.size(); ++i) {
-        index[streets[i].id] = i;
-        ofRoad[streets[i].road].push_back(i);
-    }
+    for (std::size_t i = 0; i < streets.size(); ++i) ofRoad[streets[i].road].push_back(i);
     std::vector<std::size_t> parent(streets.size());
     for (std::size_t i = 0; i < parent.size(); ++i) parent[i] = i;
     std::function<std::size_t(std::size_t)> root = [&](std::size_t i) { return parent[i] == i ? i : parent[i] = root(parent[i]); };
@@ -730,23 +726,15 @@ std::vector<std::vector<std::size_t>> streetRuns(const std::vector<PlannedJuncti
         b = root(b);
         if (a != b) parent[std::max(a, b)] = std::min(a, b);
     };
-    auto streetIndex = [&](const std::string& id, std::size_t& out) {
-        const std::map<std::string, std::size_t>::const_iterator it = index.find(id);
-        if (it == index.end()) return false;
-        out = it->second;
-        return true;
-    };
-    for (const PlannedJunction& j : junctions)
-        for (const std::array<int, 2>& t : j.through) {
-            std::size_t a = 0, b = 0;
-            if (t[0] < 0 || t[1] < 0 || static_cast<std::size_t>(t[0]) >= j.arms.size() || static_cast<std::size_t>(t[1]) >= j.arms.size()) continue;
-            if (streetIndex(j.arms[static_cast<std::size_t>(t[0])].street, a) && streetIndex(j.arms[static_cast<std::size_t>(t[1])].street, b)) unite(a, b);
+    for (const ModelJunction& j : junctions)
+        for (const std::array<uint32_t, 2>& t : j.through) {
+            if (t[0] >= j.arms.size() || t[1] >= j.arms.size()) continue;
+            const ModelStreetId a = j.arms[t[0]].street, b = j.arms[t[1]].street;
+            if (a.valid() && b.valid() && a.index < streets.size() && b.index < streets.size()) unite(a.index, b.index);
         }
     for (std::size_t i = 0; i < streets.size(); ++i)
-        for (const std::string& c : streets[i].carriesOn) {
-            std::size_t b = 0;
-            if (!c.empty() && streetIndex(c, b)) unite(i, b);
-        }
+        for (const ModelStreetId c : streets[i].carriesOn)
+            if (c.valid() && c.index < streets.size()) unite(i, c.index);
     for (const DividedPair& p : divided) {
         std::vector<std::size_t> both;
         for (const std::string& road : p) {
@@ -771,7 +759,7 @@ std::vector<std::vector<std::size_t>> streetRuns(const std::vector<PlannedJuncti
     return runs;
 }
 
-std::vector<char> namedStreets(const RoadLabGraph& g, const std::vector<PlannedStreet>& streets, const StreetNameBook& book) {
+std::vector<char> namedStreets(const RoadLabGraph& g, const std::vector<ModelStreet>& streets, const StreetNameBook& book) {
     std::vector<char> out(streets.size(), 0);
     for (std::size_t i = 0; i < streets.size(); ++i) {
         const EdgeSpec* e = g.find(streets[i].road);
@@ -782,14 +770,14 @@ std::vector<char> namedStreets(const RoadLabGraph& g, const std::vector<PlannedS
     return out;
 }
 
-std::vector<NamedStretch> namedStretches(const std::vector<PlannedStreet>& streets, const std::string& roadPrefix) {
+std::vector<NamedStretch> namedStretches(const std::vector<ModelStreet>& streets, const std::string& roadPrefix) {
     std::vector<NamedStretch> out;
-    for (const PlannedStreet& s : streets)
+    for (const ModelStreet& s : streets)
         if (!s.name.empty()) out.push_back(NamedStretch{roadPrefix + s.road, s.from, s.to, s.name});
     return out;
 }
 
-NamingReport nameStreetRuns(std::vector<PlannedStreet>& streets, const std::vector<PlannedJunction>& junctions,
+NamingReport nameStreetRuns(std::vector<ModelStreet>& streets, const std::vector<ModelJunction>& junctions,
                             const std::vector<DividedPair>& divided, const RoadLabGraph& g, const StreetNameBook& book,
                             const std::vector<NamedStretch>& keep) {
     NamingReport rep;
@@ -817,7 +805,7 @@ NamingReport nameStreetRuns(std::vector<PlannedStreet>& streets, const std::vect
         RunToName shape;
         double longest = -1, longestKept = -1;
         for (std::size_t i : runs[r]) {
-            const PlannedStreet& s = streets[i];
+            const ModelStreet& s = streets[i];
             const double len = s.to - s.from;
             shape.length += len;
             double w = travelWidth(s.road);
@@ -849,7 +837,7 @@ NamingReport nameStreetRuns(std::vector<PlannedStreet>& streets, const std::vect
     for (std::size_t k = 0; k < fresh.size(); ++k) runName[toNameRun[k]] = fresh[k];
     rep.generated = static_cast<uint32_t>(fresh.size());
     rep.runs = static_cast<uint32_t>(runs.size());
-    for (PlannedStreet& s : streets) s.name.clear();
+    for (ModelStreet& s : streets) s.name.clear();
     for (std::size_t r = 0; r < runs.size(); ++r)
         for (std::size_t i : runs[r]) {
             streets[i].name = runName[r];
@@ -900,9 +888,9 @@ static std::string insertListMembersText(const std::string& text, const char* li
     return out;
 }
 
-std::string insertStreetNamesText(const std::string& text, const std::vector<PlannedStreet>& streets, std::string* err) {
+std::string insertStreetNamesText(const std::string& text, const std::vector<ModelStreet>& streets, std::string* err) {
     std::vector<std::pair<std::string, nlohmann::json>> values;
-    for (const PlannedStreet& s : streets) values.emplace_back(s.id, s.name.empty() ? nlohmann::json() : nlohmann::json(s.name));
+    for (const ModelStreet& s : streets) values.emplace_back(s.id, s.name.empty() ? nlohmann::json() : nlohmann::json(s.name));
     return insertListMembersText(text, "streets", "name", values, err);
 }
 
@@ -924,15 +912,15 @@ std::vector<JunctionNodes> junctionNodes(const RoadLabGraph& g, LayoutSource sou
     // a point (road, station) lies on a junction when an arm of it stands there or one of its inside stretches runs past it
     // (both written to the centimetre, as the nodes are)
     constexpr double kWritten = 0.005;
-    auto holds = [&](const PlannedJunction& pj, const PlannedNodePoint& p) {
-        for (const PlannedArm& a : pj.arms)
-            if (a.road == p.road && std::fabs(a.at - p.at) <= kWritten) return true;
-        for (const PlannedStretch& st : pj.inside)
-            if (st.road == p.road && p.at >= st.from - kWritten && p.at <= st.to + kWritten) return true;
+    auto holds = [&](const ModelJunction& pj, const ModelNodePoint& p) {
+        for (const ModelArm& a : pj.arms)
+            if (a.road == p.road && std::fabs(a.station - p.station) <= kWritten) return true;
+        for (const ModelStretch& st : pj.inside)
+            if (st.road == p.road && p.station >= st.from - kWritten && p.station <= st.to + kWritten) return true;
         return false;
     };
     std::map<std::string, std::size_t> slot;   // junction id -> its entry in `out`
-    for (const PlannedJunction& pj : g.junctions)
+    for (const ModelJunction& pj : g.junctions)
         if (!pj.inside.empty()) {
             slot[pj.id] = out.size();
             out.push_back(JunctionNodes{pj.id, {}});
@@ -940,32 +928,32 @@ std::vector<JunctionNodes> junctionNodes(const RoadLabGraph& g, LayoutSource sou
     // the nodes as the layout finds them (control_plan.h findJunctions: the same road ends at one point, ramps' ends on a
     // street's side, crossings at grade) and the places where a street only carries on (a file whose junctions were grouped
     // before ADR-0419 holds some inside a junction), each placed in the one junction of the file that holds all its points
-    std::vector<PlannedNode> candidates;
+    std::vector<ModelNode> candidates;
     std::vector<CarryOn> carryOns;
     for (const JunctionFacts& f : layoutJunctionFacts(g, source, &carryOns))
         for (std::size_t n = 0; n < f.nodes.size() && n < f.nodePoints.size(); ++n)
-            candidates.push_back(PlannedNode{f.nodes[n], f.nodePoints[n]});
+            candidates.push_back(ModelNode{f.nodes[n], f.nodePoints[n]});
     for (const CarryOn& c : carryOns)
-        candidates.push_back(PlannedNode{c.at, {PlannedNodePoint{c.roads[0], written(c.stations[0])}, PlannedNodePoint{c.roads[1], written(c.stations[1])}}});
-    auto samePoint = [&](const PlannedNodePoint& a, const PlannedNodePoint& b) { return a.road == b.road && std::fabs(a.at - b.at) <= kWritten; };
-    for (const PlannedNode& cand : candidates) {
-        std::vector<const PlannedJunction*> in;
-        for (const PlannedJunction& pj : g.junctions) {
+        candidates.push_back(ModelNode{c.at, {ModelNodePoint{c.roads[0], written(c.stations[0])}, ModelNodePoint{c.roads[1], written(c.stations[1])}}});
+    auto samePoint = [&](const ModelNodePoint& a, const ModelNodePoint& b) { return a.road == b.road && std::fabs(a.station - b.station) <= kWritten; };
+    for (const ModelNode& cand : candidates) {
+        std::vector<const ModelJunction*> in;
+        for (const ModelJunction& pj : g.junctions) {
             bool all = true;
-            for (const PlannedNodePoint& p : cand.points) all = all && holds(pj, p);
+            for (const ModelNodePoint& p : cand.points) all = all && holds(pj, p);
             if (all) in.push_back(&pj);
         }
         if (in.size() != 1) {
             // (a carry-on outside every junction is no point of one; a node no junction holds is a fault of the file's list)
             if (cand.points.size() == 2 && in.empty()) {
                 bool isCarryOn = false;
-                for (const CarryOn& c : carryOns) isCarryOn = isCarryOn || (c.roads[0] == cand.points[0].road && std::fabs(written(c.stations[0]) - cand.points[0].at) <= kWritten);
+                for (const CarryOn& c : carryOns) isCarryOn = isCarryOn || (c.roads[0] == cand.points[0].road && std::fabs(written(c.stations[0]) - cand.points[0].station) <= kWritten);
                 if (isCarryOn) continue;
             }
             char where[64];
             std::snprintf(where, sizeof where, "(%.2f, %.2f)", cand.at.x, cand.at.y);
             std::string pts;
-            for (const PlannedNodePoint& p : cand.points) pts += " " + p.road + "@" + std::to_string(p.at);
+            for (const ModelNodePoint& p : cand.points) pts += " " + p.road + "@" + std::to_string(p.station);
             note(std::string("the node at ") + where + " (" + pts + " ) " + (in.empty() ? "lies on no junction of the file" : "lies on several junctions of the file"));
             continue;
         }
@@ -973,19 +961,19 @@ std::vector<JunctionNodes> junctionNodes(const RoadLabGraph& g, LayoutSource sou
         if (it == slot.end()) continue;   // a junction at one point: its `at`
         // one node of the junction already holding one of its points (a crossing named where road ends already meet, found
         // twice) takes the rest of them: they are one place
-        std::vector<PlannedNode>& nodes = out[it->second].nodes;
-        PlannedNode* into = nullptr;
-        for (PlannedNode& n : nodes)
-            for (const PlannedNodePoint& p : n.points)
-                for (const PlannedNodePoint& q : cand.points)
+        std::vector<ModelNode>& nodes = out[it->second].nodes;
+        ModelNode* into = nullptr;
+        for (ModelNode& n : nodes)
+            for (const ModelNodePoint& p : n.points)
+                for (const ModelNodePoint& q : cand.points)
                     if (!into && samePoint(p, q)) into = &n;
         if (!into) {
-            nodes.push_back(PlannedNode{Vec2(written(cand.at.x), written(cand.at.y)), {}});
+            nodes.push_back(ModelNode{Vec2(written(cand.at.x), written(cand.at.y)), {}});
             into = &nodes.back();
         }
-        for (const PlannedNodePoint& q : cand.points) {
+        for (const ModelNodePoint& q : cand.points) {
             bool have = false;
-            for (const PlannedNodePoint& p : into->points) have = have || samePoint(p, q);
+            for (const ModelNodePoint& p : into->points) have = have || samePoint(p, q);
             if (!have) into->points.push_back(q);
         }
     }
@@ -996,12 +984,12 @@ std::vector<JunctionNodes> junctionNodes(const RoadLabGraph& g, LayoutSource sou
             for (std::size_t a = 0; a < jn.nodes.size() && !merged; ++a)
                 for (std::size_t b = a + 1; b < jn.nodes.size() && !merged; ++b) {
                     bool shares = false;
-                    for (const PlannedNodePoint& p : jn.nodes[a].points)
-                        for (const PlannedNodePoint& q : jn.nodes[b].points) shares = shares || samePoint(p, q);
+                    for (const ModelNodePoint& p : jn.nodes[a].points)
+                        for (const ModelNodePoint& q : jn.nodes[b].points) shares = shares || samePoint(p, q);
                     if (!shares) continue;
-                    for (const PlannedNodePoint& q : jn.nodes[b].points) {
+                    for (const ModelNodePoint& q : jn.nodes[b].points) {
                         bool have = false;
-                        for (const PlannedNodePoint& p : jn.nodes[a].points) have = have || samePoint(p, q);
+                        for (const ModelNodePoint& p : jn.nodes[a].points) have = have || samePoint(p, q);
                         if (!have) jn.nodes[a].points.push_back(q);
                     }
                     jn.nodes.erase(jn.nodes.begin() + static_cast<std::ptrdiff_t>(b));
@@ -1010,27 +998,27 @@ std::vector<JunctionNodes> junctionNodes(const RoadLabGraph& g, LayoutSource sou
         }
     // every arm and every inside stretch's two ends stand at one of the nodes found
     for (const JunctionNodes& jn : out) {
-        const PlannedJunction* pj = nullptr;
-        for (const PlannedJunction& j : g.junctions)
+        const ModelJunction* pj = nullptr;
+        for (const ModelJunction& j : g.junctions)
             if (j.id == jn.junction) pj = &j;
         auto atNodes = [&](const std::string& road, double s) {
             int k = 0;
-            for (const PlannedNode& n : jn.nodes)
-                for (const PlannedNodePoint& p : n.points)
-                    if (p.road == road && std::fabs(p.at - s) <= kWritten) {
+            for (const ModelNode& n : jn.nodes)
+                for (const ModelNodePoint& p : n.points)
+                    if (p.road == road && std::fabs(p.station - s) <= kWritten) {
                         ++k;
                         break;
                     }
             return k;
         };
-        for (const PlannedArm& a : pj->arms)
-            if (atNodes(a.road, a.at) != 1) {
+        for (const ModelArm& a : pj->arms)
+            if (atNodes(a.road, a.station) != 1) {
                 char buf[192];
-                std::snprintf(buf, sizeof buf, "junction %s: its arm on %s at %.2f stands at %d of its nodes", jn.junction.c_str(), a.road.c_str(), a.at,
-                              atNodes(a.road, a.at));
+                std::snprintf(buf, sizeof buf, "junction %s: its arm on %s at %.2f stands at %d of its nodes", jn.junction.c_str(), a.road.c_str(), a.station,
+                              atNodes(a.road, a.station));
                 note(buf);
             }
-        for (const PlannedStretch& st : pj->inside)
+        for (const ModelStretch& st : pj->inside)
             for (double s : {st.from, st.to})
                 if (atNodes(st.road, s) < 1) {
                     char buf[192];
@@ -1046,7 +1034,7 @@ std::string insertJunctionNodesText(const std::string& text, const RoadLabGraph&
     std::map<std::string, const JunctionNodes*> of;
     for (const JunctionNodes& jn : nodes) of[jn.junction] = &jn;
     std::vector<std::pair<std::string, nlohmann::json>> values;
-    for (const PlannedJunction& pj : g.junctions) {
+    for (const ModelJunction& pj : g.junctions) {
         const std::map<std::string, const JunctionNodes*>::const_iterator it = of.find(pj.id);
         values.emplace_back(pj.id, it == of.end() || it->second->nodes.empty() ? nlohmann::json() : nodesJson(it->second->nodes));
     }
@@ -1057,7 +1045,7 @@ std::string insertJunctionNodesText(const std::string& text, const RoadLabGraph&
 
 ComposedRoads::ComposedRoads(const RoadLabGraph& asRead) : g_(asRead) { (void)expand(g_); }
 
-std::vector<std::size_t> armRing(const PlannedJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes) {
+std::vector<std::size_t> armRing(const ModelJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes) {
     const RoadLabGraph& g = roads.graph();
     auto note = [&](const std::string& s) {
         if (notes) notes->push_back("junction " + pj.id + ": " + s);
@@ -1066,16 +1054,16 @@ std::vector<std::size_t> armRing(const PlannedJunction& pj, const ComposedRoads&
     std::vector<Vec2> mouth(n), way(n);
     std::vector<const EdgeSpec*> edge(n, nullptr);
     for (std::size_t i = 0; i < n; ++i) {
-        const PlannedArm& a = pj.arms[i];
+        const ModelArm& a = pj.arms[i];
         edge[i] = g.find(a.road);
         if (!edge[i] || edge[i]->xy.size() < 2) {
             mouth[i] = pj.at;
-            way[i] = a.hasHeading ? directionOf(a.heading) : Vec2(1, 0);
-            note("arm " + std::to_string(i) + " (" + a.road + ") has no spine: measured by its " + (a.hasHeading ? "stated heading" : "list place alone (east)"));
+            way[i] = stated(a.heading) ? directionOf(a.heading) : Vec2(1, 0);
+            note("arm " + std::to_string(i) + " (" + a.road + ") has no spine: measured by its " + (stated(a.heading) ? "stated heading" : "list place alone (east)"));
             continue;
         }
-        mouth[i] = pointAt(edge[i]->xy, edge[i]->s, a.at);
-        way[i] = a.hasHeading ? directionOf(a.heading) : armDirection(*edge[i], a.at, a.spineIn);
+        mouth[i] = pointAt(edge[i]->xy, edge[i]->s, a.station);
+        way[i] = stated(a.heading) ? directionOf(a.heading) : armDirection(*edge[i], a.station, a.spineIn);
     }
     double spread = 0, reach = 0;
     for (std::size_t i = 0; i < n; ++i) {
@@ -1088,16 +1076,16 @@ std::vector<std::size_t> armRing(const PlannedJunction& pj, const ComposedRoads&
         if (!(spread > kArmRingSpreadMouths) || !edge[i] || edge[i]->xy.size() < 2) continue;
         // spread: where the arm's road leaves the circle holding every mouth, walking its spine outward from the mouth
         const EdgeSpec& e = *edge[i];
-        const PlannedArm& a = pj.arms[i];
+        const ModelArm& a = pj.arms[i];
         const double R = reach + kArmRingSpreadMargin;
         const std::size_t m = e.xy.size();
         std::vector<Vec2> out{mouth[i]};
         if (a.spineIn) {
             for (std::size_t k = m; k-- > 0;)
-                if (e.s[k] < a.at) out.push_back(e.xy[k]);
+                if (e.s[k] < a.station) out.push_back(e.xy[k]);
         } else {
             for (std::size_t k = 0; k < m; ++k)
-                if (e.s[k] > a.at) out.push_back(e.xy[k]);
+                if (e.s[k] > a.station) out.push_back(e.xy[k]);
         }
         if (out.size() < 2) {
             note("arm " + std::to_string(i) + " (" + a.road + ") has no spine beyond its mouth: measured by its heading");
@@ -1133,21 +1121,21 @@ std::vector<std::size_t> armRing(const PlannedJunction& pj, const ComposedRoads&
     return order;
 }
 
-void orderArmsRound(PlannedJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes) {
+void orderArmsRound(ModelJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes) {
     const std::vector<std::size_t> order = armRing(pj, roads, notes);
-    std::vector<int> newIndex(pj.arms.size(), -1);
-    std::vector<PlannedArm> arms;
+    std::vector<uint32_t> newIndex(pj.arms.size(), kNoIndex);
+    std::vector<ModelArm> arms;
     for (std::size_t k = 0; k < order.size(); ++k) {
-        newIndex[order[k]] = static_cast<int>(k);
+        newIndex[order[k]] = static_cast<uint32_t>(k);
         arms.push_back(pj.arms[order[k]]);
     }
     pj.arms.swap(arms);
-    for (std::array<int, 2>& t : pj.through)
-        for (int& a : t)
-            if (a >= 0 && static_cast<std::size_t>(a) < newIndex.size()) a = newIndex[static_cast<std::size_t>(a)];
+    for (std::array<uint32_t, 2>& t : pj.through)
+        for (uint32_t& a : t)
+            if (a < newIndex.size()) a = newIndex[a];
 }
 
-bool ringDiffers(const PlannedJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes) {
+bool ringDiffers(const ModelJunction& pj, const ComposedRoads& roads, std::vector<std::string>* notes) {
     const std::vector<std::size_t> order = armRing(pj, roads, notes);
     if (order.empty()) return false;
     const std::size_t start = static_cast<std::size_t>(std::find(order.begin(), order.end(), std::size_t(0)) - order.begin());
@@ -1159,7 +1147,7 @@ bool ringDiffers(const PlannedJunction& pj, const ComposedRoads& roads, std::vec
 ArmRingCheck checkArmRings(const RoadLabGraph& asRead) {
     ArmRingCheck c;
     const ComposedRoads roads(asRead);
-    for (const PlannedJunction& pj : asRead.junctions)
+    for (const ModelJunction& pj : asRead.junctions)
         if (ringDiffers(pj, roads, &c.notes)) c.differ.push_back(pj.id);
     return c;
 }
@@ -1180,7 +1168,7 @@ std::string insertArmOrderText(const std::string& text, const RoadLabGraph& g, s
     if (elems.size() != g.junctions.size()) return fail("the file's \"junctions\" list and the graph read from it differ in length");
     std::vector<std::pair<std::pair<std::size_t, std::size_t>, std::string>> edits;   // (from, to) replaced by the text
     for (std::size_t j = 0; j < elems.size(); ++j) {
-        const PlannedJunction& pj = g.junctions[j];
+        const ModelJunction& pj = g.junctions[j];
         if (!t.members(elems[j], jm)) return fail("junction " + std::to_string(j) + " is not an object");
         const Member* id = memberNamed(jm, "id");
         if (!id || text.substr(id->valueBegin, id->valueEnd - id->valueBegin) != nlohmann::json(pj.id).dump())
@@ -1202,12 +1190,11 @@ std::string insertArmOrderText(const std::string& text, const RoadLabGraph& g, s
         }
         const Member* through = memberNamed(jm, "through");
         if (through) {
-            std::vector<int> newIndex(pj.arms.size(), -1);
-            for (std::size_t k = 0; k < order.size(); ++k) newIndex[order[k]] = static_cast<int>(k);
+            std::vector<uint32_t> newIndex(pj.arms.size(), kNoIndex);
+            for (std::size_t k = 0; k < order.size(); ++k) newIndex[order[k]] = static_cast<uint32_t>(k);
             nlohmann::json pairs = nlohmann::json::array();
-            for (const std::array<int, 2>& p : pj.through)
-                pairs.push_back({p[0] >= 0 && static_cast<std::size_t>(p[0]) < newIndex.size() ? newIndex[static_cast<std::size_t>(p[0])] : p[0],
-                                 p[1] >= 0 && static_cast<std::size_t>(p[1]) < newIndex.size() ? newIndex[static_cast<std::size_t>(p[1])] : p[1]});
+            for (const std::array<uint32_t, 2>& p : pj.through)
+                pairs.push_back({p[0] < newIndex.size() ? newIndex[p[0]] : p[0], p[1] < newIndex.size() ? newIndex[p[1]] : p[1]});
             edits.push_back({{through->valueBegin, through->valueEnd}, pairs.dump()});
         }
     }

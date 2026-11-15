@@ -16,7 +16,7 @@
 namespace engine {
 namespace roads::lanes {
 
-// A STRETCH OF A LANE ON ONE STREET (road_graph_spec.h PlannedStreet): the street (an index into RoadLabGraph::streets)
+// A STRETCH OF A LANE ON ONE STREET (road_model_parts.h ModelStreet): the street (an index into RoadLabGraph::streets)
 // and the stretch of the parent's spine, stations from <= to, where the lane runs along it.
 struct LaneStreetSpan {
     int street = -1;

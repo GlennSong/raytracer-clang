@@ -4,7 +4,7 @@
 // THE CONTROL PLAN (issue #240, task B4; driving-model-design.md 5.1 and 6.1): which junction gets traffic lights, an
 // all-way stop, stop or give-way signs on its minor roads, or nothing, and what speed limit each road posts -- decided
 // by the city planner from a PLACEMENT POLICY that is rule-set data, and written into the road graph as intent
-// (road_graph_spec.h PlannedJunction, EdgeSpec::speedLimit). The lane graph builder carries the plan through and checks
+// (road_model_parts.h ModelJunction, EdgeSpec::speedLimit). The lane graph builder carries the plan through and checks
 // it; it never works a control out for itself ("roads: no guessing").
 //
 // Words used here:
@@ -15,7 +15,7 @@
 //     uses (each road's half-width, the stop line's setback, the merge gap: deck_mesh.h), so one junction gets one
 //     control. The builder checks the grouping: a built junction holding two planned ones of different controls is
 //     reported, never settled by picking one;
-//   - an ARM is a road's way into a junction (road_graph_spec.h PlannedArm); an APPROACH is an arm with lanes arriving;
+//   - an ARM is a road's way into a junction (road_model_parts.h ModelArm); an APPROACH is an arm with lanes arriving;
 //   - the MAJOR approaches are those on the most important class of road there (the policy's `class_order`); where every
 //     approach is of one class and exactly two of them run straight through (a T), those two are the major ones; every
 //     other approach is MINOR. Where no approach is minor (a crossroads of equals), there is no minor road, and the
@@ -109,11 +109,11 @@ struct JunctionFacts {
     std::string id;
     Vec2 at;
     std::vector<ArmFacts> arms;
-    std::vector<PlannedStretch> inside;   // stretches of road lying between nodes grouped into it
+    std::vector<ModelStretch> inside;   // stretches of road lying between nodes grouped into it
     std::vector<Vec2> nodes;              // where its nodes are (the road-end points grouped into it), in node order
     // each node's points: the roads meeting there and each one's station (written to the centimetre), in node order --
-    // what a layout states as the junction's nodes (road_graph_spec.h PlannedNode, ADR-0425)
-    std::vector<std::vector<PlannedNodePoint>> nodePoints;
+    // what a layout states as the junction's nodes (road_model_parts.h ModelNode, ADR-0425)
+    std::vector<std::vector<ModelNodePoint>> nodePoints;
     bool rampEnd = false;              // a ramp's free end is in it
     // Worked out by settleRoles. The minor facts are over the minor approaches, or over every approach when no approach
     // is minor (minorClass is then the least important class there, which is the major one).
@@ -182,7 +182,7 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& g, const ControlPol
 
 // THE WHOLE PLAN for a road graph.
 struct ControlPlan {
-    std::vector<PlannedJunction> junctions;                 // in id order; hand-written ones kept first, as they were
+    std::vector<ModelJunction> junctions;                 // in id order; hand-written ones kept first, as they were
     std::vector<JunctionFacts> facts;                       // the planned (not hand-written) ones' facts, same order
     std::vector<std::pair<std::string, double>> limits;     // per road (in road order): the posted limit, 0 none
     std::vector<std::string> problems;                      // a junction no row decided (a policy fault), and so on
@@ -197,7 +197,7 @@ struct ControlPlan {
     uint32_t carryOns = 0;                                  // places where a street only carries on
 };
 // Plans `g` with `policy`: every junction the graph's nodes make, decided most important first; hand-written junctions
-// (PlannedJunction::hand) kept, and any junction sharing a road end with one is left to it; every road's posted limit
+// (ModelJunction::hand) kept, and any junction sharing a road end with one is left to it; every road's posted limit
 // from the policy (a road whose limit is hand-set keeps it); the places where a street only carries on, one control.
 // `finding`: how the junctions are found (the default, the control plan's own; the road model's layout passes its own,
 // road_layout.h planLayoutControls, so the controls land on the junctions the layout wrote, ADR-0422).

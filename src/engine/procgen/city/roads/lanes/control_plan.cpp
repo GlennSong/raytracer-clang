@@ -396,7 +396,7 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
             j.nodes.push_back(node.at);
             j.nodePoints.emplace_back();
             for (const NodePoint& p : node.points)
-                j.nodePoints.back().push_back(PlannedNodePoint{g.edges[static_cast<std::size_t>(p.edge)].id, written(p.s)});
+                j.nodePoints.back().push_back(ModelNodePoint{g.edges[static_cast<std::size_t>(p.edge)].id, written(p.s)});
             j.rampEnd = j.rampEnd || node.rampEnd;
             if (node.ramp >= 0) ramps.insert(node.ramp);
             for (const NodePoint& p : node.points) stations[p.edge].push_back(p.s);
@@ -407,7 +407,7 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
             const double lo = *std::min_element(kv.second.begin(), kv.second.end());
             const double hi = *std::max_element(kv.second.begin(), kv.second.end());
             const double limit = e.speedLimitHand ? e.speedLimit : policy.postedLimit(e.cls);
-            if (hi - lo > kArmReachesPast) j.inside.push_back(PlannedStretch{e.id, written(lo), written(hi)});
+            if (hi - lo > kArmReachesPast) j.inside.push_back(ModelStretch{e.id, written(lo), written(hi)});
             for (int side = 0; side < 2; ++side) {
                 // side 0: the road before the junction (its spine runs in); side 1: after it (its spine runs out)
                 const bool in = side == 0;
@@ -475,11 +475,11 @@ ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, con
     // hand-written junctions are kept; a planned junction sharing an arm's road end with one is left to it
     std::set<std::pair<std::string, bool>> handArms;
     std::vector<Decided> before;
-    for (const PlannedJunction& h : g.junctions) {
+    for (const ModelJunction& h : g.junctions) {
         if (!h.hand) continue;
         plan.junctions.push_back(h);
         ++plan.handKept;
-        for (const PlannedArm& a : h.arms) handArms.insert(std::make_pair(a.road, a.spineIn));
+        for (const ModelArm& a : h.arms) handArms.insert(std::make_pair(a.road, a.spineIn));
         before.push_back(Decided{h.at, h.control});
     }
     std::vector<JunctionFacts> todo;
@@ -513,31 +513,31 @@ ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, con
         if (choice[i].row < 0) continue;
         const JunctionFacts& j = todo[i];
         const PolicyRow& row = policy.rows[static_cast<std::size_t>(choice[i].row)];
-        PlannedJunction pj;
+        ModelJunction pj;
         pj.id = j.id;
         pj.at = Vec2(written(j.at.x), written(j.at.y));
         pj.control = choice[i].control;
         pj.why = choice[i].why;
         for (const ArmFacts& a : j.arms) {
-            PlannedArm arm;
+            ModelArm arm;
             arm.road = a.road;
-            arm.at = written(a.at);
+            arm.station = written(a.at);
             arm.spineIn = a.spineIn;
             if (a.arriving > 0) arm.regulations = a.major ? row.majorSigns : row.minorSigns;
             for (const std::string& kind : arm.regulations) count(plan.signs, kind);
             pj.arms.push_back(arm);
         }
         pj.inside = j.inside;
-        // a junction over several points says which roads meet at each (road_graph_spec.h PlannedNode, ADR-0425)
+        // a junction over several points says which roads meet at each (road_model_parts.h ModelNode, ADR-0425)
         if (!j.inside.empty())
             for (std::size_t n = 0; n < j.nodes.size() && n < j.nodePoints.size(); ++n)
-                pj.nodes.push_back(PlannedNode{Vec2(written(j.nodes[n].x), written(j.nodes[n].y)), j.nodePoints[n]});
+                pj.nodes.push_back(ModelNode{Vec2(written(j.nodes[n].x), written(j.nodes[n].y)), j.nodePoints[n]});
         plan.junctions.push_back(pj);
         plan.facts.push_back(j);
         count(plan.byControl, pj.control);
         ++plan.byRow[static_cast<std::size_t>(choice[i].row)].second;
     }
-    for (const PlannedJunction& h : g.junctions)
+    for (const ModelJunction& h : g.junctions)
         if (h.hand) count(plan.byControl, h.control);
     std::sort(plan.byControl.begin(), plan.byControl.end());
     std::sort(plan.signs.begin(), plan.signs.end());
@@ -549,7 +549,7 @@ ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, con
 }
 
 void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junctionsOnly) {
-    // THE ROAD MODEL'S MEMBERS of a junction already listed (road_graph_spec.h PlannedArm: street, heading, through) are
+    // THE ROAD MODEL'S MEMBERS of a junction already listed (road_model_parts.h ModelArm: street, heading, through) are
     // kept where the same junction is planned again: by its id, and each arm by its road, station and way
     std::map<std::string, nlohmann::json> listed;
     if (scene.contains("junctions") && scene["junctions"].is_array())
@@ -568,7 +568,7 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junct
         return *composed;
     };
     nlohmann::json list = nlohmann::json::array();
-    for (const PlannedJunction& pj : plan.junctions) {
+    for (const ModelJunction& pj : plan.junctions) {
         nlohmann::json j;
         j["id"] = pj.id;
         j["at"] = {pj.at.x, pj.at.y};
@@ -579,10 +579,10 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junct
         const bool wasListed = was != listed.end() && was->second.contains("arms") && was->second["arms"].is_array();
         nlohmann::json arms = nlohmann::json::array();
         std::vector<int> oldIndex;   // each arm written: the listed arm it is (-1: none)
-        for (const PlannedArm& a : pj.arms) {
+        for (const ModelArm& a : pj.arms) {
             nlohmann::json aj;
             aj["road"] = a.road;
-            aj["at"] = a.at;
+            aj["at"] = a.station;
             aj["spine"] = a.spineIn ? "in" : "out";
             if (!a.regulations.empty()) aj["regulations"] = a.regulations;
             int found = -1;
@@ -590,7 +590,7 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junct
                 for (std::size_t k = 0; k < was->second["arms"].size() && found < 0; ++k) {
                     const nlohmann::json& old = was->second["arms"][k];
                     if (old.value("road", std::string()) == a.road && old.value("spine", std::string()) == aj["spine"].get<std::string>() &&
-                        std::fabs(old.value("at", -1e30) - a.at) < 1e-6) {
+                        std::fabs(old.value("at", -1e30) - a.station) < 1e-6) {
                         found = static_cast<int>(k);
                         for (const char* key : {"street", "heading"})
                             if (old.contains(key)) aj[key] = old[key];
@@ -638,16 +638,16 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junct
         j["arms"] = arms;
         if (!pj.inside.empty()) {
             nlohmann::json inside = nlohmann::json::array();
-            for (const PlannedStretch& st : pj.inside) inside.push_back({{"road", st.road}, {"from", st.from}, {"to", st.to}});
+            for (const ModelStretch& st : pj.inside) inside.push_back({{"road", st.road}, {"from", st.from}, {"to", st.to}});
             j["inside"] = inside;
         }
         // THE JUNCTION'S POINTS (ADR-0425): the plan's where it has them, else the listed junction's (a list written
         // before the plan, its stretches inside the same)
         if (!pj.nodes.empty()) {
             nlohmann::json nodes = nlohmann::json::array();
-            for (const PlannedNode& n : pj.nodes) {
+            for (const ModelNode& n : pj.nodes) {
                 nlohmann::json points = nlohmann::json::array();
-                for (const PlannedNodePoint& p : n.points) points.push_back({{"road", p.road}, {"at", p.at}});
+                for (const ModelNodePoint& p : n.points) points.push_back({{"road", p.road}, {"at", p.station}});
                 nodes.push_back({{"at", {n.at.x, n.at.y}}, {"points", points}});
             }
             j["nodes"] = nodes;

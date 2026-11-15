@@ -187,6 +187,16 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         graph.listsJunctions = true;
         graph.armsInRing = laid.armsInRing;
         if (!graph.listsStreets) { graph.streets = laid.streets; graph.listsStreets = true; }
+        else {
+            // the file's own streets stay: each arm's street is the one of that id among them (none: no such id)
+            std::map<std::string, uint32_t> own;
+            for (std::size_t i = 0; i < graph.streets.size(); ++i) own[graph.streets[i].id] = static_cast<uint32_t>(i);
+            for (ModelJunction& J : graph.junctions)
+                for (ModelArm& a : J.arms) {
+                    const std::map<std::string, uint32_t>::const_iterator it = a.street.valid() ? own.find(laid.streets[a.street.index].id) : own.end();
+                    a.street = it == own.end() ? ModelStreetId() : ModelStreetId(it->second);
+                }
+        }
         if (!graph.listsDivided) { graph.divided = laid.divided; graph.listsDivided = !laid.divided.empty(); }
     }
     auto rp = std::make_unique<Result>(); Result& r = *rp; r.graph = std::move(graph); RoadLabGraph& g = r.graph; const Rules& R = g.rules;

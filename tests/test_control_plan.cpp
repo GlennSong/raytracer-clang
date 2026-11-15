@@ -289,7 +289,7 @@ TEST_CASE(control_plan_2_a_planned_road_graph_is_carried_through) {
     uint32_t stopsSeen = 0;
     for (uint32_t j = 0; j < G.junctions.size(); ++j) {
         const Junction& jn = G.junctions[j];
-        const PlannedJunction& pj = road.junctions[jn.modelJunction];
+        const ModelJunction& pj = road.junctions[jn.modelJunction];
         CHECK(G.controlNames[jn.control] == pj.control);
         for (uint32_t k = jn.arriving.first; k < jn.arriving.end(); ++k) {
             const PathId lane = G.junctionLanes[k];

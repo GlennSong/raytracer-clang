@@ -93,9 +93,9 @@ nlohmann::json smallGraphWithLayout() {
 
 // A junction compared by what it is: its arms as (road, station, way), sorted.
 using ArmKey = std::tuple<std::string, double, bool>;
-std::vector<ArmKey> armsOf(const PlannedJunction& j) {
+std::vector<ArmKey> armsOf(const ModelJunction& j) {
     std::vector<ArmKey> out;
-    for (const PlannedArm& a : j.arms) out.emplace_back(a.road, a.at, a.spineIn);
+    for (const ModelArm& a : j.arms) out.emplace_back(a.road, a.station, a.spineIn);
     std::sort(out.begin(), out.end());
     return out;
 }
@@ -151,7 +151,7 @@ TEST_CASE(road_model_0_a_planned_city_states_every_junctions_control) {
     for (const PolicyRow& r : policy.rows) controlOfRow[r.name] = r.control;
     std::map<std::string, uint32_t> byControl;
     uint32_t decided = 0;
-    for (const PlannedJunction& pj : g.junctions) {
+    for (const ModelJunction& pj : g.junctions) {
         CHECK(!pj.control.empty());
         const std::map<std::string, std::string>::const_iterator row = controlOfRow.find(pj.why);
         const bool byRow = row != controlOfRow.end() && row->second == pj.control;
@@ -160,7 +160,7 @@ TEST_CASE(road_model_0_a_planned_city_states_every_junctions_control) {
         ++byControl[pj.control];
         // a junction whose row stands signs carries them on some arm
         bool signs = false;
-        for (const PlannedArm& a : pj.arms) signs = signs || !a.regulations.empty();
+        for (const ModelArm& a : pj.arms) signs = signs || !a.regulations.empty();
         for (const PolicyRow& r : policy.rows)
             if (r.name == pj.why && (!r.minorSigns.empty() || !r.majorSigns.empty())) CHECK(signs);
     }
@@ -196,21 +196,21 @@ TEST_CASE(road_model_1_the_planner_and_the_layout_tool_agree) {
     CHECK(planned.streets.size() == tool.streets.size());
     // junction for junction by their arms, and the ids that map one to the other
     std::map<std::vector<ArmKey>, std::string> toolByArms;
-    for (const PlannedJunction& j : tool.junctions) toolByArms[armsOf(j)] = j.id;
+    for (const ModelJunction& j : tool.junctions) toolByArms[armsOf(j)] = j.id;
     std::map<std::string, std::string> idOf;   // planner id -> tool id
     int unmatched = 0;
-    for (const PlannedJunction& j : planned.junctions) {
+    for (const ModelJunction& j : planned.junctions) {
         const std::map<std::vector<ArmKey>, std::string>::const_iterator it = toolByArms.find(armsOf(j));
         if (it == toolByArms.end()) {
             if (++unmatched <= 5) {
                 std::printf("    planner junction %s at (%.1f, %.1f) with %zu arms: the tool has no junction with those arms\n", j.id.c_str(), j.at.x, j.at.y, j.arms.size());
-                auto show = [](const PlannedJunction& x) {
+                auto show = [](const ModelJunction& x) {
                     std::string s;
-                    for (const PlannedArm& a : x.arms) s += " " + a.road + "@" + std::to_string(a.at) + (a.spineIn ? "in" : "out");
+                    for (const ModelArm& a : x.arms) s += " " + a.road + "@" + std::to_string(a.station) + (a.spineIn ? "in" : "out");
                     return s;
                 };
                 std::printf("      planner:%s\n", show(j).c_str());
-                for (const PlannedJunction& t : tool.junctions)
+                for (const ModelJunction& t : tool.junctions)
                     if (distance(t.at, j.at) < 40) std::printf("      tool %s at (%.1f, %.1f):%s\n", t.id.c_str(), t.at.x, t.at.y, show(t).c_str());
             }
             continue;
@@ -220,14 +220,18 @@ TEST_CASE(road_model_1_the_planner_and_the_layout_tool_agree) {
     CHECK(unmatched == 0);
     // street for street: road, stations, and the junction at each end (as mapped)
     std::set<std::tuple<std::string, double, double, std::string, std::string>> toolStreets, plannerStreets;
-    for (const PlannedStreet& s : tool.streets) toolStreets.emplace(s.road, s.from, s.to, s.junctions[0], s.junctions[1]);
-    for (const PlannedStreet& s : planned.streets)
-        plannerStreets.emplace(s.road, s.from, s.to, s.junctions[0].empty() ? "" : idOf[s.junctions[0]], s.junctions[1].empty() ? "" : idOf[s.junctions[1]]);
+    // (the id of the junction a street names at an end; empty: none)
+    auto endId = [](const std::vector<ModelJunction>& list, engine::ModelJunctionId j) { return j.valid() ? list[j.index].id : std::string(); };
+    for (const ModelStreet& s : tool.streets)
+        toolStreets.emplace(s.road, s.from, s.to, endId(tool.junctions, s.junctions[0]), endId(tool.junctions, s.junctions[1]));
+    for (const ModelStreet& s : planned.streets)
+        plannerStreets.emplace(s.road, s.from, s.to, s.junctions[0].valid() ? idOf[endId(planned.junctions, s.junctions[0])] : "",
+                               s.junctions[1].valid() ? idOf[endId(planned.junctions, s.junctions[1])] : "");
     CHECK(toolStreets == plannerStreets);
     // the planner's arms each name a street of its list, and the ids the planner gives are written in its own scene
     int armsWithoutStreet = 0;
-    for (const PlannedJunction& j : planned.junctions)
-        for (const PlannedArm& a : j.arms) armsWithoutStreet += a.street.empty() ? 1 : 0;
+    for (const ModelJunction& j : planned.junctions)
+        for (const ModelArm& a : j.arms) armsWithoutStreet += a.street.valid() ? 0 : 1;
     CHECK(armsWithoutStreet == 0);
     // the planner names its streets from birth (ADR-0420): every street of a class that carries a name has one, and no
     // other does
@@ -263,10 +267,10 @@ TEST_CASE(road_model_2_the_bake_key_sees_only_where_the_stated_arms_stand) {
     {
         nlohmann::json planned = bare;
         nlohmann::json list = nlohmann::json::array();
-        for (const PlannedJunction& j : layout.junctions) {
+        for (const ModelJunction& j : layout.junctions) {
             nlohmann::json jj = {{"id", j.id}, {"at", {j.at.x, j.at.y}}, {"control", "stop"}};
-            for (const PlannedArm& a : j.arms) jj["arms"].push_back({{"road", a.road}, {"at", a.at}, {"spine", a.spineIn ? "in" : "out"}});
-            for (const PlannedStretch& st : j.inside) jj["inside"].push_back({{"road", st.road}, {"from", st.from}, {"to", st.to}});
+            for (const ModelArm& a : j.arms) jj["arms"].push_back({{"road", a.road}, {"at", a.station}, {"spine", a.spineIn ? "in" : "out"}});
+            for (const ModelStretch& st : j.inside) jj["inside"].push_back({{"road", st.road}, {"from", st.from}, {"to", st.to}});
             list.push_back(jj);
         }
         planned["junctions"] = list;
@@ -280,8 +284,8 @@ TEST_CASE(road_model_2_the_bake_key_sees_only_where_the_stated_arms_stand) {
         const RoadLabGraph back = RoadLabGraph::fromJson(nlohmann::json::parse(written));
         CHECK(back.declaresJunctions);
         bool streets = true;
-        for (const PlannedJunction& j : back.junctions)
-            for (const PlannedArm& a : j.arms) streets = streets && !a.street.empty() && a.hasHeading;
+        for (const ModelJunction& j : back.junctions)
+            for (const ModelArm& a : j.arms) streets = streets && a.street.valid() && engine::stated(a.heading);
         CHECK(streets);
     }
     // the city's bake key, through the producer (ADR-0428: the paint draws the stated junctions, so where their arms stand
@@ -289,10 +293,10 @@ TEST_CASE(road_model_2_the_bake_key_sees_only_where_the_stated_arms_stand) {
     // same with the layout written into it; moving one arm a metre, or a road fewer, keys otherwise; and a file stating
     // no junctions keys otherwise than one stating them
     nlohmann::json planned = bare;
-    for (const PlannedJunction& j : layout.junctions) {
+    for (const ModelJunction& j : layout.junctions) {
         nlohmann::json jj = {{"id", j.id}, {"at", {j.at.x, j.at.y}}, {"control", "stop"}};
-        for (const PlannedArm& a : j.arms) jj["arms"].push_back({{"road", a.road}, {"at", a.at}, {"spine", a.spineIn ? "in" : "out"}});
-        for (const PlannedStretch& st : j.inside) jj["inside"].push_back({{"road", st.road}, {"from", st.from}, {"to", st.to}});
+        for (const ModelArm& a : j.arms) jj["arms"].push_back({{"road", a.road}, {"at", a.station}, {"spine", a.spineIn ? "in" : "out"}});
+        for (const ModelStretch& st : j.inside) jj["inside"].push_back({{"road", st.road}, {"from", st.from}, {"to", st.to}});
         planned["junctions"].push_back(jj);
     }
     const std::string dir = scratchDir("key");
@@ -530,14 +534,14 @@ TEST_CASE(road_model_4b_a_name_is_a_stated_run) {
     writeLayout(laidOut, deriveLayout(RoadLabGraph::fromJson(bare), LayoutSource::Inferred));
     const std::string text = laidOut.dump(1);
     const RoadLabGraph stated = RoadLabGraph::fromJson(laidOut);
-    std::vector<PlannedStreet> streets = stated.streets;
+    std::vector<ModelStreet> streets = stated.streets;
     nameStreetRuns(streets, stated.junctions, stated.divided, stated, streetNameBook());
     const std::string named = insertStreetNamesText(text, streets, &err);
     CHECK(!named.empty() && stripLayoutText(named) == stripLayoutText(text));
     const RoadLabGraph reread = RoadLabGraph::fromJson(nlohmann::json::parse(named));
     for (std::size_t s = 0; s < streets.size(); ++s) CHECK(reread.streets[s].name == streets[s].name);
     // named again, every name the file states is kept
-    std::vector<PlannedStreet> again = reread.streets;
+    std::vector<ModelStreet> again = reread.streets;
     const NamingReport rep = nameStreetRuns(again, reread.junctions, reread.divided, reread, streetNameBook(), namedStretches(reread.streets));
     CHECK(rep.generated == 0u && rep.kept == rep.runs);
     for (std::size_t s = 0; s < again.size(); ++s) CHECK(again[s].name == streets[s].name);
@@ -691,7 +695,9 @@ TEST_CASE(road_model_8_one_junction_is_no_room_for_a_car_between_stop_lines) {
     CHECK(junctionsOf(bend) == 0u);
     const RoadLayout B = deriveLayout(RoadLabGraph::fromJson(bend), LayoutSource::Inferred);
     CHECK(B.junctions.empty() && B.streets.size() == 2u);
-    if (B.streets.size() == 2u) CHECK(B.streets[0].carriesOn[1] == "q" && B.streets[1].carriesOn[0] == "p");
+    if (B.streets.size() == 2u)
+        CHECK(B.streets[0].carriesOn[1] == engine::ModelStreetId(1) && B.streets[1].id == "q" && B.streets[1].carriesOn[0] == engine::ModelStreetId(0) &&
+              B.streets[0].id == "p");
 }
 
 // ---- 9. the signs that follow from the facts (ADR-0424) ----------------------------------------------------------------

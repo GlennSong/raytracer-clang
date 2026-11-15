@@ -258,7 +258,7 @@ int main(int argc, char** argv) {
             const JunctionFacts& j = js[order[k]];
             std::set<std::string> roads;
             for (const ArmFacts& a : j.arms) roads.insert(a.road);
-            for (const PlannedStretch& st : j.inside) roads.insert(st.road);
+            for (const ModelStretch& st : j.inside) roads.insert(st.road);
             std::string rs, pts;
             for (const std::string& r : roads) rs += (rs.empty() ? "" : ",") + r;
             for (const Vec2& p : j.nodes) {
@@ -382,7 +382,7 @@ int main(int argc, char** argv) {
                     spread += 1;
                     points += jn.nodes.size();
                 }
-                for (const PlannedJunction& pj : stated.junctions) listed += pj.nodes.empty() ? 0 : 1;
+                for (const ModelJunction& pj : stated.junctions) listed += pj.nodes.empty() ? 0 : 1;
                 std::printf("%s: %zu junctions over several points, %zu points found for them (%zu junctions list theirs already)\n", argv[2],
                             spread, points, listed);
                 for (const std::string& n : notes) std::printf("  note: %s\n", n.c_str());
@@ -404,7 +404,7 @@ int main(int argc, char** argv) {
             }
             if (names && !fresh && stated.listsStreets) {
                 // the file's own streets, as they are: only their names are added
-                std::vector<PlannedStreet> streets = stated.streets;
+                std::vector<ModelStreet> streets = stated.streets;
                 const NamingReport rep = nameStreetRuns(streets, stated.junctions, stated.divided, stated, streetNameBook(), keep);
                 std::printf("%s: %u runs named over %u streets (%u kept, %u new)\n", argv[2], rep.runs, rep.streets, rep.kept, rep.generated);
                 if (!write) return 0;
@@ -822,10 +822,10 @@ int main(int argc, char** argv) {
             }
             if (jn.modelJunction < rp->graph.junctions.size()) {
                 // the stated junction it is (the road model's junction of the same index: the road file's list)
-                const PlannedJunction& p = rp->graph.junctions[jn.modelJunction];
+                const ModelJunction& p = rp->graph.junctions[jn.modelJunction];
                 f << "stated as " << p.id << " at (" << p.at.x << ", " << p.at.y << "): " << p.control << ", \"" << p.why << "\"\n";
-                for (const PlannedArm& a : p.arms) {
-                    f << "  arm: road " << a.road << ", its spine running " << (a.spineIn ? "in" : "out") << " at " << a.at << " m";
+                for (const ModelArm& a : p.arms) {
+                    f << "  arm: road " << a.road << ", its spine running " << (a.spineIn ? "in" : "out") << " at " << a.station << " m";
                     for (const std::string& r : a.regulations) f << ", " << r;
                     f << "\n";
                 }
