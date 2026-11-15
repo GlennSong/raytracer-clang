@@ -383,43 +383,42 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     }
     // MERGES BETWEEN JUNCTIONS (ADR-0426): the lab's road model states eight (a lane of a ramp running into the lane
     // beside it, a lane that ends), and the road builder marks every crossing record where such a pair of lanes join
-    // with the lane that joined (one record per pair of body sizes that meet differently, so more records than
-    // merges). At every marked record the table must say that lane gives way, by the rule set's `stated_merge`
-    // question -- read here from the lane graph's own mark, not from the table's counts. Counted beside it: the
-    // meetings between junctions still left to the lower path id (outright, or as the fall-back of asking while
-    // driving); none of them may be a marked merge.
+    // with the lane that joined: two records a merge here (one per pair of body sizes that meet differently), sixteen in
+    // all, none filed under a junction. The lab's rule set does NOT ask `stated_merge` yet (assets/scripts/rules/lab.lua
+    // says why: joining is to be reworked first), so the table must report all sixteen as stated but not asked, settle
+    // none of them by the stated merge, and leave each as before: asked while driving, the lower path id to fall back
+    // on. The marks are read here from the lane graph, the answers from the table's records, and both are held against
+    // the table's own counts.
     {
         const driving::RightOfWay& row = d->rightOfWay();
         std::set<uint32_t> statedMerges;   // the road model's connections that state a merge with a record here
-        uint32_t marked = 0, joinedGivesWay = 0, markedUnderAJunction = 0, lowerIdBetween = 0, lowerIdAtAMerge = 0;
+        uint32_t marked = 0, markedUnderAJunction = 0, byStatedMerge = 0, leftToLowerId = 0;
         for (uint32_t c = 0; c < roads.crossings.size(); ++c) {
             const engine::CrossingPoint& x = roads.crossings[c];
-            if (x.otherSide != engine::OtherSide::Path) continue;
-            const driving::MeetingAnswer* a = row.answer(engine::CrossingId(c));
-            const bool lowerId = a && (a->by == driving::SettledBy::LowerPathId ||
-                                       (a->who == driving::GivesWay::Ask && a->fallbackBy == driving::SettledBy::LowerPathId));
-            if (!x.junction.valid() && lowerId) ++lowerIdBetween;
-            if (!x.merging.valid()) continue;
+            if (x.otherSide != engine::OtherSide::Path || !x.merging.valid()) continue;
             ++marked;
             statedMerges.insert(x.modelConnection);
             markedUnderAJunction += x.junction.valid();
-            lowerIdAtAMerge += lowerId;
-            if (a && a->by == driving::SettledBy::StatedMerge &&
-                driving::myTurn(roads, *a, engine::CrossingId(c), x.merging) == driving::MyTurn::GiveWay)
-                ++joinedGivesWay;
-            else
-                std::printf("      [merge not settled] crossing %u: path %u joins path %u (model connection %u), but the "
-                            "table does not make it give way by the stated merge\n",
-                            c, x.merging.index, (x.merging == x.a ? x.otherPath() : x.a).index, x.modelConnection);
+            const driving::MeetingAnswer* a = row.answer(engine::CrossingId(c));
+            CHECK(a != nullptr);
+            if (!a) continue;
+            byStatedMerge += a->by == driving::SettledBy::StatedMerge || a->fallbackBy == driving::SettledBy::StatedMerge;
+            leftToLowerId += a->who == driving::GivesWay::Ask && a->fallbackBy == driving::SettledBy::LowerPathId;
         }
         std::printf("    [lab-v2] merges between junctions: %zu stated merges on %u crossing records (%u filed under a "
-                    "junction); the lane that joined gives way by the stated merge at %u of them; meetings between "
-                    "junctions still left to the lower path id: %u (%u of them a stated merge)\n",
-                    statedMerges.size(), marked, markedUnderAJunction, joinedGivesWay, lowerIdBetween, lowerIdAtAMerge);
+                    "junction); settled by the stated merge %u (the rule set does not ask it yet); asked while driving "
+                    "with the lower path id to fall back on %u; the table counts %u marked, %u by the stated merge, %u "
+                    "stated but not asked\n",
+                    statedMerges.size(), marked, markedUnderAJunction, byStatedMerge, leftToLowerId,
+                    row.counts.statedMerges, row.counts.byStatedMerge, row.counts.statedMergesNotAsked);
         CHECK(statedMerges.size() == 8u);
-        CHECK(marked > 0u);
-        CHECK(joinedGivesWay == marked);
-        CHECK(lowerIdAtAMerge == 0u);
+        CHECK(marked == 16u);
+        CHECK(markedUnderAJunction == 0u);
+        CHECK(byStatedMerge == 0u);
+        CHECK(leftToLowerId == 16u);
+        CHECK(row.counts.statedMerges == 16u);
+        CHECK(row.counts.byStatedMerge == 0u);
+        CHECK(row.counts.statedMergesNotAsked == 16u);
     }
     // RT_LAB_JUNCTION=<id>: that junction's table in words too (for a person chasing one junction).
     if (const char* one = std::getenv("RT_LAB_JUNCTION"))
@@ -1033,15 +1032,9 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     // BODY AGAINST BODY (issue #283): every pair of drawn bodies every tick, sorted by how their paths relate.
     const driving::TouchRow& touches = sim.drivingHost().measurements().rows().touches;
     printTouches(*d, touches);
-    // FAILS SINCE THE STATED MERGE IS READ (1 spell, not loosened): at t=27.2-31.2 s car 170 on the through lane 1598 and
-    // bus 239 on lane 1614, which joins it (crossing 15084, a stated merge whose stretch is 43 m of each lane), overlap by
-    // up to 1.72 m. Car 170 first slows for the bus's body, already on the stretch; once its own front is on the stretch
-    // too, the table's answer (the bus joined, so the bus gives way) lets it go on beside the bus. Before, that meeting
-    // was asked while driving and the lower path id (lane 1598) kept car 170 waiting. How a car keeps clear of a body
-    // already on a long join's stretch is give_way.h's and the resolver's, due a rework, and is not patched here.
     CHECK(touches.spells <= kMostTouchSpells);
-    // FAILS SINCE ADR-0426 on one row, "How a queue empties" (2.86 s a car over 14 gaps from the fourth car on since the
-    // stated merge is read; 2.76 s over 9 gaps before; target 1.7 to 2.1 s; it passed on the lane graph worked out from the built roads). Left failing, not loosened: the lane level
+    // FAILS SINCE ADR-0426 on one row, "How a queue empties" (2.76 s a car over 9 gaps from the fourth car on, target 1.7
+    // to 2.1 s; it passed on the lane graph worked out from the built roads). Left failing, not loosened: the lane level
     // moved which lines queue form at (one junction per stated junction), and the driving's start-up is the driving
     // library's, out of step 8's scope. See ADR-0426.
     // THE WHOLE TABLE PASSES (issue #284: the test used to check rows one by one and never the table), and every driver's
@@ -1063,13 +1056,14 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     // path, and a ring through that waiting is broken at an answer.
     CHECK(joinPairTicks <= kMostJoinPairTicks);
     CHECK(loopSamples <= kMostLoopSamples);
-    // FAILS SINCE ADR-0426 (5 cars over kLongestStand, not loosened): cars stand up to 143 s at red lights, the lab's
-    // longest cycle now 115 s (junction 0, which the lane level holds as the one stated junction it is: a spread junction
-    // of seven arms, one signal plan of seven phases, where the old graph split it in two; 92.8 s before), with cars
-    // queued behind them. That is the driving's signal plans, out of this step's scope. (It was 13 cars, the worst 261 s:
-    // car 92 on the frontage road s311 gave way for ever to the off-ramp d0_0_a_off merging into its lane, by the
-    // lower path id. The rule set's `stated_merge` question now makes the lane that joined give way there, and nobody
-    // stands at a merge beyond the limit.)
+    // FAILS SINCE ADR-0426 (13 cars over kLongestStand, not loosened): car 92 stood 261 s on the frontage road s311's
+    // offside lane where the off-ramp d0_0_a_off merges into it (lane 1457 joins ramp lane 1607 near (-562, 80)), giving
+    // way to the ramp's cars every time -- two lanes meeting between junctions are settled by the rule set's
+    // between_junctions questions, and two lanes have no sign rank, no movement and no line to arrive at, so the
+    // fall-back (the lower path id gives way) decides it -- with cars 97 and 184 behind it; and cars stood up to 143 s at
+    // red lights, the lab's longest cycle now 115 s (junction 0, which the lane level holds as the one stated junction it
+    // is: a spread junction of seven arms, one signal plan of seven phases, where the old graph split it in two; 92.8 s
+    // before). Both are the driving's (merging, signal plans), out of step 8's scope. See ADR-0426.
     CHECK(overLongest == 0);
     // ROOM BEYOND (issue #264): nobody at rest in a box but by a recorded give-way; the deadlock row of the measurements
     // table passes; and every grant outstanding belongs to a driven car whose front has not yet reached its lane (grants

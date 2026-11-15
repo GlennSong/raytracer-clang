@@ -96,10 +96,15 @@ rule_set = {
   -- who got there first. As at a stop or give-way sign on the minor road: CVC 21802 (a), 21803 (a) (give way to traffic
   -- on the other road) and 21801 (a) (the far turn gives way). [~] a judgement: the law has no rule for two paths that
   -- touch between junctions; this treats the one coming from the busier road as the road.
-  -- A MERGE BETWEEN JUNCTIONS comes first (`stated_merge`): where the roads state that one lane runs into the lane
-  -- beside it -- a ramp's lane joining the road, a lane that ends -- the car on the lane that joined gives way to the car
-  -- already in the lane it is joining. Only the roads' own statement counts (which lane merges into which); nothing is
-  -- judged from the shape, and a meeting with no stated merge goes on to the questions after it. Source: CVC 21658 (a)
+  -- A MERGE BETWEEN JUNCTIONS: NOT ASKED YET. The question exists (`stated_merge`, listed first, as in the commented
+  -- line below): where the roads state that one lane runs into the lane beside it -- a ramp's lane joining the road, a
+  -- lane that ends -- the car on the lane that joined gives way to the car already in the lane it is joining. Only the
+  -- roads' own statement counts (which lane merges into which); nothing is judged from the shape, and a meeting with no
+  -- stated merge goes on to the questions after it. It is switched off here because, with it on, a joining body and a
+  -- through body can both be on the 43 m stretch where their lanes join with nobody owning the pair, and they drive
+  -- through each other (the lab's car 170 and bus 239; the recorded scenes merge_known_fault_a and _b in
+  -- tests/test_driving_give_way.cpp). It is switched on when joining is reworked (a joining car slows and zips in).
+  -- Until then two lanes that merge fall to the questions below, and so to the lower path id. Source: CVC 21658 (a)
   -- (a vehicle is not moved out of its lane until that can be done with reasonable safety) and the UK Highway Code
   -- rules 133 (changing lane: do not force another driver to change course or speed) and 259 (joining a motorway from a
   -- slip road: give priority to traffic already on it); CVC 21804 (a) (a vehicle entering a highway yields to the
@@ -107,7 +112,8 @@ rule_set = {
   -- numbers from memory, unverified against the texts. [~] a judgement: both codes speak of the driver changing lane or
   -- joining; this reads the lane that ends as the one changing, and where traffic is heavy the Highway Code also asks
   -- for merging in turn (rule 134), which this does not do.
-  between_junctions = { settle = { "stated_merge", "sign_rank", "movement", "arrived_first" } },
+  -- between_junctions = { settle = { "stated_merge", "sign_rank", "movement", "arrived_first" } },
+  between_junctions = { settle = { "sign_rank", "movement", "arrived_first" } },
 
   numbers = {
     -- The gap kept to the car ahead when both stand still: the Intelligent Driver Model's s0.

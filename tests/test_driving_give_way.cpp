@@ -57,6 +57,9 @@
 //  merge 2. the joining car goes in a 15 s gap between two through cars, and waits out a platoon 3 s apart;
 //  merge 3. a rule set that does not ask the question, or a road that states no merge: the old answer (the lower path id);
 //  merge 4. a stated merge filed under a junction: read where the control asks, noted where it does not.
+//  KNOWN FAULTS AT A MERGE, RECORDED: each asserts today's WRONG outcome and fails, saying so, when it is fixed:
+//  merge known fault a. a through car and a bus both on the join's stretch drive through each other (8 variants);
+//  merge known fault b. a bus creeping to its give-way stop is put first by cannot_stop in its last centimetres.
 
 #include "test_framework.h"
 
@@ -3014,6 +3017,164 @@ TEST_CASE(give_way_merge_4_a_stated_merge_filed_under_a_junction_is_read_or_repo
             CHECK(myTurn(s.t.graph, *a, join, other) == MyTurn::GoFirst);
             CHECK(row.counts.statedMerges == 1u && row.counts.byStatedMerge == 1u && row.counts.statedMergesNotAsked == 0u);
             for (const std::string& note : row.notes) CHECK(note.find("by a merge") == std::string::npos);
+        }
+    }
+}
+
+// ---- KNOWN FAULTS AT A MERGE, RECORDED (2026-11-14) ---------------------------------------------------------------------
+//
+// The two cases below ASSERT TODAY'S WRONG OUTCOME, on purpose. They are the faults found when the lab asked
+// `stated_merge` (car 170 and bus 239 driving through each other at crossing 15084), which is why the lab's rule set
+// does not ask it yet. They are not to be patched in the give-way layer: the owner's decision is that joining is
+// reworked (a joining car slows and zips in; cars that do meet collide, and are wrecked, rather than pass through each
+// other).
+//
+// WHEN THE JOINING REWORK FIXES ONE, ITS CASE FAILS, loudly, and says so. Then FLIP its assertion to the right outcome
+// (no two bodies overlap; a car holding its give-way stop is never put first for being unable to stop) and take it out
+// of this section. Do not delete it and do not loosen it: it is the regression test for the fix.
+
+namespace {
+
+// The lab's rule set with the stated merge asked first between junctions (the lab itself does not ask it yet), or as
+// the lab has it.
+std::string labRulesForMerge(bool askStatedMerge) {
+    return labRules(askStatedMerge ? "rule_set.between_junctions = { settle = { 'stated_merge', 'sign_rank', 'movement', "
+                                     "'arrived_first' } }\n"
+                                   : "");
+}
+
+// The merge road at the lab's speeds: every lane's limit 22 m/s (the lab's pair met at about 21 m/s).
+TestRoads fastMergeRoads(bool joiningLaneFirst) {
+    TestRoadSpec spec;
+    spec.speedLimit = 22;
+    return driving_test::mergeRoads(joiningLaneFirst, true, spec);
+}
+
+// Where the merge's one stretch starts on each of its two lanes (metres along the lane).
+Real stretchStartOn(const TestRoads& t, engine::PathId lane) {
+    const engine::CrossingPoint& rec = t.graph.crossings[t.mergeJoins[0].index];
+    return rec.a == lane ? rec.aFrom : rec.otherFrom;
+}
+
+}  // namespace
+
+TEST_CASE(merge_known_fault_a_two_bodies_on_the_join_stretch_drive_through_each_other) {
+    // THE SCENE (the lab's, made small). A through car (1) comes up its lane from rest and is doing about 21.7 m/s when
+    // it is 30 m short of the stretch where the two lanes join. At that moment a 12 m bus (2) stands at rest on the
+    // joining lane with its front 0.05 m onto its own side of that stretch (put down there by the test, standing in for
+    // the lab's bus, which crept onto it: case b). The car brakes for the body on the stretch, cannot stop in 30 m,
+    // and its own front comes onto the stretch too. From then on NEITHER judges the meeting (give_way.cpp judgeLanes: "my
+    // front is on it: I go first there"), and following does not see a body on the other lane until the lanes are one:
+    // the car speeds up beside the bus along the 40 m taper and the two bodies overlap.
+    //
+    // TODAY: they overlap, in every variant -- the joining lane with the lower path id or the higher, the test rule set
+    // or the lab's, `stated_merge` asked or not. (So the fault is older than the question; asking it only changed which
+    // cars meet this way in the lab.)
+    int overlapped = 0, runs = 0;
+    for (const bool lab : {false, true})
+        for (const bool askStatedMerge : {true, false})
+            for (const bool joiningLaneFirst : {true, false}) {
+                std::unique_ptr<Sim> made;
+                if (lab) {
+                    made.reset(new Sim(fastMergeRoads(joiningLaneFirst), labRulesForMerge(askStatedMerge), "signal"));
+                } else {
+                    made.reset(new Sim(fastMergeRoads(joiningLaneFirst), kUncontrolled));
+                    CHECK(made->giveRules(kUncontrolled, askStatedMerge ? kBetweenWithMerge : kBetweenWithoutMerge));
+                }
+                Sim& s = *made;
+                CHECK(s.ok);
+                const Real carStart = stretchStartOn(s.t, s.t.mergeThrough);
+                const Real busStart = stretchStartOn(s.t, s.t.mergeJoining);
+                s.add(1, s.t.mergeThrough, 20, s.t.mergeBeyond, 290);
+                bool busDown = false;
+                Real carSpeedThen = 0;
+                for (int i = 0; i < static_cast<int>(150 / kStep) && s.arrived < 2; ++i) {
+                    const Car* car = s.d.car(CarId(1));
+                    if (!busDown && car && car->path == s.t.mergeThrough && carStart - car->along <= 30) {
+                        s.add(2, s.t.mergeJoining, busStart + 0.05, s.t.mergeBeyond, 290, 1);
+                        busDown = true;
+                        carSpeedThen = car->speed;
+                    }
+                    s.step();
+                }
+                ++runs;
+                const bool touch = s.overlapping.count({1u, 2u}) > 0;
+                overlapped += touch;
+                std::printf("    %s rule set, stated_merge %s, the %s lane has the lower id: the bus put down with the car "
+                            "30 m short at %.1f m/s; bodies overlapped: %s; %llu arrived\n",
+                            lab ? "the lab's" : "the test", askStatedMerge ? "asked" : "not asked",
+                            joiningLaneFirst ? "joining" : "through", carSpeedThen, touch ? "YES" : "no",
+                            static_cast<unsigned long long>(s.arrived));
+                CHECK(busDown);
+                CHECK(carSpeedThen > 21.0 && carSpeedThen < 22.0);
+                // KNOWN FAULT, asserted as it is today: the two bodies overlap. The right outcome is that they do not.
+                if (!touch)
+                    std::printf("    >>> THE KNOWN FAULT IS GONE in this variant: the bodies no longer overlap. Flip this case to "
+                                "CHECK(!touch) (see the note above merge_known_fault_a) and keep it as the regression test.\n");
+                CHECK(touch);
+            }
+    CHECK(runs == 8);
+    CHECK(overlapped == 8);
+}
+
+TEST_CASE(merge_known_fault_b_a_car_creeping_to_its_give_way_stop_is_put_first) {
+    // THE SCENE. The lab's rule set with `stated_merge` asked. A 12 m bus (2) comes down the joining lane and gives way
+    // to two through cars (0, and 1 a long way behind it): the table says the bus gives way, and it holds a give-way
+    // stop placed AT the start of the join's stretch (a lane has no line to stop at). Creeping up to that stop, in its
+    // last few centimetres, it is announced as unable to stop short of the stretch, and the resolver puts it FIRST by
+    // `cannot_stop`, ahead of the table -- while it still holds the stop. Why: the announcement asks "does it hold a stop
+    // short of the stretch?" with an exact comparison (announce.cpp announceLane: heldStop <= startAt), the stop sits
+    // one step of a double (7.1e-15 m) past the start, so the answer is no, and a decision's worth of travel is then
+    // charged against the centimetres left. In the lab that put bus 239 onto the stretch in front of car 170.
+    //
+    // TODAY: the flip happens, with the bus less than 0.1 m short of the stretch, slower than 1 m/s, holding its
+    // give-way stop within a hair of the stretch's start. The right outcome is that it never happens.
+    for (const bool joiningLaneFirst : {true, false}) {
+        Sim s(fastMergeRoads(joiningLaneFirst), labRulesForMerge(true), "signal");
+        CHECK(s.ok);
+        const engine::CrossingId join = s.t.mergeJoins[0];
+        const Real busStart = stretchStartOn(s.t, s.t.mergeJoining);
+        // The table: the bus's lane joined, so the bus gives way, settled at load.
+        const MeetingAnswer* answer = s.d.rightOfWay().answer(join);
+        CHECK(answer && answer->by == SettledBy::StatedMerge);
+        CHECK(answer && myTurn(s.t.graph, *answer, join, s.t.mergeJoining) == MyTurn::GiveWay);
+        s.add(0, s.t.mergeThrough, 230, s.t.mergeBeyond, 290);
+        s.add(1, s.t.mergeThrough, 70, s.t.mergeBeyond, 290);
+        s.add(2, s.t.mergeJoining, 50, s.t.mergeBeyond, 290, 1);
+        bool flipped = false;
+        Real shortThen = 0, speedThen = 0, stopOffStart = 0;
+        double at = 0;
+        for (int i = 0; i < static_cast<int>(150 / kStep) && s.arrived < 3; ++i) {
+            s.step();
+            const Car* bus = s.d.car(CarId(2));
+            const Car* car = s.d.car(CarId(1));
+            if (flipped || !bus || !car || bus->path != s.t.mergeJoining || car->path != s.t.mergeThrough) continue;
+            const Real toStart = busStart - bus->along;
+            // Only while the bus is short of the stretch and holds a stop to give way.
+            if (!(toStart > 0) || !bus->held.hasStop || !givesWay(bus->held.stopFor)) continue;
+            Question by = Question::None;
+            if (!s.d.resolver().goesFirst(s.t.graph, join, 2, 1, &by) || by != Question::CannotStop) continue;
+            flipped = true;
+            shortThen = toStart;
+            speedThen = bus->speed;
+            stopOffStart = static_cast<Real>(bus->held.stopAt - (bus->odometer + toStart));
+            at = s.d.clockSeconds();
+        }
+        std::printf("    the %s lane has the lower id: the bus, holding its give-way stop, was put before car 1 by "
+                    "cannot_stop: %s", joiningLaneFirst ? "joining" : "through", flipped ? "YES" : "no\n");
+        if (flipped)
+            std::printf(", at t=%.2f s, %.4f m short of the stretch at %.3f m/s, its stop %.3e m from the stretch's start\n",
+                        at, shortThen, speedThen, stopOffStart);
+        // KNOWN FAULT, asserted as it is today. The right outcome is CHECK(!flipped).
+        if (!flipped)
+            std::printf("    >>> THE KNOWN FAULT IS GONE: a car holding its give-way stop is no longer put first by cannot_stop. "
+                        "Flip this case to CHECK(!flipped) (see the note above merge_known_fault_a) and keep it as the "
+                        "regression test.\n");
+        CHECK(flipped);
+        if (flipped) {
+            CHECK(shortThen > 0 && shortThen < 0.1);
+            CHECK(speedThen < 1.0);
+            CHECK(std::fabs(stopOffStart) < 1e-9);
         }
     }
 }
