@@ -43,6 +43,15 @@ inline Vec2 normalize(const Vec2& v) {
 inline Vec2 perp(const Vec2& v) { return {-v.y, v.x}; }
 inline Real distance(const Vec2& a, const Vec2& b) { return (a - b).length(); }
 inline Vec2 lerp(const Vec2& a, const Vec2& b, Real t) { return a + (b - a) * t; }
+// Two plan points are the same place within the tolerance: the DISTANCE between them is no more than `eps` (a circle,
+// as every same-point check in the road code measures it -- `distance(a, b) < tolerance` -- so moving one of those to
+// this changes nothing but the name). NOT each coordinate on its own, which is what the Vec3 approxEqual in rt_math.h
+// asks. Pass a named tolerance (rt_math.h kSamePoint, kWrittenStation). The same point is always the same (infinite
+// coordinates too); a NaN coordinate: false.
+inline bool approxEqual(const Vec2& a, const Vec2& b, Real eps) {
+    const Real dx = comparedDifference(a.x, b.x), dy = comparedDifference(a.y, b.y);
+    return std::sqrt(dx * dx + dy * dy) <= eps;
+}
 
 using Poly2 = std::vector<Vec2>;
 

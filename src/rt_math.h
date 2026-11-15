@@ -95,13 +95,73 @@ inline Vec3 maxVec(const Vec3& a, const Vec3& b) {
     return {std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z)};
 }
 
+// ---- Comparing computed numbers ---------------------------------------------------------------------------------------
+//
+// Two numbers that were each worked out (a sum of lengths, a distance along a path, a point projected onto a line) are
+// never compared with a bare ==, <= or <: the last bit of a sum decides the answer. (A stop placed AT a stretch's start
+// came out 7.1e-15 m past it, and `stop <= start` said no: the cause of a collision, 2026-11-14.) They are compared by
+// the questions below, with a NAMED tolerance that says how close counts as the same.
+//
+// THE FIVE QUESTIONS all read ONE number, d (comparedDifference below: a - b, or zero when a and b are equal), against
+// ONE tolerance, so they can never disagree at the boundary:
+//   strictlyBefore(a, b, eps)   a is before b by more than the tolerance      d < -eps
+//   approxEqual(a, b, eps)      a and b are the same within the tolerance     |d| <= eps
+//   strictlyPast(a, b, eps)     a is past b by more than the tolerance        d > eps
+//   atOrBefore(a, b, eps)       a is before b, or the same                    d <= eps     (before or equal)
+//   atOrPast(a, b, eps)         a is past b, or the same                      d >= -eps    (past or equal)
+// For any a and b that are numbers (the infinities included) and eps >= 0, EXACTLY ONE of strictlyBefore, approxEqual,
+// strictlyPast is true, atOrBefore is "not strictlyPast" and atOrPast is "not strictlyBefore" (tests/test_math.cpp
+// checks it at the tolerance, one step of a double either side of it, and at the infinities). "Before" and "past" are
+// along a number line: smaller and larger.
+//
+// WHAT IS NOT A NUMBER, AND THE INFINITIES (each is deliberate):
+//   - EQUAL VALUES ARE THE SAME, ALWAYS, the infinities too: the code uses infinity for "never" and "no stop" (the
+//     driving's kNever, kForever, kFar), and a bare `never <= never` is true. So two infinities of one sign are the same
+//     (approxEqual, atOrBefore and atOrPast true; neither strictly before nor past), and swapping a bare `a <= b` for
+//     atOrBefore(a, b, eps) never changes the answer when both are "never". (Their plain difference would not be a
+//     number; that is why d is zero for equal values.)
+//   - one side infinite, the other finite, or infinities of opposite signs: strictly before or strictly past, as the
+//     signs say; never the same.
+//   - a or b is NaN: every question answers false. Nothing is before, at or past a number that does not exist, so with a
+//     NaN atOrBefore is NOT "not strictlyPast": a caller that must act on a NaN checks for it.
+//   - eps must be zero or more. A NaN eps makes every question false; a negative one is a caller's fault (nothing is
+//     the same, and "before" and "past" can both hold).
+//
+// approxEqual keeps its old default tolerance (1e-6, no unit) for the callers written before the named ones. NEW CODE
+// PASSES A NAMED TOLERANCE; the ordered questions have no default for that reason.
+//
+// The Vec3 approxEqual asks each coordinate on its own (a box: two points up to eps * sqrt(3) apart pass). The plan-point
+// (Vec2) one in engine/procgen/city/polygon.h asks the DISTANCE between the points instead, as the road code's
+// same-point checks do; the two differ on purpose, and this one is kept as it is for its callers.
+inline Real comparedDifference(Real a, Real b) { return a == b ? Real(0) : a - b; }
 inline bool approxEqual(Real a, Real b, Real eps = 1e-6) {
-    return std::abs(a - b) <= eps;
+    return std::abs(comparedDifference(a, b)) <= eps;
 }
 inline bool approxEqual(const Vec3& a, const Vec3& b, Real eps = 1e-6) {
     return approxEqual(a.x, b.x, eps) && approxEqual(a.y, b.y, eps) &&
            approxEqual(a.z, b.z, eps);
 }
+inline bool strictlyBefore(Real a, Real b, Real eps) { return comparedDifference(a, b) < -eps; }
+inline bool strictlyPast(Real a, Real b, Real eps) { return comparedDifference(a, b) > eps; }
+inline bool atOrBefore(Real a, Real b, Real eps) { return comparedDifference(a, b) <= eps; }
+inline bool atOrPast(Real a, Real b, Real eps) { return comparedDifference(a, b) >= -eps; }
+
+// THE NAMED TOLERANCES FOR LENGTHS (metres). Each is defined here once; a file that needs one uses it by name.
+// THE EXISTING CODE DOES NOT AGREE EVERYWHERE, and these two are the values to converge on, not a summary of what is
+// there: a "same point" is 1 cm in lanes/swept_body.h (kSweptSamePoint) and 1e-9 m in swept_body.cpp (kSameLinePoint);
+// "written to the centimetre" is 0.005 in lanes/road_layout.cpp (its local kWritten) and in street_map.cpp
+// (kSameStation), while lanes/road_layout.cpp has another kSameStation of 1e-6. Each such place needs a DECISION when it
+// is converted (does anything depend on the other value?), not a rename.
+//   kSamePoint: two positions closer than this are one place: 1 mm. Anything the engine works out (a cut along a road, a
+//     point projected onto a line, a sum of path lengths) is good to far better than this, and nothing drawn or driven
+//     is smaller. The value the road builder uses for "two stations are one" (lanes/lane_level.cpp kCutTolerance,
+//     kSliceGap, kJoinReported; lane_graph.cpp kLengthTolerance).
+constexpr Real kSamePoint = 1e-3;
+//   kWrittenStation: a distance read from a road file is only good to this: 1 cm, because the road file and the planner
+//     write stations and points to the centimetre. Two numbers that came from one written value are within this of each
+//     other (lanes/lane_expand.h kReachesStreetEnd; lanes/road_layout.h kPlannerSameEnd).
+constexpr Real kWrittenStation = 1e-2;
+// (No named tolerance for angles or for times yet: the existing code does not agree on one value for either.)
 
 struct Ray {
     Vec3 origin;
