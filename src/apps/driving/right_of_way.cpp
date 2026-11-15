@@ -238,7 +238,8 @@ std::vector<std::pair<bool, std::vector<uint8_t>>> buildPhases(const JunctionWor
 }
 
 // WHAT THE ROADS STATE at meeting `rec`: true when one of its two paths joined the other's lane by a stated merge
-// (CrossingPoint::merging), with that path's side, the one that gives way, in `who`. The one place the mark is read.
+// (CrossingPoint::merging), with that path's side, the one that gives way, in `who`. The one place the mark DECIDES
+// anything (buildRightOfWay also looks at whether a record is marked, only to count it and to note one never asked).
 bool statedMergeSays(const CrossingPoint& rec, GivesWay& who) {
     if (!rec.merging.valid()) return false;
     if (rec.merging == rec.a) who = GivesWay::A;

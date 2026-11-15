@@ -795,10 +795,18 @@ movement_rank = { "straight", "near_turn", "far_turn", "u_turn" }   -- earlier g
 ```
 
 `settle` is read left to right: the first question that tells the two movements apart decides. The questions
-(`light`, `sign_rank`, `movement`, `arrived_first`, `kerb_side`) are a small fixed vocabulary in C++. Questions that
-depend only on the road (`sign_rank`, `movement`, `light` per signal phase) are answered **at load** and stored per
-pair of movements. Questions that depend on the moment (`arrived_first`) are stored as "ask while driving". A
-roundabout is `give_way` on every entry; it needs no new question.
+(`light`, `sign_rank`, `movement`, `arrived_first`, `kerb_side`, `stated_merge`) are a small fixed vocabulary in C++.
+Questions that depend only on the road (`sign_rank`, `movement`, `light` per signal phase, `stated_merge`) are answered
+**at load** and stored per pair of movements. Questions that depend on the moment (`arrived_first`) are stored as "ask
+while driving". A roundabout is `give_way` on every entry; it needs no new question.
+*`stated_merge`* (2026-11-14): where the roads state that one lane runs into the lane beside it (a ramp's lane joining
+the road, a lane that ends), the car on the lane that joined gives way. It reads only the roads' own statement (the
+lane graph marks the place where the two lanes join with the lane that joined); nothing is judged from shape, and at any
+other meeting the question says nothing. It is meant for the rule set's `between_junctions` list. **The lab's rule set
+does not ask it yet.** With it asked, a joining car and a through car can both be on the long stretch where their lanes
+join (43 m in the lab) with nothing keeping the pair apart, and they drive through each other; two recorded test
+scenes hold that fault (`merge_known_fault_a` and `_b` in `tests/test_driving_give_way.cpp`). It is switched on when
+joining is reworked.
 *As built* (task B4, ADR-0403): the two-way stop row is named `stop` (as the sign kit's STOP sign names it), and a row
 with lights may name `when_dark`, the row it is treated as while no light runs a programme (a host that registers no
 light clock: section 9.1). A sixth table, `placement`, is the planner's (section 5.1).
