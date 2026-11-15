@@ -24,9 +24,6 @@ std::string fmt(const char* f, ...) {
     return buf;
 }
 
-// Two stations the road file writes from one number (to the centimetre) are one.
-constexpr Real kSameStation = 0.005;
-
 bool isStreetClass(RoadClass k) { return k == RoadClass::Arterial || k == RoadClass::Collector || k == RoadClass::Local; }
 bool isDeckClass(RoadClass k) { return k == RoadClass::Freeway || k == RoadClass::Ramp; }
 
@@ -46,7 +43,7 @@ Run runOf(const RoadModel& m, const Range& line, Real lo, Real hi) {
     r.pts.push_back(pointAtStation(xy, s, n, lo));
     r.st.push_back(lo);
     for (std::size_t i = 0; i < n; ++i)
-        if (s[i] > lo + kSameStation && s[i] < hi - kSameStation) {
+        if (strictlyPast(s[i], lo, kWrittenStation) && strictlyBefore(s[i], hi, kWrittenStation)) {
             r.pts.push_back(xy[i]);
             r.st.push_back(s[i]);
         }
@@ -71,7 +68,7 @@ Run thinned(const Run& in, const std::vector<Real>& cuts) {
     for (Real c : cuts) kept.emplace_back(c, pointAtStation(in.pts.data(), in.st.data(), in.pts.size(), c));
     std::sort(kept.begin(), kept.end(), [](const std::pair<Real, Vec2>& a, const std::pair<Real, Vec2>& b) { return a.first < b.first; });
     for (const std::pair<Real, Vec2>& k : kept) {
-        if (!out.st.empty() && k.first - out.st.back() < kSameStation) continue;
+        if (!out.st.empty() && atOrBefore(k.first, out.st.back(), kWrittenStation)) continue;
         // ...and no longer than kStreetMapSpan between nodes: the span cut into equal parts, on the line as it was
         if (!out.st.empty()) {
             const Real span = k.first - out.st.back();
@@ -207,7 +204,7 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
         if (J.nodes.empty()) return 0;
         for (std::size_t n = 0; n < J.nodes.size(); ++n)
             for (const ModelNodePoint& p : J.nodes[n].points)
-                if (p.edge == edge && std::fabs(p.station - station) <= kSameStation) return static_cast<int>(n);
+                if (p.edge == edge && sameWrittenStation(p.station, station)) return static_cast<int>(n);
         return -1;
     };
     for (std::size_t j = 0; j < m.junctions.size(); ++j) {
@@ -243,7 +240,7 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
             int host = -1;
             for (std::size_t s = 0; s < m.streets.size() && he != edgeOf.end(); ++s) {
                 const ModelStreet& S = m.streets[s];
-                if (S.edge == he->second && stated(E.hostStation) && E.hostStation >= S.from - kSameStation && E.hostStation <= S.to + kSameStation)
+                if (S.edge == he->second && stated(E.hostStation) && atOrPast(E.hostStation, S.from, kWrittenStation) && atOrBefore(E.hostStation, S.to, kWrittenStation))
                     host = static_cast<int>(s);
             }
             if (host < 0 || !stated(E.rampStation)) {
@@ -323,11 +320,11 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
                 // a ramp's end anchored on its host: driven from (or to) its gore, joined at the host's node there. This
                 // street end is the ramp's start when it begins its road, its end when no street of the road runs further
                 int rampEnd = -1;
-                if (k == 0 && std::fabs(S.from) <= kSameStation) rampEnd = 0;
+                if (k == 0 && sameWrittenStation(S.from, 0.0)) rampEnd = 0;
                 if (k == 1) {
                     rampEnd = 1;
                     for (const ModelStreet& O : m.streets)
-                        if (O.edge == S.edge && O.to > S.to + kSameStation) rampEnd = -1;
+                        if (O.edge == S.edge && strictlyPast(O.to, S.to, kWrittenStation)) rampEnd = -1;
                 }
                 const std::map<std::pair<uint32_t, int>, int>::const_iterator g =
                     rampEnd >= 0 ? goreNode.find({S.edge, rampEnd}) : goreNode.end();
@@ -347,7 +344,7 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
                 ++rep.deadEnds;
             }
         }
-        if (endStation[1] - endStation[0] <= kSameStation) {
+        if (atOrBefore(endStation[1], endStation[0], kWrittenStation)) {
             rep.notes.push_back(fmt("street %s: nothing of it is left to drive between its ends (%.2f to %.2f)", S.id.c_str(), endStation[0], endStation[1]));
             continue;
         }
@@ -357,10 +354,10 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
         const std::map<int, std::vector<std::pair<Real, int>>>::const_iterator ct = cutsOn.find(static_cast<int>(s));
         if (ct != cutsOn.end())
             for (const std::pair<Real, int>& c : ct->second) {
-                if (c.first <= endStation[0] + kSameStation || c.first >= endStation[1] - kSameStation) {
+                if (atOrBefore(c.first, endStation[0], kWrittenStation) || atOrPast(c.first, endStation[1], kWrittenStation)) {
                     // a gore at the street's very end: that end's node is the gore's (the host's street ends there)
                     rep.notes.push_back(fmt("a ramp's gore stands at the end of street %s (%.2f): joined to that end", S.id.c_str(), c.first));
-                    const int at = c.first <= endStation[0] + kSameStation ? 0 : 1;
+                    const int at = atOrBefore(c.first, endStation[0], kWrittenStation) ? 0 : 1;
                     // the gore's node takes the street's links there: the street's end node becomes the gore's
                     endNode[static_cast<std::size_t>(at)] = c.second;
                     continue;
@@ -387,7 +384,7 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
             if (i + 1 == run.pts.size()) { along.push_back(endNode[1]); continue; }
             int node = -1;
             for (const std::pair<const Real, int>& c : cutNode)
-                if (std::fabs(c.first - run.st[i]) <= kSameStation) node = c.second;
+                if (sameWrittenStation(c.first, run.st[i])) node = c.second;
             along.push_back(node >= 0 ? node : addNode(run.pts[i], -1, JunctionKind::None));
         }
         layLinks(run, along, S.section, S.edge, static_cast<int>(s), -1, endArm[0], endArm[1]);
@@ -408,14 +405,14 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
             std::vector<std::pair<Real, int>> on;
             for (std::size_t p = 0; p < J.nodes.size(); ++p)
                 for (const ModelNodePoint& q : J.nodes[p].points)
-                    if (q.edge == st.edge && q.station >= st.from - kSameStation && q.station <= st.to + kSameStation)
+                    if (q.edge == st.edge && atOrPast(q.station, st.from, kWrittenStation) && atOrBefore(q.station, st.to, kWrittenStation))
                         on.emplace_back(q.station, pointNodes[j][p]);
             std::sort(on.begin(), on.end());
-            if (on.empty() || on.front().first > st.from + kSameStation || on.back().first < st.to - kSameStation)
+            if (on.empty() || strictlyPast(on.front().first, st.from, kWrittenStation) || strictlyBefore(on.back().first, st.to, kWrittenStation))
                 rep.notes.push_back(fmt("junction %s: its stretch of %s inside it (%.2f to %.2f) does not end at its stated points: the stretch "
                                         "beyond them is not driven", J.id.c_str(), st.road.c_str(), st.from, st.to));
             for (std::size_t i = 0; i + 1 < on.size(); ++i) {
-                if (on[i + 1].first - on[i].first <= kSameStation || on[i].second == on[i + 1].second) continue;
+                if (atOrBefore(on[i + 1].first, on[i].first, kWrittenStation) || on[i].second == on[i + 1].second) continue;
                 const std::pair<int, int> ahead(on[i].second, on[i + 1].second), back(on[i + 1].second, on[i].second);
                 const bool forward = st.section.lanesForward > 0 && laidBetween.count(ahead) == 0;
                 const bool backward = st.section.lanesBackward > 0 && laidBetween.count(back) == 0;

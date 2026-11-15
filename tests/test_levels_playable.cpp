@@ -2328,7 +2328,7 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
         c.junction = static_cast<int>(j);
         std::set<std::string> here;
         for (const engine::NamedArm& a : engine::namedArmsAt(model, engine::ModelJunctionId(static_cast<uint32_t>(j)))) {
-            c.arms.push_back({a.arm, a.point, a.dir, a.travelWidth * 0.5, a.name});
+            c.arms.push_back({a.arm, a.point, a.dir, model.streets[a.street.index].section.travelWidth() * 0.5, a.name});
             here.insert(a.name);
         }
         corners += here.size() >= 2 ? 1 : 0;

@@ -52,9 +52,9 @@ struct Lane {
     bool isConnector() const { return kind == "connector"; }
 };
 
-// A lane reaches a street's end when its stretch of spine comes within this of it (metres): the streets' stations are
-// written to the centimetre.
-constexpr double kReachesStreetEnd = 0.01;
+// (A lane reaches a street's end when its stretch of spine comes to the same station as it: the streets' stations are
+// written to the centimetre, so "the same" is the one answer for written stations, road_model_parts.h sameWrittenStation
+// and rt_math.h kWrittenStation.)
 
 struct LaneSet {
     std::vector<Lane> lanes;

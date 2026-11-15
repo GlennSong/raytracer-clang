@@ -127,7 +127,10 @@ RampAnchor readAnchor(const nlohmann::json& j, const LaneLayout& hostLanes) {
     else if (j.contains("x")) { a.axis = 'x'; a.coord = j.at("x").get<double>(); a.set = true; }
     else if (j.contains("y")) { a.axis = 'y'; a.coord = j.at("y").get<double>(); a.set = true; }
     else if (j.contains("at")) { a.axis = 'p'; a.px = j.at("at").at(0).get<double>(); a.py = j.at("at").at(1).get<double>(); a.set = true; }
-    a.aux = num(j, "aux", 120.0); a.decel = num(j, "decel", 100.0); a.taper = num(j, "taper", 30.0 * hostLanes.w); a.approach = num(j, "approach", 150.0);
+    a.aux = num(j, "aux", 120.0); a.decel = num(j, "decel", 100.0); a.approach = num(j, "approach", 150.0);
+    // the taper the file states; none stated, or zero: the default (the one place it is applied)
+    a.taper = num(j, "taper", 0.0);
+    if (!(a.taper > 0)) a.taper = kRampTaperLaneWidths * hostLanes.w;
     return a;
 }
 
@@ -250,7 +253,7 @@ std::array<double, 4> RoadLabGraph::bounds() const {
     if (terrain.hasBounds) return terrain.bounds;
     double x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300, m = 0;
     for (const EdgeSpec& e : edges) {
-        const RoadClassSpec& c = cls(e); m = std::max(m, 4 * (carriagewayHalfWidth(e) + c.sidewalk));
+        m = std::max(m, 4 * sidewalkOuterHalfWidth(e));
         for (const Vec2& p : e.xy) { x0 = std::min(x0, p.x); x1 = std::max(x1, p.x); y0 = std::min(y0, p.y); y1 = std::max(y1, p.y); }
     }
     return {x0 - m, x1 + m, y0 - m, y1 + m};
@@ -342,7 +345,10 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
             if (l.contains("pockets")) for (const auto& p : l["pockets"]) {
                 PocketSpec P; P.id = p.at("id").get<std::string>(); P.kind = p.value("kind", std::string("turn")); P.side = p.value("side", std::string("right"));
                 P.dir = p.value("dir", std::string("fwd")) == "back" ? -1 : +1; P.s0 = p.at("s0").get<double>(); P.s1 = p.at("s1").get<double>();
-                P.taper = num(p, "taper", 10 * e.lanes.w); P.taperOut = num(p, "taper_out", 0.0); e.pockets.push_back(P);
+                // the taper the file states; none stated, or zero: the default (the one place it is applied)
+                P.taper = num(p, "taper", 0.0);
+                if (!(P.taper > 0)) P.taper = kPocketTaperLaneWidths * e.lanes.w;
+                P.taperOut = num(p, "taper_out", 0.0); e.pockets.push_back(P);
             }
         }
         if (ej.contains("platforms")) for (const auto& pj : ej["platforms"]) {
@@ -427,8 +433,15 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                 a.spineIn = spine == "in";
                 if (aj.contains("regulations")) a.regulations = aj["regulations"].get<std::vector<std::string>>();
                 if (!g.index.count(a.road)) throw std::runtime_error("junction " + pj.id + ": arm names unknown road " + a.road);
-                const std::map<std::string, uint32_t>::const_iterator street = streetAt.find(aj.value("street", std::string()));
-                if (street != streetAt.end()) a.street = ModelStreetId(street->second);
+                // the street it is, by id: one the file's "streets" list holds (an arm naming no street states none; one
+                // naming a street the file does not have is refused, like any other unknown id)
+                if (aj.contains("street")) {
+                    const std::string streetId = aj["street"].get<std::string>();
+                    const std::map<std::string, uint32_t>::const_iterator street = streetAt.find(streetId);
+                    if (street == streetAt.end())
+                        throw std::runtime_error("junction " + pj.id + ": arm " + a.road + " names unknown street " + streetId);
+                    a.street = ModelStreetId(street->second);
+                }
                 if (aj.contains("heading")) a.heading = aj["heading"].get<double>();
                 pj.arms.push_back(a);
             }

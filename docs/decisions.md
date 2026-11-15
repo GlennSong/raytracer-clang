@@ -20848,3 +20848,17 @@ What it does: questions about a road that several files answered, sometimes diff
 - Facts to a junction: `junctionOf` (control_plan.h). A road's posted limit: `postedLimitOn` (control_plan.cpp).
 - Two stations are one place: `sameWrittenStation` (road_model_parts.h, 1 cm); only the control plan's two joins use it yet.
 Not done (issue #292 list): the stop-line setback's second copy, the ramp meeting and tapers, the one junction writer, the other station tolerances. Lanes tag bumped (half widths are exact now).
+
+
+## ADR-0433 — One answer per road question, second pass (issue #292): where each now lives
+**Status:** Provisional · **Date:** 2026-11-15
+
+What it does: six more questions that were answered twice now have one function each, and the other answers are deleted.
+- Which approaches face each other, for the driving too: `approachesFace` (apps/driving/right_of_way.h) asks `LaneGraph::facing` (the junction's stated through pair). `kOncomingDot` and `kFacingDot` are gone. "Alongside" (two approaches arriving the same way: neither is on the other's kerb side) has no stated fact; it stays the one angle test, `kAlongsideDot`.
+- How far back a stop line stands: `boxEdgeBack` / `stopLineBack` (road_model_parts.h): the widest road crossing the arm (not its through partner), then `kStopLineBack`. `junctionAreas` and the grouping of road ends (`findJunctions`) both call it; the grouping asks it of each node's own arms (`armsOver`).
+- Where a ramp's lane meets its host lane: the builder's record, `EdgeSpec::anchorMeets` (set by `composeRamp`); `ModelConnection::meets` copies it. Owed: the builder lays whole metres, so a ramp whose length is not whole metres meets its host up to a metre early; laying the rest lengthens the ramp past the streets the shipped road files state for it (river_town: four merges came apart), so it waits for those layouts to be written again.
+- The default tapers: `kRampTaperLaneWidths` (30) and `kPocketTaperLaneWidths` (10), road_graph_spec.h, each applied once, where the road file is read.
+- A junction as the file writes it: `junctionJson` (road_layout.h). `writeControlPlan` reads the listed junctions into the model's types and writes through it.
+- Two stations are one place: `sameWrittenStation` and `kWrittenStation` (rt_math.h), now 7.5 mm: between a number and its own written form (up to 5 mm) and two different written numbers (10 mm or more). `kReachesStreetEnd`, both `kSameStation`s and `kWritten` are gone. An arm naming a street the file lacks is refused at read.
+- Which way a stated heading points: `directionOf` (road_model_parts.h). A named arm's width: asked of its street's section (`NamedArm::travelWidth` is gone). Where the sidewalk starts: `RoadLabGraph::sidewalkOuterHalfWidth`, outside the shoulder.
+Lanes tag and `kLaneGraphBuildVersion` bumped (the pavement moves only for a class with both a shoulder and a sidewalk, which no shipped file has; the lane level's tolerance and a ramp's merge station changed).

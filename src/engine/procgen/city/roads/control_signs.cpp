@@ -30,8 +30,6 @@ std::string text(const nlohmann::json& j) {
     return out;
 }
 
-Vec2 headingDir(Real degrees) { return Vec2(std::cos(degrees * DEG_TO_RAD), std::sin(degrees * DEG_TO_RAD)); }
-
 }  // namespace
 
 std::vector<ControlSignRule> controlSignRules(const AttachmentKinds& kinds, std::vector<std::string>* problems) {
@@ -160,7 +158,7 @@ ControlSignPlan placeControlSigns(const RoadModel& m, const std::vector<ControlS
                 Vec2 mouth;
                 if (!armMouth(m, J, k, mouth) || !stated(a.stopLine)) continue;
                 const Real stop = std::fabs(a.stopLine - a.station);   // metres out along the arm from its mouth
-                const Vec2 d = headingDir(a.heading);   // out along the arm, away from the junction
+                const Vec2 d = directionOf(a.heading);   // out along the arm, away from the junction
                 const Vec2 along = mouth + d * (stop - r.fromStopLine);
                 const Real out = S.section.carriagewayHalfWidth() + r.fromKerb;
                 nlohmann::json look = r.look;
@@ -191,7 +189,7 @@ ControlSignPlan placeControlSigns(const RoadModel& m, const std::vector<ControlS
                         if (p == k || !P.street.valid() || P.street.index >= m.streets.size() || !stated(P.heading)) continue;
                         const ModelStreet& PS = m.streets[P.street.index];
                         if (PS.section.lanesArriving(P.spineIn) == 0) continue;
-                        const Vec2 dp = headingDir(P.heading);
+                        const Vec2 dp = directionOf(P.heading);
                         if (std::fabs(dot(dp, d)) >= crossCos) continue;
                         // this arm on the reader's kerb side: the near corner (toward the reader's arm); on its off side:
                         // the far corner (away from it)

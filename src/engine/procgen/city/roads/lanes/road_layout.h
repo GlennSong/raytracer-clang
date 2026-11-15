@@ -85,6 +85,12 @@ ControlPlan planLayoutControls(const RoadLabGraph& g, LayoutSource source, const
 // In words: counts by number of arms, streets, dead ends, the notes.
 std::string describeLayout(const RoadLayout& layout);
 
+// A JUNCTION AS THE ROAD FILE WRITES IT -- THE ONE WRITER (issue #292): every member the file states of a junction and of
+// each arm, from the model's own type. `streets`: the list its arms' streets are places in (their ids are what is
+// written). The layout (writeLayout, insertLayoutText) and the control plan (control_plan.h writeControlPlan) both write
+// through it, so a member added to ModelJunction or ModelArm is written by both or by neither.
+nlohmann::json junctionJson(const ModelJunction& pj, const std::vector<ModelStreet>& streets);
+
 // WRITES IT INTO A SCENE'S JSON: the "junctions" list replaced by the layout's (a junction's control-plan members kept
 // as the layout carries them) and the "streets" list set; "arms_in_ring": true where the layout's arms are in their ring
 // (armsInRing, ADR-0427). For a scene the planner is making.

@@ -328,9 +328,8 @@ TEST_CASE(junction_table_2b_four_way_far_turns_protected_by_warrant) {
         if (rec.otherSide != engine::OtherSide::Path || rec.meeting == engine::Meeting::Split) continue;
         const engine::PathId o = rec.otherPath();
         if (!row.paths[rec.a.index].protectedTurn && !row.paths[o.index].protectedTurn) continue;
-        const engine::Vec2 ha = row.approaches[row.paths[rec.a.index].approach].heading;
-        const engine::Vec2 ho = row.approaches[row.paths[o.index].approach].heading;
-        if (!(engine::dot(ha, ho) < kFacingDot)) continue;
+        if (!approachesFace(g, row.approaches[row.paths[rec.a.index].approach], row.approaches[row.paths[o.index].approach]))
+            continue;
         for (uint32_t ph = 0; ph < jr.phases.count; ++ph) {
             ++checked;
             CHECK(!(row.light(g, rec.a, ph) == Light::Green && row.light(g, o, ph) == Light::Green));
@@ -489,19 +488,120 @@ TEST_CASE(junction_table_7_kerb_side_at_a_five_way) {
         return engine::Vec2(-std::cos(degrees * kDeg), -std::sin(degrees * kDeg));
     };
     const std::vector<engine::Vec2> heads = {engine::Vec2(1, 0), roadAt(0), roadAt(60), roadAt(120), roadAt(-90)};
+    // The junction states approaches 0 and 1 as one road carrying on through: they face each other. No other pair does.
+    std::vector<uint8_t> faces(heads.size() * heads.size(), 0);
+    faces[0 * heads.size() + 1] = faces[1 * heads.size() + 0] = 1;
     CHECK(engine::dot(engine::perp(heads[0]) * kerbwardPerpSign(DrivesOn::Right), engine::Vec2(0, 1)) > 0.99);
     // Keeping to DrivesOn::Right's side: of the two on my kerb half, only the first found turning toward the kerb (60 degrees) is on my kerb
     // side; the one facing me and the one on my offside are not.
-    CHECK(onKerbSideOf(heads, 2, 0, DrivesOn::Right));
-    CHECK(!onKerbSideOf(heads, 3, 0, DrivesOn::Right));
-    CHECK(!onKerbSideOf(heads, 1, 0, DrivesOn::Right));
-    CHECK(!onKerbSideOf(heads, 4, 0, DrivesOn::Right));
+    CHECK(onKerbSideOf(heads, faces, 2, 0, DrivesOn::Right));
+    CHECK(!onKerbSideOf(heads, faces, 3, 0, DrivesOn::Right));
+    CHECK(!onKerbSideOf(heads, faces, 1, 0, DrivesOn::Right));
+    CHECK(!onKerbSideOf(heads, faces, 4, 0, DrivesOn::Right));
     // Keeping to DrivesOn::Left's side, the kerb is the other way: the road at -90 degrees is the only one on my kerb half, and so on my
     // kerb side.
-    CHECK(onKerbSideOf(heads, 4, 0, DrivesOn::Left));
-    for (const std::size_t i : {1u, 2u, 3u}) CHECK(!onKerbSideOf(heads, i, 0, DrivesOn::Left));
+    CHECK(onKerbSideOf(heads, faces, 4, 0, DrivesOn::Left));
+    for (const std::size_t i : {1u, 2u, 3u}) CHECK(!onKerbSideOf(heads, faces, i, 0, DrivesOn::Left));
     // Two approaches facing each other: neither is on the other's kerb side.
-    CHECK(!onKerbSideOf(heads, 0, 1, DrivesOn::Right) && !onKerbSideOf(heads, 1, 0, DrivesOn::Right));
+    CHECK(!onKerbSideOf(heads, faces, 0, 1, DrivesOn::Right) && !onKerbSideOf(heads, faces, 1, 0, DrivesOn::Right));
+}
+
+// ---- 7b. which approaches face each other is the junction's stated through pair, never an angle (issue #292) -------------
+
+namespace {
+
+// Makes the road arriving at the middle junction of a 3 x 3 grid heading `in` arrive `degrees` off its own line (its lanes
+// keep their ends at the junction and swing their starts round), and states or un-states it and the road across the
+// junction as one road carrying on through.
+void bendAndState(TestRoads& t, Heading in, double degrees, bool statedThrough) {
+    engine::LaneGraph& g = t.graph;
+    const double kDeg = 3.14159265358979323846 / 180;
+    const engine::Vec2 d = driving_test::headingVector(in);
+    const engine::Vec2 turned(d.x * std::cos(degrees * kDeg) - d.y * std::sin(degrees * kDeg),
+                              d.x * std::sin(degrees * kDeg) + d.y * std::cos(degrees * kDeg));
+    for (uint32_t k = 0; k < t.spec.lanesEachWay; ++k) {
+        engine::Path& lane = g.paths[t.laneArriving(1, 1, in, k).index];
+        g.points[lane.curve.first] = g.points[lane.curve.end() - 1] - turned * lane.length;
+    }
+    for (const Heading h : {in, driving_test::opposite(in)})
+        for (uint32_t k = 0; k < t.spec.lanesEachWay; ++k) {
+            engine::Path& lane = g.paths[t.laneArriving(1, 1, h, k).index];
+            lane.throughArm = statedThrough ? static_cast<uint32_t>(driving_test::opposite(h)) : engine::kNoIndex;
+        }
+}
+
+// Whether the approaches arriving at the middle junction heading `a` and `b` face each other, as the table has it.
+bool tableFaces(const TestRoads& t, const RightOfWay& row, Heading a, Heading b) {
+    const uint32_t ca = row.paths[t.connector(1, 1, a, 0, a, 0).index].approach;
+    const uint32_t cb = row.paths[t.connector(1, 1, b, 0, b, 0).index].approach;
+    return approachesFace(t.graph, row.approaches[ca], row.approaches[cb]);
+}
+
+// In some phase the far turn from `a` and the straight-on from `b` (whose paths cross) are both green.
+bool greenTogether(const TestRoads& t, const RightOfWay& row, Heading a, Heading b) {
+    const engine::PathId far = t.connector(1, 1, a, 0, driving_test::farTurnFrom(a, t.spec.drivesOn), 0);
+    const engine::PathId straight = t.connector(1, 1, b, 0, b, 0);
+    const JunctionRules& jr = row.junctions[t.junction(1, 1).index];
+    for (uint32_t ph = 0; ph < jr.phases.count; ++ph)
+        if (row.light(t.graph, far, ph) == Light::Green && row.light(t.graph, straight, ph) == Light::Green) return true;
+    return false;
+}
+
+}  // namespace
+
+TEST_CASE(junction_table_7b_facing_is_the_stated_through_pair_not_the_angle) {
+    // The scene each time: a four-way with lights whose far turn may go on a plain green giving way to the approach
+    // facing it. Approaches that face each other share a phase (two phases in all); approaches that do not face each other
+    // and whose turns cross never have those turns green together (three phases: east, north + south, west).
+    // 1. The plain grid: east-west and north-south are stated pairs in line. Two phases.
+    {
+        TestRoads t = driving_test::gridRoads(3, 3);
+        const RightOfWay row = tableFor(t.graph, rulesWith(signal(false)));
+        CHECK(tableFaces(t, row, kEast, kWest) && tableFaces(t, row, kNorth, kSouth));
+        CHECK(!tableFaces(t, row, kEast, kNorth));
+        CHECK(row.junctions[t.junction(1, 1).index].phases.count == 2u);
+        CHECK(greenTogether(t, row, kEast, kWest));
+    }
+    // 2. The west-heading road arrives 34 degrees off the line and the junction STATES the pair: they face each other.
+    {
+        TestRoads t = driving_test::gridRoads(3, 3);
+        bendAndState(t, kWest, 34, true);
+        const RightOfWay row = tableFor(t.graph, rulesWith(signal(false)));
+        CHECK(tableFaces(t, row, kEast, kWest));
+        CHECK(row.junctions[t.junction(1, 1).index].phases.count == 2u);
+        CHECK(greenTogether(t, row, kEast, kWest));
+    }
+    // 3. 45 degrees off and STATED: they still face each other (an angle test at 37 degrees says they do not).
+    {
+        TestRoads t = driving_test::gridRoads(3, 3);
+        bendAndState(t, kWest, 45, true);
+        const RightOfWay row = tableFor(t.graph, rulesWith(signal(false)));
+        CHECK(tableFaces(t, row, kEast, kWest));
+        CHECK(row.junctions[t.junction(1, 1).index].phases.count == 2u);
+        CHECK(greenTogether(t, row, kEast, kWest));
+    }
+    // 4. Dead in line and NOT stated as a pair: they do not face each other (an angle test says they do). The far turn
+    //    from the east never shares a green with the west's straight-on, and the junction needs a third phase.
+    {
+        TestRoads t = driving_test::gridRoads(3, 3);
+        bendAndState(t, kWest, 0, false);
+        const RightOfWay row = tableFor(t.graph, rulesWith(signal(false)));
+        CHECK(!tableFaces(t, row, kEast, kWest));
+        CHECK(tableFaces(t, row, kNorth, kSouth));
+        CHECK(row.junctions[t.junction(1, 1).index].phases.count == 3u);
+        CHECK(!greenTogether(t, row, kEast, kWest) && !greenTogether(t, row, kWest, kEast));
+        CHECK(greenTogether(t, row, kNorth, kSouth));
+    }
+    // 5. 34 degrees off and NOT stated (the roads state a pair only within 30 degrees; the old angle test called these
+    //    two facing up to 37): they do not face each other.
+    {
+        TestRoads t = driving_test::gridRoads(3, 3);
+        bendAndState(t, kWest, 34, false);
+        const RightOfWay row = tableFor(t.graph, rulesWith(signal(false)));
+        CHECK(!tableFaces(t, row, kEast, kWest));
+        CHECK(row.junctions[t.junction(1, 1).index].phases.count == 3u);
+        CHECK(!greenTogether(t, row, kEast, kWest));
+    }
 }
 
 // ---- 8. the table as text, and the rule set's control table ---------------------------------------------------------------

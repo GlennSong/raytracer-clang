@@ -21,11 +21,13 @@
 #include "engine/bundle/binary_stream.h"
 #include "engine/procgen/city/roads/lane_graph.h"
 #include "engine/procgen/city/roads/lanes/control_plan.h"
+#include "engine/procgen/city/roads/lanes/deck_mesh.h"     // junctionAreas: the stated junctions' stop lines
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"   // the streets: where one only carries on
 #include "engine/procgen/city/roads/road_model.h"          // assembleRoadModel: the model and its lane level
 
+#include <algorithm>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <set>
@@ -229,6 +231,58 @@ TEST_CASE(control_plan_1b_the_major_road_is_the_stated_through_pair) {
     // ... restated: the main road is west and south
     j["through"] = nlohmann::json::array({nlohmann::json::array({std::min(armOf["w"], armOf["s"]), std::max(armOf["w"], armOf["s"])})});
     CHECK(givesWay(g) == std::set<std::string>({"e"}));
+}
+
+// THE STOP-LINE SETBACK IS ONE RULE (issue #292): the grouping of road ends into junctions and the stated junctions'
+// areas ask the same function (road_model_parts.h stopLineBack), so the same street carrying on is never "a road crossing
+// it". The scene: a local street `a`, 32 m long, between two four-way crossings of local streets. At its east end it
+// carries on as an ARTERIAL (`b`, half width 11 m); the streets crossing there are local (half width 6 m). Its stop line
+// at each end stands back by the crossing local street's half width and 5.2 m: 11.2 m, so 32 - 22.4 = 9.6 m of road lie
+// between its two stop lines, more than the 6.5 m a car needs to wait (rules.storage): TWO junctions. (The grouping's
+// old copy of the rule took the arterial it carries on into as crossing it: 16.2 m back at that end, 4.6 m between,
+// one junction.)
+TEST_CASE(control_plan_1c_the_grouping_and_the_areas_ask_one_stop_line_rule) {
+    nlohmann::json g;
+    g["name"] = "stop_line_test";
+    auto road = [](const std::string& id, const std::string& cls, const Vec2& a, const Vec2& b) {
+        return nlohmann::json{{"id", id}, {"class", cls}, {"path", {{"type", "polyline"}, {"points", {{a.x, a.y}, {b.x, b.y}}}}}};
+    };
+    g["edges"] = nlohmann::json::array(
+        {road("p", "local", Vec2(-232, 0), Vec2(-32, 0)), road("a", "local", Vec2(-32, 0), Vec2(0, 0)),
+         road("b", "arterial", Vec2(0, 0), Vec2(200, 0)), road("q0", "local", Vec2(-32, -150), Vec2(-32, 0)),
+         road("q1", "local", Vec2(-32, 0), Vec2(-32, 150)), road("c0", "local", Vec2(0, -150), Vec2(0, 0)),
+         road("c1", "local", Vec2(0, 0), Vec2(0, 150))});
+    const RoadLabGraph plain = RoadLabGraph::fromJson(g);
+    CHECK(approxEqual(plain.hw(*plain.find("b")), 11.0, kSamePoint) && approxEqual(plain.hw(*plain.find("c0")), 6.0, kSamePoint));
+    CHECK(approxEqual(plain.rules.storage, 6.5, kSamePoint));
+    const std::vector<JunctionFacts> found = findJunctions(plain, testPolicy());
+    CHECK(found.size() == 2u);
+    for (const JunctionFacts& j : found) CHECK(j.arms.size() == 4u && j.inside.empty());
+    // the layout written, the stated junctions' areas give street `a` the same two stop lines
+    writeLayout(g, deriveLayout(plain, LayoutSource::Inferred));
+    const RoadLabGraph laid = RoadLabGraph::fromJson(g);
+    CHECK(laid.junctions.size() == 2u);
+    const int a = laid.index.at("a");
+    std::vector<double> stopLines;
+    for (const JunctionArea& A : junctionAreas(laid))
+        for (const ArmStop& arm : A.arms)
+            if (arm.edge == a) stopLines.push_back(arm.stopLine);
+    std::sort(stopLines.begin(), stopLines.end());
+    CHECK(stopLines.size() == 2u);
+    if (stopLines.size() == 2u) {
+        CHECK(approxEqual(stopLines[0], 11.2, kSamePoint));   // back from the west crossing: 6 + 5.2
+        CHECK(approxEqual(stopLines[1], 20.8, kSamePoint));   // back from the east crossing: 32 - (6 + 5.2)
+    }
+    // AN ARM NAMING A STREET THE FILE DOES NOT HAVE is refused when the file is read, like any other unknown id (issue
+    // #292: it once read as an arm with no street, and nothing said so)
+    g["junctions"][0]["arms"][0]["street"] = "no_such_street";
+    bool refused = false;
+    try {
+        RoadLabGraph::fromJson(g);
+    } catch (const std::exception& e) {
+        refused = std::string(e.what()).find("names unknown street no_such_street") != std::string::npos;
+    }
+    CHECK(refused);
 }
 
 // ---- 2. a road graph planned, written and built ------------------------------------------------------------------------
@@ -474,6 +528,14 @@ TEST_CASE(control_plan_5_the_same_plan_and_graph_every_run) {
     nlohmann::json again = ga;
     writeControlPlan(again, planControls(RoadLabGraph::fromJson(ga), testPolicy()));
     CHECK(again.dump(1) == ga.dump(1));
+    // ... through the one writer of a junction (road_layout.h junctionJson, issue #292): each junction in the scene is that
+    // writer's writing of the junction as the road file's reader reads it back, every member of every arm
+    const RoadLabGraph read = RoadLabGraph::fromJson(again);
+    CHECK(read.junctions.size() == again["junctions"].size() && !read.junctions.empty());
+    for (std::size_t i = 0; i < read.junctions.size() && i < again["junctions"].size(); ++i) {
+        CHECK(again["junctions"][i] == junctionJson(read.junctions[i], read.streets));
+        for (const nlohmann::json& arm : again["junctions"][i]["arms"]) CHECK(arm.contains("street") && arm.contains("heading"));
+    }
     const BuiltLaneLevel second = laneGraphFrom(gb);
     const LaneGraph& first = plannedBuild().graph;
     bundle::BinWriter wa, wb;

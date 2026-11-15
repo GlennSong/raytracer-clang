@@ -761,23 +761,17 @@ std::vector<JunctionArea> junctionAreas(const RoadLabGraph& g) {
             }
             A.arms.push_back(a);
         }
-        // ADR-0419's rule: back from the mouth by the widest road CROSSING it at the same point, else at the junction --
-        // every other arm's road but its own and its stated through partner's (the same street carrying on)
+        // the one rule (road_model_parts.h boxEdgeBack): back from the mouth by the widest road crossing it; the stop
+        // line kStopLineBack further (stopLineBack is the same sum, for a caller with no box edge to hand)
+        std::vector<ArmMouth> mouths;
+        for (std::size_t k = 0; k < A.arms.size(); ++k) {
+            const int edge = A.arms[k].edge;
+            mouths.push_back(ArmMouth{edge, mouth[k], edge >= 0 ? g.hw(g.edges[static_cast<std::size_t>(edge)]) : 0.0});
+        }
         for (std::size_t k = 0; k < A.arms.size(); ++k) {
             ArmStop& a = A.arms[k];
-            const uint32_t ownStreet = throughPartner(pj.through, static_cast<uint32_t>(k));
-            double atPoint = -1, anywhere = 0;
-            for (std::size_t o = 0; o < A.arms.size(); ++o) {
-                const ArmStop& b = A.arms[o];
-                if (b.edge < 0 || b.edge == a.edge || o == ownStreet) continue;
-                const EdgeSpec& eo = g.edges[static_cast<std::size_t>(b.edge)];
-                const double hw = g.hw(eo);
-                anywhere = std::max(anywhere, hw);
-                if (atOrBefore((mouth[o] - mouth[k]).length(), kSameJunctionPoint, kSamePoint)) atPoint = std::max(atPoint, hw);
-            }
-            const double back = atPoint >= 0 ? atPoint : anywhere;
             const double away = a.spineIn ? -1.0 : 1.0;   // along the spine, away from the junction
-            a.boxEdge = a.station + away * back;
+            a.boxEdge = a.station + away * boxEdgeBack(mouths, pj.through, k);
             a.stopLine = a.boxEdge + away * kStopLineBack;
         }
         // its area along each road: its arms' box edges and mouths there, and the stretches stated inside it
@@ -1145,7 +1139,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
         out.kind = ml.kind;
         onStreet = false;
         for (const ModelLaneSpan& sp : ml.streets) {
-            if (!atOrPast(s, sp.from, kReachesStreetEnd) || !atOrBefore(s, sp.to, kReachesStreetEnd)) continue;
+            if (!atOrPast(s, sp.from, kWrittenStation) || !atOrBefore(s, sp.to, kWrittenStation)) continue;
             onStreet = true;
             const LaneSpanEnd met = laneSpanEnd(model, sp, ml.dir > 0 ? 1 : 0);
             if (met.reaches && met.junction.valid() && met.arm >= 0 && stated(met.stopLine)) {

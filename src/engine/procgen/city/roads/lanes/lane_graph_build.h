@@ -131,7 +131,10 @@ inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 // the roads themselves is the lanes tag's, kLanesBuildTag, which keys the roads; to the road file's layout, lane rules
 // or the turns' table, the cache key's own; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
-constexpr uint32_t kLaneGraphBuildVersion = 11;  // 11: a far turn waits inside facing the approach its junction STATES as
+constexpr uint32_t kLaneGraphBuildVersion = 12;  // 12: one tolerance for stations written to the centimetre (rt_math.h
+                                                 //     kWrittenStation, 7.5 mm where the lane level had 1 cm); a ramp's
+                                                 //     merge is where the builder laid it (ADR-0433)
+                                                 // 11: a far turn waits inside facing the approach its junction STATES as
                                                  //     its through partner; one road half width (ADR-0432)
                                                  // 1: the graph of #237 and the connectors of #238 (ADR-0398)
                                                  // 2: crossing points (#239, ADR-0400)

@@ -3883,7 +3883,7 @@ static std::vector<engine::SignCorner> signCornersOf(const engine::LevelRoadMode
             corner.city = static_cast<int>(c);
             corner.junction = static_cast<int>(j);
             for (const engine::NamedArm& a : engine::namedArmsAt(m, engine::ModelJunctionId(static_cast<uint32_t>(j))))
-                corner.arms.push_back({a.arm, a.point, a.dir, a.travelWidth * 0.5, a.name});
+                corner.arms.push_back({a.arm, a.point, a.dir, m.streets[a.street.index].section.travelWidth() * 0.5, a.name});
             if (!corner.arms.empty()) out.push_back(std::move(corner));
         }
     }

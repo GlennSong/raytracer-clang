@@ -18,7 +18,7 @@ void conformGrid(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& H, H
     for (size_t li = 0; li < nl; ++li) { owners.push_back({true, static_cast<int>(li), L.rank(static_cast<int>(li), g), L.lanes[li].w / 2, nullptr, 0, 0, 0, 0}); box(L.lanes[li].xy, owners.back()); }
     for (size_t ei = 0; ei < g.edges.size(); ++ei) {
         const EdgeSpec& e = g.edges[ei]; if (e.laneCount() == 0) continue; const RoadClassSpec& c = g.cls(e);
-        owners.push_back({false, static_cast<int>(ei), c.rank - 0.1, g.carriagewayHalfWidth(e) + c.sidewalk, std::make_unique<SegmentGrid>(e.xy, 8.0), 0, 0, 0, 0}); box(e.xy, owners.back());
+        owners.push_back({false, static_cast<int>(ei), c.rank - 0.1, g.sidewalkOuterHalfWidth(e), std::make_unique<SegmentGrid>(e.xy, 8.0), 0, 0, 0, 0}); box(e.xy, owners.back());
     }
     std::stable_sort(owners.begin(), owners.end(), [](const Owner& a, const Owner& b) { return a.rank > b.rank; });
     size_t N = grid.z.size(); std::vector<double> T0 = grid.z; std::vector<int> owner(N, -1); std::vector<double> odist(N, std::numeric_limits<double>::infinity());

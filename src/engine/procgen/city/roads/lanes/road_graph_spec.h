@@ -46,10 +46,18 @@ struct LaneLayout {
 // The narrowest travel lane kerb parking may leave (metres): a band that would leave less is not built.
 constexpr double kMinTravelLane = 3.2;
 
+// THE TAPER A ROAD FILE DOES NOT STATE, in lane widths: a turn pocket's (of its road's lanes) and a ramp anchor's (of its
+// host's). Each is applied once, where the road file is read (RoadLabGraph::fromJson), so PocketSpec::taper and
+// RampAnchor::taper always hold the metres the builder lays and the road model states.
+constexpr double kPocketTaperLaneWidths = 10.0;
+constexpr double kRampTaperLaneWidths = 30.0;
+
 struct PocketSpec {
     std::string id, kind = "turn", side = "right";
     int dir = +1;            // +1 forward lanes, -1 backward lanes
-    double s0 = 0, s1 = 0, taper = 0, taperOut = 0;   // taper 0 -> 10 lane widths
+    double s0 = 0, s1 = 0;
+    double taper = 0;        // metres over which it is swept out of its lane (the file's, else kPocketTaperLaneWidths)
+    double taperOut = 0;     // metres over which it runs back into it; 0: it does not
 };
 
 struct RampAnchor {
@@ -59,7 +67,9 @@ struct RampAnchor {
     char axis = 0; double coord = 0;   // 'x' or 'y': nearest host vertex to that coordinate; 'p': nearest to (px, py)
     double px = 0, py = 0;
     std::string side = "right";
-    double aux = 120, decel = 100, taper = -1, approach = 150;   // taper < 0 -> 30 lane widths
+    // metres: the auxiliary lane beside the host after an entry's gore, the deceleration lane before an exit's, the
+    // taper beyond it (the file's, else kRampTaperLaneWidths of the host's lanes; 0 only on an anchor that is not set)
+    double aux = 120, decel = 100, taper = 0, approach = 150;
 };
 
 struct ConnectorSpec { std::string from, to; double toS = 0; };
@@ -234,6 +244,10 @@ struct EdgeSpec {
     bool openEnd[2] = {false, false};
     int anchorIdx[2] = {-1, -1};         // spine index of the from-gore and the to-gore, when anchored
     std::map<std::string, std::string> anchorLanes;   // "from"/"to" -> host lane id
+    // WHERE THE RAMP'S LINE LEAVES ([0], its from-anchor) OR MEETS ([1], its to-anchor) ITS HOST LANE'S LINE: the station
+    // along the host's spine where composeRamp laid the far end of the deceleration or auxiliary lane and its taper.
+    // The builder's record; the road model copies it (ModelConnection::meets). NaN: no such anchor.
+    double anchorMeets[2] = {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
     bool isRamp() const { return !from.edge.empty() || !to.edge.empty(); }
     int laneCount() const { return lanes.fwd + lanes.back; }
     double length() const { return s.empty() ? 0.0 : s.back(); }
@@ -293,6 +307,11 @@ struct RoadLabGraph {
     // the cross-section's one answer (road_model_parts.h), asked for a road-file edge
     double hw(const EdgeSpec& e) const { return e.lanes.travelWidth() * 0.5; }
     double carriagewayHalfWidth(const EdgeSpec& e) const { return hw(e) + cls(e).shoulder; }
+    // WHERE THE SIDEWALK STARTS AND ENDS, out from the spine (issue #292): it starts at the carriageway's edge, OUTSIDE the
+    // shoulder (as bandsFor lays the bands: lanes, shoulder, sidewalk), and is the class's sidewalk wide. The pavement
+    // draws it there and the ground conforms out to there. (The pavement once measured it from the lanes' edge, so a
+    // class with a shoulder and a sidewalk had its sidewalk drawn under its shoulder: narrower than stated, or gone.)
+    double sidewalkOuterHalfWidth(const EdgeSpec& e) const { return carriagewayHalfWidth(e) + cls(e).sidewalk; }
     std::array<double, 4> bounds() const;    // terrain bounds, or the edges' extent plus a margin
     std::vector<const EdgeSpec*> paved() const;
 

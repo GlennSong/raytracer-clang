@@ -390,8 +390,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         const driving::ConnectorRules& ra = d->rightOfWay().paths[x.a.index];
         const driving::ConnectorRules& rb = d->rightOfWay().paths[x.other];
         if (ra.movement != driving::Movement::FarTurn || rb.movement != driving::Movement::FarTurn) continue;
-        if (engine::dot(d->rightOfWay().approaches[ra.approach].heading, d->rightOfWay().approaches[rb.approach].heading) <
-            driving::kFacingDot)
+        if (driving::approachesFace(roads, d->rightOfWay().approaches[ra.approach], d->rightOfWay().approaches[rb.approach]))
             ++opposingCross;
     }
     std::printf("    [lab-v2] opposing far turns at lights whose paths cross: %u pairs\n", opposingCross);

@@ -51,18 +51,14 @@ struct LaneLookup {
 // junction the road file states (RoadLabGraph::junctions; build() derives the layout once, first, for a file that states
 // none) has, along its road's spine:
 //   - its MOUTH: the stated station `at`;
-//   - its BOX EDGE, where the junction's area begins: back from the mouth (away from the junction) by the half width of
-//     the widest road CROSSING it -- an arm's road other than its own and its stated through partner's -- at the same
-//     point of the junction (mouths within kSameJunctionPoint), else anywhere in the junction (ADR-0419's rule): where the
-//     crossing road's lanes begin;
-//   - its STOP LINE, kStopLineBack further back: where traffic arriving by it stops.
+//   - its BOX EDGE, where the junction's area begins, and its STOP LINE, where traffic arriving by it stops: back from
+//     the mouth as the one rule says (road_model_parts.h boxEdgeBack, stopLineBack: the widest crossing road's half
+//     width, then kStopLineBack).
 // The paint draws each street arm's crosswalk (kCrosswalkNear to kCrosswalkFar back from the box edge) from these, and
 // its lane arrows and stop bar where the road model states them (RoadPaint, below); the road model's ModelArm::boxEdge and
 // ::stopLine ARE these; the lane level ends its lanes at these. Nothing finds or groups a junction from overlapping lanes.
 constexpr double kCrosswalkNear = 1.0;
 constexpr double kCrosswalkFar = 4.0;
-constexpr double kStopLineBack = 5.2;
-constexpr double kSameJunctionPoint = 2.0;   // metres: two arms' mouths this near meet at one point of a junction
 // One arm of a stated junction, as the paint, the model and the lane level read it.
 struct ArmStop {
     int edge = -1;              // its road (graph edge index; -1: a road the graph does not have)

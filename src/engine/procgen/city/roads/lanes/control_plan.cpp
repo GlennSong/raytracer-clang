@@ -1,6 +1,5 @@
 #include "engine/procgen/city/roads/lanes/control_plan.h"
 
-#include "engine/procgen/city/roads/lanes/deck_mesh.h"            // kStopLineBack: where the paint's stop lines stand
 #include "engine/procgen/city/roads/lanes/lane_expand.h"          // expand: ramps composed as the builder composes them
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"     // kRampEndReach: how far a ramp runs on inside a street
 #include "engine/procgen/city/roads/lanes/lane_graph_connect.h"   // kStraightOnDegrees: the one "straight on"
@@ -112,8 +111,6 @@ double degreesOf(const Vec2& d) {
     return a;
 }
 
-Vec2 directionOf(double degrees) { return Vec2(std::cos(degrees * DEG_TO_RAD), std::sin(degrees * DEG_TO_RAD)); }
-
 ThroughPairs throughPairs(const std::vector<Vec2>& dirs) {
     ThroughPairs out;
     if (dirs.size() == 2) return {{0, 1}};
@@ -166,6 +163,30 @@ ThroughPairs statedThrough(const RoadLabGraph& g, const std::vector<ArmFacts>& a
         dirs.push_back(e && e->xy.size() >= 2 ? directionOf(degreesOf(armDirection(*e, written(a.at), a.spineIn))) : Vec2(1, 0));
     }
     return throughPairs(dirs);
+}
+
+// THE ARMS OF A JUNCTION OVER THESE POINTS: `stations` is each road's stations at the junction's points (road index ->
+// stations). A road has an arm before its lowest station there (its spine runs in) and one after its highest (its spine
+// runs out), each where the road reaches more than kArmReachesPast beyond. `ramps`: the roads that are ramps ending
+// here. `inside` (optional) gets the stretches of road lying between the points. `g`: the graph with its ramps composed.
+std::vector<ArmFacts> armsOver(const RoadLabGraph& g, const std::map<int, std::vector<double>>& stations,
+                               const std::set<int>& ramps, const ControlPolicy& policy, std::vector<ModelStretch>* inside) {
+    std::vector<ArmFacts> arms;
+    for (const std::pair<const int, std::vector<double>>& kv : stations) {
+        const EdgeSpec& e = g.edges[static_cast<std::size_t>(kv.first)];
+        const double lo = *std::min_element(kv.second.begin(), kv.second.end());
+        const double hi = *std::max_element(kv.second.begin(), kv.second.end());
+        if (inside && hi - lo > kArmReachesPast) inside->push_back(ModelStretch{e.id, written(lo), written(hi)});
+        for (int side = 0; side < 2; ++side) {
+            // side 0: the road before the junction (its spine runs in); side 1: after it (its spine runs out)
+            const bool in = side == 0;
+            if (in ? lo <= kArmReachesPast : hi >= e.s.back() - kArmReachesPast) continue;
+            ArmFacts a = armFacts(e, in ? lo : hi, in, policy);
+            a.ramp = ramps.count(kv.first) > 0;
+            arms.push_back(a);
+        }
+    }
+    return arms;
 }
 
 }  // namespace
@@ -407,13 +428,35 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
     }
 
     // ---- nodes with no room for a car between them, and a divided road's two carriageways: ONE junction (ADR-0419) ----
-    // (control_plan.h, above findJunctions: the rule.) Along road `via`, a node's stop line stands back from it by the
-    // widest other road there and kStopLineBack.
-    auto stopLineBack = [&](const Node& n, int via) {
-        double hw = 0;
-        for (const NodePoint& p : n.points)
-            if (p.edge != via) hw = std::max(hw, g.hw(g.edges[static_cast<std::size_t>(p.edge)]));
-        return hw + kStopLineBack;
+    // (control_plan.h, above findJunctions: the rule.) Along road `via`, a node's stop line stands back from it as the one
+    // stop-line rule says (road_model_parts.h stopLineBack), asked of the node as the junction it would be alone: its
+    // arms (armsOver, the way a group's arms are made below) and their through pairs as the one rule states them
+    // (statedThrough), so the same street carrying on is not a road crossing it.
+    struct NodeArms {
+        std::vector<ArmFacts> arms;
+        ThroughPairs through;
+        std::vector<ArmMouth> mouths;
+    };
+    std::vector<NodeArms> nodeArms(nodes.size());
+    for (std::size_t n = 0; n < nodes.size(); ++n) {
+        NodeArms& na = nodeArms[n];
+        std::map<int, std::vector<double>> stations;
+        for (const NodePoint& p : nodes[n].points) stations[p.edge].push_back(p.s);
+        na.arms = armsOver(g, stations, {}, policy, nullptr);
+        na.through = statedThrough(g, na.arms);
+        for (const ArmFacts& a : na.arms) {
+            const int edge = g.index.at(a.road);
+            const EdgeSpec& e = g.edges[static_cast<std::size_t>(edge)];
+            na.mouths.push_back(ArmMouth{edge, pointAt(e.xy, e.s, a.at), g.hw(e)});
+        }
+    }
+    // Metres from node n back along road `via` to its stop line on the side its arm of `via` with this `spineIn` leaves
+    // by; below zero when the node has no such arm (the road ends at the node on that side).
+    auto nodeStopLineBack = [&](int n, int via, bool spineIn) {
+        const NodeArms& na = nodeArms[static_cast<std::size_t>(n)];
+        for (std::size_t k = 0; k < na.arms.size(); ++k)
+            if (na.mouths[k].road == via && na.arms[k].spineIn == spineIn) return stopLineBack(na.mouths, na.through, k);
+        return -1.0;
     };
     // each carriageway of a divided road -> its partner
     std::map<int, int> partner;
@@ -446,8 +489,12 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
             if (a == b) continue;
             const Node& na = nodes[static_cast<std::size_t>(a)];
             const Node& nb = nodes[static_cast<std::size_t>(b)];
-            const double between = kv.second[k + 1].first - kv.second[k].first - stopLineBack(na, kv.first) - stopLineBack(nb, kv.first);
-            if (between < g.rules.storage || carriagewaysMeet(na, nb, kv.first) || carriagewaysMeet(nb, na, kv.first)) unite(parent, a, b);
+            // the stretch between the two stop lines: a's on its arm leaving up the road, b's on its arm arriving down it.
+            // (A node with no such arm has the road ending within kArmReachesPast of it: no room at all.)
+            const double backA = nodeStopLineBack(a, kv.first, false), backB = nodeStopLineBack(b, kv.first, true);
+            const bool noRoom = backA < 0 || backB < 0 ||
+                                kv.second[k + 1].first - kv.second[k].first - backA - backB < g.rules.storage;
+            if (noRoom || carriagewaysMeet(na, nb, kv.first) || carriagewaysMeet(nb, na, kv.first)) unite(parent, a, b);
         }
     }
 
@@ -480,20 +527,7 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
             for (const NodePoint& p : node.points) stations[p.edge].push_back(p.s);
         }
         j.at = j.at / static_cast<double>(members[m].size());
-        for (const std::pair<const int, std::vector<double>>& kv : stations) {
-            const EdgeSpec& e = g.edges[static_cast<std::size_t>(kv.first)];
-            const double lo = *std::min_element(kv.second.begin(), kv.second.end());
-            const double hi = *std::max_element(kv.second.begin(), kv.second.end());
-            if (hi - lo > kArmReachesPast) j.inside.push_back(ModelStretch{e.id, written(lo), written(hi)});
-            for (int side = 0; side < 2; ++side) {
-                // side 0: the road before the junction (its spine runs in); side 1: after it (its spine runs out)
-                const bool in = side == 0;
-                if (in ? lo <= kArmReachesPast : hi >= e.s.back() - kArmReachesPast) continue;
-                ArmFacts a = armFacts(e, in ? lo : hi, in, policy);
-                a.ramp = ramps.count(kv.first) > 0;
-                j.arms.push_back(a);
-            }
-        }
+        j.arms = armsOver(g, stations, ramps, policy, &j.inside);
         j.through = statedThrough(g, j.arms);
         settleRoles(j, policy);
         out.push_back(j);
@@ -643,12 +677,19 @@ ControlPlan planControls(const RoadLabGraph& g, const ControlPolicy& policy, con
 }
 
 void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junctionsOnly) {
-    // THE ROAD MODEL'S MEMBERS of a junction already listed (road_model_parts.h ModelArm: street, heading, through) are
-    // kept where the same junction is planned again: by its id, and each arm by its road, station and way
-    std::map<std::string, nlohmann::json> listed;
-    if (scene.contains("junctions") && scene["junctions"].is_array())
-        for (const nlohmann::json& j : scene["junctions"])
-            if (j.is_object() && j.contains("id")) listed[j["id"].get<std::string>()] = j;
+    // WHAT THE SCENE STATES OF A JUNCTION ALREADY LISTED is kept where the same junction is planned again: by its id, and
+    // each arm by its road, station and way. The listed junctions are read into the model's own types (the road file's
+    // one reader) and each junction is written by the one writer (road_layout.h junctionJson), so whatever an arm states
+    // is carried whole: nothing here names the members to keep.
+    std::vector<ModelJunction> listedJunctions;
+    std::vector<ModelStreet> listedStreets;
+    if (scene.contains("junctions") && scene["junctions"].is_array() && !scene["junctions"].empty()) {
+        RoadLabGraph asListed = RoadLabGraph::fromJson(scene);
+        listedJunctions = std::move(asListed.junctions);
+        listedStreets = std::move(asListed.streets);
+    }
+    std::map<std::string, const ModelJunction*> listed;
+    for (const ModelJunction& j : listedJunctions) listed[j.id] = &j;
     // the scene's roads composed, to measure a ring on (made once, when a junction needs it); the scene's word that its
     // listed arms are in their ring
     const bool markedRing = scene.value("arms_in_ring", false);
@@ -663,42 +704,42 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junct
     };
     nlohmann::json list = nlohmann::json::array();
     for (const ModelJunction& pj : plan.junctions) {
-        nlohmann::json j;
-        j["id"] = pj.id;
-        j["at"] = {pj.at.x, pj.at.y};
-        j["control"] = pj.control;
-        if (!pj.why.empty()) j["why"] = pj.why;
-        if (pj.hand) j["hand"] = true;
-        const std::map<std::string, nlohmann::json>::const_iterator was = listed.find(pj.id);
-        const bool wasListed = was != listed.end() && was->second.contains("arms") && was->second["arms"].is_array();
-        nlohmann::json arms = nlohmann::json::array();
+        // the junction as written: the plan's id, place, control, stretches inside and points; its arms and through
+        // pairs set below
+        ModelJunction j = pj;
+        j.arms.clear();
+        j.through.clear();
+        const std::map<std::string, const ModelJunction*>::const_iterator at = listed.find(pj.id);
+        const ModelJunction* was = at != listed.end() ? at->second : nullptr;
+        const bool wasListed = was != nullptr;
+        std::vector<ModelArm> arms;
         std::vector<int> oldIndex;   // each arm written: the listed arm it is (-1: none)
         for (const ModelArm& a : pj.arms) {
-            nlohmann::json aj;
-            aj["road"] = a.road;
-            aj["at"] = a.station;
-            aj["spine"] = a.spineIn ? "in" : "out";
-            if (!a.regulations.empty()) aj["regulations"] = a.regulations;
+            // the planned arm: where it is and the signs the plan stands on it; what else the scene states of it (its
+            // street, its heading) only where it is a listed arm
+            ModelArm arm;
             int found = -1;
             if (wasListed)
-                for (std::size_t k = 0; k < was->second["arms"].size() && found < 0; ++k) {
-                    const nlohmann::json& old = was->second["arms"][k];
-                    if (old.value("road", std::string()) == a.road && old.value("spine", std::string()) == aj["spine"].get<std::string>() &&
-                        sameWrittenStation(old.value("at", kNotStated), a.station)) {
+                for (std::size_t k = 0; k < was->arms.size() && found < 0; ++k) {
+                    const ModelArm& old = was->arms[k];
+                    if (old.road == a.road && old.spineIn == a.spineIn && sameWrittenStation(old.station, a.station)) {
                         found = static_cast<int>(k);
-                        for (const char* key : {"street", "heading"})
-                            if (old.contains(key)) aj[key] = old[key];
+                        arm = old;
                     }
                 }
+            arm.road = a.road;
+            arm.station = a.station;
+            arm.spineIn = a.spineIn;
+            arm.regulations = a.regulations;
             oldIndex.push_back(found);
-            arms.push_back(aj);
+            arms.push_back(arm);
         }
         // THE ARMS IN THEIR RING (ADR-0427). Where the scene marks its list as in ring order ("arms_in_ring") and every
         // planned arm is one listed arm with none left over, the list's own order is kept (a planner's stated ring stands);
         // otherwise the arms go in the order the one measure gives (road_layout.h armRing, on the scene's roads composed).
         // Either way each listed through pair whose two arms were both kept follows its arms (ADR-0424: written in another
         // order without renumbering, a through pair named two other arms).
-        const std::size_t listedArms = wasListed ? was->second["arms"].size() : 0;
+        const std::size_t listedArms = wasListed ? was->arms.size() : 0;
         std::vector<int> planOfListed(listedArms, -1);   // a listed arm -> the planned arm it is
         bool permutation = wasListed && oldIndex.size() == listedArms;
         for (std::size_t n = 0; n < oldIndex.size(); ++n) {
@@ -711,45 +752,29 @@ void writeControlPlan(nlohmann::json& scene, const ControlPlan& plan, bool junct
         else
             slots = armRing(pj, roads());
         std::vector<int> placeOf(pj.arms.size(), -1);   // a planned arm -> its place in the written list
-        nlohmann::json ordered = nlohmann::json::array();
         for (std::size_t k = 0; k < slots.size(); ++k) {
             placeOf[slots[k]] = static_cast<int>(k);
-            ordered.push_back(arms[slots[k]]);
+            j.arms.push_back(arms[slots[k]]);
         }
-        arms = ordered;
-        if (wasListed && was->second.contains("through") && was->second["through"].is_array()) {
-            nlohmann::json through = nlohmann::json::array();
-            for (const nlohmann::json& pair : was->second["through"]) {
-                if (!pair.is_array() || pair.size() != 2) continue;
-                const int a0 = pair[0].get<int>(), a1 = pair[1].get<int>();
-                if (a0 < 0 || a1 < 0 || static_cast<std::size_t>(a0) >= listedArms || static_cast<std::size_t>(a1) >= listedArms) continue;
-                const int n0 = planOfListed[static_cast<std::size_t>(a0)], n1 = planOfListed[static_cast<std::size_t>(a1)];
+        // (a junction the scene does not list is written with no through pairs here: the layout states them)
+        if (wasListed)
+            for (const std::array<uint32_t, 2>& pair : was->through) {
+                if (pair[0] >= listedArms || pair[1] >= listedArms) continue;
+                const int n0 = planOfListed[pair[0]], n1 = planOfListed[pair[1]];
                 if (n0 < 0 || n1 < 0) continue;
-                through.push_back({placeOf[static_cast<std::size_t>(n0)], placeOf[static_cast<std::size_t>(n1)]});
+                j.through.push_back({static_cast<uint32_t>(placeOf[static_cast<std::size_t>(n0)]),
+                                     static_cast<uint32_t>(placeOf[static_cast<std::size_t>(n1)])});
             }
-            if (!through.empty()) j["through"] = through;
-        }
-        j["arms"] = arms;
-        if (!pj.inside.empty()) {
-            nlohmann::json inside = nlohmann::json::array();
-            for (const ModelStretch& st : pj.inside) inside.push_back({{"road", st.road}, {"from", st.from}, {"to", st.to}});
-            j["inside"] = inside;
-        }
         // THE JUNCTION'S POINTS (ADR-0425): the plan's where it has them, else the listed junction's (a list written
         // before the plan, its stretches inside the same)
-        if (!pj.nodes.empty()) {
-            nlohmann::json nodes = nlohmann::json::array();
-            for (const ModelNode& n : pj.nodes) {
-                nlohmann::json points = nlohmann::json::array();
-                for (const ModelNodePoint& p : n.points) points.push_back({{"road", p.road}, {"at", p.station}});
-                nodes.push_back({{"at", {n.at.x, n.at.y}}, {"points", points}});
-            }
-            j["nodes"] = nodes;
-        } else if (was != listed.end() && was->second.contains("nodes") && j.contains("inside") && was->second.contains("inside") &&
-                   was->second["inside"] == j["inside"]) {
-            j["nodes"] = was->second["nodes"];
+        if (j.nodes.empty() && wasListed && !j.inside.empty() && j.inside.size() == was->inside.size()) {
+            bool sameInside = true;
+            for (std::size_t k = 0; k < j.inside.size() && sameInside; ++k)
+                sameInside = j.inside[k].road == was->inside[k].road && sameWrittenStation(j.inside[k].from, was->inside[k].from) &&
+                             sameWrittenStation(j.inside[k].to, was->inside[k].to);
+            if (sameInside) j.nodes = was->nodes;
         }
-        list.push_back(j);
+        list.push_back(junctionJson(j, listedStreets));
     }
     scene["junctions"] = list;
     scene["arms_in_ring"] = true;   // every junction's arms just written in their ring (ADR-0427)

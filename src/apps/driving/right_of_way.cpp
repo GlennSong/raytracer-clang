@@ -41,7 +41,6 @@ Movement movementOfTurn(engine::Turn t) {
     return Movement::Straight;
 }
 
-bool facing(const Vec2& a, const Vec2& b) { return engine::dot(a, b) < kFacingDot; }
 bool alongside(const Vec2& a, const Vec2& b) { return engine::dot(a, b) > kAlongsideDot; }
 
 // How far round from b's direction of travel, toward b's kerb, lies the way approach a's traffic comes from: above zero
@@ -116,11 +115,14 @@ struct JunctionWork {
     std::vector<PathId> from;         // the lane each connector leaves
     std::vector<Real> fromLimit;      // ... and the limit in force on it (m/s)
     std::vector<Vec2> heading;        // per local approach
+    std::vector<uint8_t> faces;       // approaches * approaches: the two face each other (approachesFace, the stated pair)
     std::vector<uint8_t> meet;        // n * n: a cross or a join between the two
     std::vector<uint8_t> prot;        // per connector: 1 where it is a protected turn here (protected_when)
     uint32_t n = 0;
 
     bool meets(uint32_t i, uint32_t k) const { return meet[i * n + k] != 0; }
+    // Do the approaches of turns i and k face each other?
+    bool facing(uint32_t i, uint32_t k) const { return faces[app[i] * heading.size() + app[k]] != 0; }
     // Turn i may go on a plain green giving way to what it meets from the approach facing it: a `gives_way_on_green`
     // movement not protected here.
     bool givesWayOnGreen(const ControlKind& ck, uint32_t i) const {
@@ -136,7 +138,7 @@ ArrowFacts arrowFactsOf(const JunctionWork& w, uint32_t i) {
     std::vector<PathId> lanes;
     for (uint32_t k = 0; k < w.n; ++k) {
         if (w.app[k] == w.app[i] || w.mov[k] != Movement::Straight || !w.meets(i, k) ||
-            !facing(w.heading[w.app[i]], w.heading[w.app[k]]))
+            !w.facing(i, k))
             continue;
         if (std::find(lanes.begin(), lanes.end(), w.from[k]) == lanes.end()) lanes.push_back(w.from[k]);
         f.opposingLimit = std::max(f.opposingLimit, static_cast<double>(w.fromLimit[k]));
@@ -152,7 +154,7 @@ bool protectedTurn(const JunctionWork& w, const ControlKind& ck, uint32_t i, con
     if (!hasMovement(ck.givesWayOnGreen, w.mov[i]) || ck.protectedWhen.empty()) return false;
     bool meetsOncoming = false;
     for (uint32_t k = 0; k < w.n && !meetsOncoming; ++k)
-        meetsOncoming = w.app[k] != w.app[i] && w.meets(i, k) && facing(w.heading[w.app[i]], w.heading[w.app[k]]);
+        meetsOncoming = w.app[k] != w.app[i] && w.meets(i, k) && w.facing(i, k);
     if (!meetsOncoming) return false;   // nothing to give way to on its green: protecting it changes nothing
     const ArrowFacts f = arrowFactsOf(w, i);
     for (const ArrowWarrant& wr : ck.protectedWhen)
@@ -167,7 +169,7 @@ bool protectedTurn(const JunctionWork& w, const ControlKind& ck, uint32_t i, con
 // or come from approaches facing each other and one of them may go on a plain green, giving way (and is not protected).
 bool conflict(const JunctionWork& w, const ControlKind& ck, uint32_t i, uint32_t k) {
     if (i == k || w.app[i] == w.app[k] || !w.meets(i, k)) return false;
-    const bool shared = facing(w.heading[w.app[i]], w.heading[w.app[k]]) &&
+    const bool shared = w.facing(i, k) &&
                         (w.givesWayOnGreen(ck, i) || w.givesWayOnGreen(ck, k));
     return !shared;
 }
@@ -215,7 +217,7 @@ std::vector<std::pair<bool, std::vector<uint8_t>>> buildPhases(const JunctionWor
             if (!green[i] || !hasMovement(ck.arrow, w.mov[i])) continue;
             bool givesWayHere = false;
             for (uint32_t k = 0; k < n && !givesWayHere; ++k)
-                if (green[k] && w.app[k] != w.app[i] && w.meets(i, k) && facing(w.heading[w.app[i]], w.heading[w.app[k]]))
+                if (green[k] && w.app[k] != w.app[i] && w.meets(i, k) && w.facing(i, k))
                     givesWayHere = true;
             if (givesWayHere) candidates.push_back(i);
         }
@@ -278,8 +280,8 @@ bool ask(SettleQuestion q, const JunctionWork& w, const RightOfWay& row, const J
         return true;
     }
     case SettleQuestion::KerbSide: {
-        const bool aOnB = onKerbSideOf(w.heading, w.app[a], w.app[b], rules.drivesOn);
-        const bool bOnA = onKerbSideOf(w.heading, w.app[b], w.app[a], rules.drivesOn);
+        const bool aOnB = onKerbSideOf(w.heading, w.faces, w.app[a], w.app[b], rules.drivesOn);
+        const bool bOnA = onKerbSideOf(w.heading, w.faces, w.app[b], w.app[a], rules.drivesOn);
         if (aOnB == bOnA) return false;
         who = aOnB ? GivesWay::Other : GivesWay::A;   // the one on the other's kerb side goes first
         return true;
@@ -357,13 +359,15 @@ bool operator==(const MeetingAnswer& a, const MeetingAnswer& b) {
     return a.who == b.who && a.by == b.by && a.fallback == b.fallback && a.fallbackBy == b.fallbackBy;
 }
 
-bool onKerbSideOf(const std::vector<Vec2>& all, std::size_t a, std::size_t b, DrivesOn drivesOn) {
-    if (a == b || a >= all.size() || b >= all.size()) return false;
-    if (facing(all[a], all[b]) || alongside(all[a], all[b])) return false;
+bool onKerbSideOf(const std::vector<Vec2>& all, const std::vector<uint8_t>& faces, std::size_t a, std::size_t b,
+                  DrivesOn drivesOn) {
+    if (a == b || a >= all.size() || b >= all.size() || faces.size() != all.size() * all.size()) return false;
+    const auto facing = [&](std::size_t x, std::size_t y) { return faces[x * all.size() + y] != 0; };
+    if (facing(a, b) || alongside(all[a], all[b])) return false;
     const Real mine = kerbwardAngle(all[a], all[b], drivesOn);
     if (!(mine > 0)) return false;
     for (std::size_t x = 0; x < all.size(); ++x) {
-        if (x == a || x == b || facing(all[x], all[b]) || alongside(all[x], all[b])) continue;
+        if (x == a || x == b || facing(x, b) || alongside(all[x], all[b])) continue;
         const Real t = kerbwardAngle(all[x], all[b], drivesOn);
         if (t > 0 && (t < mine || (t == mine && x < a))) return false;   // another is found first
     }
@@ -457,6 +461,12 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
             cr.movement = w.mov.back();
         }
         jr.approaches.count = static_cast<uint32_t>(w.heading.size());
+        // Which of its approaches face each other: the junction's stated through pairs, read off the lane graph.
+        w.faces.assign(w.heading.size() * w.heading.size(), 0);
+        for (uint32_t a = 0; a < w.heading.size(); ++a)
+            for (uint32_t b = 0; b < w.heading.size(); ++b)
+                w.faces[a * w.heading.size() + b] =
+                    approachesFace(roads, out.approaches[jr.approaches.first + a], out.approaches[jr.approaches.first + b]) ? 1 : 0;
         // Which pairs meet (a cross or a join filed under this junction).
         w.meet.assign(static_cast<std::size_t>(w.n) * w.n, 0);
         for (uint32_t c = jn.crossings.first; c < jn.crossings.end() && c < roads.crossings.size(); ++c) {

@@ -362,8 +362,7 @@ std::vector<std::string> checkSignalProgrammes(const engine::LaneGraph& roads, c
                     const ConnectorRules& rb = row.paths[b.index];
                     if (ra.approach == rb.approach) continue;   // one approach's turns are green together by design
                     const bool facingEach = ra.approach < row.approaches.size() && rb.approach < row.approaches.size() &&
-                                            engine::dot(row.approaches[ra.approach].heading,
-                                                        row.approaches[rb.approach].heading) < kFacingDot;
+                                            approachesFace(roads, row.approaches[ra.approach], row.approaches[rb.approach]);
                     const bool permitted = facingEach && ck &&
                                            (hasMovement(ck->givesWayOnGreen, ra.movement) ||
                                             hasMovement(ck->givesWayOnGreen, rb.movement));

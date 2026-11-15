@@ -112,12 +112,12 @@ constexpr uint8_t kLightCount = 3;
 constexpr uint32_t kNoControl = 0xFFFFFFFFu;
 constexpr uint32_t kNoApproach = 0xFFFFFFFFu;
 
-// TWO APPROACHES FACE EACH OTHER when their directions of travel point more nearly opposite than this (the dot of the
-// two unit directions is below it): within about 37 degrees of head on, the figure the old signal controller uses for
-// opposing approaches (ADR-0109).
-constexpr Real kFacingDot = engine::kOncomingDot;
-// ... and run alongside each other when it is above minus this (above 0.8): neither is on the other's kerb side.
-constexpr Real kAlongsideDot = -kFacingDot;
+// TWO APPROACHES RUN ALONGSIDE EACH OTHER when their directions of travel point more nearly the same way than this (the
+// dot of the two unit directions is above it: within about 37 degrees of each other): neither is on the other's kerb
+// side. The junction states no fact for this (its arms have through pairs, not "these two arrive side by side"), so it
+// is the one angle the right-of-way table still measures. Which approaches FACE each other is not measured: see
+// approachesFace below.
+constexpr Real kAlongsideDot = 0.8;
 
 // ONE APPROACH TO A JUNCTION: the arriving lanes of one section (a lane in no section is an approach of its own), the
 // way its traffic points as it reaches the junction, and the sign it carries.
@@ -127,6 +127,14 @@ struct Approach {
     engine::Vec2 heading;           // unit: the direction of travel at the end of that lane
     int signRank = 0;               // its sign's place in RuleSet::ranks; 0 (shares the first) when it has none
 };
+
+// DO TWO APPROACHES TO ONE JUNCTION FACE EACH OTHER (their traffic meets head on)? The lane graph's one answer
+// (LaneGraph::facing): yes where the junction states their two arms as one road carrying on through. Asked of each
+// approach's first lane (every lane of an approach arrives by the same arm). Never the angle between them.
+inline bool approachesFace(const engine::LaneGraph& roads, const Approach& a, const Approach& b) {
+    return a.firstLane.valid() && b.firstLane.valid() && a.firstLane.index < roads.paths.size() &&
+           b.firstLane.index < roads.paths.size() && roads.facing(a.firstLane, b.firstLane);
+}
 
 // ONE PHASE of a junction's lights: the light each of its connectors shows, in the junction's connector order.
 struct Phase {
@@ -242,8 +250,10 @@ MyTurn myTurn(const engine::LaneGraph& roads, const MeetingAnswer& a, engine::Cr
 // WHETHER APPROACH `a` IS ON APPROACH `b`'S KERB SIDE among the approaches `all` (unit headings of travel) of one
 // junction, for traffic keeping to `drivesOn`'s side: `a` is the first approach found turning from b's direction of
 // travel toward its kerb, within the half turn on that side; approaches facing `b` or running alongside it are passed
-// over. Exposed for the five-way test.
-bool onKerbSideOf(const std::vector<engine::Vec2>& all, std::size_t a, std::size_t b, DrivesOn drivesOn);
+// over. `faces`: which of them face each other, all.size() rows of all.size() (row x, column y: approachesFace of the
+// two; the stated fact, not an angle). Exposed for the five-way test.
+bool onKerbSideOf(const std::vector<engine::Vec2>& all, const std::vector<uint8_t>& faces, std::size_t a, std::size_t b,
+                  DrivesOn drivesOn);
 
 // ---- Words -------------------------------------------------------------------------------------------------------------
 

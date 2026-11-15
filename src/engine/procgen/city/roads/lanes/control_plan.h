@@ -137,12 +137,11 @@ void settleRoles(JunctionFacts& j, const ControlPolicy& policy);
 // at most. Its result is written into the road file; every reader reads the file's pairs (throughPartner).
 ThroughPairs throughPairs(const std::vector<Vec2>& dirs);
 // The way an arm leaves its junction: from its station, kArmHeadingReach along the road away from the junction (unit).
-// The layout writes it as the arm's `heading` (degreesOf: degrees counter-clockwise from +x, to the hundredth; directionOf
-// reads one back), and the through pairs are stated from the headings as written.
+// The layout writes it as the arm's `heading` (degreesOf: degrees counter-clockwise from +x, to the hundredth;
+// road_model_parts.h directionOf reads one back), and the through pairs are stated from the headings as written.
 constexpr double kArmHeadingReach = 15.0;   // metres: enough to read past the curve a corner puts on a road's last metres
 Vec2 armDirection(const EdgeSpec& e, double at, bool spineIn);
 double degreesOf(const Vec2& d);
-Vec2 directionOf(double degrees);
 // A number as the road file writes it: stations and points to the centimetre, headings to the hundredth of a degree, so a
 // file reads cleanly and the same roads write the same bytes.
 double written(double v);
@@ -196,8 +195,9 @@ struct JunctionFinding {
 //
 // WHICH NODES ARE ONE JUNCTION (ADR-0419), the one rule: two nodes next to each other along a road are one junction when
 // the stretch of that road between their stop lines is shorter than the graph's storage length (Rules::storage, one car
-// and its gap): not even a car could wait between them. Along road `via` a node's stop line stands back from it by the
-// widest other road there (half its width: the area the crossing traffic needs) and kStopLineBack. And by construction:
+// and its gap): not even a car could wait between them. Along road `via` a node's stop line stands back from it as the
+// one stop-line rule says (road_model_parts.h stopLineBack: the widest road crossing it there -- not the same street
+// carrying on -- and kStopLineBack), the rule the stated junctions' areas and the paint read. And by construction:
 // where the two carriageways of a divided road (`divided`) meet the same street, their nodes, next to each other along it,
 // are one junction however far apart. Nothing else groups them.
 std::vector<JunctionFacts> findJunctions(const RoadLabGraph& g, const ControlPolicy& policy,

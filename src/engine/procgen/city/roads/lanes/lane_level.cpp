@@ -34,8 +34,9 @@ constexpr double kSliceGap = 1e-3;
 // Two lanes the model states lead one into the other whose lines miss by more than this are joined and reported (metres).
 constexpr double kJoinReported = 1e-3;
 // A hole this small between two stretches of a lane (metres) is the road file's stations written to the centimetre, at
-// the junction beside it: two centimetres and the cut tolerance.
-constexpr double kStationRounding = 2 * kReachesStreetEnd + kCutTolerance;
+// the junction beside it: two written stations' worth (rt_math.h kWrittenStation, each end of the hole) and the cut
+// tolerance.
+constexpr double kStationRounding = 2 * kWrittenStation + kCutTolerance;
 constexpr double kDegreesPerRadian = 57.29577951308232;
 
 // A message of any length (measured first, then written: never cut short).
@@ -253,8 +254,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         for (const ModelLaneSpan& sp : spans) {
             const ModelStreet& S = m.streets[sp.street.index];
             // (a street's stations are written to the centimetre: a lane reaching its end runs to its own end)
-            double lo = sp.from - ml.spineFrom <= kReachesStreetEnd ? ml.spineFrom : sp.from;
-            double hi = ml.spineTo - sp.to <= kReachesStreetEnd ? ml.spineTo : sp.to;
+            double lo = atOrBefore(sp.from, ml.spineFrom, kWrittenStation) ? ml.spineFrom : sp.from;
+            double hi = atOrPast(sp.to, ml.spineTo, kWrittenStation) ? ml.spineTo : sp.to;
             const double spanLo = lo, spanHi = hi;   // its whole stretch on this street, before the stop lines trim it
             int jLo = -1, aLo = -1, jHi = -1, aHi = -1, endLo = -1, endHi = -1;
             bool noStopLo = false, noStopHi = false;
@@ -323,7 +324,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         // junction (the junction's connectors cross it: no lane path, as stated), or else no lane path at all, said
         for (uint32_t j = 0; j < m.junctions.size() && insideJunction[li] < 0; ++j)
             for (const ModelStretch& st : m.junctions[j].inside)
-                if (st.road == edgeAt(ml.edge).id && st.from <= ml.spineFrom + kReachesStreetEnd && st.to >= ml.spineTo - kReachesStreetEnd)
+                if (st.road == edgeAt(ml.edge).id && atOrBefore(st.from, ml.spineFrom, kWrittenStation) && atOrPast(st.to, ml.spineTo, kWrittenStation))
                     insideJunction[li] = static_cast<int>(j);
         if (insideJunction[li] >= 0) continue;
         bool said = false;   // (a street with no room between its stop lines says so itself)
@@ -474,7 +475,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         if (S.carriesOn[static_cast<std::size_t>(streetEnd)].valid()) return;
         const EdgeSpec& e = edgeAt(S.edge);
         const double at = streetEnd == 0 ? S.from : S.to;
-        const int roadEnd = at <= kReachesStreetEnd ? 0 : at >= e.s.back() - kReachesStreetEnd ? 1 : -1;
+        const int roadEnd = sameWrittenStation(at, 0.0) ? 0 : sameWrittenStation(at, e.s.back()) ? 1 : -1;
         if (roadEnd >= 0 && !(roadEnd == 0 ? e.from.edge : e.to.edge).empty()) return;   // a ramp's anchored end
         if (roadEnd >= 0 && !roadEndMeetsAnother(g, e, roadEnd)) return;                 // a road that just ends
         if (!unstatedMeetings.insert(std::make_pair(pc.street, streetEnd)).second) return;

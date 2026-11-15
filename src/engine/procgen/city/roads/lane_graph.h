@@ -76,10 +76,8 @@ constexpr Real kNoWaitInside = -1;
 // two arms as one road carrying on through (road_model_parts.h throughPartner): each arriving lane carries its arm and
 // that arm's through partner (Path::arm, Path::throughArm, below), and LaneGraph::facing reads them. The road builder
 // places a far turn's waiting point inside the junction by it (lanes/lane_graph_crossings.h placeWaitInsidePoints).
-// NOT YET READ BY THE DRIVING MODEL (ADR-0432): its right-of-way table and signal programme still measure the angle
-// between the two approaches against this figure (apps/driving/right_of_way.h kFacingDot: within about 37 degrees of
-// opposite, where the through pairs are stated within 30). Delete it when they read Path::throughArm.
-constexpr Real kOncomingDot = -0.8;
+// The driving model's right-of-way table and signal programme read the same answer (apps/driving/right_of_way.h
+// approachesFace). Nothing measures the angle between two approaches for this.
 // The tightest radius of a path with no bend at all.
 constexpr Real kNoBend = std::numeric_limits<Real>::infinity();
 

@@ -76,7 +76,7 @@ std::vector<SignCorner> cornersOf(const RoadModel& m) {
         c.city = 0;
         c.junction = static_cast<int>(j);
         for (const NamedArm& a : namedArmsAt(m, ModelJunctionId(static_cast<uint32_t>(j))))
-            c.arms.push_back({a.arm, a.point, a.dir, a.travelWidth * 0.5, a.name});
+            c.arms.push_back({a.arm, a.point, a.dir, m.streets[a.street.index].section.travelWidth() * 0.5, a.name});
         out.push_back(c);
     }
     return out;

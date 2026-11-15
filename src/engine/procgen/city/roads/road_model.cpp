@@ -196,7 +196,7 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
                 const int gore = e.anchorIdx[end];
                 if (gore >= 0 && static_cast<std::size_t>(gore) < e.s.size()) E.rampStation = e.s[static_cast<std::size_t>(gore)];
                 E.length = end == 0 ? a.decel : a.aux;
-                E.taper = a.taper > 0 ? a.taper : (host ? 30 * host->lanes.w : 0.0);
+                E.taper = a.taper;   // the file's, or the default it was read with (road_graph_spec.h)
             } else if (!a.edge.empty()) {
                 E.kind = RampEndKind::OnStreet;
             }
@@ -257,7 +257,7 @@ LaneSpanEnd laneSpanEnd(const RoadModel& m, const ModelLaneSpan& sp, int end) {
     LaneSpanEnd out;
     const ModelStreet& S = m.streets[sp.street.index];
     const Real at = end == 0 ? S.from : S.to;
-    out.reaches = approxEqual(end == 0 ? sp.from : sp.to, at, roads::lanes::kReachesStreetEnd);
+    out.reaches = sameWrittenStation(end == 0 ? sp.from : sp.to, at);
     if (!out.reaches) return out;
     out.junction = S.junctions[static_cast<std::size_t>(end)];
     if (!out.junction.valid()) return out;
@@ -367,11 +367,10 @@ RoadModel builtRoadModel(const Result& r) {
                     C.hostStation = E.hostStation;
                     C.length = E.length;
                     C.taper = E.taper;
-                    // where the ramp's line leaves (or meets) its host lane's: composeRamp lays its deceleration lane from
-                    // the gore less the length and taper, and its auxiliary lane to the gore plus them, the way the host
-                    // lane runs
-                    const double way = r.lanes.lanes[static_cast<std::size_t>(hostLane)].dir > 0 ? 1.0 : -1.0;
-                    if (stated(E.hostStation)) C.meets = E.hostStation + (end == 0 ? -way : way) * (E.length + E.taper);
+                    // where the ramp's line leaves (or meets) its host lane's: the station the builder laid it at, as it
+                    // recorded it (lane_expand.h composeRamp, EdgeSpec::anchorMeets). Copied, never worked out again.
+                    const EdgeSpec* ramp = g.find(R.edge);
+                    if (ramp) C.meets = ramp->anchorMeets[end];
                     m.connections.push_back(C);
                 } else {
                     m.problems.push_back(fmt("ramp %s: its %s end names host lane \"%s\", which the builder did not lay", R.edge.c_str(),
@@ -405,7 +404,7 @@ RoadModel builtRoadModel(const Result& r) {
             C.kind = ConnectionKind::Diverge;
             C.from = ModelLaneId(static_cast<uint32_t>(l.sweptFrom));
             C.to = ModelLaneId(static_cast<uint32_t>(li));
-            C.taper = pocket ? (pocket->taper > 0 ? pocket->taper : 10 * l.w) : 0.0;
+            C.taper = pocket ? pocket->taper : 0.0;   // the file's, or the default it was read with
             C.hostStation = start + l.dir * C.taper;
             C.meets = start;
             m.connections.push_back(C);
@@ -601,14 +600,12 @@ std::vector<NamedArm> namedArmsAt(const RoadModel& m, ModelJunctionId j) {
     for (std::size_t k = 0; k < J.arms.size(); ++k) {
         const ModelArm& a = J.arms[k];
         if (!a.street.valid() || !stated(a.heading)) continue;
-        const ModelStreet& S = m.streets[a.street.index];
         const std::string name = streetName(m, a.street);
         NamedArm n;
         if (name.empty() || !armMouth(m, J, k, n.point)) continue;
         n.arm = static_cast<int>(k);
         n.street = a.street;
-        n.dir = Vec2(std::cos(a.heading * DEG_TO_RAD), std::sin(a.heading * DEG_TO_RAD));
-        n.travelWidth = S.section.travelWidth();
+        n.dir = directionOf(a.heading);
         n.name = name;
         out.push_back(n);
     }

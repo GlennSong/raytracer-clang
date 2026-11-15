@@ -3720,3 +3720,31 @@ TEST_CASE(lanes_the_planner_lands_a_diamond_between_one_way_frontage_roads_at_gr
     CHECK(dn.built == 0);
     CHECK(dn.rejectedLanding >= 1);
 }
+
+// WHERE THE SIDEWALK STARTS (issue #292): outside the shoulder, at the carriageway's edge (RoadLabGraph::
+// sidewalkOuterHalfWidth), the one answer the pavement, the bands and the ground share. The scene: one straight road,
+// 200 m along y = 0, two 3.5 m lanes (half width 3.5 m), a 2.5 m shoulder and a 2 m sidewalk. Its shoulder runs from 3.5
+// to 6 m off the centre line and its sidewalk from 6 to 8 m, each side: 2 x 2 m x 200 m = 800 m2 of sidewalk. (The
+// pavement once laid the sidewalk from the lanes' edge, 3.5 to 5.5 m: wholly under the shoulder, so none was drawn.)
+TEST_CASE(lanes_the_sidewalk_lies_outside_the_shoulder) {
+    nlohmann::json g;
+    g["name"] = "sidewalk_outside_shoulder";
+    g["classes"]["verge_street"] = {{"w", 3.5}, {"fwd", 1}, {"back", 1}, {"shoulder", 2.5}, {"sidewalk", 2.0},
+                                    {"g_max", 0.09}, {"window", 40}, {"thick", 0.5}};
+    g["edges"] = nlohmann::json::array(
+        {{{"id", "v"}, {"class", "verge_street"}, {"path", {{"type", "polyline"}, {"points", {{-100, 0}, {100, 0}}}}}}});
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+    const EdgeSpec& e = *r->graph.find("v");
+    CHECK(approxEqual(r->graph.hw(e), 3.5, kSamePoint));
+    CHECK(approxEqual(r->graph.carriagewayHalfWidth(e), 6.0, kSamePoint));
+    CHECK(approxEqual(r->graph.sidewalkOuterHalfWidth(e), 8.0, kSamePoint));
+    for (const double side : {1.0, -1.0}) {
+        CHECK(contains(r->pavement.sidewalk, Vec2(0, side * 7.0)));     // the middle of the sidewalk
+        CHECK(!contains(r->pavement.sidewalk, Vec2(0, side * 4.75)));   // the middle of the shoulder
+        CHECK(contains(r->pavement.shoulder, Vec2(0, side * 4.75)));
+        CHECK(!contains(r->pavement.sidewalk, Vec2(0, side * 8.5)));    // beyond the sidewalk
+    }
+    const double area = setArea(r->pavement.sidewalk);
+    std::printf("    sidewalk %.1f m2 (two 2 m strips of 200 m: 800)\n", area);
+    CHECK(area > 780.0 && area < 840.0);
+}

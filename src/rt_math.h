@@ -148,19 +148,23 @@ inline bool atOrPast(Real a, Real b, Real eps) { return comparedDifference(a, b)
 
 // THE NAMED TOLERANCES FOR LENGTHS (metres). Each is defined here once; a file that needs one uses it by name.
 // THE EXISTING CODE DOES NOT AGREE EVERYWHERE, and these two are the values to converge on, not a summary of what is
-// there: a "same point" is 1 cm in lanes/swept_body.h (kSweptSamePoint) and 1e-9 m in swept_body.cpp (kSameLinePoint);
-// "written to the centimetre" is 0.005 in lanes/road_layout.cpp (its local kWritten) and in street_map.cpp
-// (kSameStation), while lanes/road_layout.cpp has another kSameStation of 1e-6. Each such place needs a DECISION when it
-// is converted (does anything depend on the other value?), not a rename.
+// there: a "same point" is 1 cm in lanes/swept_body.h (kSweptSamePoint) and 1e-9 m in swept_body.cpp (kSameLinePoint).
+// Each such place needs a DECISION when it is converted (does anything depend on the other value?), not a rename.
 //   kSamePoint: two positions closer than this are one place: 1 mm. Anything the engine works out (a cut along a road, a
 //     point projected onto a line, a sum of path lengths) is good to far better than this, and nothing drawn or driven
 //     is smaller. The value the road builder uses for "two stations are one" (lanes/lane_level.cpp kCutTolerance,
 //     kSliceGap, kJoinReported; lane_graph.cpp kLengthTolerance).
 constexpr Real kSamePoint = 1e-3;
-//   kWrittenStation: a distance read from a road file is only good to this: 1 cm, because the road file and the planner
-//     write stations and points to the centimetre. Two numbers that came from one written value are within this of each
-//     other (lanes/lane_expand.h kReachesStreetEnd; lanes/road_layout.h kPlannerSameEnd).
-constexpr Real kWrittenStation = 1e-2;
+//   kWrittenStation: two stations along a road are one place when they are within this: three quarters of a centimetre.
+//     The road file and the planner write stations to the centimetre. A number and its own written form are up to half a
+//     centimetre apart (12.125 is written 12.13), and two different written numbers are at least a whole centimetre
+//     apart, so the value must lie between the two: half a centimetre sits exactly on the first (the last bit of a sum
+//     would decide) and a whole centimetre exactly on the second. The ONE value for every join made by station
+//     (roads/road_model_parts.h sameWrittenStation; the ordered helpers above with this as their eps). Issue #292: it
+//     was 1 cm here and in lanes/lane_expand.h, half a centimetre in street_map.cpp and lanes/road_layout.cpp, and a
+//     millionth of a metre in lanes/road_layout.cpp. (Plan POINTS written to the centimetre are another question:
+//     lanes/road_layout.h kPlannerSameEnd.)
+constexpr Real kWrittenStation = 7.5e-3;
 // (No named tolerance for angles or for times yet: the existing code does not agree on one value for either.)
 
 struct Ray {

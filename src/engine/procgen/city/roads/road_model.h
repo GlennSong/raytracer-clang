@@ -251,7 +251,7 @@ RoadModel builtRoadModel(const roads::lanes::Result& r);
 // stop line. THE ONE PLACE this is read off the stated streets and junctions: the turns' arms (turnArmsOf), the lane
 // level's cut at each stop line (lanes/lane_level.cpp) and the paint's lane lines (lanes/deck_mesh.cpp) all ask it.
 struct LaneSpanEnd {
-    bool reaches = false;            // the lane's stretch comes to that end of the street (within kReachesStreetEnd)
+    bool reaches = false;            // the lane's stretch comes to that end of the street (sameWrittenStation)
     ModelJunctionId junction;        // the junction the street names there (none: it carries on, or the road just ends)
     int arm = -1;                    // the arm of that junction this street is there (-1: the junction lists none for it)
     Real stopLine = kNotStated;      // that arm's stop line, along the road's spine (not stated: its road is not in the file)
@@ -285,13 +285,12 @@ std::vector<uint32_t> attachedToStreet(const RoadModel& m, ModelStreetId s);
 // A STREET'S NAME: the text of its attachment whose kind names the street (empty: it carries none).
 std::string streetName(const RoadModel& m, ModelStreetId s, const AttachmentKinds& kinds = attachmentKinds());
 // THE NAMED STREETS AT A JUNCTION, arm by arm in order round it (by heading): each arm whose street has a name, with
-// where it meets the junction (its street's centre line at that end), the way it leaves (its stated heading), its
-// street's travel width, and the name. What the name signs read.
+// where it meets the junction (its street's centre line at that end), the way it leaves (its stated heading), and the
+// name. What the name signs read. (How wide the street is is asked of the street: its section's travelWidth().)
 struct NamedArm {
     int arm = -1;
     ModelStreetId street;
     Vec2 point, dir;
-    Real travelWidth = 0;
     std::string name;
 };
 std::vector<NamedArm> namedArmsAt(const RoadModel& m, ModelJunctionId j);

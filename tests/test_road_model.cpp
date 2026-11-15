@@ -384,7 +384,7 @@ TEST_CASE(road_model_3_lanes_carry_their_streets_and_the_model_holds_what_is_sta
         std::printf("      arm %s: mouth %.2f, box edge %.2f, stop line %.2f\n", a.road.c_str(), a.station, a.boxEdge, a.stopLine);
         const Real away = a.spineIn ? -1.0 : 1.0;
         CHECK(approxEqual(a.boxEdge, a.station + away * back, kWrittenStation));
-        CHECK(approxEqual(a.stopLine, a.station + away * (back + roads::lanes::kStopLineBack), kWrittenStation));
+        CHECK(approxEqual(a.stopLine, a.station + away * (back + kStopLineBack), kWrittenStation));
     }
     CHECK(J.boxes.size() == 4u);   // its area along each of its four roads (each arm a road of its own)
     CHECK(J.through.size() == 2u);   // the arterial and the local street both carry on through
@@ -435,6 +435,46 @@ TEST_CASE(road_model_3b_a_ramps_merge_is_its_stated_anchor) {
     // what the ramp lane leads to: its merge
     const LeadsTo to = leadsTo(m, laneNamed(m, "ramp_one.f0"));
     CHECK(to.connections.size() == 1u && m.connections[to.connections.front()].kind == ConnectionKind::Merge);
+}
+
+// WHERE A RAMP'S LANE MEETS ITS HOST LANE IS THE BUILDER'S RECORD (issue #292): the builder lays the auxiliary lane and its
+// taper to a station on the host and records it; the model's connection copies it. The scene: merge_taper's one-lane
+// ramp, its taper restated as 108.4 m: 120 + 108.4 = 228.4 m past the gore at x = 330. The builder lays a sample every
+// whole metre, so its lane ends 228 m past the gore: at x = 558, station 708 of a mainline that starts at x = -150 along
+// y = 0, on the kerb lane of its three 3.6 m lanes (3.6 m off the centre line). The model says 708, where the lane is
+// drawn. (It once worked the station out again from the stated lengths: 708.4, where no lane ends. That the builder
+// stops at the last whole metre is owed: lane_expand.cpp composeRamp says why it is not changed here.)
+TEST_CASE(road_model_3c_a_ramp_lane_is_drawn_to_where_the_model_says_it_meets_its_host) {
+    nlohmann::json g = nlohmann::json::parse(slurp(std::string(RT_SOURCE_DIR) + "/assets/lanelab/merge_taper.json"));
+    g.erase("junctions");
+    g.erase("streets");
+    for (nlohmann::json& e : g["edges"])
+        if (e["id"] == "ramp_one") e["to"]["taper"] = 108.4;
+    writeLayout(g, deriveLayout(RoadLabGraph::fromJson(g), LayoutSource::Inferred));
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+    const RoadModel m = assembleRoadModel(*r, LaneGraphOptions());
+    // the builder's record, and the ramp's spine drawn to it, on the kerb lane's line
+    const EdgeSpec* ramp = r->graph.find("ramp_one");
+    CHECK(ramp != nullptr);
+    if (!ramp) return;
+    CHECK(approxEqual(ramp->anchorMeets[1], 708.0, kSamePoint));
+    CHECK(approxEqual(ramp->xy.back().x, 558.0, kSamePoint));
+    CHECK(approxEqual(std::fabs(ramp->xy.back().y), 3.6, kSamePoint));
+    // the model's connection says the same station
+    int found = 0;
+    for (const ModelConnection& c : m.connections) {
+        if (c.kind != ConnectionKind::Merge || c.ramp != "ramp_one") continue;
+        ++found;
+        CHECK(c.length == 120.0 && c.taper == 108.4);
+        CHECK(approxEqual(c.hostStation, 480.0, kWrittenStation));
+        CHECK(approxEqual(c.meets, 708.0, kSamePoint));
+    }
+    CHECK(found == 1);
+    // a ramp whose file states no taper gets the default once, where the file is read: 30 of its host's 3.6 m lanes
+    for (nlohmann::json& e : g["edges"])
+        if (e["id"] == "ramp_one") e["to"].erase("taper");
+    const RoadLabGraph plain = RoadLabGraph::fromJson(g);
+    CHECK(approxEqual(plain.find("ramp_one")->to.taper, 108.0, kSamePoint));
 }
 
 // ---- 4. the questions ------------------------------------------------------------------------------------------------------
@@ -667,9 +707,12 @@ std::size_t junctionsOf(const nlohmann::json& g) { return findJunctions(RoadLabG
 }  // namespace
 
 TEST_CASE(road_model_8_one_junction_is_no_room_for_a_car_between_stop_lines) {
-    // between the two Ts' stop lines along the arterial: `apart` less (11 + 5.2) at each (the arterial is the widest other
-    // road at both); one junction when that is under the storage length (6.5 m, a car and its gap)
-    const double reach = 2.0 * (11.0 + kStopLineBack);
+    // between the two Ts' stop lines along the arterial: `apart` less (6 + 5.2) at each -- the road CROSSING the arterial
+    // at each T is the local street ending on it (half width 6 m); the arterial carrying on is not crossing itself. One
+    // junction when that is under the storage length (6.5 m, a car and its gap). (Was 11 + 5.2 until issue #292: the
+    // grouping's own copy of the stop-line rule counted the arterial's other half as the widest road there, which the
+    // stated junctions' areas -- what is painted -- never did.)
+    const double reach = 2.0 * (6.0 + kStopLineBack);
     CHECK(junctionsOf(twoTees(reach + 6.0, "local", false)) == 1u);   // 6 m between: no car fits
     CHECK(junctionsOf(twoTees(reach + 7.0, "local", false)) == 2u);   // 7 m: a car can wait
     // the storage length is the road file's to state

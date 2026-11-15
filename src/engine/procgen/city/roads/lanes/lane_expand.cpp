@@ -59,25 +59,35 @@ void composeRamp(RoadLabGraph& g, EdgeSpec& e) {
     nlohmann::json path = e.path; std::string kind = path.value("type", std::string("polyline"));
     nlohmann::json pts = path.value("points", nlohmann::json::array());
     std::vector<Vec2> pre, post; e.anchorIdx[0] = e.anchorIdx[1] = -1; e.anchorLanes.clear();
+    e.anchorMeets[0] = e.anchorMeets[1] = std::numeric_limits<double>::quiet_NaN();
+    // Both ends are sampled every whole metre along the host, so where the length (auxiliary or deceleration lane and
+    // taper) is not whole metres the last sample stands up to a metre short of it: an entry's lane meets its host that much
+    // early, and an exit's gore stands that much before its stated station. The station really laid is recorded
+    // (anchorMeets) and the road model copies it, so the model and the drawing say the same place. OWED (issue #292):
+    // laying the last part-metre too makes such a ramp longer, and the shipped road files' streets were written against
+    // today's lengths (river_town's four loop ramps then end past their stated streets and their merges are not
+    // joined), so it needs those files' layouts written again.
     if (e.to.set) {
         const EdgeSpec& host = *g.find(e.to.edge); LaneSlot slot = anchorSlot(g, host, e.to.side);
-        double sg = hostStation(host, e.to), aux = e.to.aux, tap = e.to.taper > 0 ? e.to.taper : 30 * host.lanes.w, appr = e.to.approach;
+        double sg = hostStation(host, e.to), aux = e.to.aux, tap = e.to.taper, appr = e.to.approach;
         double sgn = slot.dir > 0 ? 1.0 : -1.0, outward = (e.to.side == "right") ? -1.0 : +1.0;   // the auxiliary lane lies outside the outer lane
         std::vector<double> ss, off; int n = static_cast<int>(aux + tap) + 1;
         for (int k = 0; k < n; ++k) { double d = std::min<double>(k, aux + tap); ss.push_back(sg + sgn * d); off.push_back(slot.offset + outward * host.lanes.w * (1 - smoothstep01((d - aux) / tap))); }
         post = hostPath(host, ss, off); Vec2 G = post.front(), T = tangentAtStation(host.xy, host.s, sg) * sgn;
         e.anchorLanes["to"] = host.id + "." + slot.name;
+        e.anchorMeets[1] = ss.back();   // where its line meets the host lane's
         if (kind == "bezier" && pts.size() == 4) { pts[3] = {G.x, G.y}; Vec2 c = G - T * appr; pts[2] = {c.x, c.y}; }
         else if (!pts.empty()) pts[pts.size() - 1] = {G.x, G.y};
     }
     if (e.from.set) {
         const EdgeSpec& host = *g.find(e.from.edge); LaneSlot slot = anchorSlot(g, host, e.from.side);
-        double sg = hostStation(host, e.from), dec = e.from.decel, tap = e.from.taper > 0 ? e.from.taper : 30 * host.lanes.w, appr = e.from.approach;
+        double sg = hostStation(host, e.from), dec = e.from.decel, tap = e.from.taper, appr = e.from.approach;
         double sgn = slot.dir > 0 ? 1.0 : -1.0, outward = (e.from.side == "right") ? -1.0 : +1.0;
         std::vector<double> ss, off; int n = static_cast<int>(dec + tap) + 1;
         for (int k = 0; k < n; ++k) { double d = std::min<double>(k, dec + tap); ss.push_back(sg - sgn * (dec + tap) + sgn * d); off.push_back(slot.offset + outward * host.lanes.w * smoothstep01(d / tap)); }
         pre = hostPath(host, ss, off); Vec2 G = pre.back(), T = tangentAtStation(host.xy, host.s, sg) * sgn;
         e.anchorLanes["from"] = host.id + "." + slot.name;
+        e.anchorMeets[0] = ss.front();   // where its line leaves the host lane's
         if (kind == "bezier" && pts.size() == 4) { pts[0] = {G.x, G.y}; Vec2 c = G + T * appr; pts[1] = {c.x, c.y}; }
         else if (!pts.empty()) pts[0] = {G.x, G.y};
     }
@@ -112,7 +122,7 @@ void roadLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
         const LaneSlot* inner = &cand[0]; const LaneSlot* outer = &cand[0];
         for (const LaneSlot& sl : cand) { if (sl.offset * d > inner->offset * d) inner = &sl; if (sl.offset * d < outer->offset * d) outer = &sl; }
         double baseOff = (pk.side == "right" ? outer : inner)->offset; double sgn = pk.side == "right" ? -d : d;
-        double ti = pk.taper > 0 ? pk.taper : 10 * w, to = pk.taperOut;
+        double ti = pk.taper, to = pk.taperOut;
         std::vector<Vec2> sp, nn; std::vector<double> off;
         double first = -1, last = -1;
         for (size_t i = 0; i < e.xy.size(); ++i) {
@@ -178,8 +188,8 @@ void placeOnStreets(const RoadLabGraph& g, LaneSet& L) {
         if (l.streets.empty()) continue;
         const ModelStreet& first = g.streets[static_cast<size_t>(l.streets.front().street)];
         const ModelStreet& last = g.streets[static_cast<size_t>(l.streets.back().street)];
-        const int atFrom = l.spineFrom <= first.from + kReachesStreetEnd ? junctionOf(first.junctions[0]) : -1;
-        const int atTo = l.spineTo >= last.to - kReachesStreetEnd ? junctionOf(last.junctions[1]) : -1;
+        const int atFrom = atOrBefore(l.spineFrom, first.from, kWrittenStation) ? junctionOf(first.junctions[0]) : -1;
+        const int atTo = atOrPast(l.spineTo, last.to, kWrittenStation) ? junctionOf(last.junctions[1]) : -1;
         l.junctionAtStart = l.dir > 0 ? atFrom : atTo;
         l.junctionAtEnd = l.dir > 0 ? atTo : atFrom;
     }

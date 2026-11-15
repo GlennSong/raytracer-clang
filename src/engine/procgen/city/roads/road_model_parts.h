@@ -39,6 +39,10 @@ inline bool stated(Real v) { return !std::isnan(v); }
 // shortest street is half a metre.)
 inline bool sameWrittenStation(Real a, Real b) { return approxEqual(a, b, kWrittenStation); }
 
+// THE WAY A STATED HEADING POINTS: a heading in degrees counter-clockwise from +x in plan coordinates (an arm's
+// `heading`, as the layout writes it: lanes/control_plan.h degreesOf), as a unit vector. The one reading of a heading.
+inline Vec2 directionOf(Real degrees) { return Vec2(std::cos(degrees * DEG_TO_RAD), std::sin(degrees * DEG_TO_RAD)); }
+
 // ONE ARM: a road's way out of a junction. THE ROAD FILE STATES IT (its junction's "arms": [{"road": "s4", "at": 87.3,
 // "spine": "in", "regulations": ["stop"], "street": "s4/1", "heading": 90}]): the road, the station along its spine where
 // it meets the junction ("at"), whether the spine runs INto the junction there (its forward lanes arrive) or OUT of it, the
@@ -152,6 +156,40 @@ inline uint32_t throughPartner(const ThroughPairs& through, uint32_t arm) {
     }
     return kNoIndex;
 }
+
+// HOW FAR BACK FROM ITS MOUTH AN ARM'S STOP LINE STANDS -- THE ONE RULE (ADR-0419, ADR-0428; issue #292). The junction's
+// area begins back from the arm's mouth (away from the junction) by the half width of the widest road CROSSING it: an
+// arm's road other than its own and its stated through partner's (the same street carrying on is not crossing it), at
+// the same point of the junction (mouths within kSameJunctionPoint), else anywhere in the junction. That is the arm's BOX
+// EDGE: where the crossing road's lanes begin. Its STOP LINE stands kStopLineBack further back. Asked by the stated
+// junctions' areas (lanes/deck_mesh.h junctionAreas: the paint, the model's ModelArm::boxEdge / stopLine, the lane
+// level) and by the grouping of road ends into junctions (lanes/control_plan.h findJunctions).
+constexpr Real kStopLineBack = 5.2;
+constexpr Real kSameJunctionPoint = 2.0;   // metres: two arms' mouths this near meet at one point of a junction
+// One arm as the rule reads it: its road (any number that tells roads apart; below zero: a road nobody knows, which
+// crosses nothing), where its mouth is in plan, and its road's half width (half the travel width).
+struct ArmMouth {
+    int road = -1;
+    Vec2 mouth;
+    Real halfWidth = 0;
+};
+// Metres from arm k's mouth back to its box edge. `through`: the junction's stated through pairs, by place in `arms`.
+inline Real boxEdgeBack(const std::vector<ArmMouth>& arms, const ThroughPairs& through, std::size_t k) {
+    const uint32_t ownStreet = throughPartner(through, static_cast<uint32_t>(k));
+    Real atPoint = -1, anywhere = 0;
+    for (std::size_t o = 0; o < arms.size(); ++o) {
+        const ArmMouth& b = arms[o];
+        if (b.road < 0 || b.road == arms[k].road || o == ownStreet) continue;
+        anywhere = std::max(anywhere, b.halfWidth);
+        if (atOrBefore((b.mouth - arms[k].mouth).length(), kSameJunctionPoint, kSamePoint)) atPoint = std::max(atPoint, b.halfWidth);
+    }
+    return atPoint >= 0 ? atPoint : anywhere;
+}
+// ... and back to its stop line.
+inline Real stopLineBack(const std::vector<ArmMouth>& arms, const ThroughPairs& through, std::size_t k) {
+    return boxEdgeBack(arms, through, k) + kStopLineBack;
+}
+
 struct ModelJunction {
     std::string id;
     Vec2 at;

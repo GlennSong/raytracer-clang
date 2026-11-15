@@ -410,11 +410,20 @@ TEST_CASE(approx_compare_a_stop_at_a_start_is_at_or_before_it) {
 
 TEST_CASE(approx_compare_named_tolerances_are_one_millimetre_and_one_centimetre) {
     CHECK(kSamePoint == 0.001);        // metres: two positions closer than this are one place
-    CHECK(kWrittenStation == 0.01);    // metres: road files write stations to the centimetre
+    // metres: road files write stations to the centimetre; the value lies between half a centimetre and a whole one
+    // (issue #292: it was 0.01 here and 0.005 or 1e-6 in three other files; one value now)
+    CHECK(kWrittenStation == 0.0075);
     // Two stations written to the centimetre from one number, 12.34 and 12.345 rounded either way, are one written
     // station and not one point.
     CHECK(approxEqual(12.34, 12.345, kWrittenStation));
+    CHECK(approxEqual(12.35, 12.345, kWrittenStation));
     CHECK(!approxEqual(12.34, 12.345, kSamePoint));
+    // THE TWO CASES THE OLD VALUES DISAGREED ON. A number and its own written form are one place: 12.125 is written 12.13,
+    // half a centimetre away (a tolerance of exactly 0.005 says they are two: the difference is 0.005 and one bit).
+    CHECK(approxEqual(12.125, 12.13, kWrittenStation));
+    // Two different written numbers are two places: 12.34 and 12.35 (a tolerance of exactly 0.01 says they are one: the
+    // difference is 0.01 less one bit).
+    CHECK(!approxEqual(12.34, 12.35, kWrittenStation));
 }
 
 TEST_CASE(approx_compare_nan_and_infinities) {

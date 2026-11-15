@@ -225,7 +225,7 @@ data rows.
 ## 7. Traps (from step 8)
 
 - **Street stations are written to the centimetre.** A lane's end and a street's end, or a ramp's merge station and
-  its lane end, differ by millimetres. Compare within `kReachesStreetEnd` (0.01 m, `lane_expand.h`) and snap to the
+  its lane end, differ by millimetres. Compare with `sameWrittenStation` (`road_model_parts.h`; `kWrittenStation`, 7.5 mm, `rt_math.h`: ADR-0433) and snap to the
   lane's own end. Without that, nothing was trimmed at stop lines: 2117 false corner faults, reach 50%.
 - **Three orderings were one.** The turns once sorted arms by heading, the regions walked a circle and the outline
   sorted by angle round its middle. At a spread junction they disagreed (river_town 9 junctions, traffic_lab 3). Since
