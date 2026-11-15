@@ -526,11 +526,30 @@ std::string keyedRoadFileText(const std::string& text) {
     // the bake reads any of them (the meshes, paint, deck and road graph come from the edges); the lane graph, which
     // reads them, keys them itself (laneLevelKey). Likewise the lane level's rules (ADR-0426) and the arms' ring mark
     // (ADR-0427).
+    // Since step 9 (ADR-0428) the paint draws each stated junction's arms (deck_mesh.h junctionAreas), so what it reads of
+    // them -- each junction's arms by road, station and way, and its stretches inside -- is keyed, after the cut text, in
+    // an order of its own (the arms' list order, their controls, signs, names and points move no paint).
     for (std::size_t k = 0; k < top.size(); ++k)
         if (top[k].key == "streets" || top[k].key == "divided" || top[k].key == "junctions" || top[k].key == "lane_rules" ||
             top[k].key == "arms_in_ring")
             cut.push_back(removal(top, k));
-    return cutText(text, cut);
+    std::string out = cutText(text, cut);
+    if (const Member* listed = memberNamed(top, "junctions")) {
+        const nlohmann::json list = nlohmann::json::parse(text.substr(listed->valueBegin, listed->valueEnd - listed->valueBegin), nullptr, false);
+        if (list.is_array()) {
+            nlohmann::json painted = nlohmann::json::array();
+            for (const nlohmann::json& j : list) {
+                if (!j.is_object()) continue;
+                std::vector<std::string> arms;
+                for (const nlohmann::json& a : j.value("arms", nlohmann::json::array()))
+                    if (a.is_object()) arms.push_back(nlohmann::json::array({a.value("road", ""), a.value("at", 0.0), a.value("spine", "")}).dump());
+                std::sort(arms.begin(), arms.end());
+                painted.push_back(nlohmann::json::array({arms, j.value("inside", nlohmann::json::array())}));
+            }
+            out += "\n/* the stated junctions the paint draws */ " + painted.dump();
+        }
+    }
+    return out;
 }
 
 uint64_t laneLevelKey(const nlohmann::json& spec) {

@@ -4,6 +4,7 @@
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/geom2d.h"
 #include "engine/procgen/city/rail_track.h"
+#include "rt_math.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -702,16 +703,10 @@ void platformKit(RenderMesh& plat, RenderMesh& concrete, RenderMesh& canopy, Ren
     }
 }
 
-// The junction test's numbers: two decks within kJunctionSameLevel of each other are one level; a street lane is
-// sampled every kJunctionSampleStep metres along it. (The parallel test's number, kJunctionParallel, is in the header.)
+// The crossing test's number: two decks within kJunctionSameLevel of each other are one level. (The parallel test's
+// number, kJunctionParallel, is in the header.)
 constexpr double kJunctionSameLevel = 1.0;
-constexpr double kJunctionSampleStep = 2.0;
 
-// A list of road indices, sorted and without repeats.
-void sortUnique(std::vector<int>& v) {
-    std::sort(v.begin(), v.end());
-    v.erase(std::unique(v.begin(), v.end()), v.end());
-}
 
 }  // namespace
 
@@ -741,35 +736,74 @@ bool paintsJunctionBoxes(const RoadLabGraph& g, const EdgeSpec& e) {
     return !(e.isRamp() || e.cls == "freeway" || g.cls(e).rank < 1 || trackClass(g, e.cls));
 }
 
-std::map<int, std::vector<JunctionSpan>> junctionSpans(const Result& r, const LaneLookup& look, double parallelCos) {
-    const LaneSet& L = r.lanes;
-    // per street, the parent-station spans where its lanes run through a box
-    std::map<int, std::vector<JunctionSpan>> spans;
-    std::vector<int> hits, crossing;
-    for (size_t li = 0; li < L.lanes.size(); ++li) {
-        const Lane& l = L.lanes[li]; if (l.isConnector() || l.parent < 0 || l.s.size() < 2) continue;
-        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; if (!paintsJunctionBoxes(r.graph, e)) continue;
-        int n = std::max(2, static_cast<int>(l.s.back() / kJunctionSampleStep) + 1); double in0 = -1, inLast = 0; int rankMax = -1;
-        for (int k = 0; k <= n; ++k) {
-            int cr = -1; double st = 0; hits.clear();
-            if (k < n) { double ls = l.s.back() * k / (n - 1); Vec2 p = pointAt(l.xy, l.s, ls); Vec2 t = tangentAtStation(l.xy, l.s, ls); cr = junctionCrossRank(r, look, li, p, t, &hits, parallelCos); st = project(e.xy, e.s, p).station; }
-            if (cr >= 0) { if (in0 < 0) { in0 = st; rankMax = cr; crossing.clear(); } inLast = st; rankMax = std::max(rankMax, cr); crossing.insert(crossing.end(), hits.begin(), hits.end()); }
-            else if (in0 >= 0) { sortUnique(crossing); spans[l.parent].push_back({std::min(in0, inLast), std::max(in0, inLast), rankMax, crossing}); in0 = -1; }
+std::vector<JunctionArea> junctionAreas(const RoadLabGraph& g) {
+    std::vector<JunctionArea> out;
+    out.reserve(g.junctions.size());
+    for (const PlannedJunction& pj : g.junctions) {
+        JunctionArea A;
+        // each arm's road and mouth
+        std::vector<Vec2> mouth(pj.arms.size(), pj.at);
+        for (std::size_t k = 0; k < pj.arms.size(); ++k) {
+            const PlannedArm& pa = pj.arms[k];
+            ArmStop a;
+            a.station = pa.at;
+            a.spineIn = pa.spineIn;
+            const std::map<std::string, int>::const_iterator ei = g.index.find(pa.road);
+            if (ei != g.index.end()) {
+                a.edge = ei->second;
+                const EdgeSpec& e = g.edges[static_cast<std::size_t>(a.edge)];
+                if (e.xy.size() >= 2) mouth[k] = pointAt(e.xy, e.s, pa.at);
+                a.painted = paintsJunctionBoxes(g, e);
+            }
+            A.arms.push_back(a);
         }
-    }
-    std::map<int, std::vector<JunctionSpan>> boxes;   // parent edge -> merged junction spans
-    for (auto& [pe, raw] : spans) {
-        std::sort(raw.begin(), raw.end(), [](const JunctionSpan& a, const JunctionSpan& b) { return a.s0 < b.s0; });
-        std::vector<JunctionSpan>& merged = boxes[pe];
-        for (const JunctionSpan& sp : raw) {
-            if (!merged.empty() && sp.s0 <= merged.back().s1 + kJunctionMergeGap) {
-                merged.back().s1 = std::max(merged.back().s1, sp.s1); merged.back().crossRank = std::max(merged.back().crossRank, sp.crossRank);
-                merged.back().crossEdges.insert(merged.back().crossEdges.end(), sp.crossEdges.begin(), sp.crossEdges.end());
-                sortUnique(merged.back().crossEdges);
-            } else merged.push_back(sp);
+        // ADR-0419's rule: back from the mouth by the widest road CROSSING it at the same point, else at the junction --
+        // every other arm's road but its own and its stated through partner's (the same street carrying on)
+        for (std::size_t k = 0; k < A.arms.size(); ++k) {
+            ArmStop& a = A.arms[k];
+            std::vector<bool> ownStreet(A.arms.size(), false);
+            for (const std::array<int, 2>& t : pj.through)
+                for (int side = 0; side < 2; ++side)
+                    if (t[side] == static_cast<int>(k) && t[1 - side] >= 0 && static_cast<std::size_t>(t[1 - side]) < A.arms.size())
+                        ownStreet[static_cast<std::size_t>(t[1 - side])] = true;
+            double atPoint = -1, anywhere = 0;
+            int rankAtPoint = -1, rankAnywhere = -1;
+            for (std::size_t o = 0; o < A.arms.size(); ++o) {
+                const ArmStop& b = A.arms[o];
+                if (b.edge < 0 || b.edge == a.edge || ownStreet[o]) continue;
+                const EdgeSpec& eo = g.edges[static_cast<std::size_t>(b.edge)];
+                const double hw = g.hw(eo);
+                const int rank = g.cls(eo).rank;
+                anywhere = std::max(anywhere, hw);
+                rankAnywhere = std::max(rankAnywhere, rank);
+                if (atOrBefore((mouth[o] - mouth[k]).length(), kSameJunctionPoint, kSamePoint)) {
+                    atPoint = std::max(atPoint, hw);
+                    rankAtPoint = std::max(rankAtPoint, rank);
+                }
+            }
+            const double back = atPoint >= 0 ? atPoint : anywhere;
+            const double away = a.spineIn ? -1.0 : 1.0;   // along the spine, away from the junction
+            a.boxEdge = a.station + away * back;
+            a.stopLine = a.boxEdge + away * kStopLineBack;
+            a.crossRank = atPoint >= 0 ? rankAtPoint : rankAnywhere;
         }
+        // its area along each road: its arms' box edges and mouths there, and the stretches stated inside it
+        std::map<int, std::pair<double, double>> along;
+        auto cover = [&](int edge, double lo, double hi) {
+            const std::map<int, std::pair<double, double>>::iterator it = along.find(edge);
+            if (it == along.end()) along[edge] = std::make_pair(std::min(lo, hi), std::max(lo, hi));
+            else it->second = std::make_pair(std::min({it->second.first, lo, hi}), std::max({it->second.second, lo, hi}));
+        };
+        for (const ArmStop& a : A.arms)
+            if (a.edge >= 0) cover(a.edge, a.boxEdge, a.station);
+        for (const PlannedStretch& st : pj.inside) {
+            const std::map<std::string, int>::const_iterator ei = g.index.find(st.road);
+            if (ei != g.index.end()) cover(ei->second, st.from, st.to);
+        }
+        for (const std::pair<const int, std::pair<double, double>>& kv : along) A.spans.push_back(JunctionSpan{kv.first, kv.second.first, kv.second.second});
+        out.push_back(std::move(A));
     }
-    return boxes;
+    return out;
 }
 
 std::vector<RailTrack> railTracks(const Result& r) {
@@ -1005,12 +1039,17 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         LOG_INFO << "[deck stats] concrete triangles by stage:" << o << "; asphalt " << asphalt.indices.size() / 3
                  << " (" << asphalt.vertices.size() << " verts), hasTerrain " << r.hasTerrain;
     }
-    // Junction boxes (junctionCrossRank, junctionSpans): lane paint stops inside them (lane lines running through a
-    // junction read as a mess), and the spans of them along each street get a zebra crosswalk and a stop bar per approach.
+    // THE STATED JUNCTIONS (junctionAreas, step 9): lane paint stops inside their areas and where a lane runs inside a
+    // crossing road's lane (junctionCrossRank: lane lines running through a junction read as a mess), and each street arm
+    // gets a zebra crosswalk, lane arrows and a stop bar at its stated stop line.
     auto inBox = [&](size_t li, const Vec2& p, const Vec2& t) { return junctionCrossRank(r, look, li, p, t); };
-    // parent edge -> merged junction spans: the build's, kept in its Result (the same call, made once there)
-    const std::map<int, std::vector<JunctionSpan>> boxes = r.hasJunctionBoxes ? r.junctionBoxes : junctionSpans(r, look);
-    // a point on a street lane inside one of its road's merged boxes (the median gap of a divided cross road included)
+    const std::vector<JunctionArea> areas = junctionAreas(r.graph);
+    std::map<int, std::vector<JunctionSpan>> boxes;   // road -> the stated junctions' areas along it, in station order
+    for (const JunctionArea& A : areas)
+        for (const JunctionSpan& sp : A.spans) boxes[sp.edge].push_back(sp);
+    for (std::pair<const int, std::vector<JunctionSpan>>& kv : boxes)
+        std::sort(kv.second.begin(), kv.second.end(), [](const JunctionSpan& a, const JunctionSpan& b) { return a.s0 < b.s0; });
+    // a point on a street lane inside one of the stated junctions' areas along its road
     auto inSpan = [&](const Lane& l, const Vec2& p) {
         auto it = boxes.find(l.parent); if (it == boxes.end()) return false;
         const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; const double st = project(e.xy, e.s, p).station;
@@ -1047,9 +1086,16 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
             }
         }
     }
-    for (auto& [pe, merged] : boxes) {
-        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(pe)]; const double Lr = e.s.back(); const int ownRank = r.graph.cls(e).rank;
-        auto paintSide = [&](double sBox, int sign, int crossRank) {   // sign -1: the approach at stations below the box; +1: above
+    static const std::vector<JunctionSpan> kNoSpans;
+    for (const JunctionArea& area : areas) for (const ArmStop& arm : area.arms) {
+        if (!arm.painted || arm.edge < 0) continue;
+        const int pe = arm.edge;
+        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(pe)]; if (e.s.size() < 2) continue;
+        const double Lr = e.s.back(); const int ownRank = r.graph.cls(e).rank;
+        const std::map<int, std::vector<JunctionSpan>>::const_iterator onRoad = boxes.find(pe);
+        const std::vector<JunctionSpan>& merged = onRoad == boxes.end() ? kNoSpans : onRoad->second;
+        // sign -1: the approach at stations below the box; +1: above. sStop: the arm's stated stop line (junctionAreas)
+        auto paintSide = [&](double sBox, int sign, int crossRank, double sStop) {
             const double sw0 = sBox + sign * kCrosswalkNear, sw1 = sBox + sign * kCrosswalkFar;
             if (std::min(sw0, sw1) < 2.0 || std::max(sw0, sw1) > Lr - 2.0) return;   // the road ends in this box: no leg here
             const double stMid = 0.5 * (sw0 + sw1); Vec2 P = pointAt(e.xy, e.s, stMid); Vec2 T = tangentAtStation(e.xy, e.s, stMid); Vec2 N = perp(T);
@@ -1084,7 +1130,6 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
             {
                 std::vector<const LL*> app;
                 for (const LL& x : ls) if (x.approaching) app.push_back(&x);
-                const double sStop = sBox + sign * kStopLineBack;
                 const Vec2 D = T * static_cast<double>(-sign);   // travel into the box
                 const Vec2 Lft = perp(D);                         // the plan's left of travel
                 // the approach lies at stations on the `sign` side of the box: back from the stop line is +sign
@@ -1163,10 +1208,10 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
             // for the major one (equal ranks: every approach stops)
             if (crossRank < ownRank) return;
             double lo = 1e300, hi = -1e300; for (const LL& x : ls) if (x.approaching) { lo = std::min(lo, x.lat - x.w / 2); hi = std::max(hi, x.lat + x.w / 2); }
-            if (lo < hi) { Vec2 Q = pointAt(e.xy, e.s, sBox + sign * kStopLineBack); Vec2 a = Q + N * (lo + 0.15), b = Q + N * (hi - 0.15);
+            if (lo < hi) { Vec2 Q = pointAt(e.xy, e.s, sStop); Vec2 a = Q + N * (lo + 0.15), b = Q + N * (hi - 0.15);
                 strip(paintW, std::vector<Vec2>{a, b}, std::vector<double>{zAt(laneAt(lo), a), zAt(laneAt(hi), b)}, 0.25, 0, 0, kPaintWhite); }
         };
-        for (const JunctionSpan& sp : merged) { paintSide(sp.s0, -1, sp.crossRank); paintSide(sp.s1, +1, sp.crossRank); }
+        paintSide(arm.boxEdge, arm.spineIn ? -1 : +1, arm.crossRank, arm.stopLine);
     }
     // terrain
     if (r.hasTerrain) {

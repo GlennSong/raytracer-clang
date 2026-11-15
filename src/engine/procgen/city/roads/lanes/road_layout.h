@@ -104,8 +104,10 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
 // comes back byte for byte. Text with none of them is returned as it was.
 std::string stripLayoutText(const std::string& text);
 // WHAT THE CITY'S BAKE KEY HASHES (city_producer.cpp): the file with its "streets", "divided", "junctions",
-// "arms_in_ring" and "lane_rules" members taken out whole -- the junctions with their controls and signs too (ADR-0421: no stage of the
-// bake reads any of them; the lane graph, which reads them, keys them itself, laneLevelKey, ADR-0426).
+// "arms_in_ring" and "lane_rules" members taken out whole -- the junctions with their controls and signs too (ADR-0421;
+// the lane graph, which reads them, keys them itself, laneLevelKey, ADR-0426) -- and then what the paint reads of the
+// stated junctions (ADR-0428: each junction's arms by road, station and way, in an order of their own, and its stretches
+// inside), appended: a change to where a junction's arms stand re-bakes; its control, signs, names or arm order do not.
 std::string keyedRoadFileText(const std::string& text);
 // WHAT THE LANE LEVEL READS OF A ROAD FILE THAT THE BAKE KEY LEAVES OUT (ADR-0426), hashed: its "junctions" (without
 // their points, "nodes", which only the street map reads), "arms_in_ring", "streets", "divided" and "lane_rules"

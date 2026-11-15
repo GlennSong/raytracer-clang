@@ -12,11 +12,8 @@
 //   - a LANE PATH is a stretch of one of the builder's lanes along one street: the lane's curve between stations of its
 //     road's spine (each point the builder laid stands beside a stated spine station), from the leaving arm's stop line
 //     to the arriving arm's (or a street's end where it carries on, or the lane's own end);
-//   - a STOP LINE is the builder's kept stop-line station of the stated arm (the paint's box, kStopLineBack outside it:
-//     ModelArm::stopLine), where the paint's box holds that junction alone; else ADR-0419's rule read from the stated
-//     cross-sections (control_signs.h stopLineFromMouth): where the paint found no box, or where its box holds two stated
-//     junctions (the paint's own "boxes within 12 m are one" until step 9; each such place in the road model's problems,
-//     their one home). The STATED junctions are followed, never the paint's grouping;
+//   - a STOP LINE is the stated arm's (ModelArm::stopLine): ADR-0419's rule from the stated junction, decided in one place
+//     (deck_mesh.h junctionAreas, ADR-0428) that the paint draws from too;
 //   - SECTIONS are the lanes of one road running one way between cuts: where a lane path begins or ends, where a lane
 //     leaves or joins its host (the connections' `meets`), and where the solid lines before a stop line begin. Lanes
 //     side by side are ordered by their slot (the builder's, from the centre-line side), never by where they lie;

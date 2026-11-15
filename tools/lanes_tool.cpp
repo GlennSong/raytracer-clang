@@ -684,11 +684,9 @@ int main(int argc, char** argv) {
                     lg.connectMilliseconds, buildMs);
         for (const char* stage : {"lanes", "profiles", "footprints", "surfaces"})
             if (rp->timings.count(stage)) std::printf(", %s %.0f", stage, 1000 * rp->timings.at(stage));
-        std::printf("\n  left out: %u connector lanes, %u track/footway lanes; %u lanes tidied; stop lines: %u the paint's, %u by "
-                    "ADR-0419's rule (no box), %u by it (the paint's box holds two stated junctions); joined as stated: %u where a "
+        std::printf("\n  left out: %u connector lanes, %u track/footway lanes; %u lanes tidied; joined as stated: %u where a "
                     "street carries on, %u where a lane leaves its host, %u where one merges into it, %u of them with a gap\n",
-                    lg.connectorsLeftOut, lg.otherLanesLeftOut, lg.tidiedLanes, lg.stopLinesPainted, lg.stopLinesNoBox,
-                    lg.stopLinesSharedBox, lg.carryOnJoins, lg.divergeJoins, lg.mergeJoins, lg.joinsWithGap);
+                    lg.connectorsLeftOut, lg.otherLanesLeftOut, lg.tidiedLanes, lg.carryOnJoins, lg.divergeJoins, lg.mergeJoins, lg.joinsWithGap);
         {
             // THE CORNER FAULTS (ADR-0426): the stated turns whose drawn corner does not fit a class, by class; one line per
             // turn in corner_faults.txt (the work list for step 9)

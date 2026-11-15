@@ -2180,6 +2180,8 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
                     if (crossingsFound.insert(key).second && !known.crossings.count(key))
                         std::printf("      lanes %s cross at one level outside every junction (not known)\n", key.c_str());
                 }
+        for (const std::string& k : known.crossings)
+            if (!crossingsFound.count(k)) std::printf("      lanes %s known to cross: not found\n", k.c_str());
         CHECK(crossingsFound == known.crossings);
     }
 }
@@ -2335,7 +2337,8 @@ TEST_CASE(lanes_connectors_of_the_traffic_lab_meet_their_lanes_and_fit_their_veh
 // THE TRAFFIC LAB IS ROUTABLE (#238): a car on almost any lane can get to almost any other -- the largest set of lanes
 // that can all reach one another holds at least 90% of them -- and no lane end is half-joined.
 // (Its known problems by count, with the tests' two vehicles: a change to any is a change to look at, then to write here.)
-constexpr uint32_t kTrafficLabFitsNone = 82, kTrafficLabCrossingLines = 17, kTrafficLabKinks = 65;
+// (step 9, ADR-0428: the stop lines moved to the stated rule -- fits none 82 -> 77, crossing lines 17 -> 29, kinks 65 -> 63)
+constexpr uint32_t kTrafficLabFitsNone = 77, kTrafficLabCrossingLines = 29, kTrafficLabKinks = 63;
 TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
     const LaneGraphBuild& lg = laneGraphOf("planned/traffic_lab_lanelab");
     std::printf("    traffic lab: %.1f%% of the lanes in the largest part a car can get round\n", 100 * lg.reachableShare);
@@ -2380,29 +2383,28 @@ TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
         ++byKind[kind];
     }
     const std::map<std::string, uint32_t> knownKinds = {{"fits no vehicle", kTrafficLabFitsNone}, {"tidied", 13}, {"crossing points", kTrafficLabCrossingLines},
-                                                        {"kink", kTrafficLabKinks}, {"join with a gap", 1}, {"outline", 2}, {"no junction stated", 17}};
+                                                        {"kink", kTrafficLabKinks}, {"join with a gap", 1}, {"outline", 5}, {"no junction stated", 17}};
     for (const std::pair<const std::string, uint32_t>& k : byKind) std::printf("      %u problems: %s\n", k.second, k.first.c_str());
     CHECK(byKind == knownKinds);
-    CHECK(outlines == std::set<std::string>({"j0", "j22"}));
+    // (j4, j19, j93, j96 since step 9, and j22 no longer, ADR-0428: two arms' stop lines, stated by the rule, cross where
+    // they meet at a sharp angle)
+    CHECK(outlines == std::set<std::string>({"j0", "j4", "j19", "j93", "j96"}));
     CHECK(gapJoins == std::set<std::string>({"lane d1_0_a_off.f0 leaves lane fw1_a.f3"}));
     CHECK(unstated == std::set<std::string>({"s208", "s283", "s288", "s290", "s292", "s295", "s297", "s299", "s301", "s303", "s308",
                                              "s326", "s328", "s330", "s332", "s335", "s337"}));
 }
 
-// THE TRAFFIC LAB'S ROAD MODEL'S OWN PROBLEMS, BY KIND AND COUNT (written from its model_problems.txt): the paint finds no
-// box at 39 stated arms (the two-arm junctions round the frontage ring and a few more) and one box on s56 no stated
-// junction holds; 8 sides taken as far turns where an arm with no through pair stated stands halfway round (j7, j18, j82);
-// and NONE of: an arriving lane no turn-table row covers, a paint box holding two stated junctions, anything else.
+// THE TRAFFIC LAB'S ROAD MODEL'S OWN PROBLEMS, BY KIND AND COUNT (written from its model_problems.txt): 8 sides taken as
+// far turns where an arm with no through pair stated stands halfway round (j7, j18, j82); and NONE of: an arriving lane
+// no turn-table row covers, anything else. (Since ADR-0428 the paint draws the stated junctions: no paint box can
+// disagree with them, so those problem lines are gone.)
 TEST_CASE(lanes_the_traffic_lab_road_model_problems_are_known) {
     const RoadModel m = assembleRoadModel(laneSceneOf("planned/traffic_lab_lanelab"));
     std::map<std::string, uint32_t> byKind;
     std::set<std::string> halfway;
     for (const std::string& p : m.problems) {
         std::string kind = "other";
-        if (p.find(": the paint found no box where its arm on ") != std::string::npos) kind = "arm with no paint box";
-        else if (p.find("that no stated junction holds") != std::string::npos) kind = "paint box no junction holds";
-        else if (p.find("the paint made one junction box on ") == 0) kind = "paint box holding two junctions";
-        else if (p.find(" takes no turn: ") != std::string::npos) kind = "arriving lane taking no turn";
+        if (p.find(" takes no turn: ") != std::string::npos) kind = "arriving lane taking no turn";
         else if (p.find(" stands halfway round from arm ") != std::string::npos) {
             kind = "halfway, taken as far";
             // named by the arms' roads (their places in the list are the stated ring's, ADR-0427)
@@ -2417,7 +2419,7 @@ TEST_CASE(lanes_the_traffic_lab_road_model_problems_are_known) {
         ++byKind[kind];
     }
     for (const std::pair<const std::string, uint32_t>& k : byKind) std::printf("      %u model problems: %s\n", k.second, k.first.c_str());
-    CHECK(byKind == (std::map<std::string, uint32_t>{{"arm with no paint box", 39}, {"paint box no junction holds", 1}, {"halfway, taken as far", 8}}));
+    CHECK(byKind == (std::map<std::string, uint32_t>{{"halfway, taken as far", 8}}));
     CHECK(halfway == (std::set<std::string>{"j7: s203 halfway from s16", "j7: s230 halfway from s13", "j18: s219 halfway from s28",
                                             "j18: s28 halfway from s219", "j18: s23 halfway from s31", "j18: s31 halfway from s23",
                                             "j82: s141 halfway from s224", "j82: s224 halfway from s141"}));
@@ -2593,7 +2595,8 @@ LaneGraphKnown gridCityKnown() {
     k.mergeJoins = 1;      // the entry ramp
     k.merges = {"entry.f0>fw_wb.f2"};   // the file: entry's `to` anchor on fw_wb, side right: its outer lane, f2 of three
     // (the one "other": blvd.f1 carrying on into loc_e, which has no lane in its slot)
-    k.problems = {{"crossing points", 28}, {"fits no vehicle", 1}, {"join with a gap", 11}, {"kink", 11}, {"other", 1}};
+    // (fits no vehicle 1 -> 2 at step 9, ADR-0428: the stop lines moved to the stated rule, one more corner fault)
+    k.problems = {{"crossing points", 28}, {"fits no vehicle", 2}, {"join with a gap", 11}, {"kink", 11}, {"other", 1}};
     k.joins = {{"v0.b0>h0.f0", {2.4749, 90.0}}, {"v0.f0>h4.f0", {2.4749, 90.0}}, {"v5.b0>h0.b0", {2.4749, 90.0}},
                {"h0.b0>v0.f0", {2.4749, 90.0}}, {"h0.f0>v5.f0", {2.4749, 90.0}}, {"h4.b0>v0.b0", {2.4749, 90.0}},
                {"blvd.f0>loc_e.f0", {2.4885, 99.65}}, {"blvd.f1>loc_e.f0", {5.0944, 99.65}}, {"loc_s.f0>loc_e.b0", {1.6978, 58.04}},
@@ -2636,9 +2639,10 @@ LaneGraphKnown valleyViaductKnown() {
 LaneGraphKnown trafficLabKnown() {
     LaneGraphKnown k;
     // lanes of two roads crossing before their stop lines: at j0, s33's and s36's (two arms meeting at one point at a sharp
-    // angle), at j84 s147's and s149's, and at j22's approach s57's and s60's
-    k.crossings = {"s33.f0 x s36.b0 @ (-231, -311)", "s33.f1 x s36.b0 @ (-225, -311)", "s33.f2 x s36.f0 @ (-227, -305)",
-                   "s33.f2 x s36.b0 @ (-220, -311)", "s57.f0 x s60.b2 @ (-217, 311)", "s147.b2 x s149.f0 @ (208, -311)"};
+    // angle; two of the four found before step 9 now lie inside the junction, its stop lines stated by the rule, ADR-0428),
+    // at j84 s147's and s149's, and at j22's approach s57's and s60's
+    k.crossings = {"s33.f1 x s36.b0 @ (-225, -311)", "s33.f2 x s36.b0 @ (-220, -311)", "s57.f0 x s60.b2 @ (-217, 311)",
+                   "s147.b2 x s149.f0 @ (208, -311)"};
     // the folds cut out (each lane's "tidied" problem line gives the metres; written here rounded up)
     k.tidied = {{"s2.f2", 2.4}, {"s30.f2", 1.7}, {"s61.b0", 1.0}, {"s65.f0", 1.2}, {"s90.f2", 1.3}, {"s182.f0", 1.5}, {"s189.f2", 1.5},
                 {"s193.b1", 3.1}, {"s212.b2", 2.4}, {"s212.b1", 0.4}, {"s212.f1", 0.6}, {"s212.f2", 2.3}, {"s215.b2", 0.6}};
@@ -2695,17 +2699,20 @@ TEST_CASE(lanes_lane_graph_a_grid_city_crossing_checked_by_hand) {
         fromH2 += roadOf(G.junctionLanes[k]) == h2 ? 1 : 0;
     }
     CHECK(fromV2 == 4 && fromH2 == 4);
-    // v2's box there, as the paint finds it; a lane arriving up v2 (along its spine) ends on the stop bar
-    const LaneLookup look(r.pavement);
-    const std::map<int, std::vector<JunctionSpan>> spans = junctionSpans(r, look);
+    // v2's arm arriving there along its spine, as the stated junction gives it (junctionAreas: the one rule, ADR-0428): its
+    // stop line stands back from its mouth by h2's half width and kStopLineBack; a lane arriving up v2 ends on it
     const EdgeSpec& e = r.graph.edges[static_cast<std::size_t>(v2)];
+    const EdgeSpec& cross = r.graph.edges[static_cast<std::size_t>(h2)];
     const double at = project(e.xy, e.s, crossing).station;
-    const JunctionSpan* box = nullptr;
-    for (const JunctionSpan& sp : spans.at(v2))
-        if (at >= sp.s0 && at <= sp.s1) box = &sp;
-    CHECK(box != nullptr);
-    if (!box) return;
-    CHECK(box->crossRank >= r.graph.cls(e).rank);   // the bar is painted: the crossing road ranks as high
+    const ArmStop* arm = nullptr;
+    for (const JunctionArea& A : junctionAreas(r.graph))
+        for (const ArmStop& as : A.arms)
+            if (as.edge == v2 && as.spineIn && approxEqual(as.station, at, 1.0)) arm = &as;
+    CHECK(arm != nullptr);
+    if (!arm) return;
+    const double stopBar = arm->station - (r.graph.hw(cross) + kStopLineBack);
+    CHECK(approxEqual(arm->stopLine, stopBar, kWrittenStation));
+    CHECK(arm->crossRank >= r.graph.cls(e).rank);   // the bar is painted: the crossing road ranks as high
     int onBar = 0;
     for (uint32_t k = jn.arriving.first; k < jn.arriving.end(); ++k) {
         const PathId p = G.junctionLanes[k];
@@ -2714,8 +2721,8 @@ TEST_CASE(lanes_lane_graph_a_grid_city_crossing_checked_by_hand) {
         const Vec2 end = G.pointAt(p, G.paths[p.index].length);
         const Projection pr = project(e.xy, e.s, end);
         std::printf("    v2 lane %s arrives at %.3f m along v2; the stop bar stands at %.3f m, %.2f m off the spine\n", l.id.c_str(),
-                    pr.station, box->s0 - kStopLineBack, pr.distance);
-        CHECK(std::fabs(pr.station - (box->s0 - kStopLineBack)) < kTestJoinDistance);
+                    pr.station, stopBar, pr.distance);
+        CHECK(std::fabs(pr.station - stopBar) < kTestJoinDistance);
         CHECK(pr.distance < r.graph.hw(e));   // across the road, within its lanes: where the bar is painted
         ++onBar;
     }

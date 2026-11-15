@@ -45,19 +45,40 @@ struct LaneLookup {
     explicit LaneLookup(const Pavement& pavement);
 };
 
-// JUNCTION BOXES, as the road paint finds them: lane paint stops inside them, and each street approaching one gets a
-// zebra crosswalk, lane arrows and (where it must stop) a stop bar. The lane graph cuts its lanes at the same boxes.
-// Where an approach's marks stand, in metres back from the box along the approaching street's spine: the crosswalk
-// from kCrosswalkNear to kCrosswalkFar, the stop line at kStopLineBack (its bar is painted only where the street
-// stops for the crossing road; the line is where every approach ends).
+// THE STATED JUNCTIONS' AREAS AND STOP LINES (step 9, ADR-0428) -- THE ONE PLACE a stop line is decided. Each arm of each
+// junction the road file states (RoadLabGraph::junctions; build() derives the layout once, first, for a file that states
+// none) has, along its road's spine:
+//   - its MOUTH: the stated station `at`;
+//   - its BOX EDGE, where the junction's area begins: back from the mouth (away from the junction) by the half width of
+//     the widest road CROSSING it -- an arm's road other than its own and its stated through partner's -- at the same
+//     point of the junction (mouths within kSameJunctionPoint), else anywhere in the junction (ADR-0419's rule): where the
+//     crossing road's lanes begin;
+//   - its STOP LINE, kStopLineBack further back: where traffic arriving by it stops.
+// The paint draws each street arm's crosswalk (kCrosswalkNear to kCrosswalkFar back from the box edge), lane arrows and
+// stop bar (only where the street stops for the crossing road) from these; the road model's ModelArm::boxEdge and
+// ::stopLine ARE these; the lane level ends its lanes at these. Nothing finds or groups a junction from overlapping lanes.
 constexpr double kCrosswalkNear = 1.0;
 constexpr double kCrosswalkFar = 4.0;
 constexpr double kStopLineBack = 5.2;
-// Two stretches of one street inside crossing roads closer than this along it are ONE junction: a divided cross road's
-// carriageways sit a median apart.
-constexpr double kJunctionMergeGap = 12.0;
-
-// (JunctionSpan, one junction box along a street, is in lanes.h: the build keeps the paint's boxes in its Result.)
+constexpr double kSameJunctionPoint = 2.0;   // metres: two arms' mouths this near meet at one point of a junction
+// One arm of a stated junction, as the paint, the model and the lane level read it.
+struct ArmStop {
+    int edge = -1;              // its road (graph edge index; -1: a road the graph does not have)
+    double station = 0;         // its mouth, along the road's spine
+    bool spineIn = true;        // the spine runs into the junction here (the approach lies at lower stations)
+    double boxEdge = 0;         // where the junction's area begins, along the spine
+    double stopLine = 0;        // where traffic arriving by it stops, along the spine
+    int crossRank = -1;         // the highest class rank among the other roads its box edge was measured from
+    bool painted = false;       // its road is a street the paint marks (paintsJunctionBoxes)
+};
+// One stated junction's arms (in their list order) and its area along each road it lies on (JunctionSpan: from the
+// lowest to the highest of its arms' box edges and mouths on that road, and any stretch the file states inside it).
+struct JunctionArea {
+    std::vector<ArmStop> arms;
+    std::vector<JunctionSpan> spans;
+};
+// Every stated junction's, in the graph's list order. `g` with its ramps composed (an arm's station is a composed one).
+std::vector<JunctionArea> junctionAreas(const RoadLabGraph& g);
 // The paint's PARALLEL TEST: a crossing lane whose direction there is within this (|cos| of the angle between them) of
 // the street's runs beside it, not across it (0.7: closer than about 46 degrees). The paint's number. (The ramp-landing
 // check has its own, looser one: lane_graph_build.h kJunctionParallelForGraph.)
@@ -68,13 +89,9 @@ constexpr double kJunctionParallel = 0.7;
 // `parallelCos`: the parallel test's threshold (above: beside, not across).
 int junctionCrossRank(const Result& r, const LaneLookup& look, size_t li, const Vec2& p, const Vec2& t,
                       std::vector<int>* crossEdges = nullptr, double parallelCos = kJunctionParallel);
-// Whether the paint finds junction boxes along a road of its own: streets only -- not ramps, freeways, tracks, nor classes
-// ranked below 1.
+// Whether the paint marks a road's junction approaches (crosswalk, arrows, stop bar): streets only -- not ramps,
+// freeways, tracks, nor classes ranked below 1.
 bool paintsJunctionBoxes(const RoadLabGraph& g, const EdgeSpec& e);
-// Every street's junction boxes (graph edge index -> its boxes, in station order, a divided cross road's two merged
-// into one). Streets only (paintsJunctionBoxes).
-std::map<int, std::vector<JunctionSpan>> junctionSpans(const Result& r, const LaneLookup& look,
-                                                       double parallelCos = kJunctionParallel);
 
 // Every track lane's railhead line, in running order, with the platforms beside it (rail_track.h).
 std::vector<RailTrack> railTracks(const Result& r);

@@ -199,13 +199,16 @@ RoadModelComparison compareRoadModel(const RoadModel& m, const Result& r) {
     const Pairing pn = pairJunctions(anchors, navAt);
     out.nav = tally(pn);
 
-    // ---- the paint's boxes (kept by the build), as the model's assembly attributed them -------------------------------
+    // ---- the paint's boxes: since step 9 (ADR-0428) the stated junctions' own areas (deck_mesh.h junctionAreas), so this
+    // part of the comparison agrees by construction
     struct Box { int edge; JunctionSpan span; Vec2 mid; std::vector<uint32_t> heldBy; };
     std::vector<Box> boxes;
-    for (const std::pair<const int, std::vector<JunctionSpan>>& kv : r.junctionBoxes) {
-        const EdgeSpec& e = g.edges[static_cast<std::size_t>(kv.first)];
-        for (const JunctionSpan& sp : kv.second) boxes.push_back(Box{kv.first, sp, pointAt(e.xy, e.s, 0.5 * (sp.s0 + sp.s1)), {}});
-    }
+    for (const ModelJunction& J : m.junctions)
+        for (const ModelStretch& st : J.boxes) {
+            const int ei = g.index.at(st.road);
+            const EdgeSpec& e = g.edges[static_cast<std::size_t>(ei)];
+            boxes.push_back(Box{ei, JunctionSpan{ei, st.from, st.to}, pointAt(e.xy, e.s, 0.5 * (st.from + st.to)), {}});
+        }
     std::map<std::tuple<std::string, double, double>, std::size_t> boxIndex;
     for (std::size_t b = 0; b < boxes.size(); ++b) boxIndex[std::make_tuple(g.edges[static_cast<std::size_t>(boxes[b].edge)].id, boxes[b].span.s0, boxes[b].span.s1)] = b;
     std::vector<std::vector<uint32_t>> boxesOf(m.junctions.size());

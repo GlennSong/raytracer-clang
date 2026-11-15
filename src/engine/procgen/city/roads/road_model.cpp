@@ -1,7 +1,7 @@
 #include "engine/procgen/city/roads/road_model.h"
 
 #include "engine/bundle/bundle.h"
-#include "engine/procgen/city/roads/lanes/deck_mesh.h"         // kStopLineBack, kJunctionMergeGap, paintsJunctionBoxes
+#include "engine/procgen/city/roads/lanes/deck_mesh.h"         // junctionAreas: each arm's stop line, the one rule
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"       // kArmOrderCommand: an unmarked file's ring (ADR-0427)
@@ -136,7 +136,11 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
     if (!g.junctions.empty() && !g.armsInRing)
         m.problems.push_back("the road file does not state that its junctions' arms are listed in their ring (\"arms_in_ring\"): run `" +
                              std::string(roads::lanes::kArmOrderCommand) + "`");
+    // (each arm's box edge and stop line, and the junction's area along each road: the one rule, from the stated junction,
+    // deck_mesh.h junctionAreas -- what the paint draws and the lane level ends its lanes at)
+    const std::vector<roads::lanes::JunctionArea> areas = roads::lanes::junctionAreas(g);
     for (const PlannedJunction& pj : g.junctions) {
+        const roads::lanes::JunctionArea& area = areas[m.junctions.size()];
         ModelJunction J;
         J.id = pj.id;
         J.at = pj.at;
@@ -152,8 +156,14 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
             arm.spineIn = a.spineIn;
             arm.heading = a.hasHeading ? a.heading : kNotStated;
             arm.regulations = a.regulations;
+            const roads::lanes::ArmStop& stop = area.arms[J.arms.size()];
+            if (stop.edge >= 0) {
+                arm.boxEdge = stop.boxEdge;
+                arm.stopLine = stop.stopLine;
+            }
             J.arms.push_back(arm);
         }
+        for (const roads::lanes::JunctionSpan& sp : area.spans) J.boxes.push_back(ModelStretch{g.edges[static_cast<std::size_t>(sp.edge)].id, sp.s0, sp.s1});
         for (const std::array<int, 2>& t : pj.through) J.through.push_back({static_cast<uint32_t>(t[0]), static_cast<uint32_t>(t[1])});
         for (const roads::lanes::PlannedStretch& st : pj.inside) {
             // a stretch of road inside the junction, with what the street map needs to drive it (ADR-0425)
@@ -478,101 +488,6 @@ RoadModel assembleRoadModel(const Result& r) {
         }
     }
 
-    // ---- the paint's boxes: each arm's box edge and stop line; boxes and arms that do not meet -------------------------
-    // A box on an arm's road belongs to the arm's junction where it lies within kJunctionMergeGap of the junction's own
-    // stretch of that road (its arms' stations and the stretches inside it) -- the paint's own rule for one junction along
-    // a street; the nearest such box to the arm's station is the arm's.
-    std::map<std::pair<int, std::size_t>, std::vector<uint32_t>> boxHeldBy;   // (edge, box) -> junctions holding it
-    if (r.hasJunctionBoxes)
-        for (std::size_t j = 0; j < m.junctions.size(); ++j) {
-            ModelJunction& J = m.junctions[j];
-            for (ModelArm& a : J.arms) {
-                const std::map<std::string, int>::const_iterator ei = g.index.find(a.road);
-                if (ei == g.index.end()) continue;
-                const EdgeSpec& e = g.edges[static_cast<std::size_t>(ei->second)];
-                if (!roads::lanes::paintsJunctionBoxes(g, e)) continue;
-                double lo = a.station, hi = a.station;
-                for (const ModelArm& o : J.arms)
-                    if (o.road == a.road) { lo = std::min(lo, o.station); hi = std::max(hi, o.station); }
-                for (const ModelStretch& st : J.inside)
-                    if (st.road == a.road) { lo = std::min(lo, st.from); hi = std::max(hi, st.to); }
-                const std::map<int, std::vector<roads::lanes::JunctionSpan>>::const_iterator bx = r.junctionBoxes.find(ei->second);
-                std::size_t best = 0;
-                double bestGap = 1e30;
-                if (bx != r.junctionBoxes.end())
-                    for (std::size_t b = 0; b < bx->second.size(); ++b) {
-                        const roads::lanes::JunctionSpan& sp = bx->second[b];
-                        if (sp.s0 > hi + roads::lanes::kJunctionMergeGap || sp.s1 < lo - roads::lanes::kJunctionMergeGap) continue;
-                        const double gap = a.station < sp.s0 ? sp.s0 - a.station : a.station > sp.s1 ? a.station - sp.s1 : 0.0;
-                        if (gap < bestGap) { bestGap = gap; best = b; }
-                    }
-                if (bestGap > 1e29) {
-                    const Vec2 p = e.xy.size() >= 2 ? roads::lanes::pointAt(e.xy, e.s, a.station) : J.at;
-                    m.problems.push_back(fmt("junction %s: the paint found no box where its arm on %s (station %.1f) meets it, at (%.1f, %.1f)",
-                                             J.id.c_str(), a.road.c_str(), a.station, p.x, p.y));
-                    continue;
-                }
-                const roads::lanes::JunctionSpan& sp = bx->second[best];
-                a.boxEdge = a.spineIn ? sp.s0 : sp.s1;
-                a.stopLine = a.spineIn ? sp.s0 - roads::lanes::kStopLineBack : sp.s1 + roads::lanes::kStopLineBack;
-                std::vector<uint32_t>& held = boxHeldBy[std::make_pair(ei->second, best)];
-                if (std::find(held.begin(), held.end(), static_cast<uint32_t>(j)) == held.end()) {
-                    held.push_back(static_cast<uint32_t>(j));
-                    J.boxes.push_back(ModelStretch{a.road, sp.s0, sp.s1});
-                }
-            }
-        }
-    // ...and a box on a stretch of road lying inside a junction (between nodes the planner grouped into it) is that
-    // junction's: it overlaps the stretch, or lies within kJunctionMergeGap of it
-    if (r.hasJunctionBoxes)
-        for (std::size_t j = 0; j < m.junctions.size(); ++j) {
-            ModelJunction& J = m.junctions[j];
-            for (const ModelStretch& st : std::vector<ModelStretch>(J.inside)) {
-                const std::map<std::string, int>::const_iterator ei = g.index.find(st.road);
-                if (ei == g.index.end()) continue;
-                const std::map<int, std::vector<roads::lanes::JunctionSpan>>::const_iterator bx = r.junctionBoxes.find(ei->second);
-                if (bx == r.junctionBoxes.end()) continue;
-                for (std::size_t b = 0; b < bx->second.size(); ++b) {
-                    const roads::lanes::JunctionSpan& sp = bx->second[b];
-                    if (sp.s0 > st.to + roads::lanes::kJunctionMergeGap || sp.s1 < st.from - roads::lanes::kJunctionMergeGap) continue;
-                    std::vector<uint32_t>& held = boxHeldBy[std::make_pair(ei->second, b)];
-                    if (std::find(held.begin(), held.end(), static_cast<uint32_t>(j)) != held.end()) continue;
-                    held.push_back(static_cast<uint32_t>(j));
-                    J.boxes.push_back(ModelStretch{st.road, sp.s0, sp.s1});
-                }
-            }
-        }
-    for (const std::pair<const int, std::vector<roads::lanes::JunctionSpan>>& bx : r.junctionBoxes)
-        for (std::size_t b = 0; b < bx.second.size(); ++b) {
-            const std::map<std::pair<int, std::size_t>, std::vector<uint32_t>>::const_iterator h = boxHeldBy.find(std::make_pair(bx.first, b));
-            const EdgeSpec& e = g.edges[static_cast<std::size_t>(bx.first)];
-            const roads::lanes::JunctionSpan& sp = bx.second[b];
-            const Vec2 p = roads::lanes::pointAt(e.xy, e.s, 0.5 * (sp.s0 + sp.s1));
-            // where the road file states that a street only carries on (ADR-0419): the paint still draws a box at a bend or
-            // where one road runs on as another, by its own rule, until the builder paints the stated junctions (step 9)
-            std::string carriesOn;
-            for (const ModelStreet& S : m.streets) {
-                if (S.edge != static_cast<uint32_t>(bx.first)) continue;
-                for (std::size_t k = 0; k < 2; ++k) {
-                    const Real end = k == 0 ? S.from : S.to;
-                    if (S.carriesOn[k].valid() && end >= sp.s0 - 1.0 && end <= sp.s1 + 1.0)
-                        carriesOn = S.id + " carries on into " + m.streets[S.carriesOn[k].index].id;
-                }
-            }
-            if (h == boxHeldBy.end() && !carriesOn.empty())
-                m.problems.push_back(fmt("the paint draws a junction box on %s (stations %.1f to %.1f) at (%.1f, %.1f) where street %s: the road "
-                                         "file states no junction there (the paint keeps its own rule until step 9)",
-                                         e.id.c_str(), sp.s0, sp.s1, p.x, p.y, carriesOn.c_str()));
-            else if (h == boxHeldBy.end())
-                m.problems.push_back(fmt("the paint found a junction box on %s (stations %.1f to %.1f) at (%.1f, %.1f) that no stated junction holds",
-                                         e.id.c_str(), sp.s0, sp.s1, p.x, p.y));
-            else if (h->second.size() > 1) {
-                std::string names;
-                for (uint32_t j : h->second) names += (names.empty() ? "" : ", ") + m.junctions[j].id;
-                m.problems.push_back(fmt("the paint made one junction box on %s (stations %.1f to %.1f) at (%.1f, %.1f) of stated junctions %s",
-                                         e.id.c_str(), sp.s0, sp.s1, p.x, p.y, names.c_str()));
-            }
-        }
     for (const ModelJunction& J : m.junctions)
         for (std::size_t k = 0; k < J.arms.size(); ++k)
             if (!J.arms[k].street.valid())

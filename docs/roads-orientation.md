@@ -90,9 +90,11 @@ Tests:
   model only reads what was written.
 
 Still working roads out for itself:
-- **The paint's junction boxes and stop lines** (`junctionSpans`): found from overlapping lanes, with its own
-  grouping. The lane level follows the stated junctions instead and reports each place they disagree. Fixed in
-  step 9.
+- *(Gone in step 9a, ADR-0428: the paint's own junction boxes. Each arm's box edge and stop line now come from the
+  stated junction through one function, `junctionAreas` in `lanes/deck_mesh.h`. The rule: back from the mouth by
+  the widest crossing road's half width, then `kStopLineBack`. The paint, `ModelArm::stopLine`, the lane level and the
+  control signs all read it. A file that states no junctions has its layout derived once, at the top of `build()`.
+  The bake key now includes where the stated arms stand.)*
 - **Corners**: the builder draws them without a stated radius. The lane level only tests the fit and reports corner
   faults.
 - **The layout's junction grouping** (`findJunctions`, the `rules.storage` rule). It wrote the files' junctions once.
@@ -237,6 +239,10 @@ data rows.
 
 ## 8. Known faults and open work
 
+- **Step 9a's stop lines** (ADR-0428) sit 1–2 m further out than the paint's at most junctions. The old box was
+  sampled every 2 m, so it usually ended a metre inside the crossing road. traffic_lab's self-crossing outlines went
+  from 2 (j0, j22) to 5 (j0, j4, j19, j93, j96): two arms meeting at a sharp angle now have stop lines that cross.
+  Corners are still drawn without a stated radius (step 9b).
 - **traffic_lab five-minute test fails two held limits** (left failing on purpose, commented in
   `test_traffic_lab_v2.cpp`):
   1. Car 92 stands 261 s on frontage road s311 (lane 1457), where the off-ramp lane 1607 merges between junctions

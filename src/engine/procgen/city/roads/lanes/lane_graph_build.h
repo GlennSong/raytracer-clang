@@ -262,9 +262,6 @@ struct LaneGraphBuild {
     uint32_t carryOnJoins = 0, divergeJoins = 0, mergeJoins = 0, joinsWithGap = 0;
     // of the merges made, how many are marked on their Join crossing point (CrossingPoint::merging; the rest each a problem)
     uint32_t statedMerges = 0;
-    // each arm's stop line, by where it came from: the paint's (its box holds this junction alone), ADR-0419's rule where
-    // the paint found no box, or where the paint's box holds another stated junction too (each such box a problem line)
-    uint32_t stopLinesPainted = 0, stopLinesNoBox = 0, stopLinesSharedBox = 0;
     // (where the paint and the stated junctions disagree is the road model's to say: RoadModel::problems)
     std::vector<std::string> problems;     // in plain words, each with its place; empty = nothing to look at
     std::vector<PathSource> sources;       // per path (a connector's: lane -1, no builder lane)

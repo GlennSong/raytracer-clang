@@ -216,12 +216,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
         }
     }
 
-    // ---- each arm's stop line: the builder's, where the paint's box holds that junction alone ---------------------------
-    // (where the paint and the stated junctions disagree -- a box holding two stated junctions, an arm with no box, a box
-    // no stated junction holds -- is the road model's to say, once: RoadModel::problems, assembleRoadModel)
-    std::map<std::tuple<std::string, double, double>, std::vector<uint32_t>> boxHolders;
-    for (uint32_t j = 0; j < m.junctions.size(); ++j)
-        for (const ModelStretch& b : m.junctions[j].boxes) boxHolders[std::make_tuple(b.road, b.from, b.to)].push_back(j);
+    // ---- each arm's stop line: the stated junction's (ModelArm::stopLine, deck_mesh.h junctionAreas -- the one rule the
+    // paint draws from too) -------------------------------------------------------------------------------------------------
     std::vector<std::vector<double>> stopAt(m.junctions.size());
     for (uint32_t j = 0; j < m.junctions.size(); ++j) {
         const ModelJunction& J = m.junctions[j];
@@ -229,25 +225,12 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
         for (uint32_t a = 0; a < J.arms.size(); ++a) {
             const ModelArm& arm = J.arms[a];
             if (!arm.street.valid()) continue;
-            bool shared = false;
-            if (stated(arm.stopLine))
-                for (const ModelStretch& b : J.boxes)
-                    if (b.road == arm.road && (arm.spineIn ? b.from == arm.boxEdge : b.to == arm.boxEdge))
-                        shared = shared || boxHolders[std::make_tuple(b.road, b.from, b.to)].size() > 1;
-            if (stated(arm.stopLine) && !shared) {
-                stopAt[j][a] = arm.stopLine;                ++out.stopLinesPainted;
-                continue;
-            }
-            ModelJunction planned = J;   // ADR-0419's rule, read from the stated cross-sections, not the paint's line
-            planned.arms[a].stopLine = kNotStated;
-            const Real back = stopLineFromMouth(m, planned, a);
-            if (!stated(back)) {
-                out.problems.push_back(fmt("junction %s: arm %u (street %s) has no stop line: its street has no centre line", J.id.c_str(), a,
+            if (!stated(arm.stopLine)) {
+                out.problems.push_back(fmt("junction %s: arm %u (street %s) has no stop line: its road is not in the file", J.id.c_str(), a,
                                            m.streets[arm.street.index].id.c_str()));
                 continue;
             }
-            stopAt[j][a] = arm.spineIn ? arm.station - back : arm.station + back;
-            ++(shared ? out.stopLinesSharedBox : out.stopLinesNoBox);
+            stopAt[j][a] = arm.stopLine;
         }
     }
     // the arm of junction j that street `street` is, at its `to` end (spineIn) or its `from` end

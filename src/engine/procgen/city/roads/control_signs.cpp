@@ -1,7 +1,6 @@
 #include "engine/procgen/city/roads/control_signs.h"
 
 #include "engine/ai/nav_graph.h"                       // rightOf: the kerb side of traffic going a way
-#include "engine/procgen/city/roads/lanes/deck_mesh.h"  // kStopLineBack: where the paint's stop lines stand
 
 #include <algorithm>
 #include <cmath>
@@ -10,10 +9,6 @@
 namespace engine {
 
 namespace {
-
-// Road ends this close together are one node of a junction (the planner's ends meet at one point; the layout's end
-// tolerance is well under it): the roads whose widths set an arm's stop line (ADR-0419) are the ones at its node.
-constexpr Real kSameNode = 2.0;
 
 const char* const kFaces[] = {"arriving", "entering", "crossing"};
 const char* const kSides[] = {"kerb", "near_kerb_or_far_off"};
@@ -99,17 +94,8 @@ Real stopLineFromMouth(const RoadModel& m, const ModelJunction& J, std::size_t a
     if (arm >= J.arms.size()) return kNotStated;
     const ModelArm& a = J.arms[arm];
     Vec2 mouth;
-    if (!armMouth(m, J, arm, mouth)) return kNotStated;
-    if (stated(a.stopLine)) return std::fabs(a.stopLine - a.station);   // the paint's (the built layer)
-    Real atNode = -1, anywhere = 0;
-    for (std::size_t o = 0; o < J.arms.size(); ++o) {
-        if (o == arm || !J.arms[o].street.valid() || J.arms[o].street.index >= m.streets.size()) continue;
-        const Real hw = m.streets[J.arms[o].street.index].travelWidth() * 0.5;
-        anywhere = std::max(anywhere, hw);
-        Vec2 other;
-        if (armMouth(m, J, o, other) && (other - mouth).length() <= kSameNode) atNode = std::max(atNode, hw);
-    }
-    return (atNode >= 0 ? atNode : anywhere) + roads::lanes::kStopLineBack;
+    if (!armMouth(m, J, arm, mouth) || !stated(a.stopLine)) return kNotStated;
+    return std::fabs(a.stopLine - a.station);
 }
 
 ControlSignPlan placeControlSigns(const RoadModel& m, const std::vector<ControlSignRule>& rules,

@@ -96,8 +96,10 @@ struct ModelArm {
     bool spineIn = true;             // the road's spine runs INTO the junction here (the street ends here)
     Real heading = kNotStated;       // degrees, the way the arm leaves the junction, plan coordinates
     std::vector<std::string> regulations;   // signs standing at the end of each lane arriving by it (the control plan)
-    Real boxEdge = kNotStated;       // the paint's: where the road enters the junction's box, along its spine
-    Real stopLine = kNotStated;      // the paint's: where traffic arriving by this arm stops, along its spine
+    // where the junction's area begins and where traffic arriving by this arm stops, along its road's spine: the one rule
+    // from the stated junction (deck_mesh.h junctionAreas, ADR-0428) -- what the paint draws and the lane level reads
+    Real boxEdge = kNotStated;
+    Real stopLine = kNotStated;
 };
 
 // What a street is made of across its width (design section 1: the cross-section), from its road's class and the road
@@ -151,7 +153,7 @@ struct ModelJunction {
     std::string control, why;        // empty control: the road file plans none
     std::vector<ModelStretch> inside;   // stretches of road inside it
     std::vector<ModelNode> nodes;       // its points, when stretches lie inside it (ADR-0425)
-    std::vector<ModelStretch> boxes;    // the paint's junction boxes holding its arms: its extent along each road
+    std::vector<ModelStretch> boxes;    // its area along each road it lies on (deck_mesh.h junctionAreas, ADR-0428)
 };
 // Is this junction's stated control one the signal poles stand for (road_attachments.json "signal_pole": lights)?
 bool junctionLit(const ModelJunction& J);

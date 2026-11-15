@@ -37,9 +37,10 @@ Real width, scripting on/off, the level JSON blocks it reads (`terrain`, `water`
 entities), the render cell, the spawn point, the style books (`style_book.lua`, `archetype_book.lua`) —
 and, for `lots`, **the `city` key**. So the stages chain: new roads always mean new lots.
 
-The road file's LAYOUT (its junctions' streets, headings and through pairs, and its `streets` list: ADR-0417) is not in
-the `city` key: the key hashes the file with those parts taken out (`stripLayoutText`), because no stage of the bake reads
-them. Writing or editing a layout re-bakes nothing.
+The road file's LAYOUT (its junctions' streets, headings and through pairs, and its `streets` list: ADR-0417) is mostly
+not in the `city` key: the key hashes the file with those parts taken out (`keyedRoadFileText`). What the paint reads is
+in it (ADR-0428): each stated junction's arms (road, station, way) and its stretches inside. Writing streets, controls,
+signs, names or the arms' order re-bakes nothing; moving an arm re-bakes the city.
 
 On load (`obtainForLevel`): if a bundle with every producer's current key exists, it is opened (a hit,
 well under a second). Otherwise the level is baked: a producer whose key matches an older bundle is

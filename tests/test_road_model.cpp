@@ -242,9 +242,9 @@ TEST_CASE(road_model_1_the_planner_and_the_layout_tool_agree) {
     CHECK(unnamed == 0 && misnamed == 0);
 }
 
-// ---- 2. the bake does not see the layout --------------------------------------------------------------------------------
+// ---- 2. the bake sees only where the stated arms stand --------------------------------------------------------------------------------
 
-TEST_CASE(road_model_2_the_bake_key_does_not_see_the_layout) {
+TEST_CASE(road_model_2_the_bake_key_sees_only_where_the_stated_arms_stand) {
     // as the planner writes a file (one dump): the dump with its layout strips to the dump without
     const nlohmann::json bare = smallGraph();
     const nlohmann::json with = smallGraphWithLayout();
@@ -286,28 +286,45 @@ TEST_CASE(road_model_2_the_bake_key_does_not_see_the_layout) {
             for (const PlannedArm& a : j.arms) streets = streets && !a.street.empty() && a.hasHeading;
         CHECK(streets);
     }
-    // the city's bake key, through the producer: the same with the layout written in; another without an edge
+    // the city's bake key, through the producer (ADR-0428: the paint draws the stated junctions, so where their arms stand
+    // is keyed, and nothing else of the layout): a file stating its junctions' arms (the control plan's list) keys the
+    // same with the layout written into it; moving one arm a metre, or a road fewer, keys otherwise; and a file stating
+    // no junctions keys otherwise than one stating them
+    nlohmann::json planned = bare;
+    for (const PlannedJunction& j : layout.junctions) {
+        nlohmann::json jj = {{"id", j.id}, {"at", {j.at.x, j.at.y}}, {"control", "stop"}};
+        for (const PlannedArm& a : j.arms) jj["arms"].push_back({{"road", a.road}, {"at", a.at}, {"spine", a.spineIn ? "in" : "out"}});
+        for (const PlannedStretch& st : j.inside) jj["inside"].push_back({{"road", st.road}, {"from", st.from}, {"to", st.to}});
+        planned["junctions"].push_back(jj);
+    }
     const std::string dir = scratchDir("key");
     const std::string graphPath = dir + "/graph.json";
-    std::ofstream(graphPath) << bare.dump(1);
     bundle::LevelInputs in;
     in.levelPath = dir + "/level.json";
     in.levelDir = dir;
     in.level = {{"entities", nlohmann::json::array({{{"shape", "road"}, {"road", {{"graph", graphPath}}}}})}};
-    const uint64_t before = levelRoadsKey(in);
-    {
-        std::string err;
-        std::ofstream(graphPath) << insertLayoutText(bare.dump(1), layout, &err);
-    }
-    const uint64_t after = levelRoadsKey(in);
+    auto keyOf = [&](const std::string& text) {
+        std::ofstream(graphPath) << text;
+        return levelRoadsKey(in);
+    };
+    const uint64_t stated = keyOf(planned.dump(1));
+    std::string err;
+    const RoadLayout kept = deriveLayout(RoadLabGraph::fromJson(planned), LayoutSource::Inferred);
+    const uint64_t laidOut = keyOf(insertLayoutText(planned.dump(1), kept, &err));
+    nlohmann::json moved = planned;
+    moved["junctions"][0]["arms"][0]["at"] = moved["junctions"][0]["arms"][0]["at"].get<double>() + 1.0;
+    const uint64_t armMoved = keyOf(moved.dump(1));
     nlohmann::json fewer = bare;
     fewer["edges"].erase(fewer["edges"].size() - 1);
-    std::ofstream(graphPath) << fewer.dump(1);
-    const uint64_t otherRoads = levelRoadsKey(in);
-    std::printf("    the city's key: %016llx without the layout, %016llx with it, %016llx with a road fewer\n", static_cast<unsigned long long>(before),
-                static_cast<unsigned long long>(after), static_cast<unsigned long long>(otherRoads));
-    CHECK(before != 0 && before == after);
-    CHECK(otherRoads != before);
+    const uint64_t otherRoads = keyOf(fewer.dump(1));
+    const uint64_t none = keyOf(bare.dump(1));
+    std::printf("    the city's key: %016llx stated, %016llx laid out, %016llx an arm moved, %016llx a road fewer, %016llx no junctions\n",
+                static_cast<unsigned long long>(stated), static_cast<unsigned long long>(laidOut), static_cast<unsigned long long>(armMoved),
+                static_cast<unsigned long long>(otherRoads), static_cast<unsigned long long>(none));
+    CHECK(stated != 0 && stated == laidOut);
+    CHECK(armMoved != stated);
+    CHECK(otherRoads != stated);
+    CHECK(none != stated);
     std::filesystem::remove_all(dir);
 }
 
@@ -338,14 +355,22 @@ TEST_CASE(road_model_3_lanes_carry_their_streets_and_the_model_holds_what_is_sta
         CHECK(L.atStart == (L.dir > 0 ? cross : tee));
         CHECK(L.atEnd == (L.dir > 0 ? tee : cross));
     }
-    // the paint's boxes are kept, and every arm of the crossing has its stop line from them, outside the box
-    CHECK(r.hasJunctionBoxes && !r.junctionBoxes.empty());
+    // every arm of the crossing has its stop line from the stated junction (junctionAreas, ADR-0428): its box edge back from
+    // its mouth by the CROSSING street's half width (the default classes: the arterial's arms by the local street's one
+    // 6 m lane each way, 6 m; the local street's by the arterial's three 22/6 m lanes each way, 11 m), its stop line
+    // kStopLineBack further
     const ModelJunction& J = m.junctions[cross.index];
     CHECK(J.arms.size() == 4u);
     for (const ModelArm& a : J.arms) {
         CHECK(stated(a.stopLine) && stated(a.boxEdge));
-        CHECK(a.spineIn ? a.stopLine < a.boxEdge : a.stopLine > a.boxEdge);
+        const bool arterial = a.road[0] == 'a';
+        const Real back = arterial ? 6.0 : 11.0;
+        std::printf("      arm %s: mouth %.2f, box edge %.2f, stop line %.2f\n", a.road.c_str(), a.station, a.boxEdge, a.stopLine);
+        const Real away = a.spineIn ? -1.0 : 1.0;
+        CHECK(approxEqual(a.boxEdge, a.station + away * back, kWrittenStation));
+        CHECK(approxEqual(a.stopLine, a.station + away * (back + roads::lanes::kStopLineBack), kWrittenStation));
     }
+    CHECK(J.boxes.size() == 4u);   // its area along each of its four roads (each arm a road of its own)
     CHECK(J.through.size() == 2u);   // the arterial and the local street both carry on through
     // the bend at (0, 150) is NO junction (ADR-0419): the street l1 carries on into l3 there, and each says so
     int twoArm = 0;
@@ -365,9 +390,9 @@ TEST_CASE(road_model_3_lanes_carry_their_streets_and_the_model_holds_what_is_sta
     }
     CHECK(turns && controls);
     for (const ModelJunction& j : m.junctions) CHECK(j.control.empty());
-    // the only problems: the paint still draws its box at the bend (both roads' ends), where the file states no junction
-    CHECK(m.problems.size() == 2u);
-    for (const std::string& p : m.problems) CHECK(p.find("carries on into") != std::string::npos);
+    // no problems: the paint draws only the stated junctions (ADR-0428), none at the bend where the street carries on
+    for (const std::string& p : m.problems) std::printf("      problem: %s\n", p.c_str());
+    CHECK(m.problems.empty());
 }
 
 TEST_CASE(road_model_3b_a_ramps_merge_is_its_stated_anchor) {
@@ -527,7 +552,7 @@ TEST_CASE(road_model_4b_a_name_is_a_stated_run) {
     const std::string controlled = insertJunctionControlsText(named, controls, &err);
     CHECK(!controlled.empty());
     CHECK(keyedRoadFileText(controlled) == keyedRoadFileText(named));
-    CHECK(keyedRoadFileText(controlled) == keyedRoadFileText(bare.dump(1)));
+    CHECK(keyedRoadFileText(controlled) == keyedRoadFileText(text));   // (the junctions' arms as laid out: ADR-0428)
     CHECK(laneLevelKey(nlohmann::json::parse(controlled)) != laneLevelKey(nlohmann::json::parse(named)));
     const RoadLabGraph withControls = RoadLabGraph::fromJson(nlohmann::json::parse(controlled));
     CHECK(withControls.declaresJunctions);

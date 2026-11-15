@@ -20781,3 +20781,16 @@ Pins that moved, each with its cause:
   north-west arm.
 
 **Revisit when** the side rule is replaced by a stated near/far side for arms with no through pair.
+
+## ADR-0428 — Step 9a: the paint draws the junctions the road file states
+**Status:** Provisional · **Date:** 2026-11-14
+
+What it does: one function, `junctionAreas` (`lanes/deck_mesh.h`), decides each stated arm's box edge and stop line.
+The box edge is back from the arm's mouth by half the width of the widest road crossing it (not its own road, not its
+through partner), at its point of the junction or else anywhere in it. The stop line is `kStopLineBack` further back.
+The paint draws its crosswalks, arrows and stop bars from these. `ModelArm::stopLine`, the lane level and the control
+signs read the same values. Gone: `junctionSpans` (finding boxes from overlapping lanes), its 12 m grouping
+(`kJunctionMergeGap`), the build's kept boxes, and the "paint disagrees with the stated junction" problem lines and
+counters. A file with no junctions has its layout derived once, at the top of `build()`. The bake key now includes
+where the stated arms stand (`keyedRoadFileText`), and `kLanesBuildTag` is bumped.
+

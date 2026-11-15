@@ -9,7 +9,7 @@
 //   - the NAV GRAPH the city sim routes on: the road twin (road_twin.h, the travel-lane widths), its sampled road graph
 //     (navRoadGraph) and the directed graph built from it (buildNavGraph, with its own merging of junction "knots": nodes
 //     a few metres apart made one);
-//   - the PAINT's junction boxes (deck_mesh.h junctionSpans, kept in the build's Result);
+//   - the PAINT's junction boxes (since ADR-0428 the stated junctions' own areas, deck_mesh.h junctionAreas: agreeing by construction);
 //   - the LANE GRAPH the new driving drives on (lane_graph_build.h buildLaneGraph), with its junctions and lane paths;
 //   - the LANE MATCH (apps/citysim/lane_map.h): which nav links the builder's lanes were matched to.
 //
@@ -35,7 +35,7 @@ namespace roads::lanes {
 
 struct Result;
 
-constexpr double kCompareReach = 12.0;      // metres: a junction of another form is this one's (kJunctionMergeGap)
+constexpr double kCompareReach = 12.0;      // metres: a junction of another form is this one's
 constexpr double kCompareLinkReach = 3.0;   // metres: a nav link runs along a street's middle
 
 // A junction compared both ways.

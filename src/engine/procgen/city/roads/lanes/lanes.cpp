@@ -1,8 +1,9 @@
 #include "engine/procgen/city/roads/lanes/lanes.h"
-#include "engine/procgen/city/roads/lanes/deck_mesh.h"   // junctionSpans, LaneLookup: the paint's junction boxes, kept
+#include "engine/procgen/city/roads/lanes/deck_mesh.h"   // LaneLookup: the lane footprints, prepared once
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"   // kJunctionParallelForGraph: a ramp end along a street
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_design.h"
+#include "engine/procgen/city/roads/lanes/road_layout.h"   // deriveLayout: the junctions of a file that states none
 #include "engine/procgen/city/roads/lanes/vertical_profile.h"
 #include "engine/procgen/city/rail_track.h"   // kPlatformGap: piers keep off the platforms
 
@@ -177,6 +178,17 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     };
     (void)cum;
     auto t0 = std::chrono::steady_clock::now(); auto t1 = t0;
+    // 0. THE JUNCTIONS ARE STATED (step 9, ADR-0428): a file that states none has its layout derived here, once, before
+    // anything is built (road_layout.h deriveLayout, as the one-off layout tool would write it); the builder after this
+    // reads only the stated junctions -- it never groups one of its own
+    if (!graph.listsJunctions) {
+        const RoadLayout laid = deriveLayout(graph, LayoutSource::Inferred);
+        graph.junctions = laid.junctions;
+        graph.listsJunctions = true;
+        graph.armsInRing = laid.armsInRing;
+        if (!graph.listsStreets) { graph.streets = laid.streets; graph.listsStreets = true; }
+        if (!graph.listsDivided) { graph.divided = laid.divided; graph.listsDivided = !laid.divided.empty(); }
+    }
     auto rp = std::make_unique<Result>(); Result& r = *rp; r.graph = std::move(graph); RoadLabGraph& g = r.graph; const Rules& R = g.rules;
     std::array<double, 4> bounds = g.bounds(); HeightField terrain = makeTerrain(g.terrain, bounds); r.hasTerrain = g.terrain.type != "flat";
     // 1. lanes (ramps compose from anchors)
@@ -282,15 +294,11 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         r.timings["terrain.vsDeck"] = secondsSince(tv);
     }
     r.timings["terrain"] = secondsSince(t1);
-    // 7. THE PAINT'S JUNCTION BOXES, found once and kept (ADR-0417): what the mesher paints from, and what the road model
-    // reads each arm's stop line from (they read only the lanes, footprints and deck heights, all settled above)
+    // 7. the lane footprints prepared for point tests, once, for the mesher and the lane level
     {
         const auto tj = std::chrono::steady_clock::now();
-        std::shared_ptr<const LaneLookup> look = std::make_shared<const LaneLookup>(r.pavement);
-        r.junctionBoxes = junctionSpans(r, *look);
-        r.hasJunctionBoxes = true;
-        r.lookup = std::move(look);
-        r.timings["junction boxes"] = secondsSince(tj);
+        r.lookup = std::make_shared<const LaneLookup>(r.pavement);
+        r.timings["lane lookup"] = secondsSince(tj);
     }
     r.seconds = secondsSince(t0); stage(4, "done", 1.0);
     return rp;

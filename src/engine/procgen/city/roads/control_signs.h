@@ -11,8 +11,8 @@
 //
 // Words used here:
 //   - an arm's MOUTH is where its street's centre line meets the junction; its line runs out along the arm's heading;
-//   - its STOP LINE stands back from the mouth by ADR-0419's rule: the widest other street at the same node (half its
-//     travel width) and kStopLineBack -- the rule the junctions were grouped by, read from the stated sections;
+//   - its STOP LINE is the model's (ModelArm::stopLine): ADR-0419's rule from the stated junction, decided in one place
+//     (deck_mesh.h junctionAreas) that the paint and the lane level read too;
 //   - the KERB of a street is its travel lanes' half width and its shoulder out from the centre line;
 //   - a sign's FACE points toward the traffic that reads it;
 //   - KERB SIDE / OFF SIDE: the side of a lane toward the kerb, and toward the centre line (the world drives on the
@@ -54,8 +54,8 @@ struct ControlSignRule {
 // road_attachments.json, a missing look) is left out and said in `problems`.
 std::vector<ControlSignRule> controlSignRules(const AttachmentKinds& kinds, std::vector<std::string>* problems = nullptr);
 
-// WHERE AN ARM'S STOP LINE STANDS, in metres out along it from its mouth: the built layer's (the paint's) where the
-// model has it, else ADR-0419's rule (see the top of this file). kNotStated when the arm has no street or line.
+// WHERE AN ARM'S STOP LINE STANDS, in metres out along it from its mouth: the model's (ModelArm::stopLine, the one rule
+// from the stated junction, deck_mesh.h junctionAreas). kNotStated when the arm has none, or no street or line.
 Real stopLineFromMouth(const RoadModel& m, const ModelJunction& J, std::size_t arm);
 // How far a street's kerb stands from its centre line: its travel lanes' half width and its shoulder.
 Real kerbOffset(const ModelStreet& s);
