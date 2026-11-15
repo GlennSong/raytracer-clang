@@ -735,11 +735,6 @@ std::string streetNameNear(const RoadModel& m, const Vec2& p, Real reach, Real* 
     return out;
 }
 
-ModelJunctionId junctionNamed(const RoadModel& m, const std::string& id) {
-    for (std::size_t i = 0; i < m.junctions.size(); ++i)
-        if (m.junctions[i].id == id) return ModelJunctionId(static_cast<uint32_t>(i));
-    return ModelJunctionId();
-}
 ModelStreetId streetNamed(const RoadModel& m, const std::string& id) {
     for (std::size_t i = 0; i < m.streets.size(); ++i)
         if (m.streets[i].id == id) return ModelStreetId(static_cast<uint32_t>(i));
@@ -1130,62 +1125,6 @@ std::string reportEnclosedRegions(const RoadModel& m, const EnclosedRegions& er)
     for (const EnclosedRegion& f : er.medians) out += fmt("  %.0f m2: ", f.area) + bounds(f) + "\n";
     out += "Outer faces (one per piece of network):\n";
     for (const EnclosedRegion& f : er.outer) out += fmt("  %zu steps, %.0f m2 (clockwise)\n", f.bounds.size(), f.area);
-    return out;
-}
-
-std::string enclosedRegionsSvg(const RoadModel& m, const EnclosedRegions& er, const std::vector<std::vector<Vec2>>* overlay) {
-    double x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30;
-    for (const Vec2& p : m.linePoints) { x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y); }
-    if (m.linePoints.empty()) { x0 = y0 = 0; x1 = y1 = 1; }
-    const double pad = 30, w = x1 - x0 + 2 * pad, h = y1 - y0 + 2 * pad;
-    std::string out = fmt("<svg xmlns='http://www.w3.org/2000/svg' viewBox='%.1f %.1f %.1f %.1f' font-family='sans-serif'>\n", x0 - pad, -(y1 + pad), w, h);
-    out += fmt("<rect x='%.1f' y='%.1f' width='%.1f' height='%.1f' fill='#fbfaf6'/>\n<g transform='scale(1,-1)'>\n", x0 - pad, -(y1 + pad), w, h);
-    auto colour = [](std::size_t i) {   // each region its own: hues a golden angle apart, two lightnesses alternating
-        const double hue = std::fmod(static_cast<double>(i) * 137.508, 360.0) / 60.0, l = i % 2 ? 0.68 : 0.78, sat = 0.55;
-        const double c = (1 - std::fabs(2 * l - 1)) * sat, x = c * (1 - std::fabs(std::fmod(hue, 2.0) - 1)), mm = l - c / 2;
-        double r = 0, g = 0, b = 0;
-        if (hue < 1) { r = c; g = x; } else if (hue < 2) { r = x; g = c; } else if (hue < 3) { g = c; b = x; }
-        else if (hue < 4) { g = x; b = c; } else if (hue < 5) { r = x; b = c; } else { r = c; b = x; }
-        return fmt("#%02x%02x%02x", static_cast<int>((r + mm) * 255), static_cast<int>((g + mm) * 255), static_cast<int>((b + mm) * 255));
-    };
-    auto ring = [&](const std::vector<Vec2>& pts, const std::string& style) {
-        out += "<polygon " + style + " points='";
-        for (const Vec2& p : pts) out += fmt("%.1f,%.1f ", p.x, p.y);
-        out += "'/>\n";
-    };
-    for (std::size_t r = 0; r < er.regions.size(); ++r) ring(er.regions[r].outline, "fill='" + colour(r) + "' stroke='none'");
-    for (const EnclosedRegion& f : er.medians) ring(f.outline, "fill='#999' fill-opacity='0.5' stroke='none'");
-    // the streets: walked ones by their travel width, passed-over ones dashed
-    std::vector<char> passed(m.streets.size(), 0);
-    for (ModelStreetId s : er.passedOver) passed[s.index] = 1;
-    for (std::size_t s = 0; s < m.streets.size(); ++s) {
-        const ModelStreet& S = m.streets[s];
-        if (S.line.count < 2) continue;
-        out += passed[s] ? "<polyline fill='none' stroke='#777' stroke-width='3' stroke-dasharray='10 6' stroke-opacity='0.8' points='"
-                         : fmt("<polyline fill='none' stroke='#333' stroke-width='%.1f' stroke-opacity='0.85' stroke-linecap='round' points='",
-                               std::max(2.0, 0.5 * S.travelWidth()));
-        for (uint32_t k = S.line.first; k < S.line.end(); ++k) out += fmt("%.1f,%.1f ", m.linePoints[k].x, m.linePoints[k].y);
-        out += "'/>\n";
-    }
-    if (overlay)
-        for (const std::vector<Vec2>& r : *overlay) ring(r, "fill='none' stroke='#000' stroke-width='1' stroke-dasharray='4 3'");
-    for (const ModelJunction& J : m.junctions) out += fmt("<circle cx='%.1f' cy='%.1f' r='3' fill='#c33'/>\n", J.at.x, J.at.y);
-    for (const RegionWalkNote& n : er.crossings) out += fmt("<circle cx='%.1f' cy='%.1f' r='9' fill='none' stroke='#e00' stroke-width='3'/>\n", n.at.x, n.at.y);
-    out += "</g>\n";
-    // labels upright: each street's id at the middle of its centre line, each region's number inside it
-    for (std::size_t s = 0; s < m.streets.size(); ++s) {
-        const ModelStreet& S = m.streets[s];
-        if (S.line.count < 2) continue;
-        const uint32_t k = S.line.first + (S.line.count - 1) / 2;
-        const Vec2 p = (m.linePoints[k] + m.linePoints[k + 1]) * 0.5;
-        out += fmt("<text x='%.1f' y='%.1f' font-size='7' fill='%s' text-anchor='middle' stroke='#fff' stroke-width='1.6' paint-order='stroke'>%s</text>\n",
-                   p.x, -p.y + 2.5, passed[s] ? "#666" : "#123", S.id.c_str());
-    }
-    for (std::size_t r = 0; r < er.regions.size(); ++r) {
-        const Vec2 c = interiorPoint(er.regions[r].outline);
-        out += fmt("<text x='%.1f' y='%.1f' font-size='12' font-weight='bold' fill='#000' text-anchor='middle'>R%zu</text>\n", c.x, -c.y + 4, r);
-    }
-    out += "</svg>\n";
     return out;
 }
 

@@ -2,7 +2,6 @@
 
 #include "engine/procgen/city/polygon.h"                            // convexHull
 #include "engine/procgen/city/polyline.h"                           // segmentsCross: an outline crossing itself
-#include "engine/procgen/city/roads/control_signs.h"                // stopLineFromMouth: ADR-0419's stop line
 #include "engine/procgen/city/roads/lane_turns.h"                   // turnKey: a turn's word
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"              // LaneLookup: the paved road, for the corner fit
 #include "engine/procgen/city/roads/lanes/lane_graph_connect.h"     // fitConnector, reachReport
@@ -1021,7 +1020,6 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
             x.modelConnection = mm.connection;
             ++marked;
         }
-        out.statedMerges += marked > 0 ? 1 : 0;
         if (marked == 0)
             out.problems.push_back(fmt("lane %s merges into lane %s (the road model's connection %u), but the crossing points hold no join "
                                        "of their paths: who gives way there is not carried", L.lanes[mm.branchLane].id.c_str(),

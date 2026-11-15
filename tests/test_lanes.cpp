@@ -117,17 +117,6 @@ const Result& scene(const std::string& name) {
     return *it->second;
 }
 void checkInvariants(const Result& r) { for (const Check& c : invariants(r)) { if (!c.ok) std::printf("    invariant failed: %s — %s\n", c.name.c_str(), c.detail.c_str()); CHECK(c.ok); } }
-// A scene with a KNOWN, filed limitation: the named invariants may fail (reported, not asserted); every other
-// one must hold, and a known one that starts holding says so -- take it off the list.
-void checkInvariantsExcept(const Result& r, const std::vector<std::string>& known, const char* issue) {
-    for (const Check& c : invariants(r)) {
-        const bool isKnown = std::find(known.begin(), known.end(), c.name) != known.end();
-        if (!c.ok && isKnown) { std::printf("    known failure (%s): %s — %s\n", issue, c.name.c_str(), c.detail.c_str()); continue; }
-        if (c.ok && isKnown) std::printf("    KNOWN FAILURE NOW HOLDS (%s): %s — drop it from the list\n", issue, c.name.c_str());
-        if (!c.ok) std::printf("    invariant failed: %s — %s\n", c.name.c_str(), c.detail.c_str());
-        CHECK(c.ok);
-    }
-}
 double bridge(const Result& r, const char* id) { return r.bridgeLen.at(id); }
 }
 
@@ -1570,7 +1559,6 @@ TEST_CASE(lanes_print_expand_cost_per_city) {
 #include "lane_level_scene.h"                       // a lab scene with the lane level's facts stated in memory
 #include "engine/procgen/city/roads/road_model.h"   // the traffic lab's road model's own problems
 #include "engine/procgen/city/polyline.h"           // segmentsCross: two lanes' centre lines crossing
-#include "engine/procgen/city/roads/control_signs.h"   // stopLineFromMouth: ADR-0419's stop line, worked out in the tests
 #include <map>
 #include <set>
 
@@ -1696,20 +1684,8 @@ const RoadModel& modelOf(const std::string& name) {
     if (it == cache.end()) it = cache.emplace(name, assembleRoadModel(laneSceneOf(name))).first;
     return it->second;
 }
-// WHERE ARM a OF MODEL JUNCTION j PUTS ITS STOP LINE, along its road's spine, worked out here: the paint's (its box's edge,
-// kStopLineBack outside it: ModelArm::stopLine, which the model reads from the paint's boxes) where it painted one, else
-// ADR-0419's rule from the stated cross-sections (control_signs.h stopLineFromMouth). kNotStated: neither.
-double statedStopLine(const RoadModel& m, uint32_t j, uint32_t a) {
-    const ModelArm& arm = m.junctions[j].arms[a];
-    if (stated(arm.stopLine)) return arm.stopLine;
-    ModelJunction planned = m.junctions[j];
-    planned.arms[a].stopLine = kNotStated;
-    const Real back = stopLineFromMouth(m, planned, a);
-    if (!stated(back)) return kNotStated;
-    return arm.spineIn ? arm.station - back : arm.station + back;
-}
 // EACH JUNCTION'S STATED EXTENT along each road (edge index -> stretches (from, to, model junction)): every arm's stretch
-// from its station (the street's end there) to its stop line (statedStopLine), and every stretch the road file states
+// from its station (the street's end there) to its stop line (ModelArm::stopLine), and every stretch the road file states
 // inside the junction.
 std::map<int, std::vector<std::tuple<double, double, uint32_t>>> junctionExtents(const Result& r, const RoadModel& m) {
     std::map<int, std::vector<std::tuple<double, double, uint32_t>>> out;
@@ -1717,7 +1693,7 @@ std::map<int, std::vector<std::tuple<double, double, uint32_t>>> junctionExtents
         for (uint32_t a = 0; a < m.junctions[j].arms.size(); ++a) {
             const ModelArm& arm = m.junctions[j].arms[a];
             const std::map<std::string, int>::const_iterator e = r.graph.index.find(arm.road);
-            const double stop = statedStopLine(m, j, a);
+            const double stop = arm.stopLine;
             if (e == r.graph.index.end() || !stated(stop)) continue;
             out[e->second].emplace_back(std::min(arm.station, stop), std::max(arm.station, stop), j);
         }

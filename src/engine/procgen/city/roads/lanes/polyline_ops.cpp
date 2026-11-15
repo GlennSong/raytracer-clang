@@ -55,31 +55,6 @@ std::vector<Vec2> sliceAtStations(const std::vector<Vec2>& xy, const std::vector
     return out;
 }
 
-double stationAcross(const std::vector<Vec2>& xy, const std::vector<double>& s, const Vec2& p) {
-    // from the nearest point's station, step along the tangent by how far p stands ahead of the normal there (Newton's
-    // step on a line, near enough on a gentle bend) until the step is negligible
-    constexpr int kSteps = 8;
-    constexpr double kSettled = 1e-6;
-    if (xy.size() < 2) return s.empty() ? 0.0 : s.front();
-    double st = project(xy, s, p).station;
-    for (int i = 0; i < kSteps; ++i) {
-        const double ahead = dot(p - pointAt(xy, s, st), tangentAtStation(xy, s, st));
-        const double next = std::clamp(st + ahead, s.front(), s.back());
-        const bool settled = std::fabs(next - st) < kSettled;
-        st = next;
-        if (settled) break;
-    }
-    return st;
-}
-
-double circleRadius(const Vec2& a, const Vec2& b, const Vec2& c) {
-    // R = |ab| |bc| |ca| / (2 |cross(b - a, c - a)|)
-    const double twiceArea = std::fabs(cross(b - a, c - a));
-    const double sides = distance(a, b) * distance(b, c) * distance(c, a);
-    if (!(twiceArea > 0)) return std::numeric_limits<double>::infinity();
-    return sides / (2 * twiceArea);
-}
-
 std::vector<Vec2> crossings(const std::vector<Vec2>& a, const std::vector<Vec2>& b) {
     std::vector<Vec2> out;
     auto box = [](const std::vector<Vec2>& p, double& x0, double& x1, double& y0, double& y1) {

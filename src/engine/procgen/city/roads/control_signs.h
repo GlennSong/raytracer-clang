@@ -54,9 +54,6 @@ struct ControlSignRule {
 // road_attachments.json, a missing look) is left out and said in `problems`.
 std::vector<ControlSignRule> controlSignRules(const AttachmentKinds& kinds, std::vector<std::string>* problems = nullptr);
 
-// WHERE AN ARM'S STOP LINE STANDS, in metres out along it from its mouth: the model's (ModelArm::stopLine, the one rule
-// from the stated junction, deck_mesh.h junctionAreas). kNotStated when the arm has none, or no street or line.
-Real stopLineFromMouth(const RoadModel& m, const ModelJunction& J, std::size_t arm);
 // How far a street's kerb stands from its centre line: its travel lanes' half width and its shoulder.
 Real kerbOffset(const ModelStreet& s);
 

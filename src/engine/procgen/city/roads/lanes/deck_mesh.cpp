@@ -67,7 +67,6 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
         // the front face points the way the shading normal does (as MeshBuilder::emitTri)
         MeshBuilder::triFacing(top, a, b, c, normal);
     };
-    static const float kNoUV[6] = {0, 0, 0, 0, 0, 0};
     for (size_t ti = 0; ti < tris.size(); ++ti) {
         const auto& t = tris[ti]; const DeckVertex& a = verts[static_cast<size_t>(t[0])]; const DeckVertex& b = verts[static_cast<size_t>(t[1])]; const DeckVertex& c = verts[static_cast<size_t>(t[2])];
         const int vi[3] = {t[0], t[1], t[2]};

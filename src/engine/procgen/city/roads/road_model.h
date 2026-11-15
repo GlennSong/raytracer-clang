@@ -464,13 +464,10 @@ struct EnclosedRegions {
 EnclosedRegions enclosedRegions(const RoadModel& m, const RegionWalk& rules = RegionWalk());
 // The region whose outline holds `p` (the smallest, where outlines overlap), as an index into `er.regions`; -1: none.
 int regionAt(const EnclosedRegions& er, const Vec2& p);
-// In words (every region with its bounds, every problem) and on a map (each region its own colour, the streets drawn
-// and labelled; `overlay`: rings drawn dashed over it, e.g. the pavement's holes).
+// In words (every region with its bounds, every problem).
 std::string reportEnclosedRegions(const RoadModel& m, const EnclosedRegions& er);
-std::string enclosedRegionsSvg(const RoadModel& m, const EnclosedRegions& er, const std::vector<std::vector<Vec2>>* overlay = nullptr);
 
 // Lookups by name.
-ModelJunctionId junctionNamed(const RoadModel& m, const std::string& id);
 ModelStreetId streetNamed(const RoadModel& m, const std::string& id);
 ModelLaneId laneNamed(const RoadModel& m, const std::string& id);
 

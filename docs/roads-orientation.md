@@ -60,7 +60,6 @@ Under `src/engine/procgen/city/roads/`:
 | `lanes/road_twin.h/.cpp` | The lot twin (`lotNav`, bundle section roads/lotnav). Only the lot pass reads it. **Slated for deletion in step 5.** |
 | `lanes/city_producer.*`, `lots_producer.*` | The bundle producers: road meshes, ground, twin and pavement holes; then lots. |
 | `lanes/block_audit.*` | The lot pass run headless and audited. |
-| `lanes/road_model_compare.*` | Step 2's model-against-old-forms report (`lanes_tool compare`). |
 | `lanes/lanes_export.*` | glTF, plan SVG, stats JSON, lane graph plan pictures. |
 | `lanes/README.md` | Older background on the builder. It still mentions the lattice *(probably stale)*. |
 
@@ -175,7 +174,6 @@ driving_tests rt_bake city_plan` before anything that loads a level; stale binar
 |---|---|---|
 | `lanes_tool build <file> --out <dir>` | Road meshes; compare `.glb`/`.svg` md5 before and after (stats.json differs only in timings) | ~12 s traffic_lab, ~36 s river_town |
 | `lanes_tool model <file> --out <dir>` | model.txt, report.txt, model.svg | about a build *(unsure)* |
-| `lanes_tool compare <file> --out <dir>` | Model against street map, paint, lane graph, lane match; regions | longer than model *(unsure)* |
 | `lanes_tool junctions <file> [--top N]` | The grouping's junctions, biggest first | seconds *(unsure)* |
 | `lanes_tool layout <file> [--write ...]` | Layout facts; prints whether the bake and lane-graph keys stay unchanged | seconds |
 | `lanes_tool lanegraph <file> --out <dir> --vehicle tag:radius:width:length ...` | lane_graph.txt, problems.txt, reach.txt, corner_faults.txt, svg; `--junction J` for a close-up | ~26 s traffic_lab, ~63 s river_town |
@@ -195,7 +193,6 @@ Tests (`RT_TEST_FILTER` is a substring of the case name):
   - `level_traffic_lab_v2_drives`: about 8 to 9 minutes. It builds the lane graph (~45 s) and runs 300 cars for 5
     simulated minutes. Pins `kFiveMinuteStateHash`. Limit the runs per task.
   - `level_traffic_lab_v2_same_every_run`, `level_traffic_lab_v2_rebuild_hands_over_again`.
-  - `level_v1_state_is_unchanged`: must stay unchanged.
   - `RT_LEVELS=river_town,traffic_lab` with `level_real_lanes_match_the_baked_roads` or
     `front_doors_face_their_street`.
 - `python3 tools/agent_lab_probe.py --speed 4`: about 4 minutes; overwrites its shots in

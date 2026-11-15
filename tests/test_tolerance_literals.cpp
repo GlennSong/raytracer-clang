@@ -63,7 +63,6 @@ const std::vector<std::string> kHoldsBareTolerances = {
     "engine/procgen/city/roads/lanes/road_design.cpp",          // 3
     "engine/procgen/city/roads/lanes/road_graph_spec.cpp",      // 1
     "engine/procgen/city/roads/lanes/road_layout.cpp",          // 4
-    "engine/procgen/city/roads/lanes/road_model_compare.cpp",   // 7
     "engine/procgen/city/roads/lanes/road_twin.cpp",            // 6
     "engine/procgen/city/roads/lanes/terrain_recipe.cpp",       // 2
     "engine/procgen/city/roads/lanes/vertical_profile.cpp",     // 7

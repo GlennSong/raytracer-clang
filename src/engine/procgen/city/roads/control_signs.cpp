@@ -90,14 +90,6 @@ std::vector<ControlSignRule> controlSignRules(const AttachmentKinds& kinds, std:
 
 Real kerbOffset(const ModelStreet& s) { return s.travelWidth() * 0.5 + s.section.shoulder; }
 
-Real stopLineFromMouth(const RoadModel& m, const ModelJunction& J, std::size_t arm) {
-    if (arm >= J.arms.size()) return kNotStated;
-    const ModelArm& a = J.arms[arm];
-    Vec2 mouth;
-    if (!armMouth(m, J, arm, mouth) || !stated(a.stopLine)) return kNotStated;
-    return std::fabs(a.stopLine - a.station);
-}
-
 ControlSignPlan placeControlSigns(const RoadModel& m, const std::vector<ControlSignRule>& rules,
                                   const std::function<Real(const Vec2&)>& carriagewayDepth, std::vector<Vec2> standing) {
     ControlSignPlan plan;
@@ -121,8 +113,8 @@ ControlSignPlan placeControlSigns(const RoadModel& m, const std::vector<ControlS
                     if (r.oneWayEnd == "exit" && !a.spineIn) continue;
                 }
                 Vec2 mouth;
-                const Real stop = stopLineFromMouth(m, J, k);
-                if (!armMouth(m, J, k, mouth) || !stated(stop)) continue;
+                if (!armMouth(m, J, k, mouth) || !stated(a.stopLine)) continue;
+                const Real stop = std::fabs(a.stopLine - a.station);   // metres out along the arm from its mouth
                 const Vec2 d = headingDir(a.heading);   // out along the arm, away from the junction
                 const Vec2 along = mouth + d * (stop - r.fromStopLine);
                 const Real out = kerbOffset(S) + r.fromKerb;

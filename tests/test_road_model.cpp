@@ -12,7 +12,6 @@
 //   4. the questions: the street, lane and station nearest a point; the streets at a junction in order; a street's lanes;
 //      what a lane leads to; what is attached to a street or a junction;
 //   5. saved and read back, and its own cache file, keyed;
-//   6. the comparison with the old forms runs on a small scene and agrees where they must;
 //   7. kerb parking is the road file's statement (ADR-0418): the twin's band, the model's section, and a statement that
 //      cannot be built named.
 
@@ -27,7 +26,6 @@
 #include "engine/procgen/city/roads/lanes/lane_expand.h"   // expand: the planned layer reads the ramps composed
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"
-#include "engine/procgen/city/roads/lanes/road_model_compare.h"
 #include "engine/procgen/city/roads/lanes/road_twin.h"   // roadTwin: the kerb parking band it hands the sim
 #include "engine/procgen/city/roads/road_entity.h"      // navRoadGraph
 #include "engine/procgen/city/roads/road_model.h"
@@ -585,36 +583,6 @@ TEST_CASE(road_model_5_saved_and_read_back) {
     // (the model's own cache file, which nothing read, went in ADR-0426's review)
 }
 
-// ---- 6. the comparison with the old forms --------------------------------------------------------------------------------
-
-TEST_CASE(road_model_6_compared_with_the_old_forms) {
-    // (the small graph with the facts the lane graph reads since ADR-0426: its junctions' controls and its lane rules)
-    Built b;
-    b.r = build(RoadLabGraph::fromJson(lane_level_test::withLaneLevelFacts(smallGraphWithLayout())));
-    b.model = assembleRoadModel(*b.r);
-    const RoadModelComparison c = compareRoadModel(b.model, *b.r);
-    std::printf("%s", c.text.c_str());
-    // the crossing and the T are junctions of every form, one to one; the nav has no junction node the model has not (the
-    // bend is no junction to the model either since ADR-0419: a street carrying on)
-    CHECK(c.nav.matched >= 2u && c.paint.matched >= 2u && c.laneGraph.matched >= 2u);
-    CHECK(c.modelTwoArm == 0u);
-    CHECK(c.nav.onlyModel == 0u);
-    CHECK(c.nav.onlyOther == 0u);
-    // the paint (and the lane graph, built from its boxes) still makes the bend a junction, by its own rule until step 9
-    CHECK(c.paint.onlyOther <= 1u && c.laneGraph.onlyOther <= 1u);
-    CHECK(c.nav.otherKnots == 0u && c.nav.modelKnots == 0u);
-    // every street cars drive has its nav link, with the model's lanes each way and its one-way
-    CHECK(c.streetsCompared == static_cast<uint32_t>(b.model.streets.size()));
-    CHECK(c.streetsWithoutLink == 0u && c.oneWayDiffers == 0u);
-    CHECK(c.lanesWithPaths == c.modelRoadLanes);
-    CHECK(c.text.find("WHAT THE MODEL DOES NOT STATE YET") != std::string::npos);
-    // ONE LANE COUNT (ADR-0418): every drivable link gets its road's stated lanes, so no street's nav lanes differ from
-    // the road file's; and the sim's kerbside bays lie only in a band a road states
-    CHECK(c.linksStated == c.linksDrivable);
-    CHECK(c.laneCountDiffers == 0u);
-    CHECK(c.baysOffStatedParking == 0u);
-}
-
 // ---- 7. kerb parking is stated (ADR-0418) --------------------------------------------------------------------------------
 
 namespace {
@@ -814,7 +782,7 @@ TEST_CASE(road_model_9_the_signs_follow_from_the_facts) {
         CHECK(attach(withSign, at));
         if (s.kind == "stop_sign" || s.kind == "give_way_sign") {
             // at the stop line, 0.6 m toward the junction; on the kerb side of the traffic arriving by the arm, facing it
-            CHECK(std::fabs(dot(off, d) - (stopLineFromMouth(m, J, static_cast<std::size_t>(s.arm)) - 0.6)) < 1e-6);
+            CHECK(std::fabs(dot(off, d) - (std::fabs(a.stopLine - a.station) - 0.6)) < 1e-6);
             CHECK(dot(off, rightOf(d * -1.0)) > 0);
             CHECK((s.face - d).length() < 1e-9);
             CHECK(s.look.value("sign", std::string()) == (s.kind == "stop_sign" ? "stop" : "yield"));

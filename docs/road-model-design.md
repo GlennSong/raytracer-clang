@@ -3,8 +3,7 @@
 Status: approved; steps 1 and 2 built (2026-11-13, ADR-0417) beside the old forms. Two fixes the comparison showed were
 needed came before any reader moves (ADR-0418): a street has one lane count, with its kerb parking stated in its
 cross-section (built); and which road ends make one junction follows one stated rule (ADR-0419: built for every road
-file but traffic_lab's, whose builder still merges two of the rule's junctions into one). The comparison of the model
-with the old forms is in docs/road-model-compare/.
+file but traffic_lab's, whose builder still merges two of the rule's junctions into one).
 
 ## The goal
 

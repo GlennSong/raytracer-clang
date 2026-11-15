@@ -20,12 +20,8 @@
 //   lanes_tool streetmap <graph.json> [--route x0 z0 x1 z1]   the street map agents route on, built from the file's road
 //                      model alone, in words; --route: a car's route between two points, street by street (ADR-0425)
 //   lanes_tool model <graph.json> [--out <dir>]   build the roads and assemble THE ROAD MODEL: model.txt, report.txt, model.svg
-//   lanes_tool compare <graph.json> [--out <dir>]   the model files too, and the road model against the street map, the paint's boxes,
-//                      the lane graph and the lane match: compare.txt; and the regions the streets enclose against the pavement's holes
-//                      (ADR-0423): regions.txt, regions.svg
 //   lanes_tool regions-lots <level.json> [--out <dir>]   the level's lots grown again in memory from its bundle (run with
-//                      RT_BUNDLE_WRITE=0), dumped beside the stored ones (lots_grown.txt, lots_stored.txt), and the regions
-//                      against the lot pass's frontage edges and doors (regions_lots.txt, ADR-0423). Writes nothing else.
+//                      RT_BUNDLE_WRITE=0), dumped beside the stored ones (lots_grown.txt, lots_stored.txt). Writes nothing else.
 //   lanes_tool junctions <graph.json> [--top N]   the junctions the file's grouping makes (the control plan's where the file
 //                      plans controls, else the layout's), each with its nodes and its size (the most any two nodes lie
 //                      apart), the biggest first (ADR-0418)
@@ -33,7 +29,6 @@
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/road_design.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"   // layout: the road file's junctions and streets (ADR-0417)
-#include "engine/procgen/city/roads/lanes/road_model_compare.h"   // compare: the road model against the old forms
 #include "engine/procgen/city/roads/road_model.h"   // model: the one road model (ADR-0417)
 #include "engine/procgen/city/roads/street_map.h"   // streetmap: the graph agents route on, from the model (ADR-0425)
 #include "engine/ai/pathfind.h"                     // streetmap --route
@@ -77,13 +72,6 @@ namespace {
 // The --out folder, made with every folder above it (`out/lanelab/x` when `out/lanelab` is not there yet). Says so
 // and returns false when it cannot be made: a plain mkdir made only the last folder, failed silently, and the tool
 // went on to print "wrote ..." for files it had not written.
-// The compare report's last line: how long each part took.
-std::string fmtSeconds(double build, double model, double compare) {
-    char b[160];
-    std::snprintf(b, sizeof b, "(the road build %.1f s, the model %.2f s, the comparison %.1f s)\n", build, model, compare);
-    return b;
-}
-
 bool makeOutDir(const std::string& dir) {
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
@@ -162,9 +150,8 @@ nlohmann::json interchangeDemo() {
     return scene;
 }
 
-// EVERY LOT IN WORDS (regions-lots): its kind, recipe, block, site and size, its lot line, its plan, its frontage edge (the
-// lot line its front door looks out through) and every door with where it faces, to the tenth of a millimetre -- two
-// grows of the same city compare byte for byte.
+// EVERY LOT IN WORDS (regions-lots): its kind, recipe, block, site and size, its lot line, its plan and every door with
+// where it faces, to the tenth of a millimetre -- two grows of the same city compare byte for byte.
 std::string lotDump(const std::vector<LotBuilding>& lots) {
     std::string out;
     char buf[512];
@@ -184,15 +171,6 @@ std::string lotDump(const std::vector<LotBuilding>& lots) {
         out += buf;
         ring("  lot line:", b.lot);
         ring("  plan:", b.plan);
-        Vec2 door, n;
-        const int k = lotFrontageEdge(b, &door, &n);
-        if (k >= 0) {
-            const Vec2 a = b.lot[static_cast<std::size_t>(k)], e = b.lot[(static_cast<std::size_t>(k) + 1) % b.lot.size()];
-            std::snprintf(buf, sizeof buf, "  frontage edge %d: (%.4f, %.4f) to (%.4f, %.4f)\n", k, a.x, a.y, e.x, e.y);
-            out += buf;
-        } else {
-            out += "  frontage edge: none\n";
-        }
         for (const BuildingUnit& u : b.units)
             for (const DoorSpec& d : u.doors) {
                 std::snprintf(buf, sizeof buf, "  door at (%.4f, %.4f) facing (%.5f, %.5f) %.3f x %.3f%s%s\n", d.foot.x, d.foot.y, d.normal.x, d.normal.y,
@@ -492,11 +470,10 @@ int main(int argc, char** argv) {
             return ok ? 0 : 1;
         } catch (const std::exception& e) { std::fprintf(stderr, "lanes_tool: %s\n", e.what()); return 1; }
     }
-    if (argc >= 3 && (std::strcmp(argv[1], "model") == 0 || std::strcmp(argv[1], "compare") == 0)) {
+    if (argc >= 3 && std::strcmp(argv[1], "model") == 0) {
         // THE ROAD MODEL (road_model.h, ADR-0417): the roads built, the model assembled from the build; `model` writes its
         // dump (model.txt), its report (report.txt: what it holds, what is not stated, where the build does not match) and
-        // a map (model.svg); `compare` writes the model against the old forms (compare.txt, road_model_compare.h).
-        const bool compare = std::strcmp(argv[1], "compare") == 0;
+        // a map (model.svg).
         std::string outDir = ".";
         for (int i = 3; i + 1 < argc; ++i)
             if (std::strcmp(argv[i], "--out") == 0) outDir = argv[i + 1];
@@ -515,24 +492,13 @@ int main(int argc, char** argv) {
         std::ofstream(outDir + "/report.txt") << reportRoadModel(model);
         std::ofstream(outDir + "/model.svg") << roadModelSvg(model);
         std::printf("wrote %s/model.txt, report.txt, model.svg\n", outDir.c_str());
-        if (!compare) return 0;
-        const std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
-        const RoadModelComparison c = compareRoadModel(model, *rp);
-        const double compareSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t2).count();
-        const std::string text = c.text + fmtSeconds(buildSeconds, modelSeconds, compareSeconds);
-        std::ofstream(outDir + "/compare.txt") << text;
-        // the regions enclosed by streets (ADR-0423): every region in words, and a map with the pavement's holes over it
-        std::ofstream(outDir + "/regions.txt") << reportEnclosedRegions(model, c.enclosed);
-        std::ofstream(outDir + "/regions.svg") << enclosedRegionsSvg(model, c.enclosed, &c.holes);
-        std::printf("%swrote %s/compare.txt, regions.txt, regions.svg\n", text.c_str(), outDir.c_str());
         return 0;
     }
     if (argc >= 3 && std::strcmp(argv[1], "regions-lots") == 0) {
-        // THE REGIONS AGAINST THE LOT PASS (ADR-0423's evidence; moves nothing, saves nothing but the files named here): the
+        // THE LOTS GROWN AGAIN (moves nothing, saves nothing but the files named here): the
         // level's city bundle as it is (run with RT_BUNDLE_WRITE=0: a bundle that is not current is baked in memory, never
         // written), its lots grown again in memory by the existing lot pass from the bundle's own city products, every lot
-        // dumped (lots_grown.txt) beside the lots the bundle stores (lots_stored.txt), and the region comparison
-        // (regions_lots.txt; road_model_compare.h compareRegionsWithLots)
+        // dumped (lots_grown.txt) beside the lots the bundle stores (lots_stored.txt)
         std::string outDir = ".";
         for (int i = 3; i + 1 < argc; ++i)
             if (std::strcmp(argv[i], "--out") == 0) outDir = argv[i + 1];
@@ -566,13 +532,7 @@ int main(int argc, char** argv) {
         std::ofstream(outDir + "/lots_grown.txt") << dumpGrown;
         std::ofstream(outDir + "/lots_stored.txt") << dumpStored;
         std::printf("the lots grown in memory and the lots the bundle stores dump %s\n", dumpGrown == dumpStored ? "byte-identical" : "DIFFERENTLY");
-        RoadLabGraph g = loadCityGraph(ents.back());
-        (void)expand(g);   // the planned layer reads the ramps composed (as the loader does)
-        const RoadModel model = plannedRoadModel(g);
-        const EnclosedRegions er = enclosedRegions(model);
-        const RegionLotComparison c = compareRegionsWithLots(model, er, p.holes, grown.lots, p.lotNav);
-        std::ofstream(outDir + "/regions_lots.txt") << c.text;
-        std::printf("%swrote %s/lots_grown.txt, lots_stored.txt, regions_lots.txt\n", c.text.c_str(), outDir.c_str());
+        std::printf("wrote %s/lots_grown.txt, lots_stored.txt\n", outDir.c_str());
         return 0;
     }
     if (argc == 3 && std::strcmp(argv[1], "interchange-demo") == 0) {
@@ -892,8 +852,7 @@ int main(int argc, char** argv) {
                              "       lanes_tool landings <graph.json> ...   (each ramp end on a street: on the carriageway going its way? #282)\n"
                              "       lanes_tool layout <graph.json> [--write] [--fresh] [--names]   (the road file's junctions and streets with ids; --write puts them in the file, ADR-0417; --names their names, ADR-0420)\n"
                              "       lanes_tool model <graph.json> [--out <dir>]   (the road model: model.txt, report.txt, model.svg)\n"
-                             "       lanes_tool compare <graph.json> [--out <dir>]   (the road model against the twin/nav, paint boxes, lane graph and lane match: compare.txt; regions.txt, regions.svg)\n"
-                             "       lanes_tool regions-lots <level.json> [--out <dir>]   (the regions against the lot pass, its lots grown in memory: regions_lots.txt, lot dumps)\n"
+                             "       lanes_tool regions-lots <level.json> [--out <dir>]   (the level's lots grown in memory, dumped beside the stored ones)\n"
                              "                    [--ramp-width M] [--ramp-shoulder M]   ramp carriageway (default 4.5 m lane, 2.5 m shoulder)\n");
         return 2;
     }

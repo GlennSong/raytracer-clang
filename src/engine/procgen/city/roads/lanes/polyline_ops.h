@@ -29,12 +29,6 @@ double interp(const std::vector<double>& xs, const std::vector<double>& ys, doub
 // does not leave a sliver segment).
 std::vector<Vec2> sliceAtStations(const std::vector<Vec2>& xy, const std::vector<double>& s, double from, double to,
                                   double minGap = 1e-3);
-// THE STATION A POINT LIES ACROSS: the station whose normal (perp of tangentAtStation, how the builder offsets a point
-// from a spine: a ramp's lane beside its host) passes through p, found from the nearest point's station. Where the
-// spine bends at a vertex the nearest point and this differ by up to the offset times half the bend.
-double stationAcross(const std::vector<Vec2>& xy, const std::vector<double>& s, const Vec2& p);
-// The radius of the circle through three points: infinity when they lie on a line (or two coincide).
-double circleRadius(const Vec2& a, const Vec2& b, const Vec2& c);
 
 
 // Polyline x polyline intersections (interior crossings), brute force with a bounds test.

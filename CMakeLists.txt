@@ -676,17 +676,14 @@ if(RT_BUILD_ROADS_LANES)
         target_compile_definitions(engine_core PUBLIC RT_ROADS_LANES=1)
 
         # Headless hosts: the same builder, no window.
-        # (road_model_compare.cpp reads the city sim's lane match, so it lives with the two hosts that ask for it)
-        add_executable(lanes_tool tools/lanes_tool.cpp
-            src/engine/procgen/city/roads/lanes/road_model_compare.cpp)   # the road model against the old forms (ADR-0417)
+        add_executable(lanes_tool tools/lanes_tool.cpp)
         target_include_directories(lanes_tool PRIVATE src)
         target_compile_options(lanes_tool PRIVATE -Wall -Wextra)
         target_link_libraries(lanes_tool PRIVATE engine_core citysim)
 
         add_executable(lanes_tests tests/main.cpp tests/test_lanes.cpp
             tests/test_control_plan.cpp   # every junction's control and every road's limit, planned and carried (#240)
-            tests/test_road_model.cpp     # the road file's layout and the one road model (ADR-0417)
-            src/engine/procgen/city/roads/lanes/road_model_compare.cpp)
+            tests/test_road_model.cpp)    # the road file's layout and the one road model (ADR-0417)
         target_include_directories(lanes_tests PRIVATE src tests)
         target_compile_options(lanes_tests PRIVATE -Wall -Wextra)
         target_compile_definitions(lanes_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

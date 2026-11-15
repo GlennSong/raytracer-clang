@@ -260,8 +260,6 @@ struct LaneGraphBuild {
     // street carries on as another, where a lane leaves its host and where one merges into its host; of them, how many
     // whose lines did not meet (each also a line in the problems, with the gap)
     uint32_t carryOnJoins = 0, divergeJoins = 0, mergeJoins = 0, joinsWithGap = 0;
-    // of the merges made, how many are marked on their Join crossing point (CrossingPoint::merging; the rest each a problem)
-    uint32_t statedMerges = 0;
     // (where the paint and the stated junctions disagree is the road model's to say: RoadModel::problems)
     std::vector<std::string> problems;     // in plain words, each with its place; empty = nothing to look at
     std::vector<PathSource> sources;       // per path (a connector's: lane -1, no builder lane)

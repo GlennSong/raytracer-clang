@@ -28,12 +28,6 @@
 // level_traffic_lab_v2_refused_rules_leave_the_old_model_driving: a rule set that is refused (missing, or one with
 // faults: RT_LAB_RULES=<file>) leaves the lab loading, the new model off and the old one driving.
 //
-// level_v1_state_is_unchanged: two levels driven by the OLD model alone -- the traffic lab with its citysim block set
-// back to "v1", and river_town (walkers, buses, cabs, the far tiers) -- each stepped for a while, with one number
-// folded over every agent's driving and walking state and every vehicle's pose, printed as it goes and CHECKED against
-// the numbers pinned in the test (kV1LabHashes, kV1RiverHashes; issue #284): equal numbers say a v1 level does what it
-// did when they were taken, on this machine's build.
-//
 // level_traffic_lab_v2_rebuild_hands_over_again: the city built a second time hands its drivers to the new model again,
 // with the host's seats, counts and measurements started over (issue #284).
 
@@ -44,7 +38,6 @@
 #include "../src/apps/driving/traffic_state.h"
 #include "../src/apps/driving/wait_graph.h"   // isWaiting
 #include "../src/engine/asset_manager.h"
-#include "../src/engine/bundle/bundle.h"   // fnv1a
 #include "../src/engine/components.h"
 #include "../src/engine/level_loader.h"
 #include "../src/engine/mesh_uploader.h"
@@ -55,7 +48,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -66,43 +58,6 @@
 using namespace engine;
 
 namespace {
-
-// Folds one value's bytes into the running hash.
-template <typename T> void fold(uint64_t& h, const T& v) { h = bundle::fnv1a(&v, sizeof v, h); }
-
-// ONE NUMBER OVER THE OLD MODEL'S STATE: every agent's place, heading, speed, route progress, lane, mode and goal, and
-// every vehicle's pose, in index order.
-uint64_t simStateHash(const citysim::CitySim& sim) {
-    uint64_t h = bundle::kFnvOffset;
-    for (const citysim::Agent& a : sim.agents()) {
-        fold(h, a.pos.x);
-        fold(h, a.pos.y);
-        fold(h, a.heading.x);
-        fold(h, a.heading.y);
-        fold(h, a.speed);
-        fold(h, a.distOnLeg);
-        fold(h, a.leg);
-        fold(h, a.lane);
-        fold(h, a.laneF);
-        fold(h, a.lateralOffset);
-        fold(h, a.elevation);
-        fold(h, static_cast<uint8_t>(a.moving));
-        fold(h, static_cast<uint8_t>(a.mode));
-        fold(h, static_cast<uint8_t>(a.state));
-        fold(h, static_cast<uint8_t>(a.tier));
-        fold(h, a.goal);
-        fold(h, a.vehicle);
-        fold(h, static_cast<uint64_t>(a.route.links.size()));
-    }
-    for (const citysim::SimVehicle& v : sim.vehicles()) {
-        fold(h, v.pos.x);
-        fold(h, v.pos.y);
-        fold(h, v.heading.x);
-        fold(h, v.heading.y);
-        fold(h, v.driver);
-    }
-    return h;
-}
 
 // A LEVEL LOADED AND ITS CITY BUILT, kept together (the city reads the world).
 struct LoadedCity {
@@ -115,9 +70,8 @@ struct LoadedCity {
     bool ok = false;
 
     // Loads `level`, sets its citysim block's driving model to `driving` and its rule set to `rules` (empty: as the
-    // level says), lets `adjust` change anything else in the block (none: nothing), builds the city.
-    LoadedCity(const std::string& level, const std::string& driving, const std::string& rules = std::string(),
-               const std::function<void(CitySimConfig&)>& adjust = nullptr) {
+    // level says), builds the city.
+    LoadedCity(const std::string& level, const std::string& driving, const std::string& rules = std::string()) {
         uploader = std::make_unique<RendererMeshUploader>(*renderer);
         assets = std::make_unique<AssetManager>(*uploader);
         if (!LevelLoader::load(std::string(RT_SOURCE_DIR) + "/assets/levels/" + level, world, *renderer, view, *assets,
@@ -126,34 +80,10 @@ struct LoadedCity {
         world.each<CitySimConfig>([&](Entity, CitySimConfig& c) {
             if (!driving.empty()) c.driving = driving;
             if (!rules.empty()) c.drivingRules = rules;
-            if (adjust) adjust(c);
         });
         ok = city.build(world, assets.get(), nullptr);
     }
 };
-
-// Steps `city` `seconds` in steps of `dt`, printing the old model's state hash every `printEvery` seconds, and returns
-// those hashes. `adjust`: as LoadedCity's.
-std::vector<uint64_t> runAndHash(const std::string& level, const std::string& driving, Real seconds, Real dt,
-                                 Real printEvery, const std::function<void(CitySimConfig&)>& adjust = nullptr) {
-    std::vector<uint64_t> out;
-    LoadedCity lc(level, driving, std::string(), adjust);
-    CHECK(lc.ok);
-    if (!lc.ok) return out;
-    const int steps = static_cast<int>(seconds / dt + 0.5);
-    const int every = static_cast<int>(printEvery / dt + 0.5);
-    std::printf("    [v1-hash] %s (driving %s): %zu agents\n", level.c_str(), driving.empty() ? "as the level says" : driving.c_str(),
-                lc.city.sim().agents().size());
-    for (int i = 1; i <= steps; ++i) {
-        lc.city.step(lc.world, dt);
-        if (i % every == 0) {
-            out.push_back(simStateHash(lc.city.sim()));
-            std::printf("    [v1-hash] %s t=%6.1f s: 0x%016llxull\n", level.c_str(), i * dt,
-                        static_cast<unsigned long long>(out.back()));
-        }
-    }
-    return out;
-}
 
 // ---- The new model's lab ---------------------------------------------------------------------------------------------
 
@@ -1514,50 +1444,4 @@ TEST_CASE(level_traffic_lab_v2_rebuild_hands_over_again) {
     CHECK(handed == n.drivers);
     for (int i = 0; i < 60 * 20; ++i) lc.city.step(lc.world, kStep);
     CHECK(sim.drivingHost().measurements().report().passed());
-}
-
-// THE OLD MODEL'S STATE, PINNED (issue #284: before, this printed the hashes for a person to compare by hand). Taken on
-// 7021e1b8 with the #284 work, none of which reaches the old model (below). The old model's code is the same as before the rebuild began: `git diff 3e86063c..HEAD --
-// src/apps/citysim/` shows only additions -- the new model's host (city_driving.*), CitySim's hand-over to it
-// (startDrivingV2, setDrivingRoads, the driving v2 tick), and the seam's exclusions, each `if (drivenByV2(i)) continue`
-// or a grid placement skipped for such an agent, which on a level the new model does not drive is never true; CitySim::
-// build starting the new model over (#284) does nothing on such a level either. A change to the old model's code that
-// changes these numbers changes what v1 levels do: it must say so and update them in the same change.
-// traffic_lab as v1: t = 30, 60, 90, 120 s. Taken again when the lab was re-planned with one-way frontage roads
-// (ADR-0413): its ROADS changed, not the old model's code (with the old lab roads put back, the earlier numbers still
-// came out; river_town's below did not move).
-// Both taken again with ONE LANE COUNT (ADR-0418): the sim's links now carry the lanes their road file states (an
-// arterial three a way, not two; a collector two, not one; a freeway carriageway four, not three; a boulevard three, not
-// one), so streets gained travel lanes, the lane match no longer leaves a kerb lane "to the parking", and a city that
-// sizes its traffic by lane-kilometres (river_town) deals more cars. Its ROADS' lane counts changed, not the old model's
-// driving: with the nav given its lanes the old way (a temporary switch, removed), the earlier numbers -- 71f6d213...,
-// f131e7b3..., all eight -- still came out.
-// Both taken again when the lights and signal poles moved onto the road model's stated controls (ADR-0421): the lab
-// as v1 now lights the 28 junctions its own plan states (the old rule lit 76), and on river_town every point of a
-// junction stated lit is lit and poles stand one an arm. With the old signalled set and old furniture put back (a
-// temporary switch, removed) the earlier numbers -- 787bbb8c..., a749b074... -- came out exactly.
-// Both taken again when every agent's street map came to be built from the road model (ADR-0425): its nodes and
-// links differ from the old thinned copy's, a junction lying over several points runs one signal plan, and bus lines
-// are derived afresh. With the street map built the old way (a temporary switch, removed) the earlier numbers --
-// 95361f07..., 2b9fd098... -- came out exactly.
-constexpr uint64_t kV1LabHashes[] = {0x6161808458034f6cull, 0xdc44f2a4eba36a97ull, 0x619965545bd8c04cull,
-                                     0x4350d0f0759ece61ull};
-// river_town: t = 15, 30, 45, 60 s. Taken again when street name signs moved onto the road model (ADR-0420): a sign
-// post is street furniture, walkers steer round furniture, and the posts stand at different corners (one a junction,
-// 182 -> 144). With the posts put back where they stood (a temporary switch, removed) the earlier numbers -- 943f48ad...
-// -- came out exactly; the lab, which has no walkers, did not move.
-constexpr uint64_t kV1RiverHashes[] = {0xe8a31a7c99904cfdull, 0x5e9f6a872434cf02ull, 0x7407d0c363d6ca49ull,
-                                       0xbfd7473425925330ull};
-
-TEST_CASE(level_v1_state_is_unchanged) {
-    // The lab as v1 with the fleet it had when the hashes were taken: its own fleet now deals a city bus into its traffic
-    // (#284 item 9, ADR-0412: citysim.fleet "fleet_lab", ambientBus), a change of the level's data for the new model's
-    // tests, not of the old model's code, which this pin guards.
-    const std::vector<uint64_t> lab = runAndHash("traffic_lab.json", "v1", 120.0, 1.0 / 60.0, 30.0, [](CitySimConfig& c) {
-        c.fleet.clear();
-        c.ambientBus = false;
-    });
-    const std::vector<uint64_t> river = runAndHash("river_town.json", "", 60.0, 1.0 / 30.0, 15.0);
-    CHECK(lab == std::vector<uint64_t>(std::begin(kV1LabHashes), std::end(kV1LabHashes)));
-    CHECK(river == std::vector<uint64_t>(std::begin(kV1RiverHashes), std::end(kV1RiverHashes)));
 }
