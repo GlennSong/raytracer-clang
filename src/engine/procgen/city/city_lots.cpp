@@ -1873,6 +1873,252 @@ static void sculptUnderPad(LotBuilding& g, const Poly2& poly,
     g.color = Vec3(1, 1, 1);
 }
 
+// WHAT A BUILDING MAY FRONT (Glenn, 2026-09-29: "buildings shouldn't face a freeway as a road since that's
+// not an accessible road"): a door, its walk and a plaza's mouths reach for city streets. Freeway and ramp
+// edges stay in the graph for what needs them (the deck-shadow test below) but are never frontage.
+// ...and ON THE GROUND (Glenn, 2026-09-30: "assuming the city road is on the ground in front of the house"):
+// a city street carried over the block on a bridge is no one's front door either.
+static bool faces(const RoadEdge& e) { return e.klass != RoadClass::Freeway && e.klass != RoadClass::Ramp && e.layer == 0; }
+
+// WHAT THE LOT PASS ASKS OF THE ROADS. Every question this file puts to the roads is one of the functions below, and
+// nothing outside this type reads a road link. Three kinds of question:
+//   KEEPING OFF    is this point clear of every road; how deep into a road it is and which way is out; how far the
+//                  nearest road surface is.
+//   FACING         the nearest street a building may face, where that street's carriageway and sidewalk end, whether
+//                  a block edge lies beside a street.
+//   FREEWAYS       is this point under a freeway or ramp deck, or within a clearance of one at ground level.
+// A "link" is one straight piece of a road's centre line with the road's width. Today the answers are worked out
+// from the lot pass's own copy of the roads (the graph handed to growLotBuildings) plus the alleys the pass cuts
+// itself, which are kept here as plain segments. The road model's streets and the drawn deck are to answer them
+// instead (docs/road-model-design.md step 5); the questions stay.
+class LotRoads {
+public:
+    // A service lane the lot pass cut through a block: its centre line's two ends and its paved width.
+    struct Alley { Vec2 a, b; Real width = 0; };
+    // How near a building may stand to an alley's paved edge. A service lane wants buildings AT its edge (garage
+    // doors open onto an alley). The lane is centred on the rows' SHARED lot boundary and buildings already stand
+    // lotSetback (1.4 m) off that line, so a 2.8 m pavement with almost no clearance costs the existing rows
+    // NOTHING: 0.7 m of clearance measurably shrank the inner rows and COST coverage (living_city 48.6% -> 47.3%);
+    // 0.35 m broke even.
+    static constexpr Real kAlleyClear = 0.05;
+
+    // `streets`: the roads (null: the level has none, and every question answers as if no road were near).
+    // `clearance`: how far beyond a road's half width a building must stand (alleys take kAlleyClear instead).
+    LotRoads(const RoadGraph* streets, Real clearance) : streets_(streets), clearance_(clearance) { indexLinks(); }
+
+    bool known() const { return streets_ != nullptr; }                         // the level has roads to ask about
+    bool any() const { return streets_ && !streets_->edges.empty(); }          // ...and at least one link
+    // Some road is a freeway, a ramp or a street carried over the ground: one no building may front.
+    bool hasRoadsNotToFront() const { return anyNotToFront_; }
+
+    void addAlley(const Vec2& a, const Vec2& b, Real width) { alleys_.push_back(Alley{a, b, width}); }
+    const std::vector<Alley>& alleys() const { return alleys_; }
+
+    // ---- keeping off --------------------------------------------------------------------------------------------
+    // Is `c` clear of every road and alley: at least half the road's width plus the clearance from its centre line?
+    bool clearOf(const Vec2& c) const {
+        if (!streets_) return true;
+        return !anyLink([&](const Vec2& a, const Vec2& b, Real width, bool alley) {
+            const Real clear = alley ? kAlleyClear : clearance_;
+            return distanceTo(c, a, b) < width * 0.5 + clear;
+        });
+    }
+    // Is `c` within `margin` of a road's or an alley's surface (margin 0: on the carriageway itself)?
+    bool onOrWithin(const Vec2& c, Real margin) const {
+        if (!streets_) return false;
+        return anyLink([&](const Vec2& a, const Vec2& b, Real width, bool) { return distanceTo(c, a, b) < width * 0.5 + margin; });
+    }
+    // How far `v` must move to stand clear of the road it is deepest inside (0: it is clear of them all), and the
+    // way out of that road, `away` (untouched when clear).
+    Real deepestInside(const Vec2& v, Vec2& away) const {
+        Real worst = 0;
+        if (!streets_) return worst;
+        anyLink([&](const Vec2& a, const Vec2& b, Real width, bool alley) {
+            const Real clear = alley ? kAlleyClear : clearance_;
+            Vec2 q;
+            const Real need = width * 0.5 + clear;
+            const Real d = distanceTo(v, a, b, &q);
+            if (need - d > worst) {
+                worst = need - d;
+                away = d > 1e-6 ? (v - q) * (1.0 / d) : Vec2(1, 0);
+            }
+            return false;
+        });
+        return worst;
+    }
+    // Distance from `c` to the nearest road or alley SURFACE (centre line distance less half the width, never
+    // below 0). 0 when the level has no roads.
+    Real surfaceDistance(const Vec2& c) const {
+        if (!streets_) return Real(0);
+        Real best = Real(1e30);
+        anyLink([&](const Vec2& a, const Vec2& b, Real width, bool) {
+            Real d = distanceTo(c, a, b) - width * 0.5;
+            best = std::min(best, d < 0 ? Real(0) : d);
+            return false;
+        });
+        return best;
+    }
+
+    // ---- facing -------------------------------------------------------------------------------------------------
+    // The nearest point on the centre line of a street a building may face (never a freeway, a ramp or a bridge);
+    // `from` itself when there is none.
+    Vec2 nearestFrontable(const Vec2& from) const {
+        Real best = 1e30;
+        Vec2 q = from;
+        eachStreetLink([&](const RoadEdge& e, const Vec2& ra, const Vec2& rb) {
+            if (!faces(e)) return;
+            Vec2 cp;
+            const Real dd = distanceTo(from, ra, rb, &cp);
+            if (dd < best) { best = dd; q = cp; }
+        });
+        return q;
+    }
+    // How far `q` still is from the pavement of the nearest street a building may face: beyond that street's half
+    // width and a sidewalk `sidewalkWidth` wide (0: on the pavement or the road).
+    Real shortOfPavement(const Vec2& q, Real sidewalkWidth) const {
+        Real best = Real(1e30), bestHw = 0;
+        eachStreetLink([&](const RoadEdge& e, const Vec2& ra, const Vec2& rb) {
+            if (!faces(e)) return;   // a building fronts a street, never a freeway or a ramp
+            const Real d = distanceTo(q, ra, rb);
+            if (d < best) { best = d; bestHw = e.width * 0.5; }
+        });
+        return std::max(Real(0), best - (bestHw + sidewalkWidth));
+    }
+    // The carriageway edge of the nearest street a building may face, on `from`'s side of it and 0.4 m beyond:
+    // `kerb`. Returns the distance from `from` to that street's centre line (1e30 and `kerb` untouched: none).
+    Real nearestCarriagewayEdge(const Vec2& from, Vec2& kerb) const {
+        Real best = 1e30;
+        eachStreetLink([&](const RoadEdge& e, const Vec2& ra, const Vec2& rb) {
+            if (!faces(e)) return;   // a building fronts a street, never a freeway or a ramp
+            Vec2 q;
+            const Real d = distanceTo(from, ra, rb, &q);
+            if (d >= best || d < 1e-6) return;
+            best = d;
+            // stop at the carriageway edge, on `from`'s side
+            kerb = q + (from - q) * ((e.width * 0.5 + 0.4) / d);
+        });
+        return best;
+    }
+    // The nearest road of any kind to `m`: the distance to its centre line (1e30: none) and its half width.
+    Real nearestRoad(const Vec2& m, Real& halfWidth) const {
+        Real best = 1e30;
+        eachStreetLink([&](const RoadEdge& e, const Vec2& ra, const Vec2& rb) {
+            const Real d = distanceTo(m, ra, rb);
+            if (d < best) { best = d; halfWidth = e.width * 0.5; }
+        });
+        return best;
+    }
+    // Does the block edge a-b lie beside a street a building may face? Asked at its quarter points: a street when
+    // most of them lie nearest one (a merged edge can run past a ramp's end). No road within 60 m: a street.
+    bool edgeBesideStreet(const Vec2& a, const Vec2& b) const {
+        int street = 0, freeway = 0;
+        for (Real t : {Real(0.25), Real(0.5), Real(0.75)}) {
+            const Vec2 q = a + (b - a) * t;
+            Real best = Real(60); int bestE = -1;
+            const int qx = static_cast<int>(std::floor(q.x / 32)), qz = static_cast<int>(std::floor(q.y / 32));
+            for (int cx = qx - 2; cx <= qx + 2; ++cx) for (int cz = qz - 2; cz <= qz + 2; ++cz) {
+                const std::unordered_map<long long, std::vector<int>>::const_iterator it = grid_.find(cellKey(cx, cz));
+                if (it == grid_.end()) continue;
+                for (int ei : it->second) {
+                    const RoadEdge& e = streets_->edges[static_cast<std::size_t>(ei)];
+                    const Real d = distanceTo(q, streets_->nodes[e.a].pos, streets_->nodes[e.b].pos) - e.width * Real(0.5);
+                    if (d < best) { best = d; bestE = ei; }
+                }
+            }
+            if (bestE < 0 || faces(streets_->edges[static_cast<std::size_t>(bestE)])) ++street;
+            else ++freeway;
+        }
+        return street >= freeway;
+    }
+
+    // ---- freeways -----------------------------------------------------------------------------------------------
+    // Is `q` within `clear` of the carriageway of a freeway or ramp at ground level?
+    bool besideFreeway(const Vec2& q, Real clear) const {
+        const int qx = static_cast<int>(std::floor(q.x / 32)), qz = static_cast<int>(std::floor(q.y / 32));
+        for (int cx = qx - 1; cx <= qx + 1; ++cx) for (int cz = qz - 1; cz <= qz + 1; ++cz) {
+            const std::unordered_map<long long, std::vector<int>>::const_iterator it = grid_.find(cellKey(cx, cz));
+            if (it == grid_.end()) continue;
+            for (int ei : it->second) {
+                const RoadEdge& e = streets_->edges[static_cast<std::size_t>(ei)];
+                if (faces(e) || e.layer != 0) continue;   // at-grade freeway and ramp carriageways
+                if (distanceTo(q, streets_->nodes[e.a].pos, streets_->nodes[e.b].pos) - e.width * Real(0.5) < clear) return true;
+            }
+        }
+        return false;
+    }
+    // Is `c` under a freeway or ramp deck (within half the deck's width of its centre line)? `nearestIsRamp`
+    // (optional): whether the nearest such deck is a ramp.
+    bool underDeck(const Vec2& c, bool* nearestIsRamp) const {
+        if (!streets_) return false;
+        bool under = false; Real best = 1e30;
+        eachStreetLink([&](const RoadEdge& e, const Vec2& a, const Vec2& b) {
+            if (e.klass != RoadClass::Freeway && e.klass != RoadClass::Ramp) return;
+            const Real d = distanceTo(c, a, b);
+            if (d < e.width * 0.5) {                             // within the deck shadow
+                under = true;
+                if (d < best) { best = d; if (nearestIsRamp) *nearestIsRamp = e.klass == RoadClass::Ramp; }
+            }
+        });
+        return under;
+    }
+
+private:
+    // Distance from `p` to the segment a-b; `nearest` (optional) takes the point of the segment nearest `p`.
+    static Real distanceTo(const Vec2& p, const Vec2& a, const Vec2& b, Vec2* nearest = nullptr) {
+        Vec2 ab = b - a;
+        Real len2 = ab.lengthSquared();
+        Real t = len2 > 1e-12 ? dot(p - a, ab) / len2 : 0.0;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        Vec2 q(a.x + ab.x * t, a.y + ab.y * t);
+        if (nearest) *nearest = q;
+        return (p - q).length();
+    }
+    static bool linkOk(const RoadGraph& g, const RoadEdge& e) {
+        return !(e.a < 0 || e.b < 0 || e.a >= static_cast<int>(g.nodes.size()) || e.b >= static_cast<int>(g.nodes.size()));
+    }
+    static long long cellKey(int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); }
+    // Every road link, in the roads' own order: fn(link, its two ends).
+    template <class Fn> void eachStreetLink(Fn fn) const {
+        if (!streets_) return;
+        for (const RoadEdge& e : streets_->edges) {
+            if (!linkOk(*streets_, e)) continue;
+            fn(e, streets_->nodes[e.a].pos, streets_->nodes[e.b].pos);
+        }
+    }
+    // Every road link, then every alley: fn(end, end, width, is it an alley) -> true to stop. True when one stopped it.
+    template <class Fn> bool anyLink(Fn fn) const {
+        if (streets_)
+            for (const RoadEdge& e : streets_->edges) {
+                if (!linkOk(*streets_, e)) continue;
+                if (fn(streets_->nodes[e.a].pos, streets_->nodes[e.b].pos, e.width, false)) return true;
+            }
+        for (const Alley& al : alleys_)
+            if (fn(al.a, al.b, al.width, true)) return true;
+        return false;
+    }
+    // The road links binned once on a 32 m grid, for the two questions asked of every block edge and lot corner.
+    void indexLinks() {
+        if (!any()) return;
+        constexpr Real kCell = 32;
+        for (std::size_t ei = 0; ei < streets_->edges.size(); ++ei) {
+            const RoadEdge& e = streets_->edges[ei];
+            if (!linkOk(*streets_, e)) continue;
+            anyNotToFront_ = anyNotToFront_ || !faces(e);
+            const Vec2& ra = streets_->nodes[e.a].pos; const Vec2& rb = streets_->nodes[e.b].pos;
+            const int x0 = static_cast<int>(std::floor(std::min(ra.x, rb.x) / kCell)), x1 = static_cast<int>(std::floor(std::max(ra.x, rb.x) / kCell));
+            const int z0 = static_cast<int>(std::floor(std::min(ra.y, rb.y) / kCell)), z1 = static_cast<int>(std::floor(std::max(ra.y, rb.y) / kCell));
+            if ((x1 - x0 + 1) * (z1 - z0 + 1) > 4096) continue;   // a degenerate span; never on a real net
+            for (int cx = x0; cx <= x1; ++cx) for (int cz = z0; cz <= z1; ++cz) grid_[cellKey(cx, cz)].push_back(static_cast<int>(ei));
+        }
+    }
+
+    const RoadGraph* streets_ = nullptr;
+    Real clearance_ = 0;
+    std::vector<Alley> alleys_;
+    std::unordered_map<long long, std::vector<int>> grid_;
+    bool anyNotToFront_ = false;
+};
+
 // A WALK FROM EVERY DOOR TO THE PAVEMENT (Glenn, 2026-09-21: "If it can't [face the
 // street] it would be nice to have a walk way to the door and the walk way should be on
 // the ground leading to the house's front door").
@@ -1889,34 +2135,11 @@ static void sculptUnderPad(LotBuilding& g, const Poly2& poly,
 // The ribbon DRAPES: a joint every metre, each vertex ground-relative (kDrapedPartBase),
 // so once the host lays it on the finished terrain it follows it instead of floating
 // over a dip or cutting into a rise.
-// WHAT A BUILDING MAY FRONT (Glenn, 2026-09-29: "buildings shouldn't face a freeway as a road since that's
-// not an accessible road"): a door, its walk and a plaza's mouths reach for city streets. Freeway and ramp
-// edges stay in the graph for what needs them (the deck-shadow test below) but are never frontage.
-// ...and ON THE GROUND (Glenn, 2026-09-30: "assuming the city road is on the ground in front of the house"):
-// a city street carried over the block on a bridge is no one's front door either.
-static bool faces(const RoadEdge& e) { return e.klass != RoadClass::Freeway && e.klass != RoadClass::Ramp && e.layer == 0; }
-
-void sculptDoorWalks(const LotBuilding& b, const RoadGraph* roads, Real sidewalkWidth,
+void sculptDoorWalks(const LotBuilding& b, const LotRoads& roads, Real sidewalkWidth,
                      const Poly2* block, std::vector<RenderMesh>* outParts) {
-    if (!outParts || !roads || roads->edges.empty() || sidewalkWidth <= 0) return;
+    if (!outParts || !roads.any() || sidewalkWidth <= 0) return;
     // How far past the sidewalk band this point still is (0 = on it or beyond it).
-    auto pastBand = [&](const Vec2& q) {
-        Real best = Real(1e30), bestHw = 0;
-        for (const RoadEdge& e : roads->edges) {
-            if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(roads->nodes.size()) ||
-                e.b >= static_cast<int>(roads->nodes.size())) continue;
-            if (!faces(e)) continue;   // a building fronts a street, never a freeway or a ramp
-            const Vec2& ra = roads->nodes[e.a].pos;
-            const Vec2& rb = roads->nodes[e.b].pos;
-            const Vec2 ab = rb - ra;
-            const Real len2 = ab.lengthSquared();
-            Real t = len2 > 1e-12 ? dot(q - ra, ab) / len2 : 0.0;
-            t = std::max(Real(0), std::min(Real(1), t));
-            const Real d = (q - (ra + ab * t)).length();
-            if (d < best) { best = d; bestHw = e.width * 0.5; }
-        }
-        return std::max(Real(0), best - (bestHw + sidewalkWidth));
-    };
+    auto pastBand = [&](const Vec2& q) { return roads.shortOfPavement(q, sidewalkWidth); };
     // GROUND-RELATIVE (kDrapedPartBase): y is the lift over the ground; the host
     // lays the ribbon on the finished terrain.
     auto gy = [](const Vec2&) { return Real(0); };
@@ -2390,7 +2613,7 @@ void sculptParking(LotBuilding& b, const Poly2& lotP, const SiteFrame& f, Real y
 
 void sculptPlaza(LotBuilding& b, const Poly2& planIn,
                  const std::function<Real(Real, Real)>& ground, uint32_t seed,
-                 std::vector<RenderMesh>* outParts, const RoadGraph* roads,
+                 std::vector<RenderMesh>* outParts, const LotRoads& roads,
                  std::vector<TerrainFlatten>* outFlatten = nullptr,
                  Real meshCell = 3.0) {
     if (!outParts || planIn.size() < 3) return;
@@ -2475,29 +2698,12 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
     // foot to the nearest carriageway edge — a paver ribbon that follows the
     // terrain with side skirts (the same construction the park spokes use),
     // so the plaza is HOOKED to its sidewalks instead of floating in a lot.
-    if (roads) {
+    if (roads.known()) {
         RenderMesh walk;
         for (const Mouth& mo : mouths) {
-            Real best = 1e30;
+            // stop the walk at the carriageway edge, on the mouth's side
             Vec2 curb{};
-            for (const RoadEdge& e : roads->edges) {
-                if (e.a < 0 || e.b < 0 ||
-                    e.a >= static_cast<int>(roads->nodes.size()) ||
-                    e.b >= static_cast<int>(roads->nodes.size())) continue;
-                if (!faces(e)) continue;   // a building fronts a street, never a freeway or a ramp
-                const Vec2& ra = roads->nodes[e.a].pos;
-                const Vec2& rb = roads->nodes[e.b].pos;
-                Vec2 ab = rb - ra;
-                Real len2 = ab.lengthSquared();
-                Real t = len2 > 1e-12 ? dot(mo.foot - ra, ab) / len2 : 0.0;
-                t = t < 0 ? 0 : (t > 1 ? 1 : t);
-                Vec2 q(ra.x + ab.x * t, ra.y + ab.y * t);
-                const Real d = (q - mo.foot).length();
-                if (d >= best || d < 1e-6) continue;
-                best = d;
-                // stop the walk at the carriageway edge, on the mouth's side
-                curb = q + (mo.foot - q) * ((e.width * 0.5 + 0.4) / d);
-            }
+            const Real best = roads.nearestCarriagewayEdge(mo.foot, curb);
             const Real len = (curb - mo.foot).length();
             if (best > 1e29 || len < 1.2 || len > 28.0) continue;
             Vec2 dir = (curb - mo.foot) * (1.0 / len);
@@ -2972,7 +3178,7 @@ TerrainFlatten lotPadFlatten(const LotBuilding& lb, double apron, double falloff
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           const LotParams& pIn, LotPlanDebug* debug,
                                           std::vector<RenderMesh>* outParts,
-                                          const RoadGraph* roads, Real roadClearance,
+                                          const RoadGraph* streetLinks, Real roadClearance,
                                           std::vector<RenderMesh>* outFlatParts,
                                           std::vector<TerrainFlatten>* outGrade) {
     std::vector<Poly2> paseoGrades;   // the open-air malls' footprints, graded flat after PASS A
@@ -3051,46 +3257,16 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     districts.hubRadii = p.hubRadii;
     districts.hubRadius = p.hubRadius;
     districts.seed = p.seed;
-    // Stage-10 ALLEYS live in their own small graph BESIDE the (const) sampled
-    // graph: the frontage gate counts them as street surface, and the clearance
-    // passes keep buildings just off the pavement. An Alley-class edge takes a
-    // small FIXED clearance — a garage may abut a service lane; a tower may
-    // not abut an arterial — so the lane doesn't sterilize the rows it exists
-    // to serve.
-    RoadGraph alleyGraph;
-    // Abutting: a service lane wants buildings AT its edge (garage doors open
-    // onto an alley). The lane is centred on the rows' SHARED lot boundary and
-    // buildings already stand lotSetback (1.4 m) off that line — so a 2.8 m
-    // pavement with epsilon clearance costs the existing rows NOTHING, which
-    // is the whole trick: 0.7 m of clearance measurably shrank the inner rows
-    // and COST coverage (living_city 48.6% -> 47.3%); 0.35 m broke even.
-    constexpr Real kAlleyClear = 0.05;
-    // Road-clearance corner test (device: buildings poking onto the street): a
-    // building box corner must stay `edge width/2 + roadClearance` from every
-    // road centreline. Checked against the SAMPLED graph the asphalt is meshed
-    // from, so a curvy road that bows into a straight-edged block still pushes
-    // the building back. Folded into scopeFromFootprint's shrink-to-fit below.
-    auto clearOfRoads = [&](const Vec2& c) {
-        if (!roads) return true;
-        const RoadGraph* gs[2] = {roads, &alleyGraph};
-        for (int gi = 0; gi < 2; ++gi) {
-            const RoadGraph& g = *gs[gi];
-            const Real clear = gi == 0 ? roadClearance : kAlleyClear;
-            for (const RoadEdge& e : g.edges) {
-                if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(g.nodes.size()) ||
-                    e.b >= static_cast<int>(g.nodes.size())) continue;
-                const Vec2& a = g.nodes[e.a].pos;
-                const Vec2& b = g.nodes[e.b].pos;
-                Vec2 ab = b - a;
-                Real len2 = ab.lengthSquared();
-                Real t = len2 > 1e-12 ? dot(c - a, ab) / len2 : 0.0;
-                t = t < 0 ? 0 : (t > 1 ? 1 : t);
-                Vec2 q(a.x + ab.x * t, a.y + ab.y * t);
-                if ((c - q).length() < e.width * 0.5 + clear) return false;
-            }
-        }
-        return true;
-    };
+    // EVERYTHING THIS PASS ASKS OF THE ROADS goes through this one look-up (LotRoads, above). It also holds the
+    // Stage-10 ALLEYS the pass cuts itself, beside the roads it was handed: the frontage gate counts them as street
+    // surface, and the clearance questions keep buildings just off their pavement. An alley takes a small FIXED
+    // clearance (LotRoads::kAlleyClear) — a garage may abut a service lane; a tower may not abut an arterial — so
+    // the lane doesn't sterilize the rows it exists to serve.
+    // The clearance question (device: buildings poking onto the street): a building box corner must stay
+    // `road width/2 + roadClearance` from every road centre line. Asked of the sampled roads the asphalt is meshed
+    // from, so a curvy road that bows into a straight-edged block still pushes the building back. Folded into
+    // scopeFromFootprint's shrink-to-fit below.
+    LotRoads lotRoads(streetLinks, roadClearance);
 
     // TREES IN THE ROAD (Glenn, 2026-09-17: "one lot being built in the middle
     // of a street which is placing trees in the road"). The BUILDING is shrunk
@@ -3111,51 +3287,27 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     int lotsInCarriageway = 0;   // PARCELS that reach into a lane
     std::vector<Vec2> rejectedPadAt;   // WHERE the road-locked pads were
     auto pruneTreeSpotsIntoRoad = [&](std::vector<Vec3>& spots) {
-        if (!roads || spots.empty()) return;
+        if (!lotRoads.known() || spots.empty()) return;
         const std::size_t before = spots.size();
         spots.erase(std::remove_if(spots.begin(), spots.end(),
                                    [&](const Vec3& sp) {
-                                       return !clearOfRoads(Vec2(sp.x, sp.z));
+                                       return !lotRoads.clearOf(Vec2(sp.x, sp.z));
                                    }),
                     spots.end());
         treeSpotsPruned += static_cast<int>(before - spots.size());
     };
-    // Distance from a point to the nearest road SURFACE edge (centreline
-    // distance minus half-width, floored at 0). Frontage gate: a lot whose
-    // whole footprint sits farther than the frontage bound from every road
-    // goes GREEN instead of building — stage 4 of the city contract ("lots
-    // touch the road; the middle of a block is parks and plazas").
-    auto roadSurfaceDist = [&](const Vec2& c) {
-        if (!roads) return Real(0);
-        Real best = Real(1e30);
-        const RoadGraph* gs[2] = {roads, &alleyGraph};
-        for (const RoadGraph* gp : gs) {
-            const RoadGraph& g = *gp;
-            for (const RoadEdge& e : g.edges) {
-                if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(g.nodes.size()) ||
-                    e.b >= static_cast<int>(g.nodes.size())) continue;
-                const Vec2& a = g.nodes[e.a].pos;
-                const Vec2& b = g.nodes[e.b].pos;
-                Vec2 ab = b - a;
-                Real len2 = ab.lengthSquared();
-                Real t = len2 > 1e-12 ? dot(c - a, ab) / len2 : 0.0;
-                t = t < 0 ? 0 : (t > 1 ? 1 : t);
-                Vec2 q(a.x + ab.x * t, a.y + ab.y * t);
-                Real d = (c - q).length() - e.width * 0.5;
-                best = std::min(best, d < 0 ? Real(0) : d);
-            }
-        }
-        return best;
-    };
+    // (The frontage gate asks LotRoads::surfaceDistance: a lot whose whole footprint sits farther than the
+    // frontage bound from every road surface goes GREEN instead of building — stage 4 of the city contract
+    // ("lots touch the road; the middle of a block is parks and plazas").)
     // PUSH a polygon clear of the sampled road ribbons (roads-v2.1 R4-6c,
     // drive feedback: "parks don't sit on their lots and explode into the
-    // street including fences"). Buildings shrink-to-fit via clearOfRoads;
+    // street including fences"). Buildings shrink-to-fit via LotRoads::clearOf;
     // parks/greens used their raw footprint and a uniform inset that assumed
     // 4 m half-width roads — arterials and curved streets overran them, so
     // fences and trees stood in the carriageway. Edges are subdivided first
     // so a road bowing into a LONG park edge still gets pushed.
     auto pushPolyClearOfRoads = [&](Poly2 poly) {
-        if (!roads || poly.size() < 3) return poly;
+        if (!lotRoads.known() || poly.size() < 3) return poly;
         Poly2 dense;
         for (std::size_t i = 0; i < poly.size(); ++i) {
             const Vec2& a2 = poly[i];
@@ -3168,32 +3320,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         }
         for (Vec2& v : dense) {
             for (int guard = 0; guard < 4; ++guard) {
-                Real worst = 0;
                 Vec2 away(0, 0);
-                const RoadGraph* gs[2] = {roads, &alleyGraph};
-                for (int gi = 0; gi < 2; ++gi) {
-                    const RoadGraph& g = *gs[gi];
-                    const Real clear = gi == 0 ? roadClearance : kAlleyClear;
-                    for (const RoadEdge& e : g.edges) {
-                        if (e.a < 0 || e.b < 0 ||
-                            e.a >= static_cast<int>(g.nodes.size()) ||
-                            e.b >= static_cast<int>(g.nodes.size()))
-                            continue;
-                        const Vec2& a2 = g.nodes[e.a].pos;
-                        const Vec2& b2 = g.nodes[e.b].pos;
-                        Vec2 ab = b2 - a2;
-                        Real len2 = ab.lengthSquared();
-                        Real t = len2 > 1e-12 ? dot(v - a2, ab) / len2 : 0.0;
-                        t = t < 0 ? 0 : (t > 1 ? 1 : t);
-                        const Vec2 q(a2.x + ab.x * t, a2.y + ab.y * t);
-                        const Real need = e.width * 0.5 + clear;
-                        const Real d = (v - q).length();
-                        if (need - d > worst) {
-                            worst = need - d;
-                            away = d > 1e-6 ? (v - q) * (1.0 / d) : Vec2(1, 0);
-                        }
-                    }
-                }
+                const Real worst = lotRoads.deepestInside(v, away);
                 if (worst <= 0) break;
                 v = v + away * (worst + 0.2);
             }
@@ -3207,27 +3335,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         std::vector<char> badAt(dense.size(), 0);
         for (std::size_t vi = 0; vi < dense.size(); ++vi) {
             const Vec2& v = dense[vi];
-            const RoadGraph* gs[2] = {roads, &alleyGraph};
-            for (const RoadGraph* gp : gs) {
-                const RoadGraph& g = *gp;
-                for (const RoadEdge& e : g.edges) {
-                    if (e.a < 0 || e.b < 0 ||
-                        e.a >= static_cast<int>(g.nodes.size()) ||
-                        e.b >= static_cast<int>(g.nodes.size()))
-                        continue;
-                    const Vec2& a2 = g.nodes[e.a].pos;
-                    const Vec2& b2 = g.nodes[e.b].pos;
-                    Vec2 ab = b2 - a2;
-                    Real len2 = ab.lengthSquared();
-                    Real t = len2 > 1e-12 ? dot(v - a2, ab) / len2 : 0.0;
-                    t = t < 0 ? 0 : (t > 1 ? 1 : t);
-                    if ((v - (a2 + ab * t)).length() < e.width * 0.5 + 0.3) {
-                        ++bad;
-                        badAt[vi] = 1;
-                        break;
-                    }
-                }
-                if (badAt[vi]) break;
+            if (lotRoads.onOrWithin(v, 0.3)) {
+                ++bad;
+                badAt[vi] = 1;
             }
         }
         if (bad * 5 > static_cast<int>(dense.size()))   // > 20% hopeless
@@ -3247,41 +3357,22 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // Does a finished pad still cover roadway? Samples the RING and the
     // centroid against the same predicate the buildings use, so this asks the
     // question at the clearance the pass actually intends.
-    // ON THE ASPHALT. clearOfRoads() carries the 4.6 m building clearance, so a
+    // ON THE ASPHALT. LotRoads::clearOf carries the 4.6 m building clearance, so a
     // park touching the pavement trips it without being in the road at all.
     // This asks the question Glenn actually asked: is the point on the
     // carriageway surface?
-    auto onCarriageway = [&](const Vec2& c) {
-        if (!roads) return false;
-        const RoadGraph* gs[2] = {roads, &alleyGraph};
-        for (const RoadGraph* gp : gs) {
-            const RoadGraph& g = *gp;
-            for (const RoadEdge& e : g.edges) {
-                if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(g.nodes.size()) ||
-                    e.b >= static_cast<int>(g.nodes.size())) continue;
-                const Vec2& a2 = g.nodes[e.a].pos;
-                const Vec2& b2 = g.nodes[e.b].pos;
-                Vec2 ab = b2 - a2;
-                Real len2 = ab.lengthSquared();
-                Real t = len2 > 1e-12 ? dot(c - a2, ab) / len2 : 0.0;
-                t = t < 0 ? 0 : (t > 1 ? 1 : t);
-                const Vec2 q(a2.x + ab.x * t, a2.y + ab.y * t);
-                if ((c - q).length() < e.width * 0.5) return true;
-            }
-        }
-        return false;
-    };
+    auto onCarriageway = [&](const Vec2& c) { return lotRoads.onOrWithin(c, 0); };
     auto padCoversRoad = [&](const Poly2& pad) {
         if (pad.size() < 3) return false;
         ++padsChecked;
         for (const Vec2& v : pad)
-            if (!clearOfRoads(v)) { ++padsStillInRoad; return true; }
-        if (!clearOfRoads(centroid(pad))) { ++padsStillInRoad; return true; }
+            if (!lotRoads.clearOf(v)) { ++padsStillInRoad; return true; }
+        if (!lotRoads.clearOf(centroid(pad))) { ++padsStillInRoad; return true; }
         // Edge midpoints: the case a deleted vertex leaves behind.
         bool near = false;
         for (std::size_t i = 0; i < pad.size(); ++i) {
             const Vec2 m = (pad[i] + pad[(i + 1) % pad.size()]) * 0.5;
-            if (!clearOfRoads(m)) { near = true; break; }
+            if (!lotRoads.clearOf(m)) { near = true; break; }
         }
         if (near) ++padsStillInRoad;
         return near;
@@ -3298,25 +3389,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // a road crossing a polygon must cross its boundary somewhere.
     auto padClearOrEmpty = [&](const Poly2& pad) -> Poly2 {
         if (pad.size() < 3) return pad;
-        auto hit = [&](const Vec2& c) {
-            if (!roads) return false;
-            const RoadGraph* gs2[2] = {roads, &alleyGraph};
-            for (const RoadGraph* gp : gs2)
-                for (const RoadEdge& e : gp->edges) {
-                    const RoadGraph& g = *gp;
-                    if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(g.nodes.size()) ||
-                        e.b >= static_cast<int>(g.nodes.size())) continue;
-                    const Vec2& a3 = g.nodes[e.a].pos;
-                    const Vec2& b3 = g.nodes[e.b].pos;
-                    Vec2 ab3 = b3 - a3;
-                    Real l2 = ab3.lengthSquared();
-                    Real t3 = l2 > 1e-12 ? dot(c - a3, ab3) / l2 : 0.0;
-                    t3 = t3 < 0 ? 0 : (t3 > 1 ? 1 : t3);
-                    const Vec2 q3(a3.x + ab3.x * t3, a3.y + ab3.y * t3);
-                    if ((c - q3).length() < e.width * 0.5) return true;
-                }
-            return false;
-        };
+        auto hit = [&](const Vec2& c) { return lotRoads.onOrWithin(c, 0); };
         const Vec2 c0 = centroid(pad);
         if (hit(c0)) { rejectedPadAt.push_back(c0); return Poly2{}; }
         for (std::size_t i2 = 0; i2 < pad.size(); ++i2) {
@@ -3342,33 +3415,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
         return false;
     };
-    // Under a FREEWAY/RAMP deck? The clearance graph carries the freeway
-    // right-of-way as RoadClass::Freeway / ::Ramp edges whose width is the deck
+    // Under a FREEWAY/RAMP deck (LotRoads::underDeck)? The roads carry the freeway
+    // right-of-way as freeway and ramp links whose width is the deck
     // SHADOW (set by the loader). A point within that shadow can't host a normal
     // building (it would clip the elevated structure) — the lot pass turns it
     // into deck-fitting open space instead (see PASS C).
-    auto underFreeway = [&](const Vec2& c, bool* nearestIsRamp) {
-        if (!roads) return false;
-        bool under = false; Real best = 1e30;
-        for (const RoadEdge& e : roads->edges) {
-            if (e.klass != RoadClass::Freeway && e.klass != RoadClass::Ramp) continue;
-            if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(roads->nodes.size()) ||
-                e.b >= static_cast<int>(roads->nodes.size())) continue;
-            const Vec2& a = roads->nodes[e.a].pos;
-            const Vec2& b = roads->nodes[e.b].pos;
-            Vec2 ab = b - a;
-            Real len2 = ab.lengthSquared();
-            Real t = len2 > 1e-12 ? dot(c - a, ab) / len2 : 0.0;
-            t = t < 0 ? 0 : (t > 1 ? 1 : t);
-            Vec2 q(a.x + ab.x * t, a.y + ab.y * t);
-            const Real d = (c - q).length();
-            if (d < e.width * 0.5) {                             // within the deck shadow
-                under = true;
-                if (d < best) { best = d; if (nearestIsRamp) *nearestIsRamp = e.klass == RoadClass::Ramp; }
-            }
-        }
-        return under;
-    };
     int underFwCount = 0;
     int sitesRectified = 0, sitesNoRect = 0, sitesRectUnfit = 0, pavedLots = 0;   // site-plan ledger (M1)
     // TERRAIN base for a plan: the LOWEST ground under its vertices so the
@@ -3671,8 +3722,6 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // reserve the lot and record the seed; the sculpt runs post-rebind.
     struct DeferredPark { std::size_t lot; uint32_t seed; };
     std::vector<DeferredPark> deferredParks;
-    struct DeferredAlley { Vec2 a, b; };
-    std::vector<DeferredAlley> deferredAlleys;
 
     // WHICH BLOCK EDGES ARE STREETS: a block edge whose nearest road is a freeway or a ramp gets no lots
     // (ParcelParams::isFrontage). The road segments are binned once on a 32 m grid; an edge is asked at its
@@ -3686,64 +3735,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // 6 m from the lot graph's carriageway edge: its ramp widths run ~2 m narrower than the drawn deck, and at 4 m
     // an office still stood 1.8 m from a ramp's asphalt
     constexpr Real kFreewayClear = 6.0;
-    if (roads && !roads->edges.empty()) {
-        constexpr Real kCell = 32;
-        auto segGrid = std::make_shared<std::unordered_map<long long, std::vector<int>>>();
-        auto key = [](int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); };
-        bool anyFreeway = false;
-        for (std::size_t ei = 0; ei < roads->edges.size(); ++ei) {
-            const RoadEdge& e = roads->edges[ei];
-            if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(roads->nodes.size()) || e.b >= static_cast<int>(roads->nodes.size())) continue;
-            anyFreeway = anyFreeway || !faces(e);
-            const Vec2& ra = roads->nodes[e.a].pos; const Vec2& rb = roads->nodes[e.b].pos;
-            const int x0 = static_cast<int>(std::floor(std::min(ra.x, rb.x) / kCell)), x1 = static_cast<int>(std::floor(std::max(ra.x, rb.x) / kCell));
-            const int z0 = static_cast<int>(std::floor(std::min(ra.y, rb.y) / kCell)), z1 = static_cast<int>(std::floor(std::max(ra.y, rb.y) / kCell));
-            if ((x1 - x0 + 1) * (z1 - z0 + 1) > 4096) continue;   // a degenerate span; never on a real net
-            for (int cx = x0; cx <= x1; ++cx) for (int cz = z0; cz <= z1; ++cz) (*segGrid)[key(cx, cz)].push_back(static_cast<int>(ei));
-        }
-        if (anyFreeway) {
-            if (!nearFreeway) {
-                const RoadGraph* g = roads;
-                nearFreeway = [g, segGrid, key](const Vec2& q) {
-                    const int qx = static_cast<int>(std::floor(q.x / 32)), qz = static_cast<int>(std::floor(q.y / 32));
-                    for (int cx = qx - 1; cx <= qx + 1; ++cx) for (int cz = qz - 1; cz <= qz + 1; ++cz) {
-                        auto it = segGrid->find(key(cx, cz)); if (it == segGrid->end()) continue;
-                        for (int ei : it->second) {
-                            const RoadEdge& e = g->edges[static_cast<std::size_t>(ei)];
-                            if (faces(e) || e.layer != 0) continue;   // at-grade freeway and ramp carriageways
-                            const Vec2& ra = g->nodes[e.a].pos; const Vec2& rb = g->nodes[e.b].pos;
-                            const Vec2 ab = rb - ra; const Real l2 = ab.lengthSquared();
-                            Real u = l2 > 1e-12 ? dot(q - ra, ab) / l2 : Real(0); u = std::max(Real(0), std::min(Real(1), u));
-                            if ((q - (ra + ab * u)).length() - e.width * Real(0.5) < kFreewayClear) return true;
-                        }
-                    }
-                    return false;
-                };
-            }
-            const RoadGraph* g = roads;
-            isFrontage = [g, segGrid, key](const Vec2& a, const Vec2& b) {
-                int street = 0, freeway = 0;
-                for (Real t : {Real(0.25), Real(0.5), Real(0.75)}) {
-                    const Vec2 q = a + (b - a) * t;
-                    Real best = Real(60); int bestE = -1;
-                    const int qx = static_cast<int>(std::floor(q.x / 32)), qz = static_cast<int>(std::floor(q.y / 32));
-                    for (int cx = qx - 2; cx <= qx + 2; ++cx) for (int cz = qz - 2; cz <= qz + 2; ++cz) {
-                        auto it = segGrid->find(key(cx, cz)); if (it == segGrid->end()) continue;
-                        for (int ei : it->second) {
-                            const RoadEdge& e = g->edges[static_cast<std::size_t>(ei)];
-                            const Vec2& ra = g->nodes[e.a].pos; const Vec2& rb = g->nodes[e.b].pos;
-                            const Vec2 ab = rb - ra; const Real l2 = ab.lengthSquared();
-                            Real u = l2 > 1e-12 ? dot(q - ra, ab) / l2 : Real(0); u = std::max(Real(0), std::min(Real(1), u));
-                            const Real d = (q - (ra + ab * u)).length() - e.width * Real(0.5);
-                            if (d < best) { best = d; bestE = ei; }
-                        }
-                    }
-                    if (bestE < 0 || faces(g->edges[static_cast<std::size_t>(bestE)])) ++street;
-                    else ++freeway;
-                }
-                return street >= freeway;
-            };
-        }
+    // (both asked of the look-up, which lives as long as this pass: LotRoads::edgeBesideStreet, ::besideFreeway)
+    if (lotRoads.hasRoadsNotToFront()) {
+        const LotRoads* lr = &lotRoads;
+        if (!nearFreeway) nearFreeway = [lr](const Vec2& q) { return lr->besideFreeway(q, kFreewayClear); };
+        isFrontage = [lr](const Vec2& a, const Vec2& b) { return lr->edgeBesideStreet(a, b); };
     }
     for (std::size_t bi = 0; bi < blocks.size(); ++bi) {
         const Poly2& block = blocks[bi];
@@ -4543,11 +4539,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // failing rows' front line — into the CLEARANCE graph, not the parcel
     // geometry. The rows already exist and are correctly shaped; they only
     // lack legal frontage. The gate then passes them, buildings keep just off
-    // the pavement (Alley class, kAlleyClear), and a draped Path strip makes
+    // the pavement (LotRoads::kAlleyClear), and a draped Path strip makes
     // the lane visible. Measured on living_city this fires on rim rectangles;
     // a deep enclosed block whose parcel walk orphans a row takes the same cut.
     const Real kFrontReach = 14.0;
-    if (p.alleys && roads && p.alleyWidth > 0) {
+    if (p.alleys && lotRoads.known() &&p.alleyWidth > 0) {
         // Failing candidates, grouped by block: lot -> its front distance and
         // the vertex that attains it (the alley must pass near those fronts).
         struct BlockFail { std::vector<Vec2> fronts; };
@@ -4556,7 +4552,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             Real front = Real(1e30);
             Vec2 at = c.lot.footprint.front();
             for (const Vec2& v : c.lot.footprint) {
-                const Real d = roadSurfaceDist(v);
+                const Real d = lotRoads.surfaceDistance(v);
                 if (d < front) { front = d; at = v; }
             }
             if (front > kFrontReach) failing[c.block].fronts.push_back(at);
@@ -4611,23 +4607,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // the pavement visually meets the street's sidewalk band.
             const Vec2 A = through + axis * (tMin - Real(2.5));
             const Vec2 B = through + axis * (tMax + Real(2.5));
-            const int na = static_cast<int>(alleyGraph.nodes.size());
-            alleyGraph.nodes.push_back(RoadNode{A});
-            alleyGraph.nodes.push_back(RoadNode{B});
-            RoadEdge ae;
-            ae.a = na; ae.b = na + 1;
-            ae.width = static_cast<Real>(p.alleyWidth);
-            ae.klass = RoadClass::Alley;
-            alleyGraph.edges.push_back(ae);
+            lotRoads.addAlley(A, B, static_cast<Real>(p.alleyWidth));
             dbg->alleys.push_back({A, B});
-            // The PAVEMENT is emitted LATE (deferredAlleys, after the grade
-            // rebind): the inline emit sampled the pre-terrace ground — the
+            // The PAVEMENT is emitted LATE (from the look-up's alleys, after the
+            // grade rebind): the inline emit sampled the pre-terrace ground — the
             // same ordering bug the parks had — and stamped no flatten, so
             // the ribbon floated over graded hillsides and coarse-LOD tiles
             // bulged through it (device: "floating walkways", round 3 — the
             // scored hillside ribbons were ALLEY pavements between rows
             // whose houses the relief gate had rejected).
-            deferredAlleys.push_back({A, B});
         }
     }
 
@@ -4731,14 +4719,14 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // Deferred alley pavements: draped on the SAME terraced ground as the
     // parks, and each segment stamps its band into the flatten set so the
     // rendered terrain agrees at every LOD (see the sculptPark spoke ramps).
-    if (outParts && !deferredAlleys.empty()) {
+    if (outParts && !lotRoads.alleys().empty()) {
         // GROUND-RELATIVE ribbon (kDrapedPartBase); the RAMP it stamps grades the
         // terrain and so reads the absolute ground.
         RenderMesh& path = (*outParts)[drapedSlot(PartId::Path)];
         auto gy = [&](const Vec2& v) {
             return meshGround ? meshGround(v.x, v.y) : Real(0);
         };
-        for (const DeferredAlley& da : deferredAlleys) {
+        for (const LotRoads::Alley& da : lotRoads.alleys()) {
             const Vec2 dirN = normalize(da.b - da.a);
             const Vec2 perp(-dirN.y, dirN.x);
             const Real hw = p.alleyWidth * Real(0.5);
@@ -4999,7 +4987,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             {
                 Real front = Real(1e30);
                 for (const Vec2& v : lot.footprint)
-                    front = std::min(front, roadSurfaceDist(v));
+                    front = std::min(front, lotRoads.surfaceDistance(v));
                 if (front > 14.0) {
                     dbg->rejFrontage++;
                     if (std::getenv("RT_PARCEL_DEBUG")) {
@@ -5024,7 +5012,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             {
                 bool nearestIsRamp = false;
                 if (cand.landmark < 0 &&
-                    underFreeway(centroid(lot.footprint), &nearestIsRamp)) {
+                    lotRoads.underDeck(centroid(lot.footprint), &nearestIsRamp)) {
                     const uint32_t s =
                         mix(pp.seed, static_cast<uint32_t>(li) * 17u + 11u);
                     const Real roll = ProcRng(s).next();
@@ -5126,7 +5114,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     const Vec2 m2 = (v + rect[(vi + 1) % rect.size()]) * 0.5;
                     if (!pointInPolygon(host, v + (c0 - v) * 0.02)) return false;
                     if (!pointInPolygon(host, m2 + (c0 - m2) * 0.02)) return false;
-                    if (roads && (!clearOfRoads(v) || !clearOfRoads(m2)))
+                    if (lotRoads.known() &&(!lotRoads.clearOf(v) || !lotRoads.clearOf(m2)))
                         return false;
                 }
                 return true;
@@ -5248,7 +5236,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // RECOVERABLE: shrink-fit a box INSIDE the polygon (the same
                 // mechanism as the box fallback below) — a wedge or L off-cut
                 // still builds on its fat part instead of greening whole.
-                Scope sc = scopeFromFootprint(site, 0.0, 10.0, clearOfRoads);
+                Scope sc = scopeFromFootprint(site, 0.0, 10.0, [&](const Vec2& c) { return lotRoads.clearOf(c); });
                 const Real fitShort = std::min(sc.size.x, sc.size.z);
                 const Real fitLong = std::max(sc.size.x, sc.size.z);
                 Vec2 r2(sc.axis[0].x, sc.axis[0].z);
@@ -5501,7 +5489,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                    passages.end());
                     sculptPaseo(b, b.pad, mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u), outParts,
                                 p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0),
-                                [&](const Vec2& q) { return !clearOfRoads(q); }, passages);
+                                [&](const Vec2& q) { return !lotRoads.clearOf(q); }, passages);
                 } else if (rec.name == "bus_depot") {
                     // THE BUS DEPOT's yard; a block that cannot hold a row of bays is a park after all
                     if (sculptBusDepot(b, b.pad, lot.frontage, mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u), outParts)) {
@@ -5536,7 +5524,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     }
                     sculptQuad(b, b.pad, mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u), outParts,
                                p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0),
-                               [&](const Vec2& q) { return !clearOfRoads(q); }, rec.name == "campus_quad", hallDoors);
+                               [&](const Vec2& q) { return !lotRoads.clearOf(q); }, rec.name == "campus_quad", hallDoors);
                     if (std::getenv("RT_CAMPUS_DEBUG")) {
                         std::printf("[quad] %s: %zu hall doors onto it\n", rec.name.c_str(), hallDoors.size());
                         for (const LotBuilding& h : out) {
@@ -5583,24 +5571,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.color = bp.wallColor;
             // The door (and the retail front) faces the nearest STREET, not a
             // fixed +Z: aim faceDir at the closest point on the road network.
-            if (roads) {
-                Real best = 1e30;
-                Vec2 q = b.site;
-                for (const RoadEdge& e : roads->edges) {
-                    if (e.a < 0 || e.b < 0 ||
-                        e.a >= static_cast<int>(roads->nodes.size()) ||
-                        e.b >= static_cast<int>(roads->nodes.size())) continue;
-                    if (!faces(e)) continue;   // a building fronts a street, never a freeway or a ramp
-                    const Vec2& ra = roads->nodes[e.a].pos;
-                    const Vec2& rb = roads->nodes[e.b].pos;
-                    Vec2 ab = rb - ra;
-                    Real len2 = ab.lengthSquared();
-                    Real t = len2 > 1e-12 ? dot(b.site - ra, ab) / len2 : 0.0;
-                    t = t < 0 ? 0 : (t > 1 ? 1 : t);
-                    Vec2 cp(ra.x + ab.x * t, ra.y + ab.y * t);
-                    Real dd = (cp - b.site).length();
-                    if (dd < best) { best = dd; q = cp; }
-                }
+            if (lotRoads.known()) {
+                const Vec2 q = lotRoads.nearestFrontable(b.site);   // a building fronts a street, never a freeway or a ramp
                 Vec2 dir = q - b.site;
                 if (dir.length() > 1e-6) {
                     dir = normalize(dir);
@@ -5663,7 +5635,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 if (s3.size() >= 3) plan = s3;
             }
             bool planOk = plan.size() >= 3 && area(plan) > p.minLotArea * 0.5;
-            if (planOk && roads) {
+            if (planOk && lotRoads.known()) {
                 bool fit = false;
                 for (Real t : {Real(0), Real(0.8), Real(1.6), Real(2.6), Real(3.6)}) {
                     Poly2 cand = t > 0 ? inset(plan, t) : plan;
@@ -5675,7 +5647,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     // AND collider off the street.
                     bool clear = true;
                     for (const Vec2& v : cand)
-                        if (!clearOfRoads(v)) { clear = false; break; }
+                        if (!lotRoads.clearOf(v)) { clear = false; break; }
                     if (clear) { plan = cand; fit = true; break; }
                 }
                 // Corner-pocket rescue: a curvy road bows into ONE corner of
@@ -5689,9 +5661,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     bool ok = cand.size() >= 3;
                     for (Vec2& v : cand) {
                         int guard = 0;
-                        while (!clearOfRoads(v) && guard++ < 8)
+                        while (!lotRoads.clearOf(v) && guard++ < 8)
                             v = v + (c0 - v) * 0.18;
-                        if (!clearOfRoads(v)) { ok = false; break; }
+                        if (!lotRoads.clearOf(v)) { ok = false; break; }
                     }
                     if (ok && area(cand) > std::max(Real(40), area(plan) * 0.5)) {
                         plan = cand;
@@ -5761,7 +5733,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         bool ok = true;
                         const Vec2 cc = centroid(cand);
                         for (const Vec2& q : cand) {
-                            if (roads && !clearOfRoads(q)) { ok = false; break; }
+                            if (lotRoads.known() &&!lotRoads.clearOf(q)) { ok = false; break; }
                             if (!pointInPolygon(plan, q + (cc - q) * 0.02)) {
                                 ok = false; break;
                             }
@@ -5997,7 +5969,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     bool clear = true;
                     for (const Vec2& v : house)
                         if (!pointInPolygon(site, v) ||
-                            (roads && !clearOfRoads(v))) { clear = false; break; }
+                            (lotRoads.known() &&!lotRoads.clearOf(v))) { clear = false; break; }
                     if (clear) { plan = house; yardApplied = true; break; }
                     hw2 *= 0.82;
                     hd2 *= 0.82;
@@ -6023,7 +5995,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     }
                     bool clear = true;
                     for (const Vec2& v : circ)
-                        if ((roads && !clearOfRoads(v)) ||
+                        if ((lotRoads.known() &&!lotRoads.clearOf(v)) ||
                             !pointInPolygon(plan, v)) { clear = false; break; }
                     if (clear) { plan = circ; break; }
                 }
@@ -6046,7 +6018,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     const Poly2 rim = sec.tessellateForBays(rec.params.bayWidth);   // one even facade bay per chord
                     bool clear = rim.size() >= 3;
                     for (const Vec2& v : rim)
-                        if ((roads && !clearOfRoads(v)) || !pointInPolygon(plan, v)) { clear = false; break; }
+                        if ((lotRoads.known() &&!lotRoads.clearOf(v)) || !pointInPolygon(plan, v)) { clear = false; break; }
                     if (clear) { plan = rim; ensureCCW(plan); break; }
                     w *= 0.9;
                     d *= 0.9;
@@ -6066,7 +6038,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     for (int sx = -1; sx <= 1 && fits; sx += 2)
                         for (int sy = -1; sy <= 1; sy += 2) {
                             const Vec2 corner = sb.center + u * (len * 0.5 * sx) + v * (dep * 0.5 * sy);
-                            if ((roads && !clearOfRoads(corner)) || !pointInPolygon(plan, corner)) { fits = false; break; }
+                            if ((lotRoads.known() &&!lotRoads.clearOf(corner)) || !pointInPolygon(plan, corner)) { fits = false; break; }
                         }
                     if (fits) { boxOk = true; break; }
                     len *= 0.92;
@@ -6193,7 +6165,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         for (int sy = -1; sy <= 1; sy += 2) {
                             Vec2 corner = sb.center + u * (len * 0.5 * sx) +
                                           v * (dep * 0.5 * sy);
-                            if ((roads && !clearOfRoads(corner)) ||
+                            if ((lotRoads.known() &&!lotRoads.clearOf(corner)) ||
                                 !pointInPolygon(plan, corner)) {
                                 fits = false; break;
                             }
@@ -6288,7 +6260,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // out there read the hillside: a pad 4.8 m above the road beside it.
             {
                 const Vec2 nearestRoad(bp.faceDir.x, bp.faceDir.z);
-                const Vec2 probeDir = (roads && nearestRoad.length() > Real(1e-6)) ? nearestRoad
+                const Vec2 probeDir = (lotRoads.known() &&nearestRoad.length() > Real(1e-6)) ? nearestRoad
                                       : (lot.frontage.length() > Real(1e-6) ? lot.frontage : nearestRoad);
                 b.groundY = padPlaneFor(lot.footprint.size() >= 3 ? lot.footprint : (planOk ? plan : site),
                                         probeDir);
@@ -6349,7 +6321,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // (halfWidth + sidewalkWidth) from that road's centreline. The
                 // parcel, pad and yards stay where they are: the strip's ground
                 // is the road's own carve, and the plate's skirt covers the rise.
-                if (roads && p.sidewalkWidth > 0 && bf.foot.size() >= 3) {
+                if (lotRoads.known() &&p.sidewalkWidth > 0 && bf.foot.size() >= 3) {
                     auto distToBlock = [&](const Vec2& q) {
                         Real best = 1e30;
                         for (std::size_t i = 0; i < bf.foot.size(); ++i) {
@@ -6365,17 +6337,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         const Vec2 a = b.pavedLot[i], c = b.pavedLot[(i + 1) % b.pavedLot.size()];
                         if (distToBlock(a) > 0.6 || distToBlock(c) > 0.6) continue;   // not a block edge
                         const Vec2 m = (a + c) * 0.5;
-                        Real best = 1e30, bestHw = 0;
-                        for (const RoadEdge& e : roads->edges) {
-                            if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(roads->nodes.size()) ||
-                                e.b >= static_cast<int>(roads->nodes.size())) continue;
-                            const Vec2& ra = roads->nodes[e.a].pos;
-                            const Vec2& rb = roads->nodes[e.b].pos;
-                            const Vec2 ab = rb - ra; const Real len2 = ab.lengthSquared();
-                            Real t = len2 > 1e-12 ? dot(m - ra, ab) / len2 : 0.0; t = std::max(Real(0), std::min(Real(1), t));
-                            const Real d = (m - (ra + ab * t)).length();
-                            if (d < best) { best = d; bestHw = e.width * 0.5; }
-                        }
+                        Real bestHw = 0;
+                        const Real best = lotRoads.nearestRoad(m, bestHw);
                         const Real bandEdge = bestHw + p.sidewalkWidth;
                         // Only an edge that really lies beside that road (within a few
                         // metres of its band): an alley-side edge finds a far street.
@@ -6500,7 +6463,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.height = 0.35;             // the podium IS the massing
                 sculptPlaza(b, plan, meshGround,
                             mix(pp.seed, static_cast<uint32_t>(li) * 31u + 17u),
-                            outParts, roads, outGrade,
+                            outParts, lotRoads, outGrade,
                             p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0));
                 LOG_INFO << "[plaza] at (" << b.site.x << ", " << b.site.y
                          << ") area " << static_cast<int>(area(plan)) << " m2";
@@ -6544,7 +6507,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     towerOk = true;
                     for (const Vec2& v : tplan)
                         if (!pointInPolygon(plan, v) ||
-                            (roads && !clearOfRoads(v))) {
+                            (lotRoads.known() &&!lotRoads.clearOf(v))) {
                             towerOk = false;
                             break;
                         }
@@ -6677,7 +6640,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     const Real L = d0.length();
                     if (L < 2.4) continue;
                     const Vec2 d = d0 * (1.0 / L);
-                    auto onPaving = [&](const Vec2& q) { return pointInPolygon(b.pavedLot, q) && clearOfRoads(q); };
+                    auto onPaving = [&](const Vec2& q) { return pointInPolygon(b.pavedLot, q) && lotRoads.clearOf(q); };
                     Real room = 0;
                     for (Real t = 0.3; t <= 8.0; t += 0.25) {
                         if (!onPaving((sf.a + sf.b) * 0.5 + sf.n * t)) break;
@@ -6703,7 +6666,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (paved && planOk && b.pavedLot.size() >= 3 && outParts) {
                 BuildingMesh kit;
                 const Vec3 up(0, 1, 0);
-                auto onPaving = [&](const Vec2& q) { return pointInPolygon(b.pavedLot, q) && clearOfRoads(q); };
+                auto onPaving = [&](const Vec2& q) { return pointInPolygon(b.pavedLot, q) && lotRoads.clearOf(q); };
                 auto boxAt = [&](const Vec2& c, const Vec2& d, const Vec2& n, Real w, Real dep, Real y0, Real h, PartId part, const Vec3& col) {
                     emitBox(kit, Scope::standing(c, b.paveY + y0, d, n, Vec3(w, h, dep)), part, col);
                 };
@@ -6839,7 +6802,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                            mix(pp.seed, static_cast<uint32_t>(li) * 29u + 11u),
                            outParts);
             else
-                sculptDoorWalks(b, roads, p.sidewalkWidth, &bf.foot, outParts);
+                sculptDoorWalks(b, lotRoads, p.sidewalkWidth, &bf.foot, outParts);
             pruneTreeSpotsIntoRoad(b.treeSpots);
             out.push_back(std::move(b));
         }
