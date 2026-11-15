@@ -43,6 +43,12 @@ inline Vec2 normalize(const Vec2& v) {
 inline Vec2 perp(const Vec2& v) { return {-v.y, v.x}; }
 inline Real distance(const Vec2& a, const Vec2& b) { return (a - b).length(); }
 inline Vec2 lerp(const Vec2& a, const Vec2& b, Real t) { return a + (b - a) * t; }
+// Two plan points are the same within the tolerance: each coordinate apart by no more than `eps`, as the Vec3 one in
+// rt_math.h (so two points up to eps * sqrt(2) apart along a diagonal count). Pass a named tolerance (rt_math.h
+// kSamePoint, kWrittenStation). A NaN coordinate: false.
+inline bool approxEqual(const Vec2& a, const Vec2& b, Real eps) {
+    return approxEqual(a.x, b.x, eps) && approxEqual(a.y, b.y, eps);
+}
 
 using Poly2 = std::vector<Vec2>;
 

@@ -95,6 +95,34 @@ inline Vec3 maxVec(const Vec3& a, const Vec3& b) {
     return {std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z)};
 }
 
+// ---- Comparing computed numbers ---------------------------------------------------------------------------------------
+//
+// Two numbers that were each worked out (a sum of lengths, a distance along a path, a point projected onto a line) are
+// never compared with a bare ==, <= or <: the last bit of a sum decides the answer. (A stop placed AT a stretch's start
+// came out 7.1e-15 m past it, and `stop <= start` said no: the cause of a collision, 2026-11-14.) They are compared by
+// the questions below, with a NAMED tolerance that says how close counts as the same.
+//
+// THE FIVE QUESTIONS all read ONE number, d = a - b, against ONE tolerance, so they can never disagree at the boundary:
+//   strictlyBefore(a, b, eps)   a is before b by more than the tolerance      d < -eps
+//   approxEqual(a, b, eps)      a and b are the same within the tolerance     |d| <= eps
+//   strictlyPast(a, b, eps)     a is past b by more than the tolerance        d > eps
+//   atOrBefore(a, b, eps)       a is before b, or the same                    d <= eps     (before or equal)
+//   atOrPast(a, b, eps)         a is past b, or the same                      d >= -eps    (past or equal)
+// For finite a and b and eps >= 0, EXACTLY ONE of strictlyBefore, approxEqual, strictlyPast is true (tests/test_math.cpp
+// checks it at, just inside and just outside the tolerance). "Before" and "past" are along a number line: smaller and
+// larger.
+//
+// WHAT IS NOT A NUMBER, AND THE INFINITIES (each is deliberate):
+//   - a or b is NaN: every question answers false. Nothing is before, at or past a number that does not exist, so
+//     atOrBefore is NOT simply "not strictlyPast": a caller that must act on a NaN checks for it.
+//   - one side infinite, the other finite: strictly before or strictly past, as the sign says; never equal.
+//   - both infinite with the same sign: d is NaN, so every question answers false (two "no limit" values are not
+//     compared here: test for the sentinel itself). Opposite signs: strictly before or past.
+//   - eps must be zero or more. A NaN eps makes every question false; a negative one is a caller's fault (nothing is
+//     equal, and "before" and "past" can both hold).
+//
+// approxEqual keeps its old default tolerance (1e-6, no unit) for the callers written before the named ones. NEW CODE
+// PASSES A NAMED TOLERANCE; the ordered questions have no default for that reason.
 inline bool approxEqual(Real a, Real b, Real eps = 1e-6) {
     return std::abs(a - b) <= eps;
 }
@@ -102,6 +130,22 @@ inline bool approxEqual(const Vec3& a, const Vec3& b, Real eps = 1e-6) {
     return approxEqual(a.x, b.x, eps) && approxEqual(a.y, b.y, eps) &&
            approxEqual(a.z, b.z, eps);
 }
+inline bool strictlyBefore(Real a, Real b, Real eps) { return a - b < -eps; }
+inline bool strictlyPast(Real a, Real b, Real eps) { return a - b > eps; }
+inline bool atOrBefore(Real a, Real b, Real eps) { return a - b <= eps; }
+inline bool atOrPast(Real a, Real b, Real eps) { return a - b >= -eps; }
+
+// THE NAMED TOLERANCES FOR LENGTHS (metres). Each is defined here once; a file that needs one uses it by name.
+//   kSamePoint: two positions closer than this are one place: 1 mm. Anything the engine works out (a cut along a road, a
+//     point projected onto a line, a sum of path lengths) is good to far better than this, and nothing drawn or driven
+//     is smaller. The value the road builder settled on for "two stations are one" (lanes/lane_level.cpp kCutTolerance,
+//     kSliceGap, kJoinReported; lane_graph.cpp kLengthTolerance).
+constexpr Real kSamePoint = 1e-3;
+//   kWrittenStation: a distance read from a road file is only good to this: 1 cm, because the road file and the planner
+//     write stations and points to the centimetre. Two numbers that came from one written value are within this of each
+//     other (lanes/lane_expand.h kReachesStreetEnd; lanes/road_layout.h kPlannerSameEnd).
+constexpr Real kWrittenStation = 1e-2;
+// (No named tolerance for angles or for times yet: the existing code does not agree on one value for either.)
 
 struct Ray {
     Vec3 origin;

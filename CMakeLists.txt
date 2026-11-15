@@ -848,6 +848,7 @@ add_executable(run_tests
     tests/test_lane_graph.cpp
     tests/test_lot_cache.cpp
     tests/test_math.cpp
+    tests/test_tolerance_literals.cpp
     tests/test_slot_map.cpp
     tests/test_sparse_set.cpp
     tests/test_world.cpp

@@ -328,3 +328,116 @@ TEST_CASE(mat4_inverse_view_projection) {
         for (int j = 0; j < 4; j++)
             CHECK_APPROX(product.m[i][j], (i == j) ? 1.0 : 0.0, 1e-5);
 }
+
+// ---- Comparing computed numbers (rt_math.h: approxEqual and its ordered companions) ----------------------------------
+
+#include "../src/engine/procgen/city/polygon.h"   // the plan-point approxEqual
+
+#include <limits>
+
+namespace {
+
+// How many of the three exclusive questions say yes about (a, b): must be exactly one for finite numbers.
+int exclusiveAnswers(Real a, Real b, Real eps) {
+    return (strictlyBefore(a, b, eps) ? 1 : 0) + (approxEqual(a, b, eps) ? 1 : 0) + (strictlyPast(a, b, eps) ? 1 : 0);
+}
+
+}  // namespace
+
+TEST_CASE(approx_compare_exactly_one_of_before_equal_past) {
+    // Hand-written values against b = 10 with a tolerance of 0.25 (both exact in binary, so "at the tolerance" is exact):
+    // far before, just outside, AT the tolerance, just inside, the same, and the mirror of each.
+    const Real b = 10, eps = 0.25;
+    struct Row {
+        Real a;
+        bool before, equal, past;
+    };
+    const Row rows[] = {
+        {5.0, true, false, false},       // far before
+        {9.7499, true, false, false},    // just outside the tolerance, before
+        {9.75, false, true, false},      // exactly at the tolerance: the same
+        {9.7501, false, true, false},    // just inside
+        {10.0, false, true, false},      // the same number
+        {10.2499, false, true, false},   // just inside, past
+        {10.25, false, true, false},     // exactly at the tolerance: the same
+        {10.2501, false, false, true},   // just outside, past
+        {15.0, false, false, true},      // far past
+    };
+    for (const Row& r : rows) {
+        CHECK(strictlyBefore(r.a, b, eps) == r.before);
+        CHECK(approxEqual(r.a, b, eps) == r.equal);
+        CHECK(strictlyPast(r.a, b, eps) == r.past);
+        CHECK(exclusiveAnswers(r.a, b, eps) == 1);
+        // The two inclusive questions are "before or the same" and "past or the same", from the same number.
+        CHECK(atOrBefore(r.a, b, eps) == (r.before || r.equal));
+        CHECK(atOrPast(r.a, b, eps) == (r.past || r.equal));
+        // Asked the other way round, before and past swap and equal stays.
+        CHECK(strictlyBefore(b, r.a, eps) == r.past);
+        CHECK(strictlyPast(b, r.a, eps) == r.before);
+        CHECK(approxEqual(b, r.a, eps) == r.equal);
+    }
+    // A tolerance of zero is the plain comparison.
+    CHECK(strictlyBefore(1, 2, 0) && !approxEqual(1, 2, 0) && !strictlyPast(1, 2, 0));
+    CHECK(!strictlyBefore(2, 2, 0) && approxEqual(2, 2, 0) && !strictlyPast(2, 2, 0));
+    CHECK(atOrBefore(2, 2, 0) && atOrPast(2, 2, 0));
+}
+
+TEST_CASE(approx_compare_a_stop_at_a_start_is_at_or_before_it) {
+    // THE COLLISION'S CASE (2026-11-14): a stop placed at a stretch's start came out of a sum 7.1e-15 m past it. The
+    // bare comparison says it is not at or before the start; the question with the 1 mm tolerance says it is, and says
+    // the two are the same place. (As measured in a driving merge scene: 7.105e-15 m is one step of a double between 32
+    // and 64 m, so the stop was one step past the start; 60.6 m stands in for the measured place.)
+    const Real start = 60.6;
+    const Real stop = std::nextafter(start, 100.0);
+    CHECK_APPROX(stop - start, 7.105e-15, 1e-18);
+    CHECK(stop != start);       // the sum really is past, by the last bit
+    CHECK(!(stop <= start));    // what the bare comparison answered
+    CHECK(atOrBefore(stop, start, kSamePoint));
+    CHECK(approxEqual(stop, start, kSamePoint));
+    CHECK(!strictlyPast(stop, start, kSamePoint));
+    // A stop really past the start (2 mm) is past it; one really short of it (2 mm) is before it.
+    CHECK(strictlyPast(start + 0.002, start, kSamePoint) && !atOrBefore(start + 0.002, start, kSamePoint));
+    CHECK(strictlyBefore(start - 0.002, start, kSamePoint) && atOrBefore(start - 0.002, start, kSamePoint));
+}
+
+TEST_CASE(approx_compare_named_tolerances_are_one_millimetre_and_one_centimetre) {
+    CHECK(kSamePoint == 0.001);        // metres: two positions closer than this are one place
+    CHECK(kWrittenStation == 0.01);    // metres: road files write stations to the centimetre
+    // Two stations written to the centimetre from one number, 12.34 and 12.345 rounded either way, are one written
+    // station and not one point.
+    CHECK(approxEqual(12.34, 12.345, kWrittenStation));
+    CHECK(!approxEqual(12.34, 12.345, kSamePoint));
+}
+
+TEST_CASE(approx_compare_nan_and_infinities) {
+    const Real nan = std::numeric_limits<Real>::quiet_NaN();
+    const Real inf = std::numeric_limits<Real>::infinity();
+    const Real eps = kSamePoint;
+    // A NaN on either side: every question answers false (so atOrBefore is not "not strictlyPast").
+    for (const Real other : {0.0, 1.0, inf, nan}) {
+        CHECK(!strictlyBefore(nan, other, eps) && !approxEqual(nan, other, eps) && !strictlyPast(nan, other, eps));
+        CHECK(!atOrBefore(nan, other, eps) && !atOrPast(nan, other, eps));
+        CHECK(!strictlyBefore(other, nan, eps) && !approxEqual(other, nan, eps) && !strictlyPast(other, nan, eps));
+        CHECK(!atOrBefore(other, nan, eps) && !atOrPast(other, nan, eps));
+    }
+    // One side infinite: strictly before or past, never the same.
+    CHECK(strictlyPast(inf, 5, eps) && atOrPast(inf, 5, eps) && !approxEqual(inf, 5, eps) && !atOrBefore(inf, 5, eps));
+    CHECK(strictlyBefore(5, inf, eps) && atOrBefore(5, inf, eps) && !approxEqual(5, inf, eps) && !atOrPast(5, inf, eps));
+    CHECK(strictlyBefore(-inf, 5, eps) && strictlyPast(5, -inf, eps));
+    CHECK(strictlyBefore(-inf, inf, eps) && strictlyPast(inf, -inf, eps));
+    // Two infinities of one sign: no answer at all (their difference is not a number).
+    CHECK(exclusiveAnswers(inf, inf, eps) == 0 && !atOrBefore(inf, inf, eps) && !atOrPast(inf, inf, eps));
+    CHECK(exclusiveAnswers(-inf, -inf, eps) == 0);
+    // A NaN tolerance: every question false.
+    CHECK(exclusiveAnswers(1, 1, nan) == 0 && !atOrBefore(1, 1, nan) && !atOrPast(1, 1, nan));
+}
+
+TEST_CASE(approx_compare_plan_points) {
+    // Each coordinate within the tolerance, as the Vec3 one.
+    const Vec2 p(100.0, -50.0);
+    CHECK(approxEqual(p, Vec2(100.0005, -50.0005), kSamePoint));    // half a millimetre off each way
+    CHECK(!approxEqual(p, Vec2(100.002, -50.0), kSamePoint));       // 2 mm off in x
+    CHECK(!approxEqual(p, Vec2(100.0, -50.002), kSamePoint));       // 2 mm off in y
+    CHECK(approxEqual(p, Vec2(100.002, -50.002), kWrittenStation)); // ... but one written point
+    CHECK(!approxEqual(p, Vec2(std::numeric_limits<Real>::quiet_NaN(), -50.0), kSamePoint));
+}
