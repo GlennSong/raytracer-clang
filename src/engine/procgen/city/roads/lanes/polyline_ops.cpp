@@ -48,10 +48,7 @@ std::vector<Vec2> sliceAtStations(const std::vector<Vec2>& xy, const std::vector
     std::vector<Vec2> out;
     if (xy.empty() || s.size() != xy.size()) return out;
     const double a = std::clamp(from, s.front(), s.back()), b = std::clamp(std::max(from, to), s.front(), s.back());
-    out.push_back(pointAt(xy, s, a));
-    for (std::size_t i = 0; i < xy.size(); ++i)
-        if (s[i] > a + minGap && s[i] < b - minGap) out.push_back(xy[i]);
-    out.push_back(pointAt(xy, s, b));
+    stretchAtStations(xy.data(), s.data(), xy.size(), a, b, minGap, out);   // the one function (polyline.h)
     return out;
 }
 

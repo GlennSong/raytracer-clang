@@ -86,8 +86,9 @@ constexpr double kJunctionParallel = 0.7;
 // `parallelCos`: the parallel test's threshold (above: beside, not across).
 int junctionCrossRank(const Result& r, const LaneLookup& look, size_t li, const Vec2& p, const Vec2& t,
                       std::vector<int>* crossEdges = nullptr, double parallelCos = kJunctionParallel);
-// Whether the paint marks a road's junction approaches (crosswalk, arrows, stop bar): streets only -- not ramps,
-// freeways, tracks, nor classes ranked below 1.
+// Whether the paint marks a road's junction approaches (crosswalk, arrows, stop bar): what its class states
+// (road_graph_spec.h RoadClassSpec::junctionMarkings, "junction_markings" in a road file's `classes`), and never an
+// anchored road's (a ramp's end is a gore). No class name or rank is asked (issue #292).
 bool paintsJunctionBoxes(const RoadLabGraph& g, const EdgeSpec& e);
 
 // Every track lane's railhead line, in running order, with the platforms beside it (rail_track.h).
@@ -100,7 +101,8 @@ std::vector<RailTrack> railTracks(const Result& r);
 //     Solid where not (lane_turns.h laneLineBetween, the rule the lane level fills its LaneLine from), drawn only where
 //     both lanes run along a stated street outside a junction's stop lines; the road's Edge line where no lane lies
 //     beyond; the Centre line of a two-way road with no median stated;
-//   - an ARROW in a lane arriving at a junction: the kinds of turn RoadModel::turns states from that lane there;
+//   - an ARROW in a lane arriving at a junction: the kinds of turn RoadModel::turns states from that lane there, laid
+//     out as the arrows' marking row of road_attachments.json says (when it is painted, how far before the stop line);
 //   - a STOP BAR across the lanes arriving by an arm: a marking row of road_attachments.json holding for the arm's stated
 //     signs and its junction's stated control (control_signs.h markingsOnArm).
 // Stations are along the lane's road's spine. Lanes are indices into Result::lanes; junctions and arms into the road
@@ -140,8 +142,13 @@ struct RoadPaint {
 // turn table (assets/data/lane_turns.json, its bytes' hash) and the marking rows and control names of
 // assets/data/road_attachments.json. Changing any of them re-bakes the city, as the paint is baked into its meshes.
 uint64_t paintFactsKey(const nlohmann::json& spec);
-// The shape a marking row asks for with "draws": "bar" -- the one the paint has.
+// The shapes a marking row can ask for with "draws" -- the ones the paint has: "bar", a bar across the arriving lanes at
+// the stop line; "turn_arrows", in each arriving lane the turns the road model states from it.
 constexpr const char* kPaintDrawsBar = "bar";
+constexpr const char* kPaintDrawsTurnArrows = "turn_arrows";
+// A marking is painted no nearer than this to either end of its road (metres): a crosswalk or an arrow that would lie
+// nearer is left out (the road ends inside the junction's area).
+constexpr double kPaintRoadEndMargin = 2.0;
 
 // The parapet runs the mesher sweeps: a chain of deck-boundary points on an elevated freeway or ramp lane.
 // Exposed so a diagnostic can ask where a wall ENDS — a run whose cap sits on same-level pavement is a wall

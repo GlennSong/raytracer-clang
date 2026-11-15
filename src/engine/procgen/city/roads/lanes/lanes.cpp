@@ -49,7 +49,7 @@ std::vector<RampLandingFault> checkRampLandings(const RoadLabGraph& g) {
             const RampAnchor& a = end == 0 ? e.from : e.to;
             if (a.edge.empty()) continue;
             const EdgeSpec* host = g.find(a.edge);
-            if (!host || host->xy.size() < 2 || g.cls(*host).track || g.cls(*host).footway) continue;
+            if (!host || host->xy.size() < 2 || !g.cls(*host).carriesCars()) continue;
             const bool landing = L.declared && a.edge == L.street;
             landed = landed || landing;
             if (a.set) {

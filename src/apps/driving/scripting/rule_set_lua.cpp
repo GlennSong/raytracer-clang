@@ -25,7 +25,6 @@ constexpr const char* kKeyNumbers = "numbers";
 constexpr const char* kKeyPersonality = "personality";
 constexpr const char* kKeyMeans = "means";
 constexpr const char* kKeySign = "sign";
-constexpr const char* kKeyPaint = "paint";
 constexpr const char* kKeyUnit = "unit";
 constexpr const char* kKeySource = "source";
 constexpr const char* kKeyUsual = "usual";
@@ -537,7 +536,7 @@ protected:
         std::vector<std::string> odd;
         keysOf(list, names, odd);
         for (const std::string& o : odd) fail(path, "has the key " + o + ", which is not a name; expected device names");
-        const std::vector<std::string> allowed = {kKeyMeans, kKeySign, kKeyPaint};
+        const std::vector<std::string> allowed = {kKeyMeans, kKeySign};
         std::vector<Device> devices;
         for (const std::string& name : names) {
             const int mark = lua_gettop(L);
@@ -560,12 +559,6 @@ protected:
                 std::string s;
                 if (stringAt(sign, s)) d.sign = s;
                 else fail(devicePath + "." + kKeySign, "is " + describe(sign) + ", expected a string");
-            }
-            lua_settop(L, mark + 1);
-            const int paint = pushField(dt, kKeyPaint);
-            if (!lua_isnil(L, paint)) {
-                std::vector<std::string> marks;
-                if (stringList(paint, devicePath + "." + kKeyPaint, false, marks)) d.paint = marks;
             }
             devices.push_back(d);
             lua_settop(L, mark);

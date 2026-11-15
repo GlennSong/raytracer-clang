@@ -75,13 +75,19 @@ struct ModelArm {
 //   THE TRAVEL WIDTH: every lane's width, and the median gap where the road has lanes both ways (the gap lies BETWEEN the
 //     two ways, so a one-way road has none) -- what the builder lays (roads/lanes bandsFor), and so what is drawn.
 //   THE CARRIAGEWAY'S HALF WIDTH: half the travel width and one shoulder -- the spine to the edge of the paved road.
-// The road file's lanes (roads/lanes LaneLayout) and the model's section both answer through these functions.
+//   WHETHER CARS DRIVE ON IT: not on a track (the trains') nor on a footway (people on foot). Asked by the lane level,
+//     the street map, the junction grouping, the kerb parking, the street names and the ramp landings (issue #292: each
+//     once wrote the two flags out for itself).
+// The road file's lanes and classes (roads/lanes LaneLayout, RoadClassSpec) and the model's section all answer through
+// these functions.
 inline bool lanesRunOneWay(int forward, int backward) { return (forward > 0) != (backward > 0); }
 // (the median gap a road really has: the stated one where it has lanes both ways)
 inline Real lanesMedianGap(int forward, int backward, Real medianGap) { return forward > 0 && backward > 0 ? medianGap : Real(0); }
 inline Real lanesTravelWidth(int forward, int backward, Real laneWidth, Real medianGap) {
     return (forward + backward) * laneWidth + lanesMedianGap(forward, backward, medianGap);
 }
+inline Real carriagewayHalfWidthOf(Real travelWidth, Real shoulder) { return travelWidth * Real(0.5) + shoulder; }
+inline bool sectionCarriesCars(bool track, bool footway) { return !track && !footway; }
 struct ModelSection {
     std::string roadClass;
     RoadClass klass = RoadClass::Local;        // the engine's class for it (roads/lanes classOf: the one mapping)
@@ -99,7 +105,9 @@ struct ModelSection {
     // The width the travel lanes take across, both ways: what the map draws.
     Real travelWidth() const { return lanesTravelWidth(lanesForward, lanesBackward, laneWidth, medianGap); }
     // The spine to the carriageway's edge: where the kerb (or the verge) begins.
-    Real carriagewayHalfWidth() const { return travelWidth() * Real(0.5) + shoulder; }
+    Real carriagewayHalfWidth() const { return carriagewayHalfWidthOf(travelWidth(), shoulder); }
+    // Do cars drive on it (not a track, not a footway)?
+    bool carriesCars() const { return sectionCarriesCars(track, footway); }
 };
 
 // A STRETCH OF ROAD INSIDE A JUNCTION (between nodes the planner grouped into it; the road file's "inside": [{"road",

@@ -19,7 +19,7 @@
 //
 // WHO STATES IT. A city the planner makes carries its layout from birth: planToLanesScene and the island scene writer
 // call deriveLayout(LayoutSource::Planner) on the scene they made. Its road ends meet where the planner put them at one
-// point (it writes points to the centimetre, kPlannerSameEnd), ramps end where their anchors say, and two roads cross at
+// point (it writes points to the centimetre: rt_math.h kWrittenStation), ramps end where their anchors say, and two roads cross at
 // grade where its crossing policy says (planCrossings: the scene's own "crossings" list once city_plan's design step has
 // written it, the same policy before). A road file made before this has none: `lanes_tool layout --write` derives it ONCE
 // with today's inference (LayoutSource::Inferred: ends within the graph's endpoint tolerance, half a metre, and the
@@ -47,8 +47,9 @@ namespace roads::lanes {
 
 enum class LayoutSource : uint8_t { Planner, Inferred };
 
-// The planner writes every point to the centimetre: two road ends it made from one point are within this of each other.
-constexpr double kPlannerSameEnd = 0.01;
+// (Two road ends the planner wrote are one point when they are within rt_math.h kWrittenStation: the one answer to "two
+// numbers written to the centimetre are one place", for a plan point as for a station. Issue #292: this file once had
+// its own value, a whole centimetre, which sits exactly on the distance between two DIFFERENT written points.)
 // (An arm's heading is measured over kArmHeadingReach of its road: control_plan.h, beside the one rule that states the
 // through pairs from the headings.)
 // A street shorter than this is no street: the stretch between two arms of one junction, or a road's last half metre.

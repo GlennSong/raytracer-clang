@@ -315,19 +315,24 @@ TEST_CASE(junction_table_2b_four_way_far_turns_protected_by_warrant) {
     const JunctionRules& jr = row.junctions[j.index];
     std::printf("    protected: %u turns over the grid, %u phases at the four-way\n", row.counts.protectedTurns,
                 jr.phases.count);
-    CHECK(row.counts.protectedTurns > 0u);
     CHECK(jr.phases.count > 2u);
     const engine::LaneGraph& g = t.graph;
     const engine::Junction& jn = g.junctions[j.index];
+    // WHICH TURNS ARE PROTECTED is worked out here from the scene, not read back from the table: the warrant holds only
+    // at the grid's one four-way, and the turns it protects are the control's gives-way-on-green movement, the far
+    // turns -- one from each of its four approaches. (The table once carried a flag per connector that only this test
+    // read; the lights below are the table's one statement of it.)
+    auto protectedTurn = [&](engine::PathId c) { return row.paths[c.index].movement == Movement::FarTurn; };
     uint32_t checked = 0, protectedHere = 0;
     for (uint32_t i = 0; i < jn.connectors.count; ++i)
-        protectedHere += row.paths[g.junctionConnectors[jn.connectors.first + i].index].protectedTurn ? 1u : 0u;
-    CHECK(protectedHere > 0u);
+        protectedHere += protectedTurn(g.junctionConnectors[jn.connectors.first + i]) ? 1u : 0u;
+    CHECK(protectedHere == 4u);
+    CHECK(row.counts.protectedTurns == 4u);
     for (uint32_t x = jn.crossings.first; x < jn.crossings.end(); ++x) {
         const engine::CrossingPoint& rec = g.crossings[x];
         if (rec.otherSide != engine::OtherSide::Path || rec.meeting == engine::Meeting::Split) continue;
         const engine::PathId o = rec.otherPath();
-        if (!row.paths[rec.a.index].protectedTurn && !row.paths[o.index].protectedTurn) continue;
+        if (!protectedTurn(rec.a) && !protectedTurn(o)) continue;
         if (!approachesFace(g, row.approaches[row.paths[rec.a.index].approach], row.approaches[row.paths[o.index].approach]))
             continue;
         for (uint32_t ph = 0; ph < jr.phases.count; ++ph) {
@@ -338,7 +343,7 @@ TEST_CASE(junction_table_2b_four_way_far_turns_protected_by_warrant) {
     CHECK(checked > 0u);
     for (uint32_t i = 0; i < jn.connectors.count; ++i) {   // every protected turn has a green of its own somewhere
         const engine::PathId c = g.junctionConnectors[jn.connectors.first + i];
-        if (!row.paths[c.index].protectedTurn) continue;
+        if (!protectedTurn(c)) continue;
         bool green = false;
         for (uint32_t ph = 0; ph < jr.phases.count; ++ph) green = green || row.light(g, c, ph) == Light::Green;
         CHECK(green);

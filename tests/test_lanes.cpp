@@ -1623,12 +1623,15 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
     // the stretches of one lane never overlapping and within its length as the graph reads it (a fold tidied out of it)
     const LaneSet& L = r.lanes;
     std::vector<std::vector<uint32_t>> ofLane(L.lanes.size());
+    const RoadModel& m = modelOf(name);   // (the streets a lane runs along are the model's lane's: the one place they are held)
+    CHECK(m.lanes.size() == L.lanes.size());
+    if (m.lanes.size() != L.lanes.size()) return;
     for (uint32_t p = 0; p < G.paths.size(); ++p) {
         if (G.paths[p].kind != PathKind::Lane) continue;
         CHECK(G.paths[p].modelLane == static_cast<uint32_t>(lg.sources[p].lane) && G.paths[p].street != kNoIndex);
         bool onIt = false;
-        for (const LaneStreetSpan& sp : L.lanes[static_cast<std::size_t>(lg.sources[p].lane)].streets)
-            onIt = onIt || static_cast<uint32_t>(sp.street) == G.paths[p].street;
+        for (const ModelLaneSpan& sp : m.lanes[static_cast<std::size_t>(lg.sources[p].lane)].streets)
+            onIt = onIt || sp.street.index == G.paths[p].street;
         CHECK(onIt);
         ofLane[static_cast<std::size_t>(lg.sources[p].lane)].push_back(p);
     }
@@ -1647,7 +1650,6 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
         CHECK(gp.lane < L.lanes.size());
         if (gp.lane < L.lanes.size()) gapsOf[gp.lane].push_back(&gp);
     }
-    const RoadModel& m = modelOf(name);
     std::map<int, std::vector<std::tuple<double, double, uint32_t>>> extents = junctionExtents(r, m);
     // the built lane the way cars drive it, and its stations
     std::vector<std::vector<Vec2>> builtXy(L.lanes.size());

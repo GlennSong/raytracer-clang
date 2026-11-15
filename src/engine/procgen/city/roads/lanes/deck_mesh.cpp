@@ -737,7 +737,9 @@ int junctionCrossRank(const Result& r, const LaneLookup& look, size_t li, const 
 }
 
 bool paintsJunctionBoxes(const RoadLabGraph& g, const EdgeSpec& e) {
-    return !(e.isRamp() || e.cls == "freeway" || g.cls(e).rank < 1 || trackClass(g, e.cls));
+    // the class's own stated datum (road_graph_spec.h RoadClassSpec::junctionMarkings); a road anchored on another road's
+    // side (a ramp, whatever its class) ends at a gore, which is no arm to mark
+    return g.cls(e).junctionMarkings && !e.isRamp();
 }
 
 std::vector<JunctionArea> junctionAreas(const RoadLabGraph& g) {
@@ -1298,7 +1300,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
             const double sBox = arm.boxEdge, sStop = arm.stopLine;
             const int sign = arm.spineIn ? -1 : +1;
             const double sw0 = sBox + sign * kCrosswalkNear, sw1 = sBox + sign * kCrosswalkFar;
-            if (std::min(sw0, sw1) < 2.0 || std::max(sw0, sw1) > Lr - 2.0) continue;   // the road ends in this box: no leg here
+            if (std::min(sw0, sw1) < kPaintRoadEndMargin || std::max(sw0, sw1) > Lr - kPaintRoadEndMargin) continue;   // the road ends in this box: no leg here
             const double stMid = 0.5 * (sw0 + sw1); Vec2 P = pointAt(e.xy, e.s, stMid); Vec2 T = tangentAtStation(e.xy, e.s, stMid); Vec2 N = perp(T);
             // the paved width at the crosswalk: this road's lanes there
             struct LL { int li; double lat, w; }; std::vector<LL> ls;
@@ -1322,14 +1324,22 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
             std::vector<size_t> arriving;
             for (const TurnArmLane& tl : armLanes[j][a].arriving)
                 if (!stationOf[tl.lane].empty()) arriving.push_back(tl.lane);
-            // LANE ARROWS (Glenn, 2026-09-25: "lane signs like arrows for where to turn ... they should be a part of the
-            // road"): in each arriving lane, the turns the model states from it at this junction -- straight on, the near
-            // turn (toward the kerb) and the far turn (across the oncoming traffic). Painted where there is a choice of
-            // lanes (two or more arriving) and room for it: its tail 12 m before the stop line, and again 35 m before it
-            // on a long block. A lane with no stated turn gets none (counted, said once).
-            if (model.armsInRing && arriving.size() >= 2 && std::min(sStop, sStop + sign * 40.0) > 2.0 && std::max(sStop, sStop + sign * 40.0) < Lr - 2.0) {
-                // the second arrow only where the block is long enough that the next junction's arrows (painted back
-                // from ITS stop line) don't meet it mid-block
+            // THE MARKINGS ON THE ARRIVING LANES: the rows of road_attachments.json that hold for this arm's stated signs,
+            // its junction's stated control and how many lanes arrive by it (control_signs.h markingsOnArm). No class or
+            // rank is asked, and where each goes is the row's.
+            auto layArrows = [&](const ArmMarkingRule* rule) {
+                // LANE ARROWS (Glenn, 2026-09-25: "lane signs like arrows for where to turn ... they should be a part of the
+                // road"): in each arriving lane, the turns the model states from it at this junction -- straight on, the near
+                // turn (toward the kerb) and the far turn (across the oncoming traffic). The row says when (where there is a
+                // choice of lanes) and where: each tail's distance before the stop line, the room the road must have, and
+                // the block length the tails after the first need. A lane with no stated turn gets none (counted, said once).
+                if (rule->beforeStopLine.empty()) { unknownShapes.insert(rule->draws + std::string(" with no \"before_stop_line\"")); return; }
+                if (!model.armsInRing) return;
+                if (!(std::min(sStop, sStop + sign * rule->needsRoad) > kPaintRoadEndMargin &&
+                      std::max(sStop, sStop + sign * rule->needsRoad) < Lr - kPaintRoadEndMargin))
+                    return;
+                // the tails after the first only where the block is long enough that the next junction's arrows (painted
+                // back from ITS stop line) don't meet them mid-block
                 double gap = sign < 0 ? sBox : Lr - sBox;
                 for (const JunctionSpan& o : merged) {
                     if (sign < 0 && o.s1 < sBox - 1.0) gap = std::min(gap, sBox - o.s1);
@@ -1343,9 +1353,9 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
                     const bool nearTurn = turnsHere->second[static_cast<size_t>(Turn::NearTurn)];
                     const bool farTurn = turnsHere->second[static_cast<size_t>(Turn::FarTurn)];
                     if (!straight && !nearTurn && !farTurn) continue;
-                    for (double back : {7.0, 30.0}) {
-                        if (back > 10.0 && gap < 110.0) continue;
-                        const double sTail = sStop + sign * (back + 5.0);
+                    for (std::size_t k = 0; k < rule->beforeStopLine.size(); ++k) {
+                        if (k > 0 && gap < rule->repeatNeedsBlock) continue;
+                        const double sTail = sStop + sign * rule->beforeStopLine[k];
                         if (!covers(li, sTail)) continue;
                         PaintedArrow arrow;
                         arrow.junction = static_cast<int>(j);
@@ -1361,10 +1371,10 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
                         plan.arrows.push_back(arrow);
                     }
                 }
-            }
-            // THE MARKINGS ACROSS THE ARRIVING LANES (a stop bar): the rows that hold for this arm's stated signs and its
-            // junction's stated control (control_signs.h markingsOnArm). No class or rank is asked.
-            for (const ArmMarkingRule* rule : markingsOnArm(J, a, markingRules)) {
+            };
+            for (const ArmMarkingRule* rule : markingsOnArm(J, a, markingRules, arriving.size())) {
+                if (rule->draws == kPaintDrawsTurnArrows) { layArrows(rule); continue; }
+                // A STOP BAR across the arriving lanes at the arm's stop line
                 if (rule->draws != kPaintDrawsBar) { unknownShapes.insert(rule->draws); continue; }
                 if (arriving.empty()) continue;   // nothing arrives by it (the exit of a one-way street)
                 PaintedStopBar bar;

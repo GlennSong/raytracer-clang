@@ -50,7 +50,7 @@ Under `src/engine/procgen/city/roads/`:
 | `lanes/road_layout.h/.cpp` | The road file's layout: junctions and streets with ids, the text writers used by `lanes_tool layout`, `keyedRoadFileText` (what the bake key hashes) and `laneLevelKey`. |
 | `lanes/control_plan.h/.cpp` | The control plan: each junction's control and each road's limit, from the placement policy. Also `findJunctions`, the layout's grouping of road ends into junctions by the `rules.storage` rule. Rework: the design wants the planner to state these, not group them (step 9 / design "deleted at the end"). |
 | `lanes/lanes.h/.cpp` | The lanes pipeline: graph to lanes to profiles to pavement to surfaces to terrain. `Result` holds the paint's junction boxes (`junctionBoxes`). The ramp-end check still uses an angle test (`kJunctionParallelForGraph`). |
-| `lanes/lane_expand.h/.cpp` | Roads become lane ribbons: pockets, ramps composed from their gore anchors, each lane's streets and junction ends. Records `sweptFrom` / `diesInto` for pockets and ramp lanes. |
+| `lanes/lane_expand.h/.cpp` | Roads become lane ribbons: pockets, ramps composed from their gore anchors over their whole stated length (`rampEndDistances`). Records `sweptFrom` / `diesInto` for pockets and ramp lanes. The streets a lane runs along and the junction at each end are held by the model's lane only (`ModelLane`, filled in `builtRoadModel`; ADR-0434). |
 | `lanes/deck_mesh.h/.cpp` | Meshes and paint. `junctionAreas` gives each stated arm's box edge and stop line (`kStopLineBack`, 5.2 m, outside the box). The paint's lane lines, stop bars and arrows are read off `builtRoadModel` and listed in `RoadPaint` (ADR-0431). `paintFactsKey` is what the paint reads, for the bake key. **Open in step 9**: draw corners to a stated radius. |
 | `lanes/deck_height.*`, `vertical_profile.*`, `road_design.*`, `terrain_conform.*`, `terrain_recipe.*` | Heights: profiles along spines, blended decks, the planner-shared vertical design, cut and fill. |
 | `lanes/pavement.*`, `geom2d.*`, `polyline_ops.*` | 2-D geometry: footprints, the one triangulation, the Clipper2/CDT seam, polyline helpers. |
@@ -105,9 +105,10 @@ Still working roads out for itself:
   `laneSpanEnd` (`road_model.h`), asked by the turns, the lane level and the paint. Nothing stated: nothing painted, and
   a `[paint]` warning says so once. The city's bake key includes what the paint reads: `paintFactsKey`.)*
 - **The paint, still by measuring**: where a lane lies inside a crossing road's lane (`junctionCrossRank`, a point test
-  that stops lines inside a junction the areas do not cover), the crosswalk's width (the lanes found beside the spine at
-  the crosswalk), and which arms are marked at all (`paintsJunctionBoxes`: not ramps, freeways, tracks, by class name).
-  Lines are painted along no connector lane (nothing states what lies beside one).
+  that stops lines inside a junction the areas do not cover) and the crosswalk's width (the lanes found beside the spine at
+  the crosswalk). Lines are painted along no connector lane (nothing states what lies beside one).
+  *(Stated since ADR-0434: which arms are marked at all is the road class's `junction_markings` datum, read by
+  `paintsJunctionBoxes`; the lane arrows' layout is the `lane_arrows` marking row of `road_attachments.json`.)*
 - **Corners**: the builder draws them without a stated radius. The lane level only tests the fit and reports corner
   faults.
 - **The layout's junction grouping** (`findJunctions`, the `rules.storage` rule). It wrote the files' junctions once.
@@ -174,13 +175,15 @@ facts with the tools (`lanes_tool layout ... --write`, `--names`, `--nodes`, `--
   straight on shares its lanes. They say which arriving lanes take each turn and into which leaving lanes. `[~]`
   marks a guess. Its hash is part of the road model cache's key (`laneTurnTableHash`, the file's bytes).
 - **`assets/data/road_attachments.json`**: what may attach to a street, junction or arm (names, signal poles, signs).
-  A `sign` row is a whole sign: when, facing whom, where, its look.
+  A `sign` row is a whole sign: when, facing whom, where, its look. A `marking` row is paint at an arm: the stop bar
+  (`means` names the rule set's device it is the paint of) and the lane arrows with their layout. These rows are the one
+  table saying which device paints what; the rule set (`rules/lab.lua`) states no paint (ADR-0434).
 - **`assets/scripts/rules/control_policy.lua`**: the placement policy. Class order, posted limits with sources, and
   first-match rows choosing each junction's control and signs. The planner reads it via the rule set
   (`rules/lab.lua`).
 - **The road class table**: `roadClasses()` in `lanes/road_graph_spec.cpp`. It is C++, not a data file. Each
-  class's lane width and counts, shoulder, sidewalk, median, rank, grade and kerb parking. A road file's `classes`
-  override rows.
+  class's lane width and counts, shoulder, sidewalk, median, rank, grade, kerb parking and whether its arms at a
+  junction are marked (`junction_markings`). A road file's `classes` override rows.
 - `assets/data/streets.json`: name words and sign look (names only).
 
 ## 6. Checking a change quickly

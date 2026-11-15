@@ -75,6 +75,9 @@ const std::map<std::string, RoadClassSpec>& roadClasses() {
         m["footway"].edges[3] = parapet;   // EdgeRole::Elevated
         m["footway"].edges[2].set = true;  // vs street: nothing (it meets one)
         m["footway"].edges[4].set = true;  // at grade: nothing
+        // THE CLASSES WHOSE ARMS AT A JUNCTION ARE NOT MARKED (RoadClassSpec::junctionMarkings): no crosswalk, stop bar or
+        // lane arrow where a freeway, a ramp, a track, a footway or a divider meets a junction. Every other row: marked.
+        for (const char* unmarked : {"freeway", "ramp", "divider", "rail", "light_rail", "footway"}) m[unmarked].junctionMarkings = false;
         return m;
     }();
     return k;
@@ -96,6 +99,13 @@ nlohmann::json classJson(const RoadClassSpec& c) {
     if (c.balance != 0) j["balance"] = c.balance;
     if (c.track) j["track"] = true;
     if (c.footway) j["footway"] = true;
+    {
+        // written only where it differs from what a file leaving it out is read with: the table's row of that name, or
+        // (a class the table does not know) the local row's
+        const std::map<std::string, RoadClassSpec>::const_iterator row = roadClasses().find(c.name);
+        const bool usual = row != roadClasses().end() ? row->second.junctionMarkings : roadClasses().at("local").junctionMarkings;
+        if (c.junctionMarkings != usual) j["junction_markings"] = c.junctionMarkings;
+    }
     static const char* kRoleKey[5] = {"seam", "median", "vs_street", "elevated", "at_grade"};
     for (size_t i = 0; i < 5; ++i) {
         const BarrierSpec& b = c.edges[i];
@@ -298,6 +308,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         c.rank = static_cast<int>(num(j, "rank", c.rank)); c.gMax = num(j, "g_max", c.gMax); c.window = num(j, "window", c.window); c.balance = num(j, "balance", c.balance); c.thick = num(j, "thick", c.thick);
         if (j.contains("track") && j["track"].is_boolean()) c.track = j["track"].get<bool>();
         if (j.contains("footway") && j["footway"].is_boolean()) c.footway = j["footway"].get<bool>();
+        if (j.contains("junction_markings") && j["junction_markings"].is_boolean()) c.junctionMarkings = j["junction_markings"].get<bool>();
         if (j.contains("edges") && j["edges"].is_object()) {
             static const char* kRoleKey[5] = {"seam", "median", "vs_street", "elevated", "at_grade"};
             for (size_t i = 0; i < 5; ++i) {

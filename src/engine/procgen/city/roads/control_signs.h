@@ -65,19 +65,31 @@ bool armStates(const std::string& regulation, const std::vector<std::string>& co
 struct ArmMarkingRule {
     std::string kind;                    // the attachment kind (its key in road_attachments.json)
     std::string draws;                   // what the paint draws for it (the paint's own shapes: "bar")
+    // the rule set's device it is the paint of (its `means`; empty: none). THE ONE TABLE saying which device paints what
+    // (issue #292): the rule set (assets/scripts/rules/lab.lua `devices`) states no paint of its own.
+    std::string means;
     struct When {
         std::string regulation;
         std::vector<std::string> controls;
+        int arrivingLanes = 0;           // at least this many lanes arrive by the arm (`arriving_lanes`; 0: not asked)
     };
     std::vector<When> whenAny;
+    // WHERE ALONG THE ARM a marking painted before the stop line goes (the lane arrows' layout, issue #292: these were
+    // numbers inside the paint): each one's distance before the arm's stop line, nearest first (`before_stop_line`);
+    // the ones after the first are painted only on a block at least `repeat_needs_block` long; and the arm's road must
+    // run at least `needs_road` back from the stop line. Metres; empty / 0: the row does not say.
+    std::vector<double> beforeStopLine;
+    double repeatNeedsBlock = 0;
+    double needsRoad = 0;
     std::string source;
 };
 // Every kind with a `marking` row, by name. A row that does not read is left out and said in `problems`.
 std::vector<ArmMarkingRule> armMarkingRules(const AttachmentKinds& kinds, std::vector<std::string>* problems = nullptr);
-// WHICH MARKINGS ARE PAINTED ACROSS THE LANES ARRIVING BY AN ARM (is a stop bar painted here?): THE ONE PLACE it is
-// decided, from the arm's stated signs and its junction's stated control by the rows -- never from the roads' classes.
-// The rows that hold, in the rules' order.
-std::vector<const ArmMarkingRule*> markingsOnArm(const ModelJunction& J, std::size_t arm, const std::vector<ArmMarkingRule>& rules);
+// WHICH MARKINGS ARE PAINTED ON THE LANES ARRIVING BY AN ARM (is a stop bar painted here? lane arrows?): THE ONE PLACE it
+// is decided, from the arm's stated signs, its junction's stated control and how many lanes arrive by it
+// (`arrivingLanes`), by the rows -- never from the roads' classes. The rows that hold, in the rules' order.
+std::vector<const ArmMarkingRule*> markingsOnArm(const ModelJunction& J, std::size_t arm, const std::vector<ArmMarkingRule>& rules,
+                                                 std::size_t arrivingLanes);
 
 // ONE SIGN PLACED.
 struct PlacedSign {

@@ -174,7 +174,7 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         const EdgeSpec& e = g.edges[ei]; if (e.laneCount() == 0) continue;
         const RoadClassSpec& c = g.cls(e); const double hw = g.hw(e);
         PolySet in = fromRing(spineRing(e.xy, hw)); hullCuts.push_back({in, bounds(in), static_cast<int>(ei), -1});
-        if (c.shoulder > 0) { PolySet sh = fromRing(spineRing(e.xy, hw + c.shoulder)); shoulderCuts.push_back({sh, bounds(sh), static_cast<int>(ei), -1}); }
+        if (c.shoulder > 0) { PolySet sh = fromRing(spineRing(e.xy, g.carriagewayHalfWidth(e))); shoulderCuts.push_back({sh, bounds(sh), static_cast<int>(ei), -1}); }
     }
     auto overlaps = [](const Box2& a, const Box2& b) { return a.maxX >= b.minX && b.maxX >= a.minX && a.maxY >= b.minY && b.maxY >= a.minY; };
     auto heightOf = [&](const Cutter& c, const Vec2& q) { return c.edge >= 0 ? H.ownRoad(c.edge, q) : H.own(c.lane, q); };

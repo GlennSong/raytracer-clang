@@ -44,7 +44,8 @@
 // `protected_when` warrants holds at this junction (rule_set.h ArrowWarrant: the oncoming lanes it crosses, their
 // limit, the junction's approaches -- the road's facts) is never green with what it would give way to: the colouring
 // above treats the pair as conflicting, so the turn's green comes in a phase of its own approach's, with nothing it
-// crosses from the approach facing it (a green arrow; ConnectorRules::protectedTurn). A turn the control allows on red
+// crosses from the approach facing it (a green arrow; counted in RightOfWayCounts::protectedTurns and named in the
+// report's notes -- the lights are the one statement of it). A turn the control allows on red
 // (`turn_on_red`) is "red, may turn" in every phase where it is not green. Phases are in order; their timing and the clock
 // that walks them are signal_programme.h's (task D2, #261), which fills the timing fields below.
 //
@@ -164,7 +165,6 @@ struct ConnectorRules {
     uint32_t approach = kNoApproach;   // an index into RightOfWay::approaches
     uint32_t indexInJunction = 0;      // its place in its junction's connectors
     Movement movement = Movement::Straight;   // the connector's own stated turn (B2's), never worked out again
-    bool protectedTurn = false;        // it goes only on its own green arrow here (issue #284)
     engine::Range gaps;                // into RightOfWay::gaps: the clear stretches between its crossing stretches
     Real firstStretchAt = 0;           // where its first crossing stretch begins (its length when it has none)
     // WHERE A FAR TURN MAY WAIT INSIDE THE JUNCTION on its green, giving way (the road builder's Path::waitInsideAt, kept

@@ -133,7 +133,21 @@ struct RoadClassSpec {
     // car routes onto it. An end held by the edge's own floor point stays up (a footbridge ends over a platform).
     // Steeper than kFootwayStairGrade, its deck is built as steps.
     bool footway = false;
+    // WHETHER ITS ARMS AT A JUNCTION ARE MARKED (issue #292): a crosswalk across the arm, and the stop bar and lane arrows
+    // the road model states for it (deck_mesh.h paintsJunctionBoxes, the one reader). A street's are; a freeway's, a
+    // ramp's, a track's, a footway's and a divider's are not. The class's own row says so ("junction_markings" in a
+    // road file's `classes`); no code asks the class's name or rank. A class a file adds starts from the local row: marked.
+    bool junctionMarkings = true;
+    // Do cars drive on its roads (the cross-section's one answer, road_model_parts.h: not a track, not a footway)?
+    bool carriesCars() const { return sectionCarriesCars(track, footway); }
 };
+
+// HOW FAR OUT FROM THE SPINE A SECTION'S BANDS REACH -- the one sum each (issue #292), for a class row and the lanes laid
+// on it: to the carriageway's edge (half the travel lanes' width, then the shoulder), and to the sidewalk's outer edge
+// (the sidewalk lies outside the shoulder). A road-file edge asks the same through RoadLabGraph::carriagewayHalfWidth /
+// sidewalkOuterHalfWidth; a street that is not yet an edge of a graph (the interchange maker's) asks these.
+inline double carriagewayHalfWidth(const RoadClassSpec& c, const LaneLayout& lanes) { return carriagewayHalfWidthOf(lanes.travelWidth(), c.shoulder); }
+inline double sidewalkOuterHalfWidth(const RoadClassSpec& c, const LaneLayout& lanes) { return carriagewayHalfWidth(c, lanes) + c.sidewalk; }
 
 // A station platform beside a track edge, authored on the edge: "platforms": [{"name": "Central", "s0": 300,
 // "s1": 420, "side": "both", "w": 4.5}]. Built on the OUTSIDE of the edge's outermost track on that side, its
@@ -306,12 +320,12 @@ struct RoadLabGraph {
     // half the width of a road's travel lanes, and the spine to its carriageway's edge (with the class's shoulder): both
     // the cross-section's one answer (road_model_parts.h), asked for a road-file edge
     double hw(const EdgeSpec& e) const { return e.lanes.travelWidth() * 0.5; }
-    double carriagewayHalfWidth(const EdgeSpec& e) const { return hw(e) + cls(e).shoulder; }
+    double carriagewayHalfWidth(const EdgeSpec& e) const { return roads::lanes::carriagewayHalfWidth(cls(e), e.lanes); }
     // WHERE THE SIDEWALK STARTS AND ENDS, out from the spine (issue #292): it starts at the carriageway's edge, OUTSIDE the
     // shoulder (as bandsFor lays the bands: lanes, shoulder, sidewalk), and is the class's sidewalk wide. The pavement
     // draws it there and the ground conforms out to there. (The pavement once measured it from the lanes' edge, so a
     // class with a shoulder and a sidewalk had its sidewalk drawn under its shoulder: narrower than stated, or gone.)
-    double sidewalkOuterHalfWidth(const EdgeSpec& e) const { return carriagewayHalfWidth(e) + cls(e).sidewalk; }
+    double sidewalkOuterHalfWidth(const EdgeSpec& e) const { return roads::lanes::sidewalkOuterHalfWidth(cls(e), e.lanes); }
     std::array<double, 4> bounds() const;    // terrain bounds, or the edges' extent plus a margin
     std::vector<const EdgeSpec*> paved() const;
 

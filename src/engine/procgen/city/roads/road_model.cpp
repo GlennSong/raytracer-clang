@@ -59,15 +59,11 @@ constexpr const char* kBuiltLayerAbsent =
 Range appendLine(RoadModel& m, const EdgeSpec& e, Real from, Real to) {
     Range out;
     if (e.xy.size() < 2) return out;
-    std::vector<Vec2> pts{roads::lanes::pointAt(e.xy, e.s, from)};
-    std::vector<Real> st{from};
-    for (std::size_t i = 0; i < e.xy.size(); ++i)
-        if (e.s[i] > from + 1e-6 && e.s[i] < to - 1e-6) {
-            pts.push_back(e.xy[i]);
-            st.push_back(e.s[i]);
-        }
-    pts.push_back(roads::lanes::pointAt(e.xy, e.s, to));
-    st.push_back(to);
+    // the spine's points inside the stretch (polyline.h stretchAtStations, the one function): `from` and `to` are stations
+    // the road file wrote, so a spine point within kWrittenStation of one IS that end
+    std::vector<Vec2> pts;
+    std::vector<Real> st;
+    stretchAtStations(e.xy.data(), e.s.data(), e.xy.size(), from, to, kWrittenStation, pts, &st);
     out.first = static_cast<uint32_t>(m.linePoints.size());
     for (std::size_t i : simplifyRun(pts, kLineTolerance)) {
         m.linePoints.push_back(pts[i]);
@@ -94,8 +90,8 @@ ModelSection sectionOf(const RoadLabGraph& g, const EdgeSpec& e, bool* fits) {
     s.footway = c.footway;
     // the kerb parking the road states (its class's, or its own), where it fits (ADR-0418), and where its band lies
     *fits = true;
-    s.parking = c.track || c.footway ? 0.0 : roads::lanes::kerbParking(g, e, fits);
-    if (c.track || c.footway) *fits = true;
+    s.parking = c.carriesCars() ? roads::lanes::kerbParking(g, e, fits) : 0.0;
+    if (!c.carriesCars()) *fits = true;
     if (s.parking > 0) {
         double offset = 0, width = 0;
         if (roadSpecParkingBand(roads::lanes::streetSection(g, e), +1, offset, width)) s.parkingOffset = offset;
@@ -312,7 +308,13 @@ RoadModel builtRoadModel(const Result& r) {
             J.height = r.heights->deckRoad(g.index.at(e->id), roads::lanes::pointAt(e->xy, e->s, J.arms.front().station));
     }
 
-    // ---- lanes, as the builder laid them: their curves, heights, slots, streets and end junctions ----------------------
+    // ---- lanes, as the builder laid them: their curves, heights and slots; and WHERE EACH LIES ON THE STREETS (its
+    // stretches, the junction at each end), read here from the stated streets and held by the model's lane alone (the
+    // builder's lane carries no copy, issue #292): nothing is measured but where the lane's own stretch of spine lies ----
+    std::map<std::string, std::vector<uint32_t>> streetsOf;   // road id -> its streets, along its spine
+    for (std::size_t i = 0; i < m.streets.size(); ++i) streetsOf[m.streets[i].road].push_back(static_cast<uint32_t>(i));
+    for (std::pair<const std::string, std::vector<uint32_t>>& kv : streetsOf)
+        std::stable_sort(kv.second.begin(), kv.second.end(), [&](uint32_t a, uint32_t b) { return m.streets[a].from < m.streets[b].from; });
     for (std::size_t li = 0; li < r.lanes.lanes.size(); ++li) {
         const Lane& l = r.lanes.lanes[li];
         ModelLane L;
@@ -335,9 +337,23 @@ RoadModel builtRoadModel(const Result& r) {
             m.heights.push_back(r.heights ? r.heights->deck(static_cast<int>(li), l.xy[k]) : 0.0);
             m.spineStations.push_back(e && i0 + k < e->s.size() ? e->s[i0 + k] : kNotStated);
         }
-        for (const roads::lanes::LaneStreetSpan& sp : l.streets) L.streets.push_back(ModelLaneSpan{ModelStreetId(static_cast<uint32_t>(sp.street)), sp.from, sp.to});
-        L.atStart = l.junctionAtStart >= 0 ? ModelJunctionId(static_cast<uint32_t>(l.junctionAtStart)) : ModelJunctionId();
-        L.atEnd = l.junctionAtEnd >= 0 ? ModelJunctionId(static_cast<uint32_t>(l.junctionAtEnd)) : ModelJunctionId();
+        const std::map<std::string, std::vector<uint32_t>>::const_iterator own = e ? streetsOf.find(e->id) : streetsOf.end();
+        if (own != streetsOf.end()) {
+            for (uint32_t si : own->second) {
+                const ModelStreet& st = m.streets[si];
+                const Real lo = std::max<Real>(L.spineFrom, st.from), hi = std::min<Real>(L.spineTo, st.to);
+                if (hi > lo) L.streets.push_back(ModelLaneSpan{ModelStreetId(si), lo, hi});
+            }
+        }
+        if (!L.streets.empty()) {
+            // the junction at an end of the street it begins or ends on, when the lane reaches that end of the street
+            const ModelStreet& first = m.streets[L.streets.front().street.index];
+            const ModelStreet& last = m.streets[L.streets.back().street.index];
+            const ModelJunctionId atFrom = atOrBefore(L.spineFrom, first.from, kWrittenStation) ? first.junctions[0] : ModelJunctionId();
+            const ModelJunctionId atTo = atOrPast(L.spineTo, last.to, kWrittenStation) ? last.junctions[1] : ModelJunctionId();
+            L.atStart = L.dir > 0 ? atFrom : atTo;
+            L.atEnd = L.dir > 0 ? atTo : atFrom;
+        }
         for (const ModelLaneSpan& sp : L.streets) m.streets[sp.street.index].lanes.push_back(ModelLaneId(static_cast<uint32_t>(li)));
         m.lanes.push_back(std::move(L));
     }

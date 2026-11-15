@@ -104,6 +104,7 @@ std::vector<ArmMarkingRule> armMarkingRules(const AttachmentKinds& kinds, std::v
         if (k.on != "arm") { fail(k.name, "a marking that follows from a fact is painted at an arm (\"on\": \"arm\")"); continue; }
         r.draws = k.marking.value("draws", std::string());
         if (r.draws.empty()) { fail(k.name, "it does not say what the paint \"draws\""); continue; }
+        r.means = k.marking.value("means", std::string());
         if (k.marking.contains("when_any") && k.marking["when_any"].is_array())
             for (const nlohmann::json& w : k.marking["when_any"]) {
                 if (!w.is_object()) continue;
@@ -112,11 +113,17 @@ std::vector<ArmMarkingRule> armMarkingRules(const AttachmentKinds& kinds, std::v
                 if (w.contains("controls") && w["controls"].is_array())
                     for (const nlohmann::json& c : w["controls"])
                         if (c.is_string()) when.controls.push_back(c.get<std::string>());
+                if (w.contains("arriving_lanes") && w["arriving_lanes"].is_number_integer()) when.arrivingLanes = w["arriving_lanes"].get<int>();
                 // (an entry asking nothing would hold at every arm: refused)
-                if (when.regulation.empty() && when.controls.empty()) continue;
+                if (when.regulation.empty() && when.controls.empty() && when.arrivingLanes <= 0) continue;
                 r.whenAny.push_back(std::move(when));
             }
-        if (r.whenAny.empty()) { fail(k.name, "its \"when_any\" lists no entry asking a \"regulation\" or \"controls\""); continue; }
+        if (r.whenAny.empty()) { fail(k.name, "its \"when_any\" lists no entry asking a \"regulation\", \"controls\" or \"arriving_lanes\""); continue; }
+        if (k.marking.contains("before_stop_line") && k.marking["before_stop_line"].is_array())
+            for (const nlohmann::json& d : k.marking["before_stop_line"])
+                if (d.is_number()) r.beforeStopLine.push_back(d.get<double>());
+        if (k.marking.contains("repeat_needs_block") && k.marking["repeat_needs_block"].is_number()) r.repeatNeedsBlock = k.marking["repeat_needs_block"].get<double>();
+        if (k.marking.contains("needs_road") && k.marking["needs_road"].is_number()) r.needsRoad = k.marking["needs_road"].get<double>();
         r.source = text(k.marking.value("source", nlohmann::json()));
         out.push_back(std::move(r));
     }
@@ -124,12 +131,13 @@ std::vector<ArmMarkingRule> armMarkingRules(const AttachmentKinds& kinds, std::v
     return out;
 }
 
-std::vector<const ArmMarkingRule*> markingsOnArm(const ModelJunction& J, std::size_t arm, const std::vector<ArmMarkingRule>& rules) {
+std::vector<const ArmMarkingRule*> markingsOnArm(const ModelJunction& J, std::size_t arm, const std::vector<ArmMarkingRule>& rules,
+                                                 std::size_t arrivingLanes) {
     std::vector<const ArmMarkingRule*> out;
     if (arm >= J.arms.size()) return out;
     for (const ArmMarkingRule& r : rules)
         for (const ArmMarkingRule::When& w : r.whenAny)
-            if (armStates(w.regulation, w.controls, J, J.arms[arm])) {
+            if (arrivingLanes >= static_cast<std::size_t>(std::max(w.arrivingLanes, 0)) && armStates(w.regulation, w.controls, J, J.arms[arm])) {
                 out.push_back(&r);
                 break;
             }

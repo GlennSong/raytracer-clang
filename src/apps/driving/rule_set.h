@@ -9,7 +9,7 @@
 //   - which side of the road traffic keeps, and the sign ranks in order (which sign goes first);
 //   - RIGHT OF WAY: each kind of junction control and the questions that settle who gives way there, and the order the
 //     kinds of turn go in (right_of_way.h turns them into a table per junction at load);
-//   - the DEVICES: things that can stand on or be painted on the road, and what each one means;
+//   - the DEVICES: things that can stand on the road, and what each one means to a driver;
 //   - the NUMBERS: every tunable number, stored in metres / seconds / metres per second (squared) / plain ratios,
 //     with the unit and the source it was written with;
 //   - the DEFAULT LIMITS: the speed limit on a road with none posted, by the road's class, written like the numbers
@@ -61,7 +61,8 @@ struct Device {
     VehicleScope openTo;
     std::vector<std::string> forbids;   // names of things forbidden, as written
     std::string sign;                // the sign's code, as written ("" when none)
-    std::vector<std::string> paint;  // the paint's marks, as written
+    // (What is painted on the road for a device is the `marking` rows of assets/data/road_attachments.json, each naming
+    // the device it means: engine control_signs.h markingsOnArm. A rule set states no paint.)
 };
 
 // ONE TUNABLE NUMBER. `value` is always in metres, seconds, m/s, m/s2 or a plain ratio; the original value and unit

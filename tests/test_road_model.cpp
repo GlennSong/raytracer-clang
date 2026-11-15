@@ -351,10 +351,12 @@ TEST_CASE(road_model_3_lanes_carry_their_streets_and_the_model_holds_what_is_sta
     const Result& r = *b.r;
     const RoadModel& m = b.model;
     std::printf("    %s", reportRoadModel(m).c_str());
-    // every lane on a road with streets knows them, and through lanes their slot from the centre line
+    // every lane on a road with streets knows them (the model's lane holds them: the one place), and through lanes their
+    // slot from the centre line
     int lanesOnStreets = 0, wrongSlot = 0;
-    for (const Lane& l : r.lanes.lanes) {
-        if (l.parent < 0) continue;
+    CHECK(m.lanes.size() == r.lanes.lanes.size());
+    for (const ModelLane& l : m.lanes) {
+        if (l.edge == kNoIndex) continue;
         lanesOnStreets += l.streets.empty() ? 0 : 1;
         if (l.kind == "through") wrongSlot += l.slot == std::atoi(l.id.c_str() + l.id.rfind('.') + 2) ? 0 : 1;
     }
@@ -374,17 +376,19 @@ TEST_CASE(road_model_3_lanes_carry_their_streets_and_the_model_holds_what_is_sta
     // every arm of the crossing has its stop line from the stated junction (junctionAreas, ADR-0428): its box edge back from
     // its mouth by the CROSSING street's half width (the default classes: the arterial's arms by the local street's one
     // 6 m lane each way, 6 m; the local street's by the arterial's three 22/6 m lanes each way, 11 m), its stop line
-    // kStopLineBack further
+    // 5.2 m further: 11.2 m and 16.2 m. The numbers are written out here, worked from the scene by hand: the rule itself
+    // (road_model_parts.h boxEdgeBack / stopLineBack) is what is under test, so the test neither calls it nor adds its
+    // constant.
     const ModelJunction& J = m.junctions[cross.index];
     CHECK(J.arms.size() == 4u);
     for (const ModelArm& a : J.arms) {
         CHECK(stated(a.stopLine) && stated(a.boxEdge));
         const bool arterial = a.road[0] == 'a';
-        const Real back = arterial ? 6.0 : 11.0;
+        const Real boxBack = arterial ? 6.0 : 11.0, stopBack = arterial ? 11.2 : 16.2;
         std::printf("      arm %s: mouth %.2f, box edge %.2f, stop line %.2f\n", a.road.c_str(), a.station, a.boxEdge, a.stopLine);
         const Real away = a.spineIn ? -1.0 : 1.0;
-        CHECK(approxEqual(a.boxEdge, a.station + away * back, kWrittenStation));
-        CHECK(approxEqual(a.stopLine, a.station + away * (back + kStopLineBack), kWrittenStation));
+        CHECK(approxEqual(a.boxEdge, a.station + away * boxBack, kWrittenStation));
+        CHECK(approxEqual(a.stopLine, a.station + away * stopBack, kWrittenStation));
     }
     CHECK(J.boxes.size() == 4u);   // its area along each of its four roads (each arm a road of its own)
     CHECK(J.through.size() == 2u);   // the arterial and the local street both carry on through
@@ -439,12 +443,16 @@ TEST_CASE(road_model_3b_a_ramps_merge_is_its_stated_anchor) {
 
 // WHERE A RAMP'S LANE MEETS ITS HOST LANE IS THE BUILDER'S RECORD (issue #292): the builder lays the auxiliary lane and its
 // taper to a station on the host and records it; the model's connection copies it. The scene: merge_taper's one-lane
-// ramp, its taper restated as 108.4 m: 120 + 108.4 = 228.4 m past the gore at x = 330. The builder lays a sample every
-// whole metre, so its lane ends 228 m past the gore: at x = 558, station 708 of a mainline that starts at x = -150 along
-// y = 0, on the kerb lane of its three 3.6 m lanes (3.6 m off the centre line). The model says 708, where the lane is
-// drawn. (It once worked the station out again from the stated lengths: 708.4, where no lane ends. That the builder
-// stops at the last whole metre is owed: lane_expand.cpp composeRamp says why it is not changed here.)
+// ramp, its taper restated as 108.4 m: 120 + 108.4 = 228.4 m past the gore at x = 330. The builder lays the whole stated
+// length (lane_expand.h rampEndDistances: a sample each metre and one at the length itself), so its lane ends at
+// x = 558.4, station 708.4 of a mainline that starts at x = -150 along y = 0, on the kerb lane of its three 3.6 m lanes
+// (3.6 m off the centre line). The model says 708.4, where the lane is drawn. (The builder once laid whole metres only
+// and stopped at 708.0, 0.4 m before the stated meeting; the model once worked 708.4 out again where no lane ended.)
 TEST_CASE(road_model_3c_a_ramp_lane_is_drawn_to_where_the_model_says_it_meets_its_host) {
+    // the distances an end is laid at: whole metres, then the length; a whole length gets no extra step
+    const std::vector<double> part = rampEndDistances(2.25), whole = rampEndDistances(3.0);
+    CHECK(part.size() == 4u && part[2] == 2.0 && part[3] == 2.25);
+    CHECK(whole.size() == 4u && whole[3] == 3.0);
     nlohmann::json g = nlohmann::json::parse(slurp(std::string(RT_SOURCE_DIR) + "/assets/lanelab/merge_taper.json"));
     g.erase("junctions");
     g.erase("streets");
@@ -457,8 +465,8 @@ TEST_CASE(road_model_3c_a_ramp_lane_is_drawn_to_where_the_model_says_it_meets_it
     const EdgeSpec* ramp = r->graph.find("ramp_one");
     CHECK(ramp != nullptr);
     if (!ramp) return;
-    CHECK(approxEqual(ramp->anchorMeets[1], 708.0, kSamePoint));
-    CHECK(approxEqual(ramp->xy.back().x, 558.0, kSamePoint));
+    CHECK(approxEqual(ramp->anchorMeets[1], 708.4, kSamePoint));
+    CHECK(approxEqual(ramp->xy.back().x, 558.4, kSamePoint));
     CHECK(approxEqual(std::fabs(ramp->xy.back().y), 3.6, kSamePoint));
     // the model's connection says the same station
     int found = 0;
@@ -467,7 +475,7 @@ TEST_CASE(road_model_3c_a_ramp_lane_is_drawn_to_where_the_model_says_it_meets_it
         ++found;
         CHECK(c.length == 120.0 && c.taper == 108.4);
         CHECK(approxEqual(c.hostStation, 480.0, kWrittenStation));
-        CHECK(approxEqual(c.meets, 708.0, kSamePoint));
+        CHECK(approxEqual(c.meets, 708.4, kSamePoint));
     }
     CHECK(found == 1);
     // a ramp whose file states no taper gets the default once, where the file is read: 30 of its host's 3.6 m lanes
@@ -475,6 +483,32 @@ TEST_CASE(road_model_3c_a_ramp_lane_is_drawn_to_where_the_model_says_it_meets_it
         if (e["id"] == "ramp_one") e["to"].erase("taper");
     const RoadLabGraph plain = RoadLabGraph::fromJson(g);
     CHECK(approxEqual(plain.find("ramp_one")->to.taper, 108.0, kSamePoint));
+}
+
+// THE POINTS OF A LINE INSIDE A STRETCH ARE PICKED BY ONE FUNCTION (issue #292; polyline.h stretchAtStations): the road
+// model's centre lines, the street map's runs and the lane level's slices all call it. A line along x with points at
+// stations 0, 5, 9.996 and 10, and the stretch a file wrote as 2.5 to 10: the point 4 mm before the end IS the end, so the
+// stretch is (2.5, 0), (5, 0), (10, 0). (The model's own copy asked with a millionth of a metre and kept the 4 mm point
+// as a fourth; the street map's asked with the written-station tolerance and did not.)
+TEST_CASE(road_model_3d_one_function_picks_a_lines_points_inside_a_stretch) {
+    const std::vector<Vec2> xy = {Vec2(0, 0), Vec2(5, 0), Vec2(9.996, 0), Vec2(10, 0)};
+    const std::vector<Real> s = {0.0, 5.0, 9.996, 10.0};
+    std::vector<Vec2> pts;
+    std::vector<Real> st;
+    stretchAtStations(xy.data(), s.data(), xy.size(), 2.5, 10.0, kWrittenStation, pts, &st);
+    CHECK(pts.size() == 3u && st.size() == 3u);
+    if (pts.size() == 3u) {
+        CHECK(approxEqual(pts[0].x, 2.5, kSamePoint) && approxEqual(pts[1].x, 5.0, kSamePoint) && approxEqual(pts[2].x, 10.0, kSamePoint));
+        CHECK(st[0] == 2.5 && st[1] == 5.0 && st[2] == 10.0);
+    }
+    // a stretch worked out, not written, asks with the millimetre: the same point is then inside it
+    std::vector<Vec2> fine;
+    stretchAtStations(xy.data(), s.data(), xy.size(), 2.5, 10.0, kSamePoint, fine);
+    CHECK(fine.size() == 4u);
+    // the lane level's slice is the same function, its ends kept within the line
+    const std::vector<Vec2> slice = sliceAtStations(xy, s, -3.0, 20.0, kWrittenStation);
+    CHECK(slice.size() == 3u);
+    if (slice.size() == 3u) CHECK(approxEqual(slice[0].x, 0.0, kSamePoint) && approxEqual(slice[1].x, 5.0, kSamePoint) && approxEqual(slice[2].x, 10.0, kSamePoint));
 }
 
 // ---- 4. the questions ------------------------------------------------------------------------------------------------------
@@ -803,7 +837,65 @@ TEST_CASE(road_model_9_the_signs_follow_from_the_facts) {
     }
 #endif
 
+    // WHICH DEVICE PAINTS WHAT is this file's `marking` rows alone (issue #292: the rule set once listed a `paint` per
+    // device too, read by nothing, and the two disagreed -- it gave a give-way arm "give_way_teeth", which no row draws,
+    // and knew nothing of the bar at traffic lights). Two rows, by name: the lane arrows (no device's paint) and the stop
+    // bar, the paint of the device "stop".
+    std::vector<std::string> markProblems;
+    const std::vector<engine::ArmMarkingRule> marks = engine::armMarkingRules(attachmentKinds(), &markProblems);
+    CHECK(markProblems.empty());
+    CHECK(marks.size() == 2u);
+    if (marks.size() != 2u) return;
+    CHECK(marks[0].kind == "lane_arrows" && marks[0].draws == "turn_arrows" && marks[0].means.empty());
+    CHECK(marks[1].kind == "stop_bar" && marks[1].draws == "bar" && marks[1].means == "stop");
+    // THE ARROWS' LAYOUT is that row's (issue #292: it was numbers inside the paint): where two or more lanes arrive, a
+    // tail 12 m and one 35 m before the stop line, the second on a block of 110 m or more, on a road running 40 m back
+    CHECK(marks[0].whenAny.size() == 1u && marks[0].whenAny[0].arrivingLanes == 2 && marks[0].whenAny[0].regulation.empty() &&
+          marks[0].whenAny[0].controls.empty());
+    CHECK(marks[0].beforeStopLine == std::vector<double>({12.0, 35.0}));
+    CHECK(marks[0].repeatNeedsBlock == 110.0 && marks[0].needsRoad == 40.0);
+#ifdef RT_ENABLE_SCRIPTING
+    {
+        // ...the device it means is the rule set's, one a stop line goes with, and the row is painted where an arm states it
+        engine::ScriptVM vm;
+        driving::RuleSet rs;
+        std::string err;
+        const std::string code = engine::loadScriptCode(citysim::kDefaultRuleSet, "");
+        CHECK(!code.empty() && vm.doString(code, &err) && driving::loadRuleSet(vm, citysim::kDefaultRuleSet, rs, &err));
+        for (const engine::ArmMarkingRule& r : marks) {
+            if (r.means.empty()) continue;
+            const driving::Device* d = rs.findDevice(r.means);
+            CHECK(d != nullptr && d->stopLine);
+            bool whereStated = false;
+            for (const engine::ArmMarkingRule::When& w : r.whenAny) whereStated = whereStated || w.regulation == r.means;
+            CHECK(whereStated);
+        }
+    }
+#endif
+
     const RoadModel m = plannedRoadModel(RoadLabGraph::fromJson(signedGraph()));
+    {
+        // on the signed scene: a bar across every arm stated to stop, none across the arm stated to give way (the rule
+        // set's old list would have painted teeth there); asked with one lane arriving, so no arrows row holds...
+        int stopArms = 0, giveWayArms = 0;
+        for (const ModelJunction& J : m.junctions)
+            for (std::size_t a = 0; a < J.arms.size(); ++a) {
+                const std::vector<const engine::ArmMarkingRule*> on = engine::markingsOnArm(J, a, marks, 1);
+                // ...and with two arriving, the arrows row holds as well, at every arm whatever it states
+                const std::vector<const engine::ArmMarkingRule*> two = engine::markingsOnArm(J, a, marks, 2);
+                CHECK(two.size() == on.size() + 1u && two.front()->kind == "lane_arrows");
+                const std::vector<std::string>& regs = J.arms[a].regulations;
+                if (std::find(regs.begin(), regs.end(), "stop") != regs.end()) {
+                    ++stopArms;
+                    CHECK(on.size() == 1u && on.front()->kind == "stop_bar");
+                }
+                if (std::find(regs.begin(), regs.end(), "give_way") != regs.end()) {
+                    ++giveWayArms;
+                    CHECK(on.empty());
+                }
+            }
+        CHECK(stopArms == 4 && giveWayArms == 1);
+    }
     const engine::ControlSignPlan plan = engine::placeControlSigns(m, rules, nullptr, {});
     for (const std::string& n : plan.notes) std::printf("    %s\n", n.c_str());
     CHECK(plan.notes.empty());

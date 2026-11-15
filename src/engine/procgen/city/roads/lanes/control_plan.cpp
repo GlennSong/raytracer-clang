@@ -40,7 +40,7 @@ constexpr double kNoDirection = 1e-9;
 
 bool carsDrive(const RoadLabGraph& g, const EdgeSpec& e) {
     const RoadClassSpec& c = g.cls(e);
-    return !c.track && !c.footway && e.laneCount() > 0 && e.xy.size() >= 2 && !e.s.empty() && e.s.back() > 0;
+    return c.carriesCars() && e.laneCount() > 0 && e.xy.size() >= 2 && !e.s.empty() && e.s.back() > 0;
 }
 
 // A ramp's end that is anchored to the side of a street by name alone (no gore on a host lane): where the ramp ends on

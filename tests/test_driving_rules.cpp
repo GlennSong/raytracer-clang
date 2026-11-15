@@ -30,11 +30,11 @@ rule_set = {
   drives_on = "left",
   ranks = { "priority", "give_way", "stop" },
   devices = {
-    stop        = { means = { stop_line = true, rank = "stop" },   sign = "R1-1", paint = { "stop_bar", "STOP" } },
-    give_way    = { means = { rank = "give_way" },                 sign = "R1-2", paint = { "give_way_teeth" } },
+    stop        = { means = { stop_line = true, rank = "stop" },   sign = "R1-1" },
+    give_way    = { means = { rank = "give_way" },                 sign = "R1-2" },
     speed_limit = { means = { top_speed = "value" },               sign = "R2-1" },
     no_entry    = { means = { closed_to = "all" },                 sign = "R5-1" },
-    bus_lane    = { means = { open_to = { "bus", "taxi" } },       paint = { "BUS ONLY" } },
+    bus_lane    = { means = { open_to = { "bus", "taxi" } } },
     no_turn_on_red = { means = { forbids = "turn_on_red" },        sign = "R10-11a" },
   },
   numbers = {
@@ -123,14 +123,13 @@ TEST_CASE(rules_example_loads_every_field) {
         CHECK(stop->stopLine);
         CHECK(stop->rank == 2);
         CHECK(stop->sign == "R1-1");
-        CHECK(stop->paint.size() == 2u && stop->paint[0] == "stop_bar" && stop->paint[1] == "STOP");
         CHECK(!stop->topSpeedIsValue);
         CHECK(stop->closedTo.kind == VehicleScope::Kind::Unsaid);
     }
     const Device* giveWay = r.findDevice("give_way");
     CHECK(giveWay && giveWay->rank == 1 && !giveWay->stopLine);
     const Device* limit = r.findDevice("speed_limit");
-    CHECK(limit && limit->topSpeedIsValue && limit->rank == kNoRank && limit->paint.empty());
+    CHECK(limit && limit->topSpeedIsValue && limit->rank == kNoRank);
     const Device* noEntry = r.findDevice("no_entry");
     CHECK(noEntry && noEntry->closedTo.kind == VehicleScope::Kind::All && noEntry->openTo.kind == VehicleScope::Kind::Unsaid);
     const Device* bus = r.findDevice("bus_lane");
@@ -215,6 +214,10 @@ TEST_CASE(rules_refused_with_file_and_key_path) {
                   "rule_set.devices.stop.means.rank", "is \"halt\", which is not one of ranks (priority, give_way, stop)");
     expectRefused(withParts("'left'", "stop = { means = { colour = 'red' } }", okNumber, okSetting),
                   "rule_set.devices.stop.means", "colour");
+    // what a device paints on the road is not a rule set's to say (issue #292): the one table is the `marking` rows of
+    // assets/data/road_attachments.json, which the road paint reads. A rule set that states it too is refused.
+    expectRefused(withParts("'left'", "stop = { means = { rank = 'stop' }, paint = { 'give_way_teeth' } }", okNumber, okSetting),
+                  "rule_set.devices.stop", "paint");
     expectRefused(withParts("'left'", "b = { means = { open_to = { 3, 4 } } }", okNumber, okSetting),
                   "rule_set.devices.b.means.open_to[1]", "expected a string");
     expectRefused(withParts("'left'", "b = { means = { open_to = 'some' } }", okNumber, okSetting),

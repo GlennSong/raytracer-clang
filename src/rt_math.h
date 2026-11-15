@@ -162,8 +162,10 @@ constexpr Real kSamePoint = 1e-3;
 //     would decide) and a whole centimetre exactly on the second. The ONE value for every join made by station
 //     (roads/road_model_parts.h sameWrittenStation; the ordered helpers above with this as their eps). Issue #292: it
 //     was 1 cm here and in lanes/lane_expand.h, half a centimetre in street_map.cpp and lanes/road_layout.cpp, and a
-//     millionth of a metre in lanes/road_layout.cpp. (Plan POINTS written to the centimetre are another question:
-//     lanes/road_layout.h kPlannerSameEnd.)
+//     millionth of a metre in lanes/road_layout.cpp. The same value answers for two plan POINTS the planner wrote to the
+//     centimetre (two road ends made from one point: lanes/road_layout.cpp, a planned city's junctions): the same point
+//     written twice is the same text, and two different written points are a whole centimetre apart or more.
+//     lanes/road_layout.h once had a value of its own for that, a whole centimetre (kPlannerSameEnd), on the boundary.
 constexpr Real kWrittenStation = 7.5e-3;
 // (No named tolerance for angles or for times yet: the existing code does not agree on one value for either.)
 

@@ -506,7 +506,6 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
         for (uint32_t i = 0; i < w.n; ++i) {
             const ArrowWarrant* which = nullptr;
             if (!protectedTurn(w, ck, i, &which) || !which) continue;
-            out.paths[w.conn[i].index].protectedTurn = true;
             const ArrowFacts f = arrowFactsOf(w, i);
             ++out.counts.protectedTurns;
             out.protectedNotes.push_back("junction " + std::to_string(j) + ": " + pathTurnWords(roads, out, w.conn[i]) +

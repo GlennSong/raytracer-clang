@@ -273,7 +273,7 @@ LotsCityInputs lotsCityInputs(const CityProducts& p) {
 LotRoadInputs lotRoadInputs(const RoadModel& planned, const RoadDeckField& deck) {
     LotRoadInputs in;
     auto add = [&](const std::string& id, const Range& line, const ModelSection& section) {
-        if (section.track || section.footway || line.count < 2) return;   // no building fronts a track or a footway
+        if (!section.carriesCars() || line.count < 2) return;   // no building fronts a track or a footway
         LotRoad r;
         r.id = id;
         r.line.assign(planned.linePoints.begin() + line.first, planned.linePoints.begin() + line.end());

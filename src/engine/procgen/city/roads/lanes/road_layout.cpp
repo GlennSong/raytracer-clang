@@ -256,7 +256,7 @@ std::vector<JunctionFacts> layoutJunctionFacts(const RoadLabGraph& graph, Layout
     const std::vector<CrossingSpec> crossings = graph.declaresCrossings ? graph.crossings : crossingsFromJson(planCrossings(graph));
     const std::vector<DividedPair> divided = dividedOf(graph, source);
     JunctionFinding how;
-    how.endTolerance = source == LayoutSource::Planner ? kPlannerSameEnd : -1.0;
+    how.endTolerance = source == LayoutSource::Planner ? kWrittenStation : -1.0;
     how.atGrade = &crossings;
     how.divided = &divided;
     how.carryOns = carryOns;
@@ -268,7 +268,7 @@ ControlPlan planLayoutControls(const RoadLabGraph& graph, LayoutSource source, c
     const std::vector<CrossingSpec> crossings = graph.declaresCrossings ? graph.crossings : crossingsFromJson(planCrossings(graph));
     const std::vector<DividedPair> divided = dividedOf(graph, source);
     JunctionFinding how;
-    how.endTolerance = source == LayoutSource::Planner ? kPlannerSameEnd : -1.0;
+    how.endTolerance = source == LayoutSource::Planner ? kWrittenStation : -1.0;
     how.atGrade = &crossings;
     how.divided = &divided;
     return planControls(graph, policy, how);
@@ -705,7 +705,7 @@ std::vector<char> namedStreets(const RoadLabGraph& g, const std::vector<ModelStr
         const EdgeSpec* e = g.find(streets[i].road);
         if (!e || e->laneCount() == 0) continue;
         const RoadClassSpec& c = g.cls(*e);
-        out[i] = book.unnamed.count(e->cls) || c.track || c.footway ? 0 : 1;
+        out[i] = book.unnamed.count(e->cls) || !c.carriesCars() ? 0 : 1;
     }
     return out;
 }

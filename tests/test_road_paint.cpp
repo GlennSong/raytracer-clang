@@ -85,9 +85,12 @@ struct PaintScene {
 };
 
 // The scene built with the layout derived (as `lanes_tool layout --write` would), lane rules of 20 m, and the controls
-// and signs given written onto its junctions; painted.
-PaintScene paintScene(const std::vector<JunctionControl>& facts) {
-    nlohmann::json g = lane_level_test::withLaneLevelFacts(paintSceneJson());
+// and signs given written onto its junctions; painted. `classFacts`: members written over the scene's one class row
+// (its roads are all collectors) before anything is derived.
+PaintScene paintScene(const std::vector<JunctionControl>& facts, const nlohmann::json& classFacts = nlohmann::json::object()) {
+    nlohmann::json scene = paintSceneJson();
+    for (const auto& [key, value] : classFacts.items()) scene["classes"]["collector"][key] = value;
+    nlohmann::json g = lane_level_test::withLaneLevelFacts(scene);
     for (nlohmann::json& j : g["junctions"]) {
         const Vec2 at(j["at"][0].get<double>(), j["at"][1].get<double>());
         for (const JunctionControl& f : facts) {
@@ -439,6 +442,49 @@ TEST_CASE(road_paint_arrows_show_the_turns_the_model_states_lane_by_lane) {
     for (const ModelTurn& t : m.turns) withTurns.insert(std::make_pair(static_cast<int>(t.junction.index), static_cast<int>(t.from.index)));
     CHECK(withArrows == withTurns);
     CHECK(withTurns.size() == 15);
+}
+
+// WHETHER A ROAD'S ARMS AT A JUNCTION ARE MARKED IS ITS CLASS'S STATED DATUM (issue #292; road_graph_spec.h
+// RoadClassSpec::junctionMarkings, "junction_markings" in the file's `classes`), not its class's name or rank. The old
+// rule marked every class but one named "freeway", a track, or one ranked below 1. Two scenes where the two disagree:
+//   - the scene's class stated rank 0 and nothing else: the old rule painted nothing; its arms are marked as before;
+//   - the scene's class stated "junction_markings": false (rank 1, not named freeway): the old rule painted every arm;
+//     nothing is painted at them -- no crosswalk leg's arrows or bars -- and the lines between lanes are still drawn.
+TEST_CASE(road_paint_a_class_states_whether_its_junction_arms_are_marked) {
+    const std::vector<JunctionControl> lights = {{Vec2(0, 0), "signal", {}}, {Vec2(150, 0), "stop", {{"stem", true, {"stop"}}}}};
+    const PaintScene& usual = signalScene();
+    // as the scene is: five bars (A's four arms under lights, B's stem), 30 arrows (15 lanes, two each)
+    CHECK(usual.paint.stopBars.size() == 5u && usual.paint.arrows.size() == 30u);
+    for (const JunctionArea& A : junctionAreas(usual.r->graph))
+        for (const ArmStop& arm : A.arms) CHECK(arm.painted);
+
+    const PaintScene lowRank = paintScene(lights, nlohmann::json{{"rank", 0}});
+    CHECK(lowRank.paint.stopBars.size() == 5u && lowRank.paint.arrows.size() == 30u);
+    for (const JunctionArea& A : junctionAreas(lowRank.r->graph))
+        for (const ArmStop& arm : A.arms) CHECK(arm.painted);
+
+    const PaintScene unmarked = paintScene(lights, nlohmann::json{{"junction_markings", false}});
+    CHECK(unmarked.paint.stopBars.empty() && unmarked.paint.arrows.empty());
+    std::size_t arms = 0;
+    for (const JunctionArea& A : junctionAreas(unmarked.r->graph))
+        for (const ArmStop& arm : A.arms) {
+            ++arms;
+            CHECK(!arm.painted);
+            CHECK(arm.stopLine != 0);   // the arm keeps its stop line: the lane level still ends its lanes there
+        }
+    CHECK(arms == 7u);
+    CHECK(!unmarked.paint.lines.empty());
+
+    // the table's rows: streets marked; a freeway, a ramp, a track, a footway and a divider not; a class a file adds
+    // starts marked, and the datum is written only where it differs from the row it would be read with
+    const std::map<std::string, RoadClassSpec>& table = roadClasses();
+    for (const char* marked : {"local", "collector", "arterial", "boulevard", "rural", "mountain"}) CHECK(table.at(marked).junctionMarkings);
+    for (const char* not_ : {"freeway", "ramp", "divider", "rail", "light_rail", "footway"}) CHECK(!table.at(not_).junctionMarkings);
+    CHECK(!classJson(table.at("freeway")).contains("junction_markings"));
+    CHECK(!classJson(table.at("local")).contains("junction_markings"));
+    RoadClassSpec quiet = table.at("local");
+    quiet.junctionMarkings = false;
+    CHECK(classJson(quiet).value("junction_markings", true) == false);
 }
 
 // THE ONE RULE FOR A LINE BETWEEN LANES, by itself (lane_turns.h laneLineBetween): the kinds that hold their lane come

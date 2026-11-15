@@ -37,18 +37,8 @@ struct Run {
 Run runOf(const RoadModel& m, const Range& line, Real lo, Real hi) {
     Run r;
     if (line.count < 2) return r;
-    const Vec2* xy = &m.linePoints[line.first];
-    const Real* s = &m.lineStations[line.first];
-    const std::size_t n = line.count;
-    r.pts.push_back(pointAtStation(xy, s, n, lo));
-    r.st.push_back(lo);
-    for (std::size_t i = 0; i < n; ++i)
-        if (strictlyPast(s[i], lo, kWrittenStation) && strictlyBefore(s[i], hi, kWrittenStation)) {
-            r.pts.push_back(xy[i]);
-            r.st.push_back(s[i]);
-        }
-    r.pts.push_back(pointAtStation(xy, s, n, hi));
-    r.st.push_back(hi);
+    // (polyline.h stretchAtStations, the one function; lo and hi are written stations)
+    stretchAtStations(&m.linePoints[line.first], &m.lineStations[line.first], line.count, lo, hi, kWrittenStation, r.pts, &r.st);
     return r;
 }
 
@@ -276,7 +266,7 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
     // ---- the streets ------------------------------------------------------------------------------------------------------
     for (std::size_t s = 0; s < m.streets.size(); ++s) {
         const ModelStreet& S = m.streets[s];
-        if (S.section.track || S.section.footway) continue;   // (footpaths are the sim's walks; tracks are the trains')
+        if (!S.section.carriesCars()) continue;   // (footpaths are the sim's walks; tracks are the trains')
         if (S.section.lanesForward + S.section.lanesBackward == 0 || S.line.count < 2) continue;
         std::array<int, 2> endNode{-1, -1}, endArm{-1, -1};
         std::array<Real, 2> endStation{S.from, S.to};
@@ -400,7 +390,7 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
         std::set<std::pair<int, int>> laidBetween;   // (from point's node, to point's node), directed
         for (const ModelStretch& st : J.inside) {
             if (st.edge == kNoIndex || st.line.count < 2) continue;
-            if (st.section.track || st.section.footway || st.section.lanesForward + st.section.lanesBackward == 0) continue;
+            if (!st.section.carriesCars() || st.section.lanesForward + st.section.lanesBackward == 0) continue;
             // the points on this road within the stretch, in station order
             std::vector<std::pair<Real, int>> on;
             for (std::size_t p = 0; p < J.nodes.size(); ++p)

@@ -236,9 +236,8 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         // that carriageway's lane nearest the freeway, its kerb lane or its offside lane, which it reaches crossing nothing
         const std::string kerbName = (L.forward ? "f" : "b") + std::to_string(count - 1);
         const bool oneWay = lay.oneWay();   // (it has lanes going the ramp's way: `count`, above)
-        double laneOff = 0, reach = 0, outward = 1e300;
+        double laneOff = 0, outward = 1e300;
         for (const LaneSlot& sl : slots) {
-            reach = std::max(reach, std::fabs(sl.offset));
             const bool kerb = sl.name == kerbName, offside = oneWay && L.forward && sl.name == "f0";
             if (!kerb && !offside) continue;
             const double out = dot(perp(tS) * sl.offset, n);   // how far toward the far half
@@ -247,7 +246,7 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         if (outward > 1e299) return false;
         L.far = outward > 0;
         L.run = {k};
-        const double edge = reach + lay.w / 2 + sc.shoulder + sc.sidewalk;   // the street's outer edge, sidewalk and all
+        const double edge = sidewalkOuterHalfWidth(sc, lay);   // the street's outer edge, sidewalk and all: the section's one sum
         // offsets from the freeway's centreline, outward: the lane of its own beside the lane it takes, the far side's band
         const double rAux = f + (L.far ? 1.0 : -1.0) * (std::fabs(laneOff) + lay.w);
         const double rFar = f + edge + o.bandGap + o.rampHalf;

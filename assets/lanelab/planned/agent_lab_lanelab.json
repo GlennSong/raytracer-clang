@@ -73,16 +73,6 @@
    "window": 60
   }
  },
- "divided": [
-  [
-   "bv0_in",
-   "bv0_out"
-  ],
-  [
-   "bv1_in",
-   "bv1_out"
-  ]
- ],
  "edges": [
   {
    "class": "local",
@@ -31306,52 +31296,52 @@
    "arms": [
     {
      "at": 0.0,
-     "heading": 14.55,
      "road": "s2",
      "spine": "out",
-     "street": "s2"
+     "street": "s2",
+     "heading": 14.55
     },
     {
      "at": 0.0,
-     "heading": 106.95,
      "road": "s0",
      "spine": "out",
-     "street": "s0"
+     "street": "s0",
+     "heading": 106.95
     },
     {
      "at": 0.0,
-     "heading": 138.99,
      "road": "s278",
      "spine": "out",
-     "street": "s278"
+     "street": "s278",
+     "heading": 138.99
     },
     {
      "at": 0.0,
-     "heading": 237.85,
      "road": "bv1_out",
      "spine": "out",
-     "street": "bv1_out"
+     "street": "bv1_out",
+     "heading": 237.85
     },
     {
      "at": 109.19,
-     "heading": 235.76,
      "road": "bv1_in",
      "spine": "in",
-     "street": "bv1_in"
+     "street": "bv1_in",
+     "heading": 235.76
     },
     {
      "at": 119.95,
-     "heading": 322.71,
      "road": "s272",
      "spine": "in",
-     "street": "s272"
+     "street": "s272",
+     "heading": 322.71
     },
     {
      "at": 94.47,
-     "heading": 14.81,
      "road": "s38",
      "spine": "in",
-     "street": "s38"
+     "street": "s38",
+     "heading": 14.81
     }
    ],
    "at": [
@@ -31382,45 +31372,45 @@
      "to": 20.18
     }
    ],
-   "through": [[2,5]],
    "why": "five or more roads meet: lights",
-   "nodes": [{"at":[-301.54,233.56],"points":[{"at":0.0,"road":"s0"},{"at":0.0,"road":"s1"},{"at":0.0,"road":"s2"}]},{"at":[-325.84,226.62],"points":[{"at":25.27,"road":"s1"},{"at":20.18,"road":"s274_2"},{"at":0.0,"road":"s278"}]},{"at":[-260.19,167.12],"points":[{"at":94.47,"road":"s38"},{"at":119.95,"road":"s272"},{"at":0.0,"road":"s274_0"}]},{"at":[-281.87,185.76],"points":[{"at":28.6,"road":"s274_0"},{"at":0.0,"road":"s274_1"},{"at":109.19,"road":"bv1_in"}]},{"at":[-311.59,212.53],"points":[{"at":40.0,"road":"s274_1"},{"at":0.0,"road":"s274_2"},{"at":0.0,"road":"bv1_out"}]}]
+   "through": [[2,5]],
+   "nodes": [{"at":[-301.54,233.56],"points":[{"at":0.0,"road":"s0"},{"at":0.0,"road":"s1"},{"at":0.0,"road":"s2"}]},{"at":[-325.84,226.62],"points":[{"at":25.27,"road":"s1"},{"at":20.18,"road":"s274_2"},{"at":0.0,"road":"s278"}]},{"at":[-281.87,185.76],"points":[{"at":28.6,"road":"s274_0"},{"at":0.0,"road":"s274_1"},{"at":109.19,"road":"bv1_in"}]},{"at":[-311.59,212.53],"points":[{"at":40.0,"road":"s274_1"},{"at":0.0,"road":"s274_2"},{"at":0.0,"road":"bv1_out"}]},{"at":[-260.19,167.12],"points":[{"at":94.47,"road":"s38"},{"at":119.95,"road":"s272"},{"at":0.0,"road":"s274_0"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 14.86,
      "road": "s5",
      "spine": "out",
-     "street": "s5"
+     "street": "s5",
+     "heading": 14.86
     },
     {
      "at": 0.0,
-     "heading": 107.53,
      "regulations": [
       "stop"
      ],
      "road": "s3",
      "spine": "out",
-     "street": "s3"
+     "street": "s3",
+     "heading": 107.53
     },
     {
      "at": 0.0,
-     "heading": 195.8,
      "road": "s4",
      "spine": "out",
-     "street": "s4"
+     "street": "s4",
+     "heading": 195.8
     },
     {
      "at": 65.56,
-     "heading": 287.58,
      "regulations": [
       "stop"
      ],
      "road": "s0",
      "spine": "in",
-     "street": "s0"
+     "street": "s0",
+     "heading": 287.58
     }
    ],
    "at": [
@@ -31429,53 +31419,44 @@
    ],
    "control": "stop",
    "id": "j1",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 16.36,
      "regulations": [
       "stop"
      ],
      "road": "s41",
      "spine": "out",
-     "street": "s41"
+     "street": "s41",
+     "heading": 16.36
     },
     {
      "at": 0.0,
-     "heading": 106.68,
      "road": "s40",
      "spine": "out",
-     "street": "s40"
+     "street": "s40",
+     "heading": 106.68
     },
     {
      "at": 115.39,
-     "heading": 195.7,
      "regulations": [
       "stop"
      ],
      "road": "s2",
      "spine": "in",
-     "street": "s2"
+     "street": "s2",
+     "heading": 195.7
     },
     {
      "at": 74.27,
-     "heading": 286.59000000000003,
      "road": "s37",
      "spine": "in",
-     "street": "s37"
+     "street": "s37",
+     "heading": 286.59000000000003
     }
    ],
    "at": [
@@ -31484,43 +31465,34 @@
    ],
    "control": "stop",
    "id": "j2",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 14.69,
      "road": "s7",
      "spine": "out",
-     "street": "s7"
+     "street": "s7",
+     "heading": 14.69
     },
     {
      "at": 0.0,
-     "heading": 195.72,
      "road": "s6",
      "spine": "out",
-     "street": "s6"
+     "street": "s6",
+     "heading": 195.72
     },
     {
      "at": 64.14,
-     "heading": 288.01,
      "regulations": [
       "give_way"
      ],
      "road": "s3",
      "spine": "in",
-     "street": "s3"
+     "street": "s3",
+     "heading": 288.01
     }
    ],
    "at": [
@@ -31529,43 +31501,38 @@
    ],
    "control": "give_way",
    "id": "j3",
-   "through": [
-    [
-     0,
-     1
-    ]
-   ],
-   "why": "a local street ends on another: it gives way"
+   "why": "a local street ends on another: it gives way",
+   "through": [[0,1]]
   },
   {
    "arms": [
     {
      "at": 61.0,
-     "heading": 131.75,
      "road": "s323",
      "spine": "in",
-     "street": "s323"
+     "street": "s323",
+     "heading": 131.75
     },
     {
      "at": 0.0,
-     "heading": 224.95,
      "road": "s325",
      "spine": "out",
-     "street": "s325"
+     "street": "s325",
+     "heading": 224.95
     },
     {
      "at": 73.29,
-     "heading": 314.77,
      "road": "s278",
      "spine": "in",
-     "street": "s278"
+     "street": "s278",
+     "heading": 314.77
     },
     {
      "at": 60.8,
-     "heading": 20.95,
      "road": "s4",
      "spine": "in",
-     "street": "s4"
+     "street": "s4",
+     "heading": 20.95
     }
    ],
    "at": [
@@ -31581,39 +31548,39 @@
      "to": 28.04
     }
    ],
-   "through": [[3,1],[0,2]],
    "why": "arterials cross: lights",
+   "through": [[3,1],[0,2]],
    "nodes": [{"at":[-378.88,277.09],"points":[{"at":60.8,"road":"s4"},{"at":73.29,"road":"s278"},{"at":0.0,"road":"s282"}]},{"at":[-398.11,297.49],"points":[{"at":28.04,"road":"s282"},{"at":61.0,"road":"s323"},{"at":0.0,"road":"s325"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 16.55,
      "road": "s43",
      "spine": "out",
-     "street": "s43"
+     "street": "s43",
+     "heading": 16.55
     },
     {
      "at": 0.0,
-     "heading": 107.42,
      "road": "s42",
      "spine": "out",
-     "street": "s42"
+     "street": "s42",
+     "heading": 107.42
     },
     {
      "at": 116.01,
-     "heading": 195.91,
      "road": "s5",
      "spine": "in",
-     "street": "s5"
+     "street": "s5",
+     "heading": 195.91
     },
     {
      "at": 66.09,
-     "heading": 287.14,
      "road": "s40",
      "spine": "in",
-     "street": "s40"
+     "street": "s40",
+     "heading": 287.14
     }
    ],
    "at": [
@@ -31622,54 +31589,45 @@
    ],
    "control": "signal",
    "id": "j5",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 2.27,
      "road": "s46",
      "spine": "out",
-     "street": "s46"
+     "street": "s46",
+     "heading": 2.27
     },
     {
      "at": 0.0,
-     "heading": 108.31,
      "road": "s44",
      "spine": "out",
-     "street": "s44"
+     "street": "s44",
+     "heading": 108.31
     },
     {
      "at": 0.0,
-     "heading": 179.06,
      "road": "s284",
      "spine": "out",
-     "street": "s284"
+     "street": "s284",
+     "heading": 179.06
     },
     {
      "at": 87.53,
-     "heading": 194.63,
      "road": "s7",
      "spine": "in",
-     "street": "s7"
+     "street": "s7",
+     "heading": 194.63
     },
     {
      "at": 55.48,
-     "heading": 288.08,
      "road": "s42",
      "spine": "in",
-     "street": "s42"
+     "street": "s42",
+     "heading": 288.08
     }
    ],
    "at": [
@@ -31685,54 +31643,45 @@
      "to": 29.99
     }
    ],
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     4
-    ]
-   ],
    "why": "five or more roads meet: lights",
+   "through": [[0,2],[1,4]],
    "nodes": [{"at":[-255.85,378.66],"points":[{"at":87.53,"road":"s7"},{"at":29.99,"road":"s45"},{"at":0.0,"road":"s284"}]},{"at":[-225.88,378.36],"points":[{"at":55.48,"road":"s42"},{"at":0.0,"road":"s44"},{"at":0.0,"road":"s45"},{"at":0.0,"road":"s46"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 6.17,
      "regulations": [
       "stop"
      ],
      "road": "s10",
      "spine": "out",
-     "street": "s10"
+     "street": "s10",
+     "heading": 6.17
     },
     {
      "at": 0.0,
-     "heading": 13.39,
      "road": "s13",
      "spine": "out",
-     "street": "s13"
+     "street": "s13",
+     "heading": 13.39
     },
     {
      "at": 0.0,
-     "heading": 110.19,
      "regulations": [
       "stop"
      ],
      "road": "s11",
      "spine": "out",
-     "street": "s11"
+     "street": "s11",
+     "heading": 110.19
     },
     {
      "at": 0.0,
-     "heading": 195.22,
      "road": "s287",
      "spine": "out",
-     "street": "s287"
+     "street": "s287",
+     "heading": 195.22
     }
    ],
    "at": [
@@ -31758,58 +31707,53 @@
      "to": 30.71
     }
    ],
-   "through": [
-    [
-     1,
-     3
-    ]
-   ],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[1,3]],
    "nodes": [{"at":[-381.95,475.91],"points":[{"at":0.0,"road":"s8"},{"at":0.0,"road":"s9"},{"at":0.0,"road":"s10"}]},{"at":[-383.17,479.24],"points":[{"at":3.55,"road":"s8"},{"at":0.0,"road":"s11"},{"at":0.0,"road":"s12"},{"at":0.0,"road":"s13"},{"at":0.82,"road":"s9"}]},{"at":[-412.94,471.72],"points":[{"at":31.27,"road":"s9"},{"at":30.71,"road":"s12"},{"at":0.0,"road":"s287"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 17.24,
      "road": "s50",
      "spine": "out",
-     "street": "s50"
+     "street": "s50",
+     "heading": 17.24
     },
     {
      "at": 0.0,
-     "heading": 109.05,
      "road": "s49",
      "spine": "out",
-     "street": "s49"
+     "street": "s49",
+     "heading": 109.05
     },
     {
      "at": 116.84,
-     "heading": 196.14,
      "road": "s13",
      "spine": "in",
-     "street": "s13"
+     "street": "s13",
+     "heading": 196.14
     },
     {
      "at": 122.35,
-     "heading": 178.48,
      "road": "s10",
      "spine": "in",
-     "street": "s10"
+     "street": "s10",
+     "heading": 178.48
     },
     {
      "at": 105.58,
-     "heading": 288.98,
      "road": "s44",
      "spine": "in",
-     "street": "s44"
+     "street": "s44",
+     "heading": 288.98
     },
     {
      "at": 0.0,
-     "heading": 359.3,
      "road": "s48",
      "spine": "out",
-     "street": "s48"
+     "street": "s48",
+     "heading": 359.3
     }
    ],
    "at": [
@@ -31825,51 +31769,51 @@
      "to": 30.87
     }
    ],
-   "through": [[0,2],[1,4],[3,5]],
    "why": "five or more roads meet: lights",
+   "through": [[0,2],[1,4],[3,5]],
    "nodes": [{"at":[-259.77,478.35],"points":[{"at":122.35,"road":"s10"},{"at":105.58,"road":"s44"},{"at":0.0,"road":"s47"},{"at":0.0,"road":"s48"}]},{"at":[-269.83,507.53],"points":[{"at":116.84,"road":"s13"},{"at":30.87,"road":"s47"},{"at":0.0,"road":"s49"},{"at":0.0,"road":"s50"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 13.34,
      "regulations": [
       "stop"
      ],
      "road": "s16",
      "spine": "out",
-     "street": "s16"
+     "street": "s16",
+     "heading": 13.34
     },
     {
      "at": 0.0,
-     "heading": 110.05,
      "regulations": [
       "stop"
      ],
      "road": "s14",
      "spine": "out",
-     "street": "s14"
+     "street": "s14",
+     "heading": 110.05
     },
     {
      "at": 0.0,
-     "heading": 193.66,
      "regulations": [
       "stop"
      ],
      "road": "s15",
      "spine": "out",
-     "street": "s15"
+     "street": "s15",
+     "heading": 193.66
     },
     {
      "at": 64.91,
-     "heading": 290.34000000000003,
      "regulations": [
       "stop"
      ],
      "road": "s11",
      "spine": "in",
-     "street": "s11"
+     "street": "s11",
+     "heading": 290.34000000000003
     }
    ],
    "at": [
@@ -31878,59 +31822,50 @@
    ],
    "control": "all_way_stop",
    "id": "j9",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 14.25,
      "regulations": [
       "stop"
      ],
      "road": "s19",
      "spine": "out",
-     "street": "s19"
+     "street": "s19",
+     "heading": 14.25
     },
     {
      "at": 0.0,
-     "heading": 108.31,
      "regulations": [
       "stop"
      ],
      "road": "s17",
      "spine": "out",
-     "street": "s17"
+     "street": "s17",
+     "heading": 108.31
     },
     {
      "at": 0.0,
-     "heading": 194.57,
      "regulations": [
       "stop"
      ],
      "road": "s18",
      "spine": "out",
-     "street": "s18"
+     "street": "s18",
+     "heading": 194.57
     },
     {
      "at": 64.1,
-     "heading": 288.81,
      "regulations": [
       "stop"
      ],
      "road": "s14",
      "spine": "in",
-     "street": "s14"
+     "street": "s14",
+     "heading": 288.81
     }
    ],
    "at": [
@@ -31939,53 +31874,44 @@
    ],
    "control": "all_way_stop",
    "id": "j10",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 124.06,
-     "heading": 20.13,
      "regulations": [
       "stop"
      ],
      "road": "s15",
      "spine": "in",
-     "street": "s15"
+     "street": "s15",
+     "heading": 20.13
     },
     {
      "at": 0.0,
-     "heading": 106.21,
      "road": "s290",
      "spine": "out",
-     "street": "s290"
+     "street": "s290",
+     "heading": 106.21
     },
     {
      "at": 1.56,
-     "heading": 190.08,
      "regulations": [
       "stop"
      ],
      "road": "s317",
      "spine": "out",
-     "street": "s317"
+     "street": "s317",
+     "heading": 190.08
     },
     {
      "at": 0.0,
-     "heading": 290.2,
      "road": "s316",
      "spine": "out",
-     "street": "s316"
+     "street": "s316",
+     "heading": 290.2
     }
    ],
    "at": [
@@ -32006,54 +31932,45 @@
      "to": 1.56
     }
    ],
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]],
    "nodes": [{"at":[-524.64,505.09],"points":[{"at":124.06,"road":"s15"},{"at":0.0,"road":"s290"},{"at":0.0,"road":"s291"},{"at":1.56,"road":"s317"}]},{"at":[-521.35,495.19],"points":[{"at":10.43,"road":"s291"},{"at":0.0,"road":"s316"},{"at":0.0,"road":"s317"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 16.84,
      "regulations": [
       "stop"
      ],
      "road": "s52",
      "spine": "out",
-     "street": "s52"
+     "street": "s52",
+     "heading": 16.84
     },
     {
      "at": 0.0,
-     "heading": 109.05,
      "road": "s51",
      "spine": "out",
-     "street": "s51"
+     "street": "s51",
+     "heading": 109.05
     },
     {
      "at": 118.28,
-     "heading": 195.84,
      "regulations": [
       "stop"
      ],
      "road": "s16",
      "spine": "in",
-     "street": "s16"
+     "street": "s16",
+     "heading": 195.84
     },
     {
      "at": 64.67,
-     "heading": 289.03,
      "road": "s49",
      "spine": "in",
-     "street": "s49"
+     "street": "s49",
+     "heading": 289.03
     }
    ],
    "at": [
@@ -32062,53 +31979,44 @@
    ],
    "control": "stop",
    "id": "j12",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 15.85,
      "road": "s22",
      "spine": "out",
-     "street": "s22"
+     "street": "s22",
+     "heading": 15.85
     },
     {
      "at": 0.0,
-     "heading": 106.21,
      "regulations": [
       "stop"
      ],
      "road": "s20",
      "spine": "out",
-     "street": "s20"
+     "street": "s20",
+     "heading": 106.21
     },
     {
      "at": 0.0,
-     "heading": 196.1,
      "road": "s21",
      "spine": "out",
-     "street": "s21"
+     "street": "s21",
+     "heading": 196.1
     },
     {
      "at": 63.08,
-     "heading": 286.68,
      "regulations": [
       "stop"
      ],
      "road": "s17",
      "spine": "in",
-     "street": "s17"
+     "street": "s17",
+     "heading": 286.68
     }
    ],
    "at": [
@@ -32117,61 +32025,52 @@
    ],
    "control": "stop",
    "id": "j13",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 82.68,
-     "heading": 18.45,
      "road": "s21",
      "spine": "in",
-     "street": "s21"
+     "street": "s21",
+     "heading": 18.45
     },
     {
      "at": 47.22,
-     "heading": 79.46,
      "road": "s294",
      "spine": "in",
-     "street": "s294"
+     "street": "s294",
+     "heading": 79.46
     },
     {
      "at": 0.0,
-     "heading": 177.52,
      "road": "s314",
      "spine": "out",
-     "street": "s314"
+     "street": "s314",
+     "heading": 177.52
     },
     {
      "at": 0.0,
-     "heading": 183.13,
      "road": "s315",
      "spine": "out",
-     "street": "s315"
+     "street": "s315",
+     "heading": 183.13
     },
     {
      "at": 63.93,
-     "heading": 276.09000000000003,
      "road": "s290",
      "spine": "in",
-     "street": "s290"
+     "street": "s290",
+     "heading": 276.09000000000003
     },
     {
      "at": 114.85,
-     "heading": 19.43,
      "road": "s18",
      "spine": "in",
-     "street": "s18"
+     "street": "s18",
+     "heading": 19.43
     }
    ],
    "at": [
@@ -32197,45 +32096,45 @@
      "to": 59.38
     }
    ],
-   "through": [[0,3],[5,2],[1,4]],
    "why": "five or more roads meet: lights",
+   "through": [[0,3],[5,2],[1,4]],
    "nodes": [{"at":[-537.06,567.65],"points":[{"at":114.85,"road":"s18"},{"at":63.93,"road":"s290"},{"at":0.0,"road":"s292"}]},{"at":[-537.92,597.76],"points":[{"at":30.14,"road":"s292"},{"at":59.38,"road":"s313"},{"at":0.0,"road":"s315"}]},{"at":[-532.0,656.78],"points":[{"at":47.22,"road":"s294"},{"at":0.0,"road":"s313"},{"at":0.0,"road":"s314"},{"at":82.68,"road":"s21"}]},{"at":[-532.79,633.65],"points":[{"at":90.89,"road":"s21"},{"at":23.04,"road":"s313"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 16.28,
      "regulations": [
       "stop"
      ],
      "road": "s54",
      "spine": "out",
-     "street": "s54"
+     "street": "s54",
+     "heading": 16.28
     },
     {
      "at": 0.0,
-     "heading": 108.95,
      "road": "s53",
      "spine": "out",
-     "street": "s53"
+     "street": "s53",
+     "heading": 108.95
     },
     {
      "at": 118.68,
-     "heading": 195.54,
      "regulations": [
       "stop"
      ],
      "road": "s19",
      "spine": "in",
-     "street": "s19"
+     "street": "s19",
+     "heading": 195.54
     },
     {
      "at": 65.19,
-     "heading": 288.98,
      "road": "s51",
      "spine": "in",
-     "street": "s51"
+     "street": "s51",
+     "heading": 288.98
     }
    ],
    "at": [
@@ -32244,59 +32143,50 @@
    ],
    "control": "stop",
    "id": "j15",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 17.75,
      "regulations": [
       "stop"
      ],
      "road": "s25",
      "spine": "out",
-     "street": "s25"
+     "street": "s25",
+     "heading": 17.75
     },
     {
      "at": 0.0,
-     "heading": 105.62,
      "regulations": [
       "stop"
      ],
      "road": "s23",
      "spine": "out",
-     "street": "s23"
+     "street": "s23",
+     "heading": 105.62
     },
     {
      "at": 0.0,
-     "heading": 198.0,
      "regulations": [
       "stop"
      ],
      "road": "s24",
      "spine": "out",
-     "street": "s24"
+     "street": "s24",
+     "heading": 198.0
     },
     {
      "at": 64.19,
-     "heading": 285.45,
      "regulations": [
       "stop"
      ],
      "road": "s20",
      "spine": "in",
-     "street": "s20"
+     "street": "s20",
+     "heading": 285.45
     }
    ],
    "at": [
@@ -32305,47 +32195,38 @@
    ],
    "control": "all_way_stop",
    "id": "j16",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 16.22,
      "road": "s56",
      "spine": "out",
-     "street": "s56"
+     "street": "s56",
+     "heading": 16.22
     },
     {
      "at": 0.0,
-     "heading": 108.48,
      "road": "s55",
      "spine": "out",
-     "street": "s55"
+     "street": "s55",
+     "heading": 108.48
     },
     {
      "at": 117.09,
-     "heading": 196.01,
      "road": "s22",
      "spine": "in",
-     "street": "s22"
+     "street": "s22",
+     "heading": 196.01
     },
     {
      "at": 65.56,
-     "heading": 288.63,
      "road": "s53",
      "spine": "in",
-     "street": "s53"
+     "street": "s53",
+     "heading": 288.63
     }
    ],
    "at": [
@@ -32354,53 +32235,44 @@
    ],
    "control": "signal",
    "id": "j17",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 67.93,
      "road": "s29",
      "spine": "out",
-     "street": "s29"
+     "street": "s29",
+     "heading": 67.93
     },
     {
      "at": 0.0,
-     "heading": 253.01,
      "road": "s295",
      "spine": "out",
-     "street": "s295"
+     "street": "s295",
+     "heading": 253.01
     },
     {
      "at": 71.97,
-     "heading": 288.85,
      "regulations": [
       "stop"
      ],
      "road": "s23",
      "spine": "in",
-     "street": "s23"
+     "street": "s23",
+     "heading": 288.85
     },
     {
      "at": 0.98,
-     "heading": 19.0,
      "regulations": [
       "stop"
      ],
      "road": "s28",
      "spine": "out",
-     "street": "s28"
+     "street": "s28",
+     "heading": 19.0
     }
    ],
    "at": [
@@ -32431,45 +32303,45 @@
      "to": 21.82
     }
    ],
-   "through": [[0,1]],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,1]],
    "nodes": [{"at":[-484.42,791.31],"points":[{"at":71.97,"road":"s23"},{"at":0.0,"road":"s26"},{"at":0.0,"road":"s27"},{"at":0.0,"road":"s28"},{"at":13.12,"road":"s30"}]},{"at":[-490.12,807.37],"points":[{"at":17.04,"road":"s26"},{"at":0.0,"road":"s29"},{"at":0.0,"road":"s30"},{"at":1.32,"road":"s27"},{"at":0.98,"road":"s28"}]},{"at":[-497.68,786.91],"points":[{"at":13.98,"road":"s27"},{"at":21.82,"road":"s30"},{"at":0.0,"road":"s295"}]}]
   },
   {
    "arms": [
     {
      "at": 49.68,
-     "heading": 73.44,
      "road": "s295",
      "spine": "in",
-     "street": "s295"
+     "street": "s295",
+     "heading": 73.44
     },
     {
      "at": 0.0,
-     "heading": 167.43,
      "regulations": [
       "stop"
      ],
      "road": "s312",
      "spine": "out",
-     "street": "s312"
+     "street": "s312",
+     "heading": 167.43
     },
     {
      "at": 0.0,
-     "heading": 256.49,
      "road": "s294",
      "spine": "out",
-     "street": "s294"
+     "street": "s294",
+     "heading": 256.49
     },
     {
      "at": 61.88,
-     "heading": 18.81,
      "regulations": [
       "stop"
      ],
      "road": "s24",
      "spine": "in",
-     "street": "s24"
+     "street": "s24",
+     "heading": 18.81
     }
    ],
    "at": [
@@ -32485,45 +32357,45 @@
      "to": 37.79
     }
    ],
-   "through": [[0,2]],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2]],
    "nodes": [{"at":[-522.14,702.95],"points":[{"at":61.88,"road":"s24"},{"at":0.0,"road":"s293"},{"at":0.0,"road":"s294"}]},{"at":[-512.18,739.4],"points":[{"at":37.79,"road":"s293"},{"at":49.68,"road":"s295"},{"at":0.0,"road":"s312"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 17.03,
      "regulations": [
       "stop"
      ],
      "road": "s58",
      "spine": "out",
-     "street": "s58"
+     "street": "s58",
+     "heading": 17.03
     },
     {
      "at": 0.0,
-     "heading": 108.09,
      "road": "s57",
      "spine": "out",
-     "street": "s57"
+     "street": "s57",
+     "heading": 108.09
     },
     {
      "at": 114.18,
-     "heading": 197.06,
      "regulations": [
       "stop"
      ],
      "road": "s25",
      "spine": "in",
-     "street": "s25"
+     "street": "s25",
+     "heading": 197.06
     },
     {
      "at": 67.5,
-     "heading": 288.02,
      "road": "s55",
      "spine": "in",
-     "street": "s55"
+     "street": "s55",
+     "heading": 288.02
     }
    ],
    "at": [
@@ -32532,53 +32404,44 @@
    ],
    "control": "stop",
    "id": "j20",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 17.09,
      "regulations": [
       "stop"
      ],
      "road": "s60",
      "spine": "out",
-     "street": "s60"
+     "street": "s60",
+     "heading": 17.09
     },
     {
      "at": 0.0,
-     "heading": 110.79,
      "road": "s59",
      "spine": "out",
-     "street": "s59"
+     "street": "s59",
+     "heading": 110.79
     },
     {
      "at": 111.54,
-     "heading": 197.14,
      "regulations": [
       "stop"
      ],
      "road": "s28",
      "spine": "in",
-     "street": "s28"
+     "street": "s28",
+     "heading": 197.14
     },
     {
      "at": 73.41,
-     "heading": 290.2,
      "road": "s57",
      "spine": "in",
-     "street": "s57"
+     "street": "s57",
+     "heading": 290.2
     }
    ],
    "at": [
@@ -32587,40 +32450,31 @@
    ],
    "control": "stop",
    "id": "j21",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 56.82,
-     "heading": 62.96,
      "road": "s296",
      "spine": "in",
-     "street": "s296"
+     "street": "s296",
+     "heading": 62.96
     },
     {
      "at": 0.0,
-     "heading": 152.28,
      "road": "s311",
      "spine": "out",
-     "street": "s311"
+     "street": "s311",
+     "heading": 152.28
     },
     {
      "at": 35.99,
-     "heading": 245.06,
      "road": "s29",
      "spine": "in",
-     "street": "s29"
+     "street": "s29",
+     "heading": 245.06
     }
    ],
    "at": [
@@ -32629,50 +32483,45 @@
    ],
    "control": "signal",
    "id": "j22",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 1.33,
-     "heading": 16.21,
      "road": "s36",
      "spine": "out",
-     "street": "s36"
+     "street": "s36",
+     "heading": 16.21
     },
     {
      "at": 1.47,
-     "heading": 109.78,
      "road": "s34",
      "spine": "out",
-     "street": "s34"
+     "street": "s34",
+     "heading": 109.78
     },
     {
      "at": 0.0,
-     "heading": 152.8,
      "road": "s272",
      "spine": "out",
-     "street": "s272"
+     "street": "s272",
+     "heading": 152.8
     },
     {
      "at": 0.0,
-     "heading": 263.28,
      "road": "s327",
      "spine": "out",
-     "street": "s327"
+     "street": "s327",
+     "heading": 263.28
     },
     {
      "at": 0.0,
-     "heading": 341.38,
      "road": "s326",
      "spine": "out",
-     "street": "s326"
+     "street": "s326",
+     "heading": 341.38
     }
    ],
    "at": [
@@ -32723,54 +32572,45 @@
      "to": 7.0
     }
    ],
-   "through": [
-    [
-     1,
-     3
-    ],
-    [
-     2,
-     4
-    ]
-   ],
    "why": "five or more roads meet: lights",
+   "through": [[1,3],[2,4]],
    "nodes": [{"at":[-135.66,92.06],"points":[{"at":0.0,"road":"s31"},{"at":0.0,"road":"s32"},{"at":0.0,"road":"s33"},{"at":1.33,"road":"s36"}]},{"at":[-141.47,107.43],"points":[{"at":16.43,"road":"s31"},{"at":0.0,"road":"s34"},{"at":0.0,"road":"s35"},{"at":0.0,"road":"s36"},{"at":11.66,"road":"s32"}]},{"at":[-152.86,102.14],"points":[{"at":20.56,"road":"s32"},{"at":12.93,"road":"s35"},{"at":7.8,"road":"s271"},{"at":7.0,"road":"s273"},{"at":15.39,"road":"s31"}]},{"at":[-118.54,85.55],"points":[{"at":18.32,"road":"s33"},{"at":0.0,"road":"s326"},{"at":0.0,"road":"s327"}]},{"at":[-159.55,102.33],"points":[{"at":0.0,"road":"s271"},{"at":0.0,"road":"s272"},{"at":0.0,"road":"s273"},{"at":1.47,"road":"s34"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 15.87,
      "regulations": [
       "stop"
      ],
      "road": "s39",
      "spine": "out",
-     "street": "s39"
+     "street": "s39",
+     "heading": 15.87
     },
     {
      "at": 0.0,
-     "heading": 106.41,
      "road": "s37",
      "spine": "out",
-     "street": "s37"
+     "street": "s37",
+     "heading": 106.41
     },
     {
      "at": 0.0,
-     "heading": 195.3,
      "regulations": [
       "stop"
      ],
      "road": "s38",
      "spine": "out",
-     "street": "s38"
+     "street": "s38",
+     "heading": 195.3
     },
     {
      "at": 87.97,
-     "heading": 286.65999999999997,
      "road": "s34",
      "spine": "in",
-     "street": "s34"
+     "street": "s34",
+     "heading": 286.65999999999997
     }
    ],
    "at": [
@@ -32779,53 +32619,44 @@
    ],
    "control": "stop",
    "id": "j24",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.7,
      "road": "s70",
      "spine": "out",
-     "street": "s70"
+     "street": "s70",
+     "heading": 19.7
     },
     {
      "at": 0.0,
-     "heading": 111.05,
      "regulations": [
       "stop"
      ],
      "road": "s69",
      "spine": "out",
-     "street": "s69"
+     "street": "s69",
+     "heading": 111.05
     },
     {
      "at": 100.07,
-     "heading": 199.36,
      "road": "s36",
      "spine": "in",
-     "street": "s36"
+     "street": "s36",
+     "heading": 199.36
     },
     {
      "at": 84.55,
-     "heading": 291.87,
      "regulations": [
       "stop"
      ],
      "road": "s66",
      "spine": "in",
-     "street": "s66"
+     "street": "s66",
+     "heading": 291.87
     }
    ],
    "at": [
@@ -32834,59 +32665,50 @@
    ],
    "control": "stop",
    "id": "j25",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.62,
      "regulations": [
       "stop"
      ],
      "road": "s72",
      "spine": "out",
-     "street": "s72"
+     "street": "s72",
+     "heading": 19.62
     },
     {
      "at": 0.0,
-     "heading": 106.46,
      "regulations": [
       "stop"
      ],
      "road": "s71",
      "spine": "out",
-     "street": "s71"
+     "street": "s71",
+     "heading": 106.46
     },
     {
      "at": 98.79,
-     "heading": 199.4,
      "regulations": [
       "stop"
      ],
      "road": "s39",
      "spine": "in",
-     "street": "s39"
+     "street": "s39",
+     "heading": 199.4
     },
     {
      "at": 87.72,
-     "heading": 286.99,
      "regulations": [
       "stop"
      ],
      "road": "s69",
      "spine": "in",
-     "street": "s69"
+     "street": "s69",
+     "heading": 286.99
     }
    ],
    "at": [
@@ -32895,59 +32717,50 @@
    ],
    "control": "all_way_stop",
    "id": "j26",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.18,
      "regulations": [
       "stop"
      ],
      "road": "s74",
      "spine": "out",
-     "street": "s74"
+     "street": "s74",
+     "heading": 19.18
     },
     {
      "at": 0.0,
-     "heading": 106.8,
      "regulations": [
       "stop"
      ],
      "road": "s73",
      "spine": "out",
-     "street": "s73"
+     "street": "s73",
+     "heading": 106.8
     },
     {
      "at": 99.0,
-     "heading": 198.97,
      "regulations": [
       "stop"
      ],
      "road": "s41",
      "spine": "in",
-     "street": "s41"
+     "street": "s41",
+     "heading": 198.97
     },
     {
      "at": 74.42,
-     "heading": 286.4,
      "regulations": [
       "stop"
      ],
      "road": "s71",
      "spine": "in",
-     "street": "s71"
+     "street": "s71",
+     "heading": 286.4
     }
    ],
    "at": [
@@ -32956,56 +32769,47 @@
    ],
    "control": "all_way_stop",
    "id": "j27",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 98.46,
-     "heading": 348.77,
      "regulations": [
       "stop"
      ],
      "road": "s105",
      "spine": "in",
-     "street": "s105"
+     "street": "s105",
+     "heading": 348.77
     },
     {
      "at": 113.62,
-     "heading": 166.38,
      "regulations": [
       "stop"
      ],
      "road": "s46",
      "spine": "in",
-     "street": "s46"
+     "street": "s46",
+     "heading": 166.38
     },
     {
      "at": 98.19,
-     "heading": 198.92,
      "road": "s43",
      "spine": "in",
-     "street": "s43"
+     "street": "s43",
+     "heading": 198.92
     },
     {
      "at": 66.24,
-     "heading": 288.32,
      "regulations": [
       "stop"
      ],
      "road": "s73",
      "spine": "in",
-     "street": "s73"
+     "street": "s73",
+     "heading": 288.32
     }
    ],
    "at": [
@@ -33026,45 +32830,45 @@
      "to": 7.67
     }
    ],
-   "through": [[1,0]],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[1,0]],
    "nodes": [{"at":[-115.55,355.74],"points":[{"at":98.19,"road":"s43"},{"at":66.24,"road":"s73"},{"at":0.0,"road":"s75"},{"at":113.62,"road":"s46"}]},{"at":[-108.3,358.24],"points":[{"at":120.08,"road":"s46"},{"at":7.67,"road":"s75"},{"at":98.46,"road":"s105"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.05,
      "regulations": [
       "stop"
      ],
      "road": "s81",
      "spine": "out",
-     "street": "s81"
+     "street": "s81",
+     "heading": 19.05
     },
     {
      "at": 0.0,
-     "heading": 109.04,
      "regulations": [
       "stop"
      ],
      "road": "s79",
      "spine": "out",
-     "street": "s79"
+     "street": "s79",
+     "heading": 109.04
     },
     {
      "at": 95.67,
-     "heading": 169.99,
      "road": "s48",
      "spine": "in",
-     "street": "s48"
+     "street": "s48",
+     "heading": 169.99
     },
     {
      "at": 0.0,
-     "heading": 348.52,
      "road": "s78",
      "spine": "out",
-     "street": "s78"
+     "street": "s78",
+     "heading": 348.52
     }
    ],
    "at": [
@@ -33090,50 +32894,45 @@
      "to": 7.4
     }
    ],
-   "through": [
-    [
-     2,
-     3
-    ]
-   ],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[2,3]],
    "nodes": [{"at":[-164.46,475.05],"points":[{"at":95.67,"road":"s48"},{"at":8.6,"road":"s77"},{"at":7.4,"road":"s80"}]},{"at":[-156.04,473.34],"points":[{"at":0.0,"road":"s76"},{"at":0.0,"road":"s77"},{"at":0.0,"road":"s78"}]},{"at":[-157.47,477.47],"points":[{"at":4.37,"road":"s76"},{"at":0.0,"road":"s79"},{"at":0.0,"road":"s80"},{"at":0.0,"road":"s81"},{"at":2.3,"road":"s77"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.06,
      "road": "s83",
      "spine": "out",
-     "street": "s83"
+     "street": "s83",
+     "heading": 19.06
     },
     {
      "at": 0.0,
-     "heading": 109.06,
      "regulations": [
       "stop"
      ],
      "road": "s82",
      "spine": "out",
-     "street": "s82"
+     "street": "s82",
+     "heading": 109.06
     },
     {
      "at": 96.4,
-     "heading": 199.07,
      "road": "s50",
      "spine": "in",
-     "street": "s50"
+     "street": "s50",
+     "heading": 199.07
     },
     {
      "at": 64.38,
-     "heading": 289.07,
      "regulations": [
       "stop"
      ],
      "road": "s79",
      "spine": "in",
-     "street": "s79"
+     "street": "s79",
+     "heading": 289.07
     }
    ],
    "at": [
@@ -33142,59 +32941,50 @@
    ],
    "control": "stop",
    "id": "j30",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.07,
      "regulations": [
       "stop"
      ],
      "road": "s85",
      "spine": "out",
-     "street": "s85"
+     "street": "s85",
+     "heading": 19.07
     },
     {
      "at": 0.0,
-     "heading": 109.05,
      "regulations": [
       "stop"
      ],
      "road": "s84",
      "spine": "out",
-     "street": "s84"
+     "street": "s84",
+     "heading": 109.05
     },
     {
      "at": 96.39,
-     "heading": 199.06,
      "regulations": [
       "stop"
      ],
      "road": "s52",
      "spine": "in",
-     "street": "s52"
+     "street": "s52",
+     "heading": 199.06
     },
     {
      "at": 64.38,
-     "heading": 289.06,
      "regulations": [
       "stop"
      ],
      "road": "s82",
      "spine": "in",
-     "street": "s82"
+     "street": "s82",
+     "heading": 289.06
     }
    ],
    "at": [
@@ -33203,59 +32993,50 @@
    ],
    "control": "all_way_stop",
    "id": "j31",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.07,
      "regulations": [
       "stop"
      ],
      "road": "s87",
      "spine": "out",
-     "street": "s87"
+     "street": "s87",
+     "heading": 19.07
     },
     {
      "at": 0.0,
-     "heading": 109.04,
      "regulations": [
       "stop"
      ],
      "road": "s86",
      "spine": "out",
-     "street": "s86"
+     "street": "s86",
+     "heading": 109.04
     },
     {
      "at": 96.35,
-     "heading": 199.06,
      "regulations": [
       "stop"
      ],
      "road": "s54",
      "spine": "in",
-     "street": "s54"
+     "street": "s54",
+     "heading": 199.06
     },
     {
      "at": 64.38,
-     "heading": 289.07,
      "regulations": [
       "stop"
      ],
      "road": "s84",
      "spine": "in",
-     "street": "s84"
+     "street": "s84",
+     "heading": 289.07
     }
    ],
    "at": [
@@ -33264,53 +33045,44 @@
    ],
    "control": "all_way_stop",
    "id": "j32",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 18.82,
      "road": "s89",
      "spine": "out",
-     "street": "s89"
+     "street": "s89",
+     "heading": 18.82
     },
     {
      "at": 0.0,
-     "heading": 109.03,
      "regulations": [
       "stop"
      ],
      "road": "s88",
      "spine": "out",
-     "street": "s88"
+     "street": "s88",
+     "heading": 109.03
     },
     {
      "at": 96.07,
-     "heading": 198.52,
      "road": "s56",
      "spine": "in",
-     "street": "s56"
+     "street": "s56",
+     "heading": 198.52
     },
     {
      "at": 64.46,
-     "heading": 289.03,
      "regulations": [
       "stop"
      ],
      "road": "s86",
      "spine": "in",
-     "street": "s86"
+     "street": "s86",
+     "heading": 289.03
     }
    ],
    "at": [
@@ -33319,59 +33091,50 @@
    ],
    "control": "stop",
    "id": "j33",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 17.73,
      "regulations": [
       "stop"
      ],
      "road": "s91",
      "spine": "out",
-     "street": "s91"
+     "street": "s91",
+     "heading": 17.73
     },
     {
      "at": 0.0,
-     "heading": 109.03,
      "regulations": [
       "stop"
      ],
      "road": "s90",
      "spine": "out",
-     "street": "s90"
+     "street": "s90",
+     "heading": 109.03
     },
     {
      "at": 95.27,
-     "heading": 197.37,
      "regulations": [
       "stop"
      ],
      "road": "s58",
      "spine": "in",
-     "street": "s58"
+     "street": "s58",
+     "heading": 197.37
     },
     {
      "at": 66.88,
-     "heading": 288.88,
      "regulations": [
       "stop"
      ],
      "road": "s88",
      "spine": "in",
-     "street": "s88"
+     "street": "s88",
+     "heading": 288.88
     }
    ],
    "at": [
@@ -33380,61 +33143,52 @@
    ],
    "control": "all_way_stop",
    "id": "j34",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 67.06,
-     "heading": 44.8,
      "road": "s97",
      "spine": "in",
-     "street": "s97"
+     "street": "s97",
+     "heading": 44.8
     },
     {
      "at": 0.0,
-     "heading": 131.21,
      "road": "s310",
      "spine": "out",
-     "street": "s310"
+     "street": "s310",
+     "heading": 131.21
     },
     {
      "at": 0.0,
-     "heading": 230.35,
      "road": "s65",
      "spine": "out",
-     "street": "s65"
+     "street": "s65",
+     "heading": 230.35
     },
     {
      "at": 0.0,
-     "heading": 196.09,
      "road": "s62",
      "spine": "out",
-     "street": "s62"
+     "street": "s62",
+     "heading": 196.09
     },
     {
      "at": 79.96,
-     "heading": 291.74,
      "road": "s59",
      "spine": "in",
-     "street": "s59"
+     "street": "s59",
+     "heading": 291.74
     },
     {
      "at": 0.0,
-     "heading": 16.34,
      "road": "s63",
      "spine": "out",
-     "street": "s63"
+     "street": "s63",
+     "heading": 16.34
     }
    ],
    "at": [
@@ -33455,51 +33209,51 @@
      "to": 29.56
     }
    ],
-   "through": [[5,3],[0,2],[1,4]],
    "why": "five or more roads meet: lights",
+   "through": [[5,3],[0,2],[1,4]],
    "nodes": [{"at":[-407.71,900.24],"points":[{"at":79.96,"road":"s59"},{"at":0.0,"road":"s61"},{"at":0.0,"road":"s62"},{"at":0.0,"road":"s63"}]},{"at":[-418.23,927.53],"points":[{"at":29.25,"road":"s61"},{"at":0.0,"road":"s64"},{"at":0.0,"road":"s65"}]},{"at":[-398.24,949.3],"points":[{"at":29.56,"road":"s64"},{"at":67.06,"road":"s97"},{"at":0.0,"road":"s310"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 18.95,
      "regulations": [
       "stop"
      ],
      "road": "s93",
      "spine": "out",
-     "street": "s93"
+     "street": "s93",
+     "heading": 18.95
     },
     {
      "at": 0.0,
-     "heading": 112.02,
      "regulations": [
       "stop"
      ],
      "road": "s92",
      "spine": "out",
-     "street": "s92"
+     "street": "s92",
+     "heading": 112.02
     },
     {
      "at": 94.15,
-     "heading": 196.73,
      "regulations": [
       "stop"
      ],
      "road": "s60",
      "spine": "in",
-     "street": "s60"
+     "street": "s60",
+     "heading": 196.73
     },
     {
      "at": 73.85,
-     "heading": 291.14,
      "regulations": [
       "stop"
      ],
      "road": "s90",
      "spine": "in",
-     "street": "s90"
+     "street": "s90",
+     "heading": 291.14
     }
    ],
    "at": [
@@ -33508,50 +33262,41 @@
    ],
    "control": "all_way_stop",
    "id": "j36",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 40.8,
-     "heading": 14.92,
      "road": "s62",
      "spine": "in",
-     "street": "s62"
+     "street": "s62",
+     "heading": 14.92
     },
     {
      "at": 47.96,
-     "heading": 56.37,
      "road": "s65",
      "spine": "in",
-     "street": "s65"
+     "street": "s65",
+     "heading": 56.37
     },
     {
      "at": 0.0,
-     "heading": 143.13,
      "regulations": [
       "stop"
      ],
      "road": "s297",
      "spine": "out",
-     "street": "s297"
+     "street": "s297",
+     "heading": 143.13
     },
     {
      "at": 0.0,
-     "heading": 235.45999999999998,
      "road": "s296",
      "spine": "out",
-     "street": "s296"
+     "street": "s296",
+     "heading": 235.45999999999998
     }
    ],
    "at": [
@@ -33560,49 +33305,44 @@
    ],
    "control": "stop",
    "id": "j37",
-   "through": [
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 20.76,
      "road": "s95",
      "spine": "out",
-     "street": "s95"
+     "street": "s95",
+     "heading": 20.76
     },
     {
      "at": 0.0,
-     "heading": 114.69,
      "regulations": [
       "stop"
      ],
      "road": "s94",
      "spine": "out",
-     "street": "s94"
+     "street": "s94",
+     "heading": 114.69
     },
     {
      "at": 90.96,
-     "heading": 199.8,
      "road": "s63",
      "spine": "in",
-     "street": "s63"
+     "street": "s63",
+     "heading": 199.8
     },
     {
      "at": 81.26,
-     "heading": 294.94,
      "regulations": [
       "stop"
      ],
      "road": "s92",
      "spine": "in",
-     "street": "s92"
+     "street": "s92",
+     "heading": 294.94
     }
    ],
    "at": [
@@ -33611,53 +33351,44 @@
    ],
    "control": "stop",
    "id": "j38",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 8.4,
-     "heading": 112.87,
      "regulations": [
       "stop"
      ],
      "road": "s66",
      "spine": "out",
-     "street": "s66"
+     "street": "s66",
+     "heading": 112.87
     },
     {
      "at": 92.64,
-     "heading": 169.76,
      "road": "s326",
      "spine": "in",
-     "street": "s326"
+     "street": "s326",
+     "heading": 169.76
     },
     {
      "at": 4.44,
-     "heading": 275.6,
      "regulations": [
       "stop"
      ],
      "road": "s328",
      "spine": "out",
-     "street": "s328"
+     "street": "s328",
+     "heading": 275.6
     },
     {
      "at": 0.0,
-     "heading": 354.8,
      "road": "s68",
      "spine": "out",
-     "street": "s68"
+     "street": "s68",
+     "heading": 354.8
     }
    ],
    "at": [
@@ -33683,54 +33414,45 @@
      "to": 4.44
     }
    ],
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]],
    "nodes": [{"at":[-13.73,60.16],"points":[{"at":0.0,"road":"s66"},{"at":0.0,"road":"s67"},{"at":0.0,"road":"s68"},{"at":4.44,"road":"s328"}]},{"at":[-28.82,62.96],"points":[{"at":15.36,"road":"s67"},{"at":92.64,"road":"s326"},{"at":0.0,"road":"s328"},{"at":8.4,"road":"s66"}]}]
   },
   {
    "arms": [
     {
      "at": 27.85,
-     "heading": 8.65,
      "road": "s329",
      "spine": "out",
-     "street": "s329"
+     "street": "s329",
+     "heading": 8.65
     },
     {
      "at": 0.0,
-     "heading": 111.51,
      "regulations": [
       "stop"
      ],
      "road": "s98",
      "spine": "out",
-     "street": "s98"
+     "street": "s98",
+     "heading": 111.51
     },
     {
      "at": 71.79,
-     "heading": 181.17,
      "road": "s68",
      "spine": "in",
-     "street": "s68"
+     "street": "s68",
+     "heading": 181.17
     },
     {
      "at": 0.0,
-     "heading": 282.46,
      "regulations": [
       "stop"
      ],
      "road": "s330",
      "spine": "out",
-     "street": "s330"
+     "street": "s330",
+     "heading": 282.46
     }
    ],
    "at": [
@@ -33746,54 +33468,45 @@
      "to": 27.85
     }
    ],
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]],
    "nodes": [{"at":[57.89,56.74],"points":[{"at":71.79,"road":"s68"},{"at":0.0,"road":"s329"},{"at":0.0,"road":"s330"}]},{"at":[85.53,59.94],"points":[{"at":27.85,"road":"s329"},{"at":0.0,"road":"s98"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 20.68,
      "road": "s100",
      "spine": "out",
-     "street": "s100"
+     "street": "s100",
+     "heading": 20.68
     },
     {
      "at": 0.0,
-     "heading": 109.2,
      "regulations": [
       "stop"
      ],
      "road": "s99",
      "spine": "out",
-     "street": "s99"
+     "street": "s99",
+     "heading": 109.2
     },
     {
      "at": 94.44,
-     "heading": 200.63,
      "road": "s70",
      "spine": "in",
-     "street": "s70"
+     "street": "s70",
+     "heading": 200.63
     },
     {
      "at": 119.13,
-     "heading": 289.93,
      "regulations": [
       "stop"
      ],
      "road": "s98",
      "spine": "in",
-     "street": "s98"
+     "street": "s98",
+     "heading": 289.93
     }
    ],
    "at": [
@@ -33802,59 +33515,50 @@
    ],
    "control": "stop",
    "id": "j41",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.65,
      "regulations": [
       "stop"
      ],
      "road": "s102",
      "spine": "out",
-     "street": "s102"
+     "street": "s102",
+     "heading": 19.65
     },
     {
      "at": 0.0,
-     "heading": 105.99,
      "regulations": [
       "stop"
      ],
      "road": "s101",
      "spine": "out",
-     "street": "s101"
+     "street": "s101",
+     "heading": 105.99
     },
     {
      "at": 96.63,
-     "heading": 199.45,
      "regulations": [
       "stop"
      ],
      "road": "s72",
      "spine": "in",
-     "street": "s72"
+     "street": "s72",
+     "heading": 199.45
     },
     {
      "at": 86.7,
-     "heading": 286.1,
      "regulations": [
       "stop"
      ],
      "road": "s99",
      "spine": "in",
-     "street": "s99"
+     "street": "s99",
+     "heading": 286.1
     }
    ],
    "at": [
@@ -33863,54 +33567,45 @@
    ],
    "control": "all_way_stop",
    "id": "j42",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 354.08,
      "road": "s106",
      "spine": "out",
-     "street": "s106"
+     "street": "s106",
+     "heading": 354.08
     },
     {
      "at": 0.0,
-     "heading": 173.7,
      "road": "s105",
      "spine": "out",
-     "street": "s105"
+     "street": "s105",
+     "heading": 173.7
     },
     {
      "at": 96.03,
-     "heading": 199.07,
      "road": "s74",
      "spine": "in",
-     "street": "s74"
+     "street": "s74",
+     "heading": 199.07
     },
     {
      "at": 73.6,
-     "heading": 287.65,
      "road": "s101",
      "spine": "in",
-     "street": "s101"
+     "street": "s101",
+     "heading": 287.65
     },
     {
      "at": 0.0,
-     "heading": 19.1,
      "road": "s104",
      "spine": "out",
-     "street": "s104"
+     "street": "s104",
+     "heading": 19.1
     }
    ],
    "at": [
@@ -33926,45 +33621,45 @@
      "to": 19.78
     }
    ],
-   "through": [[4,2],[1,0]],
    "why": "five or more roads meet: lights",
+   "through": [[4,2],[1,0]],
    "nodes": [{"at":[-4.85,324.12],"points":[{"at":96.03,"road":"s74"},{"at":73.6,"road":"s101"},{"at":0.0,"road":"s103"},{"at":0.0,"road":"s104"}]},{"at":[-11.1,342.89],"points":[{"at":19.78,"road":"s103"},{"at":0.0,"road":"s105"},{"at":0.0,"road":"s106"}]}]
   },
   {
    "arms": [
     {
      "at": 87.94,
-     "heading": 19.05,
      "regulations": [
       "stop"
      ],
      "road": "s142",
      "spine": "in",
-     "street": "s142"
+     "street": "s142",
+     "heading": 19.05
     },
     {
      "at": 0.0,
-     "heading": 109.07,
      "regulations": [
       "stop"
      ],
      "road": "s107",
      "spine": "out",
-     "street": "s107"
+     "street": "s107",
+     "heading": 109.07
     },
     {
      "at": 109.98,
-     "heading": 172.56,
      "road": "s78",
      "spine": "in",
-     "street": "s78"
+     "street": "s78",
+     "heading": 172.56
     },
     {
      "at": 97.22,
-     "heading": 351.81,
      "road": "s139",
      "spine": "in",
-     "street": "s139"
+     "street": "s139",
+     "heading": 351.81
     }
    ],
    "at": [
@@ -33980,56 +33675,51 @@
      "to": 7.6
     }
    ],
-   "through": [
-    [
-     2,
-     3
-    ]
-   ],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[2,3]],
    "nodes": [{"at":[-48.42,451.02],"points":[{"at":109.98,"road":"s78"},{"at":0.0,"road":"s107"},{"at":0.0,"road":"s108"}]},{"at":[-41.07,449.58],"points":[{"at":7.6,"road":"s108"},{"at":97.22,"road":"s139"},{"at":87.94,"road":"s142"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.07,
      "regulations": [
       "stop"
      ],
      "road": "s110",
      "spine": "out",
-     "street": "s110"
+     "street": "s110",
+     "heading": 19.07
     },
     {
      "at": 0.0,
-     "heading": 109.07,
      "regulations": [
       "stop"
      ],
      "road": "s109",
      "spine": "out",
-     "street": "s109"
+     "street": "s109",
+     "heading": 109.07
     },
     {
      "at": 94.43,
-     "heading": 199.07,
      "regulations": [
       "stop"
      ],
      "road": "s81",
      "spine": "in",
-     "street": "s81"
+     "street": "s81",
+     "heading": 199.07
     },
     {
      "at": 60.62,
-     "heading": 289.06,
      "regulations": [
       "stop"
      ],
      "road": "s107",
      "spine": "in",
-     "street": "s107"
+     "street": "s107",
+     "heading": 289.06
     }
    ],
    "at": [
@@ -34038,53 +33728,44 @@
    ],
    "control": "all_way_stop",
    "id": "j45",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.05,
      "road": "s112",
      "spine": "out",
-     "street": "s112"
+     "street": "s112",
+     "heading": 19.05
     },
     {
      "at": 0.0,
-     "heading": 109.05,
      "regulations": [
       "stop"
      ],
      "road": "s111",
      "spine": "out",
-     "street": "s111"
+     "street": "s111",
+     "heading": 109.05
     },
     {
      "at": 94.42,
-     "heading": 199.07,
      "road": "s83",
      "spine": "in",
-     "street": "s83"
+     "street": "s83",
+     "heading": 199.07
     },
     {
      "at": 64.38,
-     "heading": 289.08,
      "regulations": [
       "stop"
      ],
      "road": "s109",
      "spine": "in",
-     "street": "s109"
+     "street": "s109",
+     "heading": 289.08
     }
    ],
    "at": [
@@ -34093,59 +33774,50 @@
    ],
    "control": "stop",
    "id": "j46",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.06,
      "regulations": [
       "stop"
      ],
      "road": "s114",
      "spine": "out",
-     "street": "s114"
+     "street": "s114",
+     "heading": 19.06
     },
     {
      "at": 0.0,
-     "heading": 109.07,
      "regulations": [
       "stop"
      ],
      "road": "s113",
      "spine": "out",
-     "street": "s113"
+     "street": "s113",
+     "heading": 109.07
     },
     {
      "at": 94.43,
-     "heading": 199.07,
      "regulations": [
       "stop"
      ],
      "road": "s85",
      "spine": "in",
-     "street": "s85"
+     "street": "s85",
+     "heading": 199.07
     },
     {
      "at": 64.38,
-     "heading": 289.06,
      "regulations": [
       "stop"
      ],
      "road": "s111",
      "spine": "in",
-     "street": "s111"
+     "street": "s111",
+     "heading": 289.06
     }
    ],
    "at": [
@@ -34154,59 +33826,50 @@
    ],
    "control": "all_way_stop",
    "id": "j47",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.06,
      "regulations": [
       "stop"
      ],
      "road": "s116",
      "spine": "out",
-     "street": "s116"
+     "street": "s116",
+     "heading": 19.06
     },
     {
      "at": 0.0,
-     "heading": 109.06,
      "regulations": [
       "stop"
      ],
      "road": "s115",
      "spine": "out",
-     "street": "s115"
+     "street": "s115",
+     "heading": 109.06
     },
     {
      "at": 94.43,
-     "heading": 199.07,
      "regulations": [
       "stop"
      ],
      "road": "s87",
      "spine": "in",
-     "street": "s87"
+     "street": "s87",
+     "heading": 199.07
     },
     {
      "at": 64.38,
-     "heading": 289.05,
      "regulations": [
       "stop"
      ],
      "road": "s113",
      "spine": "in",
-     "street": "s113"
+     "street": "s113",
+     "heading": 289.05
     }
    ],
    "at": [
@@ -34215,53 +33878,44 @@
    ],
    "control": "all_way_stop",
    "id": "j48",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.05,
      "road": "s118",
      "spine": "out",
-     "street": "s118"
+     "street": "s118",
+     "heading": 19.05
     },
     {
      "at": 0.0,
-     "heading": 109.04,
      "regulations": [
       "stop"
      ],
      "road": "s117",
      "spine": "out",
-     "street": "s117"
+     "street": "s117",
+     "heading": 109.04
     },
     {
      "at": 94.41,
-     "heading": 199.07,
      "road": "s89",
      "spine": "in",
-     "street": "s89"
+     "street": "s89",
+     "heading": 199.07
     },
     {
      "at": 64.38,
-     "heading": 289.07,
      "regulations": [
       "stop"
      ],
      "road": "s115",
      "spine": "in",
-     "street": "s115"
+     "street": "s115",
+     "heading": 289.07
     }
    ],
    "at": [
@@ -34270,59 +33924,50 @@
    ],
    "control": "stop",
    "id": "j49",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.06,
      "regulations": [
       "stop"
      ],
      "road": "s120",
      "spine": "out",
-     "street": "s120"
+     "street": "s120",
+     "heading": 19.06
     },
     {
      "at": 0.0,
-     "heading": 108.99,
      "regulations": [
       "stop"
      ],
      "road": "s119",
      "spine": "out",
-     "street": "s119"
+     "street": "s119",
+     "heading": 108.99
     },
     {
      "at": 94.3,
-     "heading": 198.99,
      "regulations": [
       "stop"
      ],
      "road": "s91",
      "spine": "in",
-     "street": "s91"
+     "street": "s91",
+     "heading": 198.99
     },
     {
      "at": 65.98,
-     "heading": 288.96,
      "regulations": [
       "stop"
      ],
      "road": "s117",
      "spine": "in",
-     "street": "s117"
+     "street": "s117",
+     "heading": 288.96
     }
    ],
    "at": [
@@ -34331,59 +33976,50 @@
    ],
    "control": "all_way_stop",
    "id": "j50",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 20.23,
      "regulations": [
       "stop"
      ],
      "road": "s122",
      "spine": "out",
-     "street": "s122"
+     "street": "s122",
+     "heading": 20.23
     },
     {
      "at": 0.0,
-     "heading": 111.22,
      "regulations": [
       "stop"
      ],
      "road": "s121",
      "spine": "out",
-     "street": "s121"
+     "street": "s121",
+     "heading": 111.22
     },
     {
      "at": 94.71,
-     "heading": 198.42,
      "regulations": [
       "stop"
      ],
      "road": "s93",
      "spine": "in",
-     "street": "s93"
+     "street": "s93",
+     "heading": 198.42
     },
     {
      "at": 74.2,
-     "heading": 290.5,
      "regulations": [
       "stop"
      ],
      "road": "s119",
      "spine": "in",
-     "street": "s119"
+     "street": "s119",
+     "heading": 290.5
     }
    ],
    "at": [
@@ -34392,53 +34028,44 @@
    ],
    "control": "all_way_stop",
    "id": "j51",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 85.55,
-     "heading": 38.36,
      "road": "s126",
      "spine": "in",
-     "street": "s126"
+     "street": "s126",
+     "heading": 38.36
     },
     {
      "at": 0.0,
-     "heading": 125.38,
      "regulations": [
       "stop"
      ],
      "road": "s309",
      "spine": "out",
-     "street": "s309"
+     "street": "s309",
+     "heading": 125.38
     },
     {
      "at": 0.0,
-     "heading": 220.06,
      "road": "s97",
      "spine": "out",
-     "street": "s97"
+     "street": "s97",
+     "heading": 220.06
     },
     {
      "at": 71.98,
-     "heading": 289.92,
      "regulations": [
       "stop"
      ],
      "road": "s94",
      "spine": "in",
-     "street": "s94"
+     "street": "s94",
+     "heading": 289.92
     }
    ],
    "at": [
@@ -34454,54 +34081,45 @@
      "to": 11.48
     }
    ],
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]],
    "nodes": [{"at":[-348.72,994.47],"points":[{"at":71.98,"road":"s94"},{"at":0.0,"road":"s96"},{"at":0.0,"road":"s97"}]},{"at":[-339.81,1001.71],"points":[{"at":11.48,"road":"s96"},{"at":85.55,"road":"s126"},{"at":0.0,"road":"s309"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 23.82,
      "road": "s124",
      "spine": "out",
-     "street": "s124"
+     "street": "s124",
+     "heading": 23.82
     },
     {
      "at": 0.0,
-     "heading": 114.72,
      "regulations": [
       "stop"
      ],
      "road": "s123",
      "spine": "out",
-     "street": "s123"
+     "street": "s123",
+     "heading": 114.72
     },
     {
      "at": 95.55,
-     "heading": 203.63,
      "road": "s95",
      "spine": "in",
-     "street": "s95"
+     "street": "s95",
+     "heading": 203.63
     },
     {
      "at": 87.48,
-     "heading": 294.49,
      "regulations": [
       "stop"
      ],
      "road": "s121",
      "spine": "in",
-     "street": "s121"
+     "street": "s121",
+     "heading": 294.49
     }
    ],
    "at": [
@@ -34510,47 +34128,38 @@
    ],
    "control": "stop",
    "id": "j53",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 20.23,
      "road": "s132",
      "spine": "out",
-     "street": "s132"
+     "street": "s132",
+     "heading": 20.23
     },
     {
      "at": 0.0,
-     "heading": 107.99,
      "road": "s131",
      "spine": "out",
-     "street": "s131"
+     "street": "s131",
+     "heading": 107.99
     },
     {
      "at": 94.45,
-     "heading": 200.34,
      "road": "s100",
      "spine": "in",
-     "street": "s100"
+     "street": "s100",
+     "heading": 200.34
     },
     {
      "at": 127.32,
-     "heading": 288.71,
      "road": "s128",
      "spine": "in",
-     "street": "s128"
+     "street": "s128",
+     "heading": 288.71
     }
    ],
    "at": [
@@ -34559,53 +34168,44 @@
    ],
    "control": "signal",
    "id": "j54",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.26,
      "regulations": [
       "stop"
      ],
      "road": "s134",
      "spine": "out",
-     "street": "s134"
+     "street": "s134",
+     "heading": 19.26
     },
     {
      "at": 0.0,
-     "heading": 106.28,
      "road": "s133",
      "spine": "out",
-     "street": "s133"
+     "street": "s133",
+     "heading": 106.28
     },
     {
      "at": 95.53,
-     "heading": 199.32,
      "regulations": [
       "stop"
      ],
      "road": "s102",
      "spine": "in",
-     "street": "s102"
+     "street": "s102",
+     "heading": 199.32
     },
     {
      "at": 84.86,
-     "heading": 285.96,
      "road": "s131",
      "spine": "in",
-     "street": "s131"
+     "street": "s131",
+     "heading": 285.96
     }
    ],
    "at": [
@@ -34614,43 +34214,34 @@
    ],
    "control": "stop",
    "id": "j55",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 46.5,
-     "heading": 173.56,
      "road": "s106",
      "spine": "in",
-     "street": "s106"
+     "street": "s106",
+     "heading": 173.56
     },
     {
      "at": 42.31,
-     "heading": 199.06,
      "regulations": [
       "stop"
      ],
      "road": "s104",
      "spine": "in",
-     "street": "s104"
+     "street": "s104",
+     "heading": 199.06
     },
     {
      "at": 58.66,
-     "heading": 352.75,
      "road": "s136",
      "spine": "in",
-     "street": "s136"
+     "street": "s136",
+     "heading": 352.75
     }
    ],
    "at": [
@@ -34659,49 +34250,44 @@
    ],
    "control": "stop",
    "id": "j56",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.07,
      "regulations": [
       "stop"
      ],
      "road": "s145",
      "spine": "out",
-     "street": "s145"
+     "street": "s145",
+     "heading": 19.07
     },
     {
      "at": 0.0,
-     "heading": 109.08,
      "road": "s144",
      "spine": "out",
-     "street": "s144"
+     "street": "s144",
+     "heading": 109.08
     },
     {
      "at": 94.43,
-     "heading": 199.06,
      "regulations": [
       "stop"
      ],
      "road": "s110",
      "spine": "in",
-     "street": "s110"
+     "street": "s110",
+     "heading": 199.06
     },
     {
      "at": 64.38,
-     "heading": 289.06,
      "road": "s141",
      "spine": "in",
-     "street": "s141"
+     "street": "s141",
+     "heading": 289.06
     }
    ],
    "at": [
@@ -34710,47 +34296,38 @@
    ],
    "control": "stop",
    "id": "j57",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.06,
      "road": "s147",
      "spine": "out",
-     "street": "s147"
+     "street": "s147",
+     "heading": 19.06
     },
     {
      "at": 0.0,
-     "heading": 109.08,
      "road": "s146",
      "spine": "out",
-     "street": "s146"
+     "street": "s146",
+     "heading": 109.08
     },
     {
      "at": 94.43,
-     "heading": 199.07,
      "road": "s112",
      "spine": "in",
-     "street": "s112"
+     "street": "s112",
+     "heading": 199.07
     },
     {
      "at": 64.38,
-     "heading": 289.06,
      "road": "s144",
      "spine": "in",
-     "street": "s144"
+     "street": "s144",
+     "heading": 289.06
     }
    ],
    "at": [
@@ -34759,53 +34336,44 @@
    ],
    "control": "signal",
    "id": "j58",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.07,
      "regulations": [
       "stop"
      ],
      "road": "s149",
      "spine": "out",
-     "street": "s149"
+     "street": "s149",
+     "heading": 19.07
     },
     {
      "at": 0.0,
-     "heading": 109.05,
      "road": "s148",
      "spine": "out",
-     "street": "s148"
+     "street": "s148",
+     "heading": 109.05
     },
     {
      "at": 94.42,
-     "heading": 199.06,
      "regulations": [
       "stop"
      ],
      "road": "s114",
      "spine": "in",
-     "street": "s114"
+     "street": "s114",
+     "heading": 199.06
     },
     {
      "at": 64.38,
-     "heading": 289.09000000000003,
      "road": "s146",
      "spine": "in",
-     "street": "s146"
+     "street": "s146",
+     "heading": 289.09000000000003
     }
    ],
    "at": [
@@ -34814,53 +34382,44 @@
    ],
    "control": "stop",
    "id": "j59",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.07,
      "regulations": [
       "stop"
      ],
      "road": "s151",
      "spine": "out",
-     "street": "s151"
+     "street": "s151",
+     "heading": 19.07
     },
     {
      "at": 0.0,
-     "heading": 109.08,
      "road": "s150",
      "spine": "out",
-     "street": "s150"
+     "street": "s150",
+     "heading": 109.08
     },
     {
      "at": 94.43,
-     "heading": 199.05,
      "regulations": [
       "stop"
      ],
      "road": "s116",
      "spine": "in",
-     "street": "s116"
+     "street": "s116",
+     "heading": 199.05
     },
     {
      "at": 64.38,
-     "heading": 289.04,
      "road": "s148",
      "spine": "in",
-     "street": "s148"
+     "street": "s148",
+     "heading": 289.04
     }
    ],
    "at": [
@@ -34869,47 +34428,38 @@
    ],
    "control": "stop",
    "id": "j60",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.04,
      "road": "s153",
      "spine": "out",
-     "street": "s153"
+     "street": "s153",
+     "heading": 19.04
     },
     {
      "at": 0.0,
-     "heading": 109.05,
      "road": "s152",
      "spine": "out",
-     "street": "s152"
+     "street": "s152",
+     "heading": 109.05
     },
     {
      "at": 94.43,
-     "heading": 199.06,
      "road": "s118",
      "spine": "in",
-     "street": "s118"
+     "street": "s118",
+     "heading": 199.06
     },
     {
      "at": 64.38,
-     "heading": 289.05,
      "road": "s150",
      "spine": "in",
-     "street": "s150"
+     "street": "s150",
+     "heading": 289.05
     }
    ],
    "at": [
@@ -34918,53 +34468,44 @@
    ],
    "control": "signal",
    "id": "j61",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.09,
      "regulations": [
       "stop"
      ],
      "road": "s155",
      "spine": "out",
-     "street": "s155"
+     "street": "s155",
+     "heading": 19.09
     },
     {
      "at": 0.0,
-     "heading": 108.71,
      "road": "s154",
      "spine": "out",
-     "street": "s154"
+     "street": "s154",
+     "heading": 108.71
     },
     {
      "at": 94.42,
-     "heading": 199.04,
      "regulations": [
       "stop"
      ],
      "road": "s120",
      "spine": "in",
-     "street": "s120"
+     "street": "s120",
+     "heading": 199.04
     },
     {
      "at": 66.01,
-     "heading": 288.95,
      "road": "s152",
      "spine": "in",
-     "street": "s152"
+     "street": "s152",
+     "heading": 288.95
     }
    ],
    "at": [
@@ -34973,53 +34514,44 @@
    ],
    "control": "stop",
    "id": "j62",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.82,
      "regulations": [
       "stop"
      ],
      "road": "s157",
      "spine": "out",
-     "street": "s157"
+     "street": "s157",
+     "heading": 19.82
     },
     {
      "at": 0.0,
-     "heading": 109.52,
      "road": "s156",
      "spine": "out",
-     "street": "s156"
+     "street": "s156",
+     "heading": 109.52
     },
     {
      "at": 95.57,
-     "heading": 199.81,
      "regulations": [
       "stop"
      ],
      "road": "s122",
      "spine": "in",
-     "street": "s122"
+     "street": "s122",
+     "heading": 199.81
     },
     {
      "at": 75.36,
-     "heading": 289.12,
      "road": "s154",
      "spine": "in",
-     "street": "s154"
+     "street": "s154",
+     "heading": 289.12
     }
    ],
    "at": [
@@ -35028,53 +34560,44 @@
    ],
    "control": "stop",
    "id": "j63",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 42.01,
      "road": "s125",
      "spine": "out",
-     "street": "s125"
+     "street": "s125",
+     "heading": 42.01
     },
     {
      "at": 0.0,
-     "heading": 129.05,
      "regulations": [
       "stop"
      ],
      "road": "s127",
      "spine": "out",
-     "street": "s127"
+     "street": "s127",
+     "heading": 129.05
     },
     {
      "at": 0.0,
-     "heading": 202.26,
      "road": "s126",
      "spine": "out",
-     "street": "s126"
+     "street": "s126",
+     "heading": 202.26
     },
     {
      "at": 91.9,
-     "heading": 292.73,
      "regulations": [
       "stop"
      ],
      "road": "s123",
      "spine": "in",
-     "street": "s123"
+     "street": "s123",
+     "heading": 292.73
     }
    ],
    "at": [
@@ -35083,47 +34606,38 @@
    ],
    "control": "stop",
    "id": "j64",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 22.66,
      "road": "s159",
      "spine": "out",
-     "street": "s159"
+     "street": "s159",
+     "heading": 22.66
     },
     {
      "at": 0.0,
-     "heading": 112.16,
      "road": "s158",
      "spine": "out",
-     "street": "s158"
+     "street": "s158",
+     "heading": 112.16
     },
     {
      "at": 99.03,
-     "heading": 203.12,
      "road": "s124",
      "spine": "in",
-     "street": "s124"
+     "street": "s124",
+     "heading": 203.12
     },
     {
      "at": 94.07,
-     "heading": 291.88,
      "road": "s156",
      "spine": "in",
-     "street": "s156"
+     "street": "s156",
+     "heading": 291.88
     }
    ],
    "at": [
@@ -35132,40 +34646,31 @@
    ],
    "control": "signal",
    "id": "j65",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 45.73,
-     "heading": 26.54,
      "road": "s161",
      "spine": "in",
-     "street": "s161"
+     "street": "s161",
+     "heading": 26.54
     },
     {
      "at": 0.0,
-     "heading": 113.03,
      "road": "s308",
      "spine": "out",
-     "street": "s308"
+     "street": "s308",
+     "heading": 113.03
     },
     {
      "at": 59.04,
-     "heading": 207.84,
      "road": "s125",
      "spine": "in",
-     "street": "s125"
+     "street": "s125",
+     "heading": 207.84
     }
    ],
    "at": [
@@ -35174,36 +34679,31 @@
    ],
    "control": "signal",
    "id": "j66",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 26.13,
      "road": "s130",
      "spine": "out",
-     "street": "s130"
+     "street": "s130",
+     "heading": 26.13
     },
     {
      "at": 0.0,
-     "heading": 111.51,
      "road": "s128",
      "spine": "out",
-     "street": "s128"
+     "street": "s128",
+     "heading": 111.51
     },
     {
      "at": 0.0,
-     "heading": 203.45,
      "road": "s129",
      "spine": "out",
-     "street": "s129"
+     "street": "s129",
+     "heading": 203.45
     }
    ],
    "at": [
@@ -35212,36 +34712,31 @@
    ],
    "control": "signal",
    "id": "j67",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 38.97,
-     "heading": 19.03,
      "road": "s129",
      "spine": "in",
-     "street": "s129"
+     "street": "s129",
+     "heading": 19.03
     },
     {
      "at": 82.8,
-     "heading": 196.16,
      "road": "s329",
      "spine": "in",
-     "street": "s329"
+     "street": "s329",
+     "heading": 196.16
     },
     {
      "at": 0.0,
-     "heading": 289.90999999999997,
      "road": "s331",
      "spine": "out",
-     "street": "s331"
+     "street": "s331",
+     "heading": 289.90999999999997
     }
    ],
    "at": [
@@ -35250,39 +34745,34 @@
    ],
    "control": "signal",
    "id": "j68",
-   "through": [
-    [
-     0,
-     1
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,1]]
   },
   {
    "arms": [
     {
      "at": 45.92,
-     "heading": 33.96,
      "road": "s163",
      "spine": "in",
-     "street": "s163"
+     "street": "s163",
+     "heading": 33.96
     },
     {
      "at": 49.25,
-     "heading": 211.87,
      "road": "s130",
      "spine": "in",
-     "street": "s130"
+     "street": "s130",
+     "heading": 211.87
     },
     {
      "at": 0.0,
-     "heading": 299.69,
      "regulations": [
       "stop"
      ],
      "road": "s332",
      "spine": "out",
-     "street": "s332"
+     "street": "s332",
+     "heading": 299.69
     }
    ],
    "at": [
@@ -35291,49 +34781,44 @@
    ],
    "control": "stop",
    "id": "j69",
-   "through": [
-    [
-     0,
-     1
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,1]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.06,
      "road": "s166",
      "spine": "out",
-     "street": "s166"
+     "street": "s166",
+     "heading": 19.06
     },
     {
      "at": 0.0,
-     "heading": 107.17,
      "regulations": [
       "stop"
      ],
      "road": "s165",
      "spine": "out",
-     "street": "s165"
+     "street": "s165",
+     "heading": 107.17
     },
     {
      "at": 93.44,
-     "heading": 199.16,
      "road": "s132",
      "spine": "in",
-     "street": "s132"
+     "street": "s132",
+     "heading": 199.16
     },
     {
      "at": 107.04,
-     "heading": 288.07,
      "regulations": [
       "stop"
      ],
      "road": "s162",
      "spine": "in",
-     "street": "s162"
+     "street": "s162",
+     "heading": 288.07
     }
    ],
    "at": [
@@ -35342,47 +34827,38 @@
    ],
    "control": "stop",
    "id": "j70",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 108.0,
      "road": "s135",
      "spine": "out",
-     "street": "s135"
+     "street": "s135",
+     "heading": 108.0
     },
     {
      "at": 0.0,
-     "heading": 170.13,
      "road": "s136",
      "spine": "out",
-     "street": "s136"
+     "street": "s136",
+     "heading": 170.13
     },
     {
      "at": 45.76,
-     "heading": 287.36,
      "road": "s133",
      "spine": "in",
-     "street": "s133"
+     "street": "s133",
+     "heading": 287.36
     },
     {
      "at": 0.0,
-     "heading": 349.6,
      "road": "s137",
      "spine": "out",
-     "street": "s137"
+     "street": "s137",
+     "heading": 349.6
     }
    ],
    "at": [
@@ -35391,53 +34867,44 @@
    ],
    "control": "signal",
    "id": "j71",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "an arterial meets a collector: lights"
+   "why": "an arterial meets a collector: lights",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 100.53,
-     "heading": 173.62,
      "road": "s137",
      "spine": "in",
-     "street": "s137"
+     "street": "s137",
+     "heading": 173.62
     },
     {
      "at": 90.73,
-     "heading": 192.11,
      "regulations": [
       "stop"
      ],
      "road": "s134",
      "spine": "in",
-     "street": "s134"
+     "street": "s134",
+     "heading": 192.11
     },
     {
      "at": 83.69,
-     "heading": 302.07,
      "regulations": [
       "stop"
      ],
      "road": "s165",
      "spine": "in",
-     "street": "s165"
+     "street": "s165",
+     "heading": 302.07
     },
     {
      "at": 0.0,
-     "heading": 354.9,
      "road": "s167",
      "spine": "out",
-     "street": "s167"
+     "street": "s167",
+     "heading": 354.9
     }
    ],
    "at": [
@@ -35446,43 +34913,38 @@
    ],
    "control": "stop",
    "id": "j72",
-   "through": [
-    [
-     0,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 109.07,
      "road": "s138",
      "spine": "out",
-     "street": "s138"
+     "street": "s138",
+     "heading": 109.07
     },
     {
      "at": 0.0,
-     "heading": 173.7,
      "road": "s139",
      "spine": "out",
-     "street": "s139"
+     "street": "s139",
+     "heading": 173.7
     },
     {
      "at": 116.23,
-     "heading": 289.07,
      "road": "s135",
      "spine": "in",
-     "street": "s135"
+     "street": "s135",
+     "heading": 289.07
     },
     {
      "at": 0.0,
-     "heading": 352.88,
      "road": "s140",
      "spine": "out",
-     "street": "s140"
+     "street": "s140",
+     "heading": 352.88
     }
    ],
    "at": [
@@ -35491,53 +34953,44 @@
    ],
    "control": "signal",
    "id": "j73",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "an arterial meets a collector: lights"
+   "why": "an arterial meets a collector: lights",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.06,
      "regulations": [
       "stop"
      ],
      "road": "s143",
      "spine": "out",
-     "street": "s143"
+     "street": "s143",
+     "heading": 19.06
     },
     {
      "at": 0.0,
-     "heading": 109.04,
      "road": "s141",
      "spine": "out",
-     "street": "s141"
+     "street": "s141",
+     "heading": 109.04
     },
     {
      "at": 0.0,
-     "heading": 199.07,
      "regulations": [
       "stop"
      ],
      "road": "s142",
      "spine": "out",
-     "street": "s142"
+     "street": "s142",
+     "heading": 199.07
     },
     {
      "at": 41.39,
-     "heading": 289.06,
      "road": "s138",
      "spine": "in",
-     "street": "s138"
+     "street": "s138",
+     "heading": 289.06
     }
    ],
    "at": [
@@ -35546,40 +34999,31 @@
    ],
    "control": "stop",
    "id": "j74",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 49.63,
-     "heading": 19.07,
      "road": "s172",
      "spine": "in",
-     "street": "s172"
+     "street": "s172",
+     "heading": 19.07
     },
     {
      "at": 50.36,
-     "heading": 170.92,
      "road": "s140",
      "spine": "in",
-     "street": "s140"
+     "street": "s140",
+     "heading": 170.92
     },
     {
      "at": 56.59,
-     "heading": 350.33,
      "road": "s169",
      "spine": "in",
-     "street": "s169"
+     "street": "s169",
+     "heading": 350.33
     }
    ],
    "at": [
@@ -35588,55 +35032,50 @@
    ],
    "control": "signal",
    "id": "j75",
-   "through": [
-    [
-     1,
-     2
-    ]
-   ],
-   "why": "an arterial meets a collector: lights"
+   "why": "an arterial meets a collector: lights",
+   "through": [[1,2]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.07,
      "regulations": [
       "stop"
      ],
      "road": "s175",
      "spine": "out",
-     "street": "s175"
+     "street": "s175",
+     "heading": 19.07
     },
     {
      "at": 0.0,
-     "heading": 109.05,
      "regulations": [
       "stop"
      ],
      "road": "s174",
      "spine": "out",
-     "street": "s174"
+     "street": "s174",
+     "heading": 109.05
     },
     {
      "at": 94.43,
-     "heading": 199.06,
      "regulations": [
       "stop"
      ],
      "road": "s143",
      "spine": "in",
-     "street": "s143"
+     "street": "s143",
+     "heading": 199.06
     },
     {
      "at": 64.38,
-     "heading": 289.07,
      "regulations": [
       "stop"
      ],
      "road": "s171",
      "spine": "in",
-     "street": "s171"
+     "street": "s171",
+     "heading": 289.07
     }
    ],
    "at": [
@@ -35645,59 +35084,50 @@
    ],
    "control": "all_way_stop",
    "id": "j76",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.07,
      "regulations": [
       "stop"
      ],
      "road": "s177",
      "spine": "out",
-     "street": "s177"
+     "street": "s177",
+     "heading": 19.07
     },
     {
      "at": 0.0,
-     "heading": 109.04,
      "regulations": [
       "stop"
      ],
      "road": "s176",
      "spine": "out",
-     "street": "s176"
+     "street": "s176",
+     "heading": 109.04
     },
     {
      "at": 94.42,
-     "heading": 199.07,
      "regulations": [
       "stop"
      ],
      "road": "s145",
      "spine": "in",
-     "street": "s145"
+     "street": "s145",
+     "heading": 199.07
     },
     {
      "at": 64.38,
-     "heading": 289.06,
      "regulations": [
       "stop"
      ],
      "road": "s174",
      "spine": "in",
-     "street": "s174"
+     "street": "s174",
+     "heading": 289.06
     }
    ],
    "at": [
@@ -35706,53 +35136,44 @@
    ],
    "control": "all_way_stop",
    "id": "j77",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.06,
      "road": "s179",
      "spine": "out",
-     "street": "s179"
+     "street": "s179",
+     "heading": 19.06
     },
     {
      "at": 0.0,
-     "heading": 109.06,
      "regulations": [
       "stop"
      ],
      "road": "s178",
      "spine": "out",
-     "street": "s178"
+     "street": "s178",
+     "heading": 109.06
     },
     {
      "at": 94.43,
-     "heading": 199.05,
      "road": "s147",
      "spine": "in",
-     "street": "s147"
+     "street": "s147",
+     "heading": 199.05
     },
     {
      "at": 64.38,
-     "heading": 289.04,
      "regulations": [
       "stop"
      ],
      "road": "s176",
      "spine": "in",
-     "street": "s176"
+     "street": "s176",
+     "heading": 289.04
     }
    ],
    "at": [
@@ -35761,59 +35182,50 @@
    ],
    "control": "stop",
    "id": "j78",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.06,
      "regulations": [
       "stop"
      ],
      "road": "s181",
      "spine": "out",
-     "street": "s181"
+     "street": "s181",
+     "heading": 19.06
     },
     {
      "at": 0.0,
-     "heading": 109.08,
      "regulations": [
       "stop"
      ],
      "road": "s180",
      "spine": "out",
-     "street": "s180"
+     "street": "s180",
+     "heading": 109.08
     },
     {
      "at": 94.43,
-     "heading": 199.07,
      "regulations": [
       "stop"
      ],
      "road": "s149",
      "spine": "in",
-     "street": "s149"
+     "street": "s149",
+     "heading": 199.07
     },
     {
      "at": 64.38,
-     "heading": 289.06,
      "regulations": [
       "stop"
      ],
      "road": "s178",
      "spine": "in",
-     "street": "s178"
+     "street": "s178",
+     "heading": 289.06
     }
    ],
    "at": [
@@ -35822,59 +35234,50 @@
    ],
    "control": "all_way_stop",
    "id": "j79",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.06,
      "regulations": [
       "stop"
      ],
      "road": "s183",
      "spine": "out",
-     "street": "s183"
+     "street": "s183",
+     "heading": 19.06
     },
     {
      "at": 0.0,
-     "heading": 109.06,
      "regulations": [
       "stop"
      ],
      "road": "s182",
      "spine": "out",
-     "street": "s182"
+     "street": "s182",
+     "heading": 109.06
     },
     {
      "at": 94.42,
-     "heading": 199.08,
      "regulations": [
       "stop"
      ],
      "road": "s151",
      "spine": "in",
-     "street": "s151"
+     "street": "s151",
+     "heading": 199.08
     },
     {
      "at": 64.38,
-     "heading": 289.07,
      "regulations": [
       "stop"
      ],
      "road": "s180",
      "spine": "in",
-     "street": "s180"
+     "street": "s180",
+     "heading": 289.07
     }
    ],
    "at": [
@@ -35883,53 +35286,44 @@
    ],
    "control": "all_way_stop",
    "id": "j80",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.07,
      "road": "s185",
      "spine": "out",
-     "street": "s185"
+     "street": "s185",
+     "heading": 19.07
     },
     {
      "at": 0.0,
-     "heading": 109.08,
      "regulations": [
       "stop"
      ],
      "road": "s184",
      "spine": "out",
-     "street": "s184"
+     "street": "s184",
+     "heading": 109.08
     },
     {
      "at": 94.43,
-     "heading": 199.07,
      "road": "s153",
      "spine": "in",
-     "street": "s153"
+     "street": "s153",
+     "heading": 199.07
     },
     {
      "at": 64.38,
-     "heading": 289.06,
      "regulations": [
       "stop"
      ],
      "road": "s182",
      "spine": "in",
-     "street": "s182"
+     "street": "s182",
+     "heading": 289.06
     }
    ],
    "at": [
@@ -35938,59 +35332,50 @@
    ],
    "control": "stop",
    "id": "j81",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.33,
      "regulations": [
       "stop"
      ],
      "road": "s187",
      "spine": "out",
-     "street": "s187"
+     "street": "s187",
+     "heading": 19.33
     },
     {
      "at": 0.0,
-     "heading": 108.27,
      "regulations": [
       "stop"
      ],
      "road": "s186",
      "spine": "out",
-     "street": "s186"
+     "street": "s186",
+     "heading": 108.27
     },
     {
      "at": 94.61,
-     "heading": 199.2,
      "regulations": [
       "stop"
      ],
      "road": "s155",
      "spine": "in",
-     "street": "s155"
+     "street": "s155",
+     "heading": 199.2
     },
     {
      "at": 66.08,
-     "heading": 288.47,
      "regulations": [
       "stop"
      ],
      "road": "s184",
      "spine": "in",
-     "street": "s184"
+     "street": "s184",
+     "heading": 288.47
     }
    ],
    "at": [
@@ -35999,59 +35384,50 @@
    ],
    "control": "all_way_stop",
    "id": "j82",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 20.39,
      "regulations": [
       "stop"
      ],
      "road": "s189",
      "spine": "out",
-     "street": "s189"
+     "street": "s189",
+     "heading": 20.39
     },
     {
      "at": 0.0,
-     "heading": 109.22,
      "regulations": [
       "stop"
      ],
      "road": "s188",
      "spine": "out",
-     "street": "s188"
+     "street": "s188",
+     "heading": 109.22
     },
     {
      "at": 95.03,
-     "heading": 200.28,
      "regulations": [
       "stop"
      ],
      "road": "s157",
      "spine": "in",
-     "street": "s157"
+     "street": "s157",
+     "heading": 200.28
     },
     {
      "at": 76.82,
-     "heading": 288.86,
      "regulations": [
       "stop"
      ],
      "road": "s186",
      "spine": "in",
-     "street": "s186"
+     "street": "s186",
+     "heading": 288.86
     }
    ],
    "at": [
@@ -36060,40 +35436,31 @@
    ],
    "control": "all_way_stop",
    "id": "j83",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 23.68,
      "road": "s160",
      "spine": "out",
-     "street": "s160"
+     "street": "s160",
+     "heading": 23.68
     },
     {
      "at": 0.0,
-     "heading": 201.96,
      "road": "s161",
      "spine": "out",
-     "street": "s161"
+     "street": "s161",
+     "heading": 201.96
     },
     {
      "at": 101.23,
-     "heading": 289.58,
      "road": "s158",
      "spine": "in",
-     "street": "s158"
+     "street": "s158",
+     "heading": 289.58
     }
    ],
    "at": [
@@ -36102,49 +35469,44 @@
    ],
    "control": "signal",
    "id": "j84",
-   "through": [
-    [
-     0,
-     1
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,1]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 18.97,
      "road": "s191",
      "spine": "out",
-     "street": "s191"
+     "street": "s191",
+     "heading": 18.97
     },
     {
      "at": 0.0,
-     "heading": 110.03,
      "regulations": [
       "stop"
      ],
      "road": "s190",
      "spine": "out",
-     "street": "s190"
+     "street": "s190",
+     "heading": 110.03
     },
     {
      "at": 96.5,
-     "heading": 199.17,
      "road": "s159",
      "spine": "in",
-     "street": "s159"
+     "street": "s159",
+     "heading": 199.17
     },
     {
      "at": 95.37,
-     "heading": 290.22,
      "regulations": [
       "stop"
      ],
      "road": "s188",
      "spine": "in",
-     "street": "s188"
+     "street": "s188",
+     "heading": 290.22
     }
    ],
    "at": [
@@ -36153,53 +35515,44 @@
    ],
    "control": "stop",
    "id": "j85",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 58.47,
-     "heading": 5.79,
      "road": "s305",
      "spine": "in",
-     "street": "s305"
+     "street": "s305",
+     "heading": 5.79
     },
     {
      "at": 0.0,
-     "heading": 102.78,
      "regulations": [
       "stop"
      ],
      "road": "s307",
      "spine": "out",
-     "street": "s307"
+     "street": "s307",
+     "heading": 102.78
     },
     {
      "at": 74.56,
-     "heading": 193.39,
      "road": "s160",
      "spine": "in",
-     "street": "s160"
+     "street": "s160",
+     "heading": 193.39
     },
     {
      "at": 89.64,
-     "heading": 291.26,
      "regulations": [
       "stop"
      ],
      "road": "s190",
      "spine": "in",
-     "street": "s190"
+     "street": "s190",
+     "heading": 291.26
     }
    ],
    "at": [
@@ -36215,44 +35568,35 @@
      "to": 83.35
     }
    ],
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]],
    "nodes": [{"at":[-108.4,1121.84],"points":[{"at":74.56,"road":"s160"},{"at":83.35,"road":"s305"},{"at":0.0,"road":"s307"}]},{"at":[-83.5,1122.37],"points":[{"at":58.47,"road":"s305"},{"at":89.64,"road":"s190"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 41.28,
      "road": "s164",
      "spine": "out",
-     "street": "s164"
+     "street": "s164",
+     "heading": 41.28
     },
     {
      "at": 0.0,
-     "heading": 112.23,
      "regulations": [
       "stop"
      ],
      "road": "s162",
      "spine": "out",
-     "street": "s162"
+     "street": "s162",
+     "heading": 112.23
     },
     {
      "at": 0.0,
-     "heading": 215.5,
      "road": "s163",
      "spine": "out",
-     "street": "s163"
+     "street": "s163",
+     "heading": 215.5
     }
    ],
    "at": [
@@ -36261,39 +35605,34 @@
    ],
    "control": "stop",
    "id": "j87",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 59.68,
-     "heading": 42.4,
      "road": "s193",
      "spine": "in",
-     "street": "s193"
+     "street": "s193",
+     "heading": 42.4
     },
     {
      "at": 39.09,
-     "heading": 221.28,
      "road": "s164",
      "spine": "in",
-     "street": "s164"
+     "street": "s164",
+     "heading": 221.28
     },
     {
      "at": 0.0,
-     "heading": 312.75,
      "regulations": [
       "stop"
      ],
      "road": "s333",
      "spine": "out",
-     "street": "s333"
+     "street": "s333",
+     "heading": 312.75
     }
    ],
    "at": [
@@ -36302,39 +35641,34 @@
    ],
    "control": "stop",
    "id": "j88",
-   "through": [
-    [
-     0,
-     1
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,1]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 18.76,
      "road": "s195",
      "spine": "out",
-     "street": "s195"
+     "street": "s195",
+     "heading": 18.76
     },
     {
      "at": 92.78,
-     "heading": 198.77,
      "road": "s166",
      "spine": "in",
-     "street": "s166"
+     "street": "s166",
+     "heading": 198.77
     },
     {
      "at": 67.08,
-     "heading": 287.15,
      "regulations": [
       "stop"
      ],
      "road": "s192",
      "spine": "in",
-     "street": "s192"
+     "street": "s192",
+     "heading": 287.15
     }
    ],
    "at": [
@@ -36343,64 +35677,59 @@
    ],
    "control": "stop",
    "id": "j89",
-   "through": [
-    [
-     0,
-     1
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,1]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 3.06,
      "road": "s228",
      "spine": "out",
-     "street": "s228"
+     "street": "s228",
+     "heading": 3.06
     },
     {
      "at": 0.0,
-     "heading": 22.25,
      "road": "s227",
      "spine": "out",
-     "street": "s227"
+     "street": "s227",
+     "heading": 22.25
     },
     {
      "at": 0.0,
-     "heading": 128.51,
      "road": "s226",
      "spine": "out",
-     "street": "s226"
+     "street": "s226",
+     "heading": 128.51
     },
     {
      "at": 210.39,
-     "heading": 178.38,
      "road": "s167",
      "spine": "in",
-     "street": "s167"
+     "street": "s167",
+     "heading": 178.38
     },
     {
      "at": 90.65,
-     "heading": 198.96,
      "road": "s195",
      "spine": "in",
-     "street": "s195"
+     "street": "s195",
+     "heading": 198.96
     },
     {
      "at": 82.57,
-     "heading": 230.88,
      "road": "s334",
      "spine": "in",
-     "street": "s334"
+     "street": "s334",
+     "heading": 230.88
     },
     {
      "at": 0.0,
-     "heading": 318.19,
      "road": "s336",
      "spine": "out",
-     "street": "s336"
+     "street": "s336",
+     "heading": 318.19
     }
    ],
    "at": [
@@ -36436,59 +35765,46 @@
      "to": 23.72
     }
    ],
-   "through": [
-    [
-     0,
-     3
-    ],
-    [
-     1,
-     4
-    ],
-    [
-     2,
-     6
-    ]
-   ],
    "why": "five or more roads meet: lights",
+   "through": [[0,3],[1,4],[2,6]],
    "nodes": [{"at":[403.54,298.75],"points":[{"at":211.85,"road":"s167"},{"at":102.53,"road":"s195"},{"at":15.06,"road":"s223"},{"at":23.72,"road":"s225"},{"at":0.0,"road":"s226"},{"at":0.0,"road":"s227"},{"at":0.0,"road":"s228"}]},{"at":[401.53,284.75],"points":[{"at":0.0,"road":"s223"},{"at":0.0,"road":"s224"},{"at":0.0,"road":"s225"},{"at":210.39,"road":"s167"},{"at":96.01,"road":"s195"}]},{"at":[397.51,279.73],"points":[{"at":6.43,"road":"s224"},{"at":82.57,"road":"s334"},{"at":0.0,"road":"s336"},{"at":90.65,"road":"s195"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.07,
      "road": "s173",
      "spine": "out",
-     "street": "s173"
+     "street": "s173",
+     "heading": 19.07
     },
     {
      "at": 0.0,
-     "heading": 109.07,
      "road": "s171",
      "spine": "out",
-     "street": "s171"
+     "street": "s171",
+     "heading": 109.07
     },
     {
      "at": 0.0,
-     "heading": 199.05,
      "road": "s172",
      "spine": "out",
-     "street": "s172"
+     "street": "s172",
+     "heading": 199.05
     },
     {
      "at": 0.0,
-     "heading": 170.68,
      "road": "s169",
      "spine": "out",
-     "street": "s169"
+     "street": "s169",
+     "heading": 170.68
     },
     {
      "at": 0.0,
-     "heading": 351.63,
      "road": "s170",
      "spine": "out",
-     "street": "s170"
+     "street": "s170",
+     "heading": 351.63
     }
    ],
    "at": [
@@ -36504,45 +35820,45 @@
      "to": 27.2
     }
    ],
-   "through": [[0,2],[3,4]],
    "why": "five or more roads meet: lights",
+   "through": [[0,2],[3,4]],
    "nodes": [{"at":[161.21,422.58],"points":[{"at":0.0,"road":"s168"},{"at":0.0,"road":"s169"},{"at":0.0,"road":"s170"}]},{"at":[152.33,448.29],"points":[{"at":27.2,"road":"s168"},{"at":0.0,"road":"s171"},{"at":0.0,"road":"s172"},{"at":0.0,"road":"s173"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.02,
      "regulations": [
       "stop"
      ],
      "road": "s200",
      "spine": "out",
-     "street": "s200"
+     "street": "s200",
+     "heading": 19.02
     },
     {
      "at": 0.0,
-     "heading": 109.09,
      "regulations": [
       "stop"
      ],
      "road": "s199",
      "spine": "out",
-     "street": "s199"
+     "street": "s199",
+     "heading": 109.09
     },
     {
      "at": 100.27,
-     "heading": 178.2,
      "road": "s170",
      "spine": "in",
-     "street": "s170"
+     "street": "s170",
+     "heading": 178.2
     },
     {
      "at": 2.73,
-     "heading": 358.2,
      "road": "s198",
      "spine": "out",
-     "street": "s198"
+     "street": "s198",
+     "heading": 358.2
     }
    ],
    "at": [
@@ -36568,50 +35884,45 @@
      "to": 2.73
     }
    ],
-   "through": [
-    [
-     2,
-     3
-    ]
-   ],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[2,3]],
    "nodes": [{"at":[261.06,414.46],"points":[{"at":100.27,"road":"s170"},{"at":0.0,"road":"s196"},{"at":0.0,"road":"s197"},{"at":0.0,"road":"s198"}]},{"at":[263.86,416.78],"points":[{"at":4.08,"road":"s196"},{"at":4.0,"road":"s197"},{"at":0.0,"road":"s199"},{"at":0.0,"road":"s200"},{"at":2.73,"road":"s198"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 18.81,
      "road": "s202",
      "spine": "out",
-     "street": "s202"
+     "street": "s202",
+     "heading": 18.81
     },
     {
      "at": 0.0,
-     "heading": 109.49,
      "regulations": [
       "stop"
      ],
      "road": "s201",
      "spine": "out",
-     "street": "s201"
+     "street": "s201",
+     "heading": 109.49
     },
     {
      "at": 94.58,
-     "heading": 198.9,
      "road": "s173",
      "spine": "in",
-     "street": "s173"
+     "street": "s173",
+     "heading": 198.9
     },
     {
      "at": 66.16,
-     "heading": 289.7,
      "regulations": [
       "stop"
      ],
      "road": "s199",
      "spine": "in",
-     "street": "s199"
+     "street": "s199",
+     "heading": 289.7
     }
    ],
    "at": [
@@ -36620,59 +35931,50 @@
    ],
    "control": "stop",
    "id": "j93",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.06,
      "regulations": [
       "stop"
      ],
      "road": "s204",
      "spine": "out",
-     "street": "s204"
+     "street": "s204",
+     "heading": 19.06
     },
     {
      "at": 0.0,
-     "heading": 109.09,
      "regulations": [
       "stop"
      ],
      "road": "s203",
      "spine": "out",
-     "street": "s203"
+     "street": "s203",
+     "heading": 109.09
     },
     {
      "at": 94.43,
-     "heading": 199.05,
      "regulations": [
       "stop"
      ],
      "road": "s175",
      "spine": "in",
-     "street": "s175"
+     "street": "s175",
+     "heading": 199.05
     },
     {
      "at": 64.43,
-     "heading": 289.04,
      "regulations": [
       "stop"
      ],
      "road": "s201",
      "spine": "in",
-     "street": "s201"
+     "street": "s201",
+     "heading": 289.04
     }
    ],
    "at": [
@@ -36681,59 +35983,50 @@
    ],
    "control": "all_way_stop",
    "id": "j94",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.06,
      "regulations": [
       "stop"
      ],
      "road": "s206",
      "spine": "out",
-     "street": "s206"
+     "street": "s206",
+     "heading": 19.06
     },
     {
      "at": 0.0,
-     "heading": 109.07,
      "regulations": [
       "stop"
      ],
      "road": "s205",
      "spine": "out",
-     "street": "s205"
+     "street": "s205",
+     "heading": 109.07
     },
     {
      "at": 94.43,
-     "heading": 199.06,
      "regulations": [
       "stop"
      ],
      "road": "s177",
      "spine": "in",
-     "street": "s177"
+     "street": "s177",
+     "heading": 199.06
     },
     {
      "at": 64.38,
-     "heading": 289.06,
      "regulations": [
       "stop"
      ],
      "road": "s203",
      "spine": "in",
-     "street": "s203"
+     "street": "s203",
+     "heading": 289.06
     }
    ],
    "at": [
@@ -36742,53 +36035,44 @@
    ],
    "control": "all_way_stop",
    "id": "j95",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.05,
      "road": "s208",
      "spine": "out",
-     "street": "s208"
+     "street": "s208",
+     "heading": 19.05
     },
     {
      "at": 0.0,
-     "heading": 109.06,
      "regulations": [
       "stop"
      ],
      "road": "s207",
      "spine": "out",
-     "street": "s207"
+     "street": "s207",
+     "heading": 109.06
     },
     {
      "at": 94.42,
-     "heading": 199.06,
      "road": "s179",
      "spine": "in",
-     "street": "s179"
+     "street": "s179",
+     "heading": 199.06
     },
     {
      "at": 64.38,
-     "heading": 289.06,
      "regulations": [
       "stop"
      ],
      "road": "s205",
      "spine": "in",
-     "street": "s205"
+     "street": "s205",
+     "heading": 289.06
     }
    ],
    "at": [
@@ -36797,59 +36081,50 @@
    ],
    "control": "stop",
    "id": "j96",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.05,
      "regulations": [
       "stop"
      ],
      "road": "s210",
      "spine": "out",
-     "street": "s210"
+     "street": "s210",
+     "heading": 19.05
     },
     {
      "at": 0.0,
-     "heading": 109.08,
      "regulations": [
       "stop"
      ],
      "road": "s209",
      "spine": "out",
-     "street": "s209"
+     "street": "s209",
+     "heading": 109.08
     },
     {
      "at": 94.43,
-     "heading": 199.05,
      "regulations": [
       "stop"
      ],
      "road": "s181",
      "spine": "in",
-     "street": "s181"
+     "street": "s181",
+     "heading": 199.05
     },
     {
      "at": 64.38,
-     "heading": 289.04,
      "regulations": [
       "stop"
      ],
      "road": "s207",
      "spine": "in",
-     "street": "s207"
+     "street": "s207",
+     "heading": 289.04
     }
    ],
    "at": [
@@ -36858,59 +36133,50 @@
    ],
    "control": "all_way_stop",
    "id": "j97",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.05,
      "regulations": [
       "stop"
      ],
      "road": "s212",
      "spine": "out",
-     "street": "s212"
+     "street": "s212",
+     "heading": 19.05
     },
     {
      "at": 0.0,
-     "heading": 109.08,
      "regulations": [
       "stop"
      ],
      "road": "s211",
      "spine": "out",
-     "street": "s211"
+     "street": "s211",
+     "heading": 109.08
     },
     {
      "at": 94.43,
-     "heading": 199.08,
      "regulations": [
       "stop"
      ],
      "road": "s183",
      "spine": "in",
-     "street": "s183"
+     "street": "s183",
+     "heading": 199.08
     },
     {
      "at": 64.38,
-     "heading": 289.05,
      "regulations": [
       "stop"
      ],
      "road": "s209",
      "spine": "in",
-     "street": "s209"
+     "street": "s209",
+     "heading": 289.05
     }
    ],
    "at": [
@@ -36919,53 +36185,44 @@
    ],
    "control": "all_way_stop",
    "id": "j98",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.48,
      "road": "s214",
      "spine": "out",
-     "street": "s214"
+     "street": "s214",
+     "heading": 19.48
     },
     {
      "at": 0.0,
-     "heading": 108.23,
      "regulations": [
       "stop"
      ],
      "road": "s213",
      "spine": "out",
-     "street": "s213"
+     "street": "s213",
+     "heading": 108.23
     },
     {
      "at": 94.63,
-     "heading": 199.25,
      "road": "s185",
      "spine": "in",
-     "street": "s185"
+     "street": "s185",
+     "heading": 199.25
     },
     {
      "at": 64.45,
-     "heading": 288.49,
      "regulations": [
       "stop"
      ],
      "road": "s211",
      "spine": "in",
-     "street": "s211"
+     "street": "s211",
+     "heading": 288.49
     }
    ],
    "at": [
@@ -36974,59 +36231,50 @@
    ],
    "control": "stop",
    "id": "j99",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 20.4,
      "regulations": [
       "stop"
      ],
      "road": "s216",
      "spine": "out",
-     "street": "s216"
+     "street": "s216",
+     "heading": 20.4
     },
     {
      "at": 0.0,
-     "heading": 108.81,
      "regulations": [
       "stop"
      ],
      "road": "s215",
      "spine": "out",
-     "street": "s215"
+     "street": "s215",
+     "heading": 108.81
     },
     {
      "at": 95.35,
-     "heading": 200.22,
      "regulations": [
       "stop"
      ],
      "road": "s187",
      "spine": "in",
-     "street": "s187"
+     "street": "s187",
+     "heading": 200.22
     },
     {
      "at": 67.15,
-     "heading": 288.5,
      "regulations": [
       "stop"
      ],
      "road": "s213",
      "spine": "in",
-     "street": "s213"
+     "street": "s213",
+     "heading": 288.5
     }
    ],
    "at": [
@@ -37035,59 +36283,50 @@
    ],
    "control": "all_way_stop",
    "id": "j100",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 20.39,
      "regulations": [
       "stop"
      ],
      "road": "s218",
      "spine": "out",
-     "street": "s218"
+     "street": "s218",
+     "heading": 20.39
     },
     {
      "at": 0.0,
-     "heading": 110.43,
      "regulations": [
       "stop"
      ],
      "road": "s217",
      "spine": "out",
-     "street": "s217"
+     "street": "s217",
+     "heading": 110.43
     },
     {
      "at": 93.83,
-     "heading": 200.41,
      "regulations": [
       "stop"
      ],
      "road": "s189",
      "spine": "in",
-     "street": "s189"
+     "street": "s189",
+     "heading": 200.41
     },
     {
      "at": 78.01,
-     "heading": 290.26,
      "regulations": [
       "stop"
      ],
      "road": "s215",
      "spine": "in",
-     "street": "s215"
+     "street": "s215",
+     "heading": 290.26
     }
    ],
    "at": [
@@ -37096,53 +36335,44 @@
    ],
    "control": "all_way_stop",
    "id": "j101",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 16.91,
      "road": "s220",
      "spine": "out",
-     "street": "s220"
+     "street": "s220",
+     "heading": 16.91
     },
     {
      "at": 0.0,
-     "heading": 110.8,
      "regulations": [
       "stop"
      ],
      "road": "s219",
      "spine": "out",
-     "street": "s219"
+     "street": "s219",
+     "heading": 110.8
     },
     {
      "at": 93.27,
-     "heading": 197.31,
      "road": "s191",
      "spine": "in",
-     "street": "s191"
+     "street": "s191",
+     "heading": 197.31
     },
     {
      "at": 91.68,
-     "heading": 290.08,
      "regulations": [
       "stop"
      ],
      "road": "s217",
      "spine": "in",
-     "street": "s217"
+     "street": "s217",
+     "heading": 290.08
     }
    ],
    "at": [
@@ -37151,53 +36381,44 @@
    ],
    "control": "stop",
    "id": "j102",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 318.72,
      "regulations": [
       "stop"
      ],
      "road": "s335",
      "spine": "out",
-     "street": "s335"
+     "street": "s335",
+     "heading": 318.72
     },
     {
      "at": 0.0,
-     "heading": 46.98,
      "road": "s334",
      "spine": "out",
-     "street": "s334"
+     "street": "s334",
+     "heading": 46.98
     },
     {
      "at": 0.0,
-     "heading": 110.95,
      "regulations": [
       "stop"
      ],
      "road": "s192",
      "spine": "out",
-     "street": "s192"
+     "street": "s192",
+     "heading": 110.95
     },
     {
      "at": 0.0,
-     "heading": 225.52,
      "road": "s193",
      "spine": "out",
-     "street": "s193"
+     "street": "s193",
+     "heading": 225.52
     }
    ],
    "at": [
@@ -37213,39 +36434,39 @@
      "to": 21.28
     }
    ],
-   "through": [[1,3],[2,0]],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[1,3],[2,0]],
    "nodes": [{"at":[328.47,202.24],"points":[{"at":0.0,"road":"s192"},{"at":0.0,"road":"s193"},{"at":0.0,"road":"s194"}]},{"at":[343.35,217.44],"points":[{"at":21.28,"road":"s194"},{"at":0.0,"road":"s334"},{"at":0.0,"road":"s335"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 105.65,
      "road": "s229",
      "spine": "out",
-     "street": "s229"
+     "street": "s229",
+     "heading": 105.65
     },
     {
      "at": 110.62,
-     "heading": 177.96,
      "road": "s198",
      "spine": "in",
-     "street": "s198"
+     "street": "s198",
+     "heading": 177.96
     },
     {
      "at": 113.56,
-     "heading": 284.75,
      "road": "s226",
      "spine": "in",
-     "street": "s226"
+     "street": "s226",
+     "heading": 284.75
     },
     {
      "at": 0.0,
-     "heading": 359.65,
      "road": "s230",
      "spine": "out",
-     "street": "s230"
+     "street": "s230",
+     "heading": 359.65
     }
    ],
    "at": [
@@ -37254,53 +36475,44 @@
    ],
    "control": "signal",
    "id": "j104",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "an arterial meets a collector: lights"
+   "why": "an arterial meets a collector: lights",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.86,
      "regulations": [
       "stop"
      ],
      "road": "s232",
      "spine": "out",
-     "street": "s232"
+     "street": "s232",
+     "heading": 19.86
     },
     {
      "at": 0.0,
-     "heading": 108.59,
      "road": "s231",
      "spine": "out",
-     "street": "s231"
+     "street": "s231",
+     "heading": 108.59
     },
     {
      "at": 99.79,
-     "heading": 199.7,
      "regulations": [
       "stop"
      ],
      "road": "s200",
      "spine": "in",
-     "street": "s200"
+     "street": "s200",
+     "heading": 199.7
     },
     {
      "at": 46.02,
-     "heading": 287.67,
      "road": "s229",
      "spine": "in",
-     "street": "s229"
+     "street": "s229",
+     "heading": 287.67
     }
    ],
    "at": [
@@ -37309,47 +36521,38 @@
    ],
    "control": "stop",
    "id": "j105",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.25,
      "road": "s234",
      "spine": "out",
-     "street": "s234"
+     "street": "s234",
+     "heading": 19.25
     },
     {
      "at": 0.0,
-     "heading": 110.86,
      "road": "s233",
      "spine": "out",
-     "street": "s233"
+     "street": "s233",
+     "heading": 110.86
     },
     {
      "at": 99.59,
-     "heading": 199.16,
      "road": "s202",
      "spine": "in",
-     "street": "s202"
+     "street": "s202",
+     "heading": 199.16
     },
     {
      "at": 65.43,
-     "heading": 290.6,
      "road": "s231",
      "spine": "in",
-     "street": "s231"
+     "street": "s231",
+     "heading": 290.6
     }
    ],
    "at": [
@@ -37358,53 +36561,44 @@
    ],
    "control": "signal",
    "id": "j106",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 18.33,
      "regulations": [
       "stop"
      ],
      "road": "s236",
      "spine": "out",
-     "street": "s236"
+     "street": "s236",
+     "heading": 18.33
     },
     {
      "at": 0.0,
-     "heading": 110.03,
      "road": "s235",
      "spine": "out",
-     "street": "s235"
+     "street": "s235",
+     "heading": 110.03
     },
     {
      "at": 98.07,
-     "heading": 198.54,
      "regulations": [
       "stop"
      ],
      "road": "s204",
      "spine": "in",
-     "street": "s204"
+     "street": "s204",
+     "heading": 198.54
     },
     {
      "at": 64.34,
-     "heading": 290.19,
      "road": "s233",
      "spine": "in",
-     "street": "s233"
+     "street": "s233",
+     "heading": 290.19
     }
    ],
    "at": [
@@ -37413,53 +36607,44 @@
    ],
    "control": "stop",
    "id": "j107",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 18.08,
      "regulations": [
       "stop"
      ],
      "road": "s238",
      "spine": "out",
-     "street": "s238"
+     "street": "s238",
+     "heading": 18.08
     },
     {
      "at": 0.0,
-     "heading": 109.42,
      "road": "s237",
      "spine": "out",
-     "street": "s237"
+     "street": "s237",
+     "heading": 109.42
     },
     {
      "at": 97.29,
-     "heading": 198.52,
      "regulations": [
       "stop"
      ],
      "road": "s206",
      "spine": "in",
-     "street": "s206"
+     "street": "s206",
+     "heading": 198.52
     },
     {
      "at": 64.55,
-     "heading": 289.48,
      "road": "s235",
      "spine": "in",
-     "street": "s235"
+     "street": "s235",
+     "heading": 289.48
     }
    ],
    "at": [
@@ -37468,47 +36653,38 @@
    ],
    "control": "stop",
    "id": "j108",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 18.31,
      "road": "s240",
      "spine": "out",
-     "street": "s240"
+     "street": "s240",
+     "heading": 18.31
     },
     {
      "at": 0.0,
-     "heading": 108.92,
      "road": "s239",
      "spine": "out",
-     "street": "s239"
+     "street": "s239",
+     "heading": 108.92
     },
     {
      "at": 97.13,
-     "heading": 198.79,
      "road": "s208",
      "spine": "in",
-     "street": "s208"
+     "street": "s208",
+     "heading": 198.79
     },
     {
      "at": 64.52,
-     "heading": 289.02,
      "road": "s237",
      "spine": "in",
-     "street": "s237"
+     "street": "s237",
+     "heading": 289.02
     }
    ],
    "at": [
@@ -37517,53 +36693,44 @@
    ],
    "control": "signal",
    "id": "j109",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 18.55,
      "regulations": [
       "stop"
      ],
      "road": "s242",
      "spine": "out",
-     "street": "s242"
+     "street": "s242",
+     "heading": 18.55
     },
     {
      "at": 0.0,
-     "heading": 108.28,
      "road": "s241",
      "spine": "out",
-     "street": "s241"
+     "street": "s241",
+     "heading": 108.28
     },
     {
      "at": 97.54,
-     "heading": 199.03,
      "regulations": [
       "stop"
      ],
      "road": "s210",
      "spine": "in",
-     "street": "s210"
+     "street": "s210",
+     "heading": 199.03
     },
     {
      "at": 64.52,
-     "heading": 288.44,
      "road": "s239",
      "spine": "in",
-     "street": "s239"
+     "street": "s239",
+     "heading": 288.44
     }
    ],
    "at": [
@@ -37572,53 +36739,44 @@
    ],
    "control": "stop",
    "id": "j110",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 19.15,
      "regulations": [
       "stop"
      ],
      "road": "s244",
      "spine": "out",
-     "street": "s244"
+     "street": "s244",
+     "heading": 19.15
     },
     {
      "at": 0.0,
-     "heading": 107.94,
      "road": "s243",
      "spine": "out",
-     "street": "s243"
+     "street": "s243",
+     "heading": 107.94
     },
     {
      "at": 98.69,
-     "heading": 199.42,
      "regulations": [
       "stop"
      ],
      "road": "s212",
      "spine": "in",
-     "street": "s212"
+     "street": "s212",
+     "heading": 199.42
     },
     {
      "at": 64.8,
-     "heading": 287.9,
      "road": "s241",
      "spine": "in",
-     "street": "s241"
+     "street": "s241",
+     "heading": 287.9
     }
    ],
    "at": [
@@ -37627,47 +36785,38 @@
    ],
    "control": "stop",
    "id": "j111",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 20.31,
      "road": "s246",
      "spine": "out",
-     "street": "s246"
+     "street": "s246",
+     "heading": 20.31
     },
     {
      "at": 0.0,
-     "heading": 109.2,
      "road": "s245",
      "spine": "out",
-     "street": "s245"
+     "street": "s245",
+     "heading": 109.2
     },
     {
      "at": 99.38,
-     "heading": 200.33,
      "road": "s214",
      "spine": "in",
-     "street": "s214"
+     "street": "s214",
+     "heading": 200.33
     },
     {
      "at": 65.62,
-     "heading": 288.79,
      "road": "s243",
      "spine": "in",
-     "street": "s243"
+     "street": "s243",
+     "heading": 288.79
     }
    ],
    "at": [
@@ -37676,53 +36825,44 @@
    ],
    "control": "signal",
    "id": "j112",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 21.36,
      "regulations": [
       "stop"
      ],
      "road": "s248_0",
      "spine": "out",
-     "street": "s248_0"
+     "street": "s248_0",
+     "heading": 21.36
     },
     {
      "at": 0.0,
-     "heading": 111.5,
      "road": "s247",
      "spine": "out",
-     "street": "s247"
+     "street": "s247",
+     "heading": 111.5
     },
     {
      "at": 97.19,
-     "heading": 201.16,
      "regulations": [
       "stop"
      ],
      "road": "s216",
      "spine": "in",
-     "street": "s216"
+     "street": "s216",
+     "heading": 201.16
     },
     {
      "at": 68.41,
-     "heading": 291.06,
      "road": "s245",
      "spine": "in",
-     "street": "s245"
+     "street": "s245",
+     "heading": 291.06
     }
    ],
    "at": [
@@ -37731,43 +36871,34 @@
    ],
    "control": "stop",
    "id": "j113",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 111.17,
      "road": "s249",
      "spine": "out",
-     "street": "s249"
+     "street": "s249",
+     "heading": 111.17
     },
     {
      "at": 94.25,
-     "heading": 200.48,
      "regulations": [
       "stop"
      ],
      "road": "s218",
      "spine": "in",
-     "street": "s218"
+     "street": "s218",
+     "heading": 200.48
     },
     {
      "at": 77.28,
-     "heading": 291.62,
      "road": "s247",
      "spine": "in",
-     "street": "s247"
+     "street": "s247",
+     "heading": 291.62
     }
    ],
    "at": [
@@ -37776,39 +36907,34 @@
    ],
    "control": "stop",
    "id": "j114",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 174.5,
      "road": "s222",
      "spine": "out",
-     "street": "s222"
+     "street": "s222",
+     "heading": 174.5
     },
     {
      "at": 62.68,
-     "heading": 292.68,
      "regulations": [
       "stop"
      ],
      "road": "s219",
      "spine": "in",
-     "street": "s219"
+     "street": "s219",
+     "heading": 292.68
     },
     {
      "at": 0.0,
-     "heading": 352.89,
      "road": "s221",
      "spine": "out",
-     "street": "s221"
+     "street": "s221",
+     "heading": 352.89
     }
    ],
    "at": [
@@ -37817,46 +36943,41 @@
    ],
    "control": "stop",
    "id": "j115",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 68.92,
      "regulations": [
       "stop"
      ],
      "road": "s299",
      "spine": "out",
-     "street": "s299"
+     "street": "s299",
+     "heading": 68.92
     },
     {
      "at": 13.95,
-     "heading": 164.88,
      "road": "s298",
      "spine": "out",
-     "street": "s298"
+     "street": "s298",
+     "heading": 164.88
     },
     {
      "at": 93.5,
-     "heading": 195.14,
      "road": "s220",
      "spine": "in",
-     "street": "s220"
+     "street": "s220",
+     "heading": 195.14
     },
     {
      "at": 83.05,
-     "heading": 291.45,
      "road": "s249",
      "spine": "in",
-     "street": "s249"
+     "street": "s249",
+     "heading": 291.45
     }
    ],
    "at": [
@@ -37889,27 +37010,27 @@
    "arms": [
     {
      "at": 0.0,
-     "heading": 77.09,
      "regulations": [
       "stop"
      ],
      "road": "s304",
      "spine": "out",
-     "street": "s304"
+     "street": "s304",
+     "heading": 77.09
     },
     {
      "at": 45.68,
-     "heading": 170.04,
      "road": "s221",
      "spine": "in",
-     "street": "s221"
+     "street": "s221",
+     "heading": 170.04
     },
     {
      "at": 86.55,
-     "heading": 348.87,
      "road": "s298",
      "spine": "in",
-     "street": "s298"
+     "street": "s298",
+     "heading": 348.87
     }
    ],
    "at": [
@@ -37918,39 +37039,34 @@
    ],
    "control": "stop",
    "id": "j117",
-   "through": [
-    [
-     1,
-     2
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[1,2]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 93.34,
      "regulations": [
       "stop"
      ],
      "road": "s306",
      "spine": "out",
-     "street": "s306"
+     "street": "s306",
+     "heading": 93.34
     },
     {
      "at": 0.0,
-     "heading": 179.38,
      "road": "s305",
      "spine": "out",
-     "street": "s305"
+     "street": "s305",
+     "heading": 179.38
     },
     {
      "at": 39.0,
-     "heading": 357.37,
      "road": "s222",
      "spine": "in",
-     "street": "s222"
+     "street": "s222",
+     "heading": 357.37
     }
    ],
    "at": [
@@ -37959,57 +37075,52 @@
    ],
    "control": "stop",
    "id": "j118",
-   "through": [
-    [
-     1,
-     2
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[1,2]]
   },
   {
    "arms": [
     {
      "at": 85.48,
-     "heading": 64.28,
      "road": "s279",
      "spine": "in",
-     "street": "s279"
+     "street": "s279",
+     "heading": 64.28
     },
     {
      "at": 7.2,
-     "heading": 103.29,
      "road": "s251",
      "spine": "out",
-     "street": "s251"
+     "street": "s251",
+     "heading": 103.29
     },
     {
      "at": 81.89,
-     "heading": 180.62,
      "road": "s230",
      "spine": "in",
-     "street": "s230"
+     "street": "s230",
+     "heading": 180.62
     },
     {
      "at": 137.21,
-     "heading": 240.11,
      "road": "s227",
      "spine": "in",
-     "street": "s227"
+     "street": "s227",
+     "heading": 240.11
     },
     {
      "at": 4.99,
-     "heading": 354.94,
      "road": "s337",
      "spine": "out",
-     "street": "s337"
+     "street": "s337",
+     "heading": 354.94
     },
     {
      "at": 0.0,
-     "heading": 339.89,
      "road": "s277",
      "spine": "out",
-     "street": "s277"
+     "street": "s277",
+     "heading": 339.89
     }
    ],
    "at": [
@@ -38065,32 +37176,32 @@
      "to": 4.99
     }
    ],
-   "through": [[0,3],[2,4]],
    "why": "five or more roads meet: lights",
+   "through": [[0,3],[2,4]],
    "nodes": [{"at":[484.41,405.64],"points":[{"at":137.21,"road":"s227"},{"at":13.96,"road":"s254"},{"at":31.34,"road":"s275"},{"at":0.0,"road":"s337"},{"at":9.62,"road":"s252"}]},{"at":[453.1,406.89],"points":[{"at":81.89,"road":"s230"},{"at":39.13,"road":"s252"},{"at":0.0,"road":"s275"}]},{"at":[490.49,418.17],"points":[{"at":0.0,"road":"s251"},{"at":0.0,"road":"s252"},{"at":0.0,"road":"s253"},{"at":0.0,"road":"s254"},{"at":0.0,"road":"s255"},{"at":4.99,"road":"s337"}]},{"at":[504.85,423.31],"points":[{"at":15.31,"road":"s253"},{"at":0.0,"road":"s276"},{"at":0.0,"road":"s277"},{"at":85.48,"road":"s279"}]},{"at":[495.6,426.6],"points":[{"at":9.87,"road":"s255"},{"at":9.96,"road":"s276"},{"at":86.54,"road":"s279"},{"at":7.2,"road":"s251"},{"at":7.4,"road":"s253"}]}]
   },
   {
    "arms": [
     {
      "at": 39.28,
-     "heading": 180.35,
      "road": "s228",
      "spine": "in",
-     "street": "s228"
+     "street": "s228",
+     "heading": 180.35
     },
     {
      "at": 0.0,
-     "heading": 323.90999999999997,
      "road": "s345",
      "spine": "out",
-     "street": "s345"
+     "street": "s345",
+     "heading": 323.90999999999997
     },
     {
      "at": 0.0,
-     "heading": 359.21,
      "road": "s346",
      "spine": "out",
-     "street": "s346"
+     "street": "s346",
+     "heading": 359.21
     }
    ],
    "at": [
@@ -38099,55 +37210,50 @@
    ],
    "control": "signal",
    "id": "j120",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "an arterial meets a collector: lights"
+   "why": "an arterial meets a collector: lights",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 17.98,
      "regulations": [
       "stop"
      ],
      "road": "s257",
      "spine": "out",
-     "street": "s257"
+     "street": "s257",
+     "heading": 17.98
     },
     {
      "at": 0.0,
-     "heading": 107.95,
      "regulations": [
       "stop"
      ],
      "road": "s256",
      "spine": "out",
-     "street": "s256"
+     "street": "s256",
+     "heading": 107.95
     },
     {
      "at": 119.84,
-     "heading": 198.66,
      "regulations": [
       "stop"
      ],
      "road": "s232",
      "spine": "in",
-     "street": "s232"
+     "street": "s232",
+     "heading": 198.66
     },
     {
      "at": 74.68,
-     "heading": 286.65999999999997,
      "regulations": [
       "stop"
      ],
      "road": "s251",
      "spine": "in",
-     "street": "s251"
+     "street": "s251",
+     "heading": 286.65999999999997
     }
    ],
    "at": [
@@ -38156,53 +37262,44 @@
    ],
    "control": "all_way_stop",
    "id": "j121",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 17.71,
      "road": "s259",
      "spine": "out",
-     "street": "s259"
+     "street": "s259",
+     "heading": 17.71
     },
     {
      "at": 0.0,
-     "heading": 110.94,
      "regulations": [
       "stop"
      ],
      "road": "s258",
      "spine": "out",
-     "street": "s258"
+     "street": "s258",
+     "heading": 110.94
     },
     {
      "at": 119.71,
-     "heading": 198.12,
      "road": "s234",
      "spine": "in",
-     "street": "s234"
+     "street": "s234",
+     "heading": 198.12
     },
     {
      "at": 64.01,
-     "heading": 290.95,
      "regulations": [
       "stop"
      ],
      "road": "s256",
      "spine": "in",
-     "street": "s256"
+     "street": "s256",
+     "heading": 290.95
     }
    ],
    "at": [
@@ -38211,59 +37308,50 @@
    ],
    "control": "stop",
    "id": "j122",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 15.57,
      "regulations": [
       "stop"
      ],
      "road": "s261",
      "spine": "out",
-     "street": "s261"
+     "street": "s261",
+     "heading": 15.57
     },
     {
      "at": 0.0,
-     "heading": 110.36,
      "regulations": [
       "stop"
      ],
      "road": "s260",
      "spine": "out",
-     "street": "s260"
+     "street": "s260",
+     "heading": 110.36
     },
     {
      "at": 119.64,
-     "heading": 195.74,
      "regulations": [
       "stop"
      ],
      "road": "s236",
      "spine": "in",
-     "street": "s236"
+     "street": "s236",
+     "heading": 195.74
     },
     {
      "at": 60.45,
-     "heading": 290.59000000000003,
      "regulations": [
       "stop"
      ],
      "road": "s258",
      "spine": "in",
-     "street": "s258"
+     "street": "s258",
+     "heading": 290.59000000000003
     }
    ],
    "at": [
@@ -38272,59 +37360,50 @@
    ],
    "control": "all_way_stop",
    "id": "j123",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 15.12,
      "regulations": [
       "stop"
      ],
      "road": "s263",
      "spine": "out",
-     "street": "s263"
+     "street": "s263",
+     "heading": 15.12
     },
     {
      "at": 0.0,
-     "heading": 109.41,
      "regulations": [
       "stop"
      ],
      "road": "s262",
      "spine": "out",
-     "street": "s262"
+     "street": "s262",
+     "heading": 109.41
     },
     {
      "at": 119.72,
-     "heading": 190.73,
      "regulations": [
       "stop"
      ],
      "road": "s238",
      "spine": "in",
-     "street": "s238"
+     "street": "s238",
+     "heading": 190.73
     },
     {
      "at": 60.79,
-     "heading": 289.65,
      "regulations": [
       "stop"
      ],
      "road": "s260",
      "spine": "in",
-     "street": "s260"
+     "street": "s260",
+     "heading": 289.65
     }
    ],
    "at": [
@@ -38333,53 +37412,44 @@
    ],
    "control": "all_way_stop",
    "id": "j124",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 11.29,
      "road": "s265",
      "spine": "out",
-     "street": "s265"
+     "street": "s265",
+     "heading": 11.29
     },
     {
      "at": 0.0,
-     "heading": 108.36,
      "regulations": [
       "stop"
      ],
      "road": "s264",
      "spine": "out",
-     "street": "s264"
+     "street": "s264",
+     "heading": 108.36
     },
     {
      "at": 119.96,
-     "heading": 191.67,
      "road": "s240",
      "spine": "in",
-     "street": "s240"
+     "street": "s240",
+     "heading": 191.67
     },
     {
      "at": 64.0,
-     "heading": 288.62,
      "regulations": [
       "stop"
      ],
      "road": "s262",
      "spine": "in",
-     "street": "s262"
+     "street": "s262",
+     "heading": 288.62
     }
    ],
    "at": [
@@ -38388,59 +37458,50 @@
    ],
    "control": "stop",
    "id": "j125",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 13.01,
      "regulations": [
       "stop"
      ],
      "road": "s267",
      "spine": "out",
-     "street": "s267"
+     "street": "s267",
+     "heading": 13.01
     },
     {
      "at": 0.0,
-     "heading": 107.99,
      "regulations": [
       "stop"
      ],
      "road": "s266",
      "spine": "out",
-     "street": "s266"
+     "street": "s266",
+     "heading": 107.99
     },
     {
      "at": 120.64,
-     "heading": 193.14,
      "regulations": [
       "stop"
      ],
      "road": "s242",
      "spine": "in",
-     "street": "s242"
+     "street": "s242",
+     "heading": 193.14
     },
     {
      "at": 65.91,
-     "heading": 287.74,
      "regulations": [
       "stop"
      ],
      "road": "s264",
      "spine": "in",
-     "street": "s264"
+     "street": "s264",
+     "heading": 287.74
     }
    ],
    "at": [
@@ -38449,59 +37510,50 @@
    ],
    "control": "all_way_stop",
    "id": "j126",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 17.36,
      "regulations": [
       "stop"
      ],
      "road": "s269",
      "spine": "out",
-     "street": "s269"
+     "street": "s269",
+     "heading": 17.36
     },
     {
      "at": 0.0,
-     "heading": 109.79,
      "regulations": [
       "stop"
      ],
      "road": "s268",
      "spine": "out",
-     "street": "s268"
+     "street": "s268",
+     "heading": 109.79
     },
     {
      "at": 119.79,
-     "heading": 197.06,
      "regulations": [
       "stop"
      ],
      "road": "s244",
      "spine": "in",
-     "street": "s244"
+     "street": "s244",
+     "heading": 197.06
     },
     {
      "at": 69.35,
-     "heading": 289.35,
      "regulations": [
       "stop"
      ],
      "road": "s266",
      "spine": "in",
-     "street": "s266"
+     "street": "s266",
+     "heading": 289.35
     }
    ],
    "at": [
@@ -38510,53 +37562,44 @@
    ],
    "control": "all_way_stop",
    "id": "j127",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "local streets cross: an all-way stop"
+   "why": "local streets cross: an all-way stop",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 22.18,
      "road": "s270",
      "spine": "out",
-     "street": "s270/0"
+     "street": "s270/0",
+     "heading": 22.18
     },
     {
      "at": 52.17,
-     "heading": 112.09,
      "regulations": [
       "stop"
      ],
      "road": "s248_2",
      "spine": "in",
-     "street": "s248_2"
+     "street": "s248_2",
+     "heading": 112.09
     },
     {
      "at": 116.88,
-     "heading": 200.66,
      "road": "s246",
      "spine": "in",
-     "street": "s246"
+     "street": "s246",
+     "heading": 200.66
     },
     {
      "at": 71.15,
-     "heading": 291.64,
      "regulations": [
       "stop"
      ],
      "road": "s268",
      "spine": "in",
-     "street": "s268"
+     "street": "s268",
+     "heading": 291.64
     }
    ],
    "at": [
@@ -38565,53 +37608,44 @@
    ],
    "control": "stop",
    "id": "j128",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 52.81,
      "road": "bv0_out",
      "spine": "out",
-     "street": "bv0_out"
+     "street": "bv0_out",
+     "heading": 52.81
     },
     {
      "at": 129.94,
-     "heading": 52.45,
      "road": "bv0_in",
      "spine": "in",
-     "street": "bv0_in"
+     "street": "bv0_in",
+     "heading": 52.45
     },
     {
      "at": 93.65,
-     "heading": 203.37,
      "regulations": [
       "stop"
      ],
      "road": "s248_0",
      "spine": "in",
-     "street": "s248_0"
+     "street": "s248_0",
+     "heading": 203.37
     },
     {
      "at": 0.0,
-     "heading": 293.05,
      "regulations": [
       "stop"
      ],
      "road": "s248_2",
      "spine": "out",
-     "street": "s248_2"
+     "street": "s248_2",
+     "heading": 293.05
     }
    ],
    "at": [
@@ -38627,45 +37661,45 @@
      "to": 40.0
     }
    ],
-   "through": [[1,2]],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[1,2]],
    "nodes": [{"at":[272.03,978.18],"points":[{"at":93.65,"road":"s248_0"},{"at":0.0,"road":"s248_1"},{"at":129.94,"road":"bv0_in"}]},{"at":[298.35,967.56],"points":[{"at":40.0,"road":"s248_1"},{"at":0.0,"road":"s248_2"},{"at":0.0,"road":"bv0_out"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 80.32,
      "road": "s280",
      "spine": "out",
-     "street": "s280"
+     "street": "s280",
+     "heading": 80.32
     },
     {
      "at": 58.02,
-     "heading": 197.01,
      "regulations": [
       "stop"
      ],
      "road": "s257",
      "spine": "in",
-     "street": "s257"
+     "street": "s257",
+     "heading": 197.01
     },
     {
      "at": 0.0,
-     "heading": 253.55,
      "road": "s279",
      "spine": "out",
-     "street": "s279"
+     "street": "s279",
+     "heading": 253.55
     },
     {
      "at": 0.0,
-     "heading": 350.08,
      "regulations": [
       "stop"
      ],
      "road": "s281",
      "spine": "out",
-     "street": "s281"
+     "street": "s281",
+     "heading": 350.08
     }
    ],
    "at": [
@@ -38674,40 +37708,31 @@
    ],
    "control": "stop",
    "id": "j130",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 87.63,
-     "heading": 194.78,
      "road": "s259",
      "spine": "in",
-     "street": "s259"
+     "street": "s259",
+     "heading": 194.78
     },
     {
      "at": 69.18,
-     "heading": 272.82,
      "road": "s280",
      "spine": "in",
-     "street": "s280"
+     "street": "s280",
+     "heading": 272.82
     },
     {
      "at": 0.0,
-     "heading": 355.48,
      "road": "s283",
      "spine": "out",
-     "street": "s283"
+     "street": "s283",
+     "heading": 355.48
     }
    ],
    "at": [
@@ -38716,49 +37741,44 @@
    ],
    "control": "signal",
    "id": "j131",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "arterials cross: lights"
+   "why": "arterials cross: lights",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 106.31,
      "road": "s286",
      "spine": "out",
-     "street": "s286"
+     "street": "s286",
+     "heading": 106.31
     },
     {
      "at": 119.72,
-     "heading": 201.17,
      "regulations": [
       "stop"
      ],
      "road": "s263",
      "spine": "in",
-     "street": "s263"
+     "street": "s263",
+     "heading": 201.17
     },
     {
      "at": 77.57,
-     "heading": 280.9,
      "road": "s300",
      "spine": "in",
-     "street": "s300/1"
+     "street": "s300/1",
+     "heading": 280.9
     },
     {
      "at": 0.0,
-     "heading": 12.31,
      "regulations": [
       "stop"
      ],
      "road": "s301",
      "spine": "out",
-     "street": "s301"
+     "street": "s301",
+     "heading": 12.31
     }
    ],
    "at": [
@@ -38774,42 +37794,42 @@
      "to": 23.06
     }
    ],
-   "through": [[3,1],[0,2]],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[3,1],[0,2]],
    "nodes": [{"at":[521.47,697.51],"points":[{"at":119.72,"road":"s263"},{"at":0.0,"road":"s285"},{"at":0.0,"road":"s286"}]},{"at":[526.95,675.12],"points":[{"at":23.06,"road":"s285"},{"at":77.57,"road":"s300"},{"at":0.0,"road":"s301"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 112.53,
      "road": "s289",
      "spine": "out",
-     "street": "s289"
+     "street": "s289",
+     "heading": 112.53
     },
     {
      "at": 119.74,
-     "heading": 201.71,
      "road": "s265",
      "spine": "in",
-     "street": "s265"
+     "street": "s265",
+     "heading": 201.71
     },
     {
      "at": 54.75,
-     "heading": 290.90999999999997,
      "road": "s286",
      "spine": "in",
-     "street": "s286"
+     "street": "s286",
+     "heading": 290.90999999999997
     },
     {
      "at": 0.0,
-     "heading": 16.39,
      "regulations": [
       "stop"
      ],
      "road": "s302",
      "spine": "out",
-     "street": "s302"
+     "street": "s302",
+     "heading": 16.39
     }
    ],
    "at": [
@@ -38825,45 +37845,45 @@
      "to": 6.87
     }
    ],
-   "through": [[3,1],[0,2]],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[3,1],[0,2]],
    "nodes": [{"at":[501.39,755.72],"points":[{"at":119.74,"road":"s265"},{"at":0.0,"road":"s288"},{"at":0.0,"road":"s289"}]},{"at":[503.95,749.35],"points":[{"at":54.75,"road":"s286"},{"at":6.87,"road":"s288"},{"at":0.0,"road":"s302"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 31.37,
      "regulations": [
       "stop"
      ],
      "road": "s303",
      "spine": "out",
-     "street": "s303"
+     "street": "s303",
+     "heading": 31.37
     },
     {
      "at": 217.02,
-     "heading": 118.29,
      "road": "s270",
      "spine": "in",
-     "street": "s270/1"
+     "street": "s270/1",
+     "heading": 118.29
     },
     {
      "at": 108.91,
-     "heading": 201.2,
      "regulations": [
       "stop"
      ],
      "road": "s267",
      "spine": "in",
-     "street": "s267"
+     "street": "s267",
+     "heading": 201.2
     },
     {
      "at": 69.36,
-     "heading": 296.31,
      "road": "s289",
      "spine": "in",
-     "street": "s289"
+     "street": "s289",
+     "heading": 296.31
     }
    ],
    "at": [
@@ -38879,62 +37899,53 @@
      "to": 82.24
     }
    ],
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
    "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2],[1,3]],
    "nodes": [{"at":[466.78,830.28],"points":[{"at":217.02,"road":"s270"},{"at":82.24,"road":"s289"},{"at":0.0,"road":"s303"}]},{"at":[470.14,817.52],"points":[{"at":69.36,"road":"s289"},{"at":108.91,"road":"s267"}]}]
   },
   {
    "arms": [
     {
      "at": 197.51,
-     "heading": 9.92,
      "road": "s284",
      "spine": "in",
-     "street": "s284"
+     "street": "s284",
+     "heading": 9.92
     },
     {
      "at": 104.4,
-     "heading": 124.65,
      "road": "s318",
      "spine": "in",
-     "street": "s318"
+     "street": "s318",
+     "heading": 124.65
     },
     {
      "at": 0.0,
-     "heading": 190.39,
      "road": "s322",
      "spine": "out",
-     "street": "s322"
+     "street": "s322",
+     "heading": 190.39
     },
     {
      "at": 0.0,
-     "heading": 214.61,
      "road": "s324",
      "spine": "out",
-     "street": "s324"
+     "street": "s324",
+     "heading": 214.61
     },
     {
      "at": 21.56,
-     "heading": 309.89,
      "road": "s323",
      "spine": "out",
-     "street": "s323"
+     "street": "s323",
+     "heading": 309.89
     },
     {
      "at": 86.84,
-     "heading": 23.32,
      "road": "s6",
      "spine": "in",
-     "street": "s6"
+     "street": "s6",
+     "heading": 23.32
     }
    ],
    "at": [
@@ -38955,35 +37966,35 @@
      "to": 21.56
     }
    ],
-   "through": [[0,2],[5,3],[1,4]],
    "why": "five or more roads meet: lights",
+   "through": [[0,2],[5,3],[1,4]],
    "nodes": [{"at":[-452.06,364.25],"points":[{"at":197.51,"road":"s284"},{"at":104.4,"road":"s318"},{"at":0.0,"road":"s321"},{"at":0.0,"road":"s322"}]},{"at":[-437.26,344.25],"points":[{"at":24.88,"road":"s321"},{"at":0.0,"road":"s323"},{"at":0.0,"road":"s324"}]},{"at":[-422.55,328.44],"points":[{"at":21.56,"road":"s323"},{"at":86.84,"road":"s6"}]}]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 166.52,
      "road": "s343",
      "spine": "out",
-     "street": "s343"
+     "street": "s343",
+     "heading": 166.52
     },
     {
      "at": 119.27,
-     "heading": 260.31,
      "regulations": [
       "stop"
      ],
      "road": "s299",
      "spine": "in",
-     "street": "s299"
+     "street": "s299",
+     "heading": 260.31
     },
     {
      "at": 49.78,
-     "heading": 347.23,
      "road": "s342",
      "spine": "in",
-     "street": "s342"
+     "street": "s342",
+     "heading": 347.23
     }
    ],
    "at": [
@@ -38992,39 +38003,34 @@
    ],
    "control": "stop",
    "id": "j136",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 99.08,
      "road": "s339",
      "spine": "out",
-     "street": "s339"
+     "street": "s339",
+     "heading": 99.08
     },
     {
      "at": 134.91,
-     "heading": 194.54,
      "regulations": [
       "stop"
      ],
      "road": "s301",
      "spine": "in",
-     "street": "s301"
+     "street": "s301",
+     "heading": 194.54
     },
     {
      "at": 62.45,
-     "heading": 277.62,
      "road": "s338",
      "spine": "in",
-     "street": "s338"
+     "street": "s338",
+     "heading": 277.62
     }
    ],
    "at": [
@@ -39033,39 +38039,34 @@
    ],
    "control": "stop",
    "id": "j137",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 110.04,
      "road": "s340",
      "spine": "out",
-     "street": "s340"
+     "street": "s340",
+     "heading": 110.04
     },
     {
      "at": 142.34,
-     "heading": 209.59,
      "regulations": [
       "stop"
      ],
      "road": "s302",
      "spine": "in",
-     "street": "s302"
+     "street": "s302",
+     "heading": 209.59
     },
     {
      "at": 101.94,
-     "heading": 288.53,
      "road": "s339",
      "spine": "in",
-     "street": "s339"
+     "street": "s339",
+     "heading": 288.53
     }
    ],
    "at": [
@@ -39074,39 +38075,34 @@
    ],
    "control": "stop",
    "id": "j138",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 116.84,
      "road": "s341",
      "spine": "out",
-     "street": "s341"
+     "street": "s341",
+     "heading": 116.84
     },
     {
      "at": 145.41,
-     "heading": 211.02,
      "regulations": [
       "stop"
      ],
      "road": "s303",
      "spine": "in",
-     "street": "s303"
+     "street": "s303",
+     "heading": 211.02
     },
     {
      "at": 109.23,
-     "heading": 296.13,
      "road": "s340",
      "spine": "in",
-     "street": "s340"
+     "street": "s340",
+     "heading": 296.13
     }
    ],
    "at": [
@@ -39115,43 +38111,38 @@
    ],
    "control": "stop",
    "id": "j139",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 0.0,
-     "heading": 9.02,
      "road": "s320",
      "spine": "out",
-     "street": "s320"
+     "street": "s320",
+     "heading": 9.02
     },
     {
      "at": 44.23,
-     "heading": 113.96,
      "road": "s316",
      "spine": "in",
-     "street": "s316"
+     "street": "s316",
+     "heading": 113.96
     },
     {
      "at": 0.0,
-     "heading": 187.92,
      "road": "s319",
      "spine": "out",
-     "street": "s319"
+     "street": "s319",
+     "heading": 187.92
     },
     {
      "at": 0.0,
-     "heading": 295.73,
      "road": "s318",
      "spine": "out",
-     "street": "s318"
+     "street": "s318",
+     "heading": 295.73
     }
    ],
    "at": [
@@ -39160,43 +38151,34 @@
    ],
    "control": "signal",
    "id": "j140",
-   "through": [
-    [
-     0,
-     2
-    ],
-    [
-     1,
-     3
-    ]
-   ],
-   "why": "an arterial meets a collector: lights"
+   "why": "an arterial meets a collector: lights",
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
     {
      "at": 144.17,
-     "heading": 39.0,
      "regulations": [
       "stop"
      ],
      "road": "s324",
      "spine": "in",
-     "street": "s324"
+     "street": "s324",
+     "heading": 39.0
     },
     {
      "at": 251.03,
-     "heading": 121.18,
      "road": "s322",
      "spine": "in",
-     "street": "s322"
+     "street": "s322",
+     "heading": 121.18
     },
     {
      "at": 0.0,
-     "heading": 302.48,
      "road": "s344",
      "spine": "out",
-     "street": "s344"
+     "street": "s344",
+     "heading": 302.48
     }
    ],
    "at": [
@@ -39205,39 +38187,34 @@
    ],
    "control": "stop",
    "id": "j141",
-   "through": [
-    [
-     1,
-     2
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[1,2]]
   },
   {
    "arms": [
     {
      "at": 40.32,
-     "heading": 97.5,
      "road": "s300",
      "spine": "out",
-     "street": "s300/1"
+     "street": "s300/1",
+     "heading": 97.5
     },
     {
      "at": 108.49,
-     "heading": 199.22,
      "regulations": [
       "stop"
      ],
      "road": "s261",
      "spine": "in",
-     "street": "s261"
+     "street": "s261",
+     "heading": 199.22
     },
     {
      "at": 40.32,
-     "heading": 275.21,
      "road": "s300",
      "spine": "in",
-     "street": "s300/0"
+     "street": "s300/0",
+     "heading": 275.21
     }
    ],
    "at": [
@@ -39246,39 +38223,34 @@
    ],
    "control": "stop",
    "id": "j142",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2]]
   },
   {
    "arms": [
     {
      "at": 153.42,
-     "heading": 123.33,
      "road": "s270",
      "spine": "in",
-     "street": "s270/0"
+     "street": "s270/0",
+     "heading": 123.33
     },
     {
      "at": 93.36,
-     "heading": 201.07,
      "regulations": [
       "stop"
      ],
      "road": "s269",
      "spine": "in",
-     "street": "s269"
+     "street": "s269",
+     "heading": 201.07
     },
     {
      "at": 153.42,
-     "heading": 302.03,
      "road": "s270",
      "spine": "out",
-     "street": "s270/1"
+     "street": "s270/1",
+     "heading": 302.03
     }
    ],
    "at": [
@@ -39287,19 +38259,214 @@
    ],
    "control": "stop",
    "id": "j143",
-   "through": [
-    [
-     0,
-     2
-    ]
-   ],
-   "why": "a local street meets a busier road: the local street stops"
+   "why": "a local street meets a busier road: the local street stops",
+   "through": [[0,2]]
   }
  ],
  "arms_in_ring": true,
  "name": "river_town",
  "rules": {
   "closing": 3.0
+ },
+ "terrain": {
+  "base": {
+   "groundCover": {
+    "beachHeight": 3,
+    "dirt": [
+     0.12,
+     0.085,
+     0.05
+    ],
+    "dirtPatches": 0.15,
+    "grass": [
+     0.055,
+     0.085,
+     0.018
+    ],
+    "grassDry": [
+     0.1,
+     0.1,
+     0.04
+    ],
+    "mountainHeight": 260,
+    "rock": [
+     0.15,
+     0.14,
+     0.12
+    ],
+    "rockSlopeDeg": 34,
+    "seed": 5,
+    "snowHeight": 470,
+    "uplandHeight": 90
+   },
+   "heightScale": 7,
+   "mountainAlongRange": true,
+   "mountainHeight": 350,
+   "mountainMaskScale": 0,
+   "mountainScale": 0.0015,
+   "noiseScale": 0.0005,
+   "octaves": 5,
+   "rangeHeight": 450,
+   "rangeSpine": [
+    [
+     -3000,
+     -6200
+    ],
+    [
+     -3500,
+     -3000
+    ],
+    [
+     -3300,
+     0
+    ],
+    [
+     -3000,
+     2200
+    ],
+    [
+     -1900,
+     3700
+    ],
+    [
+     0,
+     4400
+    ],
+    [
+     2200,
+     4700
+    ],
+    [
+     4200,
+     5200
+    ]
+   ],
+   "rangeVariation": 0.6,
+   "rangeWidth": 900,
+   "resolution": 1200,
+   "rivers": {
+    "auto": false,
+    "bankSteep": 4.0,
+    "cell": 16,
+    "courses": [
+     {
+      "_comment": "Off the range in the northwest, down its valley, south through the gap between the mountain city and the main city, then east across the city just north of downtown (as the Chicago River runs along the Loop) to the sea.",
+      "meander": 14,
+      "points": [
+       [
+        -2750,
+        3350
+       ],
+       [
+        -2400,
+        3000
+       ],
+       [
+        -2050,
+        2700
+       ],
+       [
+        -1750,
+        2300
+       ],
+       [
+        -1680,
+        1700
+       ],
+       [
+        -1650,
+        1100
+       ],
+       [
+        -1550,
+        650
+       ],
+       [
+        -1250,
+        420
+       ],
+       [
+        -700,
+        380
+       ],
+       [
+        -200,
+        430
+       ],
+       [
+        300,
+        360
+       ],
+       [
+        800,
+        300
+       ],
+       [
+        1300,
+        250
+       ],
+       [
+        2100,
+        150
+       ]
+      ],
+      "width": [
+       20,
+       90
+      ]
+     }
+    ],
+    "incisionMax": 4.0,
+    "incisionMin": 2.5,
+    "lakeMinArea": 1000000000000.0,
+    "region": 9000
+   },
+   "rockLine": 240,
+   "seed": 11,
+   "size": 12000,
+   "snowLine": 520,
+   "tiltX": -0.02,
+   "warp": 0.35
+  },
+  "bounds": [
+   -1050.0,
+   1050.0,
+   -450.0,
+   1650.0
+  ],
+  "octaves": [
+   [
+    20.400000000000002,
+    900.0
+   ],
+   [
+    7.199999999999999,
+    360.0
+   ],
+   [
+    2.4,
+    140.0
+   ]
+  ],
+  "relief_calm": {
+   "dir": [
+    1,
+    0
+   ],
+   "from": 500,
+   "to": 1350
+  },
+  "relief_fade": {
+   "centre": [
+    0.0,
+    600.0
+   ],
+   "r0": 850,
+   "r1": 980
+  },
+  "res": 10.0,
+  "seed": 474349,
+  "type": "procedural"
  },
  "streets": [
   {
@@ -42897,7 +42064,7 @@
     null
    ],
    "road": "x0_inR_loop",
-   "to": 390.16
+   "to": 390.31
   },
   {
    "from": 0.0,
@@ -42907,7 +42074,7 @@
     null
    ],
    "road": "x0_inL_loop",
-   "to": 391.08
+   "to": 391.29
   },
   {
    "from": 0.0,
@@ -42937,7 +42104,7 @@
     null
    ],
    "road": "x1_inR_loop",
-   "to": 389.24
+   "to": 389.37
   },
   {
    "from": 0.0,
@@ -42947,207 +42114,17 @@
     null
    ],
    "road": "x1_inL_loop",
-   "to": 392.21
+   "to": 392.29
   }
  ],
- "terrain": {
-  "base": {
-   "groundCover": {
-    "beachHeight": 3,
-    "dirt": [
-     0.12,
-     0.085,
-     0.05
-    ],
-    "dirtPatches": 0.15,
-    "grass": [
-     0.055,
-     0.085,
-     0.018
-    ],
-    "grassDry": [
-     0.1,
-     0.1,
-     0.04
-    ],
-    "mountainHeight": 260,
-    "rock": [
-     0.15,
-     0.14,
-     0.12
-    ],
-    "rockSlopeDeg": 34,
-    "seed": 5,
-    "snowHeight": 470,
-    "uplandHeight": 90
-   },
-   "heightScale": 7,
-   "mountainAlongRange": true,
-   "mountainHeight": 350,
-   "mountainMaskScale": 0,
-   "mountainScale": 0.0015,
-   "noiseScale": 0.0005,
-   "octaves": 5,
-   "rangeHeight": 450,
-   "rangeSpine": [
-    [
-     -3000,
-     -6200
-    ],
-    [
-     -3500,
-     -3000
-    ],
-    [
-     -3300,
-     0
-    ],
-    [
-     -3000,
-     2200
-    ],
-    [
-     -1900,
-     3700
-    ],
-    [
-     0,
-     4400
-    ],
-    [
-     2200,
-     4700
-    ],
-    [
-     4200,
-     5200
-    ]
-   ],
-   "rangeVariation": 0.6,
-   "rangeWidth": 900,
-   "resolution": 1200,
-   "rivers": {
-    "auto": false,
-    "bankSteep": 4.0,
-    "cell": 16,
-    "courses": [
-     {
-      "_comment": "Off the range in the northwest, down its valley, south through the gap between the mountain city and the main city, then east across the city just north of downtown (as the Chicago River runs along the Loop) to the sea.",
-      "meander": 14,
-      "points": [
-       [
-        -2750,
-        3350
-       ],
-       [
-        -2400,
-        3000
-       ],
-       [
-        -2050,
-        2700
-       ],
-       [
-        -1750,
-        2300
-       ],
-       [
-        -1680,
-        1700
-       ],
-       [
-        -1650,
-        1100
-       ],
-       [
-        -1550,
-        650
-       ],
-       [
-        -1250,
-        420
-       ],
-       [
-        -700,
-        380
-       ],
-       [
-        -200,
-        430
-       ],
-       [
-        300,
-        360
-       ],
-       [
-        800,
-        300
-       ],
-       [
-        1300,
-        250
-       ],
-       [
-        2100,
-        150
-       ]
-      ],
-      "width": [
-       20,
-       90
-      ]
-     }
-    ],
-    "incisionMax": 4.0,
-    "incisionMin": 2.5,
-    "lakeMinArea": 1000000000000.0,
-    "region": 9000
-   },
-   "rockLine": 240,
-   "seed": 11,
-   "size": 12000,
-   "snowLine": 520,
-   "tiltX": -0.02,
-   "warp": 0.35
-  },
-  "bounds": [
-   -1050.0,
-   1050.0,
-   -450.0,
-   1650.0
+ "divided": [
+  [
+   "bv0_in",
+   "bv0_out"
   ],
-  "octaves": [
-   [
-    20.400000000000002,
-    900.0
-   ],
-   [
-    7.199999999999999,
-    360.0
-   ],
-   [
-    2.4,
-    140.0
-   ]
-  ],
-  "relief_calm": {
-   "dir": [
-    1,
-    0
-   ],
-   "from": 500,
-   "to": 1350
-  },
-  "relief_fade": {
-   "centre": [
-    0.0,
-    600.0
-   ],
-   "r0": 850,
-   "r1": 980
-  },
-  "res": 10.0,
-  "seed": 474349,
-  "type": "procedural"
- }
+  [
+   "bv1_in",
+   "bv1_out"
+  ]
+ ]
 }

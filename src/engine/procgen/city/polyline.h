@@ -163,6 +163,25 @@ inline Vec2 pointAtStation(const Vec2* xy, const Real* s, std::size_t n, Real st
     return lerp(xy[spot.seg], xy[spot.seg + 1], spot.t);
 }
 
+// THE STRETCH OF A LINE BETWEEN TWO STATIONS -- THE ONE FUNCTION that picks a line's points inside a stretch (issue #292:
+// the road model's centre lines, the street map's runs and the lane level's slices each had their own, with tolerances
+// of a millionth of a metre, 7.5 mm and 1 mm). Appended to `pts` (and their stations to `st`, when given): the point at
+// `from`, every point of the line strictly inside the stretch -- more than `gap` past `from` and more than `gap` before
+// `to` -- and the point at `to`. `gap` is how near an end a point may lie and still be that end: for stations a file
+// wrote (to the centimetre), rt_math.h kWrittenStation; for stations worked out, kSamePoint. from <= to.
+inline void stretchAtStations(const Vec2* xy, const Real* s, std::size_t n, Real from, Real to, Real gap, std::vector<Vec2>& pts,
+                              std::vector<Real>* st = nullptr) {
+    pts.push_back(pointAtStation(xy, s, n, from));
+    if (st) st->push_back(from);
+    for (std::size_t i = 0; i < n; ++i)
+        if (strictlyPast(s[i], from, gap) && strictlyBefore(s[i], to, gap)) {
+            pts.push_back(xy[i]);
+            if (st) st->push_back(s[i]);
+        }
+    pts.push_back(pointAtStation(xy, s, n, to));
+    if (st) st->push_back(to);
+}
+
 // A value carried at each point (a height, a width), read at a station by straight-line interpolation (numpy's interp,
 // clamped). No points: 0.
 inline Real valueAtStation(const Real* s, const Real* v, std::size_t n, Real station) {

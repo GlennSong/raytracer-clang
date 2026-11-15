@@ -27,10 +27,12 @@ rule_set = {
   ranks = { "priority", "give_way", "stop" },
   -- WHAT STANDS ON THE ROAD and what it means. The names are the control plan's regulation kinds, the same words as the
   -- sign kit's `means.regulation` (assets/scripts/signs_us.lua), so the planting (#241) finds the sign for each; `sign`
-  -- is the US manual's code for it (MUTCD 2009, R1-1 and R1-2).
+  -- is the US manual's code for it (MUTCD 2009, R1-1 and R1-2). WHAT IS PAINTED ON THE ROAD for a device is not said
+  -- here: it is the `marking` rows of assets/data/road_attachments.json (each names the device it `means`), the one
+  -- table the road paint reads. A `paint` list here is refused.
   devices = {
-    stop = { means = { stop_line = true, rank = "stop" }, sign = "R1-1", paint = { "stop_bar" } },
-    give_way = { means = { rank = "give_way" }, sign = "R1-2", paint = { "give_way_teeth" } },
+    stop = { means = { stop_line = true, rank = "stop" }, sign = "R1-1" },
+    give_way = { means = { rank = "give_way" }, sign = "R1-2" },
   },
 
   -- WHO GIVES WAY TO WHOM at each kind of junction control (issue #260): the questions asked, in order, until one tells
