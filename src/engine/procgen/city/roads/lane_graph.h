@@ -14,8 +14,9 @@
 // vector of points or of next-paths, it holds a RANGE (first, count) into one shared array. An island with tens of
 // thousands of lanes is then a handful of allocations.
 //
-// Kinds are data. Lane tags (what a lane is for), vehicle tags (who may use a path), regulation kinds, junction
-// controls and road classes are NAMES the graph carries in small tables, filled from the data files; a path or a
+// Kinds are data. Vehicle tags (who may use a path), regulation kinds, junction controls and road classes are NAMES
+// the graph carries in small tables, filled from the data files (what a lane is for is its kind in the road model,
+// reached by Path::modelLane: not copied here since ADR-0429); a path or a
 // regulation refers to a name by its index, and a set of tags is a bit mask (bit i = name i). The only fixed
 // vocabularies here are the geometric ones: a path is a lane or a connector; a connector goes straight, turns near
 // (stays by the kerb), turns far (crosses oncoming traffic) or turns back; two things meet by crossing, joining or
@@ -52,7 +53,7 @@ using CrossingId = GraphIndex<CrossingTag>;
 using CrosswalkId = GraphIndex<CrosswalkTag>;
 using TrackId = GraphIndex<TrackTag>;
 
-// An index into one of the graph's NAME tables (laneTagNames, vehicleTagNames, ...): which regulation kind, which
+// An index into one of the graph's NAME tables (vehicleTagNames, regulationKindNames, ...): which regulation kind, which
 // control, which road class. kNone where the table has nothing to say.
 using NameIndex = uint32_t;
 constexpr NameIndex kNoName = 0xFFFFFFFFu;
@@ -112,7 +113,6 @@ struct BendSpan {
 struct Path {
     PathKind kind = PathKind::Lane;
     Turn turn = Turn::None;              // connectors only
-    TagMask laneTags = 0;                // what the lane is for (bits of LaneGraph::laneTagNames)
     TagMask vehicleTags = 0;             // who may use it (bits of LaneGraph::vehicleTagNames)
     Range curve;                         // its centre line: into LaneGraph::points / along / heights
     Real length = 0;                     // metres along the centre line
@@ -247,7 +247,6 @@ struct CarSpace {
 
 struct LaneGraph {
     // The name tables (filled from the data files; the graph only carries the names it refers to by index).
-    std::vector<std::string> laneTagNames;
     std::vector<std::string> vehicleTagNames;
     std::vector<std::string> regulationKindNames;
     std::vector<std::string> controlNames;

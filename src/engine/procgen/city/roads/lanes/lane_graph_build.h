@@ -124,10 +124,10 @@ inline double offsideness(double normalOffset, int dir) { return normalOffset * 
 // dir, so a point along perp of it lies offside where offsideness says a positive offset does; the kerb is the other way.
 inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 
-// THE LANE GRAPH BUILDER'S VERSION. A saved lane graph (lane_graph_cache.h) is keyed by the roads it was built from,
+// THE LANE GRAPH BUILDER'S VERSION. A saved road model (road_model_cache.h) is keyed by the roads it was built from,
 // the vehicles its connectors were checked against and this number, so BUMP IT whenever what buildLaneLevel
 // (lane_level.h), fitConnector (lane_graph_connect.h) or findCrossingPoints (lane_graph_crossings.h) makes can change --
-// a connector's shape, a tolerance there -- or every level in v2 keeps loading the graph the old code built. (A change to
+// a connector's shape, a tolerance there -- or every level in v2 keeps loading the lane level the old code built. (A change to
 // the roads themselves is the lanes tag's, kLanesBuildTag, which keys the roads; to the road file's layout, lane rules
 // or the turns' table, the cache key's own; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
@@ -250,10 +250,11 @@ struct CornerFault {
     Vec2 at;
 };
 
+// WHAT BUILDING THE LANE LEVEL REPORTS. The lane level itself is the road model's (RoadModel::laneLevel): this is what
+// was found on the way, for a tool or a test to read. It is not saved.
 struct LaneGraphBuild {
-    LaneGraph graph;
     // A fact the lane level cannot be built without, missing from the road file, in words naming what to run; empty when
-    // it was built (lane_level.h). The graph is empty then.
+    // it was built (lane_level.h). The model's lane level is empty then.
     std::string error;
     std::vector<CornerFault> cornerFaults;   // the stated turns whose corners do not fit, per class (lane_level.h)
     // where the lane level joined two lanes the model states lead one into the other (lane_level.h): how many at places a
@@ -293,10 +294,6 @@ struct LaneGraphBuild {
     double milliseconds = 0;               // the whole of buildLaneLevel
     double connectMilliseconds = 0;        // ... of which the connectors (the crossing points: crossings.milliseconds)
 };
-
-// THE LANE GRAPH OF A BUILT ROAD NETWORK: its road model assembled from it (road_model.h assembleRoadModel), and the lane
-// level built from that (lane_level.h buildLaneLevel). `error` names what a road file lacking a fact must run.
-LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts);
 
 }  // namespace roads::lanes
 }  // namespace engine

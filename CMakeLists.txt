@@ -662,7 +662,7 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/lane_graph_crossings.cpp   # where they cross, join and split (#239)
             src/engine/procgen/city/roads/lanes/swept_body.cpp   # the ground a long body covers along a path (#284)
             src/engine/procgen/city/roads/lanes/lane_level.cpp   # the lane graph as a table built from the road model (ADR-0426)
-            src/engine/procgen/city/roads/lanes/lane_graph_cache.cpp   # a level's lane graph saved and read back
+            src/engine/procgen/city/roads/lanes/road_model_cache.cpp   # a level's built road model saved and read back (ADR-0429)
             src/engine/procgen/city/roads/lanes/control_plan.cpp   # every junction's control and every road's limit, planned (#240)
             src/engine/procgen/city/roads/lanes/road_layout.cpp   # the road file's junctions and streets, with ids (ADR-0417)
             src/engine/procgen/city/roads/road_model.cpp   # the one road model, assembled from a build (ADR-0417)

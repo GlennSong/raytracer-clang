@@ -2,6 +2,7 @@
 
 #include "engine/bundle/bundle.h"
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"         // junctionAreas: each arm's stop line, the one rule
+#include "engine/procgen/city/roads/lanes/lane_level.h"        // buildLaneLevel: the model's lane level (ADR-0429)
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"       // kArmOrderCommand: an unmarked file's ring (ADR-0427)
@@ -290,7 +291,7 @@ std::vector<std::vector<TurnArm>> turnArmsOf(const RoadModel& m) {
     return armsOf;
 }
 
-RoadModel assembleRoadModel(const Result& r) {
+RoadModel assembleRoadModel(const Result& r, const roads::lanes::LaneGraphOptions& opts, roads::lanes::LaneGraphBuild* report) {
     const RoadLabGraph& g = r.graph;
     RoadModel m = plannedRoadModel(g);
     m.built = true;
@@ -443,6 +444,10 @@ RoadModel assembleRoadModel(const Result& r) {
             if (!J.arms[k].street.valid())
                 m.problems.push_back(fmt("junction %s: arm %zu (road %s at %.1f) names no street of the road file", J.id.c_str(), k,
                                          J.arms[k].road.c_str(), J.arms[k].station));
+
+    // ---- the lane level: the table of paths, from everything stated above (lanes/lane_level.h) --------------------------
+    roads::lanes::LaneGraphBuild found = roads::lanes::buildLaneLevel(r, m, opts);
+    if (report) *report = std::move(found);
     return m;
 }
 
@@ -1377,6 +1382,7 @@ void putRoadModel(bundle::BinWriter& w, const RoadModel& m) {
     Writer io{w};
     RoadModel copy = m;   // (the walk takes its fields by reference)
     modelFields(io, copy);
+    putLaneGraph(w, m.laneLevel);   // the lane level, in the lane graph's own bytes
 }
 
 bool getRoadModel(bundle::BinReader& r, RoadModel& m, std::string* err) {
@@ -1395,6 +1401,12 @@ bool getRoadModel(bundle::BinReader& r, RoadModel& m, std::string* err) {
     if (!r.ok()) {
         m = RoadModel();
         if (err) *err = "road model: the bytes end early or do not read";
+        return false;
+    }
+    std::string why;
+    if (!getLaneGraph(r, m.laneLevel, &why)) {
+        m = RoadModel();
+        if (err) *err = "road model: its lane level does not read: " + why;
         return false;
     }
     return true;

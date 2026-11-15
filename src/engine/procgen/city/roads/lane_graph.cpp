@@ -15,9 +15,10 @@ namespace {
 // The section's magic and the version this build writes and reads (2: junctions list their arriving and leaving lanes;
 // 3: each path lists its crossing points; 4: a regulation covers a stretch, from and to, issue #240; 5: each path's bend
 // profile, issue #281; 6: each crossing point's vehicle tags on each side, ADR-0412; 7: each path's and junction's ids on
-// the road model, ADR-0426; 8: a Join's stated merge, which path joins and the model's connection, ADR-0426).
+// the road model, ADR-0426; 8: a Join's stated merge, which path joins and the model's connection, ADR-0426; 9: no lane
+// tags, a lane's kind is the road model's, ADR-0429).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 8;
+constexpr uint32_t kVersion = 9;
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
 // A closed outline (a junction's box, a crosswalk) has at least this many corners; a track's line two points.
@@ -122,7 +123,6 @@ void putItem(BinWriter& w, const LaneLine& l) {
 void putItem(BinWriter& w, const Path& p) {
     w.put(static_cast<uint8_t>(p.kind));
     w.put(static_cast<uint8_t>(p.turn));
-    w.put(p.laneTags);
     w.put(p.vehicleTags);
     putItem(w, p.curve);
     w.put(p.length);
@@ -217,7 +217,7 @@ bool getItem(BinReader& r, LaneLine& l) {
     return true;
 }
 bool getItem(BinReader& r, Path& p) {
-    return getEnum(r, p.kind) && getEnum(r, p.turn) && r.get(p.laneTags) && r.get(p.vehicleTags) &&
+    return getEnum(r, p.kind) && getEnum(r, p.turn) && r.get(p.vehicleTags) &&
            getItem(r, p.curve) && r.get(p.length) && r.get(p.width) && r.get(p.tightestRadius) &&
            getItem(r, p.bends) && r.get(p.speedLimit) && getItem(r, p.section) && r.get(p.indexInSection) && getItem(r, p.junction) &&
            getItem(r, p.from) && r.get(p.waitInsideAt) && getItem(r, p.next) && getItem(r, p.regulations) &&
@@ -486,7 +486,7 @@ bool sameVec2s(const std::vector<Vec2>& a, const std::vector<Vec2>& b) {
 }  // namespace
 
 bool operator==(const Path& a, const Path& b) {
-    return a.kind == b.kind && a.turn == b.turn && a.laneTags == b.laneTags && a.vehicleTags == b.vehicleTags &&
+    return a.kind == b.kind && a.turn == b.turn && a.vehicleTags == b.vehicleTags &&
            a.curve == b.curve && a.length == b.length && a.width == b.width && a.tightestRadius == b.tightestRadius &&
            a.bends == b.bends && a.speedLimit == b.speedLimit && a.section == b.section && a.indexInSection == b.indexInSection &&
            a.junction == b.junction && a.from == b.from && a.waitInsideAt == b.waitInsideAt && a.next == b.next &&
@@ -523,7 +523,7 @@ bool sameBends(const std::vector<BendPiece>& a, const std::vector<BendPiece>& b)
 }
 }  // namespace
 bool operator==(const LaneGraph& a, const LaneGraph& b) {
-    return a.laneTagNames == b.laneTagNames && a.vehicleTagNames == b.vehicleTagNames &&
+    return a.vehicleTagNames == b.vehicleTagNames &&
            a.regulationKindNames == b.regulationKindNames && a.controlNames == b.controlNames &&
            a.roadClassNames == b.roadClassNames && a.paths == b.paths && a.sections == b.sections &&
            a.junctions == b.junctions && a.crossings == b.crossings && a.crosswalks == b.crosswalks &&
@@ -545,8 +545,6 @@ std::vector<std::string> validate(const LaneGraph& g) {
         out.push_back(fmt("the curve arrays disagree: %zu points, %zu distances along, %zu heights", g.points.size(),
                           g.along.size(), g.heights.size()));
     const std::size_t curvePoints = std::min({g.points.size(), g.along.size(), g.heights.size()});
-    if (g.laneTagNames.size() > kMaxTagNames)
-        out.push_back(fmt("%zu lane tag names, more than the %u a tag set can hold", g.laneTagNames.size(), kMaxTagNames));
     if (g.vehicleTagNames.size() > kMaxTagNames)
         out.push_back(fmt("%zu vehicle tag names, more than the %u a tag set can hold", g.vehicleTagNames.size(), kMaxTagNames));
 
@@ -577,9 +575,6 @@ std::vector<std::string> validate(const LaneGraph& g) {
         }
         if (static_cast<uint8_t>(p.turn) >= kTurnCount)
             out.push_back(fmt("%s: unknown turn %u", who.c_str(), static_cast<unsigned>(p.turn)));
-        if (p.laneTags & ~maskOfFirst(g.laneTagNames.size()))
-            out.push_back(fmt("%s: lane tags 0x%x name tags past the %zu lane tag names", who.c_str(), p.laneTags,
-                              g.laneTagNames.size()));
         if (p.vehicleTags & ~maskOfFirst(g.vehicleTagNames.size()))
             out.push_back(fmt("%s: vehicle tags 0x%x name tags past the %zu vehicle tag names", who.c_str(), p.vehicleTags,
                               g.vehicleTagNames.size()));
@@ -1207,20 +1202,19 @@ std::string dumpPath(const LaneGraph& g, PathId id) {
                             : p.indexInSection == 0 ? "offside"
                             : p.indexInSection + 1 == laneCount ? "kerb"
                             : "between";
-        out += fmt("section %u, lane %u of %u (%s), %s, %.1f m wide, tightest radius %s, tags %s, open to %s, "
+        out += fmt("section %u, lane %u of %u (%s), %s, %.1f m wide, tightest radius %s, open to %s, "
                    "speed limit %.1f m/s, next: %s\n",
                    p.section.index, p.indexInSection, laneCount, where, metres(p.length).c_str(), p.width,
-                   metres(p.tightestRadius).c_str(), namesOf(g.laneTagNames, p.laneTags).c_str(),
+                   metres(p.tightestRadius).c_str(),
                    namesOf(g.vehicleTagNames, p.vehicleTags).c_str(), p.speedLimit, nexts.c_str());
     } else {
         const std::string wait = p.waitInsideAt == kNoWaitInside ? std::string("no place to wait inside")
                                                                   : fmt("may wait inside at %.1f m", p.waitInsideAt);
-        out += fmt("%s, from %s into %s, %s, tightest radius %s, %.1f m wide, junction %u, %s, tags %s, open to %s, "
+        out += fmt("%s, from %s into %s, %s, tightest radius %s, %.1f m wide, junction %u, %s, open to %s, "
                    "speed limit %.1f m/s\n",
                    turnWord(p.turn), pathName(g, p.from.index).c_str(), nexts.c_str(), metres(p.length).c_str(),
                    metres(p.tightestRadius).c_str(), p.width, p.junction.index, wait.c_str(),
-                   namesOf(g.laneTagNames, p.laneTags).c_str(), namesOf(g.vehicleTagNames, p.vehicleTags).c_str(),
-                   p.speedLimit);
+                   namesOf(g.vehicleTagNames, p.vehicleTags).c_str(), p.speedLimit);
     }
     // where it is on the road model (ADR-0426), when it says
     if (p.street != kNoIndex || p.modelLane != kNoIndex || p.modelTurn != kNoIndex) {
@@ -1320,7 +1314,6 @@ std::string dumpText(const LaneGraph& g) {
         for (std::size_t i = 0; i < names.size(); ++i) out += fmt("%s %zu %s", i ? "," : "", i, names[i].c_str());
         out += "\n";
     };
-    table("lane tags", g.laneTagNames);
     table("vehicle tags", g.vehicleTagNames);
     table("regulation kinds", g.regulationKindNames);
     table("controls", g.controlNames);
@@ -1377,7 +1370,6 @@ std::string dumpText(const LaneGraph& g) {
 
 void putLaneGraph(bundle::BinWriter& w, const LaneGraph& g) {
     w.magic(kMagic, kVersion);
-    putList(w, g.laneTagNames);
     putList(w, g.vehicleTagNames);
     putList(w, g.regulationKindNames);
     putList(w, g.controlNames);
@@ -1415,8 +1407,7 @@ bool getLaneGraph(bundle::BinReader& r, LaneGraph& g, std::string* err) {
         return false;
     }
     LaneGraph in;
-    const bool ok = getList(r, in.laneTagNames, "lane tag names", err) &&
-                    getList(r, in.vehicleTagNames, "vehicle tag names", err) &&
+    const bool ok = getList(r, in.vehicleTagNames, "vehicle tag names", err) &&
                     getList(r, in.regulationKindNames, "regulation kind names", err) &&
                     getList(r, in.controlNames, "control names", err) &&
                     getList(r, in.roadClassNames, "road class names", err) && getList(r, in.paths, "paths", err) &&

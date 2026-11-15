@@ -1384,7 +1384,7 @@ public:
     void useDrivingV2(bool on) { if (on) drivingV2_.emplace(); else drivingV2_.reset(); }
     // ...and the kinds of vehicle it knows (#248: one class per fleet class, read with the fleet). No-op under v1.
     void setDrivingVehicleClasses(driving::VehicleClasses c) { if (drivingV2_) drivingV2_->setVehicleClasses(std::move(c)); }
-    // ...and the road it drives on: the level's lane graph (lane_graph_cache.h), held here for as long as the model
+    // ...and the road it drives on: the lane level of the level's road model (road_model_cache.h), held here for as long as the model
     // reads it, with the one line that says what it holds and where it came from (the load's log, `lanegraph?`). The
     // model is made again on the new road, keeping its vehicle classes; it has no cars yet, so nothing else is lost.
     // No-op under v1.

@@ -98,7 +98,7 @@ ConnectorFit fitConnector(const Result& r, const LaneLookup& look, const LaneGra
 // HOW MUCH OF THE GRAPH A CAR CAN GET ROUND (reachableParts), with the lanes outside the largest part grouped by why:
 // they cannot get back to it -- they lead into a junction whose turns fit no vehicle, or into a road that just ends --
 // or nothing in it leads to them. Fills out.reach, out.reachableShare and out.outside.
-void reachReport(LaneGraphBuild& out);
+void reachReport(const LaneGraph& G, LaneGraphBuild& out);
 
 }  // namespace roads::lanes
 }  // namespace engine

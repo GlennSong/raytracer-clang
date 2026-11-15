@@ -20,7 +20,7 @@
 #include "../../engine/components.h"
 #include "../../engine/mesh_builder.h"
 #include "../../engine/procgen/city/roads/road_entity.h"
-#include "../../engine/procgen/city/roads/lanes/lane_graph_cache.h"   // the v2 driving model's road, from its cache
+#include "../../engine/procgen/city/roads/lanes/road_model_cache.h"   // the level's built road model, from its cache
 #include "../../engine/procgen/city/road_mesh.h"     // strokeRibbon (closed lot/block outlines)
 #include "../../engine/procgen/city/street_kit.h"   // trafficSignalProto, SignalParams
 #include "../../engine/procgen/noise.h"             // Noise (carved-terrain sampler)
@@ -797,8 +797,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         LOG_WARN << "[citysim] driving \"" << params_.driving << "\": unknown model (v1 or v2); keeping v1";
     }
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
-    // THE ROAD THE NEW MODEL DRIVES ON (v2 only: a v1 level does none of this): the level's lane graph, read from its
-    // cache or built from the roads and saved (lane_graph_cache.h). Its connectors are checked against the fleet's own
+    // THE ROAD THE NEW MODEL DRIVES ON (v2 only: a v1 level does none of this): the lane level of the level's built road
+    // model, read from its cache or built from the roads and saved (road_model_cache.h). Its connectors are checked against the fleet's own
     // vehicles: one turning radius, width and length per vehicle tag, the most demanding class carrying it
     // (driving::tagSizes); the length sweeps long bodies through bends (ADR-0412).
     if (const driving::Driving* d2 = sim_.drivingV2()) {
@@ -828,13 +828,27 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             LOG_WARN << "[citysim] driving v2: no lane graph (" << why << ")";
             sim_.setDrivingRoads(nullptr, "no lane graph: " + why);
         } else {
-            const std::string cacheDir = std::getenv("RT_NOCACHE") ? std::string() : std::string(engine::roads::lanes::kLaneGraphCacheDir);
-            const engine::roads::lanes::LevelLaneGraph lg = engine::roads::lanes::obtainLevelLaneGraph(li, lgo, cacheDir);
+            const std::string cacheDir = std::getenv("RT_NOCACHE") ? std::string() : std::string(engine::roads::lanes::kRoadModelCacheDir);
+            engine::roads::lanes::LevelBuiltRoads lg = engine::roads::lanes::obtainLevelRoadModel(li, lgo, cacheDir);
             for (const std::string& n : lg.notes) LOG_WARN << "[citysim] driving v2 lane graph: " << n;
-            const std::string line = engine::roads::lanes::describeLevelLaneGraph(lg);
-            if (lg.graph) LOG_INFO << "[citysim] driving v2 lane graph: " << line;
+            const std::string line = engine::roads::lanes::describeLevelRoadModel(lg);
+            if (lg.model) LOG_INFO << "[citysim] driving v2 lane graph: " << line;
             else LOG_WARN << "[citysim] driving v2: " << line;
-            sim_.setDrivingRoads(lg.graph, line);
+            // THE BUILT MODEL IS THE LEVEL'S ROAD MODEL from here on (ADR-0429): it takes the place of the planned layer the
+            // loader published for the city (the loader cannot build it: the key needs the fleet read just above), keeping
+            // what the loader attached to that layer (name signs, furniture, control signs). The driving reads the model's
+            // lane level, held alive by the model.
+            const std::shared_ptr<engine::RoadModel> model = lg.model;
+            if (model) {
+                bool published = false;
+                world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) {
+                    if (published || m.cities.empty()) return;
+                    if (m.cities.front()) model->attachments = m.cities.front()->attachments;
+                    m.cities.front() = model;
+                    published = true;
+                });
+            }
+            sim_.setDrivingRoads(model ? std::shared_ptr<const engine::LaneGraph>(model, &model->laneLevel) : nullptr, line);
         }
     }
     // THE FIRE STATIONS' ENGINES (Glenn, 2026-10-13: "a fire truck should be an actual truck"): one parked behind each

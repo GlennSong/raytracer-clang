@@ -375,8 +375,7 @@ ConnectorFit fitConnector(const Result& r, const LaneLookup& look, const LaneGra
 
 // ---- how much of the graph a car can get round ---------------------------------------------------------------------
 
-void reachReport(LaneGraphBuild& out) {
-    const LaneGraph& G = out.graph;
+void reachReport(const LaneGraph& G, LaneGraphBuild& out) {
     const uint32_t n = static_cast<uint32_t>(G.paths.size());
     out.reach = reachableParts(G);
     out.outside.clear();

@@ -46,7 +46,7 @@ int usage() {
         "       rt_bake --sections <bundle-dir>   every section: name, bytes, fnv (diff two bakes section by section)\n"
         "       rt_bake --audit <bundle-dir>   every baked mesh through the mesh audit (inward, degenerate, non-finite)\n"
         "       rt_bake --prune [--yes] [--out <root>] [level.json ...]   list stale bundles under the root, and with the default root\n"
-        "                                                     stale cache/terrain, cache/population and cache/lanegraph files;\n"
+        "                                                     stale cache/terrain, cache/population and cache/roadmodel files (and old cache/lanegraph ones);\n"
         "                                                     --yes deletes them\n"
         "                    (stale = not the newest for its level path, and not the current bundle of a listed level)\n"
         "       rt_bake --status <level.json> [--out <root>]   is the level baked, is the bake current, its size (the editor's Level cache panel)\n"

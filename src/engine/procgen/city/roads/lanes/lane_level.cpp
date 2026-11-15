@@ -86,10 +86,12 @@ struct Piece {
 
 }  // namespace
 
-LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGraphOptions& opts) {
+LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraphOptions& opts) {
     const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
     LaneGraphBuild out;
-    LaneGraph& G = out.graph;
+    model.laneLevel = LaneGraph();
+    LaneGraph& G = model.laneLevel;
+    const RoadModel& m = model;   // everything else of the model is only read
     const RoadLabGraph& g = r.graph;
     const LaneSet& L = r.lanes;
     const DeckHeight& H = *r.heights;
@@ -138,10 +140,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
             continue;
         }
         kept[li] = 1;
-        G.laneTagNames.push_back(l.kind);
     }
-    std::sort(G.laneTagNames.begin(), G.laneTagNames.end());
-    G.laneTagNames.erase(std::unique(G.laneTagNames.begin(), G.laneTagNames.end()), G.laneTagNames.end());
     for (const VehicleSize& v : opts.vehicles) G.vehicleTagNames.push_back(v.tag);
     std::sort(G.vehicleTagNames.begin(), G.vehicleTagNames.end());
     G.vehicleTagNames.erase(std::unique(G.vehicleTagNames.begin(), G.vehicleTagNames.end()), G.vehicleTagNames.end());
@@ -151,8 +150,6 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
     G.controlNames.erase(std::unique(G.controlNames.begin(), G.controlNames.end()), G.controlNames.end());
     TagMask everyone = 0;
     for (std::size_t i = 0; i < G.vehicleTagNames.size() && i < kMaxTagNames; ++i) everyone |= TagMask(1) << i;
-    if (G.laneTagNames.size() > kMaxTagNames)
-        out.problems.push_back(fmt("%zu lane kinds, more than the %u a lane's tags can hold", G.laneTagNames.size(), kMaxTagNames));
 
     // ---- every kept lane the way its traffic runs, each point at its stated spine station ----------------------------
     std::vector<TravelLane> travel(nLanes);
@@ -416,8 +413,6 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
                 for (const Vec2& q : pts) z.push_back(H.deck(static_cast<int>(li), q));
                 Path p;
                 p.kind = PathKind::Lane;
-                const NameIndex tag = LaneGraph::nameIndex(G.laneTagNames, l.kind);
-                p.laneTags = tag < kMaxTagNames ? TagMask(1) << tag : 0;
                 p.vehicleTags = everyone;
                 p.curve = G.addCurve(pts, z);
                 p.length = G.along[p.curve.end() - 1];
@@ -815,7 +810,6 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
             Path c;
             c.kind = PathKind::Connector;
             c.turn = mt.turn;
-            c.laneTags = fromPath.laneTags | intoPath.laneTags;
             c.vehicleTags = fit.open;
             c.curve = G.addCurve(fit.shape.points, fit.z);
             c.length = G.along[c.curve.end() - 1];
@@ -1055,12 +1049,10 @@ LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGra
     std::sort(out.controlPlan.regulations.begin(), out.controlPlan.regulations.end());
 
     for (const std::string& p : validate(G)) out.problems.push_back("lane graph: " + p);
-    reachReport(out);
+    reachReport(G, out);
     out.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     return out;
 }
-
-LaneGraphBuild buildLaneGraph(const Result& r, const LaneGraphOptions& opts) { return buildLaneLevel(r, assembleRoadModel(r), opts); }
 
 }  // namespace roads::lanes
 }  // namespace engine

@@ -47,7 +47,6 @@
 #include <algorithm>
 #include <cmath>
 #include "engine/procgen/city/roads/lanes/lanes_export.h"
-#include "engine/procgen/city/roads/lanes/lane_level.h"      // the lane level from the road model (ADR-0426)
 #include "engine/procgen/city/roads/lane_turns.h"            // turnKey
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"
 #include "engine/procgen/city/roads/lanes/interchange.h"
@@ -483,7 +482,7 @@ int main(int argc, char** argv) {
         try { rp = build(RoadLabGraph::load(argv[2])); } catch (const std::exception& e) { std::fprintf(stderr, "lanes: %s\n", e.what()); return 1; }
         const double buildSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         const std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
-        const RoadModel model = assembleRoadModel(*rp);
+        const RoadModel model = assembleRoadModel(*rp, LaneGraphOptions());   // (no vehicles named: `lanegraph` is the lane level's command)
         const double modelSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count();
         std::printf("%s: built in %.1f s, the model assembled in %.2f s: %zu junctions, %zu streets, %zu lanes, %zu connections, %zu problems\n", argv[2],
                     buildSeconds, modelSeconds, model.junctions.size(), model.streets.size(), model.lanes.size(), model.connections.size(),
@@ -607,11 +606,11 @@ int main(int argc, char** argv) {
         std::unique_ptr<Result> rp;
         try { rp = build(RoadLabGraph::load(argv[2])); } catch (const std::exception& e) { std::fprintf(stderr, "lanes: %s\n", e.what()); return 1; }
         const double buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-        // THE LANE LEVEL (ADR-0426): a table built from the road model of this build
-        const RoadModel model = assembleRoadModel(*rp);
-        const LaneGraphBuild lg = buildLaneLevel(*rp, model, lgo);
+        // THE ROAD MODEL of this build, its lane level with it (ADR-0429), and what building the lane level found
+        LaneGraphBuild lg;
+        const RoadModel model = assembleRoadModel(*rp, lgo, &lg);
         if (!lg.error.empty()) { std::fprintf(stderr, "lanes: %s\n", lg.error.c_str()); return 1; }
-        const LaneGraph& G = lg.graph;
+        const LaneGraph& G = model.laneLevel;
         uint32_t lanes = 0;
         for (const Path& p : G.paths) lanes += p.kind == PathKind::Lane ? 1 : 0;
         uint32_t full = 0, partly = 0, refused = 0, noTurns = 0, fitsNone = 0, noPath = 0;

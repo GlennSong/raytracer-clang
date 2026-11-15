@@ -43,11 +43,12 @@
 // names -- read in milliseconds (plannedRoadModel), and published when a level loads (components.h LevelRoadModel), for
 // the readers that only label the roads (street names, name signs, the map). The BUILT LAYER is what the road build adds
 // -- lanes with their curves and heights, connections, junction heights, the paint's boxes and stop lines -- assembled
-// from a build (assembleRoadModel = the planned layer + the built parts) by whoever has the build: the lane graph's
-// cache (lane_graph_cache.h obtainLevelLaneGraph) and lanes_tool. It is not saved on its own (its cache file, which nothing
-// read, went in the review of ADR-0426; old cache/roadmodel files are rt_bake --prune's) and not in the level's bake (that
-// would re-bake every level). A planned-only model is the same structure with its built parts empty, `built` false, and
-// its `notStated` list says which.
+// from a build (assembleRoadModel = the planned layer + the built parts) by whoever has the build: the level's road model
+// cache (lanes/road_model_cache.h obtainLevelRoadModel) and lanes_tool. The built layer holds THE LANE LEVEL too (ADR-0429,
+// `laneLevel`): the table of paths the driving drives on, filled as the last step of assembling, for the vehicles the
+// caller names. The built model is saved whole, lane level and all, in cache/roadmodel under one key; it is not in the
+// level's bake (that would re-bake every level). A planned-only model is the same structure with its built parts empty,
+// `built` false, and its `notStated` list says which.
 //
 // ATTACHMENTS (design section 1: "a bus stop is street 41, station 120, kerb side"). Anything that belongs to a street or
 // a junction is attached to it by id: its KIND is data (assets/data/road_attachments.json: what it may attach to -- a
@@ -75,6 +76,8 @@ struct TurnArm;   // lane_turns.h
 namespace roads::lanes {
 struct Result;
 struct RoadLabGraph;
+struct LaneGraphOptions;   // lanes/lane_graph_build.h: the vehicles the lane level's turns are checked against
+struct LaneGraphBuild;     // ...and what building the lane level reports
 }  // namespace roads::lanes
 
 // WHAT A KIND OF ATTACHMENT IS (assets/data/road_attachments.json): its name, what it attaches to ("street", "junction"
@@ -213,6 +216,11 @@ struct RoadModel {
     // order (the turns, the regions, the outline, the signs) read the lists as they are. False: a problem line names the
     // command, and the lane level refuses the file.
     bool armsInRing = false;
+    // THE LANE LEVEL (ADR-0429; lanes/lane_level.h says where each part comes from): every curve a car can be on, how
+    // lanes lie side by side, the paths through each junction, where paths meet, the rules standing along them. Each path
+    // names its street, lane or turn of this model, each junction its junction here. Filled by assembleRoadModel; empty in
+    // a planned-only model, and where the road file lacks a fact the lane level needs (the report's `error` says which).
+    LaneGraph laneLevel;
 };
 
 // Field for field, exactly (the saved bytes of each compared).
@@ -222,9 +230,12 @@ inline bool operator!=(const RoadModel& a, const RoadModel& b) { return !(a == b
 // THE PLANNED LAYER: everything the road file states, read from it alone (no road build: milliseconds). `g` with its ramps
 // composed (lane_expand.h expand), so stations are the builder's. The built parts empty; `built` false.
 RoadModel plannedRoadModel(const roads::lanes::RoadLabGraph& g);
-// THE MODEL OF A BUILT ROAD NETWORK: the planned layer of the build's graph and everything the build states (see the top
-// of this file).
-RoadModel assembleRoadModel(const roads::lanes::Result& r);
+// THE MODEL OF A BUILT ROAD NETWORK: the planned layer of the build's graph, everything the build states (see the top
+// of this file), and the lane level built from those (lanes/lane_level.h), its turns checked against `opts`' vehicles.
+// The one way to get a built model. `report`, when given, receives what building the lane level found (problems,
+// corner faults, where each path came from: for a tool or a test; the model does not keep it).
+RoadModel assembleRoadModel(const roads::lanes::Result& r, const roads::lanes::LaneGraphOptions& opts,
+                            roads::lanes::LaneGraphBuild* report = nullptr);
 // EACH JUNCTION'S ARMS AS THE TURN TABLE READS THEM (lane_turns.h TurnArm), in the stated ring order (the list's own): each
 // arm's heading and the built lanes arriving and leaving by it. What assembleRoadModel states the turns from.
 std::vector<std::vector<TurnArm>> turnArmsOf(const RoadModel& m);
@@ -376,14 +387,16 @@ std::string roadModelSvg(const RoadModel& m);      // junctions and streets with
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 7;    // 7: whether the file states its arms in their ring (ADR-0427)
+constexpr uint32_t kRoadModelFormat = 8;    // 8: the lane level, as the lane graph's own bytes (LGRF) after the rest (ADR-0429)
+                                            // 7: whether the file states its arms in their ring (ADR-0427)
                                             // 2: a street's kerb parking (ADR-0418); 3: where a street carries on (ADR-0419);
                                             // 4: the planned layer's centre lines, engine class and attachments (ADR-0420);
                                             // 5: a spread junction's points, inside stretches' lines and sections, the centre
                                             //    lines' stations, a ramp's gore along itself, the parking band's middle (ADR-0425)
                                             // 6: the turns through each junction, where a diverge or merge meets its host (ADR-0426)
-// (The version of what assembleRoadModel makes, kRoadModelVersion, keyed only the model's own cache file; both went in
-// ADR-0426's review. The lane graph, which assembles the model from its build, keys its own builder version.)
+// The lane level is written last, by the lane graph's own writer, and read back by its reader, which checks it
+// (validate): a model whose lane level fails that check does not read back. (What assembleRoadModel makes is versioned
+// by kLaneGraphBuildVersion, lanes/lane_graph_build.h, which the cache key holds: lanes/road_model_cache.h.)
 void putRoadModel(bundle::BinWriter& w, const RoadModel& m);
 bool getRoadModel(bundle::BinReader& r, RoadModel& m, std::string* err);
 

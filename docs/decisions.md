@@ -20794,3 +20794,14 @@ signs read the same values. Gone: `junctionSpans` (finding boxes from overlappin
 counters. A file with no junctions has its layout derived once, at the top of `build()`. The bake key now includes
 where the stated arms stand (`keyedRoadFileText`), and `kLanesBuildTag` is bumped.
 
+## ADR-0429 — The lane level is a part of the road model
+**Status:** Provisional · **Date:** 2026-11-14
+
+What it does: the built road model holds its lane level (`RoadModel::laneLevel`, the table of paths the driving reads).
+`assembleRoadModel(build, vehicles, report)` is the one way to get a built model; its last step fills the lane level and
+hands back what it found (problems, corner faults) in the optional report. The model is saved whole (the lane level's
+LGRF bytes after its own, RMDL format 8) in `cache/roadmodel` under one key: roads, the file's layout and lane facts, the
+turn table, the vehicle sizes, the builder version (`lanes/road_model_cache.h`). Gone: `lane_graph_cache.*`,
+`cache/lanegraph`, `LevelLaneGraph`, `buildLaneGraph`, the report's copy of the graph, the lane tags. The loader still
+publishes the planned layer; the host that reads the fleet swaps the built model into `LevelRoadModel` (the key needs it).
+

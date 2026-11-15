@@ -55,9 +55,11 @@
 namespace engine {
 namespace roads::lanes {
 
-// THE LANE LEVEL of a built road network, from its road model (assembleRoadModel of the same build): the graph, its
-// problems, its corner faults, where each path came from.
-LaneGraphBuild buildLaneLevel(const Result& r, const RoadModel& m, const LaneGraphOptions& opts);
+// FILLS THE MODEL'S LANE LEVEL (RoadModel::laneLevel) from its built layer and the build it was assembled from, and
+// returns what was found on the way: its problems, its corner faults, where each path came from. assembleRoadModel
+// calls it as its last step, so a caller never has to. A test that changes a stated fact of an assembled model calls it
+// again to see what the lane level makes of it.
+LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& m, const LaneGraphOptions& opts);
 
 }  // namespace roads::lanes
 }  // namespace engine

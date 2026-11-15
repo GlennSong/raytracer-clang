@@ -4,7 +4,7 @@
 
 #include "../src/engine/bundle/bundle.h"
 #include "../src/engine/procgen/city/roads/lane_graph.h"
-#include "../src/engine/procgen/city/roads/lanes/lane_graph_cache.h"   // a level's lane graph saved and read back
+#include "../src/engine/procgen/city/roads/lanes/road_model_cache.h"   // a level's road model (its lane level in it) saved and read back
 #include "../src/engine/procgen/city/roads/lanes/lane_graph_build.h"   // measureBends, findKinks (#281)
 
 #include <cstdio>
@@ -59,23 +59,17 @@ Turn turnOf(int from, int to) {
 
 LaneGraph makeCrossroads() {
     LaneGraph g;
-    g.laneTagNames = {"through", "turn", "parking"};
     g.vehicleTagNames = {"car", "bus", "bike"};
     g.regulationKindNames = {"stop", "speed_limit"};
     g.controlNames = {"all_way_stop"};
     g.roadClassNames = {"street"};
-    const TagMask through = TagMask(1) << LaneGraph::nameIndex(g.laneTagNames, "through");
-    const TagMask turn = TagMask(1) << LaneGraph::nameIndex(g.laneTagNames, "turn");
-    const TagMask kerbLane = TagMask(1) << LaneGraph::nameIndex(g.laneTagNames, "parking");
     const TagMask car = TagMask(1) << LaneGraph::nameIndex(g.vehicleTagNames, "car");
     const TagMask everyone = car | (TagMask(1) << LaneGraph::nameIndex(g.vehicleTagNames, "bus")) |
                              (TagMask(1) << LaneGraph::nameIndex(g.vehicleTagNames, "bike"));
 
-    auto lane = [&](const Vec2& from, const Vec2& to, Real width, TagMask tags, TagMask who, uint32_t section,
-                    uint32_t index) {
+    auto lane = [&](const Vec2& from, const Vec2& to, Real width, TagMask who, uint32_t section, uint32_t index) {
         Path p;
         p.kind = PathKind::Lane;
-        p.laneTags = tags;
         p.vehicleTags = who;
         p.curve = g.addCurve({from, to}, {0, 0});
         p.length = g.along[p.curve.end() - 1];
@@ -89,12 +83,12 @@ LaneGraph makeCrossroads() {
     // Lanes 0..7, then the kerb lane 8 beside lane 4.
     for (int a = 0; a < kArms; ++a) {
         const Vec2 d = armDir(a), in = arriveSide(a) * (kLaneWidth / 2), out = leaveSide(a) * (kLaneWidth / 2);
-        lane(d * kArmEnd + in, d * kJunctionHalf + in, kLaneWidth, through, everyone, static_cast<uint32_t>(2 * a), 0);
-        lane(d * kJunctionHalf + out, d * kArmEnd + out, kLaneWidth, through, everyone, static_cast<uint32_t>(2 * a + 1), 0);
+        lane(d * kArmEnd + in, d * kJunctionHalf + in, kLaneWidth, everyone, static_cast<uint32_t>(2 * a), 0);
+        lane(d * kJunctionHalf + out, d * kArmEnd + out, kLaneWidth, everyone, static_cast<uint32_t>(2 * a + 1), 0);
     }
     {
         const Vec2 d = armDir(2), kerb = arriveSide(2) * (kLaneWidth + kKerbLaneWidth / 2);
-        lane(d * kArmEnd + kerb, d * kJunctionHalf + kerb, kKerbLaneWidth, kerbLane, car, 4, 1);
+        lane(d * kArmEnd + kerb, d * kJunctionHalf + kerb, kKerbLaneWidth, car, 4, 1);
     }
     // Sections: one lane each, except section 4 (lane 4 offside, lane 8 kerb, a broken line between).
     for (uint32_t s = 0; s < 2 * kArms; ++s) {
@@ -123,7 +117,6 @@ LaneGraph makeCrossroads() {
             Path p;
             p.kind = PathKind::Connector;
             p.turn = turnOf(a, b);
-            p.laneTags = p.turn == Turn::Straight ? through : turn;
             p.vehicleTags = everyone;
             p.curve = g.addCurve({from, to}, {0, 0});
             p.length = g.along[p.curve.end() - 1];
@@ -298,7 +291,7 @@ TEST_CASE(lane_graph_text_dump_reads_by_hand) {
           "  line between lane 4 and lane 8: broken, may be crossed either way\n");
     CHECK(dumpPath(g, PathId(connectorId(0, 1))) ==
           "connector 9: far turn, from lane 0 into lane 3, 9.2 m, tightest radius 9.0 m, 3.0 m wide, junction 0, "
-          "may wait inside at 4.6 m, tags turn, open to car, bus, bike, speed limit 6.7 m/s\n"
+          "may wait inside at 4.6 m, open to car, bus, bike, speed limit 6.7 m/s\n"
           "  curve: (5.0, -1.5, 0.0) (-1.5, 5.0, 0.0)\n"
           "  bends: none measured; the whole path at its tightest radius (9.0 m)\n"
           "  crossing points along it: 2 from 0.0 m, 3 from 0.0 m\n");
@@ -706,7 +699,7 @@ TEST_CASE(lane_graph_reachable_parts_follow_next_and_lane_changes) {
     CHECK(reachableParts(loop).partOf == parts.partOf);
 }
 
-// ---- A LEVEL'S LANE GRAPH SAVED AND READ BACK (lane_graph_cache.h) ------------------------------------------------------
+// ---- A LEVEL'S ROAD MODEL, ITS LANE LEVEL IN IT, SAVED AND READ BACK (road_model_cache.h) -------------------------------
 
 namespace {
 namespace fs = std::filesystem;
@@ -714,8 +707,18 @@ using roads::lanes::LaneGraphOptions;
 using roads::lanes::LaneGraphSummary;
 using roads::lanes::VehicleSize;
 
-// A stand-in for the roads' key (the city producer's, in a level).
+// A stand-in for the roads' key (the city producer's, in a level), for the road file's layout and lane facts
+// (road_layout.h laneLevelKey) and for the turn table's hash.
 constexpr uint64_t kTestRoadsKey = 0x5eed0f0ad5c0ffeeULL;
+constexpr uint64_t kTestLaneFacts = 0x1a2e0fac75ULL;
+constexpr uint64_t kTestTurnTable = 0x7ab1e0f7a2b5ULL;
+// A road model holding `g` as its lane level (the rest empty: the cache saves and reads the model whole).
+RoadModel modelHolding(const LaneGraph& g) {
+    RoadModel m;
+    m.name = "crossroads";
+    m.laneLevel = g;
+    return m;
+}
 
 // A fresh, empty folder for one test's files, under the system's temporary folder.
 std::string cacheTestDir(const char* tag) {
@@ -736,7 +739,6 @@ void putFile(const std::string& path, const std::vector<uint8_t>& bytes) {
 // The crossroads as the builder would report it: one turn refused, one problem line, a share a car can get round.
 LaneGraphSummary crossroadsSummary(const LaneGraph& g) {
     roads::lanes::LaneGraphBuild b;
-    b.graph = g;
     roads::lanes::JunctionNote note;
     note.turnsStated = 13;
     note.turnsBuilt = 12;
@@ -744,7 +746,7 @@ LaneGraphSummary crossroadsSummary(const LaneGraph& g) {
     b.junctionNotes.push_back(note);
     b.problems.push_back("junction 0: a turn refused (for the test)");
     b.reachableShare = 2.0 / 9.0;
-    return roads::lanes::summarizeLaneGraph(b);
+    return roads::lanes::summarizeLaneGraph(g, b);
 }
 // Two vehicle tags, as a host passes them (sorted by tag).
 LaneGraphOptions testVehicles() {
@@ -769,22 +771,23 @@ TEST_CASE(lane_graph_cache_saves_and_loads_the_same_graph) {
     const LaneGraphSummary s = crossroadsSummary(g);
     CHECK(s.paths == 21 && s.lanes == 9 && s.connectors == 12 && s.sections == 8 && s.junctions == 1);
     CHECK(s.refusedTurns == 1 && s.problems == 1);
-    const uint64_t key = roads::lanes::laneGraphCacheKey(kTestRoadsKey, testVehicles());
-    const std::string path = roads::lanes::laneGraphCachePath(dir, key);
+    const uint64_t key = roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,testVehicles());
+    const std::string path = roads::lanes::roadModelCachePath(dir, key);
     std::string err;
-    CHECK(roads::lanes::writeLaneGraphCache(path, key, g, s, &err));
+    CHECK(roads::lanes::writeRoadModelCache(path, key, modelHolding(g), s, &err));
     CHECK(err.empty());
-    LaneGraph back;
+    RoadModel back;
     LaneGraphSummary backSummary;
-    CHECK(roads::lanes::readLaneGraphCache(path, key, back, backSummary, &err));
-    CHECK(back == g);
-    CHECK(dumpText(back) == dumpText(g));
-    CHECK(back.junctions[0].connectors.count == 12);   // the connectors came back with it
+    CHECK(roads::lanes::readRoadModelCache(path, key, back, backSummary, &err));
+    CHECK(back == modelHolding(g));
+    CHECK(back.laneLevel == g);
+    CHECK(dumpText(back.laneLevel) == dumpText(g));
+    CHECK(back.laneLevel.junctions[0].connectors.count == 12);   // the connectors came back with it
     CHECK(backSummary == s);
     std::printf("    %s\n", roads::lanes::describeLaneGraphSummary(backSummary).c_str());
     // the same bytes every time, and nothing left behind under a temporary name
-    const std::string again = dir + "/again.lanegraph";
-    CHECK(roads::lanes::writeLaneGraphCache(again, key, back, backSummary, &err));
+    const std::string again = dir + "/again.roadmodel";
+    CHECK(roads::lanes::writeRoadModelCache(again, key, back, backSummary, &err));
     CHECK(fileBytes(path) == fileBytes(again));
     std::size_t files = 0;
     for (const fs::directory_entry& e : fs::directory_iterator(dir)) {
@@ -801,43 +804,49 @@ TEST_CASE(lane_graph_cache_saves_and_loads_the_same_graph) {
 // the control, and the builder's version. The same inputs give the same key.
 TEST_CASE(lane_graph_cache_key_changes_with_the_vehicles_and_the_builder_version) {
     const LaneGraphOptions base = testVehicles();
-    const uint64_t k = roads::lanes::laneGraphCacheKey(kTestRoadsKey, base);
-    CHECK(k == roads::lanes::laneGraphCacheKey(kTestRoadsKey, testVehicles()));
-    CHECK(k == roads::lanes::laneGraphCacheKey(kTestRoadsKey, base, roads::lanes::kLaneGraphBuildVersion));
+    const uint64_t k = roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,base);
+    CHECK(k == roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,testVehicles()));
+    CHECK(k == roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,base, roads::lanes::kLaneGraphBuildVersion));
     std::vector<std::pair<const char*, uint64_t>> changed;
-    changed.push_back({"other roads", roads::lanes::laneGraphCacheKey(kTestRoadsKey + 1, base)});
+    changed.push_back({"other roads", roads::lanes::roadModelCacheKey(kTestRoadsKey + 1, kTestLaneFacts, kTestTurnTable, base)});
+    changed.push_back({"other lane facts in the road file",
+                       roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts + 1, kTestTurnTable, base)});
+    changed.push_back({"another turn table", roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable + 1, base)});
+    // (the three are separate inputs: one's value moved into another's place is another key)
+    changed.push_back({"the lane facts and the turn table swapped",
+                       roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestTurnTable, kTestLaneFacts, base)});
     changed.push_back({"the builder's version bumped",
-                       roads::lanes::laneGraphCacheKey(kTestRoadsKey, base, roads::lanes::kLaneGraphBuildVersion + 1)});
+                       roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,base, roads::lanes::kLaneGraphBuildVersion + 1)});
     {
         LaneGraphOptions o = base;
         o.vehicles[0].tag = "coach";
-        changed.push_back({"a tag renamed", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
+        changed.push_back({"a tag renamed", roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,o)});
     }
     {
         LaneGraphOptions o = base;
         o.vehicles[0].turningRadius += 0.01;
-        changed.push_back({"a turning radius", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
+        changed.push_back({"a turning radius", roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,o)});
     }
     {
         LaneGraphOptions o = base;
         o.vehicles[1].width += 0.01;
-        changed.push_back({"a width", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
+        changed.push_back({"a width", roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,o)});
     }
     {
         LaneGraphOptions o = base;
         std::swap(o.vehicles[0], o.vehicles[1]);
-        changed.push_back({"the order", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
+        changed.push_back({"the order", roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,o)});
     }
     {
         LaneGraphOptions o = base;
         o.vehicles.pop_back();
-        changed.push_back({"a vehicle fewer", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
+        changed.push_back({"a vehicle fewer", roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,o)});
     }
     {
         LaneGraphOptions o = base;
         o.vehicles.push_back(o.vehicles.back());
         o.vehicles.back().tag = "moped";
-        changed.push_back({"a vehicle more", roads::lanes::laneGraphCacheKey(kTestRoadsKey, o)});
+        changed.push_back({"a vehicle more", roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,o)});
     }
     {   // the same letters split differently between two tags
         LaneGraphOptions a = base, b = base;
@@ -845,7 +854,7 @@ TEST_CASE(lane_graph_cache_key_changes_with_the_vehicles_and_the_builder_version
         a.vehicles[1].tag = "c";
         b.vehicles[0].tag = "a";
         b.vehicles[1].tag = "bc";
-        CHECK(roads::lanes::laneGraphCacheKey(kTestRoadsKey, a) != roads::lanes::laneGraphCacheKey(kTestRoadsKey, b));
+        CHECK(roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,a) != roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,b));
     }
     for (std::size_t i = 0; i < changed.size(); ++i) {
         if (changed[i].second == k) std::printf("    the key did not change with %s\n", changed[i].first);
@@ -855,14 +864,14 @@ TEST_CASE(lane_graph_cache_key_changes_with_the_vehicles_and_the_builder_version
     // ...and a file saved under one key is refused when read for another
     const std::string dir = cacheTestDir("key");
     const LaneGraph g = makeCrossroads();
-    const std::string path = roads::lanes::laneGraphCachePath(dir, k);
+    const std::string path = roads::lanes::roadModelCachePath(dir, k);
     std::string err;
-    CHECK(roads::lanes::writeLaneGraphCache(path, k, g, crossroadsSummary(g), &err));
-    LaneGraph out;
+    CHECK(roads::lanes::writeRoadModelCache(path, k, modelHolding(g), crossroadsSummary(g), &err));
+    RoadModel out;
     LaneGraphSummary outSummary;
-    CHECK(!roads::lanes::readLaneGraphCache(path, changed[1].second, out, outSummary, &err));
+    CHECK(!roads::lanes::readRoadModelCache(path, changed[1].second, out, outSummary, &err));
     CHECK(err.find("made for key") != std::string::npos);
-    CHECK(out.paths.empty());
+    CHECK(out.laneLevel.paths.empty());
     std::error_code ec;
     fs::remove_all(dir, ec);
 }
@@ -873,21 +882,21 @@ TEST_CASE(lane_graph_cache_refuses_a_bad_file) {
     const std::string dir = cacheTestDir("bad");
     const LaneGraph g = makeCrossroads();
     const LaneGraphSummary s = crossroadsSummary(g);
-    const uint64_t key = roads::lanes::laneGraphCacheKey(kTestRoadsKey, testVehicles());
-    const std::string good = roads::lanes::laneGraphCachePath(dir, key);
+    const uint64_t key = roads::lanes::roadModelCacheKey(kTestRoadsKey, kTestLaneFacts, kTestTurnTable,testVehicles());
+    const std::string good = roads::lanes::roadModelCachePath(dir, key);
     std::string err;
-    CHECK(roads::lanes::writeLaneGraphCache(good, key, g, s, &err));
+    CHECK(roads::lanes::writeRoadModelCache(good, key, modelHolding(g), s, &err));
     const std::vector<uint8_t> bytes = fileBytes(good);
-    const std::string bad = dir + "/bad.lanegraph";
-    LaneGraph out;
+    const std::string bad = dir + "/bad.roadmodel";
+    RoadModel out;
     LaneGraphSummary outSummary;
 
-    CHECK(!roads::lanes::readLaneGraphCache(dir + "/missing.lanegraph", key, out, outSummary, &err));
+    CHECK(!roads::lanes::readRoadModelCache(dir + "/missing.roadmodel", key, out, outSummary, &err));
     CHECK(err.find("no such file") != std::string::npos);
     {
         const std::string text = "not a lane graph at all\n";
         putFile(bad, std::vector<uint8_t>(text.begin(), text.end()));
-        CHECK(!roads::lanes::readLaneGraphCache(bad, key, out, outSummary, &err));
+        CHECK(!roads::lanes::readRoadModelCache(bad, key, out, outSummary, &err));
         CHECK(!err.empty());
     }
     // cut short anywhere (every 7th length, and every length over the last 1 KB, where the table of contents is)
@@ -895,14 +904,14 @@ TEST_CASE(lane_graph_cache_refuses_a_bad_file) {
     for (std::size_t n = 0; n < bytes.size(); n += (n + 1024 < bytes.size() ? 7 : 1)) {
         putFile(bad, std::vector<uint8_t>(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(n)));
         err.clear();
-        const bool read = roads::lanes::readLaneGraphCache(bad, key, out, outSummary, &err);
+        const bool read = roads::lanes::readRoadModelCache(bad, key, out, outSummary, &err);
         if (read) {
             std::printf("    a file cut to %zu of %zu bytes was read\n", n, bytes.size());
             CHECK(!read);
             break;
         }
         CHECK(!err.empty());
-        CHECK(out.paths.empty());
+        CHECK(out.laneLevel.paths.empty());
         ++cuts;
     }
     // every 5th byte changed (every byte of the last 1 KB): refused, or read back exactly as written
@@ -912,8 +921,8 @@ TEST_CASE(lane_graph_cache_refuses_a_bad_file) {
         changed[i] = static_cast<uint8_t>(~changed[i]);
         putFile(bad, changed);
         err.clear();
-        if (roads::lanes::readLaneGraphCache(bad, key, out, outSummary, &err)) {
-            CHECK(out == g && outSummary == s);
+        if (roads::lanes::readRoadModelCache(bad, key, out, outSummary, &err)) {
+            CHECK(out == modelHolding(g) && outSummary == s);
             ++harmless;
         } else {
             CHECK(!err.empty());
@@ -926,20 +935,20 @@ TEST_CASE(lane_graph_cache_refuses_a_bad_file) {
     {   // a sound file whose summary does not count its own graph
         LaneGraphSummary wrong = s;
         ++wrong.connectors;
-        CHECK(roads::lanes::writeLaneGraphCache(bad, key, g, wrong, &err));
-        CHECK(!roads::lanes::readLaneGraphCache(bad, key, out, outSummary, &err));
+        CHECK(roads::lanes::writeRoadModelCache(bad, key, modelHolding(g), wrong, &err));
+        CHECK(!roads::lanes::readRoadModelCache(bad, key, out, outSummary, &err));
         CHECK(err.find("does not agree") != std::string::npos);
     }
     {   // a sound file of a graph that fails its check
         LaneGraph broken = g;
         broken.sectionLanes[0] = PathId(999);
-        CHECK(roads::lanes::writeLaneGraphCache(bad, key, broken, s, &err));
-        CHECK(!roads::lanes::readLaneGraphCache(bad, key, out, outSummary, &err));
+        CHECK(roads::lanes::writeRoadModelCache(bad, key, modelHolding(broken), s, &err));
+        CHECK(!roads::lanes::readRoadModelCache(bad, key, out, outSummary, &err));
         CHECK(err.find("out of range") != std::string::npos);
     }
     // and the good file still reads
-    CHECK(roads::lanes::readLaneGraphCache(good, key, out, outSummary, &err));
-    CHECK(out == g);
+    CHECK(roads::lanes::readRoadModelCache(good, key, out, outSummary, &err));
+    CHECK(out.laneLevel == g);
     std::error_code ec;
     fs::remove_all(dir, ec);
 }

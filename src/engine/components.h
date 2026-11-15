@@ -893,7 +893,9 @@ struct CityMap {
 
 // THE LEVEL'S ROAD MODEL (procgen/city/roads/road_model.h, ADR-0420): one per level, covering every lane-built city in
 // it, in the order the level lists them -- each city's PLANNED LAYER, read from its road file when the level loads
-// (milliseconds; its built layer is assembled only where a road build is at hand: the lane graph). What the readers that only label the roads read: the
+// (milliseconds). On a level that drives v2 the host that reads the fleet puts the first city's BUILT model here in its
+// place (lanes, turns and the lane level the driving reads: lanes/road_model_cache.h, ADR-0429), keeping what the loader
+// attached. What the readers that only label the roads read: the
 // street names (the model's name attachments), the name signs (attached to the junction arms they stand at, as the
 // loader plans them), the map, and a bus stop's street; and (ADR-0421) which junctions are lit -- the street furniture's
 // signal poles, the city sim's signals -- and the junctions and streets the lamps and trees keep to. Since ADR-0425 the
@@ -1068,8 +1070,8 @@ struct CitySimConfig {
     // THE RULE SET the new model drives by (#258): a Lua file under assets/scripts ("rules/lab.lua"). Empty: v2 ticks
     // an empty world and the old model drives every car.
     std::string drivingRules;
-    // The level file this block came from (the loader's path): under v2 the city sim keys and builds the level's lane
-    // graph from it (lane_graph_cache.h). Empty for a level not loaded from a file.
+    // The level file this block came from (the loader's path): under v2 the city sim keys and builds the level's built
+    // road model from it (lanes/road_model_cache.h). Empty for a level not loaded from a file.
     std::string levelPath;
     float hailChance = 0.0f;
     float hailMinMetres = 400.0f;

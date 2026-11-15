@@ -22,7 +22,7 @@
 #include "engine/procgen/city/plan/plan_scene.h"
 #include "engine/procgen/city/roads/lanes/control_plan.h"     // findJunctions: the one grouping
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"        // kStopLineBack
-#include "engine/procgen/city/roads/lanes/lane_graph_cache.h"   // levelRoadsKey: the city's bake key
+#include "engine/procgen/city/roads/lanes/road_model_cache.h"   // levelRoadsKey: the city's bake key
 #include "engine/procgen/city/roads/lanes/lane_expand.h"   // expand: the planned layer reads the ramps composed
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"
@@ -121,7 +121,7 @@ const Built& smallBuilt() {
     static const Built b = [] {
         Built x;
         x.r = build(RoadLabGraph::fromJson(smallGraphWithLayout()));
-        x.model = assembleRoadModel(*x.r);
+        x.model = assembleRoadModel(*x.r, LaneGraphOptions());
         return x;
     }();
     return b;
@@ -403,7 +403,7 @@ TEST_CASE(road_model_3b_a_ramps_merge_is_its_stated_anchor) {
     g.erase("streets");
     writeLayout(g, deriveLayout(RoadLabGraph::fromJson(g), LayoutSource::Inferred));
     const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
-    const RoadModel m = assembleRoadModel(*r);
+    const RoadModel m = assembleRoadModel(*r, LaneGraphOptions());
     // three ramps, each merging into the mainline's kerb lane at its anchor, with its stated auxiliary lane and taper (and,
     // since ADR-0426, a two-lane ramp's second lane merging into its first: no ramp's anchor, so not counted here)
     int merges = 0;
@@ -625,7 +625,7 @@ TEST_CASE(road_model_7_kerb_parking_is_the_road_file_s_statement) {
         g["classes"]["local"] = {{"parking", 0.0}};
         const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
         CHECK(twinBands(*r).empty());
-        for (const ModelStreet& s : assembleRoadModel(*r).streets) CHECK(s.section.parking == 0.0);
+        for (const ModelStreet& s : assembleRoadModel(*r, LaneGraphOptions()).streets) CHECK(s.section.parking == 0.0);
     }
     // ...or that it parks 2.0 m: the band is 2.0 m
     {
@@ -642,7 +642,7 @@ TEST_CASE(road_model_7_kerb_parking_is_the_road_file_s_statement) {
         g["classes"]["local"] = {{"w", 3.5}};
         const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
         CHECK(twinBands(*r).empty());
-        const RoadModel m = assembleRoadModel(*r);
+        const RoadModel m = assembleRoadModel(*r, LaneGraphOptions());
         int said = 0;
         for (const std::string& p : m.problems) said += p.find("kerb parking") != std::string::npos ? 1 : 0;
         CHECK(said == 4);   // l0..l3, once each
@@ -965,10 +965,10 @@ LaneGraphOptions oneCar() {
     return o;
 }
 // The first lane path cut from model lane `lane` (in order along it), and its last.
-std::vector<uint32_t> pathsOfLane(const LaneGraphBuild& lg, uint32_t lane) {
+std::vector<uint32_t> pathsOfLane(const LaneGraph& G, const LaneGraphBuild& lg, uint32_t lane) {
     std::vector<uint32_t> out;
-    for (uint32_t p = 0; p < lg.graph.paths.size(); ++p)
-        if (lg.graph.paths[p].kind == PathKind::Lane && lg.graph.paths[p].modelLane == lane) out.push_back(p);
+    for (uint32_t p = 0; p < G.paths.size(); ++p)
+        if (G.paths[p].kind == PathKind::Lane && G.paths[p].modelLane == lane) out.push_back(p);
     std::sort(out.begin(), out.end(), [&](uint32_t a, uint32_t b) { return lg.sources[a].from < lg.sources[b].from; });
     return out;
 }
@@ -1035,9 +1035,9 @@ TEST_CASE(road_model_11_which_turns_a_junction_offers_is_stated_by_its_arms_orde
 
 TEST_CASE(road_model_12_the_lane_level_is_a_table_built_from_the_model) {
     const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(laneLevelGraph()));
-    const RoadModel m = assembleRoadModel(*r);
-    const LaneGraphBuild lg = buildLaneLevel(*r, m, oneCar());
-    const LaneGraph& G = lg.graph;
+    LaneGraphBuild lg;   // what building the model's lane level reported
+    const RoadModel m = assembleRoadModel(*r, oneCar(), &lg);
+    const LaneGraph& G = m.laneLevel;
     CHECK(lg.error.empty());
     for (const std::string& p : validate(G)) std::printf("      [lane level] %s\n", p.c_str());
     CHECK(validate(G).empty());
@@ -1072,7 +1072,7 @@ TEST_CASE(road_model_12_the_lane_level_is_a_table_built_from_the_model) {
     {
         const ModelLaneId l1 = laneNamed(m, "l1.f0"), l3 = laneNamed(m, "l3.f0");
         CHECK(l1.valid() && l3.valid());
-        const std::vector<uint32_t> a = pathsOfLane(lg, l1.index), b = pathsOfLane(lg, l3.index);
+        const std::vector<uint32_t> a = pathsOfLane(m.laneLevel, lg,l1.index), b = pathsOfLane(m.laneLevel, lg,l3.index);
         CHECK(!a.empty() && !b.empty());
         if (!a.empty() && !b.empty()) CHECK(leadsInto(G, a.back(), b.front()));
         CHECK(lg.carryOnJoins >= 2u);
@@ -1088,8 +1088,9 @@ TEST_CASE(road_model_12_the_lane_level_is_a_table_built_from_the_model) {
     nlohmann::json bare = laneLevelGraph();
     bare.erase("lane_rules");
     const std::unique_ptr<Result> rb = build(RoadLabGraph::fromJson(bare));
-    const LaneGraphBuild none = buildLaneLevel(*rb, assembleRoadModel(*rb), oneCar());
-    CHECK(!none.error.empty() && none.error.find("--lane-rules") != std::string::npos && none.graph.paths.empty());
+    LaneGraphBuild none;
+    const RoadModel bareModel = assembleRoadModel(*rb, oneCar(), &none);
+    CHECK(!none.error.empty() && none.error.find("--lane-rules") != std::string::npos && bareModel.laneLevel.paths.empty());
 }
 
 TEST_CASE(road_model_13_a_ramp_is_a_way_on_at_the_lane_level) {
@@ -1102,26 +1103,27 @@ TEST_CASE(road_model_13_a_ramp_is_a_way_on_at_the_lane_level) {
     for (nlohmann::json& j : g["junctions"]) j["control"] = "unmarked";
     g["lane_rules"] = {{"solid_before_stop_line", 20.0}};
     const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
-    const RoadModel m = assembleRoadModel(*r);
-    const LaneGraphBuild lg = buildLaneLevel(*r, m, oneCar());
+    LaneGraphBuild lg;   // what building the model's lane level reported
+    const RoadModel m = assembleRoadModel(*r, oneCar(), &lg);
     CHECK(lg.error.empty());
-    CHECK(validate(lg.graph).empty());
+    CHECK(validate(m.laneLevel).empty());
     std::printf("      [lane level] merge_taper: %u lanes merge into their hosts, %u leave them, %u joins with a gap\n", lg.mergeJoins,
                 lg.divergeJoins, lg.joinsWithGap);
     CHECK(lg.mergeJoins >= 3u);   // each ramp into the mainline (and a two-lane ramp's second lane into its first)
     const ModelLaneId host = laneNamed(m, "mainline.f2");
     for (const char* ramp : {"ramp_one.f0", "ramp_short.f0", "ramp_long.f0"}) {
-        const std::vector<uint32_t> ps = pathsOfLane(lg, laneNamed(m, ramp).index);
+        const std::vector<uint32_t> ps = pathsOfLane(m.laneLevel, lg,laneNamed(m, ramp).index);
         CHECK(!ps.empty());
         if (ps.empty()) continue;
         // its end leads into the mainline's kerb lane, from where their lines meet
-        const Path& last = lg.graph.paths[ps.back()];
+        const LaneGraph& G = m.laneLevel;
+        const Path& last = G.paths[ps.back()];
         CHECK(last.next.count == 1u);
-        if (last.next.count == 1u) CHECK(lg.graph.paths[lg.graph.nextPaths[last.next.first].index].modelLane == host.index);
+        if (last.next.count == 1u) CHECK(G.paths[G.nextPaths[last.next.first].index].modelLane == host.index);
         // and where the two join, the measured crossing points hold a join of the two lanes
         bool join = false;
         for (uint32_t k = last.crossings.first; k < last.crossings.end(); ++k) {
-            const CrossingPoint& x = lg.graph.crossings[lg.graph.pathCrossings[k].index];
+            const CrossingPoint& x = G.crossings[G.pathCrossings[k].index];
             join = join || (x.meeting == Meeting::Join && x.otherSide == OtherSide::Path);
         }
         CHECK(join);
@@ -1301,17 +1303,17 @@ TEST_CASE(road_model_14_the_turn_table_by_hand) {
 
 TEST_CASE(road_model_15_a_diverge_and_a_merge_at_the_lane_level) {
     const std::unique_ptr<Result> r = lane_level_test::buildWithLaneLevelFacts(std::string(RT_SOURCE_DIR) + "/assets/lanelab/grid_city.json");
-    const RoadModel m = assembleRoadModel(*r);
-    const LaneGraphBuild lg = buildLaneLevel(*r, m, oneCar());
+    LaneGraphBuild lg;   // what building the model's lane level reported
+    const RoadModel m = assembleRoadModel(*r, oneCar(), &lg);
     CHECK(lg.error.empty());
-    const LaneGraph& G = lg.graph;
+    const LaneGraph& G = m.laneLevel;
     uint32_t diverges = 0, merges = 0;
     for (const ModelConnection& c : m.connections) {
         if (c.ramp != "exit" && c.ramp != "entry") continue;
         if (c.kind == ConnectionKind::Diverge && c.ramp == "exit") {
             // THE EXIT: the host lane's path ending where their lines meet leads on along the host AND into the exit's
             // first path; the two paths' bodies split there (a measured crossing point)
-            const std::vector<uint32_t> ramp = pathsOfLane(lg, c.to.index), host = pathsOfLane(lg, c.from.index);
+            const std::vector<uint32_t> ramp = pathsOfLane(m.laneLevel, lg,c.to.index), host = pathsOfLane(m.laneLevel, lg,c.from.index);
             CHECK(!ramp.empty() && !host.empty());
             if (ramp.empty()) continue;
             int from = -1;
@@ -1330,7 +1332,7 @@ TEST_CASE(road_model_15_a_diverge_and_a_merge_at_the_lane_level) {
         }
         if (c.kind == ConnectionKind::Merge && c.ramp == "entry" && c.to.index < m.lanes.size() && m.lanes[c.to.index].edge != m.lanes[c.from.index].edge) {
             // THE ENTRY: the ramp's last path leads into the host lane's path starting where their lines meet, and only there
-            const std::vector<uint32_t> ramp = pathsOfLane(lg, c.from.index);
+            const std::vector<uint32_t> ramp = pathsOfLane(m.laneLevel, lg,c.from.index);
             CHECK(!ramp.empty());
             if (ramp.empty()) continue;
             const Path& last = G.paths[ramp.back()];
@@ -1377,8 +1379,8 @@ TEST_CASE(road_model_16_the_lane_level_reports_what_it_cannot_join) {
         if (st["road"] == road) streetsOfRoad.push_back(st["id"].get<std::string>());
     CHECK(streetsOfRoad.size() == 2u);   // the road runs through the junction: a street each side
     const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
-    const RoadModel m = assembleRoadModel(*r);
-    const LaneGraphBuild lg = buildLaneLevel(*r, m, oneCar());
+    LaneGraphBuild lg;   // what building the model's lane level reported
+    const RoadModel m = assembleRoadModel(*r, oneCar(), &lg);
     CHECK(lg.error.empty());
     for (const std::string& st : streetsOfRoad) {
         bool said = false;
@@ -1388,7 +1390,7 @@ TEST_CASE(road_model_16_the_lane_level_reports_what_it_cannot_join) {
         CHECK(said);
     }
     uint32_t joinedAcross = 0, lanesOfRoad = 0;
-    const LaneGraph& G = lg.graph;
+    const LaneGraph& G = m.laneLevel;
     for (uint32_t p = 0; p < G.paths.size(); ++p) {
         if (G.paths[p].kind != PathKind::Lane || m.lanes[G.paths[p].modelLane].edge != r->graph.index.at(road)) continue;
         ++lanesOfRoad;
@@ -1402,17 +1404,17 @@ TEST_CASE(road_model_16_the_lane_level_reports_what_it_cannot_join) {
 
     // A STATED TURN NAMING NO JUNCTION of the model: not built, and said (never dropped quietly)
     const std::unique_ptr<Result> r2 = lane_level_test::buildWithLaneLevelFacts(std::string(RT_SOURCE_DIR) + "/assets/lanelab/hill_junction.json");
-    RoadModel m2 = assembleRoadModel(*r2);
+    RoadModel m2 = assembleRoadModel(*r2, oneCar());
     const std::size_t stated = m2.turns.size();
     CHECK(stated > 0u);
     ModelTurn stray = m2.turns.front();
     stray.junction = ModelJunctionId(static_cast<uint32_t>(m2.junctions.size() + 7));
     m2.turns.push_back(stray);
-    const LaneGraphBuild lg2 = buildLaneLevel(*r2, m2, oneCar());
+    const LaneGraphBuild lg2 = buildLaneLevel(*r2, m2, oneCar());   // the lane level again, of the model as changed
     const std::string expect = "stated turn " + std::to_string(stated) + " names no junction of the road model: not built";
     CHECK(std::find(lg2.problems.begin(), lg2.problems.end(), expect) != lg2.problems.end());
     uint32_t connectors = 0;
-    for (const Path& p : lg2.graph.paths) connectors += p.kind == PathKind::Connector ? 1 : 0;
+    for (const Path& p : m2.laneLevel.paths) connectors += p.kind == PathKind::Connector ? 1 : 0;
     CHECK(connectors + lg2.refusals.size() == stated);   // every turn at a junction built or refused; the stray neither
 }
 
@@ -1552,12 +1554,12 @@ TEST_CASE(road_model_17_one_stated_ring_of_a_junctions_arms) {
         nlohmann::json g = laid;
         g.erase("arms_in_ring");
         const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
-        const RoadModel m = assembleRoadModel(*r);
+        LaneGraphBuild lg;
+        const RoadModel m = assembleRoadModel(*r, oneCar(), &lg);
         CHECK(!m.armsInRing);
         CHECK(said(m));
-        const LaneGraphBuild lg = buildLaneLevel(*r, m, oneCar());
         std::printf("      %s\n", lg.error.c_str());
-        CHECK(lg.error.find("--arm-order --write") != std::string::npos && lg.graph.paths.empty());
+        CHECK(lg.error.find("--arm-order --write") != std::string::npos && m.laneLevel.paths.empty());
     }
     {
         // A MARKED FILE IS TRUSTED, never measured or re-sorted at load: its one junction's arms listed backwards (the
@@ -1574,11 +1576,11 @@ TEST_CASE(road_model_17_one_stated_ring_of_a_junctions_arms) {
         CHECK(n >= 3u);
         CHECK(checkArmRings(RoadLabGraph::fromJson(g)).differ == std::vector<std::string>({J["id"].get<std::string>()}));
         const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
-        const RoadModel m = assembleRoadModel(*r);
+        LaneGraphBuild lg;
+        const RoadModel m = assembleRoadModel(*r, oneCar(), &lg);
         CHECK(m.armsInRing);
         CHECK(!said(m));
         CHECK(m.junctions[0].arms.size() == n && m.junctions[0].arms[0].road == reversed[0]["road"].get<std::string>());
-        const LaneGraphBuild lg = buildLaneLevel(*r, m, oneCar());
         CHECK(lg.error.empty());
     }
 }

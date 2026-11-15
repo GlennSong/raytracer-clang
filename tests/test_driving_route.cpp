@@ -581,6 +581,7 @@ TEST_CASE(route_closed_chains_close_the_chain_not_the_turn) {
 #ifdef RT_ROADS_LANES
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"
 #include "engine/procgen/city/roads/lanes/lanes.h"
+#include "engine/procgen/city/roads/road_model.h"   // assembleRoadModel: the model and its lane level
 
 #include <memory>
 
@@ -590,8 +591,8 @@ namespace {
 
 // A real junction's lane graph, as the road builder makes it for these vehicle classes (driving::tagSizes); with
 // `withLength` false, the same sizes swept as points (each body's length left out, as before #284 item 9).
-engine::roads::lanes::LaneGraphBuild builtFor(const engine::roads::lanes::Result& roads, const VehicleClasses& classes,
-                                             bool withLength) {
+engine::LaneGraph builtFor(const engine::roads::lanes::Result& roads, const VehicleClasses& classes, bool withLength,
+                           engine::roads::lanes::LaneGraphBuild* report = nullptr) {
     engine::roads::lanes::LaneGraphOptions o;
     for (const TagSize& t : tagSizes(classes)) {
         engine::roads::lanes::VehicleSize v;
@@ -601,7 +602,7 @@ engine::roads::lanes::LaneGraphBuild builtFor(const engine::roads::lanes::Result
         v.length = withLength ? t.length : 0;
         o.vehicles.push_back(v);
     }
-    return engine::roads::lanes::buildLaneGraph(roads, o);
+    return engine::assembleRoadModel(roads, o, report).laneLevel;   // the road model's lane level (ADR-0429)
 }
 
 }  // namespace
@@ -618,9 +619,9 @@ TEST_CASE(route_a_long_body_is_never_sent_round_a_turn_its_swing_takes_off_the_r
     VehicleClass bus = deriveVehicleClass("test_bus", 12.0, 2.55, 5.7, 38);
     bus.tags = {"test_bus_tag"};
     classes.add(bus);
-    const engine::roads::lanes::LaneGraphBuild asPoints = builtFor(*roads, classes, false);
-    const engine::roads::lanes::LaneGraphBuild swept = builtFor(*roads, classes, true);
-    const engine::LaneGraph& g = swept.graph;
+    engine::roads::lanes::LaneGraphBuild asPointsReport, swept;   // what building each lane level reported
+    const engine::LaneGraph asPoints = builtFor(*roads, classes, false, &asPointsReport);
+    const engine::LaneGraph g = builtFor(*roads, classes, true, &swept);
     const RouteClass car = bindRouteClass(g, classes.at(0)), longBody = bindRouteClass(g, classes.at(1));
     // The connectors open to the bus swept as a point and closed to it swept at its length, open to the car either way.
     uint32_t closedForLength = 0, routed = 0;
@@ -628,11 +629,11 @@ TEST_CASE(route_a_long_body_is_never_sent_round_a_turn_its_swing_takes_off_the_r
         const engine::Path& p = g.paths[c];
         if (p.kind != engine::PathKind::Connector || mayUse(g, longBody, engine::PathId(c))) continue;
         bool openAsPoint = false;
-        for (uint32_t k = 0; k < asPoints.graph.paths.size(); ++k) {
-            const engine::Path& q = asPoints.graph.paths[k];
-            if (q.kind == engine::PathKind::Connector && q.from == p.from && asPoints.graph.nextPaths[q.next.first] ==
+        for (uint32_t k = 0; k < asPoints.paths.size(); ++k) {
+            const engine::Path& q = asPoints.paths[k];
+            if (q.kind == engine::PathKind::Connector && q.from == p.from && asPoints.nextPaths[q.next.first] ==
                                                                                    g.nextPaths[p.next.first])
-                openAsPoint = mayUse(asPoints.graph, bindRouteClass(asPoints.graph, classes.at(1)), engine::PathId(k));
+                openAsPoint = mayUse(asPoints, bindRouteClass(asPoints, classes.at(1)), engine::PathId(k));
         }
         if (!openAsPoint || !mayUse(g, car, engine::PathId(c))) continue;
         ++closedForLength;
@@ -653,7 +654,7 @@ TEST_CASE(route_a_long_body_is_never_sent_round_a_turn_its_swing_takes_off_the_r
     const engine::NameIndex busTag = engine::LaneGraph::nameIndex(g.vehicleTagNames, "test_bus_tag");
     std::printf("    hill junction: %u connectors closed to the bus only for its length (%u of them with another way round "
                 "for it); closed to it: %u swept as a point, %u at its length\n", closedForLength, routed,
-                busTag < asPoints.closedTo.size() ? asPoints.closedTo[busTag] : 0u,
+                busTag < asPointsReport.closedTo.size() ? asPointsReport.closedTo[busTag] : 0u,
                 busTag < swept.closedTo.size() ? swept.closedTo[busTag] : 0u);
     CHECK(closedForLength > 0u);
 }

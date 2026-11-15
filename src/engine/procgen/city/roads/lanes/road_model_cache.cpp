@@ -1,10 +1,9 @@
-#include "engine/procgen/city/roads/lanes/lane_graph_cache.h"
+#include "engine/procgen/city/roads/lanes/road_model_cache.h"
 
 #include "engine/bundle/bundle.h"
 #include "engine/bundle/cache_use.h"
 #include "engine/procgen/city/roads/lanes/city_producer.h"   // the roads' key, the city entities, loadCityGraph
 #include "engine/procgen/city/roads/lanes/road_layout.h"     // laneLevelKey: the layout and lane rules, keyed here
-#include "engine/procgen/city/roads/lanes/lane_level.h"      // the lane level from the road model (ADR-0426)
 #include "engine/procgen/city/roads/lane_turns.h"            // laneTurnRules: the turns' table, keyed here
 
 #include <nlohmann/json.hpp>
@@ -28,9 +27,9 @@ namespace {
 namespace fs = std::filesystem;
 
 // The file's two sections and the manifest field that names what it is.
-constexpr const char* kGraphSection = "lanegraph/graph";
-constexpr const char* kSummarySection = "lanegraph/summary";
-constexpr const char* kManifestField = "lanegraph";
+constexpr const char* kModelSection = "roadmodel/model";
+constexpr const char* kSummarySection = "roadmodel/summary";
+constexpr const char* kManifestField = "roadmodel";
 
 double secondsSince(const std::chrono::steady_clock::time_point& t) {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
@@ -94,9 +93,9 @@ bool operator==(const LaneGraphSummary& a, const LaneGraphSummary& b) {
            a.reachableShare == b.reachableShare;
 }
 
-LaneGraphSummary summarizeLaneGraph(const LaneGraphBuild& built) {
+LaneGraphSummary summarizeLaneGraph(const LaneGraph& graph, const LaneGraphBuild& built) {
     LaneGraphSummary s;
-    countGraph(built.graph, s);
+    countGraph(graph, s);
     for (const JunctionNote& n : built.junctionNotes) s.refusedTurns += n.turnsRefused;
     s.problems = static_cast<uint32_t>(built.problems.size());
     s.reachableShare = built.reachableShare;
@@ -112,12 +111,15 @@ std::string describeLaneGraphSummary(const LaneGraphSummary& s) {
     return b;
 }
 
-uint64_t laneGraphCacheKey(uint64_t roadsKey, const LaneGraphOptions& opts, uint32_t builderVersion) {
+uint64_t roadModelCacheKey(uint64_t roadsKey, uint64_t laneFacts, uint64_t turnTable, const LaneGraphOptions& opts,
+                           uint32_t builderVersion) {
     bundle::Fnv k;
-    k.str("lanegraph");
-    k.pod(kLaneGraphCacheFormat);
+    k.str("roadmodel");
+    k.pod(kRoadModelFormat);
     k.pod(builderVersion);
     k.pod(roadsKey);
+    k.pod(laneFacts);
+    k.pod(turnTable);
     // Each string's length goes in before it, so ("ab", "c") and ("a", "bc") are different keys.
     k.pod(static_cast<uint64_t>(opts.vehicles.size()));
     for (const VehicleSize& v : opts.vehicles) {
@@ -130,16 +132,11 @@ uint64_t laneGraphCacheKey(uint64_t roadsKey, const LaneGraphOptions& opts, uint
     return k.h;
 }
 
-uint64_t laneLevelCacheKey(uint64_t roadsKey, uint64_t laneFacts, uint64_t turnTable, const LaneGraphOptions& opts) {
-    uint64_t roads = bundle::fnv1a(&laneFacts, sizeof(laneFacts), roadsKey);
-    return laneGraphCacheKey(bundle::fnv1a(&turnTable, sizeof(turnTable), roads), opts);
+std::string roadModelCachePath(const std::string& dir, uint64_t key) {
+    return dir + "/" + bundle::hex16(key) + ".roadmodel";
 }
 
-std::string laneGraphCachePath(const std::string& dir, uint64_t key) {
-    return dir + "/" + bundle::hex16(key) + ".lanegraph";
-}
-
-bool writeLaneGraphCache(const std::string& path, uint64_t key, const LaneGraph& graph, const LaneGraphSummary& summary,
+bool writeRoadModelCache(const std::string& path, uint64_t key, const RoadModel& model, const LaneGraphSummary& summary,
                          std::string* err) {
     std::error_code ec;
     const fs::path parent = fs::path(path).parent_path();
@@ -148,26 +145,28 @@ bool writeLaneGraphCache(const std::string& path, uint64_t key, const LaneGraph&
     {
         bundle::BundleWriter w;
         std::string why;
-        if (!w.openFile(tmp, &why)) return fail(err, "lane graph cache: " + why);
+        if (!w.openFile(tmp, &why)) return fail(err, "road model cache: " + why);
         nlohmann::json manifest;
-        manifest[kManifestField] = {{"format", kLaneGraphCacheFormat}, {"key", bundle::hex16(key)}};
-        if (!writeLaneGraph(w, kGraphSection, graph) || !w.addJson(kSummarySection, summaryJson(summary)) ||
+        manifest[kManifestField] = {{"key", bundle::hex16(key)}};
+        bundle::BinWriter bytes;
+        putRoadModel(bytes, model);
+        if (!w.add(kModelSection, bytes.bytes) || !w.addJson(kSummarySection, summaryJson(summary)) ||
             !w.finish(manifest, &why)) {
             fs::remove(tmp, ec);
-            return fail(err, "lane graph cache: cannot write " + tmp + (why.empty() ? std::string() : ": " + why));
+            return fail(err, "road model cache: cannot write " + tmp + (why.empty() ? std::string() : ": " + why));
         }
     }
     fs::rename(tmp, path, ec);
     if (ec) {
         fs::remove(tmp, ec);
-        return fail(err, "lane graph cache: cannot move " + tmp + " into place");
+        return fail(err, "road model cache: cannot move " + tmp + " into place");
     }
     return true;
 }
 
-bool readLaneGraphCache(const std::string& path, uint64_t key, LaneGraph& graph, LaneGraphSummary& summary,
+bool readRoadModelCache(const std::string& path, uint64_t key, RoadModel& model, LaneGraphSummary& summary,
                         std::string* err) {
-    graph = LaneGraph();
+    model = RoadModel();
     summary = LaneGraphSummary();
     std::error_code ec;
     if (!fs::is_regular_file(path, ec)) return fail(err, path + ": no such file");
@@ -176,25 +175,24 @@ bool readLaneGraphCache(const std::string& path, uint64_t key, LaneGraph& graph,
     if (!b) return fail(err, why);
     const nlohmann::json& m = b->manifest();
     if (!m.contains(kManifestField) || !m[kManifestField].is_object())
-        return fail(err, path + ": not a lane graph cache (its table of contents names no lane graph)");
-    const nlohmann::json& lg = m[kManifestField];
-    if (lg.value("format", 0u) != kLaneGraphCacheFormat)
-        return fail(err, path + ": layout " + std::to_string(lg.value("format", 0u)) + ", this build reads " +
-                             std::to_string(kLaneGraphCacheFormat));
-    if (lg.value("key", std::string()) != bundle::hex16(key))
-        return fail(err, path + ": made for key " + lg.value("key", std::string("(none)")) + ", not " +
+        return fail(err, path + ": not a road model cache (its table of contents names no road model)");
+    const nlohmann::json& rm = m[kManifestField];
+    if (rm.value("key", std::string()) != bundle::hex16(key))
+        return fail(err, path + ": made for key " + rm.value("key", std::string("(none)")) + ", not " +
                              bundle::hex16(key));
-    for (const char* section : {kGraphSection, kSummarySection})
+    for (const char* section : {kModelSection, kSummarySection})
         if (!b->checkSection(section))
             return fail(err, path + ": section " + section + " is missing or its bytes no longer match their hash");
-    LaneGraph g;
-    if (!readLaneGraph(*b, kGraphSection, g, &why)) return fail(err, path + ": " + why);
+    const bundle::Bundle::View v = b->section(kModelSection);
+    bundle::BinReader r(v.data, v.size);
+    RoadModel read;
+    if (!getRoadModel(r, read, &why)) return fail(err, path + ": " + why);   // (another layout of the bytes is refused here)
     LaneGraphSummary s;
     if (!summaryFromJson(b->json(kSummarySection), s)) return fail(err, path + ": its summary is unreadable");
     LaneGraphSummary counted = s;
-    countGraph(g, counted);
-    if (!(counted == s)) return fail(err, path + ": its summary does not agree with its graph");
-    graph = std::move(g);
+    countGraph(read.laneLevel, counted);
+    if (!(counted == s)) return fail(err, path + ": its summary does not agree with its lane level");
+    model = std::move(read);
     summary = s;
     return true;
 }
@@ -206,10 +204,10 @@ uint64_t levelRoadsKey(const bundle::LevelInputs& in) {
     return p->identity(in).key;
 }
 
-LevelLaneGraph obtainLevelLaneGraph(const bundle::LevelInputs& in, const LaneGraphOptions& opts,
-                                    const std::string& cacheDir) {
+LevelBuiltRoads obtainLevelRoadModel(const bundle::LevelInputs& in, const LaneGraphOptions& opts,
+                                     const std::string& cacheDir) {
     const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
-    LevelLaneGraph out;
+    LevelBuiltRoads out;
     const std::vector<CityEntity> cities = cityEntities(in.level);
     if (cities.empty()) {
         out.error = "the level has no lane-built city";
@@ -230,23 +228,23 @@ LevelLaneGraph obtainLevelLaneGraph(const bundle::LevelInputs& in, const LaneGra
         }
         // the layout and the lane rules the lane level reads by id (the roads' key leaves them out), and the table the
         // turns are stated by (ADR-0426)
-        out.key = laneLevelCacheKey(levelRoadsKey(in), laneLevelKey(spec), laneTurnRules().hash, opts);
+        out.key = roadModelCacheKey(levelRoadsKey(in), laneLevelKey(spec), laneTurnRules().hash, opts);
     }
 
     if (!cacheDir.empty()) {
-        out.path = laneGraphCachePath(cacheDir, out.key);
+        out.path = roadModelCachePath(cacheDir, out.key);
         std::error_code ec;
         if (fs::exists(out.path, ec)) {
-            LaneGraph g;
+            RoadModel read;
             std::string why;
-            if (readLaneGraphCache(out.path, out.key, g, out.summary, &why)) {
-                out.graph = std::make_shared<const LaneGraph>(std::move(g));
+            if (readRoadModelCache(out.path, out.key, read, out.summary, &why)) {
+                out.model = std::make_shared<RoadModel>(std::move(read));
                 out.fromCache = true;
-                bundle::noteCacheUse(out.path, kLaneGraphCacheKind);
+                bundle::noteCacheUse(out.path, kRoadModelCacheKind);
                 out.seconds = secondsSince(t0);
                 return out;
             }
-            out.notes.push_back("the saved lane graph was refused and is built again: " + why);
+            out.notes.push_back("the saved road model was refused and is built again: " + why);
         }
     }
 
@@ -263,9 +261,9 @@ LevelLaneGraph obtainLevelLaneGraph(const bundle::LevelInputs& in, const LaneGra
     }
     out.roadSeconds = secondsSince(t0);
     const std::chrono::steady_clock::time_point tg = std::chrono::steady_clock::now();
-    // THE LANE LEVEL, A TABLE BUILT FROM THE ROAD MODEL (ADR-0426): the model of this build, then the table from it
-    const RoadModel model = assembleRoadModel(*roads);
-    LaneGraphBuild built = buildLaneLevel(*roads, model, opts);
+    // THE BUILT MODEL of this build, its lane level with it (ADR-0429)
+    LaneGraphBuild built;
+    std::shared_ptr<RoadModel> model = std::make_shared<RoadModel>(assembleRoadModel(*roads, opts, &built));
     roads.reset();
     out.graphSeconds = secondsSince(tg);
     if (!built.error.empty()) {
@@ -273,19 +271,19 @@ LevelLaneGraph obtainLevelLaneGraph(const bundle::LevelInputs& in, const LaneGra
         out.seconds = secondsSince(t0);
         return out;
     }
-    out.summary = summarizeLaneGraph(built);
-    // A graph that fails its own check would be refused by the reader on every later load and rebuilt each time: say so
-    // now, and drive on it (the check is about the file as much as the graph).
-    const std::vector<std::string> problems = validate(built.graph);
+    out.summary = summarizeLaneGraph(model->laneLevel, built);
+    // A lane level that fails its own check would be refused by the reader on every later load and rebuilt each time: say
+    // so now, and drive on it (the check is about the file as much as the graph).
+    const std::vector<std::string> problems = validate(model->laneLevel);
     if (!problems.empty())
         out.notes.push_back("the lane graph built fails its check (" + std::to_string(problems.size()) +
                             " problems, the first: " + problems.front() + "); it is not saved");
-    out.graph = std::make_shared<const LaneGraph>(std::move(built.graph));
+    out.model = std::move(model);
     if (!out.path.empty() && problems.empty()) {
         std::string why;
-        if (writeLaneGraphCache(out.path, out.key, *out.graph, out.summary, &why)) {
+        if (writeRoadModelCache(out.path, out.key, *out.model, out.summary, &why)) {
             out.saved = true;
-            bundle::noteCacheUse(out.path, kLaneGraphCacheKind);
+            bundle::noteCacheUse(out.path, kRoadModelCacheKind);
         } else {
             out.notes.push_back(why);
         }
@@ -294,8 +292,8 @@ LevelLaneGraph obtainLevelLaneGraph(const bundle::LevelInputs& in, const LaneGra
     return out;
 }
 
-std::string describeLevelLaneGraph(const LevelLaneGraph& lg) {
-    if (!lg.graph) return "no lane graph: " + lg.error;
+std::string describeLevelRoadModel(const LevelBuiltRoads& lg) {
+    if (!lg.model) return "no lane graph: " + lg.error;
     char how[512];
     if (lg.fromCache)
         std::snprintf(how, sizeof how, "; read from the cache %s in %.2f s (no road build)", lg.path.c_str(), lg.seconds);

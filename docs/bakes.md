@@ -15,9 +15,9 @@ Everything lives under `cache/` in the checkout the game runs from (each worktre
 | `cache/terrain/<hash>.pyramid` | the baked ground mesh (terrain with every lot flatten folded in) | the ground's content, flattens included | 145–385 MB |
 | `cache/terrain/maps_*.bin`, `weather_*.bin` | the cover maps, the weathered ground | the terrain settings | ~65 MB each; slow to remake |
 | `cache/population/<hash>.pop` | who lives and works where | places, street graph, agents, buses | small |
-| `cache/lanegraph/<key>.lanegraph` | the **lane graph** the new driving model drives on (levels with `citysim.driving = "v2"` only): every lane and every path through a junction, built from the road model (ADR-0426). A bundle file holding one graph. Built at the first load from the roads (the road build again, ~45 s on the traffic lab with the lane level), read in a fraction of a second after (`lane_graph_cache.h`) | the city producer's key (lanes tag + road graph), the road file's lane-level facts the bake key leaves out (junctions, streets, divided pairs, `lane_rules`: `laneLevelKey`), the turn table's hash (`assets/data/lane_turns.json`), the fleet's vehicle sizes by tag, `kLaneGraphBuildVersion` | a few MB |
-| `cache/roadmodel/<key>.roadmodel` | **no longer written** (the road model's own cache, which nothing read, went in ADR-0426's review); old files are cleared by `rt_bake --prune` | — | — |
-| `*.uses` beside the terrain, population and lane graph files (and old road model files, until pruned) | which levels used the file, and when (ADR-0256) | | tiny |
+| `cache/roadmodel/<key>.roadmodel` | the level's **built road model** (levels with `citysim.driving = "v2"` only): its lanes, connections and turns, and inside it the **lane level** the new driving model drives on, every lane and every path through a junction (ADR-0429). A bundle file holding one model. Built at the first load from the roads (the road build again, ~45 s on the traffic lab), read in a fraction of a second after (`lanes/road_model_cache.h`). The roads' one cache outside the bake | one key: the city producer's key (lanes tag + road graph), the road file's layout and lane facts the bake key leaves out (junctions, streets, divided pairs, `lane_rules`: `laneLevelKey`), the turn table's hash (`assets/data/lane_turns.json`), the fleet's vehicle sizes by tag, `kLaneGraphBuildVersion`, `kRoadModelFormat` | a few MB |
+| `cache/lanegraph/<key>.lanegraph` | **no longer written** (the lane graph's own cache went in ADR-0429: the lane level is part of the road model); old files are cleared by `rt_bake --prune` | — | — |
+| `*.uses` beside the terrain, population and road model files (and old lane graph files, until pruned) | which levels used the file, and when (ADR-0256) | | tiny |
 | `cache/fields`, `cache/road_signs`, `cache/clouds` | textures, sign atlases, cloud fields | their own inputs | small |
 
 Every one of these is a **cache**: deleting it is always safe; it is rebuilt on the next load.
@@ -106,9 +106,9 @@ stage reads against its key.
 - **`kLotsBuildTag`**: any change to what the lot pass OUTPUTS — sculpting (parks, quad, sports field),
   recipes and massing, lot selection (campus, big box), grading, anything stored in a `LotBuilding` or a
   part mesh.
-- **`kLaneGraphBuildVersion`** (`lane_graph_build.h`): any change to the lane graph the driving model reads (a
-  connector's shape, how the table is built from the road model; which turns exist is the turn table's, which keys
-  itself). It keys only the `cache/lanegraph` files, so a bump
+- **`kLaneGraphBuildVersion`** (`lane_graph_build.h`): any change to the built road model or the lane level in it
+  that the driving model reads (a connector's shape, how the table is built from the model; which turns exist is the
+  turn table's, which keys itself). It keys only the `cache/roadmodel` files, so a bump
   rebuilds those at the next v2 load and touches no bake.
 - **`kLanesBuildTag`**: any change to the roads the lanes builder produces. **`kRailBuildTag`**: any change
   to the track and stations (keyed only by graphs with a track class).

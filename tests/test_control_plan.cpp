@@ -24,6 +24,7 @@
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"   // the streets: where one only carries on
+#include "engine/procgen/city/roads/road_model.h"          // assembleRoadModel: the model and its lane level
 
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -217,25 +218,33 @@ nlohmann::json plannedGraph(ControlPlan* planOut = nullptr) {
     return g;
 }
 
-// The lane graph built from a road graph's JSON.
-LaneGraphBuild laneGraphFrom(const nlohmann::json& g) {
+// The lane level built from a road graph's JSON: the road model's (RoadModel::laneLevel, here `graph`), with what
+// building it reported.
+struct BuiltLaneLevel : LaneGraphBuild {
+    LaneGraph graph;
+};
+BuiltLaneLevel laneGraphFrom(const nlohmann::json& g) {
     const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
-    return buildLaneGraph(*r, testVehicles());
+    BuiltLaneLevel out;
+    LaneGraphBuild report;
+    out.graph = assembleRoadModel(*r, testVehicles(), &report).laneLevel;
+    static_cast<LaneGraphBuild&>(out) = std::move(report);
+    return out;
 }
 
-const LaneGraphBuild& plannedBuild() {
-    static const LaneGraphBuild lg = laneGraphFrom(plannedGraph());
+const BuiltLaneLevel& plannedBuild() {
+    static const BuiltLaneLevel lg = laneGraphFrom(plannedGraph());
     return lg;
 }
 
-bool hasProblem(const LaneGraphBuild& lg, const std::string& words) {
+bool hasProblem(const BuiltLaneLevel& lg, const std::string& words) {
     for (const std::string& p : lg.problems)
         if (p.find(words) != std::string::npos) return true;
     return false;
 }
 
 // The road (its id) a lane path was cut from: its section's road, through the build's records.
-std::string roadOf(const LaneGraphBuild& lg, const RoadLabGraph& g, PathId lane) {
+std::string roadOf(const BuiltLaneLevel& lg, const RoadLabGraph& g, PathId lane) {
     const uint32_t s = lg.graph.paths[lane.index].section.index;
     return s < lg.sectionSources.size() ? g.edges[static_cast<std::size_t>(lg.sectionSources[s].edge)].id : std::string();
 }
@@ -275,7 +284,7 @@ TEST_CASE(control_plan_2_a_planned_road_graph_is_carried_through) {
         else CHECK(e.contains("speed_limit") && e["speed_limit"] == (cls == "arterial" ? kArterialLimit : kLocalLimit));
     }
 
-    const LaneGraphBuild& lg = plannedBuild();
+    const BuiltLaneLevel& lg = plannedBuild();
     const LaneGraph& G = lg.graph;
     const RoadLabGraph road = RoadLabGraph::fromJson(g);
     std::printf("    controls: %u stated junctions, %zu lane-level junctions\n", lg.controlPlan.planned, G.junctions.size());
@@ -327,7 +336,7 @@ TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_report
         for (nlohmann::json& st : g["streets"])   // (the streets that ended at it end at no junction now)
             for (nlohmann::json& end : st["junctions"])
                 if (end == "j1") end = nullptr;
-        const LaneGraphBuild lg = laneGraphFrom(g);
+        const BuiltLaneLevel lg = laneGraphFrom(g);
         CHECK(lg.error.empty());
         CHECK(lg.graph.junctions.size() == 1u);
         CHECK(lg.graph.controlNames[lg.graph.junctions[0].control] == "stop");
@@ -346,7 +355,7 @@ TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_report
         nlohmann::json g = plannedGraph();
         for (nlohmann::json& a : g["junctions"][1]["arms"])
             if (a["road"] == "o0") a["regulations"] = {"stop"};
-        const LaneGraphBuild lg = laneGraphFrom(g);
+        const BuiltLaneLevel lg = laneGraphFrom(g);
         for (const std::string& p : lg.problems) std::printf("    problem: %s\n", p.c_str());
         CHECK(hasProblem(lg, "junction j1: its arm on road o0 carries \"stop\", but no lane arrives by it"));
     }
@@ -410,7 +419,7 @@ TEST_CASE(control_plan_5_the_same_plan_and_graph_every_run) {
     nlohmann::json again = ga;
     writeControlPlan(again, planControls(RoadLabGraph::fromJson(ga), testPolicy()));
     CHECK(again.dump(1) == ga.dump(1));
-    const LaneGraphBuild second = laneGraphFrom(gb);
+    const BuiltLaneLevel second = laneGraphFrom(gb);
     const LaneGraph& first = plannedBuild().graph;
     bundle::BinWriter wa, wb;
     putLaneGraph(wa, first);
