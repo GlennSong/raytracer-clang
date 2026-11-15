@@ -39,7 +39,7 @@ struct ProbeRules {
 // Ground height at (x, z), for nodes whose elevation is above the ground
 using ProbeGroundFn = std::function<double(double, double)>;
 
-// Sites along every street of `map` (the level's street map, LevelStreetMap, ADR-0425: its links follow the streets'
+// Sites along every street of `map` (the level's street map, LevelRoadModel::streetMap, ADR-0425: its links follow the streets'
 // curves; a two-way street's two links are one piece): a piece of length L takes max(1, round(L / spacing)) evenly
 // spaced, merged at junctions.
 void placeProbeSites(const NavGraph& map, const ProbeGroundFn& ground, const ProbeRules& rules, std::vector<ProbeSite>& out);

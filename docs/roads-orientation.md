@@ -85,7 +85,8 @@ Tests:
   and `NavGraph::signalControlled` reads the stated signal.
 - **Control signs**: `control_signs.h` over stated arms and regulations (ADR-0424). Placed at load and attached to
   arms.
-- **Street map / routing**: `LevelStreetMap` (street_map.h, ADR-0425). Read by the city sim, buses, rail riders,
+- **Street map / routing**: `LevelRoadModel::streetMap`, the level-wide routing table held by the one road object
+  beside its `cities` (built by `appendStreetMap`, street_map.h, ADR-0425). Read by the city sim, buses, rail riders,
   parking, walkers, the trip planner, furniture, the day/night system and the light probes.
 - **Lane level / driving v2**: the model's own `laneLevel`, filled by `assembleRoadModel` (ADR-0426, ADR-0429); the host hands the driving the lane level of the model in `LevelRoadModel`. Only traffic_lab drives v2
   (`"driving": "v2"` in its level file).

@@ -25,11 +25,11 @@ bool probesOff() {
 }
 }  // namespace
 
-// The sites along the level's streets (LevelStreetMap: the street map built from the road model at load, ADR-0425),
+// The sites along the level's streets (LevelRoadModel::streetMap: the street map built from the road model at load, ADR-0425),
 // again whenever it changes (a level, a re-plan).
 void ProbeSystem::placeSites(FrameContext& ctx) {
     std::size_t roads = 0;
-    ctx.world.each<LevelStreetMap>([&](Entity, LevelStreetMap& m) { roads += (m.map ? m.map->links.size() : 0) + 1; });
+    ctx.world.each<LevelRoadModel>([&](Entity, LevelRoadModel& m) { if (m.streetMap) roads += m.streetMap->links.size() + 1; });
     if (roads == roadsSeen_) return;
     roadsSeen_ = roads;
     const auto t0 = std::chrono::steady_clock::now();
@@ -42,7 +42,7 @@ void ProbeSystem::placeSites(FrameContext& ctx) {
     };
     sites_.clear();
     const ProbeRules& rules = lightBook().probes;
-    ctx.world.each<LevelStreetMap>([&](Entity, LevelStreetMap& m) { if (m.map) placeProbeSites(*m.map, ground, rules, sites_); });
+    ctx.world.each<LevelRoadModel>([&](Entity, LevelRoadModel& m) { if (m.streetMap) placeProbeSites(*m.streetMap, ground, rules, sites_); });
     streetCount_ = sites_.size();
     storeyKey_ = 0;
     storeyRecord_ = nullptr;

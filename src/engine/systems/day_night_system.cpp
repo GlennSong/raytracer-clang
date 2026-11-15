@@ -325,16 +325,16 @@ void DayNightSystem::seedFromConfig(const DayNightConfig& c) {
     }
 }
 
-// The city's footprint: the bounding circle of the level's street map's nodes (LevelStreetMap, the one map, ADR-0425; a
+// The city's footprint: the bounding circle of the level's street map's nodes (LevelRoadModel::streetMap, the one map, ADR-0425; a
 // lanes city's RoadEntity graph is empty, ADR-0374). Found once (roads are level data); a level with no roads has no
 // city and no pollution anywhere.
 void DayNightSystem::findCityBounds(FrameContext& ctx) {
     if (cityBoundsKnown_) return;
     double minX = 1e30, minZ = 1e30, maxX = -1e30, maxZ = -1e30;
     bool any = false;
-    ctx.world.each<LevelStreetMap>([&](Entity, LevelStreetMap& m) {
-        if (!m.map) return;
-        for (const Vec2& n : m.map->nodes) {
+    ctx.world.each<LevelRoadModel>([&](Entity, LevelRoadModel& m) {
+        if (!m.streetMap) return;
+        for (const Vec2& n : m.streetMap->nodes) {
             minX = std::min(minX, static_cast<double>(n.x));
             maxX = std::max(maxX, static_cast<double>(n.x));
             minZ = std::min(minZ, static_cast<double>(n.y));

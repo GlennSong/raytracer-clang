@@ -904,6 +904,15 @@ struct RoadModel;
 struct NavGraph;
 struct LevelRoadModel {
     std::vector<std::shared_ptr<RoadModel>> cities;
+    // THE LEVEL'S STREET MAP (docs/road-model-design.md step 7, ADR-0425): the level-wide routing table, the one graph
+    // every agent routes, drives and walks on. It covers every city in `cities`, in their order, and is built once at
+    // load from each city's planned layer and the drawn deck (roads/street_map.h appendStreetMap). It is shared: the
+    // furniture plan reads it, the city sim copies it and appends its walks. A look-up table: every link and node carries
+    // its ids into the model; nothing in it is saved. Null on a level with no lane-built city.
+    std::shared_ptr<NavGraph> streetMap;
+    // What stopped a city getting onto the street map: a road file lacking a fact the map needs (that city has no
+    // streets on the map: no traffic there).
+    std::vector<std::string> streetMapErrors;
     // The named street nearest `p` over every city (its name; empty when none is within `reach` metres): the model's
     // own question (road_model.h streetNameNear), for a label (a bus stop's street).
     std::string streetNameNear(const Vec2& p, Real reach = 40.0) const;
@@ -1207,16 +1216,6 @@ struct LevelLanes {
     // where each city's roads begin in `roads` (a TrafficLane's `parent` is that plus its road's index in its road
     // file): city c's road e is roads[cityRoads[c] + e]. In the order LevelRoadModel lists the cities.
     std::vector<int> cityRoads;
-};
-
-// THE LEVEL'S STREET MAP (docs/road-model-design.md step 7, ADR-0425): the one graph every agent routes, drives and walks
-// on -- every lane-built city's, in the level's order -- built once at load from the road model's planned layer and the
-// drawn deck (roads/street_map.h), and shared: the furniture plan reads it, the city sim copies it and appends its walks.
-// A look-up table: every link and node carries its ids into the model; nothing in it is saved. `errors`: a city whose
-// road file lacks a fact the map needs (it has no streets on the map: no traffic there).
-struct LevelStreetMap {
-    std::shared_ptr<NavGraph> map;
-    std::vector<std::string> errors;
 };
 
 // The DECK a road entity's mesh actually rode (RoadDeckField), stored by the

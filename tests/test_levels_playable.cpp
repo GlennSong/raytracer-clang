@@ -95,13 +95,13 @@ std::string levelsDir() {
 // the nodes, and every number here was tuned on the other one. RT_CITYSIM_LEVEL
 // points them at it, so "does the sim work on a lane-built city" is a measurement
 // rather than an opinion.
-// THE LEVEL'S STREET MAP (engine::LevelStreetMap, ADR-0425: built from the road model at load, every agent routes on it) as
+// THE LEVEL'S STREET MAP (engine::LevelRoadModel::streetMap, ADR-0425: built from the road model at load, every agent routes on it) as
 // a road graph of its pieces -- a two-way street's two links once, with their widths and classes: what the measurements
 // below walk. Empty when the level has none.
 engine::RoadGraph streetMapGraph(World& world) {
     engine::RoadGraph g;
     std::shared_ptr<const engine::NavGraph> map;
-    world.each<engine::LevelStreetMap>([&](Entity, engine::LevelStreetMap& m) { if (!map && m.map) map = m.map; });
+    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!map && m.streetMap) map = m.streetMap; });
     if (!map) return g;
     for (int n = 0; n < map->streetNodeCount(); ++n) g.nodes.push_back(engine::RoadNode{map->nodes[static_cast<std::size_t>(n)]});
     for (int li = 0; li < map->streetLinkCount(); ++li) {
@@ -2306,7 +2306,7 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
     if (!loaded) return;
     // the street map, which a post keeps clear of (as the loader plans the posts: ADR-0425)
     std::shared_ptr<const engine::NavGraph> streetMap;
-    world.each<engine::LevelStreetMap>([&](Entity, engine::LevelStreetMap& m) { if (!streetMap && m.map) streetMap = m.map; });
+    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!streetMap && m.streetMap) streetMap = m.streetMap; });
     const engine::NavGraph* graph = streetMap.get();
     // THE NAMES AND THE JUNCTIONS ARE THE LEVEL'S ROAD MODEL'S (ADR-0420)
     const engine::LevelRoadModel* level = nullptr;

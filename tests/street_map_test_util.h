@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_TESTS_STREET_MAP_TEST_UTIL_H
 #define RAYTRACER_TESTS_STREET_MAP_TEST_UTIL_H
 
-// A TEST WORLD'S STREET MAP. A level's street map is built from its road model when it loads (engine::LevelStreetMap,
+// A TEST WORLD'S STREET MAP. A level's street map is built from its road model when it loads (engine::LevelRoadModel::streetMap,
 // ADR-0425), and the city sim reads only that. A test world made of bare RoadEntity components has no road model, so
 // this builds its map from those entities' hand-made graphs the way any hand-made graph becomes a NavGraph (navRoadGraph,
 // buildNavGraph: what the city sim did privately for such worlds before) and publishes it as the world's map.
@@ -30,10 +30,10 @@ inline void publishStreetMap(engine::World& world, const engine::RoadGroundFn& g
             combined.edges.push_back(e);
         }
     });
-    engine::LevelStreetMap* map = nullptr;
-    world.each<engine::LevelStreetMap>([&](engine::Entity, engine::LevelStreetMap& m) { if (!map) map = &m; });
-    if (!map) map = &world.add<engine::LevelStreetMap>(world.create(), engine::LevelStreetMap{});
-    map->map = combined.edges.empty() ? std::make_shared<engine::NavGraph>() : std::make_shared<engine::NavGraph>(engine::buildNavGraph(combined));
+    engine::LevelRoadModel* roads = nullptr;
+    world.each<engine::LevelRoadModel>([&](engine::Entity, engine::LevelRoadModel& m) { if (!roads) roads = &m; });
+    if (!roads) roads = &world.add<engine::LevelRoadModel>(world.create(), engine::LevelRoadModel{});
+    roads->streetMap = combined.edges.empty() ? std::make_shared<engine::NavGraph>() : std::make_shared<engine::NavGraph>(engine::buildNavGraph(combined));
 }
 
 // A road entity added to a test world, and the world's street map published again with it.

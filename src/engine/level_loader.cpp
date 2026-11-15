@@ -86,7 +86,7 @@
 #include "procgen/city/street_signs.h"  // street name signs
 #include "text/font.h"                  // signFont
 #include "procgen/city/water_mesh.h"  // buildWaterMesh (ocean/lake surface)
-#include "ai/nav_graph.h"             // the street map (LevelStreetMap) the furniture and the sim read
+#include "ai/nav_graph.h"             // the street map (LevelRoadModel::streetMap) the furniture and the sim read
 #include "asset_root.h"               // assetPath: the map's control colours (road_attachments.json)
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
@@ -736,23 +736,20 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
                                  << " spines, " << g.edges.size() << " roads): its freeways and ramps carry no heights";
                         deck = nullptr;
                     }
-                    engine::LevelStreetMap* streets = nullptr;
-                    world.each<engine::LevelStreetMap>([&](Entity, engine::LevelStreetMap& m) { if (!streets) streets = &m; });
-                    if (!streets) streets = &world.add<engine::LevelStreetMap>(world.create(), engine::LevelStreetMap{});
-                    if (!streets->map) streets->map = std::make_shared<engine::NavGraph>();
+                    if (!models->streetMap) models->streetMap = std::make_shared<engine::NavGraph>();
                     engine::StreetMapReport rep;
                     const int cityIndex = static_cast<int>(models->cities.size()) - 1;
-                    if (engine::appendStreetMap(*streets->map, *models->cities.back(), cityIndex, deck, &rep)) {
+                    if (engine::appendStreetMap(*models->streetMap, *models->cities.back(), cityIndex, deck, &rep)) {
                         LOG_INFO << "[roads] street map, city " << cityIndex << ": " << engine::describeStreetMap(rep);
                     } else {
                         for (const std::string& err : rep.errors) {
                             LOG_ERROR << "[roads] street map, city " << cityIndex << " (" << e.graphPath << "): " << err;
-                            streets->errors.push_back(err);
+                            models->streetMapErrors.push_back(err);
                         }
                     }
                     // its signals, by each node's junction (one rule: the stated control; a file stating none lights nothing)
                     bool controls = false;
-                    models->stateSignals(*streets->map, nullptr, &controls);
+                    models->stateSignals(*models->streetMap, nullptr, &controls);
                     if (!controls)
                         LOG_WARN << "[roads] " << e.graphPath << " states no junction's control: no junction is lit. State them once: "
                                  << "city_plan controls " << e.graphPath << " rules/lab.lua --layout --write --controls-only";
@@ -826,7 +823,7 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
     // The entity's RoadEntity carries the look the builder's products are drawn with (its sidewalk and curb,
     // copied from the builder's bands below). Its graph stays empty: a lane-built city's streets are its road model's,
-    // and the street map agents route on is built from that at load (LevelStreetMap, ADR-0425). (Roads drawn as nodes in the level, and the old
+    // and the street map agents route on is built from that at load (LevelRoadModel::streetMap, ADR-0425). (Roads drawn as nodes in the level, and the old
     // grower's "generate" recipe, retired with ADR-0267.)
     RoadEntity net;
     if (roadBlock.contains("nodes") || roadBlock.contains("generate"))
@@ -8088,7 +8085,7 @@ bool LevelLoader::load(const std::string& path,
     // build the city instead of during the simulation ... the simulation
     // should use it but it shouldn't be responsible for where they are").
     // Plan every signal pole + street lamp from the level's street map (the
-    // one the city sim routes on: LevelStreetMap, ADR-0425), spawn them as city
+    // one the city sim routes on: LevelRoadModel::streetMap, ADR-0425), spawn them as city
     // geometry, and publish a StreetFurniture component: the sim animates the
     // lenses and reacts to phases, but never invents a pole.
     if (root.contains("citysim") &&
@@ -8152,7 +8149,7 @@ bool LevelLoader::load(const std::string& path,
         // THE LEVEL'S STREET MAP (ADR-0425): the one the city sim routes on, built from the road model at load -- the
         // furniture plans on it, so a pole's link is the sim's link
         std::shared_ptr<const engine::NavGraph> streetMap;
-        world.each<engine::LevelStreetMap>([&](Entity, engine::LevelStreetMap& m) { if (!streetMap && m.map) streetMap = m.map; });
+        world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!streetMap && m.streetMap) streetMap = m.streetMap; });
         if (streetMap && streetMap->linkCount() > 0) {
             const engine::NavGraph& nav = *streetMap;
             // THE ROAD MODEL'S JUNCTIONS AND CONTROLS (ADR-0421): the nodes lit by their junction's stated control (stated on

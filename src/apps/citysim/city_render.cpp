@@ -332,12 +332,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         };
     });
     // THE LEVEL'S STREET MAP (docs/road-model-design.md step 7, ADR-0425): the one map, built at load from the road model
-    // (engine::LevelStreetMap), every link and node carrying its street's and junction's ids, its signals stated by its
+    // (engine::LevelRoadModel::streetMap), every link and node carrying its street's and junction's ids, its signals stated by its
     // junctions' controls -- the same map the furniture was planned on, so a pole's link is this link. The sim copies it
     // and appends its walks (below).
     {
         std::shared_ptr<const engine::NavGraph> map;
-        world.each<engine::LevelStreetMap>([&](Entity, engine::LevelStreetMap& m) { if (!map && m.map) map = m.map; });
+        world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!map && m.streetMap) map = m.streetMap; });
         if (!map || map->linkCount() == 0) return false;
         nav_ = *map;
     }
