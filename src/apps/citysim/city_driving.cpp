@@ -178,11 +178,53 @@ void DrivingHost::reset() {
     seats_.clear();
     seatOfAgent_.clear();
     seatOfCar_.clear();
+    guests_.clear();
+    guestEvents_.clear();
     placesOfClass_.clear();
     placesFound_.clear();
     measurements_ = std::make_unique<driving::Measurements>();
     counts_ = DrivingCounts();
     cost_ = Cost();
+}
+
+// ---- Guests: cars someone else drives (ADR-0441) --------------------------------------------------------------------
+
+const DrivingHost::Seat* DrivingHost::seatOf(int agent) const {
+    if (agent < 0 || agent >= static_cast<int>(seatOfAgent_.size())) return nullptr;
+    const int k = seatOfAgent_[static_cast<std::size_t>(agent)];
+    return k >= 0 ? &seats_[static_cast<std::size_t>(k)] : nullptr;
+}
+
+bool DrivingHost::seatGuest(int agent, driving::CarId car) {
+    if (!active_ || agent < 0 || seatOf(agent) || guestOf(agent)) return false;
+    if (car.index < seatOfCar_.size() && seatOfCar_[car.index] >= 0) return false;
+    for (const Seat& g : guests_)
+        if (g.car == car) return false;
+    Seat s;
+    s.agent = agent;
+    s.car = car;
+    guests_.push_back(s);
+    return true;
+}
+
+void DrivingHost::unseatGuest(int agent) {
+    for (std::size_t k = 0; k < guests_.size(); ++k)
+        if (guests_[k].agent == agent) {
+            guests_.erase(guests_.begin() + static_cast<std::ptrdiff_t>(k));
+            return;
+        }
+}
+
+std::vector<driving::Event> DrivingHost::takeGuestEvents() {
+    std::vector<driving::Event> out;
+    out.swap(guestEvents_);
+    return out;
+}
+
+bool DrivingHost::keptForGuest(const driving::Event& e) {
+    if (e.car.index < seatOfCar_.size() && seatOfCar_[e.car.index] >= 0) return false;
+    guestEvents_.push_back(e);
+    return true;
 }
 
 std::string DrivingHost::begin(driving::Driving& d, std::vector<Agent>& agents, std::vector<SimVehicle>& vehicles,
@@ -271,11 +313,13 @@ void DrivingHost::tick(driving::Driving& d, Real dt, std::vector<Agent>& agents,
 
     // Trips that ended: the car stands at its destination, and is sent on again.
     std::vector<driving::CarId> arrived;
-    for (const driving::Event& e : d.drainEvents())
+    for (const driving::Event& e : d.drainEvents()) {
+        if (!guests_.empty() && keptForGuest(e)) continue;   // (a guest's car: its own driver's to act on)
         if (e.kind == driving::EventKind::Parked) {
             ++counts_.arrivals;
             arrived.push_back(e.car);
         }
+    }
     for (const driving::CarId car : arrived) {
         const int k = car.index < seatOfCar_.size() ? seatOfCar_[car.index] : -1;
         if (k >= 0) sendOn(d, seats_[static_cast<std::size_t>(k)]);
@@ -304,7 +348,16 @@ void DrivingHost::tick(driving::Driving& d, Real dt, std::vector<Agent>& agents,
         }
         mirror(d, s, agents, vehicles, snap);
     }
-    d.drainEvents();   // (the EndedEarly and NoRoute events of the work above: counted already)
+    // The guests' cars: where each is, copied like any other while it is on the road.
+    for (Seat& g : guests_) {
+        const bool onRoad = d.car(g.car) != nullptr;
+        const bool snap = onRoad && !g.placed;
+        g.placed = onRoad;
+        if (onRoad) mirror(d, g, agents, vehicles, snap);
+    }
+    // (the EndedEarly and NoRoute events of the work above: counted already; a guest's are kept for its driver)
+    for (const driving::Event& e : d.drainEvents())
+        if (!guests_.empty()) keptForGuest(e);
 
     const double hostMs = msSince(t1);
     ++cost_.ticks;
@@ -316,17 +369,19 @@ void DrivingHost::tick(driving::Driving& d, Real dt, std::vector<Agent>& agents,
 }
 
 bool DrivingHost::roadHeight(int agent, Real& from, Real& to) const {
-    if (!drives(agent)) return false;
-    const Seat& s = seats_[static_cast<std::size_t>(seatOfAgent_[static_cast<std::size_t>(agent)])];
-    if (!s.placed) return false;
-    from = s.roadYFrom;
-    to = s.roadY;
+    const Seat* seat = seatOf(agent);
+    if (!seat) seat = guestOf(agent);
+    if (!seat || !seat->placed) return false;
+    from = seat->roadYFrom;
+    to = seat->roadY;
     return true;
 }
 
 bool DrivingHost::braking(const driving::Driving& d, int agent) const {
-    if (!drives(agent)) return false;
-    const driving::Car* c = d.car(seats_[static_cast<std::size_t>(seatOfAgent_[static_cast<std::size_t>(agent)])].car);
+    const Seat* seat = seatOf(agent);
+    if (!seat) seat = guestOf(agent);
+    if (!seat) return false;
+    const driving::Car* c = d.car(seat->car);
     if (!c || !c->driven) return false;
     return c->acceleration < -kBrakeLampDecel || c->speed < driving::kStandingBelow;
 }

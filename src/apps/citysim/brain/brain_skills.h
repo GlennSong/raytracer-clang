@@ -78,6 +78,26 @@ public:
     virtual bool spaceNear(PlaceRef door, CarRef car, PlaceRef& out) const = 0;
     // `car` takes the space. False: another car is in it.
     virtual bool takeSpace(PlaceRef space, CarRef car) = 0;
+
+    // A SPACE HELD FOR A DRIVER (ADR-0441). `who`'s plan ends a drive in `space`: from now until they park there or
+    // give the plan up, spaceNear tells nobody else that space. One person holds at most one space; holding another
+    // lets the first go. A world that keeps no holds (the default) leaves two drivers free to be told one space.
+    virtual void holdSpace(PlaceRef space, AgentId who) {
+        (void)space;
+        (void)who;
+    }
+    // `who` holds no space any more (their plan was dropped, or they have parked).
+    virtual void dropHold(AgentId who) { (void)who; }
+    // THE SPACE TO TRY NEXT: `car` stands in the lane beside `taken`, which another car is in. The next nearest space
+    // to `door` that is free for `who` this moment. False (the default): none, and the drive ends in "cannot park".
+    virtual bool nextSpace(PlaceRef door, CarRef car, AgentId who, PlaceRef taken, PlaceRef& out) const {
+        (void)door;
+        (void)car;
+        (void)who;
+        (void)taken;
+        (void)out;
+        return false;
+    }
 };
 
 // A PLAN ASKED FOR: this person, standing here, wants to be at that place, with these traits and this car, and these

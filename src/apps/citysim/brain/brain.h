@@ -62,6 +62,9 @@ public:
     AgentId addAgent(PlaceRef home, IntentKind kind, uint8_t traits, CarRef car, Detail detail);
     std::size_t agentCount() const { return agents_.size(); }
     const AgentBrain& agent(AgentId id) const { return agents_[id]; }
+    // WHAT A PERSON HAS, changed (they were given a board, or lost it): bit i for travel.lua traits[i]. Read when they
+    // next plan; a trip under way is not planned again for it.
+    void setTraits(AgentId who, uint8_t traits) { agents_[who].traits = traits; }
 
     // A NEW INTENT: `who` now wants `kind` at `target`. The ways ruled out for the last intent are allowed again. It
     // arrives as the table's intent event, so the person's current state says what happens.

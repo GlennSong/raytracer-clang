@@ -628,6 +628,8 @@ add_library(citysim STATIC
     src/apps/citysim/city_spectate.cpp   # spectate camera: cycle + follow NPCs (headless-safe)
     # (trip_plan.cpp, the trip planner, is compiled in the `brain` library above, which citysim links)
     src/apps/citysim/city_trip.cpp       # a person sent somewhere: the plan carried out, drawn and followed
+    src/apps/citysim/city_brain.cpp      # the resident with the agent brain: the world, walking and driving for real (ADR-0441)
+    src/apps/citysim/city_brain_system.cpp   # ...seen and told: brain?, goto, the markers and the plan drawn
     src/apps/citysim/city_traffic_audio.cpp   # ambient traffic engine note (voice pool)
     src/apps/citysim/city_meshes.cpp
 )
@@ -1104,6 +1106,7 @@ add_executable(level_tests
     tests/main.cpp
     tests/test_levels_playable.cpp
     tests/test_traffic_lab_v2.cpp   # the traffic lab driven by the new model; a v1 level's state unchanged (#255, #235)
+    tests/test_brain_lab.cpp        # one resident with the agent brain makes a whole trip between markers (ADR-0441)
     # Drives the real LevelLoader, which needs a Renderer. NullRenderer
     # satisfies Renderer::create() without a GPU (exactly one create() is linked
     # per target, and this target links no backend).

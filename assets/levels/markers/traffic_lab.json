@@ -1,0 +1,13 @@
+{
+  "_comment": "THE TRAFFIC LAB'S MARKERS (ADR-0441): named points beside streets, where a resident with the agent brain can be told to be (goto <marker>). Read by traffic_lab.json and brain_lab.json (citysim.markers names this file). A marker states a street of the road file by its id, a station (metres along that road's centre line) and a kerb: along = the kerb of the traffic running along the centre line, against = the kerb of the traffic running against it. One (south) is given as a plan point instead, which the road model looks up by position (the interim form). home: a local street with kerb parking on the west side of the grid. work: a local street on the east side, about 760 m away on foot, far enough that the car is worth its five minutes of getting in and out; the drive crosses the boulevards' lights. shop: about 370 m east of home along the same line of streets, a walk or a skateboard ride. far: the north-east corner, outside the ring road. oneway: on the one-way ring road, which has no kerb parking (the car is left on a side street). ramp: a street that meets the ring road by the east freeway ramps. west and south: beyond home, and the south side.",
+  "markers": [
+    { "name": "home", "street": "s19", "station": 50.0, "kerb": "along" },
+    { "name": "work", "street": "s182", "station": 50.0, "kerb": "against" },
+    { "name": "shop", "street": "s106", "station": 45.0, "kerb": "along" },
+    { "name": "far", "street": "s288", "station": 35.0, "kerb": "along" },
+    { "name": "oneway", "street": "s249", "station": 75.0, "kerb": "along" },
+    { "name": "ramp", "street": "s223", "station": 50.0, "kerb": "against" },
+    { "name": "west", "street": "s229", "station": 50.0, "kerb": "along" },
+    { "name": "south", "at": [15.0, -425.0] }
+  ]
+}

@@ -231,6 +231,30 @@ TEST_CASE(brain_trip_no_route_and_cannot_park_plan_again_without_the_car) {
     }
 }
 
+// A TAKEN SPACE, AND A WORLD THAT NAMES THE NEXT (ADR-0441). Another car takes the far space (1300 m) during the drive,
+// and there is a free one at 1200 m, the next nearest to the door. Beside the taken space at 282 s the person is told
+// the one at 1200 m: the leg now ends there, and they drive to it, 100 m in 12.5 s, park (90 s), and walk the 300 m to
+// the door (216 s). The car is not ruled out and nothing is planned again.
+TEST_CASE(brain_trip_a_taken_space_is_answered_with_the_next_when_the_world_names_one) {
+    Scene s(Detail::Near);
+    if (!s.lab.ok) return;
+    const PlaceRef nextSpace = s.lab.space(1200);
+    s.lab.world.offersNextSpace = true;
+    s.setOut();
+    CHECK(s.lab.planOf(s.who) == "walk>2 car>3 walk>1");
+    s.lab.runTo(200000);
+    s.lab.world.addCar(s.farSpace);
+    s.lab.runTo(700000);
+    CHECK(s.lab.traceOf(s.who) ==
+          "walking@0 pulling_out@72000 driving@132000 parking@282000 driving@282000 parking@294500 walking@384500 indoors@600500");
+    const AgentBrain& a = s.lab.machine->agent(s.who);
+    CHECK(a.ruledOut == 0 && s.lab.machine->counts().plans == 1u);
+    CHECK(s.lab.planOf(s.who) == "walk>2 car>" + std::to_string(nextSpace.id) + " walk>1");
+    CHECK(s.lab.world.spaceCar[nextSpace.id] == s.car.id);       // their car stands in the next space
+    CHECK(s.lab.world.spaceCar[s.farSpace.id] == 1u);             // ...and the other car's in the one it took
+    CHECK(s.lab.world.cars[0].heldBy == kNoAgent && s.lab.world.cars[0].standing == nextSpace);
+}
+
 TEST_CASE(brain_trip_possessed_suspends_the_intent_and_release_resumes_it) {
     Lab lab;
     CHECK(lab.ok);

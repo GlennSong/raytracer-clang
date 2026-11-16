@@ -1,9 +1,9 @@
 # The agent brain: how a resident decides, holds what it is doing, and moves between states
 
 Status: design, agreed in outline with Glenn on 2026-11-16. The brain's core is built as a library with tests
-(ADR-0440, `src/apps/citysim/brain/`), driven by stand-in skills and not yet wired into the crowd or the lab:
-section 14 says what is built and where the build had to differ from this page. The first thing to be seen
-on it is one resident making one trip in the traffic lab (section 9).
+(ADR-0440, `src/apps/citysim/brain/`): section 14 says what is built and where the build had to differ from this
+page. The first thing to be seen on it, one resident making one trip in the traffic lab, is built too
+(ADR-0441; section 9 says what was built and where it differs). It is not wired into the crowd.
 
 ## Words used here
 
@@ -204,6 +204,44 @@ Road-model work this stands on (agreed 2026-11-16):
 - the physics body follows the simulated car for now; the body becomes the truth with visible crashes;
 - the junction code is used as it is (one car never exercises it) and reworked when two agents first meet.
 
+### Built (ADR-0441, 2026-11-16)
+
+Where to see it: the level `assets/levels/brain_lab.json` (the traffic lab's roads with one resident and no other
+traffic). The glue between the brain library and the city sim is `src/apps/citysim/city_brain.h`; the verbs and the
+drawing are `city_brain_system.h`; the test is `tests/test_brain_lab.cpp`.
+
+| Step above | Built | How |
+|---|---|---|
+| 1. an intent | yes | "be at that MARKER". Glenn decided markers, not buildings: a marker is a named point beside a street, stated in the level by street, station and kerb. The traffic lab has eight |
+| 2. plans among the ways they have | yes | walk, car, skateboard, scooter, by the trip planner; `brain trait has_board on` changes the next plan |
+| 3. walks to the car, gets in, pulls out | yes, pulling out is a slide | walks on the sim's own walking; gets in; when the kerb lane beside the space is clear the car is placed in it and drawn sliding out over 2.5 s |
+| 4. drives on the new driving | yes | lanes, turns, lights and stop lines are the driving's own; the car is one more car in it |
+| 5. parks, gets out, walks to the door | yes, parking is a slide | stops in the kerb lane beside the space held for it, slides in over 2.5 s, the person gets out on the kerb side and walks to the marker |
+| 6. is there | yes | stands at the marker (the intent `be_outside_at`) |
+| inspectable | by a verb, not by selecting | `brain?` gives one line; the screen shows what they want, the plan and the state |
+
+Where the build differs from this section, or this page did not say:
+
+1. **A marker, not a building's door.** Nothing here reads a lot or a door. When the lot pass records each
+   door's street, station and kerb, a door becomes a place the same way a marker is.
+2. **The two fixed waits are long to watch.** The car's row of `travel.lua` gives 2 minutes at the start of a
+   drive and 3 at its end, and the brain's pulling-out and parking states last exactly those. On screen the
+   person gets into the car and sits in it for two minutes before it moves, and sits in it for three after it
+   has slid into its space. The numbers are the planner's and were not changed. To be decided: shorter numbers
+   for a kerb space, or the minutes spent doing something visible.
+3. **A short trip is never driven.** With five fixed minutes, the car wins only beyond about 650 m on foot. The
+   traffic lab is 1.1 km across, so `home` and `work` had to be put on opposite sides for the car to be chosen.
+4. **A space is held from the moment the plan chooses it** until the driver parks there or drops the plan (my
+   choice, for Glenn to confirm; it answers section 14's difference 5 for now).
+5. **A taken space is answered with the next nearest free one** (section 7's "another space"): the car drives on
+   to it. Only when there is none does the person leave the car and walk (section 14's difference 6 stands for
+   "no route").
+6. **A new intent at the wheel is taken up only after the whole old trip**: they park, walk to the old marker,
+   and plan again from there, so they may walk straight back to the car. Redirecting the drive
+   (`Driving::changeDestination`) is not built.
+7. **Waiting for a clear lane has no limit.** A car that cannot pull out because the kerb lane is busy waits in
+   its space for as long as it takes.
+
 ## 10. Order after that
 
 1. One agent, one trip (above): the brain's core, the states for walking, driving, pulling out, parking.
@@ -287,8 +325,9 @@ with stand-in skills (`brain_tests`):
 | Section 9, inspectable | one line per person: intent, plan, leg, state, since when, waiting for what | `Machine::describe` |
 | Section 9, the real driving | the drive skill over the driving library, and the road model's kerb spaces as places. Not yet driven end to end | `brain_driving.h` |
 
-**Not built**: the real walking skill over the city sim's walkers; a World over the real city (doors, cars,
-the clock); the lab resident of section 9; the middle level; dealing boards and scooters to the population.
+**Not built**: the middle level; dealing boards and scooters to the population; a world over a real city's
+doors. (Built since, ADR-0441 and section 9: the real walking skill over the city sim's walkers, a world over
+the traffic lab's markers, its car and the clock, and the lab resident.)
 
 **Where the build differs from this page, and why.**
 

@@ -37,6 +37,12 @@ namespace citysim {
 
 class CityRenderSystem;
 class CitySpectateSystem;
+class CitySim;
+
+// A FEW STEPS OFF THE PATHS for walker `who`, as a person takes them: out to the pavement on `from`'s side of its
+// street, along to the pavement level with `to`, and in. The points to walk by, the next first, ending at `to`. Shared
+// by the trip lab and the agent brain's walk skill (city_brain.h).
+std::vector<engine::Vec2> stepsOffThePaths(const CitySim& sim, int who, engine::Vec2 from, engine::Vec2 to);
 
 class CityTripSystem : public engine::System {
 public:

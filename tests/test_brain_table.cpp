@@ -86,7 +86,12 @@ TEST_CASE(brain_shipped_data_reads_compiles_and_binds) {
     CHECK(compiled);
     if (!compiled) return;
     // every state of the design's section 5, and which are built
-    CHECK(table.states.size() == 21u && table.events.size() == 19u && table.intents.size() == 1u);
+    // (20 events and 2 intents since ADR-0441: `space_taken`, and `be_outside_at` for a place with no building)
+    CHECK(table.states.size() == 21u && table.events.size() == 20u && table.intents.size() == 2u);
+    CHECK(table.intents[0].name == "be_at" && table.intents[1].name == "be_outside_at");
+    CHECK(table.states[table.intents[1].arrive].name == "standing");
+    CHECK(table.on[table.state("parking")][table.event("space_taken")].verb == Verb::Go);
+    CHECK(table.on[table.state("parking")][table.event("space_taken")].state == table.state("driving"));
     std::string built, notBuilt;
     for (const StateRow& s : table.states) (s.fns.built ? built : notBuilt) += s.name + " ";
     CHECK(built == "walking on_small_wheels pulling_out driving parking indoors standing knocked_down stuck crashed "

@@ -149,6 +149,78 @@ static uint64_t textureKey(const TextureData& td) {
 static std::string g_levelPath;
 static json g_levelRoot;
 
+// THE CITY SIM'S MARKERS AND ITS RESIDENT WITH THE AGENT BRAIN (components.h CityMarker, CityResident; ADR-0441).
+// `"markers"` is a list, or the name of a file beside the level that holds {"markers": [...]}. A row that cannot be
+// read is left out and named in the log.
+static void readCityMarkers(const json& cs, const std::string& levelPath, CitySimConfig& cfg) {
+    json list;
+    std::string where = "citysim.markers";
+    if (cs.contains("markers") && cs["markers"].is_string()) {
+        const std::string file = cs["markers"].get<std::string>();
+        const std::size_t slash = levelPath.find_last_of('/');
+        const std::string path = slash == std::string::npos ? file : levelPath.substr(0, slash + 1) + file;
+        where = path;
+        std::ifstream in(path);
+        json root;
+        try {
+            in >> root;
+        } catch (const std::exception&) {
+            root = json();
+        }
+        if (root.is_object() && root.contains("markers")) list = root["markers"];
+        else LOG_WARN << "citysim: the markers file " << path << " is missing or holds no \"markers\" list -- no markers";
+    } else if (cs.contains("markers")) {
+        list = cs["markers"];
+    }
+    if (list.is_array())
+        for (const json& row : list) {
+            CityMarker m;
+            m.name = row.is_object() ? row.value("name", std::string()) : std::string();
+            if (m.name.empty()) {
+                LOG_WARN << where << ": a marker with no name -- left out";
+                continue;
+            }
+            const std::string kerb = row.value("kerb", std::string("along"));
+            if (row.contains("street") && row["street"].is_string() && row.contains("station") && row["station"].is_number() &&
+                (kerb == "along" || kerb == "against")) {
+                m.stated = true;
+                m.street = row["street"].get<std::string>();
+                m.station = row["station"].get<double>();
+                m.dir = kerb == "along" ? 1 : -1;
+            } else if (row.contains("at") && row["at"].is_array() && row["at"].size() == 2 && row["at"][0].is_number() &&
+                       row["at"][1].is_number()) {
+                m.x = row["at"][0].get<double>();
+                m.z = row["at"][1].get<double>();
+            } else {
+                LOG_WARN << where << ": marker " << m.name
+                         << " needs \"street\", \"station\" and \"kerb\" (along|against), or \"at\": [x, z] -- left out";
+                continue;
+            }
+            cfg.markers.push_back(m);
+        }
+    if (cs.contains("resident") && cs["resident"].is_object()) {
+        const json& r = cs["resident"];
+        cfg.resident.present = true;
+        cfg.resident.home = r.value("home", std::string());
+        cfg.resident.intent = r.value("intent", std::string());
+        cfg.resident.car = r.value("car", true);
+        if (r.contains("traits") && r["traits"].is_array())
+            for (const json& t : r["traits"])
+                if (t.is_string()) cfg.resident.traits.push_back(t.get<std::string>());
+        if (r.contains("day") && r["day"].is_array())
+            for (const json& stop : r["day"]) {
+                if (!stop.is_object() || !stop.contains("at") || !stop["at"].is_string()) {
+                    LOG_WARN << "citysim.resident.day: a stop needs \"at\": a marker's name -- left out";
+                    continue;
+                }
+                CityResident::Stop s;
+                s.at = stop["at"].get<std::string>();
+                s.minutes = stop.value("minutes", 0.0);
+                cfg.resident.day.push_back(s);
+            }
+    }
+}
+
 
 // parseVec3/parseOrientation and propagateWaterSeaLevel come from
 // level_params.h — one definition for both this loader and the offline
@@ -6417,6 +6489,7 @@ bool LevelLoader::load(const std::string& path,
             else
                 LOG_WARN << "citysim: homeNear must be [x, z] -- ignored";
         }
+        readCityMarkers(cs, g_levelPath, cfg);
         cfg.ambientBus = cs.value("ambientBus", cfg.ambientBus);
         // Scripted goal tables (ADR-0064): `"agents": "agents.lua"` names a
         // goal-table script; its TEXT rides the config so the citysim bridge

@@ -293,6 +293,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.wander = c.wander;
         params_.schedule = c.schedule;
         params_.homeNear = c.homeNear;
+        params_.markers = c.markers;
+        params_.resident = c.resident;
         params_.ambientBus = c.ambientBus;
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
@@ -2181,6 +2183,17 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // follow-up); seeded to the warmed-up speed so the first bake sees no spurious
     // deceleration.
     drawCache_.clear();   // (an agent's speed history seeds on its first look: AgentDrawCache::fresh)
+
+    // THE MARKERS AND THE RESIDENT WITH THE AGENT BRAIN (ADR-0441; city_brain.h), on a level that states any and that
+    // the new driving drives. Last, once the city is seeded: seeding puts every walker where its day has it, and the
+    // resident is put at their home marker after that.
+    if ((!params_.markers.empty() || params_.resident.present) && sim_.drivingV2() && sim_.drivingHost().active()) {
+        std::string brainReport;
+        if (sim_.startBrain(params_.markers, params_.resident, drivingClassOfSlot, &brainReport))
+            LOG_INFO << "[citysim] agent brain: " << brainReport;
+        else
+            LOG_WARN << "[citysim] agent brain: no markers and no resident on this level: " << brainReport;
+    }
 
     built_ = true;
     syncGroups(world);

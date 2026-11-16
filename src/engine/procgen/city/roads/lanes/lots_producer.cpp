@@ -98,6 +98,12 @@ public:
         // is, so every level without one keeps its key.
         nlohmann::json citysimKey = in.level.value("citysim", nlohmann::json::object());
         if (citysimKey.is_object()) citysimKey.erase("driving");
+        // ...nor its markers and its resident with the agent brain (ADR-0441): named points beside streets and one
+        // person, read at load, which no lot reads. Erased only where they are, as above.
+        if (citysimKey.is_object()) {
+            citysimKey.erase("markers");
+            citysimKey.erase("resident");
+        }
         k = bundle::fnv1aStr(citysimKey.dump(), k);
         // The ground the lots stand on: the terrain and water blocks, and the cell it is drawn at -- the terrain
         // without its forest, which the loader places at load and the lots never read (a species mix tweak on the

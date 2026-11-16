@@ -157,6 +157,23 @@ bool FakeWorld::takeSpace(PlaceRef space, CarRef car) {
     return true;
 }
 
+bool FakeWorld::nextSpace(PlaceRef door, CarRef, AgentId, PlaceRef taken, PlaceRef& out) const {
+    Vec2 at;
+    if (!offersNextSpace || !positionOf(door, at)) return false;
+    bool found = false;
+    Real best = 0;
+    for (std::size_t i = 0; i < places.size(); ++i) {
+        if (spaceCar[i] != CarRef::kNone || i == taken.id) continue;   // (kNotSpace, or a car stands in it)
+        const Real d = (places[i] - at).lengthSquared();
+        if (!found || d < best) {
+            found = true;
+            best = d;
+            out.id = static_cast<uint32_t>(i);
+        }
+    }
+    return found;
+}
+
 // ---- walking -------------------------------------------------------------------------------------------------------------
 FakeWalk::FakeWalk(FakeWorld& world, const TravelCatalog& travel, EventId arrived) : world_(world), arrived_(arrived) {
     for (const TravelMode& m : travel.modes) speeds_.push_back(m.speed);

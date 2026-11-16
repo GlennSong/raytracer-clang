@@ -73,6 +73,12 @@ public:
     // After the driving's tick: its events posted to the machine, each to the person at the wheel. An "ended early"
     // that this skill asked for itself (endTrip above) is not passed on: the brain already knows.
     void report(Machine& machine);
+    // The same for a host that drains the driving's events itself and shares them out (the city sim's hand-over,
+    // which other cars' drivers read too): `events` are the ones for this skill's cars, in the driving's order.
+    void report(Machine& machine, const std::vector<driving::Event>& events);
+    // The data's event one of the driving's kinds arrives as (bindEvents), for a host that must raise one itself (a
+    // trip it could only begin later, and then could not).
+    EventId eventFor(driving::EventKind kind) const { return events_[static_cast<uint8_t>(kind)]; }
 
 private:
     driving::Driving& driving_;

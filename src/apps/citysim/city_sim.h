@@ -35,7 +35,14 @@
 #include <unordered_map>
 #include <vector>
 
+namespace engine {
+struct CityMarker;     // components.h: a named point beside a street (ADR-0441)
+struct CityResident;   // ...and the level's one resident with the agent brain
+}  // namespace engine
+
 namespace citysim {
+
+class CityBrain;      // city_brain.h: the resident with the agent brain (ADR-0441)
 
 using engine::Real;   // the engine's scalar (double); used throughout the sim
 
@@ -183,6 +190,11 @@ struct Agent {
     // 40 m link leaves an agent 20 m from the door, or the car, it was sent to.
     Real stopAtDist = -1;
     bool directed = false;   // brain = host input; the sim won't auto-drive it
+    // A DIRECTOR'S PACE ON FOOT (ADR-0441: the agent brain's walk skill, city_brain.h): while above 0, this walker moves
+    // at that many times the walking speed and is drawn on `directedRide` (a board, a scooter, or nothing), whatever
+    // activity its trip is for. 0: the trip's own (CitySim::ridePace, rideOf).
+    float directedPace = 0;
+    Ride directedRide = Ride::None;
     bool released = false;           // ejected by the player (ADR-0062): the sim stops
                                      // driving this agent's ghost so it can't fight the
                                      // now player-driven physical car
@@ -444,6 +456,8 @@ constexpr Real kErrandOffLink = 15.0;
 // with nothing wrong. Reaching a car you can see across the road is a person crossing it, so the reach is a street's
 // width. Getting to the STREET is still the director's problem, which is the part that matters.
 constexpr Real kBoardReach = 25.0;
+// A walker's speed (m/s) before its own pace and what it rides on (Agent::speedFactor, CitySim::ridePace).
+constexpr Real kWalkSpeed = 1.4;
 
 struct SimVehicle {
     Real length = 4.2;
@@ -1410,6 +1424,13 @@ public:
     bool drivenByV2(int agent) const { return drivingHost_.drives(agent); }
     // The hand-over's side of it: counts, costs, the measurements, road heights for drawing (`driving?`).
     const DrivingHost& drivingHost() const { return drivingHost_; }
+    // THE RESIDENT WITH THE AGENT BRAIN (ADR-0441; city_brain.h, where these two are defined): the level's markers and
+    // its one resident, driven by the brain library over this sim's walking and the new driving. Call once, after
+    // startDrivingV2 has succeeded. False, with the reason in `report`, when it cannot be set up; then the level has no
+    // such resident. `classOfSlot` as startDrivingV2's. brain(): null when there is none.
+    bool startBrain(const std::vector<engine::CityMarker>& markers, const engine::CityResident& resident,
+                    const std::vector<int>& classOfSlot, std::string* report);
+    CityBrain* brain() const { return brain_.get(); }
     // Does this agent drive one trip straight into the next (the level's wander mode, or a roaming role's day)?
     // The chained-arrival corner, the final-leg turn yield and the no-parking rules ask this, not wander_.
     bool roams(const Agent& a) const {
@@ -2229,6 +2250,11 @@ private:
     std::shared_ptr<const engine::RoadModel> drivingRoads_;
     std::string drivingRoadsReport_ = "no lane graph yet";
     DrivingHost drivingHost_;   // the drivers handed to the new model (startDrivingV2); inactive on a v1 level
+    // The resident with the agent brain and everything it needs (startBrain; city_brain.h). It reads and moves this
+    // sim's agents and vehicles directly, as the hand-over above does, so it is a friend. Null: none.
+    friend class CityBrain;
+    std::shared_ptr<CityBrain> brain_;
+    void tickBrain(Real dt);    // one tick of it, after the driving's (defined in city_brain.cpp)
     // Three-tier traffic state (P4): the fed bubble centre, the fixed-frame
     // counter the V buckets key off (frameIndex_ % vTickDivisor — no wall
     // clock), and the lifetime transition counters the tests gate on.

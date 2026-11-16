@@ -52,6 +52,8 @@ brain = {
 
   intents = {
     { name = "be_at", arrive = "indoors" },
+    -- at a place with no building to go into (a marker beside a street, ADR-0441): there, they stand outside
+    { name = "be_outside_at", arrive = "standing" },
   },
 
   events = {
@@ -64,6 +66,8 @@ brain = {
     { name = "parked", otherwise = "refuse" },          -- driving: stopped at the destination, beside the space
     { name = "no_route", otherwise = "replan_without" },
     { name = "cannot_park", otherwise = "replan_without" },
+    -- raised by `parking`: the space is taken and the world named another near the door (ADR-0441)
+    { name = "space_taken", otherwise = "refuse" },
     { name = "missed_turn", otherwise = "ignore" },     -- the driving routes again by itself
     { name = "crashed", otherwise = "refuse" },
     { name = "ended_early", otherwise = "replan" },     -- something else ended the drive
@@ -92,9 +96,10 @@ brain = {
     -- `parked` is the driving's word for "stopped at the destination, in the lane beside the space"
     { name = "driving", group = "travelling", skill = "drive", ends = "skill", clock = "parked", where = "along_leg",
       on = { parked = "parking", crashed = "crashed" } },
-    -- beside the space: take it if it is still free, then the way's end minutes
+    -- beside the space: take it if it is still free, then the way's end minutes. Taken, and another space near the
+    -- door is free: drive on to that one (the leg now ends there). Taken, and none: `cannot_park`, the failed-leg rule
     { name = "parking", group = "travelling", skill = "drive", ends = "clock", clock = "done", where = "leg_end",
-      on = { done = "next_leg" } },
+      on = { done = "next_leg", space_taken = "driving" } },
 
     -- USING TRANSIT (NOT BUILT)
     { name = "waiting", group = "transit" },

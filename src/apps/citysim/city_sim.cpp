@@ -64,7 +64,7 @@ constexpr Real kBusDwellMax = 40.0;
 // How far from its destination a driver will park and walk: a few blocks.
 constexpr Real kParkSearch = 250.0;
 constexpr Real kWalkerKerbStep = 0.6;   // a walker's wait at a junction: this far back from the box's edge
-constexpr Real kWalkSpeed = 1.4;
+// (kWalkSpeed, a walker's speed, is in city_sim.h: the agent brain's walk skill sets a pace against it, ADR-0441)
 // "Wakes on nothing": a rest with no dwell and no commute. Large enough to mean
 // never in any real session, finite so the arithmetic stays ordinary.
 constexpr Real kNeverWakes = 1e9;
@@ -508,6 +508,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         drivingV2_->setVehicleClasses(std::move(classes));
     }
     drivingHost_.reset();
+    brain_.reset();   // the resident with the agent brain names the old agents too (startBrain makes it again)
     agents_.clear();
     vehicles_.clear();
     sensed_.clear();
@@ -2640,6 +2641,8 @@ void CitySim::dormantGlide(Agent& a, Real seconds) {
 Ride CitySim::rideOf(int i) const {
     if (i < 0 || i >= static_cast<int>(agents_.size())) return Ride::None;
     const Agent& a = agents_[static_cast<std::size_t>(i)];
+    // a director's pace (Agent::directedPace, ADR-0441): what it rides on is the director's too
+    if (a.mode == Agent::Mode::Pedestrian && a.directedPace > 0) return a.speed > 0 ? a.directedRide : Ride::None;
     if (a.mode != Agent::Mode::Pedestrian || !a.moving || a.tripActivity < 0 ||
         a.tripActivity >= static_cast<int>(catalog_.defs.size()))
         return Ride::None;
@@ -2647,6 +2650,7 @@ Ride CitySim::rideOf(int i) const {
 }
 
 Real CitySim::ridePace(const Agent& a) const {
+    if (a.mode == Agent::Mode::Pedestrian && a.directedPace > 0) return a.directedPace;   // (ADR-0441)
     if (a.mode != Agent::Mode::Pedestrian || a.tripActivity < 0 || a.tripActivity >= static_cast<int>(catalog_.defs.size()))
         return 1.0;
     const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(a.tripActivity)];
@@ -6813,6 +6817,8 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         if (drivingHost_.active()) drivingHost_.tick(*drivingV2_, simDt, agents_, vehicles_);
         else drivingV2_->tick(simDt);
     }
+    // THE RESIDENT WITH THE AGENT BRAIN (ADR-0441), after the driving: its reports are answered and its skills stepped.
+    if (brain_) tickBrain(simDt);
     // RT_TRACE_AGENT=<id>: that agent's plan, every tick (with the speed watchdog: what a flickering one is doing)
     static const int traceId = std::getenv("RT_TRACE_AGENT") ? std::atoi(std::getenv("RT_TRACE_AGENT")) : -1;
     if (traceId >= 0 && traceId < static_cast<int>(agents_.size())) {

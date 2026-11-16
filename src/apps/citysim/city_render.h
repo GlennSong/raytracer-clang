@@ -114,6 +114,8 @@ struct CityRenderParams {
     bool wander = false;                   // perpetual random trips (the agent lab)
     bool schedule = true;                  // false: everyone waits at home to be sent (CitySim::setDaySchedule)
     std::vector<double> homeNear;          // [x, z]: the lab person lives in the home nearest it (CitySim::moveHome)
+    std::vector<engine::CityMarker> markers;   // named points beside streets (CitySimConfig::markers, ADR-0441)
+    engine::CityResident resident;         // one person with the agent brain (CitySimConfig::resident; city_brain.h)
     bool ambientBus = false;               // ambient rotation includes the bus body (wheel_lab)
     // Scripted goal tables (ADR-0064): the SOURCE of an agents.lua-style script
     // whose archetype tables replace the sim's built-ins at build. Loaded from

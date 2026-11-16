@@ -79,7 +79,8 @@
     "dormancy": false,
     "realLanes": true,
     "driving": "v2",
-    "drivingRules": "rules/lab.lua"
+    "drivingRules": "rules/lab.lua",
+    "markers": "markers/traffic_lab.json"
   },
   "dayNight": {
     "dayMinutes": 1440.0,

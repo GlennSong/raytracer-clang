@@ -522,9 +522,12 @@ Vec2 CityTripSystem::walkTarget(std::size_t k) const {
 // not straight along a front wall or across a corner. The pavement is the walkers' own (the verge they keep), on the
 // side of the street the point is on.
 std::vector<Vec2> CityTripSystem::footSteps(Vec2 from, Vec2 to) const {
-    const CitySim& sim = city_.sim();
+    return stepsOffThePaths(city_.sim(), who_, from, to);
+}
+
+std::vector<Vec2> stepsOffThePaths(const CitySim& sim, int who, Vec2 from, Vec2 to) {
     const engine::NavGraph& nav = *sim.graph();
-    const Real verge = sim.walkerVerge(sim.agents()[static_cast<std::size_t>(who_)]);
+    const Real verge = sim.walkerVerge(sim.agents()[static_cast<std::size_t>(who)]);
     auto pavement = [&](Vec2 p) {
         const int l = nav.nearestLink(p);
         if (l < 0) return p;

@@ -106,13 +106,28 @@ void driveExit(StepContext& ctx, AgentBrain& a, ExitWhy why) {
 }
 
 // ---- PARKING: the car is in the kerb lane beside its space. The space is taken if it is still free, and the way's end
-// minutes pass (into the space, out of the car, locking up). raises: 0 cannot_park
+// minutes pass (into the space, out of the car, locking up). raises: 0 cannot_park, 1 space_taken
+//
+// THE SPACE IS TAKEN (ADR-0441): the world is asked for the next nearest free space to the door the walk after this
+// leg goes to. When it names one, the leg now ends there, it is held for this person, and `space_taken` is raised: the
+// table sends the person back to driving, to that space. When it names none, `cannot_park`, as before. The state's own
+// data says the car took no space, so leaving the state does not park it.
+constexpr uint32_t kTookNoSpace = 1;
 BrainTime parkLasts(const StepContext& ctx, const AgentBrain& a) {
     const WayRow* way = legWayRow(ctx, a);
     return way ? way->endMillis : kNever;
 }
 EventId parkEnter(StepContext& ctx, AgentBrain& a) {
-    return ctx.world->takeSpace(legEndPlace(a), carOf(a)) ? kNoId : raised(ctx, a, 0);
+    const PlaceRef space = legEndPlace(a);
+    if (ctx.world->takeSpace(space, carOf(a))) return kNoId;
+    a.payload.word = kTookNoSpace;
+    PlaceRef door, next;
+    door.id = a.legCount > 0 ? a.legEnd[a.legCount - 1] : a.intentTarget;
+    if (!ctx.world->nextSpace(door, carOf(a), ctx.agent, space, next) || !next.valid() || next == space)
+        return raised(ctx, a, 0);
+    a.legEnd[a.legNow] = next.id;
+    ctx.world->holdSpace(next, ctx.agent);
+    return raised(ctx, a, 1);
 }
 EventId parkMidLeg(StepContext& ctx, AgentBrain& a, Real) {
     // raised from far part-way through parking: the car stands in the kerb lane beside its space
@@ -122,6 +137,7 @@ EventId parkMidLeg(StepContext& ctx, AgentBrain& a, Real) {
 void parkExit(StepContext& ctx, AgentBrain& a, ExitWhy why) {
     if (why == ExitWhy::Lowered) return;
     if (why == ExitWhy::Done) {
+        if (a.payload.word == kTookNoSpace) return;   // on to another space: the car stays in the lane, still theirs
         if (ctx.skillsRun && ctx.drive) ctx.drive->park(carOf(a), legEndPlace(a));
         ctx.world->parkCar(carOf(a), ctx.agent, legEndPlace(a));
         return;
@@ -174,7 +190,7 @@ void registerBehaviours(BehaviourSet& set) {
     parking.enter = parkEnter;
     parking.enterMidLeg = parkMidLeg;
     parking.exit = parkExit;
-    set.add("parking", parking, {"cannot_park"});
+    set.add("parking", parking, {"cannot_park", "space_taken"});
 
     StateFns released;
     released.enter = releasedEnter;

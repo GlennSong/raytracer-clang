@@ -111,8 +111,10 @@ void DrivingSkill::endTrip(CarRef car) {
 
 void DrivingSkill::park(CarRef car, PlaceRef) { driving_.removeCar(driving::CarId(car.id)); }
 
-void DrivingSkill::report(Machine& machine) {
-    for (const driving::Event& e : driving_.drainEvents()) {
+void DrivingSkill::report(Machine& machine) { report(machine, driving_.drainEvents()); }
+
+void DrivingSkill::report(Machine& machine, const std::vector<driving::Event>& events) {
+    for (const driving::Event& e : events) {
         const uint8_t kind = static_cast<uint8_t>(e.kind);
         if (kind >= driving::kEventKindCount || events_[kind] == kNoId) continue;
         if (e.kind == driving::EventKind::EndedEarly) {

@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "name": "brain_lab",
+  "_comment": "THE BRAIN LAB (ADR-0441; docs/agent-brain-design.md section 9): the traffic lab's roads and markers (assets/lanelab/planned/traffic_lab_lanelab.json, markers/traffic_lab.json) with ONE resident driven by the agent brain and no other traffic. They live at the marker `home`, their car in the kerb space nearest it, and go round work, shop and home, staying a minute at each. Tell them where to be with `goto <marker>`; `brain?` says what they want, their plan and what they are doing; `brain trait has_board on` gives them a skateboard. For background traffic raise `cars` (they take the role lab_driver and drive round for ever, as on traffic_lab).",
+  "entities": [
+    {
+      "id": 1,
+      "name": "ground",
+      "shape": "box",
+      "position": [
+        0.0,
+        -0.3,
+        0.0
+      ],
+      "size": [
+        1500.0,
+        0.4,
+        1500.0
+      ],
+      "material": {
+        "albedo": [
+          0.36,
+          0.42,
+          0.3
+        ],
+        "metallic": 0.0,
+        "roughness": 1.0,
+        "opacity": 1.0,
+        "emission": [
+          0,
+          0,
+          0
+        ],
+        "checkerboard": false
+      },
+      "physics": {
+        "motion": "static",
+        "friction": 0.9,
+        "restitution": 0.0
+      }
+    },
+    {
+      "id": 2,
+      "name": "streets",
+      "shape": "road",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "road": {
+        "builder": "lanes",
+        "graph": "assets/lanelab/planned/traffic_lab_lanelab.json",
+        "sidewalks": {
+          "arterial": 5.0,
+          "collector": 4.0,
+          "local": 3.5
+        }
+      }
+    }
+  ],
+  "citysim": {
+    "seed": 214,
+    "vehicles": "vehicles.lua",
+    "fleet": "fleet_lab",
+    "ambientBus": false,
+    "cars": 0,
+    "pedestrians": 1,
+    "wander": false,
+    "buildLots": false,
+    "buses": 0,
+    "busRoutes": 0,
+    "taxiFraction": 0.0,
+    "tiered": false,
+    "debugWidgets": false,
+    "perceptionReliability": 1.0,
+    "driverRole": "lab_driver",
+    "driverRoleShare": 1.0,
+    "dormancy": false,
+    "realLanes": true,
+    "driving": "v2",
+    "drivingRules": "rules/lab.lua",
+    "markers": "markers/traffic_lab.json",
+    "resident": {
+      "home": "home",
+      "intent": "be_outside_at",
+      "car": true,
+      "traits": [],
+      "day": [
+        { "at": "work", "minutes": 1.0 },
+        { "at": "shop", "minutes": 1.0 },
+        { "at": "home", "minutes": 0.5 }
+      ]
+    }
+  },
+  "dayNight": {
+    "dayMinutes": 1440.0,
+    "timeOfDay": 0.5
+  },
+  "player": {
+    "position": [
+      -40.0,
+      1.2,
+      -75.0
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.6
+    },
+    "friction": 0.5
+  },
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  }
+}

@@ -92,8 +92,22 @@ public:
 
     // Does the new model drive agent `agent`'s car?
     bool drives(int agent) const {
-        return agent >= 0 && agent < static_cast<int>(seatOfAgent_.size()) && seatOfAgent_[static_cast<std::size_t>(agent)] >= 0;
+        return (agent >= 0 && agent < static_cast<int>(seatOfAgent_.size()) && seatOfAgent_[static_cast<std::size_t>(agent)] >= 0) ||
+               guestOf(agent) != nullptr;
     }
+
+    // A GUEST (ADR-0441): a car in the model that the host neither puts down nor sends anywhere, because someone else
+    // does (the resident with the agent brain, city_brain.h). While `agent` is seated as a guest in `car`, the old
+    // model keeps away from them as from any driver here (drives), and whenever the car is on the model's road its
+    // place is copied into the agent and the vehicle after each tick like any other car's. While the car is off the
+    // road (standing in a kerb space) nothing is copied and roadHeight answers false. False: the host is not active,
+    // or the agent or the car already has a seat.
+    bool seatGuest(int agent, driving::CarId car);
+    // The guest gets out: the old model may see the agent again. Harmless for an agent that is no guest.
+    void unseatGuest(int agent);
+    // THE EVENTS OF CARS THE HOST DID NOT SEAT ITSELF (guests' cars), since the last call, in the order the model gave
+    // them. The host drains the model's events each tick; these are the ones that are not its own to act on.
+    std::vector<driving::Event> takeGuestEvents();
     // The lane graph's height under the middle of the agent's car at the start of the last tick and at its end (for
     // the drawing, which blends the two across the tick). False when the new model does not drive the agent's car.
     bool roadHeight(int agent, Real& from, Real& to) const;
@@ -137,7 +151,18 @@ private:
     // Copy the seat's car's place into its agent and vehicle; `snap` for a car just put down (drawn there at once).
     void mirror(const driving::Driving& d, Seat& s, std::vector<Agent>& agents, std::vector<SimVehicle>& vehicles,
                 bool snap);
+    // The seat of a car the host seated itself, or null.
+    const Seat* seatOf(int agent) const;
+    const Seat* guestOf(int agent) const {
+        for (const Seat& g : guests_)
+            if (g.agent == agent) return &g;
+        return nullptr;
+    }
+    // Keeps `e` for takeGuestEvents when its car is not one the host seated itself; true when it did.
+    bool keptForGuest(const driving::Event& e);
 
+    std::vector<Seat> guests_;                 // cars someone else drives (seatGuest), in the order they were seated
+    std::vector<driving::Event> guestEvents_;  // their events, until taken
     bool active_ = false;
     uint32_t seed_ = 0;
     std::vector<Seat> seats_;          // in car order

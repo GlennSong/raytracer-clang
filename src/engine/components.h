@@ -1013,6 +1013,41 @@ struct DayNightConfig {
     WeatherClimate climate;
 };
 
+// A MARKER (ADR-0441): a named point beside a street, where a resident with the agent brain can be told to be. It
+// stands in for a building's door on a level that has none (the traffic lab). STATED: a street of the road file by its
+// id, a station (metres along that road's centre line) and a kerb -- "along": the kerb of the traffic running along the
+// centre line; "against": of the traffic running against it -- so the road model answers with no search
+// (RoadModel::frontageOn). INTERIM: a plan point `at`, which the model looks up by position (RoadModel::frontageAt).
+//   "markers": [{"name": "home", "street": "s75", "station": 45, "kerb": "along"}, {"name": "south", "at": [15, -425]}]
+struct CityMarker {
+    std::string name;
+    bool stated = false;          // street, station and kerb are given
+    std::string street;           // the road file's street id
+    double station = 0;
+    int dir = 1;                  // +1: the kerb of the traffic running along the centre line; -1: against it
+    double x = 0, z = 0;          // the interim point
+};
+
+// ONE RESIDENT WITH THE AGENT BRAIN (ADR-0441; docs/agent-brain-design.md section 9): where they live (a marker), what
+// they have (travel.lua's traits by name; a car, parked in the kerb space nearest home), and their day: the markers
+// they go round, in order, staying `minutes` at each before leaving for the next. An empty day: they stay until told.
+// Before first setting out they wait at home for the minutes of the day's last stop (the stop the round comes back to).
+// `intent` is the row of brain.lua's `intents` their wants are (what they do once there: stand outside, go indoors).
+//   "resident": {"home": "home", "intent": "be_outside_at", "car": true, "traits": [],
+//                "day": [{"at": "work", "minutes": 2}, ...]}
+struct CityResident {
+    bool present = false;
+    std::string home;
+    std::string intent;
+    bool car = true;
+    std::vector<std::string> traits;
+    struct Stop {
+        std::string at;
+        double minutes = 0;
+    };
+    std::vector<Stop> day;
+};
+
 struct CitySimConfig {
     // Population: explicit counts, or -1 = BY DENSITY (roads-v2.1 4c) — the
     // citysim bridge computes counts from the built nav graph's lane-km /
@@ -1127,6 +1162,11 @@ struct CitySimConfig {
     // THE LAB PERSON'S HOME (`"homeNear": [x, z]`, ADR-0416): the first resident with a car lives in the home nearest
     // this point, their car parked outside it. Empty: wherever the population put them.
     std::vector<double> homeNear;
+    // MARKERS AND THE RESIDENT WITH THE AGENT BRAIN (ADR-0441). `"markers"`: a list, or the name of a file beside the
+    // level holding {"markers": [...]} (so two levels on the same roads share one list). `"resident"`: one person
+    // driven by the brain. Neither changes a lot, so neither is part of the lots' bake key (lots_producer.cpp).
+    std::vector<CityMarker> markers;
+    CityResident resident;
     bool ambientBus = false;             // a test lab's ambient rotation includes the bus body (wheel_lab)
                                          // (no schedule) — the lab car keeps lapping
     // Scripted goal tables (ADR-0064): the loaded TEXT of the level's

@@ -267,6 +267,8 @@ void Machine::replan(AgentId who, bool ruleOutThisWay, bool leave, BrainTime at,
     a.legCount = 0;
     a.legNow = 0;
     a.heldState = kNoId;
+    // the space the dropped plan held for its car is let go before the new plan is priced, so it can be chosen again
+    world_.dropHold(who);
     PlanLegs legs;
     if (!planner_.plan(ask, legs) || legs.count > kMaxLegs) {
         ++counts_.noPlans;
@@ -280,6 +282,15 @@ void Machine::replan(AgentId who, bool ruleOutThisWay, bool leave, BrainTime at,
         a.legSeconds[i] = i < legs.count ? legs.seconds[i] : 0;
     }
     a.legCount = legs.count;
+    // A LEG THAT USES A VEHICLE ENDS WHERE THE VEHICLE IS LEFT: that space is held for this person from now until
+    // they park in it or drop the plan (ADR-0441), so no other plan is told it meanwhile. (The last such leg: a person
+    // holds one space.)
+    for (int i = 0; i < a.legCount; ++i)
+        if (a.legHandle(i) != kNoHandle) {
+            PlaceRef space;
+            space.id = a.legEnd[i];
+            world_.holdSpace(space, who);
+        }
     if (a.legCount == 0) arrive(who, at, depth);
     else beginLeg(who, at, depth);
 }

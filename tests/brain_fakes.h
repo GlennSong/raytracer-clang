@@ -54,6 +54,10 @@ public:
     void parkCar(CarRef car, AgentId who, PlaceRef space) override;
     bool spaceNear(PlaceRef door, CarRef car, PlaceRef& out) const override;
     bool takeSpace(PlaceRef space, CarRef car) override;
+    // THE NEXT SPACE (ADR-0441), only when a test asks for it (`offersNextSpace`): the nearest space to the door that
+    // no car stands in, other than `taken`. Off, as the world's default: none, and a taken space is "cannot park".
+    bool offersNextSpace = false;
+    bool nextSpace(PlaceRef door, CarRef car, AgentId who, PlaceRef taken, PlaceRef& out) const override;
 
     struct Car {
         PlaceRef standing;
