@@ -450,22 +450,147 @@ TEST_CASE(brain_trip_far_by_the_clock_alone_keeps_the_near_times) {
     }
 }
 
-TEST_CASE(brain_trip_an_intent_changed_on_the_way_is_taken_up_on_arriving) {
-    // A state that does not act on a new intent (driving) keeps going; on arriving, the person is not where they now
-    // want to be, and goes on from there. From the door at 1500 m to one at 1900 m: 400 m on foot (4.8 min) beats the
-    // car parked 200 m back, 288 s.
-    Scene s(Detail::Near);
-    if (!s.lab.ok) return;
-    const PlaceRef further = s.lab.door(1900);
-    s.setOut();
-    s.lab.runTo(200000);
-    s.lab.machine->setIntent(s.who, 0, further);
-    s.lab.runTo(1000000);
-    CHECK(s.lab.traceOf(s.who) ==
-          "walking@0 pulling_out@72000 driving@132000 parking@282000 walking@372000 walking@516000 indoors@804000");
-    CHECK(s.lab.machine->counts().arrivals == 1u && s.lab.machine->counts().plans == 2u);
-    CHECK(s.lab.machine->agent(s.who).intentBegan == 200000u);
-    // ...and a new intent while walking is acted on at once: back home from 100 m out, 72 s
+// A NEW INTENT DURING A CAR LEG (ADR-0442). The usual scene, with a second door at 1900 m and a free kerb space beside it
+// at 1800 m (places 4 and 5). The person is told to be at the second door:
+//   AT THE WHEEL, at 200 s: the car is 68 s into the drive, 544 m on, at 644 m. The drive is redirected: the plan
+//     becomes "car to the space at 1800 m, walk to the door". 1156 m at 8 m/s is 144.5 s, so beside the space at
+//     344.5 s; parked 90 s later; the last 100 m on foot take 72 s.
+//   WHILE PULLING OUT, at 100 s: nothing happens until the drive begins at 132 s, and it is redirected as it begins: the
+//     car sets off for the space at 1800 m, 1700 m and 212.5 s away. The same times from there.
+//   WHILE PARKING, at 300 s: parking is finished (372 s). As they step out, the walk to the old door is dropped and
+//     the trip planned again from beside the car at 1300 m: on foot 600 m is 7.2 min; by car 62.5 s of driving, 150 s
+//     of pulling out and parking and 72 s on foot is 4.7 min, so they get back in. The walk to the car is no distance
+//     and is reported at the next tick (372.5 s); out of the space at 432.5 s, beside the new one at 495 s, parked at
+//     585 s, at the door at 657 s.
+TEST_CASE(brain_trip_a_new_intent_at_the_wheel_redirects_the_drive) {
+    {
+        Scene s(Detail::Near);
+        if (!s.lab.ok) return;
+        const PlaceRef further = s.lab.door(1900), spaceBeside = s.lab.space(1800);
+        CHECK(further.id == 4u && spaceBeside.id == 5u);
+        s.setOut();
+        s.lab.runTo(199500);
+        s.lab.machine->setIntent(s.who, 0, further);
+        s.lab.runTo(200000);
+        // redirected at once: still driving, the same car, a new plan of two legs
+        CHECK(s.lab.stateName(s.who) == "driving" && s.lab.planOf(s.who) == "car>5 walk>4");
+        CHECK(s.lab.machine->agent(s.who).legNow == 0 && s.lab.machine->agent(s.who).intentBegan == 199500u);
+        // (the planner prices the drive from the street's node nearest the car, at 600 m: 1200 m is 150 s, the 44 m to
+        // that node 5.5 s, and the way's 150 s of pulling out and parking -- the first minute of which is already
+        // behind a driver at the wheel, a known over-count: 305.5 s is 5.1 min. On foot is not priced: nobody leaves a
+        // car in a lane to walk.)
+        CHECK(s.lab.planner->lastReason() ==
+              "walk -- at the wheel of the car, car 6.3 min (5.1 car + 1.2 walk): car");
+        CHECK(s.lab.drive->begun == 1 && s.lab.drive->redirected == 1 && s.lab.drive->ended == 0);
+        Vec2 at;
+        CHECK(s.lab.drive->where(s.car, at) && approxEqual(at, Vec2(644, 0), engine::kSamePoint));
+        s.lab.runTo(700000);
+        CHECK(s.lab.traceOf(s.who) ==
+              "walking@0 pulling_out@72000 driving@132000 driving@200000 parking@344500 walking@434500 indoors@506500");
+        const BrainCounts& c = s.lab.machine->counts();
+        CHECK(c.plans == 2u && c.redirects == 1u && c.redirectsLeft == 0u && c.arrivals == 1u && c.refused == 0u && c.errors == 0u);
+        CHECK(s.lab.world.cars[0].standing == spaceBeside && s.lab.world.cars[0].heldBy == kNoAgent);
+        CHECK(s.lab.world.spaceCar[s.farSpace.id] == CarRef::kNone);   // the space first planned for was never taken
+    }
+    {
+        Scene s(Detail::Near);
+        if (!s.lab.ok) return;
+        const PlaceRef further = s.lab.door(1900);
+        s.lab.space(1800);
+        s.setOut();
+        s.lab.runTo(100000);
+        s.lab.machine->setIntent(s.who, 0, further);
+        s.lab.runTo(131500);
+        CHECK(s.lab.stateName(s.who) == "pulling_out" && s.lab.planOf(s.who) == "walk>2 car>3 walk>1");
+        CHECK(s.lab.machine->counts().plans == 1u);
+        s.lab.runTo(700000);
+        CHECK(s.lab.traceOf(s.who) ==
+              "walking@0 pulling_out@72000 driving@132000 driving@132000 parking@344500 walking@434500 indoors@506500");
+        CHECK(s.lab.machine->counts().plans == 2u && s.lab.machine->counts().redirects == 1u);
+        CHECK(s.lab.drive->begun == 1 && s.lab.drive->redirected == 1);
+    }
+    {
+        Scene s(Detail::Near);
+        if (!s.lab.ok) return;
+        const PlaceRef further = s.lab.door(1900), spaceBeside = s.lab.space(1800);
+        s.setOut();
+        s.lab.runTo(300000);
+        s.lab.machine->setIntent(s.who, 0, further);
+        s.lab.runTo(371500);
+        CHECK(s.lab.stateName(s.who) == "parking" && s.lab.machine->counts().plans == 1u);
+        s.lab.runTo(372000);
+        CHECK(s.lab.planOf(s.who) == "walk>3 car>5 walk>4");
+        CHECK(s.lab.planner->lastReason() == "walk 7.2 min, car 4.7 min (0.0 walk + 3.5 car + 1.2 walk): car");
+        s.lab.runTo(800000);
+        CHECK(s.lab.traceOf(s.who) ==
+              "walking@0 pulling_out@72000 driving@132000 parking@282000 walking@372000 walking@372000 pulling_out@372500 "
+              "driving@432500 parking@495000 walking@585000 indoors@657000");
+        const BrainCounts& c = s.lab.machine->counts();
+        CHECK(c.plans == 2u && c.redirects == 0u && c.arrivals == 1u && c.refused == 0u && c.errors == 0u);
+        CHECK(s.lab.world.cars[0].standing == spaceBeside);
+    }
+}
+
+// THE LANE BESIDE THE SPACE IS BUSY (ADR-0442): a car given a trip waits in its space until the lane is clear, and its
+// way says how long it waits (the test ways: 2 minutes). The usual scene.
+//   BUSY FOR GOOD: the drive begins at 132 s and the car does not move. At 252 s, two minutes on, the driving state
+//     raises `blocked`; it is answered at the next tick, 252.5 s: the car is ruled out, they get out beside it at 100 m
+//     and walk the 1400 m, 1008 s.
+//   CLEARED AT 180 s: the car sets off at the next tick, 180.5 s; 1200 m at 8 m/s is 150 s, so beside its space at
+//     330.5 s, parked at 420.5 s, and the 200 m on foot end at 564.5 s. Nothing is planned again.
+TEST_CASE(brain_trip_a_car_that_cannot_set_off_is_given_up_as_blocked_after_its_ways_limit) {
+    {
+        Scene s(Detail::Near);
+        if (!s.lab.ok) return;
+        s.lab.drive->laneBusy = true;
+        s.setOut();
+        s.lab.runTo(252000);
+        CHECK(s.lab.stateName(s.who) == "driving" && s.lab.drive->waitingToSetOff(s.car));
+        s.lab.runTo(252500);
+        const AgentBrain& a = s.lab.machine->agent(s.who);
+        CHECK(s.lab.stateName(s.who) == "walking" && a.ruledOut == (1u << kCar));
+        CHECK(s.lab.planOf(s.who) == "walk>1" && a.legSeconds[0] == 1008);
+        CHECK(s.lab.drive->ended == 1 && !s.lab.drive->waitingToSetOff(s.car));
+        Vec2 at;
+        CHECK(s.lab.drive->where(s.car, at) && approxEqual(at, Vec2(100, 0), engine::kSamePoint));   // it never moved
+        CHECK(s.lab.world.cars[0].heldBy == kNoAgent);
+        s.lab.runTo(1300000);
+        CHECK(s.lab.traceOf(s.who) == "walking@0 pulling_out@72000 driving@132000 walking@252500 indoors@1260500");
+        CHECK(s.lab.machine->counts().plans == 2u && s.lab.machine->counts().refused == 0u);
+    }
+    {
+        Scene s(Detail::Near);
+        if (!s.lab.ok) return;
+        s.lab.drive->laneBusy = true;
+        s.setOut();
+        s.lab.runTo(180000);
+        CHECK(s.lab.drive->waitingToSetOff(s.car));
+        s.lab.drive->laneBusy = false;
+        s.lab.runTo(700000);
+        CHECK(s.lab.traceOf(s.who) == "walking@0 pulling_out@72000 driving@132000 parking@330500 walking@420500 indoors@564500");
+        CHECK(s.lab.machine->counts().plans == 1u && s.lab.machine->agent(s.who).ruledOut == 0);
+    }
+    // A way with no limit waits for as long as it takes: an hour on, still in its space
+    {
+        TravelCatalog ways = testTravel();
+        ways.modes[kCar].setOffWaitMinutes = 0;
+        Lab lab(true, nullptr, &ways);
+        if (!lab.ok) return;
+        const PlaceRef home = lab.door(0), door = lab.door(1500), carSpace = lab.space(100);
+        lab.space(1300);
+        const CarRef car = lab.world.addCar(carSpace);
+        const AgentId who = lab.person(home, 0, car, Detail::Near);
+        lab.drive->laneBusy = true;
+        lab.machine->setIntent(who, 0, door);
+        lab.tick();
+        lab.runTo(3600000);
+        CHECK(lab.traceOf(who) == "walking@0 pulling_out@72000 driving@132000");
+        CHECK(lab.drive->waitingToSetOff(car));
+    }
+}
+
+TEST_CASE(brain_trip_a_new_intent_on_foot_is_acted_on_at_once) {
+    // back home from 100 m out, 72 s
     Lab lab;
     if (!lab.ok) return;
     const PlaceRef home = lab.door(0), shop = lab.door(500);

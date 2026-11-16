@@ -3,7 +3,8 @@
 Status: design, agreed in outline with Glenn on 2026-11-16. The brain's core is built as a library with tests
 (ADR-0440, `src/apps/citysim/brain/`): section 14 says what is built and where the build had to differ from this
 page. The first thing to be seen on it, one resident making one trip in the traffic lab, is built too
-(ADR-0441; section 9 says what was built and where it differs). It is not wired into the crowd.
+(ADR-0441, and its faults put right in ADR-0442; section 9 says what was built and where it differs). It is not
+wired into the crowd.
 
 ## Words used here
 
@@ -204,11 +205,12 @@ Road-model work this stands on (agreed 2026-11-16):
 - the physics body follows the simulated car for now; the body becomes the truth with visible crashes;
 - the junction code is used as it is (one car never exercises it) and reworked when two agents first meet.
 
-### Built (ADR-0441, 2026-11-16)
+### Built (ADR-0441, then ADR-0442, 2026-11-16)
 
 Where to see it: the level `assets/levels/brain_lab.json` (the traffic lab's roads with one resident and no other
 traffic). The glue between the brain library and the city sim is `src/apps/citysim/city_brain.h`; the verbs and the
-drawing are `city_brain_system.h`; the test is `tests/test_brain_lab.cpp`.
+drawing are `city_brain_system.h`; the test is `tests/test_brain_lab.cpp`. `python3 tools/brain_lab_probe.py` runs
+the trip in the viewer and takes the pictures, from behind and, where it matters, from above.
 
 | Step above | Built | How |
 |---|---|---|
@@ -218,7 +220,7 @@ drawing are `city_brain_system.h`; the test is `tests/test_brain_lab.cpp`.
 | 4. drives on the new driving | yes | lanes, turns, lights and stop lines are the driving's own; the car is one more car in it |
 | 5. parks, gets out, walks to the door | yes, parking is a slide | stops in the kerb lane beside the space held for it, slides in over 2.5 s, the person gets out on the kerb side and walks to the marker |
 | 6. is there | yes | stands at the marker (the intent `be_outside_at`) |
-| inspectable | by a verb, not by selecting | `brain?` gives one line; the screen shows what they want, the plan and the state |
+| inspectable | by a verb, not by selecting | `brain?` gives one line; the screen shows what they want, the plan, and what they are doing in the data's words with the marker they stand at |
 
 Where the build differs from this section, or this page did not say:
 
@@ -236,11 +238,26 @@ Where the build differs from this section, or this page did not say:
 5. **A taken space is answered with the next nearest free one** (section 7's "another space"): the car drives on
    to it. Only when there is none does the person leave the car and walk (section 14's difference 6 stands for
    "no route").
-6. **A new intent at the wheel is taken up only after the whole old trip**: they park, walk to the old marker,
-   and plan again from there, so they may walk straight back to the car. Redirecting the drive
-   (`Driving::changeDestination`) is not built.
-7. **Waiting for a clear lane has no limit.** A car that cannot pull out because the kerb lane is busy waits in
-   its space for as long as it takes.
+6. **A new intent at the wheel redirects the drive** (ADR-0442; before, it waited for the whole old trip). The
+   same trip of the same car is given a new end (`Driving::changeDestination`), the plan becomes "drive to the
+   space nearest the new place, walk", and the space held at the old place is let go for the new one. Told
+   while pulling out, they are redirected as the drive begins; told while parking, they finish parking and plan
+   again as they step out. In the data this is one row entry (`driving`: `new_intent = "redirect"`), and the
+   rule that a new intent a state ignores is delivered again to the trip's next state.
+7. **Waiting for a clear lane has a limit** (ADR-0442; before, none). The car's row of `travel.lua` says how long
+   (`set_off_wait_minutes`, 1.5, an estimate). After it the person gives the car up (`blocked`), leaves it in
+   its space and plans again without it. "Clear" now looks back 30 m along every path that leads into the
+   lane, not only along the lane itself.
+8. **The resident is the brain's, and the sim's day table does not place them** (ADR-0442): their agent is
+   marked `brainOwned`, and the one function every placing pass goes through leaves such a person alone. The
+   per-tick repair that put them back is gone.
+9. **A new person starts in the state their intent arrives in** (ADR-0442): at a marker that is "standing
+   outside", not "indoors". The screen says what they are doing in the data's words and which marker they
+   stand at.
+10. **Where the car stands at a red light was measured, and is right** (ADR-0442): its front 1 cm before the road
+    model's stop line, which is also the end of the lane path the driving stops at and the middle of the
+    painted bar. A picture from behind the car made it look 3 to 5 m past the bar; pictures from above show
+    it at the bar. A test holds it.
 
 ## 10. Order after that
 
@@ -356,7 +373,8 @@ the traffic lab's markers, its car and the clock, and the lab resident.)
    Knocked down and stuck do carry on with the same leg, from where it had got to.
 8. **A new intent is not acted on in every state.** Walking, indoors and standing act on it at once. A
    person pulling out, driving or parking finishes the leg; on arriving they are not where they now want to
-   be, and go on from there. This page did not say.
+   be, and go on from there. This page did not say. (Changed by ADR-0442: a driver is redirected at the
+   wheel; a state that ignores a new intent hands it to the trip's next state; section 9, difference 6.)
 9. **A far person part-way along a leg is placed on the straight line between the leg's ends.** No route is
    stored (section 4), so that is all the brain can say; whoever raises them finds the real route.
 10. **Near and far agree only as closely as a leg's whole seconds.** A leg's planned time is kept in whole

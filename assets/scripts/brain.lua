@@ -20,6 +20,7 @@
 --
 -- states:
 --   name    what it is called
+--   label   what a person in it is said to be doing, on screen ("getting into the car"); left out: the name
 --   group   for the reader: travelling, transit, at_place, resting, body, held
 --   skill   the skill it asks: "walk", "drive", or "none"
 --   ends    "never": only an event ends it.
@@ -37,8 +38,16 @@
 --   replan          drop the plan and plan again from where the person stands
 --   replan_without  the same, first ruling out the way of the leg that failed, for as long as this intent lasts
 --   resume          leave a state that holds and carry on with what was interrupted, from where it had got to
+--   redirect        stay in this state and in the vehicle of the leg under way, and go somewhere else in it: the plan
+--                   is made again as "in this vehicle from here to the space nearest the place now wanted, then on
+--                   foot", the old space is let go and the new one held, and the skill is told the new end (ADR-0442).
+--                   Only for a state C++ can send elsewhere (driving). When no such plan can be made, nothing changes
 --   ignore          nothing happens
 --   refuse          nothing happens, and it is counted as an event that should not have come
+--
+-- A NEW INTENT THAT A STATE IGNORES IS NOT LOST: it is delivered again on entering each later state of the same trip.
+-- So a driver told to be somewhere else while pulling out is redirected as the drive begins, and one told while parking
+-- finishes parking and plans again as they step out of the car (the walking row's `new_intent = "replan"`).
 --
 -- THE RULE FOR A LEG THAT FAILS is the events' `otherwise`: plan again from here, ruling out what failed.
 --
@@ -46,7 +55,8 @@
 -- States marked NOT BUILT are registered in C++ as such: nobody can enter one yet, and trying says so.
 
 brain = {
-  start = "indoors",            -- a new person
+  -- a new person is where they want to be, in their intent's `arrive` state; this one only when that is not built
+  start = "indoors",
   no_plan = "standing",         -- wants to be somewhere and has no way there
   intent_event = "new_intent",  -- how a new intent arrives
 
@@ -58,7 +68,8 @@ brain = {
 
   events = {
     -- the layers above and below
-    { name = "new_intent", otherwise = "ignore" },      -- acted on where a row says; else on arriving
+    -- acted on where a row says; else delivered again to the trip's next state, and at the latest on arriving
+    { name = "new_intent", otherwise = "ignore" },
     { name = "resume_intent", otherwise = "refuse" },   -- raised by `released`: the intent takes over again
     { name = "done", otherwise = "refuse" },            -- a state the clock ends has run its time
     -- what the skills report
@@ -85,49 +96,59 @@ brain = {
 
   states = {
     -- TRAVELLING
-    { name = "walking", group = "travelling", skill = "walk", ends = "skill", clock = "arrived", where = "along_leg",
-      on = { arrived = "next_leg", new_intent = "replan", knocked_down = "knocked_down", stuck = "stuck" } },
-    { name = "on_small_wheels", group = "travelling", skill = "walk", ends = "skill", clock = "arrived",
+    { name = "walking", label = "walking", group = "travelling", skill = "walk", ends = "skill", clock = "arrived",
       where = "along_leg",
       on = { arrived = "next_leg", new_intent = "replan", knocked_down = "knocked_down", stuck = "stuck" } },
-    -- at the car: take it if it is still there, then the way's start minutes
-    { name = "pulling_out", group = "travelling", skill = "drive", ends = "clock", clock = "done", where = "leg_start",
+    { name = "on_small_wheels", label = "riding small wheels", group = "travelling", skill = "walk", ends = "skill",
+      clock = "arrived", where = "along_leg",
+      on = { arrived = "next_leg", new_intent = "replan", knocked_down = "knocked_down", stuck = "stuck" } },
+    -- at the car: take it if it is still there, then the way's start minutes. (A new intent waits for the drive to
+    -- begin: it is delivered again there.)
+    { name = "pulling_out", label = "getting into the car", group = "travelling", skill = "drive", ends = "clock",
+      clock = "done", where = "leg_start",
       on = { done = "driving" } },
-    -- `parked` is the driving's word for "stopped at the destination, in the lane beside the space"
-    { name = "driving", group = "travelling", skill = "drive", ends = "skill", clock = "parked", where = "along_leg",
-      on = { parked = "parking", crashed = "crashed" } },
+    -- `parked` is the driving's word for "stopped at the destination, in the lane beside the space". A new intent at
+    -- the wheel redirects the drive. `blocked` (raised here when the car has waited its way's set_off_wait_minutes
+    -- for a clear lane to leave its space into) is answered by the failed-leg rule: plan again without the car
+    { name = "driving", label = "driving", group = "travelling", skill = "drive", ends = "skill", clock = "parked",
+      where = "along_leg",
+      on = { parked = "parking", crashed = "crashed", new_intent = "redirect" } },
     -- beside the space: take it if it is still free, then the way's end minutes. Taken, and another space near the
-    -- door is free: drive on to that one (the leg now ends there). Taken, and none: `cannot_park`, the failed-leg rule
-    { name = "parking", group = "travelling", skill = "drive", ends = "clock", clock = "done", where = "leg_end",
+    -- door is free: drive on to that one (the leg now ends there). Taken, and none: `cannot_park`, the failed-leg rule.
+    -- (A new intent waits until they are out of the car: it is delivered again to the walk that follows.)
+    { name = "parking", label = "parking and getting out", group = "travelling", skill = "drive", ends = "clock",
+      clock = "done", where = "leg_end",
       on = { done = "next_leg", space_taken = "driving" } },
 
     -- USING TRANSIT (NOT BUILT)
-    { name = "waiting", group = "transit" },
-    { name = "boarding", group = "transit" },
-    { name = "riding", group = "transit" },
-    { name = "alighting", group = "transit" },
-    { name = "hailing", group = "transit" },
+    { name = "waiting", label = "waiting at a stop", group = "transit" },
+    { name = "boarding", label = "boarding", group = "transit" },
+    { name = "riding", label = "riding", group = "transit" },
+    { name = "alighting", label = "getting off", group = "transit" },
+    { name = "hailing", label = "hailing a cab", group = "transit" },
 
     -- AT A PLACE
-    { name = "indoors", group = "at_place", on = { new_intent = "replan" } },
-    { name = "standing", group = "at_place", on = { new_intent = "replan" } },
-    { name = "using_spot", group = "at_place" },       -- NOT BUILT: sit, lie, lean
-    { name = "group_activity", group = "at_place" },   -- NOT BUILT
-    { name = "working_post", group = "at_place" },     -- NOT BUILT
+    { name = "indoors", label = "indoors", group = "at_place", on = { new_intent = "replan" } },
+    { name = "standing", label = "standing outside", group = "at_place", on = { new_intent = "replan" } },
+    { name = "using_spot", label = "using a spot", group = "at_place" },       -- NOT BUILT: sit, lie, lean
+    { name = "group_activity", label = "in a group activity", group = "at_place" },   -- NOT BUILT
+    { name = "working_post", label = "working a post", group = "at_place" },     -- NOT BUILT
 
     -- RESTING (NOT BUILT)
-    { name = "asleep", group = "resting" },
+    { name = "asleep", label = "asleep", group = "resting" },
 
     -- BODY TROUBLE: each holds what the person was doing
-    { name = "knocked_down", group = "body", holds = true, on = { got_up = "resume", possessed = "possessed" } },
-    { name = "stuck", group = "body", holds = true, on = { freed = "resume", possessed = "possessed" } },
+    { name = "knocked_down", label = "knocked down", group = "body", holds = true,
+      on = { got_up = "resume", possessed = "possessed" } },
+    { name = "stuck", label = "stuck", group = "body", holds = true, on = { freed = "resume", possessed = "possessed" } },
     -- after a crash the person goes on without the car
-    { name = "crashed", group = "body", holds = true, on = { got_up = "replan_without", possessed = "possessed" } },
+    { name = "crashed", label = "in a crash", group = "body", holds = true,
+      on = { got_up = "replan_without", possessed = "possessed" } },
 
     -- HELD: the player or a director decides. The intent is kept and nothing moves the person on until released.
-    { name = "possessed", group = "held", holds = true, on = { released = "released" } },
+    { name = "possessed", label = "held by the player", group = "held", holds = true, on = { released = "released" } },
     -- let go: the intent takes over again at once, planning from where the person now stands. (It holds too, so what
     -- was interrupted is still known for the moment it lasts: that is how a far person's place is worked out.)
-    { name = "released", group = "held", holds = true, on = { resume_intent = "replan" } },
+    { name = "released", label = "let go", group = "held", holds = true, on = { resume_intent = "replan" } },
   },
 }

@@ -107,6 +107,10 @@ TripPlan planTrip(const engine::NavGraph& nav, const TravelCatalog& cat, const T
     auto tooLong = [&](const TravelMode& m, const TripLeg& l) {
         return m.longestLegMinutes > 0 && engine::strictlyPast(l.minutes, m.longestLegMinutes, kSameMinutes);
     };
+    // A VEHICLE IN HAND: the person is in it on the road, so the trip is made in it and no other way is priced.
+    const OwnedVehicle* inHand = nullptr;
+    for (const OwnedVehicle& ov : req.vehicles)
+        if (ov.inHand && !inHand) inHand = &ov;
     for (std::size_t i = 0; i < cat.modes.size(); ++i) {
         const TravelMode& m = cat.modes[i];
         const int mode = static_cast<int>(i);
@@ -152,6 +156,11 @@ TripPlan planTrip(const engine::NavGraph& nav, const TravelCatalog& cat, const T
             o.why = "needs " + m.needs;
         } else if (ruledOut(mode)) {
             o.why = "ruled out (a leg of it could not be done)";
+        } else if (inHand && inHand->mode != mode) {
+            o.why = "at the wheel of the " + cat.modes[static_cast<std::size_t>(inHand->mode)].name;
+        } else if (inHand) {
+            o.possible = leg(mode, inHand->at, inHand->leaveAt, LegEnd::VehicleLeft, "no route by " + m.name) &&
+                         footLeg(inHand->leaveAt, req.to, LegEnd::Door, "no route from where the " + m.name + " is left");
         } else if (!m.ownVehicle) {
             o.possible = leg(mode, req.from, req.to, LegEnd::Door,
                              "no route on the " + std::string(m.roads ? "roads" : "footpaths"));

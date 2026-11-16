@@ -63,6 +63,9 @@ public:
     // followed there) but leaving the debug widgets as they are, and stay on it while it has no body to show
     // (indoors, between car and pavement) rather than moving on to someone else. K, [ or ] let go of it as before.
     void follow(int agentIndex) { pendingFollow_ = agentIndex; }
+    // Stop following from the next frame, as K does: the view goes back to the camera and player systems (the control
+    // channel's `camera` verb can then place it). Harmless when nothing is followed.
+    void letGo() { pendingLetGo_ = true; }
 
 private:
     // Frame the chase camera for the followed agent's mode: a longer arm for a
@@ -80,6 +83,7 @@ private:
     Agent::Mode framedFor_ = Agent::Mode::Pedestrian;
     int pendingFollow_ = -1;       // follow()'s agent, taken up by the next update
     bool held_ = false;            // following follow()'s agent: kept through frames it has no body
+    bool pendingLetGo_ = false;    // letGo(), taken up by the next update
 };
 
 }  // namespace citysim

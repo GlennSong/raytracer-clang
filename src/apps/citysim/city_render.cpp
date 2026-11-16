@@ -111,7 +111,12 @@ void refreshBounds(InstanceGroup* g) {
 bool CityRenderSystem::carOccupied(int ai) const {
     if (ai < 0 || ai >= static_cast<int>(sim_.agents().size())) return false;
     if (ai == playerRidingAgent_ || ai == playerSeatAgent_) return true;   // the car you are in
-    return sim_.agents()[static_cast<std::size_t>(ai)].moving || sim_.onService(ai);
+    const Agent& a = sim_.agents()[static_cast<std::size_t>(ai)];
+    // A PERSON THE AGENT BRAIN OWNS IS IN THE CAR WHENEVER THEY ARE AT ITS WHEEL (ADR-0442), moving or not: the brain's
+    // pulling-out and parking states are a person sitting in a car in its space, and the brain takes them out of it
+    // when they leave. (For everyone else a car at rest stands empty: its person is indoors.)
+    if (a.brainOwned && a.mode == Agent::Mode::Driver) return true;
+    return a.moving || sim_.onService(ai);
 }
 
 Vec2 CityRenderSystem::drawnAgentPos(int i, Vec2* heading) const {

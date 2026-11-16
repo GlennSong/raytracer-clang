@@ -108,11 +108,16 @@ public:
     bool beginTrip(CarRef car, AgentId person, PlaceRef fromSpace, PlaceRef toSpace, Real fractionDone) override;
     void endTrip(CarRef car) override;
     void park(CarRef car, PlaceRef space) override;
+    // The trip now ends at `toSpace`: a waiting car sets off for there; one on its way goes on from where it is now,
+    // at the same speed. False with `noRoute`, or for a car on no trip.
+    bool changeDestination(CarRef car, PlaceRef toSpace) override;
+    bool waitingToSetOff(CarRef car) const override;
     void tick(Machine& machine);
     bool where(CarRef car, Vec2& out) const;    // false: the drive has not touched this car
 
     struct Trip {
         bool placed = false, onTrip = false, touched = false;
+        bool waiting = false;   // given a trip, and still in its space: the lane beside it is busy
         Vec2 at, from, to;
         BrainTime start = 0, end = 0;
         AgentId person = kNoAgent;
@@ -121,7 +126,10 @@ public:
     std::vector<Trip> trips;   // by car
     bool reversed = false;
     bool noRoute = false;      // every beginTrip is refused
-    int pulledOut = 0, begun = 0, ended = 0, parked = 0;
+    // THE LANE BESIDE EVERY SPACE IS BUSY: a trip begun while it is waits in its space, and sets off (taking its whole
+    // time from then) on the first tick after it is cleared.
+    bool laneBusy = false;
+    int pulledOut = 0, begun = 0, ended = 0, parked = 0, redirected = 0;
 
 private:
     Trip& tripOf(CarRef car);
@@ -132,7 +140,7 @@ private:
 // The test street: along x from 0 to 2000 m, a node every 100 m, walkable and drivable.
 engine::NavGraph longStreet();
 // The ways of travelling, as numbers: walk 5 km/h (100 m in 72 s); car at the router's speeds (a local street 8 m/s),
-// 1 minute to pull out, 1.5 to park; skateboard 10 km/h (100 m in 36 s), for someone with a board, a leg of at most 6
+// 1 minute to pull out, 1.5 to park, and at most 2 minutes waiting for a clear lane to set off into; skateboard 10 km/h (100 m in 36 s), for someone with a board, a leg of at most 6
 // minutes (1000 m), a minute of it minded as 1.2; scooter the same at 12 km/h, at most 6 minutes. Each begins in the
 // state travel.lua says.
 TravelCatalog testTravel();

@@ -111,6 +111,20 @@ void DrivingSkill::endTrip(CarRef car) {
 
 void DrivingSkill::park(CarRef car, PlaceRef) { driving_.removeCar(driving::CarId(car.id)); }
 
+bool DrivingSkill::changeDestination(CarRef car, PlaceRef toSpace) {
+    const driving::CarId id(car.id);
+    const driving::TripId trip = driving_.tripOf(id);
+    const engine::LaneGraph* roads = driving_.roads();
+    driving::PathPoint to;
+    if (!trip.valid() || !driving_.car(id) || !roads || !lanes_.kerbLane(toSpace, to)) return false;
+    // (a place off the road is refused here, so that the one way the driving can still refuse is "no route", which it
+    // reports itself)
+    if (to.path.index >= roads->paths.size() || to.along < 0 || to.along > roads->paths[to.path.index].length) return false;
+    if (driving_.changeDestination(trip, to)) return true;
+    refusedHere_.push_back(id);
+    return false;
+}
+
 void DrivingSkill::report(Machine& machine) { report(machine, driving_.drainEvents()); }
 
 void DrivingSkill::report(Machine& machine, const std::vector<driving::Event>& events) {
@@ -124,8 +138,83 @@ void DrivingSkill::report(Machine& machine, const std::vector<driving::Event>& e
                 continue;
             }
         }
+        if (e.kind == driving::EventKind::NoRoute) {
+            // a new destination the driving refused: the brain was told by changeDestination's answer
+            const std::vector<driving::CarId>::iterator mine = std::find(refusedHere_.begin(), refusedHere_.end(), e.car);
+            if (mine != refusedHere_.end()) {
+                refusedHere_.erase(mine);
+                continue;
+            }
+        }
         machine.post(static_cast<AgentId>(e.person), events_[kind], e.car.index);
     }
+}
+
+// ---- room to put a car into a lane -------------------------------------------------------------------------------------
+
+namespace {
+// The most stretches of path one question looks back over. Each uses up some of the distance, so only paths of no
+// length could reach it; reaching it answers "not clear" (the car waits) rather than looking for ever.
+constexpr int kMostStretchesBack = 64;
+}  // namespace
+
+LaneRoom::LaneRoom(const driving::Driving& driving) : driving_(driving) {
+    const engine::LaneGraph* roads = driving_.roads();
+    const std::size_t n = roads ? roads->paths.size() : 0;
+    firstInto_.assign(n + 1, 0);
+    if (!roads) return;
+    // every "path, then the path after it" of the road, in path order
+    std::vector<std::pair<uint32_t, uint32_t>> leads;
+    for (uint32_t p = 0; p < n; ++p) {
+        const engine::Path& path = roads->paths[p];
+        for (uint32_t k = 0; k < path.next.count; ++k) {
+            const engine::PathId next = roads->nextPaths[path.next.first + k];
+            if (next.index < n) leads.push_back({p, next.index});
+        }
+    }
+    for (const std::pair<uint32_t, uint32_t>& l : leads) ++firstInto_[l.second + 1];
+    for (std::size_t i = 0; i < n; ++i) firstInto_[i + 1] += firstInto_[i];
+    into_.resize(firstInto_[n]);
+    std::vector<uint32_t> filled(n, 0);
+    for (const std::pair<uint32_t, uint32_t>& l : leads) into_[firstInto_[l.second] + filled[l.second]++] = engine::PathId(l.first);
+}
+
+std::vector<engine::PathId> LaneRoom::pathsInto(engine::PathId path) const {
+    std::vector<engine::PathId> out;
+    if (path.index + 1 >= firstInto_.size()) return out;
+    for (uint32_t k = firstInto_[path.index]; k < firstInto_[path.index + 1]; ++k) out.push_back(into_[k]);
+    return out;
+}
+
+bool LaneRoom::clear(const driving::PathPoint& front, Real length, Real behind, Real ahead) const {
+    const engine::LaneGraph* roads = driving_.roads();
+    if (!roads || front.path.index + 1 >= firstInto_.size()) return false;
+    const driving::PathLists& lists = driving_.pathLists();
+    const Real pathLength = roads->paths[front.path.index].length;
+    // on the lane itself: from as far back as it goes to `ahead` past the front
+    const Real from = front.along - length - behind;
+    if (!driving::carsOnStretch(lists, front.path, std::max(Real(0), from), std::min(pathLength, front.along + ahead)).empty())
+        return false;
+    // what is left of `behind` before the lane's start, back along every path that leads in
+    struct Back {
+        engine::PathId path;   // a path leading in
+        Real left = 0;         // metres still to look back over, from its end
+    };
+    std::vector<Back> open;
+    const auto openInto = [&](engine::PathId path, Real left) {
+        if (!engine::strictlyPast(left, 0, engine::kSamePoint)) return;
+        for (uint32_t k = firstInto_[path.index]; k < firstInto_[path.index + 1]; ++k) open.push_back(Back{into_[k], left});
+    };
+    openInto(front.path, -from);
+    for (int looked = 0; !open.empty(); ++looked) {
+        if (looked >= kMostStretchesBack) return false;
+        const Back b = open.back();
+        open.pop_back();
+        const Real len = roads->paths[b.path.index].length;
+        if (!driving::carsOnStretch(lists, b.path, std::max(Real(0), len - b.left), len).empty()) return false;
+        openInto(b.path, b.left - len);
+    }
+    return true;
 }
 
 }  // namespace brain

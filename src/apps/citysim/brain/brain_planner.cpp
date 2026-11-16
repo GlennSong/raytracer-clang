@@ -22,14 +22,20 @@ bool TripPlanner::plan(const PlanAsk& ask, PlanLegs& out) {
     // a bike, needs the record to say which handle is which).
     PlaceRef carAt, leaveAt;
     Vec2 carPoint, leavePoint;
-    const bool haveCar = ask.car.valid() && ask.car.id <= kMaxHandle && world_.carStanding(ask.car, carAt) &&
-                         world_.positionOf(carAt, carPoint) && world_.spaceNear(ask.to, ask.car, leaveAt) &&
-                         world_.positionOf(leaveAt, leavePoint);
+    // AT THE WHEEL (ADR-0442) the car is where the person is, on the road, and it is theirs: the plan is made in it.
+    if (ask.atTheWheel) carPoint = ask.from;
+    const bool carKnown = ask.car.valid() && ask.car.id <= kMaxHandle &&
+                          (ask.atTheWheel || (world_.carStanding(ask.car, carAt) && world_.positionOf(carAt, carPoint)));
+    const bool haveCar = carKnown && world_.spaceNear(ask.to, ask.car, leaveAt) && world_.positionOf(leaveAt, leavePoint);
+    if (ask.atTheWheel && !haveCar) {
+        lastError_ = "at the wheel, and there is no free kerb space near place " + std::to_string(ask.to.id);
+        return false;
+    }
     if (haveCar) {
-        const bool isFree = world_.carFreeFor(ask.car, ask.agent);
+        const bool isFree = ask.atTheWheel || world_.carFreeFor(ask.car, ask.agent);
         for (std::size_t i = 0; i < travel_.modes.size(); ++i)
             if (travel_.modes[i].ownVehicle)
-                req.vehicles.push_back(OwnedVehicle{static_cast<int>(i), carPoint, leavePoint, isFree});
+                req.vehicles.push_back(OwnedVehicle{static_cast<int>(i), carPoint, leavePoint, isFree, ask.atTheWheel});
     }
     const TripPlan trip = planTrip(nav_, travel_, req);
     lastReason_ = trip.reason;

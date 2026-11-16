@@ -250,24 +250,56 @@ bool FakeDrive::beginTrip(CarRef car, AgentId person, PlaceRef fromSpace, PlaceR
     if (!world_.positionOf(toSpace, to)) return false;
     t.placed = true;
     t.touched = true;
-    t.onTrip = true;
     t.person = person;
     t.from = from;
     t.to = to;
     t.fraction = fractionDone;
+    ++begun;
+    if (laneBusy) {
+        t.at = from;
+        t.waiting = true;
+        return true;
+    }
+    t.onTrip = true;
     const Real speed = engine::classSpeed(engine::RoadClass::Local);
     spanFrom(world_.clock, millisFor((to - from).length(), speed), fractionDone, t.start, t.end);
-    ++begun;
     return true;
 }
 
 void FakeDrive::endTrip(CarRef car) {
-    if (car.id >= trips.size() || !trips[car.id].onTrip) return;
+    if (car.id >= trips.size()) return;
     Trip& t = trips[car.id];
+    if (t.waiting) {
+        t.waiting = false;
+        ++ended;
+        return;
+    }
+    if (!t.onTrip) return;
     t.at = between(t.from, t.to, t.start, t.end, world_.clock);
     t.onTrip = false;
     ++ended;
 }
+
+bool FakeDrive::changeDestination(CarRef car, PlaceRef toSpace) {
+    Vec2 to;
+    if (noRoute || car.id >= trips.size() || !world_.positionOf(toSpace, to)) return false;
+    Trip& t = trips[car.id];
+    if (t.waiting) {
+        t.to = to;
+        ++redirected;
+        return true;
+    }
+    if (!t.onTrip) return false;
+    t.from = between(t.from, t.to, t.start, t.end, world_.clock);
+    t.to = to;
+    t.fraction = 0;
+    t.start = world_.clock;
+    t.end = t.start + millisFor((t.to - t.from).length(), engine::classSpeed(engine::RoadClass::Local));
+    ++redirected;
+    return true;
+}
+
+bool FakeDrive::waitingToSetOff(CarRef car) const { return car.id < trips.size() && trips[car.id].waiting; }
 
 void FakeDrive::park(CarRef car, PlaceRef space) {
     Trip& t = tripOf(car);
@@ -290,6 +322,14 @@ void FakeDrive::tick(Machine& machine) {
     for (std::size_t k = 0; k < n; ++k) {
         const std::size_t i = reversed ? n - 1 - k : k;
         Trip& t = trips[i];
+        if (t.waiting && !laneBusy) {
+            // the lane has cleared: it sets off now, and the drive takes its whole time from here
+            t.waiting = false;
+            t.onTrip = true;
+            spanFrom(world_.clock, millisFor((t.to - t.from).length(), engine::classSpeed(engine::RoadClass::Local)), t.fraction,
+                     t.start, t.end);
+            continue;
+        }
         if (!t.onTrip || t.end > world_.clock) continue;
         t.onTrip = false;
         t.at = t.to;
@@ -318,6 +358,7 @@ TravelCatalog testTravel() {
     car.speed = 0;
     car.startMinutes = 1.0;
     car.endMinutes = 1.5;
+    car.setOffWaitMinutes = 2.0;
     car.ownVehicle = true;
     car.beginsIn = "pulling_out";
     TravelMode board;

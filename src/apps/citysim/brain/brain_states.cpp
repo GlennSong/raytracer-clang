@@ -77,7 +77,13 @@ void pullOutExit(StepContext& ctx, AgentBrain& a, ExitWhy why) {
 }
 
 // ---- DRIVING: from the kerb lane beside the car's space to the kerb lane beside the space near the door. Its planned
-// time is the leg's less the way's start and end minutes. raises: 0 no_route, 1 vehicle_gone
+// time is the leg's less the way's start and end minutes. raises: 0 no_route, 1 vehicle_gone, 2 blocked
+//
+// SETTING OFF MAY HAVE TO WAIT (ADR-0442): the skill keeps the car in its space until the lane beside it is clear. Once
+// a tick the state asks whether it is still waiting, and after the way's limit (travel.lua `set_off_wait_minutes`)
+// raises `blocked`, which the table answers (the failed-leg rule: plan again without this way).
+//
+// SENT SOMEWHERE ELSE (the verb `redirect`): the leg now ends at another space, and the skill is told.
 BrainTime driveLasts(const StepContext& ctx, const AgentBrain& a) {
     const WayRow* way = legWayRow(ctx, a);
     const BrainTime leg = legMillis(a);
@@ -97,6 +103,17 @@ EventId driveEnter(StepContext& ctx, AgentBrain& a) { return driveFrom(ctx, a, 0
 EventId driveMidLeg(StepContext& ctx, AgentBrain& a, Real fractionDone) {
     if (!ctx.world->claimCar(carOf(a), ctx.agent)) return raised(ctx, a, 1);
     return driveFrom(ctx, a, fractionDone);
+}
+EventId driveRetarget(StepContext& ctx, AgentBrain& a) {
+    if (!ctx.skillsRun) return kNoId;   // far: the clock stands for the drive, to wherever it now ends
+    if (!ctx.drive) return raised(ctx, a, 0);
+    return ctx.drive->changeDestination(carOf(a), legEndPlace(a)) ? kNoId : raised(ctx, a, 0);
+}
+void driveStep(StepContext& ctx, AgentBrain& a) {
+    const WayRow* way = legWayRow(ctx, a);
+    if (!ctx.drive || !way || way->setOffWaitMillis == 0) return;
+    if (ctx.now - a.stateEntered < way->setOffWaitMillis) return;
+    if (ctx.drive->waitingToSetOff(carOf(a))) ctx.machine->post(ctx.agent, raised(ctx, a, 2));
 }
 void driveExit(StepContext& ctx, AgentBrain& a, ExitWhy why) {
     if (why == ExitWhy::Done) return;
@@ -183,7 +200,9 @@ void registerBehaviours(BehaviourSet& set) {
     driving.enter = driveEnter;
     driving.enterMidLeg = driveMidLeg;
     driving.exit = driveExit;
-    set.add("driving", driving, {"no_route", "vehicle_gone"});
+    driving.retarget = driveRetarget;
+    driving.step = driveStep;
+    set.add("driving", driving, {"no_route", "vehicle_gone", "blocked"});
 
     StateFns parking;
     parking.lasts = parkLasts;

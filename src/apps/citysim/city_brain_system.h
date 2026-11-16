@@ -12,12 +12,17 @@
 //   brain trait <name> on|off    give or take one of travel.lua's traits (has_board), used from their next plan
 //   brain day on|off             the day table: the round of markers the level states
 //   brain follow                 the spectate camera on the person
+//   brain follow off             the camera let go, so `camera <x> <y> <z> <pitch> <yaw>` can place it (a picture from
+//                                above or from the side)
 //   markers?                     every marker: its name, street, station, kerb and where a person stands at it
 //
-// Drawn: each marker as a post with a ring at its foot and its name (the one the resident wants to be at, brighter);
-// the resident's plan, each leg in its way's colour (travel.lua): a walk under way along the pavements it will take
-// (CitySim::walkPoses, as the trip lab draws it), a drive under way along the lanes of its route, a leg still to come
-// as a straight line between its ends.
+// Drawn: each marker as a ring round the spot where a person at it stands, a post beside the ring and its name (the
+// one the resident wants to be at, brighter); the post is beside the person, never through them (ADR-0442). The resident's
+// plan, each leg in its way's colour (travel.lua): a walk under way along the pavements it will take
+// (CitySim::walkPoses, as the trip lab draws it); a drive under way along the lanes and turns of its route, from the
+// car's front bumper on; a leg with no route yet (one still to come, a car that has not left its space) as a straight
+// DASHED line between its ends. On screen: what they want, the plan, and what they are doing in the data's own words
+// (brain.lua `label`) with the marker they stand at.
 
 #include "../../engine/control/control_commands.h"
 #include "../../engine/system.h"

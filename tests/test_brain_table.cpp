@@ -145,6 +145,19 @@ TEST_CASE(brain_shipped_data_reads_compiles_and_binds) {
     CHECK(table.states[table.ways[2].begins].name == "on_small_wheels");
     CHECK(table.states[table.ways[3].begins].name == "on_small_wheels");
     CHECK(table.ways[1].startMillis == 120000u && table.ways[1].endMillis == 180000u);   // 2 and 3 minutes
+    // ADR-0442: a car waits at most a minute and a half for a clear lane to leave its space into (a way on foot waits
+    // for nothing); a new intent at the wheel redirects the drive, and is left alone while pulling out and parking;
+    // `blocked` at the wheel is the failed-leg rule; every state has a display name
+    CHECK(table.ways[1].setOffWaitMillis == 90000u && table.ways[0].setOffWaitMillis == 0u);
+    CHECK(table.on[driving][table.intentEvent].verb == Verb::Redirect);
+    CHECK(table.on[table.state("pulling_out")][table.intentEvent].verb == Verb::Ignore);
+    CHECK(table.on[table.state("parking")][table.intentEvent].verb == Verb::Ignore);
+    CHECK(table.on[walking][table.intentEvent].verb == Verb::Replan);
+    CHECK(table.on[driving][table.event("blocked")].verb == Verb::ReplanWithout);
+    CHECK(table.states[driving].fns.retarget != nullptr && table.states[walking].fns.retarget == nullptr);
+    CHECK(table.states[table.state("pulling_out")].label == "getting into the car");
+    CHECK(table.states[table.state("standing")].label == "standing outside");
+    for (const StateRow& s : table.states) CHECK(!s.label.empty());
 }
 
 TEST_CASE(brain_data_that_disagrees_with_the_code_is_refused_by_file_and_key) {
@@ -205,6 +218,16 @@ TEST_CASE(brain_data_that_disagrees_with_the_code_is_refused_by_file_and_key) {
         s = shipped;
         stateNamed(s, "walking")->on.emplace_back("got_up", "resume");
         refused(s, {"brain.lua: states.walking.on.got_up", "resume", "does not hold"});
+    }
+    // redirect in a state whose behaviour cannot be sent elsewhere, and as an event's `otherwise`
+    {
+        BrainSpec s = shipped;
+        stateNamed(s, "parking")->on.emplace_back("new_intent", "redirect");
+        refused(s, {"brain.lua: states.parking.on.new_intent", "redirect", "cannot be sent elsewhere"});
+        s = shipped;
+        for (EventSpec& e : s.events)
+            if (e.name == "new_intent") e.otherwise = "redirect";
+        refused(s, {"brain.lua: events.new_intent.otherwise", "is redirect"});
     }
     // the named roles
     {

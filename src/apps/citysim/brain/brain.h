@@ -13,6 +13,12 @@
 // it ran out, not at the time the machine noticed, so a far person visited late has the same history as one visited
 // on time.
 //
+// A NEW INTENT THAT A STATE DID NOT ACT ON IS NOT LOST (ADR-0442): the plan under way then no longer leads where the
+// person wants to be (its last leg ends somewhere else). On entering each later state of that trip the intent's event
+// is delivered again, and that state's row says what happens: a driver who was told while pulling out is redirected as
+// the drive begins; one told while parking plans again as they step out of the car. A trip whose every later state
+// ignores it is finished, and the person goes on from where it ends.
+//
 // A HOST WITH A CLOCK QUEUE need not call tick() for far people: nextAttention() says when a person next needs a
 // visit, and step() visits one. tick() itself visits everybody, which is simple and is what the tests use.
 //
@@ -39,6 +45,8 @@ struct BrainCounts {
     uint64_t refused = 0;        // events that should not have come (the table's `refuse`)
     uint64_t errors = 0;         // things the machine could not do (lastError says the latest)
     uint64_t events = 0;         // events answered
+    uint64_t redirects = 0;      // legs under way sent somewhere else (the verb `redirect`)
+    uint64_t redirectsLeft = 0;  // ...asked for and not made (no plan in the vehicle): the old trip carries on
 };
 
 // One state entered: who, which, and at what time. What a trace is a list of.
@@ -58,7 +66,8 @@ public:
     // far (no skill is ever asked).
     Machine(const BrainTable& table, World& world, Planner& planner, WalkSkill* walk, DriveSkill* drive);
 
-    // A NEW PERSON at `home`, wanting to be there (intent `kind`), in the table's start state.
+    // A NEW PERSON at `home`, wanting to be there (intent `kind`) and there already: in that intent's arriving state
+    // (indoors at a building, standing at a place with none), or the table's start state where that is not built.
     AgentId addAgent(PlaceRef home, IntentKind kind, uint8_t traits, CarRef car, Detail detail);
     std::size_t agentCount() const { return agents_.size(); }
     const AgentBrain& agent(AgentId id) const { return agents_[id]; }
@@ -108,6 +117,9 @@ private:
     void beginLeg(AgentId who, BrainTime at, int depth);
     void arrive(AgentId who, BrainTime at, int depth);
     void replan(AgentId who, bool ruleOutThisWay, bool leave, BrainTime at, int depth);
+    void redirect(AgentId who, BrainTime at, int depth);
+    // `legs` become the person's plan, from its first leg; the space a vehicle leg ends in is held for them.
+    void takePlan(AgentId who, const PlanLegs& legs);
     void resume(AgentId who, BrainTime at, int depth);
     void runClock(AgentId who, bool nearNow);
     Vec2 whereIs(AgentId who, BrainTime at) const;

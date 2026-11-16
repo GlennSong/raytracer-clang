@@ -2294,7 +2294,8 @@ void CitySim::placeFromSchedule(int idx) {
     {
         const std::size_t i = static_cast<std::size_t>(idx);
         Agent& a = agents_[i];
-        if (a.playerControlled || a.released) return;
+        // (the player's, an ejected driver's, and a person the agent brain owns are not the day table's to place)
+        if (a.playerControlled || a.released || a.brainOwned) return;
         // With no day schedule a person the director has is left where the director has them (a clock jump re-seeds);
         // everyone else is at home.
         if (!daySchedule_ && a.directed) return;

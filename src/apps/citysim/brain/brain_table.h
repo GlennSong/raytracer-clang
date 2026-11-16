@@ -13,6 +13,11 @@
 //   replan          drop the plan and plan again from where the person stands
 //   replan_without  the same, first ruling out the way of the leg that failed (for as long as this intent lasts)
 //   resume          leave a state that holds and carry on with what was interrupted, from where it had got to
+//   redirect        stay in this state and in the vehicle of the leg under way, and go somewhere else in it: the plan is
+//                   made again as "in this vehicle from here to where it will be left, then on to the place wanted",
+//                   and the state's skill is told the leg now ends there (ADR-0442). Only a row of a state whose
+//                   behaviour can be sent elsewhere (StateFns::retarget) may say it. When no such plan can be made,
+//                   nothing changes, and the new intent is taken up when the old trip ends
 //   ignore          nothing happens
 //   refuse          nothing happens, and the machine counts it as an event that should not have come
 
@@ -38,7 +43,8 @@ constexpr int kMaxRaises = 4;     // events one state's functions may raise them
 // ---- THE DATA AS READ (names, before anything is checked) ----------------------------------------------------------------
 struct StateSpec {
     std::string name;
-    std::string group;            // for a reader: travelling, transit, at_place, resting, body, held
+    std::string label;            // what a person in it is said to be doing, on screen ("driving"); empty: its name
+    std::string group;           // for a reader: travelling, transit, at_place, resting, body, held
     std::string skill = "none";   // the skill it asks: one of BehaviourSet::skills, or "none"
     // HOW IT ENDS. "never": only an event ends it. "skill": the skill's report ends it for a near person, and the
     // clock for a far one (who has no skill running). "clock": the clock ends it for everyone.
@@ -104,6 +110,9 @@ struct StateFns {
     void (*step)(StepContext&, AgentBrain&) = nullptr;
     // An event has come for the person in this state, before the table's answer is carried out.
     void (*onEvent)(StepContext&, AgentBrain&, const BrainEvent&) = nullptr;
+    // THE LEG UNDER WAY NOW ENDS SOMEWHERE ELSE (the verb `redirect`): the plan has been made again, and its first leg
+    // is this one with a new end. The state tells its skill. The same return as enter.
+    EventId (*retarget)(StepContext&, AgentBrain&) = nullptr;
     // How long the state lasts as planned, in milliseconds (kNever: not known). The machine sets the state's due time
     // from it and works out fractions with it.
     BrainTime (*lasts)(const StepContext&, const AgentBrain&) = nullptr;
@@ -125,7 +134,7 @@ struct BehaviourSet {
 };
 
 // ---- THE COMPILED TABLE ------------------------------------------------------------------------------------------------------
-enum class Verb : uint8_t { Refuse, Ignore, Go, NextLeg, Replan, ReplanWithout, Resume };
+enum class Verb : uint8_t { Refuse, Ignore, Go, NextLeg, Replan, ReplanWithout, Resume, Redirect };
 struct Answer {
     Verb verb = Verb::Refuse;
     StateId state = kNoId;        // Go: where
@@ -135,6 +144,7 @@ enum class Where : uint8_t { Place, LegStart, AlongLeg, LegEnd };
 
 struct StateRow {
     std::string name, group, skill;
+    std::string label;            // the data's display name (never empty: the name where the data gives none)
     Ends ends = Ends::Never;
     EventId clock = kNoId;
     Where where = Where::Place;
@@ -152,6 +162,9 @@ struct WayRow {
     StateId begins = kNoId;       // the state a leg of it begins in
     BrainTime startMillis = 0;    // the way's fixed time at the start of a leg (pulling out)
     BrainTime endMillis = 0;      // ...and at its end (parking)
+    // The longest a leg of it waits to set off (travel.lua `set_off_wait_minutes`: a car for a clear lane beside its
+    // space) before it is given up as blocked. 0: no limit.
+    BrainTime setOffWaitMillis = 0;
 };
 
 struct BrainTable {
@@ -171,7 +184,8 @@ struct BrainTable {
 
 // The data checked and compiled against the registered behaviours. False, with `err` naming the file and the key at
 // fault, on: a state with no behaviour; a behaviour with no state; a skill C++ has no interface for; an `on` key that
-// is not an event; an answer that is neither a state nor a verb; `resume` in a state that does not hold; an event a
+// is not an event; an answer that is neither a state nor a verb; `resume` in a state that does not hold; `redirect`
+// in a state whose behaviour cannot be sent elsewhere, or as an event's `otherwise`; an event a
 // behaviour raises that the data lacks; a missing start, no_plan, intent_event or intent; two rows of one name; more
 // rows than the fixed tables hold.
 bool compileBrainTable(const BrainSpec& spec, const BehaviourSet& behaviours, BrainTable& out, std::string* err);

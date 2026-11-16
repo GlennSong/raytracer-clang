@@ -113,6 +113,12 @@ void CitySpectateSystem::update(engine::FrameContext& ctx) {
         held_ = true;
     }
     pendingFollow_ = -1;
+    // letGo(): as K, when something is followed.
+    if (pendingLetGo_) {
+        if (spectating_) stopSpectating(ctx);
+        held_ = false;
+        pendingLetGo_ = false;
+    }
 
     if (!spectating_) return;   // OFF: PlayerSystem / CameraSystem own the view.
 

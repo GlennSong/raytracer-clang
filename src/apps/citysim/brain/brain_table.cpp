@@ -18,6 +18,7 @@ const VerbName kVerbs[] = {
     {"refuse", Verb::Refuse},         {"ignore", Verb::Ignore},
     {"next_leg", Verb::NextLeg},      {"replan", Verb::Replan},
     {"replan_without", Verb::ReplanWithout}, {"resume", Verb::Resume},
+    {"redirect", Verb::Redirect},
 };
 
 bool verbOf(const std::string& word, Verb& out) {
@@ -99,6 +100,7 @@ bool compileBrainTable(const BrainSpec& spec, const BehaviourSet& behaviours, Br
         if (t.state(s.name) >= 0) return refuse(key, "is listed twice");
         StateRow row;
         row.name = s.name;
+        row.label = s.label.empty() ? s.name : s.label;
         row.group = s.group;
         row.skill = s.skill;
         row.holds = s.holds;
@@ -164,6 +166,9 @@ bool compileBrainTable(const BrainSpec& spec, const BehaviourSet& behaviours, Br
             return refuse("events." + ev.name + ".otherwise", "names `" + ev.otherwise + "`" + neither);
         if (otherwise[e].verb == Verb::Resume)
             return refuse("events." + ev.name + ".otherwise", "is resume, which only a row of a state that holds may say");
+        if (otherwise[e].verb == Verb::Redirect)
+            return refuse("events." + ev.name + ".otherwise",
+                          "is redirect, which only a row of a state that can be sent elsewhere may say");
     }
     for (std::size_t s = 0; s < spec.states.size(); ++s) {
         const StateSpec& st = spec.states[s];
@@ -180,6 +185,9 @@ bool compileBrainTable(const BrainSpec& spec, const BehaviourSet& behaviours, Br
             if (!answerOf(row.second, a)) return refuse(key, "names `" + row.second + "`" + neither);
             if (a.verb == Verb::Resume && !st.holds)
                 return refuse(key, "is resume, but `" + st.name + "` does not hold (holds = true)");
+            if (a.verb == Verb::Redirect && !t.states[s].fns.retarget)
+                return refuse(key, "is redirect, but the behaviour of `" + st.name + "` cannot be sent elsewhere (it has no "
+                                   "retarget function)");
             t.on[s][static_cast<std::size_t>(e)] = a;
         }
     }
@@ -230,6 +238,7 @@ bool bindWays(const TravelCatalog& travel, BrainTable& table, std::string* err) 
         w.begins = static_cast<StateId>(s);
         w.startMillis = millisOf(m.startMinutes);
         w.endMillis = millisOf(m.endMinutes);
+        w.setOffWaitMillis = millisOf(m.setOffWaitMinutes);
         ways.push_back(w);
     }
     table.ways = ways;

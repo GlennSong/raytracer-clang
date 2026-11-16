@@ -102,7 +102,6 @@ struct CityBrain::Impl {
         brain::WayId way = brain::kNoId;
         Vec2 target;
         std::vector<Vec2> steps;
-        Vec2 rest;   // where the brain last left them standing (kept there while no walk is under way)
     };
     std::vector<Person> people;
 
@@ -128,6 +127,7 @@ struct CityBrain::Impl {
     std::unique_ptr<brain::TripPlanner> planner;
     std::unique_ptr<FrontPoints> fronts;
     std::unique_ptr<brain::DrivingSkill> skill;
+    std::unique_ptr<brain::LaneRoom> room;   // whether a lane is clear to pull out into
     std::unique_ptr<LabWalk> walk;
     std::unique_ptr<LabDrive> drive;
     std::unique_ptr<brain::Machine> machine;
@@ -230,7 +230,6 @@ struct CityBrain::Impl {
     void tickWalks(Real dt);
     void tickCars(Real dt);
     void tickDay();
-    bool laneClear(const driving::PathPoint& front, Real length) const;
     void slideIn(CarRec& c, PlaceRef space);
 };
 
@@ -394,31 +393,15 @@ void CityBrain::Impl::haltWalker(AgentId who) {
     a.distOnLeg = 0;
     a.stopAtDist = -1;
     a.state = Agent::State::Resting;
-    p.rest = a.pos;
 }
 
 void CityBrain::Impl::tickWalks(Real dt) {
     for (AgentId who = 0; who < people.size(); ++who) {
         Person& p = people[who];
         Agent& a = agentOf(who);
-        if (p.walk == WalkPhase::None) {
-            // STANDING WHERE THE BRAIN LEFT THEM. The sim places its whole population again whenever its clock is set
-            // (the viewer opening the level at its hour, a `daynight` jump: CitySim::seedFromSchedule), and that would
-            // carry the resident off to wherever a day they do not keep has them. They are the brain's to move.
-            if (a.mode == Agent::Mode::Pedestrian &&
-                (a.moving || a.indoors || !engine::approxEqual((a.pos - p.rest).length(), 0, engine::kSamePoint))) {
-                a.pos = p.rest;
-                a.tickFromPos = p.rest;
-                a.moving = false;
-                a.indoors = false;
-                a.speed = 0;
-                a.route = engine::Route{};
-                a.wakeAt = -1;
-                a.state = Agent::State::Resting;
-                sim.grid_.place(p.agent, p.rest);
-            }
-            continue;
-        }
+        // (a person not walking is left as they are: nothing else moves them, since the sim's day table does not place
+        // an agent the brain owns -- Agent::brainOwned, ADR-0442)
+        if (p.walk == WalkPhase::None) continue;
         const brain::StateRow& state = table.states[machine->agent(who).state];
         bool arrived = false, blocked = false;
         if (p.walk == WalkPhase::Routed) {
@@ -506,6 +489,26 @@ struct CityBrain::Impl::LabDrive : brain::DriveSkill {
         c->phase = CarPhase::Standing;
         c->tripWanted = false;
     }
+    // The trip now ends beside `toSpace`. A car that has not left its space yet sets off for there when it does; one
+    // still sliding out has its trip begun to there when the slide ends; one on the road has its trip's end changed.
+    bool changeDestination(CarRef ref, PlaceRef toSpace) override {
+        CarRec* c = im.car(ref);
+        driving::PathPoint to;
+        if (!c || !im.fronts->kerbLane(toSpace, to)) return false;
+        if (c->tripWanted) {
+            c->tripTo = toSpace;
+            ++im.counts.redirected;
+            return true;
+        }
+        if (!c->onRoad || !im.skill->changeDestination(ref, toSpace)) return false;
+        c->tripTo = toSpace;
+        ++im.counts.redirected;
+        return true;
+    }
+    bool waitingToSetOff(CarRef ref) const override {
+        const CarRec* c = im.car(ref);
+        return c && c->phase == CarPhase::WaitingForRoom;
+    }
 };
 
 bool CityBrain::Impl::getIn(AgentId who, CarRec& c) {
@@ -537,7 +540,6 @@ void CityBrain::Impl::getOut(AgentId who, CarRec& c) {
         sim.grid_.place(agent, door);
     }
     c.aboard = false;
-    people[who].rest = a.pos;
     ++counts.alighted;
 }
 
@@ -554,13 +556,6 @@ void CityBrain::Impl::writeCarPose(CarRec& c, Vec2 pos, Vec2 heading) {
     } else {
         sim.parkedGrid_.place(c.vehicle, pos);
     }
-}
-
-bool CityBrain::Impl::laneClear(const driving::PathPoint& front, Real length) const {
-    const Real pathLength = d->roads()->paths[front.path.index].length;
-    const Real from = std::max(Real(0), front.along - length - kPullOutRoomBehind);
-    const Real to = std::min(pathLength, front.along + kPullOutRoomAhead);
-    return driving::carsOnStretch(d->pathLists(), front.path, from, to).empty();
 }
 
 // The space is the car's: it leaves the driving and is drawn sliding in from where it stands in the lane.
@@ -596,7 +591,7 @@ void CityBrain::Impl::tickCars(Real dt) {
             driving::PathPoint front;
             const Real length = d->vehicleClasses().at(c.vehicleClass).length;
             if (!fronts->kerbLane(c.standing, front)) continue;
-            if (!laneClear(front, length)) {
+            if (!room->clear(front, length, kPullOutRoomBehind, kPullOutRoomAhead)) {
                 ++counts.waitedForRoom;
             } else if (d->placeCar(id, c.vehicleClass, front)) {
                 c.onRoad = true;
@@ -714,6 +709,11 @@ bool CityBrain::start(const std::vector<engine::CityMarker>& markerSpecs, const 
             left += (left.empty() ? "" : ", ") + spec.name;
             continue;
         }
+        {
+            // the post: beside the ring, half-way between away from the road and along the street (city_brain.h)
+            const Vec2 away = unit(m.stand - m.frontage.on, Vec2(1, 0));
+            m.post = m.stand + unit(away + engine::perp(away), away) * kMarkerPostOffset;
+        }
         im.markers.push_back(m);
     }
     if (!left.empty())
@@ -748,6 +748,7 @@ bool CityBrain::start(const std::vector<engine::CityMarker>& markerSpecs, const 
     im.world = std::make_unique<Impl::LabWorld>(im);
     im.planner = std::make_unique<brain::TripPlanner>(*sim.nav_, im.travel, *im.world);
     im.fronts = std::make_unique<Impl::FrontPoints>(im);
+    im.room = std::make_unique<brain::LaneRoom>(*im.d);
 
     // THEIR CAR, standing in the kerb space nearest home on foot
     CarRef carRef;
@@ -791,6 +792,7 @@ bool CityBrain::start(const std::vector<engine::CityMarker>& markerSpecs, const 
     {
         Agent& a = sim.agents_[static_cast<std::size_t>(agent)];
         sim.setAgentDirected(agent, true);
+        a.brainOwned = true;   // the sim's day table never places them (CitySim::placeFromSchedule)
         sim.pinAgent(agent, true);
         a.pos = im.markers[static_cast<std::size_t>(home)].stand;
         a.tickFromPos = a.pos;
@@ -807,7 +809,6 @@ bool CityBrain::start(const std::vector<engine::CityMarker>& markerSpecs, const 
     }
     Impl::Person person;
     person.agent = agent;
-    person.rest = im.markers[static_cast<std::size_t>(home)].stand;
     im.people.push_back(person);
     const AgentId who = im.machine->addAgent(homePlace, im.intentKind, traits, carRef, brain::Detail::Near);
     im.trace.push_back(brain::Transition{who, im.machine->agent(who).state, im.now()});
@@ -865,6 +866,20 @@ void CityBrain::setDay(bool on) { impl_->dayOn = on && !impl_->day.empty(); }
 
 std::string CityBrain::stateName() const {
     return hasResident() ? impl_->table.states[impl_->machine->agent(0).state].name : std::string();
+}
+
+std::string CityBrain::stateLabel() const {
+    return hasResident() ? impl_->table.states[impl_->machine->agent(0).state].label : std::string();
+}
+
+std::string CityBrain::standingAt() const {
+    if (!hasResident()) return "";
+    const Impl& im = *impl_;
+    const Agent& body = im.sim.agents_[static_cast<std::size_t>(im.people[0].agent)];
+    if (body.mode != Agent::Mode::Pedestrian) return "";
+    for (const BrainMarker& m : im.markers)
+        if (engine::atOrBefore((body.pos - m.stand).length(), kWalkArrivedWithin, engine::kSamePoint)) return m.name;
+    return "";
 }
 
 std::string CityBrain::planText() const {

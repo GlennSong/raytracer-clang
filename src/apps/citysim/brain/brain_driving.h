@@ -10,7 +10,10 @@
 //   DrivingSkill  the brain's DriveSkill over the driving library's front door (apps/driving/driving.h), call for call,
 //                 and the driving's events handed to the machine as the data's events of the same names.
 //
-// Neither is wired into the city sim yet. NOT BUILT: beginning a drive part-way along its route (a person raised from
+//   LaneRoom      whether a lane is empty where a car leaving its kerb space would be put, looked at back along the
+//                 paths that lead into it (ADR-0442).
+//
+// The city sim's side is city_brain.h (ADR-0441). NOT BUILT: beginning a drive part-way along its route (a person raised from
 // far in mid-drive starts from wherever the car is placed, or from the start), and taking a car off the road when its
 // driver stops being watched.
 
@@ -69,6 +72,9 @@ public:
     bool beginTrip(CarRef car, AgentId person, PlaceRef fromSpace, PlaceRef toSpace, Real fractionDone) override;   // beginTrip
     void endTrip(CarRef car) override;                                                                  // endTrip
     void park(CarRef car, PlaceRef space) override;                                                     // removeCar
+    // changeDestination. When the driving has no route there it keeps the old one and reports "no route" itself; that
+    // report is not passed on (the answer here is false, which is what the brain acts on).
+    bool changeDestination(CarRef car, PlaceRef toSpace) override;
 
     // After the driving's tick: its events posted to the machine, each to the person at the wheel. An "ended early"
     // that this skill asked for itself (endTrip above) is not passed on: the brain already knows.
@@ -86,6 +92,29 @@ private:
     uint32_t vehicleClass_;
     EventId events_[driving::kEventKindCount];
     std::vector<driving::CarId> endedHere_;   // cars whose trip this skill ended since the last report
+    std::vector<driving::CarId> refusedHere_; // cars whose new destination the driving refused since the last report
+};
+
+// IS THERE ROOM TO PUT A CAR INTO A LANE (ADR-0442)? A car leaving a kerb space is put in the lane beside it with its
+// front at a point of a lane path. That needs the lane empty from `behind` metres behind where the car's rear will be
+// to `ahead` metres ahead of its front. BEHIND is measured back along the lane path and, where the path begins nearer
+// than that, on back along EVERY path that leads into it (a turn out of a junction, and the lanes arriving at that
+// turn), until the distance is used up: a car coming round the corner is as much in the way as one in the lane. AHEAD
+// is measured on the lane path alone. "Empty" is the driving's own lists of whose body is on which path
+// (traffic_state.h carsOnStretch), so a car's tail counts as well as its front.
+//
+// Made once for a road (it lists, for every path, the paths that lead into it; the road does not change).
+class LaneRoom {
+public:
+    explicit LaneRoom(const driving::Driving& driving);
+    bool clear(const driving::PathPoint& front, Real length, Real behind, Real ahead) const;
+    // The paths that lead into `path`, in path order.
+    std::vector<engine::PathId> pathsInto(engine::PathId path) const;
+
+private:
+    const driving::Driving& driving_;
+    std::vector<uint32_t> firstInto_;   // by path: where its list begins in into_ (one more entry than paths)
+    std::vector<engine::PathId> into_;
 };
 
 }  // namespace brain

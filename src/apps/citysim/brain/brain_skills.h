@@ -49,6 +49,17 @@ public:
     virtual void endTrip(CarRef car) = 0;
     // removeCar: the car leaves the lane for `space` and stands in it.
     virtual void park(CarRef car, PlaceRef space) = 0;
+    // changeDestination (ADR-0442): the trip `car` is on (or is waiting to set off on) now ends in the kerb lane beside
+    // `toSpace`, by the route from where the car is. False: it cannot be (no trip, or no route there: then the trip
+    // keeps its old end, and no report follows).
+    virtual bool changeDestination(CarRef car, PlaceRef toSpace) = 0;
+    // IS THE CAR STILL WAITING TO SET OFF on the trip it was given: in its space, the lane beside it not yet clear?
+    // The driving state asks it once a tick, to give the wait up after the way's limit (travel.lua
+    // `set_off_wait_minutes`). A skill that puts a car in the lane at once answers no.
+    virtual bool waitingToSetOff(CarRef car) const {
+        (void)car;
+        return false;
+    }
 };
 
 // THE WORLD'S ANSWERS.
@@ -109,6 +120,9 @@ struct PlanAsk {
     uint8_t traits = 0;
     uint16_t ruledOut = 0;
     CarRef car;
+    // AT THE WHEEL (the verb `redirect`, ADR-0442): the person is in `car` now, on the road at `from`. The plan is
+    // made in it: its first leg is that car from here to where it will be left.
+    bool atTheWheel = false;
 };
 // ...and the answer, in the record's own form.
 struct PlanLegs {

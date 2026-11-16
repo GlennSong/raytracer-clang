@@ -54,7 +54,9 @@ AgentId Machine::addAgent(PlaceRef home, IntentKind kind, uint8_t traits, CarRef
     a.intentKind = kind;
     a.intentTarget = home.id;
     a.intentBegan = now;
-    a.state = table_.start;
+    // they are where they want to be: in their intent's arriving state (the table's start state when that is not built)
+    const StateId there = kind < table_.intents.size() ? table_.intents[kind].arrive : kNoId;
+    a.state = there != kNoId && table_.states[there].fns.built ? there : table_.start;
     a.stateEntered = now;
     a.stateDue = kNever;
     a.heldState = kNoId;
@@ -201,7 +203,17 @@ bool Machine::enterState(AgentId who, StateId target, BrainTime at, int depth) {
     a.stateDue = lasts == kNever ? kNever : at + lasts;
     noteEntered(who, target, at);
     const EventId raised = row.fns.enter ? row.fns.enter(ctx, a) : kNoId;
-    if (raised != kNoId) answer(who, raised, 0, at, depth + 1);
+    if (raised != kNoId) {
+        answer(who, raised, 0, at, depth + 1);
+        return true;
+    }
+    // A NEW INTENT THAT AN EARLIER STATE OF THIS TRIP DID NOT ACT ON (the plan no longer leads where the person wants to
+    // be) is delivered again to the state just entered, whose row says what happens (the top of brain.h).
+    const AgentBrain& now = agents_[who];
+    if (now.state == target && now.travelling() && now.legEnd[now.legCount - 1] != now.intentTarget) {
+        const Verb verb = table_.on[target][table_.intentEvent].verb;
+        if (verb != Verb::Ignore && verb != Verb::Refuse) answer(who, table_.intentEvent, 0, at, depth + 1);
+    }
     return true;
 }
 
@@ -276,12 +288,20 @@ void Machine::replan(AgentId who, bool ruleOutThisWay, bool leave, BrainTime at,
         return;
     }
     ++counts_.plans;
+    takePlan(who, legs);
+    if (a.legCount == 0) arrive(who, at, depth);
+    else beginLeg(who, at, depth);
+}
+
+void Machine::takePlan(AgentId who, const PlanLegs& legs) {
+    AgentBrain& a = agents_[who];
     for (int i = 0; i < kMaxLegs; ++i) {
         a.legEnd[i] = i < legs.count ? legs.end[i] : 0;
         a.legUse[i] = i < legs.count ? legs.use[i] : 0;
         a.legSeconds[i] = i < legs.count ? legs.seconds[i] : 0;
     }
     a.legCount = legs.count;
+    a.legNow = 0;
     // A LEG THAT USES A VEHICLE ENDS WHERE THE VEHICLE IS LEFT: that space is held for this person from now until
     // they park in it or drop the plan (ADR-0441), so no other plan is told it meanwhile. (The last such leg: a person
     // holds one space.)
@@ -291,8 +311,61 @@ void Machine::replan(AgentId who, bool ruleOutThisWay, bool leave, BrainTime at,
             space.id = a.legEnd[i];
             world_.holdSpace(space, who);
         }
-    if (a.legCount == 0) arrive(who, at, depth);
-    else beginLeg(who, at, depth);
+}
+
+// STAY IN THIS STATE AND THIS VEHICLE, AND GO SOMEWHERE ELSE IN IT (the verb `redirect`, ADR-0442). The plan is made
+// again with the person at the wheel: its first leg must be the leg under way (the same way, the same vehicle) with a
+// new end. Then the old plan's space is let go and the new one held, the state begins its time afresh, and its
+// behaviour tells its skill where the leg now ends. When there is no such plan (no free space near the new place, no
+// vehicle on this leg) nothing changes: the old trip carries on, and the new intent is taken up when it ends.
+void Machine::redirect(AgentId who, BrainTime at, int depth) {
+    AgentBrain& a = agents_[who];
+    const StateRow& row = table_.states[a.state];
+    if (!a.travelling() || !row.fns.retarget) {
+        ++counts_.refused;
+        return;
+    }
+    const uint32_t use = a.legUse[a.legNow];
+    PlanLegs legs;
+    bool planned = false;
+    const Vec2 from = whereIs(who, at);
+    if (a.legHandle(a.legNow) != kNoHandle) {
+        PlanAsk ask;
+        ask.agent = who;
+        ask.from = from;
+        ask.to.id = a.intentTarget;
+        ask.traits = a.traits;
+        ask.ruledOut = a.ruledOut;
+        ask.car.id = a.legHandle(a.legNow);
+        ask.atTheWheel = true;
+        // (the space the old plan holds is let go before the new one is priced, so it can be chosen again)
+        world_.dropHold(who);
+        planned = planner_.plan(ask, legs) && legs.count > 0 && legs.count <= kMaxLegs && legs.use[0] == use;
+    }
+    if (!planned) {
+        ++counts_.redirectsLeft;
+        // the old plan stands, and so does its hold
+        for (int i = a.legNow; i < a.legCount; ++i)
+            if (a.legHandle(i) != kNoHandle) {
+                PlaceRef space;
+                space.id = a.legEnd[i];
+                world_.holdSpace(space, who);
+            }
+        return;
+    }
+    ++counts_.plans;
+    ++counts_.redirects;
+    a.originX = toCentimetres(from.x);
+    a.originZ = toCentimetres(from.y);
+    takePlan(who, legs);
+    // the state's planned time runs from here, to the new end
+    a.stateEntered = at;
+    StepContext ctx = contextFor(who, at);
+    const BrainTime lasts = lastsOf(ctx, a);
+    a.stateDue = lasts == kNever ? kNever : at + lasts;
+    noteEntered(who, a.state, at);
+    const EventId raised = row.fns.retarget(ctx, a);
+    if (raised != kNoId) answer(who, raised, 0, at, depth + 1);
 }
 
 // Leave a state that holds and carry on with what was interrupted, from where it had got to.
@@ -397,6 +470,9 @@ void Machine::answer(AgentId who, EventId kind, uint32_t payload, BrainTime at, 
             return;
         case Verb::Resume:
             resume(who, at, depth);
+            return;
+        case Verb::Redirect:
+            redirect(who, at, depth);
             return;
     }
 }

@@ -28,9 +28,15 @@
 //               reports "parked" and the space is taken, the car leaves the driving and is drawn easing into the
 //               space; the person gets out on the kerb side (alightVehicle).
 //
+//               Told to be somewhere else at the wheel, the trip is given a new end (Driving::changeDestination) or,
+//               when the car has not left its space yet, sets off for the new end. A car that has waited for a clear
+//               lane longer than its way's limit is given up (the brain's `blocked`), and stays in its space.
+//
+// THE RESIDENT IS THE BRAIN'S (ADR-0442): their sim agent is marked `brainOwned`, and the sim's day table never places
+// them (CitySim::placeFromSchedule). Nothing here repairs where they are.
+//
 // INTERIM, said plainly: the car slides sideways between its space and the lane (real pulling out and parking come
-// with lane changes); "the lane is clear" looks only at the lane path beside the space, not at the paths leading into
-// it; one resident and one car; nothing here is saved.
+// with lane changes); one resident and one car; nothing here is saved.
 //
 // Same result every run: nothing reads the wall clock, and the machine answers events in a fixed order.
 
@@ -59,7 +65,8 @@ using engine::Vec2;
 // How long a car is drawn sliding between its space and the kerb lane.
 constexpr Real kKerbEaseSeconds = 2.5;
 // The kerb lane counts as clear for pulling out when no car's body is on its path from this far behind where the
-// car's rear will be (a car arriving at a local street's 11 m/s and braking gently stops in about this) ...
+// car's rear will be (a car arriving at a local street's 11 m/s and braking gently stops in about this), measured on
+// back along every path leading into the lane where the lane itself begins nearer (brain_driving.h LaneRoom) ...
 constexpr Real kPullOutRoomBehind = 30.0;
 // ... to this far ahead of where its front will be.
 constexpr Real kPullOutRoomAhead = 3.0;
@@ -73,12 +80,20 @@ constexpr std::size_t kSpacesLookedAt = 24;
 constexpr Real kDoorStandOff = 0.6;
 // A walk has arrived when the person is within this of where it ends.
 constexpr Real kWalkArrivedWithin = 0.3;
+// A MARKER IS DRAWN AS A RING AND A POST BESIDE IT. The ring, this wide, is round the spot where a person at the marker
+// stands. The post stands kMarkerPostOffset from that spot, half-way between "away from the road" and "along the
+// street": a debug line is drawn over everything, so a post in line with the camera and the person is drawn through
+// them, and the two views the follow camera takes most (behind a person facing the road; behind a person walking along
+// the sidewalk) both have a post on that diagonal well to one side.
+constexpr Real kMarkerRingRadius = 0.7;
+constexpr Real kMarkerPostOffset = 2.0;
 
 // ONE MARKER, resolved against the road model.
 struct BrainMarker {
     std::string name;
     engine::RoadFrontage frontage;   // its street, station and kerb
     Vec2 stand;                      // where a person at it stands: the middle of the sidewalk beside it
+    Vec2 post;                       // where its post is drawn: kMarkerPostOffset from `stand`, beside the ring
     bool stated = false;             // by street, station and kerb (false: looked up from a plan point)
 };
 
@@ -93,6 +108,7 @@ struct CityBrainCounts {
     uint32_t alighted = 0;
     uint32_t walksBegun = 0, walksArrived = 0, walksBlocked = 0;
     uint32_t nextSpaces = 0;       // times a taken space was answered with another
+    uint32_t redirected = 0;       // times a trip under way (or about to set off) was given a new end
 };
 
 // One leg of the plan, for drawing.
@@ -129,6 +145,11 @@ public:
     // they are in.
     std::string planText() const;
     std::string stateName() const;
+    // What they are said to be doing, on screen: the state's display name from the data (brain.lua `label`).
+    std::string stateLabel() const;
+    // The name of the marker they stand at (within kWalkArrivedWithin of where a person at it stands); empty: none, or
+    // they are in a car.
+    std::string standingAt() const;
     // Every state the resident entered, as "indoors@0 walking@1500 ..." (milliseconds).
     std::string traceText() const;
     const std::vector<brain::Transition>& trace() const;

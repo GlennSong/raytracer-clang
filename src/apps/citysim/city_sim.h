@@ -195,6 +195,12 @@ struct Agent {
     // activity its trip is for. 0: the trip's own (CitySim::ridePace, rideOf).
     float directedPace = 0;
     Ride directedRide = Ride::None;
+    // OWNED BY THE AGENT BRAIN (ADR-0442; city_brain.h): where this person is, on foot or in a car, is the brain's to
+    // say and nobody else's. The sim's day table never places them: CitySim::placeFromSchedule, the one function every
+    // placing pass goes through (the seeding at build and at a clock jump, a dormant person's next event, a wake),
+    // leaves them as they are. It goes with `directed` (the goal layer leaves their plan alone), which by itself still
+    // lets a city with a day schedule place the person again.
+    bool brainOwned = false;
     bool released = false;           // ejected by the player (ADR-0062): the sim stops
                                      // driving this agent's ghost so it can't fight the
                                      // now player-driven physical car

@@ -88,6 +88,9 @@ bool loadTravelCatalog(ScriptVM& vm, citysim::TravelCatalog& out, std::string* e
         m.endMinutes = numField(L, mt, "end_minutes", 0.0);
         if (m.startMinutes < 0 || m.endMinutes < 0)
             return fail(L, base, err, "`" + m.name + "`: start_minutes and end_minutes cannot be negative");
+        m.setOffWaitMinutes = numField(L, mt, "set_off_wait_minutes", 0.0);
+        if (m.setOffWaitMinutes < 0)
+            return fail(L, base, err, "`" + m.name + "`: set_off_wait_minutes cannot be negative");
         m.ownVehicle = boolField(L, mt, "own_vehicle", false);
         m.weight = numField(L, mt, "weight", 1.0);
         if (!(m.weight > 0)) return fail(L, base, err, "`" + m.name + "`: weight must be positive");

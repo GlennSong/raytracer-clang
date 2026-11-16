@@ -46,10 +46,11 @@ public:
             spec.events.push_back(row);
         });
         eachRow(bt, "states", [&](int t, const std::string& at) {
-            checkKeys(t, at, {"name", "group", "skill", "ends", "clock", "where", "holds", "on"});
+            checkKeys(t, at, {"name", "label", "group", "skill", "ends", "clock", "where", "holds", "on"});
             StateSpec row;
             row.name = text(t, at, "name", "");
             const std::string key = row.name.empty() ? at : "states." + row.name;
+            row.label = text(t, key, "label", "");
             row.group = text(t, key, "group", "");
             row.skill = text(t, key, "skill", row.skill);
             row.ends = text(t, key, "ends", row.ends);

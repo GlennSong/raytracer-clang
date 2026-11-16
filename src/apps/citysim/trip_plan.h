@@ -51,6 +51,10 @@ struct TravelMode {
     Real speed = 1.4;
     Real startMinutes = 0;       // fixed minutes at the start of a leg of it (unlocking, pulling out)
     Real endMinutes = 0;         // ...and at its end (finding the space, parking, locking)
+    // THE LONGEST A LEG OF IT WAITS TO SET OFF, in minutes (travel.lua `set_off_wait_minutes`): a car ready to leave
+    // its space waits for the lane beside it to be clear; after this long it is given up as blocked and the person
+    // plans again. The planner does not read it; the agent brain does. 0: it waits for as long as it takes.
+    Real setOffWaitMinutes = 0;
     bool ownVehicle = false;     // needs a vehicle the person owns, standing somewhere
     // The way of travelling to and from that vehicle, WHEN THE TABLE FIXES ONE (a row index). -1, the usual: it is
     // reached and left by the cheapest way on foot the person has (walking, or a board for someone who has one).
@@ -132,11 +136,16 @@ struct TripPlan {
 // the far end (a free space near the destination: the caller knows the parking; the planner does not).
 // A HOUSEHOLD'S CAR is shared, and whoever reaches it first takes it (agent-brain-design.md section 12): the caller says
 // where it stands NOW and whether it is `free` at this moment. A vehicle that is not free is not priced.
+// A VEHICLE IN HAND (`inHand`, ADR-0442): the person is in it now, on the road at `at` (a driver told to be somewhere
+// else). Then the trip is made in it and no other way is priced: nobody leaves a car in a lane to walk. Its option has
+// no leg to reach it: drive from `at` to `leaveAt`, then on foot to the door. The drive's minutes still count the
+// way's start minutes (a known over-count: the record does not say a leg began part-way).
 struct OwnedVehicle {
     int mode = -1;
     Vec2 at;
     Vec2 leaveAt;
     bool free = true;
+    bool inHand = false;
 };
 
 struct TripRequest {
