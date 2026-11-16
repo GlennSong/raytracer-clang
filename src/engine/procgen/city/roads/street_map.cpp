@@ -139,7 +139,7 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
         const bool walk = sec.sidewalk > 0 && isStreetClass(sec.klass);
         const bool deckClass = isDeckClass(sec.klass);
         uint8_t access = 0;
-        if (walk) access |= road_access::kWalkable | road_access::kCrossable;
+        if (walk) access |= road_access::kCrossable;   // (that people walk it is the link's `walkable`, set below)
         if (walk && !deckClass) access |= road_access::kFrontage;
         if (isStreetClass(sec.klass)) access |= road_access::kSignalable;
         auto add = [&](std::size_t i, std::size_t k, bool along) {

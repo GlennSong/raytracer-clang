@@ -337,7 +337,8 @@ uint32_t lampWordIndex(Lamp l) {
     return kNoWord;
 }
 
-std::vector<std::string> checkSignalProgrammes(const engine::LaneGraph& roads, const RuleSet& rules, const RightOfWay& row) {
+std::vector<std::string> checkSignalProgrammes(const engine::RoadModel& model, const RuleSet& rules, const RightOfWay& row) {
+    const engine::LaneGraph& roads = model.laneLevel;
     std::vector<std::string> out;
     const auto letsIn = [](Lamp l) { return l == Lamp::Green || l == Lamp::Yellow; };
     for (uint32_t j = 0; j < roads.junctions.size() && j < row.junctions.size(); ++j) {
@@ -362,7 +363,8 @@ std::vector<std::string> checkSignalProgrammes(const engine::LaneGraph& roads, c
                     const ConnectorRules& rb = row.paths[b.index];
                     if (ra.approach == rb.approach) continue;   // one approach's turns are green together by design
                     const bool facingEach = ra.approach < row.approaches.size() && rb.approach < row.approaches.size() &&
-                                            approachesFace(roads, row.approaches[ra.approach], row.approaches[rb.approach]);
+                                            approachesFace(model, engine::JunctionId(j), row.approaches[ra.approach],
+                                                           row.approaches[rb.approach]);
                     const bool permitted = facingEach && ck &&
                                            (hasMovement(ck->givesWayOnGreen, ra.movement) ||
                                             hasMovement(ck->givesWayOnGreen, rb.movement));

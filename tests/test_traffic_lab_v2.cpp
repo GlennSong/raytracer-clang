@@ -379,7 +379,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     // Every lit junction, every phase and stage: no two movements whose paths meet let traffic in together, unless the rule
     // set lets one give way (a far turn on a plain green).
     // (Since #284 the model makes this check itself when the rules are handed over, and keeps what it found.)
-    const std::vector<std::string> unsafe = driving::checkSignalProgrammes(roads, d->ruleSet(), d->rightOfWay());
+    const std::vector<std::string> unsafe = driving::checkSignalProgrammes(*d->model(), d->ruleSet(), d->rightOfWay());
     for (const std::string& u : unsafe) std::printf("      [unsafe programme] %s\n", u.c_str());
     CHECK(unsafe.empty());
     CHECK(d->signalProblems() == unsafe);
@@ -393,7 +393,8 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         const driving::ConnectorRules& ra = d->rightOfWay().paths[x.a.index];
         const driving::ConnectorRules& rb = d->rightOfWay().paths[x.other];
         if (ra.movement != driving::Movement::FarTurn || rb.movement != driving::Movement::FarTurn) continue;
-        if (driving::approachesFace(roads, d->rightOfWay().approaches[ra.approach], d->rightOfWay().approaches[rb.approach]))
+        if (driving::approachesFace(*d->model(), x.junction, d->rightOfWay().approaches[ra.approach],
+                                    d->rightOfWay().approaches[rb.approach]))
             ++opposingCross;
     }
     std::printf("    [lab-v2] opposing far turns at lights whose paths cross: %u pairs\n", opposingCross);

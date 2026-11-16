@@ -1612,7 +1612,7 @@ TEST_CASE(lights_19_nothing_that_crosses_is_green_together_and_the_state_is_a_pu
         Sim s(driving_test::gridRoads(3, 3), control, DrivingSettings::kDefaultDecideEveryTicks, true);
         CHECK(s.ok);
         const RightOfWay& row = s.d.rightOfWay();
-        const std::vector<std::string> unsafe = checkSignalProgrammes(s.t.model.laneLevel, s.d.ruleSet(), row);
+        const std::vector<std::string> unsafe = checkSignalProgrammes(s.t.model, s.d.ruleSet(), row);
         for (const std::string& u : unsafe) std::printf("    %s\n", u.c_str());
         CHECK(unsafe.empty());
         const engine::JunctionId j = s.t.junction(1, 1);
@@ -2662,7 +2662,7 @@ TEST_CASE(give_way_284_h_the_light_programmes_are_checked_when_the_rules_are_han
     // (signalProblems), among the right-of-way table's notes too, so a host that reports the table reports a breach.
     Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
     CHECK(s.ok);
-    const std::vector<std::string> direct = checkSignalProgrammes(s.t.model.laneLevel, s.d.ruleSet(), s.d.rightOfWay());
+    const std::vector<std::string> direct = checkSignalProgrammes(s.t.model, s.d.ruleSet(), s.d.rightOfWay());
     CHECK(s.d.signalProblems() == direct);
     CHECK(s.d.signalProblems().empty());
     for (const std::string& note : s.d.rightOfWay().notes) CHECK(note.find("unsafe programme") == std::string::npos);

@@ -705,7 +705,7 @@ LaneGraphSummary crossroadsSummary(const LaneGraph& g) {
     note.turnsBuilt = 12;
     note.turnsRefused = 1;
     b.junctionNotes.push_back(note);
-    b.problems.push_back("junction 0: a turn refused (for the test)");
+    b.problems.push_back(RoadProblem(RoadProblemKind::TurnNoLanePath).atJunction("0"));   // (one problem, for the count)
     b.reachableShare = 2.0 / 9.0;
     return roads::lanes::summarizeLaneGraph(g, b);
 }

@@ -206,7 +206,7 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     // 2. profiles: through roads, agree at nodes and crossings (iterated), then ramps, then connector ends
     { const DesignReport dr = designRoads(g, terrain); r.nodeMismatchBefore = dr.nodeMismatchBefore; r.nodeMismatchAfter = dr.nodeMismatchAfter; r.nodeMismatchWhere = dr.nodeMismatchWhere; r.undeclaredCrossings = dr.undeclared; }
     for (Lane& l : r.lanes.lanes) if (l.isConnector()) {
-        l.z0 = laneHeightAt(r.lanes.lanes[static_cast<size_t>(l.srcLane)], g, l.xy.front()); l.z1 = laneHeightAt(r.lanes.lanes[static_cast<size_t>(l.dstLane)], g, l.xy.back());
+        l.z0 = laneHeightAt(r.lanes.lanes[static_cast<size_t>(l.srcLane)], g, l.xy().front()); l.z1 = laneHeightAt(r.lanes.lanes[static_cast<size_t>(l.dstLane)], g, l.xy().back());
     }
     // LANELAB_DUMP_EDGE=<id>[,<id>...]: an edge's solved profile against its ground, every 50 m (why a road floats)
     if (const char* dumpId = std::getenv("LANELAB_DUMP_EDGE"))
@@ -422,7 +422,7 @@ std::vector<Check> invariants(const Result& r) {
             if (frac < 0.60) {
                 ++bad;
                 if (bad <= 8) {
-                    const Lane& l = r.lanes.lanes[li]; const Vec2 mid = pointAt(l.xy, l.s, l.s.back() * 0.5);
+                    const Lane& l = r.lanes.lanes[li]; const Vec2 mid = pointAt(l.xy(), l.s(), l.s().back() * 0.5);
                     // who owns the triangles inside this lane's footprint?
                     std::map<int, double> by;
                     for (const Surface& s : r.pavement.decks) for (size_t ti = 0; ti < s.tris.size(); ++ti) {
@@ -463,7 +463,7 @@ std::vector<Check> invariants(const Result& r) {
     d.str(""); bool dove = true;
     for (const EdgeSpec& e : g.edges) for (const auto& kv : e.anchorLanes) {
         int li = r.lanes.find(kv.second); if (li < 0) { dove = false; d << " " << e.id << " missing lane " << kv.second; continue; }
-        const Lane& l = r.lanes.lanes[static_cast<size_t>(li)]; double dist = project(l.xy, l.s, kv.first == "to" ? e.xy.back() : e.xy.front()).distance;
+        const Lane& l = r.lanes.lanes[static_cast<size_t>(li)]; double dist = project(l.xy(), l.s(), kv.first == "to" ? e.xy.back() : e.xy.front()).distance;
         if (dist > 0.05) { dove = false; d << " " << e.id << " " << kv.first << " " << kv.second << ": " << dist << " m off"; }
     }
     add("ramps dovetail into their hosts' outer lanes", dove, dove ? "every anchored ramp end sits on the host lane's centreline" : d.str());
@@ -530,9 +530,9 @@ std::vector<Check> invariants(const Result& r) {
     {
         int bad = 0; std::ostringstream dq; double worst = 0;
         for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
-            const Lane& l = r.lanes.lanes[li]; if (l.isConnector() || l.s.size() < 2) continue;
-            for (double st = 2.0; st < l.s.back() - 2.0; st += 6.0) {
-                const Vec2 p = pointAt(l.xy, l.s, st); const double d = std::fabs(r.heights->deck(static_cast<int>(li), p) - r.heights->own(static_cast<int>(li), p));
+            const Lane& l = r.lanes.lanes[li]; if (l.isConnector() || l.s().size() < 2) continue;
+            for (double st = 2.0; st < l.s().back() - 2.0; st += 6.0) {
+                const Vec2 p = pointAt(l.xy(), l.s(), st); const double d = std::fabs(r.heights->deck(static_cast<int>(li), p) - r.heights->own(static_cast<int>(li), p));
                 if (d <= 2.5) continue; ++bad; if (d > worst) worst = d; if (bad <= 6) dq << " " << l.id << " " << std::fixed << std::setprecision(2) << d << " m at (" << static_cast<int>(p.x) << ", " << static_cast<int>(p.y) << ")"; break;
             }
         }

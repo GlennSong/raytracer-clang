@@ -41,10 +41,12 @@ std::string terrainFileOf(const nlohmann::json& spec, const std::string& baseDir
     std::string f = spec["terrain"]["file"].get<std::string>(); if (f.empty() || f[0] == '/') return f; return baseDir + "/" + f;
 }
 
-// Does a graph spec use a track class: the built-in "rail" or one its own class table marks "track"?
+// Does a graph spec use a track class: one the road class table marks "track", or one its own class table does?
 bool graphHasTrack(const nlohmann::json& spec) {
     if (!spec.is_object() || !spec.contains("edges")) return false;
-    std::set<std::string> track{"rail", "light_rail"};   // the built-in track classes (road_graph_spec.cpp)
+    std::set<std::string> track;
+    for (const std::pair<const std::string, RoadClassSpec>& row : roadClasses())
+        if (row.second.track) track.insert(row.first);   // the table's track rows (assets/data/road_classes.json)
     if (spec.contains("classes") && spec["classes"].is_object())
         for (auto it = spec["classes"].begin(); it != spec["classes"].end(); ++it)
             if (it.value().is_object() && it.value().value("track", false)) track.insert(it.key());
@@ -76,6 +78,9 @@ public:
         bundle::ProducerIdentity id; id.tag = kLanesBuildTag;
         uint64_t k = bundle::fnv1aStr(std::string(kCityProducerName) + "|" + std::to_string(kCityFormatVersion) + "|" + kLanesBuildTag + "|real" + std::to_string(sizeof(Real)));
         const double cell = cityRenderCell(in.level); k = bundle::fnv1a(&cell, sizeof(cell), k);
+        // THE ROAD CLASS TABLE's bytes (assets/data/road_classes.json, ADR-0438): every road is built from its rows, so
+        // editing one re-bakes the city. (While the table was C++ only the lanes tag could say it had changed.)
+        { const uint64_t classes = roadClassTableHash(); k = bundle::fnv1a(&classes, sizeof(classes), k); }
         for (const CityEntity& e : cityEntities(in.level)) {
             k = bundle::fnv1aStr("entity" + std::to_string(e.ordinal), k);
             // (what the paint reads of the layout and of the data tables keys the city too: deck_mesh.h paintFactsKey, ADR-0431)
@@ -273,7 +278,7 @@ RoadDeckField deckFromResult(const Result& r) {
                 s.yRight[k] = r.heights->deckRoad(static_cast<int>(ei), e.xy[k] - left * s.halfWidth);
             }
         }
-        s.klass = classOf(e);
+        s.klass = classOf(r.graph, e);
         const RoadClassSpec& cls = r.graph.cls(e);   // (every edge's class is in the table: fromJson refuses one that is not)
         s.use = cls.track ? UnionSpine::Use::Track : cls.footway ? UnionSpine::Use::Footway : UnionSpine::Use::Road;
         s.authoredDeck = e.isRamp() || s.klass == RoadClass::Freeway;

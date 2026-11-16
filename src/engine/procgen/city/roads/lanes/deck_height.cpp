@@ -13,18 +13,18 @@ namespace roads::lanes {
 DeckHeight::DeckHeight(const RoadLabGraph& g, const LaneSet& L) : g_(g), L_(L) {
     partners_.assign(L.lanes.size(), {}); roadPartners_.assign(g.edges.size(), {});
     grids_.reserve(L.lanes.size());
-    for (const Lane& l : L.lanes) grids_.push_back(std::make_unique<SegmentGrid>(l.xy, 8.0));
+    for (const Lane& l : L.lanes) grids_.push_back(std::make_unique<SegmentGrid>(l.xy(), 8.0));
     // the near-lane index: each lane's centreline box, grown by its half-width and 15 m of caps and fillets
     // (the footprint's reach past the centreline) and by the index's search reach
     std::vector<Box2> box(L.lanes.size());
     double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
     for (size_t li = 0; li < L.lanes.size(); ++li) {
         Box2 b{1e300, 1e300, -1e300, -1e300};
-        for (const Vec2& q : L.lanes[li].xy) { b.minX = std::min(b.minX, q.x); b.minY = std::min(b.minY, q.y); b.maxX = std::max(b.maxX, q.x); b.maxY = std::max(b.maxY, q.y); }
+        for (const Vec2& q : L.lanes[li].xy()) { b.minX = std::min(b.minX, q.x); b.minY = std::min(b.minY, q.y); b.maxX = std::max(b.maxX, q.x); b.maxY = std::max(b.maxY, q.y); }
         const double grow = L.lanes[li].width / 2 + 15.0 + kIndexReach;
         b.minX -= grow; b.minY -= grow; b.maxX += grow; b.maxY += grow;
         box[li] = b;
-        if (L.lanes[li].xy.empty()) continue;
+        if (L.lanes[li].xy().empty()) continue;
         x0 = std::min(x0, b.minX); y0 = std::min(y0, b.minY); x1 = std::max(x1, b.maxX); y1 = std::max(y1, b.maxY);
     }
     if (x0 < x1) {
@@ -33,7 +33,7 @@ DeckHeight::DeckHeight(const RoadLabGraph& g, const LaneSet& L) : g_(g), L_(L) {
         iny_ = std::max(1, static_cast<int>(std::ceil((y1 - y0) / kIndexCell)));
         index_.assign(static_cast<size_t>(inx_) * static_cast<size_t>(iny_), {});
         for (size_t li = 0; li < L.lanes.size(); ++li) {
-            if (L.lanes[li].xy.empty()) continue;
+            if (L.lanes[li].xy().empty()) continue;
             const int i0 = std::clamp(static_cast<int>((box[li].minX - ix0_) / kIndexCell), 0, inx_ - 1), i1 = std::clamp(static_cast<int>((box[li].maxX - ix0_) / kIndexCell), 0, inx_ - 1);
             const int j0 = std::clamp(static_cast<int>((box[li].minY - iy0_) / kIndexCell), 0, iny_ - 1), j1 = std::clamp(static_cast<int>((box[li].maxY - iy0_) / kIndexCell), 0, iny_ - 1);
             for (int j = j0; j <= j1; ++j) for (int i = i0; i <= i1; ++i) index_[static_cast<size_t>(j) * static_cast<size_t>(inx_) + static_cast<size_t>(i)].push_back(static_cast<int>(li));
@@ -75,7 +75,7 @@ void DeckHeight::buildSeams() {
     std::vector<std::vector<int>> roadLanes(g_.edges.size());
     for (size_t li = 0; li < L_.lanes.size(); ++li) {
         const Lane& l = L_.lanes[li];
-        if (l.road() < 0 || static_cast<size_t>(l.road()) >= g_.edges.size() || l.isConnector() || l.xy.size() < 2 || l.s.size() != l.xy.size()) continue;
+        if (l.road() < 0 || static_cast<size_t>(l.road()) >= g_.edges.size() || l.isConnector() || l.xy().size() < 2) continue;
         roadLanes[static_cast<size_t>(l.road())].push_back(static_cast<int>(li));
     }
     for (size_t e = 0; e < g_.edges.size(); ++e) {
@@ -85,11 +85,13 @@ void DeckHeight::buildSeams() {
             for (int li : roadLanes[e]) {
                 const Lane& l = L_.lanes[static_cast<size_t>(li)];
                 const double reach = l.width / 2 + kTouch;
+                const Span<Vec2> xy = l.xy();
+                const Span<double> along = l.s();
                 size_t k = 0;
-                for (double s = 0; s <= l.s.back() + 1e-9; s += kStep) {
-                    while (k + 2 < l.s.size() && l.s[k + 1] < s) ++k;
-                    const double span = l.s[k + 1] - l.s[k], t = span > 1e-9 ? std::clamp((s - l.s[k]) / span, 0.0, 1.0) : 0.0;
-                    const Vec2 P(l.xy[k].x + (l.xy[k + 1].x - l.xy[k].x) * t, l.xy[k].y + (l.xy[k + 1].y - l.xy[k].y) * t);
+                for (double s = 0; s <= along.back() + 1e-9; s += kStep) {
+                    while (k + 2 < along.size() && along[k + 1] < s) ++k;
+                    const double span = along[k + 1] - along[k], t = span > 1e-9 ? std::clamp((s - along[k]) / span, 0.0, 1.0) : 0.0;
+                    const Vec2 P(xy[k].x + (xy[k + 1].x - xy[k].x) * t, xy[k].y + (xy[k + 1].y - xy[k].y) * t);
                     if (!(distanceToLane(q, P, reach) <= reach)) continue;
                     double es = 0;
                     if (std::isfinite(edgeGrids_[e]->distanceWithin(P, kIndexReach, &es))) st.push_back(es);

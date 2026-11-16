@@ -84,7 +84,7 @@ TEST_CASE(lanes_graph_loads_and_expands_the_valley_scene) {
     // the ramp's last point sits on the host outer lane's centreline
     int host = L.find("fwy.f2"); CHECK(host >= 0);
     const Lane& h = L.lanes[static_cast<size_t>(host)];
-    CHECK(project(h.xy, h.s, g.find("ramp")->xy.back()).distance < 0.05);
+    CHECK(project(h.xy(), h.s(), g.find("ramp")->xy.back()).distance < 0.05);
     HeightField terrain = makeTerrain(g.terrain, g.bounds());
     for (EdgeSpec& e : g.edges) if (!e.isRamp()) throughProfile(e, terrain, g.cls(e));
     CHECK(maxGrade(*g.find("fwy")) <= 0.03 * kDesignGrade + 1e-6);
@@ -299,7 +299,7 @@ TEST_CASE(lanes_planned_city_lots_keep_parks_off_the_pavement_and_front_streets_
         if (e.xy.size() < 2) continue;
         const RoadClassSpec& spec = r.graph.cls(e);
         if (spec.track || spec.footway) continue;
-        const engine::RoadClass k = classOf(e);
+        const engine::RoadClass k = classOf(r.graph, e);
         (k == engine::RoadClass::Freeway || k == engine::RoadClass::Ramp ? freeway : streets).push_back(e.xy);
     }
     CHECK(!freeway.empty());   // the case is about a freeway: the planned city must carry one
@@ -1206,7 +1206,7 @@ TEST_CASE(lanes_light_rail_lab_tracks_carry_no_street_and_stations_have_canopies
                 double y = 0;
                 CHECK(p.deck.heightAt(X.x, X.y, 1.0, &y));
                 CHECK(std::fabs(y - streetZ) < 1.0);
-                const RoadClass local = classOf(s);
+                const RoadClass local = classOf(r.graph, s);
                 CHECK(p.deck.heightOn(X.x, X.y, 0.5, &local, 0.0, 1e9, &y));
                 CHECK(std::fabs(y - streetZ) < 1.0);
                 CHECK(p.deck.coversAny(X.x, X.y, 0.5));
@@ -1437,7 +1437,7 @@ TEST_CASE(lanes_print_expand_cost_per_city) {
         const LaneSet L = expand(g);
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         std::size_t pts = 0;
-        for (const Lane& l : L.lanes) pts += l.xy.size();
+        for (const Lane& l : L.lanes) pts += l.xy().size();
         std::printf("    [expand] %-26s %5zu edges -> %6zu lanes, %8zu points: %.1f ms\n", name, g.edges.size(), L.lanes.size(), pts, ms);
     }
 }
@@ -1610,7 +1610,7 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
                 "out; joined as stated: %u carrying on, %u leaving a host, %u merging into one, %u with a gap\n",
                 name.c_str(), lanePaths, G.sections.size(), G.junctions.size(), lg.problems.size(), lg.milliseconds,
                 lg.connectorsLeftOut, lg.carryOnJoins, lg.divergeJoins, lg.mergeJoins, lg.joinsWithGap);
-    for (std::size_t i = 0; i < lg.problems.size() && i < 4; ++i) std::printf("      problem: %s\n", lg.problems[i].c_str());
+    for (std::size_t i = 0; i < lg.problems.size() && i < 4; ++i) std::printf("      problem: %s\n", problemLine(lg.problems[i]).c_str());
 
     // 1. sound
     const std::vector<std::string> faults = validate(G);
@@ -1655,7 +1655,7 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
     std::vector<std::vector<Vec2>> builtXy(L.lanes.size());
     std::vector<std::vector<double>> builtS(L.lanes.size());
     for (std::size_t li = 0; li < L.lanes.size(); ++li) {
-        builtXy[li] = L.lanes[li].xy;
+        builtXy[li] = L.lanes[li].xy().copied();
         if (L.lanes[li].dir < 0) std::reverse(builtXy[li].begin(), builtXy[li].end());
         builtS[li] = stations(builtXy[li]);
     }
@@ -1665,7 +1665,7 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
     std::vector<std::vector<double>> builtStation(L.lanes.size());
     for (std::size_t li = 0; li < L.lanes.size() && li < m.lanes.size(); ++li) {
         const ModelLane& ml = m.lanes[li];
-        if (ml.curve.count != L.lanes[li].xy.size()) continue;
+        if (ml.curve.count != L.lanes[li].xy().size()) continue;
         for (uint32_t k = 0; k < ml.curve.count; ++k) builtStation[li].push_back(m.spineStations[ml.curve.first + k]);
         if (L.lanes[li].dir < 0) std::reverse(builtStation[li].begin(), builtStation[li].end());
     }
@@ -1780,7 +1780,7 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
         if ((hole || overlap) && badCover++ < 4)
             std::printf("      lane %s: its paths and gaps %s its %.3f m (reaching %.3f m)\n", L.lanes[li].id.c_str(),
                         overlap ? "overlap along" : "do not cover", lg.laneLengths[li], reached);
-        CHECK(lg.laneLengths[li] <= L.lanes[li].s.back() + kLaneCoverTolerance);
+        CHECK(lg.laneLengths[li] <= L.lanes[li].s().back() + kLaneCoverTolerance);
     }
     CHECK(badCover == 0);
     CHECK(badJunctionGaps == 0);
@@ -1822,7 +1822,7 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
         bool tidied = false;
         for (uint32_t k = sec.lanes.first; k < sec.lanes.end(); ++k) {
             const std::size_t li = static_cast<std::size_t>(lg.sources[G.sectionLanes[k].index].lane);
-            tidied = tidied || lg.laneLengths[li] < L.lanes[li].s.back() - kLaneCoverTolerance;
+            tidied = tidied || lg.laneLengths[li] < L.lanes[li].s().back() - kLaneCoverTolerance;
         }
         if ((offStart > kSectionShareTolerance || offEnd > kSectionShareTolerance) && tidied)
             std::printf("      section %u on %s: its lanes' starts stray %.3f m and ends %.3f m from a line across the road, a lane "
@@ -1883,7 +1883,7 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
             double allowed = joinCos;
             if (cosine < joinCos) {
                 const Lane& l = L.lanes[static_cast<std::size_t>(lg.sources[p].lane)];
-                std::vector<Vec2> xy = l.xy;
+                std::vector<Vec2> xy = l.xy().copied();
                 if (l.dir < 0) std::reverse(xy.begin(), xy.end());
                 const std::vector<double> s = stations(xy);
                 const double t = lg.sources[p].to;
@@ -1929,7 +1929,7 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
     // ITS PROBLEM LINES BY KIND AND COUNT, as written for the scene
     if (known.pinProblems) {
         std::map<std::string, uint32_t> byKind;
-        for (const std::string& p : lg.problems) {
+        for (const std::string& p : problemLines(lg.problems)) {
             ++byKind[problemKind(p)];
             if (problemKind(p) == "other") std::printf("      problem: %s\n", p.c_str());
         }
@@ -2110,9 +2110,10 @@ void checkConnectors(const std::string& name) {
     }
     CHECK(badCounts == 0);
     std::size_t problemFitsNone = 0, problemNoPath = 0, refusedFitsNone = 0, refusedNoPath = 0;
-    for (const std::string& p : lg.problems) {
-        problemFitsNone += p.find(" fits no vehicle: ") != std::string::npos ? 1 : 0;
-        problemNoPath += p.find(": not built (it stays stated)") != std::string::npos ? 1 : 0;
+    // (by the problems' stated kinds, road_problem.h, not by their words)
+    for (const RoadProblem& p : lg.problems) {
+        problemFitsNone += p.kind == RoadProblemKind::TurnFitsNoVehicle ? 1 : 0;
+        problemNoPath += p.kind == RoadProblemKind::TurnNoLanePath ? 1 : 0;
     }
     for (const Refusal& ref : lg.refusals) {
         ++(ref.why == RefusalWhy::NoLanePath ? refusedNoPath : refusedFitsNone);
@@ -2240,7 +2241,7 @@ TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
     // another road where the road file states no junction (the dead-end spokes at the ring: the planner's to state)
     std::map<std::string, uint32_t> byKind;
     std::set<std::string> outlines, unstated, gapJoins;
-    for (const std::string& p : lg.problems) {
+    for (const std::string& p : problemLines(lg.problems)) {
         std::string kind = "unknown";
         if (p.find(" fits no vehicle: ") != std::string::npos) kind = "fits no vehicle";
         else if (p.find("; tidied (") != std::string::npos) kind = "tidied";
@@ -2332,7 +2333,8 @@ TEST_CASE(lanes_the_traffic_lab_bends_look_like_its_roads) {
     CHECK(mismatched == 0u);
     CHECK(G.bendPieces.size() < 4 * G.paths.size());   // a handful of pieces a path at most, on the whole
     uint32_t listed = 0;
-    for (const std::string& p : lg.problems) listed += p.find("kink: ") == 0 ? 1 : 0;
+    for (const RoadProblem& p : lg.problems)
+        listed += p.kind == RoadProblemKind::LaneKink || p.kind == RoadProblemKind::ConnectorKink || p.kind == RoadProblemKind::JoinKink ? 1 : 0;
     CHECK(listed == lg.laneKinks + lg.connectorKinks + lg.joinKinks);
 }
 
@@ -3220,7 +3222,7 @@ void checkCrossings(const std::string& name) {
                 "busiest junction %u with %u; %u junctions of two or more connectors with none; %zu problems; %.0f ms\n",
                 name.c_str(), G.crossings.size(), cr.byMeeting[0], cr.byMeeting[1], cr.byMeeting[2], cr.betweenJunctions,
                 cr.withLanes, cr.busiestJunction, cr.busiestCount, cr.junctionsWithout, cr.problems.size(), cr.milliseconds);
-    for (std::size_t i = 0; i < cr.problems.size() && i < 4; ++i) std::printf("      %s\n", cr.problems[i].c_str());
+    for (std::size_t i = 0; i < cr.problems.size() && i < 4; ++i) std::printf("      %s\n", problemLine(cr.problems[i]).c_str());
     CHECK(validate(G).empty());
     CHECK(uncoveredCrossings(G, r.graph.rules.sameLevelDz) == 0);
     int splits = 0, joins = 0, foundSplits = 0, foundJoins = 0;

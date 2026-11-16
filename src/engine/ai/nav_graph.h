@@ -64,8 +64,8 @@ struct NavLink {
     // walkers both honour it.
     bool walkable = true;
     // Semantic layer (#17): access bits (road_access::k*) copied from the
-    // source RoadEdge. kWalkable mirrors `walkable`; the new consumers key
-    // on kFrontage/kCrossable/kSignalable.
+    // source RoadEdge: kFrontage, kCrossable, kSignalable. (No bit repeats
+    // `walkable` or `footpath`: each of those is its bool alone.)
     uint8_t access = road_access::kAllStreet;
     // Kerbside PARKING band of the source road (RoadEdge::parkOffset/parkWidth,
     // resolved from its RoadSpec). parkWidth 0 = this road has no parking, and
@@ -76,7 +76,7 @@ struct NavLink {
     // to know how the cross-section is laid out.
     Real parkOffset = 0;
     Real parkWidth = 0;
-    // A FOOTPATH (access kFootpath; the quad's and the parks' walks, joined to the streets at load): walkers only --
+    // A FOOTPATH (the quad's and the parks' walks, joined to the streets at load; its access bits are none): walkers only --
     // vehicle routing never takes it. A walker on it is on the line footA -> footB (world XZ), not offset beside a
     // carriageway: a connector from a street node starts on that street's pavement, not in its middle.
     bool footpath = false;
@@ -197,7 +197,7 @@ struct NavGraph {
     Vec2 sidewalkPoint(int link, Real t, Real verge = 1.0) const;
 
     // THE WALKS (campus gap pass; Glenn: students should cross the quad): footpath segments (world XZ, a -> b, their
-    // width) joined into this graph as walker-only links (kFootpath; vehicle routing skips them). Ends that meet
+    // width) joined into this graph as walker-only links (NavLink::footpath; vehicle routing skips them). Ends that meet
     // (within 0.8 m) share a node; an end on another walk's middle (within 1.6 m) tees into it; a loose end within
     // `connect` m of a street segment is joined to both its nodes, from that street's pavement -- unless its width is NEGATIVE (|width|; the
     // walk to a hall's quad door, whose nearest street is through the hall). Returns what was added.

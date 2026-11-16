@@ -710,7 +710,7 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
                 for (const EdgeSpec& es : g.edges) out->roads.push_back(es.xy);
                 for (const Lane& l : L.lanes) {
                     engine::TrafficLane t;
-                    t.xy = l.xy;
+                    t.xy = l.xy().copied();   // (the old driving's own lanes: a second laying, to go with it)
                     t.w = l.width;
                     t.parent = l.onRoad() ? roadBase + l.road() : -1;
                     t.dir = l.dir;
@@ -724,7 +724,7 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
                     if (l.onRoad()) {
                         const EdgeSpec& es = g.edges[l.edge];
                         const std::size_t i0 = static_cast<std::size_t>(std::lower_bound(es.s.begin(), es.s.end(), l.spineFrom - 1e-9) - es.s.begin());
-                        for (std::size_t k = 0; k < l.xy.size() && i0 + k < es.s.size(); ++k) t.stations.push_back(es.s[i0 + k]);
+                        for (std::size_t k = 0; k < l.xy().size() && i0 + k < es.s.size(); ++k) t.stations.push_back(es.s[i0 + k]);
                         if (t.stations.size() != t.xy.size()) t.stations.clear();   // (laid otherwise: no stations, no match)
                     }
                     out->lanes.push_back(std::move(t));

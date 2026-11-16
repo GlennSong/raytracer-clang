@@ -119,7 +119,10 @@ uint32_t stateStreet(engine::RoadModel& m, PathId lane, Real limit, const std::s
 
 void onStreet(engine::RoadModel& m, PathId lane, uint32_t street) { m.laneLevel.paths[lane.index].street = street; }
 
-void stateControl(engine::RoadModel& m, engine::JunctionId junction, const std::string& control) {
+namespace {
+
+// The model's junction a junction of the lane table names; it is given one, with nothing stated, where it names none.
+engine::ModelJunction& modelJunctionOf(engine::RoadModel& m, engine::JunctionId junction) {
     engine::Junction& jn = m.laneLevel.junctions[junction.index];
     if (jn.modelJunction >= m.junctions.size()) {
         jn.modelJunction = static_cast<uint32_t>(m.junctions.size());
@@ -127,7 +130,24 @@ void stateControl(engine::RoadModel& m, engine::JunctionId junction, const std::
         j.id = "test_junction_" + std::to_string(jn.modelJunction);
         m.junctions.push_back(j);
     }
-    m.junctions[jn.modelJunction].control = control;
+    return m.junctions[jn.modelJunction];
+}
+
+}  // namespace
+
+void stateControl(engine::RoadModel& m, engine::JunctionId junction, const std::string& control) {
+    modelJunctionOf(m, junction).control = control;
+}
+
+void stateThrough(engine::RoadModel& m, engine::JunctionId junction, uint32_t armA, uint32_t armB, bool stated) {
+    engine::ModelJunction& J = modelJunctionOf(m, junction);
+    if (J.arms.size() <= std::max(armA, armB)) J.arms.resize(std::max(armA, armB) + 1);
+    J.through.erase(std::remove_if(J.through.begin(), J.through.end(),
+                                   [&](const std::array<uint32_t, 2>& t) {
+                                       return t[0] == armA || t[1] == armA || t[0] == armB || t[1] == armB;
+                                   }),
+                    J.through.end());
+    if (stated) J.through.push_back({armA, armB});
 }
 
 void stateTurn(engine::RoadModel& m, PathId connector, engine::Turn turn) {
@@ -466,14 +486,8 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
             for (uint8_t ii = 0; ii < kHeadingCount; ++ii) {
                 const Heading in = static_cast<Heading>(ii);
                 if (!t.sectionArriving(r, c, in).valid()) continue;
-                // The arm each arriving lane comes in by (named by the way its traffic heads), and the arm that is the same
-                // road carrying on through: the one across the junction, where the grid has a road there.
-                for (uint32_t k = 0; k < lanes; ++k) {
-                    Path& arriving = g.paths[t.laneArriving(r, c, in, k).index];
-                    arriving.arm = ii;
-                    arriving.throughArm =
-                        t.sectionLeaving(r, c, in).valid() ? static_cast<uint32_t>(opposite(in)) : engine::kNoIndex;
-                }
+                // The arm each arriving lane comes in by (named by the way its traffic heads).
+                for (uint32_t k = 0; k < lanes; ++k) g.paths[t.laneArriving(r, c, in, k).index].arm = ii;
                 for (uint8_t oi = 0; oi < kHeadingCount; ++oi) {
                     const Heading out = static_cast<Heading>(oi);
                     if (out == opposite(in) || !t.sectionLeaving(r, c, out).valid()) continue;
@@ -527,6 +541,11 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
             jn.connectors.count = static_cast<uint32_t>(g.junctionConnectors.size()) - jn.connectors.first;
             g.junctions.push_back(jn);
             stateControl(t.model, jid, kTestControl);
+            // The junction's through pairs: an arm (named by the way its traffic heads as it arrives) and the arm across
+            // the junction are one road carrying on, where the grid has a road on both sides.
+            for (const Heading in : {Heading::East, Heading::North})
+                if (t.sectionArriving(r, c, in).valid() && t.sectionLeaving(r, c, in).valid())
+                    stateThrough(t.model, jid, static_cast<uint32_t>(in), static_cast<uint32_t>(opposite(in)));
         }
     }
     for (const std::pair<PathId, engine::Turn>& ct : turns) stateTurn(t.model, ct.first, ct.second);

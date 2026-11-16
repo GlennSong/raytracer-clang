@@ -12,13 +12,13 @@ void frames(const std::vector<Vec2>& xy, std::vector<Vec2>& tan, std::vector<Vec
     for (size_t i = 0; i < n; ++i) { tan[i] = tangentAt(xy, i); nrm[i] = perp(tan[i]); }
 }
 
-Vec2 tangentAt(const std::vector<Vec2>& xy, size_t i, double minLen) {
+Vec2 tangentAt(Span<Vec2> xy, size_t i, double minLen) {
     if (xy.size() < 2) return {1, 0};
     size_t j = std::min(i + 1, xy.size() - 1), k = i == 0 ? 0 : i - 1; Vec2 d = xy[j] - xy[k];
     return d.length() > minLen ? normalize(d) : Vec2(1, 0);
 }
 
-Projection project(const std::vector<Vec2>& xy, const std::vector<double>& s, const Vec2& p) {
+Projection project(Span<Vec2> xy, Span<double> s, const Vec2& p) {
     Projection best; best.distance = std::numeric_limits<double>::infinity();
     if (xy.size() == 1) { best.distance = distance(xy[0], p); return best; }
     for (size_t i = 0; i + 1 < xy.size(); ++i) {
@@ -30,11 +30,11 @@ Projection project(const std::vector<Vec2>& xy, const std::vector<double>& s, co
 }
 
 // These three are polyline.h's station readers over the whole vector (the lane graph reads ranges with the same ones).
-Vec2 pointAt(const std::vector<Vec2>& xy, const std::vector<double>& s, double station) {
+Vec2 pointAt(Span<Vec2> xy, Span<double> s, double station) {
     return pointAtStation(xy.data(), s.data(), s.size(), station);
 }
 
-Vec2 tangentAtStation(const std::vector<Vec2>& xy, const std::vector<double>& s, double station) {
+Vec2 tangentAtStation(Span<Vec2> xy, Span<double> s, double station) {
     const Vec2 d = chordAtStation(xy.data(), s.data(), s.size(), station);
     return d.length() > kShortestStationSpan ? normalize(d) : tangentAt(xy, 0);
 }
@@ -73,7 +73,7 @@ std::vector<Vec2> crossings(const std::vector<Vec2>& a, const std::vector<Vec2>&
     return out;
 }
 
-SegmentGrid::SegmentGrid(const std::vector<Vec2>& xy, double cell) : pts_(xy), cell_(cell) {
+SegmentGrid::SegmentGrid(Span<Vec2> xy, double cell) : pts_(xy.begin(), xy.end()), cell_(cell) {
     if (xy.size() < 2) return;
     s_.assign(xy.size(), 0.0); for (size_t i = 1; i < xy.size(); ++i) s_[i] = s_[i-1] + distance(xy[i-1], xy[i]);
     double x1 = -1e300, y1 = -1e300; x0_ = y0_ = 1e300;

@@ -461,12 +461,13 @@ RightOfWay buildRightOfWay(const engine::RoadModel& model, const RuleSet& rules,
             cr.movement = w.mov.back();
         }
         jr.approaches.count = static_cast<uint32_t>(w.heading.size());
-        // Which of its approaches face each other: the junction's stated through pairs, read off the lane graph.
+        // Which of its approaches face each other: the junction's stated through pairs, asked of the road model.
         w.faces.assign(w.heading.size() * w.heading.size(), 0);
         for (uint32_t a = 0; a < w.heading.size(); ++a)
             for (uint32_t b = 0; b < w.heading.size(); ++b)
                 w.faces[a * w.heading.size() + b] =
-                    approachesFace(roads, out.approaches[jr.approaches.first + a], out.approaches[jr.approaches.first + b]) ? 1 : 0;
+                    approachesFace(model, engine::JunctionId(j), out.approaches[jr.approaches.first + a],
+                                   out.approaches[jr.approaches.first + b]) ? 1 : 0;
         // Which pairs meet (a cross or a join filed under this junction).
         w.meet.assign(static_cast<std::size_t>(w.n) * w.n, 0);
         for (uint32_t c = jn.crossings.first; c < jn.crossings.end() && c < roads.crossings.size(); ++c) {

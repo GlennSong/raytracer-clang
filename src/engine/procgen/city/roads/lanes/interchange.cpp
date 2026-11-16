@@ -219,7 +219,7 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         static const bool why = std::getenv("RT_DIAMOND_WHY") != nullptr;
         static const bool whyAll = why && std::string(std::getenv("RT_DIAMOND_WHY")) == "2";   // and every length tried
         const RampStreet& fr = streets[k];
-        const RoadClassSpec& sc = roadClass(fr.cls.empty() ? std::string("local") : fr.cls);
+        const RoadClassSpec& sc = roadClass(fr.cls);   // (a street that names no class: the table's default row)
         LaneLayout lay = sc.lanes;
         if (fr.oneWayLanes > 0) { lay.fwd = fr.oneWayLanes; lay.back = 0; }
         const std::vector<LaneSlot> slots = laneSlots(sc, lay);
@@ -307,7 +307,7 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         const double away = off ? -fwd : fwd;   // off: the freeway gore is upstream; on: downstream
         if ((L.sAnchor - sCross) * away < 0) { if (why) std::fprintf(stderr, "    %s: its gore falls past the crossing\n", fr.id.c_str()); return false; }
         const double zStreet = groundAt(L.gore);
-        const double clear = needOver(fr.cls.empty() ? std::string("local") : fr.cls);
+        const double clear = needOver(fr.cls);
         const double gd = kDesignGrade * rampClass.gMax;
         const double crossLen = o.crossPerMetre * std::fabs(rFar - rBand);
         const double descend = clear / gd + 10.0;   // the far side's run down from the hold, at the design grade, and a little
@@ -377,7 +377,7 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
                     const double dx = project(pts, ds, x).station;
                     if (dx > ds.back() - 1.0) continue;   // the gore itself, on its lane beside the street
                     const double over = zAt(dx) - groundAt(x);
-                    if (over >= needOver(streets[ci].cls.empty() ? std::string("local") : streets[ci].cls) - 0.2) {
+                    if (over >= needOver(streets[ci].cls) - 0.2) {
                         if (L.held && distance(x, L.holdAt) < L.holdHalf) L.holdStreet = ci;
                         continue;
                     }

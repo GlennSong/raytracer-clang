@@ -34,8 +34,12 @@ bool writePlanSvg(const Result& r, const std::string& path) {
         }
     };
     poly(r.pavement.sidewalk, "#d9d4c7", "#6d6a63", 0.5); poly(r.pavement.shoulder, "#5f5d5a", "none", 0); poly(r.pavement.median, "#7f9a5c", "none", 0);
-    std::map<std::string, const char*> fc = {{"freeway", "#2b2b30"}, {"ramp", "#38383e"}, {"arterial", "#3a3a3c"}, {"local", "#454547"}};
-    for (size_t li = 0; li < r.lanes.lanes.size(); ++li) { auto it = fc.find(r.lanes.lanes[li].cls); poly(r.pavement.footprints[li], it == fc.end() ? "#3a3a3c" : it->second, "none", 0); }
+    // each lane's fill: its road class's own (RoadClassSpec::planColour, "plan_colour"), or the usual one
+    for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
+        const std::map<std::string, RoadClassSpec>::const_iterator it = g.classes.find(r.lanes.lanes[li].cls);
+        const bool own = it != g.classes.end() && !it->second.planColour.empty();
+        poly(r.pavement.footprints[li], own ? it->second.planColour.c_str() : "#3a3a3c", "none", 0);
+    }
     poly(r.pavement.surface, "none", "#111", 0.6);
     for (const EdgeSpec* e : g.paved()) {
         std::string d; bool open = false;

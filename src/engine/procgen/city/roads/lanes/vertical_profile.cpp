@@ -193,14 +193,14 @@ bool anyTrack(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b) { ret
 
 bool separates(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b) {
     if (g.cls(a).track || g.cls(b).track) return true;
-    return g.rules.freewaySeparates && mustSeparate(a, b);
+    return g.rules.freewaySeparates && mustSeparate(g, a, b);
 }
 
-bool mustSeparate(const EdgeSpec& a, const EdgeSpec& b) {
+bool mustSeparate(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b) {
     // Ramps stay out of it: a ramp is pinned to its anchors and meets what it crosses by height, as
     // before (ring_city's ramps run beside the other carriageway's ends).
     if (a.isRamp() || b.isRamp()) return false;
-    return a.cls == "freeway" || b.cls == "freeway";
+    return g.cls(a).limitedAccess || g.cls(b).limitedAccess;   // (the class's own row says so: "limited_access")
 }
 
 double crossingConsistency(RoadLabGraph& g, double maxDz, double rampMaxDz, double radius) {
@@ -295,7 +295,7 @@ std::vector<CrossingMeet> crossingMeets(const RoadLabGraph& g) {
                 if (!dup) meet.push_back(q);
             }
         }
-        const bool streets = !a.isRamp() && !b.isRamp() && a.cls != "freeway" && b.cls != "freeway";
+        const bool streets = !a.isRamp() && !b.isRamp() && !g.cls(a).limitedAccess && !g.cls(b).limitedAccess;
         for (std::size_t mi = 0; mi < meet.size(); ++mi) {
             const Vec2& p = meet[mi];
             const double aEnd = std::min(distance(a.xy.front(), p), distance(a.xy.back(), p));

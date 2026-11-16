@@ -70,7 +70,7 @@ nlohmann::json planCrossings(const RoadLabGraph& spec) {
         if (e.xy.size() >= 2 && e.z.size() < 2) { e.s = stations(e.xy); e.z.assign(e.xy.size(), 0.0); }
     auto kindOf = [&](const EdgeSpec& a, const EdgeSpec& b, bool aEndsOnB, bool bEndsOnA) {
         if (g.cls(a).track || g.cls(b).track) return "bridge";
-        if ((a.cls == "freeway" && !b.isRamp()) || (b.cls == "freeway" && !a.isRamp())) return "bridge";
+        if ((g.cls(a).limitedAccess && !b.isRamp()) || (g.cls(b).limitedAccess && !a.isRamp())) return "bridge";
         if (g.cls(a).footway || g.cls(b).footway) {
             const bool footEnds = (g.cls(a).footway && aEndsOnB) || (g.cls(b).footway && bEndsOnA);
             return footEnds ? "at_grade" : "bridge";
@@ -191,7 +191,7 @@ DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain) {
             auto addEnd = [&](const EdgeSpec& e, const EdgeSpec& o) {
                 // a street ending on a street is a junction (levelled by crossingConsistency), never an
                 // overpass to lift -- ends count here only where a freeway or a ramp is one of the two
-                if (!e.isRamp() && !o.isRamp() && e.cls != "freeway" && o.cls != "freeway") return;
+                if (!e.isRamp() && !o.isRamp() && !g.cls(e).limitedAccess && !g.cls(o).limitedAccess) return;
                 for (const Vec2& q : {e.xy.front(), e.xy.back()}) {
                     // a road ending anywhere under the other's paved band counts (streets the importer clipped at a
                     // frontage road's edge end 5 m from its centreline); at-grade tees are excluded by the bridge test
@@ -241,7 +241,7 @@ DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain) {
                             const bool roadClears = zRoad - zTrack >= R.underClearance + g.cls(road).thick + R.structureDepth;
                             aHi = roadClears ? !ta : ta;
                         }
-                        else if (std::fabs(za - zb) < R.bridgeH && (a.cls == "freeway") != (b.cls == "freeway")) aHi = a.cls == "freeway";
+                        else if (std::fabs(za - zb) < R.bridgeH && g.cls(a).limitedAccess != g.cls(b).limitedAccess) aHi = g.cls(a).limitedAccess;
                     }
                     EdgeSpec& hi = aHi ? a : b; EdgeSpec& lo = aHi ? b : a;
                     // The hold must span the whole crossing, not the centreline point: a tent peaks at its station

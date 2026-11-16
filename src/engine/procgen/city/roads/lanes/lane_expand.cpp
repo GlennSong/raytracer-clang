@@ -14,17 +14,26 @@ namespace roads::lanes {
 
 namespace {
 
-
-Lane ribbonLane(const std::string& id, int parent, const std::string& kind, const std::string& cls, double w, int dir,
+// One lane laid beside `spine`. Its centre line is appended to `curves`, the one object every lane of the build is laid
+// into (road_model_parts.h LaneCurves), and the lane names its stretch of it; nothing may hold a view of an earlier
+// lane's points across this call (the arrays grow).
+Lane ribbonLane(const std::shared_ptr<LaneCurves>& curves, const std::string& id, int parent, const std::string& kind,
+                const std::string& cls, double w, int dir,
                 const std::vector<Vec2>& spine, const std::vector<Vec2>& nrm, const std::vector<double>& off) {
     Lane l; l.id = id; l.edge = parent >= 0 ? static_cast<uint32_t>(parent) : kNoIndex; l.kind = kind; l.cls = cls; l.width = w; l.dir = dir;
-    l.xy.reserve(spine.size()); l.left.reserve(spine.size()); l.right.reserve(spine.size());
+    std::vector<Vec2> xy;
+    xy.reserve(spine.size()); l.left.reserve(spine.size()); l.right.reserve(spine.size());
     for (size_t i = 0; i < spine.size(); ++i) {
-        l.xy.push_back(spine[i] + nrm[i] * off[i]);
+        xy.push_back(spine[i] + nrm[i] * off[i]);
         l.left.push_back(spine[i] + nrm[i] * (off[i] + w / 2));
         l.right.push_back(spine[i] + nrm[i] * (off[i] - w / 2));
     }
-    l.s = stations(l.xy); return l;
+    const std::vector<double> s = stations(xy);
+    l.curve = Range{static_cast<uint32_t>(curves->points.size()), static_cast<uint32_t>(xy.size())};
+    curves->points.insert(curves->points.end(), xy.begin(), xy.end());
+    curves->along.insert(curves->along.end(), s.begin(), s.end());
+    l.curves = curves;
+    return l;
 }
 
 }  // namespace
@@ -113,7 +122,7 @@ void composeRamp(RoadLabGraph& g, EdgeSpec& e) {
     for (int& i : e.anchorIdx) if (i >= static_cast<int>(e.s.size())) i = static_cast<int>(e.s.size()) - 1;
 }
 
-void roadLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
+void roadLanes(const RoadLabGraph& g, int ei, LaneSet& out, const std::shared_ptr<LaneCurves>& curves) {
     const EdgeSpec& e = g.edges[static_cast<size_t>(ei)]; const RoadClassSpec& c = g.cls(e);
     std::vector<Vec2> tan, nrm; frames(e.xy, tan, nrm); double w = e.lanes.w;
     std::vector<LaneSlot> slots = laneSlots(c, e.lanes);
@@ -121,7 +130,7 @@ void roadLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
     for (const LaneSlot& sl : slots) {
         laneOfSlot[sl.name] = static_cast<int>(out.lanes.size());
         std::vector<double> off(e.xy.size(), sl.offset);
-        out.lanes.push_back(ribbonLane(e.id + "." + sl.name, ei, "through", e.cls, w, sl.dir, e.xy, nrm, off));
+        out.lanes.push_back(ribbonLane(curves, e.id + "." + sl.name, ei, "through", e.cls, w, sl.dir, e.xy, nrm, off));
         out.lanes.back().slot = std::atoi(sl.name.c_str() + 1);   // f0 / b0: by the centre line (laneSlots' names)
         out.lanes.back().spineFrom = e.s.front();
         out.lanes.back().spineTo = e.s.back();
@@ -145,7 +154,7 @@ void roadLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
             last = st;
         }
         if (sp.size() >= 2) {
-            out.lanes.push_back(ribbonLane(e.id + "." + pk.id, ei, pk.kind, e.cls, w, d, sp, nn, off));
+            out.lanes.push_back(ribbonLane(curves, e.id + "." + pk.id, ei, pk.kind, e.cls, w, d, sp, nn, off));
             out.lanes.back().slot = pk.side == "right" ? static_cast<int>(cand.size()) : -1;   // beyond the kerb lane, or inside lane 0
             out.lanes.back().spineFrom = first;
             out.lanes.back().spineTo = last;
@@ -157,10 +166,10 @@ void roadLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
     }
 }
 
-void rampLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
+void rampLanes(const RoadLabGraph& g, int ei, LaneSet& out, const std::shared_ptr<LaneCurves>& curves) {
     const EdgeSpec& e = g.edges[static_cast<size_t>(ei)]; std::vector<Vec2> tan, nrm; frames(e.xy, tan, nrm); double w = e.lanes.w;
     std::vector<double> zero(e.xy.size(), 0.0);
-    out.lanes.push_back(ribbonLane(e.id + ".f0", ei, "ramp", e.cls, w, +1, e.xy, nrm, zero));
+    out.lanes.push_back(ribbonLane(curves, e.id + ".f0", ei, "ramp", e.cls, w, +1, e.xy, nrm, zero));
     out.lanes.back().slot = 0;
     out.lanes.back().spineFrom = e.s.front();
     out.lanes.back().spineTo = e.s.back();
@@ -169,7 +178,7 @@ void rampLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
         double last = 0;
         for (size_t i = 0; i < e.xy.size(); ++i) { if (e.s[i] > dv + tap) break; sp.push_back(e.xy[i]); nn.push_back(nrm[i]); off.push_back(-w * (1 - smoothstep01((e.s[i] - dv) / tap))); last = e.s[i]; }
         if (sp.size() >= 2) {
-            out.lanes.push_back(ribbonLane(e.id + ".f1", ei, "ramp", e.cls, w, +1, sp, nn, off));
+            out.lanes.push_back(ribbonLane(curves, e.id + ".f1", ei, "ramp", e.cls, w, +1, sp, nn, off));
             out.lanes.back().slot = 1;
             out.lanes.back().spineFrom = e.s.front();
             out.lanes.back().spineTo = last;
@@ -201,40 +210,42 @@ std::string LaneSet::roadOf(int lane, const RoadLabGraph& g) const {
 LaneSet expand(RoadLabGraph& g) {
     for (EdgeSpec& e : g.edges) if (e.isRamp()) composeRamp(g, e);
     LaneSet L;
+    const std::shared_ptr<LaneCurves> curves = std::make_shared<LaneCurves>();   // every lane's centre line, held once
+    L.curves = curves;
     for (size_t i = 0; i < g.edges.size(); ++i) {
         const EdgeSpec& e = g.edges[i]; if (e.laneCount() == 0) continue;
-        if (e.isRamp()) rampLanes(g, static_cast<int>(i), L); else roadLanes(g, static_cast<int>(i), L);
+        if (e.isRamp()) rampLanes(g, static_cast<int>(i), L, curves); else roadLanes(g, static_cast<int>(i), L, curves);
     }
     for (size_t i = 0; i < L.lanes.size(); ++i) L.byId[L.lanes[i].id] = static_cast<int>(i);
     for (const ConnectorSpec& c : g.connectors) {
         int a = L.find(c.from), b = L.find(c.to);
         if (a < 0 || b < 0) throw std::runtime_error("connector references unknown lane " + (a < 0 ? c.from : c.to));
         const Lane& A = L.lanes[static_cast<size_t>(a)]; const Lane& B = L.lanes[static_cast<size_t>(b)];
-        Vec2 p0 = A.xy.back(), t0 = tangentAt(A.xy, A.xy.size() - 1);
-        Vec2 p1 = pointAt(B.xy, B.s, c.toS), t1 = tangentAtStation(B.xy, B.s, c.toS) * (B.dir > 0 ? 1.0 : -1.0);
+        Vec2 p0 = A.xy().back(), t0 = tangentAt(A.xy(), A.xy().size() - 1);
+        Vec2 p1 = pointAt(B.xy(), B.s(), c.toS), t1 = tangentAtStation(B.xy(), B.s(), c.toS) * (B.dir > 0 ? 1.0 : -1.0);
         std::vector<Vec2> xy = hermite(p0, t0, p1, t1); std::vector<Vec2> tan, nrm; frames(xy, tan, nrm); std::vector<double> zero(xy.size(), 0.0);
-        Lane ln = ribbonLane(A.id + ">" + B.id, -1, "connector", A.cls, A.width, +1, xy, nrm, zero); ln.srcLane = a; ln.dstLane = b;
+        Lane ln = ribbonLane(curves, A.id + ">" + B.id, -1, "connector", A.cls, A.width, +1, xy, nrm, zero); ln.srcLane = a; ln.dstLane = b;
         L.byId[ln.id] = static_cast<int>(L.lanes.size()); L.lanes.push_back(std::move(ln));
     }
     return L;
 }
 
 double laneHeightAt(const Lane& l, const RoadLabGraph& g, const Vec2& p) {
-    if (l.isConnector()) { Projection pr = project(l.xy, l.s, p); double u = l.s.back() > 1e-9 ? pr.station / l.s.back() : 0.0; return (1 - u) * l.z0 + u * l.z1; }
+    if (l.isConnector()) { Projection pr = project(l.xy(), l.s(), p); double u = l.s().back() > 1e-9 ? pr.station / l.s().back() : 0.0; return (1 - u) * l.z0 + u * l.z1; }
     const EdgeSpec& e = g.edges[static_cast<size_t>(l.road())]; Projection pr = project(e.xy, e.s, p); return interp(e.s, e.z, pr.station);
 }
 
 std::vector<std::pair<int, int>> adjacency(const LaneSet& L) {
     std::vector<std::pair<int, int>> out; std::vector<std::array<double, 4>> bx(L.lanes.size());
-    for (size_t i = 0; i < L.lanes.size(); ++i) { auto& b = bx[i]; b = {1e300, -1e300, 1e300, -1e300}; for (const Vec2& p : L.lanes[i].xy) { b[0] = std::min(b[0], p.x); b[1] = std::max(b[1], p.x); b[2] = std::min(b[2], p.y); b[3] = std::max(b[3], p.y); } }
+    for (size_t i = 0; i < L.lanes.size(); ++i) { auto& b = bx[i]; b = {1e300, -1e300, 1e300, -1e300}; for (const Vec2& p : L.lanes[i].xy()) { b[0] = std::min(b[0], p.x); b[1] = std::max(b[1], p.x); b[2] = std::min(b[2], p.y); b[3] = std::max(b[3], p.y); } }
     for (size_t i = 0; i < L.lanes.size(); ++i) for (size_t j = i + 1; j < L.lanes.size(); ++j) {
         const Lane& a = L.lanes[i]; const Lane& b = L.lanes[j]; double w = (a.width + b.width) / 2; int close = 0; double dots = 0;
         if (bx[i][0] > bx[j][1] + 2 * w || bx[j][0] > bx[i][1] + 2 * w || bx[i][2] > bx[j][3] + 2 * w || bx[j][2] > bx[i][3] + 2 * w) continue;
         for (int k = 0; k < 25; ++k) {
-            double f = 0.02 + 0.96 * k / 24; Vec2 p = pointAt(a.xy, a.s, f * a.s.back()); Projection pr = project(b.xy, b.s, p);
-            if (std::fabs(pr.distance - w) < 0.25 * w) { ++close; dots += dot(tangentAtStation(a.xy, a.s, f * a.s.back()) * static_cast<double>(a.dir), tangentAtStation(b.xy, b.s, pr.station) * static_cast<double>(b.dir)); }
+            double f = 0.02 + 0.96 * k / 24; Vec2 p = pointAt(a.xy(), a.s(), f * a.s().back()); Projection pr = project(b.xy(), b.s(), p);
+            if (std::fabs(pr.distance - w) < 0.25 * w) { ++close; dots += dot(tangentAtStation(a.xy(), a.s(), f * a.s().back()) * static_cast<double>(a.dir), tangentAtStation(b.xy(), b.s(), pr.station) * static_cast<double>(b.dir)); }
         }
-        if (close * a.s.back() / 25 < 20 || close == 0) continue;
+        if (close * a.s().back() / 25 < 20 || close == 0) continue;
         if (dots / close > 0.7) out.emplace_back(static_cast<int>(i), static_cast<int>(j));
     }
     return out;

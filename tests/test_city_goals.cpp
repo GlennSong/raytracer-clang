@@ -663,7 +663,7 @@ TEST_CASE(footpaths_are_walked_across_a_block_and_never_driven) {
         // the connector from the street starts on its pavement (a carriageway's half width + 1 m out), never in its middle
         for (int li = streetLinks; li < nav.linkCount(); ++li) {
             const NavLink& L = nav.links[static_cast<std::size_t>(li)];
-            CHECK(L.footpath && L.walkable && (L.access & road_access::kFootpath));
+            CHECK(L.footpath && L.walkable && L.access == 0);   // (a walk: none of a street's access bits)
             if (L.from < streetNodes) {
                 const Real off = (L.footA - nav.nodes[static_cast<std::size_t>(L.from)]).length();
                 CHECK(off > 1.0);

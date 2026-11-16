@@ -141,7 +141,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             continue;
         }
         const bool carsDrive = g.cls(edgeAt(ml.edge)).carriesCars();
-        if (!carsDrive || ml.curve.count < 2 || !(m.along[ml.curve.end() - 1] > 0)) {
+        if (!carsDrive || ml.curve.count < 2 || !(m.laneAlong()[ml.curve.end() - 1] > 0)) {
             out.leftOut[li] = 1;
             ++out.otherLanesLeftOut;
             continue;
@@ -166,7 +166,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         bool laid = true;
         for (std::size_t k = 0; k < n && laid; ++k) laid = stated(m.spineStations[ml.curve.first + k]);
         if (!laid) {
-            out.problems.push_back("lane " + ml.id + ": not laid beside its road's spine point for point: no lane path");
+            out.problems.push_back(RoadProblem(RoadProblemKind::LaneNotBesideSpine).onLane(ml.id));
             kept[li] = 0;
             out.leftOut[li] = 1;
             ++out.drivenLanesLeftOut;
@@ -184,7 +184,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         for (std::size_t k = 0; k < n; ++k) {
             const std::size_t idx = ml.dir > 0 ? k : n - 1 - k;
             const double st = m.spineStations[ml.curve.first + idx];
-            T.xy.push_back(m.points[ml.curve.first + idx]);
+            T.xy.push_back(m.lanePoints()[ml.curve.first + idx]);
             T.u.push_back(ml.dir > 0 ? st : e.s.back() - st);
             const std::size_t i = static_cast<std::size_t>(std::lower_bound(e.s.begin(), e.s.end(), st - kCutTolerance) - e.s.begin());
             forward.push_back(tangent[std::min(i, tangent.size() - 1)] * static_cast<double>(ml.dir));
@@ -200,14 +200,14 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             cutFolds(T.xy, T.u, forward);
             T.s = stations(T.xy);
             ++out.tidiedLanes;
-            out.problems.push_back(fmt("lane %s runs backwards for %.2f m near (%.1f, %.1f): it lies on the inside of a corner of road "
-                                       "%s sharper than its offset from the road's spine; tidied (the fold cut out, %.2f m shorter)",
-                                       ml.id.c_str(), back, backAt.x, backAt.y, e.id.c_str(), before - T.s.back()));
+            // (numbers: how far it ran backwards, how much shorter the tidied lane is)
+            out.problems.push_back(RoadProblem(RoadProblemKind::LaneFoldTidied).onLane(ml.id).onRoad(e.id).where(backAt).number(back)
+                                       .number(before - T.s.back()));
         }
         for (std::size_t k = 1; k < T.u.size(); ++k) T.u[k] = std::max(T.u[k], T.u[k - 1]);
         out.laneLengths[li] = T.s.back();        T.ok = T.xy.size() >= 2 && T.s.back() > 0;
         if (!T.ok) {
-            out.problems.push_back("lane " + ml.id + ": nothing of it is left once its folds are cut out: no lane path");
+            out.problems.push_back(RoadProblem(RoadProblemKind::LaneNothingLeft).onLane(ml.id));
             kept[li] = 0;
             out.leftOut[li] = 1;
             ++out.drivenLanesLeftOut;
@@ -221,8 +221,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         for (uint32_t a = 0; a < J.arms.size(); ++a) {
             const ModelArm& arm = J.arms[a];
             if (arm.street.valid() && !stated(arm.stopLine))
-                out.problems.push_back(fmt("junction %s: arm %u (street %s) has no stop line: its road is not in the file", J.id.c_str(), a,
-                                           m.streets[arm.street.index].id.c_str()));
+                out.problems.push_back(RoadProblem(RoadProblemKind::ArmNoStopLine).atJunction(J.id).onArm(a).onStreet(m.streets[arm.street.index].id));
         }
     }
 
@@ -271,10 +270,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                 }
                 const int a = met.arm;
                 if (a < 0 || !stated(met.stopLine)) {
-                    out.problems.push_back(fmt("street %s: its %s end names junction %s, which has no arm with a stop line for it: lane %s "
-                                               "runs on to the street's end there, joined to nothing across the junction",
-                                               S.id.c_str(), end == 0 ? "`from`" : "`to`", m.junctions[J.index].id.c_str(),
-                                               m.lanes[li].id.c_str()));
+                    out.problems.push_back(RoadProblem(RoadProblemKind::StreetEndNoStopLine).onStreet(S.id).word(end == 0 ? "`from`" : "`to`")
+                                               .atJunction(m.junctions[J.index].id).onLane(m.lanes[li].id));
                     (end == 0 ? noStopLo : noStopHi) = true;
                     continue;
                 }
@@ -290,10 +287,10 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                 }
             }
             if (!(hi - lo > kCutTolerance)) {
-                const std::string why = fmt("lane %s on street %s: no room between its stop lines (%.2f to %.2f along road %s): no lane path there",
-                                            m.lanes[li].id.c_str(), S.id.c_str(), lo, hi, S.road.c_str());
-                out.problems.push_back(why);
-                drop(li, spanLo, spanHi, -1, why);
+                // (numbers: the two stop lines' stations)
+                out.problems.push_back(RoadProblem(RoadProblemKind::NoRoomBetweenStopLines).onLane(m.lanes[li].id).onStreet(S.id).onRoad(S.road)
+                                           .number(lo).number(hi));
+                drop(li, spanLo, spanHi, -1, problemLine(out.problems.back()));
                 continue;
             }
             // what the stop lines trim off its ends lies inside those junctions
@@ -331,8 +328,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         bool said = false;   // (a street with no room between its stop lines says so itself)
         for (const Dropped& d : dropped[li]) said = said || !d.why.empty();
         if (!said)
-            out.problems.push_back("lane " + m.lanes[li].id + ": it runs along none of the road model's streets, nor inside a junction: "
-                                   "no lane path");
+            out.problems.push_back(RoadProblem(RoadProblemKind::LaneOnNoStreet).onLane(m.lanes[li].id));
         out.leftOut[li] = 1;
         ++out.drivenLanesLeftOut;
     }
@@ -481,10 +477,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         if (roadEnd >= 0 && !roadEndMeetsAnother(g, e, roadEnd)) return;                 // a road that just ends
         if (!unstatedMeetings.insert(std::make_pair(pc.street, streetEnd)).second) return;
         const Vec2 p = pointAt(e.xy, e.s, at);
-        out.problems.push_back(fmt("street %s: its %s end at (%.1f, %.1f) %s, but the road file states no junction there and nothing it "
-                                   "carries on into: its lanes stop there, joined to nothing (the planner's to state)", S.id.c_str(),
-                                   streetEnd == 0 ? "`from`" : "`to`", p.x, p.y,
-                                   roadEnd < 0 ? "lies part way along its road" : "meets another road"));
+        out.problems.push_back(RoadProblem(RoadProblemKind::StreetEndUnstated).onStreet(S.id).word(streetEnd == 0 ? "`from`" : "`to`").where(p)
+                                   .word(roadEnd < 0 ? "lies part way along its road" : "meets another road"));
     };
     for (const Piece& pc : pieces)
         if (pc.startStreetEnd >= 0 && !pc.paths.empty()) unstatedEnd(pc, pc.startStreetEnd);
@@ -512,14 +506,12 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                 }
         }
         if (!named) {
-            out.problems.push_back(fmt("street %s carries on into %s, which does not name it back: its lanes lead nowhere there",
-                                       S.id.c_str(), TS.id.c_str()));
+            out.problems.push_back(RoadProblem(RoadProblemKind::CarryOnNotNamedBack).onStreet(S.id).andStreet(TS.id));
             continue;
         }
         if (backs.size() != 1) {
-            out.problems.push_back(fmt("street %s carries on into %s, %s: lane %s leads nowhere there", S.id.c_str(), TS.id.c_str(),
-                                       backs.empty() ? "where no lane leaves" : "which names it back at both ends with lanes leaving each",
-                                       m.lanes[pc.lane].id.c_str()));
+            out.problems.push_back(RoadProblem(RoadProblemKind::CarryOnAmbiguous).onStreet(S.id).andStreet(TS.id).onLane(m.lanes[pc.lane].id)
+                                       .word(backs.empty() ? "where no lane leaves" : "which names it back at both ends with lanes leaving each"));
             continue;
         }
         const int back = backs.front();
@@ -532,24 +524,22 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                 best = static_cast<int>(q);
         }
         if (best < 0) {
-            out.problems.push_back(fmt("street %s carries on into %s, where no lane leaves its end the way lane %s runs", S.id.c_str(),
-                                       TS.id.c_str(), m.lanes[pc.lane].id.c_str()));
+            out.problems.push_back(RoadProblem(RoadProblemKind::CarryOnNoLaneLeaves).onStreet(S.id).andStreet(TS.id).onLane(m.lanes[pc.lane].id));
             continue;
         }
         const Piece& into = pieces[static_cast<std::size_t>(best)];
         if (m.lanes[into.lane].slot != slot)
-            out.problems.push_back(fmt("lane %s (slot %d) carries on from street %s into %s, which has no lane in its slot: into lane %s "
-                                       "(slot %d)", m.lanes[pc.lane].id.c_str(), slot, S.id.c_str(), TS.id.c_str(),
-                                       m.lanes[into.lane].id.c_str(), m.lanes[into.lane].slot));
+            // (numbers: the lane's slot, and the slot of the lane it leads into)
+            out.problems.push_back(RoadProblem(RoadProblemKind::CarryOnOtherSlot).onLane(m.lanes[pc.lane].id).onStreet(S.id).andStreet(TS.id)
+                                       .andLane(m.lanes[into.lane].id).number(slot).number(m.lanes[into.lane].slot));
         next[pc.paths.back()].push_back(PathId(into.paths.front()));
         ++out.carryOnJoins;
         const double gap = joinGap(pc.paths.back(), into.paths.front());
         if (gap > kJoinReported) {
             ++out.joinsWithGap;
             const Vec2 at = G.pointAt(PathId(pc.paths.back()), G.paths[pc.paths.back()].length);
-            out.problems.push_back(fmt("lane %s carries on from street %s into lane %s of street %s, their lines %.3f m apart at (%.2f, "
-                                       "%.2f): joined", m.lanes[pc.lane].id.c_str(), S.id.c_str(), m.lanes[into.lane].id.c_str(),
-                                       TS.id.c_str(), gap, at.x, at.y));
+            out.problems.push_back(RoadProblem(RoadProblemKind::CarryOnGap).onLane(m.lanes[pc.lane].id).onStreet(S.id).andLane(m.lanes[into.lane].id)
+                                       .andStreet(TS.id).where(at).number(gap));
         }
     }
     // where a lane leaves its host (the host's lane path ending where their lines meet leads on into it too), and where one
@@ -578,10 +568,11 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                                                      : std::fabs(pieces[bp.back()].u1 - TB.u.back()) <= kCutTolerance);
         const int hp = hostPath(host, uOf(host, c.meets), diverge);
         if (!reaches || hp < 0) {
-            out.problems.push_back(fmt("lane %s %s lane %s at station %.2f along %s, where %s has no lane path to %s: not joined",
-                                       m.lanes[branch].id.c_str(), diverge ? "leaves" : "merges into", m.lanes[host].id.c_str(), c.meets,
-                                       edgeAt(m.lanes[host].edge).id.c_str(), !reaches ? m.lanes[branch].id.c_str() : m.lanes[host].id.c_str(),
-                                       !reaches ? (diverge ? "start from" : "end at") : "meet it (inside a junction, or past its lane)"));
+            // (words: leaves or merges into; which of the two lanes has no lane path; what it lacks one to do)
+            out.problems.push_back(RoadProblem(RoadProblemKind::ConnectionNotJoined).onLane(m.lanes[branch].id).word(diverge ? "leaves" : "merges into")
+                                       .andLane(m.lanes[host].id).atStation(c.meets).onRoad(edgeAt(m.lanes[host].edge).id)
+                                       .word(!reaches ? m.lanes[branch].id : m.lanes[host].id)
+                                       .word(!reaches ? (diverge ? "start from" : "end at") : "meet it (inside a junction, or past its lane)"));
             continue;
         }
         const uint32_t from = diverge ? static_cast<uint32_t>(hp) : pieces[bp.back()].paths.back();
@@ -593,8 +584,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         if (gap > kJoinReported) {
             ++out.joinsWithGap;
             const Vec2 at = G.pointAt(PathId(into), 0);
-            out.problems.push_back(fmt("lane %s %s lane %s, their lines %.3f m apart at (%.2f, %.2f): joined", m.lanes[branch].id.c_str(),
-                                       diverge ? "leaves" : "merges into", m.lanes[host].id.c_str(), gap, at.x, at.y));
+            out.problems.push_back(RoadProblem(RoadProblemKind::ConnectionGap).onLane(m.lanes[branch].id).word(diverge ? "leaves" : "merges into")
+                                       .andLane(m.lanes[host].id).where(at).number(gap));
         }
     }
 
@@ -622,15 +613,14 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             turnsAt[m.turns[t].junction.index].push_back(t);
             continue;
         }
-        out.problems.push_back(fmt("stated turn %u names no junction of the road model: not built", t));
+        out.problems.push_back(RoadProblem(RoadProblemKind::TurnNoJunction).number(t));
         ++turnsPlaced;
     }
     for (uint32_t j = 0; j < m.junctions.size(); ++j) {
         const ModelJunction& J = m.junctions[j];
         if (arrivingAt[j].empty() && leavingAt[j].empty()) {
             if (!turnsAt[j].empty())
-                out.problems.push_back(fmt("junction %s: %zu turns are stated, but no lane path reaches it: none built", J.id.c_str(),
-                                           turnsAt[j].size()));
+                out.problems.push_back(RoadProblem(RoadProblemKind::JunctionNoLanePath).atJunction(J.id).number(static_cast<Real>(turnsAt[j].size())));
             turnsPlaced += turnsAt[j].size();
             continue;
         }
@@ -659,8 +649,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                     }
                 if (ends.empty()) continue;
                 if (!(across.length() > 0)) {   // its arriving and leaving lanes' ways across cancel out: cannot be drawn
-                    out.problems.push_back(fmt("junction %s: arm %u (road %s): its lanes' ways across the arm cancel out: the arm is left "
-                                               "out of the junction's outline", J.id.c_str(), a, J.arms[a].road.c_str()));
+                    out.problems.push_back(RoadProblem(RoadProblemKind::ArmWaysCancel).atJunction(J.id).onArm(a).onRoad(J.arms[a].road));
                     continue;
                 }
                 across = normalize(across);
@@ -692,7 +681,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             }
             jn.box = G.addPlanPoints(ring);
             if (ring.size() < 3)
-                out.problems.push_back(fmt("junction %s at (%.1f, %.1f): its outline has %zu corners", J.id.c_str(), J.at.x, J.at.y, ring.size()));
+                out.problems.push_back(RoadProblem(RoadProblemKind::OutlineFewCorners).atJunction(J.id).where(J.at).number(static_cast<Real>(ring.size())));
             bool tangled = false;
             for (std::size_t a = 0; a < ring.size() && !tangled; ++a)
                 for (std::size_t b = a + 2; b < ring.size() && !tangled; ++b) {
@@ -701,15 +690,13 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                     tangled = segmentsCross(ring[a], ring[(a + 1) % ring.size()], ring[b], ring[(b + 1) % ring.size()], hit);
                 }
             if (tangled)
-                out.problems.push_back(fmt("junction %s at (%.1f, %.1f): its outline crosses itself (two arms' stop lines overlap: "
-                                           "a corner for step 9)", J.id.c_str(), J.at.x, J.at.y));
+                out.problems.push_back(RoadProblem(RoadProblemKind::OutlineCrossesItself).atJunction(J.id).where(J.at));
         }
         std::vector<uint32_t> arriving, leaving;
         for (const std::pair<uint32_t, uint32_t>& pa : arrivingAt[j]) {
             arriving.push_back(pa.first);
-            // the arm it arrives by and that arm's stated through partner: what says which approaches face each other
+            // the arm it arrives by: what the model is asked by (its signs, which approaches face each other)
             G.paths[pa.first].arm = pa.second;
-            G.paths[pa.first].throughArm = throughPartner(J.through, pa.second);
         }
         for (const std::pair<uint32_t, uint32_t>& pa : leavingAt[j]) leaving.push_back(pa.first);
         // a sign the file states on an arm no lane arrives by: impossible, reported (never stood elsewhere)
@@ -718,8 +705,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             bool any = false;
             for (const std::pair<uint32_t, uint32_t>& pa : arrivingAt[j]) any = any || pa.second == a;
             if (!any)
-                out.problems.push_back(fmt("junction %s: its arm on road %s carries \"%s\", but no lane arrives by it", J.id.c_str(),
-                                           J.arms[a].road.c_str(), J.arms[a].regulations.front().c_str()));
+                out.problems.push_back(RoadProblem(RoadProblemKind::SignOnArmNoLane).atJunction(J.id).onArm(a).onRoad(J.arms[a].road)
+                                           .word(J.arms[a].regulations.front()));
         }
         std::sort(arriving.begin(), arriving.end());
         std::sort(leaving.begin(), leaving.end());
@@ -753,9 +740,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                 ref.modelTurn = t;
                 ref.at = J.at;
                 out.refusals.push_back(ref);
-                out.problems.push_back(fmt("junction %s: the %s from lane %s into lane %s has no lane path %s: not built (it stays stated)",
-                                           J.id.c_str(), turnKey(mt.turn), m.lanes[mt.from.index].id.c_str(), m.lanes[mt.to.index].id.c_str(),
-                                           from < 0 ? "to start from" : "to end on"));
+                out.problems.push_back(RoadProblem(RoadProblemKind::TurnNoLanePath).atJunction(J.id).word(turnKey(mt.turn)).onLane(m.lanes[mt.from.index].id)
+                                           .andLane(m.lanes[mt.to.index].id).word(from < 0 ? "to start from" : "to end on").where(J.at));
                 ++note.turnsRefused;
                 continue;
             }
@@ -789,9 +775,9 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                 ref.modelTurn = t;
                 ref.at = fit.at;
                 out.refusals.push_back(ref);
-                out.problems.push_back(fmt("junction %s: the %s from lane %s into lane %s fits no vehicle: %s (it stays stated; a corner "
-                                           "fault)", J.id.c_str(), turnKey(mt.turn), m.lanes[mt.from.index].id.c_str(),
-                                           m.lanes[mt.to.index].id.c_str(), fit.why.c_str()));
+                // (words: the turn's kind, and the corner fit's own reason)
+                out.problems.push_back(RoadProblem(RoadProblemKind::TurnFitsNoVehicle).atJunction(J.id).word(turnKey(mt.turn)).onLane(m.lanes[mt.from.index].id)
+                                           .andLane(m.lanes[mt.to.index].id).word(fit.why).where(fit.at));
                 ++note.turnsRefused;
                 continue;
             }
@@ -823,8 +809,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
     }
     out.connectMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tConnect).count();
     if (turnsPlaced != m.turns.size())
-        out.problems.push_back(fmt("of the %zu stated turns, %zu were placed at their junctions: the rest neither built nor refused",
-                                   m.turns.size(), turnsPlaced));
+        out.problems.push_back(RoadProblem(RoadProblemKind::TurnsNotAllPlaced).number(static_cast<Real>(m.turns.size()))
+                                   .number(static_cast<Real>(turnsPlaced)));
 
     // ---- every stretch of a kept lane no lane path covers, and why (inside a junction, or said) ------------------------
     // Each stretch no lane path covers is split by the causes recorded where the stretches were left out (a junction's
@@ -863,13 +849,13 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                 if (to - from <= kStationRounding) {
                     // two of its streets' stated stations a centimetre or so apart (the road file writes them to the
                     // centimetre), with no junction beside the hole: said, so no level hides one
-                    gp.why = fmt("lane %s: %.3f m between two of its streets' stated stations, %.2f m along it, with no lane path and "
-                                 "no junction there (the road file writes stations to the centimetre)", m.lanes[li].id.c_str(), to - from, from);
+                    // (numbers: the hole's length, and how far along the lane it is)
+                    out.problems.push_back(RoadProblem(RoadProblemKind::LaneHoleAtStations).onLane(m.lanes[li].id).number(to - from).number(from));
                 } else {
-                    gp.why = fmt("lane %s: from %.2f to %.2f m along it no lane path covers it, and nothing that left it out says why",
-                                 m.lanes[li].id.c_str(), from, to);
+                    // (numbers: from and to, metres along the lane)
+                    out.problems.push_back(RoadProblem(RoadProblemKind::LaneUncovered).onLane(m.lanes[li].id).number(from).number(to));
                 }
-                out.problems.push_back(gp.why);
+                gp.why = problemLine(out.problems.back());
                 out.laneGaps.push_back(gp);
             };
             // (a hole of a centimetre or two between two causes, or between a cause and a lane path, is the road file's
@@ -937,15 +923,15 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             if (lane) {
                 ++out.laneKinks;
                 out.worstLaneKink = std::max(out.worstLaneKink, k.degrees);
-                out.problems.push_back(fmt("kink: the line of lane %s (lane path %u) jumps %.1f degrees at one point, %.1f m along it at (%.1f, "
-                                           "%.1f), beyond the bend around it (more than %.0f): kept as drawn, and the bend profile slows for it",
-                                           m.lanes[path.modelLane].id.c_str(), p, k.degrees, k.along, k.at.x, k.at.y, kKinkDegrees));
+                // (numbers: the jump in degrees, metres along the path, the jump that counts as a kink)
+                out.problems.push_back(RoadProblem(RoadProblemKind::LaneKink).onLane(m.lanes[path.modelLane].id).onPath(p).where(k.at)
+                                           .number(k.degrees).number(k.along).number(kKinkDegrees));
             } else {
                 ++out.connectorKinks;
                 out.worstConnectorKink = std::max(out.worstConnectorKink, k.degrees);
-                out.problems.push_back(fmt("kink: connector %u (junction %u) jumps %.1f degrees at one point, %.1f m along it at (%.1f, %.1f), "
-                                           "beyond the bend around it (more than %.0f)",
-                                           p, path.junction.index, k.degrees, k.along, k.at.x, k.at.y, kKinkDegrees));
+                // (numbers: the same three, then the lane level's junction it runs through)
+                out.problems.push_back(RoadProblem(RoadProblemKind::ConnectorKink).onPath(p).where(k.at).number(k.degrees).number(k.along)
+                                           .number(kKinkDegrees).number(path.junction.index));
             }
         }
     }
@@ -958,10 +944,9 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             ++out.joinKinks;
             out.worstJoinKink = std::max(out.worstJoinKink, degrees);
             const Vec2 at = G.pointAt(n, 0);
-            out.problems.push_back(fmt("kink: %s %u leads into %s %u with its heading jumping %.1f degrees at (%.1f, %.1f) (more than %.0f)",
-                                       G.paths[p].kind == PathKind::Lane ? "lane" : "connector", p,
-                                       G.paths[n.index].kind == PathKind::Lane ? "lane" : "connector", n.index, degrees, at.x, at.y,
-                                       kKinkDegrees));
+            out.problems.push_back(RoadProblem(RoadProblemKind::JoinKink).word(G.paths[p].kind == PathKind::Lane ? "lane" : "connector").onPath(p)
+                                       .word(G.paths[n.index].kind == PathKind::Lane ? "lane" : "connector").andPath(n.index).where(at)
+                                       .number(degrees).number(kKinkDegrees));
         }
     }
     out.bendPieceBytes = G.bendPieces.size() * sizeof(BendPiece) + G.paths.size() * sizeof(Range);
@@ -987,9 +972,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             ++marked;
         }
         if (marked == 0)
-            out.problems.push_back(fmt("lane %s merges into lane %s (the road model's connection %u), but the crossing points hold no join "
-                                       "of their paths: who gives way there is not carried", m.lanes[mm.branchLane].id.c_str(),
-                                       m.lanes[mm.hostLane].id.c_str(), mm.connection));
+            out.problems.push_back(RoadProblem(RoadProblemKind::MergeNotCarried).onLane(m.lanes[mm.branchLane].id).andLane(m.lanes[mm.hostLane].id)
+                                       .number(mm.connection));
     }
     out.crossings.waitInsidePoints = placeWaitInsidePoints(model);
 
@@ -1023,7 +1007,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
     }
     std::sort(out.controlPlan.regulations.begin(), out.controlPlan.regulations.end());
 
-    for (const std::string& p : validate(G)) out.problems.push_back("lane graph: " + p);
+    for (const std::string& p : validate(G)) out.problems.push_back(RoadProblem(RoadProblemKind::LaneGraphCheck).word(p));
     reachReport(G, out);
     out.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     return out;

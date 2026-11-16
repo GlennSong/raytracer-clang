@@ -40,10 +40,20 @@ inline bool stated(Real v) { return !std::isnan(v); }
 inline bool sameWrittenStation(Real a, Real b) { return approxEqual(a, b, kWrittenStation); }
 
 // THE FACTS OF ONE LANE, DECLARED ONCE (ADR-0435). A lane exists in two forms: the builder's lane while a road is being
-// laid and drawn (lanes/lane_expand.h Lane: these facts plus its centre line, edges and working data) and the road
+// laid and drawn (lanes/lane_expand.h Lane: these facts plus its edges and working data) and the road
 // model's lane, the record kept (road_model.h ModelLane: these facts plus where it lies on the streets). Both ARE this
 // struct, so a fact has one name and one type, and the model takes the builder's whole (road_model.cpp builtRoadModel),
 // never field by field. Readers that have the model read the model's.
+//
+// THE LANES' CENTRE LINES, HELD ONCE (ADR-0438): every lane's points one after another, and the distance along its own
+// lane to each. A lane names its stretch of these arrays (LaneFacts::curve). The road build makes the object as it lays
+// the lanes (lanes/lane_expand.h expand) and the road model made from that build holds THE SAME OBJECT
+// (RoadModel::curves), not a copy: the builder's lane and the model's lane read one set of points. Nothing changes it
+// once the lanes are laid. A model read back from its saved bytes holds its own.
+struct LaneCurves {
+    std::vector<Vec2> points;
+    std::vector<Real> along;
+};
 struct LaneFacts {
     std::string id, kind;            // kind: through | turn | slip | aux | ramp | connector
     uint32_t edge = kNoIndex;        // its road, an index into the road file's edges (none: a connector)
@@ -54,6 +64,7 @@ struct LaneFacts {
     int slot = -1;
     Real width = 0;                  // metres
     Real spineFrom = 0, spineTo = 0; // the stretch of its road's spine it is laid along (stations, from <= to)
+    Range curve;                     // its centre line, the way it is laid (spine order): its stretch of LaneCurves
 
     bool onRoad() const { return edge != kNoIndex; }
     // Its road's index as a signed number, -1 for none: for code that keeps road indices as int.

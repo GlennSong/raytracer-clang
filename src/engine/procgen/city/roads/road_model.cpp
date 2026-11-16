@@ -11,6 +11,7 @@
 #include "engine/procgen/city/polyline.h"                      // simplifyRun, distToSegment
 #include "engine/procgen/city/polygon.h"                       // pointInPolygon, interiorPoint: the regions' outlines
 #include "engine/asset_root.h"                                 // assetPath: the attachment kinds' file
+#include "check.h"
 #include "log.h"
 
 #include <nlohmann/json.hpp>
@@ -78,7 +79,7 @@ ModelSection sectionOf(const RoadLabGraph& g, const EdgeSpec& e, bool* fits) {
     const RoadClassSpec& c = g.cls(e);
     ModelSection s;
     s.roadClass = e.cls;
-    s.klass = roads::lanes::classOf(e);
+    s.klass = roads::lanes::classOf(g, e);
     s.lanesForward = e.lanes.fwd;
     s.lanesBackward = e.lanes.back;
     s.laneWidth = e.lanes.w;
@@ -313,20 +314,24 @@ RoadModel builtRoadModel(const Result& r) {
     for (std::size_t i = 0; i < m.streets.size(); ++i) streetsOf[m.streets[i].road].push_back(static_cast<uint32_t>(i));
     for (std::pair<const std::string, std::vector<uint32_t>>& kv : streetsOf)
         std::stable_sort(kv.second.begin(), kv.second.end(), [&](uint32_t a, uint32_t b) { return m.streets[a].from < m.streets[b].from; });
+    // THE LANES' CENTRE LINES ARE THE BUILD'S OWN OBJECT, held with it (ADR-0438): not a copy. Each lane's facts name its
+    // stretch of it (`curve`); the heights and spine stations the model adds stand beside the same stretch.
+    m.curves = r.lanes.curves;
+    m.heights.assign(m.lanePoints().size(), 0.0);
+    m.spineStations.assign(m.lanePoints().size(), kNotStated);
     for (std::size_t li = 0; li < r.lanes.lanes.size(); ++li) {
         const Lane& l = r.lanes.lanes[li];
+        CHECK(l.curves == r.lanes.curves);   // every lane of a build is laid into the build's one object (expand)
         ModelLane L;
         static_cast<LaneFacts&>(L) = l;   // the lane's facts, the builder's taken whole (declared once: road_model_parts.h)
-        L.curve = Range{static_cast<uint32_t>(m.points.size()), static_cast<uint32_t>(l.xy.size())};
         // the spine sample each point was laid beside (lane_expand.cpp ribbonLane: point k of a lane laid from spineFrom)
         std::size_t i0 = 0;
         const EdgeSpec* e = l.onRoad() ? &g.edges[l.edge] : nullptr;
         if (e) i0 = static_cast<std::size_t>(std::lower_bound(e->s.begin(), e->s.end(), l.spineFrom) - e->s.begin());
-        for (std::size_t k = 0; k < l.xy.size(); ++k) {
-            m.points.push_back(l.xy[k]);
-            m.along.push_back(k < l.s.size() ? l.s[k] : 0.0);
-            m.heights.push_back(r.heights ? r.heights->deck(static_cast<int>(li), l.xy[k]) : 0.0);
-            m.spineStations.push_back(e && i0 + k < e->s.size() ? e->s[i0 + k] : kNotStated);
+        const Span<Vec2> xy = l.xy();
+        for (std::size_t k = 0; k < xy.size(); ++k) {
+            m.heights[l.curve.first + k] = r.heights ? r.heights->deck(static_cast<int>(li), xy[k]) : 0.0;
+            m.spineStations[l.curve.first + k] = e && i0 + k < e->s.size() ? e->s[i0 + k] : kNotStated;
         }
         const std::map<std::string, std::vector<uint32_t>>::const_iterator own = e ? streetsOf.find(e->id) : streetsOf.end();
         if (own != streetsOf.end()) {
@@ -926,8 +931,9 @@ std::string reportRoadModel(const RoadModel& m) {
 
 std::string roadModelSvg(const RoadModel& m) {
     double x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30;
-    for (const Vec2& p : m.points) { x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y); }
-    if (m.points.empty()) { x0 = y0 = 0; x1 = y1 = 1; }
+    const std::vector<Vec2>& lanePoints = m.lanePoints();
+    for (const Vec2& p : lanePoints) { x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y); }
+    if (lanePoints.empty()) { x0 = y0 = 0; x1 = y1 = 1; }
     const double pad = 20, w = x1 - x0 + 2 * pad, h = y1 - y0 + 2 * pad;
     std::string out = fmt("<svg xmlns='http://www.w3.org/2000/svg' viewBox='%.1f %.1f %.1f %.1f' font-family='sans-serif'>\n", x0 - pad, -(y1 + pad), w, h);
     out += fmt("<rect x='%.1f' y='%.1f' width='%.1f' height='%.1f' fill='#f6f5f0'/>\n<g transform='scale(1,-1)'>\n", x0 - pad, -(y1 + pad), w, h);
@@ -935,7 +941,7 @@ std::string roadModelSvg(const RoadModel& m) {
     for (const ModelLane& L : m.lanes) {
         if (L.curve.count < 2) continue;
         out += fmt("<polyline fill='none' stroke='%s' stroke-width='0.35' stroke-opacity='0.6' points='", L.edge == kNoIndex ? "#9a6" : L.dir > 0 ? "#3b6fb6" : "#c0573e");
-        for (uint32_t k = L.curve.first; k < L.curve.end(); ++k) out += fmt("%.1f,%.1f ", m.points[k].x, m.points[k].y);
+        for (uint32_t k = L.curve.first; k < L.curve.end(); ++k) out += fmt("%.1f,%.1f ", lanePoints[k].x, lanePoints[k].y);
         out += "'/>\n";
     }
     // junctions: a dot each
@@ -952,7 +958,7 @@ std::string roadModelSvg(const RoadModel& m) {
         const double mid = 0.5 * (S.from + S.to);
         for (uint32_t k = L.curve.first; k + 1 < L.curve.end(); ++k)
             if (stated(m.spineStations[k]) && m.spineStations[k] <= mid && m.spineStations[k + 1] >= mid) {
-                label(m.points[k], S.id, "#555", 4.0);
+                label(lanePoints[k], S.id, "#555", 4.0);
                 break;
             }
     }
@@ -1083,8 +1089,13 @@ template <class IO, class R> void fields(IO& io, R& r, ModelRamp*) {
 template <class IO, class X> void fields(IO& io, X& x, ModelCrossing*) { io(x.a); io(x.b); io(x.kind); io(x.over); io(x.at); io(x.clearance); }
 
 template <class IO, class M> void modelFields(IO& io, M& m) {
-    io(m.name); io(m.built); io(m.junctions); io(m.streets); io(m.lanes); io(m.connections); io(m.turns); io(m.ramps); io(m.crossings); io(m.points);
-    io(m.along); io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.regulations); io(m.notStated);
+    io(m.name); io(m.built); io(m.junctions); io(m.streets); io(m.lanes); io(m.connections); io(m.turns); io(m.ramps); io(m.crossings);
+    // the lanes' centre lines: written from the object the model holds; read into one of the model's own
+    std::shared_ptr<LaneCurves> curves = std::make_shared<LaneCurves>();
+    if (m.curves) *curves = *m.curves;
+    io(curves->points); io(curves->along);
+    m.curves = std::move(curves);
+    io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.regulations); io(m.notStated);
     io(m.problems); io(m.armsInRing);
 }
 

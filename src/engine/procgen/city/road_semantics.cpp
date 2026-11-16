@@ -118,14 +118,13 @@ void classifyRoadGraph(RoadGraph& g, const GroundFn& groundAt) {
             }
         }
         uint8_t access = 0;
-        if (walk) access |= road_access::kWalkable;
         if (walk && e.layer == 0 && !elevated && !approach)
             access |= road_access::kFrontage;
         if (walk && e.layer == 0 && !approach) access |= road_access::kCrossable;
         if (street) access |= road_access::kSignalable;
         e.access = access;
-        // NOTE: bool e.walkable is deliberately untouched this round —
-        // nav/pathfind still read it; kWalkable mirrors it.
+        // (bool e.walkable is the one home of "pedestrians travel along it":
+        // nav and pathfind read it, and no access bit repeats it.)
     }
 }
 

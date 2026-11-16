@@ -333,7 +333,7 @@ TEST_CASE(junction_table_2b_four_way_far_turns_protected_by_warrant) {
         if (rec.otherSide != engine::OtherSide::Path || rec.meeting == engine::Meeting::Split) continue;
         const engine::PathId o = rec.otherPath();
         if (!protectedTurn(rec.a) && !protectedTurn(o)) continue;
-        if (!approachesFace(g, row.approaches[row.paths[rec.a.index].approach], row.approaches[row.paths[o.index].approach]))
+        if (!approachesFace(t.model, j, row.approaches[row.paths[rec.a.index].approach], row.approaches[row.paths[o.index].approach]))
             continue;
         for (uint32_t ph = 0; ph < jr.phases.count; ++ph) {
             ++checked;
@@ -522,18 +522,16 @@ void bendAndState(TestRoads& t, Heading in, double degrees, bool statedThrough) 
         engine::Path& lane = g.paths[t.laneArriving(1, 1, in, k).index];
         g.points[lane.curve.first] = g.points[lane.curve.end() - 1] - turned * lane.length;
     }
-    for (const Heading h : {in, driving_test::opposite(in)})
-        for (uint32_t k = 0; k < t.spec.lanesEachWay; ++k) {
-            engine::Path& lane = g.paths[t.laneArriving(1, 1, h, k).index];
-            lane.throughArm = statedThrough ? static_cast<uint32_t>(driving_test::opposite(h)) : engine::kNoIndex;
-        }
+    // (stated on the road model's junction, where the driving asks it: RoadModel::facing)
+    driving_test::stateThrough(t.model, t.junction(1, 1), static_cast<uint32_t>(in),
+                               static_cast<uint32_t>(driving_test::opposite(in)), statedThrough);
 }
 
 // Whether the approaches arriving at the middle junction heading `a` and `b` face each other, as the table has it.
 bool tableFaces(const TestRoads& t, const RightOfWay& row, Heading a, Heading b) {
     const uint32_t ca = row.paths[t.connector(1, 1, a, 0, a, 0).index].approach;
     const uint32_t cb = row.paths[t.connector(1, 1, b, 0, b, 0).index].approach;
-    return approachesFace(t.model.laneLevel, row.approaches[ca], row.approaches[cb]);
+    return approachesFace(t.model, t.junction(1, 1), row.approaches[ca], row.approaches[cb]);
 }
 
 // In some phase the far turn from `a` and the straight-on from `b` (whose paths cross) are both green.

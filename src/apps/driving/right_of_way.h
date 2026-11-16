@@ -129,12 +129,11 @@ struct Approach {
     int signRank = 0;               // its sign's place in RuleSet::ranks; 0 (shares the first) when it has none
 };
 
-// DO TWO APPROACHES TO ONE JUNCTION FACE EACH OTHER (their traffic meets head on)? The lane graph's one answer
-// (LaneGraph::facing): yes where the junction states their two arms as one road carrying on through. Asked of each
-// approach's first lane (every lane of an approach arrives by the same arm). Never the angle between them.
-inline bool approachesFace(const engine::LaneGraph& roads, const Approach& a, const Approach& b) {
-    return a.firstLane.valid() && b.firstLane.valid() && a.firstLane.index < roads.paths.size() &&
-           b.firstLane.index < roads.paths.size() && roads.facing(a.firstLane, b.firstLane);
+// DO TWO APPROACHES TO ONE JUNCTION FACE EACH OTHER (their traffic meets head on)? The road model's one answer
+// (RoadModel::facing): yes where junction `junction` states their two arms as one road carrying on through. Asked of
+// each approach's first lane (every lane of an approach arrives by the same arm). Never the angle between them.
+inline bool approachesFace(const engine::RoadModel& model, engine::JunctionId junction, const Approach& a, const Approach& b) {
+    return a.firstLane.valid() && b.firstLane.valid() && model.facing(junction, a.firstLane, b.firstLane);
 }
 
 // ONE PHASE of a junction's lights: the light each of its connectors shows, in the junction's connector order.

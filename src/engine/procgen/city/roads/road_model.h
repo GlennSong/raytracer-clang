@@ -156,10 +156,10 @@ struct ModelLaneSpan {
 };
 
 // THE MODEL'S LANE: the lane's facts (road_model_parts.h LaneFacts: id, kind, road, direction, slot, width, stretch of
-// spine -- the builder's lane's, taken whole) and where it lies: its centre line as kept, the streets it runs along and
-// the junction at each end.
+// spine, and the stretch of the lanes' centre lines that is its own (`curve`: into RoadModel::lanePoints / laneAlong /
+// heights / spineStations) -- the builder's lane's, taken whole) and where it lies: the streets it runs along and the
+// junction at each end.
 struct ModelLane : LaneFacts {
-    Range curve;                     // into points / along / heights: its centre line, the way it is laid (spine order)
     std::vector<ModelLaneSpan> streets;
     ModelJunctionId atStart, atEnd;  // the junction it begins and ends at, the way its traffic runs
 };
@@ -232,11 +232,18 @@ struct RoadModel {
     std::vector<ModelTurn> turns;          // junction by junction, then as lane_turns.h turnsAtJunction orders them
     std::vector<ModelRamp> ramps;
     std::vector<ModelCrossing> crossings;
-    // the lanes' centre lines (ModelLane::curve ranges into these): each point, its distance along the lane, its height
-    // (the drawn deck), and the station along its road's spine it was laid at (a lane is laid point for point beside its
-    // spine's samples; a connector's: kNotStated)
-    std::vector<Vec2> points;
-    std::vector<Real> along, heights, spineStations;
+    // THE LANES' CENTRE LINES (ModelLane::curve ranges into these): each point and its distance along the lane
+    // (`curves`, read through lanePoints / laneAlong), its height (the drawn deck), and the station along its road's
+    // spine it was laid at (a lane is laid point for point beside its spine's samples; a connector's: kNotStated).
+    // `curves` is THE OBJECT THE ROAD BUILD LAID ITS LANES INTO (road_model_parts.h LaneCurves, ADR-0438), held with
+    // the build, not copied from it: while the build exists its lanes (lanes/lane_expand.h Lane::xy, s) and this
+    // model's read the same points. Null: no lane (a planned-only model).
+    std::shared_ptr<const LaneCurves> curves;
+    std::vector<Real> heights, spineStations;
+    const std::vector<Vec2>& lanePoints() const { return curves ? curves->points : noLanePoints(); }
+    const std::vector<Real>& laneAlong() const { return curves ? curves->along : noLaneAlong(); }
+    static const std::vector<Vec2>& noLanePoints() { static const std::vector<Vec2> none; return none; }
+    static const std::vector<Real>& noLaneAlong() { static const std::vector<Real> none; return none; }
     std::vector<Vec2> linePoints;         // the streets' centre lines (ModelStreet::line ranges into it), and inside stretches'
     std::vector<Real> lineStations;       // ...each point's station along its road's spine (ADR-0425)
     std::vector<ModelAttachment> attachments;   // in the order attached
@@ -292,6 +299,20 @@ struct RoadModel {
         return j < junctions.size() ? &junctions[j] : nullptr;
     }
     const std::string& controlAt(JunctionId laneJunction) const;
+    // DO TWO APPROACHES TO A JUNCTION FACE EACH OTHER (their traffic meets head on: "oncoming")? `a` and `b`: two lane
+    // paths arriving at junction `laneJunction` of the lane level. Yes where the model's junction STATES their two arms
+    // (Path::arm of each) as one road carrying on through (ModelJunction::through, read by throughPartner). The one
+    // answer (ADR-0438): the builder places a far turn's waiting point inside the junction by it
+    // (lanes/lane_graph_crossings.h placeWaitInsidePoints) and the driving's right-of-way table and signal programme
+    // ask it (apps/driving/right_of_way.h approachesFace). Never the angle between the two; and the lane table keeps
+    // no copy of the pair. No junction of the model, or an arm not stated: no.
+    bool facing(JunctionId laneJunction, PathId a, PathId b) const {
+        const ModelJunction* J = junctionOf(laneJunction);
+        if (!J || a.index >= laneLevel.paths.size() || b.index >= laneLevel.paths.size()) return false;
+        const uint32_t armA = laneLevel.paths[a.index].arm, armB = laneLevel.paths[b.index].arm;
+        return armA != kNoIndex && armB != kNoIndex && throughPartner(J->through, armA) == armB &&
+               throughPartner(J->through, armB) == armA;
+    }
     // THE PATH THAT JOINS BY A STATED MERGE at a crossing point: where the crossing names a merge of this model
     // (CrossingPoint::modelConnection), the one of its two paths that is a stretch of the lane the connection says
     // merges (ModelConnection::from) -- the path that gives way. Not valid: no merge is stated there.
@@ -424,7 +445,8 @@ std::string roadModelSvg(const RoadModel& m);      // junctions and streets with
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 11;   // 11: the regulations stated on streets; the lane level holds none (LGRF 12, ADR-0437)
+constexpr uint32_t kRoadModelFormat = 12;   // 12: the lane level holds no through partner (LGRF 13, ADR-0438)
+                                            // 11: the regulations stated on streets; the lane level holds none (LGRF 12, ADR-0437)
                                             // 10: the lane level holds no copy of the model's facts (LGRF 11, ADR-0436)
                                             // 9: no stored one-way flag: the cross-section answers it (ADR-0432)
                                             // 8: the lane level, as the lane graph's own bytes (LGRF) after the rest (ADR-0429)

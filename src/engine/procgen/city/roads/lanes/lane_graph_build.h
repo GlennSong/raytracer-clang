@@ -14,6 +14,7 @@
 
 #include "engine/procgen/city/roads/lane_graph.h"
 #include "engine/procgen/city/roads/lanes/lanes.h"
+#include "engine/procgen/city/roads/road_problem.h"   // RoadProblem: a problem as a record (ADR-0438)
 #include "engine/procgen/city/roads/vehicle_size.h"
 
 #include <cstdint>
@@ -210,7 +211,7 @@ struct CrossingReport {
     // longer by it (counted before records of one pair are merged)
     uint32_t onlyForLength = 0, widenedForLength = 0;
     uint32_t forSomeVehicles = 0;             // records that concern only some vehicle tags on a side (the rest: all)
-    std::vector<std::string> problems;        // anything that looks wrong, in plain words with its place
+    std::vector<RoadProblem> problems;        // anything that looks wrong, each a record with its kind and place (road_problem.h)
     double milliseconds = 0;
 };
 
@@ -252,7 +253,9 @@ struct LaneGraphBuild {
     // whose lines did not meet (each also a line in the problems, with the gap)
     uint32_t carryOnJoins = 0, divergeJoins = 0, mergeJoins = 0, joinsWithGap = 0;
     // (where the paint and the stated junctions disagree is the road model's to say: RoadModel::problems)
-    std::vector<std::string> problems;     // in plain words, each with its place; empty = nothing to look at
+    // WHAT LOOKS WRONG, each a record (road_problem.h RoadProblem: its kind, the ids it concerns, its place and numbers);
+    // its sentence is problemLine(record). Empty: nothing to look at.
+    std::vector<RoadProblem> problems;
     std::vector<PathSource> sources;       // per path (a connector's: lane -1, no builder lane)
     std::vector<SectionSource> sectionSources;   // per section
     std::vector<double> laneLengths;       // per builder lane: its length as the graph reads it (a fold tidied away)

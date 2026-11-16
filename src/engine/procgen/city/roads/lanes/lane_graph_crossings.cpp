@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdarg>
 #include <cstdio>
 #include <string>
 #include <utility>
@@ -18,26 +17,12 @@ namespace roads::lanes {
 
 namespace {
 
-// Room for one problem's words.
-constexpr std::size_t kMessageBytes = 512;
 // The spatial index's cells are at least as wide as the farthest two points can be apart and still touch; on a world so
 // large that would make more cells than this along one side, they are made wider (fewer, fuller cells; the same pairs).
 constexpr double kMostCellsAcross = 1 << 20;
 // How many paths a "follows" search walks through at most (it stops far sooner: only paths shorter than touching
 // distance are walked through).
 constexpr std::size_t kMostFollowSteps = 64;
-
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((format(printf, 2, 3)))
-#endif
-void addProblem(std::vector<std::string>& to, const char* f, ...) {
-    char msg[kMessageBytes];
-    va_list args;
-    va_start(args, f);
-    std::vsnprintf(msg, sizeof msg, f, args);
-    va_end(args);
-    to.push_back(msg);
-}
 
 const char* kindWord(Meeting m) {
     switch (m) {
@@ -867,8 +852,8 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
         }
         if (count == 0 && g.junctions[j].connectors.count >= 2) ++rep.junctionsWithout;
         if (count > kManyCrossingPoints)
-            addProblem(rep.problems, "crossing points: junction %u has %u, more than %u: a slow junction for the junction plan "
-                                     "and for every car there", j, count, kManyCrossingPoints);
+            // (numbers: the lane level's junction, how many it has, how many is many)
+            rep.problems.push_back(RoadProblem(RoadProblemKind::ManyCrossingPoints).number(j).number(count).number(kManyCrossingPoints));
     }
     // the junctions' outlines, for "outside every junction"
     std::vector<std::vector<Vec2>> outlines(g.junctions.size());
@@ -889,9 +874,9 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
         const double shareA = pa.length > 0 ? (x.aTo - x.aFrom) / pa.length : 0;
         const double shareB = pb.length > 0 ? (x.otherTo - x.otherFrom) / pb.length : 0;
         if (shareA >= kNearlyWholeShare && shareB >= kNearlyWholeShare)
-            addProblem(rep.problems, "crossing points: %s and %s are within touching distance for %.0f%% and %.0f%% of their "
-                                     "lengths (%s, crossing point %u, at (%.1f, %.1f)): two paths laid nearly over each other",
-                       an.c_str(), bn.c_str(), 100 * shareA, 100 * shareB, kindWord(x.meeting), c, at.x, at.y);
+            // (words: the two paths as the dump names them, how they meet; numbers: each one's share in per cent, the crossing point)
+            rep.problems.push_back(RoadProblem(RoadProblemKind::PathsNearlyOverEachOther).onPath(x.a.index).andPath(x.other).word(an).word(bn)
+                                       .word(kindWord(x.meeting)).where(at).number(100 * shareA).number(100 * shareB).number(c));
         bool inside = false;
         for (uint32_t j = 0; j < outlines.size() && !inside; ++j) {
             if (outlines[j].size() < 3 ||
@@ -901,8 +886,8 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
         }
         // (two lanes meet out on the road by design: one leaving or merging into its host)
         if (!inside && (pa.kind == PathKind::Connector || pb.kind == PathKind::Connector))
-            addProblem(rep.problems, "crossing points: %s and %s meet at (%.1f, %.1f) (%s, crossing point %u), outside every "
-                                     "junction's outline", an.c_str(), bn.c_str(), at.x, at.y, kindWord(x.meeting), c);
+            rep.problems.push_back(RoadProblem(RoadProblemKind::CrossingOutsideJunction).onPath(x.a.index).andPath(x.other).word(an).word(bn)
+                                       .word(kindWord(x.meeting)).where(at).number(c));
     }
     rep.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     return rep;
@@ -926,7 +911,7 @@ uint32_t placeWaitInsidePoints(RoadModel& model) {
             const Path& op = g.paths[o.index];
             if (op.kind != PathKind::Connector || op.from.index >= g.paths.size()) continue;
             // (the two approaches face each other where the junction states their arms as one road carrying on through)
-            if (!g.facing(p.from, op.from)) continue;
+            if (!model.facing(p.junction, p.from, op.from)) continue;
             const double at = x.a == PathId(c) ? x.aFrom : x.otherFrom;
             if (at > 0) {
                 p.waitInsideAt = at;

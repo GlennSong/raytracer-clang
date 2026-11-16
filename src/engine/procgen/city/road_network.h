@@ -50,16 +50,17 @@ inline bool isGore(JunctionKind k) {
 
 // Per-edge ACCESS bits (semantic layer): derived once by classifyRoadGraph
 // and STORED, so consumers stop re-deriving "freeway-ness" with their own
-// class checks. kWalkable mirrors RoadEdge::walkable this round (the bool
-// stays for nav/pathfind compat until a later cleanup).
+// class checks. Whether pedestrians travel along an edge or a link, and
+// whether a link is a footpath, are NOT bits here: each has one home, the
+// bools `walkable` (RoadEdge, NavLink) and NavLink::footpath. (Bits 1 and 16
+// once repeated them and nothing read them: ADR-0438. The bits left keep
+// their values.)
 namespace road_access {
-constexpr uint8_t kWalkable   = 1;   // pedestrians travel along it
 constexpr uint8_t kFrontage   = 2;   // lots/parking/sidewalk band may front it
 constexpr uint8_t kCrossable  = 4;   // may host a zebra crossing
 constexpr uint8_t kSignalable = 8;   // counts as a signal approach
-constexpr uint8_t kFootpath   = 16;  // a FOOTPATH (a park's or the quad's walk): pedestrians only, never a vehicle
 constexpr uint8_t kAllStreet =
-    kWalkable | kFrontage | kCrossable | kSignalable;
+    kFrontage | kCrossable | kSignalable;
 }  // namespace road_access
 
 struct RoadNode {

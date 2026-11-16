@@ -9,9 +9,9 @@
 // lane table through it. The lane table (`model.laneLevel`) is laid by hand here; what the road IS -- the limit posted
 // on a stretch and its road class, the control at a junction, the turn a connector takes, which lane joins by a merge
 // -- and the rules standing along a lane (a stop sign at its end, a top speed part-way along) are stated ON THE MODEL,
-// once, by the functions below (stateStreet, stateControl, stateTurn, stateMerge, stateRegulation), and read back by
-// the same questions the driving asks (RoadModel::postedLimit, roadClassOf, controlAt, turnOf, mergingAt,
-// regulationsAlong). A test that makes its own little lane table states its facts through the same functions.
+// once, by the functions below (stateStreet, stateControl, stateThrough, stateTurn, stateMerge, stateRegulation), and
+// read back by the same questions the driving asks (RoadModel::postedLimit, roadClassOf, controlAt, facing, turnOf,
+// mergingAt, regulationsAlong). A test that makes its own little lane table states its facts through the same functions.
 //
 // The plan is laid out on compass HEADINGS: east is +x, north is +y (the plan point's second coordinate). Lanes are
 // counted as the lane graph counts them: lane 0 is the OFFSIDE-most (nearest the middle of the road), the last is the
@@ -66,6 +66,11 @@ void onStreet(engine::RoadModel& m, engine::PathId lane, uint32_t street);
 // THE CONTROL at junction `junction` of the lane table: the model gets a junction stating it (or the one the lane
 // table's junction already names is restated).
 void stateControl(engine::RoadModel& m, engine::JunctionId junction, const std::string& control);
+// A THROUGH PAIR at junction `junction` (ADR-0438): its arms `armA` and `armB` (places in the junction's list of arms,
+// the numbers its arriving lanes carry as Path::arm) are one road carrying on through, so the approaches arriving by
+// them face each other (RoadModel::facing). The model's junction gets the pair (and arms up to those places); any
+// pair it stated for either arm is replaced. `stated` false: the two are no longer a pair.
+void stateThrough(engine::RoadModel& m, engine::JunctionId junction, uint32_t armA, uint32_t armB, bool stated = true);
 // THE TURN connector `connector` takes: the model gets a stated turn of that kind, which the connector follows.
 void stateTurn(engine::RoadModel& m, engine::PathId connector, engine::Turn turn);
 // A MERGE: lane path `joining` ends into lane path `host`'s lane and gives way. The model gets a lane for each (where

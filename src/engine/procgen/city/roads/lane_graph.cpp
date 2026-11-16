@@ -19,9 +19,10 @@ namespace {
 // tags, a lane's kind is the road model's, ADR-0429; 10: an arriving lane's arm and its stated through partner, ADR-0432;
 // 11: no control, posted limit, road class, turn kind or merging path: the road model's facts, asked of it, ADR-0436;
 // 12: no regulations nor their kind names (the road model states them and answers for a path), each lane path's stretch
-// of its road's spine, ADR-0437).
+// of its road's spine, ADR-0437; 13: no through partner on an arriving lane: the road model's junction states the pair
+// and answers which approaches face each other, ADR-0438).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 12;
+constexpr uint32_t kVersion = 13;
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
 // A closed outline (a junction's box, a crosswalk) has at least this many corners; a track's line two points.
@@ -131,7 +132,6 @@ void putItem(BinWriter& w, const Path& p) {
     w.put(p.stationFrom);
     w.put(p.stationTo);
     w.put(p.arm);
-    w.put(p.throughArm);
 }
 void putItem(BinWriter& w, const Section& s) {
     putItem(w, s.lanes);
@@ -205,7 +205,7 @@ bool getItem(BinReader& r, Path& p) {
            getItem(r, p.from) && r.get(p.waitInsideAt) && getItem(r, p.next) &&
            getItem(r, p.crossings) && r.get(p.street) && r.get(p.modelLane) && r.get(p.modelTurn) &&
            r.get(onSpine) && r.get(p.stationFrom) && r.get(p.stationTo) &&
-           r.get(p.arm) && r.get(p.throughArm);
+           r.get(p.arm);
     p.onSpine = onSpine != 0;
     return ok;
 }
@@ -475,7 +475,7 @@ bool operator==(const Path& a, const Path& b) {
            a.junction == b.junction && a.from == b.from && a.waitInsideAt == b.waitInsideAt && a.next == b.next &&
            a.crossings == b.crossings && a.street == b.street && a.modelLane == b.modelLane &&
            a.modelTurn == b.modelTurn && a.onSpine == b.onSpine && a.stationFrom == b.stationFrom &&
-           a.stationTo == b.stationTo && a.arm == b.arm && a.throughArm == b.throughArm;
+           a.stationTo == b.stationTo && a.arm == b.arm;
 }
 bool operator==(const Section& a, const Section& b) {
     return a.lanes == b.lanes && a.lines == b.lines;

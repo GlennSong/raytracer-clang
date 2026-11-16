@@ -7,16 +7,19 @@
 //                      round, and why not the rest) and lane_graph.svg (lanes by section, junction outlines, connectors by
 //                      turn, refused turns as red crosses -- at the corner's middle where the turn fits no vehicle, at the
 //                      junction's centre where no lane path takes it -- crossing points by kind); with --junction,
-//                      junction_J.svg and junction_J.txt close up
+//                      junction_J.svg and junction_J.txt close up. Prints the problems counted by kind, each kind with what
+//                      it means (road_problem.h, ADR-0438)
 //   lanes_tool terrain <graph.json> <out.json> [step]   the scene's natural ground on a grid (for a map)
 //   lanes_tool interchange-demo <out.json>   write the system-interchange test scene: a curved elevated ring over a radial
 //                      expressway at ground level, its four ramps, and the expressway's inner leg becoming a boulevard
-//   lanes_tool layout <graph.json> [--write] [--fresh] [--names] [--nodes] [--lane-rules M]   the road file's junctions and
-//                      streets with ids (ADR-0417); --write puts them into the file in place (the bake key does not see them);
-//                      --names names the streets' runs once, from the planner's generator, keeping names the file has
-//                      (ADR-0420); --nodes the points of each junction spread over several, once, as the layout finds them
-//                      (ADR-0425); --lane-rules M the lane level's rules, the solid stretch before a stop line M metres
-//                      (ADR-0426)
+//   lanes_tool layout <graph.json> [--write] [--fresh] [--names] [--nodes] [--lane-rules M] [--arm-order]   the road file's
+//                      junctions and streets with ids (ADR-0417); --write puts them into the file in place (the bake key does
+//                      not see them); --fresh starts the layout over, dropping what the file states; --names names the
+//                      streets' runs once, from the planner's generator, keeping names the file has (ADR-0420); --nodes the
+//                      points of each junction spread over several, once, as the layout finds them (ADR-0425);
+//                      --lane-rules M the lane level's rules, the solid stretch before a stop line M metres (ADR-0426);
+//                      --arm-order lists each junction whose arms are not listed in their ring (exit 3 when one is not, or
+//                      the file does not say they are), and with --write puts them in order and marks the file (ADR-0427)
 //   lanes_tool streetmap <graph.json> [--route x0 z0 x1 z1]   the street map agents route on, built from the file's road
 //                      model alone, in words; --route: a car's route between two points, street by street (ADR-0425)
 //   lanes_tool model <graph.json> [--out <dir>]   build the roads and assemble THE ROAD MODEL: model.txt, report.txt, model.svg
@@ -772,7 +775,7 @@ int main(int argc, char** argv) {
         const std::string dumpPath = outDir + "/lane_graph.txt", problemsPath = outDir + "/problems.txt", svgPath = outDir + "/lane_graph.svg";
         const std::string reachPath = outDir + "/reach.txt";
         { std::ofstream f(dumpPath); f << dumpText(G); if (!f) { std::fprintf(stderr, "lanes: cannot write %s\n", dumpPath.c_str()); return 1; } }
-        { std::ofstream f(problemsPath); for (const std::string& p : lg.problems) f << p << "\n"; }
+        { std::ofstream f(problemsPath); for (const engine::RoadProblem& p : lg.problems) f << engine::problemLine(p) << "\n"; }
         {
             std::ofstream f(reachPath);
             f << "largest part a car can get round: " << lg.reach.sizes[lg.reach.largest] << " paths (" << 100.0 * lg.reachableShare
@@ -783,7 +786,11 @@ int main(int argc, char** argv) {
                 f << "\n";
             }
         }
-        for (std::size_t i = 0; i < lg.problems.size() && i < 10; ++i) std::printf("  problem: %s\n", lg.problems[i].c_str());
+        // THE PROBLEMS BY KIND (road_problem.h): how many of each, with what the kind means, then the first few in words
+        std::printf("  problems by kind (%zu in all):\n", lg.problems.size());
+        for (const std::pair<engine::RoadProblemKind, uint32_t>& k : engine::problemsByKind(lg.problems))
+            std::printf("    %6u  %-36s %s\n", k.second, engine::problemKindRow(k.first).name, engine::problemKindRow(k.first).meaning);
+        for (std::size_t i = 0; i < lg.problems.size() && i < 10; ++i) std::printf("  problem: %s\n", engine::problemLine(lg.problems[i]).c_str());
         LaneGraphSvgMarks marks;
         for (const Refusal& r : lg.refusals) marks.refusedTurns.push_back(r.at);
         if (!writeLaneGraphSvg(model, svgPath, marks)) { std::fprintf(stderr, "lanes: cannot write %s\n", svgPath.c_str()); return 1; }
@@ -973,8 +980,8 @@ int main(int argc, char** argv) {
                 const engine::Vec2 q(G.x0 + i * G.res, G.y0 + j * G.res); if (distance(q, P) > probeR) continue;
                 const double zg = G.at(i, j);
                 for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
-                    const Lane& l = r.lanes.lanes[li]; if (l.xy.size() < 2) continue;
-                    if (project(l.xy, l.s, q).distance > l.width / 2 + 1.0) continue;
+                    const Lane& l = r.lanes.lanes[li]; if (l.xy().size() < 2) continue;
+                    if (project(l.xy(), l.s(), q).distance > l.width / 2 + 1.0) continue;
                     const double excess = zg - r.heights->deck(static_cast<int>(li), q);
                     if (excess > 0.01) { ++over; if (excess > worst) { worst = excess; worstAt = q; worstLane = l.id; } }
                 }
@@ -1028,7 +1035,7 @@ int main(int argc, char** argv) {
                 // how far the run wanders sideways from its own lane: a run crossing the road shows up here
                 double maxLat = 0;
                 if (run.lane >= 0) { const Lane& l = r.lanes.lanes[static_cast<size_t>(run.lane)];
-                    for (const engine::Vec2& q : run.pts) maxLat = std::max(maxLat, project(l.xy, l.s, q).distance); }
+                    for (const engine::Vec2& q : run.pts) maxLat = std::max(maxLat, project(l.xy(), l.s(), q).distance); }
                 std::printf("           %-14s %-9s h %.2f  %5.0f m  %3zu pts  (%.0f,%.0f)->(%.0f,%.0f)  max %.1f m off its lane\n",
                             lane.c_str(), run.kind == BarrierKind::Guardrail ? "guardrail" : "wall", run.height, len, run.pts.size(),
                             run.pts.front().x, run.pts.front().y, run.pts.back().x, run.pts.back().y, maxLat);
@@ -1096,7 +1103,7 @@ int main(int argc, char** argv) {
             std::printf("  (ends %.2f / %.2f)\n", e.z.front(), e.z.back());
         }
         for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
-            const Lane& l = r.lanes.lanes[li]; if (l.isConnector()) continue; const Projection pr = project(l.xy, l.s, P); if (pr.distance > probeR) continue;
+            const Lane& l = r.lanes.lanes[li]; if (l.isConnector()) continue; const Projection pr = project(l.xy(), l.s(), P); if (pr.distance > probeR) continue;
             std::printf("  lane %-10s %.1f m off: own %.2f deck %.2f at P; partners:", l.id.c_str(), pr.distance, r.heights->own(static_cast<int>(li), P), r.heights->deck(static_cast<int>(li), P));
             for (int q : r.pavement.partners[li]) std::printf(" %s", r.lanes.lanes[static_cast<size_t>(q)].id.c_str()); std::printf("\n");
         }
@@ -1151,7 +1158,7 @@ int main(int argc, char** argv) {
                 f << "<polygon points='" << A.x << "," << A.y << " " << B.x << "," << B.y << " " << C.x << "," << C.y << "' fill='" << (mine ? "#f2a33c" : "#c9c9c9") << "' fill-opacity='0.8' stroke='#666' stroke-width='0.05'/>\n";
             }
             for (const Polygon2& pg : fp) { f << "<polygon fill='none' stroke='#c0392b' stroke-width='0.3' points='"; for (const engine::Vec2& q : pg.outer) f << q.x << "," << q.y << " "; f << "'/>\n"; for (const Ring& h : pg.holes) { f << "<polygon fill='none' stroke='#8e44ad' stroke-width='0.3' points='"; for (const engine::Vec2& q : h) f << q.x << "," << q.y << " "; f << "'/>\n"; } }
-            f << "<polyline fill='none' stroke='#1f4e9c' stroke-width='0.25' stroke-dasharray='1 0.6' points='"; for (const engine::Vec2& q : l.xy) f << q.x << "," << q.y << " "; f << "'/>\n</g>\n</svg>\n";
+            f << "<polyline fill='none' stroke='#1f4e9c' stroke-width='0.25' stroke-dasharray='1 0.6' points='"; for (const engine::Vec2& q : l.xy()) f << q.x << "," << q.y << " "; f << "'/>\n</g>\n</svg>\n";
             std::printf("--debug-lane %s: %d deck triangles in its bbox, %d owned by it; footprint polygons %zu, ring vertices %zu; wrote %s\n", debugLane.c_str(), inBox, owned, fp.size(), fp.empty() ? size_t(0) : fp[0].outer.size(), (out + "/lane_" + debugLane + ".svg").c_str());
         }
     }

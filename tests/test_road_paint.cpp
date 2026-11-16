@@ -408,7 +408,7 @@ TEST_CASE(road_paint_arrows_show_the_turns_the_model_states_lane_by_lane) {
             CHECK(a.farTurn == w.farTurn);
             // it lies in its lane and points the way the lane runs
             const Lane& lane = s.r->lanes.lanes[static_cast<std::size_t>(li)];
-            CHECK(project(lane.xy, lane.s, a.at).distance < kPaintStation);
+            CHECK(project(lane.xy(), lane.s(), a.at).distance < kPaintStation);
         }
         if (tails.size() != w.tails.size()) std::printf("    %s at junction %d: %zu arrows, expected %zu\n", w.lane, w.junction, tails.size(), w.tails.size());
         CHECK(tails.size() == w.tails.size());

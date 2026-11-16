@@ -120,7 +120,7 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
             }
             if (!keep) continue;
             int owner = touching[0]; double bd = 1e300;
-            for (int li : touching) { double d = project(L.lanes[static_cast<size_t>(li)].xy, L.lanes[static_cast<size_t>(li)].s, c).distance; if (d < bd) { bd = d; owner = li; } }
+            for (int li : touching) { double d = project(L.lanes[static_cast<size_t>(li)].xy(), L.lanes[static_cast<size_t>(li)].s(), c).distance; if (d < bd) { bd = d; owner = li; } }
             out.footprints[static_cast<size_t>(owner)] = unionSets(out.footprints[static_cast<size_t>(owner)], pieceSet); out.closingAdded += A;
         }
     }

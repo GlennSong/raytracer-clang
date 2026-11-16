@@ -10,6 +10,7 @@
 
 #include "engine/procgen/city/roads/lanes/road_graph_spec.h"
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -17,14 +18,20 @@ namespace engine {
 namespace roads::lanes {
 
 // THE BUILDER'S LANE: a lane as it is laid and drawn. It IS the lane's facts (road_model_parts.h LaneFacts: id, kind,
-// road, direction, slot, width, stretch of spine -- declared once, ADR-0435) plus what only the builder needs while it
-// works: the centre line and both edges, and the working data below. The road model's lane (road_model.h ModelLane)
-// takes the facts whole once the road is built, and is the only place that says which streets the lane runs along and
-// which junction stands at each end.
+// road, direction, slot, width, stretch of spine, its stretch of the centre lines -- declared once, ADR-0435) plus what
+// only the builder needs while it works: both edges and the working data below. The road model's lane (road_model.h
+// ModelLane) takes the facts whole once the road is built, and is the only place that says which streets the lane runs
+// along and which junction stands at each end.
+//
+// ITS CENTRE LINE is not held here (ADR-0438): it is the lane's stretch (`curve`) of the one object every lane of the
+// build is laid into (`curves`: road_model_parts.h LaneCurves, made by expand), which the road model made from the build
+// holds too. `xy()` gives its points and `s()` the distance along the lane to each, read in place.
 struct Lane : LaneFacts {
     std::string cls;                // its road's class
-    std::vector<Vec2> xy, left, right;
-    std::vector<double> s;
+    std::shared_ptr<const LaneCurves> curves;   // where every lane's centre line is held (shared with the build's road model)
+    Span<Vec2> xy() const { return curves ? Span<Vec2>(curves->points, curve) : Span<Vec2>(); }
+    Span<double> s() const { return curves ? Span<double>(curves->along, curve) : Span<double>(); }
+    std::vector<Vec2> left, right;
     int srcLane = -1, dstLane = -1; double z0 = 0, z1 = 0;   // connectors: the lanes joined and their end heights
     //   `sweptFrom` / `diesInto` (ADR-0426): a lane born along its road out of a neighbour, or dying into one -- a turn
     //   pocket swept out of the lane on its side (and back into it where it tapers out), a ramp's second lane dying into
@@ -36,6 +43,8 @@ struct Lane : LaneFacts {
 
 struct LaneSet {
     std::vector<Lane> lanes;
+    // every lane's centre line (each lane's `curves` is this object); the road model made from the build holds it too
+    std::shared_ptr<const LaneCurves> curves;
     std::map<std::string, int> byId;
     int find(const std::string& id) const { auto it = byId.find(id); return it == byId.end() ? -1 : it->second; }
     // Ownership rank: connectors yield to every lane; otherwise the parent class rank.

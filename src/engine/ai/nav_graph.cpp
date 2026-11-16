@@ -363,7 +363,7 @@ NavGraph::FootpathReport NavGraph::appendFootpaths(const std::vector<std::array<
         L.klass = RoadClass::Local;
         L.lanes = 1;
         L.walkable = true;
-        L.access = road_access::kWalkable | road_access::kFootpath;
+        L.access = 0;   // none of a street's: no frontage, no zebra, no signal arm (walkable and footpath say what it is)
         L.parkWidth = 0;
         L.footpath = true;
         Vec2 r(0, 0);

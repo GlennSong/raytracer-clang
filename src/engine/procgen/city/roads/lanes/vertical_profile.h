@@ -46,8 +46,9 @@ struct CrossingMeet { std::size_t hi = 0, lo = 0; Vec2 p; double sHi = 0, sLo = 
 std::vector<std::string> undeclaredCrossings(const RoadLabGraph& g, const std::vector<CrossingMeet>& meets);
 // crossingConsistency's worst level-crossing mismatch, measured only (a designed graph is checked, not corrected)
 double crossingMismatch(const RoadLabGraph& g, const std::vector<CrossingMeet>& meets, double maxDz, double rampMaxDz, const CrossingMeet** worstAt = nullptr);
-// Two roads that may never meet at grade where their centrelines cross: a freeway and any road but a ramp.
-bool mustSeparate(const EdgeSpec& a, const EdgeSpec& b);
+// Two roads that may never meet at grade where their centrelines cross: a road of a limited-access class (a freeway:
+// RoadClassSpec::limitedAccess) and any road but a ramp.
+bool mustSeparate(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b);
 // A TRACK crossing anything (a road, a ramp, the freeway) is a grade separation, whatever the scene's rules: there are
 // no level crossings yet (the island loop, 2026-10-11). Two of the graph's crossings that must be structure.
 bool separates(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b);

@@ -1160,6 +1160,26 @@ TEST_CASE(road_model_12_the_lane_level_is_a_table_built_from_the_model) {
     CHECK(lg.error.empty());
     for (const std::string& p : validate(G)) std::printf("      [lane level] %s\n", p.c_str());
     CHECK(validate(G).empty());
+    // THE LANES' CENTRE LINES ARE HELD ONCE (ADR-0438): the model holds the very object the build laid its lanes into,
+    // and a builder's lane and its model lane read the same points in memory, not two copies of them
+    CHECK(m.curves && m.curves == r->lanes.curves);
+    CHECK(r->lanes.lanes.size() == m.lanes.size() && !m.lanes.empty());
+    for (std::size_t li = 0; li < m.lanes.size() && li < r->lanes.lanes.size(); ++li) {
+        const Lane& built = r->lanes.lanes[li];
+        CHECK(built.curve == m.lanes[li].curve && built.xy().size() == m.lanes[li].curve.count);
+        CHECK(built.xy().data() == m.lanePoints().data() + m.lanes[li].curve.first);
+        CHECK(built.s().data() == m.laneAlong().data() + m.lanes[li].curve.first);
+    }
+    // (a model read back from its saved bytes holds its own, equal, points)
+    {
+        bundle::BinWriter w;
+        putRoadModel(w, m);
+        bundle::BinReader rd(w.bytes.data(), w.bytes.size());
+        RoadModel back;
+        std::string why;
+        CHECK(getRoadModel(rd, back, &why));
+        CHECK(back.curves && back.curves != m.curves && back.lanePoints().size() == m.lanePoints().size() && back == m);
+    }
     // one junction per stated junction, each carrying its id; every lane path its street and lane; every connector its turn
     CHECK(G.junctions.size() == m.junctions.size());
     for (uint32_t j = 0; j < G.junctions.size(); ++j) CHECK(G.junctions[j].modelJunction == j);
@@ -1275,17 +1295,21 @@ TEST_CASE(road_model_12b_approaches_face_each_other_where_a_through_pair_is_stat
         uint32_t farTurns = 0;
         *waiting = 0;
         *facingLanes = 0;
+        // the lanes arriving at the crossing that the model says face another lane arriving there
+        uint32_t laneCross = kNoIndex;   // the lane level's junction that is the crossing
+        for (uint32_t j = 0; j < G.junctions.size(); ++j)
+            if (G.junctions[j].modelJunction == cross) laneCross = j;
+        CHECK(laneCross != kNoIndex);
+        std::vector<PathId> arriving;
+        for (uint32_t p = 0; p < G.paths.size(); ++p)
+            if (G.paths[p].kind == PathKind::Lane && G.paths[p].arm != kNoIndex && m.arrivesAt(PathId(p)) == &m.junctions[cross])
+                arriving.push_back(PathId(p));
+        for (const PathId a : arriving) {
+            bool faces = false;
+            for (const PathId b : arriving) faces = faces || m.facing(JunctionId(laneCross), a, b);
+            *facingLanes += faces ? 1u : 0u;
+        }
         for (const Path& p : G.paths) {
-            if (p.kind == PathKind::Lane && p.arm != kNoIndex && p.throughArm != kNoIndex && p.street < m.streets.size() &&
-                (m.streets[p.street].junctions[0].index == cross || m.streets[p.street].junctions[1].index == cross)) {
-                // an arriving lane carries its arm and the partner the junction states for it
-                const uint32_t j = m.streets[p.street].junctions[1].index == cross && m.junctions[cross].arms[p.arm].street.index == p.street
-                                       ? cross : kNoIndex;
-                if (j == cross) {
-                    CHECK(throughPartner(m.junctions[cross].through, p.arm) == p.throughArm);
-                    ++*facingLanes;
-                }
-            }
             if (p.kind != PathKind::Connector || G.junctions[p.junction.index].modelJunction != cross ||
                 m.turnOf(PathId(static_cast<uint32_t>(&p - G.paths.data()))) != Turn::FarTurn)
                 continue;
@@ -1305,6 +1329,47 @@ TEST_CASE(road_model_12b_approaches_face_each_other_where_a_through_pair_is_stat
     CHECK(farTurnsAtTheCrossing(unstated, &waiting, &facingLanes) > 0u);
     CHECK(waiting == 0u);
     CHECK(facingLanes == 0u);
+
+    // THE MODEL IS ASKED, AND HOLDS THE PAIR ALONE (ADR-0438): the lane table once kept a copy of each arriving lane's
+    // through partner, written when it was built. Now RoadModel::facing reads the junction's stated pairs, so stating
+    // them again on the model is the new answer for every reader, with nothing built again.
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(stated));
+    LaneGraphBuild lg;
+    const RoadModel m = assembleRoadModel(*r, oneCar(), &lg);
+    const LaneGraph& G = m.laneLevel;
+    uint32_t cross = kNoIndex;   // the lane level's junction at (0, 0)
+    for (uint32_t j = 0; j < G.junctions.size(); ++j)
+        if (m.junctions[G.junctions[j].modelJunction].at.length() < 1.0) cross = j;
+    CHECK(cross != kNoIndex);
+    if (cross == kNoIndex) return;
+    // the lane paths arriving at the crossing: the arterial from the west (a0) and from the east (a1, its backward
+    // lane), the local street from the south (l0) and from the north (l1, its backward lane)
+    auto arrivingBy = [&](const char* lane) {
+        const std::vector<uint32_t> paths = pathsOfLane(G, lg, laneNamed(m, lane).index);
+        CHECK(!paths.empty());
+        PathId found;
+        for (uint32_t p : paths)
+            if (G.paths[p].arm != kNoIndex && m.arrivesAt(PathId(p)) == m.junctionOf(JunctionId(cross))) found = PathId(p);
+        CHECK(found.valid());
+        return found;
+    };
+    const PathId west = arrivingBy("a0.f0"), east = arrivingBy("a1.b0"), south = arrivingBy("l0.f0"), north = arrivingBy("l1.b0");
+    if (!west.valid() || !east.valid() || !south.valid() || !north.valid()) return;
+    const JunctionId at(cross);
+    CHECK(m.facing(at, west, east) && m.facing(at, east, west));
+    CHECK(m.facing(at, south, north) && m.facing(at, north, south));
+    CHECK(!m.facing(at, west, south) && !m.facing(at, west, north) && !m.facing(at, east, south) && !m.facing(at, west, west));
+    CHECK(!m.facing(JunctionId(99), west, east));   // no such junction: nothing stated
+    // the same lane table, the pairs stated again: none
+    RoadModel restated = m;
+    ModelJunction& J = restated.junctions[G.junctions[cross].modelJunction];
+    J.through.clear();
+    CHECK(!restated.facing(at, west, east));
+    CHECK(!restated.facing(at, south, north));
+    // ... and the arterial's west arm paired with the local street's south arm instead
+    J.through.push_back({G.paths[west.index].arm, G.paths[south.index].arm});
+    CHECK(restated.facing(at, west, south) && restated.facing(at, south, west));
+    CHECK(!restated.facing(at, west, east));
 }
 
 TEST_CASE(road_model_13_a_ramp_is_a_way_on_at_the_lane_level) {
@@ -1605,9 +1670,9 @@ TEST_CASE(road_model_16_the_lane_level_reports_what_it_cannot_join) {
     CHECK(lg.error.empty());
     for (const std::string& st : streetsOfRoad) {
         bool said = false;
-        for (const std::string& p : lg.problems)
-            said = said || (p.find("street " + st + ": its ") == 0 && p.find("names junction " + J["id"].get<std::string>() + ", which has no arm with a "
-                                                                              "stop line for it") != std::string::npos);
+        // (by the problem's record, road_problem.h: its kind, street and junction)
+        for (const RoadProblem& p : lg.problems)
+            said = said || (p.kind == RoadProblemKind::StreetEndNoStopLine && p.street == st && p.junction == J["id"].get<std::string>());
         CHECK(said);
     }
     uint32_t joinedAcross = 0, lanesOfRoad = 0;
@@ -1633,7 +1698,8 @@ TEST_CASE(road_model_16_the_lane_level_reports_what_it_cannot_join) {
     m2.turns.push_back(stray);
     const LaneGraphBuild lg2 = buildLaneLevel(*r2, m2, oneCar());   // the lane level again, of the model as changed
     const std::string expect = "stated turn " + std::to_string(stated) + " names no junction of the road model: not built";
-    CHECK(std::find(lg2.problems.begin(), lg2.problems.end(), expect) != lg2.problems.end());
+    const std::vector<std::string> lines2 = problemLines(lg2.problems);
+    CHECK(std::find(lines2.begin(), lines2.end(), expect) != lines2.end());
     uint32_t connectors = 0;
     for (const Path& p : m2.laneLevel.paths) connectors += p.kind == PathKind::Connector ? 1 : 0;
     CHECK(connectors + lg2.refusals.size() == stated);   // every turn at a junction built or refused; the stray neither
@@ -2100,4 +2166,129 @@ TEST_CASE(road_model_22_the_regulations_along_a_path_are_asked_of_the_model) {
     bad.to = 250;
     CHECK(!stateRegulation(m, bad, &why) && why.find("lies off street") != std::string::npos);
     CHECK(m.regulations.size() == 2u);
+}
+
+// ---- 23. the road class table is a data file, and a class is what its row says (ADR-0438) --------------------------------
+
+TEST_CASE(road_model_23_the_road_class_table_is_its_data_file_and_no_class_is_asked_by_name) {
+    // THE SHIPPED TABLE, row by row, against the numbers the C++ table held before it moved to
+    // assets/data/road_classes.json (written out here by hand)
+    const std::map<std::string, RoadClassSpec>& t = roadClasses();
+    CHECK(t.size() == 12u);
+    CHECK(defaultRoadClassName() == "local");
+    struct Row {
+        const char* name;
+        double w;
+        int fwd, back;
+        double shoulder, sidewalk, median;
+        int rank;
+        double gMax, window, thick;
+        engine::RoadClass engineClass;
+    };
+    const Row rows[] = {
+        {"local", 6.0, 1, 1, 0.0, 5.0, 0.0, 1, 0.12, 40.0, 0.5, engine::RoadClass::Local},
+        {"collector", 4.0, 2, 2, 0.0, 5.0, 0.0, 1, 0.10, 80.0, 0.5, engine::RoadClass::Collector},
+        {"arterial", 22.0 / 6, 3, 3, 0.0, 5.0, 0.0, 2, 0.08, 120.0, 0.6, engine::RoadClass::Arterial},
+        {"boulevard", 22.0 / 6, 3, 0, 0.0, 5.0, 0.0, 2, 0.08, 120.0, 0.6, engine::RoadClass::Local},
+        {"freeway", 3.75, 4, 0, 2.5, 0.0, 0.0, 3, 0.06, 200.0, 1.2, engine::RoadClass::Freeway},
+        {"rural", 3.5, 1, 1, 2.5, 0.0, 0.0, 1, 0.10, 60.0, 0.5, engine::RoadClass::Collector},
+        {"ramp", 4.5, 1, 0, 2.5, 0.0, 0.0, 0, 0.09, 40.0, 1.0, engine::RoadClass::Ramp},
+        {"divider", 0.0, 0, 0, 0.0, 0.0, 1.5, -1, 1.0, 1.0, 0.0, engine::RoadClass::Local},
+        {"mountain", 3.5, 1, 1, 2.5, 0.0, 0.0, 1, 0.15, 60.0, 0.5, engine::RoadClass::Local},
+        {"rail", 4.0, 1, 1, 0.0, 0.0, 0.0, 3, 0.025, 400.0, 0.8, engine::RoadClass::Local},
+        {"light_rail", 3.6, 1, 1, 0.0, 0.0, 0.0, 2, 0.05, 120.0, 0.7, engine::RoadClass::Local},
+        {"footway", 3.0, 1, 0, 0.0, 0.0, 0.0, 0, 0.6, 20.0, 0.4, engine::RoadClass::Local},
+    };
+    for (const Row& x : rows) {
+        CHECK(t.count(x.name) == 1u);
+        if (!t.count(x.name)) continue;
+        const RoadClassSpec& c = t.at(x.name);
+        // (exactly: the file's numbers are the old table's to the last bit, so nothing built moves)
+        const bool same = c.name == x.name && c.lanes.w == x.w && c.lanes.fwd == x.fwd && c.lanes.back == x.back && c.shoulder == x.shoulder &&
+                          c.sidewalk == x.sidewalk && c.median == x.median && c.rank == x.rank && c.gMax == x.gMax && c.window == x.window &&
+                          c.thick == x.thick && c.engineClass == x.engineClass && c.lanes.gap == 0.0 && c.lanes.dovetail == 60.0;
+        if (!same) std::printf("    row %s differs from the numbers written here\n", x.name);
+        CHECK(same);
+        CHECK(c.lanes.parking == (std::string(x.name) == "local" ? 2.5 : 0.0));
+        CHECK(c.balance == (std::string(x.name) == "mountain" ? 0.5 : 0.0));
+        CHECK(c.track == (std::string(x.name) == "rail" || std::string(x.name) == "light_rail"));
+        CHECK(c.footway == (std::string(x.name) == "footway"));
+        CHECK(c.limitedAccess == (std::string(x.name) == "freeway"));
+        CHECK(c.defaultBarriers == (std::string(x.name) == "freeway" || std::string(x.name) == "ramp"));
+    }
+    // the barriers the rows state: the mountain road's (none against pavement, a median or a street; a guardrail on a
+    // bridge, and at grade only over a 2 m drop), a track's parapet on a bridge, a footway's
+    auto barrier = [&](const char* cls, std::size_t role) { return t.at(cls).edges[role]; };
+    for (std::size_t role = 0; role < 3; ++role) CHECK(barrier("mountain", role).set && barrier("mountain", role).kind == BarrierKind::None);
+    CHECK(barrier("mountain", 3).set && barrier("mountain", 3).kind == BarrierKind::Guardrail && barrier("mountain", 3).h == 0.75 &&
+          barrier("mountain", 3).thick == 0.1 && barrier("mountain", 3).minDrop == 0.0);
+    CHECK(barrier("mountain", 4).kind == BarrierKind::Guardrail && barrier("mountain", 4).minDrop == 2.0);
+    for (const char* track : {"rail", "light_rail"}) {
+        CHECK(barrier(track, 3).set && barrier(track, 3).kind == BarrierKind::Wall && barrier(track, 3).h == 1.0 && barrier(track, 3).thick == 0.4);
+        CHECK(!barrier(track, 0).set && !barrier(track, 4).set);
+    }
+    CHECK(barrier("footway", 3).kind == BarrierKind::Wall && barrier("footway", 3).h == 1.1 && barrier("footway", 3).thick == 0.2);
+    CHECK(barrier("footway", 2).set && barrier("footway", 2).kind == BarrierKind::None && barrier("footway", 4).set && !barrier("footway", 0).set);
+    for (const char* plain : {"local", "collector", "arterial", "boulevard", "freeway", "rural", "ramp", "divider"})
+        for (std::size_t role = 0; role < 5; ++role) CHECK(!barrier(plain, role).set);
+    // the plan picture's colours
+    CHECK(t.at("freeway").planColour == "#2b2b30" && t.at("ramp").planColour == "#38383e" && t.at("arterial").planColour == "#3a3a3c" &&
+          t.at("local").planColour == "#454547" && t.at("collector").planColour.empty());
+    // the file's bytes key the city's bake
+    CHECK(roadClassTableHash() == engine::bundle::fnv1aStr(slurp(std::string(RT_SOURCE_DIR) + "/" + kRoadClassTableFile)));
+
+    // A CLASS IS WHAT ITS ROW SAYS, NOT WHAT IT IS CALLED. A road file states an "avenue" that is an arterial to the
+    // engine and limited-access, and states its own "freeway" row as an ordinary collector street. (Asked by name, the
+    // avenue was a local street that met other roads at one level, and the freeway a freeway whatever its row said.)
+    nlohmann::json file = smallGraph();
+    file["classes"]["avenue"] = {{"engine_class", "arterial"}, {"limited_access", true}, {"default_barriers", true}};
+    file["classes"]["freeway"] = {{"engine_class", "collector"}, {"limited_access", false}};
+    for (nlohmann::json& e : file["edges"]) {
+        if (e["id"] == "a0") e["class"] = "avenue";
+        if (e["id"] == "a2") e["class"] = "freeway";
+    }
+    const RoadLabGraph g = RoadLabGraph::fromJson(file);
+    const EdgeSpec& avenue = *g.find("a0");
+    const EdgeSpec& fw = *g.find("a2");
+    const EdgeSpec& street = *g.find("l0");
+    CHECK(classOf(g, avenue) == engine::RoadClass::Arterial);
+    CHECK(classOf(g, fw) == engine::RoadClass::Collector);
+    CHECK(classOf(g, street) == engine::RoadClass::Local);
+    CHECK(mustSeparate(g, avenue, street));
+    CHECK(!mustSeparate(g, fw, street));
+    CHECK(!mustSeparate(g, street, *g.find("l1")));
+    // a class a file adds starts from the default row: the local street's section and treatment, but no kerb parking
+    // and no colour of its own
+    CHECK(g.cls(avenue).lanes.w == 6.0 && g.cls(avenue).sidewalk == 5.0 && g.cls(avenue).lanes.parking == 0.0 && g.cls(avenue).planColour.empty());
+    CHECK(g.cls(avenue).defaultBarriers && g.cls(avenue).junctionMarkings);
+    // ...and a row of the table's name keeps what it does not restate
+    CHECK(g.cls(fw).lanes.fwd == 4 && g.cls(fw).shoulder == 2.5 && g.cls(fw).defaultBarriers && !g.cls(fw).junctionMarkings);
+    // written back only where a row differs from the one it would be read with
+    CHECK(!classJson(t.at("freeway")).contains("limited_access") && !classJson(t.at("freeway")).contains("engine_class"));
+    CHECK(classJson(g.cls(fw)).value("limited_access", true) == false);
+    CHECK(classJson(g.cls(fw)).value("engine_class", std::string()) == "collector");
+    CHECK(classJson(g.cls(avenue)).value("engine_class", std::string()) == "arterial");
+
+    // THE TABLE'S OWN READER: `like` starts a row from another, in whatever order the file lists them; what it refuses
+    const nlohmann::json doc = nlohmann::json::parse(R"({"default": "street", "classes": {
+        "alley": {"like": "street", "w": 2.5, "engine_class": "alley"},
+        "street": {"w": 3.0, "fwd": 1, "back": 1, "sidewalk": 2.0, "rank": 1}}})");
+    std::string fallback;
+    const std::map<std::string, RoadClassSpec> small = parseRoadClassTable(doc, &fallback);
+    CHECK(fallback == "street" && small.size() == 2u);
+    CHECK(small.at("alley").name == "alley" && small.at("alley").lanes.w == 2.5 && small.at("alley").sidewalk == 2.0 && small.at("alley").lanes.back == 1 &&
+          small.at("alley").engineClass == engine::RoadClass::Alley && small.at("street").engineClass == engine::RoadClass::Local);
+    auto refused = [](const char* text) {
+        try {
+            parseRoadClassTable(nlohmann::json::parse(text));
+        } catch (const std::runtime_error&) {
+            return true;
+        }
+        return false;
+    };
+    CHECK(refused(R"({"default": "street", "classes": {"street": {"like": "lane"}}})"));               // like a row it lacks
+    CHECK(refused(R"({"default": "street", "classes": {"street": {"like": "street"}}})"));             // like itself
+    CHECK(refused(R"({"default": "street", "classes": {"street": {"engine_class": "motorway"}}})"));   // no such engine class
+    CHECK(refused(R"({"default": "lane", "classes": {"street": {}}})"));                               // no default row
+    CHECK(refused(R"({"default": "street"})"));                                                        // no classes
 }

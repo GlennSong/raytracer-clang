@@ -138,6 +138,17 @@ struct RoadClassSpec {
     // ramp's, a track's, a footway's and a divider's are not. The class's own row says so ("junction_markings" in a
     // road file's `classes`); no code asks the class's name or rank. A class a file adds starts from the local row: marked.
     bool junctionMarkings = true;
+    // WHAT THE BUILDER ONCE ASKED A CLASS'S NAME FOR, stated by its row instead (ADR-0438; assets/data/road_classes.json
+    // says what each means):
+    //   - `engineClass` ("engine_class"): which of the engine's six driving classes it is (classOf, the one mapping);
+    //   - `limitedAccess` ("limited_access"): a road other roads never meet at one level (a freeway): a crossing with any
+    //     road but a ramp is a bridge, two side by side share a median wall, a street close beside gets a noise wall;
+    //   - `defaultBarriers` ("default_barriers"): its edges carry the builder's usual barriers where `edges` states none;
+    //   - `planColour` ("plan_colour"): its lanes' fill on the plan picture (empty: the picture's usual one).
+    RoadClass engineClass = RoadClass::Local;
+    bool limitedAccess = false;
+    bool defaultBarriers = false;
+    std::string planColour;
     // Do cars drive on its roads (the cross-section's one answer, road_model_parts.h: not a track, not a footway)?
     bool carriesCars() const { return sectionCarriesCars(track, footway); }
 };
@@ -340,8 +351,9 @@ struct RoadLabGraph {
 RoadSpec bandsFor(const RoadClassSpec& c, const LaneLayout& layout);
 
 // Which engine RoadClass a road-file edge carries. ONE mapping: the road model, the drawn deck and anything else that
-// has to speak both vocabularies reads it here.
-RoadClass classOf(const EdgeSpec& e);
+// has to speak both vocabularies reads it here. A road laid as a ramp (anchored to a host's lane) is a ramp; any other
+// is what its class's row states (RoadClassSpec::engineClass, "engine_class"). No class is asked by name.
+RoadClass classOf(const RoadLabGraph& g, const EdgeSpec& e);
 
 // THE STREET'S CROSS-SECTION AS THE CITY READS IT (ADR-0418): the engine band list of a road-file edge --
 // the carriageway (the road's lanes and shoulders: 2 x (hw + shoulder)) split into travel bands and, where the road states
@@ -356,10 +368,27 @@ double kerbParking(const RoadLabGraph& g, const EdgeSpec& e, bool* fits = nullpt
 
 // (name, left-normal offset from the spine, direction) of each Travel band, from the RoadSpec.
 struct LaneSlot { std::string name; double offset; int dir; };
-// THE ROAD CLASS TABLE (ADR-0276): every class's section, grade and profile, once -- what a graph's classes start
-// from, what the planner writes into the graphs it plans, and DesignRules' grades. `roadClass` falls back to local.
+// THE ROAD CLASS TABLE (ADR-0276; a data file since ADR-0438): every class's section, grade, profile and the builder's
+// treatment of it, once -- what a graph's classes start from, what the planner writes into the graphs it plans, and
+// DesignRules' grades. ITS ONE HOME IS assets/data/road_classes.json, read once by roadClasses(); there is no copy in
+// code. A missing or unreadable file, or one without its default row, throws std::runtime_error naming the file: no
+// road can be built without it. `roadClass` gives the default row (the file's "default": the local street) for a name
+// the table does not have. A level's road file states its own `classes` on top (RoadLabGraph::fromJson), through the
+// same row reader (readRoadClassRow).
+constexpr const char* kRoadClassTableFile = "assets/data/road_classes.json";
 const std::map<std::string, RoadClassSpec>& roadClasses();
 const RoadClassSpec& roadClass(const std::string& name);
+// The name of the row a class no table row names starts from (the file's "default").
+const std::string& defaultRoadClassName();
+// THE TABLE READ FROM A DOCUMENT (the file's own shape: {"default": name, "classes": {name: row}}); `defaultName`
+// receives its default row's name. Throws std::runtime_error on a row that names a `like` it cannot follow, an
+// `engine_class` the engine does not have, or a missing default row. roadClasses() is this over the shipped file.
+std::map<std::string, RoadClassSpec> parseRoadClassTable(const nlohmann::json& doc, std::string* defaultName = nullptr);
+// ONE ROW'S KEYS applied over `c` (each key present replaces c's value; `like` is the table's own and is not read
+// here): the one reader of a class row, for the table's file and for a road file's `classes`.
+void readRoadClassRow(RoadClassSpec& c, const nlohmann::json& row);
+// The table file's bytes, hashed: part of the city's bake key (lanes/city_producer.cpp), so editing a row re-bakes.
+uint64_t roadClassTableHash();
 // A table row as a graph's "classes" entry (what fromJson reads back to the same spec).
 nlohmann::json classJson(const RoadClassSpec& c);
 std::vector<LaneSlot> laneSlots(const RoadClassSpec& c, const LaneLayout& layout);

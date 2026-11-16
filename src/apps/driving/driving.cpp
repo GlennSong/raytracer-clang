@@ -179,7 +179,7 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
         if (lightsRun_) timeSignalProgrammes(*roads_, roadRules_, lightTiming_, rightOfWay_);
         // ... and checked: no stage lets in together two movements whose paths meet unless the rule set allows it. A
         // breach is reported (signalProblems, and in the table's notes), not refused: the host decides (issue #284).
-        signalProblems_ = lightsRun_ ? checkSignalProgrammes(*roads_, ruleSet_, rightOfWay_) : std::vector<std::string>();
+        signalProblems_ = lightsRun_ ? checkSignalProgrammes(*model_, ruleSet_, rightOfWay_) : std::vector<std::string>();
         // (First among the notes, so a host printing only the first few still shows them.)
         for (std::size_t i = 0; i < signalProblems_.size(); ++i)
             rightOfWay_.notes.insert(rightOfWay_.notes.begin() + static_cast<std::ptrdiff_t>(i),

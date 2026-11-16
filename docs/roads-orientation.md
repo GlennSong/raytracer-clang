@@ -45,6 +45,16 @@ width, stretch of spine). The builder's `Lane` (lanes/lane_expand.h) and the mod
 plus their own part; `builtRoadModel` takes the builder's facts whole. A lane's road is `edge` (`road()` gives it as an
 int, -1 for a connector) and its width is `width`: the old names `parent` and `w` are gone.
 
+**A lane's centre line is held once** (ADR-0438). Every lane's points and the distance along its lane to each live in
+one object, `LaneCurves` (`road_model_parts.h`), made by `expand` as it lays the lanes. A lane names its stretch of it
+(`LaneFacts::curve`). The build's lane set, each of its lanes and the road model made from that build all hold that
+same object (a shared pointer), so nothing is copied and the two forms cannot disagree. Read it through
+`Lane::xy()` / `Lane::s()` in the builder (each gives a `Span`: a pointer and a count, valid while the lanes are not
+being laid) and `RoadModel::lanePoints()` / `laneAlong()` in the model. A model read back from `cache/roadmodel` holds
+its own. `Span` (`graph_index.h`) is our stand-in for C++20's `std::span`; `project`, `pointAt`, `tangentAtStation`,
+`tangentAt` and `SegmentGrid` take one, so a whole vector still passes as it is. The old driving's `TrafficLane::xy`
+(`level_loader.cpp`) is still its own copy.
+
 Readers ask the model by id instead of measuring geometry; section 3 lists them. Kinds of attachment (a name, a
 sign) are data, not code.
 
@@ -70,13 +80,17 @@ move the loop into it; never a private loop in the reader.
 | Which path joins by a stated merge | `RoadModel::mergingAt(crossing)` |
 | The rules standing along a lane path (signs at its end, a limit part-way) | `RoadModel::regulationsAlong(path)` |
 | The junction a lane path runs to | `RoadModel::arrivesAt(path)` |
+| Do two lanes arriving at a junction face each other (oncoming traffic) | `RoadModel::facing(junction, a, b)` |
 | The arm a street-map link arrives by | `RoadModel::armReachedAt(street, link.stationTo)` |
 
 **The lane table holds no fact about what the road is** (ADR-0436, ADR-0437, issue #291): no control, posted limit,
 road class, turn kind, merging path or regulation. It holds where a car can be, and each path, junction and crossing
 point carries the id the model is asked by. A lane path also carries the stretch of spine it was cut along
 (`Path::onSpine`, `stationFrom`, `stationTo`, the way it is driven): the model places a street's regulations on it by
-those. One copy is left: `Path::throughArm` (the model's through pair; see ADR-0437 part 3).
+those. The last copy, `Path::throughArm` (the model's through pair), is gone since ADR-0438: an arriving lane carries
+only its arm (`Path::arm`), and which approaches face each other is asked of the model (`RoadModel::facing`, read by
+the builder's waiting-point pass and by the driving's `approachesFace`). A lane table made by hand states its
+junctions' through pairs with `stateThrough` (`tests/driving_test_roads.h`).
 
 **Regulations** (ADR-0437). A rule standing along a road is stated in the model, once: a sign at a junction's arm
 (`ModelArm::regulations`, from the road file) or a regulation on a street (`ModelRegulation` in
@@ -105,18 +119,19 @@ Under `src/engine/procgen/city/roads/`:
 | `road_builder.h/.cpp`, `lanes_builder.cpp` | The roads module's one builder interface and the lanes builder behind it (ADR-0089). |
 | `road_entity.h/.cpp`, `road_net_internal.h` | The engine's road entity (`RoadGraph` + look + plan). |
 | `ground_grid.h/.cpp` | Absolute ground heights on a grid, as the builder hands them back. |
-| `lanes/road_graph_spec.h/.cpp` | Reads the road file (`RoadLabGraph::fromJson`), including the road class table `roadClasses()` and every section in part 4. |
+| `lanes/road_graph_spec.h/.cpp` | Reads the road file (`RoadLabGraph::fromJson`) and every section in part 4. Reads the road class table from `assets/data/road_classes.json` once (`roadClasses()`; `readRoadClassRow` is the one reader of a class row, for the table and for a road file's `classes`). `classOf` maps a road to the engine's class from its row. |
+| `road_problem.h/.cpp` | A problem the road build found, as a record: its kind (a list with a name, a meaning and a sentence each), the ids it concerns, its place, numbers and words. `problemLine` is the one function that writes a problem's sentence (ADR-0438). |
 | `lanes/road_layout.h/.cpp` | The road file's layout: junctions and streets with ids, the text writers used by `lanes_tool layout`, `keyedRoadFileText` (what the bake key hashes) and `laneLevelKey`. |
 | `lanes/control_plan.h/.cpp` | The control plan: each junction's control and each road's limit, from the placement policy. Also `findJunctions`, the layout's grouping of road ends into junctions by the `rules.storage` rule. Rework: the design wants the planner to state these, not group them (step 9 / design "deleted at the end"). |
 | `lanes/lanes.h/.cpp` | The lanes pipeline: graph to lanes to profiles to pavement to surfaces to terrain. `Result` holds the paint's junction boxes (`junctionBoxes`). The ramp-end check still uses an angle test (`kJunctionParallelForGraph`). |
-| `lanes/lane_expand.h/.cpp` | Roads become lane ribbons: pockets, ramps composed from their gore anchors over their whole stated length (`rampEndDistances`). The builder's `Lane` is `LaneFacts` plus its centre line, edges and working data (`sweptFrom` / `diesInto` for pockets and ramp lanes; ADR-0435). The streets a lane runs along and the junction at each end are held by the model's lane only (`ModelLane`, filled in `builtRoadModel`; ADR-0434). |
+| `lanes/lane_expand.h/.cpp` | Roads become lane ribbons: pockets, ramps composed from their gore anchors over their whole stated length (`rampEndDistances`). The builder's `Lane` is `LaneFacts` plus its edges and working data (`sweptFrom` / `diesInto` for pockets and ramp lanes; ADR-0435); its centre line is its stretch of the build's one `LaneCurves`, read through `xy()` and `s()` (ADR-0438, part 1). The streets a lane runs along and the junction at each end are held by the model's lane only (`ModelLane`, filled in `builtRoadModel`; ADR-0434). |
 | `lanes/deck_mesh.h/.cpp` | Meshes and paint. `junctionAreas` gives each stated arm's box edge and stop line (`kStopLineBack`, 5.2 m, outside the box). The paint's lane lines, stop bars and arrows are read off `builtRoadModel` and listed in `RoadPaint` (ADR-0431). `paintFactsKey` is what the paint reads, for the bake key. **Open in step 9**: draw corners to a stated radius. |
 | `lanes/deck_height.*`, `vertical_profile.*`, `road_design.*`, `terrain_conform.*`, `terrain_recipe.*` | Heights: profiles along spines, blended decks, the planner-shared vertical design, cut and fill. |
 | `lanes/pavement.*`, `geom2d.*`, `polyline_ops.*` | 2-D geometry: footprints, the one triangulation, the Clipper2/CDT seam, polyline helpers. |
 | `lanes/interchange.*` | Diamond interchanges (ramps at the streets a freeway crosses). The solid stretch before a stop line is handed in (`DiamondOptions::solidBeforeStopLine`): the planner's `SceneOptions::solidBeforeStopLine`, which it also writes into the road file's `lane_rules` (ADR-0435). |
 | `vehicle_size.h/.cpp` | The body a road is checked against per vehicle tag (`VehicleSize`, `addVehicleSize`), and how a wheelbase and a tightest turn follow from the vehicle data. The driving library derives its classes with the same functions. |
 | `lanes/lane_level.h/.cpp` | **The lane level as a table built from the model** (`buildLaneLevel`, ADR-0426): the last step of `assembleRoadModel`, which fills `RoadModel::laneLevel` (ADR-0429). The header lists where each part comes from. |
-| `lanes/lane_graph_build.h/.cpp` | What is left of the old builder: report types (`LaneGraphBuild`, `CornerFault`), `cutFolds`, bend profiles, kinks, the vehicle sizes. Has the `kLaneGraphBuildVersion` cache version. |
+| `lanes/lane_graph_build.h/.cpp` | What is left of the old builder: report types (`LaneGraphBuild`, `CornerFault`), `cutFolds`, bend profiles, kinks, the vehicle sizes. Has the `kLaneGraphBuildVersion` cache version. `LaneGraphBuild::problems` is a list of records (`RoadProblem`), not sentences (ADR-0438). |
 | `lanes/lane_graph_connect.h/.cpp` | Connector shaping and `fitConnector`, the per-class corner-fit test that produces corner faults; `reachReport`. Step 9 will change what it reports, not delete it *(unsure)*. |
 | `lanes/lane_graph_crossings.h/.cpp` | Crossing points: where two paths' bodies could touch (a kept measurement). |
 | `lanes/swept_body.*` | The ground a long body covers on a bend. |
@@ -125,8 +140,9 @@ Under `src/engine/procgen/city/roads/`:
 | `lanes/block_audit.*` | The lot pass run headless and audited. |
 | `lanes/lanes_export.*` | glTF, plan SVG, stats JSON, lane graph plan pictures. |
 
-Tools: `tools/lanes_tool.cpp` (all subcommands; its top comment lists them, except `layout --lane-rules`, which it
-does not mention) and `city_plan` (the planner; `city_plan controls`).
+Tools: `tools/lanes_tool.cpp` (all subcommands; its top comment lists them, with every `layout` flag since ADR-0438)
+and `city_plan` (the planner; `city_plan controls`). `lanes_tool lanegraph` prints the lane level's problems counted
+by kind, each kind with what it means.
 
 Tests:
 - `lanes_tests`: `test_lanes.cpp`, `test_road_model.cpp`, `test_control_plan.cpp`; unit scenes in
@@ -202,7 +218,7 @@ Still working roads out for itself:
 
 | Section | What it states | Bake key sees it? |
 |---|---|---|
-| `edges`, `classes`, `terrain`, ramps, pockets, connectors | Roads, their class overrides, ground | yes |
+| `edges`, `classes`, `terrain`, ramps, pockets, connectors | Roads, their class rows stated on top of the table (`assets/data/road_classes.json`, whose own bytes the key hashes too), ground | yes |
 | `rules` (incl. `storage`, default 6.5 m) | Builder tolerances. `storage` is the waiting room between two junction points below which they are one junction (`findJunctions`). | yes (only `streets`, `divided`, `junctions`, `arms_in_ring`, `lane_rules` are cut) |
 | `carry_on_control` | The control the plan gives carry-ons (control_plan.cpp) | yes *(unsure what reads it at load)* |
 | `junctions` | Id, `at`, arms in their ring (street, heading, regulations; see below), `through` (by place in that list), `inside`, `control`, `why`, `nodes` (step 7's points) | no |
@@ -259,9 +275,18 @@ it (before `streets`), so one write is final (ADR-0437; the same test).
 - **`assets/scripts/rules/control_policy.lua`**: the placement policy. Class order, posted limits with sources, and
   first-match rows choosing each junction's control and signs. The planner reads it via the rule set
   (`rules/lab.lua`).
-- **The road class table**: `roadClasses()` in `lanes/road_graph_spec.cpp`. It is C++, not a data file. Each
-  class's lane width and counts, shoulder, sidewalk, median, rank, grade, kerb parking and whether its arms at a
-  junction are marked (`junction_markings`). A road file's `classes` override rows.
+- **`assets/data/road_classes.json`** (ADR-0438): the road class table, twelve rows. Each class's lane width and
+  counts, shoulder, sidewalk, median, rank, grade, kerb parking, barriers, whether its arms at a junction are marked
+  (`junction_markings`), and what the builder once asked the class's name for: `engine_class` (which of the engine's
+  six driving classes it is), `limited_access` (a freeway: crossings are bridges, a median wall between two of them),
+  `default_barriers` (walls and guardrails where the row states none) and `plan_colour`. The file's own comment says
+  what every key means. `like` starts a row from another (the mountain road is the rural road graded differently).
+  Read once by `roadClasses()` (`lanes/road_graph_spec.cpp`); there is no copy in C++, and a missing file stops the
+  road build with an error naming it. A road file's `classes` go on top, row by row, through the same reader
+  (`readRoadClassRow`); a class name the table lacks starts from the `default` row (`local`). The file's bytes are part
+  of the city's bake key (`roadClassTableHash`), so editing a row re-bakes. No code compares a class NAME any more;
+  what is left is listed in ADR-0438 (the interchange maker gives its ramps the class named `ramp`, and two places
+  compare a class's `rank` to 3).
 - `assets/data/streets.json`: name words and sign look (names only).
 
 ## 6. Checking a change quickly
@@ -282,7 +307,7 @@ The fleet for `--vehicle`, as step 8 used it: `bus:7.30:2.55:11.45 car:6.15:2.05
 moped:1.92:0.70:1.70 motorcycle:2.73:0.70:2.09 truck:7.45:2.25:6.69 van:7.10:2.30:6.34`.
 
 Tests (`RT_TEST_FILTER` is a substring of the case name):
-- `./build-viewer/lanes_tests`: 127 cases, about 4 to 5 minutes whole. Filters: `road_model` (quick),
+- `./build-viewer/lanes_tests`: 128 cases, about 4 to 5 minutes whole. Filters: `road_model` (quick),
   `lanes_lane_graph_of` (the five scenes' lane-graph checks against what each scene is known to hold: `LaneGraphKnown`
   in test_lanes.cpp), `lanes_the_traffic_lab`, `connectors_of`.
 - `./build-viewer/driving_tests`: 193 cases on hand-made graphs, about a minute *(roughly)*.

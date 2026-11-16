@@ -347,7 +347,7 @@ const BuiltLaneLevel& plannedBuild() {
 }
 
 bool hasProblem(const BuiltLaneLevel& lg, const std::string& words) {
-    for (const std::string& p : lg.problems)
+    for (const std::string& p : engine::problemLines(lg.problems))
         if (p.find(words) != std::string::npos) return true;
     return false;
 }
@@ -396,7 +396,7 @@ TEST_CASE(control_plan_2_a_planned_road_graph_is_carried_through) {
     const LaneGraph& G = lg.model.laneLevel;
     const RoadLabGraph road = RoadLabGraph::fromJson(g);
     std::printf("    controls: %u stated junctions, %zu lane-level junctions\n", lg.controlPlan.planned, G.junctions.size());
-    for (const std::string& p : lg.problems) std::printf("    problem: %s\n", p.c_str());
+    for (const std::string& p : engine::problemLines(lg.problems)) std::printf("    problem: %s\n", p.c_str());
     CHECK(lg.error.empty());
     CHECK(lg.controlPlan.planned == road.junctions.size());
     // ONE JUNCTION PER STATED JUNCTION (the lane level is a table built from the road model, ADR-0426): the bend is no
@@ -450,7 +450,7 @@ TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_report
         CHECK(lg.model.controlAt(JunctionId(0)) == "stop");
         // the four street ends the left-out junction held: a1's and l2's ends there, a2's and o0's starts
         std::set<std::string> said;
-        for (const std::string& p : lg.problems) {
+        for (const std::string& p : engine::problemLines(lg.problems)) {
             if (p.find("but the road file states no junction there") == std::string::npos) continue;
             std::printf("    problem: %s\n", p.c_str());
             said.insert(p.substr(0, p.find(" at (")));
@@ -464,8 +464,47 @@ TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_report
         for (nlohmann::json& a : g["junctions"][1]["arms"])
             if (a["road"] == "o0") a["regulations"] = {"stop"};
         const BuiltLaneLevel lg = laneGraphFrom(g);
-        for (const std::string& p : lg.problems) std::printf("    problem: %s\n", p.c_str());
+        for (const std::string& p : engine::problemLines(lg.problems)) std::printf("    problem: %s\n", p.c_str());
         CHECK(hasProblem(lg, "junction j1: its arm on road o0 carries \"stop\", but no lane arrives by it"));
+        // THE PROBLEM IS A RECORD (ADR-0438): its kind, the junction, arm and road it concerns and the sign's name are
+        // fields a tool can read, and its sentence is made from them by the one function
+        uint32_t found = 0;
+        for (const engine::RoadProblem& p : lg.problems) {
+            if (p.kind != engine::RoadProblemKind::SignOnArmNoLane) continue;
+            ++found;
+            CHECK(p.junction == "j1" && p.road == "o0" && p.words == std::vector<std::string>{"stop"} && p.numbers.empty());
+            CHECK(p.arm >= 0 && g["junctions"][1]["arms"][static_cast<std::size_t>(p.arm)]["road"] == "o0");
+            CHECK(engine::problemLine(p) == "junction j1: its arm on road o0 carries \"stop\", but no lane arrives by it");
+            CHECK(std::string(engine::problemKindRow(p.kind).name) == "sign on an arm no lane arrives by");
+        }
+        CHECK(found == 1u);
+        const std::vector<std::pair<engine::RoadProblemKind, uint32_t>> byKind = engine::problemsByKind(lg.problems);
+        uint32_t counted = 0;
+        for (const std::pair<engine::RoadProblemKind, uint32_t>& k : byKind) counted += k.second;
+        CHECK(counted == lg.problems.size());
+    }
+    // EVERY KIND HAS A NAME, A MEANING AND A SENTENCE, and a record with its fields filled writes that sentence with no
+    // placeholder left in it (the kinds are listed in road_problem.cpp in the enum's own order)
+    for (std::size_t k = 0; k < engine::kRoadProblemKindCount; ++k) {
+        const engine::RoadProblemKindRow& row = engine::problemKindRow(static_cast<engine::RoadProblemKind>(k));
+        CHECK(static_cast<std::size_t>(row.kind) == k && row.name[0] != '\0' && row.meaning[0] != '\0' && row.line[0] != '\0');
+        engine::RoadProblem p(row.kind);
+        p.atJunction("J").onStreet("S").andStreet("S2").onLane("L").andLane("L2").onRoad("R").onArm(1).onPath(2).andPath(3)
+            .where(engine::Vec2(1.25, 2.5)).atStation(7.5);
+        for (int i = 0; i < 10; ++i) p.number(i + 0.5).word("w" + std::to_string(i));
+        const std::string line = engine::problemLine(p);
+        CHECK(!line.empty() && line.find('{') == std::string::npos && line.find('}') == std::string::npos);
+    }
+    // two sentences written out by hand from their records: numbers keep the decimals their kind states
+    {
+        engine::RoadProblem fold(engine::RoadProblemKind::LaneFoldTidied);
+        fold.onLane("s32.f1").onRoad("s32").where(engine::Vec2(-146.84, 102.46)).number(0.974).number(1.981);
+        CHECK(engine::problemLine(fold) == "lane s32.f1 runs backwards for 0.97 m near (-146.8, 102.5): it lies on the inside of a corner of road "
+                                           "s32 sharper than its offset from the road's spine; tidied (the fold cut out, 1.98 m shorter)");
+        engine::RoadProblem slot(engine::RoadProblemKind::CarryOnOtherSlot);
+        slot.onLane("a.f1").onStreet("a/0").andStreet("b/0").andLane("b.f0").number(1).number(-1);
+        CHECK(engine::problemLine(slot) == "lane a.f1 (slot 1) carries on from street a/0 into b/0, which has no lane in its slot: into lane b.f0 "
+                                           "(slot -1)");
     }
     // (Two stated junctions are two junctions of the lane level, whatever the paint draws: since ADR-0426 nothing groups
     // them, so the case of one built junction holding two planned ones of different controls cannot arise.)

@@ -1,92 +1,125 @@
 #include "engine/procgen/city/roads/lanes/road_graph_spec.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"   // pointAt, tangentAt
+#include "engine/asset_root.h"                               // assetPath: the road class table's file
+#include "engine/bundle/bundle.h"                            // fnv1aStr: the table's hash, for the bake key
 
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <functional>
+#include <iterator>
 #include <set>
 #include <stdexcept>
 
 namespace engine {
 namespace roads::lanes {
 
-// THE ROAD CLASS TABLE (ADR-0276, #117 item 18): every class's section, grade and profile, once. A graph names its
-// classes from it (fromJson starts each class at its row), the city planner writes its rows into every graph it plans
-// (plan_scene: the brief's widths over them), the island adds its mountain row, DesignRules reads the grades. The
-// grades are the planner's, which every shipped graph carries: a freeway 6 %, an arterial or a boulevard 8 %, a
-// collector or a rural road 10 %, a local street 12 %, a ramp 9 % (an urban ramp's: with 8 % the diamonds on the
-// hilly ring ran longer than the 535 m between its arterials and only two fit), a mountain road 15 % (its design
-// grade 12 %: at the rural 10 % the island pass, climbing 8.2 % on average up its valley, could not keep to the ground
-// and rode a 2.5 km viaduct 45 m up). The sections are the default brief's (city_plan.h Brief: 12 / 16 / 22 / 30 m
-// carriageways, 5 m sidewalks).
-const std::map<std::string, RoadClassSpec>& roadClasses() {
-    static const std::map<std::string, RoadClassSpec> k = [] {
-        std::map<std::string, RoadClassSpec> m;
-        auto add = [&](const char* n, double w, int f, int b, double sh, double sw, double med, int rank, double g, double win, double th) {
-            RoadClassSpec c; c.name = n; c.lanes.w = w; c.lanes.fwd = f; c.lanes.back = b; c.shoulder = sh; c.sidewalk = sw; c.median = med;
-            c.rank = rank; c.gMax = g; c.window = win; c.thick = th; m[n] = c;
-        };
-        //   class        lane w        fwd back shoulder sidewalk median rank g_max  window thick
-        add("local",      12.0 / 2,     1,  1,  0.0,     5.0,     0.0,   1,   0.12,  40.0,  0.5);
-        add("collector",  16.0 / 4,     2,  2,  0.0,     5.0,     0.0,   1,   0.10,  80.0,  0.5);
-        add("arterial",   22.0 / 6,     3,  3,  0.0,     5.0,     0.0,   2,   0.08,  120.0, 0.6);
-        add("boulevard",  22.0 / 6,     3,  0,  0.0,     5.0,     0.0,   2,   0.08,  120.0, 0.6);
-        add("freeway",    30.0 / 8,     4,  0,  2.5,     0.0,     0.0,   3,   0.06,  200.0, 1.2);
-        // RURAL: a country road out of town -- the mountain roads -- two lanes and a shoulder, no sidewalks (and so
-        // none of a street's kerbside furniture); drives as a collector. The shoulder is 2.5 m, a ramp's (Glenn,
-        // 2026-11-04: "for the 2 lane roads on the mountains and even on the ground we should give some more shoulder
-        // space because it's hard to drive when they're that narrow"): 1.0 m left 9 m of deck to hold a car on
-        add("rural",      3.5,          1,  1,  2.5,     0.0,     0.0,   1,   0.10,  60.0,  0.5);
-        add("ramp",       4.5,          1,  0,  2.5,     0.0,     0.0,   0,   0.09,  40.0,  1.0);
-        // KERB PARKING (ADR-0418): a local street parks along both kerbs, a 2.5 m band over the kerb side of its 6 m lane
-        // each way (3.5 m of it to drive in). Measured before it was stated: the road twin carved exactly this band out
-        // of every planned local street and out of no other class on any shipped level -- a collector's or an
-        // arterial's kerb lane was never parked in. Every other class: none.
-        m["local"].lanes.parking = 2.5;
-        add("divider",    0.0,          0,  0,  0.0,     0.0,     1.5,  -1,   1.0,   1.0,   0.0);
-        // THE MOUNTAIN ROAD: the rural section, graded as mountain roads are, cutting through what it cannot climb
-        // (ADR-0116), with GUARDRAILS (ADR-0117, Glenn: "the mountain road needs railguards at some places") on its
-        // bridges and at grade where the ground 5 m out drops 2 m or more -- nowhere else
-        m["mountain"] = m["rural"];
-        m["mountain"].name = "mountain";
-        m["mountain"].gMax = 0.15;
-        m["mountain"].balance = 0.5;
-        BarrierSpec none; none.set = true;
-        BarrierSpec rail; rail.kind = BarrierKind::Guardrail; rail.h = 0.75; rail.thick = 0.1; rail.set = true;
-        BarrierSpec railDrop = rail; railDrop.minDrop = 2.0;
-        m["mountain"].edges = {none, none, none, rail, railDrop};
-        // double track: one track per direction at 4 m centres, a railway's grade (2.5 %) over a long window
-        add("rail", 4.0, 1, 1, 0.0, 0.0, 0.0, 3, 0.025, 400.0, 0.8);
-        m["rail"].track = true;
-        // a parapet where the track stands on structure; nothing at grade (the lab's own fence comes later)
-        BarrierSpec wall; wall.kind = BarrierKind::Wall; wall.h = 1.0; wall.set = true;
-        m["rail"].edges[3] = wall;   // EdgeRole::Elevated
-        // LIGHT RAIL in a town (Glenn: "Bigger cities: light rail ... a loop (Yamanote). Start simple."): a double track at
-        // 3.6 m centres, a tram's grade (5 %) over a street's window, so it climbs over a cross street and back in a block
-        add("light_rail", 3.6, 1, 1, 0.0, 0.0, 0.0, 2, 0.05, 120.0, 0.7);
-        m["light_rail"].track = true;
-        m["light_rail"].edges[3] = wall;
-        // a footway: one 3 m path, a parapet wherever it stands clear of the ground, and STAIRS where it is steep --
-        // the island's platforms stand 11-24 m over their streets (the track on the hillside above town): a 12 % ramp
-        // would have been 115-250 m long. 60 % is a stair's pitch (the mesher steps whatever is steeper than 15 %).
-        add("footway", 3.0, 1, 0, 0.0, 0.0, 0.0, 0, 0.6, 20.0, 0.4);
-        m["footway"].footway = true;
-        BarrierSpec parapet; parapet.kind = BarrierKind::Wall; parapet.h = 1.1; parapet.thick = 0.2; parapet.set = true;
-        m["footway"].edges[3] = parapet;   // EdgeRole::Elevated
-        m["footway"].edges[2].set = true;  // vs street: nothing (it meets one)
-        m["footway"].edges[4].set = true;  // at grade: nothing
-        // THE CLASSES WHOSE ARMS AT A JUNCTION ARE NOT MARKED (RoadClassSpec::junctionMarkings): no crosswalk, stop bar or
-        // lane arrow where a freeway, a ramp, a track, a footway or a divider meets a junction. Every other row: marked.
-        for (const char* unmarked : {"freeway", "ramp", "divider", "rail", "light_rail", "footway"}) m[unmarked].junctionMarkings = false;
-        return m;
+// THE ROAD CLASS TABLE (ADR-0276, #117 item 18; a data file since ADR-0438): every class's section, grade, profile and
+// the builder's treatment of it, once, in assets/data/road_classes.json (which says why each number is what it is). A
+// graph names its classes from it (fromJson starts each class at its row), the city planner writes its rows into every
+// graph it plans (plan_scene: the brief's widths over them), the island adds its mountain row, DesignRules reads the
+// grades. Read here, once; no copy of the rows is kept in code.
+
+namespace {
+
+double num(const nlohmann::json& j, const char* key, double d) { return j.contains(key) ? j.at(key).get<double>() : d; }
+
+// The keys of a class row's `edges`, by EdgeRole.
+constexpr const char* kEdgeRoleKey[5] = {"seam", "median", "vs_street", "elevated", "at_grade"};
+
+// The table as the file states it, its default row's name and the hash of its bytes: read once.
+struct RoadClassTable {
+    std::map<std::string, RoadClassSpec> rows;
+    std::string defaultName;
+    uint64_t hash = 0;
+};
+const RoadClassTable& roadClassTable() {
+    static const RoadClassTable table = [] {
+        const std::string path = assetPath(kRoadClassTableFile);
+        std::ifstream in(path, std::ios::binary);
+        if (!in) throw std::runtime_error("the road class table " + path + " is missing: no road can be built without it");
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        RoadClassTable t;
+        try {
+            t.rows = parseRoadClassTable(nlohmann::json::parse(text), &t.defaultName);
+        } catch (const std::exception& e) {
+            throw std::runtime_error("the road class table " + path + ": " + e.what());
+        }
+        t.hash = bundle::fnv1aStr(text);
+        return t;
     }();
-    return k;
+    return table;
 }
+
+}  // namespace
+
+void readRoadClassRow(RoadClassSpec& c, const nlohmann::json& j) {
+    c.lanes.w = num(j, "w", c.lanes.w); c.lanes.fwd = static_cast<int>(num(j, "fwd", c.lanes.fwd)); c.lanes.back = static_cast<int>(num(j, "back", c.lanes.back));
+    c.lanes.gap = num(j, "gap", c.lanes.gap); c.shoulder = num(j, "shoulder", c.shoulder); c.sidewalk = num(j, "sidewalk", c.sidewalk); c.median = num(j, "median", c.median);
+    c.lanes.parking = num(j, "parking", c.lanes.parking);
+    c.rank = static_cast<int>(num(j, "rank", c.rank)); c.gMax = num(j, "g_max", c.gMax); c.window = num(j, "window", c.window); c.balance = num(j, "balance", c.balance); c.thick = num(j, "thick", c.thick);
+    if (j.contains("track") && j["track"].is_boolean()) c.track = j["track"].get<bool>();
+    if (j.contains("footway") && j["footway"].is_boolean()) c.footway = j["footway"].get<bool>();
+    if (j.contains("junction_markings") && j["junction_markings"].is_boolean()) c.junctionMarkings = j["junction_markings"].get<bool>();
+    if (j.contains("limited_access") && j["limited_access"].is_boolean()) c.limitedAccess = j["limited_access"].get<bool>();
+    if (j.contains("default_barriers") && j["default_barriers"].is_boolean()) c.defaultBarriers = j["default_barriers"].get<bool>();
+    if (j.contains("plan_colour") && j["plan_colour"].is_string()) c.planColour = j["plan_colour"].get<std::string>();
+    if (j.contains("engine_class") && j["engine_class"].is_string()) {
+        const std::string name = j["engine_class"].get<std::string>();
+        if (!parseRoadClass(name, c.engineClass))
+            throw std::runtime_error("road class " + c.name + ": engine_class \"" + name + "\" is none of the engine's classes "
+                                     "(local, collector, arterial, freeway, ramp, alley)");
+    }
+    if (j.contains("edges") && j["edges"].is_object()) {
+        for (size_t i = 0; i < 5; ++i) {
+            if (!j["edges"].contains(kEdgeRoleKey[i])) continue;
+            const nlohmann::json& e = j["edges"][kEdgeRoleKey[i]]; BarrierSpec b;
+            const std::string kind = e.value("kind", std::string("none"));
+            b.kind = kind == "wall" ? BarrierKind::Wall : kind == "guardrail" ? BarrierKind::Guardrail : BarrierKind::None;
+            b.h = num(e, "h", kind == "guardrail" ? 0.75 : 0.9);
+            b.offset = num(e, "offset", 0.0); b.thick = num(e, "thick", kind == "guardrail" ? 0.1 : 0.4); b.minDrop = num(e, "min_drop", 0.0); b.set = true;
+            c.edges[i] = b;
+        }
+    }
+}
+
+std::map<std::string, RoadClassSpec> parseRoadClassTable(const nlohmann::json& doc, std::string* defaultName) {
+    if (!doc.is_object() || !doc.contains("classes") || !doc["classes"].is_object())
+        throw std::runtime_error("no \"classes\": {name: row} object");
+    const nlohmann::json& rows = doc["classes"];
+    std::map<std::string, RoadClassSpec> out;
+    // a row that is `like` another is read after it, whatever order the file lists them in
+    std::set<std::string> reading;
+    std::function<void(const std::string&)> read = [&](const std::string& name) {
+        if (out.count(name)) return;
+        if (!rows.contains(name)) throw std::runtime_error("a row is like \"" + name + "\", which the table does not have");
+        if (!reading.insert(name).second) throw std::runtime_error("row \"" + name + "\" is like itself, through its `like`");
+        const nlohmann::json& row = rows[name];
+        RoadClassSpec c;
+        if (row.contains("like")) {
+            const std::string base = row["like"].get<std::string>();
+            read(base);
+            c = out.at(base);
+        }
+        c.name = name;
+        readRoadClassRow(c, row);
+        out[name] = c;
+    };
+    for (nlohmann::json::const_iterator it = rows.begin(); it != rows.end(); ++it) read(it.key());
+    const std::string fallback = doc.value("default", std::string());
+    if (!out.count(fallback)) throw std::runtime_error("its \"default\" row \"" + fallback + "\" is not one of its classes");
+    if (defaultName) *defaultName = fallback;
+    return out;
+}
+
+const std::map<std::string, RoadClassSpec>& roadClasses() { return roadClassTable().rows; }
+const std::string& defaultRoadClassName() { return roadClassTable().defaultName; }
+uint64_t roadClassTableHash() { return roadClassTable().hash; }
 
 const RoadClassSpec& roadClass(const std::string& name) {
     const std::map<std::string, RoadClassSpec>& t = roadClasses();
-    const auto it = t.find(name);
-    return it != t.end() ? it->second : t.at("local");
+    const std::map<std::string, RoadClassSpec>::const_iterator it = t.find(name);
+    return it != t.end() ? it->second : t.at(defaultRoadClassName());
 }
 
 nlohmann::json classJson(const RoadClassSpec& c) {
@@ -100,13 +133,16 @@ nlohmann::json classJson(const RoadClassSpec& c) {
     if (c.track) j["track"] = true;
     if (c.footway) j["footway"] = true;
     {
-        // written only where it differs from what a file leaving it out is read with: the table's row of that name, or
-        // (a class the table does not know) the local row's
-        const std::map<std::string, RoadClassSpec>::const_iterator row = roadClasses().find(c.name);
-        const bool usual = row != roadClasses().end() ? row->second.junctionMarkings : roadClasses().at("local").junctionMarkings;
-        if (c.junctionMarkings != usual) j["junction_markings"] = c.junctionMarkings;
+        // each written only where it differs from what a file leaving it out is read with: the table's row of that
+        // name, or (a class the table does not have) its default row's
+        const RoadClassSpec& usual = roadClass(c.name);
+        if (c.junctionMarkings != usual.junctionMarkings) j["junction_markings"] = c.junctionMarkings;
+        if (c.engineClass != usual.engineClass) j["engine_class"] = roadClassName(c.engineClass);
+        if (c.limitedAccess != usual.limitedAccess) j["limited_access"] = c.limitedAccess;
+        if (c.defaultBarriers != usual.defaultBarriers) j["default_barriers"] = c.defaultBarriers;
+        if (c.planColour != usual.planColour) j["plan_colour"] = c.planColour;
     }
-    static const char* kRoleKey[5] = {"seam", "median", "vs_street", "elevated", "at_grade"};
+    const char* const* kRoleKey = kEdgeRoleKey;
     for (size_t i = 0; i < 5; ++i) {
         const BarrierSpec& b = c.edges[i];
         if (!b.set) continue;
@@ -119,8 +155,6 @@ nlohmann::json classJson(const RoadClassSpec& c) {
 }
 
 namespace {
-
-double num(const nlohmann::json& j, const char* key, double d) { return j.contains(key) ? j.at(key).get<double>() : d; }
 
 RampAnchor readAnchor(const nlohmann::json& j, const LaneLayout& hostLanes) {
     RampAnchor a;
@@ -235,14 +269,8 @@ std::vector<const EdgeSpec*> RoadLabGraph::paved() const {
     std::vector<const EdgeSpec*> out; for (const EdgeSpec& e : edges) if (e.laneCount() > 0) out.push_back(&e); return out;
 }
 
-RoadClass classOf(const EdgeSpec& e) {
-    if (e.isRamp() || e.cls == "ramp") return RoadClass::Ramp;
-    if (e.cls == "freeway") return RoadClass::Freeway;
-    if (e.cls == "arterial") return RoadClass::Arterial;
-    if (e.cls == "collector") return RoadClass::Collector;
-    if (e.cls == "rural") return RoadClass::Collector;   // a country road: collector speeds, no sidewalks
-    if (e.cls == "alley") return RoadClass::Alley;
-    return RoadClass::Local;
+RoadClass classOf(const RoadLabGraph& g, const EdgeSpec& e) {
+    return e.isRamp() ? RoadClass::Ramp : g.cls(e).engineClass;
 }
 
 RoadSpec streetSection(const RoadLabGraph& g, const EdgeSpec& e) {
@@ -298,29 +326,12 @@ std::vector<LaneSlot> laneSlots(const RoadClassSpec& c, const LaneLayout& L) {
 RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::string& baseDir) {
     RoadLabGraph g; g.name = spec.value("name", std::string("roads")); g.classes = roadClasses();
     if (spec.contains("classes")) for (auto it = spec["classes"].begin(); it != spec["classes"].end(); ++it) {
-        // a class the table does not know starts from the local row -- but parks only where it says so: the local row's
-        // kerb parking belongs to the local row's section (ADR-0418)
-        RoadClassSpec& c = g.classes[it.key()]; if (c.name.empty()) { c = g.classes.at("local"); c.name = it.key(); c.lanes.parking = 0.0; }
-        const nlohmann::json& j = it.value();
-        c.lanes.w = num(j, "w", c.lanes.w); c.lanes.fwd = static_cast<int>(num(j, "fwd", c.lanes.fwd)); c.lanes.back = static_cast<int>(num(j, "back", c.lanes.back));
-        c.lanes.gap = num(j, "gap", c.lanes.gap); c.shoulder = num(j, "shoulder", c.shoulder); c.sidewalk = num(j, "sidewalk", c.sidewalk); c.median = num(j, "median", c.median);
-        c.lanes.parking = num(j, "parking", c.lanes.parking);
-        c.rank = static_cast<int>(num(j, "rank", c.rank)); c.gMax = num(j, "g_max", c.gMax); c.window = num(j, "window", c.window); c.balance = num(j, "balance", c.balance); c.thick = num(j, "thick", c.thick);
-        if (j.contains("track") && j["track"].is_boolean()) c.track = j["track"].get<bool>();
-        if (j.contains("footway") && j["footway"].is_boolean()) c.footway = j["footway"].get<bool>();
-        if (j.contains("junction_markings") && j["junction_markings"].is_boolean()) c.junctionMarkings = j["junction_markings"].get<bool>();
-        if (j.contains("edges") && j["edges"].is_object()) {
-            static const char* kRoleKey[5] = {"seam", "median", "vs_street", "elevated", "at_grade"};
-            for (size_t i = 0; i < 5; ++i) {
-                if (!j["edges"].contains(kRoleKey[i])) continue;
-                const nlohmann::json& e = j["edges"][kRoleKey[i]]; BarrierSpec b;
-                const std::string kind = e.value("kind", std::string("none"));
-                b.kind = kind == "wall" ? BarrierKind::Wall : kind == "guardrail" ? BarrierKind::Guardrail : BarrierKind::None;
-                b.h = num(e, "h", kind == "guardrail" ? 0.75 : 0.9);
-                b.offset = num(e, "offset", 0.0); b.thick = num(e, "thick", kind == "guardrail" ? 0.1 : 0.4); b.minDrop = num(e, "min_drop", 0.0); b.set = true;
-                c.edges[i] = b;
-            }
-        }
+        // a class the table does not have starts from its default row (the local street's) -- but parks only where it
+        // says so: that row's kerb parking belongs to that row's section (ADR-0418). Nor does it take that row's colour
+        // on the plan picture: it is drawn as any class with none of its own.
+        RoadClassSpec& c = g.classes[it.key()];
+        if (c.name.empty()) { c = g.classes.at(defaultRoadClassName()); c.name = it.key(); c.lanes.parking = 0.0; c.planColour.clear(); }
+        readRoadClassRow(c, it.value());   // the one reader of a class row (the table's file is read by it too)
     }
     if (spec.contains("rules")) {
         const nlohmann::json& r = spec["rules"]; Rules& R = g.rules;
