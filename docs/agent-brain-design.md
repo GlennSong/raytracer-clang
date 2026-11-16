@@ -228,10 +228,35 @@ The 300-car lab stays as a flow check. Its pinned-state test is dropped once age
 | seven far situations found by label | every state, kept with its time |
 | the car's road position inside the person | owned by the driving; the person holds a handle |
 
-## 12. Open questions
+## 12. Decided with Glenn, 2026-11-16
 
-- How many legs is enough? Six covers walk, bus, change, bus, walk with one to spare.
-- Does a household share a car, and who decides who takes it? Not needed for the first build.
-- Carrying things (a skateboard on the bus, shopping): where does that live? Later.
+**How many legs.** The number of legs varies with the trip. There is a cap of eight, so a plan can never
+grow without end or call itself. Walk, bus, change, bus, walk is five. A plan that would need more than
+eight is refused, and the planner takes the next cheapest way.
+
+**A household shares its car. Whoever reaches it first takes it.** Nobody is assigned the car. Each person
+plans from where the car stands at that moment and whether it is free. If someone else drives off in it
+before they arrive, they get the "vehicle gone" event at the kerb and plan again without it (section 7).
+The car stays where its last driver parked it, and the next person plans from there, so a car left at work
+is not at home for the person who stayed behind.
+
+**Small wheels: skateboard, scooter.** They are a faster way of doing a leg on foot, not a vehicle to be
+parked.
+
+- The prop appears when the leg starts and disappears when it ends. Nothing is carried, stored or left
+  anywhere, so it can be used to reach a bus stop and the person simply boards.
+- They are data rows like any other way: on the footpaths, quicker than walking, no vehicle to return to.
+- Not everyone has one. Whether a person has a board or a scooter is a trait dealt with the population, by
+  life stage, as a data table. Without that, every trip would be priced as if everyone could skate and
+  walking would nearly vanish.
+- Each row says how much the person minds a minute of it and the longest leg it suits, so a board is taken
+  for the ten minutes to the bus stop and not for an hour across town.
+- A way that needs getting to (a car, a bus stop, a station) is reached by the cheapest foot way the person
+  has. So "skate to the stop, take the bus, walk to the door" comes out of the pricing with no special rule.
+- A bike is different: it is a real thing that is left where it is parked, like a car. It comes later.
+
+## 13. Still open
+
 - Group activities are joined by several people at once; whether the group or each person holds the state
   is decided when that state is moved over.
+- Weather and time of day changing how much a way is minded (skating in the rain, walking at night). Later.
