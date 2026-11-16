@@ -276,19 +276,19 @@ LotRoadInputs lotRoadInputs(const std::vector<std::shared_ptr<RoadModel>>& citie
 
 LotRoadInputs lotRoadInputs(const RoadModel& planned, const RoadDeckField& deck) {
     LotRoadInputs in;
-    auto add = [&](const std::string& id, const Range& line, const ModelSection& section) {
-        if (!section.carriesCars() || line.count < 2) return;   // no building fronts a track or a footway
+    // THE MODEL'S OWN LIST of the roads a search by position goes over (RoadModel::roadLines: each street, then each
+    // junction's inside stretches; no track, no footway), in its order -- the list and the order RoadModel::frontageAt
+    // searches, so "the street nearest this door" is one answer for the lot pass and for the model (ADR-0439).
+    for (const RoadLine& l : planned.roadLines()) {
+        const ModelSection& section = *l.section;
         LotRoad r;
-        r.id = id;
-        r.line = planned.centreLine(line);
+        r.id = l.street.valid() ? planned.streets[l.street.index].id : planned.junctions[l.junction.index].id;
+        r.line = planned.centreLine(l.line);
         r.halfWidth = section.carriagewayHalfWidth();   // (as the deck is drawn: city_producer.cpp deckFromResult)
         r.sidewalk = section.sidewalk;
         r.klass = section.klass;
         in.roads.push_back(std::move(r));
-    };
-    for (const ModelStreet& s : planned.streets) add(s.id, s.line, s.section);
-    for (const ModelJunction& j : planned.junctions)
-        for (const ModelStretch& inside : j.inside) add(j.id, inside.line, inside.section);
+    }
     std::shared_ptr<RoadDeckField> drawn = std::make_shared<RoadDeckField>(deck);
     drawn->buildIndex();
     in.deck = std::move(drawn);

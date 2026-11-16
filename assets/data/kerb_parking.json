@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "KERB PARKING SPACES (ADR-0439): how the road model lays parking spaces along a street's kerb.",
+    "",
+    "WHICH streets park, and how wide the parking band along each kerb is, is the road class's `parking`",
+    "(assets/data/road_classes.json; today only the local street: 2.5 m of its 6 m lane each way). This file says how",
+    "that band is cut into spaces. The road model reads it once (road_model.h kerbParkingRules) and states the spaces",
+    "(RoadModel::kerbRuns); everything else asks the model. There is no copy of these numbers in C++, and a missing or",
+    "unreadable file means no street has a space (the log says so).",
+    "",
+    "  space_length        metres of kerb one space takes, measured along the street's centre line. One car parked",
+    "                      parallel to the kerb, with room to pull in and out.",
+    "  clear_of_stop_line  metres kept empty between a junction arm's stop line and the nearest space, on both kerbs",
+    "                      of the street. The stop line already stands back from the junction's area (ADR-0428), so",
+    "                      this also keeps spaces off the crosswalk and out of the way of turning traffic.",
+    "",
+    "A street's end where it only carries on as another street (no junction), or a dead end, needs no clearance.",
+    "Where a street states the stretch buildings may front (the road file's lots_range), spaces keep to that stretch.",
+    "",
+    "WHY THE NUMBERS. 7 m is the spacing the city sim has laid its kerbside bays at since it first parked cars, and",
+    "it fits every car, van and goods vehicle of the fleets (the longest, the goods van, is 6.7 m; a bus is 11.5 m",
+    "and does not park at a kerb). Real parallel spaces are 6.0 m (UK) to 6.7 m (US, 22 ft). 10 m is the UK Highway",
+    "Code's rule 243 (do not park within 10 metres of a junction); US states use 20 ft from a crosswalk and 30 ft",
+    "from a stop sign or signal, which is about the same once the stop line's own set-back is counted. The rule's",
+    "number and these lengths are quoted from memory, not checked against the texts. Both numbers are starting",
+    "values, marked [~]: tune them here."
+  ],
+  "space_length": 7.0,
+  "clear_of_stop_line": 10.0
+}

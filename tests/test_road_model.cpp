@@ -25,6 +25,9 @@
 #include "engine/procgen/city/roads/lanes/road_model_cache.h"   // levelRoadsKey: the city's bake key
 #include "engine/procgen/city/roads/lanes/lane_expand.h"   // expand: the planned layer reads the ramps composed
 #include "engine/procgen/city/roads/lanes/lanes.h"
+#include "engine/procgen/city/roads/lanes/lots_producer.h"   // lotRoadInputs: the roads as the lot pass reads them (ADR-0439)
+#include "engine/procgen/city/city_lots.h"                   // growLotBuildings: the lot pass faces its doors
+#include "engine/level_params.h"                             // readLotGrowParams
 #include "engine/procgen/city/roads/lanes/road_layout.h"
 #include "engine/procgen/city/roads/road_entity.h"      // navRoadGraph
 #include "engine/procgen/city/roads/road_model.h"
@@ -2291,4 +2294,292 @@ TEST_CASE(road_model_23_the_road_class_table_is_its_data_file_and_no_class_is_as
     CHECK(refused(R"({"default": "street", "classes": {"street": {"engine_class": "motorway"}}})"));   // no such engine class
     CHECK(refused(R"({"default": "lane", "classes": {"street": {}}})"));                               // no default row
     CHECK(refused(R"({"default": "street"})"));                                                        // no classes
+}
+
+// ---- 24. kerb parking spaces are stated in the model, once (ADR-0439) ----------------------------------------------------
+
+namespace {
+bool samePlace(const Vec2& a, const Vec2& b) { return approxEqual(a.x, b.x, kSamePoint) && approxEqual(a.y, b.y, kSamePoint); }
+}  // namespace
+
+TEST_CASE(road_model_24_kerb_parking_spaces_are_stated_once_and_asked_of_the_model) {
+    // THE RULES are data: a space is 7 m of kerb, and 10 m are kept empty before a stop line (assets/data/kerb_parking.json)
+    const KerbParkingRules& rules = kerbParkingRules();
+    CHECK(rules.usable && rules.spaceLength == 7.0 && rules.clearOfStopLine == 10.0);
+    CHECK(rules.hash == engine::bundle::fnv1aStr(slurp(std::string(RT_SOURCE_DIR) + "/assets/data/kerb_parking.json")));
+    {   // what the reader refuses, and a file that reads
+        KerbParkingRules read;
+        std::string why;
+        CHECK(!parseKerbParkingRules(nlohmann::json::parse(R"({"clear_of_stop_line": 10})"), read, &why) && !read.usable && !why.empty());
+        CHECK(!parseKerbParkingRules(nlohmann::json::parse(R"({"space_length": 0, "clear_of_stop_line": 10})"), read) && !read.usable);
+        CHECK(!parseKerbParkingRules(nlohmann::json::parse(R"({"space_length": 6})"), read) && !read.usable);
+        CHECK(!parseKerbParkingRules(nlohmann::json::parse(R"({"space_length": 6, "clear_of_stop_line": -1})"), read) && !read.usable);
+        CHECK(parseKerbParkingRules(nlohmann::json::parse(R"({"space_length": 6, "clear_of_stop_line": 0})"), read) && read.usable &&
+              read.spaceLength == 6.0 && read.clearOfStopLine == 0.0);
+    }
+
+    // THE LANE-LEVEL SCENE. Its four local streets park (2.5 m of each 6 m lane, the band's middle 4.75 m from the centre
+    // line); its arterials and its one-way street do not.
+    //   l0 runs north up x = 0 from a dead end at (0, -150) to the crossing at (0, 0): station 150. The arterial it
+    //      meets is 22 m wide, so l0's stop line stands 11 + 5.2 m back, at station 133.8, and spaces end by 123.8.
+    //      17 spaces of 7 m fit in 0 to 123.8 (119 m), centred: from 2.4 to 121.4. The same on each kerb.
+    //   l1 runs on north from the crossing to a bend at (0, 150) where it only carries on: its stop line is at 16.2, so
+    //      spaces lie in 26.2 to 150: 17 again, from 28.6 to 147.6.
+    //   l2 is l0's twin at x = 200. l3 runs from the bend to a dead end at (120, 220), 138.92 m with no junction: 19
+    //      spaces from 2.96.
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(laneLevelGraph()));
+    const RoadModel m = assembleRoadModel(*r, oneCar());
+    const ModelStreetId l0 = streetNamed(m, "l0"), l1 = streetNamed(m, "l1"), l2 = streetNamed(m, "l2"), l3 = streetNamed(m, "l3");
+    CHECK(l0.valid() && l1.valid() && l2.valid() && l3.valid());
+    if (!l0.valid() || !l1.valid() || !l2.valid() || !l3.valid()) return;
+    const KerbSpaceCounts counts = kerbSpaceCounts(m);
+    CHECK(counts.streetsWithBand == 4u && counts.streets == 4u && counts.spaces == 140u);
+    CHECK(approxEqual(counts.kerbMetres, 980.0, kSamePoint));
+    CHECK(m.kerbRuns.size() == 8u);   // one run on each kerb of each of the four
+    for (const char* none : {"a0", "a1", "a2", "o0"}) CHECK(m.kerbSpacesOf(streetNamed(m, none)).empty());
+    for (const std::string& s : m.notStated) CHECK(s.find("the spaces along it are not") == std::string::npos);   // (the old line is gone)
+
+    // l0: the kerb of the traffic running along the spine first (17), then the other kerb (17), each by index
+    const std::vector<KerbSpace> onL0 = m.kerbSpacesOf(l0);
+    CHECK(onL0.size() == 34u);
+    if (onL0.size() != 34u) return;
+    CHECK(onL0[0].street == l0 && onL0[0].dir == 1 && onL0[0].index == 0u);
+    CHECK(approxEqual(onL0[0].from, 2.4, kWrittenStation) && approxEqual(onL0[0].to, 9.4, kWrittenStation));
+    CHECK(onL0[0].length == 7.0 && onL0[0].width == 2.5);
+    CHECK(onL0[16].dir == 1 && onL0[16].index == 16u && approxEqual(onL0[16].from, 114.4, kWrittenStation) &&
+          approxEqual(onL0[16].to, 121.4, kWrittenStation));
+    CHECK(onL0[17].dir == -1 && onL0[17].index == 0u && approxEqual(onL0[17].from, 2.4, kWrittenStation));
+    CHECK(onL0[33].dir == -1 && onL0[33].index == 16u);
+    CHECK(m.kerbSpaceName(onL0[0]) == "l0 along 0" && m.kerbSpaceName(onL0[33]) == "l0 against 16");
+    // one space by its id; an index past the kerb's last is no space
+    const KerbSpace byId = m.kerbSpace(l0, -1, 16);
+    CHECK(byId.valid() && byId.dir == -1 && byId.index == 16u && approxEqual(byId.from, 114.4, kWrittenStation));
+    CHECK(!m.kerbSpace(l0, 1, 17).valid() && !m.kerbSpace(streetNamed(m, "a1"), 1, 0).valid());
+    // the other streets' first and last spaces
+    const std::vector<KerbSpace> onL1 = m.kerbSpacesOf(l1), onL2 = m.kerbSpacesOf(l2), onL3 = m.kerbSpacesOf(l3);
+    CHECK(onL1.size() == 34u && onL2.size() == 34u && onL3.size() == 38u);
+    if (onL1.size() != 34u || onL3.size() != 38u) return;
+    CHECK(approxEqual(onL1[0].from, 28.6, kWrittenStation) && approxEqual(onL1[16].to, 147.6, kWrittenStation));
+    // (l3's street ends at station 138.92, as the layout writes it: (138.92 - 19 x 7) / 2 = 2.96)
+    CHECK(approxEqual(onL3[0].from, 2.96, kWrittenStation) && onL3[18].dir == 1 && onL3[19].dir == -1);
+
+    // WHERE A CAR IN A SPACE STANDS. l0's spine runs north, and the traffic running along it keeps to the east side (the
+    // world drives on the left; the plan is its mirror image), so that kerb's band is at x = +4.75; the other kerb's at
+    // -4.75, its cars facing south. The first space's middle is at station 5.9: y = -144.1.
+    KerbSpacePose pose;
+    CHECK(m.kerbSpacePose(onL0[0], pose) && samePlace(pose.at, Vec2(4.75, -144.1)) && samePlace(pose.facing, Vec2(0, 1)));
+    CHECK(m.kerbSpacePose(onL0[17], pose) && samePlace(pose.at, Vec2(-4.75, -144.1)) && samePlace(pose.facing, Vec2(0, -1)));
+    CHECK(m.kerbSpacePose(onL1[0], pose) && samePlace(pose.at, Vec2(4.75, 32.1)));
+    // l3 runs up and to the east from (0, 150): along (120, 70) / 138.92
+    CHECK(m.kerbSpacePose(onL3[0], pose) && samePlace(pose.facing, Vec2(120.0 / std::sqrt(19300.0), 70.0 / std::sqrt(19300.0))));
+    CHECK(!m.kerbSpacePose(KerbSpace(), pose));
+
+    // THE KERB LANE BESIDE A SPACE: the lane path a car stops on to turn into it. l0's one lane running north is one
+    // path from the dead end (station 0) to its stop line (133.8), its middle 3 m from the centre line. Beside the
+    // first space: 5.9 m along it. Beside the last (its middle at station 117.9): 117.9 m along.
+    const KerbLanePlace first = m.kerbLaneBeside(onL0[0]), last = m.kerbLaneBeside(onL0[16]);
+    CHECK(first.valid() && last.valid() && first.path == last.path);
+    if (!first.valid() || !last.valid()) return;
+    const Path& firstPath = m.laneLevel.paths[first.path.index];
+    CHECK(firstPath.street == l0.index && firstPath.alongSpine() && approxEqual(firstPath.stationFrom, 0.0, kWrittenStation) &&
+          approxEqual(firstPath.stationTo, 133.8, kWrittenStation));
+    CHECK(approxEqual(first.along, 5.9, kWrittenStation) && samePlace(first.at, Vec2(3.0, -144.1)));
+    CHECK(approxEqual(last.along, 117.9, kWrittenStation) && samePlace(last.at, Vec2(3.0, -32.1)));
+    // ...and where a road has several lanes one way, the path is the one nearest the kerb: the arterial a1 has three
+    // lanes of 3.67 m each way, and the kerb lane of the traffic running east along its spine is the third out from
+    // the centre line, its middle 9.17 m south of it (y = -9.17).
+    const KerbLanePlace kerbOfThree = m.kerbLaneAt(streetNamed(m, "a1"), 1, 100.0);
+    CHECK(kerbOfThree.valid() && samePlace(kerbOfThree.at, Vec2(100.0, -2.5 * 22.0 / 6.0)));
+    if (kerbOfThree.valid()) CHECK(m.laneLevel.paths[kerbOfThree.path.index].indexInSection == 2u);
+    // ...and beside the first space of the other kerb: the lane running south, 3 m the other side of the centre line,
+    // which ends at the dead end (station 0), so the place is 5.9 m before that path's end
+    const KerbLanePlace south = m.kerbLaneBeside(onL0[17]);
+    CHECK(south.valid());
+    if (!south.valid()) return;
+    const Path& southPath = m.laneLevel.paths[south.path.index];
+    CHECK(!southPath.alongSpine() && samePlace(south.at, Vec2(-3.0, -144.1)));
+    CHECK(approxEqual(south.along, southPath.length - 5.9, kWrittenStation));
+    // a station of the street where no lane path runs (inside the junction's area, past the stop line): none
+    CHECK(!m.kerbLaneAt(l0, 1, 145.0).valid());
+    // the one placing of a station on a path (what the regulations use too)
+    CHECK(approxEqual(m.alongPathAt(first.path, 50.0), 50.0, kWrittenStation) && m.alongPathAt(first.path, 500.0) == firstPath.length);
+
+    // THE SPACE NEAREST A POINT: 6 m east of l0's centre line, level with station 50 (y = -100). The spaces' middles on
+    // that kerb are at y = -144.1 + 7 k; the nearest is k = 6 at (4.75, -102.1), 1.25 m across and 2.1 m along.
+    const KerbSpaceNear near = m.nearestKerbSpace(Vec2(6, -100), 5.0);
+    CHECK(near.space.valid() && m.kerbSpaceName(near.space) == "l0 along 6");
+    CHECK(approxEqual(near.distance, std::sqrt(1.25 * 1.25 + 2.1 * 2.1), kSamePoint) && samePlace(near.at, Vec2(4.75, -102.1)));
+    CHECK(!m.nearestKerbSpace(Vec2(6, -100), 2.0).space.valid());        // none within 2 m
+    CHECK(!m.nearestKerbSpace(Vec2(100, 60), 30.0).space.valid());       // beside the arterial, far from every local street
+
+    // THE PLANNED LAYER STATES THEM: the same runs with no road built; only the kerb lane needs the built layer
+    const RoadModel planned = plannedRoadModel(r->graph);
+    CHECK(planned.kerbRuns.size() == 8u && kerbSpaceCounts(planned).spaces == 140u);
+    CHECK(planned.kerbSpacePose(planned.kerbSpacesOf(l0)[0], pose) && samePlace(pose.at, Vec2(4.75, -144.1)));
+    CHECK(!planned.kerbLaneBeside(planned.kerbSpacesOf(l0)[0]).valid());
+
+    // SAVED AND READ BACK: the runs are in the model's bytes (the format is 13)
+    {
+        bundle::BinWriter w;
+        putRoadModel(w, m);
+        bundle::BinReader rd(w.bytes.data(), w.bytes.size());
+        RoadModel back;
+        std::string err;
+        CHECK(getRoadModel(rd, back, &err));
+        CHECK(back.kerbRuns.size() == 8u);
+        for (std::size_t i = 0; i < back.kerbRuns.size() && i < m.kerbRuns.size(); ++i) {
+            const ModelKerbRun& a = back.kerbRuns[i];
+            const ModelKerbRun& b = m.kerbRuns[i];
+            CHECK(a.street == b.street && a.dir == b.dir && a.from == b.from && a.spaceLength == b.spaceLength && a.count == b.count);
+        }
+        RoadModel fewer = m;
+        fewer.kerbRuns.pop_back();
+        CHECK(!(fewer == m));
+    }
+    // the dump lists each run; the lines for a person list each space
+    CHECK(dumpRoadModel(m).find("kerb parking: street l0, the kerb of the traffic running along the spine, 17 spaces of 7.00 m from station 2.40 to 121.40\n") !=
+          std::string::npos);
+    bool listed = false;
+    for (const std::string& line : kerbSpaceLines(m)) listed = listed || line.find("  space l0 against 16: stations 114.40 to 121.40") == 0;
+    CHECK(listed);
+
+    // A ONE-WAY STREET THAT PARKS has spaces on the kerb its traffic runs beside, and none on the other. The scene's
+    // one-way street o0 (down x = 200 from a dead end at (200, 150) into the T at (200, 0)) is given a 12 m lane with a
+    // 2.5 m band. Its traffic runs south along its spine, so its kerb is on the west side: x = 200 - 4.75.
+    {
+        nlohmann::json g = laneLevelGraph();
+        g["classes"]["oneway"]["w"] = 12.0;
+        g["classes"]["oneway"]["parking"] = 2.5;
+        const std::unique_ptr<Result> wide = build(RoadLabGraph::fromJson(g));
+        const RoadModel w = assembleRoadModel(*wide, oneCar());
+        const ModelStreetId o0 = streetNamed(w, "o0");
+        const std::vector<KerbSpace> onO0 = w.kerbSpacesOf(o0);
+        CHECK(w.streets[o0.index].section.oneWay() && w.streets[o0.index].section.parking == 2.5);
+        CHECK(onO0.size() == 17u);
+        for (const KerbSpace& s : onO0) CHECK(s.dir == 1);
+        if (onO0.size() != 17u) return;
+        CHECK(w.kerbSpacePose(onO0[0], pose) && samePlace(pose.at, Vec2(195.25, 144.1)) && samePlace(pose.facing, Vec2(0, -1)));
+        // its one lane lies beside both kerbs: asked for either, the same lane path
+        const KerbLanePlace own = w.kerbLaneAt(o0, 1, 50.0), other = w.kerbLaneAt(o0, -1, 50.0);
+        CHECK(own.valid() && other.valid() && own.path == other.path && approxEqual(own.along, other.along, kWrittenStation));
+        // ...but a two-way street's kerb is beside the lane running that way only
+        CHECK(w.kerbLaneAt(streetNamed(w, "l0"), 1, 50.0).path != w.kerbLaneAt(streetNamed(w, "l0"), -1, 50.0).path);
+    }
+}
+
+// ---- 25. from a building's door to a place on the road (ADR-0439) ------------------------------------------------------
+
+TEST_CASE(road_model_25_where_a_door_fronts_the_road_is_asked_of_the_model) {
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(laneLevelGraph()));
+    const RoadModel m = assembleRoadModel(*r, oneCar());
+    const ModelStreetId l0 = streetNamed(m, "l0"), a1 = streetNamed(m, "a1");
+    CHECK(l0.valid() && a1.valid());
+    if (!l0.valid() || !a1.valid()) return;
+
+    // A DOOR 9 m EAST OF l0 (which runs north up x = 0 from (0, -150)), level with its station 50: it fronts l0 there,
+    // on the kerb of the traffic running along the spine (the east side).
+    const RoadFrontage f = m.frontageAt(Vec2(9, -100));
+    CHECK(f.valid() && f.street == l0 && !f.junction.valid() && f.dir == 1);
+    CHECK(approxEqual(f.station, 50.0, kSamePoint) && approxEqual(f.distance, 9.0, kSamePoint));
+    CHECK(samePlace(f.on, Vec2(0, -100)) && samePlace(f.towards, Vec2(1, 0)));
+    // the nearest place to walk: the middle of the 5 m sidewalk beyond the 6 m of carriageway
+    Vec2 walk;
+    CHECK(m.sidewalkBeside(f, walk) && samePlace(walk, Vec2(8.5, -100)));
+    // set down in the kerb lane beside it: the lane running north, 3 m from the centre line, 50 m along its first path
+    const KerbLanePlace drop = m.kerbLaneBeside(f);
+    CHECK(drop.valid() && approxEqual(drop.along, 50.0, kWrittenStation) && samePlace(drop.at, Vec2(3.0, -100)));
+    // THE KERB SPACES NEAR IT, BY WALKING DISTANCE. On its own kerb the spaces' middles are at stations 5.9 + 7 k: 47.9
+    // (2.1 m away), 54.9 (4.9), 40.9 (9.1), 61.9 (11.9). The space opposite the nearest is 2.1 m along and the 12 m of
+    // road across: 14.1. Within 15 m on foot, those five in that order.
+    const std::vector<KerbSpaceNear> near = m.kerbSpacesNear(f, 15.0, 10);
+    const char* names[] = {"l0 along 6", "l0 along 7", "l0 along 5", "l0 along 8", "l0 against 6"};
+    const Real walks[] = {2.1, 4.9, 9.1, 11.9, 14.1};
+    CHECK(near.size() == 5u);
+    for (std::size_t i = 0; i < near.size() && i < 5; ++i) {
+        CHECK(m.kerbSpaceName(near[i].space) == names[i]);
+        CHECK(approxEqual(near[i].distance, walks[i], kSamePoint));
+    }
+    if (near.size() == 5u) CHECK(samePlace(near[0].at, Vec2(4.75, -102.1)) && samePlace(near[4].at, Vec2(-4.75, -102.1)));
+    CHECK(m.kerbSpacesNear(f, 15.0, 2).size() == 2u);
+    CHECK(m.kerbSpacesNear(f, 2.0, 10).empty());
+    // THE SAME FROM STATED FACTS, with no search: the street, the station and the kerb
+    const RoadFrontage stated = m.frontageOn(l0, 50.0, 1);
+    CHECK(stated.valid() && stated.street == l0 && stated.dir == 1 && samePlace(stated.on, f.on) && samePlace(stated.towards, f.towards));
+    CHECK(m.kerbLaneBeside(stated).path == drop.path && m.kerbSpacesNear(stated, 15.0, 10).size() == 5u);
+    CHECK(!m.frontageOn(l0, 50.0, 0).valid() && !m.frontageOn(ModelStreetId(), 50.0, 1).valid());
+    // the door across the road fronts the other kerb
+    const RoadFrontage west = m.frontageAt(Vec2(-9, -100));
+    CHECK(west.valid() && west.street == l0 && west.dir == -1 && samePlace(west.towards, Vec2(-1, 0)));
+    CHECK(m.sidewalkBeside(west, walk) && samePlace(walk, Vec2(-8.5, -100)));
+    CHECK(samePlace(m.kerbLaneBeside(west).at, Vec2(-3.0, -100)));
+
+    // A DOOR ON THE ARTERIAL, 20 m north of a1 (which runs east along y = 0) at its station 100. Traffic running along
+    // a1's spine keeps to the south side, so the door is on the kerb of the traffic running against it. The arterial
+    // has no kerb parking; the nearest spaces are round the corner, each 100 m along a1 to a junction and then 32.1 m
+    // up or down a local street to the middle of its nearest space (l0's and l2's last, l1's first), on either kerb.
+    const RoadFrontage onArterial = m.frontageAt(Vec2(100, 20));
+    CHECK(onArterial.valid() && onArterial.street == a1 && onArterial.dir == -1 && approxEqual(onArterial.station, 100.0, kSamePoint));
+    CHECK(m.sidewalkBeside(onArterial, walk) && samePlace(walk, Vec2(100, 13.5)));
+    const std::vector<KerbSpaceNear> round = m.kerbSpacesNear(onArterial, 135.0, 20);
+    CHECK(round.size() == 6u);
+    std::set<std::string> found;
+    for (const KerbSpaceNear& n : round) {
+        CHECK(approxEqual(n.distance, 132.1, kSamePoint));
+        found.insert(m.kerbSpaceName(n.space));
+    }
+    CHECK(found == (std::set<std::string>{"l0 along 16", "l0 against 16", "l1 along 0", "l1 against 0", "l2 along 16", "l2 against 16"}));
+    CHECK(m.kerbSpacesNear(onArterial, 130.0, 20).empty());
+
+    // THE SAME ANSWER AS THE LOT PASS. A hand-made model: a narrow freeway along y = 20 and a wide local street along
+    // y = 60 (10 m of carriageway and 5 m of sidewalk each side). A building between them stands nearer the freeway's
+    // centre line, but no building fronts a freeway: the lot pass faces its door at the street
+    // (LotRoads::nearestFrontable), and the model answers the street too, by the same search over the same lines.
+    // (The nearest centre line of ANY road would be the freeway's.)
+    RoadModel hand;
+    auto street = [&](const char* id, RoadClass klass, Real y, Real laneWidth, int lanes, Real sidewalk) {
+        ModelStreet s;
+        s.id = s.road = id;
+        s.from = 0;
+        s.to = 200;
+        s.section.klass = klass;
+        s.section.lanesForward = s.section.lanesBackward = lanes;
+        s.section.laneWidth = laneWidth;
+        s.section.sidewalk = sidewalk;
+        s.line.first = static_cast<uint32_t>(hand.linePoints.size());
+        s.line.count = 2;
+        hand.linePoints.push_back(Vec2(0, y));
+        hand.linePoints.push_back(Vec2(200, y));
+        hand.lineStations.push_back(0);
+        hand.lineStations.push_back(200);
+        hand.streets.push_back(s);
+    };
+    street("fw", RoadClass::Freeway, 20, 3.0, 1, 0);
+    street("st", RoadClass::Local, 60, 10.0, 1, 5);
+    const RoadFrontage between = hand.frontageAt(Vec2(100, 30));   // 10 m from the freeway's line, 30 m from the street's
+    CHECK(between.valid() && between.street == streetNamed(hand, "st") && approxEqual(between.distance, 30.0, kSamePoint));
+    CHECK(between.dir == 1 && approxEqual(between.station, 100.0, kSamePoint));   // (south of an eastward spine: its own traffic's kerb)
+    CHECK(hand.roadLines().size() == 2u);
+    const LotRoadInputs roads = lotRoadInputs(hand, RoadDeckField());
+    CHECK(roads.roads.size() == 2u && roads.roads[0].id == "fw" && roads.roads[1].id == "st");
+    // one block from 4 m off the freeway's centre line (y = 24) to the back of the street's sidewalk (y = 45)
+    const std::vector<Poly2> blocks = {{{20, 24}, {180, 24}, {180, 45}, {20, 45}}};
+    nlohmann::json cityJson = {{"seed", 9}, {"sidewalk", 5.0}, {"buildChance", 1.0}};
+    LotParams lp;
+    readLotGrowParams(cityJson, lp);
+    lp.roadMargin = 0;
+    LotPlanDebug plan;
+    int faced = 0, nearerFreeway = 0;
+    for (const LotBuilding& b : growLotBuildings(blocks, lp, &plan, nullptr, &roads, 0.0)) {
+        if (b.units.empty()) continue;
+        const RoadFrontage front = hand.frontageAt(b.site);
+        CHECK(front.valid() && front.street == streetNamed(hand, "st"));
+        if (!front.valid()) continue;
+        const Vec2 toStreet = normalize(front.on - b.site);
+        const Vec3 face = b.units.front().params.faceDir;
+        CHECK(approxEqual(static_cast<Real>(face.x), toStreet.x, kSamePoint) && approxEqual(static_cast<Real>(face.z), toStreet.y, kSamePoint));
+        ++faced;
+        nearerFreeway += b.site.y < 40.0 ? 1 : 0;   // (y = 40 is halfway between the two centre lines)
+    }
+    std::printf("    [frontage] %d buildings face the street the model answers, %d of them nearer the freeway's centre line\n", faced, nearerFreeway);
+    CHECK(faced >= 2 && nearerFreeway >= 1);
 }

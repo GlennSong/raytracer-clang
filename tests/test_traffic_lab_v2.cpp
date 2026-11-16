@@ -1425,6 +1425,36 @@ TEST_CASE(level_traffic_lab_v2_one_road_model_is_published_and_driven_on) {
     const driving::Driving* d = lc.city.sim().drivingV2();
     CHECK(d != nullptr);
     if (d) CHECK(d->roads() == &model.laneLevel);
+    // THE KERB PARKING SPACES ARE THE MODEL'S, AND THE PAINT DRAWS THOSE (ADR-0439). 129 of the lab's 132 local streets
+    // hold spaces: 1098 of them along 7686 m of kerb, every one with a kerb lane path beside it. The outlines painted
+    // on the road are one for each space, in the model's order, each where a car in that space stands. (Before, the
+    // paint drew the old driving's own bays: 1294 on this level, laid by another rule, where no car of the new
+    // driving parks.)
+    const engine::KerbSpaceCounts spaces = engine::kerbSpaceCounts(model);
+    CHECK(spaces.streetsWithBand == 132u && spaces.streets == 129u && spaces.spaces == 1098u);
+    CHECK(engine::approxEqual(spaces.kerbMetres, 7686.0, engine::kSamePoint));
+    const engine::InstanceGroup* outlines = lc.world.get<engine::InstanceGroup>(lc.city.parkBayGroup());
+    CHECK(outlines != nullptr);
+    if (outlines) CHECK(outlines->transforms.size() == 1098u);
+    std::size_t counted = 0;
+    int offItsSpace = 0, noKerbLane = 0;
+    for (std::size_t s = 0; s < model.streets.size(); ++s)
+        for (const engine::KerbSpace& space : model.kerbSpacesOf(engine::ModelStreetId(static_cast<uint32_t>(s)))) {
+            engine::KerbSpacePose pose;
+            CHECK(model.kerbSpacePose(space, pose));
+            noKerbLane += model.kerbLaneBeside(space).valid() ? 0 : 1;
+            if (outlines && counted < outlines->transforms.size()) {
+                const Vec3 drawn = outlines->transforms[counted].transformPoint(Vec3(0, 0, 0));
+                offItsSpace += engine::approxEqual(static_cast<engine::Real>(drawn.x), pose.at.x, engine::kSamePoint) &&
+                                       engine::approxEqual(static_cast<engine::Real>(drawn.z), pose.at.y, engine::kSamePoint)
+                                   ? 0
+                                   : 1;
+            }
+            ++counted;
+        }
+    CHECK(counted == 1098u && offItsSpace == 0 && noKerbLane == 0);
+    std::printf("    [lab-v2] kerb parking: %u spaces on %u streets, %zu outlines painted; the old driving's own bays: %zu\n", spaces.spaces,
+                spaces.streets, outlines ? outlines->transforms.size() : std::size_t(0), lc.city.sim().parkingBays().size());
     // the vehicles the roads were checked against: the level's own fleet, read by the roads themselves
     engine::bundle::LevelInputs in;
     std::string err;

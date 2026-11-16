@@ -22,7 +22,12 @@
 //                      the file does not say they are), and with --write puts them in order and marks the file (ADR-0427)
 //   lanes_tool streetmap <graph.json> [--route x0 z0 x1 z1]   the street map agents route on, built from the file's road
 //                      model alone, in words; --route: a car's route between two points, street by street (ADR-0425)
-//   lanes_tool model <graph.json> [--out <dir>]   build the roads and assemble THE ROAD MODEL: model.txt, report.txt, model.svg
+//   lanes_tool model <graph.json> [--out <dir>] [--door x y ...]   build the roads and assemble THE ROAD MODEL: model.txt,
+//                      report.txt, model.svg (the kerb parking spaces drawn on it) and parking.txt (every kerb parking
+//                      space in words: its stations, where a car in it stands, the kerb lane path beside it; ADR-0439);
+//                      prints how many streets park and how many spaces they hold. --door x y: where that plan point
+//                      fronts the road (street, station, kerb), the nearest place to walk, where to set down in the kerb
+//                      lane, and the five nearest kerb spaces by walking distance
 //   lanes_tool regions-lots <level.json> [--out <dir>]   the level's lots grown again in memory from its bundle (run with
 //                      RT_BUNDLE_WRITE=0), dumped beside the stored ones (lots_grown.txt, lots_stored.txt). Writes nothing else.
 //   lanes_tool junctions <graph.json> [--top N]   the junctions the file's grouping makes (the control plan's where the file
@@ -485,10 +490,14 @@ int main(int argc, char** argv) {
     if (argc >= 3 && std::strcmp(argv[1], "model") == 0) {
         // THE ROAD MODEL (road_model.h, ADR-0417): the roads built, the model assembled from the build; `model` writes its
         // dump (model.txt), its report (report.txt: what it holds, what is not stated, where the build does not match) and
-        // a map (model.svg).
+        // a map (model.svg, the kerb parking spaces drawn on it), and the kerb parking spaces in words (parking.txt,
+        // ADR-0439). --door x y: where that plan point fronts the road, as the model answers it.
         std::string outDir = ".";
-        for (int i = 3; i + 1 < argc; ++i)
-            if (std::strcmp(argv[i], "--out") == 0) outDir = argv[i + 1];
+        std::vector<Vec2> doors;
+        for (int i = 3; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--out") == 0 && i + 1 < argc) outDir = argv[++i];
+            else if (std::strcmp(argv[i], "--door") == 0 && i + 2 < argc) { doors.emplace_back(std::atof(argv[i + 1]), std::atof(argv[i + 2])); i += 2; }
+        }
         if (!makeOutDir(outDir)) return 1;
         const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
         std::unique_ptr<Result> rp;
@@ -503,7 +512,47 @@ int main(int argc, char** argv) {
         std::ofstream(outDir + "/model.txt") << dumpRoadModel(model);
         std::ofstream(outDir + "/report.txt") << reportRoadModel(model);
         std::ofstream(outDir + "/model.svg") << roadModelSvg(model);
-        std::printf("wrote %s/model.txt, report.txt, model.svg\n", outDir.c_str());
+        {   // THE KERB PARKING SPACES (ADR-0439): every space in words, and what the model holds of them in one line
+            std::ofstream parking(outDir + "/parking.txt");
+            for (const std::string& line : kerbSpaceLines(model)) parking << line;
+            const KerbSpaceCounts c = kerbSpaceCounts(model);
+            // how each space really lies: the shortest on the ground (a space on the inside of a bend is shorter than its
+            // stretch of the spine), and how many have no kerb lane path beside them
+            uint32_t noLane = 0;
+            Real shortest = std::numeric_limits<Real>::infinity();
+            std::string shortestName;
+            for (std::size_t s = 0; s < model.streets.size(); ++s) {
+                const ModelStreetId street(static_cast<uint32_t>(s));
+                for (const KerbSpace& space : model.kerbSpacesOf(street)) {
+                    noLane += model.kerbLaneBeside(space).valid() ? 0u : 1u;
+                    const RoadFrontage a = model.frontageOn(street, space.from, space.dir), b = model.frontageOn(street, space.to, space.dir);
+                    const Real offset = model.streets[s].section.parkingOffset;
+                    const Real onGround = ((b.on + b.towards * offset) - (a.on + a.towards * offset)).length();
+                    if (onGround < shortest) { shortest = onGround; shortestName = model.kerbSpaceName(space); }
+                }
+            }
+            std::printf("kerb parking: %u streets state a parking band, %u hold spaces: %u spaces along %.1f m of kerb; %u with no kerb lane "
+                        "path beside them", c.streetsWithBand, c.streets, c.spaces, c.kerbMetres, noLane);
+            if (c.spaces) std::printf("; the shortest on the ground %.2f m (%s)", shortest, shortestName.c_str());
+            std::printf("\n");
+        }
+        for (const Vec2& door : doors) {
+            const RoadFrontage f = model.frontageAt(door);
+            if (!f.valid()) { std::printf("door (%.2f, %.2f): no road a building may front\n", door.x, door.y); continue; }
+            std::printf("door (%.2f, %.2f): fronts %s at station %.2f, the kerb of the traffic running %s the spine, %.2f m from the centre line\n",
+                        door.x, door.y, f.street.valid() ? ("street " + model.streets[f.street.index].id).c_str()
+                                                         : ("junction " + model.junctions[f.junction.index].id).c_str(),
+                        f.station, f.dir > 0 ? "along" : "against", f.distance);
+            Vec2 walk;
+            if (model.sidewalkBeside(f, walk)) std::printf("  the nearest place to walk: (%.2f, %.2f)\n", walk.x, walk.y);
+            else std::printf("  no sidewalk beside it\n");
+            const KerbLanePlace lane = model.kerbLaneBeside(f);
+            if (lane.valid()) std::printf("  set down in the kerb lane: lane path %u at %.2f m along, (%.2f, %.2f)\n", lane.path.index, lane.along, lane.at.x, lane.at.y);
+            else std::printf("  no kerb lane path beside it\n");
+            for (const KerbSpaceNear& n : model.kerbSpacesNear(f, 200.0, 5))
+                std::printf("  space %s: %.1f m on foot, a car in it at (%.2f, %.2f)\n", model.kerbSpaceName(n.space).c_str(), n.distance, n.at.x, n.at.y);
+        }
+        std::printf("wrote %s/model.txt, report.txt, model.svg, parking.txt\n", outDir.c_str());
         return 0;
     }
     if (argc >= 3 && std::strcmp(argv[1], "regions-lots") == 0) {

@@ -29,8 +29,10 @@
 //     ramps' merges (host lane, station, length, taper), the paint's junction boxes and stop lines.
 //   - the turn table (assets/data/lane_turns.json): which arriving lanes take which turn, applied to the stated arms,
 //     through pairs and lane kinds in one function (turnsAtJunction).
-// Where nothing states a part yet (the turns' drawn paths, which the lane level shapes; crosswalks, the parking spaces
-// along a kerb, blocks, signal groups), it is EMPTY, and the model's `notStated` list says so. Street
+//   - the kerb parking rules (assets/data/kerb_parking.json): how a street's parking band is cut into spaces, applied to
+//     the stated streets and the arms' stop lines in one function (ADR-0439; RoadModel::kerbRuns).
+// Where nothing states a part yet (the turns' drawn paths, which the lane level shapes; crosswalks, blocks, signal
+// groups), it is EMPTY, and the model's `notStated` list says so. Street
 // names are stated since ADR-0420 (the road file's streets[].name), as ATTACHMENTS (below). Where the build
 // does not match what was stated (a box the paint found that no stated junction holds, an arm with no box), it is in
 // `problems`, with its place.
@@ -149,6 +151,98 @@ struct PathRegulation {
     Real value = 0;
 };
 
+// ---- KERB PARKING SPACES (ADR-0439) ------------------------------------------------------------------------------------
+// HOW A PARKING BAND IS CUT INTO SPACES: assets/data/kerb_parking.json, read once (the file's comment says what each
+// number is and where it came from). No copy in C++: a missing or unreadable file reads as `usable` false, and then no
+// street is given a space (the log says why). `hash`: of the file's bytes, part of the saved road model's key
+// (lanes/road_model_cache.h), so editing the file makes each saved model again.
+struct KerbParkingRules {
+    bool usable = false;
+    Real spaceLength = 0;        // metres of kerb one space takes, along the street's centre line
+    Real clearOfStopLine = 0;    // metres kept empty between an arm's stop line and the nearest space
+    uint64_t hash = 0;
+};
+// The rules a parsed file states; false (and why in `err`) when a number is missing or not above zero (a clearance: below).
+bool parseKerbParkingRules(const nlohmann::json& doc, KerbParkingRules& out, std::string* err = nullptr);
+const KerbParkingRules& kerbParkingRules();
+
+// A RUN OF PARKING SPACES ALONG ONE KERB OF ONE STREET: THE ONE HOME of where a car may be left at a kerb. `count`
+// spaces, each `spaceLength` metres of the street's spine, one after another from station `from`. WHICH KERB is said by
+// the traffic that runs beside it, never by a hand: `dir` +1 is the kerb side of the traffic running along the spine,
+// -1 the kerb side of the traffic running against it. How WIDE a space is and where it lies across the road are the
+// street's own cross-section (ModelSection::parking, parkingOffset: stated once, there). The planned layer states the
+// runs (plannedRoadModel, from the stated streets, junction arms' stop lines and the rules above), by street, the +1
+// kerb then the -1 kerb, then along the spine. A space is not a record: it is place `i` of its run, and everything
+// about it is ASKED (RoadModel::kerbSpacesOf and the questions beside it).
+struct ModelKerbRun {
+    ModelStreetId street;
+    int dir = 1;
+    Real from = 0;               // the station where its first space begins (the lower station of the run)
+    Real spaceLength = 0;
+    uint32_t count = 0;
+    Real to() const { return from + static_cast<Real>(count) * spaceLength; }   // the station where its last space ends
+};
+// ONE SPACE, AS ANSWERED. Its id is (street, dir, index): `index` counts the spaces of that kerb of that street along
+// the spine from the street's `from` end, across its runs, so it is the same number for one road file and one rules
+// file. `from` to `to`: its stretch of the spine. `length`, `width`: metres along and across.
+struct KerbSpace {
+    ModelStreetId street;
+    int dir = 1;
+    uint32_t index = 0;
+    Real from = 0, to = 0;
+    Real length = 0, width = 0;
+    bool valid() const { return street.valid(); }
+    Real middle() const { return (from + to) * Real(0.5); }
+};
+// WHERE A CAR STANDING IN A SPACE IS: its middle in plan and the way it faces (unit; the way the traffic beside it runs).
+struct KerbSpacePose {
+    Vec2 at;
+    Vec2 facing = Vec2(1, 0);
+};
+// A PLACE IN THE KERB LANE: a lane path of the lane level and the distance along it (metres from its start), with the
+// plan point there. Not valid: the model has no lane level, or no lane path of that street runs that way there.
+struct KerbLanePlace {
+    PathId path;
+    Real along = 0;
+    Vec2 at;
+    bool valid() const { return path.valid(); }
+};
+// A SPACE FOUND FROM A PLACE: the space, how far it is (metres: in a straight line for nearestKerbSpace, on foot along
+// the streets for kerbSpacesNear) and where a car in it stands.
+struct KerbSpaceNear {
+    KerbSpace space;
+    Real distance = 0;
+    Vec2 at;
+};
+
+// ---- FROM A DOOR TO THE ROAD (ADR-0439) --------------------------------------------------------------------------------
+// ONE STRETCH OF ROAD WITH A CENTRE LINE that cars drive: a street, or a stretch of road inside a junction. The list of
+// them (RoadModel::roadLines), in one order, is what "the road nearest this point" is searched over -- by the lot pass
+// (lanes/lots_producer.h lotRoadInputs makes its look-up from exactly this list) and by the model's own questions
+// (frontageAt), so the two cannot find different roads.
+struct RoadLine {
+    ModelStreetId street;            // the street it is (none: a stretch inside a junction)
+    ModelJunctionId junction;        // the junction it lies inside (none: a street)
+    Range line;                      // into RoadModel::linePoints / lineStations
+    const ModelSection* section = nullptr;
+};
+// (What a building may front is one rule, road_network.h buildingMayFront: the lot pass and frontageAt both ask it.)
+// WHERE A POINT (A DOOR) FRONTS THE ROAD: the street (or the junction, where the nearest road is a stretch inside
+// one), the station along its road's spine level with the point, which kerb the point is on (`dir`: +1 the kerb side
+// of the traffic running along the spine, -1 of the traffic running against it), how far the point is from the centre
+// line and the point of the centre line nearest it (`on`). Not valid: no road a building may front has a centre line.
+struct RoadFrontage {
+    ModelStreetId street;
+    ModelJunctionId junction;
+    Real station = 0;
+    int dir = 1;
+    Real distance = 0;
+    Vec2 on;
+    Vec2 towards = Vec2(1, 0);       // unit, across the road from the centre line toward the point's kerb
+    const ModelSection* section = nullptr;
+    bool valid() const { return section != nullptr; }
+};
+
 // One lane's stretch on one street.
 struct ModelLaneSpan {
     ModelStreetId street;
@@ -248,6 +342,9 @@ struct RoadModel {
     std::vector<Real> lineStations;       // ...each point's station along its road's spine (ADR-0425)
     std::vector<ModelAttachment> attachments;   // in the order attached
     std::vector<ModelRegulation> regulations;   // the rules standing along the streets, in the order stated (ADR-0437)
+    // THE KERB PARKING SPACES (ADR-0439): each run of spaces along one kerb of one street, by street, the +1 kerb then
+    // the -1 kerb, then along the spine. The planned layer's (plannedRoadModel). Read through the questions below.
+    std::vector<ModelKerbRun> kerbRuns;
     std::vector<std::string> notStated;  // the parts of the design nothing states yet, in words
     std::vector<std::string> problems;    // where the build does not match what was stated, each with its place
     // the road file states that its junctions' arms are listed in their ring ("arms_in_ring", ADR-0427): the readers of the
@@ -357,6 +454,62 @@ struct RoadModel {
     // WHERE AN END OF A STREET IS in plan (`end` 0: its `from`, 1: its `to`): the first or last point of its centre
     // line. False: the street has no centre line.
     bool streetEnd(const ModelStreet& street, int end, Vec2& out) const;
+
+    // ---- KERB PARKING SPACES AND THE WAY FROM A DOOR TO THE ROAD (ADR-0439) --------------------------------------------
+    // THE SPACES ALONG A STREET: the kerb of the traffic running along the spine first, then the other kerb; each kerb's
+    // in order along the spine (so by index). Empty: the street's class does not park, or no space fits.
+    std::vector<KerbSpace> kerbSpacesOf(ModelStreetId street) const;
+    // ONE SPACE BY ITS ID (not valid: there is none).
+    KerbSpace kerbSpace(ModelStreetId street, int dir, uint32_t index) const;
+    // A SPACE'S NAME, for a person and for a log: "<street id> along <index>" for the kerb of the traffic running along
+    // the spine, "<street id> against <index>" for the other. Empty for a space that is not valid.
+    std::string kerbSpaceName(const KerbSpace& space) const;
+    // WHERE A CAR STANDING IN A SPACE IS: on the parking band's middle line (the street's centre line at the space's
+    // middle station, moved toward that kerb by the cross-section's parkingOffset), facing the way the traffic beside
+    // it runs. False: the space is not valid, or its street has no centre line.
+    bool kerbSpacePose(const KerbSpace& space, KerbSpacePose& out) const;
+    // THE KERB LANE BESIDE A STATION OF A STREET, for the traffic running `dir`: the lane path of the lane level on that
+    // street running that way whose stretch of the spine holds the station, the one nearest the kerb (the last of its
+    // section), and where along it the station falls (alongPathAt). Where a car stops to turn into a space or to set
+    // someone down, and where it joins the traffic again. The built layer's: not valid on a planned-only model.
+    KerbLanePlace kerbLaneAt(ModelStreetId street, int dir, Real station) const;
+    // ...beside a space: at its middle station.
+    KerbLanePlace kerbLaneBeside(const KerbSpace& space) const { return kerbLaneAt(space.street, space.dir, space.middle()); }
+    // HOW FAR ALONG A LANE PATH A STATION OF ITS ROAD'S SPINE FALLS (metres from the path's start, the way it is
+    // driven): in proportion between the stations at the path's two ends, held to the path. Exact on a straight road;
+    // on a bend out by the difference between the lane's length and the spine's over that stretch (ADR-0437). The one
+    // placing of a station on a path: the regulations' and the kerb lane's. A path stating no stretch of spine: 0.
+    Real alongPathAt(PathId path, Real station) const;
+    // THE SPACE NEAREST A PLAN POINT, by where a car in it stands, no farther than `reach` metres in a straight line.
+    // Not valid (its `space`): none is that near. A search over the streets' centre lines (their boxes first).
+    KerbSpaceNear nearestKerbSpace(const Vec2& p, Real reach) const;
+
+    // EVERY STRETCH OF ROAD CARS DRIVE THAT HAS A CENTRE LINE, in the one order the searches by position use: each
+    // street, then each junction's inside stretches.
+    std::vector<RoadLine> roadLines() const;
+    // WHERE A PLAN POINT (A DOOR) FRONTS THE ROAD: the nearest road a building may front (buildingMayFront), by its
+    // centre line -- the same search over the same lines, in the same order, as the lot pass faces its doors by
+    // (LotRoads::nearestFrontable), so a door built facing a street is answered that street. AN INTERIM: a search by
+    // position, because a built lot does not record the street, station and side its door fronts; when the lot pass
+    // records them, a reader hands them to frontageOn below and nothing is searched.
+    RoadFrontage frontageAt(const Vec2& door) const;
+    // ...the same answer from stated facts, with no search: a street, a station along its spine and a kerb.
+    RoadFrontage frontageOn(ModelStreetId street, Real station, int dir) const;
+    // THE NEAREST PLACE TO WALK beside a frontage: the middle of the sidewalk on the point's side of the road, level
+    // with it (the centre line moved toward that kerb by the carriageway's half width and half the sidewalk). False:
+    // that road has no sidewalk.
+    bool sidewalkBeside(const RoadFrontage& f, Vec2& out) const;
+    // THE KERB LANE BESIDE A FRONTAGE: where a car sets someone down for that door (kerbLaneAt, on the door's side).
+    KerbLanePlace kerbLaneBeside(const RoadFrontage& f) const {
+        return f.street.valid() ? kerbLaneAt(f.street, f.dir, f.station) : KerbLanePlace();
+    }
+    // THE KERB SPACES NEAR A FRONTAGE, nearest first BY WALKING DISTANCE, no farther than `reach` metres on foot and at
+    // most `most` of them. The walk is measured on the model's streets: along the frontage's street and on through the
+    // junctions and carry-ons at its ends along every street with a sidewalk, to the space's middle station; a space
+    // on the other kerb adds its street's travel width (the walk across). It is the model's own measure of nearness,
+    // made from stated facts; the walker's real path comes from the street map when the walk is planned. Ties: by
+    // street, kerb and index.
+    std::vector<KerbSpaceNear> kerbSpacesNear(const RoadFrontage& f, Real reach, std::size_t most) const;
 };
 
 // Field for field, exactly (the saved bytes of each compared).
@@ -441,11 +594,22 @@ ModelLaneId laneNamed(const RoadModel& m, const std::string& id);
 // ---- in words and on a map ---------------------------------------------------------------------------------------------
 std::string dumpRoadModel(const RoadModel& m);     // every junction, street, lane, connection, ramp and crossing
 std::string reportRoadModel(const RoadModel& m);   // counts, what is not stated, the problems
-std::string roadModelSvg(const RoadModel& m);      // junctions and streets with their ids, lanes
+std::string roadModelSvg(const RoadModel& m);      // junctions and streets with their ids, lanes, kerb parking spaces
+// THE KERB PARKING SPACES IN WORDS (ADR-0439), street by street and kerb by kerb: each space's name, stations, where a
+// car in it stands and faces, and the kerb lane path beside it (lanes_tool model writes them as parking.txt).
+std::vector<std::string> kerbSpaceLines(const RoadModel& m);
+// How much kerb parking a model holds: the streets whose cross-section states a parking band, how many of them hold at
+// least one space, the spaces, and the metres of kerb they take.
+struct KerbSpaceCounts {
+    uint32_t streetsWithBand = 0, streets = 0, spaces = 0;
+    Real kerbMetres = 0;
+};
+KerbSpaceCounts kerbSpaceCounts(const RoadModel& m);
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 12;   // 12: the lane level holds no through partner (LGRF 13, ADR-0438)
+constexpr uint32_t kRoadModelFormat = 13;   // 13: the kerb parking runs; the lane level holds no car spaces (LGRF 14, ADR-0439)
+                                            // 12: the lane level holds no through partner (LGRF 13, ADR-0438)
                                             // 11: the regulations stated on streets; the lane level holds none (LGRF 12, ADR-0437)
                                             // 10: the lane level holds no copy of the model's facts (LGRF 11, ADR-0436)
                                             // 9: no stored one-way flag: the cross-section answers it (ADR-0432)

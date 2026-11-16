@@ -397,14 +397,16 @@ void run(Driving& d, Real seconds, Real dt, Watch& w) {
     }
 }
 
-// How many ticks a decide interval is at a step (at least one).
+// How many ticks a decide interval is at a step (at least one): written out here by hand, for the tests' own sums.
 uint32_t ticksFor(Real interval, Real dt) {
     return std::max<uint32_t>(1, static_cast<uint32_t>(std::lround(interval / dt)));
 }
 
-void decideEvery(Driving& d, Real interval, Real dt) {
+// Drivers decide every `interval` seconds. (The setting is in seconds since ADR-0439; the driving turns it into ticks
+// of the tick's own length, so the step these tests tick at is not needed here.)
+void decideEvery(Driving& d, Real interval, Real /*dt*/) {
     DrivingSettings s;
-    s.decideEveryTicks = ticksFor(interval, dt);
+    s.decideInterval = interval;
     d.setSettings(s);
 }
 
@@ -1206,6 +1208,84 @@ TEST_CASE(tick_14_a_bend_after_a_long_straight_is_slowed_for_in_time) {
     // The same run twice: the same state hash at every tick.
     const BendRun a = runToABend(20, 1.0 / 60, 0.1), b = runToABend(20, 1.0 / 60, 0.1);
     CHECK(!a.hashes.empty() && a.hashes == b.hashes);
+}
+
+// ---- 15. how often a driver decides is stated in seconds (ADR-0439) --------------------------------------------------------
+
+namespace {
+// The bend scene of tick 14 (a 20 m bend from x = 340 to 370 on a 600 m straight), one car with id 0 from x = 10,
+// ticked at `dt` with the settings as they are made (a decision every tenth of a second). Returns WHEN ITS DRIVER WAS
+// SEEN TO DECIDE, in seconds from the start: the start of each tick in which the top speed it holds changed. While it
+// slows for the bend the rule hands it a new top speed at every decision, so those ticks are its decisions. (Car 0's
+// turn falls on the ticks whose number is a whole multiple of the decide interval in ticks.)
+std::vector<double> decisionTimesAtABend(Real dt, uint32_t* everyTicks) {
+    Straight road(6, 100);
+    engine::LaneGraph& g = road.roads.model.laneLevel;
+    engine::Path& bent = g.paths[road.lane(3).index];
+    bent.bends = g.addBends({engine::BendPiece{0, engine::kNoBend}, engine::BendPiece{40, 20}, engine::BendPiece{70, engine::kNoBend}});
+    bent.tightestRadius = 20;
+    const TestRules rules(ruleSetLua(kAllRules));
+    World w(road.model(), rules);   // (the settings as made: DrivingSettings::kDefaultDecideInterval)
+    *everyTicks = w.d.settings().decideEveryTicks(dt);
+    CHECK(placeAt(w.d, road, 0, 10));
+    CHECK(w.d.beginTrip(CarId(0), 1, road.point(590)).valid());
+    std::vector<double> times;
+    Real held = -1;
+    const int ticks = static_cast<int>(std::lround(40 / dt));
+    for (int k = 0; k < ticks; ++k) {
+        w.d.tick(dt);
+        const Car* c = w.d.car(CarId(0));
+        if (!c || !c->driven) break;
+        if (c->held.topSpeed != held) times.push_back(static_cast<double>(k) * dt);
+        held = c->held.topSpeed;
+    }
+    return times;
+}
+}  // namespace
+
+TEST_CASE(tick_15_a_driver_decides_every_tenth_of_a_second_at_any_tick_rate) {
+    // THE SETTING IS SECONDS; the tick turns it into a whole number of its own ticks.
+    const DrivingSettings made;
+    CHECK(made.decideInterval == 0.1);
+    CHECK(made.decideEveryTicks(1.0 / 60) == 6u && made.decideEveryTicks(1.0 / 30) == 3u && made.decideEveryTicks(1.0 / 20) == 2u &&
+          made.decideEveryTicks(1.0 / 120) == 12u);
+    CHECK(made.decideEveryTicks(0.1) == 1u && made.decideEveryTicks(0.5) == 1u);   // never fewer than one tick
+    CHECK(made.decideEveryTicks(0.04) == 3u);                                      // two and a half ticks: the half goes up
+    CHECK(made.decideEveryTicks(0) == 1u);                                         // no tick has run yet
+    using engine::approxEqual;
+    constexpr Real kSameInstant = 1e-9;   // seconds: two sums of the same tick lengths
+    constexpr double kOnATenth = 1e-6;    // of a tenth of a second: a time that is a whole number of tenths
+    CHECK(approxEqual(made.decideIntervalAt(1.0 / 60), 0.1, kSameInstant) && approxEqual(made.decideIntervalAt(1.0 / 30), 0.1, kSameInstant));
+    CHECK(approxEqual(made.decideIntervalAt(0.5), 0.5, kSameInstant));             // a slow tick: the driver reacts a tick late
+
+    // THE SAME SCENE AT 60, 30 AND 20 TICKS A SECOND: the driver is seen to decide on the same tenths of a second.
+    // (Stated in ticks, six of them, a level at 30 a second decided every fifth of a second and at 20 every 0.3 s.)
+    struct Rate { Real dt; uint32_t every; };
+    const Rate rates[] = {{1.0 / 60, 6}, {1.0 / 30, 3}, {1.0 / 20, 2}};
+    std::vector<double> atSixty;
+    for (const Rate& rate : rates) {
+        uint32_t every = 0;
+        const std::vector<double> times = decisionTimesAtABend(rate.dt, &every);
+        // ...the very same instants as at 60 ticks a second, one for one
+        if (atSixty.empty()) atSixty = times;
+        CHECK(times.size() == atSixty.size());
+        int otherInstants = 0;
+        for (std::size_t i = 0; i < times.size() && i < atSixty.size(); ++i) otherInstants += approxEqual(times[i], atSixty[i], kSameInstant) ? 0 : 1;
+        CHECK(otherInstants == 0);
+        CHECK(every == rate.every);
+        CHECK(times.size() >= 20u);   // it slows for the bend over two seconds and more
+        double shortestGap = 1e30;
+        int offTheTenths = 0;
+        for (std::size_t i = 0; i < times.size(); ++i) {
+            const double tenths = times[i] / 0.1;
+            offTheTenths += approxEqual(tenths, std::round(tenths), kOnATenth) ? 0 : 1;
+            if (i > 0) shortestGap = std::min(shortestGap, times[i] - times[i - 1]);
+        }
+        CHECK(offTheTenths == 0);                              // every decision seen is on a tenth of a second
+        CHECK(approxEqual(shortestGap, 0.1, kSameInstant));    // and one decision follows the last a tenth later
+        std::printf("    %.0f ticks a second: a decision every %u ticks; %zu decisions seen, the closest two %.4f s apart\n", 1 / rate.dt, every,
+                    times.size(), shortestGap);
+    }
 }
 
 // ---- What a tick costs ------------------------------------------------------------------------------------------------

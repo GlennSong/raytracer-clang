@@ -62,7 +62,7 @@ void Driving::settleClaims() {
     // A claim through close junctions sees whether its onward turns are clear by this tick's board (issue #284).
     world.board = &board_;
     world.gapNeeded = junctionNumbers_.gapComfortable;
-    world.reaction = static_cast<Real>(std::max<uint32_t>(1, settings_.decideEveryTicks)) * step_;
+    world.reaction = settings_.decideIntervalAt(step_);
     world.routeClasses = &routeClasses_;
     room_.settle(world, roomSeats_);
 }
@@ -321,7 +321,7 @@ void Driving::announce() {
     lineOrder_.clear();
 
     // Seconds between a driver's decisions: what it is told now, it acts on at its next one.
-    const Real reaction = static_cast<Real>(std::max<uint32_t>(1, settings_.decideEveryTicks)) * step_;
+    const Real reaction = settings_.decideIntervalAt(step_);
     // 1. Each car's own notes, and its nearest line.
     for (std::size_t i = 0; i < cars_.size(); ++i) {
         LineTimes& times = lineTimes_[i];
@@ -520,7 +520,7 @@ void Driving::announce() {
 void Driving::plan() {
     findTripsOfRecords();
     if (junctionsOn_) announce();
-    const uint32_t every = std::max<uint32_t>(1, settings_.decideEveryTicks);
+    const uint32_t every = settings_.decideEveryTicks(step_);   // the decide interval in ticks of this tick's length
     planned_.clear();
     for (std::size_t i = 0; i < cars_.size(); ++i) {
         const Car& c = cars_[i];
@@ -688,7 +688,7 @@ void Driving::plan() {
 void Driving::move(Real dt) {
     findTripsOfRecords();
     carsNext_ = cars_;
-    const uint32_t every = std::max<uint32_t>(1, settings_.decideEveryTicks);
+    const uint32_t every = settings_.decideEveryTicks(dt);
     const Real reaction = reactionTime(static_cast<Real>(every) * dt, dt);
 
     for (std::size_t i = 0; i < cars_.size(); ++i) {
@@ -1139,7 +1139,9 @@ uint64_t Driving::stateHash() const {
         h.pod(c.binding.rule);
         h.pod(static_cast<uint8_t>(c.binding.stopFor));
     }
-    h.pod(settings_.decideEveryTicks);
+    // (how often drivers decide, as the tick runs it: the decide interval in ticks of the last tick's length -- the
+    // number the hash has always folded here, so a run at one tick length hashes as it did when ticks were stated)
+    h.pod(settings_.decideEveryTicks(step_));
     h.pod(static_cast<uint8_t>(settings_.laneChanges));
     h.pod(capCounts_.tailsOffTrail);
     h.pod(capCounts_.lastTailOffTrail.index);
@@ -1333,7 +1335,7 @@ bool Driving::waitReasonHolds(const Car& c, std::string* why) const {
             if (other && other->id == c.id) return no("waiting for itself");   // (gone from the road: as above)
             // (Read against this tick's board only on a tick the driver decided: between decisions it holds what it
             // decided, by the board then, for up to one decide interval.)
-            const uint32_t every = std::max<uint32_t>(1, settings_.decideEveryTicks);
+            const uint32_t every = settings_.decideEveryTicks(step_);
             const bool decidedNow = tickCount_ > 0 && (tickCount_ - 1) % every == c.id.index % every;
             if (givesWay(b.stopFor) && junctionsOn_ && decidedNow && !announcedOnMine(b.car))
                 return no("giving way to car " + std::to_string(b.car.index) +
@@ -1345,7 +1347,7 @@ bool Driving::waitReasonHolds(const Car& c, std::string* why) const {
         // A PLAIN STOP AT A LINE WHERE THE LIGHTS RUN (a red, a yellow) whose lamp has shown green for longer than a
         // decision: the driver has decided since with the light green, so whatever the stop is for, it is not that lamp.
         if (b.stopFor == StopFor::Place && lightsRun_) {
-            const double interval = static_cast<double>(std::max<uint32_t>(1, settings_.decideEveryTicks) + 1) * step_;
+            const double interval = static_cast<double>(settings_.decideEveryTicks(step_) + 1) * step_;
             for (std::size_t k = 0; k < t->junctions.count && k < kMaxJunctionPlans; ++k) {
                 const JunctionPlan& p = t->junctions.plans[k];
                 if (std::fabs(p.startOdometer - c.held.stopAt) > static_cast<double>(junctionNumbers_.atLineWithin))

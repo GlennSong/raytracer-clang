@@ -2705,7 +2705,8 @@ TEST_CASE(lanes_a_level_lane_graph_is_built_once_then_read_from_its_cache) {
     // and the turn table's bytes (its hash), each on its own; the key is the one roadModelCacheKey makes
     {
         const uint64_t facts = laneLevelKey(withFacts);
-        CHECK(first.key == roadModelCacheKey(levelRoadsKey(in), facts, laneTurnRules().hash, opts));
+        const uint64_t kerb = kerbParkingRules().hash;
+        CHECK(first.key == roadModelCacheKey(levelRoadsKey(in), facts, roadModelTablesHash(laneTurnRules().hash, kerb), opts));
         // the table's hash is of its file's bytes: the shipped file's, and another text one byte longer (a comment
         // edited) hashes otherwise, and keys another file
         std::ifstream tf(std::string(RT_SOURCE_DIR) + "/assets/data/lane_turns.json", std::ios::binary);
@@ -2713,7 +2714,14 @@ TEST_CASE(lanes_a_level_lane_graph_is_built_once_then_read_from_its_cache) {
         CHECK(!table.empty() && laneTurnRules().hash == laneTurnTableHash(table));
         const uint64_t edited = laneTurnTableHash(table + " ");
         CHECK(edited != laneTurnRules().hash);
-        CHECK(roadModelCacheKey(levelRoadsKey(in), facts, edited, opts) != first.key);
+        CHECK(roadModelCacheKey(levelRoadsKey(in), facts, roadModelTablesHash(edited, kerb), opts) != first.key);
+        // ...and with the kerb parking rules' bytes (ADR-0439): the saved model holds the spaces laid by them
+        std::ifstream kf(std::string(RT_SOURCE_DIR) + "/assets/data/kerb_parking.json", std::ios::binary);
+        const std::string kerbText((std::istreambuf_iterator<char>(kf)), std::istreambuf_iterator<char>());
+        CHECK(!kerbText.empty() && kerb == bundle::fnv1aStr(kerbText));
+        CHECK(roadModelCacheKey(levelRoadsKey(in), facts, roadModelTablesHash(laneTurnRules().hash, bundle::fnv1aStr(kerbText + " ")), opts) !=
+              first.key);
+        CHECK(roadModelTablesHash(1, 2) != roadModelTablesHash(2, 1));   // (which table changed is told apart)
         nlohmann::json otherRules = withFacts;
         otherRules["lane_rules"]["solid_before_stop_line"] = 25.0;
         CHECK(laneLevelKey(otherRules) != facts);

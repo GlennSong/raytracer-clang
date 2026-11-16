@@ -115,6 +115,61 @@ inline Real distToPolyline(const Vec2& p, const std::vector<Vec2>& P, bool close
     return nearestOnPolyline(p, P, closed).dist;
 }
 
+// THE NEAREST OF SEVERAL OPEN POLYLINES TO A POINT -- THE ONE SEARCH (ADR-0439) behind "which road is nearest this
+// point": the lot pass's (city_lots.cpp LotRoads: the street a door faces, the nearest road surface) and the road
+// model's (road_model.h RoadModel::frontageAt, nearestKerbSpace). The caller hands in its lines by number (`lineAt(i)`
+// gives a pointer and a count), each line's bounding box (boxOfLine), how far from its line each one's surface starts
+// (`offsetOf(i)`, taken off the distance: 0 measures to the line itself) and which lines count (`keep(i)`). A line whose
+// box is already no nearer than the best so far is passed over unread; a line of fewer than two points is skipped.
+// Only a line strictly nearer than `reach`, and then strictly nearer than the best so far, is taken, so the first
+// found wins a tie, in the order of the numbers.
+struct LineBox {
+    Vec2 lo = Vec2(Real(1e30), Real(1e30)), hi = Vec2(Real(-1e30), Real(-1e30));
+};
+inline LineBox boxOfLine(const Vec2* xy, std::size_t n) {
+    LineBox b;
+    for (std::size_t i = 0; i < n; ++i) {
+        b.lo = Vec2(std::min(b.lo.x, xy[i].x), std::min(b.lo.y, xy[i].y));
+        b.hi = Vec2(std::max(b.hi.x, xy[i].x), std::max(b.hi.y, xy[i].y));
+    }
+    return b;
+}
+struct NearestLine {
+    int line = -1;          // which (-1: none within reach)
+    Real distance = 1e30;   // from the point to it, less its offset (may be below zero: inside the surface)
+    Vec2 on;                // the point of the line nearest the point
+    std::size_t seg = 0;    // its segment: point seg -> seg + 1 of that line
+    Real t = 0;             // the fraction along that segment
+};
+template <class LineAt, class OffsetOf, class Keep>
+NearestLine nearestLine(const Vec2& p, Real reach, std::size_t count, const LineBox* boxes, LineAt lineAt, OffsetOf offsetOf, Keep keep) {
+    NearestLine f;
+    f.distance = reach;
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::pair<const Vec2*, std::size_t> line = lineAt(i);
+        if (line.second < 2 || !keep(i)) continue;
+        const Real off = offsetOf(i);
+        const LineBox& bx = boxes[i];
+        const Real dx = std::max(Real(0), std::max(bx.lo.x - p.x, p.x - bx.hi.x));
+        const Real dy = std::max(Real(0), std::max(bx.lo.y - p.y, p.y - bx.hi.y));
+        // (a search's choice is exact, like a sort's order: of two lines a hair apart the nearer one is the nearer)
+        if (std::sqrt(dx * dx + dy * dy) - off >= f.distance) continue;
+        for (std::size_t k = 0; k + 1 < line.second; ++k) {
+            Real t = 0;
+            const Vec2 q = closestOnSegment(p, line.first[k], line.first[k + 1], &t);
+            const Real d = (p - q).length() - off;
+            if (d < f.distance) {
+                f.distance = d;
+                f.line = static_cast<int>(i);
+                f.on = q;
+                f.seg = k;
+                f.t = t;
+            }
+        }
+    }
+    return f;
+}
+
 // THE STATIONS of an open polyline: each point's distance along it from the first (0 first, the length last).
 inline std::vector<Real> stations(const std::vector<Vec2>& P) {
     std::vector<Real> s(P.size(), 0.0);

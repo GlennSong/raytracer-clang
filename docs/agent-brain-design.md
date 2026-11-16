@@ -190,11 +190,15 @@ current state and what it is waiting for.
 
 Road-model work this stands on (agreed 2026-11-16):
 
-- parking spaces stated in the road model;
-- a question the model answers: from a building's door to a place on the road;
+- parking spaces stated in the road model (done, ADR-0439: `RoadModel::kerbSpacesOf`, `kerbSpacePose`,
+  `kerbLaneBeside`);
+- a question the model answers: from a building's door to a place on the road (done, ADR-0439:
+  `RoadModel::frontageAt`, then `sidewalkBeside`, `kerbLaneBeside`, `kerbSpacesNear`; a search by position
+  until the lot pass records each door's street);
 - for the first build a car stops in the kerb lane beside its space and slides in; real pull-out and
   parking come with lane changes;
-- the driving's decision rate in seconds, not ticks, so levels at different tick rates behave the same;
+- the driving's decision rate in seconds, not ticks, so levels at different tick rates behave the same
+  (done, ADR-0439: `DrivingSettings::decideInterval`);
 - the physics body follows the simulated car for now; the body becomes the truth with visible crashes;
 - the junction code is used as it is (one car never exercises it) and reworked when two agents first meet.
 

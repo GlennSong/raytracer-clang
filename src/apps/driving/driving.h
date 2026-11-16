@@ -56,6 +56,7 @@
 #include "apps/driving/wait_graph.h"      // who is waiting for whom
 #include "slot_map.h"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -108,11 +109,27 @@ struct Trip {
 // HOW THE TICK RUNS, set by the host (or a test). These numbers move to the rule set's `detail` table (design 7.2) in
 // a later task; until then they live here, each a named default.
 struct DrivingSettings {
-    // How often a driver decides, in ticks: car `id` decides on the ticks where tick count mod N equals id mod N, so
-    // the drivers are spread evenly over the ticks (and every driver decides on its first tick of a trip, whatever its
-    // turn). At 60 ticks a second the default is the design's "near" rate, 10 decisions a second. Zero is taken as 1.
-    static constexpr uint32_t kDefaultDecideEveryTicks = 6;
-    uint32_t decideEveryTicks = kDefaultDecideEveryTicks;
+    // HOW OFTEN A DRIVER DECIDES, IN SECONDS (ADR-0439): the time between one driver's decisions. The default is the
+    // design's "near" rate, 10 decisions a second (design 7.2). Stated in seconds so that a level ticking 30 times a
+    // second and one ticking 60 times decide equally often; it was a count of ticks (6, "at 60 a second") before.
+    static constexpr Real kDefaultDecideInterval = 0.1;
+    Real decideInterval = kDefaultDecideInterval;
+    // THE DECIDE INTERVAL AS A WHOLE NUMBER OF TICKS of `step` seconds each: the nearest whole number (a half goes
+    // up), and never fewer than one, since a driver cannot decide more often than the tick runs. The tick works in
+    // these: car `id` decides on the ticks where tick count mod N equals id mod N, so the drivers are spread evenly
+    // over the ticks (and every driver decides on its first tick of a trip, whatever its turn). It is worked out from
+    // the length of the tick under way, every tick. No step yet, or an interval of zero or less: 1.
+    uint32_t decideEveryTicks(Real step) const {
+        if (!(step > 0) || !(decideInterval > 0)) return 1;
+        const long ticks = std::lround(decideInterval / step);
+        return ticks < 1 ? 1u : static_cast<uint32_t>(ticks);
+    }
+    // THE TIME BETWEEN A DRIVER'S DECISIONS AS THE TICK REALLY RUNS IT: that whole number of ticks, in seconds. Equal
+    // to `decideInterval` wherever the interval is a whole number of ticks (0.1 s at 60, 30, 20 or 10 ticks a second).
+    // THE DRIVER'S REACTION TIME is this (design 7.2: "the could-I-stop-in-time speed limit takes the decide interval as
+    // the driver's reaction time"): what a driver is told now it acts on at its next decision. It is not stated a
+    // second time, so the two cannot disagree.
+    Real decideIntervalAt(Real step) const { return static_cast<Real>(decideEveryTicks(step)) * step; }
     // Keep each driven car's trace (trace.h). It only records: switching it off changes nothing a car does, and the
     // state hash is the same either way.
     bool trace = true;

@@ -82,6 +82,16 @@ move the loop into it; never a private loop in the reader.
 | The junction a lane path runs to | `RoadModel::arrivesAt(path)` |
 | Do two lanes arriving at a junction face each other (oncoming traffic) | `RoadModel::facing(junction, a, b)` |
 | The arm a street-map link arrives by | `RoadModel::armReachedAt(street, link.stationTo)` |
+| The kerb parking spaces along a street; one space by its id; its name | `RoadModel::kerbSpacesOf(street)`, `kerbSpace(street, dir, index)`, `kerbSpaceName(space)` |
+| Where a car standing in a space is and faces | `RoadModel::kerbSpacePose(space, out)` |
+| The kerb lane path beside a space (or a station) and how far along it: where a car stops to turn in, or rejoins | `RoadModel::kerbLaneBeside(space)`, `kerbLaneAt(street, dir, station)` |
+| The space nearest a point within a distance | `RoadModel::nearestKerbSpace(point, reach)` |
+| How far along a lane path a station of its spine falls | `RoadModel::alongPathAt(path, station)` |
+| Where a point (a door) fronts the road: street, station, kerb | `RoadModel::frontageAt(point)` (a search, interim); `frontageOn(street, station, dir)` (stated facts) |
+| From a frontage: the nearest place to walk, the kerb lane to set down in, the kerb spaces in walking order | `RoadModel::sidewalkBeside(f, out)`, `kerbLaneBeside(f)`, `kerbSpacesNear(f, reach, most)` |
+| Every stretch of road with a centre line, in the order searches by position use | `RoadModel::roadLines()` |
+| The nearest of several centre lines to a point (the one search) | `nearestLine` (`city/polyline.h`) |
+| May a building front a road of this class | `buildingMayFront` (`city/road_network.h`) |
 
 **The lane table holds no fact about what the road is** (ADR-0436, ADR-0437, issue #291): no control, posted limit,
 road class, turn kind, merging path or regulation. It holds where a car can be, and each path, junction and crossing
@@ -99,6 +109,23 @@ junctions' through pairs with `stateThrough` (`tests/driving_test_roads.h`).
 file yet. The driving does not ask the model each tick: its binding (`RoadRules::regulationsOn(path)`,
 `apps/driving/road_rules.h`) is filled from `regulationsAlong` each time rules are handed over and never saved.
 
+**Kerb parking spaces** (ADR-0439). Where a car may be left at a kerb is stated in the model, once:
+`RoadModel::kerbRuns`. A run is a street, a kerb, the station where its first space begins, a space's length and a
+count. Which kerb is named by the traffic beside it: `dir` +1 is the kerb of the traffic running along the spine, -1
+of the traffic running against it. A space is place `i` of its run; its id is street, kerb and index (`s5 along 3`).
+Its width and its place across the road are the street's cross-section (`parking`, `parkingOffset`), not copied. The
+planned layer states the runs (`stateKerbRuns` in road_model.cpp) from the streets, each arm's stop line and the two
+numbers of `assets/data/kerb_parking.json`. Kept clear of: junction areas and stop lines, and what lies outside a
+road's `lots_range`. Not known to the model, so not kept clear of: driveways, bus stops, hydrants, bridges. The lane
+table holds no spaces (its unused `CarSpace` is deleted); the kerb lane path beside a space is asked
+(`kerbLaneBeside`). The outlines painted on the road are drawn from these spaces on a level the new driving drives.
+The old city sim still lays and parks in its own bays (`CitySim::ParkingBay`, a different list); they go with it.
+
+**From a door to the road** (ADR-0439). `frontageAt(point)` is a search by position, an interim: a built lot records
+nothing about the street its door fronts. It is the same search the lot pass faces its doors by: both call
+`nearestLine` (polyline.h) over `RoadModel::roadLines()`, in its order, with `buildingMayFront` as the rule.
+`lotRoadInputs` makes the lot pass's roads from that list; never add a road to one and not the other.
+
 **The street map's links** (ADR-0437). A link's `width`, `klass`, `lanes`, `oneWay`, `walkable`, `access`,
 `parkOffset` and `parkWidth` are a compiled look-up, written only in `layLinks` (`street_map.cpp`) from the street's
 stated cross-section; routing and every agent's position read them each tick. Do not write them anywhere else. The
@@ -110,7 +137,7 @@ Under `src/engine/procgen/city/roads/`:
 
 | File | What it holds |
 |---|---|
-| `road_model.h/.cpp` | The model: types, planned and built layers, save/load, `dump`, `streetNameNear`. The built model holds the lane level and is saved whole by `lanes/road_model_cache`. |
+| `road_model.h/.cpp` | The model: types, planned and built layers, save/load, `dump`, `streetNameNear`. The built model holds the lane level and is saved whole by `lanes/road_model_cache`. Also the kerb parking runs and their questions, the kerb parking rules' reader (`kerbParkingRules`), and the door-to-road questions (ADR-0439). |
 | `road_model_parts.h` | The one set of junction, arm, street, node and stretch types (`ModelJunction`, `ModelArm`, `ModelStreet`...). The road file is read into them (`RoadLabGraph::junctions` / `streets`), the layout and the control plan write them, and `plannedRoadModel` copies them whole and adds what only the model knows. A junction or street named by another is a place in the same list, not an id string. `graph_index.h` holds the index types it shares with the lane graph. |
 | `street_map.h/.cpp` | The street map every agent routes, drives and walks on (`NavGraph`), built at load from the planned layer and the deck heights (ADR-0425). |
 | `lane_turns.h/.cpp` | Which arriving lane takes which turn: reads `assets/data/lane_turns.json`; `turnsAtJunction` is the one function that applies it (ADR-0426). Also `laneLineBetween`, the one rule for whether the line between two lanes may be crossed (its lane kinds are the table's `lane_lines`). |
@@ -287,6 +314,10 @@ it (before `streets`), so one write is final (ADR-0437; the same test).
   of the city's bake key (`roadClassTableHash`), so editing a row re-bakes. No code compares a class NAME any more;
   what is left is listed in ADR-0438 (the interchange maker gives its ramps the class named `ramp`, and two places
   compare a class's `rank` to 3).
+- **`assets/data/kerb_parking.json`** (ADR-0439): how a street's parking band is cut into spaces. Two numbers:
+  `space_length` (7 m) and `clear_of_stop_line` (10 m). Read once by `kerbParkingRules()` (road_model.cpp); no copy
+  in C++, and a missing file means no street has a space. Its bytes are part of the saved road model's key
+  (`roadModelTablesHash`, with the turn table's), not of any bake key: nothing baked reads the spaces.
 - `assets/data/streets.json`: name words and sign look (names only).
 
 ## 6. Checking a change quickly
@@ -297,7 +328,7 @@ driving_tests rt_bake city_plan` before anything that loads a level; stale binar
 | Command | What | Wall clock (seen in step 8) |
 |---|---|---|
 | `lanes_tool build <file> --out <dir>` | Road meshes; compare `.glb`/`.svg` md5 before and after (stats.json differs only in timings) | ~12 s traffic_lab, ~36 s river_town |
-| `lanes_tool model <file> --out <dir>` | model.txt, report.txt, model.svg | about a build *(unsure)* |
+| `lanes_tool model <file> --out <dir> [--door x y]` | model.txt, report.txt, model.svg (the kerb parking spaces drawn on it), parking.txt (every space: stations, where its car stands, the kerb lane beside it); prints the parking counts; `--door` prints where that point fronts the road, its sidewalk point, set-down point and nearest spaces | ~16 s traffic_lab, ~43 s river_town |
 | `lanes_tool junctions <file> [--top N]` | The grouping's junctions, biggest first | seconds *(unsure)* |
 | `lanes_tool layout <file> [--write ...]` | Layout facts; prints whether the bake and lane-graph keys stay unchanged | seconds |
 | `lanes_tool lanegraph <file> --out <dir> --vehicle tag:radius:width:length ...` | lane_graph.txt, problems.txt, reach.txt, corner_faults.txt, svg; `--junction J` for a close-up | ~26 s traffic_lab, ~63 s river_town |
@@ -307,10 +338,10 @@ The fleet for `--vehicle`, as step 8 used it: `bus:7.30:2.55:11.45 car:6.15:2.05
 moped:1.92:0.70:1.70 motorcycle:2.73:0.70:2.09 truck:7.45:2.25:6.69 van:7.10:2.30:6.34`.
 
 Tests (`RT_TEST_FILTER` is a substring of the case name):
-- `./build-viewer/lanes_tests`: 128 cases, about 4 to 5 minutes whole. Filters: `road_model` (quick),
+- `./build-viewer/lanes_tests`: 130 cases, about 4 to 5 minutes whole. Filters: `road_model` (quick),
   `lanes_lane_graph_of` (the five scenes' lane-graph checks against what each scene is known to hold: `LaneGraphKnown`
   in test_lanes.cpp), `lanes_the_traffic_lab`, `connectors_of`.
-- `./build-viewer/driving_tests`: 193 cases on hand-made graphs, about a minute *(roughly)*.
+- `./build-viewer/driving_tests`: 194 cases on hand-made graphs, about a minute *(roughly)*.
 - `run_tests`, **always filtered**: `lane_graph`, `nav`, `route`, `trip_plan`, `control`, `signal`, `park`,
   `sign`, `map`. Seconds to a minute each *(roughly)*.
 - `level_tests`, **always filtered**:

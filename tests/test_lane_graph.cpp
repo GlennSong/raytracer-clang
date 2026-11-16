@@ -196,15 +196,6 @@ LaneGraph makeCrossroads() {
     meet(westToEast, OtherSide::Path, westToNorth, Meeting::Split, 0, 2, 0, 2);
     g.junctions.push_back(j);
     indexCrossings(g);   // the junction's range of them, and each path's list
-
-    // Three spaces along the kerb lane.
-    for (int s = 0; s < 3; ++s) {
-        CarSpace sp;
-        sp.lane = PathId(kKerbLane);
-        sp.from = 2 + 6 * s;
-        sp.to = sp.from + 6;
-        g.carSpaces.push_back(sp);
-    }
     return g;
 }
 
@@ -269,12 +260,11 @@ TEST_CASE(lane_graph_text_dump_reads_by_hand) {
           "on crosswalk 0 from 0.0 to 3.0 m\n");
     const std::string all = dumpText(g);
     CHECK(all.find("lane graph: 21 paths (9 lanes, 12 connectors), 8 sections, 1 junctions, 8 crossing points, "
-                   "1 crosswalks, 0 tracks, 3 car spaces\n") == 0);
+                   "1 crosswalks, 0 tracks\n") == 0);
     // a lane's stretch of its road's spine, the way it is driven
     CHECK(all.find("  from station 140.00 to 100.00 of its road's spine\n") != std::string::npos);
     CHECK(!g.paths[0].alongSpine());
     CHECK(all.find("  arriving lanes: 0 2 4 6 8\n  leaving lanes: 1 3 5 7\n") != std::string::npos);
-    CHECK(all.find("car space 2: lane 8 from 14.0 to 20.0 m\n") != std::string::npos);
     CHECK(all == dumpText(makeCrossroads()));   // the same text every run
 }
 

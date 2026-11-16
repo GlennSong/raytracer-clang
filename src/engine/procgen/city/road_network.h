@@ -26,6 +26,14 @@ enum class RoadClass : uint8_t { Freeway, Arterial, Collector, Local, Ramp, Alle
 // name is none of them (travel.lua names the classes a drive is told apart by, ADR-0416).
 const char* roadClassName(RoadClass k);
 bool parseRoadClass(const std::string& name, RoadClass& out);
+// WHAT A BUILDING MAY FRONT -- THE ONE RULE (Glenn, 2026-09-29: "buildings shouldn't face a freeway as a road since
+// that's not an accessible road"): a door, its walk and a plaza's mouths reach for city streets, never a freeway or a
+// ramp, nor a street carried over the ground on a bridge (`overGround`). Asked by the lot pass when it faces a door
+// (city_lots.cpp LotRoads::mayFront) and by the road model when it is asked where a door fronts the road
+// (roads/road_model.h RoadModel::frontageAt, ADR-0439), so a door is answered the street it was built facing.
+inline bool buildingMayFront(RoadClass klass, bool overGround) {
+    return klass != RoadClass::Freeway && klass != RoadClass::Ramp && !overGround;
+}
 
 // What MEETS at a node — not how many edges (roads-v2.2 semantic layer,
 // issue #17). Auto = unclassified; classifyRoadGraph (road_semantics.h)

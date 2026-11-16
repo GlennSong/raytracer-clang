@@ -2,6 +2,7 @@
 
 #include "engine/bundle/bundle.h"
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"         // junctionAreas: each arm's stop line, the one rule
+#include "engine/procgen/city/roads/lanes/lane_graph_build.h"  // kerbPerpSign: which side of a lane its kerb is
 #include "engine/procgen/city/roads/lanes/lane_level.h"        // buildLaneLevel: the model's lane level (ADR-0429)
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
@@ -23,6 +24,7 @@
 #include <iterator>
 #include <map>
 #include <set>
+#include <tuple>
 #include <type_traits>
 
 namespace engine {
@@ -98,6 +100,119 @@ ModelSection sectionOf(const RoadLabGraph& g, const EdgeSpec& e, bool* fits) {
         if (roadSpecParkingBand(roads::lanes::streetSection(g, e), +1, offset, width)) s.parkingOffset = offset;
     }
     return s;
+}
+
+// THE KERB PARKING SPACES OF EVERY STREET THAT PARKS (ADR-0439), stated on the model once its junctions and streets are
+// in. A street parks where its cross-section states a parking band (its road class's `parking`). Along each such
+// street the stretch that may hold spaces is its own stretch of spine, less:
+//   - at an end that names a junction: everything from that arm's stop line toward the junction, and `clearOfStopLine`
+//     more (an arm with no stop line stated: from where it meets the junction);
+//   - what lies outside the stretch buildings may front, where its road states one (lots_range);
+//   - every junction area lying along its road part-way (a junction a road runs on through), with the stop line's
+//     set-back and the clearance either side.
+// Each piece left is filled with as many whole spaces as fit, centred in it, on the kerb of each way the street has
+// lanes. Nothing here measures the ground: stations, the stated stop lines and the two numbers of the rules file.
+void stateKerbRuns(RoadModel& m, const KerbParkingRules& rules) {
+    if (!rules.usable) {
+        m.notStated.push_back("kerb parking spaces: assets/data/kerb_parking.json is missing or does not read, so no street is given a space");
+        return;
+    }
+    std::map<std::string, std::vector<std::pair<Real, Real>>> areasOn;   // road id -> the junction areas along it
+    for (const ModelJunction& J : m.junctions)
+        for (const ModelStretch& box : J.boxes) areasOn[box.road].emplace_back(box.from, box.to);
+    const Real keepOff = kStopLineBack + rules.clearOfStopLine;   // from a junction area's edge to the nearest space
+    for (std::size_t si = 0; si < m.streets.size(); ++si) {
+        const ModelStreet& S = m.streets[si];
+        if (S.section.parking <= 0 || !S.section.carriesCars()) continue;
+        const ModelStreetId street(static_cast<uint32_t>(si));
+        Real lo = S.from, hi = S.to;
+        for (int end = 0; end < 2; ++end) {
+            const ModelJunctionId j = S.junctions[static_cast<std::size_t>(end)];
+            if (j.index >= m.junctions.size()) continue;
+            const int arm = m.armAt(street, end);
+            Real line = end == 0 ? S.from : S.to;
+            if (arm >= 0 && stated(m.junctions[j.index].arms[static_cast<std::size_t>(arm)].stopLine))
+                line = m.junctions[j.index].arms[static_cast<std::size_t>(arm)].stopLine;
+            if (end == 0) lo = std::max(lo, line + rules.clearOfStopLine);
+            else hi = std::min(hi, line - rules.clearOfStopLine);
+        }
+        if (S.lotsFrom >= 0) lo = std::max(lo, S.lotsFrom);
+        if (S.lotsTo >= 0) hi = std::min(hi, S.lotsTo);
+        // the pieces left once the junction areas along the road are cut out, in order along the spine
+        std::vector<std::pair<Real, Real>> pieces;
+        {
+            std::vector<std::pair<Real, Real>> cuts;
+            const std::map<std::string, std::vector<std::pair<Real, Real>>>::const_iterator on = areasOn.find(S.road);
+            if (on != areasOn.end())
+                for (const std::pair<Real, Real>& a : on->second) cuts.emplace_back(a.first - keepOff, a.second + keepOff);
+            std::sort(cuts.begin(), cuts.end());
+            Real at = lo;
+            for (const std::pair<Real, Real>& c : cuts) {
+                // (wholly before what is left, or past the stretch)
+                if (atOrBefore(c.second, at, kWrittenStation) || atOrPast(c.first, hi, kWrittenStation)) continue;
+                if (strictlyPast(c.first, at, kWrittenStation)) pieces.emplace_back(at, c.first);
+                at = std::max(at, c.second);
+            }
+            if (strictlyBefore(at, hi, kWrittenStation)) pieces.emplace_back(at, hi);
+        }
+        for (int dir : {1, -1}) {
+            if ((dir > 0 ? S.section.lanesForward : S.section.lanesBackward) <= 0) continue;   // no traffic beside that kerb
+            for (const std::pair<Real, Real>& piece : pieces) {
+                // (a piece a written centimetre short of a whole space still holds it: stations are written to that)
+                const Real room = piece.second - piece.first;
+                const uint32_t count = static_cast<uint32_t>(std::floor((room + kWrittenStation) / rules.spaceLength));
+                if (count == 0) continue;
+                ModelKerbRun run;
+                run.street = street;
+                run.dir = dir;
+                run.spaceLength = rules.spaceLength;
+                run.count = count;
+                run.from = piece.first + std::max(Real(0), room - static_cast<Real>(count) * rules.spaceLength) * Real(0.5);
+                m.kerbRuns.push_back(run);
+            }
+        }
+    }
+}
+
+// The runs of one street: their stretch of RoadModel::kerbRuns (the list is by street).
+Range kerbRunsOfStreet(const RoadModel& m, ModelStreetId street) {
+    const std::vector<ModelKerbRun>::const_iterator first = std::lower_bound(
+        m.kerbRuns.begin(), m.kerbRuns.end(), street.index, [](const ModelKerbRun& r, uint32_t s) { return r.street.index < s; });
+    std::vector<ModelKerbRun>::const_iterator last = first;
+    while (last != m.kerbRuns.end() && last->street == street) ++last;
+    Range out;
+    out.first = static_cast<uint32_t>(first - m.kerbRuns.begin());
+    out.count = static_cast<uint32_t>(last - first);
+    return out;
+}
+
+// A street's centre line as the station readers take it: its points, their stations and the count (0: none).
+struct StreetLine {
+    const Vec2* xy = nullptr;
+    const Real* stations = nullptr;
+    std::size_t count = 0;
+};
+StreetLine lineOf(const RoadModel& m, const Range& line) {
+    StreetLine out;
+    if (line.count < 2 || line.end() > m.linePoints.size() || line.end() > m.lineStations.size()) return out;
+    out.xy = m.linePoints.data() + line.first;
+    out.stations = m.lineStations.data() + line.first;
+    out.count = line.count;
+    return out;
+}
+// The way a centre line runs between two of its stations (unit; the chord between them, and where that has no length
+// the segment holding the first): the way the spine runs there.
+Vec2 spineDirection(const StreetLine& l, Real from, Real to) {
+    const Vec2 chord = pointAtStation(l.xy, l.stations, l.count, to) - pointAtStation(l.xy, l.stations, l.count, from);
+    if (strictlyPast(chord.length(), 0, kSamePoint)) return normalize(chord);
+    const StationSpot spot = spotAtStation(l.stations, l.count, from);
+    const Vec2 seg = l.xy[spot.seg + 1] - l.xy[spot.seg];
+    return strictlyPast(seg.length(), 0, kSamePoint) ? normalize(seg) : Vec2(1, 0);
+}
+// ACROSS THE ROAD TOWARD A KERB (unit): the kerb of the traffic running `dir` (+1 along the spine, -1 against it),
+// where the spine runs `spine`. Which side a kerb lies is the one statement, lanes/lane_graph_build.h kerbPerpSign.
+Vec2 towardKerb(const Vec2& spine, int dir) {
+    return perp(spine * static_cast<Real>(dir)) * static_cast<Real>(roads::lanes::kerbPerpSign());
 }
 
 }  // namespace
@@ -244,7 +359,11 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
                           "`lane_rules` (ADR-0426), not held here");
     m.notStated.push_back("junction outlines on the ground: the builder has none (the paint's boxes are kept as stretches along each road)");
     m.notStated.push_back("crosswalks: nothing states them (the paint draws a zebra at each box)");
-    m.notStated.push_back("parking spaces: the kerb parking band is stated (each street's cross-section), the spaces along it are not (the city sim lays them at load)");
+    // ---- the kerb parking spaces (ADR-0439): stated here, from the streets, the arms' stop lines and the rules file ------
+    stateKerbRuns(m, kerbParkingRules());
+    m.notStated.push_back("what else a kerb space must keep clear of: driveways and lot entrances, bus stops, hydrants and bridges are not "
+                          "stated on a street, so no space is kept off them; parking off the street (a store's lot, a garage) is the "
+                          "lot pass's, not held here");
     m.notStated.push_back("blocks and their uses: the city plan has them, the road file does not carry them");
     m.notStated.push_back("signal groups: nothing states them (each driving model works its own out)");
     return m;
@@ -529,10 +648,7 @@ std::vector<PathRegulation> RoadModel::regulationsAlong(PathId path) const {
     // the regulations stated on its street for traffic running its way, each station placed along the path
     const int way = p.alongSpine() ? 1 : -1;
     const Real lo = std::min(p.stationFrom, p.stationTo), hi = std::max(p.stationFrom, p.stationTo);
-    const auto along = [&](Real station) {   // metres along the path, the way it is driven
-        const Real share = (station - p.stationFrom) / (p.stationTo - p.stationFrom);
-        return std::min(std::max(share, Real(0)), Real(1)) * p.length;
-    };
+    const auto along = [&](Real station) { return alongPathAt(path, station); };   // metres along the path, the way it is driven
     for (const ModelRegulation& reg : regulations) {
         if (reg.street.index != p.street || reg.dir != way) continue;
         const bool atOnePlace = approxEqual(reg.from, reg.to, kWrittenStation);
@@ -588,6 +704,291 @@ bool RoadModel::streetEnd(const ModelStreet& street, int end, Vec2& out) const {
     if (line.count == 0 || line.end() > linePoints.size()) return false;
     out = linePoints[end == 0 ? line.first : line.end() - 1];
     return true;
+}
+
+// ---- kerb parking spaces, and from a door to the road (ADR-0439) --------------------------------------------------------
+
+Real RoadModel::alongPathAt(PathId path, Real station) const {
+    if (path.index >= laneLevel.paths.size()) return 0;
+    const Path& p = laneLevel.paths[path.index];
+    if (!p.onSpine) return 0;
+    const Real share = (station - p.stationFrom) / (p.stationTo - p.stationFrom);
+    return std::min(std::max(share, Real(0)), Real(1)) * p.length;
+}
+
+namespace {
+// Space `k` of a run, with the index it has along its kerb (`first`: the index of the run's first space).
+KerbSpace spaceOfRun(const RoadModel& m, const ModelKerbRun& run, uint32_t first, uint32_t k) {
+    KerbSpace s;
+    s.street = run.street;
+    s.dir = run.dir;
+    s.index = first + k;
+    s.from = run.from + static_cast<Real>(k) * run.spaceLength;
+    s.to = run.from + static_cast<Real>(k + 1) * run.spaceLength;
+    s.length = run.spaceLength;
+    s.width = m.streets[run.street.index].section.parking;
+    return s;
+}
+}  // namespace
+
+std::vector<KerbSpace> RoadModel::kerbSpacesOf(ModelStreetId street) const {
+    std::vector<KerbSpace> out;
+    if (street.index >= streets.size()) return out;
+    const Range runs = kerbRunsOfStreet(*this, street);
+    uint32_t first = 0;
+    int kerb = 0;
+    for (uint32_t r = runs.first; r < runs.end(); ++r) {
+        const ModelKerbRun& run = kerbRuns[r];
+        if (run.dir != kerb) {   // (the other kerb's spaces count from 0 again)
+            kerb = run.dir;
+            first = 0;
+        }
+        for (uint32_t k = 0; k < run.count; ++k) out.push_back(spaceOfRun(*this, run, first, k));
+        first += run.count;
+    }
+    return out;
+}
+
+KerbSpace RoadModel::kerbSpace(ModelStreetId street, int dir, uint32_t index) const {
+    if (street.index >= streets.size()) return KerbSpace();
+    const Range runs = kerbRunsOfStreet(*this, street);
+    uint32_t first = 0;
+    for (uint32_t r = runs.first; r < runs.end(); ++r) {
+        const ModelKerbRun& run = kerbRuns[r];
+        if (run.dir != dir) continue;
+        if (index < first + run.count) return spaceOfRun(*this, run, first, index - first);
+        first += run.count;
+    }
+    return KerbSpace();
+}
+
+std::string RoadModel::kerbSpaceName(const KerbSpace& space) const {
+    if (space.street.index >= streets.size()) return std::string();
+    return streets[space.street.index].id + (space.dir > 0 ? " along " : " against ") + std::to_string(space.index);
+}
+
+bool RoadModel::kerbSpacePose(const KerbSpace& space, KerbSpacePose& out) const {
+    if (space.street.index >= streets.size()) return false;
+    const ModelStreet& S = streets[space.street.index];
+    const StreetLine l = lineOf(*this, S.line);
+    if (l.count == 0) return false;
+    const Vec2 spine = spineDirection(l, space.from, space.to);
+    out.facing = spine * static_cast<Real>(space.dir);
+    out.at = pointAtStation(l.xy, l.stations, l.count, space.middle()) + towardKerb(spine, space.dir) * S.section.parkingOffset;
+    return true;
+}
+
+KerbLanePlace RoadModel::kerbLaneAt(ModelStreetId street, int dir, Real station) const {
+    KerbLanePlace out;
+    if (street.index >= streets.size()) return out;
+    const ModelSection& sec = streets[street.index].section;
+    // A one-way street asked for the kerb its traffic does not run beside: its lanes all run the other way, and the one
+    // nearest THAT kerb is the first of its section (the centre-line side of the way it runs), not the last.
+    const bool runsThatWay = (dir > 0 ? sec.lanesForward : sec.lanesBackward) > 0;
+    if (!runsThatWay && !sec.oneWay()) return out;
+    const bool along = runsThatWay ? dir > 0 : dir < 0;
+    for (std::size_t i = 0; i < laneLevel.paths.size(); ++i) {
+        const Path& p = laneLevel.paths[i];
+        if (p.kind != PathKind::Lane || p.street != street.index || !p.onSpine || p.alongSpine() != along) continue;
+        if (strictlyBefore(station, std::min(p.stationFrom, p.stationTo), kWrittenStation) ||
+            strictlyPast(station, std::max(p.stationFrom, p.stationTo), kWrittenStation))
+            continue;
+        if (p.section.index >= laneLevel.sections.size()) continue;
+        const uint32_t lanesBeside = laneLevel.sections[p.section.index].lanes.count;
+        if (p.indexInSection != (runsThatWay ? lanesBeside - 1 : 0u)) continue;
+        out.path = PathId(static_cast<uint32_t>(i));   // (the first in id order, where two paths meet at the station)
+        out.along = alongPathAt(out.path, station);
+        out.at = laneLevel.pointAt(out.path, out.along);
+        return out;
+    }
+    return out;
+}
+
+KerbSpaceNear RoadModel::nearestKerbSpace(const Vec2& p, Real reach) const {
+    KerbSpaceNear best;
+    best.distance = reach;
+    for (std::size_t r = 0; r < kerbRuns.size();) {
+        const ModelStreetId street = kerbRuns[r].street;
+        const Range runs = kerbRunsOfStreet(*this, street);
+        r = runs.end();
+        const ModelStreet& S = streets[street.index];
+        const StreetLine l = lineOf(*this, S.line);
+        if (l.count == 0) continue;
+        // (a street whose centre line's box is farther than the best so far, its parking band's offset allowed for,
+        // holds no nearer space)
+        const LineBox box = boxOfLine(l.xy, l.count);
+        const Real dx = std::max(Real(0), std::max(box.lo.x - p.x, p.x - box.hi.x));
+        const Real dy = std::max(Real(0), std::max(box.lo.y - p.y, p.y - box.hi.y));
+        if (std::sqrt(dx * dx + dy * dy) - S.section.parkingOffset >= best.distance) continue;
+        for (const KerbSpace& s : kerbSpacesOf(street)) {
+            KerbSpacePose pose;
+            if (!kerbSpacePose(s, pose)) continue;
+            const Real d = (pose.at - p).length();
+            if (d < best.distance) {   // (a search's choice is exact; the first found wins a tie)
+                best.distance = d;
+                best.space = s;
+                best.at = pose.at;
+            }
+        }
+    }
+    return best;
+}
+
+std::vector<RoadLine> RoadModel::roadLines() const {
+    std::vector<RoadLine> out;
+    auto add = [&](ModelStreetId street, ModelJunctionId junction, const Range& line, const ModelSection& section) {
+        if (!section.carriesCars() || line.count < 2) return;   // (a track or a footway is no road to front or park on)
+        RoadLine l;
+        l.street = street;
+        l.junction = junction;
+        l.line = line;
+        l.section = &section;
+        out.push_back(l);
+    };
+    for (std::size_t s = 0; s < streets.size(); ++s) add(ModelStreetId(static_cast<uint32_t>(s)), ModelJunctionId(), streets[s].line, streets[s].section);
+    for (std::size_t j = 0; j < junctions.size(); ++j)
+        for (const ModelStretch& inside : junctions[j].inside) add(ModelStreetId(), ModelJunctionId(static_cast<uint32_t>(j)), inside.line, inside.section);
+    return out;
+}
+
+RoadFrontage RoadModel::frontageAt(const Vec2& door) const {
+    RoadFrontage f;
+    const std::vector<RoadLine> lines = roadLines();
+    std::vector<LineBox> boxes;
+    boxes.reserve(lines.size());
+    for (const RoadLine& l : lines) boxes.push_back(boxOfLine(linePoints.data() + l.line.first, l.line.count));
+    // (the road model does not state that a street is carried over the ground on a bridge, so none is: as the lot
+    // pass's roads all say, lanes/lots_producer.cpp lotRoadInputs)
+    const NearestLine n = nearestLine(
+        door, Real(1e30), lines.size(), boxes.data(),
+        [&](std::size_t i) { return std::pair<const Vec2*, std::size_t>(linePoints.data() + lines[i].line.first, lines[i].line.count); },
+        [](std::size_t) { return Real(0); }, [&](std::size_t i) { return buildingMayFront(lines[i].section->klass, false); });
+    if (n.line < 0) return f;
+    const RoadLine& l = lines[static_cast<std::size_t>(n.line)];
+    const uint32_t k = l.line.first + static_cast<uint32_t>(n.seg);
+    f.street = l.street;
+    f.junction = l.junction;
+    f.section = l.section;
+    f.station = lineStations[k] + (lineStations[k + 1] - lineStations[k]) * n.t;
+    f.distance = n.distance;
+    f.on = n.on;
+    const Vec2 seg = linePoints[k + 1] - linePoints[k];
+    const Vec2 spine = strictlyPast(seg.length(), 0, kSamePoint) ? normalize(seg) : Vec2(1, 0);
+    // which kerb the door is on: the one it lies toward from the centre line (on the line itself: the +1 kerb)
+    f.dir = dot(door - n.on, towardKerb(spine, 1)) >= 0 ? 1 : -1;
+    f.towards = towardKerb(spine, f.dir);
+    return f;
+}
+
+RoadFrontage RoadModel::frontageOn(ModelStreetId street, Real station, int dir) const {
+    RoadFrontage f;
+    if (street.index >= streets.size() || (dir != 1 && dir != -1)) return f;
+    const ModelStreet& S = streets[street.index];
+    const StreetLine l = lineOf(*this, S.line);
+    if (l.count == 0) return f;
+    const Real at = std::min(std::max(station, S.from), S.to);
+    const StationSpot spot = spotAtStation(l.stations, l.count, at);
+    const Vec2 seg = l.xy[spot.seg + 1] - l.xy[spot.seg];
+    const Vec2 spine = strictlyPast(seg.length(), 0, kSamePoint) ? normalize(seg) : Vec2(1, 0);
+    f.street = street;
+    f.section = &S.section;
+    f.station = at;
+    f.dir = dir;
+    f.on = pointAtStation(l.xy, l.stations, l.count, at);
+    f.towards = towardKerb(spine, dir);
+    return f;
+}
+
+bool RoadModel::sidewalkBeside(const RoadFrontage& f, Vec2& out) const {
+    if (!f.valid() || f.section->sidewalk <= 0) return false;
+    out = f.on + f.towards * (f.section->carriagewayHalfWidth() + f.section->sidewalk * Real(0.5));
+    return true;
+}
+
+std::vector<KerbSpaceNear> RoadModel::kerbSpacesNear(const RoadFrontage& f, Real reach, std::size_t most) const {
+    std::vector<KerbSpaceNear> out;
+    if (!f.valid() || most == 0) return out;
+    // THE WALK ALONG THE STREETS: the shortest way from the frontage to each end of each street within reach, going
+    // along streets that have a sidewalk and across from one street's end to another's where they share a junction
+    // or one carries on as the other (the straight line between the two ends: the junction's width).
+    constexpr Real kFar = std::numeric_limits<Real>::infinity();
+    std::vector<std::array<Real, 2>> toEnd(streets.size(), std::array<Real, 2>{kFar, kFar});
+    std::map<uint32_t, std::vector<std::pair<uint32_t, int>>> endsAt;   // junction -> the street ends at it
+    for (std::size_t s = 0; s < streets.size(); ++s)
+        for (int end = 0; end < 2; ++end)
+            if (streets[s].junctions[static_cast<std::size_t>(end)].index < junctions.size())
+                endsAt[streets[s].junctions[static_cast<std::size_t>(end)].index].emplace_back(static_cast<uint32_t>(s), end);
+    const auto walkable = [&](std::size_t s) { return streets[s].section.sidewalk > 0 && streets[s].line.count >= 2; };
+    std::set<std::tuple<Real, uint32_t, int>> open;   // (metres walked, street, end), the nearest first
+    const auto reachEnd = [&](uint32_t s, int end, Real walked) {
+        if (!walkable(s) || walked > reach || walked >= toEnd[s][static_cast<std::size_t>(end)]) return;
+        open.erase(std::make_tuple(toEnd[s][static_cast<std::size_t>(end)], s, end));
+        toEnd[s][static_cast<std::size_t>(end)] = walked;
+        open.insert(std::make_tuple(walked, s, end));
+    };
+    if (f.street.valid()) {
+        const ModelStreet& S = streets[f.street.index];
+        reachEnd(f.street.index, 0, std::max(Real(0), f.station - S.from));
+        reachEnd(f.street.index, 1, std::max(Real(0), S.to - f.station));
+    } else if (f.junction.index < junctions.size()) {
+        // a door fronting a stretch of road inside a junction: the walk starts for every street end at that junction
+        const std::map<uint32_t, std::vector<std::pair<uint32_t, int>>>::const_iterator at = endsAt.find(f.junction.index);
+        if (at != endsAt.end())
+            for (const std::pair<uint32_t, int>& e : at->second) {
+                Vec2 end;
+                if (streetEnd(streets[e.first], e.second, end)) reachEnd(e.first, e.second, (end - f.on).length());
+            }
+    }
+    while (!open.empty()) {
+        const std::tuple<Real, uint32_t, int> next = *open.begin();
+        open.erase(open.begin());
+        const Real walked = std::get<0>(next);
+        const uint32_t s = std::get<1>(next);
+        const int end = std::get<2>(next);
+        const ModelStreet& S = streets[s];
+        reachEnd(s, 1 - end, walked + (S.to - S.from));   // along the street to its other end
+        Vec2 here;
+        if (!streetEnd(S, end, here)) continue;
+        const auto across = [&](uint32_t other, int otherEnd) {
+            Vec2 there;
+            if (other == s || !streetEnd(streets[other], otherEnd, there)) return;
+            reachEnd(other, otherEnd, walked + (there - here).length());
+        };
+        const ModelJunctionId j = S.junctions[static_cast<std::size_t>(end)];
+        if (j.index < junctions.size())
+            for (const std::pair<uint32_t, int>& e : endsAt[j.index]) across(e.first, e.second);
+        const ModelStreetId on = S.carriesOn[static_cast<std::size_t>(end)];
+        if (on.index < streets.size()) {
+            // (the end of the other street that meets this one: the nearer of its two)
+            Vec2 a, b;
+            if (streetEnd(streets[on.index], 0, a) && streetEnd(streets[on.index], 1, b))
+                across(on.index, (a - here).length() <= (b - here).length() ? 0 : 1);
+        }
+    }
+    for (std::size_t r = 0; r < kerbRuns.size();) {
+        const ModelStreetId street = kerbRuns[r].street;
+        r = kerbRunsOfStreet(*this, street).end();
+        const ModelStreet& S = streets[street.index];
+        const bool own = f.street == street;
+        if (!own && toEnd[street.index][0] == kFar && toEnd[street.index][1] == kFar) continue;
+        for (const KerbSpace& s : kerbSpacesOf(street)) {
+            const Real mid = s.middle();
+            Real walked = std::min(toEnd[street.index][0] + (mid - S.from), toEnd[street.index][1] + (S.to - mid));
+            // on the door's own street: straight along it, and across the road to a space on the other kerb
+            if (own) walked = std::min(walked, std::fabs(mid - f.station)) + (s.dir != f.dir ? S.section.travelWidth() : Real(0));
+            if (walked > reach) continue;
+            KerbSpaceNear n;
+            n.space = s;
+            n.distance = walked;
+            KerbSpacePose pose;
+            if (kerbSpacePose(s, pose)) n.at = pose.at;
+            out.push_back(n);
+        }
+    }
+    // (a sort's order is exact; equal walks keep the order of street, kerb and index they were listed in)
+    std::stable_sort(out.begin(), out.end(), [](const KerbSpaceNear& a, const KerbSpaceNear& b) { return a.distance < b.distance; });
+    if (out.size() > most) out.resize(most);
+    return out;
 }
 
 std::vector<ModelLaneId> lanesOf(const RoadModel& m, ModelStreetId s) {
@@ -674,6 +1075,44 @@ const AttachmentKinds& attachmentKinds() {
         return k;
     }();
     return kinds;
+}
+
+bool parseKerbParkingRules(const nlohmann::json& doc, KerbParkingRules& out, std::string* err) {
+    out = KerbParkingRules();
+    auto fail = [&](const std::string& why) {
+        if (err) *err = why;
+        return false;
+    };
+    if (!doc.is_object()) return fail("it is not a table of numbers");
+    if (!doc.contains("space_length") || !doc["space_length"].is_number() || !(doc["space_length"].get<double>() > 0))
+        return fail("it gives no \"space_length\" above zero");
+    if (!doc.contains("clear_of_stop_line") || !doc["clear_of_stop_line"].is_number() || doc["clear_of_stop_line"].get<double>() < 0)
+        return fail("it gives no \"clear_of_stop_line\" (zero or more)");
+    out.spaceLength = doc["space_length"].get<double>();
+    out.clearOfStopLine = doc["clear_of_stop_line"].get<double>();
+    out.usable = true;
+    return true;
+}
+
+const KerbParkingRules& kerbParkingRules() {
+    static const KerbParkingRules rules = [] {
+        const std::string path = assetPath("assets/data/kerb_parking.json");
+        KerbParkingRules r;
+        std::ifstream in(path, std::ios::binary);
+        if (!in) {
+            LOG_WARN << "[roads] " << path << " is missing: no street is given a kerb parking space";
+            return r;
+        }
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::string why;
+        const nlohmann::json doc = nlohmann::json::parse(text, nullptr, false);
+        if (doc.is_discarded() || !parseKerbParkingRules(doc, r, &why))
+            LOG_WARN << "[roads] " << path << ": " << (doc.is_discarded() ? std::string("it is not JSON") : why)
+                     << ": no street is given a kerb parking space";
+        r.hash = bundle::fnv1aStr(text);   // (of the file as it is, usable or not: a model saved without spaces is keyed by it)
+        return r;
+    }();
+    return rules;
 }
 
 bool attach(RoadModel& m, ModelAttachment a, const AttachmentKinds& kinds, std::string* err) {
@@ -872,7 +1311,52 @@ std::string dumpRoadModel(const RoadModel& m) {
         out += fmt("regulation: %s on street %s, %s from %.2f to %.2f, value %.2f\n", r.kind.c_str(),
                    r.street.index < m.streets.size() ? m.streets[r.street.index].id.c_str() : "?",
                    r.dir > 0 ? "along the spine" : "against the spine", r.from, r.to, r.value);
+    for (const ModelKerbRun& run : m.kerbRuns)
+        out += fmt("kerb parking: street %s, the kerb of the traffic running %s the spine, %u spaces of %.2f m from station %.2f to %.2f\n",
+                   run.street.index < m.streets.size() ? m.streets[run.street.index].id.c_str() : "?", run.dir > 0 ? "along" : "against",
+                   run.count, run.spaceLength, run.from, run.to());
     return out;
+}
+
+std::vector<std::string> kerbSpaceLines(const RoadModel& m) {
+    std::vector<std::string> out;
+    for (std::size_t r = 0; r < m.kerbRuns.size();) {
+        const ModelStreetId street = m.kerbRuns[r].street;
+        r = kerbRunsOfStreet(m, street).end();
+        const ModelStreet& S = m.streets[street.index];
+        const std::vector<KerbSpace> spaces = m.kerbSpacesOf(street);
+        for (int dir : {1, -1}) {
+            uint32_t count = 0;
+            for (const KerbSpace& s : spaces) count += s.dir == dir ? 1u : 0u;
+            if (count == 0) continue;
+            out.push_back(fmt("kerb parking on street %s, the kerb of the traffic running %s the spine: %u spaces, each %.2f m long and %.2f m wide, "
+                              "their middle %.2f m from the centre line\n", S.id.c_str(), dir > 0 ? "along" : "against", count,
+                              spaces.front().length, S.section.parking, S.section.parkingOffset));
+            for (const KerbSpace& s : spaces) {
+                if (s.dir != dir) continue;
+                KerbSpacePose pose;
+                m.kerbSpacePose(s, pose);
+                const KerbLanePlace lane = m.kerbLaneBeside(s);
+                out.push_back(fmt("  space %s: stations %.2f to %.2f, a car in it at (%.2f, %.2f) facing (%.3f, %.3f); kerb lane beside it: %s\n",
+                                  m.kerbSpaceName(s).c_str(), s.from, s.to, pose.at.x, pose.at.y, pose.facing.x + Real(0), pose.facing.y + Real(0),   // (+ 0: no "-0.000")
+                                  lane.valid() ? fmt("lane path %u at %.2f m along", lane.path.index, lane.along).c_str() : "none"));
+            }
+        }
+    }
+    return out;
+}
+
+KerbSpaceCounts kerbSpaceCounts(const RoadModel& m) {
+    KerbSpaceCounts c;
+    for (const ModelStreet& S : m.streets) c.streetsWithBand += S.section.parking > 0 ? 1u : 0u;
+    uint32_t last = kNoIndex;
+    for (const ModelKerbRun& run : m.kerbRuns) {
+        if (run.street.index != last) ++c.streets;
+        last = run.street.index;
+        c.spaces += run.count;
+        c.kerbMetres += static_cast<Real>(run.count) * run.spaceLength;
+    }
+    return c;
 }
 
 std::string reportRoadModel(const RoadModel& m) {
@@ -921,6 +1405,11 @@ std::string reportRoadModel(const RoadModel& m) {
         for (const std::pair<const std::string, uint32_t>& k : byKind) out += fmt(" %u %s;", k.second, k.first.c_str());
         out += "\n";
     }
+    {
+        const KerbSpaceCounts c = kerbSpaceCounts(m);
+        out += fmt("  kerb parking (ADR-0439): %u streets state a parking band, %u of them hold spaces: %u spaces along %.1f m of kerb\n",
+                   c.streetsWithBand, c.streets, c.spaces, c.kerbMetres);
+    }
     out += m.built ? "  (planned and built layers)\n" : "  (the planned layer alone)\n";
     out += "\nNot stated yet (left empty, never worked out here):\n";
     for (const std::string& s : m.notStated) out += "  - " + s + "\n";
@@ -943,6 +1432,20 @@ std::string roadModelSvg(const RoadModel& m) {
         out += fmt("<polyline fill='none' stroke='%s' stroke-width='0.35' stroke-opacity='0.6' points='", L.edge == kNoIndex ? "#9a6" : L.dir > 0 ? "#3b6fb6" : "#c0573e");
         for (uint32_t k = L.curve.first; k < L.curve.end(); ++k) out += fmt("%.1f,%.1f ", lanePoints[k].x, lanePoints[k].y);
         out += "'/>\n";
+    }
+    // kerb parking spaces (ADR-0439): each an outline where a car in it stands, as long and as wide as the space
+    for (std::size_t r = 0; r < m.kerbRuns.size();) {
+        const ModelStreetId street = m.kerbRuns[r].street;
+        r = kerbRunsOfStreet(m, street).end();
+        for (const KerbSpace& s : m.kerbSpacesOf(street)) {
+            KerbSpacePose pose;
+            if (!m.kerbSpacePose(s, pose)) continue;
+            const Vec2 along = pose.facing * (s.length * Real(0.5)), across = perp(pose.facing) * (s.width * Real(0.5));
+            out += "<polygon fill='#2e9d6b' fill-opacity='0.35' stroke='#1c6b47' stroke-width='0.15' points='";
+            for (const Vec2& c : {pose.at - along - across, pose.at + along - across, pose.at + along + across, pose.at - along + across})
+                out += fmt("%.2f,%.2f ", c.x, c.y);
+            out += "'/>\n";
+        }
     }
     // junctions: a dot each
     for (const ModelJunction& J : m.junctions)
@@ -979,7 +1482,7 @@ template <class T> constexpr bool isRecord() {
            std::is_same<T, ModelLane>::value || std::is_same<T, ModelConnection>::value || std::is_same<T, ModelRampEnd>::value ||
            std::is_same<T, ModelRamp>::value || std::is_same<T, ModelCrossing>::value || std::is_same<T, ModelAttachment>::value ||
            std::is_same<T, ModelNode>::value || std::is_same<T, ModelNodePoint>::value || std::is_same<T, ModelTurn>::value ||
-           std::is_same<T, ModelRegulation>::value;
+           std::is_same<T, ModelRegulation>::value || std::is_same<T, ModelKerbRun>::value;
 }
 
 struct Writer {
@@ -1059,6 +1562,9 @@ template <class IO, class A> void fields(IO& io, A& a, ModelAttachment*) {
 template <class IO, class R> void fields(IO& io, R& r, ModelRegulation*) {
     io(r.kind); io(r.street); io(r.from); io(r.to); io(r.dir); io(r.value);
 }
+template <class IO, class K> void fields(IO& io, K& k, ModelKerbRun*) {
+    io(k.street); io(k.dir); io(k.from); io(k.spaceLength); io(k.count);
+}
 template <class IO, class S> void fields(IO& io, S& s, ModelLaneSpan*) { io(s.street); io(s.from); io(s.to); }
 template <class IO, class L> void fields(IO& io, L& l, ModelLane*) {
     io(l.id); io(l.kind); io(l.edge); io(l.dir); io(l.slot); io(l.width); io(l.curve); io(l.spineFrom); io(l.spineTo); io(l.streets);
@@ -1095,7 +1601,8 @@ template <class IO, class M> void modelFields(IO& io, M& m) {
     if (m.curves) *curves = *m.curves;
     io(curves->points); io(curves->along);
     m.curves = std::move(curves);
-    io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.regulations); io(m.notStated);
+    io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.regulations); io(m.kerbRuns);
+    io(m.notStated);
     io(m.problems); io(m.armsInRing);
 }
 

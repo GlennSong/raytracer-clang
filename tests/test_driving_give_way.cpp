@@ -363,13 +363,14 @@ struct Sim {
     // `lights`: register the light clock, so a control with lights runs its programme (issue #261); without it they are
     // dark (here: fixed at their first phase, as the test controls name no `when_dark`). `room`: register the room step
     // (issue #264), with the rule set's room_to_wait_inside as `roomToWaitInside`.
-    Sim(TestRoads roads, const char* control, uint32_t decideEvery = DrivingSettings::kDefaultDecideEveryTicks,
+    // (`decideInterval`: seconds between a driver's decisions, DrivingSettings::decideInterval)
+    Sim(TestRoads roads, const char* control, Real decideInterval = DrivingSettings::kDefaultDecideInterval,
         bool lights = false, bool room = false, bool roomWaitInside = true)
         : t(std::move(roads)), d(&t.model), classes(simClasses()), lightsOn(lights), roomOn(room),
           roomToWaitInside(roomWaitInside) {
         d.setVehicleClasses(classes);
         DrivingSettings s;
-        s.decideEveryTicks = decideEvery;
+        s.decideInterval = decideInterval;
         s.laneChanges = false;
         d.setSettings(s);
         ok = giveRules(control);
@@ -648,7 +649,7 @@ uint64_t carsHash(const Driving& d) {
 TEST_CASE(give_way_1b_a_queue_announces_one_behind_another) {
     // Five cars queued at rest on the road arriving at the four-way from the west, all going straight on: the fifth's
     // announcement on the first crossing point is no earlier than the fourth's plus a following interval, and so on.
-    Sim s(driving_test::gridRoads(3, 3), kUncontrolled, 1);
+    Sim s(driving_test::gridRoads(3, 3), kUncontrolled, kStep);   // (every driver decides every tick)
     CHECK(s.ok);
     for (uint32_t i = 0; i < 5; ++i) approach(s, i, 1, 1, kEast, 1 + i * 6.5, kEast);
     s.run(2 * kStep);
@@ -1570,7 +1571,7 @@ engine::PathId turnAt(const Sim& s, uint32_t r, uint32_t c, Heading in, Heading 
 }  // namespace
 
 TEST_CASE(lights_18_the_yellow_and_all_red_follow_the_formula) {
-    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideInterval, true);
     CHECK(s.ok);
     const LightTiming t = labTiming(s);
     // The ITE kinematic formula: reaction + v / (2 a + 2 g G), a = 10 ft/s2, held between 3 and 6 s.
@@ -1609,7 +1610,7 @@ TEST_CASE(lights_18_the_yellow_and_all_red_follow_the_formula) {
 TEST_CASE(lights_19_nothing_that_crosses_is_green_together_and_the_state_is_a_pure_function_of_time) {
     for (const char* control : {kLabLights, "{ settle = { 'light', 'movement' }, gives_way_on_green = { 'far_turn' }, "
                                             "arrow = { 'far_turn' } }"}) {
-        Sim s(driving_test::gridRoads(3, 3), control, DrivingSettings::kDefaultDecideEveryTicks, true);
+        Sim s(driving_test::gridRoads(3, 3), control, DrivingSettings::kDefaultDecideInterval, true);
         CHECK(s.ok);
         const RightOfWay& row = s.d.rightOfWay();
         const std::vector<std::string> unsafe = checkSignalProgrammes(s.t.model, s.d.ruleSet(), row);
@@ -1645,7 +1646,7 @@ TEST_CASE(lights_19_nothing_that_crosses_is_green_together_and_the_state_is_a_pu
         }
         CHECK(differ == 0);
         // A second model built from the same road and rules has the same programmes.
-        Sim again(driving_test::gridRoads(3, 3), control, DrivingSettings::kDefaultDecideEveryTicks, true);
+        Sim again(driving_test::gridRoads(3, 3), control, DrivingSettings::kDefaultDecideInterval, true);
         for (std::size_t p = 0; p < row.phases.size() && p < again.d.rightOfWay().phases.size(); ++p) {
             CHECK(row.phases[p].green == again.d.rightOfWay().phases[p].green);
             CHECK(row.phases[p].yellow == again.d.rightOfWay().phases[p].yellow);
@@ -1655,7 +1656,7 @@ TEST_CASE(lights_19_nothing_that_crosses_is_green_together_and_the_state_is_a_pu
 }
 
 TEST_CASE(lights_20_a_car_at_a_red_stops_at_the_line_and_goes_on_green) {
-    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideInterval, true);
     CHECK(s.ok);
     const engine::PathId straight = turnAt(s, 1, 1, kEast, kEast);
     CHECK(straight.valid());
@@ -1687,13 +1688,13 @@ TEST_CASE(lights_21_the_yellow_dilemma_both_ways) {
     // green, or cannot (a metre the other way) and must enter before the red. Both kinds happen.
     TestRoadSpec spec;
     spec.roadLength = 150;
-    Sim s(driving_test::gridRoads(3, 3, spec), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    Sim s(driving_test::gridRoads(3, 3, spec), kLabLights, DrivingSettings::kDefaultDecideInterval, true);
     CHECK(s.ok);
     const LightTiming t = labTiming(s);
     const engine::PathId straight = turnAt(s, 1, 1, kEast, kEast);
     const engine::PathId lane = s.t.laneArriving(1, 1, kEast, 0);
     const Real laneLength = s.t.model.laneLevel.paths[lane.index].length;
-    const Real interval = static_cast<Real>(DrivingSettings::kDefaultDecideEveryTicks) * kStep;
+    const Real interval = DrivingSettings().decideIntervalAt(kStep);   // (6 ticks of a sixtieth of a second)
     constexpr Real kMargin = 1.0;
     // car -> when the change (yellow, then all-red) it was judged at the start of ends
     std::map<uint32_t, double> mustStop, mustGo;
@@ -1765,7 +1766,7 @@ TEST_CASE(lights_21_the_yellow_dilemma_both_ways) {
 TEST_CASE(lights_22_a_far_turn_waits_inside_while_three_oncoming_cars_pass) {
     // D4's staged test 1: on a plain green, a far-turning car pulls forward to its place to wait inside, waits there
     // while three oncoming cars pass, and goes in the gap after them.
-    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideInterval, true);
     CHECK(s.ok);
     const Heading far = driving_test::farTurnFrom(kEast, DrivesOn::Left);
     const engine::PathId turn = turnAt(s, 1, 1, kEast, far);
@@ -1801,7 +1802,7 @@ TEST_CASE(lights_23_with_no_gap_the_far_turn_completes_on_the_change) {
     // D4's staged test 2: oncoming traffic with no gap the whole green; the far-turning car waits inside and completes
     // on the yellow or the all-red; the cross street's first car, waiting at its red, does not come onto the junction
     // until it is clear.
-    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideInterval, true);
     CHECK(s.ok);
     const Heading far = driving_test::farTurnFrom(kEast, DrivesOn::Left);
     const engine::PathId turn = turnAt(s, 1, 1, kEast, far);
@@ -1853,7 +1854,7 @@ TEST_CASE(lights_24_opposing_far_turns_both_shapes) {
         TestRoadSpec spec;
         spec.lanesEachWay = shape.first;
         spec.cornerRadius = shape.second;
-        Sim s(driving_test::gridRoads(3, 3, spec), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+        Sim s(driving_test::gridRoads(3, 3, spec), kLabLights, DrivingSettings::kDefaultDecideInterval, true);
         CHECK(s.ok);
         const Heading farE = driving_test::farTurnFrom(kEast, DrivesOn::Left);
         const Heading farW = driving_test::farTurnFrom(kWest, DrivesOn::Left);
@@ -1884,7 +1885,7 @@ TEST_CASE(lights_24_opposing_far_turns_both_shapes) {
 TEST_CASE(lights_25_ten_minutes_of_random_traffic_at_a_four_way_with_lights) {
     // D4's staged test 6, the lights version: no overlap, no loop, every stop with a reason, nobody onto a red, and no car
     // inside the junction at the start of two greens in a row.
-    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideInterval, true);
     CHECK(s.ok);
     randomTraffic(s, 1, 1, {kEast, kNorth, kWest, kSouth}, 10 * 60);
     s.report("ten minutes, a four-way with lights");
@@ -1994,7 +1995,7 @@ TEST_CASE(room_26_two_approaches_room_for_one_exactly_one_enters_the_same_every_
     std::vector<uint32_t> winners;
     std::vector<uint64_t> hashes;
     for (int run = 0; run < 2; ++run) {
-        Sim s(driving_test::gridRoads(3, 3), kUncontrolled, 1, false, true);
+        Sim s(driving_test::gridRoads(3, 3), kUncontrolled, kStep, false, true);   // (every driver decides every tick)
         CHECK(s.ok);
         const engine::PathId beyond = s.t.laneLeaving(1, 1, kEast, 0);
         park(s, 100, beyond, 14.0);
@@ -2031,7 +2032,7 @@ TEST_CASE(room_27_a_full_stopped_lane_beyond_for_ten_minutes_nobody_in_the_box_c
     // The brief's test 2. The lane beyond junction (1,1) heading east is full of parked cars end to end. Cars from the
     // west want it; cross traffic north and south goes straight on. For ten minutes: nobody comes to rest in the box, no
     // car from the west even enters it, and the cross traffic keeps moving.
-    Sim s(driving_test::gridRoads(3, 3), kUncontrolled, DrivingSettings::kDefaultDecideEveryTicks, false, true);
+    Sim s(driving_test::gridRoads(3, 3), kUncontrolled, DrivingSettings::kDefaultDecideInterval, false, true);
     CHECK(s.ok);
     const engine::PathId beyond = s.t.laneLeaving(1, 1, kEast, 0);
     uint32_t parked = 1000;
@@ -2064,7 +2065,7 @@ TEST_CASE(room_28_a_bus_does_not_enter_the_first_of_two_close_junctions_until_it
     // Taken away, the bus is granted room through both and goes, never at rest in a box.
     TestRoadSpec spec;
     spec.columnRoadLengths = {100, 8, 100};
-    Sim s(driving_test::gridRoads(1, 4, spec), kUncontrolled, DrivingSettings::kDefaultDecideEveryTicks, false, true);
+    Sim s(driving_test::gridRoads(1, 4, spec), kUncontrolled, DrivingSettings::kDefaultDecideInterval, false, true);
     CHECK(s.ok);
     const engine::PathId beyond = s.t.laneLeaving(0, 2, kEast, 0);
     park(s, 100, beyond, 9.0);
@@ -2098,7 +2099,7 @@ TEST_CASE(room_29_a_green_with_room_beyond_empties_a_queue_one_car_every_two_sec
     // must make it no slower than without it (below: the following model's own figure is the rest).
     Real mean[2] = {0, 0};
     for (int room = 0; room < 2; ++room) {
-        Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true, room == 1);
+        Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideInterval, true, room == 1);
         CHECK(s.ok);
         const engine::PathId straight = turnAt(s, 1, 1, kEast, kEast);
         CHECK(stepUntilLamp(s, straight, Lamp::Red, 120));
@@ -2279,7 +2280,7 @@ TEST_CASE(room_30_no_car_comes_to_rest_on_the_far_crosswalk) {
     x.otherTo = 3.5;
     roads.model.laneLevel.crossings.push_back(x);
     engine::indexCrossings(roads.model.laneLevel);
-    Sim s(std::move(roads), kUncontrolled, DrivingSettings::kDefaultDecideEveryTicks, false, true);
+    Sim s(std::move(roads), kUncontrolled, DrivingSettings::kDefaultDecideInterval, false, true);
     CHECK(s.ok);
     park(s, 100, beyond, 13.0);
     approach(s, 0, 1, 1, kEast, 30, kEast);
@@ -2301,7 +2302,7 @@ TEST_CASE(room_31_a_queue_backing_up_from_a_red_never_leaves_a_car_at_rest_in_th
     for (int room = 0; room < 2; ++room) {
         TestRoadSpec spec;
         spec.columnRoadLengths = {30, 100};
-        Sim s(driving_test::gridRoads(3, 3, spec), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true, room == 1);
+        Sim s(driving_test::gridRoads(3, 3, spec), kLabLights, DrivingSettings::kDefaultDecideInterval, true, room == 1);
         CHECK(s.ok);
         uint32_t next = 0;
         const engine::PathId out = s.t.laneLeaving(1, 1, kEast, 0);
@@ -2337,7 +2338,7 @@ TEST_CASE(room_32_two_junctions_six_metres_apart_never_ring_and_grants_never_lea
     // turns leaving one lane can also show the D4 case the lab does not check either: a car following a far turn that
     // waited inside, its tail off the lane as it moves off (printed, not checked).
     for (int lit = 0; lit < 2; ++lit) {
-    Sim s(elevenFourteen(6), lit ? kLabLights : kUncontrolled, DrivingSettings::kDefaultDecideEveryTicks, lit == 1, true);
+    Sim s(elevenFourteen(6), lit ? kLabLights : kUncontrolled, DrivingSettings::kDefaultDecideInterval, lit == 1, true);
     CHECK(s.ok);
     const RoomRoadReport road = s.d.roomRoadReport();
     std::printf("    %s: %u short stretches, %u pairs of turns through both lit junctions too seldom in turn (closed)\n",
@@ -2381,7 +2382,7 @@ TEST_CASE(room_33_the_same_every_run) {
     std::vector<uint64_t> first;
     int differ = 0;
     for (int run = 0; run < 2; ++run) {
-        Sim s(elevenFourteen(6), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true, true);
+        Sim s(elevenFourteen(6), kLabLights, DrivingSettings::kDefaultDecideInterval, true, true);
         CHECK(s.ok);
         uint32_t next = 0;
         for (int second = 0; second < 180; ++second) {
@@ -2398,7 +2399,7 @@ TEST_CASE(room_34_the_back_of_a_moving_queue_is_where_it_would_come_to_rest) {
     // Room is measured to where the last car would come to rest braking comfortably, not to where it is now. A car 8 m
     // beyond the box doing 8 m/s (it rests 16 m further on, braking at 2 m/s2) leaves room; the same car at rest does not.
     for (int moving = 0; moving < 2; ++moving) {
-        Sim s(driving_test::gridRoads(3, 3), kUncontrolled, DrivingSettings::kDefaultDecideEveryTicks, false, true);
+        Sim s(driving_test::gridRoads(3, 3), kUncontrolled, DrivingSettings::kDefaultDecideInterval, false, true);
         CHECK(s.ok);
         const engine::PathId beyond = s.t.laneLeaving(1, 1, kEast, 0);
         if (moving) {
@@ -2455,7 +2456,7 @@ TEST_CASE(give_way_284_a_the_hard_gap_is_never_below_the_cars_own_stopping_time)
     CHECK(s.ok);
     const JunctionNumbers& n = s.d.junctionNumbers();
     const VehicleClass& bus = s.d.vehicleClasses().at(1);
-    const Real decide = DrivingSettings::kDefaultDecideEveryTicks * kStep;
+    const Real decide = DrivingSettings().decideIntervalAt(kStep);   // (6 ticks of a sixtieth of a second)
     const Real v = 35 * 0.44704;
     const Real stopping = decide + v / (2 * bus.hardestBrake);
     std::printf("    the bus's hardest braking %.1f m/s2: at 35 mph it needs %.2f s to stop; the hard gap is %.2f s (gap_hard "
@@ -2480,7 +2481,7 @@ TEST_CASE(give_way_284_f1_no_claim_through_close_junctions_takes_the_next_juncti
     // turn at the second junction clear: at the tick it is granted, car 1's announcement on their crossing point leaves car
     // 0 the comfortable gap one way or the other. (Car 1 may still wait for car 0 later, if car 0 went ahead with the gap
     // and was slower than it reckoned: that is first in goes first, not a turn taken.)
-    Sim s(elevenFourteen(6), kUncontrolled, DrivingSettings::kDefaultDecideEveryTicks, false, true);
+    Sim s(elevenFourteen(6), kUncontrolled, DrivingSettings::kDefaultDecideInterval, false, true);
     CHECK(s.ok);
     const Heading far = driving_test::farTurnFrom(kEast, DrivesOn::Left);
     const engine::PathId from = s.t.laneArriving(1, 1, kEast, 0);
@@ -2543,7 +2544,7 @@ TEST_CASE(give_way_284_f2_a_claim_through_close_lights_is_checked_again_until_th
     // car's arrival allows for the car ahead of it, the claim needs its way through both junctions seen clear of every car
     // that could make it wait, and it is worked out afresh every tick while the car can still stop at the first line
     // (given back if it no longer holds). Nobody enters on red, nobody rests in a box but by giving way.
-    Sim s(elevenFourteen(6), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true, true);
+    Sim s(elevenFourteen(6), kLabLights, DrivingSettings::kDefaultDecideInterval, true, true);
     CHECK(s.ok);
     uint32_t next = 0;
     // (Fed harder -- a car every 6 s an arm -- the shape's two uncoordinated programmes back queues up through the boxes
@@ -2619,7 +2620,7 @@ TEST_CASE(give_way_284_h_congested_random_traffic_mixed_classes_no_body_touches_
     };
     for (const Case& k : {Case{"uncontrolled", kUncontrolled, false}, Case{"all-way stop", kAllWayStop, false},
                           Case{"lights", kLabLights, true}}) {
-        Sim s(driving_test::gridRoads(3, 3, sweptFor()), k.control, DrivingSettings::kDefaultDecideEveryTicks, k.lights, true);
+        Sim s(driving_test::gridRoads(3, 3, sweptFor()), k.control, DrivingSettings::kDefaultDecideInterval, k.lights, true);
         CHECK(s.ok);
         Measurements m;
         s.d.attachMeasurements(&m);
@@ -2660,7 +2661,7 @@ TEST_CASE(give_way_284_h_the_light_programmes_are_checked_when_the_rules_are_han
     // ITEM H. checkSignalProgrammes (no two movements whose paths meet let in together unless the rule set allows it) ran
     // only in tests. Now Driving::useRules runs it once the programmes are timed and keeps what it finds
     // (signalProblems), among the right-of-way table's notes too, so a host that reports the table reports a breach.
-    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
+    Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideInterval, true);
     CHECK(s.ok);
     const std::vector<std::string> direct = checkSignalProgrammes(s.t.model, s.d.ruleSet(), s.d.rightOfWay());
     CHECK(s.d.signalProblems() == direct);

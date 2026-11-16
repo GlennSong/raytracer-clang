@@ -3,8 +3,8 @@
 
 // THE LANE GRAPH (driving-model-design.md 5.2, issue #236): the road as the driving model reads it. Every curve a car
 // can be on (a PATH: a lane, or a CONNECTOR, the path through a junction from an arriving lane to a leaving lane),
-// how lanes lie side by side (SECTIONS), the junctions, where two paths or a path and a crosswalk or rail track meet
-// (CROSSING POINTS) and the places to leave a car (CAR SPACES).
+// how lanes lie side by side (SECTIONS), the junctions, and where two paths or a path and a crosswalk or rail track
+// meet (CROSSING POINTS).
 //
 // This file holds the types, the save and load (one bundle section), a structural check and a text dump. The lane
 // level (lanes/lane_level.h) fills it from the road model's built layer; the driving model reads it through the model
@@ -228,11 +228,9 @@ struct Junction {
     uint32_t modelJunction = kNoIndex;   // the road model's junction it is (road_model.h; ADR-0426); kNoIndex: none
 };
 
-// A PLACE TO LEAVE A CAR: a stretch of a lane tagged for it, or of a bay.
-struct CarSpace {
-    PathId lane;
-    Real from = 0, to = 0;
-};
+// (PLACES TO LEAVE A CAR are not here. The kerb parking spaces are the road model's, stated on its streets
+// (road_model.h RoadModel::kerbRuns, ADR-0439); the kerb lane path beside a space is asked of the model:
+// RoadModel::kerbLaneBeside. The `CarSpace` list this table once declared was never filled and is deleted.)
 
 struct LaneGraph {
     // The name tables (filled from the data files; the graph only carries the names it refers to by index).
@@ -245,7 +243,6 @@ struct LaneGraph {
                                             // other, aFrom)
     std::vector<Crosswalk> crosswalks;      // junction by junction (those on no junction last)
     std::vector<Track> tracks;
-    std::vector<CarSpace> carSpaces;        // by (lane, from)
 
     // The shared arrays the ranges point into.
     std::vector<Vec2> points;           // path centre lines, plan position
@@ -303,7 +300,6 @@ bool operator==(const CrossingPoint& a, const CrossingPoint& b);
 bool operator==(const Crosswalk& a, const Crosswalk& b);
 bool operator==(const Track& a, const Track& b);
 bool operator==(const Junction& a, const Junction& b);
-bool operator==(const CarSpace& a, const CarSpace& b);
 bool operator==(const LaneGraph& a, const LaneGraph& b);   // field for field, exactly
 inline bool operator!=(const LaneGraph& a, const LaneGraph& b) { return !(a == b); }
 

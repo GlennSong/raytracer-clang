@@ -1912,7 +1912,30 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         // Thousands of separate instances, so the per-instance distance cull in
         // RenderSystem actually bites here.
         g.drawClass = engine::DrawClass::GroundPaint;
+        // WHICH SPACES ARE PAINTED: the ones this level's cars park in (ADR-0439). Where the new driving drives the
+        // level's cars (v2, its drivers handed over above), those are THE ROAD MODEL'S kerb spaces
+        // (RoadModel::kerbSpacesOf: stated once, asked here), each outline where a car in the space stands
+        // (kerbSpacePose). Where the old driving drives, they are the old model's own bays, which it lays at build and
+        // parks in; that list goes with the old driving.
+        const engine::RoadModel* spacesOf =
+            sim_.drivingHost().active() && sim_.drivingV2() ? sim_.drivingV2()->model() : nullptr;
+        // The outline mesh above is drawn for a space this long (its ticks 3.12 m either side of the middle); a space of
+        // another length stretches it, so the ticks keep their place in the space.
+        constexpr Real kOutlineDrawnFor = 7.0;
+        if (spacesOf) {
+            for (std::size_t s = 0; s < spacesOf->streets.size(); ++s)
+                for (const engine::KerbSpace& space : spacesOf->kerbSpacesOf(engine::ModelStreetId(static_cast<uint32_t>(s)))) {
+                    engine::KerbSpacePose pose;
+                    if (!spacesOf->kerbSpacePose(space, pose)) continue;
+                    // (the mesh's +x is the kerb side of a car facing +z, as for a bay: the outer line lies along the kerb)
+                    const Real y = groundAt(pose.at.x, pose.at.y) + engine::kRoadMarkLift;
+                    g.transforms.push_back(Mat4::trs(Vec3(pose.at.x, y, pose.at.y),
+                                                     Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(pose.facing.x, pose.facing.y)),
+                                                     Vec3(space.width, 1, space.length / kOutlineDrawnFor)));
+                }
+        }
         for (const CitySim::ParkingBay& b : sim_.parkingBays()) {
+            if (spacesOf) break;           // (the model's spaces are painted; the old model parks no car here)
             if (b.garage >= 0) continue;   // a garage stall: the garage paints its own
             // Bay paint is PAINT: it rides at the road mesher's own stripe
             // lift (kRoadMarkLift, 2 cm), not a hand-picked 5 cm —

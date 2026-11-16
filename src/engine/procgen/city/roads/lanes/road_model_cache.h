@@ -73,10 +73,15 @@ LaneGraphSummary summarizeLaneGraph(const LaneGraph& graph, const LaneGraphBuild
 std::string describeLaneGraphSummary(const LaneGraphSummary& s);
 
 // THE KEY of the model built from roads `roadsKey`, the road file's layout and lane facts `laneFacts` (road_layout.h
-// laneLevelKey), the turn table `turnTable` (laneTurnRules().hash) and `opts` (its vehicles in their order), by builder
-// version `builderVersion` (a parameter so a test can show a bump changes it). Any of them changing makes another key.
-uint64_t roadModelCacheKey(uint64_t roadsKey, uint64_t laneFacts, uint64_t turnTable, const LaneGraphOptions& opts,
+// laneLevelKey), the data tables the model is made by `tables` (roadModelTablesHash) and `opts` (its vehicles in their
+// order), by builder version `builderVersion` (a parameter so a test can show a bump changes it). Any of them changing
+// makes another key.
+uint64_t roadModelCacheKey(uint64_t roadsKey, uint64_t laneFacts, uint64_t tables, const LaneGraphOptions& opts,
                            uint32_t builderVersion = kLaneGraphBuildVersion);
+// THE DATA TABLES A SAVED MODEL IS MADE BY, as one number for its key: the turn table's hash (laneTurnRules().hash:
+// which lane takes which turn, ADR-0426) and the kerb parking rules' (kerbParkingRules().hash: how a parking band is cut
+// into spaces, ADR-0439), each the hash of its file's bytes. Editing either file makes every saved model again.
+uint64_t roadModelTablesHash(uint64_t turnTable, uint64_t kerbParking);
 // The file for a key in `dir`: <dir>/<key as 16 hex digits>.roadmodel
 std::string roadModelCachePath(const std::string& dir, uint64_t key);
 

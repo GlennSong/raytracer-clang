@@ -679,6 +679,11 @@ public:
     // scenery cars at build; an arriving driver claims a free bay on its
     // arrival link instead of the old grass verge, and departure frees it.
     // occupant: -1 free, kBayScenery build-time filler, else the agent id.
+    // THESE ARE THE OLD DRIVING'S OWN BAYS, laid at build by its own rule (a bay every 7 m along a chain of links, 22 m
+    // back from each end) and parked in by its cars only. They are NOT the road model's kerb parking spaces
+    // (engine::RoadModel::kerbRuns, ADR-0439: stated once, kept clear of each arm's stop line), which the new driving
+    // parks in and the paint draws on a level it drives. The two lists differ (the traffic lab: 1294 bays, 1098
+    // spaces); this one goes with the old driving.
     static constexpr int kBayScenery = -2;
     struct ParkingBay {
         engine::Vec2 pos, heading;   // bay centre + facing (along the link)

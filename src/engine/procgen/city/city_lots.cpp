@@ -1887,8 +1887,9 @@ class LotRoads {
 public:
     // WHAT A BUILDING MAY FRONT (Glenn, 2026-09-29: "buildings shouldn't face a freeway as a road since that's
     // not an accessible road"): a door, its walk and a plaza's mouths reach for city streets, never a freeway or
-    // a ramp, nor a street carried over the ground on a bridge. The one place the rule is written.
-    static bool mayFront(const LotRoad& r) { return r.klass != RoadClass::Freeway && r.klass != RoadClass::Ramp && !r.overGround; }
+    // a ramp, nor a street carried over the ground on a bridge. The rule is written once (road_network.h
+    // buildingMayFront); the road model answers "where does this door front the road" by it too (ADR-0439).
+    static bool mayFront(const LotRoad& r) { return buildingMayFront(r.klass, r.overGround); }
     static bool freewayOrRamp(RoadClass k) { return k == RoadClass::Freeway || k == RoadClass::Ramp; }
     // A service lane the lot pass cut through a block: its centre line's two ends and its paved width.
     struct Alley { Vec2 a, b; Real width = 0; };
@@ -1905,12 +1906,7 @@ public:
         if (!in_) return;
         boxes_.reserve(in_->roads.size());
         for (const LotRoad& r : in_->roads) {
-            Box b;
-            for (const Vec2& p : r.line) {
-                b.lo = Vec2(std::min(b.lo.x, p.x), std::min(b.lo.y, p.y));
-                b.hi = Vec2(std::max(b.hi.x, p.x), std::max(b.hi.y, p.y));
-            }
-            boxes_.push_back(b);
+            boxes_.push_back(boxOfLine(r.line.data(), r.line.size()));
             anyNotToFront_ = anyNotToFront_ || (r.line.size() >= 2 && !mayFront(r));
         }
     }
@@ -2068,33 +2064,28 @@ private:
     }
     // THE NEAREST ROAD TO `p` among those `keep` passes, nearer than `reach`: by its centre line, or (`surface`) by
     // its carriageway's edge (then `distance` is from that edge and may be negative: on the road). The first found
-    // wins a tie. A road whose bounding box is already farther than the best so far is passed over unread.
+    // wins a tie. A road whose bounding box is already farther than the best so far is passed over unread. THE SEARCH
+    // ITSELF IS THE SHARED ONE (polyline.h nearestLine, ADR-0439): the road model answers "the road nearest this
+    // point" with the same function over the same lines (RoadModel::frontageAt), so the two cannot differ.
     template <class Keep> Found nearest(const Vec2& p, Real reach, bool surface, Keep keep) const {
         Found f;
         f.distance = reach;
         if (!in_) return f;
-        for (std::size_t ri = 0; ri < in_->roads.size(); ++ri) {
-            const LotRoad& r = in_->roads[ri];
-            if (r.line.size() < 2 || !keep(r)) continue;
-            const Real off = surface ? r.halfWidth : Real(0);
-            const Box& bx = boxes_[ri];
-            const Real dx = std::max(Real(0), std::max(bx.lo.x - p.x, p.x - bx.hi.x));
-            const Real dy = std::max(Real(0), std::max(bx.lo.y - p.y, p.y - bx.hi.y));
-            if (std::sqrt(dx * dx + dy * dy) - off >= f.distance) continue;
-            for (std::size_t k = 0; k + 1 < r.line.size(); ++k) {
-                Vec2 q;
-                const Real d = distanceTo(p, r.line[k], r.line[k + 1], &q) - off;
-                if (d < f.distance) { f.distance = d; f.road = static_cast<int>(ri); f.on = q; }
-            }
-        }
+        const std::vector<LotRoad>& roads = in_->roads;
+        const NearestLine n = nearestLine(
+            p, reach, roads.size(), boxes_.data(),
+            [&](std::size_t i) { return std::pair<const Vec2*, std::size_t>(roads[i].line.data(), roads[i].line.size()); },
+            [&](std::size_t i) { return surface ? roads[i].halfWidth : Real(0); }, [&](std::size_t i) { return keep(roads[i]); });
+        f.distance = n.distance;
+        f.road = n.line;
+        if (n.line >= 0) f.on = n.on;
         return f;
     }
 
-    struct Box { Vec2 lo = Vec2(Real(1e30), Real(1e30)), hi = Vec2(Real(-1e30), Real(-1e30)); };
     const LotRoadInputs* in_ = nullptr;
     Real clearance_ = 0;
     std::vector<Alley> alleys_;
-    std::vector<Box> boxes_;       // each road's centre line's bounding box, beside the inputs' roads
+    std::vector<LineBox> boxes_;   // each road's centre line's bounding box, beside the inputs' roads
     bool anyNotToFront_ = false;
 };
 

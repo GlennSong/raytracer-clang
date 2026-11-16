@@ -20,9 +20,10 @@ namespace {
 // 11: no control, posted limit, road class, turn kind or merging path: the road model's facts, asked of it, ADR-0436;
 // 12: no regulations nor their kind names (the road model states them and answers for a path), each lane path's stretch
 // of its road's spine, ADR-0437; 13: no through partner on an arriving lane: the road model's junction states the pair
-// and answers which approaches face each other, ADR-0438).
+// and answers which approaches face each other, ADR-0438; 14: no car spaces: the list was never filled, and the kerb
+// parking spaces are stated in the road model, ADR-0439).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 13;
+constexpr uint32_t kVersion = 14;
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
 // A closed outline (a junction's box, a crosswalk) has at least this many corners; a track's line two points.
@@ -169,11 +170,6 @@ void putItem(BinWriter& w, const Track& t) {
     putItem(w, t.line);
     w.put(t.railTrack);
 }
-void putItem(BinWriter& w, const CarSpace& s) {
-    putItem(w, s.lane);
-    w.put(s.from);
-    w.put(s.to);
-}
 void putItem(BinWriter& w, const BendPiece& b) {
     w.put(b.from);
     w.put(b.radius);
@@ -221,7 +217,6 @@ bool getItem(BinReader& r, CrossingPoint& c) {
 }
 bool getItem(BinReader& r, Crosswalk& c) { return getItem(r, c.outline) && getItem(r, c.junction) && r.get(c.walkLink); }
 bool getItem(BinReader& r, Track& t) { return getItem(r, t.line) && r.get(t.railTrack); }
-bool getItem(BinReader& r, CarSpace& s) { return getItem(r, s.lane) && r.get(s.from) && r.get(s.to); }
 bool getItem(BinReader& r, BendPiece& b) { return r.get(b.from) && r.get(b.radius); }
 
 // The fewest bytes one element of a list takes on disk (a default one, written): how a count read from a damaged file
@@ -495,7 +490,6 @@ bool operator==(const Junction& a, const Junction& b) {
            a.box == b.box && a.arriving == b.arriving && a.leaving == b.leaving &&
            a.modelJunction == b.modelJunction;
 }
-bool operator==(const CarSpace& a, const CarSpace& b) { return a.lane == b.lane && a.from == b.from && a.to == b.to; }
 namespace {
 bool sameBends(const std::vector<BendPiece>& a, const std::vector<BendPiece>& b) {
     return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](const BendPiece& x, const BendPiece& y) {
@@ -507,7 +501,7 @@ bool operator==(const LaneGraph& a, const LaneGraph& b) {
     return a.vehicleTagNames == b.vehicleTagNames &&
            a.paths == b.paths && a.sections == b.sections &&
            a.junctions == b.junctions && a.crossings == b.crossings && a.crosswalks == b.crosswalks &&
-           a.tracks == b.tracks && a.carSpaces == b.carSpaces &&
+           a.tracks == b.tracks &&
            sameVec2s(a.points, b.points) && a.along == b.along && a.heights == b.heights &&
            a.nextPaths == b.nextPaths && a.sectionLanes == b.sectionLanes && a.laneLines == b.laneLines &&
            a.junctionConnectors == b.junctionConnectors && a.junctionLanes == b.junctionLanes &&
@@ -984,22 +978,6 @@ std::vector<std::string> validate(const LaneGraph& g) {
         if (!inRange(g.tracks[t].line, g.planPoints.size()) || g.tracks[t].line.count < kMinLinePoints)
             out.push_back(fmt("track %u: its line (%u points from %u) is out of range or too short (%zu plan points)", t,
                               g.tracks[t].line.count, g.tracks[t].line.first, g.planPoints.size()));
-
-    // Car spaces.
-    for (uint32_t s = 0; s < g.carSpaces.size(); ++s) {
-        const CarSpace& sp = g.carSpaces[s];
-        const std::string who = fmt("car space %u", s);
-        if (sp.lane.index >= nPaths || g.paths[sp.lane.index].kind != PathKind::Lane) {
-            out.push_back(fmt("%s: %s is not a lane", who.c_str(), pathName(g, sp.lane.index).c_str()));
-            continue;
-        }
-        checkStretch(who, sp.lane.index, sp.from, sp.to);
-        if (s > 0) {
-            const CarSpace& y = g.carSpaces[s - 1];
-            if (y.lane.index > sp.lane.index || (y.lane == sp.lane && y.from > sp.from))
-                out.push_back(fmt("%s is out of order after car space %u", who.c_str(), s - 1));
-        }
-    }
     return out;
 }
 
@@ -1235,9 +1213,9 @@ std::string dumpText(const LaneGraph& g) {
     uint32_t lanes = 0;
     for (const Path& p : g.paths) lanes += p.kind == PathKind::Lane ? 1 : 0;
     std::string out = fmt("lane graph: %zu paths (%u lanes, %zu connectors), %zu sections, %zu junctions, "
-                          "%zu crossing points, %zu crosswalks, %zu tracks, %zu car spaces\n",
+                          "%zu crossing points, %zu crosswalks, %zu tracks\n",
                           g.paths.size(), lanes, g.paths.size() - lanes, g.sections.size(), g.junctions.size(),
-                          g.crossings.size(), g.crosswalks.size(), g.tracks.size(), g.carSpaces.size());
+                          g.crossings.size(), g.crosswalks.size(), g.tracks.size());
     auto table = [&](const char* title, const std::vector<std::string>& names) {
         out += title;
         out += ":";
@@ -1274,10 +1252,6 @@ std::string dumpText(const LaneGraph& g) {
     }
     for (uint32_t t = 0; t < g.tracks.size(); ++t)
         out += fmt("track %u: rail track %u, line %s\n", t, g.tracks[t].railTrack, planPointsText(g, g.tracks[t].line).c_str());
-    for (uint32_t s = 0; s < g.carSpaces.size(); ++s) {
-        const CarSpace& sp = g.carSpaces[s];
-        out += fmt("car space %u: %s from %.1f to %.1f m\n", s, pathName(g, sp.lane.index).c_str(), sp.from, sp.to);
-    }
     return out;
 }
 
@@ -1292,7 +1266,6 @@ void putLaneGraph(bundle::BinWriter& w, const LaneGraph& g) {
     putList(w, g.crossings);
     putList(w, g.crosswalks);
     putList(w, g.tracks);
-    putList(w, g.carSpaces);
     putList(w, g.points);
     putList(w, g.along);
     putList(w, g.heights);
@@ -1323,7 +1296,7 @@ bool getLaneGraph(bundle::BinReader& r, LaneGraph& g, std::string* err) {
                     getList(r, in.sections, "sections", err) && getList(r, in.junctions, "junctions", err) &&
                     getList(r, in.crossings, "crossing points", err) && getList(r, in.crosswalks, "crosswalks", err) &&
                     getList(r, in.tracks, "tracks", err) &&
-                    getList(r, in.carSpaces, "car spaces", err) && getList(r, in.points, "curve points", err) &&
+                    getList(r, in.points, "curve points", err) &&
                     getList(r, in.along, "curve distances along", err) && getList(r, in.heights, "curve heights", err) &&
                     getList(r, in.nextPaths, "next paths", err) && getList(r, in.sectionLanes, "section lanes", err) &&
                     getList(r, in.laneLines, "lane lines", err) &&
