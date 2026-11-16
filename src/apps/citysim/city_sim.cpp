@@ -258,7 +258,7 @@ driving::VehicleClasses builtInDrivingClasses() {
     return out;
 }
 
-void CitySim::setDrivingRoads(std::shared_ptr<const engine::LaneGraph> roads, std::string report) {
+void CitySim::setDrivingRoads(std::shared_ptr<const engine::RoadModel> roads, std::string report) {
     if (!drivingV2_) return;
     driving::VehicleClasses classes = drivingV2_->vehicleClasses();
     drivingRoads_ = std::move(roads);
@@ -503,7 +503,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     if (drivingV2_) {
         drivingV2_->attachMeasurements(nullptr);
         driving::VehicleClasses classes = drivingV2_->vehicleClasses();
-        const engine::LaneGraph* roads = drivingV2_->roads();
+        const engine::RoadModel* roads = drivingV2_->model();
         drivingV2_.emplace(roads);
         drivingV2_->setVehicleClasses(std::move(classes));
     }

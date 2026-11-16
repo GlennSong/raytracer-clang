@@ -274,12 +274,13 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
         for (int k = 0; k < 2; ++k) {
             const std::size_t kk = static_cast<std::size_t>(k);
             const Real station = k == 0 ? S.from : S.to;
+            Vec2 at;   // where this end of the street is (it has a centre line: checked above)
+            m.streetEnd(S, k, at);
             if (S.junctions[kk].valid()) {
                 const std::size_t j = S.junctions[kk].index;
                 const ModelJunction& J = m.junctions[j];
                 // the arm that is this street, leaving the junction at its `from` (spine out) or entering at its `to`
-                for (std::size_t a = 0; a < J.arms.size(); ++a)
-                    if (J.arms[a].street.valid() && J.arms[a].street.index == s && J.arms[a].spineIn == (k == 1)) endArm[kk] = static_cast<int>(a);
+                endArm[kk] = m.armAt(ModelStreetId(static_cast<uint32_t>(s)), k);
                 const int p = pointOf(j, S.edge, station);
                 if (endArm[kk] < 0)
                     rep.notes.push_back(fmt("street %s: its %s names junction %s, which lists no arm for it", S.id.c_str(), k == 0 ? "start" : "end",
@@ -300,7 +301,6 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
                     rep.notes.push_back(fmt("street %s: its %s carries on into %s, which does not name it back: not joined there", S.id.c_str(),
                                             k == 0 ? "start" : "end", m.streets[static_cast<std::size_t>(t)].id.c_str()));
                 } else {
-                    const Vec2 at = m.linePoints[k == 0 ? S.line.first : S.line.end() - 1];
                     endNode[kk] = addNode(at, -1, JunctionKind::None);
                     carryNode[{static_cast<int>(s), k}] = endNode[kk];
                     carryNode[{t, kt}] = endNode[kk];
@@ -323,13 +323,11 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
                     endStation[kk] = goreAlongRamp[{S.edge, rampEnd}];
                     atGore[kk] = true;
                 } else {
-                    const Vec2 at = m.linePoints[k == 0 ? S.line.first : S.line.end() - 1];
                     endNode[kk] = addNode(at, -1, JunctionKind::DeadEnd);
                     ++rep.deadEnds;
                 }
             }
             if (endNode[kk] < 0) {   // (unjoined, noted above): its own end, joined to nothing
-                const Vec2 at = m.linePoints[k == 0 ? S.line.first : S.line.end() - 1];
                 endNode[kk] = addNode(at, -1, JunctionKind::DeadEnd);
                 ++rep.deadEnds;
             }

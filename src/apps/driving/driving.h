@@ -204,11 +204,15 @@ bool eventBefore(const Event& a, const Event& b);
 
 class Driving {
 public:
-    // Given the road it drives on: a lane graph that must outlive this object (it is read, never owned). Null is an
-    // empty world: it ticks, and every trip is refused, since there is nowhere to go. (The vehicle classes come in
-    // through setVehicleClasses, the rules through useRules.)
-    explicit Driving(const engine::LaneGraph* roads = nullptr);
+    // Given the road it drives on: the road model (ADR-0436), which must outlive this object (it is read, never
+    // owned). Its lane level is where the cars can be; what the road is there -- each junction's control, each path's
+    // posted limit and road class, each connector's turn, each stated merge -- is asked of the model. Null is an empty
+    // world: it ticks, and every trip is refused, since there is nowhere to go. (The vehicle classes come in through
+    // setVehicleClasses, the rules through useRules.)
+    explicit Driving(const engine::RoadModel* model = nullptr);
 
+    const engine::RoadModel* model() const { return model_; }
+    // The model's lane level (null with no model).
     const engine::LaneGraph* roads() const { return roads_; }
 
     // THE RULES, already loaded and checked by the host (the Lua readers in scripting/, then buildRoadRules with a
@@ -464,9 +468,10 @@ private:
     // turnsClosedForRoom; none without the room step). Run when the rules or the vehicle classes are handed over.
     void closeTurnsForRoom();
 
-    const engine::LaneGraph* roads_ = nullptr;
+    const engine::RoadModel* model_ = nullptr;
+    const engine::LaneGraph* roads_ = nullptr;   // the model's lane level (&model_->laneLevel), or null
     VehicleClasses vehicleClasses_;
-    RouteBounds routeBounds_;                 // studyRoads(*roads_), measured once
+    RouteBounds routeBounds_;                 // studyRoads(*model_), measured once
     std::vector<RouteClass> routeClasses_;    // each vehicle class bound to the road, by class index
     std::vector<std::string> routeNotes_;
     std::vector<Car> cars_;     // every placed car, in car-id order

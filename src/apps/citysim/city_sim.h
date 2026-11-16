@@ -1384,11 +1384,11 @@ public:
     void useDrivingV2(bool on) { if (on) drivingV2_.emplace(); else drivingV2_.reset(); }
     // ...and the kinds of vehicle it knows (#248: one class per fleet class, read with the fleet). No-op under v1.
     void setDrivingVehicleClasses(driving::VehicleClasses c) { if (drivingV2_) drivingV2_->setVehicleClasses(std::move(c)); }
-    // ...and the road it drives on: the lane level of the level's road model (road_model_cache.h), held here for as long as the model
-    // reads it, with the one line that says what it holds and where it came from (the load's log, `lanegraph?`). The
-    // model is made again on the new road, keeping its vehicle classes; it has no cars yet, so nothing else is lost.
-    // No-op under v1.
-    void setDrivingRoads(std::shared_ptr<const engine::LaneGraph> roads, std::string report);
+    // ...and the road it drives on: the level's road model (road_model_cache.h; its lane level is where the cars are),
+    // held here for as long as the driving reads it, with the one line that says what it holds and where it came from
+    // (the load's log, `lanegraph?`). The driving is made again on the new road, keeping its vehicle classes; it has no
+    // cars yet, so nothing else is lost. No-op under v1.
+    void setDrivingRoads(std::shared_ptr<const engine::RoadModel> roads, std::string report);
     const std::string& drivingRoadsReport() const { return drivingRoadsReport_; }
     // The new model, read-only; null when the level drives v1.
     const driving::Driving* drivingV2() const { return drivingV2_ ? &*drivingV2_ : nullptr; }
@@ -2221,7 +2221,7 @@ private:
     bool useRealLanes_ = false; // draw cars on them (citysim.realLanes)
     std::optional<driving::Driving> drivingV2_;   // the new driving model, when the level asks for it (useDrivingV2)
     // Its road (setDrivingRoads): shared, so its address stays put while the model holds a pointer to it.
-    std::shared_ptr<const engine::LaneGraph> drivingRoads_;
+    std::shared_ptr<const engine::RoadModel> drivingRoads_;
     std::string drivingRoadsReport_ = "no lane graph yet";
     DrivingHost drivingHost_;   // the drivers handed to the new model (startDrivingV2); inactive on a v1 level
     // Three-tier traffic state (P4): the fed bubble centre, the fixed-frame

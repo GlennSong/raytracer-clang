@@ -327,16 +327,16 @@ nlohmann::json plannedGraph(ControlPlan* planOut = nullptr) {
     return g;
 }
 
-// The lane level built from a road graph's JSON: the road model's (RoadModel::laneLevel, here `graph`), with what
-// building it reported.
+// The road model built from a road graph's JSON (its lane level is `model.laneLevel`; a junction's control and a
+// path's posted limit are asked of the model), with what building the lane level reported.
 struct BuiltLaneLevel : LaneGraphBuild {
-    LaneGraph graph;
+    RoadModel model;
 };
 BuiltLaneLevel laneGraphFrom(const nlohmann::json& g) {
     const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
     BuiltLaneLevel out;
     LaneGraphBuild report;
-    out.graph = assembleRoadModel(*r, testVehicles(), &report).laneLevel;
+    out.model = assembleRoadModel(*r, testVehicles(), &report);
     static_cast<LaneGraphBuild&>(out) = std::move(report);
     return out;
 }
@@ -354,7 +354,7 @@ bool hasProblem(const BuiltLaneLevel& lg, const std::string& words) {
 
 // The road (its id) a lane path was cut from: its section's road, through the build's records.
 std::string roadOf(const BuiltLaneLevel& lg, const RoadLabGraph& g, PathId lane) {
-    const uint32_t s = lg.graph.paths[lane.index].section.index;
+    const uint32_t s = lg.model.laneLevel.paths[lane.index].section.index;
     return s < lg.sectionSources.size() ? g.edges[static_cast<std::size_t>(lg.sectionSources[s].edge)].id : std::string();
 }
 
@@ -394,7 +394,7 @@ TEST_CASE(control_plan_2_a_planned_road_graph_is_carried_through) {
     }
 
     const BuiltLaneLevel& lg = plannedBuild();
-    const LaneGraph& G = lg.graph;
+    const LaneGraph& G = lg.model.laneLevel;
     const RoadLabGraph road = RoadLabGraph::fromJson(g);
     std::printf("    controls: %u stated junctions, %zu lane-level junctions\n", lg.controlPlan.planned, G.junctions.size());
     for (const std::string& p : lg.problems) std::printf("    problem: %s\n", p.c_str());
@@ -408,7 +408,7 @@ TEST_CASE(control_plan_2_a_planned_road_graph_is_carried_through) {
     for (uint32_t j = 0; j < G.junctions.size(); ++j) {
         const Junction& jn = G.junctions[j];
         const ModelJunction& pj = road.junctions[jn.modelJunction];
-        CHECK(G.controlNames[jn.control] == pj.control);
+        CHECK(lg.model.controlAt(JunctionId(j)) == pj.control);
         for (uint32_t k = jn.arriving.first; k < jn.arriving.end(); ++k) {
             const PathId lane = G.junctionLanes[k];
             const std::string by = roadOf(lg, road, lane);
@@ -425,7 +425,7 @@ TEST_CASE(control_plan_2_a_planned_road_graph_is_carried_through) {
         const PathId lane = path.kind == PathKind::Lane ? PathId(p) : G.nextPaths[path.next.first];
         const std::string by = roadOf(lg, road, lane);
         const double want = by[0] == 'a' ? kArterialLimit : by[0] == 'l' ? kLocalLimit : 0.0;
-        CHECK(path.speedLimit == want);
+        CHECK(lg.model.postedLimit(PathId(p)) == want);
     }
     CHECK(validate(G).empty());
 }
@@ -447,8 +447,8 @@ TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_report
                 if (end == "j1") end = nullptr;
         const BuiltLaneLevel lg = laneGraphFrom(g);
         CHECK(lg.error.empty());
-        CHECK(lg.graph.junctions.size() == 1u);
-        CHECK(lg.graph.controlNames[lg.graph.junctions[0].control] == "stop");
+        CHECK(lg.model.laneLevel.junctions.size() == 1u);
+        CHECK(lg.model.controlAt(JunctionId(0)) == "stop");
         // the four street ends the left-out junction held: a1's and l2's ends there, a2's and o0's starts
         std::set<std::string> said;
         for (const std::string& p : lg.problems) {
@@ -501,7 +501,7 @@ TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_report
 // ---- 4. save and load ----------------------------------------------------------------------------------------------------
 
 TEST_CASE(control_plan_4_regulations_survive_save_and_load) {
-    const LaneGraph& G = plannedBuild().graph;
+    const LaneGraph& G = plannedBuild().model.laneLevel;
     CHECK(!G.regulations.empty());
     bundle::BinWriter w;
     putLaneGraph(w, G);
@@ -512,7 +512,6 @@ TEST_CASE(control_plan_4_regulations_survive_save_and_load) {
     CHECK(err.empty());
     CHECK(back == G);
     CHECK(back.regulations == G.regulations && back.regulationKindNames == G.regulationKindNames);
-    CHECK(back.controlNames == G.controlNames);
     CHECK(dumpText(back) == dumpText(G));
     // the dump shows each junction's control and what its arriving lanes face
     CHECK(dumpText(G).find("at the arriving lanes' ends: lane ") != std::string::npos);
@@ -537,10 +536,10 @@ TEST_CASE(control_plan_5_the_same_plan_and_graph_every_run) {
         for (const nlohmann::json& arm : again["junctions"][i]["arms"]) CHECK(arm.contains("street") && arm.contains("heading"));
     }
     const BuiltLaneLevel second = laneGraphFrom(gb);
-    const LaneGraph& first = plannedBuild().graph;
+    const LaneGraph& first = plannedBuild().model.laneLevel;
     bundle::BinWriter wa, wb;
     putLaneGraph(wa, first);
-    putLaneGraph(wb, second.graph);
+    putLaneGraph(wb, second.model.laneLevel);
     CHECK(wa.bytes == wb.bytes);
-    CHECK(dumpText(first) == dumpText(second.graph));
+    CHECK(dumpText(first) == dumpText(second.model.laneLevel));
 }

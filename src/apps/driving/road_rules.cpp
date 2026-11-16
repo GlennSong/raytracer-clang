@@ -3,6 +3,7 @@
 #include "apps/driving/signal_programme.h"   // hasLightClock: whether the lights run a programme
 
 #include <cstddef>
+#include <map>
 
 namespace driving {
 
@@ -45,20 +46,6 @@ void checkNeeds(const RuleSet& rules, const std::string& who, const std::vector<
     }
 }
 
-// The road class a path belongs to: a lane's section's; a connector's, that of the lane it joins. kNoName for none.
-engine::NameIndex roadClassOf(const engine::LaneGraph& roads, engine::PathId path) {
-    engine::PathId lane = path;
-    const engine::Path& p = roads.paths[path.index];
-    if (p.kind == engine::PathKind::Connector) {
-        if (p.next.count == 0 || p.next.first >= roads.nextPaths.size()) return engine::kNoName;
-        lane = roads.nextPaths[p.next.first];
-    }
-    if (!lane.valid() || lane.index >= roads.paths.size()) return engine::kNoName;
-    const engine::Path& l = roads.paths[lane.index];
-    if (l.kind != engine::PathKind::Lane || l.section.index >= roads.sections.size()) return engine::kNoName;
-    return roads.sections[l.section.index].roadClass;
-}
-
 }  // namespace
 
 const Device* RoadRules::device(const RuleSet& rules, engine::NameIndex kind) const {
@@ -68,15 +55,9 @@ const Device* RoadRules::device(const RuleSet& rules, engine::NameIndex kind) co
     return &rules.devices[d];
 }
 
-Real RoadRules::baseLimit(const engine::LaneGraph& roads, engine::PathId path) const {
-    if (!path.valid() || path.index >= roads.paths.size()) return 0;
-    const Real posted = roads.paths[path.index].speedLimit;
-    if (posted > 0) return posted;
-    return path.index < unpostedLimit.size() ? unpostedLimit[path.index] : Real(0);
-}
-
-bool buildRoadRules(const engine::LaneGraph& roads, const RuleSet& rules, const FactRegistry& facts, RoadRules& out,
+bool buildRoadRules(const engine::RoadModel& model, const RuleSet& rules, const FactRegistry& facts, RoadRules& out,
                     std::vector<std::string>* problems) {
+    const engine::LaneGraph& roads = model.laneLevel;
     std::vector<std::string> found;
     out.deviceOfKind.assign(roads.regulationKindNames.size(), kNoDevice);
 
@@ -91,52 +72,58 @@ bool buildRoadRules(const engine::LaneGraph& roads, const RuleSet& rules, const 
         out.deviceOfKind[k] = static_cast<uint32_t>(d - rules.devices.data());
     }
 
-    // Paths with no posted limit take their road class's default, which must be a speed.
-    out.unpostedLimit.assign(roads.paths.size(), 0);
-    enum class Lack : uint8_t { Nothing, NoDefault, NotASpeed };   // what a road class with unposted paths lacks
-    std::vector<Lack> lacking(roads.roadClassNames.size(), Lack::Nothing);
+    // Each path's limit: the one the road model posts on it, or else its road class's default, which must be a speed.
+    out.limitOfPath.assign(roads.paths.size(), 0);
+    enum class Lack : uint8_t { NoDefault, NotASpeed };   // what a road class with unposted paths lacks
+    std::map<std::string, Lack> lacking;                  // by class name, so the problems come in name order
     for (std::size_t p = 0; p < roads.paths.size(); ++p) {
-        if (roads.paths[p].speedLimit > 0) continue;
-        const engine::NameIndex cls = roadClassOf(roads, engine::PathId(static_cast<uint32_t>(p)));
-        if (cls >= roads.roadClassNames.size()) continue;
-        const Number* limit = rules.findDefaultLimit(roads.roadClassNames[cls]);
+        const engine::PathId path(static_cast<uint32_t>(p));
+        const Real posted = model.postedLimit(path);
+        if (posted > 0) {
+            out.limitOfPath[p] = posted;
+            continue;
+        }
+        const std::string& cls = model.roadClassOf(path);
+        if (cls.empty()) continue;
+        const Number* limit = rules.findDefaultLimit(cls);
         UnitFamily family = UnitFamily::Ratio;
         if (!limit) lacking[cls] = Lack::NoDefault;
         else if (!unitFamily(limit->unit, family) || family != UnitFamily::Speed) lacking[cls] = Lack::NotASpeed;
-        else out.unpostedLimit[p] = static_cast<Real>(limit->value);
+        else out.limitOfPath[p] = static_cast<Real>(limit->value);
     }
-    for (std::size_t c = 0; c < lacking.size(); ++c) {
-        const std::string& cls = roads.roadClassNames[c];
-        if (lacking[c] == Lack::NoDefault)
+    for (const std::pair<const std::string, Lack>& c : lacking) {
+        const std::string& cls = c.first;
+        if (c.second == Lack::NoDefault)
             found.push_back("the lane graph has paths of road class \"" + cls + "\" with no posted limit, but rule set \"" +
                             rules.name + "\" has no " + kKeyDefaultLimits + "." + cls);
-        else if (lacking[c] == Lack::NotASpeed)
+        else
             found.push_back("rule set \"" + rules.name + "\" gives " + kKeyDefaultLimits + "." + cls + " in \"" +
                             rules.findDefaultLimit(cls)->unit + "\", which is not a speed");
     }
 
-    // Every control a junction carries must be a row of the rule set's control table.
-    out.controlOfName.assign(roads.controlNames.size(), kNoDevice);
-    std::vector<uint32_t> junctionsOfControl(roads.controlNames.size(), 0);
-    for (const engine::Junction& jn : roads.junctions)
-        if (jn.control < junctionsOfControl.size()) ++junctionsOfControl[jn.control];
-    out.darkOfName.assign(roads.controlNames.size(), 0);
+    // Every control a junction states must be a row of the rule set's control table (a junction stating none is bound
+    // to none).
+    out.controlOfJunction.assign(roads.junctions.size(), kNoDevice);
+    out.darkJunction.assign(roads.junctions.size(), 0);
     out.lightsRun = hasLightClock(facts);
-    for (std::size_t c = 0; c < roads.controlNames.size(); ++c) {
-        const ControlKind* k = rules.findControl(roads.controlNames[c]);
+    std::map<std::string, uint32_t> junctionsLacking;   // by control name, so the problems come in name order
+    for (std::size_t j = 0; j < roads.junctions.size(); ++j) {
+        const std::string& control = model.controlAt(engine::JunctionId(static_cast<uint32_t>(j)));
+        if (control.empty()) continue;
+        const ControlKind* k = rules.findControl(control);
         // lights with no programme running are treated as the row their `when_dark` names (checked to exist at load)
         const ControlKind* dark = k && k->hasLights() && !out.lightsRun && !k->whenDark.empty()
                                       ? rules.findControl(k->whenDark)
                                       : nullptr;
         if (dark) {
-            out.controlOfName[c] = static_cast<uint32_t>(dark - rules.controls.data());
-            out.darkOfName[c] = 1;
-        } else if (k) out.controlOfName[c] = static_cast<uint32_t>(k - rules.controls.data());
-        else if (junctionsOfControl[c] > 0)
-            found.push_back("the lane graph has " + std::to_string(junctionsOfControl[c]) + " junctions controlled by \"" +
-                            roads.controlNames[c] + "\", but rule set \"" + rules.name + "\" has no control." +
-                            roads.controlNames[c]);
+            out.controlOfJunction[j] = static_cast<uint32_t>(dark - rules.controls.data());
+            out.darkJunction[j] = 1;
+        } else if (k) out.controlOfJunction[j] = static_cast<uint32_t>(k - rules.controls.data());
+        else ++junctionsLacking[control];
     }
+    for (const std::pair<const std::string, uint32_t>& c : junctionsLacking)
+        found.push_back("the lane graph has " + std::to_string(c.second) + " junctions controlled by \"" + c.first +
+                        "\", but rule set \"" + rules.name + "\" has no control." + c.first);
 
     for (const FactSpec& fact : facts.all())
         checkNeeds(rules, "fact \"" + fact.name + "\"", fact.numbers, fact.settings, found);

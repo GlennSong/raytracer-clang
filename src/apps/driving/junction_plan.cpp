@@ -181,9 +181,10 @@ bool findWaitingPoints(const LaneGraph& roads, const RightOfWay& row, PathId con
     return fitted;
 }
 
-void updateJunctionPlans(const LaneGraph& roads, const RightOfWay& row, const Car& car, Real carLength,
+void updateJunctionPlans(const engine::RoadModel& model, const RightOfWay& row, const Car& car, Real carLength,
                          const WayAhead& way, uint64_t tick, double seconds, JunctionPlans& plans, PlanUpdate& out,
                          engine::TagMask tags) {
+    const LaneGraph& roads = model.laneLevel;
     const JunctionPlans old = plans;
     std::array<uint8_t, kMaxJunctionPlans> kept{};
     plans.count = 0;
@@ -226,7 +227,7 @@ void updateJunctionPlans(const LaneGraph& roads, const RightOfWay& row, const Ca
                 JunctionPlan plan;
                 plan.junction = path.junction;
                 plan.connector = p;
-                plan.turn = path.turn;
+                plan.turn = model.turnOf(p);
                 plan.startOdometer = car.odometer + startAt;
                 plan.madeAtTick = tick;
                 plan.crossingCount = path.crossings.count;

@@ -163,8 +163,8 @@ void timeSignalProgrammes(const engine::LaneGraph& roads, const RoadRules& roadR
         for (uint32_t i = 0; i < jn.connectors.count; ++i) {
             const engine::PathId c = roads.junctionConnectors[jn.connectors.first + i];
             const engine::PathId from = roads.paths[c.index].from;
-            Real approach = knownPath(roads, from) ? roadRules.baseLimit(roads, from) : Real(0);
-            if (!(approach > 0)) approach = roadRules.baseLimit(roads, c);
+            Real approach = knownPath(roads, from) ? roadRules.baseLimit(from) : Real(0);
+            if (!(approach > 0)) approach = roadRules.baseLimit(c);
             const Real grade = knownPath(roads, from) ? roads.gradeAt(from, roads.paths[from.index].length) : Real(0);
             yellowOf[i] = yellowSeconds(t, approach, grade);
             allRedOf[i] = allRedSeconds(t, clearDistance(roads, c), approach);

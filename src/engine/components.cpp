@@ -142,9 +142,15 @@ std::vector<Vec2> LevelRoadModel::junctionPoints() const {
     return out;
 }
 
+const ModelJunction* LevelRoadModel::junctionAt(int c, int junction) const {
+    const RoadModel* m = city(c);
+    return m && junction >= 0 && static_cast<std::size_t>(junction) < m->junctions.size()
+               ? &m->junctions[static_cast<std::size_t>(junction)] : nullptr;
+}
+
 uint64_t LevelRoadModel::runKey(const Place& s) const {
-    if (s.city < 0 || s.street < 0 || !cities[static_cast<std::size_t>(s.city)]) return 0;
-    const RoadModel& m = *cities[static_cast<std::size_t>(s.city)];
+    if (s.street < 0 || !city(s.city)) return 0;
+    const RoadModel& m = *city(s.city);
     const std::string name = streetName(m, ModelStreetId(static_cast<uint32_t>(s.street)));
     const std::string key = std::to_string(s.city) + "|" +
                             (name.empty() ? "street|" + m.streets[static_cast<std::size_t>(s.street)].id : "run|" + name);
@@ -160,8 +166,8 @@ bool LevelRoadModel::controlsStated() const {
 }
 
 bool LevelRoadModel::lit(const Place& j) const {
-    if (!j.valid() || j.junction < 0 || !cities[static_cast<std::size_t>(j.city)]) return false;
-    return junctionLit(cities[static_cast<std::size_t>(j.city)]->junctions[static_cast<std::size_t>(j.junction)]);
+    const ModelJunction* J = junctionAt(j.city, j.junction);
+    return J && junctionLit(*J);
 }
 
 void LevelRoadModel::stateSignals(NavGraph& nav, int* untied, bool* stated) const {
@@ -182,6 +188,7 @@ void LevelRoadModel::stateSignals(NavGraph& nav, int* untied, bool* stated) cons
     }
 }
 #else
+const ModelJunction* LevelRoadModel::junctionAt(int, int) const { return nullptr; }
 std::vector<Vec2> LevelRoadModel::junctionPoints() const { return {}; }
 uint64_t LevelRoadModel::runKey(const Place&) const { return 0; }
 bool LevelRoadModel::controlsStated() const { return false; }

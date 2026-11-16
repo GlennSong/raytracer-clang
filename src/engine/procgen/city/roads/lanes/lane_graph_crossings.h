@@ -62,6 +62,7 @@
 #include <vector>
 
 namespace engine {
+struct RoadModel;   // road_model.h
 namespace roads::lanes {
 
 // How far apart the samples along each centre line are (metres).
@@ -108,8 +109,9 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts);
 // whose first such stretch begins at its very start. Whether waiting there is allowed, and on which lights, is the rule
 // set's: the driving model checks each point against its give-way table at load and drops one that would leave a body
 // in the way of something that may move with it (driving/signal_programme.h). Needs the crossing points
-// (findCrossingPoints first). Returns how many connectors got a point; every other path is left with none.
-uint32_t placeWaitInsidePoints(LaneGraph& g);
+// (findCrossingPoints first). Returns how many connectors got a point; every other path is left with none. `model`:
+// the road model whose lane level it is; which connectors are far turns is the model's stated fact (RoadModel::turnOf).
+uint32_t placeWaitInsidePoints(RoadModel& model);
 
 }  // namespace roads::lanes
 }  // namespace engine

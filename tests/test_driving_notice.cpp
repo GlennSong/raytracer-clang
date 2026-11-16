@@ -5,6 +5,7 @@
 
 #include "test_framework.h"
 
+#include "driving_test_roads.h"   // stateStreet: a limit is stated on the road model
 #include "apps/driving/notice.h"
 #include "apps/driving/road_rules.h"
 #include "apps/driving/rule_set.h"
@@ -44,18 +45,20 @@ VehicleClasses testClasses() {
 
 engine::PathId pid(uint32_t i) { return engine::PathId(i); }
 
-// Straight flat paths end to end along +x, each leading into the next, each with its own limit and no bend.
-engine::LaneGraph chain(const std::vector<Real>& lengths, const std::vector<Real>& limits) {
-    engine::LaneGraph g;
+// Straight flat paths end to end along +x, each leading into the next, each with no bend, on a street of its own that
+// posts its limit (the road model states the limit; the lane table is the shape).
+engine::RoadModel chain(const std::vector<Real>& lengths, const std::vector<Real>& limits) {
+    engine::RoadModel m;
+    engine::LaneGraph& g = m.laneLevel;
     g.regulationKindNames = {kTopSpeedKind, kOtherKind};
     Real x = 0;
     for (std::size_t i = 0; i < lengths.size(); ++i) {
         engine::Path p;
         p.curve = g.addCurve({engine::Vec2(x, 0), engine::Vec2(x + lengths[i], 0)}, {0, 0});
         p.length = lengths[i];
-        p.speedLimit = limits[i];
         p.tightestRadius = engine::kNoBend;
         g.paths.push_back(p);
+        driving_test::stateStreet(m, pid(static_cast<uint32_t>(i)), limits[i], std::string());
         x += lengths[i];
     }
     for (std::size_t i = 0; i + 1 < g.paths.size(); ++i) {
@@ -63,11 +66,12 @@ engine::LaneGraph chain(const std::vector<Real>& lengths, const std::vector<Real
         g.paths[i].next.count = 1;
         g.nextPaths.push_back(pid(static_cast<uint32_t>(i + 1)));
     }
-    return g;
+    return m;
 }
 
 // Puts regulations on one path (call path by path, each list sorted by distance along).
-void addRegulations(engine::LaneGraph& g, uint32_t path, const std::vector<engine::Regulation>& regs) {
+void addRegulations(engine::RoadModel& road, uint32_t path, const std::vector<engine::Regulation>& regs) {
+    engine::LaneGraph& g = road.laneLevel;
     g.paths[path].regulations.first = static_cast<uint32_t>(g.regulations.size());
     g.paths[path].regulations.count = static_cast<uint32_t>(regs.size());
     for (engine::Regulation r : regs) {
@@ -139,7 +143,8 @@ bool anySays(const std::vector<std::string>& lines, const std::string& a, const 
 
 // A small world: a graph, the classes, a rule set, the built-in facts and the binding, and the cars.
 struct World {
-    engine::LaneGraph g;
+    engine::RoadModel road;                     // the road: what the binding is made from
+    engine::LaneGraph& g = road.laneLevel;      // ... and its lane table, which the facts read
     VehicleClasses classes = testClasses();
     RuleSet rules;
     FactRegistry facts;
@@ -147,10 +152,10 @@ struct World {
     std::vector<Car> cars;
     PathLists lists;
 
-    World(engine::LaneGraph graph, RuleSet r) : g(std::move(graph)), rules(std::move(r)) {
+    World(engine::RoadModel made, RuleSet r) : road(std::move(made)), rules(std::move(r)) {
         registerBuiltInFacts(facts);
         std::vector<std::string> problems;
-        CHECK(buildRoadRules(g, rules, facts, roadRules, &problems));
+        CHECK(buildRoadRules(road, rules, facts, roadRules, &problems));
         for (const std::string& p : problems) std::printf("    %s\n", p.c_str());
     }
     void place(const std::vector<Car>& c) {
@@ -290,7 +295,7 @@ TEST_CASE(notice_car_ahead_four_facts_one_lookup) {
 TEST_CASE(notice_road_limit_two_regulations_on_one_path) {
     // One 100 m path, its own limit 20 m/s; a top speed of 15 at 30 m, something else (not a top speed) at 40 m, a top
     // speed of 10 at 60 m. Before the first: 20. At it (30) and between (45): 15. After the second (70): 10.
-    engine::LaneGraph g = chain({100}, {20});
+    engine::RoadModel g = chain({100}, {20});
     addRegulations(g, 0, {regulation(kTopSpeed, 30, 15), regulation(kOther, 40, 99), regulation(kTopSpeed, 60, 10)});
     World w(std::move(g), testRules());
     const Real fronts[] = {10, 30, 45, 70};
@@ -356,7 +361,7 @@ TEST_CASE(notice_slower_ahead_formula_closer_is_lower_absent) {
 
     // A lower top speed on my own path, 12 at 70 m, is nearer and lower: from 40 m, 30 m ahead, sqrt(144 + 120) =
     // sqrt(264) = 16.248 < 18.439.
-    engine::LaneGraph g = chain({100, 100}, {20, 10});
+    engine::RoadModel g = chain({100, 100}, {20, 10});
     addRegulations(g, 0, {regulation(kTopSpeed, 70, 12)});
     World r(std::move(g), testRules());
     r.place({record(1, 0, 40, 15)});
@@ -378,9 +383,9 @@ TEST_CASE(notice_corner_speed_formula_closer_is_lower_absent) {
     // The 20 m bend: sqrt(2 x 20) = sqrt(40). From 10 m along the first path it starts 40 m ahead:
     // sqrt(40 + 2 x 2 x 40) = sqrt(200) = 14.142. The 200 m bend: sqrt(400) = 20, 70 m ahead: sqrt(400 + 280) = 26.08,
     // higher, so the 20 m bend is the fact. From 30 m: 20 m ahead, sqrt(40 + 80) = sqrt(120) = 10.954.
-    engine::LaneGraph g = chain({50, 30, 50}, {20, 20, 20});
-    g.paths[1].tightestRadius = 20;
-    g.paths[2].tightestRadius = 200;
+    engine::RoadModel g = chain({50, 30, 50}, {20, 20, 20});
+    g.laneLevel.paths[1].tightestRadius = 20;
+    g.laneLevel.paths[2].tightestRadius = 200;
     World w(std::move(g), testRules());
     w.place({record(1, 0, 10, 15)});
     std::vector<NoticedFact> f = w.notice(1, 200);
@@ -413,10 +418,10 @@ TEST_CASE(notice_corner_speed_formula_closer_is_lower_absent) {
 TEST_CASE(notice_corner_speed_reads_the_bend_ahead_not_the_tightest_on_the_path) {
     // One 340 m lane with one tight place: straight, a 20 m bend from 200 to 230 m, straight again (its bend profile,
     // #281). Side accel 2, brake 2: the bend's own speed is sqrt(40).
-    engine::LaneGraph g = chain({340, 50}, {29, 29});
-    g.paths[0].bends = g.addBends({engine::BendPiece{0, engine::kNoBend}, engine::BendPiece{200, 20},
+    engine::RoadModel g = chain({340, 50}, {29, 29});
+    g.laneLevel.paths[0].bends = g.laneLevel.addBends({engine::BendPiece{0, engine::kNoBend}, engine::BendPiece{200, 20},
                                    engine::BendPiece{230, engine::kNoBend}});
-    g.paths[0].tightestRadius = 20;
+    g.laneLevel.paths[0].tightestRadius = 20;
     World w(std::move(g), testRules());
     // From 10 m along at 25 m/s, looking 120 m: the bend is 190 m off, out of sight: the lane is not slow here.
     w.place({record(1, 0, 10, 25)});
@@ -438,10 +443,10 @@ TEST_CASE(notice_corner_speed_reads_the_bend_ahead_not_the_tightest_on_the_path)
 TEST_CASE(notice_corner_speed_sees_a_bend_on_the_next_path_and_allows_for_the_decide_interval) {
     // A 100 m lane leading into a 20 m path that bends at 8 m from 5 to 15 m along it. From 60 m along the lane the
     // bend begins 40 + 5 = 45 m ahead: sqrt(2 x 8 + 2 x 2 x 45) = 14.0 m/s.
-    engine::LaneGraph g = chain({100, 20}, {20, 20});
-    g.paths[1].bends = g.addBends({engine::BendPiece{0, engine::kNoBend}, engine::BendPiece{5, 8},
+    engine::RoadModel g = chain({100, 20}, {20, 20});
+    g.laneLevel.paths[1].bends = g.laneLevel.addBends({engine::BendPiece{0, engine::kNoBend}, engine::BendPiece{5, 8},
                                    engine::BendPiece{15, engine::kNoBend}});
-    g.paths[1].tightestRadius = 8;
+    g.laneLevel.paths[1].tightestRadius = 8;
     World w(std::move(g), testRules());
     w.place({record(1, 0, 60, 15)});
     const NoticedFact c = w.fact(w.notice(1, 100), kFactCornerSpeed);
@@ -515,7 +520,7 @@ TEST_CASE(notice_road_rules_binding_and_refusals) {
     std::vector<std::string> problems;
 
     // Sound: each kind bound to its device.
-    const engine::LaneGraph g = chain({10}, {10});
+    const engine::RoadModel g = chain({10}, {10});
     RoadRules rr;
     CHECK(buildRoadRules(g, testRules(), facts, rr, &problems));
     CHECK(problems.empty());
@@ -525,8 +530,8 @@ TEST_CASE(notice_road_rules_binding_and_refusals) {
     CHECK(rr.device(rules, 7) == nullptr);
 
     // A regulation kind with no device: refused naming both.
-    engine::LaneGraph odd = g;
-    odd.regulationKindNames.push_back("mystery_kind");
+    engine::RoadModel odd = g;
+    odd.laneLevel.regulationKindNames.push_back("mystery_kind");
     CHECK(!buildRoadRules(odd, rules, facts, rr, &problems));
     CHECK(problems.size() == 1u && anySays(problems, "mystery_kind", "test_rules"));
 
@@ -575,8 +580,8 @@ TEST_CASE(notice_road_rules_binding_and_refusals) {
 
 TEST_CASE(notice_same_facts_whatever_order_cars_are_stored) {
     // Two 60 m paths with a lower limit and a bend on the second; six cars over both, two level with each other.
-    engine::LaneGraph g = chain({60, 60}, {20, 12});
-    g.paths[1].tightestRadius = 40;
+    engine::RoadModel g = chain({60, 60}, {20, 12});
+    g.laneLevel.paths[1].tightestRadius = 40;
     addRegulations(g, 1, {regulation(kTopSpeed, 30, 8)});
     RuleSet rules = testRules();
     rules.personality = {setting(kSettingSpeedHabit, 0.8, 1.0, 1.2, "ratio")};

@@ -146,7 +146,7 @@ Real speedThrough(const engine::LaneGraph& roads, const RoadRules& roadRules, en
                   Real comfortableSideAccel) {
     Real v = topSpeed > 0 ? topSpeed : kNever;
     if (knownPath(roads, connector)) {
-        const Real limit = roadRules.baseLimit(roads, connector);
+        const Real limit = roadRules.baseLimit(connector);
         if (limit > 0) v = std::min(v, limit);
         // its tightest stretch, as corner_speed holds a car through a connector (#281)
         const Real radius = roads.tightestBend(connector).radius;

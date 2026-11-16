@@ -23,8 +23,9 @@ constexpr Real kLaneLength = 100;
 // Two straight lanes, 100 m each, side by side in one section with a line a car may cross either way, open to the test
 // car's tag: enough road for a destination and a hold, and a route to either lane from the first.
 constexpr const char* kTestTag = "test_tag";
-engine::LaneGraph twoLanes() {
-    engine::LaneGraph g;
+engine::RoadModel twoLanes() {
+    engine::RoadModel m;   // the road model the driving is handed: its lane table laid by hand, nothing stated on it
+    engine::LaneGraph& g = m.laneLevel;
     g.vehicleTagNames = {kTestTag};
     engine::Section s;
     s.lanes.count = 2;
@@ -43,7 +44,7 @@ engine::LaneGraph twoLanes() {
     line.crossFromOffside = line.crossFromKerbside = true;
     g.laneLines.push_back(line);
     g.sections.push_back(s);
-    return g;
+    return m;
 }
 
 PathPoint at(uint32_t path, Real along) {
@@ -69,7 +70,7 @@ void placeCars(Driving& d, const std::vector<uint32_t>& ids) {
 }
 
 // A fixed sequence of calls, the state hash after each tick. `variant` changes one call (another destination).
-std::vector<uint64_t> runSequence(const engine::LaneGraph& g, int variant) {
+std::vector<uint64_t> runSequence(const engine::RoadModel& g, int variant) {
     Driving d(&g);
     std::vector<uint64_t> hashes;
     placeCars(d, {3, 1});
@@ -104,7 +105,7 @@ TEST_CASE(driving_empty_world_ticks) {
 }
 
 TEST_CASE(driving_trip_begin_query_steer_end) {
-    const engine::LaneGraph g = twoLanes();
+    const engine::RoadModel g = twoLanes();
     Driving d(&g);
     d.tick(kTickSeconds);
     // A car must be on the road before anyone drives it.
@@ -162,7 +163,7 @@ TEST_CASE(driving_trip_begin_query_steer_end) {
 }
 
 TEST_CASE(driving_stale_trip_handle_is_refused) {
-    const engine::LaneGraph g = twoLanes();
+    const engine::RoadModel g = twoLanes();
     Driving d(&g);
     placeCars(d, {1, 2});
     const TripId old = d.beginTrip(CarId(1), 1, at(0, 10));
@@ -182,7 +183,7 @@ TEST_CASE(driving_stale_trip_handle_is_refused) {
 }
 
 TEST_CASE(driving_events_sorted_by_car_and_drained) {
-    const engine::LaneGraph g = twoLanes();
+    const engine::RoadModel g = twoLanes();
     Driving d(&g);
     // Begun and ended in an order unlike car order.
     const uint32_t cars[] = {7, 2, 9, 0, 5};
@@ -198,7 +199,7 @@ TEST_CASE(driving_events_sorted_by_car_and_drained) {
 }
 
 TEST_CASE(driving_state_hash_same_calls_same_hash) {
-    const engine::LaneGraph g = twoLanes();
+    const engine::RoadModel g = twoLanes();
     const std::vector<uint64_t> first = runSequence(g, 0);
     const std::vector<uint64_t> second = runSequence(g, 0);
     const std::vector<uint64_t> other = runSequence(g, 1);
@@ -268,7 +269,12 @@ struct IncludeWalk {
 
 // The engine headers the library may include, and with them everything they include.
 const std::vector<std::string> kLibraryAllowed = {
-    "engine/procgen/city/roads/lane_graph.h",   // the road it drives on (read, never owned)
+    "engine/procgen/city/roads/road_model.h",   // the road it drives on (read, never owned): the road model, whose lane
+                                                // level is where the cars are and whose facts it asks (ADR-0436)
+    "engine/procgen/city/roads/road_model_parts.h",   // ... whose junctions, arms and streets road_model.h brings
+    "engine/procgen/city/road_network.h",       // ... which gives a street's engine class (RoadClass)
+    "engine/procgen/city/road_spec.h",          // ... which road_network.h brings (a road's band table)
+    "engine/procgen/city/roads/lane_graph.h",   // the model's lane level: the paths, junctions and crossing points
     "engine/procgen/city/roads/graph_index.h",  // ... whose index types it brings
     "engine/procgen/city/polygon.h",            // ... which the lane graph's plan shapes use
     "engine/bundle/bundle.h",                   // the repo's hash (FNV) folded field by field

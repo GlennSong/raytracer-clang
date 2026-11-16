@@ -1906,17 +1906,20 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
         std::printf("      joins made: %u carrying on, %u leaving a host, %u merging (known: %u, %u, %u)\n", lg.carryOnJoins, lg.divergeJoins,
                     lg.mergeJoins, known.carryOnJoins, known.divergeJoins, known.mergeJoins);
     CHECK(lg.carryOnJoins == known.carryOnJoins && lg.divergeJoins == known.divergeJoins && lg.mergeJoins == known.mergeJoins);
-    // EACH STATED MERGE MARKED ON ITS JOIN, with the joining lane as the one that gives way, and no other crossing point
-    // marked: the set of "joining lane>host lane" over the marked records is the scene's, written here
+    // EACH STATED MERGE NAMED ON ITS JOIN, and no other crossing point naming one; the model says which of the two
+    // paths joins, and so gives way (RoadModel::mergingAt, ADR-0436): the set of "joining lane>host lane" over the
+    // records that name a merge is the scene's, written here
     {
         std::set<std::string> marked;
         for (const CrossingPoint& x : G.crossings) {
-            if (!x.merging.valid()) continue;
+            if (x.modelConnection == kNoIndex) continue;
             CHECK(x.meeting == Meeting::Join && x.otherSide == OtherSide::Path);
-            const PathId other = x.merging == x.a ? x.otherPath() : x.a;
-            CHECK(x.merging == x.a || x.merging == x.otherPath());
+            const PathId merging = m.mergingAt(x);
+            CHECK(merging.valid() && (merging == x.a || merging == x.otherPath()));
+            if (!merging.valid()) continue;
+            const PathId other = merging == x.a ? x.otherPath() : x.a;
             if (!other.valid() || other.index >= G.paths.size()) continue;
-            const std::string key = L.lanes[G.paths[x.merging.index].modelLane].id + ">" + L.lanes[G.paths[other.index].modelLane].id;
+            const std::string key = L.lanes[G.paths[merging.index].modelLane].id + ">" + L.lanes[G.paths[other.index].modelLane].id;
             if (marked.insert(key).second && !known.merges.count(key)) std::printf("      stated merge %s marked (not known)\n", key.c_str());
         }
         for (const std::string& k : known.merges)
@@ -2167,7 +2170,7 @@ void checkConnectors(const std::string& name) {
             if (!paved(at + side, G.heightAt(PathId(c), s)) || !paved(at - side, G.heightAt(PathId(c), s))) {
                 if (offRoad++ < 4)
                     std::printf("      connector %u (%s, %.1f m, tightest %.1f m) swept %.1f m wide leaves the paved road %.2f m along it, "
-                                "at (%.2f, %.2f)\n", c, p.turn == Turn::Straight ? "straight on" : "a turn", p.length,
+                                "at (%.2f, %.2f)\n", c, modelOf(name).turnOf(PathId(c)) == Turn::Straight ? "straight on" : "a turn", p.length,
                                 p.tightestRadius, widest, s, at.x, at.y);
                 break;
             }
@@ -2217,10 +2220,11 @@ TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
     for (const std::pair<std::string, std::vector<uint32_t>>& o : lg.outside) std::printf("      %zu lanes %s\n", o.second.size(), o.first.c_str());
     CHECK(lg.reachableShare >= 0.9);
     // EVERY RAMP IS A WAY ON AND OFF (ADR-0426): each ramp's lane leaves its host's lane and leads into the road it joins
-    const LaneGraph& G = modelOf("planned/traffic_lab_lanelab").laneLevel;
+    const RoadModel& lab = modelOf("planned/traffic_lab_lanelab");
+    const LaneGraph& G = lab.laneLevel;
     for (uint32_t p = 0; p < G.paths.size(); ++p) {
         const Path& path = G.paths[p];
-        if (path.kind != PathKind::Lane || G.roadClassNames[G.sections[path.section.index].roadClass] != "ramp") continue;
+        if (path.kind != PathKind::Lane || lab.roadClassOf(PathId(p)) != "ramp") continue;
         CHECK(path.next.count > 0);
     }
     CHECK(lg.divergeJoins == 8u && lg.mergeJoins == 8u);
@@ -2304,17 +2308,18 @@ TEST_CASE(lanes_the_traffic_lab_road_model_problems_are_known) {
 // profile is small; and every kink counted is listed in the problems with its place.
 TEST_CASE(lanes_the_traffic_lab_bends_look_like_its_roads) {
     const LaneGraphBuild& lg = laneGraphOf("planned/traffic_lab_lanelab");
-    const LaneGraph& G = modelOf("planned/traffic_lab_lanelab").laneLevel;
+    const RoadModel& lab = modelOf("planned/traffic_lab_lanelab");
+    const LaneGraph& G = lab.laneLevel;
     double fastest = 0;
-    for (const Path& p : G.paths)
-        if (p.kind == PathKind::Lane) fastest = std::max(fastest, p.speedLimit);
+    for (uint32_t i = 0; i < G.paths.size(); ++i)
+        if (G.paths[i].kind == PathKind::Lane) fastest = std::max(fastest, lab.postedLimit(PathId(i)));
     std::vector<double> radii;
     uint32_t mismatched = 0;
     for (uint32_t i = 0; i < G.paths.size(); ++i) {
         const Path& p = G.paths[i];
         if (p.kind != PathKind::Lane) continue;
         if (G.tightestBend(PathId(i)).radius != p.tightestRadius) ++mismatched;
-        if (p.speedLimit == fastest) radii.push_back(G.tightestBend(PathId(i)).radius);
+        if (lab.postedLimit(PathId(i)) == fastest) radii.push_back(G.tightestBend(PathId(i)).radius);
     }
     std::sort(radii.begin(), radii.end());
     CHECK(!radii.empty());
@@ -2782,7 +2787,6 @@ double testReach() { return kTestLongWidth + kCrossingMargin; }
 constexpr double kHandLaneLength = 30.0;
 constexpr double kMiniLaneLength = 20.0;
 constexpr TagMask kBothTestVehicles = 3;
-constexpr double kTestSpeedLimit = 10.0;   // metres per second, any: nothing here reads it
 
 // Adds a path open to both test vehicles, with an empty next list beside it.
 uint32_t addTestPath(LaneGraph& g, std::vector<std::vector<PathId>>& next, PathKind kind, const std::vector<Vec2>& pts,
@@ -2793,7 +2797,6 @@ uint32_t addTestPath(LaneGraph& g, std::vector<std::vector<PathId>>& next, PathK
     p.curve = g.addCurve(pts, z);
     p.length = g.along[p.curve.end() - 1];
     p.width = kHandLaneWidth;
-    p.speedLimit = kTestSpeedLimit;
     g.paths.push_back(p);
     next.emplace_back();
     return static_cast<uint32_t>(g.paths.size() - 1);
@@ -2801,7 +2804,6 @@ uint32_t addTestPath(LaneGraph& g, std::vector<std::vector<PathId>>& next, PathK
 // Puts a lane in a section of its own.
 void ownSection(LaneGraph& g, uint32_t lane) {
     Section s;
-    s.roadClass = 0;
     s.lanes = Range{static_cast<uint32_t>(g.sectionLanes.size()), 1};
     s.lines = Range{static_cast<uint32_t>(g.laneLines.size()), 0};
     g.paths[lane].section = SectionId(static_cast<uint32_t>(g.sections.size()));
@@ -2811,8 +2813,6 @@ void ownSection(LaneGraph& g, uint32_t lane) {
 LaneGraph emptyTestGraph() {
     LaneGraph g;
     g.vehicleTagNames = {kLaneGraphTestTag, kLaneGraphLongTag};
-    g.roadClassNames = {"street"};
-    g.controlNames = {"unmarked"};
     return g;
 }
 // Writes the next lists and the one junction: `connectors` through it, `arriving` and `leaving` lanes, its outline round
@@ -2825,7 +2825,6 @@ void finishTestGraph(LaneGraph& g, std::vector<std::vector<PathId>>& next, std::
         g.nextPaths.insert(g.nextPaths.end(), next[p].begin(), next[p].end());
     }
     Junction jn;
-    jn.control = 0;
     jn.connectors = Range{0, static_cast<uint32_t>(g.junctionConnectors.size())};
     jn.box = g.addPlanPoints(convexHull(ends));
     std::sort(arriving.begin(), arriving.end());
@@ -2844,6 +2843,7 @@ void finishTestGraph(LaneGraph& g, std::vector<std::vector<PathId>>& next, std::
 struct HandGraph {
     LaneGraph g;
     std::map<uint32_t, uint32_t> pathOf;
+    std::map<uint32_t, Turn> turnOf;   // each connector's turn, as handTurns stated it (the table holds no turn kind)
 };
 HandGraph handGraph(const std::vector<double>& bearings, const std::vector<uint32_t>& lanes, double kerbPerp = -1,
                     bool mirrored = false) {
@@ -2857,7 +2857,6 @@ HandGraph handGraph(const std::vector<double>& bearings, const std::vector<uint3
     for (int side = 0; side < 2; ++side)
         for (const HandLeg& leg : side == 0 ? arriving : leaving) {
             Section sec;
-            sec.roadClass = 0;
             sec.lanes.first = static_cast<uint32_t>(g.sectionLanes.size());
             sec.lines.first = static_cast<uint32_t>(g.laneLines.size());
             for (std::size_t k = 0; k < leg.lanes.size(); ++k) {
@@ -2882,7 +2881,7 @@ HandGraph handGraph(const std::vector<double>& bearings, const std::vector<uint3
                                                 g.pointAt(b, 0), g.directionAt(b, 0));
         CHECK(s.ok);
         const uint32_t c = addTestPath(g, next, PathKind::Connector, s.points, std::vector<Real>(s.points.size(), 0));
-        g.paths[c].turn = t.turn;
+        h.turnOf[c] = t.turn;
         g.paths[c].tightestRadius = s.tightestRadius;
         g.paths[c].junction = JunctionId(0);
         g.paths[c].from = a;
@@ -2929,7 +2928,6 @@ LaneGraph miniJunction(const std::vector<MiniTurn>& turns) {
         const std::size_t si = static_cast<std::size_t>(std::find_if(starts.begin(), starts.end(), [&](const Vec2& s) { return same(s, t.from); }) - starts.begin());
         const std::size_t fi = static_cast<std::size_t>(std::find_if(finishes.begin(), finishes.end(), [&](const Vec2& s) { return same(s, t.to); }) - finishes.begin());
         const uint32_t c = addTestPath(g, next, PathKind::Connector, {t.from, t.to}, {t.z, t.z});
-        g.paths[c].turn = Turn::Straight;
         g.paths[c].junction = JunctionId(0);
         g.paths[c].from = PathId(laneIn[si]);
         next[laneIn[si]].push_back(PathId(c));
@@ -3034,7 +3032,7 @@ TEST_CASE(lanes_crossing_points_four_way_one_lane_each_way) {
         int crosses = 0;
         for (uint32_t k = h.g.paths[c].crossings.first; k < h.g.paths[c].crossings.end(); ++k)
             crosses += h.g.crossings[h.g.pathCrossings[k].index].meeting == Meeting::Cross ? 1 : 0;
-        CHECK(crosses == (h.g.paths[c].turn == Turn::NearTurn ? 0 : 4));
+        CHECK(crosses == (h.turnOf.at(c) == Turn::NearTurn ? 0 : 4));
     }
     CHECK(uncoveredCrossings(h.g, crossingTestOptions().clearance) == 0);
 }
@@ -3257,13 +3255,10 @@ void checkCrossings(const std::string& name) {
         CHECK(std::adjacent_find(intos.begin(), intos.end()) == intos.end());
     }
     std::printf("      %d junctions with two or more connectors and no crossing point, %d of them carry-ons\n", without, carryOns);
-    // found again: the same table, byte for byte (the stated merges, which the lane level marks on its Joins after they are
-    // found, CrossingPoint::merging, are not the crossings code's: left out of the comparison)
+    // found again: the same table, byte for byte (the stated merges, which the lane level names on its Joins after they
+    // are found, CrossingPoint::modelConnection, are not the crossings code's: left out of the comparison)
     LaneGraph found = G;
-    for (CrossingPoint& x : found.crossings) {
-        x.merging = PathId();
-        x.modelConnection = kNoIndex;
-    }
+    for (CrossingPoint& x : found.crossings) x.modelConnection = kNoIndex;
     LaneGraph again = G;
     CrossingOptions co = crossingTestOptions();
     co.clearance = r.graph.rules.sameLevelDz;
@@ -3304,7 +3299,6 @@ LaneGraph twoTurnsSideBySide(double inner, double outer) {
         ownSection(g, a);
         ownSection(g, b);
         const uint32_t c = addTestPath(g, next, PathKind::Connector, arc, std::vector<Real>(arc.size(), 0));
-        g.paths[c].turn = Turn::FarTurn;
         g.paths[c].junction = JunctionId(0);
         g.paths[c].from = PathId(a);
         g.paths[c].tightestRadius = r;

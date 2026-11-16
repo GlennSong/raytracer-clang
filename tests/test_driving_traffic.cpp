@@ -6,6 +6,7 @@
 
 #include "test_framework.h"
 
+#include "driving_test_roads.h"   // modelOf: the road model of a lane table laid by hand
 #include "apps/driving/driving.h"
 #include "apps/driving/traffic_state.h"
 #include "engine/procgen/city/polyline.h"
@@ -117,7 +118,8 @@ const PathEntry* entryOf(const PathList& list, uint32_t car) {
 
 TEST_CASE(driving_car_place_query_remove) {
     const engine::LaneGraph g = chain({20, 30});
-    Driving d(&g);
+    const engine::RoadModel road = driving_test::modelOf(g);   // the driving is handed a road model: this lane table
+    Driving d(&road);
     d.setVehicleClasses(testClasses());
     std::string why;
 
@@ -160,7 +162,8 @@ TEST_CASE(driving_car_place_query_remove) {
 
     // A car whose body needs a longer trail than any car may have.
     const engine::LaneGraph tiny = chain(std::vector<Real>(kMaxTrail + 2, 0.5));
-    Driving t(&tiny);
+    const engine::RoadModel tinyRoad = driving_test::modelOf(tiny);
+    Driving t(&tinyRoad);
     t.setVehicleClasses(testClasses());
     std::vector<engine::PathId> fullTrail;
     for (uint32_t i = 0; i < kMaxTrail; ++i) fullTrail.push_back(pid(static_cast<uint32_t>(kMaxTrail - i)));
@@ -298,7 +301,8 @@ TEST_CASE(driving_long_vehicle_listed_on_three_paths) {
     // A feeder lane Z of 20 m, then A 3 m, B 4 m, C 6 m.
     const engine::LaneGraph g = chain({20, 3, 4, 6});
     const uint32_t Z = 0, A = 1, B = 2, C = 3;
-    Driving d(&g);
+    const engine::RoadModel road = driving_test::modelOf(g);   // the driving is handed a road model: this lane table
+    Driving d(&road);
     d.setVehicleClasses(testClasses());
     std::string why;
     // 12 m long, its front at the end of C: C 0..6, B 0..4, A 1..3.
@@ -383,7 +387,8 @@ TEST_CASE(driving_car_ahead_across_tiny_paths) {
     for (int i = 0; i < 10; ++i) lengths.push_back(0.5);
     lengths.push_back(20);
     const engine::LaneGraph g = chain(lengths);
-    Driving d(&g);
+    const engine::RoadModel road = driving_test::modelOf(g);   // the driving is handed a road model: this lane table
+    Driving d(&road);
     d.setVehicleClasses(testClasses());
     std::string why;
     // Me, 0.4 m long, front 0.1 m into the first tiny path (my tail on the feeder). The leader, front 0.45 m into
@@ -447,7 +452,8 @@ engine::LaneGraph splitGraph() {
 
 TEST_CASE(driving_car_ahead_at_a_split_follows_the_other_path) {
     const engine::LaneGraph g = splitGraph();
-    Driving d(&g);
+    const engine::RoadModel road = driving_test::modelOf(g);   // the driving is handed a road model: this lane table
+    Driving d(&road);
     d.setVehicleClasses(testClasses());
     std::string why;
     // The leader went by connector 2 and is 10 m along it (its whole body off the lane); I am on the lane, 5 m short of
@@ -472,7 +478,8 @@ TEST_CASE(driving_car_ahead_at_a_split_follows_the_other_path) {
 
 TEST_CASE(driving_car_behind_and_cars_on_stretch) {
     const engine::LaneGraph g = twoLanes();
-    Driving d(&g);
+    const engine::RoadModel road = driving_test::modelOf(g);   // the driving is handed a road model: this lane table
+    Driving d(&road);
     d.setVehicleClasses(testClasses());
     for (uint32_t i = 1; i <= 3; ++i) CHECK(d.placeCar(CarId(i), kCar, at(0, 20.0 * i)));   // fronts at 20, 40, 60
     const std::vector<Car>& cars = d.cars();
@@ -576,8 +583,9 @@ TEST_CASE(driving_traffic_same_whatever_the_storage_order) {
     }
 
     // The state hash: the same cars placed in another order hash the same.
+    const engine::RoadModel road = driving_test::modelOf(g);
     const auto placeAll = [&](const std::vector<Car>& order) {
-        Driving d(&g);
+        Driving d(&road);
         d.setVehicleClasses(classes);
         for (const Car& c : order) {
             std::vector<engine::PathId> trail(c.trail.begin(), c.trail.begin() + c.trailCount);

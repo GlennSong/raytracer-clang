@@ -227,12 +227,12 @@ struct TestRules {
     RuleIndex rule(const char* name) const { return compiled.findRule(name); }
 };
 
-// Binds the rules to the road and hands them to `d`.
-bool giveRules(Driving& d, const engine::LaneGraph& g, const TestRules& r) {
+// Binds the rules to `d`'s road and hands them to `d`.
+bool giveRules(Driving& d, const TestRules& r) {
     if (!r.ok) return false;
     RoadRules rr;
     std::vector<std::string> problems;
-    const bool bound = buildRoadRules(g, r.ruleSet, r.facts, rr, &problems);
+    const bool bound = buildRoadRules(*d.model(), r.ruleSet, r.facts, rr, &problems);
     for (const std::string& p : problems) std::printf("    %s\n", p.c_str());
     std::string why;
     const bool used = bound && d.useRules(r.ruleSet, r.facts, r.vocab, r.compiled, rr, &why);
@@ -280,10 +280,11 @@ struct Straight {
         : roads(driving_test::straightRoadOf(lengths)), sections(static_cast<uint32_t>(lengths.size())) {
         starts.push_back(0);
         for (const Real l : lengths) starts.push_back(starts.back() + l);
-        sectionOfPath.assign(roads.graph.paths.size(), -1);
+        sectionOfPath.assign(roads.model.laneLevel.paths.size(), -1);
         for (uint32_t i = 0; i < sections; ++i) sectionOfPath[lane(i).index] = static_cast<int>(i);
     }
-    const engine::LaneGraph& graph() const { return roads.graph; }
+    const engine::RoadModel& model() const { return roads.model; }
+    const engine::LaneGraph& graph() const { return roads.model.laneLevel; }
     Real end() const { return starts.back(); }
     engine::PathId lane(uint32_t i) const { return roads.straightLane(i, true, 0); }
     // The section a front at `x` is on (a front exactly at a section's end is on that section).
@@ -410,9 +411,9 @@ void decideEvery(Driving& d, Real interval, Real dt) {
 // A Driving on `road` with the test classes and rules.
 struct World {
     Driving d;
-    explicit World(const engine::LaneGraph& g, const TestRules& rules) : d(&g) {
+    explicit World(const engine::RoadModel& road, const TestRules& rules) : d(&road) {
         d.setVehicleClasses(testClasses());
-        CHECK(giveRules(d, g, rules));
+        CHECK(giveRules(d, rules));
     }
 };
 
@@ -427,7 +428,7 @@ TEST_CASE(tick_rules_need_gap_kept_standstill_gap_and_anticipation) {
     CHECK(lacking.ok);
     RoadRules rr;
     std::vector<std::string> problems;
-    CHECK(!buildRoadRules(road.graph(), lacking.ruleSet, lacking.facts, rr, &problems));
+    CHECK(!buildRoadRules(road.model(), lacking.ruleSet, lacking.facts, rr, &problems));
     CHECK(problems.size() == 3u);
     for (const std::string& p : problems) {
         CHECK(p.find(kMoveReaderName) != std::string::npos);
@@ -437,7 +438,7 @@ TEST_CASE(tick_rules_need_gap_kept_standstill_gap_and_anticipation) {
           problems[1].find(kNumberAnticipation) != std::string::npos &&
           problems[2].find(kSettingGapKept) != std::string::npos);
     // ... and Driving refuses it rather than move cars by numbers it does not have.
-    Driving d(&road.graph());
+    Driving d(&road.model());
     std::string why;
     CHECK(!d.useRules(lacking.ruleSet, lacking.facts, lacking.vocab, lacking.compiled, rr, &why));
     CHECK(!d.hasRules() && !why.empty());
@@ -459,7 +460,7 @@ TEST_CASE(tick_rules_need_gap_kept_standstill_gap_and_anticipation) {
 TEST_CASE(tick_1_empty_road_reaches_top_speed_on_the_predicted_curve) {
     const Straight road(20, 100);
     const TestRules rules(ruleSetLua(kAllRules));
-    World w(road.graph(), rules);
+    World w(road.model(), rules);
     constexpr Real dt = 0.1;
     decideEvery(w.d, dt, dt);
     CHECK(placeAt(w.d, road, 1, 10));
@@ -504,7 +505,7 @@ TEST_CASE(tick_2_stops_short_of_a_stop_point_and_never_past) {
     const Real steps[] = {1.0 / 60, 1.0 / 30, 0.1, 0.5};
     const Real holdX = 300;
     for (const Real dt : steps) {
-        World w(road.graph(), rules);
+        World w(road.model(), rules);
         decideEvery(w.d, 0.1, dt);
         CHECK(placeAt(w.d, road, 1, 10));
         const TripId trip = w.d.beginTrip(CarId(1), 1, road.point(590));
@@ -533,7 +534,7 @@ TEST_CASE(tick_2_stops_short_of_a_stop_point_and_never_past) {
 namespace {
 
 void leaderBrakesHard(Real dt, Real decideInterval, const TestRules& rules, const Straight& road) {
-    World w(road.graph(), rules);
+    World w(road.model(), rules);
     decideEvery(w.d, decideInterval, dt);
     constexpr uint32_t kCars = 21;   // the leader (id 0) and twenty followers
     TripId leader;
@@ -621,7 +622,7 @@ Real stepFor(uint32_t seed) {
 Real intervalFor(uint32_t seed) { return (seed / 4) % 2 == 0 ? 0.1 : 0.5; }
 
 void randomLeader(const RandomRun& r, const TestRules& rules, const Straight& road, Watch& watch) {
-    World w(road.graph(), rules);
+    World w(road.model(), rules);
     decideEvery(w.d, intervalFor(r.seed), r.dt);
     const uint32_t cars = r.followers + 1;
     std::vector<uint32_t> placeOrder = r.placeOrder, tripOrder = r.tripOrder;
@@ -808,7 +809,7 @@ TEST_CASE(tick_7_crosses_ten_short_paths_in_one_tick) {
     constexpr Real kPath = 0.5;
     const Straight road(400, kPath);
     const TestRules rules(ruleSetLua(kAllRules));
-    World w(road.graph(), rules);
+    World w(road.model(), rules);
     constexpr Real dt = 0.5;
     decideEvery(w.d, 0.1, dt);
     const Real startX = 5.0;
@@ -871,7 +872,7 @@ LongRun longVehicleAndFollower(uint32_t vehicleClass, Real shortPath, uint32_t s
     lengths.push_back(200);
     const Straight road(lengths);
     const TestRules rules(ruleSetLua(kAllRules));
-    World w(road.graph(), rules);
+    World w(road.model(), rules);
     constexpr Real dt = 1.0 / 60;
     const Real length = w.d.vehicleClasses().at(vehicleClass).length;
     const Real vehicleX = 95, followerX = vehicleX - length - 10;
@@ -938,7 +939,7 @@ TEST_CASE(tick_7c_body_longer_than_the_trail_is_counted_and_kept_clear) {
 TEST_CASE(tick_8_released_queue_empties_at_a_steady_interval) {
     const Straight road(15, 100);
     const TestRules rules(ruleSetLua(kAllRules));
-    World w(road.graph(), rules);
+    World w(road.model(), rules);
     constexpr Real dt = 1.0 / 60;
     decideEvery(w.d, 0.1, dt);
     constexpr uint32_t kCars = 20;
@@ -997,7 +998,7 @@ TEST_CASE(tick_8_released_queue_empties_at_a_steady_interval) {
 TEST_CASE(tick_9_grid_trip_corner_to_corner_parks) {
     const TestRoads t = driving_test::gridRoads(3, 3);
     const TestRules rules(ruleSetLua(kAllRules));
-    World w(t.graph, rules);
+    World w(t.model, rules);
     constexpr Real dt = 1.0 / 60;
     std::string why;
     CHECK(w.d.placeCar(CarId(1), kOrdinary, at(t.laneLeaving(0, 0, Heading::East, 0), 10), {}, &why));
@@ -1018,7 +1019,7 @@ TEST_CASE(tick_9_grid_trip_corner_to_corner_parks) {
         watch.look(w.d);
         const Car& c = *w.d.car(CarId(1));
         topSpeedSeen = std::max(topSpeedSeen, c.speed);
-        if (t.graph.paths[c.path.index].kind == engine::PathKind::Connector &&
+        if (t.model.laneLevel.paths[c.path.index].kind == engine::PathKind::Connector &&
             (connectorsDriven.empty() || connectorsDriven.back() != c.path.index))
             connectorsDriven.push_back(c.path.index);
         events = w.d.drainEvents();
@@ -1047,7 +1048,7 @@ TEST_CASE(tick_9_grid_trip_corner_to_corner_parks) {
 TEST_CASE(tick_10_hold_stops_names_held_release_goes_on) {
     const Straight road(6, 100);
     const TestRules rules(ruleSetLua(kAllRules));
-    World w(road.graph(), rules);
+    World w(road.model(), rules);
     constexpr Real dt = 1.0 / 60;
     CHECK(placeAt(w.d, road, 1, 10));
     const TripId trip = w.d.beginTrip(CarId(1), 1, road.point(590));
@@ -1080,7 +1081,7 @@ TEST_CASE(tick_10_hold_stops_names_held_release_goes_on) {
 TEST_CASE(tick_11_stops_behind_a_parked_car_and_stays_put) {
     const Straight road(10, 100);
     const TestRules rules(ruleSetLua(kAllRules));
-    World w(road.graph(), rules);
+    World w(road.model(), rules);
     constexpr Real dt = 1.0 / 60;
     constexpr Real kParkedX = 500;
     CHECK(placeAt(w.d, road, 2, kParkedX));   // nobody drives it
@@ -1106,7 +1107,7 @@ TEST_CASE(tick_11_stops_behind_a_parked_car_and_stays_put) {
 TEST_CASE(tick_12_way_end_without_a_rule_is_a_wall) {
     const Straight road(3, 100);
     const TestRules rules(ruleSetLua({kRuleSpeedLimit, kRuleHeld}));   // no "lane ends", no "arrive"
-    World w(road.graph(), rules);
+    World w(road.model(), rules);
     constexpr Real dt = 1.0 / 60;
     CHECK(placeAt(w.d, road, 1, 10));
     CHECK(w.d.beginTrip(CarId(1), 1, road.point(250)).valid());
@@ -1148,13 +1149,13 @@ struct BendRun {
 BendRun runToABend(Real radius, Real dt, Real interval) {
     constexpr Real kBendFrom = 340, kBendTo = 370;
     Straight road(6, 100);
-    engine::LaneGraph& g = road.roads.graph;
+    engine::LaneGraph& g = road.roads.model.laneLevel;
     engine::Path& bent = g.paths[road.lane(3).index];
     bent.bends = g.addBends({engine::BendPiece{0, engine::kNoBend}, engine::BendPiece{kBendFrom - 300, radius},
                              engine::BendPiece{kBendTo - 300, engine::kNoBend}});
     bent.tightestRadius = radius;
     const TestRules rules(ruleSetLua(kAllRules));
-    World w(road.graph(), rules);
+    World w(road.model(), rules);
     decideEvery(w.d, interval, dt);
     CHECK(placeAt(w.d, road, 1, 10));
     CHECK(w.d.beginTrip(CarId(1), 1, road.point(590)).valid());
@@ -1215,8 +1216,8 @@ TEST_CASE(tick_timing_lists_and_a_thousand_driven_cars) {
         const TestRoads t = driving_test::gridRoads(20, 20);
         const VehicleClasses classes = testClasses();
         std::vector<engine::PathId> lanes;
-        for (uint32_t i = 0; i < t.graph.paths.size(); ++i)
-            if (t.graph.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
+        for (uint32_t i = 0; i < t.model.laneLevel.paths.size(); ++i)
+            if (t.model.laneLevel.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
         for (const uint32_t count : {1000u, 10000u}) {
             std::vector<Car> cars;
             for (uint32_t k = 0; k < count; ++k) {
@@ -1229,12 +1230,12 @@ TEST_CASE(tick_timing_lists_and_a_thousand_driven_cars) {
             PathLists lists;
             constexpr int kReps = 50;
             const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-            for (int r = 0; r < kReps; ++r) rebuildPathLists(t.graph, classes, cars, lists);
+            for (int r = 0; r < kReps; ++r) rebuildPathLists(t.model.laneLevel, classes, cars, lists);
             const double us =
                 std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / kReps;
             CHECK(lists.entries.size() >= count);
             std::printf("    rebuilding every path's list, %u cars on %zu paths: %.0f us\n", count,
-                        t.graph.paths.size(), us);
+                        t.model.laneLevel.paths.size(), us);
         }
     }
     // One tick at 1,000 driven cars on a 10 by 10 grid, deciding every 6 ticks at 60 a second. (No junction logic
@@ -1242,10 +1243,10 @@ TEST_CASE(tick_timing_lists_and_a_thousand_driven_cars) {
     {
         const TestRoads t = driving_test::gridRoads(10, 10);
         const TestRules rules(ruleSetLua(kAllRules));
-        World w(t.graph, rules);
+        World w(t.model, rules);
         std::vector<engine::PathId> lanes;
-        for (uint32_t i = 0; i < t.graph.paths.size(); ++i)
-            if (t.graph.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
+        for (uint32_t i = 0; i < t.model.laneLevel.paths.size(); ++i)
+            if (t.model.laneLevel.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
         constexpr uint32_t kCars = 1000;
         uint32_t trips = 0;
         for (uint32_t k = 0; k < kCars; ++k) {
@@ -1266,7 +1267,7 @@ TEST_CASE(tick_timing_lists_and_a_thousand_driven_cars) {
             if (c.speed > 0) ++moving;
         CHECK(trips == kCars);
         std::printf("    one tick, %u driven cars on a 10x10 grid (%zu paths): %.0f us (%u moving)\n", trips,
-                    t.graph.paths.size(), us, moving);
+                    t.model.laneLevel.paths.size(), us, moving);
     }
 }
 
@@ -1305,7 +1306,7 @@ struct Change {
 TEST_CASE(trace_T1_one_entry_per_change_in_order) {
     const Straight road(10, 100);
     const TestRules rules(ruleSetLua(kAllRules));
-    World w(road.graph(), rules);
+    World w(road.model(), rules);
     w.d.setVehicleClasses(classesWithSlow());
     constexpr Real dt = 1.0 / 60;
     constexpr Real kHoldX = 700;
@@ -1371,8 +1372,8 @@ TEST_CASE(trace_T2_tracing_on_or_off_same_state_hash) {
     const TestRoads t = driving_test::gridRoads(4, 4);
     const TestRules rules(ruleSetLua(kAllRules));
     std::vector<engine::PathId> lanes;
-    for (uint32_t i = 0; i < t.graph.paths.size(); ++i)
-        if (t.graph.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
+    for (uint32_t i = 0; i < t.model.laneLevel.paths.size(); ++i)
+        if (t.model.laneLevel.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
     constexpr uint32_t kCars = 50;
     constexpr int kTicks = 2000;
     constexpr Real dt = 1.0 / 60;
@@ -1380,7 +1381,7 @@ TEST_CASE(trace_T2_tracing_on_or_off_same_state_hash) {
     uint64_t traceHashes[2] = {0, 0};
     uint64_t entries[2] = {0, 0};
     for (int pass = 0; pass < 2; ++pass) {
-        World w(t.graph, rules);
+        World w(t.model, rules);
         DrivingSettings s;
         s.trace = pass == 0;
         w.d.setSettings(s);
@@ -1414,7 +1415,7 @@ TEST_CASE(trace_T3_driver_cards) {
     Watch watch;
     // A car on free road, at the speed limit.
     {
-        World w(road.graph(), rules);
+        World w(road.model(), rules);
         CHECK(placeAt(w.d, road, 14, 10));
         CHECK(w.d.beginTrip(CarId(14), 5, road.point(590)).valid());
         run(w.d, 15, dt, watch);
@@ -1432,7 +1433,7 @@ TEST_CASE(trace_T3_driver_cards) {
     }
     // A car following a slower one.
     {
-        World w(road.graph(), rules);
+        World w(road.model(), rules);
         w.d.setVehicleClasses(classesWithSlow());
         CHECK(placeAt(w.d, road, 9, 60, kSlow));
         CHECK(placeAt(w.d, road, 14, 10));
@@ -1452,7 +1453,7 @@ TEST_CASE(trace_T3_driver_cards) {
     }
     // A car held at a hold.
     {
-        World w(road.graph(), rules);
+        World w(road.model(), rules);
         CHECK(placeAt(w.d, road, 14, 10));
         const TripId trip = w.d.beginTrip(CarId(14), 5, road.point(590));
         CHECK(w.d.placeHold(trip, 3, road.point(150)));
@@ -1517,7 +1518,7 @@ TEST_CASE(trace_T4_full_ring_is_one_gridlock_loop) {
     const TestRules rules(ruleSetLua(kAllRules));
     constexpr Real dt = 1.0 / 60;
     {
-        World w(ring.graph, rules);
+        World w(ring.model, rules);
         fillRing(w, ring, CarId::kNone);
         Watch watch;
         run(w.d, 2, dt, watch);
@@ -1535,7 +1536,7 @@ TEST_CASE(trace_T4_full_ring_is_one_gridlock_loop) {
     }
     {
         // One car fewer: the gap travels back round the ring, every car moving up into it in turn.
-        World w(ring.graph, rules);
+        World w(ring.model, rules);
         fillRing(w, ring, 0);
         Watch watch;
         uint64_t ticksWithNoReason = 0, ticksWithLoops = 0;
@@ -1562,7 +1563,7 @@ TEST_CASE(trace_T4_full_ring_is_one_gridlock_loop) {
 TEST_CASE(trace_T5_queue_behind_a_hold_is_a_chain) {
     const Straight road(6, 100);
     const TestRules rules(ruleSetLua(kAllRules));
-    World w(road.graph(), rules);
+    World w(road.model(), rules);
     constexpr Real dt = 1.0 / 60;
     constexpr uint32_t kQueue = 6;
     TripId head;
@@ -1625,10 +1626,10 @@ void checkZeroTargetRows(const MeasurementReport& rep, const std::vector<const c
 TEST_CASE(measure_M1_grid_city_three_minutes_clean) {
     const TestRoads t = driving_test::gridRoads(4, 4);
     const TestRules rules(ruleSetLua(kAllRules));
-    World w(t.graph, rules);
+    World w(t.model, rules);
     std::vector<engine::PathId> lanes;
-    for (uint32_t i = 0; i < t.graph.paths.size(); ++i)
-        if (t.graph.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
+    for (uint32_t i = 0; i < t.model.laneLevel.paths.size(); ++i)
+        if (t.model.laneLevel.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
     constexpr uint32_t kCars = 60;
     constexpr uint32_t kSeed = 257;
     constexpr Real kDestinationAlong = 50;
@@ -1679,7 +1680,7 @@ TEST_CASE(measure_M1_grid_city_three_minutes_clean) {
 TEST_CASE(measure_M2_released_queue_figures) {
     const Straight road(6, 100);
     const TestRules rules(ruleSetLua(kAllRules));
-    World w(road.graph(), rules);
+    World w(road.model(), rules);
     constexpr Real dt = 1.0 / 60;
     decideEvery(w.d, 0.1, dt);
     constexpr uint32_t kCars = 10;
@@ -1719,7 +1720,7 @@ TEST_CASE(measure_M3_full_ring_is_one_gridlock_counted_once) {
     const TestRoads ring = ringOfFour();
     const TestRules rules(ruleSetLua(kAllRules));
     constexpr Real dt = 1.0 / 60;
-    World w(ring.graph, rules);
+    World w(ring.model, rules);
     fillRing(w, ring, CarId::kNone);
     Measurements m;
     w.d.attachMeasurements(&m);
@@ -1747,15 +1748,15 @@ TEST_CASE(measure_M4_attached_or_not_same_state_hash) {
     const TestRoads t = driving_test::gridRoads(4, 4);
     const TestRules rules(ruleSetLua(kAllRules));
     std::vector<engine::PathId> lanes;
-    for (uint32_t i = 0; i < t.graph.paths.size(); ++i)
-        if (t.graph.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
+    for (uint32_t i = 0; i < t.model.laneLevel.paths.size(); ++i)
+        if (t.model.laneLevel.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
     constexpr uint32_t kCars = 50;
     constexpr int kTicks = 2000;
     constexpr Real dt = 1.0 / 60;
     std::vector<uint64_t> hashes[2];
     Measurements m;
     for (int pass = 0; pass < 2; ++pass) {
-        World w(t.graph, rules);
+        World w(t.model, rules);
         for (uint32_t k = 0; k < kCars; ++k) {
             const engine::PathId lane = lanes[k % lanes.size()];
             CHECK(w.d.placeCar(CarId(k), kOrdinary, at(lane, 10 + static_cast<Real>(k / lanes.size()) * 30)));

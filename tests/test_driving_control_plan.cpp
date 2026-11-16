@@ -90,9 +90,8 @@ JunctionFacts gridJunction(const TestRoads& t, const std::string& eastWest, cons
 // grid takes the same, so the rule set knows every junction's), and each regulation the row names for an approach at
 // the end of every lane arriving by it. Returns the arms' headings that got a sign.
 std::vector<Heading> carry(TestRoads& t, const JunctionFacts& j, const ControlChoice& choice, const ControlPolicy& policy) {
-    engine::LaneGraph& g = t.graph;
-    g.controlNames = {choice.control};
-    for (engine::Junction& jn : g.junctions) jn.control = 0;
+    engine::LaneGraph& g = t.model.laneLevel;
+    for (uint32_t jn = 0; jn < g.junctions.size(); ++jn) driving_test::stateControl(t.model, engine::JunctionId(jn), choice.control);
     const PolicyRow& row = policy.rows[static_cast<std::size_t>(choice.row)];
     std::map<uint32_t, std::vector<std::string>> kindsOn;   // lane -> kinds at its end
     std::vector<Heading> signed_;
@@ -147,7 +146,7 @@ struct Built {
     RoadRules roadRules;
     RightOfWay row;
 };
-bool buildTable(engine::LaneGraph& g, Built& b) {
+bool buildTable(const engine::RoadModel& g, Built& b) {
     FactRegistry none;
     std::vector<std::string> problems;
     const bool ok = buildRoadRules(g, b.rules, none, b.roadRules, &problems);
@@ -172,14 +171,14 @@ TEST_CASE(control_plan_meets_the_table_1_a_two_way_stop) {
     if (choice.row < 0) return;
     const std::vector<Heading> signed_ = carry(t, j, choice, policy);
     CHECK(signed_ == (std::vector<Heading>{Heading::North, Heading::South}));
-    CHECK(buildTable(t.graph, b));
-    const engine::Junction& jn = t.graph.junctions[t.junction(kRow, kCol).index];
-    std::printf("%s", describeJunctionRules(t.graph, b.rules, b.row, t.junction(kRow, kCol)).c_str());
+    CHECK(buildTable(t.model, b));
+    const engine::Junction& jn = t.model.laneLevel.junctions[t.junction(kRow, kCol).index];
+    std::printf("%s", describeJunctionRules(t.model,b.rules, b.row, t.junction(kRow, kCol)).c_str());
     const std::map<uint32_t, Heading> from = arrivingHeadingOf(t);
     auto minor = [&](uint32_t path) { const Heading h = from.at(path); return h == Heading::North || h == Heading::South; };
     int bySign = 0, majorPairs = 0;
     for (uint32_t k = jn.crossings.first; k < jn.crossings.end(); ++k) {
-        const engine::CrossingPoint& rec = t.graph.crossings[k];
+        const engine::CrossingPoint& rec = t.model.laneLevel.crossings[k];
         if (rec.otherSide != engine::OtherSide::Path || rec.meeting == engine::Meeting::Split) continue;
         const MeetingAnswer* a = b.row.answer(engine::CrossingId(k));
         CHECK(a != nullptr);
@@ -219,15 +218,15 @@ TEST_CASE(control_plan_meets_the_table_2_an_all_way_stop) {
     CHECK(choice.control == "all_way_stop");
     if (choice.row < 0) return;
     CHECK(carry(t, j, choice, policy).size() == 4u);   // every approach stops
-    CHECK(buildTable(t.graph, b));
+    CHECK(buildTable(t.model, b));
     const JunctionRules& jr = b.row.junctions[t.junction(kRow, kCol).index];
     CHECK(b.rules.controls[jr.control].everyoneStops);
     for (uint32_t a = 0; a < jr.approaches.count; ++a)
         CHECK(b.row.approaches[jr.approaches.first + a].signRank == b.rules.rankIndex("stop"));
-    const engine::Junction& jn = t.graph.junctions[t.junction(kRow, kCol).index];
+    const engine::Junction& jn = t.model.laneLevel.junctions[t.junction(kRow, kCol).index];
     int asked = 0;
     for (uint32_t k = jn.crossings.first; k < jn.crossings.end(); ++k) {
-        const engine::CrossingPoint& rec = t.graph.crossings[k];
+        const engine::CrossingPoint& rec = t.model.laneLevel.crossings[k];
         if (rec.otherSide != engine::OtherSide::Path || rec.meeting == engine::Meeting::Split) continue;
         const MeetingAnswer* a = b.row.answer(engine::CrossingId(k));
         CHECK(a && a->who == GivesWay::Ask && a->by == SettledBy::ArrivedFirst);
@@ -248,16 +247,17 @@ TEST_CASE(control_plan_meets_the_table_3_lights_with_no_clock_are_treated_as_the
     CHECK(choice.control == "signal");
     if (choice.row < 0) return;
     CHECK(carry(t, j, choice, policy).empty());   // lights stand no sign on an approach
-    CHECK(buildTable(t.graph, b));
+    CHECK(buildTable(t.model, b));
     const ControlKind* signal = b.rules.findControl("signal");
     CHECK(signal && signal->hasLights() && !signal->whenDark.empty());
     CHECK(!b.roadRules.lightsRun);   // no light clock registered: the lights are dark (#261)
-    CHECK(b.roadRules.darkOfName.size() == 1u && b.roadRules.darkOfName[0] == 1);
+    CHECK(b.roadRules.darkJunction.size() == t.model.laneLevel.junctions.size());
+    for (const uint8_t dark : b.roadRules.darkJunction) CHECK(dark == 1);
     const JunctionRules& jr = b.row.junctions[t.junction(kRow, kCol).index];
     CHECK(b.rules.controls[jr.control].name == signal->whenDark);
     CHECK(jr.phases.count == 0u);
-    CHECK(b.row.counts.junctionsDark == static_cast<uint32_t>(t.graph.junctions.size()));
-    const std::string text = describeJunctionRules(t.graph, b.rules, b.row, t.junction(kRow, kCol));
+    CHECK(b.row.counts.junctionsDark == static_cast<uint32_t>(t.model.laneLevel.junctions.size()));
+    const std::string text = describeJunctionRules(t.model,b.rules, b.row, t.junction(kRow, kCol));
     CHECK(text.find("\"signal\", its lights dark: treated as control \"" + signal->whenDark + "\"") != std::string::npos);
 }
 

@@ -252,7 +252,7 @@ std::string describeCar(const Driving& d, CarId id) {
     PathPoint front;
     front.path = c->path;
     front.along = c->along;
-    const Remaining toGo = roads ? remainingFrom(t->route, *roads, front, t->legReached) : Remaining();
+    const Remaining toGo = d.model() ? remainingFrom(t->route, *d.model(), front, t->legReached) : Remaining();
     out += toGo.onRoute ? " (" + whole(toGo.metres) + " m, about " + whole(toGo.seconds) + " s to go)\n"
                         : " (it is off its route)\n";
 

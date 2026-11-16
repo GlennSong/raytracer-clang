@@ -5,7 +5,7 @@
 // importer), a plan SVG in the road_map_svg spirit, a JSON of stats + invariants, and the lane graph's plan.
 
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
-#include "engine/procgen/city/roads/lane_graph.h"
+#include "engine/procgen/city/roads/road_model.h"
 #include <string>
 
 namespace engine {
@@ -32,8 +32,8 @@ struct LaneGraphSvgMarks {
 // each junction's control (a coloured disc above its id, the control's name beneath), and a triangle at the end of each
 // arriving lane that faces a regulation (a stop sign), coloured by its kind, with both in the key (issue #240).
 // 1 unit = 1 m, drawn as the plan SVG is (plan y up). A comment at the top gives the plan point at the picture's origin,
-// for cropping.
-bool writeLaneGraphSvg(const LaneGraph& g, const std::string& path, const LaneGraphSvgMarks& marks = LaneGraphSvgMarks());
+// for cropping. `model`: the road model whose lane level is drawn (the controls and the turns' kinds are asked of it).
+bool writeLaneGraphSvg(const RoadModel& model, const std::string& path, const LaneGraphSvgMarks& marks = LaneGraphSvgMarks());
 
 }  // namespace roads::lanes
 }  // namespace engine

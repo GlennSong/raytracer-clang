@@ -7,14 +7,19 @@
 // (CROSSING POINTS), the rules standing along the paths (REGULATIONS) and the places to leave a car (CAR SPACES).
 //
 // This file holds the types, the save and load (one bundle section), a structural check and a text dump. The lane
-// graph builder (lanes/lane_graph_build.h) fills it from the built roads, with each junction's control and the
-// regulations the control plan wrote into the road graph (lanes/control_plan.h); the driving model reads it.
+// lane level (lanes/lane_level.h) fills it from the road model's built layer, with the signs each arm states stood at
+// the end of the lanes arriving by it; the driving model reads it through the model that holds it.
 //
 // How it is stored. The graph is whole-world and fixed after load, so it is a few big arrays: a path does not own a
 // vector of points or of next-paths, it holds a RANGE (first, count) into one shared array. An island with tens of
 // thousands of lanes is then a handful of allocations.
 //
-// Kinds are data. Vehicle tags (who may use a path), regulation kinds, junction controls and road classes are NAMES
+// WHAT IT DOES NOT HOLD (ADR-0436, issue #291): what the road IS where a path runs. A junction's control, a path's
+// posted limit, its road's class, the turn a connector takes and which path joins by a stated merge are the road
+// model's facts (road_model.h), reached by the ids a path, junction or crossing point carries (RoadModel::controlAt,
+// postedLimit, roadClassOf, turnOf, mergingAt). The table keeps no copy, so a reader holds the model and asks it.
+//
+// Kinds are data. Vehicle tags (who may use a path) and regulation kinds are NAMES
 // the graph carries in small tables, filled from the data files (what a lane is for is its kind in the road model,
 // reached by Path::modelLane: not copied here since ADR-0429); a path or a
 // regulation refers to a name by its index, and a set of tags is a bit mask (bit i = name i). The only fixed
@@ -58,7 +63,8 @@ constexpr TagMask kEveryVehicle = ~TagMask(0);
 enum class PathKind : uint8_t { Lane, Connector };
 constexpr uint8_t kPathKindCount = 2;
 
-// Which way a connector leaves the junction, read from its shape. A lane has none.
+// Which way a turn through a junction goes, as the road model states it (ModelTurn::turn; a connector's is asked of
+// the model: RoadModel::turnOf). A lane has none.
 enum class Turn : uint8_t { None, Straight, NearTurn, FarTurn, UTurn };
 constexpr uint8_t kTurnCount = 5;
 
@@ -102,8 +108,7 @@ struct BendSpan {
 // ONE CURVE A CAR CAN BE ON: a lane, or a connector through a junction.
 struct Path {
     PathKind kind = PathKind::Lane;
-    Turn turn = Turn::None;              // connectors only
-    TagMask vehicleTags = 0;             // who may use it (bits of LaneGraph::vehicleTagNames)
+    TagMask vehicleTags = 0;            // who may use it (bits of LaneGraph::vehicleTagNames)
     Range curve;                         // its centre line: into LaneGraph::points / along / heights
     Real length = 0;                     // metres along the centre line
     Real width = 0;
@@ -112,8 +117,7 @@ struct Path {
                                          // arc it was designed with (what closes it to a vehicle that turns wider).
     Range bends;                         // into LaneGraph::bendPieces: its bend profile, pieces in order along it. None:
                                          // the whole path bends at tightestRadius (a straight path, or a hand-made one)
-    Real speedLimit = 0;                 // metres per second
-    SectionId section;                   // lanes: the section it lies in
+    SectionId section;                  // lanes: the section it lies in
     uint32_t indexInSection = 0;         // lanes: 0 = offside ... last = kerb
     JunctionId junction;                 // connectors: the junction it runs through
     PathId from;                         // connectors: the lane it leaves
@@ -148,7 +152,6 @@ struct LaneLine {
 struct Section {
     Range lanes;                   // into LaneGraph::sectionLanes, offside to kerb
     Range lines;                   // into LaneGraph::laneLines: one fewer than lanes, line i between lane i and i + 1
-    NameIndex roadClass = kNoName; // a LaneGraph::roadClassNames entry
 };
 
 // TWO THINGS THAT MEET, and the stretch of each where bodies could touch. `a` is always a path; the other side is a
@@ -179,10 +182,9 @@ struct CrossingPoint {
     // for each pair of body sizes that meet differently, so two vehicles meet only where their own bodies could.
     TagMask aTags = kEveryVehicle, otherTags = kEveryVehicle;
     // A STATED MERGE (ADR-0426): on a Join of two lane paths where one ends into the other's lane by a merge the road
-    // model states -- a ramp's lane into its host's, a pocket or dropped lane tapering into its neighbour -- the path that
-    // joins, and so gives way (it is `a` or the other path), and the model's connection (RoadModel::connections). A copy of
-    // the stated fact, never measured. Invalid / kNoIndex: no stated merge here.
-    PathId merging;
+    // model states -- a ramp's lane into its host's, a pocket or dropped lane tapering into its neighbour -- the model's
+    // connection that states it (RoadModel::connections). Which of the two paths joins, and so gives way, is asked of
+    // the model (RoadModel::mergingAt), never kept here. kNoIndex: no stated merge here.
     uint32_t modelConnection = kNoIndex;
 
     PathId otherPath() const { return otherSide == OtherSide::Path ? PathId(other) : PathId(); }
@@ -214,8 +216,7 @@ struct Junction {
     Range connectors;          // into LaneGraph::junctionConnectors, in id order
     Range crossings;           // into LaneGraph::crossings directly (crossings are stored junction by junction)
     Range crosswalks;          // into LaneGraph::crosswalks directly (likewise)
-    NameIndex control = kNoName;   // a LaneGraph::controlNames entry, from the control plan
-    Range box;                 // into LaneGraph::planPoints: the outline of the area that must not be blocked
+    Range box;                // into LaneGraph::planPoints: the outline of the area that must not be blocked
     Range arriving;            // into LaneGraph::junctionLanes: the lanes ending at its outline (at a stop line), id order
     Range leaving;             // into LaneGraph::junctionLanes: the lanes beginning at its outline, in id order
     uint32_t modelJunction = kNoIndex;   // the road model's junction it is (road_model.h; ADR-0426); kNoIndex: none
@@ -243,8 +244,6 @@ struct LaneGraph {
     // The name tables (filled from the data files; the graph only carries the names it refers to by index).
     std::vector<std::string> vehicleTagNames;
     std::vector<std::string> regulationKindNames;
-    std::vector<std::string> controlNames;
-    std::vector<std::string> roadClassNames;
 
     std::vector<Path> paths;
     std::vector<Section> sections;

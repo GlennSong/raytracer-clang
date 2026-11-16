@@ -4095,10 +4095,8 @@ static void dumpControlSigns(const engine::LevelRoadModel* level, const std::vec
     d["signs"] = nlohmann::json::array();
     d["not_placed"] = nlohmann::json::array();
     for (const CityControlSigns& cs : signs) {
-        const engine::RoadModel* m = level && cs.city >= 0 && static_cast<std::size_t>(cs.city) < level->cities.size()
-                                         ? level->cities[static_cast<std::size_t>(cs.city)].get() : nullptr;
         for (const engine::PlacedSign& s : cs.plan.signs) {
-            const engine::ModelJunction* J = m && s.junction >= 0 ? &m->junctions[static_cast<std::size_t>(s.junction)] : nullptr;
+            const engine::ModelJunction* J = level ? level->junctionAt(cs.city, s.junction) : nullptr;
             d["signs"].push_back({{"city", cs.city}, {"kind", s.kind}, {"junction", J ? J->id : std::string()},
                                   {"control", J ? J->control : std::string()}, {"arm", s.arm},
                                   {"road", J ? J->arms[static_cast<std::size_t>(s.arm)].road : std::string()},
@@ -4207,7 +4205,7 @@ static nlohmann::json namedStreetsJson(const engine::LevelRoadModel* level) {
                 const std::string name = engine::streetName(m, engine::ModelStreetId(static_cast<uint32_t>(s)));
                 if (name.empty()) continue;
                 nlohmann::json line = nlohmann::json::array();
-                for (uint32_t k = m.streets[s].line.first; k < m.streets[s].line.end(); ++k) line.push_back({m.linePoints[k].x, m.linePoints[k].y});
+                for (const Vec2& q : m.centreLine(m.streets[s].line)) line.push_back({q.x, q.y});
                 d["streets"].push_back({{"city", c}, {"id", m.streets[s].id}, {"name", name}, {"line", line}});
             }
         }
@@ -4226,7 +4224,7 @@ static void mapStreetsOf(const engine::LevelRoadModel* level, engine::CityMapDat
         for (std::size_t s = 0; s < m.streets.size(); ++s) {
             const engine::ModelStreet& S = m.streets[s];
             engine::CityMapData::Street ms;
-            for (uint32_t k = S.line.first; k < S.line.end(); ++k) ms.line.push_back(m.linePoints[k]);
+            ms.line = m.centreLine(S.line);
             ms.width = S.section.travelWidth();
             ms.klass = S.section.klass;
             ms.track = S.section.track;
@@ -8407,7 +8405,8 @@ bool LevelLoader::load(const std::string& path,
                     const int c = nav.cityOf(node), j = nav.junctionOf(node);
                     if (!furnitureModel || c < 0 || j < 0 || static_cast<std::size_t>(c) >= furnitureModel->cities.size()) return std::string();
 #ifdef RT_ROADS_LANES
-                    return std::to_string(c) + ":" + furnitureModel->cities[static_cast<std::size_t>(c)]->junctions[static_cast<std::size_t>(j)].id;
+                    const engine::ModelJunction* J = furnitureModel->junctionAt(c, j);
+                    return J ? std::to_string(c) + ":" + J->id : std::string();
 #else
                     return std::string();
 #endif
@@ -8637,11 +8636,8 @@ bool LevelLoader::load(const std::string& path,
                             for (const engine::StreetSignBlade& b : post.blades) names.push_back(b.name);
                             std::string junction;   // the model junction it signs
 #ifdef RT_ROADS_LANES
-                            if (roadModel && post.city >= 0 && static_cast<std::size_t>(post.city) < roadModel->cities.size() &&
-                                roadModel->cities[static_cast<std::size_t>(post.city)] && post.junction >= 0 &&
-                                static_cast<std::size_t>(post.junction) < roadModel->cities[static_cast<std::size_t>(post.city)]->junctions.size())
-                                junction = roadModel->cities[static_cast<std::size_t>(post.city)]
-                                               ->junctions[static_cast<std::size_t>(post.junction)].id;
+                            if (const engine::ModelJunction* J = roadModel ? roadModel->junctionAt(post.city, post.junction) : nullptr)
+                                junction = J->id;
 #endif
                             d["posts"].push_back({{"at", {post.base.x, post.base.z}}, {"names", names},
                                                   {"city", post.city}, {"junction", junction}});

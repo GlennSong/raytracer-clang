@@ -257,10 +257,8 @@ LaneSpanEnd laneSpanEnd(const RoadModel& m, const ModelLaneSpan& sp, int end) {
     if (!out.reaches) return out;
     out.junction = S.junctions[static_cast<std::size_t>(end)];
     if (!out.junction.valid()) return out;
-    const ModelJunction& J = m.junctions[out.junction.index];
-    for (std::size_t a = 0; a < J.arms.size() && out.arm < 0; ++a)
-        if (J.arms[a].street == sp.street && J.arms[a].spineIn == (end == 1)) out.arm = static_cast<int>(a);
-    if (out.arm >= 0) out.stopLine = J.arms[static_cast<std::size_t>(out.arm)].stopLine;
+    out.arm = m.armAt(sp.street, end);
+    if (out.arm >= 0) out.stopLine = m.junctions[out.junction.index].arms[static_cast<std::size_t>(out.arm)].stopLine;
     return out;
 }
 
@@ -473,6 +471,52 @@ RoadModel assembleRoadModel(const Result& r, const roads::lanes::LaneGraphOption
 
 // ---- the questions ----------------------------------------------------------------------------------------------------
 
+namespace {
+const std::string kNoneStated;   // what a question with a name for an answer returns where nothing is stated
+}
+
+const std::string& RoadModel::roadClassOf(PathId path) const {
+    const ModelStreet* s = streetOf(path);
+    return s ? s->section.roadClass : kNoneStated;
+}
+
+const std::string& RoadModel::controlAt(JunctionId laneJunction) const {
+    const ModelJunction* j = junctionOf(laneJunction);
+    return j ? j->control : kNoneStated;
+}
+
+PathId RoadModel::mergingAt(const CrossingPoint& x) const {
+    if (x.modelConnection >= connections.size() || x.otherSide != OtherSide::Path) return PathId();
+    const ModelConnection& c = connections[x.modelConnection];
+    if (c.kind != ConnectionKind::Merge) return PathId();
+    const PathId other = x.otherPath();
+    if (x.a.index < laneLevel.paths.size() && laneLevel.paths[x.a.index].modelLane == c.from.index) return x.a;
+    if (other.index < laneLevel.paths.size() && laneLevel.paths[other.index].modelLane == c.from.index) return other;
+    return PathId();
+}
+
+int RoadModel::armAt(ModelStreetId street, int end) const {
+    if (street.index >= streets.size() || end < 0 || end > 1) return -1;
+    const ModelJunctionId j = streets[street.index].junctions[static_cast<std::size_t>(end)];
+    if (j.index >= junctions.size()) return -1;
+    const std::vector<ModelArm>& arms = junctions[j.index].arms;
+    for (std::size_t a = 0; a < arms.size(); ++a)
+        if (arms[a].street == street && arms[a].spineIn == (end == 1)) return static_cast<int>(a);
+    return -1;
+}
+
+std::vector<Vec2> RoadModel::centreLine(const Range& line) const {
+    if (line.end() > linePoints.size()) return {};
+    return std::vector<Vec2>(linePoints.begin() + line.first, linePoints.begin() + line.end());
+}
+
+bool RoadModel::streetEnd(const ModelStreet& street, int end, Vec2& out) const {
+    const Range& line = street.line;
+    if (line.count == 0 || line.end() > linePoints.size()) return false;
+    out = linePoints[end == 0 ? line.first : line.end() - 1];
+    return true;
+}
+
 std::vector<ModelLaneId> lanesOf(const RoadModel& m, ModelStreetId s) {
     if (!s.valid() || s.index >= m.streets.size()) return {};
     return m.streets[s.index].lanes;
@@ -624,11 +668,9 @@ std::vector<NamedArm> namedArmsAt(const RoadModel& m, ModelJunctionId j) {
 bool armMouth(const RoadModel& m, const ModelJunction& J, std::size_t arm, Vec2& out) {
     if (arm >= J.arms.size()) return false;
     const ModelArm& a = J.arms[arm];
-    if (!a.street.valid() || a.street.index >= m.streets.size()) return false;
-    const Range& L = m.streets[a.street.index].line;
-    if (L.count < 2) return false;
-    out = a.spineIn ? m.linePoints[L.end() - 1] : m.linePoints[L.first];   // its street's end at the junction
-    return true;
+    const ModelStreet* street = m.streetOf(a);
+    if (!street || street->line.count < 2) return false;
+    return m.streetEnd(*street, a.spineIn ? 1 : 0, out);   // its street's end at the junction
 }
 
 std::string streetNameNear(const RoadModel& m, const Vec2& p, Real reach, Real* distance) {

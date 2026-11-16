@@ -26,7 +26,7 @@
 //
 // Units: metres, seconds, metres per second.
 
-#include "engine/procgen/city/roads/lane_graph.h"
+#include "engine/procgen/city/roads/road_model.h"   // the road it routes on: the lane level, and the model's limits and turns
 #include "apps/driving/notice.h"          // WayAhead
 #include "apps/driving/traffic_state.h"   // PathPoint
 #include "apps/driving/vehicle_class.h"
@@ -100,9 +100,10 @@ RouteClass bindRouteClass(const engine::LaneGraph& roads, const VehicleClass& cl
 // is no tighter than the class can turn. A path whose tags are empty is open to nobody. An unknown path: false.
 bool mayUse(const engine::LaneGraph& roads, const RouteClass& cls, engine::PathId path);
 
-// The speed a class drives a path at with nothing in the way: the path's limit, capped by the class's top speed. A path
-// with no posted limit (0) is driven at the top speed. Zero for an unknown path.
-Real freeFlowSpeed(const engine::LaneGraph& roads, const RouteClass& cls, engine::PathId path);
+// The speed a class drives a path at with nothing in the way: the limit the road model posts on the path
+// (RoadModel::postedLimit), capped by the class's top speed. A path with no posted limit (0) is driven at the top speed.
+// Zero for an unknown path.
+Real freeFlowSpeed(const engine::RoadModel& model, const RouteClass& cls, engine::PathId path);
 
 // WHAT THE LOWER BOUND NEEDS TO KNOW ABOUT A GRAPH, measured once per graph (studyRoads). The bound is the straight
 // distance to the destination over the fastest speed any step can go; for it never to over-estimate, it must also
@@ -116,7 +117,7 @@ struct RouteBounds {
     Real shortestPath = 0;       // the shortest path's length
     bool usable = false;         // false (an empty graph): the search uses no bound (plain Dijkstra)
 };
-RouteBounds studyRoads(const engine::LaneGraph& roads);
+RouteBounds studyRoads(const engine::RoadModel& model);
 
 // LEARNED TIMES: the seconds driving the length of a section takes, by section id. An entry at or below zero, or past
 // the end, means "use the free-flow time". (What simulated drivers actually took comes later; the router only reads it.)
@@ -192,10 +193,10 @@ struct Route {
 
 // FINDS THE ROUTE for a car of class `cls` from `from` (its front: a path and a distance along it) to `to`.
 // `sectionSeconds`, when given, replaces the free-flow time of the sections it has entries for. `bounds` is
-// studyRoads(roads); passing one measured for another graph makes the bound wrong (still a route, maybe not the best).
+// studyRoads(model); passing one measured for another graph makes the bound wrong (still a route, maybe not the best).
 // The path the car is on may be driven on whether or not the class may use it (the car is there); every other path the
-// route uses must be open to the class.
-Route findRoute(const engine::LaneGraph& roads, const RouteBounds& bounds, const RouteClass& cls, const PathPoint& from,
+// route uses must be open to the class. `model`: the road model whose lane level is routed on.
+Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const RouteClass& cls, const PathPoint& from,
                 const PathPoint& to, const SectionSeconds* sectionSeconds = nullptr);
 
 // ---- Questions asked of a route --------------------------------------------------------------------------------------
@@ -259,7 +260,7 @@ struct Remaining {
     Real metres = 0;
     Real seconds = 0;
 };
-Remaining remainingFrom(const Route& route, const engine::LaneGraph& roads, const PathPoint& at, uint32_t fromLeg = 0);
+Remaining remainingFrom(const Route& route, const engine::RoadModel& model, const PathPoint& at, uint32_t fromLeg = 0);
 
 // ONE NUMBER OVER EVERYTHING A ROUTE SAYS, folded in a fixed order (for the driving model's state hash).
 uint64_t routeHash(const Route& route);

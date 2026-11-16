@@ -147,10 +147,6 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
     for (const VehicleSize& v : opts.vehicles) G.vehicleTagNames.push_back(v.tag);
     std::sort(G.vehicleTagNames.begin(), G.vehicleTagNames.end());
     G.vehicleTagNames.erase(std::unique(G.vehicleTagNames.begin(), G.vehicleTagNames.end()), G.vehicleTagNames.end());
-    for (const std::pair<const std::string, RoadClassSpec>& c : g.classes) G.roadClassNames.push_back(c.first);
-    for (const ModelJunction& J : m.junctions) G.controlNames.push_back(J.control);
-    std::sort(G.controlNames.begin(), G.controlNames.end());
-    G.controlNames.erase(std::unique(G.controlNames.begin(), G.controlNames.end()), G.controlNames.end());
     TagMask everyone = 0;
     for (std::size_t i = 0; i < G.vehicleTagNames.size() && i < kMaxTagNames; ++i) everyone |= TagMask(1) << i;
 
@@ -354,7 +350,6 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
     }
     std::vector<std::pair<double, double>> pathU;   // per lane path: its stretch along its corridor
     for (const std::pair<const std::pair<uint32_t, int>, std::vector<uint32_t>>& kc : corridors) {
-        const EdgeSpec& e = edgeAt(kc.first.first);
         const std::vector<uint32_t>& here = kc.second;
         std::vector<double> cuts, stops;
         for (uint32_t p : here) {
@@ -389,7 +384,6 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             });
             const SectionId sid(static_cast<uint32_t>(G.sections.size()));
             Section sec;
-            sec.roadClass = LaneGraph::nameIndex(G.roadClassNames, e.cls);
             sec.lanes.first = static_cast<uint32_t>(G.sectionLanes.size());
             sec.lines.first = static_cast<uint32_t>(G.laneLines.size());
             for (std::size_t k = 0; k < in.size(); ++k) {
@@ -406,7 +400,6 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                 p.curve = G.addCurve(pts, z);
                 p.length = G.along[p.curve.end() - 1];
                 p.width = m.lanes[li].width;
-                p.speedLimit = m.streets[pc.street].speedLimit;
                 p.section = sid;
                 p.indexInSection = static_cast<uint32_t>(k);
                 p.street = pc.street;
@@ -638,7 +631,6 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         laneJunctionOf[j] = static_cast<int>(lj);
         Junction jn;
         jn.modelJunction = j;
-        jn.control = LaneGraph::nameIndex(G.controlNames, J.control);
         jn.crossings = Range{static_cast<uint32_t>(G.crossings.size()), 0};
         jn.crosswalks = Range{static_cast<uint32_t>(G.crosswalks.size()), 0};
         // its outline: across each arm's lanes at its stop line, the arms' lines joined in the stated ring order (below)
@@ -801,13 +793,11 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             const Path& intoPath = G.paths[static_cast<std::size_t>(into)];
             Path c;
             c.kind = PathKind::Connector;
-            c.turn = mt.turn;
             c.vehicleTags = fit.open;
             c.curve = G.addCurve(fit.shape.points, fit.z);
             c.length = G.along[c.curve.end() - 1];
             c.width = std::min(fromPath.width, intoPath.width);
             c.tightestRadius = fit.shape.tightestRadius;
-            c.speedLimit = intoPath.speedLimit;
             c.junction = JunctionId(lj);
             c.from = PathId(static_cast<uint32_t>(from));
             c.modelTurn = t;
@@ -992,8 +982,9 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
     co.clearance = g.rules.sameLevelDz;
     out.crossings = findCrossingPoints(G, co);
     out.problems.insert(out.problems.end(), out.crossings.problems.begin(), out.crossings.problems.end());
-    // EACH STATED MERGE ON ITS JOIN (the model's fact, copied; nothing measured decides it): every Join between the joining
-    // lane's last path and a path of its host lane says which joins -- and so gives way -- and which connection states it.
+    // EACH STATED MERGE ON ITS JOIN (nothing measured decides it): every Join between the joining lane's last path and a
+    // path of its host lane names the connection that states it. Which of the two joins -- and so gives way -- is asked
+    // of the model by that connection (RoadModel::mergingAt), never written here.
     // A stated merge whose paths the crossings code found no Join for is said.
     for (const MadeMerge& mm : merges) {
         uint32_t marked = 0;
@@ -1002,7 +993,6 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             const uint32_t other = x.a.index == mm.joining ? x.other : x.other == mm.joining ? x.a.index : kNoIndex;
             if (other == kNoIndex || other >= G.paths.size() || G.paths[other].kind != PathKind::Lane || G.paths[other].modelLane != mm.hostLane)
                 continue;
-            x.merging = PathId(mm.joining);
             x.modelConnection = mm.connection;
             ++marked;
         }
@@ -1011,23 +1001,24 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                                        "of their paths: who gives way there is not carried", m.lanes[mm.branchLane].id.c_str(),
                                        m.lanes[mm.hostLane].id.c_str(), mm.connection));
     }
-    out.crossings.waitInsidePoints = placeWaitInsidePoints(G);
+    out.crossings.waitInsidePoints = placeWaitInsidePoints(model);
 
     // ---- the counts the old reports read ------------------------------------------------------------------------------
     out.controlPlan.planned = static_cast<uint32_t>(m.junctions.size());
-    for (const Junction& jn : G.junctions) {
+    for (uint32_t lj = 0; lj < G.junctions.size(); ++lj) {
+        const std::string& control = m.controlAt(JunctionId(lj));
         bool found = false;
         for (std::pair<std::string, uint32_t>& c : out.controlPlan.byControl)
-            if (c.first == G.controlNames[jn.control]) {
+            if (c.first == control) {
                 ++c.second;
                 found = true;
             }
-        if (!found) out.controlPlan.byControl.emplace_back(G.controlNames[jn.control], 1);
+        if (!found) out.controlPlan.byControl.emplace_back(control, 1);
     }
     std::sort(out.controlPlan.byControl.begin(), out.controlPlan.byControl.end());
-    for (const Path& p : G.paths) {
-        if (p.kind == PathKind::Lane && p.speedLimit > 0) ++out.controlPlan.lanesPosted;
-        if (p.kind == PathKind::Connector && p.speedLimit > 0) ++out.controlPlan.connectorsPosted;
+    for (uint32_t p = 0; p < G.paths.size(); ++p) {
+        if (!(m.postedLimit(PathId(p)) > 0)) continue;
+        ++(G.paths[p].kind == PathKind::Lane ? out.controlPlan.lanesPosted : out.controlPlan.connectorsPosted);
     }
     for (const Regulation& reg : G.regulations) {
         bool found = false;

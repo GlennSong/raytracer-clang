@@ -372,7 +372,7 @@ struct Sim {
     // (issue #264), with the rule set's room_to_wait_inside as `roomToWaitInside`.
     Sim(TestRoads roads, const char* control, uint32_t decideEvery = DrivingSettings::kDefaultDecideEveryTicks,
         bool lights = false, bool room = false, bool roomWaitInside = true)
-        : t(std::move(roads)), d(&t.graph), classes(simClasses()), lightsOn(lights), roomOn(room),
+        : t(std::move(roads)), d(&t.model), classes(simClasses()), lightsOn(lights), roomOn(room),
           roomToWaitInside(roomWaitInside) {
         d.setVehicleClasses(classes);
         DrivingSettings s;
@@ -384,8 +384,9 @@ struct Sim {
     // A WHOLE RULE SET written as Lua (a level's own, read from its file, with any test changes after it), every grid
     // junction under its control `controlName`; the light clock and the room step registered.
     Sim(TestRoads roads, const std::string& ruleCode, const std::string& controlName)
-        : t(std::move(roads)), d(&t.graph), classes(simClasses()), lightsOn(true), roomOn(true) {
-        t.graph.controlNames = {controlName};
+        : t(std::move(roads)), d(&t.model), classes(simClasses()), lightsOn(true), roomOn(true) {
+        for (uint32_t j = 0; j < t.model.laneLevel.junctions.size(); ++j)
+            driving_test::stateControl(t.model, engine::JunctionId(j), controlName);
         d.setVehicleClasses(classes);
         DrivingSettings s;
         s.laneChanges = false;
@@ -418,7 +419,7 @@ struct Sim {
             return false;
         }
         RoadRules roadRules;
-        if (!buildRoadRules(t.graph, ruleSet, facts, roadRules, &problems)) {
+        if (!buildRoadRules(t.model, ruleSet, facts, roadRules, &problems)) {
             for (const std::string& p : problems) std::printf("    %s\n", p.c_str());
             return false;
         }
@@ -454,15 +455,15 @@ struct Sim {
         std::vector<Footprint> bodies;
         for (const Car& c : d.cars()) {
             const uint32_t id = c.id.index;
-            const bool onConnector = t.graph.paths[c.path.index].kind == engine::PathKind::Connector;
+            const bool onConnector = t.model.laneLevel.paths[c.path.index].kind == engine::PathKind::Connector;
             // AT LIGHTS (issue #261): a front coming onto a connector, by what its lamp showed as the tick began; a front
             // leaving one; a front at rest on one.
             std::map<uint32_t, uint32_t>::iterator was = frontWas.find(id);
             if (was != frontWas.end() && was->second != c.path.index) {
-                const engine::Path& from = t.graph.paths[was->second];
+                const engine::Path& from = t.model.laneLevel.paths[was->second];
                 if (onConnector) {
                     enteredConnector[id].push_back({c.path.index, d.clockSeconds()});
-                    const Lamp lamp = lampAt(t.graph, d.rightOfWay(), c.path, before);
+                    const Lamp lamp = lampAt(t.model.laneLevel, d.rightOfWay(), c.path, before);
                     enteredOnRed += lamp == Lamp::Red;
                     enteredOnYellow += lamp == Lamp::Yellow;
                     enteredOnGreen += lamp == Lamp::Green;
@@ -473,8 +474,8 @@ struct Sim {
             frontWas[id] = c.path.index;
             if (onConnector && c.speed < kStandingBelow) ++restedInside[id];
             // At rest with part of the body in a box for a reason other than giving way (issue #264).
-            if (isWaiting(c) && bodyInBox(t.graph, d.vehicleClasses(), c, kTestAtLineWithin)) {
-                const BoxLookIn look{&t.graph, &d.vehicleClasses()};
+            if (isWaiting(c) && bodyInBox(t.model.laneLevel, d.vehicleClasses(), c, kTestAtLineWithin)) {
+                const BoxLookIn look{&t.model.laneLevel, &d.vehicleClasses()};
                 if (!boxReasonAllowed(boxReason(d.cars(), d.pathLists(), c, lookIn, &look))) {
                     ++boxTicksNotAllowed;
                     if (boxedCars.insert(id).second && std::getenv("RT_GIVE_WAY_BOX_CARDS"))
@@ -483,7 +484,7 @@ struct Sim {
             }
             // Inside a junction with lights at the start of a green: counted per stay (D4's staged test 6).
             if (!onConnector) greensInside.erase(id);
-            const engine::JunctionId j = t.graph.paths[c.path.index].junction;
+            const engine::JunctionId j = t.model.laneLevel.paths[c.path.index].junction;
             if (onConnector && lightsOn && j.valid()) {
                 const SignalNow now = signalAt(d.rightOfWay(), j, d.clockSeconds());
                 const SignalNow then = signalAt(d.rightOfWay(), j, before);
@@ -504,7 +505,7 @@ struct Sim {
                 if (plans->plans[k].mindChanges >= 2 && std::getenv("RT_GIVE_WAY_DITHER") && dithered.insert(id).second)
                     std::printf("%s", d.describeCar(c.id).c_str());
             }
-            const CarPose p = carPose(t.graph, d.vehicleClasses(), d.ruleSet(), c);
+            const CarPose p = carPose(t.model.laneLevel, d.vehicleClasses(), d.ruleSet(), c);
             Footprint f;
             f.car = c.id;
             f.rear = engine::Vec2(p.rear.x, p.rear.z);
@@ -532,9 +533,9 @@ struct Sim {
                 std::printf("---- t=%.3f\n%s", now, d.describeCar(CarId(car)).c_str());
                 const JunctionPlans* plans = d.junctionPlans(CarId(car));
                 for (std::size_t k = 0; plans && k < plans->count; ++k) {
-                    const engine::Path& p = t.graph.paths[plans->plans[k].connector.index];
+                    const engine::Path& p = t.model.laneLevel.paths[plans->plans[k].connector.index];
                     for (uint32_t x = p.crossings.first; x < p.crossings.end(); ++x)
-                        for (const Announcement& a : d.board().on(t.graph.pathCrossings[x]))
+                        for (const Announcement& a : d.board().on(t.model.laneLevel.pathCrossings[x]))
                             std::printf("  board: crossing %u car %llu path %u arrive %.2f clear %.2f going %d fixed %d at "
                                         "tick %llu notGoing %d\n",
                                         a.crossing.index, static_cast<unsigned long long>(a.who), a.onPath.index,
@@ -572,15 +573,15 @@ struct Sim {
         const Car* cx = d.car(x);
         const Car* cy = d.car(y);
         if (!cx || !cy) return false;
-        const Body bx = layBody(t.graph, *cx, d.vehicleClasses().at(cx->vehicleClass).length);
-        const Body by = layBody(t.graph, *cy, d.vehicleClasses().at(cy->vehicleClass).length);
+        const Body bx = layBody(t.model.laneLevel, *cx, d.vehicleClasses().at(cx->vehicleClass).length);
+        const Body by = layBody(t.model.laneLevel, *cy, d.vehicleClasses().at(cy->vehicleClass).length);
         for (std::size_t i = 0; i < bx.count; ++i)
             for (std::size_t k = 0; k < by.count; ++k) {
                 const engine::PathId px = bx.pieces[i].path, py = by.pieces[k].path;
                 if (px == py) return true;
-                const engine::Path& p = t.graph.paths[px.index];
+                const engine::Path& p = t.model.laneLevel.paths[px.index];
                 for (uint32_t c = p.crossings.first; c < p.crossings.end(); ++c) {
-                    const engine::CrossingPoint& rec = t.graph.crossings[t.graph.pathCrossings[c].index];
+                    const engine::CrossingPoint& rec = t.model.laneLevel.crossings[t.model.laneLevel.pathCrossings[c].index];
                     if (rec.otherSide != engine::OtherSide::Path || (rec.a == px ? rec.otherPath() : rec.a) != py) continue;
                     const bool xIsA = rec.a == px;
                     const Real xFrom = xIsA ? rec.aFrom : rec.otherFrom, xTo = xIsA ? rec.aTo : rec.otherTo;
@@ -628,7 +629,7 @@ TripId approach(Sim& s, uint32_t id, uint32_t r, uint32_t c, Heading in, Real to
                 PersonId person = 0) {
     const engine::PathId lane = s.t.laneArriving(r, c, in, 0);
     const engine::PathId out = s.t.laneLeaving(r, c, toward, 0);
-    return s.add(id, lane, s.t.graph.paths[lane.index].length - toLine, out, s.t.graph.paths[out.index].length - 10, cls,
+    return s.add(id, lane, s.t.model.laneLevel.paths[lane.index].length - toLine, out, s.t.model.laneLevel.paths[out.index].length - 10, cls,
                  person);
 }
 
@@ -659,11 +660,11 @@ TEST_CASE(give_way_1b_a_queue_announces_one_behind_another) {
     for (uint32_t i = 0; i < 5; ++i) approach(s, i, 1, 1, kEast, 1 + i * 6.5, kEast);
     s.run(2 * kStep);
     const engine::PathId conn = s.t.connector(1, 1, kEast, 0, kEast, 0);
-    const engine::Path& p = s.t.graph.paths[conn.index];
+    const engine::Path& p = s.t.model.laneLevel.paths[conn.index];
     int checked = 0;
     for (uint32_t k = p.crossings.first; k < p.crossings.end() && checked == 0; ++k) {
-        const engine::CrossingId cid = s.t.graph.pathCrossings[k];
-        if (s.t.graph.crossings[cid.index].meeting == engine::Meeting::Split) continue;
+        const engine::CrossingId cid = s.t.model.laneLevel.pathCrossings[k];
+        if (s.t.model.laneLevel.crossings[cid.index].meeting == engine::Meeting::Split) continue;
         std::vector<Real> arrive;
         for (uint32_t i = 0; i < 5; ++i) {
             const Announcement* a = s.d.board().find(cid, i, conn);
@@ -757,7 +758,7 @@ TEST_CASE(give_way_3_crossing_paths_one_gives_way_the_other_does_not_slow) {
 TEST_CASE(give_way_4_side_road_stop_sign_queue_takes_gaps) {
     // Junction (0, 1) of a two-by-three grid is a T: its side road arrives heading south.
     TestRoads roads = driving_test::gridRoads(2, 3);
-    standStopSign(roads.graph, roads.laneArriving(0, 1, kSouth, 0));
+    standStopSign(roads.model.laneLevel, roads.laneArriving(0, 1, kSouth, 0));
     Sim s(std::move(roads), kMinorStop);
     CHECK(s.ok);
     // A queue of four on the side road, each turning across the main road (its far turn); the main road's traffic from
@@ -900,15 +901,15 @@ TEST_CASE(give_way_8_a_long_vehicle_tail_blocks_the_crossing) {
     // holds through the junction; read as if it goes on, whatever stop it holds: clearIfGoing).
     Real busSpan = 0;
     const engine::PathId conn = s.t.connector(1, 1, kNorth, 0, kNorth, 0);
-    const Real busThrough = speedThrough(s.t.graph, s.d.roadRules(), conn, s.d.vehicleClasses().at(1).topSpeed,
+    const Real busThrough = speedThrough(s.t.model.laneLevel, s.d.roadRules(), conn, s.d.vehicleClasses().at(1).topSpeed,
                                          s.d.junctionNumbers().comfortableSideAccel);
     for (int i = 0; i < static_cast<int>(30 / kStep); ++i) {
         s.step();
-        const engine::Path& p = s.t.graph.paths[conn.index];
+        const engine::Path& p = s.t.model.laneLevel.paths[conn.index];
         for (uint32_t k = p.crossings.first; k < p.crossings.end(); ++k) {
-            const engine::CrossingId cid = s.t.graph.pathCrossings[k];
+            const engine::CrossingId cid = s.t.model.laneLevel.pathCrossings[k];
             const Announcement* a = s.d.board().find(cid, 0, conn);
-            if (!a || s.t.graph.crossings[cid.index].meeting != engine::Meeting::Cross) continue;
+            if (!a || s.t.model.laneLevel.crossings[cid.index].meeting != engine::Meeting::Cross) continue;
             if (a->arriveIn > 0) busSpan = std::max(busSpan, (a->clearIfGoing - a->arriveIn) * busThrough);
         }
     }
@@ -932,13 +933,13 @@ TEST_CASE(give_way_9_a_car_that_cannot_stop_is_not_stopped) {
     approach(s, 0, 1, 1, kEast, 190, kEast);
     const TripId held = approach(s, 1, 1, 1, kNorth, 0.5, kNorth);
     const engine::PathId lane1 = s.t.laneArriving(1, 1, kNorth, 0);
-    CHECK(s.d.placeHold(held, 1, at(lane1, s.t.graph.paths[lane1.index].length)));
+    CHECK(s.d.placeHold(held, 1, at(lane1, s.t.model.laneLevel.paths[lane1.index].length)));
     const engine::PathId lane0 = s.t.laneArriving(1, 1, kEast, 0);
     bool released = false;
     Real speedAtRelease = 0;
     for (int i = 0; i < static_cast<int>(60 / kStep); ++i) {
         const Car* c0 = s.d.car(CarId(0));
-        if (!released && c0 && c0->path == lane0 && s.t.graph.paths[lane0.index].length - c0->along < 15) {
+        if (!released && c0 && c0->path == lane0 && s.t.model.laneLevel.paths[lane0.index].length - c0->along < 15) {
             CHECK(s.d.releaseHold(held, 1));
             released = true;
             speedAtRelease = c0->speed;
@@ -997,8 +998,8 @@ TEST_CASE(give_way_11_a_meeting_spanning_two_junctions) {
     rec.aTo = 9;
     rec.otherFrom = 4;
     rec.otherTo = 9;
-    roads.graph.crossings.push_back(rec);
-    engine::indexCrossings(roads.graph);
+    roads.model.laneLevel.crossings.push_back(rec);
+    engine::indexCrossings(roads.model.laneLevel);
     Sim s(std::move(roads), kUncontrolled);
     CHECK(s.ok);
     approach(s, 0, 1, 1, kEast, 20, kEast);
@@ -1007,7 +1008,7 @@ TEST_CASE(give_way_11_a_meeting_spanning_two_junctions) {
     int both = 0;
     const auto onStretch = [&](const Car* c, engine::PathId p) {
         if (!c) return false;
-        const Body body = layBody(s.t.graph, *c, s.d.vehicleClasses().at(c->vehicleClass).length);
+        const Body body = layBody(s.t.model.laneLevel, *c, s.d.vehicleClasses().at(c->vehicleClass).length);
         for (std::size_t k = 0; k < body.count; ++k)
             if (body.pieces[k].path == p && body.pieces[k].front > 4 && body.pieces[k].rear < 9) return true;
         return false;
@@ -1032,7 +1033,7 @@ TEST_CASE(give_way_12_held_at_the_line_does_not_hold_up_cross_traffic) {
     // task D5 will give that as a stop). It announces "not going", so car 1 crossing its path does not wait for it.
     const TripId held = approach(s, 0, 1, 1, kNorth, 0.5, kNorth);
     const engine::PathId lane0 = s.t.laneArriving(1, 1, kNorth, 0);
-    CHECK(s.d.placeHold(held, 1, at(lane0, s.t.graph.paths[lane0.index].length)));
+    CHECK(s.d.placeHold(held, 1, at(lane0, s.t.model.laneLevel.paths[lane0.index].length)));
     s.run(2);
     approach(s, 1, 1, 1, kEast, 40, kEast);
     s.run(20);
@@ -1052,7 +1053,7 @@ TEST_CASE(give_way_13_patience_gaps_between_floor_and_full) {
     int taken = 0;
     for (PersonId person = 1; person <= 12; ++person) {
         TestRoads roads = driving_test::gridRoads(2, 3);
-        standStopSign(roads.graph, roads.laneArriving(0, 1, kSouth, 0));
+        standStopSign(roads.model.laneLevel, roads.laneArriving(0, 1, kSouth, 0));
         Sim s(std::move(roads), kMinorStop);
         CHECK(s.ok);
         uint32_t next = 10;
@@ -1149,7 +1150,7 @@ TEST_CASE(give_way_14_ten_minutes_of_random_traffic_at_each_kind) {
     }
     {
         TestRoads roads = driving_test::gridRoads(2, 3);
-        standStopSign(roads.graph, roads.laneArriving(0, 1, kSouth, 0));
+        standStopSign(roads.model.laneLevel, roads.laneArriving(0, 1, kSouth, 0));
         Sim s(std::move(roads), kMinorStop);
         CHECK(s.ok);
         randomTraffic(s, 0, 1, {kEast, kWest, kSouth}, minutes);
@@ -1171,11 +1172,11 @@ TEST_CASE(give_way_15_the_card_and_the_wait_graph_name_who) {
     approach(s, 0, 1, 1, kEast, 190, kEast);
     const TripId held = approach(s, 1, 1, 1, kNorth, 0.5, kNorth);
     const engine::PathId lane1 = s.t.laneArriving(1, 1, kNorth, 0), lane0 = s.t.laneArriving(1, 1, kEast, 0);
-    CHECK(s.d.placeHold(held, 1, at(lane1, s.t.graph.paths[lane1.index].length)));
+    CHECK(s.d.placeHold(held, 1, at(lane1, s.t.model.laneLevel.paths[lane1.index].length)));
     bool released = false, sawArrow = false, sawCard = false;
     for (int i = 0; i < static_cast<int>(40 / kStep) && !(sawArrow && sawCard); ++i) {
         const Car* c0 = s.d.car(CarId(0));
-        if (!released && c0 && c0->path == lane0 && s.t.graph.paths[lane0.index].length - c0->along < 25) {
+        if (!released && c0 && c0->path == lane0 && s.t.model.laneLevel.paths[lane0.index].length - c0->along < 25) {
             CHECK(s.d.releaseHold(held, 1));
             released = true;
         }
@@ -1205,9 +1206,9 @@ namespace {
 
 // Where along `path` its crossing point with `other` begins (metres), or -1 when the two have none.
 Real stretchWith(const Sim& s, engine::PathId path, engine::PathId other) {
-    const engine::Path& p = s.t.graph.paths[path.index];
+    const engine::Path& p = s.t.model.laneLevel.paths[path.index];
     for (uint32_t k = p.crossings.first; k < p.crossings.end(); ++k) {
-        const engine::CrossingPoint& rec = s.t.graph.crossings[s.t.graph.pathCrossings[k].index];
+        const engine::CrossingPoint& rec = s.t.model.laneLevel.crossings[s.t.model.laneLevel.pathCrossings[k].index];
         if (rec.otherSide != engine::OtherSide::Path) continue;
         const bool iAmA = rec.a == path;
         if ((iAmA ? rec.otherPath() : rec.a) == other) return iAmA ? rec.aFrom : rec.otherFrom;
@@ -1236,12 +1237,12 @@ TEST_CASE(give_way_16_a_car_that_committed_first_is_not_crossed) {
     // the truck is past its line: the truck committed first, so car 0 waits for it. (Without "committed first" car 0,
     // with right of way by the table, would never look at the truck, and drive into it.)
     TestRoads roads = driving_test::gridRoads(3, 3);
-    standStopSign(roads.graph, roads.laneArriving(1, 1, kSouth, 0));
+    standStopSign(roads.model.laneLevel, roads.laneArriving(1, 1, kSouth, 0));
     Sim s(std::move(roads), kMinorStop);
     CHECK(s.ok);
     const TripId held = approach(s, 0, 1, 1, kNorth, 0.5, kNorth);
     const engine::PathId lane0 = s.t.laneArriving(1, 1, kNorth, 0);
-    CHECK(s.d.placeHold(held, 1, at(lane0, s.t.graph.paths[lane0.index].length)));
+    CHECK(s.d.placeHold(held, 1, at(lane0, s.t.model.laneLevel.paths[lane0.index].length)));
     s.run(2);
     const Heading truckOut = driving_test::farTurnFrom(kSouth, DrivesOn::Left);
     approach(s, 1, 1, 1, kSouth, 20, truckOut, 2);
@@ -1250,9 +1251,9 @@ TEST_CASE(give_way_16_a_car_that_committed_first_is_not_crossed) {
     const engine::PathId truckPath = s.t.connector(1, 1, kSouth, 0, truckOut, 0);
     const engine::PathId carPath = s.t.connector(1, 1, kNorth, 0, kNorth, 0);
     Real crossingAlong = -1;
-    const engine::Path& tp = s.t.graph.paths[truckPath.index];
+    const engine::Path& tp = s.t.model.laneLevel.paths[truckPath.index];
     for (uint32_t k = tp.crossings.first; k < tp.crossings.end(); ++k) {
-        const engine::CrossingPoint& rec = s.t.graph.crossings[s.t.graph.pathCrossings[k].index];
+        const engine::CrossingPoint& rec = s.t.model.laneLevel.crossings[s.t.model.laneLevel.pathCrossings[k].index];
         if (rec.otherSide != engine::OtherSide::Path) continue;
         const bool truckIsA = rec.a == truckPath;
         if ((truckIsA ? rec.otherPath() : rec.a) == carPath) crossingAlong = truckIsA ? rec.aFrom : rec.otherFrom;
@@ -1294,13 +1295,13 @@ TEST_CASE(give_way_17_a_car_merging_ahead_is_followed_not_hit) {
     TestRoadSpec spec;
     spec.roadLength = 200;
     TestRoads roads = driving_test::gridRoads(3, 3, spec);
-    standStopSign(roads.graph, roads.laneArriving(1, 1, fromNear, 0));
+    standStopSign(roads.model.laneLevel, roads.laneArriving(1, 1, fromNear, 0));
     Sim s(std::move(roads), kMinorStop);
     CHECK(s.ok);
     approach(s, 0, 1, 1, fromNear, 0.5, kEast, 2);
     const TripId car1 = approach(s, 1, 1, 1, kEast, 60, kEast);
     const engine::PathId lane1 = s.t.laneArriving(1, 1, kEast, 0);
-    CHECK(s.d.placeHold(car1, 1, at(lane1, s.t.graph.paths[lane1.index].length - 59.5)));
+    CHECK(s.d.placeHold(car1, 1, at(lane1, s.t.model.laneLevel.paths[lane1.index].length - 59.5)));
     const engine::PathId truckPath = s.t.connector(1, 1, fromNear, 0, kEast, 0);
     const Real joinAt = stretchWith(s, truckPath, s.t.connector(1, 1, kEast, 0, kEast, 0));
     CHECK(joinAt > 0);
@@ -1341,7 +1342,7 @@ TEST_CASE(give_way_284_e_rolling_over_the_line_does_not_commit_the_main_road_goe
     TestRoadSpec spec;
     spec.roadLength = 200;
     TestRoads roads = driving_test::gridRoads(3, 3, spec);
-    standStopSign(roads.graph, roads.laneArriving(1, 1, fromNear, 0));
+    standStopSign(roads.model.laneLevel, roads.laneArriving(1, 1, fromNear, 0));
     Sim s(std::move(roads), kMinorStop);
     CHECK(s.ok);
     approach(s, 0, 1, 1, fromNear, 0.5, kEast, 2);
@@ -1377,9 +1378,9 @@ namespace {
 
 // The stretch of the crossing point between `path` and `other`, along `path` (from, to); (-1, -1) for none.
 std::pair<Real, Real> stretchOf(const Sim& s, engine::PathId path, engine::PathId other) {
-    const engine::Path& p = s.t.graph.paths[path.index];
+    const engine::Path& p = s.t.model.laneLevel.paths[path.index];
     for (uint32_t k = p.crossings.first; k < p.crossings.end(); ++k) {
-        const engine::CrossingPoint& rec = s.t.graph.crossings[s.t.graph.pathCrossings[k].index];
+        const engine::CrossingPoint& rec = s.t.model.laneLevel.crossings[s.t.model.laneLevel.pathCrossings[k].index];
         if (rec.otherSide != engine::OtherSide::Path) continue;
         const bool iAmA = rec.a == path;
         if ((iAmA ? rec.otherPath() : rec.a) == other)
@@ -1398,7 +1399,7 @@ TEST_CASE(give_way_284_b_a_car_that_will_stop_on_the_crossing_is_never_clear_of_
     // before its tail is clear of a stretch is NEVER clear of it (announce.h HONEST CLEAR TIMES): car 1 waits at its line
     // until car 0 is let go.
     TestRoads roads = driving_test::gridRoads(3, 3);
-    standStopSign(roads.graph, roads.laneArriving(1, 1, kNorth, 0));
+    standStopSign(roads.model.laneLevel, roads.laneArriving(1, 1, kNorth, 0));
     Sim s(std::move(roads), kMinorStop);
     CHECK(s.ok);
     const engine::PathId kPath = s.t.connector(1, 1, kNorth, 0, kNorth, 0);
@@ -1420,10 +1421,10 @@ TEST_CASE(give_way_284_b_a_car_that_will_stop_on_the_crossing_is_never_clear_of_
     CHECK(s.d.placeHold(held, 1, at(hPath, hStretch.second + hLength - 0.3)));
     approach(s, 1, 1, 1, kNorth, 0.5, kNorth);
     const engine::CrossingId shared = [&]() {
-        const engine::Path& p = s.t.graph.paths[hPath.index];
+        const engine::Path& p = s.t.model.laneLevel.paths[hPath.index];
         for (uint32_t k = p.crossings.first; k < p.crossings.end(); ++k) {
-            const engine::CrossingId c = s.t.graph.pathCrossings[k];
-            const engine::CrossingPoint& rec = s.t.graph.crossings[c.index];
+            const engine::CrossingId c = s.t.model.laneLevel.pathCrossings[k];
+            const engine::CrossingPoint& rec = s.t.model.laneLevel.crossings[c.index];
             if (rec.otherSide == engine::OtherSide::Path && (rec.a == kPath || rec.otherPath() == kPath)) return c;
         }
         return engine::CrossingId();
@@ -1466,8 +1467,8 @@ void addLaneMeeting(TestRoads& roads, engine::PathId lane, engine::PathId conn) 
     rec.aTo = laneIsA ? 46 : 10;
     rec.otherFrom = laneIsA ? 4 : 40;
     rec.otherTo = laneIsA ? 10 : 46;
-    roads.graph.crossings.push_back(rec);
-    engine::indexCrossings(roads.graph);
+    roads.model.laneLevel.crossings.push_back(rec);
+    engine::indexCrossings(roads.model.laneLevel);
 }
 
 }  // namespace
@@ -1496,7 +1497,7 @@ TEST_CASE(give_way_284_d_a_car_on_a_lane_keeps_out_of_the_way_of_a_body_on_its_c
     const auto bothOn = [&]() {
         const auto onStretch = [&](const Car* c, engine::PathId p, Real from, Real to) {
             if (!c) return false;
-            const Body body = layBody(s.t.graph, *c, s.d.vehicleClasses().at(c->vehicleClass).length);
+            const Body body = layBody(s.t.model.laneLevel, *c, s.d.vehicleClasses().at(c->vehicleClass).length);
             for (std::size_t k = 0; k < body.count; ++k)
                 if (body.pieces[k].path == p && body.pieces[k].front > from && body.pieces[k].rear < to) return true;
             return false;
@@ -1532,12 +1533,12 @@ TEST_CASE(give_way_284_d_a_car_on_a_lane_keeps_out_of_the_way_of_a_body_on_its_c
     // THE RULE SET'S ORDER BETWEEN JUNCTIONS: settled at load, the lane (straight on, no sign) before the far turn.
     CHECK(s.giveRules(kUncontrolled, "  between_junctions = { settle = { 'sign_rank', 'movement', 'arrived_first' } },\n"));
     const RightOfWay& row = s.d.rightOfWay();
-    const engine::CrossingId meeting(static_cast<uint32_t>(s.t.graph.crossings.size() - 1));
+    const engine::CrossingId meeting(static_cast<uint32_t>(s.t.model.laneLevel.crossings.size() - 1));
     const MeetingAnswer* answer = row.answer(meeting);
     CHECK(answer != nullptr);
     if (answer) {
         engine::PathId other;
-        CHECK(myTurn(s.t.graph, *answer, meeting, lane, &other) == MyTurn::GoFirst);
+        CHECK(myTurn(s.t.model.laneLevel, *answer, meeting, lane, &other) == MyTurn::GoFirst);
         CHECK(other == conn);
         CHECK(answer->by == SettledBy::Movement);
     }
@@ -1606,10 +1607,10 @@ TEST_CASE(lights_18_the_yellow_and_all_red_follow_the_formula) {
     // Every timed change on the test grid (a 30 mph limit everywhere, flat): its yellow is the formula's.
     const RightOfWay& row = s.d.rightOfWay();
     CHECK(s.d.lightsRun());
-    CHECK(row.counts.junctionsTimed == static_cast<uint32_t>(s.t.graph.junctions.size()));
+    CHECK(row.counts.junctionsTimed == static_cast<uint32_t>(s.t.model.laneLevel.junctions.size()));
     for (const Phase& p : row.phases)
         if (p.yellow > 0) CHECK_APPROX(p.yellow, yellowSeconds(t, s.t.spec.speedLimit, 0), 1e-9);
-    std::printf("%s", describeProgramme(s.t.graph, row, s.t.junction(1, 1)).c_str());
+    std::printf("%s", describeProgramme(s.t.model.laneLevel, row, s.t.junction(1, 1)).c_str());
 }
 
 TEST_CASE(lights_19_nothing_that_crosses_is_green_together_and_the_state_is_a_pure_function_of_time) {
@@ -1618,13 +1619,13 @@ TEST_CASE(lights_19_nothing_that_crosses_is_green_together_and_the_state_is_a_pu
         Sim s(driving_test::gridRoads(3, 3), control, DrivingSettings::kDefaultDecideEveryTicks, true);
         CHECK(s.ok);
         const RightOfWay& row = s.d.rightOfWay();
-        const std::vector<std::string> unsafe = checkSignalProgrammes(s.t.graph, s.d.ruleSet(), row);
+        const std::vector<std::string> unsafe = checkSignalProgrammes(s.t.model.laneLevel, s.d.ruleSet(), row);
         for (const std::string& u : unsafe) std::printf("    %s\n", u.c_str());
         CHECK(unsafe.empty());
         const engine::JunctionId j = s.t.junction(1, 1);
-        std::printf("%s", describeProgramme(s.t.graph, row, j).c_str());
+        std::printf("%s", describeProgramme(s.t.model.laneLevel, row, j).c_str());
         // The same answer however often, and in whatever order, it is asked: forwards, backwards, and one cycle on.
-        const engine::Junction& jn = s.t.graph.junctions[j.index];
+        const engine::Junction& jn = s.t.model.laneLevel.junctions[j.index];
         const Real cycle = row.junctions[j.index].cycle;
         constexpr int kSamples = 400;
         std::vector<Lamp> forwards;
@@ -1633,7 +1634,7 @@ TEST_CASE(lights_19_nothing_that_crosses_is_green_together_and_the_state_is_a_pu
             const double at = 0.37 * k;
             phases.push_back(currentPhase(row, j, at));
             for (uint32_t i = 0; i < jn.connectors.count; ++i)
-                forwards.push_back(lampAt(s.t.graph, row, s.t.graph.junctionConnectors[jn.connectors.first + i], at));
+                forwards.push_back(lampAt(s.t.model.laneLevel, row, s.t.model.laneLevel.junctionConnectors[jn.connectors.first + i], at));
         }
         int differ = 0;
         for (int k = kSamples - 1; k >= 0; --k) {
@@ -1643,10 +1644,10 @@ TEST_CASE(lights_19_nothing_that_crosses_is_green_together_and_the_state_is_a_pu
             differ += currentPhase(row, j, at) != phases[static_cast<std::size_t>(k)];
             if (!nearEdge) differ += currentPhase(row, j, at + 3 * cycle) != phases[static_cast<std::size_t>(k)];
             for (uint32_t i = 0; i < jn.connectors.count; ++i) {
-                const engine::PathId c = s.t.graph.junctionConnectors[jn.connectors.first + i];
+                const engine::PathId c = s.t.model.laneLevel.junctionConnectors[jn.connectors.first + i];
                 const Lamp was = forwards[static_cast<std::size_t>(k) * jn.connectors.count + i];
-                differ += lampAt(s.t.graph, row, c, at) != was;
-                if (!nearEdge) differ += lampAt(s.t.graph, row, c, at + 3 * cycle) != was;
+                differ += lampAt(s.t.model.laneLevel, row, c, at) != was;
+                if (!nearEdge) differ += lampAt(s.t.model.laneLevel, row, c, at + 3 * cycle) != was;
             }
         }
         CHECK(differ == 0);
@@ -1675,7 +1676,7 @@ TEST_CASE(lights_20_a_car_at_a_red_stops_at_the_line_and_goes_on_green) {
         s.step();
         const Car* c = s.d.car(CarId(0));
         if (!c || c->path != lane || c->speed >= kStandingBelow) continue;
-        restedShort = s.t.graph.paths[lane.index].length - c->along;
+        restedShort = s.t.model.laneLevel.paths[lane.index].length - c->along;
         sawRed = sawRed || s.d.lamp(straight) == Lamp::Red;
     }
     s.report("a red, then a green");
@@ -1698,7 +1699,7 @@ TEST_CASE(lights_21_the_yellow_dilemma_both_ways) {
     const LightTiming t = labTiming(s);
     const engine::PathId straight = turnAt(s, 1, 1, kEast, kEast);
     const engine::PathId lane = s.t.laneArriving(1, 1, kEast, 0);
-    const Real laneLength = s.t.graph.paths[lane.index].length;
+    const Real laneLength = s.t.model.laneLevel.paths[lane.index].length;
     const Real interval = static_cast<Real>(DrivingSettings::kDefaultDecideEveryTicks) * kStep;
     constexpr Real kMargin = 1.0;
     // car -> when the change (yellow, then all-red) it was judged at the start of ends
@@ -1736,7 +1737,7 @@ TEST_CASE(lights_21_the_yellow_dilemma_both_ways) {
         was = lamp;
         for (const Car& c : s.d.cars())
             if (c.path == straight && !enteredOn.count(c.id.index)) {
-                enteredOn[c.id.index] = lampAt(s.t.graph, s.d.rightOfWay(), straight, before);
+                enteredOn[c.id.index] = lampAt(s.t.model.laneLevel, s.d.rightOfWay(), straight, before);
                 enteredAt[c.id.index] = before;
             }
     }
@@ -1778,7 +1779,7 @@ TEST_CASE(lights_22_a_far_turn_waits_inside_while_three_oncoming_cars_pass) {
     CHECK(turn.valid());
     const Real waitAt = s.d.rightOfWay().paths[turn.index].waitInsideAt;
     std::printf("    the far turn (connector %u, %.1f m) may wait inside at %.1f m\n", turn.index,
-                s.t.graph.paths[turn.index].length, waitAt);
+                s.t.model.laneLevel.paths[turn.index].length, waitAt);
     CHECK(waitAt >= s.d.vehicleClasses().at(0).length);
     CHECK(stepUntilLamp(s, turn, Lamp::Green, 120));
     approach(s, 0, 1, 1, kEast, 10, far);
@@ -1835,7 +1836,7 @@ TEST_CASE(lights_23_with_no_gap_the_far_turn_completes_on_the_change) {
         const double before = s.d.clockSeconds();
         const std::size_t exited = s.exitedConnector[0].size();
         s.step();
-        if (s.exitedConnector[0].size() > exited) exitedOn = lampAt(s.t.graph, s.d.rightOfWay(), turn, before);
+        if (s.exitedConnector[0].size() > exited) exitedOn = lampAt(s.t.model.laneLevel, s.d.rightOfWay(), turn, before);
     }
     s.report("a far turn with no gap");
     s.checkClean();
@@ -1865,9 +1866,9 @@ TEST_CASE(lights_24_opposing_far_turns_both_shapes) {
         const Heading farW = driving_test::farTurnFrom(kWest, DrivesOn::Left);
         const engine::PathId a = turnAt(s, 1, 1, kEast, farE), b = turnAt(s, 1, 1, kWest, farW);
         bool meet = false;
-        const engine::Path& pa = s.t.graph.paths[a.index];
+        const engine::Path& pa = s.t.model.laneLevel.paths[a.index];
         for (uint32_t k = pa.crossings.first; k < pa.crossings.end(); ++k) {
-            const engine::CrossingPoint& x = s.t.graph.crossings[s.t.graph.pathCrossings[k].index];
+            const engine::CrossingPoint& x = s.t.model.laneLevel.crossings[s.t.model.laneLevel.pathCrossings[k].index];
             meet = meet || (x.otherSide == engine::OtherSide::Path && (x.a == b || x.otherPath() == b));
         }
         (meet ? crossing : clear) += 1;
@@ -1955,7 +1956,7 @@ int feed(Sim& s, const std::vector<Arm>& arms, Real seconds, uint32_t& next, Rea
             const uint32_t pick =
                 engine::bundle::fnv1a(&next, sizeof next, 0x264u) % static_cast<uint32_t>(arms[a].to.size());
             const engine::PathId to = arms[a].to[pick];
-            s.add(next, arms[a].from, 5, to, s.t.graph.paths[to.index].length - 10);
+            s.add(next, arms[a].from, 5, to, s.t.model.laneLevel.paths[to.index].length - 10);
             ++next;
             nextAt[a] = now + every + static_cast<Real>((next * 2654435761u) % 7);
         }
@@ -2014,7 +2015,7 @@ TEST_CASE(room_26_two_approaches_room_for_one_exactly_one_enters_the_same_every_
         std::printf("    run %d: car %u entered; car %u waits at %.2f m short of its line, held by %s (asks %llu, granted "
                     "%llu, refused for no room %llu, ordered by the resolver %llu)\n",
                     run, in0 ? 0u : 1u, waiter,
-                    w ? s.t.graph.paths[w->path.index].length - w->along : -1.0,
+                    w ? s.t.model.laneLevel.paths[w->path.index].length - w->along : -1.0,
                     w && w->binding.stopFor == StopFor::NoRoom ? "a stop for room beyond" : "something else",
                     static_cast<unsigned long long>(s.d.roomCounts().asked),
                     static_cast<unsigned long long>(s.d.roomCounts().granted),
@@ -2022,8 +2023,8 @@ TEST_CASE(room_26_two_approaches_room_for_one_exactly_one_enters_the_same_every_
                     static_cast<unsigned long long>(s.d.roomCounts().orderedByResolver));
         CHECK(in0 != in1);   // exactly one entered
         CHECK(w && w->speed < kStandingBelow && w->binding.by == Limit::Stop && w->binding.stopFor == StopFor::NoRoom);
-        CHECK(w && s.t.graph.paths[w->path.index].kind == engine::PathKind::Lane &&
-              s.t.graph.paths[w->path.index].length - w->along <= kTestAtLineWithin);
+        CHECK(w && s.t.model.laneLevel.paths[w->path.index].kind == engine::PathKind::Lane &&
+              s.t.model.laneLevel.paths[w->path.index].length - w->along <= kTestAtLineWithin);
         CHECK(s.boxTicksNotAllowed == 0);
         s.checkClean();
         winners.push_back(in0 ? 0u : 1u);
@@ -2041,7 +2042,7 @@ TEST_CASE(room_27_a_full_stopped_lane_beyond_for_ten_minutes_nobody_in_the_box_c
     CHECK(s.ok);
     const engine::PathId beyond = s.t.laneLeaving(1, 1, kEast, 0);
     uint32_t parked = 1000;
-    for (Real front = 4.6; front <= s.t.graph.paths[beyond.index].length; front += 6.5) park(s, parked++, beyond, front);
+    for (Real front = 4.6; front <= s.t.model.laneLevel.paths[beyond.index].length; front += 6.5) park(s, parked++, beyond, front);
     const engine::PathId westIn = s.t.laneArriving(1, 1, kEast, 0);
     const engine::PathId intoFull = s.t.connector(1, 1, kEast, 0, kEast, 0);
     uint32_t next = 0;
@@ -2075,7 +2076,7 @@ TEST_CASE(room_28_a_bus_does_not_enter_the_first_of_two_close_junctions_until_it
     const engine::PathId beyond = s.t.laneLeaving(0, 2, kEast, 0);
     park(s, 100, beyond, 9.0);
     const engine::PathId lane = s.t.laneArriving(0, 1, kEast, 0);
-    s.add(0, lane, s.t.graph.paths[lane.index].length - 40, beyond, s.t.graph.paths[beyond.index].length - 10, 1);
+    s.add(0, lane, s.t.model.laneLevel.paths[lane.index].length - 40, beyond, s.t.model.laneLevel.paths[beyond.index].length - 10, 1);
     const engine::PathId first = s.t.connector(0, 1, kEast, 0, kEast, 0);
     s.run(30);
     const Car* bus = s.d.car(CarId(0));
@@ -2085,7 +2086,7 @@ TEST_CASE(room_28_a_bus_does_not_enter_the_first_of_two_close_junctions_until_it
     CHECK(plans && plans->count > 0 && plans->plans[0].room.state == RoomState::Refused &&
           plans->plans[0].room.refusal == RoomRefusal::NoRoom && plans->plans[0].room.by == CarId(100));
     if (bus) std::printf("    blocked: the bus waits %.2f m short of the first line\n%s",
-                         s.t.graph.paths[lane.index].length - bus->along, s.d.describeCar(CarId(0)).c_str());
+                         s.t.model.laneLevel.paths[lane.index].length - bus->along, s.d.describeCar(CarId(0)).c_str());
     std::string why;
     CHECK(s.d.removeCar(CarId(100), &why));
     s.run(40);
@@ -2160,7 +2161,7 @@ TEST_CASE(queue_35_ten_cars_at_a_green_empty_at_the_saturation_headway) {
     Measurements m;
     PathPoint line;
     line.path = lane;
-    line.along = s.t.graph.paths[lane.index].length;
+    line.along = s.t.model.laneLevel.paths[lane.index].length;
     m.addCountingLine(line);
     s.d.attachMeasurements(&m);
     CHECK(stepUntilLamp(s, straight, Lamp::Red, 200));
@@ -2226,9 +2227,9 @@ TEST_CASE(room_36_every_chain_left_open_through_close_lights_lets_a_car_from_res
                 ++tried;
                 CHECK(stepUntilLamp(s, c1, Lamp::Green, 200));
                 const double green = s.d.clockSeconds();
-                const engine::PathId lane = s.t.graph.paths[c1.index].from;
-                const engine::PathId dest = s.t.graph.nextPaths[s.t.graph.paths[c2.index].next.first];
-                s.add(0, lane, s.t.graph.paths[lane.index].length - 0.5, dest, s.t.graph.paths[dest.index].length - 10);
+                const engine::PathId lane = s.t.model.laneLevel.paths[c1.index].from;
+                const engine::PathId dest = s.t.model.laneLevel.nextPaths[s.t.model.laneLevel.paths[c2.index].next.first];
+                s.add(0, lane, s.t.model.laneLevel.paths[lane.index].length - 0.5, dest, s.t.model.laneLevel.paths[dest.index].length - 10);
                 const double cycle = s.d.rightOfWay().counts.longestCycle;
                 const double limit = (s.d.roomNumbers().cyclesThrough + 1) * cycle;
                 double reached = -1;
@@ -2273,18 +2274,18 @@ TEST_CASE(room_30_no_car_comes_to_rest_on_the_far_crosswalk) {
     const engine::PathId beyond = roads.laneLeaving(1, 1, kEast, 0);
     engine::Crosswalk walk;
     walk.junction = roads.junction(1, 1);
-    roads.graph.crosswalks.push_back(walk);
+    roads.model.laneLevel.crosswalks.push_back(walk);
     engine::CrossingPoint x;
     x.a = beyond;
     x.otherSide = engine::OtherSide::Crosswalk;
-    x.other = static_cast<uint32_t>(roads.graph.crosswalks.size() - 1);
+    x.other = static_cast<uint32_t>(roads.model.laneLevel.crosswalks.size() - 1);
     x.junction = roads.junction(1, 1);
     x.aFrom = 0;
     x.aTo = 3;
     x.otherFrom = 0;
     x.otherTo = 3.5;
-    roads.graph.crossings.push_back(x);
-    engine::indexCrossings(roads.graph);
+    roads.model.laneLevel.crossings.push_back(x);
+    engine::indexCrossings(roads.model.laneLevel);
     Sim s(std::move(roads), kUncontrolled, DrivingSettings::kDefaultDecideEveryTicks, false, true);
     CHECK(s.ok);
     park(s, 100, beyond, 13.0);
@@ -2292,7 +2293,7 @@ TEST_CASE(room_30_no_car_comes_to_rest_on_the_far_crosswalk) {
     s.run(30);
     const Car* c = s.d.car(CarId(0));
     std::printf("    the car waits on lane %u, %.2f m short of its end; refused: %llu\n", c ? c->path.index : 0,
-                c ? s.t.graph.paths[c->path.index].length - c->along : -1.0,
+                c ? s.t.model.laneLevel.paths[c->path.index].length - c->along : -1.0,
                 static_cast<unsigned long long>(s.d.roomCounts().refused[static_cast<std::size_t>(RoomRefusal::NoRoom)]));
     CHECK(c && c->path == s.t.laneArriving(1, 1, kEast, 0) && c->speed < kStandingBelow);
     CHECK(s.boxTicksNotAllowed == 0);   // a body on the crosswalk at rest counts as in the box
@@ -2408,7 +2409,7 @@ TEST_CASE(room_34_the_back_of_a_moving_queue_is_where_it_would_come_to_rest) {
         CHECK(s.ok);
         const engine::PathId beyond = s.t.laneLeaving(1, 1, kEast, 0);
         if (moving) {
-            s.add(100, beyond, 8.0, beyond, s.t.graph.paths[beyond.index].length - 5);
+            s.add(100, beyond, 8.0, beyond, s.t.model.laneLevel.paths[beyond.index].length - 5);
         } else {
             park(s, 100, beyond, 8.0);
         }
@@ -2434,8 +2435,8 @@ TEST_CASE(room_34_the_back_of_a_moving_queue_is_where_it_would_come_to_rest) {
         seat.way = &trip->way;
         seat.holds = &trip->holds;
         seat.cls = &s.d.vehicleClasses().at(0);
-        const RoomRoads layout = studyRoomRoads(s.t.graph, s.d.roomNumbers().clearOfCrosswalk);
-        const RoomWorld world{s.t.graph,  s.d.rightOfWay(), s.d.ruleSet(),    s.d.roadRules(), s.d.vehicleClasses(),
+        const RoomRoads layout = studyRoomRoads(s.t.model.laneLevel, s.d.roomNumbers().clearOfCrosswalk);
+        const RoomWorld world{s.t.model.laneLevel,  s.d.rightOfWay(), s.d.ruleSet(),    s.d.roadRules(), s.d.vehicleClasses(),
                               s.d.cars(), s.d.pathLists(),  layout,           s.d.roomNumbers(), s.d.resolver(),
                               false,      2.0,              s.d.tickCount(),  s.d.clockSeconds()};
         const RoomAnswer a = ledger.measure(world, seat, 0, {});
@@ -2492,17 +2493,17 @@ TEST_CASE(give_way_284_f1_no_claim_through_close_junctions_takes_the_next_juncti
     const engine::PathId from = s.t.laneArriving(1, 1, kEast, 0);
     const engine::PathId to = s.t.laneLeaving(1, 2, far, 0);
     CHECK(from.valid() && to.valid());
-    s.add(0, from, s.t.graph.paths[from.index].length - 0.5, to, s.t.graph.paths[to.index].length - 10);
+    s.add(0, from, s.t.model.laneLevel.paths[from.index].length - 0.5, to, s.t.model.laneLevel.paths[to.index].length - 10);
     // Car 1 straight on westward through both junctions (bound beyond the first: the link is only 6 m).
     const engine::PathId from1 = s.t.laneArriving(1, 2, kWest, 0), to1 = s.t.laneLeaving(1, 1, kWest, 0);
-    s.add(1, from1, s.t.graph.paths[from1.index].length - 40, to1, s.t.graph.paths[to1.index].length - 10);
+    s.add(1, from1, s.t.model.laneLevel.paths[from1.index].length - 40, to1, s.t.model.laneLevel.paths[to1.index].length - 10);
     const engine::PathId turn = s.t.connector(1, 2, kEast, 0, far, 0);
     const engine::PathId oncoming = s.t.connector(1, 2, kWest, 0, kWest, 0);
     const engine::CrossingId shared = [&]() {
-        const engine::Path& p = s.t.graph.paths[turn.index];
+        const engine::Path& p = s.t.model.laneLevel.paths[turn.index];
         for (uint32_t k = p.crossings.first; k < p.crossings.end(); ++k) {
-            const engine::CrossingId c = s.t.graph.pathCrossings[k];
-            const engine::CrossingPoint& rec = s.t.graph.crossings[c.index];
+            const engine::CrossingId c = s.t.model.laneLevel.pathCrossings[k];
+            const engine::CrossingPoint& rec = s.t.model.laneLevel.crossings[c.index];
             if (rec.otherSide == engine::OtherSide::Path && (rec.a == oncoming || rec.otherPath() == oncoming)) return c;
         }
         return engine::CrossingId();
@@ -2597,7 +2598,7 @@ void congestedTraffic(Sim& s, uint32_t r, uint32_t c, const std::vector<Heading>
                 continue;
             }
             const uint32_t cls = (next * 2246822519u >> 7) % 3;   // the car, the bus, the slow truck, in turn-ish
-            s.add(next, lane, 14, out, s.t.graph.paths[out.index].length - 14, cls);
+            s.add(next, lane, 14, out, s.t.model.laneLevel.paths[out.index].length - 14, cls);
             ++next;
             nextAt[static_cast<int>(a)] = now + 1 + static_cast<Real>((next * 2654435761u) % 1000) / 1000;
         }
@@ -2668,7 +2669,7 @@ TEST_CASE(give_way_284_h_the_light_programmes_are_checked_when_the_rules_are_han
     // (signalProblems), among the right-of-way table's notes too, so a host that reports the table reports a breach.
     Sim s(driving_test::gridRoads(3, 3), kLabLights, DrivingSettings::kDefaultDecideEveryTicks, true);
     CHECK(s.ok);
-    const std::vector<std::string> direct = checkSignalProgrammes(s.t.graph, s.d.ruleSet(), s.d.rightOfWay());
+    const std::vector<std::string> direct = checkSignalProgrammes(s.t.model.laneLevel, s.d.ruleSet(), s.d.rightOfWay());
     CHECK(s.d.signalProblems() == direct);
     CHECK(s.d.signalProblems().empty());
     for (const std::string& note : s.d.rightOfWay().notes) CHECK(note.find("unsafe programme") == std::string::npos);
@@ -2709,15 +2710,15 @@ BusBesideCar busBesideCar(bool sweepLength) {
     // half round its own. (Placed further back, the car comes after the bus has gone, and with the record nothing touches
     // either; swept as points the bus still reaches it from 6 m back to 40.)
     const Real carBack = 6;
-    s.add(1, busLane, s.t.graph.paths[busLane.index].length - 15, busOut, 60, 1);
-    s.add(2, carLane, s.t.graph.paths[carLane.index].length - carBack, carOut, 60, 0);
+    s.add(1, busLane, s.t.model.laneLevel.paths[busLane.index].length - 15, busOut, 60, 1);
+    s.add(2, carLane, s.t.model.laneLevel.paths[carLane.index].length - carBack, carOut, 60, 0);
     s.run(40);
     BusBesideCar out;
     for (uint8_t k = 0; k < kTouchKindCount; ++k) {
         out.spells[k] = m.rows().touches.spellsByKind[k];
         out.allSpells += out.spells[k];
     }
-    for (const engine::CrossingPoint& x : s.t.graph.crossings)
+    for (const engine::CrossingPoint& x : s.t.model.laneLevel.crossings)
         if (x.otherSide == engine::OtherSide::Path &&
             ((x.a == busTurn && x.otherPath() == carTurn) || (x.a == carTurn && x.otherPath() == busTurn)))
             out.recordBetween = true;
@@ -2795,9 +2796,9 @@ MergeRun runMerge(bool joiningLaneFirst, const char* between, const std::vector<
         CHECK(a != nullptr);
         if (!a) continue;
         out.answers.push_back(*a);
-        out.joiningTurn.push_back(myTurn(s.t.graph, *a, c, joining));
+        out.joiningTurn.push_back(myTurn(s.t.model.laneLevel, *a, c, joining));
     }
-    const Real destAlong = s.t.graph.paths[beyond.index].length - 10;
+    const Real destAlong = s.t.model.laneLevel.paths[beyond.index].length - 10;
     for (std::size_t k = 0; k < throughAt.size(); ++k) s.add(static_cast<uint32_t>(k), through, throughAt[k], beyond, destAlong);
     if (joiningAt >= 0) s.add(kJoiningCar, joining, joiningAt, beyond, destAlong);
     const uint64_t cars = throughAt.size() + (joiningAt >= 0 ? 1 : 0);
@@ -2972,8 +2973,8 @@ TEST_CASE(give_way_merge_4_a_stated_merge_filed_under_a_junction_is_read_or_repo
         const engine::PathId far = roads.connector(1, 1, kNorth, 0, out, 0);
         CHECK(straight.valid() && far.valid());
         engine::CrossingId join;
-        for (uint32_t c = 0; c < roads.graph.crossings.size(); ++c) {
-            const engine::CrossingPoint& x = roads.graph.crossings[c];
+        for (uint32_t c = 0; c < roads.model.laneLevel.crossings.size(); ++c) {
+            const engine::CrossingPoint& x = roads.model.laneLevel.crossings[c];
             if (x.otherSide == engine::OtherSide::Path && x.meeting == engine::Meeting::Join &&
                 ((x.a == straight && x.otherPath() == far) || (x.a == far && x.otherPath() == straight)))
                 join = engine::CrossingId(c);
@@ -2986,8 +2987,7 @@ TEST_CASE(give_way_merge_4_a_stated_merge_filed_under_a_junction_is_read_or_repo
         CHECK(unmarked.ok);
         const MeetingAnswer* before = unmarked.d.rightOfWay().answer(join);
         CHECK(before != nullptr);
-        roads.graph.crossings[join.index].merging = joined;
-        roads.graph.crossings[join.index].modelConnection = 0;
+        driving_test::stateMerge(roads.model, joined, other);   // the model states it: `joined` joins `other`'s lane
         Sim s(std::move(roads), kUncontrolled);
         CHECK(s.ok);
         // NOT ASKED: the old answer, and one note naming the junction and the question.
@@ -3013,9 +3013,9 @@ TEST_CASE(give_way_merge_4_a_stated_merge_filed_under_a_junction_is_read_or_repo
             if (!a) return;
             CHECK(a->by == SettledBy::StatedMerge);
             engine::PathId seen;
-            CHECK(myTurn(s.t.graph, *a, join, joined, &seen) == MyTurn::GiveWay);
+            CHECK(myTurn(s.t.model.laneLevel, *a, join, joined, &seen) == MyTurn::GiveWay);
             CHECK(seen == other);
-            CHECK(myTurn(s.t.graph, *a, join, other) == MyTurn::GoFirst);
+            CHECK(myTurn(s.t.model.laneLevel, *a, join, other) == MyTurn::GoFirst);
             CHECK(row.counts.statedMerges == 1u && row.counts.byStatedMerge == 1u && row.counts.statedMergesNotAsked == 0u);
             for (const std::string& note : row.notes) CHECK(note.find("by a merge") == std::string::npos);
         }
@@ -3059,7 +3059,7 @@ TestRoads fastMergeRoads(bool joiningLaneFirst) {
 // joining lane; not valid when there is none.
 engine::CrossingId carAndBusRecord(const Sim& s) {
     for (const engine::CrossingId c : s.t.mergeJoins) {
-        const engine::CrossingPoint& rec = s.t.graph.crossings[c.index];
+        const engine::CrossingPoint& rec = s.t.model.laneLevel.crossings[c.index];
         if (rec.concerns(s.t.mergeThrough, s.d.tagsOf(0)) && rec.concerns(s.t.mergeJoining, s.d.tagsOf(1))) return c;
     }
     return engine::CrossingId();
@@ -3067,7 +3067,7 @@ engine::CrossingId carAndBusRecord(const Sim& s) {
 
 // Where record `c`'s stretch starts on `lane` (metres along the lane).
 Real stretchStartOn(const TestRoads& t, engine::CrossingId c, engine::PathId lane) {
-    const engine::CrossingPoint& rec = t.graph.crossings[c.index];
+    const engine::CrossingPoint& rec = t.model.laneLevel.crossings[c.index];
     return rec.a == lane ? rec.aFrom : rec.otherFrom;
 }
 
@@ -3232,7 +3232,7 @@ TEST_CASE(merge_known_fault_b_a_car_creeping_to_its_give_way_stop_is_put_first) 
         // The table: the bus's lane joined, so the bus gives way, settled at load.
         const MeetingAnswer* answer = s.d.rightOfWay().answer(join);
         CHECK(answer && answer->by == SettledBy::StatedMerge);
-        CHECK(answer && myTurn(s.t.graph, *answer, join, s.t.mergeJoining) == MyTurn::GiveWay);
+        CHECK(answer && myTurn(s.t.model.laneLevel, *answer, join, s.t.mergeJoining) == MyTurn::GiveWay);
         s.add(0, s.t.mergeThrough, 230, s.t.mergeBeyond, 290);
         s.add(1, s.t.mergeThrough, 70, s.t.mergeBeyond, 290);
         s.add(2, s.t.mergeJoining, 50, s.t.mergeBeyond, 290, 1);
@@ -3248,7 +3248,7 @@ TEST_CASE(merge_known_fault_b_a_car_creeping_to_its_give_way_stop_is_put_first) 
             // Only while the bus is short of the stretch and holds a stop to give way.
             if (!(toStart > 0) || !bus->held.hasStop || !givesWay(bus->held.stopFor)) continue;
             Question by = Question::None;
-            if (!s.d.resolver().goesFirst(s.t.graph, join, 2, 1, &by) || by != Question::CannotStop) continue;
+            if (!s.d.resolver().goesFirst(s.t.model.laneLevel, join, 2, 1, &by) || by != Question::CannotStop) continue;
             flipped = true;
             shortThen = toStart;
             speedThen = bus->speed;

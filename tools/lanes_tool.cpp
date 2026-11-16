@@ -696,7 +696,7 @@ int main(int argc, char** argv) {
                     if (G.paths[p].kind != PathKind::Lane) continue;
                     const bool inLargest = !parts.sizes.empty() && parts.partOf[p] == parts.largest && rr.open[p];
                     in += inLargest ? 1 : 0;
-                    const bool fw = G.roadClassNames[G.sections[G.paths[p].section.index].roadClass] == "freeway";
+                    const bool fw = model.roadClassOf(PathId(p)) == "freeway";
                     freewayAll += fw ? 1 : 0;
                     freeway += fw && inLargest ? 1 : 0;
                 }
@@ -736,11 +736,8 @@ int main(int argc, char** argv) {
             std::map<std::pair<int, std::string>, Group> groups;   // (lanes 0 / connectors 1, class) -> its paths
             for (uint32_t p = 0; p < G.paths.size(); ++p) {
                 const Path& path = G.paths[p];
-                uint32_t lane = p;
-                if (path.kind == PathKind::Connector && path.next.count > 0) lane = G.nextPaths[path.next.first].index;
-                const SectionId sec = G.paths[lane].section;
-                const std::string cls = sec.valid() && G.sections[sec.index].roadClass < G.roadClassNames.size()
-                                            ? G.roadClassNames[G.sections[sec.index].roadClass] : std::string("?");
+                const std::string& stated = model.roadClassOf(PathId(p));   // a connector's: the lane's it leads into
+                const std::string cls = stated.empty() ? std::string("?") : stated;
                 Group& gr = groups[{path.kind == PathKind::Lane ? 0 : 1, cls}];
                 const BendSpan t = G.tightestBend(PathId(p));
                 gr.radii.push_back(t.radius);
@@ -789,7 +786,7 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0; i < lg.problems.size() && i < 10; ++i) std::printf("  problem: %s\n", lg.problems[i].c_str());
         LaneGraphSvgMarks marks;
         for (const Refusal& r : lg.refusals) marks.refusedTurns.push_back(r.at);
-        if (!writeLaneGraphSvg(G, svgPath, marks)) { std::fprintf(stderr, "lanes: cannot write %s\n", svgPath.c_str()); return 1; }
+        if (!writeLaneGraphSvg(model, svgPath, marks)) { std::fprintf(stderr, "lanes: cannot write %s\n", svgPath.c_str()); return 1; }
         std::printf("wrote %s, %s, %s, %s\n", dumpPath.c_str(), problemsPath.c_str(), reachPath.c_str(), svgPath.c_str());
         for (uint32_t j : closeUps) {
             if (j >= G.junctions.size()) { std::fprintf(stderr, "lanes: no junction %u (%zu junctions)\n", j, G.junctions.size()); return 2; }
@@ -807,7 +804,7 @@ int main(int argc, char** argv) {
             close.cropLo = close.cropLo - Vec2(kCloseUpMargin, kCloseUpMargin);
             close.cropHi = close.cropHi + Vec2(kCloseUpMargin, kCloseUpMargin);
             const std::string base = outDir + "/junction_" + std::to_string(j);
-            if (!writeLaneGraphSvg(G, base + ".svg", close)) { std::fprintf(stderr, "lanes: cannot write %s.svg\n", base.c_str()); return 1; }
+            if (!writeLaneGraphSvg(model, base + ".svg", close)) { std::fprintf(stderr, "lanes: cannot write %s.svg\n", base.c_str()); return 1; }
             // the junction itself (its control, the signs its arriving lanes face), the planned junctions it came from (what
             // the road graph's control plan says and why), then its connectors, then every crossing point on one of them
             std::ofstream f(base + ".txt");

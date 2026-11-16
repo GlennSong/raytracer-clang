@@ -902,9 +902,16 @@ struct CityMap {
 // signal poles, the city sim's signals -- and the junctions and streets the lamps and trees keep to. Since ADR-0425 the
 // street map carries every node's junction and every link's street, so nothing is tied to the model by position.
 struct RoadModel;
+struct ModelJunction;
 struct NavGraph;
 struct LevelRoadModel {
     std::vector<std::shared_ptr<RoadModel>> cities;
+    // THE ROAD MODEL OF CITY `c`, and THE JUNCTION `junction` OF IT, by the numbers the street map's nodes and the
+    // placed signs carry (ADR-0436: the one look-up, with the bounds checked once). Null: no such city or junction.
+    const RoadModel* city(int c) const {
+        return c >= 0 && static_cast<std::size_t>(c) < cities.size() ? cities[static_cast<std::size_t>(c)].get() : nullptr;
+    }
+    const ModelJunction* junctionAt(int c, int junction) const;
     // What making the first city's lane level found, in one line (the load's log line and the `lanegraph?` answer):
     // its counts and where it came from, or why there is none.
     std::string laneLevelReport;

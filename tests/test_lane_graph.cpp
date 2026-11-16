@@ -34,7 +34,6 @@ constexpr Real kJunctionHalf = 5.0;    // where the arms meet the junction
 constexpr Real kArmEnd = 45.0;         // where they start
 constexpr Real kBoxHalf = 6.0;
 constexpr Real kLaneSpeed = 13.4;      // metres per second (30 mph)
-constexpr Real kTurnSpeed = 6.7;
 constexpr Real kNearRadius = 6.0;
 constexpr Real kFarRadius = 9.0;
 constexpr uint32_t kFirstConnector = 9;
@@ -61,8 +60,6 @@ LaneGraph makeCrossroads() {
     LaneGraph g;
     g.vehicleTagNames = {"car", "bus", "bike"};
     g.regulationKindNames = {"stop", "speed_limit"};
-    g.controlNames = {"all_way_stop"};
-    g.roadClassNames = {"street"};
     const TagMask car = TagMask(1) << LaneGraph::nameIndex(g.vehicleTagNames, "car");
     const TagMask everyone = car | (TagMask(1) << LaneGraph::nameIndex(g.vehicleTagNames, "bus")) |
                              (TagMask(1) << LaneGraph::nameIndex(g.vehicleTagNames, "bike"));
@@ -75,7 +72,6 @@ LaneGraph makeCrossroads() {
         p.length = g.along[p.curve.end() - 1];
         p.width = width;
         p.tightestRadius = kNoBend;
-        p.speedLimit = kLaneSpeed;
         p.section = SectionId(section);
         p.indexInSection = index;
         g.paths.push_back(p);
@@ -93,7 +89,6 @@ LaneGraph makeCrossroads() {
     // Sections: one lane each, except section 4 (lane 4 offside, lane 8 kerb, a broken line between).
     for (uint32_t s = 0; s < 2 * kArms; ++s) {
         Section sec;
-        sec.roadClass = 0;
         sec.lanes.first = static_cast<uint32_t>(g.sectionLanes.size());
         sec.lines.first = static_cast<uint32_t>(g.laneLines.size());
         g.sectionLanes.push_back(PathId(s));
@@ -116,16 +111,15 @@ LaneGraph makeCrossroads() {
             const Vec2 to = armDir(b) * kJunctionHalf + leaveSide(b) * (kLaneWidth / 2);
             Path p;
             p.kind = PathKind::Connector;
-            p.turn = turnOf(a, b);
+            const Turn turn = turnOf(a, b);   // the turn it is (the table itself holds no turn kind: the road model states it)
             p.vehicleTags = everyone;
             p.curve = g.addCurve({from, to}, {0, 0});
             p.length = g.along[p.curve.end() - 1];
             p.width = kLaneWidth;
-            p.tightestRadius = p.turn == Turn::Straight ? kNoBend : p.turn == Turn::NearTurn ? kNearRadius : kFarRadius;
-            p.speedLimit = kTurnSpeed;
+            p.tightestRadius = turn == Turn::Straight ? kNoBend : turn == Turn::NearTurn ? kNearRadius : kFarRadius;
             p.junction = JunctionId(0);
             p.from = PathId(static_cast<uint32_t>(2 * a));
-            if (p.turn == Turn::FarTurn) p.waitInsideAt = p.length / 2;
+            if (turn == Turn::FarTurn) p.waitInsideAt = p.length / 2;
             g.paths.push_back(p);
         }
     }
@@ -163,7 +157,6 @@ LaneGraph makeCrossroads() {
 
     // The junction, its crosswalk over the east arm, its crossing points.
     Junction j;
-    j.control = 0;
     j.box = g.addPlanPoints({Vec2(-kBoxHalf, -kBoxHalf), Vec2(kBoxHalf, -kBoxHalf), Vec2(kBoxHalf, kBoxHalf),
                              Vec2(-kBoxHalf, kBoxHalf)});
     j.connectors.first = static_cast<uint32_t>(g.junctionConnectors.size());
@@ -271,11 +264,11 @@ TEST_CASE(lane_graph_saves_and_loads_field_for_field) {
 TEST_CASE(lane_graph_text_dump_reads_by_hand) {
     const LaneGraph g = makeCrossroads();
     CHECK(dumpSection(g, SectionId(4)) ==
-          "section 4: street, lanes offside to kerb: lane 4, lane 8\n"
+          "section 4: lanes offside to kerb: lane 4, lane 8\n"
           "  line between lane 4 and lane 8: broken, may be crossed either way\n");
     CHECK(dumpPath(g, PathId(connectorId(0, 1))) ==
-          "connector 9: far turn, from lane 0 into lane 3, 9.2 m, tightest radius 9.0 m, 3.0 m wide, junction 0, "
-          "may wait inside at 4.6 m, open to car, bus, bike, speed limit 6.7 m/s\n"
+          "connector 9: from lane 0 into lane 3, 9.2 m, tightest radius 9.0 m, 3.0 m wide, junction 0, "
+          "may wait inside at 4.6 m, open to car, bus, bike\n"
           "  curve: (5.0, -1.5, 0.0) (-1.5, 5.0, 0.0)\n"
           "  bends: none measured; the whole path at its tightest radius (9.0 m)\n"
           "  crossing points along it: 2 from 0.0 m, 3 from 0.0 m\n");
@@ -443,7 +436,6 @@ std::vector<Vec2> drawLine(Curvature curvature, Real length, const std::vector<R
 // A graph of one lane along `pts`, its bend profile measured by the road builder's measureBends.
 LaneGraph oneLane(const std::vector<Vec2>& pts) {
     LaneGraph g;
-    g.roadClassNames = {"street"};
     Path p;
     p.curve = g.addCurve(pts, std::vector<Real>(pts.size(), 0.0));
     p.length = g.along[p.curve.end() - 1];

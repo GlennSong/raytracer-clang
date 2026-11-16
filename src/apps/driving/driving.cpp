@@ -16,8 +16,8 @@ bool eventBefore(const Event& a, const Event& b) {
            std::make_tuple(b.car.index, static_cast<uint8_t>(b.kind), b.trip.index, b.trip.generation, b.tick, b.person);
 }
 
-Driving::Driving(const engine::LaneGraph* roads) : roads_(roads) {
-    if (roads_) routeBounds_ = studyRoads(*roads_);
+Driving::Driving(const engine::RoadModel* model) : model_(model), roads_(model ? &model->laneLevel : nullptr) {
+    if (model_) routeBounds_ = studyRoads(*model_);
 }
 
 void Driving::tick(Real dt) {
@@ -174,7 +174,7 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
     hasRules_ = true;
     // Who gives way to whom, from the road and these rules; every driver plans its junctions afresh against it.
     if (roads_) {
-        rightOfWay_ = buildRightOfWay(*roads_, ruleSet_, roadRules_);
+        rightOfWay_ = buildRightOfWay(*model_, ruleSet_, roadRules_);
         // ... and every junction's traffic lights timed, with the far turns' places to wait inside checked (#261).
         if (lightsRun_) timeSignalProgrammes(*roads_, roadRules_, lightTiming_, rightOfWay_);
         // ... and checked: no stage lets in together two movements whose paths meet unless the rule set allows it. A
@@ -559,7 +559,7 @@ void Driving::plan() {
             p.way = wayAhead(t->route, *roads_, c.path, c.along, lookAhead, p.legReached);
             p.junctions = t->junctions;
             p.planUpdate = PlanUpdate();
-            updateJunctionPlans(*roads_, rightOfWay_, c, cls.length, p.way, tickCount_, clockSeconds_, p.junctions,
+            updateJunctionPlans(*model_, rightOfWay_, c, cls.length, p.way, tickCount_, clockSeconds_, p.junctions,
                                 p.planUpdate, tagsOf(c.vehicleClass));
             if (!roomOn_ || look >= roomNumbers_.throughJunctions) break;
             const Real further = roomReach(*roads_, roomRoads_, p.junctions, c, p.way,
@@ -848,7 +848,7 @@ Route Driving::routeFor(const Car& c, const PathPoint& to) const {
     PathPoint front;
     front.path = c.path;
     front.along = c.along;
-    return findRoute(*roads_, routeBounds_, routeClass(c.vehicleClass), front, to);
+    return findRoute(*model_, routeBounds_, routeClass(c.vehicleClass), front, to);
 }
 
 void Driving::queueEvent(EventKind kind, CarId car, TripId trip, PersonId person) {
@@ -1012,7 +1012,7 @@ void Driving::askAnotherWay(Car& c, Trip& t) {
     PathPoint front;
     front.path = c.path;
     front.along = c.along;
-    Route route = findRoute(*roads_, routeBounds_, cls, front, t.destination);
+    Route route = findRoute(*model_, routeBounds_, cls, front, t.destination);
     if (!route.found) return;   // no other way: it keeps its own and waits on (the measurements report a wait that cannot end)
     // ... that it can take now: the first turn of the new way, where lights run there, shows green (a driver gives up its
     // turn for one it sees it may take, not for another red; otherwise it waits on and asks again later).
@@ -1376,7 +1376,7 @@ std::string Driving::describeWaiting(const WaitReport& report) const {
 
 std::string Driving::describeJunction(engine::JunctionId junction) const {
     if (!roads_ || !hasRules_) return "no junction table: the model has no road or no rules yet\n";
-    return describeJunctionRules(*roads_, ruleSet_, rightOfWay_, junction);
+    return describeJunctionRules(*model_, ruleSet_, rightOfWay_, junction);
 }
 
 const JunctionPlans* Driving::junctionPlans(CarId car) const {

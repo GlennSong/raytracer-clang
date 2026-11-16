@@ -101,7 +101,7 @@ enum class SettleQuestion : uint8_t {
     KerbSide,       // at load: the one arriving from the other's kerb side goes first
     ArrivedFirst,   // while driving: whoever reached their line first
     StatedMerge,    // at load: one of the two joined the other's lane by a merge the roads state (a ramp lane into the
-                    // lane beside it, a lane that ends into its neighbour: CrossingPoint::merging); it gives way.
+                    // lane beside it, a lane that ends into its neighbour: RoadModel::mergingAt); it gives way.
                     // Says nothing of a meeting the roads state no merge at
 };
 constexpr uint8_t kSettleQuestionCount = 6;

@@ -48,6 +48,31 @@ int, -1 for a connector) and its width is `width`: the old names `parent` and `w
 Readers ask the model by id instead of measuring geometry; section 3 lists them. Kinds of attachment (a name, a
 sign) are data, not code.
 
+**The query functions are THE way to read the roads** (ADR-0436). A reader asks one of these; it does not walk the
+model's lists or write the bounds checks out again. If the question you have is not here, add a function here and
+move the loop into it; never a private loop in the reader.
+
+| Question | Function |
+|---|---|
+| The road model of a city; one of its junctions | `LevelRoadModel::city(c)`, `junctionAt(c, junction)` (components.h) |
+| Is a junction lit; does the file state controls; a street's run key; junction points | `LevelRoadModel::lit`, `controlsStated`, `runKey`, `junctionPoints` |
+| The street an arm is | `RoadModel::streetOf(arm)` |
+| Which arm of the junction at a street's end that street is | `RoadModel::armAt(street, end)` |
+| A street's centre line; where one of its ends is | `RoadModel::centreLine(line)`, `streetEnd(street, end)` |
+| Where an arm meets its junction; the named arms round a junction | `armMouth`, `namedArmsAt` |
+| A street's name; the named street nearest a point | `streetName`, `streetNameNear` |
+| A street's lanes; what a lane leads to; which arm and stop line a lane meets | `lanesOf`, `leadsTo`, `laneSpanEnd` |
+| Is a street one-way; its widths; do cars drive it | `ModelSection::oneWay`, `travelWidth`, `carriagewayHalfWidth`, `carriesCars` |
+| The street a lane path or connector is on | `RoadModel::streetOf(path)` |
+| The limit posted on a path; its road's class | `RoadModel::postedLimit(path)`, `roadClassOf(path)` |
+| The control at a junction of the lane level | `RoadModel::controlAt(junction)`, `junctionOf(junction)` |
+| The turn a connector takes | `RoadModel::turnOf(path)` |
+| Which path joins by a stated merge | `RoadModel::mergingAt(crossing)` |
+
+**The lane table holds no fact about what the road is** (ADR-0436, issue #291): no control, posted limit, road class,
+turn kind or merging path. It holds where a car can be, and each path, junction and crossing point carries the id the
+model is asked by. What it still holds of its own: the regulations (a rule on a stretch of a path, with a value).
+
 ## 2. File map
 
 Under `src/engine/procgen/city/roads/`:
@@ -59,7 +84,7 @@ Under `src/engine/procgen/city/roads/`:
 | `street_map.h/.cpp` | The street map every agent routes, drives and walks on (`NavGraph`), built at load from the planned layer and the deck heights (ADR-0425). |
 | `lane_turns.h/.cpp` | Which arriving lane takes which turn: reads `assets/data/lane_turns.json`; `turnsAtJunction` is the one function that applies it (ADR-0426). Also `laneLineBetween`, the one rule for whether the line between two lanes may be crossed (its lane kinds are the table's `lane_lines`). |
 | `control_signs.h/.cpp` | The stop, give-way, do-not-enter and one-way signs that follow from stated facts (ADR-0424). Also ADR-0419's stop-line rule, `stopLineFromMouth`. |
-| `lane_graph.h/.cpp` | The lane graph's types (paths, sections, junctions, crossing points, regulations), its save/load (LGRF), `validate`, dump, reach. The driving library reads these types. |
+| `lane_graph.h/.cpp` | The lane graph's types (paths, sections, junctions, crossing points, regulations), its save/load (LGRF), `validate`, dump, reach. It holds where a car can be and the ids the model is asked by, no fact about what the road is (ADR-0436). |
 | `road_builder.h/.cpp`, `lanes_builder.cpp` | The roads module's one builder interface and the lanes builder behind it (ADR-0089). |
 | `road_entity.h/.cpp`, `road_net_internal.h` | The engine's road entity (`RoadGraph` + look + plan). |
 | `ground_grid.h/.cpp` | Absolute ground heights on a grid, as the builder hands them back. |
@@ -90,7 +115,8 @@ Tests:
 - `lanes_tests`: `test_lanes.cpp`, `test_road_model.cpp`, `test_control_plan.cpp`; unit scenes in
   `assets/lanelab/*.json`; `tests/lane_level_scene.h` gives a scene the lane-level facts.
 - `run_tests`: `test_lane_graph.cpp`, `test_nav_graph.cpp`, `test_street_signs.cpp` and more.
-- `driving_tests`: hand-made graphs; does not read the model.
+- `driving_tests`: lane tables laid by hand inside a small road model the test states its facts on
+  (`tests/driving_test_roads.h`).
 - `level_tests`: `test_traffic_lab_v2.cpp`, `test_levels_playable.cpp`.
 
 ## 3. Who reads the model today
@@ -108,10 +134,11 @@ Tests:
   host makes nothing: it hands the driving the lane level of the built model the loader published in `LevelRoadModel`
   (ADR-0435), and warns when a vehicle class carries a tag the roads were not checked for. Only traffic_lab drives v2
   (`"driving": "v2"` in its level file); river_town and agent_lab get their built model too, since the loader makes it.
-- **The lane table's copies of model facts** (issue #291, open): a junction's control, a path's posted limit, a
-  section's road class, the regulations, a connector's turn kind and the merge mark are still copied into the lane
-  table, because the driving library reads the lane table alone (`const LaneGraph*`) and its 193 tests run on hand-made
-  lane tables with no model. `road_model_12` holds the control, the turn and the limit equal to the model's.
+- **The driving holds the road model** (ADR-0436): `Driving(const RoadModel*)`. It reaches the lane level through it
+  and asks the model for a junction's control, a path's posted limit and road class, a connector's turn and a stated
+  merge (the table in section 1). The lane table's copies of those five are deleted. Its regulations stay: they are the
+  only home of where a rule stands along a lane and its value. The driving's tests build a small model through
+  `tests/driving_test_roads.h` (`modelOf`, `stateStreet`, `stateControl`, `stateTurn`, `stateMerge`).
 - **The old driving's lanes** (`LevelLanes`, `TrafficLane` in components.h; `src/apps/citysim/lane_map.*`): the loader
   still lays the lanes a second time for it (`expand` in `publishCityProducts`). Slated for deletion with v1.
 - **Placement policy**: the planner writes controls and signs into the road file from `control_policy.lua`; the
@@ -168,7 +195,7 @@ Still working roads out for itself:
 
 The lane graph's key (`laneLevelKey`) hashes `junctions` (without `nodes`), `arms_in_ring`, `streets`, `divided` and
 `lane_rules`.
-It is one part of the built road model's one cache key (`roadModelCacheKey`). Since ADR-0431 the paint reads the junctions' controls, arms and through pairs, the streets (not their names), `arms_in_ring` and `lane_rules`, so writing those re-bakes the city (`paintFactsKey`); a street's name, a junction's `nodes` or `why`, and `divided` still change no bake. Only traffic_lab and river_town have `lane_rules`. Every
+It is one part of the built road model's one cache key (`roadModelCacheKey`). Since ADR-0431 the paint reads the junctions' controls, arms and through pairs, the streets (not their names), `arms_in_ring` and `lane_rules`, so writing those re-bakes the city (`paintFactsKey`); a street's name, a junction's `nodes` or `why`, and `divided` still change no bake. Only traffic_lab, river_town and agent_lab (since ADR-0436) have `lane_rules`. Every
 other road file gets no lane graph, and the error names `lanes_tool layout <file> --lane-rules 20 --write`. Write
 facts with the tools (`lanes_tool layout ... --write`, `--names`, `--nodes`, `--lane-rules`;
 `city_plan controls <file> rules/lab.lua --layout --write --controls-only`), never by hand.
@@ -325,7 +352,7 @@ data rows.
   circle on the near side. It is listed per junction in the arm-order tables and is unchanged.
 - **Deferred levels' road files are unmarked** (`arms_in_ring`). They load with a logged problem line and get no lane
   level until `lanes_tool layout <file> --arm-order --write` is run on them.
-- **Deferred levels**: every lanes level but traffic_lab and river_town lacks `lane_rules`. Levels without
+- **Deferred levels**: every lanes level but traffic_lab, river_town and agent_lab lacks `lane_rules`. Levels without
   `junctions[].nodes` get no street map (agent_lab, river_town and traffic_lab have them). The one-agent lab's car
   still drives v1. Steps 5, 6 and 9 are open (design step table).
 - **Real cases the lane-graph checks found and name** (test_lanes.cpp, per scene): lanes of two roads crossing at one

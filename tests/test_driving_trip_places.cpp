@@ -63,35 +63,35 @@ TEST_CASE(trip_places_1_parts_without_lane_changes_route_everywhere) {
     TestRoadSpec spec;
     spec.lanesEachWay = 2;
     const TestRoads t = driving_test::gridRoads(3, 3, spec);
-    const RouteClass rc = routeClass(t.graph, false);
-    const TripPlaces places = findTripPlaces(t.graph, rc, 2.0, 4);
+    const RouteClass rc = routeClass(t.model.laneLevel, false);
+    const TripPlaces places = findTripPlaces(t.model.laneLevel, rc, 2.0, 4);
     CHECK(!places.empty());
     // the offside lanes reach only offside lanes, the kerb lanes only kerb lanes: two parts
     CHECK(places.parts.size() == 2u);
     std::size_t lanes = 0;
     for (const TripPart& p : places.parts) {
         lanes += p.lanes.size();
-        for (const engine::PathId l : p.lanes) CHECK(t.graph.paths[l.index].kind == engine::PathKind::Lane);
+        for (const engine::PathId l : p.lanes) CHECK(t.model.laneLevel.paths[l.index].kind == engine::PathKind::Lane);
     }
     CHECK(lanes == places.laneCount);
     // With lane changes, one part holds every lane of the grid, those two parts' and the rest.
-    const TripPlaces joined = findTripPlaces(t.graph, routeClass(t.graph, true), 2.0, 4);
+    const TripPlaces joined = findTripPlaces(t.model.laneLevel, routeClass(t.model.laneLevel, true), 2.0, 4);
     CHECK(joined.parts.size() == 1u);
     CHECK(joined.laneCount >= lanes);
     std::size_t gridLanes = 0;
-    for (const engine::Path& p : t.graph.paths) gridLanes += p.kind == engine::PathKind::Lane ? 1 : 0;
+    for (const engine::Path& p : t.model.laneLevel.paths) gridLanes += p.kind == engine::PathKind::Lane ? 1 : 0;
     CHECK(joined.laneCount == gridLanes);
     // Any two places in one part: a route with no lane change between them.
-    const RouteBounds bounds = studyRoads(t.graph);
+    const RouteBounds bounds = studyRoads(t.model);
     int routes = 0, found = 0;
     for (uint32_t part = 0; part < places.parts.size(); ++part)
         for (uint32_t k = 0; k < 40; ++k) {
             const PathPoint from = placeInPart(places, part, placeDraw(7, k, PlaceQuestion::Start, 0));
             const PathPoint to = placeInPart(places, part, placeDraw(7, k, PlaceQuestion::Destination, 0));
             CHECK(places.partOf(from.path) == part && places.partOf(to.path) == part);
-            CHECK(from.along >= places.margin && from.along <= t.graph.paths[from.path.index].length - places.margin);
+            CHECK(from.along >= places.margin && from.along <= t.model.laneLevel.paths[from.path.index].length - places.margin);
             ++routes;
-            const Route r = findRoute(t.graph, bounds, rc, from, to);
+            const Route r = findRoute(t.model, bounds, rc, from, to);
             if (!r.found) continue;
             ++found;
             // no lane change anywhere: the lane the car is in finishes the route from every leg
@@ -111,19 +111,19 @@ TEST_CASE(trip_places_1_parts_without_lane_changes_route_everywhere) {
 
 TEST_CASE(trip_places_2_no_place_on_a_dead_end_every_place_on_a_ring) {
     const TestRoads straight = driving_test::straightRoad(4);
-    CHECK(findTripPlaces(straight.graph, routeClass(straight.graph, true), 2.0, 1).empty());
+    CHECK(findTripPlaces(straight.model.laneLevel, routeClass(straight.model.laneLevel, true), 2.0, 1).empty());
     TestRoadSpec spec;
     spec.lanesEachWay = 2;
     const TestRoads ring = driving_test::ringRoad(6, spec);
-    const TripPlaces places = findTripPlaces(ring.graph, routeClass(ring.graph, false), 2.0, 2);
+    const TripPlaces places = findTripPlaces(ring.model.laneLevel, routeClass(ring.model.laneLevel, false), 2.0, 2);
     CHECK(places.parts.size() == 2u);   // each lane goes round on its own
     CHECK(places.laneCount == 12u);
     // too small a part (asking for more lanes than a ring lane has sides) is left out
-    CHECK(findTripPlaces(ring.graph, routeClass(ring.graph, false), 2.0, 7).empty());
+    CHECK(findTripPlaces(ring.model.laneLevel, routeClass(ring.model.laneLevel, false), 2.0, 7).empty());
     // a class that may use none of the road has nowhere
-    RouteClass none = routeClass(ring.graph, false);
+    RouteClass none = routeClass(ring.model.laneLevel, false);
     none.tags = 0;
-    CHECK(findTripPlaces(ring.graph, none, 2.0, 1).empty());
+    CHECK(findTripPlaces(ring.model.laneLevel, none, 2.0, 1).empty());
 }
 
 // ---- 3. picks ------------------------------------------------------------------------------------------------------------
@@ -135,16 +135,16 @@ TEST_CASE(trip_places_3_picks_are_stable_and_spread_by_length) {
     CHECK(placeDraw(1, 42, PlaceQuestion::Start, 3) != placeDraw(2, 42, PlaceQuestion::Start, 3));
     CHECK(placeDraw(1, 42, PlaceQuestion::Start, 3) != placeDraw(1, 43, PlaceQuestion::Start, 3));
     const TestRoads ring = driving_test::ringRoad(4);
-    const TripPlaces places = findTripPlaces(ring.graph, routeClass(ring.graph, true), 2.0, 1);
+    const TripPlaces places = findTripPlaces(ring.model.laneLevel, routeClass(ring.model.laneLevel, true), 2.0, 1);
     CHECK(places.parts.size() == 1u && places.laneCount == 4u);
     // the ends of the range: the first lane's first usable metre, the last lane's last
     const PathPoint first = placeAnywhere(places, 0);
     CHECK(first.path == places.parts[0].lanes.front() && std::fabs(first.along - 2.0) < 1e-9);
     const PathPoint last = placeAnywhere(places, 1);
-    const Real lastLength = ring.graph.paths[places.parts[0].lanes.back().index].length;
+    const Real lastLength = ring.model.laneLevel.paths[places.parts[0].lanes.back().index].length;
     CHECK(last.path == places.parts[0].lanes.back() && std::fabs(last.along - (lastLength - 2.0)) < 1e-9);
     // equal lanes get an equal share of 4,000 picks, within a few percent
-    std::vector<int> hits(ring.graph.paths.size(), 0);
+    std::vector<int> hits(ring.model.laneLevel.paths.size(), 0);
     for (uint32_t k = 0; k < 4000; ++k) ++hits[placeAnywhere(places, placeDraw(9, k, PlaceQuestion::Destination, 0)).path.index];
     for (const engine::PathId l : places.parts[0].lanes) CHECK(hits[l.index] > 900 && hits[l.index] < 1100);
 }
@@ -153,19 +153,19 @@ TEST_CASE(trip_places_3_picks_are_stable_and_spread_by_length) {
 
 TEST_CASE(trip_places_4_room_for_a_car) {
     const TestRoads ring = driving_test::ringRoad(4);
-    Driving d(&ring.graph);
+    Driving d(&ring.model);
     d.setVehicleClasses(oneClass());
     const engine::PathId lane = ring.ringLane(0, 0);
     const Real length = driving_test::testCarClass().length;
-    CHECK(roomFor(ring.graph, d.pathLists(), at(lane, 50), length, 4));
-    CHECK(!roomFor(ring.graph, d.pathLists(), at(lane, length + 1), length, 4));   // its rear too near the start
-    CHECK(!roomFor(ring.graph, d.pathLists(), at(lane, 98), length, 4));           // its front too near the end
+    CHECK(roomFor(ring.model.laneLevel, d.pathLists(), at(lane, 50), length, 4));
+    CHECK(!roomFor(ring.model.laneLevel, d.pathLists(), at(lane, length + 1), length, 4));   // its rear too near the start
+    CHECK(!roomFor(ring.model.laneLevel, d.pathLists(), at(lane, 98), length, 4));           // its front too near the end
     CHECK(d.placeCar(CarId(1), 0, at(lane, 50)));
-    CHECK(!roomFor(ring.graph, d.pathLists(), at(lane, 50), length, 4));                    // on it
-    CHECK(!roomFor(ring.graph, d.pathLists(), at(lane, 50 + length + 3), length, 4));       // 3 m ahead of it
-    CHECK(roomFor(ring.graph, d.pathLists(), at(lane, 50 + length + 5), length, 4));        // 5 m ahead
-    CHECK(!roomFor(ring.graph, d.pathLists(), at(lane, 50 - length - 3), length, 4));       // 3 m behind
-    CHECK(roomFor(ring.graph, d.pathLists(), at(ring.ringLane(1, 0), 50), length, 4));      // the next side is clear
+    CHECK(!roomFor(ring.model.laneLevel, d.pathLists(), at(lane, 50), length, 4));                    // on it
+    CHECK(!roomFor(ring.model.laneLevel, d.pathLists(), at(lane, 50 + length + 3), length, 4));       // 3 m ahead of it
+    CHECK(roomFor(ring.model.laneLevel, d.pathLists(), at(lane, 50 + length + 5), length, 4));        // 5 m ahead
+    CHECK(!roomFor(ring.model.laneLevel, d.pathLists(), at(lane, 50 - length - 3), length, 4));       // 3 m behind
+    CHECK(roomFor(ring.model.laneLevel, d.pathLists(), at(ring.ringLane(1, 0), 50), length, 4));      // the next side is clear
 }
 
 // ---- 5. put down and sent on ---------------------------------------------------------------------------------------------
@@ -199,8 +199,8 @@ rule_set = { name = 'trip_places_test', drives_on = 'left', ranks = {}, devices 
 
 namespace {
 
-// The rules above, read and bound to `g` the way a level reads them, handed to `d`.
-bool giveRules(Driving& d, const engine::LaneGraph& g, std::vector<std::string>* problems = nullptr) {
+// The rules above, read and bound to `d`'s road the way a level reads them, handed to `d`.
+bool giveRules(Driving& d, std::vector<std::string>* problems = nullptr) {
     FactRegistry facts;
     if (!registerBuiltInFacts(facts) || !registerMoveNeeds(facts)) return false;
     engine::ScriptVM vm;
@@ -215,7 +215,7 @@ bool giveRules(Driving& d, const engine::LaneGraph& g, std::vector<std::string>*
     }
     RoadRules roadRules;
     std::vector<std::string> found;
-    if (!buildRoadRules(g, ruleSet, facts, roadRules, &found)) {
+    if (!buildRoadRules(*d.model(), ruleSet, facts, roadRules, &found)) {
         if (problems) *problems = found;
         return false;
     }
@@ -232,14 +232,14 @@ RingRun runRing(Real seconds) {
     spec.lanesEachWay = 2;
     spec.speedLimit = 0;   // no posted limit: the rule set's default for the road's class
     const TestRoads ring = driving_test::ringRoad(6, spec);
-    Driving d(&ring.graph);
+    Driving d(&ring.model);
     d.setVehicleClasses(oneClass());
     DrivingSettings settings;
     settings.laneChanges = false;
     d.setSettings(settings);
     RingRun out;
-    if (!giveRules(d, ring.graph)) return out;
-    const TripPlaces places = findTripPlaces(ring.graph, routeClass(ring.graph, false), 2.0, 2);
+    if (!giveRules(d)) return out;
+    const TripPlaces places = findTripPlaces(ring.model.laneLevel, routeClass(ring.model.laneLevel, false), 2.0, 2);
     std::vector<uint32_t> startDraws(20, 0), tripDraws(20, 0);
     for (uint32_t k = 0; k < 20; ++k) {
         const TripPlacing put = putCarSomewhere(d, places, CarId(k), 0, 4.0, 5, k, startDraws[k], 64);
@@ -259,7 +259,7 @@ RingRun runRing(Real seconds) {
                 ++out.renewed;
         }
         // no two bodies overlap on any path
-        for (std::size_t p = 0; p < ring.graph.paths.size(); ++p) {
+        for (std::size_t p = 0; p < ring.model.laneLevel.paths.size(); ++p) {
             const PathList list = d.pathLists().on(engine::PathId(static_cast<uint32_t>(p)));
             for (std::size_t k = 0; k + 1 < list.size(); ++k)
                 if (list[k + 1].rear < list[k].front - 1e-9) ++out.overlaps;
@@ -291,14 +291,14 @@ TEST_CASE(trip_places_6_no_lane_change_routes_and_the_road_end) {
     spec.lanesEachWay = 2;
     TestRoads t = driving_test::straightRoad(2, spec);
     const engine::PathId from = t.straightLane(0, true, 1), to = t.straightLane(1, true, 1);
-    t.graph.paths[from.index].next = engine::Range();
+    t.model.laneLevel.paths[from.index].next = engine::Range();
     for (const bool laneChanges : {false, true}) {
-        Driving d(&t.graph);
+        Driving d(&t.model);
         d.setVehicleClasses(oneClass());
         DrivingSettings settings;
         settings.laneChanges = laneChanges;
         d.setSettings(settings);
-        CHECK(giveRules(d, t.graph));
+        CHECK(giveRules(d));
         CHECK(d.placeCar(CarId(1), 0, at(from, 20)));
         const TripId trip = d.beginTrip(CarId(1), 1, at(to, 50));
         if (!laneChanges) {
@@ -316,7 +316,7 @@ TEST_CASE(trip_places_6_no_lane_change_routes_and_the_road_end) {
         CHECK(d.atRoadEnd(CarId(1)));
         CHECK(c && c->path == from && c->speed < kStandingBelow);
         std::printf("    stranded %.2f m short of its lane's end after %.1f s\n",
-                    c ? t.graph.paths[c->path.index].length - c->along : -1.0, d.clockSeconds());
+                    c ? t.model.laneLevel.paths[c->path.index].length - c->along : -1.0, d.clockSeconds());
         // ended and taken off, it is no longer there
         CHECK(d.endTrip(trip));
         CHECK(!d.atRoadEnd(CarId(1)));
@@ -344,17 +344,19 @@ TEST_CASE(trip_places_7_default_limits_by_road_class) {
     CHECK(registerBuiltInFacts(facts) && registerMoveNeeds(facts));
     RoadRules rr;
     std::vector<std::string> problems;
-    CHECK(buildRoadRules(t.graph, ruleSet, facts, rr, &problems));
+    CHECK(buildRoadRules(t.model, ruleSet, facts, rr, &problems));
     const engine::PathId lane = t.straightLane(0, true, 0);
-    CHECK(std::fabs(rr.baseLimit(t.graph, lane) - 20 * 0.44704) < 1e-9);
-    TestRoads posted = t;
-    posted.graph.paths[lane.index].speedLimit = 9;
-    CHECK(rr.baseLimit(posted.graph, lane) == 9);
+    CHECK(std::fabs(rr.baseLimit(lane) - 20 * 0.44704) < 1e-9);
+    TestRoads posted = t;   // the same road with a limit posted on that lane's street (stated on the model)
+    posted.model.streets[posted.model.laneLevel.paths[lane.index].street].speedLimit = 9;
+    RoadRules postedRules;
+    CHECK(buildRoadRules(posted.model, ruleSet, facts, postedRules, &problems));
+    CHECK(postedRules.baseLimit(lane) == 9);
     // a class with no default: one problem, naming the class and the table
     RuleSet bare = ruleSet;
     bare.defaultLimits.clear();
     problems.clear();
-    CHECK(!buildRoadRules(t.graph, bare, facts, rr, &problems));
+    CHECK(!buildRoadRules(t.model, bare, facts, rr, &problems));
     CHECK(problems.size() == 1u && problems[0].find("default_limits.test_street") != std::string::npos);
     // a limit that is not a speed is refused when the file is read
     engine::ScriptVM bad;
@@ -364,9 +366,9 @@ TEST_CASE(trip_places_7_default_limits_by_road_class) {
     CHECK(!loadRuleSet(bad, "bad.lua", refused, &err));
     CHECK(err.find("bad.lua: rule_set.default_limits.test_street.unit") != std::string::npos);
     // a car on the road drives at that limit
-    Driving d(&t.graph);
+    Driving d(&t.model);
     d.setVehicleClasses(oneClass());
-    CHECK(giveRules(d, t.graph));
+    CHECK(giveRules(d));
     CHECK(d.placeCar(CarId(1), 0, at(lane, 10)));
     CHECK(d.beginTrip(CarId(1), 1, at(t.straightLane(1, true, 0), 90)).valid());
     Real fastest = 0;

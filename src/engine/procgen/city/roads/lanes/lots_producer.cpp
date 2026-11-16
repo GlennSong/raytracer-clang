@@ -280,7 +280,7 @@ LotRoadInputs lotRoadInputs(const RoadModel& planned, const RoadDeckField& deck)
         if (!section.carriesCars() || line.count < 2) return;   // no building fronts a track or a footway
         LotRoad r;
         r.id = id;
-        r.line.assign(planned.linePoints.begin() + line.first, planned.linePoints.begin() + line.end());
+        r.line = planned.centreLine(line);
         r.halfWidth = section.carriagewayHalfWidth();   // (as the deck is drawn: city_producer.cpp deckFromResult)
         r.sidewalk = section.sidewalk;
         r.klass = section.klass;

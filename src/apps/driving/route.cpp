@@ -78,8 +78,8 @@ PathId laneAfter(const LaneGraph& g, PathId connector) {
 
 // The seconds driving the whole of a path takes: a learned time for its section when the table has one, else its
 // length at the free-flow speed. Below zero: it cannot be driven (no speed at all).
-Real pathSeconds(const LaneGraph& g, const RouteClass& cls, PathId p, const SectionSeconds* learned) {
-    const Path& path = g.paths[p.index];
+Real pathSeconds(const engine::RoadModel& g, const RouteClass& cls, PathId p, const SectionSeconds* learned) {
+    const Path& path = g.laneLevel.paths[p.index];
     if (learned && path.kind == PathKind::Lane && path.section.valid() && path.section.index < learned->size() &&
         (*learned)[path.section.index] > 0)
         return (*learned)[path.section.index];
@@ -283,22 +283,24 @@ bool mayUse(const LaneGraph& roads, const RouteClass& cls, PathId path) {
            !std::binary_search(cls.closed.begin(), cls.closed.end(), path);
 }
 
-Real freeFlowSpeed(const LaneGraph& roads, const RouteClass& cls, PathId path) {
-    if (!knownPath(roads, path)) return 0;
-    const Real limit = roads.paths[path.index].speedLimit;
+Real freeFlowSpeed(const engine::RoadModel& model, const RouteClass& cls, PathId path) {
+    if (!knownPath(model.laneLevel, path)) return 0;
+    const Real limit = model.postedLimit(path);
     if (limit <= 0) return cls.topSpeed;
     return cls.topSpeed > 0 ? std::min(limit, cls.topSpeed) : limit;
 }
 
-RouteBounds studyRoads(const LaneGraph& roads) {
+RouteBounds studyRoads(const engine::RoadModel& model) {
+    const LaneGraph& roads = model.laneLevel;
     RouteBounds b;
     if (roads.paths.empty()) return b;
     b.shortestPath = kForever;
     const std::size_t points = std::min(roads.points.size(), roads.along.size());
     for (uint32_t i = 0; i < roads.paths.size(); ++i) {
         const Path& p = roads.paths[i];
-        b.fastestLimit = std::max(b.fastestLimit, p.speedLimit);
-        if (p.speedLimit <= 0) b.anyUnlimited = true;
+        const Real posted = model.postedLimit(PathId(i));
+        b.fastestLimit = std::max(b.fastestLimit, posted);
+        if (posted <= 0) b.anyUnlimited = true;
         b.shortestPath = std::min(b.shortestPath, p.length);
         if (p.curve.count == 0 || !inRange(p.curve, points)) continue;
         const engine::Vec2 end = roads.points[p.curve.end() - 1];
@@ -323,8 +325,9 @@ RouteBounds studyRoads(const LaneGraph& roads) {
 
 // ---- finding a route ---------------------------------------------------------------------------------------------
 
-Route findRoute(const LaneGraph& roads, const RouteBounds& bounds, const RouteClass& cls, const PathPoint& from,
+Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const RouteClass& cls, const PathPoint& from,
                 const PathPoint& to, const SectionSeconds* sectionSeconds) {
+    const LaneGraph& roads = model.laneLevel;
     Route r;
     r.from = from;
     r.to = to;
@@ -458,7 +461,7 @@ Route findRoute(const LaneGraph& roads, const RouteBounds& bounds, const RouteCl
         const PathId p = nodePath(u);
         const Path& path = roads.paths[p.index];
         const Real entry = nodeEntry(u);
-        const Real whole = pathSeconds(roads, cls, p, sectionSeconds);
+        const Real whole = pathSeconds(model, cls, p, sectionSeconds);
         if (whole >= 0 && path.length > 0) {
             const Real perMetre = whole / path.length;
             // The destination, when it lies ahead on this path.
@@ -527,11 +530,11 @@ Route findRoute(const LaneGraph& roads, const RouteBounds& bounds, const RouteCl
             t.toSection = leg.section;
             if (pendingConnector.valid()) {
                 const Path& c = roads.paths[pendingConnector.index];
-                t.turn = c.turn;
+                t.turn = model.turnOf(pendingConnector);
                 t.junction = c.junction;
                 t.connector = pendingConnector;
                 t.metres = c.length;
-                const Real speed = freeFlowSpeed(roads, cls, pendingConnector);
+                const Real speed = freeFlowSpeed(model, cls, pendingConnector);
                 t.seconds = speed > 0 ? c.length / speed : Real(0);
             }
             r.turns.push_back(t);
@@ -563,7 +566,7 @@ Route findRoute(const LaneGraph& roads, const RouteBounds& bounds, const RouteCl
         if (i + 1 == r.legs.size() && !r.endConnector.valid())
             leg.leaveFraction = length > 0 ? to.along / length : Real(1);
         leg.metres = std::max(Real(0), leg.leaveFraction - leg.enterFraction) * length;
-        const Real speed = freeFlowSpeed(roads, cls, leg.lane);
+        const Real speed = freeFlowSpeed(model, cls, leg.lane);
         leg.seconds = speed > 0 ? leg.metres / speed : Real(0);
     }
 
@@ -572,12 +575,12 @@ Route findRoute(const LaneGraph& roads, const RouteBounds& bounds, const RouteCl
     if (r.startConnector.valid()) {
         const bool alsoEnd = r.endConnector == r.startConnector && r.legs.empty();
         startMetres = (alsoEnd ? to.along : roads.paths[r.startConnector.index].length) - from.along;
-        const Real speed = freeFlowSpeed(roads, cls, r.startConnector);
+        const Real speed = freeFlowSpeed(model, cls, r.startConnector);
         startSeconds = speed > 0 ? startMetres / speed : Real(0);
     }
     if (r.endConnector.valid() && !r.legs.empty()) {
         endMetres = to.along;
-        const Real speed = freeFlowSpeed(roads, cls, r.endConnector);
+        const Real speed = freeFlowSpeed(model, cls, r.endConnector);
         endSeconds = speed > 0 ? endMetres / speed : Real(0);
     }
     Real afterMetres = endMetres, afterSeconds = endSeconds;
@@ -760,13 +763,14 @@ WayAhead wayAhead(const Route& route, const LaneGraph& roads, PathId path, Real 
     return way;
 }
 
-Remaining remainingFrom(const Route& route, const LaneGraph& roads, const PathPoint& at, uint32_t fromLeg) {
+Remaining remainingFrom(const Route& route, const engine::RoadModel& model, const PathPoint& at, uint32_t fromLeg) {
+    const LaneGraph& roads = model.laneLevel;
     Remaining out;
     const RoutePlace place = placeOnRoute(route, roads, at, fromLeg);
     if (!place.onRoute()) return out;
     out.onRoute = true;
     const Path& p = roads.paths[at.path.index];
-    const Real speed = freeFlowSpeed(roads, route.vehicle, at.path);
+    const Real speed = freeFlowSpeed(model, route.vehicle, at.path);
     auto add = [&](Real metres, Real seconds) {
         out.metres += metres;
         out.seconds += seconds;

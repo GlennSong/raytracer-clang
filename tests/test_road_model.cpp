@@ -1175,17 +1175,52 @@ TEST_CASE(road_model_12_the_lane_level_is_a_table_built_from_the_model) {
         const ModelTurn& t = m.turns[p.modelTurn];
         CHECK(G.paths[p.from.index].modelLane == t.from.index);
         CHECK(G.paths[G.nextPaths[p.next.first].index].modelLane == t.to.index);
-        CHECK(p.turn == t.turn);
         CHECK(G.junctions[p.junction.index].modelJunction == t.junction.index);
     }
-    // the controls are the stated ones; the all-way stop's arriving lanes face its stop signs
-    for (const Junction& jn : G.junctions) CHECK(G.controlNames[jn.control] == m.junctions[jn.modelJunction].control);
-    // THE LANE TABLE'S COPIES OF MODEL FACTS (issue #291, not yet removed: the driving reads the lane table alone) say
-    // what the model says, by the id each carries: a lane path's limit is its street's, a connector's the turn's kind
-    // (above) and the limit of the lane it joins.
-    for (const Path& p : G.paths) {
-        if (p.kind == PathKind::Lane) CHECK(p.speedLimit == m.streets[p.street].speedLimit);
-        else CHECK(p.speedLimit == G.paths[G.nextPaths[p.next.first].index].speedLimit);
+    // WHAT THE ROAD IS ALONG A PATH IS ASKED OF THE MODEL (ADR-0436, issue #291): the lane table keeps no copy of a
+    // junction's control, a path's posted limit or road class, or a connector's turn, so there is one answer, and
+    // stating a fact again on the model changes it for every reader without the lane table being built again. (The
+    // copies the table used to keep were written when it was built and would still say the old thing.)
+    {
+        RoadModel stated = m;
+        uint32_t cross = kNoIndex, tee = kNoIndex;   // the lane level's junctions at (0, 0) and at (200, 0)
+        for (uint32_t j = 0; j < G.junctions.size(); ++j) (m.junctions[G.junctions[j].modelJunction].at.length() < 1.0 ? cross : tee) = j;
+        CHECK(cross != kNoIndex && tee != kNoIndex);
+        CHECK(stated.controlAt(JunctionId(cross)) == "all_way_stop");
+        CHECK(stated.controlAt(JunctionId(tee)) == "give_way");
+        CHECK(stated.controlAt(JunctionId(99)).empty());   // no such junction: nothing stated
+        // a lane path of the arterial a0 arriving at the crossing, and a connector leading out of it into the local
+        // street l1 (a far or near turn off the arterial)
+        const std::vector<uint32_t> a0 = pathsOfLane(G, lg, laneNamed(m, "a0.f0").index);
+        CHECK(!a0.empty());
+        if (a0.empty()) return;
+        const PathId arriving(a0.back());
+        PathId turning;   // the first connector from it that leads into a lane of l1
+        for (uint32_t k = G.paths[arriving.index].next.first; k < G.paths[arriving.index].next.end() && !turning.valid(); ++k) {
+            const PathId c = G.nextPaths[k];
+            const ModelStreet* into = stated.streetOf(c);
+            if (G.paths[c.index].kind == PathKind::Connector && into && into->road == "l1") turning = c;
+        }
+        CHECK(turning.valid());
+        if (!turning.valid()) return;
+        CHECK(stated.roadClassOf(arriving) == "arterial");
+        CHECK(stated.roadClassOf(turning) == "local");          // a connector's: the lane's it leads into
+        CHECK(stated.postedLimit(arriving) == 0.0 && stated.postedLimit(turning) == 0.0);   // the scene posts none
+        CHECK(stated.turnOf(arriving) == Turn::None);           // a lane takes no turn
+        CHECK(stated.turnOf(turning) != Turn::None && stated.turnOf(turning) != Turn::Straight);
+        // stated again, on the model alone: 11 m/s on l1's street, 17 on a0's; lights at the crossing; the turn a U-turn
+        const uint32_t l1Street = G.paths[G.nextPaths[G.paths[turning.index].next.first].index].street;
+        stated.streets[l1Street].speedLimit = 11.0;
+        stated.streets[G.paths[arriving.index].street].speedLimit = 17.0;
+        stated.streets[l1Street].section.roadClass = "collector";
+        stated.junctions[G.junctions[cross].modelJunction].control = "signal";
+        stated.turns[G.paths[turning.index].modelTurn].turn = Turn::UTurn;
+        CHECK(stated.postedLimit(arriving) == 17.0);
+        CHECK(stated.postedLimit(turning) == 11.0);             // the limit of the lane it leads into
+        CHECK(stated.roadClassOf(turning) == "collector");
+        CHECK(stated.controlAt(JunctionId(cross)) == "signal");
+        CHECK(stated.controlAt(JunctionId(tee)) == "give_way");
+        CHECK(stated.turnOf(turning) == Turn::UTurn);
     }
     // at the crossing, a lane of the arterial arriving from the west turns near into the street on its kerb side
     {
@@ -1251,7 +1286,9 @@ TEST_CASE(road_model_12b_approaches_face_each_other_where_a_through_pair_is_stat
                     ++*facingLanes;
                 }
             }
-            if (p.kind != PathKind::Connector || G.junctions[p.junction.index].modelJunction != cross || p.turn != Turn::FarTurn) continue;
+            if (p.kind != PathKind::Connector || G.junctions[p.junction.index].modelJunction != cross ||
+                m.turnOf(PathId(static_cast<uint32_t>(&p - G.paths.data()))) != Turn::FarTurn)
+                continue;
             ++farTurns;
             if (p.waitInsideAt != kNoWaitInside) ++*waiting;
         }
@@ -1844,4 +1881,50 @@ TEST_CASE(road_model_19_the_layout_written_again_into_a_shipped_file_changes_not
         CHECK(endsAtAJunction == 0u);
         CHECK(withNodes == f.junctionsWithNodes);
     }
+}
+
+// ---- 20. the questions readers ask of the junctions and streets (ADR-0436) -----------------------------------------------
+TEST_CASE(road_model_20_one_answer_for_the_arm_a_street_is_and_where_its_ends_are) {
+    // the signed scene: the arterial a0 runs from (-200, 0) to the crossing at (0, 0); l1 leaves the crossing north
+    RoadModel m = plannedRoadModel(RoadLabGraph::fromJson(signedGraph()));
+    ModelStreetId a0, l1;
+    for (uint32_t s = 0; s < m.streets.size(); ++s) {
+        if (m.streets[s].road == "a0") a0 = ModelStreetId(s);
+        if (m.streets[s].road == "l1") l1 = ModelStreetId(s);
+    }
+    CHECK(a0.valid() && l1.valid());
+    if (!a0.valid() || !l1.valid()) return;
+    // WHERE A STREET'S ENDS ARE, and its whole centre line
+    Vec2 from, to;
+    CHECK(m.streetEnd(m.streets[a0.index], 0, from) && m.streetEnd(m.streets[a0.index], 1, to));
+    CHECK(approxEqual(from.x, -200.0, kSamePoint) && approxEqual(from.y, 0.0, kSamePoint));
+    CHECK(approxEqual(to.x, 0.0, kSamePoint) && approxEqual(to.y, 0.0, kSamePoint));
+    const std::vector<Vec2> line = m.centreLine(m.streets[a0.index].line);
+    CHECK(line.size() == 2u);
+    CHECK(m.centreLine(Range{static_cast<uint32_t>(m.linePoints.size()), 4}).empty());   // not a line of this model
+    // THE ARM A STREET IS at each end: none at a0's dead end; at the crossing, the arm of road a0 whose spine runs in
+    CHECK(m.armAt(a0, 0) == -1);
+    const int arm = m.armAt(a0, 1);
+    const ModelJunction& cross = m.junctions[m.streets[a0.index].junctions[1].index];
+    CHECK(arm == 2);
+    if (arm < 0) return;
+    CHECK(cross.arms[static_cast<std::size_t>(arm)].road == "a0" && cross.arms[static_cast<std::size_t>(arm)].spineIn);
+    CHECK(m.streetOf(cross.arms[static_cast<std::size_t>(arm)]) == &m.streets[a0.index]);
+    const int l1Arm = m.armAt(l1, 0);   // l1 leaves the crossing: its spine runs out
+    CHECK(l1Arm >= 0 && l1Arm != arm && cross.arms[static_cast<std::size_t>(l1Arm)].road == "l1");
+    CHECK(m.armAt(l1, 1) == -1 || m.streets[l1.index].junctions[1].valid());
+    CHECK(m.armAt(ModelStreetId(9999), 0) == -1 && m.armAt(a0, 2) == -1);
+    // A JUNCTION THAT LISTS THE STREET TWICE (a broken file): every reader gets the same arm, the first listed. The
+    // street map once took the last and the lane level the first.
+    ModelJunction& broken = m.junctions[m.streets[a0.index].junctions[1].index];
+    broken.arms.push_back(broken.arms[static_cast<std::size_t>(arm)]);
+    CHECK(m.armAt(a0, 1) == 2);
+    ModelLaneSpan span;
+    span.street = a0;
+    span.from = m.streets[a0.index].from;
+    span.to = m.streets[a0.index].to;
+    CHECK(laneSpanEnd(m, span, 1).arm == 2);
+    // an arm that names no street of the model
+    ModelArm stray;
+    CHECK(m.streetOf(stray) == nullptr);
 }

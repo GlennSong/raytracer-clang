@@ -3,18 +3,21 @@
 
 // BINDING THE ROAD TO THE RULES, once at load (driving-model-design.md 6.4; issue #251).
 //
-// The lane graph names the kinds of regulation standing on its paths in its own table (regulationKindNames); the rule
-// set says what each device means, by name. RoadRules is the join of the two: for each regulation kind in the graph,
-// the rule set's device of the same name; and for each path with no posted limit, the rule set's default limit for its
-// road's class (issue #255: the lane graph posts no limits until the control plan does). Facts read it to learn what a
-// regulation means, and what limit holds, without looking up a name while cars drive.
+// The road model states what stands on the road by NAME: the kinds of regulation on its lane level's paths
+// (LaneGraph::regulationKindNames), each junction's control (RoadModel::controlAt), each road's class
+// (RoadModel::roadClassOf) and the limit posted on it (RoadModel::postedLimit). The rule set says what each name
+// means. RoadRules is the join of the two, looked up once: for each regulation kind, the rule set's device of the same
+// name; for each junction, the rule set's row for its stated control; for each path, the limit in force on it (the
+// posted one, or the rule set's default for its road's class). Facts read it to learn what a regulation means, and what
+// limit holds, without looking up a name while cars drive. It holds no road fact of its own: it is made from the model
+// each time rules are given, and never saved.
 //
 // Building it is also where the facts are checked against the rule set: every number and personal setting a
 // registered fact says it needs must be there, in the kind of unit it asks for (a speed is not a time); and so must
 // those of every other reader the registry holds (the move step, once registerMoveNeeds has added it). Every problem is
 // collected and reported together, one plain line each.
 
-#include "engine/procgen/city/roads/lane_graph.h"
+#include "engine/procgen/city/roads/road_model.h"
 #include "apps/driving/notice.h"
 #include "apps/driving/rule_set.h"
 
@@ -35,33 +38,33 @@ struct RoadRules {
     bool lightsRun = false;
     // One per entry of the graph's regulationKindNames: the index of its device in RuleSet::devices, or kNoDevice.
     std::vector<uint32_t> deviceOfKind;
-    // THE LIMIT ON A ROAD WITH NONE POSTED, per path (m/s): a path whose own speedLimit is 0 takes the rule set's
-    // default limit for its road's class (RuleSet::defaultLimits) -- a lane its section's class, a connector the class
-    // of the lane it joins. 0 where the path has a posted limit, no road class, or its class has no default.
-    std::vector<Real> unpostedLimit;
-    // One per entry of the graph's controlNames: the index of the rule set's row of the same name in RuleSet::controls,
-    // or kNoDevice when it has none (issue #260: right_of_way.h reads it). A control with lights while no light runs a
-    // programme: the row its `when_dark` names, when it names one (lightsRun).
-    std::vector<uint32_t> controlOfName;
-    // One per entry of the graph's controlNames: 1 where controlOfName is the row the control is treated as while its
+    // THE LIMIT IN FORCE ON EACH PATH before any regulation on it (m/s): the limit the road model posts on it
+    // (RoadModel::postedLimit: a lane its street's, a connector that of the lane it leads into), or else the rule set's
+    // default limit for its road's class (RuleSet::defaultLimits over RoadModel::roadClassOf). 0: neither.
+    std::vector<Real> limitOfPath;
+    // One per junction of the lane level: the index in RuleSet::controls of the row for the control the road model
+    // states there (RoadModel::controlAt), or kNoDevice when the rule set has none (issue #260: right_of_way.h reads
+    // it). A control with lights while no light runs a programme: the row its `when_dark` names, when it names one.
+    std::vector<uint32_t> controlOfJunction;
+    // One per junction of the lane level: 1 where controlOfJunction is the row its control is treated as while its
     // lights are dark, not its own.
-    std::vector<uint8_t> darkOfName;
+    std::vector<uint8_t> darkJunction;
 
     // What a regulation of kind `kind` means: its device in `rules` (the rule set this was built from), or null for a
     // kind the graph does not have or that is not bound.
     const Device* device(const RuleSet& rules, engine::NameIndex kind) const;
-    // The limit in force on `path` before any regulation on it: its posted limit, or else its unposted one (0 when it
-    // has neither).
-    Real baseLimit(const engine::LaneGraph& roads, engine::PathId path) const;
+    // The limit in force on `path` before any regulation on it (limitOfPath; 0 for a path it does not know).
+    Real baseLimit(engine::PathId path) const {
+        return path.index < limitOfPath.size() ? limitOfPath[path.index] : Real(0);
+    }
 };
 
 // BUILDS THE BINDING and checks the registered facts' needs. True when there is no problem. Otherwise false, `out`
 // holds what could be bound, and `problems` (when given) gets every problem, in this order: regulation kinds in the
-// graph's table order, then road classes with unposted paths and no default limit (in the graph's table order), then
-// junction controls some junction carries that the rule set's `control` table lacks (in the graph's table order), then
-// facts in slot order, then the other readers in the order added, each one's numbers then its settings in the order
-// it declares them.
-bool buildRoadRules(const engine::LaneGraph& roads, const RuleSet& rules, const FactRegistry& facts, RoadRules& out,
+// graph's table order, then road classes with unposted paths and no default limit (in name order), then junction
+// controls some junction states that the rule set's `control` table lacks (in name order), then facts in slot order,
+// then the other readers in the order added, each one's numbers then its settings in the order it declares them.
+bool buildRoadRules(const engine::RoadModel& model, const RuleSet& rules, const FactRegistry& facts, RoadRules& out,
                     std::vector<std::string>* problems = nullptr);
 
 }  // namespace driving

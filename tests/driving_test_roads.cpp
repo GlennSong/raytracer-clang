@@ -48,7 +48,7 @@ Vec2 kerbward(Heading h, driving::DrivesOn drivesOn) {
 // How far lane k's centre line lies kerbward of the road's middle line.
 Real laneOffset(const TestRoadSpec& spec, uint32_t k) { return (Real(k) + Real(0.5)) * spec.laneWidth; }
 
-// A path with the spec's width, limit and tags, its curve and length from `pts`.
+// A path with the spec's width and tags, its curve and length from `pts`.
 Path makePath(LaneGraph& g, const TestRoadSpec& spec, PathKind kind, const std::vector<Vec2>& pts) {
     Path p;
     p.kind = kind;
@@ -59,15 +59,16 @@ Path makePath(LaneGraph& g, const TestRoadSpec& spec, PathKind kind, const std::
     p.curve = g.addCurve(pts, std::vector<Real>(pts.size(), 0));
     p.length = g.along[p.curve.end() - 1];
     p.width = spec.laneWidth;
-    p.speedLimit = spec.speedLimit;
     return p;
 }
 
-// Adds a section of `lanes` lanes, lane k running from start + kerb * offset(k) to end + kerb * offset(k).
-SectionId addSection(LaneGraph& g, const TestRoadSpec& spec, const Vec2& start, const Vec2& end, const Vec2& kerb) {
+// Adds a section of `lanes` lanes, lane k running from start + kerb * offset(k) to end + kerb * offset(k), all on one
+// street of the model that posts the spec's limit.
+SectionId addSection(engine::RoadModel& m, const TestRoadSpec& spec, const Vec2& start, const Vec2& end, const Vec2& kerb) {
+    LaneGraph& g = m.laneLevel;
     const SectionId id(static_cast<uint32_t>(g.sections.size()));
     engine::Section s;
-    s.roadClass = 0;
+    uint32_t street = engine::kNoIndex;
     s.lanes.first = static_cast<uint32_t>(g.sectionLanes.size());
     s.lanes.count = spec.lanesEachWay;
     s.lines.first = static_cast<uint32_t>(g.laneLines.size());
@@ -77,8 +78,11 @@ SectionId addSection(LaneGraph& g, const TestRoadSpec& spec, const Vec2& start, 
         Path lane = makePath(g, spec, PathKind::Lane, {start + side, end + side});
         lane.section = id;
         lane.indexInSection = k;
-        g.sectionLanes.push_back(PathId(static_cast<uint32_t>(g.paths.size())));
+        const PathId path(static_cast<uint32_t>(g.paths.size()));
+        g.sectionLanes.push_back(path);
         g.paths.push_back(lane);
+        if (k == 0) street = stateStreet(m, path, spec.speedLimit);
+        else onStreet(m, path, street);
     }
     for (uint32_t k = 0; k + 1 < spec.lanesEachWay; ++k) g.laneLines.push_back(spec.line);
     g.sections.push_back(s);
@@ -86,11 +90,7 @@ SectionId addSection(LaneGraph& g, const TestRoadSpec& spec, const Vec2& start, 
 }
 
 // The names every test graph carries (its vehicle tags: the spec's).
-void addNames(LaneGraph& g, const TestRoadSpec& spec) {
-    g.vehicleTagNames = spec.vehicleTags;
-    g.roadClassNames = {kTestRoadClass};
-    g.controlNames = {kTestControl};
-}
+void addNames(LaneGraph& g, const TestRoadSpec& spec) { g.vehicleTagNames = spec.vehicleTags; }
 
 // Writes every path's next list from `nexts` (each already in id order).
 void writeNextLists(LaneGraph& g, const std::vector<std::vector<PathId>>& nexts) {
@@ -102,6 +102,68 @@ void writeNextLists(LaneGraph& g, const std::vector<std::vector<PathId>>& nexts)
 }
 
 }  // namespace
+
+// ---- stating facts on the model --------------------------------------------------------------------------------------
+
+uint32_t stateStreet(engine::RoadModel& m, PathId lane, Real limit, const std::string& roadClass) {
+    const uint32_t street = static_cast<uint32_t>(m.streets.size());
+    engine::ModelStreet s;
+    s.id = "test_street_" + std::to_string(street);
+    s.speedLimit = limit;
+    s.section.roadClass = roadClass;
+    m.streets.push_back(s);
+    onStreet(m, lane, street);
+    return street;
+}
+
+void onStreet(engine::RoadModel& m, PathId lane, uint32_t street) { m.laneLevel.paths[lane.index].street = street; }
+
+void stateControl(engine::RoadModel& m, engine::JunctionId junction, const std::string& control) {
+    engine::Junction& jn = m.laneLevel.junctions[junction.index];
+    if (jn.modelJunction >= m.junctions.size()) {
+        jn.modelJunction = static_cast<uint32_t>(m.junctions.size());
+        engine::ModelJunction j;
+        j.id = "test_junction_" + std::to_string(jn.modelJunction);
+        m.junctions.push_back(j);
+    }
+    m.junctions[jn.modelJunction].control = control;
+}
+
+void stateTurn(engine::RoadModel& m, PathId connector, engine::Turn turn) {
+    Path& c = m.laneLevel.paths[connector.index];
+    if (c.modelTurn >= m.turns.size()) {
+        c.modelTurn = static_cast<uint32_t>(m.turns.size());
+        m.turns.emplace_back();
+    }
+    m.turns[c.modelTurn].turn = turn;
+}
+
+uint32_t stateMerge(engine::RoadModel& m, PathId joining, PathId host) {
+    LaneGraph& g = m.laneLevel;
+    // each of the two paths a lane of the model (one of its own where it names none yet)
+    const auto laneOf = [&](PathId p) {
+        Path& path = g.paths[p.index];
+        if (path.modelLane >= m.lanes.size()) {
+            path.modelLane = static_cast<uint32_t>(m.lanes.size());
+            engine::ModelLane lane;
+            lane.id = "test_lane_" + std::to_string(path.modelLane);
+            m.lanes.push_back(lane);
+        }
+        return engine::ModelLaneId(path.modelLane);
+    };
+    engine::ModelConnection c;
+    c.kind = engine::ConnectionKind::Merge;
+    c.from = laneOf(joining);
+    c.to = laneOf(host);
+    const uint32_t connection = static_cast<uint32_t>(m.connections.size());
+    m.connections.push_back(c);
+    for (engine::CrossingPoint& x : g.crossings) {
+        if (x.otherSide != engine::OtherSide::Path || x.meeting != engine::Meeting::Join) continue;
+        const bool theTwo = (x.a == joining && x.otherPath() == host) || (x.a == host && x.otherPath() == joining);
+        if (theTwo) x.modelConnection = connection;
+    }
+    return connection;
+}
 
 // ---- headings ------------------------------------------------------------------------------------------------------
 
@@ -123,6 +185,7 @@ Heading farTurnFrom(Heading h, driving::DrivesOn drivesOn) { return opposite(nea
 // ---- names ---------------------------------------------------------------------------------------------------------
 
 engine::PathId TestRoads::laneOf(SectionId s, uint32_t k) const {
+    const LaneGraph& graph = model.laneLevel;
     if (!s.valid() || s.index >= graph.sections.size()) return PathId();
     const engine::Section& sec = graph.sections[s.index];
     return k < sec.lanes.count ? graph.sectionLanes[sec.lanes.first + k] : PathId();
@@ -161,6 +224,7 @@ engine::PathId TestRoads::connector(uint32_t row, uint32_t col, Heading in, uint
     const PathId a = laneArriving(row, col, in, kIn);
     const PathId b = laneLeaving(row, col, out, kOut);
     if (!j.valid() || !a.valid() || !b.valid()) return PathId();
+    const LaneGraph& graph = model.laneLevel;
     const engine::Junction& jn = graph.junctions[j.index];
     for (uint32_t i = jn.connectors.first; i < jn.connectors.end(); ++i) {
         const PathId c = graph.junctionConnectors[i];
@@ -194,7 +258,7 @@ TestRoads straightRoadOf(const std::vector<Real>& sectionLengths, const TestRoad
     t.spec = spec;
     const uint32_t sections = static_cast<uint32_t>(sectionLengths.size());
     t.sectionCount = sections;
-    LaneGraph& g = t.graph;
+    LaneGraph& g = t.model.laneLevel;
     addNames(g, spec);
     const Vec2 east = headingVector(Heading::East);
     Real x = 0;
@@ -202,8 +266,8 @@ TestRoads straightRoadOf(const std::vector<Real>& sectionLengths, const TestRoad
         const Vec2 west0 = east * x;
         x += sectionLengths[i];
         const Vec2 east0 = east * x;
-        t.straightSections.push_back(addSection(g, spec, west0, east0, kerbward(Heading::East, spec.drivesOn)));
-        t.straightSections.push_back(addSection(g, spec, east0, west0, kerbward(Heading::West, spec.drivesOn)));
+        t.straightSections.push_back(addSection(t.model, spec, west0, east0, kerbward(Heading::East, spec.drivesOn)));
+        t.straightSections.push_back(addSection(t.model, spec, east0, west0, kerbward(Heading::West, spec.drivesOn)));
     }
     // Each lane leads into the same lane of the next section its way.
     std::vector<std::vector<PathId>> nexts(g.paths.size());
@@ -220,7 +284,7 @@ TestRoads straightRoadOf(const std::vector<Real>& sectionLengths, const TestRoad
 TestRoads ringRoad(uint32_t sides, const TestRoadSpec& spec) {
     TestRoads t;
     t.spec = spec;
-    LaneGraph& g = t.graph;
+    LaneGraph& g = t.model.laneLevel;
     addNames(g, spec);
     // The polygon's corners round a circle whose chord between neighbours is roadLength.
     const Real radius = spec.roadLength / (2 * std::sin(kPi / Real(sides)));
@@ -233,7 +297,7 @@ TestRoads ringRoad(uint32_t sides, const TestRoadSpec& spec) {
         const Vec2 start = corners[i];
         const Vec2 end = corners[(i + 1) % sides];
         const Vec2 kerb = engine::perp(engine::normalize(end - start)) * driving::kerbwardPerpSign(spec.drivesOn);
-        t.ringSections.push_back(addSection(g, spec, start, end, kerb));
+        t.ringSections.push_back(addSection(t.model, spec, start, end, kerb));
     }
     std::vector<std::vector<PathId>> nexts(g.paths.size());
     for (uint32_t i = 0; i < sides; ++i)
@@ -246,15 +310,14 @@ TestRoads ringRoad(uint32_t sides, const TestRoadSpec& spec) {
 TestRoads mergeRoads(bool joiningLaneFirst, bool stated, const TestRoadSpec& spec) {
     TestRoads t;
     t.spec = spec;
-    LaneGraph& g = t.graph;
+    LaneGraph& g = t.model.laneLevel;
     addNames(g, spec);
     const Vec2 east = headingVector(Heading::East);
     const Vec2 kerb = kerbward(Heading::East, spec.drivesOn);
-    // One lane in a section of its own, along `pts`.
+    // One lane in a section of its own, along `pts`, on a street of its own that posts the spec's limit.
     const auto addLane = [&](const std::vector<Vec2>& pts) {
         const SectionId id(static_cast<uint32_t>(g.sections.size()));
         engine::Section sec;
-        sec.roadClass = 0;
         sec.lanes.first = static_cast<uint32_t>(g.sectionLanes.size());
         sec.lanes.count = 1;
         sec.lines.first = static_cast<uint32_t>(g.laneLines.size());
@@ -265,6 +328,7 @@ TestRoads mergeRoads(bool joiningLaneFirst, bool stated, const TestRoadSpec& spe
         g.sectionLanes.push_back(path);
         g.paths.push_back(lane);
         g.sections.push_back(sec);
+        stateStreet(t.model, path, spec.speedLimit);
         return path;
     };
     const Vec2 joinAt = east * kMergeThroughLength;
@@ -284,7 +348,8 @@ TestRoads mergeRoads(bool joiningLaneFirst, bool stated, const TestRoadSpec& spe
     nexts[t.mergeJoining.index].push_back(t.mergeBeyond);
     writeNextLists(g, nexts);
 #ifdef RT_ROADS_LANES
-    // Where the two lanes' bodies meet, as the road builder finds it; then the stated merge on each such record.
+    // Where the two lanes' bodies meet, as the road builder finds it; then the merge the model states, named on each
+    // such record (stateMerge).
     engine::roads::lanes::CrossingOptions crossingOptions;
     if (spec.crossingBodies.empty()) {
         engine::roads::lanes::VehicleSize car;
@@ -308,11 +373,8 @@ TestRoads mergeRoads(bool joiningLaneFirst, bool stated, const TestRoadSpec& spe
                             (x.a == t.mergeThrough && x.otherPath() == t.mergeJoining);
         if (!theTwo) continue;
         t.mergeJoins.push_back(engine::CrossingId(c));
-        if (stated) {
-            x.merging = t.mergeJoining;
-            x.modelConnection = 0;   // the test's one stated connection
-        }
     }
+    if (stated) stateMerge(t.model, t.mergeJoining, t.mergeThrough);
 #endif
     return t;
 }
@@ -322,7 +384,7 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
     t.spec = spec;
     t.rows = rows;
     t.cols = cols;
-    LaneGraph& g = t.graph;
+    LaneGraph& g = t.model.laneLevel;
     addNames(g, spec);
     const uint32_t lanes = spec.lanesEachWay;
     // Half the junction box's side: the road's half width (every lane each way) and the kerb corner.
@@ -355,16 +417,16 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
                 if (!step(r, c, h, nr, nc)) continue;
                 const Vec2 d = headingVector(h);
                 t.leavingSections[(r * cols + c) * kHeadingCount + hi] =
-                    addSection(g, spec, centre(r, c) + d * halfBox, centre(nr, nc) - d * halfBox, kerbward(h, spec.drivesOn));
+                    addSection(t.model, spec, centre(r, c) + d * halfBox, centre(nr, nc) - d * halfBox, kerbward(h, spec.drivesOn));
             }
 
     // The junctions and their connectors, junction by junction (so each junction's connectors are in id order).
     std::vector<std::pair<PathId, PathId>> joins;   // connector -> the lane it leads into, in connector order
+    std::vector<std::pair<PathId, engine::Turn>> turns;   // each connector's turn, stated once the paths are all there
     for (uint32_t r = 0; r < rows; ++r) {
         for (uint32_t c = 0; c < cols; ++c) {
             const engine::JunctionId jid(static_cast<uint32_t>(g.junctions.size()));
             engine::Junction jn;
-            jn.control = 0;
             jn.connectors.first = static_cast<uint32_t>(g.junctionConnectors.size());
             const Vec2 o = centre(r, c);
             jn.box = g.addPlanPoints({o + Vec2(-halfBox, -halfBox), o + Vec2(halfBox, -halfBox),
@@ -419,7 +481,6 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
                             pts.push_back(pOut);
                         }
                         Path conn = makePath(g, spec, PathKind::Connector, pts);
-                        conn.turn = turn;
                         conn.junction = jid;
                         conn.from = a;
                         conn.tightestRadius = radius;
@@ -427,13 +488,16 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
                         g.paths.push_back(conn);
                         g.junctionConnectors.push_back(cid);
                         joins.emplace_back(cid, b);
+                        turns.emplace_back(cid, turn);
                     }
                 }
             }
             jn.connectors.count = static_cast<uint32_t>(g.junctionConnectors.size()) - jn.connectors.first;
             g.junctions.push_back(jn);
+            stateControl(t.model, jid, kTestControl);
         }
     }
+    for (const std::pair<PathId, engine::Turn>& ct : turns) stateTurn(t.model, ct.first, ct.second);
 
     // Each lane leads into the connectors leaving its end; each connector into its lane.
     std::vector<std::vector<PathId>> nexts(g.paths.size());
@@ -461,7 +525,7 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
     }
     engine::roads::lanes::findCrossingPoints(g, crossingOptions);
     // ... and where a far turn may wait inside its junction, as the road builder places it (#261).
-    engine::roads::lanes::placeWaitInsidePoints(g);
+    engine::roads::lanes::placeWaitInsidePoints(t.model);
 #endif
     return t;
 }

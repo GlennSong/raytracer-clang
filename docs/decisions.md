@@ -20920,3 +20920,43 @@ Not done: within one process the bake's lot producer still reads the saved model
 - **Writing the layout again changes nothing.** `lanes_tool layout <file> --write` on an unchanged file gives the same bytes. Two things changed a file before. It stated a carry-on at a street end where the file's own list states a junction: on traffic_lab, 27 streets and 40 ends, each at a junction of two arms the control plan made of a carry-on. No reader asks a carry-on where a junction stands (the street map and the lane level ask the junction first), so the shipped file, which stated none, was right, and the rule is now: a street's end is at a junction or carries on, never both. And it dropped every junction's `nodes`, which came back only with a second command; now they stay where they are, so their order is the file's. Traffic_lab's file was written once more with the tool: its content is the same, its streets' keys are in the writer's order (564 lines moved). River_town and agent_lab come out byte for byte.
 
 Tests: `level_traffic_lab_v2_one_road_model_is_published_and_driven_on` (the loader's model is the built one, the driving reads that object, the fleet's sizes written out by hand); `road_model_0` (the planner states the solid stretch it plans for: 20 m, and 35 m when planned for 35); `rules_refused_with_file_and_key_path` (a device's `sign`); `road_model_19` (the three shipped files written again). Each fails with the old answer put back.
+
+
+## ADR-0436 — The driving holds the road model; the lane table keeps no copy of the model's facts; the model is asked through query functions
+**Status:** Provisional · **Date:** 2026-11-15
+
+What it does: the driving is handed the level's road model instead of only its table of lanes, five facts the lane table used to copy from the model are deleted and asked of the model instead, and the questions several readers each answered with their own loop have one function each. Nothing a car does changes: the traffic lab's five-minute state hash is the same number.
+
+Words: the **road model** (`RoadModel`) is the one description of a level's roads. Its **lane level**, or **lane table** (`RoadModel::laneLevel`), is the list of every line a car can be on: a **lane path** along a road, or a **connector** through a junction. A **control** is what governs a junction (lights, an all-way stop, a give-way sign). A **posted limit** is the speed limit a road states. A **stated merge** is the model saying "this lane ends into that lane", so the one that ends gives way. The **binding** (`RoadRules`) is the driving's look-up made once when rules are handed over: for each name the roads use, what the rule set means by it.
+
+**1. The driving holds the model.** `driving::Driving` takes `const engine::RoadModel*` (`model()`; `roads()` is still its lane level). The functions that need a stated fact take the model: `buildRoadRules`, `buildRightOfWay`, `describeJunctionRules`, `findRoute`, `studyRoads`, `freeFlowSpeed`, `remainingFrom`, `updateJunctionPlans`. The ones that read only where the paths lie still take the lane table. The driving library's allowed engine headers gain `road_model.h` and what it brings: `road_model_parts.h`, `road_network.h`, `road_spec.h`. The driving's tests build a small road model: the lane table is laid by hand as before, and each fact is stated on the model through one shared helper (`tests/driving_test_roads.h`: `modelOf`, `stateStreet`, `onStreet`, `stateControl`, `stateTurn`, `stateMerge`).
+
+**2. Five copies deleted from the lane table (issue #291).** Each is now one function on the model, reached by the id the path, junction or crossing point already carried:
+
+| Was in the lane table | Now asked | The id used |
+|---|---|---|
+| `Junction::control` and the `controlNames` list | `RoadModel::controlAt(junction)` | `Junction::modelJunction` |
+| `Path::speedLimit` | `RoadModel::postedLimit(path)` | `Path::street` (a connector: the street of the lane it leads into) |
+| `Section::roadClass` and the `roadClassNames` list | `RoadModel::roadClassOf(path)` | the same street |
+| `Path::turn` | `RoadModel::turnOf(path)` | `Path::modelTurn` |
+| `CrossingPoint::merging` | `RoadModel::mergingAt(crossing)` | `CrossingPoint::modelConnection` |
+
+The copies were written when the lane table was built, so in a level they could not differ from the model. They could differ in a test that changed a stated fact afterwards, and in every hand-made table, which stated each fact with no model at all. The binding now holds, per path, the limit in force before any sign (the posted one, or the rule set's default for the road's class) and, per junction, the rule set's row for its control. It is made from the model each time rules are given and is never saved, so it is a look-up, not a second home.
+
+**Left in the lane table, on purpose: the regulations** (`LaneGraph::regulations` and their kind names). A regulation is a rule standing on a stretch of one path with a value: "top speed 15 m/s from 30 m along". The driving reads all three parts, and its tests place limit signs part-way along a lane. The model states only the names of the signs standing at a junction arm, with no place along a lane and no value. So the lane table is the only home of where a rule stands and what value it carries; the lane level places each arm's signs at the end of the lanes arriving by it. What is still said twice is the sign's kind name. Removing that needs the model to hold signs along a street with a station and a value, which nothing writes today.
+
+**3. Query functions: the way to read the roads.** A reader asks the model; it does not walk the model's lists.
+- `RoadModel::armAt(street, end)`: which arm of the junction at a street's end that street is. The street map took the last arm that matched and the lane level the first; both now ask this (the first listed).
+- `RoadModel::streetOf(arm)`: the street an arm is. The control signs wrote the check out twice, and `armMouth` once.
+- `RoadModel::centreLine(line)` and `streetEnd(street, end)`: a street's centre line as points, and where one end is. The loader copied the points out in two places, the lot pass in one, and the street map read the end point in three.
+- `LevelRoadModel::city(c)` and `junctionAt(c, junction)`: the model of a city and one of its junctions, by the numbers the street map and the placed signs carry, with the bounds checked once. The loader wrote the check out in three places and `lit` and `runKey` read without one.
+- Already there and unchanged: `lanesOf`, `leadsTo`, `streetName`, `namedArmsAt`, `streetNameNear`, `armMouth`, `laneSpanEnd`, `junctionLit`.
+Not added, because no reader asks them today: the nearest street and station to a point (only `streetNameNear` looks by position), turns by junction and arm, the next junction along a street.
+
+**4. agent_lab has a lane level.** Its road file gained `lane_rules` (`lanes_tool layout assets/lanelab/planned/agent_lab_lanelab.json --lane-rules 20 --write`), so the loader makes its built model. The paint reads `lane_rules`, so its bake key changed and it was baked again.
+
+**What changed on disk.** The lane table's saved form is LGRF version 11 and the saved road model is format 10 (`kRoadModelFormat`), so every `cache/roadmodel` file is made again on first load. No lanes or lots tag is bumped: no road, lot or building is built differently. `lanes_tool lanegraph`'s `lane_graph.txt` no longer prints a path's limit, a section's class, a connector's turn word or a junction's control; `lanes_tool model` prints them from the model.
+
+**Not done.** The centre line is still held twice while a road is being built (the builder's lane points and the model's copy): the builder's points are read at about 300 places in 18 files, far over the 200 lines allowed for it here. The lane table's own `Junction` type still stands beside `ModelJunction`. The routing table's copies (`NavLink`) are untouched.
+
+Tests: `road_model_12` (the model's answers for a known junction, lane and connector, written out, and each fact stated again on the model is the new answer with no rebuild; 4 checks fail with copies written at build put back); `road_model_20` (the arm a street is, a street's ends, and a junction listing a street twice; 2 checks fail with the street map's old last-match answer); the scenes' stated merges by lane name (`lanes_lane_graph_of_*`, 4 checks) and the driving's merge tests (26 checks) fail when the model's answer names the host lane instead of the joining one.

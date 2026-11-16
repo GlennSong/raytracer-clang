@@ -240,20 +240,21 @@ std::vector<std::pair<bool, std::vector<uint8_t>>> buildPhases(const JunctionWor
 }
 
 // WHAT THE ROADS STATE at meeting `rec`: true when one of its two paths joined the other's lane by a stated merge
-// (CrossingPoint::merging), with that path's side, the one that gives way, in `who`. The one place the mark DECIDES
-// anything (buildRightOfWay also looks at whether a record is marked, only to count it and to note one never asked).
-bool statedMergeSays(const CrossingPoint& rec, GivesWay& who) {
-    if (!rec.merging.valid()) return false;
-    if (rec.merging == rec.a) who = GivesWay::A;
-    else if (rec.merging == rec.otherPath()) who = GivesWay::Other;
+// (`merging`: the path the road model says joins, RoadModel::mergingAt; not valid: none stated), with that path's
+// side, the one that gives way, in `who`. The one place the stated merge DECIDES anything (buildRightOfWay also looks at
+// whether a record has one, only to count it and to note one never asked).
+bool statedMergeSays(const CrossingPoint& rec, PathId merging, GivesWay& who) {
+    if (!merging.valid()) return false;
+    if (merging == rec.a) who = GivesWay::A;
+    else if (merging == rec.otherPath()) who = GivesWay::Other;
     else return false;
     return true;
 }
 
 // What one question says about turns a and b (local indexes; the two sides of meeting `rec`) at `phase`: true when it
-// tells them apart, with who gives way in `who` (A for a, Other for b).
+// tells them apart, with who gives way in `who` (A for a, Other for b). `merging`: as statedMergeSays takes it.
 bool ask(SettleQuestion q, const JunctionWork& w, const RightOfWay& row, const JunctionRules& jr, const RuleSet& rules,
-         const CrossingPoint& rec, uint32_t a, uint32_t b, uint32_t phase, GivesWay& who) {
+         const CrossingPoint& rec, PathId merging, uint32_t a, uint32_t b, uint32_t phase, GivesWay& who) {
     switch (q) {
     case SettleQuestion::Light: {
         if (jr.phases.count == 0 || phase >= jr.phases.count) return false;
@@ -287,7 +288,7 @@ bool ask(SettleQuestion q, const JunctionWork& w, const RightOfWay& row, const J
         return true;
     }
     case SettleQuestion::ArrivedFirst: return true;   // asked while driving
-    case SettleQuestion::StatedMerge: return statedMergeSays(rec, who);
+    case SettleQuestion::StatedMerge: return statedMergeSays(rec, merging, who);
     }
     return false;
 }
@@ -298,7 +299,7 @@ bool ask(SettleQuestion q, const JunctionWork& w, const RightOfWay& row, const J
 // and its own movement (a lane: straight on); arrived_first asks while driving and the rest of the list gives the
 // fall-back; nothing told apart, the lower path id gives way. Without the list, asked while driving, falling back on
 // the lower path id (as before).
-MeetingAnswer settleBetweenJunctions(const RuleSet& rules, const RightOfWay& row, const CrossingPoint& rec) {
+MeetingAnswer settleBetweenJunctions(const RuleSet& rules, const RightOfWay& row, const CrossingPoint& rec, PathId merging) {
     const PathId a = rec.a, b = rec.otherPath();
     MeetingAnswer out;
     out.who = GivesWay::Ask;
@@ -321,7 +322,7 @@ MeetingAnswer settleBetweenJunctions(const RuleSet& rules, const RightOfWay& row
             asking = true;
             continue;
         }
-        if (q == SettleQuestion::StatedMerge) told = statedMergeSays(rec, who);
+        if (q == SettleQuestion::StatedMerge) told = statedMergeSays(rec, merging, who);
         if (q == SettleQuestion::SignRank && rankOf(a) != rankOf(b)) {
             who = rankOf(a) > rankOf(b) ? GivesWay::A : GivesWay::Other;
             told = true;
@@ -391,7 +392,8 @@ Light RightOfWay::light(const LaneGraph& roads, PathId connector, uint32_t phase
     return lights[phases[jr.phases.first + phase].lights.first + this->paths[connector.index].indexInJunction];
 }
 
-RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const RoadRules& roadRules) {
+RightOfWay buildRightOfWay(const engine::RoadModel& model, const RuleSet& rules, const RoadRules& roadRules) {
+    const LaneGraph& roads = model.laneLevel;
     RightOfWay out;
     out.junctions.resize(roads.junctions.size());
     out.paths.resize(roads.paths.size());
@@ -408,9 +410,9 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
         const engine::Junction& jn = roads.junctions[j];
         JunctionRules& jr = out.junctions[j];
         JunctionWork& w = work[j];
-        if (jn.control < roadRules.controlOfName.size() && roadRules.controlOfName[jn.control] < rules.controls.size()) {
-            jr.control = roadRules.controlOfName[jn.control];
-            if (jn.control < roadRules.darkOfName.size() && roadRules.darkOfName[jn.control]) ++out.counts.junctionsDark;
+        if (j < roadRules.controlOfJunction.size() && roadRules.controlOfJunction[j] < rules.controls.size()) {
+            jr.control = roadRules.controlOfJunction[j];
+            if (j < roadRules.darkJunction.size() && roadRules.darkJunction[j]) ++out.counts.junctionsDark;
         } else {
             ++out.counts.junctionsWithoutControl;
             out.notes.push_back("junction " + std::to_string(j) + ": rule set \"" + rules.name +
@@ -451,10 +453,9 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
             }
             w.conn.push_back(c);
             w.app.push_back(local);
-            w.mov.push_back(movementOfTurn(cp.turn));
+            w.mov.push_back(movementOfTurn(model.turnOf(c)));
             w.from.push_back(from);
-            w.fromLimit.push_back(from.valid() && from.index < roads.paths.size() ? roadRules.baseLimit(roads, from)
-                                                                                 : Real(0));
+            w.fromLimit.push_back(from.valid() && from.index < roads.paths.size() ? roadRules.baseLimit(from) : Real(0));
             ConnectorRules& cr = out.paths[c.index];
             cr.approach = jr.approaches.first + local;
             cr.indexInJunction = i;
@@ -527,6 +528,7 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
                          ? out.junctions[rec.junction.index].phaseCount()
                          : 1;
         const PathId o = rec.otherPath();
+        const PathId merging = model.mergingAt(rec);   // the path the road model states joins the other's lane; none: invalid
         if (rec.meeting == engine::Meeting::Split) {
             MeetingAnswer a;
             a.who = GivesWay::Neither;
@@ -537,10 +539,10 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
         }
         if (!rec.junction.valid()) {
             // BETWEEN JUNCTIONS (issue #284): the rule set's `between_junctions`, or else asked while driving.
-            const MeetingAnswer a = settleBetweenJunctions(rules, out, rec);
+            const MeetingAnswer a = settleBetweenJunctions(rules, out, rec, merging);
             out.answers.push_back(a);
             ++out.counts.acrossJunctions;
-            if (rec.merging.valid()) {
+            if (merging.valid()) {
                 ++out.counts.statedMerges;
                 const bool asked = std::find(rules.betweenJunctions.begin(), rules.betweenJunctions.end(),
                                              SettleQuestion::StatedMerge) != rules.betweenJunctions.end();
@@ -566,7 +568,7 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
             bool asking = false, decided = false;
             for (const SettleQuestion q : settle) {
                 GivesWay who = GivesWay::A;
-                if (!ask(q, w, out, jr, rules, rec, ia, io, ph, who)) continue;
+                if (!ask(q, w, out, jr, rules, rec, merging, ia, io, ph, who)) continue;
                 if (q == SettleQuestion::ArrivedFirst) {
                     if (!asking) {
                         asking = true;
@@ -604,14 +606,14 @@ RightOfWay buildRightOfWay(const LaneGraph& roads, const RuleSet& rules, const R
         // A STATED MERGE FILED UNDER A JUNCTION (none is, in the levels of 2026-11; the road builder files a merge's joins
         // under no junction): read by the same question when the junction's control lists it; when it does not, the join
         // is settled as any other and the loader says so, so a mark is never dropped unseen.
-        if (rec.merging.valid()) {
+        if (merging.valid()) {
             ++out.counts.statedMerges;
             if (anyStatedMerge) ++out.counts.byStatedMerge;
             if (std::find(settle.begin(), settle.end(), SettleQuestion::StatedMerge) == settle.end()) {
                 ++out.counts.statedMergesNotAsked;
                 out.notes.push_back("junction " + std::to_string(j) + ": the roads state that " +
-                                    pathTurnWords(roads, out, rec.merging) + " joins the lane of " +
-                                    pathTurnWords(roads, out, rec.merging == rec.a ? o : rec.a) +
+                                    pathTurnWords(roads, out, merging) + " joins the lane of " +
+                                    pathTurnWords(roads, out, merging == rec.a ? o : rec.a) +
                                     " by a merge, but the junction's control does not ask \"" +
                                     settleQuestionWord(SettleQuestion::StatedMerge) +
                                     "\": settled as any other join there");
@@ -720,7 +722,8 @@ std::string answerWords(const LaneGraph& roads, const RightOfWay& row, const Cro
 
 }  // namespace
 
-std::string describeJunctionRules(const LaneGraph& roads, const RuleSet& rules, const RightOfWay& row, JunctionId j) {
+std::string describeJunctionRules(const engine::RoadModel& model, const RuleSet& rules, const RightOfWay& row, JunctionId j) {
+    const LaneGraph& roads = model.laneLevel;
     if (!j.valid() || j.index >= roads.junctions.size() || j.index >= row.junctions.size())
         return "no such junction: " + std::to_string(j.index) + "\n";
     const engine::Junction& jn = roads.junctions[j.index];
@@ -730,7 +733,7 @@ std::string describeJunctionRules(const LaneGraph& roads, const RuleSet& rules, 
         out += "no control the rule set knows";
     } else {
         const ControlKind& ck = rules.controls[jr.control];
-        const std::string planned = jn.control < roads.controlNames.size() ? roads.controlNames[jn.control] : std::string();
+        const std::string& planned = model.controlAt(j);
         if (!planned.empty() && planned != ck.name) out += "\"" + planned + "\", its lights dark: treated as ";
         out += "control \"" + ck.name + "\" (settle:";
         for (const SettleQuestion q : ck.settle) out += std::string(" ") + settleQuestionWord(q);

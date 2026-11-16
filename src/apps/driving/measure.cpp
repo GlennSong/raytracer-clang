@@ -1296,7 +1296,7 @@ void Measurements::lookAtCar(const Driving& d, const Car& c, const Seen* before,
                     const engine::LaneGraph* g = d.roads();
                     x.straight = !knownPath(g, out.front.path) ||
                                  g->paths[out.front.path.index].kind != engine::PathKind::Connector ||
-                                 g->paths[out.front.path.index].turn == engine::Turn::Straight;
+                                 d.model()->turnOf(out.front.path) == engine::Turn::Straight;
                     crossings_[i].push_back(x);
                 }
             }

@@ -154,8 +154,8 @@ ControlSignPlan placeControlSigns(const RoadModel& m, const std::vector<ControlS
             const ModelJunction& J = m.junctions[j];
             for (std::size_t k = 0; k < J.arms.size(); ++k) {
                 const ModelArm& a = J.arms[k];
-                if (!a.street.valid() || a.street.index >= m.streets.size() || !stated(a.heading)) continue;
-                const ModelStreet& S = m.streets[a.street.index];
+                if (!m.streetOf(a) || !stated(a.heading)) continue;
+                const ModelStreet& S = *m.streetOf(a);
                 // WHEN: over the stated facts (armStates: the reading the road markings share)
                 if (!armStates(r.regulation, r.controls, J, a)) continue;
                 if (!r.oneWayEnd.empty()) {
@@ -194,8 +194,8 @@ ControlSignPlan placeControlSigns(const RoadModel& m, const std::vector<ControlS
                     const Real crossCos = std::cos(r.crossingAngle * DEG_TO_RAD);
                     for (std::size_t p = 0; p < J.arms.size(); ++p) {
                         const ModelArm& P = J.arms[p];
-                        if (p == k || !P.street.valid() || P.street.index >= m.streets.size() || !stated(P.heading)) continue;
-                        const ModelStreet& PS = m.streets[P.street.index];
+                        if (p == k || !m.streetOf(P) || !stated(P.heading)) continue;
+                        const ModelStreet& PS = *m.streetOf(P);
                         if (PS.section.lanesArriving(P.spineIn) == 0) continue;
                         const Vec2 dp = directionOf(P.heading);
                         if (std::fabs(dot(dp, d)) >= crossCos) continue;

@@ -797,8 +797,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         LOG_WARN << "[citysim] driving \"" << params_.driving << "\": unknown model (v1 or v2); keeping v1";
     }
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
-    // THE ROAD THE NEW MODEL DRIVES ON (v2 only: a v1 level does none of this): the lane level of the level's one road
-    // model, as the loader published it (engine::LevelRoadModel, ADR-0435). Nothing is made here: the model was read from
+    // THE ROAD THE NEW MODEL DRIVES ON (v2 only: a v1 level does none of this): the level's one road model, whole
+    // (ADR-0436: its lane level is where the cars are, and what the road is there is asked of the model), as the loader
+    // published it (engine::LevelRoadModel, ADR-0435). Nothing is made here: the model was read from
     // its cache or built by the one function that makes it (road_model_cache.h obtainLevelRoadModel), its turns checked
     // against the level's own fleet, which that function reads from the same vehicle script this host read above.
     if (const driving::Driving* d2 = sim_.drivingV2()) {
@@ -821,7 +822,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         } else {
             LOG_WARN << "[citysim] driving v2: " << line;
         }
-        sim_.setDrivingRoads(model ? std::shared_ptr<const engine::LaneGraph>(model, &model->laneLevel) : nullptr, line);
+        sim_.setDrivingRoads(model, line);
     }
     // THE FIRE STATIONS' ENGINES (Glenn, 2026-10-13: "a fire truck should be an actual truck"): one parked behind each
     // bay door of every fire station (vehicleBayDoors: the doors the facade draws), its nose to the door, on the bay's

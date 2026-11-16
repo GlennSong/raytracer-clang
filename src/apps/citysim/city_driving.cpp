@@ -80,7 +80,7 @@ bool loadDrivingRules(const std::string& file, driving::Driving& d, std::string*
     }
     if (!driving::loadRules(vm, file, facts, ruleSet, vocabulary, rules, &err)) return refuse(err);
     driving::RoadRules roadRules;
-    if (!driving::buildRoadRules(*d.roads(), ruleSet, facts, roadRules, &problems)) {
+    if (!driving::buildRoadRules(*d.model(), ruleSet, facts, roadRules, &problems)) {
         std::string all;
         for (const std::string& p : problems) all += (all.empty() ? "" : "; ") + p;
         return refuse(file + ": does not fit the road: " + all);

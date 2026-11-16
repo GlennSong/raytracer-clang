@@ -113,7 +113,13 @@ constexpr std::size_t kGraphSvgRegulationColourCount = sizeof(kGraphSvgRegulatio
 constexpr double kGraphSvgControlDisc = 1.6, kGraphSvgControlLabelSize = 1.6, kGraphSvgSignMark = 0.9;
 }  // namespace
 
-bool writeLaneGraphSvg(const LaneGraph& g, const std::string& path, const LaneGraphSvgMarks& marks) {
+bool writeLaneGraphSvg(const RoadModel& model, const std::string& path, const LaneGraphSvgMarks& marks) {
+    const LaneGraph& g = model.laneLevel;
+    // the controls its junctions state, in name order: a control's colour is its place in this list
+    std::vector<std::string> controlNames;
+    for (uint32_t j = 0; j < g.junctions.size(); ++j) controlNames.push_back(model.controlAt(JunctionId(j)));
+    std::sort(controlNames.begin(), controlNames.end());
+    controlNames.erase(std::unique(controlNames.begin(), controlNames.end()), controlNames.end());
     double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
     for (const std::vector<Vec2>* set : {&g.points, &g.planPoints})
         for (const Vec2& p : *set) { x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y); }
@@ -240,7 +246,7 @@ bool writeLaneGraphSvg(const LaneGraph& g, const std::string& path, const LaneGr
     for (uint32_t p = 0; p < g.paths.size(); ++p) {
         const Path& path = g.paths[p];
         if (path.curve.end() > g.points.size() || path.kind != PathKind::Connector || !pathShown(p)) continue;
-        const std::size_t turn = static_cast<std::size_t>(path.turn) < kTurnCount ? static_cast<std::size_t>(path.turn) : 0;
+        const std::size_t turn = static_cast<std::size_t>(model.turnOf(PathId(p)));
         const char* colour = kGraphSvgTurnColours[turn];
         f << "<polyline stroke='" << colour << "' points='";
         for (uint32_t k = path.curve.first; k < path.curve.end(); ++k) f << X(g.points[k].x) << "," << Y(g.points[k].y) << " ";
@@ -286,16 +292,17 @@ bool writeLaneGraphSvg(const LaneGraph& g, const std::string& path, const LaneGr
         const Junction& jn = g.junctions[j];
         const Range& b = jn.box;
         if (b.end() > g.planPoints.size() || b.count == 0 || !shown(g.planPoints.data() + b.first, b.count)) continue;
-        if (jn.control < g.controlNames.size()) {
+        {
             Vec2 c;
             for (uint32_t k = b.first; k < b.end(); ++k) c += g.planPoints[k];
             c = c / static_cast<double>(b.count);
-            const std::string& name = g.controlNames[jn.control];
+            const std::string& name = model.controlAt(JunctionId(j));
+            const NameIndex control = LaneGraph::nameIndex(controlNames, name);
             f << "<circle cx='" << X(c.x) << "' cy='" << Y(c.y) - kGraphSvgJunctionLabelSize - kGraphSvgControlDisc << "' r='"
-              << kGraphSvgControlDisc << "' fill='" << controlColour(jn.control) << "' fill-opacity='0.85'><title>junction " << j
+              << kGraphSvgControlDisc << "' fill='" << controlColour(control) << "' fill-opacity='0.85'><title>junction " << j
               << ": " << name << "</title></circle>\n";
             f << "<text x='" << X(c.x) << "' y='" << Y(c.y) + kGraphSvgControlLabelSize << "' font-size='" << kGraphSvgControlLabelSize
-              << "' fill='" << controlColour(jn.control) << "' text-anchor='middle'>" << name << "</text>\n";
+              << "' fill='" << controlColour(control) << "' text-anchor='middle'>" << name << "</text>\n";
         }
         for (uint32_t k = jn.arriving.first; k < jn.arriving.end() && k < g.junctionLanes.size(); ++k) {
             const PathId p = g.junctionLanes[k];
@@ -320,9 +327,9 @@ bool writeLaneGraphSvg(const LaneGraph& g, const std::string& path, const LaneGr
     const double keyLine = kGraphSvgKeyLine * keyScale;
     f << "<g id='key' font-size='" << kGraphSvgKeySize * keyScale << "'>\n";
     double keyY = keyLine;
-    for (NameIndex c = 0; c < g.controlNames.size(); ++c, keyY += keyLine)
+    for (NameIndex c = 0; c < controlNames.size(); ++c, keyY += keyLine)
         f << "<text x='" << keyLine << "' y='" << keyY << "' fill='" << controlColour(c) << "'>junction control (disc): "
-          << g.controlNames[c] << "</text>\n";
+          << controlNames[c] << "</text>\n";
     for (NameIndex k = 0; k < g.regulationKindNames.size(); ++k, keyY += keyLine)
         f << "<text x='" << keyLine << "' y='" << keyY << "' fill='" << kindColour(k)
           << "'>at an arriving lane's end (triangle): " << g.regulationKindNames[k] << "</text>\n";

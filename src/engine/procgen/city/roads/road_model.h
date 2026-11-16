@@ -227,6 +227,71 @@ struct RoadModel {
     // names its street, lane or turn of this model, each junction its junction here. Filled by assembleRoadModel; empty in
     // a planned-only model, and where the road file lacks a fact the lane level needs (the report's `error` says which).
     LaneGraph laneLevel;
+
+    // ---- WHAT A READER OF THE LANE LEVEL ASKS OF THE MODEL (ADR-0436) -------------------------------------------------
+    // The lane level holds where a car can be; what the road IS there is the model's, reached by the id each path,
+    // junction and crossing point carries. The lane table keeps no copy of these (issue #291), so each has one answer.
+    // A path, junction or crossing that names nothing of the model (a table made by hand with nothing stated for it)
+    // reads as "none stated": no street, no limit, no class, no control, no turn, no merge.
+    //
+    // THE STREET A PATH IS ON: a lane's own (Path::street); a connector's, that of the lane it leads into. Null: none.
+    const ModelStreet* streetOf(PathId path) const {
+        if (path.index >= laneLevel.paths.size()) return nullptr;
+        const Path* p = &laneLevel.paths[path.index];
+        if (p->kind == PathKind::Connector) {
+            if (p->next.count == 0 || p->next.first >= laneLevel.nextPaths.size()) return nullptr;
+            const PathId into = laneLevel.nextPaths[p->next.first];
+            if (into.index >= laneLevel.paths.size()) return nullptr;
+            p = &laneLevel.paths[into.index];
+        }
+        return p->street < streets.size() ? &streets[p->street] : nullptr;
+    }
+    // THE LIMIT POSTED ON A PATH, metres per second (0: none posted): its street's (streetOf).
+    Real postedLimit(PathId path) const {
+        const ModelStreet* s = streetOf(path);
+        return s ? s->speedLimit : Real(0);
+    }
+    // THE CLASS OF THE ROAD A PATH IS ON, by name (empty: none): its street's cross-section's.
+    const std::string& roadClassOf(PathId path) const;
+    // THE TURN A CONNECTOR TAKES: the kind of the stated turn it follows (Path::modelTurn). Turn::None: a lane, or a
+    // connector following no stated turn.
+    Turn turnOf(PathId path) const {
+        if (path.index >= laneLevel.paths.size()) return Turn::None;
+        const uint32_t t = laneLevel.paths[path.index].modelTurn;
+        return t < turns.size() ? turns[t].turn : Turn::None;
+    }
+    // THE MODEL'S JUNCTION A JUNCTION OF THE LANE LEVEL IS (null: none), and the control it states (empty: none).
+    const ModelJunction* junctionOf(JunctionId laneJunction) const {
+        if (laneJunction.index >= laneLevel.junctions.size()) return nullptr;
+        const uint32_t j = laneLevel.junctions[laneJunction.index].modelJunction;
+        return j < junctions.size() ? &junctions[j] : nullptr;
+    }
+    const std::string& controlAt(JunctionId laneJunction) const;
+    // THE PATH THAT JOINS BY A STATED MERGE at a crossing point: where the crossing names a merge of this model
+    // (CrossingPoint::modelConnection), the one of its two paths that is a stretch of the lane the connection says
+    // merges (ModelConnection::from) -- the path that gives way. Not valid: no merge is stated there.
+    PathId mergingAt(const CrossingPoint& x) const;
+
+    // ---- WHAT A READER ASKS OF THE JUNCTIONS AND STREETS (ADR-0436) -------------------------------------------------
+    // THE WAY TO READ THE ROADS: a reader asks these (and the questions below this struct: lanesOf, leadsTo,
+    // streetName, namedArmsAt, streetNameNear, armMouth, laneSpanEnd) instead of walking the tables for itself, so
+    // each question has one answer. Each was a loop two or more readers wrote out.
+    //
+    // THE STREET AN ARM IS (null: the junction states none for it, or one this model does not have).
+    const ModelStreet* streetOf(const ModelArm& arm) const {
+        return arm.street.index < streets.size() ? &streets[arm.street.index] : nullptr;
+    }
+    // THE ARM A STREET IS AT THE JUNCTION IT NAMES at one of its ends (`end` 0: its `from`, 1: its `to`): its place in
+    // that junction's stated list of arms -- the arm of this street whose spine runs out of the junction at the
+    // street's `from`, into it at its `to`. The first such arm listed. -1: the street names no junction there, or the
+    // junction lists no arm for it.
+    int armAt(ModelStreetId street, int end) const;
+    // A STREET'S CENTRE LINE (or a stretch inside a junction's: ModelStretch::line), `from` to `to`, as plan points.
+    // Empty: none kept.
+    std::vector<Vec2> centreLine(const Range& line) const;
+    // WHERE AN END OF A STREET IS in plan (`end` 0: its `from`, 1: its `to`): the first or last point of its centre
+    // line. False: the street has no centre line.
+    bool streetEnd(const ModelStreet& street, int end, Vec2& out) const;
 };
 
 // Field for field, exactly (the saved bytes of each compared).
@@ -311,7 +376,8 @@ std::string roadModelSvg(const RoadModel& m);      // junctions and streets with
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 9;    // 9: no stored one-way flag: the cross-section answers it (ADR-0432)
+constexpr uint32_t kRoadModelFormat = 10;   // 10: the lane level holds no copy of the model's facts (LGRF 11, ADR-0436)
+                                            // 9: no stored one-way flag: the cross-section answers it (ADR-0432)
                                             // 8: the lane level, as the lane graph's own bytes (LGRF) after the rest (ADR-0429)
                                             // 7: whether the file states its arms in their ring (ADR-0427)
                                             // 2: a street's kerb parking (ADR-0418); 3: where a street carries on (ADR-0419);

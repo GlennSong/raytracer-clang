@@ -32,7 +32,7 @@ bool setsTopSpeed(const DriverView& v, const engine::Regulation& reg) {
 // posted: RoadRules::baseLimit), replaced by the latest regulation at or before that point that sets the top speed.
 Real limitAt(const DriverView& v, engine::PathId path, Real along) {
     const engine::Path& p = v.roads.paths[path.index];
-    Real limit = v.roadRules.baseLimit(v.roads, path);
+    Real limit = v.roadRules.baseLimit(path);
     for (uint32_t r = p.regulations.first; r < p.regulations.end() && r < v.roads.regulations.size(); ++r) {
         const engine::Regulation& reg = v.roads.regulations[r];
         if (reg.from > along) break;

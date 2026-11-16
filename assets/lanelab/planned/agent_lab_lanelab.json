@@ -38468,6 +38468,7 @@
   "seed": 474349,
   "type": "procedural"
  },
+ "lane_rules": {"solid_before_stop_line":20.0},
  "streets": [
   {
    "from": 0.0,

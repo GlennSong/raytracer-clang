@@ -3,6 +3,7 @@
 #include "engine/procgen/city/polygon.h"    // bounds, pointInPolygon
 #include "engine/procgen/city/polyline.h"   // distToPolyline, distSegmentToSegment
 #include "engine/procgen/city/roads/lanes/swept_body.h"   // a long body along a path (#284 item 9)
+#include "engine/procgen/city/roads/road_model.h"         // the stated turns (placeWaitInsidePoints)
 
 #include <algorithm>
 #include <chrono>
@@ -907,12 +908,13 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
     return rep;
 }
 
-uint32_t placeWaitInsidePoints(LaneGraph& g) {
+uint32_t placeWaitInsidePoints(RoadModel& model) {
+    LaneGraph& g = model.laneLevel;
     uint32_t placed = 0;
     for (Path& p : g.paths) p.waitInsideAt = kNoWaitInside;
     for (uint32_t c = 0; c < g.paths.size(); ++c) {
         Path& p = g.paths[c];
-        if (p.kind != PathKind::Connector || p.turn != Turn::FarTurn || !p.junction.valid() ||
+        if (p.kind != PathKind::Connector || model.turnOf(PathId(c)) != Turn::FarTurn || !p.junction.valid() ||
             p.from.index >= g.paths.size())
             continue;
         // The crossing points along it are listed by where their stretch on it begins: the first with a path from a facing

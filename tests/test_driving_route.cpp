@@ -54,7 +54,7 @@ TestRoadSpec specWith(uint32_t lanes, DrivesOn side) {
 RouteClass carOn(const engine::LaneGraph& g) { return bindRouteClass(g, driving_test::testCarClass()); }
 
 Route route(const TestRoads& t, const PathPoint& from, const PathPoint& to, const SectionSeconds* learned = nullptr) {
-    return findRoute(t.graph, studyRoads(t.graph), carOn(t.graph), from, to, learned);
+    return findRoute(t.model, studyRoads(t.model), carOn(t.model.laneLevel), from, to, learned);
 }
 
 // The legs join up: each turn's connector leaves a lane of the leg before it and joins a lane of the leg after, and
@@ -81,26 +81,26 @@ bool routeUses(const Route& r, engine::SectionId s) {
 
 const RouteLane& laneIn(const Route& r, std::size_t leg, uint32_t k) { return r.lanes[r.legs[leg].firstLane + k]; }
 
-// Adds a one-lane section nothing leads into or out of, far from the rest; returns its lane.
-engine::PathId addIsolatedLane(engine::LaneGraph& g) {
+// Adds a one-lane section nothing leads into or out of, far from the rest, on a street of its own; returns its lane.
+engine::PathId addIsolatedLane(engine::RoadModel& m) {
+    engine::LaneGraph& g = m.laneLevel;
     const engine::SectionId sid(static_cast<uint32_t>(g.sections.size()));
     const engine::PathId lane(static_cast<uint32_t>(g.paths.size()));
     engine::Path p;
     p.curve = g.addCurve({engine::Vec2(-1000, -1000), engine::Vec2(-900, -1000)}, {0, 0});
     p.length = 100;
     p.width = 3.5;
-    p.speedLimit = 13.4;
     p.vehicleTags = 1;
     p.section = sid;
     p.next.first = static_cast<uint32_t>(g.nextPaths.size());
     g.paths.push_back(p);
     engine::Section s;
-    s.roadClass = 0;
     s.lanes.first = static_cast<uint32_t>(g.sectionLanes.size());
     s.lanes.count = 1;
     s.lines.first = static_cast<uint32_t>(g.laneLines.size());
     g.sectionLanes.push_back(lane);
     g.sections.push_back(s);
+    driving_test::stateStreet(m, lane, 13.4);
     return lane;
 }
 
@@ -114,16 +114,16 @@ TEST_CASE(route_test_roads_are_valid) {
         for (uint32_t lanes = 1; lanes <= 2; ++lanes) {
             const TestRoadSpec spec = specWith(lanes, drivesOn);
             const TestRoads straight = driving_test::straightRoad(3, spec);
-            checkValid(straight.graph, "straight road");
-            CHECK(straight.graph.sections.size() == 6u);
-            CHECK(straight.graph.paths.size() == 6u * lanes);
+            checkValid(straight.model.laneLevel, "straight road");
+            CHECK(straight.model.laneLevel.sections.size() == 6u);
+            CHECK(straight.model.laneLevel.paths.size() == 6u * lanes);
             const TestRoads small = driving_test::gridRoads(2, 2, spec);
-            checkValid(small.graph, "2x2 grid");
+            checkValid(small.model.laneLevel, "2x2 grid");
             const TestRoads big = driving_test::gridRoads(4, 4, spec);
-            checkValid(big.graph, "4x4 grid");
+            checkValid(big.model.laneLevel, "4x4 grid");
             // 4 by 4 junctions: 3 roads in each of 4 rows and 4 columns, two ways.
-            CHECK(big.graph.sections.size() == 48u);
-            CHECK(big.graph.junctions.size() == 16u);
+            CHECK(big.model.laneLevel.sections.size() == 48u);
+            CHECK(big.model.laneLevel.junctions.size() == 16u);
         }
     }
 
@@ -134,16 +134,16 @@ TEST_CASE(route_test_roads_are_valid) {
     const Heading near = driving_test::nearTurnFrom(Heading::East, spec.drivesOn);
     const Heading far = driving_test::farTurnFrom(Heading::East, spec.drivesOn);
     CHECK(near != far && near != Heading::East && far != Heading::West);
-    const engine::Junction& j = t.graph.junctions[t.junction(1, 1).index];
+    const engine::Junction& j = t.model.laneLevel.junctions[t.junction(1, 1).index];
     CHECK(j.connectors.count == 16u);   // four ways in, each: two straight on, one near turn, one far turn
     const Real halfBox = 2 * spec.laneWidth + spec.cornerRadius;
     for (uint32_t k = 0; k < 2; ++k) {
         const engine::PathId s = t.connector(1, 1, Heading::East, k, Heading::East, k);
         CHECK(s.valid());
         if (s.valid()) {
-            CHECK(t.graph.paths[s.index].turn == engine::Turn::Straight);
-            CHECK_APPROX(t.graph.paths[s.index].length, 2 * halfBox, kEps);
-            CHECK(t.graph.paths[s.index].tightestRadius == engine::kNoBend);
+            CHECK(t.model.turnOf(s) == engine::Turn::Straight);
+            CHECK_APPROX(t.model.laneLevel.paths[s.index].length, 2 * halfBox, kEps);
+            CHECK(t.model.laneLevel.paths[s.index].tightestRadius == engine::kNoBend);
         }
         CHECK(!t.connector(1, 1, Heading::East, k, Heading::East, 1 - k).valid());
         CHECK(!t.connector(1, 1, Heading::East, k, Heading::West, k).valid());   // no U-turn
@@ -156,9 +156,9 @@ TEST_CASE(route_test_roads_are_valid) {
     CHECK(!t.connector(1, 1, Heading::East, 1, far, 1).valid());
     CHECK(!t.connector(1, 1, Heading::East, 1, far, 0).valid());
     if (nearTurn.valid() && farTurn.valid()) {
-        const engine::Path& n = t.graph.paths[nearTurn.index];
-        const engine::Path& f = t.graph.paths[farTurn.index];
-        CHECK(n.turn == engine::Turn::NearTurn && f.turn == engine::Turn::FarTurn);
+        const engine::Path& n = t.model.laneLevel.paths[nearTurn.index];
+        const engine::Path& f = t.model.laneLevel.paths[farTurn.index];
+        CHECK(t.model.turnOf(nearTurn) == engine::Turn::NearTurn && t.model.turnOf(farTurn) == engine::Turn::FarTurn);
         CHECK_APPROX(n.tightestRadius, spec.cornerRadius + spec.laneWidth / 2, kEps);
         CHECK_APPROX(f.tightestRadius, halfBox + spec.laneWidth / 2, kEps);
         // A quarter arc drawn in straight pieces: a little shorter than the arc.
@@ -167,8 +167,8 @@ TEST_CASE(route_test_roads_are_valid) {
     }
     // The kerb-most lane of a road lies nearer the kerb than the offside-most: further from the road's middle line,
     // on the side the near turn goes.
-    const engine::Vec2 p0 = t.graph.pointAt(t.laneLeaving(1, 1, Heading::East, 0), 50);
-    const engine::Vec2 p1 = t.graph.pointAt(t.laneLeaving(1, 1, Heading::East, 1), 50);
+    const engine::Vec2 p0 = t.model.laneLevel.pointAt(t.laneLeaving(1, 1, Heading::East, 0), 50);
+    const engine::Vec2 p1 = t.model.laneLevel.pointAt(t.laneLeaving(1, 1, Heading::East, 1), 50);
     CHECK(engine::dot(p1 - p0, driving_test::headingVector(near)) > 0);
 
     // A straight road routes through its sections with no junction turns.
@@ -196,13 +196,13 @@ TEST_CASE(route_grid_far_corners_fewest_junctions_same_every_run) {
     CHECK(r.legs.back().section == t.sectionArriving(3, 3, Heading::East));
     CHECK_APPROX(r.legs.front().enterFraction, 0.1, kEps);
     CHECK_APPROX(r.legs.back().leaveFraction, 0.9, kEps);
-    checkJoinsUp(t.graph, r);
+    checkJoinsUp(t.model.laneLevel, r);
     // The same question, the same route.
     const Route again = route(t, from, to);
     CHECK(routeHash(r) == routeHash(again));
     CHECK(again.legs.size() == r.legs.size());
     // remainingFrom the start is the whole route.
-    const Remaining all = remainingFrom(r, t.graph, from);
+    const Remaining all = remainingFrom(r, t.model,from);
     CHECK(all.onRoute);
     CHECK_APPROX(all.metres, r.metres, kEps);
     CHECK_APPROX(all.seconds, r.seconds, kEps);
@@ -218,7 +218,7 @@ TEST_CASE(route_starting_away_goes_round_never_reverses) {
     if (!r.found) return;
     CHECK(r.legs.front().section == t.sectionLeaving(0, 1, Heading::West));
     CHECK(r.legs.size() > 1u && r.legs[1].section != t.sectionLeaving(0, 0, Heading::East));   // no swing round
-    checkJoinsUp(t.graph, r);
+    checkJoinsUp(t.model.laneLevel, r);
 
     // A destination behind the car on its own lane: round the block and back along it.
     const engine::PathId lane = t.laneLeaving(1, 1, Heading::East, 0);
@@ -227,17 +227,17 @@ TEST_CASE(route_starting_away_goes_round_never_reverses) {
     if (!back.found) return;
     CHECK(back.legs.size() == 5u);
     CHECK(back.legs.front().section == back.legs.back().section);
-    checkJoinsUp(t.graph, back);
+    checkJoinsUp(t.model.laneLevel, back);
     for (const RouteTurn& turn : back.turns) CHECK(turn.turn == engine::Turn::NearTurn);   // the smallest block
     // The same lane is two places on the route; between them it is on neither.
-    CHECK(placeOnRoute(back, t.graph, at(lane, 70)).part == RoutePart::Leg);
-    CHECK(placeOnRoute(back, t.graph, at(lane, 70)).index == 0u);
-    CHECK(placeOnRoute(back, t.graph, at(lane, 10)).index == 4u);
-    CHECK(!placeOnRoute(back, t.graph, at(lane, 40)).onRoute());
-    CHECK(placeOnRoute(back, t.graph, at(back.turns[1].connector, 1)).part == RoutePart::Turn);
-    CHECK(placeOnRoute(back, t.graph, at(back.turns[1].connector, 1)).index == 1u);
+    CHECK(placeOnRoute(back, t.model.laneLevel, at(lane, 70)).part == RoutePart::Leg);
+    CHECK(placeOnRoute(back, t.model.laneLevel, at(lane, 70)).index == 0u);
+    CHECK(placeOnRoute(back, t.model.laneLevel, at(lane, 10)).index == 4u);
+    CHECK(!placeOnRoute(back, t.model.laneLevel, at(lane, 40)).onRoute());
+    CHECK(placeOnRoute(back, t.model.laneLevel, at(back.turns[1].connector, 1)).part == RoutePart::Turn);
+    CHECK(placeOnRoute(back, t.model.laneLevel, at(back.turns[1].connector, 1)).index == 1u);
     // From the last visit on, the first is no longer looked at.
-    CHECK(placeOnRoute(back, t.graph, at(lane, 70), 4).part == RoutePart::Off);
+    CHECK(placeOnRoute(back, t.model.laneLevel, at(lane, 70), 4).part == RoutePart::Off);
 }
 
 // ---- 3. which lanes lead on --------------------------------------------------------------------------------------
@@ -287,9 +287,9 @@ TEST_CASE(route_lane_changes_table_for_a_far_turn) {
 
         // A line that may not be crossed from the kerb side in the last section before the turn: there the kerb-side
         // lane cannot finish; before it, it can still change.
-        const engine::Section& sec = t.graph.sections[t.sectionLeaving(1, 1, Heading::East).index];
-        t.graph.laneLines[sec.lines.first].crossFromKerbside = false;
-        checkValid(t.graph, "one solid line");
+        const engine::Section& sec = t.model.laneLevel.sections[t.sectionLeaving(1, 1, Heading::East).index];
+        t.model.laneLevel.laneLines[sec.lines.first].crossFromKerbside = false;
+        checkValid(t.model.laneLevel, "one solid line");
         const Route solid = route(t, at(start, 10), to);
         CHECK(solid.found && solid.legs.size() == 3u);
         if (!solid.found || solid.legs.size() != 3u) continue;
@@ -312,10 +312,10 @@ TEST_CASE(route_way_ahead_through_junctions_lane_end_destination) {
     const Route r = route(t, at(off0, 50), to);
     CHECK(r.found && r.legs.size() == 4u);
     if (!r.found) return;
-    const Real across = t.graph.paths[t.connector(1, 1, Heading::East, 0, Heading::East, 0).index].length;
+    const Real across = t.model.laneLevel.paths[t.connector(1, 1, Heading::East, 0, Heading::East, 0).index].length;
 
     // From a lane that leads on: through two junctions, stopping once the look-ahead is covered.
-    WayAhead w = wayAhead(r, t.graph, off0, 50, 50 + across + 100 + across + 10);
+    WayAhead w = wayAhead(r, t.model.laneLevel, off0, 50, 50 + across + 100 + across + 10);
     CHECK(w.paths.size() == 5u);
     if (w.paths.size() == 5u) {
         CHECK(w.paths[0] == off0);
@@ -325,34 +325,34 @@ TEST_CASE(route_way_ahead_through_junctions_lane_end_destination) {
         CHECK(w.paths[4] == t.laneLeaving(1, 2, Heading::East, 0));
     }
     // A short look-ahead: the car's own path alone.
-    CHECK(wayAhead(r, t.graph, off0, 50, 40).paths.size() == 1u);
+    CHECK(wayAhead(r, t.model.laneLevel, off0, 50, 40).paths.size() == 1u);
 
     // From the kerb-side lane: on straight while it leads on, ending with the lane before the far turn.
     const engine::PathId kerb0 = t.laneLeaving(1, 0, Heading::East, 1);
-    w = wayAhead(r, t.graph, kerb0, 50, 1000);
+    w = wayAhead(r, t.model.laneLevel, kerb0, 50, 1000);
     CHECK(w.paths.size() == 5u);
     if (w.paths.size() == 5u) CHECK(w.paths[4] == t.laneLeaving(1, 2, Heading::East, 1));
-    w = wayAhead(r, t.graph, t.laneLeaving(1, 2, Heading::East, 1), 10, 1000);
+    w = wayAhead(r, t.model.laneLevel, t.laneLeaving(1, 2, Heading::East, 1), 10, 1000);
     CHECK(w.paths.size() == 1u);
 
     // To the destination, and no further.
-    w = wayAhead(r, t.graph, t.laneLeaving(1, 2, Heading::East, 0), 10, 1000);
+    w = wayAhead(r, t.model.laneLevel, t.laneLeaving(1, 2, Heading::East, 0), 10, 1000);
     CHECK(w.paths.size() == 3u);
     if (w.paths.size() == 3u) {
         CHECK(w.paths[1] == t.connector(1, 3, Heading::East, 0, far, 0));
         CHECK(w.paths[2] == to.path);
     }
-    CHECK(wayAhead(r, t.graph, to.path, 30, 1000).paths.size() == 1u);
+    CHECK(wayAhead(r, t.model.laneLevel, to.path, 30, 1000).paths.size() == 1u);
     // Off the route: its own path alone.
-    CHECK(wayAhead(r, t.graph, t.laneLeaving(2, 2, Heading::East, 0), 10, 1000).paths.size() == 1u);
+    CHECK(wayAhead(r, t.model.laneLevel, t.laneLeaving(2, 2, Heading::East, 0), 10, 1000).paths.size() == 1u);
 
     // What remains from part way, along the route's own lanes.
-    const Remaining rest = remainingFrom(r, t.graph, at(t.laneLeaving(1, 2, Heading::East, 0), 10));
-    const Real farLength = t.graph.paths[t.connector(1, 3, Heading::East, 0, far, 0).index].length;
+    const Remaining rest = remainingFrom(r, t.model,at(t.laneLeaving(1, 2, Heading::East, 0), 10));
+    const Real farLength = t.model.laneLevel.paths[t.connector(1, 3, Heading::East, 0, far, 0).index].length;
     CHECK(rest.onRoute);
     CHECK_APPROX(rest.metres, 90 + farLength + 60, kEps);
-    CHECK(!remainingFrom(r, t.graph, at(t.laneLeaving(2, 2, Heading::East, 0), 10)).onRoute);
-    CHECK(!remainingFrom(r, t.graph, at(to.path, 70)).onRoute);   // past the destination
+    CHECK(!remainingFrom(r, t.model,at(t.laneLeaving(2, 2, Heading::East, 0), 10)).onRoute);
+    CHECK(!remainingFrom(r, t.model,at(to.path, 70)).onRoute);   // past the destination
 }
 
 // ---- 5. what a class may use ---------------------------------------------------------------------------------------
@@ -367,49 +367,49 @@ TEST_CASE(route_class_tags_and_turning_radius) {
 
     // A street open only to another tag: the test car goes round it.
     const engine::SectionId closed = before.legs[2].section;
-    t.graph.vehicleTagNames.push_back("test_other");
-    const engine::Section& sec = t.graph.sections[closed.index];
-    for (uint32_t k = 0; k < sec.lanes.count; ++k) t.graph.paths[t.graph.sectionLanes[sec.lanes.first + k].index].vehicleTags = 2;
-    checkValid(t.graph, "one street closed");
+    t.model.laneLevel.vehicleTagNames.push_back("test_other");
+    const engine::Section& sec = t.model.laneLevel.sections[closed.index];
+    for (uint32_t k = 0; k < sec.lanes.count; ++k) t.model.laneLevel.paths[t.model.laneLevel.sectionLanes[sec.lanes.first + k].index].vehicleTags = 2;
+    checkValid(t.model.laneLevel, "one street closed");
     const Route round = route(t, from, to);
     CHECK(round.found);
     CHECK(!routeUses(round, closed));
-    checkJoinsUp(t.graph, round);
+    checkJoinsUp(t.model.laneLevel, round);
     CHECK(round.turns.size() == 5u);   // still the fewest junctions: another street as short
 
     // A class with only that tag may use nothing but that street: the destination is closed to it.
     std::vector<std::string> notes;
-    const RouteClass other = bindRouteClass(t.graph, driving_test::testCarClass({"test_other"}), &notes);
+    const RouteClass other = bindRouteClass(t.model.laneLevel, driving_test::testCarClass({"test_other"}), &notes);
     CHECK(notes.empty());
     CHECK(other.tags == 2u);
-    Route none = findRoute(t.graph, studyRoads(t.graph), other, from, to);
+    Route none = findRoute(t.model, studyRoads(t.model),other, from, to);
     CHECK(!none.found && none.why == NoRouteWhy::DestinationClosed);
     // ... and from that street, nothing leads anywhere it may go.
-    const engine::PathId closedLane = t.graph.sectionLanes[sec.lanes.first];
-    none = findRoute(t.graph, studyRoads(t.graph), other, at(closedLane, 10), at(closedLane, 5));
+    const engine::PathId closedLane = t.model.laneLevel.sectionLanes[sec.lanes.first];
+    none = findRoute(t.model, studyRoads(t.model),other, at(closedLane, 10), at(closedLane, 5));
     CHECK(!none.found && none.why == NoRouteWhy::NothingLeadsThere);
     // A tag the road does not know is a plain note, and matches nothing.
-    const RouteClass unknown = bindRouteClass(t.graph, driving_test::testCarClass({"no_such_tag"}), &notes);
+    const RouteClass unknown = bindRouteClass(t.model.laneLevel, driving_test::testCarClass({"no_such_tag"}), &notes);
     CHECK(unknown.tags == 0u);
     CHECK(notes.size() == 1u && says(notes[0], "no_such_tag"));
-    CHECK(!mayUse(t.graph, unknown, from.path));
+    CHECK(!mayUse(t.model.laneLevel, unknown, from.path));
     // An empty mask is open to nobody.
-    t.graph.paths[from.path.index].vehicleTags = 0;
-    CHECK(!mayUse(t.graph, carOn(t.graph), from.path));
+    t.model.laneLevel.paths[from.path.index].vehicleTags = 0;
+    CHECK(!mayUse(t.model.laneLevel, carOn(t.model.laneLevel), from.path));
 
     // A class that cannot turn as tightly as a near turn: round the block by far turns only.
     const TestRoads g = driving_test::gridRoads(4, 4, specWith(1, DrivesOn::Left));
-    RouteClass wide = carOn(g.graph);
+    RouteClass wide = carOn(g.model.laneLevel);
     wide.tightestTurnRadius = g.spec.cornerRadius + g.spec.laneWidth;   // wider than the near turn, inside the far
     const engine::PathId lane = g.laneLeaving(1, 1, Heading::East, 0);
     const engine::PathId nearTurn =
         g.connector(1, 2, Heading::East, 0, driving_test::nearTurnFrom(Heading::East, DrivesOn::Left), 0);
-    CHECK(nearTurn.valid() && !mayUse(g.graph, wide, nearTurn));
-    const Route wideBack = findRoute(g.graph, studyRoads(g.graph), wide, at(lane, 60), at(lane, 20));
+    CHECK(nearTurn.valid() && !mayUse(g.model.laneLevel, wide, nearTurn));
+    const Route wideBack = findRoute(g.model, studyRoads(g.model),wide, at(lane, 60), at(lane, 20));
     CHECK(wideBack.found);
     for (const RouteTurn& turn : wideBack.turns) {
         CHECK(turn.turn != engine::Turn::NearTurn);
-        CHECK(g.graph.paths[turn.connector.index].tightestRadius >= wide.tightestTurnRadius);
+        CHECK(g.model.laneLevel.paths[turn.connector.index].tightestRadius >= wide.tightestTurnRadius);
     }
 }
 
@@ -423,7 +423,7 @@ TEST_CASE(route_learned_times_move_the_route) {
     CHECK(quick.found && quick.legs.size() == 6u);
     if (!quick.found || quick.legs.size() != 6u) return;
     const engine::SectionId jammed = quick.legs[2].section;
-    SectionSeconds learned(t.graph.sections.size(), 0);
+    SectionSeconds learned(t.model.laneLevel.sections.size(), 0);
     learned[jammed.index] = 600;   // ten minutes to drive 100 m
     const Route slow = route(t, from, to, &learned);
     CHECK(slow.found);
@@ -442,8 +442,8 @@ TEST_CASE(route_learned_times_move_the_route) {
 
 TEST_CASE(route_no_route_plain_reason_and_in_driving) {
     TestRoads t = driving_test::gridRoads(2, 2, specWith(1, DrivesOn::Left));
-    const engine::PathId island = addIsolatedLane(t.graph);
-    checkValid(t.graph, "with an isolated lane");
+    const engine::PathId island = addIsolatedLane(t.model);
+    checkValid(t.model.laneLevel, "with an isolated lane");
     const PathPoint from = at(t.laneLeaving(0, 0, Heading::East, 0), 50);
     const Route r = route(t, from, at(island, 50));
     CHECK(!r.found && r.why == NoRouteWhy::NothingLeadsThere);
@@ -452,7 +452,7 @@ TEST_CASE(route_no_route_plain_reason_and_in_driving) {
     const Route off = route(t, from, at(island, 101));
     CHECK(!off.found && off.why == NoRouteWhy::DestinationNotOnRoad);
 
-    Driving d(&t.graph);
+    Driving d(&t.model);
     VehicleClasses classes;
     classes.add(driving_test::testCarClass());
     d.setVehicleClasses(classes);
@@ -486,14 +486,15 @@ TEST_CASE(route_no_route_plain_reason_and_in_driving) {
     CHECK(routeHash(*d.route(id)) == keptHash);   // the car has not moved: the same route
 
     // The state hash covers the route: the same trip on a road where one street is slow hashes differently.
-    SectionSeconds learned(t.graph.sections.size(), 0);
+    SectionSeconds learned(t.model.laneLevel.sections.size(), 0);
     const Route other = route(t, from, home, &learned);
     CHECK(routeHash(other) == keptHash);
     TestRoads slowed = t;
     const engine::SectionId first = kept->legs.size() > 1 ? kept->legs[1].section : kept->legs[0].section;
-    const engine::Section& sec = slowed.graph.sections[first.index];
-    slowed.graph.paths[slowed.graph.sectionLanes[sec.lanes.first].index].speedLimit = 1;
-    Driving d2(&slowed.graph);
+    const engine::Section& sec = slowed.model.laneLevel.sections[first.index];
+    // (the limit is the street's: stated once, on the road model)
+    slowed.model.streets[slowed.model.laneLevel.paths[slowed.model.laneLevel.sectionLanes[sec.lanes.first].index].street].speedLimit = 1;
+    Driving d2(&slowed.model);
     d2.setVehicleClasses(classes);
     CHECK(d2.placeCar(CarId(1), 0, from));
     const TripId id2 = d2.beginTrip(CarId(1), 7, home);
@@ -504,11 +505,11 @@ TEST_CASE(route_no_route_plain_reason_and_in_driving) {
 
 TEST_CASE(route_timing_1000_routes_on_a_40_by_40_grid) {
     const TestRoads t = driving_test::gridRoads(40, 40, specWith(2, DrivesOn::Left));
-    const engine::LaneGraph& g = t.graph;
+    const engine::LaneGraph& g = t.model.laneLevel;
     std::vector<engine::PathId> lanes;
     for (uint32_t i = 0; i < g.paths.size(); ++i)
         if (g.paths[i].kind == engine::PathKind::Lane) lanes.push_back(engine::PathId(i));
-    const RouteBounds bounds = studyRoads(g);
+    const RouteBounds bounds = studyRoads(t.model);
     const RouteClass car = carOn(g);
     constexpr uint32_t kRoutes = 1000;
     constexpr uint32_t kSeed = 254;
@@ -532,7 +533,7 @@ TEST_CASE(route_timing_1000_routes_on_a_40_by_40_grid) {
         std::vector<Real> passCosts;
         const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
         for (const std::pair<PathPoint, PathPoint>& trip : trips) {
-            const Route r = findRoute(g, used, car, trip.first, trip.second);
+            const Route r = findRoute(t.model, used, car, trip.first, trip.second);
             if (r.found) ++found;
             metres += r.metres;
             passCosts.push_back(r.cost);
@@ -589,9 +590,9 @@ TEST_CASE(route_closed_chains_close_the_chain_not_the_turn) {
 
 namespace {
 
-// A real junction's lane graph, as the road builder makes it for these vehicle classes (driving::tagSizes); with
+// A real junction's road model, as the road builder makes it for these vehicle classes (driving::tagSizes); with
 // `withLength` false, the same sizes swept as points (each body's length left out, as before #284 item 9).
-engine::LaneGraph builtFor(const engine::roads::lanes::Result& roads, const VehicleClasses& classes, bool withLength,
+engine::RoadModel builtFor(const engine::roads::lanes::Result& roads, const VehicleClasses& classes, bool withLength,
                            engine::roads::lanes::LaneGraphBuild* report = nullptr) {
     engine::roads::lanes::LaneGraphOptions o;
     for (const TagSize& t : tagSizes(classes)) {
@@ -602,7 +603,7 @@ engine::LaneGraph builtFor(const engine::roads::lanes::Result& roads, const Vehi
         v.length = withLength ? t.length : 0;
         o.vehicles.push_back(v);
     }
-    return engine::assembleRoadModel(roads, o, report).laneLevel;   // the road model's lane level (ADR-0429)
+    return engine::assembleRoadModel(roads, o, report);   // the built road model, lane level inside (ADR-0429)
 }
 
 }  // namespace
@@ -620,8 +621,10 @@ TEST_CASE(route_a_long_body_is_never_sent_round_a_turn_its_swing_takes_off_the_r
     bus.tags = {"test_bus_tag"};
     classes.add(bus);
     engine::roads::lanes::LaneGraphBuild asPointsReport, swept;   // what building each lane level reported
-    const engine::LaneGraph asPoints = builtFor(*roads, classes, false, &asPointsReport);
-    const engine::LaneGraph g = builtFor(*roads, classes, true, &swept);
+    const engine::RoadModel asPointsModel = builtFor(*roads, classes, false, &asPointsReport);
+    const engine::RoadModel model = builtFor(*roads, classes, true, &swept);
+    const engine::LaneGraph& asPoints = asPointsModel.laneLevel;
+    const engine::LaneGraph& g = model.laneLevel;
     const RouteClass car = bindRouteClass(g, classes.at(0)), longBody = bindRouteClass(g, classes.at(1));
     // The connectors open to the bus swept as a point and closed to it swept at its length, open to the car either way.
     uint32_t closedForLength = 0, routed = 0;
@@ -642,8 +645,8 @@ TEST_CASE(route_a_long_body_is_never_sent_round_a_turn_its_swing_takes_off_the_r
         const engine::PathId from = p.from, to = g.nextPaths[p.next.first];
         const PathPoint start = at(from, g.paths[from.index].length * 0.5);
         const PathPoint end = at(to, std::min<Real>(10, g.paths[to.index].length * 0.5));
-        const Route carRoute = findRoute(g, studyRoads(g), car, start, end);
-        const Route busRoute = findRoute(g, studyRoads(g), longBody, start, end);
+        const Route carRoute = findRoute(model, studyRoads(model), car, start, end);
+        const Route busRoute = findRoute(model, studyRoads(model), longBody, start, end);
         bool carTurns = false, busTurns = false;
         for (const RouteTurn& t : carRoute.turns) carTurns = carTurns || t.connector == engine::PathId(c);
         for (const RouteTurn& t : busRoute.turns) busTurns = busTurns || t.connector == engine::PathId(c);

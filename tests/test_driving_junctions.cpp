@@ -96,16 +96,17 @@ RuleSet rulesWith(const ControlKind& k, DrivesOn side = DrivesOn::Left) {
     return r;
 }
 
-// The table for `g` under `r`: every junction carries r's one control.
-RightOfWay tableFor(engine::LaneGraph& g, const RuleSet& r) {
-    g.controlNames = {r.controls[0].name};
+// The table for road `m` under `r`: every junction states r's one control.
+RightOfWay tableFor(engine::RoadModel& m, const RuleSet& r) {
+    engine::LaneGraph& g = m.laneLevel;
+    for (uint32_t j = 0; j < g.junctions.size(); ++j) driving_test::stateControl(m, engine::JunctionId(j), r.controls[0].name);
     if (g.regulationKindNames.empty()) g.regulationKindNames = {"stop"};
     RoadRules rr;
     FactRegistry none;
     std::vector<std::string> problems;
-    CHECK(buildRoadRules(g, r, none, rr, &problems));
+    CHECK(buildRoadRules(m, r, none, rr, &problems));
     for (const std::string& p : problems) std::printf("    %s\n", p.c_str());
-    return buildRightOfWay(g, r, rr);
+    return buildRightOfWay(m, r, rr);
 }
 
 // ---- The test junction's connectors by name ------------------------------------------------------------------------------
@@ -178,10 +179,10 @@ bool kerbThenMovement(const Turn& a, const Turn& b, bool kerb, bool movement, Gi
 template <typename Fn>
 int checkMeetings(const TestRoads& t, const RightOfWay& row, uint32_t r, uint32_t c, Fn expect) {
     const std::map<uint32_t, Turn> names = connectorsOf(t, r, c);
-    const engine::Junction& jn = t.graph.junctions[t.junction(r, c).index];
+    const engine::Junction& jn = t.model.laneLevel.junctions[t.junction(r, c).index];
     int checked = 0, crosses = 0, joins = 0, wrong = 0;
     for (uint32_t k = jn.crossings.first; k < jn.crossings.end(); ++k) {
-        const engine::CrossingPoint& rec = t.graph.crossings[k];
+        const engine::CrossingPoint& rec = t.model.laneLevel.crossings[k];
         if (rec.otherSide != engine::OtherSide::Path) continue;
         const Turn a = names.at(rec.a.index), b = names.at(rec.other);
         const uint32_t phases = row.junctions[t.junction(r, c).index].phaseCount();
@@ -219,10 +220,10 @@ int checkMeetings(const TestRoads& t, const RightOfWay& row, uint32_t r, uint32_
 std::vector<uint32_t> lightsOf(const TestRoads& t, const RightOfWay& row, uint32_t r, uint32_t c, uint32_t phase,
                                Light which) {
     std::vector<uint32_t> out;
-    const engine::Junction& jn = t.graph.junctions[t.junction(r, c).index];
+    const engine::Junction& jn = t.model.laneLevel.junctions[t.junction(r, c).index];
     for (uint32_t i = 0; i < jn.connectors.count; ++i) {
-        const engine::PathId p = t.graph.junctionConnectors[jn.connectors.first + i];
-        if (row.light(t.graph, p, phase) == which) out.push_back(p.index);
+        const engine::PathId p = t.model.laneLevel.junctionConnectors[jn.connectors.first + i];
+        if (row.light(t.model.laneLevel, p, phase) == which) out.push_back(p.index);
     }
     return out;
 }
@@ -281,7 +282,7 @@ Expect bySignal(const Turn& a, const Turn& b, Light la, Light lb) {
 
 TEST_CASE(junction_table_1_four_way_lights_two_phases) {
     TestRoads t = driving_test::gridRoads(3, 3);
-    const RightOfWay row = tableFor(t.graph, rulesWith(signal(false)));
+    const RightOfWay row = tableFor(t.model,rulesWith(signal(false)));
     const JunctionRules& jr = row.junctions[t.junction(1, 1).index];
     CHECK(jr.phases.count == 2u);
     // By hand: the approaches heading east and west share phase 0 (their far turns giving way), north and south phase 1;
@@ -310,13 +311,13 @@ TEST_CASE(junction_table_2b_four_way_far_turns_protected_by_warrant) {
     w.hasSource = true;
     w.approachesAtLeast = 4;
     k.protectedWhen = {w};
-    const RightOfWay row = tableFor(t.graph, rulesWith(k));
+    const RightOfWay row = tableFor(t.model,rulesWith(k));
     const engine::JunctionId j = t.junction(1, 1);
     const JunctionRules& jr = row.junctions[j.index];
     std::printf("    protected: %u turns over the grid, %u phases at the four-way\n", row.counts.protectedTurns,
                 jr.phases.count);
     CHECK(jr.phases.count > 2u);
-    const engine::LaneGraph& g = t.graph;
+    const engine::LaneGraph& g = t.model.laneLevel;
     const engine::Junction& jn = g.junctions[j.index];
     // WHICH TURNS ARE PROTECTED is worked out here from the scene, not read back from the table: the warrant holds only
     // at the grid's one four-way, and the turns it protects are the control's gives-way-on-green movement, the far
@@ -350,14 +351,14 @@ TEST_CASE(junction_table_2b_four_way_far_turns_protected_by_warrant) {
     }
     k.protectedWhen[0].approachesAtLeast = 5;
     TestRoads t2 = driving_test::gridRoads(3, 3);
-    const RightOfWay plain = tableFor(t2.graph, rulesWith(k));
+    const RightOfWay plain = tableFor(t2.model,rulesWith(k));
     CHECK(plain.counts.protectedTurns == 0u);
     CHECK(plain.junctions[t2.junction(1, 1).index].phases.count == 2u);
 }
 
 TEST_CASE(junction_table_2_four_way_lights_with_far_turn_arrows) {
     TestRoads t = driving_test::gridRoads(3, 3);
-    const RightOfWay row = tableFor(t.graph, rulesWith(signal(true)));
+    const RightOfWay row = tableFor(t.model,rulesWith(signal(true)));
     const JunctionRules& jr = row.junctions[t.junction(1, 1).index];
     // By hand: an arrow for the east and west far turns, then east and west; an arrow for the north and south far turns,
     // then north and south.
@@ -387,7 +388,7 @@ TEST_CASE(junction_table_2_four_way_lights_with_far_turn_arrows) {
 
 TEST_CASE(junction_table_3_all_way_stop) {
     TestRoads t = driving_test::gridRoads(3, 3);
-    const RightOfWay row = tableFor(t.graph, rulesWith(allWayStop()));
+    const RightOfWay row = tableFor(t.model,rulesWith(allWayStop()));
     CHECK(row.junctions[t.junction(1, 1).index].phases.count == 0u);
     // By hand: every pair is asked while driving; if that ties, the one from the other's kerb side goes first, and
     // between approaches facing each other, straight on before the near turn before the far turn.
@@ -408,7 +409,7 @@ TEST_CASE(junction_table_3_all_way_stop) {
 TEST_CASE(junction_table_4_side_road_stop_sign_at_a_t) {
     // A grid two junctions deep and three wide: junction (0, 1) is a T, its side road arriving heading south.
     TestRoads t = driving_test::gridRoads(2, 3);
-    engine::LaneGraph& g = t.graph;
+    engine::LaneGraph& g = t.model.laneLevel;
     const engine::PathId side = t.laneArriving(0, 1, kSouth, 0);
     g.regulationKindNames = {"stop"};
     engine::Regulation stop;
@@ -418,7 +419,7 @@ TEST_CASE(junction_table_4_side_road_stop_sign_at_a_t) {
     g.regulations = {stop};
     g.paths[side.index].regulations = engine::Range{0, 1};
     CHECK(engine::validate(g).empty());
-    const RightOfWay row = tableFor(g, rulesWith(minorStop()));
+    const RightOfWay row = tableFor(t.model, rulesWith(minorStop()));
     const JunctionRules& jr = row.junctions[t.junction(0, 1).index];
     CHECK(jr.approaches.count == 3u);
     // By hand: the side road gives way to the main road by its sign; on the main road, straight on before the near
@@ -445,7 +446,7 @@ TEST_CASE(junction_table_4_side_road_stop_sign_at_a_t) {
 
 TEST_CASE(junction_table_5_four_way_no_signs) {
     TestRoads t = driving_test::gridRoads(3, 3);
-    const RightOfWay row = tableFor(t.graph, rulesWith(unmarked()));
+    const RightOfWay row = tableFor(t.model,rulesWith(unmarked()));
     // By hand: asked while driving; if that ties, the one from the other's kerb side; approaches facing each other have
     // nothing more to ask, so the lower path id gives way (and the loader notes it).
     checkMeetings(t, row, 1, 1, [&](const Turn& a, const Turn& b, uint32_t) {
@@ -464,10 +465,10 @@ TEST_CASE(junction_table_5_four_way_no_signs) {
 TEST_CASE(junction_table_6_mirrored_and_flipped_is_the_same) {
     for (const ControlKind& k : {signal(true), allWayStop(), unmarked(), minorStop()}) {
         TestRoads t = driving_test::gridRoads(3, 3);
-        engine::LaneGraph mirrored = t.graph;
-        for (engine::Vec2& p : mirrored.points) p.x = -p.x;
-        for (engine::Vec2& p : mirrored.planPoints) p.x = -p.x;
-        const RightOfWay a = tableFor(t.graph, rulesWith(k, DrivesOn::Left));
+        engine::RoadModel mirrored = t.model;
+        for (engine::Vec2& p : mirrored.laneLevel.points) p.x = -p.x;
+        for (engine::Vec2& p : mirrored.laneLevel.planPoints) p.x = -p.x;
+        const RightOfWay a = tableFor(t.model,rulesWith(k, DrivesOn::Left));
         const RightOfWay b = tableFor(mirrored, rulesWith(k, DrivesOn::Right));
         CHECK(a.answers == b.answers);
         CHECK(a.lights == b.lights);
@@ -519,7 +520,7 @@ namespace {
 // keep their ends at the junction and swing their starts round), and states or un-states it and the road across the
 // junction as one road carrying on through.
 void bendAndState(TestRoads& t, Heading in, double degrees, bool statedThrough) {
-    engine::LaneGraph& g = t.graph;
+    engine::LaneGraph& g = t.model.laneLevel;
     const double kDeg = 3.14159265358979323846 / 180;
     const engine::Vec2 d = driving_test::headingVector(in);
     const engine::Vec2 turned(d.x * std::cos(degrees * kDeg) - d.y * std::sin(degrees * kDeg),
@@ -539,7 +540,7 @@ void bendAndState(TestRoads& t, Heading in, double degrees, bool statedThrough) 
 bool tableFaces(const TestRoads& t, const RightOfWay& row, Heading a, Heading b) {
     const uint32_t ca = row.paths[t.connector(1, 1, a, 0, a, 0).index].approach;
     const uint32_t cb = row.paths[t.connector(1, 1, b, 0, b, 0).index].approach;
-    return approachesFace(t.graph, row.approaches[ca], row.approaches[cb]);
+    return approachesFace(t.model.laneLevel, row.approaches[ca], row.approaches[cb]);
 }
 
 // In some phase the far turn from `a` and the straight-on from `b` (whose paths cross) are both green.
@@ -548,7 +549,7 @@ bool greenTogether(const TestRoads& t, const RightOfWay& row, Heading a, Heading
     const engine::PathId straight = t.connector(1, 1, b, 0, b, 0);
     const JunctionRules& jr = row.junctions[t.junction(1, 1).index];
     for (uint32_t ph = 0; ph < jr.phases.count; ++ph)
-        if (row.light(t.graph, far, ph) == Light::Green && row.light(t.graph, straight, ph) == Light::Green) return true;
+        if (row.light(t.model.laneLevel, far, ph) == Light::Green && row.light(t.model.laneLevel, straight, ph) == Light::Green) return true;
     return false;
 }
 
@@ -561,7 +562,7 @@ TEST_CASE(junction_table_7b_facing_is_the_stated_through_pair_not_the_angle) {
     // 1. The plain grid: east-west and north-south are stated pairs in line. Two phases.
     {
         TestRoads t = driving_test::gridRoads(3, 3);
-        const RightOfWay row = tableFor(t.graph, rulesWith(signal(false)));
+        const RightOfWay row = tableFor(t.model,rulesWith(signal(false)));
         CHECK(tableFaces(t, row, kEast, kWest) && tableFaces(t, row, kNorth, kSouth));
         CHECK(!tableFaces(t, row, kEast, kNorth));
         CHECK(row.junctions[t.junction(1, 1).index].phases.count == 2u);
@@ -571,7 +572,7 @@ TEST_CASE(junction_table_7b_facing_is_the_stated_through_pair_not_the_angle) {
     {
         TestRoads t = driving_test::gridRoads(3, 3);
         bendAndState(t, kWest, 34, true);
-        const RightOfWay row = tableFor(t.graph, rulesWith(signal(false)));
+        const RightOfWay row = tableFor(t.model,rulesWith(signal(false)));
         CHECK(tableFaces(t, row, kEast, kWest));
         CHECK(row.junctions[t.junction(1, 1).index].phases.count == 2u);
         CHECK(greenTogether(t, row, kEast, kWest));
@@ -580,7 +581,7 @@ TEST_CASE(junction_table_7b_facing_is_the_stated_through_pair_not_the_angle) {
     {
         TestRoads t = driving_test::gridRoads(3, 3);
         bendAndState(t, kWest, 45, true);
-        const RightOfWay row = tableFor(t.graph, rulesWith(signal(false)));
+        const RightOfWay row = tableFor(t.model,rulesWith(signal(false)));
         CHECK(tableFaces(t, row, kEast, kWest));
         CHECK(row.junctions[t.junction(1, 1).index].phases.count == 2u);
         CHECK(greenTogether(t, row, kEast, kWest));
@@ -590,7 +591,7 @@ TEST_CASE(junction_table_7b_facing_is_the_stated_through_pair_not_the_angle) {
     {
         TestRoads t = driving_test::gridRoads(3, 3);
         bendAndState(t, kWest, 0, false);
-        const RightOfWay row = tableFor(t.graph, rulesWith(signal(false)));
+        const RightOfWay row = tableFor(t.model,rulesWith(signal(false)));
         CHECK(!tableFaces(t, row, kEast, kWest));
         CHECK(tableFaces(t, row, kNorth, kSouth));
         CHECK(row.junctions[t.junction(1, 1).index].phases.count == 3u);
@@ -602,7 +603,7 @@ TEST_CASE(junction_table_7b_facing_is_the_stated_through_pair_not_the_angle) {
     {
         TestRoads t = driving_test::gridRoads(3, 3);
         bendAndState(t, kWest, 34, false);
-        const RightOfWay row = tableFor(t.graph, rulesWith(signal(false)));
+        const RightOfWay row = tableFor(t.model,rulesWith(signal(false)));
         CHECK(!tableFaces(t, row, kEast, kWest));
         CHECK(row.junctions[t.junction(1, 1).index].phases.count == 3u);
         CHECK(!greenTogether(t, row, kEast, kWest));
@@ -614,15 +615,15 @@ TEST_CASE(junction_table_7b_facing_is_the_stated_through_pair_not_the_angle) {
 TEST_CASE(junction_table_8_as_text) {
     TestRoads t = driving_test::gridRoads(3, 3);
     const RuleSet r = rulesWith(signal(true));
-    const RightOfWay row = tableFor(t.graph, r);
-    const std::string text = describeJunctionRules(t.graph, r, row, t.junction(1, 1));
+    const RightOfWay row = tableFor(t.model,r);
+    const std::string text = describeJunctionRules(t.model,r, row, t.junction(1, 1));
     std::printf("%s", text.substr(0, 900).c_str());
     CHECK(text.find("control \"signal_arrow\"") != std::string::npos);
     CHECK(text.find("phase 0 (arrow): green:") != std::string::npos);
     CHECK(text.find("the far turn from") != std::string::npos);
     CHECK(text.find("gives way to straight on from") != std::string::npos);
     CHECK(text.find(" left") == std::string::npos && text.find(" right") == std::string::npos);
-    CHECK(describeJunctionRules(t.graph, r, row, t.junction(1, 1)) == text);   // same table, same text
+    CHECK(describeJunctionRules(t.model,r, row, t.junction(1, 1)) == text);   // same table, same text
     CHECK(describeRightOfWay(row).find("right of way: 9 junctions") == 0);
 }
 
@@ -634,15 +635,15 @@ TEST_CASE(junction_plan_14_waiting_points_clear_of_every_stretch) {
     spec.lanesEachWay = 2;
     spec.cornerRadius = 25;
     TestRoads t = driving_test::gridRoads(3, 3, spec);
-    const RightOfWay row = tableFor(t.graph, rulesWith(allWayStop()));
-    const engine::Junction& jn = t.graph.junctions[t.junction(1, 1).index];
+    const RightOfWay row = tableFor(t.model,rulesWith(allWayStop()));
+    const engine::Junction& jn = t.model.laneLevel.junctions[t.junction(1, 1).index];
     int inside = 0;
     for (uint32_t i = 0; i < jn.connectors.count; ++i) {
-        const engine::PathId c = t.graph.junctionConnectors[jn.connectors.first + i];
-        const engine::Path& path = t.graph.paths[c.index];
+        const engine::PathId c = t.model.laneLevel.junctionConnectors[jn.connectors.first + i];
+        const engine::Path& path = t.model.laneLevel.paths[c.index];
         JunctionPlan shortCar, longCar;
-        findWaitingPoints(t.graph, row, c, 4.5, shortCar);
-        findWaitingPoints(t.graph, row, c, 18.0, longCar);
+        findWaitingPoints(t.model.laneLevel, row, c, 4.5, shortCar);
+        findWaitingPoints(t.model.laneLevel, row, c, 18.0, longCar);
         CHECK(shortCar.waitingCount >= 1 && shortCar.waitingAt[0] == 0);
         CHECK(longCar.waitingCount <= shortCar.waitingCount);
         for (const JunctionPlan* p : {&shortCar, &longCar}) {
@@ -651,7 +652,7 @@ TEST_CASE(junction_plan_14_waiting_points_clear_of_every_stretch) {
                 const Real s = p->waitingAt[w];
                 CHECK(s > p->waitingAt[w - 1]);
                 for (uint32_t k = path.crossings.first; k < path.crossings.end(); ++k) {
-                    const engine::CrossingPoint& rec = t.graph.crossings[t.graph.pathCrossings[k].index];
+                    const engine::CrossingPoint& rec = t.model.laneLevel.crossings[t.model.laneLevel.pathCrossings[k].index];
                     if (rec.meeting == engine::Meeting::Split) continue;
                     const Real from = rec.a == c ? rec.aFrom : rec.otherFrom, to = rec.a == c ? rec.aTo : rec.otherTo;
                     CHECK(!(from < s && to > s - length));   // no part of the body [s - length, s] in the stretch
@@ -717,7 +718,7 @@ TEST_CASE(junction_table_8b_control_table_read_from_lua) {
     RoadRules rr;
     FactRegistry none;
     std::vector<std::string> problems;
-    CHECK(!buildRoadRules(t.graph, r, none, rr, &problems));
+    CHECK(!buildRoadRules(t.model, r, none, rr, &problems));
     CHECK(problems.size() == 1u && problems[0].find("controlled by \"test_uncontrolled\"") != std::string::npos);
 }
 
@@ -742,7 +743,7 @@ rule_set = { name = 'd1_plans', drives_on = 'left', ranks = {}, devices = {},
   } }
 )LUA";
 
-bool giveRules(Driving& d, const engine::LaneGraph& g) {
+bool giveRules(Driving& d) {
     FactRegistry facts;
     if (!registerBuiltInFacts(facts) || !registerMoveNeeds(facts)) return false;
     engine::ScriptVM vm;
@@ -757,7 +758,7 @@ bool giveRules(Driving& d, const engine::LaneGraph& g) {
     }
     RoadRules roadRules;
     std::vector<std::string> found;
-    if (!buildRoadRules(g, ruleSet, facts, roadRules, &found)) {
+    if (!buildRoadRules(*d.model(), ruleSet, facts, roadRules, &found)) {
         for (const std::string& f : found) std::printf("    %s\n", f.c_str());
         return false;
     }
@@ -771,11 +772,11 @@ PathPoint at(engine::PathId path, Real along) {
     return p;
 }
 
-void setUp(Driving& d, const engine::LaneGraph& g) {
+void setUp(Driving& d) {
     VehicleClasses classes;
     classes.add(driving_test::testCarClass());
     d.setVehicleClasses(classes);
-    CHECK(giveRules(d, g));
+    CHECK(giveRules(d));
 }
 
 // One car, `from` its lane at `along`, bound for `to` at `toAlong`; one tick (its first decision). Its plans after it.
@@ -790,10 +791,10 @@ const JunctionPlans* planFor(Driving& d, engine::PathId from, Real along, engine
 
 // Checks the one plan a car arriving at junction (r, c) heading `in` makes for leaving heading `out`.
 void checkOnePlan(const TestRoads& t, uint32_t r, uint32_t c, Heading in, Heading out, engine::Turn turn) {
-    Driving d(&t.graph);
-    setUp(d, t.graph);
+    Driving d(&t.model);
+    setUp(d);
     const engine::PathId from = t.laneArriving(r, c, in, 0);
-    const Real along = t.graph.paths[from.index].length - 30;
+    const Real along = t.model.laneLevel.paths[from.index].length - 30;
     const JunctionPlans* plans = planFor(d, from, along, t.laneLeaving(r, c, out, 0), 20);
     CHECK(plans && plans->count >= 1);
     if (!plans || plans->count == 0) return;
@@ -801,11 +802,11 @@ void checkOnePlan(const TestRoads& t, uint32_t r, uint32_t c, Heading in, Headin
     const engine::PathId conn = t.connector(r, c, in, 0, out, 0);
     CHECK(p.junction == t.junction(r, c));
     CHECK(p.connector == conn);
-    CHECK(p.turn == turn && t.graph.paths[conn.index].turn == turn);
-    CHECK(p.crossingCount == t.graph.paths[conn.index].crossings.count);
+    CHECK(p.turn == turn && t.model.turnOf(conn) == turn);
+    CHECK(p.crossingCount == t.model.laneLevel.paths[conn.index].crossings.count);
     CHECK(p.waitingCount >= 1 && p.waitingAt[0] == 0);
     const Car* car = d.car(CarId(1));
-    CHECK(car && std::fabs((p.startOdometer - car->odometer) - (t.graph.paths[from.index].length - car->along)) < 1e-6);
+    CHECK(car && std::fabs((p.startOdometer - car->odometer) - (t.model.laneLevel.paths[from.index].length - car->along)) < 1e-6);
     // The driver card shows it, and the trace noted it.
     const std::string card = d.describeCar(CarId(1));
     CHECK(card.find("junction " + std::to_string(p.junction.index) + ": " + turnWords(turn) + " by connector " +
@@ -828,10 +829,10 @@ TEST_CASE(junction_plan_9_each_turn_at_a_four_way_and_a_t) {
         checkOnePlan(t, 1, 1, kEast, driving_test::nearTurnFrom(kEast, side), engine::Turn::NearTurn);
         checkOnePlan(t, 1, 1, kEast, driving_test::farTurnFrom(kEast, side), engine::Turn::FarTurn);
         // The far turn's card, printed once for a person to read.
-        Driving d(&t.graph);
-        setUp(d, t.graph);
+        Driving d(&t.model);
+        setUp(d);
         const engine::PathId from = t.laneArriving(1, 1, kEast, 0);
-        planFor(d, from, t.graph.paths[from.index].length - 30, t.laneLeaving(1, 1, driving_test::farTurnFrom(kEast, side), 0), 20);
+        planFor(d, from, t.model.laneLevel.paths[from.index].length - 30, t.laneLeaving(1, 1, driving_test::farTurnFrom(kEast, side), 0), 20);
         std::printf("%s", d.describeCar(CarId(1)).c_str());
     }
     {
@@ -841,7 +842,7 @@ TEST_CASE(junction_plan_9_each_turn_at_a_four_way_and_a_t) {
             for (const Heading out : kHeadings) {
                 const engine::PathId c = t.connector(0, 1, in, 0, out, 0);
                 if (!c.valid()) continue;
-                checkOnePlan(t, 0, 1, in, out, t.graph.paths[c.index].turn);
+                checkOnePlan(t, 0, 1, in, out, t.model.turnOf(c));
             }
     }
 }
@@ -859,8 +860,8 @@ TEST_CASE(junction_plan_11_two_junctions_close_together) {
     TestRoadSpec spec;
     spec.roadLength = 12;   // 12 m between boxes: the second junction is in view before the first is cleared
     const TestRoads t = driving_test::gridRoads(3, 4, spec);
-    Driving d(&t.graph);
-    setUp(d, t.graph);
+    Driving d(&t.model);
+    setUp(d);
     const JunctionPlans* plans = planFor(d, t.laneArriving(1, 1, kEast, 0), 5, t.laneLeaving(1, 2, kEast, 0), 8);
     CHECK(plans && plans->count == 2);
     if (!plans || plans->count != 2) return;
@@ -891,11 +892,11 @@ TEST_CASE(junction_plan_11_two_junctions_close_together) {
 
 TEST_CASE(junction_plan_12_dropped_when_the_route_changes) {
     const TestRoads t = driving_test::gridRoads(3, 3);
-    Driving d(&t.graph);
-    setUp(d, t.graph);
+    Driving d(&t.model);
+    setUp(d);
     const engine::PathId from = t.laneArriving(1, 1, kEast, 0);
     TripId trip;
-    const JunctionPlans* plans = planFor(d, from, t.graph.paths[from.index].length - 30, t.laneLeaving(1, 1, kEast, 0), 20, &trip);
+    const JunctionPlans* plans = planFor(d, from, t.model.laneLevel.paths[from.index].length - 30, t.laneLeaving(1, 1, kEast, 0), 20, &trip);
     CHECK(plans && plans->count == 1 && plans->plans[0].turn == engine::Turn::Straight);
     // A new destination, through the far turn: the plan goes at once, noted; the next decision makes the new one.
     const Heading far = driving_test::farTurnFrom(kEast, DrivesOn::Left);
@@ -930,24 +931,24 @@ TEST_CASE(junction_plan_13_a_refused_turn) {
     spec.refused.push_back(refused);
     const TestRoads t = driving_test::gridRoads(3, 3, spec);
     CHECK(!t.connector(1, 1, kEast, 0, far, 0).valid());
-    CHECK(t.graph.junctions[t.junction(1, 1).index].connectors.count == 11u);
+    CHECK(t.model.laneLevel.junctions[t.junction(1, 1).index].connectors.count == 11u);
     // The table has nothing to say about a turn that is not there, and the rest of the junction is settled as before.
     TestRoads whole = driving_test::gridRoads(3, 3);
-    engine::LaneGraph g = t.graph;
+    engine::RoadModel g = t.model;
     const RightOfWay row = tableFor(g, rulesWith(allWayStop()));
-    const RightOfWay rowWhole = tableFor(whole.graph, rulesWith(allWayStop()));
+    const RightOfWay rowWhole = tableFor(whole.model,rulesWith(allWayStop()));
     CHECK(row.counts.meetings < rowWhole.counts.meetings);
     // A car bound where only the refused turn leads directly is routed another way, and plans for the turn it takes.
-    Driving d(&t.graph);
-    setUp(d, t.graph);
+    Driving d(&t.model);
+    setUp(d);
     const engine::PathId from = t.laneArriving(1, 1, kEast, 0);
-    const JunctionPlans* plans = planFor(d, from, t.graph.paths[from.index].length - 30, t.laneLeaving(1, 1, far, 0), 20);
+    const JunctionPlans* plans = planFor(d, from, t.model.laneLevel.paths[from.index].length - 30, t.laneLeaving(1, 1, far, 0), 20);
     CHECK(plans && plans->count >= 1);
     if (!plans || plans->count == 0) return;
     const JunctionPlan& p = plans->plans[0];
     CHECK(p.junction == t.junction(1, 1));
-    CHECK(p.connector.valid() && t.graph.paths[p.connector.index].junction == t.junction(1, 1));
-    CHECK(p.turn != engine::Turn::FarTurn && t.graph.paths[p.connector.index].turn == p.turn);
+    CHECK(p.connector.valid() && t.model.laneLevel.paths[p.connector.index].junction == t.junction(1, 1));
+    CHECK(p.turn != engine::Turn::FarTurn && t.model.turnOf(p.connector) == p.turn);
 }
 
 // ---- 15. the same every run; the state hash untouched by plans -----------------------------------------------------------
@@ -962,11 +963,11 @@ Run runGrid(bool trace) {
     TestRoadSpec spec;
     spec.roadLength = 40;
     const TestRoads t = driving_test::gridRoads(3, 3, spec);
-    Driving d(&t.graph);
+    Driving d(&t.model);
     DrivingSettings settings;
     settings.trace = trace;
     d.setSettings(settings);
-    setUp(d, t.graph);
+    setUp(d);
     // Eight cars, two from each arm of the middle junction, each bound through it a different way.
     uint32_t id = 0;
     for (const Heading in : kHeadings)

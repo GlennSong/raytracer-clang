@@ -303,7 +303,8 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     if (!d) return;
     CHECK(d->hasRules());
     CHECK(sim.drivingHost().active());
-    const engine::LaneGraph& roads = *d->roads();
+    const engine::RoadModel& roadModel = *d->model();   // the road the driving holds: its lane level, and the facts asked of it
+    const engine::LaneGraph& roads = roadModel.laneLevel;
     std::printf("    [lab-v2] at load: %s\n", sim.drivingHost().describe(*d).c_str());
     // RT_LAB_LANEGRAPH_DUMP=<file>: the lane graph the level drives on, as text (its path and crossing ids are the ones
     // every line below names; a graph built by lanes_tool from the plan alone may number them differently).
@@ -335,7 +336,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         uint32_t marked = 0, markedUnderAJunction = 0, byStatedMerge = 0, leftToLowerId = 0;
         for (uint32_t c = 0; c < roads.crossings.size(); ++c) {
             const engine::CrossingPoint& x = roads.crossings[c];
-            if (x.otherSide != engine::OtherSide::Path || !x.merging.valid()) continue;
+            if (x.otherSide != engine::OtherSide::Path || !roadModel.mergingAt(x).valid()) continue;
             ++marked;
             statedMerges.insert(x.modelConnection);
             markedUnderAJunction += x.junction.valid();
@@ -480,22 +481,26 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     // the highest posted limit, free flow as a share of the limit, and what held its cars.
     std::map<std::string, SpeedTally> byClass;
     SpeedTally everyone;
-    NameIndex fastestClass = kNoName;
+    std::string fastestClass;   // (empty: none)
     Real fastestLimit = 0;
-    for (const engine::Path& p : roads.paths)
-        if (p.kind == engine::PathKind::Lane && p.section.valid() && p.speedLimit > fastestLimit) {
-            fastestLimit = p.speedLimit;
-            fastestClass = roads.sections[p.section.index].roadClass;
+    for (uint32_t i = 0; i < roads.paths.size(); ++i) {
+        const engine::Path& p = roads.paths[i];
+        const Real posted = roadModel.postedLimit(engine::PathId(i));
+        if (p.kind == engine::PathKind::Lane && p.section.valid() && posted > fastestLimit) {
+            fastestLimit = posted;
+            fastestClass = roadModel.roadClassOf(engine::PathId(i));
         }
+    }
     Real freeShareSum = 0, freeSeconds = 0, fastestSeconds = 0;
     // what held cars on the fastest class's lanes: car-seconds, and their speed over the posted limit summed over them
     std::map<std::string, std::pair<Real, Real>> fastestHeldBy;
     // the ramps (ADR-0426): each ramp lane on the road model (Path::modelLane) -> the cars seen on it
     std::map<uint32_t, std::set<uint32_t>> carsOnRamp;
-    for (const engine::Path& p : roads.paths)
-        if (p.kind == engine::PathKind::Lane && p.section.valid() &&
-            roads.roadClassNames[roads.sections[p.section.index].roadClass] == "ramp")
+    for (uint32_t i = 0; i < roads.paths.size(); ++i) {
+        const engine::Path& p = roads.paths[i];
+        if (p.kind == engine::PathKind::Lane && p.section.valid() && roadModel.roadClassOf(engine::PathId(i)) == "ramp")
             carsOnRamp[p.modelLane];
+    }
     for (int i = 1; i <= steps; ++i) {
         city.step(lc.world, kStep);
         const Real now = i * kStep;
@@ -503,16 +508,14 @@ TEST_CASE(level_traffic_lab_v2_drives) {
             if (!c.driven) continue;
             const engine::Path& p = roads.paths[c.path.index];
             const bool lane = p.kind == engine::PathKind::Lane && p.section.valid();
-            const NameIndex cls = lane ? roads.sections[p.section.index].roadClass : kNoName;
-            byClass[lane && cls < roads.roadClassNames.size() ? "lanes, " + roads.roadClassNames[cls]
-                                                              : std::string("connectors (inside junctions)")]
-                .add(c.speed, kStep);
+            const std::string cls = lane ? roadModel.roadClassOf(c.path) : std::string();   // (empty: none)
+            byClass[!cls.empty() ? "lanes, " + cls : std::string("connectors (inside junctions)")].add(c.speed, kStep);
             // THE RAMPS USED (ADR-0426): every car seen on a ramp's lane, by the ramp's lane on the road model
-            if (lane && cls < roads.roadClassNames.size() && roads.roadClassNames[cls] == "ramp")
-                carsOnRamp[p.modelLane].insert(c.id.index);
+            if (cls == "ramp") carsOnRamp[p.modelLane].insert(c.id.index);
             everyone.add(c.speed, kStep);
             if (!lane || cls != fastestClass) continue;
-            if (!(p.speedLimit > 0)) continue;
+            const Real posted = roadModel.postedLimit(c.path);
+            if (!(posted > 0)) continue;
             fastestSeconds += kStep;
             const driving::Limit by = c.binding.by;
             const bool ownTop = by == driving::Limit::TopSpeed && c.binding.rule == driving::kNoRule;
@@ -521,11 +524,11 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                                                      : ownTop ? std::string("its own vehicle's top speed")
                                                               : held];
             h.first += kStep;
-            h.second += c.speed / p.speedLimit * kStep;
+            h.second += c.speed / posted * kStep;
             if (by == driving::Limit::CarAhead || by == driving::Limit::Stop || by == driving::Limit::WayEnd || ownTop ||
                 c.speed < kCruisingShare * c.held.topSpeed)
                 continue;
-            freeShareSum += c.speed / p.speedLimit * kStep;
+            freeShareSum += c.speed / posted * kStep;
             freeSeconds += kStep;
         }
         // RT_LAB_WATCH=<car>,<from s>,<to s>: that car's card and the announcements on its junctions' crossing points,
@@ -573,7 +576,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                 x.restLeftAt = r.restLeftAt;
                 x.restDistance = (c.odometer - c.along) - r.restOdometer;
                 x.restCameAt = r.restCameAt;
-                x.straight = roads.paths[c.path.index].turn == engine::Turn::Straight;
+                x.straight = roadModel.turnOf(c.path) == engine::Turn::Straight;
                 lineCrossings[fp->second].push_back(x);
                 // AT LIGHTS (issue #261): what the car's turn showed as the tick began (what its driver decided by), and
                 // how long it stood on the lane it arrived by.
@@ -586,7 +589,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                     char note[160];
                     std::snprintf(note, sizeof note, "car %u %s %s lamp %s rest %.2f-%.2f from %.1f m speed %.1f",
                                   c.id.index, d->vehicleClasses().at(c.vehicleClass).name.c_str(),
-                                  kTurns[static_cast<int>(roads.paths[c.path.index].turn)],
+                                  kTurns[static_cast<int>(roadModel.turnOf(c.path))],
                                   kLamps[static_cast<int>(lamp)], r.restCameAt, r.restLeftAt, x.restDistance, c.speed);
                     lineCrossingNotes[fp->second].push_back(note);
                 }
@@ -933,7 +936,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     std::printf("    [lab-v2] the fastest class (%s, posted %.1f m/s): free flow (held by no car, stop, way's end or its own "
                 "vehicle's top speed, and cruising) %.0f of %.0f car-seconds, at %.0f%% of the posted limit on average; what held its "
                 "cars (car-seconds, and their mean speed as a share of the limit):\n",
-                fastestClass < roads.roadClassNames.size() ? roads.roadClassNames[fastestClass].c_str() : "none",
+                !fastestClass.empty() ? fastestClass.c_str() : "none",
                 fastestLimit, freeSeconds, fastestSeconds, 100.0 * freeShare);
     for (const std::pair<const std::string, std::pair<Real, Real>>& h : fastestHeldBy)
         std::printf("      %6.0f car-seconds at %3.0f%%: %s\n", h.second.first,
@@ -1163,10 +1166,8 @@ TEST_CASE(level_traffic_lab_v2_soak) {
                 if (!c.driven) continue;
                 const engine::Path& p = roads.paths[c.path.index];
                 const bool lane = p.kind == engine::PathKind::Lane && p.section.valid();
-                const NameIndex cls = lane ? roads.sections[p.section.index].roadClass : kNoName;
-                w.speedByClass[lane && cls < roads.roadClassNames.size() ? roads.roadClassNames[cls]
-                                                                         : std::string("connectors")]
-                    .add(c.speed, kStep);
+                const std::string cls = lane ? d->model()->roadClassOf(c.path) : std::string();   // (empty: none)
+                w.speedByClass[!cls.empty() ? cls : std::string("connectors")].add(c.speed, kStep);
                 // A front leaving a lane for a connector where the lights run: what its lamp showed as the tick began.
                 std::map<uint32_t, uint32_t>::iterator fp = frontPath.find(c.id.index);
                 if (fp != frontPath.end() && fp->second != c.path.index && p.kind == engine::PathKind::Connector &&

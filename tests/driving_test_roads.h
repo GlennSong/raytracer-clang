@@ -5,6 +5,13 @@
 // junctions, each built as a whole, valid lane graph (LaneGraph validate() finds nothing wrong with it) and with names
 // a test can ask for: "the lane leaving junction (r, c) heading east, lane k".
 //
+// EVERY TEST ROAD IS A SMALL ROAD MODEL (ADR-0436), as a level's is: the driving is handed the model and reaches the
+// lane table through it. The lane table (`model.laneLevel`) is laid by hand here; what the road IS -- the limit posted
+// on a stretch and its road class, the control at a junction, the turn a connector takes, which lane joins by a merge
+// -- is stated ON THE MODEL, once, by the four functions below (stateStreet, stateControl, stateTurn, stateMerge), and
+// read back by the same questions the driving asks (RoadModel::postedLimit, roadClassOf, controlAt, turnOf, mergingAt).
+// A test that makes its own little lane table states its facts through the same four.
+//
 // The plan is laid out on compass HEADINGS: east is +x, north is +y (the plan point's second coordinate). Lanes are
 // counted as the lane graph counts them: lane 0 is the OFFSIDE-most (nearest the middle of the road), the last is the
 // KERB-most. Which geometric side of a road the kerb is on is the `drivesOn` parameter, turned into geometry by
@@ -24,7 +31,7 @@
 // Later tasks extend this: add a builder beside these two (a T junction, a ramp, a turn pocket) rather than special
 // cases inside them.
 
-#include "engine/procgen/city/roads/lane_graph.h"
+#include "engine/procgen/city/roads/road_model.h"
 #include "apps/driving/rule_set.h"        // DrivesOn
 #include "apps/driving/vehicle_class.h"
 
@@ -40,6 +47,30 @@ using engine::Real;
 constexpr const char* kTestVehicleTag = "test_general";
 constexpr const char* kTestRoadClass = "test_street";
 constexpr const char* kTestControl = "test_uncontrolled";
+
+// ---- stating a road's facts on a model made by hand (the tests' one way; see the top of this file) ------------------
+// THE ROAD MODEL OF A LANE TABLE LAID BY HAND, with nothing stated yet: no limit, class, control, turn or merge. For a
+// test whose road is its shape alone, or that states its facts next with the functions below.
+inline engine::RoadModel modelOf(engine::LaneGraph table) {
+    engine::RoadModel m;
+    m.laneLevel = std::move(table);
+    return m;
+}
+// A STREET of the model that posts `limit` (metres per second; 0: none posted) and is of class `roadClass` (empty:
+// none), with lane path `lane` on it. Returns the street's place in the model's list, for putting more lanes on it
+// (onStreet).
+uint32_t stateStreet(engine::RoadModel& m, engine::PathId lane, Real limit, const std::string& roadClass = kTestRoadClass);
+// Puts another lane path on a street already stated.
+void onStreet(engine::RoadModel& m, engine::PathId lane, uint32_t street);
+// THE CONTROL at junction `junction` of the lane table: the model gets a junction stating it (or the one the lane
+// table's junction already names is restated).
+void stateControl(engine::RoadModel& m, engine::JunctionId junction, const std::string& control);
+// THE TURN connector `connector` takes: the model gets a stated turn of that kind, which the connector follows.
+void stateTurn(engine::RoadModel& m, engine::PathId connector, engine::Turn turn);
+// A MERGE: lane path `joining` ends into lane path `host`'s lane and gives way. The model gets a lane for each (where
+// the path names none yet) and the connection that says so, and every crossing point where the two paths join names
+// that connection. Returns the connection's place in the model's list.
+uint32_t stateMerge(engine::RoadModel& m, engine::PathId joining, engine::PathId host);
 
 // WHICH WAY A ROAD RUNS on the plan.
 enum class Heading : uint8_t { East, North, West, South };
@@ -84,7 +115,7 @@ struct TestRoadSpec {
 
 // A BUILT NETWORK and the names into it.
 struct TestRoads {
-    engine::LaneGraph graph;
+    engine::RoadModel model;       // the road: its lane table is model.laneLevel
     TestRoadSpec spec;
     uint32_t rows = 0, cols = 0;   // a grid's size in junctions (0 for a straight road)
     uint32_t sectionCount = 0;     // a straight road's sections each way
@@ -116,7 +147,7 @@ struct TestRoads {
     engine::PathId mergeJoining;   // the lane that joins it: the one the roads state merges, and so gives way
     engine::PathId mergeBeyond;    // the one lane both lead into
     // Every crossing record where the two meet (one per pair of body sizes that meet differently), each marked with
-    // the joining lane as the road builder marks a stated merge.
+    // the model's stated merge as the road builder marks one (where `stated`).
     std::vector<engine::CrossingId> mergeJoins;
 
     // Lane k of a section (0 = offside-most); not valid when there is none.
@@ -145,8 +176,8 @@ TestRoads ringRoad(uint32_t sides, const TestRoadSpec& spec = TestRoadSpec());
 // lane width to its kerb side, runs beside it and then tapers into it over the last kMergeTaper metres. Both lead into
 // one lane BEYOND (kMergeBeyondLength metres); there is no junction. The through lane is not cut where the joining lane
 // starts, so a car on it meets nothing until the taper. The crossing records where the two lanes' bodies meet are found
-// by the road builder's own finder, and each is marked with the joining lane (CrossingPoint::merging), as the road
-// builder marks a merge the road model states (ADR-0426); `stated` false leaves them unmarked, two lanes that just
+// by the road builder's own finder, and each names the merge the model states (stateMerge: the joining lane joins the
+// through lane's), as the road builder names one (ADR-0426); `stated` false states no merge, two lanes that just
 // happen to end in one. `joiningLaneFirst`: the joining lane is made first and so has the LOWER path id; otherwise the
 // through lane has (the same road either way: only the ids differ).
 constexpr Real kMergeThroughLength = 400, kMergeAlongside = 150, kMergeTaper = 60, kMergeBeyondLength = 300;

@@ -37,7 +37,7 @@
 //
 // Units: metres, seconds.
 
-#include "engine/procgen/city/roads/lane_graph.h"
+#include "engine/procgen/city/roads/road_model.h"   // the lane level, and the turn each connector takes
 #include "apps/driving/notice.h"          // WayAhead
 #include "apps/driving/conflict.h"            // Question
 #include "apps/driving/right_of_way.h"
@@ -245,8 +245,9 @@ bool findWaitingPoints(const engine::LaneGraph& roads, const RightOfWay& row, en
 // vehicle's length; `tick` and `seconds` stamp the notes. Plans whose connector is still on the way, or still under the
 // car's body, are kept as they are; the rest are dropped (Cleared when the car's front is past the connector's start,
 // else WayChanged); connectors on the way with no plan get one, in way order, up to kMaxJunctionPlans. `tags`: its
-// vehicle class's tags on these roads (findWaitingPoints).
-void updateJunctionPlans(const engine::LaneGraph& roads, const RightOfWay& row, const Car& car, Real carLength,
+// vehicle class's tags on these roads (findWaitingPoints). `model`: the road model whose lane level the car is on (a
+// new plan's turn is the model's: RoadModel::turnOf).
+void updateJunctionPlans(const engine::RoadModel& model, const RightOfWay& row, const Car& car, Real carLength,
                          const WayAhead& way, uint64_t tick, double seconds, JunctionPlans& plans, PlanUpdate& out,
                          engine::TagMask tags = engine::kEveryVehicle);
 

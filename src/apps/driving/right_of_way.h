@@ -21,9 +21,9 @@
 //   - arrived_first: answered while driving. The answer is "ask while driving", and the rest of the list is still
 //     asked, to find the answer to fall back on if asking ties;
 //   - stated_merge: where one of the two paths joined the other's lane by a merge the roads state (a ramp lane running
-//     into the lane beside it, a lane that ends into its neighbour: the lane graph's CrossingPoint::merging, a copy of
-//     the road model's own "lane A merges into lane B"), the one that joined gives way. It says nothing of any other
-//     meeting. Nothing here measures or guesses which lane joined: the record says, or the question passes.
+//     into the lane beside it, a lane that ends into its neighbour: the road model's own "lane A merges into lane
+//     B", asked of it by RoadModel::mergingAt), the one that joined gives way. It says nothing of any other
+//     meeting. Nothing here measures or guesses which lane joined: the model says, or the question passes.
 // If the list runs out with nothing decided, the LOWER PATH ID GIVES WAY, and the table notes the pair.
 //
 // KINDS OF MEETING. A cross or a join is settled as above. A split (two turns from one lane) is settled by nobody: the
@@ -58,7 +58,7 @@
 //
 // Units: metres.
 
-#include "engine/procgen/city/roads/lane_graph.h"
+#include "engine/procgen/city/roads/road_model.h"
 #include "apps/driving/road_rules.h"
 #include "apps/driving/rule_set.h"
 
@@ -191,7 +191,7 @@ struct RightOfWayCounts {
     uint32_t splits = 0;
     uint32_t acrossJunctions = 0;      // filed under no junction
     uint32_t byLowerPathId = 0;        // ... decided (or their fall-back decided) by the lower path id, at some phase
-    // STATED MERGES (CrossingPoint::merging): the meetings the roads mark with the path that joined; of them, those the
+    // STATED MERGES (RoadModel::mergingAt): the meetings where the road model says which path joined; of them, those the
     // one that joined gives way at (or would, if asking while driving ties), by the stated_merge question; and those
     // whose settle list never asks it (each noted when filed under a junction), settled as any other meeting.
     uint32_t statedMerges = 0;
@@ -233,9 +233,10 @@ struct RightOfWay {
     Light light(const engine::LaneGraph& roads, engine::PathId connector, uint32_t phase) const;
 };
 
-// BUILDS THE TABLE for every junction of `roads`. `roadRules` is buildRoadRules' binding (it says which control row each
-// of the graph's control names is, and what each regulation kind means).
-RightOfWay buildRightOfWay(const engine::LaneGraph& roads, const RuleSet& rules, const RoadRules& roadRules);
+// BUILDS THE TABLE for every junction of the road model's lane level. `roadRules` is buildRoadRules' binding (it says
+// which control row each junction's stated control is, and what each regulation kind means). What each connector's
+// turn is and which path joins by a stated merge are asked of the model (RoadModel::turnOf, mergingAt).
+RightOfWay buildRightOfWay(const engine::RoadModel& model, const RuleSet& rules, const RoadRules& roadRules);
 
 // (The phase a junction's table is read at, a pure function of the clock, is signal_programme.h's currentPhase.)
 
@@ -270,7 +271,7 @@ std::string pathTurnWords(const engine::LaneGraph& roads, const RightOfWay& row,
 // ONE JUNCTION'S TABLE AS TEXT: its control and phases, then every meeting of two turns in id order, in words ("the far
 // turn from the north (connector 345) gives way to straight on from the south (connector 350), by movement"). For the
 // driver card and for checking by hand. Same table, same text.
-std::string describeJunctionRules(const engine::LaneGraph& roads, const RuleSet& rules, const RightOfWay& row,
+std::string describeJunctionRules(const engine::RoadModel& model, const RuleSet& rules, const RightOfWay& row,
                                   engine::JunctionId junction);
 // The counts and the notes, as text.
 std::string describeRightOfWay(const RightOfWay& row);
