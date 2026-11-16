@@ -37,8 +37,10 @@
 //     too (ADR-0431) -- between two lanes of a kind the turn table's `lane_lines` names (through lanes), solid within the
 //     road file's `lane_rules.solid_before_stop_line` of the stop line both run to; every other line may be crossed both
 //     ways (beside a lane that begins or ends, or of another kind);
-//   - CONTROLS, SIGNS AND LIMITS: each junction's stated control; each arm's stated signs at the end of every lane
-//     arriving by it; each lane its street's posted limit, each connector the limit of the lane it joins;
+//   - CONTROLS, SIGNS AND LIMITS are NOT copied here (ADR-0436, ADR-0437): a reader asks the model by the ids each
+//     path and junction carries -- the junction's control, the street's posted limit, and the regulations along a
+//     lane path (RoadModel::regulationsAlong: its arm's signs at its end, its street's regulations by station). What
+//     the table adds for that: each lane path's stretch of its road's spine (Path::stationFrom, stationTo);
 //   - the junction's OUTLINE (the area that must not be blocked) runs across each arm's lanes at its stop line, the
 //     arms' lines joined in the junction's stated ring order (its arms' list, road_layout.h armRing, ADR-0427: nothing
 //     sorted here); an outline that still crosses itself, where two arms' stop lines overlap, is reported (corners for

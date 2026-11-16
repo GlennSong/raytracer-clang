@@ -68,10 +68,27 @@ move the loop into it; never a private loop in the reader.
 | The control at a junction of the lane level | `RoadModel::controlAt(junction)`, `junctionOf(junction)` |
 | The turn a connector takes | `RoadModel::turnOf(path)` |
 | Which path joins by a stated merge | `RoadModel::mergingAt(crossing)` |
+| The rules standing along a lane path (signs at its end, a limit part-way) | `RoadModel::regulationsAlong(path)` |
+| The junction a lane path runs to | `RoadModel::arrivesAt(path)` |
+| The arm a street-map link arrives by | `RoadModel::armReachedAt(street, link.stationTo)` |
 
-**The lane table holds no fact about what the road is** (ADR-0436, issue #291): no control, posted limit, road class,
-turn kind or merging path. It holds where a car can be, and each path, junction and crossing point carries the id the
-model is asked by. What it still holds of its own: the regulations (a rule on a stretch of a path, with a value).
+**The lane table holds no fact about what the road is** (ADR-0436, ADR-0437, issue #291): no control, posted limit,
+road class, turn kind, merging path or regulation. It holds where a car can be, and each path, junction and crossing
+point carries the id the model is asked by. A lane path also carries the stretch of spine it was cut along
+(`Path::onSpine`, `stationFrom`, `stationTo`, the way it is driven): the model places a street's regulations on it by
+those. One copy is left: `Path::throughArm` (the model's through pair; see ADR-0437 part 3).
+
+**Regulations** (ADR-0437). A rule standing along a road is stated in the model, once: a sign at a junction's arm
+(`ModelArm::regulations`, from the road file) or a regulation on a street (`ModelRegulation` in
+`RoadModel::regulations`: kind, street, stations from and to, which way the traffic runs, value; added with
+`stateRegulation`). Its kind is the name of a device in the rule set. Nothing writes street regulations into a road
+file yet. The driving does not ask the model each tick: its binding (`RoadRules::regulationsOn(path)`,
+`apps/driving/road_rules.h`) is filled from `regulationsAlong` each time rules are handed over and never saved.
+
+**The street map's links** (ADR-0437). A link's `width`, `klass`, `lanes`, `oneWay`, `walkable`, `access`,
+`parkOffset` and `parkWidth` are a compiled look-up, written only in `layLinks` (`street_map.cpp`) from the street's
+stated cross-section; routing and every agent's position read them each tick. Do not write them anywhere else. The
+arm a link arrives by is not kept; ask `armReachedAt`.
 
 ## 2. File map
 
@@ -84,7 +101,7 @@ Under `src/engine/procgen/city/roads/`:
 | `street_map.h/.cpp` | The street map every agent routes, drives and walks on (`NavGraph`), built at load from the planned layer and the deck heights (ADR-0425). |
 | `lane_turns.h/.cpp` | Which arriving lane takes which turn: reads `assets/data/lane_turns.json`; `turnsAtJunction` is the one function that applies it (ADR-0426). Also `laneLineBetween`, the one rule for whether the line between two lanes may be crossed (its lane kinds are the table's `lane_lines`). |
 | `control_signs.h/.cpp` | The stop, give-way, do-not-enter and one-way signs that follow from stated facts (ADR-0424). Also ADR-0419's stop-line rule, `stopLineFromMouth`. |
-| `lane_graph.h/.cpp` | The lane graph's types (paths, sections, junctions, crossing points, regulations), its save/load (LGRF), `validate`, dump, reach. It holds where a car can be and the ids the model is asked by, no fact about what the road is (ADR-0436). |
+| `lane_graph.h/.cpp` | The lane graph's types (paths, sections, junctions, crossing points), its save/load (LGRF), `validate`, dump, reach. It holds where a car can be and the ids the model is asked by, no fact about what the road is and no regulation (ADR-0436, ADR-0437). |
 | `road_builder.h/.cpp`, `lanes_builder.cpp` | The roads module's one builder interface and the lanes builder behind it (ADR-0089). |
 | `road_entity.h/.cpp`, `road_net_internal.h` | The engine's road entity (`RoadGraph` + look + plan). |
 | `ground_grid.h/.cpp` | Absolute ground heights on a grid, as the builder hands them back. |
@@ -136,9 +153,10 @@ Tests:
   (`"driving": "v2"` in its level file); river_town and agent_lab get their built model too, since the loader makes it.
 - **The driving holds the road model** (ADR-0436): `Driving(const RoadModel*)`. It reaches the lane level through it
   and asks the model for a junction's control, a path's posted limit and road class, a connector's turn and a stated
-  merge (the table in section 1). The lane table's copies of those five are deleted. Its regulations stay: they are the
-  only home of where a rule stands along a lane and its value. The driving's tests build a small model through
-  `tests/driving_test_roads.h` (`modelOf`, `stateStreet`, `stateControl`, `stateTurn`, `stateMerge`).
+  merge (the table in section 1). The lane table's copies of those five are deleted, and since ADR-0437 its
+  regulations too: the driving binds what `regulationsAlong` answers. The driving's tests build a small model through
+  `tests/driving_test_roads.h` (`modelOf`, `stateStreet`, `stateControl`, `stateTurn`, `stateMerge`,
+  `stateRegulation`, `stateSignAtEnd`).
 - **The old driving's lanes** (`LevelLanes`, `TrafficLane` in components.h; `src/apps/citysim/lane_map.*`): the loader
   still lays the lanes a second time for it (`expand` in `publishCityProducts`). Slated for deletion with v1.
 - **Placement policy**: the planner writes controls and signs into the road file from `control_policy.lua`; the
@@ -204,7 +222,8 @@ facts with the tools (`lanes_tool layout ... --write`, `--names`, `--nodes`, `--
 changed gives the same bytes: it keeps each junction's `nodes` where they are (and so their order), writes `through`
 back before them, and states no carry-on at a junction. It prints "the file is unchanged, byte for byte" or "CHANGED".
 `road_model_19` holds this for traffic_lab, river_town and agent_lab. `--fresh` starts the layout over and drops the
-nodes; `--nodes --write` finds them again.
+nodes; `--nodes --write` finds them again. `--lane-rules N --write` writes `lane_rules` where the layout writer leaves
+it (before `streets`), so one write is final (ADR-0437; the same test).
 
 **A junction's arms are listed in their ring** (ADR-0427): counter-clockwise round the junction in plan coordinates
 (the way headings grow). The file says so with `"arms_in_ring": true` beside the junctions list.
@@ -263,7 +282,7 @@ The fleet for `--vehicle`, as step 8 used it: `bus:7.30:2.55:11.45 car:6.15:2.05
 moped:1.92:0.70:1.70 motorcycle:2.73:0.70:2.09 truck:7.45:2.25:6.69 van:7.10:2.30:6.34`.
 
 Tests (`RT_TEST_FILTER` is a substring of the case name):
-- `./build-viewer/lanes_tests`: 124 cases, about 4 to 5 minutes whole. Filters: `road_model` (quick),
+- `./build-viewer/lanes_tests`: 127 cases, about 4 to 5 minutes whole. Filters: `road_model` (quick),
   `lanes_lane_graph_of` (the five scenes' lane-graph checks against what each scene is known to hold: `LaneGraphKnown`
   in test_lanes.cpp), `lanes_the_traffic_lab`, `connectors_of`.
 - `./build-viewer/driving_tests`: 193 cases on hand-made graphs, about a minute *(roughly)*.

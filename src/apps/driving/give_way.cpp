@@ -296,9 +296,9 @@ bool stopLineAtEnd(const engine::LaneGraph& roads, const RuleSet& rules, const R
                    Real atLineWithin) {
     if (!knownPath(roads, lane)) return false;
     const engine::Path& l = roads.paths[lane.index];
-    for (uint32_t r = l.regulations.first; r < l.regulations.end() && r < roads.regulations.size(); ++r) {
-        const Device* d = roadRules.device(rules, roads.regulations[r].kind);
-        if (d && d->stopLine && roads.regulations[r].from >= l.length - atLineWithin) return true;
+    for (const BoundRegulation& reg : roadRules.regulationsOn(lane)) {
+        const Device* d = roadRules.device(rules, reg);
+        if (d && d->stopLine && reg.from >= l.length - atLineWithin) return true;
     }
     return false;
 }

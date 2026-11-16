@@ -384,7 +384,7 @@ public:
     // put down or routed past them some other way (a host's placement, a stale route); the measurements report it.
     bool waitCanNeverEnd(const Car& c, std::string* why = nullptr) const;
     std::string describeWaiting(const WaitReport& report) const;
-    // The graph's regulation kinds bound to the rule set's devices (useRules), for code that reads facts the way a
+    // The regulations along each path bound to the rule set's devices (useRules), for code that reads facts the way a
     // driver does (measure.h).
     const RoadRules& roadRules() const { return roadRules_; }
 

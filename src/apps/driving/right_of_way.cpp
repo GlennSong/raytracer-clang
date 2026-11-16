@@ -53,11 +53,10 @@ Real kerbwardAngle(const Vec2& a, const Vec2& b, DrivesOn drivesOn) {
 
 // The sign an approach carries: the last regulation along its arriving lane whose device has a rank. None: rank 0
 // (an approach with no sign shares the rank listed first).
-int signRankOf(const LaneGraph& roads, const RuleSet& rules, const RoadRules& roadRules, PathId lane) {
+int signRankOf(const RuleSet& rules, const RoadRules& roadRules, PathId lane) {
     int rank = 0;
-    const engine::Range regs = roads.paths[lane.index].regulations;
-    for (uint32_t r = regs.first; r < regs.end() && r < roads.regulations.size(); ++r) {
-        const Device* d = roadRules.device(rules, roads.regulations[r].kind);
+    for (const BoundRegulation& reg : roadRules.regulationsOn(lane)) {
+        const Device* d = roadRules.device(rules, reg);
         if (d && d->rank != kNoRank) rank = d->rank;
     }
     return rank;
@@ -443,7 +442,7 @@ RightOfWay buildRightOfWay(const engine::RoadModel& model, const RuleSet& rules,
                                  ? roads.directionAt(from, roads.paths[from.index].length)
                                  : Vec2(1, 0);
                 ap.signRank = from.valid() && from.index < roads.paths.size()
-                                  ? signRankOf(roads, rules, roadRules, from)
+                                  ? signRankOf(rules, roadRules, from)
                                   : 0;
                 out.approaches.push_back(ap);
                 w.heading.push_back(ap.heading);

@@ -8226,7 +8226,11 @@ bool LevelLoader::load(const std::string& path,
                             engine::LevelRoadModel::Place a;
                             a.city = L.city;
                             a.junction = nav.junctionOf(L.to);
-                            a.arm = L.armIn;
+                            // (asked of the model by the link's street and far station: the link keeps no copy)
+                            const engine::RoadModel* city = rm->city(L.city);
+                            a.arm = city && L.street >= 0
+                                        ? city->armReachedAt(engine::ModelStreetId(static_cast<uint32_t>(L.street)), L.stationTo)
+                                        : -1;
                             a.street = L.street;
                             if (a.arm < 0 || a.junction < 0 || a.city < 0) return -1;
                             if (mouth) {

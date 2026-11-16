@@ -59,7 +59,6 @@ Turn turnOf(int from, int to) {
 LaneGraph makeCrossroads() {
     LaneGraph g;
     g.vehicleTagNames = {"car", "bus", "bike"};
-    g.regulationKindNames = {"stop", "speed_limit"};
     const TagMask car = TagMask(1) << LaneGraph::nameIndex(g.vehicleTagNames, "car");
     const TagMask everyone = car | (TagMask(1) << LaneGraph::nameIndex(g.vehicleTagNames, "bus")) |
                              (TagMask(1) << LaneGraph::nameIndex(g.vehicleTagNames, "bike"));
@@ -137,20 +136,10 @@ LaneGraph makeCrossroads() {
         }
         p.next.count = static_cast<uint32_t>(g.nextPaths.size()) - p.next.first;
     }
-    // Two regulations on lane 0: a speed limit over its whole length, a stop line near its end.
-    Regulation limit;
-    limit.kind = LaneGraph::nameIndex(g.regulationKindNames, "speed_limit");
-    limit.path = PathId(0);
-    limit.from = 0;
-    limit.to = g.paths[0].length;
-    limit.value = kLaneSpeed;
-    Regulation stopLine;
-    stopLine.kind = LaneGraph::nameIndex(g.regulationKindNames, "stop");
-    stopLine.path = PathId(0);
-    stopLine.from = 39;
-    stopLine.to = 39;
-    g.regulations = {limit, stopLine};
-    g.paths[0].regulations = Range{0, 2};
+    // Lane 0's stretch of its road's spine: 40 m, driven against the spine (from station 140 down to 100).
+    g.paths[0].onSpine = true;
+    g.paths[0].stationFrom = 140;
+    g.paths[0].stationTo = 100;
     // A bend profile on lane 0 (#281): straight, a 50 m curve from 10 to 20 m along, straight again.
     g.paths[0].bends = g.addBends({BendPiece{0, kNoBend}, BendPiece{10, 50}, BendPiece{20, kNoBend}});
     g.paths[0].tightestRadius = 50;
@@ -280,12 +269,11 @@ TEST_CASE(lane_graph_text_dump_reads_by_hand) {
           "on crosswalk 0 from 0.0 to 3.0 m\n");
     const std::string all = dumpText(g);
     CHECK(all.find("lane graph: 21 paths (9 lanes, 12 connectors), 8 sections, 1 junctions, 8 crossing points, "
-                   "1 crosswalks, 0 tracks, 2 regulations, 3 car spaces\n") == 0);
-    CHECK(all.find("  regulation 1: stop at 39.0 m, value 0.0\n") != std::string::npos);
-    CHECK(all.find("  regulation 0: speed_limit from 0.0 to ") != std::string::npos);
-    // what each arriving lane faces at its end (the stop line near lane 0's end), between its arriving and leaving lanes
-    CHECK(all.find("  arriving lanes: 0 2 4 6 8\n  at the arriving lanes' ends: lane 0 stop\n  leaving lanes: 1 3 5 7\n") !=
-          std::string::npos);
+                   "1 crosswalks, 0 tracks, 3 car spaces\n") == 0);
+    // a lane's stretch of its road's spine, the way it is driven
+    CHECK(all.find("  from station 140.00 to 100.00 of its road's spine\n") != std::string::npos);
+    CHECK(!g.paths[0].alongSpine());
+    CHECK(all.find("  arriving lanes: 0 2 4 6 8\n  leaving lanes: 1 3 5 7\n") != std::string::npos);
     CHECK(all.find("car space 2: lane 8 from 14.0 to 20.0 m\n") != std::string::npos);
     CHECK(all == dumpText(makeCrossroads()));   // the same text every run
 }
@@ -309,17 +297,14 @@ TEST_CASE(lane_graph_validate_names_each_fault) {
         g.paths[connectorId(1, 2)].from = PathId(4);
         CHECK(hasProblem(validate(g), "connector 12 leaves lane 4, but that lane does not list it as next"));
     }
-    {   // regulations out of order along their path
+    {   // a stretch of spine with no length, and one stated on a connector
         LaneGraph g = good;
-        g.regulations[0].from = 39.5;
-        CHECK(hasProblem(validate(g), "lane 0: its regulations are out of order (regulation 1 from 39.00 m after 39.50 m)"));
-    }
-    {   // a regulation's stretch running backwards, and one off its path
-        LaneGraph g = good;
-        g.regulations[1].to = 38;
-        CHECK(hasProblem(validate(g), "regulation 1: runs backwards on lane 0 (from 39.00 to 38.00 m)"));
-        g.regulations[1].to = g.paths[0].length + 5;
-        CHECK(hasProblem(validate(g), "regulation 1: from 39.00 to"));
+        g.paths[0].stationTo = g.paths[0].stationFrom;
+        CHECK(hasProblem(validate(g), "lane 0: its stretch of its road's spine has no length (station 140.00 at both ends)"));
+        g = good;
+        g.paths[connectorId(1, 2)].onSpine = true;
+        g.paths[connectorId(1, 2)].stationTo = 5;
+        CHECK(hasProblem(validate(g), "connector 12: it states a stretch of a road's spine, which only a lane has"));
     }
     {   // a crossing stretch running backwards
         LaneGraph g = good;

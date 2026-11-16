@@ -17,9 +17,11 @@ namespace {
 // profile, issue #281; 6: each crossing point's vehicle tags on each side, ADR-0412; 7: each path's and junction's ids on
 // the road model, ADR-0426; 8: a Join's stated merge, which path joins and the model's connection, ADR-0426; 9: no lane
 // tags, a lane's kind is the road model's, ADR-0429; 10: an arriving lane's arm and its stated through partner, ADR-0432;
-// 11: no control, posted limit, road class, turn kind or merging path: the road model's facts, asked of it, ADR-0436).
+// 11: no control, posted limit, road class, turn kind or merging path: the road model's facts, asked of it, ADR-0436;
+// 12: no regulations nor their kind names (the road model states them and answers for a path), each lane path's stretch
+// of its road's spine, ADR-0437).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 11;
+constexpr uint32_t kVersion = 12;
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
 // A closed outline (a junction's box, a crosswalk) has at least this many corners; a track's line two points.
@@ -76,10 +78,6 @@ std::string otherName(const LaneGraph& g, const CrossingPoint& c) {
     }
     return fmt("unknown %u", c.other);
 }
-std::string nameOf(const std::vector<std::string>& table, NameIndex i) {
-    if (i == kNoName) return "none";
-    return i < table.size() ? table[i] : fmt("unknown name %u", i);
-}
 std::string namesOf(const std::vector<std::string>& table, TagMask m) {
     std::string s;
     for (uint32_t b = 0; b < kMaxTagNames; ++b) {
@@ -125,11 +123,13 @@ void putItem(BinWriter& w, const Path& p) {
     putItem(w, p.from);
     w.put(p.waitInsideAt);
     putItem(w, p.next);
-    putItem(w, p.regulations);
     putItem(w, p.crossings);
     w.put(p.street);
     w.put(p.modelLane);
     w.put(p.modelTurn);
+    w.put(static_cast<uint8_t>(p.onSpine));
+    w.put(p.stationFrom);
+    w.put(p.stationTo);
     w.put(p.arm);
     w.put(p.throughArm);
 }
@@ -169,13 +169,6 @@ void putItem(BinWriter& w, const Track& t) {
     putItem(w, t.line);
     w.put(t.railTrack);
 }
-void putItem(BinWriter& w, const Regulation& r) {
-    w.put(r.kind);
-    putItem(w, r.path);
-    w.put(r.from);
-    w.put(r.to);
-    w.put(r.value);
-}
 void putItem(BinWriter& w, const CarSpace& s) {
     putItem(w, s.lane);
     w.put(s.from);
@@ -205,12 +198,16 @@ bool getItem(BinReader& r, LaneLine& l) {
     return true;
 }
 bool getItem(BinReader& r, Path& p) {
-    return getEnum(r, p.kind) && r.get(p.vehicleTags) &&
+    uint8_t onSpine = 0;
+    const bool ok = getEnum(r, p.kind) && r.get(p.vehicleTags) &&
            getItem(r, p.curve) && r.get(p.length) && r.get(p.width) && r.get(p.tightestRadius) &&
            getItem(r, p.bends) && getItem(r, p.section) && r.get(p.indexInSection) && getItem(r, p.junction) &&
-           getItem(r, p.from) && r.get(p.waitInsideAt) && getItem(r, p.next) && getItem(r, p.regulations) &&
+           getItem(r, p.from) && r.get(p.waitInsideAt) && getItem(r, p.next) &&
            getItem(r, p.crossings) && r.get(p.street) && r.get(p.modelLane) && r.get(p.modelTurn) &&
+           r.get(onSpine) && r.get(p.stationFrom) && r.get(p.stationTo) &&
            r.get(p.arm) && r.get(p.throughArm);
+    p.onSpine = onSpine != 0;
+    return ok;
 }
 bool getItem(BinReader& r, Section& s) { return getItem(r, s.lanes) && getItem(r, s.lines); }
 bool getItem(BinReader& r, Junction& j) {
@@ -224,9 +221,6 @@ bool getItem(BinReader& r, CrossingPoint& c) {
 }
 bool getItem(BinReader& r, Crosswalk& c) { return getItem(r, c.outline) && getItem(r, c.junction) && r.get(c.walkLink); }
 bool getItem(BinReader& r, Track& t) { return getItem(r, t.line) && r.get(t.railTrack); }
-bool getItem(BinReader& r, Regulation& x) {
-    return r.get(x.kind) && getItem(r, x.path) && r.get(x.from) && r.get(x.to) && r.get(x.value);
-}
 bool getItem(BinReader& r, CarSpace& s) { return getItem(r, s.lane) && r.get(s.from) && r.get(s.to); }
 bool getItem(BinReader& r, BendPiece& b) { return r.get(b.from) && r.get(b.radius); }
 
@@ -479,8 +473,9 @@ bool operator==(const Path& a, const Path& b) {
            a.curve == b.curve && a.length == b.length && a.width == b.width && a.tightestRadius == b.tightestRadius &&
            a.bends == b.bends && a.section == b.section && a.indexInSection == b.indexInSection &&
            a.junction == b.junction && a.from == b.from && a.waitInsideAt == b.waitInsideAt && a.next == b.next &&
-           a.regulations == b.regulations && a.crossings == b.crossings && a.street == b.street && a.modelLane == b.modelLane &&
-           a.modelTurn == b.modelTurn && a.arm == b.arm && a.throughArm == b.throughArm;
+           a.crossings == b.crossings && a.street == b.street && a.modelLane == b.modelLane &&
+           a.modelTurn == b.modelTurn && a.onSpine == b.onSpine && a.stationFrom == b.stationFrom &&
+           a.stationTo == b.stationTo && a.arm == b.arm && a.throughArm == b.throughArm;
 }
 bool operator==(const Section& a, const Section& b) {
     return a.lanes == b.lanes && a.lines == b.lines;
@@ -500,9 +495,6 @@ bool operator==(const Junction& a, const Junction& b) {
            a.box == b.box && a.arriving == b.arriving && a.leaving == b.leaving &&
            a.modelJunction == b.modelJunction;
 }
-bool operator==(const Regulation& a, const Regulation& b) {
-    return a.kind == b.kind && a.path == b.path && a.from == b.from && a.to == b.to && a.value == b.value;
-}
 bool operator==(const CarSpace& a, const CarSpace& b) { return a.lane == b.lane && a.from == b.from && a.to == b.to; }
 namespace {
 bool sameBends(const std::vector<BendPiece>& a, const std::vector<BendPiece>& b) {
@@ -513,9 +505,9 @@ bool sameBends(const std::vector<BendPiece>& a, const std::vector<BendPiece>& b)
 }  // namespace
 bool operator==(const LaneGraph& a, const LaneGraph& b) {
     return a.vehicleTagNames == b.vehicleTagNames &&
-           a.regulationKindNames == b.regulationKindNames && a.paths == b.paths && a.sections == b.sections &&
+           a.paths == b.paths && a.sections == b.sections &&
            a.junctions == b.junctions && a.crossings == b.crossings && a.crosswalks == b.crosswalks &&
-           a.tracks == b.tracks && a.regulations == b.regulations && a.carSpaces == b.carSpaces &&
+           a.tracks == b.tracks && a.carSpaces == b.carSpaces &&
            sameVec2s(a.points, b.points) && a.along == b.along && a.heights == b.heights &&
            a.nextPaths == b.nextPaths && a.sectionLanes == b.sectionLanes && a.laneLines == b.laneLines &&
            a.junctionConnectors == b.junctionConnectors && a.junctionLanes == b.junctionLanes &&
@@ -625,22 +617,12 @@ std::vector<std::string> validate(const LaneGraph& g) {
             }
         }
 
-        // Its regulations.
-        if (!inRange(p.regulations, g.regulations.size())) {
-            out.push_back(fmt("%s: its regulations (%u to %u) are out of range (%zu regulations)", who.c_str(),
-                              p.regulations.first, p.regulations.end(), g.regulations.size()));
-        } else {
-            for (uint32_t k = p.regulations.first; k < p.regulations.end(); ++k) {
-                if (g.regulations[k].path.index != i)
-                    out.push_back(fmt("%s: regulation %u in its list stands on %s", who.c_str(), k,
-                                      pathName(g, g.regulations[k].path.index).c_str()));
-                if (k > p.regulations.first &&
-                    !(g.regulations[k].from > g.regulations[k - 1].from ||
-                      (g.regulations[k].from == g.regulations[k - 1].from && g.regulations[k].to >= g.regulations[k - 1].to)))
-                    out.push_back(fmt("%s: its regulations are out of order (regulation %u from %.2f m after %.2f m)",
-                                      who.c_str(), k, g.regulations[k].from, g.regulations[k - 1].from));
-            }
-        }
+        // Its stretch of its road's spine: stated only on a lane, and then a real stretch (its two ends apart).
+        if (p.onSpine && p.kind != PathKind::Lane)
+            out.push_back(fmt("%s: it states a stretch of a road's spine, which only a lane has", who.c_str()));
+        else if (p.onSpine && approxEqual(p.stationFrom, p.stationTo, kSamePoint))
+            out.push_back(fmt("%s: its stretch of its road's spine has no length (station %.2f at both ends)", who.c_str(),
+                              p.stationFrom));
 
         if (p.kind == PathKind::Lane) {
             if (p.junction.valid()) out.push_back(fmt("%s: a lane names junction %u", who.c_str(), p.junction.index));
@@ -1003,27 +985,6 @@ std::vector<std::string> validate(const LaneGraph& g) {
             out.push_back(fmt("track %u: its line (%u points from %u) is out of range or too short (%zu plan points)", t,
                               g.tracks[t].line.count, g.tracks[t].line.first, g.planPoints.size()));
 
-    // Regulations: each in its path's list (so the lists cover the array once), kinds known, on the path.
-    for (uint32_t r = 0; r < g.regulations.size(); ++r) {
-        const Regulation& reg = g.regulations[r];
-        if (reg.kind >= g.regulationKindNames.size())
-            out.push_back(fmt("regulation %u: kind %u is out of range (%zu names)", r, reg.kind, g.regulationKindNames.size()));
-        if (reg.path.index >= nPaths) {
-            out.push_back(fmt("regulation %u: path %u is out of range (%zu paths)", r, reg.path.index, nPaths));
-            continue;
-        }
-        const Path& p = g.paths[reg.path.index];
-        if (r < p.regulations.first || r >= p.regulations.end())
-            out.push_back(fmt("regulation %u stands on %s, but that path's list does not hold it", r,
-                              pathName(g, reg.path.index).c_str()));
-        if (!(reg.from >= 0 && reg.from <= p.length + kLengthTolerance) || !(reg.to >= 0 && reg.to <= p.length + kLengthTolerance))
-            out.push_back(fmt("regulation %u: from %.2f to %.2f m, off %s (%.2f m long)", r, reg.from, reg.to,
-                              pathName(g, reg.path.index).c_str(), p.length));
-        else if (reg.to < reg.from)
-            out.push_back(fmt("regulation %u: runs backwards on %s (from %.2f to %.2f m)", r,
-                              pathName(g, reg.path.index).c_str(), reg.from, reg.to));
-    }
-
     // Car spaces.
     for (uint32_t s = 0; s < g.carSpaces.size(); ++s) {
         const CarSpace& sp = g.carSpaces[s];
@@ -1197,7 +1158,10 @@ std::string dumpPath(const LaneGraph& g, PathId id) {
         if (p.street != kNoIndex) out += fmt(" street %u", p.street);
         if (p.modelLane != kNoIndex) out += fmt(" lane %u", p.modelLane);
         if (p.modelTurn != kNoIndex) out += fmt(" turn %u", p.modelTurn);
+        if (p.onSpine) out += fmt(", from station %.2f to %.2f of its road's spine", p.stationFrom, p.stationTo);
         out += "\n";
+    } else if (p.onSpine) {
+        out += fmt("  from station %.2f to %.2f of its road's spine\n", p.stationFrom, p.stationTo);
     }
     out += "  curve:";
     const std::size_t curveEnd = std::min({g.points.size(), g.along.size(), g.heights.size(),
@@ -1215,13 +1179,6 @@ std::string dumpPath(const LaneGraph& g, PathId id) {
             out += fmt("%s %.1f m %s", k == p.bends.first ? "" : ",", g.bendPieces[k].from,
                        metres(g.bendPieces[k].radius).c_str());
         out += "\n";
-    }
-    for (uint32_t k = p.regulations.first; k < safeEnd(p.regulations, g.regulations.size()); ++k) {
-        const Regulation& r = g.regulations[k];
-        out += r.to == r.from ? fmt("  regulation %u: %s at %.1f m, value %.1f\n", k,
-                                    nameOf(g.regulationKindNames, r.kind).c_str(), r.from, r.value)
-                              : fmt("  regulation %u: %s from %.1f to %.1f m, value %.1f\n", k,
-                                    nameOf(g.regulationKindNames, r.kind).c_str(), r.from, r.to, r.value);
     }
     if (p.crossings.count > 0) {
         out += "  crossing points along it:";
@@ -1278,10 +1235,9 @@ std::string dumpText(const LaneGraph& g) {
     uint32_t lanes = 0;
     for (const Path& p : g.paths) lanes += p.kind == PathKind::Lane ? 1 : 0;
     std::string out = fmt("lane graph: %zu paths (%u lanes, %zu connectors), %zu sections, %zu junctions, "
-                          "%zu crossing points, %zu crosswalks, %zu tracks, %zu regulations, %zu car spaces\n",
+                          "%zu crossing points, %zu crosswalks, %zu tracks, %zu car spaces\n",
                           g.paths.size(), lanes, g.paths.size() - lanes, g.sections.size(), g.junctions.size(),
-                          g.crossings.size(), g.crosswalks.size(), g.tracks.size(), g.regulations.size(),
-                          g.carSpaces.size());
+                          g.crossings.size(), g.crosswalks.size(), g.tracks.size(), g.carSpaces.size());
     auto table = [&](const char* title, const std::vector<std::string>& names) {
         out += title;
         out += ":";
@@ -1289,7 +1245,6 @@ std::string dumpText(const LaneGraph& g) {
         out += "\n";
     };
     table("vehicle tags", g.vehicleTagNames);
-    table("regulation kinds", g.regulationKindNames);
     for (uint32_t i = 0; i < g.sections.size(); ++i) out += dumpSection(g, SectionId(i));
     for (uint32_t i = 0; i < g.paths.size(); ++i) out += dumpPath(g, PathId(i));
     for (uint32_t j = 0; j < g.junctions.size(); ++j) {
@@ -1305,18 +1260,6 @@ std::string dumpText(const LaneGraph& g) {
         out += "  arriving lanes:";
         for (uint32_t k = jn.arriving.first; k < safeEnd(jn.arriving, g.junctionLanes.size()); ++k)
             out += fmt(" %u", g.junctionLanes[k].index);
-        // what each arriving lane faces as it reaches the junction: the regulations standing at its end (a stop sign)
-        std::string facing;
-        for (uint32_t k = jn.arriving.first; k < safeEnd(jn.arriving, g.junctionLanes.size()); ++k) {
-            const uint32_t lane = g.junctionLanes[k].index;
-            if (lane >= g.paths.size()) continue;
-            const Path& lp = g.paths[lane];
-            for (uint32_t r = lp.regulations.first; r < safeEnd(lp.regulations, g.regulations.size()); ++r)
-                if (g.regulations[r].from >= lp.length - kJunctionEndReach)
-                    facing += fmt("%s lane %u %s", facing.empty() ? "" : ",", lane,
-                                  nameOf(g.regulationKindNames, g.regulations[r].kind).c_str());
-        }
-        if (!facing.empty()) out += "\n  at the arriving lanes' ends:" + facing;
         out += "\n  leaving lanes:";
         for (uint32_t k = jn.leaving.first; k < safeEnd(jn.leaving, g.junctionLanes.size()); ++k)
             out += fmt(" %u", g.junctionLanes[k].index);
@@ -1343,14 +1286,12 @@ std::string dumpText(const LaneGraph& g) {
 void putLaneGraph(bundle::BinWriter& w, const LaneGraph& g) {
     w.magic(kMagic, kVersion);
     putList(w, g.vehicleTagNames);
-    putList(w, g.regulationKindNames);
     putList(w, g.paths);
     putList(w, g.sections);
     putList(w, g.junctions);
     putList(w, g.crossings);
     putList(w, g.crosswalks);
     putList(w, g.tracks);
-    putList(w, g.regulations);
     putList(w, g.carSpaces);
     putList(w, g.points);
     putList(w, g.along);
@@ -1378,11 +1319,10 @@ bool getLaneGraph(bundle::BinReader& r, LaneGraph& g, std::string* err) {
     }
     LaneGraph in;
     const bool ok = getList(r, in.vehicleTagNames, "vehicle tag names", err) &&
-                    getList(r, in.regulationKindNames, "regulation kind names", err) &&
                     getList(r, in.paths, "paths", err) &&
                     getList(r, in.sections, "sections", err) && getList(r, in.junctions, "junctions", err) &&
                     getList(r, in.crossings, "crossing points", err) && getList(r, in.crosswalks, "crosswalks", err) &&
-                    getList(r, in.tracks, "tracks", err) && getList(r, in.regulations, "regulations", err) &&
+                    getList(r, in.tracks, "tracks", err) &&
                     getList(r, in.carSpaces, "car spaces", err) && getList(r, in.points, "curve points", err) &&
                     getList(r, in.along, "curve distances along", err) && getList(r, in.heights, "curve heights", err) &&
                     getList(r, in.nextPaths, "next paths", err) && getList(r, in.sectionLanes, "section lanes", err) &&

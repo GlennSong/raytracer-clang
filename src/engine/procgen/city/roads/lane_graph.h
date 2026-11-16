@@ -4,11 +4,11 @@
 // THE LANE GRAPH (driving-model-design.md 5.2, issue #236): the road as the driving model reads it. Every curve a car
 // can be on (a PATH: a lane, or a CONNECTOR, the path through a junction from an arriving lane to a leaving lane),
 // how lanes lie side by side (SECTIONS), the junctions, where two paths or a path and a crosswalk or rail track meet
-// (CROSSING POINTS), the rules standing along the paths (REGULATIONS) and the places to leave a car (CAR SPACES).
+// (CROSSING POINTS) and the places to leave a car (CAR SPACES).
 //
 // This file holds the types, the save and load (one bundle section), a structural check and a text dump. The lane
-// lane level (lanes/lane_level.h) fills it from the road model's built layer, with the signs each arm states stood at
-// the end of the lanes arriving by it; the driving model reads it through the model that holds it.
+// level (lanes/lane_level.h) fills it from the road model's built layer; the driving model reads it through the model
+// that holds it.
 //
 // How it is stored. The graph is whole-world and fixed after load, so it is a few big arrays: a path does not own a
 // vector of points or of next-paths, it holds a RANGE (first, count) into one shared array. An island with tens of
@@ -18,11 +18,14 @@
 // posted limit, its road's class, the turn a connector takes and which path joins by a stated merge are the road
 // model's facts (road_model.h), reached by the ids a path, junction or crossing point carries (RoadModel::controlAt,
 // postedLimit, roadClassOf, turnOf, mergingAt). The table keeps no copy, so a reader holds the model and asks it.
+// Nor THE RULES STANDING ALONG A PATH (a stop sign at its end, a top speed from 30 m along; ADR-0437): the model states
+// them, on a junction's arm or on a stretch of a street, and answers for a path (RoadModel::regulationsAlong) from the
+// street and the stretch of spine the path carries (Path::street, stationFrom, stationTo, arm).
 //
-// Kinds are data. Vehicle tags (who may use a path) and regulation kinds are NAMES
-// the graph carries in small tables, filled from the data files (what a lane is for is its kind in the road model,
-// reached by Path::modelLane: not copied here since ADR-0429); a path or a
-// regulation refers to a name by its index, and a set of tags is a bit mask (bit i = name i). The only fixed
+// Kinds are data. Vehicle tags (who may use a path) are NAMES
+// the graph carries in a small table, filled from the data files (what a lane is for is its kind in the road model,
+// reached by Path::modelLane: not copied here since ADR-0429); a path
+// refers to a name by its index, and a set of tags is a bit mask (bit i = name i). The only fixed
 // vocabularies here are the geometric ones: a path is a lane or a connector; a connector goes straight, turns near
 // (stays by the kerb), turns far (crosses oncoming traffic) or turns back; two things meet by crossing, joining or
 // splitting; and the other side of a crossing is a path, a crosswalk or a rail track.
@@ -49,8 +52,8 @@ using SectionId = GraphIndex<SectionTag>;
 using JunctionId = GraphIndex<JunctionTag>;
 using CrossingId = GraphIndex<CrossingTag>;
 
-// An index into one of the graph's NAME tables (vehicleTagNames, regulationKindNames, ...): which regulation kind, which
-// control, which road class. kNone where the table has nothing to say.
+// An index into a table of NAMES (the graph's vehicleTagNames; a reader's own list of names). kNoName where the table
+// has nothing to say.
 using NameIndex = uint32_t;
 constexpr NameIndex kNoName = 0xFFFFFFFFu;
 // A set of names from one table: bit i set = name i is in the set. So a table holds at most kMaxTagNames names.
@@ -123,14 +126,22 @@ struct Path {
     PathId from;                         // connectors: the lane it leaves
     Real waitInsideAt = kNoWaitInside;   // connectors: where along it a car may wait inside the junction
     Range next;                          // into LaneGraph::nextPaths: lanes, what leaves its end; connectors, the lane
-    Range regulations;                   // into LaneGraph::regulations, sorted by distance along
-    Range crossings;                     // into LaneGraph::pathCrossings: the crossing points it is part of (as either
+    Range crossings;                   // into LaneGraph::pathCrossings: the crossing points it is part of (as either
                                          // side), by where their stretch on it begins, then by id (indexCrossings)
     // WHERE IT IS ON THE ROAD MODEL (road_model.h; ADR-0426), by the model's ids: a lane its street and its lane (the
     // builder's lane it was cut from); a connector the stated turn it follows. kNoIndex: none (a hand-made graph).
     uint32_t street = kNoIndex;
     uint32_t modelLane = kNoIndex;
     uint32_t modelTurn = kNoIndex;
+    // A LANE'S STRETCH OF ITS ROAD'S SPINE (ADR-0437): the stations (metres along the spine of its street's road) at
+    // its start and at its end, the way it is driven -- so stationTo is below stationFrom on a lane running against
+    // the spine. `onSpine` false: none stated (a connector, or a hand-made table that states none). Where the lane
+    // level cut the path: its own data. What the road model places a street's regulations on the path by
+    // (RoadModel::regulationsAlong), and how it knows which end of its street the path runs to.
+    bool onSpine = false;
+    Real stationFrom = 0, stationTo = 0;
+    // Runs the way its road's spine does (true) or against it. Asked only of a path that is onSpine.
+    bool alongSpine() const { return stationTo > stationFrom; }
     // A LANE ARRIVING AT A JUNCTION: the arm it arrives by (its place in the junction's stated list of arms), and the arm
     // the junction states as the same road carrying on through from it (its through partner). kNoIndex: it arrives at no
     // junction; no through partner is stated. Two arriving lanes of one junction FACE EACH OTHER when one's through
@@ -222,18 +233,6 @@ struct Junction {
     uint32_t modelJunction = kNoIndex;   // the road model's junction it is (road_model.h; ADR-0426); kNoIndex: none
 };
 
-// A RULE STANDING ON A PATH: a kind (a LaneGraph::regulationKindNames entry), the stretch of the path where it applies
-// (from `from` to `to` metres along it; a sign that stands at one place, a stop sign at the end of an arriving lane,
-// has from == to), and a value whose meaning the kind's rule says ("stop here": unused; "25 from here": the speed in
-// metres per second). Who wrote it: the control plan (issue #240), carried through by the lane graph builder.
-struct Regulation {
-    NameIndex kind = kNoName;
-    PathId path;
-    Real from = 0;
-    Real to = 0;
-    Real value = 0;
-};
-
 // A PLACE TO LEAVE A CAR: a stretch of a lane tagged for it, or of a bay.
 struct CarSpace {
     PathId lane;
@@ -243,7 +242,6 @@ struct CarSpace {
 struct LaneGraph {
     // The name tables (filled from the data files; the graph only carries the names it refers to by index).
     std::vector<std::string> vehicleTagNames;
-    std::vector<std::string> regulationKindNames;
 
     std::vector<Path> paths;
     std::vector<Section> sections;
@@ -252,7 +250,6 @@ struct LaneGraph {
                                             // other, aFrom)
     std::vector<Crosswalk> crosswalks;      // junction by junction (those on no junction last)
     std::vector<Track> tracks;
-    std::vector<Regulation> regulations;    // path by path, then by where each begins (from), then where it ends (to)
     std::vector<CarSpace> carSpaces;        // by (lane, from)
 
     // The shared arrays the ranges point into.
@@ -319,7 +316,6 @@ bool operator==(const CrossingPoint& a, const CrossingPoint& b);
 bool operator==(const Crosswalk& a, const Crosswalk& b);
 bool operator==(const Track& a, const Track& b);
 bool operator==(const Junction& a, const Junction& b);
-bool operator==(const Regulation& a, const Regulation& b);
 bool operator==(const CarSpace& a, const CarSpace& b);
 bool operator==(const LaneGraph& a, const LaneGraph& b);   // field for field, exactly
 inline bool operator!=(const LaneGraph& a, const LaneGraph& b) { return !(a == b); }

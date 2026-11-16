@@ -536,10 +536,20 @@ std::string insertLaneRulesText(const std::string& text, double solidBeforeStopL
     std::vector<Member> top;
     if (!t.members(t.ws(0), top) || top.empty()) return fail("the file is not a JSON object with members");
     if (memberNamed(top, "lane_rules")) return fail("the file already states its \"lane_rules\"");
-    const Member& last = top.back();
+    // WHERE THE LAYOUT WRITER LEAVES IT (ADR-0437): the layout written again takes "streets" and "divided" out and puts
+    // them back after the file's last member (insertLayoutText), so the lane rules end up before them. Written there
+    // the first time -- after the member before "streets" (or "divided" where there is no "streets") -- the next
+    // `layout --write` moves nothing. A file with neither: after its last member.
+    std::size_t after = top.size() - 1;
+    for (std::size_t k = 0; k < top.size(); ++k)
+        if (top[k].key == "streets" || top[k].key == "divided") {
+            if (k > 0) after = k - 1;
+            break;
+        }
+    const Member& before = top[after];
     const std::string value = nlohmann::json{{"solid_before_stop_line", solidBeforeStopLine}}.dump();
     std::string out = text;
-    out.insert(last.valueEnd, "," + leadOf(text, last) + "\"lane_rules\": " + value);
+    out.insert(before.valueEnd, "," + leadOf(text, before) + "\"lane_rules\": " + value);
     if (keyedRoadFileText(out) != keyedRoadFileText(text)) return fail("writing it would change what the bake key sees");
     return out;
 }

@@ -1866,6 +1866,22 @@ TEST_CASE(road_model_19_the_layout_written_again_into_a_shipped_file_changes_not
         const std::string out = insertLayoutText(stripLayoutText(text, true), layout, &err);
         if (!err.empty()) std::printf("      %s: %s\n", f.file, err.c_str());
         CHECK(out == text);
+        // THE LANE RULES WRITTEN ONCE ARE WHERE THE LAYOUT WRITER LEAVES THEM (ADR-0437): the shipped file with its
+        // "lane_rules" member cut out (and the comma before it), then written by `--lane-rules 20`, is the shipped file
+        // to the byte -- so the layout written after it moves nothing. (It once went after the last member, behind
+        // "streets", and the next layout write moved it.)
+        const std::size_t key = text.find("\"lane_rules\"");
+        CHECK(key != std::string::npos);
+        if (key != std::string::npos) {
+            const std::size_t comma = text.rfind(',', key), close = text.find('}', key);
+            std::string without = text;
+            without.erase(comma, close + 1 - comma);
+            CHECK(without.find("lane_rules") == std::string::npos);
+            std::string why;
+            const std::string again = insertLaneRulesText(without, 20.0, &why);
+            if (!why.empty()) std::printf("      %s: %s\n", f.file, why.c_str());
+            CHECK(again == text);
+        }
         std::size_t streets = 0, ends = 0, endsAtAJunction = 0, withNodes = 0;
         for (const ModelStreet& st : layout.streets) {
             streets += st.carriesOn[0].valid() || st.carriesOn[1].valid() ? 1u : 0u;
@@ -1927,4 +1943,161 @@ TEST_CASE(road_model_20_one_answer_for_the_arm_a_street_is_and_where_its_ends_ar
     // an arm that names no street of the model
     ModelArm stray;
     CHECK(m.streetOf(stray) == nullptr);
+}
+
+// THE ARM A LINK OF THE STREET MAP ARRIVES BY IS ASKED OF THE MODEL (ADR-0437): the link carries its street and the
+// station at its far end, and the model says which arm that is (RoadModel::armReachedAt). The link once kept a copy of
+// the arm, written when the map was built; a junction whose arms are stated again then left the copy pointing at
+// another road's arm.
+TEST_CASE(road_model_21_the_arm_a_street_map_link_arrives_by_is_the_models) {
+    // the signed scene: the arterial a0 runs 200 m from its dead end at (-200, 0) to the crossing at (0, 0)
+    RoadModel m = plannedRoadModel(RoadLabGraph::fromJson(signedGraph()));
+    const ModelStreetId a0 = streetNamed(m, "a0");
+    CHECK(a0.valid());
+    if (!a0.valid()) return;
+    engine::NavGraph map;
+    engine::StreetMapReport rep;
+    CHECK(engine::appendStreetMap(map, m, 0, nullptr, &rep));
+    const auto armsReached = [&](std::vector<int>& atCrossing, std::vector<int>& elsewhere) {
+        atCrossing.clear();
+        elsewhere.clear();
+        for (const engine::NavLink& L : map.links) {
+            if (L.street != static_cast<int>(a0.index)) continue;
+            const int arm = m.armReachedAt(ModelStreetId(static_cast<uint32_t>(L.street)), L.stationTo);
+            (approxEqual(L.stationTo, 200.0, kWrittenStation) ? atCrossing : elsewhere).push_back(arm);
+        }
+    };
+    std::vector<int> atCrossing, elsewhere;
+    armsReached(atCrossing, elsewhere);
+    // one link arrives at the crossing, by arm 2 (road a0, its spine running in); every other link of the street
+    // arrives at no junction arm (along the street, or at its dead end)
+    CHECK(atCrossing == std::vector<int>{2});
+    CHECK(!elsewhere.empty());
+    for (int arm : elsewhere) CHECK(arm == -1);
+    CHECK(m.armReachedAt(a0, 100.0) == -1 && m.armReachedAt(a0, 0.0) == -1 && m.armReachedAt(a0, 200.004) == 2);
+    CHECK(m.armReachedAt(ModelStreetId(9999), 200.0) == -1);
+    // THE CROSSING'S ARMS STATED AGAIN, its first arm now listed last: a0's arm is 1, and the same links say so with no
+    // new map built
+    ModelJunction& cross = m.junctions[m.streets[a0.index].junctions[1].index];
+    std::rotate(cross.arms.begin(), cross.arms.begin() + 1, cross.arms.end());
+    CHECK(cross.arms[1].road == "a0" && cross.arms[1].spineIn);
+    armsReached(atCrossing, elsewhere);
+    CHECK(atCrossing == std::vector<int>{1});
+}
+
+// ---- 22. the regulations along a path are the model's (ADR-0437) -----------------------------------------------------------
+// A rule standing on a stretch of a street is stated ON THE MODEL, by street and station, and a path's regulations are
+// asked of the model (RoadModel::regulationsAlong). The lane table once held them: only each arm's signs, stood at the
+// end of the arriving lanes when the table was built, with no home for a rule part-way along a street and no way to see
+// one stated afterwards.
+TEST_CASE(road_model_22_the_regulations_along_a_path_are_asked_of_the_model) {
+    // The lane-level scene: the arterial a1 runs 200 m straight from the crossing j0 at (0, 0) to the T j1 at (200, 0),
+    // three lanes each way. Its stop lines stand at stations 11.2 (at j0) and 188.8 (at j1), and each lane is cut 20 m
+    // before the stop line it runs to (the solid lines). So along the spine a lane is a 157.6 m path from 11.2 to 168.8
+    // and a 20 m path from 168.8 to 188.8; against it, a 157.6 m path from 188.8 to 31.2 and a 20 m path from 31.2 to 11.2.
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(laneLevelGraph()));
+    RoadModel m = assembleRoadModel(*r, oneCar());
+    const ModelStreetId a1 = streetNamed(m, "a1");
+    CHECK(a1.valid());
+    if (!a1.valid()) return;
+    // the four kinds of path on a1, by the stretch of spine each carries
+    const auto pathsFrom = [&](Real stationFrom, Real stationTo) {
+        std::vector<PathId> out;
+        for (uint32_t p = 0; p < m.laneLevel.paths.size(); ++p) {
+            const Path& path = m.laneLevel.paths[p];
+            if (path.kind == PathKind::Lane && path.street == a1.index && path.onSpine &&
+                approxEqual(path.stationFrom, stationFrom, kWrittenStation) && approxEqual(path.stationTo, stationTo, kWrittenStation))
+                out.push_back(PathId(p));
+        }
+        return out;
+    };
+    const std::vector<PathId> alongFirst = pathsFrom(11.2, 168.8), alongLast = pathsFrom(168.8, 188.8);
+    const std::vector<PathId> againstFirst = pathsFrom(188.8, 31.2), againstLast = pathsFrom(31.2, 11.2);
+    CHECK(alongFirst.size() == 3u && alongLast.size() == 3u && againstFirst.size() == 3u && againstLast.size() == 3u);
+    // AS BUILT: nothing along a1 but the sign its arm at j0 states, at the end (20 m) of each lane arriving there
+    for (PathId p : alongFirst) CHECK(m.regulationsAlong(p).empty());
+    for (PathId p : alongLast) CHECK(m.regulationsAlong(p).empty());   // j1 states no sign on a1's arm
+    for (PathId p : againstFirst) CHECK(m.regulationsAlong(p).empty());
+    const std::string armSign = m.arrivesAt(againstLast.empty() ? PathId() : againstLast[0])
+                                    ? m.arrivesAt(againstLast[0])->arms[0].regulations.front()
+                                    : std::string();
+    for (PathId p : againstLast) {
+        const std::vector<PathRegulation> regs = m.regulationsAlong(p);
+        CHECK(regs.size() == 1u);
+        if (regs.size() != 1u) continue;
+        CHECK(regs[0].kind == armSign && !armSign.empty());
+        CHECK(approxEqual(regs[0].from, 20.0, kWrittenStation) && approxEqual(regs[0].to, 20.0, kWrittenStation));
+    }
+    // STATED ON THE STREET: a top speed of 9 m/s from station 60 to 180 for traffic running along the spine, and a
+    // sign at station 100 for traffic running against it.
+    ModelRegulation limit;
+    limit.kind = "top_speed";
+    limit.street = a1;
+    limit.from = 60;
+    limit.to = 180;
+    limit.dir = 1;
+    limit.value = 9;
+    CHECK(stateRegulation(m, limit));
+    ModelRegulation sign;
+    sign.kind = "school";
+    sign.street = a1;
+    sign.from = sign.to = 100;
+    sign.dir = -1;
+    sign.value = 5;
+    CHECK(stateRegulation(m, sign));
+    // along the spine: on the long path from 60 - 11.2 = 48.8 m to its end (157.6 m); on the last path from its start to
+    // 180 - 168.8 = 11.2 m
+    for (PathId p : alongFirst) {
+        const std::vector<PathRegulation> regs = m.regulationsAlong(p);
+        CHECK(regs.size() == 1u);
+        if (regs.size() != 1u) continue;
+        CHECK(regs[0].kind == "top_speed");
+        CHECK(approxEqual(regs[0].from, 48.8, kWrittenStation) && approxEqual(regs[0].to, 157.6, kWrittenStation));
+        CHECK(approxEqual(regs[0].value, 9.0, kSamePoint));
+    }
+    for (PathId p : alongLast) {
+        const std::vector<PathRegulation> regs = m.regulationsAlong(p);
+        CHECK(regs.size() == 1u);
+        if (regs.size() != 1u) continue;
+        CHECK(approxEqual(regs[0].from, 0.0, kWrittenStation) && approxEqual(regs[0].to, 11.2, kWrittenStation));
+    }
+    // against the spine: the sign 188.8 - 100 = 88.8 m along the long path; the last path keeps its arm's sign alone
+    for (PathId p : againstFirst) {
+        const std::vector<PathRegulation> regs = m.regulationsAlong(p);
+        CHECK(regs.size() == 1u);
+        if (regs.size() != 1u) continue;
+        CHECK(regs[0].kind == "school");
+        CHECK(approxEqual(regs[0].from, 88.8, kWrittenStation) && approxEqual(regs[0].to, 88.8, kWrittenStation));
+        CHECK(approxEqual(regs[0].value, 5.0, kSamePoint));
+    }
+    for (PathId p : againstLast) CHECK(m.regulationsAlong(p).size() == 1u);
+    // a connector has none; nor a path the model does not have
+    for (uint32_t p = 0; p < m.laneLevel.paths.size(); ++p)
+        if (m.laneLevel.paths[p].kind == PathKind::Connector) CHECK(m.regulationsAlong(PathId(p)).empty());
+    CHECK(m.regulationsAlong(PathId(99999)).empty());
+    // THE ARM'S SIGN STATED AGAIN is the new answer with no lane level built again
+    ModelJunction& j0 = m.junctions[m.streets[a1.index].junctions[0].index];
+    j0.arms[0].regulations = {"give_way"};
+    for (PathId p : againstLast) {
+        const std::vector<PathRegulation> regs = m.regulationsAlong(p);
+        CHECK(regs.size() == 1u && regs[0].kind == "give_way");
+    }
+    // WHAT THE MODEL REFUSES: no kind, no street, a way that is neither, a stretch backwards or off its street
+    std::string why;
+    ModelRegulation bad = limit;
+    bad.kind.clear();
+    CHECK(!stateRegulation(m, bad, &why));
+    bad = limit;
+    bad.street = ModelStreetId(9999);
+    CHECK(!stateRegulation(m, bad, &why));
+    bad = limit;
+    bad.dir = 0;
+    CHECK(!stateRegulation(m, bad, &why));
+    bad = limit;
+    bad.from = 190;
+    CHECK(!stateRegulation(m, bad, &why) && why.find("runs backwards") != std::string::npos);
+    bad = limit;
+    bad.to = 250;
+    CHECK(!stateRegulation(m, bad, &why) && why.find("lies off street") != std::string::npos);
+    CHECK(m.regulations.size() == 2u);
 }

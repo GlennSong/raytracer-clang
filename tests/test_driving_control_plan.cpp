@@ -93,7 +93,9 @@ std::vector<Heading> carry(TestRoads& t, const JunctionFacts& j, const ControlCh
     engine::LaneGraph& g = t.model.laneLevel;
     for (uint32_t jn = 0; jn < g.junctions.size(); ++jn) driving_test::stateControl(t.model, engine::JunctionId(jn), choice.control);
     const PolicyRow& row = policy.rows[static_cast<std::size_t>(choice.row)];
-    std::map<uint32_t, std::vector<std::string>> kindsOn;   // lane -> kinds at its end
+    // (stated on the road model, once for each signed approach: a sign at the end of the approach's street holds for
+    // every lane arriving by it -- driving_test_roads.h stateSignAtEnd)
+    t.model.regulations.clear();
     std::vector<Heading> signed_;
     std::size_t armIndex = 0;
     for (const Heading h : kHeadings) {
@@ -102,27 +104,7 @@ std::vector<Heading> carry(TestRoads& t, const JunctionFacts& j, const ControlCh
         const std::vector<std::string>& kinds = a.major ? row.majorSigns : row.minorSigns;
         if (kinds.empty()) continue;
         signed_.push_back(h);
-        for (uint32_t k = 0; k < t.spec.lanesEachWay; ++k)
-            for (const std::string& kind : kinds) kindsOn[t.laneArriving(kRow, kCol, h, k).index].push_back(kind);
-    }
-    g.regulationKindNames.clear();
-    for (const std::pair<const uint32_t, std::vector<std::string>>& l : kindsOn)
-        g.regulationKindNames.insert(g.regulationKindNames.end(), l.second.begin(), l.second.end());
-    std::sort(g.regulationKindNames.begin(), g.regulationKindNames.end());
-    g.regulationKindNames.erase(std::unique(g.regulationKindNames.begin(), g.regulationKindNames.end()), g.regulationKindNames.end());
-    g.regulations.clear();
-    for (uint32_t p = 0; p < g.paths.size(); ++p) {
-        g.paths[p].regulations = engine::Range{static_cast<uint32_t>(g.regulations.size()), 0};
-        const std::map<uint32_t, std::vector<std::string>>::const_iterator it = kindsOn.find(p);
-        if (it == kindsOn.end()) continue;
-        for (const std::string& kind : it->second) {
-            engine::Regulation reg;
-            reg.kind = engine::LaneGraph::nameIndex(g.regulationKindNames, kind);
-            reg.path = engine::PathId(p);
-            reg.from = reg.to = g.paths[p].length;
-            g.regulations.push_back(reg);
-        }
-        g.paths[p].regulations.count = static_cast<uint32_t>(g.regulations.size()) - g.paths[p].regulations.first;
+        for (const std::string& kind : kinds) CHECK(driving_test::stateSignAtEnd(t.model, t.laneArriving(kRow, kCol, h, 0), kind));
     }
     CHECK(engine::validate(g).empty());
     return signed_;

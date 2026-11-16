@@ -100,7 +100,6 @@ RuleSet rulesWith(const ControlKind& k, DrivesOn side = DrivesOn::Left) {
 RightOfWay tableFor(engine::RoadModel& m, const RuleSet& r) {
     engine::LaneGraph& g = m.laneLevel;
     for (uint32_t j = 0; j < g.junctions.size(); ++j) driving_test::stateControl(m, engine::JunctionId(j), r.controls[0].name);
-    if (g.regulationKindNames.empty()) g.regulationKindNames = {"stop"};
     RoadRules rr;
     FactRegistry none;
     std::vector<std::string> problems;
@@ -411,13 +410,7 @@ TEST_CASE(junction_table_4_side_road_stop_sign_at_a_t) {
     TestRoads t = driving_test::gridRoads(2, 3);
     engine::LaneGraph& g = t.model.laneLevel;
     const engine::PathId side = t.laneArriving(0, 1, kSouth, 0);
-    g.regulationKindNames = {"stop"};
-    engine::Regulation stop;
-    stop.kind = 0;
-    stop.path = side;
-    stop.from = stop.to = g.paths[side.index].length;
-    g.regulations = {stop};
-    g.paths[side.index].regulations = engine::Range{0, 1};
+    CHECK(driving_test::stateSignAtEnd(t.model, side, "stop"));
     CHECK(engine::validate(g).empty());
     const RightOfWay row = tableFor(t.model, rulesWith(minorStop()));
     const JunctionRules& jr = row.junctions[t.junction(0, 1).index];

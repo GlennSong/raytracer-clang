@@ -126,6 +126,10 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         const ModelLane& ml = m.lanes[lane];
         return ml.dir > 0 ? station : edgeAt(ml.edge).s.back() - station;
     };
+    auto stationOf = [&](uint32_t lane, double u) {   // ...and back: the spine station at a place along its corridor
+        const ModelLane& ml = m.lanes[lane];
+        return ml.dir > 0 ? u : edgeAt(ml.edge).s.back() - u;
+    };
 
     // ---- which lanes become lane paths, and the names -----------------------------------------------------------------
     std::vector<char> kept(nLanes, 0);
@@ -404,6 +408,10 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                 p.indexInSection = static_cast<uint32_t>(k);
                 p.street = pc.street;
                 p.modelLane = li;
+                // its stretch of its road's spine, the way it is driven (the corridor runs the way the traffic does)
+                p.onSpine = true;
+                p.stationFrom = stationOf(li, c0);
+                p.stationTo = stationOf(li, c1);
                 const uint32_t id = static_cast<uint32_t>(G.paths.size());
                 G.paths.push_back(p);
                 G.sectionLanes.push_back(PathId(id));
@@ -605,7 +613,6 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
     const LaneLookup& look = r.lookup ? *r.lookup : *ownLook;
     out.closedTo.assign(G.vehicleTagNames.size(), 0);
     const uint32_t tagCount = static_cast<uint32_t>(std::min<std::size_t>(G.vehicleTagNames.size(), kMaxTagNames));
-    std::vector<std::vector<std::string>> regulationsOn(G.paths.size());
     const std::chrono::steady_clock::time_point tConnect = std::chrono::steady_clock::now();
     // the stated turns of each junction, in the model's order (every one placed: one naming no junction is said)
     std::vector<std::vector<uint32_t>> turnsAt(m.junctions.size());
@@ -700,7 +707,6 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         std::vector<uint32_t> arriving, leaving;
         for (const std::pair<uint32_t, uint32_t>& pa : arrivingAt[j]) {
             arriving.push_back(pa.first);
-            for (const std::string& reg : J.arms[pa.second].regulations) regulationsOn[pa.first].push_back(reg);
             // the arm it arrives by and that arm's stated through partner: what says which approaches face each other
             G.paths[pa.first].arm = pa.second;
             G.paths[pa.first].throughArm = throughPartner(J.through, pa.second);
@@ -804,7 +810,6 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             const PathId id(static_cast<uint32_t>(G.paths.size()));
             G.paths.push_back(c);
             out.sources.push_back(PathSource());
-            regulationsOn.emplace_back();
             next[static_cast<std::size_t>(from)].push_back(id);
             next.push_back({PathId(static_cast<uint32_t>(into))});
             G.junctionConnectors.push_back(id);
@@ -912,24 +917,9 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         G.paths[p].next.count = static_cast<uint32_t>(next[p].size());
     }
 
-    // ---- the signs: each arm's, at the end of every lane arriving by it ---------------------------------------------------
-    for (const std::vector<std::string>& kinds : regulationsOn) G.regulationKindNames.insert(G.regulationKindNames.end(), kinds.begin(), kinds.end());
-    std::sort(G.regulationKindNames.begin(), G.regulationKindNames.end());
-    G.regulationKindNames.erase(std::unique(G.regulationKindNames.begin(), G.regulationKindNames.end()), G.regulationKindNames.end());
-    for (uint32_t p = 0; p < G.paths.size(); ++p) {
-        std::vector<std::string>& kinds = regulationsOn[p];
-        std::sort(kinds.begin(), kinds.end());
-        kinds.erase(std::unique(kinds.begin(), kinds.end()), kinds.end());
-        G.paths[p].regulations = Range{static_cast<uint32_t>(G.regulations.size()), 0};
-        for (const std::string& kind : kinds) {
-            Regulation reg;
-            reg.kind = LaneGraph::nameIndex(G.regulationKindNames, kind);
-            reg.path = PathId(p);
-            reg.from = reg.to = G.paths[p].length;
-            G.regulations.push_back(reg);
-        }
-        G.paths[p].regulations.count = static_cast<uint32_t>(G.regulations.size()) - G.paths[p].regulations.first;
-    }
+    // (THE SIGNS AND RULES ALONG THE LANES are not written here, ADR-0437: the model states them -- each arm's signs, each
+    // street's regulations -- and answers for a path, RoadModel::regulationsAlong, from the arm and the stretch of
+    // spine each lane path carries.)
 
     // ---- every path's bend profile, as a vehicle feels it, and the kinks a driver would feel (#281) -----------------
     for (uint32_t p = 0; p < G.paths.size(); ++p) {
@@ -1020,14 +1010,16 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         if (!(m.postedLimit(PathId(p)) > 0)) continue;
         ++(G.paths[p].kind == PathKind::Lane ? out.controlPlan.lanesPosted : out.controlPlan.connectorsPosted);
     }
-    for (const Regulation& reg : G.regulations) {
-        bool found = false;
-        for (std::pair<std::string, uint32_t>& c : out.controlPlan.regulations)
-            if (c.first == G.regulationKindNames[reg.kind]) {
-                ++c.second;
-                found = true;
-            }
-        if (!found) out.controlPlan.regulations.emplace_back(G.regulationKindNames[reg.kind], 1);
+    for (uint32_t p = 0; p < G.paths.size(); ++p) {
+        for (const PathRegulation& reg : m.regulationsAlong(PathId(p))) {
+            bool found = false;
+            for (std::pair<std::string, uint32_t>& c : out.controlPlan.regulations)
+                if (c.first == reg.kind) {
+                    ++c.second;
+                    found = true;
+                }
+            if (!found) out.controlPlan.regulations.emplace_back(reg.kind, 1);
+        }
     }
     std::sort(out.controlPlan.regulations.begin(), out.controlPlan.regulations.end());
 

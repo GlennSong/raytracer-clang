@@ -23,18 +23,16 @@ std::size_t wayCount(const DriverView& v) { return wayStartsOnMine(v) ? v.way.pa
 engine::PathId wayPath(const DriverView& v, std::size_t i) { return i == 0 ? v.me.path : v.way.paths[i]; }
 
 // Whether a regulation means "the top speed is my own value", through the device its kind is bound to.
-bool setsTopSpeed(const DriverView& v, const engine::Regulation& reg) {
-    const Device* d = v.roadRules.device(v.rules, reg.kind);
+bool setsTopSpeed(const DriverView& v, const BoundRegulation& reg) {
+    const Device* d = v.roadRules.device(v.rules, reg);
     return d && d->topSpeedIsValue;
 }
 
 // The limit in force at `along` on `path`: the path's own limit (posted, or its road class's default where none is
 // posted: RoadRules::baseLimit), replaced by the latest regulation at or before that point that sets the top speed.
 Real limitAt(const DriverView& v, engine::PathId path, Real along) {
-    const engine::Path& p = v.roads.paths[path.index];
     Real limit = v.roadRules.baseLimit(path);
-    for (uint32_t r = p.regulations.first; r < p.regulations.end() && r < v.roads.regulations.size(); ++r) {
-        const engine::Regulation& reg = v.roads.regulations[r];
+    for (const BoundRegulation& reg : v.roadRules.regulationsOn(path)) {
         if (reg.from > along) break;
         if (setsTopSpeed(v, reg)) limit = reg.value;
     }
@@ -156,8 +154,7 @@ void noticeSlowerAhead(const DriverView& v, NoticeScratch& s, NoticedFact& out) 
     };
     // Ahead of me on my own path.
     const engine::Path& mine = v.roads.paths[v.me.path.index];
-    for (uint32_t r = mine.regulations.first; r < mine.regulations.end() && r < v.roads.regulations.size(); ++r) {
-        const engine::Regulation& reg = v.roads.regulations[r];
+    for (const BoundRegulation& reg : v.roadRules.regulationsOn(v.me.path)) {
         if (reg.from > v.me.along && setsTopSpeed(v, reg)) consider(reg.value, v.me.path, reg.from - v.me.along);
     }
     // On each later path: the limit in force as I enter it, then its regulations further along.
@@ -167,8 +164,7 @@ void noticeSlowerAhead(const DriverView& v, NoticeScratch& s, NoticedFact& out) 
         if (!knownPath(v.roads, id) || toStart > v.lookAhead) break;
         consider(limitAt(v, id, 0), id, toStart);
         const engine::Path& p = v.roads.paths[id.index];
-        for (uint32_t r = p.regulations.first; r < p.regulations.end() && r < v.roads.regulations.size(); ++r) {
-            const engine::Regulation& reg = v.roads.regulations[r];
+        for (const BoundRegulation& reg : v.roadRules.regulationsOn(id)) {
             if (reg.from > 0 && setsTopSpeed(v, reg)) consider(reg.value, id, toStart + reg.from);
         }
         toStart += p.length;

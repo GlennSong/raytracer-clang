@@ -120,6 +120,16 @@ bool writeLaneGraphSvg(const RoadModel& model, const std::string& path, const La
     for (uint32_t j = 0; j < g.junctions.size(); ++j) controlNames.push_back(model.controlAt(JunctionId(j)));
     std::sort(controlNames.begin(), controlNames.end());
     controlNames.erase(std::unique(controlNames.begin(), controlNames.end()), controlNames.end());
+    // the regulations along each path, as the model answers (RoadModel::regulationsAlong), and their kinds in name
+    // order: a kind's colour is its place in that list
+    std::vector<std::vector<PathRegulation>> regulationsOn(g.paths.size());
+    std::vector<std::string> regulationKindNames;
+    for (uint32_t p = 0; p < g.paths.size(); ++p) {
+        regulationsOn[p] = model.regulationsAlong(PathId(p));
+        for (const PathRegulation& reg : regulationsOn[p]) regulationKindNames.push_back(reg.kind);
+    }
+    std::sort(regulationKindNames.begin(), regulationKindNames.end());
+    regulationKindNames.erase(std::unique(regulationKindNames.begin(), regulationKindNames.end()), regulationKindNames.end());
     double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
     for (const std::vector<Vec2>* set : {&g.points, &g.planPoints})
         for (const Vec2& p : *set) { x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y); }
@@ -308,16 +318,14 @@ bool writeLaneGraphSvg(const RoadModel& model, const std::string& path, const La
             const PathId p = g.junctionLanes[k];
             if (p.index >= g.paths.size()) continue;
             const Path& lp = g.paths[p.index];
-            for (uint32_t r = lp.regulations.first; r < lp.regulations.end() && r < g.regulations.size(); ++r) {
-                const Regulation& reg = g.regulations[r];
+            for (const PathRegulation& reg : regulationsOn[p.index]) {
                 if (reg.from < lp.length - kJunctionEndReach) continue;
                 const Vec2 at = g.pointAt(p, reg.from), d = g.directionAt(p, reg.from), n = perp(d);
                 const double s = kGraphSvgSignMark;
                 const Vec2 tip = at + d * s, b0 = at - d * s + n * s, b1 = at - d * s - n * s;
-                f << "<polygon fill='" << kindColour(reg.kind) << "' points='" << X(tip.x) << "," << Y(tip.y) << " " << X(b0.x)
-                  << "," << Y(b0.y) << " " << X(b1.x) << "," << Y(b1.y) << "'><title>lane " << p.index << ": "
-                  << (reg.kind < g.regulationKindNames.size() ? g.regulationKindNames[reg.kind] : std::string("?"))
-                  << "</title></polygon>\n";
+                f << "<polygon fill='" << kindColour(LaneGraph::nameIndex(regulationKindNames, reg.kind)) << "' points='" << X(tip.x)
+                  << "," << Y(tip.y) << " " << X(b0.x) << "," << Y(b0.y) << " " << X(b1.x) << "," << Y(b1.y) << "'><title>lane "
+                  << p.index << ": " << reg.kind << "</title></polygon>\n";
             }
         }
     }
@@ -330,9 +338,9 @@ bool writeLaneGraphSvg(const RoadModel& model, const std::string& path, const La
     for (NameIndex c = 0; c < controlNames.size(); ++c, keyY += keyLine)
         f << "<text x='" << keyLine << "' y='" << keyY << "' fill='" << controlColour(c) << "'>junction control (disc): "
           << controlNames[c] << "</text>\n";
-    for (NameIndex k = 0; k < g.regulationKindNames.size(); ++k, keyY += keyLine)
+    for (NameIndex k = 0; k < regulationKindNames.size(); ++k, keyY += keyLine)
         f << "<text x='" << keyLine << "' y='" << keyY << "' fill='" << kindColour(k)
-          << "'>at an arriving lane's end (triangle): " << g.regulationKindNames[k] << "</text>\n";
+          << "'>at an arriving lane's end (triangle): " << regulationKindNames[k] << "</text>\n";
     for (std::size_t t = 1; t < kTurnCount; ++t, keyY += keyLine)
         f << "<text x='" << keyLine << "' y='" << keyY << "' fill='" << kGraphSvgTurnColours[t] << "'>connector: "
           << kGraphSvgTurnNames[t] << "</text>\n";

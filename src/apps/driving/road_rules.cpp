@@ -48,29 +48,36 @@ void checkNeeds(const RuleSet& rules, const std::string& who, const std::vector<
 
 }  // namespace
 
-const Device* RoadRules::device(const RuleSet& rules, engine::NameIndex kind) const {
-    if (kind >= deviceOfKind.size()) return nullptr;
-    const uint32_t d = deviceOfKind[kind];
-    if (d >= rules.devices.size()) return nullptr;
-    return &rules.devices[d];
-}
-
 bool buildRoadRules(const engine::RoadModel& model, const RuleSet& rules, const FactRegistry& facts, RoadRules& out,
                     std::vector<std::string>* problems) {
     const engine::LaneGraph& roads = model.laneLevel;
     std::vector<std::string> found;
-    out.deviceOfKind.assign(roads.regulationKindNames.size(), kNoDevice);
 
-    for (std::size_t k = 0; k < roads.regulationKindNames.size(); ++k) {
-        const std::string& kindName = roads.regulationKindNames[k];
-        const Device* d = rules.findDevice(kindName);
-        if (!d) {
-            found.push_back("the lane graph has regulations of kind \"" + kindName + "\", but rule set \"" +
-                            rules.name + "\" has no device \"" + kindName + "\"");
-            continue;
+    // The regulations along each path, as the model answers them, each bound to the rule set's device of its kind.
+    out.regulations.clear();
+    out.regulationsOfPath.assign(roads.paths.size(), engine::Range());
+    std::map<std::string, uint32_t> deviceOfKind;   // by kind name, so the problems come in name order
+    for (std::size_t p = 0; p < roads.paths.size(); ++p) {
+        out.regulationsOfPath[p].first = static_cast<uint32_t>(out.regulations.size());
+        for (const engine::PathRegulation& stated : model.regulationsAlong(engine::PathId(static_cast<uint32_t>(p)))) {
+            std::map<std::string, uint32_t>::iterator known = deviceOfKind.find(stated.kind);
+            if (known == deviceOfKind.end()) {
+                const Device* d = rules.findDevice(stated.kind);
+                known = deviceOfKind.emplace(stated.kind, d ? static_cast<uint32_t>(d - rules.devices.data()) : kNoDevice).first;
+            }
+            BoundRegulation bound;
+            bound.device = known->second;
+            bound.from = stated.from;
+            bound.to = stated.to;
+            bound.value = stated.value;
+            out.regulations.push_back(bound);
         }
-        out.deviceOfKind[k] = static_cast<uint32_t>(d - rules.devices.data());
+        out.regulationsOfPath[p].count = static_cast<uint32_t>(out.regulations.size()) - out.regulationsOfPath[p].first;
     }
+    for (const std::pair<const std::string, uint32_t>& k : deviceOfKind)
+        if (k.second == kNoDevice)
+            found.push_back("the road model states regulations of kind \"" + k.first + "\", but rule set \"" + rules.name +
+                            "\" has no device \"" + k.first + "\"");
 
     // Each path's limit: the one the road model posts on it, or else its road class's default, which must be a speed.
     out.limitOfPath.assign(roads.paths.size(), 0);

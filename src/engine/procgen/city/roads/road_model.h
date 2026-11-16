@@ -125,6 +125,30 @@ struct ModelAttachment {
     Vec2 at = Vec2(kNotStated, kNotStated);
 };
 
+// A REGULATION ON A STREET (ADR-0437): a rule that holds on a stretch of one street for the traffic running one way
+// along it -- "top speed 15 m/s from station 30 to the street's end, for traffic running along the spine". Attached by
+// street id and station, as everything else on the roads is. Its KIND is a name from the data files: the rule set's
+// device of that name (assets/scripts/rules/*.lua `devices`) says what it means, and the driving refuses a rule set
+// that lacks it when the rules are handed over (apps/driving/road_rules.h). `from` == `to`: it stands at one place (a
+// sign). `value`: what the kind's rule makes of it (a top speed in metres per second); unused by a kind that needs none.
+// THE ONE HOME of where a rule stands along a road and what value it carries. (A sign a junction's arm states --
+// ModelArm::regulations, the road file's -- stands at the end of every lane arriving by that arm: stated there, once.)
+// A path's regulations are ASKED: RoadModel::regulationsAlong. Nothing writes these into a road file yet.
+struct ModelRegulation {
+    std::string kind;
+    ModelStreetId street;
+    Real from = 0, to = 0;           // stations along the street's road's spine, from <= to
+    int dir = 1;                     // whose traffic it holds for: +1 running along the spine, -1 against it
+    Real value = 0;
+};
+// ONE REGULATION AS A PATH MEETS IT (RoadModel::regulationsAlong): the kind's name, the stretch of the path where it
+// holds (metres along the path; equal: it stands at one place) and its value.
+struct PathRegulation {
+    std::string kind;
+    Real from = 0, to = 0;
+    Real value = 0;
+};
+
 // One lane's stretch on one street.
 struct ModelLaneSpan {
     ModelStreetId street;
@@ -216,7 +240,8 @@ struct RoadModel {
     std::vector<Vec2> linePoints;         // the streets' centre lines (ModelStreet::line ranges into it), and inside stretches'
     std::vector<Real> lineStations;       // ...each point's station along its road's spine (ADR-0425)
     std::vector<ModelAttachment> attachments;   // in the order attached
-    std::vector<std::string> notStated;   // the parts of the design nothing states yet, in words
+    std::vector<ModelRegulation> regulations;   // the rules standing along the streets, in the order stated (ADR-0437)
+    std::vector<std::string> notStated;  // the parts of the design nothing states yet, in words
     std::vector<std::string> problems;    // where the build does not match what was stated, each with its place
     // the road file states that its junctions' arms are listed in their ring ("arms_in_ring", ADR-0427): the readers of the
     // order (the turns, the regions, the outline, the signs) read the lists as they are. False: a problem line names the
@@ -271,6 +296,20 @@ struct RoadModel {
     // (CrossingPoint::modelConnection), the one of its two paths that is a stretch of the lane the connection says
     // merges (ModelConnection::from) -- the path that gives way. Not valid: no merge is stated there.
     PathId mergingAt(const CrossingPoint& x) const;
+    // THE JUNCTION A LANE PATH ARRIVES AT (null: it arrives at none, or states no stretch of its street): the junction
+    // its street names at the end the path runs to (its `to` end for a path running along the spine, its `from` end
+    // for one running against it), for a path that carries an arm (Path::arm).
+    const ModelJunction* arrivesAt(PathId path) const;
+    // THE REGULATIONS ALONG A PATH (ADR-0437), in order along it (by where each begins, then where it ends, then by
+    // kind name): what the driving binds to its rules. Two stated facts answer it, each stated once:
+    //   - the signs the arm it arrives by states (ModelArm::regulations of arrivesAt's junction), each standing at
+    //     the path's end (from == to == its length), one of each name;
+    //   - the regulations stated on its street (`regulations`) for traffic running its way, whose stretch of the
+    //     spine overlaps the path's own (Path::stationFrom, stationTo) or, for one standing at one place, lies on it:
+    //     the part on this path, each station placed along the path in proportion (exact on a straight road; on a
+    //     bend out by the difference between the lane's length and the spine's over that stretch).
+    // A connector, or a lane stating no stretch of spine, has none.
+    std::vector<PathRegulation> regulationsAlong(PathId path) const;
 
     // ---- WHAT A READER ASKS OF THE JUNCTIONS AND STREETS (ADR-0436) -------------------------------------------------
     // THE WAY TO READ THE ROADS: a reader asks these (and the questions below this struct: lanesOf, leadsTo,
@@ -286,6 +325,11 @@ struct RoadModel {
     // street's `from`, into it at its `to`. The first such arm listed. -1: the street names no junction there, or the
     // junction lists no arm for it.
     int armAt(ModelStreetId street, int end) const;
+    // THE ARM REACHED AT A STATION OF A STREET (ADR-0437): where `station` (along the street's road's spine) is one of
+    // the street's two ends, to the written centimetre, the arm the street is there (armAt); -1 anywhere else along
+    // it. What a link of the street map asks to learn the arm it arrives by: it carries its street and the station at
+    // its far end (NavLink::street, stationTo), and keeps no copy of the arm.
+    int armReachedAt(ModelStreetId street, Real station) const;
     // A STREET'S CENTRE LINE (or a stretch inside a junction's: ModelStretch::line), `from` to `to`, as plan points.
     // Empty: none kept.
     std::vector<Vec2> centreLine(const Range& line) const;
@@ -331,6 +375,10 @@ std::vector<std::vector<TurnArm>> turnArmsOf(const RoadModel& m);
 // of its arms, and then its street is the arm's).
 bool attach(RoadModel& m, ModelAttachment a, const AttachmentKinds& kinds, std::string* err = nullptr);
 bool attach(RoadModel& m, ModelAttachment a, std::string* err = nullptr);   // the shipped kinds
+// STATES A REGULATION on a street of the model (ADR-0437): refused (false, and why in `err`) when it names no kind, no
+// street of the model, a way that is neither along the spine (+1) nor against it (-1), or a stretch that runs
+// backwards or leaves its street (the street's `from` to `to`, to the written centimetre).
+bool stateRegulation(RoadModel& m, const ModelRegulation& r, std::string* err = nullptr);
 
 // ---- the questions (design section 6) ---------------------------------------------------------------------------------
 // The lanes of a street, forward then backward, each by slot from the centre line.
@@ -376,7 +424,8 @@ std::string roadModelSvg(const RoadModel& m);      // junctions and streets with
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 10;   // 10: the lane level holds no copy of the model's facts (LGRF 11, ADR-0436)
+constexpr uint32_t kRoadModelFormat = 11;   // 11: the regulations stated on streets; the lane level holds none (LGRF 12, ADR-0437)
+                                            // 10: the lane level holds no copy of the model's facts (LGRF 11, ADR-0436)
                                             // 9: no stored one-way flag: the cross-section answers it (ADR-0432)
                                             // 8: the lane level, as the lane graph's own bytes (LGRF) after the rest (ADR-0429)
                                             // 7: whether the file states its arms in their ring (ADR-0427)

@@ -131,8 +131,11 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
 
     // ---- the links along a run of centre line between two nodes, each way its lanes run ---------------------------------
     // (`forward` / `backward`: lay that way's links, where the section has lanes that way)
+    // THE ONE WRITER of a street-map link's compiled look-up (ADR-0437): its width, class, lanes, one-way, walkable,
+    // access bits and kerb parking are filled here from the street's stated cross-section and nowhere else. (The arm a
+    // link arrives by is not kept: RoadModel::armReachedAt answers it from the link's street and far station.)
     auto layLinks = [&](const Run& run, const std::vector<int>& nodesAlong, const ModelSection& sec, uint32_t edge, int street, int junction,
-                        int armAtStart, int armAtEnd, bool forward = true, bool backward = true) {
+                        bool forward = true, bool backward = true) {
         const bool walk = sec.sidewalk > 0 && isStreetClass(sec.klass);
         const bool deckClass = isDeckClass(sec.klass);
         uint8_t access = 0;
@@ -160,8 +163,6 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
             L.road = static_cast<int>(edge);
             L.stationFrom = run.st[i];
             L.stationTo = run.st[k];
-            const std::size_t last = nodesAlong.size() - 1;
-            L.armIn = k == 0 ? armAtStart : k == last ? armAtEnd : -1;
             if (deckClass) {
                 Real ya = 0, yb = 0;
                 if (deckY(edge, L.stationFrom, &ya) && deckY(edge, L.stationTo, &yb)) {
@@ -375,7 +376,7 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
                 if (sameWrittenStation(c.first, run.st[i])) node = c.second;
             along.push_back(node >= 0 ? node : addNode(run.pts[i], -1, JunctionKind::None));
         }
-        layLinks(run, along, S.section, S.edge, static_cast<int>(s), -1, endArm[0], endArm[1]);
+        layLinks(run, along, S.section, S.edge, static_cast<int>(s), -1);
     }
 
     // ---- the stretches of road inside the spread junctions, between the points on them --------------------------------------
@@ -418,7 +419,7 @@ bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeck
                     else if (k + 1 == run.pts.size()) along.push_back(on[i + 1].second);
                     else along.push_back(addNode(run.pts[k], static_cast<int>(j), JunctionKind::None));
                 }
-                layLinks(run, along, st.section, st.edge, -1, static_cast<int>(j), -1, -1, forward, backward);
+                layLinks(run, along, st.section, st.edge, -1, static_cast<int>(j), forward, backward);
             }
         }
         // a junction its stated points and stretches leave in pieces: a finding

@@ -34,7 +34,7 @@ namespace driving {
 
 using engine::Real;
 
-struct RoadRules;      // road_rules.h: the graph's regulation kinds bound to the rule set's devices
+struct RoadRules;      // road_rules.h: the regulations along each path, bound to the rule set's devices
 struct RightOfWay;     // right_of_way.h: who gives way to whom at every junction
 struct JunctionPlans;  // junction_plan.h: one driver's plans for the junctions ahead
 class AnnouncementBoard;   // announce.h: who will be on which crossing point, and when
@@ -97,7 +97,7 @@ struct DriverView {
     const std::vector<Car>& cars;        // every car's record
     const PathLists& lists;              // ... and each path's cars in order (built from `cars`)
     const RuleSet& rules;
-    const RoadRules& roadRules;          // the graph's regulation kinds, bound to the rule set's devices
+    const RoadRules& roadRules;          // the regulations along each path, bound to the rule set's devices
     Real lookAhead;                      // how far ahead I look, in metres
     // Where my trip goes and the holds the host has placed on it; null when I am on no trip (then the facts about
     // them are absent).

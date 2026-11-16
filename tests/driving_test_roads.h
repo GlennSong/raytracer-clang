@@ -8,9 +8,10 @@
 // EVERY TEST ROAD IS A SMALL ROAD MODEL (ADR-0436), as a level's is: the driving is handed the model and reaches the
 // lane table through it. The lane table (`model.laneLevel`) is laid by hand here; what the road IS -- the limit posted
 // on a stretch and its road class, the control at a junction, the turn a connector takes, which lane joins by a merge
-// -- is stated ON THE MODEL, once, by the four functions below (stateStreet, stateControl, stateTurn, stateMerge), and
-// read back by the same questions the driving asks (RoadModel::postedLimit, roadClassOf, controlAt, turnOf, mergingAt).
-// A test that makes its own little lane table states its facts through the same four.
+// -- and the rules standing along a lane (a stop sign at its end, a top speed part-way along) are stated ON THE MODEL,
+// once, by the functions below (stateStreet, stateControl, stateTurn, stateMerge, stateRegulation), and read back by
+// the same questions the driving asks (RoadModel::postedLimit, roadClassOf, controlAt, turnOf, mergingAt,
+// regulationsAlong). A test that makes its own little lane table states its facts through the same functions.
 //
 // The plan is laid out on compass HEADINGS: east is +x, north is +y (the plan point's second coordinate). Lanes are
 // counted as the lane graph counts them: lane 0 is the OFFSIDE-most (nearest the middle of the road), the last is the
@@ -71,6 +72,17 @@ void stateTurn(engine::RoadModel& m, engine::PathId connector, engine::Turn turn
 // the path names none yet) and the connection that says so, and every crossing point where the two paths join names
 // that connection. Returns the connection's place in the model's list.
 uint32_t stateMerge(engine::RoadModel& m, engine::PathId joining, engine::PathId host);
+// A REGULATION ALONG A LANE (ADR-0437): a rule of kind `kind` (a device name of the test's rule set) from `from` to
+// `to` metres along lane path `lane` (equal: a sign standing at one place), with `value` (a top speed in metres per
+// second; unused by a kind that needs none). Stated on the MODEL, on the lane's street, as a level's is
+// (engine::stateRegulation); the driving reads it back through RoadModel::regulationsAlong. The street's stations
+// are the lane's own metres: every lane path on that street that states no stretch of spine yet is given 0 to its
+// length, running the way the spine does, so the regulation holds for every lane of the street, as a sign beside a
+// road does. A lane on no street yet gets one of its own, posting no limit and of no class. False (and a line
+// printed): the model refused it.
+bool stateRegulation(engine::RoadModel& m, engine::PathId lane, const std::string& kind, Real from, Real to, Real value = 0);
+// A SIGN STANDING AT THE END OF A LANE (a stop sign where it arrives at a junction): a regulation at its last metre.
+bool stateSignAtEnd(engine::RoadModel& m, engine::PathId lane, const std::string& kind);
 
 // WHICH WAY A ROAD RUNS on the plan.
 enum class Heading : uint8_t { East, North, West, South };

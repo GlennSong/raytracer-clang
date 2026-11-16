@@ -28,7 +28,8 @@ constexpr Real kEps = 1e-9;
 // that is not one (it must never change a limit).
 constexpr const char* kTopSpeedKind = "top_speed_here";
 constexpr const char* kOtherKind = "stop_here";
-constexpr engine::NameIndex kTopSpeed = 0, kOther = 1;
+constexpr const char* kTopSpeed = kTopSpeedKind;
+constexpr const char* kOther = kOtherKind;
 
 // One class: 4.5 m long, braking comfortably at 2 m/s2.
 constexpr Real kCarLength = 4.5;
@@ -50,7 +51,6 @@ engine::PathId pid(uint32_t i) { return engine::PathId(i); }
 engine::RoadModel chain(const std::vector<Real>& lengths, const std::vector<Real>& limits) {
     engine::RoadModel m;
     engine::LaneGraph& g = m.laneLevel;
-    g.regulationKindNames = {kTopSpeedKind, kOtherKind};
     Real x = 0;
     for (std::size_t i = 0; i < lengths.size(); ++i) {
         engine::Path p;
@@ -69,23 +69,16 @@ engine::RoadModel chain(const std::vector<Real>& lengths, const std::vector<Real
     return m;
 }
 
-// Puts regulations on one path (call path by path, each list sorted by distance along).
-void addRegulations(engine::RoadModel& road, uint32_t path, const std::vector<engine::Regulation>& regs) {
-    engine::LaneGraph& g = road.laneLevel;
-    g.paths[path].regulations.first = static_cast<uint32_t>(g.regulations.size());
-    g.paths[path].regulations.count = static_cast<uint32_t>(regs.size());
-    for (engine::Regulation r : regs) {
-        r.path = pid(path);
-        g.regulations.push_back(r);
-    }
-}
-engine::Regulation regulation(engine::NameIndex kind, Real at, Real value = 0) {
-    engine::Regulation r;
-    r.kind = kind;
-    r.from = at;
-    r.to = at;
-    r.value = value;
-    return r;
+// A sign of kind `kind` standing `at` metres along a path, with its value.
+struct SignAt {
+    const char* kind;
+    Real at;
+    Real value;
+};
+SignAt regulation(const char* kind, Real at, Real value = 0) { return SignAt{kind, at, value}; }
+// States regulations along one path, on the road model (the tests' one way: driving_test_roads.h stateRegulation).
+void addRegulations(engine::RoadModel& road, uint32_t path, const std::vector<SignAt>& regs) {
+    for (const SignAt& r : regs) CHECK(driving_test::stateRegulation(road, pid(path), r.kind, r.at, r.at, r.value));
 }
 
 Number number(const std::string& name, double value, const std::string& unit) {
@@ -519,21 +512,36 @@ TEST_CASE(notice_road_rules_binding_and_refusals) {
     registerBuiltInFacts(facts);
     std::vector<std::string> problems;
 
-    // Sound: each kind bound to its device.
-    const engine::RoadModel g = chain({10}, {10});
+    // Sound: each regulation the road model states along the path, in order along it, bound to its kind's device.
+    engine::RoadModel g = chain({10}, {10});
+    addRegulations(g, 0, {regulation(kOther, 2, 0), regulation(kTopSpeed, 6, 7)});
     RoadRules rr;
     CHECK(buildRoadRules(g, testRules(), facts, rr, &problems));
     CHECK(problems.empty());
     const RuleSet rules = testRules();
-    CHECK(rr.device(rules, kTopSpeed) && rr.device(rules, kTopSpeed)->topSpeedIsValue);
-    CHECK(rr.device(rules, kOther) && rr.device(rules, kOther)->name == kOtherKind);
-    CHECK(rr.device(rules, 7) == nullptr);
+    const BoundRegulations on = rr.regulationsOn(pid(0));
+    CHECK(on.end() - on.begin() == 2);
+    if (on.end() - on.begin() == 2) {
+        const BoundRegulation& first = on.begin()[0];
+        const BoundRegulation& second = on.begin()[1];
+        CHECK(rr.device(rules, first) && rr.device(rules, first)->name == kOtherKind);
+        CHECK_APPROX(first.from, 2.0, kEps);
+        CHECK_APPROX(first.to, 2.0, kEps);
+        CHECK(rr.device(rules, second) && rr.device(rules, second)->topSpeedIsValue);
+        CHECK_APPROX(second.from, 6.0, kEps);
+        CHECK_APPROX(second.value, 7.0, kEps);
+    }
+    CHECK(rr.regulationsOn(pid(7)).begin() == rr.regulationsOn(pid(7)).end());   // a path it does not know: none
 
-    // A regulation kind with no device: refused naming both.
+    // A regulation kind with no device: refused naming both; the regulation stays, bound to nothing.
     engine::RoadModel odd = g;
-    odd.laneLevel.regulationKindNames.push_back("mystery_kind");
+    addRegulations(odd, 0, {regulation("mystery_kind", 8, 0)});
     CHECK(!buildRoadRules(odd, rules, facts, rr, &problems));
     CHECK(problems.size() == 1u && anySays(problems, "mystery_kind", "test_rules"));
+    CHECK(rr.regulationsOn(pid(0)).end() - rr.regulationsOn(pid(0)).begin() == 3);
+    if (rr.regulationsOn(pid(0)).end() - rr.regulationsOn(pid(0)).begin() == 3)
+        CHECK(rr.device(rules, rr.regulationsOn(pid(0)).begin()[2]) == nullptr);
+    CHECK(buildRoadRules(g, rules, facts, rr, nullptr));
 
     // Missing comfortable_side_accel: names corner_speed and the number.
     problems.clear();

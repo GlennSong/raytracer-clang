@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 namespace driving_test {
 
@@ -163,6 +164,37 @@ uint32_t stateMerge(engine::RoadModel& m, PathId joining, PathId host) {
         if (theTwo) x.modelConnection = connection;
     }
     return connection;
+}
+
+bool stateRegulation(engine::RoadModel& m, PathId lane, const std::string& kind, Real from, Real to, Real value) {
+    LaneGraph& g = m.laneLevel;
+    if (g.paths[lane.index].street >= m.streets.size()) stateStreet(m, lane, 0, std::string());
+    const uint32_t street = g.paths[lane.index].street;
+    engine::ModelStreet& S = m.streets[street];
+    for (Path& p : g.paths) {
+        if (p.kind != PathKind::Lane || p.street != street) continue;
+        if (!p.onSpine) {
+            p.onSpine = true;
+            p.stationFrom = 0;
+            p.stationTo = p.length;
+        }
+        S.to = std::max(S.to, std::max(p.stationFrom, p.stationTo));
+    }
+    engine::ModelRegulation r;
+    r.kind = kind;
+    r.street = engine::ModelStreetId(street);
+    r.from = from;
+    r.to = to;
+    r.value = value;
+    std::string why;
+    if (engine::stateRegulation(m, r, &why)) return true;
+    std::printf("    stateRegulation refused: %s\n", why.c_str());
+    return false;
+}
+
+bool stateSignAtEnd(engine::RoadModel& m, PathId lane, const std::string& kind) {
+    const Real end = m.laneLevel.paths[lane.index].length;
+    return stateRegulation(m, lane, kind, end, end);
 }
 
 // ---- headings ------------------------------------------------------------------------------------------------------

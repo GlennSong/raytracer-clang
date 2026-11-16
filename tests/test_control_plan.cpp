@@ -358,13 +358,12 @@ std::string roadOf(const BuiltLaneLevel& lg, const RoadLabGraph& g, PathId lane)
     return s < lg.sectionSources.size() ? g.edges[static_cast<std::size_t>(lg.sectionSources[s].edge)].id : std::string();
 }
 
-// The regulation kinds standing at the end of `lane`.
-std::vector<std::string> kindsAtEnd(const LaneGraph& g, PathId lane) {
+// The regulation kinds standing at the end of `lane`, as the road model answers (RoadModel::regulationsAlong).
+std::vector<std::string> kindsAtEnd(const RoadModel& m, PathId lane) {
     std::vector<std::string> out;
-    const Path& p = g.paths[lane.index];
-    for (uint32_t r = p.regulations.first; r < p.regulations.end(); ++r)
-        if (g.regulations[r].from == p.length && g.regulations[r].to == p.length)
-            out.push_back(g.regulationKindNames[g.regulations[r].kind]);
+    const Real length = m.laneLevel.paths[lane.index].length;
+    for (const PathRegulation& r : m.regulationsAlong(lane))
+        if (approxEqual(r.from, length, kSamePoint) && approxEqual(r.to, length, kSamePoint)) out.push_back(r.kind);
     return out;
 }
 
@@ -412,7 +411,7 @@ TEST_CASE(control_plan_2_a_planned_road_graph_is_carried_through) {
         for (uint32_t k = jn.arriving.first; k < jn.arriving.end(); ++k) {
             const PathId lane = G.junctionLanes[k];
             const std::string by = roadOf(lg, road, lane);
-            const std::vector<std::string> kinds = kindsAtEnd(G, lane);
+            const std::vector<std::string> kinds = kindsAtEnd(lg.model, lane);
             const bool local = by == "l0" || by == "l1" || by == "l2";
             CHECK(kinds == (local && pj.control == "stop" ? std::vector<std::string>{"stop"} : std::vector<std::string>{}));
             stopsSeen += static_cast<uint32_t>(kinds.size());
@@ -501,20 +500,40 @@ TEST_CASE(control_plan_3_a_junction_with_no_plan_or_an_impossible_sign_is_report
 // ---- 4. save and load ----------------------------------------------------------------------------------------------------
 
 TEST_CASE(control_plan_4_regulations_survive_save_and_load) {
-    const LaneGraph& G = plannedBuild().model.laneLevel;
-    CHECK(!G.regulations.empty());
+    // The regulations are the road model's (ADR-0437): the signs its arms state and the rules stated on its streets.
+    // A model saved and read back answers the same along every path, with one stated on a street too.
+    RoadModel m = plannedBuild().model;
+    ModelRegulation limit;
+    limit.kind = "top_speed";
+    limit.street = ModelStreetId(0);
+    limit.from = m.streets[0].from;
+    limit.to = m.streets[0].to;
+    limit.value = 9;
+    CHECK(stateRegulation(m, limit));
     bundle::BinWriter w;
-    putLaneGraph(w, G);
+    putRoadModel(w, m);
     bundle::BinReader r(w.bytes.data(), w.bytes.size());
-    LaneGraph back;
+    RoadModel back;
     std::string err;
-    CHECK(getLaneGraph(r, back, &err));
+    CHECK(getRoadModel(r, back, &err));
     CHECK(err.empty());
-    CHECK(back == G);
-    CHECK(back.regulations == G.regulations && back.regulationKindNames == G.regulationKindNames);
-    CHECK(dumpText(back) == dumpText(G));
-    // the dump shows each junction's control and what its arriving lanes face
-    CHECK(dumpText(G).find("at the arriving lanes' ends: lane ") != std::string::npos);
+    CHECK(back == m);
+    CHECK(back.laneLevel == m.laneLevel);
+    CHECK(back.regulations.size() == 1u);
+    std::size_t signs = 0, limits = 0;
+    for (uint32_t p = 0; p < m.laneLevel.paths.size(); ++p) {
+        const std::vector<PathRegulation> was = m.regulationsAlong(PathId(p)), is = back.regulationsAlong(PathId(p));
+        CHECK(was.size() == is.size());
+        for (std::size_t k = 0; k < was.size() && k < is.size(); ++k) {
+            CHECK(was[k].kind == is[k].kind && was[k].from == is[k].from && was[k].to == is[k].to && was[k].value == is[k].value);
+            ++(was[k].kind == "top_speed" ? limits : signs);
+        }
+    }
+    CHECK(signs == 3u);    // the three stop signs of test 2
+    CHECK(limits >= 1u);   // the limit, on each lane path of its street running along the spine
+    // the model's dump shows what its arms state and the regulation on the street
+    CHECK(dumpRoadModel(back).find("regulation: top_speed on street ") != std::string::npos);
+    CHECK(dumpRoadModel(back).find(" [stop]") != std::string::npos);
 }
 
 // ---- 5. same plan, same graph ----------------------------------------------------------------------------------------------

@@ -84,11 +84,17 @@ struct NavLink {
     // WHERE IT LIES ON THE ROAD MODEL (ADR-0425: a street map built from the model, roads/street_map.h; a graph built
     // from a hand-made road graph has none of them): the city (an index into LevelRoadModel::cities), the street it runs
     // along (-1: a link inside a junction, or a walk), the junction it lies inside (-1: none), the road (the road file's
-    // edge) and the stations along that road's spine at its `from` and `to` ends, and the arm of the junction it
-    // arrives by at `to` (-1: no junction arm there).
+    // edge) and the stations along that road's spine at its `from` and `to` ends. These are the ids the model is asked
+    // by: the arm of the junction a link arrives by at `to` is RoadModel::armReachedAt(street, stationTo), never kept
+    // here (ADR-0437).
+    //
+    // WHAT A LINK HOLDS OF THE ROAD ITSELF (ADR-0437): width, klass, lanes, oneWay, walkable, access, parkOffset and
+    // parkWidth above. A graph has three makers and each fills them in ONE function, and nothing else writes them: the
+    // street map (roads/street_map.cpp layLinks, from the street's stated cross-section: a compiled look-up, since
+    // routing and every agent's position read them each tick), a hand-made road graph (buildNavGraph, from its
+    // RoadEdge: no road model exists there, so the link is the fact's only form) and the walks (appendFootpaths).
     int city = -1, street = -1, junction = -1, road = -1;
     Real stationFrom = 0, stationTo = 0;
-    int armIn = -1;
 };
 
 // Semantic signal predicate (roads-v2.2 #17/S5): a node is signal-CONTROLLED

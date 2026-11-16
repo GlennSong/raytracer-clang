@@ -495,6 +495,66 @@ PathId RoadModel::mergingAt(const CrossingPoint& x) const {
     return PathId();
 }
 
+const ModelJunction* RoadModel::arrivesAt(PathId path) const {
+    if (path.index >= laneLevel.paths.size()) return nullptr;
+    const Path& p = laneLevel.paths[path.index];
+    if (p.kind != PathKind::Lane || !p.onSpine || p.arm == kNoIndex || p.street >= streets.size()) return nullptr;
+    const ModelJunctionId j = streets[p.street].junctions[p.alongSpine() ? 1 : 0];
+    return j.index < junctions.size() ? &junctions[j.index] : nullptr;
+}
+
+std::vector<PathRegulation> RoadModel::regulationsAlong(PathId path) const {
+    std::vector<PathRegulation> out;
+    if (path.index >= laneLevel.paths.size()) return out;
+    const Path& p = laneLevel.paths[path.index];
+    if (p.kind != PathKind::Lane || !p.onSpine) return out;
+    // the signs of the arm it arrives by, at its end
+    const ModelJunction* J = arrivesAt(path);
+    if (J && p.arm < J->arms.size()) {
+        std::vector<std::string> names = J->arms[p.arm].regulations;
+        std::sort(names.begin(), names.end());
+        names.erase(std::unique(names.begin(), names.end()), names.end());
+        for (const std::string& name : names) {
+            PathRegulation r;
+            r.kind = name;
+            r.from = r.to = p.length;
+            out.push_back(r);
+        }
+    }
+    // the regulations stated on its street for traffic running its way, each station placed along the path
+    const int way = p.alongSpine() ? 1 : -1;
+    const Real lo = std::min(p.stationFrom, p.stationTo), hi = std::max(p.stationFrom, p.stationTo);
+    const auto along = [&](Real station) {   // metres along the path, the way it is driven
+        const Real share = (station - p.stationFrom) / (p.stationTo - p.stationFrom);
+        return std::min(std::max(share, Real(0)), Real(1)) * p.length;
+    };
+    for (const ModelRegulation& reg : regulations) {
+        if (reg.street.index != p.street || reg.dir != way) continue;
+        const bool atOnePlace = approxEqual(reg.from, reg.to, kWrittenStation);
+        if (atOnePlace) {
+            // a sign: on the path whose stretch holds its station (an end of the stretch counts)
+            if (strictlyBefore(reg.from, lo, kWrittenStation) || strictlyPast(reg.from, hi, kWrittenStation)) continue;
+        } else if (!strictlyPast(std::min(reg.to, hi), std::max(reg.from, lo), kWrittenStation)) {
+            continue;   // a stretch: only where some of it lies on the path
+        }
+        // (the way the path is driven: a path against the spine meets the stretch's `to` first)
+        const Real a = along(way > 0 ? reg.from : reg.to), b = atOnePlace ? a : along(way > 0 ? reg.to : reg.from);
+        PathRegulation r;
+        r.kind = reg.kind;
+        r.from = a;
+        r.to = b;
+        r.value = reg.value;
+        out.push_back(r);
+    }
+    // (a sort's order must be exact: two regulations a hair apart keep the order of their numbers)
+    std::stable_sort(out.begin(), out.end(), [](const PathRegulation& x, const PathRegulation& y) {
+        if (x.from != y.from) return x.from < y.from;
+        if (x.to != y.to) return x.to < y.to;
+        return x.kind < y.kind;
+    });
+    return out;
+}
+
 int RoadModel::armAt(ModelStreetId street, int end) const {
     if (street.index >= streets.size() || end < 0 || end > 1) return -1;
     const ModelJunctionId j = streets[street.index].junctions[static_cast<std::size_t>(end)];
@@ -502,6 +562,14 @@ int RoadModel::armAt(ModelStreetId street, int end) const {
     const std::vector<ModelArm>& arms = junctions[j.index].arms;
     for (std::size_t a = 0; a < arms.size(); ++a)
         if (arms[a].street == street && arms[a].spineIn == (end == 1)) return static_cast<int>(a);
+    return -1;
+}
+
+int RoadModel::armReachedAt(ModelStreetId street, Real station) const {
+    if (street.index >= streets.size()) return -1;
+    const ModelStreet& S = streets[street.index];
+    if (sameWrittenStation(station, S.to)) return armAt(street, 1);
+    if (sameWrittenStation(station, S.from)) return armAt(street, 0);
     return -1;
 }
 
@@ -629,6 +697,24 @@ bool attach(RoadModel& m, ModelAttachment a, const AttachmentKinds& kinds, std::
 }
 
 bool attach(RoadModel& m, ModelAttachment a, std::string* err) { return attach(m, std::move(a), attachmentKinds(), err); }
+
+bool stateRegulation(RoadModel& m, const ModelRegulation& r, std::string* err) {
+    auto fail = [&](const std::string& why) {
+        if (err) *err = why;
+        return false;
+    };
+    if (r.kind.empty()) return fail("a regulation names no kind");
+    if (!r.street.valid() || r.street.index >= m.streets.size()) return fail("a " + r.kind + " regulation names no street of the model");
+    if (r.dir != 1 && r.dir != -1) return fail("a " + r.kind + " regulation holds for traffic along the spine (+1) or against it (-1), not " + std::to_string(r.dir));
+    const ModelStreet& S = m.streets[r.street.index];
+    if (strictlyPast(r.from, r.to, kWrittenStation))
+        return fail(fmt("a %s regulation on street %s runs backwards (from %.2f to %.2f)", r.kind.c_str(), S.id.c_str(), r.from, r.to));
+    if (strictlyBefore(r.from, S.from, kWrittenStation) || strictlyPast(r.to, S.to, kWrittenStation))
+        return fail(fmt("a %s regulation from %.2f to %.2f lies off street %s (%.2f to %.2f)", r.kind.c_str(), r.from, r.to, S.id.c_str(),
+                        S.from, S.to));
+    m.regulations.push_back(r);
+    return true;
+}
 
 std::vector<uint32_t> attachedToStreet(const RoadModel& m, ModelStreetId s) {
     std::vector<uint32_t> out;
@@ -777,6 +863,10 @@ std::string dumpRoadModel(const RoadModel& m) {
                    a.junction.valid() ? ("junction " + m.junctions[a.junction.index].id).c_str() : "",
                    a.arm >= 0 ? fmt(" arm %d", a.arm).c_str() : "",
                    a.street.valid() ? ((a.junction.valid() ? " (street " : "street ") + m.streets[a.street.index].id + (a.junction.valid() ? ")" : "")).c_str() : "");
+    for (const ModelRegulation& r : m.regulations)
+        out += fmt("regulation: %s on street %s, %s from %.2f to %.2f, value %.2f\n", r.kind.c_str(),
+                   r.street.index < m.streets.size() ? m.streets[r.street.index].id.c_str() : "?",
+                   r.dir > 0 ? "along the spine" : "against the spine", r.from, r.to, r.value);
     return out;
 }
 
@@ -882,7 +972,8 @@ template <class T> constexpr bool isRecord() {
            std::is_same<T, ModelSection>::value || std::is_same<T, ModelStreet>::value || std::is_same<T, ModelLaneSpan>::value ||
            std::is_same<T, ModelLane>::value || std::is_same<T, ModelConnection>::value || std::is_same<T, ModelRampEnd>::value ||
            std::is_same<T, ModelRamp>::value || std::is_same<T, ModelCrossing>::value || std::is_same<T, ModelAttachment>::value ||
-           std::is_same<T, ModelNode>::value || std::is_same<T, ModelNodePoint>::value || std::is_same<T, ModelTurn>::value;
+           std::is_same<T, ModelNode>::value || std::is_same<T, ModelNodePoint>::value || std::is_same<T, ModelTurn>::value ||
+           std::is_same<T, ModelRegulation>::value;
 }
 
 struct Writer {
@@ -959,6 +1050,9 @@ template <class IO, class S> void fields(IO& io, S& s, ModelStreet*) {
 template <class IO, class A> void fields(IO& io, A& a, ModelAttachment*) {
     io(a.kind); io(a.street); io(a.junction); io(a.arm); io(a.station); io(a.text); io(a.at);
 }
+template <class IO, class R> void fields(IO& io, R& r, ModelRegulation*) {
+    io(r.kind); io(r.street); io(r.from); io(r.to); io(r.dir); io(r.value);
+}
 template <class IO, class S> void fields(IO& io, S& s, ModelLaneSpan*) { io(s.street); io(s.from); io(s.to); }
 template <class IO, class L> void fields(IO& io, L& l, ModelLane*) {
     io(l.id); io(l.kind); io(l.edge); io(l.dir); io(l.slot); io(l.width); io(l.curve); io(l.spineFrom); io(l.spineTo); io(l.streets);
@@ -990,7 +1084,7 @@ template <class IO, class X> void fields(IO& io, X& x, ModelCrossing*) { io(x.a)
 
 template <class IO, class M> void modelFields(IO& io, M& m) {
     io(m.name); io(m.built); io(m.junctions); io(m.streets); io(m.lanes); io(m.connections); io(m.turns); io(m.ramps); io(m.crossings); io(m.points);
-    io(m.along); io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.notStated);
+    io(m.along); io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.regulations); io(m.notStated);
     io(m.problems); io(m.armsInRing);
 }
 

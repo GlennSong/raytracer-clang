@@ -244,16 +244,9 @@ const char* kLabLights =
     "{ settle = { 'light', 'movement' }, gives_way_on_green = { 'far_turn' }, "
     "turn_on_red = { movement = 'near_turn', after = 'full_stop' } }";
 
-// A stop sign standing at the end of `lane` (a "stop" regulation), as the T test of D1 places one.
-void standStopSign(engine::LaneGraph& g, engine::PathId lane) {
-    g.regulationKindNames = {"stop"};
-    engine::Regulation stop;
-    stop.kind = 0;
-    stop.path = lane;
-    stop.from = stop.to = g.paths[lane.index].length;
-    g.regulations = {stop};
-    g.paths[lane.index].regulations = engine::Range{0, 1};
-}
+// A stop sign standing at the end of `lane` (a "stop" regulation), as the T test of D1 places one: stated on the road
+// model, the tests' one way (driving_test_roads.h stateSignAtEnd).
+void standStopSign(engine::RoadModel& road, engine::PathId lane) { CHECK(driving_test::stateSignAtEnd(road, lane, "stop")); }
 
 PathPoint at(engine::PathId path, Real along) {
     PathPoint p;
@@ -758,7 +751,7 @@ TEST_CASE(give_way_3_crossing_paths_one_gives_way_the_other_does_not_slow) {
 TEST_CASE(give_way_4_side_road_stop_sign_queue_takes_gaps) {
     // Junction (0, 1) of a two-by-three grid is a T: its side road arrives heading south.
     TestRoads roads = driving_test::gridRoads(2, 3);
-    standStopSign(roads.model.laneLevel, roads.laneArriving(0, 1, kSouth, 0));
+    standStopSign(roads.model,roads.laneArriving(0, 1, kSouth, 0));
     Sim s(std::move(roads), kMinorStop);
     CHECK(s.ok);
     // A queue of four on the side road, each turning across the main road (its far turn); the main road's traffic from
@@ -1053,7 +1046,7 @@ TEST_CASE(give_way_13_patience_gaps_between_floor_and_full) {
     int taken = 0;
     for (PersonId person = 1; person <= 12; ++person) {
         TestRoads roads = driving_test::gridRoads(2, 3);
-        standStopSign(roads.model.laneLevel, roads.laneArriving(0, 1, kSouth, 0));
+        standStopSign(roads.model,roads.laneArriving(0, 1, kSouth, 0));
         Sim s(std::move(roads), kMinorStop);
         CHECK(s.ok);
         uint32_t next = 10;
@@ -1150,7 +1143,7 @@ TEST_CASE(give_way_14_ten_minutes_of_random_traffic_at_each_kind) {
     }
     {
         TestRoads roads = driving_test::gridRoads(2, 3);
-        standStopSign(roads.model.laneLevel, roads.laneArriving(0, 1, kSouth, 0));
+        standStopSign(roads.model,roads.laneArriving(0, 1, kSouth, 0));
         Sim s(std::move(roads), kMinorStop);
         CHECK(s.ok);
         randomTraffic(s, 0, 1, {kEast, kWest, kSouth}, minutes);
@@ -1237,7 +1230,7 @@ TEST_CASE(give_way_16_a_car_that_committed_first_is_not_crossed) {
     // the truck is past its line: the truck committed first, so car 0 waits for it. (Without "committed first" car 0,
     // with right of way by the table, would never look at the truck, and drive into it.)
     TestRoads roads = driving_test::gridRoads(3, 3);
-    standStopSign(roads.model.laneLevel, roads.laneArriving(1, 1, kSouth, 0));
+    standStopSign(roads.model,roads.laneArriving(1, 1, kSouth, 0));
     Sim s(std::move(roads), kMinorStop);
     CHECK(s.ok);
     const TripId held = approach(s, 0, 1, 1, kNorth, 0.5, kNorth);
@@ -1295,7 +1288,7 @@ TEST_CASE(give_way_17_a_car_merging_ahead_is_followed_not_hit) {
     TestRoadSpec spec;
     spec.roadLength = 200;
     TestRoads roads = driving_test::gridRoads(3, 3, spec);
-    standStopSign(roads.model.laneLevel, roads.laneArriving(1, 1, fromNear, 0));
+    standStopSign(roads.model,roads.laneArriving(1, 1, fromNear, 0));
     Sim s(std::move(roads), kMinorStop);
     CHECK(s.ok);
     approach(s, 0, 1, 1, fromNear, 0.5, kEast, 2);
@@ -1342,7 +1335,7 @@ TEST_CASE(give_way_284_e_rolling_over_the_line_does_not_commit_the_main_road_goe
     TestRoadSpec spec;
     spec.roadLength = 200;
     TestRoads roads = driving_test::gridRoads(3, 3, spec);
-    standStopSign(roads.model.laneLevel, roads.laneArriving(1, 1, fromNear, 0));
+    standStopSign(roads.model,roads.laneArriving(1, 1, fromNear, 0));
     Sim s(std::move(roads), kMinorStop);
     CHECK(s.ok);
     approach(s, 0, 1, 1, fromNear, 0.5, kEast, 2);
@@ -1399,7 +1392,7 @@ TEST_CASE(give_way_284_b_a_car_that_will_stop_on_the_crossing_is_never_clear_of_
     // before its tail is clear of a stretch is NEVER clear of it (announce.h HONEST CLEAR TIMES): car 1 waits at its line
     // until car 0 is let go.
     TestRoads roads = driving_test::gridRoads(3, 3);
-    standStopSign(roads.model.laneLevel, roads.laneArriving(1, 1, kNorth, 0));
+    standStopSign(roads.model,roads.laneArriving(1, 1, kNorth, 0));
     Sim s(std::move(roads), kMinorStop);
     CHECK(s.ok);
     const engine::PathId kPath = s.t.connector(1, 1, kNorth, 0, kNorth, 0);

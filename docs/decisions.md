@@ -20960,3 +20960,53 @@ Not added, because no reader asks them today: the nearest street and station to 
 **Not done.** The centre line is still held twice while a road is being built (the builder's lane points and the model's copy): the builder's points are read at about 300 places in 18 files, far over the 200 lines allowed for it here. The lane table's own `Junction` type still stands beside `ModelJunction`. The routing table's copies (`NavLink`) are untouched.
 
 Tests: `road_model_12` (the model's answers for a known junction, lane and connector, written out, and each fact stated again on the model is the new answer with no rebuild; 4 checks fail with copies written at build put back); `road_model_20` (the arm a street is, a street's ends, and a junction listing a street twice; 2 checks fail with the street map's old last-match answer); the scenes' stated merges by lane name (`lanes_lane_graph_of_*`, 4 checks) and the driving's merge tests (26 checks) fail when the model's answer names the host lane instead of the joining one.
+
+
+## ADR-0437 — Regulations live in the road model; the street map's link keeps no arm; the lane rules are written where the layout leaves them
+**Status:** Provisional · **Date:** 2026-11-16
+
+What it does: a rule standing along a road (a stop sign, a speed limit from 30 m along) is stated once, in the road model, and everyone who needs a lane's rules asks the model. The lane table no longer holds any. One copied fact is taken out of the routing table, and writing a file's lane rules needs one command instead of two. Nothing a car does changes: the traffic lab's five-minute state hash is the same number (0x7aade29530b4fdd1).
+
+Words: the **road model** (`RoadModel`) is the one description of a level's roads. Its **lane table** (`RoadModel::laneLevel`) is the list of every line a car can be on; one such line along a road is a **lane path**. A **station** is a distance along a road's centre line (its **spine**), in metres. A **regulation** is a rule that holds on a stretch of road for traffic going one way, with a kind ("stop", "top speed") and sometimes a number (the speed). An **arm** is one road's way into a junction. The **street map** (`NavGraph`) is the table of links people and cars find routes on. The **binding** (`RoadRules`) is the driving's look-up made each time rules are handed over.
+
+**1. Regulations get a home in the model (issue #291).**
+- **Where it was.** Only in the lane table: `LaneGraph::regulations` (a kind, a lane path, from and to in metres along it, a value) with its own list of kind names, `regulationKindNames`. The model stated only the names of the signs at each junction arm; the lane table copied those to the end of each arriving lane when it was built. A rule part-way along a lane had no home in the model at all, and the driving's tests wrote theirs straight into the lane table.
+- **The one home now.** Two stated facts, each stated once, both in the model:
+  - the signs a junction's arm states (`ModelArm::regulations`, the road file's), as before;
+  - a regulation on a street: `ModelRegulation` in `RoadModel::regulations` (kind, street id, station from and to, which way the traffic runs along the spine, value), added with `stateRegulation`, which refuses one that names no street, runs backwards or leaves its street. It is saved with the model.
+- **How a lane's rules are answered.** `RoadModel::regulationsAlong(path)` gives a lane path's regulations in order along it: its arm's signs at its end, and the part of each street regulation that lies on it. To place a station on a path, each lane path now carries the stretch of spine it was cut along (`Path::onSpine`, `stationFrom`, `stationTo`): that is the lane table's own data, where it cut the lane. `RoadModel::arrivesAt(path)` gives the junction a lane path runs to.
+- **Which of the two allowed designs.** The driving asks the model. The lane table holds no regulation, not even a derived one. The driving's binding (`RoadRules::regulations`, read through `regulationsOn(path)`) is filled from `regulationsAlong` each time rules are handed over and is never saved, as its limits and controls already are (ADR-0436), so cars do not ask the model every tick.
+- **Kind names.** A kind is the name of a device in the rule set (`assets/scripts/rules/lab.lua`, `devices`); the model and the road file refer to it by that name and keep no list of their own. The driving refuses a rule set that lacks a device for a kind the roads state, as before. The engine cannot check the name itself: it does not read rule sets.
+- **Deleted.** `LaneGraph::regulations`, `regulationKindNames`, `Path::regulations`, the `Regulation` type, their save, load, checks and dump lines, and `RoadRules::deviceOfKind`. `lane_graph.txt` no longer prints regulations; `lanes_tool model` prints the arms' signs and the streets' regulations.
+- **Read sites.** `notice.cpp` (the limit where I am and the slower limit ahead), `give_way.cpp` (`stopLineAtEnd`) and `right_of_way.cpp` (`signRankOf`) walk `roadRules.regulationsOn(path)` and get the same values in the same order.
+- **The tests' one way.** `stateRegulation` and `stateSignAtEnd` in `tests/driving_test_roads.h`: the test names a lane and metres along it, and the helper states it on the model's street.
+- **One approximation, said plainly.** A station is placed along a lane path in proportion between the path's two end stations. That is exact on a straight road; on a bend it is out by the difference between the lane's length and the spine's over that stretch. Nothing shipped states a regulation part-way along a street yet.
+- **A sign at one place and the cut between two paths.** A sign whose station is exactly where a lane is cut in two is answered on both paths (the end of one, the start of the next). The driving reads a top speed from the start of a path, so that is the reading it needs; a stretch (from below to) is given to each path only where some of it lies on that path.
+
+**2. The street map's link copies.** The street map is one of three makers of the same table type: the street map (from the model), `buildNavGraph` (a road graph made by hand: tests, the planner's scoring) and `appendFootpaths` (the walks). Only the first has a model to ask, so a field cannot simply go: for the other two it is the fact's only form. Each maker writes the fields in one function and nothing else writes them (checked by search): `layLinks` in `roads/street_map.cpp` for the street map.
+
+| Field | Readers (not counting the old driving in `city_sim.cpp`) | Decision |
+|---|---|---|
+| `armIn` (the arm a link arrives by) | one: the loader's furniture plan | **Deleted.** Asked of the model: `RoadModel::armReachedAt(street, stationTo)` |
+| `klass` | route finding (`pathfind.cpp`, every step of a search), buses, rail riders, trips, furniture, drawing | Kept: read inside route searches |
+| `walkable` | route finding, buses, rail riders, furniture | Kept: read inside route searches |
+| `lanes`, `width`, `oneWay` | `NavGraph::laneCenter` and `sidewalkPoint` (where every agent stands, each tick), drawing, furniture | Kept: read each tick |
+| `access` bits (frontage, signal arm) | the light controller, furniture, parking | Kept: one derived byte, written in `layLinks` |
+| `parkOffset`, `parkWidth` | the city sim's kerb parking, one drawing line | Kept: goes with the city sim |
+| `city`, `street`, `junction`, `road`, `stationFrom`, `stationTo`; node `nodeJunction`, `nodeCity` | everyone who asks the model | Kept: these are the ids the model is asked by, not copies |
+| node `statedSignal` | the city sim's lights (each tick) | Kept: written only by `LevelRoadModel::stateSignals` |
+| node `nodeKind`, `junction[]` | lights, rail, the old driving | Kept: the map's own structure (which node is a junction point, a ramp's gore, a bend) |
+
+Not done here: inside the link, `walkable` and the `kWalkable` bit of `access` say the same thing twice, as do `footpath` and the `kFootpath` bit; nothing reads the two bits. Folding each pair into one touches about 30 lines in 9 files, 7 of them in the old driving's file.
+
+**3. The lane table's own `Junction` type.** Its fields: `connectors`, `crossings`, `crosswalks`, `arriving`, `leaving` (lists of the lane table's own paths and crossing points), `box` (the outline drawn through the lane paths' ends at the stop lines) and `modelJunction` (the id the model is asked by). None repeats a fact the model states, so none is deleted; the control went in ADR-0436. One copy was found next to it and is not removed: `Path::throughArm`, the arm the junction states as the same road carrying on, which is `throughPartner` of the model's junction. Asking the model instead means the builder's waiting-point pass and the driving's hand-made grids each need a stated junction with through pairs: about six files.
+
+**4. Lane rules written once.** `lanes_tool layout <file> --lane-rules N --write` put `lane_rules` after the file's last member, behind `streets`; the layout writer takes `streets` out and puts it back last, so the next `layout --write` moved `lane_rules` in front of it and the file changed a second time. `insertLaneRulesText` now writes it where the layout writer leaves it: before `streets` (or `divided`). The three shipped files already had that order and are untouched.
+
+**What changed on disk.** The lane table's saved form is LGRF version 12 and the saved road model is format 11 (`kRoadModelFormat`), so each `cache/roadmodel` file is made again on first load. No lanes or lots tag is bumped and no level is re-baked: no road, lot or building is built differently, and the bake keys are the same.
+
+Tests, each proven by putting the old answer back:
+- `road_model_22`: on a straight 200 m street, a top speed stated from station 60 to 180 and a sign at station 100 the other way land at 48.8 to 157.6 m, 0 to 11.2 m and 88.8 m along the right lane paths; an arm's sign stated again is the new answer with no rebuild. With the old answer (arm signs only) 9 checks fail, and 59 checks in 8 cases of `driving_tests`.
+- `road_model_21`: the arm a street-map link arrives by, and the same after the junction's arms are listed in another order. Reading the link's old copy fails 1 check. Old and new agreed on every link of traffic_lab, river_town and agent_lab (compared once while both existed).
+- `road_model_19`: a shipped file with its `lane_rules` cut out and written again by the tool is the shipped file to the byte. With the old placement 3 checks fail.
+- `notice_road_rules_binding_and_refusals`, `control_plan_4`, `lane_graph` cases: rewritten for the new home.
