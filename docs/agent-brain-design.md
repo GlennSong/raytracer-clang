@@ -1,7 +1,9 @@
 # The agent brain: how a resident decides, holds what it is doing, and moves between states
 
-Status: design, agreed in outline with Glenn on 2026-11-16. No code yet. The first thing built on it is one
-resident making one trip in the traffic lab (section 9).
+Status: design, agreed in outline with Glenn on 2026-11-16. The brain's core is built as a library with tests
+(ADR-0440, `src/apps/citysim/brain/`), driven by stand-in skills and not yet wired into the crowd or the lab:
+section 14 says what is built and where the build had to differ from this page. The first thing to be seen
+on it is one resident making one trip in the traffic lab (section 9).
 
 ## Words used here
 
@@ -264,3 +266,63 @@ parked.
 - Group activities are joined by several people at once; whether the group or each person holds the state
   is decided when that state is moved over.
 - Weather and time of day changing how much a way is minded (skating in the rain, walking at night). Later.
+- Who holds a parking space, and from when (section 14, difference 5).
+- What a driver does when the space is taken or there is no route: today they get out and walk, leaving the
+  car where it stopped (section 14, difference 6).
+
+## 14. Built so far, and where the build differs (ADR-0440, 2026-11-16)
+
+**Built**, as a library (`src/apps/citysim/brain/`) that includes nothing from the city sim and is tested
+with stand-in skills (`brain_tests`):
+
+| Part of this page | Built | Where |
+|---|---|---|
+| Section 2, the four layers | each person's record: intent, plan, doing, what they have | `brain_record.h` |
+| Section 4, the plan | the existing trip planner, extended (legs cap, traits, longest leg, cheapest way on foot to a vehicle, a car in use) | `trip_plan.h`, `brain_planner.h`, `travel.lua` |
+| Section 5, states as data | all 21 states and their transitions | `assets/scripts/brain.lua`, `brain_table.h` |
+| Section 5, what a state does | walking, small wheels, pulling out, driving, parking, indoors, standing, possessed, released, knocked down, stuck, crashed. The transit states, using a spot, group activity, working a post and asleep are in the data and refuse entry ("not built yet") | `brain_states.cpp` |
+| Section 6, skills and events | the interfaces; one event queue answered once a tick, lowest person first | `brain_skills.h`, `brain.h` |
+| Section 7, interruptions | vehicle gone, no route, cannot park, knocked down and got up, possessed and released | `brain.lua` rows |
+| Section 8, detail by distance | near and far, the "next time this person needs a visit" a clock queue wants, raising and lowering part-way through a leg. Middle runs as near | `brain.h` |
+| Section 9, inspectable | one line per person: intent, plan, leg, state, since when, waiting for what | `Machine::describe` |
+| Section 9, the real driving | the drive skill over the driving library, and the road model's kerb spaces as places. Not yet driven end to end | `brain_driving.h` |
+
+**Not built**: the real walking skill over the city sim's walkers; a World over the real city (doors, cars,
+the clock); the lab resident of section 9; the middle level; dealing boards and scooters to the population.
+
+**Where the build differs from this page, and why.**
+
+1. **Legs: eight, not six.** Section 4 says six; section 12 decided eight. Eight is built.
+2. **A person's record is 120 bytes, not the 96 aimed for.** Two things this page did not count are stored.
+   Each leg's planned whole seconds (16 bytes), because section 8's far person is "leg N, due at time T"
+   and T must be known when the leg begins without finding a route. And where the plan began (8 bytes),
+   because the first leg has no leg before it to say where it starts, and a far person raised part-way
+   along it must be placed. The state's own data is 4 bytes.
+3. **Time is whole milliseconds in 32 bits**, so runs repeat to the bit and "due at" is exact. That holds a
+   little over 49 days of simulated time. A longer-running world needs 64 bits (8 more bytes a person) or a
+   clock that is re-based.
+4. **A car leg is three states, and "parked" is not the end of it.** Pulling out, driving and parking are
+   one leg of the plan. The driving library's "parked" report means "stopped at the destination, in the lane
+   beside the space"; the brain's parking state (into the space, out of the car) follows it. The names read
+   oddly side by side and were kept, because they are the driving's own.
+5. **Nobody holds a parking space until the car is beside it.** The planner is told the nearest free space
+   at the moment of planning, and the space is taken on entering the parking state. Two cars sent to one
+   door at one time are told the same space, and the second finds it taken. In the 1,000-person test 239
+   drivers met this. This page did not say who reserves a space or when. To be decided.
+6. **"Plan again, ruling out what failed" leaves the car where it stopped.** That is the rule section 7
+   gives, and it is what is built for "no route" and "cannot park": the person gets out, the car stands free
+   in the lane, and they walk. Section 7's "another space" is not built. It needs deciding with 5.
+7. **Released does not carry on; it plans again.** Section 7 says "on release, intent resumes". The player
+   may have moved the person anywhere, so the old plan is dropped and a new one made from where they stand.
+   Knocked down and stuck do carry on with the same leg, from where it had got to.
+8. **A new intent is not acted on in every state.** Walking, indoors and standing act on it at once. A
+   person pulling out, driving or parking finishes the leg; on arriving they are not where they now want to
+   be, and go on from there. This page did not say.
+9. **A far person part-way along a leg is placed on the straight line between the leg's ends.** No route is
+   stored (section 4), so that is all the brain can say; whoever raises them finds the real route.
+10. **Near and far agree only as closely as a leg's whole seconds.** A leg's planned time is kept in whole
+    seconds; a real skill takes what it takes. In the tests the stand-in skills take exactly the planned
+    time, so the times are equal there.
+11. **The planner's fixed "way to the car" (`access`) is now optional**, and the shipped car row no longer
+    sets it: a vehicle is reached and left by the cheapest way on foot the person has (section 12). A table
+    that sets it still gets it.

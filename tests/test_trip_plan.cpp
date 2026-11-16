@@ -237,3 +237,75 @@ TEST_CASE(trip_plan_drive_minutes_are_the_router_s_road_class_times) {
     CHECK(engine::routeSeconds(nav, drive.route) < streetSeconds);
 }
 
+// WHAT THE AGENT BRAIN NEEDED OF THE PLANNER (ADR-0440; agent-brain-design.md section 12): a way priced only for people
+// who have what it requires and only for a leg it suits; a vehicle reached and left by the cheapest way on foot the
+// person has, unless the table fixes one; and a household's car not priced while someone else has it.
+TEST_CASE(trip_plan_traits_longest_leg_cheapest_way_to_the_car_and_a_car_in_use) {
+    const engine::NavGraph nav = longStreet();
+    TravelCatalog cat = walkAndCar();
+    cat.modes[1].access = -1;   // the car fixes no way to it
+    cat.traits = {"has_board"};
+    TravelMode board;
+    board.name = "skateboard";
+    board.speed = 10.0 / 3.6;
+    board.needs = "has_board";
+    board.needsTrait = 0;
+    board.longestLegMinutes = 6.0;   // 1000 m
+    board.weight = 1.2;
+    cat.modes.push_back(board);
+    // the person on the street itself, so every length is a whole number of metres
+    auto ask = [](Real x, uint32_t traits) {
+        TripRequest r;
+        r.from = Vec2(0, 0);
+        r.to = Vec2(x, 0);
+        r.traits = traits;
+        r.vehicles.push_back(OwnedVehicle{1, Vec2(100, 0), Vec2(x - 200, 0)});
+        return r;
+    };
+    // NO BOARD: the row is not theirs. It is not priced, and the reason does not mention it.
+    const TripPlan without = planTrip(nav, cat, ask(500, 0));
+    CHECK(without.options.size() == 3 && !without.options[2].offered && !without.options[2].possible);
+    CHECK(without.options[2].why == "needs has_board");
+    CHECK(without.reason.find("skateboard") == std::string::npos);
+    CHECK(without.choice()->mode == 0);
+    // WITH ONE, 500 m: 3 minutes on the board, minded as 3.6, against 6 on foot
+    const TripPlan with = planTrip(nav, cat, ask(500, 1));
+    CHECK(with.choice()->mode == 2 && with.choice()->legs.size() == 1);
+    CHECK(near(with.options[2].minutes, 3.0, 1e-9) && near(with.options[2].weighted, 3.6, 1e-9));
+    // EXACTLY ITS LONGEST LEG is allowed (1000 m is 6 minutes); a metre more is not
+    CHECK(planTrip(nav, cat, ask(1000, 1)).options[2].possible);
+    TripRequest far = ask(1500, 1);
+    far.vehicles.clear();
+    const TripPlan tooFar = planTrip(nav, cat, far);
+    CHECK(!tooFar.options[2].possible && tooFar.options[2].offered);
+    CHECK(tooFar.options[2].why == "too far for skateboard (9.0 min, at most 6.0)");
+    CHECK(tooFar.choice()->mode == 0);
+    // THE CAR IS REACHED AND LEFT BY THE CHEAPEST WAY ON FOOT THEY HAVE: on the board for someone with one (100 m and
+    // 200 m: 0.6 and 1.2 minutes where walking is 1.2 and 2.4), on foot for someone without
+    const TripPlan drives = planTrip(nav, cat, ask(1500, 1));
+    CHECK(drives.choice()->mode == 1);
+    const TripOption& car = drives.options[1];
+    CHECK(car.legs.size() == 3 && car.legs[0].mode == 2 && car.legs[1].mode == 1 && car.legs[2].mode == 2);
+    CHECK(car.legs[0].end == LegEnd::Vehicle && car.legs[1].end == LegEnd::VehicleLeft && car.legs[2].end == LegEnd::Door);
+    CHECK(near(car.legs[0].minutes, 0.6, 1e-9) && near(car.legs[2].minutes, 1.2, 1e-9));
+    const TripPlan drivesOnFoot = planTrip(nav, cat, ask(1500, 0));
+    CHECK(drivesOnFoot.options[1].legs.size() == 3 && drivesOnFoot.options[1].legs[0].mode == 0 &&
+          drivesOnFoot.options[1].legs[2].mode == 0);
+    // ...unless the table fixes the way (`access`): then that way, board or no board
+    TravelCatalog fixed = cat;
+    fixed.modes[1].access = 0;
+    const TripPlan fixedWay = planTrip(nav, fixed, ask(1500, 1));
+    CHECK(fixedWay.options[1].legs.size() == 3 && fixedWay.options[1].legs[0].mode == 0 && fixedWay.options[1].legs[2].mode == 0);
+    // ...and a way on foot that is ruled out is not how the car is reached
+    TripRequest boardBroken = ask(1500, 1);
+    boardBroken.ruledOut = {2};
+    CHECK(planTrip(nav, cat, boardBroken).options[1].legs[0].mode == 0);
+    // THE HOUSEHOLD'S CAR IN USE: said by the caller at plan time; the car is not priced
+    TripRequest inUse = ask(1500, 0);
+    inUse.vehicles[0].free = false;
+    const TripPlan walks = planTrip(nav, cat, inUse);
+    CHECK(!walks.options[1].possible && walks.options[1].why == "the car is in use");
+    CHECK(walks.choice()->mode == 0);
+    CHECK(walks.reason == "walk 18.0 min, car -- the car is in use: walk");
+}
+

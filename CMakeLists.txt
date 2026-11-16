@@ -544,6 +544,53 @@ target_link_libraries(driving_tests PRIVATE engine_core driving)
 add_test(NAME driving_tests COMMAND driving_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # ============================================================
+# brain — the agent brain's core (docs/agent-brain-design.md, ADR-0440): each
+# person's record (intent, plan, doing, what they have), the machine that moves
+# them from state to state as assets/scripts/brain.lua says, and the trip
+# planner it plans with. It meets the world only through the interfaces in
+# brain_skills.h, so it is tested with stand-in skills and is not yet wired
+# into the crowd. It includes nothing from the city sim (city_sim.h), the
+# renderer, the entity world or the physics wrapper; brain_tests checks the
+# includes of every file in src/apps/citysim/brain. The arrows go one way:
+# citysim -> brain -> driving -> engine_core.
+# The trip planner (trip_plan.cpp, with its Lua reader) is compiled HERE, once,
+# and citysim gets it by linking brain: the brain plans with the same planner
+# the one-agent lab uses, not a copy.
+# ============================================================
+add_library(brain STATIC
+    src/apps/citysim/trip_plan.cpp             # the trip planner: every way of travelling priced leg by leg (ADR-0415)
+    src/apps/citysim/brain/brain.cpp           # the machine: events in, each person moved from state to state
+    src/apps/citysim/brain/brain_table.cpp     # the states and transitions, checked and compiled from the data
+    src/apps/citysim/brain/brain_states.cpp    # what each state does, registered under its name
+    src/apps/citysim/brain/brain_planner.cpp   # the plan layer: the trip planner asked, the answer in fixed legs
+    src/apps/citysim/brain/brain_driving.cpp   # the drive skill and the road questions, over the driving library
+)
+target_compile_options(brain PRIVATE -Wall -Wextra -Wpedantic)
+target_include_directories(brain PRIVATE src)
+target_link_libraries(brain PUBLIC engine_core driving)
+if(RT_ENABLE_SCRIPTING)
+    target_sources(brain PRIVATE src/apps/citysim/brain/scripting/brain_lua.cpp   # brain.lua
+                                 src/apps/citysim/scripting/travel_lua.cpp)       # travel.lua
+endif()
+
+# The brain's own headless tests: engine_core + driving + brain, never citysim. Its own program, so the test that
+# counts allocations can replace the global operator new without touching any other suite. They run on the shipped
+# brain.lua, so they are built only with the scripting layer.
+if(RT_ENABLE_SCRIPTING)
+    add_executable(brain_tests tests/main.cpp
+        tests/brain_fakes.cpp          # stand-in world and skills: deterministic, by the clock
+        tests/test_brain_table.cpp     # the record's size; the data's honesty; the shipped brain.lua and travel.lua
+        tests/test_brain_trip.cpp      # one person's trips: plan, states and times; interruptions; far and near
+        tests/test_brain_scale.cpp     # 1,000 people: the same hash twice; no allocation in a transition
+        tests/test_brain_driving.cpp)  # the real drive skill over the driving library
+    target_include_directories(brain_tests PRIVATE src tests)
+    target_compile_options(brain_tests PRIVATE -Wall -Wextra)
+    target_compile_definitions(brain_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(brain_tests PRIVATE engine_core driving brain)
+    add_test(NAME brain_tests COMMAND brain_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
+
+# ============================================================
 # citysim — the living-world APPLICATION library (ADR-0060…0066). The agent
 # city sim, traffic, places, and its render bridge: an application built ON the
 # engine, not part of it. Links engine_core (the only arrow — citysim depends on
@@ -579,13 +626,13 @@ add_library(citysim STATIC
     src/apps/citysim/city_driving.cpp   # the drivers handed to the new driving model (v2, #255)
     src/apps/citysim/city_render.cpp
     src/apps/citysim/city_spectate.cpp   # spectate camera: cycle + follow NPCs (headless-safe)
-    src/apps/citysim/trip_plan.cpp       # the trip planner: every way of travelling priced leg by leg (ADR-0415)
+    # (trip_plan.cpp, the trip planner, is compiled in the `brain` library above, which citysim links)
     src/apps/citysim/city_trip.cpp       # a person sent somewhere: the plan carried out, drawn and followed
     src/apps/citysim/city_traffic_audio.cpp   # ambient traffic engine note (voice pool)
     src/apps/citysim/city_meshes.cpp
 )
 target_compile_options(citysim PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(citysim PUBLIC engine_core driving)   # driving: the new driving model (citysim.driving = "v2")
+target_link_libraries(citysim PUBLIC engine_core driving brain)   # driving: the new driving model (citysim.driving = "v2"); brain: the trip planner
 if(RT_ENABLE_SCRIPTING)
     # The citysim-specific Lua readers (moved out of engine_core): they turn Lua
     # goal/fleet tables into citysim types, so they belong to the app, not the core.
@@ -596,7 +643,7 @@ if(RT_ENABLE_SCRIPTING)
         src/apps/citysim/scripting/place_kinds_lua.cpp
         src/apps/citysim/scripting/people_lua.cpp
         src/apps/citysim/scripting/signals_lua.cpp
-        src/apps/citysim/scripting/travel_lua.cpp
+        # (travel_lua.cpp, travel.lua's reader, is compiled in the `brain` library with the planner it reads for)
         src/apps/citysim/scripting/vehicle_body.cpp
     )
 endif()

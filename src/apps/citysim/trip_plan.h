@@ -16,6 +16,7 @@
 #include "../../engine/ai/nav_graph.h"
 #include "../../engine/ai/pathfind.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -24,10 +25,26 @@ namespace citysim {
 using engine::Real;
 using engine::Vec2;
 
+// THE MOST LEGS A PLAN HOLDS (agent-brain-design.md section 12): a way of making the trip that would need more is
+// refused and the next cheapest is taken, so a plan can never grow without end.
+constexpr int kMaxPlanLegs = 8;
+// THE MOST TRAITS a person can be dealt (TravelCatalog::traits): one bit each of a byte in a person's record.
+constexpr int kMaxTraits = 8;
+
 // ONE WAY OF TRAVELLING (a row of travel.lua).
 struct TravelMode {
     std::string name;            // "walk", "car"
     bool roads = false;          // its network: the roads (a vehicle's routing) or the footpaths (a walker's)
+    // WHO HAS IT (travel.lua `requires`): the trait a person must have for this row to be priced for them
+    // ("has_board"), and its place in TravelCatalog::traits. Empty and -1: anyone.
+    std::string needs;
+    int needsTrait = -1;
+    // THE LONGEST LEG IT SUITS, in minutes (travel.lua `longest_leg_minutes`): a leg of it that would take longer is
+    // not made this way. 0: no limit.
+    Real longestLegMinutes = 0;
+    // What a person is doing when a leg of it begins (travel.lua `begins_in`: a state of brain.lua). The planner does
+    // not read it; the agent brain does (brain/brain_table.h).
+    std::string beginsIn;
     // m/s, door to door, on the FOOTPATHS (the table says km/h). A way on the roads has none: its minutes are the
     // router's own time for the route (engine::routeSeconds: each road class at its speed, a few seconds a street
     // junction), the time it chose the route by (ADR-0416).
@@ -35,7 +52,9 @@ struct TravelMode {
     Real startMinutes = 0;       // fixed minutes at the start of a leg of it (unlocking, pulling out)
     Real endMinutes = 0;         // ...and at its end (finding the space, parking, locking)
     bool ownVehicle = false;     // needs a vehicle the person owns, standing somewhere
-    int access = -1;             // the way of travelling to and from that vehicle (a row index); -1: none needed
+    // The way of travelling to and from that vehicle, WHEN THE TABLE FIXES ONE (a row index). -1, the usual: it is
+    // reached and left by the cheapest way on foot the person has (walking, or a board for someone who has one).
+    int access = -1;
     Real weight = 1.0;           // how much the person minds a minute of it (1 = a plain minute)
     engine::Vec3 colour{1, 1, 1};   // its colour when a plan is drawn
 };
@@ -55,6 +74,10 @@ struct RoadKind {
 // picks a destination from when told "somewhere near" / "somewhere far" (straight-line metres).
 struct TravelCatalog {
     std::vector<TravelMode> modes;
+    // THE TRAITS a way can require (travel.lua `traits`), in the table's order: a person's traits are one bit each, bit
+    // i for traits[i] (TripRequest::traits). At most kMaxTraits.
+    std::vector<std::string> traits;
+    int trait(const std::string& name) const;   // its place in `traits`; -1 when it is not listed
     std::vector<RoadKind> roadKinds;
     int roadKindOf(engine::RoadClass k) const;   // the kind a class belongs to; -1 when none lists it
     Real nearMin = 150, nearMax = 600;
@@ -62,9 +85,14 @@ struct TravelCatalog {
     int find(const std::string& name) const;   // a row by name; -1 when there is none
 };
 
+// WHAT A LEG ENDS AT, so a reader that keeps places as handles (the agent brain) knows which handle each leg's end is
+// without comparing points: the door the trip is for, the vehicle where it stands, or where the vehicle is left.
+enum class LegEnd : uint8_t { Door, Vehicle, VehicleLeft };
+
 // One leg: a single way of travelling from one point to another.
 struct TripLeg {
     int mode = -1;               // row in the catalog
+    LegEnd end = LegEnd::Door;
     Vec2 from, to;
     engine::Route route;         // links of the leg's network (empty when from and to share a node)
     int fromNode = -1, toNode = -1;
@@ -82,6 +110,9 @@ struct TripLeg {
 struct TripOption {
     int mode = -1;               // the row this option is for
     bool possible = false;
+    // False: the person does not have what this way requires (a board), so it was never priced for them and the
+    // plan's reason leaves it out.
+    bool offered = true;
     std::string why;             // why not, when it is not possible ("no car", "no route by road")
     std::vector<TripLeg> legs;
     Real minutes = 0;            // the legs' minutes
@@ -99,17 +130,40 @@ struct TripPlan {
 
 // A vehicle the person owns: which way of travelling it is for, where it stands now, and where it would be left at
 // the far end (a free space near the destination: the caller knows the parking; the planner does not).
+// A HOUSEHOLD'S CAR is shared, and whoever reaches it first takes it (agent-brain-design.md section 12): the caller says
+// where it stands NOW and whether it is `free` at this moment. A vehicle that is not free is not priced.
 struct OwnedVehicle {
     int mode = -1;
     Vec2 at;
     Vec2 leaveAt;
+    bool free = true;
 };
 
 struct TripRequest {
     Vec2 from, to;
     std::vector<OwnedVehicle> vehicles;
     std::vector<int> ruledOut;   // rows not to use this time (a leg of it could not be done: city_trip re-plans)
+    uint32_t traits = 0;         // what the person has: bit i for TravelCatalog::traits[i]
+    int maxLegs = kMaxPlanLegs;  // a way needing more legs than this is refused (never more than kMaxPlanLegs)
 };
+
+// A PLAN IN FIXED FORM, for a reader that stores it per person with no heap (the agent brain's record): each leg's way,
+// what it ends at and its planned whole seconds; no route (a route is found when its leg begins and belongs to whatever
+// carries the leg out).
+struct FixedLeg {
+    uint8_t way = 0;             // row in the catalog
+    LegEnd end = LegEnd::Door;
+    uint16_t seconds = 0;        // the leg's minutes, in whole seconds
+};
+struct FixedLegs {
+    FixedLeg legs[kMaxPlanLegs];
+    uint8_t count = 0;
+};
+// The longest leg the fixed form holds, in seconds (its 16 bits: a little over 18 hours).
+constexpr long kMaxLegSeconds = 65535;
+// `o` in fixed form. Refused (false, `err` says why, naming the way's row of travel.lua) when `o` is not possible, has
+// more than kMaxPlanLegs legs, or holds a leg longer than kMaxLegSeconds.
+bool fixedLegs(const TravelCatalog& cat, const TripOption& o, FixedLegs& out, std::string* err);
 
 // One leg by `mode` from `from` to `to`: routed on the way's network between the nearest nodes that connect. False
 // (leg untouched) when nothing near the two ends routes.

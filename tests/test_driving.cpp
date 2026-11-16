@@ -5,6 +5,7 @@
 #include "test_framework.h"
 
 #include "apps/driving/driving.h"
+#include "include_walk.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -222,50 +223,8 @@ TEST_CASE(driving_state_hash_same_calls_same_hash) {
 // includes must be the standard library's (no folder, no ".h") or the JSON reader the bundle code uses.
 namespace {
 
-struct IncludeWalk {
-    std::filesystem::path src;
-    std::vector<std::string> allowed;        // headers outside src/apps/driving, as paths under src/
-    std::vector<std::string> external;       // headers from outside src/ (a third-party include path), by name
-    std::vector<std::string> seen;           // every file reached, as paths under src/
-    std::vector<std::string> breaches;
-
-    std::string underSrc(const std::filesystem::path& p) const {
-        return std::filesystem::relative(std::filesystem::weakly_canonical(p), src).generic_string();
-    }
-    void walk(const std::filesystem::path& file) {
-        const std::string me = underSrc(file);
-        if (std::find(seen.begin(), seen.end(), me) != seen.end()) return;
-        seen.push_back(me);
-        std::ifstream in(file);
-        std::string line;
-        while (std::getline(in, line)) {
-            const std::size_t inc = line.find("#include");
-            if (inc == std::string::npos || line.find_first_not_of(" \t") != inc) continue;
-            const std::size_t q = line.find('"', inc), a = line.find('<', inc);
-            if (q != std::string::npos) {
-                const std::string name = line.substr(q + 1, line.find('"', q + 1) - q - 1);
-                std::filesystem::path found = file.parent_path() / name;
-                if (!std::filesystem::exists(found)) found = src / name;
-                if (!std::filesystem::exists(found)) {
-                    if (std::find(external.begin(), external.end(), name) == external.end())
-                        breaches.push_back(me + " includes \"" + name + "\", which is not under src/ nor allowed");
-                    continue;
-                }
-                const std::string there = underSrc(found);
-                const bool inLibrary = there.rfind("apps/driving/", 0) == 0;
-                if (!inLibrary && std::find(allowed.begin(), allowed.end(), there) == allowed.end())
-                    breaches.push_back(me + " includes " + there + ", which is not on the allow-list");
-                else
-                    walk(found);
-            } else if (a != std::string::npos) {
-                const std::string name = line.substr(a + 1, line.find('>', a + 1) - a - 1);
-                const bool standard = name.find('/') == std::string::npos && name.find(".h") == std::string::npos;
-                if (!standard && name != "nlohmann/json.hpp")
-                    breaches.push_back(me + " includes <" + name + ">, which is not the standard library's");
-            }
-        }
-    }
-};
+// (The walk itself is tests/include_walk.h, shared with the agent brain's boundary test.)
+const char* const kLibraryFolder = "apps/driving/";
 
 // The engine headers the library may include, and with them everything they include.
 const std::vector<std::string> kLibraryAllowed = {
@@ -294,17 +253,7 @@ const std::vector<std::string> kScriptingAllowed = {
 
 std::vector<std::string> breachesOf(const std::filesystem::path& dir, const std::vector<std::string>& allowed,
                                     const std::vector<std::string>& external, std::size_t* files) {
-    IncludeWalk w;
-    w.src = std::filesystem::weakly_canonical(std::filesystem::path(RT_SOURCE_DIR) / "src");
-    w.allowed = allowed;
-    w.external = external;
-    std::vector<std::filesystem::path> roots;
-    for (const std::filesystem::directory_entry& e : std::filesystem::directory_iterator(dir))
-        if (e.is_regular_file()) roots.push_back(e.path());
-    std::sort(roots.begin(), roots.end());
-    for (const std::filesystem::path& f : roots) w.walk(f);
-    if (files) *files = w.seen.size();
-    return w.breaches;
+    return includeBreachesOf(std::filesystem::path(RT_SOURCE_DIR) / "src", kLibraryFolder, dir, allowed, external, files);
 }
 
 }  // namespace
@@ -325,6 +274,7 @@ TEST_CASE(driving_includes_nothing_past_its_boundary) {
     // The walk does see a breach: the entity world is not on the list.
     IncludeWalk probe;
     probe.src = std::filesystem::weakly_canonical(std::filesystem::path(RT_SOURCE_DIR) / "src");
+    probe.library = kLibraryFolder;
     probe.allowed = kLibraryAllowed;
     probe.walk(probe.src / "engine" / "level_loader.h");
     CHECK(!probe.breaches.empty());

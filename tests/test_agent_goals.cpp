@@ -200,8 +200,9 @@ TEST_CASE(people_lua_is_the_built_in_people) {
     CHECK(std::fabs(cpp.heightAt(30) - 1.0) < 0.01 && cpp.heightAt(80) < cpp.heightAt(30));
 }
 
-// THE WAYS OF TRAVELLING (travel.lua, ADR-0415): the shipped table reads -- walk, then the car reached on foot -- and a
-// table that would leave the planner guessing is refused with the reason. (There is no C++ copy to keep equal.)
+// THE WAYS OF TRAVELLING (travel.lua, ADR-0415, ADR-0440): the shipped table reads -- walk, the car reached on foot, and
+// the two small wheels for people who have them -- and a table that would leave the planner guessing is refused with
+// the reason. (There is no C++ copy to keep equal.)
 TEST_CASE(trip_plan_travel_lua_reads_and_refuses_what_it_cannot_plan_with) {
     ScriptVM vm;
     std::string err;
@@ -210,9 +211,20 @@ TEST_CASE(trip_plan_travel_lua_reads_and_refuses_what_it_cannot_plan_with) {
     const bool ok = loadTravelCatalog(vm, cat, &err);
     if (!ok) std::printf("    %s\n", err.c_str());
     CHECK(ok);
-    CHECK(cat.modes.size() == 2 && cat.find("walk") == 0 && cat.find("car") == 1);
+    CHECK(cat.modes.size() == 4 && cat.find("walk") == 0 && cat.find("car") == 1);
+    CHECK(cat.find("skateboard") == 2 && cat.find("scooter") == 3);
+    if (cat.modes.size() != 4) return;
     CHECK(!cat.modes[0].roads && !cat.modes[0].ownVehicle && cat.modes[0].access == -1);
-    CHECK(cat.modes[1].roads && cat.modes[1].ownVehicle && cat.modes[1].access == 0);
+    // the car fixes no way of reaching it: the cheapest way on foot the person has is used (ADR-0440)
+    CHECK(cat.modes[1].roads && cat.modes[1].ownVehicle && cat.modes[1].access == -1);
+    // the small wheels: on the footpaths, no vehicle to return to, only for people with the trait, and not for long
+    CHECK(cat.traits.size() == 2 && cat.traits[0] == "has_board" && cat.traits[1] == "has_scooter");
+    CHECK(!cat.modes[2].roads && !cat.modes[2].ownVehicle && cat.modes[2].needs == "has_board" && cat.modes[2].needsTrait == 0);
+    CHECK(!cat.modes[3].roads && !cat.modes[3].ownVehicle && cat.modes[3].needs == "has_scooter" && cat.modes[3].needsTrait == 1);
+    CHECK(cat.modes[2].longestLegMinutes == 15.0 && cat.modes[3].longestLegMinutes == 20.0);
+    CHECK(cat.modes[0].needsTrait == -1 && cat.modes[0].longestLegMinutes == 0.0);
+    CHECK(cat.modes[0].beginsIn == "walking" && cat.modes[1].beginsIn == "pulling_out" &&
+          cat.modes[2].beginsIn == "on_small_wheels" && cat.modes[3].beginsIn == "on_small_wheels");
     // a walk's speed is the table's; a drive has none (its minutes are the router's time by road class, ADR-0416)
     CHECK(std::fabs(cat.modes[0].speed - 5.0 / 3.6) < 1e-9 && cat.modes[1].speed == 0);
     // the kinds of road a drive is told apart by: every class the router drives in one of them, the freeway its own
@@ -232,7 +244,20 @@ TEST_CASE(trip_plan_travel_lua_reads_and_refuses_what_it_cannot_plan_with) {
         CHECK(e.find(why) != std::string::npos);
     };
     refused("travel.modes[2].access = 'teleport'", "teleport");
-    refused("travel.modes[2].access = nil", "access");
+    // `access` is optional now; a table that fixes one still reads, and the planner uses it
+    {
+        ScriptVM fixed;
+        std::string e;
+        CHECK(fixed.doString(readFile(std::string(RT_SOURCE_DIR) + "/assets/scripts/travel.lua") +
+                                 "\ntravel.modes[2].access = 'walk'", &e));
+        TravelCatalog c;
+        CHECK(loadTravelCatalog(fixed, c, &e) && c.modes.size() == 4 && c.modes[1].access == 0);
+    }
+    // ...but a car with no fixed way to it needs SOME way on foot that everyone has
+    refused("travel.modes[1].requires = 'has_board'", "open to everyone");
+    refused("travel.modes[3].requires = 'has_wings'", "has_wings");
+    refused("travel.traits = { 'has_board', 'has_board', 'has_scooter' }", "listed twice");
+    refused("travel.modes[3].longest_leg_minutes = -1", "longest_leg_minutes");
     refused("travel.modes[1].network = 'canals'", "canals");
     refused("travel.modes[1].speed_kmh = 0", "speed_kmh");
     refused("travel.modes[2].speed_kmh = 30", "router");

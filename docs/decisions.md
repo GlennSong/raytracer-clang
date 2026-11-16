@@ -21114,3 +21114,107 @@ Tests, each proven by putting the old or wrong answer back:
 - `level_traffic_lab_v2_one_road_model_is_published_and_driven_on`: the lab's counts (132, 129, 1098, 7686 m), every space with a kerb lane, and one painted outline per space where its car stands. With the paint drawing the old bays again, 2 checks fail (1294 outlines).
 - `tick_15` in `driving_tests`: the same scene at 60, 30 and 20 ticks a second; the driver is seen to decide at the same 39 instants, a tenth of a second apart. With six ticks at any rate, 14 checks fail (at 20 a second it decides every 0.3 s).
 - `lanes_a_level_lane_graph_is_built_once_then_read_from_its_cache`: the saved model's key moves with the kerb parking file's bytes.
+
+## ADR-0440 — The agent brain's core as a library: each person's record, states and transitions as data, one event queue, the trip planner extended, near and far
+**Status:** Provisional · **Date:** 2026-11-16
+
+What it does: builds the middle of the design in docs/agent-brain-design.md as a small library with its own tests. It holds, for each person, what they want, how they will get there, and the one thing they are doing this moment; it moves them from state to state as a data table says, in answer to events; and it plans with the trip planner the one-agent lab already uses. It is driven by stand-in skills in tests. It is NOT wired into the crowd, the lab or the city sim: `city_sim.cpp` is untouched, no level behaves differently, and the traffic lab's five-minute state hash is the same number (0x7aade29530b4fdd1).
+
+Words: an **intent** is what a person wants ("be at that door"). A **plan** is a short list of **legs**, each one part of the trip made one **way** (a row of `travel.lua`: walk, car, skateboard, scooter). A **state** is the one thing a person is doing this moment (a row of `brain.lua`: walking, driving, indoors). A **skill** is a system that moves a body (walking, driving); a state asks a skill and waits for its report. An **event** is a report delivered to one person ("arrived", "your car is gone"). **Near** people have skills running; **far** people (most of an island) have none, and the clock stands in for the skill. A **place** is a handle the world hands out (a door, a kerb parking space); the brain stores it and hands it back, and never looks inside. A **trait** is something a person has that a way requires (a board).
+
+**1. Where it lives.** `src/apps/citysim/brain/`, its own static library `brain`. The arrows go one way: citysim, then brain, then driving, then engine_core. It includes nothing from the city sim, the renderer, the entity world or the physics wrapper, and a test follows every include to hold that (`brain_includes_nothing_past_its_boundary`; the include walk the driving library's test used is now shared, `tests/include_walk.h`). The trip planner's two source files (`trip_plan.cpp`, `scripting/travel_lua.cpp`) stay where they are and are compiled in this library, once; citysim gets them by linking it. So the brain plans with the same planner as the lab, not a copy.
+
+**2. One person's record** (`brain_record.h`, `AgentBrain`): plain data, no heap, no strings, no virtual functions, 120 bytes, packed on 4, every byte a field so it is hashed as bytes.
+
+| Bytes | Field | What it is |
+|---|---|---|
+| 32 | `legEnd[8]` | where each leg ends (a place) |
+| 32 | `legUse[8]` | each leg's way (8 bits) and the vehicle or line it uses (24 bits) |
+| 16 | `legSeconds[8]` | each leg's planned whole seconds |
+| 4 + 4 | `intentTarget`, `intentBegan` | the place the intent is about; when it began |
+| 4 + 4 | `stateEntered`, `stateDue` | when the state was entered; when it is due to end, if known |
+| 4 | `payload` | the current state's own data (a union; for a state that holds: how much of the interrupted state's time was left) |
+| 4 + 4 | `originX`, `originZ` | where the plan began, in whole centimetres |
+| 4 | `car` | the household's car |
+| 2 | `ruledOut` | ways a leg of which failed, for as long as this intent lasts |
+| 6 | `intentKind`, `state`, `legCount` and `legNow` (4 bits each), `traits`, `heldState`, `detail` | |
+
+The target was 96 bytes. The 24 over are `legSeconds` (16) and the origin (8). The seconds are what let a far person begin a leg knowing when it ends without finding a route. The origin is where the first leg starts, which no earlier leg says, and it places a far person raised part-way along that leg. Both can be cut to reach 96 at the cost of pricing a leg again each time a far person begins one, and of asking the world where a person set out from. 238,000 people at 120 bytes are 28.6 MB.
+
+Time is whole milliseconds in 32 bits, so two runs agree to the bit. That holds a little over 49 days of simulated time.
+
+**3. States and transitions are data** (`assets/scripts/brain.lua`, read once at load by `scripting/brain_lua.cpp`, compiled by `brain_table.cpp` into flat tables indexed by number). Each state row says its group, the skill it asks, how it ends (never; by its skill's report when near and by the clock when far; by the clock always), the event the clock raises, where the person is while in it, whether it holds what was interrupted, and what each event leads to. Each event row says what it does in a state that does not list it. What an event leads to is a state's name or one of six verbs, which are the machine's own mechanisms: `next_leg`, `replan`, `replan_without`, `resume`, `ignore`, `refuse`. The rule for a failed leg is the events' default: plan again from here, ruling out the way that failed. Which state a leg of a way begins in is the way's own row (`travel.lua`, `begins_in`), so a new way is one data row.
+
+The machine (`brain.h`, `Machine`) names no state, no event and no way. What a state DOES is a small table of function pointers (enter, enter part-way, exit, step, on-event, how long it lasts) registered under the state's name at start-up (`brain_states.cpp`), the one place a state's name is written in C++. Compiling refuses a state in the data with no functions, functions with no state in the data, an event row naming something that is neither a state nor a verb, a skill C++ has no interface for, and an event a state's functions raise that the data lacks. Every message names the file and the key.
+
+The 21 states, as built:
+
+| Group | Built | In the data, refusing entry ("not built yet") |
+|---|---|---|
+| Travelling | walking, on_small_wheels, pulling_out, driving, parking | |
+| Transit | | waiting, boarding, riding, alighting, hailing |
+| At a place | indoors, standing | using_spot, group_activity, working_post |
+| Resting | | asleep |
+| Body trouble | knocked_down, stuck, crashed | |
+| Held | possessed, released | |
+
+A car leg is three states: pulling out (take the car if it is still there and free; the way's start minutes), driving, parking (take the space if it is still free; the way's end minutes). A way whose leg begins in a state that is not built is ruled out and the trip planned again, so an unfinished way degrades to another way and says so.
+
+**4. Events.** One event type (16 bytes: person, kind, a small payload, the order it was posted in) and one queue. Once a tick the queue is put in order, lowest person first and then by posting order, and each event is answered by its person's current state. So the answer does not depend on the order skills post in. A state's functions may raise an event themselves on entering ("the car is gone"); it is answered at once, at the same instant, up to a fixed depth.
+
+**5. The plan layer** uses the existing planner (`trip_plan.h`), extended:
+- **A fixed form** (`fixedLegs`): each leg's way, what it ends at (the door, the vehicle, where the vehicle is left) and its whole seconds; at most 8 legs (`kMaxPlanLegs`). A way that needs more is not possible, and the next cheapest is taken (`TripRequest::maxLegs`).
+- **`requires`** on a way: a trait from the table's `traits` list. The row is priced only for people who have it, and the plan's reason leaves it out for people who do not.
+- **`longest_leg_minutes`** on a way: a leg that would take longer is not made that way.
+- **Skateboard and scooter rows** in `travel.lua`: on the footpaths, no vehicle to return to, 10 and 12 km/h, a minute minded as 1.2, longest leg 15 and 20 minutes. These numbers are estimates, marked so in the file; nothing was measured.
+- **To and from a vehicle by the cheapest way on foot the person has.** The fixed `access` row is now optional and the shipped car row no longer sets it. A table that sets it still gets it.
+- **The household's car**: the caller says where it stands and whether it is free at this moment (`OwnedVehicle::free`). A car in use is not priced.
+
+The one-agent lab (`city_trip.cpp`) compiles and plans as before: its person has no trait, so the small wheels are not theirs and are left out of its lines, and its car is reached on foot. Its on-screen option list and its `trip?` line skip ways the person does not have (two lines changed there).
+
+**6. Skills and the world are interfaces** (`brain_skills.h`): `WalkSkill` (walk this person to this place by this way, from this fraction of the leg; cancel), `DriveSkill` (four calls, one for each of the driving library's `placeCar`, `beginTrip`, `endTrip`, `removeCar`), `World` (the clock; where a place is; where a person's body is; where the car stands, whether it is free, taking and leaving it; the nearest free kerb space to a door; taking a space) and `Planner`. There is one object of each for the whole crowd; nothing is made per person.
+
+What is real and what is a stand-in:
+- **Stand-ins, in `tests/brain_fakes.h` only**: the world, walking and driving. Each works by the clock alone: a walk takes its straight-line metres at the way's speed, a drive its metres at a local street's speed.
+- **Real**: the planner (`TripPlanner`, over the trip planner and the street map). The drive skill (`DrivingSkill` in `brain_driving.h`) over `driving::Driving`, which also hands the driving's six kinds of event to the machine under the data's names and does not send back an "ended early" the brain asked for itself. The road model's kerb spaces as places (`RoadPlaces`: `frontageAt`, `kerbSpacesNear`, `kerbSpacePose`, `kerbLaneBeside`).
+- **Not built**: a real `WalkSkill` over the city sim's walkers; a real `World` (doors, cars, the clock) around `RoadPlaces`; beginning a drive part-way along its route.
+
+**7. Detail by distance.** `Machine::step(person, level)` takes the level. Near: skills run, and their reports move the person on. Far: no skill; a state with a planned end is moved on by the clock, and each state is entered at the time the last one was due, not at the time of the visit, so a far person visited late has the same history as one visited on time. `nextAttention(person)` is the time a host's clock queue should wake them. Raised to near part-way through a state, the state's "enter part-way" function is given the fraction of its planned time already gone; lowered, its skill is stopped and the clock carries on. Middle is not built: it runs as near.
+
+**8. Inspectable.** `Machine::describe(person)` gives one line, for example: `agent 0: wants be_at place 1 since 0.0 s | plan: walk to 2, car to 3 (vehicle 0), walk to 1 | leg 2 of 3 | driving since 132.0 s, due 282.0 s, waiting for parked from the drive skill | near`.
+
+**Allocation.** Nothing is allocated per person, and answering events, entering and leaving states and the clock allocate nothing; a test counts allocations with a replaced global `operator new` (which is why the brain's tests are their own program, `brain_tests`). Planning does allocate: it calls the trip planner, whose routes are vectors. A person plans when their intent changes or a leg fails.
+
+**Where the build differs from the design** is listed in docs/agent-brain-design.md, section 14. The ones that need a decision:
+- **Nobody holds a parking space until the car is beside it.** Two cars sent to one door at one time are told the same space, and the second finds it taken. In the 1,000-person test 239 drivers met this.
+- **A failed drive leaves the car where it stopped.** "Plan again, ruling out what failed" for "no route" and "cannot park" means the person gets out and walks, and the car stands free in the lane.
+- **Released plans again** rather than carrying on, because the player may have moved the person.
+- **The record's 120 bytes** and **32-bit time**.
+
+**What is next**: a real `World` and `WalkSkill` around the city sim's walkers; the lab resident of the design's section 9 driven by the real driving; then the transit states.
+
+Tests (`brain_tests`, 18 cases, with stand-in skills on a straight 2 km street where every time can be worked out by hand; one case each in `lanes_tests` and `run_tests`). Each was proven by breaking its rule once:
+- `brain_trip_walk_drive_walk_states_and_times`: the plan (walk to the car's space, drive, walk to the door; 72, 300 and 144 s) and the six states with the millisecond each was entered. With pulling out lasting the parking minutes, 4 checks fail here and 32 across the program.
+- `brain_trip_a_board_is_one_leg_near_and_not_used_beyond_its_longest_leg`: one skateboard leg for 500 m; on foot for 1500 m (9 minutes on a board that suits 6); the board used to reach and leave the car. With the board priced for people who have none, 2 checks fail here and 51 across the program; with the longest leg ignored, 3.
+- `brain_trip_the_household_car_taken_by_another_is_gone_at_the_kerb`: two people, one car; the second to reach it gets "vehicle gone", plans again with the car not priced, and arrives on foot. With the car taken without asking, 5 checks fail.
+- `brain_trip_no_route_and_cannot_park_plan_again_without_the_car`: "no route" part-way and at the start, a space taken during the drive, and the driving's own "cannot park". With the failed way not ruled out, 10 checks fail.
+- `brain_trip_possessed_suspends_the_intent_and_release_resumes_it`: taken over part-way through a walk; the record does not change by a byte for five minutes, whatever is posted; let go, the person plans from where they stand and arrives. With a held person answering events by the defaults, 8 checks fail.
+- `brain_trip_knocked_down_then_got_up_carries_on_the_same_leg` and `brain_trip_stuck_carries_on_and_a_crash_goes_on_without_the_car`: the same leg of the same plan, its end moved by the time on the ground; a crash goes on without the car. With getting up planning again instead, 4 and 1 checks fail.
+- `brain_trip_far_by_the_clock_alone_keeps_the_near_times`: the same trip with no skill at all, by ticks, by five visits at the times `nextAttention` gives, and by one late visit; raised part-way through the drive (68 of 150 s) and through a walk; lowered part-way. With a state entered at the time of the visit, 2 checks fail; with the fraction always none, 6.
+- `brain_trip_an_intent_changed_on_the_way_is_taken_up_on_arriving`.
+- `brain_scale_two_runs_of_a_thousand_people_give_the_same_hash`: 1,000 people in shared-car households, the skills' reports posted lowest person first and then highest first. With the queue not put in order, 1 check fails (the hash).
+- `brain_scale_stepping_the_machine_allocates_nothing`: 1,076 transitions and 2,084 events with 0 allocations. With one allocation added to entering a state, 1 check fails (1,076 counted).
+- `brain_data_that_disagrees_with_the_code_is_refused_by_file_and_key`, `brain_a_plan_over_the_cap_is_refused_and_the_next_cheapest_taken`, `brain_a_state_that_is_not_built_refuses_entry_and_says_so`: with a state lacking functions accepted, 3 checks fail; functions lacking a state, 4; a row naming an unknown state, 7; the legs cap not enforced, 5.
+- `brain_record_is_small_plain_data`, `brain_shipped_data_reads_compiles_and_binds`, `brain_includes_nothing_past_its_boundary`.
+- `brain_driving_skill_maps_onto_the_driving_call_for_call`: each call reaches the driving, each event the right person. No rules are handed to the driving there, so no car moves. With the skill passing on its own "ended early", 3 checks fail.
+- `road_model_26` in `lanes_tests`: the kerb spaces near a door as places, on the lane-level scene. With a space given a new handle each time, 2 checks fail.
+- `trip_plan_traits_longest_leg_cheapest_way_to_the_car_and_a_car_in_use` in `run_tests`: the planner's new fields on its own. With the board priced for everyone 6 checks fail; with the longest leg ignored, 3.
+
+Alternatives considered:
+- **Store no leg times and price each leg when it begins.** The record would be 104 bytes. A far person would then need a route search, or a route table that does not exist yet, at every leg. Not chosen.
+- **A copy of the planner inside the brain.** Refused: one planner, extended.
+- **States as an enum in C++ with a switch.** Refused: a new state would be a new branch (AGENTS.md, kinds are data).
+- **Floating-point seconds for time.** Refused: the last bit would decide whether two runs agree.
+- **The stand-in skills inside the library.** Refused: they are test support, and the library should hold only what the sim will run.
+
+Revisit when: the crowd moves over (the record's size and 32-bit time); two brain agents first compete for a space; the lab resident drives on the real driving (what "parked" and "cannot park" should do).

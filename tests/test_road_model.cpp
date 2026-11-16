@@ -18,6 +18,8 @@
 #include "test_framework.h"
 #include "planned_city.h"
 
+#include "apps/citysim/brain/brain_driving.h"                 // RoadPlaces: the kerb spaces as the agent brain's places
+
 #include "engine/bundle/bake.h"
 #include "engine/procgen/city/plan/plan_scene.h"
 #include "engine/procgen/city/roads/lanes/control_plan.h"     // findJunctions: the one grouping
@@ -2582,4 +2584,42 @@ TEST_CASE(road_model_25_where_a_door_fronts_the_road_is_asked_of_the_model) {
     }
     std::printf("    [frontage] %d buildings face the street the model answers, %d of them nearer the freeway's centre line\n", faced, nearerFreeway);
     CHECK(faced >= 2 && nearerFreeway >= 1);
+}
+
+// ---- 26. the model's kerb spaces as places the agent brain can hold (ADR-0440) -------------------------------------------
+
+TEST_CASE(road_model_26_kerb_spaces_are_handed_to_the_agent_brain_as_places) {
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(laneLevelGraph()));
+    const RoadModel m = assembleRoadModel(*r, oneCar());
+    constexpr uint32_t kTag = 0x40000000u;   // what tells these handles from a host's own (its doors)
+    citysim::brain::RoadPlaces places(m, kTag);
+    // THE SPACES NEAR THE DOOR OF TEST 25 (9 m east of l0, level with its station 50), in the model's walking order
+    const std::vector<citysim::brain::PlaceRef> near = places.spacesNear(Vec2(9, -100), 15.0, 10);
+    const char* names[] = {"l0 along 6", "l0 along 7", "l0 along 5", "l0 along 8", "l0 against 6"};
+    CHECK(near.size() == 5u);
+    if (near.size() != 5u) return;
+    for (std::size_t i = 0; i < 5; ++i) {
+        KerbSpace space;
+        CHECK(places.owns(near[i]) && places.spaceOf(near[i], space) && m.kerbSpaceName(space) == names[i]);
+        CHECK(near[i].id == (kTag | static_cast<uint32_t>(i)));   // numbered as they are handed out, under the tag
+    }
+    // where a car in the nearest stands: the parking band's middle, 4.75 m from the centre line, at station 47.9
+    Vec2 at;
+    CHECK(places.positionOf(near[0], at) && samePlace(at, Vec2(4.75, -102.1)));
+    // the kerb lane beside it, as the driving is told it: the lane running north 3 m from the centre line, 47.9 m along
+    driving::PathPoint lane;
+    CHECK(places.kerbLane(near[0], lane));
+    KerbSpace nearest;
+    places.spaceOf(near[0], nearest);
+    const KerbLanePlace models = m.kerbLaneBeside(nearest);
+    CHECK(models.valid() && lane.path == models.path && approxEqual(lane.along, 47.9, kWrittenStation));
+    CHECK(samePlace(m.laneLevel.pointAt(lane.path, lane.along), Vec2(3.0, -102.1)));
+    // the same space asked again is the same handle; a handle that is not one of these is refused
+    CHECK(places.placeOf(nearest) == near[0]);
+    CHECK(places.spacesNear(Vec2(9, -100), 15.0, 10) == near);
+    citysim::brain::PlaceRef foreign;
+    foreign.id = 3;
+    CHECK(!places.owns(foreign) && !places.positionOf(foreign, at) && !places.kerbLane(foreign, lane));
+    foreign.id = kTag | 99u;
+    CHECK(!places.owns(foreign));
 }

@@ -41,6 +41,23 @@ bool loadTravelCatalog(ScriptVM& vm, citysim::TravelCatalog& out, std::string* e
     const int tt = lua_gettop(L);
     citysim::TravelCatalog cat;
     std::vector<std::string> access;
+    // the traits a row can require, one bit each of what a person has
+    lua_getfield(L, tt, "traits");
+    if (lua_istable(L, -1)) {
+        const lua_Integer nt = luaL_len(L, -1);
+        for (lua_Integer i = 1; i <= nt; ++i) {
+            lua_rawgeti(L, -1, i);
+            const std::string name = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_pop(L, 1);
+            if (name.empty()) return fail(L, base, err, "traits[" + std::to_string(i) + "] is not a name");
+            if (cat.trait(name) >= 0) return fail(L, base, err, "traits: `" + name + "` is listed twice");
+            cat.traits.push_back(name);
+        }
+        if (cat.traits.size() > static_cast<std::size_t>(citysim::kMaxTraits))
+            return fail(L, base, err, "traits lists " + std::to_string(cat.traits.size()) + "; a person holds at most " +
+                                          std::to_string(citysim::kMaxTraits));
+    }
+    lua_pop(L, 1);
     lua_getfield(L, tt, "modes");
     if (!lua_istable(L, -1)) return fail(L, base, err, "no `modes` list");
     const lua_Integer n = luaL_len(L, -1);
@@ -76,14 +93,29 @@ bool loadTravelCatalog(ScriptVM& vm, citysim::TravelCatalog& out, std::string* e
         if (!(m.weight > 0)) return fail(L, base, err, "`" + m.name + "`: weight must be positive");
         m.colour = vec3Field(L, mt, "colour", m.colour);
         access.push_back(strField(L, mt, "access"));
-        if (m.ownVehicle && access.back().empty())
-            return fail(L, base, err, "`" + m.name + "` needs a vehicle, so it needs an `access` way to reach it");
+        m.needs = strField(L, mt, "requires");
+        if (!m.needs.empty()) {
+            m.needsTrait = cat.trait(m.needs);
+            if (m.needsTrait < 0)
+                return fail(L, base, err, "`" + m.name + "`: requires `" + m.needs + "`, which `traits` does not list");
+        }
+        m.longestLegMinutes = numField(L, mt, "longest_leg_minutes", 0.0);
+        if (m.longestLegMinutes < 0)
+            return fail(L, base, err, "`" + m.name + "`: longest_leg_minutes cannot be negative");
+        m.beginsIn = strField(L, mt, "begins_in");
         cat.modes.push_back(m);
         lua_pop(L, 1);
     }
     lua_pop(L, 1);
     if (cat.modes.empty()) return fail(L, base, err, "`modes` is empty");
+    // a way that needs a vehicle is reached on foot: by the row it fixes (`access`), or else by any row on the
+    // footpaths, of which one at least must be open to everyone
+    bool anyoneOnFoot = false;
+    for (const citysim::TravelMode& m : cat.modes) anyoneOnFoot = anyoneOnFoot || (!m.roads && !m.ownVehicle && m.needs.empty());
     for (std::size_t i = 0; i < cat.modes.size(); ++i) {
+        if (cat.modes[i].ownVehicle && access[i].empty() && !anyoneOnFoot)
+            return fail(L, base, err, "`" + cat.modes[i].name + "` needs a vehicle, which is reached on foot, and no row "
+                                          "on the footpaths is open to everyone (give it an `access` way, or add one)");
         if (access[i].empty()) continue;
         const int a = cat.find(access[i]);
         if (a < 0) return fail(L, base, err, "`" + cat.modes[i].name + "`: access `" + access[i] + "` is not a way listed");

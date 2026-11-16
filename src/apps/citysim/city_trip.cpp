@@ -701,6 +701,7 @@ std::string CityTripSystem::status() const {
                     fmt("%.1f", dest_.x) + " " +
                     fmt("%.1f", dest_.y) + " | options:";
     for (const TripOption& o : plan_.options) {
+        if (!o.offered) continue;   // a way the person does not have (a board) was never priced for them
         s += " " + describeOption(travel_, o);
         if (!o.legs.empty()) {
             s += " [";
@@ -755,7 +756,8 @@ void CityTripSystem::render(engine::FrameContext& ctx) {
     } else {
         lines.push_back("Going to " + where_);
         for (std::size_t i = 0; i < plan_.options.size(); ++i)
-            lines.push_back((static_cast<int>(i) == plan_.chosen ? "> " : "   ") + describeOption(travel_, plan_.options[i]));
+            if (plan_.options[i].offered)   // (not the ways the person does not have)
+                lines.push_back((static_cast<int>(i) == plan_.chosen ? "> " : "   ") + describeOption(travel_, plan_.options[i]));
         if (plan_.valid())   // the chosen way's roads, leg by leg (ADR-0416)
             for (const TripLeg& L : plan_.choice()->legs) {
                 const std::string roads = describeRoads(travel_, L);
