@@ -35,7 +35,9 @@ travel = {
       own_vehicle = false, weight = 1.0, begins_in = "walking", colour = { 0.25, 0.95, 0.35 } },
     -- (set_off_wait_minutes is an ESTIMATE, not measured: about one cycle of a traffic light, after which a queue
     -- standing beside the space has had its chance to move on)
-    { name = "car", network = "roads", start_minutes = 2.0, end_minutes = 3.0, set_off_wait_minutes = 1.5,
+    -- (start and end minutes: two each, the owner's choice of 2026-11-16 -- they were 2 and 3. They decide when a
+    -- car is worth taking: at a minute each the car beat a 4.6-minute walk to the shop in brain_lab)
+    { name = "car", network = "roads", start_minutes = 2.0, end_minutes = 2.0, set_off_wait_minutes = 1.5,
       own_vehicle = true, weight = 1.0, begins_in = "pulling_out", colour = { 0.25, 0.55, 1.0 } },
     -- SMALL WHEELS: a faster way of doing a leg on foot, not a vehicle to be parked (agent-brain-design.md section
     -- 12). The numbers are ESTIMATES, not measured: a skateboard cruises at 10 to 14 km/h and a kick scooter a

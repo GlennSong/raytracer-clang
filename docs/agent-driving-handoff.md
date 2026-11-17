@@ -71,12 +71,15 @@ Small things owed:
 - the lot pass should record each door's street (costs a full re-bake; parked);
 - boards and scooters dealt to the population by life stage.
 
-## Decisions waiting on the owner
+## Decisions (settled 2026-11-16)
 
-- The car's fixed 2 minutes at the start and 3 at the end of a trip are spent sitting in the parked car and
-  decide when the car is chosen. Recommended: about 20 and 30 seconds for kerb parking.
-- Stop 25 cm earlier so the bumper is short of the stop bar's near edge (moves the pinned lab run).
-- The old driving: recommended to leave it until river_town runs on the new one, then delete.
+- The car's fixed minutes at the start and end of a trip: 2 and 2 (were 2 and 3). A minute each was tried
+  first; the car then beat a 4.6-minute walk to the shop in brain_lab, so it went back up rather than adding
+  a separate reluctance to drive short trips.
+- Stop lines: the car stops where it does now. No change.
+- Giving back a car the player took with the key: later, issue #293.
+- The old driving: leave it until river_town runs on the new one, then delete it. Do not run or fix its
+  tests meanwhile; a shared change that breaks one says so in its commit.
 
 ## The owner's standing rules
 

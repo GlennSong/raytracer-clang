@@ -162,7 +162,7 @@ TEST_CASE(brain_shipped_data_reads_compiles_and_binds) {
     CHECK(table.states[table.ways[1].begins].name == "pulling_out");
     CHECK(table.states[table.ways[2].begins].name == "on_small_wheels");
     CHECK(table.states[table.ways[3].begins].name == "on_small_wheels");
-    CHECK(table.ways[1].startMillis == 120000u && table.ways[1].endMillis == 180000u);   // 2 and 3 minutes
+    CHECK(table.ways[1].startMillis == 120000u && table.ways[1].endMillis == 120000u);   // 2 and 2 minutes
     // ADR-0442: a car waits at most a minute and a half for a clear lane to leave its space into (a way on foot waits
     // for nothing); a new intent at the wheel redirects the drive, and is left alone while pulling out and parking;
     // `blocked` at the wheel is the failed-leg rule; every state has a display name

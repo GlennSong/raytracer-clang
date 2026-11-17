@@ -430,10 +430,10 @@ TEST_CASE(level_brain_lab_one_resident_makes_the_trip) {
     CHECK(arrived);
     if (!arrived) return;
 
-    // THE STATES, in order; pulling out and parking last the way's own minutes (travel.lua: 2 and 3)
+    // THE STATES, in order; pulling out and parking last the way's own minutes (travel.lua: 2 and 2)
     CHECK(stateNames(b) == "standing walking pulling_out driving parking walking standing");
     CHECK(b.standingAt() == "work");
-    CHECK(stateLasted(b, 2) == 120000u && stateLasted(b, 4) == 180000u);
+    CHECK(stateLasted(b, 2) == 120000u && stateLasted(b, 4) == 120000u);
     const citysim::CityBrainCounts& c = b.counts();
     CHECK(c.boarded == 1u && c.alighted == 1u);
     // THE CAR LEFT ITS SPACE, was driven, and the driving reported "parked" once
@@ -804,7 +804,7 @@ TEST_CASE(level_brain_lab_whoever_reaches_the_household_car_first_takes_it) {
     // their own at the far end.
     CHECK(b.planText(kAna) == "walk>space s19 along 3, car>space s182 against 3, walk>work");
     CHECK(b.planText(kBen) == "walk>space s19 along 3, car>space s223 against 3, walk>ramp");
-    CHECK(b.planReason(kBen) == "walk 10.2 min, car 7.3 min (0.2 walk + 7.0 car + 0.2 walk): car");
+    CHECK(b.planReason(kBen) == "walk 10.2 min, car 6.3 min (0.2 walk + 6.0 car + 0.2 walk): car");
     CHECK(model.kerbSpaceName(b.heldSpace(kAna)) == "s182 against 3" && model.kerbSpaceName(b.heldSpace(kBen)) == "s223 against 3");
     // BEN IS AT THE CAR FIRST and takes it; ANA, at the kerb a second later, finds it taken: `vehicle_gone`, and a
     // plan without it
