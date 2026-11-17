@@ -180,6 +180,7 @@ static void readCityMarkers(const json& cs, const std::string& levelPath, CitySi
                 LOG_WARN << where << ": a marker with no name -- left out";
                 continue;
             }
+            m.kind = row.value("kind", std::string());
             const std::string kerb = row.value("kerb", std::string("along"));
             if (row.contains("street") && row["street"].is_string() && row.contains("station") && row["station"].is_number() &&
                 (kerb == "along" || kerb == "against")) {

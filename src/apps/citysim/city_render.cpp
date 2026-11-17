@@ -2227,7 +2227,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         // (kSpaceReach, the nearest kSpacesLookedAt) beside lanes in the largest part of the road every vehicle class
         // drives (driving/trip_places.h), at least kHomeSpaces of them (the brain then offers only those: the level's
         // drivableSpacesOnly)
-        constexpr int kHomeSpaces = 12;
+        // (12 at ADR-0446's 200 residents; at 350 a household's car found none of 12 free)
+        constexpr int kHomeSpaces = 24;
         const driving::Driving& d2 = *sim_.drivingV2();
         std::vector<driving::TripPlaces> classParts;
         std::vector<uint32_t> classMain;

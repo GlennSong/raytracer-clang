@@ -147,6 +147,9 @@ bool makeCrowd(const CrowdSpec& spec, const engine::RoadModel& model, const Crow
         if (!found) return refuse("nowhere along the streets is a place for a " + spec.places[static_cast<std::size_t>(k)].kind);
         engine::CityMarker m;
         m.name = spec.places[static_cast<std::size_t>(k)].kind + "_" + std::to_string(placesOf[static_cast<std::size_t>(k)]++);
+        // (a home is its own household's: another home is not the same kind of place to them, so it has no kind a
+        // person could swap it for, CityMarker::kind)
+        if (!spec.places[static_cast<std::size_t>(k)].homes) m.kind = spec.places[static_cast<std::size_t>(k)].kind;
         m.stated = true;
         m.street = model.streets[street].id;
         m.station = station;

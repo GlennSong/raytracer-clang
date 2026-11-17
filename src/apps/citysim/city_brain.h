@@ -128,6 +128,7 @@ constexpr Real kLeftOnRoadWithin = 1.0;
 // ONE MARKER, resolved against the road model.
 struct BrainMarker {
     std::string name;
+    std::string kind;                // engine::CityMarker::kind (empty: of no kind)
     engine::RoadFrontage frontage;   // its street, station and kerb
     Vec2 stand;                      // where a person at it stands: the middle of the sidewalk beside it
     Vec2 post;                       // where its post is drawn: kMarkerPostOffset from `stand`, beside the ring
@@ -146,6 +147,7 @@ struct CityBrainCounts {
     uint32_t walksBegun = 0, walksArrived = 0, walksBlocked = 0;
     uint32_t nextSpaces = 0;       // times a taken space was answered with another
     uint32_t redirected = 0;       // times a trip under way (or about to set off) was given a new end
+    uint32_t otherPlaces = 0;      // times a person with no way to a place chose another of its kind (ADR-0446)
     // ADR-0443: somebody the brain does not own and a household's car
     uint32_t takenStanding = 0;    // times an outsider got into a household's car that stood empty
     uint32_t takenDriven = 0;      // times the player took one with its driver in it

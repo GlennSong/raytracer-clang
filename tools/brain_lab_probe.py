@@ -207,14 +207,17 @@ def multi(sock, shots, t0, suffix, wait_speed):
 
 
 # WHERE TO LOOK ON brain_crowd at the busy period (ADR-0446): from the level test's look list
-# (RT_CROWD_LOG=5 RT_CROWD_MINUTES=5 RT_TEST_FILTER=level_brain_crowd build-viewer/level_tests), the places with the
-# most cars near them at minute 5. x, z of the plan; the height the camera looks down from.
+# (RT_CROWD_LOG=11 RT_CROWD_MINUTES=11 RT_TEST_FILTER=level_brain_crowd build-viewer/level_tests), the places with the
+# most cars near them at minute 11 (the only minute of the busy period with a car near a ramp's merge). x, z of the
+# plan; the height the camera looks down from.
 CROWD_LOOKS = [
-    ("signalled_junction_j9", -270.0, 0.0, 70.0),
-    ("stop_signed_junction_j6", -270.0, -60.0, 70.0),
-    ("ramp_merge_d1_0_b_off", 469.2, 50.8, 80.0),
+    ("signalled_junction_j0", -268.85, -264.57, 70.0),
+    ("stop_signed_junction_j11", -270.0, 60.0, 70.0),
+    ("ramp_merge_d0_0_a_off", -567.93, 5.20, 80.0),
 ]
-CROWD_BUSY_MINUTE = 5.0   # the busiest minute of the test's run: 41 cars on the road
+CROWD_BUSY_MINUTE = 11.0  # in the test's busy period (59-74 cars on the road over minutes 6-11; 62 at minute 11)
+CROWD_STANDING_SHOTS = 6  # cars found standing on the road, each taken from above
+STANDING_HEIGHT = 40.0    # ...from this high
 CHASE_BACK = 14.0         # metres behind the chased car the camera stands
 CHASE_UP = 6.0            # ...and above the ground
 
@@ -245,6 +248,21 @@ def crowd(sock, shots, t0, suffix, wait_speed):
         rtctl.send(sock, f"camera {x} {height} {z} -89 0")
         time.sleep(1.0)
         shoot(sock, shots, named(name + "_from_above"), t0, rtctl.send(sock, "waiting?"))
+    # CARS STANDING ON THE ROAD (a red light, a stop sign, the car ahead): the first few residents found so, from above
+    # (the viewer's day is not the test's to the tick, so a junction picked from the test's list may be empty)
+    standing = 0
+    for i in range(350):
+        if standing >= CROWD_STANDING_SHOTS:
+            break
+        line = rtctl.send(sock, f"brain? r{i}", timeout=30)
+        if state_of(line) == "driving" and "on the road" in line and 0.0 <= car_speed(line) < 0.05:
+            at = body_at(line)
+            if not at:
+                continue
+            standing += 1
+            rtctl.send(sock, f"camera {at[0]} {STANDING_HEIGHT} {at[1]} -89 0")
+            time.sleep(1.0)
+            shoot(sock, shots, named(f"standing_{standing}_r{i}_from_above"), t0, line)
     rtctl.send(sock, "sim resume")
     # ONE CAR CHASED: the first resident found driving on the road
     for i in range(200):

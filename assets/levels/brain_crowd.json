@@ -1,7 +1,7 @@
 {
  "version": 1,
  "name": "brain_crowd",
- "_comment": "THE BRAIN CROWD (ADR-0446; docs/two-drivers-meeting-design.md section 12, sitting 2): the traffic lab's roads (assets/lanelab/planned/traffic_lab_lanelab.json) with a CROWD of about 200 residents driven by the agent brain, made when the level loads from assets/scripts/crowd.lua and the road model: places spread along every street with a sidewalk (homes, work, shops, lunch), households at the homes, two in three owning a car parked in a kerb space near home, a skateboard or a scooter dealt to a few, and each a day (to work, out for lunch, home; or to a shop and home), everyone leaving home in the first eight minutes. They drive on the new driving and obey its lights, signs and limits. No other traffic and no lots. The lab's own markers (markers/traffic_lab.json) are here too, so `goto <who> <marker>` works. `residents?` lists everybody; `brain? r17` one of them; `brain follow r17` puts the camera on them. `pedestrians` is the crowd's 200 and one bystander for `possess walker`.",
+ "_comment": "THE BRAIN CROWD (ADR-0446; docs/two-drivers-meeting-design.md section 12, sitting 2): the traffic lab's roads (assets/lanelab/planned/traffic_lab_lanelab.json) with a CROWD of about 350 residents (200 at ADR-0446, 350 since sitting 2b) driven by the agent brain, made when the level loads from assets/scripts/crowd.lua and the road model: places spread along every street with a sidewalk (homes, work, shops, lunch), households at the homes, two in three owning a car parked in a kerb space near home, a skateboard or a scooter dealt to a few, and each a day (to work, out for lunch, home; or to a shop and home), people leaving home over the first ten minutes or so. They drive on the new driving and obey its lights, signs and limits. No other traffic and no lots. The lab's own markers (markers/traffic_lab.json) are here too, so `goto <who> <marker>` works. `residents?` lists everybody; `brain? r17` one of them; `brain follow r17` puts the camera on them. `pedestrians` is the crowd's 350 and one bystander for `possess walker`.",
  "entities": [
   {
    "id": 1,
@@ -45,7 +45,7 @@
   "fleet": "fleet_lab",
   "ambientBus": false,
   "cars": 0,
-  "pedestrians": 201,
+  "pedestrians": 351,
   "wander": false,
   "buildLots": false,
   "buses": 0,

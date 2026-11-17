@@ -148,6 +148,8 @@ struct CityBrain::Impl {
         std::vector<Stop> day;
         bool dayOn = false;
         int dayAt = -1;   // the stop they are at or going to (-1: not set out yet)
+        // the places (marker indices) they have found no way to, with every way they had to try ruled out (tickChoice)
+        std::vector<uint32_t> noWayTo;
         brain::IntentKind intentKind = 0;
         bool heldByDirector = false;          // a director moves them (the brain's `possessed` state)
         std::string reason;                   // why their last plan was chosen, or why there was none
@@ -426,6 +428,7 @@ struct CityBrain::Impl {
     void tickWalks(Real dt);
     void tickCars(Real dt);
     void tickDay(AgentId who);
+    void tickChoice(AgentId who);
     void slideIn(CarRec& c, PlaceRef space);
     void shareOutTrace();
     // ---- somebody the brain does not own ------------------------------------------------------------------------------
@@ -937,6 +940,46 @@ void CityBrain::Impl::tickDay(AgentId who) {
     machine->setIntent(who, p.intentKind, p.day[static_cast<std::size_t>(p.dayAt)].place);
 }
 
+// ANOTHER PLACE OF THE SAME KIND (ADR-0446). A person who has no way to the place they want after a way of getting there
+// was found not to work (a leg of it could not be done, so it is ruled out: the brain's `ruledOut`) judges that place
+// out of reach: they remember it, and choose the nearest place of the same kind (engine::CityMarker::kind, a data
+// name) they have not found out of reach, in a straight line from where they stand (ties: the lower marker number), and
+// want to be there instead; their day goes there from now on in place of the old one. Not a time limit and not a count
+// of tries: the judgement is made the moment the plan fails that way, once per place. A place of no kind, or no other
+// place of its kind left: nothing changes, and they wait and try again as before (brain.lua `no_way`).
+void CityBrain::Impl::tickChoice(AgentId who) {
+    const brain::AgentBrain& a = machine->agent(who);
+    if (a.state != table.noPlan || a.ruledOut == 0) return;
+    PlaceRef wanted;
+    wanted.id = a.intentTarget;
+    if (!isMarker(wanted) || markerIndex(wanted) >= markers.size()) return;
+    const uint32_t from = markerIndex(wanted);
+    const std::string& kind = markers[from].kind;
+    if (kind.empty()) return;
+    Person& p = people[who];
+    if (std::find(p.noWayTo.begin(), p.noWayTo.end(), from) == p.noWayTo.end()) p.noWayTo.push_back(from);
+    const Vec2 here = agentOf(who).pos;
+    int best = -1;
+    Real bestAway = 0;
+    for (uint32_t m = 0; m < markers.size(); ++m) {
+        if (markers[m].kind != kind || std::find(p.noWayTo.begin(), p.noWayTo.end(), m) != p.noWayTo.end()) continue;
+        const Real away = (markers[m].stand - here).length();
+        if (best >= 0 && !engine::strictlyPast(bestAway, away, engine::kSamePoint)) continue;
+        best = static_cast<int>(m);
+        bestAway = away;
+    }
+    if (best < 0) return;
+    takeSpot(best, who);
+    const PlaceRef to = markerPlace(best, who);
+    if (!to.valid()) return;
+    for (Stop& s : p.day)
+        if (s.place.id == wanted.id) s.place = to;
+    LOG_INFO << "[brain] " << p.name << ": no way to " << markers[from].name << ", so " << markers[static_cast<std::size_t>(best)].name
+             << " instead (the nearest " << kind << " not found out of reach, " << fmt("%.0f m", bestAway) << ")";
+    ++counts.otherPlaces;
+    machine->setIntent(who, p.intentKind, to);
+}
+
 void CityBrain::Impl::shareOutTrace() {
     for (const brain::Transition& t : traceAll)
         if (t.agent < people.size()) people[t.agent].trace.push_back(t);
@@ -1105,6 +1148,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
     for (const engine::CityMarker& spec : markerSpecs) {
         BrainMarker m;
         m.name = spec.name;
+        m.kind = spec.kind;
         m.stated = spec.stated;
         if (spec.stated) {
             for (std::size_t s = 0; s < im.model->streets.size(); ++s)
@@ -1328,7 +1372,10 @@ void CityBrain::tick(Real dt) {
     im.machine->tick();
     im.tickCars(dt);
     im.followCars();   // (...and the cars sliding between a space and the lane)
-    for (AgentId who = 0; who < im.people.size(); ++who) im.tickDay(who);
+    for (AgentId who = 0; who < im.people.size(); ++who) {
+        im.tickChoice(who);
+        im.tickDay(who);
+    }
     im.shareOutTrace();
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     ++im.cost.ticks;

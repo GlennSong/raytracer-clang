@@ -24,21 +24,26 @@
 --
 -- ESTIMATES, not measured: the shares are a plain small town; the minutes are short so a test sees a whole round in
 -- half an hour of the lab's clock (a real working day would be 480 minutes at work).
+--
+-- TUNED FOR TRAFFIC (sitting 2b, ADR-0446): 350 people, mostly living alone (so a car owner's car is not "in use" by
+-- someone else of the household), nearly all going to work at least 900 m away in a straight line (the lab is about a
+-- kilometre across: `beyond` past ~1000 m sends everyone to the single farthest place, whose parking then fills) and
+-- straight home again. Leaving home over minutes 0-8 is the trade measured: over 0-7 the busiest minute had 82 cars on
+-- the road but for only five minutes; over 0-12, about 50 for ten; over 0-8, 59-74 for minutes 6-11.
 
 crowd = {
-  residents = 200,
+  residents = 350,
   intent = "be_outside_at",
   keep_from_ends = 15.0,
   places = {
     { kind = "home", homes = true },
-    { kind = "work", count = 40, parking = true },
+    { kind = "work", count = 80, parking = true },
     { kind = "shop", count = 25, parking = true },
     { kind = "lunch", count = 15 },
   },
   household_sizes = {
-    { size = 1, share = 0.75 },
-    { size = 2, share = 0.20 },
-    { size = 3, share = 0.05 },
+    { size = 1, share = 0.90 },
+    { size = 2, share = 0.10 },
   },
   cars = {
     { cars = 0, share = 0.33 },
@@ -50,10 +55,11 @@ crowd = {
     { name = "has_scooter", share = 0.05 },
   },
   days = {
-    -- to work across town, out for lunch, home; leaving home in the first minute and a half (the rush)
-    { share = 0.85, stops = { { kind = "work", beyond = 1400, minutes = { 10, 20 } }, { kind = "lunch", minutes = { 3, 6 } },
-                              { home = true, minutes = { 0, 1.5 } } } },
+    -- to work across town and home again: the way out builds over minutes 3-11, the way back from about minute 20
+    { share = 0.94, stops = { { kind = "work", beyond = 900, minutes = { 1, 4 } }, { home = true, minutes = { 0, 8 } } } },
+    -- out for lunch and home
+    { share = 0.03, stops = { { kind = "lunch", minutes = { 3, 6 } }, { home = true, minutes = { 2, 12 } } } },
     -- to a shop and home, a little later
-    { share = 0.15, stops = { { kind = "shop", minutes = { 3, 10 } }, { home = true, minutes = { 2, 10 } } } },
+    { share = 0.03, stops = { { kind = "shop", minutes = { 3, 8 } }, { home = true, minutes = { 4, 14 } } } },
   },
 }

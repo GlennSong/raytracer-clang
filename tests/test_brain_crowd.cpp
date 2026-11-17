@@ -3,7 +3,7 @@
 //
 // Loads assets/levels/brain_crowd.json through the real LevelLoader and CityRenderSystem (a NullRenderer underneath):
 // the traffic lab's roads, and a crowd made when the level loads from assets/scripts/crowd.lua and the road model
-// (city_crowd.h): about 200 residents in households, the households' cars in kerb spaces near home, each person a day
+// (city_crowd.h): about 350 residents in households (200 at ADR-0446, 350 since sitting 2b), the households' cars in kerb spaces near home, each person a day
 // round places spread along the streets. The city is stepped as the viewer steps it, 60 times a second, for
 // kCrowdMinutes of the lab's clock (RT_CROWD_MINUTES for another stretch; the pinned numbers then do not apply).
 //
@@ -13,8 +13,9 @@
 // plan, the longest a car has stood still on the road (reported, NOT a limit: Glenn ruled out timeouts), rings of waits
 // in the wait-for graph, and what a tick cost. Held: no ring of waits at any minute (a ring of cars each waiting on the
 // next, which nothing can end); what the crowd is made of, the busiest minute, the counts and the state hash of the run
-// (pinned from a run that was looked at). The busy period has 41 cars on the road at once, not the hundred asked for:
-// 98 cars among 200 people, and a car owner drives only when it beats walking (ADR-0446).
+// (pinned from a run that was looked at), with how many minutes were busy (kBusyCars or more on the road) and how
+// often somebody with no way to a place chose another of its kind. The busy period has 59-74 cars on the road for six
+// minutes, not the hundred asked for (ADR-0446 says why).
 
 #include "test_framework.h"
 
@@ -46,6 +47,8 @@ namespace {
 constexpr Real kStep = 1.0 / 60.0;   // the viewer's fixed step, and the sim's tick
 // The stretch of the day the test runs (simulated minutes): everybody's first trip out and most of the trips back.
 constexpr int kCrowdMinutes = 30;
+// A minute is counted busy with this many cars on the road at its end (reported and pinned, not a rule).
+constexpr int kBusyCars = 50;
 
 struct LoadedCrowd {
     std::unique_ptr<Renderer> renderer = Renderer::create();
@@ -92,7 +95,7 @@ uint64_t crowdHash(const citysim::CityBrain& b, const citysim::CitySim& sim, Wor
 
 }  // namespace
 
-TEST_CASE(level_brain_crowd_two_hundred_residents_make_their_day) {
+TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     LoadedCrowd lc;
     CHECK(lc.ok);
     if (!lc.ok) return;
@@ -125,7 +128,7 @@ TEST_CASE(level_brain_crowd_two_hundred_residents_make_their_day) {
 
     // THE DAY, minute by minute
     const int ticksPerMinute = static_cast<int>(60.0 / kStep + 0.5);
-    int mostOnRoad = 0, mostOnRoadAt = 0, ringsSeen = 0;
+    int mostOnRoad = 0, mostOnRoadAt = 0, ringsSeen = 0, busyMinutes = 0;
     double stepMsSum = 0, stepWorst = 0;
     std::map<uint32_t, int> standingSince;   // car id -> the tick it last stood still from
     int longestStandTicks = 0;
@@ -155,6 +158,7 @@ TEST_CASE(level_brain_crowd_two_hundred_residents_make_their_day) {
         for (int who = 0; who < b.residentCount(); ++who) ++byState[b.stateName(who)];
         int onRoad = 0;
         world.each<citysim::CityCarOnLane>([&](Entity, citysim::CityCarOnLane& lane) { onRoad += lane.driven ? 1 : 0; });
+        busyMinutes += onRoad >= kBusyCars ? 1 : 0;
         if (onRoad > mostOnRoad) {
             mostOnRoad = onRoad;
             mostOnRoadAt = minute;
@@ -207,8 +211,10 @@ TEST_CASE(level_brain_crowd_two_hundred_residents_make_their_day) {
     const driving::WaitReport end = d.waitReport();
     const uint64_t hash = crowdHash(b, sim, world);
     std::printf("    [crowd] at the end: %zu rings of waits (%u gridlocks, %u deadlocks); the most cars on the road at once %d "
-                "(minute %d); arrivals %llu; errors %llu, refused %llu; final state hash %016llx\n",
-                end.loops.size(), end.gridlocks, end.deadlocks, mostOnRoad, mostOnRoadAt,
+                "(minute %d), %d minutes with %d or more; another place of the kind chosen %u times; arrivals %llu; errors "
+                "%llu, refused %llu; final state hash %016llx\n",
+                end.loops.size(), end.gridlocks, end.deadlocks, mostOnRoad, mostOnRoadAt, busyMinutes, kBusyCars,
+                b.counts().otherPlaces,
                 static_cast<unsigned long long>(b.machine()->counts().arrivals),
                 static_cast<unsigned long long>(b.machine()->counts().errors),
                 static_cast<unsigned long long>(b.machine()->counts().refused), static_cast<unsigned long long>(hash));
@@ -218,26 +224,31 @@ TEST_CASE(level_brain_crowd_two_hundred_residents_make_their_day) {
     // driving::WaitReport::loops)
     CHECK(ringsSeen == 0);
 
-    // WHAT WAS MADE AND WHAT HAPPENED, pinned from the run of 2026-11-17 (looked at: 200 residents in 154 households
-    // and 98 cars; the rush leaves home in the first minute and a half, 41 cars on the road at once at minute 5, all
-    // but 5 parked again by minute 30; 7 plans found no way, every one a walk the pavements end 27-28 m short of, r21
-    // and r141 again and again). Another stretch of the day (RT_CROWD_MINUTES) holds only the rings.
+    // WHAT WAS MADE AND WHAT HAPPENED, pinned from the run of 2026-11-17, sitting 2b (looked at: 350 residents in 323
+    // households and 226 cars; the way to work builds from minute 3, 59-74 cars on the road over minutes 6-11, the most
+    // 74 at minute 9, and the way home from about minute 20, 41-46 over minutes 25-30; r326 found no way to work_51 and
+    // went to work_75 instead; 6 plans found no way, r9's 5 of them to home_7, which has no kind to swap: the pavements
+    // end 26.6 m short of it, issue #300). Another stretch of the day (RT_CROWD_MINUTES) holds only the rings.
+    // (At ADR-0446, 200 residents: households 154, cars 98, with one 126, markers 242, the most 41 at minute 5, trips
+    // 61, parked 56, walks blocked 7, arrivals 234, no way 7, hash 0x2fe6b3a18cc9239f.)
     if (minutes == kCrowdMinutes) {
-        CHECK(b.residentCount() == 200);
-        CHECK(households == 154);
-        CHECK(b.cars().size() == 98u);
-        CHECK(withCar == 126);
-        CHECK(b.markers().size() == 242u);
-        CHECK(mostOnRoad == 41);
-        CHECK(mostOnRoadAt == 5);
-        CHECK(b.counts().tripsBegun == 61u);
-        CHECK(b.counts().parkedReports == 56u);
+        CHECK(b.residentCount() == 350);
+        CHECK(households == 323);
+        CHECK(b.cars().size() == 226u);
+        CHECK(withCar == 244);
+        CHECK(b.markers().size() == 451u);
+        CHECK(mostOnRoad == 74);
+        CHECK(mostOnRoadAt == 9);
+        CHECK(busyMinutes == 7);
+        CHECK(b.counts().tripsBegun == 252u);
+        CHECK(b.counts().parkedReports == 208u);
         CHECK(b.counts().walksBlocked == 7u);
-        CHECK(b.machine()->counts().arrivals == 234u);
-        CHECK(b.machine()->counts().noPlans == 7u);
+        CHECK(b.counts().otherPlaces == 1u);
+        CHECK(b.machine()->counts().arrivals == 452u);
+        CHECK(b.machine()->counts().noPlans == 6u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0x2fe6b3a18cc9239full);
+        CHECK(hash == 0x51e27f907adb580eull);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full

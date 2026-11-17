@@ -1021,6 +1021,9 @@ struct DayNightConfig {
 //   "markers": [{"name": "home", "street": "s75", "station": 45, "kerb": "along"}, {"name": "south", "at": [15, -425]}]
 struct CityMarker {
     std::string name;
+    // what kind of place it is ("lunch", "work": a data name, never asked about by name in C++). A person who finds no
+    // way to a place may choose another of the same kind (ADR-0446); empty: of no kind, never swapped. ("kind" in JSON)
+    std::string kind;
     bool stated = false;          // street, station and kerb are given
     std::string street;           // the road file's street id
     double station = 0;
