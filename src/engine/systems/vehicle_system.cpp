@@ -307,6 +307,37 @@ void VehicleSystem::render(FrameContext& ctx) {
 #endif
 }
 
+// TAKE CARS OUT OF PHYSICS (VehicleRetire; ADR-0447, #293's engine half): the Jolt vehicle and body, every entity made
+// for the car, the Vehicle component and the request. Collected first: removing components and destroying entities is
+// a structural change, forbidden inside World::each (ADR-0006).
+void VehicleSystem::retireVehicles(FrameContext& ctx) {
+    std::vector<Entity> asked;
+    ctx.world.each<VehicleRetire>([&](Entity e, VehicleRetire&) { asked.push_back(e); });
+    if (asked.empty()) return;
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    for (const Entity e : asked) {
+        const VehicleRetire request = *ctx.world.get<VehicleRetire>(e);
+        ctx.world.remove<VehicleRetire>(e);
+        Vehicle* v = ctx.world.get<Vehicle>(e);
+        if (!v) continue;
+        if (v->driver.valid() || !v->cargo.empty()) {
+            LOG_WARN << "[vehicle] not taken out of physics: "
+                     << (v->driver.valid() ? "someone is at its wheel" : "its trunk is not empty");
+            continue;
+        }
+        if (v->vehicleId != PhysicsWorld::INVALID_VEHICLE) pw.removeVehicle(v->vehicleId);
+        std::vector<Entity> owned = v->wheelEntities;
+        owned.insert(owned.end(), v->bodyParts.begin(), v->bodyParts.end());
+        owned.push_back(v->driverModel);
+        owned.push_back(v->engineSmoke);
+        for (const Entity o : owned)
+            if (o.valid() && ctx.world.alive(o)) ctx.world.destroy(o);
+        ctx.world.remove<Vehicle>(e);
+        if (ctx.world.has<AgentDriver>(e)) ctx.world.remove<AgentDriver>(e);
+        if (request.dropRenderable && ctx.world.has<Renderable>(e)) ctx.world.remove<Renderable>(e);
+    }
+}
+
 void VehicleSystem::createVehicles(FrameContext& ctx) {
     // Collect vehicles awaiting a Jolt body first — spawning wheel entities is a
     // structural mutation, forbidden inside World::each (ADR-0006).
@@ -323,6 +354,8 @@ void VehicleSystem::createVehicles(FrameContext& ctx) {
         if (!v || !t) continue;
         v->vehicleId = pw.addVehicle(v->config, t->position, t->orientation);
         if (v->vehicleId == PhysicsWorld::INVALID_VEHICLE) continue;
+        if (v->startMoving) pw.setVehicleMotion(v->vehicleId, v->startVelocity);   // (switched in at speed: ADR-0447)
+        v->startMoving = false;
         if (!ctx.world.has<PrevTransform>(e)) ctx.world.add<PrevTransform>(e, {*t});
 
         // Lazily build a shared UNIT wheel mesh: a unit cylinder (diameter 1 along
@@ -430,6 +463,8 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
             Vec3 vel = pw.vehicleVelocity(v.vehicleId);
             s.speed = vel.x * fwd.x + vel.y * fwd.y + vel.z * fwd.z;   // forward m/s
             in = computeDriverInput(s, ad->command, ad->tuning);
+            // (a car of the near tier steers through the player's assist: ADR-0087, ADR-0447)
+            if (ad->assistSteer) in.steer = shapeSteer(v.steerApplied, in.steer, s.speed, ctx.clock.fixedStep());
         } else {
             // Nobody at the wheel: hold the brake so it doesn't creep on a slope.
             in.brake = 1.0;
@@ -1636,6 +1671,7 @@ void VehicleSystem::fixedUpdate(FrameContext& ctx) {
         }
         if (Vehicle* v = target.valid() && ctx.world.alive(target) ? ctx.world.get<Vehicle>(target) : nullptr) repair(ctx, target, *v);
     }
+    retireVehicles(ctx);
     createVehicles(ctx);
     applyDamage(ctx);
     driveVehicles(ctx);

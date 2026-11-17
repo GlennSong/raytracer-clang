@@ -1031,6 +1031,58 @@ Real PhysicsWorld::launchAccel(const VehicleConfig& config, Real friction, Real 
     return 0;
 }
 
+Real PhysicsWorld::restHeight(const VehicleConfig& config) {
+    PhysicsWorld w;
+    if (!w.initialize()) return 0;
+    w.addBox(Vec3(100, 1, 100), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static);
+    w.optimizeBroadPhase();
+    const VehicleId car = w.addVehicle(config, Vec3(0, spawnHeight(config), 0), Quat::identity());
+    if (car == INVALID_VEHICLE) return 0;
+    const Real dt = kDefaultFixedStep;
+    const int perSecond = static_cast<int>(std::lround(1.0 / dt));
+    for (int i = 0; i < perSecond * 4; ++i) {   // (four seconds: the springs' bounce has died away)
+        w.setVehicleInput(car, 0, 0, 1);
+        w.update(dt);
+    }
+    return w.vehiclePosition(car).y;
+}
+
+Real PhysicsWorld::brakeDecel(const VehicleConfig& config, Real friction, Real fromSpeed) {
+    PhysicsWorld w;
+    if (!w.initialize()) return 0;
+    w.addBox(Vec3(3000, 1, 3000), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static, 0.0, friction);
+    w.optimizeBroadPhase();
+    const VehicleId car = w.addVehicle(config, Vec3(0, spawnHeight(config), 0), Quat::identity());
+    if (car == INVALID_VEHICLE) return 0;
+    const Real dt = kDefaultFixedStep;
+    const int perSecond = static_cast<int>(std::lround(1.0 / dt));
+    for (int i = 0; i < perSecond; ++i) w.update(dt);   // settle on the springs
+    w.setVehicleMotion(car, Vec3(0, 0, fromSpeed));
+    for (int i = 1; i <= perSecond * 15; ++i) {
+        w.setVehicleInput(car, 0, 0, 1.0);
+        w.update(dt);
+        if (w.vehicleVelocity(car).length() < 0.1) return fromSpeed / (i * dt);
+    }
+    return 0;
+}
+
+void PhysicsWorld::setVehicleMotion(VehicleId id, const Vec3& velocity) {
+    if (!impl || id >= impl->vehicles.size()) return;
+    Impl::Vehicle& v = impl->vehicles[id];
+    if (v.body.IsInvalid() || !v.constraint) return;
+    JPH::BodyInterface& bi = impl->bodies();
+    bi.SetLinearVelocity(v.body, JPH::Vec3(static_cast<float>(velocity.x), static_cast<float>(velocity.y),
+                                           static_cast<float>(velocity.z)));
+    bi.SetAngularVelocity(v.body, JPH::Vec3::sZero());
+    const JPH::Vec3 fwd = bi.GetRotation(v.body).RotateAxisZ();
+    const float forward = fwd.GetX() * static_cast<float>(velocity.x) + fwd.GetY() * static_cast<float>(velocity.y) +
+                          fwd.GetZ() * static_cast<float>(velocity.z);
+    for (JPH::Wheel* w : v.constraint->GetWheels()) {
+        const float r = w->GetSettings()->mRadius;
+        if (r > 0) w->SetAngularVelocity(forward / r);
+    }
+}
+
 PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
                                                  const Vec3& position,
                                                  const Quat& orientation) {

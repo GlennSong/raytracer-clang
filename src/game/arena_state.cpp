@@ -34,6 +34,7 @@
 #ifdef RT_ENABLE_PHYSICS
 #include "../apps/citysim/city_physics.h"
 #include "../apps/citysim/city_vehicles.h"
+#include "../apps/citysim/city_near.h"
 #include "../apps/citysim/city_walkers.h"
 #include "../apps/citysim/city_player_transit.h"
 #include "../apps/citysim/train_system.h"
@@ -235,6 +236,10 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // pedestrians already have bodies), BEFORE VehicleSystem (same-tick command
     // consumption) — and after PlayerSystem, so its chase-camera write wins.
     addSystem<citysim::CityPossessSystem>(citySys, physSys);
+    // The near tier's cars (ADR-0447): the new driving's intent turned into pedals and wheel for a car physics carries,
+    // and where it really is written back into the driving before each of its ticks. BEFORE VehicleSystem, which
+    // consumes the command the same step.
+    addSystem<citysim::CityNearSystem>(citySys, physSys);
     addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
     addSystem<CarrySystem>(physSys);             // carry loose things, and put them in a car's trunk (ADR-0358)
     addSystem<FlashlightSystem>();               // the light (L / D-pad up): its beam, staged in render() before RenderSystem

@@ -578,6 +578,10 @@ struct Vehicle {
     bool fourWheel = false;
     bool pedalled = false;         // legs, not an engine (a bicycle): no engine note (VehicleSystem's tyre sounds)
     PhysicsWorld::VehicleId vehicleId = PhysicsWorld::INVALID_VEHICLE;
+    // MOVING FROM THE START (ADR-0447): when its Jolt car is made, it is set going at `startVelocity`, its wheels
+    // rolling with it (PhysicsWorld::setVehicleMotion) -- a car switched into physics carries on at its speed.
+    bool startMoving = false;
+    Vec3 startVelocity{0, 0, 0};
     Entity driver;                 // invalid = unoccupied; set on enter, cleared on exit
     // Live driver input, written by VehicleSystem each step (for inspection/debug).
     // `steer` is the driver's raw value (the indicators read it); `steerApplied`
@@ -779,6 +783,17 @@ struct AgentDriver {
     DriverCommand command;      // heading + speed the brain currently wants
     DriverTuning tuning;        // controller gains
     int agentId = -1;           // brain handle (CitySim agent index); -1 = none
+    // The wheel through the player's steering assist (vehicle_steering.h shapeSteer: less lock the faster, wound on
+    // at a finite rate; ADR-0087), as a car of the near tier is driven (ADR-0447). Off: the controller's angle as is.
+    bool assistSteer = false;
+};
+
+// TAKE THIS CAR OUT OF PHYSICS (ADR-0447; #293's engine half): VehicleSystem removes its Jolt vehicle and body, the
+// entities it made for it (wheels, the driver, body parts, the hood's smoke) and the Vehicle component, then this
+// request. `dropRenderable`: its Renderable goes too (a car drawn some other way once it is not a Vehicle). Refused,
+// the request removed and the car left as it is, while someone sits at its wheel or carries things in its trunk.
+struct VehicleRetire {
+    bool dropRenderable = false;
 };
 
 // Night-gated emission (WS3, "street lights, building window lights"): a

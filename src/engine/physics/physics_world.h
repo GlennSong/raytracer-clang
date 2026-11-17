@@ -434,6 +434,17 @@ public:
     // full droop -- its own wheels' attach height, travel and radius, so it settles onto them from no height at all,
     // a truck's long travel as much as a sedan's. Never less than half the box (its floor on the road) and a hair over.
     static Real spawnHeight(const VehicleConfig& config);
+    // WHERE A CAR STANDS ON ITS SPRINGS (ADR-0447): its chassis centre's height over flat road once it has settled
+    // under its own weight, measured in a world of its own (as launchAccel) -- where a car switched into physics is put,
+    // so it neither drops nor is thrown up. 0 when it cannot be measured.
+    static Real restHeight(const VehicleConfig& config);
+    // HOW HARD A CAR BRAKES (ADR-0447): `config` braked with the full pedal from `fromSpeed` m/s on flat ground of
+    // `friction`, its mean deceleration to rest (m/s2, positive), in a world of its own. 0 when it never stops in 15 s.
+    static Real brakeDecel(const VehicleConfig& config, Real friction = 0.85, Real fromSpeed = 15.0);
+    // SET A CAR MOVING (ADR-0447): its chassis at `velocity` (and no spin), each wheel turning at the rate that rolls it
+    // along at its forward speed -- a car switched into physics carries on at the speed it had, without its tyres
+    // skidding up to it.
+    void setVehicleMotion(VehicleId id, const Vec3& velocity);
     // Driver input, each in [-1,1] (brake/handBrake in [0,1]): forward (throttle,
     // negative = reverse), right (steering), brake, handBrake. Wakes the chassis.
     void setVehicleInput(VehicleId id, Real forward, Real right, Real brake,

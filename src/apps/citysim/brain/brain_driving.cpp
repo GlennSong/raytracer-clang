@@ -131,6 +131,8 @@ void DrivingSkill::report(Machine& machine, const std::vector<driving::Event>& e
     for (const driving::Event& e : events) {
         const uint8_t kind = static_cast<uint8_t>(e.kind);
         if (kind >= driving::kEventKindCount || events_[kind] == kNoId) continue;
+        // (a car none of the brain's people drives: the host's own, as the near tier's lab cars, ADR-0447)
+        if (e.person >= machine.agentCount()) continue;
         if (e.kind == driving::EventKind::EndedEarly) {
             const std::vector<driving::CarId>::iterator mine = std::find(endedHere_.begin(), endedHere_.end(), e.car);
             if (mine != endedHere_.end()) {

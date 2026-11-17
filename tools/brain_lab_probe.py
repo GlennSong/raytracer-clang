@@ -295,6 +295,110 @@ def crowd(sock, shots, t0, suffix, wait_speed):
     return False
 
 
+def near_cars(line):
+    """The physics cars of a `near?` line: [(x, y, z, speed)]."""
+    return [(float(m.group(1)), float(m.group(2)), float(m.group(3)), float(m.group(4)))
+            for m in re.finditer(r"car \d+ at (-?[\d.]+) (-?[\d.]+) (-?[\d.]+), (-?[\d.]+) m/s", line)]
+
+
+def chase(sock, shots, t0, name, x, y, z, heading):
+    """The camera CHASE_BACK behind a car at (x, z) facing `heading` (unit x, z), CHASE_UP above, the sim held."""
+    fx, fz = heading
+    rtctl.send(sock, "sim pause")
+    rtctl.send(sock, f"camera {x - CHASE_BACK * fx} {y + CHASE_UP} {z - CHASE_BACK * fz} -14 {math.degrees(math.atan2(fx, -fz))}")
+    time.sleep(1.0)
+    shoot(sock, shots, name, t0, rtctl.send(sock, "near?"))
+    rtctl.send(sock, "sim resume")
+
+
+def near(sock, shots, t0, suffix, wait_speed):
+    """THE NEAR TIER'S TEST BED (ADR-0447) on brain_lab: `near route` puts a physics car on the test's route, standing
+    until its light turns red (the sim run fast meanwhile); it is taken from behind as it nears the stop line, standing at
+    it, and through the turn. Then `near queue`: a lane car with a physics car behind it, taken from above standing in
+    the queue at the red. The pictures' names begin `near_`."""
+    def named(name):
+        return f"near_{name}{suffix}"
+
+    print(rtctl.send(sock, "brain day all off"))
+    print(rtctl.send(sock, "brain follow off"))
+    staged = rtctl.send(sock, "near route")
+    print(staged)
+    m = re.search(r"round connector (\d+)", staged)
+    connector = int(m.group(1)) if m else -1
+    rtctl.send(sock, f"sim speed {wait_speed}")
+    line = wait_until_near(sock, lambda cars: len(cars) >= 1, 400)
+    rtctl.send(sock, "sim speed 1")
+    if not line:
+        print("  the physics car never set out"); return False
+    taken = set()
+    heading = None
+    last = None
+    onTurnSince = None
+    while time.time() - t0 < 1500 and "turn" not in taken:
+        line = rtctl.send(sock, "near?")
+        cars = near_cars(line)
+        if not cars or "arrived" in line:
+            print("  (it arrived before the turn was taken)")
+            break
+        x, y, z, speed = cars[0]
+        pm = re.search(r"path (\d+)", line)
+        path = int(pm.group(1)) if pm else -1
+        if last and math.hypot(x - last[0], z - last[1]) > 0.05:
+            d = (x - last[0], z - last[1])
+            n = math.hypot(*d)
+            heading = (d[0] / n, d[1] / n)
+        last = (x, z)
+        if heading and "approach" not in taken and speed > 4:
+            taken.add("approach")
+            chase(sock, shots, t0, named("1_nearing_the_line"), x, y, z, heading)
+        if speed < 0.05 and heading and "approach" in taken and "stopped" not in taken:
+            taken.add("stopped")
+            chase(sock, shots, t0, named("2_at_the_stop_line"), x, y, z, heading)
+            rtctl.send(sock, f"sim speed {wait_speed}")   # (the red is long: run it fast until it moves)
+        if speed > 0.5 and "stopped" in taken and "fast_off" not in taken:
+            taken.add("fast_off")
+            rtctl.send(sock, "sim speed 1")
+        # through the turn: on the junction's connector, a moment after it entered it
+        if path == connector and onTurnSince is None:
+            onTurnSince = time.time()
+        if onTurnSince is not None and time.time() - onTurnSince > 0.8 and heading:
+            taken.add("turn")
+            chase(sock, shots, t0, named("3_through_the_turn"), x, y, z, heading)
+        time.sleep(0.05)
+    print(rtctl.send(sock, "near?"))
+    # THE MIXED QUEUE
+    print(rtctl.send(sock, "near queue"))
+    rtctl.send(sock, f"sim speed {wait_speed}")
+    wait_until_near(sock, lambda cars: len(cars) >= 1, 400)
+    rtctl.send(sock, "sim speed 1")
+    moving = False
+    for _ in range(600):
+        cars = near_cars(rtctl.send(sock, "near?"))
+        if cars and cars[0][3] > 1.0:
+            moving = True
+        if cars and moving and cars[0][3] < 0.05:
+            x, y, z, _ = cars[0]
+            rtctl.send(sock, "sim pause")
+            rtctl.send(sock, f"camera {x} {y + 30} {z} -89 0")
+            time.sleep(1.0)
+            shoot(sock, shots, named("4_the_mixed_queue_from_above"), t0, rtctl.send(sock, "near?"))
+            rtctl.send(sock, "sim resume")
+            break
+        time.sleep(0.1)
+    print(rtctl.send(sock, "near?"))
+    return "turn" in taken
+
+
+def wait_until_near(sock, test, timeout):
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        line = rtctl.send(sock, "near?", timeout=30)
+        if test(near_cars(line)):
+            return line
+        time.sleep(0.25)
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--viewer", default="build-viewer/viewer")
@@ -305,9 +409,11 @@ def main():
     ap.add_argument("--timeout", type=float, default=900.0, help="real seconds the trip may take")
     ap.add_argument("--shots", default=os.path.expanduser("~/Pictures/Raytracer/brain"))
     ap.add_argument("--log", default="out/zz_brain3/probe_viewer.log")
-    ap.add_argument("--scenario", default="trip", choices=["trip", "multi", "crowd"],
+    ap.add_argument("--scenario", default="trip", choices=["trip", "multi", "crowd", "near"],
                     help="trip: one resident's trip (--to); multi: the contended household car, then the player takes "
-                         "it; crowd: brain_crowd at its busy period (give --level assets/levels/brain_crowd.json)")
+                         "it; crowd: brain_crowd at its busy period (give --level assets/levels/brain_crowd.json); "
+                         "near: the near tier's test bed (ADR-0447): a physics car at the stop line and through the turn, "
+                         "then the mixed queue")
     ap.add_argument("--tag", default="", help="a prefix for the pictures' names")
     ap.add_argument("--suffix", default="", help="an ending for the pictures' names (_v2), so an earlier set is kept")
     args = ap.parse_args()
@@ -331,8 +437,8 @@ def main():
             time.sleep(1.0)
         print(f"loaded in {time.time() - t0:.0f} s: {line}")
         print(rtctl.send(sock, "markers?"))
-        if args.scenario in ("multi", "crowd"):
-            run = multi if args.scenario == "multi" else crowd
+        if args.scenario in ("multi", "crowd", "near"):
+            run = {"multi": multi, "crowd": crowd, "near": near}[args.scenario]
             done = run(sock, args.shots, t0, args.suffix, args.wait_speed)
             print("\nprobe", "OK" if done else "FAILED", f"({time.time() - t0:.0f} s in all)")
             return 0 if done else 1

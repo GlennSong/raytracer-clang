@@ -17,6 +17,7 @@
 #include "city_sim.h"                       // VehicleBody
 #include "city_brain.h"                     // the households' cars: takenByPlayer (ADR-0445)
 #include "city_car.h"                       // carsNear, and a household car's components
+#include "city_near.h"                      // slotVehicleSpec: a slot's drivable car, built one way (ADR-0447)
 
 #include <cmath>
 #include <string>
@@ -284,16 +285,10 @@ Entity CityVehicleSystem::promote(engine::FrameContext& ctx, const Ambient& targ
         std::string recipe;
         Vec3 paint;
         if (city_.carDrivable(slot, recipe, paint)) {
-            const std::string lib = engine::loadScriptCode("vehicles.lua", "");
-            engine::ScriptVM vm;
-            engine::openProcgenLibrary(vm);
-            engine::openModuleLoader(vm, engine::makeModuleSource(""));
             std::string err;
             engine::VehicleSpec spec;
-            char chunk[256];
-            std::snprintf(chunk, sizeof chunk, "return vehicle.%s(seed, { color = { %.4f, %.4f, %.4f } })", recipe.c_str(),
-                          paint.x, paint.y, paint.z);
-            if (!lib.empty() && vm.doString(lib, &err) && engine::loadVehicleSpec(vm, chunk, 1u, spec, &err)) {
+            // (the one way a slot's drivable car is built: city_near.h slotVehicleSpec, ADR-0447)
+            if (slotVehicleSpec(city_, slot, spec, &recipe, &err)) {
                 const Vec3 at(groundPos.x, groundPos.y + spec.config.chassisHalfExtent.y + 0.35, groundPos.z);
                 const Real yawDeg = std::atan2(groundHeading.x, groundHeading.y) * 57.29577951308232;
                 Entity car = householdCar;

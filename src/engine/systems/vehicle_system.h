@@ -72,6 +72,7 @@ private:
     bool spawnPending_ = false;
     std::string spawnRecipe_;
     ControlAnswers answers_;   // vehicle?
+    void retireVehicles(FrameContext& ctx);   // VehicleRetire: out of physics (ADR-0447)
     void createVehicles(FrameContext& ctx);
     void driveVehicles(FrameContext& ctx);
     void writeBack(FrameContext& ctx);

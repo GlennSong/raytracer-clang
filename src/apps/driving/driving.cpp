@@ -21,6 +21,8 @@ Driving::Driving(const engine::RoadModel* model) : model_(model), roads_(model ?
 }
 
 void Driving::tick(Real dt) {
+    if (listsStale_ && roads_) rebuildPathLists(*roads_, vehicleClasses_, cars_, pathLists_);   // (carriedAt wrote)
+    listsStale_ = false;
     if (hasRules_ && roads_ && dt > 0) {
         step_ = dt;
         plan();
@@ -690,10 +692,15 @@ void Driving::move(Real dt) {
     carsNext_ = cars_;
     const uint32_t every = settings_.decideEveryTicks(dt);
     const Real reaction = reactionTime(static_cast<Real>(every) * dt, dt);
+    intents_.assign(cars_.size(), CarIntent());
+    intentSet_.assign(cars_.size(), 0);
 
     for (std::size_t i = 0; i < cars_.size(); ++i) {
         const Car& c = cars_[i];
         Trip* t = trips_.get(tripOfRecord_[i]);
+        // (a car physics carries: its controller's lag is counted in its reaction)
+        const std::map<CarId, Carried>::const_iterator carriedIt = carried_.empty() ? carried_.end() : carried_.find(c.id);
+        const bool isCarried = carriedIt != carried_.end();
         if (!c.driven) {
             // Nobody drives it: it stands (a car that has just arrived comes to rest from its last crawl).
             if (c.speed != 0) leaveParked(carsNext_[i]);
@@ -751,12 +758,37 @@ void Driving::move(Real dt) {
         f.gapKept = static_cast<Real>(personalValue(gapKept_, gapKeptHash_, t->person));
         f.standstillGap = standstillGap_;
         f.anticipation = anticipation_;
-        const StepOutcome step = stepSpeed(f, c.speed, c.held.topSpeed, c.held.topSpeedRule, ahead, count, dt, reaction);
+        const StepOutcome step = stepSpeed(f, c.speed, c.held.topSpeed, c.held.topSpeedRule, ahead, count, dt,
+                                           reaction + (isCarried ? carriedIt->second.lag : Real(0)));
+
+        // WHAT IT WANTS (design section 7): the step's speed and acceleration, and where it means to be at rest
+        {
+            CarIntent& want = intents_[i];
+            want.speed = step.speed;
+            want.acceleration = step.acceleration;
+            want.binding = step.binding;
+            for (std::size_t k = 0; k < count; ++k) {
+                const Obstacle& o = ahead[k];
+                Real rest = -1;
+                if (o.kind == Limit::Stop || (o.kind == Limit::WayEnd && !o.hardOnly)) rest = std::max(Real(0), o.distance);
+                else if (o.kind == Limit::CarAhead && o.speed < kStandingBelow)
+                    rest = std::max(Real(0), o.distance - standstillGap_);
+                if (rest < 0) continue;
+                if (!want.hasRest || rest < want.restIn) want.restIn = rest;
+                want.hasRest = true;
+            }
+            intentSet_[i] = 1;
+        }
 
         Car& out = carsNext_[i];
-        out.speed = step.speed;
         out.acceleration = step.acceleration;
         out.binding = step.binding;
+        if (isCarried) {
+            // physics moves it: the record keeps where the host last wrote it is (carriedAt), and its speed
+            out.speed = c.speed;
+            continue;
+        }
+        out.speed = step.speed;
 
         // Along the way: carry what remains past the end of a path onto the next, as many times as it takes. The end
         // of the way is a wall; the hard limit keeps the car short of it, so stopping there is only ever rounding (or
@@ -873,6 +905,123 @@ const Car* Driving::car(CarId id) const {
     return it != cars_.end() && it->id == id ? &*it : nullptr;
 }
 
+// ---- A car carried out by physics (design section 7; ADR-0447) --------------------------------------------------------
+
+namespace {
+// How many paths past the one its front is on a carried car's front is looked for on (one tick never takes it further).
+constexpr std::size_t kCarriedLookOn = 3;
+
+// THE NEAREST POINT OF A PATH'S CENTRE LINE to `p`: how far along it, how far `p` is from it, and how far to its kerb
+// side (+, the driver's left: the world drives on the left) or offside (-).
+struct OnLine {
+    Real along = 0, away = 0, side = 0;
+};
+OnLine nearestOn(const engine::LaneGraph& roads, engine::PathId path, const engine::Vec2& p) {
+    OnLine best;
+    best.away = -1;
+    const engine::Path& P = roads.paths[path.index];
+    for (uint32_t k = P.curve.first; k + 1 < P.curve.end(); ++k) {
+        const engine::Vec2 a = roads.points[k], b = roads.points[k + 1];
+        const engine::Vec2 ab = b - a;
+        const Real len2 = ab.lengthSquared();
+        const Real s = len2 > 0 ? std::clamp(((p - a).x * ab.x + (p - a).y * ab.y) / len2, Real(0), Real(1)) : Real(0);
+        const engine::Vec2 q = a + ab * s;
+        const Real away = (p - q).length();
+        if (best.away >= 0 && away >= best.away) continue;
+        const Real len = std::sqrt(len2);
+        const engine::Vec2 dir = len > 0 ? ab * (1 / len) : engine::Vec2(1, 0);
+        best.away = away;
+        best.along = roads.along[k] + s * len;
+        // (facing +z the driver's left is +x: the left of a heading (x, z) is (z, -x))
+        best.side = (p - q).x * dir.y - (p - q).y * dir.x;
+    }
+    return best;
+}
+}  // namespace
+
+bool Driving::carry(CarId id, bool carriedNow, Real lag) {
+    Car* c = findPlaced(id);
+    if (!c) return false;
+    if (carriedNow) {
+        carried_[id].lag = std::max(Real(0), lag);
+    } else if (carried_.erase(id) > 0) {
+        // back on its lane: at the nearest point along it, on its centre line, at the speed last written
+        c->offset = 0;
+        listsStale_ = true;
+    }
+    return true;
+}
+
+bool Driving::carriedAt(CarId id, const engine::Vec2& front, Real speed) {
+    if (!roads_ || !carried(id)) return false;
+    Car* c = findPlaced(id);
+    const std::map<CarId, TripId>::const_iterator ti = tripOfCar_.find(id);
+    Trip* t = ti != tripOfCar_.end() ? trips_.get(ti->second) : nullptr;
+    if (!c || !t || c->vehicleClass >= vehicleClasses_.size()) return false;
+    const std::vector<engine::PathId>& way = t->way.paths;
+    const bool onWay = t->wayAt < way.size() && way[t->wayAt] == c->path;
+
+    // the nearest centre line: its own path, then the paths after it on its way
+    std::vector<engine::PathId> look{c->path};
+    if (onWay)
+        for (std::size_t k = t->wayAt + 1; k < way.size() && k <= t->wayAt + kCarriedLookOn; ++k) look.push_back(way[k]);
+    std::size_t best = look.size();
+    OnLine at;
+    for (std::size_t k = 0; k < look.size(); ++k) {
+        const OnLine o = nearestOn(*roads_, look[k], front);
+        // (a tie goes to the later path: the car has moved onto it)
+        if (o.away < 0 || (best < look.size() && o.away > at.away)) continue;
+        best = k;
+        at = o;
+    }
+    if (best == look.size() || at.away > kCarriedReach) return false;
+
+    // how far its front moved along the way, and the paths it passed
+    Real moved = at.along - c->along;
+    std::array<engine::PathId, kMaxTrail> crossed;
+    std::size_t crossedCount = 0;
+    for (std::size_t k = 0; k < best; ++k) {
+        moved += roads_->paths[look[k].index].length;
+        for (std::size_t m = std::min(crossedCount, kMaxTrail - 1); m > 0; --m) crossed[m] = crossed[m - 1];
+        crossed[0] = look[k];
+        crossedCount = std::min(crossedCount + 1, kMaxTrail);
+    }
+    c->path = look[best];
+    c->along = at.along;
+    c->offset = at.side;
+    c->speed = std::max(Real(0), speed);
+    c->odometer += moved;
+    if (onWay) t->wayAt = static_cast<uint32_t>(t->wayAt + best);
+    // the trail: the paths just passed, latest first, then the old trail; only those the body still reaches
+    std::array<engine::PathId, kMaxTrail> trail;
+    std::size_t trailCount = 0;
+    for (std::size_t k = 0; k < crossedCount && trailCount < kMaxTrail; ++k) trail[trailCount++] = crossed[k];
+    for (std::size_t k = 0; k < c->trailCount && trailCount < kMaxTrail; ++k) trail[trailCount++] = c->trail[k];
+    c->trail = trail;
+    c->trailCount = static_cast<uint8_t>(trailCount);
+    const Body body = layBody(*roads_, *c, vehicleClasses_.at(c->vehicleClass).length);
+    c->trailCount = static_cast<uint8_t>(body.count > 0 ? body.count - 1 : 0);
+    for (std::size_t k = c->trailCount; k < kMaxTrail; ++k) c->trail[k] = engine::PathId();
+    listsStale_ = true;
+    return true;
+}
+
+const CarIntent* Driving::intent(CarId id) const {
+    const Car* c = car(id);
+    if (!c || intents_.size() != cars_.size()) return nullptr;
+    const std::size_t i = static_cast<std::size_t>(c - cars_.data());
+    return intentSet_[i] ? &intents_[i] : nullptr;
+}
+
+std::vector<engine::PathId> Driving::wayFromFront(CarId id) const {
+    std::vector<engine::PathId> out;
+    const std::map<CarId, TripId>::const_iterator ti = tripOfCar_.find(id);
+    const Trip* t = ti != tripOfCar_.end() ? trips_.get(ti->second) : nullptr;
+    if (!t) return out;
+    for (std::size_t k = t->wayAt; k < t->way.paths.size(); ++k) out.push_back(t->way.paths[k]);
+    return out;
+}
+
 bool Driving::placeCar(CarId id, uint32_t vehicleClass, const PathPoint& front, const std::vector<engine::PathId>& trail,
                        std::string* why) {
     if (!id.valid()) return refuse(why, "no car id given");
@@ -921,6 +1070,8 @@ bool Driving::placeCar(CarId id, uint32_t vehicleClass, const PathPoint& front, 
     std::vector<Car>::iterator at =
         std::lower_bound(cars_.begin(), cars_.end(), id, [](const Car& x, CarId want) { return x.id < want; });
     cars_.insert(at, c);
+    intents_.clear();   // (by record: the records moved)
+    intentSet_.clear();
     rebuildPathLists(*roads_, vehicleClasses_, cars_, pathLists_);
     return true;
 }
@@ -931,6 +1082,9 @@ bool Driving::removeCar(CarId id, std::string* why) {
     std::vector<Car>::iterator at =
         std::lower_bound(cars_.begin(), cars_.end(), id, [](const Car& x, CarId want) { return x.id < want; });
     cars_.erase(at);
+    carried_.erase(id);
+    intents_.clear();   // (by record: the records moved)
+    intentSet_.clear();
     if (roads_) rebuildPathLists(*roads_, vehicleClasses_, cars_, pathLists_);
     return true;
 }

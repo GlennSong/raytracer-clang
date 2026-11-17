@@ -6816,6 +6816,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // THE NEW DRIVING MODEL (#234), after the old one: it drives the cars handed to it (and its hand-over copies where
     // each is into its agent); with none handed over it ticks an empty world.
     if (drivingV2_) {
+        if (beforeDriving_) beforeDriving_(*drivingV2_);   // (where the cars physics carries really are: ADR-0447)
         if (drivingHost_.active()) drivingHost_.tick(*drivingV2_, simDt, agents_, vehicles_);
         else drivingV2_->tick(simDt);
     }

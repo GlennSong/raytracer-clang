@@ -219,6 +219,20 @@ struct Event {
 // order things were stored or done in.
 bool eventBefore(const Event& a, const Event& b);
 
+// WHAT A DRIVER WANTS (design section 7, ADR-0447), worked out each tick by the same formulas whoever carries it out: a
+// lane car moves by it at once; a car carried by physics (Driving::carry) hands it to the host's controller.
+struct CarIntent {
+    Real speed = 0;           // the speed it wants at the end of the tick, m/s
+    Real acceleration = 0;    // ... and the acceleration that gets it there, m/s2
+    // WHERE IT MEANS TO BE AT REST, when it does: its front `restIn` metres on, at a stop it holds, behind a car
+    // standing ahead (less the standstill gap), or at the end of a way that ends there.
+    bool hasRest = false;
+    Real restIn = 0;
+    Binding binding;          // what held it back
+};
+// How far from the centre line of its way a carried car's front may be and still be on it (m): a lane's width.
+constexpr Real kCarriedReach = 4.0;
+
 class Driving {
 public:
     // Given the road it drives on: the road model (ADR-0436), which must outlive this object (it is read, never
@@ -324,6 +338,27 @@ public:
     void tick(Real dt);
     uint64_t tickCount() const { return tickCount_; }
     double clockSeconds() const { return clockSeconds_; }
+
+    // ---- A CAR CARRIED OUT BY PHYSICS (design section 7; ADR-0447) ----
+    // Its driver perceives and decides as every driver does, and what it decides is kept as its INTENT (intent()); but
+    // the move step does not move it. The host's physics does, and the host writes where the car really is into its
+    // record each tick, before the tick (carriedAt): physics is the truth for it, and every other driver sees it there.
+    // `lag`: the seconds the host's controller answers later than a lane car would, added to the reaction its hard
+    // limit counts (stepSpeed), so a carried car keeps room enough to stop behind a braking car. Not carried any more,
+    // the car moves on from the record as a lane car. Refused (false) when the car is not placed.
+    bool carry(CarId car, bool carried, Real lag = 0);
+    bool carried(CarId car) const { return carried_.count(car) > 0; }
+    // WHERE A CARRIED CAR REALLY IS: `front`, its front bumper's plan point, is projected onto the centre line of its
+    // path and of the paths after it on its way (the nearest within kCarriedReach), and written into its record: the
+    // path, how far along it, how far off its centre (`offset`, + toward the kerb side), `speed` (m/s along it); its
+    // odometer is moved on by the distance along, the way passed by is left behind, and its body laid back from there.
+    // False, and nothing written, when it is not carried, not on a trip, or no centre line of its way lies within
+    // kCarriedReach of `front` (it is off the road). The lists other drivers read are rebuilt before the next tick.
+    bool carriedAt(CarId car, const engine::Vec2& front, Real speed);
+    // WHAT A DRIVEN CAR'S DRIVER WANTS, as of the last tick (null: not driven, or not decided yet).
+    const CarIntent* intent(CarId car) const;
+    // THE LINE A CAR FOLLOWS: the paths of its way from the one its front is on (empty: not on a trip).
+    std::vector<engine::PathId> wayFromFront(CarId car) const;
 
     // BEGIN A TRIP: `person` drives `car` to `destination`, by the route found from where the car's front is now.
     // Refused (a null handle) when the car has not been placed, is already on a trip, or the destination is not a
@@ -517,6 +552,15 @@ private:
     uint32_t gapKeptHash_ = 0;
     Real standstillGap_ = 0;
     Real anticipation_ = 0;                // the rule set's anticipation (act.h), seconds
+    // THE CARS PHYSICS CARRIES (carry): each one's lag, and what its driver wants. Kept apart from the records, so the
+    // state hash of a world without them is what it was.
+    struct Carried {
+        Real lag = 0;
+    };
+    std::map<CarId, Carried> carried_;
+    std::vector<CarIntent> intents_;       // by record (as cars_), after the last move step
+    std::vector<uint8_t> intentSet_;       // ... 1 where the car was driven and decided
+    bool listsStale_ = false;              // a carried car was written: the lists are rebuilt before the next tick
     bool junctionsOn_ = false;            // the junction step (give_way.h hasJunctionStep)
     bool lightsRun_ = false;              // the lights run a programme (road_rules.h RoadRules::lightsRun)
     LightTiming lightTiming_;             // ... by these numbers (signal_programme.h)

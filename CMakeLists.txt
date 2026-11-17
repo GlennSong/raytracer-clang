@@ -1247,6 +1247,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/motion_audio_system.cpp   # the player's moves, heard: wind, grapple, canopy, boards
         src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
         src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
+        src/apps/citysim/city_near.cpp      # the near tier's car: the new driving's intent carried out by Jolt (ADR-0447)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
         src/apps/citysim/walker_ragdolls.cpp   # the few walkers knocked flying, as ragdolls
         src/apps/citysim/city_player_transit.cpp  # the player's passenger seat on a bus or cab
@@ -1273,6 +1274,7 @@ if(RT_ENABLE_PHYSICS)
         tests/test_physics_system.cpp
         tests/test_city_phys_tier.cpp
         tests/test_city_phys_deck.cpp   # #24: physical cars on a real city's decks and ramps never fall through
+        tests/test_near_tier.cpp        # a physics car carrying out the new driving, against a lane car (ADR-0447)
         tests/test_city_ride.cpp
         tests/test_city_map.cpp
         tests/test_building_collider.cpp
@@ -1286,6 +1288,8 @@ if(RT_ENABLE_PHYSICS)
         src/engine/rope_line.cpp
         src/engine/riding.cpp
         src/apps/citysim/city_physics.cpp
+        src/apps/citysim/city_near.cpp           # the near tier's test bed (ADR-0447)
+        src/engine/systems/vehicle_system.cpp    # ...which drives its cars through the real VehicleSystem
         src/apps/citysim/city_player_transit.cpp
         src/apps/citysim/city_map_tool.cpp
         src/engine/systems/player_system.cpp

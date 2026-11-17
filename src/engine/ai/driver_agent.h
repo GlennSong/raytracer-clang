@@ -40,6 +40,9 @@ struct DriverState {
 struct DriverCommand {
     Vec2 laneA{0, 0}, laneB{0, 0};
     Real desiredSpeed = 0;   // m/s to seek (0: come to a stop and hold it)
+    // THE PEDAL THE WANTED ACCELERATION NEEDS, predicted by the caller from the car's mass and engine (+ throttle, -
+    // brake, in the pedals' [-1,1]): added to what the speed error asks (ADR-0447, the near tier's controller). 0: none.
+    Real feedForward = 0;
     // Pure pursuit: from `pos` toward `heading` (any length).
     static DriverCommand toward(const Vec2& pos, const Vec2& heading, Real speed) {
         DriverCommand c;
@@ -84,10 +87,11 @@ inline DriverInput computeDriverInput(const DriverState& s, const DriverCommand&
         // told to stop: the brake, never the throttle -- at a standstill too, or rolling back down a slope (a
         // possessed car parked at the kerb is told this and must stay put)
         in.brake = std::max(std::clamp(std::fabs(err) * t.speedGain, Real(0), Real(1)), t.holdBrake);
-    } else if (err >= 0) {
-        in.throttle = std::clamp(err * t.speedGain, Real(0), Real(1));
     } else {
-        in.brake = std::clamp(-err * t.speedGain, Real(0), Real(1));
+        // the speed error, plus the pedal the wanted acceleration needs (feedForward; 0 leaves the error alone)
+        const Real pedal = err * t.speedGain + c.feedForward;
+        if (pedal >= 0) in.throttle = std::clamp(pedal, Real(0), Real(1));
+        else in.brake = std::clamp(-pedal, Real(0), Real(1));
     }
     return in;
 }

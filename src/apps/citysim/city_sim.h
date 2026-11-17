@@ -1443,6 +1443,11 @@ public:
     const std::string& drivingRoadsReport() const { return drivingRoadsReport_; }
     // The new model, read-only; null when the level drives v1.
     const driving::Driving* drivingV2() const { return drivingV2_ ? &*drivingV2_ : nullptr; }
+    // ...and to place, send and carry cars of its own in (the near tier, city_near.h; ADR-0447). Null under v1.
+    driving::Driving* drivingV2Mutable() { return drivingV2_ ? &*drivingV2_ : nullptr; }
+    // WRITTEN BEFORE EACH TICK OF THE NEW MODEL (ADR-0447): where each car physics carries really is (the near tier's
+    // Driving::carriedAt). Empty: nothing. One hook; a second setter replaces the first.
+    void setBeforeDriving(std::function<void(driving::Driving&)> hook) { beforeDriving_ = std::move(hook); }
     // THE NEW MODEL TAKES THE DRIVERS (#255; city_driving.h): reads the rule set `rulesFile` and gives it to the model,
     // then hands it the cars of every driver of role `role` (the level's driverRole), each as the driving class of its
     // fleet slot (`classOfSlot`, as DrivingHost::begin). Those drivers leave the old model for good: their old trip and
@@ -2288,6 +2293,7 @@ private:
     std::shared_ptr<const engine::RoadModel> drivingRoads_;
     std::string drivingRoadsReport_ = "no lane graph yet";
     DrivingHost drivingHost_;   // the drivers handed to the new model (startDrivingV2); inactive on a v1 level
+    std::function<void(driving::Driving&)> beforeDriving_;   // setBeforeDriving
     // The resident with the agent brain and everything it needs (startBrain; city_brain.h). It reads and moves this
     // sim's agents directly, as the hand-over above does, so it is a friend. Null: none.
     friend class CityBrain;
