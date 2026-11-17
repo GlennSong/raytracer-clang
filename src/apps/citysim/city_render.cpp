@@ -210,13 +210,6 @@ bool CityRenderSystem::agentWorldPose(int agentId, Vec3& outPos,
         return false;
     const Agent& a = sim_.agents()[agentId];
     if (a.released) return false;   // its physical car is player-driven now
-    // IN A HOUSEHOLD'S CAR (ADR-0444): where they are is the car's pose
-    if (a.inCar >= 0) {
-        Vec2 at;
-        if (!sim_.brain() || !sim_.brain()->carPose(a.inCar, at, outHeading)) return false;
-        outPos = Vec3(at.x, groundAt(at.x, at.y), at.y);
-        return true;
-    }
 
     Real x = a.pos.x, z = a.pos.y;
     Vec2 heading = a.heading;
@@ -2787,13 +2780,13 @@ void CityRenderSystem::syncCarLamps(World& world) {
             dc.fresh = false;
             const int v = parkedVariant(body.slot, body.type);
             const int key = link.driver >= 0 ? link.driver : entityCarKey(body.id);
-            const std::unordered_map<int, Mat4>::const_iterator drawn = carEntityPose_.find(key);
-            if (link.away || !lane.driven || drawn == carEntityPose_.end() || v < 0 || v >= static_cast<int>(carLights_.size())) return;
+            const std::unordered_map<uint32_t, DrawnCar>::const_iterator drawn = carEntityDrawn_.find(body.id);
+            if (link.away || !lane.driven || drawn == carEntityDrawn_.end() || v < 0 || v >= static_cast<int>(carLights_.size())) return;
             const CarLamps lamps = engine::vehicleLampState(lane.braking ? engine::LampMotion::Holding : engine::LampMotion::Rolling,
                                                             lane.speed, prev, dark, 0);
             const uint32_t m = engine::lampMask(lamps, blinkOn);
             if (m) masks[key] = m;
-            if (lamps.head || lamps.brake) lampLights(drawn->second, v, lamps, 0x20000000u | body.id);
+            if (lamps.head || lamps.brake) lampLights(drawn->second.pose, v, lamps, 0x20000000u | body.id);
         });
     }
     // ...onto the body instances syncGroups drew this bake (carAgentIds_ runs beside each group's transforms)
@@ -3067,14 +3060,16 @@ Mat4 CityRenderSystem::parkedCarPose(int variant, Vec2 pos, Vec2 heading, Real p
 // driver while somebody sits at its wheel (the driver is drawn in the seat, the glass and cabin swapped near the
 // player, as for any car with a driver), else entityCarKey.
 void CityRenderSystem::syncCarEntities(World& world, std::vector<InstanceGroup*>& cars) {
-    carEntityPose_.clear();
+    carEntityDrawn_.clear();
     if (cars.empty() || !sim_.brain()) return;
     const std::vector<Vec3> he = carGroupHalfExtents();
     const Real period = sim_.tickPeriod();
     const Real tickT = period > 0.0 ? std::clamp(sim_.secondsSinceTick() / period, Real(0), Real(1)) : Real(1);
     world.each<CityCarBody, CityCarLink, engine::Transform, engine::PrevTransform>(
         [&](Entity e, CityCarBody& body, CityCarLink& link, engine::Transform& t, engine::PrevTransform& prev) {
-            if (link.away) return;   // the player has it as a car of their own
+            // the player has it as a car of their own: with the key, the entity has a Vehicle, which VehicleSystem draws
+            // (ADR-0445: one drawing)
+            if (link.away || world.has<engine::Vehicle>(e)) return;
             const int v = parkedVariant(body.slot, body.type);
             if (v < 0 || v >= static_cast<int>(cars.size()) || !cars[static_cast<std::size_t>(v)]) return;
             Vec2 pos = carPosition(t), heading = carHeading(t);
@@ -3096,7 +3091,7 @@ void CityRenderSystem::syncCarEntities(World& world, std::vector<InstanceGroup*>
                 m = parkedCarPose(v, pos, heading, -1e30, he);
             cars[static_cast<std::size_t>(v)]->push(m, (uint64_t(1) << 61) | (static_cast<uint64_t>(body.id) << 8));
             carAgentIds_[static_cast<std::size_t>(v)].push_back(key);
-            carEntityPose_[key] = m;
+            carEntityDrawn_[body.id] = DrawnCar{m, v};
         });
 }
 
@@ -5382,27 +5377,39 @@ bool CityRenderSystem::carSeatsOf(int agent, Mat4* pose, std::vector<Vec3>* seat
     const auto& ag = sim_.agents();
     if (agent < 0 || agent >= static_cast<int>(ag.size()) || sim_.isBus(agent)) return false;
     const Agent& a = ag[static_cast<std::size_t>(agent)];
-    if (a.mode != Agent::Mode::Driver || a.vehicle < 0 || a.released || carDriverSeat_.empty()) return false;
-    const int n = static_cast<int>(carDriverSeat_.size());
-    const int slot = drawSlotFor(agent);   // the model it is drawn as (#115), not its vehicle index
-    if (slot < 0) return false;
-    const std::size_t v = static_cast<std::size_t>(slot % n);
-    if (!carHasDriver_[v]) return false;
+    if (a.mode != Agent::Mode::Driver || a.vehicle < 0 || a.released) return false;
+    std::vector<Vec3> found;
+    if (!seatsOfVariant(drawSlotFor(agent), found)) return false;   // the model it is drawn as (#115), not its vehicle index
     if (pose) {
         const auto it = busDrawnPose_.find(agent);
         *pose = it != busDrawnPose_.end() ? it->second : agentPose(a, agent);
     }
-    if (seats) {
-        const Vec3 d = carDriverSeat_[v];
-        seats->clear();
-        seats->push_back(d);
-        seats->push_back(Vec3(-d.x, d.y, d.z));
-        // the back bench, where the model has one (its recipe's rear_hip), a seat each side of its middle
-        if (v < carHasRear_.size() && carHasRear_[v]) {
-            const Vec3 r = carRearHip_[v];
-            seats->push_back(Vec3(d.x, r.y, r.z));
-            seats->push_back(Vec3(-d.x, r.y, r.z));
-        }
+    if (seats) *seats = found;
+    return true;
+}
+
+bool CityRenderSystem::carEntitySeatsOf(uint32_t car, Mat4* pose, std::vector<Vec3>* seats) const {
+    const std::unordered_map<uint32_t, DrawnCar>::const_iterator drawn = carEntityDrawn_.find(car);
+    std::vector<Vec3> found;
+    if (drawn == carEntityDrawn_.end() || !seatsOfVariant(drawn->second.variant, found)) return false;
+    if (pose) *pose = drawn->second.pose;
+    if (seats) *seats = found;
+    return true;
+}
+
+bool CityRenderSystem::seatsOfVariant(int slot, std::vector<Vec3>& seats) const {
+    if (slot < 0 || carDriverSeat_.empty()) return false;
+    const std::size_t v = static_cast<std::size_t>(slot % static_cast<int>(carDriverSeat_.size()));
+    if (!carHasDriver_[v]) return false;
+    const Vec3 d = carDriverSeat_[v];
+    seats.clear();
+    seats.push_back(d);
+    seats.push_back(Vec3(-d.x, d.y, d.z));
+    // the back bench, where the model has one (its recipe's rear_hip), a seat each side of its middle
+    if (v < carHasRear_.size() && carHasRear_[v]) {
+        const Vec3 r = carRearHip_[v];
+        seats.push_back(Vec3(d.x, r.y, r.z));
+        seats.push_back(Vec3(-d.x, r.y, r.z));
     }
     return true;
 }

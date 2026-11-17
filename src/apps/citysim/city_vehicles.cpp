@@ -15,6 +15,8 @@
 #endif
 #include "../../log.h"
 #include "city_sim.h"                       // VehicleBody
+#include "city_brain.h"                     // the households' cars: takenByPlayer (ADR-0445)
+#include "city_car.h"                       // carsNear, and a household car's components
 
 #include <cmath>
 #include <string>
@@ -48,14 +50,15 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     // enter_vehicle; that press is what promotes the car below.
     // A PARKED CAR's HOOD OR TRUNK, opened on foot (ADR-0356; Glenn: "the cars in the world are not the same as the one
     // I am in ... I can't open the hatch"): the car becomes the real one where it stands, and the panel swings open
+    world_ = &ctx.world;
     if (city_.built()) {
         Entity pl;
         ctx.world.each<Transform, engine::ControlledBy>([&](Entity e, Transform&, engine::ControlledBy&) {
             if (!pl.valid()) pl = e;
         });
         engine::InteractCommand cmd;
-        if (pl.valid() && engine::takeInteractCommand(ctx.world, pl, "city_panel", cmd) && ambientAgent_ >= 0) {
-            const Entity car = promote(ctx, ambientAgent_);
+        if (pl.valid() && engine::takeInteractCommand(ctx.world, pl, "city_panel", cmd) && ambient_.valid()) {
+            const Entity car = promote(ctx, ambient_);
             if (Vehicle* v = car.valid() ? ctx.world.get<Vehicle>(car) : nullptr) {
                 for (Vehicle::Panel& p : v->panels) {
                     const bool back = p.name == "trunk" || p.name == "hatch" || p.name == "tailgate";
@@ -63,7 +66,7 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
                 }
                 LOG_INFO << "[cityveh] opened a parked car's " << (cmd.key == 0 ? "hood" : "trunk");
             }
-            ambientAgent_ = -1;
+            ambient_ = Ambient{};
             haveAmbient_ = false;
         }
     }
@@ -71,7 +74,7 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
         scanT_ -= ctx.frameDelta;
         if (scanT_ <= 0) {
             scanT_ = 0.25;
-            ambientAgent_ = -1;
+            ambient_ = Ambient{};
             Entity pl;
             Vec3 pp;
             ctx.world.each<Transform, engine::ControlledBy>([&](Entity e, Transform& t, engine::ControlledBy&) {
@@ -83,31 +86,24 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
                     const Real dx = t.position.x - pp.x, dz = t.position.z - pp.z;
                     if (dx * dx + dz * dz <= kCommandeerRadius * kCommandeerRadius) real = true;
                 });
-                const auto& ag = city_.sim().agents();
-                Real bestD2 = kCommandeerRadius * kCommandeerRadius;
-                int best = -1;
-                for (int i = 0; i < static_cast<int>(ag.size()) && !real; ++i) {
-                    const Agent& a = ag[static_cast<std::size_t>(i)];
-                    if (a.mode != Agent::Mode::Driver || a.vehicle < 0 || a.released || a.playerControlled) continue;
-                    const Real dx = a.pos.x - pp.x, dz = a.pos.y - pp.z;
-                    if (dx * dx + dz * dz <= bestD2) { bestD2 = dx * dx + dz * dz; best = i; }
-                }
-                ambientAgent_ = best;
+                if (!real) ambient_ = nearestAmbient(ctx.world, Vec2(pp.x, pp.z));
             }
         }
         // THE DRIVER'S SEAT, where the car is this frame (Glenn: "we'd have to be pointing at the seat that we
         // want"): the offer sits on it, beside CityPlayerTransitSystem's passenger seats, so looking at the driver's
         // side takes the car and looking at another seat rides along
         haveAmbient_ = false;
-        if (ambientAgent_ >= 0) {
+        if (ambient_.valid()) {
             engine::Mat4 pose;
             std::vector<Vec3> seats;
             Vec3 gp;
             Vec2 gh;
-            if (city_.carSeatsOf(ambientAgent_, &pose, &seats)) {
+            const bool seated = ambient_.agent >= 0 ? city_.carSeatsOf(ambient_.agent, &pose, &seats)
+                                                    : city_.carEntitySeatsOf(static_cast<uint32_t>(ambient_.car), &pose, &seats);
+            if (seated) {
                 ambientAt_ = pose.transformPoint(seats[0]) + Vec3(0, 0.35, 0);
                 haveAmbient_ = true;
-            } else if (city_.agentWorldPose(ambientAgent_, gp, gh)) {
+            } else if (ambientPose(ambient_, gp, gh)) {
                 ambientAt_ = gp + Vec3(0, 0.9, 0);
                 haveAmbient_ = true;
             }
@@ -127,13 +123,12 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
                 o.needsSight = false;
                 engine::offerInteraction(ctx.world, pl, o);
                 // ...and a PARKED one's hood and trunk, at its nose and its tail (ADR-0356)
-                const Agent& amb = city_.sim().agents()[static_cast<std::size_t>(ambientAgent_)];
                 Vec3 gp;
                 Vec2 gh;
-                const int slot = city_.carSlotOf(ambientAgent_);
+                const int slot = ambientSlot(ambient_);
                 std::string recipe;
                 Vec3 paint;
-                if (!amb.moving && slot >= 0 && city_.carDrivable(slot, recipe, paint) && city_.agentWorldPose(ambientAgent_, gp, gh)) {
+                if (!ambientMoving(ambient_) && slot >= 0 && city_.carDrivable(slot, recipe, paint) && ambientPose(ambient_, gp, gh)) {
                     const Real hl = city_.sim().fleetBody(slot).length * 0.5;
                     const Real gl = gh.length();
                     const Vec2 f = gl > 1e-6 ? gh * (1.0 / gl) : Vec2(0, 1);
@@ -178,36 +173,73 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     });
     if (realNearby) return;
 
-    // Nearest ambient (planner-owned) car within reach.
-    const CitySim& sim = city_.sim();
-    int bestAgent = -1;
-    Real bestD2 = kCommandeerRadius * kCommandeerRadius;
-    const auto& agents = sim.agents();
-    for (int i = 0; i < static_cast<int>(agents.size()); ++i) {
-        const Agent& a = agents[i];
-        if (a.mode != Agent::Mode::Driver || a.vehicle < 0) continue;
-        if (a.released || a.playerControlled) continue;
-        Real dx = a.pos.x - pXZ.x, dz = a.pos.y - pXZ.y;
-        Real d2 = dx * dx + dz * dz;
-        if (d2 <= bestD2) { bestD2 = d2; bestAgent = i; }
-    }
-    if (bestAgent < 0) return;
+    // Nearest ambient car within reach: the old sim's or a household's.
+    const Ambient best = nearestAmbient(world, pXZ);
+    if (!best.valid()) return;
 
-    promote(ctx, bestAgent);
+    promote(ctx, best);
 }
 
-// PROMOTE an ambient car: release its agent (its instanced car vanishes this tick) and spawn a real Vehicle of the
-// same car at the same pose -- for the player to get into, or to open a panel of (ADR-0356). The new entity, or none.
-Entity CityVehicleSystem::promote(engine::FrameContext& ctx, int bestAgent) {
+// THE CITY'S CARS IN THE PLAYER'S REACH (carsNear, city_car.h): an old-sim car with a vehicle the player does not
+// already drive, or a household's car, parked or with its driver in it (ADR-0445). The nearest.
+CityVehicleSystem::Ambient CityVehicleSystem::nearestAmbient(World& world, Vec2 p) const {
+    std::vector<CarSeen> cars;
+    carsNear(city_.sim(), world, p, kCommandeerRadius, cars);
+    Ambient best;
+    Real bestD2 = kCommandeerRadius * kCommandeerRadius;
+    for (const CarSeen& c : cars) {
+        if (c.agent >= 0) {
+            const Agent& a = city_.sim().agents()[static_cast<std::size_t>(c.agent)];
+            if (a.vehicle < 0 || a.playerControlled) continue;
+        }
+        const Real d2 = (c.pos - p).lengthSquared();
+        if (d2 > bestD2) continue;
+        bestD2 = d2;
+        best = c.agent >= 0 ? Ambient{c.agent, -1} : Ambient{-1, static_cast<int>(c.id)};
+    }
+    return best;
+}
+
+bool CityVehicleSystem::ambientPose(const Ambient& a, Vec3& pos, Vec2& heading) const {
+    if (a.agent >= 0) return city_.agentWorldPose(a.agent, pos, heading);
+    const CityBrain* b = city_.sim().brain();
+    Vec2 at;
+    if (!b || !b->carPose(a.car, at, heading)) return false;
+    pos = Vec3(at.x, city_.surfaceY(-1, 0, at), at.y);
+    return true;
+}
+
+int CityVehicleSystem::ambientSlot(const Ambient& a) const {
+    if (a.agent >= 0) return city_.carSlotOf(a.agent);
+    const CityBrain* b = city_.sim().brain();
+    const CityCarBody* body = b ? world_->get<CityCarBody>(b->carEntity(a.car)) : nullptr;
+    return body ? city_.carEntityVariant(body->slot, body->type) : -1;
+}
+
+bool CityVehicleSystem::ambientMoving(const Ambient& a) const {
+    if (a.agent >= 0) return city_.sim().agents()[static_cast<std::size_t>(a.agent)].moving;
+    const CityBrain* b = city_.sim().brain();
+    const CityCarOnLane* lane = b ? world_->get<CityCarOnLane>(b->carEntity(a.car)) : nullptr;
+    return lane && lane->driven;
+}
+
+// PROMOTE an ambient car -- for the player to get into, or to open a panel of (ADR-0356) -- and the entity that is now
+// a real Vehicle, or none:
+//   - an old-sim car: its agent is released (its instanced car vanishes this tick) and a real Vehicle of the same car
+//     is spawned at the same pose, a new entity;
+//   - a household's car (ADR-0445): THE SAME ENTITY becomes the Vehicle (one car, one representation): the brain is
+//     told the player has taken it (CityBrain::takenByPlayer: off the driving's road, its driver put out on the kerb
+//     side, the household told), then the entity gains its Vehicle and VehicleSystem moves and draws it from now.
+Entity CityVehicleSystem::promote(engine::FrameContext& ctx, const Ambient& target) {
     World& world = ctx.world;
     const CitySim& sim = city_.sim();
-    const auto& agents = sim.agents();
-    // PROMOTE: release the agent (its instanced car + widget vanish this tick)
-    // and spawn a real Vehicle with the same fleet body at the same pose.
-    const Agent& a = agents[bestAgent];
+    CityBrain* households = city_.simMutable().brain();
+    const Entity householdCar = target.car >= 0 && households ? households->carEntity(target.car) : Entity{};
+    if (target.car >= 0 && !householdCar.valid()) return Entity{};
+    const int bestAgent = target.agent;
     // THE MODEL IT IS DRAWN AS (#115): every part below by the draw slot, not the vehicle index -- they differ
     // whenever the fleet has service vehicles, and the car in the player's hands turned into another model.
-    const int slot = city_.carSlotOf(bestAgent);
+    const int slot = ambientSlot(target);
     if (slot < 0) return Entity{};
     // The ADOPTED fleet's body, so the promoted car's chassis, mass and CoG come
     // from the same catalogue entry its drawn shell was built from.
@@ -231,7 +263,18 @@ Entity CityVehicleSystem::promote(engine::FrameContext& ctx, int bestAgent) {
     // nothing while the ambient car vanished.
     Vec3 groundPos;
     Vec2 groundHeading;
-    if (!city_.agentWorldPose(bestAgent, groundPos, groundHeading)) return Entity{};
+    if (!ambientPose(target, groundPos, groundHeading)) return Entity{};
+    // A HOUSEHOLD'S CAR: the brain first (it takes the car off the driving and its lane component off the entity, and
+    // puts its driver out); false when somebody else has it already
+    if (householdCar.valid() && !households->takenByPlayer(target.car)) return Entity{};
+    // what the old sim's driver does once the car is the player's: they get out onto the pavement and stand there (no
+    // longer vanishing with the car)
+    const auto releaseOld = [&]() {
+        if (bestAgent >= 0 && !city_.simMutable().ejectDriver(bestAgent)) city_.simMutable().releaseDriver(bestAgent);
+    };
+    const std::string what = bestAgent >= 0 ? "agent " + std::to_string(bestAgent) + "'s car (vehicle " +
+                                                  std::to_string(sim.agents()[static_cast<std::size_t>(bestAgent)].vehicle) + ")"
+                                            : "household car " + std::to_string(target.car);
 
     // THE SAME CAR THE MENU DROPS (ADR-0355; Glenn: "Why is an SUV in the world different than mine? I can't open
     // the hatch"): the slot's drivable recipe in its paint -- panels on hinges, a body to dent, its damage tuning --
@@ -253,11 +296,12 @@ Entity CityVehicleSystem::promote(engine::FrameContext& ctx, int bestAgent) {
             if (!lib.empty() && vm.doString(lib, &err) && engine::loadVehicleSpec(vm, chunk, 1u, spec, &err)) {
                 const Vec3 at(groundPos.x, groundPos.y + spec.config.chassisHalfExtent.y + 0.35, groundPos.z);
                 const Real yawDeg = std::atan2(groundHeading.x, groundHeading.y) * 57.29577951308232;
-                const Entity car = engine::spawnVehicle(world, ctx.assets, spec, at, yawDeg);
-                LOG_INFO << "[cityveh] took agent " << bestAgent << "'s car as the drivable " << recipe << ": vehicle "
-                         << a.vehicle << ", model slot " << slot;
-                if (!city_.simMutable().ejectDriver(bestAgent)) city_.simMutable().releaseDriver(bestAgent);
-                promoted_.push_back(PromotedCar{car, bestAgent});
+                Entity car = householdCar;
+                if (car.valid()) engine::makeVehicle(world, ctx.assets, spec, car, at, yawDeg);
+                else car = engine::spawnVehicle(world, ctx.assets, spec, at, yawDeg);
+                LOG_INFO << "[cityveh] took " << what << " as the drivable " << recipe << ", model slot " << slot;
+                releaseOld();
+                promoted_.push_back(PromotedCar{car, bestAgent, target.car});
                 return car;
             }
             LOG_WARN << "[cityveh] slot " << slot << "'s drivable " << recipe << ": " << err << " -- the traffic body instead";
@@ -265,7 +309,7 @@ Entity CityVehicleSystem::promote(engine::FrameContext& ctx, int bestAgent) {
     }
 #endif
 
-    Entity e = world.create();
+    Entity e = householdCar.valid() ? householdCar : world.create();
     Transform t;
     t.position = Vec3(groundPos.x, groundPos.y + body.height * 0.5 + 0.25,
                       groundPos.z);
@@ -289,7 +333,7 @@ Entity CityVehicleSystem::promote(engine::FrameContext& ctx, int bestAgent) {
         // nothing to substitute: a C++ box car is what this whole round removed.
         LOG_WARN << "[cityveh] slot " << slot
                  << " has no body to promote — not commandeering";
-        world.destroy(e);
+        if (!householdCar.valid()) world.destroy(e);   // (a household's car stays what it was: the player's, standing)
         return Entity{};
     }
     // RETAIN: this handle is the render bridge's, acquired once at build. Taking
@@ -349,10 +393,9 @@ Entity CityVehicleSystem::promote(engine::FrameContext& ctx, int bestAgent) {
     v.openSeat = city_.carOpenSeat(slot);
     world.add<Vehicle>(e, v);   // VehicleSystem builds the Jolt car + wheels + lamps
 
-    LOG_INFO << "[cityveh] took agent " << bestAgent << "'s car: vehicle " << a.vehicle << ", model slot " << slot;
-    // the driver gets out onto the pavement and stands there (no longer vanishing with the car)
-    if (!city_.simMutable().ejectDriver(bestAgent)) city_.simMutable().releaseDriver(bestAgent);
-    promoted_.push_back(PromotedCar{e, bestAgent});
+    LOG_INFO << "[cityveh] took " << what << ", model slot " << slot;
+    releaseOld();
+    promoted_.push_back(PromotedCar{e, bestAgent, target.car});
     return e;
 }
 

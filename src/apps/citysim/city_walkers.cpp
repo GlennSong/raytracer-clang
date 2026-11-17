@@ -1,5 +1,6 @@
 #include "../../log.h"
 #include "city_walkers.h"
+#include "city_car.h"   // carsNear: the city's cars, the households' among them (ADR-0445)
 #include <cstdio>
 
 #include "../../engine/asset_manager.h"
@@ -305,22 +306,22 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         }
         cars.push_back(c);
     });
-    for (int ni : sim.nearAgents()) {   // (the near list: a far car has no body -- see below)
-        const Agent& a = sim.agents()[static_cast<std::size_t>(ni)];
-        if (a.mode != Agent::Mode::Driver || a.released || !a.moving) continue;
-        // FAR CARS CANNOT RUN ANYONE OVER. This was the only place in citysim
-        // that iterated far-tier agents: it gathered every moving driver in the
-        // whole 8 km city, and the knockdown test below is O(walkers x this
-        // list). A car with no body, hundreds of metres away, was being
-        // distance-tested against every walker on screen, every step.
-        if (a.far()) continue;
+    // ...and the city's own cars on a trip (carsNear, city_car.h: the old sim's driving agents and the households'
+    // cars, ADR-0445; a car the player holds is a Vehicle, above). FAR CARS CANNOT RUN ANYONE OVER: carsNear walks the
+    // near list only. (This was the only place in citysim that iterated far-tier agents: it gathered every moving
+    // driver in the whole 8 km city, and the knockdown test below is O(walkers x this list).)
+    std::vector<CarSeen> cityCars;
+    carsNear(sim, world, Vec2(0, 0), -1, cityCars);
+    for (const CarSeen& seen : cityCars) {
+        if (!seen.moving) continue;
         engine::DangerCar c;
-        c.pos = a.pos;
-        const Real hl = a.heading.length();
-        c.fwd = hl > 1e-6 ? a.heading * (1.0 / hl) : Vec2(0, 1);
-        c.vel = c.fwd * a.speed;
-        c.halfW = 0.95;
-        c.halfL = sim.isBus(ni) ? 5.7 : 2.35;
+        c.pos = seen.pos;
+        const Real hl = seen.heading.length();
+        c.fwd = hl > 1e-6 ? seen.heading * (1.0 / hl) : Vec2(0, 1);
+        c.vel = c.fwd * seen.speed;
+        // (an old-sim car: its fixed box, as before; a household car: its own body's)
+        c.halfW = seen.agent >= 0 ? 0.95 : seen.width * 0.5;
+        c.halfL = seen.agent >= 0 ? (sim.isBus(seen.agent) ? 5.7 : 2.35) : seen.length * 0.5;
         cars.push_back(c);
     }
     // Every person (other walkers + the on-foot player) for 360° SEPARATION —

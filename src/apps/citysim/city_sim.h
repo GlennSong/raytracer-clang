@@ -205,8 +205,8 @@ struct Agent {
     bool brainOwned = false;
     // IN A HOUSEHOLD'S CAR (ADR-0444; city_car.h): the number of the brain's car this person sits in (-1: none). Such a
     // car is an entity, not one of `vehicles`, so this person stays a walker (`mode` Pedestrian, `vehicle` -1) who is
-    // not drawn on foot (pedVisible); where they are is the car's pose (CityBrain::personPosition), and `pos` stays
-    // where they got in.
+    // not drawn on foot (pedVisible). The car is the authority on where they are: `pos` and `heading` follow its pose
+    // every tick, one way (CityBrain, ADR-0445), so a reader of `pos` need not know about `inCar`.
     int inCar = -1;
     bool released = false;           // ejected by the player (ADR-0062): the sim stops
                                      // driving this agent's ghost so it can't fight the

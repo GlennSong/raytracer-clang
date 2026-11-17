@@ -393,7 +393,12 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
 Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
                     const Vec3& position, Real yawDegrees) {
     Entity e = world.create();
+    makeVehicle(world, assets, spec, e, position, yawDegrees);
+    return e;
+}
 
+void makeVehicle(World& world, AssetManager& assets, const VehicleSpec& spec, Entity e, const Vec3& position,
+                 Real yawDegrees) {
     Transform t;
     t.position = position;
     t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), degreesToRadians(yawDegrees));
@@ -478,7 +483,6 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
     v.cargoHi = spec.cargoHi;
     v.cargoPanel = spec.cargoPanel.empty() ? -1 : v.panelIndex(spec.cargoPanel);
     world.add<Vehicle>(e, v);
-    return e;
 }
 
 }  // namespace engine

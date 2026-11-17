@@ -318,6 +318,9 @@ struct Run {
     // the first one found.
     int holdFaults = 0;
     std::string firstHoldFault;
+    // A RIDER WHERE THEIR CAR IS (ADR-0445, #296), looked at every tick: how many (person, tick) pairs found a person
+    // in a household car whose own place was not the car's.
+    int riderApart = 0;
 
     // The level's SIX residents (ADR-0443), every day table switched off: a case says who goes where. The first
     // resident (ana, number 0) and her household's car are what the one-resident cases below are about; the other
@@ -342,6 +345,8 @@ struct Run {
         lc.city.step(lc.world, kStep);
         ++ticks;
         watch.look(lc.world, sim(), *b, carStart);
+        for (const citysim::Agent& a : sim().agents())
+            if (a.inCar >= 0 && !approxEqual((a.pos - carView(lc.world, *b, a.inCar).pos).length(), 0, kSamePoint)) ++riderApart;
         std::string why;
         if (!b->holdsSound(&why)) {
             if (holdFaults++ == 0) firstHoldFault = "t=" + std::to_string(seconds()) + " " + why;
@@ -819,6 +824,7 @@ TEST_CASE(level_brain_lab_six_residents_in_three_households) {
     CHECK(b.heldSpace(kCat).valid() && !b.heldSpace(kDan).valid() && !b.heldSpace(kFay).valid());
     CHECK(b.stateName(kAna) == "standing" && b.stateName(kBen) == "standing" && b.stateName(kEve) == "standing");
     CHECK(r.holdFaults == 0);
+    CHECK(r.riderApart == 0);   // (ADR-0445: every rider, every tick, where their car is)
 }
 
 // WHOEVER REACHES THE HOUSEHOLD'S CAR FIRST TAKES IT (design section 12). Ana and ben, of one household, are told a
@@ -887,6 +893,7 @@ TEST_CASE(level_brain_lab_whoever_reaches_the_household_car_first_takes_it) {
     std::printf("    [brain-lab] ben home from the ramp: %s (%s)\n", b.planText(kBen).c_str(), b.planReason(kBen).c_str());
     CHECK(b.planText(kBen) == "walk>home");
     CHECK(r.holdFaults == 0);
+    CHECK(r.riderApart == 0);   // (ADR-0445: every rider, every tick, where their car is)
     if (r.holdFaults > 0) std::printf("    [brain-lab] holds: %s\n", r.firstHoldFault.c_str());
     CHECK(b.machine()->counts().errors == 0u && b.machine()->counts().refused == 0u);
     checkDrove(r.watch);
@@ -934,6 +941,7 @@ TEST_CASE(level_brain_lab_a_parked_car_taken_by_somebody_else) {
     r.step();
     CHECK(b.planText(kBen) == "walk>space s19 along 3, car>space s223 against 3, walk>ramp");
     CHECK(r.holdFaults == 0);
+    CHECK(r.riderApart == 0);   // (ADR-0445: every rider, every tick, where their car is)
     CHECK(b.machine()->counts().errors == 0u && b.machine()->counts().refused == 0u);
 }
 
@@ -1060,6 +1068,7 @@ TEST_CASE(level_brain_lab_the_player_takes_the_car_from_under_its_driver) {
         CHECK(b.planText(kBen) == "walk>work" && b.planReason(kBen).find("car -- no car") != std::string::npos);
     }
     CHECK(r.holdFaults == 0);
+    CHECK(r.riderApart == 0);   // (ADR-0445: every rider, every tick, where their car is)
     if (r.holdFaults > 0) std::printf("    [brain-lab] holds: %s\n", r.firstHoldFault.c_str());
     CHECK(b.machine()->counts().errors == 0u);
 }
@@ -1126,10 +1135,11 @@ TEST_CASE(level_brain_lab_a_possessed_resident_is_held_and_carries_on_when_let_g
 //   - the World holds exactly the two cars, each one entity with its body, its link and, on the road only, its lane
 //     component naming its car in the driving;
 //   - on the road its pose is the driving's (the middle of the body), and its driver sits in it: not drawn on foot, her
-//     own place left where she got in, far from the car;
+//     own place and heading the car's (ADR-0445, #296), and at no tick of the whole run was any rider's place apart from
+//     their car's;
 //   - it is drawn ONCE in the city's car groups, by its own name, where its entity is, listed under its driver (who is
-//     drawn in its seat); nothing is drawn where the driver's own record says she is; the parked car is drawn once
-//     where its entity is, listed under its own number.
+//     drawn in its seat); nothing else is drawn where it is; the parked car is drawn once where its entity is, listed
+//     under its own number.
 TEST_CASE(level_brain_lab_a_household_car_is_one_entity_drawn_from_its_own_pose) {
     Run r;
     if (!r.b) return;
@@ -1176,21 +1186,23 @@ TEST_CASE(level_brain_lab_a_household_car_is_one_entity_drawn_from_its_own_pose)
         const Vec3 mid = (pose.front + pose.rear) * 0.5;
         CHECK(approxEqual(v.pos.x, mid.x, kSamePoint) && approxEqual(v.pos.y, mid.z, kSamePoint));
     }
-    // the driver is in it: at its wheel, not drawn on foot, her own place where she got in (by the car's first space)
+    // the driver is in it: at its wheel, not drawn on foot; her own place and heading are the car's (ADR-0445, #296:
+    // the car is the authority, and the person follows it every tick)
     const int agent = b.residentAgent(kAna);
     const citysim::Agent& ana = r.person(kAna);
     CHECK(ana.inCar == car && v.driver == agent && !r.sim().pedVisible(agent));
     CHECK(ana.mode == citysim::Agent::Mode::Pedestrian && ana.vehicle < 0);
-    std::printf("    [brain-lab] the car at %.1f %.1f; ana's own place %.1f %.1f, %.1f m from it; where the brain says she is: %.1f %.1f\n",
-                v.pos.x, v.pos.y, ana.pos.x, ana.pos.y, (ana.pos - v.pos).length(), b.personPosition(kAna).x,
-                b.personPosition(kAna).y);
-    CHECK((ana.pos - v.pos).length() > 50.0);   // (67.1 m, as measured)
-    CHECK(approxEqual((b.personPosition(kAna) - v.pos).length(), 0, kSamePoint));
+    std::printf("    [brain-lab] the car at %.1f %.1f; ana's own place %.1f %.1f, %.3f m from it; ticks a rider stood apart from "
+                "their car: %d\n",
+                v.pos.x, v.pos.y, ana.pos.x, ana.pos.y, (ana.pos - v.pos).length(), r.riderApart);
+    CHECK(approxEqual((ana.pos - v.pos).length(), 0, kSamePoint));
+    CHECK(approxEqual(engine::dot(ana.heading, v.heading), 1, kParkedWithin));
+    CHECK(r.riderApart == 0);
     // DRAWN once, by its own name, where its entity is, under its driver; the parked one under its own number
     const uint64_t name = (uint64_t(1) << 61) | (static_cast<uint64_t>(car) << 8);
     const uint64_t parkedName = (uint64_t(1) << 61) | (static_cast<uint64_t>(cars[1]) << 8);
     const CarView parked = carView(world, b, cars[1]);
-    int drawn = 0, drawnParked = 0, atAnasOwnPlace = 0;
+    int drawn = 0, drawnParked = 0, atTheCar = 0;
     const std::vector<Entity>& groups = r.lc.city.carGroups();
     const std::vector<std::vector<int>>& keys = r.lc.city.carAgentIds();
     for (std::size_t g = 0; g < groups.size(); ++g) {
@@ -1198,7 +1210,7 @@ TEST_CASE(level_brain_lab_a_household_car_is_one_entity_drawn_from_its_own_pose)
         if (!group) continue;
         for (std::size_t k = 0; k < group->transforms.size(); ++k) {
             const Vec2 at(group->transforms[k].m[0][3], group->transforms[k].m[2][3]);
-            atAnasOwnPlace += (at - ana.pos).length() < 2.0 ? 1 : 0;
+            atTheCar += (at - v.pos).length() < 2.0 ? 1 : 0;
             const uint64_t id = k < group->ids.size() ? group->ids[k] : 0;
             const int key = g < keys.size() && k < keys[g].size() ? keys[g][k] : -1;
             if (id == name) {
@@ -1214,7 +1226,61 @@ TEST_CASE(level_brain_lab_a_household_car_is_one_entity_drawn_from_its_own_pose)
         }
     }
     CHECK(drawn == 1 && drawnParked == 1);
-    CHECK(atAnasOwnPlace == 0);
+    CHECK(atTheCar == 1);   // (one car drawn where the car is: nothing else, its driver's included)
     for (const std::vector<int>& walkers : r.lc.city.pedAgentIds())
         for (const int w : walkers) CHECK(w != agent);
+}
+
+// EVERY SYSTEM THAT LOOKS FOR CARS SEES A HOUSEHOLD'S CAR (ADR-0445): carsNear (city_car.h) is the one question the
+// engine note, the walkers' dodge, the possessed car's sensing and the player's key ask. Held: parked, the car is in
+// it, standing, off the road, with its body's size; 30 s into a drive it is in it on the road, on its trip, at the
+// driving's speed, with its driver; once the player holds it (the same entity with an engine::Vehicle, as
+// CityVehicleSystem makes it) it is NOT in it (VehicleSystem's, found as a Vehicle: one car, one representation) and
+// the city bake no longer draws it.
+TEST_CASE(level_brain_lab_every_system_that_looks_for_cars_sees_a_household_car) {
+    Run r;
+    if (!r.b) return;
+    citysim::CityBrain& b = *r.b;
+    World& world = r.lc.world;
+    const int car = b.cars()[0];
+    const Entity e = b.carEntity(car);
+    const auto find = [&](Vec2 at) {
+        std::vector<citysim::CarSeen> seen;
+        citysim::carsNear(r.sim(), world, at, 5.0, seen);
+        citysim::CarSeen out;
+        for (const citysim::CarSeen& c : seen)
+            if (c.entity == e) out = c;
+        return out;
+    };
+    {
+        const CarView v = carView(world, b, car);
+        const citysim::CarSeen c = find(v.pos);
+        CHECK(c.entity == e && c.id == static_cast<uint32_t>(car) && c.agent == -1 && c.driver == -1);
+        CHECK(!c.onRoad && !c.moving && approxEqual(c.speed, 0, kSamePoint));
+        CHECK(approxEqual(c.length, v.length, kSamePoint) && approxEqual(c.width, v.width, kSamePoint));
+    }
+    std::string why;
+    CHECK(b.goTo(kAna, "work", &why));
+    CHECK(r.until([&] { return b.stateName(kAna) == "driving" && r.watch.ticksDriven > 30u * 60u; }));
+    {
+        const CarView v = carView(world, b, car);
+        const citysim::CarSeen c = find(v.pos);
+        const driving::Car* placed = r.sim().drivingV2()->car(driving::CarId(static_cast<uint32_t>(car)));
+        CHECK(c.entity == e && c.onRoad && c.moving && c.driver == b.residentAgent(kAna));
+        CHECK(placed != nullptr && approxEqual(c.speed, placed ? placed->speed : -1, kSamePoint));
+        std::printf("    [brain-lab] carsNear finds the household car on the road at %.1f m/s\n", c.speed);
+    }
+    // THE PLAYER HOLDS IT (as CityVehicleSystem does: the brain told, then the same entity gains its Vehicle)
+    CHECK(b.takenByPlayer(car));
+    world.add<engine::Vehicle>(e, engine::Vehicle{});
+    const Vec2 heldAt = carView(world, b, car).pos;
+    r.step();
+    CHECK(!find(heldAt).entity.valid());
+    CHECK(!world.has<citysim::CityCarOnLane>(e) && r.sim().drivingV2()->car(driving::CarId(static_cast<uint32_t>(car))) == nullptr);
+    int drawn = 0;
+    for (const Entity g : r.lc.city.carGroups())
+        if (const InstanceGroup* group = world.get<InstanceGroup>(g))
+            for (const uint64_t id : group->ids) drawn += id == ((uint64_t(1) << 61) | (static_cast<uint64_t>(car) << 8)) ? 1 : 0;
+    CHECK(drawn == 0);
+    CHECK(b.counts().takenDriven == 1u && b.counts().putOut == 1u && !b.inCar(kAna));
 }

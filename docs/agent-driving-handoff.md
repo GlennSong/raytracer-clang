@@ -54,8 +54,9 @@ once the new one carries river_town; until then leave it running and do not patc
 - A household's car is one ECS entity (`src/apps/citysim/city_car.h`), not a row of the sim's vehicles: its
   pose, body, household and driver, and a lane component while the new driving has it; drawn in the same
   instanced car groups; a person in it is a walker with `Agent::inCar` (ADR-0444, sitting 1a of
-  `docs/two-drivers-meeting-design.md`). Not wired in 1a: the player taking a household car with the key
-  (sitting 1b); the brain's side of it is `CityBrain::takenByPlayer`.
+  `docs/two-drivers-meeting-design.md`). Sitting 1b (ADR-0445): the person's place follows the car (#296);
+  every system that looks for cars asks `carsNear` (old-sim and household cars); the player takes a
+  household car with E and the same entity becomes a `Vehicle`. Not built: handing it back (#293).
 
 ## What is next, in the agreed order
 

@@ -282,6 +282,11 @@ public:
     // passenger's (the driver's mirrored), then the two rear seats when the body is long enough to have them.
     // False for a bus, a parked or released agent, or a body that publishes no driver seat.
     bool carSeatsOf(int agent, engine::Mat4* pose, std::vector<engine::Vec3>* seats) const;
+    // ...and of a household car (ADR-0445), by its number: its pose as drawn this bake and its seats. False: it was not
+    // drawn (the player has it, or no bake yet), or its model has no driver's seat.
+    bool carEntitySeatsOf(uint32_t car, engine::Mat4* pose, std::vector<engine::Vec3>* seats) const;
+    // The model (variant) a household car is drawn as: its fleet slot, and its kind's (a bus, a cab, a fire engine).
+    int carEntityVariant(int slot, VehicleType type) const { return parkedVariant(slot, type); }
     // a bus's seats and doors (its own body's: `agent` -1, the first bus body)
     const std::vector<engine::Vec3>& busSeats(int agent = -1) const;
     const std::vector<engine::Vec3>& busDoors(int agent = -1) const;
@@ -791,8 +796,14 @@ private:
     // middle at `pos` on the ground under it or up a garage's deck (`parkedY` above -1e29), half its variant's height up.
     engine::Mat4 parkedCarPose(int variant, engine::Vec2 pos, engine::Vec2 heading, Real parkedY,
                                const std::vector<engine::Vec3>& halfExtents) const;
-    // Where each household car (by its carAgentIds_ key) was drawn this bake, for its lamps (syncCarLamps).
-    std::unordered_map<int, engine::Mat4> carEntityPose_;
+    // Where each household car (by its number) was drawn this bake and as which model, for its lamps and its seats.
+    struct DrawnCar {
+        engine::Mat4 pose;
+        int variant = -1;
+    };
+    std::unordered_map<uint32_t, DrawnCar> carEntityDrawn_;
+    // The seats of a car drawn as variant `v`: the driver's first, the front passenger's, the back bench's.
+    bool seatsOfVariant(int v, std::vector<engine::Vec3>& seats) const;
     // A household car's key in carAgentIds_ while nobody is at its wheel: below every parked row's (-2 - row), as the
     // car's number is past every row (city_car.h).
     static int entityCarKey(uint32_t id) { return -2 - static_cast<int>(id); }

@@ -1,5 +1,7 @@
 #include "city_car.h"
 
+#include "city_sim.h"
+
 #include <cmath>
 
 namespace citysim {
@@ -19,7 +21,53 @@ void setCarPose(engine::Transform& t, Vec2 pos, Vec2 heading, Real y) {
 
 void carTickBegins(engine::World& world) {
     world.each<CityCarBody, engine::Transform, engine::PrevTransform>(
-        [](engine::Entity, CityCarBody&, engine::Transform& t, engine::PrevTransform& prev) { prev.value = t; });
+        [&](engine::Entity e, CityCarBody&, engine::Transform& t, engine::PrevTransform& prev) {
+            if (!world.has<engine::Vehicle>(e)) prev.value = t;
+        });
+}
+
+void carsNear(const CitySim& sim, engine::World& world, Vec2 p, Real radius, std::vector<CarSeen>& out) {
+    const Real r2 = radius * radius;
+    const auto within = [&](Vec2 at) { return radius < 0 || (at - p).lengthSquared() <= r2; };
+    const std::vector<Agent>& agents = sim.agents();
+    const std::vector<SimVehicle>& vehicles = sim.vehicles();
+    for (const int ni : sim.nearAgents()) {
+        const Agent& a = agents[static_cast<std::size_t>(ni)];
+        if (a.mode != Agent::Mode::Driver || a.released || a.far() || !within(a.pos)) continue;
+        CarSeen c;
+        c.pos = a.pos;
+        c.heading = a.heading;
+        c.speed = a.speed;
+        c.moving = a.moving;
+        if (a.vehicle >= 0 && a.vehicle < static_cast<int>(vehicles.size())) {
+            c.length = vehicles[static_cast<std::size_t>(a.vehicle)].length;
+            c.width = vehicles[static_cast<std::size_t>(a.vehicle)].width;
+        }
+        c.agent = ni;
+        c.driver = ni;
+        out.push_back(c);
+    }
+    world.each<CityCarBody, CityCarLink, engine::Transform>(
+        [&](engine::Entity e, CityCarBody& body, CityCarLink& link, engine::Transform& t) {
+            if (link.away || world.has<engine::Vehicle>(e)) return;
+            const Vec2 at = carPosition(t);
+            if (!within(at)) return;
+            CarSeen c;
+            c.pos = at;
+            c.heading = carHeading(t);
+            const CityCarOnLane* lane = world.get<CityCarOnLane>(e);
+            c.onRoad = lane != nullptr;
+            if (lane) {
+                c.speed = lane->speed;
+                c.moving = lane->driven;
+            }
+            c.length = body.length;
+            c.width = body.width;
+            c.entity = e;
+            c.id = body.id;
+            c.driver = link.driver;
+            out.push_back(c);
+        });
 }
 
 }  // namespace citysim

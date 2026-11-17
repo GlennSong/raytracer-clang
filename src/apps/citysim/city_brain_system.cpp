@@ -138,7 +138,7 @@ std::string CityBrainSystem::residentsLine() const {
     if (!b || !b->hasResident()) return kNoBrain;
     std::string s = "ok " + std::to_string(b->residentCount()) + " residents:";
     for (int who = 0; who < b->residentCount(); ++who) {
-        const Vec2 pos = b->personPosition(who);   // (in a car: the car's)
+        const Vec2 pos = city_.sim().agents()[static_cast<std::size_t>(b->residentAgent(who))].pos;   // (in a car: the car's)
         const int wants = b->wantedMarker(who);
         const std::string at = b->standingAt(who);
         s += " " + std::to_string(who) + " " + b->residentName(who) + " (household " +
@@ -251,7 +251,7 @@ void CityBrainSystem::draw(engine::FrameContext& ctx) {
     const int who = b.residentAgent(followed_);
     const Agent& a = sim.agents()[static_cast<std::size_t>(who)];
     const bool onFoot = a.mode == Agent::Mode::Pedestrian && !b.inCar(followed_);
-    const Vec2 at = b.personPosition(followed_);
+    const Vec2 at = a.pos;   // (in a car: the car's)
     const std::vector<BrainPlanLeg> legs = b.planLegs(followed_);
     for (const BrainPlanLeg& leg : legs) {
         if (leg.done) continue;
@@ -380,7 +380,7 @@ void CityBrainSystem::render(engine::FrameContext& ctx) {
     }
     // each resident's name above their head (on foot) or their car (at its wheel)
     for (int who = 0; who < b->residentCount(); ++who) {
-        const Vec2 at = b->personPosition(who);   // (at the wheel: the car's)
+        const Vec2 at = city_.sim().agents()[static_cast<std::size_t>(b->residentAgent(who))].pos;   // (at the wheel: the car's)
         const Vec3 head(at.x, city_.surfaceY(-1, 0, at) + kNameHeight, at.y);
         if ((head - cam.position).length() > kNameRange) continue;
         Vec2 px;

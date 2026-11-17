@@ -16,7 +16,8 @@ namespace citysim {
 // with forty of them should sound like one. Same core, same clip, same rev
 // curve — the difference is only where the speed comes from.
 //
-// The nearest 8 driving agents within 70 m, voiced by the engine pool (engine/audio/engine_voices.h) the physics
+// The nearest 8 cars within 70 m (carsNear, city_car.h: the old sim's driving agents and the households' cars on the
+// road, ADR-0445), voiced by the engine pool (engine/audio/engine_voices.h) the physics
 // cars share; seed 2's rasp, so the player's own engine (seed 1) still reads as theirs. The planner gives no pedal,
 // so the pool reads each car's load from its change of speed.
 //

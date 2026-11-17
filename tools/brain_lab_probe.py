@@ -79,6 +79,8 @@ def from_above_and_the_side(sock, shots, name, t0, line, above=True, side=True, 
         rtctl.send(sock, f"camera {x} {ABOVE_HEIGHT} {z} -89 0")
         time.sleep(0.8)
         shoot(sock, shots, name + "_from_above", t0, line)
+        # what the view's centre (straight down on the body) hits: a car's kinematic box shows as a body at its roof
+        print("           aim?", rtctl.send(sock, "aim?"))
     if side:
         # yaw 0 looks along -z, so standing SIDE_AWAY toward +z of the body and looking at it
         rtctl.send(sock, f"camera {x} {SIDE_HEIGHT} {z + SIDE_AWAY} -6 0")

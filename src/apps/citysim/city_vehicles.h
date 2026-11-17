@@ -57,6 +57,12 @@ inline std::vector<PromotedLamp> promotedLamps(
 // player in it that same frame. One car system at the component level; two
 // motion regimes, each owned by the thing that's good at it.
 //
+// A HOUSEHOLD'S CAR of the agent brain (ADR-0445; city_car.h) is already an entity, so nothing spawns in its place:
+// the brain is told the player took it (its driver gets out on the kerb side, it leaves the driving), and the same
+// entity gains the Vehicle. The city bake stops drawing it; VehicleSystem draws, moves and voices it from then. When
+// the player gets out it stays a Vehicle where they left it (VehicleSystem parks it), the brain still counting it as
+// the player's: handing it back is #293.
+//
 // (The earlier all-dynamic bridge — every NPC car a Jolt vehicle chasing a
 // planner ghost through tether/pursuit/station control — is retired: two clocks
 // over one body needed endless reconciliation and jammed junctions. The
@@ -78,17 +84,32 @@ public:
 
 private:
     struct PromotedCar {
-        engine::Entity entity;   // the real Vehicle that replaced the ambient car
-        int agentId = -1;        // the released sim agent
+        engine::Entity entity;   // the real Vehicle: one that replaced an old-sim car, or a household car itself
+        int agentId = -1;        // the released sim agent (an old-sim car)
+        int car = -1;            // the household car's number (ADR-0445)
+    };
+    // AN AMBIENT CAR the player could take: an old-sim car (`agent`, its driver) or a household's car (`car`, its
+    // number; ADR-0445).
+    struct Ambient {
+        int agent = -1;
+        int car = -1;
+        bool valid() const { return agent >= 0 || car >= 0; }
     };
 
     CityRenderSystem& city_;
+    engine::World* world_ = nullptr;   // this frame's (update)
     std::vector<PromotedCar> promoted_;
     // the ambient car offered to the interaction broker (rescanned four times a second)
     engine::Real scanT_ = 0;
-    int ambientAgent_ = -1;   // the nearest ambient car in reach, rescanned four times a second
+    Ambient ambient_;   // the nearest ambient car in reach, rescanned four times a second
     // (ADR-0356) make an ambient car a real Vehicle -- the takeover, and a parked car's hood or trunk opened on foot
-    engine::Entity promote(engine::FrameContext& ctx, int agent);
+    engine::Entity promote(engine::FrameContext& ctx, const Ambient& target);
+    // The nearest ambient car within kCommandeerRadius of `p` (city_car.h carsNear: old-sim and household cars).
+    Ambient nearestAmbient(engine::World& world, engine::Vec2 p) const;
+    // Where it is (on the ground, as agentWorldPose answers), the model it is drawn as, and whether it is on a trip.
+    bool ambientPose(const Ambient& a, engine::Vec3& pos, engine::Vec2& heading) const;
+    int ambientSlot(const Ambient& a) const;
+    bool ambientMoving(const Ambient& a) const;
     bool haveAmbient_ = false;
     engine::Vec3 ambientAt_{0, 0, 0};
 };

@@ -125,6 +125,11 @@ std::string driveLabel(const std::string& drive);
 // then creates the Jolt vehicle and brings it to life. Returns the new entity.
 Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
                     const Vec3& position, Real yawDegrees);
+// ...the same onto an entity that already exists (its Transform, PrevTransform and Renderable replaced, a Vehicle and
+// its part entities added): a thing in the world that BECOMES a drivable car, as a household's car of the city does
+// when the player takes it (ADR-0445), rather than one put in its place.
+void makeVehicle(World& world, AssetManager& assets, const VehicleSpec& spec, Entity e, const Vec3& position,
+                 Real yawDegrees);
 
 }  // namespace engine
 

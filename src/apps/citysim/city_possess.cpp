@@ -2,6 +2,7 @@
 #include "../../engine/control/city_requests.h"
 
 #include "city_brain.h"   // the households' cars: board and alight (ADR-0444)
+#include "city_car.h"     // carsNear: the city's cars, the households' among them (ADR-0445)
 #include "city_render.h"
 #include "city_sim.h"
 
@@ -630,18 +631,16 @@ void CityPossessSystem::driveCar(engine::FrameContext& ctx) {
 
     lastLateral_ = follower_.update(pos2);
 
-    // Don't rear-end the city: sense along the route against every nearby sim
-    // driver plus any player-driven physical car, and yield to the leader.
+    // Don't rear-end the city: sense along the route against every nearby car of the city (carsNear: the old sim's
+    // and the households', ADR-0445) plus any player-driven physical car, and yield to the leader.
     std::vector<engine::SensedBody> bodies;
-    for (int ni : city_.sim().nearAgents()) {   // (50 m from the possessed car: the near tier)
-        const Agent& a = city_.sim().agents()[static_cast<std::size_t>(ni)];
-        if (a.mode != Agent::Mode::Driver || a.released) continue;
-        const engine::Real dx = a.pos.x - pos.x, dz = a.pos.y - pos.z;
-        if (dx * dx + dz * dz > 50.0 * 50.0) continue;
+    std::vector<CarSeen> cityCars;
+    carsNear(city_.sim(), ctx.world, pos2, 50.0, cityCars);   // (50 m from the possessed car: the near tier)
+    for (const CarSeen& c : cityCars) {
         engine::SensedBody b;
-        b.pos = a.pos;
-        b.heading = a.heading;
-        b.speed = a.speed;
+        b.pos = c.pos;
+        b.heading = c.heading;
+        b.speed = c.speed;
         bodies.push_back(b);
     }
     ctx.world.each<engine::Transform, engine::Vehicle>(

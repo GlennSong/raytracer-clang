@@ -24,14 +24,20 @@
 // households are numbered on from the last row of the sim's vehicle list as it stands when the brain starts (rows are
 // only added while the city is built, before that), so a household car's number is never a row's.
 //
-// A PERSON IN THE CAR is a sim agent on foot whose `inCar` names the car: they are not drawn on foot, and where they
-// are is the car's pose (CityBrain::personPosition). Their own position stays where they got in.
+// A PERSON IN THE CAR is a sim agent on foot whose `inCar` names the car: they are not drawn on foot. The car is the
+// authority on where they are: their own place and heading (Agent::pos, heading) follow the car's every tick, one way
+// (CityBrain's tick, ADR-0445), so any reader of Agent::pos finds them where the car is.
 //
 // THE DRAWING (city_render.cpp) walks these entities and puts each into the city's instanced car groups, the same
-// groups and the same pose functions as the sim's own cars: no draw call of its own.
+// groups and the same pose functions as the sim's own cars: no draw call of its own. Those instances are what the
+// kinematic box of every drawn car follows (city_physics.cpp).
 //
-// NOT HERE YET (sitting 1b): a physics body of the entity's own (today it has only the kinematic box city_physics.cpp
-// gives every drawn car instance), and the player taking one with the key.
+// THE PLAYER'S CAR (ADR-0445): the player takes a household car with the key (CityVehicleSystem). The SAME entity gains
+// an engine::Vehicle (VehicleSystem's: the Jolt car, its wheels, lamps and engine note) and loses its CityCarOnLane;
+// from then VehicleSystem moves and draws it and nothing here does (carsNear, the bake, carTickBegins all pass over an
+// entity with a Vehicle). Handing it back (removing the Vehicle) is not built (#293).
+//
+// EVERY SYSTEM THAT LOOKS FOR CARS asks carsNear: the old sim's driven cars and these, in one list.
 
 #include "../driving/traffic_state.h"   // driving::CarId
 #include "../../engine/components.h"    // engine::Transform, engine::PrevTransform
@@ -39,6 +45,7 @@
 #include "../../rt_math.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace citysim {
 
@@ -57,8 +64,8 @@ struct CityCarBody {
 struct CityCarLink {
     int household = -1;
     int driver = -1;     // the sim agent sitting at its wheel (-1: nobody)
-    bool away = false;   // the player has it as a physical car of their own: not drawn here (the brain's carLeftAt
-                         // brings it back)
+    bool away = false;   // the player has it as a car of their own (the brain's outsider; with the key, the entity
+                         // also has an engine::Vehicle): not drawn here
 };
 
 struct CityCarOnLane {
@@ -76,8 +83,35 @@ Vec2 carHeading(const engine::Transform& t);
 // Sets the car's place on the plan, its height and the way it points (`heading`, need not be unit; a zero one keeps
 // the way it pointed).
 void setCarPose(engine::Transform& t, Vec2 pos, Vec2 heading, Real y);
-// THE SIM'S TICK BEGINS: every car's PrevTransform is where it is now (what the drawing blends from).
+// THE SIM'S TICK BEGINS: every car's PrevTransform is where it is now (what the drawing blends from). A car the player
+// holds (it has an engine::Vehicle) is VehicleSystem's and is passed over.
 void carTickBegins(engine::World& world);
+
+class CitySim;
+
+// ONE CAR OF THE CITY AS A SYSTEM LOOKING FOR CARS SEES IT: where it is and which way it points, how fast it goes,
+// whether it is on a trip, its body's length and width, and which kind of car it is: an old-sim car (`agent`: its
+// driver, an agent in Mode::Driver; its pose is the agent's) or a household car (`entity`, its number `id`, and the
+// agent at its wheel or -1). Its height is not here: each reader has its own ground question.
+struct CarSeen {
+    Vec2 pos, heading;
+    Real speed = 0;
+    bool moving = false;
+    bool onRoad = true;   // a household car: the driving has it (CityCarOnLane); an old-sim car: always
+    Real length = 0, width = 0;
+    int agent = -1;
+    engine::Entity entity;
+    uint32_t id = 0;
+    int driver = -1;
+};
+// THE CITY'S CARS WITHIN `radius` OF `p` (radius below zero: every one), appended to `out`, the old sim's first (in
+// its near list's order: a far car has no body), then the households' (in the World's order):
+//   - an old-sim car: an agent of the near list in Mode::Driver, not released to the player, not far;
+//   - a household car: an entity with CityCarBody, not away and with no engine::Vehicle (a car the player holds is
+//     VehicleSystem's, found as a Vehicle like any physical car: one car, one representation). Its speed and "on a
+//     trip" are its CityCarOnLane's; a car off the road stands still.
+// The caller applies its own further questions (a bus, a car on service, one the player rides) through `agent`.
+void carsNear(const CitySim& sim, engine::World& world, Vec2 p, Real radius, std::vector<CarSeen>& out);
 
 }  // namespace citysim
 
