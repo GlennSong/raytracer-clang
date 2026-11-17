@@ -256,7 +256,14 @@ Settled (Glenn, 2026-11-16):
 - **The order**: cars as ECS entities first (sitting 1).
 - **The pinned lab run**: needs no decision; it follows the standing rule (never re-pinned silently: old, new, why).
 
-Open:
-- **Junction 0** in traffic_lab (seven roads meet; a 115 s light cycle, so waits up to 144 s against the test's 100 s
-  limit): (a) change that light's timing so waits stay under 100 s, or (b) leave it and not apply the limit there?
-  Recommended (a): it is a test level and its lights should be set as a sensible city would set them.
+- **No timeouts, no deadlock machinery in the game** (Glenn: cars "need to wait as long as they have to ... all
+  systems have to work in tandem without having machinery sitting around to detect deadlocks"):
+  - Junction 0 stays as built; a car waits through its red however long it is.
+  - The lab test's "nobody stands over 100 s" limit (`kLongestStand`, `tests/test_traffic_lab_v2.cpp`) is removed. The
+    test fails instead on a real deadlock: after the run, the wait-for graph finds a ring of cars each waiting on the
+    next where nothing they wait for can ever change. A queue at a red light is not one.
+  - The measurements (`driving::Measurements`, the wait-for graph among them) attach only in tests and lab tools, not
+    in normal play (today `city_driving.cpp:281` attaches them for every level on the new driving).
+  - The resolver's ring-breaking order goes with the resolver (section 10).
+  - Kept, as a driver's own habit in data: a driver who has waited long enough may look for another way
+    (`room_refused_another_way` today). It is a person's choice, not the system unsticking a car.
