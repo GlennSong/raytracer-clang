@@ -2906,6 +2906,7 @@ bool CitySim::ejectDriver(int agentIndex) {
         v.offStreet = true;   // the player's now: the sim's copy is never drawn or found again
         v.pos = standAt;
     }
+    const int takenVehicle = a.vehicle;
     a.vehicle = -1;
     a.car = -1;               // ...and never remounted: they walk from here
     a.mode = Agent::Mode::Pedestrian;
@@ -2918,6 +2919,9 @@ bool CitySim::ejectDriver(int agentIndex) {
     a.pos = standAt;
     a.route = engine::Route{};
     a.leg = 0;
+    // (ADR-0443) a resident with the agent brain put out of a household's car: the brain is told, takes the car off
+    // the new driving, stands them on the kerb side and decides what they do next
+    if (brain_) brainNoteEjected(agentIndex, takenVehicle);
     return true;
 }
 

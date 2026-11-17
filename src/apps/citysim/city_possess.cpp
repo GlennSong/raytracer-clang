@@ -342,6 +342,8 @@ void CityPossessSystem::possessWalker(engine::FrameContext& ctx,
         return;
     }
     walkerAgent_ = best;
+    // (ADR-0443) a resident with the agent brain: its `possessed` state holds them while a director moves them
+    city_.simMutable().brainNoteHeld(walkerAgent_, true);
     configureFollow(follow_, /*car=*/false);
     state_ = PossessState::Idle;
     hasDest_ = false;
@@ -563,8 +565,12 @@ void CityPossessSystem::releasePossession(engine::FrameContext& ctx) {
     // GIVE THE AGENT ITS DAY BACK. A released agent left `directed` would stand
     // wherever the director abandoned it for the rest of the run, because the
     // goal layer has been told to leave it alone (ADR-0091).
-    if (walkerAgent_ >= 0 && city_.built())
+    if (walkerAgent_ >= 0 && city_.built()) {
         city_.simMutable().setAgentDirected(walkerAgent_, false);
+        // (ADR-0443) a resident with the agent brain is let go: they plan again from where they stand, with the
+        // intent they had (and stay the brain's, not the day table's)
+        city_.simMutable().brainNoteHeld(walkerAgent_, false);
+    }
     directed_ = false;
     walkerAgent_ = -1;
     hasDest_ = false;

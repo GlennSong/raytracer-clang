@@ -1033,19 +1033,37 @@ struct CityMarker {
 // they go round, in order, staying `minutes` at each before leaving for the next. An empty day: they stay until told.
 // Before first setting out they wait at home for the minutes of the day's last stop (the stop the round comes back to).
 // `intent` is the row of brain.lua's `intents` their wants are (what they do once there: stand outside, go indoors).
-//   "resident": {"home": "home", "intent": "be_outside_at", "car": true, "traits": [],
-//                "day": [{"at": "work", "minutes": 2}, ...]}
+//   "residents": [{"name": "ana", "home": "home", "intent": "be_outside_at", "traits": [],
+//                  "day": [{"at": "work", "minutes": 2}, ...]}, ...]
+// SEVERAL RESIDENTS (ADR-0443): a list, each with a `name` the verbs take (`goto ana work`). Which car a resident may
+// use is their HOUSEHOLD's to say (CityHousehold below), not theirs. The older single form
+//   "resident": {"home": "home", "intent": "be_outside_at", "car": true, "traits": [], "day": [...]}
+// still reads: one resident named "resident" in a household of their own, with one car near home when `car` is true.
 struct CityResident {
-    bool present = false;
+    std::string name;
     std::string home;
     std::string intent;
-    bool car = true;
     std::vector<std::string> traits;
     struct Stop {
         std::string at;
         double minutes = 0;
     };
     std::vector<Stop> day;
+};
+
+// A HOUSEHOLD (ADR-0443; docs/agent-brain-design.md section 12): the residents who live together and the cars they
+// share. Nobody is assigned a car: whoever reaches one first takes it, and it stays where its last driver left it.
+// Each car states the marker it starts near (`near`: the nearest free kerb space to that marker on foot) and may name
+// the space itself as the road model names it (`space`: "s19 along 3", looked for among the spaces near that marker).
+//   "households": [{"name": "east", "members": ["ana", "ben"], "cars": [{"near": "home"}]}, ...]
+struct CityHousehold {
+    std::string name;
+    std::vector<std::string> members;
+    struct Car {
+        std::string near;
+        std::string space;
+    };
+    std::vector<Car> cars;
 };
 
 struct CitySimConfig {
@@ -1163,10 +1181,12 @@ struct CitySimConfig {
     // this point, their car parked outside it. Empty: wherever the population put them.
     std::vector<double> homeNear;
     // MARKERS AND THE RESIDENT WITH THE AGENT BRAIN (ADR-0441). `"markers"`: a list, or the name of a file beside the
-    // level holding {"markers": [...]} (so two levels on the same roads share one list). `"resident"`: one person
-    // driven by the brain. Neither changes a lot, so neither is part of the lots' bake key (lots_producer.cpp).
+    // level holding {"markers": [...]} (so two levels on the same roads share one list). `"residents"` and
+    // `"households"`: the people driven by the brain and the cars they share (ADR-0443; the older `"resident"` reads as
+    // one of each). None changes a lot, so none is part of the lots' bake key (lots_producer.cpp).
     std::vector<CityMarker> markers;
-    CityResident resident;
+    std::vector<CityResident> residents;
+    std::vector<CityHousehold> households;
     bool ambientBus = false;             // a test lab's ambient rotation includes the bus body (wheel_lab)
                                          // (no schedule) — the lab car keeps lapping
     // Scripted goal tables (ADR-0064): the loaded TEXT of the level's

@@ -1,9 +1,9 @@
 #ifndef RAYTRACER_APPS_CITYSIM_CITY_BRAIN_H
 #define RAYTRACER_APPS_CITYSIM_CITY_BRAIN_H
 
-// THE RESIDENT WITH THE AGENT BRAIN (docs/agent-brain-design.md section 9; ADR-0441): the city sim's side of the brain
-// library (brain/). On a level that states MARKERS (named points beside streets, components.h CityMarker) and one
-// RESIDENT (CityResident), one person is driven by the brain's machine: they want to be at a marker, plan the trip with
+// THE RESIDENTS WITH THE AGENT BRAIN (docs/agent-brain-design.md sections 7, 9 and 12; ADR-0441, ADR-0443): the city
+// sim's side of the brain library (brain/). On a level that states MARKERS (named points beside streets, components.h
+// CityMarker) and RESIDENTS (CityResident), each is driven by the brain's machine: they want to be at a marker, plan the trip with
 // the trip planner (walk, car, skateboard, as travel.lua's rows and their traits allow), and carry it out with the
 // sim's own walking and the new driving.
 //
@@ -35,8 +35,25 @@
 // THE RESIDENT IS THE BRAIN'S (ADR-0442): their sim agent is marked `brainOwned`, and the sim's day table never places
 // them (CitySim::placeFromSchedule). Nothing here repairs where they are.
 //
+// SEVERAL RESIDENTS, HOUSEHOLDS AND CARS (ADR-0443; design sections 7 and 12). The level states a list of residents
+// (each: a name, a home marker, traits, a day) and a list of households (each: its members and the cars they share).
+// Nobody is assigned a car: a plan prices a car of the household only if it is free at that moment, from where it
+// stands at that moment; whoever reaches it first takes it, and the others are told `vehicle_gone` at the kerb and
+// plan again without it. A car stays where its last driver left it. Each person has a spot of their own at every
+// marker (kStandApart along the sidewalk from the next person's), so two people at one marker do not stand in each
+// other.
+//
+// SOMEBODY ELSE AND THE HOUSEHOLD'S CAR (ADR-0443). An OUTSIDER is anyone the brain does not own: the player, or a
+// walker a director has taken over. The sim tells this class when an outsider gets into a household's car
+// (CitySim::boardVehicle), gets out of one (alightVehicle), or when the player takes a car with its driver in it
+// (ejectDriver). While an outsider has a car it is not free and stands nowhere a resident could take it from. Its
+// driver, if it had one, is stood on the kerb side and told `vehicle_gone`. Left again, it stands where it was left:
+// in a kerb space when it is in one, otherwise at a point, put into the kerb lane beside that point so it can be
+// driven away. A DIRECTOR HOLDING ONE OF THE BRAIN'S PEOPLE (the possession channel) is the brain's `possessed` state.
+//
 // INTERIM, said plainly: the car slides sideways between its space and the lane (real pulling out and parking come
-// with lane changes); one resident and one car; nothing here is saved.
+// with lane changes); a car the player leaves at a point is drawn where it was left and driven from the kerb lane
+// beside it; nothing here is saved.
 //
 // Same result every run: nothing reads the wall clock, and the machine answers events in a fixed order.
 
@@ -53,6 +70,7 @@
 namespace engine {
 struct CityMarker;
 struct CityResident;
+struct CityHousehold;
 }  // namespace engine
 
 namespace citysim {
@@ -87,6 +105,16 @@ constexpr Real kWalkArrivedWithin = 0.3;
 // the sidewalk) both have a post on that diagonal well to one side.
 constexpr Real kMarkerRingRadius = 0.7;
 constexpr Real kMarkerPostOffset = 2.0;
+// EACH PERSON'S OWN SPOT AT A MARKER (ADR-0443): this far along the sidewalk from the next person's (a little over a
+// pair of shoulders), to one side and the other in turn: the first resident on the marker's own spot, the second
+// kStandApart one way along the street, the third as far the other way, and so on.
+constexpr Real kStandApart = 0.9;
+// A CAR SOMEBODY ELSE LEFT IS "IN" A KERB SPACE when its middle is within this of where a car in that space stands
+// (half a space's width: its body is then mostly inside the painted bay).
+constexpr Real kLeftInSpaceWithin = 1.25;
+// ...and is ON THE ROAD, to be driven away from the kerb lane beside it, when its middle is no farther than this
+// beyond the kerb line (a wheel on the kerb still counts; a car in a field does not).
+constexpr Real kLeftOnRoadWithin = 1.0;
 
 // ONE MARKER, resolved against the road model.
 struct BrainMarker {
@@ -109,6 +137,19 @@ struct CityBrainCounts {
     uint32_t walksBegun = 0, walksArrived = 0, walksBlocked = 0;
     uint32_t nextSpaces = 0;       // times a taken space was answered with another
     uint32_t redirected = 0;       // times a trip under way (or about to set off) was given a new end
+    // ADR-0443: somebody the brain does not own and a household's car
+    uint32_t takenStanding = 0;    // times an outsider got into a household's car that stood empty
+    uint32_t takenDriven = 0;      // times the player took one with its driver in it
+    uint32_t leftAgain = 0;        // times an outsider left one somewhere
+    uint32_t putOut = 0;           // drivers stood on the kerb side because their car was taken
+    uint32_t held = 0, letGo = 0;  // times a director took one of the brain's people over, and let them go
+};
+
+// WHO HAS A HOUSEHOLD'S CAR, for a test and for the screen.
+enum class CarHolder : uint8_t {
+    Nobody,     // free: it stands where it was left
+    Resident,   // one of the brain's people
+    Outsider,   // the player, or a walker a director took over
 };
 
 // One leg of the plan, for drawing.
@@ -126,52 +167,98 @@ public:
     CityBrain(const CityBrain&) = delete;
     CityBrain& operator=(const CityBrain&) = delete;
 
-    // Reads travel.lua and brain.lua, resolves the markers, makes the resident and their car. False, with the reason
-    // in `report`: nothing is left behind. On success `report` says what was set up.
-    bool start(const std::vector<engine::CityMarker>& markers, const engine::CityResident& resident,
-               const std::vector<int>& classOfSlot, std::string* report);
-    // One tick, after the driving's: reports in, skills stepped, the machine ticked, the day table.
+    // Reads travel.lua and brain.lua, resolves the markers, makes the residents and their households' cars. False, with
+    // the reason in `report`: nothing is left behind. On success `report` says what was set up.
+    bool start(const std::vector<engine::CityMarker>& markers, const std::vector<engine::CityResident>& residents,
+               const std::vector<engine::CityHousehold>& households, const std::vector<int>& classOfSlot,
+               std::string* report);
+    // One tick, after the driving's: reports in, skills stepped, the machine ticked, the day tables.
     void tick(Real dt);
 
     const std::vector<BrainMarker>& markers() const;
     int markerNamed(const std::string& name) const;   // -1: none
-    bool hasResident() const;
-    int residentAgent() const;     // the sim's agent index (-1: none)
-    int residentVehicle() const;   // the sim's vehicle index of their car (-1: none)
 
-    // `brain?`: the machine's line for the resident, with each place it names said in words.
-    std::string describe() const;
-    // The resident's plan as "walk>space s75 along 3, car>space s223 against 2, walk>work", and the name of the state
+    // THE RESIDENTS, numbered in the order the level lists them (`who`; the first is 0, which is what every call
+    // below means when it is given none).
+    int residentCount() const;
+    bool hasResident() const { return residentCount() > 0; }
+    // A resident by name, or by number written as text ("2"). -1: none.
+    int residentNamed(const std::string& nameOrNumber) const;
+    std::string residentName(int who) const;
+    std::string householdName(int who) const;
+    // The members of `who`'s household, themselves included, in the order the level lists them.
+    std::vector<int> householdOf(int who) const;
+    int residentAgent(int who = 0) const;     // the sim's agent index (-1: none)
+    int residentOfAgent(int agent) const;     // which resident a sim agent is (-1: none of them)
+    // The sim's vehicle index of the car `who` would plan with now: one of their household's (-1: it has none).
+    int residentVehicle(int who = 0) const;
+    // Every household car, as the sim's vehicle index, in the order they were made.
+    std::vector<int> cars() const;
+    // Whose household a car is (the members), who has it now, and one line about it for the screen.
+    std::vector<int> membersOfCar(int vehicle) const;
+    CarHolder carHolder(int vehicle) const;
+    std::string describeCar(int vehicle) const;
+
+    // `brain? <who>`: the machine's line for a resident, with each place it names said in words.
+    std::string describe(int who = 0) const;
+    // A resident's plan as "walk>space s75 along 3, car>space s223 against 2, walk>work", and the name of the state
     // they are in.
-    std::string planText() const;
-    std::string stateName() const;
+    std::string planText(int who = 0) const;
+    std::string stateName(int who = 0) const;
     // What they are said to be doing, on screen: the state's display name from the data (brain.lua `label`).
-    std::string stateLabel() const;
-    // The name of the marker they stand at (within kWalkArrivedWithin of where a person at it stands); empty: none, or
-    // they are in a car.
-    std::string standingAt() const;
-    // Every state the resident entered, as "indoors@0 walking@1500 ..." (milliseconds).
-    std::string traceText() const;
-    const std::vector<brain::Transition>& trace() const;
+    std::string stateLabel(int who = 0) const;
+    // The name of the marker they stand at (within kWalkArrivedWithin of their own spot at it); empty: none, or they
+    // are in a car.
+    std::string standingAt(int who = 0) const;
+    // The marker they want to be at, as its place in markers() (-1: none).
+    int wantedMarker(int who = 0) const;
+    // Where `who` stands when they are at marker `marker`: their own spot (kStandApart).
+    Vec2 standSpot(int who, int marker) const;
+    // Why their last plan was chosen ("walk 9.3 min, car 7.2 min (...): car"), or why there was none ("no way there
+    // (...)"). Empty: they have not planned yet.
+    std::string planReason(int who = 0) const;
+    // Every state a resident entered, as "indoors@0 walking@1500 ..." (milliseconds).
+    std::string traceText(int who = 0) const;
+    const std::vector<brain::Transition>& trace(int who = 0) const;
     const brain::Machine* machine() const;
     const CityBrainCounts& counts() const;
     brain::BrainTime now() const;
-    std::vector<BrainPlanLeg> planLegs() const;
+    std::vector<BrainPlanLeg> planLegs(int who = 0) const;
 
-    // `goto <marker>`: the resident wants to be there from now. It stops the day table (setDay(true) starts it again).
-    bool goTo(const std::string& marker, std::string* why);
-    // `brain trait <name> on|off`: give or take a travel.lua trait (a board). It is used from their next plan.
-    bool setTrait(const std::string& name, bool on, std::string* why);
+    // `goto <who> <marker>`: the resident wants to be there from now. It stops their day table (setDay starts it again).
+    bool goTo(int who, const std::string& marker, std::string* why);
+    bool goTo(const std::string& marker, std::string* why) { return goTo(0, marker, why); }
+    // `brain trait <who> <name> on|off`: give or take a travel.lua trait (a board). It is used from their next plan,
+    // and a person standing with no way there plans again at once.
+    bool setTrait(int who, const std::string& name, bool on, std::string* why);
+    bool setTrait(const std::string& name, bool on, std::string* why) { return setTrait(0, name, on, why); }
+    // The day tables: everybody's, or one person's.
     void setDay(bool on);
-    bool dayOn() const;
+    void setDay(int who, bool on);
+    bool dayOn(int who = 0) const;
 
-    // The kerb space the resident's car stands in (not valid: it is on the road, or left in a lane), and its name.
-    engine::KerbSpace carSpace() const;
-    std::string carSpaceName() const;
-    // The space held for the resident (not valid: none).
-    engine::KerbSpace heldSpace() const;
+    // The kerb space the car `who` would plan with stands in (not valid: it is on the road, left at a point, or an
+    // outsider has it), and its name.
+    engine::KerbSpace carSpace(int who = 0) const;
+    std::string carSpaceName(int who = 0) const;
+    // The space held for a resident (not valid: none).
+    engine::KerbSpace heldSpace(int who = 0) const;
+    // ARE THE HOLDS SOUND (ADR-0443)? No two people hold one space; nobody holds a space another car stands in; a
+    // person with no vehicle leg left in their plan holds none. False, with the fault in `why`.
+    bool holdsSound(std::string* why) const;
     // TEST SUPPORT: another car is put in `space` (as far as the table of spaces knows; nothing is drawn).
     void occupyForTest(const engine::KerbSpace& space);
+
+    // SOMEBODY THE BRAIN DOES NOT OWN (ADR-0443). The sim calls these (CitySim::brainNote...): `agent` got into
+    // `vehicle`; got out of it, leaving it where it stands; or the player took it with `agent` at its wheel.
+    void noteBoarded(int agent, int vehicle);
+    void noteAlighted(int agent, int vehicle);
+    void noteEjected(int agent, int vehicle);
+    // The player's own copy of a household's car (the physical one ejectDriver's caller made) is handed back: the car
+    // stands at `pos`, pointing along `heading`, free. False: `vehicle` is no household car an outsider has.
+    bool carLeftAt(int vehicle, Vec2 pos, Vec2 heading);
+    // A director takes the sim agent `agent` over, or lets them go. False: the brain does not own that agent.
+    bool directorHolds(int agent, bool on);
 
 private:
     struct Impl;

@@ -589,6 +589,105 @@ TEST_CASE(brain_trip_a_car_that_cannot_set_off_is_given_up_as_blocked_after_its_
     }
 }
 
+// A WALK THAT CANNOT REACH ITS END, AND A PERSON WITH NO WAY THERE (ADR-0443). The stand-in walking has a gap in the
+// pavements at one x: a leg by a way the gap stops, whose ends lie on either side of it, cannot be begun, which the
+// walking state reports as `blocked`.
+TEST_CASE(brain_trip_a_blocked_walk_goes_another_way_and_no_way_there_tries_again) {
+    // ANOTHER WAY: with a board, 500 m is a board's leg (180 s). The board cannot pass 250 m; the feet can. The board is
+    // ruled out and the trip walked, 360 s.
+    {
+        Lab lab;
+        CHECK(lab.ok);
+        if (!lab.ok) return;
+        const PlaceRef home = lab.door(0), shop = lab.door(500);
+        const AgentId who = lab.person(home, kHasBoard, CarRef(), Detail::Near);
+        lab.walk->gapAt = 250;
+        lab.walk->gapWays = 1u << kSkateboard;
+        lab.machine->setIntent(who, 0, shop);
+        lab.tick();
+        CHECK(lab.planOf(who) == "walk>1");
+        CHECK(lab.machine->agent(who).ruledOut == (1u << kSkateboard));
+        lab.runTo(400000);
+        CHECK(lab.traceOf(who) == "on_small_wheels@0 walking@0 indoors@360000");
+        CHECK(lab.machine->counts().plans == 2u && lab.machine->counts().noPlans == 0u && lab.walk->refusedAtGap == 1);
+    }
+    // NO WAY THERE: no board, and nobody passes 250 m. They stand with the reason kept, and try again every 60 s (the
+    // data's `seconds`) with every way allowed again; when the gap is mended at 150 s the try at 180 s walks, 360 s.
+    {
+        Lab lab;
+        if (!lab.ok) return;
+        const PlaceRef home = lab.door(0), shop = lab.door(500);
+        const AgentId who = lab.person(home, 0, CarRef(), Detail::Near);
+        lab.walk->gapAt = 250;
+        lab.machine->setIntent(who, 0, shop);
+        lab.tick();
+        const AgentBrain& a = lab.machine->agent(who);
+        CHECK(lab.stateName(who) == "no_way" && a.legCount == 0 && a.stateEntered == 0u && a.stateDue == 60000u);
+        CHECK(a.ruledOut == (1u << kWalk));
+        CHECK(lab.planner->lastError() ==
+              "no way there (walk -- ruled out (a leg of it could not be done), car -- no car: no way there)");
+        CHECK(lab.machine->nextAttention(who) == 60000u);   // a host with a clock queue wakes them then
+        CHECK(lab.machine->describe(who) ==
+              "agent 0: wants be_at place 1 since 0.0 s | plan: none | no_way since 0.0 s, due 60.0 s, waiting for the "
+              "clock (try_again) | near");
+        lab.runTo(150000);
+        CHECK(lab.traceOf(who) == "walking@0 no_way@0 walking@60000 no_way@60000 walking@120000 no_way@120000");
+        CHECK(lab.machine->counts().noPlans == 3u && lab.machine->counts().plans == 3u && a.stateDue == 180000u);
+        lab.walk->gapAt = -1;   // mended
+        lab.runTo(600000);
+        CHECK(lab.traceOf(who) ==
+              "walking@0 no_way@0 walking@60000 no_way@60000 walking@120000 no_way@120000 walking@180000 indoors@540000");
+        CHECK(lab.machine->counts().noPlans == 3u && lab.machine->counts().plans == 4u && lab.machine->counts().arrivals == 1u);
+        CHECK(lab.machine->counts().refused == 0u && lab.machine->counts().errors == 0u);
+    }
+    // SOMETHING CHANGES, AND THEY DO NOT WAIT THE MINUTE: given a board at 20 s (the gap stops feet only), they are on
+    // it at once: 500 m, 180 s
+    {
+        Lab lab;
+        if (!lab.ok) return;
+        const PlaceRef home = lab.door(0), shop = lab.door(500);
+        const AgentId who = lab.person(home, 0, CarRef(), Detail::Near);
+        lab.walk->gapAt = 250;
+        lab.walk->gapWays = 1u << kWalk;
+        lab.machine->setIntent(who, 0, shop);
+        lab.tick();
+        CHECK(lab.stateName(who) == "no_way");
+        lab.runTo(19500);
+        lab.machine->setTraits(who, kHasBoard);
+        lab.runTo(300000);
+        CHECK(lab.traceOf(who) == "walking@0 no_way@0 on_small_wheels@20000 indoors@200000");
+        CHECK(lab.machine->counts().noPlans == 1u);
+    }
+    // ...AND WHEN THE HOUSEHOLD'S CAR BECOMES FREE. The usual scene, the feet stopped at 700 m (between the car at 100 m
+    // and the far space at 1300 m), and someone else has the car: no way. At 30 s they give the car up and the person
+    // is told: walk to the car (72 s), drive (60 + 150 + 90 s), walk to the door (144 s).
+    {
+        Scene s(Detail::Near);
+        if (!s.lab.ok) return;
+        const AgentId other = s.lab.person(s.lab.door(100), 0, s.car, Detail::Near);
+        CHECK(s.lab.world.claimCar(s.car, other));
+        s.lab.walk->gapAt = 700;
+        s.lab.walk->gapWays = 1u << kWalk;
+        s.setOut();
+        CHECK(s.lab.stateName(s.who) == "no_way" && s.lab.traceOf(s.who) == "walking@0 no_way@0");
+        CHECK(s.lab.planner->lastError() ==
+              "no way there (walk -- ruled out (a leg of it could not be done), car -- the car is in use: no way there)");
+        s.lab.runTo(29500);
+        s.lab.world.releaseCar(s.car, other);
+        s.lab.machine->notifyChanged(s.who);
+        s.lab.runTo(40000);
+        CHECK(s.lab.planOf(s.who) == "walk>2 car>3 walk>1" && s.lab.stateName(s.who) == "walking");
+        // (told again while walking: a trip under way is not planned again for it)
+        const uint64_t plans = s.lab.machine->counts().plans;
+        s.lab.machine->notifyChanged(s.who);
+        s.lab.runTo(600000);
+        CHECK(s.lab.machine->counts().plans == plans);
+        CHECK(s.lab.traceOf(s.who) ==
+              "walking@0 no_way@0 walking@30000 pulling_out@102000 driving@162000 parking@312000 walking@402000 indoors@546000");
+        CHECK(s.lab.machine->counts().refused == 0u && s.lab.machine->counts().errors == 0u);
+    }
+}
+
 TEST_CASE(brain_trip_a_new_intent_on_foot_is_acted_on_at_once) {
     // back home from 100 m out, 72 s
     Lab lab;

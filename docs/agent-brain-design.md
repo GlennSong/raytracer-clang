@@ -222,6 +222,25 @@ the trip in the viewer and takes the pictures, from behind and, where it matters
 | 6. is there | yes | stands at the marker (the intent `be_outside_at`) |
 | inspectable | by a verb, not by selecting | `brain?` gives one line; the screen shows what they want, the plan, and what they are doing in the data's words with the marker they stand at |
 
+**Since ADR-0443 (2026-11-16) the lab has six residents in three households**, and sections 7 and 12 are built on
+it: see "Built: several residents, a shared car, interruptions" after section 12. The table above is still how one
+of them makes one trip; "inspectable" is now also by looking (the resident or household car in the middle of the
+view has its line shown).
+
+To watch it:
+
+```
+cd /home/glennsong/Projects/raytracer-clang/.claude/worktrees/buildings
+cmake --build build-viewer --target viewer
+./build-viewer/viewer assets/levels/brain_lab.json --play
+```
+
+Console (`<who>` is a resident's name or number; with none, the followed resident): `residents?`, `brain? ana`,
+`brain follow` (the next resident), `brain follow ben`, `brain follow off`, `brain day all off`, `goto ana work`,
+`goto ben ramp`, `brain trait ana has_board on`, `markers?`, `sim speed 8`. A director: `possess walker <x> <z>`,
+`walk_to <x> <z>`, `board`, `alight`, `release`. The player: look at the driver's seat of a car with its driver in
+it (Tab moves the focus) and press E.
+
 Where the build differs from this section, or this page did not say:
 
 1. **A marker, not a building's door.** Nothing here reads a lot or a door. When the lot pass records each
@@ -316,6 +335,42 @@ parked.
   has. So "skate to the stop, take the bus, walk to the door" comes out of the pricing with no special rule.
 - A bike is different: it is a real thing that is left where it is parked, like a car. It comes later.
 
+### Built: several residents, a shared car, interruptions (ADR-0443, 2026-11-16)
+
+On `brain_lab`: ana and ben (household `east`, one car at `home`); cat, dan with a skateboard and eve (`trio`, one
+car at `west`); fay (`solo`, no car, a scooter, at `shop`). The level states them as two lists, `residents` and
+`households`. Tests: `tests/test_brain_lab.cpp` (five new cases) and `tests/test_brain_trip.cpp`.
+
+| From sections 7 and 12 | Built | How |
+|---|---|---|
+| A household shares its car; whoever reaches it first takes it | yes | a plan prices the car only if it is free then, from where it stands then; at the kerb the pulling-out state asks again and raises `vehicle_gone`; the car stays where it was parked |
+| Parking spaces held from the plan, right with several cars | yes | one hold a person; dropped on planning again, a redirect, parking, and the car being taken; a check of the holds runs every tick of the tests |
+| The player takes a parked car | yes, through the possession channel's `board` | it is not free and stands nowhere; a later plan does not price it; a person walking to it gets `vehicle_gone` at the kerb |
+| The player takes a car while a resident drives it | yes, through the real key | the driver is stood on the kerb side, told `vehicle_gone`, the trip ended and the car off the driving's road; they plan again on foot |
+| The player leaves the car somewhere | on the brain's side, and through `alight`; NOT from a car taken with the key | in a kerb space if it is in one; else at a point, put into the kerb lane beside it; in a field, nobody plans with it |
+| The player possesses a resident | yes (`possess walker`, `release`) | the `possessed` state; on release they plan again from where they stand, with the intent they had |
+| Blocked; no possible plan | yes | `blocked` rules that way out and plans again; with no way left, the state `no_way`: tries again every 60 s (data) and at once when a trait or the household's car changes |
+
+Where the build differs from sections 7 and 12, or they did not say:
+
+1. **"First to reach it" is decided by where each person happens to stand.** In the lab ben, told a second after
+   ana, takes the car because his spot at the marker is 0.9 m nearer it. Ana walks four seconds to a car she
+   could see being taken.
+2. **Nobody is told while walking to the car** that it has gone: only at the kerb, as section 12 says. A person
+   ten minutes from the car finds out on arriving. To be decided: tell them at once.
+3. **The player's own car cannot be given back.** Taking a driven car with the key makes a physical car of the
+   player's and puts the sim's copy away for good; the engine cannot turn it back. So "the player leaves it
+   somewhere" works for a car taken through the possession channel, and for a car handed back by a call
+   (`CityBrain::carLeftAt`), and not for the player stepping out of a car they took with the key.
+4. **A car left at a point stands in a live lane** as far as the driving knows, and is drawn wherever it was
+   left. With no lane changes the traffic behind it waits.
+5. **`no_way` forgets what failed**: trying again allows every way again, so a person whose walk is blocked sets
+   out on the same walk each minute. Section 7 does not say when a ruled-out way is forgiven.
+6. **A long walk begun beside the car starts on the far pavement.** The sim's own walking puts a routed walker on
+   its path at once, which may be across the street. Seen when ana, finding the car gone, set off on foot.
+7. **Two brain cars on the road at once were not seen.** In the tests and the pictures one household car drives
+   at a time. The lab's day tables will make two meet; nothing is known yet about how.
+
 ## 13. Still open
 
 - Group activities are joined by several people at once; whether the group or each person holds the state
@@ -383,3 +438,13 @@ the traffic lab's markers, its car and the clock, and the lab resident.)
 11. **The planner's fixed "way to the car" (`access`) is now optional**, and the shipped car row no longer
     sets it: a vehicle is reached and left by the cheapest way on foot the person has (section 12). A table
     that sets it still gets it.
+12. **"No plan" is a state of its own, and it ends** (ADR-0443). Section 5's table has no state for "wants to be
+    somewhere and has no way there"; the build had used `standing`, for ever. Now `no_way`, which the clock ends
+    after the data's `seconds`, and which `things_changed` ends at once. Two things the machine gained for it, both
+    general: a state's own time in the data (`seconds`), and the verb `replan_afresh` (plan again with every
+    ruled-out way allowed).
+13. **Which car a person plans with is the world's answer, not the record's** (ADR-0443): the record holds one
+    car handle and stays 120 bytes; each time they plan, the world names the household car they would take. Two
+    cars in one household are answered and not yet tested.
+14. **A place can be "this marker, this person's spot"** (ADR-0443): the handle of a marker carries whose spot is
+    meant, so two people at one marker stand 0.9 m apart. The brain still only stores and hands back the handle.

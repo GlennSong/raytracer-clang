@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "brain_lab",
-  "_comment": "THE BRAIN LAB (ADR-0441; docs/agent-brain-design.md section 9): the traffic lab's roads and markers (assets/lanelab/planned/traffic_lab_lanelab.json, markers/traffic_lab.json) with ONE resident driven by the agent brain and no other traffic. They live at the marker `home`, their car in the kerb space nearest it, and go round work, shop and home, staying a minute at each. Tell them where to be with `goto <marker>`; `brain?` says what they want, their plan and what they are doing; `brain trait has_board on` gives them a skateboard. For background traffic raise `cars` (they take the role lab_driver and drive round for ever, as on traffic_lab).",
+  "_comment": "THE BRAIN LAB (ADR-0441; docs/agent-brain-design.md section 9): the traffic lab's roads and markers (assets/lanelab/planned/traffic_lab_lanelab.json, markers/traffic_lab.json) with SIX residents driven by the agent brain, in three households, and no other traffic (ADR-0443). Household `east`: ana and ben live at the marker `home` and share one car, in the kerb space nearest it. Household `trio`: cat, dan (who has a skateboard) and eve live at `west` and share one car. Household `solo`: fay lives at `shop`, has no car and has a scooter. Nobody is assigned a car: whoever reaches it first takes it, and it stays where its last driver left it. Each has a day (the markers they go round, a minute or so at each), and the days of a household start within seconds of each other, so its members contend for the car. `pedestrians` is 7: the six residents and one bystander for `possess walker`. Tell a resident where to be with `goto <who> <marker>`; `brain? <who>` says what they want, their plan and what they are doing; `brain follow` puts the camera on the next one; `brain trait <who> has_board on` gives one a skateboard; `brain day all off` stops every day. For background traffic raise `cars` (they take the role lab_driver and drive round for ever, as on traffic_lab).",
   "entities": [
     {
       "id": 1,
@@ -65,7 +65,7 @@
     "fleet": "fleet_lab",
     "ambientBus": false,
     "cars": 0,
-    "pedestrians": 1,
+    "pedestrians": 7,
     "wander": false,
     "buildLots": false,
     "buses": 0,
@@ -81,17 +81,25 @@
     "driving": "v2",
     "drivingRules": "rules/lab.lua",
     "markers": "markers/traffic_lab.json",
-    "resident": {
-      "home": "home",
-      "intent": "be_outside_at",
-      "car": true,
-      "traits": [],
-      "day": [
-        { "at": "work", "minutes": 1.0 },
-        { "at": "shop", "minutes": 1.0 },
-        { "at": "home", "minutes": 0.5 }
-      ]
-    }
+    "residents": [
+      { "name": "ana", "home": "home", "intent": "be_outside_at", "traits": [],
+        "day": [ { "at": "work", "minutes": 1.0 }, { "at": "home", "minutes": 1.0 } ] },
+      { "name": "ben", "home": "home", "intent": "be_outside_at", "traits": [],
+        "day": [ { "at": "ramp", "minutes": 1.0 }, { "at": "home", "minutes": 1.05 } ] },
+      { "name": "cat", "home": "west", "intent": "be_outside_at", "traits": [],
+        "day": [ { "at": "far", "minutes": 1.0 }, { "at": "west", "minutes": 1.0 } ] },
+      { "name": "dan", "home": "west", "intent": "be_outside_at", "traits": [ "has_board" ],
+        "day": [ { "at": "shop", "minutes": 1.0 }, { "at": "west", "minutes": 1.05 } ] },
+      { "name": "eve", "home": "west", "intent": "be_outside_at", "traits": [],
+        "day": [ { "at": "south", "minutes": 1.0 }, { "at": "west", "minutes": 1.1 } ] },
+      { "name": "fay", "home": "shop", "intent": "be_outside_at", "traits": [ "has_scooter" ],
+        "day": [ { "at": "home", "minutes": 1.0 }, { "at": "shop", "minutes": 0.5 } ] }
+    ],
+    "households": [
+      { "name": "east", "members": [ "ana", "ben" ], "cars": [ { "near": "home" } ] },
+      { "name": "trio", "members": [ "cat", "dan", "eve" ], "cars": [ { "near": "west" } ] },
+      { "name": "solo", "members": [ "fay" ], "cars": [] }
+    ]
   },
   "dayNight": {
     "dayMinutes": 1440.0,

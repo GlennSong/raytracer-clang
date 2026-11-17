@@ -103,6 +103,9 @@ public:
         if (citysimKey.is_object()) {
             citysimKey.erase("markers");
             citysimKey.erase("resident");
+            // (ADR-0443: several residents and the households whose cars they share, read at load like the one)
+            citysimKey.erase("residents");
+            citysimKey.erase("households");
         }
         k = bundle::fnv1aStr(citysimKey.dump(), k);
         // The ground the lots stand on: the terrain and water blocks, and the cell it is drawn at -- the terrain

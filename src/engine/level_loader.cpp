@@ -198,27 +198,67 @@ static void readCityMarkers(const json& cs, const std::string& levelPath, CitySi
             }
             cfg.markers.push_back(m);
         }
-    if (cs.contains("resident") && cs["resident"].is_object()) {
-        const json& r = cs["resident"];
-        cfg.resident.present = true;
-        cfg.resident.home = r.value("home", std::string());
-        cfg.resident.intent = r.value("intent", std::string());
-        cfg.resident.car = r.value("car", true);
+    // ONE RESIDENT, as a row of `residents` or as the older single `resident`.
+    const auto readResident = [](const json& r, const std::string& at) {
+        CityResident out;
+        out.name = r.value("name", std::string());
+        out.home = r.value("home", std::string());
+        out.intent = r.value("intent", std::string());
         if (r.contains("traits") && r["traits"].is_array())
             for (const json& t : r["traits"])
-                if (t.is_string()) cfg.resident.traits.push_back(t.get<std::string>());
+                if (t.is_string()) out.traits.push_back(t.get<std::string>());
         if (r.contains("day") && r["day"].is_array())
             for (const json& stop : r["day"]) {
                 if (!stop.is_object() || !stop.contains("at") || !stop["at"].is_string()) {
-                    LOG_WARN << "citysim.resident.day: a stop needs \"at\": a marker's name -- left out";
+                    LOG_WARN << at << ".day: a stop needs \"at\": a marker's name -- left out";
                     continue;
                 }
                 CityResident::Stop s;
                 s.at = stop["at"].get<std::string>();
                 s.minutes = stop.value("minutes", 0.0);
-                cfg.resident.day.push_back(s);
+                out.day.push_back(s);
             }
+        return out;
+    };
+    if (cs.contains("resident") && cs["resident"].is_object()) {
+        // the older form: one person in a household of their own, with one car near home unless "car" is false
+        const json& r = cs["resident"];
+        CityResident one = readResident(r, "citysim.resident");
+        if (one.name.empty()) one.name = "resident";
+        CityHousehold own;
+        own.name = one.name;
+        own.members.push_back(one.name);
+        if (r.value("car", true)) own.cars.push_back(CityHousehold::Car{one.home, std::string()});
+        cfg.residents.push_back(one);
+        cfg.households.push_back(own);
     }
+    if (cs.contains("residents") && cs["residents"].is_array())
+        for (const json& r : cs["residents"]) {
+            const std::string at = "citysim.residents[" + std::to_string(cfg.residents.size()) + "]";
+            if (!r.is_object() || !r.contains("name") || !r["name"].is_string() || r["name"].get<std::string>().empty()) {
+                LOG_WARN << at << ": a resident needs a \"name\" -- left out";
+                continue;
+            }
+            cfg.residents.push_back(readResident(r, at));
+        }
+    if (cs.contains("households") && cs["households"].is_array())
+        for (const json& h : cs["households"]) {
+            if (!h.is_object()) continue;
+            CityHousehold out;
+            out.name = h.value("name", std::string());
+            if (h.contains("members") && h["members"].is_array())
+                for (const json& m : h["members"])
+                    if (m.is_string()) out.members.push_back(m.get<std::string>());
+            if (h.contains("cars") && h["cars"].is_array())
+                for (const json& c : h["cars"]) {
+                    if (!c.is_object() || !c.contains("near") || !c["near"].is_string()) {
+                        LOG_WARN << "citysim.households: a car needs \"near\": the marker it starts beside -- left out";
+                        continue;
+                    }
+                    out.cars.push_back(CityHousehold::Car{c["near"].get<std::string>(), c.value("space", std::string())});
+                }
+            cfg.households.push_back(out);
+        }
 }
 
 

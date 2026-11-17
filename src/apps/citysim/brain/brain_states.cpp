@@ -175,6 +175,9 @@ void registerBehaviours(BehaviourSet& set) {
     const StateFns waits{};
     set.add("indoors", waits);
     set.add("standing", waits);
+    // wanting to be somewhere with no way there (ADR-0443): the data says how long they wait before trying again
+    // (`seconds`) and what makes them try sooner
+    set.add("no_way", waits);
     set.add("possessed", waits);
     set.add("knocked_down", waits);
     set.add("stuck", waits);

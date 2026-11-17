@@ -258,9 +258,9 @@ struct CarWatch {
 };
 
 // The states in the order they were entered, as "standing walking ...".
-std::string stateNames(const citysim::CityBrain& b) {
+std::string stateNames(const citysim::CityBrain& b, int who = 0) {
     std::string s;
-    for (const citysim::brain::Transition& t : b.trace())
+    for (const citysim::brain::Transition& t : b.trace(who))
         s += (s.empty() ? "" : " ") + b.machine()->table().states[t.state].name;
     return s;
 }
@@ -277,28 +277,48 @@ struct Run {
     CarWatch watch;
     Vec2 carStart;
     int ticks = 0;
-    std::string logged;
+    std::vector<std::string> logged;
     bool log = std::getenv("RT_BRAIN_LAB_LOG") != nullptr;
+    // HOLDS ON KERB SPACES, looked at every tick (ADR-0443; CityBrain::holdsSound): how many ticks found a fault, and
+    // the first one found.
+    int holdFaults = 0;
+    std::string firstHoldFault;
 
+    // The level's SIX residents (ADR-0443), every day table switched off: a case says who goes where. The first
+    // resident (ana, number 0) and her household's car are what the one-resident cases below are about; the other
+    // five stand at home unless a case sends them.
     Run() : lc("brain_lab.json") {
         CHECK(lc.ok);
         if (!lc.ok) return;
         b = lc.city.simMutable().brain();
         CHECK(b != nullptr && b->hasResident());
         if (b && !b->hasResident()) b = nullptr;
-        if (b) carStart = lc.city.sim().vehicles()[static_cast<std::size_t>(b->residentVehicle())].pos;
+        if (!b) return;
+        b->setDay(false);
+        carStart = lc.city.sim().vehicles()[static_cast<std::size_t>(b->residentVehicle())].pos;
+        logged.resize(static_cast<std::size_t>(b->residentCount()));
     }
     const citysim::CitySim& sim() const { return lc.city.sim(); }
-    const citysim::Agent& person() const { return sim().agents()[static_cast<std::size_t>(b->residentAgent())]; }
-    const citysim::SimVehicle& car() const { return sim().vehicles()[static_cast<std::size_t>(b->residentVehicle())]; }
+    const citysim::Agent& person(int who = 0) const { return sim().agents()[static_cast<std::size_t>(b->residentAgent(who))]; }
+    const citysim::SimVehicle& car(int who = 0) const { return sim().vehicles()[static_cast<std::size_t>(b->residentVehicle(who))]; }
+    double seconds() const { return ticks * kStep; }
     void step() {
         lc.city.step(lc.world, kStep);
         ++ticks;
         watch.look(sim(), *b, carStart);
-        if (log && (b->stateName() != logged || ticks % (60 * 30) == 0)) {
-            logged = b->stateName();
-            std::printf("    [brain-lab] t=%.1f brain? %s\n", ticks * kStep, b->describe().c_str());
+        std::string why;
+        if (!b->holdsSound(&why)) {
+            if (holdFaults++ == 0) firstHoldFault = "t=" + std::to_string(seconds()) + " " + why;
         }
+        for (int who = 0; log && who < b->residentCount(); ++who)
+            if (b->stateName(who) != logged[static_cast<std::size_t>(who)] || ticks % (60 * 60) == 0) {
+                logged[static_cast<std::size_t>(who)] = b->stateName(who);
+                std::printf("    [brain-lab] t=%.1f brain? %s\n", seconds(), b->describe(who).c_str());
+            }
+    }
+    void run(double forSeconds) {
+        const int n = static_cast<int>(forSeconds / kStep + 0.5);
+        for (int i = 0; i < n; ++i) step();
     }
     // Steps until `done` says so; false when kLongestRun passes first.
     template <typename Done>
@@ -310,10 +330,10 @@ struct Run {
         return false;
     }
     // The resident is where they wanted to be, with nothing left to do.
-    bool there(const std::string& marker) const {
-        const citysim::brain::AgentBrain& a = b->machine()->agent(0);
-        return !a.travelling() && static_cast<int>(a.intentTarget) == b->markerNamed(marker) && b->stateName() == "standing" &&
-               b->trace().size() > 2;
+    bool there(const std::string& marker, int who = 0) const {
+        const citysim::brain::AgentBrain& a = b->machine()->agent(static_cast<citysim::brain::AgentId>(who));
+        return !a.travelling() && b->wantedMarker(who) == b->markerNamed(marker) && b->stateName(who) == "standing" &&
+               b->trace(who).size() > 2;
     }
     void printTrip(const char* what) const {
         std::printf("    [brain-lab] %s: plan \"%s\"\n    [brain-lab] states: %s\n", what, b->planText().c_str(), b->traceText().c_str());
@@ -681,4 +701,375 @@ TEST_CASE(level_traffic_lab_first_cars_stand_at_their_stop_lines) {
     // (every lab car is drawn at its class's length today, so the body as drawn is held too; a fleet slot drawn longer
     // than its class would put a drawn nose past the line and fail here, which is the fault to find)
     CHECK(sizesDiffer > 0u || drawnPastLine == 0u);
+}
+
+// ---- SEVERAL RESIDENTS, A SHARED HOUSEHOLD CAR, AND INTERRUPTIONS (ADR-0443; design sections 7 and 12) -----------------------
+//
+// The residents by number: 0 ana and 1 ben (household east, one car, at `home`); 2 cat, 3 dan (a board) and 4 eve
+// (household trio, one car, at `west`); 5 fay (household solo, no car, a scooter, at `shop`).
+
+namespace {
+constexpr int kAna = 0, kBen = 1, kCat = 2, kDan = 3, kEve = 4, kFay = 5;
+
+// The sim agent that is no resident: the level's seventh walker, for the possession channel to take over.
+int bystander(const Run& r) {
+    const std::vector<citysim::Agent>& agents = r.sim().agents();
+    for (std::size_t i = 0; i < agents.size(); ++i)
+        if (agents[i].mode == citysim::Agent::Mode::Pedestrian && r.b->residentOfAgent(static_cast<int>(i)) < 0) return static_cast<int>(i);
+    return -1;
+}
+// How far a point is from the centre line of the road nearest it, less that road's carriageway half width: above zero
+// is beyond the kerb line (on the sidewalk side), below is on the carriageway.
+Real beyondTheKerb(const engine::RoadModel& model, Vec2 at) {
+    const engine::RoadFrontage f = model.frontageAt(at);
+    return f.valid() ? f.distance - f.section->carriagewayHalfWidth() : Real(-1e9);
+}
+}  // namespace
+
+TEST_CASE(level_brain_lab_six_residents_in_three_households) {
+    Run r;
+    if (!r.b) return;
+    citysim::CityBrain& b = *r.b;
+    CHECK(b.residentCount() == 6);
+    if (b.residentCount() != 6) return;
+    const char* const names[6] = {"ana", "ben", "cat", "dan", "eve", "fay"};
+    const char* const houses[6] = {"east", "east", "trio", "trio", "trio", "solo"};
+    const char* const homes[6] = {"home", "home", "west", "west", "west", "shop"};
+    for (int who = 0; who < 6; ++who) {
+        CHECK(b.residentName(who) == names[who] && b.householdName(who) == houses[who]);
+        CHECK(b.residentNamed(names[who]) == who && b.residentNamed(std::to_string(who)) == who);
+        // each on their own spot at their home marker, standing outside, wanting to be there
+        CHECK(b.standingAt(who) == homes[who] && b.stateName(who) == "standing" && b.planText(who).empty());
+        CHECK(b.wantedMarker(who) == b.markerNamed(homes[who]));
+        CHECK((r.person(who).pos - b.standSpot(who, b.markerNamed(homes[who]))).length() <= kParkedWithin);
+        CHECK(r.person(who).brainOwned && b.residentOfAgent(b.residentAgent(who)) == who);
+    }
+    CHECK(b.residentNamed("zed") == -1 && b.residentNamed("6") == -1 && b.residentNamed("") == -1);
+    // NOBODY STANDS IN ANYBODY: every two residents are at least kStandApart apart, less a centimetre
+    for (int x = 0; x < 6; ++x)
+        for (int y = x + 1; y < 6; ++y)
+            CHECK((r.person(x).pos - r.person(y).pos).length() >= citysim::kStandApart - kParkedWithin);
+    // the first on the marker's own spot; the second kStandApart along the sidewalk from it
+    CHECK((b.standSpot(kAna, 0) - b.markers()[0].stand).length() <= kParkedWithin);
+    CHECK(approxEqual((b.standSpot(kBen, 0) - b.markers()[0].stand).length(), citysim::kStandApart, kParkedWithin));
+    // THE HOUSEHOLDS AND THEIR CARS: two cars, each in the free kerb space nearest its marker; fay's household has none
+    CHECK(b.householdOf(kAna) == std::vector<int>({kAna, kBen}) && b.householdOf(kDan) == std::vector<int>({kCat, kDan, kEve}));
+    CHECK(b.householdOf(kFay) == std::vector<int>({kFay}));
+    CHECK(b.cars().size() == 2u);
+    if (b.cars().size() != 2u) return;
+    CHECK(b.residentVehicle(kAna) == b.cars()[0] && b.residentVehicle(kBen) == b.cars()[0]);
+    CHECK(b.residentVehicle(kCat) == b.cars()[1] && b.residentVehicle(kDan) == b.cars()[1] && b.residentVehicle(kEve) == b.cars()[1]);
+    CHECK(b.residentVehicle(kFay) == -1);
+    CHECK(b.membersOfCar(b.cars()[1]) == std::vector<int>({kCat, kDan, kEve}));
+    CHECK(b.carHolder(b.cars()[0]) == citysim::CarHolder::Nobody && b.carHolder(b.cars()[1]) == citysim::CarHolder::Nobody);
+    std::printf("    [brain-lab] east's car in %s; trio's car in %s\n", b.carSpaceName(kAna).c_str(), b.carSpaceName(kCat).c_str());
+    CHECK(b.carSpaceName(kAna) == "s19 along 3");
+    CHECK(b.carSpaceName(kCat) == "s229 along 3");
+    CHECK(r.sim().drivingV2()->carCount() == 0u);
+    // EACH PLANS WITH WHAT THEY HAVE, told by name: fay (no car, a scooter) rides it home; dan (a board) rides his to
+    // the shop; cat, with neither, takes the household's car to `far`
+    std::string why;
+    CHECK(b.goTo(kFay, "home", &why) && b.goTo(kDan, "home", &why) && b.goTo(kCat, "far", &why));
+    CHECK(!b.goTo(7, "home", &why) && !b.goTo(kAna, "nowhere", &why));
+    r.step();
+    std::printf("    [brain-lab] fay: %s (%s)\n    [brain-lab] dan: %s (%s)\n    [brain-lab] cat: %s (%s)\n", b.planText(kFay).c_str(),
+                b.planReason(kFay).c_str(), b.planText(kDan).c_str(), b.planReason(kDan).c_str(), b.planText(kCat).c_str(),
+                b.planReason(kCat).c_str());
+    CHECK(b.planText(kFay) == "scooter>home");
+    CHECK(b.planText(kDan) == "skateboard>home");
+    CHECK(b.planText(kCat) == "walk>space s229 along 3, car>space s288 along 1, walk>far");
+    CHECK(b.planReason(kFay) == "walk 4.6 min, car -- no car, scooter 1.9 min: scooter");
+    CHECK(b.heldSpace(kCat).valid() && !b.heldSpace(kDan).valid() && !b.heldSpace(kFay).valid());
+    CHECK(b.stateName(kAna) == "standing" && b.stateName(kBen) == "standing" && b.stateName(kEve) == "standing");
+    CHECK(r.holdFaults == 0);
+}
+
+// WHOEVER REACHES THE HOUSEHOLD'S CAR FIRST TAKES IT (design section 12). Ana and ben, of one household, are told a
+// second apart to be at far-apart places (`work`, east; `ramp`, by the east freeway ramps). Both plan with the car, which
+// is free and stands beside them. BEN, told second, reaches it first (his spot at `home` is the nearer to it by
+// kStandApart) and drives off; ana finds it gone at the kerb and goes on foot. The car stays where ben parks it (by
+// `ramp`). Later ana, sent to `ramp`, is where the car is and takes it home; ben, left at `ramp`, then walks home,
+// since the car is no longer there.
+TEST_CASE(level_brain_lab_whoever_reaches_the_household_car_first_takes_it) {
+    Run r;
+    if (!r.b) return;
+    citysim::CityBrain& b = *r.b;
+    const engine::RoadModel& model = *r.sim().drivingV2()->model();
+    std::string why;
+    CHECK(b.goTo(kAna, "work", &why));
+    r.run(1.0);
+    CHECK(b.goTo(kBen, "ramp", &why));
+    r.step();
+    // BOTH PLANS PRICE THE CAR: it is free at that moment and stands in its space beside home. Each holds a space of
+    // their own at the far end.
+    CHECK(b.planText(kAna) == "walk>space s19 along 3, car>space s182 against 3, walk>work");
+    CHECK(b.planText(kBen) == "walk>space s19 along 3, car>space s223 against 3, walk>ramp");
+    CHECK(b.planReason(kBen) == "walk 10.2 min, car 7.3 min (0.2 walk + 7.0 car + 0.2 walk): car");
+    CHECK(model.kerbSpaceName(b.heldSpace(kAna)) == "s182 against 3" && model.kerbSpaceName(b.heldSpace(kBen)) == "s223 against 3");
+    // BEN IS AT THE CAR FIRST and takes it; ANA, at the kerb a second later, finds it taken: `vehicle_gone`, and a
+    // plan without it
+    CHECK(r.until([&] { return b.stateName(kBen) == "pulling_out"; }));
+    const double benTook = r.seconds();
+    CHECK(b.carHolder(b.cars()[0]) == citysim::CarHolder::Resident && b.stateName(kAna) == "walking");
+    CHECK(r.until([&] { return b.trace(kAna).size() >= 4u; }));
+    const double anaFound = r.seconds();
+    std::printf("    [brain-lab] ben took the car at %.2f s; ana found it gone at %.2f s: %s (%s)\n", benTook, anaFound,
+                b.planText(kAna).c_str(), b.planReason(kAna).c_str());
+    CHECK(approxEqual(benTook, 3.0, 0.02) && approxEqual(anaFound, 4.07, 0.02));
+    CHECK(stateNames(b, kAna) == "standing walking pulling_out walking");
+    CHECK(b.planText(kAna) == "walk>work");
+    CHECK(b.planReason(kAna) == "walk 9.3 min, car -- the car is in use: walk");
+    CHECK(!b.heldSpace(kAna).valid() && model.kerbSpaceName(b.heldSpace(kBen)) == "s223 against 3");
+    CHECK(r.person(kAna).mode == citysim::Agent::Mode::Pedestrian && r.person(kBen).mode == citysim::Agent::Mode::Driver);
+    // BOTH ARRIVE: ben by car, ana on foot. The car is where ben left it, free.
+    CHECK(r.until([&] { return r.there("work", kAna) && r.there("ramp", kBen); }));
+    std::printf("    [brain-lab] t=%.1f ana: %s\n    [brain-lab] ben: %s\n", r.seconds(), b.traceText(kAna).c_str(), b.traceText(kBen).c_str());
+    CHECK(stateNames(b, kBen) == "standing walking pulling_out driving parking walking standing");
+    CHECK(stateNames(b, kAna) == "standing walking pulling_out walking standing");
+    CHECK(b.carSpaceName(kAna) == "s223 against 3" && b.carHolder(b.cars()[0]) == citysim::CarHolder::Nobody);
+    CHECK(b.standingAt(kAna) == "work" && b.standingAt(kBen) == "ramp");
+    CHECK(b.counts().boarded == 1u && b.counts().pulledOut == 1u && b.counts().slidIn == 1u);
+    // ANA GOES TO WHERE THE CAR IS (on foot: it is not worth walking to a car to drive five minutes), and from there
+    // takes it home
+    CHECK(b.goTo(kAna, "ramp", &why));
+    r.step();
+    std::printf("    [brain-lab] ana to the ramp: %s (%s)\n", b.planText(kAna).c_str(), b.planReason(kAna).c_str());
+    CHECK(b.planText(kAna) == "walk>ramp");
+    CHECK(r.until([&] { return r.there("ramp", kAna); }));
+    CHECK(b.counts().boarded == 1u);
+    CHECK(b.goTo(kAna, "home", &why));
+    r.step();
+    std::printf("    [brain-lab] ana home from the ramp: %s (%s)\n", b.planText(kAna).c_str(), b.planReason(kAna).c_str());
+    CHECK(b.planText(kAna) == "walk>space s223 against 3, car>space s19 along 3, walk>home");
+    CHECK(r.until([&] { return r.there("home", kAna); }));
+    std::printf("    [brain-lab] t=%.1f ana: %s\n", r.seconds(), b.traceText(kAna).c_str());
+    CHECK(b.counts().boarded == 2u && b.counts().slidIn == 2u && b.carSpaceName(kAna) == "s19 along 3");
+    // ...AND BEN, STILL AT THE RAMP, walks home: the car is no longer where he left it
+    CHECK(b.goTo(kBen, "home", &why));
+    r.step();
+    std::printf("    [brain-lab] ben home from the ramp: %s (%s)\n", b.planText(kBen).c_str(), b.planReason(kBen).c_str());
+    CHECK(b.planText(kBen) == "walk>home");
+    CHECK(r.holdFaults == 0);
+    if (r.holdFaults > 0) std::printf("    [brain-lab] holds: %s\n", r.firstHoldFault.c_str());
+    CHECK(b.machine()->counts().errors == 0u && b.machine()->counts().refused == 0u);
+    checkDrove(r.watch);
+}
+
+// SOMEBODY ELSE TAKES A HOUSEHOLD'S PARKED CAR (the possession channel's `board`: CitySim::boardVehicle). The car is no
+// longer free and no longer in its space; a resident planning later does not price it; one already walking to it is told
+// `vehicle_gone` at the kerb. Left again (`alight`: alightVehicle), it stands where it was left, free.
+TEST_CASE(level_brain_lab_a_parked_car_taken_by_somebody_else) {
+    Run r;
+    if (!r.b) return;
+    citysim::CityBrain& b = *r.b;
+    citysim::CitySim& sim = r.lc.city.simMutable();
+    const int other = bystander(r);
+    CHECK(other >= 0);
+    if (other < 0) return;
+    const int car = b.cars()[0];
+    std::string why;
+    // ANA IS WALKING TO THE CAR when it is taken
+    CHECK(b.goTo(kAna, "work", &why));
+    r.run(1.0);
+    CHECK(b.planText(kAna) == "walk>space s19 along 3, car>space s182 against 3, walk>work" && b.stateName(kAna) == "walking");
+    CHECK(sim.boardVehicle(other, car));
+    CHECK(b.carHolder(car) == citysim::CarHolder::Outsider && b.carSpaceName(kAna).empty());
+    CHECK(b.counts().takenStanding == 1u);
+    // BEN, PLANNING NOW, does not price it
+    CHECK(b.goTo(kBen, "ramp", &why));
+    r.step();
+    std::printf("    [brain-lab] ben, the car taken: %s (%s)\n", b.planText(kBen).c_str(), b.planReason(kBen).c_str());
+    CHECK(b.planText(kBen) == "walk>ramp");
+    CHECK(b.planReason(kBen).find("car -- no car") != std::string::npos);
+    // ANA, AT THE KERB: the car is gone; on foot from there, and the space she held at work is let go
+    CHECK(r.until([&] { return b.trace(kAna).size() >= 4u; }));
+    std::printf("    [brain-lab] t=%.2f ana at the kerb: %s | %s (%s)\n", r.seconds(), b.traceText(kAna).c_str(), b.planText(kAna).c_str(),
+                b.planReason(kAna).c_str());
+    CHECK(stateNames(b, kAna) == "standing walking pulling_out walking");
+    CHECK(b.planText(kAna) == "walk>work" && !b.heldSpace(kAna).valid());
+    CHECK(b.counts().boarded == 0u && r.sim().drivingV2()->carCount() == 0u);
+    // LEFT AGAIN WHERE IT STOOD: free, in its space, and a plan made now prices it
+    CHECK(sim.alightVehicle(other));
+    CHECK(b.carHolder(car) == citysim::CarHolder::Nobody && b.carSpaceName(kAna) == "s19 along 3" && b.counts().leftAgain == 1u);
+    CHECK(b.goTo(kBen, "ramp", &why));
+    r.step();
+    CHECK(b.planText(kBen) == "walk>space s19 along 3, car>space s223 against 3, walk>ramp");
+    CHECK(r.holdFaults == 0);
+    CHECK(b.machine()->counts().errors == 0u && b.machine()->counts().refused == 0u);
+}
+
+// THE PLAYER TAKES THE CAR WHILE A RESIDENT DRIVES IT (CitySim::ejectDriver, what CityVehicleSystem calls when the
+// player gets into a driven car). The resident is put out on the kerb side and told `vehicle_gone`; the trip is ended
+// and the car is off the driving's road; they plan again on foot from where they stand. Then the player leaves the car:
+// first in a kerb space, then at a point in a lane, then in a field, and a household member plans with it, or not.
+TEST_CASE(level_brain_lab_the_player_takes_the_car_from_under_its_driver) {
+    Run r;
+    if (!r.b) return;
+    citysim::CityBrain& b = *r.b;
+    citysim::CitySim& sim = r.lc.city.simMutable();
+    const driving::Driving& d = *r.sim().drivingV2();
+    const engine::RoadModel& model = *d.model();
+    const int car = b.cars()[0];
+    std::string why;
+    CHECK(b.goTo(kAna, "work", &why));
+    CHECK(r.until([&] { return b.stateName(kAna) == "driving" && r.watch.ticksDriven > 30u * 60u; }));
+    CHECK(d.carCount() == 1u && model.kerbSpaceName(b.heldSpace(kAna)) == "s182 against 3");
+    const Vec2 carWas = r.car(kAna).pos;
+    CHECK(beyondTheKerb(model, carWas) < 0);   // (the car is on the carriageway)
+    // TAKEN
+    CHECK(sim.ejectDriver(b.residentAgent(kAna)));
+    CHECK(r.person(kAna).mode == citysim::Agent::Mode::Pedestrian && r.person(kAna).vehicle < 0);
+    // out on the kerb side: beyond the kerb line of the road the car was on, and within a road's width of the car
+    std::printf("    [brain-lab] t=%.1f taken at %.1f %.1f; ana put out at %.1f %.1f, %.2f m beyond the kerb line, %.1f m from the car\n",
+                r.seconds(), carWas.x, carWas.y, r.person(kAna).pos.x, r.person(kAna).pos.y, beyondTheKerb(model, r.person(kAna).pos),
+                (r.person(kAna).pos - carWas).length());
+    CHECK(beyondTheKerb(model, r.person(kAna).pos) > 0);
+    {
+        // ...ON THE CAR'S OWN SIDE of the road it was on (the kerb of its own traffic), level with it: the middle of
+        // that sidewalk, which is the carriageway's half width and half a sidewalk from the centre line
+        const engine::RoadFrontage carOn = model.frontageAt(carWas), personOn = model.frontageAt(r.person(kAna).pos);
+        std::printf("    [brain-lab] the car was %.2f m from the centre line of a road %.2f m to the kerb, on the kerb `dir` %d; "
+                    "ana is on `dir` %d\n",
+                    carOn.distance, carOn.section->carriagewayHalfWidth(), carOn.dir, personOn.dir);
+        CHECK(carOn.street == personOn.street && carOn.dir == personOn.dir);
+        CHECK(approxEqual(carOn.station, personOn.station, 0.5));
+        CHECK((r.person(kAna).pos - carWas).length() < carOn.section->carriagewayHalfWidth() + 5.0);
+    }
+    // the trip is ended and the car is off the driving's road, at once
+    CHECK(d.carCount() == 0u && d.car(driving::CarId(static_cast<uint32_t>(car))) == nullptr);
+    CHECK(b.carHolder(car) == citysim::CarHolder::Outsider && b.carSpaceName(kAna).empty());
+    CHECK(b.counts().takenDriven == 1u && b.counts().putOut == 1u);
+    CHECK(!r.sim().drivenByV2(b.residentAgent(kAna)));
+    r.step();
+    // THE BRAIN DECIDES WHAT FOLLOWS: `vehicle_gone` at the wheel is "plan again from here": on foot, the hold let go
+    CHECK(stateNames(b, kAna) == "standing walking pulling_out driving walking");
+    CHECK(b.planText(kAna) == "walk>work" && !b.heldSpace(kAna).valid());
+    CHECK(b.planReason(kAna).find("car -- no car") != std::string::npos);
+    const bool arrived = r.until([&] { return r.there("work", kAna); });
+    std::printf("    [brain-lab] t=%.1f ana: %s\n", r.seconds(), b.traceText(kAna).c_str());
+    CHECK(arrived);
+    CHECK(stateNames(b, kAna) == "standing walking pulling_out driving walking standing");
+    CHECK(b.counts().alighted == 0u && b.counts().parkedReports == 0u);   // nobody parked anything
+    // THE PLAYER LEAVES IT IN A KERB SPACE (the second space by home): it stands there, free, and ben plans with it
+    {
+        const std::vector<engine::KerbSpaceNear> nearHome = model.kerbSpacesNear(b.markers()[0].frontage, citysim::kSpaceReach, 2);
+        CHECK(nearHome.size() == 2u);
+        if (nearHome.size() != 2u) return;
+        engine::KerbSpacePose pose;
+        CHECK(model.kerbSpacePose(nearHome[1].space, pose));
+        const std::string name = model.kerbSpaceName(nearHome[1].space);
+        std::printf("    [brain-lab] left in %s\n", name.c_str());
+        // (half a metre off where a car in the space stands, and a little askew: a player parks roughly)
+        CHECK(b.carLeftAt(car, pose.at + pose.facing * 0.5, pose.facing));
+        CHECK(b.carHolder(car) == citysim::CarHolder::Nobody && b.carSpaceName(kBen) == name && b.counts().leftAgain == 1u);
+        CHECK(!r.sim().vehicles()[static_cast<std::size_t>(car)].offStreet);
+        CHECK(b.goTo(kBen, "work", &why));
+        r.step();
+        std::printf("    [brain-lab] ben, the car left in a space: %s (%s)\n", b.planText(kBen).c_str(), b.planReason(kBen).c_str());
+        CHECK(b.planText(kBen).rfind("walk>space " + name + ", car>space ", 0) == 0);
+        CHECK(r.until([&] { return b.stateName(kBen) == "driving" && d.carCount() == 1u; }));
+        CHECK(b.carHolder(car) == citysim::CarHolder::Resident);
+    }
+    // TAKEN FROM BEN TOO, AND LEFT AT A POINT IN A LANE: it is put into the kerb lane beside that point, and cat's
+    // household is not asked; ana, of its own household, plans with it from there
+    {
+        CHECK(sim.ejectDriver(b.residentAgent(kBen)));
+        const Vec2 at = r.person(kBen).pos;   // the kerb side of where it was taken
+        const engine::RoadFrontage f = model.frontageAt(at);
+        const engine::KerbLanePlace lane = model.kerbLaneBeside(f);
+        CHECK(lane.valid());
+        if (!lane.valid()) return;
+        const Vec2 facing = model.laneLevel.directionAt(lane.path, lane.along);
+        CHECK(b.carLeftAt(car, lane.at, facing));
+        std::printf("    [brain-lab] left at a point: %s\n", b.describeCar(car).c_str());
+        CHECK(b.carHolder(car) == citysim::CarHolder::Nobody && b.carSpaceName(kAna).empty());
+        CHECK(d.car(driving::CarId(static_cast<uint32_t>(car))) != nullptr);   // the driving knows it stands in the lane
+        CHECK(b.describeCar(car).find("left at the point") != std::string::npos);
+        r.step();
+        // ben stands on the kerb side beside it, still wanting to be at work: he plans with it from that point
+        CHECK(b.goTo(kBen, "work", &why));
+        r.step();
+        std::printf("    [brain-lab] ben, the car left at a point: %s (%s)\n", b.planText(kBen).c_str(), b.planReason(kBen).c_str());
+        CHECK(b.planText(kBen).rfind("walk>the point ", 0) == 0 &&
+              b.planText(kBen).find(", car>space s182 against 3, walk>work") != std::string::npos);
+        const uint64_t plans = b.machine()->counts().plans;
+        CHECK(r.until([&] { return b.stateName(kBen) == "driving" && d.tripOf(driving::CarId(static_cast<uint32_t>(car))).valid(); }));
+        std::printf("    [brain-lab] t=%.1f ben: %s\n", r.seconds(), b.traceText(kBen).c_str());
+        // the few steps to the car, into it, and off: by that one plan
+        const std::string states = stateNames(b, kBen);
+        const std::string tail = " walking pulling_out driving";
+        CHECK(states.size() > tail.size() && states.compare(states.size() - tail.size(), tail.size(), tail) == 0);
+        CHECK(b.machine()->counts().plans == plans);
+        CHECK(b.carHolder(car) == citysim::CarHolder::Resident && r.person(kBen).mode == citysim::Agent::Mode::Driver);
+    }
+    // TAKEN ONCE MORE AND LEFT IN A FIELD (the player's spawn, off every road): nobody can drive it from there, and
+    // nobody plans with it
+    {
+        CHECK(sim.ejectDriver(b.residentAgent(kBen)));
+        r.step();
+        CHECK(b.carLeftAt(car, Vec2(-40.0, -75.0), Vec2(0, 1)));
+        std::printf("    [brain-lab] left in a field: %s\n", b.describeCar(car).c_str());
+        CHECK(b.describeCar(car).find("off the road") != std::string::npos);
+        CHECK(d.car(driving::CarId(static_cast<uint32_t>(car))) == nullptr);
+        CHECK(b.goTo(kBen, "work", &why));
+        r.step();
+        CHECK(b.planText(kBen) == "walk>work" && b.planReason(kBen).find("car -- no car") != std::string::npos);
+    }
+    CHECK(r.holdFaults == 0);
+    if (r.holdFaults > 0) std::printf("    [brain-lab] holds: %s\n", r.firstHoldFault.c_str());
+    CHECK(b.machine()->counts().errors == 0u);
+}
+
+// A DIRECTOR TAKES A RESIDENT OVER (the possession channel: CitySim::brainNoteHeld, what `possess walker` and `release`
+// call). The brain's `possessed` state holds them: the intent is kept, the record does not change by a byte, and the
+// director moves them. Let go, they plan again from where they stand and carry on with the intent they had.
+TEST_CASE(level_brain_lab_a_possessed_resident_is_held_and_carries_on_when_let_go) {
+    Run r;
+    if (!r.b) return;
+    citysim::CityBrain& b = *r.b;
+    citysim::CitySim& sim = r.lc.city.simMutable();
+    std::string why;
+    CHECK(b.goTo(kAna, "shop", &why));
+    r.run(20.0);
+    CHECK(b.stateName(kAna) == "walking" && b.planText(kAna) == "walk>shop");
+    const int agent = b.residentAgent(kAna);
+    sim.brainNoteHeld(agent, true);
+    r.step();
+    CHECK(stateNames(b, kAna) == "standing walking possessed" && b.stateLabel(kAna) == "held by the player");
+    CHECK(b.counts().held == 1u);
+    // THE DIRECTOR WALKS THEM BACK TOWARD HOME for 30 s; the brain's record is the same bytes throughout
+    const citysim::brain::AgentBrain held = b.machine()->agent(kAna);
+    const Vec2 from = r.person(kAna).pos;
+    CHECK(sim.sendAgentTo(agent, b.standSpot(kAna, b.markerNamed("home"))));
+    bool same = true;
+    for (int i = 0; i < 30 * 60; ++i) {
+        r.step();
+        const citysim::brain::AgentBrain& now = b.machine()->agent(kAna);
+        same = same && std::equal(reinterpret_cast<const unsigned char*>(&held), reinterpret_cast<const unsigned char*>(&held) + sizeof(held),
+                                  reinterpret_cast<const unsigned char*>(&now));
+    }
+    CHECK(same);
+    const Vec2 movedTo = r.person(kAna).pos;
+    std::printf("    [brain-lab] held at %.1f %.1f; the director walked them %.1f m to %.1f %.1f\n", from.x, from.y,
+                (movedTo - from).length(), movedTo.x, movedTo.y);
+    CHECK((movedTo - from).length() > 15.0);   // (the director really moved them: about 1.4 m/s for 30 s, less the turn)
+    CHECK(b.wantedMarker(kAna) == b.markerNamed("shop") && b.stateName(kAna) == "possessed");
+    CHECK(r.person(kAna).brainOwned);
+    // LET GO: released, then at once planning from where they stand, for the shop they still want
+    sim.setAgentDirected(agent, false);   // (what the possession channel does on release, before it tells the brain)
+    sim.brainNoteHeld(agent, false);
+    r.step();
+    CHECK(stateNames(b, kAna) == "standing walking possessed released walking");
+    CHECK(b.planText(kAna) == "walk>shop" && b.counts().letGo == 1u);
+    CHECK(r.sim().agentDirected(agent));
+    {
+        const citysim::brain::AgentBrain& a = b.machine()->agent(kAna);
+        const Vec2 origin(citysim::brain::fromCentimetres(a.originX), citysim::brain::fromCentimetres(a.originZ));
+        CHECK((origin - movedTo).length() < 0.5);   // planned from where the director left them
+    }
+    const bool arrived = r.until([&] { return r.there("shop", kAna); });
+    std::printf("    [brain-lab] t=%.1f ana: %s\n", r.seconds(), b.traceText(kAna).c_str());
+    CHECK(arrived);
+    CHECK(stateNames(b, kAna) == "standing walking possessed released walking standing");
+    CHECK(b.machine()->counts().errors == 0u && b.machine()->counts().refused == 0u);
 }

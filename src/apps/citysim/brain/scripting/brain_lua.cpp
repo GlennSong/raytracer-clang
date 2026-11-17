@@ -27,10 +27,11 @@ public:
             lua_settop(L, top);
             return;
         }
-        checkKeys(bt, "brain", {"start", "no_plan", "intent_event", "intents", "events", "states"});
+        checkKeys(bt, "brain", {"start", "no_plan", "intent_event", "changed_event", "intents", "events", "states"});
         spec.start = text(bt, "brain", "start", "");
         spec.noPlan = text(bt, "brain", "no_plan", "");
         spec.intentEvent = text(bt, "brain", "intent_event", "");
+        spec.changedEvent = text(bt, "brain", "changed_event", "");
         eachRow(bt, "intents", [&](int t, const std::string& at) {
             checkKeys(t, at, {"name", "arrive"});
             IntentSpec row;
@@ -46,10 +47,14 @@ public:
             spec.events.push_back(row);
         });
         eachRow(bt, "states", [&](int t, const std::string& at) {
-            checkKeys(t, at, {"name", "label", "group", "skill", "ends", "clock", "where", "holds", "on"});
+            checkKeys(t, at, {"name", "label", "group", "skill", "ends", "clock", "where", "holds", "seconds", "on"});
             StateSpec row;
             row.name = text(t, at, "name", "");
             const std::string key = row.name.empty() ? at : "states." + row.name;
+            const int seconds = pushField(t, "seconds");
+            if (lua_type(L, seconds) == LUA_TNUMBER) row.seconds = lua_tonumber(L, seconds);
+            else if (!lua_isnil(L, seconds)) fail(key + ".seconds", "is " + describe(seconds) + ", expected a number of seconds");
+            lua_pop(L, 1);
             row.label = text(t, key, "label", "");
             row.group = text(t, key, "group", "");
             row.skill = text(t, key, "skill", row.skill);

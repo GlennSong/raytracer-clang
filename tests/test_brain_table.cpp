@@ -87,17 +87,35 @@ TEST_CASE(brain_shipped_data_reads_compiles_and_binds) {
     if (!compiled) return;
     // every state of the design's section 5, and which are built
     // (20 events and 2 intents since ADR-0441: `space_taken`, and `be_outside_at` for a place with no building)
-    CHECK(table.states.size() == 21u && table.events.size() == 20u && table.intents.size() == 2u);
+    // (22 states and 22 events since ADR-0443: `no_way`, a person with no way there who tries again; its clock's
+    // `try_again`; and `things_changed`, sent when something a person plans with changes)
+    CHECK(table.states.size() == 22u && table.events.size() == 22u && table.intents.size() == 2u);
     CHECK(table.intents[0].name == "be_at" && table.intents[1].name == "be_outside_at");
     CHECK(table.states[table.intents[1].arrive].name == "standing");
     CHECK(table.on[table.state("parking")][table.event("space_taken")].verb == Verb::Go);
     CHECK(table.on[table.state("parking")][table.event("space_taken")].state == table.state("driving"));
     std::string built, notBuilt;
     for (const StateRow& s : table.states) (s.fns.built ? built : notBuilt) += s.name + " ";
-    CHECK(built == "walking on_small_wheels pulling_out driving parking indoors standing knocked_down stuck crashed "
+    CHECK(built == "walking on_small_wheels pulling_out driving parking indoors standing no_way knocked_down stuck crashed "
                    "possessed released ");
     CHECK(notBuilt == "waiting boarding riding alighting hailing using_spot group_activity working_post asleep ");
-    CHECK(table.states[table.start].name == "indoors" && table.states[table.noPlan].name == "standing");
+    CHECK(table.states[table.start].name == "indoors" && table.states[table.noPlan].name == "no_way");
+    // ADR-0443: a person with no way there waits a minute (the data's `seconds`) and plans again with every way allowed;
+    // they plan again at once when something they plan with changes; everyone else ignores that
+    {
+        const int noWay = table.state("no_way");
+        CHECK(noWay >= 0);
+        if (noWay < 0) return;
+        CHECK(table.states[noWay].ends == Ends::Clock && table.states[noWay].fixedMillis == 60000u);
+        CHECK(table.events[table.states[noWay].clock] == "try_again");
+        CHECK(table.changedEvent != kNoId && table.events[table.changedEvent] == "things_changed");
+        CHECK(table.on[noWay][table.event("try_again")].verb == Verb::ReplanAfresh);
+        CHECK(table.on[noWay][table.changedEvent].verb == Verb::ReplanAfresh);
+        CHECK(table.on[noWay][table.intentEvent].verb == Verb::Replan);
+        CHECK(table.on[table.state("walking")][table.changedEvent].verb == Verb::Ignore);
+        CHECK(table.on[table.state("standing")][table.changedEvent].verb == Verb::Ignore);
+        CHECK(table.on[table.state("possessed")][table.changedEvent].verb == Verb::Ignore);
+    }
     CHECK(table.events[table.intentEvent] == "new_intent");
     // a few answers, read back: the row's own, an event's `otherwise`, and a holding state answering only its row
     const int walking = table.state("walking"), driving = table.state("driving"), possessed = table.state("possessed");

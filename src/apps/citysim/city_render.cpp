@@ -299,7 +299,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.schedule = c.schedule;
         params_.homeNear = c.homeNear;
         params_.markers = c.markers;
-        params_.resident = c.resident;
+        params_.residents = c.residents;
+        params_.households = c.households;
         params_.ambientBus = c.ambientBus;
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
@@ -2192,9 +2193,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // THE MARKERS AND THE RESIDENT WITH THE AGENT BRAIN (ADR-0441; city_brain.h), on a level that states any and that
     // the new driving drives. Last, once the city is seeded: seeding puts every walker where its day has it, and the
     // resident is put at their home marker after that.
-    if ((!params_.markers.empty() || params_.resident.present) && sim_.drivingV2() && sim_.drivingHost().active()) {
+    if ((!params_.markers.empty() || !params_.residents.empty()) && sim_.drivingV2() && sim_.drivingHost().active()) {
         std::string brainReport;
-        if (sim_.startBrain(params_.markers, params_.resident, drivingClassOfSlot, &brainReport))
+        if (sim_.startBrain(params_.markers, params_.residents, params_.households, drivingClassOfSlot, &brainReport))
             LOG_INFO << "[citysim] agent brain: " << brainReport;
         else
             LOG_WARN << "[citysim] agent brain: no markers and no resident on this level: " << brainReport;

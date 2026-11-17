@@ -31,13 +31,16 @@
 --           "along_leg" (between the leg's ends, by how much of the planned time has gone), "leg_end"
 --   holds   true: entering it interrupts what the person was doing. The interrupted state and how much of its time was
 --           left are kept, for `resume`.
+--   seconds how long it lasts, for a state the clock ends whose time is its own and not a leg's (`no_way`)
 --   on      event = what it leads to: a state's name, or a verb
 --
 -- THE VERBS (the machine's own mechanisms):
 --   next_leg        this leg is done: begin the plan's next leg, or, after the last, arrive
 --   replan          drop the plan and plan again from where the person stands
 --   replan_without  the same, first ruling out the way of the leg that failed, for as long as this intent lasts
---   resume          leave a state that holds and carry on with what was interrupted, from where it had got to
+--   replan_afresh   the same, first allowing again every way that was ruled out (ADR-0443): how a person with no way
+--                   there tries again
+--   resume         leave a state that holds and carry on with what was interrupted, from where it had got to
 --   redirect        stay in this state and in the vehicle of the leg under way, and go somewhere else in it: the plan
 --                   is made again as "in this vehicle from here to the space nearest the place now wanted, then on
 --                   foot", the old space is let go and the new one held, and the skill is told the new end (ADR-0442).
@@ -57,8 +60,11 @@
 brain = {
   -- a new person is where they want to be, in their intent's `arrive` state; this one only when that is not built
   start = "indoors",
-  no_plan = "standing",         -- wants to be somewhere and has no way there
+  no_plan = "no_way",           -- wants to be somewhere and has no way there
   intent_event = "new_intent",  -- how a new intent arrives
+  -- sent to a person when something they plan with has changed: their household's car became free or was moved, they
+  -- were given or lost a board (ADR-0443)
+  changed_event = "things_changed",
 
   intents = {
     { name = "be_at", arrive = "indoors" },
@@ -72,6 +78,10 @@ brain = {
     { name = "new_intent", otherwise = "ignore" },
     { name = "resume_intent", otherwise = "refuse" },   -- raised by `released`: the intent takes over again
     { name = "done", otherwise = "refuse" },            -- a state the clock ends has run its time
+    -- ADR-0443: a person with no way there has waited their `seconds` (`try_again`); something a person plans with
+    -- has changed (`things_changed`: only a person with no way there acts on it; a trip under way carries on)
+    { name = "try_again", otherwise = "refuse" },
+    { name = "things_changed", otherwise = "ignore" },
     -- what the skills report
     { name = "arrived", otherwise = "refuse" },         -- walking: at the leg's end
     { name = "parked", otherwise = "refuse" },          -- driving: stopped at the destination, beside the space
@@ -130,6 +140,13 @@ brain = {
     -- AT A PLACE
     { name = "indoors", label = "indoors", group = "at_place", on = { new_intent = "replan" } },
     { name = "standing", label = "standing outside", group = "at_place", on = { new_intent = "replan" } },
+    -- WANTS TO BE SOMEWHERE AND HAS NO WAY THERE (ADR-0443; before, they stood for ever). They stand where they are
+    -- and try again every `seconds` (an ESTIMATE: a minute, long enough for a car to come back or a lane to clear),
+    -- and at once when something they plan with changes. Trying again allows every way that had been ruled out: what
+    -- failed a minute ago may work now. Why there was no way is kept and shown (`brain?`: "no way there (...)")
+    { name = "no_way", label = "no way there, waiting to try again", group = "at_place", ends = "clock",
+      clock = "try_again", seconds = 60,
+      on = { try_again = "replan_afresh", things_changed = "replan_afresh", new_intent = "replan" } },
     { name = "using_spot", label = "using a spot", group = "at_place" },       -- NOT BUILT: sit, lie, lean
     { name = "group_activity", label = "in a group activity", group = "at_place" },   -- NOT BUILT
     { name = "working_post", label = "working a post", group = "at_place" },     -- NOT BUILT

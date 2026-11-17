@@ -72,7 +72,16 @@ public:
     // Where a person's body is, when one exists (a near person). False: none, and the brain works it out from the plan.
     virtual bool bodyPosition(AgentId who, Vec2& out) const = 0;
 
-    // THE HOUSEHOLD'S CAR. Where it stands now (false: no such car).
+    // WHICH CAR `who` WOULD PLAN WITH, asked each time they plan (ADR-0443). `has` is the car their record names. A
+    // world whose households share several cars answers the one of theirs that is free and nearest `from` (or `has`
+    // when none is free); the default is `has`. The answer becomes the record's car for the plan that follows.
+    virtual CarRef carOffered(AgentId who, CarRef has, Vec2 from) const {
+        (void)who;
+        (void)from;
+        return has;
+    }
+    // THE HOUSEHOLD'S CAR. Where it stands now (false: no such car, or it is nowhere a person could take it from: the
+    // player has it).
     virtual bool carStanding(CarRef car, PlaceRef& out) const = 0;
     // Whether `who` could take it this moment: nobody has it, or `who` already does.
     virtual bool carFreeFor(CarRef car, AgentId who) const = 0;

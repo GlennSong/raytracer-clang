@@ -18,7 +18,7 @@ const VerbName kVerbs[] = {
     {"refuse", Verb::Refuse},         {"ignore", Verb::Ignore},
     {"next_leg", Verb::NextLeg},      {"replan", Verb::Replan},
     {"replan_without", Verb::ReplanWithout}, {"resume", Verb::Resume},
-    {"redirect", Verb::Redirect},
+    {"redirect", Verb::Redirect},     {"replan_afresh", Verb::ReplanAfresh},
 };
 
 bool verbOf(const std::string& word, Verb& out) {
@@ -140,6 +140,14 @@ bool compileBrainTable(const BrainSpec& spec, const BehaviourSet& behaviours, Br
         else if (s.where == "along_leg") row.where = Where::AlongLeg;
         else if (s.where == "leg_end") row.where = Where::LegEnd;
         else return refuse(key + ".where", "is `" + s.where + "`; it must be place, leg_start, along_leg or leg_end");
+        if (s.seconds < 0 || !std::isfinite(s.seconds)) return refuse(key + ".seconds", "must be 0 or more");
+        if (s.seconds > 0) {
+            if (row.ends != Ends::Clock)
+                return refuse(key + ".seconds", "is set, but the clock does not end the state (ends = clock)");
+            if (row.fns.lasts)
+                return refuse(key + ".seconds", "is set, but the behaviour of `" + s.name + "` says how long it lasts itself");
+            row.fixedMillis = static_cast<BrainTime>(std::lround(s.seconds * kMillisPerSecond));
+        }
         t.states.push_back(row);
     }
     // ...and no functions without a state
@@ -205,6 +213,11 @@ bool compileBrainTable(const BrainSpec& spec, const BehaviourSet& behaviours, Br
         return refuse("intent_event", spec.intentEvent.empty() ? "is missing"
                                                               : "names `" + spec.intentEvent + "`, which is not an event");
     t.intentEvent = static_cast<EventId>(intentEvent);
+    if (!spec.changedEvent.empty()) {
+        const int changed = t.event(spec.changedEvent);
+        if (changed < 0) return refuse("changed_event", "names `" + spec.changedEvent + "`, which is not an event");
+        t.changedEvent = static_cast<EventId>(changed);
+    }
     if (spec.intents.empty()) return refuse("intents", "is empty");
     for (const IntentSpec& i : spec.intents) {
         if (i.name.empty()) return refuse("intents", "has a row with no name");

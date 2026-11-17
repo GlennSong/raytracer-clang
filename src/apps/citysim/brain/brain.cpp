@@ -115,8 +115,20 @@ StepContext Machine::contextFor(AgentId who, BrainTime at) const {
 }
 
 BrainTime Machine::lastsOf(const StepContext& ctx, const AgentBrain& a) const {
-    const StateFns& fns = table_.states[a.state].fns;
-    return fns.lasts ? fns.lasts(ctx, a) : kNever;
+    const StateRow& row = table_.states[a.state];
+    if (row.fns.lasts) return row.fns.lasts(ctx, a);
+    // a state whose time is the data's own (brain.lua `seconds`)
+    return row.fixedMillis > 0 ? row.fixedMillis : kNever;
+}
+
+void Machine::setTraits(AgentId who, uint8_t traits) {
+    if (agents_[who].traits == traits) return;
+    agents_[who].traits = traits;
+    notifyChanged(who);
+}
+
+void Machine::notifyChanged(AgentId who) {
+    if (table_.changedEvent != kNoId) post(who, table_.changedEvent);
 }
 
 Real Machine::fractionDone(const StepContext& ctx, const AgentBrain& a) const {
@@ -267,6 +279,12 @@ void Machine::replan(AgentId who, bool ruleOutThisWay, bool leave, BrainTime at,
     // where they stand is asked BEFORE the state is left: leaving a car changes what "their body" means
     const Vec2 from = whereIs(who, at);
     if (leave) leaveState(who, ExitWhy::Abandoned, at);
+    // which of the household's cars they would take now (asked once the old plan's car has been let go)
+    {
+        CarRef has;
+        has.id = a.car;
+        a.car = world_.carOffered(who, has, from).id;
+    }
     PlanAsk ask;
     ask.agent = who;
     ask.from = from;
@@ -467,6 +485,10 @@ void Machine::answer(AgentId who, EventId kind, uint32_t payload, BrainTime at, 
                 return;
             }
             replan(who, true, true, at, depth);
+            return;
+        case Verb::ReplanAfresh:
+            a.ruledOut = 0;
+            replan(who, false, true, at, depth);
             return;
         case Verb::Resume:
             resume(who, at, depth);

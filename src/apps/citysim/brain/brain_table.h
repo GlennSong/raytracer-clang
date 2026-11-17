@@ -12,6 +12,8 @@
 //   next_leg        this leg is done: begin the plan's next leg, or, after the last, arrive
 //   replan          drop the plan and plan again from where the person stands
 //   replan_without  the same, first ruling out the way of the leg that failed (for as long as this intent lasts)
+//   replan_afresh   the same, first allowing again every way that was ruled out: what a person with no way there does
+//                   when they try again after a while, or when something they have changed (ADR-0443)
 //   resume          leave a state that holds and carry on with what was interrupted, from where it had got to
 //   redirect        stay in this state and in the vehicle of the leg under way, and go somewhere else in it: the plan is
 //                   made again as "in this vehicle from here to where it will be left, then on to the place wanted",
@@ -54,6 +56,10 @@ struct StateSpec {
     // set out from), "leg_start", "along_leg", "leg_end".
     std::string where = "place";
     bool holds = false;           // entering it interrupts what the person was doing, to be carried on or dropped later
+    // HOW LONG IT LASTS, in seconds, for a state whose time is its own and not a leg's (ADR-0443: how long a person
+    // with no way there waits before trying again). 0: not stated. Only for a state the clock ends whose behaviour
+    // has no `lasts` function of its own.
+    double seconds = 0;
     std::vector<std::pair<std::string, std::string>> on;   // event -> a state or a verb
 };
 struct EventSpec {
@@ -69,6 +75,9 @@ struct BrainSpec {
     std::string start;            // the state a new person is in
     std::string noPlan;           // the state of a person who wants to be somewhere and has no way there
     std::string intentEvent;      // the event a new intent arrives as
+    // The event a person is sent when something they plan with has changed (ADR-0443: their household's car became
+    // free or was moved, they were given a board). Empty: none is sent.
+    std::string changedEvent;
     std::vector<StateSpec> states;
     std::vector<EventSpec> events;
     std::vector<IntentSpec> intents;
@@ -134,7 +143,7 @@ struct BehaviourSet {
 };
 
 // ---- THE COMPILED TABLE ------------------------------------------------------------------------------------------------------
-enum class Verb : uint8_t { Refuse, Ignore, Go, NextLeg, Replan, ReplanWithout, Resume, Redirect };
+enum class Verb : uint8_t { Refuse, Ignore, Go, NextLeg, Replan, ReplanWithout, Resume, Redirect, ReplanAfresh };
 struct Answer {
     Verb verb = Verb::Refuse;
     StateId state = kNoId;        // Go: where
@@ -149,6 +158,7 @@ struct StateRow {
     EventId clock = kNoId;
     Where where = Where::Place;
     bool holds = false;
+    BrainTime fixedMillis = 0;    // the data's `seconds` (0: none): how long the state lasts when its behaviour does not say
     StateFns fns;
     EventId raises[kMaxRaises] = {kNoId, kNoId, kNoId, kNoId};
 };
@@ -176,6 +186,7 @@ struct BrainTable {
     Answer on[kMaxStates][kMaxEvents];
     StateId start = kNoId, noPlan = kNoId;
     EventId intentEvent = kNoId;
+    EventId changedEvent = kNoId;   // kNoId: the data names none
 
     int state(const std::string& name) const;     // -1: none
     int event(const std::string& name) const;
@@ -187,7 +198,8 @@ struct BrainTable {
 // is not an event; an answer that is neither a state nor a verb; `resume` in a state that does not hold; `redirect`
 // in a state whose behaviour cannot be sent elsewhere, or as an event's `otherwise`; an event a
 // behaviour raises that the data lacks; a missing start, no_plan, intent_event or intent; two rows of one name; more
-// rows than the fixed tables hold.
+// rows than the fixed tables hold; `seconds` on a state the clock does not end or whose behaviour says how long it
+// lasts itself; a changed_event that is not an event.
 bool compileBrainTable(const BrainSpec& spec, const BehaviourSet& behaviours, BrainTable& out, std::string* err);
 
 // The ways of travelling bound to the states their legs begin in (travel.lua `begins_in`). False, with `err` naming

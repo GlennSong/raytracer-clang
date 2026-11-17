@@ -46,9 +46,10 @@ once the new one carries river_town; until then leave it running and do not patc
   new driving, park in a held kerb space, walk. A skateboard hop is one leg. `goto` while driving redirects
   the drive (ADR-0441, 0442).
 
-In flight when this was written: several residents in households sharing cars, the player taking cars and
-possessing residents, a person with no plan retrying, aim-to-inspect. Check `git log` for a commit naming
-ADR-0443; if it is absent, that work is uncommitted in the working tree or unfinished.
+- On `brain_lab`, six residents in three households share cars (whoever reaches one first takes it); the
+  player or a director can take a car, parked or driven, and take a resident over; a person with no plan
+  tries again (ADR-0443). Not built: the player giving back a car they took with the key. Check `git log`
+  for a commit naming ADR-0443; if it is absent, that work is uncommitted in the working tree.
 
 ## What is next, in the agreed order
 
@@ -139,9 +140,28 @@ RT_TEST_FILTER=level_traffic_lab_v2_drives ./build-viewer/level_tests
 ## Watching it
 
 ```
+cd /home/glennsong/Projects/raytracer-clang/.claude/worktrees/buildings
 cmake --build build-viewer --target viewer
 ./build-viewer/viewer assets/levels/brain_lab.json --play
 ```
 
-Console: `brain?`, `markers?`, `goto work`, `goto shop`, `brain trait has_board on`, `brain day on`,
-`brain follow`, `sim speed 8`.
+Six residents in three households (ADR-0443): ana and ben share a car at `home`; cat, dan (a board) and eve
+share one at `west`; fay (a scooter, no car) lives at `shop`. Their day tables run from the start, and a
+household's members leave within seconds of each other, so they contend for the car. `<who>` is a name or a
+number; a verb given none acts on the followed resident (the one the camera is on).
+
+Console:
+- `residents?` everybody in a few words; `brain? ana` one resident in full; `markers?`
+- `brain follow` the camera on the next resident; `brain follow ben`; `brain follow off`
+- `brain day all off` stops every day table (then send people yourself); `brain day ana on`
+- `goto ana work`, then a second later `goto ben ramp`: the contended car (ben gets it; ana walks)
+- `brain trait ana has_board on`
+- the player and the car: walk up to a car with its driver in it, look at the driver's seat (Tab moves the
+  focus) and press E; `brain? <who>` then says "taken by the player" and the driver walks on
+- a director: `possess walker <x> <z>` (the nearest walker to that point), `walk_to <x> <z>`, `board`,
+  `alight`, `release`
+- `sim speed 8`
+
+Looking at a resident or a household's car (the middle of the view) shows its line at the foot of the screen.
+`python3 tools/brain_lab_probe.py --scenario multi` plays the contended car and the player taking it, and
+takes pictures into `~/Pictures/Raytracer/brain/` (names beginning `multi_`).

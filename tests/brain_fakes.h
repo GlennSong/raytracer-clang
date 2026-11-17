@@ -94,6 +94,11 @@ public:
     std::vector<Walk> walks;
     bool reversed = false;
     int started = 0, cancelled = 0;
+    // THE PAVEMENTS END (ADR-0443): a leg by one of `gapWays` (bit i: way i) whose two ends lie on either side of
+    // x = gapAt cannot be begun: walk() answers false, which the walking state reports as `blocked`. Below 0: no gap.
+    Real gapAt = -1;
+    uint32_t gapWays = 0xFFFFFFFFu;
+    int refusedAtGap = 0;
 
 private:
     FakeWorld& world_;

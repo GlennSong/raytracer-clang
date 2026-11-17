@@ -37,7 +37,8 @@
 
 namespace engine {
 struct CityMarker;     // components.h: a named point beside a street (ADR-0441)
-struct CityResident;   // ...and the level's one resident with the agent brain
+struct CityResident;   // ...a resident with the agent brain
+struct CityHousehold;  // ...and the residents who share a household's cars (ADR-0443)
 }  // namespace engine
 
 namespace citysim {
@@ -982,6 +983,7 @@ public:
         a.tickFromPos = a.pos;            // a placement, not a motion
         a.tickFromHeading = a.heading;
         grid_.place(agentIndex, a.pos);
+        if (brain_) brainNoteBoarded(agentIndex, vehicleIndex);   // a household's car taken by someone else (ADR-0443)
         return true;
     }
 
@@ -1051,6 +1053,7 @@ public:
         v.heading = carHeading;
         v.driver = -1;
         parkedGrid_.place(a.vehicle, v.pos);
+        const int leftVehicle = a.vehicle;
         a.vehicle = -1;
         a.mode = Agent::Mode::Pedestrian;
         a.moving = false;
@@ -1065,6 +1068,7 @@ public:
                                                   a.pos.y + side.y * 2.0), 1.0);
         a.tickFromPos = a.pos;
         grid_.place(agentIndex, a.pos);
+        if (brain_) brainNoteAlighted(agentIndex, leftVehicle);   // a household's car left here by someone else (ADR-0443)
         return true;
     }
 
@@ -1430,13 +1434,19 @@ public:
     bool drivenByV2(int agent) const { return drivingHost_.drives(agent); }
     // The hand-over's side of it: counts, costs, the measurements, road heights for drawing (`driving?`).
     const DrivingHost& drivingHost() const { return drivingHost_; }
-    // THE RESIDENT WITH THE AGENT BRAIN (ADR-0441; city_brain.h, where these two are defined): the level's markers and
-    // its one resident, driven by the brain library over this sim's walking and the new driving. Call once, after
-    // startDrivingV2 has succeeded. False, with the reason in `report`, when it cannot be set up; then the level has no
-    // such resident. `classOfSlot` as startDrivingV2's. brain(): null when there is none.
-    bool startBrain(const std::vector<engine::CityMarker>& markers, const engine::CityResident& resident,
-                    const std::vector<int>& classOfSlot, std::string* report);
+    // THE RESIDENTS WITH THE AGENT BRAIN (ADR-0441, ADR-0443; city_brain.h, where these are defined): the level's
+    // markers, its residents and the households whose cars they share, driven by the brain library over this sim's
+    // walking and the new driving. Call once, after startDrivingV2 has succeeded. False, with the reason in `report`,
+    // when it cannot be set up; then the level has no such residents. `classOfSlot` as startDrivingV2's. brain(): null
+    // when there is none.
+    bool startBrain(const std::vector<engine::CityMarker>& markers, const std::vector<engine::CityResident>& residents,
+                    const std::vector<engine::CityHousehold>& households, const std::vector<int>& classOfSlot,
+                    std::string* report);
     CityBrain* brain() const { return brain_.get(); }
+    // A DIRECTOR TAKES ONE OF THE BRAIN'S PEOPLE OVER, OR LETS THEM GO (ADR-0443; the possession channel,
+    // city_possess.cpp): the brain's `possessed` state holds them (their intent kept, nothing moving them on) until
+    // `on` is false, when they plan again from where they stand. Nothing happens for an agent the brain does not own.
+    void brainNoteHeld(int agent, bool on);
     // Does this agent drive one trip straight into the next (the level's wander mode, or a roaming role's day)?
     // The chained-arrival corner, the final-leg turn yield and the no-parking rules ask this, not wander_.
     bool roams(const Agent& a) const {
@@ -2261,6 +2271,12 @@ private:
     friend class CityBrain;
     std::shared_ptr<CityBrain> brain_;
     void tickBrain(Real dt);    // one tick of it, after the driving's (defined in city_brain.cpp)
+    // WHAT THE BRAIN IS TOLD OF (ADR-0443; defined in city_brain.cpp, called only while brain_ is set): somebody got
+    // into a car (boardVehicle), got out of one and left it where it stands (alightVehicle), or the player took a car
+    // with its driver in it (ejectDriver). The brain acts only when the car is a household's or the person is its own.
+    void brainNoteBoarded(int agent, int vehicle);
+    void brainNoteAlighted(int agent, int vehicle);
+    void brainNoteEjected(int agent, int vehicle);
     // Three-tier traffic state (P4): the fed bubble centre, the fixed-frame
     // counter the V buckets key off (frameIndex_ % vTickDivisor — no wall
     // clock), and the lifetime transition counters the tests gate on.

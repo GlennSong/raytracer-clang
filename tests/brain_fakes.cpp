@@ -184,6 +184,10 @@ void FakeWalk::setAgents(std::size_t count) { walks.resize(count); }
 bool FakeWalk::walk(AgentId who, WayId way, Vec2 from, PlaceRef to, Real fractionDone) {
     Vec2 end;
     if (who >= walks.size() || way >= speeds_.size() || !(speeds_[way] > 0) || !world_.positionOf(to, end)) return false;
+    if (gapAt >= 0 && ((gapWays >> way) & 1u) != 0 && std::min(from.x, end.x) < gapAt && gapAt < std::max(from.x, end.x)) {
+        ++refusedAtGap;
+        return false;
+    }
     Walk& w = walks[who];
     w.active = true;
     w.from = from;
