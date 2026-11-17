@@ -1,6 +1,7 @@
 # Drivers among others: what a driver sees and decides, where a car lives, and crashes
 
-Status: DRAFT for Glenn, rewritten 2026-11-16 after his review in conversation. Nothing here is built. It answers
+Status: DRAFT for Glenn, rewritten 2026-11-16 after his review in conversation. Built so far: sitting 1a (the brain
+lab's household cars are entities, ADR-0444); nothing else. It answers
 issue #285 and the junction half of #286, and is the first item of `docs/agent-driving-handoff.md`'s "what is next".
 It changes `docs/driving-model-design.md` (sections 7 to 12) and adds to `docs/agent-brain-design.md`; section 11 says
 where. (The first draft, commit 7a508e43, extended the central arbiter; this replaces it.)

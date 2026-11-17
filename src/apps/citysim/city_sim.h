@@ -39,6 +39,7 @@ namespace engine {
 struct CityMarker;     // components.h: a named point beside a street (ADR-0441)
 struct CityResident;   // ...a resident with the agent brain
 struct CityHousehold;  // ...and the residents who share a household's cars (ADR-0443)
+class World;           // world.h: the entities, the households' cars among them (ADR-0444)
 }  // namespace engine
 
 namespace citysim {
@@ -202,6 +203,11 @@ struct Agent {
     // leaves them as they are. It goes with `directed` (the goal layer leaves their plan alone), which by itself still
     // lets a city with a day schedule place the person again.
     bool brainOwned = false;
+    // IN A HOUSEHOLD'S CAR (ADR-0444; city_car.h): the number of the brain's car this person sits in (-1: none). Such a
+    // car is an entity, not one of `vehicles`, so this person stays a walker (`mode` Pedestrian, `vehicle` -1) who is
+    // not drawn on foot (pedVisible); where they are is the car's pose (CityBrain::personPosition), and `pos` stays
+    // where they got in.
+    int inCar = -1;
     bool released = false;           // ejected by the player (ADR-0062): the sim stops
                                      // driving this agent's ghost so it can't fight the
                                      // now player-driven physical car
@@ -983,7 +989,6 @@ public:
         a.tickFromPos = a.pos;            // a placement, not a motion
         a.tickFromHeading = a.heading;
         grid_.place(agentIndex, a.pos);
-        if (brain_) brainNoteBoarded(agentIndex, vehicleIndex);   // a household's car taken by someone else (ADR-0443)
         return true;
     }
 
@@ -1053,7 +1058,6 @@ public:
         v.heading = carHeading;
         v.driver = -1;
         parkedGrid_.place(a.vehicle, v.pos);
-        const int leftVehicle = a.vehicle;
         a.vehicle = -1;
         a.mode = Agent::Mode::Pedestrian;
         a.moving = false;
@@ -1068,7 +1072,6 @@ public:
                                                   a.pos.y + side.y * 2.0), 1.0);
         a.tickFromPos = a.pos;
         grid_.place(agentIndex, a.pos);
-        if (brain_) brainNoteAlighted(agentIndex, leftVehicle);   // a household's car left here by someone else (ADR-0443)
         return true;
     }
 
@@ -1437,11 +1440,11 @@ public:
     // THE RESIDENTS WITH THE AGENT BRAIN (ADR-0441, ADR-0443; city_brain.h, where these are defined): the level's
     // markers, its residents and the households whose cars they share, driven by the brain library over this sim's
     // walking and the new driving. Call once, after startDrivingV2 has succeeded. False, with the reason in `report`,
-    // when it cannot be set up; then the level has no such residents. `classOfSlot` as startDrivingV2's. brain(): null
-    // when there is none.
-    bool startBrain(const std::vector<engine::CityMarker>& markers, const std::vector<engine::CityResident>& residents,
-                    const std::vector<engine::CityHousehold>& households, const std::vector<int>& classOfSlot,
-                    std::string* report);
+    // when it cannot be set up; then the level has no such residents. `classOfSlot` as startDrivingV2's. The
+    // households' cars are entities of `world` (ADR-0444; city_car.h). brain(): null when there is none.
+    bool startBrain(engine::World& world, const std::vector<engine::CityMarker>& markers,
+                    const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& households,
+                    const std::vector<int>& classOfSlot, std::string* report);
     CityBrain* brain() const { return brain_.get(); }
     // A DIRECTOR TAKES ONE OF THE BRAIN'S PEOPLE OVER, OR LETS THEM GO (ADR-0443; the possession channel,
     // city_possess.cpp): the brain's `possessed` state holds them (their intent kept, nothing moving them on) until
@@ -2267,16 +2270,10 @@ private:
     std::string drivingRoadsReport_ = "no lane graph yet";
     DrivingHost drivingHost_;   // the drivers handed to the new model (startDrivingV2); inactive on a v1 level
     // The resident with the agent brain and everything it needs (startBrain; city_brain.h). It reads and moves this
-    // sim's agents and vehicles directly, as the hand-over above does, so it is a friend. Null: none.
+    // sim's agents directly, as the hand-over above does, so it is a friend. Null: none.
     friend class CityBrain;
     std::shared_ptr<CityBrain> brain_;
     void tickBrain(Real dt);    // one tick of it, after the driving's (defined in city_brain.cpp)
-    // WHAT THE BRAIN IS TOLD OF (ADR-0443; defined in city_brain.cpp, called only while brain_ is set): somebody got
-    // into a car (boardVehicle), got out of one and left it where it stands (alightVehicle), or the player took a car
-    // with its driver in it (ejectDriver). The brain acts only when the car is a household's or the person is its own.
-    void brainNoteBoarded(int agent, int vehicle);
-    void brainNoteAlighted(int agent, int vehicle);
-    void brainNoteEjected(int agent, int vehicle);
     // Three-tier traffic state (P4): the fed bubble centre, the fixed-frame
     // counter the V buckets key off (frameIndex_ % vTickDivisor — no wall
     // clock), and the lifetime transition counters the tests gate on.

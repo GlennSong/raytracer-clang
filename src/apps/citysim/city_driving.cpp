@@ -1,5 +1,6 @@
 #include "city_driving.h"
 
+#include "city_car.h"
 #include "city_sim.h"
 
 #include "../driving/act.h"            // registerMoveNeeds
@@ -178,7 +179,7 @@ void DrivingHost::reset() {
     seats_.clear();
     seatOfAgent_.clear();
     seatOfCar_.clear();
-    guests_.clear();
+    carWorld_ = nullptr;
     guestEvents_.clear();
     placesOfClass_.clear();
     placesFound_.clear();
@@ -187,7 +188,7 @@ void DrivingHost::reset() {
     cost_ = Cost();
 }
 
-// ---- Guests: cars someone else drives (ADR-0441) --------------------------------------------------------------------
+// ---- Cars someone else drives: the households' cars, which are entities (ADR-0441, ADR-0444) ---------------------------
 
 const DrivingHost::Seat* DrivingHost::seatOf(int agent) const {
     if (agent < 0 || agent >= static_cast<int>(seatOfAgent_.size())) return nullptr;
@@ -195,24 +196,26 @@ const DrivingHost::Seat* DrivingHost::seatOf(int agent) const {
     return k >= 0 ? &seats_[static_cast<std::size_t>(k)] : nullptr;
 }
 
-bool DrivingHost::seatGuest(int agent, driving::CarId car) {
-    if (!active_ || agent < 0 || seatOf(agent) || guestOf(agent)) return false;
-    if (car.index < seatOfCar_.size() && seatOfCar_[car.index] >= 0) return false;
-    for (const Seat& g : guests_)
-        if (g.car == car) return false;
-    Seat s;
-    s.agent = agent;
-    s.car = car;
-    guests_.push_back(s);
-    return true;
-}
-
-void DrivingHost::unseatGuest(int agent) {
-    for (std::size_t k = 0; k < guests_.size(); ++k)
-        if (guests_[k].agent == agent) {
-            guests_.erase(guests_.begin() + static_cast<std::ptrdiff_t>(k));
-            return;
-        }
+// WHERE THE MODEL HAS EACH CAR ENTITY ON ITS ROAD, copied into it as `mirror` copies a seat's car into its agent: the
+// middle of the body, the way it points, the lane graph's height under it (blended across the tick by the drawing),
+// its speed and its brake lamps.
+void DrivingHost::mirrorCarEntities(const driving::Driving& d) {
+    carWorld_->each<CityCarOnLane, engine::Transform>(
+        [&](engine::Entity, CityCarOnLane& lane, engine::Transform& t) {
+            const driving::Car* c = d.car(lane.car);
+            if (!c) return;
+            const driving::CarPose pose = driving::carPose(*d.roads(), d.vehicleClasses(), d.ruleSet(), *c);
+            const engine::Vec3 mid = (pose.front + pose.rear) * 0.5;
+            const engine::Vec2 body(pose.body.x, pose.body.z);
+            setCarPose(t, engine::Vec2(mid.x, mid.z), body.length() > engine::kSamePoint ? body : engine::Vec2(pose.travel.x, pose.travel.z),
+                       mid.y);
+            lane.roadYFrom = lane.fresh ? mid.y : lane.roadY;
+            lane.roadY = mid.y;
+            lane.speed = c->speed;
+            lane.driven = c->driven;
+            lane.braking = braking(d, lane.car);
+            lane.fresh = false;
+        });
 }
 
 std::vector<driving::Event> DrivingHost::takeGuestEvents() {
@@ -306,6 +309,8 @@ std::string DrivingHost::begin(driving::Driving& d, std::vector<Agent>& agents, 
 }
 
 void DrivingHost::tick(driving::Driving& d, Real dt, std::vector<Agent>& agents, std::vector<SimVehicle>& vehicles) {
+    // (the cars that are entities: where each is as the tick begins, which the drawing blends from)
+    if (carWorld_) carTickBegins(*carWorld_);
     const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
     const double modelMs = driving::tickTimed(d, dt);
     const double watchMs = std::max(0.0, msSince(t0) - modelMs);
@@ -314,7 +319,7 @@ void DrivingHost::tick(driving::Driving& d, Real dt, std::vector<Agent>& agents,
     // Trips that ended: the car stands at its destination, and is sent on again.
     std::vector<driving::CarId> arrived;
     for (const driving::Event& e : d.drainEvents()) {
-        if (!guests_.empty() && keptForGuest(e)) continue;   // (a guest's car: its own driver's to act on)
+        if (keptForGuest(e)) continue;   // (a household's car: its own driver's to act on)
         if (e.kind == driving::EventKind::Parked) {
             ++counts_.arrivals;
             arrived.push_back(e.car);
@@ -348,16 +353,10 @@ void DrivingHost::tick(driving::Driving& d, Real dt, std::vector<Agent>& agents,
         }
         mirror(d, s, agents, vehicles, snap);
     }
-    // The guests' cars: where each is, copied like any other while it is on the road.
-    for (Seat& g : guests_) {
-        const bool onRoad = d.car(g.car) != nullptr;
-        const bool snap = onRoad && !g.placed;
-        g.placed = onRoad;
-        if (onRoad) mirror(d, g, agents, vehicles, snap);
-    }
-    // (the EndedEarly and NoRoute events of the work above: counted already; a guest's are kept for its driver)
-    for (const driving::Event& e : d.drainEvents())
-        if (!guests_.empty()) keptForGuest(e);
+    // The households' cars, which are entities: where each is, copied in while it is on the road.
+    if (carWorld_) mirrorCarEntities(d);
+    // (the EndedEarly and NoRoute events of the work above: counted already; a household car's are kept for its driver)
+    for (const driving::Event& e : d.drainEvents()) keptForGuest(e);
 
     const double hostMs = msSince(t1);
     ++cost_.ticks;
@@ -370,7 +369,6 @@ void DrivingHost::tick(driving::Driving& d, Real dt, std::vector<Agent>& agents,
 
 bool DrivingHost::roadHeight(int agent, Real& from, Real& to) const {
     const Seat* seat = seatOf(agent);
-    if (!seat) seat = guestOf(agent);
     if (!seat || !seat->placed) return false;
     from = seat->roadYFrom;
     to = seat->roadY;
@@ -379,9 +377,11 @@ bool DrivingHost::roadHeight(int agent, Real& from, Real& to) const {
 
 bool DrivingHost::braking(const driving::Driving& d, int agent) const {
     const Seat* seat = seatOf(agent);
-    if (!seat) seat = guestOf(agent);
-    if (!seat) return false;
-    const driving::Car* c = d.car(seat->car);
+    return seat && braking(d, seat->car);
+}
+
+bool DrivingHost::braking(const driving::Driving& d, driving::CarId car) {
+    const driving::Car* c = d.car(car);
     if (!c || !c->driven) return false;
     return c->acceleration < -kBrakeLampDecel || c->speed < driving::kStandingBelow;
 }

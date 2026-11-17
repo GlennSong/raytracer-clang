@@ -61,8 +61,8 @@ private:
     std::string markersLine() const;
     std::string residentsLine() const;
     void draw(engine::FrameContext& ctx);
-    // What the view's centre is on: a resident (`who`), or a household's car (`vehicle`), or neither (both -1).
-    void lookedAt(const engine::FrameContext& ctx, const CityBrain& b, int& who, int& vehicle) const;
+    // What the view's centre is on: a resident (`who`), or a household's car (`car`, its number), or neither (both -1).
+    void lookedAt(const engine::FrameContext& ctx, const CityBrain& b, int& who, int& car) const;
 
     CityRenderSystem& city_;
     CitySpectateSystem& spectate_;

@@ -13,7 +13,8 @@
 //   - after every tick it copies where each car is (driving::carPose: the middle of its body and the way it points)
 //     into its driver's Agent and its SimVehicle, which is what the drawing, the walkers' car checks, the map and the
 //     camera read; and it keeps the lane graph's height under the car, which the drawing uses to find the car's own
-//     road among stacked decks;
+//     road among stacked decks; a car that is an entity (a household's car of the agent brain, city_car.h) has the
+//     same copied into its components instead;
 //   - it answers `driving?`.
 // The old model is kept away from these drivers by CitySim (drivenByV2): they are not in its active list, its spatial
 // grid or its lane occupancy, so it neither drives nor steers nor checks them for crashes nor queues behind them.
@@ -30,6 +31,10 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+namespace engine {
+class World;
+}
 
 namespace citysim {
 
@@ -92,27 +97,26 @@ public:
 
     // Does the new model drive agent `agent`'s car?
     bool drives(int agent) const {
-        return (agent >= 0 && agent < static_cast<int>(seatOfAgent_.size()) && seatOfAgent_[static_cast<std::size_t>(agent)] >= 0) ||
-               guestOf(agent) != nullptr;
+        return agent >= 0 && agent < static_cast<int>(seatOfAgent_.size()) && seatOfAgent_[static_cast<std::size_t>(agent)] >= 0;
     }
 
-    // A GUEST (ADR-0441): a car in the model that the host neither puts down nor sends anywhere, because someone else
-    // does (the resident with the agent brain, city_brain.h). While `agent` is seated as a guest in `car`, the old
-    // model keeps away from them as from any driver here (drives), and whenever the car is on the model's road its
-    // place is copied into the agent and the vehicle after each tick like any other car's. While the car is off the
-    // road (standing in a kerb space) nothing is copied and roadHeight answers false. False: the host is not active,
-    // or the agent or the car already has a seat.
-    bool seatGuest(int agent, driving::CarId car);
-    // The guest gets out: the old model may see the agent again. Harmless for an agent that is no guest.
-    void unseatGuest(int agent);
-    // THE EVENTS OF CARS THE HOST DID NOT SEAT ITSELF (guests' cars), since the last call, in the order the model gave
-    // them. The host drains the model's events each tick; these are the ones that are not its own to act on.
+    // CARS THAT ARE ENTITIES (ADR-0444; city_car.h): a household's car of the agent brain is an entity of `world`, not
+    // a row of the sim's vehicles, and the host neither puts it down nor sends it anywhere (the brain does). From now,
+    // each tick: every such car's PrevTransform is set to where it is as the tick begins (carTickBegins); and after
+    // the model's tick, every one with a CityCarOnLane whose car the model has on its road has the model's pose copied
+    // into its Transform (the middle of its body and the way it points), with the lane graph's height under it, its
+    // speed and its brake lamps. Null: none.
+    void useCarEntities(engine::World* world) { carWorld_ = world; }
+    // THE EVENTS OF CARS THE HOST DID NOT SEAT ITSELF (the households' cars), since the last call, in the order the
+    // model gave them. The host drains the model's events each tick; these are the ones that are not its own to act on.
     std::vector<driving::Event> takeGuestEvents();
     // The lane graph's height under the middle of the agent's car at the start of the last tick and at its end (for
     // the drawing, which blends the two across the tick). False when the new model does not drive the agent's car.
     bool roadHeight(int agent, Real& from, Real& to) const;
     // Is the agent's car braking (its acceleration below -kBrakeLampDecel, or held at rest on its trip)?
     bool braking(const driving::Driving& d, int agent) const;
+    // ...and the model's car `car`, whoever's it is.
+    static bool braking(const driving::Driving& d, driving::CarId car);
 
     const DrivingCounts& counts() const { return counts_; }
     const driving::Measurements& measurements() const { return *measurements_; }
@@ -153,16 +157,13 @@ private:
                 bool snap);
     // The seat of a car the host seated itself, or null.
     const Seat* seatOf(int agent) const;
-    const Seat* guestOf(int agent) const {
-        for (const Seat& g : guests_)
-            if (g.agent == agent) return &g;
-        return nullptr;
-    }
     // Keeps `e` for takeGuestEvents when its car is not one the host seated itself; true when it did.
     bool keptForGuest(const driving::Event& e);
+    // The model's pose of every car entity on its road, copied in (useCarEntities).
+    void mirrorCarEntities(const driving::Driving& d);
 
-    std::vector<Seat> guests_;                 // cars someone else drives (seatGuest), in the order they were seated
-    std::vector<driving::Event> guestEvents_;  // their events, until taken
+    engine::World* carWorld_ = nullptr;        // where the cars that are entities are (useCarEntities)
+    std::vector<driving::Event> guestEvents_;  // the events of cars the host did not seat, until taken
     bool active_ = false;
     uint32_t seed_ = 0;
     std::vector<Seat> seats_;          // in car order

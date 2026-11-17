@@ -23,10 +23,14 @@
 //               its board where the way is one (Agent::directedPace, directedRide). Reports `arrived`, or the walking
 //               state's own failure event when there is no way on foot.
 //   driving     the brain's DrivingSkill over driving::Driving, with the parts a real car needs round it: the person
-//               gets in (boardVehicle) and is a guest of the hand-over; when the kerb lane beside the space is clear
-//               the car is placed in it and drawn easing out of the space, then the trip begins; when the driving
+//               gets in (Agent::inCar: they are in the car, not drawn on foot); when the kerb lane beside the space is
+//               clear the car is placed in it and drawn easing out of the space, then the trip begins; when the driving
 //               reports "parked" and the space is taken, the car leaves the driving and is drawn easing into the
-//               space; the person gets out on the kerb side (alightVehicle).
+//               space; the person gets out on the kerb side.
+//   the cars    EACH HOUSEHOLD CAR IS ONE ENTITY of the engine's World (ADR-0444; city_car.h): its pose, its body,
+//               its household and driver, and while the driving has it a CityCarOnLane. It is no row of the sim's
+//               vehicles. The hand-over (city_driving.h) copies the driving's pose into it after each tick; the city
+//               bake draws it in the instanced car groups.
 //
 //               Told to be somewhere else at the wheel, the trip is given a new end (Driving::changeDestination) or,
 //               when the car has not left its space yet, sets off for the new end. A car that has waited for a clear
@@ -44,20 +48,23 @@
 // other.
 //
 // SOMEBODY ELSE AND THE HOUSEHOLD'S CAR (ADR-0443). An OUTSIDER is anyone the brain does not own: the player, or a
-// walker a director has taken over. The sim tells this class when an outsider gets into a household's car
-// (CitySim::boardVehicle), gets out of one (alightVehicle), or when the player takes a car with its driver in it
-// (ejectDriver). While an outsider has a car it is not free and stands nowhere a resident could take it from. Its
+// walker a director has taken over. An outsider gets into a household's car and out of it through this class (board,
+// alight: what the possession channel calls); the player taking a car with its driver in it is takenByPlayer, which
+// the player's key does not reach yet (ADR-0444: sitting 1b). While an outsider has a car it is not free and stands
+// nowhere a resident could take it from. Its
 // driver, if it had one, is stood on the kerb side and told `vehicle_gone`. Left again, it stands where it was left:
 // in a kerb space when it is in one, otherwise at a point, put into the kerb lane beside that point so it can be
 // driven away. A DIRECTOR HOLDING ONE OF THE BRAIN'S PEOPLE (the possession channel) is the brain's `possessed` state.
 //
 // INTERIM, said plainly: the car slides sideways between its space and the lane (real pulling out and parking come
 // with lane changes); a car the player leaves at a point is drawn where it was left and driven from the kerb lane
-// beside it; nothing here is saved.
+// beside it; a household's car has no physics body of its own (only the kinematic box every drawn car instance gets,
+// city_physics.cpp) and the player cannot take one with the key (both sitting 1b, ADR-0444); nothing here is saved.
 //
 // Same result every run: nothing reads the wall clock, and the machine answers events in a fixed order.
 
 #include "brain/brain.h"
+#include "../../engine/world.h"   // engine::Entity: a household's car (ADR-0444)
 #include "../../engine/procgen/city/polygon.h"
 #include "../../engine/procgen/city/roads/road_model.h"
 #include "../../rt_math.h"
@@ -167,11 +174,12 @@ public:
     CityBrain(const CityBrain&) = delete;
     CityBrain& operator=(const CityBrain&) = delete;
 
-    // Reads travel.lua and brain.lua, resolves the markers, makes the residents and their households' cars. False, with
-    // the reason in `report`: nothing is left behind. On success `report` says what was set up.
-    bool start(const std::vector<engine::CityMarker>& markers, const std::vector<engine::CityResident>& residents,
-               const std::vector<engine::CityHousehold>& households, const std::vector<int>& classOfSlot,
-               std::string* report);
+    // Reads travel.lua and brain.lua, resolves the markers, makes the residents and their households' cars, each car
+    // an entity of `world` (city_car.h; the cars of a brain made before on that world are destroyed first). False,
+    // with the reason in `report`: nothing is left behind. On success `report` says what was set up.
+    bool start(engine::World& world, const std::vector<engine::CityMarker>& markers,
+               const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& households,
+               const std::vector<int>& classOfSlot, std::string* report);
     // One tick, after the driving's: reports in, skills stepped, the machine ticked, the day tables.
     void tick(Real dt);
 
@@ -190,14 +198,24 @@ public:
     std::vector<int> householdOf(int who) const;
     int residentAgent(int who = 0) const;     // the sim's agent index (-1: none)
     int residentOfAgent(int agent) const;     // which resident a sim agent is (-1: none of them)
-    // The sim's vehicle index of the car `who` would plan with now: one of their household's (-1: it has none).
-    int residentVehicle(int who = 0) const;
-    // Every household car, as the sim's vehicle index, in the order they were made.
+    // THE HOUSEHOLDS' CARS (ADR-0444): each is one entity (city_car.h), named here by its number (CityCarBody::id,
+    // which is also its car id in the driving).
+    // The number of the car `who` would plan with now: one of their household's (-1: it has none).
+    int residentCar(int who = 0) const;
+    // Every household car's number, in the order they were made.
     std::vector<int> cars() const;
+    // The car's entity (not valid: no such car).
+    engine::Entity carEntity(int car) const;
+    // Where the car is and the way it points, on the plan. False: no such car, or the player has it as their own.
+    bool carPose(int car, Vec2& pos, Vec2& heading) const;
     // Whose household a car is (the members), who has it now, and one line about it for the screen.
-    std::vector<int> membersOfCar(int vehicle) const;
-    CarHolder carHolder(int vehicle) const;
-    std::string describeCar(int vehicle) const;
+    std::vector<int> membersOfCar(int car) const;
+    CarHolder carHolder(int car) const;
+    std::string describeCar(int car) const;
+    // WHERE A RESIDENT IS: on foot, where their body is; in a car, where the car is (Agent::inCar). And whether they
+    // are in one.
+    Vec2 personPosition(int who) const;
+    bool inCar(int who) const;
 
     // `brain? <who>`: the machine's line for a resident, with each place it names said in words.
     std::string describe(int who = 0) const;
@@ -249,14 +267,23 @@ public:
     // TEST SUPPORT: another car is put in `space` (as far as the table of spaces knows; nothing is drawn).
     void occupyForTest(const engine::KerbSpace& space);
 
-    // SOMEBODY THE BRAIN DOES NOT OWN (ADR-0443). The sim calls these (CitySim::brainNote...): `agent` got into
-    // `vehicle`; got out of it, leaving it where it stands; or the player took it with `agent` at its wheel.
-    void noteBoarded(int agent, int vehicle);
-    void noteAlighted(int agent, int vehicle);
-    void noteEjected(int agent, int vehicle);
-    // The player's own copy of a household's car (the physical one ejectDriver's caller made) is handed back: the car
-    // stands at `pos`, pointing along `heading`, free. False: `vehicle` is no household car an outsider has.
-    bool carLeftAt(int vehicle, Vec2 pos, Vec2 heading);
+    // SOMEBODY THE BRAIN DOES NOT OWN AND A HOUSEHOLD'S CAR (ADR-0443, ADR-0444).
+    // The household car nobody is in nearest `p`, within `radius` (-1: none): what a director means by "that one".
+    int nearestFreeCar(Vec2 p, Real radius) const;
+    // The sim agent `agent` (on foot; one of the brain's own people only while a director has them) gets into `car`,
+    // which nobody is in: an outsider has it from now (the possession channel's `board`). False: they cannot.
+    bool board(int agent, int car);
+    // ...and gets out again, on the kerb side, leaving it where it stands, free (`alight`). False: they are in no
+    // household's car an outsider has.
+    bool alight(int agent);
+    // THE PLAYER TAKES THE CAR, with whoever is at its wheel put out on the kerb side and told `vehicle_gone`: it is
+    // the player's as a car of their own from now, not drawn here (CityCarLink::away). NOT WIRED to the player's key
+    // yet: that is CityVehicleSystem's promotion, which needs the car as a physics body (sitting 1b). False: no such
+    // car, or an outsider has it already.
+    bool takenByPlayer(int car);
+    // The player's own copy of a household's car is handed back: the car stands at `pos`, pointing along `heading`,
+    // free. False: `car` is no household car an outsider has.
+    bool carLeftAt(int car, Vec2 pos, Vec2 heading);
     // A director takes the sim agent `agent` over, or lets them go. False: the brain does not own that agent.
     bool directorHolds(int agent, bool on);
 

@@ -10,6 +10,8 @@
 #include "../../engine/systems/day_night_system.h"   // SimHourQuery: `daynight?` asks the sim's hour
 
 #include "bus_stop_props.h"
+#include "city_brain.h"                               // the households' cars (ADR-0444)
+#include "city_car.h"                                 // ...which are entities
 
 #include "car_lamps.h"                                // lamp decision core (ADR-0065)
 #include "screen_project.h"                           // worldToScreen (place labels)
@@ -112,10 +114,10 @@ bool CityRenderSystem::carOccupied(int ai) const {
     if (ai < 0 || ai >= static_cast<int>(sim_.agents().size())) return false;
     if (ai == playerRidingAgent_ || ai == playerSeatAgent_) return true;   // the car you are in
     const Agent& a = sim_.agents()[static_cast<std::size_t>(ai)];
-    // A PERSON THE AGENT BRAIN OWNS IS IN THE CAR WHENEVER THEY ARE AT ITS WHEEL (ADR-0442), moving or not: the brain's
-    // pulling-out and parking states are a person sitting in a car in its space, and the brain takes them out of it
-    // when they leave. (For everyone else a car at rest stands empty: its person is indoors.)
-    if (a.brainOwned && a.mode == Agent::Mode::Driver) return true;
+    // A PERSON IN A HOUSEHOLD'S CAR IS IN IT WHENEVER THEY ARE AT ITS WHEEL (ADR-0442, ADR-0444), moving or not: the
+    // brain's pulling-out and parking states are a person sitting in a car in its space, and the brain takes them out
+    // of it when they leave. (For everyone else a car at rest stands empty: its person is indoors.)
+    if (a.inCar >= 0) return true;
     return a.moving || sim_.onService(ai);
 }
 
@@ -208,6 +210,13 @@ bool CityRenderSystem::agentWorldPose(int agentId, Vec3& outPos,
         return false;
     const Agent& a = sim_.agents()[agentId];
     if (a.released) return false;   // its physical car is player-driven now
+    // IN A HOUSEHOLD'S CAR (ADR-0444): where they are is the car's pose
+    if (a.inCar >= 0) {
+        Vec2 at;
+        if (!sim_.brain() || !sim_.brain()->carPose(a.inCar, at, outHeading)) return false;
+        outPos = Vec3(at.x, groundAt(at.x, at.y), at.y);
+        return true;
+    }
 
     Real x = a.pos.x, z = a.pos.y;
     Vec2 heading = a.heading;
@@ -2195,7 +2204,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // resident is put at their home marker after that.
     if ((!params_.markers.empty() || !params_.residents.empty()) && sim_.drivingV2() && sim_.drivingHost().active()) {
         std::string brainReport;
-        if (sim_.startBrain(params_.markers, params_.residents, params_.households, drivingClassOfSlot, &brainReport))
+        if (sim_.startBrain(world, params_.markers, params_.residents, params_.households, drivingClassOfSlot, &brainReport))
             LOG_INFO << "[citysim] agent brain: " << brainReport;
         else
             LOG_WARN << "[citysim] agent brain: no markers and no resident on this level: " << brainReport;
@@ -2203,6 +2212,87 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
 
     built_ = true;
     syncGroups(world);
+    return true;
+}
+
+// Tilt low-pass (4b): `su`, the last smoothed up-vector, blended toward this bake's `up`, with a gain from the bake
+// interval (tau ~0.7 s), so the filter behaves the same at the viewer's 60 Hz and the tests' 10 Hz.
+Vec3 CityRenderSystem::smoothUp(Vec3& su, Vec3 up) const {
+    const Real k = 1.0 - std::exp(-bakeDt_ / 0.7);
+    if (su.lengthSquared() < 1e-6)
+        su = up;
+    else
+        su = normalize(su + (up - su) * k);
+    return su;
+}
+
+// FOUR WHEELS ON THE ROAD (#35 follow-up, Glenn: "we'd have to make sure the 4 wheels are on the ground"): a car's
+// body as drawn, its middle at (x, z) on the plan and pointing along `heading`. The drawn surface under each tyre's
+// contact patch (`surface(x, z, metres ahead of the middle)`), a plane fitted through them for pitch and roll, then the
+// height that puts the LOWEST tyre on the surface -- none sinks; on a crest or a twist one floats by the plane's
+// residual, as a real car's would. `lineWheels`: wheels in one line are enough (a two-wheeler: pitch only, upright).
+// `cache` (null: none) keeps the tilt low-pass and the last pose: A CAR THAT HAS NOT MOVED (at a light, in a queue, at
+// the kerb) sits exactly where it sat, not four surface samples and a fit again every bake. False: the slot has too
+// few wheels, or no heading. The one fit for every car drawn on its wheels: the sim's drivers (agentPose) and the
+// households' cars that are entities (syncGroups).
+template <typename Surface>
+bool CityRenderSystem::bodyOnWheels(int slot, bool lineWheels, Real x, Real z, Vec2 heading, AgentDrawCache* cache,
+                                    const Surface& surface, Mat4& out) const {
+    const std::size_t fewestWheels = lineWheels ? 2 : 3;
+    const std::vector<CarWheel>* wheels =
+        slot >= 0 && slot < static_cast<int>(carWheels_.size()) && carWheels_[static_cast<std::size_t>(slot)].size() >= fewestWheels
+            ? &carWheels_[static_cast<std::size_t>(slot)] : nullptr;
+    const Real fl = heading.length();
+    PoseCache* pc = cache ? &cache->pose : nullptr;
+    if (pc && pc->valid && pc->x == x && pc->z == z && pc->hx == heading.x && pc->hz == heading.y && pc->slot == slot) {
+        out = pc->m;
+        return true;
+    }
+    if (!wheels || !(fl > 1e-6)) return false;
+    const Vec2 f = heading * (1.0 / fl);
+    const Vec2 r(f.y, -f.x);                  // +X, the car's right
+    // least squares y = c + gx * lx + gz * lz over the contacts (lx right, lz forward)
+    struct C { Real lx, lz, h; Vec3 local; };
+    C cs[8];
+    int n = 0;
+    for (const CarWheel& w : *wheels) {
+        if (n == 8) break;
+        const Vec3 local(w.pos.x, w.pos.y - w.radius, w.pos.z);
+        const Real wx = x + r.x * local.x + f.x * local.z, wz = z + r.y * local.x + f.y * local.z;
+        cs[n++] = {local.x, local.z, surface(wx, wz, local.z), local};
+    }
+    Real sx = 0, sz = 0, sh = 0;
+    for (int i = 0; i < n; ++i) { sx += cs[i].lx; sz += cs[i].lz; sh += cs[i].h; }
+    sx /= n; sz /= n; sh /= n;
+    Real xx = 0, zz = 0, xz = 0, xh = 0, zh = 0;
+    for (int i = 0; i < n; ++i) {
+        const Real dx = cs[i].lx - sx, dz = cs[i].lz - sz, dh = cs[i].h - sh;
+        xx += dx * dx; zz += dz * dz; xz += dx * dz; xh += dx * dh; zh += dz * dh;
+    }
+    const Real det = xx * zz - xz * xz;
+    Real gx = 0, gz = 0;   // roll and pitch slopes
+    if (std::fabs(det) > 1e-9) { gx = (xh * zz - zh * xz) / det; gz = (zh * xx - xh * xz) / det; }
+    else if (lineWheels && zz > 1e-9) gz = zh / zz;   // wheels in one line (a two-wheeler): pitch only
+    Vec3 fw = normalize(Vec3(f.x, gz, f.y));
+    Vec3 rt = normalize(Vec3(r.x, gx, r.y));
+    Vec3 up = normalize(cross(fw, rt));
+    if (up.y < 0) up = up * -1;
+    if (cache) up = smoothUp(cache->smoothUp, up);
+    fw = normalize(Vec3(f.x, 0, f.y) - up * dot(Vec3(f.x, 0, f.y), up));
+    rt = normalize(cross(up, fw));
+    // the height at which the lowest tyre just touches
+    Real cy = -1e30;
+    for (int i = 0; i < n; ++i) {
+        const Real dy = rt.y * cs[i].local.x + up.y * cs[i].local.y + fw.y * cs[i].local.z;
+        cy = std::max(cy, cs[i].h - dy);
+    }
+    Mat4 m;   // columns: X = right, Y = up, Z = forward
+    m.m[0][0] = rt.x; m.m[1][0] = rt.y; m.m[2][0] = rt.z;
+    m.m[0][1] = up.x; m.m[1][1] = up.y; m.m[2][1] = up.z;
+    m.m[0][2] = fw.x; m.m[1][2] = fw.y; m.m[2][2] = fw.z;
+    m.m[0][3] = x; m.m[1][3] = cy; m.m[2][3] = z;
+    if (pc) *pc = PoseCache{x, z, heading.x, heading.y, slot, true, m};
+    out = m;
     return true;
 }
 
@@ -2215,15 +2305,7 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
     // unindexed callers).
     auto smoothedUp = [&](Vec3 up) {
         if (agentIdx < 0 || !car) return up;
-        Vec3& su = drawCache(agentIdx).smoothUp;
-        // Gain from the bake interval (tau ~0.7 s), so the filter behaves the
-        // same at the viewer's 60 Hz and the tests' 10 Hz.
-        const Real k = 1.0 - std::exp(-bakeDt_ / 0.7);
-        if (su.lengthSquared() < 1e-6)
-            su = up;
-        else
-            su = normalize(su + (up - su) * k);
-        return su;
+        return smoothUp(drawCache(agentIdx).smoothUp, up);
     };
     Real x = a.pos.x, z = a.pos.y;          // Vec2 maps to world XZ (.y = world z)
     Vec2 baseHeading = a.heading;
@@ -2312,12 +2394,8 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
     Real y = (a.deckY > -1e29) ? deckSurfaceNear(x, z, a.deckY) + halfH
                                : groundAt(x, z) + a.elevation + halfH;
     Real yaw = std::atan2(drawHeading.x, drawHeading.y); // box local +Z -> travel heading
-    // FOUR WHEELS ON THE ROAD (#35 follow-up, Glenn: "we'd have to make sure the 4 wheels are on the
-    // ground"). The drawn surface under each tyre's contact patch (the deck the car is on, or the road
-    // and ground), a plane fitted through them for pitch and roll, then the height that puts the LOWEST
-    // tyre on the surface -- none sinks; on a crest or a twist one floats by the plane's residual, as a
-    // real car's would. One rule for decks, ramps, streets and hills.
-    // RT_FOUR_WHEELS=0: the older centre-sample placement below, for A/B (wheel_lab)
+    // FOUR WHEELS ON THE ROAD (bodyOnWheels): one rule for decks, ramps, streets and hills, on the deck the car is
+    // on, or the road and ground. RT_FOUR_WHEELS=0: the older centre-sample placement below, for A/B (wheel_lab)
     static const bool fourWheels = [] { const char* e = std::getenv("RT_FOUR_WHEELS"); return !(e && e[0] == '0'); }();
     // THE NEW MODEL'S CARS (#255) stand on their own road: the drawn deck nearest the lane graph's height under the
     // car (blended across the tick like the position), so a car on a bridge is drawn on the bridge and never on the
@@ -2334,65 +2412,13 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
         const int slot = agentIdx >= 0 ? drawSlotFor(agentIdx) : v2 ? drawSlotFor(self) : -1;
         // (the new model's two-wheelers are fitted too: their two wheels in a line give the pitch, and they stay
         // upright; the old model's keep its older placement below)
-        const std::size_t fewestWheels = v2 ? 2 : 3;
-        const std::vector<CarWheel>* wheels =
-            slot >= 0 && slot < static_cast<int>(carWheels_.size()) && carWheels_[static_cast<std::size_t>(slot)].size() >= fewestWheels
-                ? &carWheels_[static_cast<std::size_t>(slot)] : nullptr;
-        const Real fl = drawHeading.length();
-        // A CAR THAT HAS NOT MOVED (at a light, in a queue, at the kerb) sits exactly where it sat: its last pose,
-        // not four surface samples and a fit again every bake
-        PoseCache* pc = agentIdx >= 0 ? &drawCache(agentIdx).pose : nullptr;
-        if (pc && pc->valid && pc->x == x && pc->z == z && pc->hx == drawHeading.x && pc->hz == drawHeading.y && pc->slot == slot)
-            return pc->m;
-        if (wheels && fl > 1e-6) {
-            const Vec2 f = drawHeading * (1.0 / fl);
-            const Vec2 r(f.y, -f.x);                  // +X, the car's right
-            auto surface = [&](Real px, Real pz, Real along) {
-                return v2 ? deckSurfaceNear(px, pz, v2Ref) : carSurfaceAt(a, px, pz, along);
-            };
-            // least squares y = c + gx * lx + gz * lz over the contacts (lx right, lz forward)
-            struct C { Real lx, lz, h; Vec3 local; };
-            C cs[8];
-            int n = 0;
-            for (const CarWheel& w : *wheels) {
-                if (n == 8) break;
-                const Vec3 local(w.pos.x, w.pos.y - w.radius, w.pos.z);
-                const Real wx = x + r.x * local.x + f.x * local.z, wz = z + r.y * local.x + f.y * local.z;
-                cs[n++] = {local.x, local.z, surface(wx, wz, local.z), local};
-            }
-            Real sx = 0, sz = 0, sh = 0;
-            for (int i = 0; i < n; ++i) { sx += cs[i].lx; sz += cs[i].lz; sh += cs[i].h; }
-            sx /= n; sz /= n; sh /= n;
-            Real xx = 0, zz = 0, xz = 0, xh = 0, zh = 0;
-            for (int i = 0; i < n; ++i) {
-                const Real dx = cs[i].lx - sx, dz = cs[i].lz - sz, dh = cs[i].h - sh;
-                xx += dx * dx; zz += dz * dz; xz += dx * dz; xh += dx * dh; zh += dz * dh;
-            }
-            const Real det = xx * zz - xz * xz;
-            Real gx = 0, gz = 0;   // roll and pitch slopes
-            if (std::fabs(det) > 1e-9) { gx = (xh * zz - zh * xz) / det; gz = (zh * xx - xh * xz) / det; }
-            else if (v2 && zz > 1e-9) gz = zh / zz;   // wheels in one line (a two-wheeler): pitch only
-            Vec3 fw = normalize(Vec3(f.x, gz, f.y));
-            Vec3 rt = normalize(Vec3(r.x, gx, r.y));
-            Vec3 up = normalize(cross(fw, rt));
-            if (up.y < 0) up = up * -1;
-            up = smoothedUp(up);
-            fw = normalize(Vec3(f.x, 0, f.y) - up * dot(Vec3(f.x, 0, f.y), up));
-            rt = normalize(cross(up, fw));
-            // the height at which the lowest tyre just touches
-            Real cy = -1e30;
-            for (int i = 0; i < n; ++i) {
-                const Real dy = rt.y * cs[i].local.x + up.y * cs[i].local.y + fw.y * cs[i].local.z;
-                cy = std::max(cy, cs[i].h - dy);
-            }
-            Mat4 m;   // columns: X = right, Y = up, Z = forward
-            m.m[0][0] = rt.x; m.m[1][0] = rt.y; m.m[2][0] = rt.z;
-            m.m[0][1] = up.x; m.m[1][1] = up.y; m.m[2][1] = up.z;
-            m.m[0][2] = fw.x; m.m[1][2] = fw.y; m.m[2][2] = fw.z;
-            m.m[0][3] = x; m.m[1][3] = cy; m.m[2][3] = z;
-            if (pc) *pc = PoseCache{x, z, drawHeading.x, drawHeading.y, slot, true, m};
+        Mat4 m;
+        if (bodyOnWheels(slot, v2, x, z, drawHeading, agentIdx >= 0 ? &drawCache(agentIdx) : nullptr,
+                         [&](Real px, Real pz, Real along) {
+                             return v2 ? deckSurfaceNear(px, pz, v2Ref) : carSurfaceAt(a, px, pz, along);
+                         },
+                         m))
             return m;
-        }
     }
     // Cars sit NORMAL to the road plane (device: a world-upright box on a
     // graded street floats its nose or buries its tail). Sample the drive
@@ -2607,6 +2633,34 @@ void CityRenderSystem::syncCarLamps(World& world) {
     // the sim clock keeps determinism intact.
     const bool blinkOn = engine::lampBlinkOn(sim_.seconds());
     std::unordered_map<int, uint32_t> masks;   // the lit lamps of each drawn driver, by agent
+    // Darkness from the SUN where a render view has staged one (the
+    // viewer), else from the sim's own clock (headless/offline). The two
+    // clocks are NOT synced, which is why traffic used to keep its
+    // headlights off all night while the player's car had them on.
+    const bool dark = solarStaged_
+                          ? solarElevation_ < engine::kLampDuskSunY
+                          : cityIsDark(sim_.timeOfDay());
+    // A CAR'S LAMPS AS LIGHTS (ADR-0362): a beam from each headlight marker of variant `v`'s body, a red glow behind
+    // each tail lamp (brighter braking), the body drawn at `body`; LightSystem picks which cars are lit
+    const auto lampLights = [&](const Mat4& body, int v, const CarLamps& lamps, uint32_t group) {
+        const Vec3 fwd = normalize(body.transformDirection(Vec3(0, 0, 1)));
+        const Vec3 beamDir = normalize(fwd + Vec3(0, -0.14, 0));
+        for (const LampMarker& lm : carLights_[static_cast<std::size_t>(v)]) {
+            engine::LightCandidate c;
+            c.group = group;
+            if (lamps.head && lm.name.rfind("headlight", 0) == 0) {
+                c.kind = headKind;
+                c.position = body.transformPoint(lm.pos) + fwd * 0.25;
+                c.direction = beamDir;
+            } else if (lm.name.rfind("taillight", 0) == 0) {
+                c.kind = lamps.brake ? brakeKind : tailKind;
+                c.position = body.transformPoint(lm.pos) - fwd * 0.3;
+            } else {
+                continue;
+            }
+            trafficLights_.push_back(c);
+        }
+    };
 
     // (the K tier only: a far car has no drawn body and no lamps -- its speed is recorded once it is near again)
     for (int nearIdx : sim_.nearAgents()) {
@@ -2706,13 +2760,6 @@ void CityRenderSystem::syncCarLamps(World& world) {
         int turnDir = carTurnDir(a);
         if (std::fabs(Real(a.lane) - a.laneF) > 0.12)
             turnDir = (Real(a.lane) > a.laneF) ? -1 : 1;
-        // Darkness from the SUN where a render view has staged one (the
-        // viewer), else from the sim's own clock (headless/offline). The two
-        // clocks are NOT synced, which is why traffic used to keep its
-        // headlights off all night while the player's car had them on.
-        const bool dark = solarStaged_
-                              ? solarElevation_ < engine::kLampDuskSunY
-                              : cityIsDark(sim_.timeOfDay());
         // THE NEW MODEL'S CARS (#255): the brake lamps are its own braking (its acceleration, or held at rest); no
         // indicators until its rules give them (task C8)
         const bool v2 = sim_.drivenByV2(static_cast<int>(ai));
@@ -2724,30 +2771,30 @@ void CityRenderSystem::syncCarLamps(World& world) {
                : carLampStateSolar(a.state, a.speed, prev, dark, turnDir);
         const uint32_t m = engine::lampMask(lamps, blinkOn);
         if (m) masks[static_cast<int>(ai)] = m;
-        // ...and its lamps as LIGHTS (ADR-0362): a beam from each headlight marker, a red glow behind each tail lamp
-        // (brighter braking); LightSystem picks which cars are lit
         if (lamps.head || lamps.brake) {
             const std::unordered_map<int, engine::Mat4>::const_iterator po = physPose_.find(static_cast<int>(ai));
             const Mat4 body = po != physPose_.end() ? po->second : agentPose(a, static_cast<int>(ai));
-            const Vec3 fwd = normalize(body.transformDirection(Vec3(0, 0, 1)));
-            const Vec3 beamDir = normalize(fwd + Vec3(0, -0.14, 0));
-            const uint32_t group = 0x80000000u | static_cast<uint32_t>(ai);   // (the player's cars count up from 1)
-            for (const LampMarker& lm : carLights_[static_cast<std::size_t>(v)]) {
-                engine::LightCandidate c;
-                c.group = group;
-                if (lamps.head && lm.name.rfind("headlight", 0) == 0) {
-                    c.kind = headKind;
-                    c.position = body.transformPoint(lm.pos) + fwd * 0.25;
-                    c.direction = beamDir;
-                } else if (lm.name.rfind("taillight", 0) == 0) {
-                    c.kind = lamps.brake ? brakeKind : tailKind;
-                    c.position = body.transformPoint(lm.pos) - fwd * 0.3;
-                } else {
-                    continue;
-                }
-                trafficLights_.push_back(c);
-            }
+            lampLights(body, v, lamps, 0x80000000u | static_cast<uint32_t>(ai));   // (the player's cars count up from 1)
         }
+    }
+    // THE HOUSEHOLDS' CARS, which are entities (ADR-0444): lit the same way, from the driving's own braking, while on a
+    // trip (a car at rest is dark: standing in its space, or left in a lane)
+    if (drawCars && sim_.brain() && sim_.drivingV2()) {
+        world.each<CityCarBody, CityCarLink, CityCarOnLane>([&](Entity, CityCarBody& body, CityCarLink& link, CityCarOnLane& lane) {
+            AgentDrawCache& dc = drawCache(entityCarKey(body.id));
+            const Real prev = dc.fresh ? lane.speed : dc.prevSpeed;
+            dc.prevSpeed = lane.speed;
+            dc.fresh = false;
+            const int v = parkedVariant(body.slot, body.type);
+            const int key = link.driver >= 0 ? link.driver : entityCarKey(body.id);
+            const std::unordered_map<int, Mat4>::const_iterator drawn = carEntityPose_.find(key);
+            if (link.away || !lane.driven || drawn == carEntityPose_.end() || v < 0 || v >= static_cast<int>(carLights_.size())) return;
+            const CarLamps lamps = engine::vehicleLampState(lane.braking ? engine::LampMotion::Holding : engine::LampMotion::Rolling,
+                                                            lane.speed, prev, dark, 0);
+            const uint32_t m = engine::lampMask(lamps, blinkOn);
+            if (m) masks[key] = m;
+            if (lamps.head || lamps.brake) lampLights(drawn->second, v, lamps, 0x20000000u | body.id);
+        });
     }
     // ...onto the body instances syncGroups drew this bake (carAgentIds_ runs beside each group's transforms)
     if (!masks.empty())
@@ -2995,6 +3042,64 @@ void CityRenderSystem::syncBeachThings(World& world) {
     put(umbrellaGroups_, umbrellas);
 }
 
+int CityRenderSystem::parkedVariant(int slot, VehicleType type) const {
+    const int count = drawVariantCount();
+    int v = slot;
+    if (v >= count) v %= count;
+    if (type == VehicleType::Bus && busVariant_ >= 0 && busVariant_ < count) v = busVariant_;   // a bus parked in its depot
+    if (type == VehicleType::FireEngine && fireVariant_ >= 0 && fireVariant_ < count) v = fireVariant_;   // in its bay
+    if (type == VehicleType::Taxi && taxiVariant_ >= 0 && taxiVariant_ < count) v = taxiVariant_;   // a cab at the kerb
+    return v;
+}
+
+Mat4 CityRenderSystem::parkedCarPose(int variant, Vec2 pos, Vec2 heading, Real parkedY, const std::vector<Vec3>& halfExtents) const {
+    const Real y = (parkedY > -1e29 ? parkedY : groundAt(pos.x, pos.y)) +
+                   (variant >= 0 && variant < static_cast<int>(halfExtents.size()) ? halfExtents[static_cast<std::size_t>(variant)].y : 0.65);
+    const Real yaw = std::atan2(heading.x, heading.y);
+    return Mat4::trs(Vec3(pos.x, y, pos.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1));
+}
+
+// THE HOUSEHOLDS' CARS ARE ENTITIES (ADR-0444; city_car.h), drawn by the same means as the sim's own cars, into the
+// same instanced groups: a car on the road on its wheels on the deck under it (bodyOnWheels, as a driver of the new
+// driving is drawn), one off it standing level on the ground (parkedCarPose, as a parked row is). Drawn between where
+// it was as the sim's tick began (PrevTransform) and where it is, as an agent's car is (agentPose). Its instance's name
+// is its number, so the renderer draws it between bakes whether it is driven or parked; its key in carAgentIds_ is its
+// driver while somebody sits at its wheel (the driver is drawn in the seat, the glass and cabin swapped near the
+// player, as for any car with a driver), else entityCarKey.
+void CityRenderSystem::syncCarEntities(World& world, std::vector<InstanceGroup*>& cars) {
+    carEntityPose_.clear();
+    if (cars.empty() || !sim_.brain()) return;
+    const std::vector<Vec3> he = carGroupHalfExtents();
+    const Real period = sim_.tickPeriod();
+    const Real tickT = period > 0.0 ? std::clamp(sim_.secondsSinceTick() / period, Real(0), Real(1)) : Real(1);
+    world.each<CityCarBody, CityCarLink, engine::Transform, engine::PrevTransform>(
+        [&](Entity e, CityCarBody& body, CityCarLink& link, engine::Transform& t, engine::PrevTransform& prev) {
+            if (link.away) return;   // the player has it as a car of their own
+            const int v = parkedVariant(body.slot, body.type);
+            if (v < 0 || v >= static_cast<int>(cars.size()) || !cars[static_cast<std::size_t>(v)]) return;
+            Vec2 pos = carPosition(t), heading = carHeading(t);
+            const Vec2 from = carPosition(prev.value), d = pos - from;
+            if (d.lengthSquared() < 8.0 * 8.0) {   // (a placement snaps, never slides)
+                const Real yawFrom = std::atan2(carHeading(prev.value).x, carHeading(prev.value).y);
+                Real dy = std::atan2(heading.x, heading.y) - yawFrom;
+                while (dy > engine::PI) dy -= 2 * engine::PI;
+                while (dy < -engine::PI) dy += 2 * engine::PI;
+                pos = from + d * tickT;
+                heading = Vec2(std::sin(yawFrom + dy * tickT), std::cos(yawFrom + dy * tickT));
+            }
+            const int key = link.driver >= 0 ? link.driver : entityCarKey(body.id);
+            Mat4 m;
+            const CityCarOnLane* lane = world.get<CityCarOnLane>(e);
+            const Real ref = lane ? lane->roadYFrom + (lane->roadY - lane->roadYFrom) * tickT : Real(0);
+            if (!lane || !bodyOnWheels(v, true, pos.x, pos.y, heading, &drawCache(entityCarKey(body.id)),
+                                       [&](Real px, Real pz, Real) { return deckSurfaceNear(px, pz, ref); }, m))
+                m = parkedCarPose(v, pos, heading, -1e30, he);
+            cars[static_cast<std::size_t>(v)]->push(m, (uint64_t(1) << 61) | (static_cast<uint64_t>(body.id) << 8));
+            carAgentIds_[static_cast<std::size_t>(v)].push_back(key);
+            carEntityPose_[key] = m;
+        });
+}
+
 void CityRenderSystem::syncGroups(World& world) {
     std::vector<InstanceGroup*> cars;
     cars.reserve(carGroups_.size());
@@ -3171,11 +3276,7 @@ void CityRenderSystem::syncGroups(World& world) {
             // The SAME slot the car is drawn with when driven (vi % count gave
             // a parked car a different model and colour from the one it
             // arrived in -- and could make an ordinary car a parked bus).
-            int v = sim_.ambientSlotFor(static_cast<int>(vi));
-            if (v >= drawVariantCount()) v %= drawVariantCount();
-            if (sv.type == VehicleType::Bus && busVariant_ >= 0 && busVariant_ < drawVariantCount()) v = busVariant_;   // a bus parked in its depot
-            if (sv.type == VehicleType::FireEngine && fireVariant_ >= 0 && fireVariant_ < drawVariantCount()) v = fireVariant_;   // in its bay
-            if (sv.type == VehicleType::Taxi && taxiVariant_ >= 0 && taxiVariant_ < drawVariantCount()) v = taxiVariant_;   // a cab at the kerb
+            const int v = parkedVariant(sim_.ambientSlotFor(static_cast<int>(vi)), sv.type);
             if (!cars[v]) continue;
             // The ground sample is the per-frame cost the old one-shot bake
             // existed to avoid — but only a few dozen cars survive the cull, and
@@ -3188,10 +3289,7 @@ void CityRenderSystem::syncGroups(World& world) {
             // No level parks on one today; if that changes, carry the bay (or
             // the link) on SimVehicle and switch this to deckYAt.
             // ...or UP A GARAGE: on its deck (CitySim::addGarageBays)
-            const Real y = (sv.parkedY > -1e29 ? sv.parkedY : groundAt(sv.pos.x, sv.pos.y)) +
-                           (v < static_cast<int>(he.size()) ? he[v].y : 0.65);
-            const Real yaw = std::atan2(sv.heading.x, sv.heading.y);
-            cars[v]->push(Mat4::trs(Vec3(sv.pos.x, y, sv.pos.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)),
+            cars[v]->push(parkedCarPose(v, sv.pos, sv.heading, sv.parkedY, he),
                           (uint64_t(1) << 62) | static_cast<uint64_t>(vi));   // parked: keyed on the vehicle
             // NEGATIVE-but-stable id keyed on the VEHICLE: the physics proxy key
             // must not shuffle when the cull changes bake order (-1 stays
@@ -3205,6 +3303,8 @@ void CityRenderSystem::syncGroups(World& world) {
         // ~1.9 K each) purely for want of one number.
         parkedDrawn_ = drawn;
     }
+    // THE HOUSEHOLDS' CARS, which are entities and no row of the sim's (ADR-0444), into the same groups
+    syncCarEntities(world, cars);
 
     // Each signalled approach lights ONE lamp on its head — the lens for its
     // CURRENT state — so a phase change moves the lit lens between the red/amber/
@@ -3316,13 +3416,15 @@ void CityRenderSystem::syncGroups(World& world) {
             std::vector<std::pair<Real, int>> cand;
             if (sim_.hasTierCenter()) {
                 const Vec2 c = sim_.tierCenter();
-                const auto& ags = sim_.agents();
                 for (std::size_t v = 0; v < cars.size() && v < carSeeInto_.size(); ++v) {
                     if (!cars[v] || carSeeInto_[v]) continue;
-                    for (int ai : carAgentIds_[v]) {
+                    for (std::size_t k = 0; k < carAgentIds_[v].size() && k < cars[v]->transforms.size(); ++k) {
+                        const int ai = carAgentIds_[v][k];
                         if (ai < 0) continue;
                         if (!carOccupied(ai)) continue;   // a car left at the kerb is not swapped: nobody in it
-                        const Real d = (ags[static_cast<std::size_t>(ai)].pos - c).length();
+                        // (where the car is drawn: a household car's driver is not where the car is, ADR-0444)
+                        const Mat4& xf = cars[v]->transforms[k];
+                        const Real d = (Vec2(xf.m[0][3], xf.m[2][3]) - c).length();
                         if (d < (nearSwap_.count(ai) ? kNearOut : kNearIn)) cand.push_back({d, ai});
                     }
                 }

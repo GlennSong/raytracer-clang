@@ -2906,7 +2906,6 @@ bool CitySim::ejectDriver(int agentIndex) {
         v.offStreet = true;   // the player's now: the sim's copy is never drawn or found again
         v.pos = standAt;
     }
-    const int takenVehicle = a.vehicle;
     a.vehicle = -1;
     a.car = -1;               // ...and never remounted: they walk from here
     a.mode = Agent::Mode::Pedestrian;
@@ -2919,9 +2918,6 @@ bool CitySim::ejectDriver(int agentIndex) {
     a.pos = standAt;
     a.route = engine::Route{};
     a.leg = 0;
-    // (ADR-0443) a resident with the agent brain put out of a household's car: the brain is told, takes the car off
-    // the new driving, stands them on the kerb side and decides what they do next
-    if (brain_) brainNoteEjected(agentIndex, takenVehicle);
     return true;
 }
 
@@ -3721,6 +3717,7 @@ bool CitySim::pedVisible(int i) const {
     const Agent& a = agents_[static_cast<std::size_t>(i)];
     if (a.mode != Agent::Mode::Pedestrian || a.far()) return false;
     if (riding(i)) return false;   // drawn in the vehicle, not on the pavement
+    if (a.inCar >= 0) return false;   // ...as is a person in a household's car (ADR-0444)
     // on a train journey: seen only on the street and waiting on the platform (the way in, a carriage: not drawn here)
     if (const RailTrip* rt = rail_.tripOf(i))
         if (rt->phase != RailTrip::Phase::ToStation && rt->phase != RailTrip::Phase::Waiting) return false;

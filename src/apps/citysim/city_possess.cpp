@@ -1,6 +1,7 @@
 #include "city_possess.h"
 #include "../../engine/control/city_requests.h"
 
+#include "city_brain.h"   // the households' cars: board and alight (ADR-0444)
 #include "city_render.h"
 #include "city_sim.h"
 
@@ -332,7 +333,7 @@ void CityPossessSystem::possessWalker(engine::FrameContext& ctx,
     engine::Real bestD2 = 1e30;
     for (std::size_t i = 0; i < agents.size(); ++i) {
         const Agent& a = agents[i];
-        if (a.mode != Agent::Mode::Pedestrian || a.released) continue;
+        if (a.mode != Agent::Mode::Pedestrian || a.released || a.inCar >= 0) continue;   // (in a household's car: no walker)
         const engine::Real dx = a.pos.x - ref.x, dz = a.pos.y - ref.y;
         const engine::Real d2 = dx * dx + dz * dz;
         if (d2 < bestD2) { bestD2 = d2; best = static_cast<int>(i); }
@@ -516,26 +517,36 @@ void CityPossessSystem::boardNearby(engine::FrameContext& ctx,
     const auto& agents = sim.agents();
     if (walkerAgent_ >= static_cast<int>(agents.size())) return;
     const Agent& a = agents[static_cast<std::size_t>(walkerAgent_)];
-    if (a.vehicle >= 0) { error_ = "already driving"; return; }
+    if (a.vehicle >= 0 || a.inCar >= 0) { error_ = "already driving"; return; }
     const Vec2 from = cmd.hasPos ? Vec2(cmd.x, cmd.z) : a.pos;
     const int veh = sim.nearestFreeVehicle(from, kBoardReach);
-    if (veh < 0) {
+    // ...or a household's car of the agent brain, which is an entity and no vehicle of the sim's (ADR-0444): the
+    // nearer of the two
+    CityBrain* households = sim.brain();
+    int car = households ? households->nearestFreeCar(from, kBoardReach) : -1;
+    Vec2 where, heading;
+    if (car >= 0 && households->carPose(car, where, heading) &&
+        (veh < 0 || (where - from).length() < (sim.vehicles()[static_cast<std::size_t>(veh)].pos - from).length())) {
+        // (the household's car it is)
+    } else if (veh >= 0) {
+        car = -1;
+        where = sim.vehicles()[static_cast<std::size_t>(veh)].pos;
+    } else {
         error_ = "no free car within reach — walk to one first";
         state_ = PossessState::Idle;
         return;
     }
-    const Vec2 where = sim.vehicles()[static_cast<std::size_t>(veh)].pos;
     const engine::Real walk = std::sqrt((where.x - a.pos.x) * (where.x - a.pos.x) +
                                         (where.y - a.pos.y) * (where.y - a.pos.y));
     if (walk > kBoardReach) {
         error_ = "that car is too far to get into — walk to it first";
         return;
     }
-    if (!sim.boardVehicle(walkerAgent_, veh)) {
+    if (car >= 0 ? !households->board(walkerAgent_, car) : !sim.boardVehicle(walkerAgent_, veh)) {
         error_ = "that car is taken";
         return;
     }
-    LOG_INFO << "board: agent " << walkerAgent_ << " took car " << veh << " at "
+    LOG_INFO << "board: agent " << walkerAgent_ << " took " << (car >= 0 ? "household car " : "car ") << (car >= 0 ? car : veh) << " at "
              << where.x << "," << where.y << " (" << walk << " m away)";
     configureFollow(follow_, /*car=*/true);
     hasDest_ = false;
@@ -545,7 +556,9 @@ void CityPossessSystem::boardNearby(engine::FrameContext& ctx,
 void CityPossessSystem::alightHere(engine::FrameContext& ctx) {
     (void)ctx;
     if (walkerAgent_ < 0) { error_ = "nothing possessed"; return; }
-    if (!city_.simMutable().alightVehicle(walkerAgent_)) {
+    // (out of one of the sim's cars, or of a household's car of the agent brain: ADR-0444)
+    CityBrain* households = city_.simMutable().brain();
+    if (!city_.simMutable().alightVehicle(walkerAgent_) && !(households && households->alight(walkerAgent_))) {
         error_ = "not in a car";
         return;
     }

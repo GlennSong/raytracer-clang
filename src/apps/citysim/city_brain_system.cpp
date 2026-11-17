@@ -138,14 +138,14 @@ std::string CityBrainSystem::residentsLine() const {
     if (!b || !b->hasResident()) return kNoBrain;
     std::string s = "ok " + std::to_string(b->residentCount()) + " residents:";
     for (int who = 0; who < b->residentCount(); ++who) {
-        const Agent& a = city_.sim().agents()[static_cast<std::size_t>(b->residentAgent(who))];
+        const Vec2 pos = b->personPosition(who);   // (in a car: the car's)
         const int wants = b->wantedMarker(who);
         const std::string at = b->standingAt(who);
         s += " " + std::to_string(who) + " " + b->residentName(who) + " (household " +
              (b->householdName(who).empty() ? std::string("none") : b->householdName(who)) + "; " + b->stateLabel(who) +
              (at.empty() ? std::string() : " at " + at) + "; wants " +
-             (wants >= 0 ? b->markers()[static_cast<std::size_t>(wants)].name : std::string("?")) + "; at " + fmt("%.1f", a.pos.x) +
-             " " + fmt("%.1f", a.pos.y) + (who == followed_ ? "; followed" : "") + ");";
+             (wants >= 0 ? b->markers()[static_cast<std::size_t>(wants)].name : std::string("?")) + "; at " + fmt("%.1f", pos.x) +
+             " " + fmt("%.1f", pos.y) + (b->inCar(who) ? " in the car" : "") + (who == followed_ ? "; followed" : "") + ");";
     }
     return s;
 }
@@ -250,24 +250,26 @@ void CityBrainSystem::draw(engine::FrameContext& ctx) {
     // straight dashed line
     const int who = b.residentAgent(followed_);
     const Agent& a = sim.agents()[static_cast<std::size_t>(who)];
+    const bool onFoot = a.mode == Agent::Mode::Pedestrian && !b.inCar(followed_);
+    const Vec2 at = b.personPosition(followed_);
     const std::vector<BrainPlanLeg> legs = b.planLegs(followed_);
     for (const BrainPlanLeg& leg : legs) {
         if (leg.done) continue;
         std::vector<Vec3> pts;
-        if (leg.underWay && a.mode == Agent::Mode::Pedestrian && a.moving && a.route.valid()) {
+        if (leg.underWay && onFoot && a.moving && a.route.valid()) {
             // on foot: the pavements they will take, then straight to where the walk ends
             pts.push_back(on(a.pos));
             sim.walkPoses(who, kLineStep, [&](const Agent& c) { pts.push_back(on(c.pos)); });
             pts.push_back(on(leg.to));
-        } else if (leg.underWay && a.mode == Agent::Mode::Pedestrian) {
+        } else if (leg.underWay && onFoot) {
             // the last steps off the pavements, walked straight
             pts.push_back(on(a.pos));
             pts.push_back(on(leg.to));
-        } else if (leg.underWay && b.residentVehicle(followed_) >= 0) {
+        } else if (leg.underWay && b.residentCar(followed_) >= 0) {
             // at the wheel, once the driving has a route for the trip: its lanes and the turns between them, from the
             // car's front bumper on (so the line does not lie over the car)
             const driving::Driving* d = sim.drivingV2();
-            const driving::CarId car(static_cast<uint32_t>(b.residentVehicle(followed_)));
+            const driving::CarId car(static_cast<uint32_t>(b.residentCar(followed_)));
             const driving::Trip* trip = d ? d->trip(d->tripOf(car)) : nullptr;
             const driving::Car* placed = d ? d->car(car) : nullptr;
             if (trip && placed && d->roads()) {
@@ -301,16 +303,16 @@ void CityBrainSystem::draw(engine::FrameContext& ctx) {
         }
         if (pts.empty()) {
             // no route yet (a leg to come, or a car that has not left its space): straight, and dashed
-            pieces(ctx.debug, on(leg.underWay ? a.pos : leg.from), on(leg.to), leg.colour, true);
+            pieces(ctx.debug, on(leg.underWay ? at : leg.from), on(leg.to), leg.colour, true);
             continue;
         }
         for (std::size_t i = 1; i < pts.size(); ++i) pieces(ctx.debug, pts[i - 1], pts[i], leg.colour, false);
     }
 }
 
-void CityBrainSystem::lookedAt(const engine::FrameContext& ctx, const CityBrain& b, int& who, int& vehicle) const {
+void CityBrainSystem::lookedAt(const engine::FrameContext& ctx, const CityBrain& b, int& who, int& car) const {
     who = -1;
-    vehicle = -1;
+    car = -1;
     const CitySim& sim = city_.sim();
     const engine::CameraState& cam = ctx.view.camera;
     const Vec3 toward = cam.target - cam.position;
@@ -330,26 +332,27 @@ void CityBrainSystem::lookedAt(const engine::FrameContext& ctx, const CityBrain&
         const Agent& a = sim.agents()[static_cast<std::size_t>(b.residentAgent(r))];
         Real off = 0;
         // (a person at the wheel is where their car is: the car is what is looked at)
-        if (a.mode != Agent::Mode::Pedestrian || !offLine(a.pos, off) || off > best) continue;
+        if (a.mode != Agent::Mode::Pedestrian || b.inCar(r) || !offLine(a.pos, off) || off > best) continue;
         best = off;
         who = r;
-        vehicle = -1;
+        car = -1;
     }
     for (const int v : b.cars()) {
-        const SimVehicle& car = sim.vehicles()[static_cast<std::size_t>(v)];
+        Vec2 pos, heading;
         Real off = 0;
-        if (car.offStreet || !offLine(car.pos, off) || off > best) continue;
+        // (the car's own pose: its entity; a car the player has as their own is not here to look at)
+        if (!b.carPose(v, pos, heading) || !offLine(pos, off) || off > best) continue;
         best = off;
         who = -1;
-        vehicle = v;
+        car = v;
     }
-    if (who >= 0 || vehicle >= 0) return;
+    if (who >= 0 || car >= 0) return;
     // nothing on the line: the resident nearest the camera, when one is within a few metres
     Real nearest = kLookNear;
     for (int r = 0; r < b.residentCount(); ++r) {
         const Agent& a = sim.agents()[static_cast<std::size_t>(b.residentAgent(r))];
         const Real away = (Vec3(a.pos.x, city_.surfaceY(-1, 0, a.pos) + kLookHeight, a.pos.y) - cam.position).length();
-        if (a.mode != Agent::Mode::Pedestrian || away > nearest) continue;
+        if (a.mode != Agent::Mode::Pedestrian || b.inCar(r) || away > nearest) continue;
         nearest = away;
         who = r;
     }
@@ -359,7 +362,6 @@ void CityBrainSystem::lookedAt(const engine::FrameContext& ctx, const CityBrain&
 void CityBrainSystem::render(engine::FrameContext& ctx) {
     const CityBrain* b = city_.built() ? city_.sim().brain() : nullptr;
     if (!b || ctx.actions.layerUp()) return;
-    const CitySim& sim = city_.sim();
     const float W = static_cast<float>(ctx.framebufferWidth), H = static_cast<float>(ctx.framebufferHeight);
     const float k = ctx.windowWidth > 0 ? W / static_cast<float>(ctx.windowWidth) : 1.0f;
     const float white[4] = {1, 1, 1, 0.95f}, gold[4] = {1.0f, 0.82f, 0.3f, 1.0f}, back[4] = {0, 0, 0, 0.6f};
@@ -378,8 +380,8 @@ void CityBrainSystem::render(engine::FrameContext& ctx) {
     }
     // each resident's name above their head (on foot) or their car (at its wheel)
     for (int who = 0; who < b->residentCount(); ++who) {
-        const Agent& a = sim.agents()[static_cast<std::size_t>(b->residentAgent(who))];
-        const Vec3 head(a.pos.x, city_.surfaceY(-1, 0, a.pos) + kNameHeight, a.pos.y);
+        const Vec2 at = b->personPosition(who);   // (at the wheel: the car's)
+        const Vec3 head(at.x, city_.surfaceY(-1, 0, at) + kNameHeight, at.y);
         if ((head - cam.position).length() > kNameRange) continue;
         Vec2 px;
         if (!worldToScreen(vp, head, W, H, px)) continue;

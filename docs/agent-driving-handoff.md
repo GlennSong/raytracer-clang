@@ -51,6 +51,12 @@ once the new one carries river_town; until then leave it running and do not patc
   tries again (ADR-0443). Not built: the player giving back a car they took with the key. Check `git log`
   for a commit naming ADR-0443; if it is absent, that work is uncommitted in the working tree.
 
+- A household's car is one ECS entity (`src/apps/citysim/city_car.h`), not a row of the sim's vehicles: its
+  pose, body, household and driver, and a lane component while the new driving has it; drawn in the same
+  instanced car groups; a person in it is a walker with `Agent::inCar` (ADR-0444, sitting 1a of
+  `docs/two-drivers-meeting-design.md`). Not wired in 1a: the player taking a household car with the key
+  (sitting 1b); the brain's side of it is `CityBrain::takenByPlayer`.
+
 ## What is next, in the agreed order
 
 1. **Drivers among others** (design draft, agent-centred, awaiting Glenn: `docs/two-drivers-meeting-design.md`; it

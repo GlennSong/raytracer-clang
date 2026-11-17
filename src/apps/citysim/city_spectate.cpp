@@ -12,6 +12,12 @@ using engine::Real;
 using engine::Vec2;
 using engine::Vec3;
 
+namespace {
+// How the camera frames an agent: as a car when they drive one, or sit in a household's car (ADR-0444: they are a
+// walker in it, and the car is what is seen); as a walker otherwise.
+Agent::Mode framing(const Agent& a) { return a.inCar >= 0 ? Agent::Mode::Driver : a.mode; }
+}  // namespace
+
 bool isSpectatable(const Agent& agent) {
     // A released agent's ghost is parked (its physical car is player-driven), and
     // the player ghost isn't an NPC to watch — skip both when cycling.
@@ -94,7 +100,7 @@ void CitySpectateSystem::update(engine::FrameContext& ctx) {
                 current_ = sel;
                 widgetsWereOn_ = render_.debugWidgets();
                 render_.setDebugWidgets(true);
-                configureFollowFor(agents[current_].mode);
+                configureFollowFor(framing(agents[current_]));
             }
         } else {
             stopSpectating(ctx);
@@ -109,7 +115,7 @@ void CitySpectateSystem::update(engine::FrameContext& ctx) {
             widgetsWereOn_ = render_.debugWidgets();
         }
         current_ = pendingFollow_;
-        configureFollowFor(agents[static_cast<std::size_t>(current_)].mode);
+        configureFollowFor(framing(agents[static_cast<std::size_t>(current_)]));
         held_ = true;
     }
     pendingFollow_ = -1;
@@ -125,12 +131,12 @@ void CitySpectateSystem::update(engine::FrameContext& ctx) {
     // [ / ] cycle prev / next (skips released agents, wraps).
     if (ctx.actions.pressed("spectate_next")) {
         const int sel = nextSpectatable(agents, current_, +1);
-        if (sel >= 0) { current_ = sel; configureFollowFor(agents[current_].mode); }
+        if (sel >= 0) { current_ = sel; configureFollowFor(framing(agents[current_])); }
         held_ = false;
     }
     if (ctx.actions.pressed("spectate_prev")) {
         const int sel = nextSpectatable(agents, current_, -1);
-        if (sel >= 0) { current_ = sel; configureFollowFor(agents[current_].mode); }
+        if (sel >= 0) { current_ = sel; configureFollowFor(framing(agents[current_])); }
         held_ = false;
     }
 
@@ -142,7 +148,7 @@ void CitySpectateSystem::update(engine::FrameContext& ctx) {
         const int sel = nextSpectatable(agents, current_, +1);
         if (sel < 0) { stopSpectating(ctx); return; }
         current_ = sel;
-        configureFollowFor(agents[current_].mode);
+        configureFollowFor(framing(agents[current_]));
     }
 
     // Resolve the followed agent's WORLD pose — the real external body when one is
@@ -154,12 +160,12 @@ void CitySpectateSystem::update(engine::FrameContext& ctx) {
     if (!render_.agentWorldPose(current_, worldPos, heading)) {
         if (held_) return;   // the agent we were asked to follow: wait for its body
         const int sel = nextSpectatable(agents, current_, +1);
-        if (sel >= 0) { current_ = sel; configureFollowFor(agents[current_].mode); }
+        if (sel >= 0) { current_ = sel; configureFollowFor(framing(agents[current_])); }
         return;
     }
     // In or out of a car: the chase framed for what it is now.
-    if (agents[static_cast<std::size_t>(current_)].mode != framedFor_)
-        configureFollowFor(agents[static_cast<std::size_t>(current_)].mode);
+    if (framing(agents[static_cast<std::size_t>(current_)]) != framedFor_)
+        configureFollowFor(framing(agents[static_cast<std::size_t>(current_)]));
 
     // Chase the pose. Feed ZOOM ONLY (mirrors PlayerSystem's third-person branch):
     // the heading owns the yaw, so a full update() would double-apply look input.

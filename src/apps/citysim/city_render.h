@@ -773,6 +773,29 @@ private:
         return c;
     }
     Real bakeDt_ = engine::kDefaultFixedStep;                     // last step's dt (filter gain)   // last step's per-agent speed (brake decel)
+    // The tilt low-pass: `su` blended toward `up` (city_render.cpp).
+    engine::Vec3 smoothUp(engine::Vec3& su, engine::Vec3 up) const;
+    // A car's body on its wheels at (x, z) pointing along `heading` (city_render.cpp: the one fit for the sim's drivers
+    // and the households' cars). Defined and used only in city_render.cpp.
+    template <typename Surface>
+    bool bodyOnWheels(int slot, bool lineWheels, Real x, Real z, engine::Vec2 heading, AgentDrawCache* cache,
+                      const Surface& surface, engine::Mat4& out) const;
+    // THE HOUSEHOLDS' CARS, WHICH ARE ENTITIES (ADR-0444; city_car.h), into the car groups beside the sim's own: each
+    // car's body instance, and the key it is listed under in carAgentIds_ (its driver's agent index while somebody
+    // sits at its wheel, else kEntityCarKey(id)). The lamps for them are syncCarLamps's.
+    void syncCarEntities(engine::World& world, std::vector<engine::InstanceGroup*>& cars);
+    // The variant a car of fleet slot `slot` and body `type` is drawn as when nobody is driving it: the slot, and the
+    // bus, the fire engine or the cab its kind is drawn as. Parked rows and parked household cars alike.
+    int parkedVariant(int slot, VehicleType type) const;
+    // A car standing at rest (nobody driving it: a parked row, or a household car off the road) as drawn: level, its
+    // middle at `pos` on the ground under it or up a garage's deck (`parkedY` above -1e29), half its variant's height up.
+    engine::Mat4 parkedCarPose(int variant, engine::Vec2 pos, engine::Vec2 heading, Real parkedY,
+                               const std::vector<engine::Vec3>& halfExtents) const;
+    // Where each household car (by its carAgentIds_ key) was drawn this bake, for its lamps (syncCarLamps).
+    std::unordered_map<int, engine::Mat4> carEntityPose_;
+    // A household car's key in carAgentIds_ while nobody is at its wheel: below every parked row's (-2 - row), as the
+    // car's number is past every row (city_car.h).
+    static int entityCarKey(uint32_t id) { return -2 - static_cast<int>(id); }
     // debug ground rings, one per Agent::State (indexed by it)
     engine::Entity footprintGroups_[static_cast<int>(Agent::State::Count)]{};
     engine::Entity forwardGroup_{};          // debug forward-trajectory arrows
