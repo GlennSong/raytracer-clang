@@ -17,8 +17,10 @@ the side: the person at a marker, the car at each stop on the drive, the car in 
     python3 tools/brain_lab_probe.py                 # home to work
     python3 tools/brain_lab_probe.py --to shop --trait has_board
     python3 tools/brain_lab_probe.py --suffix _v2    # the pictures' names end in _v2
+    python3 tools/brain_lab_probe.py --scenario crowd --level assets/levels/brain_crowd.json   # the crowd's busy period
 """
 import argparse
+import math
 import os
 import re
 import sys
@@ -204,6 +206,77 @@ def multi(sock, shots, t0, suffix, wait_speed):
     return True
 
 
+# WHERE TO LOOK ON brain_crowd at the busy period (ADR-0446): from the level test's look list
+# (RT_CROWD_LOG=5 RT_CROWD_MINUTES=5 RT_TEST_FILTER=level_brain_crowd build-viewer/level_tests), the places with the
+# most cars near them at minute 5. x, z of the plan; the height the camera looks down from.
+CROWD_LOOKS = [
+    ("signalled_junction_j9", -270.0, 0.0, 70.0),
+    ("stop_signed_junction_j6", -270.0, -60.0, 70.0),
+    ("ramp_merge_d1_0_b_off", 469.2, 50.8, 80.0),
+]
+CROWD_BUSY_MINUTE = 5.0   # the busiest minute of the test's run: 41 cars on the road
+CHASE_BACK = 14.0         # metres behind the chased car the camera stands
+CHASE_UP = 6.0            # ...and above the ground
+
+
+def crowd(sock, shots, t0, suffix, wait_speed):
+    """THE CROWD AT ITS BUSY PERIOD (brain_crowd, ADR-0446): the day run fast to the busiest minute, then the sim held
+    still and three places taken straight down from above (a signalled junction, a stop-signed one, a ramp's merge),
+    then one resident driving taken from the follow camera behind their car. The pictures' names begin `crowd_`."""
+    def named(name):
+        return f"crowd_{name}{suffix}"
+
+    print(rtctl.send(sock, "residents?"))
+    # the lab's clock to the busy period, fast (the day starts when the level does)
+    # (the sim's own clock, from `driving?`'s tick count at 60 a second: the speed asked for is not always reached)
+    rtctl.send(sock, f"sim speed {wait_speed}")
+    while time.time() - t0 < 1200:
+        m = re.search(r"over (\d+) ticks", rtctl.send(sock, "driving?"))
+        ticks = int(m.group(1)) if m else 0
+        if ticks >= (CROWD_BUSY_MINUTE * 60.0 - 6.0) * 60:
+            break
+        rtctl.send(sock, f"sim speed {wait_speed if ticks < (CROWD_BUSY_MINUTE * 60.0 - 30.0) * 60 else 1}")
+        time.sleep(0.5)
+    rtctl.send(sock, "sim speed 1")
+    print(rtctl.send(sock, "driving?"))
+    rtctl.send(sock, "sim pause")
+    rtctl.send(sock, "brain follow off")
+    for name, x, z, height in CROWD_LOOKS:
+        rtctl.send(sock, f"camera {x} {height} {z} -89 0")
+        time.sleep(1.0)
+        shoot(sock, shots, named(name + "_from_above"), t0, rtctl.send(sock, "waiting?"))
+    rtctl.send(sock, "sim resume")
+    # ONE CAR CHASED: the first resident found driving on the road
+    for i in range(200):
+        line = rtctl.send(sock, f"brain? r{i}", timeout=30)
+        if state_of(line) == "driving" and "on the road" in line and car_speed(line) > 3.0:
+            # (after `brain follow off` and `camera`, `brain follow <who>` did not bring the chase camera back on this
+            # run: the camera is put behind the car by hand instead, along the way it went in the last half second)
+            print(rtctl.send(sock, f"brain follow r{i}"))
+            for shot in range(2):
+                p0 = body_at(rtctl.send(sock, f"brain? r{i}"))
+                time.sleep(0.5)
+                line = rtctl.send(sock, f"brain? r{i}")
+                p1 = body_at(line)
+                if not p0 or not p1 or math.hypot(p1[0] - p0[0], p1[1] - p0[1]) < 0.5:
+                    time.sleep(2.0)
+                    continue
+                fx, fz = p1[0] - p0[0], p1[1] - p0[1]
+                n = math.hypot(fx, fz)
+                fx, fz = fx / n, fz / n
+                rtctl.send(sock, "sim pause")
+                yaw = math.degrees(math.atan2(fx, -fz))
+                rtctl.send(sock, f"camera {p1[0] - CHASE_BACK * fx} {CHASE_UP} {p1[1] - CHASE_BACK * fz} -14 {yaw}")
+                time.sleep(1.0)
+                shoot(sock, shots, named(f"chase_r{i}_{shot}"), t0, line)
+                rtctl.send(sock, "sim resume")
+                time.sleep(4.0)
+            print(rtctl.send(sock, "driving?"))
+            return True
+    print("  nobody was driving on the road to chase")
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--viewer", default="build-viewer/viewer")
@@ -214,8 +287,9 @@ def main():
     ap.add_argument("--timeout", type=float, default=900.0, help="real seconds the trip may take")
     ap.add_argument("--shots", default=os.path.expanduser("~/Pictures/Raytracer/brain"))
     ap.add_argument("--log", default="out/zz_brain3/probe_viewer.log")
-    ap.add_argument("--scenario", default="trip", choices=["trip", "multi"],
-                    help="trip: one resident's trip (--to); multi: the contended household car, then the player takes it")
+    ap.add_argument("--scenario", default="trip", choices=["trip", "multi", "crowd"],
+                    help="trip: one resident's trip (--to); multi: the contended household car, then the player takes "
+                         "it; crowd: brain_crowd at its busy period (give --level assets/levels/brain_crowd.json)")
     ap.add_argument("--tag", default="", help="a prefix for the pictures' names")
     ap.add_argument("--suffix", default="", help="an ending for the pictures' names (_v2), so an earlier set is kept")
     args = ap.parse_args()
@@ -239,8 +313,9 @@ def main():
             time.sleep(1.0)
         print(f"loaded in {time.time() - t0:.0f} s: {line}")
         print(rtctl.send(sock, "markers?"))
-        if args.scenario == "multi":
-            done = multi(sock, args.shots, t0, args.suffix, args.wait_speed)
+        if args.scenario in ("multi", "crowd"):
+            run = multi if args.scenario == "multi" else crowd
+            done = run(sock, args.shots, t0, args.suffix, args.wait_speed)
             print("\nprobe", "OK" if done else "FAILED", f"({time.time() - t0:.0f} s in all)")
             return 0 if done else 1
         # one resident's trip: ana, the first; everybody's day table off, so the other five stand at home

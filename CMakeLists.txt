@@ -631,6 +631,7 @@ add_library(citysim STATIC
     src/apps/citysim/city_trip.cpp       # a person sent somewhere: the plan carried out, drawn and followed
     src/apps/citysim/city_brain.cpp      # the resident with the agent brain: the world, walking and driving for real (ADR-0441)
     src/apps/citysim/city_brain_system.cpp   # ...seen and told: brain?, goto, the markers and the plan drawn
+    src/apps/citysim/city_crowd.cpp      # a crowd of residents, their places and days, made from the roads (ADR-0446)
     src/apps/citysim/city_traffic_audio.cpp   # ambient traffic engine note (voice pool)
     src/apps/citysim/city_meshes.cpp
 )
@@ -646,6 +647,7 @@ if(RT_ENABLE_SCRIPTING)
         src/apps/citysim/scripting/place_kinds_lua.cpp
         src/apps/citysim/scripting/people_lua.cpp
         src/apps/citysim/scripting/signals_lua.cpp
+        src/apps/citysim/scripting/crowd_lua.cpp   # crowd.lua: the crowd a level makes (ADR-0446)
         # (travel_lua.cpp, travel.lua's reader, is compiled in the `brain` library with the planner it reads for)
         src/apps/citysim/scripting/vehicle_body.cpp
     )
@@ -1108,6 +1110,7 @@ add_executable(level_tests
     tests/test_levels_playable.cpp
     tests/test_traffic_lab_v2.cpp   # the traffic lab driven by the new model; a v1 level's state unchanged (#255, #235)
     tests/test_brain_lab.cpp        # one resident with the agent brain makes a whole trip between markers (ADR-0441)
+    tests/test_brain_crowd.cpp      # a crowd of 200 residents made from the roads drives the lab (ADR-0446)
     # Drives the real LevelLoader, which needs a Renderer. NullRenderer
     # satisfies Renderer::create() without a GPU (exactly one create() is linked
     # per target, and this target links no backend).

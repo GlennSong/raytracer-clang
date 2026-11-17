@@ -469,6 +469,8 @@ constexpr Real kErrandOffLink = 15.0;
 // with nothing wrong. Reaching a car you can see across the road is a person crossing it, so the reach is a street's
 // width. Getting to the STREET is still the director's problem, which is the part that matters.
 constexpr Real kBoardReach = 25.0;
+// How many of the nodes nearest a walker sendAgentTo looks at for one a walkable link leaves (ADR-0446).
+constexpr int kWalkStartNodes = 8;
 // A walker's speed (m/s) before its own pace and what it rides on (Agent::speedFactor, CitySim::ridePace).
 constexpr Real kWalkSpeed = 1.4;
 
@@ -1181,6 +1183,23 @@ public:
         Real keepDist = a.distOnLeg;
         const bool onFoot = a.mode == Agent::Mode::Pedestrian;
         int from = legLink >= 0 ? nav_->links[static_cast<std::size_t>(legLink)].to : nav_->nearestNode(a.pos);
+        // A WALKER LEAVES FROM A NODE PEOPLE WALK: the nearest node can be a ramp's or a freeway's, none of whose links
+        // is walkable (NavLink::walkable), and a walk from it never routes -- measured on brain_crowd: people at a place
+        // beside an arterial, 10 m from a ramp's node, could not walk anywhere and stood for good (ADR-0446). The
+        // nearest few nodes are looked at for the first a walkable link leaves; none: the nearest, as before.
+        if (legLink < 0 && onFoot && from >= 0) {
+            const auto walked = [&](int n) {
+                for (const int l : nav_->outLinks[static_cast<std::size_t>(n)])
+                    if (nav_->links[static_cast<std::size_t>(l)].walkable) return true;
+                return false;
+            };
+            if (!walked(from))
+                for (const int n : nav_->nearestNodes(a.pos, kWalkStartNodes))
+                    if (walked(n)) {
+                        from = n;
+                        break;
+                    }
+        }
         // A CAR STILL IN ITS BAY (ADR-0415 as built) leaves from the bay's own street: routed from the node AHEAD of
         // the bay, startTrip pulls it out at the bay's station. From the nearest node, which can be the one behind
         // it, the drive began back there -- the car drawn reversing out of its space up the street.
@@ -1444,7 +1463,7 @@ public:
     // households' cars are entities of `world` (ADR-0444; city_car.h). brain(): null when there is none.
     bool startBrain(engine::World& world, const std::vector<engine::CityMarker>& markers,
                     const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& households,
-                    const std::vector<int>& classOfSlot, std::string* report);
+                    const std::vector<int>& classOfSlot, std::string* report, bool drivableSpacesOnly = false);
     CityBrain* brain() const { return brain_.get(); }
     // A DIRECTOR TAKES ONE OF THE BRAIN'S PEOPLE OVER, OR LETS THEM GO (ADR-0443; the possession channel,
     // city_possess.cpp): the brain's `possessed` state holds them (their intent kept, nothing moving them on) until

@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
 #include <map>
 
 namespace citysim {
@@ -41,7 +42,9 @@ constexpr uint32_t kPointTag = 0x02000000u;
 constexpr uint32_t kMarkerIndexMask = 0x0000FFFFu;
 constexpr uint32_t kMarkerSpotShift = 16;
 constexpr uint32_t kMarkerSpotMask = 0xFFu;
-constexpr std::size_t kMostResidents = kMarkerSpotMask + 1;   // one spot each
+constexpr std::size_t kMostResidents = kMarkerSpotMask + 1;   // the spots one marker has (one person each)
+// The first this many residents stand on the spot of their own number at every marker (Impl::takeSpot).
+constexpr uint32_t kSpotsByNumber = 8;
 // The car a test puts in a space (occupyForTest): no car of the households.
 constexpr uint32_t kTestCar = brain::kMaxHandle;
 // WHO HAS A CAR when it is nobody the brain owns: the player, or a walker a director took over (an OUTSIDER).
@@ -153,6 +156,7 @@ struct CityBrain::Impl {
     std::vector<Person> people;
 
     CityBrainCounts counts;
+    CityBrainCost cost;
     std::vector<brain::Transition> traceAll;   // the machine's, shared out to each person's own after every tick
 
     // (made in start, in this order; the machine last)
@@ -234,11 +238,42 @@ struct CityBrain::Impl {
     static uint32_t markerIndex(PlaceRef p) { return p.id & kMarkerIndexMask; }
     static uint32_t markerSpot(PlaceRef p) { return (p.id >> kMarkerSpotShift) & kMarkerSpotMask; }
     bool isSpace(PlaceRef p) const { return spaces && spaces->owns(p); }
-    // The marker `index` as the place `who` wants to be at: their own spot at it.
+    // EACH PERSON'S SPOT AT A MARKER (ADR-0446), given once per person and marker, the first time they use it (the
+    // level's residents in order, each their home and then their day's stops; later, whoever is sent there). The
+    // first kSpotsByNumber residents take the spot of their own number, as ADR-0443 laid them out (the first resident
+    // on the marker's own spot, the second kStandApart one way, the third the other way); everyone else, or one whose
+    // numbered spot is taken, the lowest spot nobody has. (Every resident's own number put the two-hundredth 90 m along
+    // the street from their marker.)
+    std::map<std::pair<int, AgentId>, uint32_t> spotOf;
+    std::vector<std::vector<uint8_t>> spotsTaken;   // per marker, per spot number
+    // Their spot there: the one given, or (none given yet) the one they would be given now.
+    uint32_t spotFor(int index, AgentId who) const {
+        const std::map<std::pair<int, AgentId>, uint32_t>::const_iterator it = spotOf.find({index, who});
+        if (it != spotOf.end()) return it->second;
+        static const std::vector<uint8_t> kNone;
+        const std::vector<uint8_t>& taken =
+            index >= 0 && static_cast<std::size_t>(index) < spotsTaken.size() ? spotsTaken[static_cast<std::size_t>(index)] : kNone;
+        const auto isFree = [&](uint32_t s) { return s >= taken.size() || !taken[s]; };
+        uint32_t spot = who < kSpotsByNumber && isFree(who) ? static_cast<uint32_t>(who) : 0;
+        while (!isFree(spot)) ++spot;
+        return spot;
+    }
+    void takeSpot(int index, AgentId who) {
+        if (index < 0 || index >= static_cast<int>(markers.size()) || spotOf.count({index, who}) > 0) return;
+        const uint32_t spot = spotFor(index, who);
+        if (spotsTaken.size() < markers.size()) spotsTaken.resize(markers.size());
+        std::vector<uint8_t>& taken = spotsTaken[static_cast<std::size_t>(index)];
+        if (spot >= taken.size()) taken.resize(spot + 1, 0);
+        taken[spot] = 1;
+        spotOf[{index, who}] = spot;
+    }
+    // The marker `index` as the place `who` wants to be at: their own spot at it (takeSpot first). Not valid: no such
+    // marker, or more people use it than a handle has spots for.
     PlaceRef markerPlace(int index, AgentId who) const {
         PlaceRef p;
-        if (index >= 0 && index < static_cast<int>(markers.size()) && who < kMostResidents)
-            p.id = kMarkerTag | (static_cast<uint32_t>(who) << kMarkerSpotShift) | static_cast<uint32_t>(index);
+        const uint32_t spot = spotFor(index, who);
+        if (index >= 0 && index < static_cast<int>(markers.size()) && spot < kMostResidents)
+            p.id = kMarkerTag | (spot << kMarkerSpotShift) | static_cast<uint32_t>(index);
         return p;
     }
     // WHERE THE PERSON WITH SPOT NUMBER `spot` STANDS AT A MARKER: the first on the marker's own spot, the rest
@@ -307,8 +342,42 @@ struct CityBrain::Impl {
         if (!isPoint(place) || !kerbSideOf(at, out)) out = at;
         return true;
     }
-    // The kerb spaces near a place, nearest first on foot.
-    std::vector<PlaceRef> spacesFor(PlaceRef door) const {
+    // A KERB SPACE A CAR OF CLASS `cls` CAN DRIVE AWAY FROM AND BACK TO (ADR-0446): the kerb lane beside it lies in
+    // the largest part of the road the class can drive (driving/trip_places.h: every lane of a part reaches every
+    // other). A space beside a road that just ends at the lab's open edge, or one the class's routes cannot get out
+    // of, is one a car parked in is stuck in, or a trip from it has no route and the car is left standing in the lane.
+    struct ClassParts {
+        driving::TripPlaces places;
+        uint32_t main = driving::kNoTripPart;
+    };
+    mutable std::map<uint32_t, ClassParts> partsOfClass;
+    bool drivable(PlaceRef space, uint32_t cls) const {
+        if (!drivableSpacesOnly) return true;
+        std::map<uint32_t, ClassParts>::iterator it = partsOfClass.find(cls);
+        if (it == partsOfClass.end()) {
+            ClassParts cp;
+            cp.places = driving::findTripPlaces(*d->roads(), d->routeClass(cls), kKerbLaneEndMargin, kSmallestTripPart);
+            Real most = 0;
+            for (uint32_t p = 0; p < cp.places.parts.size(); ++p)
+                if (cp.places.parts[p].total > most) {
+                    most = cp.places.parts[p].total;
+                    cp.main = p;
+                }
+            it = partsOfClass.emplace(cls, std::move(cp)).first;
+        }
+        driving::PathPoint lane;
+        return spaces->kerbLane(space, lane) && it->second.places.partOf(lane.path) == it->second.main;
+    }
+    // THE LEVEL ASKS FOR IT (citysim.drivableSpacesOnly; brain_crowd does): without it every kerb space is offered, as
+    // brain_lab was built and tested (one of its spaces, by `far`, is outside the largest part).
+    bool drivableSpacesOnly = false;
+    // The driving class a car is driven as (class 0 for a car the brain does not have).
+    uint32_t classOf(CarRef ref) const {
+        const CarRec* c = car(ref);
+        return c ? bodyOf(*c).vehicleClass : 0u;
+    }
+    // The kerb spaces near a place a car of class `cls` can drive from and to, nearest first on foot.
+    std::vector<PlaceRef> spacesFor(PlaceRef door, uint32_t cls) const {
         std::vector<PlaceRef> out;
         engine::RoadFrontage frontage;
         Vec2 at;
@@ -317,7 +386,7 @@ struct CityBrain::Impl {
         if (!frontage.street.valid()) return out;
         for (const engine::KerbSpaceNear& found : model->kerbSpacesNear(frontage, kSpaceReach, kSpacesLookedAt)) {
             const PlaceRef place = spaces->placeOf(found.space);
-            if (place.valid()) out.push_back(place);
+            if (place.valid() && drivable(place, cls)) out.push_back(place);
         }
         return out;
     }
@@ -493,7 +562,7 @@ struct CityBrain::Impl::LabWorld : brain::World {
         im.tellHousehold(*c, who);
     }
     bool spaceNear(PlaceRef door, CarRef ref, PlaceRef& out) const override {
-        for (const PlaceRef space : im.spacesFor(door))
+        for (const PlaceRef space : im.spacesFor(door, im.classOf(ref)))
             if (im.spaceFree(space, ref, brain::kNoAgent)) {
                 out = space;
                 return true;
@@ -513,7 +582,7 @@ struct CityBrain::Impl::LabWorld : brain::World {
     }
     void dropHold(AgentId who) override { im.held.erase(who); }
     bool nextSpace(PlaceRef door, CarRef ref, AgentId who, PlaceRef taken, PlaceRef& out) const override {
-        for (const PlaceRef space : im.spacesFor(door))
+        for (const PlaceRef space : im.spacesFor(door, im.classOf(ref)))
             if (space != taken && im.spaceFree(space, ref, who)) {
                 out = space;
                 ++im.counts.nextSpaces;
@@ -973,9 +1042,10 @@ CityBrain::~CityBrain() = default;
 
 bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker>& markerSpecs,
                       const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& householdSpecs,
-                      const std::vector<int>& classOfSlot, std::string* report) {
+                      const std::vector<int>& classOfSlot, std::string* report, bool drivableSpacesOnly) {
     Impl& im = *impl_;
     CitySim& sim = im.sim;
+    im.drivableSpacesOnly = drivableSpacesOnly;
     const auto refuse = [&](const std::string& why) {
         if (report) *report = why;
         for (const Impl::CarRec& c : im.cars) world.destroy(c.entity);   // (nothing is left behind)
@@ -1062,9 +1132,15 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
         if (report) *report = line + ", no resident";
         return true;
     }
-    if (residents.size() > kMostResidents)
-        return refuse("the level states " + std::to_string(residents.size()) + " residents; a marker has a spot for " +
-                      std::to_string(kMostResidents));
+    // EACH PERSON'S SPOT AT EVERY MARKER THEY USE, in the level's order: their home, then their day's stops
+    for (std::size_t r = 0; r < residents.size(); ++r) {
+        im.takeSpot(markerNamed(residents[r].home), static_cast<AgentId>(r));
+        for (const engine::CityResident::Stop& stop : residents[r].day) im.takeSpot(markerNamed(stop.at), static_cast<AgentId>(r));
+    }
+    for (std::size_t m = 0; m < im.spotsTaken.size(); ++m)
+        if (im.spotsTaken[m].size() > kMostResidents)
+            return refuse("marker \"" + im.markers[m].name + "\" is used by more residents than its " +
+                          std::to_string(kMostResidents) + " spots");
 
     // THE RESIDENTS, checked before anything is made: each a walker the level made, in the order it made them
     std::vector<int> agents;
@@ -1128,8 +1204,18 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
             const std::string at = "household \"" + hs.name + "\": a car near \"" + cs.near + "\"";
             const int marker = markerNamed(cs.near);
             if (marker < 0) return refuse(at + ": that is not one of the level's markers");
+            // THE CAR IS ONE ENTITY (city_car.h), numbered on from the sim's last vehicle row, and drawn as the fleet
+            // slot the sim would deal a vehicle of that number (CitySim::ambientSlotFor)
+            Impl::CarRec c;
+            c.id = static_cast<uint32_t>(sim.vehicles_.size() + im.cars.size());
+            c.household = index;
+            const int slot = sim.ambientSlotFor(static_cast<int>(c.id));
+            const VehicleBody& body = sim.fleetBody(slot);
+            const int cls = slot >= 0 && slot < static_cast<int>(classOfSlot.size()) ? classOfSlot[static_cast<std::size_t>(slot)] : -1;
+            const uint32_t drivenAs = cls >= 0 && cls < static_cast<int>(im.d->vehicleClasses().size()) ? static_cast<uint32_t>(cls) : 0u;
+            // ...standing in the free kerb space nearest the marker on foot that it can drive from
             PlaceRef chosen;
-            for (const PlaceRef space : im.spacesFor(im.markerPlace(marker, 0))) {
+            for (const PlaceRef space : im.spacesFor(im.markerPlace(marker, 0), drivenAs)) {
                 if (im.occupant.count(space.id) > 0) continue;
                 if (!cs.space.empty() && im.placeName(space) != "space " + cs.space) continue;
                 chosen = space;
@@ -1140,13 +1226,6 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
             if (!chosen.valid() || !im.spacePose(chosen, pose, kerbward))
                 return refuse(at + (cs.space.empty() ? std::string() : " in space \"" + cs.space + "\"") +
                               ": no such free kerb parking space within " + fmt("%.0f m", kSpaceReach) + " on foot of the marker");
-            // THE CAR IS ONE ENTITY (city_car.h), numbered on from the sim's last vehicle row, and drawn as the fleet
-            // slot the sim would deal a vehicle of that number (CitySim::ambientSlotFor)
-            Impl::CarRec c;
-            c.id = static_cast<uint32_t>(sim.vehicles_.size() + im.cars.size());            c.household = index;
-            const int slot = sim.ambientSlotFor(static_cast<int>(c.id));
-            const VehicleBody& body = sim.fleetBody(slot);
-            const int cls = slot >= 0 && slot < static_cast<int>(classOfSlot.size()) ? classOfSlot[static_cast<std::size_t>(slot)] : -1;
             CityCarBody carBody;
             carBody.id = c.id;
             carBody.slot = slot;
@@ -1154,7 +1233,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
             carBody.length = body.length;
             carBody.width = body.width;
             carBody.height = body.height;
-            carBody.vehicleClass = cls >= 0 && cls < static_cast<int>(im.d->vehicleClasses().size()) ? static_cast<uint32_t>(cls) : 0u;
+            carBody.vehicleClass = drivenAs;
             CityCarLink link;
             link.household = index;
             engine::Transform where;
@@ -1197,7 +1276,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
             sim.setAgentDirected(person.agent, true);
             a.brainOwned = true;   // the sim's day table never places them (CitySim::placeFromSchedule)
             sim.pinAgent(person.agent, true);
-            a.pos = im.spotAt(homeMarker, static_cast<uint32_t>(r));
+            a.pos = im.spotAt(homeMarker, im.spotFor(made[r].home, id));
             a.tickFromPos = a.pos;
             a.heading = unit(homeMarker.frontage.on - homeMarker.stand, a.heading);
             a.tickFromHeading = a.heading;
@@ -1238,6 +1317,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
 void CityBrain::tick(Real dt) {
     Impl& im = *impl_;
     if (!im.machine) return;
+    const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
     im.followCars();   // (the driving has moved the cars on the road: their people with them, before anyone plans)
     // the driving's reports for the households' cars, taken from the hand-over (which drains the driving's events)
     const std::vector<driving::Event> events = im.sim.drivingHost_.takeGuestEvents();
@@ -1250,6 +1330,10 @@ void CityBrain::tick(Real dt) {
     im.followCars();   // (...and the cars sliding between a space and the lane)
     for (AgentId who = 0; who < im.people.size(); ++who) im.tickDay(who);
     im.shareOutTrace();
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    ++im.cost.ticks;
+    im.cost.ms += ms;
+    im.cost.worstMs = std::max(im.cost.worstMs, ms);
 }
 
 const std::vector<BrainMarker>& CityBrain::markers() const { return impl_->markers; }
@@ -1352,6 +1436,7 @@ const std::vector<brain::Transition>& CityBrain::trace(int who) const {
 }
 const brain::Machine* CityBrain::machine() const { return impl_->machine.get(); }
 const CityBrainCounts& CityBrain::counts() const { return impl_->counts; }
+const CityBrainCost& CityBrain::cost() const { return impl_->cost; }
 brain::BrainTime CityBrain::now() const { return impl_->now(); }
 bool CityBrain::dayOn(int who) const { return impl_->isPerson(who) && impl_->people[static_cast<std::size_t>(who)].dayOn; }
 void CityBrain::setDay(bool on) {
@@ -1388,7 +1473,7 @@ int CityBrain::wantedMarker(int who) const {
 Vec2 CityBrain::standSpot(int who, int marker) const {
     const Impl& im = *impl_;
     if (marker < 0 || marker >= static_cast<int>(im.markers.size()) || who < 0) return Vec2(0, 0);
-    return im.spotAt(im.markers[static_cast<std::size_t>(marker)], static_cast<uint32_t>(who));
+    return im.spotAt(im.markers[static_cast<std::size_t>(marker)], im.spotFor(marker, static_cast<AgentId>(who)));
 }
 
 std::string CityBrain::standingAt(int who) const {
@@ -1396,9 +1481,12 @@ std::string CityBrain::standingAt(int who) const {
     const Impl& im = *impl_;
     const Agent& body = im.agentOf(static_cast<AgentId>(who));
     if (body.mode != Agent::Mode::Pedestrian || body.inCar >= 0) return "";
-    for (const BrainMarker& m : im.markers)
-        if (engine::atOrBefore((body.pos - im.spotAt(m, static_cast<uint32_t>(who))).length(), kWalkArrivedWithin, engine::kSamePoint))
+    for (std::size_t i = 0; i < im.markers.size(); ++i) {
+        const BrainMarker& m = im.markers[i];
+        if (engine::atOrBefore((body.pos - im.spotAt(m, im.spotFor(static_cast<int>(i), static_cast<AgentId>(who)))).length(),
+                               kWalkArrivedWithin, engine::kSamePoint))
             return m.name;
+    }
     return "";
 }
 
@@ -1518,7 +1606,13 @@ bool CityBrain::goTo(int who, const std::string& marker, std::string* why) {
     }
     Impl::Person& p = im.people[static_cast<std::size_t>(who)];
     p.dayOn = false;
-    im.machine->setIntent(static_cast<AgentId>(who), p.intentKind, im.markerPlace(at, static_cast<AgentId>(who)));
+    im.takeSpot(at, static_cast<AgentId>(who));
+    const PlaceRef place = im.markerPlace(at, static_cast<AgentId>(who));
+    if (!place.valid()) {
+        if (why) *why = "marker \"" + marker + "\" has no spot left";
+        return false;
+    }
+    im.machine->setIntent(static_cast<AgentId>(who), p.intentKind, place);
     return true;
 }
 
@@ -1705,9 +1799,9 @@ bool CityBrain::directorHolds(int agent, bool on) {
 
 bool CitySim::startBrain(engine::World& world, const std::vector<engine::CityMarker>& markers,
                          const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& households,
-                         const std::vector<int>& classOfSlot, std::string* report) {
+                         const std::vector<int>& classOfSlot, std::string* report, bool drivableSpacesOnly) {
     std::shared_ptr<CityBrain> made = std::make_shared<CityBrain>(*this);
-    if (!made->start(world, markers, residents, households, classOfSlot, report)) return false;
+    if (!made->start(world, markers, residents, households, classOfSlot, report, drivableSpacesOnly)) return false;
     brain_ = std::move(made);
     return true;
 }

@@ -100,7 +100,9 @@ constexpr Real kPullOutRoomAhead = 3.0;
 constexpr Real kKerbLaneEndMargin = 2.0;
 // How far on foot from a marker a kerb space may be to be offered for it, and how many are looked at.
 constexpr Real kSpaceReach = 400.0;
-constexpr std::size_t kSpacesLookedAt = 24;
+// (64: a crowd's homes share the spaces of their streets, and the ones a car cannot drive from are passed over, ADR-0446;
+// it was 24)
+constexpr std::size_t kSpacesLookedAt = 64;
 // Where a person stands to get into a car or after getting out: this far out from the car's side, on the kerb side.
 constexpr Real kDoorStandOff = 0.6;
 // A walk has arrived when the person is within this of where it ends.
@@ -152,6 +154,12 @@ struct CityBrainCounts {
     uint32_t held = 0, letGo = 0;  // times a director took one of the brain's people over, and let them go
 };
 
+// WHAT ITS TICKS COST on the wall clock (reporting only; nothing reads it back): how many, their sum and the worst.
+struct CityBrainCost {
+    uint64_t ticks = 0;
+    double ms = 0, worstMs = 0;
+};
+
 // WHO HAS A HOUSEHOLD'S CAR, for a test and for the screen.
 enum class CarHolder : uint8_t {
     Nobody,     // free: it stands where it was left
@@ -177,9 +185,11 @@ public:
     // Reads travel.lua and brain.lua, resolves the markers, makes the residents and their households' cars, each car
     // an entity of `world` (city_car.h; the cars of a brain made before on that world are destroyed first). False,
     // with the reason in `report`: nothing is left behind. On success `report` says what was set up.
+    // `drivableSpacesOnly` (ADR-0446; citysim.drivableSpacesOnly): offer only kerb spaces a car can drive away from
+    // and back to (the kerb lane beside them in the largest part of the road its class drives).
     bool start(engine::World& world, const std::vector<engine::CityMarker>& markers,
                const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& households,
-               const std::vector<int>& classOfSlot, std::string* report);
+               const std::vector<int>& classOfSlot, std::string* report, bool drivableSpacesOnly = false);
     // One tick, after the driving's: reports in, skills stepped, the machine ticked, the day tables.
     void tick(Real dt);
 
@@ -239,6 +249,7 @@ public:
     const std::vector<brain::Transition>& trace(int who = 0) const;
     const brain::Machine* machine() const;
     const CityBrainCounts& counts() const;
+    const CityBrainCost& cost() const;
     brain::BrainTime now() const;
     std::vector<BrainPlanLeg> planLegs(int who = 0) const;
 

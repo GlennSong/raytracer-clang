@@ -1187,6 +1187,13 @@ struct CitySimConfig {
     std::vector<CityMarker> markers;
     std::vector<CityResident> residents;
     std::vector<CityHousehold> households;
+    // A CROWD MADE FROM THE ROADS (ADR-0446; apps/citysim/city_crowd.h): `"crowd": "crowd.lua"` names a file under
+    // assets/scripts whose `crowd` table says how many residents, their households, cars, places and days; they are
+    // made when the city is built and added to the markers, residents and households above. Empty: none.
+    std::string crowd;
+    // `"drivableSpacesOnly": true` (ADR-0446): the brain offers its households only kerb spaces a car can drive away
+    // from and back to (apps/citysim/city_brain.h). brain_lab, built before it, does not ask.
+    bool drivableSpacesOnly = false;
     bool ambientBus = false;             // a test lab's ambient rotation includes the bus body (wheel_lab)
                                          // (no schedule) — the lab car keeps lapping
     // Scripted goal tables (ADR-0064): the loaded TEXT of the level's
