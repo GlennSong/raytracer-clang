@@ -167,15 +167,51 @@ enough; what is new is facts and rules.
 a crash). Stand-offs are broken by habits (a long wait makes a driver bolder, seeded so it is not both at once);
 crashes are counted. Both are measured, and a bad count is fixed in the habits.
 
-## 7. How a decision is carried out
+## 7. How a decision is carried out (agreed with Glenn, 2026-11-16)
 
-- **Near**: a controller turns "this speed, along this path, this far to the side" into steering, throttle and brake
-  for the Jolt car. It exists: `computeDriverInput` and the pursuit controller, tested on a real Jolt car following a
-  lane (`agent_driver_tracks_a_lane_on_real_physics_and_stops_at_its_end`). The car is where physics says; the driver
-  reads that and decides again. A skid, a shove, a swerve are facts the driver deals with, never errors to correct.
-  Holding a lane through corners and junctions on physics needs its own test bed (the old driving's roll and fishtail
-  history, ADR-0087); `wheel_lab` and `movement_lab` are the starting points.
-- **Middle**: the car moves along its lane at the decided speed, with a sideways offset for lane changes and swerves.
+**Deciding is the same near and middle.** About ten times a second the driver turns what it perceives into an
+INTENT: the line to follow (its lane's centre along its route, or an offset curve for a lane change or a swerve), how
+fast (a wanted acceleration from the following formulas), and where to stop, if anywhere ("front at the stop line",
+"behind that car"). Only how the intent is carried out differs.
+
+- **A lane car** (middle) is four numbers: which lane, how far along it, how far to the side, its speed. Each tick
+  the speed changes by the wanted acceleration and the car moves along the lane; where it is drawn comes from the
+  lane's shape. It cannot skid or be pushed, and stops exactly where it means to.
+- **A physics car** (near) is what Jolt says. A controller turns the intent into steering, throttle and brake every
+  physics step: steering by pure pursuit (aim at a point on the line some way ahead, further the faster it goes;
+  `pursuitCommand`, `computeDriverInput`, tested on a real Jolt car in `agent_driver_tracks_a_lane_on_real_physics...`
+  and `agent_driver_holds_a_cornering_route...`); speed by the error between wanted and actual speed plus a
+  prediction from the car's mass and engine; a stop by a braking curve that ends at the place, corrected each step
+  against the distance left.
+
+**Who is in charge of where a car is.** A lane car: the driving's four numbers. A physics car: Jolt. Each tick the
+physics car's real pose is projected onto the lanes (which lane, how far along, how far off its centre) and WRITTEN
+INTO the driving's record, so every other driver, lane cars included, sees it where it really is. Physics is never
+pulled toward the driving's idea of where the car should be: that was the ghost. A shove, a skid or a swerve is a fact
+its own driver sees and steers back from.
+
+**Off the road.** When the projection finds no lane, or one far from the car, the driver is "off the road": its
+intent becomes "back to the nearest point of my route, facing the right way", or another way from where it stands. On
+its roof or wrecked: a wreck (section 8).
+
+**Switching** (section 4): lane to physics, the Jolt car is made at the exact pose it is drawn at, wheels on the
+ground, moving at its speed along its heading, so it neither drops nor lurches. Physics to lane, only when near its
+lane's centre, nearly aligned with it, upright and not a wreck; it is put at the nearest point along the lane and
+keeps its speed, a jump of a few centimetres at most.
+
+**The hard parts, each with a measured target before the city:**
+1. Stopping at the line: a physics car may overshoot where a lane car stops to the centimetre. Target: within about
+   30 cm of where a lane car stops.
+2. Holding the lane through tight junction turns: the old driving's rolls and fishtails (ADR-0087) needed a yaw
+   assist, a softer rig and steering assist; those settings exist for the player's car and are reused.
+3. Lag: a physics car answers later than a lane car, so its safety margins count the controller's lag in its
+   reaction time; otherwise a physics car behind a braking lane car could hit it where a lane car would have stopped.
+4. Others' estimates: the driving estimates when a car reaches a crossing from its motion now, which suits a physics
+   car as it is.
+
+**The test bed:** a physics car and a lane car given the same route, compared: how far off the lane centre each
+strays, how far from the stop line each stops, how long each takes. Then a mixed queue (physics behind lane and lane
+behind physics) at a light, with no contact. Only then the city.
 
 ## 8. Contact, crashes, wrecks
 
@@ -230,21 +266,23 @@ with the lab's numbers watched before and after.
 ## 12. Sittings, hardest first
 
 Each is one or two items, reviewed before the next, reporting the same numbers each time (the lab's hash and limits,
-contacts, long stands, stand-offs, the brain lab).
+contacts, stands, the brain lab).
 
-1. **Cars as entities, middle tier only**: the brain lab's cars become entities with the lane component, drawn and
-   moved through the ECS, the sim's rows gone for them. With #295 first if the numbers need it. The hardest because it
-   moves the city's cars between worlds; nothing else changes behaviour.
-2. **The near tier**: a `Vehicle` component swapped in and out by distance, the controller on Jolt, hand-back rules,
-   removing a Jolt car (#293's engine part). On brain_lab: drive up to a resident's car and take it; push one with
-   your own car.
-3. **Perceiving the way ahead and reacting**: the one "what is ahead" question (physics near, lane knowledge middle),
+1. **Cars as entities** (done: 1a, ADR-0444; 1b, ADR-0445). Household cars are one entity each; every system that
+   looks for cars sees them; the player takes one with E on the same entity.
+2. **A crowd of residents on brain_lab** (reordered 2026-11-16: brain_lab had six residents and two cars, too few to
+   see or test anything that follows). 100 to 300 residents in households, with homes, cars and day tables, going
+   between places spread over traffic_lab's roads, on lane cars, obeying the lights, signs and limits as today. The
+   test bed for every sitting after it; #295 (the ECS walk) may be needed here.
+3. **The near tier** (section 7), proved on the test bed first, then in the crowd: the nearest ~100 cars physical,
+   switching as the player moves, giving back a taken car (#293).
+4. **Perceiving the way ahead and reacting**: the one "what is ahead" question (physics near, lane knowledge middle),
    brake, horn, swerve, find another way. The player in the road is the first test.
-4. **Lane changes and merges**: the road model's "lane beside", the five reasons, zipper as a habit, real pull-out
+5. **Lane changes and merges**: the road model's "lane beside", the five reasons, zipper as a habit, real pull-out
    and parking.
-5. **Junctions by judgement**: the resolver and room grants removed, gap judgement and tie habits in their place;
-   #286's limits re-measured.
-6. **Contact and crashes in the middle tier**: the contact count, the roll, wrecks, the brain's crash state, clearance.
+6. **Junctions by judgement**: the resolver and room grants removed, gap judgement and tie habits in their place;
+   the lab tests for unending rings of waits instead of long stands.
+7. **Contact and crashes in the middle tier**: the contact count, the roll, wrecks, the brain's crash state, clearance.
 
 Optional lane changes (the faster lane) and the far tier's clock queue and GPU crowd come after.
 
