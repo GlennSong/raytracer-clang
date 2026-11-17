@@ -247,13 +247,16 @@ contacts, long stands, stand-offs, the brain lab).
 
 Optional lane changes (the faster lane) and the far tier's clock queue and GPU crowd come after.
 
-## 13. Decisions for Glenn
+## 13. Decisions
 
-1. **Junction 0** (seven arms, a 115 s light cycle, waits up to 144 s): change its signal plan, or exclude it from the
-   100 s limit? Recommended: change the signal plan; it is a lab level.
-2. **The crash chance in the middle tier**: always a crash, or a probability? Recommended: always, to start, so every
-   contact is a visible wreck.
-3. **How long a wreck stays**: recommended 10 game minutes to start.
-4. **The order of sittings**: cars as entities first (recommended: everything else sits on where a car lives), or
-   perception and reacting first (the most visible: cars stop for the player)?
-5. **The pinned lab run will move** when the resolver goes. Agree to re-pin it then, with old and new numbers?
+Settled (Glenn, 2026-11-16):
+- **The crash chance in the middle tier**: very low. Most unseen contacts go on; a rule-set number, starting at 1 in
+  50. Every contact is still counted, crash or not.
+- **How long a wreck stays**: 10 game minutes to start (rule-set number).
+- **The order**: cars as ECS entities first (sitting 1).
+- **The pinned lab run**: needs no decision; it follows the standing rule (never re-pinned silently: old, new, why).
+
+Open:
+- **Junction 0** in traffic_lab (seven roads meet; a 115 s light cycle, so waits up to 144 s against the test's 100 s
+  limit): (a) change that light's timing so waits stay under 100 s, or (b) leave it and not apply the limit there?
+  Recommended (a): it is a test level and its lights should be set as a sensible city would set them.
