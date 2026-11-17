@@ -53,7 +53,8 @@ once the new one carries river_town; until then leave it running and do not patc
 
 ## What is next, in the agreed order
 
-1. **Two agents meeting properly.** Design first, then build: lane changes; joining from a ramp by zipper
+1. **Drivers among others** (design draft, agent-centred, awaiting Glenn: `docs/two-drivers-meeting-design.md`; it
+   supersedes the plan in this item). Originally: **Two agents meeting properly.** Design first, then build: lane changes; joining from a ramp by zipper
    (the joining car slows and takes turns, issue #285); the junction layer reworked so the lab's four limits
    pass (#286); crashes near the player as physics bodies. The roads now state what the junction layer used
    to guess (through pairs, facing approaches, turns, stop lines, merge marks), so it can be simpler. This

@@ -1,248 +1,259 @@
-# Two drivers meeting: lane changes, joining by zipper, the junction layer, crashes
+# Drivers among others: what a driver sees and decides, where a car lives, and crashes
 
-Status: DRAFT for Glenn, 2026-11-16. Nothing here is built. It answers issue #285 and the junction half of #286, and
-is the first item of `docs/agent-driving-handoff.md`'s "what is next". It sits on top of `docs/driving-model-design.md`
-(sections 7 to 12) and `docs/agent-brain-design.md`; where it changes either, it says so.
+Status: DRAFT for Glenn, rewritten 2026-11-16 after his review in conversation. Nothing here is built. It answers
+issue #285 and the junction half of #286, and is the first item of `docs/agent-driving-handoff.md`'s "what is next".
+It changes `docs/driving-model-design.md` (sections 7 to 12) and adds to `docs/agent-brain-design.md`; section 11 says
+where. (The first draft, commit 7a508e43, extended the central arbiter; this replaces it.)
 
 ## Words
 
-- **Car ahead / car behind**: on one lane, the nearest car in front of my front, and the nearest car behind my tail.
-- **Following**: keeping a safe distance from the car ahead (the formulas in `src/apps/driving/act.h`: easing toward a
-  speed, plus a hard "could I still stop" limit).
-- **Crossing point**: a stretch where two paths' cars could touch: two turns crossing in a junction, two paths joining
-  into one lane (ADR-0400).
-- **The resolver**: the one piece of code that says who goes first at a crossing point (`conflict.h`), asked once a
-  tick for every pair of cars announced there.
-- **Gap**: the space on a lane between two cars, the one that will be my car ahead (the **leader**) and the one that
-  will be my car behind (the **follower**). Either may be missing.
-- **Claim**: asking, in the plan step of the tick, for something two cars might both want; the settle step grants
-  claims one at a time in a fixed order (design 7.1). Room beyond a junction is already a claim (`room.h`).
+- **Driver**: a resident while they drive. Driving is a skill the person's brain uses (agent-brain-design.md); the
+  brain says "be at X", the skill drives there and reports back.
+- **Perceive**: what a driver can find out the way a person could: where things are, how fast they move, which way a
+  car's indicator blinks, whether its brake lights are on, what the road and its signs and lights say.
+- **Obstacle**: anything that would be in the car's way if it went on. Not a list of kinds (section 5).
+- **Following**: keeping a safe distance from whatever is ahead (`src/apps/driving/act.h`: easing toward a speed, plus
+  a hard "could I still stop" limit).
+- **Crossing point**: a stretch where two paths' cars could touch, such as two turns crossing in a junction (ADR-0400).
+- **Right-of-way table**: who must give way to whom at each meeting of two turns, worked out at load from the lights,
+  signs and the rule set (`right_of_way.h`). It is the law as a driver knows it, not a referee.
+- **Gap**: the space on a lane between two cars, the one that would be ahead of me (the **leader**) and the one that
+  would be behind me (the **follower**).
 - **Merge**: where the road model says one lane runs into its neighbour and ends: a ramp's lane into the freeway's, a
-  lane that drops (`ConnectionKind::Merge`, `RoadModel::mergingAt`).
-- **Zipper**: at a merge, the cars of the two lanes take turns, one from each, each joining car having slowed or sped
-  up along its lane to arrive beside its gap.
-- **Contact**: two cars' outlines overlap. Whatever happens next, a contact between two drivers who follow the rules
-  is a bug in the rules and is counted.
-- **Near / out of sight / far**: the three distances of the brain design. Near: a full agent the player can see.
-  Out of sight: still driven by the driving model, nobody looking. Far: no car exists; the person is "leg N, due at T".
+  lane that drops (`ConnectionKind::Merge`).
+- **Zipper**: at a merge, cars from the two lanes take turns, one from each.
+- **Entity, component**: the engine's ECS (ADR-0006). An entity is a handle; a component is one kind of data it has,
+  stored with all others of its kind in one packed array; a system runs over those arrays.
+- **Near / middle / far**: distance from the player. Near: the cars around the player, real physics cars. Middle: cars
+  that can be seen, moved along their lanes. Far: no car; the person is "on leg N of the trip, due at time T".
+- **Contact**: two things' outlines overlap.
 
 ## 1. What Glenn asked for
 
 - "The vehicles shouldn't drive through each other. They should collide and there should be a wreck. Really the car
   that's coming onto the freeway should slow down and properly zipper."
-- "If I'm close to those vehicles I should see them crash. They should have physics bodies. If it's distant ...
-  it could be fudged with a dice roll ... Maybe very distant cars don't crash at all because they're not present yet."
-- The roads now state what the junction layer used to guess, so the junction layer can be simpler (hand-over).
+- "If I'm close to those vehicles I should see them crash. They should have physics bodies. If it's distant ... it
+  could be fudged with a dice roll ... Maybe very distant cars don't crash at all because they're not present yet."
+- The brain is about the agent, "not trying to massage a system of many actors and the potential outcomes, like that
+  should be emergent."
+- "Drivers should see obstacles and register that. I don't want to define obstacles because it could be anything that
+  impedes their way." When the player stepped in front of a resident's car, it should have stopped or swerved, and a
+  horn would be good.
+- Cars near the player are always physics cars: "then any car could be stolen and there's no switch over between a
+  non-jolt car and a jolt one ... it also helps unify the car system." About 100 of them, coming and going as the
+  player moves.
+- A car near the player still follows its route, but can swerve round things or take a different way.
+- "We should only have one representation of a car." The ghost car (a physics car chasing the sim's idea of where it
+  should be) was not good. Use the ECS rather than working around it.
 
-## 2. What there is today (checked against the tree)
+## 2. The principles
 
-- **Following** works on one path: a car sees the car ahead on its own path and the paths its way leads into.
-- **Lane changes do not exist.** The router can plan them (`route.h`, 4 s a change), the lane graph knows which lines
-  may be crossed (`Section`, `laneLines`), but the tick cannot move a car across, so every caller turns them off
-  (`city_sim.cpp:282 settings.laneChanges = false`). Pulling out of and into a kerb space is a sideways slide.
-- **Junctions**: cars announce when they will be on each crossing point (`announce.h`); the resolver orders each pair
-  by seven questions; a car told to go second stops at its line or inside at a waiting point (`give_way.h`); nobody
-  enters a junction it cannot leave (`room.h`); a wait-for graph tells gridlock from deadlock (`wait_graph.h`).
-- **Merges are treated as crossing points**, like two turns meeting in a junction. Who gives way there
-  (`stated_merge`: the lane that joined) is built and switched OFF in `rules/lab.lua:118`, because switching it on
-  showed two faults (issue #285):
-  1. `announce.cpp:257` and `:298` compare two numbers meant to be the same point with `<=`; 7e-15 m out, a car
-     creeping to its give-way stop is judged unable to stop and put first.
-  2. A merge is one stretch 43 to 52 m long. Once both fronts are on it, the give-way code skips it
-     (`give_way.cpp:125`: "my front is on it: I go first") and following does not see a car on the other path. **For
-     that moment nobody owns the pair**, and a bus and a car drove through each other.
-  3. A joining car from rest needs about a 15 s gap, so ramps crawl.
-  Both are pinned by tests that fail when fixed (`merge_known_fault_a`, `_b` in `tests/test_driving_give_way.cpp`).
-- **The lab's limits (#286)**: queues at a green empty at 2.75 s a car (target 1.7 to 2.1); cars stand over 100 s at
-  the off-ramp join on frontage road s311 (fault 2 above) and at junction 0, one seven-arm junction on a 115 s cycle.
-- **Physics**: each drawn AI car has a kinematic box that follows it (`city_physics.h`, ADR-0060), so the player
-  bumps into cars but cars never react. A car becomes a real physical vehicle only when the player takes it
-  (`city_vehicles.h`, ADR-0062), and the engine cannot turn it back (#293). No car ever crashes into another.
+1. **Each driver decides for itself, from what it perceives and what it knows.** Nothing hands out turns. The rules
+   of the road are the driver's knowledge (the right-of-way table, the rule set), applied by that driver to what it
+   sees. How many drivers interact, and what comes of it, is emergent.
+2. **Only the world is central**: the lights (one clock), physics, and finding contact. The world says what is;
+   drivers decide what to do about it.
+3. **One car, one representation, one owner of its motion at any moment.** Never a ghost.
+4. **Detail by distance drops richness, never rules.** The same driver decides the same way near and middle; only how
+   the decision is carried out, and how much the driver can see, changes.
+5. **Checks are measurements, not control.** The wait-for graph, contact counts and long stands are counted and
+   reported. A bad number is fixed by improving drivers' habits or the roads, never by an arbiter.
+6. **Runs repeat.** Every driver decides from the same snapshot of the last tick; any chance (hesitation, a missed
+   look, a crash roll) comes from a hash of the person, the tick and the question. The lab runs without a player, so
+   it has no near tier and stays exact.
 
-## 3. The one rule: every pair of cars has exactly one owner, at every moment
+## 3. What there is today (checked against the tree)
 
-Fault 2 is the shape of every "drove through each other" bug: two cars near each other, and each piece of code
-assumed another piece was watching them. So the design starts from a rule that can be checked every tick:
+- **Following** works along one lane and the lanes the route leads into.
+- **Junctions are arbitrated centrally.** Every car announces when it will reach each crossing point (`announce.h`);
+  once a tick the resolver (`conflict.h`) orders every pair by seven questions and, where a loop of cars could form,
+  imposes one order on a whole group (Tarjan's and Kahn's methods); room beyond a junction is granted one car at a time
+  (`room.h`). The drivers then obey. This is SUMO's approach, which the 11-11 design was built on.
+- **Lane changes do not exist.** The router can plan them; the tick cannot move a car across, so callers switch them off
+  (`city_sim.cpp:282`). Pulling out of and into a kerb space is a sideways slide.
+- **Drivers perceive no person and nothing that is not a car of the driving.** The 11-11 design's "the player is a path
+  obstacle" was never built. A resident's car drove into the player.
+- **Merges** are crossing points; `stated_merge` (the joining lane gives way) is switched off in `rules/lab.lua:118`
+  because of two faults (#285): a comparison off by 7e-15 m (`announce.cpp:257`, `:298`), and a stretch where, once both
+  fronts were on it, neither giving way nor following watched the pair, so a bus and a car overlapped. In the lane
+  graph, a merging lane's last path is joined end to end into the host lane (`lane_level.cpp`, near line 570); it is
+  not the host's neighbour, so "the lane beside" cannot be seen from it.
+- **Cars are not entities.** The city's cars are rows in the sim's arrays, drawn instanced; near the player each drawn
+  car has a kinematic box (`city_physics.h`, ADR-0060) that pushes things and is pushed by nothing. The player's car is
+  an entity with a `Vehicle` component run by `VehicleSystem` (Jolt, damage ADR-0353 to 0356). Taking a car turns the
+  row into an entity, one way only (ADR-0062; #293). An older "every NPC car a Jolt vehicle chasing a planner ghost"
+  bridge was retired for needing endless reconciliation (`city_vehicles.h`).
+- **Measured today** (temporary tests, not committed): a Jolt car driven by the existing lane controller costs about
+  0.013 ms a physics step on one thread, 0.004 ms on the shared pool (100 cars: 0.48 ms; 200: 0.86 ms), physics only.
+  The ECS: one pass over 100,000 entities 0.33 ms against 0.11 ms for a plain array; adding and removing a component on
+  100 entities 0.05 ms. The gap is fixable (#295).
 
-> Any two cars whose bodies could touch within the look-ahead are related in exactly one of two ways:
-> **one follows the other** (it is the other's car behind, on a lane or in a claimed gap), or **one gives way to the
-> other** at a crossing point (the resolver said so). Passing from one to the other is a hand-over that happens in
-> one tick, never a gap where neither holds.
+## 4. Where a car lives
 
-Three consequences:
+**A car is an entity** whenever it is near or middle, and only then. One entity, its components changing with
+distance:
 
-- **A merge stops being a crossing point.** A joining car picks a gap and from then on follows its leader, and its
-  follower follows it (section 4). Two cars side by side on a merge are always one ahead of the other. The resolver
-  keeps only meetings that really are crossings: turns through a junction, two turns joining one lane at a junction,
-  a car crossing a lane between junctions.
-- **The check is cheap and runs always**: per tick, for each pair of cars near each other on lanes beside each other
-  or on crossing paths, is there an owner? A pair with none is counted with the place, like the wait-for graph's "a
-  car at rest with no reason". The lab's target is zero, and a test fails on any.
-- **Contact is a second, separate count** (section 7). A pair with an owner that still touched means a rule's numbers
-  are wrong (a gap too short, braking too weak). A pair with no owner that touched means a hole in the design.
+| | Always (near and middle) | Near: about 100 nearest | Middle: seen, further off | Far |
+|---|---|---|---|---|
+| What it has | position, the model to draw, its household, a link to whoever is driving | a `Vehicle` component: Jolt body, wheels, damage, lamps | a "moves along its lane" component: lane, distance along it, sideways offset, speed | no entity |
+| Who moves it | | physics, from the driver's steering and pedals | the driving, along the lane | the person's trip: "leg N, due at T" |
 
-## 4. Changing lanes: one mechanism for five things
+- **Out of sight a car is a record**, not an entity: "parked at this kerb space", or "on leg 3 of ana's trip". It is
+  made an entity when it comes into view, and the entity is destroyed when it leaves.
+- **Near and middle swap one component.** Same entity, same handle, nothing to reconcile: becoming near, the
+  `Vehicle` component is added at the car's position and speed and the lane component removed; leaving near, the
+  reverse.
+- **Hand-back rules**: a car leaves the near tier only when it is on a lane, upright, pointing along it and not a
+  wreck. A car pushed onto the pavement stays near (over the cap if it must) until it has driven back, or is a wreck.
+- **Coming and going as the player moves**: the near tier is the nearest cars up to a cap (100, data), entered inside
+  one distance and left beyond a larger one so cars do not flicker. A few cars change per frame, nearest first, so
+  driving fast into a busy street does not make 40 Jolt cars in one frame.
+- **Any car can be stolen**, because any car near the player is already a physics car: taking it changes who sits in
+  the driver's seat, nothing else. And the player giving a car back (#293) is the same as any car leaving the near
+  tier.
+- **Engine work this needs**: removing a `Vehicle` and its Jolt body cleanly (`VehicleSystem` never removes one today;
+  #293's engine part); and #295, so the ECS walks its arrays as fast as a plain array.
+- **People stay where they are**: the brain's packed records. A car's driver link names a person; the brain library
+  still includes nothing from the engine's world.
 
-One mechanism covers everything that moves a car from one lane to the one beside it:
+## 5. What a driver perceives
 
-| Why | How urgent |
+One question, asked by every driver at every decision: **what is ahead of me, along the way I mean to go, and how is
+it moving?** The world answers it; the driver does not ask "is there a person" or "is there a wreck".
+
+- **Near**: the world answers with physics: a shape the width of the car, swept along the path the car means to
+  drive for its look-ahead, against every body in the physics world. A person, the player, a crate, a wreck, a fallen
+  tree, a thing nobody has thought of yet: if it has a body, it is seen, with where it is and how fast it moves.
+- **Middle**: there is no physics out there for most things, so the world answers from what it knows stands on the
+  roads: cars (their lane positions), people on the road (walkers crossing, where the sim puts them), wrecks, and any
+  thing registered as standing on a lane. This is the one place "anything" narrows; it is a property of distance, and
+  the driver's question and decision are the same.
+- **Other cars, as a person sees them**: position, speed, heading, the indicator, brake lights, and whether it is
+  creeping forward. Not its plans. (Today's announcements estimate "when will that car reach the crossing" from its own
+  state; the estimate stays, made from what can be seen, by the driver who wants it.)
+- **The road**: lanes ahead and beside (the road model), signs, lights, stop lines, the right-of-way table.
+
+## 6. What a driver decides
+
+The four kinds of answer the rule set already gives (a place to stop by, a top speed, an intention, an action) are
+enough; what is new is facts and rules.
+
+- **Something in the way**: follow it like a car ahead (brake, stop short). Then, by rules: **swerve** if there is
+  room beside it in the lane or the next lane is clear (near: steering round it; middle: a lane change); **sound the
+  horn** (an action; a person standing in front of a car gets honked at); after waiting long enough with no way past,
+  **find another way** from where the car stands (the router, avoiding that stretch).
+- **At a junction**: judge, from what is seen, whether the gap before each car that has right of way over me (the
+  table says who) is big enough to go; otherwise wait at the line, or inside at a waiting point. Where nobody has right
+  of way over the other (two cars arriving at a four-way stop), go by who arrived first, as people do; a tie is broken
+  by a seeded hesitation and the driver's personality (an assertive driver goes, a timid one waits). Don't enter a
+  junction with no room beyond it for me, judged by me, now.
+- **Lane changes**, one mechanism for five reasons (the route needs a lane, the lane ends, pulling out of a kerb
+  space, pulling into one, the lane beside is faster): want it (an intention, more urgent as the last chance nears);
+  **indicate**; look for a gap whose leader I could follow and whose follower could stop behind me; if none, change
+  speed to come level with one (this is what makes a joining car slow down or speed up along a ramp instead of
+  stopping at its end); move across over a few seconds; abort in the first half if the gap closes; miss the turn and
+  re-route if the last chance passes.
+- **Letting in** is the other driver's own choice: a driver who sees a car indicating into the gap ahead of it may
+  ease off, by its personality. **Zipper** is one habit both lanes share: having let one car in, don't let the next
+  in until that one is across. No central claim; two cars wanting one gap is resolved by each seeing the other start
+  to move, and the second backing off, as people do. When they don't, they touch (section 8).
+- **Numbers from sources**: gap acceptance and the follower's acceptable braking from MOBIL (Kesting, Treiber &
+  Helbing 2007); urgency toward the last chance from SUMO's LC2013 (Erdmann 2015); critical gaps at give-way junctions
+  from the traffic engineering literature. Read from the papers when built, each with a CREDITS line; none are guessed
+  here.
+
+**What can go wrong now that nothing arbitrates**: two drivers can both wait (a stand-off) or both go (a near miss or
+a crash). Stand-offs are broken by habits (a long wait makes a driver bolder, seeded so it is not both at once);
+crashes are counted. Both are measured, and a bad count is fixed in the habits.
+
+## 7. How a decision is carried out
+
+- **Near**: a controller turns "this speed, along this path, this far to the side" into steering, throttle and brake
+  for the Jolt car. It exists: `computeDriverInput` and the pursuit controller, tested on a real Jolt car following a
+  lane (`agent_driver_tracks_a_lane_on_real_physics_and_stops_at_its_end`). The car is where physics says; the driver
+  reads that and decides again. A skid, a shove, a swerve are facts the driver deals with, never errors to correct.
+  Holding a lane through corners and junctions on physics needs its own test bed (the old driving's roll and fishtail
+  history, ADR-0087); `wheel_lab` and `movement_lab` are the starting points.
+- **Middle**: the car moves along its lane at the decided speed, with a sideways offset for lane changes and swerves.
+
+## 8. Contact, crashes, wrecks
+
+- **Near**: physics. Cars and anything else collide for real; `VehicleSystem`'s damage dents, scuffs, breaks lamps and
+  throws sparks. Nothing to build but the near tier itself. The player struck by a car ragdolls (#294).
+- **Middle**: the world finds contact between cars from their positions and outlines, every tick. Each contact is
+  counted (who, where, why: what each driver was doing). Then a seeded roll with a rule-set chance: a crash, or they
+  go on. A crash stops both where they are as a wreck, and the damage rules (pure functions in `vehicle_damage.h`) are
+  applied at the contact point and closing speed, so a wreck the player arrives at later is dented where it was hit.
+- **Far**: no cars, no contact.
+- **A wreck is an obstacle** (section 5): others follow it to a stop, swerve or change lanes round it, or find another
+  way. It stays for a rule-set time, then is cleared: the people go home and take the day off, their cars are put back
+  near home, and each clearance is counted (driving-model-design.md 11). A tow truck later.
+- **The people**: the brain gets an event "crashed"; "in a crash" is a state row in `brain.lua`.
+- **A crash between two drivers both following the rules is still a bug to look at.** The contact count says where.
+
+## 9. Merges
+
+- The road model already states each merge: the host lane, where the joining lane starts running beside it, for how
+  long, and the taper. The driving asks the road model one new question, **which lane runs beside mine here, and may I
+  cross into it**, answered from a section's neighbours and from stated merges. A merge is then a lane that ends: a
+  lane change with a hard last chance. No lanes builder change, no re-bake.
+- Merges leave the crossing-point machinery, and with them fault 2. Fault 1 is fixed wherever its comparison ends up,
+  with `approxEqual` and its ordered companions from `rt_math.h` and a named tolerance.
+- The two known-fault tests (`merge_known_fault_a`, `_b`) are rewritten to check the right outcome: the joining car
+  takes a gap, or a counted contact; never an unnoticed overlap.
+
+## 10. What happens to today's junction machinery
+
+| Piece | Becomes |
 |---|---|
-| the route needs another lane before a turn | grows as the last chance nears (`distance_to_last_chance`, design 10) |
-| the lane ends (a merge, a dropped lane) | must; the lane's end is the last chance |
-| pulling out of a kerb space | must, at the driver's own pace (the space is not a lane yet: see below) |
-| pulling into a kerb space | must, before the space |
-| the lane beside is faster | would like to (later, near only) |
+| Right-of-way table (`right_of_way.h`) | kept: the law as drivers know it |
+| Announcements (`announce.h`) | kept as each driver's estimate of when another car will reach a crossing, from what can be seen; flags only the other driver could know (committed, arrival fixed) go |
+| The resolver (`conflict.h`) and its group ordering | removed: each driver judges |
+| Room grants (`room.h`) | removed as grants; "is there room beyond for me" is the driver's own judgement |
+| Waiting points inside the junction (`junction_plan.h`) | kept: where a car may wait without blocking a crossing is road knowledge |
+| Wait-for graph (`wait_graph.h`) | kept, as a measurement |
+| The lab's pinned run (`0x7aade29530b4fdd1`) | will move; re-pinned once, with old and new numbers and why |
 
-**The steps**, each a step of the existing tick (design 7.1):
+Removing the resolver is the largest change, so it comes after drivers can perceive and change lanes, and is done
+with the lab's numbers watched before and after.
 
-1. **Want** (plan step, a rule): the rules give an intention "change to the kerb-side lane" or "the centre-line-side
-   lane" with an urgency. This is the decide layer's existing intention answer; no new kind of answer.
-2. **Choose a gap** (plan step): look at the target lane beside me, find the gaps whose leader I could follow and whose
-   follower could follow me, by the same "could I still stop" test following already uses, for both. Choose the one
-   that needs the least change of my speed. If none is safe now, **aim for one**: set my speed to arrive beside a gap
-   (this is what makes a joining car slow down or speed up along a ramp, rather than stopping at the taper).
-3. **Claim it** (plan step → settle step): "I will go between leader L and follower F on lane X". Claims on one lane
-   are granted in a fixed order (urgency, then position, then id), each grant counted before the next, so two cars
-   from either side never take one gap. This is the same machinery as room claims.
-4. **Granted**: in that tick, the follower's car ahead becomes me, and my car ahead becomes L, **while I am still in my
-   own lane**. That is the hand-over of section 3: from now the pair me/F and me/L are owned by following.
-5. **Move across** over about 3 to 4 seconds (design 10's number, to be checked against a source): my sideways offset
-   `d` goes from my lane to the target; I am listed on both lanes until across, so cars behind me in either lane see me.
-6. **Abort** in the first half if the gap closes (my leader brakes hard): `d` eases back, the claim is given up.
-7. **Fail**: a car that never got across before its last chance carries on and is routed again (design 10). The one
-   exception is a lane that physically ends: its end is a place to stop by, as today.
+## 11. What changes in the other documents
 
-**Letting in.** The follower F does not do anything special: following its new car ahead (me) already makes it ease
-off. How hard it may brake to let me in is the gap test's limit in step 2 (in the published model this is a "safe
-braking" number, MOBIL, Kesting, Treiber & Helbing 2007; SUMO's LC2013, Erdmann 2015, is the reference for urgency
-rising toward the last chance). The numbers go in the rule set and get CREDITS lines when they are read from the papers;
-none are guessed here.
+- `driving-model-design.md`: section 9 (junctions) loses central ordering and room grants; section 10 (lane changes)
+  is replaced by section 6 here; section 11 (others on the road) is replaced by sections 5 and 8; section 12 (levels of
+  detail) by section 4.
+- `agent-brain-design.md`: one event (`crashed`), one state row; the car as an entity near and middle, a record far.
+- The road model: one question, "the lane beside, and may I cross".
+- `AGENTS.md` or an ADR: cars are ECS entities when near or middle; one owner of a car's motion at any moment.
 
-**Zipper.** With the above, one courtesy rule turns joining into taking turns: a driver who has just let one car in
-ahead of it does not open a gap for another until that car is fully across (a rule over a new fact, "let in, not yet
-across"). So the next joining car's best gap is behind me. That is a rule in the rule set, not C++.
+## 12. Sittings, hardest first
 
-**Pulling out and parking.** A kerb space is not a lane. To pull out, the car claims a gap on the kerb lane beside the
-space, with itself standing still at the space's end; to park, it claims nothing (it leaves the lane) but slows in its
-lane as any stop does. This replaces today's sideways slide, and is why lane changes come first.
+Each is one or two items, reviewed before the next, reporting the same numbers each time (the lab's hash and limits,
+contacts, long stands, stand-offs, the brain lab).
 
-## 5. Merges, after this
+1. **Cars as entities, middle tier only**: the brain lab's cars become entities with the lane component, drawn and
+   moved through the ECS, the sim's rows gone for them. With #295 first if the numbers need it. The hardest because it
+   moves the city's cars between worlds; nothing else changes behaviour.
+2. **The near tier**: a `Vehicle` component swapped in and out by distance, the controller on Jolt, hand-back rules,
+   removing a Jolt car (#293's engine part). On brain_lab: drive up to a resident's car and take it; push one with
+   your own car.
+3. **Perceiving the way ahead and reacting**: the one "what is ahead" question (physics near, lane knowledge middle),
+   brake, horn, swerve, find another way. The player in the road is the first test.
+4. **Lane changes and merges**: the road model's "lane beside", the five reasons, zipper as a habit, real pull-out
+   and parking.
+5. **Junctions by judgement**: the resolver and room grants removed, gap judgement and tie habits in their place;
+   #286's limits re-measured.
+6. **Contact and crashes in the middle tier**: the contact count, the roll, wrecks, the brain's crash state, clearance.
 
-- A merge the road model states (`ConnectionKind::Merge`: a ramp's auxiliary lane beside its host for `length`, then
-  a taper) becomes, for the driving: "this lane ends here; its neighbour is the lane to change into; the line between
-  them may be crossed from here". The road model already states all three numbers.
-- **How the lane graph holds a merge today** (checked: `lane_level.cpp`, the loop over stated connections near line
-  570): the merging lane is a lane of its own road, and its last path is joined END TO END into the host lane's path
-  where their lines meet. It is not the host's neighbour in a section, so a lane change "into the lane beside" cannot
-  see the host from it. Two ways to fix that:
-  - **(a) Ask the road model** (recommended): the model already states, for each merge, the host lane, where the
-    joining lane starts running beside it (`hostStation`), for how long (`length`) and the taper. The driving asks
-    "which lane runs beside mine here, and may I cross into it" of the model, and the lane change uses the answer.
-    No lanes builder change, no re-bake. This is "ask the road model, never derive from geometry".
-  - (b) Rebuild merges in the lane graph as neighbours in one section with a crossable line. Cleaner for the lane
-    graph's own readers, but a builder change and a re-bake of every level, for no behaviour (a) cannot give.
-  Not yet checked: whether any section of today's levels already holds a merging lane beside its host (a dropped
-  lane on a street might). Sitting 1 counts them.
-- The `stated_merge` question and the merge stretches leave the resolver. Fault 2 goes away with them. Fault 1 is a
-  plain bug wherever it sits: the two comparisons use `approxEqual` and its ordered companions from `rt_math.h` with a
-  named tolerance, as AGENTS.md says.
-- The two known-fault tests change from pinning the wrong outcome to checking the right one: the bus holds back, or
-  takes the gap behind the car; never an overlap.
+Optional lane changes (the faster lane) and the far tier's clock queue and GPU crowd come after.
 
-## 6. The junction layer, simplified
+## 13. Decisions for Glenn
 
-The 2026-11-13 review called the junction layer patched and contradictory. Two things change what it has to do:
-
-- **Merges are no longer its job** (section 5), nor are the "between junctions" meetings that are really two lanes
-  joining. What is left is crossings: turns in a junction, joins at a junction, a lane crossing a connector.
-- **The roads now state** through pairs, approaches facing each other, turn kinds, stop lines and merge marks. Every
-  pair the resolver orders should be settled by stated data. Its last fall-backs ("the lower path id gives way", "the
-  lower car id") should never answer, so they become counts the lab requires to be zero, not answers.
-
-What I do not know yet, and will not guess: which of the resolver's seven questions and the give-way code's special
-cases (the guards added by #284, the split rule, the honest clear times) are still needed once merges leave. So the
-junction sitting starts with a measurement, not a rewrite: switch merges over, run the pinned lab, and count, for each
-question and each special case, how many pairs it decided. A question that decides nothing in the lab is a candidate to
-delete, shown by deleting it and seeing the lab and the tests unchanged. Then #286's limits:
-
-- **Long stands at the s311 join**: expected gone with merges (section 5). Checked by the limit, not assumed.
-- **Long stands at junction 0**: a seven-arm junction on a 115 s cycle makes waits of 144 s at red by design. That is
-  the road and its signal plan, not the driving. Glenn's call (section 10).
-- **Queues emptying at 2.75 s a car, not 1.7 to 2.1**: cause not known. Candidates: how fast a car from rest speeds up
-  (the vehicle class's numbers), each car waiting for the one ahead to move before it decides (its reaction time
-  stacking along the queue), or the announcement of a queued car being held back "no earlier than the car ahead plus a
-  following interval" (`announce.h`). Measured one at a time, in the lab, before any change.
-
-## 7. Contact, and crashes by distance
-
-**Contact is found by the driving, every tick, at every distance the driving runs**: for the pairs the owner check
-already looks at (section 3), do the two outlines overlap? Each contact is counted with the pair, the place, and who
-owned the pair. Then what the world does with it depends on how far it is from the player:
-
-| | Near (within the physics radius) | Out of sight (driven, unseen) | Far (no car) |
-|---|---|---|---|
-| What happens | Both cars become physical vehicles at their pose and speed, and the physics plays the crash | A dice roll: a crash, or they go on | Nothing: no car exists |
-| Afterwards | A wreck: the cars stay where physics left them | A crash: both stop where they are, as a wreck; the people's state is "in a crash" | — |
-| If the player arrives later | — | The wreck is there, placed as the driving left it | — |
-
-- **The dice are seeded** by the two people and the tick, never a shared generator, so a run repeats (design 7.1).
-  The chance is a rule-set number.
-- **A wreck is a path obstacle** (design 11): cars behind follow it to a stop and, once lane changes exist, change
-  lanes round it. It stays for a rule-set time, then is cleared: the people go home and take the day off, their cars
-  are put back near home, and each clearance is counted (design 11, Glenn's answer of 2026-11-11). A tow truck later.
-- **The people**: the brain gets an event "crashed"; "in a crash" is a state in `brain.lua` (the brain design already
-  names crash as an agent state). From there it is data: wait at the wreck, then go home.
-- **The physics hand-over near the player** reuses the promotion that already turns a sim car into a physical vehicle
-  when the player takes it (ADR-0062), started by a contact instead of a key. Clearing a physical wreck needs the engine
-  to remove a physical car, the same missing piece as #293; so #293's engine part comes forward into this work, and the
-  player's "give the car back" can follow cheaply.
-- **Which radius is "near"**: the one inside which cars already have kinematic boxes (`possessRadius_` 90 m in
-  `city_physics.h`)? To confirm that the new driving's cars get those boxes at all; the hand-over copies them into the
-  sim's vehicles, which suggests so, but nobody has checked.
-
-## 8. What changes elsewhere
-
-- `driving-model-design.md` section 10 (lane changes) is replaced by section 4 here; section 9 loses merges; section
-  11's wreck row is kept and given the distance table above.
-- `agent-brain-design.md`: one new event (`crashed`) and one state row in `brain.lua`; no new machinery.
-- The road model gains one question: which lane runs beside this one here (from its sections, and from its stated
-  merges), and whether its line may be crossed. One query, used by every lane change, so nothing else derives it.
-- Kinds stay data: the five reasons to change lanes, the courtesy rule, the crash chance and the wreck time are rule-set
-  rows and numbers; no C++ branch names a reason, a vehicle kind or a road kind.
-
-## 9. Sittings, hardest first
-
-Each is one or two items, ends with the same numbers reported (the pinned lab's hash and its failing checks, the
-owner and contact counts, the brain lab), and is reviewed before the next starts.
-
-1. **Lane changes for the "must" cases**, on a test scene and then traffic_lab: want, gap, claim, hand-over, move,
-   abort, fail. With it the owner check (section 3), so the hand-over is measured from the first day. Largest; may need
-   two sittings. Includes the road model's "lane beside" question (section 5 (a)), so merges can use it in sitting 2.
-2. **Merges as lane changes, and the zipper**: section 5, the courtesy rule, fault 1 with `approxEqual`, the two
-   known-fault tests turned round. Done when the s311 join has no car standing over 100 s and the lab's join overlap
-   count is zero.
-3. **Two brain cars meeting**: on brain_lab, households sent so two of their cars meet at a junction and at a lane
-   change (it has never been seen: today only one brain car is on the road at a time). Real pull-out and parking
-   replace the sideways slide.
-4. **The junction layer measured and cut** (section 6), then #286's queue-emptying limit.
-5. **Contact and crashes out of sight**: the contact count, seeded dice, wrecks as obstacles, the brain's crash state,
-   clearance.
-6. **Crashes near the player**: the physics hand-over, the engine's missing "remove a physical car" (#293's engine
-   part), a wreck the player can walk up to. Pictures from above as well as the chase camera.
-
-Optional lane changes (the faster lane) and the middle distance's cheaper rules come after, with the rest of the
-"middle and far" work.
-
-## 10. Decisions for Glenn
-
-1. **Junction 0** (seven arms, 115 s cycle, waits up to 144 s): change the lab's road or signal plan so it can pass,
-   or accept it and drop that junction from the 100 s limit? Recommended: change the signal plan, since a real
-   seven-arm junction would be split or given a shorter cycle; it is a lab level, made for this.
-2. **The crash chance out of sight**: a starting number (for example, one contact in two is a crash), or always a crash?
-   Recommended: always a crash to start, so every contact is visible in the counts and a wreck; lower it only if wrecks
-   pile up because of a rules fault we cannot fix soon.
-3. **How long a wreck stays** before it is cleared. Recommended: 10 minutes of game time to start.
-4. **Merges in the lane graph**: (a) the driving asks the road model which lane runs beside (recommended, no re-bake)
-   or (b) rebuild merges as neighbours in the lane graph (section 5)?
-5. **The order**: lane changes first (my recommendation, because merges, parking and wrecks all depend on them) or
-   crashes first (the most visible)?
+1. **Junction 0** (seven arms, a 115 s light cycle, waits up to 144 s): change its signal plan, or exclude it from the
+   100 s limit? Recommended: change the signal plan; it is a lab level.
+2. **The crash chance in the middle tier**: always a crash, or a probability? Recommended: always, to start, so every
+   contact is a visible wreck.
+3. **How long a wreck stays**: recommended 10 game minutes to start.
+4. **The order of sittings**: cars as entities first (recommended: everything else sits on where a car lives), or
+   perception and reacting first (the most visible: cars stop for the player)?
+5. **The pinned lab run will move** when the resolver goes. Agree to re-pin it then, with old and new numbers?
