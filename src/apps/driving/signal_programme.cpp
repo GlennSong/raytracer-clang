@@ -360,6 +360,40 @@ Lamp lampShownAt(const engine::LaneGraph& roads, const RightOfWay& row, engine::
     return arrowPhase || row.paths[connector.index].protectedTurn ? Lamp::GreenArrow : l;
 }
 
+HeadShows headAt(const engine::LaneGraph& roads, const RightOfWay& row, engine::JunctionId junction, uint32_t arm,
+                 double now) {
+    HeadShows out;
+    if (!junction.valid() || junction.index >= roads.junctions.size() || arm == engine::kNoIndex) return out;
+    const engine::Junction& jn = roads.junctions[junction.index];
+    // the connectors leaving the lanes that arrive by the arm, in connector order
+    const auto byArm = [&](engine::PathId c) {
+        if (!knownPath(roads, c) || c.index >= row.paths.size()) return false;
+        const engine::PathId from = roads.paths[c.index].from;
+        return knownPath(roads, from) && roads.paths[from.index].arm == arm;
+    };
+    engine::PathId main;
+    for (uint32_t i = 0; i < jn.connectors.count; ++i) {
+        const engine::PathId c = roads.junctionConnectors[jn.connectors.first + i];
+        if (!byArm(c)) continue;
+        if (!main.valid() || row.paths[c.index].movement < row.paths[main.index].movement) main = c;
+    }
+    if (!main.valid()) return out;
+    out.face = lampAt(roads, row, main, now);
+    if (out.face == Lamp::Dark) return out;
+    const Movement mainMovement = row.paths[main.index].movement;
+    const bool faceRed = out.face == Lamp::Red || out.face == Lamp::RedMayTurn;
+    for (uint32_t i = 0; i < jn.connectors.count && out.arrow != Lamp::GreenArrow; ++i) {
+        const engine::PathId c = roads.junctionConnectors[jn.connectors.first + i];
+        if (!byArm(c) || row.paths[c.index].movement == mainMovement) continue;
+        const Lamp shown = lampShownAt(roads, row, c, now);
+        if (shown == Lamp::GreenArrow || (shown == Lamp::Yellow && faceRed && out.arrow == Lamp::Dark)) {
+            out.arrow = shown;
+            out.arrowFor = row.paths[c.index].movement;
+        }
+    }
+    return out;
+}
+
 WalkSignal walkAtCrosswalk(const RightOfWay& row, uint32_t crosswalk, double now) {
     return crosswalk < row.walkOfCrosswalk.size() ? walkAt(row, row.walkOfCrosswalk[crosswalk], now) : WalkSignal::None;
 }

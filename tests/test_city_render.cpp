@@ -353,7 +353,10 @@ TEST_CASE(city_render_agents_move_when_stepped) {
     CHECK(anyMoved);
 }
 
-TEST_CASE(city_render_signals_light_up_and_change_state) {
+// THE POLES ARE THE CITY'S (ADR-0456): on a hand-made road graph the loader placed no signal poles, and the render
+// stands none of its own (it once did, by the old signal clock's links) and lights nothing. Where poles stand, their
+// heads show the new driving's lamps: level_traffic_lab_v2_the_signal_heads_show_the_new_drivings_lamps.
+TEST_CASE(city_render_stands_no_signal_of_its_own) {
     World world;
     testmap::addRoads(world, crossRoads());
 
@@ -362,30 +365,15 @@ TEST_CASE(city_render_signals_light_up_and_change_state) {
     p.pedestrians = 0;
     CityRenderSystem city(p);
     CHECK(city.build(world, nullptr));
-
-    // ONE MODEL PER SIGNAL, ITS STATE A NUMBER (FLAG_SIGNAL_STATE): each post instance carries its approach's
-    // state in its bottom row (1 green, 2 amber, 3 red) and mesh.vert lights that lamp. Every post shows exactly
-    // one valid state at every step, and the junction cycles through green and red.
     const InstanceGroup* posts = world.get<InstanceGroup>(city.signalPostGroup());
     CHECK(posts != nullptr);
-    CHECK(posts && (posts->material.flags & RenderMaterial::FLAG_SIGNAL_STATE) != 0);
-    const std::size_t total0 = posts ? posts->transforms.size() : 0;
-    CHECK(total0 > 0);
-    bool sawGreen = false, sawRed = false, allValid = true;
-    for (int i = 0; i < 2000; ++i) {
-        city.step(world, 0.1);
-        posts = world.get<InstanceGroup>(city.signalPostGroup());
-        if (!posts || posts->transforms.size() != total0) { allValid = false; break; }
-        for (const Mat4& m : posts->transforms) {
-            const int st = static_cast<int>(m.m[3][0] + 0.5);
-            if (st < 1 || st > 3) allValid = false;
-            sawGreen = sawGreen || st == 1;
-            sawRed = sawRed || st == 3;
-        }
+    CHECK(posts && posts->transforms.empty());
+    CHECK(city.signalHeadCount() == 0u);
+    for (int i = 0; i < 50; ++i) city.step(world, 0.1);
+    for (int c = 0; c < kLensColourCount; ++c) {
+        const InstanceGroup* lens = world.get<InstanceGroup>(city.signalGroup(static_cast<LensColour>(c)));
+        CHECK(lens && lens->transforms.empty());
     }
-    CHECK(sawGreen);   // a lamp glows green on a green phase...
-    CHECK(sawRed);     // ...and red on a red phase (it changes state)
-    CHECK(allValid);   // and every post always shows one state
 }
 
 // --- car lamps (ADR-0065 follow-up) ------------------------------------------
@@ -501,39 +489,9 @@ TEST_CASE(externally_owned_cars_draw_no_lamps) {
     CHECK(!everLit);   // no instanced lamps while the cars are externally owned
 }
 
-
-TEST_CASE(signal_poles_stand_outside_the_carriageway) {
-    // A WIDE cross: a fixed pole setback would land inside the carriageway ("in
-    // the middle of the road"). Each pole must sit beyond the kerb of every road.
-    RoadEntity net;
-    net.look.defaultWidth = 16.0;   // half-width 8 — a fixed ~6.6 m setback would be INSIDE
-    net.look.sidewalk = 2.5;
-    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(80, 0)},
-                        RoadNode{Vec2(-80, 0)}, RoadNode{Vec2(0, 80)},
-                        RoadNode{Vec2(0, -80)} };
-    net.graph.addEdge(0, 1, net.look.defaultWidth);
-    net.graph.addEdge(0, 2, net.look.defaultWidth);
-    net.graph.addEdge(0, 3, net.look.defaultWidth);
-    net.graph.addEdge(0, 4, net.look.defaultWidth);
-
-    World world;
-    testmap::addRoads(world, net);
-    CityRenderSystem city(cityParams());
-    CHECK(city.build(world, nullptr));
-
-    const NavGraph& nav = city.nav();
-    Real halfW = 16.0 * 0.5;
-    InstanceGroup* posts = world.get<InstanceGroup>(city.signalPostGroup());
-    CHECK(posts != nullptr);
-    CHECK(!posts->transforms.empty());
-    for (const Mat4& t : posts->transforms) {
-        Vec2 p(t.m[0][3], t.m[2][3]);
-        double dmin = 1e9;
-        for (const auto& link : nav.links)
-            dmin = std::min(dmin, distToSegment(p, nav.nodes[link.from], nav.nodes[link.to]));
-        CHECK(dmin > halfW * 0.9);   // clear of every carriageway (not in the road)
-    }
-}
+// (Where a signal pole stands clear of every carriageway is the furniture planner's, the one that places them:
+// test_street_furniture.cpp signal_poles_clear_every_arm_at_an_acute_corner, signal_poles_stand_clear_of_the_junction_pad.
+// The render's own pole placer, and its test here, went with the old signal clock, ADR-0456.)
 
 // (Where crosswalks ARE is the road model's since ADR-0452, ModelCrosswalk, tested in test_road_model.cpp; the render
 // system's own guessed "crosswalk centres", which nothing read, are gone.)

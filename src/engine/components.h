@@ -1338,6 +1338,10 @@ struct StreetFurniture {
         Vec3 face;      // head faces this way (toward its approaching traffic)
         int link = -1;  // NavGraph link the signal governs
         bool shared = false;   // an earlier signal's pole and head (two links on one approach): no head of its own
+        // THE ARM ITS HEAD IS ATTACHED TO in the road model (attachFurniture's `signal_head`, ADR-0421): the city (an
+        // index into LevelRoadModel::cities), the model junction and its arm. -1: none (a hand-made road graph, or an
+        // approach no arm takes). The ids only: what the head shows is asked of the new driving's lamps there (ADR-0456).
+        int city = -1, junction = -1, arm = -1;
     };
     std::vector<Signal> signalPoles;   // ("signals" is a Qt macro — editor includes this)
     std::vector<Vec3> lampHeads;  // street-lamp bulb positions (night lights)

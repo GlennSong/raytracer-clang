@@ -50,7 +50,6 @@
 #include "scripting/roles_lua.h"         // the role catalog (roles.lua)
 #include "scripting/place_kinds_lua.h"   // the place kinds and dwellings (places.lua)
 #include "scripting/people_lua.h"        // ages, life stages, households (people.lua)
-#include "scripting/signals_lua.h"       // the signals' cycle times (signals.lua)
 #include "scripting/crowd_lua.h"         // a crowd made from the roads (crowd.lua, ADR-0446)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
@@ -99,6 +98,8 @@ constexpr Real kCarConeRange = 18.0, kCarConeHalfAngle = 0.45;
 // (People on foot are numbered by their agent uid, far below.)
 constexpr uint32_t kPlayerThing = 0xFFF00000u;
 constexpr Real kPedConeRange = 4.5, kPedConeHalfAngle = 1.2;
+// How far beside a signal head's green lamp its arrow lens is lit (metres, along the arm), clear of the head's side.
+constexpr Real kArrowLensOffset = 0.34;
 // Debug tints, dimmer than the state rings so neither view shouts over them.
 const Vec3 kNavTint(0.18, 0.32, 0.55);    // faint blue: the road/lane graph
 const Vec3 kConeTint(0.55, 0.36, 0.10);   // dim amber: the sensing wedge
@@ -762,20 +763,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         }
         sim_.setGarages(std::move(gins));
     }
-#ifdef RT_ENABLE_SCRIPTING
-    {   // THE SIGNALS' CYCLE (signals.lua): before build, which lays every junction's phases on it
-        const std::string code = engine::loadScriptCode("signals.lua", "");
-        if (!code.empty()) {
-            engine::ScriptVM vm;
-            std::string err;
-            citysim::SignalTiming t;
-            if (vm.doString(code, &err) && engine::loadSignalTiming(vm, t, &err))
-                sim_.setSignalTiming(t);
-            else
-                LOG_WARN << "[citysim] signals.lua: " << err << " (using the built-in times)";
-        }
-    }
-#endif
     // ON THE NEW DRIVING (v2) the level's cars are the driving's own: entities that drive round for ever, made when it
     // begins (startDrivingV2; ADR-0453). The old sim makes no drivers of them.
     const int drivingCars = params_.driving == "v2" ? carCount : 0;
@@ -1804,35 +1791,27 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         b.mesh = pedMesh;
         world.add<InstanceGroup>(indoorBodyGroup_, b);
     }
-    for (int s = 0; s < 3; ++s) {
+    for (int s = 0; s < kLensColourCount; ++s) {
         signalGroups_[s] = world.create();
         InstanceGroup g;
         g.mesh = lensMesh;
-        g.material = signalMaterial(static_cast<SignalState>(s));
+        g.material = signalMaterial(static_cast<LensColour>(s));
         g.renderLayer = engine::LayerSim;   // debug layer toggle
         g.drawClass = engine::DrawClass::Effect;
         world.add<InstanceGroup>(signalGroups_[s], g);
     }
 
-    // Reuse the city's street-kit traffic-signal model: one pole+arm+head
-    // assembly per signalled approach, placed on the near-right corner facing the
-    // oncoming traffic it governs (same geometry the city generator uses). It is
-    // static, so its transforms are baked once here; only the lit lens (above)
-    // changes each step.
-    signalLinks_.clear();
-    signalLensCache_.clear();
-    SignalController& sc = sim_.signals();
-    for (int li = 0; li < nav_.linkCount(); ++li)
-        if (sc.hasSignal(li)) signalLinks_.push_back(li);
-
-    // BUILD-TIME furniture (device: "place the stop lights when we build the
-    // city ... the simulation should use it"): when the loader published a
-    // StreetFurniture plan over the SAME nav build, adopt its pole sites and
-    // its already-spawned post group — the sim animates lenses and holds cars,
-    // but the city decided where every pole stands.
+    // THE SIGNAL POLES ARE THE CITY'S (device: "place the stop lights when we build the city ... the simulation
+    // should use it"): the loader's StreetFurniture plan, over the SAME street map, stands one pole and head per arm
+    // of every junction whose stated control the poles stand for (the road model's: junctionLit, ADR-0421), each head
+    // attached to its arm. This system adopts the sites and the already-spawned post group and lights the heads from
+    // the new driving's lamps (ADR-0456); it places no pole of its own (it once did, by the old signal clock's
+    // links, where the loader had placed none).
     siteByLink_.clear();
     siteHasLink_.clear();
-    siteShared_.clear();
+    signalHeads_.clear();
+    headsModel_ = nullptr;
+    headJunctions_.clear();
     engine::Entity adoptedPosts{};
     world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& f) {
         // (the STREETS' links: the walks appended since are not the loader's. Comparing the whole count, every
@@ -1841,13 +1820,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         if (f.navLinkCount != nav_.streetLinkCount() || f.signalPoles.empty()) {
             if (!f.signalPoles.empty())
                 LOG_WARN << "[citysim] the placed signal poles were built on a different street graph (" << f.navLinkCount
-                         << " links, the sim has " << nav_.streetLinkCount() << "): drawing our own";
+                         << " links, the sim has " << nav_.streetLinkCount() << "): no signals drawn";
             return;
         }
         siteByLink_.assign(nav_.linkCount(), SignalSite{});
         siteHasLink_.assign(nav_.linkCount(), 0);
-        siteShared_.assign(nav_.linkCount(), 0);
-        for (const auto& s : f.signalPoles) {
+        for (const engine::StreetFurniture::Signal& s : f.signalPoles) {
             if (s.link < 0 || s.link >= nav_.linkCount()) continue;
             SignalSite st;
             st.base = s.base;
@@ -1856,39 +1834,42 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             st.yaw = std::atan2(s.face.x, s.face.z);
             siteByLink_[s.link] = st;
             siteHasLink_[s.link] = 1;
-            if (s.shared) siteShared_[s.link] = 1;
+            // the loader's post instances, in its order (a shared pole has none): one head each
+            if (s.shared) continue;
+            SignalHead h;
+            h.link = s.link;
+            h.city = s.city;
+            h.junction = s.junction;
+            h.arm = s.arm;
+            // its arrow lens beside the head, on the side its turn goes: the far turn's toward the road's middle
+            // (`side`: traffic keeps left, so the turn across the oncoming stream turns that way), the near turn's
+            // the other
+            const Mat4 lens = signalLensPose(st);
+            h.arrowLens[0] = Mat4::trs(st.side * kArrowLensOffset, Quat(), Vec3(1, 1, 1)) * lens;
+            h.arrowLens[1] = Mat4::trs(st.side * -kArrowLensOffset, Quat(), Vec3(1, 1, 1)) * lens;
+            signalHeads_.push_back(h);
         }
-        // the loader's post instances, in its order (a shared pole has none)
-        postLinkOf_.clear();
-        for (const auto& s : f.signalPoles)
-            if (!s.shared) postLinkOf_.push_back(s.link);
         adoptedPosts = f.postGroup;
     });
 
     if (adoptedPosts.valid()) {
         signalPostGroup_ = adoptedPosts;   // loader owns the geometry
     } else {
-        MeshHandle postMesh{};
-        if (assets) postMesh = assets->acquireMesh(engine::trafficSignalProto(), "city:signalpost");
-        signalPostGroup_ = world.create();
+        signalPostGroup_ = world.create();   // none placed: an empty group (nothing stands, nothing lights)
         InstanceGroup g;
-        g.mesh = postMesh;
         g.material = signalPostMaterial();
-        g.renderLayer = engine::LayerSim;   // debug layer toggle
+        g.renderLayer = engine::LayerSim;
         g.drawClass = engine::DrawClass::Furniture;
-        for (int li : signalLinks_) g.transforms.push_back(signalPostPose(li));
-        postLinkOf_ = signalLinks_;
-        refreshBounds(&g);
         world.add<InstanceGroup>(signalPostGroup_, g);
     }
     // ONE MODEL, ITS STATE A NUMBER: the head's own lamps light by the state each instance carries (mesh.vert,
     // FLAG_SIGNAL_STATE) -- no lens geometry rebuilt or pushed per signal per bake
     if (InstanceGroup* pg = world.get<InstanceGroup>(signalPostGroup_)) {
         pg->material.flags |= engine::RenderMaterial::FLAG_SIGNAL_STATE;
-        if (pg->transforms.size() != postLinkOf_.size()) {
-            LOG_WARN << "[citysim] signal posts " << pg->transforms.size() << " vs " << postLinkOf_.size()
-                     << " links: lamps unlit";
-            postLinkOf_.clear();
+        if (pg->transforms.size() != signalHeads_.size()) {
+            LOG_WARN << "[citysim] signal posts " << pg->transforms.size() << " vs " << signalHeads_.size()
+                     << " heads: lamps unlit";
+            signalHeads_.clear();
         }
     }
 
@@ -1972,10 +1953,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // Hand the sim the pole foot positions (XZ) as static obstacles, so pedestrians
     // on the sidewalk steer around the signal poles and never stand inside one.
     {
+        // (the placed poles, by their links in link order; a shared pole once per link it serves, as before)
         std::vector<engine::Vec2> poles;
-        poles.reserve(signalLinks_.size());
-        for (int li : signalLinks_) {
-            engine::Vec3 base = signalSite(li).base;
+        for (std::size_t li = 0; li < siteHasLink_.size(); ++li) {
+            if (!siteHasLink_[li]) continue;
+            const engine::Vec3 base = siteByLink_[li].base;
             poles.push_back(engine::Vec2(base.x, base.z));
         }
         const std::size_t poleCount = poles.size();
@@ -2487,72 +2469,64 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
 
 std::vector<Vec3> CityRenderSystem::carGroupHalfExtents() const { return sim_.poses().halfExtents(sim_); }
 
-namespace {
-constexpr Real kCurbGap = 0.8;   // pole stands this far beyond the kerb
-}  // namespace
-
-// The signal pole stands at the near-right curb corner of the junction the
-// approach enters, scaled to THIS road's width so it never lands in the
-// carriageway (a fixed setback put poles in the middle of wide roads). The mast
-// arm then reaches sideways over the street toward the centre.
-CityRenderSystem::SignalSite CityRenderSystem::signalSite(int link) const {
-    // Build-time furniture override: the CITY placed this pole (StreetFurniture,
-    // adopted in build()); everything downstream — lens poses, ped obstacles,
-    // physics poles — reads the placed site.
-    if (link >= 0 && link < static_cast<int>(siteHasLink_.size()) &&
-        siteHasLink_[link])
-        return siteByLink_[link];
-    int toNode = nav_.links[link].to;
-    Vec2 d = nav_.direction(link);               // approach direction (toward junction)
-    Vec2 node = nav_.nodes[toNode];
-    Vec2 right(d.y, -d.x);
-    // Clear the pole from EVERY road at this junction, not just the approach: back
-    // off along the approach by the widest crossing road's half-width (so it sits
-    // beyond the perpendicular carriageway) and out to the side by this road's own
-    // half-width. A fixed setback left poles in the middle of wider cross streets.
-    // A KNOT-MERGED junction's drawn crossing extends nodeSpread beyond the node
-    // (the node is the knot centroid) — back off by that too, or the pole stands
-    // mid-carriageway on generated crossings (device feedback).
-    Real thisHalf = nav_.links[link].width * 0.5;
-    Real crossHalf = thisHalf;
-    for (int ol : nav_.outLinks[toNode])
-        crossHalf = std::max(crossHalf, nav_.links[ol].width * 0.5);
-    Real spread = toNode < static_cast<int>(nav_.nodeSpread.size())
-                      ? nav_.nodeSpread[toNode] : 0.0;
-    // Back off past the junction PAD (it spans to crossHalf + sidewalk), then
-    // hug the kerb laterally — the mast arm reaches over the near lane. The
-    // old back-off ignored the sidewalk band and stood the pole on the pad's
-    // asphalt (Glenn: "stoplights are placed out in the middle of the road").
-    Vec2 corner = node - d * (crossHalf + sidewalk_ + spread + kCurbGap) +
-                  right * (thisHalf + kCurbGap);
-    Real baseY = groundAt(corner.x, corner.y) +
-                 nav_.links[link].layer * kLayerClearance;
-    SignalSite s;
-    s.base = Vec3(corner.x, baseY, corner.y);
-    s.face = Vec3(-d.x, 0, -d.y);                 // head faces approaching traffic
-    s.side = Vec3(-d.y, 0, d.x);                  // = rightOf(face): toward road centre
-    s.yaw = std::atan2(s.face.x, s.face.z);
-    return s;
-}
-
-Mat4 CityRenderSystem::signalPostPose(int link) const {
-    SignalSite s = signalSite(link);
-    return Mat4::trs(s.base, Quat::fromAxisAngle(Vec3(0, 1, 0), s.yaw), Vec3(1, 1, 1));
-}
-
-Mat4 CityRenderSystem::signalLensPose(int link, SignalState s) const {
-    SignalSite st = signalSite(link);
-    // Lamp slot on the three-lamp head (mirror of street_kit::emitTrafficSignal):
-    // the head hangs at the arm end (along `side`), red on top / amber / green on
-    // the bottom, lenses on the facing side.
+Mat4 CityRenderSystem::signalLensPose(const SignalSite& st) {
+    // Level with the green lamp of the three-lamp head (mirror of street_kit::emitTrafficSignal): the head hangs at
+    // the arm end (along `side`), red on top / amber / green on the bottom, lenses on the facing side.
     engine::SignalParams sp;
     Vec3 headTop = st.base + Vec3(0, sp.armHeight - 0.1, 0) + st.side * (sp.armLength - 0.2);
     Vec3 headCenter = headTop + Vec3(0, -0.55, 0);
-    Real slotY = (s == SignalState::Red) ? 0.42 : (s == SignalState::Green) ? -0.42 : 0.0;
+    constexpr Real kGreenSlot = -0.42;
     // the head's lamp discs stand 0.22 m out and are 0.06 thick (street_kit::emitTrafficSignal): the plate's back
     // face 1 cm in front of them, turned the way the head faces
-    Vec3 p = headCenter + Vec3(0, slotY, 0) + st.face * 0.27;
+    Vec3 p = headCenter + Vec3(0, kGreenSlot, 0) + st.face * 0.27;
     return Mat4::trs(p, Quat::fromAxisAngle(Vec3(0, 1, 0), st.yaw), Vec3(1, 1, 1));
+}
+
+// THE NUMBER A POST INSTANCE CARRIES FOR ITS HEAD'S FACE (mesh.vert FLAG_SIGNAL_STATE: 0 none, 1 green, 2 amber,
+// 3 red), from what the new driving's lamps show there (driving::headAt).
+int CityRenderSystem::headFaceNumber(driving::Lamp face) {
+    switch (face) {
+    case driving::Lamp::Green:
+    case driving::Lamp::GreenArrow: return 1;
+    case driving::Lamp::Yellow: return 2;
+    case driving::Lamp::Red:
+    case driving::Lamp::RedMayTurn: return 3;
+    case driving::Lamp::Dark: return 0;
+    }
+    return 0;
+}
+
+driving::HeadShows CityRenderSystem::signalHeadShows(std::size_t head) const {
+    const driving::Driving* d = sim_.drivingHost().active() ? sim_.drivingV2() : nullptr;
+    if (!d || !d->lightsRun() || !d->roads() || d->model() != headsModel_ || head >= headJunctions_.size())
+        return driving::HeadShows{};
+    return driving::headAt(*d->roads(), d->rightOfWay(), headJunctions_[head],
+                           static_cast<uint32_t>(signalHeads_[head].arm), d->clockSeconds());
+}
+
+void CityRenderSystem::tieSignalHeads(World& world) {
+    // Where the new driving drives (its model is one city of the level's road model), each head attached to an arm
+    // of that city's junctions shows the lamps of the lane level's junction there; elsewhere it is dark (ADR-0456).
+    const driving::Driving* d = sim_.drivingHost().active() ? sim_.drivingV2() : nullptr;
+    const engine::RoadModel* model = d ? d->model() : nullptr;
+    if (model == headsModel_ && headJunctions_.size() == signalHeads_.size()) return;
+    headsModel_ = model;
+    headJunctions_.assign(signalHeads_.size(), engine::JunctionId());
+    if (!model) return;
+    int city = -1;
+    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& rm) {
+        for (std::size_t c = 0; c < rm.cities.size() && city < 0; ++c)
+            if (rm.cities[c].get() == model) city = static_cast<int>(c);
+    });
+    if (city < 0) return;
+    int tied = 0;
+    for (std::size_t k = 0; k < signalHeads_.size(); ++k) {
+        const SignalHead& h = signalHeads_[k];
+        if (h.city != city || h.junction < 0 || h.arm < 0) continue;
+        headJunctions_[k] = model->laneJunctionOf(engine::ModelJunctionId(static_cast<uint32_t>(h.junction)));
+        tied += headJunctions_[k].valid() ? 1 : 0;
+    }
+    LOG_INFO << "[citysim] signal heads lit by the new driving's lamps: " << tied << " of " << signalHeads_.size();
 }
 
 // The turn side (-1 left / +1 right / 0 none) a car will take at the coming node,
@@ -3047,13 +3021,13 @@ void CityRenderSystem::syncGroups(World& world) {
         if (bg) bg->transforms.push_back(Mat4::translate(x, feetY, z) * Mat4::rotateY(yaw));
         return CityPoses::rideDeck(r);   // the deck it stands on
     };
-    InstanceGroup* sig[3];
-    for (int s = 0; s < 3; ++s) sig[s] = world.get<InstanceGroup>(signalGroups_[s]);
+    InstanceGroup* sig[kLensColourCount];
+    for (int s = 0; s < kLensColourCount; ++s) sig[s] = world.get<InstanceGroup>(signalGroups_[s]);
 
     // (moving: each instance named, so the renderer draws it between its last step and this one -- InstanceGroup::ids)
     for (InstanceGroup* c : cars) if (c) c->beginStep();
     if (ped) ped->beginStep();
-    for (int s = 0; s < 3; ++s) if (sig[s]) sig[s]->transforms.clear();
+    for (int s = 0; s < kLensColourCount; ++s) if (sig[s]) sig[s]->transforms.clear();
 
     carAgentIds_.assign(cars.size(), {});
     pedAgentIds_.assign(1, {});
@@ -3220,42 +3194,20 @@ void CityRenderSystem::syncGroups(World& world) {
     // THE HOUSEHOLDS' CARS, which are entities and no row of the sim's (ADR-0444), into the same groups
     syncCarEntities(world, cars);
 
-    // Each signalled approach lights ONE lamp on its head — the lens for its
-    // CURRENT state — so a phase change moves the lit lens between the red/amber/
-    // green emissive batches. The pole assembly (signalPostGroup_) is static and
-    // left untouched. (The lit lens overlays the head's matching housing lamp.)
+    // THE SIGNAL HEADS (ADR-0456): each shows what the new driving's lamps show for the traffic arriving by the arm
+    // it is attached to (driving::headAt): its face in its post instance's bottom row (mesh.vert lights that lamp),
+    // its arrow as a separate lens beside it. Dark where the new driving does not drive (the old levels): there is no
+    // other clock. The pole assembly (signalPostGroup_) is static and left untouched.
     sec(1);
-    SignalController& sc = sim_.signals();
-    if (signalLensCache_.size() != signalLinks_.size()) {   // first bake (after build adopted the placed poles)
-        signalLensCache_.resize(signalLinks_.size());
-        for (std::size_t k = 0; k < signalLinks_.size(); ++k)
-            for (int s = 0; s < 3; ++s) signalLensCache_[k][static_cast<std::size_t>(s)] = signalLensPose(signalLinks_[k], static_cast<SignalState>(s));
-    }
-    // each post's lit lamp: its link's state in the instance's bottom row (1 green, 2 amber, 3 red)
+    tieSignalHeads(world);
     if (InstanceGroup* pg = signalPostGroup_.valid() ? world.get<InstanceGroup>(signalPostGroup_) : nullptr)
-        for (std::size_t k = 0; k < postLinkOf_.size() && k < pg->transforms.size(); ++k)
-            pg->transforms[k].m[3][0] = static_cast<Real>(static_cast<int>(sc.stateForLink(postLinkOf_[k])) + 1);
-    for (std::size_t sk = 0; sk < signalLinks_.size(); ++sk) {
-        const int li = signalLinks_[sk];
-        // a link sharing an earlier signal's pole lights nothing of its own: the head shows its approach's main
-        // link (two lit lamps on one head read as a broken light)
-        if (li < static_cast<int>(siteShared_.size()) && siteShared_[static_cast<std::size_t>(li)]) continue;
-        SignalState st = sc.stateForLink(li);
-        // (the head's own lamp is lit by its state now; only the left arrow below is a separate lens)
-        // THE LEFT ARROW (ADR-0109): a fourth lamp beside the head, on the side the left turn goes,
-        // lit green (or amber) through the lead arrow while the straight-on lamps show red
-        if (sc.hasLeftArrow(li)) {
-            const SignalState la = sc.stateFor(li, Move::Left);
-            if (la != SignalState::Red && st == SignalState::Red) {
-                const Vec2 u = nav_.direction(li);
-                const Vec3 turnSide(-u.y, 0, u.x);   // the nav frame's left of travel, in the world
-                Mat4 pose = signalLensCache_[sk][static_cast<std::size_t>(SignalState::Green)];
-                pose = Mat4::trs(Vec3(0, 0, 0) + turnSide * 0.34, Quat(), Vec3(1, 1, 1)) * pose;
-                const int k = static_cast<int>(la);
-                if (sig[k]) sig[k]->transforms.push_back(pose);
-            }
+        for (std::size_t k = 0; k < signalHeads_.size() && k < pg->transforms.size(); ++k) {
+            const driving::HeadShows h = signalHeadShows(k);
+            pg->transforms[k].m[3][0] = static_cast<Real>(headFaceNumber(h.face));
+            if (h.arrow == driving::Lamp::Dark) continue;
+            InstanceGroup* lens = sig[static_cast<int>(h.arrow == driving::Lamp::GreenArrow ? LensColour::Green : LensColour::Amber)];
+            if (lens) lens->transforms.push_back(signalHeads_[k].arrowLens[h.arrowFor == driving::Movement::NearTurn ? 1 : 0]);
         }
-    }
 
     // THE MID-RANGE BAND: far agents in reach, as stand-ins, run on from their last coarse tick
     farDrawn_ = 0;
@@ -3306,7 +3258,7 @@ void CityRenderSystem::syncGroups(World& world) {
     refreshBounds(pedGround);
     for (InstanceGroup* lie : pedLie) refreshBounds(lie);
     for (InstanceGroup* bg : boardsG) refreshBounds(bg);
-    for (int s = 0; s < 3; ++s) refreshBounds(sig[s]);
+    for (int s = 0; s < kLensColourCount; ++s) refreshBounds(sig[s]);
     syncBeachThings(world);
 
     sec(2);
@@ -4635,7 +4587,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                             std::snprintf(qb, sizeof(qb), " {%d st %d v %.2f leg %d/%zu link %d len %.1f w %.1f d %.1f hold %.1f junc %d sig %d next %d why %d gap %.2f/%.2f}",
                                           i, static_cast<int>(a.state), a.speed, a.leg, a.route.links.size(), li, Lq ? Lq->length : -1.0, Lq ? Lq->width : -1.0,
                                           a.distOnLeg, a.holdTimer, Lq ? static_cast<int>(nav_.isJunction(Lq->to)) : -1,
-                                          li >= 0 ? static_cast<int>(sim_.signals().hasSignal(li)) : -1,
+                                          Lq ? static_cast<int>(nav_.signalControlled(Lq->to)) : -1,
                                           a.leg + 1 < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg + 1)] : -1,
                                           sim_.holdWhyOf(i), std::min(sim_.gapOf(i), Real(99)), sim_.minGapOf(i));
                             pileWho += qb;

@@ -2366,6 +2366,59 @@ TEST_CASE(arrows_1_far_turns_lead_on_an_arrow_and_cross_nothing_green) {
     CHECK(std::find(words.begin(), words.end(), std::string("green_arrow")) != words.end());
 }
 
+// A DRAWN HEAD SHOWS ITS ARM'S LAMPS (ADR-0456, headAt): at every half second over two cycles of the grid's middle
+// junction, each arm's head's face is what lampShownAt says for its straight-on movement (an arrow there lights the
+// face green), and its arrow is lit green exactly when one of its turns shows a green arrow. Over the run the heads
+// show a red face, a green face, and a green arrow under a red face (the lab's leading far-turn arrows).
+TEST_CASE(arrows_2_a_signal_head_shows_the_lamps_of_the_traffic_arriving_by_its_arm) {
+    Sim s(driving_test::gridRoads(3, 3), labRules(), "signal");
+    CHECK(s.ok);
+    if (!s.ok) return;
+    const RightOfWay& row = s.d.rightOfWay();
+    const engine::LaneGraph& roads = s.t.model.laneLevel;
+    const engine::JunctionId j = s.t.junction(1, 1);
+    const engine::Junction& jn = roads.junctions[j.index];
+    std::vector<uint32_t> arms;
+    for (uint32_t i = 0; i < jn.connectors.count; ++i) {
+        const engine::PathId c = roads.junctionConnectors[jn.connectors.first + i];
+        const uint32_t arm = roads.paths[roads.paths[c.index].from.index].arm;
+        if (std::find(arms.begin(), arms.end(), arm) == arms.end()) arms.push_back(arm);
+    }
+    CHECK(arms.size() == 4u);
+    const double cycle = row.junctions[j.index].cycle;
+    uint32_t samples = 0, faceWrong = 0, arrowWrong = 0, redFaces = 0, greenFaces = 0, arrowsUnderRed = 0;
+    for (double t = 0; t < 2 * cycle; t += 0.5) {
+        for (const uint32_t arm : arms) {
+            const HeadShows h = headAt(roads, row, j, arm, t);
+            ++samples;
+            bool turnArrow = false;
+            for (uint32_t i = 0; i < jn.connectors.count; ++i) {
+                const engine::PathId c = roads.junctionConnectors[jn.connectors.first + i];
+                if (roads.paths[roads.paths[c.index].from.index].arm != arm) continue;
+                const Lamp shown = lampShownAt(roads, row, c, t);
+                if (row.paths[c.index].movement == Movement::Straight) {
+                    const Lamp face = shown == Lamp::GreenArrow ? Lamp::Green : shown;
+                    if (h.face != face) ++faceWrong;
+                } else if (shown == Lamp::GreenArrow) {
+                    turnArrow = true;
+                }
+            }
+            if (turnArrow != (h.arrow == Lamp::GreenArrow)) ++arrowWrong;
+            redFaces += h.face == Lamp::Red ? 1 : 0;
+            greenFaces += h.face == Lamp::Green ? 1 : 0;
+            arrowsUnderRed += h.face == Lamp::Red && h.arrow == Lamp::GreenArrow ? 1 : 0;
+        }
+    }
+    std::printf("    [heads] %u samples: face wrong %u, arrow wrong %u; red faces %u, green faces %u, arrows under red %u\n",
+                samples, faceWrong, arrowWrong, redFaces, greenFaces, arrowsUnderRed);
+    CHECK(faceWrong == 0u);
+    CHECK(arrowWrong == 0u);
+    CHECK(redFaces > 0u);
+    CHECK(greenFaces > 0u);
+    CHECK(arrowsUnderRed > 0u);
+    CHECK(headAt(roads, row, engine::JunctionId(), arms.front(), 0).face == Lamp::Dark);   // no junction: dark
+}
+
 TEST_CASE(queue_35_ten_cars_at_a_green_empty_at_the_saturation_headway) {
     // THE LAB'S DRIVERS AT ONE LIGHT (the measurements row queue_headway, in seconds): ten ordinary cars queued at a red
     // on the lane arriving at the grid's middle junction from the west, each one standstill gap behind the next, all

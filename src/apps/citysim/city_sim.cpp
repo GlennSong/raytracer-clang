@@ -160,8 +160,7 @@ constexpr Real kPedAnticipation = 0.4;  // walkers dodge where a neighbour WILL 
 // and reads no live signal state, so a junction is a modelled dwell, not a
 // queue. kAgentGridCell sizes the P4.1 spatial grid; kGridPad widens its
 // bounds past the graph for parked verges, doorsteps and corner blends.
-constexpr Real kVSignalDelay = 4.0;     // avg dwell per SIGNALIZED junction crossed
-constexpr Real kVJunctionDelay = 1.5;   // avg dwell per stop/yield junction crossed
+constexpr Real kVJunctionDelay = 1.5;   // avg dwell per junction crossed (no old signal clock: ADR-0456)
 constexpr Real kAgentGridCell = 64.0;
 constexpr Real kGridPad = 250.0;
 
@@ -521,7 +520,6 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     junctionGrid_.configure(engine::Vec2(0, 0), engine::Vec2(1, 1),
                             kAgentGridCell, 0);
     maxJunctionRadius_ = 0;
-    signals_.build(graph, signalTiming_);
     // Curbside bays (R6b): mid-link, in the road's own PARKING BAND, well clear
     // of junction mouths; ~55% seeded with scenery cars so streets read
     // parked-along from the first frame.
@@ -5272,20 +5270,9 @@ Real CitySim::stopLineBack(const Agent& a, const JunctionAhead& ja) const {
     return std::min(stopSetback, std::max(Real(0.5), ja.approach * 0.6));
 }
 
-// The junction rules of advance(): the stop-line geometry, the signal brake, and
-// the box-occupancy / turn-yield / exit-room scan. Returns the speed target
-// after those caps plus the stop line the hard clamp in advance() holds at.
-// Pure query: no rng draws, no agent mutation.
-Move CitySim::moveFor(const Agent& a, int li) const {
-    for (std::size_t k = static_cast<std::size_t>(std::max(0, a.leg)); k + 1 < a.route.links.size(); ++k)
-        if (a.route.links[k] == li) return moveOf(nav_->direction(li), nav_->direction(a.route.links[k + 1]));
-    return Move::Straight;   // its last leg (or not on its route): straight on
-}
-
-SignalState CitySim::signalFor(const Agent& a, int li) const {
-    return signals_.stateFor(li, moveFor(a, li));
-}
-
+// The junction rules of advance(): the stop-line geometry, the walkers at the model's crosswalks, and the
+// box-occupancy / turn-yield / exit-room scan. Returns the speed target after those caps plus the stop line the hard
+// clamp in advance() holds at. Pure query: no rng draws, no agent mutation.
 CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                                                 Real target) const {
     JunctionGate gate;
@@ -5353,35 +5340,12 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
             target = std::min(target,
                               std::sqrt(kJunctionSpeed * kJunctionSpeed +
                                         kCarDecel * std::max(Real(0), distToEnd - kJunctionApproach)));
-        // Obey the stoplight. Cars go on THEIR approach's green; pedestrians
-        // cross ONLY in the WALK window (roads-v2.1 R3) — the conflict-group
-        // phases mean a "green approach" no longer guarantees the crossing
-        // street is red, so the old ride-the-perpendicular-green rule would
-        // walk peds into moving turns. WALK is everything-red by construction.
+        // (NO STOPLIGHT HERE, ADR-0456. The old signal clock that held these cars and walkers at a red is gone: the
+        // lights are the new driving's alone, and a walker at a lit junction of its roads is ruled by the model's
+        // crosswalks above. Until the old driving goes (#306 piece C) its cars obey no lights.)
         Real distToLine = ja.toNode - lineBack;
         gate.distToLine = distToLine;
-        // Only cars still BEFORE the line brake for the signal — a car already
-        // past it is COMMITTED and must clear the box (the all-red clearance
-        // exists for exactly that). Capping a committed car to zero pinned it
-        // mid-intersection every time a green expired under it.
-        // Cars AND peds ride their own approach's green — for peds this is
-        // the PARALLEL-WALK rule, and under CONFLICT-GROUP phases it is
-        // correct BY CONSTRUCTION: every arm a parallel-walking ped crosses
-        // conflicts with their approach, so it is red during their green.
-        // (Under the old bearing-parity bins that guarantee did not hold —
-        // and fixed-time WALK gates could not cover variable crossing
-        // widths: a 9 s gate left peds mid-box on arterials. The WALK window
-        // remains as bonus all-red scramble time.) Turning cars crossing the
-        // walkway on green brake for peds via the vision wedge, as before.
-        bool signalHolds =
-            car ? signalFor(a, li) != SignalState::Green
-                : !(signals_.stateForLink(li) == SignalState::Green ||
-                    signals_.walkRemainingAt(toNode) >= 6.5);
-        if (distToLine >= 0 && distToLine < kSignalApproach && signals_.hasSignal(li) && signalHolds) {
-            target = std::min(target, approachStop(distToLine, car ? kCarDecel : kPedDecel,
-                                                   target));
-        }
-        // HOLDS at the line (cars still before it, any signal state):
+        // HOLDS at the line (cars still before it):
         //  1. BOX OCCUPANCY — never enter while a car on a CROSSING heading is
         //     inside the box (a lingerer from the last phase, a mid-turn car):
         //     entering anyway is where mid-box wrecks came from. Same-axis
@@ -5408,8 +5372,6 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
             Vec2 jc = nav_->nodes[toNode];
             Real jr = junctionRadius(toNode);
             Real range = jr + 6.0;
-            // on its green ARROW a left turn is protected: everything it would cross is red
-            const bool protectedTurn = turning && signals_.protectedLeft(li) && moveFor(a, li) == Move::Left;
             // Gridlock escape: held this long by nothing but STALLED occupants, a
             // real driver inches through the box. Staggered per agent (brain bits)
             // so a ring of mutual waiters releases one at a time, deterministic.
@@ -5438,7 +5400,7 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                     break;
                 }
                 // 2: turn yield against oncoming approach traffic.
-                if (!turning || along >= -0.3 || protectedTurn) continue;
+                if (!turning || along >= -0.3) continue;
                 if (b.speed > 0.5) { yieldAtLine = true; gate.why = 2; break; }  // live traffic
                 // A gridlocked car stops waiting on anything STALLED — including
                 // the stopped-turner tie-break below, whose cross-junction chains
@@ -5868,15 +5830,12 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // Gridlock clock + escape. A jam's terminal form is a RING: cars pinned
     // nose-to-nose across adjacent junctions by the follow gap (each behind the
     // next stalled car), which no yield rule will ever release. So ANY car pinned
-    // to a standstill near a junction — by a yield or by a stalled leader, but
-    // never by a red (the light will change) — counts its hold; once gridlocked,
+    // to a standstill near a junction — by a yield or by a stalled leader (no red holds one since the old signal
+    // clock went, ADR-0456) — counts its hold; once gridlocked,
     // it stops yielding to stalled traffic (junctionSpeedCap) and CREEPS, so the
     // ring inches apart the way real drivers unpick a blocked box. If bodies
     // brush during the creep, the fender-bender freeze-and-recover arbitrates.
     if (car) {
-        const int jli = gate.approachLink;
-        const bool redAhead = jli >= 0 && signals_.hasSignal(jli) &&
-                              signalFor(a, jli) != SignalState::Green;
         const bool nearJunc = gate.node >= 0 && gate.distToNode < kSignalApproach + 12.0;
         // The gridlock clock also runs for a WEDGE-PINNED car ANYWHERE on the
         // road — a wreck pile at a link ENTRANCE (post-crash bodies
@@ -5887,7 +5846,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         const bool wedgePinned =
             a.speed < 0.05 && a.crashTimer <= 0 && a.crashCount > 0 &&
             selfIdx < carAheadGap_.size() && carAheadGap_[selfIdx] < 0.4;
-        if ((a.speed < 0.05 && nearJunc && !redAhead && a.crashTimer <= 0) ||
+        if ((a.speed < 0.05 && nearJunc && a.crashTimer <= 0) ||
             wedgePinned)
             a.holdTimer += dt;
         else if (a.speed > 1.5)   // above creep: genuinely rolling again — a
@@ -5899,35 +5858,28 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         // unpicks nothing, and with a physical car stopped there the creeping box climbed its boot and rolled it (the
         // packed junction, seed 15). Queued at the bumper gap there is no room, so it waits behind.
         const bool roomAhead = gap >= 1e8 || gap - minGap > 0.5;
-        if (gridlocked && roomAhead && !redAhead && a.crashTimer <= 0 && a.speed < 0.7)
+        if (gridlocked && roomAhead && a.crashTimer <= 0 && a.speed < 0.7)
             a.speed = 0.7;   // creep — the hard line clamp below still applies
     }
 
-    // Hard stop line at a red light: the smooth cap above slows the agent but
-    // never to exactly zero, so without this the leftover motion would carry it
-    // THROUGH the light. Clamp advance so it cannot pass the line while its
-    // approach is not green; it waits here until the signal clears.
+    // Hard stop line for a hold (a car yielding at its line, a walker held at a crosswalk's kerb end): the smooth cap
+    // above slows the agent but never to exactly zero, so without this the leftover motion would carry it THROUGH the
+    // line. (There is no red light here since the old signal clock went, ADR-0456: the old driving's cars obey no
+    // lights, and a walker the model's crosswalks rule waits by them alone, ADR-0452's walkHold.)
     //
     // The line is in ROUTE metres and may lie beyond this link: then the motion
     // below runs the normal leg-chaining loop, capped at the line (lineRoom).
     Real lineRoom = std::numeric_limits<Real>::infinity();
     if (gate.node >= 0) {
-        const int toNode = gate.node;
-        const int jli = gate.approachLink;
-        // (a walker the model's crosswalks rule here waits by them alone: ADR-0452, walkHold)
-        bool redAhead = !gate.crossing.governed && signals_.hasSignal(jli) &&
-                        (car ? signalFor(a, jli) != SignalState::Green
-                             : !(signals_.stateForLink(jli) == SignalState::Green ||
-                                 signals_.walkRemainingAt(toNode) >= 6.5));
         // A car that the cap has just brought to the line can overshoot it by a
         // hair in one tick; it is still waiting AT the line, not committed.
         const Real kLineSlack = car ? 0.3 : 0.0;
-        const bool holds = redAhead || gate.yieldAtLine || gate.walkHold;
+        const bool holds = gate.yieldAtLine || gate.walkHold;
         if (holds && gate.distToLine >= -kLineSlack - 1e-6 && (car || gate.walkHold) &&
             gate.distToLine > nav_->links[li].length - a.distOnLeg) {
             lineRoom = std::max(Real(0), gate.distToLine);
-            a.state = redAhead || !car ? Agent::State::Waiting : Agent::State::Yielding;
-            if (a.speed < 0.3) holdWhy(a, !car ? 2 : redAhead ? 11 : static_cast<uint8_t>(11 + gate.why));
+            a.state = !car ? Agent::State::Waiting : Agent::State::Yielding;
+            if (a.speed < 0.3) holdWhy(a, !car ? 2 : static_cast<uint8_t>(11 + gate.why));
         } else if (holds) {
             // The hold applies only BEFORE the line. A car already past it is
             // committed to the box and drives on — clamping it there trapped it
@@ -5936,12 +5888,10 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             if (gate.distToLine >= -kLineSlack - 1e-6) {
                 Real room = std::max(Real(0), gate.distToLine);
                 Real motion = std::min(a.speed * dt, room);
-                if (motion < a.speed * dt) { a.speed = 0; holdWhy(a, !car ? 2 : redAhead ? 11 : static_cast<uint8_t>(11 + gate.why)); }   // held at the line
+                if (motion < a.speed * dt) { a.speed = 0; holdWhy(a, !car ? 2 : static_cast<uint8_t>(11 + gate.why)); }   // held at the line
                 a.distOnLeg += motion;
-                // FSM: red = Waiting; holding a turn for oncoming = Yielding.
-                // A pedestrian held at the kerb is Waiting too (honest red ring).
-                a.state = car ? (redAhead ? Agent::State::Waiting : Agent::State::Yielding)
-                              : Agent::State::Waiting;
+                // FSM: holding a turn for oncoming = Yielding; a pedestrian held at the kerb is Waiting.
+                a.state = car ? Agent::State::Yielding : Agent::State::Waiting;
                 refreshPose(a);
                 steer(a, dt);
                 return;
@@ -5969,8 +5919,8 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         // narrow street to a wide one waited inside the wide one -- walkersInRoad's "waiting, in a street it is
         // crossing")
         const Real kerb = std::max(nav_->links[li].width * 0.5 + 3.0, junctionRadius(toNode) + kWalkerKerbStep + 1.8);
-        if (nav_->isJunction(toNode) && !signals_.hasSignal(li) &&
-            toEnd < kerb && toEnd > kerb - 1.8) {
+        // (at every junction: the old signal clock that held walkers at a lit one is gone, ADR-0456)
+        if (nav_->isJunction(toNode) && toEnd < kerb && toEnd > kerb - 1.8) {
             const Vec2 nodeP = nav_->nodes[toNode];
             // Patience relaxes the ACCEPTED GAP, it never removes the check:
             // fresh at the kerb, a walker wants ~2.5 s of clear approach;
@@ -6795,9 +6745,8 @@ void CitySim::computeCarWedge() {
         // Anti-deadlock is ASYMMETRY: I yield only to a crosser approaching
         // from my maths RIGHT (rightOf, nav_graph.h: the driver's left, as
         // traffic keeps left); it sees me on its other side and drives on —
-        // mutual yield cannot form. A crosser that a red signal
-        // will stop before the box is exempt (a green driver assumes signal-
-        // stopped traffic stays stopped); one already committed is not.
+        // mutual yield cannot form. (A crosser a red would stop was exempt; the old driving's cars obey no lights
+        // since its signal clock went, ADR-0456.)
         for (int bi : queryScratch_) {
             const std::size_t j = static_cast<std::size_t>(bi);
             if (j == i) continue;
@@ -6812,14 +6761,6 @@ void CitySim::computeCarWedge() {
             if (across > 0) continue;             // my LEFT: their yield, not mine
             const Real hdot = b.heading.x * fx + b.heading.y * fy;
             if (hdot < -0.6 || hdot > 0.85) continue;   // oncoming/parallel: not a crossing
-            if (nav_ && b.leg < static_cast<int>(b.route.links.size())) {
-                const int bLi = b.route.links[b.leg];
-                const bool redBound =
-                    signals_.hasSignal(bLi) &&
-                    signalFor(b, bLi) != SignalState::Green &&
-                    b.distOnLeg < nav_->links[bLi].length - 3.0;
-                if (redBound) continue;           // the signal will stop them
-            }
             const Real rvx = b.heading.x * b.speed - fx * a.speed;
             const Real rvy = b.heading.y * b.speed - fy * a.speed;
             const Real rv2 = rvx * rvx + rvy * rvy;
@@ -7908,7 +7849,6 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     clockTotalHours_ += dt * hoursPerSecond;
     if (hoursPerSecond <= 0) heldSeconds_ += dt;
     simSeconds_ += dt;   // memory's time base: sightings age and fade against this
-    signals_.update(dt);
 
     // Pass 1: the GOAL layer (ADR-0064) — AI agents only, the host drives
     // players. Each agent runs its current state in its archetype's GoalTable:
@@ -9009,9 +8949,7 @@ void CitySim::vAdvance(Agent& a, Real dt) {
             const int lanes = std::max(1, NL.lanes);
             if (a.lane >= lanes) a.lane = lanes - 1;
             if (a.laneF > Real(lanes - 1)) a.laneF = Real(lanes - 1);
-            if (nav_->isJunction(toNode))
-                a.vHold += signals_.hasSignal(li) ? kVSignalDelay
-                                                  : kVJunctionDelay;
+            if (nav_->isJunction(toNode)) a.vHold += kVJunctionDelay;   // (no old signal clock to wait out: ADR-0456)
         }
     }
     if (a.leg >= legCount) {

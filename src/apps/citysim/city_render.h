@@ -367,8 +367,24 @@ public:
     int taxiVariant() const { return taxiVariant_; }   // the slot the cabs draw as (-1: the fleet has none)
     engine::Entity carGroup() const { return carGroups_.empty() ? engine::Entity{} : carGroups_[0]; }
     engine::Entity pedGroup() const { return pedGroup_; }
-    engine::Entity signalGroup(SignalState s) const { return signalGroups_[static_cast<int>(s)]; }
+    engine::Entity signalGroup(LensColour c) const { return signalGroups_[static_cast<int>(c)]; }
     engine::Entity signalPostGroup() const { return signalPostGroup_; }
+    // THE DRAWN SIGNAL HEADS (ADR-0456), one per instance of the post group, in its order: the model arm each is
+    // attached to (city, junction, arm: StreetFurniture::Signal), the new driving's lane junction there (not valid:
+    // the head is dark: the new driving does not drive here), and what it shows now (driving::headAt), as lit in the
+    // post instance's bottom row (headFaceNumber) and the arrow lens groups (signalGroup).
+    struct SignalHead {
+        int link = -1;                        // the street-map link it was planted along
+        int city = -1, junction = -1, arm = -1;
+        engine::Mat4 arrowLens[2];            // its arrow lens lit for a far turn [0] or a near turn [1]
+    };
+    std::size_t signalHeadCount() const { return signalHeads_.size(); }
+    const SignalHead& signalHead(std::size_t k) const { return signalHeads_[k]; }
+    engine::JunctionId signalHeadJunction(std::size_t k) const {
+        return k < headJunctions_.size() ? headJunctions_[k] : engine::JunctionId();
+    }
+    driving::HeadShows signalHeadShows(std::size_t head) const;
+    static int headFaceNumber(driving::Lamp face);
     engine::Entity crosswalkGroup() const { return crosswalkGroup_; }
     // How many drawn cars carry any of these lit-lamp bits this bake (engine::kLampMask*): the lamps are the body's
     // own lenses, lit by a mask on its instance (ADR-0342). For the headless tests.
@@ -527,17 +543,16 @@ private:
     // from terrain samples every tick, and raw refits vibrate the body on
     // noisy/quantised ground (drive feedback C1: "cars vibrate").
     engine::Mat4 agentPose(const Agent& a, int agentIdx = -1) const;
-    // Where a signalled approach's pole stands and which way its head/arm point
-    // (matches the city's street_kit placement, scaled to road width).
+    // Where a placed signal pole stands and which way its head/arm point (the loader's StreetFurniture).
     struct SignalSite {
         engine::Vec3 base;   // pole foot (world)
         engine::Vec3 face;   // unit XZ: head facing (toward oncoming traffic)
         engine::Vec3 side;   // unit XZ: arm reach (toward the road centre)
         Real yaw;            // facing yaw for the assembly
     };
-    SignalSite signalSite(int link) const;
-    engine::Mat4 signalPostPose(int link) const;            // the pole assembly
-    engine::Mat4 signalLensPose(int link, SignalState s) const;  // lit lens at active slot
+    static engine::Mat4 signalLensPose(const SignalSite& site);   // a lens level with the head's green lamp
+    // Ties each head to the new driving's lane level (tieSignalHeads, when the driving or its model changes).
+    void tieSignalHeads(engine::World& world);
     Real groundAt(Real x, Real z) const;
     // The height of the DRIVING SURFACE on `link` at `station` metres along it —
     // the same reading the sim gives a car driving that spot (Agent::deckY), so
@@ -693,7 +708,7 @@ private:
     engine::ControlAnswers answers_;   // parking? traffic? depots? opensigns? findplace? pin? jitter?
     engine::ControlCommands::Binding answerGround_;
     std::string depotsStalled_;
-    engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
+    engine::Entity signalGroups_[kLensColourCount];   // the lit arrow lenses, by LensColour
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity parkBayGroup_;      // curbside bay outline markings (R6b)
     engine::Entity crosswalkGroup_;    // baked zebra decals at junction mouths
@@ -832,24 +847,20 @@ private:
     void bakePlanOutlines(engine::World& world);
     std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)
     std::vector<engine::Mat4> colliderPostBake_;   // prism vertical corner posts
-    std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
-    std::vector<uint8_t> siteShared_;  // by link: its signal shares an earlier one's pole and head (draws no lens)
-    std::vector<int> postLinkOf_;      // per signal-post instance: the link whose state its head shows
-
     std::vector<int> parkedScratch_;   // the vehicles near the player (syncGroups)
-    // Each signal's three lens poses (red, amber, green), parallel to signalLinks_: the poles never move, and
-    // working them out every bake (a ground sample apiece) was 10.6 ms of the island's 13 ms sync for 4,727 signals
-    std::vector<std::array<engine::Mat4, 3>> signalLensCache_;
-    // BUILD-TIME furniture adoption (device: the city places poles, the sim
-    // reacts): per-link SignalSite overrides published by the level loader's
-    // StreetFurniture component. Empty when the level placed none — then this
-    // system computes its own sites as before.
+    // THE PLACED SIGNAL POLES (the loader's StreetFurniture, adopted at build): each link's pole site (siteHasLink_: it
+    // has one), the walkers' obstacles; and the heads, one per post instance, with the lane junction of the new
+    // driving each is tied to (tieSignalHeads; headsModel_: the model they were asked of). The poles never move: their
+    // lens poses are worked out once (a ground sample apiece every bake was 10.6 ms of the island's 13 ms sync).
     std::vector<SignalSite> siteByLink_;
     std::vector<uint8_t> siteHasLink_;
+    std::vector<SignalHead> signalHeads_;
+    const engine::RoadModel* headsModel_ = nullptr;
+    std::vector<engine::JunctionId> headJunctions_;
     // (the terrain, the road lift, the decks the level's road meshes rode and the sidewalk band are the sim's ground,
     // city_poses.h CityGround: heightAt_, roadLift_, decks_, sidewalk_ above. groundAt answers from the decks
     // wherever a road passes, so every placed car/paint/lens stands on the drawn asphalt rather than on the terrain
-    // carved 0.22 m under it; signalSite's kerb back-off clears the sidewalk band.)
+    // carved 0.22 m under it.)
     bool built_ = false;
     bool debugWidgets_ = false;   // master runtime toggle (init from params; J flips it)
     // Per-layer refinements of debugWidgets_ (ADR-0066 panel): when the master is

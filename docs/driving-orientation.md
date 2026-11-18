@@ -5,9 +5,16 @@ Start here before touching `src/apps/driving/` or the city sim's driving side (`
 rules that apply. The *why* is in `docs/driving-model-design.md`, `docs/two-drivers-meeting-design.md` and the ADRs it
 names (ADR-0398 to ADR-0416 for the driving library, ADR-0440 to ADR-0452 for the brain, the near tier, things in the
 way and crosswalks, ADR-0453 for one kind of car, ADR-0455 for the brain's car facts on the car and one way to take a
-car). The roads it drives on are described in `docs/roads-orientation.md`. Written 2026-11-17, after ADR-0452; section
-3 and 4 brought up to ADR-0453 on 2026-11-18, and to ADR-0455 the same day. Anything marked *(unsure)* was
-not checked in the code.
+car, ADR-0456 for one signal clock). The roads it drives on are described in `docs/roads-orientation.md`. Written
+2026-11-17, after ADR-0452; section 3 and 4 brought up to ADR-0453 on 2026-11-18, to ADR-0455 the same day, and to
+ADR-0456 after it. Anything marked *(unsure)* was not checked in the code.
+
+**One signal clock (ADR-0456).** The traffic lights are the new driving's alone: `signal_programme.h`, pure functions of
+`Driving::clockSeconds()`. The drawn signal heads show them (`headAt`, read by `CityRenderSystem` for each head the loader
+placed, by the arm the head is attached to), the walkers at the model's crosswalks wait on its walk signals
+(`walkAtCrosswalk`), and the cars obey them. The old sim's own clock (`SignalController`, `traffic_signal.*`,
+`signals.lua`) is deleted. Where the new driving does not drive, every head is dark, no walker waits for a light, and
+the old driving's cars (until #306 piece C deletes them) obey no lights.
 
 **One car, one representation (ADR-0453).** Every car the new driving moves is a car entity (`city_car.h`): a
 household's (the brain sends it), one that drives round for ever (`CityCarRoams`: the hand-over sends it; the traffic
@@ -66,7 +73,7 @@ wishes with.
 | `rule_set.h/.cpp`, `scripting/rule_set_lua.*`, `scripting/rules_lua.*`, `scripting/lua_table_reader.h` | The rule set as plain structs, read from Lua once at load: ranks, devices, controls (settle questions, arrows, `protected_when`, `arrow_when`), numbers with units and sources, personality traits. |
 | `road_rules.h/.cpp` | Binds the road model's names (controls, regulation kinds, classes) to the rule set's rows, once at load. |
 | `right_of_way.h/.cpp` | Who gives way to whom at every meeting of two turns, per phase; the phases of each junction's lights (protected and arrow turns); the walk signals of the model's crosswalks under lights (`WalkSignalRules`, keyed on `ModelCrosswalk` ids, crossed by `RoadModel::crossersOf`). |
-| `signal_programme.h/.cpp` | The lights' clock: yellow, all-red and green timing, the green wave, `lampAt` / `lampShownAt` (a green arrow), `walkAt` / `walkAtCrosswalk` (WALK, FLASHING DON'T WALK, DON'T WALK), and `checkSignalProgrammes`, the safety check. Pure functions of the clock. |
+| `signal_programme.h/.cpp` | The lights' clock, the only one (ADR-0456): yellow, all-red and green timing, the green wave, `lampAt` / `lampShownAt` (a green arrow), `headAt` (what a drawn head at one arm shows: its face and its arrow), `walkAt` / `walkAtCrosswalk` (WALK, FLASHING DON'T WALK, DON'T WALK), and `checkSignalProgrammes`, the safety check. Pure functions of the clock. |
 | `announce.h/.cpp` | The board of announcements: each car says when it will be on each crossing point ahead. |
 | `conflict.h/.cpp` | The one conflict resolver over the board (being replaced by judgement, design sitting 6). |
 | `give_way.h/.cpp` | A driver's judgement at the junctions ahead: gaps, lights, the dilemma at a yellow. |
@@ -90,6 +97,7 @@ wishes with.
 | `citysim/city_crowd.h/.cpp` | A crowd of residents made from the road model and `crowd.lua` (ADR-0446): places beside streets, households, cars, days. |
 | `citysim/city_brain.h/.cpp` | The residents with the agent brain: what they want, their trips, carried out with the sim's walking and the new driving. |
 | `citysim/city_sim.h/.cpp` (parts) | The old sim, which still walks every person on foot on the street map: `thingsForDriving` writes them into the driving's things each tick; `crossingAhead`, `gapToCross`, `jaywalks` make them wait at a crosswalk's kerb end and cross (ADR-0452). |
+| `citysim/city_render.h/.cpp` (parts) | The signal heads (ADR-0456): one `SignalHead` per post the loader placed (`StreetFurniture::Signal`, which carries the model arm the head is attached to), tied to the new driving's lane junction there (`tieSignalHeads`, by `RoadModel::laneJunctionOf`), lit each bake from `headAt` (the face as the post instance's number, `headFaceNumber`; the arrow as a lens beside it). |
 
 ## 4. Who reads what
 
@@ -108,6 +116,7 @@ wishes with.
 
 Build with `cmake --build build-viewer --target driving_tests level_tests physics_tests viewer`. Filters are substrings:
 - `./build-viewer/driving_tests` (about 200 cases, a minute or two); `RT_TEST_FILTER=walks_`, `arrows_`, `crosswalks_`.
+- `RT_TEST_FILTER=signal_heads ./build-viewer/level_tests`: every drawn head on traffic_lab against `lampShownAt`.
 - `RT_TEST_FILTER=brain_crowd ./build-viewer/level_tests`: 12 simulated minutes of 350 residents; per-minute lines
   include the crosswalk counts. Pins its hash.
 - `RT_TEST_FILTER=near_tier ./build-viewer/physics_tests`: contacts and hits on walkers.
@@ -120,8 +129,13 @@ Build with `cmake --build build-viewer --target driving_tests level_tests physic
 
 - The old sim's people walk the street map's kerb-side line, not a pavement of the model, and cross through the
   junction's corner blend; their places waiting at a crosswalk are where their route comes level with its kerb end.
-- The sim's `walkersInRoad`, `junctionRadius` and the old signals still measure the roads from the street map for the
-  old driving (v1); they are slated to go with it.
+- The sim's `walkersInRoad` and `junctionRadius` still measure the roads from the street map for the old driving (v1);
+  they are slated to go with it. (The old signals went in ADR-0456.)
+- A walker at a junction the model's crosswalks do not rule (no crosswalk with pavements there, or a junction of a city
+  the new driving does not drive) waits for no light: it judges the gap in the old driving's cars at the kerb
+  (`advance`'s kerb discipline) at every junction, lit or not.
+- The signal heads have no lit walk signal: the pole's walk panel (`street_kit.cpp`) is painted, and which crosswalk a
+  panel would serve is stated nowhere (ADR-0456).
 - A walk round a junction that crosses two arms (a far turn on foot) is judged one crosswalk at a time, waiting at the
   corner between.
 - Since ADR-0453 the traffic lab's cars are entities with nobody in them: `spectate` follows them after the agents,

@@ -127,7 +127,7 @@ RenderMaterial pedMaterial() {
 
 // An emissive lens: dark body, strong self-illumination in the signal colour so
 // the active phase glows even before any scene lighting.
-RenderMaterial signalMaterial(SignalState s) {
+RenderMaterial signalMaterial(LensColour c) {
     RenderMaterial m;
     m.metallic = 0.0f;
     m.roughness = 0.4f;
@@ -137,10 +137,9 @@ RenderMaterial signalMaterial(SignalState s) {
     // lenses were tuned against an unlit city, and once the lamps read as real
     // fixtures a 1.6 signal beside a 4.5 lamp stopped carrying at night. A
     // signal must be the most legible light on the street, not the dimmest.
-    switch (s) {
-        case SignalState::Green:  m.albedo = Vec3(0.0, 0.2, 0.0); m.emission = Vec3(0.2, 4.0, 0.5); break;
-        case SignalState::Yellow: m.albedo = Vec3(0.2, 0.18, 0.0); m.emission = Vec3(4.0, 3.2, 0.2); break;
-        case SignalState::Red:    m.albedo = Vec3(0.2, 0.0, 0.0); m.emission = Vec3(4.0, 0.2, 0.2); break;
+    switch (c) {
+        case LensColour::Green: m.albedo = Vec3(0.0, 0.2, 0.0); m.emission = Vec3(0.2, 4.0, 0.5); break;
+        case LensColour::Amber: m.albedo = Vec3(0.2, 0.18, 0.0); m.emission = Vec3(4.0, 3.2, 0.2); break;
     }
     return m;
 }

@@ -603,7 +603,6 @@ endif()
 # ============================================================
 add_library(citysim STATIC
     src/apps/citysim/control_policy_file.cpp   # the shared control placement policy, read from its files (ADR-0422)
-    src/apps/citysim/traffic_signal.cpp
     src/apps/citysim/traffic_rules.cpp
     src/apps/citysim/city_goals.cpp
     src/apps/citysim/city_roles.cpp
@@ -648,7 +647,6 @@ if(RT_ENABLE_SCRIPTING)
         src/apps/citysim/scripting/roles_lua.cpp
         src/apps/citysim/scripting/place_kinds_lua.cpp
         src/apps/citysim/scripting/people_lua.cpp
-        src/apps/citysim/scripting/signals_lua.cpp
         src/apps/citysim/scripting/crowd_lua.cpp   # crowd.lua: the crowd a level makes (ADR-0446)
         # (travel_lua.cpp, travel.lua's reader, is compiled in the `brain` library with the planner it reads for)
         src/apps/citysim/scripting/vehicle_body.cpp
@@ -1015,7 +1013,6 @@ add_executable(run_tests
     tests/test_state_machine.cpp
     tests/test_cascade_fit.cpp
     tests/test_fall_respawn.cpp
-    tests/test_traffic_signal.cpp
     tests/test_traffic_rules.cpp
     tests/test_city_sim.cpp
     tests/test_city_goals.cpp
@@ -1026,7 +1023,6 @@ add_executable(run_tests
     tests/test_rail_sim.cpp
     tests/test_rail_riders.cpp
     tests/test_island_rail.cpp
-    tests/test_city_signals.cpp
     tests/test_city_perception.cpp
     tests/test_driver_agent.cpp
     tests/test_lane_follow.cpp

@@ -76,6 +76,7 @@ move the loop into it; never a private loop in the reader.
 | The street a lane path or connector is on | `RoadModel::streetOf(path)` |
 | The limit posted on a path; its road's class | `RoadModel::postedLimit(path)`, `roadClassOf(path)` |
 | The control at a junction of the lane level | `RoadModel::controlAt(junction)`, `junctionOf(junction)` |
+| The lane level's junction a model junction is (ask once: a walk) | `RoadModel::laneJunctionOf(modelJunction)` (ADR-0456) |
 | The turn a connector takes | `RoadModel::turnOf(path)` |
 | Which path joins by a stated merge | `RoadModel::mergingAt(crossing)` |
 | The rules standing along a lane path (signs at its end, a limit part-way) | `RoadModel::regulationsAlong(path)` |

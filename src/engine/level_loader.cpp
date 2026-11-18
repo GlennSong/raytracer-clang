@@ -8503,7 +8503,16 @@ bool LevelLoader::load(const std::string& path,
             // island). Its lens then lights on the shared head; only one post is drawn.
             std::vector<char> sharedPole;
             for (const engine::SignalSpot& s : fplan.signals) {
-                engine::StreetFurniture::Signal sig{s.base, s.face, s.link, false};
+                engine::StreetFurniture::Signal sig;
+                sig.base = s.base;
+                sig.face = s.face;
+                sig.link = s.link;
+                if (s.arm >= 0) {   // the arm attachFurniture attaches its head to, below (ADR-0456 lights it by it)
+                    const engine::LevelRoadModel::Place a = unpackArm(s.arm);
+                    sig.city = a.city;
+                    sig.junction = a.junction;
+                    sig.arm = a.arm;
+                }
                 bool shared = false;
                 for (const auto& o : sf.signalPoles) {
                     const Vec3 d = o.base - s.base;

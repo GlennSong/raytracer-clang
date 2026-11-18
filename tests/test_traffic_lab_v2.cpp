@@ -1602,3 +1602,94 @@ TEST_CASE(level_traffic_lab_v2_the_cars_are_counted_followed_and_taken) {
     CHECK(sim.census(&lc.world).emptyCars == static_cast<int>(cars) - 1);
     CHECK(!citysim::isSpectatableCar(lc.world, taken));
 }
+
+// THE DRAWN SIGNAL HEADS SHOW THE NEW DRIVING'S LAMPS (ADR-0456; there is no other signal clock). Every head the loader
+// placed on the lab is attached to an arm of a junction of the model the new driving drives on, and is tied to its
+// junction of the lane level. Every half second over 60 s (one and a half of the lab's 40 s cycles), at every head:
+//   - the number its post instance carries (the lamp mesh.vert lights) is what lampShownAt says for the arm's straight-on
+//     movement (a green arrow on it lights the face green), wherever the arm has one;
+//   - a green arrow lens is lit beside the head, on its turn's side, exactly where one of the arm's turns shows a green
+//     arrow (lampShownAt), and no other green arrow lens is lit.
+// Over the run the heads show red faces, green faces and green arrows.
+TEST_CASE(level_traffic_lab_v2_the_signal_heads_show_the_new_drivings_lamps) {
+    LoadedCity lc("traffic_lab.json", "");
+    CHECK(lc.ok);
+    if (!lc.ok) return;
+    const driving::Driving* d = lc.city.sim().drivingV2();
+    CHECK(d != nullptr && d->lightsRun() && d->roads() != nullptr);
+    if (!d || !d->roads()) return;
+    const engine::LaneGraph& roads = *d->roads();
+    const driving::RightOfWay& row = d->rightOfWay();
+    lc.city.step(lc.world, kStep);   // the first bake ties the heads
+    const std::size_t heads = lc.city.signalHeadCount();
+    std::size_t tied = 0;
+    for (std::size_t k = 0; k < heads; ++k) tied += lc.city.signalHeadJunction(k).valid() ? 1 : 0;
+    std::printf("    [heads] %zu heads placed, %zu tied to the new driving's junctions\n", heads, tied);
+    CHECK(heads > 0u);
+    CHECK(tied == heads);
+    // where along the arm a lit lens stands
+    const auto sameSpot = [](const Mat4& a, const Mat4& b) {
+        const Vec3 p = a.transformPoint(Vec3(0, 0, 0)), q = b.transformPoint(Vec3(0, 0, 0));
+        return engine::approxEqual(p.x, q.x, engine::kSamePoint) && engine::approxEqual(p.y, q.y, engine::kSamePoint) &&
+               engine::approxEqual(p.z, q.z, engine::kSamePoint);
+    };
+    uint64_t samples = 0, faceChecked = 0, faceWrong = 0, noStraight = 0, arrowsWanted = 0, arrowsMissing = 0;
+    uint64_t redFaces = 0, greenFaces = 0, greenArrows = 0, extraArrows = 0;
+    for (int tick = 0; tick < 60 * 60; ++tick) {
+        lc.city.step(lc.world, kStep);
+        if (tick % 30 != 0) continue;
+        const double now = d->clockSeconds();
+        const engine::InstanceGroup* posts = lc.world.get<engine::InstanceGroup>(lc.city.signalPostGroup());
+        const engine::InstanceGroup* green =
+            lc.world.get<engine::InstanceGroup>(lc.city.signalGroup(citysim::LensColour::Green));
+        CHECK(posts && green && posts->transforms.size() == heads);
+        if (!posts || !green || posts->transforms.size() != heads) return;
+        std::size_t wanted = 0;
+        for (std::size_t k = 0; k < heads; ++k) {
+            const engine::JunctionId j = lc.city.signalHeadJunction(k);
+            const citysim::CityRenderSystem::SignalHead& h = lc.city.signalHead(k);
+            const int drawn = static_cast<int>(posts->transforms[k].m[3][0] + 0.5);
+            ++samples;
+            redFaces += drawn == 3 ? 1 : 0;
+            greenFaces += drawn == 1 ? 1 : 0;
+            const engine::Junction& jn = roads.junctions[j.index];
+            bool straight = false, farArrow = false, nearArrow = false;
+            for (uint32_t i = 0; i < jn.connectors.count; ++i) {
+                const engine::PathId c = roads.junctionConnectors[jn.connectors.first + i];
+                if (roads.paths[roads.paths[c.index].from.index].arm != static_cast<uint32_t>(h.arm)) continue;
+                const driving::Lamp shown = driving::lampShownAt(roads, row, c, now);
+                const driving::Movement m = row.paths[c.index].movement;
+                if (m == driving::Movement::Straight && !straight) {
+                    straight = true;
+                    ++faceChecked;
+                    faceWrong += drawn == citysim::CityRenderSystem::headFaceNumber(shown) ? 0 : 1;
+                } else if (m != driving::Movement::Straight && shown == driving::Lamp::GreenArrow) {
+                    (m == driving::Movement::NearTurn ? nearArrow : farArrow) = true;
+                }
+            }
+            noStraight += straight ? 0 : 1;
+            if (!farArrow && !nearArrow) continue;
+            ++arrowsWanted;
+            ++wanted;
+            bool lit = false;
+            for (const Mat4& t : green->transforms)
+                lit = lit || sameSpot(t, h.arrowLens[farArrow ? 0 : 1]);
+            arrowsMissing += lit ? 0 : 1;
+        }
+        greenArrows += green->transforms.size();
+        extraArrows += green->transforms.size() > wanted ? green->transforms.size() - wanted : 0;
+    }
+    std::printf("    [heads] %llu samples: faces checked %llu, wrong %llu (heads with no straight on %llu); red faces %llu, "
+                "green faces %llu; green arrows wanted %llu, missing %llu, lit %llu, lit beyond those wanted %llu\n",
+                static_cast<unsigned long long>(samples), static_cast<unsigned long long>(faceChecked),
+                static_cast<unsigned long long>(faceWrong), static_cast<unsigned long long>(noStraight),
+                static_cast<unsigned long long>(redFaces), static_cast<unsigned long long>(greenFaces),
+                static_cast<unsigned long long>(arrowsWanted), static_cast<unsigned long long>(arrowsMissing),
+                static_cast<unsigned long long>(greenArrows), static_cast<unsigned long long>(extraArrows));
+    CHECK(faceChecked > 0u);
+    CHECK(faceWrong == 0u);
+    CHECK(redFaces > 0u && greenFaces > 0u);
+    CHECK(arrowsWanted > 0u);
+    CHECK(arrowsMissing == 0u);
+    CHECK(extraArrows == 0u);
+}

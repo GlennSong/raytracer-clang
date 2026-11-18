@@ -167,6 +167,23 @@ Lamp lampAt(const engine::LaneGraph& roads, const RightOfWay& row, engine::PathI
 // protected turn's green.
 Lamp lampShownAt(const engine::LaneGraph& roads, const RightOfWay& row, engine::PathId connector, double now);
 
+// WHAT A DRAWN SIGNAL HEAD SHOWS (ADR-0456). A head stands at one ARM of a junction (the road model attaches it there,
+// its `signal_head` attachment) facing the traffic arriving by that arm, and shows the lamps of that traffic's
+// movements: the connectors leaving the lanes that arrive by the arm (Path::arm). Its three-lamp FACE shows the arm's
+// MAIN movement -- straight on where one of its lanes goes straight on, else its near turn, else its far turn, else
+// its U-turn (the first such connector) -- as lampAt says it (a green arrow on the main movement lights the face
+// green: it lets traffic in as a green does). Its ARROW shows a turn of the arm going on its own: green while one of
+// the arm's other movements shows a GreenArrow (lampShownAt), else yellow while one shows yellow under a red face (the
+// arrow's change to red); otherwise it is dark. Dark everywhere where no programme runs. `arrowFor` is the movement
+// the arrow is lit for (meaningless while it is dark). A pure function of the clock, like the lamps it reads.
+struct HeadShows {
+    Lamp face = Lamp::Dark;
+    Lamp arrow = Lamp::Dark;   // Dark, GreenArrow or Yellow
+    Movement arrowFor = Movement::FarTurn;
+};
+HeadShows headAt(const engine::LaneGraph& roads, const RightOfWay& row, engine::JunctionId junction, uint32_t arm,
+                 double now);
+
 // WHAT A WALK SIGNAL SHOWS (ADR-0452; right_of_way.h WalkSignalRules): None where no programme runs or the rule set
 // states no walks. `walk`: an index into RightOfWay::walks; ...AtCrosswalk: by the road model's crosswalk id (None: it
 // has no walk signal).

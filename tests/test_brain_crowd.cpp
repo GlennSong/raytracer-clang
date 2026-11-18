@@ -331,6 +331,10 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // on WALK or in a gap, and drivers to give way to them there: the most on the road 83 -> 91 (still at minute 10),
     // busy minutes 10 -> 13, trips 265 -> 260, parked 216 -> 204, walks blocked 17 -> 1, another place 3 -> 1, arrivals
     // 444 -> 415, no plan 15 -> 1, hash 0x0c538d7f7a9fb3fa -> 0xfd98526fa3b9d920; rings still 0.
+    // AND AGAIN (ADR-0456) when the old sim's signal clock went: a walker at a junction the model's crosswalks do not rule
+    // no longer waits for that clock's WALK and judges the gap instead (the runs part at minute 3). Trips 260 -> 261,
+    // parked 204 -> 205, arrivals 415 -> 422, hash 0xfd98526fa3b9d920 -> 0xf0003605a4cb6ba2. (The one pole obstacle the
+    // old clock's links stood where no pole is, link 561, went too; put back, the hash is the same.)
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
@@ -340,15 +344,15 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
         CHECK(mostOnRoad == 91);
         CHECK(mostOnRoadAt == 10);
         CHECK(busyMinutes == 13);
-        CHECK(b.counts().tripsBegun == 260u);
-        CHECK(b.counts().parkedReports == 204u);
+        CHECK(b.counts().tripsBegun == 261u);
+        CHECK(b.counts().parkedReports == 205u);
         CHECK(b.counts().walksBlocked == 1u);
         CHECK(b.counts().otherPlaces == 1u);
-        CHECK(b.machine()->counts().arrivals == 415u);
+        CHECK(b.machine()->counts().arrivals == 422u);
         CHECK(b.machine()->counts().noPlans == 1u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0xfd98526fa3b9d920ull);
+        CHECK(hash == 0xf0003605a4cb6ba2ull);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full

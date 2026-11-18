@@ -236,11 +236,11 @@ existing code under this rule is #172.
   - It is a LAW of the engine (the physics step, gravity): ONE named constant in one header, used everywhere.
   - A bare literal in the middle of logic is none of these and is a bug in waiting.
 - **Where data lives.**
-  - Tunable tables and recipes: Lua under `assets/scripts/` (roles.lua, activities.lua, vehicles.lua, signals.lua),
+  - Tunable tables and recipes: Lua under `assets/scripts/` (roles.lua, activities.lua, vehicles.lua, rules/lab.lua),
     read at load by a small reader in the owning module.
   - Authored, per-level or generated data: JSON (levels, road graphs) or a bake.
   - A C++ copy exists only as the fallback when the file is absent, and a test keeps it EQUAL to the file
-    (`roles_lua_is_the_built_in_role_catalog`, `signals_lua_is_the_built_in_signal_timing`). Prefer no copy at all.
+    (`roles_lua_is_the_built_in_role_catalog`). Prefer no copy at all.
 - **Behaviour is composed, not hard-coded.** C++ exposes verbs (actions, events, queries) as an API; data composes
   them into behaviour, as the goal tables do (ADR-0064: states and transitions in Lua, executed by C++). Per-tick Lua
   is for the few (a possessed agent, a scripted scene), not the 100k crowd; the crowd runs C++ over tables the

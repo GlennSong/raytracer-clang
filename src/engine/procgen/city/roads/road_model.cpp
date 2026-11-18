@@ -690,6 +690,12 @@ const std::string& RoadModel::controlAt(JunctionId laneJunction) const {
     return j ? j->control : kNoneStated;
 }
 
+JunctionId RoadModel::laneJunctionOf(ModelJunctionId junction) const {
+    for (uint32_t lj = 0; lj < laneLevel.junctions.size(); ++lj)
+        if (laneLevel.junctions[lj].modelJunction == junction.index) return JunctionId(lj);
+    return JunctionId();
+}
+
 PathId RoadModel::mergingAt(const CrossingPoint& x) const {
     if (x.modelConnection >= connections.size() || x.otherSide != OtherSide::Path) return PathId();
     const ModelConnection& c = connections[x.modelConnection];

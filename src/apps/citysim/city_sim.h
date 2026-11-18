@@ -20,7 +20,6 @@
 #include "place_kinds.h"   // what kind each place is, and its tags (places.lua)
 #include "households.h"     // ages, life stages and households (people.lua)
 #include "relationships.h"
-#include "traffic_signal.h"
 #include "../driving/driving.h"   // the new driving model (#234; citysim.driving = "v2")
 #include "city_driving.h"         // ...and the city sim's side of it: the drivers handed over (#255)
 #include "city_poses.h"           // where the city's bodies are each fixed step (ADR-0454)
@@ -766,9 +765,6 @@ public:
     int walkerFile(const Agent& a) const;       // which file across the pavement a walker keeps (0 = by the kerb)
     engine::Real walkerVerge(const Agent& a) const;   // ...as its distance in from the kerb
     const engine::NavGraph* graph() const { return nav_; }
-    SignalController& signals() { return signals_; }
-    // The signals' cycle times (signals.lua at level load; SignalTiming's defaults otherwise). Set before build().
-    void setSignalTiming(const SignalTiming& t) { signalTiming_ = t; }
     // RT_TRAFFIC_DEBUG: why a walker last stood still (1 kerb gap, 2 signal line, 3 a car body, 4 its leader) and
     // its follow gap -- the "spawn point" heaps. A CAR's (#218, the lab's mid-turn freezes): 10 a crash hold, 11 a red,
     // 12 a crossing car in the box, 13 oncoming (a turn), 14 no exit room, 15 its lane leader, 16 a body in the wedge,
@@ -2086,10 +2082,6 @@ private:
         bool walkHold = false;
         CrossingKind kind = CrossingKind::Unmarked;   // how they would cross it, going now
     };
-    // The signal a car faces at an approach, for ITS movement there (read off its route): during a
-    // lead arrow its left may be green while going straight is red (ADR-0109).
-    Move moveFor(const Agent& a, int approachLink) const;
-    SignalState signalFor(const Agent& a, int approachLink) const;
     JunctionGate junctionSpeedCap(const Agent& a, int li, Real target) const;
     // The next junction on the route within `horizon` route metres: the leg
     // whose link enters it, the distance to its node, and the length of the
@@ -2140,7 +2132,7 @@ private:
     bool clearPromotion(int i);   // seat a promoted car behind live traffic
     // Advance a V agent along its REAL route at the modelled speed: link class
     // speed shaped by fixed average junction delays (vHold). No sensing, no
-    // FSM, no live signal state — hasSignal() is static topology, not a query.
+    // FSM, no signal state (ADR-0456: the old clock is gone; every junction crossed costs kVJunctionDelay).
     void vAdvance(Agent& a, Real dt);
 
 public:
@@ -2302,8 +2294,6 @@ private:
     std::vector<int> dormantScratch_;         // tierPass wake candidates
     int dormancies_ = 0;
     int wakes_ = 0;
-    SignalController signals_;
-    SignalTiming signalTiming_;
     // THE ROLES and each one's day (setRoleCatalog); the wanderers' tables (the agent lab) beside them.
     RoleCatalog roles_ = defaultRoleCatalog();
     PlaceKindCatalog placeKinds_ = defaultPlaceKindCatalog();

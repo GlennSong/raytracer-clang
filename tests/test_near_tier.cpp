@@ -1123,13 +1123,15 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // (with the old switch-in pose, and nothing else changed, the run gives 0xb80206dda672d5d5 again). And again (ADR-0454,
     // the pose moved to the sim, city_poses.h) from 0x032b5fd2c2071980, every count the same: a car's four-wheel fit
     // memory (its tilt low-pass) now lasts while the car is posed, not until the drawing's cache had gone 600 bakes
-    // without it (with that sweep put back, and nothing else changed, the run gives 0x032b5fd2c2071980 again)
-    CHECK(mostNear == 12);
-    CHECK(mostNearAt == 7);
+    // without it (with that sweep put back, and nothing else changed, the run gives 0x032b5fd2c2071980 again). And again
+    // (ADR-0456) from 12 at minute 7, 0xdf46fdec96641d00, in and out the same: the old signal clock went, so a walker at a
+    // junction the model's crosswalks do not rule judges the gap instead of waiting for that clock's WALK.
+    CHECK(mostNear == 13);
+    CHECK(mostNearAt == 12);
     CHECK(c.intoPhysics == 83u);
     CHECK(c.intoLane == 63u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0xdf46fdec96641d00ull);
+    CHECK(hash == 0x59168988decd4c99ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

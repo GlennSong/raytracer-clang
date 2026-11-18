@@ -464,6 +464,10 @@ struct RoadModel {
         return j < junctions.size() ? &junctions[j] : nullptr;
     }
     const std::string& controlAt(JunctionId laneJunction) const;
+    // THE JUNCTION OF THE LANE LEVEL A JUNCTION OF THE MODEL IS (not valid: none): the one whose `modelJunction` names it.
+    // What a reader holding a model junction (a signal head attached to one of its arms, ADR-0456) asks to read the
+    // lane level's paths there. A walk over the lane level's junctions: ask once, not per tick.
+    JunctionId laneJunctionOf(ModelJunctionId junction) const;
     // DO TWO APPROACHES TO A JUNCTION FACE EACH OTHER (their traffic meets head on: "oncoming")? `a` and `b`: two lane
     // paths arriving at junction `laneJunction` of the lane level. Yes where the model's junction STATES their two arms
     // (Path::arm of each) as one road carrying on through (ModelJunction::through, read by throughPartner). The one

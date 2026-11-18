@@ -13,13 +13,6 @@ TEST_CASE(approach_stop_eases_to_zero) {
     CHECK_APPROX(approachStop(1000.0, 4.0, 20.0), 20.0, 1e-9);   // capped
 }
 
-TEST_CASE(signal_cap_green_is_free_red_stops) {
-    CHECK_APPROX(signalSpeedCap(SignalState::Green, 5.0, 16.0, 4.0), 16.0, 1e-9);
-    // Red close ahead caps well below free speed (easing to a stop).
-    CHECK(signalSpeedCap(SignalState::Red, 3.0, 16.0, 4.0) < 16.0);
-    CHECK_APPROX(signalSpeedCap(SignalState::Red, 0.0, 16.0, 4.0), 0.0, 1e-9);
-}
-
 TEST_CASE(nearest_obstacle_ahead_in_cone) {
     VisionCone c;
     c.origin = Vec2(0, 0);

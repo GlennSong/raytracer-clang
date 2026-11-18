@@ -235,7 +235,7 @@ rule_set = {
     green_shortest = { 7.0, unit = "s", source = "[~] a guess to tune: a short minimum green that still lets a few queued cars away" },
     green_longest = { 30.0, unit = "s", source = "[~] a guess to tune" },
     signal_cycle = { 40.0, unit = "s",
-      source = "[~] after assets/scripts/signals.lua's note: keep a two-phase cycle short, so one red's queue fits a small city block" },
+      source = "[~] (once in the deleted signals.lua, ADR-0456): keep a two-phase cycle short, so one red's queue fits a small city block" },
     -- THE GREEN WAVE: each junction's cycle starts as much later as a car at this speed takes to drive to it from the
     -- plan's origin in this direction (east, north: a direction on the plan), so lights along it turn green in turn.
     signal_wave_speed = { 30, unit = "mph", source = "[~] a guess to tune: a little under the arterials' limit" },

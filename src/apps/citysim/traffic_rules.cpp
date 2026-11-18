@@ -11,15 +11,6 @@ double approachStop(double dist, double decel, double maxSpeed) {
     return std::min(v, maxSpeed);
 }
 
-double signalSpeedCap(SignalState state, double dist, double maxSpeed, double decel) {
-    switch (state) {
-        case SignalState::Green:  return maxSpeed;
-        case SignalState::Yellow: return approachStop(dist, decel, maxSpeed);
-        case SignalState::Red:    return approachStop(dist, decel, maxSpeed);
-    }
-    return maxSpeed;
-}
-
 double nearestObstacleAhead(const engine::VisionCone& cone,
                             const std::vector<engine::Vec2>& obstacles,
                             double noObstacle) {

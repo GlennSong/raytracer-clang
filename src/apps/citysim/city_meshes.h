@@ -3,7 +3,6 @@
 
 #include "../../renderer/renderer.h"   // RenderMesh, RenderMaterial
 #include "city_sim.h"                  // VehicleType, Agent::State, fleet table
-#include "traffic_signal.h"            // SignalState
 #include "../../engine/procgen/person.h"   // the walk cycle
 
 namespace citysim {
@@ -76,7 +75,10 @@ engine::RenderMesh wedgeXZ(engine::Real halfAngleRad, int segs = 12);
 // mesh's vertex colours).
 engine::RenderMaterial carMaterial();
 engine::RenderMaterial pedMaterial();
-engine::RenderMaterial signalMaterial(SignalState s);      // emissive lit lens
+// The colour a separately drawn signal lens is lit: a head's arrow, green, or amber in its change to red (ADR-0456).
+enum class LensColour : uint8_t { Green, Amber };
+constexpr int kLensColourCount = 2;
+engine::RenderMaterial signalMaterial(LensColour c);       // emissive lit lens
 engine::RenderMaterial signalPostMaterial();               // pole/arm/head assembly
 engine::RenderMaterial widgetMaterial(engine::Vec3 color); // debug ground paint
 
