@@ -325,7 +325,8 @@ allocation of its state. Everything else asks that model.
 - **What is not a second model.**
   - Several implementations behind ONE interface where the platform demands it. The renderer is one, with Metal,
     Vulkan and WebGPU backends and their shaders.
-  - A look-up copy filled FROM the model for speed, holding nothing of its own and never computing.
+  - A value copied FROM the model onto the model's own element for speed, holding nothing of its own, never
+    computing, and never forming a structure of its own (no second graph, list or index of the same things).
   - A deliberate exception with a good reason, written down in an ADR before it is built.
 - **A fact the model lacks is added to the model first,** as the first piece of the task, before anything reads it.
 - **Reports and reviews check it.** Every helper's report says which concepts its change touched, and confirms it
@@ -348,8 +349,10 @@ model. Making another new one is unacceptable."
 - **A fact the model lacks is added to the model first.** Check `RoadModel::notStated`: if what you need is listed
   there, stating it (from the road file, or derived ONCE in one function inside the model) is the first piece of
   your task, before any reader uses it. Never a private derivation "for now".
-- **Copies are look-ups only.** The street map (`street_map.h`) and the lane level may COPY a model fact for speed,
-  filled from the model at build; they hold no fact of their own and never compute one.
+- **No second graph of the roads.** A copy of a model fact for speed is a value attached to the model's own element
+  (by its id), never a structure with its own nodes, links or topology. The street map (`street_map.h`, the
+  `NavGraph` people route on) IS such a second graph, built from the model with nodes of its own every 60 m, and it is
+  being removed (people route on the model itself). Until it is gone, no new reader of it and no new fact on it.
 - **No new road structure outside the model.** No table mapping one road id to another, no "which crosswalk/arm/kerb
   is this" test, no merging streets by position, in apps, tests or tools. Test fixtures build roads through the
   model too.
