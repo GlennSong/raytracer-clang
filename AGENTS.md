@@ -250,7 +250,47 @@ existing code under this rule is #172.
 - **Reviews check it.** A review flags any new kind-specific branch, magic number or C++-only table, and the change
   either moves it to data or says in its ADR why it cannot.
 
-## One Road Model (Engine Rule)
+## One Model Per Concept (Engine Rule)
+
+Glenn (2026-11-17): "The idea is to build a source of truth for every concept. There should only ever be an agent
+brain, a mesh builder, a physics model, one ECS, etc. Unless there's a good reason to have a different way of doing
+something, most systems should have one model especially when it comes to defining procedural generation and the
+city's systems. ... This way we don't have strange disagreements, double allocations of memory, and other weird
+issues."
+
+Every concept the engine has (roads, people's decisions, meshes, bodies in the world, entities, vehicles, places,
+buildings, signals, weather, ...) has ONE model: one place its facts are stated or derived, one set of types, one
+allocation of its state. Everything else asks that model.
+
+- **The ones we have.**
+  - ONE agent brain: `src/apps/citysim/brain/`. Every person decides through it.
+  - ONE mesh builder: the mesh library, ADR-0173 (`MeshBuilder`).
+  - ONE physics model: Jolt, behind `PhysicsWorld`. Ropes, cars, ragdolls and boxes are all Jolt bodies.
+  - ONE ECS: `engine::World`. A thing in the world is one entity, and changing what it is means adding or removing
+    components, never a second object beside it. The ghost car was the anti-model.
+  - ONE road model: `src/engine/procgen/city/roads/` (below).
+  - ONE renderer.
+  - ONE set of math helpers (`rt_math.h`, `hash.h`, `polygon.h`, `polyline.h`; see Engineering Ethos).
+  - ONE data source per table: Lua or JSON, with no C++ copy (see Kinds Are Data).
+  When you find a second one, it goes on the duplicate-systems list as a bug. Do not build on either half.
+- **What counts as a second model.**
+  - A type that holds the same facts as another.
+  - A private table or derivation of facts the model owns, "for now" or "for speed".
+  - A copy that computes something of its own.
+  - A second allocation of the same state, kept in step by hand.
+  - A parallel path that does the same job a worse way.
+  - Test fixtures that build their own version of a concept.
+- **What is not a second model.**
+  - Several implementations behind ONE interface where the platform demands it. The renderer is one, with Metal,
+    Vulkan and WebGPU backends and their shaders.
+  - A look-up copy filled FROM the model for speed, holding nothing of its own and never computing.
+  - A deliberate exception with a good reason, written down in an ADR before it is built.
+- **A fact the model lacks is added to the model first,** as the first piece of the task, before anything reads it.
+- **Reports and reviews check it.** Every helper's report says which concepts its change touched, and confirms it
+  made no second model of any of them. A review checks the diff for it before commit. A change that breaks this rule
+  is not committed.
+
+### The road model (the worked example)
 
 Seven descriptions of the same roads (the plan, the road file, the built lanes, the routing twin, the lot twin, the
 lane match, the lane graph) were consolidated into ONE road model over 2026-11-13..16 (ADR-0417..0438, docs/road-model-
@@ -304,7 +344,8 @@ demo, not a screenshot prop. Build it to be used by everything that comes after.
   soft bodies, so the rope belongs on Jolt (#118); and several separate 3D
   meshing tools once grew up side by side when there should have been one (the
   mesh library, ADR-0173, is the one). When you find a duplicate, add it to the
-  duplicate-systems sweep (#117) instead of building on either half.
+  duplicate-systems sweep (#117) instead of building on either half. The rule
+  this serves is One Model Per Concept, above.
 - **The math is shared; look before you write a helper** (#184, ADR-0316..0321).
   A dozen kinds of small helper had each been written five to twenty-five times.
   Before writing one, look in:
