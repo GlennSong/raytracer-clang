@@ -18,8 +18,10 @@ namespace citysim {
 // the cars themselves being dynamically simulated (the sim still owns their
 // motion). Lives in the viewer/editor build (it needs Jolt), not engine_core.
 //
-// It reads the car poses straight from CityRenderSystem's baked InstanceGroup, so
-// the colliders track exactly what is drawn.
+// A car entity's box is at where its body is this fixed step (city_car.h CityCarPose, ADR-0454), and a walker's where
+// the walker stands this step (city_poses.h CityPoses::walkerBoxPoses), every step. The old sim's cars are still read from
+// CityRenderSystem's baked InstanceGroups, which are baked only on a frame's last two fixed steps (named for later in
+// ADR-0454).
 class CityPhysicsSystem : public engine::System {
 public:
     CityPhysicsSystem(CityRenderSystem& city, engine::PhysicsSystem& physics)
@@ -108,12 +110,15 @@ private:
     // their proxy box far below instead of tracking (a kinematic box inside
     // the dynamic chassis would fight it — and it must park the SAME tick the
     // body spawns, which is why this reads the live possessed set, not a flag
-    // captured at bake time).
+    // captured at bake time). `withCarEntities`: the car entities' boxes from their CityCarPose instead of their drawn
+    // instances. `posed`: poses given for this step, by agent, placed before any group's instances (the walkers').
     void syncKinematic(engine::World& world, const std::vector<engine::Entity>& groups,
                        const std::vector<engine::Vec3>& groupExtents,
                        std::unordered_map<long long, ProxyBody>& proxies,
                        engine::Real dt,
-                       const std::vector<std::vector<int>>* agentIds = nullptr);
+                       const std::vector<std::vector<int>>* agentIds = nullptr, bool withCarEntities = false,
+                       const std::vector<std::pair<int, engine::Mat4>>* posed = nullptr);
+    std::vector<std::pair<int, engine::Mat4>> walkerPoses_;   // (scratch: CityPoses::walkerBoxPoses, each step)
     // R5 (roads-v2.1): the PHYSICAL tier — the N moving drivers nearest the
     // player run on real Jolt wheeled vehicles, driven by the SAME plan the
     // kinematic brains produce (computeDriverInput chases the sim's ghost); their

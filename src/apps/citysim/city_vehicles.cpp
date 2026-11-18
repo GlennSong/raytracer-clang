@@ -100,7 +100,9 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
             Vec3 gp;
             Vec2 gh;
             const bool seated = ambient_.agent >= 0 ? city_.carSeatsOf(ambient_.agent, &pose, &seats)
-                                                    : city_.carEntitySeatsOf(static_cast<uint32_t>(ambient_.car), &pose, &seats);
+                                                    : city_.carEntitySeatsOf(
+                                                          ctx.world, carEntityNumbered(ctx.world, static_cast<uint32_t>(ambient_.car)),
+                                                          &pose, &seats);
             if (seated) {
                 ambientAt_ = pose.transformPoint(seats[0]) + Vec3(0, 0.35, 0);
                 haveAmbient_ = true;

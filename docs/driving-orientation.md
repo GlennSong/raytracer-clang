@@ -14,6 +14,14 @@ lab's 300, or `cars` on any v2 level), or a test bed's (`CityNearSystem::labCar`
 no `SimVehicle` row stands for a car of the new driving; those are the old driving's (v1) only. Look cars up through
 the entities (`World::each<CityCarBody, ...>`, `carsNear`), never through `CitySim::agents()`.
 
+**One pose per car per fixed step (ADR-0454).** Where a car entity's body is this step, on its wheels on the deck, is
+`CityCarPose`, set once every fixed step after `sim.step` by the sim's pose module (`city_poses.h` `CityPoses`, held by
+`CitySim::poses()`: `stepCarPoses`, and `poseCarNow` for a car made between steps). The four-wheel fit, its tilt
+filter, the ground it stands on, the models' wheels and the walkers' pose live there too; `CityRenderSystem` only draws. Its kinematic box (`CityPhysicsSystem`), the near tier's switch into
+physics (`toPhysics`), the player's seats in it (`carEntitySeatsOf`) and the drawing all read it; the drawing's
+blend of one bake to the next is drawing only. The Transform stays the sim's record (plan place at the tick's end,
+PrevTransform at its start). Never read a car's place for anything but drawing from the car instance groups.
+
 Words: a **path** is one curve a car can be on, a **lane** (along a street) or a **connector** (through a junction).
 The **lane level** is the table of paths the road model builds (`RoadModel::laneLevel`). A **crossing point** is a
 stretch where two paths' bodies (or a path and a crosswalk) could touch. A **fact** is a named value a driver notices

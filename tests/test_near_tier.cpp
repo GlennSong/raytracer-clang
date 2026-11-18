@@ -158,9 +158,6 @@ struct Rig {
         }
         if (withBridge) bridge.fixedUpdate(c);   // (the arena's order: the city, its boxes, then the near tier)
         near.fixedUpdate(c);
-        // (RT_NEAR_BAKE_LATE=1: the pose bake on a frame's last two steps only, as before ADR-0450: the A/B)
-        static const bool bakeLate = std::getenv("RT_NEAR_BAKE_LATE") != nullptr;
-        if (bakeLate) city.bakeEveryStep(false);
         vehicles.fixedUpdate(c);
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         frameMs += ms;
@@ -1120,13 +1117,85 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // clear of the parking band, so every car's line, and every car's day, moved; and the city is stepped as the app
     // steps it, eight steps a frame. And again (ADR-0451) from 16 at minute 11, in 82, out 66, 0x30470fc2f83cc7c7:
     // drivers stop for what is in their way. And again (ADR-0452) from 14 at minute 11, in 91, out 76,
-    // 0x9699075db5940e90: people wait at crosswalks' kerb ends and cross on WALK or in a gap, and drivers give way to them
+    // 0x9699075db5940e90: people wait at crosswalks' kerb ends and cross on WALK or in a gap, and drivers give way to them.
+    // And again (ADR-0454) from 0xb80206dda672d5d5, every count the same: a car is switched into physics where its body
+    // is this step (CityCarPose: its middle and heading as fitted on its wheels) instead of at its plan place and heading
+    // (with the old switch-in pose, and nothing else changed, the run gives 0xb80206dda672d5d5 again). And again (ADR-0454,
+    // the pose moved to the sim, city_poses.h) from 0x032b5fd2c2071980, every count the same: a car's four-wheel fit
+    // memory (its tilt low-pass) now lasts while the car is posed, not until the drawing's cache had gone 600 bakes
+    // without it (with that sweep put back, and nothing else changed, the run gives 0x032b5fd2c2071980 again)
     CHECK(mostNear == 12);
     CHECK(mostNearAt == 7);
     CHECK(c.intoPhysics == 83u);
     CHECK(c.intoLane == 63u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0xb80206dda672d5d5ull);
+    CHECK(hash == 0xdf46fdec96641d00ull);
+}
+
+// THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at
+// `sim speed 16`, on traffic_lab (300 cars, no near tier), with the viewer's kinematic boxes. Each step, every lane
+// car's box moves by what the car moved (the bridge sets the box's target in one step and the next physics step
+// carries it there, so the box's move this step is the car's move the step before). Before ADR-0454 the boxes were
+// read from the drawing's bake, which ran only on a frame's last two steps: they stood still for six steps and then
+// jumped six steps' worth.
+TEST_CASE(near_tier_boxes_follow_their_cars_every_fixed_step) {
+    Rig rig("traffic_lab", false);
+    CHECK(rig.ok);
+    if (!rig.ok) return;
+    rig.withBridge = true;
+    rig.cityAsApp = true;
+    rig.stepsPerFrame = kProbeStepsPerFrame;
+    constexpr Real kBoxFollows = 0.02;   // m: a box's step off its car's step (the kinematic move is exact to the step)
+    constexpr Real kPutDown = 5.0;       // m: a car moved further in one step was put down again, not driven
+    constexpr int kSteps = 6 * 60;       // six seconds
+    struct Seen { Vec2 box, car, carBefore; int steps = 0; };
+    std::map<uint32_t, Seen> seen;
+    uint64_t looks = 0, off = 0;
+    Real worst = 0;
+    uint32_t worstCar = 0;
+    int worstStep = 0;
+    for (int i = 0; i < kSteps; ++i) {
+        rig.frame();
+        rig.world.each<citysim::CityCarBody, citysim::CityCarOnLane>(
+            [&](Entity e, citysim::CityCarBody& b, citysim::CityCarOnLane&) {
+                const PhysicsBodyId box = rig.bridge.entityCarBox(rig.world, e);
+                if (box == INVALID_PHYSICS_BODY) {
+                    seen.erase(b.id);
+                    return;
+                }
+                const Vec3 bp = rig.physics.physicsWorld().bodyPosition(box);
+                const Vec2 boxAt(bp.x, bp.z), carAt = middleOf(rig, e);
+                std::map<uint32_t, Seen>::iterator s = seen.find(b.id);
+                if (s == seen.end()) {
+                    seen[b.id] = Seen{boxAt, carAt, carAt, 1};
+                    return;
+                }
+                Seen& was = s->second;
+                if (was.steps >= 2) {
+                    const Vec2 carMove = was.car - was.carBefore;
+                    if (carMove.length() < kPutDown) {
+                        const Real miss = ((boxAt - was.box) - carMove).length();
+                        ++looks;
+                        if (miss > kBoxFollows) ++off;
+                        if (miss > worst) {
+                            worst = miss;
+                            worstCar = b.id;
+                            worstStep = i;
+                        }
+                    }
+                }
+                was.carBefore = was.car;
+                was.car = carAt;
+                was.box = boxAt;
+                ++was.steps;
+            });
+    }
+    std::printf("    [boxes] %llu looks at a lane car's box over %d fixed steps at %d a frame: %llu off their car's step by "
+                "more than %.2f m; the worst %.3f m (car %u, step %d)\n",
+                static_cast<unsigned long long>(looks), kSteps, rig.stepsPerFrame, static_cast<unsigned long long>(off),
+                kBoxFollows, worst, worstCar, worstStep);
+    CHECK(looks > 10000u);
+    CHECK(off == 0u);
 }
 
 // THE CAP HELD (ADR-0448): the same walk and drive with the cap at 4 (the level's data changed before the first step),

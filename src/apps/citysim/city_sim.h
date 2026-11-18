@@ -23,6 +23,7 @@
 #include "traffic_signal.h"
 #include "../driving/driving.h"   // the new driving model (#234; citysim.driving = "v2")
 #include "city_driving.h"         // ...and the city sim's side of it: the drivers handed over (#255)
+#include "city_poses.h"           // where the city's bodies are each fixed step (ADR-0454)
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -1470,6 +1471,10 @@ public:
     uint32_t nextCarNumber(engine::World& world) const;
     // The hand-over's side of it: counts, costs, the measurements (`driving?`).
     const DrivingHost& drivingHost() const { return drivingHost_; }
+    // WHERE THE CITY'S BODIES ARE EACH FIXED STEP (city_poses.h, ADR-0454): the car entities' CityCarPose, the walkers'
+    // poses, and the ground and the drawn models' body facts they stand on and are fitted with.
+    CityPoses& poses() { return poses_; }
+    const CityPoses& poses() const { return poses_; }
     // The player takes the car `car`, one that drives round for ever (DrivingHost::takenByPlayer). False when it is not.
     bool playerTakesRoamingCar(engine::Entity car) {
         return drivingV2_ && drivingHost_.takenByPlayer(*drivingV2_, car);
@@ -2372,6 +2377,7 @@ private:
     std::shared_ptr<const engine::RoadModel> drivingRoads_;
     std::string drivingRoadsReport_ = "no lane graph yet";
     DrivingHost drivingHost_;   // the hand-over to the new model (startDrivingV2); inactive on a v1 level
+    CityPoses poses_;           // where the bodies are each fixed step (poses())
     std::function<void(driving::Driving&)> beforeDriving_;   // setBeforeDriving
     // The resident with the agent brain and everything it needs (startBrain; city_brain.h). It reads and moves this
     // sim's agents directly, as the hand-over above does, so it is a friend. Null: none.

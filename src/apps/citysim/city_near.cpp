@@ -787,7 +787,6 @@ void CityNearSystem::fixedUpdate(engine::FrameContext& ctx) {
         ctx.world.each<engine::CitySimConfig>([&](Entity, engine::CitySimConfig& c) { rules_ = c.near; });
     }
     if (!measured_ && city_.built() && rules_.cap > 0) measureSlots(ctx.world);
-    city_.bakeEveryStep(rules_.cap > 0);   // (the boxes and the switch-in pose fresh every step: ADR-0450)
     if (!staged_.empty()) sendStaged(ctx.world, ctx.clock.fixedStep());
     tierStep(ctx);
     soundHorns(ctx, *d);
@@ -867,8 +866,8 @@ bool CityNearSystem::toPhysics(engine::World& world, engine::AssetManager& asset
     driving::Driving* d = city_.simMutable().drivingV2Mutable();
     const CityCarBody* body = world.get<CityCarBody>(e);
     const CityCarOnLane* lane = world.get<CityCarOnLane>(e);
-    const engine::Transform* t = world.get<engine::Transform>(e);
-    if (!d || !body || !lane || !t) return refuse("not a car the driving has on its lanes");
+    const CityCarPose* pose = world.get<CityCarPose>(e);
+    if (!d || !body || !lane || !pose) return refuse("not a car the driving has on its lanes");
     if (world.has<engine::Vehicle>(e)) return refuse("it is a physics car already");
     const driving::Car* c = d->car(lane->car);
     if (!c || !c->driven) return refuse("the driving has it on no trip");
@@ -878,12 +877,13 @@ bool CityNearSystem::toPhysics(engine::World& world, engine::AssetManager& asset
     const engine::VehicleSpec& spec = *slotted.spec;
     const SlotCar* measuredCar = &slotted;
 
-    // WHERE IT IS DRAWN: its middle and heading, on the lane graph's height under it, standing on its springs; a step
-    // of its speed on, where the lane car would be when physics first moves it
-    const Vec2 heading = carHeading(*t);
+    // WHERE ITS BODY IS THIS STEP (city_car.h CityCarPose, what its box and its drawing are at): its middle and heading,
+    // on the road it stands by, standing on its springs; a step of its speed on, where the lane car would be when
+    // physics first moves it
+    const Vec2 heading = engine::normalize(Vec2(pose->body.m[0][2], pose->body.m[2][2]));
     const Real speed = c->speed;
-    const Vec2 middle = carPosition(*t) + heading * (speed * step);
-    const Vec3 at(middle.x, lane->roadY + measuredCar->restHeight, middle.y);
+    const Vec2 middle = Vec2(pose->body.m[0][3], pose->body.m[2][3]) + heading * (speed * step);
+    const Vec3 at(middle.x, pose->road + measuredCar->restHeight, middle.y);
     engine::makeVehicle(world, assets, spec, e, at, std::atan2(heading.x, heading.y) * kDegrees);
     // its kinematic box goes now: the chassis is made at the end of this step and steps first in the next, before the
     // boxes are synced again (ADR-0449)
@@ -1104,6 +1104,7 @@ Entity CityNearSystem::labCar(engine::World& world, uint32_t id, int slot, uint3
     lane.roadYFrom = lane.roadY = mid.y;
     lane.driven = to.path.valid();
     world.add<CityCarOnLane>(e, lane);
+    city_.simMutable().poses().poseCarNow(world, e, city_.sim());   // (its body's pose now, not at the next step: ADR-0454)
     return e;
 }
 

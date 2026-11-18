@@ -28,9 +28,16 @@
 // authority on where they are: their own place and heading (Agent::pos, heading) follow the car's every tick, one way
 // (CityBrain's tick, ADR-0445), so any reader of Agent::pos finds them where the car is.
 //
+//   CityCarPose         WHERE ITS BODY IS THIS FIXED STEP (ADR-0454): its body on its wheels on the drawn deck under
+//                       it (or, off the road, standing level on the ground), at the place between the tick's start and
+//                       end this step stands for. Set once every fixed step after the sim's step (city_poses.h
+//                       CityPoses::stepCarPoses), for every car entity that is not a Jolt car; the one pose the car's kinematic
+//                       box (city_physics.cpp), the near tier's switch into physics (city_near.cpp toPhysics), the
+//                       player's seats in it and the drawing all read.
+//
 // THE DRAWING (city_render.cpp) walks these entities and puts each into the city's instanced car groups, the same
-// groups and the same pose functions as the sim's own cars: no draw call of its own. Those instances are what the
-// kinematic box of every drawn car follows (city_physics.cpp).
+// groups as the sim's own cars: no draw call of its own. It draws CityCarPose; the renderer blends one bake to the
+// next for smooth frames, and that blend is drawing only.
 //
 // THE PLAYER'S CAR (ADR-0445): the player takes a household car with the key (CityVehicleSystem). The SAME entity gains
 // an engine::Vehicle (VehicleSystem's: the Jolt car, its wheels, lamps and engine note) and loses its CityCarOnLane;
@@ -82,6 +89,15 @@ struct CityCarOnLane {
     bool braking = false;            // its brake lamps are lit (city_driving.h kBrakeLampDecel)
     bool driven = false;             // on a trip (a car left standing in a lane is not)
     bool fresh = true;               // just put on the road: its road height is not blended from an earlier one
+};
+
+// WHERE THE BODY IS THIS FIXED STEP (above). Not the Transform: the Transform is the sim's record of the car (its place
+// on the plan as the tick ends, PrevTransform as it began, the lane graph's height), which the brain, the hand-over and
+// carsNear read; this is the body as it stands at this fixed step, derived from that record once, on the deck and
+// tilted to its wheels.
+struct CityCarPose {
+    engine::Mat4 body;   // the body's frame: its middle on its wheels, local +Z forward
+    Real road = 0;       // the height of the road it stands by (the lane graph's, blended to this step; 0 off the road)
 };
 
 // DRIVES ROUND FOR EVER, sent on trip after trip by the hand-over (above). Only the hand-over's count of the places it

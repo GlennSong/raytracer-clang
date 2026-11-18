@@ -273,8 +273,8 @@ public:
     // in that body frame: seat hip points, door floor points, floor height.
     // False when the agent is not a see-into vehicle.
     bool busFrame(int agent, engine::Mat4* pose) const;
-    // THE TYRES AGAINST THE ROAD (the new model's drawing check, #255): the car entity `car` (city_car.h) as it would be
-    // drawn now (without the tilt filter's memory: a pure read), and for each of its wheels the height of the wheel's
+    // THE TYRES AGAINST THE ROAD (the new model's drawing check, #255): the car entity `car` (city_car.h) as the
+    // four-wheel fit puts it now (without the tilt filter's memory: a pure read), and for each of its wheels the height of the wheel's
     // lowest point above the drawn road surface under it (metres; + floats, - sinks), wheel by wheel; and, when asked,
     // the pose it is drawn with and each wheel's lowest point. False when the driving does not have the car on its road
     // (no lane component) or its model has no wheels.
@@ -286,9 +286,10 @@ public:
     // passenger's (the driver's mirrored), then the two rear seats when the body is long enough to have them.
     // False for a bus, a parked or released agent, or a body that publishes no driver seat.
     bool carSeatsOf(int agent, engine::Mat4* pose, std::vector<engine::Vec3>* seats) const;
-    // ...and of a household car (ADR-0445), by its number: its pose as drawn this bake and its seats. False: it was not
-    // drawn (the player has it, or no bake yet), or its model has no driver's seat.
-    bool carEntitySeatsOf(uint32_t car, engine::Mat4* pose, std::vector<engine::Vec3>* seats) const;
+    // ...and of a car entity (ADR-0445): where its body is this step (city_car.h CityCarPose) and its seats. False: it
+    // has no such pose (the player has it, physics carries it, or no step yet), or its model has no driver's seat.
+    bool carEntitySeatsOf(engine::World& world, engine::Entity car, engine::Mat4* pose,
+                          std::vector<engine::Vec3>* seats) const;
     // The model (variant) a household car is drawn as: its fleet slot, and its kind's (a bus, a cab, a fire engine).
     int carEntityVariant(int slot, VehicleType type) const { return parkedVariant(slot, type); }
     // a bus's seats and doors (its own body's: `agent` -1, the first bus body)
@@ -348,11 +349,9 @@ public:
     // A household car's key in carAgentIds_ while nobody is at its wheel: below every parked row's (-2 - row), as the
     // car's number is past every row (city_car.h). Public for the physics bridge, which keys its boxes by it.
     static int entityCarKey(uint32_t id) { return -2 - static_cast<int>(id); }
-    // THE POSE BAKE ON EVERY FIXED STEP, not only a frame's last two (ADR-0450). The drawn cars' kinematic boxes
-    // (city_physics.h) and the pose a car is switched into physics at are read from the bake; skipped on a catch-up
-    // frame (the viewer at `sim speed 16` runs 8 steps a frame) they stood still for six steps and then jumped six
-    // steps' worth into the physics cars around them. The near tier asks for it while it is on.
-    void bakeEveryStep(bool on) { bakeEveryStep_ = on; }
+    // The bit a car entity's drawn instance carries in its name (InstanceGroup::ids; its number shifted by 8 beside it),
+    // so a reader of the car groups can tell those instances from the sim's own cars.
+    static constexpr uint64_t kCarEntityInstance = uint64_t(1) << 61;
     // ...and with somebody at its wheel, that driver's agent index (as syncCarEntities draws it)
     static int entityCarDrawKey(const CityCarBody& body, const CityCarLink& link) {
         return link.driver >= 0 ? link.driver : entityCarKey(body.id);
@@ -416,17 +415,7 @@ public:
         engine::Vec3 pos;
     };
 
-    // One wheel of a fleet car, in body-local space (+Z forward, x>0 the driver's left).
-    // Same independence rationale as LampMarker: a mirror of the scripting-only
-    // engine::WheelPlacement, so the non-scripting build still compiles.
-    struct CarWheel {
-        engine::Vec3 pos;
-        Real radius = 0.3;
-        Real width = 0.2;
-        bool steered = false;
-        bool driven = true;
-        bool handBrake = false;
-    };
+    // (One wheel of a fleet car, CarWheel, is the sim's: city_poses.h.)
 
     // The fleet slot's car WITHOUT its wheels, for a car the player commandeers
     // (ADR-0062): it becomes a real Vehicle and grows physics wheels, so drawing
@@ -525,9 +514,7 @@ private:
     // any other length indexes off the end of its own groups. 1 when there are
     // no groups, so the modulo stays defined; the callers' index guards do the
     // rest.
-    int drawVariantCount() const {
-        return carGroups_.empty() ? 1 : static_cast<int>(carGroups_.size());
-    }
+    int drawVariantCount() const { return sim_.poses().models.count(); }   // (carGroups_.size(), set at build)
 
     void syncGroups(engine::World& world);
     // A moving instance's name across bakes (InstanceGroup::ids): the agent's uid, and which of its parts (0 the body;
@@ -579,7 +566,6 @@ private:
     // Bus-stop furniture entities, kept so a rebuild can remove the old set
     // rather than stacking a second pole on every stop.
     std::vector<engine::Entity> busStopProps_;
-    int busVariant_ = -1;   // fleet slot that draws as a bus (-1 = none): the first of busVariants_
     // EVERY BUS BODY (Glenn, 2026-11-06: two saloons, "one where it's all seats and one where they're standing room"):
     // the fleet's slots whose class is a bus ("bus", "bus_standing"); each bus wears the one its route picks
     std::vector<int> busVariants_;
@@ -592,10 +578,18 @@ private:
         bool nextStop = false;
     };
     std::vector<std::vector<BusBoard>> busBoards_;
-    int fireVariant_ = -1;  // ...and as a fire engine (a fire station's, stationed in its bays)
-    int taxiVariant_ = -1;  // ...and as a taxi (the cabs', CitySim::isTaxi)
     Real busPrintAcc_ = 0;  // RT_PRINT_BUSES cadence
     CitySim sim_;
+    // THE DRAWN MODELS' BODY FACTS AND THE GROUND are the sim's (city_poses.h, ADR-0454): this host loads them at build
+    // and draws from them, by these names
+    int& busVariant_ = sim_.poses().models.bus;     // fleet slot that draws as a bus (-1 = none): the first of busVariants_
+    int& fireVariant_ = sim_.poses().models.fire;   // ...and as a fire engine (a fire station's, stationed in its bays)
+    int& taxiVariant_ = sim_.poses().models.taxi;   // ...and as a taxi (the cabs', CitySim::isTaxi)
+    std::vector<std::vector<CarWheel>>& carWheels_ = sim_.poses().models.wheels;   // each model's wheels
+    std::function<double(double, double)>& heightAt_ = sim_.poses().ground.terrain;   // terrain drape (may be null)
+    std::vector<engine::RoadDeckField>& decks_ = sim_.poses().ground.decks;          // the drawn road decks
+    Real& roadLift_ = sim_.poses().ground.roadLift;
+    Real& sidewalk_ = sim_.poses().ground.sidewalk;
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)
     // THE MID-RANGE BODIES (vehicles.lua `mid`): per variant, the cheaper whole car drawn from its `mid_from` out --
     // the same instances as carGroups_ (copied once the bake is done, lamp masks and all), the near group stopping
@@ -612,7 +606,6 @@ private:
     // Set per fixed step: bake the render poses only on the frame's LAST step
     // (see fixedUpdate). True by default so a direct step() call still bakes.
     bool bakeThisStep_ = true;
-    bool bakeEveryStep_ = false;   // bakeEveryStep
     // Adaptive-dip state. The CADENCE itself lives in CitySim (setTickPeriod);
     // this is only the load multiplier the bridge derives from the frame's
     // fixed-step count and scales that period by.
@@ -712,8 +705,7 @@ private:
     // Wheel-less bodies + wheel layouts, one per car variant (indexed like
     // carGroups_). Populated only from Lua fleet recipes that publish a separate
     // wheelset; see carChassisMesh() / carWheels().
-    std::vector<engine::MeshHandle> carChassis_;
-    std::vector<std::vector<CarWheel>> carWheels_;
+    std::vector<engine::MeshHandle> carChassis_;   // (the wheel layouts: carWheels_, the sim's models, above)
     // ...and each slot's handling (carConfig), read with the catalogue: no geometry, so a headless sim has it.
     std::vector<engine::PhysicsWorld::VehicleConfig> carConfigs_;
     // per slot: the menu's recipe for it and its paint (loadFleetDrivable), what a taken car is built as
@@ -776,10 +768,8 @@ private:
     // agent -- its last car pose, its tilt low-pass, its speed for the brake-light test, its far-band ground height
     // -- for the agents actually DRAWN (the near and mid-range ~2,000), not five arrays sized for all 100,000
     // (~230 bytes each). Entries not touched for a while are swept.
-    struct PoseCache { Real x = 0, z = 0, hx = 0, hz = 0; int slot = -1; bool valid = false; engine::Mat4 m; };
     struct AgentDrawCache {
-        PoseCache pose;
-        engine::Vec3 smoothUp{0, 0, 0};
+        FitMemory fit;                  // an old-sim driver's four-wheel fit memory (city_poses.h)
         Real prevSpeed = 0;
         bool fresh = true;              // prevSpeed not yet seeded (the first look sees no deceleration)
         Real farY = 0;
@@ -794,35 +784,20 @@ private:
         return c;
     }
     Real bakeDt_ = engine::kDefaultFixedStep;                     // last step's dt (filter gain)   // last step's per-agent speed (brake decel)
-    // The tilt low-pass: `su` blended toward `up` (city_render.cpp).
-    engine::Vec3 smoothUp(engine::Vec3& su, engine::Vec3 up) const;
-    // A car's body on its wheels at (x, z) pointing along `heading` (city_render.cpp: the one fit for the sim's drivers
-    // and the households' cars). Defined and used only in city_render.cpp.
-    template <typename Surface>
-    bool bodyOnWheels(int slot, bool lineWheels, Real x, Real z, engine::Vec2 heading, AgentDrawCache* cache,
-                      const Surface& surface, engine::Mat4& out) const;
+    // (The four-wheel fit, its tilt low-pass, a car entity's and a walker's pose are the sim's: city_poses.h.)
     // THE NEW DRIVING'S CARS, WHICH ARE ENTITIES (ADR-0444, ADR-0453; city_car.h), into the car groups beside the sim's
-    // own: each car's body instance, and the key it is listed under in carAgentIds_ (its driver's agent index while
-    // somebody sits at its wheel, else kEntityCarKey(id)). The lamps for them are syncCarLamps's.
+    // own: each car's body instance where its CityCarPose is, and the key it is listed under in carAgentIds_ (its
+    // driver's agent index while somebody sits at its wheel, else kEntityCarKey(id)). The lamps for them are
+    // syncCarLamps's.
     void syncCarEntities(engine::World& world, std::vector<engine::InstanceGroup*>& cars);
-    // ...where one is drawn now, as `variant` (city_render.cpp); `cache`: the tilt filter's memory (null: a pure read);
-    // `roadRef`: the lane graph height it is stood by (0 off the road).
-    engine::Mat4 carEntityPose(const CityCarOnLane* lane, const engine::Transform& t, const engine::Transform& prev,
-                               int variant, const std::vector<engine::Vec3>& he, AgentDrawCache* cache,
-                               Real* roadRef) const;
-    // The variant a car of fleet slot `slot` and body `type` is drawn as when nobody is driving it: the slot, and the
-    // bus, the fire engine or the cab its kind is drawn as. Parked rows and parked household cars alike.
-    int parkedVariant(int slot, VehicleType type) const;
-    // A car standing at rest (nobody driving it: a parked row, or a household car off the road) as drawn: level, its
-    // middle at `pos` on the ground under it or up a garage's deck (`parkedY` above -1e29), half its variant's height up.
+    // The variant a car of fleet slot `slot` and body `type` is drawn as when nobody is driving it (the sim's models:
+    // CityCarModels::variantOf).
+    int parkedVariant(int slot, VehicleType type) const { return sim_.poses().models.variantOf(slot, type); }
+    // A car standing at rest (CityPoses::parkedCarPose).
     engine::Mat4 parkedCarPose(int variant, engine::Vec2 pos, engine::Vec2 heading, Real parkedY,
-                               const std::vector<engine::Vec3>& halfExtents) const;
-    // Where each household car (by its number) was drawn this bake and as which model, for its lamps and its seats.
-    struct DrawnCar {
-        engine::Mat4 pose;
-        int variant = -1;
-    };
-    std::unordered_map<uint32_t, DrawnCar> carEntityDrawn_;
+                               const std::vector<engine::Vec3>& halfExtents) const {
+        return sim_.poses().parkedCarPose(variant, pos, heading, parkedY, halfExtents);
+    }
     // The seats of a car drawn as variant `v`: the driver's first, the front passenger's, the back bench's.
     bool seatsOfVariant(int v, std::vector<engine::Vec3>& seats) const;
     // debug ground rings, one per Agent::State (indexed by it)
@@ -871,17 +846,10 @@ private:
     // system computes its own sites as before.
     std::vector<SignalSite> siteByLink_;
     std::vector<uint8_t> siteHasLink_;
-    std::function<double(double, double)> heightAt_;   // terrain drape (may be null)
-    Real roadLift_ = 0.0;
-    // The decks the level's road meshes rode (RoadDeck components, copied at
-    // build): groundAt answers from these wherever a road passes, so every
-    // placed car/paint/lens stands on the drawn asphalt rather than on the
-    // terrain carved 0.22 m under it.
-    std::vector<engine::RoadDeckField> decks_;
-    // Sidewalk band width from the widest net look — signalSite's kerb
-    // back-off must clear the junction pad, which spans out to
-    // carriageway/2 + THIS (mirrors StreetFurnitureParams::sidewalkWidth).
-    Real sidewalk_ = 3.5;
+    // (the terrain, the road lift, the decks the level's road meshes rode and the sidewalk band are the sim's ground,
+    // city_poses.h CityGround: heightAt_, roadLift_, decks_, sidewalk_ above. groundAt answers from the decks
+    // wherever a road passes, so every placed car/paint/lens stands on the drawn asphalt rather than on the terrain
+    // carved 0.22 m under it; signalSite's kerb back-off clears the sidewalk band.)
     bool built_ = false;
     bool debugWidgets_ = false;   // master runtime toggle (init from params; J flips it)
     // Per-layer refinements of debugWidgets_ (ADR-0066 panel): when the master is

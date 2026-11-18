@@ -6,6 +6,7 @@
 #include "../../engine/world.h"
 #include "../../profile.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace citysim {
@@ -98,68 +99,85 @@ void CityPhysicsSystem::syncKinematic(World& world, const std::vector<Entity>& g
                                       const std::vector<Vec3>& groupExtents,
                                       std::unordered_map<long long, ProxyBody>& proxies,
                                       Real dt,
-                                      const std::vector<std::vector<int>>* agentIds) {
+                                      const std::vector<std::vector<int>>* agentIds, bool withCarEntities,
+                                      const std::vector<std::pair<int, Mat4>>* posed) {
     RT_PROFILE_ZONE_NAMED("syncKinematic");
     PhysicsWorld& pw = physics_.physicsWorld();
     const std::vector<Agent>& agents = city_.sim().agents();
     const uint32_t stamp = ++proxyStamp_;
+    // Proxy identity. An agent keys on its uid. A SCENERY car keys on the id the bake hands over (-2 - bayIndex), a car
+    // entity with nobody at its wheel on -2 - its number: stable across frames, which matters now that scenery is
+    // distance-culled -- bake ORDER shifts as the player moves, so an order-derived key would shuffle every parked
+    // car's proxy each step. -1 (unknown) keeps the old sequential fallback.
     long long sceneryKey = -1;   // scenery bake order is fixed for the run
+    const auto keyOf = [&](int ai) {
+        return (ai >= 0 && ai < static_cast<int>(agents.size()))
+                   ? static_cast<long long>(agents[static_cast<std::size_t>(ai)].uid)
+                   : (ai <= -2 ? static_cast<long long>(ai) : sceneryKey--);
+    };
+    // ONE BOX TO ITS POSE `m` this step (`ai`: the agent it is drawn for, or below zero none)
+    const auto place = [&](long long key, int ai, const Mat4& m, const Vec3& he) {
+        bool isParked = false;
+        if (ai >= 0)
+            for (const Possessed& p : possessed_)
+                if (p.agent == ai) { isParked = true; break; }
+        // THE VEHICLE THE PLAYER IS RIDING has no box either: the ride
+        // pins the player inside it every step, and physics pushed the
+        // capsule back out through the side -- a passenger watching their
+        // own bus from the kerb, a metre or three to its left.
+        if (ai >= 0 && ai == city_.playerRidingAgent()) isParked = true;
+        Vec3 p(m.m[0][3], m.m[1][3], m.m[2][3]);
+        if (isParked) p.y = -1000.0;   // possessed: box parks below the world
+        const Real yaw = std::atan2(m.m[0][2], m.m[2][2]);   // heading from local +Z basis
+        const Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
+        std::unordered_map<long long, ProxyBody>::iterator it = proxies.find(key);
+        if (it == proxies.end()) {
+            // Newly drawn (first frame, or a V agent promoted into the K
+            // bubble): SPAWN the box at the drawn pose — like park/unpark
+            // below, arriving is a discontinuous move, never a sweep.
+            ProxyBody nb;
+            nb.he = he;
+            nb.id = pw.addBox(he, p, rot, BodyMotion::Kinematic,
+                              /*restitution*/ 0.0, /*friction*/ 0.6);
+            nb.parked = isParked ? 1 : 0;
+            nb.stamp = stamp;
+            proxies.emplace(key, nb);
+            return;
+        }
+        ProxyBody& b = it->second;
+        b.stamp = stamp;
+        const bool wasParked = b.parked != 0;
+        // Park/unpark is a DISCONTINUOUS move: teleport, never sweep — a
+        // MoveKinematic across the jump is a one-frame hypersonic sweep
+        // straight through the freshly spawned chassis (measured: it batted
+        // cars 1.7 km across the map).
+        if (isParked != wasParked) pw.teleport(b.id, p, rot);
+        else if (!isParked) pw.moveKinematic(b.id, p, rot, dt);
+        b.parked = isParked ? 1 : 0;
+    };
+    // THE CAR ENTITIES (ADR-0454): each box at where its car's body is THIS step (city_car.h CityCarPose), set every
+    // fixed step whether the drawing baked or not. Their drawn instances below are passed over: the drawing reads the
+    // same pose, but only on the steps it bakes (and its last bake may still hold a car that is a Jolt car now).
+    if (withCarEntities)
+        world.each<CityCarBody, CityCarLink, CityCarPose>([&](Entity, CityCarBody& body, CityCarLink& link, CityCarPose& pose) {
+            const int v = city_.sim().poses().models.variantOf(body.slot, body.type);
+            if (v < 0 || v >= static_cast<int>(groups.size()) || groupExtents.empty()) return;
+            const int ai = CityRenderSystem::entityCarDrawKey(body, link);
+            place(keyOf(ai), ai, pose.body, groupExtents[std::min(static_cast<std::size_t>(v), groupExtents.size() - 1)]);
+        });
+    // POSES GIVEN FOR THIS STEP (the walkers', ADR-0454), instead of drawn instances
+    if (posed && !groupExtents.empty())
+        for (const std::pair<int, Mat4>& w : *posed) place(keyOf(w.first), w.first, w.second, groupExtents.front());
     for (std::size_t gi = 0; gi < groups.size(); ++gi) {
         InstanceGroup* g = world.get<InstanceGroup>(groups[gi]);
         if (!g) continue;
         const Vec3& he = groupExtents[gi < groupExtents.size() ? gi : groupExtents.size() - 1];
         for (std::size_t ii = 0; ii < g->transforms.size(); ++ii) {
+            if (withCarEntities && ii < g->ids.size() && (g->ids[ii] & CityRenderSystem::kCarEntityInstance)) continue;
             int ai = -1;
             if (agentIds && gi < agentIds->size() && ii < (*agentIds)[gi].size())
                 ai = (*agentIds)[gi][ii];
-            // Proxy identity. An agent keys on its uid. A SCENERY car keys on
-            // the id the bake hands over (-2 - bayIndex): stable across frames,
-            // which matters now that scenery is distance-culled — bake ORDER
-            // shifts as the player moves, so an order-derived key would shuffle
-            // every parked car's proxy each step. -1 (unknown) keeps the old
-            // sequential fallback.
-            const long long key =
-                (ai >= 0 && ai < static_cast<int>(agents.size()))
-                    ? static_cast<long long>(agents[ai].uid)
-                    : (ai <= -2 ? static_cast<long long>(ai) : sceneryKey--);
-            bool isParked = false;
-            if (ai >= 0)
-                for (const Possessed& p : possessed_)
-                    if (p.agent == ai) { isParked = true; break; }
-            // THE VEHICLE THE PLAYER IS RIDING has no box either: the ride
-            // pins the player inside it every step, and physics pushed the
-            // capsule back out through the side -- a passenger watching their
-            // own bus from the kerb, a metre or three to its left.
-            if (ai >= 0 && ai == city_.playerRidingAgent()) isParked = true;
-            const Mat4& m = g->transforms[ii];
-            Vec3 p(m.m[0][3], m.m[1][3], m.m[2][3]);
-            if (isParked) p.y = -1000.0;   // possessed: box parks below the world
-            Real yaw = std::atan2(m.m[0][2], m.m[2][2]);   // heading from local +Z basis
-            const Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
-            auto it = proxies.find(key);
-            if (it == proxies.end()) {
-                // Newly drawn (first frame, or a V agent promoted into the K
-                // bubble): SPAWN the box at the drawn pose — like park/unpark
-                // below, arriving is a discontinuous move, never a sweep.
-                ProxyBody nb;
-                nb.he = he;
-                nb.id = pw.addBox(he, p, rot, BodyMotion::Kinematic,
-                                  /*restitution*/ 0.0, /*friction*/ 0.6);
-                nb.parked = isParked ? 1 : 0;
-                nb.stamp = stamp;
-                proxies.emplace(key, nb);
-                continue;
-            }
-            ProxyBody& b = it->second;
-            b.stamp = stamp;
-            const bool wasParked = b.parked != 0;
-            // Park/unpark is a DISCONTINUOUS move: teleport, never sweep — a
-            // MoveKinematic across the jump is a one-frame hypersonic sweep
-            // straight through the freshly spawned chassis (measured: it batted
-            // cars 1.7 km across the map).
-            if (isParked != wasParked) pw.teleport(b.id, p, rot);
-            else if (!isParked) pw.moveKinematic(b.id, p, rot, dt);
-            b.parked = isParked ? 1 : 0;
+            place(keyOf(ai), ai, g->transforms[ii], he);
         }
     }
     // Instances gone this pass (tier demotion, a released driver): drop their
@@ -251,11 +269,16 @@ void CityPhysicsSystem::step(World& world, Real dt) {
     // player and the physics gun collide with them.
     possessTier(world, dt);   // R5: physical tier drives + parks proxies BEFORE the box sync
     syncPossessedInstances(world);   // drawn car == its body, this frame
-    syncKinematic(world, city_.carGroups(), city_.carGroupHalfExtents(), carProxies_, dt,
-                  &city_.carAgentIds());
-    { std::vector<Entity> peds{ city_.pedGroup() };
-      std::vector<Vec3> pedExtents{ city_.pedHalfExtent() };
-      syncKinematic(world, peds, pedExtents, pedProxies_, dt, &city_.pedAgentIds()); }
+    syncKinematic(world, city_.carGroups(), city_.sim().poses().halfExtents(city_.sim()), carProxies_, dt,
+                  &city_.carAgentIds(), true);
+    // the walkers' boxes where the walkers are this step (the sim's walker pose, city_poses.h; not the drawing's bake,
+    // which skips a catch-up frame's first steps: ADR-0454) -- where the city owns its walkers (else they are physics
+    // characters of their own, CityWalkerSystem)
+    { std::vector<Vec3> pedExtents{ city_.pedHalfExtent() };
+      walkerPoses_.clear();
+      if (!city_.pedsExternallyOwned())
+          city_.sim().poses().walkerBoxPoses(city_.sim(), pedExtents.front().y * 2, walkerPoses_);
+      syncKinematic(world, {}, pedExtents, pedProxies_, dt, nullptr, false, &walkerPoses_); }
 
     // Signal poles are static: one thin tall box per pole, built once (they never
     // move). The pole foot is the instance translation; the mast rises +Y.

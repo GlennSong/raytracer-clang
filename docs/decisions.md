@@ -21949,3 +21949,65 @@ Words: a **car entity** is one entity in the World with `CityCarBody` (what it i
 - The near tier's off-road cars on traffic_lab, above.
 
 **Revisit when** cars far from the player become records instead of entities (design section 4, "far: no entity"): a roaming car is then a record of its trip, made an entity when it comes into view.
+
+## ADR-0454 — One pose per car per fixed step: the car's box, its switch into physics and its drawing read where its body is, set by the city's step; the every-step bake is gone (#306, task 2)
+**Status:** Provisional · **Date:** 2026-11-18
+
+What it does: where a car's body is at each fixed step is now worked out once, in the city's step, and kept on the car. Its physics box, the near tier's switch into a Jolt car, the player's seats in it and the drawing all read that one pose. Before, the drawing was the source: the boxes copied the drawn car instances, and the drawing only bakes a frame's last two fixed steps. At `sim speed 16` (8 fixed steps a frame) the boxes stood still for six steps and then jumped six steps' worth, into near cars and into the player. ADR-0450 hid this by baking every step while the near tier was on (`bakeEveryStep`), which cost frame time and still left every other level's boxes jumping on a catch-up frame. That switch is deleted.
+
+Words: a **fixed step** is one tick of the engine's clock (1/60 s); on a slow frame the clock runs several in a row (a **catch-up frame**, at most 8). The **bake** is `CityRenderSystem::syncGroups`, which fills the instanced groups the renderer draws. A **kinematic box** is the Jolt box that stands in for a drawn car or walker so the player, the physics gun and the near cars bump into it (`CityPhysicsSystem`). The **four-wheel fit** is `bodyOnWheels`: the body set on the drawn road deck under its wheels, tilted to it.
+
+**1. The pose** (`city_car.h` `CityCarPose`): the body's frame (its middle on its wheels, +Z forward) and the road height it stands by.
+- It is set every fixed step, right after `sim.step`, by `CityPoses::stepCarPoses` (one rule, `poseCar`, for every car entity; the sim's, section 4). It is set whether or not the drawing bakes that step. A car made between steps (the near tier's lab cars) gets it at once (`poseCarNow`).
+- A car that is a Jolt car, one the player has, or one that is nowhere has none.
+- **Why not the Transform.** The Transform is the sim's record of the car: its place on the plan at the tick's end, with PrevTransform at its start and the lane height. The brain, the hand-over and `carsNear` read it. The body pose is a different fact: the place this fixed step stands for between those two ticks (they differ when a level sets `localHz`), set on the deck and tilted to the wheels. Writing it into the Transform would change what those readers see (and the driving's hashes), and would lose the tick-start/tick-end pair it is computed from.
+- **Not a second model:** it is computed once a step from the record, nothing else computes it, and every reader asks it.
+
+**2. Who reads it.**
+- **The boxes** (`CityPhysicsSystem::syncKinematic`, `withCarEntities`): a car entity's box goes to its `CityCarPose` every fixed step. The car entities' drawn instances are passed over (their name carries `kCarEntityInstance`), so a stale bake can never put a box back inside a car that has just become a Jolt car.
+- **The switch into physics** (`city_near.cpp` `toPhysics`): the Jolt car is made at the pose's middle and heading and on its road height, instead of at the Transform (the tick's end). No v2 level sets `localHz` (each sim tick is one fixed step), so on today's levels the two are a fit apart, not a tick of travel.
+- **The seats** (`carEntitySeatsOf`, which the key's offer reads) and **the lamps** read the pose too. The bake's `carEntityDrawn_` map (the drawn pose kept for them) is deleted.
+- **The drawing** (`syncCarEntities`) pushes the pose. The renderer blends one bake to the next for smooth frames, and that blend is drawing only. The bake still runs on a frame's last two steps only: that saving is for drawing alone, and it stays.
+
+**3. The walkers' boxes** (point 4 of the task). In the viewer the walkers are Jolt characters of their own (`CityWalkerSystem`, `setPedsExternallyOwned(true)`), moved every fixed step, so they do not have this fault there. The walkers' kinematic boxes exist only in a host where the city owns its walkers (the test rigs). There they had the same fault, and deleting `bakeEveryStep` exposed it: the near-crowd test's near cars hit 15 walkers. The same small change fixes it: the walkers' boxes are placed from `CityPoses::walkerBoxPoses` every step. That is each walker standing or walking, posed by `walkerStandingPose`, the one function the walkers' group is drawn with (its board's deck is `rideDeck`, shared with the board drawing).
+
+**Deleted:** `CityRenderSystem::bakeEveryStep` and its flag, the near tier's call to it, the test rig's `RT_NEAR_BAKE_LATE` A/B, and the `carEntityDrawn_` map with its `DrawnCar`.
+
+**Measured** (headless; the same every run):
+- **The new test** `near_tier_boxes_follow_their_cars_every_fixed_step` (physics_tests): traffic_lab, 300 cars, no near tier, the viewer's boxes, 8 fixed steps a frame, 6 s. 107,400 looks, every box moved by exactly its car's move each step (worst 0.000 m). It fails the old way: with the car entities' boxes read from their drawn instances again, 80,485 of 105,600 looks were off by more than 2 cm, the worst 1.174 m.
+- **The near tier's crowd test** (brain_crowd, stepped as the app steps it, 8 steps a frame): contacts 0; chassis hits on parked cars 0, on driven cars' boxes 0, on walkers 0, on other things 0 (all as before). Every count is the same as before (the most near 12 at minute 7, 83 in, 63 out, 4 refused). The known 7.8 s off-lane stand remains.
+  - Its own hash changed `0xb80206dda672d5d5` -> `0x032b5fd2c2071980` (re-pinned). The cause is only the switch-in pose: with `toPhysics` put back at the Transform and nothing else changed, the run gives `0xb80206dda672d5d5` again.
+  - Before the walker fix, with the walkers' boxes still from the bake, the same test had 15 hits on walkers and 27 on other things.
+- **The cost**, brain_crowd's near crowd, PhysicsSystem's step alone:
+  - worst step 1.753 ms before (every-step bake), 1.705 / 1.616 ms after (two runs);
+  - per-minute averages 0.058..0.358 ms before, 0.055..0.346 ms after.
+  - ADR-0450's 2.1 to 3.0 ms was not reproduced in this rig. The bake's own saving (about six fewer bakes on a catch-up frame) is city-step time, which this test does not print.
+- **The driving's hashes are unchanged**, since poses do not feed back into the driving: v2_drives `0x55109fe9a8e247b1` (its same two known failures), brain_crowd `0xfd98526fa3b9d920` (its one known failure).
+- **Other checks:** `level_brain_lab` 11/11, `first_cars` 1/1, `river_town` 1/1, the traffic_lab filter 8 of 10 (the known two failures and the stale 3364-paths pin), `brain_tests` 23/23, `driving_tests` 199/199, `lanes_tests` 132/132, `run_tests` trip_plan 11, goal 6, _lua 25, parking 5, spectat 7, tolerance 4.
+- **The tyre check** (`wheelGaps`, v2_drives) still measures the four-wheel fit itself, without the tilt filter's memory. Read from `CityCarPose` (which holds the filtered, drawn pose), one car's tyre sat 3 cm or more off the deck (`worstGap < 0.03` failed). That is a fact about the filter, which the drawing has always used, and is named below.
+- **Viewer** (brain_crowd at `sim speed 16`, then 1; `viewer`, not `editor_app`): it ran without errors, a car switched into physics with contacts 0, and the drawing path is the same blend of the same pose at the same steps as before. Smoothness was not measured by a tool, and the pictures (`~/Pictures/Raytracer/brain/task2_brain_crowd_speed{16,1}.png`) do not show moving cars.
+
+**Not done, for later tasks:**
+- The old sim's cars (v1 agents, parked rows) still have their boxes from the bake, so they freeze and jump on a catch-up frame. They go with the old driving.
+- The tilt filter (`smoothUp`) lets a drawn car's tyres sit more than 3 cm off the deck where the road's tilt changes. It is now also what the boxes and the switch into physics read.
+- `jitter?` measures only old-sim agents; it cannot measure a car entity's drawn smoothness.
+
+**4. The pose is the sim's, not the drawing's** (`src/apps/citysim/city_poses.h/.cpp`, `CityPoses`, held by `CitySim::poses()`).
+- Moved out of `CityRenderSystem`:
+  - the car pose step (`stepCarPoses`, `poseCarNow`, `carEntityPose`);
+  - the four-wheel fit (`bodyOnWheels`) and its tilt low-pass (`smoothUp`), and `parkedCarPose`;
+  - each car entity's fit memory (keyed by its number);
+  - the walker pose (`walkerPose`, the walkers' half of the old `agentPose`), `walkerStandingPose`, `walkerBoxPoses` and `rideDeck`.
+- What they stand on and are fitted with is the sim's too, loaded by the host at build:
+  - the ground (`CityGround`: the road decks, the terrain, the road lift, the sidewalk band; `groundAt`, `deckSurfaceNear`);
+  - the drawn models' body facts (`CityCarModels`: each model's wheels, how many models, which ones the buses, fire engines and cabs are drawn as; `variantOf`, and the half extents).
+- `CityRenderSystem` keeps only drawing. Its old names for that data (`decks_`, `heightAt_`, `roadLift_`, `sidewalk_`, `carWheels_`, `busVariant_`, `fireVariant_`, `taxiVariant_`) are references into the sim's; `groundAt`, `deckSurfaceNear`, `parkedVariant`, `parkedCarPose`, `carGroupHalfExtents` and `drawVariantCount` forward to it.
+  - `agentPose` calls the sim's walker pose for a walker.
+  - The old sim's drivers' drawing calls the sim's fit, with their own fit memory in the draw cache (the old driving's, which goes with it).
+- Physics reads `city.sim().poses()` (the boxes' half extents, the walkers' poses, a car's model); the near tier's lab car calls `poses().poseCarNow`. No reader takes a pose from `CityRenderSystem`.
+- **One behaviour changed with the move: how long a car's fit memory (its tilt low-pass) lasts.** It used to live in the drawing's draw cache, which dropped an entry after 600 bakes without it, so the memory's life depended on how often the drawing baked. It now lasts exactly while the car is posed; a car that becomes a Jolt car, is taken or is gone loses it and starts afresh.
+  - The near crowd's hash moved `0x032b5fd2c2071980` -> `0xdf46fdec96641d00`, with every count the same (12 near at minute 7, 83 in, 63 out, all hits 0, contacts 0).
+  - The cause was checked: with the draw cache's 600-bake sweep put back on the new memory, and nothing else changed, the run gives `0x032b5fd2c2071980` exactly.
+  - The driving's hashes do not move: v2_drives `0x55109fe9a8e247b1`, brain_crowd `0xfd98526fa3b9d920`.
+
+**Revisit when** a level sets `localHz` for the new driving (then the switch-in pose and the boxes sit between ticks), or far cars become records.

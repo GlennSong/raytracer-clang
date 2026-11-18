@@ -626,6 +626,7 @@ add_library(citysim STATIC
     src/apps/citysim/city_sim.cpp
     src/apps/citysim/city_driving.cpp   # the drivers handed to the new driving model (v2, #255)
     src/apps/citysim/city_car.cpp       # a household's car as one entity: its components (ADR-0444)
+    src/apps/citysim/city_poses.cpp     # where the city's bodies are each fixed step: cars and walkers (ADR-0454)
     src/apps/citysim/city_render.cpp
     src/apps/citysim/city_spectate.cpp   # spectate camera: cycle + follow NPCs (headless-safe)
     # (trip_plan.cpp, the trip planner, is compiled in the `brain` library above, which citysim links)
