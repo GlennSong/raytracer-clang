@@ -1,7 +1,6 @@
 #include "city_driving.h"
 
 #include "city_car.h"
-#include "city_sim.h"
 
 #include "../driving/act.h"            // registerMoveNeeds
 #include "../driving/give_way.h"       // registerJunctionFacts
@@ -125,66 +124,97 @@ const driving::TripPlaces& DrivingHost::placesFor(const driving::Driving& d, uin
     return placesOfClass_[cls];
 }
 
-bool DrivingHost::putDown(driving::Driving& d, Seat& s, Real room) {
-    const driving::TripPlacing p = driving::putCarSomewhere(d, placesFor(d, s.vehicleClass), s.car, s.vehicleClass, room,
-                                                            seed_, s.person, s.startDraws, kPlaceTries);
+// ---- The host's own cars: those that drive round for ever (CityCarRoams; ADR-0453) -----------------------------------
+
+DrivingHost::OwnCars DrivingHost::ownCars() {
+    OwnCars out;
+    if (!carWorld_) return out;
+    carWorld_->each<CityCarRoams, CityCarBody>(
+        [&](engine::Entity e, CityCarRoams&, CityCarBody& body) { out.push_back({body.id, e}); });
+    std::sort(out.begin(), out.end(), [](const std::pair<uint32_t, engine::Entity>& a,
+                                         const std::pair<uint32_t, engine::Entity>& b) { return a.first < b.first; });
+    return out;
+}
+
+// WHERE THE MODEL HAS THE CAR, copied into its entity: the middle of the body, the way it points (its rear to its
+// front, on the plan), the lane graph's height under it (blended across the tick by the drawing: `lane.fresh` for a
+// car just put down, drawn there at once), its speed and its brake lamps.
+static void copyPose(const driving::Driving& d, const driving::Car& c, CityCarOnLane& lane, engine::Transform& t) {
+    const driving::CarPose pose = driving::carPose(*d.roads(), d.vehicleClasses(), d.ruleSet(), c);
+    const engine::Vec3 mid = (pose.front + pose.rear) * 0.5;
+    const engine::Vec2 body(pose.body.x, pose.body.z);
+    setCarPose(t, engine::Vec2(mid.x, mid.z),
+               body.length() > engine::kSamePoint ? body : engine::Vec2(pose.travel.x, pose.travel.z), mid.y);
+    lane.roadYFrom = lane.fresh ? mid.y : lane.roadY;
+    lane.roadY = mid.y;
+    lane.speed = c.speed;
+    lane.driven = c.driven;
+    lane.braking = DrivingHost::braking(d, lane.car);
+    lane.fresh = false;
+}
+
+bool DrivingHost::putDown(driving::Driving& d, engine::Entity e, Real room) {
+    const CityCarBody& body = *carWorld_->get<CityCarBody>(e);
+    CityCarRoams& roams = *carWorld_->get<CityCarRoams>(e);
+    const driving::CarId car(body.id);
+    const driving::TripPlacing p = driving::putCarSomewhere(d, placesFor(d, body.vehicleClass), car, body.vehicleClass,
+                                                            room, seed_, driving::PersonId(body.id), roams.startDraws,
+                                                            kPlaceTries);
     if (!p.done) {
         ++counts_.noRoomYet;
         return false;
     }
-    s.placed = true;
     ++counts_.placed;
+    CityCarOnLane lane;
+    lane.car = car;
+    engine::Transform& t = *carWorld_->get<engine::Transform>(e);
+    copyPose(d, *d.car(car), carWorld_->add<CityCarOnLane>(e, lane), t);
+    // (drawn where it was put down at once: it does not slide there from where it was)
+    if (engine::PrevTransform* prev = carWorld_->get<engine::PrevTransform>(e)) prev->value = t;
     return true;
 }
 
-bool DrivingHost::sendOn(driving::Driving& d, Seat& s) {
-    const driving::TripPlacing p =
-        driving::sendCarSomewhere(d, placesFor(d, s.vehicleClass), s.car, s.person, seed_, s.tripDraws, kPlaceTries);
+bool DrivingHost::takenByPlayer(driving::Driving& d, engine::Entity e) {
+    if (!carWorld_ || !carWorld_->has<CityCarRoams>(e)) return false;
+    const driving::CarId car(carWorld_->get<CityCarBody>(e)->id);
+    if (d.car(car)) {
+        const driving::TripId trip = d.tripOf(car);
+        if (trip.valid()) d.endTrip(trip);
+        if (d.carried(car)) d.carry(car, false);
+        d.removeCar(car);
+        --counts_.placed;
+    }
+    carWorld_->remove<CityCarOnLane>(e);
+    carWorld_->remove<CityCarRoams>(e);
+    --counts_.drivers;
+    return true;
+}
+
+bool DrivingHost::sendOn(driving::Driving& d, engine::Entity e) {
+    const CityCarBody& body = *carWorld_->get<CityCarBody>(e);
+    CityCarRoams& roams = *carWorld_->get<CityCarRoams>(e);
+    const driving::TripPlacing p = driving::sendCarSomewhere(d, placesFor(d, body.vehicleClass), driving::CarId(body.id),
+                                                             driving::PersonId(body.id), seed_, roams.tripDraws,
+                                                             kPlaceTries);
     counts_.routesNotFound += p.noRoute;
     if (!p.done) {
         ++counts_.noTripYet;
         return false;
     }
     ++counts_.tripsBegun;
+    if (CityCarOnLane* lane = carWorld_->get<CityCarOnLane>(e)) lane->driven = true;
     return true;
 }
 
-void DrivingHost::mirror(const driving::Driving& d, Seat& s, std::vector<Agent>& agents,
-                         std::vector<SimVehicle>& vehicles, bool snap) {
-    const driving::Car* c = d.car(s.car);
-    if (!c) return;
-    Agent& a = agents[static_cast<std::size_t>(s.agent)];
-    const driving::CarPose pose = driving::carPose(*d.roads(), d.vehicleClasses(), d.ruleSet(), *c);
-    // The middle of the body, between its bumpers, and the way it points (its rear to its front, on the plan).
-    const engine::Vec3 mid = (pose.front + pose.rear) * 0.5;
-    engine::Vec2 heading(pose.body.x, pose.body.z);
-    const Real len = heading.length();
-    heading = len > 1e-9 ? heading * (1.0 / len) : engine::Vec2(pose.travel.x, pose.travel.z);
-    a.pos = engine::Vec2(mid.x, mid.z);
-    a.heading = heading;
-    a.speed = c->speed;
-    a.moving = c->driven;
-    a.state = c->speed < driving::kStandingBelow ? Agent::State::Waiting
-              : c->binding.by == driving::Limit::CarAhead ? Agent::State::Following
-                                                          : Agent::State::Cruising;
-    s.roadYFrom = snap ? mid.y : s.roadY;
-    s.roadY = mid.y;
-    if (snap) {
-        a.tickFromPos = a.pos;
-        a.tickFromHeading = a.heading;
-    }
-    if (a.vehicle >= 0 && a.vehicle < static_cast<int>(vehicles.size())) {
-        vehicles[static_cast<std::size_t>(a.vehicle)].pos = a.pos;
-        vehicles[static_cast<std::size_t>(a.vehicle)].heading = a.heading;
-    }
-}
-
 void DrivingHost::reset() {
+    // (its own cars were made for the last build's city: they go with it)
+    if (carWorld_) {
+        std::vector<engine::Entity> mine;
+        for (const std::pair<uint32_t, engine::Entity>& c : ownCars()) mine.push_back(c.second);
+        for (const engine::Entity e : mine) carWorld_->destroy(e);
+    }
     active_ = false;
     seed_ = 0;
-    seats_.clear();
-    seatOfAgent_.clear();
-    seatOfCar_.clear();
     carWorld_ = nullptr;
     guestEvents_.clear();
     placesOfClass_.clear();
@@ -194,34 +224,12 @@ void DrivingHost::reset() {
     cost_ = Cost();
 }
 
-// ---- Cars someone else drives: the households' cars, which are entities (ADR-0441, ADR-0444) ---------------------------
+// ---- Every car entity the model has (ADR-0444, ADR-0453) ---------------------------------------------------------------
 
-const DrivingHost::Seat* DrivingHost::seatOf(int agent) const {
-    if (agent < 0 || agent >= static_cast<int>(seatOfAgent_.size())) return nullptr;
-    const int k = seatOfAgent_[static_cast<std::size_t>(agent)];
-    return k >= 0 ? &seats_[static_cast<std::size_t>(k)] : nullptr;
-}
-
-// WHERE THE MODEL HAS EACH CAR ENTITY ON ITS ROAD, copied into it as `mirror` copies a seat's car into its agent: the
-// middle of the body, the way it points, the lane graph's height under it (blended across the tick by the drawing),
-// its speed and its brake lamps.
 void DrivingHost::mirrorCarEntities(const driving::Driving& d) {
-    carWorld_->each<CityCarOnLane, engine::Transform>(
-        [&](engine::Entity, CityCarOnLane& lane, engine::Transform& t) {
-            const driving::Car* c = d.car(lane.car);
-            if (!c) return;
-            const driving::CarPose pose = driving::carPose(*d.roads(), d.vehicleClasses(), d.ruleSet(), *c);
-            const engine::Vec3 mid = (pose.front + pose.rear) * 0.5;
-            const engine::Vec2 body(pose.body.x, pose.body.z);
-            setCarPose(t, engine::Vec2(mid.x, mid.z), body.length() > engine::kSamePoint ? body : engine::Vec2(pose.travel.x, pose.travel.z),
-                       mid.y);
-            lane.roadYFrom = lane.fresh ? mid.y : lane.roadY;
-            lane.roadY = mid.y;
-            lane.speed = c->speed;
-            lane.driven = c->driven;
-            lane.braking = braking(d, lane.car);
-            lane.fresh = false;
-        });
+    carWorld_->each<CityCarOnLane, engine::Transform>([&](engine::Entity, CityCarOnLane& lane, engine::Transform& t) {
+        if (const driving::Car* c = d.car(lane.car)) copyPose(d, *c, lane, t);
+    });
 }
 
 std::vector<driving::Event> DrivingHost::takeGuestEvents() {
@@ -230,41 +238,22 @@ std::vector<driving::Event> DrivingHost::takeGuestEvents() {
     return out;
 }
 
-bool DrivingHost::keptForGuest(const driving::Event& e) {
-    if (e.car.index < seatOfCar_.size() && seatOfCar_[e.car.index] >= 0) return false;
+bool DrivingHost::keptForGuest(const driving::Event& e, const OwnCars& own) {
+    const OwnCars::const_iterator it =
+        std::lower_bound(own.begin(), own.end(), e.car.index,
+                         [](const std::pair<uint32_t, engine::Entity>& c, uint32_t id) { return c.first < id; });
+    if (it != own.end() && it->first == e.car.index) return false;
     guestEvents_.push_back(e);
     return true;
 }
 
-std::string DrivingHost::begin(driving::Driving& d, std::vector<Agent>& agents, std::vector<SimVehicle>& vehicles,
-                               const std::vector<int>& who, const std::vector<int>& classOfSlot, uint32_t seed) {
+std::string DrivingHost::begin(driving::Driving& d, engine::World& world, uint32_t seed) {
     if (!d.roads() || !d.hasRules() || d.vehicleClasses().empty()) return "the new model has no road, rules or vehicles";
     seed_ = seed;
-    seatOfAgent_.assign(agents.size(), -1);
-    seatOfCar_.assign(vehicles.size(), -1);
-    seats_.clear();
-    for (const int i : who) {
-        if (i < 0 || i >= static_cast<int>(agents.size())) continue;
-        const Agent& a = agents[static_cast<std::size_t>(i)];
-        if (a.vehicle < 0 || a.vehicle >= static_cast<int>(vehicles.size())) continue;
-        if (seatOfCar_[static_cast<std::size_t>(a.vehicle)] >= 0) continue;   // (one driver a car)
-        Seat s;
-        s.agent = i;
-        s.car = driving::CarId(static_cast<uint32_t>(a.vehicle));
-        s.person = a.uid;
-        const int slot = vehicles[static_cast<std::size_t>(a.vehicle)].slot;
-        const int cls = slot >= 0 && slot < static_cast<int>(classOfSlot.size()) ? classOfSlot[static_cast<std::size_t>(slot)] : -1;
-        s.vehicleClass = cls >= 0 && cls < static_cast<int>(d.vehicleClasses().size()) ? static_cast<uint32_t>(cls) : 0u;
-        seatOfCar_[static_cast<std::size_t>(a.vehicle)] = 0;   // (taken; the real seat number is set below)
-        seats_.push_back(s);
-    }
-    std::sort(seats_.begin(), seats_.end(), [](const Seat& x, const Seat& y) { return x.car < y.car; });
-    for (std::size_t k = 0; k < seats_.size(); ++k) {
-        seatOfAgent_[static_cast<std::size_t>(seats_[k].agent)] = static_cast<int>(k);
-        seatOfCar_[seats_[k].car.index] = static_cast<int>(k);
-    }
+    carWorld_ = &world;
+    const OwnCars own = ownCars();
     counts_ = DrivingCounts();
-    counts_.drivers = static_cast<uint32_t>(seats_.size());
+    counts_.drivers = static_cast<uint32_t>(own.size());
     // THE COUNTING LINES (issue #284): the line of every junction whose lights run a programme -- the end of each lane
     // that leads into its connectors -- so the measurements' queue rows see queues empty over them (before, the host
     // registered none and those rows had no data). Only lit lines: the rows' targets are a queue leaving on a green
@@ -290,15 +279,12 @@ std::string DrivingHost::begin(driving::Driving& d, std::vector<Agent>& agents, 
     d.attachMeasurements(measurements_.get());
     // The bodies-touching row measures each car at the size it is DRAWN (its fleet slot's body), which may differ from
     // its driving class's (the class takes the first slot of its name).
-    for (const Seat& s : seats_) {
-        const SimVehicle& v = vehicles[s.car.index];
-        measurements_->setDrawnSize(s.car, v.length, v.width);
+    for (const std::pair<uint32_t, engine::Entity>& c : own) {
+        const CityCarBody& body = *world.get<CityCarBody>(c.second);
+        measurements_->setDrawnSize(driving::CarId(body.id), body.length, body.width);
     }
-    for (Seat& s : seats_) {
-        if (!putDown(d, s, kStartRoom)) continue;
-        sendOn(d, s);
-        mirror(d, s, agents, vehicles, true);
-    }
+    for (const std::pair<uint32_t, engine::Entity>& c : own)
+        if (putDown(d, c.second, kStartRoom)) sendOn(d, c.second);
     active_ = true;
     std::size_t lanes = 0, parts = 0;
     for (std::size_t c = 0; c < placesOfClass_.size(); ++c)
@@ -314,55 +300,55 @@ std::string DrivingHost::begin(driving::Driving& d, std::vector<Agent>& agents, 
     return line;
 }
 
-void DrivingHost::tick(driving::Driving& d, Real dt, std::vector<Agent>& agents, std::vector<SimVehicle>& vehicles) {
-    // (the cars that are entities: where each is as the tick begins, which the drawing blends from)
+void DrivingHost::tick(driving::Driving& d, Real dt) {
+    // (where each car entity is as the tick begins, which the drawing blends from)
     if (carWorld_) carTickBegins(*carWorld_);
     const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
     const double modelMs = driving::tickTimed(d, dt);
     const double watchMs = std::max(0.0, msSince(t0) - modelMs);
     const std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
+    const OwnCars own = ownCars();
+    const auto entityOf = [&](driving::CarId car) {
+        const OwnCars::const_iterator it =
+            std::lower_bound(own.begin(), own.end(), car.index,
+                             [](const std::pair<uint32_t, engine::Entity>& c, uint32_t id) { return c.first < id; });
+        return it != own.end() && it->first == car.index ? it->second : engine::Entity{};
+    };
 
     // Trips that ended: the car stands at its destination, and is sent on again.
     std::vector<driving::CarId> arrived;
     for (const driving::Event& e : d.drainEvents()) {
-        if (keptForGuest(e)) continue;   // (a household's car: its own driver's to act on)
+        if (keptForGuest(e, own)) continue;   // (a household's car: its own driver's to act on)
         if (e.kind == driving::EventKind::Parked) {
             ++counts_.arrivals;
             arrived.push_back(e.car);
         }
     }
-    for (const driving::CarId car : arrived) {
-        const int k = car.index < seatOfCar_.size() ? seatOfCar_[car.index] : -1;
-        if (k >= 0) sendOn(d, seats_[static_cast<std::size_t>(k)]);
-    }
-    for (Seat& s : seats_) {
-        bool snap = false;
-        if (!s.placed) {
+    for (const driving::CarId car : arrived) sendOn(d, entityOf(car));
+    for (const std::pair<uint32_t, engine::Entity>& c : own) {
+        const driving::CarId car(c.first);
+        const engine::Entity e = c.second;
+        if (!d.car(car)) {
             // Not put down yet (no room was found): try again, now with moving traffic about.
-            if (!putDown(d, s, kMovingRoom)) continue;
-            sendOn(d, s);
-            snap = true;
-        } else if (d.atRoadEnd(s.car)) {
+            if (putDown(d, e, kMovingRoom)) sendOn(d, e);
+        } else if (!d.carried(car) && d.atRoadEnd(car)) {
             // At the end of a road that just ends: nothing will ever move it on, so it is taken off and put down
-            // where it can drive from.
-            d.endTrip(d.tripOf(s.car));
-            d.removeCar(s.car);
-            s.placed = false;
+            // where it can drive from. (A car physics carries is the near tier's until it is a lane car again.)
+            d.endTrip(d.tripOf(car));
+            d.removeCar(car);
+            carWorld_->remove<CityCarOnLane>(e);
             --counts_.placed;
             ++counts_.replaced;
-            if (!putDown(d, s, kMovingRoom)) continue;
-            sendOn(d, s);
-            snap = true;
-        } else if (!d.tripOf(s.car).valid()) {
+            if (putDown(d, e, kMovingRoom)) sendOn(d, e);
+        } else if (!d.tripOf(car).valid()) {
             // Arrived earlier but no destination was found then: try again.
-            sendOn(d, s);
+            sendOn(d, e);
         }
-        mirror(d, s, agents, vehicles, snap);
     }
-    // The households' cars, which are entities: where each is, copied in while it is on the road.
+    // Every car entity on the road: where it is, copied in.
     if (carWorld_) mirrorCarEntities(d);
     // (the EndedEarly and NoRoute events of the work above: counted already; a household car's are kept for its driver)
-    for (const driving::Event& e : d.drainEvents()) keptForGuest(e);
+    for (const driving::Event& e : d.drainEvents()) keptForGuest(e, own);
 
     const double hostMs = msSince(t1);
     ++cost_.ticks;
@@ -371,19 +357,6 @@ void DrivingHost::tick(driving::Driving& d, Real dt, std::vector<Agent>& agents,
     cost_.watchMs += watchMs;
     cost_.hostMs += hostMs;
     cost_.hostWorstMs = std::max(cost_.hostWorstMs, hostMs);
-}
-
-bool DrivingHost::roadHeight(int agent, Real& from, Real& to) const {
-    const Seat* seat = seatOf(agent);
-    if (!seat || !seat->placed) return false;
-    from = seat->roadYFrom;
-    to = seat->roadY;
-    return true;
-}
-
-bool DrivingHost::braking(const driving::Driving& d, int agent) const {
-    const Seat* seat = seatOf(agent);
-    return seat && braking(d, seat->car);
 }
 
 bool DrivingHost::braking(const driving::Driving& d, driving::CarId car) {

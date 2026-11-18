@@ -20,9 +20,9 @@
 //                       the driving's pose into the Transform after each tick. A parked car has none: it keeps its
 //                       pose and its kerb space (the brain's table of spaces) and nothing moves it.
 //
-// THE CAR'S NUMBER is the same in the brain (its CarRef), in the driving (its CarId) and in the drawing. Cars of the
-// households are numbered on from the last row of the sim's vehicle list as it stands when the brain starts (rows are
-// only added while the city is built, before that), so a household car's number is never a row's.
+// THE CAR'S NUMBER is the same in the brain (its CarRef), in the driving (its CarId) and in the drawing. Car entities
+// are numbered on from the last number in use (CitySim::nextCarNumber: past the sim's vehicle rows, which are only
+// added while the city is built, and past every car entity), so a car's number is never a row's or another car's.
 //
 // A PERSON IN THE CAR is a sim agent on foot whose `inCar` names the car: they are not drawn on foot. The car is the
 // authority on where they are: their own place and heading (Agent::pos, heading) follow the car's every tick, one way
@@ -36,6 +36,13 @@
 // an engine::Vehicle (VehicleSystem's: the Jolt car, its wheels, lamps and engine note) and loses its CityCarOnLane;
 // from then VehicleSystem moves and draws it and nothing here does (carsNear, the bake, carTickBegins all pass over an
 // entity with a Vehicle). Handing it back (removing the Vehicle) is not built (#293).
+//
+// A CAR THAT DRIVES ROUND FOR EVER (ADR-0453): the traffic lab's cars (citysim.cars on a level the new driving drives)
+// are the same entities with nobody in them (CityCarLink: no household, no driver) and a CityCarRoams. Nobody in the
+// city decides for them: the hand-over (DrivingHost) puts each down on the road and, every time it arrives, sends it
+// on another trip, its picks hashed from the level's seed and the car's number, which is also the person number its
+// trips are driven as. It has no kerb space, so while the driving does not have it (no room was found to put it down
+// yet) it is nowhere: not drawn and not seen (carNowhere).
 //
 // EVERY SYSTEM THAT LOOKS FOR CARS asks carsNear: the old sim's driven cars and these, in one list.
 
@@ -77,6 +84,18 @@ struct CityCarOnLane {
     bool fresh = true;               // just put on the road: its road height is not blended from an earlier one
 };
 
+// DRIVES ROUND FOR EVER, sent on trip after trip by the hand-over (above). Only the hand-over's count of the places it
+// has picked for the car (trip_places' draw counts), so each pick is a new one and every run makes the same.
+struct CityCarRoams {
+    uint32_t startDraws = 0;   // places picked to put the car down
+    uint32_t tripDraws = 0;    // ...and destinations picked
+};
+
+// A car that drives round for ever which the driving does not have (no lane component, no physics car): nowhere.
+bool carNowhere(engine::World& world, engine::Entity e);
+// The car entity numbered `id` (CityCarBody::id), whoever's it is; none when there is no such car.
+engine::Entity carEntityNumbered(engine::World& world, uint32_t id);
+
 // The car's place and heading on the plan, from its Transform.
 Vec2 carPosition(const engine::Transform& t);
 Vec2 carHeading(const engine::Transform& t);
@@ -107,7 +126,8 @@ struct CarSeen {
 // THE CITY'S CARS WITHIN `radius` OF `p` (radius below zero: every one), appended to `out`, the old sim's first (in
 // its near list's order: a far car has no body), then the households' (in the World's order):
 //   - an old-sim car: an agent of the near list in Mode::Driver, not released to the player, not far;
-//   - a household car: an entity with CityCarBody, not away and with no engine::Vehicle (a car the player holds is
+//   - a car entity (a household's, or one that drives round for ever): an entity with CityCarBody, not away, not
+//     nowhere (carNowhere) and with no engine::Vehicle (a car the player holds, or the near tier carries, is
 //     VehicleSystem's, found as a Vehicle like any physical car: one car, one representation). Its speed and "on a
 //     trip" are its CityCarOnLane's; a car off the road stands still.
 // The caller applies its own further questions (a bus, a car on service, one the player rides) through `agent`.

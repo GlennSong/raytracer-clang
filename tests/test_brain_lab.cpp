@@ -534,7 +534,6 @@ TEST_CASE(level_brain_lab_one_resident_makes_the_trip) {
     // WHERE THE PERSON ENDS: on foot, standing at the marker
     CHECK(r.person().mode == citysim::Agent::Mode::Pedestrian && r.person().vehicle < 0 && !r.person().moving);
     CHECK((r.person().pos - b.markers()[1].stand).length() <= kStandsWithin);
-    CHECK(!r.sim().drivenByV2(b.residentAgent()));
 }
 
 TEST_CASE(level_brain_lab_a_board_makes_the_short_hop_one_leg) {
@@ -700,11 +699,16 @@ TEST_CASE(level_traffic_lab_first_cars_stand_at_their_stop_lines) {
     for (int i = 0; i < steps; ++i) {
         lc.city.step(lc.world, kStep);
         if (i % kLookEvery != 0) continue;
+        // (the lab's cars are car entities, ADR-0453: where each is drawn from, and its drawn length, by its number)
+        std::map<uint32_t, std::pair<Vec2, Real>> drawn;
+        lc.world.each<citysim::CityCarBody, engine::Transform>([&](Entity, citysim::CityCarBody& b, engine::Transform& t) {
+            drawn[b.id] = {citysim::carPosition(t), b.length};
+        });
         for (const driving::Car& c : d->cars()) {
-            if (c.id.index >= sim.vehicles().size()) continue;
+            const std::map<uint32_t, std::pair<Vec2, Real>>::const_iterator v = drawn.find(c.id.index);
+            if (v == drawn.end()) continue;
             LineStop s;
-            const citysim::SimVehicle& v = sim.vehicles()[c.id.index];
-            if (!measureAtLine(*d, model, c, v.pos, v.length, s)) continue;
+            if (!measureAtLine(*d, model, c, v->second.first, v->second.second, s)) continue;
             const engine::Path& path = model.laneLevel.paths[c.path.index];
             bool first = true;
             for (const driving::PathEntry& e : driving::carsOnStretch(d->pathLists(), c.path, c.along + kJustAhead, path.length))
@@ -988,7 +992,6 @@ TEST_CASE(level_brain_lab_the_player_takes_the_car_from_under_its_driver) {
     CHECK(d.carCount() == 0u && d.car(driving::CarId(static_cast<uint32_t>(car))) == nullptr);
     CHECK(b.carHolder(car) == citysim::CarHolder::Outsider && b.carSpaceName(kAna).empty());
     CHECK(b.counts().takenDriven == 1u && b.counts().putOut == 1u);
-    CHECK(!r.sim().drivenByV2(b.residentAgent(kAna)));
     r.step();
     // THE BRAIN DECIDES WHAT FOLLOWS: `vehicle_gone` at the wheel is "plan again from here": on foot, the hold let go
     CHECK(stateNames(b, kAna) == "standing walking pulling_out driving walking");

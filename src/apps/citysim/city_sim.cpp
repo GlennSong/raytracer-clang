@@ -1,4 +1,5 @@
 #include "city_sim.h"
+#include "city_car.h"     // the new driving's cars are entities (startDrivingV2)
 #include "../../hash.h"   // lowbias32
 
 #include "traffic_rules.h"   // approachStop
@@ -267,11 +268,17 @@ void CitySim::setDrivingRoads(std::shared_ptr<const engine::RoadModel> roads, st
     drivingV2_->setVehicleClasses(std::move(classes));
 }
 
-bool CitySim::startDrivingV2(const std::string& rulesFile, const std::string& role, const std::vector<int>& classOfSlot,
-                             std::string* report) {
+uint32_t CitySim::nextCarNumber(engine::World& world) const {
+    uint32_t next = static_cast<uint32_t>(vehicles_.size());
+    world.each<CityCarBody>([&](engine::Entity, CityCarBody& b) { next = std::max(next, b.id + 1); });
+    return next;
+}
+
+bool CitySim::startDrivingV2(engine::World& world, const std::string& rulesFile, int cars,
+                             const std::vector<int>& classOfSlot, std::string* report) {
     std::string why;
     if (!drivingV2_ || !drivingV2_->roads()) why = "the new model has no road (see `lanegraph?`)";
-    else if (drivingHost_.active()) why = "the new model already drives this level's drivers";
+    else if (drivingHost_.active()) why = "the new model already runs on this level";
     else if (!loadDrivingRules(rulesFile, *drivingV2_, &why)) why = "rule set refused: " + why;
     if (!why.empty()) {
         if (report) *report = why;
@@ -282,51 +289,30 @@ bool CitySim::startDrivingV2(const std::string& rulesFile, const std::string& ro
     settings.laneChanges = false;
     drivingV2_->setSettings(settings);
 
-    const int roleId = roles_.find(role);
-    std::vector<int> who;
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
-        const Agent& a = agents_[i];
-        if (roleId < 0 || static_cast<int>(a.role) != roleId) continue;
-        if (a.mode != Agent::Mode::Driver || a.vehicle < 0 || a.vehicle >= static_cast<int>(vehicles_.size())) continue;
-        if (a.playerControlled || a.released) continue;
-        who.push_back(static_cast<int>(i));
+    // THE CARS THAT DRIVE ROUND FOR EVER (city_car.h CityCarRoams): each one entity, with nobody in it; where it is
+    // comes from the driving once the hand-over has put it down.
+    const uint32_t classes = static_cast<uint32_t>(drivingV2_->vehicleClasses().size());
+    for (int k = 0; k < cars; ++k) {
+        CityCarBody body;
+        body.id = nextCarNumber(world);
+        body.slot = ambientSlotFor(static_cast<int>(body.id));
+        const VehicleBody& fleet = fleetBody(body.slot);
+        body.type = fleet.type;
+        body.length = fleet.length;
+        body.width = fleet.width;
+        body.height = fleet.height;
+        const int cls = body.slot >= 0 && body.slot < static_cast<int>(classOfSlot.size())
+                            ? classOfSlot[static_cast<std::size_t>(body.slot)]
+                            : -1;
+        body.vehicleClass = cls >= 0 && static_cast<uint32_t>(cls) < classes ? static_cast<uint32_t>(cls) : 0u;
+        const engine::Entity e = world.create();
+        world.add<engine::Transform>(e);
+        world.add<engine::PrevTransform>(e);
+        world.add<CityCarBody>(e, body);
+        world.add<CityCarLink>(e, CityCarLink{});
+        world.add<CityCarRoams>(e);
     }
-    // LEAVING THE OLD MODEL: its trip, its bays and its in-between states go; the agent sits in its own car, which the
-    // old model no longer finds in its spatial grid. The pose is the new model's from here on.
-    for (const int i : who) {
-        Agent& a = agents_[static_cast<std::size_t>(i)];
-        releaseBays(a);
-        a.route = engine::Route();
-        a.leg = 0;
-        a.distOnLeg = 0;
-        a.tripGoal = -1;
-        a.stopAtDist = -1;
-        a.pullLen = 0;
-        a.pullS = 0;
-        a.tickFromPullS = 0;
-        a.pullOffset = Vec2(0, 0);
-        a.pullYawOffset = 0;
-        a.lane = 0;
-        a.laneF = 0;
-        a.laneVel = 0;
-        a.lateralOffset = 0;
-        a.leanTarget = 0;
-        a.elevation = 0;
-        a.grade = 0;
-        a.deckY = -1e30f;
-        a.crashTimer = 0;
-        a.crashCount = 0;
-        a.holdTimer = 0;
-        a.indoors = false;
-        a.wakeAt = -1;
-        SimVehicle& v = vehicles_[static_cast<std::size_t>(a.vehicle)];
-        v.driver = i;
-        v.offStreet = false;
-        v.parkedY = -1e30;
-    }
-    const std::string line = drivingHost_.begin(*drivingV2_, agents_, vehicles_, who, classOfSlot, seed_);
-    for (const int i : who)
-        if (drivingHost_.drives(i)) grid_.remove(i);
+    const std::string line = drivingHost_.begin(*drivingV2_, world, seed_);
     if (report) *report = line;
     return true;
 }
@@ -6646,7 +6632,6 @@ void CitySim::computeGaps() {
     for (int i : kIdx_) {
         const Agent& a = agents_[i];
         if (a.far()) continue;   // far tier: not on the road
-        if (drivenByV2(i)) continue;   // the new model's: not in the old model's lanes
         if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
         const int li = a.route.links[a.leg];
         const long long key = laneKeyOf(a, li);
@@ -6698,7 +6683,6 @@ void CitySim::computeGaps() {
         const Agent& a = agents_[i];
         if (gaps_[i] != INF) continue;                 // has a same-link leader already
         if (a.far()) continue;        // far tier: no following
-        if (drivenByV2(i)) continue;  // the new model's: it follows by its own lists
         if (!a.moving) continue;
         int legN = static_cast<int>(a.route.links.size());
         Real ahead = nav_->links[a.route.links[a.leg]].length - a.distOnLeg;  // to end of this link
@@ -6888,7 +6872,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             thingsForDriving(thingsScratch_);
             drivingV2_->setThingsOnRoad(thingsScratch_);
         }
-        if (drivingHost_.active()) drivingHost_.tick(*drivingV2_, simDt, agents_, vehicles_);
+        if (drivingHost_.active()) drivingHost_.tick(*drivingV2_, simDt);
         else drivingV2_->tick(simDt);
     }
     // THE RESIDENT WITH THE AGENT BRAIN (ADR-0441), after the driving: its reports are answered and its skills stepped.
@@ -7001,8 +6985,17 @@ const CitySim::ActivitySpot* CitySim::usingSpot(int i) const {
     return &seats_[static_cast<std::size_t>(a.tripSeat)];
 }
 
-CitySim::Census CitySim::census() const {
+CitySim::Census CitySim::census(engine::World* world) const {
     Census c;
+    if (world)
+        world->each<CityCarRoams, CityCarBody, CityCarLink>([&](engine::Entity, CityCarRoams&, CityCarBody& body,
+                                                                CityCarLink& link) {
+            if (link.driver >= 0) return;
+            ++c.emptyCars;
+            const driving::Car* car = drivingV2_ ? drivingV2_->car(driving::CarId(body.id)) : nullptr;
+            c.emptyCarsOnRoad += car ? 1 : 0;
+            c.emptyCarsDriven += car && car->driven ? 1 : 0;
+        });
     for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
         const Agent& a = agents_[static_cast<std::size_t>(i)];
         if (isBus(i)) { c.busesMoving += a.moving ? 1 : 0; continue; }
@@ -7849,20 +7842,17 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // P4.1: re-hash the population. place() early-outs on an unchanged cell,
     // so a V agent (whose pose only moves on its coarse tick) costs a compare.
     // Only what can have moved: the K and V tiers (a dormant agent stands where it went under) -- unless a bulk
-    // move put everyone somewhere new. The new model's drivers stay out of this grid: every car-to-car check of the old
-    // model finds the cars it looks at through it, and they are not the old model's to check (startDrivingV2).
+    // move put everyone somewhere new.
     if (rehashAll_) {
         for (std::size_t i = 0; i < agents_.size(); ++i) {
             const Agent& a = agents_[i];
-            if (drivenByV2(static_cast<int>(i))) continue;
             grid_.place(static_cast<int>(i), a.pos);
             if (a.tier == Agent::Tier::V) vGrid_.place(static_cast<int>(i), a.pos);
             else if (a.tier == Agent::Tier::D) dGrid_.place(static_cast<int>(i), a.pos);
         }
         rehashAll_ = false;
     } else {
-        for (int i : kIdx_)
-            if (!drivenByV2(i)) grid_.place(i, agents_[static_cast<std::size_t>(i)].pos);
+        for (int i : kIdx_) grid_.place(i, agents_[static_cast<std::size_t>(i)].pos);
         for (int i : vIdx_) {
             grid_.place(i, agents_[static_cast<std::size_t>(i)].pos);
             vGrid_.place(i, agents_[static_cast<std::size_t>(i)].pos);
@@ -7902,8 +7892,6 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         const std::size_t i = static_cast<std::size_t>(ki);
         const Agent& a = agents_[i];
         if (a.far()) continue;
-        // THE NEW MODEL'S DRIVERS are not the old model's to move: no goal table, no advance, no crash check, no wedge.
-        if (drivenByV2(ki)) continue;
         // A held clock (rate 0) keeps sleepers under: nothing on their
         // schedule can come due while the day stands still.
         if (a.wakeAt >= 0 && (hoursPerSecond_ <= 0 || simSeconds_ < a.wakeAt)) {
@@ -8757,9 +8745,6 @@ void CitySim::tierPass(Real hoursPerSecond) {
         // Player-adjacent agents never demote: host-driven, released to the
         // player, or tethered to a physical body another bridge owns -- nor one being followed.
         if (a.playerControlled || a.released || a.tethered || a.pinned) continue;
-        // ...nor the new model's drivers: the far tier drives the old model's routes (the new model's own levels of
-        // detail are task E7)
-        if (drivenByV2(static_cast<int>(i))) continue;
         const Real dr = (a.mode == Agent::Mode::Driver ? carDemoteRadius : pedDemoteRadius) * ns;
         const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
         if (dx * dx + dy * dy <= dr * dr) {

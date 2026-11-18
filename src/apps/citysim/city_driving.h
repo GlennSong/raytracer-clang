@@ -3,43 +3,39 @@
 
 // THE CITY SIM'S SIDE OF THE NEW DRIVING MODEL (citysim.driving = "v2"; issues #255, #258, #235).
 //
-// On a v2 level the city sim hands its drivers' cars to the driving library (driving::Driving) and stops driving them
-// itself. This module is the hand-over and what the city sim does for those cars from then on:
+// On a v2 level every car the new driving (driving::Driving) moves is a car entity (city_car.h; ADR-0444, ADR-0453):
+// a household's car of the agent brain, a car that drives round for ever (the traffic lab's), or a test bed's car.
+// This module is the hand-over: what the city does for those cars each tick of the driving.
 //   - it reads the level's rule set (loadDrivingRules) and gives it to the model; a rule set with problems is
-//     refused, every problem named with its file and key path, and the old model keeps the cars;
-//   - it puts each driver's car down on the lane graph, with room round it, and sends it on a trip; when the car
-//     arrives it sends it on another, so the lab keeps moving (driving/trip_places.h). A car stuck at the end of a road
-//     that just ends (the map's open edges) is put down again where it can drive from, and counted;
-//   - after every tick it copies where each car is (driving::carPose: the middle of its body and the way it points)
-//     into its driver's Agent and its SimVehicle, which is what the drawing, the walkers' car checks, the map and the
-//     camera read; and it keeps the lane graph's height under the car, which the drawing uses to find the car's own
-//     road among stacked decks; a car that is an entity (a household's car of the agent brain, city_car.h) has the
-//     same copied into its components instead;
+//     refused, every problem named with its file and key path, and the level then has no new driving;
+//   - THE CARS THAT DRIVE ROUND FOR EVER (CityCarRoams) are its own to send: it puts each down on the lane graph,
+//     with room round it, and sends it on a trip; when the car arrives it sends it on another, so the lab keeps moving
+//     (driving/trip_places.h). A car stuck at the end of a road that just ends (the map's open edges) is put down
+//     again where it can drive from, and counted. Nobody else's car is put down or sent anywhere here (the brain sends
+//     its households' cars);
+//   - after every tick it copies where each car entity the driving has is (driving::carPose: the middle of its body
+//     and the way it points) into its Transform, with the lane graph's height under it (which the drawing uses to find
+//     the car's own road among stacked decks), its speed and its brake lamps;
 //   - it answers `driving?`.
-// The old model is kept away from these drivers by CitySim (drivenByV2): they are not in its active list, its spatial
-// grid or its lane occupancy, so it neither drives nor steers nor checks them for crashes nor queues behind them.
 //
-// Same result every run: cars are walked in car order (a car's id is its vehicle index); every place comes from
-// trip_places' hashes of the level's seed and the driver's id; the clock is read only to report what a tick cost.
+// Same result every run: its cars are walked in the order of their numbers; every place comes from trip_places' hashes
+// of the level's seed and the car's number; the clock is read only to report what a tick cost.
 
 #include "../driving/driving.h"
 #include "../driving/measure.h"
 #include "../driving/trip_places.h"
+#include "../../engine/world.h"
 #include "../../rt_math.h"
 
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
-
-namespace engine {
-class World;
-}
 
 namespace citysim {
 
-struct Agent;
-struct SimVehicle;
+struct CityCarRoams;
 using engine::Real;
 
 // HOW THE HAND-OVER PICKS PLACES (metres), named here because the rule set says how drivers drive, not where the lab
@@ -64,7 +60,7 @@ constexpr Real kBrakeLampDecel = 0.5;
 
 // WHAT THE HAND-OVER HAS DONE SO FAR.
 struct DrivingCounts {
-    uint32_t drivers = 0;          // agents whose cars the new model drives
+    uint32_t drivers = 0;          // cars that drive round for ever (CityCarRoams), the hand-over's own to send
     uint32_t placed = 0;           // of those, cars on the road now
     uint64_t tripsBegun = 0;
     uint64_t arrivals = 0;         // trips that ended at their destination (Parked events)
@@ -76,46 +72,35 @@ struct DrivingCounts {
 
 class DrivingHost {
 public:
-    // Whether `begin` has run: the new model drives some agents.
+    // Whether `begin` has run: the new driving runs here.
     bool active() const { return active_; }
-    // BACK TO NOTHING HANDED OVER (issue #284): no seats, no places, counts and costs at zero, a fresh measurements table.
-    // CitySim::build calls it, as a rebuild makes new agents and vehicles: seats kept from the last build would name
-    // agents that are not the new model's, and keep them from the old one. The host detaches the old measurements from
-    // its Driving first.
+    // BACK TO NOTHING HANDED OVER (issue #284): its cars that drive round for ever destroyed, no places, counts and
+    // costs at zero, a fresh measurements table. CitySim::build calls it, as a rebuild makes a new city: cars kept from
+    // the last build would be on the old one's driving. The host detaches the old measurements from its Driving first.
     void reset();
 
-    // HAND OVER: the new model drives the cars of `who` (agent indices, each a driver with a vehicle), each as the
-    // driving class of its vehicle's fleet slot (`classOfSlot`: per slot, an index into d.vehicleClasses(), or -1 for
-    // the first class). Each car is put down and sent on a trip; picks are hashed from `seed`. Measurements are
-    // attached to `d`. Returns one line saying what was done.
-    std::string begin(driving::Driving& d, std::vector<Agent>& agents, std::vector<SimVehicle>& vehicles,
-                      const std::vector<int>& who, const std::vector<int>& classOfSlot, uint32_t seed);
+    // THE DRIVING BEGINS on the car entities of `world` (city_car.h), which it has from now on. Its own cars, every
+    // entity with CityCarRoams (made by CitySim::startDrivingV2), are each put down and sent on a trip, in the order of
+    // their numbers; picks are hashed from `seed`. Measurements are attached to `d`. Returns one line saying what was
+    // done.
+    std::string begin(driving::Driving& d, engine::World& world, uint32_t seed);
 
-    // ONE TICK of the new model (timed, for the report), then the hand-over's own work: trips for cars that arrived,
-    // cars put down again from a road's end or put down at last, and every car's place copied into its agent.
-    void tick(driving::Driving& d, Real dt, std::vector<Agent>& agents, std::vector<SimVehicle>& vehicles);
+    // ONE TICK of the new model (timed, for the report), then the hand-over's own work: every car entity's
+    // PrevTransform set to where it is as the tick begins (carTickBegins); after the model's tick, trips for its own
+    // cars that arrived, its cars put down again from a road's end or put down at last, and every car entity the model
+    // has on its road (with a CityCarOnLane) given the model's pose in its Transform (the middle of its body and the
+    // way it points), the lane graph's height under it, its speed and its brake lamps.
+    void tick(driving::Driving& d, Real dt);
 
-    // Does the new model drive agent `agent`'s car?
-    bool drives(int agent) const {
-        return agent >= 0 && agent < static_cast<int>(seatOfAgent_.size()) && seatOfAgent_[static_cast<std::size_t>(agent)] >= 0;
-    }
-
-    // CARS THAT ARE ENTITIES (ADR-0444; city_car.h): a household's car of the agent brain is an entity of `world`, not
-    // a row of the sim's vehicles, and the host neither puts it down nor sends it anywhere (the brain does). From now,
-    // each tick: every such car's PrevTransform is set to where it is as the tick begins (carTickBegins); and after
-    // the model's tick, every one with a CityCarOnLane whose car the model has on its road has the model's pose copied
-    // into its Transform (the middle of its body and the way it points), with the lane graph's height under it, its
-    // speed and its brake lamps. Null: none.
-    void useCarEntities(engine::World* world) { carWorld_ = world; }
-    // THE EVENTS OF CARS THE HOST DID NOT SEAT ITSELF (the households' cars), since the last call, in the order the
-    // model gave them. The host drains the model's events each tick; these are the ones that are not its own to act on.
+    // THE EVENTS OF CARS THAT ARE NOT THE HOST'S OWN (the households' cars, a test bed's), since the last call, in the
+    // order the model gave them. The host drains the model's events each tick; these are the ones that are not its own
+    // to act on.
     std::vector<driving::Event> takeGuestEvents();
-    // The lane graph's height under the middle of the agent's car at the start of the last tick and at its end (for
-    // the drawing, which blends the two across the tick). False when the new model does not drive the agent's car.
-    bool roadHeight(int agent, Real& from, Real& to) const;
-    // Is the agent's car braking (its acceleration below -kBrakeLampDecel, or held at rest on its trip)?
-    bool braking(const driving::Driving& d, int agent) const;
-    // ...and the model's car `car`, whoever's it is.
+    // THE PLAYER TAKES ONE OF THE HOST'S OWN CARS (CityVehicleSystem's key; ADR-0453): its trip ended, it is off the
+    // model's road, and it no longer drives round for ever (no lane component, no CityCarRoams): the entity is the
+    // player's to make a Vehicle of, as a household's car is. False when `e` is not one of the host's own.
+    bool takenByPlayer(driving::Driving& d, engine::Entity e);
+    // Is the model's car `car` braking (its acceleration below -kBrakeLampDecel, or held at rest on its trip)?
     static bool braking(const driving::Driving& d, driving::CarId car);
 
     const DrivingCounts& counts() const { return counts_; }
@@ -135,40 +120,25 @@ public:
     const Cost& cost() const { return cost_; }
 
 private:
-    struct Seat {
-        int agent = -1;
-        driving::CarId car;
-        driving::PersonId person = 0;
-        uint32_t vehicleClass = 0;
-        uint32_t startDraws = 0;   // places picked to put the car down (trip_places' draw counts)
-        uint32_t tripDraws = 0;    // ... and destinations picked
-        bool placed = false;
-        Real roadYFrom = 0, roadY = 0;   // the lane graph's height under the body's middle: tick start, tick end
-    };
-
     // The places trips can use for vehicle class `cls` (found the first time they are asked for).
     const driving::TripPlaces& placesFor(const driving::Driving& d, uint32_t cls);
-    // Put the seat's car down (with `room`) and send it on a trip; false when no room was found this time.
-    bool putDown(driving::Driving& d, Seat& s, Real room);
-    // Send the seat's placed car on a trip; false when no destination was found this time.
-    bool sendOn(driving::Driving& d, Seat& s);
-    // Copy the seat's car's place into its agent and vehicle; `snap` for a car just put down (drawn there at once).
-    void mirror(const driving::Driving& d, Seat& s, std::vector<Agent>& agents, std::vector<SimVehicle>& vehicles,
-                bool snap);
-    // The seat of a car the host seated itself, or null.
-    const Seat* seatOf(int agent) const;
-    // Keeps `e` for takeGuestEvents when its car is not one the host seated itself; true when it did.
-    bool keptForGuest(const driving::Event& e);
-    // The model's pose of every car entity on its road, copied in (useCarEntities).
+    // THE HOST'S OWN CARS as they are now (every entity with CityCarRoams), by number, in the order of their numbers.
+    using OwnCars = std::vector<std::pair<uint32_t, engine::Entity>>;
+    OwnCars ownCars();
+    // Put the car `e` down (with `room`), giving it its lane component and its pose; false when no room was found this
+    // time.
+    bool putDown(driving::Driving& d, engine::Entity e, Real room);
+    // Send the car `e`, which the model has, on a trip; false when no destination was found this time.
+    bool sendOn(driving::Driving& d, engine::Entity e);
+    // Keeps `e` for takeGuestEvents when its car is not one of `own`; true when it did.
+    bool keptForGuest(const driving::Event& e, const OwnCars& own);
+    // The model's pose of every car entity on its road, copied in.
     void mirrorCarEntities(const driving::Driving& d);
 
-    engine::World* carWorld_ = nullptr;        // where the cars that are entities are (useCarEntities)
-    std::vector<driving::Event> guestEvents_;  // the events of cars the host did not seat, until taken
+    engine::World* carWorld_ = nullptr;        // where the car entities are (begin)
+    std::vector<driving::Event> guestEvents_;  // the events of cars not the host's own, until taken
     bool active_ = false;
     uint32_t seed_ = 0;
-    std::vector<Seat> seats_;          // in car order
-    std::vector<int> seatOfAgent_;     // per agent: its seat, or -1
-    std::vector<int> seatOfCar_;       // per car id (vehicle index): its seat, or -1
     std::vector<driving::TripPlaces> placesOfClass_;
     std::vector<uint8_t> placesFound_;
     std::unique_ptr<driving::Measurements> measurements_ = std::make_unique<driving::Measurements>();

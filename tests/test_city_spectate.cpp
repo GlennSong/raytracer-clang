@@ -93,6 +93,21 @@ TEST_CASE(next_spectatable_edge_cases) {
     CHECK(nextSpectatable(three, 99, +1) == 0);
 }
 
+// THE CARS WITH NOBODY IN THEM come after the agents in the cycle (ADR-0453): a city of cars alone (the traffic lab)
+// can be spectated, and the cycle runs agents, then cars, and wraps.
+TEST_CASE(next_spectate_target_goes_round_agents_then_cars) {
+    const std::vector<Agent> none;
+    CHECK(nextSpectateTarget(none, 0, -1, +1) == -1);
+    CHECK(nextSpectateTarget(none, 3, -1, +1) == 0);    // cars alone
+    CHECK(nextSpectateTarget(none, 3, 2, +1) == 0);     // ...wrapping
+    CHECK(nextSpectateTarget(none, 3, -1, -1) == 2);
+    const std::vector<Agent> two = { makeAgent(), makeAgent(Agent::Mode::Driver, /*rel=*/true) };
+    CHECK(nextSpectateTarget(two, 2, 0, +1) == 2);      // past the released agent, to the first car
+    CHECK(nextSpectateTarget(two, 2, 3, +1) == 0);      // the last car wraps to the first agent
+    CHECK(nextSpectateTarget(two, 2, 0, -1) == 3);      // back from the first agent to the last car
+    CHECK(nextSpectateTarget(two, 0, 0, +1) == nextSpectatable(two, 0, +1));
+}
+
 TEST_CASE(clamp_spectate_index_handles_stale_selection) {
     // Empty city clamps to "no selection".
     CHECK(clampSpectateIndex(0, 0) == -1);

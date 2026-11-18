@@ -203,24 +203,26 @@ CityVehicleSystem::Ambient CityVehicleSystem::nearestAmbient(World& world, Vec2 
 
 bool CityVehicleSystem::ambientPose(const Ambient& a, Vec3& pos, Vec2& heading) const {
     if (a.agent >= 0) return city_.agentWorldPose(a.agent, pos, heading);
-    const CityBrain* b = city_.sim().brain();
-    Vec2 at;
-    if (!b || !b->carPose(a.car, at, heading)) return false;
+    // a car entity, whoever's (a household's, or one that drives round for ever: ADR-0453), where its entity is
+    const Entity e = carEntityNumbered(*world_, static_cast<uint32_t>(a.car));
+    const engine::Transform* t = world_->get<engine::Transform>(e);
+    const CityCarLink* link = world_->get<CityCarLink>(e);
+    if (!t || !link || link->away) return false;
+    const Vec2 at = carPosition(*t);
+    heading = carHeading(*t);
     pos = Vec3(at.x, city_.surfaceY(-1, 0, at), at.y);
     return true;
 }
 
 int CityVehicleSystem::ambientSlot(const Ambient& a) const {
     if (a.agent >= 0) return city_.carSlotOf(a.agent);
-    const CityBrain* b = city_.sim().brain();
-    const CityCarBody* body = b ? world_->get<CityCarBody>(b->carEntity(a.car)) : nullptr;
+    const CityCarBody* body = world_->get<CityCarBody>(carEntityNumbered(*world_, static_cast<uint32_t>(a.car)));
     return body ? city_.carEntityVariant(body->slot, body->type) : -1;
 }
 
 bool CityVehicleSystem::ambientMoving(const Ambient& a) const {
     if (a.agent >= 0) return city_.sim().agents()[static_cast<std::size_t>(a.agent)].moving;
-    const CityBrain* b = city_.sim().brain();
-    const CityCarOnLane* lane = b ? world_->get<CityCarOnLane>(b->carEntity(a.car)) : nullptr;
+    const CityCarOnLane* lane = world_->get<CityCarOnLane>(carEntityNumbered(*world_, static_cast<uint32_t>(a.car)));
     return lane && lane->driven;
 }
 
@@ -235,8 +237,10 @@ Entity CityVehicleSystem::promote(engine::FrameContext& ctx, const Ambient& targ
     World& world = ctx.world;
     const CitySim& sim = city_.sim();
     CityBrain* households = city_.simMutable().brain();
-    const Entity householdCar = target.car >= 0 && households ? households->carEntity(target.car) : Entity{};
+    // (a car entity: a household's, which the brain knows, or one that drives round for ever, the hand-over's)
+    const Entity householdCar = target.car >= 0 ? carEntityNumbered(world, static_cast<uint32_t>(target.car)) : Entity{};
     if (target.car >= 0 && !householdCar.valid()) return Entity{};
+    const bool brainsCar = householdCar.valid() && households && households->carEntity(target.car) == householdCar;
     const int bestAgent = target.agent;
     // THE MODEL IT IS DRAWN AS (#115): every part below by the draw slot, not the vehicle index -- they differ
     // whenever the fleet has service vehicles, and the car in the player's hands turned into another model.
@@ -266,8 +270,11 @@ Entity CityVehicleSystem::promote(engine::FrameContext& ctx, const Ambient& targ
     Vec2 groundHeading;
     if (!ambientPose(target, groundPos, groundHeading)) return Entity{};
     // A HOUSEHOLD'S CAR: the brain first (it takes the car off the driving and its lane component off the entity, and
-    // puts its driver out); false when somebody else has it already
-    if (householdCar.valid() && !households->takenByPlayer(target.car)) return Entity{};
+    // puts its driver out); false when somebody else has it already. A CAR THAT DRIVES ROUND FOR EVER: the hand-over
+    // ends its trip and takes it off the driving (DrivingHost::takenByPlayer). Any other car entity is not offered.
+    if (householdCar.valid() && !(brainsCar ? households->takenByPlayer(target.car)
+                                            : city_.simMutable().playerTakesRoamingCar(householdCar)))
+        return Entity{};
     // what the old sim's driver does once the car is the player's: they get out onto the pavement and stand there (no
     // longer vanishing with the car)
     const auto releaseOld = [&]() {
@@ -275,7 +282,7 @@ Entity CityVehicleSystem::promote(engine::FrameContext& ctx, const Ambient& targ
     };
     const std::string what = bestAgent >= 0 ? "agent " + std::to_string(bestAgent) + "'s car (vehicle " +
                                                   std::to_string(sim.agents()[static_cast<std::size_t>(bestAgent)].vehicle) + ")"
-                                            : "household car " + std::to_string(target.car);
+                                            : (brainsCar ? "household car " : "car ") + std::to_string(target.car);
 
     // THE SAME CAR THE MENU DROPS (ADR-0355; Glenn: "Why is an SUV in the world different than mine? I can't open
     // the hatch"): the slot's drivable recipe in its paint -- panels on hinges, a body to dent, its damage tuning --

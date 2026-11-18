@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "brain_lab",
-  "_comment": "THE BRAIN LAB (ADR-0441; docs/agent-brain-design.md section 9): the traffic lab's roads and markers (assets/lanelab/planned/traffic_lab_lanelab.json, markers/traffic_lab.json) with SIX residents driven by the agent brain, in three households, and no other traffic (ADR-0443). Household `east`: ana and ben live at the marker `home` and share one car, in the kerb space nearest it. Household `trio`: cat, dan (who has a skateboard) and eve live at `west` and share one car. Household `solo`: fay lives at `shop`, has no car and has a scooter. Nobody is assigned a car: whoever reaches it first takes it, and it stays where its last driver left it. Each has a day (the markers they go round, a minute or so at each), and the days of a household start within seconds of each other, so its members contend for the car. `pedestrians` is 7: the six residents and one bystander for `possess walker`. Tell a resident where to be with `goto <who> <marker>`; `brain? <who>` says what they want, their plan and what they are doing; `brain follow` puts the camera on the next one; `brain trait <who> has_board on` gives one a skateboard; `brain day all off` stops every day. For background traffic raise `cars` (they take the role lab_driver and drive round for ever, as on traffic_lab).",
+  "_comment": "THE BRAIN LAB (ADR-0441; docs/agent-brain-design.md section 9): the traffic lab's roads and markers (assets/lanelab/planned/traffic_lab_lanelab.json, markers/traffic_lab.json) with SIX residents driven by the agent brain, in three households, and no other traffic (ADR-0443). Household `east`: ana and ben live at the marker `home` and share one car, in the kerb space nearest it. Household `trio`: cat, dan (who has a skateboard) and eve live at `west` and share one car. Household `solo`: fay lives at `shop`, has no car and has a scooter. Nobody is assigned a car: whoever reaches it first takes it, and it stays where its last driver left it. Each has a day (the markers they go round, a minute or so at each), and the days of a household start within seconds of each other, so its members contend for the car. `pedestrians` is 7: the six residents and one bystander for `possess walker`. Tell a resident where to be with `goto <who> <marker>`; `brain? <who>` says what they want, their plan and what they are doing; `brain follow` puts the camera on the next one; `brain trait <who> has_board on` gives one a skateboard; `brain day all off` stops every day. For background traffic raise `cars` (cars with nobody in them that drive round for ever, as on traffic_lab: ADR-0453).",
   "entities": [
     {
       "id": 1,
@@ -74,8 +74,6 @@
     "tiered": false,
     "debugWidgets": false,
     "perceptionReliability": 1.0,
-    "driverRole": "lab_driver",
-    "driverRoleShare": 1.0,
     "dormancy": false,
     "realLanes": true,
     "driving": "v2",

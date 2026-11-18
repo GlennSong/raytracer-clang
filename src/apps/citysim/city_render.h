@@ -273,11 +273,12 @@ public:
     // in that body frame: seat hip points, door floor points, floor height.
     // False when the agent is not a see-into vehicle.
     bool busFrame(int agent, engine::Mat4* pose) const;
-    // THE TYRES AGAINST THE ROAD (the new model's drawing check, #255): agent `agent`'s car as it would be drawn now, and
-    // for each of its wheels the height of the wheel's lowest point above the drawn road surface under it (metres; +
-    // floats, - sinks), wheel by wheel; and, when asked, the pose it is drawn with and each wheel's lowest point. False
-    // when the agent is not a driver drawn with wheels.
-    bool wheelGaps(int agent, std::vector<Real>& gaps, engine::Mat4* pose = nullptr,
+    // THE TYRES AGAINST THE ROAD (the new model's drawing check, #255): the car entity `car` (city_car.h) as it would be
+    // drawn now (without the tilt filter's memory: a pure read), and for each of its wheels the height of the wheel's
+    // lowest point above the drawn road surface under it (metres; + floats, - sinks), wheel by wheel; and, when asked,
+    // the pose it is drawn with and each wheel's lowest point. False when the driving does not have the car on its road
+    // (no lane component) or its model has no wheels.
+    bool wheelGaps(engine::World& world, engine::Entity car, std::vector<Real>& gaps, engine::Mat4* pose = nullptr,
                    std::vector<engine::Vec3>* bottoms = nullptr) const;
     // A CAR'S SEATS (Glenn, 2026-10-02: "a way to detect which part of the car you get into so you can be a
     // passenger (backseat, frontseat passenger) or the driver ... we'd have to be pointing at the seat that we
@@ -800,10 +801,15 @@ private:
     template <typename Surface>
     bool bodyOnWheels(int slot, bool lineWheels, Real x, Real z, engine::Vec2 heading, AgentDrawCache* cache,
                       const Surface& surface, engine::Mat4& out) const;
-    // THE HOUSEHOLDS' CARS, WHICH ARE ENTITIES (ADR-0444; city_car.h), into the car groups beside the sim's own: each
-    // car's body instance, and the key it is listed under in carAgentIds_ (its driver's agent index while somebody
-    // sits at its wheel, else kEntityCarKey(id)). The lamps for them are syncCarLamps's.
+    // THE NEW DRIVING'S CARS, WHICH ARE ENTITIES (ADR-0444, ADR-0453; city_car.h), into the car groups beside the sim's
+    // own: each car's body instance, and the key it is listed under in carAgentIds_ (its driver's agent index while
+    // somebody sits at its wheel, else kEntityCarKey(id)). The lamps for them are syncCarLamps's.
     void syncCarEntities(engine::World& world, std::vector<engine::InstanceGroup*>& cars);
+    // ...where one is drawn now, as `variant` (city_render.cpp); `cache`: the tilt filter's memory (null: a pure read);
+    // `roadRef`: the lane graph height it is stood by (0 off the road).
+    engine::Mat4 carEntityPose(const CityCarOnLane* lane, const engine::Transform& t, const engine::Transform& prev,
+                               int variant, const std::vector<engine::Vec3>& he, AgentDrawCache* cache,
+                               Real* roadRef) const;
     // The variant a car of fleet slot `slot` and body `type` is drawn as when nobody is driving it: the slot, and the
     // bus, the fire engine or the cab its kind is drawn as. Parked rows and parked household cars alike.
     int parkedVariant(int slot, VehicleType type) const;

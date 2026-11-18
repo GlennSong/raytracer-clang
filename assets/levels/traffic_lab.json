@@ -74,8 +74,6 @@
     "tiered": false,
     "debugWidgets": false,
     "perceptionReliability": 1.0,
-    "driverRole": "lab_driver",
-    "driverRoleShare": 1.0,
     "dormancy": false,
     "realLanes": true,
     "driving": "v2",

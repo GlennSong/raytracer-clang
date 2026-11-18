@@ -1105,9 +1105,11 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
     im.ecs = &world;
     {
         // the cars of a brain made before (the city built again on the same world) go: their numbers and their people
-        // are the old city's
+        // are the old city's (the cars that drive round for ever are the hand-over's, made for this city already)
         std::vector<engine::Entity> old;
-        world.each<CityCarBody>([&](engine::Entity e, CityCarBody&) { old.push_back(e); });
+        world.each<CityCarBody>([&](engine::Entity e, CityCarBody&) {
+            if (!world.has<CityCarRoams>(e)) old.push_back(e);
+        });
         for (const engine::Entity e : old) world.destroy(e);
     }
 
@@ -1250,10 +1252,10 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
             const std::string at = "household \"" + hs.name + "\": a car near \"" + cs.near + "\"";
             const int marker = markerNamed(cs.near);
             if (marker < 0) return refuse(at + ": that is not one of the level's markers");
-            // THE CAR IS ONE ENTITY (city_car.h), numbered on from the sim's last vehicle row, and drawn as the fleet
+            // THE CAR IS ONE ENTITY (city_car.h), numbered on from the last car number in use, and drawn as the fleet
             // slot the sim would deal a vehicle of that number (CitySim::ambientSlotFor)
             Impl::CarRec c;
-            c.id = static_cast<uint32_t>(sim.vehicles_.size() + im.cars.size());
+            c.id = sim.nextCarNumber(world);
             c.household = index;
             const int slot = sim.ambientSlotFor(static_cast<int>(c.id));
             const VehicleBody& body = sim.fleetBody(slot);
@@ -1299,8 +1301,8 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
         im.households.push_back(h);
     }
     im.skill = std::make_unique<brain::DrivingSkill>(*im.d, *im.fronts, im.cars.empty() ? 0u : im.bodyOf(im.cars.front()).vehicleClass);
-    // the hand-over copies the driving's pose into each car entity while the driving has it, and begins each tick
-    sim.drivingHost_.useCarEntities(&world);
+    // (the hand-over copies the driving's pose into each car entity while the driving has it: it has the world since
+    // the driving began, startDrivingV2)
     if (!im.skill->bindEvents(im.table, &err)) return refuse(err);
     im.walk = std::make_unique<Impl::LabWalk>(im);
     im.drive = std::make_unique<Impl::LabDrive>(im);

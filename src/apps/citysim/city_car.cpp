@@ -26,6 +26,18 @@ void carTickBegins(engine::World& world) {
         });
 }
 
+bool carNowhere(engine::World& world, engine::Entity e) {
+    return world.has<CityCarRoams>(e) && !world.has<CityCarOnLane>(e) && !world.has<engine::Vehicle>(e);
+}
+
+engine::Entity carEntityNumbered(engine::World& world, uint32_t id) {
+    engine::Entity found;
+    world.each<CityCarBody>([&](engine::Entity e, CityCarBody& body) {
+        if (body.id == id) found = e;
+    });
+    return found;
+}
+
 void carsNear(const CitySim& sim, engine::World& world, Vec2 p, Real radius, std::vector<CarSeen>& out) {
     const Real r2 = radius * radius;
     const auto within = [&](Vec2 at) { return radius < 0 || (at - p).lengthSquared() <= r2; };
@@ -49,7 +61,7 @@ void carsNear(const CitySim& sim, engine::World& world, Vec2 p, Real radius, std
     }
     world.each<CityCarBody, CityCarLink, engine::Transform>(
         [&](engine::Entity e, CityCarBody& body, CityCarLink& link, engine::Transform& t) {
-            if (link.away || world.has<engine::Vehicle>(e)) return;
+            if (link.away || world.has<engine::Vehicle>(e) || carNowhere(world, e)) return;
             const Vec2 at = carPosition(t);
             if (!within(at)) return;
             CarSeen c;

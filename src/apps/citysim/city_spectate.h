@@ -3,6 +3,7 @@
 
 #include "../../engine/system.h"
 #include "../../engine/camera/follow_camera_controller.h"
+#include "../../engine/world.h"
 #include "city_sim.h"   // Agent
 
 #include <vector>
@@ -35,6 +36,13 @@ bool isSpectatable(const Agent& agent);
 // is spectatable at all. If `current` is the only spectatable agent it is
 // returned (cycling is a no-op rather than losing the target).
 int nextSpectatable(const std::vector<Agent>& agents, int current, int dir);
+// ...and over the agents then `cars` cars after them (indices agents.size() .. + cars - 1, every one spectatable): the
+// cycle K and [ ] go round when the city has cars with nobody in them to follow (ADR-0453).
+int nextSpectateTarget(const std::vector<Agent>& agents, std::size_t cars, int current, int dir);
+
+// A car followed as itself: one with nobody in it that drives round for ever (city_car.h CityCarRoams), while it is
+// somewhere (on the road, or a near physics car) and not the player's. A car with a driver is followed through them.
+bool isSpectatableCar(engine::World& world, engine::Entity car);
 
 // Clamp a possibly-stale selection to a valid index for a vector of `count`
 // agents: -1 (no selection) when the city is empty, the last index when the
@@ -59,6 +67,7 @@ public:
     // Inspection (tests / debug): the current spectate state.
     bool spectating() const { return spectating_; }
     int followedAgent() const { return current_; }
+    engine::Entity followedCar() const { return car_; }   // a car followed as itself (isSpectatableCar), or none
     // Follow this agent from the next frame, as if K and [ ] had picked it (the trip lab: a person sent somewhere is
     // followed there) but leaving the debug widgets as they are, and stay on it while it has no body to show
     // (indoors, between car and pavement) rather than moving on to someone else. K, [ or ] let go of it as before.
@@ -73,11 +82,17 @@ private:
     void configureFollowFor(Agent::Mode mode);
     // Stop spectating and hand the view back (restores the prior widget state).
     void stopSpectating(engine::FrameContext& ctx);
+    // The cars followed as themselves now, in the order of their numbers.
+    std::vector<engine::Entity> spectatableCars(engine::World& world) const;
+    // Move to the next (`dir` +1) or previous (-1) target of the cycle (nextSpectateTarget), framed for it; false
+    // when there is none.
+    bool advance(engine::World& world, int dir);
 
     CityRenderSystem& render_;
     engine::FollowCameraController follow_;
     bool spectating_ = false;
     int current_ = -1;             // index into sim().agents(), or -1
+    engine::Entity car_;           // ...or the car followed as itself (current_ is then -1)
     bool widgetsWereOn_ = false;   // debug-widget state captured on spectate-on
     // The mode the chase is framed for: a followed walker who gets into a car (or out of one) is re-framed.
     Agent::Mode framedFor_ = Agent::Mode::Pedestrian;

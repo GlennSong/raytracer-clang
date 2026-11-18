@@ -4,8 +4,15 @@ Start here before touching `src/apps/driving/` or the city sim's driving side (`
 `city_near.*`, `city_car.*`, `city_crowd.*`, `city_brain.*`). This page says where things are, who reads what and the
 rules that apply. The *why* is in `docs/driving-model-design.md`, `docs/two-drivers-meeting-design.md` and the ADRs it
 names (ADR-0398 to ADR-0416 for the driving library, ADR-0440 to ADR-0452 for the brain, the near tier, things in the
-way and crosswalks). The roads it drives on are described in `docs/roads-orientation.md`. Written 2026-11-17, after
-ADR-0452. Anything marked *(unsure)* was not checked in the code.
+way and crosswalks, ADR-0453 for one kind of car). The roads it drives on are described in `docs/roads-orientation.md`.
+Written 2026-11-17, after ADR-0452; section 3 and 4 brought up to ADR-0453 on 2026-11-18. Anything marked *(unsure)* was
+not checked in the code.
+
+**One car, one representation (ADR-0453).** Every car the new driving moves is a car entity (`city_car.h`): a
+household's (the brain sends it), one that drives round for ever (`CityCarRoams`: the hand-over sends it; the traffic
+lab's 300, or `cars` on any v2 level), or a test bed's (`CityNearSystem::labCar`). No sim agent in `Mode::Driver` and
+no `SimVehicle` row stands for a car of the new driving; those are the old driving's (v1) only. Look cars up through
+the entities (`World::each<CityCarBody, ...>`, `carsNear`), never through `CitySim::agents()`.
 
 Words: a **path** is one curve a car can be on, a **lane** (along a street) or a **connector** (through a junction).
 The **lane level** is the table of paths the road model builds (`RoadModel::laneLevel`). A **crossing point** is a
@@ -60,8 +67,8 @@ wishes with.
 
 | File | What it holds |
 |---|---|
-| `citysim/city_driving.h/.cpp` | `DrivingHost`: hands the sim's drivers to the driving, puts cars down, sends them on trips, copies each car's pose into its agent or entity, answers `driving?`. |
-| `citysim/city_car.h/.cpp` | A household's car is one ECS entity (ADR-0444): pose, body, household, driver; a lane component while the driving has it. |
+| `citysim/city_driving.h/.cpp` | `DrivingHost`: runs the driving's tick; puts its own cars (those that drive round for ever) down and sends them on trip after trip; copies every car entity's pose from the driving; answers `driving?`. |
+| `citysim/city_car.h/.cpp` | Every car the new driving moves is one ECS entity (ADR-0444, ADR-0453): pose, body, household, driver; a lane component while the driving has it; `CityCarRoams` on a car with nobody in it that drives round for ever (the traffic lab's); `carsNear`. |
 | `citysim/city_near.h/.cpp` | The near tier (ADR-0447..0450): the cars nearest the player as Jolt cars carrying out their drivers' intent, switched on one entity; physics sweeps answer "what is in my way" for them (ADR-0451). |
 | `citysim/city_crowd.h/.cpp` | A crowd of residents made from the road model and `crowd.lua` (ADR-0446): places beside streets, households, cars, days. |
 | `citysim/city_brain.h/.cpp` | The residents with the agent brain: what they want, their trips, carried out with the sim's walking and the new driving. |
@@ -100,3 +107,8 @@ Build with `cmake --build build-viewer --target driving_tests level_tests physic
   old driving (v1); they are slated to go with it.
 - A walk round a junction that crosses two arms (a far turn on foot) is judged one crosswalk at a time, waiting at the
   corner between.
+- Since ADR-0453 the traffic lab's cars are entities with nobody in them: `spectate` follows them after the agents,
+  `CitySim::census(world)` counts them, and the key takes one (`carEntityNumbered`, `DrivingHost::takenByPlayer`). The
+  near test bed's cars drive as one person number (`kLabPerson`) where the roaming cars drive as their own numbers.
+- traffic_lab has no near tier: switched on (brain_crowd's `citysim.near`), no two Jolt cars touch, but a few near cars
+  leave their carriageway on some streets and stand off their lane for minutes. How it was measured is in ADR-0453.

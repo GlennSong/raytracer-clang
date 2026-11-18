@@ -792,8 +792,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         }
     }
 #endif
+    // ON THE NEW DRIVING (v2) the level's cars are the driving's own: entities that drive round for ever, made when it
+    // begins (startDrivingV2; ADR-0453). The old sim makes no drivers of them.
+    const int drivingCars = params_.driving == "v2" ? carCount : 0;
     { const auto tT0 = std::chrono::steady_clock::now();
-    sim_.build(nav_, carCount, pedCount, params_.seed);
+    sim_.build(nav_, carCount - drivingCars, pedCount, params_.seed);
     if (haveLaneMap) sim_.setLaneMap(std::move(laneMap));   // (matched above, before the lane counts were read)
     {
         bool real = params_.realLanes;
@@ -1029,14 +1032,15 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         LOG_INFO << "[citysim] " << n << " drivers take the role " << params_.driverRole;
         if (n == 0) LOG_WARN << "[citysim] driverRole " << params_.driverRole << ": unknown role, or no drivers";
     }
-    // THE NEW MODEL TAKES THOSE DRIVERS (v2 with a rule set; #255): their cars are put down on the lane graph and driven
-    // by the rules. A rule set that is refused leaves the level loading with the new model off and the old one driving.
+    // THE NEW MODEL BEGINS (v2 with a rule set; #255, ADR-0453): the level's cars are made, entities that drive round
+    // for ever, put down on the lane graph and driven by the rules. A rule set that is refused leaves the level loading
+    // with the new model off and no traffic.
     if (sim_.drivingV2() && !params_.drivingRules.empty()) {
         std::string report;
-        if (sim_.startDrivingV2(params_.drivingRules, params_.driverRole, drivingClassOfSlot, &report)) {
+        if (sim_.startDrivingV2(world, params_.drivingRules, drivingCars, drivingClassOfSlot, &report)) {
             LOG_INFO << "[citysim] driving v2: " << report << ", by the rule set " << params_.drivingRules;
         } else {
-            LOG_WARN << "[citysim] driving v2 is OFF on this level, the old model drives every car: " << report;
+            LOG_WARN << "[citysim] driving v2 is OFF on this level, so it has no traffic: " << report;
             sim_.useDrivingV2(false);
         }
     } else if (sim_.drivingV2()) {
@@ -2475,27 +2479,13 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
     // FOUR WHEELS ON THE ROAD (bodyOnWheels): one rule for decks, ramps, streets and hills, on the deck the car is
     // on, or the road and ground. RT_FOUR_WHEELS=0: the older centre-sample placement below, for A/B (wheel_lab)
     static const bool fourWheels = [] { const char* e = std::getenv("RT_FOUR_WHEELS"); return !(e && e[0] == '0'); }();
-    // THE NEW MODEL'S CARS (#255) stand on their own road: the drawn deck nearest the lane graph's height under the
-    // car (blended across the tick like the position), so a car on a bridge is drawn on the bridge and never on the
-    // street below it; the four-wheel fit below then puts its tyres on that surface. Its pose comes from the model
-    // (the agent's place, copied from driving::carPose after each tick), so an unindexed caller fits it too.
-    const std::vector<Agent>& everyone = sim_.agents();
-    const int self = agentIdx >= 0 ? agentIdx
-                     : (&a >= everyone.data() && &a < everyone.data() + everyone.size()) ? static_cast<int>(&a - everyone.data())
-                                                                                          : -1;
-    Real v2From = 0, v2To = 0;
-    const bool v2 = car && self >= 0 && sim_.drivingHost().roadHeight(self, v2From, v2To);
-    const Real v2Ref = v2From + (v2To - v2From) * tickT;
+    // (The new driving's cars are entities, drawn by syncCarEntities on the deck nearest their lane height: ADR-0453.)
     if (car && fourWheels) {
-        const int slot = agentIdx >= 0 ? drawSlotFor(agentIdx) : v2 ? drawSlotFor(self) : -1;
-        // (the new model's two-wheelers are fitted too: their two wheels in a line give the pitch, and they stay
-        // upright; the old model's keep its older placement below)
+        const int slot = agentIdx >= 0 ? drawSlotFor(agentIdx) : -1;
+        // (the old model's two-wheelers keep its older placement below)
         Mat4 m;
-        if (bodyOnWheels(slot, v2, x, z, drawHeading, agentIdx >= 0 ? &drawCache(agentIdx) : nullptr,
-                         [&](Real px, Real pz, Real along) {
-                             return v2 ? deckSurfaceNear(px, pz, v2Ref) : carSurfaceAt(a, px, pz, along);
-                         },
-                         m))
+        if (bodyOnWheels(slot, false, x, z, drawHeading, agentIdx >= 0 ? &drawCache(agentIdx) : nullptr,
+                         [&](Real px, Real pz, Real along) { return carSurfaceAt(a, px, pz, along); }, m))
             return m;
     }
     // Cars sit NORMAL to the road plane (device: a world-upright box on a
@@ -2838,15 +2828,7 @@ void CityRenderSystem::syncCarLamps(World& world) {
         int turnDir = carTurnDir(a);
         if (std::fabs(Real(a.lane) - a.laneF) > 0.12)
             turnDir = (Real(a.lane) > a.laneF) ? -1 : 1;
-        // THE NEW MODEL'S CARS (#255): the brake lamps are its own braking (its acceleration, or held at rest); no
-        // indicators until its rules give them (task C8)
-        const bool v2 = sim_.drivenByV2(static_cast<int>(ai));
-        const CarLamps lamps =
-            v2 ? engine::vehicleLampState(sim_.drivingHost().braking(*sim_.drivingV2(), static_cast<int>(ai))
-                                              ? engine::LampMotion::Holding
-                                              : engine::LampMotion::Rolling,
-                                          a.speed, prev, dark, 0)
-               : carLampStateSolar(a.state, a.speed, prev, dark, turnDir);
+        const CarLamps lamps = carLampStateSolar(a.state, a.speed, prev, dark, turnDir);
         const uint32_t m = engine::lampMask(lamps, blinkOn);
         if (m) masks[static_cast<int>(ai)] = m;
         if (lamps.head || lamps.brake) {
@@ -2855,9 +2837,10 @@ void CityRenderSystem::syncCarLamps(World& world) {
             lampLights(body, v, lamps, 0x80000000u | static_cast<uint32_t>(ai));   // (the player's cars count up from 1)
         }
     }
-    // THE HOUSEHOLDS' CARS, which are entities (ADR-0444): lit the same way, from the driving's own braking, while on a
-    // trip (a car at rest is dark: standing in its space, or left in a lane)
-    if (drawCars && sim_.brain() && sim_.drivingV2()) {
+    // THE NEW DRIVING'S CARS, which are entities (ADR-0444, ADR-0453): lit from the driving's own braking (its
+    // acceleration, or held at rest; no indicators until its rules give them, task C8), while on a trip (a car at rest
+    // is dark: standing in its space, or left in a lane)
+    if (drawCars && sim_.drivingV2()) {
         world.each<CityCarBody, CityCarLink, CityCarOnLane>([&](Entity, CityCarBody& body, CityCarLink& link, CityCarOnLane& lane) {
             AgentDrawCache& dc = drawCache(entityCarKey(body.id));
             const Real prev = dc.fresh ? lane.speed : dc.prevSpeed;
@@ -3137,43 +3120,53 @@ Mat4 CityRenderSystem::parkedCarPose(int variant, Vec2 pos, Vec2 heading, Real p
     return Mat4::trs(Vec3(pos.x, y, pos.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1));
 }
 
-// THE HOUSEHOLDS' CARS ARE ENTITIES (ADR-0444; city_car.h), drawn by the same means as the sim's own cars, into the
-// same instanced groups: a car on the road on its wheels on the deck under it (bodyOnWheels, as a driver of the new
-// driving is drawn), one off it standing level on the ground (parkedCarPose, as a parked row is). Drawn between where
-// it was as the sim's tick began (PrevTransform) and where it is, as an agent's car is (agentPose). Its instance's name
-// is its number, so the renderer draws it between bakes whether it is driven or parked; its key in carAgentIds_ is its
-// driver while somebody sits at its wheel (the driver is drawn in the seat, the glass and cabin swapped near the
-// player, as for any car with a driver), else entityCarKey.
-void CityRenderSystem::syncCarEntities(World& world, std::vector<InstanceGroup*>& cars) {
-    carEntityDrawn_.clear();
-    if (cars.empty() || !sim_.brain()) return;
-    const std::vector<Vec3> he = carGroupHalfExtents();
+// WHERE A CAR ENTITY IS DRAWN NOW (syncCarEntities, carEntityWheelGaps): between where it was as the sim's tick began
+// (PrevTransform) and where it is, as an agent's car is (agentPose; a placement snaps, never slides); while the
+// driving has it, on its wheels on the deck nearest its lane graph height (bodyOnWheels: a car on a bridge is drawn
+// on the bridge, never on the street below), else level on the ground (parkedCarPose).
+Mat4 CityRenderSystem::carEntityPose(const CityCarOnLane* lane, const engine::Transform& t, const engine::Transform& prev,
+                                     int variant, const std::vector<Vec3>& he, AgentDrawCache* cache,
+                                     Real* roadRef) const {
     const Real period = sim_.tickPeriod();
     const Real tickT = period > 0.0 ? std::clamp(sim_.secondsSinceTick() / period, Real(0), Real(1)) : Real(1);
+    Vec2 pos = carPosition(t), heading = carHeading(t);
+    const Vec2 from = carPosition(prev), d = pos - from;
+    if (d.lengthSquared() < 8.0 * 8.0) {   // (a placement snaps, never slides)
+        const Real yawFrom = std::atan2(carHeading(prev).x, carHeading(prev).y);
+        Real dy = std::atan2(heading.x, heading.y) - yawFrom;
+        while (dy > engine::PI) dy -= 2 * engine::PI;
+        while (dy < -engine::PI) dy += 2 * engine::PI;
+        pos = from + d * tickT;
+        heading = Vec2(std::sin(yawFrom + dy * tickT), std::cos(yawFrom + dy * tickT));
+    }
+    const Real ref = lane ? lane->roadYFrom + (lane->roadY - lane->roadYFrom) * tickT : Real(0);
+    if (roadRef) *roadRef = ref;
+    Mat4 m;
+    if (!lane || !bodyOnWheels(variant, true, pos.x, pos.y, heading, cache,
+                               [&](Real px, Real pz, Real) { return deckSurfaceNear(px, pz, ref); }, m))
+        m = parkedCarPose(variant, pos, heading, -1e30, he);
+    return m;
+}
+
+// THE NEW DRIVING'S CARS ARE ENTITIES (ADR-0444, ADR-0453; city_car.h), drawn by the same means as the sim's own cars,
+// into the same instanced groups, where carEntityPose puts them. Its instance's name is its number, so the renderer
+// draws it between bakes whether it is driven or parked; its key in carAgentIds_ is its driver while somebody sits at
+// its wheel (the driver is drawn in the seat, the glass and cabin swapped near the player, as for any car with a
+// driver), else entityCarKey.
+void CityRenderSystem::syncCarEntities(World& world, std::vector<InstanceGroup*>& cars) {
+    carEntityDrawn_.clear();
+    if (cars.empty()) return;
+    const std::vector<Vec3> he = carGroupHalfExtents();
     world.each<CityCarBody, CityCarLink, engine::Transform, engine::PrevTransform>(
         [&](Entity e, CityCarBody& body, CityCarLink& link, engine::Transform& t, engine::PrevTransform& prev) {
             // the player has it as a car of their own: with the key, the entity has a Vehicle, which VehicleSystem draws
-            // (ADR-0445: one drawing)
-            if (link.away || world.has<engine::Vehicle>(e)) return;
+            // (ADR-0445: one drawing); a car that drives round for ever, not on the road, is nowhere (carNowhere)
+            if (link.away || world.has<engine::Vehicle>(e) || carNowhere(world, e)) return;
             const int v = parkedVariant(body.slot, body.type);
             if (v < 0 || v >= static_cast<int>(cars.size()) || !cars[static_cast<std::size_t>(v)]) return;
-            Vec2 pos = carPosition(t), heading = carHeading(t);
-            const Vec2 from = carPosition(prev.value), d = pos - from;
-            if (d.lengthSquared() < 8.0 * 8.0) {   // (a placement snaps, never slides)
-                const Real yawFrom = std::atan2(carHeading(prev.value).x, carHeading(prev.value).y);
-                Real dy = std::atan2(heading.x, heading.y) - yawFrom;
-                while (dy > engine::PI) dy -= 2 * engine::PI;
-                while (dy < -engine::PI) dy += 2 * engine::PI;
-                pos = from + d * tickT;
-                heading = Vec2(std::sin(yawFrom + dy * tickT), std::cos(yawFrom + dy * tickT));
-            }
             const int key = entityCarDrawKey(body, link);
-            Mat4 m;
-            const CityCarOnLane* lane = world.get<CityCarOnLane>(e);
-            const Real ref = lane ? lane->roadYFrom + (lane->roadY - lane->roadYFrom) * tickT : Real(0);
-            if (!lane || !bodyOnWheels(v, true, pos.x, pos.y, heading, &drawCache(entityCarKey(body.id)),
-                                       [&](Real px, Real pz, Real) { return deckSurfaceNear(px, pz, ref); }, m))
-                m = parkedCarPose(v, pos, heading, -1e30, he);
+            const Mat4 m = carEntityPose(world.get<CityCarOnLane>(e), t, prev.value, v, he,
+                                         &drawCache(entityCarKey(body.id)), nullptr);
             cars[static_cast<std::size_t>(v)]->push(m, (uint64_t(1) << 61) | (static_cast<uint64_t>(body.id) << 8));
             carAgentIds_[static_cast<std::size_t>(v)].push_back(key);
             carEntityDrawn_[body.id] = DrawnCar{m, v};
@@ -5538,24 +5531,24 @@ bool CityRenderSystem::busFrame(int agent, Mat4* pose) const {
     return true;
 }
 
-bool CityRenderSystem::wheelGaps(int agent, std::vector<Real>& gaps, Mat4* pose, std::vector<Vec3>* bottoms) const {
+bool CityRenderSystem::wheelGaps(World& world, Entity car, std::vector<Real>& gaps, Mat4* pose,
+                                 std::vector<Vec3>* bottoms) const {
     gaps.clear();
     if (bottoms) bottoms->clear();
-    if (agent < 0 || agent >= static_cast<int>(sim_.agents().size())) return false;
-    const Agent& a = sim_.agents()[static_cast<std::size_t>(agent)];
-    const int slot = drawSlotFor(agent);
-    if (a.mode != Agent::Mode::Driver || slot < 0 || slot >= static_cast<int>(carWheels_.size())) return false;
-    // The pose as drawn (without the tilt filter's memory: a pure read), and the surface the drawing stands it on: the
-    // new model's car on the deck nearest its lane graph height, an old-model car as carSurfaceAt reads it.
-    const Mat4 m = agentPose(a);
+    const CityCarBody* body = world.get<CityCarBody>(car);
+    const CityCarOnLane* lane = world.get<CityCarOnLane>(car);
+    const engine::Transform* t = world.get<engine::Transform>(car);
+    const engine::PrevTransform* prev = world.get<engine::PrevTransform>(car);
+    if (!body || !lane || !t || !prev) return false;
+    const int slot = parkedVariant(body->slot, body->type);
+    if (slot < 0 || slot >= static_cast<int>(carWheels_.size())) return false;
+    // The pose as drawn, and the surface the drawing stands it on: the deck nearest its lane graph height.
+    Real ref = 0;
+    const Mat4 m = carEntityPose(lane, *t, prev->value, slot, carGroupHalfExtents(), nullptr, &ref);
     if (pose) *pose = m;
-    const Real period = sim_.tickPeriod();
-    const Real t = period > 0.0 ? std::clamp(sim_.secondsSinceTick() / period, Real(0), Real(1)) : Real(1);
-    Real from = 0, to = 0;
-    const bool v2 = sim_.drivingHost().roadHeight(agent, from, to);
     for (const CarWheel& w : carWheels_[static_cast<std::size_t>(slot)]) {
         const Vec3 c = m.transformPoint(Vec3(w.pos.x, w.pos.y - w.radius, w.pos.z));
-        const Real road = v2 ? deckSurfaceNear(c.x, c.z, from + (to - from) * t) : carSurfaceAt(a, c.x, c.z, w.pos.z);
+        const Real road = deckSurfaceNear(c.x, c.z, ref);
         gaps.push_back(c.y - road);
         if (bottoms) bottoms->push_back(c);
     }

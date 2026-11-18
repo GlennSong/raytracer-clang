@@ -1440,8 +1440,7 @@ public:
     void setUseRealLanes(bool on) { useRealLanes_ = on; }
     bool useRealLanes() const { return useRealLanes_; }
     // THE NEW DRIVING MODEL (#234; citysim.driving = "v2"): on, the sim holds a driving::Driving and ticks it once per
-    // sim tick. Until startDrivingV2 hands it cars it ticks an empty world and the old model drives every car. Off
-    // drops it.
+    // sim tick. Until startDrivingV2 begins it, it ticks an empty world. Off drops it.
     void useDrivingV2(bool on) { if (on) drivingV2_.emplace(); else drivingV2_.reset(); }
     // ...and the kinds of vehicle it knows (#248: one class per fleet class, read with the fleet). No-op under v1.
     void setDrivingVehicleClasses(driving::VehicleClasses c) { if (drivingV2_) drivingV2_->setVehicleClasses(std::move(c)); }
@@ -1458,19 +1457,23 @@ public:
     // WRITTEN BEFORE EACH TICK OF THE NEW MODEL (ADR-0447): where each car physics carries really is (the near tier's
     // Driving::carriedAt). Empty: nothing. One hook; a second setter replaces the first.
     void setBeforeDriving(std::function<void(driving::Driving&)> hook) { beforeDriving_ = std::move(hook); }
-    // THE NEW MODEL TAKES THE DRIVERS (#255; city_driving.h): reads the rule set `rulesFile` and gives it to the model,
-    // then hands it the cars of every driver of role `role` (the level's driverRole), each as the driving class of its
-    // fleet slot (`classOfSlot`, as DrivingHost::begin). Those drivers leave the old model for good: their old trip and
-    // bays are dropped, and from then on the old model neither drives them, nor steers or crash-checks them, nor counts
-    // them in its lanes and junctions (drivenByV2). False, with the reason in `report`, when there is no new model or
-    // the rule set is refused; then nothing changes and the old model drives every car. On success `report` says what
-    // was handed over. Call once, after build and the roles.
-    bool startDrivingV2(const std::string& rulesFile, const std::string& role, const std::vector<int>& classOfSlot,
+    // THE NEW MODEL BEGINS (#255, ADR-0453; city_driving.h): reads the rule set `rulesFile` and gives it to the model,
+    // then makes `cars` cars that drive round for ever (the level's citysim.cars; city_car.h CityCarRoams), entities of
+    // `world` with nobody in them, each numbered by nextCarNumber, drawn as the fleet slot the sim deals that number
+    // (ambientSlotFor) and driven as that slot's driving class (`classOfSlot`: per slot, an index into the model's
+    // vehicle classes, or -1 for the first); and the hand-over puts them down and sends them on trips from then on.
+    // False, with the reason in `report`, when there is no new model or the rule set is refused; then nothing is made.
+    // On success `report` says what was done. Call once, after build.
+    bool startDrivingV2(engine::World& world, const std::string& rulesFile, int cars, const std::vector<int>& classOfSlot,
                         std::string* report);
-    // Does the new model drive this agent's car? (Always false on a v1 level.)
-    bool drivenByV2(int agent) const { return drivingHost_.drives(agent); }
-    // The hand-over's side of it: counts, costs, the measurements, road heights for drawing (`driving?`).
+    // THE NEXT FREE CAR NUMBER: past every row of the vehicle list and every car entity of `world` (city_car.h).
+    uint32_t nextCarNumber(engine::World& world) const;
+    // The hand-over's side of it: counts, costs, the measurements (`driving?`).
     const DrivingHost& drivingHost() const { return drivingHost_; }
+    // The player takes the car `car`, one that drives round for ever (DrivingHost::takenByPlayer). False when it is not.
+    bool playerTakesRoamingCar(engine::Entity car) {
+        return drivingV2_ && drivingHost_.takenByPlayer(*drivingV2_, car);
+    }
     // THE RESIDENTS WITH THE AGENT BRAIN (ADR-0441, ADR-0443; city_brain.h, where these are defined): the level's
     // markers, its residents and the households whose cars they share, driven by the brain library over this sim's
     // walking and the new driving. Call once, after startDrivingV2 has succeeded. False, with the reason in `report`,
@@ -1752,8 +1755,12 @@ public:
         int atWorkByRole[kRoles] = {};   // resting in a state wearing AtWork (on shift, in class)
         int outing = 0;                   // wearing Outing: at or on the way to a stop, by day or by night
         int busesMoving = 0, cabsMoving = 0;   // the service fleet, outside every count above
+        // THE CARS WITH NOBODY IN THEM (city_car.h CityCarRoams; ADR-0453): no person stands for them, so they are
+        // outside every count above: how many there are, how many the driving has on its road, and of those on a trip
+        int emptyCars = 0, emptyCarsOnRoad = 0, emptyCarsDriven = 0;
     };
-    Census census() const;
+    // ...with the cars of `world` counted too (null: the people alone).
+    Census census(engine::World* world = nullptr) const;
     // WALKERS IN THE ROAD (Glenn: "the npcs all over the roads is a problem. It's interfering with traffic"): every
     // visible walker of the full sim whose spot is inside a street's carriageway (closer to its centreline than half
     // its width), counted by why -- its state, moving or standing, waiting for a bus, and whether the street it is in
@@ -2364,7 +2371,7 @@ private:
     // Its road (setDrivingRoads): shared, so its address stays put while the model holds a pointer to it.
     std::shared_ptr<const engine::RoadModel> drivingRoads_;
     std::string drivingRoadsReport_ = "no lane graph yet";
-    DrivingHost drivingHost_;   // the drivers handed to the new model (startDrivingV2); inactive on a v1 level
+    DrivingHost drivingHost_;   // the hand-over to the new model (startDrivingV2); inactive on a v1 level
     std::function<void(driving::Driving&)> beforeDriving_;   // setBeforeDriving
     // The resident with the agent brain and everything it needs (startBrain; city_brain.h). It reads and moves this
     // sim's agents directly, as the hand-over above does, so it is a friend. Null: none.
