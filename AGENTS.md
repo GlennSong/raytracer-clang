@@ -244,11 +244,53 @@ existing code under this rule is #172.
 - **Behaviour is composed, not hard-coded.** C++ exposes verbs (actions, events, queries) as an API; data composes
   them into behaviour, as the goal tables do (ADR-0064: states and transitions in Lua, executed by C++). Per-tick Lua
   is for the few (a possessed agent, a scripted scene), not the 100k crowd; the crowd runs C++ over tables the
-  scripts declared at load. Where gameplay code lives in general is #124.
+  scripts declared at load. Where gameplay code lives in general is #124, and the rule for it is Game Logic In
+  Scripts, below.
 - **Hot loops may compile data.** Turning Lua tables into flat C++ structs at load for speed is fine; the source of
   truth is still the data, and nothing in the hot loop names a kind.
 - **Reviews check it.** A review flags any new kind-specific branch, magic number or C++-only table, and the change
   either moves it to data or says in its ADR why it cannot.
+
+## Game Logic In Scripts (Engine Rule)
+
+Glenn (2026-11-17): "we should be more data driven where possible and maybe even script driven so that we don't bake a
+ton of game logic into the C++ engine. This way we could use lua to tune and script aspects of the game faster. It
+maybe less performant, but hopefully the harder parts are in C++ and are performant to make up for it."
+
+The C++ engine provides MECHANISMS (fast, general, hard to get right). Lua decides what the game DOES with them, so it
+can be tuned and scripted without a rebuild.
+
+- **C++:**
+  - hot loops over thousands of things;
+  - physics, rendering, routing, perception sweeps;
+  - generation algorithms;
+  - the brain's machine and the rule evaluator;
+  - file and asset formats.
+- **Lua:**
+  - what exists, and its numbers (Kinds Are Data);
+  - rules and decisions (what a driver does about something in its way, when a person drives or walks);
+  - behaviour as states and transitions;
+  - scenarios, missions, level scripting, recipes.
+- **The test.** Would someone tuning or designing the game want to change this without recompiling? Then it is Lua.
+  Does it run every tick for thousands of things? Then C++ runs tables that Lua declared at load. Per-tick Lua is for
+  the few: a possessed agent, a scripted scene, a mission.
+- **The agent brain is the exception that proves the line.** Brain STATES and what they DO may be defined in Lua,
+  composed from a brain API of verbs: go to, walk, drive, take or leave a car, wait for an event, start a timer, use a
+  spot, look for a place of a kind, and so on.
+  - The Lua runs only when something happens to that person: entering or leaving a state, an event, a timer ending.
+    It never runs every tick.
+  - The per-tick work, the skills and the clock, stays C++. People change state every few minutes, so a 100k crowd
+    calls Lua a few hundred times a second.
+  - DIRECTORS use the same verbs. The player possessing someone, Laya deciding for a character and a mission script
+    are one API, not separate paths (One Model Per Concept).
+  - Not built yet: #305. Today a state's actions are C++ functions
+    registered under its name (brain_states.cpp).
+- **New C++ exposes verbs and queries** that scripts compose, not finished behaviour.
+- **Measure before moving logic back into C++.** If Lua shows in a profile, first compile its tables into flat C++
+  data at load (Kinds Are Data allows it).
+- **Hot reload where the system allows it,** as building uses do (ADR-0259).
+- **Reviews check it.** A review flags game logic written in C++ that the test puts in Lua, and the change either
+  moves it or says in its ADR why it cannot.
 
 ## One Model Per Concept (Engine Rule)
 
