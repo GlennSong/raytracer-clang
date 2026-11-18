@@ -250,6 +250,31 @@ existing code under this rule is #172.
 - **Reviews check it.** A review flags any new kind-specific branch, magic number or C++-only table, and the change
   either moves it to data or says in its ADR why it cannot.
 
+## One Road Model (Engine Rule)
+
+Seven descriptions of the same roads (the plan, the road file, the built lanes, the routing twin, the lot twin, the
+lane match, the lane graph) were consolidated into ONE road model over 2026-11-13..16 (ADR-0417..0438, docs/road-model-
+design.md), at a cost of about 2.4 billion tokens. Two days later a helper began a new one, crosswalks worked out
+inside the driving library and the sim, without noticing. Glenn (2026-11-17): "We just consolidated all roads to one
+model. Making another new one is unacceptable."
+
+- **Road facts live in `src/engine/procgen/city/roads/` and nowhere else.** A road fact is anything about where the
+  roads are or what is on them: junctions, arms, streets, lanes, kerbs, pavements, crosswalks, stop lines, parking,
+  controls, signs, ramps, heights, which lane crosses what. Everything else ASKS the model through its query
+  functions (`armAt`, `streetOf`, `controlAt`, `drivenLine`, ...); it never works a road fact out for itself from
+  geometry, positions, angles or distances.
+- **A fact the model lacks is added to the model first.** Check `RoadModel::notStated`: if what you need is listed
+  there, stating it (from the road file, or derived ONCE in one function inside the model) is the first piece of
+  your task, before any reader uses it. Never a private derivation "for now".
+- **Copies are look-ups only.** The street map (`street_map.h`) and the lane level may COPY a model fact for speed,
+  filled from the model at build; they hold no fact of their own and never compute one.
+- **No new road structure outside the model.** No table mapping one road id to another, no "which crosswalk/arm/kerb
+  is this" test, no merging streets by position, in apps, tests or tools. Test fixtures build roads through the
+  model too.
+- **Every helper's report lists any road fact its change computes outside `roads/`** (expected: none), and every
+  reader of any road fact it added. A review checks the diff for it before commit; a change that breaks this rule is
+  not committed.
+
 ## Engineering Ethos (Engine Rule)
 
 Every system here is a real, load-bearing implementation meant to be an *underlying
