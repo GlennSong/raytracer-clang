@@ -393,6 +393,126 @@ NEAR_CROWD_MINUTE = 9.0      # the crowd test's busy minutes (near cars most fro
 NEAR_CROWD_AT = (-250.0, 6.0)  # beside the signalled junction at -270, 0 the crowd's cars cross
 
 
+def heading_of(sock, pick):
+    """A near car moving faster than 4 m/s, and its heading from two looks half a second apart: (car, (fx, fz))."""
+    first = near_cars(rtctl.send(sock, "near?"))
+    time.sleep(0.5)
+    second = near_cars(rtctl.send(sock, "near?"))
+    for a in second:
+        if a[3] < pick:
+            continue
+        b = min(first, key=lambda c: math.hypot(c[0] - a[0], c[2] - a[2]), default=None)
+        if not b:
+            continue
+        d = math.hypot(a[0] - b[0], a[2] - b[2])
+        if 0.3 < d < 15.0:
+            return a, ((a[0] - b[0]) / d, (a[2] - b[2]) / d)
+    return None, None
+
+
+def things(sock, shots, t0, suffix, wait_speed, log_path):
+    """WHAT IS IN A DRIVER'S WAY (ADR-0451) on brain_crowd at its busy minute: the player stands in the lane ahead of a
+    moving near car (it stops short and sounds its horn: the viewer's log says so), the same from above as it goes round
+    him, and a lane car stopped for a person crossing. Pictures `things_*`."""
+    def named(name):
+        return f"things_{name}{suffix}"
+
+    print(rtctl.send(sock, "near marks on"))
+    print(rtctl.send(sock, "brain labels off"))
+    print(rtctl.send(sock, "brain follow off"))
+    print(rtctl.send(sock, "detach off"))
+    rtctl.send(sock, f"sim speed {wait_speed}")
+    while time.time() - t0 < 900:
+        m = re.search(r"over (\d+) ticks", rtctl.send(sock, "driving?"))
+        if m and int(m.group(1)) >= NEAR_CROWD_MINUTE * 60 * 60:
+            break
+        time.sleep(0.5)
+    rtctl.send(sock, "sim speed 1")
+    ok = True
+    # 1. THE PLAYER IN THE LANE, 30 m ahead of a moving near car
+    car, fwd = None, None
+    for attempt in range(40):
+        car, fwd = heading_of(sock, 4.0)
+        if car:
+            break
+        time.sleep(0.5)
+    if not car:
+        print("  no moving near car")
+        return False
+    fx, fz = fwd
+    px, pz = car[0] + 30 * fx, car[2] + 30 * fz
+    m = re.search(r"car (\d+) at %.2f" % car[0], rtctl.send(sock, "near?"))
+    if m:
+        a = re.findall(r"-?[\d.]+", rtctl.send(sock, f"near ahead {m.group(1)} 28"))
+        if len(a) >= 2:
+            px, pz = float(a[0]), float(a[1])
+    print(rtctl.send(sock, f"teleport {px} {pz}"))
+    stopped = None
+    for i in range(40):
+        time.sleep(0.25)
+        for c in near_cars(rtctl.send(sock, "near?")):
+            if math.hypot(c[0] - px, c[2] - pz) < 12 and c[3] < 0.2:
+                stopped = c
+        if stopped:
+            break
+    print("  stopped short:", stopped)
+    rtctl.send(sock, "sim pause")
+    sx, sz = (stopped[0] + px) / 2 if stopped else px, (stopped[2] + pz) / 2 if stopped else pz
+    # from the side: 9 m off the line to the left, a little above, looking across at the two
+    cx, cz = sx + 9 * fz, sz - 9 * fx
+    yaw = math.degrees(math.atan2(sx - cx, -(sz - cz)))
+    rtctl.send(sock, f"camera {cx} 3 {cz} -8 {yaw}")
+    time.sleep(1.0)
+    shoot(sock, shots, named("1_stopped_short_of_the_player"), t0, rtctl.send(sock, "things?"))
+    rtctl.send(sock, "sim resume")
+    print(rtctl.send(sock, "detach off"))
+    time.sleep(0.5)
+    with open(log_path, "r", errors="replace") as f:
+        horns = [l.strip() for l in f if "[near] horn" in l]
+    print("  horns in the log:", len(horns), horns[-3:])
+    # 2. GOING ROUND HIM, from above
+    before = re.search(r"swerves (\d+)", rtctl.send(sock, "things?"))
+    before = int(before.group(1)) if before else 0
+    swerved = False
+    for i in range(60):
+        time.sleep(0.25)
+        m = re.search(r"swerves (\d+)", rtctl.send(sock, "things?"))
+        if m and int(m.group(1)) > before:
+            swerved = True
+            time.sleep(1.2)
+            break
+    print("  swerved:", swerved)
+    rtctl.send(sock, "sim pause")
+    rtctl.send(sock, f"camera {px} 22 {pz} -89 0")
+    time.sleep(1.0)
+    shoot(sock, shots, named("2_going_round_the_player_from_above"), t0, rtctl.send(sock, "things?"))
+    rtctl.send(sock, "sim resume")
+    print(rtctl.send(sock, "detach off"))
+    # 3. A LANE CAR STOPPED FOR A PERSON CROSSING: the player out of the road first
+    print(rtctl.send(sock, f"teleport {px + 40 * fz} {pz - 40 * fx}"))
+    found = None
+    for i in range(240):
+        line = rtctl.send(sock, "things?")
+        for m in re.finditer(r"lane car (\d+) at (-?[\d.]+) (-?[\d.]+), ([\d.]+) m/s, a thing ([\d.]+) m ahead, moving", line):
+            if float(m.group(4)) < 0.1 and float(m.group(5)) < 8:
+                found = (float(m.group(2)), float(m.group(3)))
+        if found:
+            break
+        time.sleep(0.25)
+    print("  a lane car stopped for someone moving in its way:", found)
+    if found:
+        rtctl.send(sock, "sim pause")
+        rtctl.send(sock, f"camera {found[0]} 18 {found[1]} -89 0")
+        time.sleep(1.0)
+        shoot(sock, shots, named("3_a_lane_car_stopped_for_a_person_crossing"), t0, rtctl.send(sock, "things?"))
+        rtctl.send(sock, "sim resume")
+    end = rtctl.send(sock, "near?")
+    print(end)
+    m = re.search(r"contacts (\d+)", end)
+    print("CONTACTS AT THE END:", m.group(1) if m else "?")
+    return ok and bool(stopped) and swerved and bool(found)
+
+
 def near_crowd(sock, shots, t0, suffix, wait_speed):
     """THE NEAR TIER IN THE CROWD (ADR-0448) on brain_crowd: `near marks on` (a cyan post over each physics car), the day
     run fast to the busy minute, the player put beside a busy junction and walked (the game's own chase camera), then
@@ -522,7 +642,7 @@ def main():
     ap.add_argument("--timeout", type=float, default=900.0, help="real seconds the trip may take")
     ap.add_argument("--shots", default=os.path.expanduser("~/Pictures/Raytracer/brain"))
     ap.add_argument("--log", default="out/zz_brain3/probe_viewer.log")
-    ap.add_argument("--scenario", default="trip", choices=["trip", "multi", "crowd", "near", "nearcrowd"],
+    ap.add_argument("--scenario", default="trip", choices=["trip", "multi", "crowd", "near", "nearcrowd", "things"],
                     help="trip: one resident's trip (--to); multi: the contended household car, then the player takes "
                          "it; crowd: brain_crowd at its busy period (give --level assets/levels/brain_crowd.json); "
                          "near: the near tier's test bed (ADR-0447): a physics car at the stop line and through the turn, "
@@ -550,6 +670,10 @@ def main():
             time.sleep(1.0)
         print(f"loaded in {time.time() - t0:.0f} s: {line}")
         print(rtctl.send(sock, "markers?"))
+        if args.scenario == "things":
+            done = things(sock, args.shots, t0, args.suffix, args.wait_speed, args.log)
+            print("\nprobe", "OK" if done else "FAILED", f"({time.time() - t0:.0f} s in all)")
+            return 0 if done else 1
         if args.scenario in ("multi", "crowd", "near", "nearcrowd"):
             run = {"multi": multi, "crowd": crowd, "near": near, "nearcrowd": near_crowd}[args.scenario]
             done = run(sock, args.shots, t0, args.suffix, args.wait_speed)

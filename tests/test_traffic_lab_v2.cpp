@@ -169,7 +169,10 @@ constexpr double kLongestStand = 100.0;
 // car's line on those streets moved. The two-car deadlock loop of #286 is not seen on this run (0 loops, so the loop
 // limit and the deadlock row pass); still failing: queues empty at 3.14 s a car, and cars over kLongestStand. (Before:
 // 0x7aade29530b4fdd1, ADR-0432.)
-constexpr uint64_t kFiveMinuteStateHash = 0x03f9fd2cd2940971ull;
+// Retaken for ADR-0451 (drivers stop for what is in their way): the lab's look-ahead now reaches a car's length and a
+// stand-off past the next junction's box, and walkers on the road are seen; the same two failures, queues 3.14 -> 3.26 s a
+// car. (Before: 0x03f9fd2cd2940971, ADR-0450.)
+constexpr uint64_t kFiveMinuteStateHash = 0x480f608a3a35465cull;
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's

@@ -81,6 +81,7 @@ struct CityNearCar {
     // the line it follows: its way's centre line, from the path before its front's
     engine::LaneFollower follower;
     std::vector<engine::PathId> line;
+    engine::Real lineOffset = 0;   // ...moved this far to the side, going round something (Driving::passOffset)
     // how far it has gone since the driving's last tick (m): what the intent's distance to rest has shrunk by
     engine::Real sinceTick = 0;
     uint64_t tickSeen = 0;
@@ -145,6 +146,10 @@ struct NearCounts {
     uint32_t taken = 0, givenBack = 0;   // household cars the player took, and gave back (#293)
     uint32_t contacts = 0;         // new touches between two of the city's Jolt cars
     std::vector<NearContact> contactList;   // the first few, each
+    // THE LOOK AHEAD (ADR-0451): looks made (one per near car per step), box sweeps cast, and their time
+    uint64_t sweeps = 0, sweepCasts = 0;
+    double sweepMs = 0;
+    uint32_t hornsPlayed = 0;     // horns sounded by near cars (played where there is sound)
     uint32_t otherHits = 0;       // new touches between one city Jolt car's chassis and anything else
     uint32_t parkedHits = 0;      // ...of them, on a drawn car nobody drives (a parked car's kinematic box)
     uint32_t drivenBoxHits = 0;   // ...on a drawn car someone drives (a lane car, or one sliding into or out of a space)
@@ -211,6 +216,15 @@ private:
     uint32_t nextLabId_ = 1000;
     bool marks_ = false;   // `near marks on|off`
     CityPhysicsSystem* boxes_ = nullptr;   // useBoxes
+    // WHAT IS IN A NEAR CAR'S WAY (ADR-0451): the bodies the look ahead passes over (the cars the driving drives, its own
+    // included), sorted, and the look itself (writePoses, before the driving's tick)
+    std::vector<engine::PhysicsBodyId> known_;
+    // THE HORN of a near car whose driver sounds it (Driving::hornsLastTick): one short honk, the engine's own procedural
+    // horn (sfx::horn) shaped once into a clip
+    engine::AudioClipHandle hornClip_;
+    void soundHorns(engine::FrameContext& ctx, const driving::Driving& d);
+    void seeAhead(driving::Driving& d, const CityNearCar& n, const engine::Vehicle& v, const engine::Vec3& at,
+                  engine::Real speed);
     bool pressEnter_ = false;   // `near key`: VehicleSystem's own get-in/get-out press on the next frame
     void sendStaged(engine::World& world, engine::Real step);
     CityRenderSystem& city_;

@@ -21744,3 +21744,72 @@ Words: the **kerb parking band** is the strip along each kerb where cars park (A
 - level_traffic_lab_v2_drives: hash 0x7aade29530b4fdd1 -> 0x03f9fd2cd2940971. Of the 4 known failures, 2 are gone: the #286 two-car deadlock loop is not seen (0 loops), so the loop limit and the deadlock row pass. Still failing: queues empty at 3.14 s a car, and cars over kLongestStand.
 - lanes_tests, the traffic lab: corner faults ("fits no vehicle") 76 -> 75; crossing-point problems 29 -> 16 (narrower paths side by side touch less); tidied folds 13 -> 11 (s61.b0 and s65.f0 no longer fold); the known lane crossings outside junctions moved about 2 m with s36's, s60's and s149's kerb lanes. The lane-path checks now compare against `drivenLanePoints`, not the built lane. road_model 24/25/26: the kerb lane beside a space is at 1.75 m from the centre line, not 3.0 m.
 - Unchanged and passing: brain_tests 23/23, driving_tests 194/194, level_brain_lab 11/11, first_cars 1/1, run_tests trip_plan 11, goal 6, _lua 25, parking 5, river_town (level_tests) 1/1, the other near-tier cases.
+
+## ADR-0451 — Drivers see what is in their way, whatever it is, and stop short, sound the horn, go round it or find another way (sitting 4)
+**Status:** Provisional · **Date:** 2026-11-17
+
+What it does: every driver, at every decision, asks one question: what is ahead of me along the way I mean to go, and how is it moving? The world answers it, and the driver never asks what kind of thing it is (Glenn: "I don't want to define obstacles because it could be anything that impedes their way"). The driver then follows it like a car ahead and stops short of it. It sounds the horn at it, goes round it where there is room, and, where there is none and it does not move, finds another way. Design sections 5 and 6 (docs/two-drivers-meeting-design.md).
+
+Words: a **thing** is anything on the road that is not a car the driving drives. That covers a person on foot, the player, a crate, a car nobody here drives (parked, sliding into its space, the player's), and a wreck. The **thing ahead** is the nearest one along a car's way. A **sweep** moves a box through the physics world along a line and reports what the box meets.
+
+**1. Who answers** (src/apps/driving/things.h).
+- **A near car (a physics car).** Physics answers. Before each tick the near tier sweeps a box the car's width (its chassis half width) along the line the car means to drive, in 4 m straight pieces from its front bumper (`PhysicsWorld::sweepBox`, a Jolt shape cast). The look-ahead is its stopping distance after a 1 s reaction, plus the stand-off, plus 5 m, and never less than 35 m. It also reaches through the next junction's box to a car length and a stand-off beyond it.
+  - **What the sweep sees:** every body that moves (Jolt's moving layer: dynamic and kinematic bodies) and every character's capsule. The player is a Jolt character, which is not a body, so characters are tested separately.
+  - **Ground versus thing:** told apart by layer, with no list of kinds. Static bodies are the fixed world: the ground, the roads, buildings and fixed street furniture. They sit on the non-moving layer, which the sweep never looks at.
+  - **Bodies passed over:** the car's own body, and the cars the driving already sees (the near cars and the kinematic boxes of cars on the driving's lanes). A parked car, a car sliding into its kerb space, or the player's car is a thing like any other.
+  - **Something about to step in:** a second sweep, 5 m wider each side, covers 3 s of road (`sweepBoxAll`, every hit). Something there that moves toward the car's line, and reaches its side before the car reaches it (or within 1 s after), counts as in the way now.
+  - **Room to pass:** further sweeps at sideways offsets in 0.5 m steps, each as wide as the car plus `pass_clearance` either side. They run from the front to well past the thing (40 m further where the offset is in the oncoming lane), and pass over only the car's own body. The car may move within its lane, or one lane over to the offside if that is clear; it never goes past the kerb.
+- **A middle car (a lane car).** The driving answers from one registry the world writes each tick (`Driving::setThingsOnRoad`). It holds every person on foot outdoors (`CitySim::thingsForDriving`, by where the sim puts them, with half a shoulder width of 0.3 m and their velocity), plus what the host adds (`CitySim::setExternalThings`): the player on foot, and every physics car the driving does not drive. A thing is in the car's way when its middle is closer to the car's line than the two half widths and the clearance. The same "coming into it" judgement applies (5 m wider, moving toward the line, timed against the car).
+  - **Pavement versus road:** the driver does not sort walkers onto pavement or road. A person on the pavement is simply not in its way.
+  - **Room to pass:** within its lane only. Lane changes are sitting 5.
+- **Seeing far enough at a junction:** the way a driver holds now reaches a car length and a stand-off past the next junction's box. A thing standing just beyond a junction, leaving no room past the box, is stopped for at the line (`thing_stop`), where the car can still choose another way.
+
+**2. What a driver decides** (rules/lab.lua, data). The new facts are `thing_ahead`, `thing_gap`, `thing_stop` (a place), `thing_speed`, `thing_stood`, `waited_for_it` and `room_to_pass`. The new answers are the action `horn` and the intentions `pass` = swerve and `way` = another (`registerThingFacts`, `registerThingAnswers`). The four rules:
+- "something in the way": stop at `thing_stop`, which is `thing_stand_off` (3.0 m) short of it;
+- "horn at what stands in the way": thing ahead, standing, and nearer than `horn_within` (10 m). The horn sounds once for each thing (`Driving::hornsLastTick`). A near car plays the engine's own procedural horn (`sfx::horn`, three periods with a fade in and out) at the car, and the viewer logs `[near] horn: car N at x z`;
+- "go round it": room to pass, and both the driver's own wait behind it and the thing's stand reach `wait_before_passing`. A lane car eases sideways to the offset at 1 m/s. A near car's follower line moves to the offset. Either goes back to its line once past;
+- "another way round it": no room, and both waits reach `wait_before_another_way`. The router is asked for a way from where the car stands with the turns into the thing's path closed (once for each thing). None is possible when the thing stands on the car's own path.
+- **Patience, as personal traits** (seeded from the person, as every trait in `personality`), to put to Glenn:
+  - `wait_before_passing`: usually 3 s, 1.5-6 s;
+  - `wait_before_another_way`: usually 15 s, 8-30 s.
+  - Neither is a timer. A driver reads how long the thing has stood and how long it has waited behind it. A thing that moves (a person crossing) resets both.
+
+**3. #303** (a near car not seeing a car sliding into its kerb space). A sliding car is no longer on the driving's lanes, so its box is not passed over, and it is seen. The crowd test's hits on driven cars' boxes went from 1 (3d) to 0. Closed.
+
+**Measured.**
+- **Near-car tests** (physics_tests, brain_lab's route, the day off so the road is clear):
+
+| what stands in the lane | stopped short | least gap to the car | horn | went round | another way | arrived |
+|---|---|---|---|---|---|---|
+| the stand-in player (a character) | 3.20 m | 0.57 m | yes | yes | no | 72 s |
+| a crate (a dynamic box) | 3.20 m | 0.40 m | yes | yes | no | 72 s |
+| a road block across the road beyond a junction | at the line, 64.3 m short | | no | no | yes | 134 s |
+
+- **Lane car and a person crossing** (`near_tier_a_lane_car_stops_for_a_person_crossing`): the person steps out 20 m ahead of a car doing 7.1 m/s. The car stops with a least gap of 3.03 m, and goes on once they are clear.
+- **Each check bites:**
+  - without the "something in the way" rule, the player is hit (least gap -0.30 m) and the crate is pushed (a chassis hit; the car does not arrive);
+  - without the horn rule, no horn;
+  - without "go round it", the car waits and never arrives;
+  - without "another way", the road-block car waits and never arrives.
+- **Crowd** (brain_crowd, near tier, 12 minutes, eight steps a frame):
+  - hits on people on foot 11 (3d) -> **0**;
+  - hits on parked cars 0, and on driven cars' boxes 1 -> **0**;
+  - contacts between near cars still **0**, and rings of waits **0**;
+  - horns 177 (the near cars' 24);
+  - swerves 0 and other ways 0: the things in the crowd move, so they never stand long enough;
+  - longest stand off a lane 0 s;
+  - the 8 chassis hits left are car 83 scraping the ground under hard braking.
+- **Cost:** 0.008 ms a look for one near car per step (about 25 sweeps: the look-ahead in 4 m pieces, the wider look, and the room search while standing), 0.037 ms a step over the whole run. At the busy minute, 14-15 near cars cost about 0.12 ms a step.
+- **Seen in the viewer** (`brain_lab_probe.py --scenario things --level assets/levels/brain_crowd.json --suffix _4`; `~/Pictures/Raytracer/brain/things_*_4.png`):
+  - a near car stopped short of where the player stood in its lane (the player himself is out of frame), with five horns in the viewer's log;
+  - a lane car at its line while a person crosses ahead;
+  - `near?` contacts 0 at the end.
+  - The swerve round the player was not caught in the viewer run: no swerve was counted in the 15 s the probe waited.
+
+**Found, not fixed:** on brain_crowd, car 123 stood 483 s at the line of junction 92, a spread junction with five phases. At each green, people on foot crossing its path stopped it again (thing_stop 0.0 m at the line), and the next red held it. Rings 0: nobody waits for it. Its patience rules do not apply, because the people move. The sim's people cross wherever their route goes. Whether drivers should creep through a gap in a crowd, or people should keep to the crossings that are green for them, is a question for Glenn.
+
+**Pins** (old -> new; why for all: drivers now stop for what is in their way, and the way a driver looks along now reaches past the next junction's box):
+- near_tier_in_the_crowd: most near 16 at minute 11 -> 14 at 11; in 82 -> 91; out 66 -> 76; hash 0x30470fc2f83cc7c7 -> 0x9699075db5940e90. Ratchets: chassis hits <= 13 -> <= 8 (the ground); longest stand off the lane <= 82 s -> <= 5 s (the steer-back time).
+- level_brain_crowd: most on the road 79 -> 83; trips 269 -> 265; parked 225 -> 216; walks blocked 13 -> 17; arrivals 451 -> 444; plans with no way 11 -> 15; hash 0x1d2715902b8559a2 -> 0x0c538d7f7a9fb3fa; rings 0.
+- level_traffic_lab_v2_drives: hash 0x03f9fd2cd2940971 -> 0x480f608a3a35465c. The same two known failures: queues empty at 3.26 s a car (was 3.14), and cars over kLongestStand.
+- Unchanged and passing: brain_tests 23/23, driving_tests 194/194, lanes_tests 131/131, level_brain_lab 11/11, first_cars 1/1, river_town 1/1, run_tests trip_plan 11, goal 6, _lua 25, parking 5.

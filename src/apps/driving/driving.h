@@ -46,6 +46,7 @@
 #include "apps/driving/notice.h"
 #include "apps/driving/right_of_way.h"    // who gives way to whom, worked out at load
 #include "apps/driving/room.h"            // room beyond a junction, granted one car at a time
+#include "apps/driving/things.h"          // what is in a driver's way, whatever it is (ADR-0451)
 #include "apps/driving/signal_programme.h"   // the traffic lights' clock: a pure function of the time
 #include "apps/driving/road_rules.h"
 #include "apps/driving/route.h"
@@ -360,6 +361,33 @@ public:
     // THE LINE A CAR FOLLOWS: the paths of its way from the one its front is on (empty: not on a trip).
     std::vector<engine::PathId> wayFromFront(CarId car) const;
 
+    // ---- WHAT IS IN A DRIVER'S WAY (things.h; ADR-0451), when the registry has the thing step ----
+    // THE THINGS ON THE ROAD this tick, as the world writes them (people on foot, the player, anything set down): a
+    // lane car looks for them along its way. Replaced whole; written before the tick.
+    void setThingsOnRoad(std::vector<RoadThing> things) { things_ = std::move(things); }
+    const std::vector<RoadThing>& thingsOnRoad() const { return things_; }
+    // WHAT A CARRIED CAR SEES IN ITS WAY this tick, as the host's physics found it (not found: nothing). Written before
+    // the tick, read by the car's next decision; a carried car with nothing written sees nothing.
+    void seeAhead(CarId car, const ThingAhead& seen) { seen_[car] = seen; }
+    // What a car last saw in its way (its last decision), or null.
+    const ThingAhead* thingAhead(CarId car) const;
+    // THE SIDEWAYS OFFSET a car's driver means to drive at, going round something (+ toward the kerb side; 0: on its
+    // line): a lane car is moved toward it (DrivingSettings), a carried car's host steers to it.
+    Real passOffset(CarId car) const;
+    // THE CARS WHOSE DRIVERS SOUNDED THE HORN in the last tick (each once for each thing they honk at), in car order.
+    const std::vector<CarId>& hornsLastTick() const { return horns_; }
+    struct ThingCounts {
+        uint64_t seen = 0;         // decisions with something in the way
+        uint64_t horns = 0;        // horns sounded
+        uint64_t swerves = 0;      // times a driver began to go round something
+        uint64_t anotherWays = 0;  // ways found round something that stood (and asked: wanted)
+        uint64_t anotherWaysWanted = 0;
+    };
+    const ThingCounts& thingCounts() const { return thingCounts_; }
+    bool thingStep() const { return thingsOn_; }
+    Real thingStandOff() const { return thingStandOff_; }
+    Real passClearance() const { return passClearance_; }
+
     // BEGIN A TRIP: `person` drives `car` to `destination`, by the route found from where the car's front is now.
     // Refused (a null handle) when the car has not been placed, is already on a trip, or the destination is not a
     // place on the road (an unknown path, or a distance off its ends). Refused too when the destination is on the road
@@ -485,6 +513,9 @@ private:
         std::size_t roomAsk = kMaxJunctionPlans;
         bool roomAskInside = false;
         RoomStop roomStop;
+        // WHAT WAS IN ITS WAY and what it decided about it (the thing step only)
+        ThingAhead thing;
+        bool horn = false, pass = false, anotherWay = false;
     };
     // Counts and traces what one update of a car's plans did.
     void notePlanUpdate(const PlanUpdate& u, CarId car, Trip& t, const JunctionPlans& plans);
@@ -558,6 +589,32 @@ private:
         Real lag = 0;
     };
     std::map<CarId, Carried> carried_;
+    // THE THING STEP (things.h): the things on the road, what each carried car saw, and each driver's watch on the thing
+    // in its way (which it is, since when it has stood, whether it was honked at, the offset it goes round at). Kept apart
+    // from the records: a world with no things hashes as before.
+    bool thingsOn_ = false;
+    Real thingStandOff_ = 0, passClearance_ = 0;
+    std::vector<RoadThing> things_;
+    std::map<CarId, ThingAhead> seen_;
+    struct ThingWatch {
+        ThingAhead last;
+        uint32_t id = 0;
+        bool still = false;
+        uint64_t stillSince = 0;   // tick
+        bool waiting = false;
+        uint64_t waitingSince = 0; // tick: I came to rest behind it
+        bool honked = false;
+        Real passOffset = 0;
+        bool passing = false;
+        double passEnd = 0;        // the odometer reading at which it is past the thing and back on its line
+        uint64_t askedAnotherWayTick = 0;
+    };
+    std::map<CarId, ThingWatch> watch_;
+    std::vector<CarId> horns_;
+    ThingCounts thingCounts_;
+    IntentionKindId passKind_ = kNoIntentionKind, wayKind_ = kNoIntentionKind;
+    ActionId hornAction_ = kNoAction;
+    void askAnotherWayRound(Car& c, Trip& t, const ThingAhead& thing);
     std::vector<CarIntent> intents_;       // by record (as cars_), after the last move step
     std::vector<uint8_t> intentSet_;       // ... 1 where the car was driven and decided
     bool listsStale_ = false;              // a carried car was written: the lists are rebuilt before the next tick

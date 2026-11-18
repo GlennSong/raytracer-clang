@@ -552,6 +552,272 @@ TEST_CASE(near_tier_a_car_switches_into_physics_and_back_mid_route) {
     CHECK(rig.world.has<citysim::CityCarOnLane>(e));
 }
 
+// ---- Sitting 4: what is in a driver's way, whatever it is (ADR-0451) --------------------------------------------------
+
+namespace {
+
+constexpr Real kThingAhead = 30.0;        // m: the thing stands this far along the lane from where the car starts
+constexpr Real kThingRunSeconds = 240.0;  // the most a run is stepped (a test's bound: the checks say what happened)
+constexpr Real kStoodShortLeast = 1.0;    // m: stopped short, the car's front at least this far from the thing
+constexpr Real kBarrierAlong = 8.0;       // m along the lane beyond the junction where the road block stands
+constexpr Real kBarrierHalfAcross = 9.0;  // m: the road block reaches this far either side of the lane (a road's width)
+
+enum class ThingKind { Player, Crate, RoadBlock };
+const char* thingName(ThingKind k) {
+    return k == ThingKind::Player ? "the stand-in player" : k == ThingKind::Crate ? "a crate" : "a road block";
+}
+
+// THE GAP BETWEEN A CAR'S BODY AND A THING: the car a box (middle, heading, half length and width) on the plan, the thing
+// a circle; below zero they overlap
+Real gapToCar(Vec2 middle, Vec2 forward, Real halfLength, Real halfWidth, Vec2 thing, Real radius) {
+    const Vec2 d = thing - middle;
+    const Real a = d.x * forward.x + d.y * forward.y, b = d.x * forward.y - d.y * forward.x;
+    const Real dx = std::max(Real(0), std::fabs(a) - halfLength), dy = std::max(Real(0), std::fabs(b) - halfWidth);
+    return std::sqrt(dx * dx + dy * dy) - radius;
+}
+
+struct ThingRun {
+    bool placed = false, sawIt = false, stoppedShort = false, honked = false, swerved = false, passed = false,
+         anotherWay = false, arrived = false;
+    Real closest = 1e9;          // m: the least gap between the car's body and the thing (below zero: they touched)
+    Real stoodShort = 0;         // m: its front from the thing when it first came to rest for it
+    uint32_t chassisHits = 0;    // the car's chassis touching anything (Jolt)
+    Real seconds = 0;
+};
+
+// A NEAR CAR ON THE LAB'S ROUTE meets a thing standing in its way: `kind` stands on the approach lane kThingAhead along
+// (the player, a crate), or across the road beyond the junction (a road block: the car is sent past it, one junction on).
+ThingRun runThing(ThingKind kind) {
+    ThingRun out;
+    Rig rig;
+    CHECK(rig.ok);
+    if (!rig.ok) return out;
+    int slot = -1;
+    uint32_t cls = 0;
+    rig.householdBody(slot, cls);
+    const std::vector<LabRoute> routes = citysim::labRoutes(rig.d(), kRunUp, kRunOn);
+    CHECK(!routes.empty());
+    if (routes.empty()) return out;
+    const LabRoute& r = routes.front();
+    const LaneGraph& roads = *rig.d().roads();
+    PhysicsWorld& pw = rig.physics.physicsWorld();
+    // where it stands, and where the car is sent
+    driving::PathPoint to = r.to;
+    PathId on = r.approach;
+    Real along = r.start.along + kThingAhead;
+    if (kind == ThingKind::RoadBlock) {
+        on = r.exit;
+        along = kBarrierAlong;
+        // ...sent one junction past it: along the exit lane (and the lane it runs on into) to the next junction, and the
+        // lane out of its first turn
+        to.path = PathId();
+        PathId p = r.exit;
+        for (int step = 0; step < 16 && !to.path.valid(); ++step) {
+            const Path& P = roads.paths[p.index];
+            if (P.next.count == 0) break;
+            const PathId q = roads.nextPaths[P.next.first];
+            if (roads.paths[q.index].kind == PathKind::Connector) {
+                if (roads.paths[q.index].next.count > 0) to.path = roads.nextPaths[roads.paths[q.index].next.first];
+            } else {
+                p = q;
+            }
+        }
+        CHECK(to.path.valid());
+        if (!to.path.valid()) return out;
+        to.along = std::min(Real(15), roads.paths[to.path.index].length * Real(0.5));
+    }
+    Vec2 at, dir;
+    pointOn(roads, on, along, at, dir);
+    const Real ground = roads.heightAt(on, along);
+    if (std::getenv("RT_THING_LOG")) {
+        const Path& A = roads.paths[r.approach.index];
+        std::printf("    [thing] route %u -> %u -> %u; the approach leads into %u paths:", r.approach.index, r.turn.index,
+                    r.exit.index, A.next.count);
+        for (uint32_t k = A.next.first; k < A.next.end(); ++k) std::printf(" %u", roads.nextPaths[k].index);
+        std::printf("; lane changes %d\n", rig.d().settings().laneChanges ? 1 : 0);
+    }
+    Real radius = 0;
+    if (kind == ThingKind::Player) {
+        radius = 0.3;
+        pw.addCharacter(0.6, radius, Vec3(at.x, ground + 0.95, at.y));
+    } else if (kind == ThingKind::Crate) {
+        radius = 0.5;
+        pw.addBox(Vec3(0.5, 0.5, 0.5), Vec3(at.x, ground + 0.55, at.y), Quat(), BodyMotion::Dynamic, 0.0, 0.8);
+    } else {
+        radius = 0.5;
+        const Quat turn = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(dir.x, dir.y));
+        pw.addBox(Vec3(kBarrierHalfAcross, 0.6, 0.5), Vec3(at.x, ground + 0.6, at.y), turn, BodyMotion::Kinematic);
+    }
+    std::string why;
+    const Entity e = rig.near.labCar(rig.world, 1000, slot, cls, r.start, to, &why);
+    if (!e.valid()) std::printf("    [thing] the lab car was refused: %s\n", why.c_str());
+    if (!e.valid()) return out;
+    CHECK(rig.near.toPhysics(rig.world, rig.assets, e, kStep, &why));
+    out.placed = true;
+    const driving::CarId id(1000);
+    const Real halfLength = rig.d().vehicleClasses().at(cls).length * 0.5;
+    const uint32_t hitsBefore = rig.near.counts().otherHits;
+    bool moved = false;   // (it stands at the start: stopping short counts once it has moved off)
+    for (int i = 0; i < static_cast<int>(kThingRunSeconds / kStep); ++i) {
+        rig.frame();
+        const driving::Car* c = rig.d().car(id);
+        if (!c) break;
+        if (!c->driven) {
+            out.arrived = true;
+            out.seconds = (i + 1) * kStep;
+            break;
+        }
+        const driving::ThingAhead* seen = rig.d().thingAhead(id);
+        if (seen && seen->found) out.sawIt = true;
+        if (c->speed > 1.0) moved = true;
+        const Vehicle* v = rig.world.get<Vehicle>(e);
+        if (v && v->vehicleId != PhysicsWorld::INVALID_VEHICLE && kind != ThingKind::RoadBlock) {
+            const Vec3 m = pw.vehiclePosition(v->vehicleId), f = pw.vehicleOrientation(v->vehicleId).rotate(Vec3(0, 0, 1));
+            const Vec2 fwd = normalize(Vec2(f.x, f.z));
+            out.closest = std::min(out.closest, gapToCar(Vec2(m.x, m.z), fwd, halfLength, v->config.chassisHalfExtent.x, at, radius));
+            const Vec2 front = Vec2(m.x, m.z) + fwd * halfLength;
+            if ((front - at).x * dir.x + (front - at).y * dir.y > radius + halfLength * 2) out.passed = true;
+            if (moved && !out.stoppedShort && c->speed < driving::kStandingBelow && seen && seen->found) {
+                out.stoppedShort = true;
+                out.stoodShort = (at - front).x * dir.x + (at - front).y * dir.y - radius;
+            }
+        }
+        if (kind == ThingKind::RoadBlock && moved && !out.stoppedShort && c->speed < driving::kStandingBelow && seen &&
+            seen->found) {
+            out.stoppedShort = true;
+            out.stoodShort = seen->distance;
+            out.closest = seen->distance;
+        }
+        if (std::getenv("RT_THING_LOG") && i % 30 == 0)
+            std::printf("    [thing] t %.1f: path %u along %.1f speed %.2f | seen %d %.2f m side %.2f room %d offset %.2f | "
+                        "horns %llu swerves %llu ways %llu/%llu | pass offset %.2f\n",
+                        (i + 1) * kStep, c->path.index, c->along, c->speed, seen && seen->found ? 1 : 0,
+                        seen ? seen->distance : 0.0, seen ? seen->side : 0.0, seen && seen->roomToPass ? 1 : 0,
+                        seen ? seen->passOffset : 0.0, static_cast<unsigned long long>(rig.d().thingCounts().horns),
+                        static_cast<unsigned long long>(rig.d().thingCounts().swerves),
+                        static_cast<unsigned long long>(rig.d().thingCounts().anotherWays),
+                        static_cast<unsigned long long>(rig.d().thingCounts().anotherWaysWanted), rig.d().passOffset(id));
+    }
+    out.honked = rig.d().thingCounts().horns > 0;
+    out.swerved = rig.d().thingCounts().swerves > 0;
+    out.anotherWay = rig.d().thingCounts().anotherWays > 0;
+    out.chassisHits = rig.near.counts().otherHits - hitsBefore;
+    std::printf("    [thing] %s: saw it %d; stopped short %d, %.2f m from it; honked %d (near horns played %u); went round "
+                "it %d, past it %d; another way %d; the least gap %.2f m; chassis hits %u; arrived %d in %.1f s\n",
+                thingName(kind), out.sawIt ? 1 : 0, out.stoppedShort ? 1 : 0, out.stoodShort, out.honked ? 1 : 0,
+                rig.near.counts().hornsPlayed, out.swerved ? 1 : 0, out.passed ? 1 : 0, out.anotherWay ? 1 : 0,
+                out.closest, out.chassisHits, out.arrived ? 1 : 0, out.seconds);
+    return out;
+}
+
+}  // namespace
+
+// THE PLAYER STANDS IN THE LANE (ADR-0451; Glenn: "the car probably should have stopped or swerved out of the way. It
+// would be funny to also get a horn sound"): the near car sees him (a character, swept like any body), stops short
+// without touching, sounds its horn, and goes round him where there is room (the lab's day is off: the road is clear).
+TEST_CASE(near_tier_a_near_car_stops_honks_and_goes_round_the_player) {
+    const ThingRun run = runThing(ThingKind::Player);
+    CHECK(run.placed && run.sawIt);
+    CHECK(run.stoppedShort && run.stoodShort >= kStoodShortLeast);
+    CHECK(run.closest > 0);
+    CHECK(run.honked);
+    CHECK(run.swerved && run.passed);
+    CHECK(run.arrived);
+}
+
+// ...THE SAME WITH A CRATE: anything with a body is seen; nothing in the driver asks what it is.
+TEST_CASE(near_tier_a_near_car_stops_honks_and_goes_round_a_crate) {
+    const ThingRun run = runThing(ThingKind::Crate);
+    CHECK(run.placed && run.sawIt);
+    CHECK(run.stoppedShort && run.stoodShort >= kStoodShortLeast);
+    CHECK(run.closest > 0);
+    CHECK(run.chassisHits == 0u);
+    CHECK(run.honked);
+    CHECK(run.swerved && run.passed);
+    CHECK(run.arrived);
+}
+
+// ...AND WITH NO ROOM: a road block across the road beyond a junction. The car stops at the junction's line (not in the
+// box), finds no room to go round, waits as long as its driver waits (wait_before_another_way, its own), then finds
+// another way from where it stands and arrives by it.
+TEST_CASE(near_tier_a_near_car_with_no_way_past_finds_another_way) {
+    const ThingRun run = runThing(ThingKind::RoadBlock);
+    CHECK(run.placed && run.sawIt);
+    CHECK(run.stoppedShort && run.stoodShort > 0);
+    CHECK(!run.swerved);
+    CHECK(run.anotherWay);
+    CHECK(run.chassisHits == 0u);
+    CHECK(run.arrived);
+}
+
+// A LANE CAR AND A PERSON CROSSING (the middle tier): a person steps into the road ahead of a lane car and walks across
+// it. The car stops short of them, and goes on once they are clear.
+constexpr Real kCrossFrom = 6.0;      // m to the kerb side of the lane's line, where the person starts
+constexpr Real kCrossWhen = 20.0;     // m: they step out when the car's front is this far short of where they cross
+constexpr Real kWalkerSpeed = 1.4;    // m/s
+TEST_CASE(near_tier_a_lane_car_stops_for_a_person_crossing) {
+    Rig rig;
+    CHECK(rig.ok);
+    if (!rig.ok) return;
+    int slot = -1;
+    uint32_t cls = 0;
+    rig.householdBody(slot, cls);
+    const std::vector<LabRoute> routes = citysim::labRoutes(rig.d(), kRunUp, kRunOn);
+    CHECK(!routes.empty());
+    if (routes.empty()) return;
+    const LabRoute& r = routes.front();
+    const LaneGraph& roads = *rig.d().roads();
+    Vec2 cross, dir;
+    pointOn(roads, r.approach, r.start.along + kThingAhead + 10, cross, dir);
+    const Vec2 kerbward(dir.y, -dir.x);
+    std::string why;
+    const Entity e = rig.near.labCar(rig.world, 1000, slot, cls, r.start, r.to, &why);
+    CHECK(e.valid());
+    if (!e.valid()) return;
+    const driving::CarId id(1000);
+    const Real halfLength = rig.d().vehicleClasses().at(cls).length * 0.5;
+    const Real halfWidth = rig.d().vehicleClasses().at(cls).width * 0.5;
+    bool walking = false, stopped = false, wentOn = false, arrived = false;
+    Real walked = 0, closest = 1e9, speedAtStep = 0;
+    for (int i = 0; i < static_cast<int>(kThingRunSeconds / kStep); ++i) {
+        const driving::Car* c = rig.d().car(id);
+        if (!c) break;
+        if (!c->driven) {
+            arrived = true;
+            break;
+        }
+        const Vec2 front = frontOf(rig, e, halfLength);
+        const Real toCross = (cross - front).x * dir.x + (cross - front).y * dir.y;
+        if (!walking && toCross <= kCrossWhen) {
+            walking = true;
+            speedAtStep = c->speed;
+        }
+        Vec2 person = cross + kerbward * kCrossFrom;
+        if (walking) {
+            walked = std::min(walked + kWalkerSpeed * kStep, 2 * kCrossFrom);
+            person = cross + kerbward * (kCrossFrom - walked);
+        }
+        driving::RoadThing th;
+        th.id = 77;
+        th.at = person;
+        th.halfAcross = citysim::CitySim::kWalkerHalfAcross;
+        th.velocity = walking && walked < 2 * kCrossFrom ? kerbward * -kWalkerSpeed : Vec2();
+        rig.city.simMutable().setExternalThings({th});
+        rig.frame();
+        const Vec2 mid = middleOf(rig, e);
+        closest = std::min(closest, gapToCar(mid, dir, halfLength, halfWidth, person, th.halfAcross));
+        if (walking && c->speed < driving::kStandingBelow) stopped = true;
+        if (stopped && walked >= 2 * kCrossFrom && c->speed > 1.0) wentOn = true;
+    }
+    std::printf("    [thing] a person crossing ahead of a lane car (it was at %.1f m/s when they stepped out): stopped %d, "
+                "the least gap %.2f m, went on once they were clear %d, arrived %d; horns %llu\n",
+                speedAtStep, stopped ? 1 : 0, closest, wentOn ? 1 : 0, arrived ? 1 : 0,
+                static_cast<unsigned long long>(rig.d().thingCounts().horns));
+    CHECK(walking && stopped);
+    CHECK(closest > 0);
+    CHECK(wentOn && arrived);
+}
+
 // ---- Sitting 3b: the near tier in the crowd (ADR-0448) ---------------------------------------------------------------
 
 namespace {
@@ -564,13 +830,12 @@ constexpr Real kRouteLong = 2500.0;   // m of streets the stand-in follows (back
 constexpr Real kOffLane = 0.5;              // m: a near car's front this far off its lane's centre is off its lane
 constexpr Real kStandingBelowSpeed = 0.1;   // m/s: ...and standing, slower than this
 constexpr int kProbeStepsPerFrame = 8;      // the clock's cap (clock.h MAX_STEPS_PER_ADVANCE), what `sim speed 16` runs
-// THE KNOWN GAPS (ADR-0450): since the kerb lane is driven clear of the parking band no near car touches a parked car
-// (checked: 0). What is left, and what brain_crowd measured with it: a near car runs into a lane car sliding into its
-// kerb space (the driving has let it go, so nobody behind sees it), and pedestrians' kinematic boxes on the crossings
-// shove near cars, one of them to 14 m/s; a near car pushed nose-in against a car in a space cannot steer back (it has
-// no reverse). Ratchets, to come down.
-constexpr uint32_t kChassisHitsKnown = 13;
-constexpr Real kOffLaneKnownWorst = 82;     // s (car 112 after the sliding car, nose against it)
+// WHAT IS LEFT (ADR-0451): since drivers see what is in their way, whatever it is, no near car touches a parked car, a
+// person on foot or another near car (each checked: 0). The chassis hits left are the ground: car 83 scraping the road
+// under hard braking (the ground is a static body, which a driver's look never sees). A near car pushed off its line
+// steers back within kSteerBack.
+constexpr uint32_t kChassisHitsKnown = 8;
+constexpr Real kOffLaneKnownWorst = 5;      // s: kSteerBack, the time a car pushed off its line takes to steer back
 
 
 // THE STAND-IN PLAYER'S ROUTE: lane centre lines end to end from the lane nearest `from`, each the first lane on from
@@ -778,11 +1043,13 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
         rig.world.each<citysim::CityCarOnLane>([&](Entity, citysim::CityCarOnLane& l) { lanesDriven += l.driven ? 1 : 0; });
         std::printf("    [near-crowd] %2d min (%s): near %d now, %d at most | %d lane cars driven | in %u, out %u | the most "
                     "in one step %d | over the cap at most %d | contacts %u | %zu rings | the tier %.3f ms a step, physics "
-                    "%.3f ms a step | refused:%s\n",
+                    "%.3f ms a step | looking ahead %.4f ms a step (%.4f a look) | refused:%s\n",
                     minute, minute <= kWalkMinutes ? "walking" : "driving", c.nearNow, nearMost, lanesDriven,
                     c.intoPhysics - last.intoPhysics, c.intoLane - last.intoLane, c.mostThisStep, c.mostOverCap,
                     c.contacts, wr.loops.size(), (c.tierMs - lastTier) / static_cast<double>(std::max<uint64_t>(1, c.tierSteps - lastTierSteps)),
-                    (rig.physicsMs - lastPhys) / static_cast<double>(std::max<uint64_t>(1, rig.frames - lastFrames)), refusals.c_str());
+                    (rig.physicsMs - lastPhys) / static_cast<double>(std::max<uint64_t>(1, rig.frames - lastFrames)),
+                    (c.sweepMs - last.sweepMs) / static_cast<double>(std::max<uint64_t>(1, rig.frames - lastFrames)),
+                    (c.sweepMs - last.sweepMs) / static_cast<double>(std::max<uint64_t>(1, c.sweeps - last.sweeps)), refusals.c_str());
         last = c;
         lastTier = c.tierMs;
         lastTierSteps = c.tierSteps;
@@ -809,6 +1076,15 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     }
     std::printf("    [near-crowd] chassis hits: on parked cars %u, on driven cars' boxes %u, on walkers %u\n", c.parkedHits,
                 c.drivenBoxHits, c.pedestrianHits);
+    const driving::Driving::ThingCounts& tc = rig.d().thingCounts();
+    std::printf("    [near-crowd] what was in the way (ADR-0451): decisions with something in the way %llu; horns %llu (near "
+                "cars' played %u); swerves %llu; other ways found %llu of %llu wanted; looks ahead %llu, box sweeps %llu, "
+                "%.4f ms a look, %.3f ms a step in all\n",
+                static_cast<unsigned long long>(tc.seen), static_cast<unsigned long long>(tc.horns), c.hornsPlayed,
+                static_cast<unsigned long long>(tc.swerves), static_cast<unsigned long long>(tc.anotherWays),
+                static_cast<unsigned long long>(tc.anotherWaysWanted), static_cast<unsigned long long>(c.sweeps),
+                static_cast<unsigned long long>(c.sweepCasts), c.sweeps ? c.sweepMs / static_cast<double>(c.sweeps) : 0.0,
+                rig.frames ? c.sweepMs / static_cast<double>(rig.frames) : 0.0);
     std::printf("    [near-crowd] chassis hits on other things %u; the longest a near car stood off its lane %.1f s (car %u, "
                 "%.2f m off)\n",
                 c.otherHits, worstOffFor, worstOffCar, worstOff);
@@ -823,6 +1099,9 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     CHECK(ringsSeen == 0);                       // no ring of waits, ever
     CHECK(c.contacts == 0);                      // two of the city's Jolt cars never touch
     CHECK(c.parkedHits == 0);                    // no near car touches a parked car (ADR-0450; 3c: most of 59)
+    CHECK(c.pedestrianHits == 0);                // ...nor a person on foot (ADR-0451; 3d: 11)
+    CHECK(c.drivenBoxHits == 0);                 // ...nor a car sliding into its kerb space (#303; 3d: 1)
+    CHECK(rig.d().thingCounts().horns > 0);      // drivers sounded their horns at what stood in their way
     CHECK(c.otherHits <= kChassisHitsKnown);     // (the known gaps, above)
     CHECK(worstOffFor <= kOffLaneKnownWorst);
     CHECK(c.mostThisStep <= rules.perStep);      // a few switches a step, never a burst
@@ -834,13 +1113,14 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // switched in loses its box at once
     // Re-pinned again (ADR-0450) from 34 at minute 12, in 77, out 46, 0x317e4d66f3504130: the kerb lanes are driven
     // clear of the parking band, so every car's line, and every car's day, moved; and the city is stepped as the app
-    // steps it, eight steps a frame
-    CHECK(mostNear == 16);
+    // steps it, eight steps a frame. And again (ADR-0451) from 16 at minute 11, in 82, out 66, 0x30470fc2f83cc7c7:
+    // drivers stop for what is in their way
+    CHECK(mostNear == 14);
     CHECK(mostNearAt == 11);
-    CHECK(c.intoPhysics == 82u);
-    CHECK(c.intoLane == 66u);
+    CHECK(c.intoPhysics == 91u);
+    CHECK(c.intoLane == 76u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x30470fc2f83cc7c7ull);
+    CHECK(hash == 0x9699075db5940e90ull);
 }
 
 // THE CAP HELD (ADR-0448): the same walk and drive with the cap at 4 (the level's data changed before the first step),

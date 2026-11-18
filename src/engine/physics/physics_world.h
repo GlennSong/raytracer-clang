@@ -178,6 +178,24 @@ public:
     bool castRayHit(const Vec3& origin, const Vec3& dirAndLength, RayHit& hit,
                     PhysicsBodyId ignore = INVALID_PHYSICS_BODY) const;
     Vec3 characterVelocity(CharacterId id) const;
+    // WHAT A BOX SWEPT ALONG A LINE MEETS FIRST (ADR-0451: what is in a driver's way). The box (half extents
+    // `halfExtent`, turned by `orientation`, its middle at `from`) moved by `motion`, against everything that MOVES --
+    // every dynamic and kinematic body (the moving layer) and every character's capsule -- and never the fixed world:
+    // the ground, the roads, buildings and the fixed street furniture are static bodies, which a swept box would always
+    // meet. `ignore` (sorted): bodies passed through (the car's own, the cars the caller already knows of). True when it
+    // meets something: the nearest, by how far along `motion` (0: already overlapping at the start).
+    struct SweepHit {
+        Real fraction = 0;
+        Vec3 point;                                 // where it meets it (a character: its middle)
+        Vec3 velocity;                              // how the thing met moves
+        PhysicsBodyId body = INVALID_PHYSICS_BODY;  // the body met, or none for a character
+        bool character = false;
+    };
+    bool sweepBox(const Vec3& halfExtent, const Vec3& from, const Quat& orientation, const Vec3& motion,
+                  const std::vector<PhysicsBodyId>& ignore, SweepHit& out) const;
+    // ...EVERYTHING it meets, nearest first (appended to `out`).
+    void sweepBoxAll(const Vec3& halfExtent, const Vec3& from, const Quat& orientation, const Vec3& motion,
+                     const std::vector<PhysicsBodyId>& ignore, std::vector<SweepHit>& out) const;
     GroundState characterGroundState(CharacterId id) const;
     // The body the character stands on (INVALID_PHYSICS_BODY in the air): what a footstep lands on.
     PhysicsBodyId characterGroundBody(CharacterId id) const;

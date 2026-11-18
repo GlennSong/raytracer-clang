@@ -175,15 +175,28 @@ void CityPhysicsSystem::syncKinematic(World& world, const std::vector<Entity>& g
     }
 }
 
-bool CityPhysicsSystem::dropEntityCarBox(engine::World& world, Entity car) {
+bool CityPhysicsSystem::entityCarKey(engine::World& world, Entity car, long long& key) const {
     const CityCarBody* body = world.get<CityCarBody>(car);
     const CityCarLink* link = world.get<CityCarLink>(car);
     if (!body || !link) return false;
     // the key syncKinematic gave its box: the driver's uid, or the car's own (negative) key with nobody at the wheel
     const int ai = CityRenderSystem::entityCarDrawKey(*body, *link);
     const std::vector<Agent>& agents = city_.sim().agents();
-    const long long key = ai >= 0 && ai < static_cast<int>(agents.size()) ? static_cast<long long>(agents[static_cast<std::size_t>(ai)].uid)
-                                                                           : static_cast<long long>(ai);
+    key = ai >= 0 && ai < static_cast<int>(agents.size()) ? static_cast<long long>(agents[static_cast<std::size_t>(ai)].uid)
+                                                          : static_cast<long long>(ai);
+    return true;
+}
+
+engine::PhysicsBodyId CityPhysicsSystem::entityCarBox(engine::World& world, Entity car) const {
+    long long key = 0;
+    if (!entityCarKey(world, car, key)) return engine::INVALID_PHYSICS_BODY;
+    const std::unordered_map<long long, ProxyBody>::const_iterator it = carProxies_.find(key);
+    return it == carProxies_.end() ? engine::INVALID_PHYSICS_BODY : it->second.id;
+}
+
+bool CityPhysicsSystem::dropEntityCarBox(engine::World& world, Entity car) {
+    long long key = 0;
+    if (!entityCarKey(world, car, key)) return false;
     std::unordered_map<long long, ProxyBody>::iterator it = carProxies_.find(key);
     if (it == carProxies_.end()) return false;
     physics_.physicsWorld().removeBody(it->second.id);

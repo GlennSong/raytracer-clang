@@ -226,6 +226,16 @@ rule_set = {
     signal_wave_speed = { 30, unit = "mph", source = "[~] a guess to tune: a little under the arterials' limit" },
     signal_wave_east = { 1.0, unit = "ratio", source = "[~] a guess to tune: the wave runs east" },
     signal_wave_north = { 0.0, unit = "ratio", source = "[~] a guess to tune" },
+
+    -- WHAT IS IN A DRIVER'S WAY (ADR-0451; design section 6): anything ahead along the way it means to go -- a person,
+    -- the player, a crate, a car nobody here drives. A driver stops this far short of it, measured to its near side.
+    thing_stand_off = { 3.0, unit = "m",
+      source = "[~] a judgement: a little more than the standstill gap kept to a car, room to see round and to pull out" },
+    -- Going round it: the gap left between the car's side and the thing, and the thing and the lane's edge.
+    pass_clearance = { 0.5, unit = "m",
+      source = "[~] a judgement: half a metre past a person or a box at a crawl; UK Highway Code rule 163 asks for at least 1.5 m past a cyclist at speed (from memory, unverified), which a crawl round a standing thing does not need" },
+    -- The horn: sounded at a thing standing this near in front of a stopped car.
+    horn_within = { 10.0, unit = "m", source = "[~] a judgement: about two car lengths, close enough to be meant" },
   },
 
   -- THE LIMIT ON A ROAD WITH NONE POSTED, by the road's class (the lane graph's road classes). The control plan posts
@@ -253,6 +263,13 @@ rule_set = {
     -- How slowly this person's comfortable gap shrinks while waiting at a line (gap_shrink is divided by it): a patient
     -- driver (2) waits twice as long before taking a smaller gap.
     patience = { usual = 1.0, low = 0.5, high = 2.0, unit = "ratio", source = "[~] a guess to tune" },
+    -- WHAT IS IN MY WAY (ADR-0451): how long this person waits behind something that stands still in the lane before
+    -- going round it, where there is room ...
+    wait_before_passing = { usual = 3.0, low = 1.5, high = 6.0, unit = "s",
+      source = "[~] a guess to put to Glenn: long enough to stop, sound the horn and see whether it moves" },
+    -- ... and, where there is no room, before looking for another way from where they are.
+    wait_before_another_way = { usual = 15.0, low = 8.0, high = 30.0, unit = "s",
+      source = "[~] a guess to put to Glenn: a person in the road gets a little while to move before the driver gives up its way" },
   },
 
   -- WHAT A DRIVER DOES with what it notices. Answers combine by fixed arithmetic (the nearest place to stop by, the
@@ -285,6 +302,21 @@ rule_set = {
     -- everyone (CVC 21453 (b), section unverified).
     { name = "turn on red",       when = { all = { { "light", "is", "red_may_turn" }, { "not", "stopped_at_line" } } },
       give = { stop_at = "next_line" } },
+    -- WHAT IS IN MY WAY (ADR-0451; design section 6), whatever it is. Follow it like a car ahead and stop short of it ...
+    { name = "something in the way", when = "thing_ahead", give = { stop_at = "thing_stop" } },
+    -- ... sound the horn at it, once, standing close behind it (Glenn: "it would be funny to also get a horn sound") ...
+    { name = "horn at what stands in the way",
+      when = { all = { "thing_ahead", "standing", { "thing_gap", "<", "horn_within" } } }, give = { action = "horn" } },
+    -- ... go round it where there is room, once I have stood behind it a while and it has not moved ...
+    { name = "go round it",
+      when = { all = { "thing_ahead", "room_to_pass", { "waited_for_it", ">=", "wait_before_passing" },
+                       { "thing_stood", ">=", "wait_before_passing" } } },
+      give = { pass = "swerve" } },
+    -- ... and where there is none, after longer, look for another way from where I am.
+    { name = "another way round it",
+      when = { all = { "thing_ahead", { "not", "room_to_pass" }, { "waited_for_it", ">=", "wait_before_another_way" },
+                       { "thing_stood", ">=", "wait_before_another_way" } } },
+      give = { way = "another" } },
   },
 
   -- THE PLACEMENT POLICY (issue #240; ADR-0422): how the city planner chooses each junction's control and each road's

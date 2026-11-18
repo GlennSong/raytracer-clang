@@ -6817,6 +6817,10 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // each is into its agent); with none handed over it ticks an empty world.
     if (drivingV2_) {
         if (beforeDriving_) beforeDriving_(*drivingV2_);   // (where the cars physics carries really are: ADR-0447)
+        if (drivingV2_->thingStep()) {   // (what stands on the roads: ADR-0451)
+            thingsForDriving(thingsScratch_);
+            drivingV2_->setThingsOnRoad(thingsScratch_);
+        }
         if (drivingHost_.active()) drivingHost_.tick(*drivingV2_, simDt, agents_, vehicles_);
         else drivingV2_->tick(simDt);
     }
@@ -6955,6 +6959,22 @@ CitySim::Census CitySim::census() const {
         }
     }
     return c;
+}
+
+void CitySim::thingsForDriving(std::vector<driving::RoadThing>& out) const {
+    out.clear();
+    for (std::size_t i = 0; i < agents_.size(); ++i) {
+        const Agent& a = agents_[i];
+        if (a.mode != Agent::Mode::Pedestrian || a.inCar >= 0 || riding(static_cast<int>(i))) continue;
+        if (!a.moving && a.indoors) continue;
+        driving::RoadThing t;
+        t.id = a.uid;
+        t.at = a.pos;
+        t.halfAcross = kWalkerHalfAcross;
+        t.velocity = a.moving ? a.heading * a.speed : Vec2();
+        out.push_back(t);
+    }
+    out.insert(out.end(), externalThings_.begin(), externalThings_.end());
 }
 
 std::map<std::string, int> CitySim::walkersInRoad(int* visible) const {

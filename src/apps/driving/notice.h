@@ -40,6 +40,7 @@ struct JunctionPlans;  // junction_plan.h: one driver's plans for the junctions 
 class AnnouncementBoard;   // announce.h: who will be on which crossing point, and when
 struct GiveWayVerdict;     // give_way.h: what one driver judged about giving way at the junctions ahead
 struct RoomStop;           // room.h: where a driver refused room beyond a junction waits
+struct ThingView;          // things.h: what is in a driver's way
 
 // WHAT KIND OF VALUE a fact holds.
 enum class FactKind : uint8_t {
@@ -115,6 +116,9 @@ struct DriverView {
     // Where I wait for room beyond a junction, if I was refused it (issue #264: the room facts of room.h read it). Null
     // when the room step is off.
     const RoomStop* room = nullptr;
+    // What is in my way along my way ahead, and how long it has stood there (things.h; ADR-0451). Null when the thing
+    // step is off.
+    const ThingView* things = nullptr;
     // How long what I decide now is held before I decide again (seconds; the decide interval). A top speed I am given
     // now is still the one I hold that long from now, so "the speed I may do now" for a bend or a lower limit ahead
     // (corner_speed, slower_ahead) allows for covering that much road at it before I can brake (issue #281). Zero: I

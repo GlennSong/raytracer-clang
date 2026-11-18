@@ -79,6 +79,12 @@ bool loadDrivingRules(const std::string& file, driving::Driving& d, std::string*
         for (const std::string& p : problems) all += (all.empty() ? "" : "; ") + p;
         return refuse("the light clock would not register: " + all);
     }
+    // What is in a driver's way, whatever it is (ADR-0451): its facts, and the horn, going round and another way.
+    if (!driving::registerThingFacts(facts, &problems) || !driving::registerThingAnswers(vocabulary, &err)) {
+        std::string all = err;
+        for (const std::string& p : problems) all += (all.empty() ? "" : "; ") + p;
+        return refuse("the thing step would not register: " + all);
+    }
     if (!driving::loadRules(vm, file, facts, ruleSet, vocabulary, rules, &err)) return refuse(err);
     driving::RoadRules roadRules;
     if (!driving::buildRoadRules(*d.model(), ruleSet, facts, roadRules, &problems)) {

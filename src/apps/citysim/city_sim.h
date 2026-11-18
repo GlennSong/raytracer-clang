@@ -1750,6 +1750,11 @@ public:
     // is the one it is walking along (it should be on the pavement) or one it is crossing. Slow (every link per
     // walker): a test's measurement, not a per-frame call.
     std::map<std::string, int> walkersInRoad(int* visible = nullptr) const;
+    // EVERY PERSON ON FOOT OUTDOORS, as a thing for the new driving's drivers to look for along their way (ADR-0451):
+    // where they are, how wide (kWalkerHalfAcross) and how they move. A driver finds the ones in its way by itself, so
+    // the pavement needs no telling apart from the road here. Then the things the host wrote (setExternalThings).
+    void thingsForDriving(std::vector<driving::RoadThing>& out) const;
+    static constexpr Real kWalkerHalfAcross = 0.3;   // m: half a person's shoulders
     // A junction's box radius (the stop lines and a walker's wait are measured from it).
     Real junctionBox(int node) const { return junctionRadius(node); }
     // A group member's place in its session (formations other than Roam) and the way it faces there.
@@ -1852,6 +1857,10 @@ public:
     // A car is not a person: it is seen down the lane far enough to stop from speed, and held short of by both
     // bodies' lengths, not by a person's clearance measured to its centre (Glenn, 2026-10-02: "If my car stops the
     // car behind me just rams me").
+    // THE THINGS ON THE ROAD THE WORLD OUTSIDE THE SIM KNOWS (ADR-0451): the player on foot, a car the player has, a
+    // body set down -- written each step by the host; the new driving's drivers look for them along their way, with
+    // the sim's own people on foot (walkersOnRoad).
+    void setExternalThings(std::vector<driving::RoadThing> things) { externalThings_ = std::move(things); }
     void setExternalObstacles(std::vector<engine::Vec2> obstacles, std::vector<Real> halfLengths = {}) {
         externalObstacles_ = std::move(obstacles);
         externalHalf_ = std::move(halfLengths);
@@ -2136,6 +2145,8 @@ private:
     std::vector<int> advancedSet_;         // ...which ones (cleared next tick)
                                         // (lets grid candidates map back to ghosts)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
+    std::vector<driving::RoadThing> externalThings_;   // host-injected things on the road (setExternalThings)
+    std::vector<driving::RoadThing> thingsScratch_;
     std::vector<Real> externalHalf_;                // parallel: a vehicle's half length, 0 = a person
     std::vector<engine::Vec2> bodyObstacles_;       // the physical tier's chassis off their ghosts (setBodyObstacles)
     std::vector<Real> bodyHalf_;

@@ -20,6 +20,8 @@
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
+#include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
@@ -878,6 +880,89 @@ uint8_t PhysicsWorld::bodySurface(PhysicsBodyId id) const {
     const JPH::BodyID b(id);
     if (!impl->bodies().IsAdded(b)) return 0;
     return static_cast<uint8_t>(impl->bodies().GetUserData(b) & 0xFF);
+}
+
+// (the one sweep both ask: every hit, or the nearest)
+namespace {
+class SkipSorted final : public JPH::BodyFilter {
+public:
+    explicit SkipSorted(const std::vector<PhysicsBodyId>& ids) : ids_(ids) {}
+    bool ShouldCollide(const JPH::BodyID& id) const override {
+        return !std::binary_search(ids_.begin(), ids_.end(), id.GetIndexAndSequenceNumber());
+    }
+    bool ShouldCollideLocked(const JPH::Body& b) const override { return ShouldCollide(b.GetID()); }
+
+private:
+    const std::vector<PhysicsBodyId>& ids_;
+};
+}  // namespace
+
+void PhysicsWorld::sweepBoxAll(const Vec3& halfExtent, const Vec3& from, const Quat& orientation, const Vec3& motion,
+                               const std::vector<PhysicsBodyId>& ignore, std::vector<SweepHit>& out) const {
+    if (!impl) return;
+    const std::size_t first = out.size();
+    const JPH::BoxShape box(JPH::Vec3(static_cast<float>(halfExtent.x), static_cast<float>(halfExtent.y),
+                                      static_cast<float>(halfExtent.z)));
+    const JPH::Quat q(static_cast<float>(orientation.x), static_cast<float>(orientation.y),
+                      static_cast<float>(orientation.z), static_cast<float>(orientation.w));
+    const JPH::RMat44 start = JPH::RMat44::sRotationTranslation(q, JPH::RVec3(from.x, from.y, from.z));
+    const JPH::Vec3 dir(static_cast<float>(motion.x), static_cast<float>(motion.y), static_cast<float>(motion.z));
+    const JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(&box, JPH::Vec3::sReplicate(1.0f), start, dir);
+    JPH::ShapeCastSettings settings;
+    settings.mReturnDeepestPoint = true;   // (something already in the box at the start is met at fraction 0)
+    JPH::AllHitCollisionCollector<JPH::CastShapeCollector> hits;
+    const JPH::SpecifiedBroadPhaseLayerFilter moving(BroadPhaseLayers::MOVING);
+    const JPH::SpecifiedObjectLayerFilter movingObjects(Layers::MOVING);
+    const SkipSorted skip(ignore);
+    impl->physicsSystem.GetNarrowPhaseQuery().CastShape(cast, settings, JPH::RVec3::sZero(), hits, moving, movingObjects,
+                                                        skip);
+    for (const JPH::ShapeCastResult& h : hits.mHits) {
+        SweepHit s;
+        s.fraction = static_cast<Real>(h.mFraction);
+        const JPH::Vec3 p = h.mContactPointOn2;
+        s.point = Vec3(p.GetX(), p.GetY(), p.GetZ());
+        s.body = h.mBodyID2.GetIndexAndSequenceNumber();
+        const JPH::Vec3 v = impl->bodies().GetLinearVelocity(h.mBodyID2);
+        s.velocity = Vec3(v.GetX(), v.GetY(), v.GetZ());
+        out.push_back(s);
+    }
+    // ...and the characters: a capsule is in the box's way when its middle comes within the box's half width and its
+    // own radius of the line the box's middle runs along (measured in the box's turn), between the start and the end
+    const Real length = motion.length();
+    if (length > 0) {
+        const Quat inv = orientation.conjugate();
+        const Vec3 axis = inv.rotate(motion) * (1 / length);
+        for (const Impl::Character& ch : impl->characters) {
+            if (!ch.controller) continue;
+            const JPH::RVec3 cp = ch.controller->GetPosition();
+            const Vec3 local = inv.rotate(Vec3(cp.GetX(), cp.GetY(), cp.GetZ()) - from);
+            const Real along = local.x * axis.x + local.y * axis.y + local.z * axis.z;
+            const Vec3 across = local - axis * along;
+            const Real reach = static_cast<Real>(ch.radius);
+            if (std::fabs(across.x) > halfExtent.x + reach) continue;
+            if (std::fabs(across.y) > halfExtent.y + static_cast<Real>(ch.halfHeight) + reach) continue;
+            const Real front = along - halfExtent.z - reach;
+            if (along + halfExtent.z + reach < 0 || front > length) continue;
+            SweepHit s;
+            s.fraction = std::max(Real(0), front / length);
+            s.point = Vec3(cp.GetX(), cp.GetY(), cp.GetZ());
+            const JPH::Vec3 v = ch.controller->GetLinearVelocity();
+            s.velocity = Vec3(v.GetX(), v.GetY(), v.GetZ());
+            s.character = true;
+            out.push_back(s);
+        }
+    }
+    std::sort(out.begin() + static_cast<std::ptrdiff_t>(first), out.end(),
+              [](const SweepHit& a, const SweepHit& b) { return a.fraction < b.fraction; });
+}
+
+bool PhysicsWorld::sweepBox(const Vec3& halfExtent, const Vec3& from, const Quat& orientation, const Vec3& motion,
+                            const std::vector<PhysicsBodyId>& ignore, SweepHit& out) const {
+    std::vector<SweepHit> all;
+    sweepBoxAll(halfExtent, from, orientation, motion, ignore, all);
+    if (all.empty()) return false;
+    out = all.front();
+    return true;
 }
 
 Vec3 PhysicsWorld::characterVelocity(CharacterId id) const {

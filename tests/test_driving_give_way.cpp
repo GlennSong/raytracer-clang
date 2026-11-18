@@ -406,8 +406,10 @@ struct Sim {
             return false;
         }
         std::vector<std::string> problems;
+        // (the lab's own rule set goes round what is in a driver's way: ADR-0451)
         if (!registerJunctionFacts(facts, ruleSet.ranks, &problems) || (lightsOn && !registerLightClock(facts, &problems)) ||
             (roomOn && !registerRoomFacts(facts, &problems)) ||
+            (!fullRules.empty() && (!registerThingFacts(facts, &problems) || !registerThingAnswers(vocabulary, &err))) ||
             !loadRules(vm, kFile, facts, ruleSet, vocabulary, rules, &err)) {
             std::printf("    rules: %s\n", err.c_str());
             return false;

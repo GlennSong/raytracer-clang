@@ -235,24 +235,27 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // (with one 244 -> 249), the most on the road 74 at minute 9 -> 79 at minute 10, busy minutes 7 -> 10, trips 252 ->
     // 269, parked 208 -> 225, walks blocked 7 -> 13, another place 1 -> 3, arrivals 452 -> 451, no plan 6 -> 11, hash
     // 0x51e27f907adb580e -> 0x1d2715902b8559a2. Every car's line moved, so every car's day did; rings of waits still 0.
+    // AND AGAIN (ADR-0451) when drivers came to stop for people on foot in their way: the most on the road 79 -> 83,
+    // trips 269 -> 265, parked 225 -> 216, walks blocked 13 -> 17, arrivals 451 -> 444, no plan 11 -> 15, hash
+    // 0x1d2715902b8559a2 -> 0x0c538d7f7a9fb3fa; rings still 0.
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
         CHECK(b.cars().size() == 231u);
         CHECK(withCar == 249);
         CHECK(b.markers().size() == 451u);
-        CHECK(mostOnRoad == 79);
+        CHECK(mostOnRoad == 83);
         CHECK(mostOnRoadAt == 10);
         CHECK(busyMinutes == 10);
-        CHECK(b.counts().tripsBegun == 269u);
-        CHECK(b.counts().parkedReports == 225u);
-        CHECK(b.counts().walksBlocked == 13u);
+        CHECK(b.counts().tripsBegun == 265u);
+        CHECK(b.counts().parkedReports == 216u);
+        CHECK(b.counts().walksBlocked == 17u);
         CHECK(b.counts().otherPlaces == 3u);
-        CHECK(b.machine()->counts().arrivals == 451u);
-        CHECK(b.machine()->counts().noPlans == 11u);
+        CHECK(b.machine()->counts().arrivals == 444u);
+        CHECK(b.machine()->counts().noPlans == 15u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0x1d2715902b8559a2ull);
+        CHECK(hash == 0x0c538d7f7a9fb3faull);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full

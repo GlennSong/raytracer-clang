@@ -69,6 +69,9 @@ public:
     // the next sync it outlived the switch by one physics step, and the new chassis was made inside it: shoved,
     // damaged and off its lane (measured headless with the boxes on: 1040 chassis hits). False: it had no box.
     bool dropEntityCarBox(engine::World& world, engine::Entity car);
+    // ...a household car's kinematic box (INVALID_PHYSICS_BODY: it has none): the cars the driving drives, which a near
+    // car's look ahead passes over as it sees them already (ADR-0451)
+    engine::PhysicsBodyId entityCarBox(engine::World& world, engine::Entity car) const;
     // Is this body one of the walkers' kinematic boxes (what a near car's hit was, ADR-0450)?
     bool isPedestrianBox(engine::PhysicsBodyId id) const {
         for (const std::pair<const long long, ProxyBody>& kv : pedProxies_)
@@ -83,6 +86,7 @@ public:
 
 private:
     void releaseBodies();
+    bool entityCarKey(engine::World& world, engine::Entity car, long long& key) const;
     // P4.3: one live kinematic proxy box per drawn instance, keyed by the
     // instance's STABLE identity — the baking agent's uid, or a negative bake
     // ordinal for build-time scenery cars. Replaces the old positional pool

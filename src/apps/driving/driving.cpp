@@ -23,6 +23,7 @@ Driving::Driving(const engine::RoadModel* model) : model_(model), roads_(model ?
 void Driving::tick(Real dt) {
     if (listsStale_ && roads_) rebuildPathLists(*roads_, vehicleClasses_, cars_, pathLists_);   // (carriedAt wrote)
     listsStale_ = false;
+    horns_.clear();
     if (hasRules_ && roads_ && dt > 0) {
         step_ = dt;
         plan();
@@ -155,6 +156,20 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
     if (room && !readRoomNumbers(ruleSet, roomNumbers, why)) return false;
     roomOn_ = room;
     roomNumbers_ = roomNumbers;
+    // What is in a driver's way (ADR-0451), when the registry has it: its numbers, and the answers it acts on.
+    thingsOn_ = hasThingStep(facts);
+    if (thingsOn_) {
+        const Number* standOff = ruleSet.findNumber(kNumberThingStandOff);
+        const Number* clearance = ruleSet.findNumber(kNumberPassClearance);
+        if (!standOff || !clearance)
+            return refuse(why, "rule set \"" + ruleSet.name + "\" lacks the number \"" + kNumberThingStandOff + "\" or \"" +
+                                   kNumberPassClearance + "\", which the thing step reads");
+        thingStandOff_ = static_cast<Real>(standOff->value);
+        passClearance_ = static_cast<Real>(clearance->value);
+        hornAction_ = vocabulary.findAction(kActionHorn);
+        passKind_ = vocabulary.findIntention(kIntentionPass);
+        wayKind_ = vocabulary.findIntention(kIntentionWay);
+    }
     lightsRun_ = roadRules.lightsRun;
     lightTiming_ = lightTiming;
     junctionsOn_ = junctions;
@@ -552,6 +567,12 @@ void Driving::plan() {
                 if (!jp.connector.valid() || jp.connector.index >= roads_->paths.size()) continue;
                 lookAhead = std::max(lookAhead, static_cast<Real>(jp.startOdometer - c.odometer) +
                                                     roads_->paths[jp.connector.index].length);
+                // ...and, with the thing step, a car's length and a stand-off past the box: whether something stands
+                // there, leaving it no room, is seen at the line (things.h thing_stop)
+                if (thingsOn_ && k == 0)
+                    lookAhead = std::max(lookAhead, static_cast<Real>(jp.startOdometer - c.odometer) +
+                                                        roads_->paths[jp.connector.index].length + cls.length +
+                                                        thingStandOff_ + passClearance_);
             }
         }
         // The way ahead, and the junctions on it: plans kept, dropped and made before the driver notices anything. With
@@ -607,6 +628,60 @@ void Driving::plan() {
             view.giveWay = &p.verdict;
         }
         if (roomOn_) view.room = &p.roomStop;
+        // WHAT IS IN ITS WAY (ADR-0451): physics' answer for a carried car, the things on the road for a lane car
+        ThingView things;
+        if (thingsOn_) {
+            if (carried_.count(c.id)) {
+                const std::map<CarId, ThingAhead>::const_iterator s = seen_.find(c.id);
+                if (s != seen_.end()) things.thing = s->second;
+            } else {
+                const std::vector<engine::PathId> after(p.way.paths.size() > 1 ? p.way.paths.begin() + 1 : p.way.paths.end(),
+                                                        p.way.paths.end());
+                things.thing = findThingAhead(*roads_, c.path, c.along, after, lookAhead, cls.width * Real(0.5), c.offset,
+                                              passClearance_, things_, c.speed);
+            }
+            ThingWatch& w = watch_[c.id];
+            if (!things.thing.found || things.thing.id != w.id) {
+                w.id = things.thing.found ? things.thing.id : 0;
+                w.still = false;
+                w.waiting = false;
+                w.honked = false;
+                w.askedAnotherWayTick = 0;
+            }
+            if (things.thing.found) {
+                ++thingCounts_.seen;
+                if (things.thing.moves < kThingStillBelow) {
+                    if (!w.still) w.stillSince = tickCount_;
+                    w.still = true;
+                    things.stood = static_cast<Real>(static_cast<double>(tickCount_ - w.stillSince) * step_);
+                } else {
+                    w.still = false;
+                }
+                if (c.speed < kStandingBelow) {
+                    if (!w.waiting) w.waitingSince = tickCount_;
+                    w.waiting = true;
+                    things.waited = static_cast<Real>(static_cast<double>(tickCount_ - w.waitingSince) * step_);
+                } else {
+                    w.waiting = false;
+                }
+            } else {
+                w.waiting = false;
+            }
+            w.last = things.thing;
+            things.standOff = thingStandOff_;
+            things.myLength = cls.length;
+            for (std::size_t k = 0; k < p.junctions.count; ++k) {
+                const JunctionPlan& jp = p.junctions.plans[k];
+                if (!jp.connector.valid() || jp.connector.index >= roads_->paths.size()) continue;
+                const Real toLine = static_cast<Real>(jp.startOdometer - c.odometer);
+                if (toLine < 0) continue;
+                things.lineAt = toLine;
+                things.boxEndsAt = toLine + roads_->paths[jp.connector.index].length;
+                break;
+            }
+            p.thing = things.thing;
+            view.things = &things;
+        }
         // What it decides now it holds until its next turn to decide (#281: a bend's speed allows for that).
         view.decideInterval = static_cast<Real>(every) * step_;
         noticeFacts(view, facts_, wanted_, noticed_, noticeScratch_);
@@ -618,6 +693,11 @@ void Driving::plan() {
         }
         decide(rules_, noticed_, ruleSet_, t->person, decision_);
         p.held.decided = true;
+        if (thingsOn_ && p.thing.found) {
+            for (const ActionAnswer& a : decision_.actions) p.horn = p.horn || (a.action != kNoAction && a.action == hornAction_);
+            if (passKind_ < decision_.intentions.size()) p.pass = decision_.intentions[passKind_].given;
+            if (wayKind_ < decision_.intentions.size()) p.anotherWay = decision_.intentions[wayKind_].given;
+        }
         if (decision_.stop.given) {
             p.held.hasStop = true;
             p.held.stopAt = c.odometer + decision_.stop.distance;
@@ -682,6 +762,26 @@ void Driving::plan() {
         // Refused room for long at the junction it waits at: it asks for another way (issue #284). Visited in car order,
         // after its own decision is applied; a route found changes only this car's trip.
         if (roomOn_) askAnotherWay(c, *t);
+        // WHAT IT DECIDED ABOUT THE THING IN ITS WAY (ADR-0451): a horn, once for each thing; going round it; another way.
+        if (thingsOn_ && p.thing.found) {
+            ThingWatch& w = watch_[c.id];
+            if (p.horn && !w.honked) {
+                w.honked = true;
+                horns_.push_back(c.id);
+                ++thingCounts_.horns;
+            }
+            if (p.pass && p.thing.roomToPass && !w.passing) {
+                w.passing = true;
+                w.passOffset = p.thing.passOffset;
+                w.passEnd = c.odometer + std::max(Real(0), p.thing.distance) + 2 * p.thing.halfAcross +
+                            vehicleClasses_.at(c.vehicleClass).length + passClearance_;
+                ++thingCounts_.swerves;
+            }
+            if (p.anotherWay && w.askedAnotherWayTick == 0) {
+                w.askedAnotherWayTick = tickCount_;
+                askAnotherWayRound(c, *t, p.thing);
+            }
+        }
     }
 }
 
@@ -783,6 +883,20 @@ void Driving::move(Real dt) {
         Car& out = carsNext_[i];
         out.acceleration = step.acceleration;
         out.binding = step.binding;
+        // GOING ROUND SOMETHING (ADR-0451): back on its line once past it; a lane car eases sideways to the offset its
+        // driver means to drive at (a carried car's host steers there, passOffset)
+        if (thingsOn_) {
+            const std::map<CarId, ThingWatch>::iterator wi = watch_.find(c.id);
+            Real target = 0;
+            if (wi != watch_.end() && wi->second.passing) {
+                if (c.odometer >= wi->second.passEnd) wi->second.passing = false;
+                else target = wi->second.passOffset;
+            }
+            if (!isCarried && out.offset != target) {
+                const Real most = kSwerveSideSpeed * dt;
+                out.offset = std::fabs(target - out.offset) <= most ? target : out.offset + (target > out.offset ? most : -most);
+            }
+        }
         if (isCarried) {
             // physics moves it: the record keeps where the host last wrote it is (carriedAt), and its speed
             out.speed = c.speed;
@@ -911,32 +1025,55 @@ namespace {
 // How many paths past the one its front is on a carried car's front is looked for on (one tick never takes it further).
 constexpr std::size_t kCarriedLookOn = 3;
 
-// THE NEAREST POINT OF A PATH'S CENTRE LINE to `p`: how far along it, how far `p` is from it, and how far to its kerb
-// side (+, the driver's left: the world drives on the left) or offside (-).
-struct OnLine {
-    Real along = 0, away = 0, side = 0;
-};
-OnLine nearestOn(const engine::LaneGraph& roads, engine::PathId path, const engine::Vec2& p) {
-    OnLine best;
-    best.away = -1;
-    const engine::Path& P = roads.paths[path.index];
-    for (uint32_t k = P.curve.first; k + 1 < P.curve.end(); ++k) {
-        const engine::Vec2 a = roads.points[k], b = roads.points[k + 1];
-        const engine::Vec2 ab = b - a;
-        const Real len2 = ab.lengthSquared();
-        const Real s = len2 > 0 ? std::clamp(((p - a).x * ab.x + (p - a).y * ab.y) / len2, Real(0), Real(1)) : Real(0);
-        const engine::Vec2 q = a + ab * s;
-        const Real away = (p - q).length();
-        if (best.away >= 0 && away >= best.away) continue;
-        const Real len = std::sqrt(len2);
-        const engine::Vec2 dir = len > 0 ? ab * (1 / len) : engine::Vec2(1, 0);
-        best.away = away;
-        best.along = roads.along[k] + s * len;
-        // (facing +z the driver's left is +x: the left of a heading (x, z) is (z, -x))
-        best.side = (p - q).x * dir.y - (p - q).y * dir.x;
-    }
-    return best;
+// (nearestOn, the nearest point of a path's centre line: things.h)
+}  // namespace
+
+const ThingAhead* Driving::thingAhead(CarId car) const {
+    const std::map<CarId, ThingWatch>::const_iterator w = watch_.find(car);
+    return w != watch_.end() ? &w->second.last : nullptr;
 }
+
+Real Driving::passOffset(CarId car) const {
+    const std::map<CarId, ThingWatch>::const_iterator w = watch_.find(car);
+    return w != watch_.end() && w->second.passing ? w->second.passOffset : Real(0);
+}
+
+// ANOTHER WAY ROUND A THING THAT STANDS (ADR-0451): a way from where the car is that does not use the path the thing
+// stands on (closed for this one search). None (the thing stands on the car's own path, or nothing else leads there):
+// it keeps its way and waits.
+void Driving::askAnotherWayRound(Car& c, Trip& t, const ThingAhead& thing) {
+    ++thingCounts_.anotherWaysWanted;
+    if (!thing.path.valid() || thing.path == c.path || thing.path.index >= roads_->paths.size()) return;
+    // (a route is closed by its turns: the connector the thing stands on, or every connector into the lane it stands on)
+    RouteClass cls = routeClass(c.vehicleClass);
+    const auto close = [&](engine::PathId p) {
+        const std::vector<engine::PathId>::iterator at = std::lower_bound(cls.closed.begin(), cls.closed.end(), p);
+        if (at == cls.closed.end() || *at != p) cls.closed.insert(at, p);
+    };
+    if (roads_->paths[thing.path.index].kind == engine::PathKind::Connector) {
+        close(thing.path);
+    } else {
+        for (uint32_t k = 0; k < roads_->paths.size(); ++k) {
+            const engine::Path& P = roads_->paths[k];
+            if (P.kind != engine::PathKind::Connector) continue;
+            for (uint32_t n = P.next.first; n < P.next.end() && n < roads_->nextPaths.size(); ++n)
+                if (roads_->nextPaths[n] == thing.path) close(engine::PathId(k));
+        }
+    }
+    PathPoint front;
+    front.path = c.path;
+    front.along = c.along;
+    Route route = findRoute(*model_, routeBounds_, cls, front, t.destination);
+    if (!route.found) return;
+    route.vehicle = routeClass(c.vehicleClass);
+    ++thingCounts_.anotherWays;
+    t.route = std::move(route);
+    t.legReached = 0;
+    c.held.decided = false;
+    dropPlansForNewRoute(t);
+}
+
+namespace {
 }  // namespace
 
 bool Driving::carry(CarId id, bool carriedNow, Real lag) {
@@ -945,6 +1082,7 @@ bool Driving::carry(CarId id, bool carriedNow, Real lag) {
     if (carriedNow) {
         carried_[id].lag = std::max(Real(0), lag);
     } else if (carried_.erase(id) > 0) {
+        seen_.erase(id);
         // back on its lane: at the nearest point along it, on its centre line, at the speed last written
         c->offset = 0;
         listsStale_ = true;

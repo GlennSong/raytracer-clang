@@ -12,6 +12,7 @@
 #include "bus_stop_props.h"
 #include "city_brain.h"                               // the households' cars (ADR-0444)
 #include "city_car.h"                                 // ...which are entities
+#include "city_near.h"                                // CityNearCar: a near car the driving sees by itself (ADR-0451)
 #include "city_crowd.h"                               // a crowd made from the roads (ADR-0446)
 #include "../../engine/ai/pathfind.h"                 // stronglyConnected: where a crowd's people can walk
 #include "../../engine/procgen/city/polyline.h"       // distToSegment
@@ -94,6 +95,9 @@ Vec3 translationOf(const Mat4& t) { return Vec3(t.m[0][3], t.m[1][3], t.m[2][3])
 // per-tick driver cone and the walkers' think-cadence kPedVision* constants
 // (city_sim.cpp). The wedge draws what the agent can actually see.
 constexpr Real kCarConeRange = 18.0, kCarConeHalfAngle = 0.45;
+// The player's number as a thing on the road (ADR-0451); a physics car the driving does not drive takes the next ones.
+// (People on foot are numbered by their agent uid, far below.)
+constexpr uint32_t kPlayerThing = 0xFFF00000u;
 constexpr Real kPedConeRange = 4.5, kPedConeHalfAngle = 1.2;
 // Debug tints, dimmer than the state rings so neither view shouts over them.
 const Vec3 kNavTint(0.18, 0.32, 0.55);    // faint blue: the road/lane graph
@@ -5412,6 +5416,30 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
             obstacles.push_back(Vec2(t.position.x, t.position.z));
             halves.push_back(std::max(Real(1.5), v.config.chassisHalfExtent.z));   // a CAR: held short by its length
         });
+    // THE SAME, AS THINGS ON THE ROAD for the new driving's drivers (ADR-0451): the player on foot, and every physics
+    // car the driving does not drive (the player's, one left standing) -- a near car it drives it sees by itself
+    {
+        std::vector<driving::RoadThing> things;
+        if (!playerRiding_)
+            ctx.world.each<engine::Transform, engine::CharacterController, engine::ControlledBy>(
+                [&](engine::Entity, engine::Transform& t, engine::CharacterController&, engine::ControlledBy&) {
+                    driving::RoadThing th;
+                    th.id = kPlayerThing;
+                    th.at = Vec2(t.position.x, t.position.z);
+                    th.halfAcross = CitySim::kWalkerHalfAcross;
+                    things.push_back(th);
+                });
+        uint32_t next = kPlayerThing + 1;
+        ctx.world.each<engine::Transform, engine::Vehicle>([&](engine::Entity e, engine::Transform& t, engine::Vehicle& v) {
+            if (ctx.world.has<CityNearCar>(e)) return;
+            driving::RoadThing th;
+            th.id = next++;
+            th.at = Vec2(t.position.x, t.position.z);
+            th.halfAcross = v.config.chassisHalfExtent.x;
+            things.push_back(th);
+        });
+        sim_.setExternalThings(std::move(things));
+    }
     sim_.setExternalObstacles(std::move(obstacles), std::move(halves));
 
     // The pose bake exists for the RENDERER. When the clock runs several fixed
