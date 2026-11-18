@@ -186,6 +186,7 @@ bool DrivingHost::takenByPlayer(driving::Driving& d, engine::Entity e) {
     }
     carWorld_->remove<CityCarOnLane>(e);
     carWorld_->remove<CityCarRoams>(e);
+    if (CityCarLink* link = carWorld_->get<CityCarLink>(e)) link->away = true;   // the player's from now (ADR-0455)
     --counts_.drivers;
     return true;
 }

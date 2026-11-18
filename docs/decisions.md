@@ -22011,3 +22011,60 @@ Words: a **fixed step** is one tick of the engine's clock (1/60 s); on a slow fr
   - The driving's hashes do not move: v2_drives `0x55109fe9a8e247b1`, brain_crowd `0xfd98526fa3b9d920`.
 
 **Revisit when** a level sets `localHz` for the new driving (then the switch-in pose and the boxes sit between ticks), or far cars become records.
+
+## ADR-0455 — What the agent brain knows about a household's car is on the car's entity; the player takes a car, and gives it back, one way each (#306, task 3)
+**Status:** Provisional · **Date:** 2026-11-18
+
+What it does: the agent brain no longer keeps its own record of each household car. Before, it held a list of `CarRec` beside the car's entity, and several facts were in both and written by hand in both places: the car's household, whether the player had it (`lost` in the record, `away` on the entity), and whether its resident was in it (`aboard` in the record, the driver on the entity). One forgotten write and the brain said one thing while every other system that looks for cars (`carsNear`) said another. Now every fact is held once, on the entity, and the brain reads it from there. At the same time, taking a car is one function whoever's the car is, and giving one back is one function.
+
+Words: a **car entity** is one entity with `CityCarBody` (what it is, its number), `CityCarLink` (its household, the sim agent at its wheel, and `away`: the player has it), a Transform, and `CityCarOnLane` while the driving has it (ADR-0444, ADR-0453). A **household's car** is one the brain's residents share. An **outsider** is anyone the brain does not own: the player, or a walker a director has taken over (ADR-0443). The **hand-over** (`DrivingHost`) sends the cars that drive round for ever (`CityCarRoams`). The **near tier** turns the cars nearest the player into Jolt cars (ADR-0447, ADR-0448).
+
+**Size, before:** `CarRec` had 17 fields. 71 lines named it. It was found from a car's number by walking the whole list (`car(ref)`, 30 calls, several every tick for every car). Six of its facts were copies or could be worked out from the entity. Taking a car had two functions (the brain's `takenByPlayer` and the hand-over's `takenByPlayer`), chosen between at two call sites (the key in `city_vehicles.cpp`, and the near tier's step 1, which only ever told the brain).
+
+**1. Where each fact of the old record now lives:**
+
+| Fact | Now |
+|---|---|
+| its number (`id`) | `CityCarBody::id` (already there) |
+| its entity | the entity itself; the brain keeps only the list of its cars' entities |
+| its household | `CityCarLink::household` (already there; it was written twice) |
+| who has it (`heldBy`: a resident, an outsider, nobody) | `CityCarKept::heldBy` (new) |
+| the outsider's sim agent (`outsiderAgent`) | worked out: `CityCarLink::driver` (an outsider in a car sits at its wheel) |
+| the player has it (`lost`) | `CityCarLink::away` (already there; it was written twice) |
+| its resident is in it (`aboard`) | worked out: the holder is a resident and that resident's agent is `CityCarLink::driver` |
+| where it stands (`standing`, a place the brain plans with) | `CityCarKept::standing` |
+| left where nobody can drive it from (`stranded`) | `CityCarKept::stranded` |
+| standing / waiting for room / easing out / on the road / easing in (`phase`) | `CityCarKept::phase` (`CityCarPhase`) |
+| the slide between its space and the lane (from, to, how far) | `CityCarKept::ease*` |
+| a trip wanted once it is in the lane (who, from, to) | `CityCarKept::tripWanted`, `tripPerson`, `tripFrom`, `tripTo` |
+
+**Why one new component, `CityCarKept`** (`city_car.h`), on household cars only: the facts in it are the brain's own and no other component held them (a place the brain plans with is a brain handle; which resident has claimed the car, before they are in it, is a brain fact; the slide between space and lane is the brain's interim pulling out and parking). It is one component, not several, because they are made together, live as long as the car, and splitting them would only spread one record over several. It is never added or removed after the car is made, so a reference to it stays good across a tick. Its phase is not worked out from `CityCarOnLane`, because a car can be on the driving's road and standing (left in a lane) or easing out.
+
+**2. Found at once.** The brain keeps `cars` (the entities, in the order they were made, which is the order every walk over the cars takes, so nothing changes order) and the first car's number. Household cars are numbered in a row (`CitySim::nextCarNumber`, past every car before), so the car of a number is `cars[number - first]`; `start` refuses a household whose car number does not follow. This is a handle from number to entity, nothing more: no fact is copied into it.
+
+**3. One way to take a car: `CitySim::playerTakesCar(world, car)`** (`city_car.cpp`). The key (`CityVehicleSystem::promote`) and the near tier (a player sitting in one of its Jolt cars, its step 1) both call it, for any car entity, lane car or Jolt car:
+- a household's car (`CityCarLink::household` set): the brain's half, `CityBrain::takenByPlayer` (off the driving's road, its driver put out on the kerb side and told `vehicle_gone`, the household told; `away` set);
+- a car that drives round for ever (`CityCarRoams`): the hand-over's half, `DrivingHost::takenByPlayer` (trip ended, off the road, never sent again), which now also sets `away`, so every reader agrees the player has it;
+- anything else (a test bed's lab car): false, as before.
+The near tier used to tell only the brain, so a roaming car taken there would have kept being sent by the hand-over (task 1's note). It now goes through the same function.
+
+**Giving it back: `CitySim::playerLeftCar(world, car)`** (#293). The near tier, once the player has left a household's car and it has stopped, retires its Jolt car and then calls it; it tells the brain (`CityBrain::carLeftAt`, where the car stands). A roaming car the player took is not given back (it has no household; handing it back to the hand-over is not built): the near tier's give-back step now collects only household cars, so the roaming car stays the player's Jolt car where it was left, exactly as before.
+
+**Not a second model:** `CityCarKept` holds only facts nobody else holds. The brain's `cars` list is entities only. `Household::cars` (the numbers of a household's cars) stays as the brain's index of which cars a household shares, numbers only. The table of which car stands in which kerb space (`occupant`) and which space is held for whom (`held`) are the kerb spaces' facts, not the cars', and are unchanged.
+
+**Measured** (headless; the same every run):
+- The hashes are unchanged, as they should be for a change of where facts are kept: `level_brain_crowd` `0xfd98526fa3b9d920` (its one known failure, the kerb-end share, `test_brain_crowd.cpp:314`); `level_traffic_lab_v2_drives` `0x55109fe9a8e247b1` (its two known failures); the near crowd `0xdf46fdec96641d00` (its known off-lane stand).
+- `level_brain_lab` 12/12 (the 11 before and the new one), `first_cars` 1/1, `river_town` 1/1, `traffic_lab` filter 8/10 (the two known v2 checks, and the stale 3364-paths pin). `brain_tests` 23/23, `driving_tests` 199/199, `lanes_tests` 132/132, `physics_tests` near_tier 11/12 (the known off-lane stand; the take-and-give-back case passes). `run_tests` trip_plan 11, goal 6, _lua 25, parking 5, spectat 7, tolerance_literals 2.
+- In the viewer (brain_lab, `tools/rtctl.py`): the player beside ana's parked car pressed E; the brain said "taken by the player"; the player drove about 30 m, stopped and got out; the brain said the car stood "left at the point -350.2 64.8, free"; `goto ana work`: she walked to it, got in and drove it ("on the road, ana has it").
+
+**Tests:**
+- New: `level_brain_lab_who_has_a_car_has_one_answer`. After each of: standing, a resident driving it, the player taking it (`playerTakesCar`), a tick later, giving it back (`playerLeftCar`), a tick later, and another resident driving it away, it asks every reader who has the car and whether it is away (the brain's `carHolder`, `carPose`, `describeCar` and `inCar`; `carsNear`; the driving and the lane component) and fails on the first disagreement. It bites: with the one write `CityCarLink::away = false` left out of the give-back, four checks fail ("away, yet the brain says it is not an outsider's"; the resident then drives a car no system can see).
+- `level_traffic_lab_v2_the_cars_are_counted_followed_and_taken` takes the car through `playerTakesCar` and checks `away` is set.
+
+**Not done, for later tasks:**
+- `carEntityNumbered` (the key's look-up from a car's number to its entity, used several times per press of E) still walks every car entity. Not per tick; one index of all car entities would belong with the "far cars are records" work.
+- A household car given back in the middle of a street on brain_lab, where the player took it from under ana 30 s into her drive (seen while writing the new test, not with the code before this change, so not proven to be older): ben plans with it, gets in, and the driving refuses every trip from where it was put in the kerb lane at once; he plans again every minute for ever. The new test gives the car back in a kerb space instead. Worth a look with the driving's refusals.
+- A roaming car the player took is never handed back to the hand-over.
+- The near test bed's cars (`kLabPerson`) have no owner to tell: `playerTakesCar` is false for them, as before. With the key that refuses the take; sitting in one in the near tier still seats the player (VehicleSystem's key) and the driving keeps the car's record and trip. With task 13's one convention for nobody's car.
+
+**Revisit when** the brain's states move into Lua (#305): the take and give-back are then verbs of the brain API, and these two functions are where a director's take joins them.

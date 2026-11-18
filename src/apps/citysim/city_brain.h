@@ -49,17 +49,21 @@
 //
 // SOMEBODY ELSE AND THE HOUSEHOLD'S CAR (ADR-0443). An OUTSIDER is anyone the brain does not own: the player, or a
 // walker a director has taken over. An outsider gets into a household's car and out of it through this class (board,
-// alight: what the possession channel calls); the player taking a car (with the key: CityVehicleSystem, which makes the
-// same entity a physical Vehicle, ADR-0445) is takenByPlayer. While an outsider has a car it is not free and stands
-// nowhere a resident could take it from. Its
-// driver, if it had one, is stood on the kerb side and told `vehicle_gone`. Left again, it stands where it was left:
+// alight: what the possession channel calls); the player taking a car (CitySim::playerTakesCar, the one way: the key,
+// which makes the same entity a physical Vehicle, ADR-0445, or a car of the near tier) is takenByPlayer, and giving it
+// back (CitySim::playerLeftCar) is carLeftAt. While an outsider has a car it is not free and stands nowhere a resident
+// could take it from. Its driver, if it had one, is stood on the kerb side and told `vehicle_gone`. Left again, it
+// stands where it was left:
 // in a kerb space when it is in one, otherwise at a point, put into the kerb lane beside that point so it can be
 // driven away. A DIRECTOR HOLDING ONE OF THE BRAIN'S PEOPLE (the possession channel) is the brain's `possessed` state.
 //
 // INTERIM, said plainly: the car slides sideways between its space and the lane (real pulling out and parking come
 // with lane changes); a car the player leaves at a point is drawn where it was left and driven from the kerb lane
 // beside it; a household's car has no physics body of its own until the player takes it (only the kinematic box every
-// drawn car instance gets, city_physics.cpp); a car the player took is never handed back (#293); nothing here is saved.
+// drawn car instance gets, city_physics.cpp), and the near tier's while it is near; nothing here is saved.
+//
+// WHAT THE BRAIN KNOWS ABOUT A CAR IS ON THE CAR (ADR-0455): its CityCarKept component (city_car.h), beside its
+// CityCarLink (household, driver, away). The brain holds only the cars' entities in the order they were made.
 //
 // Same result every run: nothing reads the wall clock, and the machine answers events in a fixed order.
 
@@ -289,13 +293,13 @@ public:
     // household's car an outsider has.
     bool alight(int agent);
     // THE PLAYER TAKES THE CAR, with whoever is at its wheel put out on the kerb side and told `vehicle_gone`: it is
-    // the player's as a car of their own from now, not drawn here (CityCarLink::away). What the player's key calls
-    // (CityVehicleSystem::promote, ADR-0445), before the same entity gains its Vehicle. False: no such car, or an
-    // outsider has it already.
+    // the player's as a car of their own from now, not drawn here (CityCarLink::away). The brain's half of the one way a
+    // car is taken, CitySim::playerTakesCar (the key, CityVehicleSystem::promote, ADR-0445; the near tier; ADR-0455),
+    // called before the same entity gains its Vehicle. False: no such car, or an outsider has it already.
     bool takenByPlayer(int car);
-    // The player's own copy of a household's car is handed back: the car stands at `pos`, pointing along `heading`,
-    // free. False: `car` is no household car an outsider has, or it is a physical Vehicle now (taken with the key:
-    // handing that back is #293).
+    // The player's household car is handed back: the car stands at `pos`, pointing along `heading`, free. The brain's
+    // half of CitySim::playerLeftCar (#293). False: `car` is no household car an outsider has, or it is still a
+    // physical Vehicle (the near tier retires it first).
     bool carLeftAt(int car, Vec2 pos, Vec2 heading);
     // A director takes the sim agent `agent` over, or lets them go. False: the brain does not own that agent.
     bool directorHolds(int agent, bool on);

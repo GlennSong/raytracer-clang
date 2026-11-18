@@ -89,35 +89,16 @@ struct CityBrain::Impl {
     std::vector<Vec2> points;   // where a car was left in a lane, by the low bits of a point place
     brain::EventId vehicleGone = brain::kNoId, possessed = brain::kNoId, released = brain::kNoId;
 
-    // THE CARS, each one entity of the World (city_car.h): its pose, body, household and driver, and while the driving
-    // has it, its CityCarOnLane. A car's CarRef and its id in the driving are both its number (CityCarBody::id). What
-    // is kept here is the brain's own table about it: where it stands, who has it, and what it is doing between its
-    // space and the lane.
-    enum class CarPhase : uint8_t {
-        Standing,         // in a kerb space, or left standing in a lane
-        WaitingForRoom,   // in its space, its driver aboard, waiting for the kerb lane to be clear
-        EasingOut,        // placed in the kerb lane; drawn sliding out of the space
-        OnRoad,           // the driving's
-        EasingIn,         // out of the driving; drawn sliding into its space
-    };
-    struct CarRec {
-        uint32_t id = 0;                      // its number (CityCarBody::id)
-        engine::Entity entity;
-        int household = -1;
-        PlaceRef standing;                    // where it stands, or last stood (not valid: an outsider has it)
-        AgentId heldBy = brain::kNoAgent;     // a resident, kOutsider, or nobody
-        int outsiderAgent = -1;               // the sim agent in it when an outsider has it (-1: the player themselves)
-        bool lost = false;                    // an outsider has it and it is away (the player's own car)
-        bool stranded = false;                // left where no lane is beside it: nobody can drive it from there
-        bool aboard = false;                  // its holder, a resident, is in it
-        CarPhase phase = CarPhase::Standing;
-        Vec2 easeFromPos, easeFromHeading, easeToPos, easeToHeading;
-        Real easeT = 0;
-        bool tripWanted = false;              // a trip to begin once it is in the lane
-        AgentId tripPerson = brain::kNoAgent;
-        PlaceRef tripFrom, tripTo;
-    };
-    std::vector<CarRec> cars;
+    // THE CARS, each one entity of the World (city_car.h), and everything about a car is on it (ADR-0455): its pose,
+    // body, household, driver and whether the player has it, while the driving has it its CityCarOnLane, and the
+    // brain's own keeping of it (CityCarKept: where it stands, who has it, what it is doing between its space and the
+    // lane). A car's CarRef and its id in the driving are both its number (CityCarBody::id). Kept here are only the
+    // entities, in the order they were made (the order every walk over the cars takes), and the first one's number:
+    // the household cars are numbered in a row (start), so the car of a number is found at once (car), never by a walk.
+    using CarPhase = CityCarPhase;
+    using Car = engine::Entity;
+    std::vector<Car> cars;
+    uint32_t firstCar = 0;
     std::map<uint32_t, uint32_t> occupant;   // kerb space (place id) -> the car in it
     std::map<AgentId, uint32_t> held;        // person -> the kerb space (place id) held for them
 
@@ -179,45 +160,50 @@ struct CityBrain::Impl {
     // ---- the sim's own things -----------------------------------------------------------------------------------------
     Agent& agentOf(AgentId who) { return sim.agents_[static_cast<std::size_t>(people[who].agent)]; }
     const Agent& agentOf(AgentId who) const { return sim.agents_[static_cast<std::size_t>(people[who].agent)]; }
-    CarRec* car(CarRef ref) {
-        for (CarRec& c : cars)
-            if (c.id == ref.id) return &c;
-        return nullptr;
+    // The household car numbered `ref` (not valid: none, or the car a test put in a space).
+    Car car(CarRef ref) const {
+        if (!ref.valid() || ref.id < firstCar || ref.id - firstCar >= cars.size()) return Car{};
+        return cars[ref.id - firstCar];
     }
-    const CarRec* car(CarRef ref) const { return const_cast<Impl*>(this)->car(ref); }
-    CarRec* carNumbered(int number) {
+    Car carNumbered(int number) const {
         CarRef ref;
         if (number >= 0) ref.id = static_cast<uint32_t>(number);
-        return ref.valid() ? car(ref) : nullptr;
+        return car(ref);
     }
-    const CarRec* carNumbered(int number) const { return const_cast<Impl*>(this)->carNumbered(number); }
-    // ---- the car's own components (city_car.h): every question about where it is or what it is asks them -----------
-    engine::Transform& poseOf(const CarRec& c) const { return *ecs->get<engine::Transform>(c.entity); }
-    const CityCarBody& bodyOf(const CarRec& c) const { return *ecs->get<CityCarBody>(c.entity); }
-    CityCarLink& linkOf(const CarRec& c) const { return *ecs->get<CityCarLink>(c.entity); }
-    Vec2 carPos(const CarRec& c) const { return carPosition(poseOf(c)); }
-    Vec2 carFacing(const CarRec& c) const { return carHeading(poseOf(c)); }
-    driving::CarId idOf(const CarRec& c) const { return driving::CarId(c.id); }
+    // ---- the car's own components (city_car.h): every question about the car asks them -----------------------------
+    engine::Transform& poseOf(Car c) const { return *ecs->get<engine::Transform>(c); }
+    const CityCarBody& bodyOf(Car c) const { return *ecs->get<CityCarBody>(c); }
+    CityCarLink& linkOf(Car c) const { return *ecs->get<CityCarLink>(c); }
+    CityCarKept& keptOf(Car c) const { return *ecs->get<CityCarKept>(c); }
+    uint32_t numberOf(Car c) const { return bodyOf(c).id; }
+    Vec2 carPos(Car c) const { return carPosition(poseOf(c)); }
+    Vec2 carFacing(Car c) const { return carHeading(poseOf(c)); }
+    driving::CarId idOf(Car c) const { return driving::CarId(numberOf(c)); }
+    // Its holder, a resident, is in it: at its wheel.
+    bool aboard(Car c) const {
+        const AgentId h = keptOf(c).heldBy;
+        return h < people.size() && linkOf(c).driver >= 0 && linkOf(c).driver == people[h].agent;
+    }
     // Is it on the driving's road?
-    bool onRoad(const CarRec& c) const { return d->car(idOf(c)) != nullptr; }
+    bool onRoad(Car c) const { return d->car(idOf(c)) != nullptr; }
     // ITS LANE COMPONENT FOLLOWS THE DRIVING: added when the driving has just been given the car, taken away when the
     // driving no longer has it. Called after every placeCar and removeCar.
-    void syncLane(const CarRec& c) {
-        const bool has = ecs->has<CityCarOnLane>(c.entity);
+    void syncLane(Car c) {
+        const bool has = ecs->has<CityCarOnLane>(c);
         if (onRoad(c) && !has) {
             CityCarOnLane lane;
             lane.car = idOf(c);
             lane.roadYFrom = lane.roadY = poseOf(c).position.y;
-            ecs->add<CityCarOnLane>(c.entity, lane);
+            ecs->add<CityCarOnLane>(c, lane);
         } else if (!onRoad(c) && has) {
-            ecs->remove<CityCarOnLane>(c.entity);
+            ecs->remove<CityCarOnLane>(c);
         }
     }
     // A PERSON IN A CAR IS WHERE THE CAR IS (#296, ADR-0445): whoever sits at a car's wheel has their own place and
     // heading set to the car's. One way: the car is the authority and nothing is written back. Called at the end of
     // every tick (after the driving and the slides between space and lane) and when they get in.
     void followCars() {
-        for (const CarRec& c : cars) {
+        for (const Car c : cars) {
             const int agent = linkOf(c).driver;
             // (a car of the near tier is a Vehicle its driver still drives, its Transform physics': followed too;
             // ADR-0448. One the player has is not the household's to follow.)
@@ -234,7 +220,7 @@ struct CityBrain::Impl {
         return -1;
     }
     BrainTime now() const { return static_cast<BrainTime>(std::llround(sim.simSeconds_ * kMillis)); }
-    Real lengthOf(const CarRec& c) const { return d->vehicleClasses().at(bodyOf(c).vehicleClass).length; }
+    Real lengthOf(Car c) const { return d->vehicleClasses().at(bodyOf(c).vehicleClass).length; }
 
     // ---- places -------------------------------------------------------------------------------------------------------
     static bool isMarker(PlaceRef p) { return p.valid() && (p.id & kKindMask) == kMarkerTag; }
@@ -377,8 +363,8 @@ struct CityBrain::Impl {
     bool drivableSpacesOnly = false;
     // The driving class a car is driven as (class 0 for a car the brain does not have).
     uint32_t classOf(CarRef ref) const {
-        const CarRec* c = car(ref);
-        return c ? bodyOf(*c).vehicleClass : 0u;
+        const Car c = car(ref);
+        return c.valid() ? bodyOf(c).vehicleClass : 0u;
     }
     // The kerb spaces near a place a car of class `cls` can drive from and to, nearest first on foot.
     std::vector<PlaceRef> spacesFor(PlaceRef door, uint32_t cls) const {
@@ -403,40 +389,42 @@ struct CityBrain::Impl {
             if (h.second == space.id && h.first != who) return false;
         return true;
     }
-    void leaveEverySpace(const CarRec& c) {
+    void leaveEverySpace(Car c) {
+        const uint32_t number = numberOf(c);
         for (std::map<uint32_t, uint32_t>::iterator it = occupant.begin(); it != occupant.end();)
-            it = it->second == c.id ? occupant.erase(it) : std::next(it);
+            it = it->second == number ? occupant.erase(it) : std::next(it);
     }
     // THE HOUSEHOLD IS TOLD ITS CAR HAS CHANGED (it is free, it has moved, it is gone): everyone but `except`. Only a
     // person standing with no way there acts on it (brain.lua `things_changed`).
-    void tellHousehold(const CarRec& c, AgentId except) {
-        if (!machine || c.household < 0) return;
-        for (const AgentId m : households[static_cast<std::size_t>(c.household)].members)
+    void tellHousehold(Car c, AgentId except) {
+        const int household = linkOf(c).household;
+        if (!machine || household < 0) return;
+        for (const AgentId m : households[static_cast<std::size_t>(household)].members)
             if (m != except) machine->notifyChanged(m);
     }
 
     // ---- getting in and out -------------------------------------------------------------------------------------------
-    bool getIn(AgentId who, CarRec& c);
-    void getOut(AgentId who, CarRec& c);
+    bool getIn(AgentId who, Car c);
+    void getOut(AgentId who, Car c);
     // Anybody into the car's driver's seat (they are in it from now: not drawn on foot), and out of it again, stood at
     // `out`.
-    void seat(int agent, const CarRec& c);
-    void unseat(int agent, const CarRec& c, Vec2 out);
+    void seat(int agent, Car c);
+    void unseat(int agent, Car c, Vec2 out);
     // Where a person getting out of the car stands: on the kerb side (beside its space, or beside the road where it
     // is), or, failing that, a step to its side clear of the lanes.
-    Vec2 outOf(const CarRec& c) const;
-    void writeCarPose(CarRec& c, Vec2 pos, Vec2 heading);
+    Vec2 outOf(Car c) const;
+    void writeCarPose(Car c, Vec2 pos, Vec2 heading);
     void haltWalker(AgentId who);
     void tickWalks(Real dt);
     void tickCars(Real dt);
     void tickDay(AgentId who);
     void tickChoice(AgentId who);
-    void slideIn(CarRec& c, PlaceRef space);
+    void slideIn(Car c, PlaceRef space);
     void shareOutTrace();
     // ---- somebody the brain does not own ------------------------------------------------------------------------------
-    void outsiderTook(CarRec& c, int agent, bool lost);
-    void outsiderLeft(CarRec& c);
-    std::string carLine(const CarRec& c) const;
+    void outsiderTook(Car c, bool lost);
+    void outsiderLeft(Car c);
+    std::string carLine(Car c) const;
 };
 
 // ---- The kerb lane beside a place, as the point a car's FRONT is at ---------------------------------------------------
@@ -448,7 +436,7 @@ struct CityBrain::Impl::FrontPoints : brain::KerbLanes {
     explicit FrontPoints(Impl& i) : im(i) {}
     Impl& im;
     Real length = 0;
-    FrontPoints& of(const CarRec& c) {
+    FrontPoints& of(Car c) {
         length = im.lengthOf(c);
         return *this;
     }
@@ -520,51 +508,57 @@ struct CityBrain::Impl::LabWorld : brain::World {
         return best;
     }
     bool carStanding(CarRef ref, PlaceRef& out) const override {
-        const CarRec* c = im.car(ref);
+        const Car c = im.car(ref);
+        if (!c.valid()) return false;
+        const CityCarKept& k = im.keptOf(c);
         // (a car an outsider has stands nowhere a resident could take it from; nor does one left where no lane is)
-        if (!c || !c->standing.valid() || c->heldBy == kOutsider || c->stranded) return false;
-        out = c->standing;
+        if (!k.standing.valid() || k.heldBy == kOutsider || k.stranded) return false;
+        out = k.standing;
         return true;
     }
     bool carFreeFor(CarRef ref, AgentId who) const override {
-        const CarRec* c = im.car(ref);
-        return c && (c->heldBy == brain::kNoAgent || c->heldBy == who);
+        const Car c = im.car(ref);
+        return c.valid() && (im.keptOf(c).heldBy == brain::kNoAgent || im.keptOf(c).heldBy == who);
     }
     bool claimCar(CarRef ref, AgentId who) override {
-        CarRec* c = im.car(ref);
-        if (!c || (c->heldBy != brain::kNoAgent && c->heldBy != who)) return false;
-        c->heldBy = who;
+        const Car c = im.car(ref);
+        if (!c.valid()) return false;
+        CityCarKept& k = im.keptOf(c);
+        if (k.heldBy != brain::kNoAgent && k.heldBy != who) return false;
+        k.heldBy = who;
         return true;
     }
     void releaseCar(CarRef ref, AgentId who) override {
-        CarRec* c = im.car(ref);
-        if (!c || c->heldBy != who) return;
-        im.getOut(who, *c);
-        c->heldBy = brain::kNoAgent;
-        c->tripWanted = false;
-        if (c->phase == CarPhase::WaitingForRoom) c->phase = CarPhase::Standing;
-        im.tellHousehold(*c, who);
+        const Car c = im.car(ref);
+        if (!c.valid() || im.keptOf(c).heldBy != who) return;
+        im.getOut(who, c);
+        CityCarKept& k = im.keptOf(c);
+        k.heldBy = brain::kNoAgent;
+        k.tripWanted = false;
+        if (k.phase == CarPhase::WaitingForRoom) k.phase = CarPhase::Standing;
+        im.tellHousehold(c, who);
     }
     void leaveCar(CarRef ref, AgentId who) override {
-        CarRec* c = im.car(ref);
-        if (!c || c->heldBy != who) return;
+        const Car c = im.car(ref);
+        if (!c.valid() || im.keptOf(c).heldBy != who) return;
         // on the road it stays where it is, placed and undriven, and stands at a place of its own
-        if (im.onRoad(*c)) c->standing = im.pointPlace(im.carPos(*c));
-        im.getOut(who, *c);
-        c->heldBy = brain::kNoAgent;
-        c->tripWanted = false;
-        if (c->phase != CarPhase::EasingIn) c->phase = CarPhase::Standing;
-        im.tellHousehold(*c, who);
+        if (im.onRoad(c)) im.keptOf(c).standing = im.pointPlace(im.carPos(c));
+        im.getOut(who, c);
+        CityCarKept& k = im.keptOf(c);
+        k.heldBy = brain::kNoAgent;
+        k.tripWanted = false;
+        if (k.phase != CarPhase::EasingIn) k.phase = CarPhase::Standing;
+        im.tellHousehold(c, who);
     }
     void parkCar(CarRef ref, AgentId who, PlaceRef space) override {
-        CarRec* c = im.car(ref);
-        if (!c) return;
-        c->standing = space;
+        const Car c = im.car(ref);
+        if (!c.valid()) return;
+        im.keptOf(c).standing = space;
         im.occupant[space.id] = ref.id;
-        im.getOut(who, *c);
-        if (c->heldBy == who) c->heldBy = brain::kNoAgent;
+        im.getOut(who, c);
+        if (im.keptOf(c).heldBy == who) im.keptOf(c).heldBy = brain::kNoAgent;
         im.held.erase(who);
-        im.tellHousehold(*c, who);
+        im.tellHousehold(c, who);
     }
     bool spaceNear(PlaceRef door, CarRef ref, PlaceRef& out) const override {
         for (const PlaceRef space : im.spacesFor(door, im.classOf(ref)))
@@ -575,11 +569,11 @@ struct CityBrain::Impl::LabWorld : brain::World {
         return false;
     }
     bool takeSpace(PlaceRef space, CarRef ref) override {
-        CarRec* c = im.car(ref);
-        if (!c || !im.isSpace(space) || !im.spaceFree(space, ref, c->heldBy)) return false;
-        im.leaveEverySpace(*c);
+        const Car c = im.car(ref);
+        if (!c.valid() || !im.isSpace(space) || !im.spaceFree(space, ref, im.keptOf(c).heldBy)) return false;
+        im.leaveEverySpace(c);
         im.occupant[space.id] = ref.id;
-        im.slideIn(*c, space);
+        im.slideIn(c, space);
         return true;
     }
     void holdSpace(PlaceRef space, AgentId who) override {
@@ -706,80 +700,85 @@ struct CityBrain::Impl::LabDrive : brain::DriveSkill {
 
     // The person who has the car gets in. The car stays in its space until its trip begins.
     bool pullOut(CarRef ref, PlaceRef space) override {
-        CarRec* c = im.car(ref);
-        if (!c || c->heldBy == kOutsider) return false;
-        if (c->heldBy != brain::kNoAgent && !c->aboard && !im.getIn(c->heldBy, *c)) return false;
-        if (im.onRoad(*c)) return true;   // left in a lane by an earlier trip: it sets off from there
+        const Car c = im.car(ref);
+        if (!c.valid() || im.keptOf(c).heldBy == kOutsider) return false;
+        const AgentId holder = im.keptOf(c).heldBy;
+        if (holder != brain::kNoAgent && !im.aboard(c) && !im.getIn(holder, c)) return false;
+        if (im.onRoad(c)) return true;   // left in a lane by an earlier trip: it sets off from there
         driving::PathPoint front;
-        return im.fronts->of(*c).kerbLane(space, front);
+        return im.fronts->of(c).kerbLane(space, front);
     }
     bool beginTrip(CarRef ref, AgentId person, PlaceRef fromSpace, PlaceRef toSpace, Real) override {
-        CarRec* c = im.car(ref);
+        const Car c = im.car(ref);
         driving::PathPoint to;
-        if (!c || c->heldBy == kOutsider || !im.fronts->of(*c).kerbLane(toSpace, to)) return false;
-        c->tripPerson = person;
-        c->tripFrom = fromSpace;
-        c->tripTo = toSpace;
-        if (im.onRoad(*c) && c->phase != CarPhase::EasingOut) {
-            c->phase = CarPhase::OnRoad;
-            c->tripWanted = false;
+        if (!c.valid() || im.keptOf(c).heldBy == kOutsider || !im.fronts->of(c).kerbLane(toSpace, to)) return false;
+        CityCarKept& k = im.keptOf(c);
+        k.tripPerson = person;
+        k.tripFrom = fromSpace;
+        k.tripTo = toSpace;
+        if (im.onRoad(c) && k.phase != CarPhase::EasingOut) {
+            k.phase = CarPhase::OnRoad;
+            k.tripWanted = false;
             if (!im.skill->beginTrip(ref, person, fromSpace, toSpace, 0)) return false;
             ++im.counts.tripsBegun;
             return true;
         }
         // in its space: it is placed in the kerb lane when the lane is clear, eased out, and the trip begins then
-        c->tripWanted = true;
-        if (c->phase == CarPhase::Standing || c->phase == CarPhase::EasingIn) c->phase = CarPhase::WaitingForRoom;
+        k.tripWanted = true;
+        if (k.phase == CarPhase::Standing || k.phase == CarPhase::EasingIn) k.phase = CarPhase::WaitingForRoom;
         return true;
     }
     void endTrip(CarRef ref) override {
-        CarRec* c = im.car(ref);
-        if (!c || c->heldBy == kOutsider) return;
-        c->tripWanted = false;
-        if (c->phase == CarPhase::WaitingForRoom) c->phase = CarPhase::Standing;
+        const Car c = im.car(ref);
+        if (!c.valid() || im.keptOf(c).heldBy == kOutsider) return;
+        CityCarKept& k = im.keptOf(c);
+        k.tripWanted = false;
+        if (k.phase == CarPhase::WaitingForRoom) k.phase = CarPhase::Standing;
         im.skill->endTrip(ref);
     }
     // The car stands in `space` from now: off the road if it was still on it, and exactly where a car in the space
     // stands (the slide in, if one was under way, is over).
     void park(CarRef ref, PlaceRef space) override {
-        CarRec* c = im.car(ref);
-        if (!c || c->heldBy == kOutsider) return;
-        if (im.onRoad(*c)) {
+        const Car c = im.car(ref);
+        if (!c.valid() || im.keptOf(c).heldBy == kOutsider) return;
+        if (im.onRoad(c)) {
             im.skill->endTrip(ref);
-            im.fronts->of(*c);
+            im.fronts->of(c);
             im.skill->park(ref, space);
-            im.syncLane(*c);
+            im.syncLane(c);
         }
         engine::KerbSpacePose pose;
         Vec2 kerbward;
-        if (im.spacePose(space, pose, kerbward)) im.writeCarPose(*c, pose.at, pose.facing);
-        c->phase = CarPhase::Standing;
-        c->tripWanted = false;
+        if (im.spacePose(space, pose, kerbward)) im.writeCarPose(c, pose.at, pose.facing);
+        CityCarKept& k = im.keptOf(c);
+        k.phase = CarPhase::Standing;
+        k.tripWanted = false;
     }
     // The trip now ends beside `toSpace`. A car that has not left its space yet sets off for there when it does; one
     // still sliding out has its trip begun to there when the slide ends; one on the road has its trip's end changed.
     bool changeDestination(CarRef ref, PlaceRef toSpace) override {
-        CarRec* c = im.car(ref);
+        const Car c = im.car(ref);
         driving::PathPoint to;
-        if (!c || c->heldBy == kOutsider || !im.fronts->of(*c).kerbLane(toSpace, to)) return false;
-        if (c->tripWanted) {
-            c->tripTo = toSpace;
+        if (!c.valid() || im.keptOf(c).heldBy == kOutsider || !im.fronts->of(c).kerbLane(toSpace, to)) return false;
+        CityCarKept& k = im.keptOf(c);
+        if (k.tripWanted) {
+            k.tripTo = toSpace;
             ++im.counts.redirected;
             return true;
         }
-        if (!im.onRoad(*c) || !im.skill->changeDestination(ref, toSpace)) return false;
-        c->tripTo = toSpace;
+        if (!im.onRoad(c) || !im.skill->changeDestination(ref, toSpace)) return false;
+        k.tripTo = toSpace;
         ++im.counts.redirected;
         return true;
     }
     bool waitingToSetOff(CarRef ref) const override {
-        const CarRec* c = im.car(ref);
-        return c && c->phase == CarPhase::WaitingForRoom;
+        const Car c = im.car(ref);
+        return c.valid() && im.keptOf(c).phase == CarPhase::WaitingForRoom;
     }
 };
 
 // THE PERSON WHO HAS THE CAR GETS IN: into its driver's seat, which nobody else is in.
-bool CityBrain::Impl::getIn(AgentId who, CarRec& c) {
+bool CityBrain::Impl::getIn(AgentId who, Car c) {
     const Agent& a = agentOf(who);
     if (a.mode != Agent::Mode::Pedestrian || a.inCar >= 0 || a.vehicle >= 0 || linkOf(c).driver >= 0) return false;
     // NO WALK GOES ON IN THE CAR. A walk of no length (the person already beside the car) is ended by the machine on
@@ -787,25 +786,23 @@ bool CityBrain::Impl::getIn(AgentId who, CarRec& c) {
     // report ended whatever state the person was in by then (pulling_out, 3.6 s into its two minutes). With the person
     // a driver of a sim vehicle (before ADR-0444) the sim refused to step them, which hid it.
     haltWalker(who);
-    seat(people[who].agent, c);
-    c.aboard = true;
+    seat(people[who].agent, c);   // (aboard from now: its holder's agent is at its wheel)
     ++counts.boarded;
     return true;
 }
 
 // ...AND GETS OUT, leaving the car exactly where it stands: out on the kerb side.
-void CityBrain::Impl::getOut(AgentId who, CarRec& c) {
-    if (!c.aboard || who >= people.size()) return;
+void CityBrain::Impl::getOut(AgentId who, Car c) {
+    if (!aboard(c) || who >= people.size()) return;
     unseat(people[who].agent, c, outOf(c));
-    c.aboard = false;
     ++counts.alighted;
 }
 
 // IN THE DRIVER'S SEAT: the person is in the car from now (Agent::inCar), not drawn on foot, and not one of the
 // walkers anybody senses; their own place follows the car's from now (followCars).
-void CityBrain::Impl::seat(int agent, const CarRec& c) {
+void CityBrain::Impl::seat(int agent, Car c) {
     Agent& a = sim.agents_[static_cast<std::size_t>(agent)];
-    a.inCar = static_cast<int>(c.id);
+    a.inCar = static_cast<int>(numberOf(c));
     a.pos = carPos(c);
     a.heading = carFacing(c);
     a.tickFromPos = a.pos;   // (a placement, not a motion)
@@ -823,7 +820,7 @@ void CityBrain::Impl::seat(int agent, const CarRec& c) {
     sim.grid_.remove(agent);
 }
 
-void CityBrain::Impl::unseat(int agent, const CarRec& c, Vec2 out) {
+void CityBrain::Impl::unseat(int agent, Car c, Vec2 out) {
     Agent& a = sim.agents_[static_cast<std::size_t>(agent)];
     a.inCar = -1;
     a.pos = out;
@@ -840,11 +837,11 @@ void CityBrain::Impl::unseat(int agent, const CarRec& c, Vec2 out) {
     sim.grid_.place(agent, out);
 }
 
-Vec2 CityBrain::Impl::outOf(const CarRec& c) const {
+Vec2 CityBrain::Impl::outOf(Car c) const {
     Vec2 out;
     const Vec2 at = carPos(c);
     // beside its space; or, left in a lane (or nowhere a space is), on the sidewalk beside the road there
-    if (!onRoad(c) && doorPoint(c.standing, out)) return out;
+    if (!onRoad(c) && doorPoint(keptOf(c).standing, out)) return out;
     if (kerbSideOf(at, out)) return out;
     // (no sidewalk near: a step to the car's side, clear of the lanes, as the sim stands anyone getting out)
     const Vec2 h = carFacing(c);
@@ -853,13 +850,13 @@ Vec2 CityBrain::Impl::outOf(const CarRec& c) const {
 
 // THE CAR IS AT `pos`, POINTING ALONG `heading` (drawn sliding between its space and the lane, or put down). Its height
 // is left as it was: off the road the drawing stands it on the ground under it.
-void CityBrain::Impl::writeCarPose(CarRec& c, Vec2 pos, Vec2 heading) {
+void CityBrain::Impl::writeCarPose(Car c, Vec2 pos, Vec2 heading) {
     engine::Transform& t = poseOf(c);
     setCarPose(t, pos, heading, t.position.y);
 }
 
 // The space is the car's: it leaves the driving and is drawn sliding in from where it stands in the lane.
-void CityBrain::Impl::slideIn(CarRec& c, PlaceRef space) {
+void CityBrain::Impl::slideIn(Car c, PlaceRef space) {
     engine::KerbSpacePose pose;
     Vec2 kerbward;
     if (!spacePose(space, pose, kerbward)) return;
@@ -871,58 +868,60 @@ void CityBrain::Impl::slideIn(CarRec& c, PlaceRef space) {
         d->removeCar(id);
         syncLane(c);
     }
-    c.easeFromPos = carPos(c);
-    c.easeFromHeading = carFacing(c);
-    c.easeToPos = pose.at;
-    c.easeToHeading = pose.facing;
-    c.easeT = 0;
-    c.phase = CarPhase::EasingIn;
-    c.standing = space;
+    CityCarKept& k = keptOf(c);
+    k.easeFromPos = carPos(c);
+    k.easeFromHeading = carFacing(c);
+    k.easeToPos = pose.at;
+    k.easeToHeading = pose.facing;
+    k.easeT = 0;
+    k.phase = CarPhase::EasingIn;
+    k.standing = space;
     ++counts.slidIn;
 }
 
 void CityBrain::Impl::tickCars(Real dt) {
-    for (CarRec& c : cars) {
-        if (c.heldBy == kOutsider) continue;   // somebody else's to move
+    for (const Car c : cars) {
+        CityCarKept& k = keptOf(c);
+        if (k.heldBy == kOutsider) continue;   // somebody else's to move
         const driving::CarId id = idOf(c);
         CarRef ref;
         ref.id = id.index;
-        if (c.phase == CarPhase::WaitingForRoom) {
+        if (k.phase == CarPhase::WaitingForRoom) {
             driving::PathPoint front;
             const Real length = lengthOf(c);
-            if (!fronts->of(c).kerbLane(c.standing, front)) continue;
+            if (!fronts->of(c).kerbLane(k.standing, front)) continue;
             if (!room->clear(front, length, kPullOutRoomBehind, kPullOutRoomAhead)) {
                 ++counts.waitedForRoom;
             } else if (d->placeCar(id, bodyOf(c).vehicleClass, front)) {
                 syncLane(c);
-                occupant.erase(c.standing.id);
-                c.easeFromPos = carPos(c);
-                c.easeFromHeading = carFacing(c);
+                occupant.erase(k.standing.id);
+                k.easeFromPos = carPos(c);
+                k.easeFromHeading = carFacing(c);
                 // where the driving has it: the middle of its body and the way it points (as the hand-over copies it)
                 const driving::CarPose pose = driving::carPose(*d->roads(), d->vehicleClasses(), d->ruleSet(), *d->car(id));
                 const Vec3 mid = (pose.front + pose.rear) * 0.5;
-                c.easeToPos = Vec2(mid.x, mid.z);
-                c.easeToHeading = unit(Vec2(pose.body.x, pose.body.z), c.easeFromHeading);
-                c.easeT = 0;
-                c.phase = CarPhase::EasingOut;
+                k.easeToPos = Vec2(mid.x, mid.z);
+                k.easeToHeading = unit(Vec2(pose.body.x, pose.body.z), k.easeFromHeading);
+                k.easeT = 0;
+                k.phase = CarPhase::EasingOut;
                 ++counts.pulledOut;
             }
         }
-        if (c.phase == CarPhase::EasingOut || c.phase == CarPhase::EasingIn) {
-            c.easeT = std::min(kKerbEaseSeconds, c.easeT + dt);
-            const Real s = engine::smoothstep01(c.easeT / kKerbEaseSeconds);
-            writeCarPose(c, c.easeFromPos + (c.easeToPos - c.easeFromPos) * s,
-                         unit(c.easeFromHeading + (c.easeToHeading - c.easeFromHeading) * s, c.easeToHeading));
-            if (engine::atOrPast(c.easeT, kKerbEaseSeconds, engine::kSamePoint)) {
-                if (c.phase == CarPhase::EasingIn) {
-                    c.phase = CarPhase::Standing;
+        if (k.phase == CarPhase::EasingOut || k.phase == CarPhase::EasingIn) {
+            k.easeT = std::min(kKerbEaseSeconds, k.easeT + dt);
+            const Real s = engine::smoothstep01(k.easeT / kKerbEaseSeconds);
+            writeCarPose(c, k.easeFromPos + (k.easeToPos - k.easeFromPos) * s,
+                         unit(k.easeFromHeading + (k.easeToHeading - k.easeFromHeading) * s, k.easeToHeading));
+            if (engine::atOrPast(k.easeT, kKerbEaseSeconds, engine::kSamePoint)) {
+                if (k.phase == CarPhase::EasingIn) {
+                    k.phase = CarPhase::Standing;
                 } else {
-                    c.phase = CarPhase::OnRoad;
-                    if (c.tripWanted) {
-                        c.tripWanted = false;
+                    k.phase = CarPhase::OnRoad;
+                    if (k.tripWanted) {
+                        k.tripWanted = false;
                         fronts->of(c);
                         // (no route: the driving queues its own "no route" for the person, which the skill passes on)
-                        if (skill->beginTrip(ref, c.tripPerson, c.tripFrom, c.tripTo, 0)) ++counts.tripsBegun;
+                        if (skill->beginTrip(ref, k.tripPerson, k.tripFrom, k.tripTo, 0)) ++counts.tripsBegun;
                     }
                 }
             }
@@ -992,8 +991,9 @@ void CityBrain::Impl::shareOutTrace() {
 
 // AN OUTSIDER HAS THE CAR FROM NOW: it leaves every table. No space is its, it is off the driving's road, no trip is
 // wanted of it, and nobody of the household can take it or plan with it until it is left again. `lost`: the player has
-// it as a physical car of their own, so it is not drawn here (CityCarLink::away) until it is handed back.
-void CityBrain::Impl::outsiderTook(CarRec& c, int agent, bool lost) {
+// it as a physical car of their own, so it is not drawn here (CityCarLink::away) until it is handed back. Otherwise
+// the outsider is the sim agent at its wheel (CityCarLink::driver, seated first).
+void CityBrain::Impl::outsiderTook(Car c, bool lost) {
     const driving::CarId id = idOf(c);
     if (onRoad(c)) {
         CarRef ref;
@@ -1003,15 +1003,13 @@ void CityBrain::Impl::outsiderTook(CarRec& c, int agent, bool lost) {
         syncLane(c);
     }
     leaveEverySpace(c);
-    c.heldBy = kOutsider;
-    c.outsiderAgent = agent;
-    c.lost = lost;
     linkOf(c).away = lost;
-    c.stranded = false;
-    c.aboard = false;
-    c.phase = CarPhase::Standing;
-    c.tripWanted = false;
-    c.standing = PlaceRef();
+    CityCarKept& k = keptOf(c);
+    k.heldBy = kOutsider;
+    k.stranded = false;
+    k.phase = CarPhase::Standing;
+    k.tripWanted = false;
+    k.standing = PlaceRef();
     tellHousehold(c, brain::kNoAgent);
 }
 
@@ -1019,27 +1017,25 @@ void CityBrain::Impl::outsiderTook(CarRec& c, int agent, bool lost) {
 // a car in one stands and no other car is in that space. Otherwise at a point: on the road (no farther than
 // kLeftOnRoadWithin beyond the kerb line) it is put into the kerb lane beside that point, so the driving knows it is
 // there and a resident can drive it away; anywhere else it is stranded, and nobody plans with it.
-void CityBrain::Impl::outsiderLeft(CarRec& c) {
+void CityBrain::Impl::outsiderLeft(Car c) {
     const Vec2 at = carPos(c);
     const driving::CarId id = idOf(c);
     CarRef ref;
     ref.id = id.index;
-    c.heldBy = brain::kNoAgent;
-    c.outsiderAgent = -1;
-    c.lost = false;
     linkOf(c).away = false;
-    c.aboard = false;
-    c.phase = CarPhase::Standing;
-    c.tripWanted = false;
-    c.stranded = false;
+    CityCarKept& k = keptOf(c);
+    k.heldBy = brain::kNoAgent;
+    k.phase = CarPhase::Standing;
+    k.tripWanted = false;
+    k.stranded = false;
     const engine::KerbSpaceNear near = model->nearestKerbSpace(at, kLeftInSpaceWithin);
     const PlaceRef space = near.space.valid() ? spaces->placeOf(near.space) : PlaceRef();
     const std::map<uint32_t, uint32_t>::const_iterator in = space.valid() ? occupant.find(space.id) : occupant.end();
     if (space.valid() && (in == occupant.end() || in->second == ref.id)) {
-        c.standing = space;
+        k.standing = space;
         occupant[space.id] = ref.id;
     } else {
-        c.standing = pointPlace(at);
+        k.standing = pointPlace(at);
         const engine::RoadFrontage frontage = model->frontageAt(at);
         const engine::KerbLanePlace lane = frontage.valid() && frontage.street.valid() ? model->kerbLaneBeside(frontage)
                                                                                          : engine::KerbLanePlace();
@@ -1052,29 +1048,31 @@ void CityBrain::Impl::outsiderLeft(CarRec& c) {
         if (!onRoad(c) && onTheRoad && fronts->of(c).frontAt(mid, front) && room->clear(front, lengthOf(c), kLeftRoom, kLeftRoom))
             d->placeCar(id, bodyOf(c).vehicleClass, front);
         syncLane(c);
-        c.stranded = !onRoad(c);
+        k.stranded = !onRoad(c);
     }
     ++counts.leftAgain;
     LOG_INFO << "[brain] " << carLine(c);
     tellHousehold(c, brain::kNoAgent);
 }
 
-std::string CityBrain::Impl::carLine(const CarRec& c) const {
+std::string CityBrain::Impl::carLine(Car c) const {
     static const char* const kPhase[] = {"standing", "waiting in its space for the kerb lane to be clear",
                                          "sliding out of its space", "on the road", "sliding into its space"};
+    const CityCarLink& link = linkOf(c);
+    const CityCarKept& k = keptOf(c);
     std::string s = "the car of household " +
-                    (c.household >= 0 ? households[static_cast<std::size_t>(c.household)].name : std::string("?")) + " (car " +
-                    std::to_string(c.id) + ") ";
-    if (c.heldBy == kOutsider) {
-        s += c.outsiderAgent >= 0 ? "has been taken by somebody else (sim agent " + std::to_string(c.outsiderAgent) + ")"
-                                  : std::string("has been taken by the player");
+                    (link.household >= 0 ? households[static_cast<std::size_t>(link.household)].name : std::string("?")) +
+                    " (car " + std::to_string(numberOf(c)) + ") ";
+    if (k.heldBy == kOutsider) {
+        s += link.driver >= 0 ? "has been taken by somebody else (sim agent " + std::to_string(link.driver) + ")"
+                              : std::string("has been taken by the player");
         return s + ": it is not free, and stands nowhere a resident could take it from";
     }
-    s += std::string("is ") + kPhase[static_cast<int>(c.phase)] +
-         (c.phase == CarPhase::OnRoad && !c.aboard ? " (left there)" : "") + ", " +
-         (onRoad(c) && isSpace(c.standing) ? "last in " : isPoint(c.standing) ? "left at " : "in ") + placeName(c.standing);
-    if (c.stranded) s += ", off the road: nobody can drive it from there";
-    if (c.heldBy < people.size()) s += ", " + people[c.heldBy].name + " has it";
+    s += std::string("is ") + kPhase[static_cast<int>(k.phase)] +
+         (k.phase == CarPhase::OnRoad && !aboard(c) ? " (left there)" : "") + ", " +
+         (onRoad(c) && isSpace(k.standing) ? "last in " : isPoint(k.standing) ? "left at " : "in ") + placeName(k.standing);
+    if (k.stranded) s += ", off the road: nobody can drive it from there";
+    if (k.heldBy < people.size()) s += ", " + people[k.heldBy].name + " has it";
     else s += ", free";
     if (const driving::Car* placed = d->car(idOf(c))) s += ", " + fmt("%.1f m/s", placed->speed);
     return s;
@@ -1093,7 +1091,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
     im.drivableSpacesOnly = drivableSpacesOnly;
     const auto refuse = [&](const std::string& why) {
         if (report) *report = why;
-        for (const Impl::CarRec& c : im.cars) world.destroy(c.entity);   // (nothing is left behind)
+        for (const Impl::Car c : im.cars) world.destroy(c);   // (nothing is left behind)
         im.cars.clear();
         return false;
     };
@@ -1254,10 +1252,12 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
             if (marker < 0) return refuse(at + ": that is not one of the level's markers");
             // THE CAR IS ONE ENTITY (city_car.h), numbered on from the last car number in use, and drawn as the fleet
             // slot the sim would deal a vehicle of that number (CitySim::ambientSlotFor)
-            Impl::CarRec c;
-            c.id = sim.nextCarNumber(world);
-            c.household = index;
-            const int slot = sim.ambientSlotFor(static_cast<int>(c.id));
+            // (in a row: the brain finds a car from its number by where it is in im.cars)
+            const uint32_t number = sim.nextCarNumber(world);
+            if (im.cars.empty()) im.firstCar = number;
+            if (number != im.firstCar + im.cars.size())
+                return refuse(at + ": car number " + std::to_string(number) + " does not follow the household cars before it");
+            const int slot = sim.ambientSlotFor(static_cast<int>(number));
             const VehicleBody& body = sim.fleetBody(slot);
             const int cls = slot >= 0 && slot < static_cast<int>(classOfSlot.size()) ? classOfSlot[static_cast<std::size_t>(slot)] : -1;
             const uint32_t drivenAs = cls >= 0 && cls < static_cast<int>(im.d->vehicleClasses().size()) ? static_cast<uint32_t>(cls) : 0u;
@@ -1275,7 +1275,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
                 return refuse(at + (cs.space.empty() ? std::string() : " in space \"" + cs.space + "\"") +
                               ": no such free kerb parking space within " + fmt("%.0f m", kSpaceReach) + " on foot of the marker");
             CityCarBody carBody;
-            carBody.id = c.id;
+            carBody.id = number;
             carBody.slot = slot;
             carBody.type = body.type;
             carBody.length = body.length;
@@ -1284,18 +1284,20 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
             carBody.vehicleClass = drivenAs;
             CityCarLink link;
             link.household = index;
+            CityCarKept kept;
+            kept.standing = chosen;
             engine::Transform where;
             setCarPose(where, pose.at, pose.facing, 0);
-            c.entity = world.create();
-            world.add<engine::Transform>(c.entity, where);
-            world.add<engine::PrevTransform>(c.entity, engine::PrevTransform{where});
-            world.add<CityCarBody>(c.entity, carBody);
-            world.add<CityCarLink>(c.entity, link);
-            c.standing = chosen;
+            const Impl::Car c = world.create();
+            world.add<engine::Transform>(c, where);
+            world.add<engine::PrevTransform>(c, engine::PrevTransform{where});
+            world.add<CityCarBody>(c, carBody);
+            world.add<CityCarLink>(c, link);
+            world.add<CityCarKept>(c, kept);
             im.cars.push_back(c);
-            im.occupant[chosen.id] = c.id;
-            h.cars.push_back(c.id);
-            line += "; household " + hs.name + "'s car (car " + std::to_string(c.id) + ", a " +
+            im.occupant[chosen.id] = number;
+            h.cars.push_back(number);
+            line += "; household " + hs.name + "'s car (car " + std::to_string(number) + ", a " +
                     im.d->vehicleClasses().at(carBody.vehicleClass).name + ") stands in " + im.placeName(chosen);
         }
         im.households.push_back(h);
@@ -1436,26 +1438,22 @@ int CityBrain::residentCar(int who) const {
     if (residentCount() == 0 || !im.isPerson(who)) return -1;
     CarRef ref;
     ref.id = im.machine->agent(static_cast<AgentId>(who)).car;
-    const Impl::CarRec* c = im.car(ref);
-    return c ? static_cast<int>(c->id) : -1;
+    return im.car(ref).valid() ? static_cast<int>(ref.id) : -1;
 }
 
 std::vector<int> CityBrain::cars() const {
     std::vector<int> out;
-    for (const Impl::CarRec& c : impl_->cars) out.push_back(static_cast<int>(c.id));
+    for (const Impl::Car c : impl_->cars) out.push_back(static_cast<int>(impl_->numberOf(c)));
     return out;
 }
 
-engine::Entity CityBrain::carEntity(int car) const {
-    const Impl::CarRec* c = impl_->carNumbered(car);
-    return c ? c->entity : engine::Entity{};
-}
+engine::Entity CityBrain::carEntity(int car) const { return impl_->carNumbered(car); }
 
 bool CityBrain::carPose(int car, Vec2& pos, Vec2& heading) const {
-    const Impl::CarRec* c = impl_->carNumbered(car);
-    if (!c || impl_->linkOf(*c).away) return false;
-    pos = impl_->carPos(*c);
-    heading = impl_->carFacing(*c);
+    const Impl::Car c = impl_->carNumbered(car);
+    if (!c.valid() || impl_->linkOf(c).away) return false;
+    pos = impl_->carPos(c);
+    heading = impl_->carFacing(c);
     return true;
 }
 
@@ -1464,21 +1462,22 @@ bool CityBrain::inCar(int who) const { return impl_->isPerson(who) && impl_->age
 std::vector<int> CityBrain::membersOfCar(int car) const {
     const Impl& im = *impl_;
     std::vector<int> out;
-    const Impl::CarRec* c = im.carNumbered(car);
-    if (!c || c->household < 0) return out;
-    for (const AgentId m : im.households[static_cast<std::size_t>(c->household)].members) out.push_back(static_cast<int>(m));
+    const Impl::Car c = im.carNumbered(car);
+    if (!c.valid() || im.linkOf(c).household < 0) return out;
+    for (const AgentId m : im.households[static_cast<std::size_t>(im.linkOf(c).household)].members)
+        out.push_back(static_cast<int>(m));
     return out;
 }
 
 CarHolder CityBrain::carHolder(int car) const {
-    const Impl::CarRec* c = impl_->carNumbered(car);
-    if (!c || c->heldBy == brain::kNoAgent) return CarHolder::Nobody;
-    return c->heldBy == kOutsider ? CarHolder::Outsider : CarHolder::Resident;
+    const Impl::Car c = impl_->carNumbered(car);
+    if (!c.valid() || impl_->keptOf(c).heldBy == brain::kNoAgent) return CarHolder::Nobody;
+    return impl_->keptOf(c).heldBy == kOutsider ? CarHolder::Outsider : CarHolder::Resident;
 }
 
 std::string CityBrain::describeCar(int car) const {
-    const Impl::CarRec* c = impl_->carNumbered(car);
-    return c ? impl_->carLine(*c) : std::string("no household's car is car ") + std::to_string(car);
+    const Impl::Car c = impl_->carNumbered(car);
+    return c.valid() ? impl_->carLine(c) : std::string("no household's car is car ") + std::to_string(car);
 }
 
 const std::vector<brain::Transition>& CityBrain::trace(int who) const {
@@ -1594,7 +1593,7 @@ std::string CityBrain::describe(int who) const {
         for (const uint32_t carId : im.households[static_cast<std::size_t>(person.household)].cars) {
             CarRef ref;
             ref.id = carId;
-            if (const Impl::CarRec* c = im.car(ref)) s += " | " + im.carLine(*c);
+            if (const Impl::Car c = im.car(ref); c.valid()) s += " | " + im.carLine(c);
         }
     else
         s += " | no household, no car";
@@ -1686,8 +1685,10 @@ bool CityBrain::setTrait(int who, const std::string& name, bool on, std::string*
 engine::KerbSpace CityBrain::carSpace(int who) const {
     engine::KerbSpace space;
     const Impl& im = *impl_;
-    const Impl::CarRec* c = im.carNumbered(residentCar(who));
-    if (c && !im.onRoad(*c) && c->heldBy != kOutsider && im.isSpace(c->standing)) im.spaces->spaceOf(c->standing, space);
+    const Impl::Car c = im.carNumbered(residentCar(who));
+    if (!c.valid()) return space;
+    const CityCarKept& k = im.keptOf(c);
+    if (!im.onRoad(c) && k.heldBy != kOutsider && im.isSpace(k.standing)) im.spaces->spaceOf(k.standing, space);
     return space;
 }
 
@@ -1742,31 +1743,31 @@ int CityBrain::nearestFreeCar(Vec2 p, Real radius) const {
     const Impl& im = *impl_;
     int best = -1;
     Real bestD = radius;
-    for (const Impl::CarRec& c : im.cars) {
+    for (const Impl::Car c : im.cars) {
         const CityCarLink& link = im.linkOf(c);
         if (link.driver >= 0 || link.away) continue;
         const Real d = (im.carPos(c) - p).length();
         if (d > bestD) continue;
         bestD = d;
-        best = static_cast<int>(c.id);
+        best = static_cast<int>(im.numberOf(c));
     }
     return best;
 }
 
 bool CityBrain::board(int agent, int car) {
     Impl& im = *impl_;
-    Impl::CarRec* c = im.machine ? im.carNumbered(car) : nullptr;
-    if (!c || agent < 0 || agent >= static_cast<int>(im.sim.agents_.size())) return false;
+    const Impl::Car c = im.machine ? im.carNumbered(car) : Impl::Car{};
+    if (!c.valid() || agent < 0 || agent >= static_cast<int>(im.sim.agents_.size())) return false;
     const Agent& a = im.sim.agents_[static_cast<std::size_t>(agent)];
     if (a.mode != Agent::Mode::Pedestrian || a.inCar >= 0 || a.vehicle >= 0) return false;
     // (nobody gets into a car with somebody at its wheel; and one of the brain's own people gets in by their plan,
     // unless a director has them)
-    if (im.linkOf(*c).driver >= 0 || im.linkOf(*c).away || c->heldBy == kOutsider) return false;
+    if (im.linkOf(c).driver >= 0 || im.linkOf(c).away || im.keptOf(c).heldBy == kOutsider) return false;
     const int who = im.personOfAgent(agent);
     if (who >= 0 && !im.people[static_cast<std::size_t>(who)].heldByDirector) return false;
     LOG_INFO << "[brain] household car (car " << car << ") taken where it stood by sim agent " << agent;
-    im.seat(agent, *c);
-    im.outsiderTook(*c, agent, false);
+    im.seat(agent, c);
+    im.outsiderTook(c, false);
     ++im.counts.takenStanding;
     return true;
 }
@@ -1774,45 +1775,45 @@ bool CityBrain::board(int agent, int car) {
 bool CityBrain::alight(int agent) {
     Impl& im = *impl_;
     if (!im.machine || agent < 0 || agent >= static_cast<int>(im.sim.agents_.size())) return false;
-    Impl::CarRec* c = im.carNumbered(im.sim.agents_[static_cast<std::size_t>(agent)].inCar);
-    if (!c || c->heldBy != kOutsider || c->outsiderAgent != agent) return false;
-    im.unseat(agent, *c, im.outOf(*c));
-    im.outsiderLeft(*c);
+    const Impl::Car c = im.carNumbered(im.sim.agents_[static_cast<std::size_t>(agent)].inCar);
+    // (an outsider in the car is at its wheel)
+    if (!c.valid() || im.keptOf(c).heldBy != kOutsider || im.linkOf(c).driver != agent) return false;
+    im.unseat(agent, c, im.outOf(c));
+    im.outsiderLeft(c);
     return true;
 }
 
 bool CityBrain::takenByPlayer(int car) {
     Impl& im = *impl_;
-    Impl::CarRec* c = im.machine ? im.carNumbered(car) : nullptr;
-    if (!c || c->heldBy == kOutsider) return false;
-    const int who = c->aboard && c->heldBy < im.people.size() ? static_cast<int>(c->heldBy) : -1;
+    const Impl::Car c = im.machine ? im.carNumbered(car) : Impl::Car{};
+    if (!c.valid() || im.keptOf(c).heldBy == kOutsider) return false;
+    const int who = im.aboard(c) ? static_cast<int>(im.keptOf(c).heldBy) : -1;
     if (who >= 0) {
         // THE DRIVER IS PUT OUT ON THE KERB SIDE of where the car is, and told the car is gone; what they do next is
         // their state's row to say
         const AgentId id = static_cast<AgentId>(who);
         Vec2 out;
-        if (!im.kerbSideOf(im.carPos(*c), out)) out = im.outOf(*c);
-        im.unseat(im.people[id].agent, *c, out);
-        c->aboard = false;
+        if (!im.kerbSideOf(im.carPos(c), out)) out = im.outOf(c);
+        im.unseat(im.people[id].agent, c, out);
         ++im.counts.putOut;
         im.machine->post(id, im.vehicleGone);
     }
     LOG_INFO << "[brain] household car (car " << car << ") taken by the player"
              << (who >= 0 ? " with " + im.people[static_cast<std::size_t>(who)].name + " at its wheel" : std::string());
-    im.outsiderTook(*c, -1, true);
+    im.outsiderTook(c, true);
     ++im.counts.takenDriven;
     return true;
 }
 
 bool CityBrain::carLeftAt(int car, Vec2 pos, Vec2 heading) {
     Impl& im = *impl_;
-    Impl::CarRec* c = im.machine ? im.carNumbered(car) : nullptr;
-    // (a car the player took with the key is a physical Vehicle on this entity, VehicleSystem's to move: giving that
-    // back means removing the Vehicle, which is #293, not built)
-    if (!c || c->heldBy != kOutsider || im.ecs->has<engine::Vehicle>(c->entity)) return false;
-    engine::Transform& t = im.poseOf(*c);
+    const Impl::Car c = im.machine ? im.carNumbered(car) : Impl::Car{};
+    // (a car the player took with the key is a physical Vehicle on this entity, VehicleSystem's to move: the near tier
+    // retires the Vehicle first, then gives it back, CitySim::playerLeftCar)
+    if (!c.valid() || im.keptOf(c).heldBy != kOutsider || im.ecs->has<engine::Vehicle>(c)) return false;
+    engine::Transform& t = im.poseOf(c);
     setCarPose(t, pos, unit(heading, carHeading(t)), t.position.y);
-    im.outsiderLeft(*c);
+    im.outsiderLeft(c);
     return true;
 }
 

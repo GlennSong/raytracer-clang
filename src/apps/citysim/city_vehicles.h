@@ -57,11 +57,12 @@ inline std::vector<PromotedLamp> promotedLamps(
 // player in it that same frame. One car system at the component level; two
 // motion regimes, each owned by the thing that's good at it.
 //
-// A HOUSEHOLD'S CAR of the agent brain (ADR-0445; city_car.h) is already an entity, so nothing spawns in its place:
-// the brain is told the player took it (its driver gets out on the kerb side, it leaves the driving), and the same
-// entity gains the Vehicle. The city bake stops drawing it; VehicleSystem draws, moves and voices it from then. When
-// the player gets out it stays a Vehicle where they left it (VehicleSystem parks it), the brain still counting it as
-// the player's: handing it back is #293.
+// A CAR ENTITY (a household's, ADR-0445, or one that drives round for ever, ADR-0453; city_car.h) is already an entity,
+// so nothing spawns in its place: it is taken the one way (CitySim::playerTakesCar, ADR-0455: its driver gets out on
+// the kerb side, it leaves the driving), and the same entity gains the Vehicle. The city bake stops drawing it;
+// VehicleSystem draws, moves and voices it from then. When the player gets out it stays a Vehicle where they left it
+// (VehicleSystem parks it) until the near tier gives a household's car back once it has stopped (#293,
+// CitySim::playerLeftCar).
 //
 // (The earlier all-dynamic bridge — every NPC car a Jolt vehicle chasing a
 // planner ghost through tether/pursuit/station control — is retired: two clocks

@@ -96,9 +96,10 @@ public:
     // order the model gave them. The host drains the model's events each tick; these are the ones that are not its own
     // to act on.
     std::vector<driving::Event> takeGuestEvents();
-    // THE PLAYER TAKES ONE OF THE HOST'S OWN CARS (CityVehicleSystem's key; ADR-0453): its trip ended, it is off the
-    // model's road, and it no longer drives round for ever (no lane component, no CityCarRoams): the entity is the
-    // player's to make a Vehicle of, as a household's car is. False when `e` is not one of the host's own.
+    // THE PLAYER TAKES ONE OF THE HOST'S OWN CARS (ADR-0453; the hand-over's half of CitySim::playerTakesCar, which is
+    // the one way in, ADR-0455): its trip ended, it is off the model's road (a Jolt car of the near tier no longer
+    // carried), and it no longer drives round for ever (no lane component, no CityCarRoams); CityCarLink::away: the
+    // player's. False when `e` is not one of the host's own.
     bool takenByPlayer(driving::Driving& d, engine::Entity e);
     // Is the model's car `car` braking (its acceleration below -kBrakeLampDecel, or held at rest on its trip)?
     static bool braking(const driving::Driving& d, driving::CarId car);

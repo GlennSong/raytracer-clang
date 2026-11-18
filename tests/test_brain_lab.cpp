@@ -1288,3 +1288,109 @@ TEST_CASE(level_brain_lab_every_system_that_looks_for_cars_sees_a_household_car)
     CHECK(drawn == 0);
     CHECK(b.counts().takenDriven == 1u && b.counts().putOut == 1u && !b.inCar(kAna));
 }
+
+// WHO HAS THE CAR HAS ONE ANSWER (ADR-0455). Every fact about a household's car is held once, on its entity, so every
+// reader that asks "who has this car, is it away, is it on the road" answers the same: the brain (carHolder, carPose,
+// describeCar, inCar), every system that looks for cars (carsNear), the driving and the hand-over's lane component.
+// Asked after each step of: a resident driving it, the player taking it (the one way, CitySim::playerTakesCar),
+// giving it back (CitySim::playerLeftCar), and a resident driving it away again. Before ADR-0455 the brain kept its
+// own copies (the household twice, `lost` beside CityCarLink::away, `aboard` beside CityCarLink::driver), each written
+// by hand beside the other; one write forgotten and the readers disagreed.
+namespace {
+// Every reader's answer about `car`, compared; the first disagreement in `why`. Empty: they agree.
+std::string answersDisagree(Run& r, int car) {
+    citysim::CityBrain& b = *r.b;
+    World& world = r.lc.world;
+    const Entity e = b.carEntity(car);
+    const citysim::CityCarLink* link = world.get<citysim::CityCarLink>(e);
+    if (!link) return "the car has no CityCarLink";
+    const bool away = link->away;
+    const citysim::CarHolder holder = b.carHolder(car);
+    Vec2 pos, heading;
+    const bool posed = b.carPose(car, pos, heading);
+    const std::string line = b.describeCar(car);
+    const bool saysPlayer = line.find("taken by the player") != std::string::npos;
+    std::vector<citysim::CarSeen> seen;
+    citysim::carsNear(r.sim(), world, Vec2(0, 0), -1, seen);
+    const citysim::CarSeen* found = nullptr;
+    for (const citysim::CarSeen& c : seen)
+        if (c.entity == e) found = &c;
+    const bool inDriving = r.sim().drivingV2()->car(driving::CarId(static_cast<uint32_t>(car))) != nullptr;
+    const bool onLane = world.has<citysim::CityCarOnLane>(e);
+    char buf[256];
+    std::snprintf(buf, sizeof buf, "away %d, holder %d, posed %d, says the player %d, seen %d, in the driving %d, on a lane %d",
+                  away ? 1 : 0, static_cast<int>(holder), posed ? 1 : 0, saysPlayer ? 1 : 0, found ? 1 : 0, inDriving ? 1 : 0,
+                  onLane ? 1 : 0);
+    const std::string all = buf;
+    if (away && holder != citysim::CarHolder::Outsider) return "away, yet the brain says it is not an outsider's: " + all;
+    if (posed == away) return "the brain's pose and away disagree: " + all;
+    if (saysPlayer != away) return "the brain's line and away disagree: " + all;
+    if ((found != nullptr) == away) return "carsNear and away disagree: " + all;
+    if (inDriving != onLane) return "the driving and the lane component disagree: " + all;
+    if (away && inDriving) return "away, yet the driving has it: " + all;
+    if (found && found->driver != link->driver) return "carsNear's driver and the car's disagree: " + all;
+    for (const int who : b.membersOfCar(car)) {
+        const bool atWheel = link->driver >= 0 && link->driver == b.residentAgent(who);
+        if (b.inCar(who) != atWheel) return b.residentName(who) + " in the car and at its wheel disagree: " + all;
+        if (atWheel && holder != citysim::CarHolder::Resident) return "a resident at the wheel of a car no resident has: " + all;
+    }
+    return "";
+}
+}  // namespace
+
+TEST_CASE(level_brain_lab_who_has_a_car_has_one_answer) {
+    Run r;
+    if (!r.b) return;
+    citysim::CityBrain& b = *r.b;
+    citysim::CitySim& sim = r.lc.city.simMutable();
+    World& world = r.lc.world;
+    const int car = b.cars()[0];
+    const Entity e = b.carEntity(car);
+    const auto agree = [&](const char* when) {
+        const std::string why = answersDisagree(r, car);
+        std::printf("    [one-answer] %s: %s\n", when, why.empty() ? "every reader agrees" : why.c_str());
+        CHECK(why.empty());
+    };
+    agree("standing in its space");
+    std::string why;
+    // A RESIDENT DRIVES IT
+    CHECK(b.goTo(kAna, "work", &why));
+    CHECK(r.until([&] { return b.stateName(kAna) == "driving" && r.watch.ticksDriven > 30u * 60u; }));
+    agree("ana driving it");
+    CHECK(b.carHolder(car) == citysim::CarHolder::Resident && b.inCar(kAna));
+    // THE PLAYER TAKES IT, the one way (as the key and the near tier do)
+    CHECK(sim.playerTakesCar(world, e));
+    CHECK(!sim.playerTakesCar(world, e));   // (once)
+    agree("taken by the player");
+    CHECK(b.carHolder(car) == citysim::CarHolder::Outsider && !b.inCar(kAna));
+    r.step();
+    agree("taken, a tick later");
+    // ...DRIVES IT HOME (put there: the second kerb space by home, a little off and askew, as a player parks) AND GIVES
+    // IT BACK, the one way, where it stands
+    {
+        const engine::RoadModel& model = *r.sim().drivingV2()->model();
+        const std::vector<engine::KerbSpaceNear> nearHome = model.kerbSpacesNear(b.markers()[0].frontage, citysim::kSpaceReach, 2);
+        CHECK(nearHome.size() == 2u);
+        if (nearHome.size() != 2u) return;
+        engine::KerbSpacePose pose;
+        CHECK(model.kerbSpacePose(nearHome[1].space, pose));
+        Transform& t = *world.get<Transform>(e);
+        citysim::setCarPose(t, pose.at + pose.facing * 0.5, pose.facing, t.position.y);
+    }
+    CHECK(sim.playerLeftCar(world, e));
+    CHECK(!sim.playerLeftCar(world, e));   // (once)
+    agree("given back");
+    CHECK(b.carHolder(car) == citysim::CarHolder::Nobody && !world.get<citysim::CityCarLink>(e)->away);
+    r.step();
+    agree("given back, a tick later");
+    // A RESIDENT DRIVES IT AWAY AGAIN (whoever of the household plans with it from where it was left)
+    CHECK(b.goTo(kBen, "work", &why));
+    const bool drivenAgain = r.until([&] { return b.stateName(kBen) == "driving" && world.has<citysim::CityCarOnLane>(e); });
+    std::printf("    [one-answer] t=%.1f ben: %s (%s); driving it again %d; %s | %s\n", r.seconds(), b.planText(kBen).c_str(),
+                b.planReason(kBen).c_str(), drivenAgain ? 1 : 0, b.traceText(kBen).c_str(), b.describeCar(car).c_str());
+    if (!drivenAgain) std::printf("    [one-answer] %s\n", b.describe(kBen).c_str());
+    CHECK(drivenAgain);
+    agree("ben driving it away");
+    CHECK(r.holdFaults == 0);
+    CHECK(r.riderApart == 0);
+}

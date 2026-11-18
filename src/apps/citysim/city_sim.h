@@ -1475,10 +1475,17 @@ public:
     // poses, and the ground and the drawn models' body facts they stand on and are fitted with.
     CityPoses& poses() { return poses_; }
     const CityPoses& poses() const { return poses_; }
-    // The player takes the car `car`, one that drives round for ever (DrivingHost::takenByPlayer). False when it is not.
-    bool playerTakesRoamingCar(engine::Entity car) {
-        return drivingV2_ && drivingHost_.takenByPlayer(*drivingV2_, car);
-    }
+    // THE ONE WAY THE PLAYER TAKES A CAR ENTITY (city_car.h; ADR-0455), with the key or by sitting in a car of the near
+    // tier: whoever's it is, a lane car or a Jolt car. A household's car is told to the brain (CityBrain::takenByPlayer:
+    // off the driving's road, its driver put out on the kerb side, the household told); one that drives round for ever
+    // is told to the hand-over (DrivingHost::takenByPlayer: its trip ended, off the road, never sent again). Either way
+    // CityCarLink::away says from then that the player has it. False: no such car, the player has it already, it is
+    // nobody's to take (a test bed's car), or its owner refused (an outsider is in it). Defined in city_car.cpp.
+    bool playerTakesCar(engine::World& world, engine::Entity car);
+    // ...AND THE ONE WAY IT IS GIVEN BACK (#293), once it is no Jolt car any more (the near tier retires it when the
+    // player has left it and it has stopped): the household has it again where it stands (CityBrain::carLeftAt). False:
+    // the player does not have it, or it is not a household's (a car that drove round for ever is not given back yet).
+    bool playerLeftCar(engine::World& world, engine::Entity car);
     // THE RESIDENTS WITH THE AGENT BRAIN (ADR-0441, ADR-0443; city_brain.h, where these are defined): the level's
     // markers, its residents and the households whose cars they share, driven by the brain library over this sim's
     // walking and the new driving. Call once, after startDrivingV2 has succeeded. False, with the reason in `report`,

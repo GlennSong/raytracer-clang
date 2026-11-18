@@ -39,10 +39,17 @@
 // groups as the sim's own cars: no draw call of its own. It draws CityCarPose; the renderer blends one bake to the
 // next for smooth frames, and that blend is drawing only.
 //
-// THE PLAYER'S CAR (ADR-0445): the player takes a household car with the key (CityVehicleSystem). The SAME entity gains
-// an engine::Vehicle (VehicleSystem's: the Jolt car, its wheels, lamps and engine note) and loses its CityCarOnLane;
-// from then VehicleSystem moves and draws it and nothing here does (carsNear, the bake, carTickBegins all pass over an
-// entity with a Vehicle). Handing it back (removing the Vehicle) is not built (#293).
+//   CityCarKept         A HOUSEHOLD'S CAR ONLY: what the agent brain keeps about it (ADR-0455): where it stands as a
+//                       place the brain plans with, which of the brain's people has it, and its slide between its kerb
+//                       space and the lane. The brain keeps no record of its own beside it.
+//
+// THE PLAYER'S CAR (ADR-0445, ADR-0455): the player takes any car entity one way, CitySim::playerTakesCar (the key,
+// CityVehicleSystem, and sitting in a car of the near tier both call it): the brain lets a household's car go, the
+// hand-over one it sends, and CityCarLink::away says the player has it. With the key the SAME entity gains an
+// engine::Vehicle (VehicleSystem's: the Jolt car, its wheels, lamps and engine note) and loses its CityCarOnLane; from
+// then VehicleSystem moves and draws it and nothing here does (carsNear, the bake, carTickBegins all pass over an
+// entity with a Vehicle). Left and stopped, a household's car loses its Vehicle (the near tier) and is given back one
+// way, CitySim::playerLeftCar (#293).
 //
 // A CAR THAT DRIVES ROUND FOR EVER (ADR-0453): the traffic lab's cars (citysim.cars on a level the new driving drives)
 // are the same entities with nobody in them (CityCarLink: no household, no driver) and a CityCarRoams. Nobody in the
@@ -53,6 +60,7 @@
 //
 // EVERY SYSTEM THAT LOOKS FOR CARS asks carsNear: the old sim's driven cars and these, in one list.
 
+#include "brain/brain_record.h"         // brain::PlaceRef, brain::AgentId (CityCarKept)
 #include "../driving/traffic_state.h"   // driving::CarId
 #include "../../engine/components.h"    // engine::Transform, engine::PrevTransform
 #include "../../engine/world.h"
@@ -78,8 +86,35 @@ struct CityCarBody {
 struct CityCarLink {
     int household = -1;
     int driver = -1;     // the sim agent sitting at its wheel (-1: nobody)
-    bool away = false;   // the player has it as a car of their own (the brain's outsider; with the key, the entity
-                         // also has an engine::Vehicle): not drawn here
+    bool away = false;   // the player has it as a car of their own (taken with CitySim::playerTakesCar, whoever's it
+                         // was; with the key, the entity also has an engine::Vehicle): not drawn here
+};
+
+// THE AGENT BRAIN'S KEEPING OF A HOUSEHOLD'S CAR (ADR-0455): on every household car, made with it by the brain
+// (city_brain.cpp), and nowhere else. What only the brain knows about the car and every other component does not hold:
+// where it stands as a place the brain plans with, which of the brain's people has it, and what it is doing between
+// its kerb space and the lane. Its household, its driver and whether the player has it are CityCarLink's; whether the
+// driving has it is CityCarOnLane's; its number is CityCarBody's. Its holder is IN it when the holder is a resident
+// and that resident's sim agent is CityCarLink::driver; an outsider in it is CityCarLink::driver too.
+enum class CityCarPhase : uint8_t {
+    Standing,         // in a kerb space, or left standing in a lane
+    WaitingForRoom,   // in its space, its driver aboard, waiting for the kerb lane to be clear
+    EasingOut,        // placed in the kerb lane; drawn sliding out of the space
+    OnRoad,           // the driving's
+    EasingIn,         // out of the driving; drawn sliding into its space
+};
+struct CityCarKept {
+    brain::PlaceRef standing;                 // where it stands, or last stood (not valid: an outsider has it)
+    brain::AgentId heldBy = brain::kNoAgent;  // a resident, the brain's outsider (city_brain.cpp kOutsider), or nobody
+    bool stranded = false;                    // left where no lane is beside it: nobody can drive it from there
+    CityCarPhase phase = CityCarPhase::Standing;
+    // the slide between its space and the lane (while EasingOut or EasingIn)
+    Vec2 easeFromPos, easeFromHeading, easeToPos, easeToHeading;
+    Real easeT = 0;
+    // a trip to begin once it is in the lane: who drives it, from and to where
+    bool tripWanted = false;
+    brain::AgentId tripPerson = brain::kNoAgent;
+    brain::PlaceRef tripFrom, tripTo;
 };
 
 struct CityCarOnLane {

@@ -14,8 +14,7 @@
 #include "../../engine/scripting/vehicle_spec.h"
 #endif
 #include "../../log.h"
-#include "city_sim.h"                       // VehicleBody
-#include "city_brain.h"                     // the households' cars: takenByPlayer (ADR-0445)
+#include "city_sim.h"                       // VehicleBody; playerTakesCar (ADR-0455)
 #include "city_car.h"                       // carsNear, and a household car's components
 #include "city_near.h"                      // slotVehicleSpec: a slot's drivable car, built one way (ADR-0447)
 
@@ -232,17 +231,18 @@ bool CityVehicleSystem::ambientMoving(const Ambient& a) const {
 // a real Vehicle, or none:
 //   - an old-sim car: its agent is released (its instanced car vanishes this tick) and a real Vehicle of the same car
 //     is spawned at the same pose, a new entity;
-//   - a household's car (ADR-0445): THE SAME ENTITY becomes the Vehicle (one car, one representation): the brain is
-//     told the player has taken it (CityBrain::takenByPlayer: off the driving's road, its driver put out on the kerb
-//     side, the household told), then the entity gains its Vehicle and VehicleSystem moves and draws it from now.
+//   - a car entity (a household's, ADR-0445, or one that drives round for ever, ADR-0453): THE SAME ENTITY becomes the
+//     Vehicle (one car, one representation): it is taken the one way a car is taken (CitySim::playerTakesCar: the brain
+//     or the hand-over lets it go, off the driving's road, a driver put out on the kerb side, ADR-0455), then the
+//     entity gains its Vehicle and VehicleSystem moves and draws it from now.
 Entity CityVehicleSystem::promote(engine::FrameContext& ctx, const Ambient& target) {
     World& world = ctx.world;
     const CitySim& sim = city_.sim();
-    CityBrain* households = city_.simMutable().brain();
-    // (a car entity: a household's, which the brain knows, or one that drives round for ever, the hand-over's)
+    // (a car entity: a household's, or one that drives round for ever)
     const Entity householdCar = target.car >= 0 ? carEntityNumbered(world, static_cast<uint32_t>(target.car)) : Entity{};
     if (target.car >= 0 && !householdCar.valid()) return Entity{};
-    const bool brainsCar = householdCar.valid() && households && households->carEntity(target.car) == householdCar;
+    const CityCarLink* carLink = householdCar.valid() ? world.get<CityCarLink>(householdCar) : nullptr;
+    const bool brainsCar = carLink && carLink->household >= 0;
     const int bestAgent = target.agent;
     // THE MODEL IT IS DRAWN AS (#115): every part below by the draw slot, not the vehicle index -- they differ
     // whenever the fleet has service vehicles, and the car in the player's hands turned into another model.
@@ -271,12 +271,9 @@ Entity CityVehicleSystem::promote(engine::FrameContext& ctx, const Ambient& targ
     Vec3 groundPos;
     Vec2 groundHeading;
     if (!ambientPose(target, groundPos, groundHeading)) return Entity{};
-    // A HOUSEHOLD'S CAR: the brain first (it takes the car off the driving and its lane component off the entity, and
-    // puts its driver out); false when somebody else has it already. A CAR THAT DRIVES ROUND FOR EVER: the hand-over
-    // ends its trip and takes it off the driving (DrivingHost::takenByPlayer). Any other car entity is not offered.
-    if (householdCar.valid() && !(brainsCar ? households->takenByPlayer(target.car)
-                                            : city_.simMutable().playerTakesRoamingCar(householdCar)))
-        return Entity{};
+    // A CAR ENTITY: taken first (off the driving, its lane component off the entity, its driver out); false when
+    // somebody else has it already, or it is nobody's to take.
+    if (householdCar.valid() && !city_.simMutable().playerTakesCar(world, householdCar)) return Entity{};
     // what the old sim's driver does once the car is the player's: they get out onto the pavement and stand there (no
     // longer vanishing with the car)
     const auto releaseOld = [&]() {

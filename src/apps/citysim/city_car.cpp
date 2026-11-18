@@ -1,5 +1,6 @@
 #include "city_car.h"
 
+#include "city_brain.h"   // CityBrain::takenByPlayer, carLeftAt
 #include "city_sim.h"
 
 #include <cmath>
@@ -28,6 +29,26 @@ void carTickBegins(engine::World& world) {
 
 bool carNowhere(engine::World& world, engine::Entity e) {
     return world.has<CityCarRoams>(e) && !world.has<CityCarOnLane>(e) && !world.has<engine::Vehicle>(e);
+}
+
+// ---- The player takes a car, and gives it back (ADR-0455): one way each, whoever's the car is ----------------------
+
+bool CitySim::playerTakesCar(engine::World& world, engine::Entity car) {
+    const CityCarBody* body = world.get<CityCarBody>(car);
+    const CityCarLink* link = world.get<CityCarLink>(car);
+    if (!body || !link || link->away) return false;
+    // (each owner says yes or no and sets CityCarLink::away when it lets the car go: the one record of it)
+    if (link->household >= 0) return brain_ && brain_->takenByPlayer(static_cast<int>(body->id));
+    if (world.has<CityCarRoams>(car)) return drivingV2_ && drivingHost_.takenByPlayer(*drivingV2_, car);
+    return false;
+}
+
+bool CitySim::playerLeftCar(engine::World& world, engine::Entity car) {
+    const CityCarBody* body = world.get<CityCarBody>(car);
+    const CityCarLink* link = world.get<CityCarLink>(car);
+    const engine::Transform* t = world.get<engine::Transform>(car);
+    if (!body || !link || !t || !link->away || link->household < 0 || !brain_) return false;
+    return brain_->carLeftAt(static_cast<int>(body->id), carPosition(*t), carHeading(*t));
 }
 
 engine::Entity carEntityNumbered(engine::World& world, uint32_t id) {

@@ -463,7 +463,6 @@ void CityNearSystem::onStart(engine::FrameContext& ctx) {
 void CityNearSystem::tierStep(engine::FrameContext& ctx) {
     engine::World& world = ctx.world;
     driving::Driving* d = city_.simMutable().drivingV2Mutable();
-    CityBrain* brain = city_.simMutable().brain();
     if (!d) return;
     const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
     engine::PhysicsWorld& pw = physics_.physicsWorld();
@@ -476,12 +475,12 @@ void CityNearSystem::tierStep(engine::FrameContext& ctx) {
     for (const Entity e : nears) {
         const CityNearCar* n = world.get<CityNearCar>(e);
         const engine::Vehicle* v = world.get<engine::Vehicle>(e);
-        const CityCarBody* body = world.get<CityCarBody>(e);
         if (v->driver.valid()) {
             const driving::CarId id = n->car;
             if (d->carried(id)) d->carry(id, false);
             world.remove<CityNearCar>(e);
-            if (brain && body) brain->takenByPlayer(static_cast<int>(body->id));
+            // (the one way the player takes a car: the brain told for a household's, the hand-over for one it sends)
+            city_.simMutable().playerTakesCar(world, e);
             if (world.has<engine::AgentDriver>(e)) world.remove<engine::AgentDriver>(e);
             ++counts_.taken;
             continue;
@@ -493,10 +492,12 @@ void CityNearSystem::tierStep(engine::FrameContext& ctx) {
         }
     }
     // 2. GIVEN BACK (#293): a household car the player had (taken near or with the key), left: once it has stopped its
-    // Jolt car goes, then the household has it again where it stands (CityBrain::carLeftAt: in a kerb space beside it,
-    // or where it stands, on the road or not)
+    // Jolt car goes, then the household has it again where it stands (CitySim::playerLeftCar, the one way back: in a kerb
+    // space beside it, or where it stands, on the road or not). A car that drove round for ever the player took stays
+    // the player's Jolt car (it has no household to go back to; handing it back to the hand-over is not built).
     world.each<CityCarBody, CityCarLink, engine::Vehicle>([&](Entity e, CityCarBody&, CityCarLink& link, engine::Vehicle&) {
-        if (link.away && std::find(taken_.begin(), taken_.end(), e) == taken_.end()) taken_.push_back(e);
+        if (link.away && link.household >= 0 && std::find(taken_.begin(), taken_.end(), e) == taken_.end())
+            taken_.push_back(e);
     });
     for (std::size_t i = 0; i < taken_.size();) {
         const Entity e = taken_[i];
@@ -513,8 +514,7 @@ void CityNearSystem::tierStep(engine::FrameContext& ctx) {
             ++i;
             continue;
         }
-        const engine::Transform* t = world.get<engine::Transform>(e);
-        if (brain && t && brain->carLeftAt(static_cast<int>(body->id), carPosition(*t), carHeading(*t))) ++counts_.givenBack;
+        if (city_.simMutable().playerLeftCar(world, e)) ++counts_.givenBack;
         taken_.erase(taken_.begin() + static_cast<std::ptrdiff_t>(i));
     }
 

@@ -1559,8 +1559,9 @@ TEST_CASE(level_traffic_lab_v2_rebuild_hands_over_again) {
 }
 
 // THE LAB'S CARS ARE FOUND AS CARS (ADR-0453): the census counts them, `spectate` can follow each, every system that
-// looks for cars sees them (carsNear), and the player can take one (the key's side: DrivingHost::takenByPlayer, after
-// which the driving no longer has it and the hand-over no longer sends it).
+// looks for cars sees them (carsNear), and the player can take one (the one way, CitySim::playerTakesCar, which tells
+// the hand-over, DrivingHost::takenByPlayer, after which the driving no longer has it, the hand-over no longer sends
+// it, and CityCarLink::away says the player has it: ADR-0455).
 TEST_CASE(level_traffic_lab_v2_the_cars_are_counted_followed_and_taken) {
     LoadedCity lc("traffic_lab.json", "");
     CHECK(lc.ok);
@@ -1589,8 +1590,9 @@ TEST_CASE(level_traffic_lab_v2_the_cars_are_counted_followed_and_taken) {
     if (followable.empty()) return;
     const Entity taken = followable.front();
     const uint32_t number = lc.world.get<citysim::CityCarBody>(taken)->id;
-    CHECK(sim.playerTakesRoamingCar(taken));
-    CHECK(!sim.playerTakesRoamingCar(taken));   // (once)
+    CHECK(sim.playerTakesCar(lc.world, taken));
+    CHECK(!sim.playerTakesCar(lc.world, taken));   // (once)
+    CHECK(lc.world.get<citysim::CityCarLink>(taken)->away);   // (the player's: ADR-0455)
     CHECK(sim.drivingV2()->car(driving::CarId(number)) == nullptr);
     CHECK(!lc.world.has<citysim::CityCarRoams>(taken) && !lc.world.has<citysim::CityCarOnLane>(taken));
     CHECK(citysim::carEntityNumbered(lc.world, number) == taken);
