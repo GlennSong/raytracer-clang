@@ -108,6 +108,7 @@ public:
             citysimKey.erase("households");
             citysimKey.erase("crowd");   // (ADR-0446: a crowd made from the roads at load, read by no lot)
             citysimKey.erase("drivableSpacesOnly");
+            citysimKey.erase("near");
         }
         k = bundle::fnv1aStr(citysimKey.dump(), k);
         // The ground the lots stand on: the terrain and water blocks, and the cell it is drawn at -- the terrain

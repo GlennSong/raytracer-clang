@@ -263,6 +263,13 @@ static void readCityMarkers(const json& cs, const std::string& levelPath, CitySi
     // A CROWD MADE FROM THE ROADS (ADR-0446): the file under assets/scripts that says what to make
     if (cs.contains("crowd") && cs["crowd"].is_string()) cfg.crowd = cs["crowd"].get<std::string>();
     cfg.drivableSpacesOnly = cs.value("drivableSpacesOnly", false);
+    if (cs.contains("near") && cs["near"].is_object()) {   // the near tier (ADR-0448)
+        const json& n = cs["near"];
+        cfg.near.cap = n.value("cap", 0);
+        cfg.near.enter = n.value("enter", 0.0);
+        cfg.near.leave = std::max(cfg.near.enter, n.value("leave", 0.0));
+        cfg.near.perStep = n.value("per_step", 0);
+    }
 }
 
 

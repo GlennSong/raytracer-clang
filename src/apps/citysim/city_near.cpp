@@ -6,6 +6,7 @@
 #include "../../engine/systems/physics_system.h"
 #include "../../engine/world.h"
 #include "../../log.h"
+#include "city_brain.h"
 #include "city_render.h"
 
 #ifdef RT_ENABLE_SCRIPTING
@@ -102,8 +103,26 @@ engine::DriverCommand nearCommand(CityNearCar& n, const engine::LaneGraph& roads
 
 // ---- The spec a slot's car is built from ------------------------------------------------------------------------------
 
+std::unique_ptr<engine::ScriptVM> openVehiclesLibrary(std::string* why) {
+#ifdef RT_ENABLE_SCRIPTING
+    std::unique_ptr<engine::ScriptVM> vm = std::make_unique<engine::ScriptVM>();
+    engine::openProcgenLibrary(*vm);
+    engine::openModuleLoader(*vm, engine::makeModuleSource(""));
+    const std::string lib = engine::loadScriptCode("vehicles.lua", "");
+    std::string err;
+    if (lib.empty() || !vm->doString(lib, &err)) {
+        if (why) *why = lib.empty() ? "no vehicles.lua" : "vehicles.lua: " + err;
+        return nullptr;
+    }
+    return vm;
+#else
+    if (why) *why = "a build without scripting has no vehicles.lua";
+    return nullptr;
+#endif
+}
+
 bool slotVehicleSpec(const CityRenderSystem& city, int slot, engine::VehicleSpec& spec, std::string* recipeOut,
-                     std::string* why) {
+                     std::string* why, engine::ScriptVM* vehicles) {
 #ifdef RT_ENABLE_SCRIPTING
     std::string recipe;
     Vec3 paint;
@@ -111,16 +130,18 @@ bool slotVehicleSpec(const CityRenderSystem& city, int slot, engine::VehicleSpec
         if (why) *why = "fleet slot " + std::to_string(slot) + " has no drivable recipe";
         return false;
     }
-    const std::string lib = engine::loadScriptCode("vehicles.lua", "");
-    engine::ScriptVM vm;
-    engine::openProcgenLibrary(vm);
-    engine::openModuleLoader(vm, engine::makeModuleSource(""));
+    std::unique_ptr<engine::ScriptVM> own;
+    if (!vehicles) {
+        own = openVehiclesLibrary(why);
+        if (!own) return false;
+        vehicles = own.get();
+    }
     std::string err;
     char chunk[256];
     std::snprintf(chunk, sizeof chunk, "return vehicle.%s(seed, { color = { %.4f, %.4f, %.4f } })", recipe.c_str(), paint.x,
                   paint.y, paint.z);
-    if (lib.empty() || !vm.doString(lib, &err) || !engine::loadVehicleSpec(vm, chunk, 1u, spec, &err)) {
-        if (why) *why = "fleet slot " + std::to_string(slot) + "'s drivable " + recipe + ": " + (lib.empty() ? "no vehicles.lua" : err);
+    if (!engine::loadVehicleSpec(*vehicles, chunk, 1u, spec, &err)) {
+        if (why) *why = "fleet slot " + std::to_string(slot) + "'s drivable " + recipe + ": " + err;
         return false;
     }
     if (recipeOut) *recipeOut = recipe;
@@ -130,6 +151,7 @@ bool slotVehicleSpec(const CityRenderSystem& city, int slot, engine::VehicleSpec
     (void)slot;
     (void)spec;
     (void)recipeOut;
+    (void)vehicles;
     if (why) *why = "a build without scripting has no drivable recipes";
     return false;
 #endif
@@ -141,8 +163,29 @@ void CityNearSystem::onStart(engine::FrameContext& ctx) {
     world_ = &ctx.world;
     assets_ = &ctx.assets;
     city_.simMutable().setBeforeDriving([this](driving::Driving& d) { writePoses(d); });
+    // TOUCHES BETWEEN TWO OF THE CITY'S JOLT CARS (ADR-0448): counted, the first few kept
+    onCollision_ = ctx.events.listen<engine::Collision>([this](const engine::Collision& col) {
+        if (col.persisted || !world_) return;
+        uint32_t a = 0, b = 0;
+        int found = 0;
+        engine::PhysicsWorld& pw = physics_.physicsWorld();
+        world_->each<CityCarBody, engine::Vehicle>([&](Entity, CityCarBody& body, engine::Vehicle& v) {
+            if (v.vehicleId == engine::PhysicsWorld::INVALID_VEHICLE) return;
+            const engine::PhysicsBodyId id = pw.vehicleBody(v.vehicleId);
+            if (id == col.bodyA) {
+                a = body.id;
+                ++found;
+            } else if (id == col.bodyB) {
+                b = body.id;
+                ++found;
+            }
+        });
+        if (found < 2) return;
+        ++counts_.contacts;
+        if (counts_.contactList.size() < kContactsKept) counts_.contactList.push_back(NearContact{a, b, col.position, col.speed});
+    });
     if (!ctx.commands) return;
-    ctx.commands->add("near", "near route|queue|clear",
+    ctx.commands->add("near", "near route|queue|clear|marks [off]|key",
                       "The near tier's test bed in the viewer (ADR-0447): `route` puts a physics car at the start of the "
                       "test's route, `queue` a lane car with a physics car behind it; they set out when the route's light "
                       "turns red. `clear` takes the lab's cars away. `near?` says where they are.",
@@ -152,6 +195,15 @@ void CityNearSystem::onStart(engine::FrameContext& ctx) {
                           if (what == "clear") {
                               clearLab(*world_);
                               return "ok the lab's cars are gone";
+                          }
+                          if (what == "key") {
+                              pressEnter_ = true;
+                              return std::string("ok the key to get in or out, pressed on the next frame (VehicleSystem's "
+                                                 "own: the nearest car within its reach, no looking at it needed)");
+                          }
+                          if (what == "marks") {
+                              marks_ = c.args.size() < 2 || c.args[1] != "off";
+                              return marks_ ? "ok a cyan post over each car of the near tier" : "ok no posts";
                           }
                           if (what != "route" && what != "queue") return "err usage: near route|queue|clear";
                           std::string why;
@@ -179,6 +231,14 @@ void CityNearSystem::onStart(engine::FrameContext& ctx) {
                                             c ? c->offset : 0.0, c ? c->path.index : 0u, c && c->driven ? "" : ", arrived");
                               out += buf;
                           });
+                          std::snprintf(buf, sizeof buf, " | near %d (over the cap %d), taken %u, given back %u, contacts %u",
+                                        counts_.nearNow, counts_.overCapNow, counts_.taken, counts_.givenBack, counts_.contacts);
+                          out += buf;
+                          for (const NearContact& k : counts_.contactList) {
+                              std::snprintf(buf, sizeof buf, " | touch: car %u and car %u at %.1f %.1f %.1f, closing at %.2f m/s",
+                                            k.a, k.b, k.at.x, k.at.y, k.at.z, k.speed);
+                              out += buf;
+                          }
                           std::snprintf(buf, sizeof buf, " | into physics %u, into the lane %u, refused %u, poses written %llu, "
                                         "off the road %llu, %.3f ms a step",
                                         counts_.intoPhysics, counts_.intoLane, counts_.refused,
@@ -189,6 +249,139 @@ void CityNearSystem::onStart(engine::FrameContext& ctx) {
                           return out;
                       },
                       kOwner);
+}
+
+// THE NEAR TIER (ADR-0448; design section 4), each fixed step before the controller.
+void CityNearSystem::tierStep(engine::FrameContext& ctx) {
+    engine::World& world = ctx.world;
+    driving::Driving* d = city_.simMutable().drivingV2Mutable();
+    CityBrain* brain = city_.simMutable().brain();
+    if (!d) return;
+    const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    engine::PhysicsWorld& pw = physics_.physicsWorld();
+
+    // 1. CARS THAT LEAVE THE TIER BY THEMSELVES: the player sat in one (VehicleSystem's key: only the seat changes, the
+    // household loses it, its driver put out), or the brain let one go from the driving (it parked: it slides into its
+    // space as a car the city draws, so its Jolt car goes)
+    std::vector<Entity> nears;
+    world.each<CityNearCar, engine::Vehicle>([&](Entity e, CityNearCar&, engine::Vehicle&) { nears.push_back(e); });
+    for (const Entity e : nears) {
+        const CityNearCar* n = world.get<CityNearCar>(e);
+        const engine::Vehicle* v = world.get<engine::Vehicle>(e);
+        const CityCarBody* body = world.get<CityCarBody>(e);
+        if (v->driver.valid()) {
+            const driving::CarId id = n->car;
+            if (d->carried(id)) d->carry(id, false);
+            world.remove<CityNearCar>(e);
+            if (brain && body) brain->takenByPlayer(static_cast<int>(body->id));
+            if (world.has<engine::AgentDriver>(e)) world.remove<engine::AgentDriver>(e);
+            ++counts_.taken;
+            continue;
+        }
+        const driving::Car* c = d->car(n->car);
+        if (!c || !d->carried(n->car)) {
+            world.add<engine::VehicleRetire>(e, engine::VehicleRetire{true});
+            world.remove<CityNearCar>(e);
+        }
+    }
+    // 2. GIVEN BACK (#293): a household car the player had (taken near or with the key), left: once it has stopped its
+    // Jolt car goes, then the household has it again where it stands (CityBrain::carLeftAt: in a kerb space beside it,
+    // or where it stands, on the road or not)
+    world.each<CityCarBody, CityCarLink, engine::Vehicle>([&](Entity e, CityCarBody&, CityCarLink& link, engine::Vehicle&) {
+        if (link.away && std::find(taken_.begin(), taken_.end(), e) == taken_.end()) taken_.push_back(e);
+    });
+    for (std::size_t i = 0; i < taken_.size();) {
+        const Entity e = taken_[i];
+        const engine::Vehicle* v = world.alive(e) ? world.get<engine::Vehicle>(e) : nullptr;
+        const CityCarBody* body = world.alive(e) ? world.get<CityCarBody>(e) : nullptr;
+        if (!body) {
+            taken_.erase(taken_.begin() + static_cast<std::ptrdiff_t>(i));
+            continue;
+        }
+        if (v) {
+            if (!v->driver.valid() && v->vehicleId != engine::PhysicsWorld::INVALID_VEHICLE &&
+                pw.vehicleVelocity(v->vehicleId).length() < kGiveBackBelow && !world.has<engine::VehicleRetire>(e))
+                world.add<engine::VehicleRetire>(e, engine::VehicleRetire{true});
+            ++i;
+            continue;
+        }
+        const engine::Transform* t = world.get<engine::Transform>(e);
+        if (brain && t && brain->carLeftAt(static_cast<int>(body->id), carPosition(*t), carHeading(*t))) ++counts_.givenBack;
+        taken_.erase(taken_.begin() + static_cast<std::ptrdiff_t>(i));
+    }
+
+    // 3. THE TIER: around the player (in a car, the car)
+    int nearNow = 0;
+    world.each<CityNearCar>([&](Entity, CityNearCar&) { ++nearNow; });
+    counts_.nearNow = nearNow;
+    if (rules_.cap <= 0) return;
+    Vec2 centre;
+    bool found = false;
+    world.each<engine::Transform, engine::ControlledBy>([&](Entity p, engine::Transform& t, engine::ControlledBy&) {
+        if (found) return;
+        found = true;
+        centre = flat(t.position);
+        if (const engine::InVehicle* iv = world.get<engine::InVehicle>(p))
+            if (const engine::Transform* ct = world.alive(iv->vehicle) ? world.get<engine::Transform>(iv->vehicle) : nullptr)
+                centre = flat(ct->position);
+    });
+    if (!found) return;
+    int switches = 0;
+    // OUT, the farthest first: beyond `leave`, back to the lane when it may (else it stays, over the cap if it must)
+    std::vector<std::pair<Real, Entity>> out;
+    world.each<CityNearCar, engine::Transform>([&](Entity e, CityNearCar&, engine::Transform& t) {
+        const Real away = (flat(t.position) - centre).length();
+        if (away > rules_.leave) out.push_back({away, e});
+    });
+    std::sort(out.begin(), out.end(), [](const std::pair<Real, Entity>& a, const std::pair<Real, Entity>& b) {
+        return a.first > b.first;
+    });
+    for (const std::pair<Real, Entity>& o : out) {
+        if (switches >= rules_.perStep) break;
+        if (toLane(world, o.second)) {
+            ++switches;
+            --nearNow;
+        }
+    }
+    // IN, the nearest first: driven lane cars within `enter`, up to the cap
+    std::vector<std::pair<Real, Entity>> in;
+    world.each<CityCarBody, CityCarLink, CityCarOnLane, engine::Transform>(
+        [&](Entity e, CityCarBody&, CityCarLink& link, CityCarOnLane& lane, engine::Transform& t) {
+            if (link.away || !lane.driven || world.has<engine::Vehicle>(e)) return;
+            const Real away = (flat(t.position) - centre).length();
+            if (away < rules_.enter) in.push_back({away, e});
+        });
+    std::sort(in.begin(), in.end(), [](const std::pair<Real, Entity>& a, const std::pair<Real, Entity>& b) {
+        return a.first < b.first;
+    });
+    for (const std::pair<Real, Entity>& c : in) {
+        if (switches >= rules_.perStep || nearNow >= rules_.cap) break;
+        if (toPhysics(world, ctx.assets, c.second, ctx.clock.fixedStep())) {
+            ++switches;
+            ++nearNow;
+        }
+    }
+    counts_.nearNow = nearNow;
+    counts_.overCapNow = std::max(0, nearNow - rules_.cap);
+    counts_.mostOverCap = std::max(counts_.mostOverCap, counts_.overCapNow);
+    counts_.mostThisStep = std::max(counts_.mostThisStep, switches);
+    counts_.tierMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    ++counts_.tierSteps;
+}
+
+void CityNearSystem::update(engine::FrameContext& ctx) {
+    if (!pressEnter_) return;
+    pressEnter_ = false;
+    ctx.actions.injectPress("enter_vehicle");
+}
+
+void CityNearSystem::render(engine::FrameContext& ctx) {
+    if (!marks_) return;
+    const Vec3 kNearMark(0.1, 0.9, 1.0);   // cyan
+    ctx.world.each<CityNearCar, engine::Transform>([&](Entity, CityNearCar&, engine::Transform& t) {
+        ctx.debug.line(t.position, t.position + Vec3(0, kNearPostHeight, 0), kNearMark);
+        ctx.debug.sphere(t.position + Vec3(0, kNearPostHeight, 0), 0.4, kNearMark);
+    });
 }
 
 void CityNearSystem::onStop(engine::FrameContext& ctx) {
@@ -222,7 +415,13 @@ void CityNearSystem::fixedUpdate(engine::FrameContext& ctx) {
     assets_ = &ctx.assets;
     const driving::Driving* d = city_.sim().drivingV2();
     if (!d || !d->roads()) return;
+    if (!rulesRead_) {
+        rulesRead_ = true;
+        ctx.world.each<engine::CitySimConfig>([&](Entity, engine::CitySimConfig& c) { rules_ = c.near; });
+    }
+    if (!measured_ && city_.built() && rules_.cap > 0) measureSlots(ctx.world);
     if (!staged_.empty()) sendStaged(ctx.world, ctx.clock.fixedStep());
+    tierStep(ctx);
     const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
     engine::PhysicsWorld& pw = physics_.physicsWorld();
     bool any = false;
@@ -242,10 +441,52 @@ void CityNearSystem::fixedUpdate(engine::FrameContext& ctx) {
     ++counts_.controlSteps;
 }
 
+void CityNearSystem::refuse(const std::string& reason) {
+    ++counts_.refused;
+    ++counts_.refusedBy[reason];
+}
+
+const CityNearSystem::SlotCar& CityNearSystem::slotCar(int slot) {
+    std::map<int, SlotCar>::iterator found = slotCars_.find(slot);
+    if (found != slotCars_.end()) return found->second;
+    SlotCar s;
+    s.spec = std::make_shared<engine::VehicleSpec>();
+    const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    if (!vehiclesVm_) vehiclesVm_ = openVehiclesLibrary(&s.why);
+    if (vehiclesVm_ && slotVehicleSpec(city_, slot, *s.spec, nullptr, &s.why, vehiclesVm_.get())) {
+        const std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
+        const engine::PhysicsWorld::CarMeasures m = engine::PhysicsWorld::measureCar(s.spec->config);
+        s.restHeight = m.restHeight;
+        s.launch = m.launch;
+        s.brake = m.brake;
+        if (!(s.restHeight > 0)) s.why = "its Jolt car could not be stood on its springs";
+        LOG_INFO << "[near] fleet slot " << slot << ": its spec built in "
+                 << std::chrono::duration<double, std::milli>(t1 - t0).count() << " ms, its Jolt car measured in "
+                 << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count() << " ms";
+    }
+    return slotCars_.emplace(slot, s).first->second;
+}
+
+// EVERY FLEET SLOT THE LEVEL'S CARS USE, measured as the level loads (the first step the city is built): building a
+// slot's spec and measuring its Jolt car took 1.2 s at the first switch (ADR-0447).
+void CityNearSystem::measureSlots(engine::World& world) {
+    measured_ = true;
+    const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    std::vector<int> slots;
+    world.each<CityCarBody>([&](Entity, CityCarBody& b) {
+        if (std::find(slots.begin(), slots.end(), b.slot) == slots.end()) slots.push_back(b.slot);
+    });
+    for (const int s : slots) slotCar(s);
+    counts_.slotsMeasured = static_cast<int>(slots.size());
+    counts_.measureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (!slots.empty())
+        LOG_INFO << "[near] " << slots.size() << " fleet slots measured for the near tier in " << counts_.measureMs << " ms";
+}
+
 bool CityNearSystem::toPhysics(engine::World& world, engine::AssetManager& assets, Entity e, Real step, std::string* why) {
-    const auto refuse = [&](const std::string& reason) {
-        ++counts_.refused;
-        if (why) *why = reason;
+    const auto refuse = [&](const std::string& reason, const std::string& detail = std::string()) {
+        this->refuse(reason);
+        if (why) *why = detail.empty() ? reason : reason + ": " + detail;
         return false;
     };
     driving::Driving* d = city_.simMutable().drivingV2Mutable();
@@ -257,25 +498,17 @@ bool CityNearSystem::toPhysics(engine::World& world, engine::AssetManager& asset
     const driving::Car* c = d->car(lane->car);
     if (!c || !c->driven) return refuse("the driving has it on no trip");
     if (c->vehicleClass >= d->vehicleClasses().size()) return refuse("its vehicle class is unknown");
-    engine::VehicleSpec spec;
-    std::string err;
-    if (!slotVehicleSpec(city_, body->slot, spec, nullptr, &err)) return refuse(err);
-    std::map<int, SlotCar>::iterator measured = slotCars_.find(body->slot);
-    if (measured == slotCars_.end()) {
-        SlotCar s;
-        s.restHeight = engine::PhysicsWorld::restHeight(spec.config);
-        s.launch = engine::PhysicsWorld::launchAccel(spec.config);
-        s.brake = engine::PhysicsWorld::brakeDecel(spec.config);
-        measured = slotCars_.emplace(body->slot, s).first;
-    }
-    if (!(measured->second.restHeight > 0)) return refuse("its Jolt car could not be stood on its springs");
+    const SlotCar& slotted = slotCar(body->slot);
+    if (!slotted.why.empty() || !slotted.spec) return refuse("its slot has no Jolt car", slotted.why);
+    const engine::VehicleSpec& spec = *slotted.spec;
+    const SlotCar* measuredCar = &slotted;
 
     // WHERE IT IS DRAWN: its middle and heading, on the lane graph's height under it, standing on its springs; a step
     // of its speed on, where the lane car would be when physics first moves it
     const Vec2 heading = carHeading(*t);
     const Real speed = c->speed;
     const Vec2 middle = carPosition(*t) + heading * (speed * step);
-    const Vec3 at(middle.x, lane->roadY + measured->second.restHeight, middle.y);
+    const Vec3 at(middle.x, lane->roadY + measuredCar->restHeight, middle.y);
     engine::makeVehicle(world, assets, spec, e, at, std::atan2(heading.x, heading.y) * kDegrees);
     engine::Vehicle* v = world.get<engine::Vehicle>(e);
     if (!v) return refuse("the engine made no Vehicle");
@@ -288,8 +521,8 @@ bool CityNearSystem::toPhysics(engine::World& world, engine::AssetManager& asset
     CityNearCar n;
     n.car = lane->car;
     n.halfLength = d->vehicleClasses().at(c->vehicleClass).length * 0.5;
-    n.launch = measured->second.launch;
-    n.brake = measured->second.brake;
+    n.launch = measuredCar->launch;
+    n.brake = measuredCar->brake;
     const driving::CarId id = lane->car;
     world.remove<CityCarOnLane>(e);   // (the driving no longer draws it: physics does)
     world.add<CityNearCar>(e, n);
@@ -299,9 +532,9 @@ bool CityNearSystem::toPhysics(engine::World& world, engine::AssetManager& asset
 }
 
 bool CityNearSystem::toLane(engine::World& world, Entity e, std::string* why) {
-    const auto refuse = [&](const std::string& reason) {
-        ++counts_.refused;
-        if (why) *why = reason;
+    const auto refuse = [&](const std::string& reason, const std::string& detail = std::string()) {
+        this->refuse(reason);
+        if (why) *why = detail.empty() ? reason : reason + ": " + detail;
         return false;
     };
     driving::Driving* d = city_.simMutable().drivingV2Mutable();
@@ -315,12 +548,12 @@ bool CityNearSystem::toLane(engine::World& world, Entity e, std::string* why) {
     const engine::Quat q = pw.vehicleOrientation(v->vehicleId);
     const Vec3 up = q.rotate(Vec3(0, 1, 0));
     if (up.y < std::cos(kBackUprightDegrees / kDegrees)) return refuse("it is not upright");
-    if (std::fabs(c->offset) > kBackOffset) return refuse("its front is " + std::to_string(c->offset) + " m off its lane's centre");
+    if (std::fabs(c->offset) > kBackOffset) return refuse("off its lane's centre", std::to_string(c->offset) + " m");
     const driving::CarPose pose = driving::carPose(*d->roads(), d->vehicleClasses(), d->ruleSet(), *c);
     const Vec2 lanes = engine::normalize(Vec2(pose.travel.x, pose.travel.z));
     const Vec2 forward = engine::normalize(flat(q.rotate(Vec3(0, 0, 1))));
     const Real align = std::acos(std::clamp(lanes.x * forward.x + lanes.y * forward.y, Real(-1), Real(1))) * kDegrees;
-    if (align > kBackAlignDegrees) return refuse("it points " + std::to_string(align) + " degrees off its lane");
+    if (align > kBackAlignDegrees) return refuse("not pointing along its lane", std::to_string(align) + " degrees");
 
     // ONTO THE LANE: at the nearest point along it (no offset), keeping the speed it was last written with
     const driving::CarId id = n->car;

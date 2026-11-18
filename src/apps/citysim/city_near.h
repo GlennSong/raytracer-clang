@@ -28,13 +28,18 @@
 #include "../driving/driving.h"
 #include "city_car.h"
 
+#include "../../engine/components.h"   // CitySimConfig::NearTier
+#include "../../engine/event_bus.h"
+
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace engine {
 class PhysicsSystem;
 class AssetManager;
+class ScriptVM;
 struct VehicleSpec;
 }  // namespace engine
 
@@ -59,6 +64,12 @@ constexpr engine::Real kNearLookGain = 0.5;
 constexpr engine::Real kBackOffset = 0.3;          // m
 constexpr engine::Real kBackAlignDegrees = 6.0;
 constexpr engine::Real kBackUprightDegrees = 12.0;
+// A car the player left is given back to its household once it is slower than this (m/s): not while it rolls (#293).
+constexpr engine::Real kGiveBackBelow = 0.5;
+// How many touches between two of the city's Jolt cars are kept, each (NearCounts::contactList).
+constexpr std::size_t kContactsKept = 32;
+// `near marks on`: how high the post over each near car stands (m).
+constexpr engine::Real kNearPostHeight = 4.0;
 
 // A CAR OF THE NEAR TIER: on an entity with a CityCarBody and an engine::Vehicle while physics carries it.
 struct CityNearCar {
@@ -81,8 +92,10 @@ engine::DriverCommand nearCommand(CityNearCar& n, const engine::LaneGraph& roads
 
 // THE DRIVABLE SPEC OF A FLEET SLOT: its recipe from vehicles.lua in its paint (the car the player takes is built the
 // same way: city_vehicles.cpp). False, with the reason, when the slot has none or the recipe fails.
+// `vehicles`: a VM with vehicles.lua loaded already (openVehiclesLibrary), for many slots at once; null: one is made.
 bool slotVehicleSpec(const CityRenderSystem& city, int slot, engine::VehicleSpec& spec, std::string* recipe,
-                     std::string* why);
+                     std::string* why, engine::ScriptVM* vehicles = nullptr);
+std::unique_ptr<engine::ScriptVM> openVehiclesLibrary(std::string* why);
 
 // THE TEST BED'S ROUTES (ADR-0447): through a junction with traffic lights, by its connectors, the tightest turn
 // first: from `runUp` metres before the lane's end into the junction, round the turn, to `runOn` metres along the lane
@@ -100,9 +113,29 @@ constexpr engine::Real kLabRunUp = 60.0;
 constexpr engine::Real kLabRunOn = 40.0;
 constexpr engine::Real kLabQueueBehind = 14.0;
 
+// ONE TOUCH BETWEEN TWO CARS OF THE CITY THAT ARE BOTH JOLT CARS (ADR-0448): who, where, how fast they closed.
+struct NearContact {
+    uint32_t a = 0, b = 0;   // their car numbers
+    engine::Vec3 at;
+    engine::Real speed = 0;
+};
+
 struct NearCounts {
     uint32_t intoPhysics = 0, intoLane = 0;
     uint32_t refused = 0;
+    std::map<std::string, uint32_t> refusedBy;   // by reason
+    // THE TIER (ADR-0448)
+    int nearNow = 0;               // physics cars of the near tier now
+    int mostThisStep = 0;          // the most switches made in one fixed step
+    int mostOverCap = 0;           // the most near cars over the cap (cars that could not go back)
+    int overCapNow = 0;
+    uint32_t taken = 0, givenBack = 0;   // household cars the player took, and gave back (#293)
+    uint32_t contacts = 0;         // new touches between two of the city's Jolt cars
+    std::vector<NearContact> contactList;   // the first few, each
+    double tierMs = 0;             // the tier's choosing and switching, summed (wall clock)
+    uint64_t tierSteps = 0;
+    double measureMs = 0;          // measuring the fleet slots' Jolt cars at load
+    int slotsMeasured = 0;
     uint64_t written = 0;      // poses written into the driving
     uint64_t offRoad = 0;      // ticks a physics car's front was on no centre line of its way
     double controlMs = 0;      // the controller and the writing, summed (wall clock)
@@ -116,6 +149,8 @@ public:
     void onStart(engine::FrameContext& ctx) override;        // the hook into the driving's tick, the `near` verbs
     void fixedUpdate(engine::FrameContext& ctx) override;    // each physics car's pedals and wheel
     void onStop(engine::FrameContext& ctx) override;
+    void render(engine::FrameContext& ctx) override;   // `near marks on`: a post over each car of the near tier
+    void update(engine::FrameContext& ctx) override;   // `near key`: the key to get in or out, pressed
 
     // INTO PHYSICS: the car on `e` (a CityCarBody whose car the driving has on a trip, drawn as a lane car) becomes a Jolt
     // car where it is drawn, at its speed. VehicleSystem makes the Jolt car at the end of the next fixed step and physics
@@ -153,16 +188,32 @@ private:
     driving::Lamp lastLamp_ = driving::Lamp::Dark;
     engine::AssetManager* assets_ = nullptr;
     uint32_t nextLabId_ = 1000;
+    bool marks_ = false;   // `near marks on|off`
+    bool pressEnter_ = false;   // `near key`: VehicleSystem's own get-in/get-out press on the next frame
     void sendStaged(engine::World& world, engine::Real step);
     CityRenderSystem& city_;
     engine::PhysicsSystem& physics_;
     engine::World* world_ = nullptr;
     NearCounts counts_;
-    // what each fleet slot's Jolt car is measured to do (made once a slot: each a small world of its own)
+    // what each fleet slot's Jolt car is built from and measured to do (made once a slot: each a small world of its
+    // own), measured for every slot the level's cars use as it loads (measureSlots), so no switch waits on it
     struct SlotCar {
         engine::Real restHeight = 0, launch = 0, brake = 0;
+        std::shared_ptr<engine::VehicleSpec> spec;
+        std::string why;   // why it cannot be built (no spec)
     };
     std::map<int, SlotCar> slotCars_;
+    const SlotCar& slotCar(int slot);
+    std::shared_ptr<engine::ScriptVM> vehiclesVm_;   // vehicles.lua, loaded once for every slot's spec
+    bool measured_ = false;
+    void measureSlots(engine::World& world);
+    // THE TIER (ADR-0448): the level's rules, read once
+    bool rulesRead_ = false;
+    engine::CitySimConfig::NearTier rules_;
+    std::vector<engine::Entity> taken_;   // household cars the player has (to give back when left)
+    void tierStep(engine::FrameContext& ctx);
+    void refuse(const std::string& reason);
+    engine::EventBus::Subscription onCollision_;   // touches between two of the city's Jolt cars
     void writePoses(driving::Driving& d);   // the hook: where each physics car really is
 };
 

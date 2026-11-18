@@ -1212,6 +1212,14 @@ struct CitySimConfig {
     // `"drivableSpacesOnly": true` (ADR-0446): the brain offers its households only kerb spaces a car can drive away
     // from and back to (apps/citysim/city_brain.h). brain_lab, built before it, does not ask.
     bool drivableSpacesOnly = false;
+    // THE NEAR TIER (ADR-0448; design section 4): the driven cars nearest the player are physics cars, up to `cap`
+    // (0: none); a car comes in within `enter` metres and goes back beyond `leave`; at most `perStep` switch in a fixed
+    // step, nearest first. "near": {"cap": 100, "enter": 150, "leave": 180, "per_step": 3}
+    struct NearTier {
+        int cap = 0;
+        double enter = 0, leave = 0;
+        int perStep = 0;
+    } near;
     bool ambientBus = false;             // a test lab's ambient rotation includes the bus body (wheel_lab)
                                          // (no schedule) — the lab car keeps lapping
     // Scripted goal tables (ADR-0064): the loaded TEXT of the level's

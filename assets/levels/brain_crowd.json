@@ -62,7 +62,8 @@
   "drivingRules": "rules/lab.lua",
   "markers": "markers/traffic_lab.json",
   "crowd": "crowd.lua",
-  "drivableSpacesOnly": true
+  "drivableSpacesOnly": true,
+  "near": { "cap": 100, "enter": 150, "leave": 180, "per_step": 3 }
  },
  "dayNight": {
   "dayMinutes": 1440.0,

@@ -389,6 +389,90 @@ def near(sock, shots, t0, suffix, wait_speed):
     return "turn" in taken
 
 
+NEAR_CROWD_MINUTE = 9.0      # the crowd test's busy minutes (near cars most from minute 9 on)
+NEAR_CROWD_AT = (-250.0, 6.0)  # beside the signalled junction at -270, 0 the crowd's cars cross
+
+
+def near_crowd(sock, shots, t0, suffix, wait_speed):
+    """THE NEAR TIER IN THE CROWD (ADR-0448) on brain_crowd: `near marks on` (a cyan post over each physics car), the day
+    run fast to the busy minute, the player put beside a busy junction and walked (the game's own chase camera), then
+    the same place from above; then the nearest physics car taken with E, driven, stopped, left, and the car after it is
+    given back, from above. Pictures `nearcrowd_*`."""
+    def named(name):
+        return f"nearcrowd_{name}{suffix}"
+
+    print(rtctl.send(sock, "near marks on"))
+    print(rtctl.send(sock, "brain follow off"))   # (the brain's spectate camera off r0: the camera is the player's)
+    print(rtctl.send(sock, "detach off"))
+    rtctl.send(sock, f"sim speed {wait_speed}")
+    while time.time() - t0 < 900:
+        m = re.search(r"over (\d+) ticks", rtctl.send(sock, "driving?"))
+        if m and int(m.group(1)) >= NEAR_CROWD_MINUTE * 60 * 60:
+            break
+        time.sleep(0.5)
+    rtctl.send(sock, "sim speed 1")
+    x, z = NEAR_CROWD_AT
+    # (beside a physics car that is moving, if one is: the player walks among them)
+    cars = near_cars(rtctl.send(sock, "near?"))
+    moving = [c for c in cars if c[3] > 2.0] or cars
+    if moving:
+        x, z = moving[0][0] + 6.0, moving[0][2]
+    print(rtctl.send(sock, f"teleport {x} {z}"))
+    time.sleep(1.0)
+    rtctl.send(sock, "hold W")
+    time.sleep(4.0)
+    print(rtctl.send(sock, "near?"))
+    shoot(sock, shots, named("1_walking_among_physics_cars"), t0, rtctl.send(sock, "near?"))
+    rtctl.send(sock, "release W")
+    cam = re.findall(r"-?[\d.]+", rtctl.send(sock, "where?"))
+    cx, cy, cz = float(cam[0]), float(cam[1]), float(cam[2])
+    rtctl.send(sock, "sim pause")
+    rtctl.send(sock, f"camera {cx} 70 {cz} -89 0")
+    time.sleep(1.0)
+    shoot(sock, shots, named("2_near_and_middle_from_above"), t0, rtctl.send(sock, "near?"))
+    rtctl.send(sock, "sim resume")
+    print(rtctl.send(sock, "detach off"))   # (the camera back on the player)
+    # TAKE THE NEAREST PHYSICS CAR: beside it, E
+    cars = near_cars(rtctl.send(sock, "near?"))
+    if not cars:
+        print("  no physics car to take"); return False
+    cars.sort(key=lambda c: math.hypot(c[0] - cx, c[2] - cz))
+    took = False
+    for attempt in range(8):
+        cars = near_cars(rtctl.send(sock, "near?"))
+        if not cars:
+            break
+        cars.sort(key=lambda c: math.hypot(c[0] - cx, c[2] - cz))
+        car = cars[0]
+        rtctl.send(sock, f"teleport {car[0] + 1.5} {car[2]}")
+        time.sleep(0.6)
+        # (the broker offered only the hood here, its "get in" out of view: VehicleSystem's own key instead, the
+        # nearest car within its reach)
+        print(rtctl.send(sock, "near key"))
+        time.sleep(1.0)
+        if re.search(r"taken [1-9]", rtctl.send(sock, "near?")):
+            took = True
+            break
+    print(rtctl.send(sock, "vehicle?"))
+    rtctl.send(sock, "hold W")
+    time.sleep(2.5)
+    shoot(sock, shots, named("3_driving_a_taken_car"), t0, rtctl.send(sock, "vehicle?"))
+    rtctl.send(sock, "release W")
+    rtctl.send(sock, "hold Space")
+    time.sleep(3.0)
+    rtctl.send(sock, "release Space")
+    print(rtctl.send(sock, "near key"))
+    time.sleep(3.0)
+    cam = re.findall(r"-?[\d.]+", rtctl.send(sock, "where?"))
+    rtctl.send(sock, "sim pause")
+    rtctl.send(sock, f"camera {float(cam[0])} 25 {float(cam[2])} -89 0")
+    time.sleep(1.0)
+    shoot(sock, shots, named("4_the_car_given_back"), t0, rtctl.send(sock, "near?"))
+    rtctl.send(sock, "sim resume")
+    print(rtctl.send(sock, "near?"))
+    return took
+
+
 def wait_until_near(sock, test, timeout):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -409,7 +493,7 @@ def main():
     ap.add_argument("--timeout", type=float, default=900.0, help="real seconds the trip may take")
     ap.add_argument("--shots", default=os.path.expanduser("~/Pictures/Raytracer/brain"))
     ap.add_argument("--log", default="out/zz_brain3/probe_viewer.log")
-    ap.add_argument("--scenario", default="trip", choices=["trip", "multi", "crowd", "near"],
+    ap.add_argument("--scenario", default="trip", choices=["trip", "multi", "crowd", "near", "nearcrowd"],
                     help="trip: one resident's trip (--to); multi: the contended household car, then the player takes "
                          "it; crowd: brain_crowd at its busy period (give --level assets/levels/brain_crowd.json); "
                          "near: the near tier's test bed (ADR-0447): a physics car at the stop line and through the turn, "
@@ -437,8 +521,8 @@ def main():
             time.sleep(1.0)
         print(f"loaded in {time.time() - t0:.0f} s: {line}")
         print(rtctl.send(sock, "markers?"))
-        if args.scenario in ("multi", "crowd", "near"):
-            run = {"multi": multi, "crowd": crowd, "near": near}[args.scenario]
+        if args.scenario in ("multi", "crowd", "near", "nearcrowd"):
+            run = {"multi": multi, "crowd": crowd, "near": near, "nearcrowd": near_crowd}[args.scenario]
             done = run(sock, args.shots, t0, args.suffix, args.wait_speed)
             print("\nprobe", "OK" if done else "FAILED", f"({time.time() - t0:.0f} s in all)")
             return 0 if done else 1

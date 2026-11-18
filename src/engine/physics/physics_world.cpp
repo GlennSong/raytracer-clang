@@ -1031,39 +1031,43 @@ Real PhysicsWorld::launchAccel(const VehicleConfig& config, Real friction, Real 
     return 0;
 }
 
-Real PhysicsWorld::restHeight(const VehicleConfig& config) {
+PhysicsWorld::CarMeasures PhysicsWorld::measureCar(const VehicleConfig& config, Real friction) {
+    constexpr Real kLaunchTo = 10.0, kBrakeFrom = 15.0;   // m/s (launchAccel's own 10)
+    CarMeasures out;
     PhysicsWorld w;
-    if (!w.initialize()) return 0;
-    w.addBox(Vec3(100, 1, 100), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static);
-    w.optimizeBroadPhase();
-    const VehicleId car = w.addVehicle(config, Vec3(0, spawnHeight(config), 0), Quat::identity());
-    if (car == INVALID_VEHICLE) return 0;
-    const Real dt = kDefaultFixedStep;
-    const int perSecond = static_cast<int>(std::lround(1.0 / dt));
-    for (int i = 0; i < perSecond * 4; ++i) {   // (four seconds: the springs' bounce has died away)
-        w.setVehicleInput(car, 0, 0, 1);
-        w.update(dt);
-    }
-    return w.vehiclePosition(car).y;
-}
-
-Real PhysicsWorld::brakeDecel(const VehicleConfig& config, Real friction, Real fromSpeed) {
-    PhysicsWorld w;
-    if (!w.initialize()) return 0;
+    if (!w.initialize()) return out;
     w.addBox(Vec3(3000, 1, 3000), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static, 0.0, friction);
     w.optimizeBroadPhase();
     const VehicleId car = w.addVehicle(config, Vec3(0, spawnHeight(config), 0), Quat::identity());
-    if (car == INVALID_VEHICLE) return 0;
+    if (car == INVALID_VEHICLE) return out;
     const Real dt = kDefaultFixedStep;
     const int perSecond = static_cast<int>(std::lround(1.0 / dt));
-    for (int i = 0; i < perSecond; ++i) w.update(dt);   // settle on the springs
-    w.setVehicleMotion(car, Vec3(0, 0, fromSpeed));
+    // standing: four seconds held on the brake, the springs' bounce died away
+    for (int i = 0; i < perSecond * 4; ++i) {
+        w.setVehicleInput(car, 0, 0, 1);
+        w.update(dt);
+    }
+    out.restHeight = w.vehiclePosition(car).y;
+    // pulling away at full throttle
+    for (int i = 1; i <= perSecond * 15; ++i) {
+        w.setVehicleInput(car, 1.0, 0, 0);
+        w.update(dt);
+        if (w.vehicleVelocity(car).length() >= kLaunchTo) {
+            out.launch = kLaunchTo / (i * dt);
+            break;
+        }
+    }
+    // braking from 15 m/s with the full pedal
+    w.setVehicleMotion(car, w.vehicleOrientation(car).rotate(Vec3(0, 0, kBrakeFrom)));
     for (int i = 1; i <= perSecond * 15; ++i) {
         w.setVehicleInput(car, 0, 0, 1.0);
         w.update(dt);
-        if (w.vehicleVelocity(car).length() < 0.1) return fromSpeed / (i * dt);
+        if (w.vehicleVelocity(car).length() < 0.1) {
+            out.brake = kBrakeFrom / (i * dt);
+            break;
+        }
     }
-    return 0;
+    return out;
 }
 
 void PhysicsWorld::setVehicleMotion(VehicleId id, const Vec3& velocity) {

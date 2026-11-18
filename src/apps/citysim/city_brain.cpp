@@ -219,7 +219,9 @@ struct CityBrain::Impl {
     void followCars() {
         for (const CarRec& c : cars) {
             const int agent = linkOf(c).driver;
-            if (agent < 0 || ecs->has<engine::Vehicle>(c.entity)) continue;
+            // (a car of the near tier is a Vehicle its driver still drives, its Transform physics': followed too;
+            // ADR-0448. One the player has is not the household's to follow.)
+            if (agent < 0 || linkOf(c).away) continue;
             Agent& a = sim.agents_[static_cast<std::size_t>(agent)];
             a.pos = carPos(c);
             a.heading = carFacing(c);
