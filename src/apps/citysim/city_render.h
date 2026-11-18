@@ -347,6 +347,11 @@ public:
     // A household car's key in carAgentIds_ while nobody is at its wheel: below every parked row's (-2 - row), as the
     // car's number is past every row (city_car.h). Public for the physics bridge, which keys its boxes by it.
     static int entityCarKey(uint32_t id) { return -2 - static_cast<int>(id); }
+    // THE POSE BAKE ON EVERY FIXED STEP, not only a frame's last two (ADR-0450). The drawn cars' kinematic boxes
+    // (city_physics.h) and the pose a car is switched into physics at are read from the bake; skipped on a catch-up
+    // frame (the viewer at `sim speed 16` runs 8 steps a frame) they stood still for six steps and then jumped six
+    // steps' worth into the physics cars around them. The near tier asks for it while it is on.
+    void bakeEveryStep(bool on) { bakeEveryStep_ = on; }
     // ...and with somebody at its wheel, that driver's agent index (as syncCarEntities draws it)
     static int entityCarDrawKey(const CityCarBody& body, const CityCarLink& link) {
         return link.driver >= 0 ? link.driver : entityCarKey(body.id);
@@ -607,6 +612,7 @@ private:
     // Set per fixed step: bake the render poses only on the frame's LAST step
     // (see fixedUpdate). True by default so a direct step() call still bakes.
     bool bakeThisStep_ = true;
+    bool bakeEveryStep_ = false;   // bakeEveryStep
     // Adaptive-dip state. The CADENCE itself lives in CitySim (setTickPeriod);
     // this is only the load multiplier the bridge derives from the frame's
     // fixed-step count and scales that period by.

@@ -449,6 +449,13 @@ def near_crowd(sock, shots, t0, suffix, wait_speed):
     rtctl.send(sock, f"camera {cx} 70 {cz} -89 0")
     time.sleep(1.0)
     shoot(sock, shots, named("2_near_and_middle_from_above"), t0, rtctl.send(sock, "near?"))
+    # (ADR-0450: close over a near car that is moving, if one is, to see its line beside the parked cars)
+    moving = [c for c in near_cars(rtctl.send(sock, "near?")) if c[3] > 2.0]
+    if moving:
+        mx, my, mz, _ = moving[0]
+        rtctl.send(sock, f"camera {mx} {my + 24} {mz} -89 0")
+        time.sleep(1.0)
+        shoot(sock, shots, named("2b_a_moving_near_car_from_above"), t0, rtctl.send(sock, "near?"))
     rtctl.send(sock, "sim resume")
     print(rtctl.send(sock, "detach off"))   # (the camera back on the player)
     # TAKE THE NEAREST PHYSICS CAR: beside it, E

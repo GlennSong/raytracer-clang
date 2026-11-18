@@ -102,6 +102,10 @@ struct Rig {
     uint64_t frames = 0;
     GamepadState pad;          // the stand-in player's pedals (the take-and-give-back case)
     bool withUpdate = false;   // VehicleSystem's per-frame update too (getting in and out)
+    // FIXED STEPS IN ONE APP FRAME (RT_NEAR_STEPS_PER_FRAME; the viewer at `sim speed 16` runs 8, the clock's cap) and
+    // the city stepped as the app steps it (RT_NEAR_CITY_AS_APP=1: CityRenderSystem::fixedUpdate, not step)
+    int stepsPerFrame = std::getenv("RT_NEAR_STEPS_PER_FRAME") ? std::max(1, std::atoi(std::getenv("RT_NEAR_STEPS_PER_FRAME"))) : 1;
+    bool cityAsApp = std::getenv("RT_NEAR_CITY_AS_APP") != nullptr;
     std::string pressNext;     // ...and an action pressed on the next frame
 
     FrameContext ctx() {
@@ -142,9 +146,19 @@ struct Rig {
         const double pms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         physicsMs += pms;
         physicsWorstMs = std::max(physicsWorstMs, pms);
-        city.step(world, kStep);
+        if (stepsPerFrame > 1 || cityAsApp) {
+            // (the app's own fixed step: on a frame of several, the pose bake only on its last two)
+            c.fixedStepIndex = static_cast<int>(frames % static_cast<uint64_t>(stepsPerFrame));
+            c.fixedStepCount = stepsPerFrame;
+            city.fixedUpdate(c);
+        } else {
+            city.step(world, kStep);
+        }
         if (withBridge) bridge.fixedUpdate(c);   // (the arena's order: the city, its boxes, then the near tier)
         near.fixedUpdate(c);
+        // (RT_NEAR_BAKE_LATE=1: the pose bake on a frame's last two steps only, as before ADR-0450: the A/B)
+        static const bool bakeLate = std::getenv("RT_NEAR_BAKE_LATE") != nullptr;
+        if (bakeLate) city.bakeEveryStep(false);
         vehicles.fixedUpdate(c);
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         frameMs += ms;
@@ -549,12 +563,14 @@ constexpr int kDriveMinutes = 6;
 constexpr Real kRouteLong = 2500.0;   // m of streets the stand-in follows (back along them when they run out)
 constexpr Real kOffLane = 0.5;              // m: a near car's front this far off its lane's centre is off its lane
 constexpr Real kStandingBelowSpeed = 0.1;   // m/s: ...and standing, slower than this
-// THE KNOWN GAP (ADR-0449): a kerb lane's centre line runs 0.6-0.8 m from the side of a car parked in the kerb band
-// (the band lies over the lane's kerb side, ADR-0418), so a 1.8 m Jolt chassis on the line meets parked cars' boxes and
-// can wedge there. Until the line keeps clear of the band, these are what brain_crowd measured with the boxes taken at
-// the switch: ratchets, to come down to 0 and to kSteerBack.
-constexpr uint32_t kChassisHitsKnown = 59;
-constexpr Real kOffLaneKnownWorst = 190;    // s
+constexpr int kProbeStepsPerFrame = 8;      // the clock's cap (clock.h MAX_STEPS_PER_ADVANCE), what `sim speed 16` runs
+// THE KNOWN GAPS (ADR-0450): since the kerb lane is driven clear of the parking band no near car touches a parked car
+// (checked: 0). What is left, and what brain_crowd measured with it: a near car runs into a lane car sliding into its
+// kerb space (the driving has let it go, so nobody behind sees it), and pedestrians' kinematic boxes on the crossings
+// shove near cars, one of them to 14 m/s; a near car pushed nose-in against a car in a space cannot steer back (it has
+// no reverse). Ratchets, to come down.
+constexpr uint32_t kChassisHitsKnown = 13;
+constexpr Real kOffLaneKnownWorst = 82;     // s (car 112 after the sliding car, nose against it)
 
 
 // THE STAND-IN PLAYER'S ROUTE: lane centre lines end to end from the lane nearest `from`, each the first lane on from
@@ -616,11 +632,72 @@ Entity standInPlayer(Rig& rig, Vec2 at) {
 
 }  // namespace
 
+// THE KERB LANE KEEPS CLEAR OF PARKED CARS (ADR-0450, #302): on brain_crowd, along every lane path beside a kerb
+// parking band, sampled every kClearanceStep, the side gap from a car on the path to a car in the nearest kerb space
+// beside it, and from the car to its street's centre line (oncoming traffic beyond), each for the WIDEST car of the
+// fleet on both sides. Before #302 the line ran through the band's inner part and the gap to a parked van was below 0.
+constexpr Real kClearanceStep = 2.0;     // m along a path between samples
+constexpr Real kBesideSpace = 4.0;       // m: a space whose middle is within this of the sample, along the road, is beside it
+constexpr Real kLeastSideGap = 0.3;      // m: a car passing a parked car leaves at least this
+TEST_CASE(near_tier_the_kerb_lane_keeps_clear_of_parked_cars) {
+    Rig rig("brain_crowd", false);
+    CHECK(rig.ok);
+    if (!rig.ok) return;
+    const RoadModel& model = *rig.d().model();
+    const LaneGraph& roads = *rig.d().roads();
+    Real widest = 0;
+    for (int s = 0; s < rig.city.sim().fleetSize(); ++s) widest = std::max(widest, rig.city.sim().fleetBody(s).width);
+    Real leastToParked = 1e9, leastToMiddle = 1e9, mostToParked = 0, widthDriven = 0;
+    int paths = 0, samples = 0;
+    for (uint32_t pi = 0; pi < roads.paths.size(); ++pi) {
+        const Path& P = roads.paths[pi];
+        if (P.kind != PathKind::Lane || P.street >= model.streets.size()) continue;
+        const ModelSection& sec = model.streets[P.street].section;
+        if (!(sec.parking > 0)) continue;
+        const std::vector<KerbSpace> spaces = model.kerbSpacesOf(ModelStreetId(P.street));
+        bool any = false;
+        for (Real at = kClearanceStep; at < P.length - kClearanceStep; at += kClearanceStep) {
+            const Vec2 q = roads.pointAt(PathId(pi), at), dir = roads.directionAt(PathId(pi), at);
+            const RoadFrontage f = model.frontageAt(q);
+            if (f.valid()) leastToMiddle = std::min(leastToMiddle, f.distance);
+            for (const KerbSpace& sp : spaces) {
+                KerbSpacePose pose;
+                if (!model.kerbSpacePose(sp, pose)) continue;
+                const Vec2 d = pose.at - q;
+                if (std::fabs(d.x * dir.x + d.y * dir.y) > kBesideSpace) continue;
+                const Real side = std::fabs(d.x * dir.y - d.y * dir.x);
+                if (side > sec.parking + P.width) continue;   // (the far kerb's spaces)
+                leastToParked = std::min(leastToParked, side);
+                mostToParked = std::max(mostToParked, side);
+                any = true;
+                ++samples;
+            }
+        }
+        if (any) {
+            ++paths;
+            widthDriven = P.width;
+        }
+    }
+    const Real gapToParked = leastToParked - widest, gapToMiddle = leastToMiddle - widest * 0.5;
+    std::printf("    [kerb-lane] %d lane paths beside parked spaces, %d samples; driven width %.2f m; a car's middle from a "
+                "parked car's middle %.2f-%.2f m; from the centre line at least %.2f m; the widest car %.2f m: side gap to a "
+                "parked car of that width %.2f m, to the centre line %.2f m (%.2f m between two passing)\n",
+                paths, samples, widthDriven, leastToParked, mostToParked, leastToMiddle, widest, gapToParked, gapToMiddle,
+                2 * gapToMiddle);
+    CHECK(paths > 0);
+    CHECK(gapToParked >= kLeastSideGap);
+    CHECK(gapToMiddle >= kLeastSideGap * 0.5);
+}
+
 TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     Rig rig("brain_crowd", false);
     CHECK(rig.ok);
     if (!rig.ok) return;
     rig.withBridge = std::getenv("RT_NEAR_NO_BRIDGE") == nullptr;   // (the viewer's kinematic boxes: ADR-0449)
+    // (the city stepped as the app steps it, eight fixed steps a frame as the viewer runs at `sim speed 16`, the probe's:
+    // ADR-0450 found the boxes went stale on such frames. RT_NEAR_STEPS_PER_FRAME sets another number.)
+    rig.cityAsApp = true;
+    if (!std::getenv("RT_NEAR_STEPS_PER_FRAME")) rig.stepsPerFrame = kProbeStepsPerFrame;
     CitySimConfig::NearTier rules;
     rig.world.each<CitySimConfig>([&](Entity, CitySimConfig& c) { rules = c.near; });
     CHECK(rules.cap == 100);   // (the level's data: brain_crowd.json citysim.near)
@@ -722,6 +799,16 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
                     k.a, k.at.x, k.at.y, k.at.z, k.speed, k.carBox ? "a drawn car's box, key" : "not a car", k.boxKey,
                     k.boxAt.x, k.boxAt.y, k.boxAt.z, k.boxHalf.x, k.boxHalf.z, rig.world.alive(k.otherEntity) ? "yes" : "no",
                     rig.world.get<Vehicle>(k.otherEntity) ? " (a vehicle)" : (rig.world.get<ControlledBy>(k.otherEntity) ? " (the player)" : ""));
+    // (where each hit was across its road: from the centre line, and where the carriageway ends)
+    for (const citysim::NearContact& k : c.otherHitList) {
+        const RoadFrontage f = rig.d().model()->frontageAt(Vec2(k.at.x, k.at.z));
+        if (f.valid())
+            std::printf("    [near-crowd]   car %u's hit: %.2f m from %s's centre line (%s), its carriageway %.2f m either side\n", k.a,
+                        f.distance, f.street.valid() ? rig.d().model()->streets[f.street.index].id.c_str() : "a junction road", f.junction.valid() ? "in a junction" : "on the street",
+                        f.section->carriagewayHalfWidth());
+    }
+    std::printf("    [near-crowd] chassis hits: on parked cars %u, on driven cars' boxes %u, on walkers %u\n", c.parkedHits,
+                c.drivenBoxHits, c.pedestrianHits);
     std::printf("    [near-crowd] chassis hits on other things %u; the longest a near car stood off its lane %.1f s (car %u, "
                 "%.2f m off)\n",
                 c.otherHits, worstOffFor, worstOffCar, worstOff);
@@ -735,7 +822,8 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
                 c.taken, c.givenBack, c.slotsMeasured, c.measureMs, rig.physicsWorstMs, static_cast<unsigned long long>(hash));
     CHECK(ringsSeen == 0);                       // no ring of waits, ever
     CHECK(c.contacts == 0);                      // two of the city's Jolt cars never touch
-    CHECK(c.otherHits <= kChassisHitsKnown);     // (the known gap, above)
+    CHECK(c.parkedHits == 0);                    // no near car touches a parked car (ADR-0450; 3c: most of 59)
+    CHECK(c.otherHits <= kChassisHitsKnown);     // (the known gaps, above)
     CHECK(worstOffFor <= kOffLaneKnownWorst);
     CHECK(c.mostThisStep <= rules.perStep);      // a few switches a step, never a burst
     CHECK(c.slotsMeasured > 0);                  // the slots measured as the level loads...
@@ -744,12 +832,15 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // same day (ADR-0449) from 24 at minute 12, in 86, out 60, 0x7e9a72ab10d087d5: the drawn cars' kinematic boxes are
     // now in the run, as in the viewer (they were missing, so the near cars met nothing the viewer's meet), and a car
     // switched in loses its box at once
-    CHECK(mostNear == 34);
-    CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 77u);
-    CHECK(c.intoLane == 46u);
+    // Re-pinned again (ADR-0450) from 34 at minute 12, in 77, out 46, 0x317e4d66f3504130: the kerb lanes are driven
+    // clear of the parking band, so every car's line, and every car's day, moved; and the city is stepped as the app
+    // steps it, eight steps a frame
+    CHECK(mostNear == 16);
+    CHECK(mostNearAt == 11);
+    CHECK(c.intoPhysics == 82u);
+    CHECK(c.intoLane == 66u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x317e4d66f3504130ull);
+    CHECK(hash == 0x30470fc2f83cc7c7ull);
 }
 
 // THE CAP HELD (ADR-0448): the same walk and drive with the cap at 4 (the level's data changed before the first step),

@@ -2377,29 +2377,31 @@ TEST_CASE(road_model_24_kerb_parking_spaces_are_stated_once_and_asked_of_the_mod
     CHECK(!m.kerbSpacePose(KerbSpace(), pose));
 
     // THE KERB LANE BESIDE A SPACE: the lane path a car stops on to turn into it. l0's one lane running north is one
-    // path from the dead end (station 0) to its stop line (133.8), its middle 3 m from the centre line. Beside the
-    // first space: 5.9 m along it. Beside the last (its middle at station 117.9): 117.9 m along.
+    // path from the dead end (station 0) to its stop line (133.8). The lane is 6 m wide and the parking band (2.5 m, its
+    // middle 4.75 m out) lies over its outer 2.5 m, so it is driven along the middle of the 3.5 m left (ADR-0450):
+    // 1.75 m from the centre line. Beside the first space: 5.9 m along it. Beside the last (its middle at station
+    // 117.9): 117.9 m along.
     const KerbLanePlace first = m.kerbLaneBeside(onL0[0]), last = m.kerbLaneBeside(onL0[16]);
     CHECK(first.valid() && last.valid() && first.path == last.path);
     if (!first.valid() || !last.valid()) return;
     const Path& firstPath = m.laneLevel.paths[first.path.index];
     CHECK(firstPath.street == l0.index && firstPath.alongSpine() && approxEqual(firstPath.stationFrom, 0.0, kWrittenStation) &&
           approxEqual(firstPath.stationTo, 133.8, kWrittenStation));
-    CHECK(approxEqual(first.along, 5.9, kWrittenStation) && samePlace(first.at, Vec2(3.0, -144.1)));
-    CHECK(approxEqual(last.along, 117.9, kWrittenStation) && samePlace(last.at, Vec2(3.0, -32.1)));
+    CHECK(approxEqual(first.along, 5.9, kWrittenStation) && samePlace(first.at, Vec2(1.75, -144.1)));
+    CHECK(approxEqual(last.along, 117.9, kWrittenStation) && samePlace(last.at, Vec2(1.75, -32.1)));
     // ...and where a road has several lanes one way, the path is the one nearest the kerb: the arterial a1 has three
     // lanes of 3.67 m each way, and the kerb lane of the traffic running east along its spine is the third out from
     // the centre line, its middle 9.17 m south of it (y = -9.17).
     const KerbLanePlace kerbOfThree = m.kerbLaneAt(streetNamed(m, "a1"), 1, 100.0);
     CHECK(kerbOfThree.valid() && samePlace(kerbOfThree.at, Vec2(100.0, -2.5 * 22.0 / 6.0)));
     if (kerbOfThree.valid()) CHECK(m.laneLevel.paths[kerbOfThree.path.index].indexInSection == 2u);
-    // ...and beside the first space of the other kerb: the lane running south, 3 m the other side of the centre line,
+    // ...and beside the first space of the other kerb: the lane running south, 1.75 m the other side of the centre line,
     // which ends at the dead end (station 0), so the place is 5.9 m before that path's end
     const KerbLanePlace south = m.kerbLaneBeside(onL0[17]);
     CHECK(south.valid());
     if (!south.valid()) return;
     const Path& southPath = m.laneLevel.paths[south.path.index];
-    CHECK(!southPath.alongSpine() && samePlace(south.at, Vec2(-3.0, -144.1)));
+    CHECK(!southPath.alongSpine() && samePlace(south.at, Vec2(-1.75, -144.1)));
     CHECK(approxEqual(south.along, southPath.length - 5.9, kWrittenStation));
     // a station of the street where no lane path runs (inside the junction's area, past the stop line): none
     CHECK(!m.kerbLaneAt(l0, 1, 145.0).valid());
@@ -2487,9 +2489,10 @@ TEST_CASE(road_model_25_where_a_door_fronts_the_road_is_asked_of_the_model) {
     // the nearest place to walk: the middle of the 5 m sidewalk beyond the 6 m of carriageway
     Vec2 walk;
     CHECK(m.sidewalkBeside(f, walk) && samePlace(walk, Vec2(8.5, -100)));
-    // set down in the kerb lane beside it: the lane running north, 3 m from the centre line, 50 m along its first path
+    // set down in the kerb lane beside it: the lane running north, driven 1.75 m from the centre line (clear of the
+    // parking band, ADR-0450), 50 m along its first path
     const KerbLanePlace drop = m.kerbLaneBeside(f);
-    CHECK(drop.valid() && approxEqual(drop.along, 50.0, kWrittenStation) && samePlace(drop.at, Vec2(3.0, -100)));
+    CHECK(drop.valid() && approxEqual(drop.along, 50.0, kWrittenStation) && samePlace(drop.at, Vec2(1.75, -100)));
     // THE KERB SPACES NEAR IT, BY WALKING DISTANCE. On its own kerb the spaces' middles are at stations 5.9 + 7 k: 47.9
     // (2.1 m away), 54.9 (4.9), 40.9 (9.1), 61.9 (11.9). The space opposite the nearest is 2.1 m along and the 12 m of
     // road across: 14.1. Within 15 m on foot, those five in that order.
@@ -2513,7 +2516,7 @@ TEST_CASE(road_model_25_where_a_door_fronts_the_road_is_asked_of_the_model) {
     const RoadFrontage west = m.frontageAt(Vec2(-9, -100));
     CHECK(west.valid() && west.street == l0 && west.dir == -1 && samePlace(west.towards, Vec2(-1, 0)));
     CHECK(m.sidewalkBeside(west, walk) && samePlace(walk, Vec2(-8.5, -100)));
-    CHECK(samePlace(m.kerbLaneBeside(west).at, Vec2(-3.0, -100)));
+    CHECK(samePlace(m.kerbLaneBeside(west).at, Vec2(-1.75, -100)));
 
     // A DOOR ON THE ARTERIAL, 20 m north of a1 (which runs east along y = 0) at its station 100. Traffic running along
     // a1's spine keeps to the south side, so the door is on the kerb of the traffic running against it. The arterial
@@ -2606,14 +2609,15 @@ TEST_CASE(road_model_26_kerb_spaces_are_handed_to_the_agent_brain_as_places) {
     // where a car in the nearest stands: the parking band's middle, 4.75 m from the centre line, at station 47.9
     Vec2 at;
     CHECK(places.positionOf(near[0], at) && samePlace(at, Vec2(4.75, -102.1)));
-    // the kerb lane beside it, as the driving is told it: the lane running north 3 m from the centre line, 47.9 m along
+    // the kerb lane beside it, as the driving is told it: the lane running north, driven 1.75 m from the centre line
+    // (ADR-0450), 47.9 m along
     driving::PathPoint lane;
     CHECK(places.kerbLane(near[0], lane));
     KerbSpace nearest;
     places.spaceOf(near[0], nearest);
     const KerbLanePlace models = m.kerbLaneBeside(nearest);
     CHECK(models.valid() && lane.path == models.path && approxEqual(lane.along, 47.9, kWrittenStation));
-    CHECK(samePlace(m.laneLevel.pointAt(lane.path, lane.along), Vec2(3.0, -102.1)));
+    CHECK(samePlace(m.laneLevel.pointAt(lane.path, lane.along), Vec2(1.75, -102.1)));
     // the same space asked again is the same handle; a handle that is not one of these is refused
     CHECK(places.placeOf(nearest) == near[0]);
     CHECK(places.spacesNear(Vec2(9, -100), 15.0, 10) == near);

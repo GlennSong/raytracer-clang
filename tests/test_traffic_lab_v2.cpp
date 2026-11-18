@@ -165,7 +165,11 @@ constexpr double kLongestStand = 100.0;
 // Retaken for ADR-0432 (one answer for one-way, width and the through road): where far turns may wait inside a junction
 // now follows the junction's stated through pairs, and lane geometry moved by rounding. The same deadlock loop and
 // failing limits as before (issue #286). (Before: 0x1285b74a8d99f9f8, ADR-0428.)
-constexpr uint64_t kFiveMinuteStateHash = 0x7aade29530b4fdd1ull;
+// Retaken for ADR-0450 (kerb lanes driven clear of the parking band, 1.25 m in on the lab's local streets): every
+// car's line on those streets moved. The two-car deadlock loop of #286 is not seen on this run (0 loops, so the loop
+// limit and the deadlock row pass); still failing: queues empty at 3.14 s a car, and cars over kLongestStand. (Before:
+// 0x7aade29530b4fdd1, ADR-0432.)
+constexpr uint64_t kFiveMinuteStateHash = 0x03f9fd2cd2940971ull;
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's

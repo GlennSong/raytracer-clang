@@ -5421,7 +5421,7 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
     // ...and the step BEFORE it: the renderer draws a moving instance between its last bake and this one by the
     // frame's interpolation (InstanceGroup::ids), which is a fixed step apart only if the step before was baked too.
     // On a catch-up frame that is one bake more; on most frames (one step) nothing changes.
-    bakeThisStep_ = (ctx.fixedStepIndex + 2 >= ctx.fixedStepCount);
+    bakeThisStep_ = bakeEveryStep_ || (ctx.fixedStepIndex + 2 >= ctx.fixedStepCount);
 
     // ADAPTIVE DIP. When the clock is behind it runs MORE fixed steps to catch
     // up — and if the sim is what made us late, that deepens the hole (the

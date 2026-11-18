@@ -280,6 +280,20 @@ RoadSpec streetSection(const RoadLabGraph& g, const EdgeSpec& e) {
     return roadSpecStreetParking(carriageway, perDir, c.sidewalk, 0.15, e.lanes.parking, kMinTravelLane);
 }
 
+DrivenLine drivenLine(const RoadLabGraph& g, const EdgeSpec& e, const LaneSlot& slot) {
+    const double half = e.lanes.w * 0.5;
+    double lo = slot.offset - half, hi = slot.offset + half;
+    double band = 0, width = 0;
+    // (the bands lie the same distance either side of the carriageway's middle: the one band's inner edge bounds both)
+    if (g.cls(e).carriesCars() && e.lanes.parking > 0 && roadSpecParkingBand(streetSection(g, e), +1, band, width)) {
+        const double inner = std::fabs(band) - width * 0.5;
+        hi = std::min(hi, inner);
+        lo = std::max(lo, -inner);
+    }
+    if (!(hi > lo)) return DrivenLine{slot.offset, e.lanes.w};
+    return DrivenLine{(lo + hi) * 0.5, hi - lo};
+}
+
 double kerbParking(const RoadLabGraph& g, const EdgeSpec& e, bool* fits) {
     double offset = 0, width = 0;
     const bool has = e.lanes.parking > 0 && roadSpecParkingBand(streetSection(g, e), +1, offset, width);

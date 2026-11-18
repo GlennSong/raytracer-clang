@@ -62,6 +62,7 @@ std::string fmt(const char* f, ...) {
 struct TravelLane {
     std::vector<Vec2> xy;
     std::vector<double> s, u;
+    double width = 0;   // the width driven (drivenLine)
     bool ok = false;
 };
 // The distance along the lane at corridor distance u (exactly its own end where u is that end).
@@ -102,6 +103,33 @@ std::string laneLevelRefusal(const RoadLabGraph& g, const RoadModel& m, bool bui
     std::string error = "no lane level for " + g.name + ": the road file does not state ";
     for (std::size_t i = 0; i < missing.size(); ++i) error += (i ? "; nor " : "") + missing[i];
     return error;
+}
+
+std::vector<Vec2> drivenLanePoints(const RoadLabGraph& g, const RoadModel& m, uint32_t lane, double* width) {
+    std::vector<Vec2> out;
+    if (lane >= m.lanes.size()) return out;
+    const ModelLane& ml = m.lanes[lane];
+    out.assign(m.lanePoints().begin() + ml.curve.first, m.lanePoints().begin() + ml.curve.end());
+    if (width) *width = ml.width;
+    if (!ml.onRoad() || ml.kind != "through" || ml.slot < 0) return out;
+    const EdgeSpec& e = g.edges[ml.edge];
+    double across = 0;
+    for (const LaneSlot& sl : laneSlots(g.cls(e), e.lanes)) {
+        if (sl.dir != ml.dir || std::atoi(sl.name.c_str() + 1) != ml.slot) continue;
+        const DrivenLine dl = drivenLine(g, e, sl);
+        across = dl.offset - sl.offset;
+        if (width) *width = dl.width;
+    }
+    if (across == 0) return out;
+    std::vector<Vec2> tangent, normal;
+    frames(e.xy, tangent, normal);
+    for (uint32_t k = 0; k < ml.curve.count; ++k) {
+        const double st = m.spineStations[ml.curve.first + k];
+        if (!stated(st)) continue;   // (a lane not laid beside its spine: the lane level leaves it out)
+        const std::size_t at = static_cast<std::size_t>(std::lower_bound(e.s.begin(), e.s.end(), st - kCutTolerance) - e.s.begin());
+        out[k] = out[k] + normal[std::min(at, normal.size() - 1)] * across;
+    }
+    return out;
 }
 
 LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraphOptions& opts) {
@@ -177,6 +205,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             std::vector<Vec2> normal;
             frames(e.xy, tangent, normal);
         }
+        // THE LINE DRIVEN (ADR-0450): the lane's own points, but a lane the kerb band overlaps
+        const std::vector<Vec2> driven = drivenLanePoints(g, m, static_cast<uint32_t>(li), &T.width);
         std::vector<Vec2> forward;   // the way its road runs at each point, the way its traffic runs
         double back = 0;
         Vec2 backAt;
@@ -184,7 +214,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         for (std::size_t k = 0; k < n; ++k) {
             const std::size_t idx = ml.dir > 0 ? k : n - 1 - k;
             const double st = m.spineStations[ml.curve.first + idx];
-            T.xy.push_back(m.lanePoints()[ml.curve.first + idx]);
+            T.xy.push_back(driven[idx]);
             T.u.push_back(ml.dir > 0 ? st : e.s.back() - st);
             const std::size_t i = static_cast<std::size_t>(std::lower_bound(e.s.begin(), e.s.end(), st - kCutTolerance) - e.s.begin());
             forward.push_back(tangent[std::min(i, tangent.size() - 1)] * static_cast<double>(ml.dir));
@@ -399,7 +429,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                 p.vehicleTags = everyone;
                 p.curve = G.addCurve(pts, z);
                 p.length = G.along[p.curve.end() - 1];
-                p.width = m.lanes[li].width;
+                p.width = T.width;
                 p.section = sid;
                 p.indexInSection = static_cast<uint32_t>(k);
                 p.street = pc.street;

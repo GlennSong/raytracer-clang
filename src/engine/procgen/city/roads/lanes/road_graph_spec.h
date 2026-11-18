@@ -392,6 +392,14 @@ uint64_t roadClassTableHash();
 // A table row as a graph's "classes" entry (what fromJson reads back to the same spec).
 nlohmann::json classJson(const RoadClassSpec& c);
 std::vector<LaneSlot> laneSlots(const RoadClassSpec& c, const LaneLayout& layout);
+// THE LINE A TRAVEL LANE IS DRIVEN ALONG (ADR-0450, #302): the middle of the part of the lane traffic keeps to. The kerb
+// parking band lies over the kerb side of the kerb lane (LaneLayout::parking, above), and traffic keeps to the rest, so
+// a lane the band overlaps is driven along the middle of what is left, that much narrower; any other lane along its
+// own middle, at its width. From the band `e` states and that fits (streetSection), never a measurement. `offset` as
+// LaneSlot's (left of the spine is +), `width` in metres. The lane level drives this line (lane_level.cpp); the builder
+// lays and paints the lane as stated.
+struct DrivenLine { double offset = 0, width = 0; };
+DrivenLine drivenLine(const RoadLabGraph& g, const EdgeSpec& e, const LaneSlot& slot);
 
 // --- path helpers shared with lane expansion (ramps are recomposed from their anchors) ---
 std::vector<Vec2> bezier(const std::array<Vec2, 4>& p, int n = 200);

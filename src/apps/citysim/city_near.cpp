@@ -188,21 +188,22 @@ void CityNearSystem::onStart(engine::FrameContext& ctx) {
             // ONE city Jolt car's chassis against something else (a drawn car's kinematic box, a pole, the player, a
             // kerb): its wheels meet the road by ray, so a chassis touch is a hit
             ++counts_.otherHits;
-            if (counts_.otherHitList.size() < kContactsKept) {
-                NearContact hit{aIsCar ? a : b, 0, col.position, col.speed};
-                const engine::PhysicsBodyId other = aIsCar ? col.bodyB : col.bodyA;
-                hit.boxAt = pw.bodyPosition(other);
-                hit.otherEntity = aIsCar ? col.b : col.a;
-                if (boxes_)
-                    for (const CityPhysicsSystem::ProxyBox& box : boxes_->carProxyBoxes())
-                        if (box.id == other) {
-                            hit.carBox = true;
-                            hit.boxKey = box.key;
-                            hit.boxAt = pw.bodyPosition(other);
-                            hit.boxHalf = box.he;
-                        }
-                counts_.otherHitList.push_back(hit);
-            }
+            NearContact hit{aIsCar ? a : b, 0, col.position, col.speed};
+            const engine::PhysicsBodyId other = aIsCar ? col.bodyB : col.bodyA;
+            hit.boxAt = pw.bodyPosition(other);
+            hit.otherEntity = aIsCar ? col.b : col.a;
+            if (boxes_)
+                for (const CityPhysicsSystem::ProxyBox& box : boxes_->carProxyBoxes())
+                    if (box.id == other) {
+                        hit.carBox = true;
+                        hit.boxKey = box.key;
+                        hit.boxHalf = box.he;
+                    }
+            // (a drawn car's box keyed below zero has nobody at its wheel: a parked car, ADR-0450)
+            if (hit.carBox && hit.boxKey < 0) ++counts_.parkedHits;
+            else if (hit.carBox) ++counts_.drivenBoxHits;
+            else if (boxes_ && boxes_->isPedestrianBox(other)) ++counts_.pedestrianHits;
+            if (counts_.otherHitList.size() < kContactsKept) counts_.otherHitList.push_back(hit);
             return;
         }
         ++counts_.contacts;
@@ -444,6 +445,7 @@ void CityNearSystem::fixedUpdate(engine::FrameContext& ctx) {
         ctx.world.each<engine::CitySimConfig>([&](Entity, engine::CitySimConfig& c) { rules_ = c.near; });
     }
     if (!measured_ && city_.built() && rules_.cap > 0) measureSlots(ctx.world);
+    city_.bakeEveryStep(rules_.cap > 0);   // (the boxes and the switch-in pose fresh every step: ADR-0450)
     if (!staged_.empty()) sendStaged(ctx.world, ctx.clock.fixedStep());
     tierStep(ctx);
     const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();

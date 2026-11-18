@@ -1447,6 +1447,7 @@ TEST_CASE(lanes_print_expand_cost_per_city) {
 #include "engine/procgen/city/roads/lanes/lane_graph_connect.h"
 #include "engine/procgen/city/roads/lane_turns.h"   // the stated turns (the hand-made junctions below)
 #include "lane_level_scene.h"                       // a lab scene with the lane level's facts stated in memory
+#include "engine/procgen/city/roads/lanes/lane_level.h"   // drivenLanePoints: the line a lane is driven along
 #include "engine/procgen/city/roads/road_model.h"   // the traffic lab's road model's own problems
 #include "engine/procgen/city/polyline.h"           // segmentsCross: two lanes' centre lines crossing
 #include <map>
@@ -1651,11 +1652,14 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
         if (gp.lane < L.lanes.size()) gapsOf[gp.lane].push_back(&gp);
     }
     std::map<int, std::vector<std::tuple<double, double, uint32_t>>> extents = junctionExtents(r, m);
-    // the built lane the way cars drive it, and its stations
+    // the built lane the way cars drive it, and its stations: on the line it is driven along (ADR-0450: a lane the kerb
+    // parking band overlaps is driven along the middle of the rest of it)
     std::vector<std::vector<Vec2>> builtXy(L.lanes.size());
     std::vector<std::vector<double>> builtS(L.lanes.size());
     for (std::size_t li = 0; li < L.lanes.size(); ++li) {
-        builtXy[li] = L.lanes[li].xy().copied();
+        builtXy[li] = li < m.lanes.size() && m.lanes[li].curve.count == L.lanes[li].xy().size()
+                          ? drivenLanePoints(r.graph, m, static_cast<uint32_t>(li))
+                          : L.lanes[li].xy().copied();
         if (L.lanes[li].dir < 0) std::reverse(builtXy[li].begin(), builtXy[li].end());
         builtS[li] = stations(builtXy[li]);
     }
@@ -1692,6 +1696,8 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
             std::printf("      lane %s: the graph reads it %.3f m long, the built lane is %.3f m (may cut %.2f)\n", L.lanes[li].id.c_str(),
                         lg.laneLengths[li], builtLength, cut);
         CHECK(lengthOk);
+        if (t != known.tidied.end() && !(lg.laneLengths[li] < builtLength - kSliceTolerance))
+            std::printf("      lane %s is named as tidied, and is not: take it off the list\n", L.lanes[li].id.c_str());
         if (t != known.tidied.end()) CHECK(lg.laneLengths[li] < builtLength - kSliceTolerance);   // (a named tidy that no longer happens: off the list)
         for (uint32_t p : ofLane[li]) {
             const double from = lg.sources[p].from, to = lg.sources[p].to;
@@ -1780,7 +1786,7 @@ void checkLaneGraph(const std::string& name, const LaneGraphKnown& known = LaneG
         if ((hole || overlap) && badCover++ < 4)
             std::printf("      lane %s: its paths and gaps %s its %.3f m (reaching %.3f m)\n", L.lanes[li].id.c_str(),
                         overlap ? "overlap along" : "do not cover", lg.laneLengths[li], reached);
-        CHECK(lg.laneLengths[li] <= L.lanes[li].s().back() + kLaneCoverTolerance);
+        CHECK(builtS[li].empty() || lg.laneLengths[li] <= builtS[li].back() + kLaneCoverTolerance);   // (the line driven)
     }
     CHECK(badCover == 0);
     CHECK(badJunctionGaps == 0);
@@ -2213,8 +2219,10 @@ TEST_CASE(lanes_connectors_of_the_traffic_lab_meet_their_lanes_and_fit_their_veh
 // that can all reach one another holds at least 90% of them -- and no lane end is half-joined.
 // (Its known problems by count, with the tests' two vehicles: a change to any is a change to look at, then to write here.)
 // (step 9, ADR-0428: the stop lines moved to the stated rule -- fits none 82 -> 77, crossing lines 17 -> 29, kinks 65 -> 63)
-constexpr uint32_t kTrafficLabFitsNone = 76,   // 77 before ADR-0432: the carriageway half width is exact now, not read back off float lane bands
-                    kTrafficLabCrossingLines = 29, kTrafficLabKinks = 63;
+// (ADR-0450: kerb lanes driven clear of the parking band, 1.25 m nearer the centre line and 3.5 m wide -- fits none
+// 76 -> 75, crossing lines 29 -> 16 (narrower paths beside each other touch less), tidied folds 13 -> 11)
+constexpr uint32_t kTrafficLabFitsNone = 75,   // 77 before ADR-0432: the carriageway half width is exact now, not read back off float lane bands
+                    kTrafficLabCrossingLines = 16, kTrafficLabKinks = 63, kTrafficLabTidied = 11;
 TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
     const LaneGraphBuild& lg = laneGraphOf("planned/traffic_lab_lanelab");
     std::printf("    traffic lab: %.1f%% of the lanes in the largest part a car can get round\n", 100 * lg.reachableShare);
@@ -2260,7 +2268,7 @@ TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
         if (kind == "unknown") std::printf("      problem: %s\n", p.c_str());
         ++byKind[kind];
     }
-    const std::map<std::string, uint32_t> knownKinds = {{"fits no vehicle", kTrafficLabFitsNone}, {"tidied", 13}, {"crossing points", kTrafficLabCrossingLines},
+    const std::map<std::string, uint32_t> knownKinds = {{"fits no vehicle", kTrafficLabFitsNone}, {"tidied", kTrafficLabTidied}, {"crossing points", kTrafficLabCrossingLines},
                                                         {"kink", kTrafficLabKinks}, {"join with a gap", 1}, {"outline", 5}, {"no junction stated", 17}};
     for (const std::pair<const std::string, uint32_t>& k : byKind) std::printf("      %u problems: %s\n", k.second, k.first.c_str());
     CHECK(byKind == knownKinds);
@@ -2521,10 +2529,13 @@ LaneGraphKnown trafficLabKnown() {
     // lanes of two roads crossing before their stop lines: at j0, s33's and s36's (two arms meeting at one point at a sharp
     // angle; two of the four found before step 9 now lie inside the junction, its stop lines stated by the rule, ADR-0428),
     // at j84 s147's and s149's, and at j22's approach s57's and s60's
-    k.crossings = {"s33.f1 x s36.b0 @ (-225, -311)", "s33.f2 x s36.b0 @ (-220, -311)", "s57.f0 x s60.b2 @ (-217, 311)",
-                   "s147.b2 x s149.f0 @ (208, -311)"};
-    // the folds cut out (each lane's "tidied" problem line gives the metres; written here rounded up)
-    k.tidied = {{"s2.f2", 2.4}, {"s30.f2", 1.7}, {"s61.b0", 1.0}, {"s65.f0", 1.2}, {"s90.f2", 1.3}, {"s182.f0", 1.5}, {"s189.f2", 1.5},
+    // (moved 2 m with the kerb lanes of s36, s60 and s149 since they are driven clear of the parking band, ADR-0450: s36's
+    // two kerb lanes now meet s33's outer lane, where its b0 met f1 and f2)
+    k.crossings = {"s33.f2 x s36.b0 @ (-221, -309)", "s33.f2 x s36.f0 @ (-225, -306)", "s57.f0 x s60.b2 @ (-219, 309)",
+                   "s147.b2 x s149.f0 @ (210, -309)"};
+    // the folds cut out (each lane's "tidied" problem line gives the metres; written here rounded up). (s61.b0 and s65.f0
+    // no longer fold: kerb lanes driven 1.25 m nearer their spine, ADR-0450)
+    k.tidied = {{"s2.f2", 2.4}, {"s30.f2", 1.7}, {"s90.f2", 1.3}, {"s182.f0", 1.5}, {"s189.f2", 1.5},
                 {"s193.b1", 3.1}, {"s212.b2", 2.4}, {"s212.b1", 0.4}, {"s212.f1", 0.6}, {"s212.f2", 2.3}, {"s215.b2", 0.6}};
     k.insideRoads = {"s0", "s1", "s2", "s4", "s26", "s27", "s30", "s34", "s115", "s117", "s145", "s146", "s168", "s169", "s170", "s171", "s172",
                      "s173", "s174", "s176", "s189", "s190", "s191", "s195", "s198", "s200", "s201", "s202", "s204", "s206", "s207", "s211",

@@ -69,6 +69,12 @@ public:
     // the next sync it outlived the switch by one physics step, and the new chassis was made inside it: shoved,
     // damaged and off its lane (measured headless with the boxes on: 1040 chassis hits). False: it had no box.
     bool dropEntityCarBox(engine::World& world, engine::Entity car);
+    // Is this body one of the walkers' kinematic boxes (what a near car's hit was, ADR-0450)?
+    bool isPedestrianBox(engine::PhysicsBodyId id) const {
+        for (const std::pair<const long long, ProxyBody>& kv : pedProxies_)
+            if (kv.second.id == id) return true;
+        return false;
+    }
     // Times the backstop snapped a lost body onto its ghost. The soak gate
     // asserts the CONTROLLER never needs it; in production it's the fuse.
     int snapCount() const { return snapCount_; }

@@ -145,7 +145,10 @@ struct NearCounts {
     uint32_t taken = 0, givenBack = 0;   // household cars the player took, and gave back (#293)
     uint32_t contacts = 0;         // new touches between two of the city's Jolt cars
     std::vector<NearContact> contactList;   // the first few, each
-    uint32_t otherHits = 0;                 // new touches between one city Jolt car's chassis and anything else
+    uint32_t otherHits = 0;       // new touches between one city Jolt car's chassis and anything else
+    uint32_t parkedHits = 0;      // ...of them, on a drawn car nobody drives (a parked car's kinematic box)
+    uint32_t drivenBoxHits = 0;   // ...on a drawn car someone drives (a lane car, or one sliding into or out of a space)
+    uint32_t pedestrianHits = 0;  // ...on a walker's kinematic box
     std::vector<NearContact> otherHitList;  // ...the first few (b = 0)
     double tierMs = 0;             // the tier's choosing and switching, summed (wall clock)
     uint64_t tierSteps = 0;

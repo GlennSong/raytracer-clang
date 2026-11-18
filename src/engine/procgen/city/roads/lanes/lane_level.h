@@ -64,6 +64,13 @@ namespace roads::lanes {
 // again to see what the lane level makes of it.
 LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& m, const LaneGraphOptions& opts);
 
+// THE LINE A MODEL LANE IS DRIVEN ALONG (ADR-0450, #302), point for point with its own points (RoadModel::lanePoints,
+// in the lane's own order along its road): its own points, but a through lane the kerb parking band overlaps
+// (road_graph_spec.h drivenLine) moved across toward its centre-line side by the builder's own frame of its road
+// (lane_expand.cpp ribbonLane lays a lane at spine + normal * offset). `width`, if asked: the width driven. The one
+// place the lane level's lane paths take their points from; a test that checks them against the built lanes asks it.
+std::vector<Vec2> drivenLanePoints(const RoadLabGraph& g, const RoadModel& m, uint32_t lane, double* width = nullptr);
+
 // WHY A ROAD FILE GETS NO LANE LEVEL, or empty when it states everything the lane level needs: `g` the road file as
 // read (its ramps composed), `m` its road model. `builtLayer`: the model holds the built layer of the build asked about
 // (true to ask of the file alone, before any road is built: road_model_cache.h obtainLevelRoadModel does, so a level
