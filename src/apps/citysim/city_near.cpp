@@ -7,6 +7,7 @@
 #include "../../engine/world.h"
 #include "../../log.h"
 #include "city_brain.h"
+#include "city_physics.h"
 #include "city_render.h"
 
 #ifdef RT_ENABLE_SCRIPTING
@@ -168,19 +169,42 @@ void CityNearSystem::onStart(engine::FrameContext& ctx) {
         if (col.persisted || !world_) return;
         uint32_t a = 0, b = 0;
         int found = 0;
+        bool aIsCar = false;
         engine::PhysicsWorld& pw = physics_.physicsWorld();
         world_->each<CityCarBody, engine::Vehicle>([&](Entity, CityCarBody& body, engine::Vehicle& v) {
             if (v.vehicleId == engine::PhysicsWorld::INVALID_VEHICLE) return;
             const engine::PhysicsBodyId id = pw.vehicleBody(v.vehicleId);
             if (id == col.bodyA) {
                 a = body.id;
+                aIsCar = true;
                 ++found;
             } else if (id == col.bodyB) {
                 b = body.id;
                 ++found;
             }
         });
-        if (found < 2) return;
+        if (found == 0) return;
+        if (found == 1) {
+            // ONE city Jolt car's chassis against something else (a drawn car's kinematic box, a pole, the player, a
+            // kerb): its wheels meet the road by ray, so a chassis touch is a hit
+            ++counts_.otherHits;
+            if (counts_.otherHitList.size() < kContactsKept) {
+                NearContact hit{aIsCar ? a : b, 0, col.position, col.speed};
+                const engine::PhysicsBodyId other = aIsCar ? col.bodyB : col.bodyA;
+                hit.boxAt = pw.bodyPosition(other);
+                hit.otherEntity = aIsCar ? col.b : col.a;
+                if (boxes_)
+                    for (const CityPhysicsSystem::ProxyBox& box : boxes_->carProxyBoxes())
+                        if (box.id == other) {
+                            hit.carBox = true;
+                            hit.boxKey = box.key;
+                            hit.boxAt = pw.bodyPosition(other);
+                            hit.boxHalf = box.he;
+                        }
+                counts_.otherHitList.push_back(hit);
+            }
+            return;
+        }
         ++counts_.contacts;
         if (counts_.contactList.size() < kContactsKept) counts_.contactList.push_back(NearContact{a, b, col.position, col.speed});
     });
@@ -441,9 +465,14 @@ void CityNearSystem::fixedUpdate(engine::FrameContext& ctx) {
     ++counts_.controlSteps;
 }
 
-void CityNearSystem::refuse(const std::string& reason) {
+void CityNearSystem::refuse(const std::string& reason, uint32_t car) {
     ++counts_.refused;
     ++counts_.refusedBy[reason];
+    std::map<uint32_t, std::string>::iterator last = lastRefusal_.find(car);
+    if (car != kNoCarNumber && last != lastRefusal_.end() && last->second == reason) return;
+    lastRefusal_[car] = reason;
+    ++counts_.refusedCars;
+    ++counts_.refusedCarsBy[reason];
 }
 
 const CityNearSystem::SlotCar& CityNearSystem::slotCar(int slot) {
@@ -485,7 +514,8 @@ void CityNearSystem::measureSlots(engine::World& world) {
 
 bool CityNearSystem::toPhysics(engine::World& world, engine::AssetManager& assets, Entity e, Real step, std::string* why) {
     const auto refuse = [&](const std::string& reason, const std::string& detail = std::string()) {
-        this->refuse(reason);
+        const CityCarBody* refused = world.get<CityCarBody>(e);
+        this->refuse(reason, refused ? refused->id : kNoCarNumber);
         if (why) *why = detail.empty() ? reason : reason + ": " + detail;
         return false;
     };
@@ -510,6 +540,9 @@ bool CityNearSystem::toPhysics(engine::World& world, engine::AssetManager& asset
     const Vec2 middle = carPosition(*t) + heading * (speed * step);
     const Vec3 at(middle.x, lane->roadY + measuredCar->restHeight, middle.y);
     engine::makeVehicle(world, assets, spec, e, at, std::atan2(heading.x, heading.y) * kDegrees);
+    // its kinematic box goes now: the chassis is made at the end of this step and steps first in the next, before the
+    // boxes are synced again (ADR-0449)
+    if (boxes_) boxes_->dropEntityCarBox(world, e);
     engine::Vehicle* v = world.get<engine::Vehicle>(e);
     if (!v) return refuse("the engine made no Vehicle");
     v->startMoving = true;
@@ -528,12 +561,14 @@ bool CityNearSystem::toPhysics(engine::World& world, engine::AssetManager& asset
     world.add<CityNearCar>(e, n);
     d->carry(id, true, kNearLag);
     ++counts_.intoPhysics;
+    lastRefusal_.erase(body->id);
     return true;
 }
 
 bool CityNearSystem::toLane(engine::World& world, Entity e, std::string* why) {
     const auto refuse = [&](const std::string& reason, const std::string& detail = std::string()) {
-        this->refuse(reason);
+        const CityCarBody* refused = world.get<CityCarBody>(e);
+        this->refuse(reason, refused ? refused->id : kNoCarNumber);
         if (why) *why = detail.empty() ? reason : reason + ": " + detail;
         return false;
     };
@@ -568,6 +603,7 @@ bool CityNearSystem::toLane(engine::World& world, Entity e, std::string* why) {
     lane.driven = c->driven;
     world.add<CityCarOnLane>(e, lane);
     ++counts_.intoLane;
+    if (const CityCarBody* body = world.get<CityCarBody>(e)) lastRefusal_.erase(body->id);
     return true;
 }
 

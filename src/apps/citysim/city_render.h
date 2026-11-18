@@ -4,6 +4,7 @@
 #include "../../engine/system.h"
 #include "../../engine/ai/nav_graph.h"
 #include "../../engine/components.h"   // engine::AuthoredPlace (level-authored places)
+#include "city_car.h"      // CityCarBody, CityCarLink (entityCarDrawKey)
 #include "city_meshes.h"   // buildPersonMesh, materials (was declared here)
 #include "city_sim.h"
 #include "places.h"        // PlaceMap (ADR-0066)
@@ -343,6 +344,13 @@ public:
     bool carOccupied(int agentIndex) const;
     int loadMultiplier() const { return loadMul_; }
     CitySim& simMutable() { return sim_; }   // ADR-0062 bridge: release ejected drivers
+    // A household car's key in carAgentIds_ while nobody is at its wheel: below every parked row's (-2 - row), as the
+    // car's number is past every row (city_car.h). Public for the physics bridge, which keys its boxes by it.
+    static int entityCarKey(uint32_t id) { return -2 - static_cast<int>(id); }
+    // ...and with somebody at its wheel, that driver's agent index (as syncCarEntities draws it)
+    static int entityCarDrawKey(const CityCarBody& body, const CityCarLink& link) {
+        return link.driver >= 0 ? link.driver : entityCarKey(body.id);
+    }
     const PlaceMap& places() const { return places_; }
     const engine::NavGraph& nav() const { return nav_; }
     // The height things drawn along a route stand on: link `link`'s surface at `station` (deckYAt), the ground for
@@ -806,9 +814,6 @@ private:
     std::unordered_map<uint32_t, DrawnCar> carEntityDrawn_;
     // The seats of a car drawn as variant `v`: the driver's first, the front passenger's, the back bench's.
     bool seatsOfVariant(int v, std::vector<engine::Vec3>& seats) const;
-    // A household car's key in carAgentIds_ while nobody is at its wheel: below every parked row's (-2 - row), as the
-    // car's number is past every row (city_car.h).
-    static int entityCarKey(uint32_t id) { return -2 - static_cast<int>(id); }
     // debug ground rings, one per Agent::State (indexed by it)
     engine::Entity footprintGroups_[static_cast<int>(Agent::State::Count)]{};
     engine::Entity forwardGroup_{};          // debug forward-trajectory arrows

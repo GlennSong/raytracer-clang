@@ -402,6 +402,7 @@ def near_crowd(sock, shots, t0, suffix, wait_speed):
         return f"nearcrowd_{name}{suffix}"
 
     print(rtctl.send(sock, "near marks on"))
+    print(rtctl.send(sock, "brain labels off"))   # (#299: the places' and residents' names off the pictures)
     print(rtctl.send(sock, "brain follow off"))   # (the brain's spectate camera off r0: the camera is the player's)
     print(rtctl.send(sock, "detach off"))
     rtctl.send(sock, f"sim speed {wait_speed}")
@@ -412,15 +413,33 @@ def near_crowd(sock, shots, t0, suffix, wait_speed):
         time.sleep(0.5)
     rtctl.send(sock, "sim speed 1")
     x, z = NEAR_CROWD_AT
-    # (beside a physics car that is moving, if one is: the player walks among them)
-    cars = near_cars(rtctl.send(sock, "near?"))
-    moving = [c for c in cars if c[3] > 2.0] or cars
-    if moving:
-        x, z = moving[0][0] + 6.0, moving[0][2]
-    print(rtctl.send(sock, f"teleport {x} {z}"))
-    time.sleep(1.0)
+    yaw = 0.0
+    # (behind a physics car that is moving, if one is, facing the way it goes: the player walks after it down the
+    # street, the game's chase camera looking along the street with the car ahead. Its heading from two looks.)
+    first = near_cars(rtctl.send(sock, "near?"))
+    time.sleep(0.5)
+    second = near_cars(rtctl.send(sock, "near?"))
+    best = None
+    for a in second:
+        if a[3] < 2.0:
+            continue
+        b = min(first, key=lambda c: math.hypot(c[0] - a[0], c[2] - a[2]), default=None)
+        if b and 0.3 < math.hypot(a[0] - b[0], a[2] - b[2]) < 15.0:
+            best = (a, b)
+            break
+    if best:
+        a, b = best
+        d = math.hypot(a[0] - b[0], a[2] - b[2])
+        fx, fz = (a[0] - b[0]) / d, (a[2] - b[2]) / d
+        # 12 m behind it, to the kerb side (the left of the heading, cars drive on the left: (fz, -fx))
+        x, z = a[0] - 12.0 * fx + 3.0 * fz, a[2] - 12.0 * fz - 3.0 * fx
+        yaw = math.degrees(math.atan2(fx, -fz))
+        print(rtctl.send(sock, f"teleport {x} 2 {z} 0 {yaw}"))
+    else:
+        print(rtctl.send(sock, f"teleport {x} {z}"))
+    time.sleep(0.6)
     rtctl.send(sock, "hold W")
-    time.sleep(4.0)
+    time.sleep(1.2)
     print(rtctl.send(sock, "near?"))
     shoot(sock, shots, named("1_walking_among_physics_cars"), t0, rtctl.send(sock, "near?"))
     rtctl.send(sock, "release W")
@@ -469,7 +488,10 @@ def near_crowd(sock, shots, t0, suffix, wait_speed):
     time.sleep(1.0)
     shoot(sock, shots, named("4_the_car_given_back"), t0, rtctl.send(sock, "near?"))
     rtctl.send(sock, "sim resume")
-    print(rtctl.send(sock, "near?"))
+    end = rtctl.send(sock, "near?")
+    print(end)
+    m = re.search(r"contacts (\d+)", end)
+    print("CONTACTS AT THE END:", m.group(1) if m else "?")
     return took
 
 

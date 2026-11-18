@@ -67,6 +67,7 @@ private:
     CityRenderSystem& city_;
     CitySpectateSystem& spectate_;
     engine::UiText ui_;
+    bool labels_ = true;           // `brain labels on|off`: the places' and residents' names drawn over the view (#299)
     int followed_ = 0;             // the followed resident: the camera's, the panel's, and a nameless verb's
     bool camOnce_ = false;         // the camera was put on them once, when the level came up
     bool followAsked_ = false;     // `brain follow`: put the camera on followed_ at the next update

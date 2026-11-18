@@ -65,6 +65,10 @@ public:
         for (const auto& kv : carProxies_) out.push_back({kv.second.id, kv.second.he, kv.first});
         return out;
     }
+    // A HOUSEHOLD CAR THAT HAS JUST BECOME A JOLT CAR (the near tier, ADR-0449): its kinematic box goes NOW. Left to
+    // the next sync it outlived the switch by one physics step, and the new chassis was made inside it: shoved,
+    // damaged and off its lane (measured headless with the boxes on: 1040 chassis hits). False: it had no box.
+    bool dropEntityCarBox(engine::World& world, engine::Entity car);
     // Times the backstop snapped a lost body onto its ghost. The soak gate
     // asserts the CONTROLLER never needs it; in production it's the fuse.
     int snapCount() const { return snapCount_; }

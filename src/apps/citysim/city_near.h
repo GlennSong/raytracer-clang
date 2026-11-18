@@ -46,6 +46,7 @@ struct VehicleSpec;
 namespace citysim {
 
 class CityRenderSystem;
+class CityPhysicsSystem;
 
 // THE CONTROLLER'S LAG (s): how much later than a lane car a physics car answers what its driver wants -- the decision
 // passed on at the next physics step, the pedals' and the tyres' response. Counted in its reaction (Driving::carry), so
@@ -114,16 +115,28 @@ constexpr engine::Real kLabRunOn = 40.0;
 constexpr engine::Real kLabQueueBehind = 14.0;
 
 // ONE TOUCH BETWEEN TWO CARS OF THE CITY THAT ARE BOTH JOLT CARS (ADR-0448): who, where, how fast they closed.
+constexpr uint32_t kNoCarNumber = 0xffffffffu;   // a car with no number (no CityCarBody)
+
 struct NearContact {
     uint32_t a = 0, b = 0;   // their car numbers
     engine::Vec3 at;
     engine::Real speed = 0;
+    // A HIT ON SOMETHING ELSE (b unused): what it was -- a drawn car's kinematic box (`boxKey`: the drawing agent's
+    // uid, or below zero a car nobody drives), or not a car
+    bool carBox = false;
+    long long boxKey = 0;
+    engine::Vec3 boxAt, boxHalf;   // ...where the other body stood, and a car box's half extents
+    engine::Entity otherEntity;    // ...the other body's entity, if it has one
 };
 
 struct NearCounts {
     uint32_t intoPhysics = 0, intoLane = 0;
     uint32_t refused = 0;
     std::map<std::string, uint32_t> refusedBy;   // by reason
+    // ...PER CAR, not per step (a car refused every step for a minute is one refusal): times a car was refused for a
+    // reason it was not refused for at its last try, by reason
+    uint32_t refusedCars = 0;
+    std::map<std::string, uint32_t> refusedCarsBy;
     // THE TIER (ADR-0448)
     int nearNow = 0;               // physics cars of the near tier now
     int mostThisStep = 0;          // the most switches made in one fixed step
@@ -132,6 +145,8 @@ struct NearCounts {
     uint32_t taken = 0, givenBack = 0;   // household cars the player took, and gave back (#293)
     uint32_t contacts = 0;         // new touches between two of the city's Jolt cars
     std::vector<NearContact> contactList;   // the first few, each
+    uint32_t otherHits = 0;                 // new touches between one city Jolt car's chassis and anything else
+    std::vector<NearContact> otherHitList;  // ...the first few (b = 0)
     double tierMs = 0;             // the tier's choosing and switching, summed (wall clock)
     uint64_t tierSteps = 0;
     double measureMs = 0;          // measuring the fleet slots' Jolt cars at load
@@ -169,6 +184,9 @@ public:
     static constexpr driving::PersonId kLabPerson = 0xFFFF0000u;
 
     const NearCounts& counts() const { return counts_; }
+    // THE DRAWN CARS' KINEMATIC BOXES (city_physics.h), when the host keeps them: a car switched into physics has its
+    // box taken away at the switch (ADR-0449). Null: no boxes.
+    void useBoxes(CityPhysicsSystem* boxes) { boxes_ = boxes; }
 
     // THE TEST BED IN THE VIEWER (`near route|queue|clear`): the test's route with a physics car, or its mixed queue (a
     // physics car behind a lane car), the cars standing until the route's light turns red and then sent, as the test
@@ -189,6 +207,7 @@ private:
     engine::AssetManager* assets_ = nullptr;
     uint32_t nextLabId_ = 1000;
     bool marks_ = false;   // `near marks on|off`
+    CityPhysicsSystem* boxes_ = nullptr;   // useBoxes
     bool pressEnter_ = false;   // `near key`: VehicleSystem's own get-in/get-out press on the next frame
     void sendStaged(engine::World& world, engine::Real step);
     CityRenderSystem& city_;
@@ -212,7 +231,9 @@ private:
     engine::CitySimConfig::NearTier rules_;
     std::vector<engine::Entity> taken_;   // household cars the player has (to give back when left)
     void tierStep(engine::FrameContext& ctx);
-    void refuse(const std::string& reason);
+    // (`car`: the household car's number, CityCarBody::id; kNoCarNumber when it has none)
+    void refuse(const std::string& reason, uint32_t car);
+    std::map<uint32_t, std::string> lastRefusal_;   // each car's last refusal, while it lasts (refusedCarsBy)
     engine::EventBus::Subscription onCollision_;   // touches between two of the city's Jolt cars
     void writePoses(driving::Driving& d);   // the hook: where each physics car really is
 };

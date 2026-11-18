@@ -218,7 +218,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // player). Walkers are physics characters (CityWalkerSystem) — their plant is
     // trivially controllable, so bodies-follow-planner works for them everywhere.
     citySys.setPedsExternallyOwned(true);
-    addSystem<citysim::CityPhysicsSystem>(citySys, physSys);   // car proxies + poles
+    auto& carBoxes = addSystem<citysim::CityPhysicsSystem>(citySys, physSys);   // car proxies + poles
     addSystem<citysim::CityVehicleSystem>(citySys);            // commandeer promotion
     addSystem<citysim::CityWalkerSystem>(citySys, physSys);    // spawn + drive walkers
     // The player IS a person in third person (ADR-0064, ADR-0254): the jointed body posed for what it does --
@@ -239,7 +239,8 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // The near tier's cars (ADR-0447): the new driving's intent turned into pedals and wheel for a car physics carries,
     // and where it really is written back into the driving before each of its ticks. BEFORE VehicleSystem, which
     // consumes the command the same step.
-    addSystem<citysim::CityNearSystem>(citySys, physSys);
+    // (a car switched into physics loses its kinematic box at once: ADR-0449)
+    addSystem<citysim::CityNearSystem>(citySys, physSys).useBoxes(&carBoxes);
     addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
     addSystem<CarrySystem>(physSys);             // carry loose things, and put them in a car's trunk (ADR-0358)
     addSystem<FlashlightSystem>();               // the light (L / D-pad up): its beam, staged in render() before RenderSystem

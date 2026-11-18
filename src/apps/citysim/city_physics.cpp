@@ -175,6 +175,22 @@ void CityPhysicsSystem::syncKinematic(World& world, const std::vector<Entity>& g
     }
 }
 
+bool CityPhysicsSystem::dropEntityCarBox(engine::World& world, Entity car) {
+    const CityCarBody* body = world.get<CityCarBody>(car);
+    const CityCarLink* link = world.get<CityCarLink>(car);
+    if (!body || !link) return false;
+    // the key syncKinematic gave its box: the driver's uid, or the car's own (negative) key with nobody at the wheel
+    const int ai = CityRenderSystem::entityCarDrawKey(*body, *link);
+    const std::vector<Agent>& agents = city_.sim().agents();
+    const long long key = ai >= 0 && ai < static_cast<int>(agents.size()) ? static_cast<long long>(agents[static_cast<std::size_t>(ai)].uid)
+                                                                           : static_cast<long long>(ai);
+    std::unordered_map<long long, ProxyBody>::iterator it = carProxies_.find(key);
+    if (it == carProxies_.end()) return false;
+    physics_.physicsWorld().removeBody(it->second.id);
+    carProxies_.erase(it);
+    return true;
+}
+
 void CityPhysicsSystem::fixedUpdate(engine::FrameContext& ctx) {
     if (!city_.built()) return;
     step(ctx.world, ctx.clock.fixedStep());

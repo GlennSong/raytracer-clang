@@ -2872,7 +2872,7 @@ void CityRenderSystem::syncCarLamps(World& world) {
             dc.prevSpeed = lane.speed;
             dc.fresh = false;
             const int v = parkedVariant(body.slot, body.type);
-            const int key = link.driver >= 0 ? link.driver : entityCarKey(body.id);
+            const int key = entityCarDrawKey(body, link);
             const std::unordered_map<uint32_t, DrawnCar>::const_iterator drawn = carEntityDrawn_.find(body.id);
             if (link.away || !lane.driven || drawn == carEntityDrawn_.end() || v < 0 || v >= static_cast<int>(carLights_.size())) return;
             const CarLamps lamps = engine::vehicleLampState(lane.braking ? engine::LampMotion::Holding : engine::LampMotion::Rolling,
@@ -3175,7 +3175,7 @@ void CityRenderSystem::syncCarEntities(World& world, std::vector<InstanceGroup*>
                 pos = from + d * tickT;
                 heading = Vec2(std::sin(yawFrom + dy * tickT), std::cos(yawFrom + dy * tickT));
             }
-            const int key = link.driver >= 0 ? link.driver : entityCarKey(body.id);
+            const int key = entityCarDrawKey(body, link);
             Mat4 m;
             const CityCarOnLane* lane = world.get<CityCarOnLane>(e);
             const Real ref = lane ? lane->roadYFrom + (lane->roadY - lane->roadYFrom) * tickT : Real(0);

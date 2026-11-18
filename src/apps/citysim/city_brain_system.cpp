@@ -106,10 +106,11 @@ void CityBrainSystem::onStart(engine::FrameContext& ctx) {
                       "A resident with the agent brain (the followed one, or the one named) wants to be at that marker from "
                       "now: they plan the trip and make it. Stops their day table (brain day on resumes it). Poll brain?.",
                       [this](const engine::ControlCommand& c) { return gotoVerb(c); }, kOwner);
-    ctx.commands->add("brain", "brain trait [who] <name> on|off | day [who|all] on|off | follow [who|off]",
+    ctx.commands->add("brain", "brain trait [who] <name> on|off | day [who|all] on|off | follow [who|off] | labels on|off",
                       "Give or take one of a resident's traits (travel.lua: has_board, has_scooter), used from their next "
                       "plan; switch a day table; put the camera on the next resident or the one named, or let it go (then "
-                      "`camera` places it). With no name: the followed resident.",
+                      "`camera` places it); show or hide the places' and residents' names. With no name: the followed "
+                      "resident.",
                       [this](const engine::ControlCommand& c) { return brainVerb(c); }, kOwner);
 }
 
@@ -162,7 +163,8 @@ std::string CityBrainSystem::gotoVerb(const engine::ControlCommand& cmd) {
 }
 
 std::string CityBrainSystem::brainVerb(const engine::ControlCommand& cmd) {
-    const std::string usage = "err usage: brain trait [who] <name> on|off | day [who|all] on|off | follow [who|off]";
+    const std::string usage =
+        "err usage: brain trait [who] <name> on|off | day [who|all] on|off | follow [who|off] | labels on|off";
     CityBrain* b = city_.built() ? city_.simMutable().brain() : nullptr;
     if (!b || !b->hasResident()) return kNoBrain;
     if (cmd.args.empty()) return usage;
@@ -174,6 +176,11 @@ std::string CityBrainSystem::brainVerb(const engine::ControlCommand& cmd) {
     };
     const std::string noSuch = "err no resident \"" + (cmd.args.size() > 1 ? cmd.args[1] : std::string()) + "\" (residents?)";
     bool on = false;
+    // the places' names and the residents' names over the view (#299: a probe's pictures turn them off)
+    if (what == "labels" && cmd.args.size() == 2 && onOff(cmd.args[1], on)) {
+        labels_ = on;
+        return std::string("ok labels ") + (on ? "on" : "off");
+    }
     if (what == "trait" && (cmd.args.size() == 3 || cmd.args.size() == 4) && onOff(cmd.args.back(), on)) {
         const int who = cmd.args.size() == 4 ? b->residentNamed(cmd.args[1]) : followed_;
         if (who < 0) return noSuch;
@@ -373,13 +380,13 @@ void CityBrainSystem::render(engine::FrameContext& ctx) {
                     Mat4::lookAt(cam.position, cam.target, cam.up);
     for (const BrainMarker& m : b->markers()) {
         const Vec3 top(m.post.x, city_.surfaceY(-1, 0, m.post) + kPostHeight, m.post.y);
-        if ((top - cam.position).length() > kLabelRange) continue;
+        if (!labels_ || (top - cam.position).length() > kLabelRange) continue;
         Vec2 px;
         if (!worldToScreen(vp, top, W, H, px)) continue;
         ui_.label(ctx.renderer, q, static_cast<float>(px.x), static_cast<float>(px.y) - 30.0f * k, m.name, 16.0f * k, gold, back, 5.0f * k);
     }
     // each resident's name above their head (on foot) or their car (at its wheel)
-    for (int who = 0; who < b->residentCount(); ++who) {
+    for (int who = 0; labels_ && who < b->residentCount(); ++who) {
         const Vec2 at = city_.sim().agents()[static_cast<std::size_t>(b->residentAgent(who))].pos;   // (at the wheel: the car's)
         const Vec3 head(at.x, city_.surfaceY(-1, 0, at) + kNameHeight, at.y);
         if ((head - cam.position).length() > kNameRange) continue;

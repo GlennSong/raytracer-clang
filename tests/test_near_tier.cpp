@@ -19,6 +19,7 @@
 #include "../src/apps/citysim/city_brain.h"
 #include "../src/apps/citysim/city_car.h"
 #include "../src/apps/citysim/city_near.h"
+#include "../src/apps/citysim/city_physics.h"
 #include "../src/apps/citysim/city_render.h"
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/components.h"
@@ -37,6 +38,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -90,6 +92,10 @@ struct Rig {
     VehicleSystem vehicles{physics, cameras};
     citysim::CityRenderSystem city;
     CityNearSystem near{city, physics};
+    // THE VIEWER'S KINEMATIC BOXES (ADR-0449): CityPhysicsSystem keeps a box on every drawn car and walker, as the
+    // viewer's arena does; the 3b crowd test ran without it, and its near cars never met a drawn car
+    citysim::CityPhysicsSystem bridge{city, physics};
+    bool withBridge = false;
     bool ok = false;
     double frameMs = 0, frameWorstMs = 0;
     double physicsMs = 0, physicsWorstMs = 0;   // PhysicsSystem's step alone
@@ -113,6 +119,9 @@ struct Rig {
         physics.createBodies(world);
         FrameContext c = ctx();
         near.onStart(c);
+        // (as the arena: ADR-0449. RT_NEAR_BOX_LATE=1 leaves a switched car's box to the next sync, as before the fix:
+        // the A/B that shows the crowd test catching it)
+        if (!std::getenv("RT_NEAR_BOX_LATE")) near.useBoxes(&bridge);
         vehicles.onStart(c);
         ok = city.sim().drivingV2() != nullptr;
     }
@@ -134,6 +143,7 @@ struct Rig {
         physicsMs += pms;
         physicsWorstMs = std::max(physicsWorstMs, pms);
         city.step(world, kStep);
+        if (withBridge) bridge.fixedUpdate(c);   // (the arena's order: the city, its boxes, then the near tier)
         near.fixedUpdate(c);
         vehicles.fixedUpdate(c);
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -537,6 +547,15 @@ constexpr Real kDriveSpeed = 12.0;    // m/s: ...and then at a driving speed
 constexpr int kWalkMinutes = 6;
 constexpr int kDriveMinutes = 6;
 constexpr Real kRouteLong = 2500.0;   // m of streets the stand-in follows (back along them when they run out)
+constexpr Real kOffLane = 0.5;              // m: a near car's front this far off its lane's centre is off its lane
+constexpr Real kStandingBelowSpeed = 0.1;   // m/s: ...and standing, slower than this
+// THE KNOWN GAP (ADR-0449): a kerb lane's centre line runs 0.6-0.8 m from the side of a car parked in the kerb band
+// (the band lies over the lane's kerb side, ADR-0418), so a 1.8 m Jolt chassis on the line meets parked cars' boxes and
+// can wedge there. Until the line keeps clear of the band, these are what brain_crowd measured with the boxes taken at
+// the switch: ratchets, to come down to 0 and to kSteerBack.
+constexpr uint32_t kChassisHitsKnown = 59;
+constexpr Real kOffLaneKnownWorst = 190;    // s
+
 
 // THE STAND-IN PLAYER'S ROUTE: lane centre lines end to end from the lane nearest `from`, each the first lane on from
 // the last (a busy part of the lab: its signalled junction at -270, 0 that the crowd's cars cross at the busy minute)
@@ -601,9 +620,15 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     Rig rig("brain_crowd", false);
     CHECK(rig.ok);
     if (!rig.ok) return;
+    rig.withBridge = std::getenv("RT_NEAR_NO_BRIDGE") == nullptr;   // (the viewer's kinematic boxes: ADR-0449)
     CitySimConfig::NearTier rules;
     rig.world.each<CitySimConfig>([&](Entity, CitySimConfig& c) { rules = c.near; });
     CHECK(rules.cap == 100);   // (the level's data: brain_crowd.json citysim.near)
+    // A NEAR CAR STANDING OFF ITS LANE: each one's seconds at rest with its front more than kOffLane from its lane's
+    // centre, and the worst
+    std::map<uint32_t, Real> offFor;
+    Real worstOffFor = 0, worstOff = 0;
+    uint32_t worstOffCar = 0;
     const std::vector<Vec2> route = playerRoute(rig, Vec2(-270, 0));
     CHECK(route.size() >= 2);
     const Entity player = standInPlayer(rig, route.front());
@@ -623,6 +648,44 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
             rig.world.get<Transform>(player)->position = Vec3(at.x, 1.0, at.y);
             rig.frame();
             nearMost = std::max(nearMost, rig.near.counts().nearNow);
+            // RT_NEAR_TRACE=<car>: that near car's intent, controller output, real pose and the driving's record,
+            // four times a second
+            static const int traced = std::getenv("RT_NEAR_TRACE") ? std::atoi(std::getenv("RT_NEAR_TRACE")) : -1;
+            // RT_NEAR_TRACE_CAR=<car>: what the brain says of another car, every five seconds
+            static const int other = std::getenv("RT_NEAR_TRACE_CAR") ? std::atoi(std::getenv("RT_NEAR_TRACE_CAR")) : -1;
+            if (other >= 0 && t % 300 == 0)
+                if (citysim::CityBrain* b = rig.city.simMutable().brain())
+                    std::printf("    [near-trace] %d:%05.2f car %d: %s\n", minute, t * kStep, other, b->describeCar(other).c_str());
+            if (traced >= 0 && t % 15 == 0)
+                rig.world.each<citysim::CityNearCar, Vehicle, AgentDriver>(
+                    [&](Entity, citysim::CityNearCar& n, Vehicle& v, AgentDriver& ad) {
+                        if (static_cast<int>(n.car.index) != traced) return;
+                        const driving::Car* car = rig.d().car(n.car);
+                        const driving::CarIntent* want = rig.d().intent(n.car);
+                        const PhysicsWorld& pw = rig.physics.physicsWorld();
+                        const Vec3 p = pw.vehiclePosition(v.vehicleId), f = pw.vehicleOrientation(v.vehicleId).rotate(Vec3(0, 0, 1));
+                        std::printf("    [near-trace] %d:%05.2f car %d at %.2f %.2f heading %.2f %.2f %.2f m/s | record path %u along "
+                                    "%.2f offset %.2f | want %.2f m/s, rest %d %.2f | command %.2f ff %.2f | steer %.2f throttle %.2f "
+                                    "brake %.2f\n",
+                                    minute, t * kStep, traced, p.x, p.z, f.x, f.z, pw.vehicleVelocity(v.vehicleId).length(),
+                                    car ? car->path.index : 0u, car ? car->along : 0.0, car ? car->offset : 0.0,
+                                    want ? want->speed : -1.0, want && want->hasRest ? 1 : 0, want ? want->restIn : 0.0,
+                                    ad.command.desiredSpeed, ad.command.feedForward, v.steerApplied, v.throttle, v.brake);
+                    });
+            rig.world.each<citysim::CityNearCar>([&](Entity, citysim::CityNearCar& n) {
+                const driving::Car* car = rig.d().car(n.car);
+                const Real offLine = car ? car->offset : 0;
+                if (!car || !car->driven || car->speed > kStandingBelowSpeed || std::fabs(offLine) < kOffLane) {
+                    offFor.erase(n.car.index);
+                    return;
+                }
+                const Real s = (offFor[n.car.index] += kStep);
+                if (s > worstOffFor) {
+                    worstOffFor = s;
+                    worstOff = offLine;
+                    worstOffCar = n.car.index;
+                }
+            });
         }
         const citysim::NearCounts& c = rig.near.counts();
         const driving::WaitReport wr = rig.d().waitReport();
@@ -632,8 +695,8 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
             mostNearAt = minute;
         }
         std::string refusals;
-        for (const std::pair<const std::string, uint32_t>& r : c.refusedBy)
-            refusals += " " + r.first + " " + std::to_string(r.second) + ";";
+        for (const std::pair<const std::string, uint32_t>& r : c.refusedCarsBy)
+            refusals += " " + r.first + " " + std::to_string(r.second) + " cars (" + std::to_string(c.refusedBy.at(r.first)) + " tries);";
         int lanesDriven = 0;
         rig.world.each<citysim::CityCarOnLane>([&](Entity, citysim::CityCarOnLane& l) { lanesDriven += l.driven ? 1 : 0; });
         std::printf("    [near-crowd] %2d min (%s): near %d now, %d at most | %d lane cars driven | in %u, out %u | the most "
@@ -653,24 +716,40 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     for (const citysim::NearContact& k : c.contactList)
         std::printf("    [near-crowd] contact: car %u and car %u at %.1f %.1f %.1f, closing at %.2f m/s\n", k.a, k.b, k.at.x,
                     k.at.y, k.at.z, k.speed);
+    for (const citysim::NearContact& k : c.otherHitList)
+        std::printf("    [near-crowd] a near car's chassis hit something else: car %u at %.1f %.1f %.1f, closing at %.2f m/s: "
+                    "%s %lld, at %.2f %.2f %.2f, half %.2f x %.2f, entity %s%s\n",
+                    k.a, k.at.x, k.at.y, k.at.z, k.speed, k.carBox ? "a drawn car's box, key" : "not a car", k.boxKey,
+                    k.boxAt.x, k.boxAt.y, k.boxAt.z, k.boxHalf.x, k.boxHalf.z, rig.world.alive(k.otherEntity) ? "yes" : "no",
+                    rig.world.get<Vehicle>(k.otherEntity) ? " (a vehicle)" : (rig.world.get<ControlledBy>(k.otherEntity) ? " (the player)" : ""));
+    std::printf("    [near-crowd] chassis hits on other things %u; the longest a near car stood off its lane %.1f s (car %u, "
+                "%.2f m off)\n",
+                c.otherHits, worstOffFor, worstOffCar, worstOff);
     const uint64_t hash = rig.d().stateHash();
-    std::printf("    [near-crowd] at the end: the most near %d (minute %d); in %u, out %u, refused %u; the most in one step %d; "
+    for (const std::pair<const std::string, uint32_t>& r : c.refusedCarsBy)
+        std::printf("    [near-crowd] refused, %s: %u times a car (%u tries)\n", r.first.c_str(), r.second, c.refusedBy.at(r.first));
+    std::printf("    [near-crowd] at the end: the most near %d (minute %d); in %u, out %u, refused %u (%u tries); the most in one step %d; "
                 "over the cap at most %d; contacts %u; taken %u, given back %u; %d slots measured at load in %.1f ms; worst "
                 "physics step %.3f ms; the driving's state hash %016llx\n",
-                mostNear, mostNearAt, c.intoPhysics, c.intoLane, c.refused, c.mostThisStep, c.mostOverCap, c.contacts,
+                mostNear, mostNearAt, c.intoPhysics, c.intoLane, c.refusedCars, c.refused, c.mostThisStep, c.mostOverCap, c.contacts,
                 c.taken, c.givenBack, c.slotsMeasured, c.measureMs, rig.physicsWorstMs, static_cast<unsigned long long>(hash));
     CHECK(ringsSeen == 0);                       // no ring of waits, ever
     CHECK(c.contacts == 0);                      // two of the city's Jolt cars never touch
+    CHECK(c.otherHits <= kChassisHitsKnown);     // (the known gap, above)
+    CHECK(worstOffFor <= kOffLaneKnownWorst);
     CHECK(c.mostThisStep <= rules.perStep);      // a few switches a step, never a burst
     CHECK(c.slotsMeasured > 0);                  // the slots measured as the level loads...
     CHECK(c.intoPhysics > 0 && c.intoLane > 0);  // ...and cars came and went
-    // PINNED from the run looked at (2026-11-17): brain_crowd never fills the cap of 100 within 150 m
-    CHECK(mostNear == 24);
+    // PINNED from the run looked at (2026-11-17): brain_crowd never fills the cap of 100 within 150 m. Re-pinned the
+    // same day (ADR-0449) from 24 at minute 12, in 86, out 60, 0x7e9a72ab10d087d5: the drawn cars' kinematic boxes are
+    // now in the run, as in the viewer (they were missing, so the near cars met nothing the viewer's meet), and a car
+    // switched in loses its box at once
+    CHECK(mostNear == 34);
     CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 86u);
-    CHECK(c.intoLane == 60u);
+    CHECK(c.intoPhysics == 77u);
+    CHECK(c.intoLane == 46u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x7e9a72ab10d087d5ull);
+    CHECK(hash == 0x317e4d66f3504130ull);
 }
 
 // THE CAP HELD (ADR-0448): the same walk and drive with the cap at 4 (the level's data changed before the first step),
