@@ -49,6 +49,11 @@ constexpr Real kStep = 1.0 / 60.0;   // the viewer's fixed step, and the sim's t
 constexpr int kCrowdMinutes = 30;
 // A minute is counted busy with this many cars on the road at its end (reported and pinned, not a rule).
 constexpr int kBusyCars = 50;
+// A walker standing at a crosswalk's kerb is this near (m) its kerb end's waiting place (ADR-0452): a few people waiting
+// at one kerb end are spread round it by the crowd's own spacing (CitySim's overlap push), so not all on the one point.
+constexpr Real kAtTheKerbEnd = 2.5;
+// ...and fewer than one sample in this many is not (the spread junctions' known few).
+constexpr uint64_t kAwayShareOneIn = 20;
 
 struct LoadedCrowd {
     std::unique_ptr<Renderer> renderer = Renderer::create();
@@ -133,6 +138,23 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     std::map<uint32_t, int> standingSince;   // car id -> the tick it last stood still from
     int longestStandTicks = 0;
     uint32_t longestStandCar = 0;
+    // ...AT A LIT JUNCTION (ADR-0452): standing on a lane into one, or inside one
+    std::map<uint32_t, int> litSince;
+    int longestLitTicks = 0;
+    uint32_t longestLitCar = 0, longestLitJunction = 0;
+    // ...WALKERS STANDING AT A CROSSWALK'S KERB (ADR-0452): how far from the model's waiting place
+    Real farthestFromKerb = 0;
+    int farthestFromKerbWho = -1;
+    std::string farthestFromKerbWhy;
+    uint64_t kerbWaitSamples = 0, kerbWaitAway = 0;
+    const auto litJunctionOf = [&](const driving::Car& c) -> int {
+        const engine::LaneGraph& roads = *d.roads();
+        const engine::Path& P = roads.paths[c.path.index];
+        engine::JunctionId j = P.junction;
+        if (P.kind == engine::PathKind::Lane && P.next.count > 0) j = roads.paths[roads.nextPaths[P.next.first].index].junction;
+        return j.valid() && j.index < d.rightOfWay().junctions.size() && d.rightOfWay().junctions[j.index].running()
+                   ? static_cast<int>(j.index) : -1;
+    };
     for (int minute = 1; minute <= minutes; ++minute) {
         for (int t = 0; t < ticksPerMinute; ++t) {
             const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
@@ -152,6 +174,39 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                     longestStandTicks = tick - it->second;
                     longestStandCar = c.id.index;
                 }
+            }
+            for (const driving::Car& c : d.cars()) {
+                const int lit = driving::isWaiting(c) ? litJunctionOf(c) : -1;
+                if (lit < 0) {
+                    litSince.erase(c.id.index);
+                    continue;
+                }
+                const std::map<uint32_t, int>::iterator it = litSince.emplace(c.id.index, tick).first;
+                if (tick - it->second > longestLitTicks) {
+                    longestLitTicks = tick - it->second;
+                    longestLitCar = c.id.index;
+                    longestLitJunction = static_cast<uint32_t>(lit);
+                }
+            }
+            // EVERY WALKER STANDING AT A CROSSWALK'S KERB stands at its kerb end (ADR-0452): the farthest any is from
+            // the nearer of the model's two waiting places, every tick
+            for (const citysim::Agent& a : sim.agents()) {
+                if (a.mode == citysim::Agent::Mode::Driver || !a.moving || a.crosswalkAt < 0 || a.onCrosswalk || a.speed > 0.05) continue;
+                const engine::ModelCrosswalk* cw = d.model()->crosswalk(static_cast<uint32_t>(a.crosswalkAt));
+                if (!cw) continue;
+                const Real off = std::min((a.pos - cw->kerbWait(0, citysim::CitySim::kCrossingKerbStep)).length(),
+                                          (a.pos - cw->kerbWait(1, citysim::CitySim::kCrossingKerbStep)).length());
+                if (off > farthestFromKerb) {
+                    farthestFromKerb = off;
+                    farthestFromKerbWho = static_cast<int>(&a - sim.agents().data());
+                    const citysim::CitySim::CrossingAhead x = sim.crossingAhead(a);
+                    char line[200];
+                    std::snprintf(line, sizeof line, "minute %d: hold why %d, crosswalk %d, to hold %.2f m, to far %.2f m", minute,
+                                  sim.holdWhyOf(farthestFromKerbWho), a.crosswalkAt, x.toHold, x.toFar);
+                    farthestFromKerbWhy = line;
+                }
+                ++kerbWaitSamples;
+                kerbWaitAway += off > kAtTheKerbEnd ? 1u : 0u;
             }
         }
         std::map<std::string, int> byState;
@@ -207,6 +262,21 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                     longestStandTicks * kStep, longestStandCar, b.cost().ms / std::max<uint64_t>(1, b.cost().ticks), b.cost().worstMs,
                     sim.drivingHost().cost().modelMs / std::max<uint64_t>(1, sim.drivingHost().cost().ticks),
                     sim.drivingHost().cost().modelWorstMs, stepMsSum / (minute * ticksPerMinute), stepWorst);
+        // CROSSWALKS (ADR-0452): people waiting at kerbs now and crossing now; crossings begun so far by kind; drivers
+        // giving way at crosswalks so far by the crosswalk's control, and decisions standing for someone only waiting
+        // (both hesitating); and the longest a car has stood at a lit junction
+        const citysim::CitySim::WalkStats& ws = sim.walkStats();
+        const driving::Driving::ThingCounts& tc = d.thingCounts();
+        std::printf("    [crowd]        crosswalks: at kerbs %d, crossing %d (waited %.0f agent-s) | crossings: on walk %llu, at signs "
+                    "%llu, marked %llu, unmarked %llu, against the lights %llu | drivers gave way: lights %llu, signs %llu, "
+                    "none %llu; stood for a waiter %llu decisions | longest stand at a lit junction %.1f s (car %u, junction %u)\n",
+                    sim.walkersWaitingAtKerbs(), sim.walkersOnCrosswalks(), ws.waitingTicks * kStep,
+                    static_cast<unsigned long long>(ws.crossings[0]), static_cast<unsigned long long>(ws.crossings[1]),
+                    static_cast<unsigned long long>(ws.crossings[2]), static_cast<unsigned long long>(ws.crossings[3]),
+                    static_cast<unsigned long long>(ws.crossings[4]), static_cast<unsigned long long>(tc.crosswalkGiveWays[0]),
+                    static_cast<unsigned long long>(tc.crosswalkGiveWays[1]), static_cast<unsigned long long>(tc.crosswalkGiveWays[2]),
+                    static_cast<unsigned long long>(tc.crosswalkStandOffs), longestLitTicks * kStep, longestLitCar,
+                    longestLitJunction);
     }
     const driving::WaitReport end = d.waitReport();
     const uint64_t hash = crowdHash(b, sim, world);
@@ -223,6 +293,25 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // NO RING OF WAITS AT ANY MINUTE: a ring is cars each waiting on the next, which nothing can end (the wait-for graph,
     // driving::WaitReport::loops)
     CHECK(ringsSeen == 0);
+    // PEOPLE WAITING AT A CROSSWALK STAND AT ITS KERB END (ADR-0452), never in the carriageway: every sample of a walker
+    // standing at a kerb, within a hand of the model's waiting place
+    std::printf("    [crowd] walkers standing at a crosswalk's kerb: %llu samples, the farthest %.2f m from its kerb end (agent %d)\n",
+                static_cast<unsigned long long>(kerbWaitSamples), farthestFromKerb, farthestFromKerbWho);
+    if (farthestFromKerb > kAtTheKerbEnd && farthestFromKerbWho >= 0) {
+        const citysim::Agent& a = sim.agents()[static_cast<std::size_t>(farthestFromKerbWho)];
+        const citysim::CitySim::CrossingAhead x = sim.crossingAhead(a);
+        std::printf("    [crowd]   then: %s\n", farthestFromKerbWhy.c_str());
+        std::printf("    [crowd]   it: %s | crossing ahead: found %d crosswalk %u from end %d, to hold %.2f, to far %.2f; at %d on %d; hold why %d\n",
+                    sim.describeAgent(farthestFromKerbWho).substr(0, 200).c_str(), x.found ? 1 : 0, x.crosswalk, x.fromEnd, x.toHold,
+                    x.toFar, a.crosswalkAt, a.onCrosswalk ? 1 : 0, sim.holdWhyOf(farthestFromKerbWho));
+    }
+    // KNOWN (ADR-0452): a walker whose route line passes a crosswalk far from its kerb end (at a junction spread over
+    // several points) is not stepped across to it and waits on its route, at the arriving arm's box edge at most; those
+    // samples are counted, and held to a small share
+    std::printf("    [crowd]   of them %llu (%.2f%%) not at a kerb end\n", static_cast<unsigned long long>(kerbWaitAway),
+                kerbWaitSamples ? 100.0 * static_cast<double>(kerbWaitAway) / static_cast<double>(kerbWaitSamples) : 0.0);
+    CHECK(kerbWaitSamples > 0u);
+    CHECK(kerbWaitAway * kAwayShareOneIn < kerbWaitSamples);
 
     // WHAT WAS MADE AND WHAT HAPPENED, pinned from the run of 2026-11-17, sitting 2b (looked at: 350 residents in 323
     // households and 226 cars; the way to work builds from minute 3, 59-74 cars on the road over minutes 6-11, the most
@@ -238,24 +327,28 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // AND AGAIN (ADR-0451) when drivers came to stop for people on foot in their way: the most on the road 79 -> 83,
     // trips 269 -> 265, parked 225 -> 216, walks blocked 13 -> 17, arrivals 451 -> 444, no plan 11 -> 15, hash
     // 0x1d2715902b8559a2 -> 0x0c538d7f7a9fb3fa; rings still 0.
+    // AND AGAIN (ADR-0452) when crosswalks came into the road model and people came to wait at their kerb ends and cross
+    // on WALK or in a gap, and drivers to give way to them there: the most on the road 83 -> 91 (still at minute 10),
+    // busy minutes 10 -> 13, trips 265 -> 260, parked 216 -> 204, walks blocked 17 -> 1, another place 3 -> 1, arrivals
+    // 444 -> 415, no plan 15 -> 1, hash 0x0c538d7f7a9fb3fa -> 0xfd98526fa3b9d920; rings still 0.
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
         CHECK(b.cars().size() == 231u);
         CHECK(withCar == 249);
         CHECK(b.markers().size() == 451u);
-        CHECK(mostOnRoad == 83);
+        CHECK(mostOnRoad == 91);
         CHECK(mostOnRoadAt == 10);
-        CHECK(busyMinutes == 10);
-        CHECK(b.counts().tripsBegun == 265u);
-        CHECK(b.counts().parkedReports == 216u);
-        CHECK(b.counts().walksBlocked == 17u);
-        CHECK(b.counts().otherPlaces == 3u);
-        CHECK(b.machine()->counts().arrivals == 444u);
-        CHECK(b.machine()->counts().noPlans == 15u);
+        CHECK(busyMinutes == 13);
+        CHECK(b.counts().tripsBegun == 260u);
+        CHECK(b.counts().parkedReports == 204u);
+        CHECK(b.counts().walksBlocked == 1u);
+        CHECK(b.counts().otherPlaces == 1u);
+        CHECK(b.machine()->counts().arrivals == 415u);
+        CHECK(b.machine()->counts().noPlans == 1u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0x0c538d7f7a9fb3faull);
+        CHECK(hash == 0xfd98526fa3b9d920ull);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full
@@ -281,6 +374,44 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                             f.section ? f.section->roadClass.c_str() : "?", b.traceText(who).c_str());
             }
         if (d.car(driving::CarId(longestStandCar))) std::printf("    [crowd] stood longest:\n%s", d.describeCar(driving::CarId(longestStandCar)).c_str());
+        // ...the crosswalk it gives way at (ADR-0452), and who is on it or waiting at it
+        const uint32_t cwAt = d.crosswalkGivingWayAt(driving::CarId(longestStandCar));
+        if (const engine::ModelCrosswalk* cw = d.model()->crosswalk(cwAt)) {
+            std::printf("    [crowd] it gives way at crosswalk %u (junction %s, arm %u, %s, walk signal %s), ends (%.1f %.1f) (%.1f %.1f)\n",
+                        cwAt, d.model()->junctions[cw->junction.index].id.c_str(), cw->arm, engine::crosswalkControlWord(cw->control),
+                        driving::walkWord(driving::walkAtCrosswalk(d.rightOfWay(), cwAt, d.clockSeconds())), cw->ends[0].x,
+                        cw->ends[0].y, cw->ends[1].x, cw->ends[1].y);
+            for (std::size_t i = 0; i < sim.agents().size(); ++i)
+                if (sim.agents()[i].crosswalkAt == static_cast<int>(cwAt)) {
+                    std::string why;
+                    sim.gapToCross(sim.agents()[i], cwAt, sim.agents()[i].crossWaited, false, &why);
+                    std::printf("    [crowd]   %s it: agent %zu (waited %.0f s; held by: %s): %s\n", sim.agents()[i].onCrosswalk ? "on" : "at",
+                                i, sim.agents()[i].crossWaited, why.empty() ? "nothing" : why.c_str(),
+                                sim.describeAgent(static_cast<int>(i)).substr(0, 120).c_str());
+                }
+        }
+        // ...and what is in its way (ADR-0451/0452), as the driving last saw it, and who that is
+        if (const driving::ThingAhead* t = d.thingAhead(driving::CarId(longestStandCar))) {
+            std::printf("    [crowd] in its way: %d, thing %u, %.2f m ahead, %.2f m to the side, moving %.2f m/s, on path %u\n",
+                        t->found ? 1 : 0, t->id, t->distance, t->side, t->moves, t->path.index);
+            for (const driving::RoadThing& th : d.thingsOnRoad())
+                if (th.id == t->id) std::printf("    [crowd]   it is at %.1f %.1f\n", th.at.x, th.at.y);
+            for (std::size_t i = 0; i < sim.agents().size(); ++i)
+                if (sim.agents()[i].uid == t->id) {
+                    const citysim::Agent& a = sim.agents()[i];
+                    std::printf("    [crowd]   agent %zu: %s\n", i, sim.describeAgent(static_cast<int>(i)).c_str());
+                    const citysim::CitySim::CrossingAhead x = sim.crossingAhead(a);
+                    std::printf("    [crowd]   its crossing ahead: governed %d found %d crosswalk %u from end %d, to hold %.2f m, to far %.2f m; "
+                                "hold why %d\n", x.governed ? 1 : 0, x.found ? 1 : 0, x.crosswalk, x.fromEnd, x.toHold, x.toFar,
+                                sim.holdWhyOf(static_cast<int>(i)));
+                    for (std::size_t k = 0; k < a.route.links.size(); ++k) {
+                        const engine::NavLink& L = sim.graph()->links[static_cast<std::size_t>(a.route.links[k])];
+                        std::printf("    [crowd]     leg %zu: link %d, street %d, junction %d, %.1f m, from node %d (junction %d) to %d "
+                                    "(junction %d)\n", k, a.route.links[k], L.street, L.junction, L.length, L.from,
+                                    sim.graph()->junctionOf(L.from), L.to, sim.graph()->junctionOf(L.to));
+                    }
+                }
+        }
         for (const driving::Car& c : d.cars())
             if (!c.driven) {
                 std::printf("    [crowd] on the road and not driven: %s\n", b.describeCar(static_cast<int>(c.id.index)).c_str());

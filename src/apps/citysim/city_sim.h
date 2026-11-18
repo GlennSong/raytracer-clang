@@ -23,6 +23,7 @@
 #include "traffic_signal.h"
 #include "../driving/driving.h"   // the new driving model (#234; citysim.driving = "v2")
 #include "city_driving.h"         // ...and the city sim's side of it: the drivers handed over (#255)
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -372,6 +373,15 @@ struct Agent {
     bool tethered = false;
     engine::Vec2 tetherAnchor;
     float tetherLead = 10.0;
+    // AT A CROSSWALK (ADR-0452): the road model's crosswalk this walker waits at the kerb end of (`onCrosswalk` false) or
+    // is crossing (true), as of its last step; -1: neither. `crossWaited`: seconds it has waited there to cross.
+    // `crossingKind`: how the crossing it is on began (CrossingKind), for the counts.
+    int crosswalkAt = -1;
+    bool onCrosswalk = false;
+    bool aboutToCross = false;   // waiting at a kerb with no lights, plainly about to cross (drivers give way)
+    int8_t crossFromEnd = 0;     // the kerb end of `crosswalkAt` they step off from
+    uint8_t crossingKind = 0;
+    Real crossWaited = 0;
     // Continuous sideways lean off the path (ADR-0061), rate-limited, so a walker
     // steers smoothly around what it sees instead of popping. Decays back to 0.
     Real lateralOffset = 0;
@@ -1754,6 +1764,51 @@ public:
     // where they are, how wide (kWalkerHalfAcross) and how they move. A driver finds the ones in its way by itself, so
     // the pavement needs no telling apart from the road here. Then the things the host wrote (setExternalThings).
     void thingsForDriving(std::vector<driving::RoadThing>& out) const;
+    // CROSSWALKS (ADR-0452). The crosswalks are the road model's (road_model.h ModelCrosswalk) and so is which a walk
+    // round a junction crosses (RoadModel::crosswalksOnWalk, asked with the arms the walker's links arrive and leave by:
+    // RoadModel::armReachedAt). A person on foot WAITS AT THE CROSSWALK'S KERB END (where its route comes level with it,
+    // a step back) until they go: under lights, on WALK (a rare few, by a seeded trait, on DON'T WALK when the gap is a
+    // jaywalker's); elsewhere, when no car that is not already slowing or stopped would reach the crosswalk inside the
+    // gap they accept (a seeded trait: people.lua `crossing`). Once started they cross. Nobody arbitrates: a driver gives
+    // way by its own rule to people on the crosswalk and waiting at it (driving/things.h).
+    enum class CrossingKind : uint8_t { Lights, Signs, Marked, Unmarked, AgainstTheLights };
+    static constexpr uint8_t kCrossingKindCount = 5;
+    static const char* crossingKindWord(CrossingKind k);
+    // THE NEXT CROSSING ON A WALKER'S WAY at the junction ahead (found: false: none; `governed`: the junction ahead has
+    // the model's crosswalks, so they, not the old signals, rule its walkers there).
+    struct CrossingAhead {
+        bool governed = false, found = false;
+        uint32_t crosswalk = 0;
+        int fromEnd = 0;
+        Real toHold = 0;   // route metres to where they wait: level with the kerb end they step off from, a step back
+        Real toFar = 0;    // ...to where they are across: level with the far kerb end
+    };
+    CrossingAhead crossingAhead(const Agent& a) const;
+    // Whether a person at crosswalk `crosswalk` would step off now (the gap they accept, against the cars they see),
+    // `bigger`: a jaywalker's gap; `waited`: how long they have waited (a longer wait makes them bolder).
+    // `why` (optional, out): what holds them, in words (empty when they go).
+    bool gapToCross(const Agent& a, uint32_t crosswalk, Real waited, bool bigger, std::string* why = nullptr) const;
+    // One of the rare few who cross against the lights (people.lua crossing.jaywalk_share, a hash of who they are).
+    bool jaywalks(const Agent& a) const;
+    // THE COUNTS: agent-ticks waiting at kerbs; crossings begun, by kind. (Both hesitating -- a driver standing for a
+    // person who waits at the kerb -- is the driving's count: Driving::ThingCounts::crosswalkStandOffs.)
+    struct WalkStats {
+        uint64_t waitingTicks = 0;
+        std::array<uint64_t, kCrossingKindCount> crossings{};
+    };
+    // A walker held this near (m of route) the place they wait at a crosswalk is waiting at its kerb.
+    static constexpr Real kCrossingAtKerb = 3.0;
+    // ...and, slower than this (m/s), stands at the crosswalk's kerb end (ModelCrosswalk::kerbWait).
+    static constexpr Real kCrossingStanding = 0.05;
+    // How far behind a crosswalk's kerb end, on the pavement, a person waits (m): a step.
+    static constexpr Real kCrossingKerbStep = 0.6;
+    // The most (m) a waiting walker steps aside from its route's line to stand at the kerb end (a safety bound: it is a
+    // few metres where the route passes the crosswalk).
+    static constexpr Real kCrossingStepAside = 10.0;
+    const WalkStats& walkStats() const { return walkStats_; }
+    // People waiting at a kerb right now, and crossing right now.
+    int walkersWaitingAtKerbs() const;
+    int walkersOnCrosswalks() const;
     static constexpr Real kWalkerHalfAcross = 0.3;   // m: half a person's shoulders
     // A junction's box radius (the stop lines and a walker's wait are measured from it).
     Real junctionBox(int node) const { return junctionRadius(node); }
@@ -2006,6 +2061,11 @@ private:
         int approachLink = -1;      // the route link that enters it (its signal)
         Real distToNode = 0;        // route metres to the node
         Real distToLine = 0;        // route metres to the stop line (< 0: past it)
+        // A WALKER AT THE MODEL'S CROSSWALKS (ADR-0452): they rule it here (`crossing.governed`: not the old signals),
+        // the crossing ahead, and whether it holds them at its kerb end now (distToLine is then its toHold)
+        CrossingAhead crossing;
+        bool walkHold = false;
+        CrossingKind kind = CrossingKind::Unmarked;   // how they would cross it, going now
     };
     // The signal a car faces at an approach, for ITS movement there (read off its route): during a
     // lead arrow its left may be green while going straight is red (ADR-0109).
@@ -2146,6 +2206,7 @@ private:
                                         // (lets grid candidates map back to ghosts)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
     std::vector<driving::RoadThing> externalThings_;   // host-injected things on the road (setExternalThings)
+    WalkStats walkStats_;                              // crosswalks (ADR-0452)
     std::vector<driving::RoadThing> thingsScratch_;
     std::vector<Real> externalHalf_;                // parallel: a vehicle's half length, 0 = a person
     std::vector<engine::Vec2> bodyObstacles_;       // the physical tier's chassis off their ghosts (setBodyObstacles)

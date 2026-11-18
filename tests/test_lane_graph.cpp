@@ -161,7 +161,7 @@ LaneGraph makeCrossroads() {
     Crosswalk walk;
     walk.outline = g.addPlanPoints({Vec2(6, -3), Vec2(9, -3), Vec2(9, 3), Vec2(6, 3)});
     walk.junction = JunctionId(0);
-    walk.walkLink = 17;
+    walk.modelCrosswalk = 17;
     g.crosswalks.push_back(walk);
     j.crosswalks = Range{0, 1};
 

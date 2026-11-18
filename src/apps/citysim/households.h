@@ -76,6 +76,21 @@ struct HouseholdType {
     std::vector<HouseholdTie> ties;
 };
 
+// CROSSING THE ROAD AT A CROSSWALK (ADR-0452): people.lua `people.crossing`; these defaults are the file's. A person
+// steps off when no car that is not already slowing or stopped would reach the crosswalk within their accepted gap:
+// the time to walk across at `walk_speed`, plus their own start-up margin (a seeded trait, start_up_lo..hi), less
+// `bolder_per_second` for each second they have waited, never under `bolder_floor`; a jaywalker's gap (crossing
+// against the lights, with no right of way) is `jaywalk_gap` times that. `jaywalk_share`: the share of people who
+// cross against the lights at all.
+struct CrossingTuning {
+    double walkSpeed = 1.07;          // m/s (3.5 ft/s)
+    double startUpLo = 2.0, startUpHi = 5.0;
+    double bolderPerSecond = 0.1;
+    double bolderFloor = 0.5;
+    double jaywalkGap = 1.5;
+    double jaywalkShare = 0.03;
+};
+
 struct PeopleCatalog {
     std::vector<LifeStage> stages;
     std::vector<AgeBand> bands;
@@ -89,6 +104,8 @@ struct PeopleCatalog {
     std::vector<std::pair<int, double>> lodgers;
     // GETTING OUT OF A CAR'S WAY (ADR-0355): people.dodge, how they notice a car coming, dodge it, or go down
     engine::DodgeTuning dodge;
+    // CROSSING THE ROAD (ADR-0452): people.crossing
+    CrossingTuning crossing;
 
     int stage(const std::string& name) const;
     int band(const std::string& name) const;

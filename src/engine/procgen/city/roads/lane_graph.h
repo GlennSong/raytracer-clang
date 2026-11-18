@@ -201,11 +201,13 @@ struct CrossingPoint {
     }
 };
 
-// A PLACE WHERE PEOPLE WALK ACROSS the road: its area, and the link of the walkers' network it carries.
+// A PLACE WHERE PEOPLE WALK ACROSS the road: its area, and the road model's crosswalk it is. A COPY for the crossing
+// finder, laid from the model (road_model.h layLaneCrosswalks, ADR-0452): its ring starts with the edge at the model
+// crosswalk's kerb end 0 and runs to the edge at end 1, so a crossing point's otherFrom/otherTo are metres from end 0.
 struct Crosswalk {
     Range outline;                                   // into LaneGraph::planPoints, a closed ring
     JunctionId junction;                             // none for one out on a road
-    uint32_t walkLink = kNoIndex;                    // the walkers' network link it is (that network's index)
+    uint32_t modelCrosswalk = kNoIndex;              // the road model's crosswalk (RoadModel::crosswalks); kNoIndex: none
 };
 
 // A RAIL TRACK at street level, where it lies on the road.

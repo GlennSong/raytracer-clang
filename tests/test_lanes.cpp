@@ -2291,6 +2291,7 @@ TEST_CASE(lanes_the_traffic_lab_road_model_problems_are_known) {
     for (const std::string& p : m.problems) {
         std::string kind = "other";
         if (p.find(" takes no turn: ") != std::string::npos) kind = "arriving lane taking no turn";
+        else if (p.find("its crosswalk's kerb end lies in another road") != std::string::npos) kind = "crosswalk kerb end in a road";
         else if (p.find(" stands halfway round from arm ") != std::string::npos) {
             kind = "halfway, taken as far";
             // named by the arms' roads (their places in the list are the stated ring's, ADR-0427)
@@ -2305,7 +2306,8 @@ TEST_CASE(lanes_the_traffic_lab_road_model_problems_are_known) {
         ++byKind[kind];
     }
     for (const std::pair<const std::string, uint32_t>& k : byKind) std::printf("      %u model problems: %s\n", k.second, k.first.c_str());
-    CHECK(byKind == (std::map<std::string, uint32_t>{{"halfway, taken as far", 8}}));
+    // (ADR-0452: 33 crosswalks of spread junctions whose kerb end lies in another road; not used by people)
+    CHECK(byKind == (std::map<std::string, uint32_t>{{"halfway, taken as far", 8}, {"crosswalk kerb end in a road", 33}}));
     CHECK(halfway == (std::set<std::string>{"j7: s203 halfway from s16", "j7: s230 halfway from s13", "j18: s219 halfway from s28",
                                             "j18: s28 halfway from s219", "j18: s23 halfway from s31", "j18: s31 halfway from s23",
                                             "j82: s141 halfway from s224", "j82: s224 halfway from s141"}));

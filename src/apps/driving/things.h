@@ -25,6 +25,7 @@
 #include "apps/driving/notice.h"
 #include "apps/driving/decide.h"
 #include "engine/procgen/city/roads/lane_graph.h"
+#include "engine/procgen/city/roads/road_model.h"   // the crosswalks (ADR-0452)
 #include "rt_math.h"
 
 #include <cstdint>
@@ -43,7 +44,38 @@ struct RoadThing {
     engine::Vec2 at;
     Real halfAcross = 0;
     engine::Vec2 velocity;
+    // WHERE IT STANDS AGAINST A CROSSWALK (ADR-0452), as the world sees it: the road model's crosswalk it is on, or
+    // stands at the kerb end of plainly about to cross (kNoIndex: neither), and which. A person waiting at a kerb for a
+    // walk signal to change is not about to cross: the world says nothing of them.
+    uint32_t crosswalk = engine::kNoIndex;
+    bool onCrosswalk = false;
 };
+
+// ---- PEOPLE ON CROSSWALKS (ADR-0452) ----------------------------------------------------------------------------------
+// Drivers give way to a person on a crosswalk their way crosses, and to one at its kerb plainly about to cross where no
+// lights run it (the UK's zebra rule; Japan's Road Traffic Act article 38). The crosswalks and the paths over them are
+// the road model's (road_model.h ModelCrosswalk, RoadModel::crossersOf); the people, the world's (RoadThing).
+// THE CROSSWALK AHEAD WITH SOMEONE ON IT OR ABOUT TO STEP ON IT: the nearest along my way whose stretch on my path I
+// have not yet reached, within `reach`. `stopAt`: my front to where that stretch begins (m).
+struct CrosswalkAhead {
+    bool found = false;
+    uint32_t crosswalk = engine::kNoIndex;   // the road model's
+    Real stopAt = 0;
+    engine::PathId path;                     // the path the stretch is on
+    bool someoneOn = false;                  // someone is on it (else: waiting at its kerb)
+};
+// WHO IS ON OR AT EACH CROSSWALK this tick, from the things on the road: by the road model's crosswalk id.
+struct CrosswalkPeople {
+    std::vector<uint8_t> on, waiting;
+    void fill(const std::vector<RoadThing>& things, std::size_t crosswalks);
+};
+// Along my path from `along` and then `pathsAfter`, no further than `reach`: the nearest crossing point of a crosswalk
+// (the lane level's records, each naming the model's crosswalk) whose stretch on my path begins ahead of my front, with
+// someone on that crosswalk, or someone waiting at its kerb where its control is not lights and I can still stop before
+// it braking at `comfortDecel` from `mySpeed`.
+CrosswalkAhead findCrosswalkAhead(const engine::RoadModel& model, engine::PathId path, Real along,
+                                  const std::vector<engine::PathId>& pathsAfter, Real reach, Real mySpeed, Real comfortDecel,
+                                  const CrosswalkPeople& people);
 
 // A thing slower than this (m/s) stands still: what a driver watching it judges (thing_stood counts from then).
 constexpr Real kThingStillBelow = 0.2;
@@ -97,6 +129,12 @@ constexpr const char* kFactThingSpeed = "thing_speed";     // m/s: how fast it m
 constexpr const char* kFactThingStood = "thing_stood";     // s: how long it has stood still in my way (0 moving)
 constexpr const char* kFactRoomToPass = "room_to_pass";    // yes/no: there is room to go round it
 constexpr const char* kFactWaited = "waited_for_it";       // s: how long I have stood behind it (0 moving)
+constexpr const char* kFactCrosswalkPerson = "person_at_crosswalk";   // yes/no: someone on, or about to step on, a
+                                                                      // crosswalk ahead of me (CrosswalkAhead)
+constexpr const char* kFactCrosswalkStop = "crosswalk_stop";          // place: crosswalk_stand_off before it
+constexpr const char* kNumberCrosswalkStandOff = "crosswalk_stand_off";   // m: how far short of a crosswalk a driver stops
+constexpr const char* kNumberCrosswalkDecel = "crosswalk_deceleration";   // m/s2: the braking a driver stops at for a
+                                                                          // person waiting at a kerb (no more)
 // The rule-set numbers the facts read.
 constexpr const char* kNumberThingStandOff = "thing_stand_off";   // m: how far short of a thing a driver stops
 constexpr const char* kNumberPassClearance = "pass_clearance";    // m: the gap left beside a thing when going round it
@@ -118,6 +156,9 @@ struct ThingView {
     // just beyond a junction that leaves no room for me past the box is stopped for at the line.
     Real lineAt = -1, boxEndsAt = -1;
     Real myLength = 0;
+    // A CROSSWALK AHEAD with someone on it or about to step on it (ADR-0452), and how far short of it I stop.
+    CrosswalkAhead crosswalk;
+    Real crosswalkStandOff = 0;
 };
 
 // Adds the facts above (and the reader of the numbers the driving reads for them). False with the reasons when one is

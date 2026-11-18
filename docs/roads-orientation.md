@@ -90,6 +90,7 @@ move the loop into it; never a private loop in the reader.
 | Where a point (a door) fronts the road: street, station, kerb | `RoadModel::frontageAt(point)` (a search, interim); `frontageOn(street, station, dir)` (stated facts) |
 | From a frontage: the nearest place to walk, the kerb lane to set down in, the kerb spaces in walking order | `RoadModel::sidewalkBeside(f, out)`, `kerbLaneBeside(f)`, `kerbSpacesNear(f, reach, most)` |
 | Every stretch of road with a centre line, in the order searches by position use | `RoadModel::roadLines()` |
+| The crosswalks (ADR-0452): across an arm; by id; of a lane-level record; the paths over one; which a walk round a junction crosses; where a person waits at a kerb end | `RoadModel::crosswalkAcross`, `crosswalk`, `crosswalkOfLane`, `crossersOf`, `crosswalksOnWalk`, `ModelCrosswalk::kerbWait` (stated once by `stateCrosswalks` in road_model.cpp; laid in the lane level by `layLaneCrosswalks`) |
 | The nearest of several centre lines to a point (the one search) | `nearestLine` (`city/polyline.h`) |
 | May a building front a road of this class | `buildingMayFront` (`city/road_network.h`) |
 

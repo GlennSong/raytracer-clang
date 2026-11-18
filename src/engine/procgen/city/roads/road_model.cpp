@@ -222,6 +222,86 @@ bool junctionLit(const ModelJunction& J) {
     return !J.control.empty() && pole && !pole->controls.empty() && pole->standsFor(J.control);
 }
 
+namespace {
+
+// THE CROSSWALKS (ADR-0452): THE ONE FUNCTION that states them, from stated facts only. Across every arm of every stated
+// junction whose road the paint marks (`areas`' ArmStop::painted: its class's junction_markings, never an anchored
+// road's end) or whose street has pavements (its cross-section's sidewalk): its band kCrosswalkNear to kCrosswalkFar back
+// from the arm's box edge, along the road's spine (deck_mesh.h, the one source of the two numbers), where the band lies
+// on the road clear of its ends (kPaintRoadEndMargin: a road that ends inside the box has no leg there); its kerb ends
+// level with the band's middle, the carriageway's half width either side of the spine toward each kerb
+// (towardKerb, from kerbPerpSign); its control from the junction's stated control (lit: lights) and the arm's stated
+// signs. The paint draws the marked ones (lanes/deck_mesh.cpp) and the lane level lays them all (layLaneCrosswalks).
+void stateCrosswalks(RoadModel& m, const RoadLabGraph& g, const std::vector<roads::lanes::JunctionArea>& areas) {
+    for (std::size_t j = 0; j < m.junctions.size() && j < areas.size(); ++j) {
+        const ModelJunction& J = m.junctions[j];
+        const bool lit = junctionLit(J);
+        for (std::size_t a = 0; a < J.arms.size() && a < areas[j].arms.size(); ++a) {
+            const roads::lanes::ArmStop& arm = areas[j].arms[a];
+            if (arm.edge < 0) continue;
+            const EdgeSpec& e = g.edges[static_cast<std::size_t>(arm.edge)];
+            if (e.s.size() < 2) continue;
+            const ModelStreet* street = m.streetOf(J.arms[a]);
+            bool fits = true;
+            const ModelSection section = street ? street->section : sectionOf(g, e, &fits);
+            const bool pavements = section.sidewalk > 0 && section.carriesCars();
+            if (!arm.painted && !pavements) continue;
+            const int sign = arm.spineIn ? -1 : +1;   // the approach lies at stations below the box (-1) or above (+1)
+            const Real nearStation = arm.boxEdge + sign * roads::lanes::kCrosswalkNear;
+            const Real farStation = arm.boxEdge + sign * roads::lanes::kCrosswalkFar;
+            const Real roadLength = e.s.back();
+            if (std::min(nearStation, farStation) < roads::lanes::kPaintRoadEndMargin ||
+                std::max(nearStation, farStation) > roadLength - roads::lanes::kPaintRoadEndMargin)
+                continue;
+            ModelCrosswalk c;
+            c.junction = ModelJunctionId(static_cast<uint32_t>(j));
+            c.arm = static_cast<uint32_t>(a);
+            c.street = J.arms[a].street;
+            c.road = e.id;
+            c.nearStation = nearStation;
+            c.farStation = farStation;
+            const Real mid = (nearStation + farStation) * Real(0.5);
+            const Vec2 at = roads::lanes::pointAt(e.xy, e.s, mid);
+            const Vec2 spine = roads::lanes::tangentAtStation(e.xy, e.s, mid);
+            const Real half = section.carriagewayHalfWidth();
+            c.ends[0] = at + towardKerb(spine, +1) * half;
+            c.ends[1] = at + towardKerb(spine, -1) * half;
+            c.length = 2 * half;
+            c.spineIn = arm.spineIn;
+            c.marked = arm.painted;
+            c.pavements = pavements;
+            c.control = lit ? CrosswalkControl::Lights
+                            : !J.arms[a].regulations.empty() ? CrosswalkControl::Signs : CrosswalkControl::None;
+            // A KERB END IN ANOTHER ROAD: at a junction spread over several points two arms can stand so close that one
+            // arm's band reaches into another's carriageway (or a stretch inside the junction). Nobody can wait at a kerb
+            // there, so the crosswalk is not one people use (`pavements` false; still marked: the paint draws what it
+            // drew), and the problem is said with its place.
+            if (c.pavements) {
+                const auto inRoad = [&](const Vec2& p, const Range& line, const ModelSection& s) {
+                    const std::vector<Vec2> pts = m.centreLine(line);
+                    return pts.size() >= 2 && strictlyBefore(distToPolyline(p, pts, false), s.carriagewayHalfWidth(), kSamePoint);
+                };
+                for (int end = 0; end < 2 && c.pavements; ++end) {
+                    const Vec2 e = c.ends[static_cast<std::size_t>(end)];
+                    for (std::size_t b = 0; b < J.arms.size() && c.pavements; ++b) {
+                        if (b == a) continue;
+                        const ModelStreet* other = m.streetOf(J.arms[b]);
+                        if (other && other != street && inRoad(e, other->line, other->section)) c.pavements = false;
+                    }
+                    for (const ModelStretch& in : J.inside)
+                        if (c.pavements && inRoad(e, in.line, in.section)) c.pavements = false;
+                }
+                if (!c.pavements)
+                    m.problems.push_back(fmt("junction %s, arm %zu (%s): its crosswalk's kerb end lies in another road's carriageway; "
+                                             "nobody waits there, so it is not one people cross by", J.id.c_str(), a, e.id.c_str()));
+            }
+            m.crosswalks.push_back(c);
+        }
+    }
+}
+
+}  // namespace
+
 // ---- the planned layer and the model of a build -------------------------------------------------------------------------
 
 RoadModel plannedRoadModel(const RoadLabGraph& g) {
@@ -358,7 +438,8 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
     m.notStated.push_back("which lines between lanes may be crossed: the lane level's, from the lanes' kinds and the road file's "
                           "`lane_rules` (ADR-0426), not held here");
     m.notStated.push_back("junction outlines on the ground: the builder has none (the paint's boxes are kept as stretches along each road)");
-    m.notStated.push_back("crosswalks: nothing states them (the paint draws a zebra at each box)");
+    // ---- the crosswalks (ADR-0452): stated here, from the arms' box edges, the paint's marked arms and the pavements ----
+    stateCrosswalks(m, g, areas);
     // ---- the kerb parking spaces (ADR-0439): stated here, from the streets, the arms' stop lines and the rules file ------
     stateKerbRuns(m, kerbParkingRules());
     m.notStated.push_back("what else a kerb space must keep clear of: driveways and lot entrances, bus stops, hydrants and bridges are not "
@@ -1398,6 +1479,24 @@ std::string reportRoadModel(const RoadModel& m) {
                    byTurn[static_cast<std::size_t>(Turn::FarTurn)]);
     }
     out += fmt("  %zu ramps, %zu crossings\n", m.ramps.size(), m.crossings.size());
+    {   // the crosswalks (ADR-0452)
+        uint32_t marked = 0, pavements = 0, laid = 0, crossers = 0;
+        std::array<uint32_t, kCrosswalkControlCount> byControl{};
+        Real shortest = 0, longest = 0;
+        for (uint32_t i = 0; i < m.crosswalks.size(); ++i) {
+            const ModelCrosswalk& c = m.crosswalks[i];
+            marked += c.marked ? 1u : 0u;
+            pavements += c.pavements ? 1u : 0u;
+            laid += c.laneCrosswalk != kNoIndex ? 1u : 0u;
+            crossers += static_cast<uint32_t>(m.crossersOf(i).size());
+            ++byControl[static_cast<std::size_t>(c.control)];
+            shortest = i == 0 ? c.length : std::min(shortest, c.length);
+            longest = std::max(longest, c.length);
+        }
+        out += fmt("  %zu crosswalks (ADR-0452): %u marked, %u with pavements; %u under lights, %u at signs, %u with neither; "
+                   "%.1f to %.1f m kerb to kerb; %u in the lane level, crossed by %u path stretches\n",
+                   m.crosswalks.size(), marked, pavements, byControl[0], byControl[1], byControl[2], shortest, longest, laid, crossers);
+    }
     {
         std::map<std::string, uint32_t> byKind;
         for (const ModelAttachment& a : m.attachments) ++byKind[a.kind];
@@ -1482,7 +1581,7 @@ template <class T> constexpr bool isRecord() {
            std::is_same<T, ModelLane>::value || std::is_same<T, ModelConnection>::value || std::is_same<T, ModelRampEnd>::value ||
            std::is_same<T, ModelRamp>::value || std::is_same<T, ModelCrossing>::value || std::is_same<T, ModelAttachment>::value ||
            std::is_same<T, ModelNode>::value || std::is_same<T, ModelNodePoint>::value || std::is_same<T, ModelTurn>::value ||
-           std::is_same<T, ModelRegulation>::value || std::is_same<T, ModelKerbRun>::value;
+           std::is_same<T, ModelRegulation>::value || std::is_same<T, ModelKerbRun>::value || std::is_same<T, ModelCrosswalk>::value;
 }
 
 struct Writer {
@@ -1565,6 +1664,14 @@ template <class IO, class R> void fields(IO& io, R& r, ModelRegulation*) {
 template <class IO, class K> void fields(IO& io, K& k, ModelKerbRun*) {
     io(k.street); io(k.dir); io(k.from); io(k.spaceLength); io(k.count);
 }
+template <class IO, class C> void fields(IO& io, C& c, ModelCrosswalk*) {
+    io(c.junction); io(c.arm); io(c.street); io(c.road); io(c.nearStation); io(c.farStation); io(c.ends); io(c.length);
+    io(c.spineIn); io(c.marked); io(c.pavements);
+    uint8_t control = static_cast<uint8_t>(c.control);
+    io(control);
+    c.control = static_cast<CrosswalkControl>(control);
+    io(c.laneCrosswalk);
+}
 template <class IO, class S> void fields(IO& io, S& s, ModelLaneSpan*) { io(s.street); io(s.from); io(s.to); }
 template <class IO, class L> void fields(IO& io, L& l, ModelLane*) {
     io(l.id); io(l.kind); io(l.edge); io(l.dir); io(l.slot); io(l.width); io(l.curve); io(l.spineFrom); io(l.spineTo); io(l.streets);
@@ -1602,6 +1709,7 @@ template <class IO, class M> void modelFields(IO& io, M& m) {
     io(curves->points); io(curves->along);
     m.curves = std::move(curves);
     io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.regulations); io(m.kerbRuns);
+    io(m.crosswalks);
     io(m.notStated);
     io(m.problems); io(m.armsInRing);
 }
@@ -1641,6 +1749,120 @@ bool getRoadModel(bundle::BinReader& r, RoadModel& m, std::string* err) {
         return false;
     }
     return true;
+}
+
+// ---- crosswalks (ADR-0452) ----------------------------------------------------------------------------------------------
+
+const char* crosswalkControlWord(CrosswalkControl c) {
+    switch (c) {
+    case CrosswalkControl::Lights: return "lights";
+    case CrosswalkControl::Signs: return "signs";
+    case CrosswalkControl::None: return "none";
+    }
+    return "none";
+}
+
+const ModelCrosswalk* RoadModel::crosswalkAcross(ModelJunctionId junction, uint32_t arm) const {
+    for (const ModelCrosswalk& c : crosswalks)
+        if (c.junction == junction && c.arm == arm) return &c;
+    return nullptr;
+}
+
+std::vector<CrosswalkCrosser> RoadModel::crossersOf(uint32_t crosswalk) const {
+    std::vector<CrosswalkCrosser> out;
+    if (crosswalk >= crosswalks.size()) return out;
+    const uint32_t w = crosswalks[crosswalk].laneCrosswalk;
+    if (w >= laneLevel.crosswalks.size()) return out;
+    const JunctionId lj = laneLevel.crosswalks[w].junction;
+    // (a crosswalk's crossing points are filed under its junction: its range of the list, else the whole list)
+    uint32_t first = 0, end = static_cast<uint32_t>(laneLevel.crossings.size());
+    if (lj.valid() && lj.index < laneLevel.junctions.size()) {
+        first = laneLevel.junctions[lj.index].crossings.first;
+        end = laneLevel.junctions[lj.index].crossings.end();
+    }
+    for (uint32_t x = first; x < end && x < laneLevel.crossings.size(); ++x) {
+        const CrossingPoint& cp = laneLevel.crossings[x];
+        if (cp.otherSide != OtherSide::Crosswalk || cp.other != w) continue;
+        CrosswalkCrosser c;
+        c.path = cp.a;
+        c.from = cp.aFrom;
+        c.to = cp.aTo;
+        c.acrossFrom = cp.otherFrom;
+        c.acrossTo = cp.otherTo;
+        out.push_back(c);
+    }
+    return out;
+}
+
+std::vector<WalkCrossing> RoadModel::crosswalksOnWalk(ModelJunctionId junction, int armIn, int armOut) const {
+    std::vector<WalkCrossing> out;
+    if (junction.index >= junctions.size()) return out;
+    const int n = static_cast<int>(junctions[junction.index].arms.size());
+    if (armIn < 0 || armOut < 0 || armIn >= n || armOut >= n) return out;
+    // s: the ring step (+1 counter-clockwise, the list's order) toward the arriving traffic's kerb. A person arriving by
+    // arm i stands at the corner between i and i+s; leaving by arm k, at the corner between k-s and k.
+    const int s = kerbSideCounterClockwise() ? 1 : -1;
+    const auto wrap = [n](int a) { return ((a % n) + n) % n; };
+    const auto stepsFrom = [&](int dir) {   // steps from armIn to armOut going `dir` round the ring
+        for (int k = 0; k < n; ++k)
+            if (wrap(armIn + dir * k) == armOut) return k;
+        return n;
+    };
+    // going s: across armIn+s ... armOut-s (steps - 1 arms); going -s: across armIn ... armOut (steps + 1 arms)
+    const int forward = stepsFrom(s) - 1, backward = stepsFrom(-s) + 1;
+    const bool goForward = forward <= backward;
+    const int count = goForward ? forward : backward;
+    for (int k = 0; k < count; ++k) {
+        const int arm = goForward ? wrap(armIn + s * (k + 1)) : wrap(armIn - s * k);
+        const ModelCrosswalk* c = crosswalkAcross(junction, static_cast<uint32_t>(arm));
+        if (!c || !c->pavements) continue;
+        // which kerb end is at which corner: end 0 is on the kerb of the traffic running along the spine. Where the spine
+        // runs into the junction that traffic arrives by this arm, so end 0 is at the corner (arm, arm+s); else at
+        // (arm-s, arm). Going s a person comes from (arm-s, arm); going -s from (arm, arm+s).
+        WalkCrossing w;
+        w.crosswalk = static_cast<uint32_t>(c - crosswalks.data());
+        w.fromEnd = goForward == c->spineIn ? 1 : 0;
+        out.push_back(w);
+    }
+    return out;
+}
+
+bool stateCrosswalk(RoadModel& m, const ModelCrosswalk& c, uint32_t* id, std::string* err) {
+    if (c.junction.index >= m.junctions.size()) {
+        if (err) *err = fmt("crosswalk: junction %u is not one of the model's %zu", c.junction.index, m.junctions.size());
+        return false;
+    }
+    if (c.arm >= m.junctions[c.junction.index].arms.size()) {
+        if (err) *err = fmt("crosswalk: junction %u lists no arm %u", c.junction.index, c.arm);
+        return false;
+    }
+    if (id) *id = static_cast<uint32_t>(m.crosswalks.size());
+    m.crosswalks.push_back(c);
+    return true;
+}
+
+void layLaneCrosswalks(RoadModel& m) {
+    LaneGraph& g = m.laneLevel;
+    g.crosswalks.clear();
+    for (ModelCrosswalk& c : m.crosswalks) c.laneCrosswalk = kNoIndex;
+    for (uint32_t lj = 0; lj < g.junctions.size(); ++lj) {
+        Junction& jn = g.junctions[lj];
+        jn.crosswalks = Range{static_cast<uint32_t>(g.crosswalks.size()), 0};
+        if (jn.modelJunction == kNoIndex) continue;
+        for (uint32_t id = 0; id < m.crosswalks.size(); ++id) {
+            ModelCrosswalk& c = m.crosswalks[id];
+            if (c.junction.index != jn.modelJunction) continue;
+            // the band, kerb to kerb: the edge at end 0 first, then the edge at end 1 (lane_graph.h Crosswalk)
+            const Vec2 along = perp(c.across()) * (c.bandWidth() * Real(0.5));
+            Crosswalk w;
+            w.outline = g.addPlanPoints({c.ends[0] - along, c.ends[0] + along, c.ends[1] + along, c.ends[1] - along});
+            w.junction = JunctionId(lj);
+            w.modelCrosswalk = id;
+            c.laneCrosswalk = static_cast<uint32_t>(g.crosswalks.size());
+            g.crosswalks.push_back(w);
+            ++jn.crosswalks.count;
+        }
+    }
 }
 
 bool operator==(const RoadModel& a, const RoadModel& b) {

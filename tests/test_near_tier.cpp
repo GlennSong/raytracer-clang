@@ -53,7 +53,9 @@ constexpr Real kStep = 1.0 / 60.0;
 constexpr Real kRunUp = citysim::kLabRunUp;   // (the viewer's `near route|queue` set out the same way)
 constexpr Real kRunOn = citysim::kLabRunOn;
 constexpr Real kQueueBehind = citysim::kLabQueueBehind;
-constexpr Real kRunSeconds = 150.0;    // the most a run is stepped (a test's bound: the checks say whether it arrived)
+// the most a run is stepped (a test's bound: the checks say whether it arrived). 150 -> 180 s (ADR-0452): drivers now
+// give way to people at crosswalks, and the mixed queue's follower came to rest 0.6 m short of its place at 150 s
+constexpr Real kRunSeconds = 180.0;
 constexpr Real kSwitchSpeed = 8.0;     // m/s: a car is switched into physics once this fast
 constexpr Real kSettleSeconds = 1.0;   // after a switch into physics, how long its vertical motion is watched
 
@@ -429,6 +431,9 @@ Real runQueue(bool physicsBehind, bool& bothArrived) {
         if (n.found() && n.car == driving::CarId(1000)) closestRecorded = std::min(closestRecorded, n.gap);
     }
     bothArrived = arrivedLead && arrivedFollow;
+    for (const uint32_t id : {1000u, 1001u})
+        if (rig.d().car(driving::CarId(id)) && rig.d().car(driving::CarId(id))->driven)
+            std::printf("    [near] car %u did not arrive:\n%s", id, rig.d().describeCar(driving::CarId(id)).c_str());
     std::printf("    [near] queue, a %s behind a %s: the closest gap %.2f m (the driving's records: %.2f m); both arrived %d\n",
                 physicsBehind ? "physics car" : "lane car", physicsBehind ? "lane car" : "physics car", closest,
                 closestRecorded, bothArrived ? 1 : 0);
@@ -1114,13 +1119,14 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // Re-pinned again (ADR-0450) from 34 at minute 12, in 77, out 46, 0x317e4d66f3504130: the kerb lanes are driven
     // clear of the parking band, so every car's line, and every car's day, moved; and the city is stepped as the app
     // steps it, eight steps a frame. And again (ADR-0451) from 16 at minute 11, in 82, out 66, 0x30470fc2f83cc7c7:
-    // drivers stop for what is in their way
-    CHECK(mostNear == 14);
-    CHECK(mostNearAt == 11);
-    CHECK(c.intoPhysics == 91u);
-    CHECK(c.intoLane == 76u);
+    // drivers stop for what is in their way. And again (ADR-0452) from 14 at minute 11, in 91, out 76,
+    // 0x9699075db5940e90: people wait at crosswalks' kerb ends and cross on WALK or in a gap, and drivers give way to them
+    CHECK(mostNear == 12);
+    CHECK(mostNearAt == 7);
+    CHECK(c.intoPhysics == 83u);
+    CHECK(c.intoLane == 63u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x9699075db5940e90ull);
+    CHECK(hash == 0xb80206dda672d5d5ull);
 }
 
 // THE CAP HELD (ADR-0448): the same walk and drive with the cap at 4 (the level's data changed before the first step),

@@ -3,6 +3,7 @@
 #include "apps/driving/traffic_state.h"   // kerbwardPerpSign
 #ifdef RT_ROADS_LANES
 #include "engine/procgen/city/roads/lanes/lane_graph_crossings.h"   // the road builder's crossing-point finder
+#include "engine/procgen/city/roads/lanes/deck_mesh.h"              // kCrosswalkNear, kCrosswalkFar: the one source
 #endif
 
 #include <algorithm>
@@ -246,6 +247,14 @@ engine::PathId TestRoads::laneOf(SectionId s, uint32_t k) const {
 engine::JunctionId TestRoads::junction(uint32_t row, uint32_t col) const {
     if (row >= rows || col >= cols) return engine::JunctionId();
     return engine::JunctionId(row * cols + col);
+}
+
+uint32_t TestRoads::crosswalkAcross(uint32_t row, uint32_t col, Heading h) const {
+    const engine::JunctionId j = junction(row, col);
+    if (!j.valid() || j.index >= model.laneLevel.junctions.size()) return engine::kNoIndex;
+    const engine::ModelCrosswalk* c =
+        model.crosswalkAcross(engine::ModelJunctionId(model.laneLevel.junctions[j.index].modelJunction), static_cast<uint32_t>(h));
+    return c ? static_cast<uint32_t>(c - model.crosswalks.data()) : engine::kNoIndex;
 }
 
 SectionId TestRoads::sectionLeaving(uint32_t row, uint32_t col, Heading h) const {
@@ -549,6 +558,45 @@ TestRoads gridRoads(uint32_t rows, uint32_t cols, const TestRoadSpec& spec) {
         }
     }
     for (const std::pair<PathId, engine::Turn>& ct : turns) stateTurn(t.model, ct.first, ct.second);
+
+    // THE CROSSWALKS (ADR-0452), stated on the model at every arm (named by the way its arriving traffic heads), then laid
+    // into the lane level by the model's one function.
+#ifdef RT_ROADS_LANES
+    if (spec.crosswalks) {
+        const Real nearIn = Real(engine::roads::lanes::kCrosswalkNear), farIn = Real(engine::roads::lanes::kCrosswalkFar);
+        for (uint32_t r = 0; r < rows; ++r)
+            for (uint32_t c = 0; c < cols; ++c) {
+                const engine::JunctionId jid = t.junction(r, c);
+                engine::ModelJunction& J = modelJunctionOf(t.model, jid);
+                if (J.arms.size() < kHeadingCount) J.arms.resize(kHeadingCount);
+                for (uint8_t hi = 0; hi < kHeadingCount; ++hi) {
+                    const Heading h = static_cast<Heading>(hi);
+                    if (!t.sectionArriving(r, c, h).valid() && !t.sectionLeaving(r, c, opposite(h)).valid()) continue;
+                    // the arm's road lies behind the arriving traffic; the band inside the box, back from its edge
+                    const Vec2 back = headingVector(h) * Real(-1);
+                    const Real mid = halfBox - Real(0.5) * (nearIn + farIn);
+                    const Vec2 at = centre(r, c) + back * mid;
+                    const Real half = Real(lanes) * spec.laneWidth;
+                    engine::ModelCrosswalk cw;
+                    cw.junction = engine::ModelJunctionId(g.junctions[jid.index].modelJunction);
+                    cw.arm = hi;
+                    cw.road = "test_road";
+                    cw.nearStation = halfBox - farIn;
+                    cw.farStation = halfBox - nearIn;
+                    cw.ends[0] = at + kerbward(h, spec.drivesOn) * half;
+                    cw.ends[1] = at - kerbward(h, spec.drivesOn) * half;
+                    cw.length = 2 * half;
+                    cw.spineIn = true;
+                    cw.marked = true;
+                    cw.pavements = true;
+                    cw.control = spec.crosswalkControl;
+                    std::string why;
+                    if (!engine::stateCrosswalk(t.model, cw, nullptr, &why)) std::printf("    crosswalk: %s\n", why.c_str());
+                }
+            }
+        engine::layLaneCrosswalks(t.model);
+    }
+#endif
 
     // Each lane leads into the connectors leaving its end; each connector into its lane.
     std::vector<std::vector<PathId>> nexts(g.paths.size());

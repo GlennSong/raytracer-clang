@@ -81,6 +81,10 @@ constexpr const char* kNumberSignalCycle = "signal_cycle";                   // 
 constexpr const char* kNumberWaveSpeed = "signal_wave_speed";                // m/s: the green wave's speed
 constexpr const char* kNumberWaveEast = "signal_wave_east";                  // ratio: its direction, east part
 constexpr const char* kNumberWaveNorth = "signal_wave_north";                // ratio: ... north part
+// THE WALKS (ADR-0452), read when the rule set states them (a rule set without them has no walk signals: its crosswalks
+// show nothing): the walk interval, and the walking speed the clearance is timed at (crossing length / speed).
+constexpr const char* kNumberWalkInterval = "walk_interval";                 // s
+constexpr const char* kNumberWalkClearanceSpeed = "walk_clearance_speed";    // m/s
 // The name the light clock reads the rule set under, in the problems buildRoadRules reports.
 constexpr const char* kLightClockReaderName = "the light clock (traffic lights' programmes and the yellow)";
 
@@ -95,6 +99,8 @@ struct LightTiming {
     Real greenShortest = 0, greenLongest = 0;
     Real cycle = 0;
     Real waveSpeed = 0, waveEast = 0, waveNorth = 0;
+    Real walkInterval = 0, walkClearanceSpeed = 0;   // 0: the rule set states no walks
+    bool walks() const { return walkInterval > 0 && walkClearanceSpeed > 0; }
 };
 
 // Adds the light clock as a reader of the numbers it needs. A host that wants lights to run registers it (after reading
@@ -119,8 +125,9 @@ Real allRedSeconds(const LightTiming& t, Real clearDistance, Real speed);
 
 // TIMES EVERY PROGRAMME of `row` (its phases, built by buildRightOfWay) and checks every far turn's place to wait inside
 // (see the top of this file). `roadRules` gives the limits. Fills each lit junction's cycle and offset and each phase's
-// green, yellow and all-red; each connector's waitInsideAt that passes; and the counts and notes.
-void timeSignalProgrammes(const engine::LaneGraph& roads, const RoadRules& roadRules, const LightTiming& timing,
+// green, yellow and all-red; each connector's waitInsideAt that passes; each walk signal's walk and clearance (the
+// clearance from its crosswalk's length kerb to kerb, the road model's: hence the model); and the counts and notes.
+void timeSignalProgrammes(const engine::RoadModel& model, const RoadRules& roadRules, const LightTiming& timing,
                           RightOfWay& row);
 
 // ---- At any moment: pure functions of the clock --------------------------------------------------------------------
@@ -148,14 +155,27 @@ enum class Lamp : uint8_t {
     Yellow,
     Red,
     RedMayTurn,   // red, but the control allows this turn on red, giving way to everything
+    GreenArrow,   // green, as an arrow: the turn goes alone (an arrow phase, or a protected turn's green). lampAt says
+                  // Green for it (the arrow lets traffic in as a green does); lampShownAt and the `light` fact say this
 };
-constexpr uint8_t kLampCount = 5;
+constexpr uint8_t kLampCount = 6;
 // The lamp of `connector` at `now`: in its phase's green, the phase's light; in the yellow and all-red after it, a
 // movement losing its green shows yellow, then red (or red, may turn, where the next phase allows it); one green in the
 // next phase too stays green; one not green stays as it was.
 Lamp lampAt(const engine::LaneGraph& roads, const RightOfWay& row, engine::PathId connector, double now);
-// The words a rule set's `light` fact speaks, in Lamp order from Green ("green", "yellow", "red", "red_may_turn"); and a
-// lamp's word ("dark" for Dark).
+// WHAT THE HEAD SHOWS (ADR-0452): lampAt, but a green that goes alone is a GreenArrow -- in an arrow phase, or a
+// protected turn's green.
+Lamp lampShownAt(const engine::LaneGraph& roads, const RightOfWay& row, engine::PathId connector, double now);
+
+// WHAT A WALK SIGNAL SHOWS (ADR-0452; right_of_way.h WalkSignalRules): None where no programme runs or the rule set
+// states no walks. `walk`: an index into RightOfWay::walks; ...AtCrosswalk: by the road model's crosswalk id (None: it
+// has no walk signal).
+enum class WalkSignal : uint8_t { None, Walk, Flashing, DontWalk };
+WalkSignal walkAt(const RightOfWay& row, uint32_t walk, double now);
+WalkSignal walkAtCrosswalk(const RightOfWay& row, uint32_t crosswalk, double now);
+const char* walkWord(WalkSignal w);
+// The words a rule set's `light` fact speaks, in Lamp order from Green ("green", "yellow", "red", "red_may_turn",
+// "green_arrow"); and a lamp's word ("dark" for Dark).
 std::vector<std::string> lampWords();
 const char* lampWord(Lamp l);
 // The word index of a lamp in lampWords(), or kNoWord for Dark.

@@ -373,7 +373,6 @@ public:
     // How many drawn cars carry any of these lit-lamp bits this bake (engine::kLampMask*): the lamps are the body's
     // own lenses, lit by a mask on its instance (ADR-0342). For the headless tests.
     std::size_t carsLit(engine::World& world, uint32_t bits) const;
-    const std::vector<engine::Vec2>& crosswalkCenters() const { return crosswalkCenters_; }
     // The painted curbside bay outlines (R6b). Exposed so the height gate (#25)
     // can check the paint lands on the asphalt instead of floating over it.
     engine::Entity parkBayGroup() const { return parkBayGroup_; }
@@ -866,7 +865,6 @@ private:
     // system computes its own sites as before.
     std::vector<SignalSite> siteByLink_;
     std::vector<uint8_t> siteHasLink_;
-    std::vector<engine::Vec2> crosswalkCenters_;   // one per junction approach (centre of band)
     std::function<double(double, double)> heightAt_;   // terrain drape (may be null)
     Real roadLift_ = 0.0;
     // The decks the level's road meshes rode (RoadDeck components, copied at

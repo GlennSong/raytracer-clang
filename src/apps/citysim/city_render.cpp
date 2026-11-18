@@ -2014,22 +2014,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // bakes a set-back "metres past the junction mouth" coordinate into the
     // carriageway UV, and the RoadMarkings shader stripes the zebra band there — so
     // it's part of the road surface, set back on the approach, and never a floating
-    // decal overlapping the centreline. We keep only the crosswalk CENTRES here (a
-    // handy anchor for future ped-crossing logic); the decal group stays empty.
-    crosswalkCenters_.clear();
+    // decal overlapping the centreline. The decal group stays empty. (Where a crosswalk IS is the road model's,
+    // ModelCrosswalk, ADR-0452: the guessed "crosswalk centres" once kept here, read by nobody, are gone.)
     crosswalkGroup_ = world.create();
-    {
-        const Real depth = 2.6;
-        for (int li = 0; li < nav_.linkCount(); ++li) {
-            const engine::NavLink& L = nav_.links[li];
-            if (!nav_.isJunction(L.to)) continue;
-            Vec2 d = nav_.direction(li);
-            Vec2 node = nav_.nodes[L.to];
-            Real halfW = L.width * 0.5;
-            crosswalkCenters_.push_back(node - d * (halfW + depth * 0.5 + 0.3));
-        }
-        world.add<InstanceGroup>(crosswalkGroup_, InstanceGroup{});   // empty: road paints the bars
-    }
+    world.add<InstanceGroup>(crosswalkGroup_, InstanceGroup{});   // empty: road paints the bars
 
     // Debug widgets (ADR-0061): per-agent footprint ring (one group per behaviour
     // state, coloured) + a forward trajectory arrow. The groups always exist so a

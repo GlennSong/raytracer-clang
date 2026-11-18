@@ -54,9 +54,11 @@ struct LaneLookup {
 //   - its BOX EDGE, where the junction's area begins, and its STOP LINE, where traffic arriving by it stops: back from
 //     the mouth as the one rule says (road_model_parts.h boxEdgeBack, stopLineBack: the widest crossing road's half
 //     width, then kStopLineBack).
-// The paint draws each street arm's crosswalk (kCrosswalkNear to kCrosswalkFar back from the box edge) from these, and
-// its lane arrows and stop bar where the road model states them (RoadPaint, below); the road model's ModelArm::boxEdge and
-// ::stopLine ARE these; the lane level ends its lanes at these. Nothing finds or groups a junction from overlapping lanes.
+// A crosswalk's band lies kCrosswalkNear to kCrosswalkFar back from an arm's box edge: the ONE source of those two numbers,
+// read only by the road model's one function that states the crosswalks (road_model.cpp stateCrosswalks, ADR-0452); the
+// paint draws each marked crosswalk from the model's record, with its lane arrows and stop bar where the road model states
+// them (RoadPaint, below); the road model's ModelArm::boxEdge and ::stopLine ARE these; the lane level ends its lanes at
+// these. Nothing finds or groups a junction from overlapping lanes.
 constexpr double kCrosswalkNear = 1.0;
 constexpr double kCrosswalkFar = 4.0;
 // One arm of a stated junction, as the paint, the model and the lane level read it.
@@ -130,10 +132,19 @@ struct PaintedStopBar {
     Vec2 from, to;              // its two ends in plan
     int fromLane = -1, toLane = -1;   // the lanes its ends lie in (for their heights)
 };
+// A ZEBRA painted across an arm (ADR-0452): the model's crosswalk it is the paint of, and where its stripes run across
+// the road -- from the first stripe's middle to the last's, at the band's middle (the paint's own measure of the lanes'
+// width there).
+struct PaintedZebra {
+    uint32_t crosswalk = kNoIndex;   // the road model's
+    Vec2 from, to;
+    int stripes = 0;
+};
 struct RoadPaint {
     std::vector<PaintedLine> lines;
     std::vector<PaintedArrow> arrows;
     std::vector<PaintedStopBar> stopBars;
+    std::vector<PaintedZebra> zebras;
     std::vector<std::string> problems;   // what was not painted because nothing states it, once per kind of gap
 };
 // WHAT THE PAINT READS BESIDES THE ROADS THEMSELVES, AS ONE NUMBER FOR THE BAKE KEY (city_producer.cpp): of a road file

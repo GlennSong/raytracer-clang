@@ -2627,3 +2627,100 @@ TEST_CASE(road_model_26_kerb_spaces_are_handed_to_the_agent_brain_as_places) {
     foreign.id = kTag | 99u;
     CHECK(!places.owns(foreign));
 }
+
+// THE CROSSWALKS ARE THE ROAD MODEL'S (ADR-0452): stated once, by the planned layer, across every marked or paved arm of
+// traffic_lab's stated junctions; the paint draws its zebras from them; the lane level lays them, and the road build's
+// crossing finder finds the connectors over each. Checked against the scene's own facts and against what the paint drew.
+namespace {
+// The two kerb ends lie the crosswalk's length apart, to this (m).
+constexpr Real kKerbEndOnEdge = 0.05;
+// Halfway between them is the street's centre line, to this (m): the model keeps a street's line to within 0.1 m of its
+// spine (road_model.cpp kLineTolerance), and the band's middle is placed on the spine.
+constexpr Real kMiddleOnLine = 0.12;
+// A painted zebra's stripes lie inside the kerb-to-kerb span, on its line, to this (m).
+constexpr Real kZebraOnLine = 0.05;
+}  // namespace
+TEST_CASE(road_model_27_the_crosswalks_are_stated_once_and_the_paint_and_the_lane_level_read_them) {
+    const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/traffic_lab_lanelab.json";
+    const std::unique_ptr<Result> r =
+        build(RoadLabGraph::fromJson(nlohmann::json::parse(slurp(path)), path.substr(0, path.find_last_of('/'))));
+    RoadPaint paint;
+    buildMeshes(*r, &paint);
+    const RoadModel m = assembleRoadModel(*r, oneCar());
+    for (const std::string& s : m.notStated) CHECK(s.find("crosswalks") == std::string::npos);   // stated now
+    CHECK(!m.crosswalks.empty());
+    // at a lit junction, a stop-signed one (an arm with a stop sign) and a plain one (none)
+    std::map<std::string, uint32_t> byJunctionControl;
+    std::array<uint32_t, kCrosswalkControlCount> byControl{};
+    Real shortest = 1e9, longest = 0, worstEdge = 0, worstBand = 0;
+    uint32_t laid = 0, crossed = 0, inAnotherRoad = 0;
+    for (uint32_t id = 0; id < m.crosswalks.size(); ++id) {
+        const ModelCrosswalk& c = m.crosswalks[id];
+        const ModelJunction& J = m.junctions[c.junction.index];
+        const ModelArm& arm = J.arms[c.arm];
+        ++byJunctionControl[J.control];
+        ++byControl[static_cast<std::size_t>(c.control)];
+        // its control is the junction's and the arm's stated facts
+        if (J.control == "signal") CHECK(c.control == CrosswalkControl::Lights);
+        else CHECK(c.control == (arm.regulations.empty() ? CrosswalkControl::None : CrosswalkControl::Signs));
+        // its band: kCrosswalkNear to kCrosswalkFar back from the arm's stated box edge, toward the approach
+        const Real back = arm.spineIn ? -1 : 1;
+        worstBand = std::max(worstBand, std::fabs(c.nearStation - (arm.boxEdge + back * kCrosswalkNear)));
+        worstBand = std::max(worstBand, std::fabs(c.farStation - (arm.boxEdge + back * kCrosswalkFar)));
+        // kerb to kerb: the street's carriageway, its two ends that far apart, each on an edge
+        const ModelStreet* s = m.streetOf(arm);
+        CHECK(s != nullptr);
+        if (!s) continue;
+        CHECK(approxEqual(c.length, 2 * s->section.carriagewayHalfWidth(), kSamePoint));
+        CHECK(approxEqual((c.ends[1] - c.ends[0]).length(), c.length, kKerbEndOnEdge));
+        const std::vector<Vec2> line = m.centreLine(s->line);
+        worstEdge = std::max(worstEdge, distToPolyline(c.middle(), line, false));
+        shortest = std::min(shortest, c.length);
+        longest = std::max(longest, c.length);
+        CHECK(!c.pavements || s->section.sidewalk > 0);   // (a kerb end in another road's carriageway: not one people use)
+        inAnotherRoad += s->section.sidewalk > 0 && !c.pavements ? 1u : 0u;
+        // laid in the lane level, and crossed by the connectors there
+        laid += c.laneCrosswalk != kNoIndex ? 1u : 0u;
+        crossed += m.crossersOf(id).empty() ? 0u : 1u;
+    }
+    std::printf("      %zu crosswalks: %u under lights, %u at signs, %u with neither; by junction control:", m.crosswalks.size(),
+                byControl[0], byControl[1], byControl[2]);
+    for (const std::pair<const std::string, uint32_t>& k : byJunctionControl) std::printf(" %s %u;", k.first.c_str(), k.second);
+    std::printf("\n      %.1f to %.1f m kerb to kerb; the middle off the centre line by at most %.3f m; band off by at most %.4f m; "
+                "%u laid, %u crossed; %u with a kerb end in another road (not used by people)\n", shortest, longest, worstEdge,
+                worstBand, laid, crossed, inAnotherRoad);
+    CHECK(inAnotherRoad < m.crosswalks.size() / 10);   // (the spread junctions' few)
+    // (traffic_lab's 20 "unmarked" junctions are two-arm carry-ons and freeway joints: each of their roads begins at the
+    // mouth, so a band would lie within kPaintRoadEndMargin of its end, and none is stated, as the paint drew none. The
+    // plain crosswalks -- no lights, no sign -- are the through road's at its stop-signed junctions.)
+    for (const char* control : {"signal", "stop", "all_way_stop"}) CHECK(byJunctionControl[control] > 0u);
+    CHECK(byJunctionControl["unmarked"] == 0u);
+    for (const uint32_t n : byControl) CHECK(n > 0u);
+    CHECK(worstEdge <= kMiddleOnLine);
+    CHECK(worstBand <= kWrittenStation);
+    CHECK(shortest > 0 && longest < 30.0);
+    CHECK(laid == m.crosswalks.size());
+    CHECK(crossed == m.crosswalks.size());
+    // THE PAINT DRAWS THE MARKED ONES, each across its crosswalk: its stripes from kerb to kerb, on the line between the
+    // kerb ends, inside them
+    uint32_t marked = 0;
+    for (const ModelCrosswalk& c : m.crosswalks) marked += c.marked ? 1u : 0u;
+    CHECK(paint.zebras.size() == marked);
+    Real worstOff = 0, shortestShare = 1;
+    for (const PaintedZebra& z : paint.zebras) {
+        CHECK(z.crosswalk < m.crosswalks.size());
+        if (z.crosswalk >= m.crosswalks.size()) continue;
+        const ModelCrosswalk& c = m.crosswalks[z.crosswalk];
+        CHECK(c.marked);
+        for (const Vec2& p : {z.from, z.to}) {
+            worstOff = std::max(worstOff, distToSegment(p, c.ends[0], c.ends[1]));
+            const Real t = dot(p - c.ends[0], c.across());
+            CHECK(t > 0 && t < c.length);
+        }
+        shortestShare = std::min(shortestShare, (z.to - z.from).length() / c.length);
+    }
+    std::printf("      %zu zebras painted (of %u marked): stripes off the kerb-to-kerb line by at most %.3f m; the shortest spans "
+                "%.0f%% of its crosswalk\n", paint.zebras.size(), marked, worstOff, shortestShare * 100);
+    CHECK(worstOff <= kZebraOnLine);
+    CHECK(shortestShare > 0.5);
+}

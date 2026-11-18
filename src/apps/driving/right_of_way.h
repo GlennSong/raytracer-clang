@@ -156,6 +156,8 @@ struct JunctionRules {
     Real cycle = 0;
     Real offset = 0;
     uint32_t phaseCount() const { return phases.count > 0 ? phases.count : 1; }   // a junction with no lights has one
+    // ITS WALKS (ADR-0452): the crosswalks of a junction with lights, into RightOfWay::walks
+    engine::Range walks;
     bool running() const { return cycle > 0 && phases.count > 0; }
 };
 
@@ -170,7 +172,30 @@ struct ConnectorRules {
     // only at lights running a programme and only where the check at load passes: signal_programme.h). kNoWaitInside:
     // nowhere.
     Real waitInsideAt = engine::kNoWaitInside;
+    // A PROTECTED TURN here (protected_when): its green is always an arrow (ADR-0452: what its lamp shows)
+    bool protectedTurn = false;
 };
+
+// A WALK SIGNAL: THE SIGNAL OF ONE CROSSWALK OF A JUNCTION WITH LIGHTS (ADR-0452). The crosswalk is the road model's
+// (road_model.h ModelCrosswalk: which arm it lies across, its length kerb to kerb), and so are the paths that cross it
+// (RoadModel::crossersOf: what the road build's crossing finder found over its outline); nothing here works either out.
+// Each crosswalk under lights where people reach it (its `pavements`) gets its own signal: WALK, then FLASHING DON'T WALK
+// (the clearance: long enough to finish crossing from the kerb at the clearance walking speed), then DON'T WALK. Of the
+// connectors crossing it, those whose lane ARRIVES BY ITS ARM (Path::arm, the arm the model states) leave across it; the
+// rest turn into its arm across it. It WALKS in a phase where every movement green across it gives way to it: a turn
+// into its arm from another arm on a plain green (never straight on, never on an arrow, never a protected turn, never a
+// turn leaving by its own arm). It shows WALK from the start of a run of such phases, FLASHING DON'T WALK for the
+// clearance before the run's last green ends, and DON'T WALK through that phase's yellow and all-red and every phase
+// after, until the next run. A pure function of the clock, as the lamps (signal_programme.h walkAt).
+struct WalkSignalRules {
+    uint32_t junction = 0;                // the lane level's junction
+    uint32_t crosswalk = engine::kNoIndex;   // the road model's crosswalk (RoadModel::crosswalks)
+    engine::Range crossedBy;              // into RightOfWay::walkCrossers: the connectors whose paths cross it
+    engine::Range phases;                 // into RightOfWay::walkPhases: per phase of its junction, 1 where it may walk
+    Real walk = 0, clearance = 0;         // its timing (signal_programme.h): the walk interval and the clearance (s)
+};
+// Does a connector crossing a crosswalk leave by the crosswalk's own arm (its lane arrives by that arm)?
+bool leavesAcross(const engine::RoadModel& model, engine::PathId connector, const engine::ModelCrosswalk& crosswalk);
 
 // A STRETCH OF A CONNECTOR clear of every crossing stretch, between two of them: a body standing wholly inside it is
 // in nobody's way.
@@ -184,6 +209,7 @@ struct RightOfWayCounts {
     uint32_t junctionsWithLights = 0;
     uint32_t phases = 0;               // over the junctions with lights
     uint32_t protectedTurns = 0;       // turns going only on their own green arrow (rule_set.h ArrowWarrant)
+    uint32_t walks = 0;                // crosswalks with their own signal (ADR-0452)
     uint32_t meetings = 0;             // path-to-path crossing records answered
     uint32_t settledAtLoad = 0;        // ... where one gives way, at every phase
     uint32_t askWhileDriving = 0;      // ... asked while driving at some phase
@@ -213,6 +239,12 @@ struct RightOfWay {
     std::vector<Phase> phases;
     std::vector<Light> lights;
     std::vector<ClearGap> gaps;
+    std::vector<WalkSignalRules> walks;       // ADR-0452: junction by junction
+    // THE WALK SIGNAL OF EACH OF THE ROAD MODEL'S CROSSWALKS (by its id; kNoIndex: it has none -- no lights there): an
+    // index into `walks`
+    std::vector<uint32_t> walkOfCrosswalk;
+    std::vector<engine::PathId> walkCrossers;
+    std::vector<uint8_t> walkPhases;
     // Per crossing record (by CrossingId): its answers in `answers`, one per phase of its junction (one when filed under
     // no junction); none (count 0) for a crosswalk's or a track's.
     std::vector<engine::Range> answersOf;

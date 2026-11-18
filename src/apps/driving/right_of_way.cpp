@@ -113,6 +113,7 @@ struct JunctionWork {
     std::vector<Movement> mov;
     std::vector<PathId> from;         // the lane each connector leaves
     std::vector<Real> fromLimit;      // ... and the limit in force on it (m/s)
+    std::vector<std::string> fromClass;   // ... and its road's class (the road model's)
     std::vector<Vec2> heading;        // per local approach
     std::vector<uint8_t> faces;       // approaches * approaches: the two face each other (approachesFace, the stated pair)
     std::vector<uint8_t> meet;        // n * n: a cross or a join between the two
@@ -143,6 +144,7 @@ ArrowFacts arrowFactsOf(const JunctionWork& w, uint32_t i) {
         f.opposingLimit = std::max(f.opposingLimit, static_cast<double>(w.fromLimit[k]));
     }
     f.opposingLanes = static_cast<uint32_t>(lanes.size());
+    f.roadClass = i < w.fromClass.size() ? w.fromClass[i] : std::string();
     return f;
 }
 
@@ -214,6 +216,13 @@ std::vector<std::pair<bool, std::vector<uint8_t>>> buildPhases(const JunctionWor
         std::vector<uint32_t> candidates;
         for (uint32_t i = 0; i < n; ++i) {
             if (!green[i] || !hasMovement(ck.arrow, w.mov[i])) continue;
+            // (only where the control's arrow_when holds for it, when it states any: ADR-0452)
+            if (!ck.arrowWhen.empty()) {
+                const ArrowFacts f = arrowFactsOf(w, i);
+                bool warranted = false;
+                for (const ArrowWarrant& wr : ck.arrowWhen) warranted = warranted || warrantHolds(wr, f);
+                if (!warranted) continue;
+            }
             bool givesWayHere = false;
             for (uint32_t k = 0; k < n && !givesWayHere; ++k)
                 if (green[k] && w.app[k] != w.app[i] && w.meets(i, k) && w.facing(i, k))
@@ -391,11 +400,22 @@ Light RightOfWay::light(const LaneGraph& roads, PathId connector, uint32_t phase
     return lights[phases[jr.phases.first + phase].lights.first + this->paths[connector.index].indexInJunction];
 }
 
+bool leavesAcross(const engine::RoadModel& model, engine::PathId connector, const engine::ModelCrosswalk& crosswalk) {
+    const LaneGraph& roads = model.laneLevel;
+    if (connector.index >= roads.paths.size()) return false;
+    const engine::Path& c = roads.paths[connector.index];
+    if (c.kind != engine::PathKind::Connector || !c.from.valid() || c.from.index >= roads.paths.size()) return false;
+    const engine::ModelJunction* J = model.junctionOf(c.junction);
+    return J && crosswalk.junction.index < model.junctions.size() && J == &model.junctions[crosswalk.junction.index] &&
+           roads.paths[c.from.index].arm == crosswalk.arm;
+}
+
 RightOfWay buildRightOfWay(const engine::RoadModel& model, const RuleSet& rules, const RoadRules& roadRules) {
     const LaneGraph& roads = model.laneLevel;
     RightOfWay out;
     out.junctions.resize(roads.junctions.size());
     out.paths.resize(roads.paths.size());
+    out.walkOfCrosswalk.assign(model.crosswalks.size(), engine::kNoIndex);
     out.answersOf.assign(roads.crossings.size(), Range());
     out.counts.junctions = static_cast<uint32_t>(roads.junctions.size());
 
@@ -455,6 +475,7 @@ RightOfWay buildRightOfWay(const engine::RoadModel& model, const RuleSet& rules,
             w.mov.push_back(movementOfTurn(model.turnOf(c)));
             w.from.push_back(from);
             w.fromLimit.push_back(from.valid() && from.index < roads.paths.size() ? roadRules.baseLimit(from) : Real(0));
+            w.fromClass.push_back(from.valid() ? model.roadClassOf(from) : std::string());
             ConnectorRules& cr = out.paths[c.index];
             cr.approach = jr.approaches.first + local;
             cr.indexInJunction = i;
@@ -501,6 +522,48 @@ RightOfWay buildRightOfWay(const engine::RoadModel& model, const RuleSet& rules,
             out.phases.push_back(p);
         }
         jr.phases.count = static_cast<uint32_t>(phases.size());
+        for (uint32_t i = 0; i < w.n; ++i) out.paths[w.conn[i].index].protectedTurn = w.prot[i] != 0;
+        // THE WALK SIGNALS (ADR-0452): one for each of the road model's crosswalks at this junction that people reach;
+        // the connectors that cross it are the model's answer (crossersOf); it may walk in a phase where everything green
+        // across it is a turn into its arm from another arm, on a plain green
+        jr.walks.first = static_cast<uint32_t>(out.walks.size());
+        for (uint32_t lw = jn.crosswalks.first; lw < jn.crosswalks.end() && lw < roads.crosswalks.size(); ++lw) {
+            const uint32_t id = model.crosswalkOfLane(lw);
+            const engine::ModelCrosswalk* cw = model.crosswalk(id);
+            if (!cw || !cw->pavements) continue;
+            WalkSignalRules wc;
+            wc.junction = j;
+            wc.crosswalk = id;
+            wc.crossedBy.first = static_cast<uint32_t>(out.walkCrossers.size());
+            std::vector<uint8_t> crosses(w.n, 0);
+            std::vector<uint8_t> yields(w.n, 0);
+            for (const engine::CrosswalkCrosser& x : model.crossersOf(id)) {
+                if (x.path.index >= out.paths.size() || roads.paths[x.path.index].kind != engine::PathKind::Connector ||
+                    roads.paths[x.path.index].junction.index != j)
+                    continue;
+                const uint32_t k = out.paths[x.path.index].indexInJunction;
+                if (k >= w.n || crosses[k]) continue;
+                crosses[k] = 1;
+                out.walkCrossers.push_back(w.conn[k]);
+                yields[k] = !leavesAcross(model, w.conn[k], *cw) && w.mov[k] != Movement::Straight && !w.prot[k];
+            }
+            {
+                wc.crossedBy.count = static_cast<uint32_t>(out.walkCrossers.size()) - wc.crossedBy.first;
+                wc.phases.first = static_cast<uint32_t>(out.walkPhases.size());
+                for (uint32_t ph = 0; ph < phases.size(); ++ph) {
+                    bool walks = true;
+                    for (uint32_t k = 0; k < w.n && walks; ++k)
+                        if (crosses[k] && phases[ph].second[k] && (phases[ph].first || !yields[k])) walks = false;
+                    out.walkPhases.push_back(walks ? 1 : 0);
+                }
+                wc.phases.count = static_cast<uint32_t>(phases.size());
+                if (id >= out.walkOfCrosswalk.size()) out.walkOfCrosswalk.resize(model.crosswalks.size(), engine::kNoIndex);
+                out.walkOfCrosswalk[id] = static_cast<uint32_t>(out.walks.size());
+                out.walks.push_back(wc);
+            }
+        }
+        jr.walks.count = static_cast<uint32_t>(out.walks.size()) - jr.walks.first;
+        out.counts.walks += jr.walks.count;
         ++out.counts.junctionsWithLights;
         out.counts.phases += jr.phases.count;
         // PROTECTED TURNS (issue #284), each with the warrant that protected it and the facts it was asked of.

@@ -368,8 +368,11 @@ bool bodyInBox(const engine::LaneGraph& roads, const VehicleClasses& classes, co
         }
         for (uint32_t c = path.crossings.first; c < path.crossings.end() && c < roads.pathCrossings.size(); ++c) {
             const engine::CrossingPoint& x = roads.crossings[roads.pathCrossings[c].index];
+            // (a stretch running to the lane's end is the reach of a body at its stop line toward the crosswalk beyond it,
+            // on the connectors: a car standing at its line is not on it. ADR-0452: since the crosswalks are laid in the
+            // lane level, every arriving lane has one)
             if (x.otherSide == engine::OtherSide::Crosswalk && x.a == piece.path && piece.front > x.aFrom &&
-                piece.rear < x.aTo)
+                piece.rear < x.aTo && engine::strictlyBefore(x.aTo, path.length, engine::kSamePoint))
                 return true;
         }
     }

@@ -166,6 +166,11 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
                                    kNumberPassClearance + "\", which the thing step reads");
         thingStandOff_ = static_cast<Real>(standOff->value);
         passClearance_ = static_cast<Real>(clearance->value);
+        // (people on crosswalks, ADR-0452: the facts' own numbers, which buildRoadRules has checked are there)
+        const Number* cwStandOff = ruleSet.findNumber(kNumberCrosswalkStandOff);
+        const Number* cwDecel = ruleSet.findNumber(kNumberCrosswalkDecel);
+        crosswalkStandOff_ = cwStandOff ? static_cast<Real>(cwStandOff->value) : Real(0);
+        crosswalkDecel_ = cwDecel ? static_cast<Real>(cwDecel->value) : Real(0);
         hornAction_ = vocabulary.findAction(kActionHorn);
         passKind_ = vocabulary.findIntention(kIntentionPass);
         wayKind_ = vocabulary.findIntention(kIntentionWay);
@@ -193,7 +198,7 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
     if (roads_) {
         rightOfWay_ = buildRightOfWay(*model_, ruleSet_, roadRules_);
         // ... and every junction's traffic lights timed, with the far turns' places to wait inside checked (#261).
-        if (lightsRun_) timeSignalProgrammes(*roads_, roadRules_, lightTiming_, rightOfWay_);
+        if (lightsRun_) timeSignalProgrammes(*model_, roadRules_, lightTiming_, rightOfWay_);
         // ... and checked: no stage lets in together two movements whose paths meet unless the rule set allows it. A
         // breach is reported (signalProblems, and in the table's notes), not refused: the host decides (issue #284).
         signalProblems_ = lightsRun_ ? checkSignalProgrammes(*model_, ruleSet_, rightOfWay_) : std::vector<std::string>();
@@ -539,6 +544,7 @@ void Driving::plan() {
     if (junctionsOn_) announce();
     const uint32_t every = settings_.decideEveryTicks(step_);   // the decide interval in ticks of this tick's length
     planned_.clear();
+    if (thingsOn_) crosswalkPeople_.fill(things_, model_ ? model_->crosswalks.size() : 0);   // (ADR-0452)
     for (std::size_t i = 0; i < cars_.size(); ++i) {
         const Car& c = cars_[i];
         const Trip* t = trips_.get(tripOfRecord_[i]);
@@ -650,6 +656,10 @@ void Driving::plan() {
             }
             if (things.thing.found) {
                 ++thingCounts_.seen;
+                const bool inJunction = (things.thing.path.valid() && things.thing.path.index < roads_->paths.size() &&
+                                         roads_->paths[things.thing.path.index].kind == engine::PathKind::Connector) ||
+                                        roads_->paths[c.path.index].kind == engine::PathKind::Connector;
+                if (inJunction && c.speed < kStandingBelow) ++thingCounts_.atJunctions;
                 if (things.thing.moves < kThingStillBelow) {
                     if (!w.still) w.stillSince = tickCount_;
                     w.still = true;
@@ -668,6 +678,24 @@ void Driving::plan() {
                 w.waiting = false;
             }
             w.last = things.thing;
+            // PEOPLE ON CROSSWALKS (ADR-0452): the nearest crosswalk ahead my way crosses with someone on it, or about to
+            // step on it
+            {
+                const std::vector<engine::PathId> after(p.way.paths.size() > 1 ? p.way.paths.begin() + 1 : p.way.paths.end(),
+                                                        p.way.paths.end());
+                things.crosswalk = findCrosswalkAhead(*model_, c.path, c.along, after, lookAhead, c.speed, crosswalkDecel_,
+                                                      crosswalkPeople_);
+                things.crosswalkStandOff = crosswalkStandOff_;
+                uint32_t& was = crosswalkOf_[c.id];
+                if (things.crosswalk.found && things.crosswalk.crosswalk != was) {
+                    const engine::ModelCrosswalk* cw = model_->crosswalk(things.crosswalk.crosswalk);
+                    if (cw) ++thingCounts_.crosswalkGiveWays[static_cast<std::size_t>(cw->control)];
+                }
+                was = things.crosswalk.found ? things.crosswalk.crosswalk : engine::kNoIndex;
+                // (standing for someone who is only waiting at the kerb: both hesitate, until the person sees it stand)
+                if (things.crosswalk.found && !things.crosswalk.someoneOn && c.speed < kStandingBelow)
+                    ++thingCounts_.crosswalkStandOffs;
+            }
             things.standOff = thingStandOff_;
             things.myLength = cls.length;
             for (std::size_t k = 0; k < p.junctions.count; ++k) {

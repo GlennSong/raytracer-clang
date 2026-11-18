@@ -378,12 +378,26 @@ public:
     const std::vector<CarId>& hornsLastTick() const { return horns_; }
     struct ThingCounts {
         uint64_t seen = 0;         // decisions with something in the way
+        // ...of them, giving way in a junction: standing for something on the junction's connectors or at its line
+        // (people on a crosswalk a turning car crosses, ADR-0452)
+        uint64_t atJunctions = 0;
+        // TIMES A DRIVER BEGAN TO GIVE WAY AT A CROSSWALK to someone on it or about to step on it (ADR-0452), by the
+        // crosswalk's control (engine::CrosswalkControl: lights, signs, none)
+        std::array<uint64_t, engine::kCrosswalkControlCount> crosswalkGiveWays{};
+        // DECISIONS STANDING FOR SOMEONE ONLY WAITING AT A CROSSWALK'S KERB: both hesitating, until the person sees the
+        // car stand and goes (or grows bolder)
+        uint64_t crosswalkStandOffs = 0;
         uint64_t horns = 0;        // horns sounded
         uint64_t swerves = 0;      // times a driver began to go round something
         uint64_t anotherWays = 0;  // ways found round something that stood (and asked: wanted)
         uint64_t anotherWaysWanted = 0;
     };
     const ThingCounts& thingCounts() const { return thingCounts_; }
+    // THE CROSSWALK A DRIVER GAVE WAY AT in its last decision (the road model's id; kNoIndex: none), ADR-0452.
+    uint32_t crosswalkGivingWayAt(CarId car) const {
+        const std::map<CarId, uint32_t>::const_iterator it = crosswalkOf_.find(car);
+        return it == crosswalkOf_.end() ? engine::kNoIndex : it->second;
+    }
     bool thingStep() const { return thingsOn_; }
     Real thingStandOff() const { return thingStandOff_; }
     Real passClearance() const { return passClearance_; }
@@ -594,6 +608,9 @@ private:
     // from the records: a world with no things hashes as before.
     bool thingsOn_ = false;
     Real thingStandOff_ = 0, passClearance_ = 0;
+    Real crosswalkStandOff_ = 0, crosswalkDecel_ = 0;   // people on crosswalks (ADR-0452)
+    CrosswalkPeople crosswalkPeople_;                    // ...who is on or at each crosswalk this tick
+    std::map<CarId, uint32_t> crosswalkOf_;              // ...the crosswalk each driver last gave way at (counting)
     std::vector<RoadThing> things_;
     std::map<CarId, ThingAhead> seen_;
     struct ThingWatch {

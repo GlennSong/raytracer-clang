@@ -191,7 +191,7 @@ TEST_CASE(rules_example_loads_every_field) {
 }
 
 TEST_CASE(rules_units_convert_to_metres_and_seconds) {
-    CHECK(unitWords() == "s, m, ft, mph, km/h, m/s, m/s2, ft/s2, ratio");
+    CHECK(unitWords() == "s, m, ft, mph, km/h, m/s, m/s2, ft/s2, ft/s, ratio");   // (ft/s: MUTCD's walking speed, ADR-0452)
     double f = 0;
     CHECK(unitFactor("km/h", f));
     CHECK_APPROX(f * 36.0, 10.0, 1e-9);

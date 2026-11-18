@@ -223,6 +223,20 @@ bool loadPeopleCatalog(ScriptVM& vm, citysim::PeopleCatalog& out, std::string* e
         k.throwCap = numField(L, d, "throw_cap", k.throwCap);
     }
     lua_pop(L, 1);
+    // people.crossing (optional): crossing the road at a crosswalk (ADR-0452)
+    lua_getfield(L, pt, "crossing");
+    if (lua_istable(L, -1)) {
+        const int d = lua_gettop(L);
+        citysim::CrossingTuning& k = c.crossing;
+        k.walkSpeed = numField(L, d, "walk_speed", k.walkSpeed);
+        k.startUpLo = numField(L, d, "start_up_lo", k.startUpLo);
+        k.startUpHi = numField(L, d, "start_up_hi", k.startUpHi);
+        k.bolderPerSecond = numField(L, d, "bolder_per_second", k.bolderPerSecond);
+        k.bolderFloor = numField(L, d, "bolder_floor", k.bolderFloor);
+        k.jaywalkGap = numField(L, d, "jaywalk_gap", k.jaywalkGap);
+        k.jaywalkShare = numField(L, d, "jaywalk_share", k.jaywalkShare);
+    }
+    lua_pop(L, 1);
     lua_settop(L, base);
     if (const std::string wrong = c.check(); !wrong.empty()) return fail(err, "people.lua: " + wrong);
     out = std::move(c);

@@ -123,6 +123,11 @@ bool readLightTiming(const RuleSet& rules, LightTiming& out, std::string* why) {
         }
         *n.second = static_cast<Real>(found->value);
     }
+    // (the walks, where the rule set states them)
+    const Number* walk = rules.findNumber(kNumberWalkInterval);
+    const Number* walkSpeed = rules.findNumber(kNumberWalkClearanceSpeed);
+    out.walkInterval = walk ? static_cast<Real>(walk->value) : Real(0);
+    out.walkClearanceSpeed = walkSpeed ? static_cast<Real>(walkSpeed->value) : Real(0);
     return true;
 }
 
@@ -141,8 +146,9 @@ Real allRedSeconds(const LightTiming& t, Real clearDistance, Real speed) {
 
 // ---- At load ---------------------------------------------------------------------------------------------------------
 
-void timeSignalProgrammes(const engine::LaneGraph& roads, const RoadRules& roadRules, const LightTiming& t,
+void timeSignalProgrammes(const engine::RoadModel& model, const RoadRules& roadRules, const LightTiming& t,
                           RightOfWay& row) {
+    const engine::LaneGraph& roads = model.laneLevel;
     RightOfWayCounts& counts = row.counts;
     counts.junctionsTimed = 0;
     counts.shortestCycle = counts.longestCycle = 0;
@@ -184,11 +190,41 @@ void timeSignalProgrammes(const engine::LaneGraph& roads, const RoadRules& roadR
         // The greens share what the target cycle leaves, equally.
         const Real share = (t.cycle - lost) / static_cast<Real>(n);
         const Real green = std::clamp(share, t.greenShortest, std::max(t.greenShortest, t.greenLongest));
-        for (uint32_t ph = 0; ph < n; ++ph) {
-            Phase& p = row.phases[jr.phases.first + ph];
-            p.green = green;
-            jr.cycle += p.length();
+        for (uint32_t ph = 0; ph < n; ++ph) row.phases[jr.phases.first + ph].green = green;
+        // THE WALKS (ADR-0452): each crosswalk's clearance (its length at the clearance walking speed); a run of phases it
+        // walks in is long enough for the walk interval and the clearance before the run's last green ends, or that green
+        // is lengthened
+        for (uint32_t k = jr.walks.first; k < jr.walks.end() && k < row.walks.size(); ++k) {
+            WalkSignalRules& wc = row.walks[k];
+            const engine::ModelCrosswalk* cw = model.crosswalk(wc.crosswalk);
+            if (!t.walks() || !cw) {
+                wc.walk = wc.clearance = 0;
+                continue;
+            }
+            wc.walk = t.walkInterval;
+            wc.clearance = cw->length / t.walkClearanceSpeed;
+            const auto walks = [&](uint32_t ph) { return row.walkPhases[wc.phases.first + ph] != 0; };
+            bool all = true;
+            for (uint32_t ph = 0; ph < n; ++ph) all = all && walks(ph);
+            if (all) continue;   // (nothing ever crosses it: it always walks)
+            for (uint32_t ph = 0; ph < n; ++ph) {
+                if (!walks(ph) || walks((ph + n - 1) % n)) continue;   // a run's first phase
+                Real available = 0;
+                uint32_t last = ph;
+                for (uint32_t q = ph;; q = (q + 1) % n) {
+                    const Phase& p = row.phases[jr.phases.first + q];
+                    last = q;
+                    if (!walks((q + 1) % n)) {
+                        available += p.green;
+                        break;
+                    }
+                    available += p.length();
+                }
+                const Real needed = wc.walk + wc.clearance;
+                if (available < needed) row.phases[jr.phases.first + last].green += needed - available;
+            }
         }
+        for (uint32_t ph = 0; ph < n; ++ph) jr.cycle += row.phases[jr.phases.first + ph].length();
         if (wave) {
             // The phase the wave times: the first serving the approach that runs most nearly along the wave's line (either
             // way). Every junction then starts that phase as the wave passes, so two lights close together serve the
@@ -313,7 +349,60 @@ Lamp lampAt(const engine::LaneGraph& roads, const RightOfWay& row, engine::PathI
     return next == Light::RedMayTurn ? Lamp::RedMayTurn : Lamp::Red;
 }
 
-std::vector<std::string> lampWords() { return {"green", "yellow", "red", "red_may_turn"}; }
+Lamp lampShownAt(const engine::LaneGraph& roads, const RightOfWay& row, engine::PathId connector, double now) {
+    const Lamp l = lampAt(roads, row, connector, now);
+    if (l != Lamp::Green) return l;
+    const engine::Path& p = roads.paths[connector.index];
+    const JunctionRules& jr = row.junctions[p.junction.index];
+    const SignalNow s = signalAt(row, p.junction, now);
+    const bool arrowPhase = s.running && row.phases[jr.phases.first + s.phase].arrow &&
+                            lightIn(row, jr, s.phase, row.paths[connector.index].indexInJunction) == Light::Green;
+    return arrowPhase || row.paths[connector.index].protectedTurn ? Lamp::GreenArrow : l;
+}
+
+WalkSignal walkAtCrosswalk(const RightOfWay& row, uint32_t crosswalk, double now) {
+    return crosswalk < row.walkOfCrosswalk.size() ? walkAt(row, row.walkOfCrosswalk[crosswalk], now) : WalkSignal::None;
+}
+
+WalkSignal walkAt(const RightOfWay& row, uint32_t walk, double now) {
+    if (walk >= row.walks.size()) return WalkSignal::None;
+    const WalkSignalRules& wc = row.walks[walk];
+    if (!(wc.walk > 0) || wc.junction >= row.junctions.size()) return WalkSignal::None;
+    const JunctionRules& jr = row.junctions[wc.junction];
+    const SignalNow s = signalAt(row, engine::JunctionId(wc.junction), now);
+    if (!s.running) return WalkSignal::None;
+    const uint32_t n = jr.phases.count;
+    const auto walks = [&](uint32_t ph) { return row.walkPhases[wc.phases.first + ph] != 0; };
+    if (!walks(s.phase)) return WalkSignal::DontWalk;
+    // how long until its run's last green ends
+    const Phase& cur = row.phases[jr.phases.first + s.phase];
+    const Real into = s.stage == Stage::Green ? s.into : s.stage == Stage::Yellow ? cur.green + s.into : cur.green + cur.yellow + s.into;
+    Real endIn = 0;
+    uint32_t q = s.phase;
+    for (uint32_t step = 0; step < n; ++step, q = (q + 1) % n) {
+        const Phase& p = row.phases[jr.phases.first + q];
+        const Real before = q == s.phase ? into : Real(0);
+        if (!walks((q + 1) % n) || step + 1 == n) {
+            endIn += p.green - before;
+            break;
+        }
+        endIn += p.length() - before;
+    }
+    if (!(endIn > 0)) return WalkSignal::DontWalk;
+    return endIn > wc.clearance ? WalkSignal::Walk : WalkSignal::Flashing;
+}
+
+const char* walkWord(WalkSignal w) {
+    switch (w) {
+    case WalkSignal::None: return "none";
+    case WalkSignal::Walk: return "walk";
+    case WalkSignal::Flashing: return "flashing don't walk";
+    case WalkSignal::DontWalk: return "don't walk";
+    }
+    return "none";
+}
+
+std::vector<std::string> lampWords() { return {"green", "yellow", "red", "red_may_turn", "green_arrow"}; }
 
 const char* lampWord(Lamp l) {
     switch (l) {
@@ -322,6 +411,7 @@ const char* lampWord(Lamp l) {
     case Lamp::Yellow: return "yellow";
     case Lamp::Red: return "red";
     case Lamp::RedMayTurn: return "red_may_turn";
+    case Lamp::GreenArrow: return "green_arrow";
     }
     return "dark";
 }
@@ -332,6 +422,7 @@ uint32_t lampWordIndex(Lamp l) {
     case Lamp::Yellow: return 1;
     case Lamp::Red: return 2;
     case Lamp::RedMayTurn: return 3;
+    case Lamp::GreenArrow: return 4;
     case Lamp::Dark: break;
     }
     return kNoWord;
@@ -374,6 +465,37 @@ std::vector<std::string> checkSignalProgrammes(const engine::RoadModel& model, c
                                   kStageWords[s] + "): " + pathTurnWords(roads, row, a) + " and " +
                                   pathTurnWords(roads, row, b) + " both let traffic in, and their paths meet (crossing point " +
                                   std::to_string(c) + ")");
+                }
+            }
+            // THE WALKS (ADR-0452): while a crosswalk shows WALK or FLASHING DON'T WALK, everything that lets traffic in
+            // across it gives way to it: a turn into its arm from another arm, on a plain green (looked at near the start,
+            // the middle and the end of each stage). The paths across it are the road model's (crossersOf), asked afresh.
+            for (int s = 0; s < 3; ++s) {
+                if (!(stageLength[s] > 0)) continue;
+                for (const Real share : {Real(0.02), Real(0.5), Real(0.98)}) {
+                    const double at = phaseStart + stageFrom[s] + stageLength[s] * share;
+                    for (uint32_t k = jr.walks.first; k < jr.walks.end() && k < row.walks.size(); ++k) {
+                        const WalkSignal ws = walkAt(row, k, at);
+                        if (ws != WalkSignal::Walk && ws != WalkSignal::Flashing) continue;
+                        const WalkSignalRules& wc = row.walks[k];
+                        const engine::ModelCrosswalk* cw = model.crosswalk(wc.crosswalk);
+                        if (!cw) continue;
+                        for (const engine::CrosswalkCrosser& cx : model.crossersOf(wc.crosswalk)) {
+                            const engine::PathId x = cx.path;
+                            if (x.index >= roads.paths.size() || roads.paths[x.index].kind != engine::PathKind::Connector ||
+                                roads.paths[x.index].junction.index != j)
+                                continue;
+                            const Lamp shown = lampShownAt(roads, row, x, at);
+                            if (shown != Lamp::Green && shown != Lamp::Yellow && shown != Lamp::GreenArrow) continue;
+                            const bool yields = !leavesAcross(model, x, *cw) && row.paths[x.index].movement != Movement::Straight &&
+                                                shown != Lamp::GreenArrow;
+                            if (yields) continue;
+                            out.push_back("junction " + std::to_string(j) + ", phase " + std::to_string(ph) + ": the walk across " +
+                                          "crosswalk " + std::to_string(wc.crosswalk) + " shows " + walkWord(ws) + " while " +
+                                          pathTurnWords(roads, row, x) + " shows " + lampWord(shown) +
+                                          " across it and does not give way to it");
+                        }
+                    }
                 }
             }
             phaseStart += p.length();

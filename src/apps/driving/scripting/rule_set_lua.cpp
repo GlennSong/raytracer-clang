@@ -45,6 +45,8 @@ constexpr const char* kKeyEveryoneStops = "everyone_stops";
 constexpr const char* kKeyGivesWayOnGreen = "gives_way_on_green";
 constexpr const char* kKeyArrow = "arrow";
 constexpr const char* kKeyProtectedWhen = "protected_when";
+constexpr const char* kKeyArrowWhen = "arrow_when";
+constexpr const char* kKeyRoadClass = "road_class";
 constexpr const char* kKeyOpposingLanes = "opposing_lanes";
 constexpr const char* kKeyOpposingLimitAbove = "opposing_limit_above";
 constexpr const char* kKeyApproaches = "approaches";
@@ -155,7 +157,7 @@ protected:
                 lua_settop(L, top);
                 continue;
             }
-            checkKeys(wt, wPath, {kKeyName, kKeyOpposingLanes, kKeyOpposingLimitAbove, kKeyApproaches, kKeySource});
+            checkKeys(wt, wPath, {kKeyName, kKeyOpposingLanes, kKeyOpposingLimitAbove, kKeyApproaches, kKeyRoadClass, kKeySource});
             ArrowWarrant w;
             const int nm = pushField(wt, kKeyName);
             if (!stringAt(nm, w.name) || w.name.empty()) {
@@ -195,8 +197,13 @@ protected:
                 ok = false;
             }
             lua_settop(L, wt);
+            {
+                const int rc = pushField(wt, kKeyRoadClass);
+                if (!lua_isnil(L, rc) && !stringList(rc, wPath + "." + kKeyRoadClass, false, w.roadClasses)) ok = false;
+                lua_settop(L, wt);
+            }
             readSource(wt, wPath, w.source, w.hasSource);
-            if (w.opposingLanesAtLeast == 0 && w.approachesAtLeast == 0 && !w.asksOpposingLimit) {
+            if (w.opposingLanesAtLeast == 0 && w.approachesAtLeast == 0 && !w.asksOpposingLimit && w.roadClasses.empty()) {
                 fail(wPath, "asks nothing; expected at least one of " + std::string(kKeyOpposingLanes) + ", " +
                                 kKeyOpposingLimitAbove + ", " + kKeyApproaches);
                 ok = false;
@@ -303,7 +310,7 @@ protected:
         keysOf(list, names, odd);
         for (const std::string& o : odd) fail(path, "has the key " + o + ", which is not a name; expected control names");
         const std::vector<std::string> allowed = {kKeySettle,    kKeyEveryoneStops, kKeyGivesWayOnGreen, kKeyArrow,
-                                                  kKeyProtectedWhen, kKeyTurnOnRed, kKeyWhenDark};
+                                                  kKeyProtectedWhen, kKeyArrowWhen, kKeyTurnOnRed, kKeyWhenDark};
         std::vector<ControlKind> controls;
         for (const std::string& name : names) {
             const int mark = lua_gettop(L);
@@ -355,6 +362,11 @@ protected:
                              "` names no movement that would otherwise go on the plain green giving way");
                     ok = false;
                 }
+            }
+            {
+                const int v = pushField(ct, kKeyArrowWhen);
+                if (!lua_isnil(L, v) && !arrowWarrants(v, controlPath + "." + kKeyArrowWhen, k.arrowWhen)) ok = false;
+                lua_settop(L, mark + 1);
             }
             {
                 const int v = pushField(ct, kKeyTurnOnRed);

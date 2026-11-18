@@ -1301,8 +1301,11 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
             // sign -1: the approach lies at stations below the box; +1: above. sStop: the arm's stated stop line
             const double sBox = arm.boxEdge, sStop = arm.stopLine;
             const int sign = arm.spineIn ? -1 : +1;
-            const double sw0 = sBox + sign * kCrosswalkNear, sw1 = sBox + sign * kCrosswalkFar;
-            if (std::min(sw0, sw1) < kPaintRoadEndMargin || std::max(sw0, sw1) > Lr - kPaintRoadEndMargin) continue;   // the road ends in this box: no leg here
+            // THE ZEBRA IS THE MODEL'S CROSSWALK across this arm (road_model.h ModelCrosswalk, ADR-0452): its band. A marked
+            // arm with none stated is one whose road ends inside the box: no leg here.
+            const ModelCrosswalk* crosswalk = model.crosswalkAcross(ModelJunctionId(static_cast<uint32_t>(j)), static_cast<uint32_t>(a));
+            if (!crosswalk || !crosswalk->marked) continue;
+            const double sw0 = crosswalk->nearStation, sw1 = crosswalk->farStation;
             const double stMid = 0.5 * (sw0 + sw1); Vec2 P = pointAt(e.xy, e.s, stMid); Vec2 T = tangentAtStation(e.xy, e.s, stMid); Vec2 N = perp(T);
             // the paved width at the crosswalk: this road's lanes there
             struct LL { int li; double lat, w; }; std::vector<LL> ls;
@@ -1318,10 +1321,16 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
             auto zAt = [&](int li, const Vec2& q) { return H.deck(li, q) + 0.025; };
             // zebra: stripes along the road, 0.5 m on a 1 m pitch, across the paved width
             Vec2 A = pointAt(e.xy, e.s, sw0), B = pointAt(e.xy, e.s, sw1);
+            PaintedZebra zebra;
+            zebra.crosswalk = static_cast<uint32_t>(crosswalk - model.crosswalks.data());
             for (double lat = latMin + 0.55; lat + 0.25 <= latMax - 0.3; lat += 1.0) {
                 int li = laneAt(lat); Vec2 a2 = A + N * lat, b2 = B + N * lat;
                 strip(paintW, std::vector<Vec2>{a2, b2}, std::vector<double>{zAt(li, a2), zAt(li, b2)}, 0.25, 0, 0, kPaintWhite);
+                if (zebra.stripes == 0) zebra.from = P + N * lat;
+                zebra.to = P + N * lat;
+                ++zebra.stripes;
             }
+            plan.zebras.push_back(zebra);
             // the lanes arriving by this arm, as the model states them (road_model.h turnArmsOf), that the paint has laid
             std::vector<size_t> arriving;
             for (const TurnArmLane& tl : armLanes[j][a].arriving)

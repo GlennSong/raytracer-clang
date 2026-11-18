@@ -91,9 +91,76 @@ void noticeRoomToPass(const DriverView& v, NoticeScratch&, NoticedFact& out) {
     about(*v.things, out);
 }
 
+// (what a crosswalk fact is about: the path its stretch is on, and how far ahead it begins)
+void aboutCrosswalk(const ThingView& t, NoticedFact& out) {
+    out.aboutPath = t.crosswalk.path;
+    out.hasMetres = true;
+    out.metres = t.crosswalk.stopAt;
+}
+
+void noticeCrosswalkPerson(const DriverView& v, NoticeScratch&, NoticedFact& out) {
+    if (!v.things) return;
+    out.present = true;
+    out.yes = v.things->crosswalk.found;
+    if (out.yes) aboutCrosswalk(*v.things, out);
+}
+
+void noticeCrosswalkStop(const DriverView& v, NoticeScratch&, NoticedFact& out) {
+    if (!v.things || !v.things->crosswalk.found) return;
+    out.present = true;
+    out.number = std::max(Real(0), v.things->crosswalk.stopAt - v.things->crosswalkStandOff);
+    aboutCrosswalk(*v.things, out);
+}
+
 constexpr const char* kThingReaderName = "the things in a driver's way";
 
 }  // namespace
+
+void CrosswalkPeople::fill(const std::vector<RoadThing>& things, std::size_t crosswalks) {
+    on.assign(crosswalks, 0);
+    waiting.assign(crosswalks, 0);
+    for (const RoadThing& t : things) {
+        if (t.crosswalk >= crosswalks) continue;
+        (t.onCrosswalk ? on : waiting)[t.crosswalk] = 1;
+    }
+}
+
+CrosswalkAhead findCrosswalkAhead(const engine::RoadModel& model, engine::PathId path, Real along,
+                                  const std::vector<engine::PathId>& pathsAfter, Real reach, Real mySpeed, Real comfortDecel,
+                                  const CrosswalkPeople& people) {
+    CrosswalkAhead best;
+    const engine::LaneGraph& roads = model.laneLevel;
+    // (how far I need to stop braking no harder than that, for a person who is only waiting)
+    const Real stopping = comfortDecel > 0 ? mySpeed * mySpeed / (2 * comfortDecel) : Real(0);
+    Real start = -along;   // where the path begins, from my front
+    for (std::size_t k = 0; k <= pathsAfter.size(); ++k) {
+        const engine::PathId pid = k == 0 ? path : pathsAfter[k - 1];
+        if (!pid.valid() || pid.index >= roads.paths.size()) break;
+        if (start > reach) break;
+        const engine::Path& P = roads.paths[pid.index];
+        for (uint32_t i = P.crossings.first; i < P.crossings.end() && i < roads.pathCrossings.size(); ++i) {
+            const engine::CrossingPoint& x = roads.crossings[roads.pathCrossings[i].index];
+            if (x.otherSide != engine::OtherSide::Crosswalk || x.a != pid) continue;
+            const Real begins = start + x.aFrom;
+            if (begins < 0 || begins > reach) continue;   // already over it (committed), or beyond my look
+            if (best.found && begins >= best.stopAt) continue;
+            const uint32_t id = model.crosswalkOfLane(x.other);
+            const engine::ModelCrosswalk* cw = model.crosswalk(id);
+            if (!cw || id >= people.on.size()) continue;
+            const bool on = people.on[id] != 0;
+            const bool waiting = people.waiting[id] != 0 && cw->control != engine::CrosswalkControl::Lights &&
+                                 begins >= stopping;
+            if (!on && !waiting) continue;
+            best.found = true;
+            best.crosswalk = id;
+            best.stopAt = begins;
+            best.path = pid;
+            best.someoneOn = on;
+        }
+        start += P.length;
+    }
+    return best;
+}
 
 OnLine nearestOn(const engine::LaneGraph& roads, engine::PathId path, const engine::Vec2& p) {
     OnLine best;
@@ -203,6 +270,17 @@ bool registerThingFacts(FactRegistry& registry, std::vector<std::string>* proble
                          "there is room to go round the thing in my way, pass_clearance beside it");
     room.numbers.push_back(need(kNumberPassClearance, UnitFamily::Length));
     specs.push_back(room);
+    // PEOPLE ON CROSSWALKS (ADR-0452). Their numbers are read where the rule set states them (a rule set without them
+    // gives no crosswalk facts: nobody is seen at a crosswalk).
+    FactSpec person = spec(kFactCrosswalkPerson, FactKind::YesNo, UnitFamily::Ratio, noticeCrosswalkPerson,
+                           "someone is on a crosswalk ahead of me that my way crosses, or waits at its kerb plainly about to "
+                           "cross where no lights run it and I can still stop for them comfortably");
+    person.numbers.push_back(need(kNumberCrosswalkDecel, UnitFamily::Acceleration));
+    specs.push_back(person);
+    FactSpec cwStop = spec(kFactCrosswalkStop, FactKind::Place, UnitFamily::Length, noticeCrosswalkStop,
+                           "where I stop for the people at the crosswalk ahead: crosswalk_stand_off before my way reaches it");
+    cwStop.numbers.push_back(need(kNumberCrosswalkStandOff, UnitFamily::Length));
+    specs.push_back(cwStop);
     bool ok = true;
     for (FactSpec& s : specs) {
         std::string why;

@@ -981,6 +981,8 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
     }
     out.bendPieceBytes = G.bendPieces.size() * sizeof(BendPiece) + G.paths.size() * sizeof(Range);
 
+    // ---- the model's crosswalks laid in (ADR-0452), so the crossing finder finds the paths over each ---------------------
+    layLaneCrosswalks(model);
     // ---- where the paths' bodies could touch (measured), and where a far turn may wait inside -----------------------------
     CrossingOptions co;
     co.vehicles = opts.vehicles;

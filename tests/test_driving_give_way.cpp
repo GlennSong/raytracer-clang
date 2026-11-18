@@ -2139,6 +2139,233 @@ std::string labRules(const std::string& more = "") {
     return code.str() + "\n" + more;
 }
 
+// WALK SIGNALS (ADR-0452) on the lab's own rule set: every grid junction lit; each crosswalk's clearance is its crossing
+// length at MUTCD's 3.5 ft/s and its walk the 7 s interval; over a cycle it shows WALK, then FLASHING DON'T WALK for the
+// clearance, then DON'T WALK; and the safety check finds nothing.
+// THE TEST GRID WITH CROSSWALKS (ADR-0452): the crosswalks are stated on the grid's road model (TestRoadSpec::crosswalks),
+// and the connectors over each found by the road builder's crossing finder, as a level's are.
+TestRoads gridWithCrosswalks(engine::CrosswalkControl control = engine::CrosswalkControl::Lights) {
+    driving_test::TestRoadSpec spec;
+    spec.crosswalks = true;
+    spec.crosswalkControl = control;
+    return driving_test::gridRoads(3, 3, spec);
+}
+
+constexpr Real kWalkSample = 0.05;              // s between looks over a cycle
+constexpr Real kWalkTimingTolerance = 0.1;      // s: the flashing measured by sampling, within this of the clearance
+constexpr Real kFeetPerSecond = 0.3048;         // m/s in one ft/s
+TEST_CASE(walks_1_each_crosswalk_walks_then_flashes_for_its_clearance_then_stops) {
+    Sim s(gridWithCrosswalks(), labRules(), "signal");
+    CHECK(s.ok);
+    if (!s.ok) return;
+    const RightOfWay& row = s.d.rightOfWay();
+    std::printf("    [walks] %u crosswalks with signals at %u lit junctions (%zu stated on the model)\n", row.counts.walks,
+                row.counts.junctionsWithLights, s.t.model.crosswalks.size());
+    // one walk signal for each of the model's crosswalks, every one keyed on it
+    CHECK(row.counts.walks == s.t.model.crosswalks.size());
+    for (uint32_t id = 0; id < s.t.model.crosswalks.size(); ++id) CHECK(row.walkOfCrosswalk[id] < row.walks.size());
+    const std::vector<std::string> unsafe = checkSignalProgrammes(s.t.model, s.d.ruleSet(), row);
+    for (const std::string& u : unsafe) std::printf("    %s\n", u.c_str());
+    CHECK(unsafe.empty());
+    const engine::JunctionId j = s.t.junction(1, 1);
+    const JunctionRules& jr = row.junctions[j.index];
+    CHECK(jr.walks.count == 4u);
+    for (uint32_t k = jr.walks.first; k < jr.walks.end(); ++k) {
+        const WalkSignalRules& wc = row.walks[k];
+        const engine::ModelCrosswalk& cw = s.t.model.crosswalks[wc.crosswalk];
+        // crossed by the connectors arriving by its arm and those turning into it (the crossing finder's)
+        std::printf("    [walks] crosswalk %u across arm %u: crossed by %u connectors\n", wc.crosswalk, cw.arm, wc.crossedBy.count);
+        CHECK(wc.crossedBy.count > 0);
+        CHECK_APPROX(wc.clearance, cw.length / (3.5 * kFeetPerSecond), 1e-9);
+        CHECK_APPROX(wc.walk, 7.0, 1e-9);
+        // over one cycle: how long it shows each, and in what order it changes
+        Real walking = 0, flashing = 0, longestFlash = 0, flashRun = 0;
+        int walkToFlash = 0, flashToStop = 0, stopToWalk = 0, otherChange = 0;
+        WalkSignal was = walkAt(row, k, 0);
+        // (two cycles, so a run that wraps the cycle's start is seen whole; the totals below are halved)
+        for (Real at = kWalkSample; at <= 2 * jr.cycle; at += kWalkSample) {
+            const WalkSignal now = walkAt(row, k, at);
+            if (now == WalkSignal::Walk) walking += kWalkSample;
+            if (now == WalkSignal::Flashing) {
+                flashing += kWalkSample;
+                flashRun += kWalkSample;
+                longestFlash = std::max(longestFlash, flashRun);
+            } else {
+                flashRun = 0;
+            }
+            if (now != was) {
+                if (was == WalkSignal::Walk && now == WalkSignal::Flashing) ++walkToFlash;
+                else if (was == WalkSignal::Flashing && now == WalkSignal::DontWalk) ++flashToStop;
+                else if (was == WalkSignal::DontWalk && now == WalkSignal::Walk) ++stopToWalk;
+                else ++otherChange;
+            }
+            was = now;
+        }
+        walking *= 0.5;
+        flashing *= 0.5;
+        std::printf("    [walks] junction %u, crosswalk %u (%.1f m): walk %.1f s, flashing %.1f s (clearance %.2f s) a cycle of %.1f s\n",
+                    j.index, wc.crosswalk, cw.length, walking, flashing, wc.clearance, jr.cycle);
+        CHECK(walking + kWalkTimingTolerance >= wc.walk);
+        CHECK(std::fabs(longestFlash - wc.clearance) <= kWalkTimingTolerance);
+        CHECK(walkToFlash >= 2 && std::abs(walkToFlash - flashToStop) <= 1 && otherChange == 0);
+        CHECK(std::abs(stopToWalk - walkToFlash) <= 1);
+    }
+}
+
+// ...THE SAFETY CHECK LEARNS THE WALKS: a crosswalk let walk in a phase where something that does not give way to it is
+// green across it is caught.
+TEST_CASE(walks_2_the_safety_check_catches_a_walk_beside_a_movement_that_does_not_give_way) {
+    Sim s(gridWithCrosswalks(), labRules(), "signal");
+    CHECK(s.ok);
+    if (!s.ok) return;
+    RightOfWay row = s.d.rightOfWay();
+    const engine::JunctionId j = s.t.junction(1, 1);
+    const JunctionRules& jr = row.junctions[j.index];
+    bool broke = false;
+    for (uint32_t k = jr.walks.first; k < jr.walks.end() && !broke; ++k)
+        for (uint32_t ph = 0; ph < jr.phases.count && !broke; ++ph) {
+            if (row.walkPhases[row.walks[k].phases.first + ph]) continue;
+            row.walkPhases[row.walks[k].phases.first + ph] = 1;   // a walk where traffic crosses it
+            broke = true;
+        }
+    CHECK(broke);
+    const std::vector<std::string> unsafe = checkSignalProgrammes(s.t.model, s.d.ruleSet(), row);
+    std::printf("    [walks] with one walk let go beside crossing traffic: %zu breaches, the first: %s\n", unsafe.size(),
+                unsafe.empty() ? "none" : unsafe.front().c_str());
+    CHECK(!unsafe.empty());
+}
+
+// PEOPLE ON CROSSWALKS (ADR-0452) on the lab's own rule set, at an unmarked four-way of the grid with the model's
+// crosswalks: one car arrives from the west going straight on, across the crosswalk on the far side (across the arm
+// the eastward traffic leaves by). A person stands on that crosswalk at its far kerb end, out of the car's lane (so the
+// "something in the way" rule does not see them), or waits at that kerb end, about to cross. What the car does over
+// 25 s: how close its front came to the crosswalk's stretch on its connector, whether it came to rest, and whether its
+// front passed the crosswalk.
+struct CrosswalkRun {
+    Real closest = 1e9;     // the crosswalk's stretch start less the car's front, on its connector, least seen (m)
+    bool rested = false;    // came to rest on the connector or its lane before the crosswalk
+    bool passed = false;    // its front passed the start of the crosswalk's stretch
+    uint64_t giveWays = 0;  // Driving::ThingCounts::crosswalkGiveWays, all controls
+};
+CrosswalkRun crosswalkRun(const std::string& rules, engine::CrosswalkControl control, bool onIt, Real seconds = 25) {
+    CrosswalkRun out;
+    Sim s(gridWithCrosswalks(control), rules, "unmarked");
+    CHECK(s.ok);
+    if (!s.ok) return out;
+    const engine::PathId straight = turnAt(s, 1, 1, kEast, kEast);
+    // the crosswalk across the arm the car leaves by: the arm the westward traffic arrives by
+    const uint32_t cw = s.t.crosswalkAcross(1, 1, kWest);
+    CHECK(cw != engine::kNoIndex);
+    Real stretch = -1;
+    for (const engine::CrosswalkCrosser& x : s.t.model.crossersOf(cw))
+        if (x.path == straight) stretch = x.from;
+    CHECK(stretch >= 0);
+    // the person: at the kerb end on the far half of the road (the westward lanes' side), out of the car's lane
+    const engine::ModelCrosswalk& c = s.t.model.crosswalks[cw];
+    driving::RoadThing person;
+    person.id = 7001;
+    person.halfAcross = 0.3;
+    person.crosswalk = cw;
+    person.onCrosswalk = onIt;
+    const engine::Vec2 laneMiddle = s.t.model.laneLevel.pointAt(straight, stretch);
+    person.at = (c.ends[0] - laneMiddle).length() > (c.ends[1] - laneMiddle).length() ? c.ends[0] : c.ends[1];
+    person.at = person.at + (c.middle() - person.at) * (onIt ? Real(0.15) : Real(0));
+    s.d.setThingsOnRoad({person});
+    approach(s, 0, 1, 1, kEast, 40, kEast);
+    for (Real t = 0; t < seconds; t += kStep) {
+        s.step();
+        const driving::Car* car = s.d.car(CarId(0));
+        if (!car) break;
+        if (car->path == straight) {
+            out.closest = std::min(out.closest, stretch - car->along);
+            if (car->along > stretch) out.passed = true;
+        }
+        if (!out.passed && car->speed < 0.05 && (car->path == straight || car->path == s.t.laneArriving(1, 1, kEast, 0)))
+            out.rested = true;
+    }
+    for (const uint64_t g : s.d.thingCounts().crosswalkGiveWays) out.giveWays += g;
+    return out;
+}
+// The lab's rule set without the crosswalk rule: what each check below must catch.
+std::string labRulesWithoutCrosswalkRule() {
+    return labRules("for i = #rule_set.rules, 1, -1 do if rule_set.rules[i].name == 'give way to people crossing' then "
+                    "table.remove(rule_set.rules, i) end end\n");
+}
+
+TEST_CASE(crosswalks_1_a_car_stops_for_someone_on_a_crosswalk_with_no_lights) {
+    const CrosswalkRun with = crosswalkRun(labRules(), engine::CrosswalkControl::None, true);
+    const CrosswalkRun without = crosswalkRun(labRulesWithoutCrosswalkRule(), engine::CrosswalkControl::None, true);
+    std::printf("    [crosswalks] someone on it: closest %.2f m, rested %d, passed %d, gave way %llu | without the rule: passed %d\n",
+                with.closest, with.rested ? 1 : 0, with.passed ? 1 : 0, static_cast<unsigned long long>(with.giveWays),
+                without.passed ? 1 : 0);
+    CHECK(with.rested);
+    CHECK(!with.passed);
+    CHECK(with.closest >= 0);
+    CHECK(with.giveWays > 0);
+    CHECK(without.passed);   // (the check bites: without the rule the car drives over the crosswalk)
+}
+
+TEST_CASE(crosswalks_2_a_car_stops_for_someone_waiting_at_the_kerb_where_no_lights_run_it_and_not_where_they_do) {
+    const CrosswalkRun none = crosswalkRun(labRules(), engine::CrosswalkControl::None, false);
+    const CrosswalkRun lit = crosswalkRun(labRules(), engine::CrosswalkControl::Lights, false);
+    std::printf("    [crosswalks] someone waiting at the kerb: no lights: rested %d, passed %d | lights: passed %d\n",
+                none.rested ? 1 : 0, none.passed ? 1 : 0, lit.passed ? 1 : 0);
+    CHECK(none.rested);
+    CHECK(!none.passed);
+    CHECK(lit.passed);   // (a waiting person at a crosswalk under lights waits for WALK: the driver does not stop)
+}
+
+// PROTECTED THEN PERMISSIVE (ADR-0452): the lab's far turns get a leading green arrow; on it they go alone (nothing they
+// meet is green, the check says so), the head shows an arrow and the light fact says "green_arrow"; then they may go on
+// the plain green.
+TEST_CASE(arrows_1_far_turns_lead_on_an_arrow_and_cross_nothing_green) {
+    Sim s(driving_test::gridRoads(3, 3), labRules(), "signal");
+    CHECK(s.ok);
+    if (!s.ok) return;
+    const RightOfWay& row = s.d.rightOfWay();
+    const engine::LaneGraph& roads = s.t.model.laneLevel;
+    const engine::JunctionId j = s.t.junction(1, 1);
+    const JunctionRules& jr = row.junctions[j.index];
+    const engine::Junction& jn = roads.junctions[j.index];
+    std::printf("%s", describeProgramme(roads, row, j).c_str());
+    uint32_t arrowPhases = 0, arrowsShown = 0, meetingGreen = 0, alsoPermissive = 0;
+    double start = jr.offset;
+    for (uint32_t ph = 0; ph < jr.phases.count; ++ph) {
+        const Phase& p = row.phases[jr.phases.first + ph];
+        const double mid = start + p.green / 2;
+        if (p.arrow) {
+            ++arrowPhases;
+            for (uint32_t i = 0; i < jn.connectors.count; ++i) {
+                const engine::PathId c = roads.junctionConnectors[jn.connectors.first + i];
+                if (lampAt(roads, row, c, mid) != Lamp::Green) continue;
+                if (lampShownAt(roads, row, c, mid) == Lamp::GreenArrow) ++arrowsShown;
+                // nothing it meets is green
+                const engine::Path& P = roads.paths[c.index];
+                for (uint32_t x = P.crossings.first; x < P.crossings.end(); ++x) {
+                    const engine::CrossingPoint& cp = roads.crossings[roads.pathCrossings[x].index];
+                    if (cp.otherSide != engine::OtherSide::Path || cp.meeting == engine::Meeting::Split) continue;
+                    const engine::PathId o = cp.a == c ? cp.otherPath() : cp.a;
+                    if (row.paths[o.index].approach != row.paths[c.index].approach && lampAt(roads, row, o, mid) == Lamp::Green)
+                        ++meetingGreen;
+                }
+                // ...and it is green in the plain phase after it, giving way
+                if (lampAt(roads, row, c, start + p.length() + row.phases[jr.phases.first + (ph + 1) % jr.phases.count].green / 2) ==
+                    Lamp::Green)
+                    ++alsoPermissive;
+            }
+        }
+        start += p.length();
+    }
+    std::printf("    [arrows] %u arrow phases, %u arrows shown, %u green beside them where they meet, %u go on after\n",
+                arrowPhases, arrowsShown, meetingGreen, alsoPermissive);
+    CHECK(arrowPhases > 0);
+    CHECK(arrowsShown > 0);
+    CHECK(meetingGreen == 0u);
+    CHECK(alsoPermissive == arrowsShown);
+    const std::vector<std::string> words = lampWords();
+    CHECK(std::find(words.begin(), words.end(), std::string("green_arrow")) != words.end());
+}
+
 TEST_CASE(queue_35_ten_cars_at_a_green_empty_at_the_saturation_headway) {
     // THE LAB'S DRIVERS AT ONE LIGHT (the measurements row queue_headway, in seconds): ten ordinary cars queued at a red
     // on the lane arriving at the grid's middle junction from the west, each one standstill gap behind the next, all

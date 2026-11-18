@@ -316,6 +316,71 @@ struct ModelCrossing {
     Real clearance = kNotStated;
 };
 
+// ---- CROSSWALKS (ADR-0452) ----------------------------------------------------------------------------------------------
+// A CROSSWALK is a place where people on foot walk across one arm of a junction, from one kerb to the other. No road
+// file states one; the model STATES them once, in one function (stateCrosswalks in road_model.cpp, called by
+// plannedRoadModel, from stated facts only): one across every arm of a stated junction whose road the paint marks (its
+// class's `junction_markings`) or whose street has pavements, where its band lies on the road. The band is
+// lanes/deck_mesh.h kCrosswalkNear to kCrosswalkFar back from the arm's box edge (ModelArm::boxEdge), the one source of
+// those numbers. Everything about a crosswalk is read off its record: the paint draws its zebra there, the lane level
+// lays its outline (so the road build's own crossing finder finds the paths that cross it), the driving times its walk
+// signal and gives way to people on it, and the city's people on foot wait at its kerb end.
+//
+// HOW IT IS CONTROLLED, from the junction's stated control and the arm's stated signs: under the junction's LIGHTS
+// (a walk signal: WALK, FLASHING DON'T WALK, DON'T WALK); at the arm's SIGNS (a stop or give-way sign: traffic stops or
+// gives way at the line, then gives way to people crossing); or NONE (a marked crossing with no lights, or an unmarked
+// one: drivers give way to people on it and to people at its kerb plainly about to cross).
+enum class CrosswalkControl : uint8_t { Lights, Signs, None };
+constexpr uint8_t kCrosswalkControlCount = 3;
+struct ModelCrosswalk {
+    ModelJunctionId junction;
+    uint32_t arm = 0;                // the arm of that junction it lies across (its place in the stated list)
+    ModelStreetId street;            // that arm's street (none: the junction states none for the arm)
+    std::string road;                // the arm's road (the road-file edge)
+    // ITS BAND along the road's spine: the edge nearer the junction and the edge farther from it (stations)
+    Real nearStation = 0, farStation = 0;
+    // ITS TWO KERB ENDS, in plan, level with the band's middle: [0] on the kerb of the traffic running along the spine
+    // (+1), [1] on the kerb of the traffic running against it. The carriageway's edge, where a person steps off.
+    std::array<Vec2, 2> ends{};
+    Real length = 0;                 // kerb to kerb: the carriageway's width there (m)
+    bool spineIn = true;             // the arm's road's spine runs into the junction (as ModelArm::spineIn)
+    bool marked = false;             // the paint marks it (a zebra): the arm's road class marks its junction arms
+    bool pavements = false;          // its street has pavements, so people on foot reach it
+    CrosswalkControl control = CrosswalkControl::None;
+    // ITS RECORD IN THE LANE LEVEL (LaneGraph::crosswalks; built layer): where the paths that cross it are found
+    // (RoadModel::crossersOf). kNoIndex: none (a planned-only model, or a junction no lane path reaches).
+    uint32_t laneCrosswalk = kNoIndex;
+    // How wide the band is, along the road (m).
+    Real bandWidth() const { return std::fabs(farStation - nearStation); }
+    // The middle of its band, in plan, and the way across it from end 0 to end 1 (unit).
+    Vec2 middle() const { return (ends[0] + ends[1]) * Real(0.5); }
+    // WHERE A PERSON WAITS TO STEP OFF AT KERB END `end` (0 or 1): `back` metres behind it, on the pavement (away from
+    // the crosswalk's middle, across the road's line).
+    Vec2 kerbWait(int end, Real back) const {
+        const Vec2 e = ends[static_cast<std::size_t>(end == 0 ? 0 : 1)];
+        const Vec2 out = e - middle();
+        return out.length() > 0 ? e + out * (back / out.length()) : e;
+    }
+    Vec2 across() const {
+        const Vec2 d = ends[1] - ends[0];
+        return d.length() > 0 ? d * (Real(1) / d.length()) : Vec2(1, 0);
+    }
+};
+// ONE PATH THAT CROSSES A CROSSWALK, as the lane level found it (its crossing points with the crosswalk): the path,
+// the stretch of it whose body could be on the crosswalk (metres along it), and the stretch of the walk across that
+// it covers (metres from kerb end 0).
+struct CrosswalkCrosser {
+    PathId path;
+    Real from = 0, to = 0;
+    Real acrossFrom = 0, acrossTo = 0;
+};
+// ONE CROSSING ON A WALK ROUND A JUNCTION: the crosswalk crossed, and the kerb end a person steps off from (0 or 1).
+struct WalkCrossing {
+    uint32_t crosswalk = kNoIndex;
+    int fromEnd = 0;
+};
+const char* crosswalkControlWord(CrosswalkControl c);
+
 struct RoadModel {
     std::string name;
     bool built = false;                   // the built layer is here (assembleRoadModel); false: the planned layer alone
@@ -345,6 +410,9 @@ struct RoadModel {
     // THE KERB PARKING SPACES (ADR-0439): each run of spaces along one kerb of one street, by street, the +1 kerb then
     // the -1 kerb, then along the spine. The planned layer's (plannedRoadModel). Read through the questions below.
     std::vector<ModelKerbRun> kerbRuns;
+    // THE CROSSWALKS (ADR-0452): junction by junction, each junction's in its arms' order. Stated by the planned layer
+    // (see ModelCrosswalk); read through the questions below.
+    std::vector<ModelCrosswalk> crosswalks;
     std::vector<std::string> notStated;  // the parts of the design nothing states yet, in words
     std::vector<std::string> problems;    // where the build does not match what was stated, each with its place
     // the road file states that its junctions' arms are listed in their ring ("arms_in_ring", ADR-0427): the readers of the
@@ -510,7 +578,40 @@ struct RoadModel {
     // made from stated facts; the walker's real path comes from the street map when the walk is planned. Ties: by
     // street, kerb and index.
     std::vector<KerbSpaceNear> kerbSpacesNear(const RoadFrontage& f, Real reach, std::size_t most) const;
+
+    // ---- CROSSWALKS (ADR-0452) ------------------------------------------------------------------------------------------
+    // THE CROSSWALK ACROSS AN ARM of a junction (null: none stated there).
+    const ModelCrosswalk* crosswalkAcross(ModelJunctionId junction, uint32_t arm) const;
+    // ONE BY ITS ID (null: none).
+    const ModelCrosswalk* crosswalk(uint32_t id) const { return id < crosswalks.size() ? &crosswalks[id] : nullptr; }
+    // THE CROSSWALK A RECORD OF THE LANE LEVEL IS (kNoIndex: none; a lane table made by hand states it).
+    uint32_t crosswalkOfLane(uint32_t laneCrosswalk) const {
+        return laneCrosswalk < laneLevel.crosswalks.size() ? laneLevel.crosswalks[laneCrosswalk].modelCrosswalk : kNoIndex;
+    }
+    // THE PATHS THAT CROSS A CROSSWALK (built layer), in the lane level's order of its crossing points: what the road
+    // build's crossing finder found for its outline. Empty: none, or a planned-only model.
+    std::vector<CrosswalkCrosser> crossersOf(uint32_t crosswalk) const;
+    // THE CROSSWALKS A WALK ROUND A JUNCTION CROSSES, in the order crossed, by a person who arrives by arm `armIn` on
+    // the pavement on the kerb side of that arm's arriving traffic and leaves by arm `armOut` on the kerb side of its
+    // leaving traffic -- the way the street map's people walk (rightOf their way: the kerb side). They go round the
+    // junction's corners in its stated ring (ADR-0427) the way that crosses fewer arms (a tie: toward the arriving
+    // traffic's kerb), crossing each arm between at its crosswalk; an arm with no crosswalk where people reach it is
+    // passed over. The kerb side is the one statement of it (lane_turns.h kerbSideCounterClockwise). Empty: a turn round
+    // the corner, an arm out of range, or a junction with no crosswalk on the way.
+    std::vector<WalkCrossing> crosswalksOnWalk(ModelJunctionId junction, int armIn, int armOut) const;
 };
+
+// STATES A CROSSWALK on the model by hand (a test's lane table, which has no road file): refused (false, why in `err`)
+// when it names no junction of the model or an arm the junction does not list. Appended to `crosswalks`; returns its id
+// in `id`. (A level's crosswalks are stated by plannedRoadModel, never by this.)
+bool stateCrosswalk(RoadModel& m, const ModelCrosswalk& c, uint32_t* id = nullptr, std::string* err = nullptr);
+// THE CROSSWALKS LAID INTO THE LANE LEVEL (ADR-0452): for every crosswalk of a junction of the lane level `g` (by
+// Junction::modelJunction), its outline -- the band from its near to its far edge, kerb to kerb -- as a lane-level
+// Crosswalk record naming it (Crosswalk::modelCrosswalk), filed under its junction, and the model's record told its
+// place (laneCrosswalk). The road build's crossing finder then finds the paths that cross each (lanes/lane_graph_crossings.h
+// findCrossingPoints). THE ONE PLACE a crosswalk becomes a lane-level record: buildLaneLevel calls it, and a test's lane
+// table made by hand calls it the same way. Replaces any crosswalks the lane level held.
+void layLaneCrosswalks(RoadModel& m);
 
 // Field for field, exactly (the saved bytes of each compared).
 bool operator==(const RoadModel& a, const RoadModel& b);
@@ -608,7 +709,8 @@ KerbSpaceCounts kerbSpaceCounts(const RoadModel& m);
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 13;   // 13: the kerb parking runs; the lane level holds no car spaces (LGRF 14, ADR-0439)
+constexpr uint32_t kRoadModelFormat = 14;   // 14: the crosswalks; the lane level's name the model's (LGRF 15, ADR-0452)
+                                            // 13:the kerb parking runs; the lane level holds no car spaces (LGRF 14, ADR-0439)
                                             // 12: the lane level holds no through partner (LGRF 13, ADR-0438)
                                             // 11: the regulations stated on streets; the lane level holds none (LGRF 12, ADR-0437)
                                             // 10: the lane level holds no copy of the model's facts (LGRF 11, ADR-0436)

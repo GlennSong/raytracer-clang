@@ -356,6 +356,63 @@ void CityNearSystem::onStart(engine::FrameContext& ctx) {
                           return out;
                       },
                       kOwner);
+    // AT THE CROSSWALKS (ADR-0452): people waiting at a kerb end or crossing, with the crosswalk (the road model's), its
+    // control and its walk signal; drivers giving way at a crosswalk; cars on a green arrow; the counts
+    ctx.commands->add("crosswalks?", "crosswalks?",
+                      "People at the road model's crosswalks (ADR-0452): each one waiting at a kerb end or crossing, where, "
+                      "which crosswalk, its control and walk signal; each driver giving way at one; each car on a connector "
+                      "whose head shows a green arrow; and the counts so far.",
+                      [this](const engine::ControlCommand&) -> std::string {
+                          if (!world_) return "err no world yet";
+                          const citysim::CitySim& sim = city_.sim();
+                          const driving::Driving* d = sim.drivingV2();
+                          const engine::RoadModel* m = d ? d->model() : nullptr;
+                          if (!d || !m || !d->roads()) return "err no driving";
+                          std::string out = "ok";
+                          char buf[256];
+                          for (std::size_t i = 0; i < sim.agents().size(); ++i) {
+                              const citysim::Agent& a = sim.agents()[i];
+                              if (a.mode == citysim::Agent::Mode::Driver || !a.moving || a.crosswalkAt < 0) continue;
+                              const engine::ModelCrosswalk* c = m->crosswalk(static_cast<uint32_t>(a.crosswalkAt));
+                              if (!c) continue;
+                              const driving::WalkSignal ws = driving::walkAtCrosswalk(d->rightOfWay(), static_cast<uint32_t>(a.crosswalkAt),
+                                                                                      d->clockSeconds());
+                              std::snprintf(buf, sizeof buf, " | walker %zu %s crosswalk %d at %.1f %.1f (%s, %s, junction %s)", i,
+                                            a.onCrosswalk ? "on" : "waiting at", a.crosswalkAt, a.pos.x, a.pos.y,
+                                            engine::crosswalkControlWord(c->control), driving::walkWord(ws),
+                                            m->junctions[c->junction.index].id.c_str());
+                              out += buf;
+                          }
+                          for (const driving::Car& c : d->cars()) {
+                              if (!c.driven) continue;
+                              const driving::CarPose pose = driving::carPose(*d->roads(), d->vehicleClasses(), d->ruleSet(), c);
+                              const uint32_t cw = d->crosswalkGivingWayAt(c.id);
+                              if (cw != engine::kNoIndex) {
+                                  std::snprintf(buf, sizeof buf, " | car %u gives way at crosswalk %u, at %.1f %.1f, %.2f m/s",
+                                                c.id.index, cw, pose.front.x, pose.front.z, c.speed);
+                                  out += buf;
+                              }
+                              if (d->roads()->paths[c.path.index].kind == engine::PathKind::Connector &&
+                                  driving::lampShownAt(*d->roads(), d->rightOfWay(), c.path, d->clockSeconds()) == driving::Lamp::GreenArrow) {
+                                  std::snprintf(buf, sizeof buf, " | car %u turns on a green arrow, at %.1f %.1f, %.2f m/s", c.id.index,
+                                                pose.front.x, pose.front.z, c.speed);
+                                  out += buf;
+                              }
+                          }
+                          const citysim::CitySim::WalkStats& ws = sim.walkStats();
+                          const driving::Driving::ThingCounts& tc = d->thingCounts();
+                          std::snprintf(buf, sizeof buf, " | crossings %llu on walk, %llu at signs, %llu marked, %llu unmarked, %llu against "
+                                        "the lights; drivers gave way %llu, %llu, %llu",
+                                        static_cast<unsigned long long>(ws.crossings[0]), static_cast<unsigned long long>(ws.crossings[1]),
+                                        static_cast<unsigned long long>(ws.crossings[2]), static_cast<unsigned long long>(ws.crossings[3]),
+                                        static_cast<unsigned long long>(ws.crossings[4]),
+                                        static_cast<unsigned long long>(tc.crosswalkGiveWays[0]),
+                                        static_cast<unsigned long long>(tc.crosswalkGiveWays[1]),
+                                        static_cast<unsigned long long>(tc.crosswalkGiveWays[2]));
+                          out += buf;
+                          return out;
+                      },
+                      kOwner);
     ctx.commands->add("near?", "near?",
                       "The near tier's physics cars (ADR-0447): each one's car number, where it is, its speed, its front's "
                       "offset from its lane's centre, and the switches, poses written and time spent so far.",

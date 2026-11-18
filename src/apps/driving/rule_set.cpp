@@ -30,6 +30,7 @@ const UnitRow kUnits[] = {
     {"m/s", kIdentity, UnitFamily::Speed},
     {"m/s2", kIdentity, UnitFamily::Acceleration},
     {"ft/s2", kMetresPerFoot, UnitFamily::Acceleration},
+    {"ft/s", kMetresPerFoot, UnitFamily::Speed},
     {"ratio", kIdentity, UnitFamily::Ratio},
 };
 
@@ -155,6 +156,8 @@ bool warrantHolds(const ArrowWarrant& w, const ArrowFacts& f) {
     if (w.opposingLanesAtLeast > 0 && f.opposingLanes < w.opposingLanesAtLeast) return false;
     if (w.asksOpposingLimit && !(f.opposingLimit > w.opposingLimitAbove)) return false;
     if (w.approachesAtLeast > 0 && f.approaches < w.approachesAtLeast) return false;
+    if (!w.roadClasses.empty() && std::find(w.roadClasses.begin(), w.roadClasses.end(), f.roadClass) == w.roadClasses.end())
+        return false;
     return true;
 }
 

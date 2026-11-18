@@ -172,7 +172,10 @@ constexpr double kLongestStand = 100.0;
 // Retaken for ADR-0451 (drivers stop for what is in their way): the lab's look-ahead now reaches a car's length and a
 // stand-off past the next junction's box, and walkers on the road are seen; the same two failures, queues 3.14 -> 3.26 s a
 // car. (Before: 0x03f9fd2cd2940971, ADR-0450.)
-constexpr uint64_t kFiveMinuteStateHash = 0x480f608a3a35465cull;
+// Retaken for ADR-0452 (crosswalks in the road model, laid in the lane level: their crossing points move each
+// connector's waiting gaps; far turns lead on a green arrow; walk signals lengthen some greens): the same two failures,
+// queues 3.26 -> 2.40 s a car, and cars over kLongestStand. (Before: 0x480f608a3a35465c, ADR-0451.)
+constexpr uint64_t kFiveMinuteStateHash = 0x55109fe9a8e247b1ull;
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's

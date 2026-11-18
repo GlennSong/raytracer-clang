@@ -124,6 +124,13 @@ struct TestRoadSpec {
     std::vector<driving::TagSize> crossingBodies;
     // THE VEHICLE TAGS every path is open to (the graph's vehicle tag names, in this order). Default: the test tag alone.
     std::vector<std::string> vehicleTags{kTestVehicleTag};
+    // A GRID'S CROSSWALKS (ADR-0452): stated on the model at every arm of every junction (engine::stateCrosswalk), as a
+    // level's road model states them: across the arm's road, the band kCrosswalkNear to kCrosswalkFar in from the box's
+    // edge (the grid's lanes end at the box, so its connectors cross the band), kerb to kerb across the road, with
+    // pavements, of control `crosswalkControl`; then laid into the lane level by the model's own function
+    // (engine::layLaneCrosswalks), so the road builder's crossing finder finds the connectors over each.
+    bool crosswalks = false;
+    engine::CrosswalkControl crosswalkControl = engine::CrosswalkControl::None;
     TestRoadSpec() {
         line.crossFromOffside = true;
         line.crossFromKerbside = true;
@@ -139,6 +146,9 @@ struct TestRoads {
 
     // ---- grid names (an unknown junction or a road off the grid's edge: not valid) ----
     engine::JunctionId junction(uint32_t row, uint32_t col) const;
+    // THE CROSSWALK across the arm by which traffic heading `h` arrives at junction (row, col) (kNoIndex: none stated):
+    // the model's id (RoadModel::crosswalkAcross).
+    uint32_t crosswalkAcross(uint32_t row, uint32_t col, Heading h) const;
     // The section of the road leaving junction (row, col) heading `h`.
     engine::SectionId sectionLeaving(uint32_t row, uint32_t col, Heading h) const;
     // Lane k of it (0 = offside-most).

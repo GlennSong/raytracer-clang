@@ -68,8 +68,23 @@ rule_set = {
                  -- cycle and the green among the factors (section 4.3.6) and says multi-leg geometry may need its own
                  -- phasing (4.3.4, split phasing); the number five is a [~] judgement for the lab, the junction count
                  -- standing in for the green the turn would get.
+                 -- PROTECTED ONLY on a boulevard's approaches (ADR-0452): the widest roads the planner builds, where an
+                 -- oncoming stream is several lanes of the city's fastest traffic.
+                 { name = "arriving by a boulevard", road_class = { "boulevard" },
+                   source = "[~] Glenn's default (2026-11-17): protected-only on the big roads, after FHWA Traffic Signal Timing Manual 2008 section 4.3.6 (opposing lanes and speed among the factors)" },
                  { name = "five or more approaches", approaches = 5,
                    source = "[~] after FHWA Traffic Signal Timing Manual 2008 (FHWA-HOP-08-024), sections 4.3.4 and 4.3.6; measured in the lab: a far turn at six-approach junction 21 gave way through two and three 7 s greens and stood 176-200 s (issue #284)" },
+               },
+               -- PROTECTED THEN PERMISSIVE (ADR-0452, Glenn 2026-11-17: "what about protected turns"): a far turn crossing
+               -- oncoming traffic gets a leading green arrow, going alone, then may go on the plain green giving way.
+               -- WHERE (`arrow_when`): where it crosses at least one oncoming lane -- every far turn that has anything to
+               -- give way to. Traffic engineers choose this per approach from counts, speeds and sight lines (FHWA
+               -- Traffic Signal Timing Manual 2008, section 4.3.6, as above); the lab has no counts, so the road's facts
+               -- alone, and a narrower warrant here is a data change.
+               arrow = { "far_turn" },
+               arrow_when = {
+                 { name = "an oncoming lane to cross", opposing_lanes = 1,
+                   source = "[~] Glenn's default (2026-11-17): protected then permissive wherever a far turn gives way, after FHWA Traffic Signal Timing Manual 2008 (FHWA-HOP-08-024) section 4.3.6, which lists the factors without a single rule" },
                },
                turn_on_red = { movement = "near_turn", after = "full_stop" }, when_dark = "all_way_stop" },
     -- AN ALL-WAY STOP: everyone stops at the line; then whoever got there first goes; of two arriving together, the one
@@ -226,6 +241,16 @@ rule_set = {
     signal_wave_speed = { 30, unit = "mph", source = "[~] a guess to tune: a little under the arterials' limit" },
     signal_wave_east = { 1.0, unit = "ratio", source = "[~] a guess to tune: the wave runs east" },
     signal_wave_north = { 0.0, unit = "ratio", source = "[~] a guess to tune" },
+    -- WALK SIGNALS (ADR-0452). The WALK interval: MUTCD 2009 section 4E.06 (paragraph 11): the walk interval should be at
+    -- least 7 seconds long, so that pedestrians have time to leave the kerb before the clearance begins (it may be 4 s
+    -- where few people walk; the lab takes the usual 7). The CLEARANCE (flashing don't walk) is the distance from the kerb
+    -- to the far side of the travelled way, walked at 3.5 ft/s (section 4E.06, paragraph 7); it ends as the parallel green
+    -- ends, so the yellow and all-red after it are the buffer before conflicting traffic moves (paragraph 15: a buffer of
+    -- at least 3 s).
+    walk_interval = { 7.0, unit = "s",
+      source = "MUTCD 2009 (FHWA) section 4E.06, paragraph 11: a walk interval of at least 7 s (read from memory and secondary summaries; the text itself unread)" },
+    walk_clearance_speed = { 3.5, unit = "ft/s",
+      source = "MUTCD 2009 (FHWA) section 4E.06, paragraph 7: the pedestrian clearance time is the distance kerb to far side of the travelled way at 3.5 ft/s (read from memory and secondary summaries; the text itself unread)" },
 
     -- WHAT IS IN A DRIVER'S WAY (ADR-0451; design section 6): anything ahead along the way it means to go -- a person,
     -- the player, a crate, a car nobody here drives. A driver stops this far short of it, measured to its near side.
@@ -236,6 +261,14 @@ rule_set = {
       source = "[~] a judgement: half a metre past a person or a box at a crawl; UK Highway Code rule 163 asks for at least 1.5 m past a cyclist at speed (from memory, unverified), which a crawl round a standing thing does not need" },
     -- The horn: sounded at a thing standing this near in front of a stopped car.
     horn_within = { 10.0, unit = "m", source = "[~] a judgement: about two car lengths, close enough to be meant" },
+    -- PEOPLE ON CROSSWALKS (ADR-0452): a driver giving way to people on a crosswalk stops this far short of where its way
+    -- reaches the crosswalk ...
+    crosswalk_stand_off = { 1.0, unit = "m",
+      source = "[~] a judgement: stopped close behind the band, as drivers do at a zebra; nothing published sets it" },
+    -- ... and stops for someone only WAITING at the kerb only if it can, braking no harder than this (someone already on
+    -- the crossing is stopped for however hard that takes). The same comfortable braking the yellow is timed with.
+    crosswalk_deceleration = { 10.0, unit = "ft/s2",
+      source = "ITE kinematic change interval's deceleration (10 ft/s2), as signal_deceleration above: a comfortable stop; [~] its use here a judgement" },
   },
 
   -- THE LIMIT ON A ROAD WITH NONE POSTED, by the road's class (the lane graph's road classes). The control plan posts
@@ -302,6 +335,18 @@ rule_set = {
     -- everyone (CVC 21453 (b), section unverified).
     { name = "turn on red",       when = { all = { { "light", "is", "red_may_turn" }, { "not", "stopped_at_line" } } },
       give = { stop_at = "next_line" } },
+    -- PEOPLE ON CROSSWALKS (ADR-0452): give way to anyone on a crosswalk my way crosses, and to anyone at its kerb plainly
+    -- about to cross where no lights run it (and I can still stop comfortably), stopping before it. At lights the people
+    -- cross on their WALK and a turning car on its green meets them here; at a stop sign the car stops at its line first
+    -- (the rule above), then this holds it while someone is on or stepping onto the crosswalk. Sources: the UK's Zebra,
+    -- Pelican and Puffin Pedestrian Crossings Regulations 1997, regulation 25 (a pedestrian on the carriageway within a
+    -- zebra crossing has precedence over any vehicle) and Highway Code rules 195 (be ready to stop for people waiting at
+    -- a zebra; you MUST give way once one has moved onto it) and H2 (2022: at a junction, give way to people crossing or
+    -- waiting to cross the road you turn into or out of); Japan's Road Traffic Act (Act No. 105 of 1960), article 38
+    -- paragraph 1 (approaching a crosswalk, a driver keeps to a speed at which it can stop before it, and stops before it
+    -- for a pedestrian crossing or about to cross, so as not to obstruct them). Numbers and wording from memory,
+    -- unverified against the texts.
+    { name = "give way to people crossing", when = "person_at_crosswalk", give = { stop_at = "crosswalk_stop" } },
     -- WHAT IS IN MY WAY (ADR-0451; design section 6), whatever it is. Follow it like a car ahead and stop short of it ...
     { name = "something in the way", when = "thing_ahead", give = { stop_at = "thing_stop" } },
     -- ... sound the horn at it, once, standing close behind it (Glenn: "it would be funny to also get a horn sound") ...

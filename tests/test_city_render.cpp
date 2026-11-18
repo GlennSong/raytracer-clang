@@ -535,29 +535,13 @@ TEST_CASE(signal_poles_stand_outside_the_carriageway) {
     }
 }
 
-TEST_CASE(crosswalks_sit_at_junction_mouths) {
+// (Where crosswalks ARE is the road model's since ADR-0452, ModelCrosswalk, tested in test_road_model.cpp; the render
+// system's own guessed "crosswalk centres", which nothing read, are gone.)
+TEST_CASE(crosswalks_are_painted_into_the_road_not_drawn_as_decals) {
     World world;
     testmap::addRoads(world, crossRoads());   // 4-arm cross, width 10
     CityRenderSystem city(cityParams());
     CHECK(city.build(world, nullptr));
-
-    const NavGraph& nav = city.nav();
-    // One crosswalk band per approach into the junction (4 arms here).
-    const auto& centers = city.crosswalkCenters();
-    CHECK(centers.size() == 4u);
-
-    Real halfW = 10.0 * 0.5;
-    for (const Vec2& c : centers) {
-        // Each band sits just outside the junction node, across the road mouth —
-        // beyond the carriageway edge but not far down the arm.
-        double dNode = 1e9;
-        for (const Vec2& n : nav.nodes) {
-            double dx = c.x - n.x, dy = c.y - n.y;
-            dNode = std::min(dNode, std::sqrt(dx * dx + dy * dy));
-        }
-        CHECK(dNode > halfW * 0.8);    // outside the intersection box...
-        CHECK(dNode < halfW + 6.0);    // ...but right at the mouth, not mid-block
-    }
     // The bars are painted into the ROAD TEXTURE now (ADR-0062), not a decal group:
     // the group still exists (a stable anchor) but carries no overlay instances.
     InstanceGroup* g = world.get<InstanceGroup>(city.crosswalkGroup());

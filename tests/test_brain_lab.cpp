@@ -492,8 +492,9 @@ TEST_CASE(level_brain_lab_one_resident_makes_the_trip) {
     }
     CHECK(lit >= 2);
     CHECK(stopLines >= 1);
-    // (two of the lights were red when it reached them: checkDrove held where it stood at each)
-    CHECK(redLightStands(r.watch) == 2);
+    // (three of the lights were red when it reached them: checkDrove held where it stood at each. 2 -> 3 at ADR-0452:
+    // drivers give way to people at crosswalks now, and the drive's timing moved so it met a third red, at path 875)
+    CHECK(redLightStands(r.watch) == 3);
     // WHERE THE CAR ENDS: in the space that was held, exactly where a car in it stands and faces, off the driving's
     // road, and nobody holds a space any more. It is the nearest space to work on foot.
     CHECK(b.carSpaceName() == "s182 against 3");

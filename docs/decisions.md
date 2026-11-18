@@ -21813,3 +21813,94 @@ Words: a **thing** is anything on the road that is not a car the driving drives.
 - level_brain_crowd: most on the road 79 -> 83; trips 269 -> 265; parked 225 -> 216; walks blocked 13 -> 17; arrivals 451 -> 444; plans with no way 11 -> 15; hash 0x1d2715902b8559a2 -> 0x0c538d7f7a9fb3fa; rings 0.
 - level_traffic_lab_v2_drives: hash 0x03f9fd2cd2940971 -> 0x480f608a3a35465c. The same two known failures: queues empty at 3.26 s a car (was 3.14), and cars over kLongestStand.
 - Unchanged and passing: brain_tests 23/23, driving_tests 194/194, lanes_tests 131/131, level_brain_lab 11/11, first_cars 1/1, river_town 1/1, run_tests trip_plan 11, goal 6, _lua 25, parking 5.
+
+## ADR-0452 — Crosswalks are stated in the road model, once; walk signals, green arrows, and giving way to people at crosswalks with and without lights (sitting 4b)
+**Status:** Provisional · **Date:** 2026-11-17
+
+What it does: the road model now says where every crosswalk is (one function, from facts the road file already states), and everything that needs a crosswalk reads that record: the road paint, the lane level (so the road build's own crossing finder knows which paths run over each), the traffic lights' walk signals, drivers giving way to people, and the city's people on foot waiting at the kerb. On top of it: far turns get a green arrow, people cross on WALK, drivers give way to people on crosswalks and at their kerbs where no lights run them, and people judge the gap in traffic there themselves. Glenn: "We just consolidated all roads to one model. Making another new one is unacceptable." The first draft of this sitting worked crosswalks out inside the driving library and the sim; that is gone.
+
+Words:
+- A **crosswalk** is a place where people walk across one arm of a junction, kerb to kerb. Its **band** is the strip of road it covers; its two **kerb ends** are where a person steps off.
+- A **walk signal** shows WALK (go), FLASHING DON'T WALK (do not start; finish if you have), then DON'T WALK.
+- A **green arrow** is a turn's own green while everything it would cross is red (a **protected** turn); **protected then permissive** gives the arrow first, then lets the turn go on the plain green giving way.
+- **Gap acceptance**: a person steps off when the nearest car that would cross is far enough away in time; the **accepted gap** is that time.
+- A **spread junction** is one the planner made of several points with stretches of road inside it.
+- A **stand-off** is a driver and a person each waiting for the other.
+
+**1. The crosswalk in the road model** (`road_model.h ModelCrosswalk`; stated by `stateCrosswalks` in `road_model.cpp`, called by `plannedRoadModel`; `crosswalks` came off the `notStated` list).
+- **Where:** across every arm of a stated junction whose road the paint marks (its class's `junction_markings`; never an anchored ramp's end) or whose street has pavements, where the band lies on the road clear of its ends. The band is `kCrosswalkNear` to `kCrosswalkFar` (1 to 4 m) back from the arm's stated box edge, the one source of those numbers (`lanes/deck_mesh.h`), read only by this function.
+- **Each record:** junction and arm, street and road, the band's near and far stations, the two kerb ends (the carriageway's half width either side of the spine, end 0 on the kerb of the traffic running along the spine), length kerb to kerb, marked or not, pavements or not, control, and its record in the lane level.
+- **Control:** under lights where the junction's control is lit (the signal pole's attachment row says which); at signs where the arm states one (a stop or give-way sign); otherwise none (a marked crossing with no lights, or an unmarked one).
+- **A kerb end in another road:** at a spread junction one arm's band can reach into another road's carriageway. Such a crosswalk is still marked (the paint draws what it drew) but is not one people use (`pavements` false), and the model's problems say so. traffic_lab has 33 of 513.
+- **Questions** (`RoadModel`): `crosswalkAcross(junction, arm)`, `crosswalk(id)`, `crosswalkOfLane(w)`, `crossersOf(id)` (the paths over it and where along each, from the lane level's crossing points), `crosswalksOnWalk(junction, armIn, armOut)` (which crosswalks a walk round the junction's corners crosses, in order, and from which kerb end, from the stated ring of arms and `lane_turns.h kerbSideCounterClockwise`), and `ModelCrosswalk::kerbWait(end, back)` (where a person waits).
+- **In the lane level:** `layLaneCrosswalks` (the one place a crosswalk becomes a lane-level record) lays each crosswalk's band as a `Crosswalk` naming the model's id (`Crosswalk::modelCrosswalk`, which replaces the never-filled `walkLink`). The road build's own crossing finder (`findCrossingPoints`) then finds the paths over each. A test's hand-made lane table states crosswalks with `stateCrosswalk` and calls the same function.
+- **The paint** reads the record (`deck_mesh.cpp`: the zebra's band is the model's). traffic_lab's meshes are byte for byte the same before and after (`lanes_tool build`, glb and svg md5 equal), so the lots key does not change and nothing re-bakes. `RoadPaint::zebras` lists what was drawn, for the test.
+- **Formats:** road model 13 -> 14, lane graph (LGRF) 14 -> 15, `kLaneGraphBuildVersion` 13 -> 15. Each level's saved road model is rebuilt once at its next load. No lots re-bake.
+- **traffic_lab:** 513 crosswalks, all marked. 124 are under lights, 229 at signs, 160 with neither (the through road at stop-signed junctions). Their lengths are 8 to 22 m kerb to kerb. All 513 are laid in the lane level and crossed by 5,240 path stretches. Its 20 "unmarked" junctions (two-arm carry-ons and freeway joints) have none: each road begins at the mouth, so a band would lie within 2 m of the road's end, as the paint already decided.
+
+**2. Walk signals and arrows** (`right_of_way.h WalkSignalRules`, `signal_programme.h walkAt / walkAtCrosswalk`).
+- **One walk signal per crosswalk** under lights that people reach, keyed on the model's id (`RightOfWay::walkOfCrosswalk`). The connectors that cross it are the model's answer (`crossersOf`).
+- **When it walks:** in a phase where everything green across it gives way to it, that is, a turn into its arm from another arm on a plain green. A connector whose lane arrives by the crosswalk's own arm leaves across it, read from the arm the model states (`Path::arm`, `leavesAcross`).
+- **Timing:** the walk interval is 7 s and the clearance is the length at 3.5 ft/s (MUTCD 2009 4E.06). A run of walking phases too short for both is lengthened.
+- **The safety check:** `checkSignalProgrammes` asks the model for the crossers afresh and reports a walk shown beside traffic that does not give way to it.
+- **Arrows:** `arrow_when` warrants (the same warrants as `protected_when`, plus a `road_class` condition). In lab.lua every far turn that crosses an oncoming lane is protected then permissive, and a boulevard's arrivals are protected only. `Lamp::GreenArrow`: `lampAt` still says Green; `lampShownAt` and the `light` fact's word `green_arrow` say arrow.
+
+**3. Drivers give way to people at crosswalks** (`things.h findCrosswalkAhead`; rule set facts `person_at_crosswalk`, `crosswalk_stop`; the rule "give way to people crossing" in `rules/lab.lua`).
+- **The world says who stands where:** each person on foot the sim hands the driving (`RoadThing`) carries the crosswalk they are on, or whose kerb they wait at plainly about to cross (`crosswalk`, `onCrosswalk`). People waiting for a walk signal to change are not about to cross.
+- **The driver's rule:** a driver stops `crosswalk_stand_off` (1 m) before the first crosswalk on its way, read from the lane level's crossing points, that it has not reached. It stops where someone is on that crosswalk, or waits at its kerb where no lights run it and the driver can still stop braking at `crosswalk_deceleration` (10 ft/s2). Sources: the UK zebra rule (Zebra, Pelican and Puffin Pedestrian Crossings Regulations 1997, regulation 25; Highway Code rules 195 and H2) and Japan's Road Traffic Act, article 38.
+- **At a stop sign** the car first stops at its line as before, then this rule holds it while someone is on or stepping onto the crosswalk. **At lights,** a turning car green across a crosswalk meets the people crossing on WALK here.
+- **Counted:** `ThingCounts::crosswalkGiveWays` by control, and `crosswalkStandOffs` (decisions standing for someone who only waits).
+
+**4. People at crosswalks** (`city_sim.cpp crossingAhead, gapToCross, jaywalks`; numbers in `assets/scripts/people.lua people.crossing`, read into the `PeopleCatalog`; `assets/data/walking.json` is deleted).
+- **Which crosswalk:** the arms a walker's links arrive and leave by are asked of the model (`armReachedAt`), then the crosswalks on that walk (`crosswalksOnWalk`).
+- **Where they wait:** where their route comes level with the kerb end they step off from, a step back. Once standing there they are placed at the crosswalk's kerb end (`kerbWait`), never wherever their route line runs. Under lights they go on WALK.
+- **Without lights** they go when no car that would cross it is coming inside their accepted gap. The gap is the crossing length at 3.5 ft/s plus a start-up margin of their own (a seeded trait, 2 to 5 s round the HCM's 3 s), less 0.1 s for each second waited (bolder with time), never under 0.5 s. A car already slowing or standing means go, and so does a car standing on the crosswalk, which they walk round. They never step out in front of a car moving over it.
+- **Jaywalkers:** a seeded 3% (`jaywalk_share`, Glenn's call: rare) may cross against the lights, needing 1.5 times the gap, with no right of way. Drivers still stop for anyone in their way (ADR-0451's things). The street map's people do not cross mid-block, so no mid-block jaywalking arises.
+- **Nothing arbitrates:** a driver stopping for a person at the kerb is seen standing, and the person goes.
+- **Removed:** the first draft's `WalkCrossing` and `RightOfWay` street-and-angle crosswalks; the sim's `walkSignalAhead` with its `laneJunctionOfModel_` remap and `kAcrossMyWay` angle test; the test helper `gridWithPavements`, which merged streets by position; `walking.json`; the render system's unread `crosswalkCenters_`.
+
+**What was found on the way (fixed):**
+- A car standing on a crosswalk (waiting for the junction) held the people at its kerb, and a car behind those people waited for them. On j81, 12 people and two cars stood 20 minutes. People now walk round a standing car.
+- At spread junction j92, a walker waited "at the kerb" 0.6 m before a junction point inside the box, standing in connector 3056. Car 48 stood behind them for 1,300 s.
+  - Causes: the place on the route level with the kerb end lay in the carriageway, and crosswalk 372's kerb end itself lies in another road.
+  - Fixes: a waiting person stands at the kerb end, never further along their route than the arriving arm's stated box edge. Crosswalks whose kerb end is in a road are not used. A crosswalk lying far from a walker's route (more than 6 m beyond the arriving street's edge) is not crossed by them.
+- Since the crosswalks are laid in the lane level, every arriving lane's last metre is within a body's reach of the band beyond its stop line. The measurements counted a car standing at its line as "in the box" (6,612 car-seconds at red lights in traffic_lab). `measure.cpp bodyInBox` now leaves out a stretch that runs to the lane's end.
+
+**Measured** (brain_crowd, 30 minutes, 350 residents, `level_brain_crowd_the_residents_make_their_day`):
+
+| | before (ADR-0451) | now |
+|---|---|---|
+| crossings begun: on WALK / at a sign / marked, no lights / unmarked / against the lights | (not counted) | 1,044 / 1,877 / 403 / 0 / 55 |
+| drivers who gave way at a crosswalk: lights / signs / none | (no such rule) | 445 / 528 / 206 |
+| decisions standing for someone only waiting (stand-offs) | | 120 |
+| people waiting at kerbs at a minute's end | | 4 to 14 |
+| rings of waits | 0 | 0 |
+| car 123 at junction 92 | 804 s | 459 s (minutes 20-28); the cause was not caught |
+| longest stand at a lit junction, any car | | 459 s (car 123, j92) |
+
+- **Cars standing for someone who only waits** settle with no arbiter: the person sees the car stand and goes. There were 120 such decisions in 30 minutes. An earlier run of this sitting had 71,156, before a car standing on the crosswalk stopped holding people back.
+- **People waiting at a kerb: FAILING.** Of 824,680 samples of a walker standing still with a crosswalk set, 75% are more than 2.5 m from its kerb end, against a bound of 1 in 20.
+  - The picture shows a walker placed right at a kerb end, so the placing works where it applies.
+  - Most standing walkers are not placed there. Known cases: those whose route is held at the arm's box edge more than 10 m from the kerb end (`kCrossingStepAside`, a safety bound), and spread junctions; the worst sample is 79 m off.
+  - Not diagnosed further. Next: log the hold reason of the far samples.
+- **Near tier** (`near_tier_in_the_crowd_follows_the_player`): contacts 0, hits on walkers 0, on parked cars 0, on driven cars' boxes 0, other chassis hits 0 (was 8). The longest a near car stood off its lane is 7.9 s (car 112), over the ratchet of 5 s: **failing, left so**.
+
+**Pins** (old -> new, why: people now wait at kerbs and cross on WALK or in a gap, and drivers give way to them; far turns lead on arrows; the crosswalks' crossing points move connectors' waiting gaps):
+- level_brain_crowd:
+  - the most on the road 83 -> 91 (minute 10); busy minutes 10 -> 13;
+  - trips 265 -> 260; parked 216 -> 204; walks blocked 17 -> 1; another place 3 -> 1;
+  - arrivals 444 -> 415; no plan 15 -> 1;
+  - hash 0x0c538d7f7a9fb3fa -> 0xfd98526fa3b9d920.
+- near_tier_in_the_crowd: the most near 14 at minute 11 -> 12 at minute 7; in 91 -> 83; out 76 -> 63; hash 0x9699075db5940e90 -> 0xb80206dda672d5d5.
+- near_tier mixed queue: the run's bound 150 -> 180 s. The follower came to rest 0.6 m short of its place at 150 s.
+- level_traffic_lab_v2_drives: hash 0x480f608a3a35465c -> 0x55109fe9a8e247b1. The same two known failures: queues 3.26 -> 2.40 s a car, and cars over kLongestStand.
+- level_brain_lab one resident: red-light stands 2 -> 3.
+- lanes_tests traffic_lab model problems: + 33 "crosswalk kerb end in a road".
+- driving rule units: + ft/s.
+
+**Not done:**
+- **Signal heads:** the drawn heads are still lit by the old sim's signal controller (`CityRenderSystem`, `SignalController::stateForLink`), not by the new driving's lamps. So the existing heads do not show the green arrows or the walk signals, and on a v2 level they can disagree with what cars obey. Each head is attached to its junction's arm in the model (`attachFurniture`), so lighting them from `lampShownAt` over the lanes arriving by that arm is runtime work with no bake.
+- **New heads** (arrow lamps, WALK / DON'T WALK heads) are new geometry on the signal poles. The poles are street furniture placed at load (`StreetFurniturePlan`), not baked, so new heads would cost no lots re-bake: only the furniture kit's meshes and the load's instancing. The turn arrows painted off the driven line (#304) are road paint, which is baked: a `kLanesBuildTag` bump re-bakes every lane-built level's city. Batched for Glenn.
+- **Scripted lab scenes** for one walker at DON'T WALK, at a stop sign, and at a marked crossing were not built. The rules are tested on the driving's grid (`crosswalks_1`, `crosswalks_2`, `walks_1`, `walks_2`, `arrows_1`) and measured in the crowd.
+
+**Revisit when** the planner states spread junctions' crosswalks itself, or the sim's people walk the model's pavements instead of the street map's lines.

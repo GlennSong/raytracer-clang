@@ -147,12 +147,16 @@ struct ArrowWarrant {
     double writtenLimit = 0;             // ... as written
     std::string limitUnit;               // ... and its unit
     uint32_t approachesAtLeast = 0;      // 0: not asked
+    // ROAD CLASS (ADR-0452): the class of the road the turn arrives by (the road model's class name, as the road file
+    // writes it) is one of these; empty: not asked
+    std::vector<std::string> roadClasses;
 };
 // The facts a warrant is asked of, for one turn (right_of_way.cpp works them out).
 struct ArrowFacts {
     uint32_t opposingLanes = 0;
     double opposingLimit = 0;   // m/s
     uint32_t approaches = 0;
+    std::string roadClass;      // the class of the road the turn arrives by
 };
 // Whether `w` holds for a turn with facts `f`.
 bool warrantHolds(const ArrowWarrant& w, const ArrowFacts& f);
@@ -169,6 +173,9 @@ struct ControlKind {
     // Turns given their own green arrow: a phase of their own, before the phase their approach shares with the one facing
     // it, in which they go and what they meet waits.
     MovementMask arrow = 0;
+    // WHERE THEY GET IT (`arrow_when`, ADR-0452): an `arrow` movement gets its arrow phase at a junction only where one of
+    // these warrants holds for it (the same warrants as protected_when's). Empty: wherever it would give way.
+    std::vector<ArrowWarrant> arrowWhen;
     // PROTECTED TURNS (`protected_when`): a `givesWayOnGreen` turn for which one of these warrants holds at a junction is
     // protected there: it never shares a green with what it would give way to from the approach facing it, so the phases
     // give it a green of its own (right_of_way.h). Empty: no turn is.

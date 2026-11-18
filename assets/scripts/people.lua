@@ -108,3 +108,23 @@ people.dodge = {
   dive_below = 0.45, dive_boost = 1.3, dive_for = 0.45,
   knock_speed = 2.5, throw_cap = 30.0,
 }
+
+-- CROSSING THE ROAD AT A CROSSWALK (ADR-0452). Where no lights run a crosswalk, a person steps off when no car that is
+-- not already slowing or stopped for them would reach it within the gap they accept: the time to walk across, plus a
+-- start-up margin of their own; a car slowing or standing means go. Once started they cross. The gap is the Highway
+-- Capacity Manual's pedestrian critical headway, t = L / Sp + ts: the crossing length L walked at Sp, plus a start-up
+-- and end clearance time ts (Highway Capacity Manual 2010, the two-way stop-controlled intersection chapter's critical
+-- headway for a single pedestrian, with Sp = 3.5 ft/s and ts = 3 s; from memory, the chapter and equation numbers not
+-- checked against the text).
+--   walk_speed            m/s: Sp, 3.5 ft/s
+--   start_up_lo / hi      s: each person's own ts, between these (the HCM's 3 s near the middle) [~ the spread]
+--   bolder_per_second     s of margin given up for each second waited at the kerb [~]
+--   bolder_floor          s: the least margin anyone keeps [~]
+--   jaywalk_gap           a gap this many times bigger for someone crossing against the lights, with no right of way [~]
+--   jaywalk_share         the share of people who ever cross against the lights (Glenn, 2026-11-17: a rare personal
+--                         trait) [~ a judgement to put to him, not a measured rate]
+people.crossing = {
+  walk_speed = 1.07, start_up_lo = 2.0, start_up_hi = 5.0,
+  bolder_per_second = 0.1, bolder_floor = 0.5,
+  jaywalk_gap = 1.5, jaywalk_share = 0.03,
+}

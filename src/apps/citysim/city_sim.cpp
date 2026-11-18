@@ -5185,6 +5185,14 @@ void CitySim::refreshPose(Agent& a) const {
             }
         }
     }
+    // A WALKER STANDING AT A CROSSWALK'S KERB (ADR-0452) stands at its kerb end, on the pavement, a step back: the
+    // model's place (ModelCrosswalk::kerbWait), not wherever its route line runs (inside a spread junction that line can
+    // lie in the carriageway).
+    if (a.mode != Agent::Mode::Driver && a.crosswalkAt >= 0 && !a.onCrosswalk && a.speed < kCrossingStanding && drivingRoads_)
+        if (const engine::ModelCrosswalk* cw = drivingRoads_->crosswalk(static_cast<uint32_t>(a.crosswalkAt))) {
+            const Vec2 kerb = cw->kerbWait(a.crossFromEnd, kCrossingKerbStep);
+            if ((kerb - a.pos).length() <= kCrossingStepAside) a.pos = kerb;
+        }
 }
 
 // Turn the heading toward the current leg's direction. A pedestrian pivots
@@ -5296,6 +5304,44 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                                                 Real target) const {
     JunctionGate gate;
     bool car = a.mode == Agent::Mode::Driver;
+    // A WALKER AT THE ROAD MODEL'S CROSSWALKS (ADR-0452): where the junction ahead has them, they rule its walkers, not
+    // the old signals or kerb gaps. Before the kerb end they step off from, a person goes on WALK where lights run it (a
+    // rare jaywalker on any phase, given a jaywalker's gap), elsewhere when the gap they accept is there; else they wait
+    // a step back from that kerb end. Past it they are crossing, and carry on.
+    if (!car) {
+        gate.crossing = crossingAhead(a);
+        if (gate.crossing.governed) {
+            gate.cap = target;
+            if (!gate.crossing.found || gate.crossing.toHold < 0) return gate;
+            const engine::ModelCrosswalk* c = drivingRoads_->crosswalk(gate.crossing.crosswalk);
+            const driving::WalkSignal ws = drivingV2_ && drivingV2_->lightsRun()
+                                               ? driving::walkAtCrosswalk(drivingV2_->rightOfWay(), gate.crossing.crosswalk,
+                                                                          drivingV2_->clockSeconds())
+                                               : driving::WalkSignal::None;
+            bool go = false;
+            if (c && c->control == engine::CrosswalkControl::Lights && ws != driving::WalkSignal::None) {
+                gate.kind = CrossingKind::Lights;
+                go = ws == driving::WalkSignal::Walk;
+                if (!go && jaywalks(a) && gapToCross(a, gate.crossing.crosswalk, a.crossWaited, true)) {
+                    go = true;
+                    gate.kind = CrossingKind::AgainstTheLights;
+                }
+            } else {
+                gate.kind = !c ? CrossingKind::Unmarked
+                            : c->control == engine::CrosswalkControl::Signs ? CrossingKind::Signs
+                            : c->marked ? CrossingKind::Marked : CrossingKind::Unmarked;
+                go = gapToCross(a, gate.crossing.crosswalk, a.crossWaited, false);
+            }
+            if (!go) {
+                gate.walkHold = true;
+                gate.distToLine = gate.crossing.toHold;
+                gate.node = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])].to;
+                gate.approachLink = a.route.links[static_cast<std::size_t>(a.leg)];
+                gate.cap = std::min(target, approachStop(gate.crossing.toHold, kPedDecel, target));
+            }
+            return gate;
+        }
+    }
     // Cars look ahead along the route (see junctionAhead); walkers keep the
     // current link -- their kerb rules are written per link. The reach covers
     // the longest setback (a bus at a wide box, ~25 m) plus the signal
@@ -5345,8 +5391,7 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
             car ? signalFor(a, li) != SignalState::Green
                 : !(signals_.stateForLink(li) == SignalState::Green ||
                     signals_.walkRemainingAt(toNode) >= 6.5);
-        if (distToLine >= 0 && distToLine < kSignalApproach && signals_.hasSignal(li) &&
-            signalHolds) {
+        if (distToLine >= 0 && distToLine < kSignalApproach && signals_.hasSignal(li) && signalHolds) {
             target = std::min(target, approachStop(distToLine, car ? kCarDecel : kPedDecel,
                                                    target));
         }
@@ -5702,6 +5747,25 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // the target; the gate carries the line the hard clamp below holds at.
     JunctionGate gate = junctionSpeedCap(a, li, target);
     target = gate.cap;
+    // WHERE THIS WALKER STANDS AGAINST A CROSSWALK (ADR-0452), for the drivers (thingsForDriving) and the counts
+    if (!car) {
+        const CrossingAhead& x = gate.crossing;
+        const bool atKerb = x.found && x.toHold >= 0 && x.toHold < kCrossingAtKerb && gate.walkHold;
+        const bool on = x.found && x.toHold < 0 && x.toFar > 0;
+        if (on && !(a.onCrosswalk && a.crosswalkAt == static_cast<int>(x.crosswalk)))
+            ++walkStats_.crossings[std::min<std::size_t>(a.crossingKind, kCrossingKindCount - 1)];
+        if (x.found && x.toHold >= 0) a.crossingKind = static_cast<uint8_t>(gate.kind);
+        a.crosswalkAt = atKerb || on ? static_cast<int>(x.crosswalk) : -1;
+        a.crossFromEnd = static_cast<int8_t>(x.fromEnd);
+        a.onCrosswalk = on;
+        a.aboutToCross = atKerb && gate.kind != CrossingKind::Lights;
+        if (atKerb) {
+            a.crossWaited += dt;
+            ++walkStats_.waitingTicks;
+        } else {
+            a.crossWaited = 0;
+        }
+    }
     // CORNER FEASIBILITY (roads-v2.1 R5): a real car cannot hold a junction
     // arc at cruise (90 degrees at 8 m/s on a ~7 m arc is ~1 g lateral) — and
     // the physical tier drives THIS plan, so an infeasible corner meant the
@@ -5864,19 +5928,21 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     if (gate.node >= 0) {
         const int toNode = gate.node;
         const int jli = gate.approachLink;
-        bool redAhead = signals_.hasSignal(jli) &&
+        // (a walker the model's crosswalks rule here waits by them alone: ADR-0452, walkHold)
+        bool redAhead = !gate.crossing.governed && signals_.hasSignal(jli) &&
                         (car ? signalFor(a, jli) != SignalState::Green
                              : !(signals_.stateForLink(jli) == SignalState::Green ||
                                  signals_.walkRemainingAt(toNode) >= 6.5));
         // A car that the cap has just brought to the line can overshoot it by a
         // hair in one tick; it is still waiting AT the line, not committed.
         const Real kLineSlack = car ? 0.3 : 0.0;
-        if ((redAhead || gate.yieldAtLine) && gate.distToLine >= -kLineSlack - 1e-6 &&
-            car && gate.distToLine > nav_->links[li].length - a.distOnLeg) {
+        const bool holds = redAhead || gate.yieldAtLine || gate.walkHold;
+        if (holds && gate.distToLine >= -kLineSlack - 1e-6 && (car || gate.walkHold) &&
+            gate.distToLine > nav_->links[li].length - a.distOnLeg) {
             lineRoom = std::max(Real(0), gate.distToLine);
-            a.state = redAhead ? Agent::State::Waiting : Agent::State::Yielding;
-            if (a.speed < 0.3) holdWhy(a, redAhead ? 11 : static_cast<uint8_t>(11 + gate.why));
-        } else if (redAhead || gate.yieldAtLine) {
+            a.state = redAhead || !car ? Agent::State::Waiting : Agent::State::Yielding;
+            if (a.speed < 0.3) holdWhy(a, !car ? 2 : redAhead ? 11 : static_cast<uint8_t>(11 + gate.why));
+        } else if (holds) {
             // The hold applies only BEFORE the line. A car already past it is
             // committed to the box and drives on — clamping it there trapped it
             // mid-intersection whenever a green expired under it, and everything
@@ -5904,7 +5970,8 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // hold above). Assertiveness cap: after ~12 s of no gap the walker
     // crosses anyway — traffic never fully starves a pedestrian, and the
     // cars' person-sense stays the safety net, exactly like a real kerb.
-    if (!car) {
+    // (Not where the road model's crosswalks rule the junction ahead, ADR-0452: there the walker judged the gap above.)
+    if (!car && !gate.crossing.governed) {
         const int toNode = nav_->links[li].to;
         const Real toEnd = nav_->links[li].length - a.distOnLeg;
         // The kerb line sits BEFORE the corner-cut blend window (half the
@@ -6961,6 +7028,196 @@ CitySim::Census CitySim::census() const {
     return c;
 }
 
+// ---- CROSSWALKS (ADR-0452) ----------------------------------------------------------------------------------------------
+namespace {
+// How far along its route a walker looks for the next junction's crosswalks (m): past the longest street link into a
+// spread junction's points.
+constexpr Real kCrossingLookAhead = 80.0;
+// Two places along a route this close (m) project a kerb end equally well: the earlier counts for where a person steps
+// off, the later for where they are across (on a walk back across their own street both lie level).
+constexpr Real kSameProjection = 0.5;
+// A crosswalk's kerb end no further than this (m) beyond the arriving street's half width from a walker's route lies on
+// their way (they walk the route's kerb-side line, a verge out from the carriageway: the side street's crosswalk sits a
+// few metres beyond the arriving street's edge); farther, they do not pass it.
+constexpr Real kCrossingReach = 6.0;
+// A car braking harder than this (m/s2) is slowing; one slower than this (m/s) stands: either means go to a person at
+// the kerb (people.lua crossing: "a car slowing or standing means go").
+constexpr Real kCarSlowing = 0.5;
+constexpr Real kCarStanding = 0.5;
+// The salts of the two crossing traits (each a hash of who the person is, as every trait).
+constexpr uint32_t kStartUpSalt = 0x43524F53u, kJaywalkSalt = 0x4A415957u;
+}  // namespace
+
+const char* CitySim::crossingKindWord(CrossingKind k) {
+    switch (k) {
+    case CrossingKind::Lights: return "on WALK";
+    case CrossingKind::Signs: return "at a stop or give-way sign";
+    case CrossingKind::Marked: return "at a marked crossing with no lights";
+    case CrossingKind::Unmarked: return "at an unmarked crossing";
+    case CrossingKind::AgainstTheLights: return "against the lights";
+    }
+    return "?";
+}
+
+CitySim::CrossingAhead CitySim::crossingAhead(const Agent& a) const {
+    CrossingAhead out;
+    const engine::RoadModel* m = drivingRoads_.get();
+    if (!m || m->crosswalks.empty() || !nav_ || a.mode == Agent::Mode::Driver) return out;
+    const int legs = static_cast<int>(a.route.links.size());
+    if (a.leg < 0 || a.leg >= legs) return out;
+    // route metres from the walker to the start of each leg, from two legs back (the crossing may still be under them)
+    const int first = std::max(0, a.leg - 2);
+    std::vector<Real> startOf(static_cast<std::size_t>(legs + 1), 0);
+    {
+        Real back = -a.distOnLeg;
+        for (int k = a.leg - 1; k >= first; --k) back -= nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(k)])].length;
+        Real at = back;
+        for (int k = first; k < legs; ++k) {
+            startOf[static_cast<std::size_t>(k)] = at;
+            at += nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(k)])].length;
+        }
+        startOf[static_cast<std::size_t>(legs)] = at;
+    }
+    const auto link = [&](int k) -> const engine::NavLink& { return nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(k)])]; };
+    for (int inLeg = first; inLeg < legs && startOf[static_cast<std::size_t>(inLeg)] < kCrossingLookAhead; ++inLeg) {
+        // the street link arriving at a junction of the driving's roads (city 0), and the first street link leaving it
+        const engine::NavLink& in = link(inLeg);
+        if (in.street < 0 || in.city != 0 || in.footpath) continue;
+        const int J = nav_->junctionOf(in.to);
+        if (J < 0 || static_cast<std::size_t>(J) >= m->junctions.size()) continue;
+        int outLeg = -1;
+        for (int k = inLeg + 1; k < legs; ++k) {
+            const engine::NavLink& L = link(k);
+            if (L.street >= 0) {
+                if (nav_->junctionOf(L.from) == J) outLeg = k;
+                break;
+            }
+            if (L.junction != J) break;
+        }
+        const engine::ModelJunctionId jid(static_cast<uint32_t>(J));
+        bool any = false;
+        for (const engine::ModelCrosswalk& c : m->crosswalks) any = any || (c.junction == jid && c.pavements);
+        if (!any) continue;
+        out.governed = true;
+        if (outLeg < 0) return out;   // the walk ends at this junction: nothing to cross
+        const engine::NavLink& outL = link(outLeg);
+        const int armIn = m->armReachedAt(engine::ModelStreetId(static_cast<uint32_t>(in.street)), in.stationTo);
+        const int armOut = m->armReachedAt(engine::ModelStreetId(static_cast<uint32_t>(outL.street)), outL.stationFrom);
+        // where along the route a kerb end comes level: its nearest point on the links from the arriving one to the
+        // leaving one (earliest of equals, or latest for the far end)
+        const auto levelWith = [&](const Vec2& p, bool latest, Real* awayOut = nullptr) {
+            Real best = 0, bestAway = std::numeric_limits<Real>::infinity();
+            for (int k = inLeg; k <= outLeg; ++k) {
+                const engine::NavLink& L = link(k);
+                const Vec2 A = nav_->nodes[static_cast<std::size_t>(L.from)], B = nav_->nodes[static_cast<std::size_t>(L.to)];
+                const Vec2 ab = B - A;
+                const Real l2 = ab.lengthSquared();
+                const Real t = l2 > 0 ? std::clamp(dot(p - A, ab) / l2, Real(0), Real(1)) : Real(0);
+                const Real away = (p - (A + ab * t)).length();
+                const bool better = latest ? away <= bestAway + kSameProjection : away + kSameProjection < bestAway;
+                if (!better) continue;
+                bestAway = std::min(bestAway, away);
+                best = startOf[static_cast<std::size_t>(k)] + t * L.length;
+            }
+            if (awayOut) *awayOut = bestAway;
+            return best;
+        };
+        for (const engine::WalkCrossing& w : m->crosswalksOnWalk(jid, armIn, armOut)) {
+            const engine::ModelCrosswalk* c = m->crosswalk(w.crosswalk);
+            if (!c) continue;
+            // (the street map's walkers cut through a junction on its links, not round its corners: at a junction spread
+            // over several points, a crosswalk the walk round the corners would cross can lie far from where they walk,
+            // and they do not pass it)
+            Real away = 0;
+            levelWith(c->ends[static_cast<std::size_t>(w.fromEnd)], false, &away);
+            if (away > in.width * Real(0.5) + kCrossingReach) continue;
+            const Real toFar = levelWith(c->ends[static_cast<std::size_t>(1 - w.fromEnd)], true);
+            if (toFar < 0) continue;   // across it already
+            out.found = true;
+            out.crosswalk = w.crosswalk;
+            out.fromEnd = w.fromEnd;
+            out.toHold = levelWith(c->ends[static_cast<std::size_t>(w.fromEnd)], false) - kCrossingKerbStep;
+            // ...and never inside the junction's box: at most up to the arriving arm's stated box edge, on their own
+            // street's pavement (a spread junction's point can lie well inside its box, and a route line ending there
+            // stood a waiting walker in the carriageway)
+            if (armIn >= 0 && static_cast<std::size_t>(armIn) < m->junctions[jid.index].arms.size()) {
+                const Real boxEdge = m->junctions[jid.index].arms[static_cast<std::size_t>(armIn)].boxEdge;
+                const Real span = in.stationTo - in.stationFrom;
+                if (engine::stated(boxEdge) && std::fabs(span) > 0) {
+                    const Real t = std::clamp((boxEdge - in.stationFrom) / span, Real(0), Real(1));
+                    out.toHold = std::min(out.toHold, startOf[static_cast<std::size_t>(inLeg)] + t * in.length - kCrossingKerbStep);
+                }
+            }
+            out.toFar = toFar;
+            return out;
+        }
+        // (everything at this junction crossed: on to the next)
+        out.governed = false;
+    }
+    return out;
+}
+
+bool CitySim::gapToCross(const Agent& a, uint32_t crosswalk, Real waited, bool bigger, std::string* why) const {
+    const engine::RoadModel* m = drivingRoads_.get();
+    const engine::ModelCrosswalk* c = m ? m->crosswalk(crosswalk) : nullptr;
+    if (!c || !drivingV2_ || !drivingV2_->roads()) return true;
+    const CrossingTuning& t = people_.crossing;
+    const Real personal = static_cast<Real>(t.startUpLo + (t.startUpHi - t.startUpLo) * engine::unit24(engine::hashPair(a.uid, kStartUpSalt)));
+    const Real margin = std::max(static_cast<Real>(t.bolderFloor), personal - static_cast<Real>(t.bolderPerSecond) * waited);
+    Real need = c->length / static_cast<Real>(t.walkSpeed) + margin;
+    if (bigger) need *= static_cast<Real>(t.jaywalkGap);
+    const engine::LaneGraph& roads = *drivingV2_->roads();
+    const driving::PathLists& lists = drivingV2_->pathLists();
+    // the cars that would cross it (on a path the model says crosses it, or on the lane leading into one), as a person
+    // sees them: how far off, how fast, whether braking
+    const auto threat = [&](const driving::PathEntry& e, Real distance) {
+        const driving::Car* car = drivingV2_->car(e.car);
+        if (!car || car->speed < kCarStanding || car->acceleration < -kCarSlowing) return false;   // standing or slowing: go
+        const bool held = distance / car->speed < need;
+        if (held && why)
+            *why = "car " + std::to_string(e.car.index) + " coming at " + std::to_string(car->speed) + " m/s, " +
+                   std::to_string(distance) + " m off (gap needed " + std::to_string(need) + " s)";
+        return held;
+    };
+    for (const engine::CrosswalkCrosser& x : m->crossersOf(crosswalk)) {
+        for (const driving::PathEntry& e : lists.on(x.path)) {
+            // a car MOVING over the crosswalk: never step into it. A car standing on it is walked round, as people do
+            // (it waits for something else -- the car ahead, a gap in the junction -- and nobody waits for it to go:
+            // waiting for it while it waited behind a driver waiting for them stood 12 people and two cars 20 minutes
+            // on brain_crowd's j81). A car standing short of it has stopped for them.
+            const driving::Car* on = drivingV2_->car(e.car);
+            const bool standing = on && on->speed < kCarStanding;
+            if (e.rear <= x.to && e.front >= x.from && !standing) {
+                if (why) *why = "car " + std::to_string(e.car.index) + " on the crosswalk, path " + std::to_string(x.path.index);
+                return false;
+            }
+            if (e.why == driving::OnPath::Front && e.front < x.from && threat(e, x.from - e.front)) return false;
+        }
+        const engine::PathId lane = x.path.index < roads.paths.size() ? roads.paths[x.path.index].from : engine::PathId();
+        if (!lane.valid() || lane.index >= roads.paths.size()) continue;
+        for (const driving::PathEntry& e : lists.on(lane))
+            if (e.why == driving::OnPath::Front && threat(e, roads.paths[lane.index].length - e.front + x.from)) return false;
+    }
+    return true;
+}
+
+bool CitySim::jaywalks(const Agent& a) const {
+    // a seeded share of people, by who they are (a hash of their id, as every personal trait)
+    return engine::unit24(engine::hashPair(a.uid, kJaywalkSalt)) < people_.crossing.jaywalkShare;
+}
+
+int CitySim::walkersWaitingAtKerbs() const {
+    int n = 0;
+    for (const Agent& a : agents_) n += a.mode != Agent::Mode::Driver && a.moving && a.crosswalkAt >= 0 && !a.onCrosswalk ? 1 : 0;
+    return n;
+}
+
+int CitySim::walkersOnCrosswalks() const {
+    int n = 0;
+    for (const Agent& a : agents_) n += a.mode != Agent::Mode::Driver && a.moving && a.crosswalkAt >= 0 && a.onCrosswalk ? 1 : 0;
+    return n;
+}
+
 void CitySim::thingsForDriving(std::vector<driving::RoadThing>& out) const {
     out.clear();
     for (std::size_t i = 0; i < agents_.size(); ++i) {
@@ -6972,6 +7229,11 @@ void CitySim::thingsForDriving(std::vector<driving::RoadThing>& out) const {
         t.at = a.pos;
         t.halfAcross = kWalkerHalfAcross;
         t.velocity = a.moving ? a.heading * a.speed : Vec2();
+        // (where they stand against a crosswalk, ADR-0452: on it, or at its kerb plainly about to cross)
+        if (a.moving && a.crosswalkAt >= 0 && (a.onCrosswalk || a.aboutToCross)) {
+            t.crosswalk = static_cast<uint32_t>(a.crosswalkAt);
+            t.onCrosswalk = a.onCrosswalk;
+        }
         out.push_back(t);
     }
     out.insert(out.end(), externalThings_.begin(), externalThings_.end());

@@ -372,7 +372,8 @@ void judgeGiveWay(const GiveWayInputs& in, GiveWayVerdict& out) {
         // when that light will be green as I get there, so I never stop at its line with my tail in the box behind.
         const double line = plans.plans[lit].startOdometer;
         out.hasLight = true;
-        out.lamp = litLamp;
+        // (what the head shows: a green that goes alone is a green arrow, ADR-0452)
+        out.lamp = litLamp == Lamp::Green ? lampShownAt(in.roads, in.row, plans.plans[lit].connector, in.now) : litLamp;
         out.toLightLine = static_cast<Real>(line - me.odometer);
         // THE DILEMMA. Holding what I decide now for one decide interval, then braking at the deceleration the yellow is
         // timed for. Once I hold a stop at that line I keep it while my hardest braking still can make it: a driver who

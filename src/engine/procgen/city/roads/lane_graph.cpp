@@ -23,7 +23,7 @@ namespace {
 // and answers which approaches face each other, ADR-0438; 14: no car spaces: the list was never filled, and the kerb
 // parking spaces are stated in the road model, ADR-0439).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 14;
+constexpr uint32_t kVersion = 15;   // 15: a crosswalk names the road model's (Crosswalk::modelCrosswalk, ADR-0452)
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
 // A closed outline (a junction's box, a crosswalk) has at least this many corners; a track's line two points.
@@ -164,7 +164,7 @@ void putItem(BinWriter& w, const CrossingPoint& c) {
 void putItem(BinWriter& w, const Crosswalk& c) {
     putItem(w, c.outline);
     putItem(w, c.junction);
-    w.put(c.walkLink);
+    w.put(c.modelCrosswalk);
 }
 void putItem(BinWriter& w, const Track& t) {
     putItem(w, t.line);
@@ -215,7 +215,7 @@ bool getItem(BinReader& r, CrossingPoint& c) {
            getItem(r, c.junction) && r.get(c.aFrom) && r.get(c.aTo) && r.get(c.otherFrom) && r.get(c.otherTo) &&
            r.get(c.aTags) && r.get(c.otherTags) && r.get(c.modelConnection);
 }
-bool getItem(BinReader& r, Crosswalk& c) { return getItem(r, c.outline) && getItem(r, c.junction) && r.get(c.walkLink); }
+bool getItem(BinReader& r, Crosswalk& c) { return getItem(r, c.outline) && getItem(r, c.junction) && r.get(c.modelCrosswalk); }
 bool getItem(BinReader& r, Track& t) { return getItem(r, t.line) && r.get(t.railTrack); }
 bool getItem(BinReader& r, BendPiece& b) { return r.get(b.from) && r.get(b.radius); }
 
@@ -482,7 +482,7 @@ bool operator==(const CrossingPoint& a, const CrossingPoint& b) {
            a.modelConnection == b.modelConnection;
 }
 bool operator==(const Crosswalk& a, const Crosswalk& b) {
-    return a.outline == b.outline && a.junction == b.junction && a.walkLink == b.walkLink;
+    return a.outline == b.outline && a.junction == b.junction && a.modelCrosswalk == b.modelCrosswalk;
 }
 bool operator==(const Track& a, const Track& b) { return a.line == b.line && a.railTrack == b.railTrack; }
 bool operator==(const Junction& a, const Junction& b) {
@@ -1247,7 +1247,7 @@ std::string dumpText(const LaneGraph& g) {
     for (uint32_t w = 0; w < g.crosswalks.size(); ++w) {
         const Crosswalk& cw = g.crosswalks[w];
         const std::string where = cw.junction.valid() ? fmt("junction %u", cw.junction.index) : std::string("on the road");
-        const std::string link = cw.walkLink == kNoIndex ? std::string("no walkers' link") : fmt("walkers' link %u", cw.walkLink);
+        const std::string link = cw.modelCrosswalk == kNoIndex ? std::string("no road-model crosswalk") : fmt("the road model's crosswalk %u", cw.modelCrosswalk);
         out += fmt("crosswalk %u, %s: %s, outline %s\n", w, where.c_str(), link.c_str(), planPointsText(g, cw.outline).c_str());
     }
     for (uint32_t t = 0; t < g.tracks.size(); ++t)
