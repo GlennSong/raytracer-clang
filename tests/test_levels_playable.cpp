@@ -47,7 +47,6 @@
 #include "../src/engine/procgen/city/city_svg.h"   // CityMapData (the in-road census)
 #include "../src/apps/citysim/city_render.h"        // CityRenderSystem (traffic census)
 #include "../src/apps/citysim/city_map_raster.h"    // the map tool's picture
-#include "../src/apps/citysim/bus_stop_props.h"     // routeColour
 #include "../src/engine/procgen/city/street_signs.h"   // street name signs
 #include "../src/engine/procgen/city/roads/road_model.h"   // the level's road model: names, junctions (ADR-0420)
 #include "../src/engine/text/font.h"
@@ -1561,285 +1560,6 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
 }
 
 
-// THE BUSES SERVE THE CITY (Glenn, 2026-09-18: "The bus routes do seem sparse.
-// I couldn't find one and I walked around for a while"). Built exactly as the
-// game builds it -- the loader's terrain-gated street network, the level's own
-// busRoutes / busStops / busMaxWalk, the sim's own seed -- because a headless
-// metro grown without terrain is a different, rounder city, and measuring that
-// one once already produced a wrong answer.
-TEST_CASE(metro_bus_network_serves_the_city) {
-    std::unique_ptr<Renderer> renderer = Renderer::create();
-    RendererMeshUploader uploader(*renderer);
-    AssetManager assets(uploader);
-    World world;
-    RenderView view;
-    const bool loaded =
-        LevelLoader::load(simLevelPath(), world, *renderer,
-                          view, assets, /*editorMode=*/false);
-    CHECK(loaded);
-    if (!loaded) return;
-    citysim::CityRenderSystem city;
-    CHECK(city.build(world, &assets, nullptr));
-
-    const citysim::BusNetwork& net = city.sim().buses();
-    CHECK(net.routeCount() >= 3);
-    int stops = 0;
-    for (int r = 0; r < net.routeCount(); ++r) {
-        const citysim::BusRoute& route = net.route(r);
-        Real loop = 0;
-        for (std::size_t k = 1; k < route.path.size(); ++k) {
-            const Real dx = route.path[k].x - route.path[k - 1].x;
-            const Real dy = route.path[k].y - route.path[k - 1].y;
-            loop += std::sqrt(dx * dx + dy * dy);
-        }
-        stops += static_cast<int>(route.stops.size());
-        std::printf("    [buses] route %d: %zu stops over a %.0f m loop (%.0f m apart)\n",
-                    r, route.stops.size(), loop, loop / std::max<std::size_t>(1, route.stops.size()));
-    }
-    const Real walk = 220.0;   // metro_v2_test.json busMaxWalk
-    const Real served = net.coverage(city.nav(), walk);
-    const Real block = net.coverage(city.nav(), 120.0);
-    const Real share = net.streetShare(city.nav());
-    std::printf("    [buses] %d stops; %.0f%% of walkable street within %.0f m of one, "
-                "%.0f%% within 120 m; %.0f%% of streets have a bus on them\n",
-                stops, 100.0 * served, walk, 100.0 * block, 100.0 * share);
-    // A walker outside the served area is never offered a bus at all.
-    CHECK(served >= 0.90);
-
-    // WHAT THE RIDER'S RULE ACCEPTS: walking trips across the city,
-    // scored by door-to-door TIME -- walk to the stop, wait half a headway,
-    // ride forward round the loop, walk on -- against walking the whole way
-    // (straight line x1.25 for the street network).
-    {
-        const auto& nav = city.nav();
-        uint32_t h = 12345u;
-        auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return h; };
-        int trips = 0, accepted = 0, slowerThanWalking = 0, backwardsRide = 0, changes = 0;
-        double sumSaved = 0;
-        for (int k = 0; k < 3000; ++k) {
-            const Vec2 o = nav.nodes[rnd() % nav.nodes.size()];
-            const Vec2 d = nav.nodes[rnd() % nav.nodes.size()];
-            const Real direct = std::sqrt((d.x - o.x) * (d.x - o.x) + (d.y - o.y) * (d.y - o.y));
-            if (direct < 300 || direct > 2500) continue;
-            ++trips;
-            const citysim::BusTrip t = net.planTrip(o, d, walk);
-            if (!t.valid()) continue;
-            ++accepted;
-            const auto& r = net.route(t.route);
-            const Vec2 a = r.stops[static_cast<std::size_t>(t.fromStop)].pos;
-            const Vec2 b = r.stops[static_cast<std::size_t>(t.toStop)].pos;
-            const Real wa = std::sqrt((a.x - o.x) * (a.x - o.x) + (a.y - o.y) * (a.y - o.y));
-            const Real wb = std::sqrt((d.x - b.x) * (d.x - b.x) + (d.y - b.y) * (d.y - b.y));
-            const Real walkT = direct * 1.25 / 1.4;
-            Real busT = wa * 1.25 / 1.4 + net.waitSeconds(t.route) +
-                        net.rideSeconds(t.route, t.fromStop, t.toStop);
-            // A TRANSFER is planned as its first leg; stepping off at the change
-            // stop the rider plans again, exactly as here.
-            const citysim::BusTrip t2 = net.planTrip(b, d, walk);
-            if (t2.valid() && t2.route != t.route) {
-                ++changes;
-                const auto& r2 = net.route(t2.route);
-                const Vec2 a2 = r2.stops[static_cast<std::size_t>(t2.fromStop)].pos;
-                const Vec2 b2 = r2.stops[static_cast<std::size_t>(t2.toStop)].pos;
-                busT += std::sqrt((a2.x - b.x) * (a2.x - b.x) + (a2.y - b.y) * (a2.y - b.y)) * 1.25 / 1.4 +
-                        60.0 + net.waitSeconds(t2.route) +
-                        net.rideSeconds(t2.route, t2.fromStop, t2.toStop) +
-                        std::sqrt((d.x - b2.x) * (d.x - b2.x) + (d.y - b2.y) * (d.y - b2.y)) * 1.25 / 1.4;
-            } else {
-                busT += wb * 1.25 / 1.4;
-            }
-            if (busT > walkT) ++slowerThanWalking;
-            if (net.rideMetres(t.route, t.fromStop, t.toStop) > 0.5 * r.loopLength) ++backwardsRide;
-            sumSaved += walkT - busT;
-        }
-        std::printf("    [rider] %d trips 300-2500 m: bus taken for %d (%d with a change); "
-                    "%d of those SLOWER than walking, %d riding over half a loop; "
-                    "mean saving %.0f s\n",
-                    trips, accepted, changes, slowerThanWalking, backwardsRide,
-                    accepted ? sumSaved / accepted : 0.0);
-        // The old walk-only rule, measured: 2378 of 2552 accepted, 1382 of them
-        // SLOWER than walking, a mean 132 s LOST. Chosen by time now.
-        CHECK(accepted > 500);
-        CHECK(changes > 0);                     // transfers are used
-        CHECK(slowerThanWalking == 0);
-        CHECK(accepted && sumSaved / accepted > 120.0);
-    }
-
-    // And a stop should be about a block away, on a street you might walk
-    // down: the old network had 57% and 28% here, which is what "I walked
-    // around for a while and couldn't find one" measured as.
-    CHECK(block >= 0.80);
-    // The lane-built metro (2026-10-22, a RATCHET): 36-38 % of streets carry a bus (ADR-0217: not yet looked at).
-    // Was 0.50, the lattice city's.
-    CHECK(share >= 0.34);
-
-    // EVERY BUS STARTS AT A STOP ON ITS OWN ROUTE, through the whole build --
-    // setBuses seated them, and assignPlaces (which runs after it) then sent
-    // every one home, so a route's first bus was a kilometre off its loop.
-    int buses = 0, offRoute = 0;
-    Real worst = 0;
-    for (int i = 0; i < static_cast<int>(city.sim().agents().size()); ++i) {
-        const int r = city.sim().busRouteOf(i);
-        if (r < 0) continue;
-        ++buses;
-        const citysim::BusRoute& route = net.route(r);
-        const int n = static_cast<int>(route.stops.size());
-        const int at = (city.sim().busNextStopOf(i) - 1 + n) % n;
-        const Vec2 d = city.sim().agents()[static_cast<std::size_t>(i)].pos -
-                       route.stops[static_cast<std::size_t>(at)].pos;
-        const Real dd = std::sqrt(d.x * d.x + d.y * d.y);
-        worst = std::max(worst, dd);
-        if (dd > 30.0) ++offRoute;
-    }
-    std::printf("    [buses] %d buses; %d not at their starting stop (worst %.0f m)\n",
-                buses, offRoute, worst);
-    CHECK(buses == 24);
-    CHECK(offRoute == 0);
-
-    // And in the running city, walkers choose it: three minutes, boardings.
-    {
-        const long before = city.sim().busBoardAttempts();
-        const auto ps0 = city.sim().buses().planStats();
-        for (int i = 0; i < 1800; ++i) city.step(world, 0.1);
-        long aboard = 0;
-        for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai)
-            if (city.sim().isBus(static_cast<int>(ai)))
-                aboard += city.sim().rides().load(static_cast<int>(ai));
-        const auto& ps = city.sim().buses().planStats();
-        std::printf("    [rider] 3 min of metro: %ld boardings, %ld aboard now, %ld waiting; "
-                    "plans asked %ld, bus %ld (%ld with a change), not worth it %ld\n",
-                    city.sim().busBoardAttempts() - before, aboard,
-                    static_cast<long>(city.sim().buses().waitingCount()), ps.asked - ps0.asked,
-                    ps.ok - ps0.ok,
-                    ps.transfers - ps0.transfers, ps.noSaving - ps0.noSaving);
-        CHECK(city.sim().busBoardAttempts() - before > 0);
-    }
-}
-
-// REGIONAL BUSES (Glenn, 2026-09-23: "Are there regional buses and long distance
-// buses that go between towns?"). metro_planned has places out along its freeways --
-// two towns and a mountain city -- whose streets meet the city's only by freeway. Each
-// street network gets loops of its own, one REGIONAL loop joins them by freeway at
-// stops the local loops share, and a share of walkers work in another town and ride.
-TEST_CASE(metro_planned_regional_bus_joins_the_towns) {
-    if (skipHeavy()) { std::printf("    skipped: loads metro_planned (heavy, RT_LEVEL_TESTS_SKIP_HEAVY)\n"); return; }
-    std::unique_ptr<Renderer> renderer = Renderer::create();
-    RendererMeshUploader uploader(*renderer);
-    AssetManager assets(uploader);
-    World world;
-    RenderView view;
-    const bool loaded = LevelLoader::load(levelsDir() + "/metro_planned.json", world, *renderer,
-                                          view, assets, /*editorMode=*/false);
-    CHECK(loaded);
-    if (!loaded) return;
-    citysim::CityRenderSystem city;
-    CHECK(city.build(world, &assets, nullptr));
-    const citysim::BusNetwork& net = city.sim().buses();
-
-    int regional = -1;
-    std::set<int> localNets;
-    for (int r = 0; r < net.routeCount(); ++r) {
-        const citysim::BusRoute& route = net.route(r);
-        if (route.regional) regional = r;
-        else localNets.insert(route.network);
-    }
-    std::printf("    [regional] %d routes, local loops in %zu street networks, regional route %d\n",
-                net.routeCount(), localNets.size(), regional);
-    CHECK(localNets.size() >= 3);    // the city, the mountain city (with the SW town), the NE town
-    CHECK(regional >= 0);
-    if (regional < 0) return;
-    // it stops in every network that has local loops, at a stop one of them shares
-    std::set<int> servedNets;
-    for (const citysim::BusStop& st : net.route(regional).stops) {
-        servedNets.insert(net.networkOf(st.node));
-        bool shared = false;
-        for (int r = 0; r < net.routeCount() && !shared; ++r)
-            if (r != regional)
-                for (const citysim::BusStop& o : net.route(r).stops)
-                    if (o.node == st.node) { shared = true; break; }
-        CHECK(shared);
-    }
-    CHECK(servedNets == localNets);
-
-    // Walkers who work in another town, and a trip between two of them planned end to
-    // end: the first leg is a bus that exists.
-    const auto& cs = city.sim().commuteStats();
-    std::printf("    [regional] %d of %d walkers tried ride to work in another town\n",
-                cs.busCommuters, cs.busCommuteTried);
-    CHECK(cs.busCommuters > 0);
-
-    // And in the running city someone rides it: the most aboard the regional buses at once,
-    // over the morning commute -- opened at 7:00, the day's clock run at 3 in-world minutes a
-    // real second so departures keep coming, the buses still driving in real time.
-    // Dormancy off: out past the player's bubble a walker's day is not simulated at all
-    // (rebuilt from the schedule on waking), and the town commuters all live out there.
-    // With it on, only riders near the player ride -- though they stay awake for the whole
-    // journey once they have a bus trip.
-    city.simMutable().dormancyEnabled = false;
-    city.simMutable().setHoursPerSecond(0.05);
-    city.simMutable().seedFromSchedule(7.0);
-    long most = 0, boardings0 = city.sim().busBoardAttempts();
-    for (int i = 0; i < 30000 && most < 10; ++i) {
-        city.step(world, 0.1);
-        if (i % 50) continue;
-        long aboard = 0;
-        for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai)
-            if (city.sim().busRouteOf(static_cast<int>(ai)) == regional)
-                aboard += city.sim().rides().load(static_cast<int>(ai));
-        most = std::max(most, aboard);
-    }
-    std::printf("    [regional] until %.1f h: %ld boardings in all, at most %ld aboard the regional buses\n",
-                city.sim().clockHours(), city.sim().busBoardAttempts() - boardings0, most);
-    CHECK(most >= 10);   // a busload, not a straggler left aboard from the minutes above
-
-    // ...and gets off in another town: the riders aboard the regional buses now, followed
-    // until they step off, stand in a different street network from home.
-    // (Where they BOARDED, not home: a rider's restNode stays the boarding stop for the ride.
-    // The mountain city and the SW town are one street network with three regional stops, so
-    // some ride it as an express within their own town -- that is not "another town".)
-    std::vector<std::pair<int, int>> riders;   // (agent, network boarded in)
-    for (std::size_t p = 0; p < city.sim().agents().size(); ++p) {
-        const int d = city.sim().rides().driverOf(static_cast<int>(p));
-        if (d >= 0 && city.sim().busRouteOf(d) == regional)
-            riders.push_back({static_cast<int>(p), net.networkOf(city.sim().agents()[p].restNode)});
-    }
-    int across = 0, within = 0, still = 0;
-    for (int i = 0; i < 21000; ++i) {   // a lap and then some
-        city.step(world, 0.1);
-        if (i % 100) continue;
-        across = within = still = 0;
-        for (const auto& [p, boardedIn] : riders) {
-            const citysim::Agent& a = city.sim().agents()[static_cast<std::size_t>(p)];
-            if (city.sim().rides().driverOf(p) >= 0) { ++still; continue; }
-            if (net.networkOf(a.restNode) != boardedIn) ++across; else ++within;
-        }
-        if (still == 0) break;
-    }
-    std::printf("    [regional] of %zu riders aboard the regional: %d set down in another town, %d in their own, %d still aboard\n",
-                riders.size(), across, within, still);
-    CHECK(across > 0);
-
-    // EVERY BUS DRIVES, near the player or not, with dormancy back on: it froze the far ones
-    // (5 of 40 moved in five minutes, and the regional loop never ran). Last, because agents
-    // put to sleep stay asleep when it is switched off again.
-    city.simMutable().dormancyEnabled = true;
-    {
-        std::vector<Vec2> was(city.sim().agents().size());
-        for (std::size_t ai = 0; ai < was.size(); ++ai) was[ai] = city.sim().agents()[ai].pos;
-        for (int i = 0; i < 3000; ++i) city.step(world, 0.1);
-        int buses = 0, moved = 0;
-        for (std::size_t ai = 0; ai < was.size(); ++ai) {
-            if (!city.sim().isBus(static_cast<int>(ai))) continue;
-            const Vec2 d = city.sim().agents()[ai].pos - was[ai];
-            ++buses;
-            if (d.x * d.x + d.y * d.y > 25.0) ++moved;
-        }
-        std::printf("    [regional] %d of %d buses moved in five minutes (dormancy %s)\n", moved, buses,
-                    city.sim().dormancyEnabled ? "on" : "off");
-        CHECK(moved * 10 >= buses * 9);
-    }
-}
-
 // PARKING (Glenn, 2026-09-18: "They park at the corner in a pile, but they
 // should be using the parallel parking spaces or maybe the parking garages, but
 // they need to park in spaces and not in a heap on the corner"). A census of
@@ -1863,7 +1583,6 @@ ParkCensus parkCensus(const citysim::CityRenderSystem& city) {
     for (std::size_t ai = 0; ai < sim.agents().size(); ++ai) {
         const auto& a = sim.agents()[ai];
         if (a.archetype != citysim::Agent::Mode::Driver) continue;
-        if (sim.isBus(static_cast<int>(ai))) continue;   // at a stop, not parked
         ++c.drivers;
         if (a.moving) continue;                      // on the road
         if (a.car < 0 || a.car >= static_cast<int>(sim.vehicles().size())) continue;
@@ -1953,9 +1672,7 @@ TEST_CASE(metro_cars_park_in_spaces_not_heaps) {
     double speed = 0;
     for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai) {
         const auto& a = city.sim().agents()[ai];
-        if (a.archetype != citysim::Agent::Mode::Driver || !a.moving ||
-            city.sim().isBus(static_cast<int>(ai)))
-            continue;
+        if (a.archetype != citysim::Agent::Mode::Driver || !a.moving) continue;
         ++moving;
         speed += a.speed;
         const auto& rl = a.route.links;
@@ -2181,10 +1898,9 @@ TEST_CASE(metro_pedestrians_walk_and_keep_apart) {
             const Vec2 d = a.pos - c;
             if (d.x * d.x + d.y * d.y > 200.0 * 200.0) continue;
             const int ki = static_cast<int>(k);
-            if (city.sim().riding(ki)) continue;
             if (!city.sim().pedVisible(ki)) { ++indoors; continue; }
             if (a.moving) ++moving;
-            else if (!city.sim().awaitingRide(ki)) ++standing;
+            else if (!city.sim().onTrainJourney(ki)) ++standing;
             drawn.push_back(k);
         }
         for (std::size_t x = 0; x < drawn.size(); ++x)
@@ -2751,31 +2467,9 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
             for (const Vec3& h : sf.lampHeads) note(lamps, decks, h.x, h.z, 0.0);
         });
 
-        // BUS STOPS — the pole, the sign and the bench. A BusStop::pos is a nav
-        // NODE and sits on the centreline by construction, so asking about THAT
-        // measures nothing; what must be clear is where the furniture LANDED,
-        // which buildBusStopProps reports for exactly this audit.
-        RoadIntrusion stops{"bus stops (carriageway)"};
-        {
-            citysim::CityRenderSystem city;
-            if (city.build(world, &assets, nullptr)) {
-                std::vector<Vec3> at;
-                // Height does not matter to this audit — only WHERE the prop landed
-                // in plan — so the deck (or 0) is a sufficient ground for the call.
-                citysim::buildBusStopProps(
-                    world, assets, city.sim().buses(), city.nav(),
-                    [&](Real x, Real z) {
-                        double y = 0;
-                        for (const engine::RoadDeckField* d : decks)
-                            if (d->heightAt(x, z, 4.0, &y)) return static_cast<Real>(y);
-                        return Real(0);
-                    },
-                    nullptr, &at, decks.front());
-                for (const Vec3& p : at) note(stops, decks, p.x, p.z, 0.0);
-            }
-        }
-
-        const RoadIntrusion* all[] = {&scatter, &streetTrees, &poles, &lamps, &stops};
+        // (The bus stops' poles, signs and benches were audited here too; they went with the old driving's buses,
+        // ADR-0460.)
+        const RoadIntrusion* all[] = {&scatter, &streetTrees, &poles, &lamps};
         for (const RoadIntrusion* r : all) {
             std::printf("    [furniture] %-14s %-20s %d of %d in a road%s\n", name, r->what.c_str(),
                         r->count, r->total,
@@ -2800,8 +2494,8 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
         // (engine::DrawnRoad, the index this gate uses), lot trees included, and both cities
         // are clean: nothing stands in a road, on either builder.
         for (const RoadIntrusion* r : all) CHECK(r->count == 0);
-        // ...and the things measured EXIST. "0 of 0 bus stops in a road" passed while the
-        // freeway weld had left metro_lanes with no bus routes at all.
+        // ...and the things measured EXIST ("0 of 0 bus stops in a road" once passed while the freeway weld had left
+        // metro_lanes with no bus routes at all).
         for (const RoadIntrusion* r : all) CHECK(r->total > 0);
     }
 }
@@ -3525,7 +3219,7 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
         int drivers = 0, plannedFreeway = 0, longTrips = 0;
         for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai) {
             const auto& a = city.sim().agents()[ai];
-            if (a.archetype != citysim::Agent::Mode::Driver || city.sim().isBus(static_cast<int>(ai))) continue;
+            if (a.archetype != citysim::Agent::Mode::Driver) continue;
             ++drivers;
             if (usesFreeway(a.route)) ++plannedFreeway;
             if (a.home >= 0 && a.work >= 0 && a.home < n && a.work < n &&
@@ -3598,7 +3292,7 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
         int commutes = 0, commutesViaFreeway = 0;
         for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai) {
             const auto& a = city.sim().agents()[ai];
-            if (a.archetype != citysim::Agent::Mode::Driver || city.sim().isBus(static_cast<int>(ai))) continue;
+            if (a.archetype != citysim::Agent::Mode::Driver) continue;
             if (a.home < 0 || a.work < 0 || a.home == a.work || a.home >= n || a.work >= n) continue;
             const engine::Route r = engine::findRoute(nav, a.home, a.work);
             if (!r.valid()) continue;
@@ -4228,37 +3922,32 @@ TEST_CASE(metro_day_census_prints) {
     if (!loaded) return;
     citysim::CityRenderSystem city;
     CHECK(city.build(world, &assets, nullptr));
-    std::printf("    [census] hour | out%% (walkers out / moving, drivers moving, riding, waiting) | by role out%% "
-                "of the first four roles | boardings in 5 min | bus plans asked / taken / not worth it\n");
+    std::printf("    [census] hour | out%% (walkers out / moving, drivers moving, on a train journey) | by role out%% "
+                "of the first four roles\n");
     const char* only = std::getenv("RT_CENSUS_HOUR");   // one hour of the seven, to look closer
     for (Real hour : {8.0, 10.0, 12.5, 15.0, 17.5, 20.0, 23.0}) {
         if (only && std::fabs(std::atof(only) - hour) > 1e-6) continue;
         city.setWorldClock(hour, 1.0 / 3600.0);
         for (int i = 0; i < 3000; ++i) city.step(world, 0.1);   // settle 5 min
-        const long b0 = city.sim().busBoardAttempts();
-        const auto ps0 = city.sim().buses().planStats();
         constexpr int kR = citysim::CitySim::Census::kRoles;
-        double wo = 0, wm = 0, dm = 0, rd = 0, wt = 0, ag = 0, rOut[kR] = {}, rAll[kR] = {}, rWork[kR] = {}, bm = 0, cm = 0, og = 0;
+        double wo = 0, wm = 0, dm = 0, wt = 0, ag = 0, rOut[kR] = {}, rAll[kR] = {}, rWork[kR] = {}, og = 0;
         int samples = 0;
         for (int i = 0; i < 3000; ++i) {
             city.step(world, 0.1);
             if (i % 100 != 0) continue;   // every 10 s
             const citysim::CitySim::Census c = city.sim().census();
-            bm += c.busesMoving; cm += c.cabsMoving; og += c.outing;
-            wo += c.walkersOutside; wm += c.walkersMoving; dm += c.driversMoving; rd += c.riding; wt += c.waiting; ag += c.agents;
+            og += c.outing;
+            wo += c.walkersOutside; wm += c.walkersMoving; dm += c.driversMoving; wt += c.waiting; ag += c.agents;
             for (int r = 0; r < kR; ++r) { rOut[r] += c.outsideByRole[r]; rAll[r] += c.byRole[r]; rWork[r] += c.atWorkByRole[r]; }
             ++samples;
         }
         const double n = samples;
-        const double out = (wo + dm + rd + wt) / n, all = ag / n;
-        const auto& ps = city.sim().buses().planStats();
+        const double out = (wo + dm + wt) / n, all = ag / n;
         auto pct = [](double a, double b) { return b > 0 ? 100.0 * a / b : 0.0; };
-        std::printf("    [census] %5.1f | %5.1f%% (%.0f / %.0f, %.0f, %.0f, %.0f) | %.1f / %.1f / %.1f / %.1f | %ld | %ld / %ld / %ld\n",
-                    hour, pct(out, all), wo / n, wm / n, dm / n, rd / n, wt / n, pct(rOut[0], rAll[0]), pct(rOut[1], rAll[1]),
-                    pct(rOut[2], rAll[2]), pct(rOut[3], rAll[3]), city.sim().busBoardAttempts() - b0, ps.asked - ps0.asked,
-                    ps.ok - ps0.ok, ps.noSaving - ps0.noSaving);
-        std::printf("    [census] %5.1f | service: buses moving %.0f, cabs moving %.0f | out somewhere (a stop, a night out) %.0f (%.1f%%)\n",
-                    hour, bm / n, cm / n, og / n, pct(og, ag));
+        std::printf("    [census] %5.1f | %5.1f%% (%.0f / %.0f, %.0f, %.0f) | %.1f / %.1f / %.1f / %.1f\n",
+                    hour, pct(out, all), wo / n, wm / n, dm / n, wt / n, pct(rOut[0], rAll[0]), pct(rOut[1], rAll[1]),
+                    pct(rOut[2], rAll[2]), pct(rOut[3], rAll[3]));
+        std::printf("    [census] %5.1f | out somewhere (a stop, a night out) %.0f (%.1f%%)\n", hour, og / n, pct(og, ag));
         {   // every role: how many, and the share of them out
             std::string line;
             const auto& roles = city.sim().roles().roles;
@@ -4271,7 +3960,7 @@ TEST_CASE(metro_day_census_prints) {
             }
             std::printf("    [census] %5.1f | roles: %s\n", hour, line.c_str());
         }
-        if (hour >= 23.0) {   // WHO DRIVES AT NIGHT: the drivers still moving, by tier / activity / bus or cab
+        if (hour >= 23.0) {   // WHO DRIVES AT NIGHT: the drivers still moving, by tier / activity
             static const char* kAct[] = {"AtHome", "Commuting", "AtWork", "Returning", "Shopping", "Outing", "Lunch"};
             std::map<std::string, int> why;
             const citysim::CitySim& sim = city.sim();
@@ -4281,8 +3970,8 @@ TEST_CASE(metro_day_census_prints) {
                 const char tier = a.tier == citysim::Agent::Tier::K ? 'K' : a.tier == citysim::Agent::Tier::V ? 'V' : 'D';
                 const int act = static_cast<int>(a.activity);
                 char key[96];
-                std::snprintf(key, sizeof key, "%s tier %c %s role %d departHome %.0f",
-                              sim.isBus(i) ? "bus" : sim.isTaxi(i) ? "cab" : "car", tier, act >= 0 && act < 7 ? kAct[act] : "?",
+                std::snprintf(key, sizeof key, "car tier %c %s role %d departHome %.0f",
+                              tier, act >= 0 && act < 7 ? kAct[act] : "?",
                               static_cast<int>(a.role), std::floor(a.departHome));
                 ++why[key];
             }
@@ -4321,7 +4010,6 @@ TEST_CASE(people_census_prints) {
     std::map<std::string, int> noCommuteBy;
     for (int i = 0; i < static_cast<int>(sim.agents().size()); ++i) {
         const citysim::Agent& a = sim.agents()[static_cast<std::size_t>(i)];
-        if (sim.onService(i)) continue;
         ++byRole[sim.roles().nameOf(a.role)];
         sideJobs += a.sideVenue >= 0 ? 1 : 0;
         if (a.workPlace != citysim::kNoPlace && a.homePlace != citysim::kNoPlace && a.stage >= 0 &&

@@ -426,7 +426,7 @@ void TrainSystem::fixedUpdate(engine::FrameContext& ctx) {
         if (city_) {   // the city's people on the line: how many chose it, where they are now
             const RailRiders& rr = city_->sim().railRiders();
             int phase[5] = {0, 0, 0, 0, 0};
-            int walking = 0, onBus = 0, still = 0;
+            int walking = 0, still = 0;
             std::vector<double> left;   // metres to the station's way in, of those still on the street
             const CitySim& cs = city_->sim();
             for (int p : rr.passengers()) {
@@ -435,14 +435,13 @@ void TrainSystem::fixedUpdate(engine::FrameContext& ctx) {
                 ++phase[static_cast<int>(t->phase)];
                 if (t->phase != RailTrip::Phase::ToStation || p >= static_cast<int>(cs.agents().size())) continue;
                 const Agent& a = cs.agents()[static_cast<std::size_t>(p)];
-                if (cs.buses().tripOf(p)) ++onBus; else if (a.moving) ++walking; else ++still;
+                if (a.moving) ++walking; else ++still;
                 const Vec2 acc = rr.stations()[static_cast<std::size_t>(t->from)].access;
                 left.push_back(std::hypot(a.pos.x - acc.x, a.pos.y - acc.y));
             }
             std::sort(left.begin(), left.end());
             char lb[160];
-            std::snprintf(lb, sizeof(lb), " (walking %d, bus %d, standing %d; to go: nearest %.0f m, median %.0f m)", walking, onBus,
-                          still, left.empty() ? 0.0 : left.front(), left.empty() ? 0.0 : left[left.size() / 2]);
+            std::snprintf(lb, sizeof(lb), " (walking %d, standing %d; to go: nearest %.0f m, median %.0f m)", walking, still, left.empty() ? 0.0 : left.front(), left.empty() ? 0.0 : left[left.size() / 2]);
             char b[600];
             std::snprintf(b, sizeof(b), "; riders: %zu stations pinned, planned %ld entered %ld boarded %ld set down %ld gave up %ld | "
                           "now to station %d%s, in the way in %d, on platforms %d, aboard %d, on the way out %d",

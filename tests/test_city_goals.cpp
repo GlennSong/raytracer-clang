@@ -386,10 +386,9 @@ TEST_CASE(households_fill_the_dwellings_one_to_each) {
                 if (h.dwelling != Household::kNoDwelling) ++taken[h.dwelling];
             int twice = 0;
             for (int t : taken) twice += t > 1 ? 1 : 0;
-            int housed = 0, service = 0, wrongHome = 0, kidsDriving = 0, kidsWorking = 0, homeless = 0, kids = 0;
+            int housed = 0, wrongHome = 0, kidsDriving = 0, kidsWorking = 0, homeless = 0, kids = 0;
             for (int i = 0; i < static_cast<int>(sim.agents().size()); ++i) {
                 const Agent& a = sim.agents()[static_cast<std::size_t>(i)];
-                if (sim.onService(i)) { ++service; continue; }
                 homeless += a.homePlace == kNoPlace ? 1 : 0;
                 if (a.household < 0) continue;
                 ++housed;
@@ -402,7 +401,7 @@ TEST_CASE(households_fill_the_dwellings_one_to_each) {
                     kidsWorking += a.workPlace != kNoPlace ? 1 : 0;
                 }
             }
-            const int residents = static_cast<int>(sim.agents().size()) - service;
+            const int residents = static_cast<int>(sim.agents().size());
             std::printf("    [households] %d a block, seed %u: %s; unhoused %d\n", perBlock, seed, sim.populationLine().c_str(),
                         sim.unhousedCount());
             CHECK(twice == 0);

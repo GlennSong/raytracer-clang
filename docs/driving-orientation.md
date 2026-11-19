@@ -6,7 +6,7 @@ rules that apply. The *why* is in `docs/driving-model-design.md`, `docs/two-driv
 names (ADR-0398 to ADR-0416 for the driving library, ADR-0440 to ADR-0452 for the brain, the near tier, things in the
 way and crosswalks, ADR-0453 for one kind of car, ADR-0455 for the brain's car facts on the car and one way to take a
 car, ADR-0456 for one signal clock, ADR-0457 for river_town on the new driving, ADR-0459 for deleting the old
-driving's possession, passenger seat and trip lab). The roads it drives on are described
+driving's possession, passenger seat and trip lab, ADR-0460 for its buses and cabs). The roads it drives on are described
 in `docs/roads-orientation.md`. Written 2026-11-17, after ADR-0452; section 3 and 4 brought up to ADR-0453 on
 2026-11-18, to ADR-0455 the same day, and to ADR-0456, ADR-0457 and ADR-0459 after it. Anything marked *(unsure)* was not
 checked in the code.
@@ -29,8 +29,13 @@ own any more (`possess walker`, `walk_to`, `board`/`alight` a household's car of
 `drive_to` and the bus `ride` are gone), the player's passenger seat on a bus, cab or old car
 (`CityPlayerTransitSystem`, the `ride` verb) is gone, and the one-agent trip lab (`CityTripSystem`, the `trip` verbs, Y
 / I / U, agent_lab's purpose) is gone, the agent brain's trips having superseded it; its `stepsOffThePaths` is the
-brain's now (`city_brain.cpp`). Still there until C2: buses and taxis (`isBus`, `setBuses`, the depots, `RideBook`'s
-bus riders). Until C3: every v1 car (`Mode::Driver`, `SimVehicle`, the lane match, the ghost-backed physical tier, its
+brain's now (`city_brain.cpp`). C2 is done (ADR-0460): no buses and no cabs. The sim's buses, cabs, depots, bus stops,
+riders, hailing, bus commuters and "towns" (which were the bus network's street networks) are gone, with their drawing
+(destination signs, doors, riders in seats, stop furniture, `depots?`) and the `busRoutes`/`buses`/`taxiFraction`/
+`hail*`/`busService`/`busCommuteShare` level keys (ignored if a level still sets them). Left: `BusNetwork`'s route
+planner alone (`city_bus.h`, for the island planner's map lines), the pure `RideBook` and `Dispatch` modules (no user
+in the sim), the fleet's bus and taxi bodies, the lot pass's bus depot yards (built, drawn, unused). Until C3: every v1
+car (`Mode::Driver`, `SimVehicle`, the lane match, the ghost-backed physical tier, its
 drawing and lamps, `LevelLanes`). The player still takes any car with E (`CitySim::playerTakesCar`).
 
 **One car, one representation (ADR-0453).** Every car the new driving moves is a car entity (`city_car.h`): a

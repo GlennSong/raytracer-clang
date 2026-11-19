@@ -1,16 +1,14 @@
 #ifndef RAYTRACER_APPS_CITYSIM_CITY_BUS_H
 #define RAYTRACER_APPS_CITYSIM_CITY_BUS_H
 
-// BUSES (Glenn: "we should make buses and taxis and Lyfts for npcs to get
-// around the city. Ideally a subway or train at some point. We would need to
-// plan that since we don't have rail lines").
+// BUS ROUTES, PLANNED (Glenn: "we should make buses and taxis and Lyfts for npcs to get around the city").
 //
-// A bus differs from a taxi in exactly one way that matters: it does not go
-// where you ask. It drives a FIXED LOOP for ever, and you ride it if its loop
-// happens to pass near where you are going. So the taxi's Dispatch (one hail,
-// one driver, a destination chosen by the passenger) is the wrong shape, and
-// this carries its own waiting lists instead. RideBook still does the actual
-// carrying — that part is the same for every vehicle in the city.
+// What is left of the old driving's buses (ADR-0460): the ROUTE PLANNER alone. It lays a city's bus loops over its
+// street map, and the island planner (tools/city_plan.cpp) draws them on the island's map as its local bus lines.
+// The buses that drove these loops, their riders, their depots and the riders' trip planning went with the old
+// driving; nothing in the city sim reads this any more. It plans over the street map (engine::NavGraph), which #306
+// task 4 deletes: a bus of the new driving plans its loop on the road model's lanes, so this goes with the street
+// map unless the island planner has moved to the road model first.
 //
 // ROUTES ARE DERIVED, NOT AUTHORED. The city is procedural, so a route written
 // into a level file would not survive the next regeneration: the nodes it named
@@ -25,10 +23,8 @@
 #include "../../engine/ai/nav_graph.h"   // routes FOLLOW STREETS, so the graph
 #include "../../engine/procgen/city/polygon.h"   // engine::Vec2, engine::Real
 
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 
 namespace citysim {
@@ -37,8 +33,7 @@ struct BusStop {
     int node = -1;              // nav node this stop sits on
     engine::Vec2 pos{0, 0};
     // Which visit of the route's pathNodes this stop is (the loop may pass a node twice), set when the
-    // route is built: pathNodes[pathIndex - 1] -> node is the street the bus ARRIVES by, where it stands
-    // and where the stop's furniture belongs (#36). -1: not on the route's path.
+    // route is built: pathNodes[pathIndex - 1] -> node is the street the bus ARRIVES by. -1: not on the route's path.
     int pathIndex = -1;
 };
 
@@ -52,18 +47,12 @@ struct BusRoute {
     // at consecutive streets").
     std::vector<engine::Vec2> path;
     std::vector<int> pathNodes;   // the same, as nav node ids -- an OPEN loop (the last node is not the first again)
-    // How far round the loop each stop is (metres from the first path node),
-    // and the loop's length: a ride's distance is the arc FORWARD from the
-    // boarding stop, because a loop only runs one way.
+    // How far round the loop each stop is (metres from the first path node), and the loop's length.
     std::vector<engine::Real> stopArc;
     engine::Real loopLength = 0;
-    // Stops shared with another route: where a rider can change buses.
+    // Stops shared with another route: where a rider could change buses.
     std::vector<int> hubStops;
-    // THE YARD (Glenn: "buses should be constantly running (that is until their
-    // stop time and then they should go back to some kind of bus yard). A bus
-    // can be in a no-service state and travel back home"). Peripheral, like a
-    // real depot: the stop furthest from the city's middle, so an off-duty bus
-    // drives OUT of town rather than parking on the busiest corner.
+    // THE YARD: the stop furthest from the city's middle (a peripheral depot).
     int depotNode = -1;
     engine::Vec2 depotPos{0, 0};
     // Which street network the loop serves (BusNetwork::networkOf); -1 for the
@@ -79,19 +68,6 @@ struct BusRoute {
     bool valid() const { return stops.size() >= 2; }
 };
 
-// Where a rider is in the system: which route they are waiting for / riding,
-// and the stop index they want to get off at.
-struct BusTrip {
-    int route = -1;
-    int fromStop = -1;
-    int toStop = -1;
-    // A rider KEEPS their trip once aboard -- the bus needs toStop to know
-    // where to set them down -- but must drop off the waiting list, or the
-    // next bus would try to pick up someone already sitting on one.
-    bool aboard = false;
-    bool valid() const { return route >= 0 && fromStop >= 0 && toStop >= 0; }
-};
-
 class BusNetwork {
 public:
     // Lay out `routeCount` LOOPS over the street graph.
@@ -100,8 +76,7 @@ public:
     // ALONG streets, stopping every few hundred metres, and it meets other
     // routes at hubs so a rider can change. So the network is built as:
     //   1. HUBS -- well-connected junctions, spread across the city. Every
-    //      route passes through several, and routes SHARE them, which is what
-    //      makes a transfer possible at all.
+    //      route passes through several, and routes SHARE them.
     //   2. each route is a closed loop over its own ordered subset of hubs,
     //      with the legs between them PATHFOUND over the road graph, so the
     //      line follows real streets.
@@ -128,30 +103,6 @@ public:
     int networkOf(int node) const {
         return node >= 0 && node < static_cast<int>(comp_.size()) ? comp_[static_cast<std::size_t>(node)] : -1;
     }
-    // Any stop within maxWalk of p. Without one at either end planTrip has nothing to plan (an exact pre-check).
-    bool servesNear(engine::Vec2 p, engine::Real maxWalk) const {
-        for (const BusRoute& r : routes_)
-            for (const BusStop& st : r.stops)
-                if (std::sqrt((st.pos.x - p.x) * (st.pos.x - p.x) + (st.pos.y - p.y) * (st.pos.y - p.y)) <= maxWalk)
-                    return true;   // (planTrip's own test, to the bit)
-        return false;
-    }
-    // A route's LINE: a twin is the same line the other way round, so it wears its loop's colour and number
-    // (the map, the stop flags, the HUD).
-    int lineOf(int r) const {
-        if (r < 0 || r >= routeCount()) return r;
-        const int t = routes_[static_cast<std::size_t>(r)].twin;
-        return t >= 0 && t < r ? t : r;
-    }
-    // Routes driven both ways round (each loop and its twin).
-    bool twoWay() const {
-        for (const BusRoute& r : routes_) if (r.twin >= 0) return true;
-        return false;
-    }
-    bool hasRegional() const {
-        for (const BusRoute& r : routes_) if (r.regional) return true;
-        return false;
-    }
 
     // The hubs the network was built around, in world XZ.
     const std::vector<engine::Vec2>& hubs() const { return hubs_; }
@@ -161,74 +112,6 @@ public:
     bool empty() const { return routes_.empty(); }
     void clear();
 
-    // The nearest stop on `r` to `p`, as an index into that route's stops, or
-    // -1 when the route is empty.
-    int nearestStop(int r, engine::Vec2 p) const;
-
-    // COVERAGE: the share of walkable street, by length, that lies within
-    // `maxWalk` (straight line, the same measure planTrip uses) of SOME stop on
-    // SOME route. A walker outside it can never be offered a bus, whatever the
-    // routes look like on a map -- "I walked around for a while and couldn't
-    // find one" (Glenn, 2026-09-18) is this number being low.
-    engine::Real coverage(const engine::NavGraph& nav, engine::Real maxWalk) const;
-
-    // --- time, for choosing a bus by how long it TAKES ------------------------
-    // Metres a bus drives from stop a to stop b on route r: forward round the
-    // loop, never backwards.
-    engine::Real rideMetres(int r, int a, int b) const;
-    // Seconds for that ride: the drive at a city pace plus a dwell at every
-    // stop in between.
-    engine::Real rideSeconds(int r, int a, int b) const;
-    // Buses on each route (the sim deals them), and so the mean wait: half the
-    // headway, a lap's time over the buses sharing it.
-    void setFleet(std::vector<int> busesPerRoute) { fleet_ = std::move(busesPerRoute); }
-    int fleetOf(int r) const { return r >= 0 && r < static_cast<int>(fleet_.size()) ? fleet_[static_cast<std::size_t>(r)] : 0; }
-    engine::Real waitSeconds(int r) const;
-
-    // THE SHARE OF STREETS A BUS DRIVES ALONG, by length. The number coverage
-    // hides: 94% of metro's street was within 220 m of a stop while 71% of its
-    // streets had no bus on them, because the stop was a street over behind a
-    // building. Whether you WALK PAST a bus stop is this number.
-    engine::Real streetShare(const engine::NavGraph& nav) const;
-
-    // The best route to get from `from` to `to`: the one whose nearest stop to
-    // each is closest overall, scored on the walking a rider would still have to
-    // do at both ends. Returns an invalid trip when no route helps — which is
-    // the common case for a short hop, and the caller should simply walk.
-    // `maxWalk` bounds how far a rider will walk to or from a stop.
-    // count = false: leave planStats() alone (and so safe to call from several threads at once -- the population's
-    // decisions at load ask it in parallel). walkable = false: the two ends are in different street networks, so
-    // there is no walk to beat and any trip is taken.
-    BusTrip planTrip(engine::Vec2 from, engine::Vec2 to, engine::Real maxWalk, bool count = true,
-                     bool walkable = true) const;
-
-    // WHY a trip was refused, counted. Ridership was zero in the shipped city
-    // while the mechanism provably worked in a test one, and the difference has
-    // to be one of these gates -- guessing which cost two rounds elsewhere.
-    struct PlanStats {
-        long asked = 0, noRoutes = 0, sameStop = 0, farFrom = 0, farTo = 0,
-             noSaving = 0, ok = 0, transfers = 0;
-    };
-    const PlanStats& planStats() const { return stats_; }
-    void resetPlanStats() { stats_ = PlanStats{}; }
-
-    // --- who is waiting, and who is aboard --------------------------------
-    // These are keyed by AGENT INDEX and deliberately sparse: a city of
-    // thousands has a handful of bus riders, and Agent is not the place for it.
-    bool waitFor(int passenger, const BusTrip& trip);
-    void stopWaiting(int passenger);
-    const BusTrip* tripOf(int passenger) const;
-
-    // Everyone waiting for `route` at stop index `stop`, ascending by passenger
-    // so a traversal is reproducible.
-    std::vector<int> waitingAt(int route, int stop) const;
-    // Riders ABOARD `route` who get off at `stop`, ascending.
-    std::vector<int> alightingAt(int route, int stop) const;
-    void markAboard(int passenger);
-    // Done with the system entirely (set down, or gave up waiting).
-    void forget(int passenger) { stopWaiting(passenger); }
-    std::size_t waitingCount() const { return waiting_.size(); }
-
 private:
     void buildRegional(const engine::NavGraph& nav);
     int anchorsServed_ = 0, anchorCount_ = 0;
@@ -237,18 +120,6 @@ private:
     std::vector<int> comp_;   // street network per nav node
     std::vector<BusRoute> routes_;
     std::vector<engine::Vec2> hubs_;
-    std::unordered_map<int, BusTrip> waiting_;
-    mutable PlanStats stats_;
-    std::vector<int> fleet_;   // buses per route
-    struct Transfer {
-        int fromRoute, fromStop, toRoute, toStop;
-        engine::Real walk;   // metres between the two stops
-    };
-    std::vector<Transfer> transfers_;
-    // planTrip's index: the transfers out of each (route, stop), in transfers_ order; stopBase_[r] + stop
-    std::vector<int> stopBase_;
-    std::vector<std::vector<int>> transfersFrom_;
-    void indexTransfers();
 };
 
 }  // namespace citysim

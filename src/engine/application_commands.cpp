@@ -813,10 +813,6 @@ void Application::registerCityVerbs() {
                      "The trains: lines, stops, every train's place, speed and doors, and whether you are aboard.",
                      unanswered("a TrainSystem: play mode on a level with rail"));
 
-    commandTable.add("depots?", "depots?",
-                     "Buses: on route, heading in, off duty and parked in depot bays, the nearest bus and bay, and any stalled heading in.",
-                     unanswered("a CityRenderSystem: play mode on a city level"));
-
     // `pin <agent>` / `unpin <agent>`: FOLLOW an agent -- it stays in the full sim however far it goes
     {
         const ControlCommands::Handler h = [this](const ControlCommand& cmd) -> std::string {

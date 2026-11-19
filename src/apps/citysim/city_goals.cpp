@@ -7,7 +7,6 @@ namespace citysim {
 namespace {
 const char* kEventNames[] = {"departWork", "departHome", "arrived",
                              "noRoute",    "idle",       "dwellDone",
-                             "gotFare",    "serviceEnd", "serviceStart",
                              "evening",    "eveningOver"};
 static_assert(sizeof(kEventNames) / sizeof(kEventNames[0]) ==
                   static_cast<std::size_t>(GoalEvent::Count),
@@ -23,10 +22,6 @@ const char* targetName(GoalTarget t) {
         case GoalTarget::Home: return "home";
         case GoalTarget::Random: return "random";
         case GoalTarget::Shop: return "shop";
-        case GoalTarget::Fare: return "fare";
-        case GoalTarget::Drop: return "drop";
-        case GoalTarget::Stop: return "stop";
-        case GoalTarget::Depot: return "depot";
         case GoalTarget::Lunch: return "lunch";
         case GoalTarget::Outing: return "outing";
         case GoalTarget::Campus: return "campus";
@@ -156,59 +151,6 @@ GoalTable wanderGoals(bool driver) {
         t.addTransition("RoamRest", GoalEvent::Idle, "Roam");
     }
     t.setEntry("Roam");
-    return t;
-}
-
-GoalTable busGoals() {
-    GoalTable t;
-    // ONE state. A bus has no decisions to make: it drives to the next stop,
-    // for ever. Arriving CHAINS into the next leg (arriveOrChain), and the
-    // stop index advances there too, so the self-loop is the whole timetable.
-    t.addState("Drive", GoalAction::GoTo, GoalTarget::Stop, Activity::Commuting);
-    t.addTransition("Drive", GoalEvent::Arrived, "Drive");
-    // A leg it cannot route is skipped, not fatal: the stop index has already
-    // moved on, so the bus simply tries the one after it.
-    t.addTransition("Drive", GoalEvent::NoRoute, "Drive");
-
-    // OUT OF SERVICE. At the end of the service day the bus stops taking
-    // passengers and drives to the yard, then sits there until service resumes.
-    // Deadheading is a REAL state, not an absence of one: a bus crossing town
-    // empty with its doors shut is doing its job, and a viewer can tell it from
-    // one that is simply stuck.
-    t.addState("ToDepot", GoalAction::GoTo, GoalTarget::Depot, Activity::Returning);
-    t.addState("OffDuty", GoalAction::Rest, GoalTarget::None, Activity::AtHome);
-    t.addTransition("Drive", GoalEvent::ServiceEnd, "ToDepot");
-    t.addTransition("ToDepot", GoalEvent::Arrived, "OffDuty");
-    // A yard it cannot reach must not strand the bus mid-road for the night.
-    t.addTransition("ToDepot", GoalEvent::NoRoute, "OffDuty");
-    t.addTransition("OffDuty", GoalEvent::ServiceStart, "Drive");
-    // ...and one still on its way in when the morning service starts turns back to its route
-    t.addTransition("ToDepot", GoalEvent::ServiceStart, "Drive");
-    t.setEntry("Drive");
-    return t;
-}
-
-GoalTable taxiGoals() {
-    GoalTable t;
-    // Cruise: a wandering car, exactly like wanderGoals' Roam -- Arrived chains
-    // straight into the next leg so the cab keeps rolling through junctions.
-    t.addState("Cruise", GoalAction::GoTo, GoalTarget::Random, Activity::Commuting);
-    t.addState("ToPickup", GoalAction::GoTo, GoalTarget::Fare, Activity::Commuting);
-    t.addState("ToDrop", GoalAction::GoTo, GoalTarget::Drop, Activity::Commuting);
-    t.addTransition("Cruise", GoalEvent::Arrived, "Cruise");
-    // The dispatch matched us: break off the cruise and go and collect.
-    t.addTransition("Cruise", GoalEvent::GotFare, "ToPickup");
-    // Arriving AT the pickup boards the passenger (CitySim::arriveOrChain does
-    // the boarding, then the table moves the cab on to the destination).
-    t.addTransition("ToPickup", GoalEvent::Arrived, "ToDrop");
-    // Arriving at the destination sets them down; back to cruising for another.
-    t.addTransition("ToDrop", GoalEvent::Arrived, "Cruise");
-    // A fare we cannot route to is not a fare: drop it and keep cruising,
-    // rather than a cab frozen forever on an unreachable pickup.
-    t.addTransition("ToPickup", GoalEvent::NoRoute, "Cruise");
-    t.addTransition("ToDrop", GoalEvent::NoRoute, "Cruise");
-    t.addTransition("Cruise", GoalEvent::NoRoute, "Cruise");
-    t.setEntry("Cruise");
     return t;
 }
 

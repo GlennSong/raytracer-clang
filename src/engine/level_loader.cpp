@@ -6449,30 +6449,21 @@ bool LevelLoader::load(const std::string& path,
         cfg.sceneryRadius = cs.value("sceneryRadius", cfg.sceneryRadius);
         cfg.maxWalkerBodies = cs.value("maxWalkerBodies", cfg.maxWalkerBodies);
         cfg.pedPromoteRadius = cs.value("pedPromoteRadius", cfg.pedPromoteRadius);
-        cfg.taxiFraction = cs.value("taxiFraction", cfg.taxiFraction);
         cfg.driverRole = cs.value("driverRole", cfg.driverRole);
         cfg.driverRoleShare = cs.value("driverRoleShare", cfg.driverRoleShare);
         cfg.realLanes = cs.value("realLanes", cfg.realLanes);
         cfg.driving = cs.value("driving", cfg.driving);
         cfg.drivingRules = cs.value("drivingRules", cfg.drivingRules);
         cfg.levelPath = g_levelPath;
-        cfg.hailChance = cs.value("hailChance", cfg.hailChance);
-        cfg.hailMinMetres = cs.value("hailMinMetres", cfg.hailMinMetres);
-        cfg.busRoutes = cs.value("busRoutes", cfg.busRoutes);
-        cfg.busStops = cs.value("busStops", cfg.busStops);
-        cfg.buses = cs.value("buses", cfg.buses);
-        cfg.busMaxWalk = cs.value("busMaxWalk", cfg.busMaxWalk);
-        if (cs.contains("busService") && cs["busService"].is_array() && cs["busService"].size() == 2) {
-            cfg.busServiceStart = cs["busService"][0].get<float>();
-            cfg.busServiceEnd = cs["busService"][1].get<float>();
-        }
+        // (The old buses' and cabs' keys -- busRoutes, busStops, buses, busMaxWalk, busService, busCommuteShare,
+        // taxiFraction, hailChance, hailMinMetres -- are no longer read: ADR-0460. A level that still sets them loads
+        // as before; nothing reads them.)
         cfg.physicalCars = cs.value("physicalCars", cfg.physicalCars);
         cfg.pedDemoteRadius = cs.value("pedDemoteRadius", cfg.pedDemoteRadius);
         cfg.localHz = cs.value("localHz", cfg.localHz);
         cfg.adaptiveRate = cs.value("adaptiveRate", cfg.adaptiveRate);
         cfg.carsPerLaneKm = cs.value("carsPerLaneKm", cfg.carsPerLaneKm);
         cfg.longCommuteShare = cs.value("longCommuteShare", cfg.longCommuteShare);
-        cfg.busCommuteShare = cs.value("busCommuteShare", cfg.busCommuteShare);
         cfg.pedsPerKm = cs.value("pedsPerKm", cfg.pedsPerKm);
         cfg.maxAmbient = cs.value("maxAmbient", cfg.maxAmbient);
         cfg.nearTarget = cs.value("nearTarget", cfg.nearTarget);
@@ -6799,7 +6790,7 @@ bool LevelLoader::load(const std::string& path,
             int lotTreesOnRoad = 0;
             std::map<std::string, int> tradePlaces;   // the shop units that became places, by trade
             std::vector<engine::ShopSign> shopSigns;   // ...and the boards that name them
-            int depotYards = 0, depotBays = 0;          // the bus depots' bays, to the buses
+            int depotYards = 0, depotBays = 0;          // the bus depots' yards (built and drawn; no bus parks there)
             int surfaceLots = 0, surfaceStalls = 0;     // the big boxes' and malls' parking lots, to the drivers
             int fuelStops = 0;                            // the gas stations' pump sides (ADR-0357)
             struct OpenSpot { Vec3 at; Vec2 n; int place; };
@@ -7114,7 +7105,6 @@ bool LevelLoader::load(const std::string& path,
                 if (lb.type == "depot" && lb.recipe != "gas_station") {
                     engine::CitySimConfig::GarageSpec gs;
                     const bool carPark = lb.recipe == "car_park";
-                    gs.buses = !carPark;
                     for (const engine::LotBuilding::Area& ar : lb.areas) {
                         if (ar.kind == (carPark ? "car_gate" : "bus_gate")) { gs.px = ar.center.x; gs.pz = ar.center.y; gs.ox = ar.axis.x; gs.oz = ar.axis.y; }
                         if (ar.kind != (carPark ? "car_bay" : "bus_bay")) continue;
@@ -7126,10 +7116,10 @@ bool LevelLoader::load(const std::string& path,
                         surfaceStalls += static_cast<int>(gs.stalls.size());
                         cfg.garages.push_back(std::move(gs));
                     } else if (!gs.stalls.empty()) {
+                        // (a bus depot's yard is built and drawn, but no bus parks in it: the old driving's buses are
+                        // gone, ADR-0460, and its bays are no garage for anyone else)
                         ++depotYards;
                         depotBays += static_cast<int>(gs.stalls.size());
-                        LOG_INFO << "[citylots] bus depot at " << lb.site.x << " " << lb.site.y << ": " << gs.stalls.size() << " bays";
-                        cfg.garages.push_back(std::move(gs));
                     }
                 }
                 if (lb.type != "green" && lb.type != "depot") {

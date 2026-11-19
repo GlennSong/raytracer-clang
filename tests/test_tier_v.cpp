@@ -516,7 +516,7 @@ TEST_CASE(a_dormant_traveller_moves_on_and_wakes_where_it_has_got_to) {
     std::vector<std::pair<int, Vec2>> movers;
     for (std::size_t i = 0; i < sim.agents().size(); ++i) {
         const Agent& a = sim.agents()[i];
-        if (a.tier == Agent::Tier::D && a.moving && !sim.isBus(static_cast<int>(i))) movers.push_back({static_cast<int>(i), a.pos});
+        if (a.tier == Agent::Tier::D && a.moving) movers.push_back({static_cast<int>(i), a.pos});
     }
     run(Vec2(-700, -700), 20.0);
     int moved = 0, still = 0;

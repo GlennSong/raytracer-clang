@@ -609,13 +609,12 @@ add_library(citysim STATIC
     src/apps/citysim/activities.cpp
     src/apps/citysim/city_transit.cpp   # carrying people: the shared ride primitive
     src/apps/citysim/city_dispatch.cpp   # hailing a ride: the matching policy
-    src/apps/citysim/city_bus.cpp   # fixed-loop transit: derived routes and stops
+    src/apps/citysim/city_bus.cpp   # bus loops planned over the street map (the island planner's local lines)
     src/apps/citysim/rail_sim.cpp   # trains on the road builder's tracks: lines, timetable, carriage poses
     src/apps/citysim/city_rail_riders.cpp   # people taking the train: stations on the streets, who is where
     src/apps/citysim/station_boards.cpp   # the stations' names on their platforms
     src/apps/citysim/station_entrance.cpp   # the pavilion over each station's way in
     src/apps/citysim/rail_board.cpp   # a platform's departure board: next trains, minutes away
-    src/apps/citysim/bus_stop_props.cpp   # the pole, sign and bench you can see
     src/apps/citysim/lane_map.cpp         # the real lanes on each link (#218)
     src/apps/citysim/city_map_raster.cpp  # the map tool's picture: the city SVG, rasterized (nanosvg)
     src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
@@ -1017,8 +1016,6 @@ add_executable(run_tests
     tests/test_city_goals.cpp
     tests/test_city_transit.cpp
     tests/test_city_dispatch.cpp
-    tests/test_city_taxi.cpp
-    tests/test_city_bus.cpp
     tests/test_rail_sim.cpp
     tests/test_rail_riders.cpp
     tests/test_island_rail.cpp
@@ -1272,7 +1269,6 @@ if(RT_ENABLE_PHYSICS)
         tests/test_city_phys_tier.cpp
         tests/test_city_phys_deck.cpp   # #24: physical cars on a real city's decks and ramps never fall through
         tests/test_near_tier.cpp        # a physics car carrying out the new driving, against a lane car (ADR-0447)
-        tests/test_city_ride.cpp
         tests/test_city_map.cpp
         tests/test_building_collider.cpp
         tests/test_building_interior.cpp

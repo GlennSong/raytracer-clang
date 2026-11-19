@@ -108,12 +108,6 @@
   "usage": "daynight?"
  },
  {
-  "name": "depots?",
-  "owner": "engine",
-  "summary": "Buses: on route, heading in, off duty and parked in depot bays, the nearest bus and bay, and any stalled heading in.",
-  "usage": "depots?"
- },
- {
   "name": "detach",
   "owner": "engine",
   "summary": "Detach the camera from the player for fast travel (the F key).",

@@ -4,6 +4,7 @@
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/engine/procgen/city/road_network.h"
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 
@@ -224,21 +225,31 @@ TEST_CASE(a_driver_whose_car_is_taken_gets_out_and_walks_on) {
     CHECK(walked > 20.0);
 }
 
-// THE DEPOT'S PULL-INS ARE STAGGERED (the city's next ten #6): the buses of a 5:30-23:30 service finish over the last
-// 75 minutes, a quarter of an hour apart, and pull out over the first 40 -- not all at once (the island's 40 buses
-// queued at the depot gates at 23:30).
-TEST_CASE(buses_finish_their_service_day_over_an_hour_not_at_once) {
+// A STATIONED VEHICLE (Glenn, 2026-10-13: "a fire truck should be an actual truck"): the fire engine is a fleet body
+// like any other, parked in its fire station's bay by addStationedVehicle -- driverless, its own type and size, where it
+// was put -- and never dealt to ordinary traffic, nor is the bus body. (Moved from test_city_bus.cpp with ADR-0460.)
+TEST_CASE(a_fire_engine_is_stationed_and_never_dealt_to_traffic) {
+    NavGraph nav = citytest::cityNav(600.0, 120.0, 4);
     CitySim sim;
-    sim.setBusService(5.5, 23.5);
-    std::set<int> ends, starts;
-    for (int i = 0; i < 40; ++i) {
-        const Real e = sim.busOwnEnd(i), s = sim.busOwnStart(i);
-        CHECK(e <= 23.5 + 1e-9 && e >= 22.25 - 1e-9);
-        CHECK(s >= 5.5 - 1e-9 && s <= 6.15);
-        ends.insert(static_cast<int>(std::lround(e * 4)));
-        starts.insert(static_cast<int>(std::lround(s * 8)));
+    std::vector<VehicleBody> fleet = {{4.6, 1.8, 1.45, VehicleType::Sedan}, {4.2, 1.75, 1.5, VehicleType::Hatchback},
+                                      {9.2, 2.52, 3.21, VehicleType::FireEngine}, {11.3, 2.55, 3.2, VehicleType::Bus}};
+    sim.setFleet(fleet);
+    sim.build(nav, 40, 20, 5);
+    for (int i = 0; i < 400; ++i) {
+        const int s = sim.ambientSlotFor(i);
+        CHECK(s == 0 || s == 1);   // only the cars
     }
-    std::printf("    [depot] %zu different finishing times, %zu pull-out times among 40 buses\n", ends.size(), starts.size());
-    CHECK(ends.size() >= 5);
-    CHECK(starts.size() >= 5);
+    const std::size_t before = sim.vehicles().size();
+    const int vi = sim.addStationedVehicle(VehicleType::FireEngine, Vec2(10, 20), Vec2(0, 1), 3.5);
+    CHECK(vi == static_cast<int>(before));
+    CHECK(sim.vehicles().size() == before + 1);
+    const SimVehicle& v = sim.vehicles()[static_cast<std::size_t>(vi)];
+    CHECK(v.type == VehicleType::FireEngine && v.driver < 0);
+    CHECK(std::fabs(v.length - 9.2) < 1e-9 && std::fabs(v.parkedY - 3.5) < 1e-9);
+    std::vector<int> near;
+    sim.parkedNear(Vec2(10, 20), 3.0, near);   // the parked index finds it
+    CHECK(std::find(near.begin(), near.end(), vi) != near.end());
+    CHECK(sim.addStationedVehicle(VehicleType::Van, Vec2(0, 0), Vec2(1, 0), 0) == -1);   // no body of that type
+    for (int t = 0; t < 600; ++t) sim.step(0.05);
+    CHECK(sim.vehicles()[static_cast<std::size_t>(vi)].pos.x == 10.0);   // nobody drove it off
 }

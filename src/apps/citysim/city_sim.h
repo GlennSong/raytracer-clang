@@ -12,10 +12,7 @@
 #include "city_goals.h"
 #include "city_roles.h"   // every resident's day comes from its role (RoleCatalog, buildDayTable)
 #include "lane_map.h"     // the real lanes on each link (#218)
-#include "city_bus.h"
 #include "city_rail_riders.h"
-#include "city_dispatch.h"
-#include "city_transit.h"
 #include "places.h"
 #include "place_kinds.h"   // what kind each place is, and its tags (places.lua)
 #include "households.h"     // ages, life stages and households (people.lua)
@@ -285,13 +282,9 @@ struct Agent {
     int session = -1;        // the group activity session it is in (CitySim::sessions_), -1 none
     int sessionRole = -1;    // its role in it (the definition's roles)
     engine::Vec2 roamTarget{0, 0};   // where it is running to on the area
-    // Where the current outing/lunch trip is going, kept until arrival: a leg
-    // by BUS sets the walker down at a stop and the trip resumes from there,
-    // and it must resume to the same place, not re-pick one.
+    // Where the current outing/lunch trip is going, kept until arrival: a trip resumed part-way (a train journey's
+    // street leg) resumes to the same place, not a newly picked one.
     int outingTo = -1;
-    // A bus that pulled up short of its stop node (busStandBack): the leg it
-    // stands on, so its next trip starts from there. -1 otherwise.
-    int busStoodLeg = -1;
     engine::Vec2 crashAnchor;        // where the pile-up started
     // Gridlock escape (ADR-0066 device fix): seconds this car has been pinned at
     // a junction hold (yieldAtLine with ~zero speed). Past a few seconds, box
@@ -299,11 +292,6 @@ struct Agent {
     // driver inches through a gridlocked box — which breaks the circular wait a
     // knot of overlapping junctions can otherwise form. Staggered per agent.
     Real holdTimer = 0;
-    // A BUS AT ITS STOP: seconds it still stands there with the doors open
-    // (Glenn, 2026-09-18: "they should stop and give people time to get on and
-    // off"). The next trip is already routed; the bus just does not move until
-    // this runs out. Both tiers honour it (advance, vAdvance).
-    float busDwell = 0;
     // PULLING OUT OF A SPACE: the car's drawn position eases from where it was
     // parked into its lane over `pullLen` metres of driving (pullS so far),
     // instead of appearing in the lane in one frame -- which read as "jump
@@ -432,8 +420,8 @@ struct Agent {
 // so the sim (following distance, colliders) and the renderer (mesh, lift) agree.
 // FireEngine: a fire station's (2026-10-13), stationed in its bays -- never dealt to ordinary traffic, like the bus.
 enum class VehicleType : uint8_t { Sedan, Hatchback, SUV, Pickup, Van, BoxTruck, Bus, FireEngine, Taxi };
-// A SERVICE body is dealt to its service only, never to ambient traffic or a kerb bay: the bus to the routes, the fire
-// engine to its station, the taxi to the cabs (isTaxi)
+// A SERVICE body is never dealt to ambient traffic or a kerb bay: the fire engine is its station's; the bus and the
+// taxi are the services' (their old driving went with ADR-0460; the bodies stay in the fleet for the new driving's)
 inline bool serviceVehicle(VehicleType t) {
     return t == VehicleType::Bus || t == VehicleType::FireEngine || t == VehicleType::Taxi;
 }
@@ -737,26 +725,15 @@ public:
         // car is put away up on its deck (and fetched back out to the street when it leaves).
         engine::Real y = -1e30;
         int garage = -1;
-        // A BUS DEPOT's bay (GarageIn::buses): only a bus going off duty takes one, and nothing else does.
-        bool busOnly = false;
     };
     const std::vector<ParkingBay>& parkingBays() const { return bays_; }
     // THE GARAGES (CitySimConfig::garages): every stall a bay, anchored on the street link in front of the portal.
     // After build. Returns the stalls added.
     struct GarageStallIn { engine::Vec2 at, face; engine::Real y; };
-    int addGarageBays(const engine::Vec2& portal, const engine::Vec2& out, const std::vector<GarageStallIn>& stalls,
-                      bool buses = false);
-    // THE BUS DEPOTS (garages of bus bays): each route's, the nearest to its stops (-1: none -- the old yard, the
-    // route's outermost stop). After setBuses.
-    int depotCount() const { return static_cast<int>(depotGarages_.size()); }
-    int depotOfRoute(int r) const {
-        return r >= 0 && r < static_cast<int>(routeDepot_.size()) ? routeDepot_[static_cast<std::size_t>(r)] : -1;
-    }
-    // buses parked in a depot bay / depot bays in all
-    void depotUse(int& parked, int& bays) const;
+    int addGarageBays(const engine::Vec2& portal, const engine::Vec2& out, const std::vector<GarageStallIn>& stalls);
     engine::Real bayReach2(const ParkingBay& b, const engine::Vec2& target) const;
     // ...or BEFORE build: the garages to lay with the kerbside bays, so the cars parked at the start can be up them too
-    struct GarageIn { engine::Vec2 portal, out; std::vector<GarageStallIn> stalls; bool buses = false; };
+    struct GarageIn { engine::Vec2 portal, out; std::vector<GarageStallIn> stalls; };
     void setGarages(std::vector<GarageIn> g) { pendingGarages_ = std::move(g); }
     // Effective lane spacing for a link: a parked-up street loses its curb
     // strips from the DRIVABLE width (band-model semantics, sim-side). The
@@ -869,60 +846,13 @@ public:
         grid_.query(pos, radius, out);
     }
 
-    // TAKE THE BUS (ADR-0091). The same choice the goal layer makes at every
-    // trip, offered to a director: plan a ride from where the agent stands to
-    // `dest`, register it as waiting, and walk it to the boarding stop —
-    // walking to the stop IS the trip. From there the sim does the rest, and
-    // it already knows how: arriveOrChain stands a rider at its stop, the bus
-    // picks up everyone waiting for its route, and sets them down at theirs.
-    // False when no route helps, which for a short hop is the common answer
-    // and means "just walk".
-    bool sendAgentByBus(int agentIndex, engine::Vec2 dest) {
-        if (!nav_ || agentIndex < 0 ||
-            agentIndex >= static_cast<int>(agents_.size()))
-            return false;
-        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
-        if (a.mode != Agent::Mode::Pedestrian || buses_.empty() ||
-            onService(agentIndex) || buses_.tripOf(agentIndex))
-            return false;
-        const int origin = nav_->nearestNode(a.pos);
-        const int to = nav_->nearestNode(dest);
-        if (origin < 0 || to < 0 || origin == to) return false;
-        BusTrip bt = buses_.planTrip(nav_->nodes[static_cast<std::size_t>(origin)],
-                                     nav_->nodes[static_cast<std::size_t>(to)],
-                                     busMaxWalk_);
-        if (!bt.valid()) return false;
-        const int stopNode =
-            buses_.route(bt.route).stops[static_cast<std::size_t>(bt.fromStop)].node;
-        // PROVE THE WALK BEFORE TAKING IT. startTrip's no-path branch PARKS the
-        // agent — clears its route and moves it to an idle pose at the origin —
-        // so calling it speculatively means every REFUSED ride still shunts the
-        // agent about. Fourteen refusals in half a minute is a person flickering
-        // around the street, which is exactly what Glenn watched happen. Same
-        // rule as sendAgentTo: nothing is mutated until the answer is yes.
-        if (stopNode != origin &&
-            !engine::findRoute(*nav_, origin, stopNode, /*pedestrian=*/true).valid())
-            return false;
-        if (!buses_.waitFor(agentIndex, bt)) return false;
-        a.wakeAt = -1;
-        if (stopNode != origin) {
-            startTrip(a, origin, stopNode, /*fromRest=*/!a.moving);
-            if (!a.moving) { buses_.stopWaiting(agentIndex); return false; }
-            a.state = Agent::State::Walking;
-        }
-        a.activity = Activity::Outing;
-        return true;
-    }
-
-    // The same by TRAIN (city_rail_riders.h): plan the journey to `dest` in another town, register it, and walk the
+    // TAKE THE TRAIN (city_rail_riders.h): plan the journey to `dest` in another town, register it, and walk the
     // agent to the station's way in; the sim takes it from there. False when no train helps (same town, or a town
     // without a station) or the station cannot be walked to.
     bool sendAgentByTrain(int agentIndex, engine::Vec2 dest) {
         if (!nav_ || !rail_.active() || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return false;
         Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
-        if (a.mode != Agent::Mode::Pedestrian || onService(agentIndex) || buses_.tripOf(agentIndex) ||
-            rail_.tripOf(agentIndex))
-            return false;
+        if (a.mode != Agent::Mode::Pedestrian || rail_.tripOf(agentIndex)) return false;
         const int origin = nav_->nearestNode(a.pos);
         const int to = nav_->nearestNode(dest);
         if (origin < 0 || to < 0 || origin == to) return false;
@@ -1510,20 +1440,6 @@ public:
     // setWander() resets back to the built-ins.
     void setGoalTables(GoalTable pedestrian, GoalTable driver);
 
-    // CARRYING PEOPLE (city_transit.h). RideBook is the bare relation; these
-    // apply the sim-side POLICY that goes with it. Boarding clears `moving`,
-    // and that one flag is all it takes: the pedestrian overlap solver, the
-    // sensed_ scan and advance() ALREADY gate on it, so a passenger drops out
-    // of all three without any of them learning what a ride is.
-    bool boardRide(int passenger, int driver);
-    void alightRide(int passenger, int atNode = -1);   // atNode: where they step off
-    const RideBook& rides() const { return rides_; }
-    bool riding(int i) const { return rides_.driverOf(i) >= 0; }
-    // Which agent is driving the thing carrying `i` — a bus, a cab, anything.
-    // -1 when it is on its own feet. `riding` answers whether; this answers
-    // what, which is the question a director actually has.
-    int carrierOf(int i) const { return rides_.driverOf(i); }
-
     // Why is this agent standing still? The question splits in two: advance()
     // was never called (a guard above the call site), or it ran and something
     // inside clamped the motion to zero. These three answer it.
@@ -1546,74 +1462,18 @@ public:
                    ? minGaps_[static_cast<std::size_t>(i)] : Real(-1);
     }
 
-    // HAILING (city_dispatch.h). `hail` queues a walker for a ride; a free
-    // taxi picks the cheapest reachable one up in the goal pass. Exposed so a
-    // host, a test or a future bus policy can drive it without reaching into
-    // the sim's internals.
-    bool hail(int passenger, int pickup, int dropoff);
-    // Hailed, or already promised a cab: either way the agent is WAITING and
-    // must not be re-dispatched on foot by the goal pass.
-    bool awaitingRide(int i) const {
-        // A BUS RIDER STANDING AT A STOP counts too: the same hazard as the
-        // taxi, one vehicle later. Without this the goal pass would relaunch
-        // their trip on foot every tick and they would walk off before the bus
-        // came. (A rider still WALKING to the stop is `moving`, so the GoTo
-        // branch leaves them alone anyway.)
-        if (const BusTrip* bt = buses_.tripOf(i)) { if (!bt->aboard) return true; }
-        // ...and anyone past the street on a train journey: in a station, on a platform, aboard, on the way out
-        if (const RailTrip* rt = rail_.tripOf(i)) { if (rt->phase != RailTrip::Phase::ToStation) return true; }
-        return dispatch_.isWaiting(i) || dispatch_.driverFor(i) >= 0;
+    // ON A TRAIN JOURNEY PAST THE STREET: in a station, on a platform, aboard, on the way out. The goal pass leaves
+    // them alone (it would relaunch their trip on foot every tick).
+    bool onTrainJourney(int i) const {
+        const RailTrip* rt = rail_.tripOf(i);
+        return rt && rt->phase != RailTrip::Phase::ToStation;
     }
-    const Dispatch& dispatch() const { return dispatch_; }
-    // Mark an agent as a cab: it runs the taxi table instead of its archetype's.
-    void setTaxi(int i, bool on);
-    // What fraction of the DRIVERS work as cabs, and how willing a walker is to
-    // hail one. Both persist across a rebuild, like the wander and tier knobs:
-    // the host owns them.
-    void setTaxiFraction(Real f);
-    // BUSES. `routes` loops of `stopsPerRoute` stops are derived from the nav
-    // graph (city_bus.h), and `busCount` drivers are put on them. `maxWalk`
-    // bounds how far a rider will walk to a stop -- and so, in practice, how
-    // often a bus is worth taking at all.
-    void setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk);
-    // Places a bus loop must stop at (the stations' ways in); set BEFORE setBuses.
-    std::vector<engine::Vec2> busAnchors;
     // TRAINS (city_rail_riders.h): the host's running RailSim, read each tick. Between two towns with a station
     // each, walkers go by train. Kept across a rebuild (the stations are re-pinned to the new streets).
     void setRail(const RailSim* rail);
     const RailRiders& railRiders() const { return rail_; }
-    // The SERVICE DAY. Outside [startHour, endHour) buses finish up, deadhead
-    // to the yard and sit there. endHour <= startHour means around the clock,
-    // which is the old behaviour and stays the default.
-    void setBusService(Real startHour, Real endHour) {
-        busServiceStart_ = startHour;
-        busServiceEnd_ = endHour;
-        busWake_ = true;   // (the sleeping buses re-time their wake: CitySim::step)
-    }
-    bool busesInService() const {
-        if (busServiceEnd_ <= busServiceStart_) return true;   // 24 hour service
-        return clockHours_ >= busServiceStart_ && clockHours_ < busServiceEnd_;
-    }
-    // ONE BUS'S SERVICE DAY (the city's next ten #6: "a bus queue forms at the depot gate -- they arrive in bunches at
-    // 23:30; real depots stagger pull-ins"): each bus finishes up to 75 minutes before the city's last bus, in 15-minute
-    // steps by its own number, and pulls out in the morning half that late -- so the yard fills and empties over an
-    // hour, not in one minute. busesInService() stays the city's hours (whether a rider can still wait for one).
-    Real busStagger(int i) const {
-        uint32_t h = static_cast<uint32_t>(i) * 2654435761u;
-        h ^= h >> 15;
-        return static_cast<Real>(h % 6u) * 0.25;
-    }
-    Real busOwnStart(int i) const { return busServiceStart_ + busStagger(i) * 0.5; }
-    Real busOwnEnd(int i) const { return busServiceEnd_ - busStagger(i); }
-    bool busOwnInService(int i) const {
-        if (busServiceEnd_ <= busServiceStart_) return true;
-        return clockHours_ >= busOwnStart(i) && clockHours_ < busOwnEnd(i);
-    }
-    const BusNetwork& buses() const { return buses_; }
-    bool isBus(int i) const;
     // Is this pedestrian ON THE STREET to be drawn (and given a body)? A
-    // walker, someone waiting at a stop or pausing outside -- not someone
-    // indoors, riding, or far. The walker system and the renderer both ask.
+    // walker, someone pausing outside -- not someone indoors, in a car, or far. The walker system and the renderer both ask.
     bool pedVisible(int i) const;
     // THE ROLES (city_roles.h): every resident's day is its role's, built by buildDayTable from the catalog
     // (roles.lua at level load; defaultRoleCatalog otherwise). Re-seats every agent on its new table.
@@ -1753,16 +1613,15 @@ public:
     // what it is doing (trip, seat, activity, session), its route leg and link, its rest, its leash.
     std::string describeAgent(int agentIndex) const;
     // THE CENSUS (Glenn: "Ridership feels sparse ... more people outside"): who is out right now, whatever their tier
-    // -- walkers outside (moving, or standing out of doors) and moving, drivers moving, riders aboard, people waiting
-    // at stops -- in all and by role. O(agents): ask it now and then, not every frame.
+    // -- walkers outside (moving, or standing out of doors) and moving, drivers moving, people on a train journey
+    // past the street (`waiting`) -- in all and by role. O(agents): ask it now and then, not every frame.
     struct Census {
         int agents = 0, walkers = 0, drivers = 0;
-        int walkersOutside = 0, walkersMoving = 0, driversMoving = 0, riding = 0, waiting = 0;
+        int walkersOutside = 0, walkersMoving = 0, driversMoving = 0, waiting = 0;
         static constexpr int kRoles = 16;   // by role id (roles().roles)
         int byRole[kRoles] = {}, outsideByRole[kRoles] = {};
         int atWorkByRole[kRoles] = {};   // resting in a state wearing AtWork (on shift, in class)
         int outing = 0;                   // wearing Outing: at or on the way to a stop, by day or by night
-        int busesMoving = 0, cabsMoving = 0;   // the service fleet, outside every count above
         // THE CARS WITH NOBODY IN THEM (city_car.h CityCarRoams; ADR-0453): no person stands for them, so they are
         // outside every count above: how many there are, how many the driving has on its road, and of those on a trip
         int emptyCars = 0, emptyCarsOnRoad = 0, emptyCarsDriven = 0;
@@ -1771,7 +1630,7 @@ public:
     Census census(engine::World* world = nullptr) const;
     // WALKERS IN THE ROAD (Glenn: "the npcs all over the roads is a problem. It's interfering with traffic"): every
     // visible walker of the full sim whose spot is inside a street's carriageway (closer to its centreline than half
-    // its width), counted by why -- its state, moving or standing, waiting for a bus, and whether the street it is in
+    // its width), counted by why -- its state, moving or standing, and whether the street it is in
     // is the one it is walking along (it should be on the pavement) or one it is crossing. Slow (every link per
     // walker): a test's measurement, not a per-frame call.
     std::map<std::string, int> walkersInRoad(int* visible = nullptr) const;
@@ -1834,46 +1693,6 @@ public:
     // `pullS`: how far into the pull the DRAWN car is (interpolated through
     // the sim tick by the renderer, like its position).
     static Real pullOutWeight(const Agent& a, Real pullS);
-    // A bus's route and the index of the stop it is heading for; -1 if the
-    // agent is not a bus.
-    // A bus taking passengers: not deadheading to its depot, not off duty there (its sign reads NOT IN SERVICE)
-    bool busInService(int i) const {
-        if (!isBus(i)) return false;
-        const Agent::Activity act = agents_[static_cast<std::size_t>(i)].activity;
-        return act != Agent::Activity::Returning && act != Agent::Activity::AtHome;
-    }
-    int busRouteOf(int i) const {
-        return isBus(i) ? busRoute_[static_cast<std::size_t>(i)] : -1;
-    }
-    int busNextStopOf(int i) const {
-        return isBus(i) ? busStop_[static_cast<std::size_t>(i)] : -1;
-    }
-    // Legs a bus could not route and skipped. Evidence, not decoration: the
-    // stall this counts is what stopped anyone boarding.
-    long busSkippedLegs() const { return busSkippedLegs_; }
-    // Which gate stops a walker even ASKING for a bus.
-    struct BusGate { long thinkPed = 0, thinkDrv = 0, gotoPed = 0, gotoDrv = 0,
-                     departures = 0, notPed = 0, noNet = 0, isBus = 0,
-                     already = 0, noTarget = 0, asked = 0; };
-    const BusGate& busGate() const { return busGate_; }
-    long busStopsServed() const { return busStopsServed_; }
-    // Discriminates the two ways a waiting rider is never carried: the bus
-    // never OFFERED (attempts 0 -> it has not come round since they arrived)
-    // or it offered and RideBook refused (attempts > 0, refused > 0).
-    long busBoardAttempts() const { return busBoardAttempts_; }
-    long busBoardRefused() const { return busBoardRefused_; }
-    // `chance` is the odds a walker facing a trip at least `minMetres` long
-    // hails instead of setting off on foot. 0 disables hailing entirely.
-    void setHailPolicy(Real chance, Real minMetres) {
-        hailChance_ = chance;
-        hailMinMetres_ = minMetres;
-    }
-    bool isTaxi(int i) const;
-    // ON A SERVICE (#172): drafted off the driver pool by a vehicle service -- the bus network (setBuses), the cab
-    // dispatch (setTaxis) -- to run the service's own table, not a day: no home or job of its own to hire from, no
-    // schedule, no bay, no ride on a bus or a train. Code that only needs "is this someone's day?" asks this, never
-    // which service; a new service (a train's crew, a ferry's) joins here and every such question follows.
-    bool onService(int i) const { return isBus(i) || isTaxi(i); }
 
     // Make agents LIVE in the city (ADR-0066 Phase 3). Assign each agent a home
     // (a Home place) and a job (a routable Shop/Office/Civic place), pin its
@@ -1889,8 +1708,8 @@ public:
     // THE POPULATION CACHE (Glenn: "could we assign the job and home for each agent offline and save/load
     // that information?"). What assignPlaces decides for each agent -- home, job, errand stop, role, hours,
     // commute, starting pose -- plus its commute statistics, written to `<dir>/<key>.pop` keyed by a hash
-    // of EVERYTHING it reads (the nav graph, the places, each agent's state before assignment, the bus
-    // network, the shares, the format). A later load with the same inputs reads it instead of deciding
+    // of EVERYTHING it reads (the nav graph, the places, each agent's state before assignment, the shares, the
+    // format). A later load with the same inputs reads it instead of deciding
     // again. "" (the default) = no cache. RT_POPULATION_VERIFY=1 decides anyway and reports any field that
     // differs from the cache.
     void setPopulationCacheDir(std::string dir) { populationCacheDir_ = std::move(dir); }
@@ -1899,17 +1718,9 @@ public:
     // Share of drivers assignPlaces gives a CROSS-TOWN job (1.2 km+ away); the rest
     // take the nearest of their sampled jobs. Set before assignPlaces.
     void setLongCommuteShare(Real share) { longCommuteShare_ = share; }
-    void setBusCommuteShare(Real share) { busCommuteShare_ = share; }
-    // HOW FAR A DAY REACHES (Glenn: "a small percent wants a long distance trip between cities across the island.
-    // Maybe some people go to nearby cities and most within their city"). Of the agents whose job is SAMPLED
-    // (drivers, bus commuters), these shares look in the nearest towns / any town farther; the rest stay in their
-    // own. A town is a street network (BusNetwork::networkOf) with jobs; a level of one town is unaffected.
-    void setTripReach(Real nearbyShare, Real farShare) { nearbyTripShare_ = nearbyShare; farTripShare_ = farShare; }
     // What the last assignPlaces did with the drivers' jobs (for the load log).
     struct CommuteStats {
-        int crossTownDrivers = 0, driversWithJobs = 0; Real meanDriverCommute = 0; int busCommuters = 0, busCommuteTried = 0;
-        int towns = 0, ownTown = 0, nearbyTown = 0, farTown = 0;   // where everyone's work is, from their home's town
-        int driverOwn = 0, driverNearby = 0, driverFar = 0;          // ...the drivers' alone
+        int crossTownDrivers = 0, driversWithJobs = 0; Real meanDriverCommute = 0;
     };
     const CommuteStats& commuteStats() const { return commuteStats_; }
     const RelationshipTable& relationships() const { return relationships_; }
@@ -1995,9 +1806,6 @@ private:
     // by `mode` (how it happens to be moving: a driver who parks and walks to a door keeps its day). A bus or a cab
     // runs its service table; the agent lab's wanderers their perpetual loop (goalPed_ / goalDriver_).
     const GoalTable& tableFor(const Agent& a) const {
-        const int i = indexOf(a);
-        if (isBus(i)) return busTable_;
-        if (isTaxi(i)) return taxiTable_;
         if (wander_) return a.archetype == Agent::Mode::Driver ? goalDriver_ : goalPed_;
         return roleTables_[static_cast<std::size_t>(dayRoleOf(a))];
     }
@@ -2041,28 +1849,13 @@ private:
     }
     void reseatOnTables();      // each agent onto its table's state wearing its label (else the entry)
     bool launchClear(const Agent& a, int node) const;   // no moving car near the spawn
-    void seatBusAt(int idx, int node, int queued = 0);   // a bus at rest on a stop
     // The nearest FREE bay to `target` within `maxDist`, claimed for agent
     // `self` (-1 if none). The one allocator for a car at load and on arrival.
     int claimBayNear(engine::Vec2 target, int self, Real maxDist);
     void releaseBays(Agent& a);          // free both the held and the reserved bay
-    Real busDistanceToStop(const Agent& a) const;
-    Real busStandBack(const Agent& a) const;   // route metres short of its stop node
-    // WHERE A RIDER WAITS for route r at stop s: the kerb beside where the bus's doors stand -- back up the street the
-    // bus arrives by (busStandBackAt), out past the carriageway onto the pavement: the same point the stop's pole and
-    // bench stand at (buildBusStopProps). The stop NODE is usually a junction's middle, and riders who waited where
-    // their walk ended stood in it (Glenn: "a lot of npcs standing around in the middle of the street"). False when
-    // the route does not say how it arrives.
-    bool stopWaitSpot(int route, int stop, engine::Vec2& at, engine::Vec2& along) const;
-public:
-    // The same stand-back for a bus arriving at `inLink`'s end node, measured from that node back along the
-    // link to the bus's CENTRE -- where the stop's furniture belongs (#36). Walks back through plain nodes
-    // like busStandBack; the bus length is the fleet's.
-    Real busStandBackAt(int inLink) const;
-private:
     std::vector<int> nearestFreeBays(engine::Vec2 target, Real maxDist, int k, bool garages = true) const;
-    bool fitsAGarage(int agentIdx) const;   // its car is a car (not a bus, a truck): under 5.6 m
-    bool parksInBays(const Agent& a) const;   // a private car that parks (not a bus/cab/wanderer)
+    bool fitsAGarage(int agentIdx) const;   // its car is a car (not a truck): under 5.6 m
+    bool parksInBays(const Agent& a) const;   // a private car that parks (not a wanderer)
     void advance(Agent& a, Real dt, Real gap, Real minGap);
     // advance()'s junction verdict: the speed target after the signal brake and
     // the box-occupancy / turn-yield scan, plus where the stop line is -- in
@@ -2171,8 +1964,6 @@ private:
 
     const engine::NavGraph* nav_ = nullptr;
     Real longCommuteShare_ = 0;   // setLongCommuteShare
-    Real busCommuteShare_ = 0;    // setBusCommuteShare
-    Real nearbyTripShare_ = 0.15, farTripShare_ = 0.05;   // setTripReach
     CommuteStats commuteStats_;
     std::vector<Agent> agents_;
     std::vector<SimVehicle> vehicles_;
@@ -2180,10 +1971,6 @@ private:
     std::vector<VehicleBody> fleet_;
     std::vector<ParkingBay> bays_;
     int garageCount_ = 0;   // garages whose stalls are bays (addGarageBays)
-    std::vector<int> depotGarages_;   // ...those that are bus depots (their garage indices)
-    std::vector<int> routeDepot_;     // per bus route: its depot (an index into depotGarages_), -1 none
-    std::vector<int> busDepotPick_;   // per agent: the depot a bus's NEXT trip parks in (set by the Depot goal)
-    void assignDepots();
     std::vector<GarageIn> pendingGarages_;   // setGarages: laid by build with the kerbside bays
     // Each link's reverse twin (-1 if one-way), and a per-link route cost
     // scale kept at 1 except while a bay departure prices its own twin.
@@ -2267,28 +2054,10 @@ private:
                                               // nest inside an agent query)
     mutable std::vector<int> queryScratch_;   // shared candidate buffer (queries
     std::vector<int> pairScratch_;   // car-vs-car pair query (stepTick)
-    RideBook rides_;                 // who is riding with whom (city_transit.h)
-    Dispatch dispatch_;              // who wants a ride (city_dispatch.h)
-    std::vector<uint8_t> taxi_;      // per-agent: runs the taxi table
-    GoalTable taxiTable_;
-    BusNetwork buses_;
     RailRiders rail_;
     const RailSim* railSrc_ = nullptr;
-    std::vector<int> busRoute_, busStop_;   // per agent; -1 = not a bus
-    GoalTable busTable_;
-    Real busMaxWalk_ = 0;
     std::string populationCacheDir_;      // setPopulationCacheDir
     PopulationCacheReport popCache_;
-    Real busServiceStart_ = 0, busServiceEnd_ = 0;   // 0/0 = around the clock
-    bool busServiceWas_ = true;                      // edge detect for the events
-    bool busWake_ = false;                           // setBusService: wake the sleeping buses next step
-    long busSkippedLegs_ = 0;
-    mutable BusGate busGate_;
-    long busStopsServed_ = 0;
-    long busBoardAttempts_ = 0, busBoardRefused_ = 0;
-    Real taxiFraction_ = 0;
-    Real hailChance_ = 0;
-    Real hailMinMetres_ = 400;
                                               // never nest across a live iteration)
     std::vector<int> tierScratch_;            // tierPass promotion candidates
     std::vector<int> dormantScratch_;         // tierPass wake candidates

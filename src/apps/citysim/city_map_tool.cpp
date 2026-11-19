@@ -7,7 +7,6 @@
 #include "../../engine/player/tools.h"
 #include "../../engine/waypoint.h"
 #include "../../engine/world.h"
-#include "bus_stop_props.h"   // routeColour: the map wears the stop signs' colours
 #include "city_render.h"
 #include "rail_sim.h"
 
@@ -257,16 +256,6 @@ std::vector<TransitLine> CityMapToolSystem::transitLines() const {
                 l.closed = L.loop;
                 lines.push_back(std::move(l));
             }
-    }
-    const BusNetwork& net = city_.sim().buses();
-    for (int r = 0; r < net.routeCount(); ++r) {
-        TransitLine l;
-        for (const Vec2& p : net.route(r).path) l.path.push_back({p.x, p.y});
-        const engine::Vec3 c = routeColour(net.lineOf(r));
-        l.r = static_cast<float>(c.x);
-        l.g = static_cast<float>(c.y);
-        l.b = static_cast<float>(c.z);
-        lines.push_back(std::move(l));
     }
     return lines;
 }
@@ -594,45 +583,6 @@ std::vector<engine::Renderer::UiQuad> CityMapToolSystem::composeFrame(engine::Wo
     const float ink[4] = {0.08f, 0.08f, 0.09f, 1.0f};
     const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
-    if (city_.built()) {
-        const BusNetwork& net = city_.sim().buses();
-        // STOPS: a dot in the route's colour; an interchange (a hub stop,
-        // where routes meet) bigger and ringed.
-        for (int r = 0; r < net.routeCount(); ++r) {
-            const engine::Vec3 rc = routeColour(net.lineOf(r));
-            const float col[4] = {static_cast<float>(rc.x), static_cast<float>(rc.y),
-                                  static_cast<float>(rc.z), 1.0f};
-            const BusRoute& route = net.route(r);
-            for (std::size_t si = 0; si < route.stops.size(); ++si) {
-                const Vec2 s = toPx(route.stops[si].pos.x, route.stops[si].pos.y);
-                if (!onPanel(s, -4.0f)) continue;
-                const bool hub = std::find(route.hubStops.begin(), route.hubStops.end(),
-                                           static_cast<int>(si)) != route.hubStops.end();
-                dot(s, hub ? 9.0f : 7.0f, ink);
-                dot(s, hub ? 6.5f : 4.5f, hub ? white : col);
-                if (hub) dot(s, 3.5f, col);
-            }
-        }
-        // THE BUSES, live: where each one is right now.
-        const auto& agents = city_.sim().agents();
-        for (int i = 0; i < static_cast<int>(agents.size()); ++i) {
-            const int r = city_.sim().busRouteOf(i);
-            if (r < 0) continue;
-            const Vec2 s = toPx(agents[static_cast<std::size_t>(i)].pos.x,
-                                agents[static_cast<std::size_t>(i)].pos.y);
-            if (!onPanel(s, -6.0f)) continue;
-            const engine::Vec3 rc = routeColour(city_.sim().buses().lineOf(r));
-            const float col[4] = {static_cast<float>(rc.x), static_cast<float>(rc.y),
-                                  static_cast<float>(rc.z), 1.0f};
-            Quad back = Quad::rect(static_cast<float>(s.x) - 8, static_cast<float>(s.y) - 8,
-                                   static_cast<float>(s.x) + 8, static_cast<float>(s.y) + 8);
-            q.push_back(tinted(back, ink));
-            Quad front = Quad::rect(static_cast<float>(s.x) - 5.5f, static_cast<float>(s.y) - 5.5f,
-                                    static_cast<float>(s.x) + 5.5f, static_cast<float>(s.y) + 5.5f);
-            q.push_back(tinted(front, col));
-        }
-    }
-
     // THE RAIL, live: each station a ringed square, each train its cars, a dot apiece in its line's colour
     if (city_.built())
         if (const RailSim* rs = city_.sim().railRiders().rail()) {
@@ -730,22 +680,6 @@ std::vector<engine::Renderer::UiQuad> CityMapToolSystem::composeFrame(engine::Wo
         }
     }
 
-    // THE LEGEND: each LINE's colour, in route order (the HUD names them). Twins come after every loop, so the
-    // lines are the first routes.
-    if (city_.built()) {
-        int n = 0;
-        while (n < city_.sim().buses().routeCount() && city_.sim().buses().lineOf(n) == n) ++n;
-        const float x0 = p.x0 + 16, y0 = p.y0 + 16;
-        if (n > 0)
-            q.push_back(tinted(Quad::rect(x0 - 8, y0 - 8, x0 + 48, y0 + n * 22.0f + 2), kFrame));
-        for (int r = 0; r < n; ++r) {
-            const engine::Vec3 rc = routeColour(r);
-            const float col[4] = {static_cast<float>(rc.x), static_cast<float>(rc.y),
-                                  static_cast<float>(rc.z), 1.0f};
-            const float y = y0 + r * 22.0f;
-            q.push_back(tinted(Quad::rect(x0, y + 4, x0 + 40, y + 12), col));
-        }
-    }
     return q;
 }
 

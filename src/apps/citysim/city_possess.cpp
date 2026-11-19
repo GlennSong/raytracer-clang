@@ -497,32 +497,6 @@ void CityPossessSystem::publishLook() {
         out += buf;
     }
 
-    // THE NEAREST BUS STOP AND WHAT CALLS THERE. The agent's own transit state
-    // is in `agent?`; this is the option it has not taken yet.
-    {
-        const BusNetwork& net = sim.buses();
-        int bestR = -1, bestS = -1;
-        engine::Real bestD = 0;
-        for (int r = 0; r < net.routeCount(); ++r) {
-            const BusRoute& route = net.route(r);
-            for (std::size_t si = 0; si < route.stops.size(); ++si) {
-                const engine::Real d = dist(route.stops[si].pos);
-                if (bestR < 0 || d < bestD) {
-                    bestR = r; bestS = static_cast<int>(si); bestD = d;
-                }
-            }
-        }
-        if (bestR >= 0 && bestD <= kLookRadiusPlaces) {
-            const BusStop& st = net.route(bestR).stops[static_cast<std::size_t>(bestS)];
-            std::snprintf(buf, sizeof(buf),
-                          " | stop route=%d d=%.0f b=%.0f at=%.1f,%.1f node=%d",
-                          bestR, static_cast<double>(bestD),
-                          static_cast<double>(bearing(st.pos)),
-                          static_cast<double>(st.pos.x),
-                          static_cast<double>(st.pos.y), st.node);
-            out += buf;
-        }
-    }
 
     // A CAR IT COULD TAKE — the nearest one with nobody in it, out to the same
     // range as the places, because a car two streets away is a destination you
@@ -621,10 +595,9 @@ void CityPossessSystem::publishStatus() {
                 "agent=%d mode=%s activity=%s state=%s tier=%c moving=%d "
                 "indoors=%d restDwell=%.1f speed=%.2f pos=%.1f,%.1f "
                 "leg=%d/%d routeValid=%d tripGoal=%d home=%d work=%d "
-                "busDwell=%.1f busStoodLeg=%d riding=%d awaitingRide=%d "
-                "busRoute=%d busNextStop=%d stepped=%d gap=%.1f minGap=%.1f "
+                "train=%d inCar=%d stepped=%d gap=%.1f minGap=%.1f "
                 "tethered=%d anchorDist=%.1f lead=%.1f playerCtl=%d released=%d "
-                "carrier=%d cityHeld=%d",
+                "cityHeld=%d",
                 walkerAgent_,
                 a.mode == Agent::Mode::Driver ? "car" : "ped",
                 activityLabel(a.activity), stateLabel(a.state),
@@ -633,13 +606,8 @@ void CityPossessSystem::publishStatus() {
                 static_cast<double>(a.pos.x), static_cast<double>(a.pos.y),
                 a.leg, static_cast<int>(a.route.links.size()),
                 a.route.valid() ? 1 : 0, a.tripGoal, a.home, a.work,
-                // The transit half of its mind: `advance` returns early while
-                // busDwell runs, so an agent queued for a bus stands still no
-                // matter how valid its route is.
-                static_cast<double>(a.busDwell), a.busStoodLeg,
-                sim.riding(walkerAgent_) ? 1 : 0,
-                sim.awaitingRide(walkerAgent_) ? 1 : 0,
-                sim.busRouteOf(walkerAgent_), sim.busNextStopOf(walkerAgent_),
+                // what is carrying it: a train (past the street on a rail journey), or a household's car
+                sim.onTrainJourney(walkerAgent_) ? 1 : 0, a.inCar,
                 sim.steppedLastTick(walkerAgent_) ? 1 : 0,
                 static_cast<double>(sim.gapOf(walkerAgent_)),
                 static_cast<double>(sim.minGapOf(walkerAgent_)),
@@ -649,11 +617,7 @@ void CityPossessSystem::publishStatus() {
                 a.tethered ? static_cast<double>((a.pos - a.tetherAnchor).length())
                            : -1.0,
                 static_cast<double>(a.tetherLead),
-                a.playerControlled ? 1 : 0, a.released ? 1 : 0,
-                // WHAT IS CARRYING IT. `riding` only says yes; a director
-                // (and a tour script) needs to know whether that is the bus
-                // it asked for, somebody's cab, or its own car.
-                sim.carrierOf(walkerAgent_), sim.tetherHeld());
+                a.playerControlled ? 1 : 0, a.released ? 1 : 0, sim.tetherHeld());
             agentLine = buf;
         }
     }

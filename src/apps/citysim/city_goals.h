@@ -37,10 +37,6 @@ enum class GoalAction : uint8_t {
 // Where a GoTo state travels: the agent's work node, its home node, or a
 // random routable node drawn from the sim rng (wander's goal pick).
 // Shop: an errand stop picked near home at assignment (Agent::shop).
-// Fare: the pickup node of the hail this driver was assigned (city_dispatch).
-// Drop: that fare's destination. Both are DYNAMIC -- unlike Work/Home/Shop
-// they are not a field on the agent, they are looked up in the Dispatch,
-// which is what lets one table drive a taxi, a Lyft or a bus.
 // Lunch: a cafe or restaurant near work that is open now (none, or a walker
 // who brought lunch: the trip does not start and NoRoute fires).
 // Outing: somewhere near to go next -- a park, a cafe, a store, a supermarket,
@@ -49,8 +45,7 @@ enum class GoalAction : uint8_t {
 // or a bleacher by the pitch, a walk across the quad, lunch (CitySim::pickCampusBreak).
 // Activity: a free ACTIVITY SPOT of the state's kinds and tags (activities.h) -- a bench, a stand, a track -- reserved
 // and walked to; what the body does there is the spot's kind.
-enum class GoalTarget : uint8_t { None, Work, Home, Random, Shop, Fare, Drop, Stop, Depot,
-                                  Lunch, Outing, Campus, Activity };
+enum class GoalTarget : uint8_t { None, Work, Home, Random, Shop, Lunch, Outing, Campus, Activity };
 
 // The events CitySim EMITS at fixed points — the full trigger vocabulary a
 // table may transition on. Emission lives in C++ (clock windows, arrival,
@@ -62,9 +57,6 @@ enum class GoalEvent : uint8_t {
     NoRoute,      // a departure/chain found no route to its goal
     Idle,         // resting, every tick — the hook for perpetual behaviours
     DwellDone,    // resting, and `dwellHours` of clock time passed in this state
-    GotFare,      // a free driver was just matched to a waiting hail
-    ServiceEnd,   // the clock left the service window: finish up and go home
-    ServiceStart, // the clock entered it: back on the road
     Evening,      // resting, and tonight is a night out for this agent and its evening has begun (CitySim::eveningPlan)
     EveningOver,  // resting, and its evening is over (or it is not going out tonight)
     Count
@@ -140,10 +132,6 @@ private:
 // straight through the arrival node (Arrived self-loop onto a GoTo state); a
 // walker rests one tick at the kerb first (Arrived -> RoamRest -Idle-> Roam).
 GoalTable wanderGoals(bool driver);
-// A TAXI's day: cruise until dispatched, collect, deliver, cruise again.
-GoalTable taxiGoals();
-// A BUS's day: drive the loop, for ever. One state.
-GoalTable busGoals();
 
 }  // namespace citysim
 

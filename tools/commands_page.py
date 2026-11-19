@@ -37,7 +37,7 @@ FAMILIES = [
      ["possess", "possess?", "agent?", "look?", "walk_to", "direct", "board", "alight", "enter", "exit",
       "possess_stop", "release"]),
     ("Asking the city", "The living city's counts and diagnostics, and finding things in it.",
-     ["walkers?", "flicker?", "speeders?", "activities?", "knock", "knock?", "traffic?", "parking?", "depots?",
+     ["walkers?", "flicker?", "speeders?", "activities?", "knock", "knock?", "traffic?", "parking?",
       "trains?", "opensigns?", "jitter", "jitter?", "who?", "pin", "unpin", "pin?", "findplace", "findplace?"]),
     ("Asking the ground and the buildings", "What stands where, and maps of it.",
      ["lot?", "towers?", "recipes?", "ground?", "citymap"]),

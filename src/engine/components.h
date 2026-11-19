@@ -1098,11 +1098,8 @@ struct CitySimConfig {
     // like more traffic on the freeway"). 0 = everyone takes the nearest of their
     // sampled jobs (the short-commute rule).
     float longCommuteShare = 0.0f;
-    // Share of WALKERS who work in another town and ride there: their job is
-    // drawn from a different street network (a town, the mountain city, the
-    // city) that the buses — local, regional, local — can take them to. 0 =
-    // every walker works within walking distance (the old rule).
-    float busCommuteShare = 0.0f;
+    // (The old driving's buses and cabs are gone, ADR-0460: busRoutes, busStops, buses, busMaxWalk, busService,
+    // busCommuteShare, taxiFraction, hailChance and hailMinMetres in a level file are not read.)
     // Ceiling on EACH density-derived count. This was a literal 400 in the
     // bridge, which silently halved metro v2: its own network asks for 769
     // cars and 788 walkers, and got 400 of each (measured 2026-09-16,
@@ -1140,11 +1137,6 @@ struct CitySimConfig {
     // not.
     float pedPromoteRadius = 280.0f;
     float pedDemoteRadius = 350.0f;
-    // CABS (city_dispatch / taxiGoals). `taxiFraction` of the DRIVERS work as
-    // taxis; a walker facing a trip at least `hailMinMetres` long hails one
-    // with probability `hailChance` instead of walking. All three default to
-    // OFF, so no existing level changes behaviour by being reloaded.
-    float taxiFraction = 0.0f;
     // A ROLE FOR THE LEVEL's DRIVERS (#214): `driverRoleShare` of the private drivers take role `driverRole` (roles.lua)
     // -- the traffic lab's "lab_driver", always driving. Empty: none.
     std::string driverRole;
@@ -1161,18 +1153,6 @@ struct CitySimConfig {
     // The level file this block came from (the loader's path): under v2 the city sim keys and builds the level's built
     // road model from it (lanes/road_model_cache.h). Empty for a level not loaded from a file.
     std::string levelPath;
-    float hailChance = 0.0f;
-    float hailMinMetres = 400.0f;
-    // BUSES (city_bus.h): `busRoutes` derived loops of `busStops` stops, with
-    // `buses` drivers on them. `busMaxWalk` is how far a rider will walk to a
-    // stop, and is in practice the knob that decides how often a bus is used.
-    int busRoutes = 0;
-    int busStops = 8;
-    int buses = 0;
-    float busMaxWalk = 120.0f;
-    // THE SERVICE DAY (hours): outside it the buses go back to their depot. Used only where the city has a depot
-    // (a bus depot lot); end <= start is around the clock.
-    float busServiceStart = 5.5f, busServiceEnd = 23.5f;
     // PHYSICAL TRAFFIC (R5): how many of the moving cars nearest the player are
     // handed to real Jolt vehicles that chase the sim's plan. 0 = none: every
     // car is drawn on the sim's own motion, which keeps its wheels on the road
@@ -1271,8 +1251,7 @@ struct CitySimConfig {
     std::vector<std::array<double, 5>> sitSpots;
     // THE PARKING GARAGES you can drive into (shape_grammar buildGarage): the portal on the street (x z, the way out)
     // and every stall -- x, z, face x, face z, the deck's height (world y).
-    // buses: a BUS DEPOT's bays (sculptBusDepot) -- only buses park there, and buses park nowhere else
-    struct GarageSpec { double px = 0, pz = 0, ox = 0, oz = 1; std::vector<std::array<double, 5>> stalls; bool buses = false; };
+    struct GarageSpec { double px = 0, pz = 0, ox = 0, oz = 1; std::vector<std::array<double, 5>> stalls; };
     std::vector<GarageSpec> garages;
 };
 

@@ -29,27 +29,15 @@ namespace {
 constexpr Real kReusePrice = 4.0;
 constexpr Real kMaxDetour = 1.6;
 
-// A city bus's average pace between stops (signals, turns, traffic) and the
-// time a stop costs it, dwell plus pulling in and out: what a rider's choice
-// weighs a ride by. Measured, not guessed: metro buses drive ~8 m/s at cruise
-// and stand 10 s + 3 s a rider (city_sim.cpp).
+// A city bus's average pace between stops (signals, turns, traffic): what a loop's lap is priced at. Measured,
+// not guessed: metro buses drove ~8 m/s at cruise (the old driving's buses, before ADR-0460).
 constexpr Real kBusPace = 6.5;
-constexpr Real kBusStopSeconds = 16.0;
-// A person on foot, and how much longer the streets are than the straight line.
-constexpr Real kWalkPace = 1.4;
-constexpr Real kStreetFactor = 1.25;
-// Changing buses: stops this close count as one interchange, and the change
-// itself costs a minute over the walk and the wait (people dislike it).
-constexpr Real kTransferWalk = 100.0;
-constexpr Real kTransferPenalty = 60.0;
 // A place out along the freeway earns local buses from this much street up; the
 // regional route stops once per this much of a place's extent (at most three).
 constexpr Real kMinPlaceStreet = 3000.0;
 constexpr Real kRegionalStopSpan = 1500.0;
 // A bus's pace on the freeway and its ramps, against the class speed limit.
 constexpr Real kFreewayBusShare = 0.8;
-// A rider changes buses at most this many times (town bus, regional, city bus).
-constexpr int kMaxChanges = 2;
 
 Real dist(Vec2 a, Vec2 b) {
     const Real dx = a.x - b.x, dy = a.y - b.y;
@@ -60,20 +48,7 @@ Real dist(Vec2 a, Vec2 b) {
 
 void BusNetwork::clear() {
     routes_.clear();
-    waiting_.clear();
     comp_.clear();
-    transfers_.clear();
-    indexTransfers();
-}
-
-void BusNetwork::indexTransfers() {
-    stopBase_.assign(routes_.size() + 1, 0);
-    for (std::size_t r = 0; r < routes_.size(); ++r) stopBase_[r + 1] = stopBase_[r] + static_cast<int>(routes_[r].stops.size());
-    transfersFrom_.assign(static_cast<std::size_t>(stopBase_.back()), {});
-    for (int k = 0; k < static_cast<int>(transfers_.size()); ++k) {
-        const Transfer& x = transfers_[static_cast<std::size_t>(k)];
-        transfersFrom_[static_cast<std::size_t>(stopBase_[static_cast<std::size_t>(x.fromRoute)] + x.fromStop)].push_back(k);
-    }
 }
 
 // THE REGIONAL ROUTE (Glenn, 2026-09-23: "regional buses ... that go between towns").
@@ -278,10 +253,7 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
                        int stopsPerRoute, uint32_t seed, const std::vector<engine::Vec2>& anchors) {
     anchorsServed_ = 0; anchorCount_ = static_cast<int>(anchors.size());
     routes_.clear();
-    waiting_.clear();
     hubs_.clear();
-    transfers_.clear();
-    indexTransfers();
     const int n = nav.nodeCount();
     if (n < 4 || routeCount <= 0 || stopsPerRoute < 2) return;
 
@@ -609,262 +581,6 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
         }
     }
 
-    // CHANGE POINTS: a stop of one route within kTransferWalk of a stop of
-    // another -- a shared hub (0 m) or the next corner. One per stop pair.
-    transfers_.clear();
-    const int builtRoutes = static_cast<int>(routes_.size());
-    for (int r = 0; r < builtRoutes; ++r)
-        for (int q = 0; q < builtRoutes; ++q) {
-            if (q == r) continue;
-            const BusRoute& A = routes_[static_cast<std::size_t>(r)];
-            const BusRoute& B = routes_[static_cast<std::size_t>(q)];
-            for (std::size_t i = 0; i < A.stops.size(); ++i)
-                for (std::size_t j = 0; j < B.stops.size(); ++j) {
-                    const Real w = dist(A.stops[i].pos, B.stops[j].pos);
-                    if (w <= kTransferWalk)
-                        transfers_.push_back({r, static_cast<int>(i), q, static_cast<int>(j), w});
-                }
-        }
-    indexTransfers();
-}
-
-
-Real BusNetwork::coverage(const engine::NavGraph& nav, Real maxWalk) const {
-    // Sample every walkable link every few metres and weigh by length, so a
-    // long avenue counts for more than a stub. Links are directed, so each
-    // street is counted twice -- which cancels in the ratio.
-    std::vector<Vec2> stops;
-    for (const BusRoute& r : routes_)
-        for (const BusStop& s : r.stops) stops.push_back(s.pos);
-    const Real r2 = maxWalk * maxWalk;
-    constexpr Real kStep = 10.0;
-    Real total = 0, covered = 0;
-    for (const engine::NavLink& L : nav.links) {
-        if (!L.walkable) continue;
-        const Vec2 a = nav.nodes[static_cast<std::size_t>(L.from)];
-        const Vec2 b = nav.nodes[static_cast<std::size_t>(L.to)];
-        const Real len = dist(a, b);
-        if (len <= 0) continue;
-        const int n = std::max(1, static_cast<int>(len / kStep));
-        const Real w = len / n;
-        for (int k = 0; k < n; ++k) {
-            const Real t = (k + 0.5) / n;
-            const Vec2 p(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
-            total += w;
-            for (const Vec2& s : stops) {
-                const Real dx = p.x - s.x, dy = p.y - s.y;
-                if (dx * dx + dy * dy <= r2) { covered += w; break; }
-            }
-        }
-    }
-    return total > 0 ? covered / total : 0;
-}
-
-Real BusNetwork::streetShare(const engine::NavGraph& nav) const {
-    // A street is an undirected node pair; the directed links of a two-way
-    // street would otherwise count it twice on one side of the ratio only.
-    const long long n = nav.nodeCount();
-    auto key = [n](int a, int b) {
-        return a < b ? static_cast<long long>(a) * n + b : static_cast<long long>(b) * n + a;
-    };
-    std::unordered_map<long long, bool> driven;
-    for (const BusRoute& r : routes_)
-        for (std::size_t k = 0; k < r.pathNodes.size(); ++k)
-            driven[key(r.pathNodes[k], r.pathNodes[(k + 1) % r.pathNodes.size()])] = true;
-    std::unordered_map<long long, bool> seen;
-    Real total = 0, onRoute = 0;
-    for (const engine::NavLink& L : nav.links) {
-        if (!L.walkable) continue;
-        const long long k = key(L.from, L.to);
-        if (seen.count(k)) continue;
-        seen[k] = true;
-        total += L.length;
-        if (driven.count(k)) onRoute += L.length;
-    }
-    return total > 0 ? onRoute / total : 0;
-}
-
-Real BusNetwork::rideMetres(int r, int a, int b) const {
-    if (r < 0 || r >= routeCount()) return 0;
-    const BusRoute& route = routes_[static_cast<std::size_t>(r)];
-    const int n = static_cast<int>(route.stopArc.size());
-    if (a < 0 || b < 0 || a >= n || b >= n || route.loopLength <= 0) return 0;
-    Real d = route.stopArc[static_cast<std::size_t>(b)] - route.stopArc[static_cast<std::size_t>(a)];
-    if (d <= 0) d += route.loopLength;
-    return d;
-}
-
-Real BusNetwork::rideSeconds(int r, int a, int b) const {
-    if (r < 0 || r >= routeCount()) return 0;
-    const int n = static_cast<int>(routes_[static_cast<std::size_t>(r)].stops.size());
-    if (n <= 0) return 0;
-    const int between = ((b - a) % n + n) % n;
-    const Real pace = routes_[static_cast<std::size_t>(r)].pace > 0 ? routes_[static_cast<std::size_t>(r)].pace : kBusPace;
-    return rideMetres(r, a, b) / pace + between * kBusStopSeconds;
-}
-
-Real BusNetwork::waitSeconds(int r) const {
-    if (r < 0 || r >= routeCount()) return 0;
-    const BusRoute& route = routes_[static_cast<std::size_t>(r)];
-    const Real lap = route.loopLength / (route.pace > 0 ? route.pace : kBusPace) +
-                     static_cast<Real>(route.stops.size()) * kBusStopSeconds;
-    const int buses = r < static_cast<int>(fleet_.size()) ? std::max(1, fleet_[static_cast<std::size_t>(r)]) : 1;
-    return 0.5 * lap / buses;
-}
-
-int BusNetwork::nearestStop(int r, Vec2 p) const {
-    if (r < 0 || r >= routeCount()) return -1;
-    const BusRoute& route = routes_[static_cast<std::size_t>(r)];
-    int best = -1;
-    Real bestD = 0;
-    for (std::size_t i = 0; i < route.stops.size(); ++i) {
-        const Real d = dist(p, route.stops[i].pos);
-        if (best < 0 || d < bestD) { best = static_cast<int>(i); bestD = d; }
-    }
-    return best;
-}
-
-// CHOOSE BY TIME (Glenn, 2026-09-18: "How does an agent decide to take a bus
-// to where they are going? Is there some algorithm that ... takes bus routing
-// into account to help them get across the city faster?"). The old rule took
-// a bus whenever the walks to and from its stops summed shorter than the trip:
-// it never asked how long the RIDE was, or which way the loop runs. Measured
-// on metro, 58% of the bus trips it accepted were slower than walking and 49%
-// rode more than half way round the loop.
-//
-// Door-to-door time, the way a person weighs it: walk to a stop, wait half a
-// headway, ride FORWARD round the loop, walk on -- or change once, at stops of
-// two routes within kTransferWalk of each other. The bus is taken only if it
-// beats walking by a real margin. A transfer is planned as its FIRST leg, to
-// the change stop; stepping off there, the rider plans again, and the second
-// route is the obvious answer from where they stand.
-BusTrip BusNetwork::planTrip(Vec2 from, Vec2 to, Real maxWalk, bool count, bool walkable) const {
-    PlanStats scratchStats;
-    PlanStats& stats = count ? stats_ : scratchStats;
-    BusTrip best;
-    ++stats.asked;
-    if (routes_.empty()) { ++stats.noRoutes; return best; }
-    const Real walkAll = dist(from, to) * kStreetFactor / kWalkPace;
-    auto walkT = [](Vec2 p, Vec2 q) { return dist(p, q) * kStreetFactor / kWalkPace; };
-
-    // Stops within the walk of each end, per route.
-    const int R = routeCount();
-    std::vector<std::vector<int>> nearFrom(static_cast<std::size_t>(R)),
-        nearTo(static_cast<std::size_t>(R));
-    for (int r = 0; r < R; ++r) {
-        const BusRoute& route = routes_[static_cast<std::size_t>(r)];
-        for (std::size_t s = 0; s < route.stops.size(); ++s) {
-            if (dist(from, route.stops[s].pos) <= maxWalk)
-                nearFrom[static_cast<std::size_t>(r)].push_back(static_cast<int>(s));
-            if (dist(to, route.stops[s].pos) <= maxWalk)
-                nearTo[static_cast<std::size_t>(r)].push_back(static_cast<int>(s));
-        }
-    }
-    // UP TO kMaxChanges CHANGES (a town bus, the regional, a city bus), as the least
-    // door-to-door time over states "at stop s of route r, about to board" and "just
-    // stepped off route r at stop s", each with how many changes it took. Settling
-    // them in time order (Dijkstra) finds the same trip the one-bus and one-change
-    // loops did whenever that is the fastest, and the two-change trip only when it is.
-    // The trip handed back is still its FIRST leg: stepping off at the change the
-    // rider plans again from there.
-    struct Lab { Real t; int kind, r, s, changes; int firstR, firstA, firstB; };
-    auto cmp = [](const Lab& x, const Lab& y) { return x.t > y.t; };
-    std::priority_queue<Lab, std::vector<Lab>, decltype(cmp)> pq(cmp);
-    // settled (kind, r, s, changes), flat: planTrip runs for every bus commuter's candidates at load
-    // (routes only change in build(), which re-indexes at its end)
-    const int totalStops = stopBase_.back();
-    std::vector<char> settled(static_cast<std::size_t>(2 * totalStops * (kMaxChanges + 1)), 0);
-    auto slot = [&](int kind, int r, int s, int changes) {
-        return static_cast<std::size_t>((kind * totalStops + stopBase_[static_cast<std::size_t>(r)] + s) * (kMaxChanges + 1) + changes);
-    };
-    for (int r = 0; r < R; ++r)
-        for (int a : nearFrom[static_cast<std::size_t>(r)])
-            pq.push({walkT(from, routes_[static_cast<std::size_t>(r)].stops[static_cast<std::size_t>(a)].pos) + waitSeconds(r), 0, r, a, 0, r, a, -1});
-    Real bestT = 1e30;
-    bool bestIsTransfer = false, anyReach = false;
-    while (!pq.empty()) {
-        const Lab L = pq.top(); pq.pop();
-        if (L.t >= bestT) break;
-        char& done = settled[slot(L.kind, L.r, L.s, L.changes)];
-        if (done) continue;
-        done = 1;
-        const BusRoute& route = routes_[static_cast<std::size_t>(L.r)];
-        const int n = static_cast<int>(route.stops.size());
-        if (L.kind == 0) {   // aboard at L.s: ride forward to any other stop
-            for (int b = 0; b < n; ++b) {
-                if (b == L.s) continue;
-                pq.push({L.t + rideSeconds(L.r, L.s, b), 1, L.r, b, L.changes, L.firstR, L.firstA, L.firstB < 0 ? b : L.firstB});
-            }
-            continue;
-        }
-        // stepped off at L.s: walk to the destination, or change
-        const std::vector<int>& ends = nearTo[static_cast<std::size_t>(L.r)];
-        if (std::find(ends.begin(), ends.end(), L.s) != ends.end()) {
-            anyReach = true;
-            const Real t = L.t + walkT(route.stops[static_cast<std::size_t>(L.s)].pos, to);
-            if (t < bestT) {
-                bestT = t;
-                best.route = L.firstR; best.fromStop = L.firstA; best.toStop = L.firstB;
-                bestIsTransfer = L.changes > 0;
-            }
-        }
-        if (L.changes >= kMaxChanges) continue;
-        for (int k : transfersFrom_[static_cast<std::size_t>(stopBase_[static_cast<std::size_t>(L.r)] + L.s)])
-            if (const Transfer& x = transfers_[static_cast<std::size_t>(k)]; true)
-                pq.push({L.t + x.walk * kStreetFactor / kWalkPace + kTransferPenalty + waitSeconds(x.toRoute), 0, x.toRoute, x.toStop,
-                         L.changes + 1, L.firstR, L.firstA, L.firstB});
-    }
-    // Only if it is really quicker: a minute and a sixth of the walk at least. Between street networks there IS no
-    // walk (walkable = false): any trip at all beats one that cannot be made. Measured on the island: 82% of the
-    // would-be bus commuters' plans were turned down as slower than a walk to another town that does not exist.
-    if (best.valid() && (!walkable || bestT < walkAll - std::max(Real(60), walkAll * Real(0.15)))) {
-        ++stats.ok;
-        if (bestIsTransfer) ++stats.transfers;
-        return best;
-    }
-    if (best.valid()) ++stats.noSaving;
-    else if (!anyReach) ++stats.farFrom;
-    return BusTrip{};
-}
-
-bool BusNetwork::waitFor(int passenger, const BusTrip& trip) {
-    if (passenger < 0 || !trip.valid()) return false;
-    if (trip.route >= routeCount()) return false;
-    if (waiting_.count(passenger)) return false;
-    waiting_[passenger] = trip;
-    return true;
-}
-
-void BusNetwork::stopWaiting(int passenger) { waiting_.erase(passenger); }
-
-const BusTrip* BusNetwork::tripOf(int passenger) const {
-    const auto it = waiting_.find(passenger);
-    return it == waiting_.end() ? nullptr : &it->second;
-}
-
-std::vector<int> BusNetwork::waitingAt(int route, int stop) const {
-    std::vector<int> out;
-    for (const auto& kv : waiting_)
-        if (!kv.second.aboard && kv.second.route == route &&
-            kv.second.fromStop == stop)
-            out.push_back(kv.first);
-    std::sort(out.begin(), out.end());   // hash order must not reach the sim
-    return out;
-}
-
-std::vector<int> BusNetwork::alightingAt(int route, int stop) const {
-    std::vector<int> out;
-    for (const auto& kv : waiting_)
-        if (kv.second.aboard && kv.second.route == route &&
-            kv.second.toStop == stop)
-            out.push_back(kv.first);
-    std::sort(out.begin(), out.end());
-    return out;
-}
-
-void BusNetwork::markAboard(int passenger) {
-    const auto it = waiting_.find(passenger);
-    if (it != waiting_.end()) it->second.aboard = true;
 }
 
 }  // namespace citysim

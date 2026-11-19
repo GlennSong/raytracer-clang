@@ -40,7 +40,6 @@ struct CityRenderParams {
     Real carsPerLaneKm = 10.0;
     Real pedsPerKm = 6.0;
     Real longCommuteShare = 0.0;   // CitySimConfig::longCommuteShare
-    Real busCommuteShare = 0.0;    // CitySimConfig::busCommuteShare
     // Ceiling on each density-derived count (CitySimConfig::maxAmbient). The
     // bridge used to clamp at a literal 400, which halved metro v2: its own
     // network asks for 769 cars and 788 walkers.
@@ -74,21 +73,12 @@ struct CityRenderParams {
     // ~2x, and near-tier agents are the expensive ones.
     Real pedPromoteRadius = 280.0;
     Real pedDemoteRadius = 350.0;
-    // Cabs on the street, and how readily a walker hails one (0 = off).
-    Real taxiFraction = 0.0;
     std::string driverRole;        // a role for the level's drivers (CitySim::giveDriversRole; the traffic lab's)
     Real driverRoleShare = 1.0;
     bool realLanes = false;        // draw cars on the real lanes (#218)
     std::string driving = "v1";    // which driving model (CitySimConfig::driving; "v2" also runs the new library)
     std::string drivingRules;      // the rule set v2 drives by (CitySimConfig::drivingRules)
     std::string levelPath;         // the level file (CitySimConfig::levelPath): v2 builds its lane graph from it
-    Real hailChance = 0.0;
-    Real hailMinMetres = 400.0;
-    int busRoutes = 0;
-    int busStops = 8;
-    int buses = 0;
-    Real busMaxWalk = 120.0;
-    Real busServiceStart = 5.5, busServiceEnd = 23.5;   // CitySimConfig: with a depot, the buses' day
     // Cars handed to real physics near the player (CitySimConfig::physicalCars).
     // 0 = none, the shipping default; the physics soaks opt in.
     int physicalCars = 0;
@@ -256,9 +246,6 @@ public:
 
     bool built() const { return built_; }
     const CitySim& sim() const { return sim_; }
-    // A BUS'S DRAWN FRAME: the exact matrix its body is drawn with this step. False when the agent is not a
-    // see-into vehicle.
-    bool busFrame(int agent, engine::Mat4* pose) const;
     // THE TYRES AGAINST THE ROAD (the new model's drawing check, #255): the car entity `car` (city_car.h) as the
     // four-wheel fit puts it now (without the tilt filter's memory: a pure read), and for each of its wheels the height of the wheel's
     // lowest point above the drawn road surface under it (metres; + floats, - sinks), wheel by wheel; and, when asked,
@@ -270,7 +257,7 @@ public:
     // passenger (backseat, frontseat passenger) or the driver ... we'd have to be pointing at the seat that we
     // want"): an ambient car's drawn pose and its seat hips in the body frame -- [0] the driver's, [1] the front
     // passenger's (the driver's mirrored), then the two rear seats when the body is long enough to have them.
-    // False for a bus, a parked or released agent, or a body that publishes no driver seat.
+    // False for a parked or released agent, or a body that publishes no driver seat.
     bool carSeatsOf(int agent, engine::Mat4* pose, std::vector<engine::Vec3>* seats) const;
     // ...and of a car entity (ADR-0445): where its body is this step (city_car.h CityCarPose) and its seats. False: it
     // has no such pose (the player has it, physics carries it, or no step yet), or its model has no driver's seat.
@@ -278,7 +265,6 @@ public:
                           std::vector<engine::Vec3>* seats) const;
     // The model (variant) a household car is drawn as: its fleet slot, and its kind's (a bus, a cab, a fire engine).
     int carEntityVariant(int slot, VehicleType type) const { return parkedVariant(slot, type); }
-    static int riderSeat(int agent, int j, int n);
     // R5 physical tier (roads-v2.1): agents whose RENDER truth is a Jolt
     // vehicle body. CityPhysicsSystem drives the bodies from the sim's own
     // plan and writes each pose here; syncGroups bakes it instead of the
@@ -321,7 +307,7 @@ public:
         const engine::Mat4 m = agentPose(a);
         return engine::Vec2(m.m[0][3], m.m[2][3]);
     }
-    // Is anyone in this driver's car? Only while it is on a trip (moving; a bus or a cab on duty; the car you ride)
+    // Is anyone in this driver's car? Only while it is on a trip (moving), or a household's car with its person in it
     bool carOccupied(int agentIndex) const;
     int loadMultiplier() const { return loadMul_; }
     CitySim& simMutable() { return sim_; }   // ADR-0062 bridge: release ejected drivers
@@ -555,28 +541,15 @@ private:
 
     CityRenderParams params_;
     engine::NavGraph nav_;
-    // Bus-stop furniture entities, kept so a rebuild can remove the old set
-    // rather than stacking a second pole on every stop.
-    std::vector<engine::Entity> busStopProps_;
     // EVERY BUS BODY (Glenn, 2026-11-06: two saloons, "one where it's all seats and one where they're standing room"):
-    // the fleet's slots whose class is a bus ("bus", "bus_standing"); each bus wears the one its route picks
+    // the fleet's slots whose class is a bus ("bus", "bus_standing")
     std::vector<int> busVariants_;
-    int busVariantOf(int agent) const;
-    bool isBusVariant(int v) const;
-    // per busVariants_ entry: its boards, in the body's frame -- the destination on the front, rear and kerb side,
-    // and the next stop inside, over the saloon (markers dest_sign, dest_sign_rear, dest_sign_side, stop_display)
-    struct BusBoard {
-        engine::Mat4 local;
-        bool nextStop = false;
-    };
-    std::vector<std::vector<BusBoard>> busBoards_;
-    Real busPrintAcc_ = 0;  // RT_PRINT_BUSES cadence
     CitySim sim_;
     // THE DRAWN MODELS' BODY FACTS AND THE GROUND are the sim's (city_poses.h, ADR-0454): this host loads them at build
     // and draws from them, by these names
     int& busVariant_ = sim_.poses().models.bus;     // fleet slot that draws as a bus (-1 = none): the first of busVariants_
     int& fireVariant_ = sim_.poses().models.fire;   // ...and as a fire engine (a fire station's, stationed in its bays)
-    int& taxiVariant_ = sim_.poses().models.taxi;   // ...and as a taxi (the cabs', CitySim::isTaxi)
+    int& taxiVariant_ = sim_.poses().models.taxi;   // ...and as a taxi (a household's or a lab's car of that class)
     std::vector<std::vector<CarWheel>>& carWheels_ = sim_.poses().models.wheels;   // each model's wheels
     std::function<double(double, double)>& heightAt_ = sim_.poses().ground.terrain;   // terrain drape (may be null)
     std::vector<engine::RoadDeckField>& decks_ = sim_.poses().ground.decks;          // the drawn road decks
@@ -682,9 +655,8 @@ private:
     std::string findPlace_;            // a FindPlaceRequest's name, until update answers it
     std::string groundQuery_;          // `ground? x z [r]`, until update answers it
     std::string groundResult_ = "none";
-    engine::ControlAnswers answers_;   // parking? traffic? depots? opensigns? findplace? pin? jitter?
+    engine::ControlAnswers answers_;   // parking? traffic? opensigns? findplace? pin? jitter?
     engine::ControlCommands::Binding answerGround_;
-    std::string depotsStalled_;
     engine::Entity signalGroups_[kLensColourCount];   // the lit arrow lenses, by LensColour
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity parkBayGroup_;      // curbside bay outline markings (R6b)
@@ -702,17 +674,6 @@ private:
     std::vector<engine::PhysicsWorld::VehicleConfig> carConfigs_;
     // per slot: the menu's recipe for it and its paint (loadFleetDrivable), what a taken car is built as
     std::vector<std::string> carDrivable_;
-    // per slot: a bus's door leaves (ADR-0356) -- each its paint's group and its glass's, and the slide at fully open;
-    // and per bus agent, how open its doors are (0 shut .. 1)
-    struct DoorLeafGroups {
-        engine::Entity body, glass;
-        engine::Vec3 slide{0, 0, 0};
-    };
-    std::vector<std::vector<DoorLeafGroups>> carDoorLeaves_;
-    std::unordered_map<int, float> busDoorOpen_;
-    struct BusDoorSound { engine::Vec3 at; bool shut = false; };
-    std::vector<BusDoorSound> busDoorSounds_;   // this step's, for the frame's update to play
-    engine::AudioClipHandle busDoorShutClip_, busDoorOpenClip_;
     std::vector<engine::Vec3> carPaint_;
     // ...and its seat (the handling's `seat`): a seat with BARS, not a wheel, is ridden astride, so the slot draws
     // its own rider (carRiderGroups_) posed by the player's seat rule instead of the car driver
@@ -720,9 +681,8 @@ private:
     // SEE-INTO VEHICLES (the bus; Glenn: "we should see the npcs sitting on
     // the bus. There should be a driver"). Per variant, indexed like
     // carGroups_: a CLEAR glass group (invalid Entity when the slot's glass is
-    // merged dark into its body, i.e. every ordinary car), and the seat hip
-    // points people are drawn on. The people themselves are instanced: one
-    // driver group, three rider groups for a little variety of dress.
+    // merged dark into its body, i.e. every ordinary car), and the driver's
+    // seat. The driver is instanced: one group.
     std::vector<engine::Entity> carGlassGroups_;
     // FLEET V2 GLASS. Per slot: the same glass OPAQUE with a reflective glass material (traffic at large),
     // the cabin apart from the shell, and whether the slot is always seen into (the bus). An ordinary car
@@ -735,14 +695,12 @@ private:
     std::vector<char> carOpenSeat_;   // nothing round the driver (a convertible), by slot
     // The agents drawn see-through this bake (nearest the player, with hysteresis).
     std::unordered_set<int> nearSwap_;
-    std::vector<std::vector<engine::Vec3>> carSeats_;
     std::vector<engine::Vec3> carDriverSeat_;
     std::vector<engine::Vec3> carRearHip_;   // per slot: the back bench's hip point (its middle), where carHasRear_
     std::vector<char> carHasRear_;
     std::vector<char> carHasDriver_;
     engine::Entity busDriverGroup_{};
     std::vector<engine::Entity> carRiderGroups_;   // per slot: its rider astride (invalid: a car's driver, if any)
-    engine::Entity busRiderGroups_[3] = {};
     // The matrix each see-into vehicle was DRAWN with at the last bake, by
     // agent. A passenger is placed through exactly this -- recomputing the
     // pose skipped the drawn body's tilt filter, and on a slope the rider
@@ -803,19 +761,6 @@ private:
     std::vector<engine::Mat4> blockBake_;    // cached block-outline transforms
     std::vector<engine::Mat4> lotBake_;      // cached lot-outline transforms
     engine::AssetManager* assets_ = nullptr; // for bakes made after build() (bakePlanOutlines)
-    // THE BUSES' DESTINATION SIGNS (engine::busSignImages): one group per label (each route's, then NOT IN SERVICE),
-    // made on the first frame the renderer is at hand (the atlas is a texture); filled per step in syncCarLamps
-    std::vector<engine::Entity> busSignGroups_;
-    std::vector<int> busSignRow_;   // per route: its label's row
-    int busSignOff_ = -1;           // the NOT IN SERVICE row
-    std::vector<std::vector<int>> busStopRow_;   // per route, per stop: its NEXT STOP row (the stop's street)
-    int busSignsDrawn_ = 0;         // signs pushed this step (depots?)
-    engine::Vec3 busSignAt_{0, 0, 0};   // ...the last one's world position
-    bool busSignsTried_ = false;
-    engine::Mat4 busSignLocal_;     // the board on the bus, in its body's frame
-    void makeBusSigns(engine::FrameContext& ctx);
-    int busSignRowFor(int agent) const;
-    int busStopRowFor(int agent) const;
     bool planBaked_ = false;                 // the plan outlines bake on first show
     void bakePlanOutlines(engine::World& world);
     std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)

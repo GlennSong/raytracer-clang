@@ -67,7 +67,6 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         walkers += a.mode == citysim::Agent::Mode::Pedestrian ? 1 : 0;
     }
     CHECK(oldDrivers == 0);
-    CHECK(sim.buses().routeCount() == 0);
     CHECK(sim.drivingV2() != nullptr && sim.drivingHost().active());
     citysim::CityBrain* bp = sim.brain();
     CHECK(bp != nullptr && bp->hasResident());
@@ -88,10 +87,10 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     int withCar = 0;
     for (int who = 0; who < b.residentCount(); ++who) withCar += b.residentCar(who) >= 0 ? 1 : 0;
     std::printf("    [river] %d residents in %d households, %zu cars (%d residents in a household with one), %zu markers; the old "
-                "sim's agents: %zu (%d walkers, %d drivers), bus routes %d; the driving's cars %zu; memory %.0f MB loaded "
+                "sim's agents: %zu (%d walkers, %d drivers); the driving's cars %zu; memory %.0f MB loaded "
                 "(%.0f before)\n",
                 b.residentCount(), households, b.cars().size(), withCar, b.markers().size(), sim.agents().size(), walkers,
-                oldDrivers, sim.buses().routeCount(), d.carCount(), mbLoaded, mb0);
+                oldDrivers, d.carCount(), mbLoaded, mb0);
     // THE ROADS THE NEW DRIVING HAS: the model's junctions and streets, and its lane level's paths
     std::printf("    [river] the road model: %zu junctions, %zu streets, %zu lane-level paths; the street map %d nodes, %d links\n",
                 d.model()->junctions.size(), d.model()->streets.size(), d.roads()->paths.size(), sim.nav().nodeCount(),
@@ -227,15 +226,18 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         CHECK(b.markers().size() == 799u);
         CHECK(mostOnRoad == 117);
         CHECK(mostOnRoadAt == 11);
-        CHECK(b.counts().tripsBegun == 263u);
-        CHECK(b.counts().parkedReports == 145u);
+        CHECK(b.counts().tripsBegun == 259u);
+        CHECK(b.counts().parkedReports == 141u);
         CHECK(b.counts().walksBlocked == 7u);
         CHECK(b.counts().otherPlaces == 6u);
-        CHECK(b.machine()->counts().arrivals == 623u);
+        CHECK(b.machine()->counts().arrivals == 621u);
         CHECK(b.machine()->counts().noPlans == 225u);
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
         // are each one whole record now, so who gives way to whom there moved; every count above is unchanged
-        CHECK(hash == 0x4b8f868f3d5e05e0ull);
+        // 0x4b8f868f3d5e05e0 -> 0xde1f57edbda09ebc (ADR-0460): river_town's old walkers no longer hail cabs that never
+        // existed (hailChance 0.25, no cabs: a quarter of the walkers facing 350 m or more stood at the kerb all run);
+        // they walk. Put back, the old hash returns exactly. Trips 263 -> 259, parked 145 -> 141, arrivals 623 -> 621.
+        CHECK(hash == 0xde1f57edbda09ebcull);
     }
 }

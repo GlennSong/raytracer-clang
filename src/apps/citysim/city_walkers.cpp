@@ -112,7 +112,7 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
     // physics has no entity-destroy hook; see the onStop note).
     for (std::size_t wi = 0; wi < walkers_.size();) {
         Walker& w = walkers_[wi];
-        // Gone INDOORS (home, work, a cafe), onto a bus, or out of the bubble:
+        // Gone INDOORS (home, work, a cafe), into a car, or out of the bubble:
         // no body on the pavement (CitySim::pedVisible). It gets a fresh one
         // when it steps out again.
         const bool stale =
@@ -123,7 +123,6 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
             const Agent& ga = agents[static_cast<std::size_t>(w.agentId)];
             const char* why = ga.mode != Agent::Mode::Pedestrian ? "got in a car"
                               : ga.far()                          ? "left the near tier"
-                              : sim.riding(w.agentId)             ? "boarded a ride"
                               : ga.indoors                        ? "went indoors"
                                                                   : "stopped (not moving, not indoors?)";
             gone_[w.agentId] = Gone{std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
@@ -321,7 +320,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         c.vel = c.fwd * seen.speed;
         // (an old-sim car: its fixed box, as before; a household car: its own body's)
         c.halfW = seen.agent >= 0 ? 0.95 : seen.width * 0.5;
-        c.halfL = seen.agent >= 0 ? (sim.isBus(seen.agent) ? 5.7 : 2.35) : seen.length * 0.5;
+        c.halfL = seen.agent >= 0 ? 2.35 : seen.length * 0.5;
         cars.push_back(c);
     }
     // Every person (other walkers + the on-foot player) for 360° SEPARATION —
@@ -852,9 +851,9 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                              ai, a.pos.x, a.pos.y, li, a.leg, a.route.links.size(), a.distOnLeg,
                              L0.length, a.speed, a.far() ? 1 : 0, static_cast<int>(a.tier));
                 std::fprintf(stderr, "[walk debug]   gap %.2f minGap %.2f bodyLag %.2f tethered %d\n", sm.debugGap(ai), sm.debugMinGap(ai), a.bodyLag, a.tethered ? 1 : 0);
-                std::fprintf(stderr, "[walk debug]   state %d hold %.1f riding %d awaiting %d seatPhase %d playerControlled %d | link %d: %.1f %.1f -> %.1f %.1f (nodes %d -> %d, street nodes < %d); next:",
-                             static_cast<int>(a.state), a.holdTimer, sm.riding(ai) ? 1 : 0,
-                             sm.awaitingRide(ai) ? 1 : 0, a.seatPhase, a.playerControlled ? 1 : 0,
+                std::fprintf(stderr, "[walk debug]   state %d hold %.1f on a train journey %d seatPhase %d playerControlled %d | link %d: %.1f %.1f -> %.1f %.1f (nodes %d -> %d, street nodes < %d); next:",
+                             static_cast<int>(a.state), a.holdTimer,
+                             sm.onTrainJourney(ai) ? 1 : 0, a.seatPhase, a.playerControlled ? 1 : 0,
                              li, L0.footA.x, L0.footA.y, L0.footB.x, L0.footB.y, L0.from, L0.to, ng.streetNodeCount());
                 for (std::size_t q = 1; q < std::min<std::size_t>(5, a.route.links.size()); ++q) {
                     const engine::NavLink& Lq = ng.links[static_cast<std::size_t>(a.route.links[q])];
