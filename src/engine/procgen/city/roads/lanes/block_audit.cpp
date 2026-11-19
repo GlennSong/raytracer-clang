@@ -493,7 +493,7 @@ std::vector<PadConflict> padsOnPavement(const Result& r, const std::vector<Terra
 BlockAudit auditBlocks(const Result& r, const nlohmann::json& citysim) {
     BlockAudit a;
     LotParams lp;
-    readLotGrowParams(citysim.is_object() ? citysim : nlohmann::json::object(), lp);
+    readLotGrowParams(LotCitysim::of(citysim), lp);
     const HeightGrid* grid = r.hasTerrain ? &r.terrain : nullptr;
     lp.ground = [grid](Real x, Real z) { return static_cast<Real>(grid ? grid->sample(x, z) : 0.0); };
     {

@@ -19,6 +19,7 @@
 
 #include "test_framework.h"
 
+#include "crowd_test_rig.h"
 #include "../src/apps/citysim/city_brain.h"
 #include "../src/apps/citysim/city_car.h"
 #include "../src/apps/citysim/city_render.h"
@@ -55,53 +56,13 @@ constexpr Real kAtTheKerbEnd = 2.5;
 // ...and fewer than one sample in this many is not (the spread junctions' known few).
 constexpr uint64_t kAwayShareOneIn = 20;
 
-struct LoadedCrowd {
-    std::unique_ptr<Renderer> renderer = Renderer::create();
-    std::unique_ptr<RendererMeshUploader> uploader;
-    std::unique_ptr<AssetManager> assets;
-    World world;
-    RenderView view;
-    citysim::CityRenderSystem city;
-    bool ok = false;
-    LoadedCrowd() {
-        uploader = std::make_unique<RendererMeshUploader>(*renderer);
-        assets = std::make_unique<AssetManager>(*uploader);
-        if (!LevelLoader::load(std::string(RT_SOURCE_DIR) + "/assets/levels/brain_crowd.json", world, *renderer, view, *assets, false))
-            return;
-        ok = city.build(world, assets.get(), nullptr);
-    }
-};
-
-// One number over the run's end state: the driving's own state hash, then every resident's brain record byte for byte
-// and their place to the centimetre, then every household car's place to the centimetre.
-uint64_t crowdHash(const citysim::CityBrain& b, const citysim::CitySim& sim, World& world) {
-    uint64_t h = sim.drivingV2()->stateHash();
-    const auto mix = [&](uint32_t v) { h = h * 1099511628211ull ^ hashPair(static_cast<uint32_t>(h >> 32), v); };
-    for (int who = 0; who < b.residentCount(); ++who) {
-        const citysim::brain::AgentBrain& a = b.machine()->agent(static_cast<citysim::brain::AgentId>(who));
-        const unsigned char* bytes = reinterpret_cast<const unsigned char*>(&a);
-        for (std::size_t i = 0; i < sizeof(a); i += 4) {
-            uint32_t w = 0;
-            for (std::size_t k = 0; k < 4 && i + k < sizeof(a); ++k) w |= static_cast<uint32_t>(bytes[i + k]) << (8 * k);
-            mix(w);
-        }
-        const Vec2 p = sim.agents()[static_cast<std::size_t>(b.residentAgent(who))].pos;
-        mix(static_cast<uint32_t>(static_cast<int32_t>(std::lround(p.x * 100))));
-        mix(static_cast<uint32_t>(static_cast<int32_t>(std::lround(p.y * 100))));
-    }
-    for (const int car : b.cars()) {
-        const Transform* t = world.get<Transform>(b.carEntity(car));
-        if (!t) continue;
-        mix(static_cast<uint32_t>(static_cast<int32_t>(std::lround(t->position.x * 100))));
-        mix(static_cast<uint32_t>(static_cast<int32_t>(std::lround(t->position.z * 100))));
-    }
-    return h;
-}
+using crowdtest::LoadedCrowd;   // (crowd_test_rig.h: shared with test_river_town_crowd.cpp)
+using crowdtest::crowdHash;
 
 }  // namespace
 
 TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
-    LoadedCrowd lc;
+    LoadedCrowd lc("brain_crowd.json");
     CHECK(lc.ok);
     if (!lc.ok) return;
     citysim::CitySim& sim = lc.city.simMutable();

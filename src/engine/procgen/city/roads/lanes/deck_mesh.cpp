@@ -2,6 +2,7 @@
 #include "engine/procgen/city/roads/control_signs.h"            // markingsOnArm: which arms get a stop bar
 #include "engine/procgen/city/roads/lane_turns.h"               // laneLineBetween: the lines between lanes
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"   // kerbPerpSign: which side of a lane its kerb is
+#include "engine/procgen/city/roads/lanes/lane_level.h"         // drivenLanePoints: where a lane is driven (#304)
 #include "engine/procgen/city/roads/road_model.h"               // builtRoadModel: the model the paint is read off
 #include "engine/bundle/bundle.h"                               // fnv1aStr: paintFactsKey
 #include "engine/mesh_builder.h"
@@ -1108,6 +1109,14 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
         if (tangent) *tangent = normalize(pts[k + 1] - pts[k]);
         return pts[k] + (pts[k + 1] - pts[k]) * f;
     };
+    // a lane's driven line, point for point with its own points (lane_level.h drivenLanePoints: the lane level's line)
+    std::map<size_t, std::vector<Vec2>> drivenOf;
+    auto drivenPoints = [&](size_t li) -> Span<Vec2> {
+        std::map<size_t, std::vector<Vec2>>::iterator it = drivenOf.find(li);
+        if (it == drivenOf.end())
+            it = drivenOf.emplace(li, drivenLanePoints(r.graph, model, static_cast<uint32_t>(li))).first;
+        return Span<Vec2>(it->second.data(), it->second.size());
+    };
     auto covers = [&](size_t li, double s) {
         return atOrPast(s, model.lanes[li].spineFrom, kLaneLineStation) && atOrBefore(s, model.lanes[li].spineTo, kLaneLineStation);
     };
@@ -1376,9 +1385,11 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
                         arrow.nearTurn = nearTurn;
                         arrow.farTurn = farTurn;
                         arrow.station = sTail;
+                        // ON THE LINE THE LANE IS DRIVEN ALONG (#304, ADR-0457): a kerb lane the parking band overlaps is
+                        // driven in the middle of what the band leaves (drivenLanePoints, ADR-0450), and its arrow is
+                        // painted there, under the cars, not at the lane's own middle under the parked cars' wheels
                         Vec2 along;
-                        arrow.at = atStation(li, L.lanes[li].xy(), sTail, &along);
-                        arrow.heading = along * static_cast<double>(model.lanes[li].dir);
+                        arrow.at = atStation(li, drivenPoints(li), sTail, &along);                        arrow.heading = along * static_cast<double>(model.lanes[li].dir);
                         plan.arrows.push_back(arrow);
                     }
                 }

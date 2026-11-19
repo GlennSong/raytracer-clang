@@ -632,7 +632,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             // grew a DIFFERENT city offline than in the game. The tracer renders the city; it
             // does not decide what the city is.
             engine::CityGrowInputs gin;
-            gin.citysim = cs;
+            gin.citysim = engine::LotCitysim::of(cs);
             gin.levelDir = levelDir;
             gin.padGround = [&ctp, &cnoise](double x, double z) {
                 return terrainHeight(ctp, cnoise, x, z);   // pads grade off the road-carved ground

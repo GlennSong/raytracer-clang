@@ -94,6 +94,9 @@ TEST_CASE(lanes_graph_loads_and_expands_the_valley_scene) {
 #include "engine/procgen/city/roads/lanes/block_audit.h"
 #include "engine/procgen/city/roads/lanes/city_producer.h"
 #include "engine/procgen/city/roads/lanes/lots_producer.h"
+#include "engine/city_grow.h"       // growCity: its reads of the citysim block (ADR-0457)
+#include "engine/lot_citysim.h"     // the citysim fields the lot pass reads
+#include "engine/lot_grow_setup.h"  // lotGrowSetupForLevel
 #include "engine/procgen/city/roads/road_builder.h"
 #include "engine/bundle/bundle_glb.h"
 #include "engine/procgen/city/lot_cache.h"
@@ -519,6 +522,73 @@ TEST_CASE(lanes_lots_producer_identity_follows_its_inputs_and_the_city_key) {
     LevelInputs shaped = terrain; shaped.level["entities"].push_back(nlohmann::json{{"shape", "script"}, {"onTerrain", true}}); CHECK(!lp->applies(shaped));   // ...unless a script shapes it
     LevelInputs plain = in; plain.level["citysim"].erase("buildLots"); plain.level["citysim"].erase("planOnly"); CHECK(!lp->applies(plain));
     LevelInputs road = in; road.level["entities"].push_back(nlohmann::json{{"shape", "road"}}); CHECK(!lp->applies(road));
+}
+
+// THE LOT PASS READS ONLY WHAT ITS KEY HASHES (ADR-0457; lot_citysim.h). Mechanically, two ways:
+//   1. the readers of the lot pass -- readLotGrowParams, lotGrowSetupForLevel and growCity's own reads -- run over the
+//      citysim block of every shipped level (assets/levels/*.json) and of the lab scenes: each reads through LotCitysim,
+//      which throws on a field kLotCitysimFields does not name, so a new read of an undeclared field fails here;
+//   2. the lots key moves with each declared field and with none of the fields only the running sim reads.
+TEST_CASE(lot_citysim_the_lot_pass_reads_only_what_its_key_hashes) {
+    using namespace engine::bundle;
+    int levels = 0, refused = 0;
+    std::string firstRefusal;
+    for (const char* dir : {"assets/levels", "assets/lanelab/levels"}) {
+        for (const std::filesystem::directory_entry& f : std::filesystem::directory_iterator(std::string(RT_SOURCE_DIR) + "/" + dir)) {
+            if (f.path().extension() != ".json") continue;
+            std::ifstream in(f.path());
+            nlohmann::json level;
+            try { in >> level; } catch (const std::exception&) { continue; }
+            if (!level.is_object() || !level.contains("citysim")) continue;
+            ++levels;
+            try {
+                const LotCitysim cs = LotCitysim::ofLevel(level);
+                LotParams lp;
+                readLotGrowParams(cs, lp);
+                (void)lotGrowSetupForLevel(cs, std::string(), HeightField(), {}, nullptr, 0.0, nullptr);
+                CityGrowInputs gin;   // no blocks: growCity reads its fields and grows nothing
+                gin.citysim = cs;
+                (void)growCity(gin);
+            } catch (const std::logic_error& e) {
+                if (refused++ == 0) firstRefusal = f.path().filename().string() + ": " + e.what();
+            }
+        }
+    }
+    std::printf("    [lot citysim] %d levels' blocks read; %d read a field the key does not hash%s%s\n", levels, refused,
+                refused ? ": " : "", firstRefusal.c_str());
+    CHECK(levels >= 20);
+    CHECK(refused == 0);
+    // a field no list names is refused, so the check above can fail
+    bool threw = false;
+    try { (void)LotCitysim().value("cars", 0); } catch (const std::logic_error&) { threw = true; }
+    CHECK(threw);
+
+    // 2. the key
+    registerCityProducer(); registerLotsProducer();
+    const BundleProducer* lots = findProducer(kLotsProducerName);
+    CHECK(lots != nullptr);
+    if (!lots) return;
+    const std::filesystem::path before = std::filesystem::current_path(); std::filesystem::current_path(RT_SOURCE_DIR);
+    struct Restore { std::filesystem::path p; ~Restore() { std::error_code ec; std::filesystem::current_path(p, ec); } } restore{before};
+    LevelInputs in; std::string err; CHECK(loadLevelInputs("assets/lanelab/levels/ring.json", in, &err));
+    const uint64_t key = lots->identity(in).key;
+    int movedBySim = 0, stillForLots = 0;
+    for (const char* simOnly : {"cars", "pedestrians", "buses", "busRoutes", "taxiFraction", "driving", "drivingRules", "crowd",
+                                "near", "tiered", "dormancy", "hoursPerSecond", "vehicles", "fleet"}) {
+        LevelInputs v = in;
+        v.level["citysim"][simOnly] = 12345;
+        movedBySim += lots->identity(v).key != key ? 1 : 0;
+    }
+    for (const char* f : kLotCitysimFields) {
+        if (std::string(f) == "renderCell") continue;   // (the city key's too: covered there)
+        LevelInputs v = in;
+        v.level["citysim"][f] = 12345;
+        stillForLots += lots->identity(v).key == key ? 1 : 0;
+    }
+    std::printf("    [lot citysim] sim-only fields that moved the lots key: %d; declared fields that did not: %d\n", movedBySim,
+                stillForLots);
+    CHECK(movedBySim == 0);
+    CHECK(stillForLots == 0);
 }
 
 TEST_CASE(lanes_lots_bake_reads_the_city_products_back_and_is_deterministic) {

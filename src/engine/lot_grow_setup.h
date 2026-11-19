@@ -6,6 +6,7 @@
 // and the archetype book (Lua resolved to data). One derivation, so the loader and the `lots` bundle
 // producer grow the same city from the same inputs.
 
+#include "engine/lot_citysim.h"   // the citysim fields the lot pass reads (ADR-0457)
 #include "engine/procgen/city/city_lots.h"
 #include "engine/procgen/city/roads/road_entity.h"
 #include "engine/procgen/terrain.h"
@@ -29,7 +30,7 @@ struct LotGrowSetup {
     bool planOnly = false;                  // outlines only, no buildings
 };
 
-LotGrowSetup lotGrowSetupForLevel(const nlohmann::json& cs, const std::string& levelDir, const HeightField& ground,
+LotGrowSetup lotGrowSetupForLevel(const LotCitysim& cs, const std::string& levelDir, const HeightField& ground,
                                   const std::vector<RoadEntity>& nets, LotGroundWithFn groundWith, double groundMeshCell,
                                   const Vec2* enterableAt);
 

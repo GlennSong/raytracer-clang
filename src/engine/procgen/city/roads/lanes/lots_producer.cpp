@@ -54,8 +54,8 @@ bool hasRoadEntities(const nlohmann::json& level) {
     return false;
 }
 bool lotsWanted(const nlohmann::json& level) {
-    const nlohmann::json cs = level.value("citysim", nlohmann::json::object());
-    return cs.is_object() && (cs.value("buildLots", false) || cs.value("planOnly", false));
+    const LotCitysim cs = LotCitysim::ofLevel(level);
+    return cs.value("buildLots", false) || cs.value("planOnly", false);
 }
 
 class LotsProducer : public bundle::BundleProducer {
@@ -93,24 +93,10 @@ public:
             }
             k = bundle::fnv1aStr("lotroads|" + lotRoadsKeyText(spec), k);
         }
-        // The city sim's block, all but which driving model drives the cars (citysim.driving): that is chosen at load
-        // and changes no lot, so switching a level to the new model must not re-bake its lots. Erased only where it
-        // is, so every level without one keeps its key.
-        nlohmann::json citysimKey = in.level.value("citysim", nlohmann::json::object());
-        if (citysimKey.is_object()) citysimKey.erase("driving");
-        // ...nor its markers and its resident with the agent brain (ADR-0441): named points beside streets and one
-        // person, read at load, which no lot reads. Erased only where they are, as above.
-        if (citysimKey.is_object()) {
-            citysimKey.erase("markers");
-            citysimKey.erase("resident");
-            // (ADR-0443: several residents and the households whose cars they share, read at load like the one)
-            citysimKey.erase("residents");
-            citysimKey.erase("households");
-            citysimKey.erase("crowd");   // (ADR-0446: a crowd made from the roads at load, read by no lot)
-            citysimKey.erase("drivableSpacesOnly");
-            citysimKey.erase("near");
-        }
-        k = bundle::fnv1aStr(citysimKey.dump(), k);
+        // THE CITY SIM'S BLOCK AS THE LOT PASS READS IT (ADR-0457): exactly the fields it reads (lot_citysim.h
+        // kLotCitysimFields), the same LotCitysim the grow is handed below; the fields only the running sim reads
+        // (people, driving, crowds, buses, ...) re-bake nothing.
+        k = bundle::fnv1aStr("lotcitysim|" + LotCitysim::ofLevel(in.level).keyText(), k);
         // The ground the lots stand on: the terrain and water blocks, and the cell it is drawn at -- the terrain
         // without its forest, which the loader places at load and the lots never read (a species mix tweak on the
         // island must not re-bake its 8.8 GB of city; a level with no forest keys exactly as before)
@@ -325,7 +311,7 @@ std::string lotRoadsKeyText(const nlohmann::json& roadFile) {
 }
 
 NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInputs& city, nlohmann::json* report) {
-    const nlohmann::json cs = in.level.value("citysim", nlohmann::json::object());
+    const LotCitysim cs = LotCitysim::ofLevel(in.level);   // (what the key hashes, and nothing else: ADR-0457)
     // The blocks are the city's pavement holes; there are no nets. The ground: on a level with
     // terrain, the loader's -- the level's terrain with the city's grid blended in, sampled and
     // re-graded exactly as the loader's lot pass does; without, the city's own grid.

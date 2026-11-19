@@ -39,7 +39,7 @@ namespace engine {
 //   BLOCKS   the same holes, already run through cityBlocksFromHoles.
 //   AUTHORED a level with no roads draws its blocks by hand (citysim.blocks).
 struct CityGrowInputs {
-    nlohmann::json citysim = nlohmann::json::object();
+    LotCitysim citysim;   // the citysim fields the lot pass reads, and only those (lot_citysim.h, ADR-0457)
     std::string levelDir;
     HeightField padGround;              // what the lot pads grade off (eroded + the road carve)
     const std::vector<RoadEntity>* nets = nullptr;   // the level's road entities: their look (sidewalk, curb)

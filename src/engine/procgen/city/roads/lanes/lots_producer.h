@@ -7,7 +7,8 @@
 // does (the same lotGrowSetupForLevel, the same growLotBuildings call) and writes the NetLotResult under
 // `lots/` through the lot codecs. The loader reads it back and runs everything after the grow unchanged.
 //
-// Identity: the city producer's key (the blocks and the ground come from it), the level's citysim block,
+// Identity: the city producer's key (the blocks and the ground come from it), the citysim fields the lot pass reads
+// (lot_citysim.h kLotCitysimFields, read through the same LotCitysim the grow reads; ADR-0457),
 // the authored spawn (the enterable building), the style and archetype books' bytes, sizeof(Real),
 // kLotsFormatVersion and kLotsBuildTag — bumped by hand whenever the grow's output changes.
 //

@@ -26,6 +26,8 @@
 #include "engine/procgen/city/roads/lane_turns.h"
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"
+#include "engine/procgen/city/roads/lanes/lane_level.h"   // drivenLanePoints (#304)
+#include "engine/procgen/city/polyline.h"                 // distToPolyline
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/road_model.h"
 
@@ -442,6 +444,30 @@ TEST_CASE(road_paint_arrows_show_the_turns_the_model_states_lane_by_lane) {
     for (const ModelTurn& t : m.turns) withTurns.insert(std::make_pair(static_cast<int>(t.junction.index), static_cast<int>(t.from.index)));
     CHECK(withArrows == withTurns);
     CHECK(withTurns.size() == 15);
+}
+
+// AN ARROW IS PAINTED ON THE LINE ITS LANE IS DRIVEN ALONG (#304, ADR-0457): the scene's roads with 6 m lanes and a 2.5 m
+// kerb parking band (a planned city's local street), so each kerb lane is driven 1.25 m toward the centre line of its own
+// middle (lane_level.h drivenLanePoints, ADR-0450). Every arrow lies on its lane's driven line, and those in kerb lanes are
+// that 1.25 m off the lane's own middle, where the arrows were painted before (under the parked cars' wheels).
+TEST_CASE(road_paint_arrows_lie_on_the_line_the_lane_is_driven_along) {
+    const PaintScene s = paintScene({{Vec2(0, 0), "signal", {}}, {Vec2(150, 0), "stop", {{"stem", true, {"stop"}}}}},
+                                    nlohmann::json{{"w", 6.0}, {"parking", 2.5}});
+    constexpr double kBandShift = 1.25;   // half the band: how far the kerb lane's driven line lies from its middle
+    const RoadModel m = builtRoadModel(*s.r);
+    int arrows = 0, offTheDrivenLine = 0, shifted = 0;
+    for (const PaintedArrow& a : s.paint.arrows) {
+        ++arrows;
+        const std::vector<Vec2> driven = drivenLanePoints(s.r->graph, m, static_cast<uint32_t>(a.lane));
+        const std::vector<Vec2> own = s.r->lanes.lanes[static_cast<std::size_t>(a.lane)].xy().copied();
+        offTheDrivenLine += distToPolyline(a.at, driven) < kPaintStation ? 0 : 1;
+        shifted += std::fabs(distToPolyline(a.at, own) - kBandShift) < kPaintStation ? 1 : 0;
+    }
+    std::printf("    [paint] %d arrows: %d off their lane's driven line, %d on a kerb lane's line 1.25 m off its middle\n",
+                arrows, offTheDrivenLine, shifted);
+    CHECK(arrows > 0);
+    CHECK(offTheDrivenLine == 0);
+    CHECK(shifted > 0);
 }
 
 // WHETHER A ROAD'S ARMS AT A JUNCTION ARE MARKED IS ITS CLASS'S STATED DATUM (issue #292; road_graph_spec.h

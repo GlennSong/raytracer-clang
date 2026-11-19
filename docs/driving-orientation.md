@@ -5,9 +5,16 @@ Start here before touching `src/apps/driving/` or the city sim's driving side (`
 rules that apply. The *why* is in `docs/driving-model-design.md`, `docs/two-drivers-meeting-design.md` and the ADRs it
 names (ADR-0398 to ADR-0416 for the driving library, ADR-0440 to ADR-0452 for the brain, the near tier, things in the
 way and crosswalks, ADR-0453 for one kind of car, ADR-0455 for the brain's car facts on the car and one way to take a
-car, ADR-0456 for one signal clock). The roads it drives on are described in `docs/roads-orientation.md`. Written
-2026-11-17, after ADR-0452; section 3 and 4 brought up to ADR-0453 on 2026-11-18, to ADR-0455 the same day, and to
-ADR-0456 after it. Anything marked *(unsure)* was not checked in the code.
+car, ADR-0456 for one signal clock, ADR-0457 for river_town on the new driving). The roads it drives on are described
+in `docs/roads-orientation.md`. Written 2026-11-17, after ADR-0452; section 3 and 4 brought up to ADR-0453 on
+2026-11-18, to ADR-0455 the same day, and to ADR-0456 and ADR-0457 after it. Anything marked *(unsure)* was not
+checked in the code.
+
+**Which levels the new driving drives (ADR-0457).** traffic_lab, brain_lab, brain_crowd and river_town (`citysim.driving
+= "v2"` with `drivingRules`). river_town's cars are all a crowd's households' (`citysim.crowd = "crowd_river_town.lua"`,
+the same format as crowd.lua; `cars: 0`, no buses or cabs); the old sim still walks its other people on foot. A sim-only
+citysim field (driving, cars, a crowd, buses, the near tier) never re-bakes a level: the lots key hashes only the fields
+the lot pass reads (`src/engine/lot_citysim.h`).
 
 **One signal clock (ADR-0456).** The traffic lights are the new driving's alone: `signal_programme.h`, pure functions of
 `Driving::clockSeconds()`. The drawn signal heads show them (`headAt`, read by `CityRenderSystem` for each head the loader
@@ -117,8 +124,11 @@ wishes with.
 Build with `cmake --build build-viewer --target driving_tests level_tests physics_tests viewer`. Filters are substrings:
 - `./build-viewer/driving_tests` (about 200 cases, a minute or two); `RT_TEST_FILTER=walks_`, `arrows_`, `crosswalks_`.
 - `RT_TEST_FILTER=signal_heads ./build-viewer/level_tests`: every drawn head on traffic_lab against `lampShownAt`.
-- `RT_TEST_FILTER=brain_crowd ./build-viewer/level_tests`: 12 simulated minutes of 350 residents; per-minute lines
+- `RT_TEST_FILTER=brain_crowd ./build-viewer/level_tests`: 30 simulated minutes of 350 residents; per-minute lines
   include the crosswalk counts. Pins its hash.
+- `RT_TEST_FILTER=river_town_crowd ./build-viewer/level_tests`: river_town's 630 residents (`crowd_river_town.lua`), 30
+  minutes; per-minute lines, why the cars standing at the end stand, what is in the longest-standing car's way, tick
+  cost and memory. Pins its hash. (The two crowd tests share `tests/crowd_test_rig.h`.)
 - `RT_TEST_FILTER=near_tier ./build-viewer/physics_tests`: contacts and hits on walkers.
 - `RT_TEST_FILTER=v2_drives ./build-viewer/level_tests`: traffic_lab, 300 cars, 5 minutes; two known failures.
 - Viewer: `tools/rtctl.py` launches `build-viewer/viewer assets/levels/brain_crowd.json`; `tools/brain_lab_probe.py`
@@ -148,3 +158,11 @@ Build with `cmake --build build-viewer --target driving_tests level_tests physic
   looked into).
 - traffic_lab has no near tier: switched on (brain_crowd's `citysim.near`), no two Jolt cars touch, but a few near cars
   leave their carriageway on some streets and stand off their lane for minutes. How it was measured is in ADR-0453.
+- river_town (ADR-0457, measured, not filed yet):
+  - a queue of about 40 residents waiting at crosswalk 123's kerb end (lane junction 29, near -142 482) reaches back
+    over lane 388, and car 91 stands behind it ("something in the way") from minute 5 to the end; the people at the
+    front never go, not diagnosed;
+  - its road model fails its own lane-graph check (lane 1183 and crosswalk 481's meeting recorded twice), so it is never
+    saved and is rebuilt at every load (about 70 s);
+  - a car can reach only 89.6% of its lane paths, and 116 turns are refused;
+  - 8 residents stand in `no_way` all run, planning again every minute.

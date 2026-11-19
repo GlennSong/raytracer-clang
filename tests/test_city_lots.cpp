@@ -208,7 +208,7 @@ TEST_CASE(alleys_recover_frontage_orphaned_back_rows) {
     }
     nlohmann::json cityJson = { { "seed", 9 }, { "sidewalk", 4.0 }, { "buildChance", 1.0 } };
     LotParams lp;
-    readLotGrowParams(cityJson, lp);
+    readLotGrowParams(LotCitysim::of(cityJson), lp);
     lp.roadMargin = 0;   // the block already begins behind the sidewalk
     auto grow = [&](const LotParams& p, LotPlanDebug& plan) {
         int n = 0;

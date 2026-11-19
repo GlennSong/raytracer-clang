@@ -39,9 +39,12 @@ A bundle is built by **producers**, in order, each writing named sections:
    and its tag retired with the lattice.)
 
 A producer's **key** is a hash of: its tag, the lot format version (`lotcache::kLotsFormatVersion`), the
-Real width, scripting on/off, the level JSON blocks it reads (`terrain`, `water`, `citysim`, road
-entities), the render cell, the spawn point, the style books (`style_book.lua`, `archetype_book.lua`) —
-and, for `lots`, **the `city` key**. So the stages chain: new roads always mean new lots.
+Real width, scripting on/off, the level JSON blocks it reads (`terrain`, `water`, road entities; of `citysim`, only
+the fields the lot pass reads: `src/engine/lot_citysim.h` `kLotCitysimFields`, ADR-0457), the render cell, the spawn
+point, the style books (`style_book.lua`, `archetype_book.lua`) — and, for `lots`, **the `city` key**. So the stages
+chain: new roads always mean new lots. Changing how the sim runs (people, cars, driving, a crowd, buses) re-bakes
+nothing; a new citysim field the lot pass reads is one line in that list (the lot pass cannot read one that is not:
+`lot_citysim_the_lot_pass_reads_only_what_its_key_hashes`).
 
 The road file's LAYOUT (its junctions' streets, headings and through pairs, and its `streets` list: ADR-0417) is mostly
 not in the `city` key: the key hashes the file with those parts taken out (`keyedRoadFileText`). What the paint reads is

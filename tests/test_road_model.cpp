@@ -2570,7 +2570,7 @@ TEST_CASE(road_model_25_where_a_door_fronts_the_road_is_asked_of_the_model) {
     const std::vector<Poly2> blocks = {{{20, 24}, {180, 24}, {180, 45}, {20, 45}}};
     nlohmann::json cityJson = {{"seed", 9}, {"sidewalk", 5.0}, {"buildChance", 1.0}};
     LotParams lp;
-    readLotGrowParams(cityJson, lp);
+    readLotGrowParams(LotCitysim::of(cityJson), lp);
     lp.roadMargin = 0;
     LotPlanDebug plan;
     int faced = 0, nearerFreeway = 0;

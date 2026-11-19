@@ -22118,3 +22118,85 @@ It is a pure function of the driving's clock, like the lamps. Where no programme
 - `assets/scripts/rules/lab.lua`'s `signal_cycle` source text still cites signals.lua's note.
 
 **Revisit when** walk heads are drawn, or a head should show more than one arrow (a near and a far turn each going alone at once).
+
+## ADR-0457 — The lots key hashes only the citysim fields the lot pass reads; river_town drives on the new driving with a crowd of its own; turn arrows on the driven line (#306, deleting the old driving, piece B; #304)
+**Status:** Provisional · **Date:** 2026-11-18
+
+What it does, in three parts:
+1. **A city's bake no longer depends on how its sim runs.** The lots bake (the lots and buildings grown on a level's blocks) was keyed on the level's whole `citysim` block, less a list of fields someone had remembered to take out. So changing the number of cars, the buses, the driving or a crowd re-baked the city, though no lot reads any of them. Now one list says which citysim fields the lot pass reads, the key hashes exactly those, and the lot pass can read no other. Glenn (2026-11-18), asked whether to re-bake river_town for piece B or fix the key: "Why not fix it for real?"
+2. **river_town is driven by the new driving.** Its cars are the households' of a crowd of 630 residents made from its roads (the same way brain_crowd's are). The old driving drives nothing there: no old cars, buses or cabs.
+3. **#304:** a lane's turn arrows are painted on the line the lane is driven along, not at its middle.
+
+Words:
+- The **lot pass** is the step that grows the lots and buildings on a city's blocks. Its result is baked into the level's bundle (`cache/levels/<key>`), and the **key** is a hash of everything it reads, so a change to any of that re-bakes it.
+- A **crowd** is residents, households and their cars made at load from a crowd file (`crowd.lua`'s format, ADR-0446) and the road model.
+- The **driven line** of a lane is where its cars drive: its middle, except a kerb lane that the kerb parking band overlaps, which is driven along the middle of what the band leaves (ADR-0450).
+
+**1. The honest lots key** (`src/engine/lot_citysim.h`).
+- **One list:** `kLotCitysimFields`, found by reading every reader of the lot pass, with each field's reader named beside it:
+  - `lotsWanted` and `lotGrowSetupForLevel`: buildLots, planOnly, facadeDistance, detailDistance;
+  - `readLotGrowParams`: seed, buildChance, sidewalk, downtownRadius, midtownRadius, plinth, hubRadius, wholeBlocks, recipe, coreness, stairs, lifts, districts, parcel, alleys, alleyWidth;
+  - `growCity`: blocks, sidewalk;
+  - the lots writer: renderCell (also in the city key).
+- **One type:** `LotCitysim` keeps only those fields of a block. The lots producer's key hashes what it keeps (`keyText`). Every reader of the lot pass takes a `LotCitysim` instead of the JSON block: the producer, the loader (`growCityLots`), the offline tracer (`level_scene.cpp`), the block audit and the tests.
+- **Mechanical:** a read of a field the list does not name throws `std::logic_error`. A reader therefore cannot see what the key does not hash.
+- **Deleted:** "hash the whole block, then erase the sim-only fields" (`lots_producer.cpp`) and its erase list (driving, markers, resident(s), households, crowd, drivableSpacesOnly, near).
+- **The test** `lanes_tests lot_citysim_the_lot_pass_reads_only_what_its_key_hashes`:
+  - It runs the three readers over the citysim block of every shipped level and lab scene (20 levels): none reads an undeclared field.
+  - On the ring scene, none of 14 sim-only fields (cars, pedestrians, buses, busRoutes, taxiFraction, driving, drivingRules, crowd, near, tiered, dormancy, hoursPerSecond, vehicles, fleet) moves the lots key, and every declared field does.
+  - It bites: with `readLotGrowParams` also reading `taxiFraction`, all 20 levels are refused ("the lot pass read citysim.taxiFraction, which kLotCitysimFields does not name").
+- **What it re-bakes:** every level with lots, once, lazily at its next load, because its key text changed even where its content did not. river_town's re-bake (`rt_bake`) took 82 s at a peak of 2.7 GB. The new bundle is section for section byte-identical to the old one (`rt_bake --sections`, 1,646 sections): only the key moved.
+- traffic_lab, brain_lab and brain_crowd grow no lots, so they bake nothing.
+- **The proof it holds:** river_town.json was switched back to `driving: v1, cars: -1` for the bite below and loaded with a bundle hit, no re-bake.
+
+**2. river_town on the new driving.**
+- **The level** (`assets/levels/river_town.json` citysim): `driving: v2`, `drivingRules: rules/lab.lua` (the lab's rule set: its numbers are general, and river_town needs nothing of its own), `cars: 0` (no cars that drive round for ever), `buses: 0`, `busRoutes: 0`, `taxiFraction: 0`, `crowd: crowd_river_town.lua`, `drivableSpacesOnly`, and the near tier (brain_crowd's numbers). `tiered` and `dormancy` stay on: measured both ways, the run with them on was cheaper (4.6 against 5.8 ms a step) and touched no bodies (against 1 spell with them off).
+- **The crowd** (`assets/scripts/crowd_river_town.lua`): the same format and reader as crowd.lua, the one crowd format. Its numbers are crowd.lua's scaled to river_town's area (1.4 by 1.7 km against the lab's 1.14 km square): 630 residents, 145 places of work, 45 shops and 27 lunch places. The days are crowd.lua's.
+- **The old driving drives nothing:** 0 drivers among the old sim's agents (it still walks its 6,206 other people on foot), and no bus line. The lights on all 434 heads are the new driving's (ADR-0456).
+- **The roads:** the whole network is in the model (144 junctions and 325 streets, as the road file states). The faults are listed below.
+
+**Measured** (`level_tests level_river_town_crowd_drives_on_the_new_driving`, 30 minutes of the day at 60 steps a second, headless):
+
+| | |
+|---|---|
+| made | 630 residents in 582 households, 388 cars (415 residents in a household with one), 799 markers |
+| rings of waits | 0, every minute |
+| bodies touching (the driving's measurements) | 0 spells |
+| cars on the road | the most 117 (minute 11); 55 at minute 19; 117 at minute 30, 99 of them standing |
+| trips | 263 begun, 145 parked, 623 arrivals; 1,205 plans, 225 with no way, 7 walks blocked, 6 other places of the kind |
+| residents at minute 30 | driving 119, small wheels 68, parking 8, pulling out 5, standing 54, walking 368, no way 8 |
+| the longest stand | car 91, 1,481 s (from minute 5): "something in the way", about 40 residents queued over its lane (below) |
+| standing at the end, by rule | 62 none named (queued behind a car), 18 red light, 12 giving way to people crossing, 5 no room beyond, 2 something in the way |
+| a tick (mean, worst) | brain 0.06 (1.7) ms, driving 1.2 (4.1) ms, the whole city step 4.2 (10.8) ms |
+| memory | about 2.0 GB resident, flat over the run |
+
+No far tier for cars is needed at this size: the whole step is a quarter of a viewer frame.
+
+**The test** pins what was made and what happened (the hash 0x9757add914fdb773) and holds the checks below. It also prints why the cars standing at the end stand and what is in the longest-standing car's way. It bites: with the level set back to `driving: v1, cars: -1`, it fails on old drivers (3 checks).
+- no ring of waits at any minute;
+- no driver among the old sim's agents, and none moving;
+- no bus line;
+- every signal head tied to the new driving's junctions;
+- no brain errors or refusals.
+
+**The old river_town test** (`level_river_town_streets_are_drivable_grades`) is kept. It checks the steepest drawn street grade (a ratchet under 70%) and pins nothing of the old driving.
+
+**3. #304: arrows on the driven line** (`deck_mesh.cpp layArrows`).
+- An arrow's place is read off `drivenLanePoints` (lane_level.h), the line the lane level's paths take, instead of the lane's own points.
+- **No shipped road changes.** Arrows are painted only where two or more lanes arrive by an arm, and the one class with a parking band, the local street, has one lane each way and no pockets in any shipped road file. Every road file was checked, and traffic_lab and river_town were built with a probe: no arrow moved.
+- So there is no `kLanesBuildTag` bump (it would re-build every level's roads for nothing), and no before/after picture: there is no banded street with arrows on traffic_lab to show.
+- **The test** `lanes_tests road_paint_arrows_lie_on_the_line_the_lane_is_driven_along` uses the paint scene with 6 m lanes and a 2.5 m band: 30 arrows, all on their lane's driven line, 14 of them 1.25 m off a kerb lane's middle. It bites: painted at the lane's middle, 14 are off the driven line.
+
+**Pins:** none of the earlier ones move. brain_crowd 0xf0003605a4cb6ba2, v2_drives 0x55109fe9a8e247b1, near crowd 0x59168988decd4c99, each with its known failures.
+
+**Shared, not copied:** the crowd tests' rig (loading a level with its city, and the crowd hash) is `tests/crowd_test_rig.h`, used by both crowd tests.
+
+**One model:** concepts touched are the bake key (one list, one type, one reader path), the crowd (one format), driving levels, and the road paint (it asks the lane level's one driven line). No second model of any of them.
+
+**Found, for later (not filed):**
+- **A jam at river_town's lane junction 29:** about 40 residents queue at crosswalk 123's kerb end (near -142, 482). The queue, people following the one ahead, reaches back over lane 388, and car 91 waits behind it from minute 5 to the end. Why the front of the queue never goes was not diagnosed. It is the same family as ADR-0452's walkers-waiting-far-from-a-kerb-end fault.
+- **river_town's road model fails its own lane-graph check** (lane 1183 and crosswalk 481's meeting recorded twice), so it is never saved and is rebuilt at every load (about 70 s).
+- **A car can reach only 89.6% of river_town's lane paths**, and 116 turns are refused.
+- **8 residents stand in `no_way` all run**, planning again every minute: most of the 225 plans with no way.
+
+**Revisit when** the lot pass reads a new citysim field (one line in `kLotCitysimFields`), or buses and cabs move onto the new driving.

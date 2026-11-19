@@ -3939,7 +3939,7 @@ static GrownLots growCityLots(
     // A warm load grows nothing, so the books are resolved (for the watch list) but never parsed.
     for (const std::string& p : engine::cityGrowScriptFiles(levelDir)) g_loadedScriptFiles.push_back(p);
     engine::CityGrowInputs gin;
-    gin.citysim = cs.is_object() ? cs : json::object();
+    gin.citysim = engine::LotCitysim::of(cs);   // (the fields the lots key hashes: the bake grows the same city, ADR-0457)
     gin.levelDir = levelDir;
     gin.padGround = ground;
     gin.nets = &nets;

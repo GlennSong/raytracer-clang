@@ -18,7 +18,7 @@ bool authoredSpawnXZ(const nlohmann::json& root, Vec2& out) {
     return true;
 }
 
-LotGrowSetup lotGrowSetupForLevel(const nlohmann::json& cs, const std::string& levelDir, const HeightField& ground,
+LotGrowSetup lotGrowSetupForLevel(const LotCitysim& cs, const std::string& levelDir, const HeightField& ground,
                                   const std::vector<RoadEntity>& nets, LotGroundWithFn groundWith, double groundMeshCell,
                                   const Vec2* enterableAt) {
     LotGrowSetup s;

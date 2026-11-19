@@ -43,8 +43,8 @@ NetLotResult growCity(const CityGrowInputs& in, LotGrowSetup* setupOut) {
     // elevator runs in.
     std::vector<Poly2> authored;
     if (!(in.blocks && !in.blocks->empty()) && !(in.holes && !in.holes->empty()) &&
-        in.citysim.contains("blocks") && in.citysim["blocks"].is_array()) {
-        for (const auto& poly : in.citysim["blocks"]) {
+        in.citysim.at("blocks").is_array()) {
+        for (const auto& poly : in.citysim.at("blocks")) {
             Poly2 b;
             if (!poly.is_array()) continue;
             for (const auto& pt : poly)

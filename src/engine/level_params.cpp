@@ -432,7 +432,7 @@ std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(co
     return nullptr;
 }
 
-void readLotGrowParams(const json& cityJson, LotParams& lots) {
+void readLotGrowParams(const LotCitysim& cityJson, LotParams& lots) {
     lots.seed = cityJson.value("seed", 1u) ^ 0x10c5u;
     lots.buildChance = cityJson.value("buildChance", 0.9);
     // ROAD MARGIN — sidewalk only, no road-half term (measured 2026-08-16).
@@ -494,8 +494,8 @@ void readLotGrowParams(const json& cityJson, LotParams& lots) {
     // the city's districts; the nets' own are not merged in, or a recipe would
     // silently outvote the author. `road_products_probe <level>` prints what a
     // recipe planned in exactly this form, to copy across.
-    if (cityJson.contains("districts") && cityJson["districts"].is_object()) {
-        const auto& dj = cityJson["districts"];
+    if (cityJson.at("districts").is_object()) {
+        const json& dj = cityJson.at("districts");
         lots.hubRadius = dj.value("hubRadius", lots.hubRadius);
         if (dj.contains("hubs") && dj["hubs"].is_array()) {
             auto kindOf = [](const std::string& n) {
@@ -603,8 +603,8 @@ void readLotGrowParams(const json& cityJson, LotParams& lots) {
             }
         }
     }
-    if (cityJson.contains("parcel") && cityJson["parcel"].is_object()) {
-        const auto& pj = cityJson["parcel"];
+    if (cityJson.at("parcel").is_object()) {
+        const json& pj = cityJson.at("parcel");
         lots.parcelTargetArea = pj.value("targetArea", lots.parcelTargetArea);
         lots.parcelMinArea = pj.value("minArea", lots.parcelMinArea);
         lots.parcelMinEdge = pj.value("minEdge", lots.parcelMinEdge);
