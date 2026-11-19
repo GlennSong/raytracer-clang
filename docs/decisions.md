@@ -22200,3 +22200,43 @@ No far tier for cars is needed at this size: the whole step is a quarter of a vi
 - **8 residents stand in `no_way` all run**, planning again every minute: most of the 225 plans with no way.
 
 **Revisit when** the lot pass reads a new citysim field (one line in `kLotCitysimFields`), or buses and cabs move onto the new driving.
+
+## ADR-0458 — A crosswalk in a junction on a slope is crossed once: its level is the junction's whole span of heights, so river_town's road model is saved
+**Status:** Provisional · **Date:** 2026-11-18
+
+What it does: the crossing finder now treats a junction's crosswalk as lying anywhere between the junction's lowest and highest lane end, not only at each end's own height. On a sloping junction a path that falls across a crosswalk is now found on it once, from one side of the band to the other. Before, one sample in the middle of the band was taken as the path stepping off it, and the one meeting was recorded twice. river_town's lane level failed its own check because of that, so its road model was never saved and was built again at every load (about 70 s).
+
+Words:
+- The **lane level** is the table of paths cars drive on, saved with the road model in `cache/roadmodel/<key>.roadmodel` (ADR-0429, ADR-0435). It is saved only when `validate` finds no problem in it.
+- A **crossing point** is one record of where a path's cars could be on something else: another path, a track, or a crosswalk (ADR-0452). "One meeting recorded once" is one of `validate`'s rules: two records of the same path and crosswalk must not overlap on both stretches.
+- The **same-level figure** is the road builder's `sameLevelDz` (1 m): heights within it count as one level, so a bridge over a street is no crossing.
+
+**The cause** (`src/engine/procgen/city/roads/lanes/lane_graph_crossings.cpp`, the crosswalk pass of `findCrossingPoints`, the `atLevel` test). A crosswalk has no height of its own. Its level was taken as the list of its junction's lane-end heights, and a path's sample counted as at that level only when it was within 1 m of one of them. river_town's junction 120 (the lane level's) has ends at -0.28, -0.73, -1.39, -3.42 and about -7.35 m. Between -1.39 and -3.42 there is a gap: heights from -2.39 to -2.42 m are within 1 m of no end. Lane 1183 falls across crosswalk 481 at about 0.37 m per metre. Its sample at 8.74 m along, at -2.41 m, landed in the gap. The pass split the path's run there into two runs, and so made two records. Each record's stretch is widened by one sample each way, so both met at 8.74 m, and the stretches across the walk overlapped too: `validate` reported "crossing points 22026 and 22027 record one meeting of lane 1183 and crosswalk 481 twice". Connector 3820 was split the same way at 26.96 m. These two were all `validate` caught. A wider gap splits a run into two records that do not touch, or cuts a record short, and `validate` cannot see either. river_town had more of those, found by comparing the lane level built under the old rule and the new one, record for record:
+- 27 paths over 5 crosswalks (353, 358, 364, 417 and 481, at the lane level's junctions 88, 89, 90, 103 and 120) changed. 19 of them had been split in two and 8 had been cut short. Each is now one record over the whole band.
+- The same 27 paths and crosswalks meet, before and after: none is gained or lost. The records drop from 26,490 to 26,471, and no record between two paths changed.
+- traffic_lab's lane level is the same record for record (22,732).
+
+**The fix.** A junction's level is the span from its lowest lane end to its highest, give or take the same-level figure. It is one surface between its ends, so a path crossing it at any height in between is on it. `validate` is unchanged and nothing is de-duplicated afterwards. The path's run over the band is no longer broken, so there is one record by construction.
+
+**The limit, written down:** the span is the junction's, not the crosswalk's own. In a junction with a large drop (junction 120 drops 7.1 m over about 30 m), a path at another level could in principle pass over a crosswalk on the junction's low side and still be within the span. Doing that needs a bridge less than about 3 m above that crosswalk inside the junction's outline, and none of the four levels has one. If a level ever does, state the crosswalk's own height on the road model (from its arm's lane ends) and test against that.
+
+**Version:** `kLaneGraphBuildVersion` 15 → 16 (`lanes/lane_graph_build.h`). Each level's road model is built once more and then saved. The lots key does not read it (ADR-0457), so nothing re-bakes.
+
+**Problem counts from `validate`, before → after:**
+- river_town: 2 → 0;
+- agent_lab: 2 → 0 (it is built from river_town's roads);
+- traffic_lab: 0 → 0;
+- brain_crowd: 0 → 0 (it is built from traffic_lab's roads).
+
+**Load times of the road model** (`obtainLevelRoadModel`):
+- river_town: 70.3 s built and saved, then 1.1 s read from the cache. Before, it took about 71 s at every load and was never saved.
+- agent_lab: 70.8 s, then 1.2 s.
+- traffic_lab: 27.2 s, then 1.1 s.
+
+**The test** `lanes_tests lanes_crossing_points_a_crosswalk_on_a_sloping_junction_is_crossed_once` builds a straight connector that falls from 1.01 m to -1.01 m across a 4 m crosswalk. Its middle sample, at 0 m, is within 1 m of neither end. Now there is one record, it covers the whole band, and `validate` is clean. It bites: under the old rule the same graph gives two records touching at the middle, and `validate` reports "crossing point 1 and crossing point 0 record one meeting of connector 2 and crosswalk 0 twice", the river_town fault.
+
+**Pins:**
+- **river_town crowd: 0x9757add914fdb773 → 0x4b8f868f3d5e05e0.** Re-pinned in `test_river_town_crowd.cpp`. Its crosswalk records changed (above), so who gives way to whom at those five crosswalks moved. Every count pinned beside the hash is unchanged: residents, cars, the most on the road (117, minute 11), trips, arrivals (623), no-plans (225), walks blocked (7).
+- **Unchanged,** because traffic_lab's roads give the same lane level: brain_crowd 0xf0003605a4cb6ba2, with its known kerb-end-share failure; v2_drives 0x55109fe9a8e247b1, with its 2 known failures; near crowd 0x59168988decd4c99.
+
+**One model:** the concept touched is the road model's crosswalks and the crossing points over them. The change is inside `src/engine/procgen/city/roads/`, adds no type, table or second derivation, and the crossing finder stays the one place where the paths over a crosswalk are found.

@@ -128,7 +128,10 @@ inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 // the roads themselves is the lanes tag's, kLanesBuildTag, which keys the roads; to the road file's layout, lane rules
 // or the turns' table, the cache key's own; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
-constexpr uint32_t kLaneGraphBuildVersion = 15;  // 14, 15: the road model's crosswalks laid in, and the paths crossing
+constexpr uint32_t kLaneGraphBuildVersion = 16;  // 16: a crosswalk's level is its junction's whole span of lane-end
+                                                 //     heights, so a path falling across a sloping junction crosses it
+                                                 //     once (ADR-0458)
+                                                 // 14, 15: the road model's crosswalks laid in, and the paths crossing
                                                  //     each found (road_model.h layLaneCrosswalks, ADR-0452); 15: one
                                                  //     whose kerb end lies in another road is not one people use
                                                  // 13: a lane the kerb parking band overlaps is driven along the middle

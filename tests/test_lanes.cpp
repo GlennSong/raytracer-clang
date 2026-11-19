@@ -3272,6 +3272,59 @@ TEST_CASE(lanes_crossing_points_a_crosswalk_gives_one_record_per_path_over_it) {
     }
 }
 
+// A CROSSWALK IN A JUNCTION ON A SLOPE is crossed once (ADR-0458). The junction's level is every height from its lowest
+// lane end to its highest, not each end's height alone: the lane in ends just over one same-level figure above the
+// middle and the lane out begins as far below it, so the connector between them, falling evenly, has a sample at the
+// middle that is near neither end's height. The crossing finder once took that one sample as the path leaving the
+// crosswalk and recorded the one meeting twice, two records touching on both stretches (river_town's lane 1183 and
+// connector 3820 over its crosswalk 481), and the lane level failed its check and was never saved.
+TEST_CASE(lanes_crossing_points_a_crosswalk_on_a_sloping_junction_is_crossed_once) {
+    const CrossingOptions opts = crossingTestOptions();
+    constexpr double kOverTheFigure = 0.01;                     // the ends' heights beyond the same-level figure (m)
+    constexpr double kHalfSpan = 10.0;                          // the connector runs x = -10 to 10 (m)
+    constexpr double kWalkHalfWidth = 2.0, kWalkHalfLength = 5.0;   // the crosswalk: x -2 to 2, y -5 to 5 (m)
+    const double high = opts.clearance + kOverTheFigure, low = -high;
+    LaneGraph g = emptyTestGraph();
+    std::vector<std::vector<PathId>> next;
+    const uint32_t in = addTestPath(g, next, PathKind::Lane, {Vec2(-kHalfSpan - kMiniLaneLength, 0), Vec2(-kHalfSpan, 0)}, {high, high});
+    ownSection(g, in);
+    const uint32_t out = addTestPath(g, next, PathKind::Lane, {Vec2(kHalfSpan, 0), Vec2(kHalfSpan + kMiniLaneLength, 0)}, {low, low});
+    ownSection(g, out);
+    const uint32_t c = addTestPath(g, next, PathKind::Connector, {Vec2(-kHalfSpan, 0), Vec2(kHalfSpan, 0)}, {high, low});
+    g.paths[c].junction = JunctionId(0);
+    g.paths[c].from = PathId(in);
+    next[in].push_back(PathId(c));
+    next[c].push_back(PathId(out));
+    g.junctionConnectors.push_back(PathId(c));
+    finishTestGraph(g, next, {PathId(in)}, {PathId(out)},
+                    {Vec2(-kHalfSpan, -kWalkHalfLength - 1), Vec2(kHalfSpan, -kWalkHalfLength - 1),
+                     Vec2(kHalfSpan, kWalkHalfLength + 1), Vec2(-kHalfSpan, kWalkHalfLength + 1)});
+    // the middle of the connector is a sample, at the middle height: near neither end's height
+    CHECK(std::fabs(g.heightAt(PathId(c), kHalfSpan) - high) > opts.clearance);
+    CHECK(std::fabs(g.heightAt(PathId(c), kHalfSpan) - low) > opts.clearance);
+    Crosswalk walk;
+    walk.outline = g.addPlanPoints({Vec2(-kWalkHalfWidth, -kWalkHalfLength), Vec2(kWalkHalfWidth, -kWalkHalfLength),
+                                    Vec2(kWalkHalfWidth, kWalkHalfLength), Vec2(-kWalkHalfWidth, kWalkHalfLength)});
+    walk.junction = JunctionId(0);
+    g.crosswalks.push_back(walk);
+    g.junctions[0].crosswalks = Range{0, 1};
+    const CrossingReport rep = findCrossingPoints(g, opts);
+    const std::vector<std::string> faults = validate(g);
+    for (const std::string& f : faults) std::printf("      fault: %s\n", f.c_str());
+    CHECK(faults.empty());
+    CHECK(rep.withCrosswalks == 1);
+    int onWalk = 0;
+    for (const CrossingPoint& x : g.crossings) {
+        if (x.otherSide != OtherSide::Crosswalk) continue;
+        ++onWalk;
+        CHECK(x.a == PathId(c) && x.other == 0 && x.junction == JunctionId(0));
+        std::printf("    sloping crosswalk: the connector %.2f to %.2f m, the walk %.2f to %.2f m\n", x.aFrom, x.aTo, x.otherFrom, x.otherTo);
+        // the whole of the band, both sides of the middle: from before x = -2 to past x = 2
+        CHECK(x.aFrom < kHalfSpan - kWalkHalfWidth && x.aTo > kHalfSpan + kWalkHalfWidth);
+    }
+    CHECK(onWalk == 1);
+}
+
 // MIRRORED, THE MIRRORED TABLE: a junction and its mirror image (traffic keeping to the other side) give the same turns,
 // so the same paths in the same order -- and the same crossing points, record for record.
 TEST_CASE(lanes_crossing_points_of_a_mirrored_junction_are_mirrored) {

@@ -234,6 +234,8 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         CHECK(b.machine()->counts().arrivals == 623u);
         CHECK(b.machine()->counts().noPlans == 225u);
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
-        CHECK(hash == 0x9757add914fdb773ull);
+        // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
+        // are each one whole record now, so who gives way to whom there moved; every count above is unchanged
+        CHECK(hash == 0x4b8f868f3d5e05e0ull);
     }
 }

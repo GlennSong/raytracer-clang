@@ -786,7 +786,11 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
         const Vec2 walkFrom = (ring[0] + ring[1]) * 0.5, walkTo = (ring[half] + ring[(half + 1) % ring.size()]) * 0.5;
         const double walkLength = distance(walkFrom, walkTo);
         const Vec2 walkDir = walkLength > 0 ? (walkTo - walkFrom) / walkLength : Vec2(1, 0);
-        // its level: the heights of its junction's lane ends (none for a crosswalk out on a road: any level)
+        // its level: its junction's, every height from the lowest of its lane ends to the highest, give or take the
+        // same-level figure (none for a crosswalk out on a road: any level). The whole span, not each end's height alone:
+        // a junction on a slope lies between its ends, and a path falling across it from a high end to a low one passes
+        // heights near neither. Taken end by end, one such sample in the middle of the band read as the path leaving the
+        // crosswalk and coming back, and one meeting was recorded twice (ADR-0458).
         std::vector<double> levels;
         if (cw.junction.valid() && cw.junction.index < g.junctions.size()) {
             const Junction& jn = g.junctions[cw.junction.index];
@@ -794,12 +798,9 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
                 levels.push_back(g.heightAt(g.junctionLanes[k], g.paths[g.junctionLanes[k].index].length));
             for (uint32_t k = jn.leaving.first; k < jn.leaving.end(); ++k) levels.push_back(g.heightAt(g.junctionLanes[k], 0));
         }
-        auto atLevel = [&](double z) {
-            if (levels.empty()) return true;
-            for (double l : levels)
-                if (std::fabs(z - l) <= clearance) return true;
-            return false;
-        };
+        const double lowest = levels.empty() ? 0.0 : *std::min_element(levels.begin(), levels.end());
+        const double highest = levels.empty() ? 0.0 : *std::max_element(levels.begin(), levels.end());
+        auto atLevel = [&](double z) { return levels.empty() || (z >= lowest - clearance && z <= highest + clearance); };
         std::vector<uint64_t> keys;
         for (int64_t ix = index.at(lo.x - farthestReach); ix <= index.at(hi.x + farthestReach); ++ix)
             for (int64_t iy = index.at(lo.y - farthestReach); iy <= index.at(hi.y + farthestReach); ++iy)
