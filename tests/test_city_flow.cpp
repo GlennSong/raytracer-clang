@@ -3,7 +3,6 @@
 
 #include "city_test_util.h"
 #include "../src/apps/citysim/city_sim.h"
-#include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/procgen/city/road_network.h"
 
 using namespace engine;
@@ -11,92 +10,10 @@ using namespace citysim;
 
 namespace {
 
-// cross4 (city_test_util.h) with long arms: a busy run piles cars into the one
-// centre conflict point — exactly where a naive "brake for everything you see"
-// rule deadlocks.
+// cross4 (city_test_util.h): one junction every walk crosses.
 using citytest::cross4;
 
-// Count how many times any car completes a trip (arrives at work or home) over
-// the run. A gridlocked sim produces almost none; flowing traffic produces many.
-int countArrivals(CitySim& sim, int steps) {
-    std::vector<Agent::Activity> prev;
-    for (const Agent& a : sim.agents()) prev.push_back(a.activity);
-    int arrivals = 0;
-    for (int i = 0; i < steps; ++i) {
-        sim.step(0.1, 0.5);
-        const auto& ag = sim.agents();
-        for (std::size_t k = 0; k < ag.size(); ++k) {
-            // By ARCHETYPE, not by current locomotion: a car owner parks and
-            // steps out at the moment it arrives, so filtering on `mode` here
-            // skipped every arrival at exactly the tick it happened.
-            if (ag[k].archetype != Agent::Mode::Driver) continue;
-            bool nowArrived = ag[k].activity == Agent::Activity::AtWork ||
-                              ag[k].activity == Agent::Activity::AtHome;
-            bool wasMoving = prev[k] == Agent::Activity::Commuting ||
-                             prev[k] == Agent::Activity::Returning;
-            if (wasMoving && nowArrived) ++arrivals;
-            prev[k] = ag[k].activity;
-        }
-    }
-    return arrivals;
-}
-
 }  // namespace
-
-TEST_CASE(busy_junction_does_not_gridlock) {
-    NavGraph nav = cross4(50.0);
-    CitySim sim;
-    sim.build(nav, 24, 0, 17);   // 24 cars funnelling through one junction
-
-    int arrivals = countArrivals(sim, 12000);
-    // Over ~6 in-world days, two-dozen commuters crossing one signal should
-    // complete many trips. A snarl (cars braking for each other forever) yields
-    // a handful at most; healthy flow yields dozens. (Threshold recalibrated for
-    // the longer signal cycle — 12 s green + all-red clearance — and the
-    // turn-yield rule; a gridlock still reads as near-zero.)
-    CHECK(arrivals > 25);
-}
-
-TEST_CASE(cars_keep_to_the_right_side_of_the_road) {
-    // A wide two-way street: with a fixed lane offset a car would hug the
-    // centreline on a wide road (ambiguous side); the width-relative spacing keeps
-    // each car centred in its own half. Verify every moving car sits on the RIGHT
-    // of its travel direction and inside the carriageway, in both directions.
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)}, {Vec2(140, 0)} };
-    g.edges = { RoadEdge{0, 1, 14, RoadClass::Arterial, 0} };   // 14 m -> 2 lanes/side
-    NavGraph nav = buildNavGraph(g);
-
-    CitySim sim;
-    sim.build(nav, 14, 0, 33);
-    const NavGraph& G = *sim.graph();
-
-    bool sawEast = false, sawWest = false;
-    int checks = 0;
-    for (int i = 0; i < 4000; ++i) {
-        sim.step(0.1, 0.5);
-        for (const Agent& a : sim.agents()) {
-            if (a.mode != Agent::Mode::Driver || !a.moving) continue;
-            if (a.leg >= static_cast<int>(a.route.links.size())) continue;
-            int li = a.route.links[a.leg];
-            Real L = G.links[li].length;
-            Real t = L > 1e-9 ? a.distOnLeg / L : 0.0;
-            Vec2 dir = G.direction(li);
-            Vec2 right(dir.y, -dir.x);
-            Vec2 base = G.pointOnLink(li, t);
-            Real lateral = (a.pos.x - base.x) * right.x + (a.pos.y - base.y) * right.y;
-            Real halfWidth = G.links[li].width * 0.5;
-            CHECK(lateral > 0.0);                  // on the right of travel
-            CHECK(lateral <= halfWidth + 1e-6);    // and inside the carriageway
-            ++checks;
-            if (dir.x > 0.5) sawEast = true;
-            if (dir.x < -0.5) sawWest = true;
-        }
-    }
-    CHECK(checks > 0);
-    CHECK(sawEast);   // both travel directions present...
-    CHECK(sawWest);   // ...each correctly on its own right-hand side
-}
 
 TEST_CASE(agents_never_teleport_even_with_unroutable_pairs) {
     // Two road components with NO edge between them, ~200 m apart. An agent whose
@@ -117,7 +34,7 @@ TEST_CASE(agents_never_teleport_even_with_unroutable_pairs) {
     NavGraph nav = buildNavGraph(g);
 
     CitySim sim;
-    sim.build(nav, 16, 16, 99);
+    sim.build(nav, 32, 99);
     std::vector<Vec2> prev;
     for (const Agent& a : sim.agents()) prev.push_back(a.pos);
 
@@ -146,8 +63,8 @@ TEST_CASE(pedestrians_react_and_walk_around_each_other) {
     // deterministic.
     NavGraph nav = cross4(40.0);
     CitySim a, b;
-    a.build(nav, 0, 30, 55);   // pedestrians only
-    b.build(nav, 0, 30, 55);
+    a.build(nav, 30, 55);
+    b.build(nav, 30, 55);
 
     Real minPedDist = 1e9, maxLeanJump = 0;
     bool anyArrived = false, anyAvoided = false;
@@ -189,279 +106,6 @@ TEST_CASE(pedestrians_react_and_walk_around_each_other) {
     CHECK(same);
 }
 
-TEST_CASE(cars_stop_for_the_player_standing_in_the_road) {
-    // A straight two-way street. The "player" stands in the eastbound lane; cars
-    // driving up behind must hold short, not drive through them.
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)}, {Vec2(120, 0)} };
-    g.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
-    NavGraph nav = buildNavGraph(g);
-
-    CitySim sim;
-    sim.build(nav, 10, 0, 71);
-    const Vec2 player(60.0, -2.0);   // mid-road, in the eastbound (right-hand) lane
-
-    Real minDist = 1e9;
-    bool approached = false;
-    for (int i = 0; i < 4000; ++i) {
-        sim.setExternalObstacles({ player });   // host injects the live player each step
-        sim.step(0.1, 0.5);
-        for (const Agent& a : sim.agents()) {
-            if (a.mode != Agent::Mode::Driver || !a.moving) continue;
-            if (a.heading.x < 0.5) continue;     // only the lane heading toward the player
-            Real dx = a.pos.x - player.x, dz = a.pos.y - player.y;
-            Real d = std::sqrt(dx * dx + dz * dz);
-            minDist = std::min(minDist, d);
-            if (a.pos.x < player.x && d < 12.0) approached = true;
-        }
-    }
-    CHECK(approached);          // a car really did come up behind the player...
-    CHECK(minDist > 2.0);       // ...and never ran them over (held short)
-}
-
-TEST_CASE(cross_node_following_keeps_cars_off_each_other) {
-    // Car-following now spans nodes: a car crossing a junction/bend keeps its
-    // distance to the car ahead on its continuing route, so followers rarely pile
-    // through their leader. On this single-junction stress test (all traffic funnels
-    // through one node) genuine body overlap is rare; a real grid spreads far
-    // thinner. We assert it's rare (not zero — a brief one-step touch can still
-    // happen at a merge, a known discrete-step limitation), traffic flows, and the
-    // sim is deterministic.
-    NavGraph nav = cross4(50.0);
-    CitySim a, b;
-    a.build(nav, 24, 0, 17);
-    b.build(nav, 24, 0, 17);
-
-    long overlapSteps = 0, sampled = 0;
-    int arrivals = 0;
-    std::vector<Agent::Activity> prev;
-    for (const Agent& ag : a.agents()) prev.push_back(ag.activity);
-
-    for (int i = 0; i < 12000; ++i) {
-        a.step(0.1, 0.5);
-        b.step(0.1, 0.5);
-        const auto& ag = a.agents();
-        // Arrivals (count over ALL car owners — an arrived car has
-        // moving == false, and its owner has already stepped out of it, so this
-        // filters on ARCHETYPE rather than current locomotion).
-        for (std::size_t k = 0; k < ag.size(); ++k) {
-            if (ag[k].archetype != Agent::Mode::Driver) continue;
-            bool arrived = ag[k].activity == Agent::Activity::AtWork ||
-                           ag[k].activity == Agent::Activity::AtHome;
-            bool wasMoving = prev[k] == Agent::Activity::Commuting ||
-                             prev[k] == Agent::Activity::Returning;
-            if (wasMoving && arrived) ++arrivals;
-            prev[k] = ag[k].activity;
-        }
-        // Overlap among actively-driving cars.
-        bool overlap = false, anyMoving = false;
-        for (std::size_t p = 0; p < ag.size(); ++p) {
-            if (ag[p].mode != Agent::Mode::Driver || !ag[p].moving || ag[p].speed < 0.5) continue;
-            anyMoving = true;
-            for (std::size_t q = p + 1; q < ag.size(); ++q) {
-                if (ag[q].mode != Agent::Mode::Driver || !ag[q].moving || ag[q].speed < 0.5) continue;
-                Real dx = ag[p].pos.x - ag[q].pos.x, dy = ag[p].pos.y - ag[q].pos.y;
-                if (std::sqrt(dx * dx + dy * dy) < 1.5) overlap = true;   // bodies overlapping
-            }
-        }
-        if (anyMoving) { ++sampled; if (overlap) ++overlapSteps; }
-    }
-    CHECK(sampled > 0);
-    CHECK(arrivals > 25);                          // traffic keeps flowing (no gridlock —
-                                                   // threshold sized for the slower, safer
-                                                   // signal cycle with all-red clearance)
-    CHECK(overlapSteps < sampled / 10);            // genuine overlap in well under 10% of steps
-    bool same = true;                              // and the sim stays deterministic
-    for (std::size_t i = 0; i < a.agents().size(); ++i)
-        if (a.agents()[i].pos.x != b.agents()[i].pos.x ||
-            a.agents()[i].pos.y != b.agents()[i].pos.y)
-            same = false;
-    CHECK(same);
-}
-
-TEST_CASE(cars_do_not_freeze_for_oncoming_traffic) {
-    // A single two-way street: cars run both directions. The old wide cone made
-    // every car brake for oncoming traffic 3.5 m to the side; here they must keep
-    // moving past each other.
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)}, {Vec2(120, 0)} };
-    g.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
-    NavGraph nav = buildNavGraph(g);   // two-way -> opposing links
-
-    CitySim sim;
-    sim.build(nav, 12, 0, 5);
-
-    // Watch the busiest stretch: at most steps SOME car is moving at a healthy
-    // clip. If oncoming traffic froze everyone, this stays false for long runs.
-    int movingSteps = 0, sampled = 0;
-    for (int i = 0; i < 4000; ++i) {
-        sim.step(0.1, 0.5);
-        bool anyFast = false;
-        bool anyCommuting = false;
-        for (const Agent& a : sim.agents()) {
-            if (a.activity == Agent::Activity::Commuting ||
-                a.activity == Agent::Activity::Returning) anyCommuting = true;
-            if (a.moving && a.speed > 3.0) anyFast = true;
-        }
-        if (anyCommuting) { ++sampled; if (anyFast) ++movingSteps; }
-    }
-    CHECK(sampled > 0);
-    // Whenever cars are out commuting, traffic is moving the vast majority of the
-    // time (not frozen nose-to-nose with oncoming cars).
-    CHECK(movingSteps > sampled * 9 / 10);
-}
-
-TEST_CASE(wander_trips_chain_without_teleporting) {
-    // The agent-lab wander loop (browser round): arrival must NOT snap to a
-    // parking pose before the next trip — on device that one-frame verge pose
-    // read as the car "jumping backwards in time, then shooting forward". Track
-    // every per-tick displacement, including across the rest frame between
-    // trips, and bound it near honest motion (speed*dt + the corner-cut arc).
-    RoadEntity netTheta;
-    netTheta.look.defaultWidth = 7.0;
-    netTheta.graph.nodes = { RoadNode{Vec2(-60, -40)}, RoadNode{Vec2(60, -40)},
-                             RoadNode{Vec2(60, 40)}, RoadNode{Vec2(-60, 40)},
-                             RoadNode{Vec2(-60, 0)}, RoadNode{Vec2(60, 0)} };
-    netTheta.graph.addEdge(0, 1, netTheta.look.defaultWidth);
-    netTheta.graph.addEdge(1, 5, netTheta.look.defaultWidth);
-    netTheta.graph.addEdge(5, 2, netTheta.look.defaultWidth);
-    netTheta.graph.addEdge(2, 3, netTheta.look.defaultWidth);
-    netTheta.graph.addEdge(3, 4, netTheta.look.defaultWidth);
-    netTheta.graph.addEdge(4, 0, netTheta.look.defaultWidth);
-    netTheta.graph.addEdge(4, 5, netTheta.look.defaultWidth);
-    NavGraph nav = buildNavGraph(navRoadGraph(netTheta, nullptr));
-    CitySim sim;
-    sim.build(nav, 4, 0, 7);
-    sim.setWander(true);
-
-    std::vector<Vec2> prev(sim.agents().size());
-    std::vector<bool> had(sim.agents().size(), false);
-    Real maxJump = 0;
-    int trips = 0;
-    for (int i = 0; i < 20000; ++i) {
-        sim.step(0.1, 0.0);
-        const auto& ag = sim.agents();
-        for (std::size_t k = 0; k < ag.size(); ++k) {
-            if (i < 300) { prev[k] = ag[k].pos; had[k] = true; continue; }   // warm-up:
-            // the one-time initial departure hops from the verge build pose to the
-            // lane; every later transition is the chained wander loop under test.
-            if (had[k]) {
-                Real dx = ag[k].pos.x - prev[k].x, dy = ag[k].pos.y - prev[k].y;
-                maxJump = std::max(maxJump, std::sqrt(dx * dx + dy * dy));
-            }
-            prev[k] = ag[k].pos;
-            had[k] = true;
-            trips = std::max(trips, ag[k].trips);
-        }
-    }
-    CHECK(trips >= 3);        // the loop really is chaining trip after trip
-    // Bound: speed*dt (~0.9 max) + the lane-offset rotation as a chained trip
-    // starts its new route at the node (~2.5 on a 90-degree corner). The old
-    // parking snap was 4-13 m backwards — this must stay well under that.
-    CHECK(maxJump < 3.4);
-}
-
-TEST_CASE(cars_crash_and_stop_instead_of_ghosting) {
-    // Browser round: "a bunch of cars intersected through each other... they
-    // should collide". Ambient cars are planner-owned, so contact is a sim
-    // rule: a closing overlap freezes both (a fender-bender) and they resume
-    // staggered. Pack a signalled cross and assert no two moving cars ever
-    // interpenetrate DEEPLY — the crash freeze must catch them at first touch.
-    NavGraph nav = cross4(60.0);
-    long ghostTicks = 0, escapeTicks = 0, ticks = 0;
-    // Five seeds, not one: escape time on this map swings 1.6%-33% by seed (17 alone sat at the threshold),
-    // and the claim is about the steady state, not one draw.
-    for (uint32_t seed : {17u, 18u, 19u, 20u, 21u}) {
-    CitySim sim;
-    sim.build(nav, 12, 0, seed);   // busy, but not beyond what one junction can carry
-    sim.setWander(true);   // keep every car endlessly criss-crossing the centre
-
-    for (int i = 0; i < 12000; ++i) {
-        sim.step(0.1, 0.5);
-        const auto& ag = sim.agents();
-        bool anyEscape = false;
-        for (std::size_t x = 0; x < ag.size(); ++x) {
-            if (ag[x].mode != Agent::Mode::Driver || !ag[x].moving) continue;
-            if (ag[x].crashCount > 5) anyEscape = true;
-            for (std::size_t y = x + 1; y < ag.size(); ++y) {
-                if (ag[y].mode != Agent::Mode::Driver || !ag[y].moving) continue;
-                // A sanctioned wreck ESCAPE may pass close — that's the tow
-                // truck, not ghosting.
-                if (ag[x].crashCount > 5 || ag[y].crashCount > 5) continue;
-                Real dx = ag[x].pos.x - ag[y].pos.x, dy = ag[x].pos.y - ag[y].pos.y;
-                Real d = std::sqrt(dx * dx + dy * dy);
-                // GHOSTING — two cars driving fast THROUGH each other — is what
-                // the crash rule exists to kill. Frozen wrecks touching (both
-                // stopped) are not ghosting.
-                if (d < 1.5 && ag[x].speed > 2.0 && ag[y].speed > 2.0) ++ghostTicks;
-            }
-        }
-        ++ticks;
-        if (anyEscape) ++escapeTicks;
-    }
-    }
-    CHECK(ghostTicks == 0);           // nobody ever sails through another car
-    // Escapes must not be the STEADY state. This synthetic map is escape-heavy
-    // by construction (every trip crosses ONE junction; dead-end tips force
-    // U-turn chains into head-on meets) — real levels have neither. Since the
-    // contact broad phase stopped cutting angled meets short (#23), contacts that
-    // used to pass as silent overlaps register, and escapes roughly doubled here
-    // (seeds 17-21: 10.0% -> 19.0% of ticks).
-    std::printf("    [escape] %ld/%ld ticks (%.1f%%) over 5 seeds\n", escapeTicks, ticks,
-                100.0 * double(escapeTicks) / double(ticks));
-    CHECK(escapeTicks < ticks / 3);
-}
-
-TEST_CASE(cars_stay_on_the_carriageway_across_width_changes) {
-    // Review fix (lane re-clamp): a car that drew lane 1 on a two-lane arterial
-    // used to KEEP lane 1 onto a one-lane local link — an offset past the kerb,
-    // driving on the verge and invisible to same-link followers. Route traffic
-    // over an arterial -> local width step and assert every moving car stays
-    // within its current link's carriageway.
-    RoadGraph g;
-    g.nodes = { {Vec2(-150, 0)}, {Vec2(0, 0)}, {Vec2(150, 0)}, {Vec2(0, 150)} };
-    g.edges = {
-        RoadEdge{0, 1, 14, RoadClass::Arterial, 0},   // 2 lanes per direction
-        RoadEdge{1, 2, 6, RoadClass::Local, 0},       // 1 lane per direction
-        RoadEdge{1, 3, 6, RoadClass::Local, 0},
-    };
-    NavGraph nav = buildNavGraph(g);
-    CitySim sim;
-    sim.build(nav, 16, 0, 21);
-    sim.setWander(true);   // keep everyone criss-crossing the width change
-
-    Real worstOverhang = 0;
-    for (int i = 0; i < 8000; ++i) {
-        sim.step(0.1, 0.5);
-        for (const Agent& a : sim.agents()) {
-            if (a.mode != Agent::Mode::Driver || !a.moving) continue;
-            // Junction boxes are paved corner to corner and the corner-cut arc
-            // legitimately sweeps across them — only MID-LINK overhang is the
-            // kerb-driving bug this test pins.
-            if (sim.nearJunction(a.pos, 2.0)) continue;
-            // Lateral distance from the nearest link's centreline, minus that
-            // link's half-width: positive = off the carriageway.
-            Real best = 1e9, bestHw = 0;
-            for (int li = 0; li < nav.linkCount(); ++li) {
-                Vec2 A = nav.nodes[nav.links[li].from], B = nav.nodes[nav.links[li].to];
-                Vec2 ab = B - A;
-                Real len2 = ab.lengthSquared();
-                Real t = len2 > 1e-9
-                             ? std::max(Real(0), std::min(Real(1),
-                                   ((a.pos.x - A.x) * ab.x + (a.pos.y - A.y) * ab.y) / len2))
-                             : Real(0);
-                Vec2 c(A.x + ab.x * t, A.y + ab.y * t);
-                Real d = (a.pos - c).length();
-                if (d < best) { best = d; bestHw = nav.links[li].width * 0.5; }
-            }
-            worstOverhang = std::max(worstOverhang, best - bestHw);
-        }
-    }
-    // Corner-cut arcs may momentarily shave inside a junction, never OUTSIDE the
-    // kerb by more than a body's slack. The unclamped-lane bug overhung by ~1.5m.
-    CHECK(worstOverhang < 0.6);
-}
-
 TEST_CASE(tether_held_pedestrian_ghost_does_not_drift) {
     // Review fix (H1): the reactive lean is pos += offset on top of a re-anchored
     // pose. A tether-HELD ghost skipped advance() (no re-anchor) but still got the
@@ -473,8 +117,8 @@ TEST_CASE(tether_held_pedestrian_ghost_does_not_drift) {
     g.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
     NavGraph nav = buildNavGraph(g);
     CitySim sim;
-    sim.build(nav, 0, 6, 9);   // several walkers so the cone SEES neighbours
-                               // (a non-zero lean is what used to accumulate)
+    sim.build(nav, 6, 9);   // several walkers so the cone SEES neighbours
+                            // (a non-zero lean is what used to accumulate)
     // Walk until someone is properly en route.
     int target = -1;
     for (int i = 0; i < 4000 && target < 0; ++i) {
@@ -497,52 +141,6 @@ TEST_CASE(tether_held_pedestrian_ghost_does_not_drift) {
     CHECK(maxDrift < 1.0);   // held means held — the bug drifted metres per tick
 }
 
-TEST_CASE(walkers_gap_accept_at_unsignalled_junctions) {
-    // Roads-v2 S8 kerb discipline: at an UNCONTROLLED junction (the tee is
-    // degree 3 — no signal), a walker waits at the kerb while cars are
-    // inbound and crosses in a gap. The outcome under test: no NEAR MISS —
-    // a fast car passing within body distance of a walker in the crossing —
-    // while walkers still get across (the 12 s assertiveness cap forbids
-    // starvation). Before the rule, walkers stepped straight off the kerb
-    // and relied on every driver's brakes.
-    NavGraph nav = citytest::tee(45.0);
-    CitySim sim;
-    sim.build(nav, 10, 8, 9);
-    sim.setWander(true);
-
-    long contact = 0, pedNearBox = 0;
-    for (int i = 0; i < 12000; ++i) {
-        sim.step(0.1, 0.5);
-        const auto& ag = sim.agents();
-        for (const Agent& p : ag) {
-            if (p.mode != Agent::Mode::Pedestrian || !p.moving) continue;
-            Real pd = std::sqrt(p.pos.x * p.pos.x + p.pos.y * p.pos.y);
-            if (pd > 9.0) continue;
-            ++pedNearBox;
-            for (const Agent& c : ag) {
-                if (c.mode != Agent::Mode::Driver || !c.moving || c.speed <= 3.0)
-                    continue;
-                Real dx = c.pos.x - p.pos.x, dy = c.pos.y - p.pos.y;
-                // CONTACT-level: a fast car's bumper reaching the body.
-                // (Passes at 1.6-2.2 m happen — a walker standing at the
-                // kerb while a car rolls by is city-normal; the kerb rule's
-                // job is that nobody is UNDER the car. Tightening this to a
-                // clearance gate comes with real crosswalk-band geometry.)
-                if (dx * dx + dy * dy < 1.3 * 1.3) {
-                    ++contact;
-                    if (std::getenv("RT_CONTACT_DEBUG"))
-                        std::printf("    [contact] step %d walker %s | car %s\n", i,
-                                    sim.describeAgent(static_cast<int>(&p - ag.data())).substr(0, 260).c_str(),
-                                    sim.describeAgent(static_cast<int>(&c - ag.data())).substr(0, 200).c_str());
-                }
-            }
-        }
-    }
-    std::printf("    [ped] near-box %ld ticks, contact %ld\n", pedNearBox, contact);
-    CHECK(pedNearBox > 0);   // walkers really do reach and cross the junction
-    CHECK(contact == 0);     // never under a fast car's bumper while doing so
-}
-
 // WALKERS IN FILES (Glenn: "all the agents ... on top of one another like it's some spawn point"). A tower door's
 // strollers went down one line 1 m in from the kerb, each held behind the next: single file at a third of a walking
 // pace, a heap at the door. On a wide pavement they keep up to three files, each its own following chain; on a narrow
@@ -551,7 +149,7 @@ TEST_CASE(walkers_keep_files_across_a_wide_pavement) {
     NavGraph nav = citytest::cityNav(600.0, 120.0, 5);
     CitySim sim;
     sim.setWander(true);
-    sim.build(nav, 0, 300, 11);
+    sim.build(nav, 300, 11);
     int byFile[3] = {0, 0, 0};
     for (const Agent& a : sim.agents()) ++byFile[std::clamp(sim.walkerFile(a), 0, 2)];
     CHECK(byFile[0] == 300);   // no pavement known: the one line by the kerb

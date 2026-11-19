@@ -256,7 +256,7 @@ void CityPoses::walkerBoxPoses(const CitySim& sim, Real height, std::vector<std:
     const std::vector<Agent>& agents = sim.agents();
     for (const int ai : sim.nearAgents()) {
         const Agent& a = agents[static_cast<std::size_t>(ai)];
-        if (a.far() || a.mode == Agent::Mode::Driver || !sim.pedVisible(ai)) continue;
+        if (a.far() || !sim.pedVisible(ai)) continue;
         CitySim::RestPose rp;
         if (sim.restPose(ai, rp)) continue;   // (sitting or lying: drawn in their own groups, and given no box)
         out.push_back({ai, walkerStandingPose(sim, ai, height, nullptr)});

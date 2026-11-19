@@ -66,7 +66,7 @@ TEST_CASE(assign_places_gives_every_agent_a_home) {
     NavGraph nav = citytest::cross4(45);
     PlaceMap places = townPlaces(nav, 3);
     CitySim sim;
-    sim.build(nav, /*drivers*/ 2, /*peds*/ 3, /*seed*/ 4);
+    sim.build(nav, /*peds*/ 5, /*seed*/ 4);
     sim.assignPlaces(places, nav);
 
     for (const Agent& a : sim.agents()) {
@@ -80,9 +80,9 @@ TEST_CASE(assign_places_seeds_coworkers_and_is_deterministic) {
     NavGraph nav = citytest::cross4(45);
     PlaceMap places = townPlaces(nav, 2);   // one shared office → coworkers likely
     CitySim a, b;
-    a.build(nav, 2, 3, 7);
+    a.build(nav, 5, 7);
     a.assignPlaces(places, nav);
-    b.build(nav, 2, 3, 7);
+    b.build(nav, 5, 7);
     b.assignPlaces(places, nav);
 
     // Anyone sharing the single office is a coworker; and two runs of the same
@@ -107,7 +107,7 @@ TEST_CASE(assign_places_no_homes_is_a_noop) {
     NavGraph nav = citytest::cross4(45);
     PlaceMap empty;                       // no places at all
     CitySim sim;
-    sim.build(nav, 1, 1, 3);
+    sim.build(nav, 2, 3);
     sim.assignPlaces(empty, nav);         // must not crash or assign
     for (const Agent& a : sim.agents()) CHECK(a.homePlace == kNoPlace);
     CHECK(sim.relationships().pairCount() == 0);
@@ -126,9 +126,9 @@ TEST_CASE(assign_places_roles_are_consistent_and_deterministic) {
     places.add(PlaceType::Park, Vec2(-20, -20), nav);
 
     CitySim a, b;
-    a.build(nav, 4, 8, 21);
+    a.build(nav, 12, 21);
     a.assignPlaces(places, nav);
-    b.build(nav, 4, 8, 21);
+    b.build(nav, 12, 21);
     b.assignPlaces(places, nav);
 
     for (std::size_t i = 0; i < a.agents().size(); ++i) {
@@ -167,7 +167,7 @@ TEST_CASE(shop_without_hours_does_not_strand_its_worker) {
     places.add(PlaceType::Shop, Vec2(30, -20), nav);
 
     CitySim sim;
-    sim.build(nav, 6, 6, 21);
+    sim.build(nav, 12, 21);
     sim.assignPlaces(places, nav);
 
     for (const Agent& a : sim.agents()) {

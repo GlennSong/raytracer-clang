@@ -471,7 +471,7 @@ uint32_t CitySim::tripRnd(Agent& a) { return a.tripRng.bits(); }
 
 Real CitySim::brainUnit(Agent& a) { return a.faults.next(); }
 
-void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32_t seed) {
+void CitySim::build(const NavGraph& graph, int pedCount, uint32_t seed) {
     nav_ = &graph;
     // "There and back by car" for the whole build, once (engine::stronglyConnected).
     const std::vector<int> buildCarComp = engine::stronglyConnected(graph, /*onFoot=*/false);
@@ -656,9 +656,6 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     // predecessor. Seed the leftovers so a roundabout or a loop road still parks.
     for (int li = 0; li < graph.linkCount(); ++li)
         if (!seen[li]) layChain(li);
-    // THE GARAGES' STALLS (setGarages), with the kerbside bays: the cars parked at the start can be up them too
-    garageCount_ = 0;
-    for (const GarageIn& gin : pendingGarages_) addGarageBays(gin.portal, gin.out, gin.stalls);
     if (std::getenv("RT_PARK_DEBUG"))
         std::fprintf(stderr,
                      "[park] links=%d chains=%d  short-chain=%d  no-band=%d  "
@@ -750,16 +747,11 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         if (graph.isJunction(v)) junctions_.push_back({graph.nodes[v], r});
     }
 
-    const int total = driverCount + pedCount;
-    agents_.reserve(total);
-    vehicles_.reserve(driverCount);
-    for (int i = 0; i < total; ++i) {
+    agents_.reserve(pedCount);
+    for (int i = 0; i < pedCount; ++i) {
         Agent a;
         a.uid = ids_.next();   // stable identity for relationships / memory / jobs
-        a.mode = (i < driverCount) ? Agent::Mode::Driver : Agent::Mode::Pedestrian;
-        // Identity, fixed for the run. Starts equal to the initial locomotion:
-        // a car owner begins the day in its car, a walker on foot. Only `mode`
-        // moves from here.
+        a.mode = Agent::Mode::Pedestrian;
         a.archetype = a.mode;
         a.home = static_cast<int>(rnd() % n);
         a.work = static_cast<int>(rnd() % n);
@@ -840,24 +832,6 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         // parked on, which read as "failed to be placed" (device round 3).
         if (!graph.outLinks[a.home].empty())
             a.heading = graph.direction(graph.outLinks[a.home][0]);
-
-        // A driver possesses a freshly-created car (two-way possession link). Its
-        // body comes from the fleet slot matching its index, so the renderer (which
-        // maps the same index to a body) draws exactly this shape + size.
-        if (a.mode == Agent::Mode::Driver) {
-            SimVehicle v;
-            v.slot = ambientSlotFor(static_cast<int>(vehicles_.size()));
-            const VehicleBody& body = fleetBody(v.slot);
-            v.length = body.length;
-            v.width = body.width;
-            v.height = body.height;
-            v.type = body.type;
-            v.driver = static_cast<int>(agents_.size());
-            v.pos = a.pos;
-            a.vehicle = static_cast<int>(vehicles_.size());
-            a.car = a.vehicle;   // owns it for the run; `vehicle` is only "in it now"
-            vehicles_.push_back(v);
-        }
         agents_.push_back(a);
     }
 
@@ -929,21 +903,6 @@ struct PopTail {
     double driverCommute, medianAll, medianDrive, medianWalk;
 };
 }  // namespace
-
-bool CitySim::moveHome(int agentIndex, const PlaceMap& places, PlaceId home) {
-    if (!nav_ || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()) || home == kNoPlace ||
-        home >= static_cast<PlaceId>(places.size()))
-        return false;
-    Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
-    const int node = nav_->nearestNode(places[home].entrance);   // (assignPlaces' nodeOf)
-    if (node < 0) return false;
-    a.homePlace = home;
-    a.home = node;
-    a.homeDoor = placeDoor(places[home]);
-    a.restNode = node;
-    a.pos = a.mode == Agent::Mode::Pedestrian ? a.homeDoor : idlePose(node, a.mode, a.brain);
-    return true;
-}
 
 void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     relationships_.clear();
@@ -2606,41 +2565,6 @@ Vec2 CitySim::idlePose(int node, Agent::Mode mode, uint32_t brain) const {
 //
 // Called from BOTH trip starters. A wander trip builds its own route and would
 // otherwise leave a dismounted driver walking the rest of the level.
-bool CitySim::ejectDriver(int agentIndex) {
-    if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return false;
-    Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
-    if (a.mode != Agent::Mode::Driver || a.vehicle < 0) return false;
-    // where they stand: the pavement beside the link the car is on (a walker's own side of it), level with the car
-    Vec2 standAt = a.pos;
-    if (nav_ && a.route.valid() && a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size())) {
-        const int li = a.route.links[static_cast<std::size_t>(a.leg)];
-        const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
-        const Vec2 A = nav_->nodes[static_cast<std::size_t>(L.from)], B = nav_->nodes[static_cast<std::size_t>(L.to)];
-        const Real l2 = (B - A).lengthSquared();
-        const Real tt = l2 > 1e-9 ? std::clamp(dot(a.pos - A, B - A) / l2, Real(0), Real(1)) : Real(0);
-        standAt = nav_->sidewalkPoint(li, tt, 0.8);
-    }
-    if (a.vehicle < static_cast<int>(vehicles_.size())) {
-        SimVehicle& v = vehicles_[static_cast<std::size_t>(a.vehicle)];
-        v.driver = -1;
-        v.offStreet = true;   // the player's now: the sim's copy is never drawn or found again
-        v.pos = standAt;
-    }
-    a.vehicle = -1;
-    a.car = -1;               // ...and never remounted: they walk from here
-    a.mode = Agent::Mode::Pedestrian;
-    a.released = false;
-    a.tethered = false;
-    a.moving = false;
-    a.speed = 0;
-    a.crashTimer = 0;
-    a.crashCount = 0;
-    a.pos = standAt;
-    a.route = engine::Route{};
-    a.leg = 0;
-    return true;
-}
-
 void CitySim::remountOwnedCar(Agent& a) {
     if (a.archetype != Agent::Mode::Driver || a.vehicle >= 0) return;
     if (a.car < 0 || a.car >= static_cast<int>(vehicles_.size())) return;
@@ -3571,36 +3495,6 @@ int CitySim::goalNodeFor(const Agent& a, GoalTarget target) const {
     }
 }
 
-int CitySim::addStationedVehicle(VehicleType type, Vec2 pos, Vec2 heading, Real y) {
-    int slot = -1;
-    for (int fs = 0; fs < fleetSize() && slot < 0; ++fs)
-        if (fleetBody(fs).type == type) slot = fs;
-    if (slot < 0) return -1;
-    const VehicleBody& bb = fleetBody(slot);
-    SimVehicle v;
-    v.length = bb.length;
-    v.width = bb.width;
-    v.height = bb.height;
-    v.type = type;
-    v.slot = slot;
-    v.pos = pos;
-    v.heading = heading;
-    v.parkedY = y;
-    vehicles_.push_back(v);
-    // the parked index was sized for the fleet at build: grow it by one and hash everything again
-    if (nav_ && !nav_->nodes.empty()) {
-        Vec2 lo = nav_->nodes[0], hi = nav_->nodes[0];
-        for (const Vec2& p : nav_->nodes) {
-            lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y);
-            hi.x = std::max(hi.x, p.x); hi.y = std::max(hi.y, p.y);
-        }
-        const Vec2 pad(kGridPad, kGridPad);
-        parkedGrid_.configure(lo - pad, hi + pad, kAgentGridCell, static_cast<int>(vehicles_.size()));
-        for (std::size_t i = 0; i < vehicles_.size(); ++i) parkedGrid_.place(static_cast<int>(i), vehicles_[i].pos);
-    }
-    return static_cast<int>(vehicles_.size()) - 1;
-}
-
 // PARKING (Glenn, 2026-09-18: "They park at the corner in a pile, but they
 // should be using the parallel parking spaces... they need to park in spaces
 // and not in a heap on the corner"). Measured on metro at load: 4646 marked
@@ -3615,41 +3509,6 @@ Real CitySim::bayReach2(const ParkingBay& b, const Vec2& target) const {
     const Real d = (b.pos - target).length();
     const Real e = b.garage >= 0 ? std::max(Real(0), d - 120.0) : d;
     return e * e;
-}
-
-int CitySim::addGarageBays(const Vec2& portal, const Vec2& out, const std::vector<GarageStallIn>& stalls) {
-    if (!nav_ || stalls.empty()) return 0;
-    // the street in front of the portal: the nearest at-grade street link, within 30 m of a point 4 m out
-    const Vec2 front = portal + out * 4.0;
-    int bestL = -1;
-    Real bestD = 30.0, bestT = 0;
-    for (int li = 0; li < nav_->linkCount(); ++li) {
-        const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
-        if (L.footpath || L.layer != 0 || L.elevAbsolute || L.length < 6.0) continue;
-        if (!(L.access & engine::road_access::kFrontage)) continue;
-        const Vec2 a = nav_->nodes[static_cast<std::size_t>(L.from)], b = nav_->nodes[static_cast<std::size_t>(L.to)];
-        const Vec2 ab = b - a;
-        const Real t = std::clamp(dot(front - a, ab) / std::max(dot(ab, ab), Real(1e-9)), Real(0.15), Real(0.85));
-        const Real d = (a + ab * t - front).length();
-        if (d < bestD) { bestD = d; bestL = li; bestT = t; }
-    }
-    if (bestL < 0) return 0;
-    const int gi = garageCount_++;
-    const Real station = bestT * nav_->links[static_cast<std::size_t>(bestL)].length;
-    for (const GarageStallIn& st : stalls) {
-        ParkingBay b;
-        b.pos = st.at;
-        b.heading = st.face;
-        b.link = bestL;
-        b.station = station;
-        b.width = 2.5;
-        b.occupant = -1;
-        b.y = st.y;
-        b.garage = gi;
-        baysOnLink_[static_cast<std::size_t>(bestL)].push_back(static_cast<int>(bays_.size()));
-        bays_.push_back(b);
-    }
-    return static_cast<int>(stalls.size());
 }
 
 int CitySim::claimBayNear(Vec2 target, int self, Real maxDist) {
@@ -5831,15 +5690,10 @@ CitySim::Census CitySim::census(engine::World* world) const {
         if (!a.moving && a.activity == Activity::AtWork) ++c.atWorkByRole[r];
         if (a.activity == Activity::Outing) ++c.outing;   // out: a day's stop, a night's (inside or not)
         if (onTrainJourney(i)) { ++c.waiting; ++c.outsideByRole[r]; continue; }
-        if (a.mode == Agent::Mode::Pedestrian) {
-            ++c.walkers;
-            const bool out = a.moving || !a.indoors;
-            if (out) { ++c.walkersOutside; ++c.outsideByRole[r]; }
-            if (a.moving) ++c.walkersMoving;
-        } else {
-            ++c.drivers;
-            if (a.moving) { ++c.driversMoving; ++c.outsideByRole[r]; }
-        }
+        ++c.walkers;
+        const bool out = a.moving || !a.indoors;
+        if (out) { ++c.walkersOutside; ++c.outsideByRole[r]; }
+        if (a.moving) ++c.walkersMoving;
     }
     return c;
 }
@@ -6053,42 +5907,6 @@ void CitySim::thingsForDriving(std::vector<driving::RoadThing>& out) const {
         out.push_back(t);
     }
     out.insert(out.end(), externalThings_.begin(), externalThings_.end());
-}
-
-std::map<std::string, int> CitySim::walkersInRoad(int* visible) const {
-    std::map<std::string, int> out;
-    if (visible) *visible = 0;
-    if (!nav_) return out;
-    static const char* kSt[] = {"resting", "walking", "avoiding", "waiting", "cruising", "following", "yielding", "turning"};
-    for (int i : kIdx_) {
-        if (!pedVisible(i)) continue;
-        if (visible) ++*visible;
-        const Agent& a = agents_[static_cast<std::size_t>(i)];
-        int best = -1;
-        Real bestD = 1e30;
-        for (int li = 0; li < nav_->linkCount(); ++li) {
-            const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
-            if (L.footpath || L.layer != 0 || L.elevAbsolute || L.klass == engine::RoadClass::Freeway) continue;
-            const Vec2 A = nav_->nodes[static_cast<std::size_t>(L.from)], B = nav_->nodes[static_cast<std::size_t>(L.to)];
-            const Vec2 ab = B - A;
-            const Real l2 = ab.lengthSquared();
-            Real t = l2 > 1e-12 ? dot(a.pos - A, ab) / l2 : 0;
-            t = std::clamp(t, Real(0), Real(1));
-            const Real d = (a.pos - (A + ab * t)).length() - L.width * 0.5;
-            if (d < bestD) { bestD = d; best = li; }
-        }
-        if (best < 0 || bestD > -0.2) continue;   // on the pavement (or within a hand of the kerb)
-        int leg = a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
-        const engine::NavLink& in = nav_->links[static_cast<std::size_t>(best)];
-        const bool along = leg >= 0 && (leg == best || (nav_->links[static_cast<std::size_t>(leg)].from == in.to &&
-                                                         nav_->links[static_cast<std::size_t>(leg)].to == in.from));
-        const bool crossingLeg = leg >= 0 && nav_->links[static_cast<std::size_t>(leg)].footpath;
-        std::string k = kSt[std::min(7, static_cast<int>(a.state))];
-        k += a.moving ? (a.speed > 0.2 ? " moving" : " stopped-on-route") : " at rest";
-        k += along ? " | in the street it walks along" : crossingLeg ? " | on a walk/crossing link" : leg >= 0 ? " | in a street it is crossing" : " | no route";
-        ++out[k];
-    }
-    return out;
 }
 
 std::string CitySim::describeAgent(int i) const {

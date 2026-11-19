@@ -152,7 +152,7 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
             // EVERY WALKER STANDING AT A CROSSWALK'S KERB stands at its kerb end (ADR-0452): the farthest any is from
             // the nearer of the model's two waiting places, every tick
             for (const citysim::Agent& a : sim.agents()) {
-                if (a.mode == citysim::Agent::Mode::Driver || !a.moving || a.crosswalkAt < 0 || a.onCrosswalk || a.speed > 0.05) continue;
+                if (!a.moving || a.crosswalkAt < 0 || a.onCrosswalk || a.speed > 0.05) continue;
                 const engine::ModelCrosswalk* cw = d.model()->crosswalk(static_cast<uint32_t>(a.crosswalkAt));
                 if (!cw) continue;
                 const Real off = std::min((a.pos - cw->kerbWait(0, citysim::CitySim::kCrossingKerbStep)).length(),

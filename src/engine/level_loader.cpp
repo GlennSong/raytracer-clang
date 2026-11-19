@@ -813,7 +813,7 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
                  << " pavement holes";
     }
     // THE CITY'S ROAD MODEL AND ITS STREET MAP, from the graph the bake was built from (cityEntities + loadCityGraph).
-    // (The old driving's own second laying of the lanes, LevelLanes, went with it: ADR-0461.)
+    // (The old driving's own second laying of the lanes went with it: ADR-0461.)
     {
         using namespace engine::roads::lanes;
         std::size_t cityNumber = 0;   // this city's place among the level's lane-built cities (and in its road model)
@@ -6489,13 +6489,8 @@ bool LevelLoader::load(const std::string& path,
         cfg.showPlan = cs.value("showPlan", false);
         cfg.wander = cs.value("wander", cfg.wander);
         cfg.schedule = cs.value("schedule", cfg.schedule);
-        if (cs.contains("homeNear")) {
-            const auto& hn = cs["homeNear"];
-            if (hn.is_array() && hn.size() == 2 && hn[0].is_number() && hn[1].is_number())
-                cfg.homeNear = {hn[0].get<double>(), hn[1].get<double>()};
-            else
-                LOG_WARN << "citysim: homeNear must be [x, z] -- ignored";
-        }
+        // (`homeNear`, the lab person's home, went with the old driving: it moved the first resident with an old car,
+        // ADR-0462; ignored if a level still sets it)
         readCityMarkers(cs, g_levelPath, cfg);
         cfg.ambientBus = cs.value("ambientBus", cfg.ambientBus);
         // Scripted goal tables (ADR-0064): `"agents": "agents.lua"` names a
@@ -6756,7 +6751,6 @@ bool LevelLoader::load(const std::string& path,
             std::map<std::string, int> tradePlaces;   // the shop units that became places, by trade
             std::vector<engine::ShopSign> shopSigns;   // ...and the boards that name them
             int depotYards = 0, depotBays = 0;          // the bus depots' yards (built and drawn; no bus parks there)
-            int surfaceLots = 0, surfaceStalls = 0;     // the big boxes' and malls' parking lots, to the drivers
             int fuelStops = 0;                            // the gas stations' pump sides (ADR-0357)
             struct OpenSpot { Vec3 at; Vec2 n; int place; };
             std::vector<OpenSpot> openSpots;            // ...and the OPEN signs in their windows
@@ -7067,24 +7061,15 @@ bool LevelLoader::load(const std::string& path,
                     world.add<engine::FuelStop>(fe, {ar.center, ar.axis, ar.halfL, ar.halfW});
                     ++fuelStops;
                 }
-                if (lb.type == "depot" && lb.recipe != "gas_station") {
-                    engine::CitySimConfig::GarageSpec gs;
-                    const bool carPark = lb.recipe == "car_park";
-                    for (const engine::LotBuilding::Area& ar : lb.areas) {
-                        if (ar.kind == (carPark ? "car_gate" : "bus_gate")) { gs.px = ar.center.x; gs.pz = ar.center.y; gs.ox = ar.axis.x; gs.oz = ar.axis.y; }
-                        if (ar.kind != (carPark ? "car_bay" : "bus_bay")) continue;
-                        const Real gy0 = dressingGround ? dressingGround(ar.center.x, ar.center.y) : lb.groundY;
-                        gs.stalls.push_back({ar.center.x, ar.center.y, ar.axis.x, ar.axis.y, gy0 + 0.05});
-                    }
-                    if (!gs.stalls.empty() && carPark) {
-                        ++surfaceLots;
-                        surfaceStalls += static_cast<int>(gs.stalls.size());
-                        cfg.garages.push_back(std::move(gs));
-                    } else if (!gs.stalls.empty()) {
-                        // (a bus depot's yard is built and drawn, but no bus parks in it: the old driving's buses are
-                        // gone, ADR-0460, and its bays are no garage for anyone else)
+                // (a bus depot's yard, an open lot's car park, a garage's decks and a big box's parking lot are built and
+                // drawn, but nobody parks in them: their stalls were the old driving's bays, gone with ADR-0460 and
+                // ADR-0462; the new driving parks in the road model's kerb spaces)
+                if (lb.type == "depot" && lb.recipe != "gas_station" && lb.recipe != "car_park") {
+                    int bays = 0;
+                    for (const engine::LotBuilding::Area& ar : lb.areas) bays += ar.kind == "bus_bay" ? 1 : 0;
+                    if (bays > 0) {
                         ++depotYards;
-                        depotBays += static_cast<int>(gs.stalls.size());
+                        depotBays += bays;
                     }
                 }
                 if (lb.type != "green" && lb.type != "depot") {
@@ -7111,35 +7096,6 @@ bool LevelLoader::load(const std::string& path,
                         cfg.footpaths.push_back({k.a.x, k.a.y, k.b.x, k.b.y, k.streetEnds ? k.width : -k.width});
                     for (const engine::LotBuilding::SitSpot& sp : lb.sitSpots)
                         cfg.sitSpots.push_back({sp.at.x, sp.at.y, sp.face.x, sp.face.y, sp.hip});
-                    for (const engine::BuildingUnit& u : lb.units) {   // a garage's portal and stalls, for the drivers
-                        Vec2 pat, pout;
-                        if (!u.params.parkingDecks || u.plan.size() < 3 || !engine::garagePortalOf(u.plan, u.params, pat, pout))
-                            continue;
-                        engine::CitySimConfig::GarageSpec gs;
-                        gs.px = pat.x; gs.pz = pat.y; gs.ox = pout.x; gs.oz = pout.y;
-                        for (const engine::ParkingStall& st : engine::garageStallsOf(u.plan, u.params))
-                            gs.stalls.push_back({st.at.x, st.at.y, st.face.x, st.face.y, u.baseY + st.y});
-                        cfg.garages.push_back(std::move(gs));
-                    }
-                    // A BIG BOX'S OR A MALL'S PARKING LOT, for the drivers: its stalls as sculptParking striped them,
-                    // entered from the middle of its street edge (a garage at ground level, to the citysim)
-                    for (const engine::OpenSpace& o : lb.open) {
-                        if (o.kind != engine::OpenKind::Parking || lb.units.empty()) continue;
-                        const Vec3 fd3 = lb.units.front().params.faceDir;
-                        Vec2 fd(fd3.x, fd3.z);
-                        // a lot BEHIND the building faces the other way (its street is the back one)
-                        if (dot(centroid(o.poly) - centroid(lb.units.front().plan), fd) < 0) fd = fd * -1.0;
-                        Vec2 pat, pout;
-                        const std::vector<engine::ParkingStall> st = engine::surfaceStallsOf(o.poly, fd, &pat, &pout);
-                        if (st.empty()) continue;
-                        const Real y = lb.paveY != 0 ? lb.paveY : lb.units.front().baseY;
-                        engine::CitySimConfig::GarageSpec gs;
-                        gs.px = pat.x; gs.pz = pat.y; gs.ox = pout.x; gs.oz = pout.y;
-                        for (const engine::ParkingStall& sp : st) gs.stalls.push_back({sp.at.x, sp.at.y, sp.face.x, sp.face.y, y + 0.03});
-                        cfg.garages.push_back(std::move(gs));
-                        ++surfaceLots;
-                        surfaceStalls += static_cast<int>(st.size());
-                    }
                     for (const engine::LotBuilding::Area& ar : lb.areas)
                         cfg.activityAreas.push_back({ar.kind, ar.center.x, ar.center.y, ar.axis.x, ar.axis.y, ar.halfL, ar.halfW});
                     // A PLAYGROUND (an open lot's, the swings and the frames): where the children play (activities.lua
@@ -7507,7 +7463,6 @@ bool LevelLoader::load(const std::string& path,
                      << treesNoPad << " planted with no pad to test, "
                      << lotTreesOnRoad << " kept off the drawn road";
             if (depotYards) LOG_INFO << "[citylots] " << depotYards << " bus depots, " << depotBays << " bus bays";
-            if (surfaceLots) LOG_INFO << "[citylots] " << surfaceLots << " parking lots, " << surfaceStalls << " stalls for the drivers";
             if (fuelStops) LOG_INFO << "[citylots] " << fuelStops << " fuel stops at the gas stations";
             if (!tradePlaces.empty()) {
                 std::string line;

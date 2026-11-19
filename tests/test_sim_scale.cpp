@@ -31,7 +31,7 @@ struct Row {
 
 Row run(const NavGraph& nav, int agents, bool tiered, int ticks) {
     CitySim sim;
-    sim.build(nav, agents / 2, agents - agents / 2, 7);
+    sim.build(nav, agents, 7);
     if (tiered) {
         sim.tieringEnabled = true;
         sim.dormancyEnabled = true;
@@ -144,7 +144,7 @@ TEST_CASE(metro_v2_density_target_prints) {
     // What that population costs on this network, flat and tiered.
     for (int tiered = 0; tiered < 2; ++tiered) {
         CitySim sim;
-        sim.build(nav, wantCars, wantPeds, 9);
+        sim.build(nav, wantPeds, 9);   // (the cars are the driving's car entities, not the sim's: ADR-0461)
         if (tiered) {
             sim.tieringEnabled = true;
             sim.dormancyEnabled = true;
@@ -182,7 +182,7 @@ TEST_CASE(sim_scale_100k_island_prints) {
         for (int moving = 0; moving < 2; ++moving) {
             const auto b0 = std::chrono::steady_clock::now();
             CitySim sim;
-            sim.build(nav, n / 2, n - n / 2, 7);
+            sim.build(nav, n, 7);
             sim.tieringEnabled = true;
             sim.dormancyEnabled = true;
             Vec2 player(0, 0);

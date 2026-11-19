@@ -81,7 +81,6 @@ struct Agent {
     // sensing/FSM and no live signal queries — it traverses its real A* route
     // on a coarse ~1 Hz tick at a modelled speed (class speed shaped by fixed
     // average junction delays), so promotion finds it where it should be.
-    // P (the physical Jolt tier) stays what it was: possessTier's overlay on K.
     // Everything is K until a level opts in (CitySim::tieringEnabled) AND a
     // player position is fed (setTierCenter) — headless sims are unchanged.
     // D (Dormant) is the tier BELOW V: not simulated at all, not even coarsely.
@@ -433,8 +432,7 @@ struct VehicleBody {
     VehicleType type = VehicleType::Sedan;
     // What this car can pull away at (m/s^2, 0 to 10 m/s, PhysicsWorld::launchAccel on its own handling -- item 23):
     // the brains plan its launches under it, so a bus pulls away like a bus and a physical one keeps its ghost.
-    // Measured where there is physics (CityPhysicsSystem, setFleetLaunch): 0 not yet, -1 never gets there; until
-    // then, and in a build with no physics, the stock kCarAccel.
+    // 0: not measured (nothing measures it since ADR-0461), so the stock kCarAccel.
     Real launch = 0;
 };
 
@@ -501,10 +499,9 @@ struct SensedGhost {
 
 class CitySim {
 public:
-    // `driverCount` agents that each own (possess) a car + `pedCount` walking
-    // agents, over `graph`, seeded by `seed`. Deterministic (ADR-0002).
-    void build(const engine::NavGraph& graph, int driverCount, int pedCount,
-               uint32_t seed);
+    // `pedCount` agents on foot over `graph`, seeded by `seed`. Deterministic (ADR-0002). Nobody is built driving: the
+    // cars are the driving's car entities (city_car.h; ADR-0461, ADR-0462).
+    void build(const engine::NavGraph& graph, int pedCount, uint32_t seed);
 
     // Adopt a fleet catalogue (vehicle_classes.lua, via the level's vehicle
     // recipes). Call BEFORE build(): drivers take their body at build time, so a
@@ -512,10 +509,6 @@ public:
     // empty table restores the built-in one. Slots wrap exactly as the built-in
     // table's do.
     void setFleet(std::vector<VehicleBody> fleet) { fleet_ = std::move(fleet); }
-    // The measured launch of fleet slot `slot` (VehicleBody::launch); no-op without a scripted fleet.
-    void setFleetLaunch(int slot, Real launch) {
-        if (slot >= 0 && slot < static_cast<int>(fleet_.size())) fleet_[static_cast<std::size_t>(slot)].launch = launch;
-    }
     int fleetSize() const {
         return fleet_.empty() ? vehicleFleetSize()
                               : static_cast<int>(fleet_.size());
@@ -543,10 +536,6 @@ public:
         }
         return 0;
     }
-    // A VEHICLE THAT LIVES PARKED where it is stationed (a fire engine in its station's bay): no owner, no driver,
-    // its body the fleet slot of that type; standing at `pos` facing `heading`, on the floor at world y `y`. Call
-    // after build(). The index of the new vehicle, or -1 when the fleet has no body of that type.
-    int addStationedVehicle(VehicleType type, engine::Vec2 pos, engine::Vec2 heading, Real y);
     const VehicleBody& fleetBody(int slot) const {
         if (fleet_.empty()) return vehicleFleetBody(slot);
         const int n = static_cast<int>(fleet_.size());
@@ -695,9 +684,6 @@ public:
     // tick (capped, and never past its link's end), so a far crowd moves rather than hopping once a second. False
     // for an agent with nothing to show: not far, indoors at rest, riding, released.
     bool farDrawPose(int agentIndex, engine::Vec2& pos, engine::Vec2& heading) const;
-    // Vehicles hashed near (c, r), ascending -- a superset: every car is placed where it last parked (a driven one's
-    // entry is stale; the caller skips cars with a driver)
-    void parkedNear(engine::Vec2 c, Real r, std::vector<int>& out) const { parkedGrid_.query(c, r, out); }
     const std::vector<SimVehicle>& vehicles() const { return vehicles_; }
 
     // Curbside parallel-parking bays (roads-v2.1 R6b, plan 4d phase 1):
@@ -719,21 +705,12 @@ public:
         // stall is drawn to it, so the markings can never lap onto the kerb.
         engine::Real width = 0;
         int occupant = -1;
-        // A GARAGE STALL (addGarageBays): its deck's height (world y; below -1e29 a kerbside bay) and its garage.
-        // `link`/`station` are the street point in front of the garage's portal: the driver routes there, and the
-        // car is put away up on its deck (and fetched back out to the street when it leaves).
+        // A GARAGE STALL: its deck's height (world y; below -1e29 a kerbside bay) and its garage. (No garage stall is
+        // laid since ADR-0462: their stalls came from the level, and nothing hands them in now.)
         engine::Real y = -1e30;
         int garage = -1;
     };
-    const std::vector<ParkingBay>& parkingBays() const { return bays_; }
-    // THE GARAGES (CitySimConfig::garages): every stall a bay, anchored on the street link in front of the portal.
-    // After build. Returns the stalls added.
-    struct GarageStallIn { engine::Vec2 at, face; engine::Real y; };
-    int addGarageBays(const engine::Vec2& portal, const engine::Vec2& out, const std::vector<GarageStallIn>& stalls);
     engine::Real bayReach2(const ParkingBay& b, const engine::Vec2& target) const;
-    // ...or BEFORE build: the garages to lay with the kerbside bays, so the cars parked at the start can be up them too
-    struct GarageIn { engine::Vec2 portal, out; std::vector<GarageStallIn> stalls; };
-    void setGarages(std::vector<GarageIn> g) { pendingGarages_ = std::move(g); }
     // Effective lane spacing for a link: a parked-up street loses its curb
     // strips from the DRIVABLE width (band-model semantics, sim-side). The
     // render bridge lines its lane arrows up with the same spacing.
@@ -1041,38 +1018,11 @@ public:
                agents_[static_cast<std::size_t>(agentIndex)].directed;
     }
 
-    // The physical tier reports how far a possessed car's body trails its ghost (Agent::bodyLag).
-    void setAgentBodyLag(int agentIndex, Real metres) {
-        if (agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()))
-            agents_[static_cast<std::size_t>(agentIndex)].bodyLag = metres;
-    }
-
     // Mark an agent as host-driven (the player): the sim won't run its AI brain.
     void setPlayerControlled(int agentIndex, bool on) {
         if (agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()))
             agents_[agentIndex].playerControlled = on;
     }
-
-    // Release an agent whose car the player commandeered (ADR-0062): the sim parks
-    // its ghost and stops advancing it, so the brain no longer fights the physical
-    // car the player now drives. Idempotent; -1/out-of-range is a no-op.
-    void releaseDriver(int agentIndex) {
-        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return;
-        Agent& a = agents_[agentIndex];
-        a.released = true;
-        a.tethered = false;
-        a.moving = false;
-        a.speed = 0;
-        a.crashTimer = 0;   // released agents skip the sim's passes — stale wreck
-        a.crashCount = 0;   // state would never decay and poison a future resume
-    }
-
-    // THE DRIVER GETS OUT (the city's next ten #6; Glenn: "When you steal a car, its driver just vanishes. They
-    // should get out and stand there."): the player took this agent's car with them in it. The car is no longer
-    // theirs -- its sim copy is put away (offStreet, never drawn, never remounted) -- and they are a pedestrian on
-    // the pavement beside where the car was, standing, their trip dropped: the goal brain's next idle sends them on,
-    // on foot. Returns false when out of range or the agent is not driving a car.
-    bool ejectDriver(int agentIndex);
 
     // Tether a planner ghost to its physical car (ADR-0062): the ghost holds
     // whenever it is more than `maxLead` metres from `anchor` (the car's real
@@ -1348,10 +1298,6 @@ public:
     // car parked outside, the person indoors -- and held there for a director (`directed`), going only where they are
     // sent. Set before seedFromSchedule.
     void setDaySchedule(bool on) { daySchedule_ = on; }
-    // THE LAB PERSON'S HOME (citysim.homeNear, ADR-0416): agent `agentIndex` lives at `home` from now on -- its door,
-    // its node, where it rests. After assignPlaces, before seedFromSchedule (which puts them and their car there).
-    // False when out of range or `home` is not a place.
-    bool moveHome(int agentIndex, const PlaceMap& places, PlaceId home);
     bool daySchedule() const { return daySchedule_; }
     // THE DRIVING (#234; a level that names citysim.drivingRules): on, the sim holds a driving::Driving and ticks it once
     // per sim tick. Until startDrivingV2 begins it, it ticks an empty world. Off drops it.
@@ -1600,11 +1546,11 @@ public:
     // what it is doing (trip, seat, activity, session), its route leg and link, its rest, its leash.
     std::string describeAgent(int agentIndex) const;
     // THE CENSUS (Glenn: "Ridership feels sparse ... more people outside"): who is out right now, whatever their tier
-    // -- walkers outside (moving, or standing out of doors) and moving, drivers moving, people on a train journey
+    // -- walkers outside (moving, or standing out of doors) and moving, people on a train journey
     // past the street (`waiting`) -- in all and by role. O(agents): ask it now and then, not every frame.
     struct Census {
-        int agents = 0, walkers = 0, drivers = 0;
-        int walkersOutside = 0, walkersMoving = 0, driversMoving = 0, waiting = 0;
+        int agents = 0, walkers = 0;
+        int walkersOutside = 0, walkersMoving = 0, waiting = 0;
         static constexpr int kRoles = 16;   // by role id (roles().roles)
         int byRole[kRoles] = {}, outsideByRole[kRoles] = {};
         int atWorkByRole[kRoles] = {};   // resting in a state wearing AtWork (on shift, in class)
@@ -1615,12 +1561,6 @@ public:
     };
     // ...with the cars of `world` counted too (null: the people alone).
     Census census(engine::World* world = nullptr) const;
-    // WALKERS IN THE ROAD (Glenn: "the npcs all over the roads is a problem. It's interfering with traffic"): every
-    // visible walker of the full sim whose spot is inside a street's carriageway (closer to its centreline than half
-    // its width), counted by why -- its state, moving or standing, and whether the street it is in
-    // is the one it is walking along (it should be on the pavement) or one it is crossing. Slow (every link per
-    // walker): a test's measurement, not a per-frame call.
-    std::map<std::string, int> walkersInRoad(int* visible = nullptr) const;
     // EVERY PERSON ON FOOT OUTDOORS, as a thing for the new driving's drivers to look for along their way (ADR-0451):
     // where they are, how wide (kWalkerHalfAcross) and how they move. A driver finds the ones in its way by itself, so
     // the pavement needs no telling apart from the road here. Then the things the host wrote (setExternalThings).
@@ -1957,8 +1897,6 @@ private:
     // Adopted fleet catalogue; empty = use the built-in table (see setFleet).
     std::vector<VehicleBody> fleet_;
     std::vector<ParkingBay> bays_;
-    int garageCount_ = 0;   // garages whose stalls are bays (addGarageBays)
-    std::vector<GarageIn> pendingGarages_;   // setGarages: laid by build with the kerbside bays
     // Each link's reverse twin (-1 if one-way), and a per-link route cost
     // scale kept at 1 except while a bay departure prices its own twin.
     std::vector<int> twinOf_;

@@ -330,12 +330,6 @@
   "usage": "panels open|shut|knock [name]"
  },
  {
-  "name": "parking?",
-  "owner": "engine",
-  "summary": "Parking: kerb bays and garage stalls taken, and the nearest taken stall.",
-  "usage": "parking?"
- },
- {
   "name": "person",
   "owner": "engine",
   "summary": "On-foot camera: first or third person (the V key).",

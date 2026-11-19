@@ -17,58 +17,13 @@ namespace {
 NavGraph cityNav() { return citytest::cityNav(200, 50, 7); }
 }  // namespace
 
-TEST_CASE(city_build_possession) {
-    NavGraph nav = cityNav();
-    CitySim sim;
-    sim.build(nav, 20, 10, 1234);
-    CHECK(sim.agents().size() == 30u);
-    CHECK(sim.vehicles().size() == 20u);   // one car per driver, none for pedestrians
-
-    int drivers = 0, peds = 0;
-    for (const Agent& a : sim.agents()) {
-        if (a.mode == Agent::Mode::Driver) {
-            ++drivers;
-            CHECK(a.vehicle >= 0);                       // a driver possesses a car
-        } else {
-            ++peds;
-            CHECK(a.vehicle == -1);                      // a pedestrian has none
-        }
-    }
-    CHECK(drivers == 20);
-    CHECK(peds == 10);
-
-    // Possession is two-way: each car's driver points back at an agent that owns it.
-    for (std::size_t v = 0; v < sim.vehicles().size(); ++v) {
-        int d = sim.vehicles()[v].driver;
-        CHECK(d >= 0);
-        CHECK(sim.agents()[d].vehicle == static_cast<int>(v));
-    }
-}
-
-TEST_CASE(city_possessed_car_tracks_its_driver) {
-    NavGraph nav = cityNav();
-    CitySim sim;
-    sim.build(nav, 25, 0, 99);
-    bool anyMoved = false;
-    for (int i = 0; i < 4000; ++i) sim.step(0.1, 0.3);
-    for (const Agent& a : sim.agents()) {
-        if (a.mode != Agent::Mode::Driver || a.vehicle < 0) continue;
-        const SimVehicle& v = sim.vehicles()[a.vehicle];
-        // The car mirrors the agent that drives it.
-        CHECK_APPROX(v.pos.x, a.pos.x, 1e-9);
-        CHECK_APPROX(v.pos.y, a.pos.y, 1e-9);
-        if ((a.pos - nav.nodes[a.home]).length() > 5.0) anyMoved = true;
-    }
-    CHECK(anyMoved);   // at least one driver actually drove its car somewhere
-}
-
-// THE PER-LEVEL SWITCH (#234; citysim.driving): with "v2" the sim holds the new driving library and ticks it once per
-// sim tick, and the old model, which still drives every car, does exactly what it does under "v1".
-TEST_CASE(city_sim_driving_v2_ticks_alongside_v1) {
+// THE DRIVING (#234): a sim that holds the driving library ticks it once per sim tick, and its people do exactly what
+// they do in a sim without it.
+TEST_CASE(city_sim_driving_ticks_alongside_the_people) {
     NavGraph nav = cityNav();
     CitySim v1, v2;
-    v1.build(nav, 25, 10, 99);
-    v2.build(nav, 25, 10, 99);
+    v1.build(nav, 35, 99);
+    v2.build(nav, 35, 99);
     v2.useDrivingV2(true);
     CHECK(v1.drivingV2() == nullptr);
     CHECK(v2.drivingV2() != nullptr);
@@ -92,15 +47,13 @@ TEST_CASE(city_sim_driving_v2_ticks_alongside_v1) {
         const Agent& b = v2.agents()[i];
         if (a.pos.x != b.pos.x || a.pos.y != b.pos.y || a.speed != b.speed || a.state != b.state) ++differ;
     }
-    for (std::size_t v = 0; v < v1.vehicles().size() && v < v2.vehicles().size(); ++v)
-        if (v1.vehicles()[v].pos.x != v2.vehicles()[v].pos.x || v1.vehicles()[v].pos.y != v2.vehicles()[v].pos.y) ++differ;
     CHECK(differ == 0);
 }
 
 TEST_CASE(city_player_agent_is_not_auto_driven) {
     NavGraph nav = cityNav();
     CitySim sim;
-    sim.build(nav, 10, 0, 7);
+    sim.build(nav, 10, 7);
     sim.setPlayerControlled(0, true);
     Vec2 start = sim.agents()[0].pos;
     bool othersMoved = false;
@@ -110,13 +63,13 @@ TEST_CASE(city_player_agent_is_not_auto_driven) {
     CHECK_APPROX(sim.agents()[0].pos.y, start.y, 1e-9);
     for (std::size_t i = 1; i < sim.agents().size(); ++i)
         if ((sim.agents()[i].pos - start).length() > 5.0) othersMoved = true;
-    CHECK(othersMoved);   // the AI crowd still drives
+    CHECK(othersMoved);   // the AI crowd still moves
 }
 
-TEST_CASE(city_drivers_commute) {
+TEST_CASE(city_people_commute) {
     NavGraph nav = cityNav();
     CitySim sim;
-    sim.build(nav, 40, 0, 55);
+    sim.build(nav, 40, 55);
     bool atWork = false;
     for (int i = 0; i < 6000 && !atWork; ++i) {
         sim.step(0.1, 0.3);
@@ -129,8 +82,8 @@ TEST_CASE(city_drivers_commute) {
 TEST_CASE(city_is_deterministic) {
     NavGraph nav = cityNav();
     CitySim a, b;
-    a.build(nav, 20, 20, 4242);
-    b.build(nav, 20, 20, 4242);
+    a.build(nav, 40, 4242);
+    b.build(nav, 40, 4242);
     for (int i = 0; i < 2500; ++i) { a.step(0.1, 0.3); b.step(0.1, 0.3); }
     bool same = a.agents().size() == b.agents().size();
     for (std::size_t i = 0; i < a.agents().size() && same; ++i)
@@ -154,7 +107,7 @@ TEST_CASE(city_is_deterministic) {
 TEST_CASE(shift_archetypes_spread_the_departure_hours) {
     NavGraph nav = cityNav();
     CitySim sim;
-    sim.build(nav, 1200, 800, 11);
+    sim.build(nav, 2000, 11);
 
     // Bucket by the archetype each departWork belongs to.
     int early = 0, standard = 0, swing = 0, night = 0, part = 0, other = 0;
@@ -196,7 +149,7 @@ TEST_CASE(shift_archetypes_spread_the_departure_hours) {
 TEST_CASE(night_shift_agents_have_a_wrapping_window) {
     NavGraph nav = cityNav();
     CitySim sim;
-    sim.build(nav, 1200, 800, 11);
+    sim.build(nav, 2000, 11);
 
     int wrapping = 0;
     for (const Agent& a : sim.agents())
@@ -214,18 +167,20 @@ TEST_CASE(night_shift_agents_have_a_wrapping_window) {
 // walk from a parking bay to a door costs nearly two hours.
 //
 // The failure is silent (the city just looks permanently stuck in rush hour),
-// so this pins the relationship between the world's SIZE and its CLOCK.
+// so this pins the relationship between the world's SIZE and its CLOCK. (On foot since ADR-0462: the old driving's
+// commuters drove a town 1.2 km across; a walker walks one 600 m across, its homes and offices at half the spacing.
+// The 1.2 km walk measured 656 s, 2.6 h at 0.004.)
 TEST_CASE(a_commute_fits_inside_the_working_day) {
-    NavGraph nav = citytest::cityNav(1200, 90, 5);   // a town ~1.2 km across
+    NavGraph nav = citytest::cityNav(600, 90, 5);   // a town ~600 m across
     CitySim sim;
-    sim.build(nav, 300, 100, 13);
+    sim.build(nav, 400, 13);
 
     // Places make assignPlaces (which measures the commute) meaningful.
     PlaceMap places;
     for (int i = 0; i < 12; ++i)
-        places.add(PlaceType::Home, Vec2(-500 + i * 60.0, -400), nav);
+        places.add(PlaceType::Home, Vec2(-250 + i * 30.0, -200), nav);
     for (int i = 0; i < 6; ++i)
-        places.add(PlaceType::Office, Vec2(-300 + i * 90.0, 400), nav, 9, 17);
+        places.add(PlaceType::Office, Vec2(-150 + i * 45.0, 200), nav, 9, 17);
     sim.assignPlaces(places, nav);
 
     const Real secs = sim.commuteSecondsMedian();
@@ -257,7 +212,7 @@ TEST_CASE(a_commute_fits_inside_the_working_day) {
 TEST_CASE(resting_agents_sleep_until_their_next_activity) {
     NavGraph nav = cityNav();
     CitySim sim;
-    sim.build(nav, 200, 100, 5);
+    sim.build(nav, 300, 5);
 
     int peakSleeping = 0;
     long sleepingTicks = 0;
@@ -282,7 +237,7 @@ TEST_CASE(resting_agents_sleep_until_their_next_activity) {
 TEST_CASE(sleeping_does_not_change_the_day) {
     NavGraph nav = cityNav();
     CitySim a;
-    a.build(nav, 120, 60, 31);
+    a.build(nav, 180, 31);
 
     // Run a full in-world day and count what everyone is doing at the end.
     int atWork = 0, atHome = 0, commuting = 0;
@@ -300,7 +255,7 @@ TEST_CASE(sleeping_does_not_change_the_day) {
     CHECK(commuting < static_cast<int>(a.agents().size()));
     // Determinism survives the wake path.
     CitySim b;
-    b.build(nav, 120, 60, 31);
+    b.build(nav, 180, 31);
     for (int i = 0; i < 6000; ++i) b.step(0.1, 0.05);
     bool same = true;
     for (std::size_t i = 0; i < a.agents().size() && same; ++i)
@@ -323,7 +278,7 @@ TEST_CASE(sleeping_does_not_change_the_day) {
 TEST_CASE(schedule_snapshot_agrees_with_a_stepped_day) {
     NavGraph nav = cityNav();
     CitySim sim;
-    sim.build(nav, 400, 0, 17);
+    sim.build(nav, 400, 17);
 
     // Step to a definite hour, then ask the snapshot about that same hour.
     const Real rate = 0.05;
@@ -361,7 +316,7 @@ TEST_CASE(schedule_snapshot_agrees_with_a_stepped_day) {
 TEST_CASE(schedule_snapshot_is_pure_and_covers_the_whole_day) {
     NavGraph nav = cityNav();
     CitySim sim;
-    sim.build(nav, 200, 0, 23);
+    sim.build(nav, 200, 23);
     const Agent& a = sim.agents()[0];
 
     for (Real h = 0; h < 24.0; h += 0.5) {
@@ -404,7 +359,7 @@ TEST_CASE(seeding_produces_a_lived_in_city_at_any_hour) {
 
     auto census = [&](Real hour, int& atWork, int& atHome, int& moving) {
         CitySim sim;
-        sim.build(nav, 300, 100, 29);
+        sim.build(nav, 400, 29);
         sim.seedFromSchedule(hour);
         atWork = atHome = moving = 0;
         for (const Agent& a : sim.agents()) {
@@ -439,8 +394,8 @@ TEST_CASE(seeding_produces_a_lived_in_city_at_any_hour) {
 TEST_CASE(seeding_is_deterministic) {
     NavGraph nav = cityNav();
     CitySim a, b;
-    a.build(nav, 200, 80, 77);
-    b.build(nav, 200, 80, 77);
+    a.build(nav, 280, 77);
+    b.build(nav, 280, 77);
     a.seedFromSchedule(9.25);
     b.seedFromSchedule(9.25);
     bool same = true;
@@ -475,7 +430,7 @@ TEST_CASE(seeding_respects_the_levels_clock_rate) {
 
     auto travellingAt = [&](Real rate, Real hour) {
         CitySim sim;
-        sim.build(nav, 600, 400, 19);
+        sim.build(nav, 1000, 19);
         sim.setHoursPerSecond(rate);
         sim.seedFromSchedule(hour);
         int moving = 0;
@@ -504,7 +459,7 @@ TEST_CASE(seeding_respects_the_levels_clock_rate) {
 TEST_CASE(sleepers_wake_on_their_hour_whatever_the_rate_did) {
     NavGraph nav = cityNav();
     CitySim sim;
-    sim.build(nav, 200, 100, 5);
+    sim.build(nav, 300, 5);
     for (int i = 0; i < 6000 && sim.sleepingAgents() == 0; ++i) sim.step(0.1, 0.05);
     CHECK(sim.sleepingAgents() > 0);
 
@@ -553,7 +508,7 @@ TEST_CASE(population_read_from_the_cache_is_the_population_decided) {
     std::filesystem::remove_all(dir);
     auto town = [&](CitySim& sim, NavGraph& nav, PlaceMap& places, Real shopClose) {
         nav = citytest::cityNav(1200, 90, 5);
-        sim.build(nav, 300, 200, 13);
+        sim.build(nav, 500, 13);
         for (int i = 0; i < 14; ++i) places.add(PlaceType::Home, Vec2(-500 + i * 60.0, -400), nav);
         for (int i = 0; i < 6; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 90.0, 400), nav, 9, 17);
         for (int i = 0; i < 4; ++i) places.add(PlaceType::Shop, Vec2(-400 + i * 200.0, 0), nav, 8, shopClose);

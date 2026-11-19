@@ -126,7 +126,7 @@ TEST_CASE(people_sent_to_the_other_town_go_by_train_and_arrive) {
     RailSim rail;
     rail.build(ovalWithWaysIn(nav), trainKindNamed("intercity"), 2);
     CitySim sim;
-    sim.build(nav, 0, 120, 17);
+    sim.build(nav, 120, 17);
     sim.setRail(&rail);
     CHECK(sim.railRiders().active());
 

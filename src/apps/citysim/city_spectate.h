@@ -25,6 +25,11 @@ class CityRenderSystem;
 // the view exactly as before.
 
 // --- pure, headless-testable core --------------------------------------------
+// How the chase camera frames what it follows: a car (a car followed as itself, or someone sitting in a household's car,
+// ADR-0444: the car is what is seen) or a person on foot.
+enum class SpectateFraming : uint8_t { OnFoot, Car };
+SpectateFraming spectateFraming(const Agent& agent);
+
 // An agent worth spectating: alive in the sim (not released to the player) and
 // not the host-driven player ghost. Released/player agents are skipped.
 bool isSpectatable(const Agent& agent);
@@ -77,9 +82,9 @@ public:
     void letGo() { pendingLetGo_ = true; }
 
 private:
-    // Frame the chase camera for the followed agent's mode: a longer arm for a
-    // driver, a tighter frame for a walker. Called when the target changes.
-    void configureFollowFor(Agent::Mode mode);
+    // Frame the chase camera for what is followed: a longer arm for a car, a tighter frame for a walker. Called when
+    // the target changes.
+    void configureFollowFor(SpectateFraming framing);
     // Stop spectating and hand the view back (restores the prior widget state).
     void stopSpectating(engine::FrameContext& ctx);
     // The cars followed as themselves now, in the order of their numbers.
@@ -94,8 +99,8 @@ private:
     int current_ = -1;             // index into sim().agents(), or -1
     engine::Entity car_;           // ...or the car followed as itself (current_ is then -1)
     bool widgetsWereOn_ = false;   // debug-widget state captured on spectate-on
-    // The mode the chase is framed for: a followed walker who gets into a car (or out of one) is re-framed.
-    Agent::Mode framedFor_ = Agent::Mode::Pedestrian;
+    // What the chase is framed for: a followed walker who gets into a car (or out of one) is re-framed.
+    SpectateFraming framedFor_ = SpectateFraming::OnFoot;
     int pendingFollow_ = -1;       // follow()'s agent, taken up by the next update
     bool held_ = false;            // following follow()'s agent: kept through frames it has no body
     bool pendingLetGo_ = false;    // letGo(), taken up by the next update

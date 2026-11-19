@@ -115,7 +115,7 @@ def multi(sock, shots, t0, suffix, wait_speed):
     Ana and ben share one car. Both are sent far away a second apart; ben reaches the car first and takes it; ana finds
     it gone at the kerb and walks. While ben waits at a stop on his drive, the PLAYER is put beside the car (`teleport`)
     and takes it with the real key (`tap E`: the interaction broker's "take the car", CityVehicleSystem's promotion,
-    CitySim::ejectDriver). Ben is put out on the kerb side and walks on. Each key moment is taken from above and from
+    CitySim::playerTakesCar). Ben is put out on the kerb side and walks on. Each key moment is taken from above and from
     the side, the names beginning `multi_`."""
     def named(name):
         return f"multi_{name}{suffix}"

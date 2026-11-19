@@ -1243,170 +1243,6 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
     CHECK(lampInBody == 0);
 }
 
-// THE TRAFFIC CENSUS (device: "the simulated cars ... sometimes they are below
-// the road ... the cars should appear above the road ... come up with some
-// tests to ensure the vehicles are on the road properly"). Loads the shipped
-// metro through the real loader, stands up the citysim bridge exactly as the
-// game does (default params, CitySimConfig from the level), drives the sim for
-// a while, and compares every drawn DRIVEN car's wheel-bottom against the
-// COLLIDER surface under it — the road mesh the player's own car drives on.
-// Measured at adoption on the deck fixture: cars 0.62 m under the deck on
-// average (the bridge placed them on the terrain, which the mesher carves
-// 0.22 m under the deck, minus a vestigial 0.08 lift, plus the carve's own
-// hillside error); after RoadDeck: within 3 cm.
-
-TEST_CASE(metro_traffic_drives_on_the_road_deck) {
-    std::unique_ptr<Renderer> renderer = Renderer::create();
-    RendererMeshUploader uploader(*renderer);
-    AssetManager assets(uploader);
-    World world;
-    RenderView view;
-    const bool loaded =
-        LevelLoader::load(simLevelPath(), world, *renderer,
-                          view, assets, /*editorMode=*/false);
-    CHECK(loaded);
-    if (!loaded) return;
-
-    ColliderGrid grid;
-    world.each<MeshCollider>([&](Entity, MeshCollider& mc) { grid.add(mc); });
-    CHECK(!grid.tris.empty());
-
-    citysim::CityRenderSystem city;
-    CHECK(city.build(world, &assets, nullptr));
-    const std::vector<Vec3> he = city.carGroupHalfExtents();
-
-    int checked = 0, seen = 0, noSurface = 0;
-    double sum = 0, lo = 1e9, hi = -1e9;
-    double lowestTyreHi = -1e9;   // over every sample, the gap under the car's LOWEST tyre
-    Vec2 worstAt(0, 0);
-    double worst = 0;
-    // Offender context: what the bridge could have used at that spot.
-    std::vector<const engine::RoadDeckField*> decks;
-    world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { decks.push_back(&d.field); });
-    std::function<double(double, double)> terrain;
-    world.each<engine::TerrainLodConfig>([&](Entity, engine::TerrainLodConfig& c) {
-        auto params = std::make_shared<engine::TerrainParams>(c.params);
-        auto noise = std::make_shared<engine::Noise>(c.seed);
-        terrain = [params, noise](double x, double z) {
-            return engine::terrainHeight(*params, *noise, x, z);
-        };
-    });
-    struct Offender { double d, x, z, y, surface, deck, terr; int link; double linkHalf; int layer; double speed; int padHits; double tyreLo, tyreHi; };
-    std::vector<Offender> offenders;
-    std::size_t padTris = 0;
-    for (const engine::RoadDeckField* f : decks) padTris += f->pads.size();
-    std::printf("    [traffic] decks=%zu pad triangles=%zu\n", decks.size(), padTris);
-    auto sample = [&]() {
-        const auto& ids = city.carAgentIds();
-        for (std::size_t v = 0; v < city.carGroups().size(); ++v) {
-            InstanceGroup* g = world.get<InstanceGroup>(city.carGroups()[v]);
-            if (!g || v >= ids.size()) continue;
-            for (std::size_t i = 0; i < g->transforms.size() && i < ids[v].size(); ++i) {
-                if (ids[v][i] < 0) continue;                 // parked scenery
-                // MOVING traffic only: a driver resting at a destination may
-                // have pulled off the carriageway (a dead end, a place's
-                // entrance) — that is a different question from "cars drive
-                // on the road".
-                const auto& agents = city.sim().agents();
-                const int aid = ids[v][i];
-                if (aid >= static_cast<int>(agents.size()) || agents[aid].speed < 1.0) continue;
-                ++seen;
-                const Mat4& m = g->transforms[i];
-                const double x = m.m[0][3], y = m.m[1][3], z = m.m[2][3];
-                const double bottom = y - (v < he.size() ? he[v].y : 0.65);
-                double top;
-                // The surface the car is ON: the highest collider under its
-                // origin (a bridge deck over a street resolves to the deck).
-                if (!grid.surfaceAt(x, z, y, top)) { ++noSurface; continue; }
-                const double d = bottom - top;
-                ++checked;
-                sum += d;
-                lo = std::min(lo, d);
-                hi = std::max(hi, d);
-                if (std::fabs(d) > worst) { worst = std::fabs(d); worstAt = Vec2(x, z); }
-                // each tyre's contact patch against the collider under IT: the placement (ADR-0087's
-                // four wheels) rests the LOWEST tyre on the road, so on a crest or a twist the other
-                // tyres -- and the body's centre -- may float by the fitted plane's residual
-                double tyreLo = 1e9, tyreHi = -1e9;
-                for (const auto& w : city.carWheels(static_cast<int>(v))) {
-                    const Vec3 l(w.pos.x, w.pos.y - w.radius, w.pos.z);
-                    const double wx = m.m[0][0] * l.x + m.m[0][1] * l.y + m.m[0][2] * l.z + x;
-                    const double wy = m.m[1][0] * l.x + m.m[1][1] * l.y + m.m[1][2] * l.z + y;
-                    const double wz = m.m[2][0] * l.x + m.m[2][1] * l.y + m.m[2][2] * l.z + z;
-                    double ts;
-                    if (!grid.surfaceAt(wx, wz, wy + 0.5, ts)) continue;
-                    tyreLo = std::min(tyreLo, wy - ts); tyreHi = std::max(tyreHi, wy - ts);
-                }
-                if (tyreLo < 1e8) lowestTyreHi = std::max(lowestTyreHi, tyreLo);
-                if (std::fabs(d) > 0.25) {
-                    double deckY = std::nan("");
-                    for (const engine::RoadDeckField* f : decks) {
-                        double yy;
-                        if (f->heightAt(x, z, 4.5, &yy)) { deckY = yy; break; }
-                    }
-                    const int link = city.nav().nearestLink(Vec2(x, z));
-                    int padHits = 0;
-                    for (const engine::RoadDeckField* f : decks)
-                        for (const auto& t : f->pads)
-                            if (x >= std::min({t.a.x, t.b.x, t.c.x}) - 0.01 && x <= std::max({t.a.x, t.b.x, t.c.x}) + 0.01 &&
-                                z >= std::min({t.a.z, t.b.z, t.c.z}) - 0.01 && z <= std::max({t.a.z, t.b.z, t.c.z}) + 0.01)
-                                ++padHits;
-                    offenders.push_back({d, x, z, y, top, deckY,
-                                         terrain ? terrain(x, z) : std::nan(""), link,
-                                         link >= 0 ? city.nav().links[link].width * 0.5 : 0.0,
-                                         link >= 0 ? city.nav().links[link].layer : -1,
-                                         agents[aid].speed, padHits, tyreLo, tyreHi});
-                }
-            }
-        }
-    };
-    for (int i = 0; i < 600; ++i) {                       // 60 s of city time
-        city.step(world, 0.1);
-        if (i % 20 == 0) sample();
-    }
-    std::printf("    [traffic] %d samples (%d seen, %d off any collider): wheel-bottom minus "
-                "surface mean=%.3fm min=%.3fm max=%.3fm worst=%.3fm at (%.1f, %.1f)\n",
-                checked, seen, noSurface, checked ? sum / checked : 0.0, lo, hi, worst,
-                worstAt.x, worstAt.y);
-    std::printf("    [traffic] the lowest tyre's gap, worst over the samples: %+.3f m\n", lowestTyreHi);
-    std::sort(offenders.begin(), offenders.end(),
-              [](const Offender& a, const Offender& b) { return std::fabs(a.d) > std::fabs(b.d); });
-    std::printf("    [traffic] %zu samples off by > 0.25 m; worst distinct spots:\n", offenders.size());
-    std::vector<std::pair<int, int>> shown;
-    int printed = 0;
-    for (const Offender& o : offenders) {
-        const std::pair<int, int> cellKey{static_cast<int>(std::floor(o.x / 3.0)),
-                                          static_cast<int>(std::floor(o.z / 3.0))};
-        if (std::find(shown.begin(), shown.end(), cellKey) != shown.end()) continue;
-        shown.push_back(cellKey);
-        std::printf("      d=%+.2f at (%.1f, %.1f) y=%.2f surface=%.2f deck=%.2f terrain+0.22=%.2f "
-                    "link=%d half=%.1f layer=%d speed=%.1f padTrisOver=%d tyres %+.2f..%+.2f surfaces:",
-                    o.d, o.x, o.z, o.y, o.surface, o.deck, o.terr + 0.22, o.link, o.linkHalf,
-                    o.layer, o.speed, o.padHits, o.tyreLo, o.tyreHi);
-        for (double h : grid.surfacesAt(o.x, o.z)) std::printf(" %.2f", h);
-        std::printf("\n");
-        if (++printed >= 10) break;
-    }
-    // Measured at adoption (RoadDeck + pads, moving cars only): 2562 samples,
-    // mean 0.000 m, max +0.012 m, min -0.269 m — ONE sample, at
-    // (-899.9, 106.6) on the western foothill, where a second collider
-    // surface stands 0.26 m above the deck under a driving car (three stacked
-    // surfaces there: 44.43 / 44.83 deck / 45.09). That is a road-side
-    // geometry question, not a placement one; the bound holds it at its
-    // current size and the mean/max bounds keep placement honest.
-    CHECK(checked > 200);                                  // the fixture must bite
-    // THE LANE-BUILT METRO: the lanes builder drew the pavement tilted, up to 0.8 m off the centreline height it
-    // published (ADR-0217), and the gate was ratcheted to -0.60 / 1.0 / 1.1 on 2026-10-22. With the drawn section
-    // published (ADR-0223), local clang: min -0.12 m, lowest tyre +0.09, body max +0.19, none past 25 cm.
-    CHECK(lo > -0.30);                                     // never IN the road
-    // NEVER HOVERING, asked of the tyres: a car rests its lowest tyre on the road (four-wheel
-    // placement), so its body's centre may stand above the surface under it on a crest or a twist
-    // -- 2026-09-29, metro_lanes: one sample of 1200, body +0.28 m, tyres +0.00..+0.40.
-    CHECK(lowestTyreHi < 0.10);
-    CHECK(hi < 0.45);                                      // and the body no further than a twist's residual
-    CHECK(std::fabs(checked ? sum / checked : 0.0) < 0.03);   // no systematic term
-}
-
 // THE PUBLISHED DECK AGAINST THE DRAWN ONE (ADR-0217's owed question: why the field cars ride and the pavement the
 // lanes builder drew part by 0.1-0.3 m). Every published road spine, every 2 m, at five offsets across its
 // carriageway: the spine's own profile and the field's answer, each against the drawn collider surface nearest it.
@@ -1559,295 +1395,6 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
     }
 }
 
-
-// PARKING (Glenn, 2026-09-18: "They park at the corner in a pile, but they
-// should be using the parallel parking spaces or maybe the parking garages, but
-// they need to park in spaces and not in a heap on the corner"). A census of
-// every DRAWN parked car in the loader-built metro: in a marked bay, or on the
-// verge; how many sit on top of another parked car; how many inside a junction.
-namespace {
-struct ParkCensus {
-    int drivers = 0, bays = 0, parked = 0, inBay = 0, verge = 0, stacked = 0,
-        atJunction = 0, offStreet = 0;
-    std::vector<std::string> where;   // the first few heaps and junction cars, with their bay and the street's width
-};
-ParkCensus parkCensus(const citysim::CityRenderSystem& city) {
-    ParkCensus c;
-    const auto& sim = city.sim();
-    const auto& nav = city.nav();
-    c.bays = static_cast<int>(sim.parkingBays().size());
-    std::vector<Vec2> parkedAt;
-    std::vector<Real> parkedY;       // a garage stall's deck (else 0: the street)
-    std::vector<char> inGarage;
-    std::vector<int> parkedBay;
-    for (std::size_t ai = 0; ai < sim.agents().size(); ++ai) {
-        const auto& a = sim.agents()[ai];
-        if (a.archetype != citysim::Agent::Mode::Driver) continue;
-        ++c.drivers;
-        if (a.moving) continue;                      // on the road
-        if (a.car < 0 || a.car >= static_cast<int>(sim.vehicles().size())) continue;
-        const auto& v = sim.vehicles()[static_cast<std::size_t>(a.car)];
-        if (v.offStreet) { ++c.offStreet; continue; }
-        ++c.parked;
-        if (a.parkedBay >= 0) ++c.inBay; else ++c.verge;
-        // A driver resting IN its car is drawn at its own pose; one that got
-        // out left the car where it parked.
-        parkedAt.push_back(a.vehicle >= 0 ? a.pos : v.pos);
-        const bool g = a.parkedBay >= 0 && sim.parkingBays()[static_cast<std::size_t>(a.parkedBay)].garage >= 0;
-        inGarage.push_back(g ? 1 : 0);
-        parkedBay.push_back(a.parkedBay);
-        parkedY.push_back(g ? sim.parkingBays()[static_cast<std::size_t>(a.parkedBay)].y : 0.0);
-    }
-    for (std::size_t i = 0; i < parkedAt.size(); ++i) {
-        for (std::size_t j = 0; j < parkedAt.size(); ++j) {
-            if (i == j) continue;
-            const Vec2 d = parkedAt[i] - parkedAt[j];
-            // A GARAGE'S STALLS are 2.5 m apart and its decks stand over each other: two cars there are a heap
-            // only if they are nearer than a stall's width on the same deck (the 3 m plan test counted
-            // neighbouring stalls, and the cars on the decks above, as heaps)
-            const bool both = inGarage[i] && inGarage[j];
-            const Real dy = parkedY[i] - parkedY[j];
-            if (both ? (d.x * d.x + d.y * d.y + dy * dy < 2.0 * 2.0) : (d.x * d.x + d.y * d.y < 3.0 * 3.0)) {
-                ++c.stacked;
-                if (c.where.size() < 8) {
-                    char b[160];
-                    std::snprintf(b, sizeof b, "heap at (%.1f, %.1f) with (%.1f, %.1f), %.1f m apart, bays %d and %d",
-                                  parkedAt[i].x, parkedAt[i].y, parkedAt[j].x, parkedAt[j].y, d.length(), parkedBay[i], parkedBay[j]);
-                    c.where.push_back(b);
-                }
-                break;
-            }
-        }
-        for (int n = 0; n < nav.nodeCount(); ++n) {
-            if (!nav.isJunction(n)) continue;
-            const Vec2 d = parkedAt[i] - nav.nodes[static_cast<std::size_t>(n)];
-            if (d.x * d.x + d.y * d.y < 10.0 * 10.0) {
-                ++c.atJunction;
-                if (c.where.size() < 8) {
-                    char b[160];
-                    std::snprintf(b, sizeof b, "in a junction at (%.1f, %.1f), %.1f m from its node (%.1f, %.1f), bay %d",
-                                  parkedAt[i].x, parkedAt[i].y, d.length(), nav.nodes[static_cast<std::size_t>(n)].x,
-                                  nav.nodes[static_cast<std::size_t>(n)].y, parkedBay[i]);
-                    c.where.push_back(b);
-                }
-                break;
-            }
-        }
-    }
-    return c;
-}
-void printPark(const char* when, const ParkCensus& c) {
-    std::printf("    [park] %s: %d drivers, %d bays | %d parked on street: %d in bays, "
-                "%d on the verge | %d stacked within 3 m of another | %d inside a "
-                "junction | %d off-street\n",
-                when, c.drivers, c.bays, c.parked, c.inBay, c.verge, c.stacked,
-                c.atJunction, c.offStreet);
-    for (const std::string& w : c.where) std::printf("      %s\n", w.c_str());
-}
-}  // namespace
-
-TEST_CASE(metro_cars_park_in_spaces_not_heaps) {
-    std::unique_ptr<Renderer> renderer = Renderer::create();
-    RendererMeshUploader uploader(*renderer);
-    AssetManager assets(uploader);
-    World world;
-    RenderView view;
-    const bool loaded =
-        LevelLoader::load(simLevelPath(), world, *renderer,
-                          view, assets, /*editorMode=*/false);
-    CHECK(loaded);
-    if (!loaded) return;
-    citysim::CityRenderSystem city;
-    CHECK(city.build(world, &assets, nullptr));
-    const ParkCensus atLoad = parkCensus(city);
-    printPark("at load", atLoad);
-    for (int i = 0; i < 1800; ++i) city.step(world, 0.1);   // 3 minutes
-    // AND TRAFFIC STILL FLOWS. Two ways parking in bays first slowed metro:
-    // cars resting in a bay sat just inside the car-ahead corridor of the kerb
-    // lane (passing cars braked behind them), and routes ended in U-turns to
-    // reach a bay's street, or left one by turning straight back. Measured:
-    // mean speed of moving cars after 3 min 5.6 m/s before the allocator, 4.1
-    // with those two bugs, 6.1 fixed; U-turn routes 0 / 67 / ~11.
-    int moving = 0, uturns = 0;
-    double speed = 0;
-    for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai) {
-        const auto& a = city.sim().agents()[ai];
-        if (a.archetype != citysim::Agent::Mode::Driver || !a.moving) continue;
-        ++moving;
-        speed += a.speed;
-        const auto& rl = a.route.links;
-        for (std::size_t q = 1; q < rl.size(); ++q) {
-            const auto& l0 = city.nav().links[static_cast<std::size_t>(rl[q - 1])];
-            const auto& l1 = city.nav().links[static_cast<std::size_t>(rl[q])];
-            if (l0.from == l1.to && l0.to == l1.from) { ++uturns; break; }
-        }
-    }
-    const double meanSpeed = moving ? speed / moving : 0.0;
-    std::printf("    [park] traffic after 3 min: %d moving, mean %.2f m/s, %d routes "
-                "with a U-turn\n", moving, meanSpeed, uturns);
-    CHECK(moving > 100);
-    CHECK(meanSpeed > 5.0);
-    CHECK(uturns < 25);
-    const ParkCensus later = parkCensus(city);
-    printPark("after 3 min", later);
-    // Measured before the allocator: 2 of 1257 parked cars in a bay, 857
-    // within 3 m of another, 23 inside a junction -- with 4646 bays free.
-    for (const ParkCensus* c : {&atLoad, &later}) {
-        CHECK(c->parked > 500);                       // the fixture must bite
-        CHECK(c->inBay >= c->parked * 95 / 100);      // in marked spaces
-        CHECK(c->stacked == 0);                       // no heaps
-        CHECK(c->atJunction == 0);                    // nothing in the box
-    }
-}
-
-// CARS WAIT BEFORE THE CROSSWALK AND DO NOT DRIVE THROUGH EACH OTHER (Glenn,
-// 2026-09-19: "they should not stop in the middle of the intersection. That
-// creates an instant traffic jam. They should stop before the cross walk and
-// then wait for the light ... The cars should not go through each other").
-//
-// Metro's streets are chains of ~4 m links, and every junction rule looked at
-// the current link only: the stop line was clamped to 40% of a 4 m link (inside
-// the box), the car one link back did not see the junction at all, car-
-// following saw two links (~8 m) ahead, and far-tier cars were promoted into
-// the live sim at cruise on top of stopped queues. Measured by this test on
-// the code before the fix: 3732 car-seconds stuck in a box and 5535
-// overlapping pairs; after it, ~100 and ~80-270 (the busy ring where far cars
-// join the live sim still makes the odd pile). The gates sit well between.
-//
-// Sampled once a second after a 20 s warm-up, over the live (non-far) cars:
-//  - STUCK IN A BOX: a car stopped > 5 s with its centre inside a junction's
-//    drawn mouth (the widest arm's half-width + the 3.5 m sidewalk band --
-//    where the road mesher trims the streets and the zebras start).
-//  - OVERLAPS: two car bodies interpenetrating by more than a 10 cm skin.
-TEST_CASE(metro_junctions_stay_clear) {
-    std::unique_ptr<Renderer> renderer = Renderer::create();
-    RendererMeshUploader uploader(*renderer);
-    AssetManager assets(uploader);
-    World world;
-    RenderView view;
-    const bool loaded =
-        LevelLoader::load(simLevelPath(), world, *renderer,
-                          view, assets, /*editorMode=*/false);
-    CHECK(loaded);
-    if (!loaded) return;
-    citysim::CityRenderSystem city;
-    CHECK(city.build(world, &assets, nullptr));
-    const auto& nav = city.nav();
-    std::vector<int> junctions;
-    std::vector<Real> mouth;
-    for (int n = 0; n < nav.nodeCount(); ++n) {
-        if (!nav.isJunction(n)) continue;
-        Real r = 0;
-        for (int li : nav.outLinks[static_cast<std::size_t>(n)])
-            r = std::max(r, nav.links[static_cast<std::size_t>(li)].width * 0.5);
-        junctions.push_back(n);
-        mouth.push_back(r + 3.5);
-    }
-    // Rectangle overlap by separating axes, bodies shrunk by a 10 cm skin.
-    auto overlap = [](Vec2 pa, Vec2 ha, Real la, Vec2 pb, Vec2 hb, Real lb) {
-        const Vec2 axes[4] = {ha, Vec2(-ha.y, ha.x), hb, Vec2(-hb.y, hb.x)};
-        const Vec2 d = pb - pa;
-        for (const Vec2& ax : axes) {
-            auto reach = [&](Vec2 h, Real l) {
-                return std::fabs(h.x * ax.x + h.y * ax.y) * (l * 0.5 - 0.1) +
-                       std::fabs(-h.y * ax.x + h.x * ax.y) * 0.8;
-            };
-            if (std::fabs(d.x * ax.x + d.y * ax.y) > reach(ha, la) + reach(hb, lb)) return false;
-        }
-        return true;
-    };
-    auto bodyLength = [&](const citysim::Agent& a) {
-        return a.vehicle >= 0 ? city.sim().vehicles()[static_cast<std::size_t>(a.vehicle)].length
-                              : Real(4.2);
-    };
-    std::vector<Real> stoppedFor(city.sim().agents().size(), 0);
-    long samples = 0, carsSeen = 0, inBox = 0, stuckBox = 0, overlaps = 0;
-    std::vector<long> stuckAt(junctions.size(), 0);
-    for (int i = 0; i < 1800; ++i) {
-        city.step(world, 0.1);
-        const auto& ag = city.sim().agents();
-        for (std::size_t k = 0; k < ag.size(); ++k) {
-            if (ag[k].mode == citysim::Agent::Mode::Driver && ag[k].moving && ag[k].speed < 0.3)
-                stoppedFor[k] += 0.1;
-            else
-                stoppedFor[k] = 0;
-        }
-        if (i < 200 || i % 10) continue;
-        ++samples;
-        std::vector<std::size_t> cars;
-        for (std::size_t k = 0; k < ag.size(); ++k)
-            if (ag[k].mode == citysim::Agent::Mode::Driver && ag[k].moving && !ag[k].far())
-                cars.push_back(k);
-        carsSeen += static_cast<long>(cars.size());
-        for (std::size_t k : cars) {
-            if (ag[k].speed >= 0.3) continue;
-            for (std::size_t j = 0; j < junctions.size(); ++j) {
-                const Vec2 d = ag[k].pos - nav.nodes[static_cast<std::size_t>(junctions[j])];
-                const Real r = mouth[j];
-                if (d.x * d.x + d.y * d.y < r * r) {
-                    ++inBox;
-                    if (stoppedFor[k] > 5.0) {
-                        ++stuckBox;
-                        ++stuckAt[j];
-                    }
-                    break;
-                }
-            }
-        }
-        for (std::size_t x = 0; x < cars.size(); ++x)
-            for (std::size_t y = x + 1; y < cars.size(); ++y) {
-                const auto& A = ag[cars[x]];
-                const auto& B = ag[cars[y]];
-                const Vec2 d = A.pos - B.pos;
-                if (d.x * d.x + d.y * d.y > 16.0 * 16.0) continue;
-                if (std::fabs(A.elevation - B.elevation) > 2.5) continue;
-                if (overlap(A.pos, A.heading, bodyLength(A), B.pos, B.heading, bodyLength(B)))
-                    ++overlaps;
-            }
-    }
-    std::printf("    [junction] %ld samples, %.0f live cars each: %ld stopped in a box "
-                "(%ld for > 5 s), %ld overlapping pairs\n",
-                samples, samples ? static_cast<double>(carsSeen) / samples : 0.0, inBox,
-                stuckBox, overlaps);
-    std::vector<std::size_t> worst(junctions.size());
-    for (std::size_t j = 0; j < worst.size(); ++j) worst[j] = j;
-    std::sort(worst.begin(), worst.end(),
-              [&](std::size_t a, std::size_t b) { return stuckAt[a] > stuckAt[b]; });
-    for (std::size_t w = 0; w < std::min<std::size_t>(5, worst.size()) && stuckAt[worst[w]] > 0; ++w) {
-        const Vec2 p = nav.nodes[static_cast<std::size_t>(junctions[worst[w]])];
-        std::printf("    [junction]   %ld stuck at node %d  ->  teleport %.2f %.2f\n",
-                    stuckAt[worst[w]], junctions[worst[w]], p.x, p.y);
-    }
-    // RT_JUNCTION_DUMP: the cars standing still at the worst junction at the end -- where each is, its links, and what
-    // stands ahead of it within 12 m
-    if (std::getenv("RT_JUNCTION_DUMP") && !worst.empty() && stuckAt[worst[0]] > 0) {
-        const Vec2 c = nav.nodes[static_cast<std::size_t>(junctions[worst[0]])];
-        const auto& ag = city.sim().agents();
-        for (std::size_t k = 0; k < ag.size(); ++k) {
-            const citysim::Agent& a = ag[k];
-            if (a.mode != citysim::Agent::Mode::Driver || !a.moving || stoppedFor[k] < 5.0 || (a.pos - c).length() > 30) continue;
-            const int li = a.leg < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
-            const int ln = a.leg + 1 < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg) + 1] : -1;
-            std::printf("      car %zu stopped %.0f s at (%.1f, %.1f) heading (%.2f, %.2f) lane %d laneF %.2f link %d (%d->%d k%d) next %d",
-                        k, stoppedFor[k], a.pos.x, a.pos.y, a.heading.x, a.heading.y, a.lane, a.laneF, li,
-                        li >= 0 ? nav.links[static_cast<std::size_t>(li)].from : -1, li >= 0 ? nav.links[static_cast<std::size_t>(li)].to : -1,
-                        li >= 0 ? static_cast<int>(nav.links[static_cast<std::size_t>(li)].klass) : -1, ln);
-            if (ln >= 0) std::printf(" (%d->%d)", nav.links[static_cast<std::size_t>(ln)].from, nav.links[static_cast<std::size_t>(ln)].to);
-            std::printf(" dist %.1f/%.1f\n", a.distOnLeg, li >= 0 ? nav.links[static_cast<std::size_t>(li)].length : 0.0);
-            for (std::size_t m = 0; m < ag.size(); ++m) {
-                if (m == k || ag[m].mode != citysim::Agent::Mode::Driver || !ag[m].moving) continue;
-                const Vec2 d = ag[m].pos - a.pos;
-                const Real ahead = d.x * a.heading.x + d.y * a.heading.y;
-                if (ahead > 0 && ahead < 12 && std::fabs(d.x * a.heading.y - d.y * a.heading.x) < 3)
-                    std::printf("        ahead: car %zu %.1f m on, %.1f across, heading (%.2f, %.2f), speed %.1f\n", m, ahead,
-                                d.x * a.heading.y - d.y * a.heading.x, ag[m].heading.x, ag[m].heading.y, ag[m].speed);
-            }
-        }
-    }
-    CHECK(samples > 0 && carsSeen / samples > 40);   // the city is actually driving
-    CHECK(stuckBox < 300);
-    CHECK(overlaps < 800);
-}
 
 // PEOPLE ARE OUT DOING THINGS, AND INSIDE WHEN THEY ARE NOT (Glenn, 2026-09-19:
 // "npcs stand around and don't walk and also overlap each other ... More
@@ -3035,13 +2582,13 @@ TEST_CASE(lot_dressing_is_planted_on_the_ground) {
     }
 }
 
-// THE FREEWAY CENSUS (Glenn, 2026-09-21: "vehicles don't take the freeway"). Three
+// THE FREEWAY CENSUS (Glenn, 2026-09-21: "vehicles don't take the freeway"). The
 // questions, so a zero can be pinned on the right layer:
 //   1. is there a freeway in the sim's graph at all (links by class);
 //   2. does the ROUTER take it when it should — long cross-city pairs, travel time;
-//   3. does TRAFFIC take it — which class every moving car is on after 3 minutes,
-//      and how many of the drivers' planned routes touch a freeway link.
-TEST_CASE(freeway_census_links_routes_and_traffic) {
+//   3. are its carriageways one-way (no reverse twin).
+// (Whether TRAFFIC took it was the old driving's cars, gone with ADR-0462.)
+TEST_CASE(freeway_census_links_and_routes) {
     const char* kCities[] = {"river_town.json", "metro_v2_test.json"};
     for (const char* name : kCities) {
         if (!levelPicked(name)) continue;   // RT_LEVELS=a,b picks among them
@@ -3213,30 +2760,10 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
         }
         std::printf("    [freeway] %-18s router: %d pairs > 1.5 km apart, %d routable, %d via the freeway\n",
                     name, pairs, routed, viaFreeway);
-        // 3. The traffic.
-        for (int i = 0; i < 1800; ++i) city.step(world, 0.1);
-        std::map<std::string, int> onClass;
-        int drivers = 0, plannedFreeway = 0, longTrips = 0;
-        for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai) {
-            const auto& a = city.sim().agents()[ai];
-            if (a.archetype != citysim::Agent::Mode::Driver) continue;
-            ++drivers;
-            if (usesFreeway(a.route)) ++plannedFreeway;
-            if (a.home >= 0 && a.work >= 0 && a.home < n && a.work < n &&
-                (nav.nodes[a.home] - nav.nodes[a.work]).length() > 1500.0)
-                ++longTrips;
-            if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
-            ++onClass[klassName(nav.links[static_cast<std::size_t>(a.route.links[a.leg])].klass)];
-        }
-        // WHAT GLENN SAW (2026-09-21): "turning around between freeways which is not possible
-        // since there are walls" and "cars floating alongside the freeway". So: no planned route
-        // takes a freeway/ramp link straight back along its reverse, no freeway/ramp link has a
-        // reverse at all, and a car on one is inside the drawn deck.
-        std::vector<const engine::RoadDeckField*> fwDecks;
-        world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { fwDecks.push_back(&d.field); });
-        int deckLinks = 0, twoWayDeck = 0, uturnRoutes = 0, onDeckCars = 0, offDeckCars = 0;
-        double worstOff = 0;
-        Vec2 worstOffAt(0, 0);
+        // 3. The carriageways. WHAT GLENN SAW (2026-09-21): "turning around between freeways which is not possible
+        // since there are walls": no freeway/ramp link has a reverse. (The traffic on them, the old driving's cars, was
+        // counted here until ADR-0462: their routes turning back, cars off the deck, the drivers' commutes.)
+        int deckLinks = 0, twoWayDeck = 0;
         {
             std::set<std::pair<int, int>> dir;
             for (const engine::NavLink& l : nav.links) dir.insert({l.from, l.to});
@@ -3246,68 +2773,12 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
                 if (dir.count({l.to, l.from})) ++twoWayDeck;
             }
         }
-        for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai) {
-            const auto& a = city.sim().agents()[ai];
-            if (a.archetype != citysim::Agent::Mode::Driver) continue;
-            const auto& rl = a.route.links;
-            for (std::size_t q = 1; q < rl.size(); ++q) {
-                const auto& l0 = nav.links[static_cast<std::size_t>(rl[q - 1])];
-                const auto& l1 = nav.links[static_cast<std::size_t>(rl[q])];
-                const bool deck0 = l0.klass == engine::RoadClass::Freeway || l0.klass == engine::RoadClass::Ramp;
-                if (deck0 && l1.from == l0.to && l1.to == l0.from) { ++uturnRoutes; break; }
-            }
-            if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(rl.size()) || fwDecks.empty()) continue;
-            const auto& cur = nav.links[static_cast<std::size_t>(rl[a.leg])];
-            if (cur.klass != engine::RoadClass::Freeway && cur.klass != engine::RoadClass::Ramp) continue;
-            double depth = 0;
-            for (const engine::RoadDeckField* d : fwDecks) depth = std::max(depth, d->depthInside(a.pos.x, a.pos.y));
-            if (depth > 0) { ++onDeckCars; continue; }
-            ++offDeckCars;
-            // How far off: step outward until the deck is found (0.25 m steps, up to 20 m).
-            double off = 20.0;
-            for (double r = 0.25; r <= 20.0; r += 0.25) {
-                bool hit = false;
-                for (int k = 0; k < 16 && !hit; ++k) {
-                    const double ang = k * 0.3926991;
-                    for (const engine::RoadDeckField* d : fwDecks)
-                        if (d->depthInside(a.pos.x + r * std::cos(ang), a.pos.y + r * std::sin(ang)) > 0) { hit = true; break; }
-                }
-                if (hit) { off = r; break; }
-            }
-            if (off > worstOff) { worstOff = off; worstOffAt = a.pos; }
-        }
-        std::printf("    [freeway] %-18s carriageways: %d freeway/ramp links, %d with a reverse twin | %d routes turn "
-                    "back on one | cars on them: %d on the deck, %d off it (worst %.2f m off at %.0f,%.0f)\n",
-                    name, deckLinks, twoWayDeck, uturnRoutes, onDeckCars, offDeckCars, worstOff, worstOffAt.x,
-                    worstOffAt.y);
+        std::printf("    [freeway] %-18s carriageways: %d freeway/ramp links, %d with a reverse twin\n", name, deckLinks,
+                    twoWayDeck);
         CHECK(twoWayDeck == 0);
-        CHECK(uturnRoutes == 0);
-        // A RATCHET (2026-10-22): Linux GCC's metro_lanes had one car 0.25 m off the deck (0 on macOS and local
-        // clang) -- the drawn deck below the published one (ADR-0217), met by chaos. Was 0.
-        CHECK(offDeckCars <= 1);
-        std::string now;
-        for (const auto& [k, v] : onClass) now += " " + k + " " + std::to_string(v);
-        // DEMAND, not a snapshot: every driver's own commute (home -> work, the router's
-        // choice) and whether it takes the freeway. At any moment most cars are parked.
-        int commutes = 0, commutesViaFreeway = 0;
-        for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai) {
-            const auto& a = city.sim().agents()[ai];
-            if (a.archetype != citysim::Agent::Mode::Driver) continue;
-            if (a.home < 0 || a.work < 0 || a.home == a.work || a.home >= n || a.work >= n) continue;
-            const engine::Route r = engine::findRoute(nav, a.home, a.work);
-            if (!r.valid()) continue;
-            ++commutes;
-            if (usesFreeway(r)) ++commutesViaFreeway;
-        }
-        std::printf("    [freeway] %-18s commutes: %d of %d drivers' home->work routes take the freeway\n", name,
-                    commutesViaFreeway, commutes);
-        std::printf("    [freeway] %-18s traffic after 3 min: %d drivers, moving on:%s | %d planned routes touch "
-                    "the freeway | %d home-work pairs > 1.5 km apart\n",
-                    name, drivers, now.c_str(), plannedFreeway, longTrips);
-        // A city with a freeway USES it: long pairs route over it, and cars are on it.
+        // A city with a freeway USES it: long pairs route over it.
         if (byClass.count("freeway")) {
             CHECK(viaFreeway * 4 >= routed);        // metro_lanes: 124 of 184
-            CHECK(onClass["freeway"] > 0);          // metro_lanes: 17 cars at 3 min
         }
     }
 }
@@ -3922,7 +3393,7 @@ TEST_CASE(metro_day_census_prints) {
     if (!loaded) return;
     citysim::CityRenderSystem city;
     CHECK(city.build(world, &assets, nullptr));
-    std::printf("    [census] hour | out%% (walkers out / moving, drivers moving, on a train journey) | by role out%% "
+    std::printf("    [census] hour | out%% (walkers out / moving, on a train journey) | by role out%% "
                 "of the first four roles\n");
     const char* only = std::getenv("RT_CENSUS_HOUR");   // one hour of the seven, to look closer
     for (Real hour : {8.0, 10.0, 12.5, 15.0, 17.5, 20.0, 23.0}) {
@@ -3930,22 +3401,22 @@ TEST_CASE(metro_day_census_prints) {
         city.setWorldClock(hour, 1.0 / 3600.0);
         for (int i = 0; i < 3000; ++i) city.step(world, 0.1);   // settle 5 min
         constexpr int kR = citysim::CitySim::Census::kRoles;
-        double wo = 0, wm = 0, dm = 0, wt = 0, ag = 0, rOut[kR] = {}, rAll[kR] = {}, rWork[kR] = {}, og = 0;
+        double wo = 0, wm = 0, wt = 0, ag = 0, rOut[kR] = {}, rAll[kR] = {}, rWork[kR] = {}, og = 0;
         int samples = 0;
         for (int i = 0; i < 3000; ++i) {
             city.step(world, 0.1);
             if (i % 100 != 0) continue;   // every 10 s
             const citysim::CitySim::Census c = city.sim().census();
             og += c.outing;
-            wo += c.walkersOutside; wm += c.walkersMoving; dm += c.driversMoving; wt += c.waiting; ag += c.agents;
+            wo += c.walkersOutside; wm += c.walkersMoving; wt += c.waiting; ag += c.agents;
             for (int r = 0; r < kR; ++r) { rOut[r] += c.outsideByRole[r]; rAll[r] += c.byRole[r]; rWork[r] += c.atWorkByRole[r]; }
             ++samples;
         }
         const double n = samples;
-        const double out = (wo + dm + wt) / n, all = ag / n;
+        const double out = (wo + wt) / n, all = ag / n;
         auto pct = [](double a, double b) { return b > 0 ? 100.0 * a / b : 0.0; };
-        std::printf("    [census] %5.1f | %5.1f%% (%.0f / %.0f, %.0f, %.0f) | %.1f / %.1f / %.1f / %.1f\n",
-                    hour, pct(out, all), wo / n, wm / n, dm / n, wt / n, pct(rOut[0], rAll[0]), pct(rOut[1], rAll[1]),
+        std::printf("    [census] %5.1f | %5.1f%% (%.0f / %.0f, %.0f) | %.1f / %.1f / %.1f / %.1f\n",
+                    hour, pct(out, all), wo / n, wm / n, wt / n, pct(rOut[0], rAll[0]), pct(rOut[1], rAll[1]),
                     pct(rOut[2], rAll[2]), pct(rOut[3], rAll[3]));
         std::printf("    [census] %5.1f | out somewhere (a stop, a night out) %.0f (%.1f%%)\n", hour, og / n, pct(og, ag));
         {   // every role: how many, and the share of them out
@@ -3959,23 +3430,6 @@ TEST_CASE(metro_day_census_prints) {
                 line += b;
             }
             std::printf("    [census] %5.1f | roles: %s\n", hour, line.c_str());
-        }
-        if (hour >= 23.0) {   // WHO DRIVES AT NIGHT: the drivers still moving, by tier / activity
-            static const char* kAct[] = {"AtHome", "Commuting", "AtWork", "Returning", "Shopping", "Outing", "Lunch"};
-            std::map<std::string, int> why;
-            const citysim::CitySim& sim = city.sim();
-            for (int i = 0; i < static_cast<int>(sim.agents().size()); ++i) {
-                const citysim::Agent& a = sim.agents()[static_cast<std::size_t>(i)];
-                if (a.mode != citysim::Agent::Mode::Driver || !a.moving) continue;
-                const char tier = a.tier == citysim::Agent::Tier::K ? 'K' : a.tier == citysim::Agent::Tier::V ? 'V' : 'D';
-                const int act = static_cast<int>(a.activity);
-                char key[96];
-                std::snprintf(key, sizeof key, "car tier %c %s role %d departHome %.0f",
-                              tier, act >= 0 && act < 7 ? kAct[act] : "?",
-                              static_cast<int>(a.role), std::floor(a.departHome));
-                ++why[key];
-            }
-            for (const auto& kv : why) std::printf("    [census night] %5d  %s\n", kv.second, kv.first.c_str());
         }
     }
 }
@@ -4018,11 +3472,10 @@ TEST_CASE(people_census_prints) {
             if (a.commuteSeconds <= 0 && a.home != a.work) {   // (work at their own corner: no trip)
                 ++noCommute;
                 char k[160];
-                std::snprintf(k, sizeof k, "%s %s, home %d work %d, workPlace %u", sim.roles().nameOf(a.role),
-                              a.archetype == citysim::Agent::Mode::Driver ? "driver" : "walker", a.home, a.work,
-                              static_cast<unsigned>(a.workPlace));
+                std::snprintf(k, sizeof k, "%s, home %d work %d, workPlace %u", sim.roles().nameOf(a.role), a.home,
+                              a.work, static_cast<unsigned>(a.workPlace));
                 if (noCommute <= 6) std::printf("    [people]   no commute: %s\n", k);
-                ++noCommuteBy[std::string(sim.roles().nameOf(a.role)) + (a.archetype == citysim::Agent::Mode::Driver ? " driver" : " walker")];
+                ++noCommuteBy[std::string(sim.roles().nameOf(a.role))];
             }
         }
     }
@@ -4155,57 +3608,6 @@ TEST_CASE(housing_audit_prints) {
     }
     std::printf("    [housing] TOTAL: %d dwellings counted as homes, %d more not counted; homes are %.0f%% of %.0f m2 of floor\n",
                 counted, uncounted, 100.0 * homeM2 / std::max(1.0, allM2), allM2);
-}
-
-// WALKERS IN THE ROAD (Glenn: "the npcs all over the roads is a problem. It's interfering with traffic ... they can
-// walk through vehicles"). Print-only under RT_ROADWALK=1: the island (or RT_CENSUS_LEVEL), a player standing
-// downtown where they were seen (RT_ROADWALK_AT="x z"), at the morning and the evening -- every visible walker of
-// the full sim whose spot is inside a carriageway, by why (CitySim::walkersInRoad).
-TEST_CASE(walkers_in_the_road_prints) {
-    if (!std::getenv("RT_ROADWALK")) return;
-    std::unique_ptr<Renderer> renderer = Renderer::create();
-    RendererMeshUploader uploader(*renderer);
-    AssetManager assets(uploader);
-    World world;
-    RenderView view;
-    const char* lvl = std::getenv("RT_CENSUS_LEVEL");
-    const bool loaded = LevelLoader::load(lvl ? std::string(lvl) : std::string("assets/levels/island_8_nature.json"), world,
-                                          *renderer, view, assets, false);
-    CHECK(loaded);
-    if (!loaded) return;
-    Real px = -3358, pz = -438;
-    if (const char* at = std::getenv("RT_ROADWALK_AT")) std::sscanf(at, "%lf %lf", &px, &pz);
-    {   // the player: the tier bubble's centre
-        Entity p = world.create();
-        Transform t;
-        t.position = Vec3(px, 15, pz);
-        world.add<Transform>(p, t);
-        world.add<engine::ControlledBy>(p, engine::ControlledBy{});
-    }
-    citysim::CityRenderSystem city;
-    CHECK(city.build(world, &assets, nullptr));
-    for (Real hour : {8.25, 17.5}) {
-        city.setWorldClock(hour, 1.0 / 3600.0);
-        for (int i = 0; i < 1800; ++i) city.step(world, 0.1);   // settle 3 min
-        std::map<std::string, int> all;
-        int visible = 0, samples = 0;
-        for (int s = 0; s < 5; ++s) {
-            for (int i = 0; i < 300; ++i) city.step(world, 0.1);
-            int v = 0;
-            for (const auto& kv : city.sim().walkersInRoad(&v)) all[kv.first] += kv.second;
-            visible += v;
-            ++samples;
-        }
-        int inRoad = 0;
-        for (const auto& kv : all) inRoad += kv.second;
-        std::printf("    [road walkers] %4.1f h: %.0f visible walkers near the player, %.0f of them in a carriageway (%.0f%%)\n",
-                    hour, visible / double(samples), inRoad / double(samples), visible ? 100.0 * inRoad / visible : 0.0);
-        std::vector<std::pair<int, std::string>> rows;
-        for (const auto& kv : all) rows.push_back({kv.second, kv.first});
-        std::sort(rows.rbegin(), rows.rend());
-        for (std::size_t r = 0; r < rows.size() && r < 12; ++r)
-            std::printf("    [road walkers]        %6.1f  %s\n", rows[r].first / double(samples), rows[r].second.c_str());
-    }
 }
 
 // SHOPS INSIDE AS WELL AS OUT (storefronts plan, stage 5; Glenn: "What about the interior does it look like a shop

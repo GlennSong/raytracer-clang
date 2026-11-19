@@ -1469,8 +1469,8 @@ TEST_CASE(level_traffic_lab_v2_one_road_model_is_published_and_driven_on) {
             ++counted;
         }
     CHECK(counted == 1098u && offItsSpace == 0 && noKerbLane == 0);
-    std::printf("    [lab-v2] kerb parking: %u spaces on %u streets, %zu outlines painted; the old driving's own bays: %zu\n", spaces.spaces,
-                spaces.streets, outlines ? outlines->transforms.size() : std::size_t(0), lc.city.sim().parkingBays().size());
+    std::printf("    [lab-v2] kerb parking: %u spaces on %u streets, %zu outlines painted\n", spaces.spaces,
+                spaces.streets, outlines ? outlines->transforms.size() : std::size_t(0));
     // the vehicles the roads were checked against: the level's own fleet, read by the roads themselves
     engine::bundle::LevelInputs in;
     std::string err;
@@ -1496,7 +1496,7 @@ TEST_CASE(level_traffic_lab_v2_one_road_model_is_published_and_driven_on) {
 
 // A RULE SET THAT IS REFUSED (here: one that is not there; RT_LAB_RULES names another to try) leaves the lab loading
 // with the new model switched off and no traffic (ADR-0453: the lab's cars are the new driving's own; the old model
-// no longer drives them in its place): no car entities, and no drivers of the old sim.
+// no longer drives them in its place): no car entities (the sim is built with nobody driving, ADR-0461).
 TEST_CASE(level_traffic_lab_v2_refused_rules_leave_the_lab_without_traffic) {
     const char* other = std::getenv("RT_LAB_RULES");
     LoadedCity lc("traffic_lab.json", other ? other : "rules/no_such_rule_set.lua");
@@ -1506,13 +1506,11 @@ TEST_CASE(level_traffic_lab_v2_refused_rules_leave_the_lab_without_traffic) {
     CHECK(sim.drivingV2() == nullptr);
     CHECK(!sim.drivingHost().active());
     for (int i = 0; i < 60 * 5; ++i) lc.city.step(lc.world, kStep);
-    int drivers = 0, cars = 0;
-    for (const citysim::Agent& a : sim.agents()) drivers += a.mode == citysim::Agent::Mode::Driver;
+    int cars = 0;
     lc.world.each<citysim::CityCarBody>([&](Entity, citysim::CityCarBody&) { ++cars; });
-    std::printf("    [lab-v2] rule set refused: the new model is %s; %d car entities, %d drivers of the old sim\n",
-                sim.drivingV2() ? "on" : "off", cars, drivers);
+    std::printf("    [lab-v2] rule set refused: the new model is %s; %d car entities\n",
+                sim.drivingV2() ? "on" : "off", cars);
     CHECK(cars == 0);
-    CHECK(drivers == 0);
 }
 
 // THE CITY BUILT AGAIN (issue #284): CitySim::build starts the new model's host over. Before, a rebuild kept the old
@@ -1539,19 +1537,16 @@ TEST_CASE(level_traffic_lab_v2_rebuild_hands_over_again) {
     CHECK(n.placed == n.drivers);
     CHECK(n.tripsBegun == n.placed);   // counted afresh, not carried over
     CHECK(sim.drivingV2()->carCount() == n.placed);
-    // The cars of the last build are gone: the World holds this build's cars only, each one on the road, and the old sim
-    // has no drivers (ADR-0453: one representation of a car).
+    // The cars of the last build are gone: the World holds this build's cars only, each one on the road (ADR-0453: one
+    // representation of a car).
     uint32_t cars = 0, onRoad = 0;
     lc.world.each<citysim::CityCarBody, citysim::CityCarRoams>([&](Entity e, citysim::CityCarBody& body, citysim::CityCarRoams&) {
         ++cars;
         const citysim::CityCarOnLane* lane = lc.world.get<citysim::CityCarOnLane>(e);
         if (lane && lane->car.index == body.id && sim.drivingV2()->car(lane->car)) ++onRoad;
     });
-    int oldDrivers = 0;
-    for (const citysim::Agent& a : sim.agents()) oldDrivers += a.mode == citysim::Agent::Mode::Driver;
     CHECK(cars == n.drivers);
     CHECK(onRoad == n.drivers);
-    CHECK(oldDrivers == 0);
     for (int i = 0; i < 60 * 20; ++i) lc.city.step(lc.world, kStep);
     CHECK(sim.drivingHost().measurements().report().passed());
 }

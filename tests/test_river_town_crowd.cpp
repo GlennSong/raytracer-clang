@@ -60,13 +60,9 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     CHECK(lc.ok);
     if (!lc.ok) return;
     citysim::CitySim& sim = lc.city.simMutable();
-    // NOTHING FOR THE OLD DRIVING TO DRIVE: no agent of the old sim is a driver (no v1 car, bus or cab), and no bus line
-    int oldDrivers = 0, walkers = 0;
-    for (const citysim::Agent& a : sim.agents()) {
-        oldDrivers += a.mode == citysim::Agent::Mode::Driver ? 1 : 0;
-        walkers += a.mode == citysim::Agent::Mode::Pedestrian ? 1 : 0;
-    }
-    CHECK(oldDrivers == 0);
+    // (the sim is built with nobody driving since ADR-0461: its agents are the people on foot)
+    int walkers = 0;
+    for (const citysim::Agent& a : sim.agents()) walkers += a.mode == citysim::Agent::Mode::Pedestrian ? 1 : 0;
     CHECK(sim.drivingV2() != nullptr && sim.drivingHost().active());
     citysim::CityBrain* bp = sim.brain();
     CHECK(bp != nullptr && bp->hasResident());
@@ -87,10 +83,10 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     int withCar = 0;
     for (int who = 0; who < b.residentCount(); ++who) withCar += b.residentCar(who) >= 0 ? 1 : 0;
     std::printf("    [river] %d residents in %d households, %zu cars (%d residents in a household with one), %zu markers; the old "
-                "sim's agents: %zu (%d walkers, %d drivers); the driving's cars %zu; memory %.0f MB loaded "
+                "sim's agents: %zu (%d walkers); the driving's cars %zu; memory %.0f MB loaded "
                 "(%.0f before)\n",
                 b.residentCount(), households, b.cars().size(), withCar, b.markers().size(), sim.agents().size(), walkers,
-                oldDrivers, d.carCount(), mbLoaded, mb0);
+                d.carCount(), mbLoaded, mb0);
     // THE ROADS THE NEW DRIVING HAS: the model's junctions and streets, and its lane level's paths
     std::printf("    [river] the road model: %zu junctions, %zu streets, %zu lane-level paths; the street map %d nodes, %d links\n",
                 d.model()->junctions.size(), d.model()->streets.size(), d.roads()->paths.size(), sim.nav().nodeCount(),
@@ -98,7 +94,7 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
 
     // THE DAY, minute by minute
     const int ticksPerMinute = static_cast<int>(60.0 / kStep + 0.5);
-    int mostOnRoad = 0, mostOnRoadAt = 0, ringsSeen = 0, oldMoving = 0;
+    int mostOnRoad = 0, mostOnRoadAt = 0, ringsSeen = 0;
     double stepMsSum = 0, stepWorst = 0;
     std::map<uint32_t, int> standingSince;   // car id -> the tick it last stood still from
     int longestStandTicks = 0;
@@ -125,9 +121,6 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
                 }
             }
         }
-        // NOTHING DRIVEN BY THE OLD DRIVING: no agent of the old sim's drives
-        for (const citysim::Agent& a : sim.agents())
-            oldMoving += a.mode == citysim::Agent::Mode::Driver && a.moving ? 1 : 0;
         std::map<std::string, int> byState;
         for (int who = 0; who < b.residentCount(); ++who) ++byState[b.stateName(who)];
         int onRoad = 0;
@@ -156,12 +149,12 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     const driving::WaitReport end = d.waitReport();
     const uint64_t hash = crowdtest::crowdHash(b, sim, world);
     std::printf("    [river] at the end: %zu rings of waits (%u gridlocks, %u deadlocks); the most cars on the road at once %d "
-                "(minute %d); another place of the kind chosen %u times; arrivals %llu; errors %llu, refused %llu; old "
-                "drivers moving %d; final state hash %016llx\n",
+                "(minute %d); another place of the kind chosen %u times; arrivals %llu; errors %llu, refused %llu; "
+                "final state hash %016llx\n",
                 end.loops.size(), end.gridlocks, end.deadlocks, mostOnRoad, mostOnRoadAt, b.counts().otherPlaces,
                 static_cast<unsigned long long>(b.machine()->counts().arrivals),
                 static_cast<unsigned long long>(b.machine()->counts().errors),
-                static_cast<unsigned long long>(b.machine()->counts().refused), oldMoving,
+                static_cast<unsigned long long>(b.machine()->counts().refused),
                 static_cast<unsigned long long>(hash));
     std::printf("    [river] the longest stand, car %u, %.1f s; its card then:\n%s\n", longestStandCar, longestStandTicks * kStep,
                 longestStandWhy.c_str());
@@ -207,9 +200,8 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     CHECK(lc.city.signalHeadCount() > 0u);
     CHECK(tied == lc.city.signalHeadCount());
 
-    // NO RING OF WAITS AT ANY MINUTE, and nothing the old driving drives
+    // NO RING OF WAITS AT ANY MINUTE
     CHECK(ringsSeen == 0);
-    CHECK(oldMoving == 0);
     CHECK(b.machine()->counts().errors == 0u);
     CHECK(b.machine()->counts().refused == 0u);
 

@@ -98,7 +98,6 @@ struct CityRenderParams {
     bool debugWidgets = false;             // draw each agent's footprint + trajectory
     bool wander = false;                   // perpetual random trips (the agent lab)
     bool schedule = true;                  // false: everyone waits at home to be sent (CitySim::setDaySchedule)
-    std::vector<double> homeNear;          // [x, z]: the lab person lives in the home nearest it (CitySim::moveHome)
     std::vector<engine::CityMarker> markers;   // named points beside streets (CitySimConfig::markers, ADR-0441)
     std::vector<engine::CityResident> residents;     // the people with the agent brain (CitySimConfig::residents; city_brain.h)
     std::vector<engine::CityHousehold> households;   // ...and the households whose cars they share (ADR-0443)
@@ -565,7 +564,6 @@ private:
     std::vector<std::vector<std::array<double, 2>>> jogLoops_;   // the tracks to run (CitySimConfig)
     std::vector<engine::CitySimConfig::ActivityAreaSpec> activityAreas_;   // the pitches, the lawns (CitySimConfig)
     std::vector<std::array<double, 5>> sitSpots_;
-    std::vector<engine::CitySimConfig::GarageSpec> garages_;
     // THE OPEN SIGNS: each authored place's PlaceId (kNoPlace: skipped), and who is on shift where (dealOpenSigns)
     std::vector<PlaceId> placeOfAuthored_;
     std::vector<uint16_t> onShift_;
@@ -576,7 +574,7 @@ private:
     std::size_t signedStaffOf_ = 0, shiftCursor_ = 0;
     void listSignedStaff();
     void dealOpenSigns(engine::World& world, engine::Vec3 cam);
-    int parkingTick_ = 0;   // (parking? telemetry every 60 frames)   // the drivable parking garages (CitySimConfig)   // seats that are not furniture: a fountain's rim (CitySimConfig)
+    int parkingTick_ = 0;   // (traffic? telemetry every 60 frames, the open signs every 30)
     std::unordered_map<int, std::vector<uint32_t>> indoorHeld_;   // record index -> spots our occupants hold, per piece
     int indoorDrawn_ = 0;
 public:
@@ -590,7 +588,7 @@ private:
     std::string findPlace_;            // a FindPlaceRequest's name, until update answers it
     std::string groundQuery_;          // `ground? x z [r]`, until update answers it
     std::string groundResult_ = "none";
-    engine::ControlAnswers answers_;   // parking? traffic? opensigns? findplace? pin? jitter?
+    engine::ControlAnswers answers_;   // traffic? opensigns? findplace? pin? jitter?
     engine::ControlCommands::Binding answerGround_;
     engine::Entity signalGroups_[kLensColourCount];   // the lit arrow lenses, by LensColour
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies

@@ -12,12 +12,10 @@ using namespace citysim;
 namespace {
 
 // A bare Agent with just the fields the pure spectate helpers read. The sim
-// builds full agents; here we only need mode / released / playerControlled /
+// builds full agents; here we only need released / playerControlled / inCar /
 // heading, so hand-rolling keeps the tests independent of a NavGraph.
-Agent makeAgent(Agent::Mode mode = Agent::Mode::Driver, bool released = false,
-                bool playerControlled = false) {
+Agent makeAgent(bool released = false, bool playerControlled = false) {
     Agent a;
-    a.mode = mode;
     a.released = released;
     a.playerControlled = playerControlled;
     return a;
@@ -27,11 +25,16 @@ Agent makeAgent(Agent::Mode mode = Agent::Mode::Driver, bool released = false,
 
 TEST_CASE(spectatable_skips_released_and_player_agents) {
     CHECK(isSpectatable(makeAgent()));
-    CHECK(!isSpectatable(makeAgent(Agent::Mode::Driver, /*released=*/true)));
-    CHECK(!isSpectatable(
-        makeAgent(Agent::Mode::Pedestrian, /*released=*/false, /*player=*/true)));
-    // A walking (non-released, non-player) agent is spectatable too.
-    CHECK(isSpectatable(makeAgent(Agent::Mode::Pedestrian)));
+    CHECK(!isSpectatable(makeAgent(/*released=*/true)));
+    CHECK(!isSpectatable(makeAgent(/*released=*/false, /*player=*/true)));
+}
+
+// The chase frames a person on foot as a walker and one sitting in a household's car (inCar) as the car.
+TEST_CASE(spectate_frames_a_walker_on_foot_and_a_passenger_as_the_car) {
+    Agent a = makeAgent();
+    CHECK(spectateFraming(a) == SpectateFraming::OnFoot);
+    a.inCar = 3;
+    CHECK(spectateFraming(a) == SpectateFraming::Car);
 }
 
 TEST_CASE(next_spectatable_cycles_and_wraps) {
@@ -49,8 +52,8 @@ TEST_CASE(next_spectatable_cycles_and_wraps) {
 TEST_CASE(next_spectatable_skips_released_agents) {
     std::vector<Agent> agents = {
         makeAgent(),                                   // 0 ok
-        makeAgent(Agent::Mode::Driver, /*rel=*/true),  // 1 released
-        makeAgent(Agent::Mode::Driver, /*rel=*/true),  // 2 released
+        makeAgent(/*rel=*/true),  // 1 released
+        makeAgent(/*rel=*/true),  // 2 released
         makeAgent(),                                   // 3 ok
     };
     // From 0 forward, skip 1 and 2, land on 3.
@@ -78,8 +81,8 @@ TEST_CASE(next_spectatable_edge_cases) {
 
     // Every agent unspectatable: -1 regardless of the starting index.
     std::vector<Agent> allReleased = {
-        makeAgent(Agent::Mode::Driver, /*rel=*/true),
-        makeAgent(Agent::Mode::Driver, /*rel=*/true),
+        makeAgent(/*rel=*/true),
+        makeAgent(/*rel=*/true),
     };
     CHECK(nextSpectatable(allReleased, -1, +1) == -1);
     CHECK(nextSpectatable(allReleased, 0, +1) == -1);
@@ -101,7 +104,7 @@ TEST_CASE(next_spectate_target_goes_round_agents_then_cars) {
     CHECK(nextSpectateTarget(none, 3, -1, +1) == 0);    // cars alone
     CHECK(nextSpectateTarget(none, 3, 2, +1) == 0);     // ...wrapping
     CHECK(nextSpectateTarget(none, 3, -1, -1) == 2);
-    const std::vector<Agent> two = { makeAgent(), makeAgent(Agent::Mode::Driver, /*rel=*/true) };
+    const std::vector<Agent> two = { makeAgent(), makeAgent(/*rel=*/true) };
     CHECK(nextSpectateTarget(two, 2, 0, +1) == 2);      // past the released agent, to the first car
     CHECK(nextSpectateTarget(two, 2, 3, +1) == 0);      // the last car wraps to the first agent
     CHECK(nextSpectateTarget(two, 2, 0, -1) == 3);      // back from the first agent to the last car

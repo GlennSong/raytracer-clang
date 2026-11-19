@@ -372,7 +372,7 @@ void CityNearSystem::onStart(engine::FrameContext& ctx) {
                           char buf[256];
                           for (std::size_t i = 0; i < sim.agents().size(); ++i) {
                               const citysim::Agent& a = sim.agents()[i];
-                              if (a.mode == citysim::Agent::Mode::Driver || !a.moving || a.crosswalkAt < 0) continue;
+                              if (!a.moving || a.crosswalkAt < 0) continue;
                               const engine::ModelCrosswalk* c = m->crosswalk(static_cast<uint32_t>(a.crosswalkAt));
                               if (!c) continue;
                               const driving::WalkSignal ws = driving::walkAtCrosswalk(d->rightOfWay(), static_cast<uint32_t>(a.crosswalkAt),

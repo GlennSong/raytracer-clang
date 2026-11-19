@@ -176,7 +176,7 @@ struct CarSeen {
 // car entity (a household's, or one that drives round for ever) with CityCarBody, not away, not nowhere (carNowhere)
 // and with no engine::Vehicle (a car the player holds, or the near tier carries, is VehicleSystem's, found as a Vehicle
 // like any physical car: one car, one representation). Its speed and "on a trip" are its CityCarOnLane's; a car off the
-// road stands still. (The old driving's cars, agents in Mode::Driver, were listed first until ADR-0461.)
+// road stands still. (The old driving's cars were listed first until ADR-0461.)
 void carsNear(engine::World& world, Vec2 p, Real radius, std::vector<CarSeen>& out);
 
 }  // namespace citysim

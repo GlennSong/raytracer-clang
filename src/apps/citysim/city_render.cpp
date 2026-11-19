@@ -247,7 +247,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.levelPath = c.levelPath;
         params_.wander = c.wander;
         params_.schedule = c.schedule;
-        params_.homeNear = c.homeNear;
         params_.markers = c.markers;
         params_.residents = c.residents;
         params_.households = c.households;
@@ -264,7 +263,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         jogLoops_ = c.jogLoops;       // the tracks to run
         activityAreas_ = c.activityAreas;   // the pitches, the lawns
         sitSpots_ = c.sitSpots;             // a fountain's rim
-        garages_ = c.garages;               // the parking garages you can drive into
     });
 
     // The road entities' look: the lift and the sidewalk width the sim draws its people and cars with.
@@ -690,18 +688,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         LOG_INFO << "[citysim] places entered from a walk: " << places_.snapToWalks(nav_);
     }
     sim_.setJunctionPad(sidewalk_);
-    sim_.ambientBus = params_.ambientBus;   // before build: it picks each driver's body
-    {   // THE GARAGES' STALLS become bays (~/.claude/plans/nightlife-and-malls.md stage 4b), laid with the kerbside ones
-        std::vector<CitySim::GarageIn> gins;
-        for (const engine::CitySimConfig::GarageSpec& gs : garages_) {
-            CitySim::GarageIn gi;
-            gi.portal = Vec2(gs.px, gs.pz);
-            gi.out = Vec2(gs.ox, gs.oz);
-            for (const auto& st : gs.stalls) gi.stalls.push_back({Vec2(st[0], st[1]), Vec2(st[2], st[3]), st[4]});
-            gins.push_back(std::move(gi));
-        }
-        sim_.setGarages(std::move(gins));
-    }
+    sim_.ambientBus = params_.ambientBus;   // the households' cars' bodies (ambientSlotFor)
     // THE LEVEL'S CARS are the driving's own: entities that drive round for ever, made when it begins (startDrivingV2;
     // ADR-0453), on a level that names a rule set. The sim makes no drivers of its own (the old driving went with
     // ADR-0461): a level with no rule set has no traffic.
@@ -710,7 +697,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     if (!drives && carCount > 0)
         LOG_INFO << "[citysim] " << carCount << " cars asked for, but the level names no rule set (citysim.drivingRules): no traffic";
     { const auto tT0 = std::chrono::steady_clock::now();
-    sim_.build(nav_, 0, pedCount, params_.seed);
+    sim_.build(nav_, pedCount, params_.seed);
     // THE DRIVING (#234): the driving library runs on a level that names a rule set (given its road below)
     if (drives) {
         sim_.useDrivingV2(true);
@@ -752,12 +739,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         sim_.setDrivingRoads(model, line);
     }
     // (The fire stations' engines, parked in their bays as rows of the old sim's vehicle list, went with the old driving:
-    // ADR-0461. A fire engine comes back as a parked car entity.)
-    {
-        int stalls = 0;
-        for (const CitySim::ParkingBay& b : sim_.parkingBays()) stalls += b.garage >= 0;
-        if (!garages_.empty()) LOG_INFO << "[citysim] parking garages: " << garages_.size() << ", " << stalls << " stalls as bays";
-    }
+    // ADR-0461. A fire engine comes back as a parked car entity. The garages' stalls, the old driving's bays, went with
+    // it too: ADR-0462.)
     // THE SEATS out in the city (the furniture library, M5): every sit spot of the outdoor furniture the loader
     // laid -- park benches, plaza benches, café chairs -- for the strollers to use. Interiors are not out yet (they
     // stream in), and nobody walks into one to sit anyway.
@@ -1006,22 +989,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                  << sports << " by a sports field (" << campusJog << " campus jog)";
     }
     LOG_INFO << "[citysim] startup: assignPlaces " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
-    // THE LAB PERSON'S HOME (citysim.homeNear, ADR-0416): the first resident with a car moves to the home nearest the
-    // point, before the city is seeded -- so the seeding parks their car outside it, as anyone's
-    if (params_.homeNear.size() == 2) {
-        const Vec2 at(params_.homeNear[0], params_.homeNear[1]);
-        const PlaceId home = places_.nearest(PlaceType::Home, at);
-        int who = -1;
-        for (std::size_t i = 0; i < sim_.agents().size() && who < 0; ++i) {
-            const Agent& a = sim_.agents()[i];
-            if (a.homePlace != kNoPlace && a.car >= 0 && !a.released && !a.playerControlled) who = static_cast<int>(i);
-        }
-        if (home != kNoPlace && who >= 0 && sim_.moveHome(who, places_, home))
-            LOG_INFO << "[citysim] homeNear " << at.x << " " << at.y << ": person " << who << " lives in home #" << home
-                     << " at " << places_[home].entrance.x << " " << places_[home].entrance.y;
-        else
-            LOG_WARN << "[citysim] homeNear " << at.x << " " << at.y << ": no home or no resident with a car -- ignored";
-    }
     if (sim_.populationCache().used)
         LOG_INFO << "[citysim] population: " << (sim_.populationCache().hit ? "read from" : "decided, cached in")
                  << " cache/population/" << std::hex << sim_.populationCache().key << std::dec << ".pop";
@@ -2859,7 +2826,7 @@ void CityRenderSystem::onStart(engine::FrameContext& ctx) {
     onJitter_ = ctx.events.listen<engine::JitterRequest>([this](const engine::JitterRequest& r) {
         jitterRequests_.push_back(r);
     });
-    for (const char* q : {"parking?", "traffic?", "opensigns?", "findplace?"})
+    for (const char* q : {"traffic?", "opensigns?", "findplace?"})
         answers_.bind(ctx.commands, "CityRenderSystem", q);
     answers_.bind(ctx.commands, "CityRenderSystem", "jitter?", "nothing recorded (ask with `jitter`)");
     answers_.bind(ctx.commands, "CityRenderSystem", "pin?", "none followed");
@@ -3270,29 +3237,12 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     // deck height at the projected point — the numbers that separate "the
     // terrain is wrong" from "the road is wrong" from "the pad is wrong".
     {
-        // `parking?`: the kerbside bays and the garages' stalls, how many are taken, and the nearest taken garage
-        // stall to the camera (where to go and look)
-        // (the counts below walk every agent and vehicle on the island: kept only while a probe is asking -- see
-        // answers_: any of this system's questions within the last minute. The first question after a quiet spell
-        // answers from the last count.)
+        // (the counts below walk every agent on the island: kept only while a probe is asking -- see answers_: any of
+        // this system's questions within the last minute. The first question after a quiet spell answers from the last
+        // count. `parking?`, the old driving's bays and garage stalls, went with it: ADR-0462.)
         const bool asked = answers_.secondsSinceAsked() < 60.0;
         if (++parkingTick_ % 60 == 0 && asked) {
-            int kerb = 0, kerbTaken = 0, stalls = 0, stallsTaken = 0;
-            Real bestD = 1e30;
-            Vec2 best;
-            Real bestY = 0;
             const Vec2 cam(ctx.view.camera.position.x, ctx.view.camera.position.z);
-            for (const CitySim::ParkingBay& b : sim_.parkingBays()) {
-                const bool taken = b.occupant >= 0;
-                if (b.garage < 0) { ++kerb; kerbTaken += taken; continue; }
-                ++stalls;
-                stallsTaken += taken;
-                if (taken && (b.pos - cam).length() < bestD) { bestD = (b.pos - cam).length(); best = b.pos; bestY = b.y; }
-            }
-            char buf[256];
-            std::snprintf(buf, sizeof(buf), "kerb %d/%d taken, garage stalls %d/%d taken; nearest taken stall %.1f %.1f %.1f (%.0f m)",
-                          kerbTaken, kerb, stallsTaken, stalls, best.x, bestY, best.y, bestD < 1e29 ? bestD : -1.0);
-            answers_.set("parking?", buf);
             // `traffic?` (the city's next ten: "the streets look empty"): the people within 300 m of the camera -- on
             // foot, indoors, in the full sim -- and the piles. (The old driving's cars, counted here until ADR-0461, are
             // gone; the driving's cars are `driving?`'s.)
@@ -3576,11 +3526,11 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
     ImGui::Begin(kDebugWindowTitle);
     if (ImGui::CollapsingHeader("Living City")) {
         const auto& agents = sim_.agents();
-        int drivers = 0, peds = 0;
+        int inCars = 0, onFoot = 0;
         for (const Agent& a : agents)
-            (a.mode == Agent::Mode::Driver ? drivers : peds)++;
-        ImGui::Text("Time %05.2f h   Agents %d  (%d cars, %d peds)",
-                    sim_.timeOfDay(), static_cast<int>(agents.size()), drivers, peds);
+            (a.inCar >= 0 ? inCars : onFoot)++;
+        ImGui::Text("Time %05.2f h   Agents %d  (%d in cars, %d on foot)",
+                    sim_.timeOfDay(), static_cast<int>(agents.size()), inCars, onFoot);
         ImGui::Text("Perception faults: %ld", sim_.faults());
 
         // Master toggle (mirrors the J key) + per-layer refinements.
@@ -3641,7 +3591,7 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
         if (inspectAgent_ >= 0) {
             const Agent& a = agents[inspectAgent_];
             ImGui::Text("UID %u   %s   %s", a.uid,
-                        a.mode == Agent::Mode::Driver ? "Driver" : "Pedestrian",
+                        a.inCar >= 0 ? "In a car" : "On foot",
                         sim_.roles().nameOf(a.role));
             ImGui::Text("State: %s%s", agentStateName(a.state),
                         a.playerControlled ? "  (player)" : "");

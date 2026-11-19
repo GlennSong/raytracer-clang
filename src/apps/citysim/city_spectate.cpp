@@ -14,11 +14,7 @@ using engine::Real;
 using engine::Vec2;
 using engine::Vec3;
 
-namespace {
-// How the camera frames an agent: as a car when they drive one, or sit in a household's car (ADR-0444: they are a
-// walker in it, and the car is what is seen); as a walker otherwise.
-Agent::Mode framing(const Agent& a) { return a.inCar >= 0 ? Agent::Mode::Driver : a.mode; }
-}  // namespace
+SpectateFraming spectateFraming(const Agent& a) { return a.inCar >= 0 ? SpectateFraming::Car : SpectateFraming::OnFoot; }
 
 bool isSpectatable(const Agent& agent) {
     // A released agent's ghost is parked (its physical car is player-driven), and
@@ -81,11 +77,11 @@ bool CitySpectateSystem::advance(engine::World& world, int dir) {
     if (sel < static_cast<int>(agents.size())) {
         current_ = sel;
         car_ = engine::Entity{};
-        configureFollowFor(framing(agents[static_cast<std::size_t>(sel)]));
+        configureFollowFor(spectateFraming(agents[static_cast<std::size_t>(sel)]));
     } else {
         current_ = -1;
         car_ = cars[static_cast<std::size_t>(sel) - agents.size()];
-        configureFollowFor(Agent::Mode::Driver);
+        configureFollowFor(SpectateFraming::Car);
     }
     return true;
 }
@@ -108,12 +104,12 @@ void CitySpectateSystem::onStart(engine::FrameContext& ctx) {
     ctx.actions.bindButton("spectate_next", engine::KeyCode::RightBracket);
 }
 
-void CitySpectateSystem::configureFollowFor(Agent::Mode mode) {
+void CitySpectateSystem::configureFollowFor(SpectateFraming framing) {
     // Behind-and-above framing; look input never reaches it (zoom-only), so the
     // agent's heading owns the yaw and the offsets stay glued to its back.
     follow_.orbitYaw = 0.0;
     follow_.lateralOffset = 0.0;
-    if (mode == Agent::Mode::Driver) {
+    if (framing == SpectateFraming::Car) {
         follow_.distance = 8.0;
         follow_.minDistance = 3.0;
         follow_.maxDistance = 22.0;
@@ -126,7 +122,7 @@ void CitySpectateSystem::configureFollowFor(Agent::Mode mode) {
         follow_.targetHeight = 1.2;
         follow_.orbitPitch = -12.0;
     }
-    framedFor_ = mode;
+    framedFor_ = framing;
 }
 
 void CitySpectateSystem::stopSpectating(engine::FrameContext& /*ctx*/) {
@@ -164,7 +160,7 @@ void CitySpectateSystem::update(engine::FrameContext& ctx) {
         }
         current_ = pendingFollow_;
         car_ = engine::Entity{};
-        configureFollowFor(framing(agents[static_cast<std::size_t>(current_)]));
+        configureFollowFor(spectateFraming(agents[static_cast<std::size_t>(current_)]));
         held_ = true;
     }
     pendingFollow_ = -1;
@@ -216,9 +212,9 @@ void CitySpectateSystem::update(engine::FrameContext& ctx) {
         if (held_) return;   // the agent we were asked to follow: wait for its body
         advance(ctx.world, +1);
         return;
-    } else if (framing(agents[static_cast<std::size_t>(current_)]) != framedFor_) {
+    } else if (spectateFraming(agents[static_cast<std::size_t>(current_)]) != framedFor_) {
         // In or out of a car: the chase framed for what it is now.
-        configureFollowFor(framing(agents[static_cast<std::size_t>(current_)]));
+        configureFollowFor(spectateFraming(agents[static_cast<std::size_t>(current_)]));
     }
 
     // Chase the pose. Feed ZOOM ONLY (mirrors PlayerSystem's third-person branch):

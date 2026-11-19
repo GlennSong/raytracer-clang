@@ -541,7 +541,7 @@ void CityPossessSystem::publishLook() {
             const Agent& o = agents[static_cast<std::size_t>(ai)];
             std::snprintf(buf, sizeof(buf),
                           " | %s=%d d=%.1f b=%.0f state=%s speed=%.1f",
-                          o.mode == Agent::Mode::Driver ? "car" : "ped", ai,
+                          o.inCar >= 0 ? "car" : "ped", ai,
                           static_cast<double>(d), static_cast<double>(bearing(o.pos)),
                           stateLabel(o.state), static_cast<double>(o.speed));
             out += buf;
@@ -599,7 +599,7 @@ void CityPossessSystem::publishStatus() {
                 "tethered=%d anchorDist=%.1f lead=%.1f playerCtl=%d released=%d "
                 "cityHeld=%d",
                 walkerAgent_,
-                a.mode == Agent::Mode::Driver ? "car" : "ped",
+                a.inCar >= 0 ? "car" : "ped",   // in a household's car (inCar), else on foot
                 activityLabel(a.activity), stateLabel(a.state),
                 tierLabel(a.tier), a.moving ? 1 : 0, a.indoors ? 1 : 0,
                 static_cast<double>(a.restDwell), static_cast<double>(a.speed),

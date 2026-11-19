@@ -1153,10 +1153,10 @@ TEST_CASE(level_brain_lab_a_household_car_is_one_entity_drawn_from_its_own_pose)
     const std::vector<int> cars = b.cars();
     CHECK(cars.size() == 2u);
     if (cars.size() != 2u) return;
-    // (the lab's level makes no traffic: the sim's vehicle rows are the fire engines and parked cars of the build, if any)
-    const std::size_t rows = r.sim().vehicles().size();
-    std::printf("    [brain-lab] %zu vehicle rows; household cars %d and %d\n", rows, cars[0], cars[1]);
-    CHECK(cars[0] == static_cast<int>(rows) && cars[1] == static_cast<int>(rows) + 1);
+    // (the lab's level makes no traffic, and the sim has no cars of its own since ADR-0461: the households' are numbered
+    // from 0)
+    std::printf("    [brain-lab] household cars %d and %d\n", cars[0], cars[1]);
+    CHECK(cars[0] == 0 && cars[1] == 1);
     // the cars are entities, and only these two
     int entities = 0;
     world.each<citysim::CityCarBody, citysim::CityCarLink, Transform>(
@@ -1169,7 +1169,6 @@ TEST_CASE(level_brain_lab_a_household_car_is_one_entity_drawn_from_its_own_pose)
     for (const int car : cars) {
         const CarView v = carView(world, b, car);
         CHECK(v.found);
-        for (const citysim::SimVehicle& row : r.sim().vehicles()) CHECK((row.pos - v.pos).length() > 1.0);
     }
 
     // ANA DRIVES TO WORK, 30 s into the drive

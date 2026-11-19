@@ -7,9 +7,10 @@ names (ADR-0398 to ADR-0416 for the driving library, ADR-0440 to ADR-0452 for th
 way and crosswalks, ADR-0453 for one kind of car, ADR-0455 for the brain's car facts on the car and one way to take a
 car, ADR-0456 for one signal clock, ADR-0457 for river_town on the new driving, ADR-0459 for deleting the old
 driving's possession, passenger seat and trip lab, ADR-0460 for its buses and cabs, ADR-0461 for its cars outside the
-sim). The roads it drives on are described in `docs/roads-orientation.md`. Written 2026-11-17, after ADR-0452; section
-3 and 4 brought up to ADR-0453 on 2026-11-18, to ADR-0455 the same day, and to ADR-0456, ADR-0457, ADR-0459 and
-ADR-0461 after it. Anything marked *(unsure)* was not
+sim, ADR-0462 for the sim's own way in to them and their tests). The roads it drives on are described in
+`docs/roads-orientation.md`. Written 2026-11-17, after ADR-0452; section 3 and 4 brought up to ADR-0453 on 2026-11-18,
+to ADR-0455 the same day, and to ADR-0456, ADR-0457, ADR-0459, ADR-0461 and ADR-0462 after it. Anything marked
+*(unsure)* was not
 checked in the code.
 
 **Which levels the driving drives (ADR-0457, ADR-0461).** Every level that names a rule set (`citysim.drivingRules`):
@@ -43,10 +44,17 @@ everything outside the sim that served the old cars is gone: their drawing (agen
 the four-wheel fit memory, the far band's two-box cars, the old bays' paint), the ghost-backed physical tier
 (`possessTier`, `spotClear`, `physicalCars`), their promotion with E, `carsNear`'s old-sim branch, the lane match
 (`lane_map.*`, `LevelLanes`, `TrafficLane`, `realLanes`), `car_lamps.h`, `RideBook` and `Dispatch`, the parked fire
-engines, `giveDriversRole`/`driverRole`/`lab_driver` and the `citysim.driving` flag. **C3b, owed:** the sim's own v1 code
-in `city_sim.*`, now dead (`Agent::Mode::Driver` and the car fields, `SimVehicle`, the car branches of the stepper,
-bays and garages, `junctionRadius`, `walkersInRoad`, ...), with the unit and level tests that still build old drivers
-through `CitySim::build` directly. The player still takes any car with E (`CitySim::playerTakesCar`).
+engines, `giveDriversRole`/`driverRole`/`lab_driver` and the `citysim.driving` flag. C3b is split in two (ADR-0462).
+**C3b-1 is done:** `CitySim::build(graph, pedCount, seed)` takes no driver count, so nothing can make an old driver; every
+test that built old drivers or measured old cars is deleted (or now builds walkers, where it was about days, places,
+tiers or walking); and the old cars' ways in from outside the stepper are gone: `addStationedVehicle`, `ejectDriver`,
+`releaseDriver`, `setGarages` (with the loader's garage specs, `CitySimConfig::garages`), `parkingBays()` and `parking?`,
+`moveHome` and `citysim.homeNear`, `setFleetLaunch`, `setAgentBodyLag`, `parkedNear`, `walkersInRoad`, the census's
+driver counts, and the `Mode::Driver` readers in possession, spectate (`SpectateFraming`), the poses, the near tier and
+the debug panel. **C3b-2, owed:** the stepper's own dead car code in `city_sim.*` (`Agent::Mode::Driver` and the car
+fields, `SimVehicle`/`vehicles()`, the car branches of `advance`, `startTrip`, `refreshPose` and the rest, the bays,
+the crash and hold passes, the old goal tables' car choices, `traffic_rules.*`). The player still takes any car with E
+(`CitySim::playerTakesCar`).
 
 **One car, one representation (ADR-0453).** Every car the new driving moves is a car entity (`city_car.h`): a
 household's (the brain sends it), one that drives round for ever (`CityCarRoams`: the hand-over sends it; the traffic
@@ -165,9 +173,11 @@ Build with `cmake --build build-viewer --target driving_tests level_tests physic
 
 - The old sim's people walk the street map's kerb-side line, not a pavement of the model, and cross through the
   junction's corner blend; their places waiting at a crosswalk are where their route comes level with its kerb end.
-- The sim's `walkersInRoad` and `junctionRadius` still measure the roads from the street map; they go with C3b. The
-  walkers read `junctionRadius` too (`onStreet`, the wait at a junction's kerb), so taking it away moves the walkers
-  (and the pinned hashes): that part is task 4's (people route on the road model), not a deletion.
+- The sim's `junctionRadius` still measures the roads from the street map (`nodeBoxRadius_`, the widest street at a
+  node, worked out at build: a road fact computed outside `roads/`). Its car readers go with C3b-2; the walkers read it
+  too (`onStreet`, the wait at a junction's kerb), so taking it away moves the walkers (and the pinned hashes): that part
+  is task 4's (people route on the road model), not a deletion. (`walkersInRoad`, a test's count of walkers in a
+  carriageway measured from the street map, went with ADR-0462.)
 - A walker's place standing at a crosswalk's kerb end (`refreshPose`'s ModelCrosswalk::kerbWait step, ADR-0452) is
   never reached: `refreshPose` returns for every walker before it. Found in ADR-0461, not fixed (it moves the walkers
   and every pinned hash); likely part of brain_crowd's kerb-end-share failure, so task 4's.

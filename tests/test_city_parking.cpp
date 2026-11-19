@@ -1,12 +1,5 @@
-// Curbside parking (roads-v2.1 R6b): marked parallel bays mid-link on at-grade
-// Local streets. Every bay starts EMPTY — the ~55% seeded with decorative cars
-// owned by nobody are gone — so a parked car is only ever one an agent drove
-// there. An arriving driver claims a free bay on its arrival link (the grass
-// verge remains the fallback), gets out and walks the last stretch to its door,
-// and reclaims the car on its next departure. Gates: bays never crowd junction
-// mouths, arrivals really park and depart, occupancy is conserved in both
-// directions, no bay ever holds two cars, and a parked car does not follow its
-// owner around.
+// Parking stalls of a lot (engine::surfaceStallsOf), and the trip lab's walker on a parked-along cross. (The old
+// driving's kerb bays and garage stalls, and the tests of its cars parking in them, went with it: ADR-0462.)
 #include "test_framework.h"
 
 #include "../src/apps/citysim/city_sim.h"
@@ -18,7 +11,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <nlohmann/json.hpp>
 
 using namespace engine;
 using namespace citysim;
@@ -27,9 +19,7 @@ namespace {
 
 // A wide 4-way cross (12 m carriageways, 100 m arms) whose streets carry a REAL
 // cross-section: sidewalk | curb | parking 2.5 | travel 3.5 | travel 3.5 |
-// parking 2.5 | curb | sidewalk. The Parking band is what makes a road park-able
-// now (the old "Local and >= 9 m wide" heuristic is gone), so the fixture has to
-// resolve one exactly the way a generated street does.
+// parking 2.5 | curb | sidewalk, resolved the way a generated street does.
 NavGraph wideCross() {
     const RoadSpec spec = roadSpecStreetParking(12.0, 1, 3.5, 0.25, 2.5, 3.2);
     double off = 0, w = 0;
@@ -47,283 +37,7 @@ NavGraph wideCross() {
     return buildNavGraph(g);
 }
 
-// ONE street, `segs` segments long, optionally bent onto a circular arc of
-// `radius` (0 = dead straight). Dead ends at both ends, so the whole thing is a
-// single chain — which is the unit bays are laid along.
-NavGraph oneStreet(double len, int segs, double radius) {
-    const RoadSpec spec = roadSpecStreetParking(12.0, 1, 3.5, 0.25, 2.5, 3.2);
-    double off = 0, w = 0;
-    roadSpecParkingBand(spec, +1, off, w);
-    RoadGraph g;
-    for (int i = 0; i <= segs; ++i) {
-        if (radius > 0.0) {
-            const double t = (len / radius) * i / segs;    // arc length = r * theta
-            g.nodes.push_back({ Vec2(radius * std::sin(t), radius * (1 - std::cos(t))) });
-        } else {
-            g.nodes.push_back({ Vec2(len * i / segs, 0) });
-        }
-    }
-    for (int i = 0; i < segs; ++i) {
-        RoadEdge e{ i, i + 1, static_cast<Real>(spec.carriagewayWidth()),
-                    RoadClass::Local, 0 };
-        e.parkOffset = static_cast<Real>(off);
-        e.parkWidth = static_cast<Real>(w);
-        g.edges.push_back(e);
-    }
-    return buildNavGraph(g);
-}
-
 }  // namespace
-
-// A CURVED street parks like a straight one of the same length. Bays used to be
-// laid per sampled SEGMENT, gated at 40 m — and the sampler collapses a straight
-// run to one long segment while shattering a curve into short ones, so a bend
-// silently deleted a street's parking. Measured on the generated metro net: 240
-// links carried a parking band and were under 40 m, while just TWO were long
-// enough to park on. Bays ride the junction-to-junction CHAIN now, so the same
-// 160 m of street parks the same whether it is drawn straight or bent.
-TEST_CASE(a_curved_street_parks_like_a_straight_one) {
-    NavGraph straight = oneStreet(160.0, 1, 0.0);      // one long segment
-    NavGraph curved = oneStreet(160.0, 16, 90.0);      // the same street, bent
-    CitySim s1, s2;
-    s1.build(straight, 0, 0, 5);
-    s2.build(curved, 0, 0, 5);
-    const std::size_t nStraight = s1.parkingBays().size();
-    const std::size_t nCurved = s2.parkingBays().size();
-    std::printf("[parking] straight %zu bays, curved %zu bays\n", nStraight, nCurved);
-    CHECK(nStraight > 0);
-    CHECK(nCurved > 0);
-    // Same arc length, so the same bays — the polyline is a hair shorter than
-    // the true arc, which can cost at most one station per direction.
-    CHECK(nStraight >= nCurved);
-    CHECK(nStraight - nCurved <= 2);
-}
-
-TEST_CASE(parking_bays_stay_clear_of_junction_mouths) {
-    NavGraph nav = wideCross();
-    CitySim sim;
-    sim.build(nav, 0, 0, 5);
-    const auto& bays = sim.parkingBays();
-    CHECK(!bays.empty());
-
-    int scenery = 0;
-    for (const CitySim::ParkingBay& b : bays) {
-        // Clear of every junction node (the mouth machinery owns that zone).
-        for (int ni = 0; ni < nav.nodeCount(); ++ni)
-            CHECK((b.pos - nav.nodes[ni]).length() >= 12.0);
-        // Sits in the road's PARKING BAND: the bay centre is the band centre,
-        // so the whole stall lies between the last travel lane and the kerb.
-        const NavLink& L = nav.links[b.link];
-        const Vec2 dir = nav.direction(b.link);
-        const Vec2 rel = b.pos - nav.nodes[L.from];
-        const Real lat = rel.x * dir.y - rel.y * dir.x;   // + = right of dir
-        CHECK_APPROX(lat, L.parkOffset, 1e-9);
-        CHECK_APPROX(b.width, L.parkWidth, 1e-9);
-        CHECK(lat - b.width * 0.5 >= L.width * 0.5 - L.parkWidth - 1e-9);
-        CHECK(lat + b.width * 0.5 <= L.width * 0.5 + 1e-9);
-        if (b.occupant == CitySim::kBayScenery) ++scenery;
-    }
-    std::printf("[parking] bays=%zu scenery=%d\n", bays.size(), scenery);
-    // EVERY BAY IS BORN FREE. The build used to seed ~55% of them with a
-    // decorative car owned by nobody; a bay is now only ever occupied by an
-    // agent that drove there, so a freshly built city has none.
-    CHECK(scenery == 0);
-    for (const CitySim::ParkingBay& b : bays) CHECK(b.occupant == -1);
-}
-
-TEST_CASE(parking_arrivals_claim_bays_and_departures_free_them) {
-    NavGraph nav = wideCross();
-    CitySim sim;
-    sim.build(nav, 10, 0, 9);   // scheduled day: commutes arrive + rest
-
-    long parkTicks = 0, freedAfterPark = 0;
-    bool orphanedBay = false, doubleParked = false, wrongPose = false;
-    std::vector<int> lastOccupant(sim.parkingBays().size(), -1);
-    for (std::size_t i = 0; i < sim.parkingBays().size(); ++i)
-        lastOccupant[i] = sim.parkingBays()[i].occupant;
-
-    for (int i = 0; i < 6000; ++i) {
-        sim.step(0.1, 0.5);
-        const auto& ag = sim.agents();
-        const auto& bays = sim.parkingBays();
-        std::vector<int> users(bays.size(), 0);
-        for (std::size_t ai = 0; ai < ag.size(); ++ai) {
-            const Agent& a = ag[ai];
-            if (a.parkedBay < 0) continue;
-            ++parkTicks;
-            ++users[a.parkedBay];
-            const CitySim::ParkingBay& b = bays[a.parkedBay];
-            if (b.occupant != static_cast<int>(ai)) doubleParked = true;
-            if ((a.pos - b.pos).length() > 0.5) wrongPose = true;
-            if (a.moving) wrongPose = true;
-        }
-        for (std::size_t bi = 0; bi < bays.size(); ++bi) {
-            if (users[bi] > 1) doubleParked = true;
-            // CONSERVATION, the other direction: a bay claiming an agent must
-            // be claimed back by that agent. With the decorative filler gone,
-            // occupancy is the only record of where a car is — a bay holding a
-            // stale index is a car nobody can ever retrieve.
-            const int occ = bays[bi].occupant;
-            // A driver on its way holds the bay it is driving to (the route
-            // ends AT it): reserved is claimed too.
-            if (occ >= 0 && (occ >= static_cast<int>(ag.size()) ||
-                             (ag[occ].parkedBay != static_cast<int>(bi) &&
-                              ag[occ].targetBay != static_cast<int>(bi))))
-                orphanedBay = true;
-            // A bay that held an agent and is free again = a real departure.
-            if (lastOccupant[bi] >= 0 && bays[bi].occupant == -1)
-                ++freedAfterPark;
-            lastOccupant[bi] = bays[bi].occupant;
-        }
-    }
-    std::printf("[parking] parkTicks=%ld departures=%ld\n", parkTicks,
-                freedAfterPark);
-    CHECK(parkTicks > 0);          // drivers really rest in bays
-    CHECK(freedAfterPark > 0);     // and pull out again
-    CHECK(!orphanedBay);
-    CHECK(!doubleParked);
-    CHECK(!wrongPose);
-}
-
-// THE PARK-AND-WALK CYCLE. A car owner drives to its destination, leaves the car
-// at the kerb, and covers the last stretch to its door on foot. The car stays
-// exactly where it was left for the whole rest — it is an object the world
-// contains, not a decoration that follows its owner around.
-//
-// Before this, `mode` meant both "what this agent is" and "how it is moving", so
-// an agent could never get out: flipping it would have deleted the car. The
-// split is `archetype` (identity, fixed) vs `mode` (locomotion, mutable).
-TEST_CASE(a_driver_parks_its_car_and_walks_away_from_it) {
-    NavGraph nav = wideCross();
-    CitySim sim;
-    sim.build(nav, 12, 0, 9);
-
-    const std::size_t vehiclesAtBuild = sim.vehicles().size();
-    bool sawDismount = false, carFollowedOwner = false, lostOwnership = false;
-    bool doubleDriven = false;
-    Vec2 parkedAt(0, 0);
-    int watched = -1;
-    long restTicks = 0;
-
-    for (int i = 0; i < 6000; ++i) {
-        sim.step(0.1, 0.5);
-        const auto& ag = sim.agents();
-        const auto& veh = sim.vehicles();
-
-        // Conservation: cars are never created or destroyed, and no two agents
-        // are ever in the same one.
-        if (veh.size() != vehiclesAtBuild) lostOwnership = true;
-        std::vector<int> inUse(veh.size(), 0);
-        for (const Agent& a : ag) {
-            if (a.archetype == Agent::Mode::Driver && a.car < 0) lostOwnership = true;
-            if (a.vehicle >= 0) {
-                if (a.vehicle != a.car) lostOwnership = true;   // only ever its own
-                if (++inUse[a.vehicle] > 1) doubleDriven = true;
-            }
-        }
-
-        // Watch the first owner we catch on foot with its car left behind.
-        if (watched < 0) {
-            for (std::size_t k = 0; k < ag.size(); ++k) {
-                const Agent& a = ag[k];
-                if (a.archetype != Agent::Mode::Driver) continue;
-                if (a.mode != Agent::Mode::Pedestrian || a.moving) continue;
-                if (a.car < 0 || veh[a.car].driver >= 0) continue;
-                watched = static_cast<int>(k);
-                parkedAt = veh[a.car].pos;
-                sawDismount = true;
-                break;
-            }
-        } else {
-            const Agent& a = ag[watched];
-            if (a.mode == Agent::Mode::Pedestrian && !a.moving && a.vehicle < 0) {
-                ++restTicks;
-                // The car has NOT moved while its owner is away from it.
-                if ((veh[a.car].pos - parkedAt).length() > 1e-9)
-                    carFollowedOwner = true;
-            } else {
-                watched = -1;   // it drove off again; look for the next one
-            }
-        }
-    }
-
-    std::printf("[parking] dismounts seen=%d, watched rest ticks=%ld\n",
-                sawDismount ? 1 : 0, restTicks);
-    CHECK(sawDismount);          // owners really do get out
-    CHECK(restTicks > 0);        // ...and stay out for a while
-    CHECK(!carFollowedOwner);    // the car stays where it was parked
-    CHECK(!lostOwnership);       // every owner still owns exactly its own car
-    CHECK(!doubleDriven);        // and no car has two drivers
-}
-
-// HOW OFTEN DOES AN ARRIVAL ACTUALLY GET A MARKED BAY? The probe only considers
-// bays within 30 m of the arrival node on the arrival link, so contention pushes
-// the rest onto the verge. Printed rather than asserted tightly: this is the
-// number that says whether the bay search needs widening, and it only became
-// visible once real agents were the only thing filling bays.
-TEST_CASE(parking_bay_hit_rate_is_reported) {
-    NavGraph nav = wideCross();
-    CitySim sim;
-    sim.build(nav, 16, 0, 3);
-
-    long parkedInBay = 0, parkedOnVerge = 0;
-    for (int i = 0; i < 4000; ++i) {
-        sim.step(0.1, 0.5);
-        for (const Agent& a : sim.agents()) {
-            if (a.archetype != Agent::Mode::Driver) continue;
-            if (a.mode != Agent::Mode::Pedestrian || a.moving) continue;
-            (a.parkedBay >= 0 ? parkedInBay : parkedOnVerge)++;
-        }
-    }
-    const long total = parkedInBay + parkedOnVerge;
-    std::printf("[parking] resting-owner ticks: %ld in a bay, %ld on the verge "
-                "(%.0f%% bay)\n",
-                parkedInBay, parkedOnVerge,
-                total ? 100.0 * double(parkedInBay) / double(total) : 0.0);
-    CHECK(total > 0);
-}
-
-// THE GARAGES (~/.claude/plans/nightlife-and-malls.md stage 4b): a garage's stalls are bays anchored on the street in
-// front of its portal. In a crossroads with no kerbside parking at all, drivers park up a garage: in its bays, the car
-// left on its deck (at the stall, at the deck's height), and they drive out again.
-TEST_CASE(drivers_park_up_a_garage_and_drive_out_again) {
-    const RoadSpec spec = roadSpecStreetParking(12.0, 1, 3.5, 0.25, 2.5, 3.2);
-    RoadGraph g;
-    g.nodes = { { Vec2(0, 0) }, { Vec2(0, 100) }, { Vec2(0, -100) }, { Vec2(100, 0) }, { Vec2(-100, 0) } };
-    for (int arm = 1; arm <= 4; ++arm)
-        g.edges.push_back(RoadEdge{ 0, arm, static_cast<Real>(spec.carriagewayWidth()), RoadClass::Local, 0 });
-    NavGraph nav = buildNavGraph(g);
-    CitySim sim;
-    sim.build(nav, 10, 0, 9);
-    const std::size_t kerb = sim.parkingBays().size();
-    std::vector<CitySim::GarageStallIn> stalls;
-    for (int lvl = 0; lvl < 3; ++lvl)
-        for (int i = 0; i < 10; ++i) stalls.push_back({Vec2(14.0 + i * 2.5, 40.0), Vec2(0, -1), 0.03 + lvl * 3.0});
-    const int added = sim.addGarageBays(Vec2(10, 50), Vec2(-1, 0), stalls);
-    std::printf("    [garage bays] kerbside %zu, garage %d\n", kerb, added);
-    CHECK(kerb == 0);
-    CHECK(added == 30);
-    int parkedUp = 0, wrongHeight = 0, departures = 0;
-    std::vector<int> last(sim.parkingBays().size(), -1);
-    for (int i = 0; i < 6000; ++i) {
-        sim.step(0.1, 0.5);
-        const auto& bays = sim.parkingBays();
-        for (const Agent& a : sim.agents()) {
-            if (a.parkedBay < 0 || bays[a.parkedBay].garage < 0 || a.car < 0) continue;
-            ++parkedUp;
-            const SimVehicle& v = sim.vehicles()[static_cast<std::size_t>(a.car)];
-            if (std::fabs(v.parkedY - bays[a.parkedBay].y) > 1e-6 || (v.pos - bays[a.parkedBay].pos).length() > 0.5) ++wrongHeight;
-        }
-        for (std::size_t bi = 0; bi < bays.size(); ++bi) {
-            if (last[bi] >= 0 && bays[bi].occupant == -1) ++departures;
-            last[bi] = bays[bi].occupant;
-        }
-    }
-    std::printf("    [garage bays] parked-up ticks %d, wrong height %d, departures %d\n", parkedUp, wrongHeight, departures);
-    CHECK(parkedUp > 0);
-    CHECK(wrongHeight == 0);
-    CHECK(departures > 0);
-}
 
 // A BIG BOX'S OR A MALL'S PARKING LOT is stalls for the drivers (engine::surfaceStallsOf): every stall on the lot, none
 // on another, nose-in off the aisles, and its way in on the street edge. A shallow lot runs its rows along the store
@@ -355,7 +69,7 @@ TEST_CASE(a_parking_lot_is_stalls_for_the_drivers) {
 TEST_CASE(trip_plan_walker_sets_off_where_it_stands_and_its_line_is_its_way) {
     NavGraph nav = wideCross();
     CitySim sim;
-    sim.build(nav, 0, 1, 5);
+    sim.build(nav, 1, 5);
     CHECK(sim.agents().size() == 1);
     if (sim.agents().size() != 1) return;
     sim.setAgentDirected(0, true);

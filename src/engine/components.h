@@ -1159,9 +1159,6 @@ struct CitySimConfig {
                                          // (plan-only demarcation levels)
     bool wander = false;                 // agents take perpetual random trips
     bool schedule = true;                // false: nobody keeps a day; everyone waits at home to be sent (the trip lab)
-    // THE LAB PERSON'S HOME (`"homeNear": [x, z]`, ADR-0416): the first resident with a car lives in the home nearest
-    // this point, their car parked outside it. Empty: wherever the population put them.
-    std::vector<double> homeNear;
     // MARKERS AND THE RESIDENT WITH THE AGENT BRAIN (ADR-0441). `"markers"`: a list, or the name of a file beside the
     // level holding {"markers": [...]} (so two levels on the same roads share one list). `"residents"` and
     // `"households"`: the people driven by the brain and the cars they share (ADR-0443; the older `"resident"` reads as
@@ -1233,10 +1230,6 @@ struct CitySimConfig {
     std::vector<ActivityAreaSpec> activityAreas;
     // PLACES TO SIT that are not furniture (a fountain's rim): x, z, face x, face z, hip (above the ground).
     std::vector<std::array<double, 5>> sitSpots;
-    // THE PARKING GARAGES you can drive into (shape_grammar buildGarage): the portal on the street (x z, the way out)
-    // and every stall -- x, z, face x, face z, the deck's height (world y).
-    struct GarageSpec { double px = 0, pz = 0, ox = 0, oz = 1; std::vector<std::array<double, 5>> stalls; };
-    std::vector<GarageSpec> garages;
 };
 
 // THE OPEN SIGNS in shop windows (storefronts stage 3), one 200 m cell's: the loader makes two InstanceGroups of the

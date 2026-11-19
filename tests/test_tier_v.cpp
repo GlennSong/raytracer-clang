@@ -97,7 +97,7 @@ TEST_CASE(tier_v_determinism_and_conservation) {
     const NavGraph nav = citytest::cityNav(700, 130, 5);
     CitySim simA, simB;
     for (CitySim* s : {&simA, &simB}) {
-        s->build(nav, 50, 30, 42);
+        s->build(nav, 80, 42);
         s->setWander(true);
         s->tieringEnabled = true;
     }
@@ -130,8 +130,6 @@ TEST_CASE(tier_v_determinism_and_conservation) {
     // The path genuinely crossed tier boundaries — both transitions fired.
     CHECK(simA.tierPromotions() > 0);
     CHECK(simA.tierDemotions() > 0);
-    // Vehicles are conserved too (a demotion strips render/proxy, never the car).
-    CHECK(static_cast<int>(simA.vehicles().size()) == 50);
 }
 
 // (e): the tiering-off default. An untouched sim, a sim with the switch on but
@@ -142,7 +140,7 @@ TEST_CASE(tier_v_off_matches_legacy) {
     const NavGraph nav = citytest::cityNav(400, 110, 7);
     CitySim plain, switchOnNoCentre, centreNoSwitch;
     for (CitySim* s : {&plain, &switchOnNoCentre, &centreNoSwitch}) {
-        s->build(nav, 30, 20, 9);
+        s->build(nav, 50, 9);
         s->setWander(true);
     }
     switchOnNoCentre.tieringEnabled = true;   // no centre fed: must stay all K
@@ -170,7 +168,7 @@ TEST_CASE(tier_v_travel_truth) {
     Real duration[2] = {0, 0};
     for (int run = 0; run < 2; ++run) {
         CitySim sim;
-        sim.build(nav, 1, 0, 21);
+        sim.build(nav, 1, 21);
         if (run == 1) {
             sim.tieringEnabled = true;
             sim.setTierCenter(Vec2(1e5, 1e5));   // far: the driver demotes at once
@@ -205,7 +203,7 @@ TEST_CASE(tier_v_travel_truth) {
 TEST_CASE(tier_v_no_teleport_on_promotion) {
     const NavGraph nav = citytest::cityNav(500, 120, 3);
     CitySim sim;
-    sim.build(nav, 40, 20, 4);
+    sim.build(nav, 60, 4);
     sim.setWander(true);
     sim.tieringEnabled = true;
     const Real dt = 1.0 / 60.0;
@@ -256,7 +254,7 @@ TEST_CASE(tier_v_stress_deterministic) {
     const auto wall0 = std::chrono::steady_clock::now();
     CitySim simA, simB;
     for (CitySim* s : {&simA, &simB}) {
-        s->build(nav, 600, 400, 77);
+        s->build(nav, 1000, 77);
         s->setWander(true);
         s->tieringEnabled = true;
         s->setTierCenter(Vec2(0, 0));
@@ -288,7 +286,7 @@ TEST_CASE(dormancy_off_matches_tier_v) {
     const NavGraph nav = citytest::cityNav(400, 110, 7);
     CitySim plain, switchOnNoCentre, centreNoSwitch;
     for (CitySim* s : {&plain, &switchOnNoCentre, &centreNoSwitch}) {
-        s->build(nav, 30, 20, 9);
+        s->build(nav, 50, 9);
         s->setWander(true);
         s->tieringEnabled = true;
     }
@@ -313,7 +311,7 @@ TEST_CASE(dormancy_off_matches_tier_v) {
 TEST_CASE(dormancy_sleeps_the_far_field_and_wakes_it_back) {
     const NavGraph nav = citytest::cityNav(1600, 120, 3);
     CitySim sim;
-    sim.build(nav, 200, 100, 11);
+    sim.build(nav, 300, 11);
     sim.tieringEnabled = true;
     sim.dormancyEnabled = true;
     sim.dormantRadius = 600.0;         // tight, so the fixture actually reaches it
@@ -342,90 +340,6 @@ TEST_CASE(dormancy_sleeps_the_far_field_and_wakes_it_back) {
     CHECK(sim.agents().size() == 300u);
 }
 
-// DORMANCY STRIPS THE AGENT, NEVER THE VEHICLE. A parked car keeps its pose
-// while its owner does not exist — otherwise a car the player is looking at
-// would move (or vanish) the moment its owner slept, and the whole "you can
-// steal a parked car" premise depends on the car outliving the agent.
-TEST_CASE(dormant_agents_do_not_move_their_parked_cars) {
-    const NavGraph nav = citytest::cityNav(1600, 120, 3);
-    CitySim sim;
-    sim.build(nav, 150, 0, 21);
-    sim.tieringEnabled = true;
-    sim.dormantRadius = 600.0;
-    sim.dormantResumeRadius = 500.0;
-
-    // SETTLE FIRST, with dormancy OFF. A dormant agent does not drive anywhere,
-    // so switching it on before the city has run leaves nothing parked to test
-    // — the far field simply freezes at its starting pose.
-    sim.dormancyEnabled = false;
-    for (int i = 0; i < 9000; ++i) {
-        sim.setTierCenter(Vec2(-700, -700));
-        sim.step(0.1, 0.05);
-    }
-    // Now sleep the far field.
-    sim.dormancyEnabled = true;
-    for (int i = 0; i < 600; ++i) {
-        sim.setTierCenter(Vec2(-700, -700));
-        sim.step(0.1, 0.05);
-    }
-
-    // Snapshot the cars whose owner is dormant RIGHT NOW. A car whose owner is
-    // awake may legitimately be driven away and re-parked somewhere else; the
-    // invariant is only about the ones nobody is simulating.
-    std::vector<int> ownerOf(sim.vehicles().size(), -1);
-    for (std::size_t i = 0; i < sim.agents().size(); ++i)
-        if (sim.agents()[i].car >= 0) ownerOf[sim.agents()[i].car] = static_cast<int>(i);
-
-    {   // diagnostic: why are there (or aren't there) parked cars to watch?
-        int driverless = 0, dormant = 0, dormantWithParkedCar = 0, peds = 0;
-        for (std::size_t v = 0; v < sim.vehicles().size(); ++v)
-            if (sim.vehicles()[v].driver < 0) ++driverless;
-        for (const Agent& a : sim.agents()) {
-            if (a.tier == Agent::Tier::D) ++dormant;
-            if (a.mode == Agent::Mode::Pedestrian) ++peds;
-            if (a.tier == Agent::Tier::D && a.car >= 0 &&
-                sim.vehicles()[a.car].driver < 0) ++dormantWithParkedCar;
-        }
-        std::printf("    [dormancy] %d driverless cars, %d dormant agents, "
-                    "%d on foot, %d dormant-with-parked-car\n",
-                    driverless, dormant, peds, dormantWithParkedCar);
-    }
-
-    std::vector<int> watch;
-    std::vector<Vec2> before;
-    for (std::size_t v = 0; v < sim.vehicles().size(); ++v) {
-        const int o = ownerOf[v];
-        if (o < 0 || sim.vehicles()[v].driver >= 0) continue;
-        if (sim.agents()[o].tier != Agent::Tier::D) continue;
-        watch.push_back(static_cast<int>(v));
-        before.push_back(sim.vehicles()[v].pos);
-    }
-
-    // Keep the player put so nothing wakes, and run on.
-    for (int i = 0; i < 3000; ++i) {
-        sim.setTierCenter(Vec2(-700, -700));
-        sim.step(0.1, 0.05);
-    }
-
-    // A dormant owner still keeps its day (the dormant schedule events): one
-    // that left for work took its car. So a car either held its pose, or went
-    // WITH its owner -- driven (owner under way) or parked where the owner now
-    // rests. Never moved without them: that is the parked-heap bug.
-    int held = 0, went = 0;
-    for (std::size_t k = 0; k < watch.size(); ++k) {
-        const int v = watch[k];
-        const Agent& o = sim.agents()[ownerOf[v]];
-        if (o.tier != Agent::Tier::D) continue;  // woke: fair game
-        if ((sim.vehicles()[v].pos - before[k]).length() < 1e-9) { ++held; continue; }
-        ++went;
-        CHECK(o.moving || (sim.vehicles()[v].pos - o.pos).length() < 1e-6);
-    }
-    std::printf("    [dormancy] %d cars of still-dormant owners held their pose, "
-                "%d went with their owner (%ld schedule events)\n",
-                held, went, sim.dormantEvents());
-    CHECK(held > 0);   // the invariant must actually have been exercised
-}
-
 // CONTINUITY (the 100k plan; Glenn: "I'd definitely want it so I could follow someone around the city ... I don't want
 // it so that if you turn around and turn back that person disappears"). Someone near you stays FAR on their exact
 // trip for rememberSeconds after you go -- not dormant, not rebuilt from a schedule -- and then may sleep; someone
@@ -433,7 +347,7 @@ TEST_CASE(dormant_agents_do_not_move_their_parked_cars) {
 TEST_CASE(near_agents_are_remembered_and_a_pinned_one_is_followed) {
     const NavGraph nav = citytest::cityNav(1600, 120, 3);
     CitySim sim;
-    sim.build(nav, 200, 100, 11);
+    sim.build(nav, 300, 11);
     sim.tieringEnabled = true;
     sim.dormancyEnabled = true;
     sim.dormantRadius = 600.0;
@@ -478,7 +392,7 @@ TEST_CASE(near_agents_are_remembered_and_a_pinned_one_is_followed) {
 TEST_CASE(a_dormant_traveller_wakes_further_along_its_trip) {
     const NavGraph nav = citytest::cityNav(1600, 120, 3);
     CitySim sim;
-    sim.build(nav, 200, 100, 11);
+    sim.build(nav, 300, 11);
     sim.tieringEnabled = true;
     sim.dormancyEnabled = true;
     sim.dormantRadius = 600.0;
@@ -497,11 +411,12 @@ TEST_CASE(a_dormant_traveller_wakes_further_along_its_trip) {
 }
 
 // THROUGH TRAFFIC (the busy streets): a sleeper under way is moved along its trip as it goes -- it used to keep the
-// pose it set off from until it arrived, so a car driving past the player from across the island never woke.
+// pose it set off from until it arrived, so someone passing the player from across the island never woke. (On foot
+// since ADR-0462: 20 s at a walk is about 25 m, so "moved on" is past 15 m; it was 30 m for the old driving's cars.)
 TEST_CASE(a_dormant_traveller_moves_on_and_wakes_where_it_has_got_to) {
     const NavGraph nav = citytest::cityNav(1600, 120, 3);
     CitySim sim;
-    sim.build(nav, 200, 100, 11);
+    sim.build(nav, 300, 11);
     sim.tieringEnabled = true;
     sim.dormancyEnabled = true;
     sim.dormantRadius = 600.0;
@@ -523,7 +438,7 @@ TEST_CASE(a_dormant_traveller_moves_on_and_wakes_where_it_has_got_to) {
     for (const auto& [i, p0] : movers) {
         const Agent& a = sim.agents()[static_cast<std::size_t>(i)];
         if (a.tier != Agent::Tier::D || !a.moving) continue;   // woke, or got there
-        ((a.pos - p0).length() > 30.0 ? moved : still) += 1;
+        ((a.pos - p0).length() > 15.0 ? moved : still) += 1;
     }
     std::printf("    [through] %zu sleepers under way; 20 s on: %d moved on, %d where they were; %ld waypoints\n",
                 movers.size(), moved, still, sim.dormantWaypoints());

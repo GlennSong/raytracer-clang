@@ -128,8 +128,8 @@ TEST_CASE(installing_the_default_tables_changes_nothing) {
     // draws, same tick every transition fires, same poses and labels.
     NavGraph nav = citytest::cross4(50.0);
     CitySim a, b;
-    a.build(nav, 16, 8, 17);
-    b.build(nav, 16, 8, 17);
+    a.build(nav, 24, 17);
+    b.build(nav, 24, 17);
     b.setGoalTables(builtinDayTable("worker"), builtinDayTable("worker"));
     bool same = true;
     for (int i = 0; i < 6000; ++i) {
@@ -163,7 +163,7 @@ TEST_CASE(custom_goal_table_runs_errands_with_a_two_hour_dwell) {
 
     NavGraph nav = citytest::cross4(40.0);
     CitySim sim;
-    sim.build(nav, 1, 1, 9);
+    sim.build(nav, 2, 9);
     sim.setGoalTables(errands, errands);
 
     // Track each agent's rest bouts: every completed stay must last ~2 h of
@@ -212,7 +212,7 @@ TEST_CASE(outings_sometimes_sit_on_a_bench_and_get_up_again) {
     CHECK(out.setEntry("Pause"));
     NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
     CitySim sim;
-    sim.build(nav, 0, 12, 21);
+    sim.build(nav, 12, 21);
     sim.setGoalTables(out, out);
     std::vector<CitySim::SeatSpot> seats;
     for (int i = 0; i < nav.nodeCount(); i += 3) {
@@ -262,7 +262,7 @@ TEST_CASE(outings_sometimes_sit_on_a_bench_and_get_up_again) {
 TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
     NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
     CitySim sim;
-    sim.build(nav, 20, 400, 21);
+    sim.build(nav, 420, 21);
     PlaceMap places;
     for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
     for (int i = 0; i < 4; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 160.0, 330), nav, 9, 17);
@@ -334,7 +334,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
 TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
     NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
     CitySim sim;
-    sim.build(nav, 20, 400, 21);
+    sim.build(nav, 420, 21);
     PlaceMap places;
     for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
     places.add(PlaceType::Office, Vec2(0, 330), nav, 9, 17);
@@ -367,7 +367,7 @@ TEST_CASE(households_fill_the_dwellings_one_to_each) {
         for (uint32_t seed = 1; seed <= 4; ++seed) {
             NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
             CitySim sim;
-            sim.build(nav, 120, 360, seed);
+            sim.build(nav, 480, seed);
             PlaceMap places;
             for (int i = 0; i < 24; ++i) {
                 const PlaceId h = places.add(PlaceType::Home, Vec2(-350 + (i % 12) * 60.0, i < 12 ? -330 : 330), nav);
@@ -418,7 +418,7 @@ TEST_CASE(households_fill_the_dwellings_one_to_each) {
     auto who = [](uint32_t seed) {
         NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
         CitySim sim;
-        sim.build(nav, 60, 200, seed);
+        sim.build(nav, 260, seed);
         PlaceMap places;
         for (int i = 0; i < 12; ++i) places.setDwellings(places.add(PlaceType::Home, Vec2(-350 + i * 60.0, -330), nav), {0, 1, 2, 3, 2, 1});
         places.add(PlaceType::Office, Vec2(0, 0), nav, 9, 17);
@@ -438,7 +438,7 @@ TEST_CASE(students_work_their_evening_jobs_on_shift_nights) {
     for (uint32_t seed = 3; seed <= 5; ++seed) {
         NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
         CitySim sim;
-        sim.build(nav, 20, 400, seed);
+        sim.build(nav, 420, seed);
         PlaceMap places;
         for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
         for (int i = 0; i < 4; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 160.0, 330), nav, 9, 17);
@@ -485,7 +485,7 @@ TEST_CASE(children_play_skate_and_scoot) {
     for (uint32_t seed = 2; seed <= 4; ++seed) {
         NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
         CitySim sim;
-        sim.build(nav, 20, 500, seed);
+        sim.build(nav, 520, seed);
         PlaceMap places;
         std::vector<int> beds;
         for (int d = 0; d < 6; ++d) beds.push_back(2 + d % 3);   // family-sized flats
@@ -572,7 +572,7 @@ TEST_CASE(housemates_are_tied_as_their_household_says) {
     }
     // the sim: every Household bond is between agents of one household, and a parent / child pair reads both ways
     CitySim sim;
-    sim.build(nav, 60, 240, 5);
+    sim.build(nav, 300, 5);
     places.add(PlaceType::Office, Vec2(0, 0), nav, 9, 17);
     sim.assignPlaces(places, nav);
     const RelationshipTable& rel = sim.relationships();
@@ -685,7 +685,7 @@ TEST_CASE(an_activity_goal_takes_only_spots_of_its_kind_and_tags) {
     CHECK(out.setEntry("Pause"));
     NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
     CitySim sim;
-    sim.build(nav, 0, 40, 21);
+    sim.build(nav, 40, 21);
     sim.setGoalTables(out, out);
     PlaceMap places;
     for (int i = 0; i < 6; ++i) places.add(PlaceType::Home, Vec2(-250 + i * 100.0, -250), nav);
@@ -734,7 +734,7 @@ TEST_CASE(joggers_run_laps_of_the_track_and_come_off_it) {
     CHECK(out.setEntry("Rest"));
     NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
     CitySim sim;
-    sim.build(nav, 0, 30, 21);
+    sim.build(nav, 30, 21);
     sim.setGoalTables(out, out);
     // a track: a 40 x 30 m oval between the streets
     std::vector<Vec2> loop;
@@ -808,7 +808,7 @@ TEST_CASE(a_crowd_walks_a_footpath_to_work) {
     const Vec2 d = normalize(p11 - p00);
     nav.appendFootpaths({{p00.x + d.x * 8, p00.y + d.y * 8, p11.x - d.x * 8, p11.y - d.y * 8, 2.0}});
     CitySim sim;
-    sim.build(nav, 0, 60, 21);
+    sim.build(nav, 60, 21);
     PlaceMap places;
     const PlaceId home = places.add(PlaceType::Home, p00 + Vec2(-6, -6), nav);
     const PlaceId job = places.add(PlaceType::Office, p11 + Vec2(6, 6), nav, 8, 17);
@@ -845,7 +845,7 @@ struct KickRun { int games = 0, started = 0, swapped = 0, givenUp = 0, outOfHalf
 KickRun runKickabout(int walkers) {
     NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
     CitySim sim;
-    sim.build(nav, 0, walkers, 21);
+    sim.build(nav, walkers, 21);
     ActivityCatalog cat = defaultActivityCatalog();
     Menu kick;
     kick.name = "kick";
@@ -965,7 +965,7 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     cat.menus.push_back(all);
     NavGraph nav = citytest::cityNav(1200.0, 100.0, 5);
     CitySim sim;
-    sim.build(nav, 0, 300, 21);
+    sim.build(nav, 300, 21);
     sim.setActivityCatalog(cat);
     GoalTable t;
     t.addState("Go", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
@@ -1104,7 +1104,7 @@ struct LawnRun {
 LawnRun runLawn(const char* activity, int walkers, double startHour) {
     NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
     CitySim sim;
-    sim.build(nav, 0, walkers, 33);
+    sim.build(nav, walkers, 33);
     ActivityCatalog cat = defaultActivityCatalog();
     Menu m;
     m.name = "lawn";
@@ -1211,7 +1211,7 @@ TEST_CASE(a_shop_is_open_to_customers_only_while_someone_works_there) {
     int gated = 0, disagree = 0, closedInHours = 0, openHours = 0;
     for (uint32_t seed = 21; seed <= 28; ++seed) {
         CitySim sim;
-        sim.build(nav, 40, 300, seed);
+        sim.build(nav, 340, seed);
         PlaceMap places;
         for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
         for (int i = 0; i < 4; ++i) places.add(PlaceType::Shop, Vec2(-300 + i * 160.0, 330), nav, 8, 22);
@@ -1261,7 +1261,7 @@ TEST_CASE(a_shop_is_open_to_customers_only_while_someone_works_there) {
 TEST_CASE(people_live_and_work_where_the_floor_space_is) {
     NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
     CitySim sim;
-    sim.build(nav, 200, 600, 31);
+    sim.build(nav, 800, 31);
     PlaceMap places;
     std::vector<PlaceId> houses;
     for (int i = 0; i < 10; ++i) {

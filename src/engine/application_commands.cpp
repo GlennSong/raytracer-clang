@@ -796,10 +796,6 @@ void Application::registerCityVerbs() {
                      "People drawn moving faster than a sprint: how many, and the latest with their state.",
                      unanswered("a CityWalkerSystem: play mode on a city level"));
 
-    commandTable.add("parking?", "parking?",
-                     "Parking: kerb bays and garage stalls taken, and the nearest taken stall.",
-                     unanswered("a CityRenderSystem: play mode on a city level"));
-
     commandTable.add("traffic?", "traffic?",
                      "The city's people near the camera (out of doors, indoors, in the full sim) and any pile-ups (more with RT_TRAFFIC_DEBUG); the cars are driving?'s.",
                      unanswered("a CityRenderSystem: play mode on a city level"));

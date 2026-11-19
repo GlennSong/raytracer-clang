@@ -139,7 +139,7 @@ TEST_CASE(agent_id_allocator_is_monotonic) {
 TEST_CASE(agent_uids_stable_and_unique) {
     NavGraph nav = citytest::cross4(40);
     CitySim sim;
-    sim.build(nav, /*drivers*/ 3, /*peds*/ 4, /*seed*/ 99);
+    sim.build(nav, /*peds*/ 7, /*seed*/ 99);
 
     // Every agent has a distinct, dense UID in [0, count).
     std::set<AgentId> seen;
@@ -152,7 +152,7 @@ TEST_CASE(agent_uids_stable_and_unique) {
 
     // Determinism (ADR-0002): the same seed reproduces the same UID sequence.
     CitySim sim2;
-    sim2.build(nav, 3, 4, 99);
+    sim2.build(nav, 7, 99);
     for (std::size_t i = 0; i < sim.agents().size(); ++i)
         CHECK(sim.agents()[i].uid == sim2.agents()[i].uid);
 }

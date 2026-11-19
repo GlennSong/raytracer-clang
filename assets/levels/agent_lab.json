@@ -60,7 +60,6 @@
     "vehicles": "vehicles.lua",
     "wander": false,
     "schedule": false,
-    "homeNear": [-590.0, -210.0],
     "busCommuteShare": 0.0,
     "controlSigns": true,
     "graph": "assets/lanelab/planned/agent_lab_lanelab.json"
