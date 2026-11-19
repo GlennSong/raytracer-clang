@@ -1959,3 +1959,11 @@ endif()
 add_executable(rt_trees tools/rt_trees.cpp)
 target_link_libraries(rt_trees PRIVATE engine_core Threads::Threads)
 target_include_directories(rt_trees PRIVATE src)
+
+# rt_model_sheet (#191 step 1): one Lua recipe -> four path-traced views in one PNG, with its size, counts and audit
+if(RT_ENABLE_SCRIPTING)
+    add_executable(rt_model_sheet tools/rt_model_sheet.cpp ${CORE_SOURCES})
+    target_link_libraries(rt_model_sheet PRIVATE engine_core Threads::Threads)
+    target_include_directories(rt_model_sheet PRIVATE src)
+    target_compile_options(rt_model_sheet PRIVATE -Wall -Wextra)
+endif()
