@@ -144,7 +144,6 @@ TEST_CASE(installing_the_default_tables_changes_nothing) {
             same = false;
     }
     CHECK(same);
-    CHECK(a.faults() == b.faults());
 }
 
 TEST_CASE(custom_goal_table_runs_errands_with_a_two_hour_dwell) {
@@ -386,7 +385,7 @@ TEST_CASE(households_fill_the_dwellings_one_to_each) {
                 if (h.dwelling != Household::kNoDwelling) ++taken[h.dwelling];
             int twice = 0;
             for (int t : taken) twice += t > 1 ? 1 : 0;
-            int housed = 0, wrongHome = 0, kidsDriving = 0, kidsWorking = 0, homeless = 0, kids = 0;
+            int housed = 0, wrongHome = 0, kidsWorking = 0, homeless = 0, kids = 0;
             for (int i = 0; i < static_cast<int>(sim.agents().size()); ++i) {
                 const Agent& a = sim.agents()[static_cast<std::size_t>(i)];
                 homeless += a.homePlace == kNoPlace ? 1 : 0;
@@ -397,7 +396,6 @@ TEST_CASE(households_fill_the_dwellings_one_to_each) {
                 const LifeStage& st = sim.people().stages[static_cast<std::size_t>(a.stage)];
                 if (st.walks && h.type != Household::kHall) {
                     ++kids;
-                    kidsDriving += a.archetype != Agent::Mode::Pedestrian ? 1 : 0;
                     kidsWorking += a.workPlace != kNoPlace ? 1 : 0;
                 }
             }
@@ -408,7 +406,7 @@ TEST_CASE(households_fill_the_dwellings_one_to_each) {
             CHECK(housed == static_cast<int>(plan.people.size()));
             CHECK(sim.unhousedCount() == residents - housed);
             CHECK(wrongHome == 0);
-            CHECK(kids > 0 && kidsDriving == 0 && kidsWorking == 0);
+            CHECK(kids > 0 && kidsWorking == 0);
             CHECK(homeless == 0);
             CHECK(plan.capacity >= housed);
             if (perBlock == 6) CHECK(sim.unhousedCount() > 0 && plan.dwellingsFilled >= plan.dwellings * 9 / 10);

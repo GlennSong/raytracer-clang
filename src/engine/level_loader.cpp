@@ -6428,7 +6428,6 @@ bool LevelLoader::load(const std::string& path,
         cfg.localHz = cs.value("localHz", cfg.localHz);
         cfg.adaptiveRate = cs.value("adaptiveRate", cfg.adaptiveRate);
         cfg.carsPerLaneKm = cs.value("carsPerLaneKm", cfg.carsPerLaneKm);
-        cfg.longCommuteShare = cs.value("longCommuteShare", cfg.longCommuteShare);
         cfg.pedsPerKm = cs.value("pedsPerKm", cfg.pedsPerKm);
         cfg.maxAmbient = cs.value("maxAmbient", cfg.maxAmbient);
         cfg.nearTarget = cs.value("nearTarget", cfg.nearTarget);
@@ -6481,8 +6480,8 @@ bool LevelLoader::load(const std::string& path,
         cfg.lampLightRange = cs.value("lampLightRange", cfg.lampLightRange);
         cfg.lampGlowDistance = cs.value("lampGlowDistance", cfg.lampGlowDistance);
         cfg.startHour = cs.value("startHour", cfg.startHour);
-        cfg.perceptionReliability =
-            cs.value("perceptionReliability", cfg.perceptionReliability);
+        // (`longCommuteShare` and `perceptionReliability`, the old driving's drivers' cross-town jobs and the cars'
+        // perception misses, went with ADR-0463; ignored if a level still sets them)
         cfg.debugWidgets = cs.value("debugWidgets", cfg.debugWidgets);
         cfg.tieredAgents = cs.value("tiered", cfg.tieredAgents);
         cfg.dormantAgents = cs.value("dormancy", cfg.dormantAgents);

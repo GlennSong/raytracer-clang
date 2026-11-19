@@ -624,7 +624,7 @@ struct CityBrain::Impl::LabWalk : brain::WalkSkill {
         Person& p = im.people[who];
         Agent& a = im.agentOf(who);
         Vec2 target;
-        if (a.mode != Agent::Mode::Pedestrian || a.inCar >= 0 || !im.walkTarget(to, target)) return false;
+        if (a.inCar >= 0 || !im.walkTarget(to, target)) return false;
         const TravelMode& mode = im.travel.modes[way];
         // at the way's speed, and on its board where the way is named as one of the things a walker can ride
         a.directedPace = static_cast<float>(mode.speed / (kWalkSpeed * std::max(Real(0.1), static_cast<Real>(a.speedFactor))));
@@ -667,7 +667,6 @@ void CityBrain::Impl::haltWalker(AgentId who) {
     Agent& a = agentOf(who);
     a.directedPace = 0;
     a.directedRide = Ride::None;
-    if (a.mode != Agent::Mode::Pedestrian) return;
     a.moving = false;
     a.speed = 0;
     a.route = engine::Route{};
@@ -803,7 +802,7 @@ struct CityBrain::Impl::LabDrive : brain::DriveSkill {
 // THE PERSON WHO HAS THE CAR GETS IN: into its driver's seat, which nobody else is in.
 bool CityBrain::Impl::getIn(AgentId who, Car c) {
     const Agent& a = agentOf(who);
-    if (a.mode != Agent::Mode::Pedestrian || a.inCar >= 0 || a.vehicle >= 0 || linkOf(c).driver >= 0) return false;
+    if (a.inCar >= 0 || linkOf(c).driver >= 0) return false;
     // NO WALK GOES ON IN THE CAR. A walk of no length (the person already beside the car) is ended by the machine on
     // the spot while the walk skill still has it; stepped on from inside the car, it "arrived" seconds later and its
     // report ended whatever state the person was in by then (pulling_out, 3.6 s into its two minutes). With the person
@@ -1215,7 +1214,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
     std::vector<int> agents;
     for (std::size_t i = 0; i < sim.agents_.size() && agents.size() < residents.size(); ++i) {
         const Agent& a = sim.agents_[i];
-        if (a.mode == Agent::Mode::Pedestrian && !a.released && !a.playerControlled) agents.push_back(static_cast<int>(i));
+        if (!a.released && !a.playerControlled) agents.push_back(static_cast<int>(i));
     }
     if (agents.size() < residents.size())
         return refuse("the level states " + std::to_string(residents.size()) + " residents and made " + std::to_string(agents.size()) +
@@ -1359,7 +1358,6 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
             a.route = engine::Route{};
             a.wakeAt = -1;
             a.state = Agent::State::Resting;
-            a.car = -1;   // (the household's cars are entities, not the sim's vehicles: ADR-0444)
             sim.grid_.place(person.agent, a.pos);
         }
         const AgentId who = im.machine->addAgent(homePlace, person.intentKind, made[r].traits, carRef, brain::Detail::Near);
@@ -1553,7 +1551,7 @@ std::string CityBrain::standingAt(int who) const {
     if (residentCount() == 0 || !impl_->isPerson(who)) return "";
     const Impl& im = *impl_;
     const Agent& body = im.agentOf(static_cast<AgentId>(who));
-    if (body.mode != Agent::Mode::Pedestrian || body.inCar >= 0) return "";
+    if (body.inCar >= 0) return "";
     for (std::size_t i = 0; i < im.markers.size(); ++i) {
         const BrainMarker& m = im.markers[i];
         if (engine::atOrBefore((body.pos - im.spotAt(m, im.spotFor(static_cast<int>(i), static_cast<AgentId>(who)))).length(),
@@ -1782,7 +1780,7 @@ bool CityBrain::board(int agent, int car) {
     const Impl::Car c = im.machine ? im.carNumbered(car) : Impl::Car{};
     if (!c.valid() || agent < 0 || agent >= static_cast<int>(im.sim.agents_.size())) return false;
     const Agent& a = im.sim.agents_[static_cast<std::size_t>(agent)];
-    if (a.mode != Agent::Mode::Pedestrian || a.inCar >= 0 || a.vehicle >= 0) return false;
+    if (a.inCar >= 0) return false;
     // (nobody gets into a car with somebody at its wheel; and one of the brain's own people gets in by their plan,
     // unless a director has them)
     if (im.linkOf(c).driver >= 0 || im.linkOf(c).away || im.keptOf(c).heldBy == kOutsider) return false;
@@ -1860,8 +1858,7 @@ bool CityBrain::directorHolds(int agent, bool on) {
     } else {
         // let go: still the brain's (the possession channel has just handed them back to a day they do not keep)
         im.sim.setAgentDirected(agent, true);
-        // out of whatever car the director had them in: one of the sim's, or a household's
-        if (im.agentOf(id).vehicle >= 0) im.sim.alightVehicle(agent);
+        // out of the household's car the director had them in
         if (im.agentOf(id).inCar >= 0) alight(agent);
         im.haltWalker(id);
         ++im.counts.letGo;

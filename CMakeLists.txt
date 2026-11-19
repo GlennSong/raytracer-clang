@@ -603,7 +603,6 @@ endif()
 # ============================================================
 add_library(citysim STATIC
     src/apps/citysim/control_policy_file.cpp   # the shared control placement policy, read from its files (ADR-0422)
-    src/apps/citysim/traffic_rules.cpp
     src/apps/citysim/city_goals.cpp
     src/apps/citysim/city_roles.cpp
     src/apps/citysim/activities.cpp
@@ -989,7 +988,6 @@ add_executable(run_tests
     tests/test_road_rules.cpp
     tests/test_road_weld.cpp
     tests/test_road_spec.cpp
-    tests/test_idm.cpp
     tests/test_street_furniture.cpp
     tests/test_street_signs.cpp
     tests/test_editable_curve.cpp
@@ -1008,7 +1006,6 @@ add_executable(run_tests
     tests/test_state_machine.cpp
     tests/test_cascade_fit.cpp
     tests/test_fall_respawn.cpp
-    tests/test_traffic_rules.cpp
     tests/test_city_sim.cpp
     tests/test_city_goals.cpp
     tests/test_rail_sim.cpp

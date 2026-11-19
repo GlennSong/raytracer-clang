@@ -532,7 +532,7 @@ TEST_CASE(level_brain_lab_one_resident_makes_the_trip) {
     const std::vector<engine::KerbSpaceNear> nearWork = model.kerbSpacesNear(b.markers()[1].frontage, citysim::kSpaceReach, 1);
     CHECK(nearWork.size() == 1u && model.kerbSpaceName(nearWork[0].space) == "s182 against 3");
     // WHERE THE PERSON ENDS: on foot, standing at the marker
-    CHECK(r.person().mode == citysim::Agent::Mode::Pedestrian && r.person().vehicle < 0 && !r.person().moving);
+    CHECK(!r.person().moving);
     CHECK((r.person().pos - b.markers()[1].stand).length() <= kStandsWithin);
 }
 
@@ -762,7 +762,7 @@ constexpr int kAna = 0, kBen = 1, kCat = 2, kDan = 3, kEve = 4, kFay = 5;
 int bystander(const Run& r) {
     const std::vector<citysim::Agent>& agents = r.sim().agents();
     for (std::size_t i = 0; i < agents.size(); ++i)
-        if (agents[i].mode == citysim::Agent::Mode::Pedestrian && r.b->residentOfAgent(static_cast<int>(i)) < 0) return static_cast<int>(i);
+        if (r.b->residentOfAgent(static_cast<int>(i)) < 0) return static_cast<int>(i);
     return -1;
 }
 // How far a point is from the centre line of the road nearest it, less that road's carriageway half width: above zero
@@ -868,7 +868,7 @@ TEST_CASE(level_brain_lab_whoever_reaches_the_household_car_first_takes_it) {
     CHECK(b.planText(kAna) == "walk>work");
     CHECK(b.planReason(kAna) == "walk 9.3 min, car -- the car is in use: walk");
     CHECK(!b.heldSpace(kAna).valid() && model.kerbSpaceName(b.heldSpace(kBen)) == "s223 against 3");
-    CHECK(r.person(kAna).mode == citysim::Agent::Mode::Pedestrian && !b.inCar(kAna) && b.inCar(kBen));
+    CHECK(!b.inCar(kAna) && b.inCar(kBen));
     // BOTH ARRIVE: ben by car, ana on foot. The car is where ben left it, free.
     CHECK(r.until([&] { return r.there("work", kAna) && r.there("ramp", kBen); }));
     std::printf("    [brain-lab] t=%.1f ana: %s\n    [brain-lab] ben: %s\n", r.seconds(), b.traceText(kAna).c_str(), b.traceText(kBen).c_str());
@@ -970,7 +970,7 @@ TEST_CASE(level_brain_lab_the_player_takes_the_car_from_under_its_driver) {
     CHECK(beyondTheKerb(model, carWas) < 0);   // (the car is on the carriageway)
     // TAKEN
     CHECK(b.takenByPlayer(car));
-    CHECK(r.person(kAna).mode == citysim::Agent::Mode::Pedestrian && r.person(kAna).vehicle < 0 && !b.inCar(kAna));
+    CHECK(!b.inCar(kAna));
     CHECK(r.car(kAna).away && r.car(kAna).driver == -1);   // (the player's own car now: not drawn here)
     // out on the kerb side: beyond the kerb line of the road the car was on, and within a road's width of the car
     std::printf("    [brain-lab] t=%.1f taken at %.1f %.1f; ana put out at %.1f %.1f, %.2f m beyond the kerb line, %.1f m from the car\n",
@@ -1193,8 +1193,7 @@ TEST_CASE(level_brain_lab_a_household_car_is_one_entity_drawn_from_its_own_pose)
     // the car is the authority, and the person follows it every tick)
     const int agent = b.residentAgent(kAna);
     const citysim::Agent& ana = r.person(kAna);
-    CHECK(ana.inCar == car && v.driver == agent && !r.sim().pedVisible(agent));
-    CHECK(ana.mode == citysim::Agent::Mode::Pedestrian && ana.vehicle < 0);
+    CHECK(ana.inCar == car && v.driver == agent && !r.sim().pedVisible(agent));   // (in a household's car, not a sim one)
     std::printf("    [brain-lab] the car at %.1f %.1f; ana's own place %.1f %.1f, %.3f m from it; ticks a rider stood apart from "
                 "their car: %d\n",
                 v.pos.x, v.pos.y, ana.pos.x, ana.pos.y, (ana.pos - v.pos).length(), r.riderApart);

@@ -121,8 +121,8 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         if (!stale) { ++wi; continue; }
         if (w.agentId >= 0 && w.agentId < static_cast<int>(agents.size())) {
             const Agent& ga = agents[static_cast<std::size_t>(w.agentId)];
-            const char* why = ga.mode != Agent::Mode::Pedestrian ? "got in a car"
-                              : ga.far()                          ? "left the near tier"
+            const char* why = ga.inCar >= 0 ? "got in a car"
+                              : ga.far()                       ? "left the near tier"
                               : ga.indoors                        ? "went indoors"
                                                                   : "stopped (not moving, not indoors?)";
             gone_[w.agentId] = Gone{std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
@@ -845,9 +845,9 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                 std::fprintf(stderr, "[walk debug] agent %d at %.1f %.1f link %d leg %d/%zu dist %.2f of %.2f speed %.2f far %d tier %d\n",
                              ai, a.pos.x, a.pos.y, li, a.leg, a.route.links.size(), a.distOnLeg,
                              L0.length, a.speed, a.far() ? 1 : 0, static_cast<int>(a.tier));
-                std::fprintf(stderr, "[walk debug]   gap %.2f minGap %.2f bodyLag %.2f tethered %d\n", sm.debugGap(ai), sm.debugMinGap(ai), a.bodyLag, a.tethered ? 1 : 0);
-                std::fprintf(stderr, "[walk debug]   state %d hold %.1f on a train journey %d seatPhase %d playerControlled %d | link %d: %.1f %.1f -> %.1f %.1f (nodes %d -> %d, street nodes < %d); next:",
-                             static_cast<int>(a.state), a.holdTimer,
+                std::fprintf(stderr, "[walk debug]   gap %.2f minGap %.2f tethered %d\n", sm.debugGap(ai), sm.debugMinGap(ai), a.tethered ? 1 : 0);
+                std::fprintf(stderr, "[walk debug]   state %d on a train journey %d seatPhase %d playerControlled %d | link %d: %.1f %.1f -> %.1f %.1f (nodes %d -> %d, street nodes < %d); next:",
+                             static_cast<int>(a.state),
                              sm.onTrainJourney(ai) ? 1 : 0, a.seatPhase, a.playerControlled ? 1 : 0,
                              li, L0.footA.x, L0.footA.y, L0.footB.x, L0.footB.y, L0.from, L0.to, ng.streetNodeCount());
                 for (std::size_t q = 1; q < std::min<std::size_t>(5, a.route.links.size()); ++q) {

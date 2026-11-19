@@ -39,7 +39,6 @@ struct CityRenderParams {
     int pedestrians = 40;   // -1 = by density (pedsPerKm over the sidewalks)
     Real carsPerLaneKm = 10.0;
     Real pedsPerKm = 6.0;
-    Real longCommuteShare = 0.0;   // CitySimConfig::longCommuteShare
     // Ceiling on each density-derived count (CitySimConfig::maxAmbient). The
     // bridge used to clamp at a literal 400, which halved metro v2: its own
     // network asks for 769 cars and 788 walkers.
@@ -53,7 +52,6 @@ struct CityRenderParams {
     // costs the same: 22:00 is as cheap as 08:00. 10.5 keeps the historical
     // feel of the retired warm-up, which landed around mid-morning.
     Real startHour = 10.5;
-    Real perceptionReliability = 0.97;     // <1 -> agents occasionally err (ADR-0060)
     engine::Vec3 carSize{1.8, 1.3, 4.2};   // matches the player sedan (W,H,L); +Z = travel
     engine::Vec3 pedSize{0.5, 1.8, 0.5};
     Real signalLensSize = 0.28;            // lit emissive lens: a plate this wide, over the head's own lamp (m)

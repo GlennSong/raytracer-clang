@@ -1441,7 +1441,7 @@ TEST_CASE(metro_pedestrians_walk_and_keep_apart) {
         std::vector<std::size_t> drawn;
         for (std::size_t k = 0; k < ag.size(); ++k) {
             const auto& a = ag[k];
-            if (a.mode != citysim::Agent::Mode::Pedestrian || a.far()) continue;
+            if (a.far()) continue;
             const Vec2 d = a.pos - c;
             if (d.x * d.x + d.y * d.y > 200.0 * 200.0) continue;
             const int ki = static_cast<int>(k);

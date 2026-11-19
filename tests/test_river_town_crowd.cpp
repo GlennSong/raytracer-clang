@@ -61,8 +61,7 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     if (!lc.ok) return;
     citysim::CitySim& sim = lc.city.simMutable();
     // (the sim is built with nobody driving since ADR-0461: its agents are the people on foot)
-    int walkers = 0;
-    for (const citysim::Agent& a : sim.agents()) walkers += a.mode == citysim::Agent::Mode::Pedestrian ? 1 : 0;
+    const int walkers = static_cast<int>(sim.agents().size());
     CHECK(sim.drivingV2() != nullptr && sim.drivingHost().active());
     citysim::CityBrain* bp = sim.brain();
     CHECK(bp != nullptr && bp->hasResident());

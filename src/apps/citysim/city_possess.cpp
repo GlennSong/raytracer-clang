@@ -222,7 +222,7 @@ void CityPossessSystem::possessWalker(engine::FrameContext& ctx,
     engine::Real bestD2 = 1e30;
     for (std::size_t i = 0; i < agents.size(); ++i) {
         const Agent& a = agents[i];
-        if (a.mode != Agent::Mode::Pedestrian || a.released || a.inCar >= 0) continue;   // (in a household's car: no walker)
+        if (a.released || a.inCar >= 0) continue;   // (in a household's car: no walker)
         const engine::Real dx = a.pos.x - ref.x, dz = a.pos.y - ref.y;
         const engine::Real d2 = dx * dx + dz * dz;
         if (d2 < bestD2) { bestD2 = d2; best = static_cast<int>(i); }

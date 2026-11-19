@@ -535,15 +535,13 @@ TEST_CASE(population_read_from_the_cache_is_the_population_decided) {
                           a.workDoor.y == c.workDoor.y && a.shopDoor.x == c.shopDoor.x && a.shopDoor.y == c.shopDoor.y &&
                           a.pos.x == c.pos.x && a.pos.y == c.pos.y && a.heading.x == c.heading.x && a.heading.y == c.heading.y &&
                           a.departHome == c.departHome && a.departWork == c.departWork && a.commuteSeconds == c.commuteSeconds &&
-                          a.role == c.role && a.archetype == c.archetype && a.mode == c.mode && a.indoors == c.indoors;
+                          a.role == c.role && a.indoors == c.indoors;
         differ += !same;
     }
-    const auto& sa = A.commuteStats(); const auto& sc = C.commuteStats();
-    std::printf("    %zu agents, %d differ; drivers with jobs %d/%d; median commute %.1f/%.1f s\n", A.agents().size(), differ,
-                sa.driversWithJobs, sc.driversWithJobs, A.commuteSecondsMedian(), C.commuteSecondsMedian());
+    std::printf("    %zu agents, %d differ; median commute %.1f/%.1f s\n", A.agents().size(), differ,
+                A.commuteSecondsMedian(), C.commuteSecondsMedian());
     CHECK(differ == 0);
-    CHECK(sa.driversWithJobs == sc.driversWithJobs && sa.crossTownDrivers == sc.crossTownDrivers);
-    CHECK(sa.meanDriverCommute == sc.meanDriverCommute);
+    CHECK(A.commuteSecondsMedian() == C.commuteSecondsMedian());
     CHECK(A.commuteSecondsMedian() == C.commuteSecondsMedian());
     int roles[16] = {};   // by role id: the first three, then students and the staff roles
     for (const Agent& a : A.agents()) roles[std::min(15, static_cast<int>(a.role))]++;

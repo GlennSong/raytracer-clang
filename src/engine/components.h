@@ -1093,11 +1093,6 @@ struct CitySimConfig {
     int pedestrians = 40;
     float carsPerLaneKm = 10.0f;   // density mode: ambient cars per lane-km
     float pedsPerKm = 6.0f;        // density mode: walkers per sidewalk-km
-    // Share of DRIVERS who commute across town: their job is drawn from 1.2 km+
-    // away, so a city with a ring freeway sees it used (Glenn, 2026-09-22: "I'd
-    // like more traffic on the freeway"). 0 = everyone takes the nearest of their
-    // sampled jobs (the short-commute rule).
-    float longCommuteShare = 0.0f;
     // (The old driving's buses and cabs are gone, ADR-0460: busRoutes, busStops, buses, busMaxWalk, busService,
     // busCommuteShare, taxiFraction, hailChance and hailMinMetres in a level file are not read.)
     // Ceiling on EACH density-derived count. This was a literal 400 in the
@@ -1116,7 +1111,6 @@ struct CitySimConfig {
     // their schedules at this hour, so any start costs the same — a level can
     // open at 03:00 as cheaply as at midday.
     float startHour = 10.5f;
-    float perceptionReliability = 0.97f; // <1 -> agents occasionally err
     // Draw radius for PARKED scenery cars (m). City-wide instance groups can't
     // be partially frustum-culled, so this is what keeps thousands of parked
     // bodies out of the colour and shadow passes. 0 = draw them all.

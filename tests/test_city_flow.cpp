@@ -75,7 +75,6 @@ TEST_CASE(pedestrians_react_and_walk_around_each_other) {
         b.step(0.1, 0.5);
         const auto& ag = a.agents();
         for (std::size_t p = 0; p < ag.size(); ++p) {
-            if (ag[p].mode != Agent::Mode::Pedestrian) continue;
             if (ag[p].activity == Agent::Activity::AtWork) anyArrived = true;
             if (ag[p].state == Agent::State::Avoiding) anyAvoided = true;
             // The sideways lean only ever changes by a bounded amount per step
@@ -86,7 +85,7 @@ TEST_CASE(pedestrians_react_and_walk_around_each_other) {
             wasMoving[p] = ag[p].moving;
             if (!ag[p].moving || ag[p].speed < 0.3) continue;   // actually walking
             for (std::size_t q = p + 1; q < ag.size(); ++q) {
-                if (ag[q].mode != Agent::Mode::Pedestrian || !ag[q].moving || ag[q].speed < 0.3)
+                if (!ag[q].moving || ag[q].speed < 0.3)
                     continue;
                 Real dx = ag[p].pos.x - ag[q].pos.x, dy = ag[p].pos.y - ag[q].pos.y;
                 minPedDist = std::min(minPedDist, std::sqrt(dx * dx + dy * dy));

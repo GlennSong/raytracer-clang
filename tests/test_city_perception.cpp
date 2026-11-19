@@ -36,7 +36,7 @@ TEST_CASE(pedestrians_walk_around_static_poles) {
     for (int i = 0; i < 4000; ++i) {
         sim.step(0.1, 0.4);
         for (const Agent& a : sim.agents()) {
-            if (a.mode != Agent::Mode::Pedestrian || !a.moving) continue;
+            if (!a.moving) continue;
             for (const Vec2& o : poles) {
                 Real dx = a.pos.x - o.x, dy = a.pos.y - o.y;
                 minDist = std::min(minDist, std::sqrt(dx * dx + dy * dy));

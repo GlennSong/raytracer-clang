@@ -215,7 +215,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.cars = c.cars;
         params_.pedestrians = c.pedestrians;
         params_.carsPerLaneKm = c.carsPerLaneKm;
-        params_.longCommuteShare = c.longCommuteShare;
         params_.pedsPerKm = c.pedsPerKm;
         params_.maxAmbient = c.maxAmbient;
         params_.nearTarget = c.nearTarget;
@@ -235,7 +234,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.seed = c.seed;
         params_.hoursPerSecond = c.hoursPerSecond;
         params_.startHour = c.startHour;
-        params_.perceptionReliability = c.perceptionReliability;
         params_.sceneryRadius = c.sceneryRadius;
         params_.localHz = c.localHz;
         params_.adaptiveRate = c.adaptiveRate;
@@ -844,7 +842,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         }
         if (offered > 0) LOG_INFO << "[citysim] seats: " << sim_.seats().size() << " of " << offered << " outdoor seats reachable from the paths";
     }
-    sim_.setPerceptionReliability(params_.perceptionReliability);
     sim_.setWander(params_.wander);
     sim_.setDaySchedule(params_.schedule);
     // Three-tier traffic (P4): the level's opt-in. The bubble only engages
@@ -966,7 +963,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // routes them to actual buildings. No-op when the level authored no places
     // (then the built random home/work schedule stands). After setWander so the
     // (persistent) mode is settled; before the warm-up so day one runs on places.
-    sim_.setLongCommuteShare(params_.longCommuteShare);
     // The population cache (CitySim::setPopulationCacheDir): off under RT_NOCACHE, like the level bundle.
     if (!std::getenv("RT_NOCACHE")) sim_.setPopulationCacheDir("cache/population");
     { const auto tT0 = std::chrono::steady_clock::now();
@@ -998,9 +994,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                  << " someone is on shift (" << at10.neverStaffed << " never staffed); staffed at 10:00 " << at10.staffedNow
                  << ", at 22:00 " << at22.staffedNow;
     }
-    LOG_INFO << "[citysim] commutes: " << sim_.commuteStats().driversWithJobs << " drivers with jobs, "
-             << sim_.commuteStats().crossTownDrivers << " cross-town (share " << params_.longCommuteShare
-             << "), mean driver commute " << static_cast<int>(sim_.commuteStats().meanDriverCommute) << " m";
 
     // ONE CLOCK. A staged day/night cycle owns the world's hour and rate:
     // the sim opens at the sky's hour and its schedules run at the sky's
@@ -1028,11 +1021,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // and the only symptom is a city permanently stuck in rush hour — so say it
     // at load instead.
     {
-        // Reported PER MODE. A blended median is driver-dominated (drivers
-        // outnumber walkers and occupy the low agent indices), so a city that
-        // is fine to drive across and impossible to walk across looks fine.
-        const Real driveHours =
-            sim_.commuteSecondsDrive() * params_.hoursPerSecond;
+        // (on foot: the sim's people walk since ADR-0463; the cars are the driving's)
         const Real walkHours =
             sim_.commuteSecondsWalk() * params_.hoursPerSecond;
         auto report = [&](const char* who, Real hours, Real secs) {
@@ -1049,7 +1038,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                           << "), or shorten this group's journeys — for walkers "
                              "that means homes nearer their work, or transit.";
         };
-        report("DRIVER", driveHours, sim_.commuteSecondsDrive());
         report("WALKER", walkHours, sim_.commuteSecondsWalk());
     }
 
@@ -3297,9 +3285,9 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                             const int li = a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
                             char qb[260];
                             const engine::NavLink* Lq = li >= 0 ? &nav_.links[static_cast<std::size_t>(li)] : nullptr;
-                            std::snprintf(qb, sizeof(qb), " {%d st %d v %.2f leg %d/%zu link %d len %.1f w %.1f d %.1f hold %.1f junc %d sig %d next %d why %d gap %.2f/%.2f}",
+                            std::snprintf(qb, sizeof(qb), " {%d st %d v %.2f leg %d/%zu link %d len %.1f w %.1f d %.1f junc %d sig %d next %d why %d gap %.2f/%.2f}",
                                           i, static_cast<int>(a.state), a.speed, a.leg, a.route.links.size(), li, Lq ? Lq->length : -1.0, Lq ? Lq->width : -1.0,
-                                          a.distOnLeg, a.holdTimer, Lq ? static_cast<int>(nav_.isJunction(Lq->to)) : -1,
+                                          a.distOnLeg, Lq ? static_cast<int>(nav_.isJunction(Lq->to)) : -1,
                                           Lq ? static_cast<int>(nav_.signalControlled(Lq->to)) : -1,
                                           a.leg + 1 < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg + 1)] : -1,
                                           sim_.holdWhyOf(i), std::min(sim_.gapOf(i), Real(99)), sim_.minGapOf(i));
@@ -3531,7 +3519,6 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
             (a.inCar >= 0 ? inCars : onFoot)++;
         ImGui::Text("Time %05.2f h   Agents %d  (%d in cars, %d on foot)",
                     sim_.timeOfDay(), static_cast<int>(agents.size()), inCars, onFoot);
-        ImGui::Text("Perception faults: %ld", sim_.faults());
 
         // Master toggle (mirrors the J key) + per-layer refinements.
         ImGui::Checkbox("Debug widgets (J)", &debugWidgets_);

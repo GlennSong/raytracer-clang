@@ -37,16 +37,13 @@ int agentMismatches(const CitySim& A, const CitySim& B) {
         const Agent& x = a[i];
         const Agent& y = b[i];
         const bool same =
-            x.uid == y.uid && x.mode == y.mode && x.state == y.state &&
+            x.uid == y.uid && x.state == y.state &&
             x.tier == y.tier && x.activity == y.activity && x.goal == y.goal &&
             x.goalHours == y.goalHours && x.restNode == y.restNode &&
             x.arrivedLink == y.arrivedLink && x.leg == y.leg &&
             x.distOnLeg == y.distOnLeg && x.speed == y.speed &&
             x.elevation == y.elevation && x.grade == y.grade &&
-            x.deckY == y.deckY && x.lane == y.lane && x.laneF == y.laneF &&
-            x.laneTimer == y.laneTimer && x.trips == y.trips &&
-            x.parkedBay == y.parkedBay && x.crashTimer == y.crashTimer &&
-            x.crashCount == y.crashCount && x.holdTimer == y.holdTimer &&
+            x.deckY == y.deckY && x.trips == y.trips &&
             x.thinkTimer == y.thinkTimer && x.leanTarget == y.leanTarget &&
             x.lateralOffset == y.lateralOffset && x.brain == y.brain &&
             x.speedFactor == y.speedFactor && x.pos.x == y.pos.x &&

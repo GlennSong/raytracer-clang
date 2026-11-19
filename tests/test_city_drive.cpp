@@ -19,6 +19,14 @@ using citytest::straightRoad;   // an open road: no junctions between the tests
 
 }  // namespace
 
+TEST_CASE(approach_stop_eases_to_zero) {
+    // At the stop point, speed 0; farther away, faster; capped at maxSpeed. (Moved from test_traffic_rules.cpp.)
+    CHECK_APPROX(approachStop(0.0, 4.0, 20.0), 0.0, 1e-9);
+    CHECK(approachStop(2.0, 4.0, 20.0) > 0.0);
+    CHECK(approachStop(2.0, 4.0, 20.0) < approachStop(20.0, 4.0, 20.0));
+    CHECK_APPROX(approachStop(1000.0, 4.0, 20.0), 20.0, 1e-9);   // capped
+}
+
 TEST_CASE(agents_have_distinct_personal_paces) {
     // Personality (ADR-0062): each agent holds its own fraction of the nominal
     // speed, derived from its brain seed — varied, bounded, and reproducible.
@@ -72,7 +80,7 @@ TEST_CASE(walkers_keep_a_wide_berth_around_the_player) {
     for (int i = 0; i < 4000; ++i) {
         sim.step(0.1, 0.5);
         for (const Agent& a : sim.agents())
-            if (a.mode == Agent::Mode::Pedestrian && a.moving)
+            if (a.moving)
                 minDist = std::min(minDist, (a.pos - player).length());
     }
     std::printf("    [berth] closest walker to the player %.3f m\n", minDist);
@@ -103,7 +111,7 @@ TEST_CASE(agents_commit_to_decisions_between_thinks) {
         sim.step(0.05, 0.5);
         for (std::size_t k = 0; k < sim.agents().size(); ++k) {
             const Agent& a = sim.agents()[k];
-            if (a.mode != Agent::Mode::Pedestrian || !a.moving) continue;
+            if (!a.moving) continue;
             ++movingTicks[k];
             if (a.leanTarget != lastTarget[k]) ++changes[k];
             lastTarget[k] = a.leanTarget;

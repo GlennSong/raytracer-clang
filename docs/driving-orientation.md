@@ -7,9 +7,10 @@ names (ADR-0398 to ADR-0416 for the driving library, ADR-0440 to ADR-0452 for th
 way and crosswalks, ADR-0453 for one kind of car, ADR-0455 for the brain's car facts on the car and one way to take a
 car, ADR-0456 for one signal clock, ADR-0457 for river_town on the new driving, ADR-0459 for deleting the old
 driving's possession, passenger seat and trip lab, ADR-0460 for its buses and cabs, ADR-0461 for its cars outside the
-sim, ADR-0462 for the sim's own way in to them and their tests). The roads it drives on are described in
-`docs/roads-orientation.md`. Written 2026-11-17, after ADR-0452; section 3 and 4 brought up to ADR-0453 on 2026-11-18,
-to ADR-0455 the same day, and to ADR-0456, ADR-0457, ADR-0459, ADR-0461 and ADR-0462 after it. Anything marked
+sim, ADR-0462 for the sim's own way in to them and their tests, ADR-0463 for the sim's own car code). The roads it drives
+on are described in `docs/roads-orientation.md`. Written 2026-11-17, after ADR-0452; section 3 and 4 brought up to
+ADR-0453 on 2026-11-18, to ADR-0455 the same day, and to ADR-0456, ADR-0457, ADR-0459, ADR-0461, ADR-0462 and ADR-0463
+after it. Anything marked
 *(unsure)* was not
 checked in the code.
 
@@ -25,8 +26,7 @@ re-bakes a level: the lots key hashes only the fields the lot pass reads (`src/e
 `Driving::clockSeconds()`. The drawn signal heads show them (`headAt`, read by `CityRenderSystem` for each head the loader
 placed, by the arm the head is attached to), the walkers at the model's crosswalks wait on its walk signals
 (`walkAtCrosswalk`), and the cars obey them. The old sim's own clock (`SignalController`, `traffic_signal.*`,
-`signals.lua`) is deleted. Where the new driving does not drive, every head is dark, no walker waits for a light, and
-the old driving's cars (until #306 piece C deletes them) obey no lights.
+`signals.lua`) is deleted. Where the new driving does not drive, every head is dark and no walker waits for a light.
 
 **Deleting the old driving (v1), piece C, in three parts (#306).** C1 is done (ADR-0459): possession drives no car of its
 own any more (`possess walker`, `walk_to`, `board`/`alight` a household's car of the new driving; `possess car`,
@@ -51,9 +51,10 @@ tiers or walking); and the old cars' ways in from outside the stepper are gone: 
 `releaseDriver`, `setGarages` (with the loader's garage specs, `CitySimConfig::garages`), `parkingBays()` and `parking?`,
 `moveHome` and `citysim.homeNear`, `setFleetLaunch`, `setAgentBodyLag`, `parkedNear`, `walkersInRoad`, the census's
 driver counts, and the `Mode::Driver` readers in possession, spectate (`SpectateFraming`), the poses, the near tier and
-the debug panel. **C3b-2, owed:** the stepper's own dead car code in `city_sim.*` (`Agent::Mode::Driver` and the car
-fields, `SimVehicle`/`vehicles()`, the car branches of `advance`, `startTrip`, `refreshPose` and the rest, the bays,
-the crash and hold passes, the old goal tables' car choices, `traffic_rules.*`). The player still takes any car with E
+the debug panel. **C3b-2 is done (ADR-0463), and with it the old driving is gone:** an `Agent` is a person on foot
+(no `Agent::Mode`, no `archetype`, no car fields), there is no `SimVehicle`, and the stepper's car branches, the bays,
+the crash and hold passes, the cars' perception, `traffic_rules.*` (`approachStop` is `city_sim.h`'s) and
+`engine/ai/idm.h` are deleted. The population cache is format 13. The player still takes any car with E
 (`CitySim::playerTakesCar`).
 
 **One car, one representation (ADR-0453).** Every car the new driving moves is a car entity (`city_car.h`): a
@@ -174,16 +175,16 @@ Build with `cmake --build build-viewer --target driving_tests level_tests physic
 - The old sim's people walk the street map's kerb-side line, not a pavement of the model, and cross through the
   junction's corner blend; their places waiting at a crosswalk are where their route comes level with its kerb end.
 - The sim's `junctionRadius` still measures the roads from the street map (`nodeBoxRadius_`, the widest street at a
-  node, worked out at build: a road fact computed outside `roads/`). Its car readers go with C3b-2; the walkers read it
-  too (`onStreet`, the wait at a junction's kerb), so taking it away moves the walkers (and the pinned hashes): that part
-  is task 4's (people route on the road model), not a deletion. (`walkersInRoad`, a test's count of walkers in a
-  carriageway measured from the street map, went with ADR-0462.)
+  node, worked out at build: a road fact computed outside `roads/`). Its car readers went with ADR-0463; the walkers read
+  it (`onStreet`, `stopLineBack`, the place a walker stands back from a junction), so taking it away moves the walkers
+  (and the pinned hashes): that part is task 4's (people route on the road model), not a deletion.
 - A walker's place standing at a crosswalk's kerb end (`refreshPose`'s ModelCrosswalk::kerbWait step, ADR-0452) is
-  never reached: `refreshPose` returns for every walker before it. Found in ADR-0461, not fixed (it moves the walkers
-  and every pinned hash); likely part of brain_crowd's kerb-end-share failure, so task 4's.
+  never reached: `refreshPose` returns for every walker before it (an explicit `return` since ADR-0463, commented).
+  Found in ADR-0461, not fixed (it moves the walkers and every pinned hash); likely part of brain_crowd's
+  kerb-end-share failure, so task 4's.
 - A walker at a junction the model's crosswalks do not rule (no crosswalk with pavements there, or a junction of a city
-  the new driving does not drive) waits for no light: it judges the gap in the old driving's cars at the kerb
-  (`advance`'s kerb discipline) at every junction, lit or not.
+  the new driving does not drive) waits for nothing: no light, and since ADR-0463 no gap either (it judged the gap in the
+  old driving's cars, which were gone already).
 - The signal heads have no lit walk signal: the pole's walk panel (`street_kit.cpp`) is painted, and which crosswalk a
   panel would serve is stated nowhere (ADR-0456).
 - A walk round a junction that crosses two arms (a far turn on foot) is judged one crosswalk at a time, waiting at the
