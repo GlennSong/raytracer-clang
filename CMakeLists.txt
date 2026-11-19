@@ -347,6 +347,29 @@ add_library(meshopt_codecs STATIC
 target_include_directories(meshopt_codecs SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party/meshoptimizer/src)
 target_link_libraries(engine_core PUBLIC meshopt_codecs)
 
+# Manifold (Apache-2.0, third_party/manifold, v3.5.5): exact booleans on closed meshes, behind the engine's own words
+# MeshBuilder::boolean / mesh.union, mesh.subtract, mesh.intersect (#191 step 3). Only engine/mesh_boolean.cpp includes
+# it. Built static, single-threaded, without its 2-D cross sections, tests or bindings; in a function so the switches
+# it reads do not leak into the rest of this build.
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/manifold/CMakeLists.txt" AND Git_FOUND)
+    execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init -- third_party/manifold
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
+function(rt_add_manifold)
+    set(BUILD_SHARED_LIBS OFF)
+    set(MANIFOLD_CROSS_SECTION OFF)
+    set(MANIFOLD_TEST OFF)
+    set(MANIFOLD_PAR OFF)
+    set(MANIFOLD_PYBIND OFF)
+    set(MANIFOLD_CBIND OFF)
+    set(MANIFOLD_JSBIND OFF)
+    set(MANIFOLD_DEBUG OFF)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/manifold ${CMAKE_BINARY_DIR}/manifold EXCLUDE_FROM_ALL)
+endfunction()
+rt_add_manifold()
+target_sources(engine_core PRIVATE src/engine/mesh_boolean.cpp)
+target_link_libraries(engine_core PRIVATE manifold)
+
 # Dear ImGui (ADR-0011): core + ImGuizmo compile inside engine_core (the
 # panels/gizmos live there); platform backends (GLFW/Metal) attach per host.
 #
@@ -1061,6 +1084,7 @@ target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 if(RT_ENABLE_SCRIPTING)
     target_sources(run_tests PRIVATE
         tests/test_script_vm.cpp
+        tests/test_mesh_lua_words.cpp
         tests/test_script_modules.cpp
         tests/test_script_system.cpp
         tests/test_gun_script.cpp

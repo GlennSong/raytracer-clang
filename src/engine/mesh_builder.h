@@ -526,6 +526,24 @@ struct MeshBuilder {
     };
     static RenderMesh weld(const RenderMesh& mesh);
     static RenderMesh weld(const RenderMesh& mesh, const WeldTolerance& tol);
+
+    // --- BOOLEANS (mesh_boolean.cpp, over the Manifold library; #191 step 3) -----------------------------------------
+    // JOIN two solids (Union), CUT the second out of the first (Subtract), or KEEP only where they overlap (Intersect).
+    // Exact: the result's faces are pieces of the two inputs' own faces, cut along the lines where the solids cross.
+    // BOTH INPUTS MUST BE CLOSED SOLIDS: every edge shared by exactly two faces, no loose sheet, no hole. A mesh that
+    // is not is refused, and `error` says which one and how many open edges it has; nothing is guessed.
+    // The result comes back as two meshes: the faces that came from `a` and the faces that came from `b` (a hole's
+    // walls, when subtracting), so each can keep its own material. Every vertex keeps what it carried -- normal, uv,
+    // colour, tangent -- blended along a cut edge; a subtracted solid's faces come back turned to face into the
+    // cavity. Faces are wound by triFacing like every other mesh.
+    enum class BooleanOp { Union, Subtract, Intersect };
+    struct BooleanResult {
+        RenderMesh fromA, fromB;
+        std::string error;   // empty when it worked
+        bool ok() const { return error.empty(); }
+        RenderMesh whole() const { return merged({fromA, fromB}); }
+    };
+    static BooleanResult boolean(const RenderMesh& a, const RenderMesh& b, BooleanOp op);
 };
 
 }  // namespace engine

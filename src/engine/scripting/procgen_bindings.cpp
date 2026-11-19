@@ -2442,11 +2442,27 @@ int l_scope_shell(lua_State* L) {
     return 1;
 }
 
-// mesh.quad(a, b, c, d, normal, color) -> mesh : one panel from four corners.
+// mesh.quad(a, b, c, d, normal, color, {uv_a, uv_b, uv_c, uv_d}?) -> mesh : one panel from four corners; with the
+// seventh argument, each corner's own {u, v} (MeshBuilder::emitQuadUV) instead of the 0..1 square.
 int l_mesh_quad(lua_State* L) {
     Vec3 a = checkVec3(L, 1), b = checkVec3(L, 2), c = checkVec3(L, 3),
          d = checkVec3(L, 4), nrm = checkVec3(L, 5);
     auto m = std::make_shared<RenderMesh>();
+    if (lua_istable(L, 7)) {
+        float uv[4][2];
+        for (int i = 0; i < 4; ++i) {
+            lua_rawgeti(L, 7, i + 1);
+            luaL_checktype(L, -1, LUA_TTABLE);
+            lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2);
+            uv[i][0] = static_cast<float>(luaL_checknumber(L, -2));
+            uv[i][1] = static_cast<float>(luaL_checknumber(L, -1));
+            lua_pop(L, 3);
+        }
+        MeshBuilder::emitQuadUV(*m, a, b, c, d, nrm, optColor(L, 6), uv[0][0], uv[0][1], uv[1][0], uv[1][1], uv[2][0],
+                                uv[2][1], uv[3][0], uv[3][1]);
+        pushMesh(L, std::move(m));
+        return 1;
+    }
     MeshBuilder::emitQuad(*m, a, b, c, d, nrm, optColor(L, 6));
     pushMesh(L, std::move(m));
     return 1;
@@ -2565,6 +2581,238 @@ int l_mesh_audit(lua_State* L) {
     lua_pushinteger(L, a.flipped); lua_setfield(L, -2, "flipped");
     lua_pushinteger(L, a.degenerate); lua_setfield(L, -2, "degenerate");
     lua_pushinteger(L, static_cast<lua_Integer>(openEdges(m))); lua_setfield(L, -2, "open_edges");
+    return 1;
+}
+
+// --- THE CLEAN-UP AND RESHAPING WORDS (#191 step 2): the toolkit's weld, simplify, remesh, hole filling and hull, and
+// the primitives and raw emitters Lua could not reach. Each wraps the MeshBuilder function of the same name.
+
+std::vector<double> checkNumberList(lua_State* L, int idx) {
+    luaL_checktype(L, idx, LUA_TTABLE);
+    std::vector<double> out;
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, idx)); i <= n; ++i) {
+        lua_rawgeti(L, idx, i); out.push_back(luaL_checknumber(L, -1)); lua_pop(L, 1);
+    }
+    return out;
+}
+
+// mesh.weld(m, {position = 1e-4, direction = 1e-3, uv = 1e-4, color = 1/512, sliver = 1e-8, position_only = false})
+// -> mesh : vertices that are the same vertex become one; triangles with no area go (MeshBuilder::weld). With
+// position_only, vertices at one place become one whatever their normals and uvs (hard edges smooth away).
+int l_mesh_weld(lua_State* L) {
+    const RenderMesh& in = checkMesh(L, 1);
+    MeshBuilder::WeldTolerance tol;
+    if (lua_istable(L, 2)) {
+        tol.position = optNumField(L, 2, "position", tol.position);
+        tol.direction = optNumField(L, 2, "direction", tol.direction);
+        tol.uv = optNumField(L, 2, "uv", tol.uv);
+        tol.color = optNumField(L, 2, "color", tol.color);
+        tol.sliver = optNumField(L, 2, "sliver", tol.sliver);
+        tol.positionOnly = optBoolField(L, 2, "position_only", tol.positionOnly);
+    }
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::weld(in, tol)));
+    return 1;
+}
+
+// What simplify, remesh and fill_holes share: they work on a surface whose faces share vertices, and they move
+// positions only. So each welds by position first (unless {weld = false}) and gives the result creased normals after
+// (unless {crease = false}; a number is the crease angle in degrees). Colours ride on the vertices that are kept;
+// uvs do not survive and want `mesh.unwrap` or a projection afterwards.
+std::shared_ptr<RenderMesh> surfaceForReshaping(lua_State* L, int meshIdx, int optsIdx) {
+    const RenderMesh& in = checkMesh(L, meshIdx);
+    if (lua_istable(L, optsIdx) && !optBoolField(L, optsIdx, "weld", true)) return std::make_shared<RenderMesh>(in);
+    MeshBuilder::WeldTolerance tol;
+    tol.positionOnly = true;
+    return std::make_shared<RenderMesh>(MeshBuilder::weld(in, tol));
+}
+void normalsAfterReshaping(lua_State* L, int optsIdx, RenderMesh& m) {
+    double crease = 50.0;
+    if (lua_istable(L, optsIdx)) {
+        lua_getfield(L, optsIdx, "crease");
+        const bool off = lua_isboolean(L, -1) && !lua_toboolean(L, -1);
+        if (lua_isnumber(L, -1)) crease = lua_tonumber(L, -1);
+        lua_pop(L, 1);
+        if (off) return;
+    }
+    MeshBuilder::autosmooth(m, crease);
+}
+
+// mesh.simplify(m, {tris = n | ratio = 0.5, max_error = metres, weld =, crease =}) -> mesh, triangles_left : fewer
+// triangles, the surface moved as little as possible (MeshBuilder::simplify). `max_error` is how far the surface may
+// move, in metres; without it only the count stops it.
+int l_mesh_simplify(lua_State* L) {
+    auto m = surfaceForReshaping(L, 1, 2);
+    const std::size_t have = m->indices.size() / 3;
+    std::size_t target = have / 2;
+    double maxError = 1e30;
+    if (lua_istable(L, 2)) {
+        const double ratio = optNumField(L, 2, "ratio", 0.5);
+        target = static_cast<std::size_t>(std::max(0.0, optNumField(L, 2, "tris", std::floor(static_cast<double>(have) * ratio))));
+        const double metres = optNumField(L, 2, "max_error", -1.0);
+        if (metres >= 0.0) maxError = metres * metres;   // the C++ takes the squared distance
+    }
+    const std::size_t left = MeshBuilder::simplify(*m, target, maxError);
+    *m = MeshBuilder::weld(*m);   // drop the vertices no triangle uses any more
+    normalsAfterReshaping(L, 2, *m);
+    pushMesh(L, m);
+    lua_pushinteger(L, static_cast<lua_Integer>(left));
+    return 2;
+}
+
+// mesh.split_non_manifold(m) -> mesh, vertices_added : where two sheets touch at a vertex, the vertex is split so
+// every edge sits on at most two faces (MeshBuilder::splitNonManifold). Remeshing needs it.
+int l_mesh_split_non_manifold(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    const std::size_t added = MeshBuilder::splitNonManifold(*m);
+    pushMesh(L, m);
+    lua_pushinteger(L, static_cast<lua_Integer>(added));
+    return 2;
+}
+
+// mesh.fill_holes(m, {max_edges = 16, weld =, crease =}) -> mesh, holes_filled : every small open loop is closed by a
+// fan round a new vertex at its middle (MeshBuilder::fillHoles).
+int l_mesh_fill_holes(lua_State* L) {
+    auto m = surfaceForReshaping(L, 1, 2);
+    const int maxEdges = std::max(3, optIntField(L, 2, "max_edges", 16));
+    const std::size_t filled = MeshBuilder::fillHoles(*m, static_cast<std::size_t>(maxEdges), [](const Vec3& p) { return p; });
+    normalsAfterReshaping(L, 2, *m);
+    pushMesh(L, m);
+    lua_pushinteger(L, static_cast<lua_Integer>(filled));
+    return 2;
+}
+
+// mesh.remesh(m, {edge = metres, iterations = 6, weld =, crease =}) -> mesh : even, near-equilateral triangles of about
+// `edge` metres (MeshBuilder::remesh). New vertices stay where the old flat faces put them: there is no surface to
+// project onto, so a coarse curved mesh is not made rounder by this.
+int l_mesh_remesh(lua_State* L) {
+    auto m = surfaceForReshaping(L, 1, 2);
+    const double edge = optNumField(L, 2, "edge", 0.0);
+    luaL_argcheck(L, edge > 0.0, 2, "mesh.remesh wants {edge = metres}");
+    MeshBuilder::splitNonManifold(*m);
+    MeshBuilder::remesh(*m, [edge](const Vec3&) { return edge; }, [](const Vec3& p) { return p; },
+                        std::max(1, optIntField(L, 2, "iterations", 6)));
+    *m = MeshBuilder::weld(*m);
+    normalsAfterReshaping(L, 2, *m);
+    pushMesh(L, m);
+    return 1;
+}
+
+// mesh.hull(mesh | {points...}, color?) -> mesh : the convex hull, flat shaded, faces wound outward
+// (MeshBuilder::convexHull). Empty when the points are fewer than four or all in one plane. A collider's shape, a
+// rock's first form.
+int l_mesh_hull(lua_State* L) {
+    std::vector<Vec3> pts;
+    if (lua_istable(L, 1)) pts = checkVec3List(L, 1);
+    else for (const Vertex& v : checkMesh(L, 1).vertices) pts.push_back(v.position);
+    const Vec3 color = optColor(L, 2);
+    auto m = std::make_shared<RenderMesh>();
+    for (const std::array<uint32_t, 3>& t : MeshBuilder::convexHull(pts)) {
+        const Vec3& a = pts[t[0]]; const Vec3& b = pts[t[1]]; const Vec3& c = pts[t[2]];
+        const Vec3 out = cross(b - a, c - a);   // the hull gives its triangles counter-clockwise seen from outside
+        if (out.length() > 0.0) MeshBuilder::emitTri(*m, a, b, c, normalize(out), color);
+    }
+    pushMesh(L, m);
+    return 1;
+}
+
+// mesh.tri(a, b, c, normal, color) -> mesh : one triangle, wound to face `normal` (MeshBuilder::emitTri); or, with
+// {uv_a, uv_b, uv_c} as a sixth argument, with its own uvs (emitTriUV).
+int l_mesh_tri(lua_State* L) {
+    const Vec3 a = checkVec3(L, 1), b = checkVec3(L, 2), c = checkVec3(L, 3), n = checkVec3(L, 4);
+    auto m = std::make_shared<RenderMesh>();
+    if (lua_istable(L, 6)) {
+        Vec2 uv[3];
+        for (int i = 0; i < 3; ++i) {
+            lua_rawgeti(L, 6, i + 1);
+            luaL_checktype(L, -1, LUA_TTABLE);
+            lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2);
+            uv[i] = Vec2(luaL_checknumber(L, -2), luaL_checknumber(L, -1));
+            lua_pop(L, 3);
+        }
+        MeshBuilder::emitTriUV(*m, a, b, c, n, optColor(L, 5), static_cast<float>(uv[0].x), static_cast<float>(uv[0].y),
+                               static_cast<float>(uv[1].x), static_cast<float>(uv[1].y), static_cast<float>(uv[2].x),
+                               static_cast<float>(uv[2].y));
+    } else {
+        MeshBuilder::emitTri(*m, a, b, c, n, optColor(L, 5));
+    }
+    pushMesh(L, m);
+    return 1;
+}
+
+// mesh.wedge{x, y, z} -> a ramp: a box cut corner to corner (MeshBuilder::wedge)
+int l_mesh_wedge(lua_State* L) {
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::wedge(checkVec3(L, 1))));
+    return 1;
+}
+
+// mesh.cube_sphere(radius, face_res = 32, warp = true) -> a sphere of six evenly gridded faces, no pole pinch
+// (MeshBuilder::cubeSphere)
+int l_mesh_cube_sphere(lua_State* L) {
+    const bool warp = lua_isnoneornil(L, 3) ? true : lua_toboolean(L, 3) != 0;
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::cubeSphere(static_cast<float>(luaL_checknumber(L, 1)),
+                                                                     static_cast<int>(luaL_optinteger(L, 2, 32)), warp)));
+    return 1;
+}
+
+// mesh.cross_cards(width, height, planes, normal = {0,1,0}) -> upright crossed quads through the origin: grass,
+// flowers, a far tree (MeshBuilder::crossCards)
+int l_mesh_cross_cards(lua_State* L) {
+    const Vec3 normal = lua_istable(L, 4) ? checkVec3(L, 4) : Vec3(0, 1, 0);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::crossCards(luaL_checknumber(L, 1), luaL_checknumber(L, 2),
+                                                                     static_cast<int>(luaL_optinteger(L, 3, 2)), normal)));
+    return 1;
+}
+
+// mesh.ribbon({points...}, {half_widths...}, {up = {0,1,0}, colours = {...}}) -> a flat strip along a curve, u across
+// it and v the metres along it (MeshBuilder::ribbon): a path, a strap, a frond
+int l_mesh_ribbon(lua_State* L) {
+    const std::vector<Vec3> pts = checkVec3List(L, 1);
+    const std::vector<double> half = checkNumberList(L, 2);
+    Vec3 up(0, 1, 0);
+    std::vector<Vec3> colours;
+    if (lua_istable(L, 3)) {
+        up = optVec3Field(L, 3, "up", up);
+        lua_getfield(L, 3, "colours");
+        if (lua_istable(L, -1)) colours = checkVec3List(L, lua_gettop(L));
+        lua_pop(L, 1);
+    }
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::ribbon(pts, half, up, colours)));
+    return 1;
+}
+
+// mesh.project_uv(m, origin, u_axis, v_axis) -> mesh : flat uvs along any two axes, u = dot(p - origin, u_axis) and
+// the same for v; the axes carry the scale (a direction over a tile size) (MeshBuilder::projectUV)
+int l_mesh_project_uv(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::projectUV(*m, 0, checkVec3(L, 2), checkVec3(L, 3), checkVec3(L, 4));
+    pushMesh(L, m);
+    return 1;
+}
+
+// mesh.union(a, b) / mesh.subtract(a, b) / mesh.intersect(a, b) -> whole, from_a, from_b : join two closed solids, cut
+// the second out of the first, or keep only where they overlap (MeshBuilder::boolean). `whole` is the result as one
+// mesh; `from_a` and `from_b` are the same faces split by which input they came from (a hole's walls are `from_b`), for
+// giving each its own material. Both inputs must be closed solids; one that is not is a script error saying which.
+int booleanWord(lua_State* L, MeshBuilder::BooleanOp op) {
+    const MeshBuilder::BooleanResult r = MeshBuilder::boolean(checkMesh(L, 1), checkMesh(L, 2), op);
+    if (!r.ok()) return luaL_error(L, "mesh boolean: %s", r.error.c_str());
+    pushMesh(L, std::make_shared<RenderMesh>(r.whole()));
+    pushMesh(L, std::make_shared<RenderMesh>(r.fromA));
+    pushMesh(L, std::make_shared<RenderMesh>(r.fromB));
+    return 3;
+}
+int l_mesh_union(lua_State* L) { return booleanWord(L, MeshBuilder::BooleanOp::Union); }
+int l_mesh_subtract(lua_State* L) { return booleanWord(L, MeshBuilder::BooleanOp::Subtract); }
+int l_mesh_intersect(lua_State* L) { return booleanWord(L, MeshBuilder::BooleanOp::Intersect); }
+
+// mesh.planar_uv(m, axis = "y", scale = 1) -> mesh : flat uvs looking along x, y or z; the other two position
+// components, times `scale`, become (u, v) (MeshBuilder::generatePlanarUVs)
+int l_mesh_planar_uv(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    const char* axis = luaL_optstring(L, 2, "y");
+    const int index = axis[0] == 'x' ? 0 : axis[0] == 'z' ? 2 : 1;
+    MeshBuilder::generatePlanarUVs(*m, index, static_cast<float>(luaL_optnumber(L, 3, 1.0)));
+    pushMesh(L, m);
     return 1;
 }
 
@@ -4495,6 +4743,22 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"mirror", l_mesh_mirror},
         {"array", l_mesh_array},
         {"array_along", l_mesh_array_along},
+        {"weld", l_mesh_weld},
+        {"simplify", l_mesh_simplify},
+        {"split_non_manifold", l_mesh_split_non_manifold},
+        {"fill_holes", l_mesh_fill_holes},
+        {"remesh", l_mesh_remesh},
+        {"hull", l_mesh_hull},
+        {"tri", l_mesh_tri},
+        {"wedge", l_mesh_wedge},
+        {"cube_sphere", l_mesh_cube_sphere},
+        {"cross_cards", l_mesh_cross_cards},
+        {"ribbon", l_mesh_ribbon},
+        {"project_uv", l_mesh_project_uv},
+        {"planar_uv", l_mesh_planar_uv},
+        {"union", l_mesh_union},
+        {"subtract", l_mesh_subtract},
+        {"intersect", l_mesh_intersect},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kMeshFns);
