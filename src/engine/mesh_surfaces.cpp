@@ -645,6 +645,80 @@ RenderMesh MeshBuilder::loft(const std::vector<std::vector<Vec3>>& sections, boo
     return m;
 }
 
+RenderMesh MeshBuilder::sheet(const std::vector<std::vector<Vec3>>& rows, const Vec3& toward, const Vec3& color, double creaseDeg) {
+    RenderMesh m;
+    const int nr = static_cast<int>(rows.size());
+    if (nr < 2) return m;
+    const int np = static_cast<int>(rows[0].size());
+    if (np < 2) return m;
+    for (const auto& row : rows)
+        if (static_cast<int>(row.size()) != np) return m;   // (every row the same count)
+    GridSurface g;
+    g.rows = nr;
+    g.cols = np;
+    g.creaseDeg = creaseDeg;
+    g.color = color;
+    for (const auto& row : rows)
+        for (const Vec3& q : row) g.p.push_back(q);
+    {
+        const std::vector<double> s0 = runningLength(rows[0], false);
+        for (double x : s0) g.u.push_back(s0.back() > 1e-12 ? x / s0.back() : 0.0);
+        std::vector<Vec3> middles;
+        for (const auto& row : rows) middles.push_back(row[static_cast<std::size_t>(np / 2)]);
+        g.v = runningLength(middles, false);
+    }
+    const bool given = toward.lengthSquared() > 1e-24;
+    g.hint = [&](int b, int q) {
+        if (given) return toward;
+        // along the row, crossed with the way the rows go: rows running left to right and going away face the viewer
+        return cross(g.at(b, q + 1) - g.at(b, q), g.at(b + 1, q) - g.at(b, q));
+    };
+    g.emit(m);
+    return m;
+}
+
+RenderMesh MeshBuilder::ruled(const MeshPath& a, const MeshPath& b, int steps, int count, const Vec3& toward, const Vec3& color,
+                              double creaseDeg) {
+    if (a.pts.size() < 2 || b.pts.size() < 2) return RenderMesh();
+    const int n = count >= 2 ? count : static_cast<int>(std::max(a.pts.size(), b.pts.size()));
+    const std::vector<Vec3> ea = evenlyAlong(a.pts, n), eb = evenlyAlong(b.pts, n);
+    const int bands = std::max(1, steps);
+    std::vector<std::vector<Vec3>> rows;
+    for (int r = 0; r <= bands; ++r) {
+        const double t = static_cast<double>(r) / bands;
+        std::vector<Vec3> row;
+        for (int k = 0; k < n; ++k) row.push_back(ea[static_cast<std::size_t>(k)] * (1.0 - t) + eb[static_cast<std::size_t>(k)] * t);
+        rows.push_back(std::move(row));
+    }
+    return sheet(rows, toward, color, creaseDeg);
+}
+
+RenderMesh MeshBuilder::patch(const MeshPath& bottom, const MeshPath& top, const MeshPath& left, const MeshPath& right, int across,
+                              int up, const Vec3& toward, const Vec3& color, double creaseDeg) {
+    if (bottom.pts.size() < 2 || top.pts.size() < 2 || left.pts.size() < 2 || right.pts.size() < 2) return RenderMesh();
+    const int nu = std::max(2, across + 1), nv = std::max(2, up + 1);
+    const std::vector<Vec3> c0 = evenlyAlong(bottom.pts, nu), c1 = evenlyAlong(top.pts, nu);
+    const std::vector<Vec3> d0 = evenlyAlong(left.pts, nv), d1 = evenlyAlong(right.pts, nv);
+    // the four corners, each the middle of the two curve ends that meet there
+    const Vec3 p00 = (c0.front() + d0.front()) * 0.5, p10 = (c0.back() + d1.front()) * 0.5;
+    const Vec3 p01 = (c1.front() + d0.back()) * 0.5, p11 = (c1.back() + d1.back()) * 0.5;
+    std::vector<std::vector<Vec3>> rows;
+    for (int j = 0; j < nv; ++j) {
+        const double v = static_cast<double>(j) / (nv - 1);
+        std::vector<Vec3> row;
+        for (int i = 0; i < nu; ++i) {
+            const double u = static_cast<double>(i) / (nu - 1);
+            // Coons: the two pairs of facing curves blended across, less the flat sheet through the corners they both count
+            const Vec3 alongU = c0[static_cast<std::size_t>(i)] * (1.0 - v) + c1[static_cast<std::size_t>(i)] * v;
+            const Vec3 alongV = d0[static_cast<std::size_t>(j)] * (1.0 - u) + d1[static_cast<std::size_t>(j)] * u;
+            const Vec3 corners = p00 * ((1.0 - u) * (1.0 - v)) + p10 * (u * (1.0 - v)) + p01 * ((1.0 - u) * v) + p11 * (u * v);
+            row.push_back(alongU + alongV - corners);
+        }
+        rows.push_back(std::move(row));
+    }
+    return sheet(rows, toward, color, creaseDeg);
+}
+
 RenderMesh MeshBuilder::superquadric(const Vec3& r, double e1, double e2, int stacks, int slices, const Vec3& color) {
     RenderMesh m;
     stacks = std::max(2, stacks);

@@ -2805,6 +2805,51 @@ int l_mesh_union(lua_State* L) { return booleanWord(L, MeshBuilder::BooleanOp::U
 int l_mesh_subtract(lua_State* L) { return booleanWord(L, MeshBuilder::BooleanOp::Subtract); }
 int l_mesh_intersect(lua_State* L) { return booleanWord(L, MeshBuilder::BooleanOp::Intersect); }
 
+// The sheets (one face thick, drawn on one side). Each takes a last table {toward = {x,y,z}, color = {r,g,b},
+// crease = degrees}: `toward` is the side the sheet faces; without it, the side from which its rows run left to right
+// going away.
+struct SheetLook { Vec3 toward{0, 0, 0}; Vec3 color{1, 1, 1}; double crease = 40.0; };
+SheetLook checkSheetLook(lua_State* L, int idx) {
+    SheetLook look;
+    if (!lua_istable(L, idx)) return look;
+    look.toward = optVec3Field(L, idx, "toward", look.toward);
+    look.color = optVec3Field(L, idx, "color", look.color);
+    look.crease = optNumField(L, idx, "crease", look.crease);
+    return look;
+}
+// mesh.sheet({row1, row2, ...}, look?) -> a sheet through a grid of points, each row a list of {x,y,z}, the same count
+// each (MeshBuilder::sheet)
+int l_mesh_sheet(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<std::vector<Vec3>> rows;
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 1)); i <= n; ++i) {
+        lua_rawgeti(L, 1, i);
+        rows.push_back(checkVec3List(L, lua_gettop(L)));
+        lua_pop(L, 1);
+    }
+    const SheetLook look = checkSheetLook(L, 2);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::sheet(rows, look.toward, look.color, look.crease)));
+    return 1;
+}
+// mesh.ruled(path_a, path_b, {steps = 1, count = 0, ...look}) -> the sheet of straight lines joining two curves
+// (MeshBuilder::ruled)
+int l_mesh_ruled(lua_State* L) {
+    const MeshPath a = checkPath(L, 1), b = checkPath(L, 2);
+    const SheetLook look = checkSheetLook(L, 3);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::ruled(a, b, optIntField(L, 3, "steps", 1), optIntField(L, 3, "count", 0),
+                                                                look.toward, look.color, look.crease)));
+    return 1;
+}
+// mesh.patch(bottom, top, left, right, {across = 12, up = 12, ...look}) -> the sheet filling four boundary curves:
+// bottom and top run the same way, left joins their starts and right their ends (MeshBuilder::patch)
+int l_mesh_patch(lua_State* L) {
+    const MeshPath bottom = checkPath(L, 1), top = checkPath(L, 2), left = checkPath(L, 3), right = checkPath(L, 4);
+    const SheetLook look = checkSheetLook(L, 5);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::patch(bottom, top, left, right, optIntField(L, 5, "across", 12),
+                                                                optIntField(L, 5, "up", 12), look.toward, look.color, look.crease)));
+    return 1;
+}
+
 // mesh.planar_uv(m, axis = "y", scale = 1) -> mesh : flat uvs looking along x, y or z; the other two position
 // components, times `scale`, become (u, v) (MeshBuilder::generatePlanarUVs)
 int l_mesh_planar_uv(lua_State* L) {
@@ -4759,6 +4804,9 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"union", l_mesh_union},
         {"subtract", l_mesh_subtract},
         {"intersect", l_mesh_intersect},
+        {"sheet", l_mesh_sheet},
+        {"ruled", l_mesh_ruled},
+        {"patch", l_mesh_patch},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kMeshFns);

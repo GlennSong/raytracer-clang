@@ -92,6 +92,7 @@ const std::map<std::string, std::string> kReach = {
     {"merged", "mesh.merge"},
     {"mirrored", "mesh.mirror"},
     {"paint", "mesh.paint"},
+    {"patch", "mesh.patch"},
     {"pathArc", "mesh.path.arc"},
     {"pathBezier", "mesh.path.bezier"},
     {"pathCircle", "mesh.path.circle"},
@@ -118,7 +119,9 @@ const std::map<std::string, std::string> kReach = {
     {"revolve", "mesh.revolve"},
     {"ribbon", "mesh.ribbon"},
     {"roundedBox", "mesh.rounded_box"},
+    {"ruled", "mesh.ruled"},
     {"shape", "c++ only: the level file's shape names; a script calls the primitive itself"},
+    {"sheet", "mesh.sheet"},
     {"simplify", "mesh.simplify"},
     {"sphere", "mesh.sphere"},
     {"splitNonManifold", "mesh.split_non_manifold"},
@@ -450,4 +453,75 @@ TEST_CASE(mesh_booleans_take_every_closed_primitive_and_refuse_an_open_sheet) {
     const MeshBuilder::BooleanResult refused = MeshBuilder::boolean(box, sheet, MeshBuilder::BooleanOp::Subtract);
     CHECK(!refused.ok());
     CHECK(refused.fromA.indices.empty() && refused.fromB.indices.empty());
+}
+
+// --- SHEETS (#191 step 3): a grid of points, the lines between two curves, the fill of four curves ---
+
+namespace {
+
+double areaOf(const RenderMesh& m) {
+    double twice = 0;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const Vec3& a = m.vertices[m.indices[t]].position;
+        twice += cross(m.vertices[m.indices[t + 1]].position - a, m.vertices[m.indices[t + 2]].position - a).length();
+    }
+    return twice * 0.5;
+}
+
+}  // namespace
+
+TEST_CASE(mesh_sheets_have_the_area_and_the_side_they_were_asked_for) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    // two level 2 m lines a metre apart: a 2 m2 floor. Asked to face up it does; asked to face down it does.
+    const std::string lines = "local a, b = { {0, 0, 0}, {2, 0, 0} }, { {0, 0, -1}, {2, 0, -1} } ";
+    auto up = build(vm, lines + "return mesh.ruled(a, b, { steps = 4, count = 5, toward = {0, 1, 0} })");
+    auto down = build(vm, lines + "return mesh.ruled(a, b, { toward = {0, -1, 0} })");
+    CHECK(up && down);
+    if (up) {
+        CHECK_APPROX(areaOf(*up), 2.0, 1e-9);
+        CHECK(up->indices.size() / 3 == 4 * 4 * 2);
+        CHECK(auditMesh(*up).clean());
+        for (const Vertex& v : up->vertices) CHECK(v.normal.y > 0.99);
+    }
+    if (down) { CHECK(auditMesh(*down).clean()); for (const Vertex& v : down->vertices) CHECK(v.normal.y < -0.99); }
+    // with no side asked for: rows running left to right (+x) and going away (-z) face the viewer above them
+    auto own = build(vm, lines + "return mesh.ruled(a, b)");
+    CHECK(own != nullptr);
+    if (own) for (const Vertex& v : own->vertices) CHECK(v.normal.y > 0.99);
+    // a grid given row by row is the same sheet
+    auto grid = build(vm, "return mesh.sheet({ { {0,0,0}, {1,0,0}, {2,0,0} }, { {0,0,-1}, {1,0,-1}, {2,0,-1} } })");
+    CHECK(grid != nullptr);
+    if (grid) { CHECK_APPROX(areaOf(*grid), 2.0, 1e-9); for (const Vertex& v : grid->vertices) CHECK(v.normal.y > 0.99); }
+    // rows of different counts are not a grid: nothing is built
+    auto ragged = build(vm, "return mesh.sheet({ { {0,0,0}, {1,0,0} }, { {0,0,-1}, {1,0,-1}, {2,0,-1} } })");
+    CHECK(ragged && ragged->indices.empty());
+}
+
+TEST_CASE(mesh_patch_fills_four_curves_and_passes_through_each) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    // four straight edges of a unit square: the flat square, 1 m2
+    auto flat = build(vm, "return mesh.patch({ {0,0,0}, {1,0,0} }, { {0,0,-1}, {1,0,-1} }, { {0,0,0}, {0,0,-1} }, { {1,0,0}, {1,0,-1} }, "
+                          "{ across = 4, up = 4, toward = {0, 1, 0} })");
+    CHECK(flat != nullptr);
+    if (flat) { CHECK_APPROX(areaOf(*flat), 1.0, 1e-9); CHECK(flat->indices.size() / 3 == 32); CHECK(auditMesh(*flat).clean()); }
+    // the front edge arched 0.3 m up at its middle, the other three straight: the patch reaches 0.3 m at the middle
+    // of its front edge, stays level along the back, and rises nowhere above the arch
+    auto arched = build(vm, "local front = {} for i = 0, 16 do local t = i / 16 front[#front + 1] = { t, 0.3 * math.sin(math.pi * t), 0 } end "
+                            "return mesh.patch(front, { {0,0,-1}, {1,0,-1} }, { {0,0,0}, {0,0,-1} }, { {1,0,0}, {1,0,-1} }, "
+                            "{ across = 16, up = 8, toward = {0, 1, 0} })");
+    CHECK(arched != nullptr);
+    if (!arched) return;
+    CHECK(auditMesh(*arched).clean());
+    double frontMiddle = -1, backHighest = -1, highest = -1;
+    for (const Vertex& v : arched->vertices) {
+        highest = std::max(highest, static_cast<double>(v.position.y));
+        if (std::fabs(v.position.z) < 1e-9 && std::fabs(v.position.x - 0.5) < 0.02) frontMiddle = std::max(frontMiddle, static_cast<double>(v.position.y));
+        if (std::fabs(v.position.z + 1.0) < 1e-9) backHighest = std::max(backHighest, static_cast<double>(v.position.y));
+    }
+    CHECK(frontMiddle > 0.29 && frontMiddle < 0.301);
+    CHECK(std::fabs(backHighest) < 1e-9);
+    CHECK(highest < 0.301);
+    CHECK(areaOf(*arched) > 1.0);   // bowed, so more than the flat square
 }

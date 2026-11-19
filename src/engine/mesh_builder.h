@@ -155,6 +155,24 @@ struct MeshBuilder {
     // circles, a car's sections.
     static RenderMesh loft(const std::vector<std::vector<Vec3>>& sections, bool closedRings = true, bool caps = true,
                            const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
+    // A SHEET through a grid of points: `rows` of the same count each, one face thick, drawn on ONE side -- the side
+    // `toward` points to (each face turned to it), or, when `toward` is zero, the side from which the rows run left to
+    // right as they go away from you. u runs 0..1 along the first row, v the metres from row to row. A sail, an awning,
+    // a fender skin, a curved panel. (A solid wants a loft, or a sheet given thickness.)
+    static RenderMesh sheet(const std::vector<std::vector<Vec3>>& rows, const Vec3& toward = Vec3(0, 0, 0),
+                            const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
+    // RULED: the sheet of straight lines joining two curves, point for point by their share of each curve's length,
+    // in `steps` bands between them and `count` points along (0: the longer curve's own count). A ramp between two
+    // edges, a blade, a hood between two rails, a twisted ribbon.
+    static RenderMesh ruled(const MeshPath& a, const MeshPath& b, int steps = 1, int count = 0,
+                            const Vec3& toward = Vec3(0, 0, 0), const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
+    // A PATCH: the sheet filling four boundary curves (a Coons patch). `bottom` and `top` run the same way, `left`
+    // from bottom's start to top's start and `right` from bottom's end to top's end; where the corners do not quite
+    // meet, the curves win along their own edges. `across` points along bottom and top, `up` along left and right.
+    // A car's roof between its rails, a tent panel, a saddle, a hull plate.
+    static RenderMesh patch(const MeshPath& bottom, const MeshPath& top, const MeshPath& left, const MeshPath& right,
+                            int across = 12, int up = 12, const Vec3& toward = Vec3(0, 0, 0),
+                            const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
     // A SUPERQUADRIC (Barr's superellipsoid): radii `r`; `e1` shapes it top to bottom and `e2` round it (1: round,
     // under 1: squarer, 0.1 nearly a box; 2: a diamond). One word from a box with soft edges to a sphere to a cylinder
     // with round ends: pebbles, cushions, buttons, soap-bar seats, rounded car parts.
