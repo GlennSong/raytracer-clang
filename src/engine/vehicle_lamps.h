@@ -14,8 +14,8 @@ namespace engine {
 // This started life as citysim's carLampState, typed against `Agent::State` and
 // the sim's own clock, which meant the player's car could not use it: it had a
 // manual headlight toggle, no brake lights and no indicators. The predicate is
-// the same question in both cases, so it lives here and citysim adapts to it
-// (see apps/citysim/car_lamps.h) rather than owning it.
+// the same question in both cases, so it lives here and citysim asks it
+// (CityRenderSystem::syncCarLamps) rather than owning it.
 //
 // Pure: no ECS, no rendering, no Lua, no clock of its own. Callers supply the
 // two things that differ between them — whether it is dark, and what the vehicle

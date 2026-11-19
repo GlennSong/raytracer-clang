@@ -17,7 +17,7 @@
 
   <figure class="shot">
     <img src="img/citysim/bus_stop_crowd.webp" alt="A crowd of blocky townspeople waiting at a bus stop on a downtown corner; a yellow bus pulls in behind a signal, cars wait at the crossing and an elevated rail line runs behind">
-    <figcaption>Downtown on the island at midday: people waiting at a stop for line 7, a bus at the kerb, traffic held at the signal. Every figure here is an agent with a home, a job and a timetable of its own.</figcaption>
+    <figcaption>Downtown on the island at midday, October 2026: people waiting at a stop for line 7, a bus at the kerb, traffic held at the signal. Every figure here is an agent with a home, a job and a timetable of its own. (The buses, the stops and this traffic were the old driving's, deleted in November: ADR-0460, ADR-0461. The island has no traffic until it is given the new driving's data.)</figcaption>
   </figure>
 
   <p>The older page <a href="../city-sim.html">How the City Thinks</a> covers the early perception design (vision
@@ -608,11 +608,12 @@
   </ul>
   <figure class="shot">
     <img src="img/citysim/bus_ride_junction.webp" alt="View from a seat inside a bus at a junction: a yellow bus, a taxi and a green car meet across the zebra crossing, overlapping">
-    <figcaption>Riding a bus (route 0, seated) through a junction on 2026-10-06. The yellow bus, the cab and the green car have met inside the box — the kind of tangle the box-occupancy rules, the gridlock clock and the fender-bender freeze exist to keep rare and to unwind.</figcaption>
+    <figcaption>Riding a bus (route 0, seated) through a junction on 2026-10-06. The yellow bus, the cab and the green car have met inside the box — the kind of tangle the box-occupancy rules, the gridlock clock and the fender-bender freeze exist to keep rare and to unwind. (All three were the old driving's: the buses and cabs went in ADR-0460, the cars in ADR-0461.)</figcaption>
   </figure>
   <p>Gates: <code>metro_junctions_stay_clear</code> (level tests; thresholds stuck &lt; 300 car-seconds, overlaps
-    &lt; 800, from about 3,732 and 5,535 before the route-metre fixes) and
-    <code>city_phys_tier_packed_junction_does_not_pile_up</code> (a physics soak).</p>
+    &lt; 800, from about 3,732 and 5,535 before the route-metre fixes; it goes with the rest of the old driving's sim
+    code) and <code>city_phys_tier_packed_junction_does_not_pile_up</code> (a physics soak, deleted with the physical
+    tier in ADR-0461).</p>
 
   <h2>Cars: one car system, two motion owners</h2>
   <p>ADR-0062 started from Glenn's requirement: "one car system". The player can walk up to <i>any</i> car and drive
@@ -654,7 +655,7 @@
         <path d="M315,106 L315,160 L575,160 L575,110" fill="none" stroke="#e6c07b" stroke-width="1.6" marker-end="url(#ar5)"/>
         <text x="445" y="152" fill="#e6c07b" font-size="12">the player presses enter: releaseDriver,</text>
         <text x="445" y="178" fill="#e6c07b" font-size="12">instance vanishes, a real Vehicle spawns in its place</text>
-        <text x="450" y="214" fill="#93a6ba" font-size="12">Opt-in middle ground: CitySimConfig::physicalCars hands the nearest N cars to Jolt (physics soaks only; default 0)</text>
+        <text x="450" y="214" fill="#93a6ba" font-size="12">(The opt-in middle ground, physicalCars, went with the old driving: the near tier is the new driving's, ADR-0447)</text>
       </g>
     </svg>
   </div>
@@ -721,7 +722,7 @@
 
   <table>
     <tr><th>Tier</th><th>Simulated as</th><th>Drawn as</th><th>Costs</th></tr>
-    <tr><td>P</td><td>K, plus a physical body: a Jolt character capsule for the nearest walkers; cars only when promoted (or <code>physicalCars</code>)</td><td>its own entity, posed limbs</td><td>a fixed budget: <code>maxWalkerBodies</code> 200</td></tr>
+    <tr><td>P</td><td>K, plus a physical body: a Jolt character capsule for the nearest walkers; cars only when promoted (or carried by the new driving's near tier)</td><td>its own entity, posed limbs</td><td>a fixed budget: <code>maxWalkerBodies</code> 200</td></tr>
     <tr><td>K</td><td>everything: sensing, memory, FSM, signals, junction rules, fender-benders, seats and sessions</td><td>instanced meshes, lamps, debug rings</td><td>3–30 µs an agent, rising with local density</td></tr>
     <tr><td>V</td><td>its exact route at a modelled speed, once a second, blind (no sensing, no queues)</td><td>GPU crowd stand-in (or a CPU band where compute is missing)</td><td>~0.3 µs an agent</td></tr>
     <tr><td>D</td><td>nothing; a heap event at its next departure, arrival, or 4 s waypoint while travelling</td><td>GPU crowd while on a trip; indoors otherwise</td><td>a heap pop per event, budget 400 a tick</td></tr>
@@ -834,7 +835,7 @@
 
   <figure class="shot">
     <img src="img/citysim/street_from_above.webp" alt="Looking down a downtown street from a paraglider: a junction with zebra crossings, moving and parked cars, a bus at a stop, pedestrians on the pavements">
-    <figcaption>Saltwood from a paraglider: the near tier at work — traffic on both carriageways, cars in parking bays, a bus at its stop (the HUD: "line 6 bus at the stop now"), walkers on the pavements.</figcaption>
+    <figcaption>Saltwood from a paraglider, October 2026: the near tier at work — traffic on both carriageways, cars in parking bays, a bus at its stop (the HUD: "line 6 bus at the stop now"), walkers on the pavements. (The traffic, the bays and the bus were the old driving's: gone since ADR-0460 and ADR-0461.)</figcaption>
   </figure>
 
   <h2>Scale: what was measured</h2>
@@ -855,20 +856,20 @@
     of October respects that line exactly: it decides nothing. It only places far stand-ins from a route and a
     clock; every decision stays on the CPU, deterministic.</p></div>
 
-  <h2>Transit: buses, cabs and trains</h2>
-  <p>A bus is an agent with a one-state table ("drive the loop, for ever") and a <code>BusNetwork</code>
-    (<code>city_bus.h</code>) of derived loops: farthest-point hubs, legs A*'d street-only with a reuse price so
-    routes spread, stops 180–300 m apart, and every loop given a reverse <b>twin</b> so buses run both ways. The
+  <h2>Transit: trains (buses and cabs are gone, for now)</h2>
+  <p><b>There are no buses and no cabs</b> since November 2026 (ADR-0460): they were the old driving's own driving
+    agents, and went with it, their stops, depots, riders, hailing and the player's seat on them included. They come
+    back when they are rebuilt on the new driving; ADR-0460 lists what the deleted tests checked, for that rebuild.
+    What is left of them: <code>BusNetwork</code>'s route planner (<code>city_bus.h</code>), which only the island
+    planner uses now, to draw each town's local bus loops on the island's map, and the fleet's bus and taxi bodies.
+    The shared ride book and cab dispatch (<code>city_transit</code>, <code>city_dispatch</code>) are deleted too
+    (ADR-0461): the rebuild designs its own.</p>
+  <p>How the loops were planned, for that rebuild: farthest-point hubs, legs A*'d street-only with a reuse price so
+    routes spread, stops 180–300 m apart, and every loop given a reverse <b>twin</b> so buses ran both ways. The
     metric that mattered was not distance coverage (94% within 220 m hid the problem) but the share of streets a bus
-    drives: 28% → 58%. Buses dwell 10 s plus 3 s a rider; with a depot they have a service day (05:30–23:30) and
-    sleep in their bays overnight.</p>
-  <p>Riders choose with <code>planTrip</code>: door-to-door <i>time</i> (walk, half the headway as the wait, the ride
-    round the loop, one transfer within 100 m), taken only if it beats walking by max(60 s, 15%). Under the old
-    walk-only rule 58% of accepted trips were slower than walking. Between towns there is no walk to beat
-    (<code>walkable=false</code>); that one change took island bus commuters from 34 to 602 of 948. Cabs are
-    drivers with a taxi table matched by <code>Dispatch</code>; trains are a separate <code>RailSim</code> whose
-    riders (ADR-0156) walk to platforms the same way. The player rides a bus in the bus's own frame, placed
-    through its drawn matrix.</p>
+    drove: 28% → 58%. Riders chose by door-to-door <i>time</i>, taken only if it beat walking by max(60 s, 15%).</p>
+  <p><b>Trains</b> are unchanged: a separate <code>RailSim</code> whose riders (ADR-0156) walk to platforms and
+    ride between towns.</p>
 
   <h2>Possession: every drawn agent is two objects</h2>
   <p>Possession lets a director — a script, a model, the player — run one agent. The control channel
@@ -988,7 +989,7 @@
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_render.h">src/apps/citysim/city_render.h</a> — <code>CityRenderSystem</code>: builds the sim from a level, draws it, feeds the GPU crowd</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_walkers.cpp">src/apps/citysim/city_walkers.cpp</a> — walker bodies, the body budget, the tether escape</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_vehicles.cpp">src/apps/citysim/city_vehicles.cpp</a> — promotion of an ambient car to a Jolt Vehicle</li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_bus.h">src/apps/citysim/city_bus.h</a> — BusNetwork; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_dispatch.h">city_dispatch.h</a> cabs; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/rail_sim.h">rail_sim.h</a> trains</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_bus.h">src/apps/citysim/city_bus.h</a> — BusNetwork's route planner (the island planner's map lines); <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/rail_sim.h">rail_sim.h</a> trains</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_possess.cpp">src/apps/citysim/city_possess.cpp</a> — possession over the control channel</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/ai/">src/engine/ai/</a> — nav_graph, pathfind, perception, agent_memory, commitment, driver_agent, lane_follow, traffic_sense</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/crowd.comp">shaders/vulkan/crowd.comp</a> — the GPU crowd</li>
@@ -998,7 +999,6 @@
   <p><b>Tests.</b> <code>test_city_sim</code>, <code>test_city_goals</code> (tables, parity, staffing, the catalog
     rules), <code>test_agent_goals</code> (the Lua matches the C++), <code>test_agent_memory</code>,
     <code>test_city_flow</code> (crashes, files of walkers), <code>test_tier_v</code> (tiers, waking mid-trip),
-    <code>test_city_phys_tier</code>, <code>test_city_ride</code>, <code>test_city_bus</code>,
     <code>test_city_possess</code>, <code>test_sim_scale</code> (the bench, print-only under
     <code>RT_SIM_SCALE=1</code>), and the level gates in <code>test_levels_playable.cpp</code>
     (<code>metro_junctions_stay_clear</code>, <code>metro_bus_network_serves_the_city</code>,

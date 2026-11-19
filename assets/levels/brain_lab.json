@@ -75,8 +75,6 @@
     "debugWidgets": false,
     "perceptionReliability": 1.0,
     "dormancy": false,
-    "realLanes": true,
-    "driving": "v2",
     "drivingRules": "rules/lab.lua",
     "markers": "markers/traffic_lab.json",
     "residents": [

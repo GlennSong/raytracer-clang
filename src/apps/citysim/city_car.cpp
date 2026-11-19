@@ -59,27 +59,9 @@ engine::Entity carEntityNumbered(engine::World& world, uint32_t id) {
     return found;
 }
 
-void carsNear(const CitySim& sim, engine::World& world, Vec2 p, Real radius, std::vector<CarSeen>& out) {
+void carsNear(engine::World& world, Vec2 p, Real radius, std::vector<CarSeen>& out) {
     const Real r2 = radius * radius;
     const auto within = [&](Vec2 at) { return radius < 0 || (at - p).lengthSquared() <= r2; };
-    const std::vector<Agent>& agents = sim.agents();
-    const std::vector<SimVehicle>& vehicles = sim.vehicles();
-    for (const int ni : sim.nearAgents()) {
-        const Agent& a = agents[static_cast<std::size_t>(ni)];
-        if (a.mode != Agent::Mode::Driver || a.released || a.far() || !within(a.pos)) continue;
-        CarSeen c;
-        c.pos = a.pos;
-        c.heading = a.heading;
-        c.speed = a.speed;
-        c.moving = a.moving;
-        if (a.vehicle >= 0 && a.vehicle < static_cast<int>(vehicles.size())) {
-            c.length = vehicles[static_cast<std::size_t>(a.vehicle)].length;
-            c.width = vehicles[static_cast<std::size_t>(a.vehicle)].width;
-        }
-        c.agent = ni;
-        c.driver = ni;
-        out.push_back(c);
-    }
     world.each<CityCarBody, CityCarLink, engine::Transform>(
         [&](engine::Entity e, CityCarBody& body, CityCarLink& link, engine::Transform& t) {
             if (link.away || world.has<engine::Vehicle>(e) || carNowhere(world, e)) return;

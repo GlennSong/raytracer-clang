@@ -7,7 +7,7 @@ using namespace engine;
 // The SHARED lamp predicate. It used to live in citysim typed against
 // Agent::State, which is exactly why the player's car had only a manual headlight
 // switch — no brake lights, no indicators. These pin the behaviour both callers
-// now depend on; citysim's own adapter is covered by tests/test_car_lamps.cpp.
+// now depend on (the city's clock-darkness fallback: test_city_render.cpp).
 
 namespace {
 VehicleLamps roll(Real speed, Real prev, bool dark = false) {

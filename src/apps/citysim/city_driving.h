@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_APPS_CITYSIM_CITY_DRIVING_H
 #define RAYTRACER_APPS_CITYSIM_CITY_DRIVING_H
 
-// THE CITY SIM'S SIDE OF THE NEW DRIVING MODEL (citysim.driving = "v2"; issues #255, #258, #235).
+// THE CITY SIM'S SIDE OF THE DRIVING (on a level that names citysim.drivingRules; issues #255, #258, #235).
 //
 // On a v2 level every car the new driving (driving::Driving) moves is a car entity (city_car.h; ADR-0444, ADR-0453):
 // a household's car of the agent brain, a car that drives round for ever (the traffic lab's), or a test bed's car.

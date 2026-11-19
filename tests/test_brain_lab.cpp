@@ -1250,7 +1250,7 @@ TEST_CASE(level_brain_lab_every_system_that_looks_for_cars_sees_a_household_car)
     const Entity e = b.carEntity(car);
     const auto find = [&](Vec2 at) {
         std::vector<citysim::CarSeen> seen;
-        citysim::carsNear(r.sim(), world, at, 5.0, seen);
+        citysim::carsNear(world, at, 5.0, seen);
         citysim::CarSeen out;
         for (const citysim::CarSeen& c : seen)
             if (c.entity == e) out = c;
@@ -1259,7 +1259,7 @@ TEST_CASE(level_brain_lab_every_system_that_looks_for_cars_sees_a_household_car)
     {
         const CarView v = carView(world, b, car);
         const citysim::CarSeen c = find(v.pos);
-        CHECK(c.entity == e && c.id == static_cast<uint32_t>(car) && c.agent == -1 && c.driver == -1);
+        CHECK(c.entity == e && c.id == static_cast<uint32_t>(car) && c.driver == -1);
         CHECK(!c.onRoad && !c.moving && approxEqual(c.speed, 0, kSamePoint));
         CHECK(approxEqual(c.length, v.length, kSamePoint) && approxEqual(c.width, v.width, kSamePoint));
     }
@@ -1311,7 +1311,7 @@ std::string answersDisagree(Run& r, int car) {
     const std::string line = b.describeCar(car);
     const bool saysPlayer = line.find("taken by the player") != std::string::npos;
     std::vector<citysim::CarSeen> seen;
-    citysim::carsNear(r.sim(), world, Vec2(0, 0), -1, seen);
+    citysim::carsNear(world, Vec2(0, 0), -1, seen);
     const citysim::CarSeen* found = nullptr;
     for (const citysim::CarSeen& c : seen)
         if (c.entity == e) found = &c;

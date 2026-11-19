@@ -202,8 +202,8 @@ Tests:
   regulations too: the driving binds what `regulationsAlong` answers. The driving's tests build a small model through
   `tests/driving_test_roads.h` (`modelOf`, `stateStreet`, `stateControl`, `stateTurn`, `stateMerge`,
   `stateRegulation`, `stateSignAtEnd`).
-- **The old driving's lanes** (`LevelLanes`, `TrafficLane` in components.h; `src/apps/citysim/lane_map.*`): the loader
-  still lays the lanes a second time for it (`expand` in `publishCityProducts`). Slated for deletion with v1.
+- *(Gone in ADR-0461: the old driving's lanes, `LevelLanes` / `TrafficLane` and the lane match `lane_map.*`, the
+  loader's second laying of the lanes for it.)*
 - **Placement policy**: the planner writes controls and signs into the road file from `control_policy.lua`; the
   model only reads what was written.
 

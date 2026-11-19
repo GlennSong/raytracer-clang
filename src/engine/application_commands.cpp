@@ -801,7 +801,7 @@ void Application::registerCityVerbs() {
                      unanswered("a CityRenderSystem: play mode on a city level"));
 
     commandTable.add("traffic?", "traffic?",
-                     "City traffic: cars driving island-wide and any pile-ups (more with RT_TRAFFIC_DEBUG).",
+                     "The city's people near the camera (out of doors, indoors, in the full sim) and any pile-ups (more with RT_TRAFFIC_DEBUG); the cars are driving?'s.",
                      unanswered("a CityRenderSystem: play mode on a city level"));
 
     commandTable.add("opensigns?", "opensigns?",
@@ -830,7 +830,7 @@ void Application::registerCityVerbs() {
     }
 
     commandTable.add("jitter", "jitter [agent id|-1] [frames]",
-                     "Record how evenly a vehicle is drawn for some frames (default 300): -1 the nearest moving one. jitter? answers.",
+                     "Record how evenly an agent is drawn for some frames (default 300): -1 the nearest moving walker. jitter? answers.",
                      [this](const ControlCommand& cmd) -> std::string {
         JitterRequest r;
         double v;
@@ -846,7 +846,7 @@ void Application::registerCityVerbs() {
     });
 
     commandTable.add("jitter?", "jitter?",
-                     "The jitter measurement: which vehicle is being recorded, then how evenly it and the camera moved.",
+                     "The jitter measurement: which agent is being recorded, then how evenly it and the camera moved.",
                      unanswered("a CityRenderSystem: play mode on a city level"));
 
     commandTable.add("pin?", "pin?",
@@ -870,18 +870,18 @@ void Application::registerCityVerbs() {
     commandTable.add("who?", "who? [agent id]",
                      "With an id, ask about any agent; alone, read the answer (refreshed every step).",
                      unanswered("a CityWalkerSystem: play mode on a city level"));
-    // `driver? <car>`: the new driving model's card for one car (citysim.driving = "v2"); `waiting?`: who waits for whom
+    // `driver? <car>`: the driving's card for one car (a level that names citysim.drivingRules); `waiting?`: who waits for whom
     commandTable.add("driver?", "driver? [car id]",
                      "With an id, ask for a car's driver card in the new driving model; alone, read it (refreshed every step).",
                      unanswered("a CityWalkerSystem: play mode on a city level"));
     commandTable.add("waiting?", "waiting?",
                      "Who is waiting for whom in the new driving model: counts, loops, the longest queue and its head.",
                      unanswered("a CityWalkerSystem: play mode on a city level"));
-    // `lanegraph?`: the road the new driving model drives on (citysim.driving = "v2")
+    // `lanegraph?`: the road the driving drives on
     commandTable.add("lanegraph?", "lanegraph?",
                      "The new driving model's lane graph: paths, sections, junctions, connectors, refused turns, how much a car can get round, and whether it came from the cache or was built.",
                      unanswered("a CityWalkerSystem: play mode on a city level"));
-    // `driving?`: the new driving model's cars at a glance (citysim.driving = "v2")
+    // `driving?`: the driving's cars at a glance
     commandTable.add("driving?", "driving?",
                      "The new driving model's cars in one line: how many are placed, moving and standing, trips begun and arrived, cars put down again from a road's end, routes not found, mean speed, and what a tick costs.",
                      unanswered("a CityWalkerSystem: play mode on a city level"));

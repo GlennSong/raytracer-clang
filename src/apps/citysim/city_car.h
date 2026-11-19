@@ -160,29 +160,24 @@ void carTickBegins(engine::World& world);
 class CitySim;
 
 // ONE CAR OF THE CITY AS A SYSTEM LOOKING FOR CARS SEES IT: where it is and which way it points, how fast it goes,
-// whether it is on a trip, its body's length and width, and which kind of car it is: an old-sim car (`agent`: its
-// driver, an agent in Mode::Driver; its pose is the agent's) or a household car (`entity`, its number `id`, and the
-// agent at its wheel or -1). Its height is not here: each reader has its own ground question.
+// whether it is on a trip, its body's length and width, and which car it is (`entity`, its number `id`, and the agent at
+// its wheel or -1). Its height is not here: each reader has its own ground question.
 struct CarSeen {
     Vec2 pos, heading;
     Real speed = 0;
     bool moving = false;
-    bool onRoad = true;   // a household car: the driving has it (CityCarOnLane); an old-sim car: always
+    bool onRoad = true;   // the driving has it (CityCarOnLane)
     Real length = 0, width = 0;
-    int agent = -1;
     engine::Entity entity;
     uint32_t id = 0;
     int driver = -1;
 };
-// THE CITY'S CARS WITHIN `radius` OF `p` (radius below zero: every one), appended to `out`, the old sim's first (in
-// its near list's order: a far car has no body), then the households' (in the World's order):
-//   - an old-sim car: an agent of the near list in Mode::Driver, not released to the player, not far;
-//   - a car entity (a household's, or one that drives round for ever): an entity with CityCarBody, not away, not
-//     nowhere (carNowhere) and with no engine::Vehicle (a car the player holds, or the near tier carries, is
-//     VehicleSystem's, found as a Vehicle like any physical car: one car, one representation). Its speed and "on a
-//     trip" are its CityCarOnLane's; a car off the road stands still.
-// The caller applies its own further questions (a bus, a car on service, one the player rides) through `agent`.
-void carsNear(const CitySim& sim, engine::World& world, Vec2 p, Real radius, std::vector<CarSeen>& out);
+// THE CITY'S CARS WITHIN `radius` OF `p` (radius below zero: every one), appended to `out` in the World's order: every
+// car entity (a household's, or one that drives round for ever) with CityCarBody, not away, not nowhere (carNowhere)
+// and with no engine::Vehicle (a car the player holds, or the near tier carries, is VehicleSystem's, found as a Vehicle
+// like any physical car: one car, one representation). Its speed and "on a trip" are its CityCarOnLane's; a car off the
+// road stands still. (The old driving's cars, agents in Mode::Driver, were listed first until ADR-0461.)
+void carsNear(engine::World& world, Vec2 p, Real radius, std::vector<CarSeen>& out);
 
 }  // namespace citysim
 

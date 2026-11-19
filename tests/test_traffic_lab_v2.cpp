@@ -75,16 +75,14 @@ struct LoadedCity {
     citysim::CityRenderSystem city;
     bool ok = false;
 
-    // Loads `level`, sets its citysim block's driving model to `driving` and its rule set to `rules` (empty: as the
-    // level says), builds the city.
-    LoadedCity(const std::string& level, const std::string& driving, const std::string& rules = std::string()) {
+    // Loads `level`, sets its citysim block's rule set to `rules` (empty: as the level says), builds the city.
+    explicit LoadedCity(const std::string& level, const std::string& rules = std::string()) {
         uploader = std::make_unique<RendererMeshUploader>(*renderer);
         assets = std::make_unique<AssetManager>(*uploader);
         if (!LevelLoader::load(std::string(RT_SOURCE_DIR) + "/assets/levels/" + level, world, *renderer, view, *assets,
                                false))
             return;
         world.each<CitySimConfig>([&](Entity, CitySimConfig& c) {
-            if (!driving.empty()) c.driving = driving;
             if (!rules.empty()) c.drivingRules = rules;
         });
         ok = city.build(world, assets.get(), nullptr);
@@ -307,7 +305,7 @@ struct WheelStats {
 }  // namespace
 
 TEST_CASE(level_traffic_lab_v2_drives) {
-    LoadedCity lc("traffic_lab.json", "");
+    LoadedCity lc("traffic_lab.json");
     CHECK(lc.ok);
     if (!lc.ok) return;
     citysim::CityRenderSystem& city = lc.city;
@@ -1072,7 +1070,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
 TEST_CASE(level_traffic_lab_v2_same_every_run) {
     std::vector<uint64_t> first, firstPlans;
     for (int run = 0; run < 2; ++run) {
-        LoadedCity lc("traffic_lab.json", "");
+        LoadedCity lc("traffic_lab.json");
         CHECK(lc.ok);
         if (!lc.ok) return;
         const driving::Driving* d = lc.city.sim().drivingV2();
@@ -1153,7 +1151,7 @@ TEST_CASE(level_traffic_lab_v2_soak) {
     std::vector<uint64_t> hashes;   // the state hash every simulated minute, for the second run
     std::vector<SoakWindow> windows;
     {
-        LoadedCity lc("traffic_lab.json", "");
+        LoadedCity lc("traffic_lab.json");
         CHECK(lc.ok);
         if (!lc.ok) return;
         citysim::CityRenderSystem& city = lc.city;
@@ -1394,7 +1392,7 @@ TEST_CASE(level_traffic_lab_v2_soak) {
     }
     // SAME EVERY RUN over the long run: the lab again, its state hash every simulated minute equal to the first run's.
     if (std::getenv("RT_LAB_SOAK_TWICE") && std::string(std::getenv("RT_LAB_SOAK_TWICE")) == "0") return;
-    LoadedCity again("traffic_lab.json", "");
+    LoadedCity again("traffic_lab.json");
     CHECK(again.ok);
     if (!again.ok) return;
     const driving::Driving* d2 = again.city.sim().drivingV2();
@@ -1422,7 +1420,7 @@ TEST_CASE(level_traffic_lab_v2_soak) {
 // the host swapped a model of its own in, copying the attachments across by hand.) The vehicles its turns are checked
 // against are read from the level's own fleet by the roads, written out here by hand from vehicles.lua's fleet_lab.
 TEST_CASE(level_traffic_lab_v2_one_road_model_is_published_and_driven_on) {
-    LoadedCity lc("traffic_lab.json", "");
+    LoadedCity lc("traffic_lab.json");
     CHECK(lc.ok);
     if (!lc.ok) return;
     int published = 0;
@@ -1501,7 +1499,7 @@ TEST_CASE(level_traffic_lab_v2_one_road_model_is_published_and_driven_on) {
 // no longer drives them in its place): no car entities, and no drivers of the old sim.
 TEST_CASE(level_traffic_lab_v2_refused_rules_leave_the_lab_without_traffic) {
     const char* other = std::getenv("RT_LAB_RULES");
-    LoadedCity lc("traffic_lab.json", "", other ? other : "rules/no_such_rule_set.lua");
+    LoadedCity lc("traffic_lab.json", other ? other : "rules/no_such_rule_set.lua");
     CHECK(lc.ok);
     if (!lc.ok) return;
     const citysim::CitySim& sim = lc.city.sim();
@@ -1522,7 +1520,7 @@ TEST_CASE(level_traffic_lab_v2_refused_rules_leave_the_lab_without_traffic) {
 // model already drives this level's drivers") and the level fell back to the old model -- or, built directly, the old
 // model skipped agents whose indices happened to match old seats.
 TEST_CASE(level_traffic_lab_v2_rebuild_hands_over_again) {
-    LoadedCity lc("traffic_lab.json", "");
+    LoadedCity lc("traffic_lab.json");
     CHECK(lc.ok);
     if (!lc.ok) return;
     for (int i = 0; i < 60 * 5; ++i) lc.city.step(lc.world, kStep);
@@ -1563,7 +1561,7 @@ TEST_CASE(level_traffic_lab_v2_rebuild_hands_over_again) {
 // the hand-over, DrivingHost::takenByPlayer, after which the driving no longer has it, the hand-over no longer sends
 // it, and CityCarLink::away says the player has it: ADR-0455).
 TEST_CASE(level_traffic_lab_v2_the_cars_are_counted_followed_and_taken) {
-    LoadedCity lc("traffic_lab.json", "");
+    LoadedCity lc("traffic_lab.json");
     CHECK(lc.ok);
     if (!lc.ok) return;
     citysim::CitySim& sim = lc.city.simMutable();
@@ -1584,7 +1582,7 @@ TEST_CASE(level_traffic_lab_v2_the_cars_are_counted_followed_and_taken) {
     CHECK(followable.size() == cars);
     CHECK(citysim::nextSpectateTarget(sim.agents(), followable.size(), -1, +1) == static_cast<int>(sim.agents().size()));
     std::vector<citysim::CarSeen> seen;
-    citysim::carsNear(sim, lc.world, Vec2(0, 0), -1, seen);
+    citysim::carsNear(lc.world, Vec2(0, 0), -1, seen);
     CHECK(seen.size() == cars);
     // THE PLAYER TAKES ONE
     if (followable.empty()) return;
@@ -1612,7 +1610,7 @@ TEST_CASE(level_traffic_lab_v2_the_cars_are_counted_followed_and_taken) {
 //     arrow (lampShownAt), and no other green arrow lens is lit.
 // Over the run the heads show red faces, green faces and green arrows.
 TEST_CASE(level_traffic_lab_v2_the_signal_heads_show_the_new_drivings_lamps) {
-    LoadedCity lc("traffic_lab.json", "");
+    LoadedCity lc("traffic_lab.json");
     CHECK(lc.ok);
     if (!lc.ok) return;
     const driving::Driving* d = lc.city.sim().drivingV2();

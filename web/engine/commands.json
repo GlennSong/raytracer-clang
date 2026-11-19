@@ -242,13 +242,13 @@
  {
   "name": "jitter",
   "owner": "engine",
-  "summary": "Record how evenly a vehicle is drawn for some frames (default 300): -1 the nearest moving one. jitter? answers.",
+  "summary": "Record how evenly an agent is drawn for some frames (default 300): -1 the nearest moving walker. jitter? answers.",
   "usage": "jitter [agent id|-1] [frames]"
  },
  {
   "name": "jitter?",
   "owner": "engine",
-  "summary": "The jitter measurement: which vehicle is being recorded, then how evenly it and the camera moved.",
+  "summary": "The jitter measurement: which agent is being recorded, then how evenly it and the camera moved.",
   "usage": "jitter?"
  },
  {
@@ -494,7 +494,7 @@
  {
   "name": "traffic?",
   "owner": "engine",
-  "summary": "City traffic: cars driving island-wide and any pile-ups (more with RT_TRAFFIC_DEBUG).",
+  "summary": "The city's people near the camera (out of doors, indoors, in the full sim) and any pile-ups (more with RT_TRAFFIC_DEBUG); the cars are driving?'s.",
   "usage": "traffic?"
  },
  {

@@ -1137,30 +1137,14 @@ struct CitySimConfig {
     // not.
     float pedPromoteRadius = 280.0f;
     float pedDemoteRadius = 350.0f;
-    // A ROLE FOR THE LEVEL's DRIVERS (#214): `driverRoleShare` of the private drivers take role `driverRole` (roles.lua)
-    // -- the traffic lab's "lab_driver", always driving. Empty: none.
-    std::string driverRole;
-    float driverRoleShare = 1.0f;
-    // DRAW CARS ON THE REAL LANES (#218, ADR-0396): the lanes builder's lanes, not the link's line plus an offset.
-    // The traffic lab's; the cities' once their junctions take real lanes.
-    bool realLanes = false;
-    // WHICH DRIVING MODEL (#234): "v1", today's, drives the cars; "v2" also runs the new driving library (src/apps/
-    // driving), which drives the cars of the level's driverRole when the level names a rule set (drivingRules).
-    std::string driving = "v1";
-    // THE RULE SET the new model drives by (#258): a Lua file under assets/scripts ("rules/lab.lua"). Empty: v2 ticks
-    // an empty world and the old model drives every car.
+    // THE RULE SET the driving drives by (#258): a Lua file under assets/scripts ("rules/lab.lua"). A level that names
+    // one has traffic: the driving (src/apps/driving) runs on its road model and drives its `cars` and its crowd's
+    // households' cars. Empty: no driving and no traffic (ADR-0461: the old driving, and the `driving` key that chose
+    // between the two, are gone).
     std::string drivingRules;
-    // The level file this block came from (the loader's path): under v2 the city sim keys and builds the level's built
-    // road model from it (lanes/road_model_cache.h). Empty for a level not loaded from a file.
+    // The level file this block came from (the loader's path): the city sim keys and builds the level's built road
+    // model from it (lanes/road_model_cache.h). Empty for a level not loaded from a file.
     std::string levelPath;
-    // PHYSICAL TRAFFIC (R5): how many of the moving cars nearest the player are
-    // handed to real Jolt vehicles that chase the sim's plan. 0 = none: every
-    // car is drawn on the sim's own motion, which keeps its wheels on the road
-    // and never snaps. Off by default since 2026-09-18 -- the chasing bodies
-    // floated or sank by up to 0.65 m (one sedan chassis for every class, the
-    // bus included) and snapped back onto the plan when they fell behind,
-    // which read on screen as a car jumping back and pivoting on the spot.
-    int physicalCars = 0;
     // Sim tick rate for LOCAL agents (Hz). 0 = every fixed step (historical).
     // 30 halves the traffic sim's cost; poses extrapolate between ticks.
     float localHz = 0.0f;
@@ -1271,33 +1255,6 @@ struct OpenSigns {
 // for where they are"). The loader plans and SPAWNS every signal pole and
 // street lamp from the roads' deterministic nav graph; this component tells
 // the sim where they stand. The sim animates lenses / reacts to phases only.
-// THE CITY's REAL LANES (#218): every lane the lanes builder laid, recomputed at load from the level's own graph by the
-// builder's first step (expand -- the input the bake was built from, ~60 ms on the island) and published as plain
-// lines, so the traffic sim drives the painted lanes instead of a centreline plus an offset. `kind` is the builder's:
-// through | turn | slip | aux | ramp | connector. `parent` is the lane's road (graph edge index), `dir` +1 along it.
-// WHERE EACH LANE LIES ON ITS ROAD (ADR-0417's ids, read by the lane match since ADR-0425): `slot`, its place across the
-// lanes running its way, from the centre-line side (0) to the kerb side (a pocket born on the kerb side is one past the
-// last, one on the centre-line side -1); `spineFrom` / `spineTo`, the stretch of its road's spine it is laid along; and
-// `stations`, each point's station along that spine (a lane is laid point for point beside its spine's samples).
-struct TrafficLane {
-    std::vector<Vec2> xy;
-    double w = 3.5;
-    int parent = -1;
-    int dir = 1;
-    std::string kind;
-    int slot = -1;
-    double spineFrom = 0, spineTo = 0;
-    std::vector<double> stations;
-};
-struct LevelLanes {
-    std::vector<TrafficLane> lanes;
-    // each road's centreline after expand (graph edge index -> points), for checking the recompute against the bake
-    std::vector<std::vector<Vec2>> roads;
-    // where each city's roads begin in `roads` (a TrafficLane's `parent` is that plus its road's index in its road
-    // file): city c's road e is roads[cityRoads[c] + e]. In the order LevelRoadModel lists the cities.
-    std::vector<int> cityRoads;
-};
-
 // The DECK a road entity's mesh actually rode (RoadDeckField), stored by the
 // loader beside the Renderable. Everything placed ON a road — sim cars, parked
 // cars, bay paint, signal lenses and poles — samples this, not the terrain

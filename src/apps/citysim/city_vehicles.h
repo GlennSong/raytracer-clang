@@ -46,29 +46,20 @@ inline std::vector<PromotedLamp> promotedLamps(
     return out;
 }
 
-// PROMOTION-on-interaction (ADR-0062, motion-authority rethink). Ambient NPC
-// traffic is moved by ONE authority — the CitySim planner, drawn instanced and
-// collided via kinematic proxies (CityPhysicsSystem). Full vehicle dynamics is
-// an INTERACTION response, not the default gait of forty cars: when the player
-// walks up to an ambient car and presses enter, this system PROMOTES it — the
-// sim releases the agent (its instanced car vanishes), a real engine Vehicle
-// with the same fleet body spawns in its place (wheel-less mesh; VehicleSystem
-// adds physics wheels + lamps), and VehicleSystem's normal enter flow seats the
-// player in it that same frame. One car system at the component level; two
-// motion regimes, each owned by the thing that's good at it.
+// PROMOTION-on-interaction (ADR-0062, motion-authority rethink). Ambient traffic
+// is moved by ONE authority — the driving, drawn instanced and collided via
+// kinematic proxies (CityPhysicsSystem). Full vehicle dynamics is an INTERACTION
+// response, not the default gait of forty cars: when the player walks up to an
+// ambient car and presses enter, this system PROMOTES it, and VehicleSystem's
+// normal enter flow seats the player in it that same frame.
 //
-// A CAR ENTITY (a household's, ADR-0445, or one that drives round for ever, ADR-0453; city_car.h) is already an entity,
+// Every ambient car is a CAR ENTITY (a household's, ADR-0445, or one that drives round for ever, ADR-0453; city_car.h),
 // so nothing spawns in its place: it is taken the one way (CitySim::playerTakesCar, ADR-0455: its driver gets out on
 // the kerb side, it leaves the driving), and the same entity gains the Vehicle. The city bake stops drawing it;
 // VehicleSystem draws, moves and voices it from then. When the player gets out it stays a Vehicle where they left it
 // (VehicleSystem parks it) until the near tier gives a household's car back once it has stopped (#293,
-// CitySim::playerLeftCar).
-//
-// (The earlier all-dynamic bridge — every NPC car a Jolt vehicle chasing a
-// planner ghost through tether/pursuit/station control — is retired: two clocks
-// over one body needed endless reconciliation and jammed junctions. The
-// pursuit/sensing controller stack in engine/ai lives on: it drives the
-// possessed car (city_possess, ADR-0079).)
+// CitySim::playerLeftCar). (The old driving's cars, whose drivers were released and a new Vehicle spawned in their
+// place, went with it: ADR-0461.)
 //
 // Viewer/editor only (needs Jolt via PhysicsSystem/VehicleSystem), not
 // engine_core. UNVERIFIED on device, like the rest of the Jolt path.
@@ -85,16 +76,13 @@ public:
 
 private:
     struct PromotedCar {
-        engine::Entity entity;   // the real Vehicle: one that replaced an old-sim car, or a household car itself
-        int agentId = -1;        // the released sim agent (an old-sim car)
-        int car = -1;            // the household car's number (ADR-0445)
+        engine::Entity entity;   // the real Vehicle: the car entity itself
+        int car = -1;            // its number (ADR-0445)
     };
-    // AN AMBIENT CAR the player could take: an old-sim car (`agent`, its driver) or a household's car (`car`, its
-    // number; ADR-0445).
+    // AN AMBIENT CAR the player could take: a car entity, by its number (`car`; ADR-0445, ADR-0453).
     struct Ambient {
-        int agent = -1;
         int car = -1;
-        bool valid() const { return agent >= 0 || car >= 0; }
+        bool valid() const { return car >= 0; }
     };
 
     CityRenderSystem& city_;
@@ -105,7 +93,7 @@ private:
     Ambient ambient_;   // the nearest ambient car in reach, rescanned four times a second
     // (ADR-0356) make an ambient car a real Vehicle -- the takeover, and a parked car's hood or trunk opened on foot
     engine::Entity promote(engine::FrameContext& ctx, const Ambient& target);
-    // The nearest ambient car within kCommandeerRadius of `p` (city_car.h carsNear: old-sim and household cars).
+    // The nearest ambient car within kCommandeerRadius of `p` (city_car.h carsNear: the car entities).
     Ambient nearestAmbient(engine::World& world, engine::Vec2 p) const;
     // Where it is (on the ground, as agentWorldPose answers), the model it is drawn as, and whether it is on a trip.
     bool ambientPose(const Ambient& a, engine::Vec3& pos, engine::Vec2& heading) const;

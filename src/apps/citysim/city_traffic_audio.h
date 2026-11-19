@@ -10,7 +10,7 @@
 namespace citysim {
 
 // Engine note for AMBIENT traffic — the citysim adapter over
-// engine::engineSoundFor, exactly as car_lamps.h adapts the lamp core. The
+// engine::engineSoundFor, as the city's drawing does the lamp core. The
 // city's cars are planner ghosts, not physics bodies, so nothing in the
 // engine-side VehicleSystem can voice them; but they are cars, and a street
 // with forty of them should sound like one. Same core, same clip, same rev

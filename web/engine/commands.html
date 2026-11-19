@@ -32,16 +32,16 @@
   <div class="nav"><a href="index.html">← How the engine works</a> · <a href="spine.html">the spine</a> · <a href="../index.html">scenes</a></div>
   <h1>Control verbs</h1>
   <p class="lede">A running viewer listens on a local socket, and anything that can write a line of text can drive
-    it: a probe script, Claude through the MCP server, or you with <code>nc</code>. These are all 103 things
+    it: a probe script, Claude through the MCP server, or you with <code>nc</code>. These are all 100 things
     it can be told, straight from the engine's command table, where every verb is registered once with its usage
     and what it does.</p>
 
   <div class="tally">
-    <div><b>103</b><span>verbs in all</span></div>
-    <div><b>46</b><span>questions (ending in <code>?</code>)</span></div>
+    <div><b>100</b><span>verbs in all</span></div>
+    <div><b>45</b><span>questions (ending in <code>?</code>)</span></div>
     <div><b>33</b><span>act directly</span></div>
-    <div><b>31</b><span>send a typed request</span></div>
-    <div><b>39</b><span>answered by their system</span></div>
+    <div><b>29</b><span>send a typed request</span></div>
+    <div><b>38</b><span>answered by their system</span></div>
   </div>
 
   <h2>How a line gets in</h2>
@@ -90,7 +90,7 @@
   <h2>What a verb looks like</h2>
   <div class="code">
     <div class="hd"><span>The teleport verb: its name, usage and summary, then the handler</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/371bd96e54ed675e46af8497248f40c4b5d3f2f1/src/engine/application_commands.cpp#L517-L533">src/engine/application_commands.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/04a87e314e1316b9e92d2e8a51a8060fb0055280/src/engine/application_commands.cpp#L517-L533">src/engine/application_commands.cpp</a></div>
 <pre>commandTable.add(<span class="s">"teleport"</span>, <span class="s">"teleport &lt;x y z [pitch yaw] | x z&gt; | open"</span>,
                  <span class="s">"Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?. `open` unfolds the Teleport panel."</span>,
                  [this](const ControlCommand&amp; cmd) -&gt; std::string {
@@ -172,7 +172,7 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <tr id="v-weather"><td><code>weather clear|fair|overcast|storm|auto|off [now]</code></td><td>Set the weather (eased in, or `now` to snap); auto walks between states; off hands the clouds back to the panel.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-weather_q"><td><code>weather?</code></td><td>The weather state, and whether it is on auto.</td><td><span class="kind answered">a system answers</span></td></tr>
   </table>
-  <h2 id="the-player">The player <span class="count">14</span></h2>
+  <h2 id="the-player">The player <span class="count">13</span></h2>
   <p>Moving, pressing keys, getting into things.</p>
   <table class="verbs">
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
@@ -186,21 +186,19 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <tr id="v-interact_q"><td><code>interact?</code></td><td>What the interaction focus is on.</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-vehicle_spawn"><td><code>vehicle_spawn [recipe]</code></td><td>Drop a vehicle in front of the player (the N key); e.g. vehicle_spawn moped.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-vehicle_q"><td><code>vehicle?</code></td><td>The player&#x27;s vehicle: speed, rpm, gear, drive mode, position, and the sim speed.</td><td><span class="kind answered">a system answers</span></td></tr>
-    <tr id="v-ride"><td><code>ride bus|taxi|any|off | ride &lt;x&gt; &lt;z&gt;</code></td><td>The player boards the nearest bus or taxi, or gets off; with x z, the possessed agent rides a bus there.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-train_board"><td><code>train_board [train] [car]</code></td><td>Put the player aboard a train, standing mid-carriage (defaults: train 0, car 1).</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-elevator"><td><code>elevator call | pick &lt;delta&gt;</code></td><td>Press the elevator call key, or move the panel&#x27;s floor selection by delta.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-elevator_q"><td><code>elevator?</code></td><td>The elevator: in the cab or at a door, moving, the floor, the selection and the cab&#x27;s floor.</td><td><span class="kind answered">a system answers</span></td></tr>
   </table>
-  <h2 id="possession">Possession <span class="count">13</span></h2>
-  <p>Take over one of the city&#x27;s people or cars and direct them (ADR-0079, ADR-0091).</p>
+  <h2 id="possession">Possession <span class="count">12</span></h2>
+  <p>Take over one of the city&#x27;s people and direct them (ADR-0079, ADR-0091).</p>
   <table class="verbs">
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
-    <tr id="v-possess"><td><code>possess car|walker [x z]</code></td><td>Take over a city car or walker (the nearest, or the one nearest x z). Poll possess?.</td><td><span class="kind request">typed request</span></td></tr>
+    <tr id="v-possess"><td><code>possess walker [x z]</code></td><td>Take over a city walker (the nearest, or the one nearest x z). Poll possess?.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-possess_q"><td><code>possess?</code></td><td>The possessed agent: kind, state, position, speed and distance left.</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-agent_q"><td><code>agent?</code></td><td>The possessed agent&#x27;s mind: activity, goal state, and what decides whether it walks.</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-look_q"><td><code>look?</code></td><td>What the possessed agent can see: places, people and transit nearby, each with a point walk_to accepts.</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-walk_to"><td><code>walk_to &lt;x&gt; &lt;z&gt;</code></td><td>Walk the possessed walker to a point.</td><td><span class="kind request">typed request</span></td></tr>
-    <tr id="v-drive_to"><td><code>drive_to &lt;x&gt; &lt;z&gt;</code></td><td>Drive the possessed car to a point.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-direct"><td><code>direct on|off</code></td><td>Hold the possessed agent&#x27;s own schedule off, so a director&#x27;s plan is not overwritten.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-board"><td><code>board [x z]</code></td><td>The possessed walker gets into the nearest free car (or the one nearest x z).</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-alight"><td><code>alight</code></td><td>The possessed walker gets out of the car it is in.</td><td><span class="kind request">typed request</span></td></tr>
@@ -209,7 +207,7 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <tr id="v-possess_stop"><td><code>possess_stop</code></td><td>Stop the possessed agent where it is.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-release"><td><code>release</code></td><td>Hand the possessed agent back to the city sim.</td><td><span class="kind request">typed request</span></td></tr>
   </table>
-  <h2 id="asking-the-city">Asking the city <span class="count">19</span></h2>
+  <h2 id="asking-the-city">Asking the city <span class="count">18</span></h2>
   <p>The living city&#x27;s counts and diagnostics, and finding things in it.</p>
   <table class="verbs">
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
@@ -219,13 +217,12 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <tr id="v-activities_q"><td><code>activities?</code></td><td>What the city&#x27;s people are out doing: per activity, who is at it or coming, groups, the nearest.</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-knock"><td><code>knock</code></td><td>Throw the townsperson nearest the player as if a car hit them.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-knock_q"><td><code>knock?</code></td><td>Townspeople thrown so far, and the ragdolls in play.</td><td><span class="kind answered">a system answers</span></td></tr>
-    <tr id="v-traffic_q"><td><code>traffic?</code></td><td>City traffic: cars driving island-wide and any pile-ups (more with RT_TRAFFIC_DEBUG).</td><td><span class="kind answered">a system answers</span></td></tr>
+    <tr id="v-traffic_q"><td><code>traffic?</code></td><td>The city&#x27;s people near the camera (out of doors, indoors, in the full sim) and any pile-ups (more with RT_TRAFFIC_DEBUG); the cars are driving?&#x27;s.</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-parking_q"><td><code>parking?</code></td><td>Parking: kerb bays and garage stalls taken, and the nearest taken stall.</td><td><span class="kind answered">a system answers</span></td></tr>
-    <tr id="v-depots_q"><td><code>depots?</code></td><td>Buses: on route, heading in, off duty and parked in depot bays, the nearest bus and bay, and any stalled heading in.</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-trains_q"><td><code>trains?</code></td><td>The trains: lines, stops, every train&#x27;s place, speed and doors, and whether you are aboard.</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-opensigns_q"><td><code>opensigns?</code></td><td>Shops&#x27; OPEN signs: lit, closed for the night, open with nobody on shift, and the nearest lit one.</td><td><span class="kind answered">a system answers</span></td></tr>
-    <tr id="v-jitter"><td><code>jitter [agent id|-1] [frames]</code></td><td>Record how evenly a vehicle is drawn for some frames (default 300): -1 the bus or cab you ride, else the nearest moving one. jitter? answers.</td><td><span class="kind request">typed request</span></td></tr>
-    <tr id="v-jitter_q"><td><code>jitter?</code></td><td>The jitter measurement: which vehicle is being recorded, then how evenly it and the camera moved.</td><td><span class="kind answered">a system answers</span></td></tr>
+    <tr id="v-jitter"><td><code>jitter [agent id|-1] [frames]</code></td><td>Record how evenly an agent is drawn for some frames (default 300): -1 the nearest moving walker. jitter? answers.</td><td><span class="kind request">typed request</span></td></tr>
+    <tr id="v-jitter_q"><td><code>jitter?</code></td><td>The jitter measurement: which agent is being recorded, then how evenly it and the camera moved.</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-who_q"><td><code>who? [agent id]</code></td><td>With an id, ask about any agent; alone, read the answer (refreshed every step).</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-pin"><td><code>pin &lt;agent id&gt;</code></td><td>Follow an agent: it stays in the full sim however far it goes.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-unpin"><td><code>unpin &lt;agent id&gt;</code></td><td>Stop following an agent.</td><td><span class="kind request">typed request</span></td></tr>
@@ -298,7 +295,7 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_control_channel.cpp">tests/test_control_channel.cpp</a> — the table's tests, and the check that this list matches it</li>
   </ul>
 
-  <footer>Generated by <code>tools/commands_page.py</code> from the command table at commit <code>371bd96e</code>.
+  <footer>Generated by <code>tools/commands_page.py</code> from the command table at commit <code>04a87e31</code>.
     Drawn from ADR-0078 and ADR-0253 (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a>).</footer>
 </div>
 </body>

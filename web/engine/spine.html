@@ -255,7 +255,7 @@
     <figcaption>One frame's work: the city simulation placed the crowd and the bus, physics moved the bodies, the
       bus-stop panel (bottom left) and the tool prompt (bottom) are game UI written by their own systems, and the
       render system drew it all. All of them are ticked by the same loop (Glenn's screenshot,
-      2026-10-24).</figcaption>
+      2026-10-24; the buses and the old driving's cars in it are gone since ADR-0460 and ADR-0461).</figcaption>
   </figure>
 
   <h2>Fixed timestep, interpolation, and time scale</h2>
@@ -867,10 +867,12 @@
     injection. It widened the same day.
     <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L5802">ADR-0079</a>
     split writes into two classes: <b>document writes</b> stay the bridge's monopoly, but <b>transient play acts</b>
-    (what the debug keys can do) are allowed. <code>possess car|walker</code> spawns a red sedan on the nearest
-    lane, or commandeers a pedestrian, and gives it to an agent brain: <code>drive_to x z</code> routes it and
-    drives with pursuit and traffic sensing, and <code>possess?</code> reports driving, arrived, stuck or
-    no-route. Nothing it spawns carries a <code>SourceSpec</code>, so none of it can ever be saved into a level.
+    (what the debug keys can do) are allowed. <code>possess walker</code> commandeers a pedestrian and gives it to
+    a director: <code>walk_to x z</code> routes it on foot, <code>board</code> / <code>alight</code> get it into and
+    out of a household's car, and <code>possess?</code> reports how the walk is going (walking, arrived, stuck or
+    no-route). Its own red sedan (<code>possess car</code>, <code>drive_to</code>) went with the old driving
+    (ADR-0459): a director that drives is owed a way on the new one. Nothing it touches carries a
+    <code>SourceSpec</code>, so none of it can ever be saved into a level.
     Since then the verb list has grown to about 80 commands, among them <code>tap</code>/<code>hold</code> (real
     keys), <code>teleport</code>, <code>ledger</code>, <code>mem?</code> and a family of telemetry questions. Any
     command ending in <code>?</code> also stamps <code>telemetry.askedAt</code>, because the island-wide counts behind

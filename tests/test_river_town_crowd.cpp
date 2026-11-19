@@ -238,6 +238,10 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 0x4b8f868f3d5e05e0 -> 0xde1f57edbda09ebc (ADR-0460): river_town's old walkers no longer hail cabs that never
         // existed (hailChance 0.25, no cabs: a quarter of the walkers facing 350 m or more stood at the kerb all run);
         // they walk. Put back, the old hash returns exactly. Trips 263 -> 259, parked 145 -> 141, arrivals 623 -> 621.
-        CHECK(hash == 0xde1f57edbda09ebcull);
+        // 0xde1f57edbda09ebc -> 0x83b99189cfc16fbd (ADR-0461): the 15 fire engines parked in river_town's fire stations
+        // were rows 0-14 of the old sim's vehicle list, and a car entity is numbered past every row (nextCarNumber), so
+        // every household car's number is 15 lower now (the longest stand: car 91 -> 76). Every count, every minute,
+        // is the same.
+        CHECK(hash == 0x83b99189cfc16fbdull);
     }
 }

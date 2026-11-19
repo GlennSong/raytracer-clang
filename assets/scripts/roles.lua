@@ -10,8 +10,9 @@
 -- WHO HOLDS A ROLE (#172; Glenn, 2026-11-01: roles are what a person is, commuting and strolling are parts of a day):
 --   * a LIFE STAGE's people (people.lua: each stage without a job names its role -- child, student, at_home, retired);
 --   * someone of a working stage, by the job they found: the FIRST role in `order` whose `job` takes that place;
---   * a STAFF role's, hired by the places it staffs, from the holders of a catch-all job role (`job = {}`);
---   * a LEVEL's: citysim.driverRole gives a role to (driverRoleShare of) its drivers -- the traffic lab's lab_driver.
+--   * a STAFF role's, hired by the places it staffs, from the holders of a catch-all job role (`job = {}`).
+--   (A LEVEL's, given to its old-driving drivers by citysim.driverRole -- the traffic lab's lab_driver -- went with the
+--   old driving, ADR-0461.)
 --
 -- roles.<name> = {
 --   day = {
@@ -43,7 +44,7 @@
 
 roles = {
   order = { "shopkeeper", "worker", "student", "child", "at_home", "retired",
-            "teacher", "librarian", "manager", "waiter", "cook", "clerk", "bartender", "lab_driver" },
+            "teacher", "librarian", "manager", "waiter", "cook", "clerk", "bartender" },
 
   -- keeps a shop whose hours the level wrote: a worker's day, on the shop's hours
   shopkeeper = {
@@ -124,13 +125,5 @@ roles = {
     day = { evening = "evening" },
     night_out = 0.05,
     staff = { places = { "bar", "club" }, per_place = 2, hours = "place" },
-  },
-
-  -- THE TRAFFIC LAB's DRIVER (#214): always driving -- a trip to a destination and straight on to the next, for ever
-  -- (day.roam; the agent lab's perpetual trip as a role). No job and no staff, so the job search never hands it out:
-  -- a level gives it to its drivers (citysim.driverRole = "lab_driver").
-  lab_driver = {
-    day = { roam = true },
-    night_out = 0,
   },
 }

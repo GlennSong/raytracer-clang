@@ -11,13 +11,12 @@
 #include "activities.h"
 #include "city_goals.h"
 #include "city_roles.h"   // every resident's day comes from its role (RoleCatalog, buildDayTable)
-#include "lane_map.h"     // the real lanes on each link (#218)
 #include "city_rail_riders.h"
 #include "places.h"
 #include "place_kinds.h"   // what kind each place is, and its tags (places.lua)
 #include "households.h"     // ages, life stages and households (people.lua)
 #include "relationships.h"
-#include "../driving/driving.h"   // the new driving model (#234; citysim.driving = "v2")
+#include "../driving/driving.h"   // the driving (#234; a level that names citysim.drivingRules)
 #include "city_driving.h"         // ...and the city sim's side of it: the drivers handed over (#255)
 #include "city_poses.h"           // where the city's bodies are each fixed step (ADR-0454)
 #include <array>
@@ -1354,20 +1353,8 @@ public:
     // False when out of range or `home` is not a place.
     bool moveHome(int agentIndex, const PlaceMap& places, PlaceId home);
     bool daySchedule() const { return daySchedule_; }
-    // A LEVEL's ROLE FOR ITS DRIVERS (#214; citysim.driverRole): `share` of the private drivers (never a bus, a cab or
-    // a service vehicle) take role `name` -- the traffic lab gives lab_driver, always driving. After the cabs and
-    // buses are marked. Returns how many took it (0 when the role is unknown).
-    int giveDriversRole(const std::string& name, Real share);
-    // THE REAL LANES (#218): the lanes builder's lanes matched to the links (LaneMap; set by the host after build) --
-    // always built, used to draw cars only where the level asks (citysim.realLanes; RT_REAL_LANES=1/0 overrides):
-    // the traffic lab drives them; the cities keep the centreline offsets until the junctions take real lanes (ramp
-    // tails merging along a street met its traffic and jammed metro's junctions: ADR-0396).
-    void setLaneMap(LaneMap m) { laneMap_ = std::move(m); }
-    const LaneMap& laneMap() const { return laneMap_; }
-    void setUseRealLanes(bool on) { useRealLanes_ = on; }
-    bool useRealLanes() const { return useRealLanes_; }
-    // THE NEW DRIVING MODEL (#234; citysim.driving = "v2"): on, the sim holds a driving::Driving and ticks it once per
-    // sim tick. Until startDrivingV2 begins it, it ticks an empty world. Off drops it.
+    // THE DRIVING (#234; a level that names citysim.drivingRules): on, the sim holds a driving::Driving and ticks it once
+    // per sim tick. Until startDrivingV2 begins it, it ticks an empty world. Off drops it.
     void useDrivingV2(bool on) { if (on) drivingV2_.emplace(); else drivingV2_.reset(); }
     // ...and the kinds of vehicle it knows (#248: one class per fleet class, read with the fleet). No-op under v1.
     void setDrivingVehicleClasses(driving::VehicleClasses c) { if (drivingV2_) drivingV2_->setVehicleClasses(std::move(c)); }
@@ -2136,8 +2123,6 @@ private:
     Real thinkPeriod_ = 0.35;   // reactive re-decide cadence (s), staggered per agent
     bool wander_ = false;       // lab mode: perpetual random trips, no schedule
     bool daySchedule_ = true;   // false: everyone at home, held for a director (setDaySchedule)
-    LaneMap laneMap_;           // the real lanes on each link (#218): empty = the link's line plus an offset
-    bool useRealLanes_ = false; // draw cars on them (citysim.realLanes)
     std::optional<driving::Driving> drivingV2_;   // the new driving model, when the level asks for it (useDrivingV2)
     // Its road (setDrivingRoads): shared, so its address stays put while the model holds a pointer to it.
     std::shared_ptr<const engine::RoadModel> drivingRoads_;

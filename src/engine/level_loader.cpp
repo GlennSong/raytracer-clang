@@ -65,7 +65,6 @@
 #include "bundle/cache_use.h"
 #ifdef RT_ROADS_LANES
 #include "procgen/city/roads/lanes/lanes.h"     // the lanes road builder (ADR-0083/0089)
-#include "procgen/city/roads/lanes/lane_expand.h"   // expand: the city's real lanes for the traffic sim (#218)
 #include "procgen/city/roads/lanes/deck_mesh.h"
 #include "procgen/city/roads/lanes/block_audit.h"  // sceneBlocks: city blocks straight from the pavement
 #include "procgen/city/roads/lanes/city_producer.h" // the city as a bundle producer (ADR-0084)
@@ -813,9 +812,8 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
         LOG_INFO << "[roads] " << g_lanes.blocks.size() << " city blocks from " << built.holes.size()
                  << " pavement holes";
     }
-    // THE REAL LANES (#218): this city's lanes, recomputed from the graph the bake was built from (the same rule:
-    // cityEntities + loadCityGraph, then the builder's own first step, expand). Not baked: ~60 ms on the island, and
-    // a level test holds them to the baked road surface.
+    // THE CITY'S ROAD MODEL AND ITS STREET MAP, from the graph the bake was built from (cityEntities + loadCityGraph).
+    // (The old driving's own second laying of the lanes, LevelLanes, went with it: ADR-0461.)
     {
         using namespace engine::roads::lanes;
         std::size_t cityNumber = 0;   // this city's place among the level's lane-built cities (and in its road model)
@@ -824,35 +822,6 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
             if (e.entityIndex != in.entityIndex) continue;
             try {
                 RoadLabGraph g = loadCityGraph(e);
-                const LaneSet L = expand(g);
-                engine::LevelLanes* out = nullptr;
-                world.each<engine::LevelLanes>([&](Entity, engine::LevelLanes& l) { if (!out) out = &l; });
-                if (!out) out = &world.add<engine::LevelLanes>(world.create(), engine::LevelLanes{});
-                const int roadBase = static_cast<int>(out->roads.size());
-                out->cityRoads.push_back(roadBase);
-                for (const EdgeSpec& es : g.edges) out->roads.push_back(es.xy);
-                for (const Lane& l : L.lanes) {
-                    engine::TrafficLane t;
-                    t.xy = l.xy().copied();   // (the old driving's own lanes: a second laying, to go with it)
-                    t.w = l.width;
-                    t.parent = l.onRoad() ? roadBase + l.road() : -1;
-                    t.dir = l.dir;
-                    t.kind = l.kind;
-                    // where it lies on its road (ADR-0417's ids, the lane match's since ADR-0425): its slot, its stretch of
-                    // the road's spine, and each point's station there (a lane is laid point for point beside the spine's
-                    // samples from spineFrom: lane_expand.cpp)
-                    t.slot = l.slot;
-                    t.spineFrom = l.spineFrom;
-                    t.spineTo = l.spineTo;
-                    if (l.onRoad()) {
-                        const EdgeSpec& es = g.edges[l.edge];
-                        const std::size_t i0 = static_cast<std::size_t>(std::lower_bound(es.s.begin(), es.s.end(), l.spineFrom - 1e-9) - es.s.begin());
-                        for (std::size_t k = 0; k < l.xy().size() && i0 + k < es.s.size(); ++k) t.stations.push_back(es.s[i0 + k]);
-                        if (t.stations.size() != t.xy.size()) t.stations.clear();   // (laid otherwise: no stations, no match)
-                    }
-                    out->lanes.push_back(std::move(t));
-                }
-                LOG_INFO << "[roads] " << L.lanes.size() << " lanes recomputed for the traffic sim (" << g.edges.size() << " roads)";
                 // THE ROAD MODEL (ADR-0420, ADR-0435): this city's part of the level's one road model, made once a load by the
                 // one function that makes it (lanesLevelRoads: obtainLevelRoadModel) and published here as one city of the
                 // level's one LevelRoadModel, in the order the level lists its cities. The first city's is the built model
@@ -908,7 +877,7 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
                                  << "city_plan controls " << e.graphPath << " rules/lab.lua --layout --write --controls-only";
                 }
             } catch (const std::exception& ex) {
-                LOG_WARN << "[roads] lanes for the traffic sim: " << ex.what() << " (cars keep the centreline offsets)";
+                LOG_WARN << "[roads] road model and street map: " << ex.what();
             }
         }
     }
@@ -6449,16 +6418,12 @@ bool LevelLoader::load(const std::string& path,
         cfg.sceneryRadius = cs.value("sceneryRadius", cfg.sceneryRadius);
         cfg.maxWalkerBodies = cs.value("maxWalkerBodies", cfg.maxWalkerBodies);
         cfg.pedPromoteRadius = cs.value("pedPromoteRadius", cfg.pedPromoteRadius);
-        cfg.driverRole = cs.value("driverRole", cfg.driverRole);
-        cfg.driverRoleShare = cs.value("driverRoleShare", cfg.driverRoleShare);
-        cfg.realLanes = cs.value("realLanes", cfg.realLanes);
-        cfg.driving = cs.value("driving", cfg.driving);
         cfg.drivingRules = cs.value("drivingRules", cfg.drivingRules);
         cfg.levelPath = g_levelPath;
         // (The old buses' and cabs' keys -- busRoutes, busStops, buses, busMaxWalk, busService, busCommuteShare,
-        // taxiFraction, hailChance, hailMinMetres -- are no longer read: ADR-0460. A level that still sets them loads
-        // as before; nothing reads them.)
-        cfg.physicalCars = cs.value("physicalCars", cfg.physicalCars);
+        // taxiFraction, hailChance, hailMinMetres -- are no longer read: ADR-0460; nor the old driving's -- driving,
+        // driverRole, driverRoleShare, realLanes, physicalCars: ADR-0461. A level that still sets them loads as before;
+        // nothing reads them.)
         cfg.pedDemoteRadius = cs.value("pedDemoteRadius", cfg.pedDemoteRadius);
         cfg.localHz = cs.value("localHz", cfg.localHz);
         cfg.adaptiveRate = cs.value("adaptiveRate", cfg.adaptiveRate);

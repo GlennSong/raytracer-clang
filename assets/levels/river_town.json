@@ -10,7 +10,6 @@
   "cars": 0,
   "crowd": "crowd_river_town.lua",
   "drivableSpacesOnly": true,
-  "driving": "v2",
   "drivingRules": "rules/lab.lua",
   "near": {
    "cap": 100,

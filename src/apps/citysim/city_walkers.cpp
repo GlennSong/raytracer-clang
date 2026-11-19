@@ -211,9 +211,7 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
 
     // --- THE BODY BUDGET ------------------------------------------------
     // Every K pedestrian now has an entity and is drawn; this decides which of
-    // them also get a Jolt capsule. Nearest-first up to the level's budget,
-    // exactly
-    // the shape CityPhysicsSystem::possessTier uses for its 12 physical cars.
+    // them also get a Jolt capsule. Nearest-first up to the level's budget.
     const int budget = city_.params().maxWalkerBodies;
     if (budget <= 0) {   // unbounded: every K ped keeps a capsule (historical)
         for (Walker& w : walkers_) {
@@ -305,12 +303,10 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         }
         cars.push_back(c);
     });
-    // ...and the city's own cars on a trip (carsNear, city_car.h: the old sim's driving agents and the households'
-    // cars, ADR-0445; a car the player holds is a Vehicle, above). FAR CARS CANNOT RUN ANYONE OVER: carsNear walks the
-    // near list only. (This was the only place in citysim that iterated far-tier agents: it gathered every moving
-    // driver in the whole 8 km city, and the knockdown test below is O(walkers x this list).)
+    // ...and the city's own cars on a trip (carsNear, city_car.h: the car entities, ADR-0445; a car the player holds is
+    // a Vehicle, above).
     std::vector<CarSeen> cityCars;
-    carsNear(sim, world, Vec2(0, 0), -1, cityCars);
+    carsNear(world, Vec2(0, 0), -1, cityCars);
     for (const CarSeen& seen : cityCars) {
         if (!seen.moving) continue;
         engine::DangerCar c;
@@ -318,9 +314,8 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         const Real hl = seen.heading.length();
         c.fwd = hl > 1e-6 ? seen.heading * (1.0 / hl) : Vec2(0, 1);
         c.vel = c.fwd * seen.speed;
-        // (an old-sim car: its fixed box, as before; a household car: its own body's)
-        c.halfW = seen.agent >= 0 ? 0.95 : seen.width * 0.5;
-        c.halfL = seen.agent >= 0 ? 2.35 : seen.length * 0.5;
+        c.halfW = seen.width * 0.5;
+        c.halfL = seen.length * 0.5;
         cars.push_back(c);
     }
     // Every person (other walkers + the on-foot player) for 360° SEPARATION —
@@ -732,8 +727,8 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                                ragdolls_.describe(pw));
 }
 
-// The answer to `driver?` and `waiting?` when the level drives the old model.
-static constexpr const char* kDrivingV2Off = "the new driving model is off on this level (it runs when citysim.driving = \"v2\")";
+// The answer to `driver?` and `waiting?` when the level has no driving.
+static constexpr const char* kDrivingV2Off = "the driving is off on this level (it runs where the level names citysim.drivingRules)";
 // A control reply is one line: the driving library's text, its lines joined by " | ".
 static std::string oneLine(std::string text) {
     while (!text.empty() && text.back() == '\n') text.pop_back();

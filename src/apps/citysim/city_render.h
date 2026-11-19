@@ -73,15 +73,9 @@ struct CityRenderParams {
     // ~2x, and near-tier agents are the expensive ones.
     Real pedPromoteRadius = 280.0;
     Real pedDemoteRadius = 350.0;
-    std::string driverRole;        // a role for the level's drivers (CitySim::giveDriversRole; the traffic lab's)
-    Real driverRoleShare = 1.0;
-    bool realLanes = false;        // draw cars on the real lanes (#218)
-    std::string driving = "v1";    // which driving model (CitySimConfig::driving; "v2" also runs the new library)
-    std::string drivingRules;      // the rule set v2 drives by (CitySimConfig::drivingRules)
-    std::string levelPath;         // the level file (CitySimConfig::levelPath): v2 builds its lane graph from it
-    // Cars handed to real physics near the player (CitySimConfig::physicalCars).
-    // 0 = none, the shipping default; the physics soaks opt in.
-    int physicalCars = 0;
+    // the rule set the driving drives by (CitySimConfig::drivingRules); empty: no driving, no traffic (ADR-0461)
+    std::string drivingRules;
+    std::string levelPath;         // the level file (CitySimConfig::levelPath): the driving builds its lane graph from it
     // SIM RATE (P8.2d). Traffic is not physics: agents follow lanes, so a
     // bigger dt costs nothing but precision. 0 or >= the fixed rate keeps the
     // historical every-step tick (and every existing test/gate bit-identical);
@@ -174,32 +168,23 @@ public:
     }
 
     // Agent `agentId`'s current WORLD pose for spectating: the real external body
-    // pose when one is reported (cars/peds owned by the physics bridges), else the
+    // pose when one is reported (walkers owned by the physics bridge), else the
     // sim ghost (pos + groundAt + elevation). `outPos` is the body ORIGIN on the
     // ground (y = terrain + elevation); `outHeading` is its XZ heading. Returns
     // false for an out-of-range / released / unreported (no external body) agent.
     bool agentWorldPose(int agentId, engine::Vec3& outPos,
                         engine::Vec2& outHeading) const;
 
-    // When a CityVehicleSystem owns the NPC cars as real physics Vehicles (ADR-0062),
-    // this render bridge must NOT also draw them as instanced kinematic boxes (that
-    // would double every car). Call before build(): it skips creating/baking the car
-    // instance groups; peds, signals, and crosswalks stay owned here. The CitySim
-    // still runs as the PLANNER (its ghosts drive the AgentDriver commands).
-    void setCarsExternallyOwned(bool on) { carsExternallyOwned_ = on; }
-    bool carsExternallyOwned() const { return carsExternallyOwned_; }
-
-    // Same handoff for PEDESTRIANS (ADR-0062): when a CityWalkerSystem owns them
+    // A HANDOFF FOR PEDESTRIANS (ADR-0062): when a CityWalkerSystem owns them
     // as physics characters, this bridge stops baking the instanced ped boxes
     // (they'd draw twice) — the CitySim keeps planning; walkers follow bodies.
     void setPedsExternallyOwned(bool on) { pedsExternallyOwned_ = on; }
     bool pedsExternallyOwned() const { return pedsExternallyOwned_; }
 
-    // The physical car poses (ADR-0062), fed each step by the vehicle bridge so
-    // the per-agent DEBUG WIDGETS ring the REAL car — not the planner ghost, which
+    // The physical walker poses (ADR-0062), fed each step by the walker bridge so
+    // the per-agent DEBUG WIDGETS ring the REAL body — not the planner ghost, which
     // legitimately runs ahead/behind (an empty ring on the ground is the ghost).
-    // Only used when cars are externally owned; drivers without a reported pose
-    // (released to the player, dead entity) draw no widget.
+    // Only used when walkers are externally owned; one without a reported pose draws no widget.
     struct ExternalAgentPose {
         int agentId = -1;
         engine::Vec2 pos;
@@ -212,9 +197,6 @@ public:
         // its planner ghost thinks it's walking. -1 = use the ghost's state.
         int stateOverride = -1;
     };
-    void setExternalCarPoses(std::vector<ExternalAgentPose> poses) {
-        externalCarPoses_ = std::move(poses);
-    }
     void setExternalPedPoses(std::vector<ExternalAgentPose> poses) {
         externalPedPoses_ = std::move(poses);
     }
@@ -255,30 +237,16 @@ public:
                    std::vector<engine::Vec3>* bottoms = nullptr) const;
     // A CAR'S SEATS (Glenn, 2026-10-02: "a way to detect which part of the car you get into so you can be a
     // passenger (backseat, frontseat passenger) or the driver ... we'd have to be pointing at the seat that we
-    // want"): an ambient car's drawn pose and its seat hips in the body frame -- [0] the driver's, [1] the front
-    // passenger's (the driver's mirrored), then the two rear seats when the body is long enough to have them.
-    // False for a parked or released agent, or a body that publishes no driver seat.
-    bool carSeatsOf(int agent, engine::Mat4* pose, std::vector<engine::Vec3>* seats) const;
-    // ...and of a car entity (ADR-0445): where its body is this step (city_car.h CityCarPose) and its seats. False: it
-    // has no such pose (the player has it, physics carries it, or no step yet), or its model has no driver's seat.
+    // want"): a car entity's pose where its body is this step (city_car.h CityCarPose, ADR-0445) and its seat hips in
+    // the body frame -- [0] the driver's, [1] the front passenger's (the driver's mirrored), then the two rear seats
+    // when the body has a back bench. False: it has no such pose (the player has it, physics carries it, or no step
+    // yet), or its model has no driver's seat.
     bool carEntitySeatsOf(engine::World& world, engine::Entity car, engine::Mat4* pose,
                           std::vector<engine::Vec3>* seats) const;
     // The model (variant) a household car is drawn as: its fleet slot, and its kind's (a bus, a cab, a fire engine).
     int carEntityVariant(int slot, VehicleType type) const { return parkedVariant(slot, type); }
-    // R5 physical tier (roads-v2.1): agents whose RENDER truth is a Jolt
-    // vehicle body. CityPhysicsSystem drives the bodies from the sim's own
-    // plan and writes each pose here; syncGroups bakes it instead of the
-    // kinematic agentPose, and flags the instance so its kinematic proxy
-    // box parks instead of tracking (a box inside the dynamic chassis would
-    // fight it).
-    void setAgentPhysPose(int agent, const engine::Mat4& pose) {
-        physPose_[agent] = pose;
-    }
-    void clearAgentPhysPose(int agent) { physPose_.erase(agent); }
-    // Bake-order agent id per car instance (parallel to each carGroup's
-    // transforms), so the physics bridge can park the kinematic proxy of a
-    // possessed agent THE SAME TICK it acquires the body (a bake-time flag
-    // would lag one tick and the box would kick the fresh chassis).
+    // The key of each car instance this bake (parallel to each carGroup's transforms): the car entity's driver's
+    // agent index while somebody sits at its wheel, else entityCarKey (entityCarDrawKey).
     const std::vector<std::vector<int>>& carAgentIds() const {
         return carAgentIds_;
     }
@@ -301,16 +269,14 @@ public:
     // crowd's instances follow -- agentPose). Between ticks the raw position holds still and then hops; at a slowed
     // tick (the adaptive rate, down to 7.5 Hz) a walker posed from it read as flickering at superspeed.
     engine::Vec2 drawnAgentPos(int agentIndex, engine::Vec2* heading = nullptr) const;
-    // Where a pose -- an agent's, or a copy of one (CitySim::walkPoses) -- is DRAWN on the ground plane: agentPose's
-    // place, a car's pull out of and into its bay included (the trip lab's line, ADR-0415).
-    engine::Vec2 drawnPlace(const Agent& a) const {
-        const engine::Mat4 m = agentPose(a);
-        return engine::Vec2(m.m[0][3], m.m[2][3]);
-    }
-    // Is anyone in this driver's car? Only while it is on a trip (moving), or a household's car with its person in it
+    // Is anyone in this car entity's driver's seat (the agent at its wheel)? While they are in it (a household's car
+    // with its person in it), or under way.
     bool carOccupied(int agentIndex) const;
+    // Is it dark by the sim's clock (in-world hours)? What the cars' headlights follow where no render view has staged
+    // the sun (headless): on before dawn and after dusk.
+    static bool clockIsDark(Real clockHours);
     int loadMultiplier() const { return loadMul_; }
-    CitySim& simMutable() { return sim_; }   // ADR-0062 bridge: release ejected drivers
+    CitySim& simMutable() { return sim_; }   // the bridges: the take-a-car path, the near tier
     // A household car's key in carAgentIds_ while nobody is at its wheel: below every parked row's (-2 - row), as the
     // car's number is past every row (city_car.h). Public for the physics bridge, which keys its boxes by it.
     static int entityCarKey(uint32_t id) { return -2 - static_cast<int>(id); }
@@ -366,12 +332,10 @@ public:
     // baked once at build; shown/hidden with the same HUD toggle as the rings.
     engine::Entity navLinkGroup() const { return navLinkGroup_; }
     engine::Entity navNodeGroup() const { return navNodeGroup_; }
-    // Debug VISION-CONE view: one ground wedge per MOVING agent, sized to its
-    // mode's sensing cone (drivers 18 m / 0.45 rad, walkers 4.5 m / 1.2 rad),
-    // at the same widget pose the rings use (real bodies when external).
-    engine::Entity visionGroup(Agent::Mode m) const {
-        return visionGroups_[static_cast<int>(m)];
-    }
+    // Debug VISION-CONE view: one ground wedge per MOVING walker, sized to its
+    // sensing cone (4.5 m / 1.2 rad), at the same widget pose the rings use
+    // (real bodies when external).
+    engine::Entity visionGroup() const { return visionGroup_; }
     // Half-extents of a car / pedestrian box, for a physics collider that tracks
     // the drawn instance.
     engine::Vec3 carHalfExtent() const {
@@ -413,15 +377,6 @@ public:
     // shell's underside culls from inside), so without these the player sat in an empty frame over the road. The
     // cabin is invalid for a see-into body (bus, convertible), whose cabin is part of its chassis.
     engine::MeshHandle carGlassMesh(int slot) const { return slotOf(carGlassMesh_, slot); }
-    // WHICH MODEL an agent's car is drawn as: the slot every car* accessor above and below takes. Not its vehicle
-    // index: the fleet deals ordinary cars past the service slots (CitySim::ambientSlotFor), and a bus or a fire
-    // engine has its own -- so `a.vehicle` named a different model (#115: "when I take a car, why does the car
-    // change?"; and a passenger's seats came off another model's layout). -1 when it draws as none.
-    // Over the FLEET's slots (its handling, carConfig), so a city that draws nothing -- a headless soak -- still knows
-    // a bus is a bus; where cars are drawn the two counts are one.
-    int carSlotOf(int agent) const {
-        return slotFor(agent, carConfigs_.empty() ? drawVariantCount() : static_cast<int>(carConfigs_.size()));
-    }
     // That car's driver's hip point (the fleet recipe's `driver_seat`, its interior's own seat), for a commandeered
     // car's driver: false when the slot publishes none.
     bool carDriverSeat(int slot, engine::Vec3& out) const {
@@ -502,12 +457,8 @@ private:
     // glass, cabin, lamps, a rider... their own small numbers)
     static uint64_t movingId(const Agent& a, uint32_t part) { return (static_cast<uint64_t>(a.uid) << 8) | part; }
     void syncCarLamps(engine::World& world);   // bake the emissive lamp instances
-    int carTurnDir(const Agent& a) const;      // route-bend turn side (-1/0/+1)
-    // Box sized by a.mode (car/ped). `agentIdx` >= 0 enables the per-agent
-    // TILT LOW-PASS for cars (roads-v2.1 4b): the road-plane basis is re-fit
-    // from terrain samples every tick, and raw refits vibrate the body on
-    // noisy/quantised ground (drive feedback C1: "cars vibrate").
-    engine::Mat4 agentPose(const Agent& a, int agentIdx = -1) const;
+    // A walker's drawn pose (the sim's walker pose, city_poses.h).
+    engine::Mat4 agentPose(const Agent& a) const;
     // Where a placed signal pole stands and which way its head/arm point (the loader's StreetFurniture).
     struct SignalSite {
         engine::Vec3 base;   // pole foot (world)
@@ -529,15 +480,6 @@ private:
     // lerped height `refY`, so never the street under it or the freeway over it), else `refY` itself.
     // The lerp between nav ends cuts under a ramp's vertical curves; the drawn profile does not (#35).
     Real deckSurfaceNear(Real x, Real z, Real refY) const;
-    // The fleet slot agent `ai` is DRAWN with (the ambient rotation, the bus override): the one mesh,
-    // lamps and wheel set that car wears. -1 when there is no drawable slot.
-    int drawSlotFor(int ai) const { return slotFor(ai, drawVariantCount()); }
-    int slotFor(int ai, int variants) const;   // (the rule, over `variants` slots)
-    // The drawn road surface under (px, pz) for car `a`, `along` metres ahead of its centre: on a deck, the
-    // deck it is on (deckSurfaceNear from its link's height); on the ground, the road or ground at ITS level
-    // (the terrain + its layer lift as the reference), so an overpass or a stacked junction pad above never
-    // answers for a street car (wheel_lab: groundAt's top-pad rule read the freeway 8 m up).
-    Real carSurfaceAt(const Agent& a, Real px, Real pz, Real along) const;
 
     CityRenderParams params_;
     engine::NavGraph nav_;
@@ -560,14 +502,8 @@ private:
     // the same instances as carGroups_ (copied once the bake is done, lamp masks and all), the near group stopping
     // where this one starts. Invalid where the recipe has none.
     std::vector<engine::Entity> carMidGroups_;
-    std::vector<engine::RenderMesh> carFarMesh_;   // per variant: the recipe's far stand-in (empty: the two boxes)
     void copyMidBodies(engine::World& world);
-    std::unordered_map<int, engine::Mat4> physPose_;      // R5: agent -> body pose
     std::vector<std::vector<int>> carAgentIds_;           // parallel to bakes
-    // (The one-shot SceneryCar bake that used to live here is gone: parked cars
-    // are real SimVehicles now, drawn straight off the vehicle list in
-    // syncGroups. A cached pose would be wrong rather than stale, because a
-    // parked car moves as soon as its owner drives it away.)
     // Set per fixed step: bake the render poses only on the frame's LAST step
     // (see fixedUpdate). True by default so a direct step() call still bakes.
     bool bakeThisStep_ = true;
@@ -588,9 +524,8 @@ private:
     engine::Entity crowdBoardGroups_[2];   // the crowd's and the far band's riders' boards (skateboard, scooter)
     void syncBeachThings(engine::World& world);
     // THE MID-RANGE BAND (the 100k plan's M band; Glenn: "increase the number of people throughout the island"):
-    // far (V) agents within farCarRadius / farPedRadius, drawn from CitySim::farDrawPose as cheap stand-ins -- a
-    // two-box car per body slot, the box person -- in groups of their own (no physics proxy, no lamps)
-    std::vector<engine::Entity> farCarGroups_;
+    // far (V) agents within farPedRadius, drawn from CitySim::farDrawPose as cheap stand-ins -- the box person -- in a
+    // group of its own (no physics proxy)
     engine::Entity farPedGroup_;
     // (far band ground heights: in the agent's draw cache below)
     int farDrawn_ = 0;
@@ -608,11 +543,11 @@ private:
     std::vector<uint32_t> crowdArena_, crowdDirtySlots_;
     std::size_t crowdGarbage_ = 0;
     std::vector<float> crowdLinkLen_;   // per link: its length as the shader measures it (xz, end to end)
-    Real farCarDistance = 4000.0, farPedDistance = 1500.0;
+    Real farPedDistance = 1500.0;
     int crowdLive_ = 0, crowdDrawnSeen_ = 0;
     long lastDormantEvents_ = 0;      // the stats line's sleepers' events since the last line
     double lastDormantMs_ = 0;
-    Real farCarRadius = 900.0, farPedRadius = 700.0;
+    Real farPedRadius = 700.0;
     // PEOPLE INSIDE (campus M4): a streamed interior shows the agents the sim has indoors there -- sitting, and
     // standing (a lecturer) or lying (asleep) on the standing body. stepIndoors refreshes them once a second.
     engine::Entity indoorSitGroup_, indoorBodyGroup_;
@@ -701,21 +636,11 @@ private:
     std::vector<char> carHasDriver_;
     engine::Entity busDriverGroup_{};
     std::vector<engine::Entity> carRiderGroups_;   // per slot: its rider astride (invalid: a car's driver, if any)
-    // The matrix each see-into vehicle was DRAWN with at the last bake, by
-    // agent. A passenger is placed through exactly this -- recomputing the
-    // pose skipped the drawn body's tilt filter, and on a slope the rider
-    // wobbled against the bus by the difference.
-    std::unordered_map<int, engine::Mat4> busDrawnPose_;
-    // Parked cars that survived the distance cull on the last bake — how many
-    // car bodies the frame actually pays for. This was computed and discarded,
-    // which left the car share of the frame a guess with a 2.7x spread.
-    int parkedDrawn_ = 0;
     // THE DRAW CACHE (bytes per agent; Glenn: "Why do you keep putting off this work?"): what the drawers keep per
-    // agent -- its last car pose, its tilt low-pass, its speed for the brake-light test, its far-band ground height
-    // -- for the agents actually DRAWN (the near and mid-range ~2,000), not five arrays sized for all 100,000
-    // (~230 bytes each). Entries not touched for a while are swept.
+    // drawn thing -- a car entity's speed for the brake-light test (by entityCarKey), a far walker's ground height --
+    // for the things actually DRAWN, not arrays sized for all 100,000. Entries not touched for a while are swept.
+    // (An old-sim driver's four-wheel fit memory went with the old driving: ADR-0461.)
     struct AgentDrawCache {
-        FitMemory fit;                  // an old-sim driver's four-wheel fit memory (city_poses.h)
         Real prevSpeed = 0;
         bool fresh = true;              // prevSpeed not yet seeded (the first look sees no deceleration)
         Real farY = 0;
@@ -739,11 +664,6 @@ private:
     // The variant a car of fleet slot `slot` and body `type` is drawn as when nobody is driving it (the sim's models:
     // CityCarModels::variantOf).
     int parkedVariant(int slot, VehicleType type) const { return sim_.poses().models.variantOf(slot, type); }
-    // A car standing at rest (CityPoses::parkedCarPose).
-    engine::Mat4 parkedCarPose(int variant, engine::Vec2 pos, engine::Vec2 heading, Real parkedY,
-                               const std::vector<engine::Vec3>& halfExtents) const {
-        return sim_.poses().parkedCarPose(variant, pos, heading, parkedY, halfExtents);
-    }
     // The seats of a car drawn as variant `v`: the driver's first, the front passenger's, the back bench's.
     bool seatsOfVariant(int v, std::vector<engine::Vec3>& seats) const;
     // debug ground rings, one per Agent::State (indexed by it)
@@ -751,7 +671,7 @@ private:
     engine::Entity forwardGroup_{};          // debug forward-trajectory arrows
     engine::Entity navLinkGroup_{};          // debug navgraph lane strips (static bake)
     engine::Entity navNodeGroup_{};          // debug junction-node rings (static bake)
-    engine::Entity visionGroups_[2]{};       // debug sensing wedges, indexed by Agent::Mode
+    engine::Entity visionGroup_{};           // debug sensing wedges (the walkers')
     engine::Entity blockGroup_{};            // debug city-BLOCK outlines (static bake)
     engine::Entity lotGroup_{};              // debug LOT outlines (static bake)
     engine::Entity colliderStripGroup_{};    // debug collider-prism rim outlines
@@ -765,7 +685,6 @@ private:
     void bakePlanOutlines(engine::World& world);
     std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)
     std::vector<engine::Mat4> colliderPostBake_;   // prism vertical corner posts
-    std::vector<int> parkedScratch_;   // the vehicles near the player (syncGroups)
     // THE PLACED SIGNAL POLES (the loader's StreetFurniture, adopted at build): each link's pole site (siteHasLink_: it
     // has one), the walkers' obstacles; and the heads, one per post instance, with the lane junction of the new
     // driving each is tied to (tieSignalHeads; headsModel_: the model they were asked of). The poles never move: their
@@ -826,9 +745,7 @@ private:
     Real worldClockHour_ = -1.0;
     Real worldClockRate_ = 0.0;
     void adoptWorldClock(engine::FrameContext& ctx);
-    bool carsExternallyOwned_ = false;   // ADR-0062: a CityVehicleSystem owns the cars
     bool pedsExternallyOwned_ = false;   // ADR-0062: a CityWalkerSystem owns the peds
-    std::vector<ExternalAgentPose> externalCarPoses_;   // real car poses for widgets
     std::vector<ExternalAgentPose> externalPedPoses_;   // real walker poses for widgets
 };
 

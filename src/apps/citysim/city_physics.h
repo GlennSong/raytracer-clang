@@ -19,9 +19,8 @@ namespace citysim {
 // motion). Lives in the viewer/editor build (it needs Jolt), not engine_core.
 //
 // A car entity's box is at where its body is this fixed step (city_car.h CityCarPose, ADR-0454), and a walker's where
-// the walker stands this step (city_poses.h CityPoses::walkerBoxPoses), every step. The old sim's cars are still read from
-// CityRenderSystem's baked InstanceGroups, which are baked only on a frame's last two fixed steps (named for later in
-// ADR-0454).
+// the walker stands this step (city_poses.h CityPoses::walkerBoxPoses), every step. (The old driving's cars, read from
+// the drawing's bakes, and its physical tier -- Jolt cars chasing the old sim's ghosts -- went with it: ADR-0461.)
 class CityPhysicsSystem : public engine::System {
 public:
     CityPhysicsSystem(CityRenderSystem& city, engine::PhysicsSystem& physics)
@@ -31,24 +30,9 @@ public:
     void onStop(engine::FrameContext& ctx) override;
 
     // --- testable core (no FrameContext), the CityRenderSystem pattern ---
-    // One physics-bridge step: possess/drive the physical tier, then track
-    // every kinematic proxy. The headless soak drives this directly.
+    // One physics-bridge step: track every kinematic proxy. The headless tests drive this directly.
     void step(engine::World& world, engine::Real dt);
-    // The live physical roster (agent ids + vehicle ids) for gates.
-    struct Possessed {
-        int agent = -1;
-        engine::PhysicsWorld::VehicleId vid =
-            engine::PhysicsWorld::INVALID_VEHICLE;
-        engine::Real stuckTime = 0;   // body pinned while its ghost recedes
-        engine::Real lastDist = 0;    // gap last tick, for closing-rate
-        engine::Real halfX = 0, halfZ = 0;   // its chassis box (its slot's handling, carConfig)
-        engine::Real spawnAbove = 0;         // its centre over the road when put down (PhysicsWorld::spawnHeight)
-    };
-    const std::vector<Possessed>& possessed() const { return possessed_; }
-    // Each fleet slot's launch, measured on its own handling and handed to the sim (item 23): the tier calls it every
-    // tick and it measures only slots not yet measured since the fleet was (re)built.
-    void measureFleetLaunches();
-    // The kinematic proxy boxes standing in for the drawn ambient cars — the
+    // The kinematic proxy boxes standing in for the city's cars — the
     // bodies the player actually bumps into. Exposed so the walk-through gate
     // (#26) can check every drawn car really has one where it is drawn. The
     // value type is private, so this hands out just the body ids.
@@ -59,7 +43,7 @@ public:
         return out;
     }
     // The same boxes with their half extents (a van's is bigger than a sedan's), for overlap gates.
-    // key: the baking agent's uid, or negative for a scenery (parked, agentless) car.
+    // key: the uid of the agent at the car's wheel, or negative for a car with nobody at its wheel (-2 - its number).
     struct ProxyBox { engine::PhysicsBodyId id; engine::Vec3 he; long long key; };
     std::vector<ProxyBox> carProxyBoxes() const {
         std::vector<ProxyBox> out;
@@ -80,73 +64,33 @@ public:
             if (kv.second.id == id) return true;
         return false;
     }
-    // Times the backstop snapped a lost body onto its ghost. The soak gate
-    // asserts the CONTROLLER never needs it; in production it's the fuse.
-    int snapCount() const { return snapCount_; }
-    // Snaps the backstop wanted but held back because the ghost's spot (and the lane behind it) was taken.
-    int snapsHeld() const { return snapsHeld_; }
-
 private:
     void releaseBodies();
     bool entityCarKey(engine::World& world, engine::Entity car, long long& key) const;
-    // P4.3: one live kinematic proxy box per drawn instance, keyed by the
-    // instance's STABLE identity — the baking agent's uid, or a negative bake
-    // ordinal for build-time scenery cars. Replaces the old positional pool
-    // that fully rebuilt whenever the drawn count changed (O(n) churn every
-    // tier promotion/demotion).
+    // P4.3: one live kinematic proxy box per body, keyed by its STABLE identity (a walker's uid, a car entity's
+    // entityCarDrawKey turned into a key the same way), so one arriving or leaving adds or removes ONE box.
     struct ProxyBody {
         engine::PhysicsBodyId id{};
         engine::Vec3 he{};     // collider half extent (a van's box is bigger than a sedan's)
-        char parked = 0;       // last tick's possessed-parked state
-        uint32_t stamp = 0;    // last sync pass that saw this instance
+        uint32_t stamp = 0;    // last sync pass that saw this body
     };
-    // Keep `proxies` matched to the instances across `groups` as an
-    // incremental DIFF: add a body for a newly drawn instance (spawned at its
-    // pose — never swept in), remove bodies whose instance vanished (tier
-    // demotion, release), move the rest. `groupExtents` gives the collider
-    // half-extent for each group (so a van's box is bigger than a sedan's).
-    // `agentIds` (parallel per group): the baking agent id of each instance —
-    // the key source, and instances whose agent is currently POSSESSED park
-    // their proxy box far below instead of tracking (a kinematic box inside
-    // the dynamic chassis would fight it — and it must park the SAME tick the
-    // body spawns, which is why this reads the live possessed set, not a flag
-    // captured at bake time). `withCarEntities`: the car entities' boxes from their CityCarPose instead of their drawn
-    // instances. `posed`: poses given for this step, by agent, placed before any group's instances (the walkers').
-    void syncKinematic(engine::World& world, const std::vector<engine::Entity>& groups,
-                       const std::vector<engine::Vec3>& groupExtents,
-                       std::unordered_map<long long, ProxyBody>& proxies,
-                       engine::Real dt,
-                       const std::vector<std::vector<int>>* agentIds = nullptr, bool withCarEntities = false,
+    // Keep `proxies` matched to this step's bodies as an incremental DIFF: add a box for a new one (spawned at its
+    // pose — never swept in), remove boxes whose body went, move the rest. `withCarEntities`: the car entities' boxes
+    // from their CityCarPose, of the model each is drawn as (one of `carModels`), sized by `extents` (one per model);
+    // `posed`: poses given for this step, by agent (the walkers'), sized by `extents.front()`.
+    void syncKinematic(engine::World& world, std::size_t carModels, const std::vector<engine::Vec3>& extents,
+                       std::unordered_map<long long, ProxyBody>& proxies, engine::Real dt, bool withCarEntities,
                        const std::vector<std::pair<int, engine::Mat4>>* posed = nullptr);
     std::vector<std::pair<int, engine::Mat4>> walkerPoses_;   // (scratch: CityPoses::walkerBoxPoses, each step)
-    // R5 (roads-v2.1): the PHYSICAL tier — the N moving drivers nearest the
-    // player run on real Jolt wheeled vehicles, driven by the SAME plan the
-    // kinematic brains produce (computeDriverInput chases the sim's ghost); their
-    // render pose comes from the body (city_.setAgentPhysPose).
-    void possessTier(engine::World& world, engine::Real dt);
-    // #23: is a footprint of half extents (hx, hz) at (c, yaw) clear of every OTHER car -- the other possessed bodies and the
-    // kinematic boxes not parked below the world? A body is only ever PLACED (spawned on acquisition,
-    // snapped by the backstop) where this holds: teleporting a chassis into a car that is already there is
-    // what "piled upon other cars ... go through each other" was.
-    bool spotClear(engine::Vec2 c, engine::Real yaw, engine::Real hx, engine::Real hz, int selfAgent) const;
-    // Stamp each possessed car's drawn instance transform from its live body,
-    // so the car is never drawn where its chassis no longer is (#26).
-    void syncPossessedInstances(engine::World& world);
 
     CityRenderSystem& city_;
     engine::PhysicsSystem& physics_;
-    std::unordered_map<long long, ProxyBody> carProxies_;   // uid/scenery-keyed
+    std::unordered_map<long long, ProxyBody> carProxies_;   // keyed as above
     std::unordered_map<long long, ProxyBody> pedProxies_;
     uint32_t proxyStamp_ = 0;               // sync-pass counter (stale detection)
     std::vector<long long> staleScratch_;   // keys to drop, sorted (determinism)
-    std::vector<int> nearScratch_;          // possessTier grid candidates (P4.1)
     std::vector<engine::PhysicsBodyId> poleBodies_;   // static, one per signal pole
     bool polesBuilt_ = false;
-    std::vector<Possessed> possessed_;
-    int snapCount_ = 0;
-    int snapsHeld_ = 0;
-    int maxPhysical_ = 12;
-    engine::Real possessRadius_ = 90.0;   // acquire inside; drop past 1.3x
 };
 
 }  // namespace citysim

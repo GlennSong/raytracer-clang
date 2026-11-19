@@ -1119,7 +1119,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
         return false;
     };
     if (!sim.drivingV2_ || !sim.drivingV2_->roads() || !sim.drivingV2_->hasRules() || !sim.drivingHost_.active())
-        return refuse("the new driving does not run on this level (citysim.driving \"v2\" with a rule set)");
+        return refuse("the driving does not run on this level (it runs where the level names citysim.drivingRules)");
     if (!sim.nav_) return refuse("the city has no street map");
     im.d = &*sim.drivingV2_;
     im.model = im.d->model();

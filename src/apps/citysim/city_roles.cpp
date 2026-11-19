@@ -260,10 +260,6 @@ RoleCatalog defaultRoleCatalog() {
     staff("cook", floor, 0.08, {"restaurant"}, 2, true);
     staff("clerk", floor, 0.15, {"supermarket", "shop"}, 2, true);
     staff("bartender", floor, 0.05, {"bar", "club"}, 2, true);
-    // the traffic lab's driver (#214): always driving -- no job, never handed out; a level gives it (citysim.driverRole)
-    RoleDay roam;
-    roam.roam = true;
-    add("lab_driver", roam, 0.0);
     return c;
 }
 

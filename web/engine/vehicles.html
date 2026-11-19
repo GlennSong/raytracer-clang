@@ -1101,8 +1101,10 @@ v.frontGrip = <span class="n">0.9f</span>;
     (<code>headlight_l/r</code>, <code>taillight_l/r</code>) set the lens positions. One pure predicate,
     <code>engine::vehicleLampState</code> (<code>vehicle_lamps.h</code>), decides what is lit: headlights at dusk,
     brake lights when the car holds or sheds speed, indicators while it turns. The player's car calls it from
-    <code>VehicleSystem</code>. City traffic calls it through the adapter in <code>apps/citysim/car_lamps.h</code>,
-    which maps an agent's state onto it, and draws the lit lenses as three instanced groups.</p>
+    <code>VehicleSystem</code>. City traffic (the driving's car entities) calls it from
+    <code>CityRenderSystem::syncCarLamps</code> with the car's braking, and lights the lenses each body was built with
+    by a mask on its instance (ADR-0342). (The adapter for the old driving's agents, <code>car_lamps.h</code>, went
+    with it: ADR-0461.)</p>
   <figure class="shot">
     <img src="img/vehicles/night-lamps.webp" alt="Night on a two-lane mountain road: a red car with glowing tail lights ahead and a yellow car with lit headlights coming the other way">
     <figcaption>Headlights and taillights on ambient traffic at night (2026-09-26, mesh.car bodies).</figcaption>
@@ -1129,8 +1131,8 @@ v.frontGrip = <span class="n">0.9f</span>;
     <code>test_vehicle_drivetrain</code>, <code>test_offroad_course</code>, <code>test_two_wheelers</code>,
     <code>test_drift</code>, <code>test_driver_seat</code>, <code>test_vehicle_body</code> (every fleet slot and
     drivable entry builds), <code>test_vehicle_kit</code> (closed, in budget, no slivers), <code>test_polymesh</code>,
-    <code>test_vehicle_lamps</code>, <code>test_car_lamps</code>,
-    <code>test_driver_agent</code>, <code>test_lane_follow</code>, <code>test_city_ride</code>.</p>
+    <code>test_vehicle_lamps</code>,
+    <code>test_driver_agent</code>, <code>test_lane_follow</code>.</p>
   <p><b>Labs:</b> <code>wheel_lab.json</code> (every fleet slot wandering; the tyre probe <code>ground? 0 0 700</code>
     with <code>RT_GROUND_DUMP</code>), <code>offroad_course.json</code>, <code>fleet_gallery.json</code>,
     <code>car_gallery.json</code>, <code>car_drive.json</code>, <code>movement_lab.json</code>.</p>

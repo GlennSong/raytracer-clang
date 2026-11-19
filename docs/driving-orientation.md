@@ -6,16 +6,19 @@ rules that apply. The *why* is in `docs/driving-model-design.md`, `docs/two-driv
 names (ADR-0398 to ADR-0416 for the driving library, ADR-0440 to ADR-0452 for the brain, the near tier, things in the
 way and crosswalks, ADR-0453 for one kind of car, ADR-0455 for the brain's car facts on the car and one way to take a
 car, ADR-0456 for one signal clock, ADR-0457 for river_town on the new driving, ADR-0459 for deleting the old
-driving's possession, passenger seat and trip lab, ADR-0460 for its buses and cabs). The roads it drives on are described
-in `docs/roads-orientation.md`. Written 2026-11-17, after ADR-0452; section 3 and 4 brought up to ADR-0453 on
-2026-11-18, to ADR-0455 the same day, and to ADR-0456, ADR-0457 and ADR-0459 after it. Anything marked *(unsure)* was not
+driving's possession, passenger seat and trip lab, ADR-0460 for its buses and cabs, ADR-0461 for its cars outside the
+sim). The roads it drives on are described in `docs/roads-orientation.md`. Written 2026-11-17, after ADR-0452; section
+3 and 4 brought up to ADR-0453 on 2026-11-18, to ADR-0455 the same day, and to ADR-0456, ADR-0457, ADR-0459 and
+ADR-0461 after it. Anything marked *(unsure)* was not
 checked in the code.
 
-**Which levels the new driving drives (ADR-0457).** traffic_lab, brain_lab, brain_crowd and river_town (`citysim.driving
-= "v2"` with `drivingRules`). river_town's cars are all a crowd's households' (`citysim.crowd = "crowd_river_town.lua"`,
-the same format as crowd.lua; `cars: 0`, no buses or cabs); the old sim still walks its other people on foot. A sim-only
-citysim field (driving, cars, a crowd, buses, the near tier) never re-bakes a level: the lots key hashes only the fields
-the lot pass reads (`src/engine/lot_citysim.h`).
+**Which levels the driving drives (ADR-0457, ADR-0461).** Every level that names a rule set (`citysim.drivingRules`):
+traffic_lab, brain_lab, brain_crowd and river_town. There is one driving since ADR-0461: the `citysim.driving` key that
+chose between the old and the new is gone (ignored if a level still sets it), and a level with no rule set has no
+driving and no traffic at all (the old levels, until they get the new driving's data). river_town's cars are all a
+crowd's households' (`citysim.crowd = "crowd_river_town.lua"`, the same format as crowd.lua; `cars: 0`); the old sim
+still walks its other people on foot. A sim-only citysim field (cars, a crowd, the rule set, the near tier) never
+re-bakes a level: the lots key hashes only the fields the lot pass reads (`src/engine/lot_citysim.h`).
 
 **One signal clock (ADR-0456).** The traffic lights are the new driving's alone: `signal_programme.h`, pure functions of
 `Driving::clockSeconds()`. The drawn signal heads show them (`headAt`, read by `CityRenderSystem` for each head the loader
@@ -33,16 +36,24 @@ brain's now (`city_brain.cpp`). C2 is done (ADR-0460): no buses and no cabs. The
 riders, hailing, bus commuters and "towns" (which were the bus network's street networks) are gone, with their drawing
 (destination signs, doors, riders in seats, stop furniture, `depots?`) and the `busRoutes`/`buses`/`taxiFraction`/
 `hail*`/`busService`/`busCommuteShare` level keys (ignored if a level still sets them). Left: `BusNetwork`'s route
-planner alone (`city_bus.h`, for the island planner's map lines), the pure `RideBook` and `Dispatch` modules (no user
-in the sim), the fleet's bus and taxi bodies, the lot pass's bus depot yards (built, drawn, unused). Until C3: every v1
-car (`Mode::Driver`, `SimVehicle`, the lane match, the ghost-backed physical tier, its
-drawing and lamps, `LevelLanes`). The player still takes any car with E (`CitySim::playerTakesCar`).
+planner alone (`city_bus.h`, for the island planner's map lines), the fleet's bus and taxi bodies, the lot pass's bus
+depot yards (built, drawn, unused). C3 is split in two (ADR-0461). **C3a is done:** no level makes an old car any
+more (the sim is built with no drivers; the level's `cars` are the driving's, made only where a rule set is named), and
+everything outside the sim that served the old cars is gone: their drawing (agent-row cars, parked rows, their lamps,
+the four-wheel fit memory, the far band's two-box cars, the old bays' paint), the ghost-backed physical tier
+(`possessTier`, `spotClear`, `physicalCars`), their promotion with E, `carsNear`'s old-sim branch, the lane match
+(`lane_map.*`, `LevelLanes`, `TrafficLane`, `realLanes`), `car_lamps.h`, `RideBook` and `Dispatch`, the parked fire
+engines, `giveDriversRole`/`driverRole`/`lab_driver` and the `citysim.driving` flag. **C3b, owed:** the sim's own v1 code
+in `city_sim.*`, now dead (`Agent::Mode::Driver` and the car fields, `SimVehicle`, the car branches of the stepper,
+bays and garages, `junctionRadius`, `walkersInRoad`, ...), with the unit and level tests that still build old drivers
+through `CitySim::build` directly. The player still takes any car with E (`CitySim::playerTakesCar`).
 
 **One car, one representation (ADR-0453).** Every car the new driving moves is a car entity (`city_car.h`): a
 household's (the brain sends it), one that drives round for ever (`CityCarRoams`: the hand-over sends it; the traffic
-lab's 300, or `cars` on any v2 level), or a test bed's (`CityNearSystem::labCar`). No sim agent in `Mode::Driver` and
-no `SimVehicle` row stands for a car of the new driving; those are the old driving's (v1) only. Look cars up through
-the entities (`World::each<CityCarBody, ...>`, `carsNear`), never through `CitySim::agents()`.
+lab's 300, or `cars` on any level that names a rule set), or a test bed's (`CityNearSystem::labCar`). It is the only
+kind of car since ADR-0461 (C3a): no level makes a sim agent in `Mode::Driver` or a `SimVehicle` row any more (their
+code is dead until C3b deletes it). Look cars up through the entities (`World::each<CityCarBody, ...>`,
+`carsNear(world, ...)`), never through `CitySim::agents()`.
 
 **One pose per car per fixed step (ADR-0454).** Where a car entity's body is this step, on its wheels on the deck, is
 `CityCarPose`, set once every fixed step after `sim.step` by the sim's pose module (`city_poses.h` `CityPoses`, held by
@@ -154,8 +165,12 @@ Build with `cmake --build build-viewer --target driving_tests level_tests physic
 
 - The old sim's people walk the street map's kerb-side line, not a pavement of the model, and cross through the
   junction's corner blend; their places waiting at a crosswalk are where their route comes level with its kerb end.
-- The sim's `walkersInRoad` and `junctionRadius` still measure the roads from the street map for the old driving (v1);
-  they are slated to go with it. (The old signals went in ADR-0456.)
+- The sim's `walkersInRoad` and `junctionRadius` still measure the roads from the street map; they go with C3b. The
+  walkers read `junctionRadius` too (`onStreet`, the wait at a junction's kerb), so taking it away moves the walkers
+  (and the pinned hashes): that part is task 4's (people route on the road model), not a deletion.
+- A walker's place standing at a crosswalk's kerb end (`refreshPose`'s ModelCrosswalk::kerbWait step, ADR-0452) is
+  never reached: `refreshPose` returns for every walker before it. Found in ADR-0461, not fixed (it moves the walkers
+  and every pinned hash); likely part of brain_crowd's kerb-end-share failure, so task 4's.
 - A walker at a junction the model's crosswalks do not rule (no crosswalk with pavements there, or a junction of a city
   the new driving does not drive) waits for no light: it judges the gap in the old driving's cars at the kerb
   (`advance`'s kerb discipline) at every junction, lit or not.

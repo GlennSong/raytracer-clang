@@ -107,19 +107,13 @@ TEST_CASE(city_render_builds_from_roadnet) {
     CHECK(city.build(world, nullptr));   // null AssetManager: transforms only
     CHECK(city.built());
     CHECK(city.nav().linkCount() > 0);
-    CHECK(city.sim().agents().size() == 14u);
-
-    // CONSERVATION, not a fixed split. Eight cars exist and are always drawn —
-    // whether being driven (agent-keyed) or parked with their owner away
-    // (vehicle-keyed) — so the car count is exact. The PERSON count is not 6
-    // any more: a car owner walks the last few metres of every arrival, so at
-    // any instant some of the eight drivers are also on foot. What must hold is
-    // that every agent is drawn exactly once, as one or the other.
-    CHECK(carTotal(world, city) == 8u);
+    // THE CARS ARE THE DRIVING'S (ADR-0461): with no rule set named there is no driving, so the eight cars asked for
+    // are not made, and the sim's agents are the six walkers, every one drawn at most once.
+    CHECK(city.sim().agents().size() == 6u);
+    CHECK(carTotal(world, city) == 0u);
     const std::size_t peds = groupCount(world, city.pedGroup());
-    CHECK(peds >= 6u);                      // at least the dedicated walkers
-    CHECK(peds <= 14u);                     // ...and never more than the population
-    CHECK(city.carGroups().size() > 1u);    // there really are multiple variants
+    CHECK(peds <= 6u);
+    CHECK(city.carGroups().size() > 1u);    // the fleet's models are still built, one group each
 }
 
 TEST_CASE(city_render_debug_widgets) {
@@ -140,78 +134,14 @@ TEST_CASE(city_render_debug_widgets) {
         city.step(world, 0.1);
         std::size_t arrows = groupCount(world, city.forwardGroup());
         maxArrows = std::max(maxArrows, arrows);
-        CHECK(arrows <= 10u);   // never more than the agent count
+        CHECK(arrows <= 5u);   // never more than the agent count (the five walkers: no driving, no cars)
     }
-    // One footprint per agent, spread across the behaviour-state groups (peds use
-    // the first four; drivers use the FSM states after them).
+    // One footprint per agent, spread across the behaviour-state groups.
     std::size_t foot = 0;
     for (int s = 0; s < static_cast<int>(Agent::State::Count); ++s)
         foot += groupCount(world, city.footprintGroup(static_cast<Agent::State>(s)));
-    CHECK(foot == 10u);
+    CHECK(foot == 5u);
     CHECK(maxArrows >= 1u);     // agents did move at some point, drawing a trajectory
-}
-
-TEST_CASE(debug_widgets_ring_the_real_car_when_cars_are_external) {
-    // ADR-0062: with cars owned by the vehicle bridge, a driver's debug ring must
-    // circle the PHYSICAL car (the bridge-reported pose), not the planner ghost —
-    // a ring around the ghost is an empty circle on the ground. Drivers with no
-    // reported car draw no ring; pedestrian rings are unaffected.
-    World world;
-    testmap::addRoads(world, squareLoop());
-    CityRenderParams p = cityParams();
-    p.cars = 4;
-    p.pedestrians = 3;
-    p.debugWidgets = true;
-    CityRenderSystem city(p);
-    city.setCarsExternallyOwned(true);
-    CHECK(city.build(world, nullptr));
-
-    // Report a real pose for ONE agent that is actually driving right now, far
-    // from any ghost. Picked dynamically: a car owner that has already parked is
-    // on foot, and a car pose reported for it would describe a car it is not in.
-    // Step until somebody is actually behind a wheel. On a fixture this small
-    // every commute finishes inside the build warm-up, so the whole car-owning
-    // population is parked and on foot at t=0; a driver appears again at the
-    // next scheduled departure.
-    int driving = -1;
-    for (int t = 0; t < 4000 && driving < 0; ++t) {
-        city.step(world, 0.1);
-        for (std::size_t i = 0; i < city.sim().agents().size(); ++i)
-            if (city.sim().agents()[i].mode == Agent::Mode::Driver) {
-                driving = static_cast<int>(i);
-                break;
-            }
-    }
-    CHECK(driving >= 0);
-    const Vec2 realPos(500.0, -500.0);
-    city.setExternalCarPoses(
-        { CityRenderSystem::ExternalAgentPose{driving, realPos, Vec2(0, 1),
-                                              realPos} });
-    city.step(world, 0.1);
-
-    std::size_t rings = 0;
-    bool ringAtReal = false;
-    for (int s = 0; s < static_cast<int>(Agent::State::Count); ++s) {
-        InstanceGroup* g = world.get<InstanceGroup>(
-            city.footprintGroup(static_cast<Agent::State>(s)));
-        if (!g) continue;
-        for (const Mat4& m : g->transforms) {
-            ++rings;
-            if (std::fabs(m.m[0][3] - realPos.x) < 1e-6 &&
-                std::fabs(m.m[2][3] - realPos.y) < 1e-6)
-                ringAtReal = true;
-        }
-    }
-    // Derived, not hardcoded: with cars externally owned, a ring is drawn for
-    // every agent currently ON FOOT (peds are not external here) plus the one
-    // car whose real pose was reported. Unreported drivers still draw none.
-    // The count is derived because a car owner that has parked is on foot —
-    // the split between the two groups moves over the day.
-    std::size_t onFoot = 0;
-    for (const Agent& a : city.sim().agents())
-        if (a.mode == Agent::Mode::Pedestrian) ++onFoot;
-    CHECK(rings == onFoot + 1u);
-    CHECK(ringAtReal);       // and the car's ring sits at the REAL pose
 }
 
 TEST_CASE(external_peds_stop_the_instanced_bake_and_ring_real_walkers) {
@@ -221,16 +151,15 @@ TEST_CASE(external_peds_stop_the_instanced_bake_and_ring_real_walkers) {
     World world;
     testmap::addRoads(world, squareLoop());
     CityRenderParams p = cityParams();
-    p.cars = 2;
+    p.cars = 0;
     p.pedestrians = 3;
     p.debugWidgets = true;
     CityRenderSystem city(p);
-    city.setCarsExternallyOwned(true);
     city.setPedsExternallyOwned(true);
     CHECK(city.build(world, nullptr));
 
     const Vec2 realPed(321.0, 654.0);
-    // Ped agents follow the drivers in the agent array: ids 2..4 here.
+    // The walkers are the agents: ids 0..2 here.
     city.setExternalPedPoses({ CityRenderSystem::ExternalAgentPose{2, realPed, Vec2(1, 0), realPed} });
     city.step(world, 0.1);
 
@@ -267,25 +196,6 @@ TEST_CASE(external_peds_stop_the_instanced_bake_and_ring_real_walkers) {
     CHECK(redAtReal);
 }
 
-TEST_CASE(commandeered_car_leaves_the_instanced_fleet) {
-    // Promotion (ADR-0062 rethink): when the player commandeers an ambient car,
-    // the sim releases its agent and the instanced fleet must drop that car (the
-    // real Vehicle takes its visual place). Widgets drop it too.
-    World world;
-    testmap::addRoads(world, squareLoop());
-    CityRenderParams p = cityParams();
-    p.cars = 5;
-    p.pedestrians = 0;
-    CityRenderSystem city(p);
-    CHECK(city.build(world, nullptr));
-    city.step(world, 0.1);
-    CHECK(carTotal(world, city) == 5u);
-
-    city.simMutable().releaseDriver(2);
-    city.step(world, 0.1);
-    CHECK(carTotal(world, city) == 4u);   // the commandeered car vanished
-}
-
 TEST_CASE(city_render_car_colliders_scale_with_the_fleet) {
     World world;
     testmap::addRoads(world, squareLoop());
@@ -317,42 +227,6 @@ TEST_CASE(city_render_build_fails_without_roads) {
     CHECK(!city.built());
 }
 
-TEST_CASE(city_render_agents_move_when_stepped) {
-    World world;
-    testmap::addRoads(world, squareLoop());
-
-    CityRenderParams p = cityParams();
-    p.cars = 12;
-    p.pedestrians = 0;
-    CityRenderSystem city(p);
-    CHECK(city.build(world, nullptr));
-
-    // Gather every car's translation across all variant groups (group order +
-    // agent order are stable, so index k tracks the same car each step).
-    auto gather = [&]() {
-        std::vector<Vec3> v;
-        for (Entity e : city.carGroups()) {
-            InstanceGroup* g = world.get<InstanceGroup>(e);
-            if (!g) continue;
-            for (const Mat4& t : g->transforms)
-                v.push_back(Vec3(t.m[0][3], t.m[1][3], t.m[2][3]));
-        }
-        return v;
-    };
-    std::vector<Vec3> start = gather();
-    CHECK(start.size() == 12u);
-
-    bool anyMoved = false;
-    for (int i = 0; i < 3000; ++i) {
-        city.step(world, 0.1);
-        std::vector<Vec3> now = gather();
-        CHECK(now.size() == 12u);   // count stable across steps
-        for (std::size_t k = 0; k < now.size(); ++k)
-            if ((now[k] - start[k]).length() > 1.0) anyMoved = true;
-    }
-    CHECK(anyMoved);
-}
-
 // THE POLES ARE THE CITY'S (ADR-0456): on a hand-made road graph the loader placed no signal poles, and the render
 // stands none of its own (it once did, by the old signal clock's links) and lights nothing. Where poles stand, their
 // heads show the new driving's lamps: level_traffic_lab_v2_the_signal_heads_show_the_new_drivings_lamps.
@@ -377,116 +251,18 @@ TEST_CASE(city_render_stands_no_signal_of_its_own) {
 }
 
 // --- car lamps (ADR-0065 follow-up) ------------------------------------------
-// The lamp DECISION logic (carLampState) is unit-tested headless in
-// test_car_lamps.cpp; these exercise the instanced RENDER BAKE — that the right
-// emissive lamp transforms appear on drawn cars — which is otherwise viewer-gated.
-// The bake is deterministic (sim clock drives even the turn-signal blink), so
-// these are stable, not flaky.
-
-TEST_CASE(car_headlights_track_the_night_clock) {
-    // At deep night every car on the move wears both headlights, a parked one none (ADR-0341), and by day none --
-    // over six towns, every sample. (It asked for one sample with lamps on EVERY drawn car, parked ones too, and
-    // passed on the moment all six were driving; one town can put none of its six on a night shift -- ADR-0265.)
-    int nightSamples = 0, nightWrong = 0, daySamples = 0, dayWrong = 0;
-    for (uint32_t seed = 1; seed <= 6; ++seed) {
-        StubUploader up;
-        AssetManager assets(up);
-        World world;
-        testmap::addRoads(world, squareLoop());
-        CityRenderParams p = cityParams();
-        p.cars = 6;
-        p.pedestrians = 0;
-        p.seed = seed;
-        p.hoursPerSecond = 3.0;   // sweep a full day in a few hundred steps
-        CityRenderSystem city(p);
-        CHECK(city.build(world, &assets));
-        for (int i = 0; i < 2000; ++i) {
-            city.step(world, 0.1);
-            const Real t = city.sim().timeOfDay();
-            const std::size_t heads = city.carsLit(world, engine::kLampMaskHead);   // (cars, each its own two lenses)
-            const std::size_t cars = carTotal(world, city);
-            if (cars == 0) continue;
-            std::size_t driving = 0, onTrip = 0;
-            for (int ai : city.sim().nearAgents()) {
-                const Agent& a = city.sim().agents()[static_cast<std::size_t>(ai)];
-                driving += a.mode == Agent::Mode::Driver && a.moving && a.speed > 0.5 && !a.far();
-                onTrip += a.mode == Agent::Mode::Driver && a.moving && !a.far() && !a.released;
-            }
-            if (t > 20.0 || t < 5.0) {          // deep night: headlights on every car on the move, NONE on a parked one
-                if (driving == 0) continue;
-                ++nightSamples;
-                // (a parked car is dark, ADR-0341: lamps on a car at rest hung over the kerb with no body under them)
-                nightWrong += heads < driving || heads > onTrip;
-            } else if (t > 9.0 && t < 16.0) {   // midday: none
-                ++daySamples;
-                dayWrong += heads != 0;
-            }
-        }
-    }
-    std::printf("    [headlights] six towns: %d night samples (%d wrong), %d midday (%d wrong)\n", nightSamples, nightWrong, daySamples, dayWrong);
-    CHECK(nightSamples > 0 && nightWrong == 0);   // every drawn car on the move lights its headlights at night
-    CHECK(daySamples > 0 && dayWrong == 0);       // and none by day
-}
-
-TEST_CASE(car_brake_lights_come_on_when_holding) {
-    StubUploader up;
-    AssetManager assets(up);
-    World world;
-    testmap::addRoads(world, crossRoads());   // signalled junction
-    CityRenderParams p = cityParams();
-    p.cars = 8;
-    p.pedestrians = 0;
-    CityRenderSystem city(p);
-    CHECK(city.build(world, &assets));
-
-    bool sawBrake = false;
-    for (int i = 0; i < 3000; ++i) {
-        city.step(world, 0.1);
-        if (city.carsLit(world, engine::kLampMaskBrake) > 0) sawBrake = true;
-    }
-    CHECK(sawBrake);   // cars hold at the red / yield and light their brakes
-}
-
-TEST_CASE(car_turn_signals_flash_on_turns) {
-    StubUploader up;
-    AssetManager assets(up);
-    World world;
-    testmap::addRoads(world, crossRoads());
-    CityRenderParams p = cityParams();
-    p.cars = 8;
-    p.pedestrians = 0;
-    CityRenderSystem city(p);
-    CHECK(city.build(world, &assets));
-
-    bool sawTurn = false;
-    for (int i = 0; i < 4000; ++i) {
-        city.step(world, 0.1);
-        // A turning car's indicator flashes (sim-clock blink), so over many steps
-        // a Turning-state car coincides with a blink-on window.
-        if (city.carsLit(world, engine::kLampMaskLeft | engine::kLampMaskRight) > 0) sawTurn = true;
-    }
-    CHECK(sawTurn);
-}
-
-TEST_CASE(externally_owned_cars_draw_no_lamps) {
-    // ADR-0062: a car owned by the vehicle bridge isn't drawn here, so it lights no
-    // lamps here either (its real Vehicle owns them) — even at night.
-    World world;
-    testmap::addRoads(world, squareLoop());
-    CityRenderParams p = cityParams();
-    p.cars = 5;
-    p.pedestrians = 0;
-    p.hoursPerSecond = 3.0;   // pass through night too
-    CityRenderSystem city(p);
-    city.setCarsExternallyOwned(true);
-    CHECK(city.build(world, nullptr));
-
-    bool everLit = false;
-    for (int i = 0; i < 500; ++i) {
-        city.step(world, 0.1);
-        if (city.carsLit(world, ~0u) > 0) everLit = true;
-    }
-    CHECK(!everLit);   // no instanced lamps while the cars are externally owned
+// When a lamp lights is the shared core's (engine::vehicleLampState, test_vehicle_lamps.cpp). The city's cars are
+// entities lit from the driving's braking (CityRenderSystem::syncCarLamps); where no render view has staged the sun
+// (headless), darkness is the sim's clock. (The old driving's cars' lamp cases -- headlights by the night clock, brake
+// lights holding at a light, indicators on a turn, none on a car owned elsewhere -- went with it: ADR-0461.)
+TEST_CASE(city_headlights_follow_the_clock_outside_dawn_to_dusk) {
+    CHECK(CityRenderSystem::clockIsDark(2.0));    // deep night: on
+    CHECK(CityRenderSystem::clockIsDark(6.0));    // before dawn: on
+    CHECK(!CityRenderSystem::clockIsDark(6.5));   // AT dawn: off (not before it)
+    CHECK(!CityRenderSystem::clockIsDark(12.0));  // midday: off
+    CHECK(!CityRenderSystem::clockIsDark(19.0));  // AT dusk: off (not after it)
+    CHECK(CityRenderSystem::clockIsDark(19.1));   // just past dusk: on
+    CHECK(CityRenderSystem::clockIsDark(23.5));
 }
 
 // (Where a signal pole stands clear of every carriageway is the furniture planner's, the one that places them:
@@ -526,8 +302,10 @@ TEST_CASE(level_citysim_config_overrides_build_params) {
     p.pedestrians = 40;
     CityRenderSystem city(p);
     CHECK(city.build(world, nullptr));
-    CHECK(city.sim().agents().size() == 2u);   // ...but the LEVEL's block wins
-    CHECK(carTotal(world, city) == 1u);
+    // ...but the LEVEL's block wins: its one walker (its one car is the driving's, and the block names no rule set:
+    // no driving, so no car, ADR-0461)
+    CHECK(city.sim().agents().size() == 1u);
+    CHECK(carTotal(world, city) == 0u);
     CHECK(groupCount(world, city.pedGroup()) == 1u);
 }
 
@@ -576,25 +354,17 @@ TEST_CASE(agent_lab_theta_circuit_is_navigable) {
             if (a != b && !findRoute(nav, a, b).valid()) allRoute = false;
     CHECK(allRoute);
 
-    // Both lab agents come alive: the driver rolls and the walker walks.
-    bool carMoved = false, pedMoved = false;
+    // The lab's walker comes alive and, wandering, strings trip after trip together. (Its car was the old driving's:
+    // with no rule set named the level has no driving, so no car, ADR-0461.)
+    bool pedMoved = false;
     for (int i = 0; i < 6000; ++i) {
         city.step(world, 0.1);
-        for (const Agent& a : city.sim().agents()) {
-            if (!a.moving || a.speed <= 0.5) continue;
-            (a.mode == Agent::Mode::Driver ? carMoved : pedMoved) = true;
-        }
+        for (const Agent& a : city.sim().agents())
+            if (a.moving && a.speed > 0.5) pedMoved = true;
     }
-    CHECK(carMoved);
     CHECK(pedMoved);
-
-    // Wander keeps the lab ALIVE: the driver strings together trip after trip
-    // instead of parking until the evening commute (device round 3 — "I would
-    // expect the car to be running around the track").
-    int carTrips = 0;
-    for (const Agent& a : city.sim().agents())
-        if (a.mode == Agent::Mode::Driver) carTrips = a.trips;
-    CHECK(carTrips >= 3);
+    CHECK(city.sim().agents().size() == 1u);
+    CHECK(!city.sim().agents().empty() && city.sim().agents().front().trips >= 3);
 }
 
 TEST_CASE(wedge_mesh_is_a_flat_outline_cone) {
@@ -658,24 +428,18 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
     CHECK(junctions == 1);
     CHECK(groupCount(world, city.navNodeGroup()) == static_cast<std::size_t>(junctions));
 
-    // Cones: exactly one per MOVING agent every step, split by mode; the
-    // navgraph stays put (static bake, not rebaked per frame).
-    bool sawCarCone = false, sawPedCone = false;
+    // Cones: exactly one per MOVING walker every step; the navgraph stays put (static bake, not rebaked per frame).
+    bool sawPedCone = false;
     for (int i = 0; i < 3000; ++i) {
         city.step(world, 0.1);
-        std::size_t movingCars = 0, movingPeds = 0;
-        for (const Agent& a : city.sim().agents()) {
-            if (!a.moving) continue;
-            (a.mode == Agent::Mode::Driver ? movingCars : movingPeds) += 1;
-        }
-        CHECK(groupCount(world, city.visionGroup(Agent::Mode::Driver)) == movingCars);
-        CHECK(groupCount(world, city.visionGroup(Agent::Mode::Pedestrian)) == movingPeds);
+        std::size_t movingPeds = 0;
+        for (const Agent& a : city.sim().agents())
+            if (a.moving) ++movingPeds;
+        CHECK(groupCount(world, city.visionGroup()) == movingPeds);
         CHECK(groupCount(world, city.navLinkGroup()) == lanes);
-        if (movingCars > 0) sawCarCone = true;
         if (movingPeds > 0) sawPedCone = true;
     }
-    CHECK(sawCarCone);   // agents really moved, so both views really drew
-    CHECK(sawPedCone);
+    CHECK(sawPedCone);   // walkers really moved, so both views really drew
 }
 
 TEST_CASE(debug_navgraph_and_cones_vanish_when_the_hud_is_off) {
@@ -690,8 +454,7 @@ TEST_CASE(debug_navgraph_and_cones_vanish_when_the_hud_is_off) {
     for (int i = 0; i < 500; ++i) city.step(world, 0.1);
     CHECK(groupCount(world, city.navLinkGroup()) == 0u);
     CHECK(groupCount(world, city.navNodeGroup()) == 0u);
-    CHECK(groupCount(world, city.visionGroup(Agent::Mode::Driver)) == 0u);
-    CHECK(groupCount(world, city.visionGroup(Agent::Mode::Pedestrian)) == 0u);
+    CHECK(groupCount(world, city.visionGroup()) == 0u);
 }
 
 TEST_CASE(person_mesh_stands_and_swings) {
@@ -772,80 +535,20 @@ TEST_CASE(walk_pose_index_tracks_real_speed) {
     CHECK(std::fabs(walkPoseSwing(1)) > 0.1);
 }
 
-TEST_CASE(car_pose_probe_no_vibration_on_jagged_ground) {
-    // Roads-v2.1 4b (drive feedback C1: "cars vibrate"): the car's road-plane
-    // basis is re-fit from ground samples every tick; on QUANTISED ground
-    // (CDLOD mesh steps) the raw fit snaps the up-vector tick to tick. The
-    // tilt low-pass must bound the per-tick swing while still letting the
-    // body take real slopes.
-    World world;
-    RoadEntity net = squareLoop();
-    // Jagged drape: coarse steps (quantised terrain) over a gentle slope.
-    // (Roads no longer store a terrain sampler; it goes to build() below.)
-    const RoadGroundFn ground = [](double x, double z) {
-        const double slope = 0.03 * x + 0.02 * z;
-        const double steps = 0.22 * (std::floor(x / 2.0) + std::floor(z / 2.0));
-        return slope + std::fmod(std::fabs(steps), 0.44);
-    };
-    testmap::addRoads(world, net, ground);
-
-    CityRenderParams params = cityParams();
-    params.cars = 4;
-    params.pedestrians = 0;
-    params.seed = 3;
-    params.wander = true;
-    CityRenderSystem city(params);
-    CHECK(city.build(world, nullptr, ground));
-    for (int i = 0; i < 80; ++i) city.step(world, 0.1);   // warm up: cars rolling
-
-    // Track every car instance's up-vector across steps (instances keep bake
-    // order while the same agents stay moving).
-    std::vector<Vec3> prevUp;
-    Real maxSwing = 0;   // degrees per 0.1 s tick
-    for (int i = 0; i < 150; ++i) {
-        city.step(world, 0.1);
-        std::vector<Vec3> ups;
-        for (Entity e : city.carGroups()) {
-            InstanceGroup* g = world.get<InstanceGroup>(e);
-            if (!g) continue;
-            for (const Mat4& m : g->transforms)
-                ups.push_back(Vec3(m.m[0][1], m.m[1][1], m.m[2][1]));
-        }
-        if (prevUp.size() == ups.size()) {
-            for (std::size_t k = 0; k < ups.size(); ++k) {
-                const Real c = std::clamp(dot(prevUp[k], ups[k]), Real(-1), Real(1));
-                maxSwing = std::max(maxSwing, std::acos(c) * 180.0 / 3.14159265358979);
-            }
-        }
-        prevUp = std::move(ups);
-    }
-    std::printf("    [pose] maxSwing=%.2f deg/tick\n", maxSwing);
-    // Unsmoothed, a 0.22 m step under one axle flips the fit several degrees
-    // in ONE tick; the low-pass spreads it. Bound the per-tick swing.
-    CHECK(maxSwing < 2.5);
-    CHECK(maxSwing > 0.0);   // the probe really saw tilting cars
-}
-
 TEST_CASE(density_population_scales_with_the_graph) {
-    // Roads-v2.1 4c: cars = -1 / pedestrians = -1 ask for DENSITY population —
-    // counts derived from lane-km / sidewalk-km, so a bigger city gets more
-    // traffic from the same recipe, and explicit counts stay overrides.
-    auto build = [](RoadEntity net, int cars, Real perLaneKm, World& world) {
+    // Roads-v2.1 4c: pedestrians = -1 asks for DENSITY population — a count derived from sidewalk-km, so a bigger city
+    // gets more people from the same recipe, and explicit counts stay overrides. (The cars a density asks for are the
+    // driving's, made only where the level names a rule set: none here, ADR-0461.)
+    auto build = [](RoadEntity net, int peds, Real perKm, World& world) {
         testmap::addRoads(world, std::move(net));
         CityRenderParams p = cityParams();
-        p.cars = cars;
-        p.pedestrians = -1;
-        p.carsPerLaneKm = perLaneKm;
+        p.cars = -1;
+        p.pedestrians = peds;
+        p.pedsPerKm = perKm;
         p.seed = 5;
         CityRenderSystem city(p);
         CHECK(city.build(world, nullptr));
-        int drivers = 0, peds = 0;
-        for (const Agent& a : city.sim().agents())
-            // POPULATION, so archetype: this counts how many car owners the
-            // density rule created, not how many happen to be behind a wheel at
-            // the instant we look.
-            (a.archetype == Agent::Mode::Driver ? drivers : peds)++;
-        return std::make_pair(drivers, peds);
+        return static_cast<int>(city.sim().agents().size());
     };
     auto grid = []() {
         RoadEntity net;
@@ -866,17 +569,15 @@ TEST_CASE(density_population_scales_with_the_graph) {
     };
 
     World w1, w2, w3, w4;
-    auto tiny = build(squareLoop(), -1, 30.0, w1);   // 0.16 km loop
-    auto big = build(grid(), -1, 30.0, w2);          // ~1.9 km grid
-    auto denser = build(grid(), -1, 60.0, w3);       // same city, 2x density
-    auto fixed_ = build(grid(), 9, 30.0, w4);        // explicit count wins
-    std::printf("    [density] tiny=%d big=%d denser=%d fixed=%d peds=%d\n",
-                tiny.first, big.first, denser.first, fixed_.first, big.second);
-    CHECK(tiny.first >= 6);                  // floor keeps a hamlet alive
-    CHECK(big.first > tiny.first);           // more city -> more cars
-    CHECK(denser.first > big.first);         // knob scales it
-    CHECK(fixed_.first == 9);                // explicit count is an override
-    CHECK(big.second > 6);                   // walkers scale too
+    const int tiny = build(squareLoop(), -1, 30.0, w1);   // 0.16 km loop
+    const int big = build(grid(), -1, 30.0, w2);          // ~1.9 km grid
+    const int denser = build(grid(), -1, 60.0, w3);       // same city, 2x density
+    const int fixed_ = build(grid(), 9, 30.0, w4);        // explicit count wins
+    std::printf("    [density] walkers tiny=%d big=%d denser=%d fixed=%d\n", tiny, big, denser, fixed_);
+    CHECK(tiny >= 6);              // floor keeps a hamlet alive
+    CHECK(big > tiny);             // more city -> more people
+    CHECK(denser > big);           // knob scales it
+    CHECK(fixed_ == 9);            // explicit count is an override
 }
 
 // --- P8.2d: sim rate below the fixed step -----------------------------------
@@ -888,14 +589,14 @@ TEST_CASE(density_population_scales_with_the_graph) {
 // same ground, and poses keep moving between ticks.
 
 namespace {
-// Sum of |position| deltas across every car instance, over `steps` calls.
+// Sum of |position| deltas across every drawn walker, over `steps` calls. (Cars until ADR-0461: the city's agents are
+// all walkers now, its cars the driving's entities.)
 Real driveDistance(World& world, CityRenderSystem& city, int steps, Real dt) {
     auto snapshot = [&]() {
         std::vector<Vec3> out;
-        for (Entity e : city.carGroups())
-            if (InstanceGroup* g = world.get<InstanceGroup>(e))
-                for (const Mat4& m : g->transforms)
-                    out.push_back(Vec3(m.m[0][3], m.m[1][3], m.m[2][3]));
+        if (InstanceGroup* g = world.get<InstanceGroup>(city.pedGroup()))
+            for (const Mat4& m : g->transforms)
+                out.push_back(Vec3(m.m[0][3], m.m[1][3], m.m[2][3]));
         return out;
     };
     std::vector<Vec3> prev = snapshot();
@@ -918,8 +619,8 @@ TEST_CASE(city_sim_rate_default_is_every_step) {
     testmap::addRoads(a, squareLoop());
     testmap::addRoads(b, squareLoop());
     CityRenderParams p = cityParams();
-    p.cars = 6; p.pedestrians = 0; p.seed = 5;
-    p.wander = true;              // drive continuously (no schedule window)
+    p.cars = 0; p.pedestrians = 6; p.seed = 5;
+    p.wander = true;              // move continuously (no schedule window)
     CityRenderParams q = p;
     q.localHz = 0.0;              // explicit default
     CityRenderSystem ca(p), cb(q);
@@ -942,8 +643,8 @@ TEST_CASE(city_sim_rate_30hz_covers_the_same_ground) {
     testmap::addRoads(a, squareLoop());
     testmap::addRoads(b, squareLoop());
     CityRenderParams p = cityParams();
-    p.cars = 8; p.pedestrians = 0; p.seed = 5;
-    p.wander = true;              // drive continuously (no schedule window)
+    p.cars = 0; p.pedestrians = 8; p.seed = 5;
+    p.wander = true;              // move continuously (no schedule window)
     CityRenderParams q = p;
     q.localHz = 30.0;
     q.adaptiveRate = false;       // pin the rate: this asserts 30 Hz, not load
@@ -966,24 +667,23 @@ TEST_CASE(city_sim_rate_poses_keep_moving_between_ticks) {
     World world;
     testmap::addRoads(world, squareLoop());
     CityRenderParams p = cityParams();
-    p.cars = 8; p.pedestrians = 0; p.seed = 5;
-    p.wander = true;              // drive continuously (no schedule window)
+    p.cars = 0; p.pedestrians = 8; p.seed = 5;
+    p.wander = true;              // move continuously (no schedule window)
     p.localHz = 30.0;
     p.adaptiveRate = false;
     CityRenderSystem city(p);
     CHECK(city.build(world, nullptr));
-    for (int i = 0; i < 240; ++i) city.step(world, 1.0 / 60.0);   // get rolling
+    for (int i = 0; i < 240; ++i) city.step(world, 1.0 / 60.0);   // get going
 
     auto poses = [&]() {
         std::vector<Vec3> out;
-        for (Entity e : city.carGroups())
-            if (InstanceGroup* g = world.get<InstanceGroup>(e))
-                for (const Mat4& m : g->transforms)
-                    out.push_back(Vec3(m.m[0][3], m.m[1][3], m.m[2][3]));
+        if (InstanceGroup* g = world.get<InstanceGroup>(city.pedGroup()))
+            for (const Mat4& m : g->transforms)
+                out.push_back(Vec3(m.m[0][3], m.m[1][3], m.m[2][3]));
         return out;
     };
     // Two consecutive steps: one of them ticks the sim, the other must still
-    // move the drawn cars. Neither may be a frozen frame.
+    // move the drawn walkers. Neither may be a frozen frame.
     int frozen = 0;
     std::vector<Vec3> prev = poses();
     for (int i = 0; i < 8; ++i) {
@@ -1027,7 +727,7 @@ TEST_CASE(city_sim_far_tier_refreshes_on_a_clock_not_a_tick_count) {
         big.graph.addEdge(3, 0, big.look.defaultWidth);
         testmap::addRoads(world, big);
         CityRenderParams p = cityParams();
-        p.cars = 60; p.pedestrians = 0; p.seed = 5;
+        p.cars = 0; p.pedestrians = 60; p.seed = 5;
         p.wander = true;
         p.tieredAgents = true;
         p.localHz = hz;

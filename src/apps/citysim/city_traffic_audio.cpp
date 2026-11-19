@@ -10,8 +10,7 @@ using engine::Vec2;
 using engine::Vec3;
 
 namespace {
-// A household car's key in the voice pool: above every agent index (the old sim's cars' keys), and stable for the run
-// (its number).
+// A car entity's key in the voice pool: clear of the physics cars' keys, and stable for the run (its number).
 constexpr uint64_t kHouseholdCarKey = uint64_t(1) << 40;
 }  // namespace
 
@@ -21,24 +20,14 @@ void CityTrafficAudioSystem::update(engine::FrameContext& ctx) {
     const Vec3 ear = ctx.view.camera.position;
 
     std::vector<engine::EngineVoicePool::Engine> heard;
-    // THE CITY'S CARS NEAR THE EAR (carsNear, ADR-0445): the old sim's driven cars (a far car has no body and no note;
-    // a released one is the player's, voiced by VehicleSystem) and the households' cars on the road. A household car
-    // the player holds has an engine::Vehicle and is VehicleSystem's: carsNear leaves it out. One car, one engine.
-    // (a cheap reject on the plan's position before working out a pose)
+    // THE CITY'S CARS NEAR THE EAR (carsNear, ADR-0445): the car entities on the road. One the player holds has an
+    // engine::Vehicle and is VehicleSystem's: carsNear leaves it out. One car, one engine.
     std::vector<CarSeen> cars;
-    carsNear(city_.sim(), ctx.world, Vec2(ear.x, ear.z), kAudibleRange + 20.0, cars);
+    carsNear(ctx.world, Vec2(ear.x, ear.z), kAudibleRange + 20.0, cars);
     for (const CarSeen& c : cars) {
-        Vec3 pos;
-        Vec2 heading;
-        uint64_t key = 0;
-        if (c.agent >= 0) {
-            if (!city_.agentWorldPose(c.agent, pos, heading)) continue;
-            key = static_cast<uint64_t>(c.agent);
-        } else {
-            if (!c.onRoad) continue;   // standing in its space: its engine is off
-            pos = Vec3(c.pos.x, city_.surfaceY(-1, 0, c.pos), c.pos.y);
-            key = kHouseholdCarKey | c.id;
-        }
+        if (!c.onRoad) continue;   // standing in its space: its engine is off
+        const Vec3 pos(c.pos.x, city_.surfaceY(-1, 0, c.pos), c.pos.y);
+        const uint64_t key = kHouseholdCarKey | c.id;
         const engine::Real d2 = (pos - ear).lengthSquared();
         if (d2 > kAudibleRange * kAudibleRange) continue;
         // (phased by its key, its own spread beside the physics cars')
