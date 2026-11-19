@@ -1,4 +1,4 @@
--- HOW PEOPLE GET ABOUT (the trip planner: src/apps/citysim/trip_plan.h, city_trip.h; ADR-0415, ADR-0440)
+-- HOW PEOPLE GET ABOUT (the trip planner: src/apps/citysim/trip_plan.h; ADR-0415, ADR-0440)
 --
 -- One row per way of travelling. A person going somewhere prices every row they can use as a whole trip, and takes the
 -- fewest weighted minutes (a minute of a way counts `weight` minutes). Ties go to the earlier row. A way that needs a

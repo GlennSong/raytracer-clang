@@ -256,22 +256,8 @@ public:
 
     bool built() const { return built_; }
     const CitySim& sim() const { return sim_; }
-    // The player is aboard a sim vehicle (CityPlayerTransitSystem): stop
-    // feeding their body to the sim as an obstacle, or the vehicle they are
-    // riding brakes for them.
-    void setPlayerRidingAgent(int agent) {
-        playerRidingAgent_ = agent;
-        playerRiding_ = agent >= 0;
-    }
-    int playerRidingAgent() const { return playerRidingAgent_; }
-    // Where a passenger STANDS on this bus, in world space: the aisle by the
-    // middle door. False when the agent is not drawn as a see-into vehicle.
-    bool busStandingSpot(int agent, engine::Vec3* world) const;
-    // A PASSENGER'S FRAME (Glenn: "Should the player be able to move freely
-    // around the bus interior and find a seat?"). The bus's drawn pose -- the
-    // exact matrix its body is drawn with this step -- and its saloon layout
-    // in that body frame: seat hip points, door floor points, floor height.
-    // False when the agent is not a see-into vehicle.
+    // A BUS'S DRAWN FRAME: the exact matrix its body is drawn with this step. False when the agent is not a
+    // see-into vehicle.
     bool busFrame(int agent, engine::Mat4* pose) const;
     // THE TYRES AGAINST THE ROAD (the new model's drawing check, #255): the car entity `car` (city_car.h) as the
     // four-wheel fit puts it now (without the tilt filter's memory: a pure read), and for each of its wheels the height of the wheel's
@@ -292,14 +278,7 @@ public:
                           std::vector<engine::Vec3>* seats) const;
     // The model (variant) a household car is drawn as: its fleet slot, and its kind's (a bus, a cab, a fire engine).
     int carEntityVariant(int slot, VehicleType type) const { return parkedVariant(slot, type); }
-    // a bus's seats and doors (its own body's: `agent` -1, the first bus body)
-    const std::vector<engine::Vec3>& busSeats(int agent = -1) const;
-    const std::vector<engine::Vec3>& busDoors(int agent = -1) const;
-    engine::Real busFloorY(int agent = -1) const;   // body-local floor height
-    // True if an NPC rider is drawn in `seat` on this bus right now.
-    bool busSeatTaken(int agent, int seat) const;
     static int riderSeat(int agent, int j, int n);
-    void setPlayerSeat(int agent, int seat) { playerSeatAgent_ = agent; playerSeat_ = seat; }
     // R5 physical tier (roads-v2.1): agents whose RENDER truth is a Jolt
     // vehicle body. CityPhysicsSystem drives the bodies from the sim's own
     // plan and writes each pose here; syncGroups bakes it instead of the
@@ -576,8 +555,6 @@ private:
 
     CityRenderParams params_;
     engine::NavGraph nav_;
-    bool playerRiding_ = false;
-    int playerRidingAgent_ = -1;
     // Bus-stop furniture entities, kept so a rebuild can remove the old set
     // rather than stacking a second pole on every stop.
     std::vector<engine::Entity> busStopProps_;
@@ -759,7 +736,6 @@ private:
     // The agents drawn see-through this bake (nearest the player, with hysteresis).
     std::unordered_set<int> nearSwap_;
     std::vector<std::vector<engine::Vec3>> carSeats_;
-    std::vector<std::vector<engine::Vec3>> carDoors_;
     std::vector<engine::Vec3> carDriverSeat_;
     std::vector<engine::Vec3> carRearHip_;   // per slot: the back bench's hip point (its middle), where carHasRear_
     std::vector<char> carHasRear_;
@@ -767,9 +743,6 @@ private:
     engine::Entity busDriverGroup_{};
     std::vector<engine::Entity> carRiderGroups_;   // per slot: its rider astride (invalid: a car's driver, if any)
     engine::Entity busRiderGroups_[3] = {};
-    // The seat the PLAYER holds on the bus they ride (-1 none): NPC riders
-    // are dealt round it, so nobody is drawn sitting in the player's lap.
-    int playerSeatAgent_ = -1, playerSeat_ = -1;
     // The matrix each see-into vehicle was DRAWN with at the last bake, by
     // agent. A passenger is placed through exactly this -- recomputing the
     // pose skipped the drawn body's tilt filter, and on a slope the rider
@@ -880,7 +853,7 @@ private:
     // THE SHAKE, MEASURED (`jitter [agent|-1] [frames]`, then `jitter?`): every drawn frame,
     // where a vehicle is drawn (as agentPose places it, without its side effects) and where the camera is; then how
     // evenly each moved -- Glenn: "buses and cars sometimes shake. Their position is not stable. Trains actually
-    // appear very stable in contrast". -1: the bus or cab you ride, else the nearest moving vehicle.
+    // appear very stable in contrast". -1: the nearest moving vehicle.
     void measureJitter(engine::FrameContext& ctx);
     struct JitterSample { engine::Vec3 at, cam; engine::Real dt; engine::Vec3 inVehicle; };
     std::vector<JitterSample> jitter_;

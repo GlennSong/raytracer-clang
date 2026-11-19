@@ -17,7 +17,7 @@
 #include "systems/vehicle_system.h"  // VehicleSpawnRequest
 #include "systems/interact_broker_system.h"   // InteractRequest
 #include "systems/elevator_system.h"   // ElevatorRequest
-#include "control/city_requests.h"     // PossessRequest, RideRequest, CityLayerRequest, JitterRequest, ...
+#include "control/city_requests.h"     // PossessRequest, CityLayerRequest, JitterRequest, ...
 #include "systems/debug_overlay_system.h"   // static settings<->renderer mapping (control `render`)
 #include "../log.h"
 #include "engine/bundle/bundle.h"
@@ -644,28 +644,6 @@ void Application::registerPlayerVerbs() {
                      "What the interaction focus is on.",
                      unanswered("an InteractBrokerSystem: play mode"));
 
-    commandTable.add("ride", "ride bus|taxi|any|off | ride <x> <z>",
-                     "The player boards the nearest bus or taxi, or gets off; with x z, the possessed agent rides a bus there.",
-                     [this](const ControlCommand& cmd) -> std::string {
-        // One verb, two riders. `ride <x> <z>` sends the possessed agent by bus to a
-        // place (ADR-0091); it was a second handler further down that this one always
-        // returned before, so it never ran.
-        double x, z;
-        if (cmd.args.size() >= 2 && num(cmd.args[0], x) && num(cmd.args[1], z)) {
-            return publishRequest(eventBus, PossessRequest{"ride " + cmd.args[0] + " " + cmd.args[1]}, cmd.name, "ok staged (poll possess?)");
-        }
-        // Otherwise the player boards the nearest bus or cab, or gets off
-        // (city_player_transit.h). NPCs have been riding since RideBook; this is the player's seat.
-        const std::string what = cmd.args.empty() ? "any" : cmd.args[0];
-        RideRequest r;
-        if (what == "off") r.mode = 0;
-        else if (what == "bus") r.mode = 1;
-        else if (what == "taxi" || what == "cab") r.mode = 2;
-        else if (what == "any") r.mode = 3;
-        else return "err usage: ride bus|taxi|any|off  (or ride <x> <z> for the possessed agent)";
-        return publishRequest(eventBus, r, "ride", "ok ride " + what + " staged");
-    });
-
     commandTable.add("elevator", "elevator call | pick <delta>",
                      "Press the elevator call key, or move the panel's floor selection by delta.",
                      [this](const ControlCommand& cmd) -> std::string {
@@ -699,31 +677,27 @@ void Application::registerPossessionVerbs() {
     // publish a PossessRequest (control/city_requests.h); CityPossessSystem
     // (registered by city-running states) hears it and answers possess?,
     // look? and agent?. In a state without that system the verbs say so.
-    commandTable.add("possess", "possess car|walker [x z]",
-                     "Take over a city car or walker (the nearest, or the one nearest x z). Poll possess?.",
+    // (Only a walker: possession's own car driver went with the old driving, ADR-0459. A possessed walker can still
+    // `board` a household's car of the new driving.)
+    commandTable.add("possess", "possess walker [x z]",
+                     "Take over a city walker (the nearest, or the one nearest x z). Poll possess?.",
                      [this](const ControlCommand& cmd) -> std::string {
-        if (cmd.args.empty() ||
-            (cmd.args[0] != "car" && cmd.args[0] != "walker"))
-            return "err usage: possess <car|walker> [x z]";
+        if (cmd.args.empty() || cmd.args[0] != "walker") return "err usage: possess walker [x z]";
         std::string staged = cmd.args[0];
         for (size_t i = 1; i < cmd.args.size() && i < 3; ++i)
             staged += " " + cmd.args[i];
         return publishRequest(eventBus, PossessRequest{staged}, cmd.name, "ok staged (poll possess?)");
     });
 
-    {
-        const ControlCommands::Handler h = [this](const ControlCommand& cmd) -> std::string {
-            double x, z;
-            if (cmd.args.size() < 2 || !num(cmd.args[0], x) || !num(cmd.args[1], z))
-                return "err usage: " + cmd.name + " <x> <z>";
-            const std::string line = (cmd.name == "drive_to" ? "driveto " : "walkto ") + cmd.args[0] + " " + cmd.args[1];
-            return publishRequest(eventBus, PossessRequest{line}, cmd.name, "ok staged (poll possess?)");
-        };
-        commandTable.add("drive_to", "drive_to <x> <z>",
-                         "Drive the possessed car to a point.", h);
-        commandTable.add("walk_to", "walk_to <x> <z>",
-                         "Walk the possessed walker to a point.", h);
-    }
+    commandTable.add("walk_to", "walk_to <x> <z>",
+                     "Walk the possessed walker to a point.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        double x, z;
+        if (cmd.args.size() < 2 || !num(cmd.args[0], x) || !num(cmd.args[1], z))
+            return "err usage: " + cmd.name + " <x> <z>";
+        return publishRequest(eventBus, PossessRequest{"walkto " + cmd.args[0] + " " + cmd.args[1]}, cmd.name,
+                              "ok staged (poll possess?)");
+    });
 
     // Hold the goal layer off the possessed agent so a director's plan is not
     // overwritten by its schedule seconds later (ADR-0091).
@@ -860,7 +834,7 @@ void Application::registerCityVerbs() {
     }
 
     commandTable.add("jitter", "jitter [agent id|-1] [frames]",
-                     "Record how evenly a vehicle is drawn for some frames (default 300): -1 the bus or cab you ride, else the nearest moving one. jitter? answers.",
+                     "Record how evenly a vehicle is drawn for some frames (default 300): -1 the nearest moving one. jitter? answers.",
                      [this](const ControlCommand& cmd) -> std::string {
         JitterRequest r;
         double v;

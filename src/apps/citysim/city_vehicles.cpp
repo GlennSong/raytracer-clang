@@ -90,8 +90,8 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
             }
         }
         // THE DRIVER'S SEAT, where the car is this frame (Glenn: "we'd have to be pointing at the seat that we
-        // want"): the offer sits on it, beside CityPlayerTransitSystem's passenger seats, so looking at the driver's
-        // side takes the car and looking at another seat rides along
+        // want"): the offer sits on it, so looking at the driver's side takes the car (the passenger seats beside it
+        // went with the old driving, ADR-0459)
         haveAmbient_ = false;
         if (ambient_.valid()) {
             engine::Mat4 pose;

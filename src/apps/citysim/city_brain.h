@@ -19,7 +19,7 @@
 //               who has the car, and which space is HELD for which driver (from the moment a plan chooses it until
 //               they park there or drop the plan).
 //   walking     the sim's own: the person is sent along the pavements (CitySim::sendAgentTo) and takes the last steps
-//               off them straight (stepAgentToward, by the trip lab's stepsOffThePaths), at the way's speed and on
+//               off them straight (stepAgentToward, by the walk skill's stepsOffThePaths), at the way's speed and on
 //               its board where the way is one (Agent::directedPace, directedRide). Reports `arrived`, or the walking
 //               state's own failure event when there is no way on foot.
 //   driving     the brain's DrivingSkill over driving::Driving, with the parts a real car needs round it: the person

@@ -8,7 +8,8 @@
 // going to the earlier way in the table.
 //
 // The ways of travelling are DATA (assets/scripts/travel.lua, one row each): adding one is a row, plus, where it
-// moves the person differently, its execution (city_trip.h). This module names no way of travelling.
+// moves the person differently, its execution (the agent brain's skills, city_brain.h). This module names no way of
+// travelling.
 //
 // Pure: the nav graph and the table in, the plan out. No sim, no world, no Lua (the reader is
 // scripting/travel_lua.h), so it is unit-tested headless.
@@ -151,7 +152,7 @@ struct OwnedVehicle {
 struct TripRequest {
     Vec2 from, to;
     std::vector<OwnedVehicle> vehicles;
-    std::vector<int> ruledOut;   // rows not to use this time (a leg of it could not be done: city_trip re-plans)
+    std::vector<int> ruledOut;   // rows not to use this time (a leg of it could not be done: the caller re-plans)
     uint32_t traits = 0;         // what the person has: bit i for TravelCatalog::traits[i]
     int maxLegs = kMaxPlanLegs;  // a way needing more legs than this is refused (never more than kMaxPlanLegs)
 };

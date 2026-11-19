@@ -35,12 +35,11 @@ void describeEngineEvents(EventBus& bus) {
                                    "Drive the day/night cycle: hour, hold, loop minutes, calendar day, moon, terrain shadows, sky HUD, chart.");
     describeEvent<WeatherRequest>(bus, "WeatherRequest", "Set the weather: clear, fair, overcast, storm, auto or off; now snaps it.");
     describeEvent<PossessRequest>(bus, "PossessRequest",
-                                  "A possession command line: car|walker [x z], driveto|walkto x z, direct on|off, board, enter, exit, alight, ride x z, stop, release.");
+                                  "A possession command line: walker [x z], walkto x z, direct on|off, board, enter, exit, alight, stop, release.");
     describeEvent<LimpRequest>(bus, "LimpRequest", "The player goes limp (G), or is thrown limp at a velocity.");
     describeEvent<VehicleSpawnRequest>(bus, "VehicleSpawnRequest", "Drop a vehicle in front of the player (N); recipe picks one.");
     describeEvent<InteractRequest>(bus, "InteractRequest", "The interact key: 1 tap, 2 hold, 3 stand up, 4 next focus (Tab).");
     describeEvent<ElevatorRequest>(bus, "ElevatorRequest", "The lift: call the cab to this door, and/or move the floor selection by pick.");
-    describeEvent<RideRequest>(bus, "RideRequest", "The player boards the nearest bus (1), cab (2) or either (3), or gets off (0).");
     describeEvent<TrainBoardRequest>(bus, "TrainBoardRequest", "Put the player aboard a train, standing mid-carriage.");
     describeEvent<KnockRequest>(bus, "KnockRequest", "Throw the walker nearest the player down, as a car would.");
     describeEvent<PinRequest>(bus, "PinRequest", "Follow an agent in the full sim however far it goes (on), or stop.");

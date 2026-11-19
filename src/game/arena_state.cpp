@@ -28,7 +28,6 @@
 #include "../engine/systems/nature_collider_system.h"
 #include "../apps/citysim/city_render.h"
 #include "../apps/citysim/city_spectate.h"
-#include "../apps/citysim/city_trip.h"
 #include "../apps/citysim/city_brain_system.h"
 #include "../apps/citysim/city_traffic_audio.h"
 #ifdef RT_ENABLE_PHYSICS
@@ -36,7 +35,6 @@
 #include "../apps/citysim/city_vehicles.h"
 #include "../apps/citysim/city_near.h"
 #include "../apps/citysim/city_walkers.h"
-#include "../apps/citysim/city_player_transit.h"
 #include "../apps/citysim/train_system.h"
 #include "../apps/citysim/city_map_tool.h"
 #include "../apps/citysim/city_possess.h"
@@ -196,9 +194,6 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // poses + drives ctx.view.camera only — no physics — so it sits OUTSIDE the
     // Jolt block, after CameraSystem/PlayerSystem so its override wins the frame.
     auto& spectateSys = addSystem<citysim::CitySpectateSystem>(citySys);
-    // A person sent somewhere (ADR-0415, the one-agent lab): `trip near|far|to|at|mark`, Y / I. Plans the trip, carries
-    // out its legs with the sim's own verbs, draws the plan and has spectate follow the person.
-    addSystem<citysim::CityTripSystem>(citySys, spectateSys);
     // The resident with the agent brain (ADR-0441), on a level that states markers: `brain?`, `goto <marker>`,
     // `brain trait|day|follow`, `markers?`; draws the markers and the plan and has spectate follow the person.
     addSystem<citysim::CityBrainSystem>(citySys, spectateSys);
@@ -225,17 +220,14 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // walking in the crowd's stride, climbing, swimming, flying, sat in a seat, limp. After PlayerSystem so the
     // capsule pose it reads is already this tick's.
     addSystem<PlayerBodySystem>();
-    // The passenger seat: `ride bus|taxi|any` / `ride off` (city_player_transit).
-    addSystem<citysim::CityPlayerTransitSystem>(citySys, physSys, camSys.flyController());
     addSystem<citysim::TrainSystem>(physSys, camSys.flyController(), &citySys);   // trains on the level's tracks, and the player aboard
     // The map: tool slot 3 (city_map_tool) -- the city SVG through the game UI
     // layer; drag pans, the wheel zooms, C centres on you.
     addSystem<citysim::CityMapToolSystem>(citySys, camSys.flyController());
-    // The control channel's avatar (ADR-0079): consumes possess.cmd one-shots,
-    // produces AgentDriver commands. AFTER CityWalkerSystem (commandeered
-    // pedestrians already have bodies), BEFORE VehicleSystem (same-tick command
-    // consumption) — and after PlayerSystem, so its chase-camera write wins.
-    addSystem<citysim::CityPossessSystem>(citySys, physSys);
+    // The control channel's avatar (ADR-0079): a walker a director takes over (its own car driver went with the old
+    // driving, ADR-0459). AFTER CityWalkerSystem (commandeered pedestrians already have bodies) and after
+    // PlayerSystem, so its chase-camera write wins.
+    addSystem<citysim::CityPossessSystem>(citySys);
     // The near tier's cars (ADR-0447): the new driving's intent turned into pedals and wheel for a car physics carries,
     // and where it really is written back into the driving before each of its ticks. BEFORE VehicleSystem, which
     // consumes the command the same step.

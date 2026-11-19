@@ -226,17 +226,16 @@ TEST_CASE(control_application_registers_every_verb_once_with_its_words) {
     CHECK(app.commands().run(parseControlCommand("ping")) == "ok pong");
     CHECK(app.commands().run(parseControlCommand("commands?")).rfind("ok ", 0) == 0);
     CHECK(app.commands().run(parseControlCommand("bogus")).rfind("err unknown command: bogus", 0) == 0);
-    // `ride <x> <z>` goes to the possessed agent with anything after the two numbers, as it did before the merge
+    // with nobody listening, a possession verb says so
+    CHECK(app.commands().run(parseControlCommand("walk_to 120 -340")).rfind("err walk_to: nothing here", 0) == 0);
+    // `walk_to <x> <z>` goes to the possessed agent without anything after the two numbers
     std::string possess;
     EventBus::Subscription sub = app.events().listen<PossessRequest>([&](const PossessRequest& r) { possess = r.command; });
-    CHECK(app.commands().run(parseControlCommand("ride 120 -340 0")) == "ok staged (poll possess?)");
-    CHECK(possess == "ride 120 -340");
-    // ...and the player's ride to the transit system; with none listening, the verb says so
-    CHECK(app.commands().run(parseControlCommand("ride bus")).rfind("err ride: nothing here", 0) == 0);
-    int ride = -1;
-    EventBus::Subscription rides = app.events().listen<RideRequest>([&](const RideRequest& r) { ride = r.mode; });
-    CHECK(app.commands().run(parseControlCommand("ride bus")) == "ok ride bus staged");
-    CHECK(ride == 1);
+    CHECK(app.commands().run(parseControlCommand("walk_to 120 -340 0")) == "ok staged (poll possess?)");
+    CHECK(possess == "walkto 120 -340");
+    // only a walker is possessed (possession's own car driver went with the old driving, ADR-0459)
+    CHECK(app.commands().run(parseControlCommand("possess car")).rfind("err usage", 0) == 0);
+    CHECK(!t.has("drive_to") && !t.has("ride"));
 }
 
 // Names are stored lowercased, as they arrive; a name that is not one word is refused.

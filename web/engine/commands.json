@@ -126,12 +126,6 @@
   "usage": "direct on|off"
  },
  {
-  "name": "drive_to",
-  "owner": "engine",
-  "summary": "Drive the possessed car to a point.",
-  "usage": "drive_to <x> <z>"
- },
- {
   "name": "driver?",
   "owner": "engine",
   "summary": "With an id, ask for a car's driver card in the new driving model; alone, read it (refreshed every step).",
@@ -254,7 +248,7 @@
  {
   "name": "jitter",
   "owner": "engine",
-  "summary": "Record how evenly a vehicle is drawn for some frames (default 300): -1 the bus or cab you ride, else the nearest moving one. jitter? answers.",
+  "summary": "Record how evenly a vehicle is drawn for some frames (default 300): -1 the nearest moving one. jitter? answers.",
   "usage": "jitter [agent id|-1] [frames]"
  },
  {
@@ -380,8 +374,8 @@
  {
   "name": "possess",
   "owner": "engine",
-  "summary": "Take over a city car or walker (the nearest, or the one nearest x z). Poll possess?.",
-  "usage": "possess car|walker [x z]"
+  "summary": "Take over a city walker (the nearest, or the one nearest x z). Poll possess?.",
+  "usage": "possess walker [x z]"
  },
  {
   "name": "possess?",
@@ -436,12 +430,6 @@
   "owner": "engine",
   "summary": "Make a field report as F9 does (field_report.h), without the note box: the shot, the facts and this note, saved to the reports folder once the frame lands. Read the log for the folder.",
   "usage": "report [note]"
- },
- {
-  "name": "ride",
-  "owner": "engine",
-  "summary": "The player boards the nearest bus or taxi, or gets off; with x z, the possessed agent rides a bus there.",
-  "usage": "ride bus|taxi|any|off | ride <x> <z>"
  },
  {
   "name": "set",

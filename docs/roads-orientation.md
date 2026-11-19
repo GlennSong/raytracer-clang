@@ -354,8 +354,6 @@ Tests (`RT_TEST_FILTER` is a substring of the case name):
     that object, and the fleet's sizes as the roads read them (ADR-0435).
   - `RT_LEVELS=river_town,traffic_lab` with `level_real_lanes_match_the_baked_roads` or
     `front_doors_face_their_street`.
-- `python3 tools/agent_lab_probe.py --speed 4`: about 4 minutes; overwrites its shots in
-  ~/Pictures/Raytracer/agent-lab.
 
 Rules: never run `run_tests` or `level_tests` without `RT_TEST_FILTER`. No 30-minute soak inside a task. Wait for a
 background job by its notification or its output file, never a `pgrep` loop. Stop only your own viewers, by PID

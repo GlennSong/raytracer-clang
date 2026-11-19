@@ -629,7 +629,6 @@ add_library(citysim STATIC
     src/apps/citysim/city_render.cpp
     src/apps/citysim/city_spectate.cpp   # spectate camera: cycle + follow NPCs (headless-safe)
     # (trip_plan.cpp, the trip planner, is compiled in the `brain` library above, which citysim links)
-    src/apps/citysim/city_trip.cpp       # a person sent somewhere: the plan carried out, drawn and followed
     src/apps/citysim/city_brain.cpp      # the resident with the agent brain: the world, walking and driving for real (ADR-0441)
     src/apps/citysim/city_brain_system.cpp   # ...seen and told: brain?, goto, the markers and the plan drawn
     src/apps/citysim/city_crowd.cpp      # a crowd of residents, their places and days, made from the roads (ADR-0446)
@@ -1249,7 +1248,6 @@ if(RT_ENABLE_PHYSICS)
         src/apps/citysim/city_near.cpp      # the near tier's car: the new driving's intent carried out by Jolt (ADR-0447)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
         src/apps/citysim/walker_ragdolls.cpp   # the few walkers knocked flying, as ragdolls
-        src/apps/citysim/city_player_transit.cpp  # the player's passenger seat on a bus or cab
         src/apps/citysim/train_system.cpp   # trains drawn, and the player aboard one
         src/apps/citysim/city_map_tool.cpp  # the map: tool slot 3, drawn with the game UI layer
         src/apps/citysim/city_possess.cpp   # the control channel's avatar (ADR-0079)
@@ -1289,7 +1287,6 @@ if(RT_ENABLE_PHYSICS)
         src/apps/citysim/city_physics.cpp
         src/apps/citysim/city_near.cpp           # the near tier's test bed (ADR-0447)
         src/engine/systems/vehicle_system.cpp    # ...which drives its cars through the real VehicleSystem
-        src/apps/citysim/city_player_transit.cpp
         src/apps/citysim/city_map_tool.cpp
         src/engine/systems/player_system.cpp
         src/engine/player/player_body.cpp

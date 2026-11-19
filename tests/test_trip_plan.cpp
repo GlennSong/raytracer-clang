@@ -151,7 +151,7 @@ TEST_CASE(trip_plan_ties_go_to_the_earlier_row) {
 }
 
 TEST_CASE(trip_plan_a_way_ruled_out_is_not_taken) {
-    // city_trip re-plans without a way whose leg could not be done
+    // a caller re-plans without a way whose leg could not be done
     const engine::NavGraph nav = longStreet();
     const TravelCatalog cat = walkAndCar();
     TripRequest r = goTo(1500);

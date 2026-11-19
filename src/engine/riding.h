@@ -13,7 +13,7 @@ class FlyCameraController;
 // RIDING (ADR-0243; Glenn, 2026-10-24: "How general of a thing should this component be made where we are going from
 // one relative space to worldspace and back again? I suppose cars, trains, buses would use this. ... ships and dare I
 // say it some kind of spaceship"). A rider is a Passenger: a point in a CARRIER's own frame. The system that owns the
-// vehicle -- the bus and the car (CityPlayerTransitSystem), the train (TrainSystem), the driver's seat (VehicleSystem)
+// vehicle -- the train (TrainSystem), the driver's seat (VehicleSystem)
 // -- keeps the rules that are its own (who boards where, the aisle, the gangways, the seats, the doors) and hands the rest here:
 //
 //  rideStep()     each fixed step, after the owner set Passenger::carrier / local / sitting / eyeAbove: the capsule

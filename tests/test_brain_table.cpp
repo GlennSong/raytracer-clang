@@ -418,6 +418,6 @@ TEST_CASE(brain_includes_nothing_past_its_boundary) {
     probe.src = src;
     probe.library = "apps/citysim/brain/";
     probe.allowed = allowed;
-    probe.walk(src / "apps" / "citysim" / "city_trip.h");
+    probe.walk(src / "apps" / "citysim" / "city_sim.h");
     CHECK(!probe.breaches.empty());
 }

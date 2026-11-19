@@ -121,7 +121,6 @@ void refreshBounds(InstanceGroup* g) {
 
 bool CityRenderSystem::carOccupied(int ai) const {
     if (ai < 0 || ai >= static_cast<int>(sim_.agents().size())) return false;
-    if (ai == playerRidingAgent_ || ai == playerSeatAgent_) return true;   // the car you are in
     const Agent& a = sim_.agents()[static_cast<std::size_t>(ai)];
     // A PERSON IN A HOUSEHOLD'S CAR IS IN IT WHENEVER THEY ARE AT ITS WHEEL (ADR-0442, ADR-0444), moving or not: the
     // brain's pulling-out and parking states are a person sitting in a car in its space, and the brain takes them out
@@ -1405,7 +1404,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     carOpenSeat_.clear();
     nearSwap_.clear();
     carSeats_.clear();
-    carDoors_.clear();
     carDoorLeaves_.clear();
     busDoorOpen_.clear();
     carDriverSeat_.clear();
@@ -1430,7 +1428,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             bool seeInto = false;
             bool openSeat = false;
             float glassOpacity = 0.30f;
-            std::vector<Vec3> seats, doors;
+            std::vector<Vec3> seats;
             std::vector<engine::CarBodyRecipe::DoorLeaf> doorLeaves;   // a bus's (ADR-0356)
             Vec3 driverSeat(0, 0, 0), rearHip(0, 0, 0);
             bool hasRear = false;
@@ -1474,7 +1472,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         glassOpacity = static_cast<float>(recipe.glassOpacity);
                         openSeat = recipe.openSeat;
                         seats = recipe.seats;
-                        doors = recipe.doors;
                         doorLeaves = std::move(recipe.doorLeaves);
                         driverSeat = recipe.driverSeat;
                         hasDriver = recipe.hasDriverSeat;
@@ -1566,7 +1563,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 carGlassOpacity_.push_back(glassOpacity);
                 carOpenSeat_.push_back(openSeat ? 1 : 0);
                 carSeats_.push_back(std::move(seats));
-                carDoors_.push_back(std::move(doors));
                 {   // A BUS's DOOR LEAVES (ADR-0356): a group for each leaf's paint and its glass, pushed per bus by
                     // syncCarLamps slid open as it stands at a stop
                     std::vector<DoorLeafGroups> leaves;
@@ -3337,8 +3333,6 @@ void CityRenderSystem::syncGroups(World& world) {
             for (std::size_t k = 0; k < ids.size() && k < cars[v]->transforms.size(); ++k) {
                 const int ai = ids[k];
                 if (ai < 0) continue;   // a parked scenery body: nobody aboard
-                // the car the player RIDES in: its drawn matrix, every step, so the passenger sits still in it
-                if (ai == playerRidingAgent_) busDrawnPose_[ai] = cars[v]->transforms[k];
                 if (!always && (!nearSwap_.count(ai) || !carInteriorGroups_[v].valid())) continue;   // behind opaque glass: nobody to see
                 const Mat4& xf = cars[v]->transforms[k];
                 busDrawnPose_[ai] = xf;
@@ -3352,7 +3346,6 @@ void CityRenderSystem::syncGroups(World& world) {
                 int placed = 0;
                 for (int j = 0; j < n && placed < load; ++j) {
                     const int seat = riderSeat(ai, j, n);
-                    if (ai == playerSeatAgent_ && seat == playerSeat_) continue;
                     InstanceGroup* r = rid[(ai + placed) % 3];
                     if (r)
                         r->push(xf * Mat4::trs(seats[static_cast<std::size_t>(seat)], Quat(), Vec3(1, 1, 1)),
@@ -4170,7 +4163,6 @@ void CityRenderSystem::measureJitter(engine::FrameContext& ctx) {
         int id = req.agent;
         const int frames = req.frames;
         const Vec3 cam = ctx.view.camera.position;
-        if (id < 0) id = playerRidingAgent_;
         if (id < 0) {   // the nearest moving vehicle
             Real best = 80.0 * 80.0;
             const auto& ag = sim_.agents();
@@ -5173,15 +5165,10 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
     // whether the player is on foot or driving. The player is the entity with a
     // CharacterController under host control (PlayerSystem).
     std::vector<Vec2> obstacles;
-    // NOT while riding: the player then sits on the vehicle's own pose, and a
-    // bus braking for an obstacle at distance zero never pulls away from the
-    // stop -- it stood at speed 0 with its passenger aboard.
-    if (!playerRiding_)
-        ctx.world.each<engine::Transform, engine::CharacterController, engine::ControlledBy>(
-            [&](engine::Entity, engine::Transform& t, engine::CharacterController&,
-                engine::ControlledBy&) {
-                obstacles.push_back(Vec2(t.position.x, t.position.z));
-            });
+    ctx.world.each<engine::Transform, engine::CharacterController, engine::ControlledBy>(
+        [&](engine::Entity, engine::Transform& t, engine::CharacterController&, engine::ControlledBy&) {
+            obstacles.push_back(Vec2(t.position.x, t.position.z));
+        });
     // Every REAL physics Vehicle too (the player's car, commandeered/promoted
     // cars — driven OR abandoned): a promoted car has no planner ghost, so
     // without this ambient traffic plans straight through a car parked across
@@ -5196,15 +5183,14 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
     // car the driving does not drive (the player's, one left standing) -- a near car it drives it sees by itself
     {
         std::vector<driving::RoadThing> things;
-        if (!playerRiding_)
-            ctx.world.each<engine::Transform, engine::CharacterController, engine::ControlledBy>(
-                [&](engine::Entity, engine::Transform& t, engine::CharacterController&, engine::ControlledBy&) {
-                    driving::RoadThing th;
-                    th.id = kPlayerThing;
-                    th.at = Vec2(t.position.x, t.position.z);
-                    th.halfAcross = CitySim::kWalkerHalfAcross;
-                    things.push_back(th);
-                });
+        ctx.world.each<engine::Transform, engine::CharacterController, engine::ControlledBy>(
+            [&](engine::Entity, engine::Transform& t, engine::CharacterController&, engine::ControlledBy&) {
+                driving::RoadThing th;
+                th.id = kPlayerThing;
+                th.at = Vec2(t.position.x, t.position.z);
+                th.halfAcross = CitySim::kWalkerHalfAcross;
+                things.push_back(th);
+            });
         uint32_t next = kPlayerThing + 1;
         ctx.world.each<engine::Transform, engine::Vehicle>([&](engine::Entity e, engine::Transform& t, engine::Vehicle& v) {
             if (ctx.world.has<CityNearCar>(e)) return;
@@ -5245,19 +5231,6 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
 
     step(ctx.world, ctx.clock.fixedStep());
     bakeThisStep_ = true;   // a direct step() call (tests) always bakes
-}
-
-bool CityRenderSystem::busStandingSpot(int agent, Vec3* world) const {
-    if (!world || !sim_.isBus(agent)) return false;
-    if (agent < 0 || agent >= static_cast<int>(sim_.agents().size())) return false;
-    if (busVariant_ < 0 || busVariant_ >= static_cast<int>(carSeats_.size())) return false;
-    if (carSeats_[static_cast<std::size_t>(busVariant_)].empty()) return false;
-    // The aisle, a little aft of the middle: where standing passengers stand.
-    // The pose is the body's (agentPose without an index does not advance the
-    // tilt filter, so this is a pure read).
-    const Mat4 pose = agentPose(sim_.agents()[static_cast<std::size_t>(agent)]);
-    *world = pose.transformPoint(Vec3(0, 0, -0.8));
-    return true;
 }
 
 // The j-th seat a bus's riders fill. Spread through the saloon rather than
@@ -5363,41 +5336,6 @@ int CityRenderSystem::busVariantOf(int agent) const {
 }
 bool CityRenderSystem::isBusVariant(int v) const {
     return v >= 0 && std::find(busVariants_.begin(), busVariants_.end(), v) != busVariants_.end();
-}
-
-const std::vector<Vec3>& CityRenderSystem::busSeats(int agent) const {
-    static const std::vector<Vec3> kNone;
-    const int bv = busVariantOf(agent);
-    if (bv < 0 || bv >= static_cast<int>(carSeats_.size())) return kNone;
-    return carSeats_[static_cast<std::size_t>(bv)];
-}
-
-const std::vector<Vec3>& CityRenderSystem::busDoors(int agent) const {
-    static const std::vector<Vec3> kNone;
-    const int bv = busVariantOf(agent);
-    if (bv < 0 || bv >= static_cast<int>(carDoors_.size())) return kNone;
-    return carDoors_[static_cast<std::size_t>(bv)];
-}
-
-Real CityRenderSystem::busFloorY(int agent) const {
-    const std::vector<Vec3>& doors = busDoors(agent);
-    if (!doors.empty()) return doors.front().y;   // doors are floor points
-    const std::vector<Vec3>& seats = busSeats(agent);
-    return seats.empty() ? Real(0) : seats.front().y - Real(0.45);
-}
-
-bool CityRenderSystem::busSeatTaken(int agent, int seat) const {
-    const int n = static_cast<int>(busSeats(agent).size());
-    if (n <= 0 || !sim_.isBus(agent)) return false;
-    const int load = std::min(sim_.rides().load(agent), n);
-    int placed = 0;
-    for (int j = 0; j < n && placed < load; ++j) {
-        const int s = riderSeat(agent, j, n);
-        if (agent == playerSeatAgent_ && s == playerSeat_) continue;
-        if (s == seat) return true;
-        ++placed;
-    }
-    return false;
 }
 
 }  // namespace citysim

@@ -12,22 +12,13 @@ namespace engine {
 // hear them, and a state without a city has nobody listening -- the verb then says so.
 
 // PossessRequest: one possession command line, in the grammar parsePossessCmd reads (city_possess_logic.h):
-// "car [x z]", "walker [x z]", "driveto x z", "walkto x z", "direct on|off", "board [x z]", "enter", "exit",
-// "alight", "ride x z", "stop", "release". CityPossessSystem hears it; `possess?` answers.
+// "walker [x z]", "walkto x z", "direct on|off", "board [x z]", "enter", "exit", "alight", "stop", "release".
+// CityPossessSystem hears it; `possess?` answers.
 struct PossessRequest {
     std::string command;
 };
 inline void describeProperties(PossessRequest& r, PropertyVisitor& v) {
     v.field(FieldMeta("command"), r.command);
-}
-
-// RideRequest: the player boards the nearest bus (1) or cab (2) or either (3), or gets off (0). The socket's
-// `ride bus|taxi|any|off`; CityPlayerTransitSystem hears it.
-struct RideRequest {
-    int mode = 3;
-};
-inline void describeProperties(RideRequest& r, PropertyVisitor& v) {
-    v.field(FieldMeta("mode").range(0, 3), r.mode);
 }
 
 // TrainBoardRequest: put the player aboard a train, standing mid-carriage (a probe's way in; on foot you walk in
@@ -79,7 +70,7 @@ inline void describeProperties(CityLayerRequest& r, PropertyVisitor& v) {
 }
 
 // JitterRequest: record where a vehicle is drawn every frame for `frames` frames, then say how evenly it moved
-// (the bus shake). agent -1: the bus or cab you ride, else the nearest moving vehicle. CityRenderSystem hears it;
+// (the bus shake). agent -1: the nearest moving vehicle. CityRenderSystem hears it;
 // `jitter?` answers.
 struct JitterRequest {
     int agent = -1;

@@ -20,7 +20,7 @@ so Claude Code sessions get these as first-class tools.
 | "Any settings knob" | `set` / `get`, `render save` | viewer |
 | "Show me the AO buffer" | `view` (+ wireframe) | viewer |
 | "Where's the frame time going?" | `ledger` summary / CSV capture | viewer |
-| "Give me an avatar" | `possess` car/walker + `drive_to`/`walk_to` | play mode, city levels |
+| "Give me an avatar" | `possess walker` + `walk_to` | play mode, city levels |
 
 ## The socket
 
@@ -116,22 +116,20 @@ render <apply|save>               # push ssao./ssr./shadow./bloom./tonemap.op/
                                   # save also persists settings.json
 view <0-8> [wire0-2]              # debug views (AO/SSR/depth/...) + wireframe
 ledger <start <csv>|stop|summary> # ADR-0077 frame ledger, remotely
-possess <car|walker> [x z]        # ADR-0079 avatar: spawn an AI sedan on the
-                                  # nearest lane / commandeer a pedestrian;
+possess walker [x z]              # ADR-0079 avatar: commandeer a pedestrian;
                                   # the chase camera follows it
-drive_to <x> <z>                  # route + drive there (pursuit + sensing)
 walk_to <x> <z>                   # sidewalk route (walker)
-possess?                          # state: driving/walking/arrived/stuck/
-                                  # no-route + pos/speed/remaining/lat/lead
-possess_stop | release            # brake and hold / detach brain + camera
+board [x z] | alight              # into / out of a household's car
+possess?                          # state: walking/arrived/no-route
+                                  # + pos/speed/remaining
+possess_stop | release            # stand still / detach brain + camera
 ```
 
-Possession is PLAY-mode only (edit mode has no nav graph or physics) and
-performs transient play acts only — nothing it spawns carries a SourceSpec or
-can reach the level document (ADR-0079). The possessed car ignores traffic
-signals (v1); sensing keeps it from rear-ending traffic. `stuck` cycles with
-a brake-hold/retry — persistent stuck is the director's cue to `drive_to`
-somewhere reachable or `release`.
+Possession is PLAY-mode only (edit mode has no nav graph) and performs
+transient play acts only — nothing it does can reach the level document
+(ADR-0079). Its own car (a sedan spawned on the street map's lanes and
+steered there, `possess car` and `drive_to`) and the bus ride went with the
+old driving (ADR-0459).
 
 Try it by hand against a running viewer:
 

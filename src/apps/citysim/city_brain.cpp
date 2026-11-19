@@ -2,7 +2,6 @@
 
 #include "city_car.h"
 #include "city_sim.h"
-#include "city_trip.h"   // stepsOffThePaths: a walker's last steps off the pavements
 #include "brain/brain_driving.h"
 #include "brain/brain_planner.h"
 #include "brain/brain_states.h"
@@ -58,6 +57,30 @@ constexpr Real kLeftRoom = 0.5;
 const char* const kVehicleGone = "vehicle_gone";
 const char* const kPossessed = "possessed";
 const char* const kReleased = "released";
+
+// A FEW STEPS OFF THE PATHS for walker `who`, as a person takes them: out to the pavement on `from`'s side of its
+// street, along to the pavement level with `to`, and in -- not straight along a front wall or across a corner. The
+// pavement is the walkers' own (the verge they keep). The points to walk by, the next first, ending at `to`. (The
+// one-agent trip lab's once; the walk skill's alone since that lab was deleted with the old driving, ADR-0459.)
+std::vector<engine::Vec2> stepsOffThePaths(const CitySim& sim, int who, engine::Vec2 from, engine::Vec2 to) {
+    const engine::NavGraph& nav = *sim.graph();
+    const Real verge = sim.walkerVerge(sim.agents()[static_cast<std::size_t>(who)]);
+    auto pavement = [&](engine::Vec2 p) {
+        const int l = nav.nearestLink(p);
+        if (l < 0) return p;
+        const engine::NavLink& L = nav.links[static_cast<std::size_t>(l)];
+        const engine::Vec2 A = nav.nodes[static_cast<std::size_t>(L.from)];
+        const Real t = L.length > 1e-6 ? std::clamp(dot(p - A, nav.direction(l)) / L.length, Real(0), Real(1)) : Real(0);
+        const engine::Vec2 q = nav.pointOnLink(l, t);
+        const engine::Vec2 side = nav.sidewalkPoint(l, t, verge) - q;
+        return dot(p - q, side) >= 0 ? q + side : q - side;   // (the pavement on p's side of the street)
+    };
+    std::vector<engine::Vec2> steps;
+    for (const engine::Vec2 p : {pavement(from), pavement(to), to})
+        if ((p - (steps.empty() ? from : steps.back())).length() > 0.5) steps.push_back(p);
+    if (steps.empty() || (steps.back() - to).length() > 1e-6) steps.push_back(to);
+    return steps;
+}
 
 std::string fmt(const char* f, double a) {
     char b[64];

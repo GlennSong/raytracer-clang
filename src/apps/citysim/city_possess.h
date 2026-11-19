@@ -2,17 +2,12 @@
 #define RAYTRACER_APPS_CITYSIM_CITY_POSSESS_H
 
 #include "../../engine/system.h"
-#include "../../engine/ai/lane_follow.h"
-#include "../../engine/ai/traffic_sense.h"
 #include "../../engine/camera/follow_camera_controller.h"
+#include "../../engine/procgen/city/polygon.h"   // Vec2
 #include "city_possess_logic.h"
 #include "../../engine/control/control_commands.h"
 
 #include <vector>
-
-namespace engine {
-class PhysicsSystem;
-}
 
 namespace citysim {
 
@@ -20,51 +15,42 @@ class CityRenderSystem;
 
 // The control channel's AVATAR (ADR-0079). An agent directing the engine can't
 // play in realtime — its perception-action loop is seconds and stills — so the
-// realtime half stays in-engine: this system spawns a car (or commandeers a
-// sim pedestrian), attaches the AgentDriver brain, and follows routed
-// destinations with the pursuit/sensing stack that has sat harness-tested in
-// engine/ai since the possession-tier retirement. The director supplies
-// INTENT (PossessRequests from the channel's verbs) and reads state back
-// (`possess?`, `look?`, `agent?`, which this system answers).
-//
-// This is the first producer of AgentDriver — VehicleSystem has consumed it
-// (vehicle_system.cpp driveVehicles) since ADR-0062 with nobody writing it.
+// realtime half stays in-engine: this system commandeers a sim pedestrian and
+// walks it to routed destinations. The director supplies INTENT
+// (PossessRequests from the channel's verbs) and reads state back (`possess?`,
+// `look?`, `agent?`, which this system answers). A possessed walker can get
+// into a household's car of the new driving (`board`) and out of it again
+// (`alight`). Its own car driver -- a spawned Jolt sedan steered along the
+// street map's lanes -- was deleted with the old driving (ADR-0459).
 //
 // Ordering contract (arena_state.cpp): registered AFTER CityWalkerSystem so
-// commandeered pedestrians already have bodies, BEFORE VehicleSystem so the
-// fixedUpdate command is consumed the same tick — and its update() camera
-// write runs after PlayerSystem's, so the chase view wins the frame (the
+// commandeered pedestrians already have bodies, and its update() camera write
+// runs after PlayerSystem's, so the chase view wins the frame (the
 // CitySpectateSystem precedent). Transient play acts only: nothing here
-// touches the level document (no SourceSpec — runtime spawns are never saved).
+// touches the level document.
 class CityPossessSystem : public engine::System {
 public:
-    CityPossessSystem(CityRenderSystem& city, engine::PhysicsSystem& physics)
-        : city_(city), physicsSys_(physics) {}
+    explicit CityPossessSystem(CityRenderSystem& city) : city_(city) {}
 
     void onStart(engine::FrameContext& ctx) override;      // hears PossessRequest, answers possess?/look?/agent?
     void update(engine::FrameContext& ctx) override;       // commands + camera + status
-    void fixedUpdate(engine::FrameContext& ctx) override;  // the drive loop
+    void fixedUpdate(engine::FrameContext& ctx) override;  // arrival
 
 private:
     void handleCommand(engine::FrameContext& ctx, const PossessCmd& cmd);
-    void possessCar(engine::FrameContext& ctx, const PossessCmd& cmd);
     void possessWalker(engine::FrameContext& ctx, const PossessCmd& cmd);
-    void driveTo(engine::FrameContext& ctx, engine::Real x, engine::Real z);
-    void walkTo(engine::FrameContext& ctx, engine::Real x, engine::Real z);
-    void releasePossession(engine::FrameContext& ctx);
+    void walkTo(engine::Real x, engine::Real z);
+    void releasePossession();
     void publishLook();
-    void boardNearby(engine::FrameContext& ctx, const PossessCmd& cmd);
-    void alightHere(engine::FrameContext& ctx);
-    void driveCar(engine::FrameContext& ctx);
+    void boardNearby(const PossessCmd& cmd);
+    void alightHere();
     void updateCamera(engine::FrameContext& ctx);
-    void publishStatus(engine::FrameContext& ctx);
+    void publishStatus();
     // Walker pose: physical body when present, sim ghost otherwise.
     bool walkerPose(engine::Vec3& outPos, engine::Vec2& outHeading) const;
 
     CityRenderSystem& city_;
-    engine::PhysicsSystem& physicsSys_;
 
-    engine::Entity car_;                       // possessed car (kind == car)
     int walkerAgent_ = -1;                     // possessed pedestrian (>= 0)
     bool directed_ = false;                    // goal layer held off (ADR-0091)
     PossessState state_ = PossessState::None;
@@ -76,17 +62,10 @@ private:
     engine::EventBus::Subscription onRequest_;
     engine::ControlCommands::Binding answerStatus_, answerLook_, answerAgent_;
 
-    engine::LaneFollower follower_;            // car route
-    std::vector<engine::Real> pathSpeeds_;     // per-point class speeds
-    engine::StuckDetector stuck_;
-    engine::Real stuckHold_ = 0;               // brake-hold left after a stuck fire
-    engine::Real lastLateral_ = 0;             // follower telemetry, for status
-    engine::Real lastLeadGap_ = -1;            // sensed leader gap (-1 = clear)
-    engine::Vec2 dest_{0, 0};                  // active destination (both kinds)
+    engine::Vec2 dest_{0, 0};                  // active destination
     bool hasDest_ = false;
 
     engine::FollowCameraController follow_;    // owned chase rig (spectate idiom)
-    int spawnSeed_ = 0;
 };
 
 }  // namespace citysim
