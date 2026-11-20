@@ -561,6 +561,13 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
                 J.arms[a].boxEdge = stop.boxEdge;
                 J.arms[a].stopLine = stop.stopLine;
             }
+            // THE PLANNING FAULT (ADR-0471): the next junction along its road stands too close for the angle its roads meet
+            // at, so its box edge stops short of where its kerbs clear the crossing road (more than 10 cm short: said)
+            if (stop.squeeze > 0.1 && stop.facing >= 0)
+                m.problems.push_back(fmt("junction %s, arm %zu (%s): too close to junction %s for the angle its roads meet at: its box "
+                                         "edge stops %.1f m short of where its kerbs clear the crossing road (a planning fault)",
+                                         J.id.c_str(), a, J.arms[a].road.c_str(), g.junctions[static_cast<std::size_t>(stop.facing)].id.c_str(),
+                                         stop.squeeze));
         }
         for (const roads::lanes::JunctionSpan& sp : area.spans) J.boxes.push_back(ModelStretch{g.edges[static_cast<std::size_t>(sp.edge)].id, sp.s0, sp.s1});
         for (ModelStretch& in : J.inside) {

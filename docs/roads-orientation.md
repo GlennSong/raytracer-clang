@@ -175,7 +175,7 @@ Under `src/engine/procgen/city/roads/`:
 | `lanes/lanes.h/.cpp` | The lanes pipeline: graph to lanes to profiles to pavement to surfaces to terrain. `Result` holds the paint's junction boxes (`junctionBoxes`). The ramp-end check still uses an angle test (`kJunctionParallelForGraph`). |
 | `lanes/lane_expand.h/.cpp` | Roads become lane ribbons: pockets, ramps composed from their gore anchors over their whole stated length (`rampEndDistances`). The builder's `Lane` is `LaneFacts` plus its edges and working data (`sweptFrom` / `diesInto` for pockets and ramp lanes; ADR-0435); its centre line is its stretch of the build's one `LaneCurves`, read through `xy()` and `s()` (ADR-0438, part 1). The streets a lane runs along and the junction at each end are held by the model's lane only (`ModelLane`, filled in `builtRoadModel`; ADR-0434). `ribbonLane` is the one way a lane is laid (the walks too). A footway's lane is of kind `footway` (ADR-0465). |
 | `lanes/walk_lanes.h/.cpp` | The walks for people on foot (ADR-0465): `layWalks`, the build's last step, lays each kerb's sidewalk lane and each ring pair's corner walk along the drawn sidewalk (`Pavement::sidewalk` and footways' paving, kept `kWalkFromKerb` in from its edges, seams up to `kSeamBridge` closed) into the build's `LaneCurves`, as `LaneSet::walks`; `Result::walkCorners` says which pairs got none and why. Nothing is drawn from them; the lane level lays them as walks (ADR-0466). |
-| `lanes/deck_mesh.h/.cpp` | Meshes and paint. `junctionAreas` gives each stated arm's box edge and stop line (`kStopLineBack`, 5.2 m, outside the box). The paint's lane lines, stop bars and arrows are read off `builtRoadModel` and listed in `RoadPaint` (ADR-0431). `paintFactsKey` is what the paint reads, for the bake key. **Open in step 9**: draw corners to a stated radius. |
+| `lanes/deck_mesh.h/.cpp` | Meshes and paint. `junctionAreas` gives each stated arm's box edge and stop line (`kStopLineBack`, 5.2 m, outside the box) by the one rule, `boxEdgeBack` in `road_model_parts.h`. The rule is the square rule, or at a sharp angle the arm's kerbs clear of the crossing road, within the room to the next junction's facing arm; `findJunctions` asks the same rule with the same room, so the grouping never moves (ADR-0471). The arms the room stops short are `ArmStop::squeeze`, said as model problems. The paint's lane lines, stop bars and arrows are read off `builtRoadModel` and listed in `RoadPaint` (ADR-0431). `paintFactsKey` is what the paint reads, for the bake key. **Open in step 9**: draw corners to a stated radius. |
 | `lanes/deck_height.*`, `vertical_profile.*`, `road_design.*`, `terrain_conform.*`, `terrain_recipe.*` | Heights: profiles along spines, blended decks, the planner-shared vertical design, cut and fill. |
 | `lanes/pavement.*`, `geom2d.*`, `polyline_ops.*` | 2-D geometry: footprints, the one triangulation, the Clipper2/CDT seam, polyline helpers. |
 | `lanes/interchange.*` | Diamond interchanges (ramps at the streets a freeway crosses). The solid stretch before a stop line is handed in (`DiamondOptions::solidBeforeStopLine`): the planner's `SceneOptions::solidBeforeStopLine`, which it also writes into the road file's `lane_rules` (ADR-0435). |
@@ -231,7 +231,8 @@ Tests:
 Still working roads out for itself:
 - *(Gone in step 9a, ADR-0428: the paint's own junction boxes. Each arm's box edge and stop line now come from the
   stated junction through one function, `junctionAreas` in `lanes/deck_mesh.h`. The rule: back from the mouth by
-  the widest crossing road's half width, then `kStopLineBack`. The paint, `ModelArm::stopLine`, the lane level and the
+  the widest crossing road's half width (since ADR-0471: or until the arm's kerbs clear it at the angle they meet,
+  within the room to the next junction), then `kStopLineBack`. The paint, `ModelArm::stopLine`, the lane level and the
   control signs all read it. A file that states no junctions has its layout derived once, at the top of `build()`.
   The bake key now includes where the stated arms stand.)*
 - *(Gone, ADR-0431: the paint's own lane lines, stop bars and lane arrows. `buildMeshes` builds the model's built layer
@@ -425,9 +426,13 @@ data rows.
 ## 8. Known faults and open work
 
 - **Step 9a's stop lines** (ADR-0428) sit 1–2 m further out than the paint's at most junctions. The old box was
-  sampled every 2 m, so it usually ended a metre inside the crossing road. traffic_lab's self-crossing outlines went
-  from 2 (j0, j22) to 5 (j0, j4, j19, j93, j96): two arms meeting at a sharp angle now have stop lines that cross.
-  Corners are still drawn without a stated radius (step 9b).
+  sampled every 2 m, so it usually ended a metre inside the crossing road. Corners are still drawn without a stated
+  radius (step 9b). Since ADR-0471 the stop lines at sharp-angled junctions stand back further, which costs river_town
+  turns that now cut a corner (fits no vehicle 175 -> 199, at j0, j14, j90, j119, j135). Step 9b should win them back.
+- **Junctions too close for the angle their roads meet at** (ADR-0471, model problem lines, the planner's to fix):
+  traffic_lab 9 arms (j0, j22, j24, j37, j70, j84), river_town and agent_lab 26 (j6, j7, j8, j14, j35, j37, j43, j56,
+  j68, j72, j73, j75, j90, j91, j135). The room to the next junction caps the box edge short of clear, so most of
+  these keep a kerb end out in the asphalt. Listed by arm in ADR-0471, pinned in `road_model_39`.
 - **traffic_lab five-minute test fails two held limits** (left failing on purpose, commented in
   `test_traffic_lab_v2.cpp`):
   1. Car 92 stands 261 s on frontage road s311 (lane 1457), where the off-ramp lane 1607 merges between junctions
@@ -442,11 +447,12 @@ data rows.
   planner's to state: s208 is the fourth arm of j95, drawn as a crossroads but not in its ring. The other 16 (traffic_lab,
   the spokes at its ring) and 24 (river_town) end 8 m under the freeway: dead ends since ADR-0469, each joined across by a
   turn-round.
-- **Walks cut off by the junction drawing** (ADR-0469; owed to the one planned re-bake, listed junction by junction
-  there): a corner gets no walk where a crosswalk's kerb end stands 6-20 m out in a sharp-angled junction's asphalt
-  (the box edge rule, `boxEdgeBack`, sets each arm back as if the roads met square: traffic_lab 13 corners, river_town
-  27), or where the drawn sidewalk has a wedge or notch of bare ground at a kink between two roads' sidewalk bands
-  (traffic_lab 9, river_town 17). Sidewalks cut off from the largest part on foot: traffic_lab 4, river_town 25.
+- **Walks cut off by the junction drawing** (ADR-0469, ADR-0471): a corner gets no walk where a crosswalk's kerb end
+  stands out in a sharp-angled junction's asphalt. `boxEdgeBack` now sets each arm back at the angle the arms meet, so
+  this is down to traffic_lab 4 corners and river_town 13 (was 13 and 27): the junctions too close for their angle,
+  above, and river_town j19, j116, j119, which the rule's straight strips do not reach. A corner also gets no walk
+  where the drawn sidewalk has a wedge or notch of bare ground at a kink between two roads' sidewalk bands (B2,
+  traffic_lab 9, river_town 18; S3's). Sidewalks cut off from the largest part on foot: traffic_lab 0, river_town 14.
   river_town's tn0/tn1 (the freeway's turn-round loops, classed boulevard) have sidewalks nobody can reach.
 - **Two traffic_lab ramps carry no car** (d0_0_a_on, d1_0_a_off). Their hosts' kerb lanes end at freeway joints
   j153/j154, whose stated turns all leave the paved road.
@@ -454,9 +460,8 @@ data rows.
   and x1_outR_link state a merge past the host lane's end. s320 carries on into s287 where no lane leaves. Dead-end
   spokes under the freeway ring (dead ends, ADR-0469). The planner no longer reproduces river_town's road file (ADR-0423). Car reach 41%
   without lane changes, 81% with: lane changes come first.
-- **Outlines that still cross themselves**: traffic_lab j0, j22; river_town ten (problem lines). They are the same
-  junctions before and after ADR-0427, so the arm order does not cause them. Their arms' lanes cross before the stop
-  lines (j0 s33/s36).
+- **Outlines that still cross themselves**: traffic_lab none; river_town and agent_lab j75 (problem lines). Since
+  ADR-0471 sharp-angled arms' stop lines stand back far enough not to overlap. It was 5 and 11.
 - **The side rule** (lane_turns.cpp, `turnKindsFrom`): an arm with no through pair stated calls a turn near or far by
   which half of the ring the other arm lies in. Exactly halfway counts as far. traffic_lab: 56 junctions, 191 turns
   rely on it, 8 halfway notes. river_town: 43, 192, 25. At spread junctions it can call a turn near that a driver

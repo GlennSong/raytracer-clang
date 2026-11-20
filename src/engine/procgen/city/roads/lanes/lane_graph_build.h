@@ -128,7 +128,9 @@ inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 // the roads themselves is the lanes tag's, kLanesBuildTag, which keys the roads; to the road file's layout, lane rules
 // or the turns' table, the cache key's own; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
-constexpr uint32_t kLaneGraphBuildVersion = 18;  // 18: a street ending under the freeway is a dead end, joined across
+constexpr uint32_t kLaneGraphBuildVersion = 19;  // 19: the box edge and stop line at the angle the arms meet, within the
+                                                 //     room to the next junction (ADR-0471)
+                                                 // 18: a street ending under the freeway is a dead end, joined across
                                                  //     (the crossing policy, ADR-0469)
                                                  // 17: the walks laid in and joined at their stated ends (ADR-0466)
                                                  // 16: a crosswalk's level is its junction's whole span of lane-end
